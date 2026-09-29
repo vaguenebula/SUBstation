@@ -4,17 +4,20 @@ import os
 import sys
 import time
 import traceback
+from dataclasses import replace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-from PySide6.QtCore import QCoreApplication, QPoint, QSettings, Qt
+from PySide6.QtCore import QCoreApplication, QPoint, QPointF, QSettings, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from gilstudio import _engine as ge
 from gilstudio import theme
+from gilstudio.ui.clip_view import WARP_MODES
 
 from .conftest import SAMPLE_RATE, write_wav
 
@@ -102,7 +105,7 @@ def test_mouse_drag_moves_clip_and_undo_restores(window, three_tracks):
     track = window.project.tracks[0]
     clip = track.clips[0]
     row = arrangement.layout_model.rows[0]
-    start = QPoint(int(view.beat_to_x(clip.start_beat) + 30), row.top - view.scroll_y + row.height // 2)
+    start = QPoint(int(view.beat_to_x(clip.start_beat) + 30), row.top - view.scroll_y + 6)  # title bar
     end = start + QPoint(int(4 * view.px_per_beat), 0)
     QTest.mousePress(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
     QTest.mouseMove(lanes, start + QPoint(10, 0))
@@ -112,6 +115,7 @@ def test_mouse_drag_moves_clip_and_undo_restores(window, three_tracks):
     assert moved.id == clip.id
     assert moved.start_beat == pytest.approx(4.0)
     assert window.selection.clips == {(track.id, clip.id)}
+    assert window.selection.insert_beat == pytest.approx(4.0)  # playback follows the moved clip
     window.undo_stack.undo()
     assert window.project.track(track.id).clips[0].start_beat == 0.0
 
@@ -176,6 +180,44 @@ def test_devices_and_mixer_reach_engine(window, three_tracks):
     assert window.engine.processor_param(engine_id, 0) == pytest.approx(0.0)
     window.editor.remove_device(track.id, device.id)
     assert window.devices.widgets == {}
+
+
+def test_builtin_devices_in_browser(window, three_tracks):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QDropEvent
+
+    from gilstudio.ui.browser.browser_models import device_kinds
+
+    browser, devices = window.browser, window.devices
+    tracks = window.project.tracks
+    assert not hasattr(devices, "add_button")  # devices come from the browser now
+    # Built-in > Audio Effects > Utility
+    [builtin] = [browser.sidebar.topLevelItem(i) for i in range(browser.sidebar.topLevelItemCount())
+                 if browser.sidebar.topLevelItem(i).text(0) == "Built-in"]
+    audio_effects = builtin.child(0)
+    assert audio_effects.text(0) == "Audio Effects" and builtin.isExpanded()
+    browser.sidebar.setCurrentItem(audio_effects)
+    assert browser.list_model.rowCount() == 1
+    index = browser.list_model.index(0)
+    assert browser.list_model.item(index).name == "Utility"
+    mime = browser.list_model.mimeData([index])
+    assert device_kinds(mime) == ["utility"]
+
+    # Double-click adds it to the selected track...
+    window.selection.select_track(tracks[0].id)
+    browser._activate_list(index)
+    assert [d.kind for d in tracks[0].devices] == ["utility"]
+    # ...dropping on the device view adds it to the track shown there...
+    actions, buttons, mods = Qt.DropAction.CopyAction, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    devices.dropEvent(QDropEvent(QPointF(20, 20), actions, mime, buttons, mods))
+    assert len(tracks[0].devices) == 2 and len(devices.widgets) == 2
+    # ...and dropping on a track in the arrangement adds it to that track.
+    lanes, row = window.arrangement.lanes, window.arrangement.layout_model.rows[2]
+    lanes.dropEvent(QDropEvent(QPointF(40, row.top - window.arrangement.view.scroll_y + 10), actions, mime,
+                               buttons, mods))
+    assert [d.kind for d in tracks[2].devices] == ["utility"]
+    assert window.selection.track_id == tracks[2].id and len(devices.widgets) == 1
+    assert devices.minimumHeight() == devices.maximumHeight()  # fixed height, not resizable
 
 
 def test_save_open_roundtrip(window, three_tracks, tmp_path):
@@ -251,8 +293,10 @@ def test_mouse_trim_and_rubber_band(window, three_tracks):
     track = window.project.tracks[0]
     clip = track.clips[0]
     row = arrangement.layout_model.rows[0]
-    y = row.top - view.scroll_y + row.height // 2
+    y = row.top - view.scroll_y + 6  # trim handles are at the ends of the title bar
+    body_y = row.top - view.scroll_y + row.height // 2
     right_edge = int(view.beat_to_x(clip.end_beat(window.project.tempo))) - 2
+    assert lanes.hit_clip(QPointF(right_edge, body_y))[2] == "body"  # lower down: no trimming
     drag(lanes, QPoint(right_edge, y), QPoint(int(view.beat_to_x(2.0)), y))
     trimmed = window.project.track(track.id).clips[0]
     assert trimmed.duration_sec == pytest.approx(1.0)  # 2 beats at 120 BPM
@@ -261,9 +305,224 @@ def test_mouse_trim_and_rubber_band(window, three_tracks):
     trimmed = window.project.track(track.id).clips[0]
     assert (trimmed.start_beat, trimmed.offset_sec) == (1.0, pytest.approx(0.5))
 
+    # Trim handles are only just inside a clip's ends, shown with bracket cursors.
+    start_x = int(view.beat_to_x(trimmed.start_beat))
+    QTest.mouseMove(lanes, QPoint(start_x + 2, y))
+    assert lanes.cursor().shape() == Qt.CursorShape.BitmapCursor
+    assert lanes._hover_edge == (trimmed.id, "left")
+    assert not lanes.grab().isNull()
+    QTest.mouseMove(lanes, QPoint(start_x - 2, y))  # just outside: not a trim
+    assert lanes.cursor().shape() == Qt.CursorShape.IBeamCursor and lanes._hover_edge is None
+    drag(lanes, QPoint(start_x - 2, y), QPoint(int(view.beat_to_x(0.0)), y))
+    assert window.project.track(track.id).clips[0].start_beat == 1.0  # a time selection, not a trim
+    # Where two clips touch, each side of the boundary trims its own clip.
+    window.editor.add_clips(track.id, 2.0, [(three_tracks[0], 1.0)])
+    first, second = window.project.track(track.id).clips
+    boundary = view.beat_to_x(2.0)
+    assert lanes.hit_clip(QPointF(boundary - 2, y))[1:] == (first, "right")
+    assert lanes.hit_clip(QPointF(boundary + 2, y))[1:] == (second, "left")
+
     empty_y = arrangement.layout_model.total_height - view.scroll_y + 40  # below the tracks
-    drag(lanes, QPoint(int(view.beat_to_x(0.5)), 2), QPoint(int(view.beat_to_x(20.0)), empty_y))
-    assert len(window.selection.clips) == 3
+    drag(lanes, QPoint(int(view.beat_to_x(20.0)), empty_y), QPoint(int(view.beat_to_x(0.5)), 2))
+    assert len(window.selection.clips) == 4  # including the clip added above
+
+
+def test_clip_body_sets_insert_and_selects_time(window, three_tracks):
+    arrangement = window.arrangement
+    lanes, view, rows = arrangement.lanes, arrangement.view, arrangement.layout_model.rows
+    tracks = window.project.tracks
+    body_y = rows[0].top - view.scroll_y + rows[0].height // 2
+    # A click in a clip body places the insert marker instead of selecting the clip.
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                     QPoint(int(view.beat_to_x(1.0)), body_y))
+    assert window.selection.clips == set()
+    assert window.selection.insert_beat == pytest.approx(1.0)
+    assert window.selection.track_id == tracks[0].id
+    # Dragging selects a time range across the tracks it covers; play starts at its start.
+    end_y = rows[1].top - view.scroll_y + rows[1].height // 2
+    drag(lanes, QPoint(int(view.beat_to_x(3.0)), body_y), QPoint(int(view.beat_to_x(1.0)), end_y))
+    assert window.selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id))
+    assert window.selection.insert_beat == pytest.approx(1.0)
+    assert window.selection.clips == set()
+    window.editor.delete_tracks([tracks[1].id])
+    assert window.selection.time_range[2] == (tracks[0].id,)
+
+
+def wheel(widget, pos: QPoint, notches: int, modifiers):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    event = QWheelEvent(QPointF(pos), QPointF(widget.mapToGlobal(pos)), QPoint(), QPoint(0, 120 * notches),
+                        Qt.MouseButton.NoButton, modifiers, Qt.ScrollPhase.NoScrollPhase, False)
+    QApplication.sendEvent(widget, event)
+
+
+def test_alt_wheel_resizes_tracks(window, three_tracks):
+    arrangement = window.arrangement
+    lanes, view, rows = arrangement.lanes, arrangement.view, arrangement.layout_model.rows
+    track = window.project.tracks[1]
+    before = track.height
+    wheel(lanes, QPoint(200, rows[1].top - view.scroll_y + 10), 2, Qt.KeyboardModifier.AltModifier)
+    assert window.project.track(track.id).height == before + 24
+    assert arrangement.layout_model.rows[2].top == arrangement.layout_model.rows[1].top + before + 24
+    header = arrangement.headers.headers[track.id]
+    wheel(header.pan, QPoint(5, 5), -1, Qt.KeyboardModifier.AltModifier)  # over a control, too
+    assert window.project.track(track.id).height == before + 12
+    assert window.project.track(track.id).pan == 0.0
+    wheel(header, QPoint(20, 5), -100, Qt.KeyboardModifier.AltModifier)
+    assert window.project.track(track.id).height == 24  # MIN_TRACK_HEIGHT
+
+
+def test_ctrl_alt_drag_scrolls_both_ways(window, three_tracks):
+    for track in window.project.tracks:
+        window.editor.set_track_height(track.id, 400)
+    view = window.arrangement.view
+    assert view.max_scroll_y > 100
+    view.set_scroll_beats(8.0)
+    mods = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+    clips_before = [list(t.clips) for t in window.project.tracks]
+    drag(window.arrangement.lanes, QPoint(400, 300), QPoint(300, 200), mods)
+    assert view.scroll_y == 100
+    assert view.scroll_beats == pytest.approx(8.0 + 100 / view.px_per_beat)
+    assert [list(t.clips) for t in window.project.tracks] == clips_before  # nothing was copied or moved
+
+
+def test_title_click_sets_playback_start(window, three_tracks):
+    arrangement = window.arrangement
+    lanes, view, rows = arrangement.lanes, arrangement.view, arrangement.layout_model.rows
+    track = window.project.tracks[2]
+    clip = track.clips[0]  # starts at 2 s = beat 4
+    title = QPoint(int(view.beat_to_x(clip.start_beat) + 30), rows[2].top - view.scroll_y + 14)
+    lanes.mouseMoveEvent(QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(title), QPointF(lanes.mapToGlobal(title)),
+                                     Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                                     Qt.KeyboardModifier.NoModifier))
+    assert lanes.cursor().shape() == Qt.CursorShape.PointingHandCursor
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, title)
+    assert window.selection.clips == {(track.id, clip.id)}
+    assert window.selection.insert_beat == pytest.approx(4.0)
+    window.toggle_play()
+    assert window.bridge.position == pytest.approx(4.0, abs=0.1)
+    window.toggle_play()
+
+
+def test_double_click_clip_opens_clip_view(window, three_tracks):
+    arrangement = window.arrangement
+    view, row = arrangement.view, arrangement.layout_model.rows[0]
+    track = window.project.tracks[0]
+    clip = track.clips[0]
+    clip_view = arrangement.clip_view
+    assert not clip_view.isVisible()
+    QTest.mouseDClick(arrangement.lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                      QPoint(int(view.beat_to_x(1.0)), row.top - view.scroll_y + row.height // 2))
+    assert clip_view.isVisible()
+    assert clip_view.geometry() == arrangement.rect()  # overlays the whole arrangement
+    assert clip_view.clip_refs == [(track.id, clip.id)]
+    assert clip_view.name.text() == clip.name
+    assert clip_view.waveform.clips[0][0] == clip
+    assert not clip_view.waveform.grab().isNull()
+    assert window.selection.clips == {(track.id, clip.id)}
+    QTest.keyClick(clip_view, Qt.Key.Key_Escape)
+    assert not clip_view.isVisible()
+    arrangement.toggle_clip_view()  # Shift+Tab reopens the selected clip
+    assert clip_view.isVisible()
+    window.editor.delete_clips([(track.id, clip.id)])  # deleting the clip closes the view
+    assert not clip_view.isVisible()
+
+
+def test_drag_ending_in_clip_band_selects_clip_range(window, three_tracks):
+    arrangement = window.arrangement
+    lanes, view, rows = arrangement.lanes, arrangement.view, arrangement.layout_model.rows
+    selection, tracks = window.selection, window.project.tracks
+    tempo = window.project.tempo
+    body_y = rows[0].top - view.scroll_y + rows[0].height // 2
+    lane_y = rows[1].top - view.scroll_y + rows[1].height - 8
+    # Ending lower in the lane selects time (for automation later); Delete leaves clips alone.
+    drag(lanes, QPoint(int(view.beat_to_x(1.0)), body_y), QPoint(int(view.beat_to_x(3.0)), lane_y))
+    assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id))
+    assert not selection.clip_range and selection.clips == set()
+    window.delete_selection()
+    assert [len(t.clips) for t in tracks] == [1, 1, 1]
+    # Ending in the top (clip) band makes a clip range: it persists, and it knows
+    # the clips it touches (for the clip view).
+    band_y = rows[1].top - view.scroll_y + 5
+    drag(lanes, QPoint(int(view.beat_to_x(1.0)), body_y), QPoint(int(view.beat_to_x(3.0)), band_y))
+    assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id))
+    assert selection.clip_range
+    assert selection.clips == {(tracks[0].id, tracks[0].clips[0].id), (tracks[1].id, tracks[1].clips[0].id)}
+    assert not lanes.grab().isNull()
+    # Delete cuts out only the range: clip 0 (beats 0-4) keeps its start and end,
+    # clip 1 (beats 2-8) loses its first beat, track 3 is outside the range.
+    window.delete_selection()
+    assert [(c.start_beat, c.end_beat(tempo)) for c in tracks[0].clips] == [(0.0, 1.0), (3.0, 4.0)]
+    assert [(c.start_beat, c.end_beat(tempo)) for c in tracks[1].clips] == [(3.0, 8.0)]
+    assert len(tracks[2].clips) == 1
+    assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id))  # still selected
+    assert selection.clips == set()
+    window.undo_stack.undo()
+    assert [len(t.clips) for t in tracks] == [1, 1, 1]
+    # Ctrl+D copies just the selected area to right after it, then selects the copy.
+    selection.set_time_range(1.0, 3.0, (tracks[0].id, tracks[1].id), clips=set())
+    window.duplicate()
+
+    def spans(track):
+        return [(round(c.start_beat, 6), round(c.end_beat(tempo), 6)) for c in track.clips]
+
+    assert spans(tracks[0]) == [(0.0, 3.0), (3.0, 5.0)]
+    assert spans(tracks[1]) == [(2.0, 4.0), (4.0, 5.0), (5.0, 8.0)]
+    assert tracks[1].clips[1].offset_sec == pytest.approx(0.0)  # the copy plays clip 1's first beat
+    assert selection.time_range == (3.0, 5.0, (tracks[0].id, tracks[1].id)) and selection.clip_range
+    assert selection.insert_beat == 3.0
+    window.undo_stack.undo()
+    assert [len(t.clips) for t in tracks] == [1, 1, 1]
+    # Clicking a clip's title inside the range selects just that clip.
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                     QPoint(int(view.beat_to_x(5.0)), rows[1].top - view.scroll_y + 6))
+    assert selection.time_range is None and not selection.clip_range
+    assert selection.clips == {(tracks[1].id, tracks[1].clips[0].id)}
+    # ...and draws it highlighted (this used to be hidden by a stale clip-range flag).
+    body = QPoint(int(view.beat_to_x(5.0)), rows[1].top - view.scroll_y + rows[1].height // 2)
+    highlighted = lanes.grab().toImage().pixelColor(body)
+    selection.set_clips(set())
+    assert lanes.grab().toImage().pixelColor(body) != highlighted
+
+
+def test_clip_view_edits_several_clips_in_unison(window, three_tracks):
+    arrangement = window.arrangement
+    editor, tracks = window.editor, window.project.tracks
+    refs = [(t.id, t.clips[0].id) for t in tracks[:2]]
+    editor.update_clips(refs[1:], lambda c: replace(c, transpose=5, warp_mode="Tones"), "setup")
+    window.selection.set_clips(refs)
+    arrangement.toggle_clip_view()
+    clip_view = arrangement.clip_view
+    assert clip_view.clip_refs == refs
+    assert clip_view.name.text() == "2 Clips"
+    assert len(clip_view.waveform.clips) == 2
+    assert not clip_view.waveform.grab().isNull()
+    assert clip_view.mode.currentIndex() == -1  # modes differ
+    assert "…" in clip_view.transpose.readout.text()
+
+    # A knob drag moves every clip by the same amount, as one undo step.
+    depth = window.undo_stack.count()
+    key = object()
+    for value in (1.0, 2.2):
+        clip_view.transpose.knob.valueChanged.emit(value, key)
+    assert [t.clips[0].transpose for t in tracks[:2]] == [2, 7]
+    assert window.undo_stack.count() == depth + 1
+    # Choosing a warp mode sets it on all of them.
+    clip_view.mode.activated.emit(WARP_MODES.index("Complex"))
+    assert {t.clips[0].warp_mode for t in tracks[:2]} == {"Complex"}
+    assert clip_view.mode.currentText() == "Complex"
+    clip_view.warp.click()
+    assert all(t.clips[0].warp for t in tracks[:2])
+    window.undo_stack.undo()
+    window.undo_stack.undo()
+    window.undo_stack.undo()
+    assert [t.clips[0].transpose for t in tracks[:2]] == [0, 5]
+    assert tracks[2].clips[0].transpose == 0  # not selected, untouched
+    # Deleting one clip keeps the view open on the other.
+    editor.delete_clips(refs[:1])
+    assert clip_view.clip_refs == refs[1:]
+    assert clip_view.name.text() == tracks[1].clips[0].name
 
 
 def test_drop_files_from_browser(window, tmp_path):

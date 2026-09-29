@@ -3,8 +3,16 @@ volume, pan, meter. Plus the master track header and lane."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QRectF, Qt
-from PySide6.QtGui import QColor, QContextMenuEvent, QIcon, QMouseEvent, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QObject, QRect, QRectF, Qt
+from PySide6.QtGui import (
+    QColor,
+    QContextMenuEvent,
+    QIcon,
+    QMouseEvent,
+    QPainter,
+    QPixmap,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QLineEdit, QMenu, QWidget
 
 from ... import theme
@@ -14,6 +22,7 @@ from ...model.project import MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT, TRACK_COLORS
 from ...model.timebase import format_db, format_pan
 from ..widgets import Knob, MeterWidget, ToggleButton, ValueBox
 from .grid import draw_grid, draw_loop_region
+from .lanes_canvas import resize_track_by_wheel
 from .view_state import Selection, TrackLayout, ViewState
 
 RESIZE_GRAB = 4
@@ -55,6 +64,8 @@ class TrackHeader(QWidget):
         self.volume.valueChanged.connect(
             lambda v, key: self.editor.set_track_param(self.track_id, "volume_db", v, key))
         self.pan.valueChanged.connect(lambda v, key: self.editor.set_track_param(self.track_id, "pan", v, key))
+        for widget in (self.volume, self.pan, self.activator, self.solo, self.meter):
+            widget.installEventFilter(self)  # Alt+wheel over a control still resizes the track
         self.refresh()
 
     @property
@@ -104,6 +115,25 @@ class TrackHeader(QWidget):
         p.fillRect(QRect(0, 0, 1, self.height()), QColor(theme.BORDER))
 
     # --- Interaction -----------------------------------------------------------------
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Wheel and self._alt_wheel(event):
+            return True
+        return super().eventFilter(watched, event)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if not self._alt_wheel(event):
+            event.ignore()
+
+    def _alt_wheel(self, event: QWheelEvent) -> bool:
+        """Alt+wheel resizes this track (Qt may report it on either axis)."""
+        mods = event.modifiers()
+        if not mods & Qt.KeyboardModifier.AltModifier or mods & Qt.KeyboardModifier.ControlModifier:
+            return False
+        delta = event.angleDelta()
+        resize_track_by_wheel(self.editor, self.track_id, delta.y() or delta.x())
+        event.accept()
+        return True
 
     def _in_resize_zone(self, y: float) -> bool:
         return y >= self.height() - RESIZE_GRAB
@@ -224,6 +254,10 @@ class TrackHeaderColumn(QWidget):
 
     def mousePressEvent(self, _event) -> None:
         self.selection.select_track(None)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        self.view.set_scroll_y(self.view.scroll_y - event.angleDelta().y() / 120.0 * 48)
+        event.accept()
 
 
 class MasterHeader(QWidget):

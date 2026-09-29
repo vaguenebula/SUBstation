@@ -55,6 +55,21 @@ def test_overlap_removes_covered_clip_and_keeps_neighbours():
     assert [c.id for c in result] == ["new", "touching"]
 
 
+def test_remove_range_keeps_start_and_end_of_spanning_clip():
+    long = clip(0.0, 8.0, cid="long")
+    inside = clip(10.0, 1.0)
+    across = clip(11.5, 2.0, cid="across")
+    after = edits.remove_range([long, inside, across], 2.0, 12.0, TEMPO)
+    after = edits.remove_range(after, 3.0, 5.0, TEMPO)
+    assert spans(after) == [(0.0, 2.0), (12.0, 13.5)]
+    # A middle cut leaves both ends, each still playing its own part of the audio.
+    [a, b] = edits.remove_range([long], 3.0, 5.0, TEMPO)
+    assert spans([a, b]) == [(0.0, 3.0), (5.0, 8.0)]
+    assert a.id == "long" and b.id != "long"
+    assert b.offset_sec == pytest.approx(2.5)
+    assert edits.remove_range([long], 9.0, 10.0, TEMPO) == [long]  # untouched
+
+
 def test_split_clip():
     left, right = edits.split_clip(clip(0, 4, offset=1.0), 1.0, TEMPO)
     assert spans([left, right]) == [(0, 1), (1, 4)]
@@ -178,6 +193,43 @@ def test_delete_track_undo_restores_everything(editor):
     editor.undo_stack.undo()
     assert snapshot(editor.project) == before
     assert editor.project.track(t.id).devices[0].kind == "utility"
+
+
+def test_faster_tempo_trims_clips_instead_of_overlapping(editor):
+    p = editor.project
+    track = editor.add_audio_track()
+    editor.add_clips(track.id, 0.0, [("a.wav", 2.0), ("b.wav", 1.0)])  # 4 beats, then 2 at 120 BPM
+    second = p.track(track.id).clips[1]
+    assert second.start_beat == 4.0
+
+    def ends():
+        return [(round(c.start_beat, 6), round(c.end_beat(p.tempo), 6)) for c in p.track(track.id).clips]
+
+    # Dragging the tempo up trims the first clip at the second one's start...
+    drag = object()
+    editor.set_tempo(150.0, drag)
+    assert ends() == [(0.0, 4.0), (4.0, 6.5)]
+    assert p.track(track.id).clips[0].duration_sec == pytest.approx(1.6)
+    # ...and back down within the same drag restores it: steps fit from the start of the drag.
+    editor.set_tempo(130.0, drag)
+    editor.set_tempo(100.0, drag)
+    assert p.track(track.id).clips[0].duration_sec == pytest.approx(2.0)
+    editor.set_tempo(180.0, drag)
+    assert ends() == [(0.0, 4.0), (4.0, 7.0)]
+    # The whole drag is one undo step that restores tempo and clips.
+    editor.undo_stack.undo()
+    assert p.tempo == 120.0
+    assert [c.duration_sec for c in p.track(track.id).clips] == [2.0, 1.0]
+    editor.undo_stack.redo()
+    assert p.tempo == 180.0 and ends()[0] == (0.0, 4.0)
+
+
+def test_fit_to_tempo_leaves_non_overlapping_clips_alone():
+    clips = [clip(0.0, 2.0), clip(4.0, 2.0)]
+    assert edits.fit_to_tempo(clips, TEMPO) is clips
+    for factor, end in ((2, 8.0), (3, 10.0)):  # the first clip would grow to 4 or 6 beats
+        fitted = edits.fit_to_tempo(clips, TEMPO * factor)
+        assert [(c.start_beat, round(c.end_beat(TEMPO * factor), 6)) for c in fitted] == [(0.0, 4.0), (4.0, end)]
 
 
 def test_settings(editor):

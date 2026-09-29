@@ -107,7 +107,12 @@ class ViewState(QObject):
 
 
 class Selection(QObject):
-    """Selected clips, the selected track, and the insert (start) marker."""
+    """Selected clips, the selected track, the insert (start) marker, and a time
+    selection: a beat range spanning one or more adjacent tracks.
+
+    A time selection made in the clips' band is a clip range: `clips` holds the
+    clips it touches (for the clip view) and Delete cuts out just that range.
+    Made lower in the lanes it is a lane range (for automation, later)."""
 
     changed = Signal()
     insert_changed = Signal()
@@ -117,10 +122,13 @@ class Selection(QObject):
         self.clips: set[tuple[str, str]] = set()
         self.track_id: str | None = None
         self.insert_beat = 0.0
+        self.time_range: tuple[float, float, tuple[str, ...]] | None = None  # start, end, track ids
+        self._range_selects_clips = False
         self.focus = "clips"  # what Delete acts on: "clips" or "track"
 
     def set_clips(self, refs, track_id: str | None = None) -> None:
         self.clips = set(refs)
+        self.time_range = None
         if track_id is not None:
             self.track_id = track_id
         self.focus = "clips"
@@ -128,6 +136,7 @@ class Selection(QObject):
 
     def toggle_clip(self, ref: tuple[str, str]) -> None:
         self.clips ^= {ref}
+        self.time_range = None
         self.track_id = ref[0]
         self.focus = "clips"
         self.changed.emit()
@@ -137,7 +146,26 @@ class Selection(QObject):
         if focus_track:
             self.focus = "track"
             self.clips = set()
+            self.time_range = None
         self.changed.emit()
+
+    def set_time_range(self, start: float, end: float, track_ids, clips=None) -> None:
+        """Select a beat range across tracks. With `clips` (the clips it touches,
+        possibly none) it is a clip range, otherwise a lane range."""
+        track_ids = tuple(track_ids)
+        self.time_range = (start, end, track_ids) if end > start and track_ids else None
+        self._range_selects_clips = clips is not None
+        self.clips = set(clips or ()) if self.time_range else set()
+        if track_ids:
+            self.track_id = track_ids[0]
+        self.focus = "clips"
+        self.changed.emit()
+
+    @property
+    def clip_range(self) -> bool:
+        """Whether the time selection selects clip content (not automation). Derived,
+        so clearing the time selection can never leave it stale."""
+        return self.time_range is not None and self._range_selects_clips
 
     def set_insert(self, beat: float) -> None:
         self.insert_beat = max(0.0, beat)
@@ -149,9 +177,14 @@ class Selection(QObject):
         valid_clips = {(t.id, c.id) for t in project.tracks for c in t.clips}
         clips = self.clips & valid_clips
         track_id = self.track_id if self.track_id in valid_tracks else None
-        if clips != self.clips or track_id != self.track_id:
+        time_range = self.time_range
+        if time_range is not None:
+            kept = tuple(t for t in time_range[2] if t in valid_tracks)
+            time_range = (time_range[0], time_range[1], kept) if kept else None
+        if clips != self.clips or track_id != self.track_id or time_range != self.time_range:
             self.clips = clips
             self.track_id = track_id
+            self.time_range = time_range
             self.changed.emit()
 
 

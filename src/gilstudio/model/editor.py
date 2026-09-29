@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from .commands import (
     SetDeviceEnabledCommand,
     SetDeviceParamCommand,
     SetDevicesCommand,
+    SetTempoCommand,
     UpdateSettingsCommand,
     UpdateTrackCommand,
 )
@@ -28,6 +30,8 @@ BUILTIN_DEVICES = {
     # kind: (display name, {param id: default})
     "utility": ("Utility", {"gain": 0.0, "pan": 0.0, "width": 100.0}),
 }
+# How the browser's Built-in category groups the devices above.
+BUILTIN_CATEGORIES = {"Audio Effects": ["utility"]}
 
 
 class ProjectEditor:
@@ -85,7 +89,22 @@ class ProjectEditor:
             self._push(UpdateSettingsCommand(self.project, old, new, text, merge_key))
 
     def set_tempo(self, bpm: float, merge_key: object | None = None) -> None:
-        self._set_settings("Change Tempo", merge_key, tempo=max(20.0, min(999.0, round(bpm, 2))))
+        """Change the tempo, trimming clips that would otherwise overlap."""
+        p = self.project
+        tempo = max(20.0, min(999.0, round(bpm, 2)))
+        if tempo == p.tempo:
+            return
+        current = {t.id: list(t.clips) for t in p.tracks}
+        # Within one drag, fit from the clips as they were when the drag began, so
+        # going up and back down doesn't leave clips trimmed.
+        baseline = current
+        index = self.undo_stack.index()
+        last = self.undo_stack.command(index - 1) if index > 0 else None
+        if (merge_key is not None and isinstance(last, SetTempoCommand) and last.merge_key == merge_key
+                and last.old[1].keys() == current.keys()):
+            baseline = last.old[1]
+        fitted = {tid: edits.fit_to_tempo(clips, tempo) for tid, clips in baseline.items()}
+        self._push(SetTempoCommand(p, (p.tempo, current), (tempo, fitted), merge_key))
 
     def set_time_signature(self, ts: TimeSignature) -> None:
         self._set_settings("Change Time Signature", time_signature=ts)
@@ -103,10 +122,10 @@ class ProjectEditor:
 
     # --- Clips -------------------------------------------------------------------
 
-    def _commit(self, text: str, after: dict[str, list[Clip]]) -> None:
+    def _commit(self, text: str, after: dict[str, list[Clip]], merge_key: object | None = None) -> None:
         before = {tid: list(self.project.track(tid).clips) for tid in after}
         if before != after:
-            self._push(SetClipsCommand(self.project, text, before, after))
+            self._push(SetClipsCommand(self.project, text, before, after, merge_key))
 
     def add_clips(self, track_id: str | None, start_beat: float, sources: list[tuple[str, float]],
                   track_index: int | None = None) -> list[ClipRef]:
@@ -172,6 +191,17 @@ class ProjectEditor:
         clips = [clip if c.id == clip.id else c for c in self.project.track(track_id).clips]
         self._commit(text, {track_id: edits.resolve_overlaps(clips, {clip.id}, self.project.tempo)})
 
+    def update_clips(self, refs: list[ClipRef], change: Callable[[Clip], Clip], text: str,
+                     merge_key: object | None = None) -> None:
+        """Apply `change` to each clip in `refs` as one undo step (clip view settings).
+        Positions and lengths must not change, so overlaps need no resolving."""
+        ids_by_track: dict[str, set[str]] = {}
+        for tid, cid in refs:
+            ids_by_track.setdefault(tid, set()).add(cid)
+        after = {tid: [change(c) if c.id in ids else c for c in self.project.track(tid).clips]
+                 for tid, ids in ids_by_track.items()}
+        self._commit(text, after, merge_key)
+
     def delete_clips(self, refs: list[ClipRef]) -> None:
         ids_by_track: dict[str, set[str]] = {}
         for tid, cid in refs:
@@ -179,6 +209,36 @@ class ProjectEditor:
         after = {tid: [c for c in self.project.track(tid).clips if c.id not in ids]
                  for tid, ids in ids_by_track.items()}
         self._commit("Delete Clips" if len(refs) > 1 else "Delete Clip", after)
+
+    def delete_range(self, start: float, end: float, track_ids: list[str]) -> None:
+        """Delete the clip content between two beats on the given tracks."""
+        tempo = self.project.tempo
+        self._commit("Delete Time Selection", {
+            tid: edits.remove_range(self.project.track(tid).clips, start, end, tempo) for tid in track_ids})
+
+    def duplicate_range(self, start: float, end: float, track_ids: list[str]) -> list[ClipRef]:
+        """Ableton's Ctrl+D on a time selection: copy just the clip content between
+        two beats to right after `end`, replacing what was there. Returns the copies."""
+        tempo = self.project.tempo
+        length = end - start
+        after: dict[str, list[Clip]] = {}
+        result: list[ClipRef] = []
+        for tid in track_ids:
+            clips = self.project.track(tid).clips
+            copies = [replace(c, start_beat=c.start_beat + length) for c in edits.slice_range(clips, start, end, tempo)]
+            if copies:
+                ids = {c.id for c in copies}
+                after[tid] = edits.resolve_overlaps(list(clips) + copies, ids, tempo)
+                result += [(tid, cid) for cid in ids]
+        if after:
+            self._commit("Duplicate Time Selection", after)
+        return result
+
+    def clips_in_range(self, start: float, end: float, track_ids) -> set[ClipRef]:
+        """The clips on these tracks that overlap the beat range."""
+        tempo = self.project.tempo
+        return {(tid, c.id) for tid in track_ids for c in self.project.track(tid).clips
+                if c.start_beat < end and c.end_beat(tempo) > start}
 
     def duplicate_clips(self, refs: list[ClipRef]) -> list[ClipRef]:
         """Ableton's Ctrl+D: copies land right after the selection."""

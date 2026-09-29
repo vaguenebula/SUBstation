@@ -1,4 +1,5 @@
-"""Mouse gestures on the track lanes: move/copy clips, trim edges, rubber band."""
+"""Mouse gestures on the track lanes: move/copy clips, trim edges, time selection,
+rubber band, and hand-scrolling."""
 
 from __future__ import annotations
 
@@ -77,6 +78,7 @@ class MoveClipsGesture(ClipGesture):
         new_refs = self.canvas.editor.move_clips(self.refs, self.delta, self.track_delta, copy_clips=self.copy)
         if new_refs:
             self.canvas.selection.set_clips(new_refs, track_id=new_refs[0][0])
+            self.canvas.selection.set_insert(self.primary.start_beat + self.delta)  # follow the moved clip
 
 
 class TrimGesture(ClipGesture):
@@ -135,3 +137,55 @@ class RubberBandGesture(ClipGesture):
 
     def rubber_band(self) -> QRectF | None:
         return self.rect
+
+
+class TimeSelectGesture(ClipGesture):
+    """Click places the insert marker; drag selects across tracks. Where the drag
+    ends decides what: in a lane's clip (title) band it selects the clips it
+    touches, lower down it selects a time range (later: automation)."""
+
+    def __init__(self, canvas, press: QPointF, bypass_snap: bool):
+        self.canvas = canvas
+        self.press = press
+        self.anchor = max(0.0, canvas.view.snap_beat(canvas.view.x_to_beat(press.x()), bypass_snap))
+        self.anchor_row = canvas.row_index_at(press.y(), clamp=True)
+        self.active = False
+
+    def move(self, pos: QPointF, modifiers) -> None:
+        if not self.active:
+            if (pos - self.press).manhattanLength() < DRAG_THRESHOLD:
+                return
+            self.active = True
+        view = self.canvas.view
+        bypass = bool(modifiers & Qt.KeyboardModifier.AltModifier)
+        beat = max(0.0, view.snap_beat(view.x_to_beat(pos.x()), bypass))
+        start, end = sorted((self.anchor, beat))
+        row = self.canvas.row_index_at(pos.y(), clamp=True)
+        first, last = sorted((self.anchor_row, row))
+        rows = self.canvas.layout_model.rows[first:last + 1]
+        track_ids = [r.track_id for r in rows]
+        selection = self.canvas.selection
+        if self.canvas.in_clip_band(pos):
+            selection.set_time_range(start, end, track_ids,
+                                     clips=self.canvas.editor.clips_in_range(start, end, track_ids))
+            self.canvas.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            selection.set_time_range(start, end, track_ids)
+            self.canvas.setCursor(Qt.CursorShape.IBeamCursor)
+        selection.set_insert(start)
+
+
+class PanGesture(ClipGesture):
+    """Ctrl+Alt drag: scroll the arrangement in both directions (Ableton's hand)."""
+
+    def __init__(self, canvas, press: QPointF):
+        self.canvas = canvas
+        self.press = press
+        self.scroll_beats = canvas.view.scroll_beats
+        self.scroll_y = canvas.view.scroll_y
+
+    def move(self, pos: QPointF, modifiers) -> None:
+        view = self.canvas.view
+        delta = pos - self.press
+        view.set_scroll_beats(self.scroll_beats - delta.x() / view.px_per_beat)
+        view.set_scroll_y(self.scroll_y - delta.y())

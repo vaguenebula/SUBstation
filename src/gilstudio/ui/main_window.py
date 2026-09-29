@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
             source.status_message.connect(self.show_message)
         self.arrangement.locate_requested.connect(self.locate)
         self.browser.file_activated.connect(self.add_file_at_insert)
+        self.browser.device_activated.connect(self.add_device_to_selected_track)
         self.transport.play_requested.connect(self.toggle_play)
         self.transport.stop_requested.connect(self.stop_button)
         self.transport.preferences_requested.connect(self.show_preferences)
@@ -147,6 +148,7 @@ class MainWindow(QMainWindow):
                                            checkable=True, checked=True)
         self.devices_action = self._action(view, "&Device View", self.devices.setVisible, "Ctrl+Alt+L",
                                            checkable=True, checked=True)
+        self._action(view, "&Clip View", self.arrangement.toggle_clip_view, "Shift+Tab")
         view.addSeparator()
         arrangement = self.arrangement
         self._action(view, "Zoom &In", lambda: arrangement.zoom(1.4), ["+", "=", QKeySequence.StandardKey.ZoomIn])
@@ -222,17 +224,43 @@ class MainWindow(QMainWindow):
         track = self.editor.add_audio_track(index)
         self.selection.select_track(track.id, focus_track=True)
 
+    def add_device_to_selected_track(self, kind: str) -> None:
+        track_id = self.selection.track_id
+        if track_id and self.project.has_track(track_id):
+            self.editor.add_device(track_id, kind)
+        else:
+            self.show_message("Select a track to add the device to.")
+
     def delete_track(self) -> None:
         if self.selection.track_id and self.project.has_track(self.selection.track_id):
             self.editor.delete_tracks([self.selection.track_id])
 
     def delete_selection(self) -> None:
+        time_range = self.selection.time_range
+        if time_range is not None:
+            if self.selection.clip_range:
+                # Cut out just the selected area; the selection stays, now empty.
+                start, end, track_ids = time_range
+                self.editor.delete_range(start, end, list(track_ids))
+                self.selection.set_time_range(start, end, track_ids, clips=set())
+            return  # a lane range will delete automation
         if self.selection.clips:
             self.editor.delete_clips(sorted(self.selection.clips))
         elif self.selection.focus == "track":
             self.delete_track()
 
     def duplicate(self) -> None:
+        time_range = self.selection.time_range
+        if time_range is not None:
+            if self.selection.clip_range:
+                # Copy the selected area to right after it, and select the copy.
+                start, end, track_ids = time_range
+                length = end - start
+                self.editor.duplicate_range(start, end, list(track_ids))
+                self.selection.set_time_range(end, end + length, track_ids,
+                                              clips=self.editor.clips_in_range(end, end + length, track_ids))
+                self.selection.set_insert(end)
+            return  # a lane range will duplicate automation
         if self.selection.clips:
             refs = self.editor.duplicate_clips(sorted(self.selection.clips))
             self.selection.set_clips(refs)
