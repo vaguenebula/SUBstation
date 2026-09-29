@@ -1,7 +1,8 @@
 """Clip view: opened by double-clicking a clip (or Shift+Tab), it overlays the
-arrangement with clip controls on the left and large waveforms on the right.
+arrangement. A MIDI clip gets the piano roll and nothing else. Audio clips get
+clip controls on the left and large waveforms on the right.
 
-It edits every selected clip at once. Knobs move all clips by the same amount
+For audio, it edits every selected clip at once. Knobs move all clips by the same amount
 (transposing up 2 semitones transposes each clip by 2, whatever it was at);
 switches and the warp mode set the same value on all of them.
 
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -33,9 +35,10 @@ from PySide6.QtWidgets import (
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
 from ..model.editor import ClipRef, ProjectEditor
-from ..model.project import WARP_MODES, Clip
+from ..model.project import WARP_MODES, AnyClip, Clip, MidiClip
 from ..model.timebase import beats_to_seconds, format_db, format_pan
 from .arrangement.waveform_cache import WaveformCache
+from .piano_roll import PianoRoll
 from .widgets import Knob, ToggleButton, ValueBox
 
 WARP_MODE_TIPS = {
@@ -228,12 +231,14 @@ class ClipView(QFrame):
     """Overlay over the arrangement; hidden until clips are opened."""
 
     closed = Signal()
+    locate_requested = Signal(float)
 
     def __init__(self, editor: ProjectEditor, bridge: EngineBridge, parent: QWidget | None = None):
         super().__init__(parent)
         self.editor = editor
         self.project = editor.project
         self.clip_refs: list[ClipRef] = []  # the first one leads: knobs show its values
+        self.midi = False  # showing a MIDI clip in the piano roll
         # (gesture key, attribute, {clip id: value when the gesture started})
         self._baseline: tuple[object, str, dict[str, float]] | None = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -355,16 +360,22 @@ class ClipView(QFrame):
 
         self.waveform = ClipWaveform(bridge)
 
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
-        body.addWidget(scroll)
-        body.addWidget(self.waveform, 1)
+        self.audio_page = QWidget()
+        audio = QHBoxLayout(self.audio_page)
+        audio.setContentsMargins(0, 0, 0, 0)
+        audio.setSpacing(0)
+        audio.addWidget(scroll)
+        audio.addWidget(self.waveform, 1)
+        self.piano_roll = PianoRoll(editor, bridge)
+        self.piano_roll.locate_requested.connect(self.locate_requested)
+        self.body = QStackedWidget()
+        self.body.addWidget(self.audio_page)
+        self.body.addWidget(self.piano_roll)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(header_widget)
-        layout.addLayout(body, 1)
+        layout.addWidget(self.body, 1)
 
         self.project.clips_changed.connect(self._on_clips_changed)
         self.project.settings_changed.connect(self._refresh)
@@ -376,14 +387,15 @@ class ClipView(QFrame):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(theme.PANEL))
         p.fillRect(QRectF(0, HEADER_HEIGHT - 1, self.width(), 1), QColor(theme.BORDER))
-        p.fillRect(QRectF(CONTROLS_WIDTH, HEADER_HEIGHT, 1, self.height()), QColor(theme.BORDER))
+        if not self.midi:
+            p.fillRect(QRectF(CONTROLS_WIDTH, HEADER_HEIGHT, 1, self.height()), QColor(theme.BORDER))
         clips = self._clips()
         if clips:
             p.fillRect(QRectF(0, 0, 5, HEADER_HEIGHT - 1), QColor(self.project.track(clips[0][0]).color))
 
     # --- Opening & closing -------------------------------------------------------
 
-    def _clips(self) -> list[tuple[str, Clip]]:
+    def _clips(self) -> list[tuple[str, AnyClip]]:
         """(track id, clip) for each open clip that still exists, in order."""
         result = []
         for track_id, clip_id in self.clip_refs:
@@ -393,24 +405,38 @@ class ClipView(QFrame):
                     result.append((track_id, clip))
         return result
 
-    def open_clips(self, refs) -> None:
-        """Show `refs` over the arrangement, ordered top track first, then by time."""
+    def open_clips(self, refs, lead: ClipRef | None = None) -> None:
+        """Show `refs` over the arrangement, ordered top track first, then by time.
+        If the lead clip (`lead`, else the first) is a MIDI clip, the piano roll
+        opens it alone; otherwise the audio clips among `refs` open together."""
         self.clip_refs = list(refs)
         clips = sorted(self._clips(), key=lambda tc: (self.project.track_index(tc[0]), tc[1].start_beat))
-        self.clip_refs = [(track_id, clip.id) for track_id, clip in clips]
         if not clips:
             self.close_view()
             return
+        first = next((tc for tc in clips if (tc[0], tc[1].id) == lead), clips[0])
+        self.midi = isinstance(first[1], MidiClip)
+        if self.midi:
+            clips = [first]
+        else:
+            clips = [tc for tc in clips if not isinstance(tc[1], MidiClip)]
+        self.clip_refs = [(track_id, clip.id) for track_id, clip in clips]
         self._baseline = None
+        self.piano_roll.set_clip(*(self.clip_refs[0] if self.midi else (None, None)))
+        self.body.setCurrentWidget(self.piano_roll if self.midi else self.audio_page)
         self._refresh()
         self.show()
         self.raise_()
-        self.setFocus()
+        if self.midi:
+            self.piano_roll.grid.setFocus()
+        else:
+            self.setFocus()
 
     def close_view(self) -> None:
         was_open = self.isVisible()
         self.clip_refs = []
         self.waveform.set_clips([])
+        self.piano_roll.set_clip(None, None)
         self.hide()
         if was_open:
             self.closed.emit()
@@ -440,6 +466,12 @@ class ClipView(QFrame):
             return
         clips = [clip for _, clip in items]
         lead = clips[0]
+        if self.midi:
+            count = len(lead.played_notes())
+            self.name.setText(lead.name)
+            self.info.setText(f"{lead.duration_beats:.2f} beats  ·  {count} note{'' if count == 1 else 's'}")
+            self.update()
+            return
         if len(clips) == 1:
             self.name.setText(lead.name)
             tempo = self.project.tempo

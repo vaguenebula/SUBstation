@@ -1,8 +1,10 @@
-"""Bottom 'detail view': the selected track's device chain.
+"""Bottom 'detail view': the selected track's device chain. On a MIDI track the
+instrument comes first.
 
 Built-in devices only for now; this is also where VST3/CLAP devices will live.
 Parameter metadata comes from the engine, so plugin parameters will show up
-here without UI changes.
+here without UI changes: a knob per parameter (log-scaled where the engine
+says so), or a list for parameters that choose between named values.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QPainter
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -21,13 +24,16 @@ from PySide6.QtWidgets import (
 
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
-from ..model.editor import BUILTIN_DEVICES, ProjectEditor
+from ..model.editor import BUILTIN_DEVICES, ProjectEditor, is_instrument
 from ..model.project import Device
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds
 from .widgets import Knob, ToggleButton
 
 PANEL_HEIGHT = 150
+EFFECTS_HINT = "Drop audio effects here from the browser (Built-in \u203a Audio Effects)"
+INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in \u203a Instruments)"
+INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create \u203a Insert MIDI Track)."
 
 
 def _format_value(value: float, unit: str) -> str:
@@ -37,6 +43,12 @@ def _format_value(value: float, unit: str) -> str:
         return f"{value:.0f} %"
     if unit == "":
         return f"{value:+.2f}" if value else "0.00"
+    if unit == "Hz":
+        return f"{value / 1000:.2f} kHz" if value >= 1000 else f"{value:.0f} Hz"
+    if unit == "ms":
+        if value >= 1000:
+            return f"{value / 1000:.2f} s"
+        return f"{value:.1f} ms" if value < 10 else f"{value:.0f} ms"
     return f"{value:.2f} {unit}"
 
 
@@ -72,31 +84,43 @@ class DeviceWidget(QFrame):
         header.addWidget(remove)
 
         self.knobs: dict[str, tuple[Knob, QLabel, str]] = {}
+        self.choices: dict[str, QComboBox] = {}
         params = QHBoxLayout()
         params.setSpacing(10)
         engine_id = bridge.engine_device_id(track_id, device.id)
         infos = bridge.engine.processor_params(engine_id) if engine_id is not None else []
         for info in infos:
             value = device.params.get(info.id, info.default_value)
-            knob = Knob(info.min_value, info.max_value, value, default=info.default_value,
-                        bipolar=info.min_value < 0 < info.max_value and info.unit == "",
-                        formatter=lambda v, u=info.unit: _format_value(v, u))
-            knob.setFixedSize(38, 38)
             name = QLabel(info.name)
             name.setAlignment(Qt.AlignmentFlag.AlignCenter)
             name.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 8pt;")
-            readout = QLabel(_format_value(value, info.unit))
-            readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            readout.setStyleSheet("font-size: 8pt;")
-            knob.valueChanged.connect(
-                lambda v, key, pid=info.id: editor.set_device_param(track_id, self.device_id, pid, v, key))
             column = QVBoxLayout()
             column.setSpacing(1)
             column.addWidget(name)
-            column.addWidget(knob, 0, Qt.AlignmentFlag.AlignHCenter)
-            column.addWidget(readout)
+            if info.value_labels:
+                choice = QComboBox()
+                choice.addItems(info.value_labels)
+                choice.setCurrentIndex(round(value))
+                choice.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                choice.activated.connect(
+                    lambda i, pid=info.id: editor.set_device_param(track_id, self.device_id, pid, float(i)))
+                column.addWidget(choice)
+                column.addStretch(1)
+                self.choices[info.id] = choice
+            else:
+                knob = Knob(info.min_value, info.max_value, value, default=info.default_value,
+                            bipolar=info.min_value < 0 < info.max_value and info.unit == "",
+                            log_scale=info.log_scale, formatter=lambda v, u=info.unit: _format_value(v, u))
+                knob.setFixedSize(38, 38)
+                readout = QLabel(_format_value(value, info.unit))
+                readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                readout.setStyleSheet("font-size: 8pt;")
+                knob.valueChanged.connect(
+                    lambda v, key, pid=info.id: editor.set_device_param(track_id, self.device_id, pid, v, key))
+                column.addWidget(knob, 0, Qt.AlignmentFlag.AlignHCenter)
+                column.addWidget(readout)
+                self.knobs[info.id] = (knob, readout, info.unit)
             params.addLayout(column)
-            self.knobs[info.id] = (knob, readout, info.unit)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 8)
@@ -111,6 +135,10 @@ class DeviceWidget(QFrame):
             if value is not None:
                 knob.setValue(value)
                 readout.setText(_format_value(value, unit))
+        for param_id, choice in self.choices.items():
+            value = device.params.get(param_id)
+            if value is not None:
+                choice.setCurrentIndex(round(value))
 
 
 class DevicePanel(QFrame):
@@ -149,7 +177,7 @@ class DevicePanel(QFrame):
         scroll.viewport().setAutoFillBackground(False)
         self.chain.setAutoFillBackground(False)
 
-        self.hint = QLabel("Drop audio effects here from the browser (Built-in \u203a Audio Effects)")
+        self.hint = QLabel(EFFECTS_HINT)
         self.hint.setStyleSheet(f"color: {theme.TEXT_DISABLED};")
 
         layout = QHBoxLayout(self)
@@ -207,7 +235,9 @@ class DevicePanel(QFrame):
             self.chain_layout.addWidget(widget)
         self.chain_layout.addWidget(self.hint)
         self.chain_layout.addStretch(1)
-        self.hint.setVisible(not track.devices)
+        needs_instrument = track.is_midi and not any(is_instrument(d.kind) for d in track.devices)
+        self.hint.setText(INSTRUMENT_HINT if needs_instrument else EFFECTS_HINT)
+        self.hint.setVisible(needs_instrument or not track.devices)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         mime = event.mimeData()
@@ -217,8 +247,9 @@ class DevicePanel(QFrame):
     def dropEvent(self, event: QDropEvent) -> None:
         kinds = [k for k in device_kinds(event.mimeData()) if k in BUILTIN_DEVICES]
         if kinds and self.track_id is not None:
-            for kind in kinds:
-                self.editor.add_device(self.track_id, kind)
+            refused = [kind for kind in kinds if self.editor.add_device(self.track_id, kind) is None]
+            if refused:
+                self.status_message.emit(INSTRUMENT_REFUSED)
         else:
             self.status_message.emit("VST3/CLAP plugin hosting is not available yet.")
         event.acceptProposedAction()

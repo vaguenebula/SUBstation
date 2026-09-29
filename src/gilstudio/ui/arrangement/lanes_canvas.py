@@ -26,8 +26,8 @@ from PySide6.QtWidgets import QMenu, QWidget
 
 from ... import theme
 from ...audio.engine_bridge import EngineBridge, is_audio_file
-from ...model.editor import BUILTIN_DEVICES, ProjectEditor
-from ...model.project import MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT, Clip
+from ...model.editor import BUILTIN_DEVICES, ProjectEditor, is_instrument
+from ...model.project import MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT, AnyClip, MidiClip
 from ..browser.browser_models import PLUGIN_MIME, device_kinds
 from .grid import draw_grid, draw_loop_region
 from .interactions import (
@@ -135,7 +135,7 @@ class LanesCanvas(QWidget):
             return 0 if y + self.view.scroll_y < 0 else len(self.layout_model.rows) - 1
         return index
 
-    def _clip_rect(self, clip: Clip, row_top: float, row_height: int) -> QRectF:
+    def _clip_rect(self, clip: AnyClip, row_top: float, row_height: int) -> QRectF:
         x0 = self.view.beat_to_x(clip.start_beat)
         x1 = self.view.beat_to_x(clip.end_beat(self.project.tempo))
         return QRectF(x0, row_top + 1, max(2.0, x1 - x0), row_height - 3)
@@ -149,7 +149,7 @@ class LanesCanvas(QWidget):
         row = self.layout_model.rows[index]
         return row.height < MIN_TITLE_ROW or 0 <= pos.y() + self.view.scroll_y - row.top < TITLE_HEIGHT + 1
 
-    def hit_clip(self, pos: QPointF) -> tuple[str, Clip, str] | None:
+    def hit_clip(self, pos: QPointF) -> tuple[str, AnyClip, str] | None:
         """(track id, clip, zone) under `pos`; zone is left/right (trim handles, at
         the ends of the title bar), title (select & move) or body (time selection
         / insert marker)."""
@@ -229,7 +229,8 @@ class LanesCanvas(QWidget):
             p.setPen(QColor(theme.TEXT_DIM))
             p.setFont(theme.ui_font(10))
             p.drawText(QRectF(self.rect()), Qt.AlignmentFlag.AlignCenter,
-                       "Drag audio files here from the browser\nor press Ctrl+T to create an audio track")
+                       "Drag audio files here from the browser\nor press Ctrl+T to create an audio track,"
+                       " Ctrl+Shift+T for a MIDI track")
 
         time_range = self.selection.time_range
         if time_range is not None:
@@ -261,7 +262,7 @@ class LanesCanvas(QWidget):
             p.setPen(QPen(QColor(theme.ACCENT), 1))
             p.drawRect(band)
 
-    def _draw_clip(self, p: QPainter, track_color: str, clip: Clip, rect: QRectF, visible: QRectF,
+    def _draw_clip(self, p: QPainter, track_color: str, clip: AnyClip, rect: QRectF, visible: QRectF,
                    selected: bool, ghost: bool = False) -> None:
         base = QColor(track_color)
         title_h = TITLE_HEIGHT if rect.height() >= MIN_TITLE_ROW else 0
@@ -285,8 +286,10 @@ class LanesCanvas(QWidget):
                 name = p.fontMetrics().elidedText(clip.name, Qt.TextElideMode.ElideRight, int(text_rect.width()))
                 p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
 
-        source = self.bridge.source(clip.path)
-        if source is not None:
+        source = None if isinstance(clip, MidiClip) else self.bridge.source(clip.path)
+        if isinstance(clip, MidiClip):
+            self._draw_notes(p, clip, body.adjusted(0, 2, 0, -2), visible)
+        elif source is not None:
             wave_area = body.adjusted(0, 1, 0, -1)
             p.setClipRect(wave_area.intersected(visible))
             self.waveforms.draw(p, source, wave_area, rect.left(), clip.offset_sec,
@@ -312,6 +315,22 @@ class LanesCanvas(QWidget):
             x = rect.left() if hover[1] == "left" else rect.right() - 2
             p.fillRect(QRectF(x, rect.top(), 2, rect.height()), QColor(theme.SELECTION_OUTLINE))
         p.restore()
+
+    def _draw_notes(self, p: QPainter, clip: MidiClip, area: QRectF, visible: QRectF) -> None:
+        """The notes a MIDI clip plays, fitted to the clip's height (as in Ableton)."""
+        played = clip.played_notes()
+        if not played or area.height() < 3:
+            return
+        low = min(note.pitch for *_, note in played)
+        high = max(note.pitch for *_, note in played)
+        row = min(area.height() / (high - low + 1), max(2.0, area.height() / 12))
+        top = area.top() + (area.height() - row * (high - low + 1)) / 2
+        gap = 1.0 if row > 3 else 0.0
+        for start, end, note in played:
+            x0, x1 = self.view.beat_to_x(start), self.view.beat_to_x(end)
+            if x1 >= visible.left() and x0 <= visible.right():
+                p.fillRect(QRectF(x0, top + (high - note.pitch) * row, max(1.0, x1 - x0 - gap), max(1.0, row - gap)),
+                           theme.WAVEFORM)
 
     def _draw_drop_preview(self, p: QPainter) -> None:
         if not self._drop_preview:
@@ -425,12 +444,29 @@ class LanesCanvas(QWidget):
             return
         hit = self.hit_clip(event.position())
         if hit is None:
+            index = self.row_index_at(event.position().y())
+            if index is not None:  # empty space on a MIDI track: make a clip there and open it
+                ref = self.insert_midi_clip(self.layout_model.rows[index].track_id, event.position().x())
+                if ref is not None:
+                    self.clip_view_requested.emit(*ref)
             return
         track_id, clip, _ = hit
         # Double-clicking one of several selected clips opens them all.
         if (track_id, clip.id) not in self.selection.clips:
             self.selection.set_clips({(track_id, clip.id)}, track_id=track_id)
         self.clip_view_requested.emit(track_id, clip.id)
+
+    def insert_midi_clip(self, track_id: str, x: float) -> tuple[str, str] | None:
+        """A new MIDI clip on a MIDI track where `x` is (see ProjectEditor.midi_clip_span), selected."""
+        if not self.project.track(track_id).is_midi:
+            return None
+        step = self.view.grid_step() if self.view.snap else 0.0
+        start, length = self.editor.midi_clip_span(track_id, self.view.x_to_beat(x), step)
+        ref = self.editor.add_midi_clip(track_id, start, length)
+        if ref is not None:
+            self.selection.set_clips({ref}, track_id=track_id)
+            self.selection.set_insert(start)
+        return ref
 
     def keyPressEvent(self, event) -> None:
         self._on_modifiers(event.modifiers())
@@ -479,8 +515,13 @@ class LanesCanvas(QWidget):
             menu.addAction("Delete", lambda: self.editor.delete_clips(refs))
         else:
             index = self.row_index_at(pos.y())
-            menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(
-                None if index is None else index + 1))
+            at = None if index is None else index + 1
+            if index is not None and self.project.track(self.layout_model.rows[index].track_id).is_midi:
+                track_id = self.layout_model.rows[index].track_id
+                menu.addAction("Insert MIDI Clip", lambda: self.insert_midi_clip(track_id, pos.x()))
+                menu.addSeparator()
+            menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(at))
+            menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(at))
             if index is not None:
                 track_id = self.layout_model.rows[index].track_id
                 menu.addAction("Delete Track", lambda: self.editor.delete_tracks([track_id]))
@@ -498,16 +539,20 @@ class LanesCanvas(QWidget):
     def dragMoveEvent(self, event) -> None:
         paths = audio_paths(event.mimeData())
         if not paths:
-            # Devices drop onto the track under the mouse.
+            # Devices drop onto the track under the mouse; an instrument below the
+            # tracks makes a new MIDI track.
             mime = event.mimeData()
-            on_track = device_kinds(mime) and self.row_index_at(event.position().y()) is not None
-            if on_track or mime.hasFormat(PLUGIN_MIME):
+            kinds = device_kinds(mime)
+            on_track = kinds and self.row_index_at(event.position().y()) is not None
+            if on_track or any(is_instrument(k) for k in kinds) or mime.hasFormat(PLUGIN_MIME):
                 event.acceptProposedAction()
             else:
                 event.ignore()
             return
         pos = event.position()
         index = self.row_index_at(pos.y())
+        if index is not None and self.project.track(self.layout_model.rows[index].track_id).is_midi:
+            index = None  # audio can't go on a MIDI track: it gets a new track
         beat = max(0.0, self.view.snap_beat(self.view.x_to_beat(pos.x())))
         sources = []
         for path in paths:
@@ -527,10 +572,20 @@ class LanesCanvas(QWidget):
         self.update()
         kinds = [k for k in device_kinds(event.mimeData()) if k in BUILTIN_DEVICES]
         index = self.row_index_at(event.position().y())
-        if kinds and index is not None:
-            track_id = self.layout_model.rows[index].track_id
-            for kind in kinds:
-                self.editor.add_device(track_id, kind)
+        if kinds:
+            if index is not None:
+                track_id = self.layout_model.rows[index].track_id
+                refused = [kind for kind in kinds if self.editor.add_device(track_id, kind) is None]
+                if refused:
+                    self.status_message.emit("Instruments go on MIDI tracks. Drop one below the tracks to make one.")
+            else:
+                instrument = next((k for k in kinds if is_instrument(k)), None)
+                if instrument is None:
+                    return
+                track_id = self.editor.add_midi_track(instrument=instrument).id
+                for kind in kinds:
+                    if not is_instrument(kind):
+                        self.editor.add_device(track_id, kind)
             self.selection.select_track(track_id)  # show its devices
             event.acceptProposedAction()
             return

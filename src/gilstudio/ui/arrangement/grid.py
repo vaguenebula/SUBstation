@@ -32,6 +32,18 @@ def grid_lines(view: ViewState, x0: float, x1: float, step: float | None = None)
         yield view.beat_to_x(beat), beat, kind
 
 
+def label_step(view: ViewState, step: float) -> float:
+    """Beats between ruler labels: the grid step or a coarser musical unit, so
+    labels are at least 44 px apart."""
+    ts = view.project.time_signature
+    bar = ts.beats_per_bar
+    candidates = [step, ts.beat_length, bar] + [bar * m for m in (2, 4, 8, 16, 32, 64, 128)]
+    for candidate in sorted(c for c in candidates if c >= step):
+        if candidate * view.px_per_beat >= 44:
+            return candidate
+    return candidates[-1]
+
+
 def draw_grid(painter: QPainter, view: ViewState, x0: float, x1: float, top: float, bottom: float) -> None:
     if bottom <= top:
         return

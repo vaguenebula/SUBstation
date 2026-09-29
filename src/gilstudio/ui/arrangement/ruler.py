@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QWidget
 from ... import theme
 from ...model.editor import ProjectEditor
 from ...model.timebase import format_bar_label
-from .grid import grid_lines
+from .grid import grid_lines, label_step
 from .view_state import Selection, ViewState
 
 LOOP_STRIP = 14
@@ -75,13 +75,13 @@ class TimelineRuler(QWidget):
         scale_top = LOOP_STRIP
         scale_h = self.height() - LOOP_STRIP
         step = self.view.grid_step()
-        label_step = self._label_step(step)
+        every = label_step(self.view, step)
         p.setFont(theme.ui_font(8))
         for x, beat, kind in grid_lines(self.view, rect.left() - 60, rect.right() + 1, step):
             tick = {"bar": scale_h, "beat": scale_h * 0.45, "sub": scale_h * 0.25}[kind]
             color = QColor(theme.TEXT_DIM if kind == "bar" else theme.GRID_BAR)
             p.fillRect(QRectF(round(x), self.height() - tick, 1, tick), color)
-            if abs(beat / label_step - round(beat / label_step)) < 1e-6:
+            if abs(beat / every - round(beat / every)) < 1e-6:
                 p.setPen(QColor(theme.TEXT))
                 p.drawText(QPointF(round(x) + 3, scale_top + 12), format_bar_label(beat, project.time_signature))
         p.fillRect(QRectF(rect.left(), self.height() - 1, rect.width(), 1), QColor(theme.BORDER))
@@ -98,14 +98,6 @@ class TimelineRuler(QWidget):
         path.lineTo(px + 0.5, self.height() - 1)
         path.closeSubpath()
         p.fillPath(path, QColor(theme.PLAYHEAD))
-
-    def _label_step(self, step: float) -> float:
-        bar = self.project.time_signature.beats_per_bar
-        candidates = [step, self.project.time_signature.beat_length, bar] + [bar * m for m in (2, 4, 8, 16, 32, 64, 128)]
-        for candidate in sorted(c for c in candidates if c >= step):
-            if candidate * self.view.px_per_beat >= 44:
-                return candidate
-        return candidates[-1]
 
     # --- Interaction ---------------------------------------------------------------
 

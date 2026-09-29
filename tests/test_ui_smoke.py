@@ -1,61 +1,20 @@
 """Builds the real main window offscreen and drives it like a user would."""
 
-import os
-import sys
 import time
-import traceback
 from dataclasses import replace
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-from PySide6.QtCore import QCoreApplication, QPoint, QPointF, QSettings, Qt
+from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from gilstudio import _engine as ge
-from gilstudio import theme
 from gilstudio.audio.engine_bridge import clip_desc
 from gilstudio.ui.clip_view import WARP_MODES
 
 from .conftest import SAMPLE_RATE, write_wav
-
-
-@pytest.fixture(scope="module")
-def app():
-    QCoreApplication.setOrganizationName("GIL Studio Tests")  # keep tests out of the user's settings
-    QCoreApplication.setApplicationName("GIL Studio Tests")
-    application = QApplication.instance() or QApplication([])
-    theme.apply(application)
-    yield application
-
-
-@pytest.fixture
-def window(app, tmp_path):
-    settings = QSettings()
-    settings.clear()
-    settings.setValue("browser/places", [str(tmp_path)])
-    from gilstudio.ui.main_window import MainWindow
-
-    # Exceptions raised inside Qt slots are only printed; collect them instead.
-    errors = []
-    previous_hook = sys.excepthook
-    sys.excepthook = lambda *exc_info: errors.append(exc_info)
-    engine = ge.Engine()
-    w = MainWindow(engine)
-    w.resize(1400, 820)
-    w.show()
-    app.processEvents()
-    yield w
-    w.undo_stack.setClean()
-    w.close()
-    engine.close_device()
-    w.deleteLater()
-    app.processEvents()
-    sys.excepthook = previous_hook
-    assert not errors, "".join("".join(traceback.format_exception(*e)) for e in errors)
 
 
 def wait_until(predicate, timeout=5.0):
@@ -195,8 +154,9 @@ def test_builtin_devices_in_browser(window, three_tracks):
     # Built-in > Audio Effects > Utility
     [builtin] = [browser.sidebar.topLevelItem(i) for i in range(browser.sidebar.topLevelItemCount())
                  if browser.sidebar.topLevelItem(i).text(0) == "Built-in"]
-    audio_effects = builtin.child(0)
-    assert audio_effects.text(0) == "Audio Effects" and builtin.isExpanded()
+    categories = {builtin.child(i).text(0): builtin.child(i) for i in range(builtin.childCount())}
+    assert list(categories) == ["Instruments", "Audio Effects"] and builtin.isExpanded()
+    audio_effects = categories["Audio Effects"]
     browser.sidebar.setCurrentItem(audio_effects)
     assert browser.list_model.rowCount() == 1
     index = browser.list_model.index(0)

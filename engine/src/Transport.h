@@ -15,10 +15,19 @@ struct TransportCommand {
     double beat = 0.0;  // Locate target
 };
 
+// A note played by hand (e.g. clicking the piano roll), sent straight to a
+// track's instrument. velocity 0 is a note-off.
+struct PreviewNote {
+    uint32_t trackId = 0;
+    uint8_t key = 60;
+    uint8_t velocity = 0;
+};
+
 struct SharedState {
     // API -> audio thread. Pushed only while holding the engine's edit mutex, so
     // there is exactly one producer.
     SpscQueue<TransportCommand, 256> commands;
+    SpscQueue<PreviewNote, 256> previewNotes;
     std::atomic<bool> metronome{false};
     std::atomic<float> masterGain{1.f};
     std::atomic<const AudioSource*> previewSource{nullptr};

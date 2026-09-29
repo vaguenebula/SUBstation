@@ -1,5 +1,6 @@
 """Project files: JSON (.gilproj). Clip paths are stored both absolute and
-relative to the project file, so a project folder can be moved."""
+relative to the project file, so a project folder can be moved. MIDI tracks
+store their clips' notes inline, as [pitch, start, length, velocity]."""
 
 from __future__ import annotations
 
@@ -7,19 +8,24 @@ import json
 import os
 from pathlib import Path
 
+from .notes import normalize
 from .project import (
     DEFAULT_WARP_MODE,
     LEGACY_WARP_MODES,
+    TRACK_KINDS,
     WARP_MODES,
+    AnyClip,
     Clip,
     Device,
+    MidiClip,
+    Note,
     Project,
     Track,
 )
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 1
+VERSION = 2  # 2: MIDI tracks
 EXTENSION = ".gilproj"
 
 
@@ -36,6 +42,35 @@ def _relative(path: str, base: Path | None) -> str | None:
         return None
 
 
+def _clip_to_dict(clip: AnyClip, base: Path | None) -> dict:
+    if isinstance(clip, MidiClip):
+        return {
+            "id": clip.id,
+            "name": clip.name,
+            "start_beat": clip.start_beat,
+            "duration_beats": clip.duration_beats,
+            "offset_beats": clip.offset_beats,
+            "notes": [[n.pitch, n.start, n.length, n.velocity] for n in clip.notes],
+        }
+    return {
+        "id": clip.id,
+        "name": clip.name,
+        "path": clip.path,
+        "relative_path": _relative(clip.path, base),
+        "start_beat": clip.start_beat,
+        "duration_sec": clip.duration_sec,
+        "offset_sec": clip.offset_sec,
+        "source_duration_sec": clip.source_duration_sec,
+        "gain_db": clip.gain_db,
+        "warp": clip.warp,
+        "warp_mode": clip.warp_mode,
+        "segment_bpm": clip.segment_bpm,
+        "transpose": clip.transpose,
+        "detune": clip.detune,
+        "pan": clip.pan,
+    }
+
+
 def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
     base = project_file.parent if project_file else None
     return {
@@ -48,6 +83,7 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
         "tracks": [
             {
                 "id": t.id,
+                "kind": t.kind,
                 "name": t.name,
                 "color": t.color,
                 "volume_db": t.volume_db,
@@ -57,26 +93,7 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
                 "height": t.height,
                 "devices": [{"id": d.id, "kind": d.kind, "enabled": d.enabled, "params": d.params}
                             for d in t.devices],
-                "clips": [
-                    {
-                        "id": c.id,
-                        "name": c.name,
-                        "path": c.path,
-                        "relative_path": _relative(c.path, base),
-                        "start_beat": c.start_beat,
-                        "duration_sec": c.duration_sec,
-                        "offset_sec": c.offset_sec,
-                        "source_duration_sec": c.source_duration_sec,
-                        "gain_db": c.gain_db,
-                        "warp": c.warp,
-                        "warp_mode": c.warp_mode,
-                        "segment_bpm": c.segment_bpm,
-                        "transpose": c.transpose,
-                        "detune": c.detune,
-                        "pan": c.pan,
-                    }
-                    for c in t.clips
-                ],
+                "clips": [_clip_to_dict(c, base) for c in t.clips],
             }
             for t in project.tracks
         ],
@@ -92,10 +109,48 @@ def _resolve_clip_path(data: dict, base: Path | None) -> str:
     return path
 
 
+def _audio_clip(c: dict, base: Path | None) -> Clip:
+    return Clip(
+        id=c["id"],
+        path=_resolve_clip_path(c, base),
+        name=c.get("name", Path(c["path"]).stem),
+        start_beat=float(c["start_beat"]),
+        duration_sec=float(c["duration_sec"]),
+        offset_sec=float(c.get("offset_sec", 0.0)),
+        source_duration_sec=float(c.get("source_duration_sec", 0.0)),
+        gain_db=float(c.get("gain_db", 0.0)),
+        warp=bool(c.get("warp", False)),
+        warp_mode=_warp_mode(c.get("warp_mode")),
+        segment_bpm=float(c.get("segment_bpm", 0.0)),
+        transpose=int(c.get("transpose", 0)),
+        detune=float(c.get("detune", 0.0)),
+        pan=float(c.get("pan", 0.0)),
+    )
+
+
+def _midi_clip(c: dict) -> MidiClip:
+    notes = []
+    for pitch, start, length, velocity in c.get("notes", []):
+        if float(length) > 0:
+            notes.append(Note(pitch=max(0, min(127, int(pitch))), start=max(0.0, float(start)), length=float(length),
+                              velocity=max(1, min(127, int(velocity)))))
+    return MidiClip(
+        id=c["id"],
+        name=c.get("name", "MIDI"),
+        start_beat=float(c["start_beat"]),
+        duration_beats=float(c["duration_beats"]),
+        offset_beats=float(c.get("offset_beats", 0.0)),
+        notes=normalize(notes),
+    )
+
+
 def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track]:
     base = project_file.parent if project_file else None
     tracks = []
     for t in data.get("tracks", []):
+        kind = t.get("kind", "audio")
+        if kind not in TRACK_KINDS:
+            raise ValueError(f"unknown track kind {kind!r}")
         tracks.append(Track(
             id=t["id"],
             name=t["name"],
@@ -109,24 +164,10 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
                             params={k: float(v) for k, v in d.get("params", {}).items()})
                      for d in t.get("devices", [])],
             clips=sorted(
-                (Clip(
-                    id=c["id"],
-                    path=_resolve_clip_path(c, base),
-                    name=c.get("name", Path(c["path"]).stem),
-                    start_beat=float(c["start_beat"]),
-                    duration_sec=float(c["duration_sec"]),
-                    offset_sec=float(c.get("offset_sec", 0.0)),
-                    source_duration_sec=float(c.get("source_duration_sec", 0.0)),
-                    gain_db=float(c.get("gain_db", 0.0)),
-                    warp=bool(c.get("warp", False)),
-                    warp_mode=_warp_mode(c.get("warp_mode")),
-                    segment_bpm=float(c.get("segment_bpm", 0.0)),
-                    transpose=int(c.get("transpose", 0)),
-                    detune=float(c.get("detune", 0.0)),
-                    pan=float(c.get("pan", 0.0)),
-                ) for c in t.get("clips", [])),
+                (_midi_clip(c) if kind == "midi" else _audio_clip(c, base) for c in t.get("clips", [])),
                 key=lambda c: c.start_beat,
             ),
+            kind=kind,
         ))
     return tracks
 

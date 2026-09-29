@@ -34,6 +34,7 @@ nanobind_add_module(_engine NB_STATIC
     engine/src/Renderer.cpp
     engine/src/Metronome.cpp
     engine/src/Warp.cpp
+    engine/src/processors/Synth.cpp
 )
 target_include_directories(_engine PRIVATE engine/src)
 # Signalsmith Stretch (time stretching / pitch shifting) and its FFT library:

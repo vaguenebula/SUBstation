@@ -194,6 +194,7 @@ class TrackHeader(QWidget):
         menu.addSeparator()
         index = self.project.track_index(self.track_id)
         menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(index + 1))
+        menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(index + 1))
         menu.addAction("Delete Track", lambda: self.editor.delete_tracks([self.track_id]))
         menu.exec(event.globalPos())
 

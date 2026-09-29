@@ -32,7 +32,14 @@ LOOP_OFF = "#5d5d5d"
 LOOP_REGION = QColor(255, 255, 255, 12)
 SELECTION_OUTLINE = "#ffffff"
 RUBBER_BAND = QColor(255, 166, 43, 40)
-WAVEFORM = QColor(22, 22, 22, 230)
+WAVEFORM = QColor(22, 22, 22, 230)  # also MIDI notes drawn in clips
+
+# Piano roll
+KEY_WHITE = "#d2d2d2"
+KEY_BLACK = "#1f1f1f"
+KEY_LABEL = "#4a4a4a"
+BLACK_KEY_ROW = "#252525"
+OUTSIDE_CLIP = QColor(0, 0, 0, 110)  # content a clip has but doesn't play
 
 # Controls
 ACTIVATOR_ON = "#ffc233"

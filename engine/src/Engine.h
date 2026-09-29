@@ -43,6 +43,15 @@ struct ClipDesc {
     std::string id;             // stable clip identity, so edits don't interrupt a stretching clip
 };
 
+// A note on a MIDI track, in timeline beats. The UI flattens MIDI clips into
+// these, keeping only what the clips play (notes cut at their clip's end).
+struct NoteDesc {
+    double startBeat = 0.0;
+    double lengthBeats = 0.25;
+    int key = 60;  // MIDI note number; 60 = C3
+    int velocity = 100;
+};
+
 struct MeterReading {
     uint32_t trackId = 0;  // 0 = master
     float left = 0.f;
@@ -84,6 +93,10 @@ public:
     uint32_t addTrack();
     void removeTrack(uint32_t trackId);
     void setTrackClips(uint32_t trackId, const std::vector<ClipDesc>& clips);
+    void setTrackNotes(uint32_t trackId, const std::vector<NoteDesc>& notes);
+    // Plays a note on the track's instrument right away (velocity 0 releases it),
+    // e.g. while editing notes. Only heard while a device runs.
+    void previewNote(uint32_t trackId, int key, int velocity);
     void setTrackGain(uint32_t trackId, float gain);
     void setTrackPan(uint32_t trackId, float pan);
     void setTrackMute(uint32_t trackId, bool mute);
@@ -135,6 +148,7 @@ private:
         std::shared_ptr<TrackParams> params;
         std::vector<ClipDesc> clips;
         std::vector<std::string> clipKeys;  // sourceKey() of each clip's path
+        std::vector<NoteDesc> notes;
         std::vector<std::shared_ptr<Processor>> inserts;
     };
 
@@ -153,6 +167,7 @@ private:
     void resumeLiveLocked();
     void renderOfflineLocked(double startBeat, int64_t frames, float* out, bool loop, bool metronome);
     void prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices, double startBeat);
+    void resetProcessorsLocked();
     void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
     static std::string sourceKey(const std::string& path);
 

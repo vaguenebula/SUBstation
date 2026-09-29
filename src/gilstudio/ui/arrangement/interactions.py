@@ -8,7 +8,7 @@ from dataclasses import replace
 from PySide6.QtCore import QPointF, QRectF, Qt
 
 from ...model import edits
-from ...model.project import Clip
+from ...model.project import AnyClip
 
 DRAG_THRESHOLD = 4
 
@@ -19,7 +19,7 @@ class ClipGesture:
     def hidden_ids(self) -> set[str]:
         return set()
 
-    def ghosts(self) -> list[tuple[int, str, Clip]]:
+    def ghosts(self) -> list[tuple[int, str, AnyClip]]:
         """(row index, track colour, clip) to draw as previews."""
         return []
 
@@ -57,15 +57,13 @@ class MoveClipsGesture(ClipGesture):
         new_start = max(0.0, view.snap_beat(self.primary.start_beat + raw, bypass))
         self.delta = max(new_start - self.primary.start_beat, -min(c.start_beat for _, _, c in self.items))
         row = self.canvas.row_index_at(pos.y(), clamp=True)
-        rows = [r for r, _, _ in self.items]
-        count = len(self.canvas.project.tracks)
-        self.track_delta = max(-min(rows), min(row - self.origin_row, count - 1 - max(rows)))
+        self.track_delta = self.canvas.editor.clamp_track_delta(self.refs, row - self.origin_row)
         self.copy = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
 
     def hidden_ids(self) -> set[str]:
         return {c.id for _, _, c in self.items} if self.active and not self.copy else set()
 
-    def ghosts(self) -> list[tuple[int, str, Clip]]:
+    def ghosts(self) -> list[tuple[int, str, AnyClip]]:
         if not self.active:
             return []
         colors = [t.color for t in self.canvas.project.tracks]
@@ -82,14 +80,14 @@ class MoveClipsGesture(ClipGesture):
 
 
 class TrimGesture(ClipGesture):
-    def __init__(self, canvas, track_id: str, clip: Clip, edge: str):
+    def __init__(self, canvas, track_id: str, clip: AnyClip, edge: str):
         self.canvas = canvas
         self.track_id = track_id
         self.clip = clip
         self.edge = edge
         self.row = canvas.project.track_index(track_id)
         self.color = canvas.project.track(track_id).color
-        self.result: Clip | None = None
+        self.result: AnyClip | None = None
 
     def move(self, pos: QPointF, modifiers) -> None:
         view = self.canvas.view
@@ -103,7 +101,7 @@ class TrimGesture(ClipGesture):
     def hidden_ids(self) -> set[str]:
         return {self.clip.id} if self.result else set()
 
-    def ghosts(self) -> list[tuple[int, str, Clip]]:
+    def ghosts(self) -> list[tuple[int, str, AnyClip]]:
         return [(self.row, self.color, self.result)] if self.result else []
 
     def finish(self) -> None:

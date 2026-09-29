@@ -113,8 +113,10 @@ class ArrangementView(QWidget):
         # Double-clicking a clip opens the clip view over the whole arrangement.
         self.clip_view = ClipView(editor, bridge, self)
         self.clip_view.hide()
-        self.lanes.clip_view_requested.connect(lambda _track_id, _clip_id: self.open_clips(self.selection.clips))
+        self.lanes.clip_view_requested.connect(
+            lambda track_id, clip_id: self.open_clips(self.selection.clips, lead=(track_id, clip_id)))
         self.clip_view.closed.connect(self.lanes.setFocus)
+        self.clip_view.locate_requested.connect(self.locate_requested)
         bridge.position_changed.connect(self._on_position)
         self._on_reset()
 
@@ -202,9 +204,9 @@ class ArrangementView(QWidget):
 
     # --- Clip view ------------------------------------------------------------------
 
-    def open_clips(self, refs) -> None:
+    def open_clips(self, refs, lead: tuple[str, str] | None = None) -> None:
         self.clip_view.setGeometry(self.rect())
-        self.clip_view.open_clips(refs)
+        self.clip_view.open_clips(refs, lead)
 
     def toggle_clip_view(self) -> None:
         """Shift+Tab: open the selected clips, or close the clip view."""
