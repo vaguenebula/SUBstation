@@ -241,6 +241,10 @@ class NoteGrid(QWidget):
 
     # --- Mouse -----------------------------------------------------------------------
 
+    def dragging(self) -> bool:
+        """Whether a drag is under way (the note tools stay out of its way)."""
+        return self._gesture is not None and self._gesture.active
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
             return
@@ -299,6 +303,7 @@ class NoteGrid(QWidget):
         self._deselect_on_click = None
         self.roll.release_audition()
         self._update_cursor(event.position(), event.modifiers())
+        self.roll.place_tools()
         self.update()
 
     def _on_modifiers(self, mods) -> None:

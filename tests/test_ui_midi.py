@@ -201,29 +201,52 @@ def test_alt_wheel_resizes_the_keys_and_ctrl_alt_drag_scrolls(window, midi_clip)
     assert not window.project.clip(track.id, clip.id).notes and not roll.selected
 
 
-def test_legato_quantize_and_humanize_buttons(window, midi_clip):
+def test_note_tools_float_by_the_selected_notes(window, midi_clip):
     track, clip, roll = midi_clip
-    tools = roll.tools
+    tools, grid = roll.tools, roll.grid
 
     def clip_notes():
         return window.project.clip(track.id, clip.id).notes
 
-    assert not tools.legato.isEnabled() and not tools.quantize.isEnabled()  # nothing to act on yet
     played = [Note(60, 0.1, 0.25), Note(64, 1.05, 0.25), Note(67, 1.9, 0.25), Note(72, 3.2, 0.25)]
     window.editor.set_clip_notes((track.id, clip.id), played, "setup")
-    assert tools.legato.isEnabled() and tools.humanize.isEnabled()
+    assert not tools.isVisible()  # only with notes selected
 
-    # With nothing selected, Quantize (to 1/16 by default) moves every note.
+    # Ctrl+A shows them, over the notes and inside the grid.
+    QTest.keyClick(grid, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    assert tools.isVisible() and tools.count.text() == "4 notes"
+    assert grid.rect().contains(tools.geometry())
+    # Quantize (to 1/16 by default) moves the selected notes, as one undo step.
     depth = window.undo_stack.count()
     tools.quantize.click()
     assert [n.start for n in clip_notes()] == [0.0, 1.0, 2.0, 3.25]
     assert window.undo_stack.count() == depth + 1 and window.undo_stack.undoText() == "Quantize"
+    assert roll.selected == set(clip_notes()) and tools.isVisible()
     window.undo_stack.undo()
-    # Ctrl+U does the same, here to 1/4 at half strength.
+    # With nothing selected the tools hide; Ctrl+U then quantizes every note, here to 1/4 at half strength.
+    QTest.mouseClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 3.0, 50))
+    assert not roll.selected and not tools.isVisible()
     tools.grid.setCurrentText("1/4")
     tools.amount.setValue(50.0)
-    QTest.keyClick(roll.grid, Qt.Key.Key_U, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClick(grid, Qt.Key.Key_U, Qt.KeyboardModifier.ControlModifier)
     assert [n.start for n in clip_notes()] == pytest.approx([0.05, 1.025, 1.95, 3.1])
+    window.undo_stack.undo()
+
+    # Clicking a note shows them just above it.
+    note = clip_notes()[1]
+    QTest.mouseClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 1.1, 64))
+    assert roll.selected == {note} and tools.count.text() == "1 note"
+    assert tools.geometry().bottom() < grid.note_rect(note).top()
+    # They hide while notes are dragged, and come back where the notes end up.
+    press = cell(roll, 1.1, 64)
+    QTest.mousePress(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, press)
+    QTest.mouseMove(grid, press + QPoint(0, int(roll.row_height * 2)))
+    assert not tools.isVisible()
+    QTest.mouseRelease(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                       press + QPoint(0, int(roll.row_height * 2)))
+    [moved] = roll.selected
+    assert moved.pitch == 62 and tools.isVisible()
+    assert tools.geometry().bottom() < grid.note_rect(moved).top()
     window.undo_stack.undo()
 
     # Legato acts on the selected notes: each reaches the next, the last the clip's end.
@@ -235,7 +258,7 @@ def test_legato_quantize_and_humanize_buttons(window, midi_clip):
     window.undo_stack.undo()
 
     # Humanize moves starts and velocities a little, lengths stay.
-    roll.set_selection(set())
+    roll.set_selection(clip_notes())
     roll._rng.seed(3)
     tools.humanize_amount.setValue(100.0)
     before = clip_notes()

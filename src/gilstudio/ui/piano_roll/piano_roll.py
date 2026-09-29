@@ -1,6 +1,6 @@
 """Piano roll: the clip view of a MIDI clip, laid out like Ableton's MIDI editor.
-Tools on top (legato, quantize, humanize), then the ruler; keys on the left,
-the notes in the middle, velocities below.
+The ruler on top; keys on the left, the notes in the middle, velocities below.
+Selecting notes brings up the note tools (legato, quantize, humanize) by them.
 
 Times are beats of the clip's content (the ruler's 1 is its first beat). The
 part the clip plays in the arrangement is lit; notes outside it are kept but
@@ -61,8 +61,6 @@ class PianoRoll(QWidget):
         self._fit_pending = False
         self._rng = random.Random()  # for Humanize
 
-        self.tools = NoteTools(self)
-
         self.preview = ToggleButton(icon=icons.headphones(), role="tool",
                                     tooltip="Hear notes as you click, add and move them")
         self.preview.setChecked(True)
@@ -72,6 +70,7 @@ class PianoRoll(QWidget):
         self.keys.setFixedWidth(KEYS_WIDTH)
         self.grid = NoteGrid(self)
         self.velocity = VelocityLane(self)
+        self.tools = NoteTools(self, self.grid)  # floats over the grid, by the selected notes
         velocity_label = QLabel("Velocity")
         velocity_label.setFixedWidth(KEYS_WIDTH)
         velocity_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -84,17 +83,16 @@ class PianoRoll(QWidget):
         grid = QGridLayout(self)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(0)
-        grid.addWidget(self.tools, 0, 0, 1, 3)
-        grid.addWidget(self.preview, 1, 0, Qt.AlignmentFlag.AlignCenter)
-        grid.addWidget(self.ruler, 1, 1)
-        grid.addWidget(self.keys, 2, 0)
-        grid.addWidget(self.grid, 2, 1)
-        grid.addWidget(self.vbar, 2, 2)
-        grid.addWidget(velocity_label, 3, 0)
-        grid.addWidget(self.velocity, 3, 1)
-        grid.addWidget(self.hbar, 4, 1)
+        grid.addWidget(self.preview, 0, 0, Qt.AlignmentFlag.AlignCenter)
+        grid.addWidget(self.ruler, 0, 1)
+        grid.addWidget(self.keys, 1, 0)
+        grid.addWidget(self.grid, 1, 1)
+        grid.addWidget(self.vbar, 1, 2)
+        grid.addWidget(velocity_label, 2, 0)
+        grid.addWidget(self.velocity, 2, 1)
+        grid.addWidget(self.hbar, 3, 1)
         grid.setColumnStretch(1, 1)
-        grid.setRowStretch(2, 1)
+        grid.setRowStretch(1, 1)
         self.setFocusProxy(self.grid)
 
         self.view.changed.connect(self._on_view_changed)
@@ -131,7 +129,6 @@ class PianoRoll(QWidget):
         """After the clip changed (edits, undo): forget selected notes that are gone, repaint."""
         clip = self.clip()
         self.selected &= set(clip.notes) if clip is not None else set()
-        self.tools.set_has_notes(bool(clip and clip.notes))
         self._fit_if_ready()
         self._update_bars()
         self._on_position(self.bridge.position)
@@ -152,8 +149,19 @@ class PianoRoll(QWidget):
 
     # --- Tools ---------------------------------------------------------------------
 
+    def place_tools(self) -> None:
+        """Show the note tools by the selected notes, or hide them: with nothing
+        selected, and while a drag is moving notes or drawing a rubber band."""
+        gesture = self.grid.dragging()
+        rects = [self.grid.note_rect(n) for n in self.selected] if not gesture else []
+        area = None
+        for rect in rects:
+            area = rect if area is None else area.united(rect)
+        self.tools.show_near(area, len(rects))
+
     def tool_targets(self) -> list[Note]:
-        """What the tools act on: the selected notes, or all of them if none are."""
+        """What the tools act on: the selected notes, or all of them if none are
+        (Ctrl+U with nothing selected)."""
         clip = self.clip()
         if clip is None:
             return []
@@ -249,10 +257,12 @@ class PianoRoll(QWidget):
         self.vbar.blockSignals(False)
         self.keys.update()
         self.grid.update()
+        self.place_tools()
 
     def repaint_all(self) -> None:
         for widget in (self.ruler, self.keys, self.grid, self.velocity):
             widget.update()
+        self.place_tools()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

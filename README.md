@@ -18,9 +18,9 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
   - Double-click to add a note (one grid step long) or delete one. Drag notes to move them (Ctrl copies, Alt ignores the grid), drag their ends to resize, drag in empty space to select.
   - Delete, Ctrl+A, Ctrl+D (duplicate), Up/Down (Shift: an octave), Left/Right (a grid step; Shift: a bar).
   - Drag a stem in the velocity lane to change velocities; several selected notes change together.
-  - Tools above the ruler act on the selected notes, or on all of them if none are selected:
+  - Selecting notes (with the mouse, a key, or Ctrl+A) brings up a small tool bar next to them; it acts on the selected notes and hides while you drag:
     - **Legato** makes each note last until the next one starts (a chord's notes together); the last ones reach the clip's end. A note never runs into the next note on its own key.
-    - **Quantize** (Ctrl+U) moves note starts onto a grid (1/4 to 1/32, or triplets), by an amount from 0 to 100 %. Lengths stay.
+    - **Quantize** (Ctrl+U) moves note starts onto a grid (1/4 to 1/32, or triplets), by an amount from 0 to 100 %. Lengths stay. With nothing selected, Ctrl+U quantizes every note.
     - **Humanize** nudges starts and velocities at random. At 100 % a note moves by up to a 32nd note and its velocity by up to 24; the default is 25 %.
   - Notes you click, add or move are played on the track's instrument (the headphones button turns this off). The part of the clip that plays is lit; the rest is dimmed.
 - Synth: a polyphonic subtractive synth (16 voices) with sine, triangle, saw and square oscillators (band-limited saw and square), an ADSR envelope, a resonant low-pass filter and volume. Velocity sets the level.- Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
