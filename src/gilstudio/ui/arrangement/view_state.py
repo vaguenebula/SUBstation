@@ -40,8 +40,10 @@ class ViewState(QObject):
     def x_to_beat(self, x: float) -> float:
         return self.scroll_beats + x / self.px_per_beat
 
-    def frames_per_pixel(self, sample_rate: float) -> float:
-        return sample_rate * 60.0 / (self.project.tempo * self.px_per_beat)
+    def frames_per_pixel(self, sample_rate: float, source_tempo: float | None = None) -> float:
+        """Source frames per pixel. `source_tempo` is the tempo the audio maps onto
+        beats at (a warped clip's segment BPM); by default the project tempo."""
+        return sample_rate * 60.0 / ((source_tempo or self.project.tempo) * self.px_per_beat)
 
     # --- Scroll & zoom -----------------------------------------------------------
 

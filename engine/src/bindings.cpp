@@ -73,17 +73,37 @@ NB_MODULE(_engine, m) {
         .def_ro("left", &gil::MeterReading::left)
         .def_ro("right", &gil::MeterReading::right);
 
+    nb::enum_<gil::WarpMode>(m, "WarpMode")
+        .value("BEATS", gil::WarpMode::Beats)
+        .value("TONES", gil::WarpMode::Tones)
+        .value("TEXTURE", gil::WarpMode::Texture)
+        .value("RE_PITCH", gil::WarpMode::RePitch)
+        .value("COMPLEX", gil::WarpMode::Complex)
+        .value("COMPLEX_PRO", gil::WarpMode::ComplexPro);
+
     nb::class_<gil::ClipDesc>(m, "ClipDesc")
         .def(
             "__init__",
             [](gil::ClipDesc* self, std::string path, double startBeat, double durationSec, double offsetSec,
-               float gain) { new (self) gil::ClipDesc{std::move(path), startBeat, durationSec, offsetSec, gain}; },
-            "path"_a, "start_beat"_a, "duration_sec"_a, "offset_sec"_a = 0.0, "gain"_a = 1.0f)
+               float gain, float pan, bool warp, double segmentBpm, gil::WarpMode warpMode, double transpose,
+               std::string id) {
+                new (self) gil::ClipDesc{std::move(path), startBeat, durationSec, offsetSec, gain, pan,
+                                         warp, segmentBpm, warpMode, transpose, std::move(id)};
+            },
+            "path"_a, "start_beat"_a, "duration_sec"_a, "offset_sec"_a = 0.0, "gain"_a = 1.0f, nb::kw_only(),
+            "pan"_a = 0.0f, "warp"_a = false, "segment_bpm"_a = 0.0, "warp_mode"_a = gil::WarpMode::Beats,
+            "transpose"_a = 0.0, "id"_a = "")
         .def_rw("path", &gil::ClipDesc::path)
         .def_rw("start_beat", &gil::ClipDesc::startBeat)
         .def_rw("duration_sec", &gil::ClipDesc::durationSec)
         .def_rw("offset_sec", &gil::ClipDesc::offsetSec)
-        .def_rw("gain", &gil::ClipDesc::gain);
+        .def_rw("gain", &gil::ClipDesc::gain)
+        .def_rw("pan", &gil::ClipDesc::pan)
+        .def_rw("warp", &gil::ClipDesc::warp)
+        .def_rw("segment_bpm", &gil::ClipDesc::segmentBpm)
+        .def_rw("warp_mode", &gil::ClipDesc::warpMode)
+        .def_rw("transpose", &gil::ClipDesc::transpose)
+        .def_rw("id", &gil::ClipDesc::id);
 
     nb::class_<AudioSource>(m, "AudioSource")
         .def_prop_ro("path", &AudioSource::path)

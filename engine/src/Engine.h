@@ -7,6 +7,7 @@
 //  * API calls may come from any Python thread. They serialise on `mutex_`,
 //    mutate the edit model, then rebuild and publish a new snapshot.
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -28,9 +29,18 @@ namespace gil {
 struct ClipDesc {
     std::string path;
     double startBeat = 0.0;
-    double durationSec = 0.0;
-    double offsetSec = 0.0;
+    double durationSec = 0.0;   // of source audio
+    double offsetSec = 0.0;     // into the source
     float gain = 1.f;
+    float pan = 0.f;            // -1 (left) .. 1 (right), balance
+    // Warping. Unwarped clips play at the file's own speed, so their length in
+    // beats follows the tempo. Warped clips are locked to beats: `segmentBpm` is
+    // the tempo of the source audio, and they play at tempo / segmentBpm speed.
+    bool warp = false;
+    double segmentBpm = 0.0;
+    WarpMode warpMode = WarpMode::Beats;
+    double transpose = 0.0;     // semitones (fractions for detune); ignored by Re-Pitch
+    std::string id;             // stable clip identity, so edits don't interrupt a stretching clip
 };
 
 struct MeterReading {
@@ -142,6 +152,8 @@ private:
     void suspendLiveLocked();
     void resumeLiveLocked();
     void renderOfflineLocked(double startBeat, int64_t frames, float* out, bool loop, bool metronome);
+    void prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices, double startBeat);
+    void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
     static std::string sourceKey(const std::string& path);
 
     mutable std::mutex mutex_;
@@ -172,6 +184,10 @@ private:
     uint32_t nextTrackId_ = 1;
     std::unordered_map<uint32_t, std::pair<uint32_t, std::shared_ptr<Processor>>> processors_;
     uint32_t nextProcessorId_ = 1;
+
+    // Stretchers for live playback, per configuration. They only grow (a voice
+    // may still be in use by the audio thread) until the sample rate changes.
+    WarpVoiceSet warpVoices_;
 
     std::unordered_map<std::string, std::shared_ptr<AudioSource>> sources_;
     std::shared_ptr<const AudioSource> previewHold_;

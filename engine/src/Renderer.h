@@ -42,6 +42,11 @@ public:
     void setPlaying(bool playing) noexcept { playing_ = playing; }
     bool playing() const noexcept { return playing_; }
 
+    // Stretch voices to use instead of the snapshot's (which belong to the live
+    // renderer). Offline renders pass a fresh set so they neither disturb live
+    // playback nor depend on it. Must outlive the rendering.
+    void setWarpVoices(const WarpVoiceSet* voices) noexcept { voiceOverride_ = voices; }
+
 private:
     struct ChunkFlags {
         bool live;  // smooth parameter changes and publish meters
@@ -62,7 +67,9 @@ private:
     static constexpr int kMaxTicks = 64;
 
     void renderChunk(const RenderSnapshot& snap, SharedState& shared, int frames, ChunkFlags flags) noexcept;
-    void renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade) noexcept;
+    void renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade,
+                     const WarpVoiceSet& voices) noexcept;
+    WarpVoice* acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept;
     void scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset) noexcept;
     void mixPreview(SharedState& shared, int frames) noexcept;
 
@@ -72,6 +79,9 @@ private:
     bool playing_ = false;
 
     std::vector<float> trackLeft_, trackRight_, masterLeft_, masterRight_;
+    std::vector<float> warpLeft_, warpRight_;  // one warped clip's audio, before gain and fades
+    const WarpVoiceSet* voiceOverride_ = nullptr;
+    uint64_t blockCounter_ = 1;  // stamps voice use; 0 means "never used"
     std::array<Segment, kMaxSegments> segments_{};
     int numSegments_ = 0;
     std::array<Tick, kMaxTicks> ticks_{};

@@ -7,6 +7,10 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 **What works today**
 - Arrangement timeline with any number of audio tracks, waveforms, adaptive grid with snapping, zoom and scroll.
 - Clip editing: move (also across tracks), Ctrl-drag to copy, trim either edge, split, duplicate, delete, rubber-band select. Overlaps follow Ableton's rule: the clip you place wins.
+- Clip view (double-click a clip): warping, transpose/detune, clip volume and pan, for one clip or many at once.
+  - **Warp** locks a clip to the beat grid. Its audio is taken to be at the *Seg. BPM* and is stretched in real time to follow the project tempo. Turning Warp on sets Seg. BPM to the current tempo, so nothing moves until the tempo changes.
+  - Warp modes: *Beats* (tight transients), *Tones*, *Texture* (smooth), *Complex*, *Complex Pro* (keeps formants when transposing), and *Re-Pitch* (no stretching: speed and pitch change together, like a turntable).
+  - **Transpose/Detune** shift the pitch without changing the speed, warped or not (except in Re-Pitch).
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
 - Master track, metronome, loop brace, follow mode, CPU meter.
 - Browser: categories (Samples, Plug-ins), user "Places", instant search, click-to-preview, drag-and-drop or double-click to add clips.
@@ -52,6 +56,7 @@ python -m pytest
 ```
 
 - Engine tests render offline, so no audio device is needed. They check sample-exact clip placement, gain/pan/mute/solo, looping, tempo changes, the metronome, fades, the Utility device and export.
+- Warp tests check that warped clips land on their beats at any tempo, keep their pitch, start sample-aligned (also after a locate), transpose to the right frequency, and that Re-Pitch filters rather than aliases.
 - Model tests cover overlap resolution, trims, splits, undo/redo and save/load.
 - The UI tests drive the real main window offscreen: mouse drags, drops, header controls and dialogs.
 
@@ -92,6 +97,7 @@ src/gilstudio/                 Python: UI, model, undo, file I/O
 engine/src/                    C++: everything on the audio thread
   Engine        public API; edit model; builds and publishes render snapshots
   Renderer      mixing: clips -> inserts -> fader/pan -> master; loop; metronome; preview
+  Warp          stretch voices (time stretch / pitch shift) and the Re-Pitch resampler
   AudioSource   decoding (WAV/FLAC/MP3) at the engine rate + peak mipmaps
   AudioDevice   miniaudio WASAPI output (the only backend-specific code)
   Processor.h   insert-device interface (built-ins now, VST3/CLAP later)
@@ -104,6 +110,14 @@ engine/src/                    C++: everything on the audio thread
 - Retired snapshots are freed on the UI thread once the audio thread's epoch counter shows they are no longer in use.
 - Continuous controls (volume, pan, mute, solo, device parameters) are atomics, smoothed on the audio thread.
 - The UI never waits on the audio thread: the playhead, meters and CPU load are read from atomics.
+
+**Warping**
+- The snapshot turns each clip's beats into samples at the current tempo. A warped clip's two ends sit on their beats, and it plays at `tempo / segment BPM` speed.
+- Clips that need it are time-stretched on the audio thread by [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) (MIT, header-only; vendored with its FFT library in `engine/third_party/`). Nothing else is needed to build it.
+- Stretchers keep state from block to block, so they live in *voices*. These are allocated on the edit side, pooled per warp-mode block size, and handed to the audio thread in the snapshot. The renderer binds a voice to a playing clip.
+- A voice re-seeks when playback jumps (start, locate, loop, clip start). It uses the stretcher's `outputSeek` to pre-compute its latency, so the first frame is exactly aligned. A tempo change keeps the source position, so the clip carries on without a re-seek.
+- Offline renders and exports use fresh voices with a fixed random seed, so they are repeatable and don't disturb live playback.
+- Clips at their own tempo with no transposition skip the stretcher and play bit-exact. Re-Pitch uses windowed-sinc resampling, with the cutoff lowered when speeding up.
 
 ## Adding VST3 / CLAP hosting (planned)
 
@@ -123,5 +137,6 @@ The seams are already in place:
 
 - Recording, MIDI clips and instruments.
 - ASIO: the `AudioDevice` class is the only place a new backend has to go.
-- Plugin hosting, automation, warping/time-stretching, tempo changes over time.
+- Plugin hosting, automation, tempo changes over time.
+- Warp markers (warping within a clip) and automatic tempo detection: a warped clip has one segment BPM, and you set it.
 - Streaming long files from disk: sources are decoded into memory.

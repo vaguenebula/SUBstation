@@ -65,6 +65,7 @@ void Engine::openDevice(const std::string& name, uint32_t sampleRate, uint32_t b
         if (rate != sampleRate_) {
             sampleRate_ = rate;
             reloadSourcesLocked();
+            warpVoices_ = {};  // stretchers are sized for the old rate; the next snapshot makes new ones
         }
         // The audio thread is not running, so the preview can be dropped directly.
         shared_.previewSource.store(nullptr, std::memory_order_seq_cst);
@@ -449,14 +450,27 @@ void Engine::suspendLiveLocked() {
 
 void Engine::resumeLiveLocked() { liveSuspended_.store(false, std::memory_order_seq_cst); }
 
+void Engine::prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices, double startBeat) {
+    // Fresh stretchers, as many as live playback has, so an offline render
+    // starts from a clean state and leaves the live voices alone.
+    for (int c = 0; c < kNumStretchConfigs; ++c) {
+        for (size_t i = 0; i < snapshotHold_->warpVoices[c].size(); ++i) {
+            voices[c].push_back(std::make_shared<WarpVoice>(static_cast<StretchConfig>(c), sampleRate_));
+        }
+    }
+    offline.prepare(sampleRate_);
+    offline.setWarpVoices(&voices);
+    offline.syncTempo(*snapshotHold_);
+    offline.setPosition(std::llround(std::max(0.0, startBeat) * snapshotHold_->samplesPerBeat()));
+    offline.setPlaying(true);
+}
+
 void Engine::renderOfflineLocked(double startBeat, int64_t frames, float* out, bool loop, bool metronome) {
     suspendLiveLocked();
     ScopeExit resume([this] { resumeLiveLocked(); });
     Renderer offline;
-    offline.prepare(sampleRate_);
-    offline.syncTempo(*snapshotHold_);
-    offline.setPosition(std::llround(std::max(0.0, startBeat) * snapshotHold_->samplesPerBeat()));
-    offline.setPlaying(true);
+    WarpVoiceSet voices;
+    prepareOfflineLocked(offline, voices, startBeat);
     offline.renderOffline(*snapshotHold_, shared_, out, frames, loop, metronome);
 }
 
@@ -492,10 +506,8 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
     suspendLiveLocked();
     ScopeExit resume([this] { resumeLiveLocked(); });
     Renderer offline;
-    offline.prepare(sampleRate_);
-    offline.syncTempo(*snapshotHold_);
-    offline.setPosition(std::llround(std::max(0.0, startBeat) * spb));
-    offline.setPlaying(true);
+    WarpVoiceSet voices;
+    prepareOfflineLocked(offline, voices, startBeat);
 
     constexpr int64_t kChunk = 16384;
     std::vector<float> rendered(kChunk * 2);
@@ -527,12 +539,14 @@ void Engine::rebuildSnapshotLocked() {
     snap->clipFadeSamples = std::llround(clipFadeMs_ * 0.001 * sampleRate_);
 
     const auto rate = static_cast<uint32_t>(sampleRate_);
+    std::array<size_t, kNumStretchConfigs> voicesNeeded{};
     snap->tracks.reserve(tracks_.size());
     for (const TrackModel& track : tracks_) {
         TrackRender render;
         render.id = track.id;
         render.params = track.params;
         render.inserts = track.inserts;
+        std::array<size_t, kNumStretchConfigs> stretching{};
         for (size_t i = 0; i < track.clips.size(); ++i) {
             const ClipDesc& clip = track.clips[i];
             auto it = sources_.find(track.clipKeys[i]);
@@ -542,16 +556,48 @@ void Engine::rebuildSnapshotLocked() {
             cr.source = source;
             cr.start = std::max<int64_t>(0, std::llround(clip.startBeat * spb));
             cr.sourceOffset = std::clamp<int64_t>(std::llround(clip.offsetSec * sampleRate_), 0, source->frames());
-            cr.length = std::min<int64_t>(std::llround(clip.durationSec * sampleRate_), source->frames() - cr.sourceOffset);
-            cr.gain = clip.gain;
+            const bool warped = clip.warp && clip.segmentBpm > 0.0;
+            if (warped) {
+                // Locked to beats: both ends sit on their beats at any tempo.
+                cr.rate = tempo_ / clip.segmentBpm;
+                const double endBeat = clip.startBeat + clip.durationSec * clip.segmentBpm / 60.0;
+                cr.length = std::llround(endBeat * spb) - cr.start;
+            } else {
+                cr.length = std::llround(clip.durationSec * sampleRate_);
+            }
+            // Never play past the end of the file.
+            const auto available = static_cast<double>(source->frames() - cr.sourceOffset);
+            cr.length = std::min<int64_t>(cr.length, static_cast<int64_t>(std::floor(available / cr.rate)));
             if (cr.length <= 0) continue;
+
+            cr.gain = clip.gain;
+            balanceGains(clip.pan, cr.panLeft, cr.panRight);
+            const bool repitch = warped && clip.warpMode == WarpMode::RePitch;
+            const bool speedChanges = std::abs(cr.rate - 1.0) > 1e-9;
+            if (repitch) {
+                cr.playback = speedChanges ? ClipRender::Playback::Resample : ClipRender::Playback::Direct;
+            } else if (speedChanges || clip.transpose != 0.0) {
+                cr.playback = ClipRender::Playback::Stretch;
+                cr.stretchConfig = stretchConfigFor(clip.warpMode);
+                cr.transpose = static_cast<float>(clip.transpose);
+                cr.preserveFormants = clip.warpMode == WarpMode::ComplexPro;
+                ++stretching[static_cast<size_t>(cr.stretchConfig)];
+            }
+            const uint64_t identity = clip.id.empty() ? std::hash<size_t>{}(i) : std::hash<std::string>{}(clip.id);
+            cr.key = identity ^ (static_cast<uint64_t>(track.id) * 0x9E3779B97F4A7C15ull);
+
             render.maxClipLength = std::max(render.maxClipLength, cr.length);
             render.clips.push_back(std::move(cr));
         }
+        // Clips on a track don't overlap, so only a few play in any one block
+        // (more only if they are shorter than a block).
+        for (int c = 0; c < kNumStretchConfigs; ++c) voicesNeeded[c] += std::min<size_t>(stretching[c], 3);
         std::sort(render.clips.begin(), render.clips.end(),
                   [](const ClipRender& a, const ClipRender& b) { return a.start < b.start; });
         snap->tracks.push_back(std::move(render));
     }
+    ensureWarpVoicesLocked(voicesNeeded);
+    snap->warpVoices = warpVoices_;
 
     std::shared_ptr<const RenderSnapshot> old = std::move(snapshotHold_);
     snapshotHold_ = snap;
@@ -560,6 +606,16 @@ void Engine::rebuildSnapshotLocked() {
     releasePool_.retire(std::move(old), audioEpoch_.load(std::memory_order_seq_cst));
     collectGarbageLocked();
     serviceTransportIfIdleLocked();
+}
+
+void Engine::ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed) {
+    constexpr size_t kMaxVoices = 64;  // per configuration
+    for (int c = 0; c < kNumStretchConfigs; ++c) {
+        auto& pool = warpVoices_[c];
+        while (pool.size() < std::min(needed[c], kMaxVoices)) {
+            pool.push_back(std::make_shared<WarpVoice>(static_cast<StretchConfig>(c), sampleRate_));
+        }
+    }
 }
 
 void Engine::collectGarbageLocked() {

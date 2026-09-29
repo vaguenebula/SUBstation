@@ -5,8 +5,10 @@ It edits every selected clip at once. Knobs move all clips by the same amount
 (transposing up 2 semitones transposes each clip by 2, whatever it was at);
 switches and the warp mode set the same value on all of them.
 
-Settings are stored in the project and saved, but only the volume reaches the
-audio today: warping, pitch and pan wait for engine support.
+Warp locks a clip to the beat grid: its audio is taken to be at the segment BPM
+and is stretched to follow the project tempo. Transpose and detune shift the
+pitch without changing the speed, warped or not (except in Re-Pitch mode, where
+speed and pitch move together like a turntable and transposing does nothing).
 """
 
 from __future__ import annotations
@@ -31,13 +33,22 @@ from PySide6.QtWidgets import (
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
 from ..model.editor import ClipRef, ProjectEditor
-from ..model.project import Clip
-from ..model.timebase import format_db, format_pan
+from ..model.project import WARP_MODES, Clip
+from ..model.timebase import beats_to_seconds, format_db, format_pan
 from .arrangement.waveform_cache import WaveformCache
 from .widgets import Knob, ToggleButton, ValueBox
 
-WARP_MODES = ["Beats", "Tones", "Texture", "Re-Pitch", "Complex", "Complex Pro"]
-NOT_WIRED = "Saved with the clip, but not applied to the audio yet."
+WARP_MODE_TIPS = {
+    "Beats": "Beats: keeps drum hits and other transients tight.",
+    "Tones": "Tones: for pitched material with a clear melody or bass line.",
+    "Texture": "Texture: smooth, for pads, ambience and noisy sounds.",
+    "Re-Pitch": "Re-Pitch: no stretching; speed and pitch change together, like a turntable.",
+    "Complex": "Complex: for full mixes and mixed material.",
+    "Complex Pro": "Complex Pro: like Complex, and keeps the formants (vocal character) when transposing.",
+}
+TRANSPOSE_TIP = "Pitch shift in semitones; the speed stays the same"
+DETUNE_TIP = "Fine pitch shift in cents"
+REPITCH_NOTE = "Re-Pitch: the pitch follows the speed, so Transpose and Detune have no effect."
 CONTROLS_WIDTH = 260
 HEADER_HEIGHT = 30
 RULER_HEIGHT = 20
@@ -254,20 +265,24 @@ class ClipView(QFrame):
 
         # --- Warp ---
         warp_box, warp_layout = _section("Warp")
-        self.warp = ToggleButton("Warp", role="activator", tooltip=NOT_WIRED)
+        self.warp = ToggleButton("Warp", role="activator",
+                                 tooltip="Lock the clip to the beat grid, so it follows the project tempo")
         self.warp.setFixedHeight(20)
-        self.warp.toggled.connect(lambda on: self._set_all("warp", on, "Toggle Warp"))
+        self.warp.toggled.connect(self._set_warp)
         self.mode = QComboBox()
         self.mode.addItems(WARP_MODES)
         self.mode.setPlaceholderText("Mixed")
         self.mode.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.mode.setToolTip("Warp mode. " + NOT_WIRED)
+        for i, name in enumerate(WARP_MODES):
+            self.mode.setItemData(i, WARP_MODE_TIPS[name], Qt.ItemDataRole.ToolTipRole)
+        self.mode.setToolTip("How the clip is stretched (and transposed)")
         self.mode.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.mode.setMinimumContentsLength(8)
         self.mode.activated.connect(lambda i: self._set_all("warp_mode", WARP_MODES[i], "Change Warp Mode"))
         self.bpm = ValueBox(120.0, *BPM_RANGE, step=0.01, decimals=2, sample_text="999.00",
                             formatter=lambda v: f"{v:.2f}")
-        self.bpm.setToolTip("Segment BPM. " + NOT_WIRED)
+        self.bpm.setToolTip("Segment BPM: the tempo of the audio in the clip. Warped clips play at\n"
+                            "project tempo ÷ segment BPM speed.")
         self.bpm.setFixedHeight(20)
         self.bpm.valueChanged.connect(lambda v, key: self._set_all("segment_bpm", v, "Change Segment BPM", key))
         halve = QPushButton(":2")
@@ -276,7 +291,8 @@ class ClipView(QFrame):
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             button.setFixedHeight(20)
             button.setMinimumWidth(34)
-            button.setToolTip(("Halve" if factor < 1 else "Double") + " each clip's segment BPM. " + NOT_WIRED)
+            button.setToolTip(("Halve" if factor < 1 else "Double") + " each clip's segment BPM"
+                              f" (warped clips play {'twice as fast' if factor < 1 else 'half as fast'})")
             button.clicked.connect(lambda _=False, f=factor: self._scale_bpm(f))
         grid = QGridLayout()
         grid.setHorizontalSpacing(6)
@@ -292,9 +308,9 @@ class ClipView(QFrame):
         # --- Pitch ---
         pitch_box, pitch_layout = _section("Pitch")
         self.transpose = KnobControl("Transpose", -48.0, 48.0, 0.0, lambda v: f"{round(v):+d} st",
-                                     bipolar=True, tooltip=NOT_WIRED)
+                                     bipolar=True, tooltip=TRANSPOSE_TIP)
         self.detune = KnobControl("Detune", -50.0, 50.0, 0.0, lambda v: f"{round(v):+d} ct",
-                                  bipolar=True, tooltip=NOT_WIRED)
+                                  bipolar=True, tooltip=DETUNE_TIP)
         row = QHBoxLayout()
         row.addWidget(self.transpose)
         row.addWidget(self.detune)
@@ -303,7 +319,7 @@ class ClipView(QFrame):
         # --- Mix ---
         mix_box, mix_layout = _section("Mix")
         self.gain = KnobControl("Volume", -70.0, 24.0, 0.0, format_db)
-        self.pan = KnobControl("Pan", -1.0, 1.0, 0.0, format_pan, bipolar=True, tooltip=NOT_WIRED)
+        self.pan = KnobControl("Pan", -1.0, 1.0, 0.0, format_pan, bipolar=True)
         row = QHBoxLayout()
         row.addWidget(self.gain)
         row.addWidget(self.pan)
@@ -316,7 +332,7 @@ class ClipView(QFrame):
             control.knob.valueChanged.connect(
                 lambda v, key, c=control, a=attr, t=text, i=integer: self._nudge_all(c, a, v, key, t, i))
 
-        hint = QLabel("Settings are saved with each clip. Only Volume changes the audio for now.")
+        hint = QLabel("Warped clips follow the project tempo. Transpose keeps the speed.")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {theme.TEXT_DISABLED};")
 
@@ -427,7 +443,9 @@ class ClipView(QFrame):
         lead = clips[0]
         if len(clips) == 1:
             self.name.setText(lead.name)
-            self.info.setText(f"{lead.duration_sec:.2f} s  ·  {lead.length_beats(self.project.tempo):.2f} beats")
+            tempo = self.project.tempo
+            beats = lead.length_beats(tempo)
+            self.info.setText(f"{beats_to_seconds(beats, tempo):.2f} s  ·  {beats:.2f} beats")
         else:
             tracks = len({track_id for track_id, _ in items})
             self.name.setText(f"{len(clips)} Clips")
@@ -440,12 +458,23 @@ class ClipView(QFrame):
         self.bpm.setValue(self._segment_bpm(lead))
         self.transpose.set_values([c.transpose for c in clips])
         self.detune.set_values([c.detune for c in clips])
+        repitch = all(c.is_warped and c.warp_mode == "Re-Pitch" for c in clips)
+        for control, tip in ((self.transpose, TRANSPOSE_TIP), (self.detune, DETUNE_TIP)):
+            control.setEnabled(not repitch)
+            control.setToolTip(REPITCH_NOTE if repitch else tip)
         self.gain.set_values([c.gain_db for c in clips])
         self.pan.set_values([c.pan for c in clips])
         self.waveform.set_clips([(clip, self.project.track(track_id).color) for track_id, clip in items])
         self.update()
 
     # --- Editing all open clips -------------------------------------------------------
+
+    def _set_warp(self, on: bool) -> None:
+        """Warping a clip whose segment BPM was never set takes the project tempo,
+        so the clip keeps its length and speed until the tempo changes."""
+        self.editor.update_clips(
+            self.clip_refs, lambda c: replace(c, warp=on, segment_bpm=c.segment_bpm or self.project.tempo),
+            "Toggle Warp")
 
     def _set_all(self, attr: str, value, text: str, merge_key: object | None = None) -> None:
         """Give every open clip the same value (warp on/off, mode, segment BPM)."""

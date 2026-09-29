@@ -13,13 +13,16 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from .timebase import TimeSignature, seconds_to_beats
+from .timebase import TimeSignature, beats_to_seconds, seconds_to_beats
 
 # Ableton-like clip/track colours.
 TRACK_COLORS = [
     "#ff94a6", "#ffa529", "#cc9927", "#f7f47c", "#bffb00", "#1aff2f", "#25ffa8",
     "#5cffe8", "#8bc5ff", "#5480e4", "#92a7ff", "#d86ce4", "#e553a0", "#ffb3a0",
 ]
+
+# Ableton's warp modes, in the engine's order (gilstudio._engine.WarpMode).
+WARP_MODES = ["Beats", "Tones", "Texture", "Re-Pitch", "Complex", "Complex Pro"]
 
 DEFAULT_TRACK_HEIGHT = 68
 MIN_TRACK_HEIGHT = 24
@@ -32,8 +35,10 @@ def new_id() -> str:
 
 @dataclass(frozen=True)
 class Clip:
-    """An audio clip. Unwarped: its length is fixed in seconds, so its length in
-    beats follows the tempo (as in Ableton with warping off)."""
+    """An audio clip. `offset_sec` and `duration_sec` measure the source audio it
+    plays. Unwarped, that plays at its own speed, so the clip's length in beats
+    follows the tempo. Warped, the audio is taken to be at `segment_bpm` and is
+    stretched to the project tempo, so its length in beats is fixed (as in Ableton)."""
 
     id: str
     path: str
@@ -43,17 +48,32 @@ class Clip:
     offset_sec: float = 0.0
     source_duration_sec: float = 0.0
     gain_db: float = 0.0
-    # Clip view settings. Stored and saved, but the engine doesn't apply these
-    # yet (only gain_db reaches the audio).
+    # Clip view settings.
     warp: bool = False
-    warp_mode: str = "Beats"
-    segment_bpm: float = 0.0  # 0: not set, shown as the project tempo
+    warp_mode: str = "Beats"  # one of WARP_MODES
+    segment_bpm: float = 0.0  # tempo of the source audio; 0: not set, shown as the project tempo
     transpose: int = 0  # semitones
     detune: float = 0.0  # cents
     pan: float = 0.0
 
+    @property
+    def is_warped(self) -> bool:
+        return self.warp and self.segment_bpm > 0
+
+    def source_tempo(self, tempo: float) -> float:
+        """The tempo at which this clip's audio maps onto beats: its segment BPM
+        when warped, otherwise the project tempo (it plays at its own speed)."""
+        return self.segment_bpm if self.is_warped else tempo
+
+    def beats_to_source(self, beats: float, tempo: float) -> float:
+        """Seconds of source audio covered by `beats` of this clip."""
+        return beats_to_seconds(beats, self.source_tempo(tempo))
+
+    def source_to_beats(self, seconds: float, tempo: float) -> float:
+        return seconds_to_beats(seconds, self.source_tempo(tempo))
+
     def length_beats(self, tempo: float) -> float:
-        return seconds_to_beats(self.duration_sec, tempo)
+        return self.source_to_beats(self.duration_sec, tempo)
 
     def end_beat(self, tempo: float) -> float:
         return self.start_beat + self.length_beats(tempo)

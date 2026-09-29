@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from .project import Clip, Device, Project, Track
+from .project import WARP_MODES, Clip, Device, Project, Track
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
@@ -111,7 +111,7 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
                     source_duration_sec=float(c.get("source_duration_sec", 0.0)),
                     gain_db=float(c.get("gain_db", 0.0)),
                     warp=bool(c.get("warp", False)),
-                    warp_mode=str(c.get("warp_mode", "Beats")),
+                    warp_mode=c.get("warp_mode") if c.get("warp_mode") in WARP_MODES else "Beats",
                     segment_bpm=float(c.get("segment_bpm", 0.0)),
                     transpose=int(c.get("transpose", 0)),
                     detune=float(c.get("detune", 0.0)),

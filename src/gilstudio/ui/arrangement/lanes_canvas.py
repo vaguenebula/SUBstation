@@ -290,7 +290,8 @@ class LanesCanvas(QWidget):
             wave_area = body.adjusted(0, 1, 0, -1)
             p.setClipRect(wave_area.intersected(visible))
             self.waveforms.draw(p, source, wave_area, rect.left(), clip.offset_sec,
-                                self.view.frames_per_pixel(source.sample_rate), theme.WAVEFORM,
+                                self.view.frames_per_pixel(source.sample_rate, clip.source_tempo(self.project.tempo)),
+                                theme.WAVEFORM,
                                 split_channels=wave_area.height() >= 44, visible=visible)
             p.setClipRect(rect.intersected(visible).adjusted(-1, -1, 1, 1))
         elif body.height() > 10 and rect.width() > 40:
