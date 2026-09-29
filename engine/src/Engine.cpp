@@ -580,7 +580,7 @@ void Engine::rebuildSnapshotLocked() {
                 cr.playback = ClipRender::Playback::Stretch;
                 cr.stretchConfig = stretchConfigFor(clip.warpMode);
                 cr.transpose = static_cast<float>(clip.transpose);
-                cr.preserveFormants = clip.warpMode == WarpMode::ComplexPro;
+                cr.preserveFormants = clip.warpMode == WarpMode::Formants;
                 ++stretching[static_cast<size_t>(cr.stretchConfig)];
             }
             const uint64_t identity = clip.id.empty() ? std::hash<size_t>{}(i) : std::hash<std::string>{}(clip.id);

@@ -80,8 +80,8 @@ def test_detune_in_fractional_semitones(engine, make_wav):
     assert freq == pytest.approx(440.0 * 2 ** (-0.5 / 12), rel=0.002)
 
 
-@pytest.mark.parametrize("mode", [ge.WarpMode.BEATS, ge.WarpMode.TONES, ge.WarpMode.TEXTURE,
-                                  ge.WarpMode.COMPLEX, ge.WarpMode.COMPLEX_PRO])
+@pytest.mark.parametrize("mode", [ge.WarpMode.TRANSIENTS, ge.WarpMode.STANDARD, ge.WarpMode.SMOOTH,
+                                  ge.WarpMode.FORMANTS])
 def test_warped_clip_follows_tempo_and_keeps_pitch(engine, make_wav, mode):
     # 2 s of audio at 60 BPM is 2 beats: at 120 BPM that takes 1 s, at the same pitch.
     add_clip(engine, make_wav(sine(440.0)), start_beat=1.0, warp=True, segment_bpm=60.0, warp_mode=mode)
@@ -117,7 +117,8 @@ def test_tempo_change_rescales_warped_clips_only(engine, make_wav):
     spb = SAMPLE_RATE * 60 / 90
     out = engine.render_offline(0.0, int(12 * spb))
     warped = out[: int(4 * spb)]
-    assert audible(warped)[1] == round(2 * spb)  # still 2 beats long, now 1.33 s
+    end = round(2 * spb)  # still 2 beats long, now 1.33 s
+    assert audible(warped)[1] > end - 32 and np.all(warped[end:] == 0.0)
     assert audible(out[int(8 * spb) :])[1] == pytest.approx(SAMPLE_RATE, abs=1)
 
 
@@ -125,7 +126,7 @@ def test_warped_clip_is_sample_aligned(engine, make_wav):
     # The burst starts 0.5 s into the source; at double speed it must be heard
     # 0.25 s after the clip start, with no stretcher latency.
     add_clip(engine, make_wav(burst_at(0.5)), start_beat=2.0, warp=True, segment_bpm=60.0,
-             warp_mode=ge.WarpMode.BEATS)
+             warp_mode=ge.WarpMode.TRANSIENTS)
     out = engine.render_offline(0.0, 4 * SAMPLE_RATE)
     expected = int(2 * SPB + 0.25 * SAMPLE_RATE)
     assert abs(onset(out) - expected) < 0.004 * SAMPLE_RATE
@@ -155,7 +156,7 @@ def test_starting_inside_a_warped_clip_matches_playing_through(engine, make_wav)
 def test_offline_renders_are_repeatable(engine, make_wav):
     rng = np.random.default_rng(3)
     add_clip(engine, make_wav(rng.uniform(-0.5, 0.5, SAMPLE_RATE)), duration_sec=1.0, warp=True,
-             segment_bpm=77.0, transpose=3.0, warp_mode=ge.WarpMode.TEXTURE)
+             segment_bpm=77.0, transpose=3.0, warp_mode=ge.WarpMode.SMOOTH)
     first = engine.render_offline(0.0, SAMPLE_RATE)
     second = engine.render_offline(0.0, SAMPLE_RATE)
     np.testing.assert_array_equal(first, second)

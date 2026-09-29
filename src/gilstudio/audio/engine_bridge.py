@@ -37,7 +37,7 @@ def clip_desc(clip: Clip) -> ge.ClipDesc:
         pan=clip.pan,
         warp=clip.is_warped,
         segment_bpm=clip.segment_bpm,
-        warp_mode=_WARP_MODES.get(clip.warp_mode, ge.WarpMode.BEATS),
+        warp_mode=_WARP_MODES.get(clip.warp_mode, ge.WarpMode.STANDARD),
         transpose=clip.transpose + clip.detune / 100.0,
         id=clip.id,
     )

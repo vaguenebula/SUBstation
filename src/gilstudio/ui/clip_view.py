@@ -39,12 +39,11 @@ from .arrangement.waveform_cache import WaveformCache
 from .widgets import Knob, ToggleButton, ValueBox
 
 WARP_MODE_TIPS = {
-    "Beats": "Beats: keeps drum hits and other transients tight.",
-    "Tones": "Tones: for pitched material with a clear melody or bass line.",
-    "Texture": "Texture: smooth, for pads, ambience and noisy sounds.",
+    "Transients": "Transients: short stretch blocks keep drum hits and other attacks tight.",
+    "Standard": "Standard: good all-round, for melodies, bass lines and full mixes.",
+    "Smooth": "Smooth: long stretch blocks, for pads, ambience and noisy sounds; softens attacks.",
+    "Formants": "Formants: like Standard, and keeps the formants (vocal character) when transposing.",
     "Re-Pitch": "Re-Pitch: no stretching; speed and pitch change together, like a turntable.",
-    "Complex": "Complex: for full mixes and mixed material.",
-    "Complex Pro": "Complex Pro: like Complex, and keeps the formants (vocal character) when transposing.",
 }
 TRANSPOSE_TIP = "Pitch shift in semitones; the speed stays the same"
 DETUNE_TIP = "Fine pitch shift in cents"

@@ -491,7 +491,7 @@ def test_clip_view_edits_several_clips_in_unison(window, three_tracks):
     arrangement = window.arrangement
     editor, tracks = window.editor, window.project.tracks
     refs = [(t.id, t.clips[0].id) for t in tracks[:2]]
-    editor.update_clips(refs[1:], lambda c: replace(c, transpose=5, warp_mode="Tones"), "setup")
+    editor.update_clips(refs[1:], lambda c: replace(c, transpose=5, warp_mode="Smooth"), "setup")
     window.selection.set_clips(refs)
     arrangement.toggle_clip_view()
     clip_view = arrangement.clip_view
@@ -510,9 +510,9 @@ def test_clip_view_edits_several_clips_in_unison(window, three_tracks):
     assert [t.clips[0].transpose for t in tracks[:2]] == [2, 7]
     assert window.undo_stack.count() == depth + 1
     # Choosing a warp mode sets it on all of them.
-    clip_view.mode.activated.emit(WARP_MODES.index("Complex"))
-    assert {t.clips[0].warp_mode for t in tracks[:2]} == {"Complex"}
-    assert clip_view.mode.currentText() == "Complex"
+    clip_view.mode.activated.emit(WARP_MODES.index("Transients"))
+    assert {t.clips[0].warp_mode for t in tracks[:2]} == {"Transients"}
+    assert clip_view.mode.currentText() == "Transients"
     clip_view.warp.click()
     assert all(t.clips[0].warp for t in tracks[:2])
     window.undo_stack.undo()
@@ -561,7 +561,7 @@ def test_clip_view_warping_reaches_the_audio(window, three_tracks):
     assert not clip_view.transpose.isEnabled() and not clip_view.detune.isEnabled()
     desc = clip_desc(track.clips[0])
     assert (desc.warp, desc.segment_bpm, desc.warp_mode, desc.transpose) == (True, 120.0, ge.WarpMode.RE_PITCH, 12.0)
-    clip_view.mode.activated.emit(WARP_MODES.index("Complex Pro"))
+    clip_view.mode.activated.emit(WARP_MODES.index("Formants"))
     assert clip_view.transpose.isEnabled()
 
     # :2 halves the segment BPM: the clip plays twice as fast, half as long.

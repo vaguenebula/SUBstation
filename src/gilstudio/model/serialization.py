@@ -7,7 +7,15 @@ import json
 import os
 from pathlib import Path
 
-from .project import WARP_MODES, Clip, Device, Project, Track
+from .project import (
+    DEFAULT_WARP_MODE,
+    LEGACY_WARP_MODES,
+    WARP_MODES,
+    Clip,
+    Device,
+    Project,
+    Track,
+)
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
@@ -111,7 +119,7 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
                     source_duration_sec=float(c.get("source_duration_sec", 0.0)),
                     gain_db=float(c.get("gain_db", 0.0)),
                     warp=bool(c.get("warp", False)),
-                    warp_mode=c.get("warp_mode") if c.get("warp_mode") in WARP_MODES else "Beats",
+                    warp_mode=_warp_mode(c.get("warp_mode")),
                     segment_bpm=float(c.get("segment_bpm", 0.0)),
                     transpose=int(c.get("transpose", 0)),
                     detune=float(c.get("detune", 0.0)),
@@ -121,6 +129,11 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
             ),
         ))
     return tracks
+
+
+def _warp_mode(name) -> str:
+    name = LEGACY_WARP_MODES.get(name, name)
+    return name if name in WARP_MODES else DEFAULT_WARP_MODE
 
 
 def load_into(project: Project, data: dict, project_file: Path | None = None) -> None:

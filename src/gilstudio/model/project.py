@@ -21,8 +21,12 @@ TRACK_COLORS = [
     "#5cffe8", "#8bc5ff", "#5480e4", "#92a7ff", "#d86ce4", "#e553a0", "#ffb3a0",
 ]
 
-# Ableton's warp modes, in the engine's order (gilstudio._engine.WarpMode).
-WARP_MODES = ["Beats", "Tones", "Texture", "Re-Pitch", "Complex", "Complex Pro"]
+# Warp modes, in the engine's order (gilstudio._engine.WarpMode).
+WARP_MODES = ["Transients", "Standard", "Smooth", "Formants", "Re-Pitch"]
+DEFAULT_WARP_MODE = "Standard"
+# Names used by earlier versions, mapped to the mode that plays the same way.
+LEGACY_WARP_MODES = {"Beats": "Transients", "Tones": "Standard", "Complex": "Standard",
+                     "Texture": "Smooth", "Complex Pro": "Formants"}
 
 DEFAULT_TRACK_HEIGHT = 68
 MIN_TRACK_HEIGHT = 24
@@ -50,7 +54,7 @@ class Clip:
     gain_db: float = 0.0
     # Clip view settings.
     warp: bool = False
-    warp_mode: str = "Beats"  # one of WARP_MODES
+    warp_mode: str = DEFAULT_WARP_MODE  # one of WARP_MODES
     segment_bpm: float = 0.0  # tempo of the source audio; 0: not set, shown as the project tempo
     transpose: int = 0  # semitones
     detune: float = 0.0  # cents
