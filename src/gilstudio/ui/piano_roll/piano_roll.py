@@ -34,6 +34,9 @@ from .velocity_lane import VelocityLane
 KEYS_WIDTH = 64
 RULER_HEIGHT = 24
 ROW_HEIGHT = 12
+MIN_ROW_HEIGHT = 5
+MAX_ROW_HEIGHT = 36
+ROW_HEIGHT_STEP = 1.5  # pixels per wheel notch (Alt+wheel)
 DEFAULT_PITCH = 60  # C3: centred for a clip without notes
 PREVIEW_VELOCITY = 100
 
@@ -49,6 +52,7 @@ class PianoRoll(QWidget):
         self.view = ViewState(self.project, self)  # time in content beats; scroll_y in pixels
         self.view.grid_level = 1  # a little wider than the arrangement's: 1/16 notes across a bar
         self.row_height = ROW_HEIGHT
+        self._row_height_exact = float(ROW_HEIGHT)  # keeps a trackpad's small steps adding up
         self.track_id: str | None = None
         self.clip_id: str | None = None
         self.selected: set[Note] = set()
@@ -183,6 +187,20 @@ class PianoRoll(QWidget):
 
     def pitch_at(self, y: float) -> int:
         return max(0, min(127, 127 - math.floor((y + self.view.scroll_y) / self.row_height)))
+
+    def zoom_rows(self, notches: float, anchor_y: float) -> None:
+        """Make the keys' rows taller (or shorter), keeping the pitch under
+        `anchor_y` (a note grid y) in place."""
+        exact = max(MIN_ROW_HEIGHT, min(MAX_ROW_HEIGHT, self._row_height_exact + notches * ROW_HEIGHT_STEP))
+        self._row_height_exact = exact
+        height = round(exact)
+        if height == self.row_height:
+            return
+        rows = (anchor_y + self.view.scroll_y) / self.row_height
+        self.row_height = height
+        self._update_bars()
+        self.view.set_scroll_y(rows * height - anchor_y)
+        self._on_vscroll()
 
     def _fit_if_ready(self) -> None:
         """Zoom to the part the clip plays and centre its notes. Waits until the

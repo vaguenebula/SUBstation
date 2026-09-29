@@ -3,6 +3,8 @@
 Mouse: double-click to add a note (one grid step long) or to delete one; drag a
 note to move it (Ctrl copies, Alt bypasses the grid), drag either end to resize
 it, drag in empty space to select. Selected notes move and resize together.
+Ctrl+Alt drag scrolls the view. Wheel: scroll (Shift: sideways), Ctrl: zoom
+time, Alt: make the keys' rows taller or shorter.
 Keys: Delete, Ctrl+A, Ctrl+D (duplicate), Ctrl+U (quantize), Up/Down (Shift: an
 octave), Left/Right (a grid step; Shift: a bar).
 """
@@ -13,7 +15,15 @@ import math
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen, QWheelEvent
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QWidget
 
 from ... import theme
@@ -21,6 +31,7 @@ from ...model import notes
 from ...model.notes import by_time, is_black_key, note_name
 from ...model.project import Note
 from ..arrangement.grid import draw_grid
+from ..arrangement.lanes_canvas import is_pan_modifier
 
 if TYPE_CHECKING:
     from .piano_roll import PianoRoll
@@ -115,6 +126,22 @@ class SelectNotesGesture(NoteGesture):
 
     def rubber_band(self) -> QRectF | None:
         return self.rect
+
+
+class PanGesture(NoteGesture):
+    """Ctrl+Alt drag: scroll the view in both directions, as in the arrangement."""
+
+    def __init__(self, grid: NoteGrid, press: QPointF):
+        super().__init__(grid, press)
+        view = self.roll.view
+        self.scroll_beats = view.scroll_beats
+        self.scroll_y = view.scroll_y
+
+    def move(self, pos: QPointF, modifiers) -> None:
+        view = self.roll.view
+        delta = pos - self.press
+        view.set_scroll_beats(self.scroll_beats - delta.x() / view.px_per_beat)
+        view.set_scroll_y(self.scroll_y - delta.y())
 
 
 class NoteGrid(QWidget):
@@ -220,6 +247,10 @@ class NoteGrid(QWidget):
         self.setFocus()
         roll = self.roll
         pos, mods = event.position(), event.modifiers()
+        if is_pan_modifier(mods):
+            self._gesture = PanGesture(self, pos)
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
         additive = bool(mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
         hit = self.note_at(pos)
         if hit is None:
@@ -248,26 +279,41 @@ class NoteGrid(QWidget):
             self._gesture.move(event.position(), event.modifiers())
             self.update()
             return
-        hit = self.note_at(event.position())
-        if hit is None:
+        self._update_cursor(event.position(), event.modifiers())
+
+    def _update_cursor(self, pos: QPointF, mods) -> None:
+        hit = self.note_at(pos)
+        if is_pan_modifier(mods):
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        elif hit is None:
             self.setCursor(Qt.CursorShape.ArrowCursor)
         elif hit[1] == "body":
             self.setCursor(Qt.CursorShape.PointingHandCursor)
         else:
             self.setCursor(Qt.CursorShape.SizeHorCursor)
 
-    def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         gesture, self._gesture = self._gesture, None
         if self._deselect_on_click is not None and gesture is not None and not gesture.active:
             self.roll.set_selection(self.roll.selected - {self._deselect_on_click})
         self._deselect_on_click = None
         self.roll.release_audition()
+        self._update_cursor(event.position(), event.modifiers())
         self.update()
+
+    def _on_modifiers(self, mods) -> None:
+        """Show the hand as soon as Ctrl+Alt is held, without moving the mouse."""
+        if self._gesture is None and self.underMouse():
+            self._update_cursor(QPointF(self.mapFromGlobal(QCursor.pos())), mods)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        self._on_modifiers(event.modifiers())
+        super().keyReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         roll = self.roll
         clip = roll.clip()
-        if event.button() != Qt.MouseButton.LeftButton or clip is None:
+        if event.button() != Qt.MouseButton.LeftButton or clip is None or is_pan_modifier(event.modifiers()):
             return
         pos = event.position()
         hit = self.note_at(pos)
@@ -287,7 +333,10 @@ class NoteGrid(QWidget):
     def wheelEvent(self, event: QWheelEvent) -> None:
         view = self.roll.view
         delta, mods = event.angleDelta(), event.modifiers()
-        if mods & Qt.KeyboardModifier.ControlModifier:
+        if mods & Qt.KeyboardModifier.AltModifier and not mods & Qt.KeyboardModifier.ControlModifier:
+            # Qt may report Alt+wheel as horizontal scrolling, so accept either axis.
+            self.roll.zoom_rows((delta.y() or delta.x()) / 120.0, event.position().y())
+        elif mods & Qt.KeyboardModifier.ControlModifier:
             view.zoom_at(event.position().x(), 1.15 ** (delta.y() / 120.0))
         elif mods & Qt.KeyboardModifier.ShiftModifier or delta.x():
             pixels = -(delta.x() or delta.y()) / 120.0 * 80.0
@@ -315,6 +364,7 @@ class NoteGrid(QWidget):
         return super().event(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        self._on_modifiers(event.modifiers())
         roll = self.roll
         clip = roll.clip()
         if clip is None or not self._handles(event):

@@ -90,6 +90,8 @@ python -m pytest
 | Zoom in / out / to arrangement | + / − / Z |
 | Zoom around the mouse | Ctrl+wheel (or drag vertically in the ruler) |
 | Scroll horizontally | Shift+wheel (or drag horizontally in the ruler) |
+| Scroll in any direction | Ctrl+Alt drag |
+| Resize the track under the mouse (piano roll: the keys' rows) | Alt+wheel |
 | Narrow / widen grid, toggle snap | Ctrl+1 / Ctrl+2 / Ctrl+4 |
 | Bypass snapping while dragging | hold Alt |
 | Copy clips while dragging | hold Ctrl |

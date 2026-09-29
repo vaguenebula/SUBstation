@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QDropEvent, QMouseEvent
+from PySide6.QtGui import QDropEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -23,9 +23,8 @@ def lane_point(window, track_index: int, beat: float, y: str = "body") -> QPoint
     return QPoint(int(arrangement.view.beat_to_x(beat)), top + (6 if y == "title" else row.height // 2))
 
 
-def ctrl_drag(widget, start: QPoint, end: QPoint) -> None:
-    """Like drag(), holding Ctrl throughout (QTest.mouseMove can't send modifiers)."""
-    ctrl = Qt.KeyboardModifier.ControlModifier
+def ctrl_drag(widget, start: QPoint, end: QPoint, ctrl=Qt.KeyboardModifier.ControlModifier) -> None:
+    """Like drag(), holding Ctrl (or `ctrl`) throughout (QTest.mouseMove can't send modifiers)."""
     QTest.mousePress(widget, Qt.MouseButton.LeftButton, ctrl, start)
     for point in (start + (end - start) / 2, end):
         QApplication.sendEvent(widget, QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(point),
@@ -169,6 +168,37 @@ def test_rubber_band_keys_and_velocity_lane(window, midi_clip):
     velocities = [n.velocity for n in window.project.clip(track.id, clip.id).notes]
     assert velocities[:2] == [100, 100] and velocities[2] == pytest.approx(37, abs=2)
     assert window.undo_stack.undoText() == "Change Velocity"
+
+
+def wheel(widget, pos: QPoint, notches: float, mods) -> None:
+    QApplication.sendEvent(widget, QWheelEvent(QPointF(pos), QPointF(widget.mapToGlobal(pos)), QPoint(),
+                                               QPoint(0, int(notches * 120)), Qt.MouseButton.NoButton, mods,
+                                               Qt.ScrollPhase.NoScrollPhase, False))
+
+
+def test_alt_wheel_resizes_the_keys_and_ctrl_alt_drag_scrolls(window, midi_clip):
+    track, clip, roll = midi_clip
+    grid, alt = roll.grid, Qt.KeyboardModifier.AltModifier
+    at = cell(roll, 1.0, 64)
+    scroll_beats, height = roll.view.scroll_beats, roll.row_height
+    # Alt+wheel over the grid (or the keys) makes the rows taller, keeping the key under the mouse there.
+    wheel(grid, at, 4, alt)
+    assert roll.row_height > height and roll.view.scroll_beats == scroll_beats
+    assert roll.pitch_at(at.y()) == 64
+    taller = roll.row_height
+    wheel(roll.keys, QPoint(10, at.y()), -8, alt)
+    assert roll.row_height < taller and roll.pitch_at(at.y()) == 64
+    for _ in range(50):
+        wheel(grid, at, -1, alt)
+    assert roll.row_height == 5  # no shorter than this
+    # Ctrl+Alt drag scrolls both ways, and draws no note or rubber band.
+    ctrl_alt = Qt.KeyboardModifier.ControlModifier | alt
+    start = cell(roll, 2.0, roll.pitch_at(grid.height() / 2))
+    beat, y = roll.view.scroll_beats, roll.view.scroll_y
+    ctrl_drag(grid, start, start + QPoint(-40, 30), ctrl_alt)
+    assert roll.view.scroll_beats == pytest.approx(beat + 40 / roll.view.px_per_beat)
+    assert 0 < roll.view.scroll_y == y - 30
+    assert not window.project.clip(track.id, clip.id).notes and not roll.selected
 
 
 def test_legato_quantize_and_humanize_buttons(window, midi_clip):
