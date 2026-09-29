@@ -221,6 +221,17 @@ def drag(widget, start: QPoint, end: QPoint, modifiers=Qt.KeyboardModifier.NoMod
     QTest.mouseRelease(widget, Qt.MouseButton.LeftButton, modifiers, end)
 
 
+def ctrl_drag(widget, start: QPoint, end: QPoint) -> None:
+    """Like drag(), holding Ctrl throughout (QTest.mouseMove can't send modifiers)."""
+    ctrl = Qt.KeyboardModifier.ControlModifier
+    QTest.mousePress(widget, Qt.MouseButton.LeftButton, ctrl, start)
+    for point in (start + (end - start) / 2, end):
+        QApplication.sendEvent(widget, QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(point),
+                                                   QPointF(widget.mapToGlobal(point)), Qt.MouseButton.NoButton,
+                                                   Qt.MouseButton.LeftButton, ctrl))
+    QTest.mouseRelease(widget, Qt.MouseButton.LeftButton, ctrl, end)
+
+
 def test_ruler_loop_brace_and_scrub_zoom(window):
     arrangement = window.arrangement
     ruler, view = arrangement.ruler, arrangement.view
@@ -364,6 +375,34 @@ def test_title_click_sets_playback_start(window, three_tracks):
     window.toggle_play()
     assert window.bridge.position == pytest.approx(4.0, abs=0.1)
     window.toggle_play()
+
+
+def test_ctrl_drag_copies_selected_clip(window, three_tracks):
+    arrangement = window.arrangement
+    lanes, view, row = arrangement.lanes, arrangement.view, arrangement.layout_model.rows[0]
+    track = window.project.tracks[0]
+    clip = track.clips[0]  # beats 0-4
+    before = replace(clip)
+
+    def title(c) -> QPoint:
+        return QPoint(int(view.beat_to_x(c.start_beat) + 30), row.top - view.scroll_y + 6)
+
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, title(clip))
+    assert window.selection.clips == {(track.id, clip.id)}
+    # Ctrl-dragging the selected clip copies it, leaving the original where it was.
+    ctrl_drag(lanes, title(clip), title(clip) + QPoint(int(8 * view.px_per_beat), 0))
+    original, copy = window.project.track(track.id).clips
+    assert original == before
+    assert copy.id != clip.id and copy.start_beat == pytest.approx(8.0)
+    assert window.selection.clips == {(track.id, copy.id)}
+
+    # Ctrl-clicking an unselected clip adds it; Ctrl-clicking a selected one deselects it.
+    ctrl = Qt.KeyboardModifier.ControlModifier
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, ctrl, title(original))
+    assert window.selection.clips == {(track.id, original.id), (track.id, copy.id)}
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, ctrl, title(copy))
+    assert window.selection.clips == {(track.id, original.id)}
+    assert len(window.project.track(track.id).clips) == 2  # clicks copy nothing
 
 
 def test_double_click_clip_opens_clip_view(window, three_tracks):
