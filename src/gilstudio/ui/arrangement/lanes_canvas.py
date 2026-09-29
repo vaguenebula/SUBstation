@@ -115,6 +115,7 @@ class LanesCanvas(QWidget):
         self.waveforms = waveforms
         self._playhead = 0.0
         self._gesture: ClipGesture | None = None
+        self._deselect_on_click: tuple[str, str] | None = None  # a Ctrl-pressed selected clip
         self._drop_preview: tuple[int | None, float, list[tuple[str, float]]] | None = None
         self._hover_edge: tuple[str, str] | None = None  # (clip id, "left"/"right") under the mouse
         self.setAcceptDrops(True)
@@ -354,16 +355,23 @@ class LanesCanvas(QWidget):
                 self.selection.set_clips({ref}, track_id=track_id)
                 self._gesture = TrimGesture(self, track_id, clip, zone)
                 return
+            self._deselect_on_click = None
             if additive and not (mods & Qt.KeyboardModifier.ShiftModifier):
-                self.selection.toggle_clip(ref)
-                if ref not in self.selection.clips:
-                    return
+                if ref in self.selection.clips and not self.selection.clip_range:
+                    # Ctrl-clicking a selected clip deselects it, but only once the mouse
+                    # comes up without dragging: dragging copies the whole selection instead.
+                    self._deselect_on_click = ref
+                else:
+                    self.selection.toggle_clip(ref)
+                    if ref not in self.selection.clips:
+                        return
             elif ref not in self.selection.clips or self.selection.clip_range:
                 # (Clicking a clip inside a clip range selects just that clip.)
                 keep = self.selection.clips if additive and not self.selection.clip_range else set()
                 self.selection.set_clips({ref} | keep, track_id=track_id)
-            # Playback will start from the clicked clip, as with Ableton's start marker.
-            self.selection.set_insert(clip.start_beat)
+            if self._deselect_on_click is None:
+                # Playback will start from the clicked clip, as with Ableton's start marker.
+                self.selection.set_insert(clip.start_beat)
             refs = sorted(self.selection.clips)
             self._gesture = MoveClipsGesture(self, pos, ref, refs)
             return
@@ -415,6 +423,9 @@ class LanesCanvas(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         gesture, self._gesture = self._gesture, None
+        ref, self._deselect_on_click = self._deselect_on_click, None
+        if ref is not None and gesture is not None and not gesture.active:
+            self.selection.toggle_clip(ref)
         if gesture:
             gesture.finish()
         self._update_cursor(event.position(), event.modifiers())
