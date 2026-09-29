@@ -237,6 +237,11 @@ def test_note_tools_float_by_notes_selected_by_dragging(window, midi_clip):
                        press + QPoint(0, int(roll.row_height * 2)))
     assert sorted(n.pitch for n in roll.selected) == [58, 62] and tools.shown
     window.undo_stack.undo()
+    # Clicking one note of the group (without dragging it) selects just that note; the tools go.
+    drag(grid, cell(roll, 0.0, 66) - QPoint(2, 0), cell(roll, 1.5, 59))
+    assert roll.selected == set(clip_notes()[:2]) and tools.shown
+    QTest.mouseClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 1.1, 64))
+    assert roll.selected == {clip_notes()[1]} and not tools.shown
     # Clicking empty space deselects, and the tools fade away.
     QTest.mouseClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 3.0, 50))
     assert not roll.selected and not tools.shown

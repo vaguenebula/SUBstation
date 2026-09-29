@@ -155,7 +155,7 @@ class NoteGrid(QWidget):
         super().__init__(roll)
         self.roll = roll
         self._gesture: NoteGesture | None = None
-        self._deselect_on_click: Note | None = None
+        self._select_on_click: set[Note] | None = None  # when the mouse comes up without dragging
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
@@ -269,12 +269,17 @@ class NoteGrid(QWidget):
             self._gesture = SelectNotesGesture(self, pos, additive)
             return
         note, zone = hit
-        # Ctrl-clicking a selected note deselects it, but only once the mouse comes
-        # up without dragging: Ctrl-dragging it copies the selection instead.
-        self._deselect_on_click = None
+        # Clicking one of several selected notes selects just it, and Ctrl-clicking
+        # a selected note deselects it, but only once the mouse comes up without
+        # dragging: dragging moves (Ctrl: copies) the whole selection instead.
+        self._select_on_click = None
         if note in roll.selected:
-            if mods & Qt.KeyboardModifier.ControlModifier and not mods & Qt.KeyboardModifier.ShiftModifier:
-                self._deselect_on_click = note
+            if mods & Qt.KeyboardModifier.ShiftModifier:
+                pass
+            elif mods & Qt.KeyboardModifier.ControlModifier:
+                self._select_on_click = roll.selected - {note}
+            elif len(roll.selected) > 1:
+                self._select_on_click = {note}
         else:
             roll.set_selection((roll.selected if additive else set()) | {note})
         roll.audition(note.pitch, note.velocity)
@@ -304,9 +309,9 @@ class NoteGrid(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         gesture, self._gesture = self._gesture, None
-        if self._deselect_on_click is not None and gesture is not None and not gesture.active:
-            self.roll.set_selection(self.roll.selected - {self._deselect_on_click})
-        self._deselect_on_click = None
+        if self._select_on_click is not None and gesture is not None and not gesture.active:
+            self.roll.set_selection(self._select_on_click)
+        self._select_on_click = None
         if gesture is not None:
             gesture.finish()
         self.roll.release_audition()
