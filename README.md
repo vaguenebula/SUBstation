@@ -5,16 +5,25 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 (miniaudio/WASAPI), bound with nanobind.
 
 **What works today**
-- Arrangement timeline with any number of audio tracks, waveforms, adaptive grid with snapping, zoom and scroll.
-- Clip editing: move (also across tracks), Ctrl-drag to copy, trim either edge, split, duplicate, delete, rubber-band select. Overlaps follow Ableton's rule: the clip you place wins.
-- Clip view (double-click a clip): warping, transpose/detune, clip volume and pan, for one clip or many at once.
+- Arrangement timeline with any number of audio and MIDI tracks, waveforms and note previews, adaptive grid with snapping, zoom and scroll.
+- Clip editing: move (also across tracks of the same kind), Ctrl-drag to copy, trim either edge, split, duplicate, delete, rubber-band select. Overlaps follow Ableton's rule: the clip you place wins.
+- Clip view (double-click a clip): for audio clips, warping, transpose/detune, clip volume and pan, for one clip or many at once. For a MIDI clip, the piano roll (below).
   - **Warp** locks a clip to the beat grid. Its audio is taken to be at the *Seg. BPM* and is stretched in real time to follow the project tempo. Turning Warp on sets Seg. BPM to the current tempo, so nothing moves until the tempo changes.
   - Warp modes: *Transients* (short stretch blocks, tight attacks), *Standard* (all-round), *Smooth* (long blocks, for pads and textures), *Formants* (Standard, keeping formants when transposing), and *Re-Pitch* (no stretching: speed and pitch change together, like a turntable). Projects saved with the earlier Ableton-style names load into the equivalent mode.
   - **Transpose/Detune** shift the pitch without changing the speed, warped or not (except in Re-Pitch).
-- Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
+- MIDI tracks (Ctrl+Shift+T) come with the built-in **Synth**. Double-click empty space on a MIDI track (or press Ctrl+Shift+M) to make a MIDI clip; it opens in the piano roll.
+  - A MIDI clip is a window onto its notes, like an audio clip onto its file: trimming or splitting it hides notes but never deletes them. Its length is in beats, so it doesn't change with the tempo.
+  - As in Ableton, a clip plays the notes that start inside it and cuts them at its end.
+- Piano roll: keys (click to hear a key and select its notes), a ruler in the clip's own time (click to play from there), notes, and a velocity lane.
+  - Double-click to add a note (one grid step long) or delete one. Drag notes to move them (Ctrl copies, Alt ignores the grid), drag their ends to resize, drag in empty space to select.
+  - Delete, Ctrl+A, Ctrl+D (duplicate), Up/Down (Shift: an octave), Left/Right (a grid step; Shift: a bar).
+  - Drag a stem in the velocity lane to change velocities; several selected notes change together.
+  - Notes you click, add or move are played on the track's instrument (the headphones button turns this off). The part of the clip that plays is lit; the rest is dimmed.
+- Synth: a polyphonic subtractive synth (16 voices) with sine, triangle, saw and square oscillators (band-limited saw and square), an ADSR envelope, a resonant low-pass filter and volume. Velocity sets the level.- Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
 - Master track, metronome, loop brace, follow mode, CPU meter.
-- Browser: categories (Samples, Plug-ins), user "Places", instant search, click-to-preview, drag-and-drop or double-click to add clips.
-- Device view with a built-in Utility device (gain/pan/width), wired through the same `Processor` interface future plugins will use.
+- Browser: categories (Samples, Built-in, Plug-ins), user "Places", instant search, click-to-preview, drag-and-drop or double-click to add clips.
+  - Built-in › Instruments › Synth goes on a MIDI track (replacing its instrument). With no MIDI track selected, double-clicking it or dropping it below the tracks makes one.
+- Device view with the built-in Synth instrument and Utility device (gain/pan/width), wired through the same `Processor` interface future plugins will use. Parameters that choose between named values get a list; frequency and time knobs turn logarithmically.
 - Undo/redo for all edits, `.gilproj` projects (JSON), WAV export (16/24/32-bit float).
 - Audio device selection (WASAPI shared or exclusive, sample rate, buffer size).
 
@@ -57,8 +66,9 @@ python -m pytest
 
 - Engine tests render offline, so no audio device is needed. They check sample-exact clip placement, gain/pan/mute/solo, looping, tempo changes, the metronome, fades, the Utility device and export.
 - Warp tests check that warped clips land on their beats at any tempo, keep their pitch, start sample-aligned (also after a locate), transpose to the right frequency, and that Re-Pitch filters rather than aliases.
-- Model tests cover overlap resolution, trims, splits, undo/redo and save/load.
-- The UI tests drive the real main window offscreen: mouse drags, drops, header controls and dialogs.
+- MIDI engine tests check that notes start on their sample and follow the tempo, that the Synth plays the right pitch and level, and that loop wraps and offline renders leave no hanging notes.
+- Model tests cover overlap resolution, trims, splits (audio and MIDI), note editing, undo/redo and save/load.
+- The UI tests drive the real main window offscreen: mouse drags, drops, header controls, dialogs, and the piano roll.
 
 ## Keyboard shortcuts
 
@@ -67,7 +77,8 @@ python -m pytest
 | Play / stop (returns to the start marker) | Space |
 | Stop; press again to return to the start | Stop button |
 | Go to start | Home |
-| Insert audio track | Ctrl+T |
+| Insert audio track / MIDI track | Ctrl+T / Ctrl+Shift+T |
+| Insert MIDI clip (on the selected MIDI track, or over a time selection) | Ctrl+Shift+M |
 | Duplicate / split at insert marker / delete | Ctrl+D / Ctrl+E / Delete |
 | Select all clips | Ctrl+A |
 | Undo / redo | Ctrl+Z / Ctrl+Y |
@@ -82,25 +93,30 @@ python -m pytest
 | Search the browser | Ctrl+F |
 | Export audio | Ctrl+Shift+R |
 
+In the piano roll, Delete, Ctrl+A and Ctrl+D act on notes; arrow keys move them.
+
 ## Architecture
 
 ```
 src/gilstudio/                 Python: UI, model, undo, file I/O
-  model/        project.py (Project/Track/Clip + Qt signals), edits.py (pure clip maths),
-                editor.py (undoable operations), commands.py (QUndoCommands), serialization.py
+  model/        project.py (Project/Track/Clip/MidiClip/Note + Qt signals), edits.py (pure clip maths),
+                notes.py (pure note editing), editor.py (undoable operations),
+                commands.py (QUndoCommands), serialization.py
   audio/        engine_bridge.py: mirrors the model into the engine; async decoding;
                 polls the playhead (60 Hz) and meters (30 Hz)
-  ui/           main_window, transport_bar, device_panel, dialogs,
+  ui/           main_window, transport_bar, device_panel, dialogs, clip_view,
                 arrangement/ (custom-painted ruler, lanes, headers; numpy waveform tiles),
+                piano_roll/ (keys, ruler, note grid, velocity lane),
                 browser/ (background file index, search, preview)
   plugins/      scanner.py: lists installed VST3/CLAP plug-ins
 engine/src/                    C++: everything on the audio thread
   Engine        public API; edit model; builds and publishes render snapshots
-  Renderer      mixing: clips -> inserts -> fader/pan -> master; loop; metronome; preview
+  Renderer      mixing: clips and notes -> inserts -> fader/pan -> master; loop; metronome; preview
   Warp          stretch voices (time stretch / pitch shift) and the Re-Pitch resampler
   AudioSource   decoding (WAV/FLAC/MP3) at the engine rate + peak mipmaps
   AudioDevice   miniaudio WASAPI output (the only backend-specific code)
   Processor.h   insert-device interface (built-ins now, VST3/CLAP later)
+  processors/   built-in devices: Synth (instrument), Utility
   bindings.cpp  nanobind module gilstudio._engine
 ```
 
@@ -110,6 +126,13 @@ engine/src/                    C++: everything on the audio thread
 - Retired snapshots are freed on the UI thread once the audio thread's epoch counter shows they are no longer in use.
 - Continuous controls (volume, pan, mute, solo, device parameters) are atomics, smoothed on the audio thread.
 - The UI never waits on the audio thread: the playhead, meters and CPU load are read from atomics.
+
+**MIDI**
+- The UI flattens a MIDI track's clips into the notes they play, in beats (`set_track_notes`). The snapshot converts them to samples at the current tempo.
+- Each block, the renderer turns notes starting in it into note-on events for the track's devices, and remembers when each ends. Note-offs come from that record, not from the snapshot, so a note edited or deleted while it sounds still ends.
+- Stopping, locating and wrapping around the loop release every sounding note. A tempo change moves the recorded note ends along with the playhead.
+- Notes the piano roll plays go through a lock-free queue to the next audio block, straight to the track's instrument.
+- Offline renders share devices with live playback, so the engine resets them before and after (from the rendering thread, via a flag). A device that is switched off resets when it comes back on, so it can't keep notes whose note-offs it missed.
 
 **Warping**
 - The snapshot turns each clip's beats into samples at the current tempo. A warped clip's two ends sit on their beats, and it plays at `tempo / segment BPM` speed.
@@ -123,7 +146,7 @@ engine/src/                    C++: everything on the audio thread
 
 The seams are already in place:
 - **`engine/src/Processor.h`** is what the renderer hosts in each track's insert chain.
-  - It already carries transport info and an event list for MIDI and parameter automation.
+  - It carries transport info and an event list: note events today (the built-in Synth plays them), parameter automation later.
   - It has latency reporting for delay compensation, and `openEditor(void* hwnd)` for plugin GUIs.
 - **`engine/src/plugins/PluginFormat.h`** is the scan/instantiate interface. Implement it with:
   - the VST3 SDK (MIT-licensed since 3.8), and
@@ -135,7 +158,8 @@ The seams are already in place:
 
 ## Not yet implemented
 
-- Recording, MIDI clips and instruments.
+- Recording (audio or MIDI) and MIDI input from controllers.
+- Looping MIDI clips, quantizing, MIDI effects, and editing several MIDI clips in the piano roll at once.
 - ASIO: the `AudioDevice` class is the only place a new backend has to go.
 - Plugin hosting, automation, tempo changes over time.
 - Warp markers (warping within a clip) and automatic tempo detection: a warped clip has one segment BPM, and you set it.

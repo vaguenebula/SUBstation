@@ -66,7 +66,9 @@ NB_MODULE(_engine, m) {
         .def_ro("unit", &gil::ParamInfo::unit)
         .def_ro("min_value", &gil::ParamInfo::minValue)
         .def_ro("max_value", &gil::ParamInfo::maxValue)
-        .def_ro("default_value", &gil::ParamInfo::defaultValue);
+        .def_ro("default_value", &gil::ParamInfo::defaultValue)
+        .def_ro("log_scale", &gil::ParamInfo::logScale)
+        .def_ro("value_labels", &gil::ParamInfo::valueLabels);
 
     nb::class_<gil::MeterReading>(m, "MeterReading")
         .def_ro("track_id", &gil::MeterReading::trackId)
@@ -103,6 +105,22 @@ NB_MODULE(_engine, m) {
         .def_rw("warp_mode", &gil::ClipDesc::warpMode)
         .def_rw("transpose", &gil::ClipDesc::transpose)
         .def_rw("id", &gil::ClipDesc::id);
+
+    nb::class_<gil::NoteDesc>(m, "NoteDesc")
+        .def(
+            "__init__",
+            [](gil::NoteDesc* self, double startBeat, double lengthBeats, int key, int velocity) {
+                new (self) gil::NoteDesc{startBeat, lengthBeats, key, velocity};
+            },
+            "start_beat"_a, "length_beats"_a, "key"_a, "velocity"_a = 100)
+        .def_rw("start_beat", &gil::NoteDesc::startBeat)
+        .def_rw("length_beats", &gil::NoteDesc::lengthBeats)
+        .def_rw("key", &gil::NoteDesc::key)
+        .def_rw("velocity", &gil::NoteDesc::velocity)
+        .def("__repr__", [](const gil::NoteDesc& n) {
+            return "NoteDesc(" + std::to_string(n.startBeat) + ", " + std::to_string(n.lengthBeats) + ", key=" +
+                   std::to_string(n.key) + ", velocity=" + std::to_string(n.velocity) + ")";
+        });
 
     nb::class_<AudioSource>(m, "AudioSource")
         .def_prop_ro("path", &AudioSource::path)
@@ -157,6 +175,10 @@ NB_MODULE(_engine, m) {
         .def("add_track", &Engine::addTrack)
         .def("remove_track", &Engine::removeTrack, "track_id"_a)
         .def("set_track_clips", &Engine::setTrackClips, "track_id"_a, "clips"_a)
+        .def("set_track_notes", &Engine::setTrackNotes, "track_id"_a, "notes"_a,
+             "The notes a MIDI track plays, in timeline beats.")
+        .def("preview_note", &Engine::previewNote, "track_id"_a, "key"_a, "velocity"_a,
+             "Play a note on the track's instrument now; velocity 0 releases it.")
         .def("set_track_gain", &Engine::setTrackGain, "track_id"_a, "gain"_a)
         .def("set_track_pan", &Engine::setTrackPan, "track_id"_a, "pan"_a)
         .def("set_track_mute", &Engine::setTrackMute, "track_id"_a, "mute"_a)

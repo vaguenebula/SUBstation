@@ -1,6 +1,11 @@
 #pragma once
 // Turns a RenderSnapshot into audio. One instance is driven by the device
 // callback (live); export and tests use a separate instance (offline).
+//
+// MIDI tracks: the renderer turns the snapshot's notes into note events for the
+// track's processors. It remembers which notes it started and when each ends,
+// so every note-on gets its note-off even if the arrangement changes while the
+// note sounds; stopping, locating and loop wraps release all sounding notes.
 
 #include <array>
 #include <cstdint>
@@ -37,6 +42,11 @@ public:
     void applyCommand(const TransportCommand& command) noexcept;
     void publishTransport(SharedState& shared) const noexcept;
 
+    // Preview notes reach the instruments at the start of the live renderer's
+    // next block. With no device running they are thrown away instead.
+    void drainPreviewNotes(SharedState& shared) noexcept;
+    static void discardPreviewNotes(SharedState& shared) noexcept;
+
     void setPosition(int64_t samples) noexcept { position_ = samples < 0 ? 0 : samples; }
     int64_t position() const noexcept { return position_; }
     void setPlaying(bool playing) noexcept { playing_ = playing; }
@@ -58,13 +68,22 @@ private:
         int64_t position;
         int length;
         int offset;
+        bool jump;  // the playhead jumped here (locate, loop wrap): sounding notes stop
     };
     struct Tick {
         int offset;
         bool accent;
     };
+    struct ActiveNote {
+        uint32_t trackId;
+        uint8_t key;
+        int64_t end;  // timeline sample of its note-off
+    };
     static constexpr int kMaxSegments = 16;
     static constexpr int kMaxTicks = 64;
+    static constexpr int kMaxActiveNotes = 512;  // across all tracks
+    static constexpr int kMaxEvents = 1024;      // per track and block
+    static constexpr int kMaxPreviewNotes = 256;
 
     void renderChunk(const RenderSnapshot& snap, SharedState& shared, int frames, ChunkFlags flags) noexcept;
     void renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade,
@@ -72,10 +91,15 @@ private:
     WarpVoice* acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept;
     void scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset) noexcept;
     void mixPreview(SharedState& shared, int frames) noexcept;
+    void buildNoteEvents(const TrackRender& track) noexcept;
+    void releaseNotes(uint32_t trackId, int offset) noexcept;
+    void forgetNotesOfRemovedTracks(const RenderSnapshot& snap) noexcept;
+    bool pushEvent(const ProcessEvent& event) noexcept;
 
     double sampleRate_ = 48000.0;
     double samplesPerBeat_ = 0.0;
     int64_t position_ = 0;
+    int64_t expectedPosition_ = -1;  // where playback continues if the playhead doesn't jump
     bool playing_ = false;
 
     std::vector<float> trackLeft_, trackRight_, masterLeft_, masterRight_;
@@ -86,6 +110,14 @@ private:
     int numSegments_ = 0;
     std::array<Tick, kMaxTicks> ticks_{};
     int numTicks_ = 0;
+
+    // Notes. Sized in prepare(); the counts say how much is in use.
+    std::vector<ActiveNote> activeNotes_;
+    int numActiveNotes_ = 0;
+    std::vector<ProcessEvent> events_;  // the current track's events for this block
+    int numEvents_ = 0;
+    std::vector<PreviewNote> previewNotes_;
+    int numPreviewNotes_ = 0;
 
     Metronome metronome_;
     SmoothedValue masterGain_;

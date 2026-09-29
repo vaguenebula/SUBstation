@@ -60,11 +60,21 @@ struct ClipRender {
     double sourceAt(int64_t t) const noexcept { return sourceOffset + static_cast<double>(t - start) * rate; }
 };
 
+// A note of a MIDI clip, already cut to its clip: the renderer sends a note-on
+// at `start` and a note-off at `end`.
+struct NoteRender {
+    int64_t start = 0;  // timeline samples
+    int64_t end = 0;    // > start
+    uint8_t key = 60;
+    uint8_t velocity = 100;
+};
+
 struct TrackRender {
     uint32_t id = 0;
     std::shared_ptr<TrackParams> params;
     std::vector<ClipRender> clips;  // sorted by start
     int64_t maxClipLength = 0;      // bounds the binary search window
+    std::vector<NoteRender> notes;  // sorted by start
     std::vector<std::shared_ptr<Processor>> inserts;
 };
 

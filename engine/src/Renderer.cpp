@@ -14,13 +14,26 @@ void Renderer::prepare(double sampleRate) {
     masterGain_.reset(sampleRate, 0.02);
     masterNeedsSnap_ = true;
     previewSource_ = nullptr;
+    // Processors are prepared (silenced) along with the renderer.
+    activeNotes_.assign(kMaxActiveNotes, {});
+    numActiveNotes_ = 0;
+    events_.assign(kMaxEvents, {});
+    numEvents_ = 0;
+    previewNotes_.assign(kMaxPreviewNotes, {});
+    numPreviewNotes_ = 0;
+    expectedPosition_ = -1;
 }
 
 void Renderer::syncTempo(const RenderSnapshot& snap) noexcept {
-    // Tempo (or sample rate) changed: keep the playhead on the same beat.
+    // Tempo (or sample rate) changed: keep the playhead, and the ends of the
+    // sounding notes, on the same beat.
     const double spb = snap.samplesPerBeat();
     if (samplesPerBeat_ > 0.0 && spb != samplesPerBeat_) {
-        position_ = std::llround(static_cast<double>(position_) * (spb / samplesPerBeat_));
+        const double ratio = spb / samplesPerBeat_;
+        const auto rescale = [ratio](int64_t t) { return std::llround(static_cast<double>(t) * ratio); };
+        position_ = rescale(position_);
+        if (expectedPosition_ >= 0) expectedPosition_ = rescale(expectedPosition_);
+        for (int i = 0; i < numActiveNotes_; ++i) activeNotes_[i].end = rescale(activeNotes_[i].end);
     }
     samplesPerBeat_ = spb;
 }
@@ -40,6 +53,19 @@ void Renderer::applyCommand(const TransportCommand& command) noexcept {
     }
 }
 
+void Renderer::drainPreviewNotes(SharedState& shared) noexcept {
+    PreviewNote note;
+    while (shared.previewNotes.pop(note)) {
+        if (numPreviewNotes_ < static_cast<int>(previewNotes_.size())) previewNotes_[numPreviewNotes_++] = note;
+    }
+}
+
+void Renderer::discardPreviewNotes(SharedState& shared) noexcept {
+    PreviewNote note;
+    while (shared.previewNotes.pop(note)) {
+    }
+}
+
 void Renderer::publishTransport(SharedState& shared) const noexcept {
     shared.positionSamples.store(position_, std::memory_order_relaxed);
     shared.positionBeats.store(samplesPerBeat_ > 0.0 ? position_ / samplesPerBeat_ : 0.0, std::memory_order_relaxed);
@@ -50,12 +76,14 @@ void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, floa
                            uint32_t channels) noexcept {
     syncTempo(snap);
     drainCommands(shared);
+    drainPreviewNotes(shared);
 
     uint32_t done = 0;
     while (done < frames) {
         const int n = static_cast<int>(std::min<uint32_t>(kMaxBlock, frames - done));
         renderChunk(snap, shared, n,
                     {true, snap.loopEnabled, shared.metronome.load(std::memory_order_relaxed)});
+        numPreviewNotes_ = 0;  // played in the first chunk
         mixPreview(shared, n);
 
         float* dst = out + static_cast<size_t>(done) * channels;
@@ -106,9 +134,10 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
             if (looping && position_ < snap.loopEnd && position_ + length > snap.loopEnd) {
                 length = static_cast<int>(snap.loopEnd - position_);
             }
-            segments_[numSegments_++] = {position_, length, done};
+            segments_[numSegments_++] = {position_, length, done, position_ != expectedPosition_};
             if (flags.metronome) scheduleTicks(snap, position_, length, done);
             position_ += length;
+            expectedPosition_ = position_;
             done += length;
             if (looping && position_ == snap.loopEnd) position_ = snap.loopStart;
         }
@@ -136,7 +165,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
     std::fill_n(masterL, frames, 0.f);
     std::fill_n(masterR, frames, 0.f);
 
-    // 2. Tracks: clips -> inserts -> fader/pan -> master.
+    // 2. Tracks: clips and notes -> inserts -> fader/pan -> master.
     for (const TrackRender& track : snap.tracks) {
         float* left = trackLeft_.data();
         float* right = trackRight_.data();
@@ -144,10 +173,18 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
         std::fill_n(right, frames, 0.f);
 
         for (int s = 0; s < numSegments_; ++s) renderClips(track, segments_[s], snap.clipFadeSamples, voices);
+        if (!track.notes.empty() || numActiveNotes_ > 0 || numPreviewNotes_ > 0) {
+            buildNoteEvents(track);
+        } else {
+            numEvents_ = 0;
+        }
 
+        context.inEvents = {events_.data(), static_cast<size_t>(numEvents_)};
         float* channels[2] = {left, right};
         for (const auto& insert : track.inserts) {
-            if (insert->isEnabled()) insert->process(context, channels, 2, frames);
+            if (!insert->isEnabled()) continue;
+            if (insert->takeResetRequest()) insert->reset();
+            insert->process(context, channels, 2, frames);
         }
 
         TrackParams& params = *track.params;
@@ -190,6 +227,8 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
             }
         }
     }
+
+    forgetNotesOfRemovedTracks(snap);
 
     // 3. Master fader and meter.
     const float masterTarget = shared.masterGain.load(std::memory_order_relaxed);
@@ -300,6 +339,85 @@ void Renderer::renderClips(const TrackRender& track, const Segment& segment, int
             const int64_t dst = t - segStart;
             outL[dst] += srcL[src] * g * clip.panLeft;
             outR[dst] += srcR[src] * g * clip.panRight;
+        }
+    }
+}
+
+bool Renderer::pushEvent(const ProcessEvent& event) noexcept {
+    if (numEvents_ >= static_cast<int>(events_.size())) return false;
+    events_[numEvents_++] = event;
+    return true;
+}
+
+void Renderer::releaseNotes(uint32_t trackId, int offset) noexcept {
+    for (int a = 0; a < numActiveNotes_;) {
+        if (activeNotes_[a].trackId != trackId) {
+            ++a;
+            continue;
+        }
+        if (!pushEvent(ProcessEvent::noteOff(offset, activeNotes_[a].key))) return;  // next block
+        activeNotes_[a] = activeNotes_[--numActiveNotes_];
+    }
+}
+
+void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
+    numEvents_ = 0;
+    for (int i = 0; i < numPreviewNotes_; ++i) {
+        const PreviewNote& note = previewNotes_[i];
+        if (note.trackId != track.id) continue;
+        pushEvent(note.velocity > 0 ? ProcessEvent::noteOn(0, note.key, note.velocity)
+                                    : ProcessEvent::noteOff(0, note.key));
+    }
+    if (!playing_) releaseNotes(track.id, 0);
+
+    for (int s = 0; s < numSegments_; ++s) {
+        const Segment& segment = segments_[s];
+        if (segment.jump) releaseNotes(track.id, segment.offset);
+        const int64_t segEnd = segment.position + segment.length;
+
+        // Note-ons: notes starting in this segment. Notes that started earlier
+        // are not chased, as in Ableton.
+        auto it = std::lower_bound(track.notes.begin(), track.notes.end(), segment.position,
+                                   [](const NoteRender& note, int64_t value) { return note.start < value; });
+        for (; it != track.notes.end() && it->start < segEnd; ++it) {
+            if (numActiveNotes_ == static_cast<int>(activeNotes_.size())) break;
+            const auto offset = static_cast<int32_t>(segment.offset + (it->start - segment.position));
+            if (!pushEvent(ProcessEvent::noteOn(offset, it->key, it->velocity))) break;
+            activeNotes_[numActiveNotes_++] = {track.id, it->key, it->end};
+        }
+
+        // Note-offs due in this segment, including for notes that just started.
+        for (int a = 0; a < numActiveNotes_;) {
+            const ActiveNote& note = activeNotes_[a];
+            if (note.trackId != track.id || note.end >= segEnd) {
+                ++a;
+                continue;
+            }
+            const auto offset =
+                static_cast<int32_t>(segment.offset + std::max<int64_t>(0, note.end - segment.position));
+            if (!pushEvent(ProcessEvent::noteOff(offset, note.key))) break;
+            activeNotes_[a] = activeNotes_[--numActiveNotes_];
+        }
+    }
+
+    // In time order; at the same offset a note-off comes first, so a note that
+    // ends where the next one on its key starts doesn't cut the new one short.
+    std::sort(events_.begin(), events_.begin() + numEvents_, [](const ProcessEvent& a, const ProcessEvent& b) {
+        if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
+        return a.type == ProcessEvent::Type::NoteOff && b.type != ProcessEvent::Type::NoteOff;
+    });
+}
+
+void Renderer::forgetNotesOfRemovedTracks(const RenderSnapshot& snap) noexcept {
+    // Their instruments are gone along with the track.
+    for (int a = 0; a < numActiveNotes_;) {
+        const uint32_t id = activeNotes_[a].trackId;
+        const bool exists = std::any_of(snap.tracks.begin(), snap.tracks.end(),
+                                        [id](const TrackRender& track) { return track.id == id; });
+        if (exists) {
+            ++a;
+        } else {
+            activeNotes_[a] = activeNotes_[--numActiveNotes_];
         }
     }
 }

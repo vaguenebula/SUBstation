@@ -1,5 +1,10 @@
+import os
+import sys
+import traceback
 import wave
 from pathlib import Path
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
@@ -40,3 +45,47 @@ def dc_wav(make_wav):
 def ramp_wav(make_wav):
     """Mono file whose sample i has the value i / 32768 (exact in 16-bit PCM)."""
     return make_wav(np.arange(SAMPLE_RATE) % 32768 / 32768.0)
+
+
+@pytest.fixture(scope="module")
+def app():
+    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtWidgets import QApplication
+
+    from gilstudio import theme
+
+    QCoreApplication.setOrganizationName("GIL Studio Tests")  # keep tests out of the user's settings
+    QCoreApplication.setApplicationName("GIL Studio Tests")
+    application = QApplication.instance() or QApplication([])
+    theme.apply(application)
+    yield application
+
+
+@pytest.fixture
+def window(app, tmp_path):
+    """The real main window, offscreen, with no audio device."""
+    from PySide6.QtCore import QSettings
+
+    from gilstudio import _engine as ge
+    from gilstudio.ui.main_window import MainWindow
+
+    settings = QSettings()
+    settings.clear()
+    settings.setValue("browser/places", [str(tmp_path)])
+    # Exceptions raised inside Qt slots are only printed; collect them instead.
+    errors = []
+    previous_hook = sys.excepthook
+    sys.excepthook = lambda *exc_info: errors.append(exc_info)
+    engine = ge.Engine()
+    w = MainWindow(engine)
+    w.resize(1400, 820)
+    w.show()
+    app.processEvents()
+    yield w
+    w.undo_stack.setClean()
+    w.close()
+    engine.close_device()
+    w.deleteLater()
+    app.processEvents()
+    sys.excepthook = previous_hook
+    assert not errors, "".join("".join(traceback.format_exception(*e)) for e in errors)

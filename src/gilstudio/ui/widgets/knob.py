@@ -1,4 +1,5 @@
-"""Rotary knob: drag vertically, Shift for fine control, double-click resets."""
+"""Rotary knob: drag vertically, Shift for fine control, double-click resets.
+With `log_scale` (for frequencies and times) it moves evenly in log(value)."""
 
 from __future__ import annotations
 
@@ -21,10 +22,11 @@ class Knob(QWidget):
     def __init__(self, minimum: float = 0.0, maximum: float = 1.0, value: float = 0.0, *,
                  default: float | None = None, bipolar: bool = False,
                  formatter: Callable[[float], str] | None = None, color: str = theme.ACCENT,
-                 parent: QWidget | None = None):
+                 log_scale: bool = False, parent: QWidget | None = None):
         super().__init__(parent)
         self._min = minimum
         self._max = maximum
+        self._log = log_scale and minimum > 0
         self._value = value
         self._default = value if default is None else default
         self._bipolar = bipolar
@@ -49,7 +51,15 @@ class Knob(QWidget):
             self.update()
 
     def _fraction(self, value: float) -> float:
+        if self._log:
+            return math.log(value / self._min) / math.log(self._max / self._min)
         return (value - self._min) / (self._max - self._min)
+
+    def _from_fraction(self, fraction: float) -> float:
+        fraction = max(0.0, min(1.0, fraction))
+        if self._log:
+            return self._min * (self._max / self._min) ** fraction
+        return self._min + fraction * (self._max - self._min)
 
     def _set_from_user(self, value: float, gesture: object) -> None:
         value = max(self._min, min(self._max, value))
@@ -96,8 +106,8 @@ class Knob(QWidget):
             return
         start_y, start_value, gesture = self._drag
         pixels_for_full_range = 1000.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 150.0
-        delta = (start_y - event.position().y()) / pixels_for_full_range * (self._max - self._min)
-        self._set_from_user(start_value + delta, gesture)
+        delta = (start_y - event.position().y()) / pixels_for_full_range
+        self._set_from_user(self._from_fraction(self._fraction(start_value) + delta), gesture)
 
     def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
         self._drag = None
@@ -107,5 +117,5 @@ class Knob(QWidget):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         notches = event.angleDelta().y() / 120.0
-        self._set_from_user(self._value + notches * (self._max - self._min) / 50.0, object())
+        self._set_from_user(self._from_fraction(self._fraction(self._value) + notches / 50.0), object())
         event.accept()

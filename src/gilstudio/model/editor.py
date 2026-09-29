@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import copy
+import math
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtGui import QUndoStack
 
-from . import edits
+from . import edits, notes
 from .commands import (
     InsertTrackCommand,
     RemoveTrackCommand,
@@ -21,17 +22,28 @@ from .commands import (
     UpdateSettingsCommand,
     UpdateTrackCommand,
 )
-from .project import Clip, Device, Project, Track, new_id
+from .project import AnyClip, Clip, Device, MidiClip, Project, Track, new_id
 from .timebase import TimeSignature
 
 ClipRef = tuple[str, str]  # (track id, clip id)
 
 BUILTIN_DEVICES = {
     # kind: (display name, {param id: default})
+    "synth": ("Synth", {"wave": 2.0, "attack": 3.0, "decay": 300.0, "sustain": 70.0, "release": 200.0,
+                        "cutoff": 4000.0, "resonance": 10.0, "volume": 0.0}),
     "utility": ("Utility", {"gain": 0.0, "pan": 0.0, "width": 100.0}),
 }
 # How the browser's Built-in category groups the devices above.
-BUILTIN_CATEGORIES = {"Audio Effects": ["utility"]}
+BUILTIN_CATEGORIES = {"Instruments": ["synth"], "Audio Effects": ["utility"]}
+DEFAULT_INSTRUMENT = "synth"  # new MIDI tracks come with it, ready to play
+
+
+def is_instrument(kind: str) -> bool:
+    return kind in BUILTIN_CATEGORIES["Instruments"]
+
+
+def new_device(kind: str) -> Device:
+    return Device(id=new_id(), kind=kind, params=dict(BUILTIN_DEVICES[kind][1]))
 
 
 class ProjectEditor:
@@ -49,6 +61,14 @@ class ProjectEditor:
         track = Track(id=new_id(), name=name or p.unique_track_name(f"{len(p.tracks) + 1} Audio"),
                       color=p.next_color())
         self._push(InsertTrackCommand(p, track, len(p.tracks) if index is None else index, "Insert Audio Track"))
+        return p.track(track.id)
+
+    def add_midi_track(self, index: int | None = None, name: str | None = None,
+                       instrument: str | None = DEFAULT_INSTRUMENT) -> Track:
+        p = self.project
+        track = Track(id=new_id(), name=name or p.unique_track_name(f"{len(p.tracks) + 1} MIDI"),
+                      color=p.next_color(), kind="midi", devices=[new_device(instrument)] if instrument else [])
+        self._push(InsertTrackCommand(p, track, len(p.tracks) if index is None else index, "Insert MIDI Track"))
         return p.track(track.id)
 
     def delete_tracks(self, track_ids: list[str]) -> None:
@@ -122,7 +142,7 @@ class ProjectEditor:
 
     # --- Clips -------------------------------------------------------------------
 
-    def _commit(self, text: str, after: dict[str, list[Clip]], merge_key: object | None = None) -> None:
+    def _commit(self, text: str, after: dict[str, list[AnyClip]], merge_key: object | None = None) -> None:
         before = {tid: list(self.project.track(tid).clips) for tid in after}
         if before != after:
             self._push(SetClipsCommand(self.project, text, before, after, merge_key))
@@ -130,12 +150,12 @@ class ProjectEditor:
     def add_clips(self, track_id: str | None, start_beat: float, sources: list[tuple[str, float]],
                   track_index: int | None = None) -> list[ClipRef]:
         """Place audio files one after another; `sources` is [(path, duration_sec)].
-        With no track id a new audio track is created (at `track_index`)."""
+        With no track id (or a MIDI track's) a new audio track is created (at `track_index`)."""
         if not sources:
             return []
         self.undo_stack.beginMacro("Add Clip" if len(sources) == 1 else "Add Clips")
         try:
-            if track_id is None:
+            if track_id is None or self.project.track(track_id).is_midi:
                 track_id = self.add_audio_track(index=track_index, name=Path(sources[0][0]).stem).id
             tempo = self.project.tempo
             clips = list(self.project.track(track_id).clips)
@@ -152,6 +172,48 @@ class ProjectEditor:
             self.undo_stack.endMacro()
         return [(track_id, cid) for cid in new_ids]
 
+    def add_midi_clip(self, track_id: str, start_beat: float, length_beats: float) -> ClipRef | None:
+        """An empty MIDI clip on a MIDI track, named after the track. It wins
+        against clips it overlaps, like a placed clip."""
+        track = self.project.track(track_id)
+        if not track.is_midi or length_beats < edits.MIN_MIDI_CLIP_BEATS:
+            return None
+        clip = MidiClip(id=new_id(), name=track.name, start_beat=max(0.0, start_beat), duration_beats=length_beats)
+        self._commit("Insert MIDI Clip", {track_id: edits.resolve_overlaps(list(track.clips) + [clip], {clip.id},
+                                                                           self.project.tempo)})
+        return track_id, clip.id
+
+    def midi_clip_span(self, track_id: str, beat: float, grid_step: float = 0.0) -> tuple[float, float]:
+        """Where a new MIDI clip made at `beat` goes: from the grid line at or before
+        it (not reaching back over the clip before), one bar long or up to the next clip."""
+        tempo = self.project.tempo
+        clips = self.project.track(track_id).clips
+        beat = max(0.0, beat)
+        start = math.floor(beat / grid_step + 1e-9) * grid_step if grid_step > 0 else beat
+        start = max([start] + [c.end_beat(tempo) for c in clips if c.end_beat(tempo) <= beat + edits.EPS])
+        end = min([start + self.project.time_signature.beats_per_bar]
+                  + [c.start_beat for c in clips if c.start_beat > start + edits.EPS])
+        return start, end - start
+
+    def set_clip_notes(self, ref: ClipRef, clip_notes, text: str, merge_key: object | None = None) -> None:
+        """Replace a MIDI clip's notes (piano roll edits). With a `merge_key`, one
+        gesture's edits are one undo step."""
+        normalized = notes.normalize(clip_notes)
+        self.update_clips([ref], lambda c: replace(c, notes=normalized), text, merge_key)
+
+    def clamp_track_delta(self, refs: list[ClipRef], track_delta: int) -> int:
+        """How far these clips can move across tracks: within the track list, and
+        only onto tracks of their own kind (audio or MIDI). A move that would put
+        any clip on the other kind of track keeps them on their tracks."""
+        p = self.project
+        indices = [p.track_index(tid) for tid, _ in refs]
+        if not indices:
+            return 0
+        track_delta = max(-min(indices), min(track_delta, len(p.tracks) - 1 - max(indices)))
+        if any(p.tracks[i + track_delta].kind != p.tracks[i].kind for i in indices):
+            return 0
+        return track_delta
+
     def move_clips(self, refs: list[ClipRef], delta_beats: float, track_delta: int = 0,
                    copy_clips: bool = False) -> list[ClipRef]:
         """Move (or copy) clips in time and across tracks. Returns the resulting refs."""
@@ -160,10 +222,10 @@ class ProjectEditor:
         moving = [(tid, p.clip(tid, cid)) for tid, cid in refs]
         if not moving:
             return []
-        # Keep the whole group inside the timeline and the track list.
+        # Keep the whole group inside the timeline, the track list, and tracks of its kind.
         delta_beats = max(delta_beats, -min(c.start_beat for _, c in moving))
         indices = [p.track_index(tid) for tid, _ in moving]
-        track_delta = max(-min(indices), min(track_delta, len(p.tracks) - 1 - max(indices)))
+        track_delta = self.clamp_track_delta(refs, track_delta)
 
         lists = {t.id: list(t.clips) for t in p.tracks}
         affected: set[str] = set()
@@ -186,12 +248,12 @@ class ProjectEditor:
         self._commit("Copy Clips" if copy_clips else "Move Clips", after)
         return result
 
-    def replace_clip(self, track_id: str, clip: Clip, text: str) -> None:
+    def replace_clip(self, track_id: str, clip: AnyClip, text: str) -> None:
         """Commit an edited version of one clip (e.g. after trimming)."""
         clips = [clip if c.id == clip.id else c for c in self.project.track(track_id).clips]
         self._commit(text, {track_id: edits.resolve_overlaps(clips, {clip.id}, self.project.tempo)})
 
-    def update_clips(self, refs: list[ClipRef], change: Callable[[Clip], Clip], text: str,
+    def update_clips(self, refs: list[ClipRef], change: Callable[[AnyClip], AnyClip], text: str,
                      merge_key: object | None = None) -> None:
         """Apply `change` to each clip in `refs` as one undo step (clip view settings).
         Positions must not change. Lengths in beats may (warping, segment BPM): a
@@ -232,7 +294,7 @@ class ProjectEditor:
         two beats to right after `end`, replacing what was there. Returns the copies."""
         tempo = self.project.tempo
         length = end - start
-        after: dict[str, list[Clip]] = {}
+        after: dict[str, list[AnyClip]] = {}
         result: list[ClipRef] = []
         for tid in track_ids:
             clips = self.project.track(tid).clips
@@ -262,7 +324,7 @@ class ProjectEditor:
 
     def split_clips(self, refs: list[ClipRef], at_beat: float) -> None:
         tempo = self.project.tempo
-        after: dict[str, list[Clip]] = {}
+        after: dict[str, list[AnyClip]] = {}
         for tid, cid in refs:
             clips = after.get(tid) or list(self.project.track(tid).clips)
             for i, clip in enumerate(clips):
@@ -282,13 +344,22 @@ class ProjectEditor:
 
     # --- Devices -----------------------------------------------------------------
 
-    def add_device(self, track_id: str, kind: str, index: int | None = None) -> Device:
-        name, defaults = BUILTIN_DEVICES[kind]
-        before = copy.deepcopy(self.project.track(track_id).devices)
-        device = Device(id=new_id(), kind=kind, params=dict(defaults))
+    def add_device(self, track_id: str, kind: str, index: int | None = None) -> Device | None:
+        """Add a device to a track's chain. An instrument only goes on a MIDI track
+        (None otherwise), where it comes first and replaces any other instrument."""
+        track = self.project.track(track_id)
+        before = copy.deepcopy(track.devices)
         after = copy.deepcopy(before)
-        after.insert(len(after) if index is None else index, device)
-        self._push(SetDevicesCommand(self.project, track_id, before, after, f"Add {name}"))
+        device = new_device(kind)
+        if is_instrument(kind):
+            if not track.is_midi:
+                return None
+            after = [d for d in after if not is_instrument(d.kind)]
+            after.insert(0, device)
+        else:
+            first = 1 if after and is_instrument(after[0].kind) else 0  # effects go after the instrument
+            after.insert(len(after) if index is None else max(first, index), device)
+        self._push(SetDevicesCommand(self.project, track_id, before, after, f"Add {BUILTIN_DEVICES[kind][0]}"))
         return device
 
     def remove_device(self, track_id: str, device_id: str) -> None:

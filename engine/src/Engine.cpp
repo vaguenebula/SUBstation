@@ -10,6 +10,7 @@
 
 #include "PathUtils.h"
 #include "miniaudio.h"
+#include "processors/Synth.h"
 #include "processors/Utility.h"
 
 namespace gil {
@@ -243,6 +244,20 @@ void Engine::setTrackClips(uint32_t trackId, const std::vector<ClipDesc>& clips)
     rebuildSnapshotLocked();
 }
 
+void Engine::setTrackNotes(uint32_t trackId, const std::vector<NoteDesc>& notes) {
+    std::lock_guard lock(mutex_);
+    trackLocked(trackId).notes = notes;
+    rebuildSnapshotLocked();
+}
+
+void Engine::previewNote(uint32_t trackId, int key, int velocity) {
+    std::lock_guard lock(mutex_);
+    trackLocked(trackId);
+    shared_.previewNotes.push({trackId, static_cast<uint8_t>(std::clamp(key, 0, 127)),
+                               static_cast<uint8_t>(std::clamp(velocity, 0, 127))});
+    serviceTransportIfIdleLocked();
+}
+
 void Engine::setTrackGain(uint32_t trackId, float gain) {
     std::lock_guard lock(mutex_);
     trackLocked(trackId).params->gain.store(std::max(0.f, gain));
@@ -289,6 +304,8 @@ uint32_t Engine::addBuiltinProcessor(uint32_t trackId, const std::string& type, 
     std::shared_ptr<Processor> processor;
     if (type == "utility") {
         processor = std::make_shared<UtilityProcessor>();
+    } else if (type == "synth") {
+        processor = std::make_shared<SynthProcessor>();
     } else {
         throw std::invalid_argument("Unknown built-in device: " + type);
     }
@@ -348,6 +365,7 @@ void Engine::serviceTransportIfIdleLocked() {
     renderer_.syncTempo(*snapshotHold_);
     renderer_.drainCommands(shared_);
     renderer_.publishTransport(shared_);
+    Renderer::discardPreviewNotes(shared_);  // nobody would hear them, and a stale note-on could hang
 }
 
 void Engine::play() {
@@ -450,6 +468,15 @@ void Engine::suspendLiveLocked() {
 
 void Engine::resumeLiveLocked() { liveSuspended_.store(false, std::memory_order_seq_cst); }
 
+void Engine::resetProcessorsLocked() {
+    // Offline renders share the processors with live playback. Resetting them
+    // before keeps live notes out of the render; after, keeps the render's
+    // last notes from hanging in live playback.
+    for (auto& track : tracks_) {
+        for (auto& insert : track.inserts) insert->requestReset();
+    }
+}
+
 void Engine::prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices, double startBeat) {
     // Fresh stretchers, as many as live playback has, so an offline render
     // starts from a clean state and leaves the live voices alone.
@@ -466,8 +493,13 @@ void Engine::prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices, doubl
 }
 
 void Engine::renderOfflineLocked(double startBeat, int64_t frames, float* out, bool loop, bool metronome) {
+    ScopedNoDenormals noDenormals;
     suspendLiveLocked();
-    ScopeExit resume([this] { resumeLiveLocked(); });
+    resetProcessorsLocked();
+    ScopeExit resume([this] {
+        resetProcessorsLocked();
+        resumeLiveLocked();
+    });
     Renderer offline;
     WarpVoiceSet voices;
     prepareOfflineLocked(offline, voices, startBeat);
@@ -503,8 +535,13 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
         throw std::runtime_error("Could not create " + path);
     }
 
+    ScopedNoDenormals noDenormals;
     suspendLiveLocked();
-    ScopeExit resume([this] { resumeLiveLocked(); });
+    resetProcessorsLocked();
+    ScopeExit resume([this] {
+        resetProcessorsLocked();
+        resumeLiveLocked();
+    });
     Renderer offline;
     WarpVoiceSet voices;
     prepareOfflineLocked(offline, voices, startBeat);
@@ -546,6 +583,18 @@ void Engine::rebuildSnapshotLocked() {
         render.id = track.id;
         render.params = track.params;
         render.inserts = track.inserts;
+        render.notes.reserve(track.notes.size());
+        for (const NoteDesc& note : track.notes) {
+            NoteRender nr;
+            nr.start = std::max<int64_t>(0, std::llround(note.startBeat * spb));
+            nr.end = std::max<int64_t>(nr.start + 1, std::llround((note.startBeat + note.lengthBeats) * spb));
+            nr.key = static_cast<uint8_t>(std::clamp(note.key, 0, 127));
+            nr.velocity = static_cast<uint8_t>(std::clamp(note.velocity, 1, 127));
+            render.notes.push_back(nr);
+        }
+        std::sort(render.notes.begin(), render.notes.end(), [](const NoteRender& a, const NoteRender& b) {
+            return a.start != b.start ? a.start < b.start : a.key < b.key;
+        });
         std::array<size_t, kNumStretchConfigs> stretching{};
         for (size_t i = 0; i < track.clips.size(); ++i) {
             const ClipDesc& clip = track.clips[i];

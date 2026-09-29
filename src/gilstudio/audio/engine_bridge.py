@@ -43,6 +43,12 @@ def clip_desc(clip: Clip) -> ge.ClipDesc:
     )
 
 
+def note_descs(track: Track) -> list[ge.NoteDesc]:
+    """The notes a MIDI track plays, from all of its clips, in timeline beats."""
+    return [ge.NoteDesc(start, end - start, note.pitch, note.velocity)
+            for clip in track.clips for start, end, note in clip.played_notes()]
+
+
 class _LoadSignals(QObject):
     loaded = Signal(str, object)
     failed = Signal(str, str)
@@ -125,7 +131,7 @@ class EngineBridge(QObject):
             self._add_engine_track(track)
         self._push_settings()
         # Forget decoded audio the new project doesn't use.
-        used = {_key(c.path) for t in self.project.tracks for c in t.clips}
+        used = {_key(c.path) for t in self.project.tracks if not t.is_midi for c in t.clips}
         self._sources = {k: s for k, s in self._sources.items() if k in used}
         self.engine.release_unused_sources()
 
@@ -156,10 +162,13 @@ class EngineBridge(QObject):
         engine_id = self._track_ids.get(track_id)
         if engine_id is None:
             return
-        clips = self.project.track(track_id).clips
-        for clip in clips:
+        track = self.project.track(track_id)
+        if track.is_midi:
+            self.engine.set_track_notes(engine_id, note_descs(track))
+            return
+        for clip in track.clips:
             self.request_source(clip.path)
-        self.engine.set_track_clips(engine_id, [clip_desc(c) for c in clips])
+        self.engine.set_track_clips(engine_id, [clip_desc(c) for c in track.clips])
 
     def _sync_devices(self, track_id: str) -> None:
         engine_track = self._track_ids.get(track_id)
@@ -300,6 +309,12 @@ class EngineBridge(QObject):
 
     def stop_preview(self) -> None:
         self.engine.stop_preview()
+
+    def preview_note(self, track_id: str, pitch: int, velocity: int) -> None:
+        """Play a note on a MIDI track's instrument now; velocity 0 releases it."""
+        engine_id = self._track_ids.get(track_id)
+        if engine_id is not None:
+            self.engine.preview_note(engine_id, pitch, velocity)
 
     # --- Device ------------------------------------------------------------------
 

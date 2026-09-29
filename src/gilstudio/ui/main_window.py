@@ -21,7 +21,7 @@ from .. import APP_NAME, __version__
 from .. import _engine as ge
 from ..audio.engine_bridge import EngineBridge
 from ..audio.settings import AudioSettings
-from ..model.editor import ProjectEditor
+from ..model.editor import ProjectEditor, is_instrument
 from ..model.project import Project
 from ..model.serialization import EXTENSION, ProjectFileError, load_project, save_project
 from . import icons
@@ -141,6 +141,9 @@ class MainWindow(QMainWindow):
 
         create = bar.addMenu("&Create")
         self._action(create, "Insert Audio &Track", self.insert_track, "Ctrl+T")
+        self._action(create, "Insert &MIDI Track", self.insert_midi_track, "Ctrl+Shift+T")
+        self._action(create, "Insert MIDI &Clip", self.insert_midi_clip, "Ctrl+Shift+M")
+        create.addSeparator()
         self._action(create, "Delete Selected Track", self.delete_track)
 
         view = bar.addMenu("&View")
@@ -217,16 +220,49 @@ class MainWindow(QMainWindow):
 
     # --- Editing -------------------------------------------------------------------
 
-    def insert_track(self) -> None:
-        index = None
+    def _after_selected_track(self) -> int | None:
         if self.selection.track_id and self.project.has_track(self.selection.track_id):
-            index = self.project.track_index(self.selection.track_id) + 1
-        track = self.editor.add_audio_track(index)
+            return self.project.track_index(self.selection.track_id) + 1
+        return None
+
+    def insert_track(self) -> None:
+        track = self.editor.add_audio_track(self._after_selected_track())
         self.selection.select_track(track.id, focus_track=True)
+
+    def insert_midi_track(self) -> None:
+        track = self.editor.add_midi_track(self._after_selected_track())
+        self.selection.select_track(track.id, focus_track=True)
+
+    def insert_midi_clip(self) -> None:
+        """Ctrl+Shift+M: a MIDI clip over the time selection on each MIDI track in it,
+        or at the insert marker (a bar long) on the selected MIDI track."""
+        time_range = self.selection.time_range
+        if time_range is not None:
+            start, end, track_ids = time_range
+            refs = [self.editor.add_midi_clip(tid, start, end - start) for tid in track_ids
+                    if self.project.track(tid).is_midi]
+        else:
+            track_id = self.selection.track_id
+            refs = []
+            if track_id and self.project.has_track(track_id) and self.project.track(track_id).is_midi:
+                view = self.arrangement.view
+                start, length = self.editor.midi_clip_span(
+                    track_id, self.selection.insert_beat, view.grid_step() if view.snap else 0.0)
+                refs = [self.editor.add_midi_clip(track_id, start, length)]
+        refs = [ref for ref in refs if ref is not None]
+        if refs:
+            self.selection.set_clips(refs, track_id=refs[0][0])
+        else:
+            self.show_message("Select a MIDI track (or a time range on one) to insert a MIDI clip.")
 
     def add_device_to_selected_track(self, kind: str) -> None:
         track_id = self.selection.track_id
-        if track_id and self.project.has_track(track_id):
+        has_track = bool(track_id) and self.project.has_track(track_id)
+        if is_instrument(kind) and not (has_track and self.project.track(track_id).is_midi):
+            # As in Ableton: an instrument chosen with no MIDI track selected gets a new one.
+            track = self.editor.add_midi_track(self._after_selected_track(), instrument=kind)
+            self.selection.select_track(track.id, focus_track=True)
+        elif has_track:
             self.editor.add_device(track_id, kind)
         else:
             self.show_message("Select a track to add the device to.")

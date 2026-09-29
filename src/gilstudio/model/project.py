@@ -28,6 +28,9 @@ DEFAULT_WARP_MODE = "Standard"
 LEGACY_WARP_MODES = {"Beats": "Transients", "Tones": "Standard", "Complex": "Standard",
                      "Texture": "Smooth", "Complex Pro": "Formants"}
 
+# Audio tracks hold audio clips; MIDI tracks hold MIDI clips and an instrument.
+TRACK_KINDS = ("audio", "midi")
+
 DEFAULT_TRACK_HEIGHT = 68
 MIN_TRACK_HEIGHT = 24
 MAX_TRACK_HEIGHT = 400
@@ -83,6 +86,60 @@ class Clip:
         return self.start_beat + self.length_beats(tempo)
 
 
+@dataclass(frozen=True)
+class Note:
+    """A MIDI note. Times are in beats from the start of its clip's content."""
+
+    pitch: int  # MIDI note number, 60 = C3
+    start: float
+    length: float
+    velocity: int = 100  # 1..127
+
+    @property
+    def end(self) -> float:
+        return self.start + self.length
+
+
+@dataclass(frozen=True)
+class MidiClip:
+    """A MIDI clip: a window onto its notes, as an audio clip is onto its file.
+    Content beat `offset_beats` plays at `start_beat`. Notes outside the window
+    are kept but not played, so trimming or splitting a clip never loses notes.
+    MIDI is measured in beats, so a clip's length doesn't follow the tempo.
+    (`tempo` arguments are accepted so both kinds of clip can be edited alike.)"""
+
+    id: str
+    name: str
+    start_beat: float
+    duration_beats: float
+    offset_beats: float = 0.0
+    notes: tuple[Note, ...] = ()  # sorted by start, then pitch
+
+    def length_beats(self, tempo: float = 0.0) -> float:
+        return self.duration_beats
+
+    def end_beat(self, tempo: float = 0.0) -> float:
+        return self.start_beat + self.duration_beats
+
+    @property
+    def window_end(self) -> float:
+        """The content beat at the clip's end."""
+        return self.offset_beats + self.duration_beats
+
+    def to_timeline(self, content_beat: float) -> float:
+        return self.start_beat + content_beat - self.offset_beats
+
+    def played_notes(self) -> list[tuple[float, float, Note]]:
+        """(timeline start, timeline end, note) for each note the clip plays: those
+        starting inside its window, cut at the clip's end (as in Ableton)."""
+        end = self.window_end
+        return [(self.to_timeline(n.start), self.to_timeline(min(n.end, end)), n)
+                for n in self.notes if self.offset_beats <= n.start < end]
+
+
+AnyClip = Clip | MidiClip
+
+
 @dataclass
 class Device:
     """An insert device on a track. `kind` is 'utility' today; plugin devices
@@ -104,8 +161,13 @@ class Track:
     mute: bool = False
     solo: bool = False
     height: int = DEFAULT_TRACK_HEIGHT
-    clips: list[Clip] = field(default_factory=list)  # sorted by start_beat
+    clips: list[AnyClip] = field(default_factory=list)  # sorted by start_beat; MidiClips on MIDI tracks
     devices: list[Device] = field(default_factory=list)
+    kind: str = "audio"  # one of TRACK_KINDS; fixed for the track's life
+
+    @property
+    def is_midi(self) -> bool:
+        return self.kind == "midi"
 
 
 class Project(QObject):
@@ -146,7 +208,7 @@ class Project(QObject):
     def has_track(self, track_id: str) -> bool:
         return any(t.id == track_id for t in self.tracks)
 
-    def clip(self, track_id: str, clip_id: str) -> Clip:
+    def clip(self, track_id: str, clip_id: str) -> AnyClip:
         for clip in self.track(track_id).clips:
             if clip.id == clip_id:
                 return clip
@@ -184,12 +246,12 @@ class Project(QObject):
     def update_track(self, track_id: str, **attrs) -> None:
         track = self.track(track_id)
         for name, value in attrs.items():
-            if not hasattr(track, name) or name in ("id", "clips", "devices"):
+            if not hasattr(track, name) or name in ("id", "kind", "clips", "devices"):
                 raise AttributeError(name)
             setattr(track, name, value)
         self.track_changed.emit(track_id)
 
-    def set_clips(self, track_id: str, clips: list[Clip]) -> None:
+    def set_clips(self, track_id: str, clips: list[AnyClip]) -> None:
         self.track(track_id).clips = sorted(clips, key=lambda c: c.start_beat)
         self.clips_changed.emit(track_id)
 
