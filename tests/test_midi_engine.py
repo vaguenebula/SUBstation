@@ -1,6 +1,8 @@
 """MIDI in the engine: note scheduling and the built-in Synth.
 Rendered offline, so no audio device is needed."""
 
+import time
+
 import numpy as np
 import pytest
 
@@ -18,6 +20,31 @@ def engine():
     e = ge.Engine()
     yield e
     e.close_device()
+
+
+@pytest.fixture
+def live_engine():
+    """An engine with a running output device (the default, else any that opens)."""
+    e = ge.Engine()
+    for name in [""] + [d.name for d in e.list_output_devices()]:
+        try:
+            e.open_device(name, 0, 256, False)
+            break
+        except RuntimeError:
+            continue
+    else:
+        pytest.skip("no audio output device")
+    yield e
+    e.close_device()
+
+
+def wait_beats(engine, beats, timeout=5.0):
+    """Wait until the playing transport has advanced `beats`."""
+    target = engine.position_beats + beats
+    deadline = time.monotonic() + timeout
+    while engine.position_beats < target:
+        assert time.monotonic() < deadline, "the audio device stopped"
+        time.sleep(0.002)
 
 
 def synth_track(engine, notes, params=None):
@@ -155,3 +182,25 @@ def test_preview_notes_need_a_running_device(engine):
     assert np.abs(engine.render_offline(0.0, SPB)).max() == 0.0
     with pytest.raises(ValueError):
         engine.preview_note(track + 100, 60, 100)
+
+
+def test_quick_preview_notes_all_end(live_engine):
+    """Dragging a note across keys in the piano roll plays and releases notes
+    faster than audio blocks go by. Several arrive in one block; each must end."""
+    engine = live_engine
+    track, _ = synth_track(engine, [], {RELEASE: 1.0})
+    engine.play()  # the transport measures audio time
+    engine.preview_note(track, 60, 100)
+    wait_beats(engine, 0.25)
+    engine.take_meters()
+    wait_beats(engine, 0.25)
+    assert max(m.left for m in engine.take_meters() if m.track_id == track) > 0.05  # heard
+
+    for key in range(61, 73):  # as the dragged note moves up: release the last key, play the next
+        engine.preview_note(track, key - 1, 0)
+        engine.preview_note(track, key, 100)
+    engine.preview_note(track, 72, 0)  # mouse up
+    wait_beats(engine, 0.25)
+    engine.take_meters()
+    wait_beats(engine, 0.5)
+    assert max(m.left for m in engine.take_meters() if m.track_id == track) < 1e-4  # nothing left sounding

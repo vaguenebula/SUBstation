@@ -361,6 +361,10 @@ void Renderer::releaseNotes(uint32_t trackId, int offset) noexcept {
 }
 
 void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
+    // Notes played by hand come first, all at the block start and in the order
+    // they were played: dragging a note across keys releases one key and plays
+    // the next several times within a block, and reordering those would leave
+    // notes playing whose note-off came first.
     numEvents_ = 0;
     for (int i = 0; i < numPreviewNotes_; ++i) {
         const PreviewNote& note = previewNotes_[i];
@@ -368,6 +372,7 @@ void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
         pushEvent(note.velocity > 0 ? ProcessEvent::noteOn(0, note.key, note.velocity)
                                     : ProcessEvent::noteOff(0, note.key));
     }
+    const int previewEvents = numEvents_;
     if (!playing_) releaseNotes(track.id, 0);
 
     for (int s = 0; s < numSegments_; ++s) {
@@ -400,12 +405,14 @@ void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
         }
     }
 
-    // In time order; at the same offset a note-off comes first, so a note that
-    // ends where the next one on its key starts doesn't cut the new one short.
-    std::sort(events_.begin(), events_.begin() + numEvents_, [](const ProcessEvent& a, const ProcessEvent& b) {
-        if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
-        return a.type == ProcessEvent::Type::NoteOff && b.type != ProcessEvent::Type::NoteOff;
-    });
+    // The arrangement's notes in time order; at the same offset a note-off comes
+    // first, so a note that ends where the next one on its key starts doesn't cut
+    // the new one short.
+    std::sort(events_.begin() + previewEvents, events_.begin() + numEvents_,
+              [](const ProcessEvent& a, const ProcessEvent& b) {
+                  if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
+                  return a.type == ProcessEvent::Type::NoteOff && b.type != ProcessEvent::Type::NoteOff;
+              });
 }
 
 void Renderer::forgetNotesOfRemovedTracks(const RenderSnapshot& snap) noexcept {
