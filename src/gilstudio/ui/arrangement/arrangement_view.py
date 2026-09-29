@@ -1,0 +1,204 @@
+"""Composes the arrangement: ruler on top, lanes with track headers on the right
+(as in Ableton), the master track pinned at the bottom, shared scrollbars."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QColor, QMouseEvent, QPainter
+from PySide6.QtWidgets import QGridLayout, QScrollBar, QWidget
+
+from ... import theme
+from ...audio.engine_bridge import EngineBridge
+from ...model.editor import ProjectEditor
+from .lanes_canvas import LanesCanvas
+from .ruler import TimelineRuler
+from .track_headers import MasterHeader, MasterLane, TrackHeaderColumn
+from .view_state import Selection, TrackLayout, ViewState
+from .waveform_cache import WaveformCache
+
+HEADER_WIDTH = 236
+MASTER_HEIGHT = 40
+DROP_ZONE = 120  # empty space below the last track for dropping files
+
+
+class GridInfo(QWidget):
+    """Corner above the headers: shows the grid size; click toggles snapping."""
+
+    def __init__(self, view: ViewState, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.view = view
+        self.setToolTip("Grid (Ctrl+1 narrower, Ctrl+2 wider). Click to toggle snapping (Ctrl+4).")
+        view.changed.connect(self.update)
+        view.grid_changed.connect(self.update)
+        view.project.settings_changed.connect(self.update)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(theme.PANEL))
+        p.fillRect(QRect(0, self.height() - 1, self.width(), 1), QColor(theme.BORDER))
+        p.fillRect(QRect(0, 0, 1, self.height()), QColor(theme.BORDER))
+        step = self.view.grid_step()
+        bar = self.view.project.time_signature.beats_per_bar
+        if step >= bar:
+            label = f"{round(step / bar)} Bar" + ("s" if step > bar else "")
+        else:
+            label = f"1/{round(4 / step)}"
+        p.setPen(QColor(theme.TEXT if self.view.snap else theme.TEXT_DISABLED))
+        p.drawText(self.rect().adjusted(10, 0, -8, 0), Qt.AlignmentFlag.AlignVCenter,
+                   f"Grid {label}" + ("" if self.view.snap else " (off)"))
+
+    def mousePressEvent(self, _event: QMouseEvent) -> None:
+        self.view.set_snap(not self.view.snap)
+
+
+class ArrangementView(QWidget):
+    locate_requested = Signal(float)
+    status_message = Signal(str)
+
+    def __init__(self, editor: ProjectEditor, selection: Selection, bridge: EngineBridge,
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.editor = editor
+        self.project = editor.project
+        self.selection = selection
+        self.bridge = bridge
+        self.view = ViewState(self.project, self)
+        self.layout_model = TrackLayout(self.project)
+        self.waveforms = WaveformCache()
+
+        self.ruler = TimelineRuler(self.view, editor, selection)
+        self.lanes = LanesCanvas(editor, self.view, self.layout_model, selection, bridge, self.waveforms)
+        self.headers = TrackHeaderColumn(editor, self.view, self.layout_model, selection, bridge)
+        self.headers.setFixedWidth(HEADER_WIDTH)
+        self.grid_info = GridInfo(self.view)
+        self.grid_info.setFixedWidth(HEADER_WIDTH)
+        self.master_lane = MasterLane(self.view)
+        self.master_lane.setFixedHeight(MASTER_HEIGHT)
+        self.master_header = MasterHeader(editor, bridge)
+        self.master_header.setFixedSize(HEADER_WIDTH, MASTER_HEIGHT)
+        self.hbar = QScrollBar(Qt.Orientation.Horizontal)
+        self.vbar = QScrollBar(Qt.Orientation.Vertical)
+        for bar in (self.hbar, self.vbar):
+            bar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+        grid.addWidget(self.ruler, 0, 0)
+        grid.addWidget(self.grid_info, 0, 1, 1, 2)
+        grid.addWidget(self.lanes, 1, 0)
+        grid.addWidget(self.headers, 1, 1)
+        grid.addWidget(self.vbar, 1, 2, 2, 1)
+        grid.addWidget(self.master_lane, 2, 0)
+        grid.addWidget(self.master_header, 2, 1)
+        grid.addWidget(self.hbar, 3, 0)
+        grid.setColumnStretch(0, 1)
+        grid.setRowStretch(1, 1)
+
+        p = self.project
+        for signal in (p.track_inserted, p.track_removed):
+            signal.connect(self._on_structure_changed)
+        p.reset.connect(self._on_reset)
+        p.track_changed.connect(self._on_track_changed)
+        p.clips_changed.connect(lambda _tid: (self.selection.prune(self.project), self._update_hbar()))
+        p.settings_changed.connect(self._update_hbar)
+        self.view.changed.connect(self._update_hbar)
+        self.view.vscroll_changed.connect(self._sync_vbar_value)
+        self.hbar.valueChanged.connect(self._on_hbar)
+        self.vbar.valueChanged.connect(self.view.set_scroll_y)
+        self.ruler.locate_requested.connect(self.locate_requested)
+        self.lanes.status_message.connect(self.status_message)
+        bridge.position_changed.connect(self._on_position)
+        self._on_reset()
+
+    # --- Model changes -----------------------------------------------------------
+
+    def _on_reset(self) -> None:
+        self.waveforms.clear()
+        self.view.scroll_beats = 0.0
+        self.view.scroll_y = 0
+        self._on_structure_changed()
+        self.view.changed.emit()
+
+    def _on_structure_changed(self, *_args) -> None:
+        self.layout_model.rebuild()
+        self.headers.sync()
+        self.selection.prune(self.project)
+        self._update_vbar()
+        self.lanes.update()
+
+    def _on_track_changed(self, track_id: str) -> None:
+        old_height = self.layout_model.total_height
+        self.layout_model.rebuild()
+        self.headers.refresh(track_id)
+        if self.layout_model.total_height != old_height:
+            self.headers.relayout()
+            self._update_vbar()
+        self.lanes.update()
+
+    # --- Scrolling ---------------------------------------------------------------
+
+    def _update_hbar(self, *_args) -> None:
+        width = max(1, self.lanes.width())
+        ppb = self.view.px_per_beat
+        bar = self.project.time_signature.beats_per_bar
+        content_end = max(self.project.end_beat(), self.project.loop_end,
+                          self.view.x_to_beat(width)) + 16 * bar
+        self.hbar.blockSignals(True)
+        self.hbar.setRange(0, max(0, int(content_end * ppb - width)))
+        self.hbar.setPageStep(width)
+        self.hbar.setSingleStep(max(1, width // 20))
+        self.hbar.setValue(int(self.view.scroll_beats * ppb))
+        self.hbar.blockSignals(False)
+
+    def _on_hbar(self, value: int) -> None:
+        self.view.set_scroll_beats(value / self.view.px_per_beat)
+
+    def _update_vbar(self) -> None:
+        viewport = max(1, self.lanes.height())
+        maximum = max(0, self.layout_model.total_height + DROP_ZONE - viewport)
+        self.view.max_scroll_y = maximum
+        self.vbar.blockSignals(True)
+        self.vbar.setRange(0, maximum)
+        self.vbar.setPageStep(viewport)
+        self.vbar.setSingleStep(24)
+        self.vbar.blockSignals(False)
+        if self.view.scroll_y > maximum:
+            self.view.set_scroll_y(maximum)
+        self._sync_vbar_value()
+
+    def _sync_vbar_value(self) -> None:
+        if self.view.scroll_y > self.view.max_scroll_y:
+            self.view.set_scroll_y(self.view.max_scroll_y)
+            return
+        self.vbar.blockSignals(True)
+        self.vbar.setValue(self.view.scroll_y)
+        self.vbar.blockSignals(False)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_hbar()
+        self._update_vbar()
+
+    # --- Playhead ------------------------------------------------------------------
+
+    def _on_position(self, beat: float) -> None:
+        self.lanes.set_playhead(beat)
+        self.ruler.set_playhead(beat)
+        self.master_lane.set_playhead(beat)
+        if self.view.follow and self.bridge.is_playing:
+            x = self.view.beat_to_x(beat)
+            width = self.lanes.width()
+            if x > width * 0.96 or x < 0:
+                self.view.set_scroll_beats(beat - width * 0.04 / self.view.px_per_beat)
+
+    # --- Commands -----------------------------------------------------------------
+
+    def zoom(self, factor: float) -> None:
+        playhead_x = self.view.beat_to_x(self.bridge.position)
+        anchor = playhead_x if 0 <= playhead_x <= self.lanes.width() else self.lanes.width() / 2
+        self.view.zoom_at(anchor, factor)
+
+    def zoom_to_arrangement(self) -> None:
+        end = max(self.project.end_beat(), self.project.time_signature.beats_per_bar * 8)
+        self.view.zoom_to_fit(0.0, end * 1.05, self.lanes.width())
