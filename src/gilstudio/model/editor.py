@@ -194,12 +194,23 @@ class ProjectEditor:
     def update_clips(self, refs: list[ClipRef], change: Callable[[Clip], Clip], text: str,
                      merge_key: object | None = None) -> None:
         """Apply `change` to each clip in `refs` as one undo step (clip view settings).
-        Positions and lengths must not change, so overlaps need no resolving."""
+        Positions must not change. Lengths in beats may (warping, segment BPM): a
+        clip that would run into the next one is trimmed, as on a tempo change."""
         ids_by_track: dict[str, set[str]] = {}
         for tid, cid in refs:
             ids_by_track.setdefault(tid, set()).add(cid)
-        after = {tid: [change(c) if c.id in ids else c for c in self.project.track(tid).clips]
-                 for tid, ids in ids_by_track.items()}
+        current = {tid: list(self.project.track(tid).clips) for tid in ids_by_track}
+        # Within one drag, work from the clips as they were when the drag began, so
+        # dragging the segment BPM down and back up doesn't leave clips trimmed.
+        baseline = current
+        index = self.undo_stack.index()
+        last = self.undo_stack.command(index - 1) if index > 0 else None
+        if (merge_key is not None and isinstance(last, SetClipsCommand) and last.merge_key == merge_key
+                and last.before.keys() == current.keys()):
+            baseline = last.before
+        tempo = self.project.tempo
+        after = {tid: edits.fit_to_tempo([change(c) if c.id in ids_by_track[tid] else c for c in clips], tempo)
+                 for tid, clips in baseline.items()}
         self._commit(text, after, merge_key)
 
     def delete_clips(self, refs: list[ClipRef]) -> None:

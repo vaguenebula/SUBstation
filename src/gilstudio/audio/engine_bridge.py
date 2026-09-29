@@ -14,10 +14,11 @@ from collections.abc import Callable
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 
 from .. import _engine as ge
-from ..model.project import Project, Track
+from ..model.project import WARP_MODES, Clip, Project, Track
 from ..model.timebase import db_to_gain
 
 AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
+_WARP_MODES = {name: ge.WarpMode(index) for index, name in enumerate(WARP_MODES)}
 
 
 def is_audio_file(path: str) -> bool:
@@ -26,6 +27,20 @@ def is_audio_file(path: str) -> bool:
 
 def _key(path: str) -> str:
     return os.path.normcase(os.path.abspath(path))
+
+
+def clip_desc(clip: Clip) -> ge.ClipDesc:
+    """The engine's view of a clip. Positions stay in beats and seconds; the
+    engine converts them to samples at the current tempo and sample rate."""
+    return ge.ClipDesc(
+        clip.path, clip.start_beat, clip.duration_sec, clip.offset_sec, db_to_gain(clip.gain_db),
+        pan=clip.pan,
+        warp=clip.is_warped,
+        segment_bpm=clip.segment_bpm,
+        warp_mode=_WARP_MODES.get(clip.warp_mode, ge.WarpMode.BEATS),
+        transpose=clip.transpose + clip.detune / 100.0,
+        id=clip.id,
+    )
 
 
 class _LoadSignals(QObject):
@@ -144,9 +159,7 @@ class EngineBridge(QObject):
         clips = self.project.track(track_id).clips
         for clip in clips:
             self.request_source(clip.path)
-        self.engine.set_track_clips(engine_id, [
-            ge.ClipDesc(c.path, c.start_beat, c.duration_sec, c.offset_sec, db_to_gain(c.gain_db)) for c in clips
-        ])
+        self.engine.set_track_clips(engine_id, [clip_desc(c) for c in clips])
 
     def _sync_devices(self, track_id: str) -> None:
         engine_track = self._track_ids.get(track_id)

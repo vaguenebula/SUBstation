@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from PySide6.QtGui import QUndoStack
 
@@ -239,3 +241,78 @@ def test_settings(editor):
     editor.undo_stack.undo()
     editor.undo_stack.undo()
     assert (editor.project.tempo, editor.project.loop_enabled) == (120.0, False)
+
+
+# --- Warping --------------------------------------------------------------------------
+
+
+def warped(start, beats, segment_bpm=60.0, cid=None, source=100.0):
+    """A warped clip `beats` long; at 60 BPM a beat is one second of audio."""
+    return Clip(id=cid or new_id(), path="a.wav", name="a", start_beat=start,
+                duration_sec=beats * 60.0 / segment_bpm, source_duration_sec=source,
+                warp=True, segment_bpm=segment_bpm)
+
+
+def test_warped_clip_length_is_fixed_in_beats():
+    c = warped(0.0, 4.0)
+    for tempo in (60.0, 120.0, 175.0):
+        assert c.length_beats(tempo) == pytest.approx(4.0)
+    # Unwarped (or warped without a segment BPM) it follows the tempo again.
+    assert replace(c, warp=False).length_beats(120.0) == pytest.approx(8.0)
+    assert replace(c, segment_bpm=0.0).length_beats(120.0) == pytest.approx(8.0)
+
+
+def test_editing_warped_clips_measures_source_at_segment_bpm():
+    c = warped(2.0, 4.0, cid="w")  # 4 s of audio over beats 2..6
+    left, right = edits.split_clip(c, 3.0, TEMPO)
+    assert (left.duration_sec, right.offset_sec, right.duration_sec) == pytest.approx((1.0, 1.0, 3.0))
+    trimmed = edits.trim_start(replace(c, offset_sec=5.0), 1.0, TEMPO)
+    assert (trimmed.start_beat, trimmed.offset_sec, trimmed.duration_sec) == pytest.approx((1.0, 4.0, 5.0))
+    assert edits.trim_end(c, 5.0, TEMPO).duration_sec == pytest.approx(3.0)
+    pieces = edits.remove_range([c], 3.0, 4.0, TEMPO)
+    assert spans(pieces) == [(2.0, 3.0), (4.0, 6.0)]
+    assert pieces[1].offset_sec == pytest.approx(2.0)
+
+
+def test_tempo_change_leaves_warped_clips_alone(editor):
+    t = editor.add_audio_track()
+    editor.project.set_clips(t.id, [warped(0.0, 4.0, cid="w"), clip(4.0, 2.0, cid="u")])
+    editor.set_tempo(60.0)  # the unwarped clip grows, the warped one doesn't
+    w, u = editor.project.track(t.id).clips
+    assert w.length_beats(60.0) == pytest.approx(4.0)
+    assert u.length_beats(60.0) == pytest.approx(1.0)
+
+
+def test_segment_bpm_changes_trim_at_the_next_clip_and_drags_recover(editor):
+    t = editor.add_audio_track()
+    original = [warped(0.0, 2.0, cid="w"), clip(3.0, 2.0, cid="next")]
+    editor.project.set_clips(t.id, original)
+    refs = [(t.id, "w")]
+    key = object()
+    depth = editor.undo_stack.count()
+    # A higher segment BPM plays the audio slower, so the clip grows (2 s at
+    # 180 BPM is 6 beats) until it meets the next clip, which keeps its place.
+    editor.update_clips(refs, lambda c: replace(c, segment_bpm=180.0), "Change Segment BPM", key)
+    w, nxt = editor.project.track(t.id).clips
+    assert w.end_beat(TEMPO) == pytest.approx(3.0)
+    assert w.duration_sec == pytest.approx(1.0)  # 3 beats at 180 BPM
+    assert nxt == original[1]
+    # ...and dragging back in the same gesture restores it untrimmed.
+    editor.update_clips(refs, lambda c: replace(c, segment_bpm=60.0), "Change Segment BPM", key)
+    assert editor.project.track(t.id).clips == original
+    assert editor.undo_stack.count() == depth + 1
+    # Separate edits don't merge: a lower BPM (faster) leaves the trimmed clip short.
+    editor.update_clips(refs, lambda c: replace(c, segment_bpm=180.0), "Change Segment BPM")
+    editor.update_clips(refs, lambda c: replace(c, segment_bpm=90.0), "Change Segment BPM")
+    assert editor.project.clip(t.id, "w").length_beats(TEMPO) == pytest.approx(1.5)
+    editor.undo_stack.undo()
+    editor.undo_stack.undo()
+    assert editor.project.track(t.id).clips == original
+
+
+def test_turning_warp_off_trims_like_a_tempo_change(editor):
+    t = editor.add_audio_track()
+    editor.project.set_clips(t.id, [warped(0.0, 2.0, cid="w"), clip(3.0, 2.0, cid="next")])
+    # Unwarped, 2 s of audio is 4 beats at 120 BPM: cut where the next clip starts.
+    editor.update_clips([(t.id, "w")], lambda c: replace(c, warp=False), "Toggle Warp")
+    assert editor.project.clip(t.id, "w").end_beat(TEMPO) == pytest.approx(3.0)

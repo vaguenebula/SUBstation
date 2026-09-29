@@ -6,7 +6,6 @@ import math
 from dataclasses import replace
 
 from .project import Clip, new_id
-from .timebase import beats_to_seconds, seconds_to_beats
 
 MIN_CLIP_SEC = 0.005
 EPS = 1e-9
@@ -54,14 +53,14 @@ def cut_clip(clip: Clip, cuts: list[tuple[float, float]], tempo: float) -> list[
         return [clip]  # untouched: avoid float drift from recomputing it
     result: list[Clip] = []
     for a, b in pieces:
-        duration = beats_to_seconds(b - a, tempo)
+        duration = clip.beats_to_source(b - a, tempo)
         if duration < MIN_CLIP_SEC:
             continue
         result.append(replace(
             clip,
             id=new_id() if result else clip.id,
             start_beat=a,
-            offset_sec=clip.offset_sec + beats_to_seconds(a - clip.start_beat, tempo),
+            offset_sec=clip.offset_sec + clip.beats_to_source(a - clip.start_beat, tempo),
             duration_sec=duration,
         ))
     return result
@@ -76,15 +75,16 @@ def remove_range(clips: list[Clip], start: float, end: float, tempo: float) -> l
 
 def fit_to_tempo(clips: list[Clip], tempo: float) -> list[Clip]:
     """Unwarped clips keep their length in seconds, so a faster tempo makes them
-    longer in beats. Trim any clip that would run into the next one (the later clip
-    keeps its place) so clips never overlap. Returns `clips` itself if nothing changes."""
+    longer in beats (and a warped clip grows when its segment BPM drops). Trim any
+    clip that would run into the next one (the later clip keeps its place) so clips
+    never overlap. Returns `clips` itself if nothing changes."""
     ordered = sorted(clips, key=lambda c: c.start_beat)
     result: list[Clip] = []
     changed = False
     for i, clip in enumerate(ordered):
         if i + 1 < len(ordered) and clip.end_beat(tempo) > ordered[i + 1].start_beat + EPS:
             changed = True
-            duration = beats_to_seconds(ordered[i + 1].start_beat - clip.start_beat, tempo)
+            duration = clip.beats_to_source(ordered[i + 1].start_beat - clip.start_beat, tempo)
             if duration < MIN_CLIP_SEC:
                 continue  # fully covered
             clip = replace(clip, duration_sec=duration)
@@ -97,16 +97,16 @@ def slice_range(clips: list[Clip], start: float, end: float, tempo: float) -> li
     result = []
     for clip in clips:
         a, b = max(start, clip.start_beat), min(end, clip.end_beat(tempo))
-        duration = beats_to_seconds(b - a, tempo)
+        duration = clip.beats_to_source(b - a, tempo)
         if duration >= MIN_CLIP_SEC:
             result.append(replace(clip, id=new_id(), start_beat=a, duration_sec=duration,
-                                  offset_sec=clip.offset_sec + beats_to_seconds(a - clip.start_beat, tempo)))
+                                  offset_sec=clip.offset_sec + clip.beats_to_source(a - clip.start_beat, tempo)))
     return result
 
 
 def split_clip(clip: Clip, at_beat: float, tempo: float) -> tuple[Clip, Clip] | None:
     """Split into two clips at `at_beat`; None if the point is not inside the clip."""
-    left_sec = beats_to_seconds(at_beat - clip.start_beat, tempo)
+    left_sec = clip.beats_to_source(at_beat - clip.start_beat, tempo)
     if left_sec < MIN_CLIP_SEC or clip.duration_sec - left_sec < MIN_CLIP_SEC:
         return None
     left = replace(clip, duration_sec=left_sec)
@@ -117,17 +117,17 @@ def split_clip(clip: Clip, at_beat: float, tempo: float) -> tuple[Clip, Clip] | 
 
 def trim_start(clip: Clip, new_start_beat: float, tempo: float) -> Clip:
     """Move the left edge. The audio stays in place on the timeline."""
-    delta = beats_to_seconds(new_start_beat - clip.start_beat, tempo)
+    delta = clip.beats_to_source(new_start_beat - clip.start_beat, tempo)
     delta = max(delta, -clip.offset_sec)  # cannot reveal audio before the file starts
-    delta = max(delta, -beats_to_seconds(clip.start_beat, tempo))  # nor move before beat 0
+    delta = max(delta, -clip.beats_to_source(clip.start_beat, tempo))  # nor move before beat 0
     delta = min(delta, clip.duration_sec - MIN_CLIP_SEC)
-    return replace(clip, start_beat=clip.start_beat + seconds_to_beats(delta, tempo),
+    return replace(clip, start_beat=clip.start_beat + clip.source_to_beats(delta, tempo),
                    offset_sec=clip.offset_sec + delta, duration_sec=clip.duration_sec - delta)
 
 
 def trim_end(clip: Clip, new_end_beat: float, tempo: float) -> Clip:
     """Move the right edge, limited by the end of the source file."""
-    duration = beats_to_seconds(new_end_beat - clip.start_beat, tempo)
+    duration = clip.beats_to_source(new_end_beat - clip.start_beat, tempo)
     available = clip.source_duration_sec - clip.offset_sec if clip.source_duration_sec > 0 else math.inf
     return replace(clip, duration_sec=max(MIN_CLIP_SEC, min(duration, available)))
 

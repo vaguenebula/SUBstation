@@ -11,6 +11,7 @@
 
 #include "AudioSource.h"
 #include "Processor.h"
+#include "Warp.h"
 #include "rt/RtUtils.h"
 
 namespace gil {
@@ -35,11 +36,28 @@ struct TrackParams {
 };
 
 struct ClipRender {
+    enum class Playback : uint8_t {
+        Direct,     // source frames 1:1 (unwarped, or warped at its own tempo, no pitch change)
+        Resample,   // Re-Pitch: speed and pitch change together
+        Stretch,    // time stretcher: speed and pitch independent
+    };
+
     std::shared_ptr<const AudioSource> source;
     int64_t start = 0;          // timeline position, samples
-    int64_t length = 0;         // samples
+    int64_t length = 0;         // timeline samples
     int64_t sourceOffset = 0;   // first source frame played
+    double rate = 1.0;          // source frames per timeline frame (project tempo / clip tempo)
     float gain = 1.f;
+    float panLeft = 1.f;        // clip pan as balance gains
+    float panRight = 1.f;
+    Playback playback = Playback::Direct;
+    StretchConfig stretchConfig = StretchConfig::Standard;
+    float transpose = 0.f;      // semitones (Stretch only)
+    bool preserveFormants = false;
+    uint64_t key = 0;           // identifies the clip across snapshots (stretch voice continuity)
+
+    // Source position (fractional frames) heard at timeline sample `t`.
+    double sourceAt(int64_t t) const noexcept { return sourceOffset + static_cast<double>(t - start) * rate; }
 };
 
 struct TrackRender {
@@ -60,6 +78,7 @@ struct RenderSnapshot {
     int64_t loopEnd = 0;
     int64_t clipFadeSamples = 0;
     std::vector<TrackRender> tracks;
+    WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
 
     double samplesPerBeat() const { return sampleRate * 60.0 / tempo; }
 };

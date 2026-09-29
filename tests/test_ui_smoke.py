@@ -13,10 +13,11 @@ import pytest
 from PySide6.QtCore import QCoreApplication, QPoint, QPointF, QSettings, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from gilstudio import _engine as ge
 from gilstudio import theme
+from gilstudio.audio.engine_bridge import clip_desc
 from gilstudio.ui.clip_view import WARP_MODES
 
 from .conftest import SAMPLE_RATE, write_wav
@@ -523,6 +524,53 @@ def test_clip_view_edits_several_clips_in_unison(window, three_tracks):
     editor.delete_clips(refs[:1])
     assert clip_view.clip_refs == refs[1:]
     assert clip_view.name.text() == tracks[1].clips[0].name
+
+
+def test_clip_view_warping_reaches_the_audio(window, three_tracks):
+    arrangement, project, editor = window.arrangement, window.project, window.editor
+    track = project.tracks[0]  # tone0: 2 s at 220 Hz, beats 0..4
+    for other in project.tracks[1:]:
+        editor.set_track_param(other.id, "mute", True)
+    window.selection.set_clips({(track.id, track.clips[0].id)})
+    arrangement.toggle_clip_view()
+    clip_view = arrangement.clip_view
+
+    # Warp on: the segment BPM takes the project tempo, so nothing moves yet.
+    clip_view.warp.click()
+    clip = track.clips[0]
+    assert (clip.warp, clip.segment_bpm) == (True, 120.0)
+    assert clip.end_beat(project.tempo) == pytest.approx(4.0)
+    # Doubling the tempo halves its duration and keeps it on the beat grid.
+    editor.set_tempo(240.0)
+    clip = track.clips[0]
+    assert clip.end_beat(project.tempo) == pytest.approx(4.0)
+    assert "1.00 s" in clip_view.info.text()
+    out = window.engine.render_offline(0.0, 2 * SAMPLE_RATE)
+    assert np.abs(out[SAMPLE_RATE // 2 : SAMPLE_RATE - 2000]).max() > 0.1
+    assert np.abs(out[SAMPLE_RATE + 10 :]).max() == 0.0
+
+    # Transpose is heard (an octave up) and the mode list offers every mode.
+    clip_view.transpose.knob.valueChanged.emit(12.0, object())
+    assert track.clips[0].transpose == 12
+    out = window.engine.render_offline(0.0, SAMPLE_RATE)
+    spectrum = np.abs(np.fft.rfft(out[SAMPLE_RATE // 4 : SAMPLE_RATE // 4 + 16384, 0] * np.hanning(16384)))
+    assert np.argmax(spectrum) * SAMPLE_RATE / 16384 == pytest.approx(440.0, rel=0.01)
+
+    # Re-Pitch ignores transposition, so its knobs are disabled.
+    clip_view.mode.activated.emit(WARP_MODES.index("Re-Pitch"))
+    assert not clip_view.transpose.isEnabled() and not clip_view.detune.isEnabled()
+    desc = clip_desc(track.clips[0])
+    assert (desc.warp, desc.segment_bpm, desc.warp_mode, desc.transpose) == (True, 120.0, ge.WarpMode.RE_PITCH, 12.0)
+    clip_view.mode.activated.emit(WARP_MODES.index("Complex Pro"))
+    assert clip_view.transpose.isEnabled()
+
+    # :2 halves the segment BPM: the clip plays twice as fast, half as long.
+    before = track.clips[0].end_beat(project.tempo)
+    buttons = [b for b in clip_view.findChildren(QPushButton) if b.text() == ":2"]
+    buttons[0].click()
+    assert track.clips[0].segment_bpm == 60.0
+    assert track.clips[0].end_beat(project.tempo) == pytest.approx(before / 2)
+    assert not arrangement.grab().isNull()  # warped waveforms draw at their own scale
 
 
 def test_drop_files_from_browser(window, tmp_path):

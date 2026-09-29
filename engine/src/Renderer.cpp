@@ -7,7 +7,9 @@ namespace gil {
 
 void Renderer::prepare(double sampleRate) {
     sampleRate_ = sampleRate;
-    for (auto* buffer : {&trackLeft_, &trackRight_, &masterLeft_, &masterRight_}) buffer->assign(kMaxBlock, 0.f);
+    for (auto* buffer : {&trackLeft_, &trackRight_, &masterLeft_, &masterRight_, &warpLeft_, &warpRight_}) {
+        buffer->assign(kMaxBlock, 0.f);
+    }
     metronome_.prepare(sampleRate);
     masterGain_.reset(sampleRate, 0.02);
     masterNeedsSnap_ = true;
@@ -90,6 +92,8 @@ void Renderer::renderOffline(const RenderSnapshot& snap, SharedState& shared, fl
 
 void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int frames, ChunkFlags flags) noexcept {
     const int64_t chunkStart = position_;
+    const WarpVoiceSet& voices = voiceOverride_ ? *voiceOverride_ : snap.warpVoices;
+    ++blockCounter_;
 
     // 1. Split the chunk into contiguous timeline segments (loop wrap-around).
     numSegments_ = 0;
@@ -139,7 +143,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
         std::fill_n(left, frames, 0.f);
         std::fill_n(right, frames, 0.f);
 
-        for (int s = 0; s < numSegments_; ++s) renderClips(track, segments_[s], snap.clipFadeSamples);
+        for (int s = 0; s < numSegments_; ++s) renderClips(track, segments_[s], snap.clipFadeSamples, voices);
 
         float* channels[2] = {left, right};
         for (const auto& insert : track.inserts) {
@@ -222,7 +226,28 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
     metronome_.renderUntil(masterL, masterR, cursor, frames);
 }
 
-void Renderer::renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade) noexcept {
+WarpVoice* Renderer::acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept {
+    // The voice that played this clip last, if it is still ours; otherwise the
+    // voice idle the longest. A voice already used in this block is never taken.
+    const auto& pool = voices[static_cast<size_t>(clip.stretchConfig)];
+    WarpVoice* best = nullptr;
+    for (const auto& voice : pool) {
+        if (voice->key == clip.key && voice->lastUsed != 0) {
+            best = voice.get();
+            break;
+        }
+        if (voice->lastUsed < blockCounter_ && (!best || voice->lastUsed < best->lastUsed)) best = voice.get();
+    }
+    if (!best) return nullptr;  // more simultaneous warped clips than voices: this one stays silent
+    // The previous block already stamped it (or, after a loop wrap, this block).
+    continuing = best->key == clip.key && best->lastUsed + 1 >= blockCounter_;
+    best->key = clip.key;
+    best->lastUsed = blockCounter_;
+    return best;
+}
+
+void Renderer::renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade,
+                           const WarpVoiceSet& voices) noexcept {
     const int64_t segStart = segment.position;
     const int64_t segEnd = segStart + segment.length;
     float* outL = trackLeft_.data() + segment.offset;
@@ -238,11 +263,31 @@ void Renderer::renderClips(const TrackRender& track, const Segment& segment, int
         const int64_t to = std::min(segEnd, clip.start + clip.length);
         if (from >= to) continue;
 
-        const AudioSource& source = *clip.source;
-        const float* srcL = source.channelData(0);
-        const float* srcR = source.channels() > 1 ? source.channelData(1) : srcL;
-        const int64_t fade = std::min(clipFade, clip.length / 2);
+        // Where this clip's unscaled audio for [from, to) comes from.
+        const float* srcL;
+        const float* srcR;
+        int64_t srcBase;  // index into srcL/srcR of timeline sample t is t - srcBase
+        if (clip.playback == ClipRender::Playback::Direct) {
+            const AudioSource& source = *clip.source;
+            srcL = source.channelData(0);
+            srcR = source.channels() > 1 ? source.channelData(1) : srcL;
+            srcBase = clip.start - clip.sourceOffset;
+        } else {
+            const int n = static_cast<int>(to - from);
+            if (clip.playback == ClipRender::Playback::Resample) {
+                renderResampled(clip, from, n, warpLeft_.data(), warpRight_.data());
+            } else {
+                bool continuing = false;
+                WarpVoice* voice = acquireVoice(voices, clip, continuing);
+                if (!voice) continue;
+                voice->render(clip, from, n, continuing, warpLeft_.data(), warpRight_.data());
+            }
+            srcL = warpLeft_.data();
+            srcR = warpRight_.data();
+            srcBase = from;
+        }
 
+        const int64_t fade = std::min(clipFade, clip.length / 2);
         for (int64_t t = from; t < to; ++t) {
             const int64_t inClip = t - clip.start;
             float g = clip.gain;
@@ -251,10 +296,10 @@ void Renderer::renderClips(const TrackRender& track, const Segment& segment, int
                 const int64_t toEnd = clip.length - inClip;
                 if (toEnd < fade) g *= static_cast<float>(toEnd) / fade;
             }
-            const int64_t src = clip.sourceOffset + inClip;
+            const int64_t src = t - srcBase;
             const int64_t dst = t - segStart;
-            outL[dst] += srcL[src] * g;
-            outR[dst] += srcR[src] * g;
+            outL[dst] += srcL[src] * g * clip.panLeft;
+            outR[dst] += srcR[src] * g * clip.panRight;
         }
     }
 }
