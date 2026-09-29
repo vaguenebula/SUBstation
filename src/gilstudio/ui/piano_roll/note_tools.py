@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QWidget,
+)
 
 from ... import theme
 from ...model.notes import HUMANIZE_BEATS, HUMANIZE_VELOCITY, QUANTIZE_GRIDS
