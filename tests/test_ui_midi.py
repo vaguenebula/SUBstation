@@ -171,6 +171,54 @@ def test_rubber_band_keys_and_velocity_lane(window, midi_clip):
     assert window.undo_stack.undoText() == "Change Velocity"
 
 
+def test_legato_quantize_and_humanize_buttons(window, midi_clip):
+    track, clip, roll = midi_clip
+    tools = roll.tools
+
+    def clip_notes():
+        return window.project.clip(track.id, clip.id).notes
+
+    assert not tools.legato.isEnabled() and not tools.quantize.isEnabled()  # nothing to act on yet
+    played = [Note(60, 0.1, 0.25), Note(64, 1.05, 0.25), Note(67, 1.9, 0.25), Note(72, 3.2, 0.25)]
+    window.editor.set_clip_notes((track.id, clip.id), played, "setup")
+    assert tools.legato.isEnabled() and tools.humanize.isEnabled()
+
+    # With nothing selected, Quantize (to 1/16 by default) moves every note.
+    depth = window.undo_stack.count()
+    tools.quantize.click()
+    assert [n.start for n in clip_notes()] == [0.0, 1.0, 2.0, 3.25]
+    assert window.undo_stack.count() == depth + 1 and window.undo_stack.undoText() == "Quantize"
+    window.undo_stack.undo()
+    # Ctrl+U does the same, here to 1/4 at half strength.
+    tools.grid.setCurrentText("1/4")
+    tools.amount.setValue(50.0)
+    QTest.keyClick(roll.grid, Qt.Key.Key_U, Qt.KeyboardModifier.ControlModifier)
+    assert [n.start for n in clip_notes()] == pytest.approx([0.05, 1.025, 1.95, 3.1])
+    window.undo_stack.undo()
+
+    # Legato acts on the selected notes: each reaches the next, the last the clip's end.
+    roll.set_selection(clip_notes()[:3])
+    tools.legato.click()
+    assert [(n.start, n.length) for n in clip_notes()] == [
+        (0.1, pytest.approx(0.95)), (1.05, pytest.approx(0.85)), (1.9, pytest.approx(2.1)), (3.2, 0.25)]
+    assert roll.selected == set(clip_notes()[:3])  # still selected
+    window.undo_stack.undo()
+
+    # Humanize moves starts and velocities a little, lengths stay.
+    roll.set_selection(set())
+    roll._rng.seed(3)
+    tools.humanize_amount.setValue(100.0)
+    before = clip_notes()
+    tools.humanize.click()
+    after = sorted(clip_notes(), key=lambda n: n.pitch)
+    assert after != sorted(before, key=lambda n: n.pitch)
+    for old, new in zip(before, after, strict=True):
+        assert abs(new.start - old.start) <= 0.125 and abs(new.velocity - old.velocity) <= 24
+        assert new.length == old.length
+    assert window.undo_stack.undoText() == "Humanize"
+    assert not window.arrangement.clip_view.grab().isNull()
+
+
 def test_midi_clips_in_the_arrangement(window, midi_clip, tmp_path):
     track, clip, _ = midi_clip
     project, editor = window.project, window.editor

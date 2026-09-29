@@ -3,8 +3,8 @@
 Mouse: double-click to add a note (one grid step long) or to delete one; drag a
 note to move it (Ctrl copies, Alt bypasses the grid), drag either end to resize
 it, drag in empty space to select. Selected notes move and resize together.
-Keys: Delete, Ctrl+A, Ctrl+D (duplicate), Up/Down (Shift: an octave),
-Left/Right (a grid step; Shift: a bar).
+Keys: Delete, Ctrl+A, Ctrl+D (duplicate), Ctrl+U (quantize), Up/Down (Shift: an
+octave), Left/Right (a grid step; Shift: a bar).
 """
 
 from __future__ import annotations
@@ -301,7 +301,8 @@ class NoteGrid(QWidget):
     @staticmethod
     def _handles(event: QKeyEvent) -> bool:
         key = event.key()
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and key in (Qt.Key.Key_A, Qt.Key.Key_D):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and key in (Qt.Key.Key_A, Qt.Key.Key_D,
+                                                                              Qt.Key.Key_U):
             return True
         return key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace, Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left,
                        Qt.Key.Key_Right)
@@ -324,6 +325,8 @@ class NoteGrid(QWidget):
         selected = sorted(roll.selected, key=by_time)
         if key == Qt.Key.Key_A:
             roll.set_selection(clip.notes)
+        elif key == Qt.Key.Key_U:
+            roll.quantize()  # the selected notes, or all
         elif not selected:
             pass
         elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):

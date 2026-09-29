@@ -1,5 +1,6 @@
 """Piano roll: the clip view of a MIDI clip, laid out like Ableton's MIDI editor.
-Keys on the left, a ruler on top, the notes in the middle, velocities below.
+Tools on top (legato, quantize, humanize), then the ruler; keys on the left,
+the notes in the middle, velocities below.
 
 Times are beats of the clip's content (the ruler's 1 is its first beat). The
 part the clip plays in the arrangement is lit; notes outside it are kept but
@@ -9,6 +10,7 @@ dimmed. Every edit goes through the editor, so it is undoable and heard at once.
 from __future__ import annotations
 
 import math
+import random
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QWheelEvent
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import QGridLayout, QLabel, QScrollBar, QWidget
 
 from ... import theme
 from ...audio.engine_bridge import EngineBridge
+from ...model import notes
 from ...model.editor import ProjectEditor
 from ...model.notes import is_black_key, note_name
 from ...model.project import MidiClip, Note
@@ -25,6 +28,7 @@ from ..arrangement.grid import grid_lines, label_step
 from ..arrangement.view_state import ViewState
 from ..widgets import ToggleButton
 from .note_grid import NoteGrid
+from .note_tools import NoteTools
 from .velocity_lane import VelocityLane
 
 KEYS_WIDTH = 64
@@ -51,6 +55,9 @@ class PianoRoll(QWidget):
         self.playhead: float | None = None  # content beat, while the arrangement is inside the clip
         self.auditioned: int | None = None  # the key sounding while the mouse holds it
         self._fit_pending = False
+        self._rng = random.Random()  # for Humanize
+
+        self.tools = NoteTools(self)
 
         self.preview = ToggleButton(icon=icons.headphones(), role="tool",
                                     tooltip="Hear notes as you click, add and move them")
@@ -73,16 +80,17 @@ class PianoRoll(QWidget):
         grid = QGridLayout(self)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(0)
-        grid.addWidget(self.preview, 0, 0, Qt.AlignmentFlag.AlignCenter)
-        grid.addWidget(self.ruler, 0, 1)
-        grid.addWidget(self.keys, 1, 0)
-        grid.addWidget(self.grid, 1, 1)
-        grid.addWidget(self.vbar, 1, 2)
-        grid.addWidget(velocity_label, 2, 0)
-        grid.addWidget(self.velocity, 2, 1)
-        grid.addWidget(self.hbar, 3, 1)
+        grid.addWidget(self.tools, 0, 0, 1, 3)
+        grid.addWidget(self.preview, 1, 0, Qt.AlignmentFlag.AlignCenter)
+        grid.addWidget(self.ruler, 1, 1)
+        grid.addWidget(self.keys, 2, 0)
+        grid.addWidget(self.grid, 2, 1)
+        grid.addWidget(self.vbar, 2, 2)
+        grid.addWidget(velocity_label, 3, 0)
+        grid.addWidget(self.velocity, 3, 1)
+        grid.addWidget(self.hbar, 4, 1)
         grid.setColumnStretch(1, 1)
-        grid.setRowStretch(1, 1)
+        grid.setRowStretch(2, 1)
         self.setFocusProxy(self.grid)
 
         self.view.changed.connect(self._on_view_changed)
@@ -119,23 +127,53 @@ class PianoRoll(QWidget):
         """After the clip changed (edits, undo): forget selected notes that are gone, repaint."""
         clip = self.clip()
         self.selected &= set(clip.notes) if clip is not None else set()
+        self.tools.set_has_notes(bool(clip and clip.notes))
         self._fit_if_ready()
         self._update_bars()
         self._on_position(self.bridge.position)
         self.repaint_all()
 
-    def commit(self, notes, text: str, merge_key: object | None = None, selected=None) -> None:
-        """Make `notes` the clip's notes (one undo step per `merge_key`) and select `selected`."""
+    def commit(self, clip_notes, text: str, merge_key: object | None = None, selected=None) -> None:
+        """Make `clip_notes` the clip's notes (one undo step per `merge_key`) and select `selected`."""
         if self.clip() is None:
             return
         if selected is not None:
             self.selected = set(selected)
-        self.editor.set_clip_notes((self.track_id, self.clip_id), notes, text, merge_key)
+        self.editor.set_clip_notes((self.track_id, self.clip_id), clip_notes, text, merge_key)
         self.repaint_all()
 
-    def set_selection(self, notes) -> None:
-        self.selected = set(notes)
+    def set_selection(self, selected) -> None:
+        self.selected = set(selected)
         self.repaint_all()
+
+    # --- Tools ---------------------------------------------------------------------
+
+    def tool_targets(self) -> list[Note]:
+        """What the tools act on: the selected notes, or all of them if none are."""
+        clip = self.clip()
+        if clip is None:
+            return []
+        return sorted(self.selected or clip.notes, key=notes.by_time)
+
+    def _apply_tool(self, targets: list[Note], changed: list[Note], text: str) -> None:
+        clip = self.clip()
+        if clip is not None and targets:
+            self.commit(notes.place(clip.notes, targets, changed), text,
+                        selected=changed if self.selected else set())
+
+    def legato(self) -> None:
+        clip, targets = self.clip(), self.tool_targets()
+        if clip is not None:
+            self._apply_tool(targets, notes.legato(targets, clip.notes, clip.window_end), "Legato")
+
+    def quantize(self) -> None:
+        targets = self.tool_targets()
+        self._apply_tool(targets, notes.quantized(targets, self.tools.quantize_step, self.tools.quantize_amount),
+                         "Quantize")
+
+    def humanize(self) -> None:
+        targets = self.tool_targets()
+        self._apply_tool(targets, notes.humanized(targets, self._rng, self.tools.humanize_level), "Humanize")
 
     # --- Geometry ------------------------------------------------------------------
 

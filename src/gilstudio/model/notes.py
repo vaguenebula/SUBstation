@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import bisect
+import random
 from collections.abc import Iterable
 from dataclasses import replace
 
@@ -9,6 +11,11 @@ from .project import Note
 
 MIN_NOTE_BEATS = 1 / 64
 EPS = 1e-9
+# Quantize grids, as the piano roll offers them: (name, beats).
+QUANTIZE_GRIDS = (("1/4", 1.0), ("1/8", 0.5), ("1/8T", 1 / 3), ("1/16", 0.25), ("1/16T", 1 / 6), ("1/32", 0.125))
+# At 100 % humanize, how far a note may move (a 32nd note) and its velocity change.
+HUMANIZE_BEATS = 0.125
+HUMANIZE_VELOCITY = 24
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 BLACK_KEYS = {1, 3, 6, 8, 10}
 
@@ -101,3 +108,55 @@ def resized(notes: Iterable[Note], edge: str, delta: float, min_length: float = 
 
 def with_velocity(notes: Iterable[Note], delta: float) -> list[Note]:
     return [replace(n, velocity=max(1, min(127, round(n.velocity + delta)))) for n in notes]
+
+
+def untangle(notes: Iterable[Note]) -> list[Note]:
+    """Where notes on the same key overlap, the earlier one ends where the later
+    starts (and goes if nothing is left of it); of two starting together, the
+    longer stays. For notes changed together, which can't win against each other."""
+    result = []
+    ordered = sorted(notes, key=lambda n: (n.pitch, n.start, n.length))
+    for i, note in enumerate(ordered):
+        following = ordered[i + 1] if i + 1 < len(ordered) else None
+        if following is not None and following.pitch == note.pitch and following.start < note.end - EPS:
+            note = replace(note, length=following.start - note.start)
+        if note.length >= MIN_NOTE_BEATS - EPS:
+            result.append(note)
+    return result
+
+
+def legato(targets: Iterable[Note], clip_notes: Iterable[Note], end: float) -> list[Note]:
+    """Lengthen or shorten each target note to last until the next target starts
+    (a chord's notes all reach the next chord); the last ones reach `end`, the
+    clip's end. A note never runs into the next note on its own key."""
+    targets = list(targets)
+    starts = sorted({n.start for n in targets})
+    same_key: dict[int, list[float]] = {}
+    for n in clip_notes:
+        same_key.setdefault(n.pitch, []).append(n.start)
+    result = []
+    for n in targets:
+        i = bisect.bisect_right(starts, n.start + EPS)
+        stop = min([starts[i] if i < len(starts) else end]
+                   + [s for s in same_key.get(n.pitch, ()) if s > n.start + EPS])
+        result.append(replace(n, length=stop - n.start) if stop - n.start >= MIN_NOTE_BEATS else n)
+    return result
+
+
+def quantized(notes: Iterable[Note], step: float, amount: float = 1.0) -> list[Note]:
+    """Move each note's start toward the nearest multiple of `step` beats, all the
+    way at `amount` 1, keeping its length."""
+    return untangle(replace(n, start=max(0.0, n.start + (round(n.start / step) * step - n.start) * amount))
+                    for n in notes)
+
+
+def humanized(notes: Iterable[Note], rng: random.Random, amount: float) -> list[Note]:
+    """Nudge each note's start and velocity at random, as a player would: at
+    `amount` 1 by up to HUMANIZE_BEATS and HUMANIZE_VELOCITY either way, more
+    often a little than a lot. Lengths stay."""
+    result = []
+    for n in notes:
+        start = max(0.0, n.start + rng.triangular(-1.0, 1.0, 0.0) * amount * HUMANIZE_BEATS)
+        velocity = round(n.velocity + rng.triangular(-1.0, 1.0, 0.0) * amount * HUMANIZE_VELOCITY)
+        result.append(replace(n, start=start, velocity=max(1, min(127, velocity))))
+    return untangle(result)

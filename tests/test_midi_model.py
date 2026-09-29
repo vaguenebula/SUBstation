@@ -1,6 +1,7 @@
 """MIDI in the model: clips as windows onto notes, note editing, editor rules and files."""
 
 import json
+import random
 from dataclasses import replace
 
 import pytest
@@ -125,6 +126,49 @@ def test_moves_and_resizes_stay_in_range():
     assert notes.resized([Note(C, 1.0, 1.0)], "start", 3.0, 0.25) == [Note(C, 1.75, 0.25)]
     assert notes.with_velocity([Note(C, 0.0, 1.0, 100), Note(E, 0.0, 1.0, 20)], -30) == [
         Note(C, 0.0, 1.0, 70), Note(E, 0.0, 1.0, 1)]
+
+
+def test_legato_joins_notes_and_chords():
+    chord = [Note(C, 0.0, 0.5), Note(E, 0.0, 0.25)]
+    melody = [Note(G, 1.5, 0.25), Note(C, 3.0, 2.0)]
+    result = notes.legato(chord + melody, chord + melody, 4.0)
+    # A chord reaches the next start together; the last note reaches the clip's end
+    # (and is shortened to it); legato shortens as well as lengthens.
+    assert [(n.pitch, n.start, n.length) for n in result] == [(C, 0.0, 1.5), (E, 0.0, 1.5), (G, 1.5, 1.5),
+                                                              (C, 3.0, 1.0)]
+    # Only the targets count as "next": an unselected note in between is passed over,
+    # unless it is on the same key, which a note never runs into.
+    between = Note(E, 1.0, 0.5)
+    assert notes.legato([Note(C, 0.0, 0.25), Note(G, 2.0, 0.25)], [between], 4.0)[0].length == 2.0
+    assert notes.legato([Note(E, 0.0, 0.25)], [between], 4.0)[0].length == 1.0
+    past_the_end = Note(C, 5.0, 1.0)
+    assert notes.legato([past_the_end], [], 4.0) == [past_the_end]
+
+
+def test_quantize_moves_starts_onto_the_grid():
+    played = [Note(C, 0.1, 0.5), Note(E, 0.9, 0.2), Note(G, 1.3, 1.0, 90)]
+
+    def starts(result):
+        return [(round(n.start, 6), n.length) for n in sorted(result, key=notes.by_time)]
+
+    assert starts(notes.quantized(played, 0.25)) == [(0.0, 0.5), (1.0, 0.2), (1.25, 1.0)]
+    assert starts(notes.quantized(played, 0.25, amount=0.5)) == [(0.05, 0.5), (0.95, 0.2), (1.275, 1.0)]
+    assert notes.quantized([Note(C, 0.3, 0.1)], 1 / 3)[0].start == pytest.approx(1 / 3)  # triplets
+    # Two notes on a key landing together: the longer one stays.
+    assert notes.quantized([Note(C, 0.9, 0.5), Note(C, 1.05, 1.0)], 1.0) == [Note(C, 1.0, 1.0)]
+
+
+def test_humanize_nudges_timing_and_velocity_within_bounds():
+    played = [Note(C + i, float(i), 0.5, 100) for i in range(40)]
+    result = notes.humanized(played, random.Random(7), 0.5)
+    assert result == notes.humanized(played, random.Random(7), 0.5)  # repeatable with the same seed
+    by_pitch = {n.pitch: n for n in result}
+    shifts = [by_pitch[n.pitch].start - n.start for n in played]
+    changes = [by_pitch[n.pitch].velocity - n.velocity for n in played]
+    assert max(map(abs, shifts)) <= 0.5 * notes.HUMANIZE_BEATS and len(set(shifts)) > 10
+    assert max(map(abs, changes)) <= 0.5 * notes.HUMANIZE_VELOCITY + 0.5 and len(set(changes)) > 3
+    assert all(by_pitch[n.pitch].length == n.length for n in played)
+    assert notes.humanized(played, random.Random(7), 0.0) == played
 
 
 # --- Editor -----------------------------------------------------------------------------

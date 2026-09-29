@@ -18,6 +18,10 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
   - Double-click to add a note (one grid step long) or delete one. Drag notes to move them (Ctrl copies, Alt ignores the grid), drag their ends to resize, drag in empty space to select.
   - Delete, Ctrl+A, Ctrl+D (duplicate), Up/Down (Shift: an octave), Left/Right (a grid step; Shift: a bar).
   - Drag a stem in the velocity lane to change velocities; several selected notes change together.
+  - Tools above the ruler act on the selected notes, or on all of them if none are selected:
+    - **Legato** makes each note last until the next one starts (a chord's notes together); the last ones reach the clip's end. A note never runs into the next note on its own key.
+    - **Quantize** (Ctrl+U) moves note starts onto a grid (1/4 to 1/32, or triplets), by an amount from 0 to 100 %. Lengths stay.
+    - **Humanize** nudges starts and velocities at random. At 100 % a note moves by up to a 32nd note and its velocity by up to 24; the default is 25 %.
   - Notes you click, add or move are played on the track's instrument (the headphones button turns this off). The part of the clip that plays is lit; the rest is dimmed.
 - Synth: a polyphonic subtractive synth (16 voices) with sine, triangle, saw and square oscillators (band-limited saw and square), an ADSR envelope, a resonant low-pass filter and volume. Velocity sets the level.- Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
 - Master track, metronome, loop brace, follow mode, CPU meter.
@@ -93,7 +97,7 @@ python -m pytest
 | Search the browser | Ctrl+F |
 | Export audio | Ctrl+Shift+R |
 
-In the piano roll, Delete, Ctrl+A and Ctrl+D act on notes; arrow keys move them.
+In the piano roll, Delete, Ctrl+A and Ctrl+D act on notes, Ctrl+U quantizes them, and arrow keys move them.
 
 ## Architecture
 
@@ -159,7 +163,7 @@ The seams are already in place:
 ## Not yet implemented
 
 - Recording (audio or MIDI) and MIDI input from controllers.
-- Looping MIDI clips, quantizing, MIDI effects, and editing several MIDI clips in the piano roll at once.
+- Looping MIDI clips, MIDI effects, and editing several MIDI clips in the piano roll at once.
 - ASIO: the `AudioDevice` class is the only place a new backend has to go.
 - Plugin hosting, automation, tempo changes over time.
 - Warp markers (warping within a clip) and automatic tempo detection: a warped clip has one segment BPM, and you set it.
