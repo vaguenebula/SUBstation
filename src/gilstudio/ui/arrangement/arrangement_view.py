@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QGridLayout, QScrollBar, QWidget
 from ... import theme
 from ...audio.engine_bridge import EngineBridge
 from ...model.editor import ProjectEditor
+from ..clip_view import ClipView
 from .lanes_canvas import LanesCanvas
 from .ruler import TimelineRuler
 from .track_headers import MasterHeader, MasterLane, TrackHeaderColumn
@@ -108,6 +109,12 @@ class ArrangementView(QWidget):
         self.vbar.valueChanged.connect(self.view.set_scroll_y)
         self.ruler.locate_requested.connect(self.locate_requested)
         self.lanes.status_message.connect(self.status_message)
+
+        # Double-clicking a clip opens the clip view over the whole arrangement.
+        self.clip_view = ClipView(editor, bridge, self)
+        self.clip_view.hide()
+        self.lanes.clip_view_requested.connect(lambda _track_id, _clip_id: self.open_clips(self.selection.clips))
+        self.clip_view.closed.connect(self.lanes.setFocus)
         bridge.position_changed.connect(self._on_position)
         self._on_reset()
 
@@ -177,6 +184,7 @@ class ArrangementView(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        self.clip_view.setGeometry(self.rect())
         self._update_hbar()
         self._update_vbar()
 
@@ -191,6 +199,19 @@ class ArrangementView(QWidget):
             width = self.lanes.width()
             if x > width * 0.96 or x < 0:
                 self.view.set_scroll_beats(beat - width * 0.04 / self.view.px_per_beat)
+
+    # --- Clip view ------------------------------------------------------------------
+
+    def open_clips(self, refs) -> None:
+        self.clip_view.setGeometry(self.rect())
+        self.clip_view.open_clips(refs)
+
+    def toggle_clip_view(self) -> None:
+        """Shift+Tab: open the selected clips, or close the clip view."""
+        if self.clip_view.isVisible():
+            self.clip_view.close_view()
+        elif self.selection.clips:
+            self.open_clips(self.selection.clips)
 
     # --- Commands -----------------------------------------------------------------
 

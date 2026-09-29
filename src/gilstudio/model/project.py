@@ -43,6 +43,14 @@ class Clip:
     offset_sec: float = 0.0
     source_duration_sec: float = 0.0
     gain_db: float = 0.0
+    # Clip view settings. Stored and saved, but the engine doesn't apply these
+    # yet (only gain_db reaches the audio).
+    warp: bool = False
+    warp_mode: str = "Beats"
+    segment_bpm: float = 0.0  # 0: not set, shown as the project tempo
+    transpose: int = 0  # semitones
+    detune: float = 0.0  # cents
+    pan: float = 0.0
 
     def length_beats(self, tempo: float) -> float:
         return seconds_to_beats(self.duration_sec, tempo)

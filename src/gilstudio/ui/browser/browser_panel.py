@@ -26,12 +26,19 @@ from PySide6.QtWidgets import (
 
 from ... import theme
 from ...audio.engine_bridge import AUDIO_EXTENSIONS, EngineBridge, is_audio_file
+from ...model.editor import BUILTIN_CATEGORIES, BUILTIN_DEVICES
 from .. import icons
 from ..widgets import ToggleButton
 from .browser_models import BrowserItem, ItemListModel
 from .file_index import FileIndex
 
 ROLE_SCOPE = Qt.ItemDataRole.UserRole + 1
+
+
+def builtin_items(category: str | None = None) -> list[BrowserItem]:
+    """Built-in devices, all or one category's."""
+    return [BrowserItem(BUILTIN_DEVICES[kind][0], kind, "device", name)
+            for name, kinds in BUILTIN_CATEGORIES.items() if category in (None, name) for kind in kinds]
 
 
 def default_places() -> list[str]:
@@ -41,6 +48,7 @@ def default_places() -> list[str]:
 
 class BrowserPanel(QWidget):
     file_activated = Signal(str)  # double-click: add the file to the arrangement
+    device_activated = Signal(str)  # double-click a built-in device: add it to the selected track
     status_message = Signal(str)
 
     def __init__(self, bridge: EngineBridge, parent: QWidget | None = None):
@@ -156,6 +164,13 @@ class BrowserPanel(QWidget):
 
         section("CATEGORIES")
         first = entry("Samples", ("samples",), icons.waveform())
+        builtin = entry("Built-in", ("builtin",), icons.plugin())
+        for name in BUILTIN_CATEGORIES:
+            child = QTreeWidgetItem([name])
+            child.setData(0, ROLE_SCOPE, ("builtin", name))
+            child.setIcon(0, icons.plugin())
+            builtin.addChild(child)
+        builtin.setExpanded(True)
         entry("Plug-ins", ("plugins",), icons.plugin())
         section("PLACES")
         for place in self.places:
@@ -165,8 +180,9 @@ class BrowserPanel(QWidget):
 
         target = first
         if select is not None:
-            for i in range(self.sidebar.topLevelItemCount()):
-                item = self.sidebar.topLevelItem(i)
+            items = [self.sidebar.topLevelItem(i) for i in range(self.sidebar.topLevelItemCount())]
+            items += [item.child(j) for item in list(items) for j in range(item.childCount())]
+            for item in items:
                 if tuple(item.data(0, ROLE_SCOPE) or ()) == tuple(select):
                     target = item
         self.sidebar.setCurrentItem(target)
@@ -228,6 +244,8 @@ class BrowserPanel(QWidget):
 
         if scope[0] == "plugins":
             items = self.index.plugins
+        elif scope[0] == "builtin":
+            items = builtin_items(scope[1] if len(scope) > 1 else None)
         elif scope[0] == "place":
             prefix = str(Path(scope[1])).lower().rstrip("\\/") + "\\"
             items = [i for i in self.index.audio if i.path.lower().startswith(prefix)]
@@ -268,6 +286,8 @@ class BrowserPanel(QWidget):
             return
         if item.kind == "audio":
             self.file_activated.emit(item.path)
+        elif item.kind == "device":
+            self.device_activated.emit(item.path)
         else:
             self.status_message.emit(f"{item.name}: VST3/CLAP plugin hosting is not available yet.")
 

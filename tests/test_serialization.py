@@ -17,7 +17,8 @@ def make_project(audio_path: str) -> Project:
         Track(id="t1", name="Drums", color="#ff94a6", volume_db=-6.0, pan=0.25, mute=True, height=90,
               devices=[Device(id="d1", kind="utility", params={"gain": -2.0, "pan": 0.0, "width": 50.0})],
               clips=[Clip(id="c1", path=audio_path, name="kick", start_beat=1.5, duration_sec=2.0, offset_sec=0.25,
-                          source_duration_sec=4.0, gain_db=-1.0)]),
+                          source_duration_sec=4.0, gain_db=-1.0, warp=True, warp_mode="Complex",
+                          segment_bpm=128.0, transpose=-3, detune=12.0, pan=-0.5)]),
         Track(id="t2", name="Empty", color="#8bc5ff", solo=True),
     ]
     return p

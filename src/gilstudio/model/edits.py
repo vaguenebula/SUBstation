@@ -39,21 +39,69 @@ def resolve_overlaps(clips: list[Clip], winners: set[str], tempo: float) -> list
     for clip in clips:
         if clip.id in winners:
             result.append(clip)
-            continue
-        kept_original_id = False
-        for a, b in subtract_intervals(clip.start_beat, clip.end_beat(tempo), cuts):
-            duration = beats_to_seconds(b - a, tempo)
-            if duration < MIN_CLIP_SEC:
-                continue
-            result.append(replace(
-                clip,
-                id=new_id() if kept_original_id else clip.id,
-                start_beat=a,
-                offset_sec=clip.offset_sec + beats_to_seconds(a - clip.start_beat, tempo),
-                duration_sec=duration,
-            ))
-            kept_original_id = True
+        else:
+            result.extend(cut_clip(clip, cuts, tempo))
     return sorted(result, key=lambda c: c.start_beat)
+
+
+def cut_clip(clip: Clip, cuts: list[tuple[float, float]], tempo: float) -> list[Clip]:
+    """The parts of `clip` outside every cut (beat intervals): nothing, the clip
+    itself, a trimmed clip, or pieces. The first piece keeps the clip's id; every
+    piece still plays the same audio at the same place on the timeline."""
+    end = clip.end_beat(tempo)
+    pieces = subtract_intervals(clip.start_beat, end, cuts)
+    if pieces == [(clip.start_beat, end)]:
+        return [clip]  # untouched: avoid float drift from recomputing it
+    result: list[Clip] = []
+    for a, b in pieces:
+        duration = beats_to_seconds(b - a, tempo)
+        if duration < MIN_CLIP_SEC:
+            continue
+        result.append(replace(
+            clip,
+            id=new_id() if result else clip.id,
+            start_beat=a,
+            offset_sec=clip.offset_sec + beats_to_seconds(a - clip.start_beat, tempo),
+            duration_sec=duration,
+        ))
+    return result
+
+
+def remove_range(clips: list[Clip], start: float, end: float, tempo: float) -> list[Clip]:
+    """Delete everything between two beats: whole clips inside go, clips across an
+    edge are trimmed, and a clip spanning the range keeps its start and its end."""
+    return sorted((piece for clip in clips for piece in cut_clip(clip, [(start, end)], tempo)),
+                  key=lambda c: c.start_beat)
+
+
+def fit_to_tempo(clips: list[Clip], tempo: float) -> list[Clip]:
+    """Unwarped clips keep their length in seconds, so a faster tempo makes them
+    longer in beats. Trim any clip that would run into the next one (the later clip
+    keeps its place) so clips never overlap. Returns `clips` itself if nothing changes."""
+    ordered = sorted(clips, key=lambda c: c.start_beat)
+    result: list[Clip] = []
+    changed = False
+    for i, clip in enumerate(ordered):
+        if i + 1 < len(ordered) and clip.end_beat(tempo) > ordered[i + 1].start_beat + EPS:
+            changed = True
+            duration = beats_to_seconds(ordered[i + 1].start_beat - clip.start_beat, tempo)
+            if duration < MIN_CLIP_SEC:
+                continue  # fully covered
+            clip = replace(clip, duration_sec=duration)
+        result.append(clip)
+    return result if changed else clips
+
+
+def slice_range(clips: list[Clip], start: float, end: float, tempo: float) -> list[Clip]:
+    """New clips (fresh ids) holding just the parts of `clips` between two beats."""
+    result = []
+    for clip in clips:
+        a, b = max(start, clip.start_beat), min(end, clip.end_beat(tempo))
+        duration = beats_to_seconds(b - a, tempo)
+        if duration >= MIN_CLIP_SEC:
+            result.append(replace(clip, id=new_id(), start_beat=a, duration_sec=duration,
+                                  offset_sec=clip.offset_sec + beats_to_seconds(a - clip.start_beat, tempo)))
+    return result
 
 
 def split_clip(clip: Clip, at_beat: float, tempo: float) -> tuple[Clip, Clip] | None:

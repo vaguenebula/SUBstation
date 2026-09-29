@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -25,7 +24,7 @@ from ..audio.engine_bridge import EngineBridge
 from ..model.editor import BUILTIN_DEVICES, ProjectEditor
 from ..model.project import Device
 from .arrangement.view_state import Selection
-from .browser.browser_models import PLUGIN_MIME
+from .browser.browser_models import PLUGIN_MIME, device_kinds
 from .widgets import Knob, ToggleButton
 
 PANEL_HEIGHT = 150
@@ -150,15 +149,7 @@ class DevicePanel(QFrame):
         scroll.viewport().setAutoFillBackground(False)
         self.chain.setAutoFillBackground(False)
 
-        self.add_button = QPushButton("+ Add Device")
-        self.add_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        menu = QMenu(self.add_button)
-        for kind, (name, _defaults) in BUILTIN_DEVICES.items():
-            menu.addAction(name, lambda k=kind: self._add(k))
-        plugin_action = menu.addAction("VST3 / CLAP Plug-ins (coming soon)")
-        plugin_action.setEnabled(False)
-        self.add_button.setMenu(menu)
-        self.hint = QLabel("Drop audio effects here")
+        self.hint = QLabel("Drop audio effects here from the browser (Built-in \u203a Audio Effects)")
         self.hint.setStyleSheet(f"color: {theme.TEXT_DISABLED};")
 
         layout = QHBoxLayout(self)
@@ -201,12 +192,11 @@ class DevicePanel(QFrame):
         self.track_id = track_id
         while self.chain_layout.count():
             item = self.chain_layout.takeAt(0)
-            if item.widget() and item.widget() not in (self.add_button, self.hint):
+            if item.widget() and item.widget() is not self.hint:
                 item.widget().deleteLater()
         self.widgets.clear()
         if track_id is None:
             self.title.setText("No track selected")
-            self.add_button.hide()
             self.hint.hide()
             return
         track = self.project.track(track_id)
@@ -215,20 +205,20 @@ class DevicePanel(QFrame):
             widget = DeviceWidget(track_id, device, self.editor, self.bridge)
             self.widgets[device.id] = widget
             self.chain_layout.addWidget(widget)
-        self.chain_layout.addWidget(self.add_button)
         self.chain_layout.addWidget(self.hint)
         self.chain_layout.addStretch(1)
-        self.add_button.show()
         self.hint.setVisible(not track.devices)
 
-    def _add(self, kind: str) -> None:
-        if self.track_id is not None:
-            self.editor.add_device(self.track_id, kind)
-
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasFormat(PLUGIN_MIME):
+        mime = event.mimeData()
+        if self.track_id is not None and (device_kinds(mime) or mime.hasFormat(PLUGIN_MIME)):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        self.status_message.emit("VST3/CLAP plugin hosting is not available yet.")
+        kinds = [k for k in device_kinds(event.mimeData()) if k in BUILTIN_DEVICES]
+        if kinds and self.track_id is not None:
+            for kind in kinds:
+                self.editor.add_device(self.track_id, kind)
+        else:
+            self.status_message.emit("VST3/CLAP plugin hosting is not available yet.")
         event.acceptProposedAction()
