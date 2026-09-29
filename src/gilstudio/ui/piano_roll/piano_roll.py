@@ -1,6 +1,7 @@
 """Piano roll: the clip view of a MIDI clip, laid out like Ableton's MIDI editor.
 The ruler on top; keys on the left, the notes in the middle, velocities below.
-Selecting notes brings up the note tools (legato, quantize, humanize) by them.
+Selecting a group of notes by dragging (or Ctrl+A) brings up the note tools
+(legato, quantize, humanize) by them.
 
 Times are beats of the clip's content (the ruler's 1 is its first beat). The
 part the clip plays in the arrangement is lit; notes outside it are kept but
@@ -60,6 +61,9 @@ class PianoRoll(QWidget):
         self.auditioned: int | None = None  # the key sounding while the mouse holds it
         self._fit_pending = False
         self._rng = random.Random()  # for Humanize
+        # The note tools show for a group chosen by a rubber band or Ctrl+A, not
+        # for notes clicked or drawn; they stay while that group is edited.
+        self.tools_wanted = False
 
         self.preview = ToggleButton(icon=icons.headphones(), role="tool",
                                     tooltip="Hear notes as you click, add and move them")
@@ -113,6 +117,7 @@ class PianoRoll(QWidget):
         if (track_id, clip_id) != (self.track_id, self.clip_id):
             self.track_id, self.clip_id = track_id, clip_id
             self.selected = set()
+            self.tools_wanted = False
             self._fit_pending = clip_id is not None
         self.refresh()
 
@@ -143,17 +148,20 @@ class PianoRoll(QWidget):
         self.editor.set_clip_notes((self.track_id, self.clip_id), clip_notes, text, merge_key)
         self.repaint_all()
 
-    def set_selection(self, selected) -> None:
+    def set_selection(self, selected, tools: bool = False) -> None:
+        """Select `selected`; `tools` brings up the note tools by them."""
         self.selected = set(selected)
+        self.tools_wanted = tools and bool(self.selected)
         self.repaint_all()
 
     # --- Tools ---------------------------------------------------------------------
 
     def place_tools(self) -> None:
-        """Show the note tools by the selected notes, or hide them: with nothing
-        selected, and while a drag is moving notes or drawing a rubber band."""
-        gesture = self.grid.dragging()
-        rects = [self.grid.note_rect(n) for n in self.selected] if not gesture else []
+        """Show the note tools by the selected notes when they were chosen as a
+        group, or hide them: with nothing selected, and while a drag is moving
+        notes or drawing a rubber band."""
+        shown = self.tools_wanted and not self.grid.dragging()
+        rects = [self.grid.note_rect(n) for n in self.selected] if shown else []
         area = None
         for rect in rects:
             area = rect if area is None else area.united(rect)

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from gilstudio.model.project import MidiClip, Note
 from gilstudio.ui.browser.browser_models import device_kinds
+from gilstudio.ui.piano_roll.note_tools import SHOW_MS
 
 from .conftest import SAMPLE_RATE, write_wav
 from .test_ui_smoke import drag, tone
@@ -201,52 +202,65 @@ def test_alt_wheel_resizes_the_keys_and_ctrl_alt_drag_scrolls(window, midi_clip)
     assert not window.project.clip(track.id, clip.id).notes and not roll.selected
 
 
-def test_note_tools_float_by_the_selected_notes(window, midi_clip):
+def test_note_tools_float_by_notes_selected_by_dragging(window, midi_clip):
     track, clip, roll = midi_clip
     tools, grid = roll.tools, roll.grid
 
     def clip_notes():
         return window.project.clip(track.id, clip.id).notes
 
+    def settle():  # let the bar's animation finish
+        QTest.qWait(SHOW_MS + 60)
+
     played = [Note(60, 0.1, 0.25), Note(64, 1.05, 0.25), Note(67, 1.9, 0.25), Note(72, 3.2, 0.25)]
     window.editor.set_clip_notes((track.id, clip.id), played, "setup")
-    assert not tools.isVisible()  # only with notes selected
+    assert not tools.isVisible()
 
-    # Ctrl+A shows them, over the notes and inside the grid.
+    # Clicking a note, or drawing one, selects it without bringing up the tools.
+    QTest.mouseClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 1.1, 64))
+    assert roll.selected == {clip_notes()[1]} and not tools.shown
+    QTest.mouseDClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 3.0, 50))
+    assert len(roll.selected) == 1 and not tools.shown
+    window.undo_stack.undo()
+
+    # A rubber band brings them up (fading in as they rise), just above the notes it caught.
+    drag(grid, cell(roll, 0.0, 66) - QPoint(2, 0), cell(roll, 1.5, 59))
+    assert roll.selected == set(clip_notes()[:2]) and tools.shown and tools.count.text() == "2 notes"
+    settle()
+    assert tools.isVisible() and tools.geometry().bottom() < grid.note_rect(clip_notes()[1]).top()
+    # They hide while the group is dragged, and come back where it ends up.
+    press = cell(roll, 1.1, 64)
+    QTest.mousePress(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, press)
+    QTest.mouseMove(grid, press + QPoint(0, int(roll.row_height * 2)))
+    assert not tools.shown
+    QTest.mouseRelease(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                       press + QPoint(0, int(roll.row_height * 2)))
+    assert sorted(n.pitch for n in roll.selected) == [58, 62] and tools.shown
+    window.undo_stack.undo()
+    # Clicking empty space deselects, and the tools fade away.
+    QTest.mouseClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 3.0, 50))
+    assert not roll.selected and not tools.shown
+    settle()
+    assert not tools.isVisible()
+
+    # Ctrl+A brings them up too, inside the grid.
     QTest.keyClick(grid, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
-    assert tools.isVisible() and tools.count.text() == "4 notes"
+    assert tools.shown and tools.count.text() == "4 notes"
+    settle()
     assert grid.rect().contains(tools.geometry())
-    # Quantize (to 1/16 by default) moves the selected notes, as one undo step.
-    depth = window.undo_stack.count()
+    # Quantize (to 1/16 by default) moves the selected notes, as one undo step, and the tools stay.
+    depth = window.undo_stack.index()
     tools.quantize.click()
     assert [n.start for n in clip_notes()] == [0.0, 1.0, 2.0, 3.25]
-    assert window.undo_stack.count() == depth + 1 and window.undo_stack.undoText() == "Quantize"
-    assert roll.selected == set(clip_notes()) and tools.isVisible()
+    assert window.undo_stack.index() == depth + 1 and window.undo_stack.undoText() == "Quantize"
+    assert roll.selected == set(clip_notes()) and tools.shown
     window.undo_stack.undo()
-    # With nothing selected the tools hide; Ctrl+U then quantizes every note, here to 1/4 at half strength.
-    QTest.mouseClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 3.0, 50))
-    assert not roll.selected and not tools.isVisible()
+    # With nothing selected, Ctrl+U quantizes every note, here to 1/4 at half strength.
+    roll.set_selection(set())
     tools.grid.setCurrentText("1/4")
     tools.amount.setValue(50.0)
     QTest.keyClick(grid, Qt.Key.Key_U, Qt.KeyboardModifier.ControlModifier)
     assert [n.start for n in clip_notes()] == pytest.approx([0.05, 1.025, 1.95, 3.1])
-    window.undo_stack.undo()
-
-    # Clicking a note shows them just above it.
-    note = clip_notes()[1]
-    QTest.mouseClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, 1.1, 64))
-    assert roll.selected == {note} and tools.count.text() == "1 note"
-    assert tools.geometry().bottom() < grid.note_rect(note).top()
-    # They hide while notes are dragged, and come back where the notes end up.
-    press = cell(roll, 1.1, 64)
-    QTest.mousePress(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, press)
-    QTest.mouseMove(grid, press + QPoint(0, int(roll.row_height * 2)))
-    assert not tools.isVisible()
-    QTest.mouseRelease(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
-                       press + QPoint(0, int(roll.row_height * 2)))
-    [moved] = roll.selected
-    assert moved.pitch == 62 and tools.isVisible()
-    assert tools.geometry().bottom() < grid.note_rect(moved).top()
     window.undo_stack.undo()
 
     # Legato acts on the selected notes: each reaches the next, the last the clip's end.

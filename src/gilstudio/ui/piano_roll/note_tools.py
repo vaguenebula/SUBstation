@@ -1,16 +1,17 @@
 """The note tools: Legato, Quantize and Humanize, in a small floating bar that
-appears over the note grid next to the selected notes whenever there are some
-(select with the mouse, the keys or Ctrl+A). Each tool is one undo step."""
+glides in over the note grid next to a group of notes selected by dragging a
+rubber band or with Ctrl+A. Each tool is one undo step."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QEasingCurve, QPoint, QRectF, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -29,6 +30,9 @@ DEFAULT_HUMANIZE = 25.0  # %
 GAP = 8  # between the bar and the notes
 MARGIN = 4  # between the bar and the grid's edges
 RADIUS = 5.0
+SHOW_MS = 180
+HIDE_MS = 120
+RISE = 8  # pixels the bar rises as it fades in
 
 
 def _percent(value: float) -> str:
@@ -82,6 +86,18 @@ class NoteTools(QWidget):
         self.legato.clicked.connect(roll.legato)
         self.quantize.clicked.connect(roll.quantize)
         self.humanize.clicked.connect(roll.humanize)
+
+        # Showing fades the bar in as it rises into place; hiding fades it out
+        # as it sinks back. `_progress` runs 0 (gone) .. 1 (in place).
+        self.shown = False  # where it is heading
+        self._target = QPoint()
+        self._progress = 0.0
+        self._fade = QGraphicsOpacityEffect(self)
+        self._fade.setOpacity(0.0)
+        self.setGraphicsEffect(self._fade)
+        self._animation = QVariantAnimation(self)
+        self._animation.valueChanged.connect(self._step)
+        self._animation.finished.connect(self._settled)
         self.hide()
 
     @staticmethod
@@ -107,7 +123,7 @@ class NoteTools(QWidget):
         """Float above the selected notes (`notes_rect`, in the grid's coordinates),
         or below them when there is no room above; hide for None."""
         if notes_rect is None or count == 0:
-            self.hide()
+            self._animate(False)
             return
         self.count.setText(f"{count} note{'s' if count != 1 else ''}")
         self.adjustSize()
@@ -119,9 +135,38 @@ class NoteTools(QWidget):
             y = notes_rect.bottom() + GAP
         x = max(MARGIN, min(area.width() - width - MARGIN, x))
         y = max(MARGIN, min(area.height() - height - MARGIN, y))
-        self.move(round(x), round(y))
-        self.show()
-        self.raise_()
+        self._target = QPoint(round(x), round(y))
+        self._animate(True)
+        self._place()  # (follows the notes at once as the view scrolls)
+
+    def _animate(self, shown: bool) -> None:
+        if shown == self.shown:
+            return
+        self.shown = shown
+        self._animation.stop()
+        # From wherever a reversed animation left off, taking the rest of its time.
+        remaining = (1.0 - self._progress) if shown else self._progress
+        self._animation.setStartValue(self._progress)
+        self._animation.setEndValue(1.0 if shown else 0.0)
+        self._animation.setDuration(max(1, round((SHOW_MS if shown else HIDE_MS) * remaining)))
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic if shown else QEasingCurve.Type.InCubic)
+        if shown:
+            self.show()
+            self.raise_()
+        self._animation.start()
+
+    def _step(self, progress: float) -> None:
+        self._progress = float(progress)
+        self._fade.setOpacity(self._progress)
+        self._fade.setEnabled(self._progress < 1.0)  # drawn directly (crisp) once in place
+        self._place()
+
+    def _place(self) -> None:
+        self.move(self._target + QPoint(0, round((1.0 - self._progress) * RISE)))
+
+    def _settled(self) -> None:
+        if not self.shown:
+            self.hide()
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)

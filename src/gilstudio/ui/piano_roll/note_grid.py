@@ -61,6 +61,8 @@ class NoteGesture:
     def rubber_band(self) -> QRectF | None:
         return None
 
+    def finish(self) -> None: ...
+
 
 class MoveNotesGesture(NoteGesture):
     def __init__(self, grid: NoteGrid, press: QPointF, grabbed: Note, moving: list[Note]):
@@ -126,6 +128,10 @@ class SelectNotesGesture(NoteGesture):
 
     def rubber_band(self) -> QRectF | None:
         return self.rect
+
+    def finish(self) -> None:
+        if self.active:  # a group chosen by dragging: bring up the note tools by it
+            self.roll.set_selection(self.roll.selected, tools=True)
 
 
 class PanGesture(NoteGesture):
@@ -301,6 +307,8 @@ class NoteGrid(QWidget):
         if self._deselect_on_click is not None and gesture is not None and not gesture.active:
             self.roll.set_selection(self.roll.selected - {self._deselect_on_click})
         self._deselect_on_click = None
+        if gesture is not None:
+            gesture.finish()
         self.roll.release_audition()
         self._update_cursor(event.position(), event.modifiers())
         self.roll.place_tools()
@@ -324,6 +332,7 @@ class NoteGrid(QWidget):
         hit = self.note_at(pos)
         if hit is not None:
             note = hit[0]
+            roll.tools_wanted = False
             roll.commit(notes.place(clip.notes, [note], []), "Delete Note", selected=roll.selected - {note})
             return
         view = roll.view
@@ -332,6 +341,7 @@ class NoteGrid(QWidget):
         if view.snap and not event.modifiers() & Qt.KeyboardModifier.AltModifier:
             beat = math.floor(beat / step + 1e-9) * step  # the grid cell that was clicked
         note = Note(pitch=roll.pitch_at(pos.y()), start=beat, length=step)
+        roll.tools_wanted = False
         roll.commit(notes.place(clip.notes, [], [note]), "Add Note", selected={note})
         roll.audition(note.pitch, note.velocity)
 
@@ -379,7 +389,7 @@ class NoteGrid(QWidget):
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         selected = sorted(roll.selected, key=by_time)
         if key == Qt.Key.Key_A:
-            roll.set_selection(clip.notes)
+            roll.set_selection(clip.notes, tools=True)
         elif key == Qt.Key.Key_U:
             roll.quantize()  # the selected notes, or all
         elif not selected:
