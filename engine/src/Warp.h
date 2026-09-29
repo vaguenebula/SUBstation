@@ -18,8 +18,13 @@ namespace gil {
 
 struct ClipRender;
 
-// Ableton's warp modes; the order matches the UI list.
-enum class WarpMode : uint8_t { Beats, Tones, Texture, RePitch, Complex, ComplexPro };
+// Warp modes; the order matches the UI list (model/project.py WARP_MODES).
+//  Transients: short stretch blocks, tight attacks (drums).
+//  Standard:   the stretcher's default blocks; good all-round.
+//  Smooth:     long blocks: smooth tones, pads and noise, softer attacks.
+//  Formants:   Standard, plus keeping the formants in place when transposing.
+//  RePitch:    no stretching; resampled, so speed and pitch change together.
+enum class WarpMode : uint8_t { Transients, Standard, Smooth, Formants, RePitch };
 
 // Stretcher block sizes. Each warp mode (except Re-Pitch) maps to one, and
 // voices are pooled per configuration because reconfiguring allocates.

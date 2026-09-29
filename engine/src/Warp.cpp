@@ -28,9 +28,9 @@ struct StretchTiming {
 // Shorter blocks keep drum transients tight; longer ones give smoother tones
 // and textures at the cost of smearing attacks.
 constexpr std::array<StretchTiming, kNumStretchConfigs> kTimings = {{
-    {0.080, 0.020},  // Transient (Beats)
-    {0.120, 0.030},  // Standard (Tones, Complex, Complex Pro): Signalsmith's default preset
-    {0.200, 0.050},  // Smooth (Texture)
+    {0.080, 0.020},  // Transient (Transients mode)
+    {0.120, 0.030},  // Standard (Standard and Formants modes): Signalsmith's default preset
+    {0.200, 0.050},  // Smooth (Smooth mode)
 }};
 
 // A clip's source as the stretcher's input: `reader[channel][i]` is source frame
@@ -91,8 +91,8 @@ const SincTable kSinc;
 
 StretchConfig stretchConfigFor(WarpMode mode) noexcept {
     switch (mode) {
-        case WarpMode::Beats: return StretchConfig::Transient;
-        case WarpMode::Texture: return StretchConfig::Smooth;
+        case WarpMode::Transients: return StretchConfig::Transient;
+        case WarpMode::Smooth: return StretchConfig::Smooth;
         default: return StretchConfig::Standard;
     }
 }

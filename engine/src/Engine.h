@@ -38,7 +38,7 @@ struct ClipDesc {
     // the tempo of the source audio, and they play at tempo / segmentBpm speed.
     bool warp = false;
     double segmentBpm = 0.0;
-    WarpMode warpMode = WarpMode::Beats;
+    WarpMode warpMode = WarpMode::Standard;
     double transpose = 0.0;     // semitones (fractions for detune); ignored by Re-Pitch
     std::string id;             // stable clip identity, so edits don't interrupt a stretching clip
 };

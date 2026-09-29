@@ -17,7 +17,7 @@ def make_project(audio_path: str) -> Project:
         Track(id="t1", name="Drums", color="#ff94a6", volume_db=-6.0, pan=0.25, mute=True, height=90,
               devices=[Device(id="d1", kind="utility", params={"gain": -2.0, "pan": 0.0, "width": 50.0})],
               clips=[Clip(id="c1", path=audio_path, name="kick", start_beat=1.5, duration_sec=2.0, offset_sec=0.25,
-                          source_duration_sec=4.0, gain_db=-1.0, warp=True, warp_mode="Complex",
+                          source_duration_sec=4.0, gain_db=-1.0, warp=True, warp_mode="Formants",
                           segment_bpm=128.0, transpose=-3, detune=12.0, pan=-0.5)]),
         Track(id="t2", name="Empty", color="#8bc5ff", solo=True),
     ]
@@ -62,3 +62,20 @@ def test_rejects_foreign_files(tmp_path):
     bad.write_text("{not json")
     with pytest.raises(ProjectFileError):
         load_project(Project(), bad)
+
+
+def test_old_warp_mode_names_load_as_their_equivalents(tmp_path):
+    audio = tmp_path / "kick.wav"
+    audio.write_bytes(b"")
+    target = tmp_path / "song.gilproj"
+    save_project(make_project(str(audio)), target)
+    data = json.loads(target.read_text(encoding="utf-8"))
+    clip = data["tracks"][0]["clips"][0]
+    for old, new in (("Beats", "Transients"), ("Tones", "Standard"), ("Complex", "Standard"),
+                     ("Texture", "Smooth"), ("Complex Pro", "Formants"), ("Re-Pitch", "Re-Pitch"),
+                     ("Nonsense", "Standard")):
+        clip["warp_mode"] = old
+        target.write_text(json.dumps(data), encoding="utf-8")
+        loaded = Project()
+        load_project(loaded, target)
+        assert loaded.tracks[0].clips[0].warp_mode == new, old

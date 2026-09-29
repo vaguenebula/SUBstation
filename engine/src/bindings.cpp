@@ -74,12 +74,11 @@ NB_MODULE(_engine, m) {
         .def_ro("right", &gil::MeterReading::right);
 
     nb::enum_<gil::WarpMode>(m, "WarpMode")
-        .value("BEATS", gil::WarpMode::Beats)
-        .value("TONES", gil::WarpMode::Tones)
-        .value("TEXTURE", gil::WarpMode::Texture)
-        .value("RE_PITCH", gil::WarpMode::RePitch)
-        .value("COMPLEX", gil::WarpMode::Complex)
-        .value("COMPLEX_PRO", gil::WarpMode::ComplexPro);
+        .value("TRANSIENTS", gil::WarpMode::Transients)
+        .value("STANDARD", gil::WarpMode::Standard)
+        .value("SMOOTH", gil::WarpMode::Smooth)
+        .value("FORMANTS", gil::WarpMode::Formants)
+        .value("RE_PITCH", gil::WarpMode::RePitch);
 
     nb::class_<gil::ClipDesc>(m, "ClipDesc")
         .def(
@@ -91,7 +90,7 @@ NB_MODULE(_engine, m) {
                                          warp, segmentBpm, warpMode, transpose, std::move(id)};
             },
             "path"_a, "start_beat"_a, "duration_sec"_a, "offset_sec"_a = 0.0, "gain"_a = 1.0f, nb::kw_only(),
-            "pan"_a = 0.0f, "warp"_a = false, "segment_bpm"_a = 0.0, "warp_mode"_a = gil::WarpMode::Beats,
+            "pan"_a = 0.0f, "warp"_a = false, "segment_bpm"_a = 0.0, "warp_mode"_a = gil::WarpMode::Standard,
             "transpose"_a = 0.0, "id"_a = "")
         .def_rw("path", &gil::ClipDesc::path)
         .def_rw("start_beat", &gil::ClipDesc::startBeat)

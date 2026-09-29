@@ -9,7 +9,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - Clip editing: move (also across tracks), Ctrl-drag to copy, trim either edge, split, duplicate, delete, rubber-band select. Overlaps follow Ableton's rule: the clip you place wins.
 - Clip view (double-click a clip): warping, transpose/detune, clip volume and pan, for one clip or many at once.
   - **Warp** locks a clip to the beat grid. Its audio is taken to be at the *Seg. BPM* and is stretched in real time to follow the project tempo. Turning Warp on sets Seg. BPM to the current tempo, so nothing moves until the tempo changes.
-  - Warp modes: *Beats* (tight transients), *Tones*, *Texture* (smooth), *Complex*, *Complex Pro* (keeps formants when transposing), and *Re-Pitch* (no stretching: speed and pitch change together, like a turntable).
+  - Warp modes: *Transients* (short stretch blocks, tight attacks), *Standard* (all-round), *Smooth* (long blocks, for pads and textures), *Formants* (Standard, keeping formants when transposing), and *Re-Pitch* (no stretching: speed and pitch change together, like a turntable). Projects saved with the earlier Ableton-style names load into the equivalent mode.
   - **Transpose/Detune** shift the pitch without changing the speed, warped or not (except in Re-Pitch).
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
 - Master track, metronome, loop brace, follow mode, CPU meter.
