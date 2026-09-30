@@ -6,7 +6,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 
 **What works today**
 - Arrangement timeline with any number of audio and MIDI tracks, waveforms and note previews, adaptive grid with snapping, zoom and scroll.
-- Clip editing: move (also across tracks of the same kind), Ctrl-drag to copy, trim either edge, split, duplicate, delete, rubber-band select. Overlaps follow Ableton's rule: the clip you place wins.
+- Clip editing: move (also across tracks of the same kind), Ctrl-drag to copy, trim either edge, split, duplicate, delete, rubber-band select. Dragging inside a time selection moves (or copies) just that stretch, splitting clips at its edges. Overlaps follow Ableton's rule: the clip you place wins.
 - Clip view (double-click a clip): for audio clips, warping, transpose/detune, clip volume and pan, for one clip or many at once. For a MIDI clip, the piano roll (below).
   - **Warp** locks a clip to the beat grid. Its audio is taken to be at the *Seg. BPM* and is stretched in real time to follow the project tempo. Turning Warp on sets Seg. BPM to the current tempo, so nothing moves until the tempo changes.
   - Warp modes: *Transients* (short stretch blocks, tight attacks), *Standard* (all-round), *Smooth* (long blocks, for pads and textures), *Formants* (Standard, keeping formants when transposing), and *Re-Pitch* (no stretching: speed and pitch change together, like a turntable). Projects saved with the earlier Ableton-style names load into the equivalent mode.
@@ -27,7 +27,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - VST3 plug-ins, instruments and effects (see below).
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
 - Master track, metronome, loop brace, follow mode, CPU meter.
-- Browser: categories (Samples, Built-in, Plug-ins), user "Places", instant search, click-to-preview, drag-and-drop or double-click to add clips.
+- Browser: categories (All, Samples, Built-in, Plug-ins), user "Places", instant search, click-to-preview, drag-and-drop or double-click to add clips. Lists sort by *Rank* (what you add most, and most recently, first; counts kept in `%LOCALAPPDATA%\GIL Studio\library.json`) or *Name*.
   - Instruments (built-in or plug-in) go on a MIDI track, replacing its instrument. With no MIDI track selected, double-clicking one or dropping it below the tracks makes one.
 - Device view with the built-in Synth instrument and Utility device (gain/pan/width), and plug-ins, all through the same `Processor` interface. Parameters that choose between named values get a list; frequency and time knobs turn logarithmically. Right-click a device to move it along the chain.
 - Undo/redo for all edits, `.gilproj` projects (JSON), WAV export (16/24/32-bit float).
@@ -141,8 +141,10 @@ python -m pytest
 | Bypass snapping while dragging | hold Alt |
 | Copy clips while dragging | hold Ctrl |
 | Toggle browser / device view | Ctrl+Alt+B / Ctrl+Alt+L |
-| Search the browser | Ctrl+F |
+| Search everything in the browser ("All"); Enter selects the first result, Enter again adds it | Ctrl+F |
 | Export audio | Ctrl+Shift+R |
+
+The Ctrl/Alt shortcuts also work while a plug-in's editor window has the focus, except Ctrl+A/C/V/X/Z/Y, which the plug-in keeps for its own text fields. Keys without Ctrl or Alt (Space, Delete, ...) go to the plug-in.
 
 In the piano roll, Delete, Ctrl+A and Ctrl+D act on notes, Ctrl+U quantizes them, and arrow keys move them.
 
@@ -158,7 +160,7 @@ src/gilstudio/                 Python: UI, model, undo, file I/O
   ui/           main_window, transport_bar, device_panel, dialogs, clip_view,
                 arrangement/ (custom-painted ruler, lanes, headers; numpy waveform tiles),
                 piano_roll/ (keys, ruler, note grid, velocity lane),
-                browser/ (background file index, search, preview)
+                browser/ (background file index, search and ranking, library of use counts, preview)
   plugins/      scanner.py: finds VST3 plug-ins and reads them in child processes (scan_worker.py); cache
 engine/src/                    C++: everything on the audio thread, and plug-in hosting
   Engine        public API; edit model; builds and publishes render snapshots

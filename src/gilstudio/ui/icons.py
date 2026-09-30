@@ -143,6 +143,16 @@ def plugin(color: str = theme.TEXT_DIM) -> QIcon:
 
 
 @cache
+def search(color: str = theme.TEXT_DIM) -> QIcon:
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QRectF(10, 10, 30, 30))
+        p.drawLine(QPointF(37, 37), QPointF(54, 54))
+    return _icon(draw, color)
+
+
+@cache
 def app_icon() -> QIcon:
     def draw(p: QPainter, _c: QColor):
         p.setBrush(QColor(theme.PANEL_ALT))

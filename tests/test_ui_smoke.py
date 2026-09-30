@@ -1,11 +1,12 @@
 """Builds the real main window offscreen and drives it like a user would."""
 
+import sys
 import time
 from dataclasses import replace
 
 import numpy as np
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QPoint, QPointF, QSettings, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
@@ -212,6 +213,36 @@ def test_browser_indexes_and_searches(window, tmp_path):
     assert mime.urls()[0].toLocalFile().endswith("Kick Deep.wav")
     browser.file_activated.emit(item.path)
     assert window.project.tracks[-1].clips[0].name == "Kick Deep"
+
+
+def test_find_searches_all(window, tmp_path):
+    write_wav(tmp_path / "Utility Hit.wav", tone(0.2, 60.0))
+    browser = window.browser
+    browser.index.rebuild([str(tmp_path)])
+    assert wait_until(lambda: not browser.index.indexing and browser.index.audio)
+    [samples] = [browser.sidebar.topLevelItem(i) for i in range(browser.sidebar.topLevelItemCount())
+                 if browser.sidebar.topLevelItem(i).text(0) == "Samples"]
+    browser.sidebar.setCurrentItem(samples)
+    window._focus_search()  # Ctrl+F
+    assert browser._scope() == ("all",)
+    browser.search.setText("utility")
+    browser._refresh()
+    kinds = {browser.list_model.item(browser.list_model.index(r)).kind
+             for r in range(browser.list_model.rowCount())}
+    assert kinds == {"device", "audio"}  # the built-in Utility and the sample
+
+
+def test_enter_in_search_selects_then_adds(window, three_tracks):
+    browser, track = window.browser, window.project.tracks[0]
+    window.selection.select_track(track.id)
+    window._focus_search()
+    browser.search.setText("utility")  # Enter before the delayed search ran
+    QTest.keyClick(browser.search, Qt.Key.Key_Return)
+    current = browser.list_model.item(browser.list_view.currentIndex())
+    assert current is not None and current.kind == "device" and current.name == "Utility"
+    assert not track.devices
+    QTest.keyClick(browser.list_view, Qt.Key.Key_Return)
+    assert [d.kind for d in track.devices] == ["utility"]
 
 
 def drag(widget, start: QPoint, end: QPoint, modifiers=Qt.KeyboardModifier.NoModifier):
@@ -486,6 +517,49 @@ def test_drag_ending_in_clip_band_selects_clip_range(window, three_tracks):
     assert lanes.grab().toImage().pixelColor(body) != highlighted
 
 
+def test_dragging_a_clip_range_moves_it(window, three_tracks):
+    arrangement = window.arrangement
+    lanes, view, rows = arrangement.lanes, arrangement.view, arrangement.layout_model.rows
+    selection, tracks, tempo = window.selection, window.project.tracks, window.project.tempo
+
+    def band(row, beat):
+        return QPoint(int(view.beat_to_x(beat)), rows[row].top - view.scroll_y + 5)
+
+    def spans(track):
+        return [(round(c.start_beat, 6), round(c.end_beat(tempo), 6)) for c in track.clips]
+
+    def select_range():
+        body = QPoint(int(view.beat_to_x(1.0)), rows[0].top - view.scroll_y + rows[0].height // 2)
+        drag(lanes, body, band(1, 3.0))
+        assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id)) and selection.clip_range
+
+    # Clips: track 0 beats 0-4, track 1 beats 2-8, track 2 beats 4-12.
+    select_range()
+    depth = window.undo_stack.count()
+    drag(lanes, band(0, 2.0), band(0, 6.0))  # grabbing any selected clip moves the whole range
+    assert spans(tracks[0]) == [(0.0, 1.0), (3.0, 4.0), (5.0, 7.0)]
+    assert spans(tracks[1]) == [(3.0, 6.0), (6.0, 7.0), (7.0, 8.0)]  # the moved beat replaces what it lands on
+    assert selection.time_range == (5.0, 7.0, (tracks[0].id, tracks[1].id)) and selection.clip_range
+    assert window.undo_stack.count() == depth + 1
+    window.undo_stack.undo()
+    assert [len(t.clips) for t in tracks] == [1, 1, 1]
+
+    # Down a track, and Ctrl copies instead.
+    select_range()
+    ctrl_drag(lanes, band(0, 2.0), band(1, 2.0))
+    assert spans(tracks[0]) == [(0.0, 4.0)]
+    assert spans(tracks[1]) == [(1.0, 3.0), (3.0, 8.0)]
+    assert spans(tracks[2]) == [(2.0, 3.0), (4.0, 12.0)]
+    assert selection.time_range == (1.0, 3.0, (tracks[1].id, tracks[2].id))
+    window.undo_stack.undo()
+
+    # A click inside the range, without dragging, still selects just that clip.
+    select_range()
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, band(1, 2.5))
+    assert selection.time_range is None and selection.clips == {(tracks[1].id, tracks[1].clips[0].id)}
+    assert lanes._gesture is None
+
+
 def test_clip_view_edits_several_clips_in_unison(window, three_tracks):
     arrangement = window.arrangement
     editor, tracks = window.editor, window.project.tracks
@@ -616,3 +690,50 @@ def test_header_controls_and_dialogs(window, three_tracks):
     export = ExportDialog(True, window)
     assert export.bit_depth.currentData() == 24
     export.reject()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="plug-in editors are Win32 windows")
+def test_shortcuts_from_plugin_editor(window, monkeypatch):
+    import ctypes
+    from ctypes import wintypes
+
+    from gilstudio.ui import plugin_keys
+
+    shortcuts = window._plugin_shortcuts
+    ctrl = Qt.KeyboardModifier.ControlModifier
+    monkeypatch.setattr(plugin_keys, "is_plugin_editor", lambda hwnd: hwnd == 1234)
+    monkeypatch.setattr(plugin_keys, "pressed_modifiers", lambda: ctrl)
+
+    def key_down(hwnd: int, vk: int) -> bool:
+        msg = wintypes.MSG(hWnd=hwnd, message=plugin_keys.WM_KEYDOWN, wParam=vk)
+        return shortcuts.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(msg))[0]
+
+    window.browser.sidebar.setCurrentItem(window.browser.sidebar.topLevelItem(2))  # Samples
+    assert key_down(1234, ord("F"))  # Ctrl+F in a plug-in's editor searches the browser
+    assert window.browser._scope() == ("all",)
+    assert not key_down(1234, ord("C"))  # the plug-in keeps its copy / paste / undo...
+    assert not key_down(1234, ord("K"))  # ...and keys that are no shortcut
+    assert not key_down(999, ord("F"))  # other windows' keys are Qt's
+    monkeypatch.setattr(plugin_keys, "pressed_modifiers", lambda: Qt.KeyboardModifier.NoModifier)
+    assert not key_down(1234, 0x20)  # Space without Ctrl/Alt: the plug-in's
+
+
+def test_used_items_rank_first(window, three_tracks):
+    browser, track = window.browser, window.project.tracks[0]
+    window.selection.select_track(track.id)
+    window._focus_search()
+
+    def names() -> list[str]:
+        browser.search.setText("e")
+        browser._refresh()
+        return [browser.list_model.item(browser.list_model.index(r)).name
+                for r in range(browser.list_model.rowCount())]
+
+    before = names()
+    last = before[-1]
+    browser._activate_list(browser.list_model.index(len(before) - 1))  # a double-click
+    assert browser.library.uses(browser.list_model.item(browser.list_model.index(len(before) - 1)).key) == 1
+    assert names()[0] == last  # used, so first
+    browser.sort.setCurrentIndex(browser.sort.findData("name"))
+    assert names() == sorted(before, key=str.casefold)
+    assert QSettings().value("browser/sort") == "name"

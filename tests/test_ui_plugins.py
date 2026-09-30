@@ -79,12 +79,15 @@ def test_plugins_in_the_browser(window):
     widget = window.devices.widgets[device.id]
     assert isinstance(widget, PluginDeviceWidget)
     # The generic editor offers what the user can change (not the read-only
-    # parameters), a page at a time.
-    assert list(widget.knobs) == [GAIN, 6, 7, 8, 9, 10, 11] and list(widget.choices) == [WAVE]
-    assert widget.choices[WAVE].currentText() == "Sine" and widget.pages == 2
-    assert widget.page_label.text() == "1/2" and not widget.previous.isEnabled()
+    # parameters), four at a time in a 2x2 grid.
+    assert list(widget.knobs) == [GAIN, 6, 7] and list(widget.choices) == [WAVE]
+    assert widget.choices[WAVE].currentText() == "Sine" and widget.pages == 3
+    assert widget.page_label.text() == "1/3" and not widget.previous.isEnabled()
+    positions = [widget.params.getItemPosition(i)[:2] for i in range(widget.params.count())]
+    assert positions == [(0, 0), (0, 1), (1, 0), (1, 1)]
     widget.next.click()
-    assert list(widget.knobs) == [12, 13, 14, 15] and widget.page_label.text() == "2/2"
+    widget.next.click()
+    assert list(widget.knobs) == [12, 13, 14, 15] and widget.page_label.text() == "3/3"
     window.editor.add_device(track.id, "utility")  # the device view is rebuilt...
     assert list(window.devices.widgets[device.id].knobs) == [12, 13, 14, 15]  # ...on the same page
 
@@ -112,7 +115,7 @@ def test_showing_a_plugin_opens_no_stray_windows(window):
         window.selection.select_track(track.id)
     finally:
         QApplication.instance().removeEventFilter(spy)
-    assert window.devices.widgets[track.devices[0].id].pages == 2
+    assert window.devices.widgets[track.devices[0].id].pages == 3
     assert spy.shown == []
     QTest.qWait(1)  # it has no editor to show, and that's no news to report
     assert "no editor" not in window.statusBar().currentMessage()

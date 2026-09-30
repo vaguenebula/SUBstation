@@ -344,6 +344,38 @@ class ProjectEditor(QObject):
             self._commit("Duplicate Time Selection", after)
         return result
 
+    def move_range(self, start: float, end: float, track_ids: list[str], delta_beats: float,
+                   track_delta: int = 0, copy_clips: bool = False) -> tuple[float, list[str]]:
+        """Ableton's drag of a time selection: move (or copy) just the clip content
+        between two beats, in time and across tracks. Clips across the range's edges
+        are split there; the moved content replaces what it lands on. Returns where
+        the range ended up: its new start and tracks."""
+        p = self.project
+        tempo = p.tempo
+        delta_beats = max(delta_beats, -start)
+        track_delta = self.clamp_track_delta([(tid, "") for tid in track_ids], track_delta)
+        lists = {t.id: list(t.clips) for t in p.tracks}
+        affected: set[str] = set()
+        winners: dict[str, set[str]] = {}
+        dest_ids = []
+        pieces = {tid: edits.slice_range(lists[tid], start, end, tempo) for tid in track_ids}
+        for tid in track_ids:
+            dest = p.tracks[p.track_index(tid) + track_delta].id
+            dest_ids.append(dest)
+            if not copy_clips and pieces[tid]:
+                lists[tid] = edits.remove_range(lists[tid], start, end, tempo)
+                affected.add(tid)
+        for tid, dest in zip(track_ids, dest_ids, strict=True):
+            moved = [replace(c, start_beat=c.start_beat + delta_beats) for c in pieces[tid]]
+            if moved:
+                lists[dest] += moved
+                winners.setdefault(dest, set()).update(c.id for c in moved)
+                affected.add(dest)
+        after = {tid: edits.resolve_overlaps(lists[tid], winners.get(tid, set()), tempo) for tid in affected}
+        if after:
+            self._commit("Copy Time Selection" if copy_clips else "Move Time Selection", after)
+        return start + delta_beats, dest_ids
+
     def clips_in_range(self, start: float, end: float, track_ids) -> set[ClipRef]:
         """The clips on these tracks that overlap the beat range."""
         tempo = self.project.tempo

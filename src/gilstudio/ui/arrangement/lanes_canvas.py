@@ -40,6 +40,7 @@ from .grid import draw_grid, draw_loop_region
 from .interactions import (
     ClipGesture,
     MoveClipsGesture,
+    MoveRangeGesture,
     PanGesture,
     RubberBandGesture,
     TimeSelectGesture,
@@ -233,6 +234,10 @@ class LanesCanvas(QWidget):
             p.fillRect(QRectF(visible.left(), y + row.height - 1, visible.width(), 1), QColor(theme.BORDER))
 
         if gesture:
+            for row_index, color, clip in gesture.kept():
+                row = self.layout_model.rows[row_index]
+                rect = self._clip_rect(clip, row.top - view.scroll_y, row.height)
+                self._draw_clip(p, color, clip, rect, visible, False)
             for row_index, color, clip in gesture.ghosts():
                 row = self.layout_model.rows[row_index]
                 rect = self._clip_rect(clip, row.top - view.scroll_y, row.height)
@@ -246,7 +251,7 @@ class LanesCanvas(QWidget):
                        "Drag audio files here from the browser\nor press Ctrl+T to create an audio track,"
                        " Ctrl+Shift+T for a MIDI track")
 
-        time_range = self.selection.time_range
+        time_range = (gesture.time_range() if gesture else None) or self.selection.time_range
         if time_range is not None:
             start, end, track_ids = time_range
             x0, x1 = view.beat_to_x(start), view.beat_to_x(end)
@@ -378,15 +383,39 @@ class LanesCanvas(QWidget):
             self._gesture = PanGesture(self, pos)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
-        additive = bool(mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
         hit = self.hit_clip(pos)
-        if hit and hit[2] != "body":
+        if hit and hit[2] in ("left", "right"):
             track_id, clip, zone = hit
+            self.selection.set_clips({(track_id, clip.id)}, track_id=track_id)
+            self._gesture = TrimGesture(self, track_id, clip, zone)
+            return
+        if self._in_clip_range(pos) and not mods & Qt.KeyboardModifier.ShiftModifier:
+            # Dragging the selected stretch moves it (Ctrl: copies); a click selects as usual.
+            self._gesture = MoveRangeGesture(self, pos, lambda: self._select_on_click(pos, mods, hit))
+            return
+        self._click(pos, mods, hit)
+
+    def _select_on_click(self, pos: QPointF, mods, hit) -> None:
+        """A click in a clip range without dragging: select as a click anywhere else would."""
+        self._click(pos, mods, hit)
+        self._gesture = None
+        self._deselect_on_click = None
+
+    def _in_clip_range(self, pos: QPointF) -> bool:
+        """Whether `pos` is in the clip band inside the selected clip range."""
+        time_range = self.selection.time_range
+        index = self.row_index_at(pos.y())
+        if not self.selection.clip_range or index is None or not self.in_clip_band(pos):
+            return False
+        start, end, track_ids = time_range
+        return self.layout_model.rows[index].track_id in track_ids and start <= self.view.x_to_beat(pos.x()) <= end
+
+    def _click(self, pos: QPointF, mods, hit) -> None:
+        """A press that is not a trim or a drag of the time selection."""
+        additive = bool(mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
+        if hit and hit[2] != "body":
+            track_id, clip, _ = hit
             ref = (track_id, clip.id)
-            if zone in ("left", "right"):
-                self.selection.set_clips({ref}, track_id=track_id)
-                self._gesture = TrimGesture(self, track_id, clip, zone)
-                return
             self._deselect_on_click = None
             if additive and not (mods & Qt.KeyboardModifier.ShiftModifier):
                 if ref in self.selection.clips and not self.selection.clip_range:
@@ -440,7 +469,8 @@ class LanesCanvas(QWidget):
                 self._set_hover_edge((hit[1].id, zone))
                 self.setCursor(trim_cursor(zone))
                 return
-            shape = Qt.CursorShape.PointingHandCursor if zone == "title" else Qt.CursorShape.IBeamCursor
+            grab = zone == "title" or self._in_clip_range(pos)
+            shape = Qt.CursorShape.PointingHandCursor if grab else Qt.CursorShape.IBeamCursor
         self._set_hover_edge(None)
         self.setCursor(shape)
 

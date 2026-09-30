@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
+from functools import cached_property
 
 from PySide6.QtCore import QAbstractListModel, QMimeData, QModelIndex, Qt, QUrl
 
@@ -37,6 +39,10 @@ def plugin_refs(mime) -> list[PluginRef]:
         return []
 
 
+def audio_key(path: str) -> str:
+    return "audio:" + os.path.normcase(os.path.normpath(path))
+
+
 @dataclass(frozen=True)
 class BrowserItem:
     name: str
@@ -46,6 +52,13 @@ class BrowserItem:
     plugin: PluginRef | None = None
     tooltip: str = ""
 
+    @cached_property
+    def key(self) -> str:
+        """Who the item is, for what the browser remembers about it (library.py)."""
+        if self.kind == "plugin" and self.plugin is not None:
+            return f"plugin:{self.plugin.format}:{self.plugin.uid}"
+        return audio_key(self.path) if self.kind == "audio" else f"{self.kind}:{self.path}"
+
     def matches(self, terms: list[str]) -> bool:
         haystack = f"{self.name} {self.detail}".lower()
         return all(term in haystack for term in terms)
@@ -54,8 +67,9 @@ class BrowserItem:
 class ItemListModel(QAbstractListModel):
     """Flat list of browser items (search results, samples, plug-ins); draggable."""
 
-    def __init__(self, parent=None):
+    def __init__(self, library=None, parent=None):
         super().__init__(parent)
+        self.library = library  # a Library, for how often each item was used
         self._items: list[BrowserItem] = []
 
     def set_items(self, items: list[BrowserItem]) -> None:
@@ -76,7 +90,9 @@ class ItemListModel(QAbstractListModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return f"{item.name}   ({item.detail})" if item.kind == "plugin" and item.detail else item.name
         if role == Qt.ItemDataRole.ToolTipRole:
-            return item.tooltip or item.path
+            uses = self.library.uses(item.key) if self.library is not None else 0
+            used = f"\nUsed {uses} time{'s' if uses != 1 else ''}" if uses else ""
+            return (item.tooltip or item.path) + used
         if role == Qt.ItemDataRole.DecorationRole:
             return icons.waveform() if item.kind == "audio" else icons.plugin()
         return None

@@ -30,7 +30,7 @@ from ..model.serialization import (
     load_project,
     save_project,
 )
-from . import icons
+from . import icons, plugin_keys
 from .arrangement.arrangement_view import ArrangementView
 from .arrangement.view_state import Selection
 from .browser.browser_panel import BrowserPanel
@@ -99,6 +99,11 @@ class MainWindow(QMainWindow):
         self.project.reset.connect(self._update_title)
 
         self._create_actions()
+        # The Ctrl/Alt shortcuts work while a plug-in's editor has the focus too.
+        self._plugin_shortcuts = None
+        if plugin_keys.supported():
+            self._plugin_shortcuts = plugin_keys.PluginEditorShortcuts(self)
+            QApplication.instance().installNativeEventFilter(self._plugin_shortcuts)
         self._restore_window()
         self._update_title()
         self.statusBar().showMessage("Ready")
@@ -363,6 +368,7 @@ class MainWindow(QMainWindow):
             self.selection.set_clips(refs, track_id=refs[0][0])
 
     def _focus_search(self) -> None:
+        self.activateWindow()  # from a plug-in's editor
         if not self.browser.isVisible():
             self.browser_action.setChecked(True)
         self.browser.focus_search()
@@ -507,6 +513,9 @@ class MainWindow(QMainWindow):
         self.bridge.stop_preview()
         self.bridge.close_all_editors()
         self.browser.shutdown()
+        if self._plugin_shortcuts is not None:
+            QApplication.instance().removeNativeEventFilter(self._plugin_shortcuts)
+            self._plugin_shortcuts = None
         event.accept()
 
     def showEvent(self, event) -> None:

@@ -56,7 +56,10 @@ def test_midi_track_with_the_synth_and_a_clip_in_the_piano_roll(window, midi_cli
     assert track.is_midi and [d.kind for d in track.devices] == ["synth"]
     assert window.devices.widgets  # the Synth shows in the device view...
     [synth] = window.devices.widgets.values()
-    assert synth.choices["wave"].currentText() == "Saw" and "cutoff" in synth.knobs  # ...with a list and knobs
+    assert synth.choices["wave"].currentText() == "Saw" and "attack" in synth.knobs  # ...with a list and knobs,
+    assert synth.pages == 2  # four at a time
+    synth.next.click()
+    assert "cutoff" in synth.knobs and not synth.choices
     # Double-clicking empty space on a MIDI track made a one-bar clip at the grid line and opened it.
     assert isinstance(clip, MidiClip) and (clip.start_beat, clip.duration_beats) == (4.0, 4.0)
     assert clip_view.isVisible() and clip_view.midi
