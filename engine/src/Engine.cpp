@@ -347,17 +347,84 @@ void Engine::setTrackSolo(uint32_t trackId, bool solo) {
     trackLocked(trackId).params->solo.store(solo);
 }
 
-void Engine::setMasterGain(float gain) { shared_.masterGain.store(std::max(0.f, gain)); }
+void Engine::setMasterGain(float gain) { master_->gain.store(std::max(0.f, gain)); }
+
+void Engine::setMasterPan(float pan) { master_->pan.store(std::clamp(pan, -1.f, 1.f)); }
 
 std::vector<MeterReading> Engine::takeMeters() {
     std::lock_guard lock(mutex_);
     std::vector<MeterReading> meters;
     meters.reserve(tracks_.size() + 1);
-    meters.push_back({0, shared_.masterPeakLeft.exchange(0.f), shared_.masterPeakRight.exchange(0.f)});
+    meters.push_back({0, master_->peakLeft.exchange(0.f), master_->peakRight.exchange(0.f)});
     for (const auto& track : tracks_) {
         meters.push_back({track.id, track.params->peakLeft.exchange(0.f), track.params->peakRight.exchange(0.f)});
     }
     return meters;
+}
+
+// ---------------------------------------------------------------------------
+// Automation
+
+void Engine::setTrackAutomation(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes) {
+    std::lock_guard lock(mutex_);
+    if (trackId == 0) {
+        masterAutomation_ = lanes;
+    } else {
+        trackLocked(trackId).automation = lanes;
+    }
+    rebuildSnapshotLocked();
+}
+
+void Engine::buildAutomationLocked(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes,
+                                   const std::vector<std::shared_ptr<Processor>>& inserts, int faderLatency,
+                                   double samplesPerBeat, std::vector<AutomationRender>& processorLanes,
+                                   AutomationRender& volume, AutomationRender& pan) {
+    for (const AutomationLaneDesc& desc : lanes) {
+        if (desc.points.empty()) continue;
+        AutomationRender lane;
+        AutomationRender* target = nullptr;
+        if (desc.processorId == 0) {
+            if (desc.param == "volume") {
+                target = &volume;
+            } else if (desc.param == "pan") {
+                target = &pan;
+            } else {
+                continue;
+            }
+            lane.latency = faderLatency;
+        } else {
+            const auto found = processors_.find(desc.processorId);
+            if (found == processors_.end() || found->second.first != trackId) continue;
+            const std::shared_ptr<Processor>& processor = found->second.second;
+            const auto place = std::find(inserts.begin(), inserts.end(), processor);
+            if (place == inserts.end()) continue;
+            const auto& infos = processor->params();
+            const auto info = std::find_if(infos.begin(), infos.end(),
+                                           [&](const ParamInfo& p) { return p.id == desc.param; });
+            if (info == infos.end() || info->readOnly) continue;
+            lane.processor = processor;
+            lane.param = static_cast<int>(info - infos.begin());
+            lane.steps = info->stepCount();
+            lane.insert = static_cast<int>(place - inserts.begin());
+            for (auto it = inserts.begin(); it != place; ++it) {
+                if ((*it)->isEnabled()) lane.latency += std::max(0, (*it)->latencySamples());
+            }
+        }
+        lane.nodes.reserve(desc.points.size());
+        for (const AutomationPoint& point : desc.points) {
+            lane.nodes.push_back({std::llround(std::max(0.0, point.beat) * samplesPerBeat),
+                                  std::clamp(point.value, 0.f, 1.f), std::clamp(point.curve, -1.f, 1.f)});
+        }
+        std::stable_sort(lane.nodes.begin(), lane.nodes.end(),
+                         [](const AutomationNode& a, const AutomationNode& b) { return a.time < b.time; });
+        if (target) {
+            *target = std::move(lane);
+        } else {
+            processorLanes.push_back(std::move(lane));
+        }
+    }
+    std::stable_sort(processorLanes.begin(), processorLanes.end(),
+                     [](const AutomationRender& a, const AutomationRender& b) { return a.insert < b.insert; });
 }
 
 // ---------------------------------------------------------------------------
@@ -696,9 +763,9 @@ void Engine::renderOfflineLocked(double startBeat, int64_t frames, float* out, b
     // With delay compensation the output lags the timeline: render the lag first and drop it.
     if (const int64_t lag = snapshotHold_->maxLatency; lag > 0) {
         std::vector<float> discarded(static_cast<size_t>(lag) * 2);
-        offline.renderOffline(*snapshotHold_, shared_, discarded.data(), lag, loop, metronome);
+        offline.renderOffline(*snapshotHold_, discarded.data(), lag, loop, metronome);
     }
-    offline.renderOffline(*snapshotHold_, shared_, out, frames, loop, metronome);
+    offline.renderOffline(*snapshotHold_, out, frames, loop, metronome);
 }
 
 std::vector<float> Engine::renderOffline(double startBeat, int64_t frames, bool loop, bool metronome) {
@@ -746,14 +813,14 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
     std::vector<float> rendered(kChunk * 2);
     for (int64_t lag = snapshotHold_->maxLatency; lag > 0;) {  // see renderOfflineLocked()
         const int64_t n = std::min(kChunk, lag);
-        offline.renderOffline(*snapshotHold_, shared_, rendered.data(), n);
+        offline.renderOffline(*snapshotHold_, rendered.data(), n);
         lag -= n;
     }
     std::vector<uint8_t> converted(kChunk * 2 * sizeof(float));
     const ma_dither_mode dither = bitDepth == 16 ? ma_dither_mode_triangle : ma_dither_mode_none;
     for (int64_t done = 0; done < total;) {
         const int64_t n = std::min(kChunk, total - done);
-        offline.renderOffline(*snapshotHold_, shared_, rendered.data(), n);
+        offline.renderOffline(*snapshotHold_, rendered.data(), n);
         ma_pcm_convert(converted.data(), format, rendered.data(), ma_format_f32, static_cast<ma_uint64>(n * 2), dither);
         ma_encoder_write_pcm_frames(&encoder, converted.data(), static_cast<ma_uint64>(n), nullptr);
         done += n;
@@ -790,6 +857,12 @@ void Engine::rebuildSnapshotLocked() {
         snap->maxLatency = std::max(snap->maxLatency, latency);
     }
 
+    // The master: its fader only (it has no devices yet).
+    snap->master = master_;
+    std::vector<AutomationRender> masterDeviceLanes;
+    buildAutomationLocked(0, masterAutomation_, {}, snap->maxLatency, spb, masterDeviceLanes, snap->masterVolume,
+                          snap->masterPan);
+
     const auto rate = static_cast<uint32_t>(sampleRate_);
     std::array<size_t, kNumStretchConfigs> voicesNeeded{};
     snap->tracks.reserve(tracks_.size());
@@ -805,6 +878,8 @@ void Engine::rebuildSnapshotLocked() {
             track.delay = std::make_shared<DelayLine>(2 * render.compensation + Renderer::kMaxBlock);
         }
         render.delay = track.delay;
+        buildAutomationLocked(track.id, track.automation, track.inserts, snap->maxLatency, spb, render.automation,
+                              render.volume, render.pan);
         render.notes.reserve(track.notes.size());
         for (const NoteDesc& note : track.notes) {
             NoteRender nr;

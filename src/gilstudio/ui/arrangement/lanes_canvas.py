@@ -1,4 +1,6 @@
-"""The track lanes: clips, grid, loop, playhead, and all clip mouse editing.
+"""The track lanes: clips, grid, loop, playhead, and all clip mouse editing;
+and the tracks' automation, over their clips and in lanes below them
+(see automation_lanes.py).
 
 Custom-painted for speed: each paint only touches what intersects the dirty
 rectangle, and playhead motion repaints just two thin strips.
@@ -37,6 +39,8 @@ from ...model.project import (
     PluginRef,
 )
 from ..browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
+from . import automation_lanes
+from .automation_lanes import EnvelopeArea, Hover
 from .grid import draw_grid, draw_loop_region
 from .interactions import (
     ClipGesture,
@@ -131,6 +135,7 @@ class LanesCanvas(QWidget):
         self._clip_anchor: tuple[str, str] | None = None  # the last clip clicked without Shift
         self._drop_preview: tuple[int | None, float, list[tuple[str, float]]] | None = None
         self._hover_edge: tuple[str, str] | None = None  # (clip id, "left"/"right") under the mouse
+        self._hover_point: Hover | None = None  # the breakpoint (or place on a line) under the mouse
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -138,8 +143,19 @@ class LanesCanvas(QWidget):
 
         for signal in (view.changed, view.vscroll_changed, view.grid_changed, selection.changed,
                        selection.insert_changed, self.project.settings_changed, bridge.source_ready,
-                       bridge.source_failed, self.project.clips_changed, self.project.track_changed):
+                       bridge.source_failed, self.project.clips_changed, self.project.track_changed,
+                       self.project.automation_changed, self.project.automation_view_changed,
+                       self.project.devices_changed, bridge.automation_state_changed):
             signal.connect(lambda *_args: self.update())
+        # A parameter set by hand: lanes without an envelope draw its value.
+        for signal in (self.project.device_param_changed, self.project.device_state_changed,
+                       bridge.plugin_param_edited, bridge.plugin_params_changed, bridge.plugin_params_rebuilt,
+                       bridge.devices_loaded):
+            signal.connect(lambda track_id, *_args: self._update_if_shown(track_id))
+
+    def _update_if_shown(self, track_id: str) -> None:
+        if self.project.has_track(track_id) and self.project.track(track_id).automation_view.shown:
+            self.update()
 
     # --- Geometry ------------------------------------------------------------------
 
@@ -161,7 +177,29 @@ class LanesCanvas(QWidget):
         if index is None:
             return False
         row = self.layout_model.rows[index]
-        return row.height < MIN_TITLE_ROW or 0 <= pos.y() + self.view.scroll_y - row.top < TITLE_HEIGHT + 1
+        y = pos.y() + self.view.scroll_y - row.top
+        return y < row.main_height and (row.main_height < MIN_TITLE_ROW or 0 <= y < TITLE_HEIGHT + 1)
+
+    def envelope_areas(self) -> list[EnvelopeArea]:
+        """The automation lanes showing, top to bottom: in tracks' own lanes (below
+        the clips' title band) and below them."""
+        areas = []
+        width, scroll = float(self.width()), self.view.scroll_y
+        for row in self.layout_model.rows:
+            if not row.automation or row.bottom - scroll < 0 or row.top - scroll > self.height():
+                continue
+            top = row.top - scroll
+            key = self.project.track(row.track_id).automation_view.key
+            if key:
+                areas.append(EnvelopeArea(row.track_id, key, -1,
+                                          QRectF(0, top + TITLE_HEIGHT + 1, width, row.main_height - TITLE_HEIGHT - 2)))
+            for lane in row.lanes:
+                areas.append(EnvelopeArea(row.track_id, lane.key, lane.index,
+                                          QRectF(0, lane.top - scroll, width, lane.height - 1)))
+        return areas
+
+    def envelope_area_at(self, pos: QPointF) -> EnvelopeArea | None:
+        return automation_lanes.area_at(self.envelope_areas(), pos)
 
     def hit_clip(self, pos: QPointF) -> tuple[str, AnyClip, str] | None:
         """(track id, clip, zone) under `pos`; zone is left/right (trim handles, at
@@ -172,8 +210,10 @@ class LanesCanvas(QWidget):
             return None
         row = self.layout_model.rows[index]
         top = row.top - self.view.scroll_y
+        if pos.y() >= top + row.main_height:
+            return None  # in an automation lane below the track
         for clip in reversed(self.project.track(row.track_id).clips):
-            rect = self._clip_rect(clip, top, row.height)
+            rect = self._clip_rect(clip, top, row.main_height)
             # Only inside the clip: next to it, or on a neighbour's side of a
             # shared boundary, you are not trimming this clip.
             if rect.left() <= pos.x() <= rect.right():
@@ -222,23 +262,29 @@ class LanesCanvas(QWidget):
             for clip in track.clips:
                 if clip.id in hidden:
                     continue
-                rect = self._clip_rect(clip, y, row.height)
+                rect = self._clip_rect(clip, y, row.main_height)
                 if rect.left() > visible.right():
                     break
                 if rect.right() < visible.left():
                     continue
                 self._draw_clip(p, track.color, clip, rect, visible, False)  # the selected area is tinted
+            for lane in row.lanes:  # automation lanes below the track
+                p.fillRect(QRectF(visible.left(), lane.top - view.scroll_y - 1, visible.width(), 1),
+                           QColor(theme.GRID_BAR))
             p.fillRect(QRectF(visible.left(), y + row.height - 1, visible.width(), 1), QColor(theme.BORDER))
 
         if gesture:
             for row_index, color, clip in gesture.kept():
                 row = self.layout_model.rows[row_index]
-                rect = self._clip_rect(clip, row.top - view.scroll_y, row.height)
+                rect = self._clip_rect(clip, row.top - view.scroll_y, row.main_height)
                 self._draw_clip(p, color, clip, rect, visible, False)
             for row_index, color, clip in gesture.ghosts():
                 row = self.layout_model.rows[row_index]
-                rect = self._clip_rect(clip, row.top - view.scroll_y, row.height)
+                rect = self._clip_rect(clip, row.top - view.scroll_y, row.main_height)
                 self._draw_clip(p, color, clip, rect, visible, True, ghost=True)
+        areas = self.envelope_areas()
+        for area in areas:
+            automation_lanes.draw_area(p, self, area, visible, self._hover_point, shade=area.lane < 0)
         self._draw_drop_preview(p)
 
         if not self.project.tracks and not self._drop_preview:
@@ -249,16 +295,18 @@ class LanesCanvas(QWidget):
                        " Ctrl+Shift+T for a MIDI track")
 
         time_range = (gesture.time_range() if gesture else None) or self.selection.time_range
-        if time_range is not None:
+        if time_range is not None and self.selection.lanes and not (gesture and gesture.time_range()):
+            automation_lanes.draw_range(p, self, areas, SELECTION_TINT)  # on the automation lanes it covers
+        elif time_range is not None:
             start, end, track_ids = time_range
             x0, x1 = view.beat_to_x(start), view.beat_to_x(end)
             for track_id in track_ids:
                 row = self.layout_model.row_for(track_id)
                 if row is None:
                     continue
-                area = QRectF(x0, row.top - view.scroll_y, x1 - x0, row.height - 1)
-                if not self.selection.clip_range and row.height >= MIN_TITLE_ROW:
-                    # A lane (automation) range leaves the clips' title band alone.
+                area = QRectF(x0, row.top - view.scroll_y, x1 - x0, row.main_height - 1)
+                if not self.selection.clip_range and row.main_height >= MIN_TITLE_ROW:
+                    # A lane range leaves the clips' title band alone.
                     area.setTop(area.top() + TITLE_HEIGHT + 1)
                 p.fillRect(area, SELECTION_TINT)
 
@@ -271,6 +319,7 @@ class LanesCanvas(QWidget):
         x = round(view.beat_to_x(self._playhead))
         if visible.left() - 2 <= x <= visible.right() + 2:
             p.fillRect(QRectF(x, 0, 1, self.height()), QColor(theme.PLAYHEAD))
+        automation_lanes.draw_readout(p, self, gesture)
 
 
     def _draw_clip(self, p: QPainter, track_color: str, clip: AnyClip, rect: QRectF, visible: QRectF,
@@ -356,7 +405,7 @@ class LanesCanvas(QWidget):
             height = DEFAULT_TRACK_HEIGHT
         else:
             row = self.layout_model.rows[row_index]
-            top, height = row.top - self.view.scroll_y, row.height
+            top, height = row.top - self.view.scroll_y, row.main_height
         x = self.view.beat_to_x(beat)
         for path, duration in sources:
             width = duration * self.project.tempo / 60.0 * self.view.px_per_beat
@@ -378,6 +427,11 @@ class LanesCanvas(QWidget):
         if is_pan_modifier(mods):
             self._gesture = PanGesture(self, pos)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+        area = self.envelope_area_at(pos)
+        if area is not None:
+            self._gesture = automation_lanes.press(self, area, pos, mods)
+            self.update()
             return
         hit = self.hit_clip(pos)
         if hit and hit[2] in ("left", "right"):
@@ -440,6 +494,15 @@ class LanesCanvas(QWidget):
         self._update_cursor(event.position(), event.modifiers())
 
     def _update_cursor(self, pos: QPointF, mods) -> None:
+        area = None if is_pan_modifier(mods) else self.envelope_area_at(pos)
+        point, shape = automation_lanes.hover(self, area, pos, mods)
+        if point != self._hover_point:
+            self._hover_point = point
+            self.update()
+        if area is not None:
+            self._set_hover_edge(None)
+            self.setCursor(shape)
+            return
         if is_pan_modifier(mods):
             shape = Qt.CursorShape.OpenHandCursor
         elif not self.layout_model.rows:
@@ -464,6 +527,9 @@ class LanesCanvas(QWidget):
     def leaveEvent(self, _event) -> None:
         if self._gesture is None:
             self._set_hover_edge(None)
+            if self._hover_point is not None:
+                self._hover_point = None
+                self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         gesture, self._gesture = self._gesture, None
@@ -474,6 +540,11 @@ class LanesCanvas(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
+            return
+        area = self.envelope_area_at(event.position())
+        if area is not None and not is_pan_modifier(event.modifiers()):
+            self._gesture = automation_lanes.press(self, area, event.position(), event.modifiers())
+            self.update()
             return
         hit = self.hit_clip(event.position())
         if hit is None:
@@ -558,6 +629,11 @@ class LanesCanvas(QWidget):
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         pos = QPointF(event.pos())
         menu = QMenu(self)
+        area = self.envelope_area_at(pos)
+        if area is not None:
+            automation_lanes.add_menu_actions(self, area, pos, menu)
+            menu.exec(event.globalPos())
+            return
         hit = self.hit_clip(pos)
         if hit:
             track_id, clip, _ = hit

@@ -34,6 +34,7 @@ class TransportBar(QWidget):
     play_requested = Signal()
     stop_requested = Signal()
     preferences_requested = Signal()
+    re_enable_requested = Signal()
 
     def __init__(self, editor: ProjectEditor, bridge: EngineBridge, view: ViewState, parent: QWidget | None = None):
         super().__init__(parent)
@@ -56,6 +57,13 @@ class TransportBar(QWidget):
         self.record = ToggleButton(icon=icons.record(), role="tool", checkable=False,
                                    tooltip="Recording is not available in this version")
         self.record.setEnabled(False)
+        # Lit while automation is overridden (a target changed by hand): a click brings it back.
+        self.re_enable = ToggleButton(icon=icons.re_enable_automation(), role="re-enable",
+                                      tooltip="Re-Enable Automation")
+        self.re_enable.setEnabled(False)
+        self.lock_envelopes = ToggleButton(icon=icons.lock_envelopes(), role="tool",
+                                           tooltip="Lock Envelopes: automation stays in place when clips move "
+                                                   "(off: it moves with them)")
         self.position = QLabel()
         self.position.setFont(theme.ui_font(11, bold=True))
         self.position.setMinimumWidth(96)
@@ -84,7 +92,7 @@ class TransportBar(QWidget):
                        self.metronome):
             layout.addWidget(widget)
         layout.addStretch(1)
-        for widget in (self.position, self.play, self.stop, self.record):
+        for widget in (self.position, self.play, self.stop, self.record, self.re_enable, self.lock_envelopes):
             layout.addWidget(widget)
         layout.addStretch(1)
         for widget in (self.loop, self.follow, _separator(), self.cpu, self.device):
@@ -99,6 +107,8 @@ class TransportBar(QWidget):
         self.loop.toggled.connect(self.editor.set_loop_enabled)
         self.follow.toggled.connect(self._set_follow)
         self.device.clicked.connect(self.preferences_requested)
+        self.re_enable.clicked.connect(self.re_enable_requested)
+        self.lock_envelopes.toggled.connect(self.editor.set_automation_locked)
 
         self.project.settings_changed.connect(self.refresh)
         self.project.reset.connect(self.refresh)
@@ -106,6 +116,7 @@ class TransportBar(QWidget):
         bridge.transport_changed.connect(self.play.set_checked_silently)
         bridge.device_changed.connect(self.refresh_device)
         bridge.meters_updated.connect(self._show_cpu)
+        bridge.automation_state_changed.connect(self._show_overrides)
         self._cpu_ticks = 0
         self.refresh()
         self._show_position(0.0)
@@ -121,6 +132,7 @@ class TransportBar(QWidget):
         self.ts_num.setValue(p.time_signature.numerator)
         self.ts_den.setValue(p.time_signature.denominator)
         self.loop.set_checked_silently(p.loop_enabled)
+        self.lock_envelopes.set_checked_silently(p.automation_locked)
         self._show_position(self.bridge.position)
 
     def refresh_device(self) -> None:
@@ -151,6 +163,11 @@ class TransportBar(QWidget):
         text = f"{bar + 1:>3}. {beat_index + 1}. {sixteenth + 1}"
         if self.position.text() != text:
             self.position.setText(text)
+
+    def _show_overrides(self, _owner: str = "") -> None:
+        overridden = self.bridge.has_overrides
+        self.re_enable.setEnabled(overridden)
+        self.re_enable.set_checked_silently(overridden)
 
     def _show_cpu(self) -> None:
         self._cpu_ticks = (self._cpu_ticks + 1) % 15

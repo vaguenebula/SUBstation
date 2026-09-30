@@ -24,6 +24,8 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from gilstudio import _engine as ge
 from gilstudio.audio import engine_bridge
+from gilstudio.model import automation
+from gilstudio.model.automation import AutomationPoint
 from gilstudio.model.project import PLUGIN_KIND, PluginRef
 from gilstudio.ui.browser.browser_models import plugin_refs
 from gilstudio.ui.browser.file_index import plugin_ref
@@ -178,6 +180,56 @@ def test_edits_in_the_plugin_editor_are_undoable(window):
     user32.SendMessageW(frame, 0x0010, 0, 0)  # WM_CLOSE
     poll(window)
     assert not widget.edit.isChecked() and not window.engine.is_editor_open(pid)
+
+
+def test_automating_plugin_parameters(window):
+    track, device = synth_track(window)
+    pid = engine_id(window, track, device)
+    knob, _readout = window.devices.widgets[device.id].knobs[GAIN]
+    key = automation.device_key(device.id, str(GAIN))
+    centre = QPoint(knob.width() // 2, knob.height() // 2)
+    drag(knob, centre, centre + QPoint(0, 30))  # turning it shows its automation
+    assert window.project.track(track.id).automation_view.key == key
+    assert window.arrangement.headers.headers[track.id].automation.main.device.text() == "GIL Test Synth"
+    assert window.bridge.param_spec(track.id, key).name == "Gain"
+    # An envelope drives it: the plug-in, its controller and the knob follow.
+    window.editor.set_envelope(track.id, key, (AutomationPoint(0.0, 0.25),))
+    window.engine.render_offline(0.0, 256)
+    poll(window)
+    assert window.engine.processor_param(pid, GAIN) == pytest.approx(0.25)
+    assert knob.value() == pytest.approx(0.25) and knob.automation() == "on"
+    # Turning it by hand overrides the envelope, until automation is re-enabled.
+    drag(knob, centre, centre + QPoint(0, 30))
+    assert window.bridge.is_overridden(track.id, key) and knob.automation() == "off"
+    window.engine.render_offline(0.0, 256)
+    poll(window)
+    assert window.engine.processor_param(pid, GAIN) == pytest.approx(knob.value(), abs=1e-3) != 0.25
+    window.bridge.re_enable_automation()
+    window.engine.render_offline(0.0, 256)
+    poll(window)
+    assert window.engine.processor_param(pid, GAIN) == pytest.approx(0.25)
+
+
+def test_edits_in_a_plugin_editor_override_its_automation(window):
+    track = window.editor.add_audio_track(name="Drums")
+    window.selection.select_track(track.id)
+    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    pid = engine_id(window, track, device)
+    key = automation.device_key(device.id, str(FX_GAIN))
+    window.editor.set_envelope(track.id, key, (AutomationPoint(0.0, 0.8),))
+    window.engine.render_offline(0.0, 256)
+    poll(window)
+    assert window.engine.processor_param(pid, FX_GAIN) == pytest.approx(0.8)
+    widget = window.devices.widgets[device.id]
+    widget.edit.click()  # shows the editor
+    view = user32.GetWindow(editor_window("GIL Test Effect - Drums"), 5)
+    user32.SendMessageW(view, EDIT_GAIN, 0, 0)  # the editor sets 0.3
+    poll(window)
+    assert window.bridge.is_overridden(track.id, key)
+    assert window.project.track(track.id).automation_view.key == key  # and its lane shows
+    window.engine.render_offline(0.0, 256)
+    poll(window)
+    assert window.engine.processor_param(pid, FX_GAIN) == pytest.approx(0.3)
 
 
 def test_devices_fit_the_device_view(window):

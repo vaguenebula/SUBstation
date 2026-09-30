@@ -1,5 +1,9 @@
 """Composes the arrangement: ruler on top, lanes with track headers on the right
-(as in Ableton), the master track pinned at the bottom, shared scrollbars."""
+(as in Ableton), the master track pinned at the bottom, shared scrollbars.
+
+Automation shows per track (and for the master): 'A' shows or hides it all, and
+changing a parameter by hand shows its track's automation with that parameter
+in the track's own lane."""
 
 from __future__ import annotations
 
@@ -9,16 +13,16 @@ from PySide6.QtWidgets import QGridLayout, QScrollBar, QWidget
 
 from ... import theme
 from ...audio.engine_bridge import EngineBridge
+from ...model.automation import MASTER
 from ...model.editor import ProjectEditor
 from ..clip_view import ClipView
 from .lanes_canvas import LanesCanvas
 from .ruler import TimelineRuler
-from .track_headers import MasterHeader, MasterLane, TrackHeaderColumn
-from .view_state import Selection, TrackLayout, ViewState
+from .track_headers import MASTER_HEIGHT, MasterHeader, MasterLane, TrackHeaderColumn
+from .view_state import Selection, TrackLayout, ViewState, automation_rows
 from .waveform_cache import WaveformCache
 
 HEADER_WIDTH = 236
-MASTER_HEIGHT = 40
 DROP_ZONE = 120  # empty space below the last track for dropping files
 
 
@@ -73,10 +77,10 @@ class ArrangementView(QWidget):
         self.headers.setFixedWidth(HEADER_WIDTH)
         self.grid_info = GridInfo(self.view)
         self.grid_info.setFixedWidth(HEADER_WIDTH)
-        self.master_lane = MasterLane(self.view)
-        self.master_lane.setFixedHeight(MASTER_HEIGHT)
+        self.master_lane = MasterLane(editor, self.view, selection, bridge)
         self.master_header = MasterHeader(editor, bridge)
-        self.master_header.setFixedSize(HEADER_WIDTH, MASTER_HEIGHT)
+        self.master_header.setFixedWidth(HEADER_WIDTH)
+        self._update_master_height()
         self.hbar = QScrollBar(Qt.Orientation.Horizontal)
         self.vbar = QScrollBar(Qt.Orientation.Vertical)
         for bar in (self.hbar, self.vbar):
@@ -101,6 +105,9 @@ class ArrangementView(QWidget):
             signal.connect(self._on_structure_changed)
         p.reset.connect(self._on_reset)
         p.track_changed.connect(self._on_track_changed)
+        p.automation_view_changed.connect(self._on_automation_view_changed)
+        p.automation_changed.connect(lambda *_args: self.selection.prune(self.project))
+        editor.parameter_touched.connect(self._on_parameter_touched)
         p.clips_changed.connect(lambda _tid: (self.selection.prune(self.project), self._update_hbar()))
         p.settings_changed.connect(self._update_hbar)
         self.view.changed.connect(self._update_hbar)
@@ -127,7 +134,31 @@ class ArrangementView(QWidget):
         self.view.scroll_beats = 0.0
         self.view.scroll_y = 0
         self._on_structure_changed()
+        self._update_master_height()
         self.view.changed.emit()
+
+    def _on_automation_view_changed(self, owner: str) -> None:
+        if owner == MASTER:
+            self._update_master_height()
+        elif self.project.has_track(owner):
+            self._on_track_changed(owner)
+            self.headers.relayout()
+
+    def _update_master_height(self) -> None:
+        main_height, lanes = automation_rows(self.project.master_automation_view, 0, MASTER_HEIGHT)
+        height = main_height + sum(lane.height for lane in lanes)
+        self.master_lane.setFixedHeight(height)
+        self.master_header.setFixedHeight(height)
+        self.master_lane.set_rows(main_height, lanes)
+        self.master_header.set_rows(main_height, lanes)
+
+    def _on_parameter_touched(self, owner: str, key: str) -> None:
+        """A parameter changed by hand: its automation shows (as the lane's parameter)."""
+        view = self.project.automation_view(owner) if self.project.has_owner(owner) else None
+        if view is None or (view.shown and view.key == key):
+            return
+        if self.bridge.can_automate(owner, key):
+            self.editor.show_automation(owner, key)
 
     def _on_structure_changed(self, *_args) -> None:
         self.layout_model.rebuild()

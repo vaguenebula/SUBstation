@@ -11,7 +11,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QUndoStack
 
-from . import edits, notes
+from . import automation, edits, notes
+from .automation import MASTER, MIXER_PAN, MIXER_VOLUME, AutomationView, Envelope
 from .commands import (
     InsertTrackCommand,
     RemoveTrackCommand,
@@ -20,6 +21,8 @@ from .commands import (
     SetDeviceParamCommand,
     SetDevicesCommand,
     SetDeviceStateCommand,
+    SetEnvelopeCommand,
+    SetEnvelopesCommand,
     SetTempoCommand,
     UpdateSettingsCommand,
     UpdateTrackCommand,
@@ -38,6 +41,7 @@ from .project import (
 from .timebase import TimeSignature
 
 ClipRef = tuple[str, str]  # (track id, clip id)
+LaneRef = tuple[str, str]  # (automation owner, target key)
 
 BUILTIN_DEVICES = {
     # kind: (display name, {param id: default})
@@ -79,6 +83,9 @@ def new_device(kind: str, plugin: PluginRef | None = None) -> Device:
 class ProjectEditor(QObject):
     # (track id, device id) when the user adds a plug-in (not on undo or redo).
     plugin_added = Signal(str, str)
+    # (automation owner, target key) when the user changes a parameter that can be
+    # automated (not on undo or redo): its automation lane shows it.
+    parameter_touched = Signal(str, str)
 
     def __init__(self, project: Project, undo_stack: QUndoStack):
         super().__init__()
@@ -134,6 +141,9 @@ class ProjectEditor(QObject):
         old = getattr(self.project.track(track_id), attr)
         if value != old:
             self._push(UpdateTrackCommand(self.project, track_id, attr, old, value, labels[attr], merge_key))
+        touched = {"volume_db": MIXER_VOLUME, "pan": MIXER_PAN}.get(attr)
+        if touched:
+            self.parameter_touched.emit(track_id, touched)
 
     def set_track_height(self, track_id: str, height: int) -> None:
         # View state: saved with the project but not worth an undo step.
@@ -177,6 +187,11 @@ class ProjectEditor(QObject):
 
     def set_master_volume(self, db: float, merge_key: object | None = None) -> None:
         self._set_settings("Change Master Volume", merge_key, master_volume_db=db)
+        self.parameter_touched.emit(MASTER, MIXER_VOLUME)
+
+    def set_master_pan(self, pan: float, merge_key: object | None = None) -> None:
+        self._set_settings("Change Master Pan", merge_key, master_pan=max(-1.0, min(1.0, pan)))
+        self.parameter_touched.emit(MASTER, MIXER_PAN)
 
     # --- Clips -------------------------------------------------------------------
 
@@ -184,6 +199,58 @@ class ProjectEditor(QObject):
         before = {tid: list(self.project.track(tid).clips) for tid in after}
         if before != after:
             self._push(SetClipsCommand(self.project, text, before, after, merge_key))
+
+    def _commit_moved(self, text: str, after: dict[str, list[AnyClip]], envelopes: dict[LaneRef, Envelope]) -> None:
+        """Clips that moved, and the automation that moved with them, as one undo step."""
+        if not envelopes:
+            self._commit(text, after)
+            return
+        self.undo_stack.beginMacro(text)
+        try:
+            self._commit(text, after)
+            for (owner, key), points in envelopes.items():
+                self.set_envelope(owner, key, points, text)
+        finally:
+            self.undo_stack.endMacro()
+
+    def _carried_automation(self, spans, delta_beats: float, copy_clips: bool) -> dict[LaneRef, Envelope]:
+        """The envelopes after the automation under moving (or copied) clips went
+        with them, unless automation is locked. `spans` are (source track,
+        destination track, start, end) of the clips. Only envelopes with
+        breakpoints under the clips move. Across tracks, only the mixer's
+        automation goes along (a device's belongs to its track); a device's
+        stays where it is."""
+        if self.project.automation_locked:
+            return {}
+        by_move: dict[tuple[str, str], list[tuple[float, float]]] = {}
+        for source, dest, start, end in spans:
+            if end > start:
+                by_move.setdefault((source, dest), []).append((start, end))
+        changed: dict[LaneRef, Envelope] = {}
+        edges: dict[LaneRef, set[float]] = {}
+
+        def current(owner: str, key: str) -> Envelope:
+            return changed.get((owner, key), self.project.envelope(owner, key))
+
+        pastes = []
+        for (source, dest), ranges in by_move.items():
+            if source == dest and delta_beats == 0 and not copy_clips:
+                continue
+            for start, end in automation.merge_spans(ranges):
+                for key, points in self.project.automation(source).items():
+                    if (dest != source and key not in automation.MIXER_KEYS
+                            or not automation.has_points_in(points, start, end)):
+                        continue
+                    pastes.append((dest, key, start + delta_beats, end - start,
+                                   automation.copy_range(points, start, end)))
+                    if not copy_clips:
+                        changed[(source, key)] = automation.remove_range(current(source, key), start, end)
+                        edges.setdefault((source, key), set()).update((start, end))
+        for dest, key, at, length, content in pastes:
+            changed[(dest, key)] = automation.paste_range(current(dest, key), content, at, length)
+            edges.setdefault((dest, key), set()).update((at, at + length))
+        changed = {lane: automation.drop_redundant(points, edges[lane]) for lane, points in changed.items()}
+        return {lane: points for lane, points in changed.items() if points != self.project.envelope(*lane)}
 
     def add_clips(self, track_id: str | None, start_beat: float, sources: list[tuple[str, float]],
                   track_index: int | None = None) -> list[ClipRef]:
@@ -289,7 +356,10 @@ class ProjectEditor(QObject):
             affected.add(dest)
             result.append((dest, moved.id))
         after = {tid: edits.resolve_overlaps(lists[tid], winners.get(tid, set()), tempo) for tid in affected}
-        self._commit("Copy Clips" if copy_clips else "Move Clips", after)
+        spans = [(tid, p.tracks[index + track_delta].id, clip.start_beat, clip.end_beat(tempo))
+                 for (tid, clip), index in zip(moving, indices, strict=True)]
+        self._commit_moved("Copy Clips" if copy_clips else "Move Clips", after,
+                           self._carried_automation(spans, delta_beats, copy_clips))
         return result
 
     def replace_clip(self, track_id: str, clip: AnyClip, text: str) -> None:
@@ -348,7 +418,8 @@ class ProjectEditor(QObject):
                 after[tid] = edits.resolve_overlaps(list(clips) + copies, ids, tempo)
                 result += [(tid, cid) for cid in ids]
         if after:
-            self._commit("Duplicate Time Selection", after)
+            spans = [(tid, tid, start, end) for tid in after]
+            self._commit_moved("Duplicate Time Selection", after, self._carried_automation(spans, length, True))
         return result
 
     def move_range(self, start: float, end: float, track_ids: list[str], delta_beats: float,
@@ -381,7 +452,9 @@ class ProjectEditor(QObject):
                 affected.add(dest)
         after = {tid: edits.resolve_overlaps(lists[tid], winners.get(tid, set()), tempo) for tid in affected}
         if after:
-            self._commit("Copy Time Selection" if copy_clips else "Move Time Selection", after)
+            spans = [(tid, dest, start, end) for tid, dest in zip(track_ids, dest_ids, strict=True) if pieces[tid]]
+            self._commit_moved("Copy Time Selection" if copy_clips else "Move Time Selection", after,
+                               self._carried_automation(spans, delta_beats, copy_clips))
         return start + delta_beats, dest_ids
 
     def clips_area(self, refs) -> tuple[float, float, list[str]] | None:
@@ -452,7 +525,7 @@ class ProjectEditor(QObject):
         else:
             first = 1 if after and device_is_instrument(after[0]) else 0  # effects go after the instrument
             after.insert(len(after) if index is None else max(first, index), device)
-        self._push(SetDevicesCommand(self.project, track_id, before, after, f"Add {device_name(device)}"))
+        self._set_devices(track_id, before, after, f"Add {device_name(device)}")
         if device.is_plugin:
             self.plugin_added.emit(track_id, device.id)
         return device
@@ -491,7 +564,20 @@ class ProjectEditor(QObject):
         after = [d for d in copy.deepcopy(before) if d.id not in ids]
         if len(after) != len(before):
             text = "Delete Device" if len(before) - len(after) == 1 else "Delete Devices"
+            self._set_devices(track_id, before, after, text)
+
+    def _set_devices(self, track_id: str, before: list[Device], after: list[Device], text: str) -> None:
+        """Change a chain; the automation of devices that leave it goes with them (in the same undo step)."""
+        gone = {d.id for d in before} - {d.id for d in after}
+        orphans = [key for key in self.project.track(track_id).automation if automation.key_device(key) in gone]
+        if not orphans:
             self._push(SetDevicesCommand(self.project, track_id, before, after, text))
+            return
+        self.undo_stack.beginMacro(text)
+        self._push(SetDevicesCommand(self.project, track_id, before, after, text))
+        for key in orphans:
+            self._push(SetEnvelopeCommand(self.project, track_id, key, self.project.envelope(track_id, key), (), text))
+        self.undo_stack.endMacro()
 
     def set_device_param(self, track_id: str, device_id: str, param_id: str, value: float,
                          merge_key: object | None = None, old: float | None = None) -> None:
@@ -502,6 +588,12 @@ class ProjectEditor(QObject):
         if old is None or old != value:
             self._push(SetDeviceParamCommand(self.project, track_id, device_id, param_id,
                                              value if old is None else old, value, merge_key))
+        self.parameter_touched.emit(track_id, automation.device_key(device_id, param_id))
+
+    def touch_parameter(self, owner: str, key: str) -> None:
+        """A parameter taken hold of (clicked) without changing it: as Ableton
+        does, the arrangement shows its automation."""
+        self.parameter_touched.emit(owner, key)
 
     def set_device_state(self, track_id: str, device_id: str, old: str | None, new: str,
                          text: str = "Load Preset") -> None:
@@ -512,3 +604,141 @@ class ProjectEditor(QObject):
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:
         if self.project.device(track_id, device_id).enabled != enabled:
             self._push(SetDeviceEnabledCommand(self.project, track_id, device_id, enabled))
+
+    # --- Automation ---------------------------------------------------------------
+    # Envelopes are normalized (see automation.py); an owner is a track id or MASTER.
+
+    def set_envelope(self, owner: str, key: str, points, text: str = "Change Automation",
+                     merge_key: object | None = None) -> None:
+        new = automation.normalize(points)
+        old = self.project.envelope(owner, key)
+        if new != old:
+            self._push(SetEnvelopeCommand(self.project, owner, key, old, new, text, merge_key))
+
+    def add_automation_point(self, owner: str, key: str, beat: float, value: float,
+                             merge_key: object | None = None) -> int:
+        """A new breakpoint; returns its index. With a `merge_key`, dragging it
+        right away (move_automation_points with the same key) is the same undo step."""
+        points, index = automation.add_point(self.project.envelope(owner, key), beat, value)
+        self.set_envelope(owner, key, points, "Add Automation Point", merge_key)
+        return index
+
+    def move_automation_points(self, owner: str, key: str, original: Envelope, indices, delta_beats: float,
+                               delta_value: float, merge_key: object | None = None) -> dict[int, int]:
+        """Move points of `original` (the envelope when the drag began) together.
+        Returns where they are now ({index in `original`: index})."""
+        points, where = automation.move_points_mapped(original, indices, delta_beats, delta_value)
+        self.set_envelope(owner, key, points, "Move Automation", merge_key)
+        return where
+
+    def delete_automation_points(self, owner: str, key: str, indices) -> None:
+        points = automation.delete_points(self.project.envelope(owner, key), indices)
+        self.set_envelope(owner, key, points, "Delete Automation Point")
+
+    def set_automation_curve(self, owner: str, key: str, original: Envelope, index: int, curve: float,
+                             merge_key: object | None = None) -> None:
+        self.set_envelope(owner, key, automation.set_curve(original, index, curve), "Change Automation Curve",
+                          merge_key)
+
+    def clear_envelope(self, owner: str, key: str) -> None:
+        self.set_envelope(owner, key, (), "Delete Envelope")
+
+    def _each_lane(self, text: str, lanes, change) -> None:
+        """`change(envelope)` on each lane, as one undo step."""
+        changed = [(owner, key, change(self.project.envelope(owner, key))) for owner, key in dict.fromkeys(lanes)
+                   if self.project.has_owner(owner)]
+        changed = [(o, k, new) for o, k, new in changed if new != self.project.envelope(o, k)]
+        if not changed:
+            return
+        self.undo_stack.beginMacro(text)
+        for owner, key, new in changed:
+            self.set_envelope(owner, key, new, text)
+        self.undo_stack.endMacro()
+
+    def delete_automation_range(self, start: float, end: float, lanes: list[LaneRef]) -> None:
+        """Delete the automation between two beats on these lanes."""
+        self._each_lane("Delete Automation", lanes, lambda points: automation.remove_range(points, start, end))
+
+    def move_automation_range(self, start: float, end: float, originals: dict[LaneRef, Envelope],
+                              delta_beats: float, delta_value: float, merge_key: object | None = None) -> None:
+        """Move the automation between two beats on these lanes (`originals`: their
+        envelopes when the drag began) in time and value, as one undo step."""
+        lanes = {lane: points for lane, points in originals.items() if points and self.project.has_owner(lane[0])}
+        new = {lane: automation.move_range(points, start, end, delta_beats, delta_value)
+               for lane, points in lanes.items()}
+        current = {lane: self.project.envelope(*lane) for lane in new}
+        if new != current:
+            self._push(SetEnvelopesCommand(self.project, current, new, "Move Automation", merge_key))
+
+    def duplicate_automation_range(self, start: float, end: float, lanes: list[LaneRef]) -> None:
+        """Copy the automation between two beats to right after `end`, over what was there."""
+        def duplicate(points: Envelope) -> Envelope:
+            if not points:
+                return points
+            return automation.paste_range(points, automation.copy_range(points, start, end), end, end - start)
+        self._each_lane("Duplicate Automation", lanes, duplicate)
+
+    def set_automation_locked(self, locked: bool) -> None:
+        """Lock Envelopes: whether automation stays in place when clips move
+        (unlocked, it moves with them). A setting, not an edit: not undoable."""
+        if locked != self.project.automation_locked:
+            self.project.update_settings(automation_locked=locked)
+
+    # View state: what the arrangement shows of each owner's automation. Saved with
+    # the project, but not undoable (like track heights).
+
+    def _update_view(self, owner: str, **changes) -> None:
+        view = self.project.automation_view(owner)
+        new = replace(view, **changes)
+        if new != view:
+            self.project.set_automation_view(owner, new)
+
+    def default_automation_key(self, owner: str) -> str:
+        """What a lane shows when nothing was chosen: the first automated target, else the volume."""
+        return next(iter(self.project.automation(owner)), MIXER_VOLUME)
+
+    def show_automation(self, owner: str, key: str | None = None) -> None:
+        """Show an owner's automation, with `key` (if given) in its main lane."""
+        view = self.project.automation_view(owner)
+        self._update_view(owner, shown=True, key=key or view.key or self.default_automation_key(owner))
+
+    def hide_automation(self, owner: str) -> None:
+        self._update_view(owner, shown=False)
+
+    def toggle_all_automation(self) -> bool:
+        """Show every track's (and the master's) automation, or hide it all if all
+        of it shows. Returns whether it shows now."""
+        owners = self.project.owners()
+        show = not all(self.project.automation_view(o).shown for o in owners)
+        for owner in owners:
+            if show:
+                self.show_automation(owner)
+            else:
+                self.hide_automation(owner)
+        return show
+
+    def add_automation_lane(self, owner: str) -> None:
+        """Another lane below the owner's main lane: the first automated target not
+        shown yet (else the first mixer control not shown)."""
+        view = self.project.automation_view(owner)
+        shown = {view.key, *view.lanes}
+        candidates = [*self.project.automation(owner), MIXER_VOLUME, MIXER_PAN]
+        key = next((k for k in candidates if k not in shown), candidates[0])
+        self._update_view(owner, shown=True, key=view.key or self.default_automation_key(owner),
+                          lanes=view.lanes + (key,))
+
+    def set_automation_lane(self, owner: str, index: int, key: str) -> None:
+        """Show `key` in lane `index` (-1: the main lane)."""
+        view = self.project.automation_view(owner)
+        if index < 0:
+            self._update_view(owner, shown=True, key=key)
+        elif index < len(view.lanes):
+            self._update_view(owner, lanes=view.lanes[:index] + (key,) + view.lanes[index + 1:])
+
+    def remove_automation_lane(self, owner: str, index: int) -> None:
+        view = self.project.automation_view(owner)
+        if 0 <= index < len(view.lanes):
+            self._update_view(owner, lanes=view.lanes[:index] + view.lanes[index + 1:])
+
+    def reset_automation_view(self, owner: str) -> None:
+        self._update_view(owner, **vars(AutomationView()))

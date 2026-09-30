@@ -31,6 +31,10 @@ class ClipGesture:
         """Where to draw the time selection while dragging it, if it is being moved."""
         return None
 
+    def readout(self) -> tuple[QPointF, str] | None:
+        """A value to show next to what is being dragged, and where."""
+        return None
+
     def move(self, pos: QPointF, modifiers) -> None: ...
 
     def finish(self) -> None: ...

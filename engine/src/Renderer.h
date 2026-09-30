@@ -11,6 +11,12 @@
 // around in is processed in two parts. Tracks whose devices add less latency
 // than the slowest track are delayed to line up with it, and so is the
 // metronome, so the output lags the timeline by the snapshot's maxLatency.
+//
+// Automation: before each stretch a processor processes, the renderer hands it
+// its automated parameters' values over the stretch (Processor::automate): the
+// value at the start, then wherever it changes, every kAutomationStep samples
+// along a slope and at each breakpoint. Automated volume and pan are followed
+// sample by sample. While stopped, automated values follow the playhead.
 
 #include <array>
 #include <cstdint>
@@ -38,7 +44,7 @@ public:
     // Renders the timeline from the current position into interleaved stereo.
     // Never publishes meters or plays the preview; looping and the metronome
     // are opt-in (exports leave them off).
-    void renderOffline(const RenderSnapshot& snap, SharedState& shared, float* outStereo, int64_t frames,
+    void renderOffline(const RenderSnapshot& snap, float* outStereo, int64_t frames,
                        bool loop = false, bool metronome = false) noexcept;
 
     // Transport state. Only one thread drives a renderer at a time: the audio
@@ -66,6 +72,8 @@ public:
     void setDelayLines(const std::vector<std::shared_ptr<DelayLine>>* lines) noexcept { delayOverride_ = lines; }
 
 private:
+    static constexpr int kAutomationStep = 64;  // samples between a slope's values for processors
+
     struct ChunkFlags {
         bool live;  // smooth parameter changes and publish meters
         bool loop;
@@ -98,9 +106,16 @@ private:
     static constexpr int kMaxEvents = 1024;      // per track and block
     static constexpr int kMaxPreviewNotes = 256;
 
-    void renderChunk(const RenderSnapshot& snap, SharedState& shared, int frames, ChunkFlags flags) noexcept;
+    void renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept;
     void processInserts(const TrackRender& track, ProcessContext& context, int64_t chunkStart, int frames,
                         double samplesPerBeat) noexcept;
+    void automateInsert(const AutomationRender& lane, int64_t position, int length, bool moving) noexcept;
+    // Volume and pan (automated or not), in place; live renders also smooth and meter.
+    void applyFader(const RenderSnapshot& snap, TrackParams& params, const AutomationRender& volume,
+                    const AutomationRender& pan, bool audible, float* left, float* right, int frames,
+                    bool live) noexcept;
+    void fillLane(const AutomationRender& lane, int frames, float* out) const noexcept;
+    static int64_t automationTime(int64_t t, int latency) noexcept { return t > latency ? t - latency : 0; }
     void renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade,
                      const WarpVoiceSet& voices) noexcept;
     WarpVoice* acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept;
@@ -120,6 +135,7 @@ private:
 
     std::vector<float> trackLeft_, trackRight_, masterLeft_, masterRight_;
     std::vector<float> warpLeft_, warpRight_;  // one warped clip's audio, before gain and fades
+    std::vector<float> autoGain_, autoPanLeft_, autoPanRight_;  // automated fader, per sample
     const WarpVoiceSet* voiceOverride_ = nullptr;
     const std::vector<std::shared_ptr<DelayLine>>* delayOverride_ = nullptr;
     uint64_t blockCounter_ = 1;  // stamps voice use; 0 means "never used"
@@ -141,8 +157,6 @@ private:
     int numPreviewNotes_ = 0;
 
     Metronome metronome_;
-    SmoothedValue masterGain_;
-    bool masterNeedsSnap_ = true;
 
     uint32_t previewSerial_ = 0;
     const AudioSource* previewSource_ = nullptr;

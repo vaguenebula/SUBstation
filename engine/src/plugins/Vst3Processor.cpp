@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 #include "plugins/EditorWindow.h"
@@ -296,7 +297,12 @@ void Vst3Processor::allocateBuffers() {
     {
         std::lock_guard lock(mutex_);
         queues = std::clamp<size_t>(params_.size() + 64, 128, 4096);
+        automationIds_.clear();
+        for (const ParamMeta& meta : meta_) automationIds_.push_back(meta.id);
     }
+    automated_ = std::make_unique<std::atomic<float>[]>(automationIds_.size());
+    for (size_t i = 0; i < automationIds_.size(); ++i) automated_[i].store(std::numeric_limits<float>::quiet_NaN());
+    automationPending_.store(false);
     events_.setCapacity(kMaxEvents);
     outputEvents_.setCapacity(kMaxEvents);
     inputChanges_.setCapacity(queues);
@@ -336,6 +342,16 @@ void Vst3Processor::process(const ProcessContext& ctx, float* const* channels, i
     buildEvents(ctx);
     ParamChange change;
     while (toAudio_.pop(change)) inputChanges_.add(change.id, 0, change.value);
+    const ParamAutomation* changes = automation();
+    const size_t numChanges = numAutomation();
+    for (size_t i = 0; i < numChanges; ++i) {
+        const auto index = static_cast<size_t>(changes[i].index);
+        if (index >= automationIds_.size()) continue;
+        inputChanges_.add(automationIds_[index], std::clamp<int32>(changes[i].sampleOffset, 0, numFrames - 1),
+                          changes[i].value);
+        automated_[index].store(changes[i].value, std::memory_order_relaxed);
+    }
+    if (numChanges > 0) automationPending_.store(true, std::memory_order_release);
     fillContext(ctx);
 
     float* left = channels[0];
@@ -448,8 +464,6 @@ void Vst3Processor::buildEvents(const ProcessContext& ctx) {
             case ProcessEvent::Type::Midi:
                 addMidi(in);
                 break;
-            case ProcessEvent::Type::ParamChange:
-                break;  // automation is not implemented yet
         }
     }
 }
@@ -649,10 +663,16 @@ std::string Vst3Processor::paramText(int index, float value) const {
 void Vst3Processor::beginEdit(ParamID id) {
     std::lock_guard lock(mutex_);
     const int index = indexOf(id);
-    if (index >= 0) gestures_[id] = {++gestureCounter_, values_[index].load()};
+    if (index < 0) return;
+    gestures_[id] = {++gestureCounter_, values_[index].load()};
+    ProcessorEvent event;  // clicking a control, before it changes anything: its automation shows
+    event.type = ProcessorEvent::Type::ParamTouched;
+    event.paramIndex = index;
+    pending_.push_back(event);
 }
 
 void Vst3Processor::performEdit(ParamID id, ParamValue value) {
+    if (syncingAutomation_.load()) return;  // an echo of the automated value we just gave it
     toAudio_.push(id, value);
     std::lock_guard lock(mutex_);
     const int index = indexOf(id);
@@ -696,8 +716,9 @@ bool Vst3Processor::idle() {
         pushEvent({ProcessorEvent::Type::EditorClosed});
     }
 
-    // Output parameters: the controller shows what the processor reports.
-    bool changed = false;
+    // Output parameters: the controller shows what the processor reports; and
+    // what automation did.
+    bool changed = applyAutomatedValues();
     ParamChange change;
     while (fromAudio_.pop(change)) {
         {
@@ -742,6 +763,30 @@ bool Vst3Processor::idle() {
     }
     if (changed) pushEvent({ProcessorEvent::Type::ParamsChanged});
     return latencyChanged;
+}
+
+bool Vst3Processor::applyAutomatedValues() {
+    if (!automationPending_.exchange(false, std::memory_order_acquire)) return false;
+    std::vector<std::pair<ParamID, ParamValue>> updates;
+    {
+        std::lock_guard lock(mutex_);
+        // automated_ and meta_ index the same list: the buffers are set up after every parameter rebuild.
+        const size_t count = std::min(automationIds_.size(), meta_.size());
+        for (size_t i = 0; i < count; ++i) {
+            const float value =
+                automated_[i].exchange(std::numeric_limits<float>::quiet_NaN(), std::memory_order_relaxed);
+            if (std::isnan(value)) continue;
+            values_[i].store(toPlain(value, meta_[i].steps));
+            updates.emplace_back(meta_[i].id, value);
+        }
+    }
+    // Without the lock: the plug-in may call us back.
+    if (controller_) {
+        syncingAutomation_.store(true);
+        for (const auto& [id, value] : updates) controller_->setParamNormalized(id, value);
+        syncingAutomation_.store(false);
+    }
+    return !updates.empty();
 }
 
 // ---------------------------------------------------------------------------

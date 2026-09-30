@@ -1,6 +1,7 @@
 """Rotary knob: drag vertically, Shift for fine control, double-click resets.
 With `log_scale` (for frequencies and times) it moves evenly in log(value);
-with `step` it only takes multiples of it (from the minimum)."""
+with `step` it only takes multiples of it (from the minimum). A dot in its
+corner marks it automated (red) or its automation overridden (grey)."""
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import QWidget
 
 from ... import theme
 
+AUTOMATION_COLORS = {"on": "#ff4a3d", "off": "#8c8c8c"}  # automated / automation overridden
 START_ANGLE = 225.0  # degrees, Qt convention (0 = 3 o'clock, counter-clockwise)
 SPAN = 270.0
 
@@ -35,6 +37,7 @@ class Knob(QWidget):
         self._format = formatter or (lambda v: f"{v:.2f}")
         self._color = QColor(color)
         self._drag: tuple[float, float, object] | None = None
+        self._automation: str | None = None
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMinimumSize(22, 22)
         self._update_tooltip()
@@ -62,6 +65,15 @@ class Knob(QWidget):
         if self._log:
             return self._min * (self._max / self._min) ** fraction
         return self._min + fraction * (self._max - self._min)
+
+    def automation(self) -> str | None:
+        return self._automation
+
+    def set_automation(self, state: str | None) -> None:
+        """None, "on" (automated) or "off" (automation overridden)."""
+        if state != self._automation:
+            self._automation = state
+            self.update()
 
     def set_formatter(self, formatter: Callable[[float], str]) -> None:
         self._format = formatter
@@ -104,6 +116,7 @@ class Knob(QWidget):
         p.setPen(QPen(QColor(theme.TEXT), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         p.drawLine(QPointF(center.x() + math.cos(angle) * radius * 0.3,
                            center.y() - math.sin(angle) * radius * 0.3), tip)
+        draw_automation_dot(p, self._automation, QPointF(self.width() - 3.5, 3.5))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -127,3 +140,14 @@ class Knob(QWidget):
         notches = event.angleDelta().y() / 120.0
         self._set_from_user(self._from_fraction(self._fraction(self._value) + notches / 50.0), object())
         event.accept()
+
+
+def draw_automation_dot(p: QPainter, state: str | None, at: QPointF) -> None:
+    if state is None:
+        return
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(AUTOMATION_COLORS[state]))
+    p.drawEllipse(at, 2.5, 2.5)
+    p.restore()

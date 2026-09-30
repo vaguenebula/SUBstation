@@ -45,21 +45,7 @@ const std::vector<ParamInfo>& infos() {
 
 }  // namespace
 
-SynthProcessor::SynthProcessor() {
-    for (int i = 0; i < NumParams; ++i) values_[i].store(infos()[i].defaultValue);
-}
-
-const std::vector<ParamInfo>& SynthProcessor::params() const { return infos(); }
-
-float SynthProcessor::getParam(int index) const {
-    return index >= 0 && index < NumParams ? values_[index].load() : 0.f;
-}
-
-void SynthProcessor::setParam(int index, float value) {
-    if (index < 0 || index >= NumParams) return;
-    const auto& info = infos()[index];
-    values_[index].store(std::clamp(value, info.minValue, info.maxValue));
-}
+SynthProcessor::SynthProcessor() : BuiltinProcessor(infos()) {}
 
 void SynthProcessor::prepare(double sampleRate, int maxBlockSize) {
     sampleRate_ = sampleRate;
@@ -182,7 +168,7 @@ void SynthProcessor::renderVoices(int from, int to, Waveform wave, const Envelop
     }
 }
 
-void SynthProcessor::process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) {
+void SynthProcessor::render(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) {
     const bool silent = ctx.inEvents.count == 0 &&
                         std::none_of(voices_.begin(), voices_.end(), [](const Voice& voice) { return voice.active; });
     if (silent) {  // nothing playing: skip the work, and start the next note at the current settings

@@ -27,6 +27,7 @@
 
 #include "AudioDevice.h"
 #include "AudioSource.h"
+#include "Automation.h"
 #include "Processor.h"
 #include "Renderer.h"
 #include "Snapshot.h"
@@ -141,7 +142,17 @@ public:
     void setTrackMute(uint32_t trackId, bool mute);
     void setTrackSolo(uint32_t trackId, bool solo);
     void setMasterGain(float gain);
+    void setMasterPan(float pan);
     std::vector<MeterReading> takeMeters();
+
+    // --- Automation -------------------------------------------------------------
+    // Replaces the automation of a track (trackId 0: the master): an envelope per
+    // target, either a mixer control (processorId 0, param "volume" or "pan") or
+    // a parameter (by id) of one of the track's devices. Envelopes of devices
+    // that are gone, or parameters they don't have, are kept but not played.
+    // A target automated here follows its envelope; its own value (set above)
+    // counts again once its envelope is taken away.
+    void setTrackAutomation(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes);
 
     // --- Devices on tracks (insert chain) ------------------------------------
     uint32_t addBuiltinProcessor(uint32_t trackId, const std::string& type, int index);
@@ -210,6 +221,7 @@ private:
         std::vector<NoteDesc> notes;
         std::vector<std::shared_ptr<Processor>> inserts;
         std::shared_ptr<DelayLine> delay;   // delay compensation, kept across snapshots
+        std::vector<AutomationLaneDesc> automation;
     };
 
     void audioCallback(const AudioIO& io) noexcept override;
@@ -234,6 +246,11 @@ private:
                               std::vector<std::shared_ptr<DelayLine>>& delays, double startBeat);
     void resetProcessorsLocked();
     void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
+    // The snapshot's envelopes for a track (or the master: no inserts), in samples.
+    void buildAutomationLocked(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes,
+                               const std::vector<std::shared_ptr<Processor>>& inserts, int faderLatency,
+                               double samplesPerBeat, std::vector<AutomationRender>& processorLanes,
+                               AutomationRender& volume, AutomationRender& pan);
     static std::string sourceKey(const std::string& path);
 
     mutable std::recursive_mutex mutex_;
@@ -263,6 +280,8 @@ private:
 
     std::vector<TrackModel> tracks_;
     uint32_t nextTrackId_ = 1;
+    std::shared_ptr<TrackParams> master_ = std::make_shared<TrackParams>();
+    std::vector<AutomationLaneDesc> masterAutomation_;
     std::unordered_map<uint32_t, std::pair<uint32_t, std::shared_ptr<Processor>>> processors_;  // id -> track, processor
     uint32_t nextProcessorId_ = 1;
     // Removed processors wait here until no snapshot uses them, so that they are

@@ -188,6 +188,20 @@ def test_an_effect_processes_the_track(engine, uids, dc_wav):
     np.testing.assert_allclose(engine.render_offline(0.0, 1000), 0.5)
 
 
+def test_automation_reaches_the_plugin_and_its_controller(engine, uids, dc_wav):
+    track = clip_track(engine, dc_wav)
+    effect = engine.add_plugin_processor(track, "VST3", PLUGINS, uids["GIL Test Effect"])
+    engine.take_processor_events()
+    engine.set_track_automation(track, [ge.AutomationLane(effect, str(FX_GAIN), [ge.AutomationPoint(0.0, 0.25)])])
+    np.testing.assert_allclose(engine.render_offline(0.0, 1000), 0.25)  # automated, as if set to 0.25
+    engine.idle()  # the automated value reaches the controller (the plug-in's editor) and the UI
+    assert engine.processor_param(effect, FX_GAIN) == pytest.approx(0.25)
+    assert ge.ProcessorEventType.PARAMS_CHANGED in [e.type for e in engine.take_processor_events()]
+    engine.set_track_automation(track, [])
+    engine.set_processor_param(effect, FX_GAIN, 0.5)
+    np.testing.assert_allclose(engine.render_offline(0.0, 1000), 0.5)
+
+
 def test_a_mono_plugin_on_a_stereo_track(engine, uids, make_wav):
     wav = make_wav(np.tile([0.5, 0.25], (SAMPLE_RATE, 1)))
     track = clip_track(engine, wav)

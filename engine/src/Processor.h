@@ -7,7 +7,9 @@
 // or the thread rendering offline). Everything else is called from the main
 // (UI) thread, as plug-in formats require, unless noted.
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -19,12 +21,11 @@ namespace gil {
 // sends each track's notes to every processor on the track (audio effects
 // ignore them), sorted by sample offset, note-offs before note-ons at the same
 // offset. Plug-in adapters translate these to their format's events.
+// (Automation reaches each processor separately: see Processor::automate().)
 struct ProcessEvent {
-    enum class Type : uint8_t { NoteOn, NoteOff, Midi, ParamChange };
+    enum class Type : uint8_t { NoteOn, NoteOff, Midi };
     Type type = Type::Midi;
     int32_t sampleOffset = 0;
-    int32_t param = 0;
-    float value = 0.f;
     // NoteOn/NoteOff: data[0] is the key (0-127, 60 = C3), data[1] the velocity
     // (1-127; 0 for note-offs), data[2] the MIDI channel. Midi: the raw bytes.
     uint8_t data[4] = {};
@@ -71,6 +72,12 @@ struct ProcessContext {
     EventList inEvents;
 };
 
+// A parameter, whatever kind of processor it belongs to. Its values are plain
+// (in its own units, from minValue to maxValue). Automation, and anything else
+// that treats all parameters alike, works on normalized values (0..1), which
+// toNormalized()/fromNormalized() map to and from plain ones: evenly, or in
+// log(value) for logScale parameters, or in whole steps for discrete ones (the
+// way VST3 maps its stepped parameters, so plug-in values round-trip).
 struct ParamInfo {
     std::string id;
     std::string name;
@@ -84,6 +91,44 @@ struct ParamInfo {
     bool automatable = true;
     bool readOnly = false;                 // set by the processor itself (a meter or a display)
     bool hidden = false;                   // not for a generic editor (e.g. a plug-in's own bypass)
+
+    // The number of steps between the lowest and highest value of a discrete
+    // parameter (a list, or whole values); 0 for a continuous one.
+    int stepCount() const noexcept {
+        if (steps > 0) return steps;
+        if (!valueLabels.empty()) return std::max(1, static_cast<int>(valueLabels.size()) - 1);
+        return 0;
+    }
+    bool isLog() const noexcept { return logScale && minValue > 0.f && maxValue > minValue; }
+
+    float toNormalized(float plain) const noexcept {
+        const float range = maxValue - minValue;
+        if (!(range > 0.f)) return 0.f;
+        if (const int count = stepCount(); count > 0) {
+            const auto last = static_cast<float>(count);
+            return std::clamp(std::round(plain - minValue), 0.f, last) / last;
+        }
+        plain = std::clamp(plain, minValue, maxValue);
+        if (isLog()) return std::log(plain / minValue) / std::log(maxValue / minValue);
+        return (plain - minValue) / range;
+    }
+    float fromNormalized(float normalized) const noexcept {
+        normalized = std::clamp(normalized, 0.f, 1.f);
+        if (const int count = stepCount(); count > 0) {
+            const auto last = static_cast<float>(count);
+            return minValue + std::min(last, std::floor(normalized * (last + 1.f)));
+        }
+        if (isLog()) return minValue * std::pow(maxValue / minValue, normalized);
+        return minValue + normalized * (maxValue - minValue);
+    }
+};
+
+// A change the host's automation makes to a parameter within a process() call.
+struct ParamAutomation {
+    int32_t sampleOffset = 0;
+    int32_t index = 0;   // the parameter
+    float value = 0.f;   // normalized (ParamInfo::fromNormalized gives its plain value)
+    uint32_t order = 0;  // when it was handed over; sorting by time keeps each parameter's changes in order
 };
 
 // Something a processor reports to the UI. Collected on the main thread.
@@ -96,9 +141,10 @@ struct ProcessorEvent {
         EditorRequested,   // the plug-in asks for its editor to be opened
         StateDirty,        // the plug-in's state changed in a way no parameter shows
         LatencyChanged,
+        ParamTouched,      // the user took hold of a parameter in the plug-in's editor (paramIndex)
     };
     Type type = Type::ParamsChanged;
-    int paramIndex = -1;  // ParamEdited: which parameter,
+    int paramIndex = -1;  // ParamEdited, ParamTouched: which parameter,
     float value = 0.f;    // its new value
     float oldValue = 0.f; // and its value before the edit (or before the gesture started)
     uint32_t gesture = 0; // edits of one gesture (a knob drag) share this; 0: a single edit
@@ -168,9 +214,34 @@ public:
     void requestReset() noexcept { resetRequested_.store(true, std::memory_order_release); }
     bool takeResetRequest() noexcept { return resetRequested_.exchange(false, std::memory_order_acquire); }
 
+    // --- Automation (rendering thread) -------------------------------------
+    // Before each process() call the renderer hands the processor what its
+    // automation does during that call: parameter `index` goes to the normalized
+    // `value` at `sampleOffset`, in time order for each parameter (at least the
+    // value at offset 0 for every automated parameter). After the call it clears
+    // them. Applying them is up to the processor: built-in devices split their
+    // blocks where values change (BuiltinProcessor), plug-ins hand them on to the
+    // plug-in (sample-accurately in VST3). Processors nested in others (the
+    // devices in a rack) get theirs directly, wherever they sit.
+    static constexpr size_t kMaxAutomation = 2048;  // per call; the rest is dropped
+    bool automate(int index, float value, int32_t sampleOffset) noexcept {
+        if (numAutomation_ >= automation_.size()) return false;
+        automation_[numAutomation_] = {sampleOffset, index, value, static_cast<uint32_t>(numAutomation_)};
+        ++numAutomation_;
+        return true;
+    }
+    void clearAutomation() noexcept { numAutomation_ = 0; }
+
+protected:
+    // In process(): the automation for this call (processors may sort it).
+    ParamAutomation* automation() noexcept { return automation_.data(); }
+    size_t numAutomation() const noexcept { return numAutomation_; }
+
 private:
     std::atomic<bool> enabled_{true};
     std::atomic<bool> resetRequested_{false};
+    std::vector<ParamAutomation> automation_ = std::vector<ParamAutomation>(kMaxAutomation);
+    size_t numAutomation_ = 0;
 };
 
 }  // namespace gil

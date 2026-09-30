@@ -22,6 +22,7 @@ from .. import APP_NAME, __version__
 from .. import _engine as ge
 from ..audio.engine_bridge import EngineBridge
 from ..audio.settings import AudioSettings
+from ..model import automation
 from ..model.editor import ProjectEditor, is_instrument
 from ..model.project import PLUGIN_KIND, PluginRef, Project
 from ..model.serialization import (
@@ -91,10 +92,14 @@ class MainWindow(QMainWindow):
         self.selection.changed.connect(lambda: self.bridge.show_plugin_editors(self.selection.track_id))
         self.editor.plugin_added.connect(self._plugin_added)
         self.bridge.plugin_param_edited.connect(self._plugin_param_edited)
+        self.bridge.plugin_param_touched.connect(
+            lambda track_id, device_id, param_id: self.editor.touch_parameter(
+                track_id, automation.device_key(device_id, param_id)))
         self.bridge.plugin_state_dirty.connect(self.undo_stack.resetClean)
         self.transport.play_requested.connect(self.toggle_play)
         self.transport.stop_requested.connect(self.stop_button)
         self.transport.preferences_requested.connect(self.show_preferences)
+        self.transport.re_enable_requested.connect(self.bridge.re_enable_automation)
         self.undo_stack.cleanChanged.connect(self._update_title)
         self.project.reset.connect(self._update_title)
 
@@ -152,6 +157,11 @@ class MainWindow(QMainWindow):
         self._action(edit, "&Delete", self.delete_selection, [QKeySequence.StandardKey.Delete, "Backspace"])
         self._action(edit, "Select &All", self.select_all, QKeySequence.StandardKey.SelectAll)
         edit.addSeparator()
+        self.re_enable_action = self._action(edit, "Re-Enable Automation", lambda: self.bridge.re_enable_automation())
+        self.re_enable_action.setEnabled(False)
+        self.bridge.automation_state_changed.connect(
+            lambda _owner: self.re_enable_action.setEnabled(self.bridge.has_overrides))
+        edit.addSeparator()
         self._action(edit, "Play / Stop", self.toggle_play, "Space")
         self._action(edit, "Go to Start", lambda: self.locate(0.0), "Home")
         self.loop_action = self._action(edit, "Loop", self.editor.set_loop_enabled, "Ctrl+L", checkable=True)
@@ -172,6 +182,7 @@ class MainWindow(QMainWindow):
         self.devices_action = self._action(view, "&Device View", self.devices.setVisible, "Ctrl+Alt+L",
                                            checkable=True, checked=True)
         self._action(view, "&Clip View", self.arrangement.toggle_clip_view, "Shift+Tab")
+        self._action(view, "&Automation", self.editor.toggle_all_automation, "A")
         if plugin_keys.supported():
             self._action(view, "Close Plug-in &Editor", lambda: plugin_keys.close_foremost_editor(), "Ctrl+W")
         view.addSeparator()
@@ -189,6 +200,10 @@ class MainWindow(QMainWindow):
         options = bar.addMenu("&Options")
         self._action(options, "&Preferences…", self.show_preferences, "Ctrl+,")
         self._action(options, "&Rescan Plug-ins", self.browser.rescan_plugins)
+        options.addSeparator()
+        self.lock_action = self._action(options, "&Lock Envelopes", self.editor.set_automation_locked, checkable=True)
+        for signal in (self.project.settings_changed, self.project.reset):
+            signal.connect(lambda: self._sync_check(self.lock_action, self.project.automation_locked))
 
         help_menu = bar.addMenu("&Help")
         self._action(help_menu, "&About GIL Studio", self.show_about)
@@ -317,16 +332,31 @@ class MainWindow(QMainWindow):
             self.editor.delete_tracks([self.selection.track_id])
 
     def delete_selection(self) -> None:
-        if self.selection.focus == "devices":
+        selection = self.selection
+        if selection.focus == "devices":
             self.devices.delete_selected()  # not clips selected before: they aren't what the user is on
             return
-        if self.selection.time_range is not None:
-            self.arrangement.lanes.delete_area()  # (a lane range will delete automation)
-        elif self.selection.focus == "track":
+        if selection.points is not None:
+            owner, key, indices = selection.points
+            self.editor.delete_automation_points(owner, key, indices)
+            selection.select_points(owner, key, ())
+        elif selection.time_range is not None and selection.lanes:
+            self.editor.delete_automation_range(*selection.time_range[:2], list(selection.lanes))
+        elif selection.time_range is not None:
+            self.arrangement.lanes.delete_area()
+        elif selection.focus == "track":
             self.delete_track()
 
     def duplicate(self) -> None:
-        self.arrangement.lanes.duplicate_area()  # (a lane range will duplicate automation)
+        selection = self.selection
+        if selection.time_range is not None and selection.lanes:
+            start, end, track_ids = selection.time_range
+            lanes = selection.lanes
+            self.editor.duplicate_automation_range(start, end, list(lanes))
+            selection.set_time_range(end, 2 * end - start, track_ids, lanes=lanes)  # the copy
+            selection.set_insert(end)
+            return
+        self.arrangement.lanes.duplicate_area()
 
     def split(self) -> None:
         refs = sorted(self.selection.clips)

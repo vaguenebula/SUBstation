@@ -5,9 +5,9 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtCore import QCoreApplication, QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
-from . import APP_NAME, theme
+from . import APP_NAME, engine_mismatch, theme
 from . import _engine as ge
 
 
@@ -26,6 +26,10 @@ def main(argv: list[str] | None = None) -> int:
     QCoreApplication.setApplicationName(APP_NAME)
     app = QApplication(argv)
     theme.apply(app)
+    if (mismatch := engine_mismatch()) is not None:
+        print(mismatch, file=sys.stderr)
+        QMessageBox.critical(None, APP_NAME, mismatch)
+        return 1
 
     from .ui.main_window import MainWindow  # after QApplication exists
 

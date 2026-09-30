@@ -31,7 +31,6 @@ struct SharedState {
     SpscQueue<TransportCommand, 256> commands;
     SpscQueue<PreviewNote, 256> previewNotes;
     std::atomic<bool> metronome{false};
-    std::atomic<float> masterGain{1.f};
     std::atomic<const AudioSource*> previewSource{nullptr};
     std::atomic<uint32_t> previewSerial{0};
     std::atomic<float> previewGain{0.8f};
@@ -40,8 +39,6 @@ struct SharedState {
     std::atomic<bool> playing{false};
     std::atomic<int64_t> positionSamples{0};
     std::atomic<double> positionBeats{0.0};
-    std::atomic<float> masterPeakLeft{0.f};
-    std::atomic<float> masterPeakRight{0.f};
     std::atomic<bool> previewActive{false};
     std::atomic<float> cpuLoad{0.f};
     // Peak level of each open input channel (beyond this many, none).
