@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, Qt
-from PySide6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
@@ -573,3 +573,33 @@ def test_dragging_devices_scrolls_the_chain(window):
     left = bar.value()
     QTest.qWait(50)
     assert bar.value() == left and not panel.drop_marker.isVisible()
+
+
+def test_ctrl_alt_drag_scrolls_the_chain(window):
+    track = window.editor.add_audio_track()
+    window.selection.select_track(track.id)
+    for _ in range(12):
+        window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    bar = panel.scroll.horizontalScrollBar()
+    assert wait_until(lambda: bar.maximum() > 0)
+    device = track.devices[0].id
+    knob = panel.widgets[device].findChildren(QWidget)[-1]  # the press can land on a knob
+    pan = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+    left = Qt.MouseButton.LeftButton
+    local = QPointF(knob.width() / 2, knob.height() / 2)
+    start = QPointF(knob.mapToGlobal(local.toPoint()))  # the mouse's screen position; the knob moves
+
+    def send(kind, x, buttons):
+        screen = start + QPointF(x, 0)
+        QApplication.sendEvent(knob, QMouseEvent(kind, local, screen, left, buttons, pan))
+
+    send(QEvent.Type.MouseButtonPress, 0, left)
+    send(QEvent.Type.MouseMove, -150, left)  # drag left: the chain scrolls right
+    assert bar.value() == min(150, bar.maximum())
+    send(QEvent.Type.MouseMove, -50, left)
+    assert bar.value() == 50
+    send(QEvent.Type.MouseButtonRelease, -50, Qt.MouseButton.NoButton)
+    assert panel.selected == [] and QApplication.overrideCursor() is None
+    send(QEvent.Type.MouseMove, -300, Qt.MouseButton.NoButton)  # the pan is over
+    assert bar.value() == 50

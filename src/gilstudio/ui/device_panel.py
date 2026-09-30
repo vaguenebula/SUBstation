@@ -9,7 +9,8 @@ button for its own editor. Right-click a device for more (move, presets).
 
 Click a device (its title or background) to select it, Shift-click to select a
 range, Ctrl-click to add or remove one; Delete deletes the selection. Drag
-effects to reorder them (the instrument stays first).
+effects to reorder them (the instrument stays first). Ctrl+Alt-drag anywhere on
+the chain scrolls it, as in the arrangement.
 """
 
 from __future__ import annotations
@@ -18,7 +19,16 @@ import base64
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QPoint, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QMimeData,
+    QObject,
+    QPoint,
+    QSettings,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -53,6 +63,7 @@ from ..model.editor import (
     device_name,
 )
 from ..model.project import PLUGIN_KIND, Device
+from .arrangement.lanes_canvas import is_pan_modifier
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from .widgets import Knob, ToggleButton
@@ -540,6 +551,10 @@ class DevicePanel(QFrame):
         self._autoscroll = QTimer(self)
         self._autoscroll.setInterval(AUTOSCROLL_INTERVAL)
         self._autoscroll.timeout.connect(self._auto_scroll)
+        # Ctrl+Alt-drag scrolls the chain. The press usually lands on a device or a
+        # knob, so the panel watches the chain's mouse events before they do.
+        self._pan: tuple[float, int] | None = None  # (press x on screen, scroll value)
+        QApplication.instance().installEventFilter(self)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
@@ -626,6 +641,26 @@ class DevicePanel(QFrame):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._set_selected([])  # a click beside the devices
+
+    # --- Scrolling by hand -------------------------------------------------------------
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress:
+            if (event.button() == Qt.MouseButton.LeftButton and is_pan_modifier(event.modifiers())
+                    and isinstance(obj, QWidget) and self.scroll.isAncestorOf(obj)):
+                self._pan = (event.globalPosition().x(), self.scroll.horizontalScrollBar().value())
+                QApplication.setOverrideCursor(Qt.CursorShape.ClosedHandCursor)
+                return True
+        elif self._pan is not None and kind in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonRelease):
+            if kind == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.LeftButton:
+                x, value = self._pan
+                self.scroll.horizontalScrollBar().setValue(value - round(event.globalPosition().x() - x))
+            else:  # released (even if the release went elsewhere)
+                self._pan = None
+                QApplication.restoreOverrideCursor()
+            return True
+        return False
 
     # --- Reordering ------------------------------------------------------------------
 
