@@ -86,7 +86,10 @@ python -m pip install --no-build-isolation -e .    # compiles gilstudio._engine
 
 Re-run the last command after changing any C++ code (the build is incremental,
 in `build/`; it makes `gilstudio._engine` and `gilstudio._browser`). Python changes
-need no reinstall. If the newest Visual Studio
+need no reinstall. The app (and the tests) won't start with an engine built from
+older code than the Python side: they say so, and to re-run it. When Python code
+comes to need a change in `engine/src/bindings.cpp`, bump `API_VERSION` there and
+`ENGINE_API` in `src/gilstudio/__init__.py` together. If the newest Visual Studio
 causes trouble, pick another one with `$env:CMAKE_GENERATOR="Visual Studio 17 2022"`.
 
 The parts of the VST 3 SDK the engine uses are included (`engine/third_party/vst3sdk`,

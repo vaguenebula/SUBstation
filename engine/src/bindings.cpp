@@ -42,6 +42,9 @@ NB_MODULE(_engine, m) {
     // Qt/PySide can keep engine objects alive until interpreter teardown; that
     // is harmless, so don't print nanobind's leak report at exit.
     nb::set_leak_warnings(false);
+    // Bumped whenever the Python code comes to depend on a change here; the app
+    // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
+    m.attr("API_VERSION") = 2;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
 

@@ -10,13 +10,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
 import pytest
 
-from gilstudio import _engine
+from gilstudio import _engine, engine_mismatch
 
 SAMPLE_RATE = 48000  # the engine's rate when no device is open
 
 # The VST3 test plug-ins, built with the engine (tests/vst3_plugins). The tests see
 # only these, never the plug-ins installed on the computer, and keep their own scan cache.
 TEST_PLUGINS = Path(_engine.__file__).parent / "_testplugins" / "GILTestPlugins.vst3"
+
+if (_mismatch := engine_mismatch()) is not None:  # the tests would fail in confusing ways
+    pytest.exit(_mismatch, returncode=1)
 os.environ["GILSTUDIO_VST3_PATH"] = str(TEST_PLUGINS.parent)
 os.environ["GILSTUDIO_PLUGIN_CACHE"] = str(Path(tempfile.mkdtemp(prefix="gil-plugin-cache-")) / "vst3-cache.json")
 # Nor the browser's use counts or its index (each window gets its own; see `window`).

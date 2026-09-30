@@ -345,3 +345,13 @@ def test_moving_clips_by_reference_moves_their_automation(editor):
     editor.duplicate_clips([(a.id, clip)])
     assert [p.beat for p in editor.project.envelope(a.id, synth)] == [2.0, 6.0]
 
+
+
+def test_the_app_checks_the_engine_matches(monkeypatch):
+    import gilstudio
+
+    assert gilstudio.engine_mismatch() is None
+    monkeypatch.setattr(ge, "API_VERSION", gilstudio.ENGINE_API - 1)
+    assert "older code" in gilstudio.engine_mismatch() and "pip install" in gilstudio.engine_mismatch()
+    monkeypatch.delattr(ge, "API_VERSION")  # built before there was one
+    assert "older code" in gilstudio.engine_mismatch()

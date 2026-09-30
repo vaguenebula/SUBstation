@@ -556,7 +556,6 @@ class EngineBridge(QObject):
         changed: dict[tuple[str, str], None] = {}
         dirty = False
         kind = ge.ProcessorEventType
-        touched = getattr(kind, "PARAM_TOUCHED", None)  # (an engine built before it: never)
         for event in events:
             place = places.get(event.processor_id)
             if place is None:
@@ -565,7 +564,7 @@ class EngineBridge(QObject):
                 param_id = self.param_id(event.processor_id, event.param_index)
                 if param_id is not None:
                     self.plugin_param_edited.emit(*place, param_id, event.value, event.old_value, event.gesture)
-            elif touched is not None and event.type == touched:
+            elif event.type == kind.PARAM_TOUCHED:
                 param_id = self.param_id(event.processor_id, event.param_index)
                 if param_id is not None:
                     self.plugin_param_touched.emit(*place, param_id)
