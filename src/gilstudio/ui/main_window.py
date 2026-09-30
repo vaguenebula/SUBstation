@@ -88,7 +88,7 @@ class MainWindow(QMainWindow):
         self.bridge.owner_window = lambda: int(self.winId())  # plug-in editors float above this window
         # Only the selected track's plug-in editors are shown; a new plug-in shows its editor.
         self.selection.changed.connect(lambda: self.bridge.show_plugin_editors(self.selection.track_id))
-        self.editor.plugin_added = self._plugin_added
+        self.editor.plugin_added.connect(self._plugin_added)
         self.bridge.plugin_param_edited.connect(self._plugin_param_edited)
         self.bridge.plugin_state_dirty.connect(self.undo_stack.resetClean)
         self.transport.play_requested.connect(self.toggle_play)

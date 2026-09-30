@@ -187,6 +187,25 @@ def test_midi_tracks_come_with_the_synth(editor):
     assert [d.kind for d in editor.project.track(track.id).devices] == ["synth", "utility"]
 
 
+def test_move_device_goes_to_its_new_position(editor):
+    track = editor.add_midi_track()
+    synth, a, b, c = [track.devices[0].id] + [editor.add_device(track.id, "utility").id for _ in range(3)]
+
+    def chain():
+        return [d.id for d in editor.project.track(track.id).devices]
+
+    editor.move_device(track.id, a, 2)  # right
+    assert chain() == [synth, b, a, c]
+    editor.move_device(track.id, c, 1)  # left
+    assert chain() == [synth, c, b, a]
+    editor.move_device(track.id, b, 9)  # past the end
+    assert chain() == [synth, c, a, b]
+    editor.move_device(track.id, c, 0)  # not before the instrument
+    editor.move_device(track.id, synth, 3)  # which doesn't move
+    assert chain() == [synth, c, a, b]
+    assert editor.undo_stack.undoText() == "Move Device"
+
+
 def test_midi_clips_and_note_edits_are_undoable(editor):
     track = editor.add_midi_track()
     ref = editor.add_midi_clip(track.id, 4.0, 4.0)
