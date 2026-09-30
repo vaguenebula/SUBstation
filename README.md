@@ -6,12 +6,12 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 
 **What works today**
 - Arrangement timeline with any number of audio and MIDI tracks, waveforms and note previews, adaptive grid with snapping, zoom and scroll.
-- Clip editing: move (also across tracks of the same kind), Ctrl-drag to copy, trim either edge, split, duplicate, delete, rubber-band select. Dragging inside a time selection moves (or copies) just that stretch, splitting clips at its edges. Overlaps follow Ableton's rule: the clip you place wins.
+- Clip editing: move (also across tracks of the same kind), Ctrl-drag to copy, trim either edge, split, duplicate, delete. Selecting is always on the grid, which shows through the clips and runs all the way down: clicking a clip's title selects the area it covers, Shift-clicking another selects the area that fully contains both (on the tracks between too), and dragging anywhere in the lanes (or below the tracks) selects a time range; in a lane's title band it selects the clips it touches. Double-click a clip to open it in the clip view (the piano roll for MIDI). Dragging inside a time selection moves (or copies) just that stretch, splitting clips at its edges. Overlaps follow Ableton's rule: the clip you place wins.
 - Clip view (double-click a clip): for audio clips, warping, transpose/detune, clip volume and pan, for one clip or many at once. For a MIDI clip, the piano roll (below).
   - **Warp** locks a clip to the beat grid. Its audio is taken to be at the *Seg. BPM* and is stretched in real time to follow the project tempo. Turning Warp on sets Seg. BPM to the current tempo, so nothing moves until the tempo changes.
   - Warp modes: *Transients* (short stretch blocks, tight attacks), *Standard* (all-round), *Smooth* (long blocks, for pads and textures), *Formants* (Standard, keeping formants when transposing), and *Re-Pitch* (no stretching: speed and pitch change together, like a turntable). Projects saved with the earlier Ableton-style names load into the equivalent mode.
   - **Transpose/Detune** shift the pitch without changing the speed, warped or not (except in Re-Pitch).
-- MIDI tracks (Ctrl+Shift+T) come with the built-in **Synth**. Double-click empty space on a MIDI track (or press Ctrl+Shift+M) to make a MIDI clip; it opens in the piano roll.
+- MIDI tracks (Ctrl+Shift+T) come with the built-in **Synth**. To make a MIDI clip, press Ctrl+Shift+D (or use Create › Insert MIDI Clip, or right-click a MIDI track › Insert MIDI Clip): it fills the time selection, or is a bar long at the insert marker (or where you right-clicked), and opens in the piano roll.
   - A MIDI clip is a window onto its notes, like an audio clip onto its file: trimming or splitting it hides notes but never deletes them. Its length is in beats, so it doesn't change with the tempo.
   - As in Ableton, a clip plays the notes that start inside it and cuts them at its end.
 - Piano roll: keys (click to hear a key and select its notes), a ruler in the clip's own time (click to play from there), notes, and a velocity lane.
@@ -49,7 +49,8 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 ## VST3 plug-ins
 
 - **Finding them.** The browser lists the plug-ins in the standard VST3 folders (`C:\Program Files\Common Files\VST3` and `%LOCALAPPDATA%\Programs\Common\VST3`) under *Plug-ins › Instruments / Audio Effects*, with their vendor. A module with several plug-ins (an instrument and its FX version) shows each.
-  - Plug-in files are read in a separate process, several per process, so a plug-in that crashes or hangs while loading is only marked as failed (hover over *Plug-ins* for the list and the reasons). The scan runs in the background at start-up and reads only new or changed files; the results are cached in `%LOCALAPPDATA%\GIL Studio\vst3-cache.json`. *Options › Rescan Plug-ins* reads everything again.
+  - Plug-in files are read in a separate process, several per process, so a plug-in that crashes or hangs while loading is only marked as failed (hover over *Plug-ins* for the list and the reasons). The scan runs in the background at start-up and reads only new or changed files; the results are cached in `%LOCALAPPDATA%\GIL Studio\vst3-cache.json`. *Options › Rescan Plug-ins* (or the button in *Preferences › Plug-ins*) reads everything again.
+  - Besides the standard VST3 folders, plug-ins are looked for in folders of your own: add or remove them in *Options › Preferences › Plug-ins*. An added folder is scanned at once (only its new files), and a removed folder's plug-ins leave the browser.
 - **Using them.** Drag a plug-in onto a track, into the device view, or below the tracks (an instrument makes a MIDI track); or double-click it to add it to the selected track. Instruments play the MIDI clips (and the piano roll's notes) sample-accurately.
 - **The device view** shows a plug-in's parameters eight at a time (‹ › pages), with the plug-in's own text for their values (`-3.0 dB`, `Bell`); lists get a menu. Read-only and hidden parameters are left out, and the device's on/off switch stands in for the plug-in's own bypass.
   - **Edit** opens the plug-in's editor in a window of its own, which floats above the main window. It follows the plug-in's resize requests, lets you resize it within the plug-in's limits (if it can resize), and tells the plug-in when it moves to a screen with another scale.
@@ -132,7 +133,7 @@ python -m pytest
 | Stop; press again to return to the start | Stop button |
 | Go to start | Home |
 | Insert audio track / MIDI track | Ctrl+T / Ctrl+Shift+T |
-| Insert MIDI clip (on the selected MIDI track, or over a time selection) | Ctrl+Shift+M |
+| Insert MIDI clip (on the selected MIDI track, or over a time selection) | Ctrl+Shift+D (or Ctrl+Shift+M) |
 | Duplicate / split at insert marker / delete | Ctrl+D / Ctrl+E / Delete |
 | Select all clips | Ctrl+A |
 | Undo / redo | Ctrl+Z / Ctrl+Y |
@@ -148,6 +149,8 @@ python -m pytest
 | Toggle browser / device view | Ctrl+Alt+B / Ctrl+Alt+L |
 | Search everything in the browser ("All"); Enter selects the first result, Enter again adds it | Ctrl+F |
 | Export audio | Ctrl+Shift+R |
+| Show a plug-in's editor | double-click its device in the device view |
+| Close the plug-in editor in front | Ctrl+W |
 
 The Ctrl/Alt shortcuts also work while a plug-in's editor window has the focus, except Ctrl+A/C/V/X/Z/Y, which the plug-in keeps for its own text fields. Keys without Ctrl or Alt (Space, Delete, ...) go to the plug-in.
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, Signal
 
+from ...model.editor import ProjectEditor
 from ...model.project import Project
 
 GRID_MIN_PIXELS = {-2: 6.0, -1: 11.0, 0: 20.0, 1: 40.0, 2: 80.0}  # narrowest .. widest
@@ -109,12 +110,14 @@ class ViewState(QObject):
 
 
 class Selection(QObject):
-    """Selected clips, the selected track, the insert (start) marker, and a time
-    selection: a beat range spanning one or more adjacent tracks.
+    """The selected track, the insert (start) marker, and a time selection: a beat
+    range spanning one or more adjacent tracks. Selecting is always on the grid:
+    selecting a clip selects the area it covers.
 
-    A time selection made in the clips' band is a clip range: `clips` holds the
-    clips it touches (for the clip view) and Delete cuts out just that range.
-    Made lower in the lanes it is a lane range (for automation, later)."""
+    A time selection made in the clips' band (or by clicking clips) is a clip
+    range: `clips` holds the clips it touches (for the clip view) and Delete cuts
+    out just that range. Made lower in the lanes it is a lane range (for
+    automation, later)."""
 
     changed = Signal()
     insert_changed = Signal()
@@ -128,20 +131,26 @@ class Selection(QObject):
         self._range_selects_clips = False
         self.focus = "clips"  # what Delete acts on: "clips", "track" or "devices" (the device view's)
 
-    def set_clips(self, refs, track_id: str | None = None) -> None:
-        self.clips = set(refs)
+    def clear(self, track_id: str | None = None) -> None:
+        """Select nothing (on `track_id`, if given: where the insert marker shows)."""
+        self.clips = set()
         self.time_range = None
         if track_id is not None:
             self.track_id = track_id
         self.focus = "clips"
         self.changed.emit()
 
-    def toggle_clip(self, ref: tuple[str, str]) -> None:
-        self.clips ^= {ref}
-        self.time_range = None
-        self.track_id = ref[0]
-        self.focus = "clips"
-        self.changed.emit()
+    def select_clips(self, editor: ProjectEditor, refs, track_id: str | None = None) -> None:
+        """Select the grid area that fully contains these clips: from the earliest
+        start to the latest end, on every track from the first clip's to the last's."""
+        area = editor.clips_area(refs)
+        if area is None:
+            self.clear(track_id)
+            return
+        start, end, track_ids = area
+        self.set_time_range(start, end, track_ids, clips=editor.clips_in_range(start, end, track_ids))
+        if track_id is not None and track_id in track_ids:
+            self.track_id = track_id
 
     def select_track(self, track_id: str | None, focus_track: bool = False) -> None:
         self.track_id = track_id

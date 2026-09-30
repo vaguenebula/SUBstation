@@ -1,21 +1,30 @@
-"""Preferences (audio device) and export dialogs."""
+"""Preferences (audio device, plug-in folders) and export dialogs."""
 
 from __future__ import annotations
 
 import html
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
+from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +33,11 @@ from .. import _engine as ge
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
 from ..audio.settings import BUFFER_SIZES, DRIVERS, SAMPLE_RATES, AudioSettings
+from ..plugins.scanner import standard_paths
+from ..plugins.settings import custom_folders, set_custom_folders
+
+if TYPE_CHECKING:
+    from .browser.file_index import PluginIndex
 
 NO_ASIO = ("This build has no ASIO support: unzip Steinberg's ASIO SDK into the project folder "
            "and build again (see the README).")
@@ -57,11 +71,12 @@ def output_choices(names: list[str]) -> list[tuple[str, tuple[int, ...]]]:
 
 
 class PreferencesDialog(QDialog):
-    """Audio preferences. Changes apply at once: what a device offers (its
-    sample rates, buffer sizes and channels, its driver's own settings) is only
-    known while it is open."""
+    """Audio and plug-in preferences. Changes apply at once: what a device offers
+    (its sample rates, buffer sizes and channels, its driver's own settings) is
+    only known while it is open."""
 
-    def __init__(self, bridge: EngineBridge, parent: QWidget | None = None):
+    def __init__(self, bridge: EngineBridge, parent: QWidget | None = None,
+                 plugins: PluginIndex | None = None):
         super().__init__(parent)
         self.setWindowTitle("Preferences")
         self.setMinimumWidth(500)
@@ -104,9 +119,19 @@ class PreferencesDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
 
+        audio = QWidget()
+        audio_layout = QVBoxLayout(audio)
+        audio_layout.addLayout(self.form)
+        audio_layout.addWidget(self.status)
+        audio_layout.addStretch(1)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(audio, "Audio")
+        self.plugins = PluginsPage(plugins) if plugins is not None else None
+        if self.plugins is not None:
+            self.tabs.addTab(self.plugins, "Plug-ins")
+
         layout = QVBoxLayout(self)
-        layout.addLayout(self.form)
-        layout.addWidget(self.status)
+        layout.addWidget(self.tabs)
         layout.addWidget(buttons)
 
         self.driver.currentIndexChanged.connect(self._driver_chosen)
@@ -281,6 +306,123 @@ class PreferencesDialog(QDialog):
             self.setEnabled(True)
         if not shown:
             self._refresh("The driver has no settings dialog of its own.")
+
+
+def _same_folder(a: str | Path, b: str | Path) -> bool:
+    return os.path.normcase(os.path.normpath(str(a))) == os.path.normcase(os.path.normpath(str(b)))
+
+
+class PluginsPage(QWidget):
+    """Where VST3 plug-ins are looked for, and rescanning them. Folders added or
+    removed apply at once: only the new files are read, and a removed folder's
+    plug-ins leave the browser."""
+
+    def __init__(self, index: PluginIndex, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.index = index
+        self.folders = QListWidget()
+        self.folders.setToolTip("Plug-ins are looked for in these folders and the folders inside them.")
+        self.add_button = QPushButton("Add Folder…")
+        self.remove_button = QPushButton("Remove")
+        self.rescan_button = QPushButton("Rescan Plug-ins")
+        self.rescan_button.setToolTip("Read every plug-in file again, also those that could not be read before.")
+        self.scan_status = QLabel()
+        self.scan_status.setWordWrap(True)
+        self.scan_status.setStyleSheet(f"color: {theme.TEXT_DIM};")
+
+        folder_buttons = QHBoxLayout()
+        folder_buttons.setContentsMargins(0, 0, 0, 0)
+        folder_buttons.addWidget(self.add_button)
+        folder_buttons.addWidget(self.remove_button)
+        folder_buttons.addStretch(1)
+        scan_row = QHBoxLayout()
+        scan_row.setContentsMargins(0, 0, 0, 0)
+        scan_row.addWidget(self.rescan_button)
+        scan_row.addWidget(self.scan_status, 1)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("VST3 Folders"))
+        layout.addWidget(self.folders, 1)
+        layout.addLayout(folder_buttons)
+        layout.addSpacing(8)
+        layout.addLayout(scan_row)
+
+        self.add_button.clicked.connect(lambda: self.add_folder())
+        self.remove_button.clicked.connect(self.remove_folder)
+        self.rescan_button.clicked.connect(self.rescan)
+        self.folders.currentItemChanged.connect(self._update_buttons)
+        index.updated.connect(self._show_scan)
+        index.progress.connect(self._show_progress)
+        self._show_folders()
+        self._show_scan()
+
+    def _show_folders(self, select: str | None = None) -> None:
+        self.folders.clear()
+        for path in standard_paths():
+            item = QListWidgetItem(f"{path}  (standard)")
+            item.setForeground(QColor(theme.TEXT_DIM))
+            item.setToolTip("A standard VST3 folder: always searched.")
+            self.folders.addItem(item)
+        for folder in custom_folders():
+            item = QListWidgetItem(folder)
+            item.setData(Qt.ItemDataRole.UserRole, folder)
+            if Path(folder).is_dir():
+                item.setToolTip(folder)
+            else:
+                item.setToolTip(f"{folder}\nThis folder doesn't exist (any more).")
+                item.setForeground(QColor("#ff6b5e"))
+            self.folders.addItem(item)
+            if select is not None and _same_folder(folder, select):
+                self.folders.setCurrentItem(item)
+        self._update_buttons()
+
+    def _update_buttons(self) -> None:
+        item = self.folders.currentItem()
+        self.remove_button.setEnabled(item is not None and item.data(Qt.ItemDataRole.UserRole) is not None)
+
+    def add_folder(self, folder: str | None = None) -> None:
+        """Adds a folder (asks which if none is given) and scans it."""
+        if not folder:
+            folder = QFileDialog.getExistingDirectory(self, "Add VST3 Folder", str(Path.home()))
+        if not folder:
+            return
+        folder = str(Path(folder))
+        folders = custom_folders()
+        if not any(_same_folder(folder, f) for f in [*standard_paths(), *folders]):
+            set_custom_folders([*folders, folder])
+            self.index.scan()  # reads only the new folder's files
+        self._show_folders(select=folder)
+
+    def remove_folder(self) -> None:
+        item = self.folders.currentItem()
+        folder = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if folder is None:
+            return
+        set_custom_folders([f for f in custom_folders() if not _same_folder(f, folder)])
+        self._show_folders()
+        self.index.scan()  # its plug-ins leave the browser
+
+    def rescan(self) -> None:
+        """Reads every plug-in file again (also those that failed before)."""
+        self.index.scan(rescan=True)
+
+    def _show_progress(self, done: int, total: int, path: str) -> None:
+        self.scan_status.setText(f"Scanning {done + 1}/{total}: {Path(path).stem}")
+
+    def _show_scan(self) -> None:
+        index = self.index
+        self.rescan_button.setEnabled(not index.scanning)
+        if index.scanning:
+            self.scan_status.setText("Scanning plug-ins…")
+            self.scan_status.setToolTip("")
+            return
+        count = len(index.plugins)
+        text = f"{count} plug-in{'s' if count != 1 else ''} found"
+        failures = index.failures
+        if failures:
+            text += f" · {len(failures)} file{'s' if len(failures) != 1 else ''} could not be read"
+        self.scan_status.setText(text)
+        self.scan_status.setToolTip("\n".join(f"{Path(f.path).name}: {f.reason}" for f in failures[:30]))
 
 
 class ExportDialog(QDialog):

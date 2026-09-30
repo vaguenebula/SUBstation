@@ -221,6 +221,12 @@ class ProjectEditor(QObject):
                                                                            self.project.tempo)})
         return track_id, clip.id
 
+    def add_midi_clips_over(self, start_beat: float, end_beat: float, track_ids) -> list[ClipRef]:
+        """An empty MIDI clip over a time range on each MIDI track of `track_ids`."""
+        refs = [self.add_midi_clip(tid, start_beat, end_beat - start_beat) for tid in track_ids
+                if self.project.has_track(tid) and self.project.track(tid).is_midi]
+        return [ref for ref in refs if ref is not None]
+
     def midi_clip_span(self, track_id: str, beat: float, grid_step: float = 0.0) -> tuple[float, float]:
         """Where a new MIDI clip made at `beat` goes: from the grid line at or before
         it (not reaching back over the clip before), one bar long or up to the next clip."""
@@ -359,7 +365,8 @@ class ProjectEditor(QObject):
         affected: set[str] = set()
         winners: dict[str, set[str]] = {}
         dest_ids = []
-        pieces = {tid: edits.slice_range(lists[tid], start, end, tempo) for tid in track_ids}
+        # Moved clips that were wholly inside the range stay the same clips.
+        pieces = {tid: edits.slice_range(lists[tid], start, end, tempo, keep_ids=not copy_clips) for tid in track_ids}
         for tid in track_ids:
             dest = p.tracks[p.track_index(tid) + track_delta].id
             dest_ids.append(dest)
@@ -376,6 +383,20 @@ class ProjectEditor(QObject):
         if after:
             self._commit("Copy Time Selection" if copy_clips else "Move Time Selection", after)
         return start + delta_beats, dest_ids
+
+    def clips_area(self, refs) -> tuple[float, float, list[str]] | None:
+        """The grid area that fully contains these clips: the earliest start to the
+        latest end, on every track from the topmost clip's to the lowest one's.
+        None if none of them exist."""
+        p = self.project
+        by_ref = {(t.id, c.id): (i, c) for i, t in enumerate(p.tracks) for c in t.clips}
+        found = [by_ref[ref] for ref in refs if ref in by_ref]
+        if not found:
+            return None
+        rows = [i for i, _ in found]
+        start = min(c.start_beat for _, c in found)
+        end = max(c.end_beat(p.tempo) for _, c in found)
+        return start, end, [t.id for t in p.tracks[min(rows):max(rows) + 1]]
 
     def clips_in_range(self, start: float, end: float, track_ids) -> set[ClipRef]:
         """The clips on these tracks that overlap the beat range."""

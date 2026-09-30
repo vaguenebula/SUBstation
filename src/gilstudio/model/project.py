@@ -31,7 +31,7 @@ LEGACY_WARP_MODES = {"Beats": "Transients", "Tones": "Standard", "Complex": "Sta
 # Audio tracks hold audio clips; MIDI tracks hold MIDI clips and an instrument.
 TRACK_KINDS = ("audio", "midi")
 
-DEFAULT_TRACK_HEIGHT = 68
+DEFAULT_TRACK_HEIGHT = 80
 MIN_TRACK_HEIGHT = 24
 MAX_TRACK_HEIGHT = 400
 

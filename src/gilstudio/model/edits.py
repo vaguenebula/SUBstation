@@ -105,11 +105,18 @@ def fit_to_tempo(clips: list[AnyClip], tempo: float) -> list[AnyClip]:
     return result if changed else clips
 
 
-def slice_range(clips: list[AnyClip], start: float, end: float, tempo: float) -> list[AnyClip]:
-    """New clips (fresh ids) holding just the parts of `clips` between two beats."""
+def slice_range(clips: list[AnyClip], start: float, end: float, tempo: float,
+                keep_ids: bool = False) -> list[AnyClip]:
+    """New clips (fresh ids) holding just the parts of `clips` between two beats.
+    A clip wholly inside is taken as it is (with its own id if `keep_ids`)."""
     result = []
     for clip in clips:
-        piece = _piece(clip, max(start, clip.start_beat), min(end, clip.end_beat(tempo)), tempo, new_id())
+        clip_end = clip.end_beat(tempo)
+        if clip.start_beat >= start - EPS and clip_end <= end + EPS:
+            if clip.start_beat < end and clip_end > start:
+                result.append(clip if keep_ids else replace(clip, id=new_id()))
+            continue
+        piece = _piece(clip, max(start, clip.start_beat), min(end, clip_end), tempo, new_id())
         if piece is not None:
             result.append(piece)
     return result

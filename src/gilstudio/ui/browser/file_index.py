@@ -27,6 +27,7 @@ from ... import _browser
 from ...audio.engine_bridge import AUDIO_EXTENSIONS
 from ...model.project import PluginRef
 from ...plugins.scanner import PluginInfo, PluginScanner, ScanFailure
+from ...plugins.settings import plugin_folders
 from .browser_models import BrowserItem
 from .library import HALF_LIFE_DAYS, Library
 
@@ -195,13 +196,14 @@ class _PluginScanThread(QThread):
     done = Signal(list, list)  # PluginInfo, ScanFailure
     failed = Signal(str)
 
-    def __init__(self, rescan: bool, parent: QObject | None = None):
+    def __init__(self, rescan: bool, folders: list[Path], parent: QObject | None = None):
         super().__init__(parent)
         self.rescan = rescan
+        self.folders = folders
 
     def run(self) -> None:
         try:
-            result = PluginScanner().scan(rescan=self.rescan, progress=self.progress.emit,
+            result = PluginScanner(folders=self.folders).scan(rescan=self.rescan, progress=self.progress.emit,
                                           cancelled=self.isInterruptionRequested)
         except (OSError, RuntimeError) as exc:
             self.failed.emit(str(exc))
@@ -233,7 +235,7 @@ class PluginIndex(QObject):
         if self._thread is not None:
             self._again = rescan or bool(self._again)
             return
-        self._thread = _PluginScanThread(rescan, self)
+        self._thread = _PluginScanThread(rescan, plugin_folders(), self)
         self._thread.progress.connect(self.progress)
         self._thread.done.connect(self._on_done)
         self._thread.failed.connect(self.status_message)

@@ -162,7 +162,7 @@ class MainWindow(QMainWindow):
         create = bar.addMenu("&Create")
         self._action(create, "Insert Audio &Track", self.insert_track, "Ctrl+T")
         self._action(create, "Insert &MIDI Track", self.insert_midi_track, "Ctrl+Shift+T")
-        self._action(create, "Insert MIDI &Clip", self.insert_midi_clip, "Ctrl+Shift+M")
+        self._action(create, "Insert MIDI &Clip", self.insert_midi_clip, ["Ctrl+Shift+D", "Ctrl+Shift+M"])
         create.addSeparator()
         self._action(create, "Delete Selected Track", self.delete_track)
 
@@ -172,6 +172,8 @@ class MainWindow(QMainWindow):
         self.devices_action = self._action(view, "&Device View", self.devices.setVisible, "Ctrl+Alt+L",
                                            checkable=True, checked=True)
         self._action(view, "&Clip View", self.arrangement.toggle_clip_view, "Shift+Tab")
+        if plugin_keys.supported():
+            self._action(view, "Close Plug-in &Editor", lambda: plugin_keys.close_foremost_editor(), "Ctrl+W")
         view.addSeparator()
         arrangement = self.arrangement
         self._action(view, "Zoom &In", lambda: arrangement.zoom(1.4), ["+", "=", QKeySequence.StandardKey.ZoomIn])
@@ -219,7 +221,7 @@ class MainWindow(QMainWindow):
         self.show_message(f"Audio is off: {error}. Choose a device in Options > Preferences.")
 
     def show_preferences(self) -> None:
-        dialog = PreferencesDialog(self.bridge, self)
+        dialog = PreferencesDialog(self.bridge, self, plugins=self.browser.plugin_index)
         dialog.exec()
         dialog.deleteLater()
 
@@ -262,13 +264,12 @@ class MainWindow(QMainWindow):
         self.selection.select_track(track.id, focus_track=True)
 
     def insert_midi_clip(self) -> None:
-        """Ctrl+Shift+M: a MIDI clip over the time selection on each MIDI track in it,
-        or at the insert marker (a bar long) on the selected MIDI track."""
+        """Ctrl+Shift+D / Ctrl+Shift+M: a MIDI clip over the time selection on each MIDI
+        track in it, or at the insert marker (a bar long) on the selected MIDI track;
+        opened in the piano roll."""
         time_range = self.selection.time_range
         if time_range is not None:
-            start, end, track_ids = time_range
-            refs = [self.editor.add_midi_clip(tid, start, end - start) for tid in track_ids
-                    if self.project.track(tid).is_midi]
+            refs = self.editor.add_midi_clips_over(*time_range)
         else:
             track_id = self.selection.track_id
             refs = []
@@ -279,7 +280,8 @@ class MainWindow(QMainWindow):
                 refs = [self.editor.add_midi_clip(track_id, start, length)]
         refs = [ref for ref in refs if ref is not None]
         if refs:
-            self.selection.set_clips(refs, track_id=refs[0][0])
+            self.selection.select_clips(self.editor, refs, track_id=refs[0][0])
+            self.arrangement.open_clips(refs, lead=refs[0])  # straight into the piano roll
         else:
             self.show_message("Select a MIDI track (or a time range on one) to insert a MIDI clip.")
 
@@ -318,34 +320,13 @@ class MainWindow(QMainWindow):
         if self.selection.focus == "devices":
             self.devices.delete_selected()  # not clips selected before: they aren't what the user is on
             return
-        time_range = self.selection.time_range
-        if time_range is not None:
-            if self.selection.clip_range:
-                # Cut out just the selected area; the selection stays, now empty.
-                start, end, track_ids = time_range
-                self.editor.delete_range(start, end, list(track_ids))
-                self.selection.set_time_range(start, end, track_ids, clips=set())
-            return  # a lane range will delete automation
-        if self.selection.clips:
-            self.editor.delete_clips(sorted(self.selection.clips))
+        if self.selection.time_range is not None:
+            self.arrangement.lanes.delete_area()  # (a lane range will delete automation)
         elif self.selection.focus == "track":
             self.delete_track()
 
     def duplicate(self) -> None:
-        time_range = self.selection.time_range
-        if time_range is not None:
-            if self.selection.clip_range:
-                # Copy the selected area to right after it, and select the copy.
-                start, end, track_ids = time_range
-                length = end - start
-                self.editor.duplicate_range(start, end, list(track_ids))
-                self.selection.set_time_range(end, end + length, track_ids,
-                                              clips=self.editor.clips_in_range(end, end + length, track_ids))
-                self.selection.set_insert(end)
-            return  # a lane range will duplicate automation
-        if self.selection.clips:
-            refs = self.editor.duplicate_clips(sorted(self.selection.clips))
-            self.selection.set_clips(refs)
+        self.arrangement.lanes.duplicate_area()  # (a lane range will duplicate automation)
 
     def split(self) -> None:
         refs = sorted(self.selection.clips)
@@ -355,7 +336,7 @@ class MainWindow(QMainWindow):
             self.editor.split_clips(refs, self.selection.insert_beat)
 
     def select_all(self) -> None:
-        self.selection.set_clips({(t.id, c.id) for t in self.project.tracks for c in t.clips})
+        self.selection.select_clips(self.editor, [(t.id, c.id) for t in self.project.tracks for c in t.clips])
 
     def add_file_at_insert(self, path: str) -> None:
         info = self.bridge.file_info(path)
@@ -365,7 +346,7 @@ class MainWindow(QMainWindow):
         refs = self.editor.add_clips(track_id, self.selection.insert_beat, [(path, info.duration)],
                                      track_index=len(self.project.tracks))
         if refs:
-            self.selection.set_clips(refs, track_id=refs[0][0])
+            self.selection.select_clips(self.editor, refs)
 
     def _focus_search(self) -> None:
         self.activateWindow()  # from a plug-in's editor
@@ -390,7 +371,7 @@ class MainWindow(QMainWindow):
         self.undo_stack.clear()
         self.undo_stack.setClean()
         self._play_start = 0.0
-        self.selection.set_clips(set())
+        self.selection.clear()
         self.selection.select_track(None)
         self.selection.set_insert(0.0)
         self.bridge.locate(0.0)

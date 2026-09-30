@@ -1,8 +1,9 @@
 """The browser on the left: categories and places, search, preview.
 
 "All" lists everything (built-in devices, plug-ins and samples) at once; Ctrl+F
-searches there. Enter in the search field selects the first result, and Enter on a
-result adds it, as a double-click does.
+searches there. Enter or Down in the search field selects the first result, and
+Enter on a result adds it, as a double-click does. A preview stops when you click
+anywhere outside the browser.
 
 Lists are sorted by Rank (what you use most first) or Name; see search.py. An item
 counts as used when it is added to the project from here, by double-click, Enter
@@ -36,6 +37,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QDrag, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QFileDialog,
     QFileSystemModel,
@@ -136,6 +138,7 @@ class BrowserPanel(QWidget):
         self._select_first = False  # when they come (Enter was pressed before)
         self._keep: tuple | None = None  # where the list was, to go back to when they come
         self._restoring = False
+        self._previewing = False  # a preview was started and not stopped since
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search  (Ctrl+F)")
@@ -186,8 +189,9 @@ class BrowserPanel(QWidget):
         self.tree_view.dropped.connect(self._used_tree)
         self.tree_view.selectionModel().currentChanged.connect(self._tree_current_changed)
 
-        for view in (self.list_view, self.tree_view):
+        for view in (self.list_view, self.tree_view, self.search):
             view.installEventFilter(self)
+        QApplication.instance().installEventFilter(self)  # clicks elsewhere stop the preview
 
         self.content = QStackedWidget()
         self.content.addWidget(self.list_view)
@@ -479,11 +483,16 @@ class BrowserPanel(QWidget):
 
     def _preview_toggled(self, enabled: bool) -> None:
         if not enabled:
-            self.bridge.stop_preview()
+            self.stop_preview()
 
     def _maybe_preview(self, path: str) -> None:
         if self.preview.isChecked() and is_audio_file(path):
+            self._previewing = True
             self.bridge.preview_file(path)
+
+    def stop_preview(self) -> None:
+        self._previewing = False
+        self.bridge.stop_preview()
 
     def _sort_changed(self) -> None:
         QSettings().setValue("browser/sort", self.sort.currentData())
@@ -535,13 +544,29 @@ class BrowserPanel(QWidget):
             view.setFocus()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if (event.type() == QEvent.Type.KeyPress and watched in (self.list_view, self.tree_view)
+        kind = event.type()
+        if (kind == QEvent.Type.MouseButtonPress and self._previewing and watched.isWidgetType()
+                and not self._contains(watched)):
+            self.stop_preview()  # a click outside the browser
+            return False
+        if kind == QEvent.Type.KeyPress and watched is self.search and event.key() == Qt.Key.Key_Down:
+            self._select_first_result()
+            return True
+        if (kind == QEvent.Type.KeyPress and watched in (self.list_view, self.tree_view)
                 and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)):
             index = watched.currentIndex()
             if index.isValid():
                 (self._activate_list if watched is self.list_view else self._activate_tree)(index)
             return True
         return super().eventFilter(watched, event)
+
+    def _contains(self, widget: QWidget) -> bool:
+        """Whether `widget` is part of the browser, its popups (menus, the sort list) included."""
+        while widget is not None:
+            if widget is self:
+                return True
+            widget = widget.parentWidget()
+        return False
 
     def focus_search(self) -> None:
         """Search everything: switch to "All" and focus the search field."""
@@ -551,5 +576,6 @@ class BrowserPanel(QWidget):
         self.search.selectAll()
 
     def shutdown(self) -> None:
+        QApplication.instance().removeEventFilter(self)
         self.index.close()
         self.plugin_index.wait()

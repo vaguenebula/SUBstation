@@ -98,6 +98,10 @@ def test_finding_plugin_files(tmp_path, monkeypatch):
                                                              os.path.join("A", "Vendor", "Single.vst3")]
     monkeypatch.setenv("GILSTUDIO_VST3_PATH", os.pathsep.join([str(tmp_path / "A"), str(tmp_path / "B")]))
     assert search_paths() == [tmp_path / "A", tmp_path / "B"]
+    # The user's own folders come after the standard ones, each folder once.
+    assert search_paths([str(tmp_path / "C"), str(tmp_path / "a") + os.sep]) == [
+        tmp_path / "A", tmp_path / "B", tmp_path / "C"]
+    assert search_paths([str(tmp_path / "C")]) == [tmp_path / "A", tmp_path / "B", tmp_path / "C"]
     monkeypatch.setenv("GILSTUDIO_VST3_PATH", "")
     assert search_paths() == []
 

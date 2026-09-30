@@ -9,3 +9,7 @@ __pycache__/
 # Steinberg's ASIO SDK, unzipped into the project folder (not ours to publish)
 /asiosdk*/
 /ASIOSDK*/
+/ASIO-SDK*/
+/asio-sdk*/
+# Logs plug-ins write into the working folder (e.g. kiloHearts.log)
+*.log

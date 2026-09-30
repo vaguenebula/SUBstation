@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -70,7 +71,7 @@ from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from .widgets import Knob, ToggleButton
 
-PANEL_HEIGHT = 210
+PANEL_MARGIN = 8  # above and below the chain
 PARAM_COLUMNS = 2
 PARAMS_PER_PAGE = 4  # a 2×2 grid
 PARAM_WIDTH = 84
@@ -79,6 +80,7 @@ DEVICE_WIDTH = 216
 EFFECTS_HINT = "Drop audio effects here from the browser (Built-in or Plug-ins › Audio Effects)"
 INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in or Plug-ins › Instruments)"
 INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create › Insert MIDI Track)."
+MESSAGE_LINES = 4  # a plug-in's error message is cut to this; its tooltip has it all
 PRESET_FILTER = "VST3 Preset (*.vstpreset)"
 DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
 AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
@@ -284,6 +286,14 @@ class _DeviceFrame(QFrame):
             self.released.emit(self.device_id, event.modifiers())
         self._press = None
 
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.open_editor()
+        event.accept()
+
+    def open_editor(self) -> None:
+        """What double-clicking the device does: plug-ins show their own editor."""
+
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         self.menu_requested.emit(self.device_id)
         menu = QMenu(self)
@@ -306,6 +316,32 @@ class _DeviceFrame(QFrame):
 
     def refresh(self, device: Device) -> None:
         self.enabled.set_checked_silently(device.enabled)
+
+
+class _TallestDevice(_DeviceFrame):
+    """A device as tall as any gets: a knob in every slot of the page, and page
+    arrows. The device view is made to fit it, so the chain never scrolls
+    vertically, whatever the fonts and the screen's scale."""
+
+    def __init__(self, editor: ProjectEditor):
+        super().__init__("", Device(id="", kind="utility"), editor)
+        self._set_param_count(PARAMS_PER_PAGE + 1)
+
+    def _param_widget(self, n: int) -> QWidget:
+        cell, column = self._param_cell("Name")  # a knob and its readout: taller than a list
+        knob = Knob()
+        knob.setFixedSize(KNOB_SIZE, KNOB_SIZE)
+        column.addWidget(knob, 0, Qt.AlignmentFlag.AlignHCenter)
+        column.addWidget(self._readout("0.00"))
+        return cell
+
+
+def device_height(editor: ProjectEditor) -> int:
+    """The height the tallest device needs."""
+    probe = _TallestDevice(editor)
+    height = probe.minimumSizeHint().height()
+    probe.deleteLater()
+    return height
 
 
 class DeviceWidget(_DeviceFrame):
@@ -401,6 +437,9 @@ class PluginDeviceWidget(_DeviceFrame):
             message = QLabel(text)
             message.setWordWrap(True)
             message.setStyleSheet(f"color: {theme.TEXT_DIM};")
+            # A long one would make the device taller than the view.
+            message.setMaximumHeight(QFontMetrics(message.font()).lineSpacing() * MESSAGE_LINES)
+            message.setToolTip(text)
             self.body.insertWidget(self.body.indexOf(self.params) + 1, message)
         self._set_param_count(len(self.shown) if self.engine_id is not None else 0, page)
 
@@ -484,6 +523,10 @@ class PluginDeviceWidget(_DeviceFrame):
             self.bridge.close_plugin_editor(self.track_id, self.device_id)
         self.update_editor_button()
 
+    def open_editor(self) -> None:
+        if self.engine_id is not None:
+            self._toggle_editor(True)  # already open: brought to the front
+
     def add_menu_actions(self, menu: QMenu) -> None:
         loaded = self.engine_id is not None
         menu.addAction("Show Editor", lambda: self._toggle_editor(True)).setEnabled(loaded)
@@ -545,7 +588,6 @@ class DevicePanel(QFrame):
         self._pages: dict[str, int] = {}  # plug-in device id -> the parameter page it shows
         self.selected: list[str] = []  # selected device ids, in chain order
         self._anchor: str | None = None  # where a Shift-click range starts
-        self.setFixedHeight(PANEL_HEIGHT)
         self.setAcceptDrops(True)
 
         self.chain = QWidget()
@@ -582,8 +624,12 @@ class DevicePanel(QFrame):
         QApplication.instance().installEventFilter(self)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(10, PANEL_MARGIN, 10, PANEL_MARGIN)
         layout.addWidget(scroll, 1)
+        # Room for the tallest device with the horizontal scroll bar showing: no vertical scrolling.
+        bar = scroll.horizontalScrollBar()
+        bar_height = scroll.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent, None, bar)
+        self.setFixedHeight(2 * PANEL_MARGIN + device_height(editor) + bar_height)
 
         selection.changed.connect(self._on_selection)
         self.project.devices_changed.connect(self._on_devices_changed)

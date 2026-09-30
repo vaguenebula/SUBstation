@@ -28,6 +28,7 @@ from ... import theme
 from ...audio.engine_bridge import EngineBridge, is_audio_file
 from ...model.editor import BUILTIN_DEVICES, ProjectEditor, is_instrument
 from ...model.project import (
+    DEFAULT_TRACK_HEIGHT,
     MAX_TRACK_HEIGHT,
     MIN_TRACK_HEIGHT,
     PLUGIN_KIND,
@@ -39,10 +40,8 @@ from ..browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from .grid import draw_grid, draw_loop_region
 from .interactions import (
     ClipGesture,
-    MoveClipsGesture,
     MoveRangeGesture,
     PanGesture,
-    RubberBandGesture,
     TimeSelectGesture,
     TrimGesture,
 )
@@ -129,7 +128,7 @@ class LanesCanvas(QWidget):
         self.waveforms = waveforms
         self._playhead = 0.0
         self._gesture: ClipGesture | None = None
-        self._deselect_on_click: tuple[str, str] | None = None  # a Ctrl-pressed selected clip
+        self._clip_anchor: tuple[str, str] | None = None  # the last clip clicked without Shift
         self._drop_preview: tuple[int | None, float, list[tuple[str, float]]] | None = None
         self._hover_edge: tuple[str, str] | None = None  # (clip id, "left"/"right") under the mouse
         self.setAcceptDrops(True)
@@ -207,18 +206,16 @@ class LanesCanvas(QWidget):
         p.fillRect(visible, QColor(theme.EMPTY_AREA))
 
         rows = self.layout_model.visible_rows(view.scroll_y + visible.top(), view.scroll_y + visible.bottom() + 1)
-        tracks_bottom = min(float(self.height()), self.layout_model.total_height - view.scroll_y)
         for _, row in rows:
             y = row.top - view.scroll_y
             color = theme.LANE_SELECTED if row.track_id == self.selection.track_id else theme.LANE
             p.fillRect(QRectF(visible.left(), y, visible.width(), row.height), QColor(color))
-        draw_grid(p, view, visible.left(), visible.right(), max(0.0, visible.top()), tracks_bottom)
-        draw_loop_region(p, view, visible.left(), visible.right(), 0.0, tracks_bottom)
+        # The grid goes all the way down: below the tracks too, where selecting works on it as well.
+        draw_grid(p, view, visible.left(), visible.right(), visible.top(), visible.bottom() + 1)
+        draw_loop_region(p, view, visible.left(), visible.right(), 0.0, float(self.height()))
 
         gesture = self._gesture
         hidden = gesture.hidden_ids() if gesture else set()
-        # Clips touched by a clip range aren't drawn selected: only the range is.
-        whole_clips = set() if self.selection.clip_range else self.selection.clips
         for _, row in rows:
             track = self.project.track(row.track_id)
             y = row.top - view.scroll_y
@@ -230,7 +227,7 @@ class LanesCanvas(QWidget):
                     break
                 if rect.right() < visible.left():
                     continue
-                self._draw_clip(p, track.color, clip, rect, visible, (track.id, clip.id) in whole_clips)
+                self._draw_clip(p, track.color, clip, rect, visible, False)  # the selected area is tinted
             p.fillRect(QRectF(visible.left(), y + row.height - 1, visible.width(), 1), QColor(theme.BORDER))
 
         if gesture:
@@ -275,11 +272,6 @@ class LanesCanvas(QWidget):
         if visible.left() - 2 <= x <= visible.right() + 2:
             p.fillRect(QRectF(x, 0, 1, self.height()), QColor(theme.PLAYHEAD))
 
-        band = gesture.rubber_band() if gesture else None
-        if band is not None:
-            p.fillRect(band, theme.RUBBER_BAND)
-            p.setPen(QPen(QColor(theme.ACCENT), 1))
-            p.drawRect(band)
 
     def _draw_clip(self, p: QPainter, track_color: str, clip: AnyClip, rect: QRectF, visible: QRectF,
                    selected: bool, ghost: bool = False) -> None:
@@ -295,15 +287,19 @@ class LanesCanvas(QWidget):
         p.fillRect(body, body_color)
         if selected:
             p.fillRect(body, SELECTION_TINT)
+        # The grid shows through the body, faintly (under the notes and the waveform);
+        # the title bar, where the clip is grabbed, stays solid.
+        draw_grid(p, self.view, max(rect.left() + 1, visible.left()), min(rect.right() - 1, visible.right()),
+                  body.top(), body.bottom(), over_clip=True)
+        title = QRectF(rect.left(), rect.top(), rect.width(), title_h)
         if title_h:
-            title = QRectF(rect.left(), rect.top(), rect.width(), title_h)
             p.fillRect(title, base.lighter(115) if selected else base)
-            if rect.width() > 16:
-                p.setPen(QColor(theme.ACCENT_TEXT))
-                p.setFont(theme.ui_font(7.5))
-                text_rect = title.adjusted(4, 0, -3, 0)
-                name = p.fontMetrics().elidedText(clip.name, Qt.TextElideMode.ElideRight, int(text_rect.width()))
-                p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
+        if title_h and rect.width() > 16:
+            p.setPen(QColor(theme.ACCENT_TEXT))
+            p.setFont(theme.ui_font(7.5))
+            text_rect = title.adjusted(4, 0, -3, 0)
+            name = p.fontMetrics().elidedText(clip.name, Qt.TextElideMode.ElideRight, int(text_rect.width()))
+            p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
 
         source = None if isinstance(clip, MidiClip) else self.bridge.source(clip.path)
         if isinstance(clip, MidiClip):
@@ -357,7 +353,7 @@ class LanesCanvas(QWidget):
         row_index, beat, sources = self._drop_preview
         if row_index is None:
             top = self.layout_model.total_height - self.view.scroll_y
-            height = 68
+            height = DEFAULT_TRACK_HEIGHT
         else:
             row = self.layout_model.rows[row_index]
             top, height = row.top - self.view.scroll_y, row.height
@@ -386,7 +382,7 @@ class LanesCanvas(QWidget):
         hit = self.hit_clip(pos)
         if hit and hit[2] in ("left", "right"):
             track_id, clip, zone = hit
-            self.selection.set_clips({(track_id, clip.id)}, track_id=track_id)
+            self.selection.select_clips(self.editor, [(track_id, clip.id)])
             self._gesture = TrimGesture(self, track_id, clip, zone)
             return
         if self._in_clip_range(pos) and not mods & Qt.KeyboardModifier.ShiftModifier:
@@ -399,7 +395,6 @@ class LanesCanvas(QWidget):
         """A click in a clip range without dragging: select as a click anywhere else would."""
         self._click(pos, mods, hit)
         self._gesture = None
-        self._deselect_on_click = None
 
     def _in_clip_range(self, pos: QPointF) -> bool:
         """Whether `pos` is in the clip band inside the selected clip range."""
@@ -412,41 +407,28 @@ class LanesCanvas(QWidget):
 
     def _click(self, pos: QPointF, mods, hit) -> None:
         """A press that is not a trim or a drag of the time selection."""
-        additive = bool(mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
         if hit and hit[2] != "body":
+            # Selecting a clip selects the area it covers on the grid; Shift-clicking
+            # another selects the area that fully contains both (and the tracks between).
             track_id, clip, _ = hit
             ref = (track_id, clip.id)
-            self._deselect_on_click = None
-            if additive and not (mods & Qt.KeyboardModifier.ShiftModifier):
-                if ref in self.selection.clips and not self.selection.clip_range:
-                    # Ctrl-clicking a selected clip deselects it, but only once the mouse
-                    # comes up without dragging: dragging copies the whole selection instead.
-                    self._deselect_on_click = ref
-                else:
-                    self.selection.toggle_clip(ref)
-                    if ref not in self.selection.clips:
-                        return
-            elif ref not in self.selection.clips or self.selection.clip_range:
-                # (Clicking a clip inside a clip range selects just that clip.)
-                keep = self.selection.clips if additive and not self.selection.clip_range else set()
-                self.selection.set_clips({ref} | keep, track_id=track_id)
-            if self._deselect_on_click is None:
-                # Playback will start from the clicked clip, as with Ableton's start marker.
-                self.selection.set_insert(clip.start_beat)
-            refs = sorted(self.selection.clips)
-            self._gesture = MoveClipsGesture(self, pos, ref, refs)
+            if mods & Qt.KeyboardModifier.ShiftModifier and self._clip_anchor is not None:
+                self.selection.select_clips(self.editor, [self._clip_anchor, ref], track_id=track_id)
+            else:
+                self._clip_anchor = ref
+                self.selection.select_clips(self.editor, [ref])
+            # Playback will start from the selection, as with Ableton's start marker.
+            self.selection.set_insert(self.selection.time_range[0])
+            self._gesture = MoveRangeGesture(self, pos)  # dragging moves it (Ctrl: copies)
             return
 
-        index = self.row_index_at(pos.y())
-        if index is None:
-            # Below the tracks: rubber-band select whole clips.
-            if not additive:
-                self.selection.set_clips(set())
-            self._gesture = RubberBandGesture(self, pos, additive)
+        if not self.layout_model.rows:
             return
-        # Clip body or empty lane: a click sets the insert marker, a drag selects time.
+        # Clip body, empty lane or below the tracks: a click sets the insert marker,
+        # a drag selects time on the grid (from below the tracks, starting at the last one).
+        index = self.row_index_at(pos.y())
         gesture = TimeSelectGesture(self, pos, bool(mods & Qt.KeyboardModifier.AltModifier))
-        self.selection.set_clips(set(), track_id=self.layout_model.rows[index].track_id)
+        self.selection.clear(track_id=None if index is None else self.layout_model.rows[index].track_id)
         self.selection.set_insert(gesture.anchor)
         self._gesture = gesture
 
@@ -460,7 +442,7 @@ class LanesCanvas(QWidget):
     def _update_cursor(self, pos: QPointF, mods) -> None:
         if is_pan_modifier(mods):
             shape = Qt.CursorShape.OpenHandCursor
-        elif self.row_index_at(pos.y()) is None:
+        elif not self.layout_model.rows:
             shape = Qt.CursorShape.ArrowCursor
         else:
             hit = self.hit_clip(pos)
@@ -485,9 +467,6 @@ class LanesCanvas(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         gesture, self._gesture = self._gesture, None
-        ref, self._deselect_on_click = self._deselect_on_click, None
-        if ref is not None and gesture is not None and not gesture.active:
-            self.selection.toggle_clip(ref)
         if gesture:
             gesture.finish()
         self._update_cursor(event.position(), event.modifiers())
@@ -498,29 +477,52 @@ class LanesCanvas(QWidget):
             return
         hit = self.hit_clip(event.position())
         if hit is None:
-            index = self.row_index_at(event.position().y())
-            if index is not None:  # empty space on a MIDI track: make a clip there and open it
-                ref = self.insert_midi_clip(self.layout_model.rows[index].track_id, event.position().x())
-                if ref is not None:
-                    self.clip_view_requested.emit(*ref)
             return
         track_id, clip, _ = hit
         # Double-clicking one of several selected clips opens them all.
         if (track_id, clip.id) not in self.selection.clips:
-            self.selection.set_clips({(track_id, clip.id)}, track_id=track_id)
+            self.selection.select_clips(self.editor, [(track_id, clip.id)])
         self.clip_view_requested.emit(track_id, clip.id)
 
     def insert_midi_clip(self, track_id: str, x: float) -> tuple[str, str] | None:
-        """A new MIDI clip on a MIDI track where `x` is (see ProjectEditor.midi_clip_span), selected."""
+        """A new MIDI clip on a MIDI track, selected and opened in the piano roll: over
+        the time selection (on each of its MIDI tracks) if `x` is inside it, else
+        where `x` is (see ProjectEditor.midi_clip_span). The one on `track_id`."""
         if not self.project.track(track_id).is_midi:
             return None
-        step = self.view.grid_step() if self.view.snap else 0.0
-        start, length = self.editor.midi_clip_span(track_id, self.view.x_to_beat(x), step)
-        ref = self.editor.add_midi_clip(track_id, start, length)
-        if ref is not None:
-            self.selection.set_clips({ref}, track_id=track_id)
-            self.selection.set_insert(start)
+        beat = self.view.x_to_beat(x)
+        time_range = self.selection.time_range
+        if time_range is not None and track_id in time_range[2] and time_range[0] <= beat <= time_range[1]:
+            refs = self.editor.add_midi_clips_over(*time_range)
+            start = time_range[0]
+        else:
+            step = self.view.grid_step() if self.view.snap else 0.0
+            start, length = self.editor.midi_clip_span(track_id, beat, step)
+            refs = [ref for ref in [self.editor.add_midi_clip(track_id, start, length)] if ref is not None]
+        ref = next((r for r in refs if r[0] == track_id), None)
+        if ref is None:
+            return None
+        self.selection.select_clips(self.editor, refs, track_id=track_id)
+        self.selection.set_insert(start)
+        self.clip_view_requested.emit(*ref)
         return ref
+
+    def delete_area(self) -> None:
+        """Cut the clips out of the selected area; the (now empty) area stays selected."""
+        if self.selection.clip_range:
+            start, end, track_ids = self.selection.time_range
+            self.editor.delete_range(start, end, list(track_ids))
+            self.selection.set_time_range(start, end, track_ids, clips=set())
+
+    def duplicate_area(self) -> None:
+        """Copy the selected area to right after it, and select the copy."""
+        if self.selection.clip_range:
+            start, end, track_ids = self.selection.time_range
+            length = end - start
+            self.editor.duplicate_range(start, end, list(track_ids))
+            self.selection.set_time_range(end, end + length, track_ids,
+                                          clips=self.editor.clips_in_range(end, end + length, track_ids))
+            self.selection.set_insert(end)
 
     def keyPressEvent(self, event) -> None:
         self._on_modifiers(event.modifiers())
@@ -560,13 +562,13 @@ class LanesCanvas(QWidget):
         if hit:
             track_id, clip, _ = hit
             if (track_id, clip.id) not in self.selection.clips:
-                self.selection.set_clips({(track_id, clip.id)}, track_id=track_id)
+                self.selection.select_clips(self.editor, [(track_id, clip.id)])
             refs = sorted(self.selection.clips)
             split_at = self.view.snap_beat(self.view.x_to_beat(pos.x()))
             menu.addAction("Split Here", lambda: self.editor.split_clips(refs, split_at))
-            menu.addAction("Duplicate", lambda: self.selection.set_clips(self.editor.duplicate_clips(refs)))
+            menu.addAction("Duplicate", self.duplicate_area)
             menu.addSeparator()
-            menu.addAction("Delete", lambda: self.editor.delete_clips(refs))
+            menu.addAction("Delete", self.delete_area)
         else:
             index = self.row_index_at(pos.y())
             at = None if index is None else index + 1
@@ -649,7 +651,7 @@ class LanesCanvas(QWidget):
         track_id = None if index is None else self.layout_model.rows[index].track_id
         refs = self.editor.add_clips(track_id, beat, sources, track_index=len(self.project.tracks))
         if refs:
-            self.selection.set_clips(refs, track_id=refs[0][0])
+            self.selection.select_clips(self.editor, refs)
         event.acceptProposedAction()
         self.activateWindow()
         self.setFocus()

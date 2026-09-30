@@ -94,7 +94,7 @@ def test_mouse_drag_moves_clip_and_undo_restores(window, three_tracks):
 def test_edit_commands(window, three_tracks):
     project = window.project
     track = project.tracks[0]
-    window.selection.set_clips({(track.id, track.clips[0].id)}, track_id=track.id)
+    window.selection.select_clips(window.editor, {(track.id, track.clips[0].id)}, track_id=track.id)
     window.selection.set_insert(1.0)
     window.split()
     assert [round(c.start_beat, 6) for c in project.track(track.id).clips] == [0.0, 1.0]
@@ -241,6 +241,27 @@ def test_browser_indexes_and_searches(window, tmp_path):
     assert window.project.tracks[-1].clips[0].name == "Kick Deep"
 
 
+def test_down_from_search_previews_first_result_until_clicking_elsewhere(window, tmp_path, monkeypatch):
+    write_wav(tmp_path / "Kick Long.wav", tone(0.5, 60.0))
+    browser = window.browser
+    browser.index.rebuild([str(tmp_path)])
+    indexed(browser, 1)
+    previewed, stopped = [], []
+    monkeypatch.setattr(window.bridge, "preview_file", previewed.append)
+    monkeypatch.setattr(window.bridge, "stop_preview", lambda: stopped.append(True))
+    browser.search.setText("kick long")
+    QTest.keyClick(browser.search, Qt.Key.Key_Down)
+    settle(browser)
+    assert wait_until(lambda: browser.list_view.currentIndex().row() == 0)
+    assert previewed and previewed[-1].endswith("Kick Long.wav")
+    QTest.mouseClick(browser.list_view.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(200, 200))
+    assert not stopped  # clicks in the browser keep it playing
+    QTest.mouseClick(window.arrangement.lanes, Qt.MouseButton.LeftButton, pos=QPoint(50, 10))
+    assert stopped == [True]
+    QTest.mouseClick(window.arrangement.lanes, Qt.MouseButton.LeftButton, pos=QPoint(60, 10))
+    assert stopped == [True]  # nothing playing any more
+
+
 def test_find_searches_all(window, tmp_path):
     write_wav(tmp_path / "Utility Hit.wav", tone(0.2, 60.0))
     browser = window.browser
@@ -363,7 +384,7 @@ def test_ruler_loop_brace_and_scrub_zoom(window):
     assert window.bridge.position == pytest.approx(view.snap_beat(3.0))
 
 
-def test_mouse_trim_and_rubber_band(window, three_tracks):
+def test_mouse_trim_and_selecting_below_the_tracks(window, three_tracks):
     arrangement = window.arrangement
     lanes, view = arrangement.lanes, arrangement.view
     track = window.project.tracks[0]
@@ -398,9 +419,23 @@ def test_mouse_trim_and_rubber_band(window, three_tracks):
     assert lanes.hit_clip(QPointF(boundary - 2, y))[1:] == (first, "right")
     assert lanes.hit_clip(QPointF(boundary + 2, y))[1:] == (second, "left")
 
-    empty_y = arrangement.layout_model.total_height - view.scroll_y + 40  # below the tracks
-    drag(lanes, QPoint(int(view.beat_to_x(20.0)), empty_y), QPoint(int(view.beat_to_x(0.5)), 2))
-    assert len(window.selection.clips) == 4  # including the clip added above
+    # Below the tracks is grid too: a drag from there selects time on it, from the last track up,
+    # snapped like anywhere else (here ending in the first track's title band: the clips it touches).
+    tracks = window.project.tracks
+    empty_y = arrangement.layout_model.total_height - view.scroll_y + 40
+    assert lanes.row_index_at(empty_y) is None
+    QTest.mouseMove(lanes, QPoint(int(view.beat_to_x(3.0)), empty_y))
+    assert lanes.cursor().shape() == Qt.CursorShape.IBeamCursor
+    drag(lanes, QPoint(int(view.beat_to_x(20.3)), empty_y), QPoint(int(view.beat_to_x(0.6)), 2))
+    snapped = (view.snap_beat(0.6), view.snap_beat(20.3))
+    assert snapped == (1.0, 20.0)  # (a one-beat grid at this zoom)
+    assert window.selection.time_range == (*snapped, tuple(t.id for t in tracks))
+    assert window.selection.clip_range and len(window.selection.clips) == 4  # including the clip added above
+    # A click there places the insert marker on the grid and deselects.
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                     QPoint(int(view.beat_to_x(6.1)), empty_y))
+    assert window.selection.time_range is None and not window.selection.clips
+    assert window.selection.insert_beat == 6.0
 
 
 def test_clip_body_sets_insert_and_selects_time(window, three_tracks):
@@ -492,6 +527,8 @@ def test_ctrl_drag_copies_selected_clip(window, three_tracks):
         return QPoint(int(view.beat_to_x(c.start_beat) + 30), row.top - view.scroll_y + 6)
 
     QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, title(clip))
+    # Selecting a clip selects the area it covers on the grid.
+    assert window.selection.time_range == (0.0, 4.0, (track.id,)) and window.selection.clip_range
     assert window.selection.clips == {(track.id, clip.id)}
     # Ctrl-dragging the selected clip copies it, leaving the original where it was.
     ctrl_drag(lanes, title(clip), title(clip) + QPoint(int(8 * view.px_per_beat), 0))
@@ -499,14 +536,39 @@ def test_ctrl_drag_copies_selected_clip(window, three_tracks):
     assert original == before
     assert copy.id != clip.id and copy.start_beat == pytest.approx(8.0)
     assert window.selection.clips == {(track.id, copy.id)}
+    assert window.selection.time_range == (8.0, 12.0, (track.id,))
 
-    # Ctrl-clicking an unselected clip adds it; Ctrl-clicking a selected one deselects it.
-    ctrl = Qt.KeyboardModifier.ControlModifier
-    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, ctrl, title(original))
-    assert window.selection.clips == {(track.id, original.id), (track.id, copy.id)}
-    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, ctrl, title(copy))
-    assert window.selection.clips == {(track.id, original.id)}
+    # A Ctrl-click (no drag) just selects the clip's area.
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, title(original))
+    assert window.selection.time_range == (0.0, 4.0, (track.id,))
     assert len(window.project.track(track.id).clips) == 2  # clicks copy nothing
+
+
+def test_shift_click_selects_the_clips_in_between(window, three_tracks):
+    arrangement = window.arrangement
+    lanes, view, rows = arrangement.lanes, arrangement.view, arrangement.layout_model.rows
+    tracks = window.project.tracks  # clips at beats 0-4, 2-8 and 4-12
+    window.editor.add_clips(tracks[1].id, 20.0, [(three_tracks[0], 2.0)])  # outside the span
+    far = max(tracks[1].clips, key=lambda c: c.start_beat)
+
+    def title(index, c) -> QPoint:
+        return QPoint(int(view.beat_to_x(c.start_beat) + 10), rows[index].top - view.scroll_y + 6)
+
+    shift = Qt.KeyboardModifier.ShiftModifier
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, title(0, tracks[0].clips[0]))
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, shift, title(2, tracks[2].clips[0]))
+    # The area fully containing both clips, on the tracks from one to the other.
+    assert window.selection.time_range == (0.0, 12.0, tuple(t.id for t in tracks))
+    assert window.selection.clips == {(t.id, t.clips[0].id) for t in tracks if t.clips[0] is not far}
+    assert (tracks[1].id, far.id) not in window.selection.clips
+    # A plain click on one of the selected clips selects just it (a drag would move them all).
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, title(1, tracks[1].clips[0]))
+    assert window.selection.clips == {(tracks[1].id, tracks[1].clips[0].id)}
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, title(0, tracks[0].clips[0]))
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, shift, title(2, tracks[2].clips[0]))
+    # Shift-clicking again extends from the same anchor rather than adding to the selection.
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, shift, title(0, tracks[0].clips[0]))
+    assert window.selection.clips == {(tracks[0].id, tracks[0].clips[0].id)}
 
 
 def test_double_click_clip_opens_clip_view(window, three_tracks):
@@ -546,6 +608,10 @@ def test_drag_ending_in_clip_band_selects_clip_range(window, three_tracks):
     assert not selection.clip_range and selection.clips == set()
     window.delete_selection()
     assert [len(t.clips) for t in tracks] == [1, 1, 1]
+    # Going up into the lanes above selects the clips, wherever in the lane it ends.
+    drag(lanes, QPoint(int(view.beat_to_x(1.0)), lane_y), QPoint(int(view.beat_to_x(3.0)), body_y))
+    assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id)) and selection.clip_range
+    selection.clear()
     # Ending in the top (clip) band makes a clip range: it persists, and it knows
     # the clips it touches (for the clip view).
     band_y = rows[1].top - view.scroll_y + 5
@@ -578,15 +644,15 @@ def test_drag_ending_in_clip_band_selects_clip_range(window, three_tracks):
     assert selection.insert_beat == 3.0
     window.undo_stack.undo()
     assert [len(t.clips) for t in tracks] == [1, 1, 1]
-    # Clicking a clip's title inside the range selects just that clip.
+    # Clicking a clip's title inside the range selects just that clip's area.
     QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
                      QPoint(int(view.beat_to_x(5.0)), rows[1].top - view.scroll_y + 6))
-    assert selection.time_range is None and not selection.clip_range
+    assert selection.time_range == (2.0, 8.0, (tracks[1].id,)) and selection.clip_range
     assert selection.clips == {(tracks[1].id, tracks[1].clips[0].id)}
-    # ...and draws it highlighted (this used to be hidden by a stale clip-range flag).
+    # ...and draws it highlighted.
     body = QPoint(int(view.beat_to_x(5.0)), rows[1].top - view.scroll_y + rows[1].height // 2)
     highlighted = lanes.grab().toImage().pixelColor(body)
-    selection.set_clips(set())
+    selection.clear()
     assert lanes.grab().toImage().pixelColor(body) != highlighted
 
 
@@ -626,11 +692,19 @@ def test_dragging_a_clip_range_moves_it(window, three_tracks):
     assert selection.time_range == (1.0, 3.0, (tracks[1].id, tracks[2].id))
     window.undo_stack.undo()
 
-    # A click inside the range, without dragging, still selects just that clip.
+    # A click inside the range, without dragging, still selects just that clip's area.
     select_range()
     QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, band(1, 2.5))
-    assert selection.time_range is None and selection.clips == {(tracks[1].id, tracks[1].clips[0].id)}
+    assert selection.time_range == (2.0, 8.0, (tracks[1].id,))
+    assert selection.clips == {(tracks[1].id, tracks[1].clips[0].id)}
     assert lanes._gesture is None
+
+    # Dragging a selected clip moves the very clip (same id), unchanged.
+    clip = tracks[1].clips[0]
+    drag(lanes, band(1, 2.5), band(1, 4.5))
+    [moved] = tracks[1].clips
+    assert moved.id == clip.id and moved.start_beat == 4.0 and moved.duration_sec == clip.duration_sec
+    assert selection.time_range == (4.0, 10.0, (tracks[1].id,))
 
 
 def test_clip_view_edits_several_clips_in_unison(window, three_tracks):
@@ -638,7 +712,7 @@ def test_clip_view_edits_several_clips_in_unison(window, three_tracks):
     editor, tracks = window.editor, window.project.tracks
     refs = [(t.id, t.clips[0].id) for t in tracks[:2]]
     editor.update_clips(refs[1:], lambda c: replace(c, transpose=5, warp_mode="Smooth"), "setup")
-    window.selection.set_clips(refs)
+    window.selection.select_clips(window.editor, refs)
     arrangement.toggle_clip_view()
     clip_view = arrangement.clip_view
     assert clip_view.clip_refs == refs
@@ -677,7 +751,7 @@ def test_clip_view_warping_reaches_the_audio(window, three_tracks):
     track = project.tracks[0]  # tone0: 2 s at 220 Hz, beats 0..4
     for other in project.tracks[1:]:
         editor.set_track_param(other.id, "mute", True)
-    window.selection.set_clips({(track.id, track.clips[0].id)})
+    window.selection.select_clips(window.editor, {(track.id, track.clips[0].id)})
     arrangement.toggle_clip_view()
     clip_view = arrangement.clip_view
 

@@ -54,7 +54,7 @@ class ScanResult:
     failures: list[ScanFailure] = field(default_factory=list)
 
 
-def search_paths() -> list[Path]:
+def standard_paths() -> list[Path]:
     """The standard VST3 folders, or those in GILSTUDIO_VST3_PATH (separated by
     os.pathsep; empty for none)."""
     override = os.environ.get("GILSTUDIO_VST3_PATH")
@@ -63,6 +63,14 @@ def search_paths() -> list[Path]:
     common = Path(os.environ.get("CommonProgramFiles", r"C:\Program Files\Common Files"))
     local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Programs" / "Common"
     return [common / "VST3", local / "VST3"]
+
+
+def search_paths(custom: list[str] | tuple[str, ...] = ()) -> list[Path]:
+    """The standard folders, then the user's own (each once)."""
+    paths: dict[str, Path] = {}
+    for path in [*standard_paths(), *(Path(p) for p in custom if p)]:
+        paths.setdefault(os.path.normcase(os.path.normpath(str(path))), path)
+    return list(paths.values())
 
 
 def find_plugin_files(roots: list[Path] | None = None) -> list[str]:
@@ -135,7 +143,8 @@ def _signature(path: str) -> list[int] | None:
 
 class PluginScanner:
     def __init__(self, cache_file: Path | None = None, timeout: float = SCAN_TIMEOUT,
-                 worker: list[str] | None = None):
+                 worker: list[str] | None = None, folders: list[Path] | None = None):
+        self.folders = folders  # where to look (default: the standard folders)
         self.cache_file = cache_path() if cache_file is None else Path(cache_file)
         self.timeout = timeout
         self.worker = worker or [sys.executable, "-m", "gilstudio.plugins.scan_worker"]
@@ -169,7 +178,7 @@ class PluginScanner:
         """Everything in `files` (default: all installed plug-in files). Only new or
         changed files are read, unless `rescan`. `progress(done, total, path)` is
         called before each file that is read."""
-        files = find_plugin_files() if files is None else files
+        files = find_plugin_files(self.folders) if files is None else files
         cache = {} if rescan else self._load_cache()
         entries: dict[str, dict] = {}
         todo: list[str] = []
