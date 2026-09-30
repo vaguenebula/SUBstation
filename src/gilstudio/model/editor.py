@@ -78,6 +78,8 @@ class ProjectEditor:
     def __init__(self, project: Project, undo_stack: QUndoStack):
         self.project = project
         self.undo_stack = undo_stack
+        # Called with (track id, device id) when the user adds a plug-in (not on undo or redo).
+        self.plugin_added: Callable[[str, str], None] = lambda track_id, device_id: None
 
     def _push(self, command) -> None:
         self.undo_stack.push(command)
@@ -99,6 +101,8 @@ class ProjectEditor:
         track = Track(id=new_id(), name=name or p.unique_track_name(f"{len(p.tracks) + 1} MIDI"),
                       color=p.next_color(), kind="midi", devices=devices)
         self._push(InsertTrackCommand(p, track, len(p.tracks) if index is None else index, "Insert MIDI Track"))
+        if plugin:
+            self.plugin_added(track.id, devices[0].id)
         return p.track(track.id)
 
     def delete_tracks(self, track_ids: list[str]) -> None:
@@ -392,6 +396,8 @@ class ProjectEditor:
             first = 1 if after and device_is_instrument(after[0]) else 0  # effects go after the instrument
             after.insert(len(after) if index is None else max(first, index), device)
         self._push(SetDevicesCommand(self.project, track_id, before, after, f"Add {device_name(device)}"))
+        if device.is_plugin:
+            self.plugin_added(track_id, device.id)
         return device
 
     def move_device(self, track_id: str, device_id: str, index: int) -> None:

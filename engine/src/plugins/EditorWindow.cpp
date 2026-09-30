@@ -124,6 +124,12 @@ void EditorWindow::bringToFront() {
     SetForegroundWindow(hwnd_);
 }
 
+void EditorWindow::setVisible(bool visible) {
+    if (hwnd_) ShowWindow(hwnd_, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+}
+
+bool EditorWindow::isVisible() const { return hwnd_ && IsWindowVisible(hwnd_); }
+
 void EditorWindow::updateContentScale() {
     scale_ = static_cast<float>(GetDpiForWindow(hwnd_)) / USER_DEFAULT_SCREEN_DPI;
     Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport> support(view_);

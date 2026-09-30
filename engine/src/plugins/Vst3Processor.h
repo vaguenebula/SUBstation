@@ -71,6 +71,7 @@ public:
     bool openEditor(void* ownerWindow, const std::string& title) override;
     void closeEditor() override;
     bool isEditorOpen() const override;
+    bool setEditorVisible(bool visible) override;
     void setEditorTitle(const std::string& title) override;
 
 private:

@@ -812,7 +812,13 @@ bool Vst3Processor::openEditor(void* ownerWindow, const std::string& title) {
 
 void Vst3Processor::closeEditor() { editor_.reset(); }
 
-bool Vst3Processor::isEditorOpen() const { return editor_ && editor_->isOpen(); }
+bool Vst3Processor::isEditorOpen() const { return editor_ && editor_->isOpen() && editor_->isVisible(); }
+
+bool Vst3Processor::setEditorVisible(bool visible) {
+    if (!editor_ || !editor_->isOpen()) return false;
+    editor_->setVisible(visible);
+    return true;
+}
 
 void Vst3Processor::setEditorTitle(const std::string& title) {
     if (editor_) editor_->setTitle(title);

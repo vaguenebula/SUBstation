@@ -3,7 +3,9 @@ undo, and projects. Drives the real main window offscreen with the test
 plug-ins (see tests/vst3_plugins); plug-in editors are real Win32 windows."""
 
 import base64
+import ctypes
 import json
+from ctypes import wintypes
 
 import pytest
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, Qt
@@ -108,6 +110,8 @@ def test_showing_a_plugin_opens_no_stray_windows(window):
         QApplication.instance().removeEventFilter(spy)
     assert window.devices.widgets[track.devices[0].id].pages == 2
     assert spy.shown == []
+    QTest.qWait(1)  # it has no editor to show, and that's no news to report
+    assert "no editor" not in window.statusBar().currentMessage()
 
 
 def test_knobs_edit_plugins_undoably(window):
@@ -300,3 +304,57 @@ def test_editor_follows_its_device(window):
     window.close()  # and they all close with the main window
     assert not editor_window("GIL Test Effect - Bass")
     QTest.qWait(1)
+
+
+def window_rect(hwnd) -> tuple[int, int, int, int]:
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def test_plugin_editors_follow_the_selected_track(window):
+    effect = installed(window)["GIL Test Effect"]
+    drums = window.editor.add_audio_track(name="Drums")
+    bass = window.editor.add_audio_track(name="Bass")
+    window.selection.select_track(drums.id)
+    # Adding a plug-in shows its editor.
+    on_drums = window.editor.add_device(drums.id, PLUGIN_KIND, plugin=effect)
+    QTest.qWait(1)
+    assert window.bridge.is_plugin_editor_open(drums.id, on_drums.id)
+    assert window.devices.widgets[on_drums.id].edit.isChecked()
+    drums_frame = editor_window("GIL Test Effect - Drums")
+    user32.SetWindowPos(drums_frame, None, 40, 50, 0, 0, 0x0001 | 0x0004 | 0x0010)  # moved by the user
+    place = window_rect(drums_frame)
+
+    # Selecting another track hides it; a plug-in added there shows its own.
+    window.selection.select_track(bass.id)
+    assert not window.bridge.is_plugin_editor_open(drums.id, on_drums.id)
+    assert not user32.IsWindowVisible(drums_frame)
+    on_bass = window.editor.add_device(bass.id, PLUGIN_KIND, plugin=effect)
+    QTest.qWait(1)
+    assert window.bridge.is_plugin_editor_open(bass.id, on_bass.id)
+    window.devices.widgets[on_bass.id].edit.click()  # the user closes it
+    assert not editor_window("GIL Test Effect - Bass")
+
+    # Coming back shows the editor again, where it was; the one closed stays closed.
+    window.selection.select_track(drums.id)
+    assert window.bridge.is_plugin_editor_open(drums.id, on_drums.id) and user32.IsWindowVisible(drums_frame)
+    assert window_rect(drums_frame) == place and window.devices.widgets[on_drums.id].edit.isChecked()
+    window.selection.select_track(bass.id)
+    assert not window.bridge.is_plugin_editor_open(bass.id, on_bass.id)
+
+    # Closed with its own close button, it stays closed too.
+    window.selection.select_track(drums.id)
+    user32.SendMessageW(drums_frame, 0x0010, 0, 0)  # WM_CLOSE
+    poll(window)
+    window.selection.select_track(None)
+    window.selection.select_track(drums.id)
+    assert not window.bridge.is_plugin_editor_open(drums.id, on_drums.id)
+
+    # Undo and redo don't open editors (the last step added the effect on Bass).
+    window.selection.select_track(bass.id)
+    window.undo_stack.undo()
+    window.undo_stack.redo()
+    QTest.qWait(1)
+    assert not window.bridge.is_plugin_editor_open(bass.id, on_bass.id)
+    window.undo_stack.setClean()

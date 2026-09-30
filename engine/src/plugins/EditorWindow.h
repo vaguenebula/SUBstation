@@ -32,6 +32,10 @@ public:
     bool wasClosed() const noexcept { return closed_; }
     void setTitle(const std::string& title);
     void bringToFront();
+    // Hidden, the window keeps its place and the plug-in its view; shown again,
+    // it doesn't take the focus.
+    void setVisible(bool visible);
+    bool isVisible() const;
 
     // IPlugFrame
     tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;

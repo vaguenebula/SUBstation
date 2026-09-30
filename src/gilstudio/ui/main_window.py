@@ -86,6 +86,9 @@ class MainWindow(QMainWindow):
         plugins = self.browser.plugin_index
         plugins.updated.connect(lambda: self.bridge.set_known_plugins(plugins.plugins))
         self.bridge.owner_window = lambda: int(self.winId())  # plug-in editors float above this window
+        # Only the selected track's plug-in editors are shown; a new plug-in shows its editor.
+        self.selection.changed.connect(lambda: self.bridge.show_plugin_editors(self.selection.track_id))
+        self.editor.plugin_added = self._plugin_added
         self.bridge.plugin_param_edited.connect(self._plugin_param_edited)
         self.bridge.plugin_state_dirty.connect(self.undo_stack.resetClean)
         self.transport.play_requested.connect(self.toggle_play)
@@ -280,6 +283,12 @@ class MainWindow(QMainWindow):
             self.editor.add_device(track_id, kind, plugin=plugin)
         else:
             self.show_message("Select a track to add the device to.")
+
+    def _plugin_added(self, track_id: str, device_id: str) -> None:
+        # After the add is done (the track may be selected just after it, and a drop
+        # finished): the editor opens when its track is shown.
+        QTimer.singleShot(0, lambda: self.project.has_track(track_id)
+                          and self.bridge.request_plugin_editor(track_id, device_id))
 
     def _plugin_param_edited(self, track_id: str, device_id: str, param_id: str, value: float, old: float,
                              gesture: int) -> None:
