@@ -119,6 +119,34 @@ def test_click_on_the_line_adds_breakpoints_and_dragging_moves_them(window, trac
     assert window.project.envelope(a.id, MIXER_PAN)[0] == added
 
 
+def test_pressing_on_the_line_adds_a_breakpoint_that_a_drag_places(window, tracks):
+    a, _ = tracks
+    window.editor.show_automation(a.id, MIXER_PAN)
+    lanes = window.arrangement.lanes
+    steps = window.undo_stack.count()
+    drag(lanes, point(window, a.id, 2.0, 0.5), point(window, a.id, 3.0, 0.9))
+    [placed] = window.project.envelope(a.id, MIXER_PAN)
+    assert placed.beat == pytest.approx(3.0) and placed.value == pytest.approx(0.9, abs=0.05)
+    assert window.selection.points == (a.id, MIXER_PAN, frozenset({0}))
+    assert window.undo_stack.count() == steps + 1  # adding and placing: one step
+    window.undo_stack.undo()
+    assert window.project.envelope(a.id, MIXER_PAN) == ()
+
+
+def test_lanes_show_parameters_changed_by_hand(window, tracks, monkeypatch):
+    a, b = tracks
+    window.editor.show_automation(a.id)
+    synth = window.project.track(a.id).devices[0]
+    lanes = window.arrangement.lanes
+    repaints = []
+    monkeypatch.setattr(lanes, "update", lambda *args: repaints.append(args))
+    window.editor.set_device_param(a.id, synth.id, "attack", 50.0)
+    assert repaints
+    repaints.clear()
+    window.bridge.plugin_params_changed.emit(b.id, "x")  # (a plug-in's values) on a track not showing any
+    assert not repaints
+
+
 def test_a_new_breakpoint_goes_on_a_sloped_line(window, tracks):
     a, _ = tracks
     window.editor.show_automation(a.id, MIXER_PAN)

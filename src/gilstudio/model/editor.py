@@ -609,10 +609,12 @@ class ProjectEditor(QObject):
         if new != old:
             self._push(SetEnvelopeCommand(self.project, owner, key, old, new, text, merge_key))
 
-    def add_automation_point(self, owner: str, key: str, beat: float, value: float) -> int:
-        """A new breakpoint; returns its index."""
+    def add_automation_point(self, owner: str, key: str, beat: float, value: float,
+                             merge_key: object | None = None) -> int:
+        """A new breakpoint; returns its index. With a `merge_key`, dragging it
+        right away (move_automation_points with the same key) is the same undo step."""
         points, index = automation.add_point(self.project.envelope(owner, key), beat, value)
-        self.set_envelope(owner, key, points, "Add Automation Point")
+        self.set_envelope(owner, key, points, "Add Automation Point", merge_key)
         return index
 
     def move_automation_points(self, owner: str, key: str, original: Envelope, indices, delta_beats: float,

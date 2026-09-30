@@ -5,10 +5,10 @@ in its lane (MasterLane). Both hosts hand their lanes to the functions here as
 EnvelopeAreas.
 
 In a lane (as in Ableton):
-- A click on the envelope's line adds a breakpoint on it (on the grid when
-  snapping is on; Alt-click where there is no segment to bend: off the grid).
-  Where it would go shows while the mouse is over the line. A click off the
-  line adds nothing.
+- A press on the envelope's line adds a breakpoint on it (on the grid when
+  snapping is on; Alt-click where there is no segment to bend: off the grid),
+  and dragging on places it. Where it would go shows while the mouse is over
+  the line. A click off the line adds nothing.
 - A click on a breakpoint deletes it; Shift- or Ctrl-click selects it instead
   (with the others selected), and Delete deletes the selected ones.
 - Dragging a breakpoint moves it, and the others selected with it, in time and
@@ -330,16 +330,20 @@ def _alt(mods) -> bool:
 
 class PointGesture(ClipGesture):
     """Drag breakpoints: the one pressed, and the others selected with it. A
-    click without dragging deletes it (Shift/Ctrl: selects it instead)."""
+    click without dragging deletes it (Shift/Ctrl: selects it instead). With
+    `added`, the breakpoint was just added by this press: a click keeps it, and
+    adding and dragging it are one undo step."""
 
-    def __init__(self, host, area: EnvelopeArea, index: int, press: QPointF, mods):
+    def __init__(self, host, area: EnvelopeArea, index: int, press: QPointF, mods, added: bool = False):
         self.host = host
         self.area = area
         self.index = index
         self.press = press
+        self.added = added
         self.original = host.project.envelope(area.owner, area.key)
-        selected = set(host.selection.selected_points(area.owner, area.key))
-        self.selecting = bool(mods & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier))
+        selected = set(host.selection.selected_points(area.owner, area.key)) if not added else set()
+        self.selecting = not added and bool(
+            mods & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier))
         if self.selecting:
             selected ^= {index}
         elif index not in selected:
@@ -347,6 +351,7 @@ class PointGesture(ClipGesture):
         host.selection.select_points(area.owner, area.key, selected)
         self.indices = selected if index in selected else {index}
         self.active = False
+        self.merge_key: object = self
 
     def move(self, pos: QPointF, modifiers) -> None:
         if not self.active:
@@ -361,7 +366,7 @@ class PointGesture(ClipGesture):
             delta_beats = max(0.0, view.snap_beat(beat, _alt(modifiers))) - anchor.beat
         delta_value = (self.press.y() - pos.y()) / max(1.0, self.area.values.height()) * _fine(modifiers)
         self.host.editor.move_automation_points(self.area.owner, self.area.key, self.original, self.indices,
-                                                delta_beats, delta_value, merge_key=self)
+                                                delta_beats, delta_value, merge_key=self.merge_key)
         self.host.update()
 
     def readout(self) -> tuple[QPointF, str] | None:
@@ -374,7 +379,7 @@ class PointGesture(ClipGesture):
                 spec.format_normalized(spec.quantize(point.value)))
 
     def finish(self) -> None:
-        if self.active or self.selecting:
+        if self.active or self.selecting or self.added:
             return
         owner, key = self.area.owner, self.area.key
         self.host.editor.delete_automation_points(owner, key, [self.index])
@@ -399,10 +404,23 @@ class CurveGesture(ClipGesture):
         self.host.update()
 
 
+class _MergeKey:
+    """Ties a new breakpoint's adding to the drag that follows."""
+
+
+def _add_and_drag(host, area: EnvelopeArea, pos: QPointF, mods, target: tuple[float, float]) -> PointGesture:
+    """A press on the line: a breakpoint there at once, and a drag places it."""
+    key = _MergeKey()
+    index = host.editor.add_automation_point(area.owner, area.key, *target, merge_key=key)
+    gesture = PointGesture(host, area, index, pos, mods, added=True)
+    gesture.merge_key = key
+    host.selection.set_insert(target[0])
+    return gesture
+
+
 class LaneGesture(ClipGesture):
-    """A press on a lane off its breakpoints: a click on the line adds one there
-    (elsewhere it sets the insert marker); a drag selects a time range on the
-    lanes it crosses."""
+    """A press on a lane off its breakpoints and its line: a click sets the
+    insert marker; a drag selects a time range on the lanes it crosses."""
 
     def __init__(self, host, area: EnvelopeArea, press: QPointF, mods):
         self.host = host
@@ -411,7 +429,6 @@ class LaneGesture(ClipGesture):
         self.bypass = _alt(mods)
         view = host.view
         self.anchor = max(0.0, view.snap_beat(view.x_to_beat(press.x()), self.bypass))
-        self.target = add_target(host, area, press, mods)
         self.active = False
         host.selection.clear(track_id=None if area.owner == MASTER else area.owner)
 
@@ -438,15 +455,8 @@ class LaneGesture(ClipGesture):
         self.host.setCursor(Qt.CursorShape.IBeamCursor)
 
     def finish(self) -> None:
-        if self.active:
-            return
-        self.host.selection.set_insert(self.anchor)
-        if self.target is None:
-            return
-        owner, key = self.area.owner, self.area.key
-        beat, value = self.target
-        index = self.host.editor.add_automation_point(owner, key, beat, value)
-        self.host.selection.select_points(owner, key, {index})
+        if not self.active:
+            self.host.selection.set_insert(self.anchor)
 
 
 def press(host, area: EnvelopeArea, pos: QPointF, mods) -> ClipGesture:
@@ -460,6 +470,9 @@ def press(host, area: EnvelopeArea, pos: QPointF, mods) -> ClipGesture:
         segment = automation.segment_index(points, host.view.x_to_beat(pos.x()))
         if segment is not None:
             return CurveGesture(host, area, segment, pos)
+    target = add_target(host, area, pos, mods)
+    if target is not None:
+        return _add_and_drag(host, area, pos, mods, target)
     return LaneGesture(host, area, pos, mods)
 
 

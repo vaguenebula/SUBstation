@@ -147,6 +147,15 @@ class LanesCanvas(QWidget):
                        self.project.automation_changed, self.project.automation_view_changed,
                        self.project.devices_changed, bridge.automation_state_changed):
             signal.connect(lambda *_args: self.update())
+        # A parameter set by hand: lanes without an envelope draw its value.
+        for signal in (self.project.device_param_changed, self.project.device_state_changed,
+                       bridge.plugin_param_edited, bridge.plugin_params_changed, bridge.plugin_params_rebuilt,
+                       bridge.devices_loaded):
+            signal.connect(lambda track_id, *_args: self._update_if_shown(track_id))
+
+    def _update_if_shown(self, track_id: str) -> None:
+        if self.project.has_track(track_id) and self.project.track(track_id).automation_view.shown:
+            self.update()
 
     # --- Geometry ------------------------------------------------------------------
 
