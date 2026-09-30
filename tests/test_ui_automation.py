@@ -400,3 +400,59 @@ def test_dragging_up_from_a_lane_into_the_clips_selects_them(window, tracks):
     # Kept to the lanes, it is a range on the automation.
     drag(lanes, start, point(window, a.id, 3.0, 0.1))
     assert window.selection.lanes == ((a.id, MIXER_PAN),) and not window.selection.clips
+
+
+def test_dragging_near_a_segment_moves_its_two_breakpoints(window, tracks):
+    a, _ = tracks
+    window.editor.show_automation(a.id, MIXER_PAN)
+    window.editor.set_envelope(a.id, MIXER_PAN, env((0.0, 0.2), (2.0, 0.4), (6.0, 0.4), (8.0, 0.8)))
+    lanes = window.arrangement.lanes
+    near = point(window, a.id, 4.0, 0.4) + QPoint(0, 10)  # below the line, not on it
+    lanes._update_cursor(QPointF(near), Qt.KeyboardModifier.NoModifier)
+    assert lanes._hover_point.kind == "segment" and lanes._hover_point.index == 1
+    far = point(window, a.id, 4.0, 0.4) + QPoint(0, 30)
+    lanes._update_cursor(QPointF(far), Qt.KeyboardModifier.NoModifier)
+    assert lanes._hover_point is None
+    # A click selects the two; a drag moves them together, as one undo step.
+    click(lanes, near)
+    assert window.selection.points == (a.id, MIXER_PAN, frozenset({1, 2}))
+    assert len(window.project.envelope(a.id, MIXER_PAN)) == 4
+    steps = window.undo_stack.count()
+    height = area(window, a.id).values.height()
+    drag(lanes, near, near + QPoint(0, -round(height * 0.25)))
+    points = window.project.envelope(a.id, MIXER_PAN)
+    assert [p.beat for p in points] == [0.0, 2.0, 6.0, 8.0]
+    assert points[1].value == pytest.approx(0.65, abs=0.02) and points[2].value == pytest.approx(0.65, abs=0.02)
+    assert points[0].value == 0.2 and points[3].value == 0.8
+    assert window.undo_stack.count() == steps + 1
+
+
+def test_dragging_a_selected_range_moves_its_automation(window, tracks):
+    a, _ = tracks
+    window.editor.show_automation(a.id, MIXER_PAN)
+    ramp = env((0.0, 0.0), (8.0, 1.0))
+    window.editor.set_envelope(a.id, MIXER_PAN, ramp)
+    lanes = window.arrangement.lanes
+    drag(lanes, point(window, a.id, 2.0, 0.9), point(window, a.id, 4.0, 0.9))  # select 2..4
+    assert window.selection.time_range[:2] == (2.0, 4.0)
+    inside = point(window, a.id, 3.0, 0.8)
+    lanes._update_cursor(QPointF(inside), Qt.KeyboardModifier.NoModifier)
+    assert lanes._hover_point.kind == "range" and lanes.cursor().shape() == Qt.CursorShape.SizeAllCursor
+    # Up: the inside moves, with steps at the edges; the outside stays.
+    height = area(window, a.id).values.height()
+    steps = window.undo_stack.count()
+    drag(lanes, inside, inside + QPoint(0, -round(height * 0.25)))
+    points = window.project.envelope(a.id, MIXER_PAN)
+    assert automation.value_at(points, 3.0) == pytest.approx(0.625, abs=0.02)
+    assert automation.value_at(points, 1.0) == pytest.approx(0.125)
+    assert automation.value_at(points, 5.0) == pytest.approx(0.625)
+    assert [p.beat for p in points].count(2.0) == 2 and [p.beat for p in points].count(4.0) == 2
+    assert window.selection.time_range[:2] == (2.0, 4.0) and window.undo_stack.count() == steps + 1
+    window.undo_stack.undo()
+    assert window.project.envelope(a.id, MIXER_PAN) == ramp
+    # Right: it lands 2 beats later (over what was there); the range goes along.
+    drag(lanes, inside, point(window, a.id, 5.0, 0.8))
+    points = window.project.envelope(a.id, MIXER_PAN)
+    assert automation.value_at(points, 5.0) == pytest.approx(0.375)  # what was at 3
+    assert automation.value_at(points, 7.0) == pytest.approx(0.875)  # the rest as it was
+    assert window.selection.time_range[:2] == (4.0, 6.0)

@@ -113,6 +113,19 @@ def test_duplicate_range():
     assert auto.value_at(doubled, 5.0) == pytest.approx(0.0)
 
 
+def test_move_range():
+    ramp = env((0.0, 0.0), (8.0, 1.0))
+    up = auto.move_range(ramp, 2.0, 4.0, 0.0, 0.5)
+    assert auto.value_at(up, 1.0) == pytest.approx(0.125) and auto.value_at(up, 5.0) == pytest.approx(0.625)
+    assert auto.value_at(up, 3.0) == pytest.approx(0.875)
+    assert auto.value_at(up, 2.0) == pytest.approx(0.75) and auto.left_value(up, 2.0) == pytest.approx(0.25)  # a step
+    assert auto.move_range(ramp, 2.0, 4.0, 0.0, 0.0) == ramp  # no stray points
+    later = auto.move_range(ramp, 2.0, 4.0, 4.0, 0.0)
+    assert auto.value_at(later, 7.0) == pytest.approx(0.375) and auto.value_at(later, 1.0) == pytest.approx(0.125)
+    assert auto.move_range(ramp, 2.0, 4.0, -10.0, 0.0)[0].beat == 0.0  # not before the start
+    assert auto.value_at(auto.move_range(ramp, 2.0, 4.0, 0.0, 2.0), 3.0) == 1.0  # values stay in range
+
+
 def test_keys():
     key = auto.device_key("abc", "7:x")
     assert auto.parse_key(key) == ("device", "abc", "7:x") and auto.key_device(key) == "abc"

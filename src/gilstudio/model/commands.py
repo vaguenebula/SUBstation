@@ -208,6 +208,24 @@ class SetDeviceEnabledCommand(QUndoCommand):
         self.project.set_device_enabled(self.track_id, self.device_id, not self.enabled)
 
 
+class SetEnvelopesCommand(_MergeableCommand):
+    """Replaces several envelopes at once, {(owner, key): envelope} (moving a
+    time range on several lanes). With a `merge_key`, one drag is one undo step."""
+
+    def __init__(self, project: Project, old: dict[tuple[str, str], Envelope],
+                 new: dict[tuple[str, str], Envelope], text: str, merge_key: object | None = None):
+        super().__init__(text, tuple(new), old, new, merge_key)
+        self.project = project
+
+    def redo(self) -> None:
+        for (owner, key), points in self.new.items():
+            self.project.set_envelope(owner, key, points)
+
+    def undo(self) -> None:
+        for (owner, key), points in self.old.items():
+            self.project.set_envelope(owner, key, points)
+
+
 class SetEnvelopeCommand(_MergeableCommand):
     """Replaces one automation envelope (an empty one: no automation). Dragging
     points passes a `merge_key`, so one drag is one undo step."""

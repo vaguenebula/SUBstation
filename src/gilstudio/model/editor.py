@@ -22,6 +22,7 @@ from .commands import (
     SetDevicesCommand,
     SetDeviceStateCommand,
     SetEnvelopeCommand,
+    SetEnvelopesCommand,
     SetTempoCommand,
     UpdateSettingsCommand,
     UpdateTrackCommand,
@@ -655,6 +656,17 @@ class ProjectEditor(QObject):
     def delete_automation_range(self, start: float, end: float, lanes: list[LaneRef]) -> None:
         """Delete the automation between two beats on these lanes."""
         self._each_lane("Delete Automation", lanes, lambda points: automation.remove_range(points, start, end))
+
+    def move_automation_range(self, start: float, end: float, originals: dict[LaneRef, Envelope],
+                              delta_beats: float, delta_value: float, merge_key: object | None = None) -> None:
+        """Move the automation between two beats on these lanes (`originals`: their
+        envelopes when the drag began) in time and value, as one undo step."""
+        lanes = {lane: points for lane, points in originals.items() if points and self.project.has_owner(lane[0])}
+        new = {lane: automation.move_range(points, start, end, delta_beats, delta_value)
+               for lane, points in lanes.items()}
+        current = {lane: self.project.envelope(*lane) for lane in new}
+        if new != current:
+            self._push(SetEnvelopesCommand(self.project, current, new, "Move Automation", merge_key))
 
     def duplicate_automation_range(self, start: float, end: float, lanes: list[LaneRef]) -> None:
         """Copy the automation between two beats to right after `end`, over what was there."""

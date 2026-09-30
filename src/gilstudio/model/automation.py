@@ -356,6 +356,21 @@ def drop_redundant(points: Sequence[AutomationPoint], beats: Iterable[float]) ->
     return tuple(out)
 
 
+def move_range(points: Sequence[AutomationPoint], start: float, end: float, delta_beats: float,
+               delta_value: float) -> Envelope:
+    """Move the envelope between two beats up or down (`delta_value`) and in
+    time (`delta_beats`, over what is where it lands; where it was, the envelope
+    runs straight across). Breakpoints at the range's edges keep the envelope
+    outside it as it was: moved up or down, it steps there."""
+    if not points or end <= start:
+        return tuple(points)
+    delta_beats = max(delta_beats, -start)
+    content = tuple(replace(p, value=_clamp(p.value + delta_value)) for p in copy_range(points, start, end))
+    base = remove_range(points, start, end) if delta_beats else tuple(points)
+    moved = paste_range(base, content, start + delta_beats, end - start)
+    return drop_redundant(moved, (start, end, start + delta_beats, end + delta_beats))
+
+
 def has_points_in(points: Sequence[AutomationPoint], start: float, end: float) -> bool:
     return any(start <= p.beat <= end for p in points)
 
