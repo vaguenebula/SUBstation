@@ -553,7 +553,8 @@ def test_dragging_devices_scrolls_the_chain(window):
     panel = window.devices
     bar = panel.scroll.horizontalScrollBar()
     assert wait_until(lambda: bar.maximum() > 0), (panel.scroll.viewport().width(), panel.chain.width())
-    assert bar.value() == 0
+    QTest.qWait(1)  # scrolled to the last device added
+    bar.setValue(0)
     mime = QMimeData()
     mime.setData("application/x-gilstudio-device-move", f"{track.id}\n{track.devices[0].id}".encode())
     viewport = panel.scroll.viewport()
@@ -583,6 +584,8 @@ def test_ctrl_alt_drag_scrolls_the_chain(window):
     panel = window.devices
     bar = panel.scroll.horizontalScrollBar()
     assert wait_until(lambda: bar.maximum() > 0)
+    QTest.qWait(1)  # scrolled to the last device added
+    bar.setValue(0)
     device = track.devices[0].id
     knob = panel.widgets[device].findChildren(QWidget)[-1]  # the press can land on a knob
     pan = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
@@ -603,3 +606,37 @@ def test_ctrl_alt_drag_scrolls_the_chain(window):
     assert panel.selected == [] and QApplication.overrideCursor() is None
     send(QEvent.Type.MouseMove, -300, Qt.MouseButton.NoButton)  # the pan is over
     assert bar.value() == 50
+
+
+def test_adding_a_plugin_scrolls_to_it(window):
+    refs = installed(window)
+    track = window.editor.add_midi_track(instrument=None)
+    window.selection.select_track(track.id)
+    for _ in range(12):
+        window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    bar = panel.scroll.horizontalScrollBar()
+    assert wait_until(lambda: bar.maximum() > 0)
+    viewport = panel.scroll.viewport()
+
+    def in_view(device_id):
+        widget = panel.widgets[device_id]
+        left = widget.mapTo(viewport, QPoint(0, 0)).x()
+        return left >= 0 and left + widget.width() <= viewport.width()
+
+    # Added from the browser while scrolled to the start: the chain scrolls to it.
+    bar.setValue(0)
+    window.add_device_to_selected_track(PLUGIN_KIND, refs["GIL Test Effect"])
+    added = track.devices[-1].id
+    assert wait_until(lambda: bar.value() > 0) and in_view(added)
+
+    # Dropped on the chain, where the user is looking, it doesn't scroll, even for
+    # an instrument, which goes first.
+    bar.setValue(bar.maximum())
+    mime = QMimeData()
+    mime.setData("application/x-gilstudio-plugin", json.dumps([asdict(refs["GIL Test Synth"])]).encode())
+    last = panel.widgets[added]
+    panel.dropEvent(drop(QPointF(last.mapTo(panel, QPoint(2, last.height() // 2))), mime))
+    assert track.devices[0].plugin == refs["GIL Test Synth"]
+    QTest.qWait(50)
+    assert in_view(added) and not in_view(track.devices[0].id)

@@ -10,7 +10,8 @@ button for its own editor. Right-click a device for more (move, presets).
 Click a device (its title or background) to select it, Shift-click to select a
 range, Ctrl-click to add or remove one; Delete deletes the selection. Drag
 effects to reorder them (the instrument stays first). Ctrl+Alt-drag anywhere on
-the chain scrolls it, as in the arrangement.
+the chain scrolls it, as in the arrangement. The chain scrolls to show a device
+when one is added, unless it was dropped on the chain (where it is in view).
 """
 
 from __future__ import annotations
@@ -554,6 +555,7 @@ class DevicePanel(QFrame):
         # Ctrl+Alt-drag scrolls the chain. The press usually lands on a device or a
         # knob, so the panel watches the chain's mouse events before they do.
         self._pan: tuple[float, int] | None = None  # (press x on screen, scroll value)
+        self._dropping = False  # devices added by a drop on the chain are already in view
         QApplication.instance().installEventFilter(self)
 
         layout = QHBoxLayout(self)
@@ -736,8 +738,20 @@ class DevicePanel(QFrame):
         self.drop_marker.hide()
 
     def _on_devices_changed(self, track_id: str) -> None:
-        if track_id == self.track_id:
-            self.show_track(track_id)
+        if track_id != self.track_id:
+            return
+        old = set(self.widgets)
+        self.show_track(track_id)
+        added = [i for i in self._chain_ids() if i not in old]
+        if added and not self._dropping:
+            # After the chain is laid out, so the new device has its place.
+            QTimer.singleShot(0, lambda device_id=added[-1]: self._scroll_to(device_id))
+
+    def _scroll_to(self, device_id: str) -> None:
+        widget = self.widgets.get(device_id)
+        if widget is not None:
+            self.chain_layout.activate()  # so it has its place in the chain
+            self.scroll.ensureWidgetVisible(widget, 0, 0)
 
     def _on_param_changed(self, track_id: str, device_id: str, _param_id: str) -> None:
         if track_id == self.track_id and device_id in self.widgets:
@@ -797,6 +811,7 @@ class DevicePanel(QFrame):
             widget.remove_selected = self.delete_selected
             self.widgets[device.id] = widget
             self.chain_layout.addWidget(widget)
+            widget.show()  # now, not on Qt's next pass, so the chain can be laid out at once
         self.chain_layout.addWidget(self.hint)
         self.chain_layout.addStretch(1)
         needs_instrument = track.is_midi and not any(device_is_instrument(d) for d in track.devices)
@@ -833,15 +848,19 @@ class DevicePanel(QFrame):
             new = [(kind, None) for kind in device_kinds(mime) if kind in BUILTIN_DEVICES]
             new += [(PLUGIN_KIND, ref) for ref in plugin_refs(mime)]
             refused = False
-            for kind, ref in new:
-                count = len(self.project.track(self.track_id).devices)
-                device = self.editor.add_device(self.track_id, kind, index=index, plugin=ref)
-                refused |= device is None
-                chain = [d.id for d in self.project.track(self.track_id).devices]
-                if device is not None and not device_is_instrument(device):
-                    index = chain.index(device.id) + 1  # the next one goes after it
-                else:  # a new instrument (not one replacing another) went in first, before the drop point
-                    index += len(chain) - count
+            self._dropping = True
+            try:
+                for kind, ref in new:
+                    count = len(self.project.track(self.track_id).devices)
+                    device = self.editor.add_device(self.track_id, kind, index=index, plugin=ref)
+                    refused |= device is None
+                    chain = [d.id for d in self.project.track(self.track_id).devices]
+                    if device is not None and not device_is_instrument(device):
+                        index = chain.index(device.id) + 1  # the next one goes after it
+                    else:  # a new instrument (not one replacing another) went in first, before the drop point
+                        index += len(chain) - count
+            finally:
+                self._dropping = False
             if refused:
                 self.status_message.emit(INSTRUMENT_REFUSED)
         event.acceptProposedAction()
