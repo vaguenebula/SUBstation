@@ -140,15 +140,41 @@ class MidiClip:
 AnyClip = Clip | MidiClip
 
 
+@dataclass(frozen=True)
+class PluginRef:
+    """Which plug-in a device is: enough to load it, to find it again if it
+    moved, and to name it if it is missing."""
+
+    format: str  # "VST3"
+    uid: str  # VST3 class id
+    name: str
+    vendor: str = ""
+    path: str = ""  # where it was when last loaded
+    instrument: bool = False
+
+
+PLUGIN_KIND = "plugin"
+
+
 @dataclass
 class Device:
-    """An insert device on a track. `kind` is 'utility' today; plugin devices
-    will use kinds like 'vst3' / 'clap' plus an identifier."""
+    """An insert device on a track: a built-in one ('synth', 'utility'), or a
+    plug-in (kind 'plugin', with `plugin` saying which).
+
+    A built-in device's parameters are its whole state. A plug-in keeps its own
+    state; `state` holds it (base64) as last saved, for loading the project.
+    Its `params` only record values changed from the host, for undo."""
 
     id: str
     kind: str
     enabled: bool = True
     params: dict[str, float] = field(default_factory=dict)
+    plugin: PluginRef | None = None
+    state: str | None = None
+
+    @property
+    def is_plugin(self) -> bool:
+        return self.kind == PLUGIN_KIND
 
 
 @dataclass
@@ -177,6 +203,7 @@ class Project(QObject):
     clips_changed = Signal(str)  # track id
     devices_changed = Signal(str)  # track id: devices added/removed/toggled
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
+    device_state_changed = Signal(str, str)  # track id, device id: a plug-in's whole state was set (a preset)
     settings_changed = Signal()  # tempo, time signature, loop, master volume
     reset = Signal()  # everything replaced (new/open)
 
@@ -272,6 +299,10 @@ class Project(QObject):
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:
         self.device(track_id, device_id).enabled = enabled
         self.devices_changed.emit(track_id)
+
+    def set_device_state(self, track_id: str, device_id: str, state: str | None) -> None:
+        self.device(track_id, device_id).state = state
+        self.device_state_changed.emit(track_id, device_id)
 
     def update_settings(self, **attrs) -> None:
         for name, value in attrs.items():

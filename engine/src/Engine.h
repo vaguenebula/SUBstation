@@ -6,6 +6,12 @@
 //    and atomics. It never locks, allocates, frees, or touches Python.
 //  * API calls may come from any Python thread. They serialise on `mutex_`,
 //    mutate the edit model, then rebuild and publish a new snapshot.
+//  * Plug-ins are created, called and destroyed on the main (UI) thread, as
+//    plug-in formats require: the plug-in calls below, and idle(), must come
+//    from the thread that created the engine. Plug-ins may run a message loop
+//    inside a call (a licence dialog), which can call back into the engine from
+//    the same thread, so `mutex_` is recursive and slow plug-in calls are made
+//    without holding it.
 
 #include <array>
 #include <atomic>
@@ -58,6 +64,20 @@ struct MeterReading {
     float right = 0.f;
 };
 
+// A processor's description for the UI.
+struct ProcessorInfo {
+    std::string typeId;
+    std::string name;
+    int latency = 0;  // samples
+    int tail = 0;
+    bool hasEditor = false;
+};
+
+// A ProcessorEvent and the processor it came from.
+struct ProcessorEventRecord : ProcessorEvent {
+    uint32_t processorId = 0;
+};
+
 struct DeviceStatus {
     bool open = false;
     std::string name;
@@ -106,11 +126,29 @@ public:
 
     // --- Devices on tracks (insert chain) ------------------------------------
     uint32_t addBuiltinProcessor(uint32_t trackId, const std::string& type, int index);
+    // Loads a plug-in ("VST3" format) into the chain. Main thread; throws
+    // std::runtime_error with a message for the user if it can't be loaded.
+    uint32_t addPluginProcessor(uint32_t trackId, const std::string& format, const std::string& path,
+                                const std::string& uid, int index);
     void removeProcessor(uint32_t processorId);
+    // Reorders a track's chain; `processorIds` must be the track's processors.
+    void setTrackProcessorOrder(uint32_t trackId, const std::vector<uint32_t>& processorIds);
+    ProcessorInfo processorInfo(uint32_t processorId);
     std::vector<ParamInfo> processorParams(uint32_t processorId);
+    int processorParamIndex(uint32_t processorId, const std::string& paramId);  // -1: no such parameter
     float processorParam(uint32_t processorId, int index);
     void setProcessorParam(uint32_t processorId, int index, float value);
+    std::string processorParamText(uint32_t processorId, int index, float value);
     void setProcessorEnabled(uint32_t processorId, bool enabled);
+    std::vector<uint8_t> processorState(uint32_t processorId);
+    void setProcessorState(uint32_t processorId, const std::vector<uint8_t>& state);
+    // Plug-in editors, in windows owned by `ownerWindow` (an HWND; 0 for none).
+    bool openEditor(uint32_t processorId, uintptr_t ownerWindow, const std::string& title);
+    void closeEditor(uint32_t processorId);
+    bool isEditorOpen(uint32_t processorId);
+    void setEditorTitle(uint32_t processorId, const std::string& title);
+    // What processors reported since the last call (edits in a plug-in's editor...).
+    std::vector<ProcessorEventRecord> takeProcessorEvents();
 
     // --- Transport ------------------------------------------------------------
     void play();
@@ -138,8 +176,9 @@ public:
     void exportWav(const std::string& path, double startBeat, double endBeat, int bitDepth);
 
     // --- Housekeeping ---------------------------------------------------------
-    // Call regularly from the UI thread: frees retired snapshots, handles device
-    // loss. Future home of plugin main-thread callbacks.
+    // Call regularly from the UI thread: frees retired snapshots and removed
+    // processors, handles device loss, and does the main-thread work plug-ins
+    // asked for (restarts, parameter updates, editor events).
     void idle();
 
 private:
@@ -150,6 +189,7 @@ private:
         std::vector<std::string> clipKeys;  // sourceKey() of each clip's path
         std::vector<NoteDesc> notes;
         std::vector<std::shared_ptr<Processor>> inserts;
+        std::shared_ptr<DelayLine> delay;   // delay compensation, kept across snapshots
     };
 
     void audioCallback(float* out, uint32_t frames, uint32_t channels) noexcept override;
@@ -157,6 +197,9 @@ private:
 
     TrackModel& trackLocked(uint32_t trackId);
     std::shared_ptr<Processor> processorLocked(uint32_t processorId);
+    std::shared_ptr<Processor> processor(uint32_t processorId);  // locks
+    uint32_t insertProcessorLocked(uint32_t trackId, std::shared_ptr<Processor> processor, int index);
+    void retireProcessorLocked(std::shared_ptr<Processor> processor);
     void rebuildSnapshotLocked();
     void pushCommandLocked(const TransportCommand& command);
     void serviceTransportIfIdleLocked();
@@ -166,12 +209,13 @@ private:
     void suspendLiveLocked();
     void resumeLiveLocked();
     void renderOfflineLocked(double startBeat, int64_t frames, float* out, bool loop, bool metronome);
-    void prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices, double startBeat);
+    void prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices,
+                              std::vector<std::shared_ptr<DelayLine>>& delays, double startBeat);
     void resetProcessorsLocked();
     void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
     static std::string sourceKey(const std::string& path);
 
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
 
     AudioDevice device_;
     bool deviceRunning_ = false;
@@ -197,8 +241,11 @@ private:
 
     std::vector<TrackModel> tracks_;
     uint32_t nextTrackId_ = 1;
-    std::unordered_map<uint32_t, std::pair<uint32_t, std::shared_ptr<Processor>>> processors_;
+    std::unordered_map<uint32_t, std::pair<uint32_t, std::shared_ptr<Processor>>> processors_;  // id -> track, processor
     uint32_t nextProcessorId_ = 1;
+    // Removed processors wait here until no snapshot uses them, so that they are
+    // destroyed in idle(), on the main thread (plug-ins require it).
+    std::vector<std::shared_ptr<Processor>> graveyard_;
 
     // Stretchers for live playback, per configuration. They only grow (a voice
     // may still be in use by the audio thread) until the sample rate changes.

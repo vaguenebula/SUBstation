@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from PySide6.QtCore import QAbstractListModel, QMimeData, QModelIndex, Qt, QUrl
 
+from ...model.project import PluginRef
 from .. import icons
 
-PLUGIN_MIME = "application/x-gilstudio-plugin"
+PLUGIN_MIME = "application/x-gilstudio-plugin"  # JSON list of PluginRef fields
 DEVICE_MIME = "application/x-gilstudio-device"  # JSON list of built-in device kinds
 
 
@@ -22,12 +23,28 @@ def device_kinds(mime) -> list[str]:
     return [k for k in kinds if isinstance(k, str)]
 
 
+def plugin_refs(mime) -> list[PluginRef]:
+    """Plug-ins dragged from the browser, if any."""
+    if not mime.hasFormat(PLUGIN_MIME):
+        return []
+    try:
+        items = json.loads(bytes(mime.data(PLUGIN_MIME)).decode())
+        return [PluginRef(format=str(i["format"]), uid=str(i["uid"]), name=str(i["name"]),
+                          vendor=str(i.get("vendor", "")), path=str(i.get("path", "")),
+                          instrument=bool(i.get("instrument", False)))
+                for i in items]
+    except (ValueError, KeyError, TypeError):
+        return []
+
+
 @dataclass(frozen=True)
 class BrowserItem:
     name: str
     path: str
     kind: str  # "audio", "plugin" or "device" (built-in; `path` is the device kind)
-    detail: str = ""  # parent folder, plugin format, or device category
+    detail: str = ""  # parent folder, plug-in vendor, or device category
+    plugin: PluginRef | None = None
+    tooltip: str = ""
 
     def matches(self, terms: list[str]) -> bool:
         haystack = f"{self.name} {self.detail}".lower()
@@ -57,9 +74,9 @@ class ItemListModel(QAbstractListModel):
         if item is None:
             return None
         if role == Qt.ItemDataRole.DisplayRole:
-            return f"{item.name}   ({item.detail})" if item.kind == "plugin" else item.name
+            return f"{item.name}   ({item.detail})" if item.kind == "plugin" and item.detail else item.name
         if role == Qt.ItemDataRole.ToolTipRole:
-            return item.path
+            return item.tooltip or item.path
         if role == Qt.ItemDataRole.DecorationRole:
             return icons.waveform() if item.kind == "audio" else icons.plugin()
         return None
@@ -77,7 +94,7 @@ class ItemListModel(QAbstractListModel):
         audio = [QUrl.fromLocalFile(i.path) for i in items if i.kind == "audio"]
         if audio:
             mime.setUrls(audio)
-        plugins = [{"name": i.name, "format": i.detail, "path": i.path} for i in items if i.kind == "plugin"]
+        plugins = [asdict(i.plugin) for i in items if i.kind == "plugin" and i.plugin is not None]
         if plugins:
             mime.setData(PLUGIN_MIME, json.dumps(plugins).encode())
         devices = [i.path for i in items if i.kind == "device"]

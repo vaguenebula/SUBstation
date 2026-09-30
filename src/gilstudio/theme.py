@@ -97,6 +97,7 @@ QPushButton[role="activator"], QPushButton[role="solo"] {{
     padding: 0px; font-size: 8pt; font-weight: 600; border-radius: 2px;
 }}
 QPushButton[role="flat"] {{ padding: 0px; border: none; background: transparent; color: {TEXT_DIM}; }}
+QPushButton[role="small"] {{ padding: 0px 6px; font-size: 8pt; }}
 QPushButton[role="flat"]:hover {{ color: {TEXT}; }}
 
 QComboBox {{

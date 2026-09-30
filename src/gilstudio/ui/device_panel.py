@@ -1,21 +1,35 @@
 """Bottom 'detail view': the selected track's device chain. On a MIDI track the
 instrument comes first.
 
-Built-in devices only for now; this is also where VST3/CLAP devices will live.
-Parameter metadata comes from the engine, so plugin parameters will show up
-here without UI changes: a knob per parameter (log-scaled where the engine
-says so), or a list for parameters that choose between named values.
+Parameter metadata comes from the engine, so built-in devices and plug-ins
+show alike: a knob per parameter (log-scaled where the engine says so), or a
+list for parameters that choose between named values. A plug-in shows its
+parameters a page at a time, with its own text for their values, and has a
+button for its own editor. Right-click a device for more (move, presets).
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QPainter
+import base64
+import os
+from pathlib import Path
+
+from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QContextMenuEvent,
+    QDragEnterEvent,
+    QDropEvent,
+    QFontMetrics,
+    QPainter,
+)
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -24,16 +38,24 @@ from PySide6.QtWidgets import (
 
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
-from ..model.editor import BUILTIN_DEVICES, ProjectEditor, is_instrument
-from ..model.project import Device
+from ..model.editor import (
+    BUILTIN_DEVICES,
+    ProjectEditor,
+    device_is_instrument,
+    device_name,
+)
+from ..model.project import PLUGIN_KIND, Device
 from .arrangement.view_state import Selection
-from .browser.browser_models import PLUGIN_MIME, device_kinds
+from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from .widgets import Knob, ToggleButton
 
 PANEL_HEIGHT = 150
-EFFECTS_HINT = "Drop audio effects here from the browser (Built-in \u203a Audio Effects)"
-INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in \u203a Instruments)"
-INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create \u203a Insert MIDI Track)."
+PARAMS_PER_PAGE = 8
+PARAM_WIDTH = 58
+EFFECTS_HINT = "Drop audio effects here from the browser (Built-in or Plug-ins › Audio Effects)"
+INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in or Plug-ins › Instruments)"
+INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create › Insert MIDI Track)."
+PRESET_FILTER = "VST3 Preset (*.vstpreset)"
 
 
 def _format_value(value: float, unit: str) -> str:
@@ -52,9 +74,29 @@ def _format_value(value: float, unit: str) -> str:
     return f"{value:.2f} {unit}"
 
 
-class DeviceWidget(QFrame):
-    def __init__(self, track_id: str, device: Device, editor: ProjectEditor, bridge: EngineBridge,
-                 parent: QWidget | None = None):
+def _encode(state: bytes | None) -> str | None:
+    return base64.b64encode(state).decode("ascii") if state else None
+
+
+def _elided(text: str, width: int, label: QLabel) -> str:
+    return QFontMetrics(label.font()).elidedText(text, Qt.TextElideMode.ElideRight, width)
+
+
+def _header_button(text: str, tooltip: str) -> QPushButton:
+    button = QPushButton(text)
+    button.setProperty("role", "flat")
+    button.setFont(theme.ui_font(11))
+    button.setFixedSize(18, 18)
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    button.setToolTip(tooltip)
+    return button
+
+
+class _DeviceFrame(QFrame):
+    """What built-in and plug-in devices share: the frame, the header (on/off,
+    name, delete) and the right-click menu."""
+
+    def __init__(self, track_id: str, device: Device, editor: ProjectEditor, parent: QWidget | None = None):
         super().__init__(parent)
         self.track_id = track_id
         self.device_id = device.id
@@ -67,22 +109,49 @@ class DeviceWidget(QFrame):
         self.enabled.setFixedSize(14, 14)
         self.enabled.setChecked(device.enabled)
         self.enabled.toggled.connect(lambda on: editor.set_device_enabled(track_id, self.device_id, on))
-        title = QLabel(BUILTIN_DEVICES.get(device.kind, (device.kind,))[0])
-        title.setFont(theme.ui_font(9, bold=True))
-        remove = QPushButton("×")
-        remove.setProperty("role", "flat")
-        remove.setFont(theme.ui_font(11))
-        remove.setFixedSize(18, 18)
-        remove.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        remove.setToolTip("Delete device")
+        self.title = QLabel(device_name(device))
+        self.title.setFont(theme.ui_font(9, bold=True))
+        remove = _header_button("×", "Delete device")
         remove.clicked.connect(lambda: editor.remove_device(track_id, self.device_id))
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        header.addWidget(self.enabled)
-        header.addWidget(title)
-        header.addStretch(1)
-        header.addWidget(remove)
+        self.header = QHBoxLayout()
+        self.header.setSpacing(6)
+        self.header.addWidget(self.enabled)
+        self.header.addWidget(self.title)
+        self.header.addStretch(1)
+        self.header.addWidget(remove)
 
+    def device(self) -> Device:
+        return self.editor.project.device(self.track_id, self.device_id)
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        menu = QMenu(self)
+        self.add_menu_actions(menu)
+        chain = [d.id for d in self.editor.project.track(self.track_id).devices]
+        index = chain.index(self.device_id)
+        if not device_is_instrument(self.device()):
+            left = menu.addAction("Move Left", lambda: self.editor.move_device(self.track_id, self.device_id, index - 1))
+            first = 1 if device_is_instrument(self.editor.project.track(self.track_id).devices[0]) else 0
+            left.setEnabled(index > first)
+            right = menu.addAction("Move Right",
+                                   lambda: self.editor.move_device(self.track_id, self.device_id, index + 1))
+            right.setEnabled(index < len(chain) - 1)
+            menu.addSeparator()
+        menu.addAction("Delete", lambda: self.editor.remove_device(self.track_id, self.device_id))
+        menu.exec(event.globalPos())
+
+    def add_menu_actions(self, menu: QMenu) -> None:
+        """Device-specific entries at the top of the right-click menu."""
+
+    def refresh(self, device: Device) -> None:
+        self.enabled.set_checked_silently(device.enabled)
+
+
+class DeviceWidget(_DeviceFrame):
+    """A built-in device: its parameters are in the model."""
+
+    def __init__(self, track_id: str, device: Device, editor: ProjectEditor, bridge: EngineBridge,
+                 parent: QWidget | None = None):
+        super().__init__(track_id, device, editor, parent)
         self.knobs: dict[str, tuple[Knob, QLabel, str]] = {}
         self.choices: dict[str, QComboBox] = {}
         params = QHBoxLayout()
@@ -124,12 +193,12 @@ class DeviceWidget(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 8)
-        layout.addLayout(header)
+        layout.addLayout(self.header)
         layout.addLayout(params)
         layout.addStretch(1)
 
     def refresh(self, device: Device) -> None:
-        self.enabled.set_checked_silently(device.enabled)
+        super().refresh(device)
         for param_id, (knob, readout, unit) in self.knobs.items():
             value = device.params.get(param_id)
             if value is not None:
@@ -139,6 +208,233 @@ class DeviceWidget(QFrame):
             value = device.params.get(param_id)
             if value is not None:
                 choice.setCurrentIndex(round(value))
+
+
+class PluginDeviceWidget(_DeviceFrame):
+    """A plug-in: its parameters live in the plug-in (the engine), shown a page
+    at a time; the Edit button shows its own editor."""
+
+    page_changed = Signal(str, int)  # device id, page
+
+    def __init__(self, track_id: str, device: Device, editor: ProjectEditor, bridge: EngineBridge,
+                 page: int = 0, parent: QWidget | None = None):
+        super().__init__(track_id, device, editor, parent)
+        self.bridge = bridge
+        self.engine = bridge.engine
+        self.engine_id = bridge.engine_device_id(track_id, device.id)
+        self.knobs: dict[int, tuple[Knob, QLabel]] = {}  # parameter index ->
+        self.choices: dict[int, QComboBox] = {}
+        self.infos = self.engine.processor_params(self.engine_id) if self.engine_id is not None else []
+        # What a generic editor should offer: what can be automated and isn't the plug-in's own business.
+        shown = [i for i, p in enumerate(self.infos) if p.automatable and not p.hidden and not p.read_only]
+        self.shown = shown or [i for i, p in enumerate(self.infos) if not p.hidden and not p.read_only]
+        self.pages = max(1, -(-len(self.shown) // PARAMS_PER_PAGE))
+        self.page = min(page, self.pages - 1)
+
+        plugin = device.plugin
+        self.title.setText(_elided(plugin.name, 150, self.title))
+        self._update_tooltip()
+
+        self.previous = _header_button("‹", "Previous parameters")
+        self.previous.clicked.connect(lambda: self.set_page(self.page - 1))
+        self.page_label = QLabel()
+        self.page_label.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 8pt;")
+        self.next = _header_button("›", "Next parameters")
+        self.next.clicked.connect(lambda: self.set_page(self.page + 1))
+        self.edit = ToggleButton("Edit", role="small", tooltip="Show the plug-in's own editor")
+        self.edit.setFixedHeight(18)
+        self.edit.toggled.connect(self._toggle_editor)
+        at = self.header.indexOf(self.title) + 1
+        for widget in (self.edit, self.previous, self.page_label, self.next):
+            self.header.insertWidget(at, widget)
+            at += 1
+        for widget in (self.previous, self.page_label, self.next):
+            widget.setVisible(self.pages > 1)
+        self.edit.setEnabled(self.engine_id is not None)
+        self.update_editor_button()
+
+        self.params = QHBoxLayout()
+        self.params.setSpacing(6)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.addLayout(self.header)
+        if self.engine_id is None:
+            message = QLabel(bridge.plugin_errors.get(device.id) or f"{plugin.name} is not loaded.")
+            message.setWordWrap(True)
+            message.setStyleSheet(f"color: {theme.TEXT_DIM};")
+            message.setFixedWidth(260)
+            layout.addWidget(message)
+        else:
+            layout.addLayout(self.params)
+            self._build_page()
+        layout.addStretch(1)
+
+    def _update_tooltip(self) -> None:
+        plugin = self.device().plugin
+        lines = [plugin.name, plugin.vendor, self.bridge.plugin_path(plugin) or plugin.path]
+        if self.engine_id is not None:
+            latency = self.engine.processor_info(self.engine_id).latency
+            if latency:
+                lines.append(f"Latency: {latency} samples (compensated)")
+        self.title.setToolTip("\n".join(line for line in lines if line))
+
+    # --- Parameters ----------------------------------------------------------------
+
+    def _text(self, index: int, value: float) -> str:
+        info = self.infos[index]
+        text = self.engine.processor_param_text(self.engine_id, index, value)
+        if not text:
+            return f"{value:.2f}"
+        return text if not info.unit or info.unit in text else f"{text} {info.unit}"
+
+    def set_page(self, page: int) -> None:
+        page = max(0, min(page, self.pages - 1))
+        if page != self.page:
+            self.page = page
+            self._build_page()
+            self.page_changed.emit(self.device_id, page)
+
+    def _build_page(self) -> None:
+        while self.params.count():
+            item = self.params.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                self._clear(item.layout())
+        self.knobs.clear()
+        self.choices.clear()
+        self.page_label.setText(f"{self.page + 1}/{self.pages}")
+        self.previous.setEnabled(self.page > 0)
+        self.next.setEnabled(self.page < self.pages - 1)
+        first = self.page * PARAMS_PER_PAGE
+        for index in self.shown[first:first + PARAMS_PER_PAGE]:
+            self.params.addWidget(self._param_column(index))
+        if not self.shown:
+            none = QLabel("No parameters to show here: use the plug-in's editor.")
+            none.setStyleSheet(f"color: {theme.TEXT_DIM};")
+            self.params.addWidget(none)
+
+    @staticmethod
+    def _clear(layout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _param_column(self, index: int) -> QWidget:
+        info = self.infos[index]
+        value = self.engine.processor_param(self.engine_id, index)
+        column_widget = QWidget()
+        column_widget.setFixedWidth(PARAM_WIDTH)
+        column = QVBoxLayout(column_widget)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(1)
+        name = QLabel()
+        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 8pt;")
+        name.setText(_elided(info.name, PARAM_WIDTH, name))
+        name.setToolTip(info.name)
+        column.addWidget(name)
+        if info.value_labels:
+            choice = QComboBox()
+            choice.addItems(info.value_labels)
+            choice.setCurrentIndex(round(value))
+            choice.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            choice.setFixedWidth(PARAM_WIDTH)
+            choice.activated.connect(lambda i, ix=index: self._edit(ix, float(i), None))
+            column.addWidget(choice)
+            column.addStretch(1)
+            self.choices[index] = choice
+        else:
+            centred = info.steps == 0 and abs(info.default_value - 0.5 * (info.min_value + info.max_value)) < 1e-6
+            knob = Knob(info.min_value, info.max_value, value, default=info.default_value, bipolar=centred,
+                        step=1.0 if info.steps else 0.0, formatter=lambda v, ix=index: self._text(ix, v))
+            knob.setFixedSize(34, 34)
+            readout = QLabel()
+            readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            readout.setStyleSheet("font-size: 8pt;")
+            readout.setText(_elided(self._text(index, value), PARAM_WIDTH, readout))
+            knob.valueChanged.connect(lambda v, key, ix=index: self._edit(ix, v, key))
+            column.addWidget(knob, 0, Qt.AlignmentFlag.AlignHCenter)
+            column.addWidget(readout)
+            self.knobs[index] = (knob, readout)
+        return column_widget
+
+    def _edit(self, index: int, value: float, gesture: object | None) -> None:
+        old = self.engine.processor_param(self.engine_id, index)
+        self.editor.set_device_param(self.track_id, self.device_id, self.infos[index].id, value, gesture, old=old)
+
+    def refresh_values(self) -> None:
+        if self.engine_id is None:
+            return
+        for index, (knob, readout) in self.knobs.items():
+            value = self.engine.processor_param(self.engine_id, index)
+            knob.setValue(value)
+            readout.setText(_elided(self._text(index, value), PARAM_WIDTH, readout))
+        for index, choice in self.choices.items():
+            choice.setCurrentIndex(round(self.engine.processor_param(self.engine_id, index)))
+        self._update_tooltip()
+
+    def refresh(self, device: Device) -> None:
+        super().refresh(device)
+        self.refresh_values()
+
+    # --- Editor and presets --------------------------------------------------------
+
+    def update_editor_button(self) -> None:
+        self.edit.set_checked_silently(self.bridge.is_plugin_editor_open(self.track_id, self.device_id))
+
+    def _toggle_editor(self, show: bool) -> None:
+        if show:
+            self.bridge.open_plugin_editor(self.track_id, self.device_id)
+        else:
+            self.bridge.close_plugin_editor(self.track_id, self.device_id)
+        self.update_editor_button()
+
+    def add_menu_actions(self, menu: QMenu) -> None:
+        loaded = self.engine_id is not None
+        menu.addAction("Show Editor", lambda: self._toggle_editor(True)).setEnabled(loaded)
+        menu.addAction("Load Preset…", self.load_preset).setEnabled(loaded)
+        menu.addAction("Save Preset…", self.save_preset).setEnabled(loaded)
+        menu.addSeparator()
+
+    def _preset_folder(self) -> str:
+        stored = QSettings().value("plugins/preset_dir")
+        if stored and os.path.isdir(str(stored)):
+            return str(stored)
+        plugin = self.device().plugin
+        # Where VST3 presets usually live.
+        folder = Path.home() / "Documents" / "VST3 Presets" / (plugin.vendor or "Unknown") / plugin.name
+        return str(folder if folder.is_dir() else Path.home() / "Documents")
+
+    def load_preset(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Load Preset", self._preset_folder(), PRESET_FILTER)
+        if not path:
+            return
+        QSettings().setValue("plugins/preset_dir", str(Path(path).parent))
+        try:
+            data = Path(path).read_bytes()
+            old = self.bridge.plugin_state(self.track_id, self.device_id)
+            self.engine.set_processor_state(self.engine_id, data)  # fails if it is another plug-in's
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.bridge.status_message.emit(f"Could not load {Path(path).name}: {exc}")
+            return
+        self.editor.set_device_state(self.track_id, self.device_id, _encode(old), _encode(data),
+                                     f"Load Preset {Path(path).stem}")
+
+    def save_preset(self) -> None:
+        plugin = self.device().plugin
+        suggested = str(Path(self._preset_folder()) / f"{plugin.name}.vstpreset")
+        path, _ = QFileDialog.getSaveFileName(self, "Save Preset", suggested, PRESET_FILTER)
+        if not path:
+            return
+        QSettings().setValue("plugins/preset_dir", str(Path(path).parent))
+        try:
+            state = self.bridge.plugin_state(self.track_id, self.device_id)
+            if state is not None:
+                Path(path).write_bytes(state)
+        except (OSError, RuntimeError) as exc:
+            self.bridge.status_message.emit(f"Could not save the preset: {exc}")
 
 
 class DevicePanel(QFrame):
@@ -152,7 +448,8 @@ class DevicePanel(QFrame):
         self.selection = selection
         self.bridge = bridge
         self.track_id: str | None = None
-        self.widgets: dict[str, DeviceWidget] = {}
+        self.widgets: dict[str, _DeviceFrame] = {}
+        self._pages: dict[str, int] = {}  # plug-in device id -> the parameter page it shows
         self.setFixedHeight(PANEL_HEIGHT)
         self.setAcceptDrops(True)
 
@@ -188,9 +485,14 @@ class DevicePanel(QFrame):
         selection.changed.connect(self._on_selection)
         self.project.devices_changed.connect(self._on_devices_changed)
         self.project.device_param_changed.connect(self._on_param_changed)
+        self.project.device_state_changed.connect(self._on_state_changed)
         self.project.track_changed.connect(self._on_track_changed)
         self.project.reset.connect(lambda: self.show_track(None))
         self.project.track_removed.connect(lambda tid, _i: self.show_track(None) if tid == self.track_id else None)
+        bridge.plugin_params_changed.connect(self._on_plugin_values)
+        bridge.plugin_params_rebuilt.connect(self._on_plugin_rebuilt)
+        bridge.plugin_editor_changed.connect(self._on_plugin_editor)
+        bridge.devices_loaded.connect(self._on_devices_changed)
         self.show_track(None)
 
     def paintEvent(self, _event) -> None:
@@ -210,9 +512,28 @@ class DevicePanel(QFrame):
         if track_id == self.track_id and device_id in self.widgets:
             self.widgets[device_id].refresh(self.project.device(track_id, device_id))
 
+    def _on_state_changed(self, track_id: str, device_id: str) -> None:
+        widget = self.widgets.get(device_id) if track_id == self.track_id else None
+        if isinstance(widget, PluginDeviceWidget):
+            widget.refresh_values()
+
+    def _on_plugin_values(self, track_id: str, device_id: str) -> None:
+        self._on_state_changed(track_id, device_id)
+
+    def _on_plugin_rebuilt(self, track_id: str, _device_id: str) -> None:
+        self._on_devices_changed(track_id)
+
+    def _on_plugin_editor(self, track_id: str, device_id: str) -> None:
+        widget = self.widgets.get(device_id) if track_id == self.track_id else None
+        if isinstance(widget, PluginDeviceWidget):
+            widget.update_editor_button()
+
     def _on_track_changed(self, track_id: str) -> None:
         if track_id == self.track_id:
             self.title.setText(self.project.track(track_id).name)
+
+    def _remember_page(self, device_id: str, page: int) -> None:
+        self._pages[device_id] = page
 
     def show_track(self, track_id: str | None) -> None:
         if track_id is not None and not self.project.has_track(track_id):
@@ -230,12 +551,16 @@ class DevicePanel(QFrame):
         track = self.project.track(track_id)
         self.title.setText(track.name)
         for device in track.devices:
-            widget = DeviceWidget(track_id, device, self.editor, self.bridge)
+            if device.is_plugin:
+                widget = PluginDeviceWidget(track_id, device, self.editor, self.bridge, self._pages.get(device.id, 0))
+                widget.page_changed.connect(self._remember_page)
+            else:
+                widget = DeviceWidget(track_id, device, self.editor, self.bridge)
             self.widgets[device.id] = widget
             self.chain_layout.addWidget(widget)
         self.chain_layout.addWidget(self.hint)
         self.chain_layout.addStretch(1)
-        needs_instrument = track.is_midi and not any(is_instrument(d.kind) for d in track.devices)
+        needs_instrument = track.is_midi and not any(device_is_instrument(d) for d in track.devices)
         self.hint.setText(INSTRUMENT_HINT if needs_instrument else EFFECTS_HINT)
         self.hint.setVisible(needs_instrument or not track.devices)
 
@@ -245,11 +570,12 @@ class DevicePanel(QFrame):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        kinds = [k for k in device_kinds(event.mimeData()) if k in BUILTIN_DEVICES]
-        if kinds and self.track_id is not None:
-            refused = [kind for kind in kinds if self.editor.add_device(self.track_id, kind) is None]
-            if refused:
+        mime = event.mimeData()
+        if self.track_id is not None:
+            kinds = [k for k in device_kinds(mime) if k in BUILTIN_DEVICES]
+            added = [self.editor.add_device(self.track_id, kind) for kind in kinds]
+            added += [self.editor.add_device(self.track_id, PLUGIN_KIND, plugin=ref) for ref in plugin_refs(mime)]
+            if any(device is None for device in added):
                 self.status_message.emit(INSTRUMENT_REFUSED)
-        else:
-            self.status_message.emit("VST3/CLAP plugin hosting is not available yet.")
         event.acceptProposedAction()
+

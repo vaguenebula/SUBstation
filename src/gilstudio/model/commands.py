@@ -174,6 +174,24 @@ class SetDeviceParamCommand(_MergeableCommand):
         self.project.set_device_param(*self.key, self.old)
 
 
+class SetDeviceStateCommand(QUndoCommand):
+    """Replaces a plug-in's whole state (loading a preset); states are base64."""
+
+    def __init__(self, project: Project, track_id: str, device_id: str, old: str | None, new: str, text: str):
+        super().__init__(text)
+        self.project = project
+        self.track_id = track_id
+        self.device_id = device_id
+        self.old = old
+        self.new = new
+
+    def redo(self) -> None:
+        self.project.set_device_state(self.track_id, self.device_id, self.new)
+
+    def undo(self) -> None:
+        self.project.set_device_state(self.track_id, self.device_id, self.old)
+
+
 class SetDeviceEnabledCommand(QUndoCommand):
     def __init__(self, project: Project, track_id: str, device_id: str, enabled: bool):
         super().__init__("Activate Device" if enabled else "Deactivate Device")
