@@ -10,12 +10,26 @@
 #include <nanobind/stl/vector.h>
 
 #include "Engine.h"
+#include "plugins/Vst3Format.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
 
 using gil::AudioSource;
 using gil::Engine;
+
+namespace {
+
+nb::bytes toBytes(const std::vector<uint8_t>& data) {
+    return nb::bytes(reinterpret_cast<const char*>(data.data()), data.size());
+}
+
+std::vector<uint8_t> fromBytes(const nb::bytes& data) {
+    const auto* begin = static_cast<const uint8_t*>(data.data());
+    return {begin, begin + data.size()};
+}
+
+}  // namespace
 
 using PeakArray = nb::ndarray<nb::numpy, const float, nb::ndim<3>, nb::c_contig>;
 using SampleArray = nb::ndarray<nb::numpy, const float, nb::ndim<2>>;
@@ -68,7 +82,60 @@ NB_MODULE(_engine, m) {
         .def_ro("max_value", &gil::ParamInfo::maxValue)
         .def_ro("default_value", &gil::ParamInfo::defaultValue)
         .def_ro("log_scale", &gil::ParamInfo::logScale)
-        .def_ro("value_labels", &gil::ParamInfo::valueLabels);
+        .def_ro("value_labels", &gil::ParamInfo::valueLabels)
+        .def_ro("steps", &gil::ParamInfo::steps)
+        .def_ro("automatable", &gil::ParamInfo::automatable)
+        .def_ro("read_only", &gil::ParamInfo::readOnly)
+        .def_ro("hidden", &gil::ParamInfo::hidden)
+        .def("__repr__", [](const gil::ParamInfo& p) { return "ParamInfo('" + p.id + "', '" + p.name + "')"; });
+
+    nb::class_<gil::PluginDescription>(m, "PluginDescription")
+        .def_ro("format", &gil::PluginDescription::format)
+        .def_ro("path", &gil::PluginDescription::path)
+        .def_ro("uid", &gil::PluginDescription::uid)
+        .def_ro("name", &gil::PluginDescription::name)
+        .def_ro("vendor", &gil::PluginDescription::vendor)
+        .def_ro("version", &gil::PluginDescription::version)
+        .def_ro("category", &gil::PluginDescription::category)
+        .def_ro("is_instrument", &gil::PluginDescription::isInstrument)
+        .def("__repr__", [](const gil::PluginDescription& d) {
+            return "PluginDescription('" + d.name + "', " + d.format + ", " + d.uid + ")";
+        });
+
+    m.def(
+        "scan_vst3", [](const std::string& path) { return gil::vst3::Vst3Format::instance().scanFile(path); },
+        "path"_a, ReleaseGil(),
+        "List the plug-ins in a VST3 file or bundle. Loads its code: the UI calls this in a child process.");
+    m.def("vst3_search_paths", [] { return gil::vst3::Vst3Format::instance().defaultSearchPaths(); },
+          "The standard VST3 folders.");
+
+    nb::class_<gil::ProcessorInfo>(m, "ProcessorInfo")
+        .def_ro("type_id", &gil::ProcessorInfo::typeId)
+        .def_ro("name", &gil::ProcessorInfo::name)
+        .def_ro("latency", &gil::ProcessorInfo::latency)
+        .def_ro("tail", &gil::ProcessorInfo::tail)
+        .def_ro("has_editor", &gil::ProcessorInfo::hasEditor);
+
+    nb::enum_<gil::ProcessorEvent::Type>(m, "ProcessorEventType")
+        .value("PARAM_EDITED", gil::ProcessorEvent::Type::ParamEdited)
+        .value("PARAMS_CHANGED", gil::ProcessorEvent::Type::ParamsChanged)
+        .value("PARAM_INFO_CHANGED", gil::ProcessorEvent::Type::ParamInfoChanged)
+        .value("EDITOR_CLOSED", gil::ProcessorEvent::Type::EditorClosed)
+        .value("EDITOR_REQUESTED", gil::ProcessorEvent::Type::EditorRequested)
+        .value("STATE_DIRTY", gil::ProcessorEvent::Type::StateDirty)
+        .value("LATENCY_CHANGED", gil::ProcessorEvent::Type::LatencyChanged);
+
+    nb::class_<gil::ProcessorEventRecord>(m, "ProcessorEvent")
+        .def_ro("processor_id", &gil::ProcessorEventRecord::processorId)
+        .def_prop_ro("type", [](const gil::ProcessorEventRecord& e) { return e.type; })
+        .def_prop_ro("param_index", [](const gil::ProcessorEventRecord& e) { return e.paramIndex; })
+        .def_prop_ro("value", [](const gil::ProcessorEventRecord& e) { return e.value; })
+        .def_prop_ro("old_value", [](const gil::ProcessorEventRecord& e) { return e.oldValue; })
+        .def_prop_ro("gesture", [](const gil::ProcessorEventRecord& e) { return e.gesture; })
+        .def("__repr__", [](const gil::ProcessorEventRecord& e) {
+            return "ProcessorEvent(" + std::to_string(e.processorId) + ", type=" +
+                   std::to_string(static_cast<int>(e.type)) + ", param=" + std::to_string(e.paramIndex) + ")";
+        });
 
     nb::class_<gil::MeterReading>(m, "MeterReading")
         .def_ro("track_id", &gil::MeterReading::trackId)
@@ -187,11 +254,45 @@ NB_MODULE(_engine, m) {
         .def("take_meters", &Engine::takeMeters, "Peak levels since the last call; track_id 0 is the master.")
         // Insert chain
         .def("add_builtin_processor", &Engine::addBuiltinProcessor, "track_id"_a, "type"_a, "index"_a = -1)
+        .def("add_plugin_processor", &Engine::addPluginProcessor, "track_id"_a, "format"_a, "path"_a, "uid"_a,
+             "index"_a = -1, ReleaseGil(),
+             "Load a plug-in into a track's chain (main thread). Raises RuntimeError if it can't be loaded.")
         .def("remove_processor", &Engine::removeProcessor, "processor_id"_a)
+        .def("set_track_processor_order", &Engine::setTrackProcessorOrder, "track_id"_a, "processor_ids"_a)
+        .def("processor_info", &Engine::processorInfo, "processor_id"_a)
         .def("processor_params", &Engine::processorParams, "processor_id"_a)
+        .def("processor_param_index", &Engine::processorParamIndex, "processor_id"_a, "param_id"_a)
         .def("processor_param", &Engine::processorParam, "processor_id"_a, "index"_a)
         .def("set_processor_param", &Engine::setProcessorParam, "processor_id"_a, "index"_a, "value"_a)
+        .def("processor_param_text", &Engine::processorParamText, "processor_id"_a, "index"_a, "value"_a,
+             "The processor's own text for a value ('' if it has none).")
         .def("set_processor_enabled", &Engine::setProcessorEnabled, "processor_id"_a, "enabled"_a)
+        .def(
+            "processor_state",
+            [](Engine& self, uint32_t processorId) {
+                std::vector<uint8_t> state;
+                {
+                    nb::gil_scoped_release release;
+                    state = self.processorState(processorId);
+                }
+                return toBytes(state);
+            },
+            "processor_id"_a, "A plug-in's settings (a .vstpreset); empty for built-in devices.")
+        .def(
+            "set_processor_state",
+            [](Engine& self, uint32_t processorId, const nb::bytes& state) {
+                const auto data = fromBytes(state);
+                nb::gil_scoped_release release;
+                self.setProcessorState(processorId, data);
+            },
+            "processor_id"_a, "state"_a)
+        .def("open_editor", &Engine::openEditor, "processor_id"_a, "owner_window"_a = 0, "title"_a = "",
+             ReleaseGil(), "Show a plug-in's editor window (or raise it). False if it has none.")
+        .def("close_editor", &Engine::closeEditor, "processor_id"_a)
+        .def("is_editor_open", &Engine::isEditorOpen, "processor_id"_a)
+        .def("set_editor_title", &Engine::setEditorTitle, "processor_id"_a, "title"_a)
+        .def("take_processor_events", &Engine::takeProcessorEvents,
+             "What processors reported since the last call (edits in a plug-in's own editor, ...).")
         // Transport
         .def("play", &Engine::play)
         .def("stop", &Engine::stop)
@@ -224,5 +325,5 @@ NB_MODULE(_engine, m) {
             "Render the arrangement to a (frames, 2) float32 array.")
         .def("export_wav", &Engine::exportWav, "path"_a, "start_beat"_a, "end_beat"_a, "bit_depth"_a = 24,
              ReleaseGil())
-        .def("idle", &Engine::idle, "Housekeeping; call periodically from the UI thread.");
+        .def("idle", &Engine::idle, ReleaseGil(), "Housekeeping; call periodically from the UI thread.");
 }

@@ -227,7 +227,7 @@ def test_midi_tracks_roundtrip(tmp_path, qapp):
     target = tmp_path / "song.gilproj"
     save_project(project, target)
     data = json.loads(target.read_text(encoding="utf-8"))
-    assert data["version"] == 2 and data["tracks"][0]["kind"] == "midi"
+    assert data["version"] >= 2 and data["tracks"][0]["kind"] == "midi"  # 2 added MIDI tracks
     assert data["tracks"][0]["clips"][0]["notes"] == [[C, 1.0, 0.5, 90], [G, 2.25, 1.0, 100]]
     loaded = Project()
     load_project(loaded, target)

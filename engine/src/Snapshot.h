@@ -4,6 +4,7 @@
 // it with a single atomic pointer swap. All positions are already converted to
 // samples, so the audio thread never deals with beats or seconds.
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -60,6 +61,44 @@ struct ClipRender {
     double sourceAt(int64_t t) const noexcept { return sourceOffset + static_cast<double>(t - start) * rate; }
 };
 
+// Delays a track's output so that it lines up with the track whose devices add
+// the most latency (plug-in delay compensation). Rendering-thread state; the
+// edit side allocates it and keeps it across snapshots.
+class DelayLine {
+public:
+    explicit DelayLine(int capacity)
+        : left_(static_cast<size_t>(std::max(capacity, 1))), right_(static_cast<size_t>(std::max(capacity, 1))) {}
+    int capacity() const noexcept { return static_cast<int>(left_.size()); }
+
+    // Real-time. When the delay changes it starts again from silence rather than
+    // replaying stale audio.
+    void process(float* left, float* right, int frames, int delay) noexcept {
+        delay = std::clamp(delay, 0, capacity() - 1);
+        if (delay != delay_) {
+            std::fill(left_.begin(), left_.end(), 0.f);
+            std::fill(right_.begin(), right_.end(), 0.f);
+            delay_ = delay;
+            write_ = 0;
+        }
+        if (delay == 0) return;
+        const int size = capacity();
+        for (int i = 0; i < frames; ++i) {
+            left_[write_] = left[i];
+            right_[write_] = right[i];
+            int read = write_ - delay;
+            if (read < 0) read += size;
+            left[i] = left_[read];
+            right[i] = right_[read];
+            if (++write_ == size) write_ = 0;
+        }
+    }
+
+private:
+    std::vector<float> left_, right_;
+    int write_ = 0;
+    int delay_ = 0;
+};
+
 // A note of a MIDI clip, already cut to its clip: the renderer sends a note-on
 // at `start` and a note-off at `end`.
 struct NoteRender {
@@ -76,6 +115,9 @@ struct TrackRender {
     int64_t maxClipLength = 0;      // bounds the binary search window
     std::vector<NoteRender> notes;  // sorted by start
     std::vector<std::shared_ptr<Processor>> inserts;
+    int latency = 0;                    // samples the enabled inserts add
+    int compensation = 0;               // samples the track is delayed by to line up with the slowest one
+    std::shared_ptr<DelayLine> delay;   // for the live renderer (offline renders bring their own)
 };
 
 struct RenderSnapshot {
@@ -87,6 +129,7 @@ struct RenderSnapshot {
     int64_t loopStart = 0;
     int64_t loopEnd = 0;
     int64_t clipFadeSamples = 0;
+    int maxLatency = 0;  // the output lags the timeline by this much (tracks and metronome alike)
     std::vector<TrackRender> tracks;
     WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
 

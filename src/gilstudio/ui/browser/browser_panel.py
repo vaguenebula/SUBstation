@@ -1,4 +1,8 @@
-"""The browser on the left: categories and places, search, preview."""
+"""The browser on the left: categories and places, search, preview.
+
+Plug-ins are listed as the background scan finds them (Plug-ins › Instruments /
+Audio Effects); the footer shows the scan's progress, and hovering over
+"Plug-ins" lists the files that could not be read."""
 
 from __future__ import annotations
 
@@ -30,9 +34,10 @@ from ...model.editor import BUILTIN_CATEGORIES, BUILTIN_DEVICES
 from .. import icons
 from ..widgets import ToggleButton
 from .browser_models import BrowserItem, ItemListModel
-from .file_index import FileIndex
+from .file_index import FileIndex, PluginIndex
 
 ROLE_SCOPE = Qt.ItemDataRole.UserRole + 1
+PLUGIN_CATEGORIES = ("Instruments", "Audio Effects")
 
 
 def builtin_items(category: str | None = None) -> list[BrowserItem]:
@@ -49,6 +54,7 @@ def default_places() -> list[str]:
 class BrowserPanel(QWidget):
     file_activated = Signal(str)  # double-click: add the file to the arrangement
     device_activated = Signal(str)  # double-click a built-in device: add it to the selected track
+    plugin_activated = Signal(object)  # double-click a plug-in (a PluginRef): add it to the selected track
     status_message = Signal(str)
 
     def __init__(self, bridge: EngineBridge, parent: QWidget | None = None):
@@ -59,6 +65,11 @@ class BrowserPanel(QWidget):
         self.places: list[str] = [str(p) for p in stored] if isinstance(stored, list) and stored else default_places()
         self.index = FileIndex(self)
         self.index.updated.connect(self._refresh)
+        self.plugin_index = PluginIndex(self)
+        self.plugin_index.updated.connect(self._plugins_updated)
+        self.plugin_index.progress.connect(self._scan_progress)
+        self.plugin_index.status_message.connect(self.status_message)
+        self._scan_text = ""
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search  (Ctrl+F)")
@@ -130,6 +141,7 @@ class BrowserPanel(QWidget):
 
         self._build_sidebar()
         self.index.rebuild(self.places)
+        self.plugin_index.scan()
 
     @staticmethod
     def _make_draggable(view: QAbstractItemView) -> None:
@@ -171,7 +183,15 @@ class BrowserPanel(QWidget):
             child.setIcon(0, icons.plugin())
             builtin.addChild(child)
         builtin.setExpanded(True)
-        entry("Plug-ins", ("plugins",), icons.plugin())
+        plugins = entry("Plug-ins", ("plugins",), icons.plugin())
+        for name in PLUGIN_CATEGORIES:
+            child = QTreeWidgetItem([name])
+            child.setData(0, ROLE_SCOPE, ("plugins", name))
+            child.setIcon(0, icons.plugin())
+            plugins.addChild(child)
+        plugins.setExpanded(True)
+        self._plugins_entry = plugins
+        self._update_plugins_tooltip()
         section("PLACES")
         for place in self.places:
             entry(Path(place).name or place, ("place", place), icons.folder(), place)
@@ -205,6 +225,9 @@ class BrowserPanel(QWidget):
         menu = QMenu(self)
         if scope and scope[0] == "place":
             menu.addAction("Remove from Places", lambda: self.remove_place(scope[1]))
+        if scope and scope[0] == "plugins":
+            menu.addAction("Rescan Plug-ins", self.rescan_plugins)
+            menu.addSeparator()
         menu.addAction("Add Folder…", self.add_place)
         menu.addAction("Rescan", lambda: self.index.rebuild(self.places))
         menu.exec(self.sidebar.viewport().mapToGlobal(pos))
@@ -229,6 +252,46 @@ class BrowserPanel(QWidget):
     def _save_places(self) -> None:
         QSettings().setValue("browser/places", self.places)
 
+    # --- Plug-ins ------------------------------------------------------------------
+
+    def rescan_plugins(self) -> None:
+        """Read every plug-in file again (also those that failed before)."""
+        self.plugin_index.scan(rescan=True)
+
+    def _scan_progress(self, done: int, total: int, path: str) -> None:
+        self._scan_text = f"Scanning plug-ins {done + 1}/{total}: {Path(path).stem}"
+        if self._scope()[0] == "plugins":
+            self.status.setText(self._scan_text)
+
+    def _plugins_updated(self) -> None:
+        if not self.plugin_index.scanning:
+            self._scan_text = ""
+            failures = len(self.plugin_index.failures)
+            if failures:
+                self.status_message.emit(f"{failures} plug-in file{'s' if failures != 1 else ''} could not be read "
+                                         "(hover over Plug-ins in the browser for details).")
+        self._update_plugins_tooltip()
+        self._refresh()
+
+    def _update_plugins_tooltip(self) -> None:
+        failures = self.plugin_index.failures
+        lines = ["VST3 plug-ins"]
+        if failures:
+            lines.append("")
+            lines.append("Could not be read:")
+            lines += [f"{Path(f.path).name}: {f.reason}" for f in failures[:30]]
+            if len(failures) > 30:
+                lines.append(f"...and {len(failures) - 30} more")
+        self._plugins_entry.setToolTip(0, "\n".join(lines))
+
+    def _plugin_items(self, category: str | None) -> list[BrowserItem]:
+        items = self.plugin_index.items
+        if category == "Instruments":
+            return [i for i in items if i.plugin.instrument]
+        if category == "Audio Effects":
+            return [i for i in items if not i.plugin.instrument]
+        return items
+
     # --- Content -------------------------------------------------------------------
 
     def _refresh(self) -> None:
@@ -243,7 +306,7 @@ class BrowserPanel(QWidget):
             return
 
         if scope[0] == "plugins":
-            items = self.index.plugins
+            items = self._plugin_items(scope[1] if len(scope) > 1 else None)
         elif scope[0] == "builtin":
             items = builtin_items(scope[1] if len(scope) > 1 else None)
         elif scope[0] == "place":
@@ -255,10 +318,17 @@ class BrowserPanel(QWidget):
             items = [i for i in items if i.matches(terms)]
         self.list_model.set_items(items)
         self.content.setCurrentWidget(self.list_view)
-        if self.index.indexing:
+        if scope[0] == "plugins":
+            failures = len(self.plugin_index.failures)
+            if self.plugin_index.scanning:
+                self.status.setText(self._scan_text or "Scanning plug-ins…")
+            elif not self.plugin_index.plugins:
+                self.status.setText("No VST3 plug-ins found")
+            else:
+                note = f", {failures} could not be read" if failures and not terms else ""
+                self.status.setText(f"{len(items)} plug-in{'s' if len(items) != 1 else ''}{note}")
+        elif self.index.indexing:
             self.status.setText("Indexing…")
-        elif scope[0] == "plugins" and not items and not terms:
-            self.status.setText("No VST3/CLAP plug-ins found")
         else:
             self.status.setText(f"{len(items)} item{'s' if len(items) != 1 else ''}")
 
@@ -288,8 +358,8 @@ class BrowserPanel(QWidget):
             self.file_activated.emit(item.path)
         elif item.kind == "device":
             self.device_activated.emit(item.path)
-        else:
-            self.status_message.emit(f"{item.name}: VST3/CLAP plugin hosting is not available yet.")
+        elif item.kind == "plugin" and item.plugin is not None:
+            self.plugin_activated.emit(item.plugin)
 
     def _activate_tree(self, index: QModelIndex) -> None:
         if not self.fs_model.isDir(index):
@@ -301,3 +371,4 @@ class BrowserPanel(QWidget):
 
     def shutdown(self) -> None:
         self.index.wait()
+        self.plugin_index.wait()

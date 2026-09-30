@@ -37,4 +37,5 @@ def main(argv: list[str] | None = None) -> int:
         QTimer.singleShot(0, lambda: window.open_project(argv[1]))
     code = app.exec()
     engine.close_device()
+    window.bridge.shutdown()
     return code

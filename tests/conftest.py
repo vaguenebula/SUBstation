@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import traceback
 import wave
 from pathlib import Path
@@ -9,7 +10,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
 import pytest
 
+from gilstudio import _engine
+
 SAMPLE_RATE = 48000  # the engine's rate when no device is open
+
+# The VST3 test plug-ins, built with the engine (tests/vst3_plugins). The tests see
+# only these, never the plug-ins installed on the computer, and keep their own scan cache.
+TEST_PLUGINS = Path(_engine.__file__).parent / "_testplugins" / "GILTestPlugins.vst3"
+os.environ["GILSTUDIO_VST3_PATH"] = str(TEST_PLUGINS.parent)
+os.environ["GILSTUDIO_PLUGIN_CACHE"] = str(Path(tempfile.mkdtemp(prefix="gil-plugin-cache-")) / "vst3-cache.json")
 
 
 def write_wav(path: Path, samples: np.ndarray, sample_rate: int = SAMPLE_RATE) -> Path:
@@ -85,6 +94,7 @@ def window(app, tmp_path):
     w.undo_stack.setClean()
     w.close()
     engine.close_device()
+    w.bridge.shutdown()  # unloads the plug-ins
     w.deleteLater()
     app.processEvents()
     sys.excepthook = previous_hook

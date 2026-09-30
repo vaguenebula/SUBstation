@@ -1,6 +1,7 @@
 """Project files: JSON (.gilproj). Clip paths are stored both absolute and
 relative to the project file, so a project folder can be moved. MIDI tracks
-store their clips' notes inline, as [pitch, start, length, velocity]."""
+store their clips' notes inline, as [pitch, start, length, velocity]. Plug-in
+devices store which plug-in they are and its state (a .vstpreset, base64)."""
 
 from __future__ import annotations
 
@@ -19,13 +20,14 @@ from .project import (
     Device,
     MidiClip,
     Note,
+    PluginRef,
     Project,
     Track,
 )
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 2  # 2: MIDI tracks
+VERSION = 3  # 2: MIDI tracks, 3: plug-ins
 EXTENSION = ".gilproj"
 
 
@@ -71,6 +73,29 @@ def _clip_to_dict(clip: AnyClip, base: Path | None) -> dict:
     }
 
 
+def _device_to_dict(device: Device) -> dict:
+    data = {"id": device.id, "kind": device.kind, "enabled": device.enabled, "params": device.params}
+    if device.plugin is not None:
+        p = device.plugin
+        data["plugin"] = {"format": p.format, "uid": p.uid, "name": p.name, "vendor": p.vendor, "path": p.path,
+                          "instrument": p.instrument}
+        data["state"] = device.state
+    return data
+
+
+def _device(d: dict) -> Device:
+    plugin = None
+    if "plugin" in d:
+        p = d["plugin"]
+        plugin = PluginRef(format=str(p.get("format", "VST3")), uid=str(p["uid"]), name=str(p.get("name", "Plug-in")),
+                           vendor=str(p.get("vendor", "")), path=str(p.get("path", "")),
+                           instrument=bool(p.get("instrument", False)))
+    state = d.get("state")
+    return Device(id=d["id"], kind=d["kind"], enabled=bool(d.get("enabled", True)),
+                  params={k: float(v) for k, v in d.get("params", {}).items()}, plugin=plugin,
+                  state=state if isinstance(state, str) else None)
+
+
 def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
     base = project_file.parent if project_file else None
     return {
@@ -91,8 +116,7 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
                 "mute": t.mute,
                 "solo": t.solo,
                 "height": t.height,
-                "devices": [{"id": d.id, "kind": d.kind, "enabled": d.enabled, "params": d.params}
-                            for d in t.devices],
+                "devices": [_device_to_dict(d) for d in t.devices],
                 "clips": [_clip_to_dict(c, base) for c in t.clips],
             }
             for t in project.tracks
@@ -160,9 +184,7 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
             mute=bool(t.get("mute", False)),
             solo=bool(t.get("solo", False)),
             height=int(t.get("height", 68)),
-            devices=[Device(id=d["id"], kind=d["kind"], enabled=bool(d.get("enabled", True)),
-                            params={k: float(v) for k, v in d.get("params", {}).items()})
-                     for d in t.get("devices", [])],
+            devices=[_device(d) for d in t.get("devices", [])],
             clips=sorted(
                 (_midi_clip(c) if kind == "midi" else _audio_clip(c, base) for c in t.get("clips", [])),
                 key=lambda c: c.start_beat,

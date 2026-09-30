@@ -3,18 +3,26 @@ engine state (playhead, meters, CPU) through Qt signals.
 
 Everything here runs on the Qt main thread except source decoding, which runs
 in a small thread pool; the engine releases the GIL while decoding.
+
+Plug-ins: a device's engine processor lives as long as the device is in its
+chain, so a plug-in keeps its state (and open editor) when the chain around it
+changes. When a plug-in device goes away (deleted, or its track), its state is
+kept here, so undo brings it back as it was. Edits made in a plug-in's own
+editor come back from the engine as `plugin_param_edited`, for the undo stack.
 """
 
 from __future__ import annotations
 
+import base64
 import math
 import os
 from collections.abc import Callable
+from dataclasses import replace
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 
 from .. import _engine as ge
-from ..model.project import WARP_MODES, Clip, Project, Track
+from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Track
 from ..model.timebase import db_to_gain
 
 AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
@@ -78,13 +86,29 @@ class EngineBridge(QObject):
     meters_updated = Signal()
     device_changed = Signal()
     status_message = Signal(str)
+    # Plug-ins (track id, device id first)
+    plugin_param_edited = Signal(str, str, str, float, float, int)  # param id, value, value before, gesture
+    plugin_params_changed = Signal(str, str)  # values changed without edits (a preset, meters): show them
+    plugin_params_rebuilt = Signal(str, str)  # the parameter list changed
+    plugin_editor_changed = Signal(str, str)  # its editor opened or closed
+    plugin_state_dirty = Signal()  # a plug-in changed in a way no edit shows: the project has changes
+    devices_loaded = Signal(str)  # track id: its devices' processors were (re)created
 
     def __init__(self, engine: ge.Engine, project: Project, parent: QObject | None = None):
         super().__init__(parent)
         self.engine = engine
         self.project = project
         self._track_ids: dict[str, int] = {}  # model track id -> engine track id
-        self._devices: dict[str, list[tuple[str, int]]] = {}  # track id -> [(model device id, engine id)]
+        # track id -> [(model device id, engine id)]; the engine id is None when a plug-in didn't load
+        self._devices: dict[str, list[tuple[str, int | None]]] = {}
+        self._enabled: dict[int, bool] = {}  # engine id -> what the engine was told
+        self._plugin_ids: dict[int, str] = {}  # engine id of each plug-in processor -> the path it came from
+        self._plugin_states: dict[str, bytes] = {}  # device id -> its plug-in's state when it went away
+        self._param_ids: dict[int, list[str]] = {}  # engine id -> parameter ids by index (cache)
+        self._busy = 0  # > 0 while a plug-in call may run a message loop that calls us back
+        self.plugin_errors: dict[str, str] = {}  # device id -> why its plug-in isn't loaded
+        self.known_plugins: dict[str, str] = {}  # plug-in uid -> file, from the scan: finds moved plug-ins
+        self.owner_window: Callable[[], int] = lambda: 0  # HWND owning plug-in editor windows
         self._sources: dict[str, ge.AudioSource] = {}
         self._loading: dict[str, list[Callable[[], None]]] = {}
         self._failed: dict[str, str] = {}
@@ -106,6 +130,8 @@ class EngineBridge(QObject):
         project.clips_changed.connect(self._push_clips)
         project.devices_changed.connect(self._sync_devices)
         project.device_param_changed.connect(self._push_device_param)
+        project.device_state_changed.connect(self._push_device_state)
+        project.track_changed.connect(self._update_editor_titles)
         project.settings_changed.connect(self._push_settings)
 
         self._position_timer = QTimer(self)
@@ -126,6 +152,11 @@ class EngineBridge(QObject):
             self.engine.remove_track(engine_id)
         self._track_ids.clear()
         self._devices.clear()
+        self._enabled.clear()
+        self._plugin_ids.clear()
+        self._plugin_states.clear()
+        self._param_ids.clear()
+        self.plugin_errors.clear()
         self.meters.clear()
         for track in self.project.tracks:
             self._add_engine_track(track)
@@ -142,10 +173,11 @@ class EngineBridge(QObject):
         self._sync_devices(track.id)
 
     def _on_track_removed(self, track_id: str, _index: int) -> None:
+        for device_id, processor_id in self._devices.pop(track_id, []):
+            self._forget_processor(device_id, processor_id, remove=False)
         engine_id = self._track_ids.pop(track_id, None)
         if engine_id is not None:
             self.engine.remove_track(engine_id)  # also removes its devices
-        self._devices.pop(track_id, None)
         self.meters.pop(track_id, None)
 
     def _push_mixer(self, track_id: str) -> None:
@@ -174,20 +206,98 @@ class EngineBridge(QObject):
         engine_track = self._track_ids.get(track_id)
         if engine_track is None:
             return
-        devices = self.project.track(track_id).devices
-        current = self._devices.get(track_id, [])
-        if [d.id for d in devices] != [model_id for model_id, _ in current]:
-            # Structure changed: rebuild the chain. (Plugin devices will need
-            # state-preserving reordering here.)
-            for _, engine_id in current:
-                self.engine.remove_processor(engine_id)
-            current = [(d.id, self.engine.add_builtin_processor(engine_track, d.kind)) for d in devices]
-            self._devices[track_id] = current
-            for device in devices:
-                for param_id in device.params:
-                    self._push_device_param(track_id, device.id, param_id)
-        for device, (_, engine_id) in zip(devices, current, strict=True):
-            self.engine.set_processor_enabled(engine_id, device.enabled)
+        track = self.project.track(track_id)
+        current = dict(self._devices.get(track_id, []))
+        if list(current) != [d.id for d in track.devices]:
+            # The chain changed. Devices still in it keep their processors (a
+            # plug-in keeps its state and editor); new ones get one; the rest go.
+            wanted = {d.id for d in track.devices}
+            for device_id, processor_id in current.items():
+                if device_id not in wanted:
+                    self._forget_processor(device_id, processor_id)
+            chain = [(d.id, current[d.id] if d.id in current else self._create_processor(engine_track, d))
+                     for d in track.devices]
+            self._devices[track_id] = chain
+            self.engine.set_track_processor_order(engine_track, [pid for _, pid in chain if pid is not None])
+            self.devices_loaded.emit(track_id)
+        self._push_enabled(track)
+
+    def _push_enabled(self, track: Track) -> None:
+        for device, (_, processor_id) in zip(track.devices, self._devices.get(track.id, []), strict=True):
+            if processor_id is not None and self._enabled.get(processor_id) != device.enabled:
+                self.engine.set_processor_enabled(processor_id, device.enabled)
+                self._enabled[processor_id] = device.enabled
+
+    def _create_processor(self, engine_track: int, device: Device) -> int | None:
+        if device.is_plugin:
+            return self._load_plugin(engine_track, device)
+        processor_id = self.engine.add_builtin_processor(engine_track, device.kind)
+        for param_id, value in device.params.items():
+            self._set_param(processor_id, param_id, value)
+        return processor_id
+
+    def plugin_path(self, plugin: PluginRef) -> str | None:
+        """Where a plug-in is now: where it was, or where the scan found it."""
+        if plugin.path and os.path.exists(plugin.path):
+            return plugin.path
+        return self.known_plugins.get(plugin.uid)
+
+    def _load_plugin(self, engine_track: int, device: Device) -> int | None:
+        plugin = device.plugin
+        path = self.plugin_path(plugin)
+        if path is None:
+            self._plugin_failed(device, f"{plugin.name} is not installed.")
+            return None
+        self._busy += 1
+        try:
+            processor_id = self.engine.add_plugin_processor(engine_track, plugin.format, path, plugin.uid)
+        except (RuntimeError, ValueError) as exc:
+            self._plugin_failed(device, f"{plugin.name} could not be loaded: {exc}")
+            return None
+        finally:
+            self._busy -= 1
+        self._plugin_ids[processor_id] = path
+        self.plugin_errors.pop(device.id, None)
+        # Its state as it was when the device went away (undo), else as saved.
+        state = self._plugin_states.pop(device.id, None)
+        if state is None and device.state:
+            try:
+                state = base64.b64decode(device.state)
+            except ValueError:
+                state = None
+        if state:
+            self._set_plugin_state(processor_id, plugin.name, state)
+        return processor_id
+
+    def _plugin_failed(self, device: Device, message: str) -> None:
+        self.plugin_errors[device.id] = message
+        self.status_message.emit(message)
+
+    def _set_plugin_state(self, processor_id: int, name: str, state: bytes) -> None:
+        self._busy += 1
+        try:
+            self.engine.set_processor_state(processor_id, state)
+        except (RuntimeError, ValueError) as exc:
+            self.status_message.emit(f"{name}: its settings could not be restored ({exc})")
+        finally:
+            self._busy -= 1
+
+    def _forget_processor(self, device_id: str, processor_id: int | None, remove: bool = True) -> None:
+        """A device's processor goes away (with its track if not `remove`). A
+        plug-in's state is kept, in case the device comes back (undo)."""
+        self.plugin_errors.pop(device_id, None)
+        if processor_id is None:
+            return
+        if processor_id in self._plugin_ids:
+            try:
+                self._plugin_states[device_id] = self.engine.processor_state(processor_id)
+            except RuntimeError:
+                pass
+            del self._plugin_ids[processor_id]
+        self._enabled.pop(processor_id, None)
+        self._param_ids.pop(processor_id, None)
+        if remove:
+            self.engine.remove_processor(processor_id)
 
     def engine_device_id(self, track_id: str, device_id: str) -> int | None:
         for model_id, engine_id in self._devices.get(track_id, []):
@@ -200,10 +310,157 @@ class EngineBridge(QObject):
         if engine_id is None:
             return
         value = self.project.device(track_id, device_id).params[param_id]
-        for index, info in enumerate(self.engine.processor_params(engine_id)):
-            if info.id == param_id:
-                self.engine.set_processor_param(engine_id, index, value)
-                return
+        if engine_id in self._plugin_ids:
+            index = self.engine.processor_param_index(engine_id, param_id)
+            if index < 0 or self.engine.processor_param(engine_id, index) == value:
+                return  # an edit made in the plug-in's own editor: it has the value already
+            self.engine.set_processor_param(engine_id, index, value)
+            return
+        self._set_param(engine_id, param_id, value)
+
+    def _set_param(self, processor_id: int, param_id: str, value: float) -> None:
+        index = self.engine.processor_param_index(processor_id, param_id)
+        if index >= 0:
+            self.engine.set_processor_param(processor_id, index, value)
+
+    def _push_device_state(self, track_id: str, device_id: str) -> None:
+        engine_id = self.engine_device_id(track_id, device_id)
+        device = self.project.device(track_id, device_id)
+        if engine_id is not None and device.state:
+            self._set_plugin_state(engine_id, device.plugin.name if device.plugin else device.kind,
+                                   base64.b64decode(device.state))
+
+    # --- Plug-ins ------------------------------------------------------------------
+
+    def set_known_plugins(self, plugins) -> None:
+        """The scanned plug-ins (PluginInfo): lets projects find plug-ins that moved.
+        Devices whose plug-in wasn't found get another try."""
+        self.known_plugins = {p.uid: p.path for p in plugins}
+        for track_id, chain in self._devices.items():
+            track = self.project.track(track_id)
+            if not any(pid is None for _, pid in chain):
+                continue
+            devices = {d.id: d for d in track.devices}
+            reloaded = [(did, self._load_plugin(self._track_ids[track_id], devices[did])
+                         if pid is None and devices[did].is_plugin and self.plugin_path(devices[did].plugin)
+                         else pid) for did, pid in chain]
+            if reloaded != chain:
+                self._devices[track_id] = reloaded
+                self.engine.set_track_processor_order(self._track_ids[track_id],
+                                                      [pid for _, pid in reloaded if pid is not None])
+                self._push_enabled(track)
+                self.devices_loaded.emit(track_id)
+
+    def plugin_state(self, track_id: str, device_id: str) -> bytes | None:
+        """A plug-in device's current state (a .vstpreset), None if it isn't loaded."""
+        engine_id = self.engine_device_id(track_id, device_id)
+        if engine_id is None or engine_id not in self._plugin_ids:
+            return None
+        return self.engine.processor_state(engine_id)
+
+    def store_plugin_states(self) -> None:
+        """Copy every plug-in's state into the model, for saving the project."""
+        for track in self.project.tracks:
+            for device in track.devices:
+                engine_id = self.engine_device_id(track.id, device.id)
+                if engine_id is None or engine_id not in self._plugin_ids:
+                    continue
+                try:
+                    device.state = base64.b64encode(self.engine.processor_state(engine_id)).decode("ascii")
+                except RuntimeError as exc:
+                    self.status_message.emit(f"{device.plugin.name}: {exc}")
+                path = self._plugin_ids[engine_id]
+                if device.plugin.path != path:  # found somewhere else: remember where
+                    device.plugin = replace(device.plugin, path=path)
+
+    def param_id(self, processor_id: int, index: int) -> str | None:
+        ids = self._param_ids.get(processor_id)
+        if ids is None:
+            ids = self._param_ids[processor_id] = [p.id for p in self.engine.processor_params(processor_id)]
+        return ids[index] if 0 <= index < len(ids) else None
+
+    def _editor_title(self, track_id: str, device_id: str) -> str:
+        device = self.project.device(track_id, device_id)
+        name = device.plugin.name if device.plugin else device.kind
+        return f"{name} - {self.project.track(track_id).name}"
+
+    def open_plugin_editor(self, track_id: str, device_id: str) -> bool:
+        engine_id = self.engine_device_id(track_id, device_id)
+        if engine_id is None:
+            return False
+        self._busy += 1
+        try:
+            opened = self.engine.open_editor(engine_id, self.owner_window(), self._editor_title(track_id, device_id))
+        finally:
+            self._busy -= 1
+        if not opened:
+            self.status_message.emit(f"{self.project.device(track_id, device_id).plugin.name} has no editor.")
+        self.plugin_editor_changed.emit(track_id, device_id)
+        return opened
+
+    def close_plugin_editor(self, track_id: str, device_id: str) -> None:
+        engine_id = self.engine_device_id(track_id, device_id)
+        if engine_id is not None:
+            self.engine.close_editor(engine_id)
+            self.plugin_editor_changed.emit(track_id, device_id)
+
+    def is_plugin_editor_open(self, track_id: str, device_id: str) -> bool:
+        engine_id = self.engine_device_id(track_id, device_id)
+        return engine_id is not None and self.engine.is_editor_open(engine_id)
+
+    def close_all_editors(self) -> None:
+        for chain in self._devices.values():
+            for _, processor_id in chain:
+                if processor_id in self._plugin_ids:
+                    self.engine.close_editor(processor_id)
+
+    def shutdown(self) -> None:
+        """Unload every plug-in now, while the application is still whole (not
+        whenever the engine happens to be garbage-collected)."""
+        self.close_all_editors()
+        for engine_id in self._track_ids.values():
+            self.engine.remove_track(engine_id)
+        self._track_ids.clear()
+        self._devices.clear()
+        self._plugin_ids.clear()
+        self.engine.idle()
+
+    def _update_editor_titles(self, track_id: str) -> None:
+        for device_id, processor_id in self._devices.get(track_id, []):
+            if processor_id in self._plugin_ids and self.engine.is_editor_open(processor_id):
+                self.engine.set_editor_title(processor_id, self._editor_title(track_id, device_id))
+
+    def _dispatch_processor_events(self) -> None:
+        events = self.engine.take_processor_events()
+        if not events:
+            return
+        places = {pid: (tid, did) for tid, chain in self._devices.items() for did, pid in chain if pid is not None}
+        changed: dict[tuple[str, str], None] = {}
+        dirty = False
+        kind = ge.ProcessorEventType
+        for event in events:
+            place = places.get(event.processor_id)
+            if place is None:
+                continue
+            if event.type == kind.PARAM_EDITED:
+                param_id = self.param_id(event.processor_id, event.param_index)
+                if param_id is not None:
+                    self.plugin_param_edited.emit(*place, param_id, event.value, event.old_value, event.gesture)
+            elif event.type in (kind.PARAMS_CHANGED, kind.LATENCY_CHANGED):
+                changed[place] = None
+            elif event.type == kind.PARAM_INFO_CHANGED:
+                self._param_ids.pop(event.processor_id, None)
+                self.plugin_params_rebuilt.emit(*place)
+            elif event.type == kind.EDITOR_CLOSED:
+                self.plugin_editor_changed.emit(*place)
+            elif event.type == kind.EDITOR_REQUESTED:
+                self.open_plugin_editor(*place)
+            elif event.type == kind.STATE_DIRTY:
+                dirty = True
+        for place in changed:
+            self.plugin_params_changed.emit(*place)
+        if dirty:
+            self.plugin_state_dirty.emit()
 
     def _push_settings(self) -> None:
         p = self.project
@@ -347,6 +604,12 @@ class EngineBridge(QObject):
             self._last_playing = playing
             self.transport_changed.emit(playing)
 
+    def poll_plugins(self) -> None:
+        """The engine's housekeeping, and what plug-ins reported since."""
+        self.engine.idle()
+        if not self._busy:  # not from a message loop inside a plug-in call
+            self._dispatch_processor_events()
+
     def _poll_meters(self) -> None:
         by_engine_id = {engine_id: track_id for track_id, engine_id in self._track_ids.items()}
         for reading in self.engine.take_meters():
@@ -354,7 +617,7 @@ class EngineBridge(QObject):
             if key is not None:
                 self.meters[key] = (reading.left, reading.right)
         self.meters_updated.emit()
-        self.engine.idle()
+        self.poll_plugins()
         event = self.engine.take_device_event()
         if event == "stopped":
             self.status_message.emit("The audio device stopped. Choose a device in Options > Preferences.")

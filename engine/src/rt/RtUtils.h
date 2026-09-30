@@ -85,6 +85,7 @@ public:
         tail_.store(tail + 1, std::memory_order_release);
         return true;
     }
+    bool empty() const noexcept { return tail_.load(std::memory_order_acquire) == head_.load(std::memory_order_acquire); }
 
 private:
     std::array<T, Capacity> items_{};

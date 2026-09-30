@@ -27,8 +27,15 @@ from PySide6.QtWidgets import QMenu, QWidget
 from ... import theme
 from ...audio.engine_bridge import EngineBridge, is_audio_file
 from ...model.editor import BUILTIN_DEVICES, ProjectEditor, is_instrument
-from ...model.project import MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT, AnyClip, MidiClip
-from ..browser.browser_models import PLUGIN_MIME, device_kinds
+from ...model.project import (
+    MAX_TRACK_HEIGHT,
+    MIN_TRACK_HEIGHT,
+    PLUGIN_KIND,
+    AnyClip,
+    MidiClip,
+    PluginRef,
+)
+from ..browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from .grid import draw_grid, draw_loop_region
 from .interactions import (
     ClipGesture,
@@ -97,6 +104,12 @@ def is_pan_modifier(mods) -> bool:
 def resize_track_by_wheel(editor: ProjectEditor, track_id: str, delta: int) -> None:
     height = editor.project.track(track_id).height + round(delta / 120.0 * HEIGHT_STEP)
     editor.set_track_height(track_id, max(MIN_TRACK_HEIGHT, min(MAX_TRACK_HEIGHT, height)))
+
+
+def dropped_devices(mime) -> list[tuple[str, PluginRef | None]]:
+    """Devices dragged from the browser, as (kind, plug-in): built-in ones, then plug-ins."""
+    devices: list[tuple[str, PluginRef | None]] = [(k, None) for k in device_kinds(mime) if k in BUILTIN_DEVICES]
+    return devices + [(PLUGIN_KIND, ref) for ref in plugin_refs(mime)]
 
 
 class LanesCanvas(QWidget):
@@ -552,10 +565,9 @@ class LanesCanvas(QWidget):
         if not paths:
             # Devices drop onto the track under the mouse; an instrument below the
             # tracks makes a new MIDI track.
-            mime = event.mimeData()
-            kinds = device_kinds(mime)
-            on_track = kinds and self.row_index_at(event.position().y()) is not None
-            if on_track or any(is_instrument(k) for k in kinds) or mime.hasFormat(PLUGIN_MIME):
+            devices = dropped_devices(event.mimeData())
+            on_track = devices and self.row_index_at(event.position().y()) is not None
+            if on_track or any(is_instrument(*d) for d in devices):
                 event.acceptProposedAction()
             else:
                 event.ignore()
@@ -581,27 +593,24 @@ class LanesCanvas(QWidget):
     def dropEvent(self, event: QDropEvent) -> None:
         preview, self._drop_preview = self._drop_preview, None
         self.update()
-        kinds = [k for k in device_kinds(event.mimeData()) if k in BUILTIN_DEVICES]
+        devices = dropped_devices(event.mimeData())
         index = self.row_index_at(event.position().y())
-        if kinds:
+        if devices:
             if index is not None:
                 track_id = self.layout_model.rows[index].track_id
-                refused = [kind for kind in kinds if self.editor.add_device(track_id, kind) is None]
+                refused = [d for d in devices if self.editor.add_device(track_id, d[0], plugin=d[1]) is None]
                 if refused:
                     self.status_message.emit("Instruments go on MIDI tracks. Drop one below the tracks to make one.")
             else:
-                instrument = next((k for k in kinds if is_instrument(k)), None)
+                instrument = next((d for d in devices if is_instrument(*d)), None)
                 if instrument is None:
                     return
-                track_id = self.editor.add_midi_track(instrument=instrument).id
-                for kind in kinds:
-                    if not is_instrument(kind):
-                        self.editor.add_device(track_id, kind)
+                kind, plugin = instrument
+                track_id = self.editor.add_midi_track(instrument=kind if plugin is None else None, plugin=plugin).id
+                for kind, plugin in devices:
+                    if not is_instrument(kind, plugin):
+                        self.editor.add_device(track_id, kind, plugin=plugin)
             self.selection.select_track(track_id)  # show its devices
-            event.acceptProposedAction()
-            return
-        if event.mimeData().hasFormat(PLUGIN_MIME):
-            self.status_message.emit("VST3/CLAP plugin hosting is not available yet.")
             event.acceptProposedAction()
             return
         if not preview or not preview[2]:

@@ -1,5 +1,6 @@
 """Rotary knob: drag vertically, Shift for fine control, double-click resets.
-With `log_scale` (for frequencies and times) it moves evenly in log(value)."""
+With `log_scale` (for frequencies and times) it moves evenly in log(value);
+with `step` it only takes multiples of it (from the minimum)."""
 
 from __future__ import annotations
 
@@ -22,11 +23,12 @@ class Knob(QWidget):
     def __init__(self, minimum: float = 0.0, maximum: float = 1.0, value: float = 0.0, *,
                  default: float | None = None, bipolar: bool = False,
                  formatter: Callable[[float], str] | None = None, color: str = theme.ACCENT,
-                 log_scale: bool = False, parent: QWidget | None = None):
+                 log_scale: bool = False, step: float = 0.0, parent: QWidget | None = None):
         super().__init__(parent)
         self._min = minimum
         self._max = maximum
         self._log = log_scale and minimum > 0
+        self._step = step
         self._value = value
         self._default = value if default is None else default
         self._bipolar = bipolar
@@ -61,7 +63,13 @@ class Knob(QWidget):
             return self._min * (self._max / self._min) ** fraction
         return self._min + fraction * (self._max - self._min)
 
+    def set_formatter(self, formatter: Callable[[float], str]) -> None:
+        self._format = formatter
+        self._update_tooltip()
+
     def _set_from_user(self, value: float, gesture: object) -> None:
+        if self._step > 0:
+            value = self._min + round((value - self._min) / self._step) * self._step
         value = max(self._min, min(self._max, value))
         if value != self._value:
             self._value = value

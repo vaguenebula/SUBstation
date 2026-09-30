@@ -22,6 +22,9 @@ void Renderer::prepare(double sampleRate) {
     previewNotes_.assign(kMaxPreviewNotes, {});
     numPreviewNotes_ = 0;
     expectedPosition_ = -1;
+    pendingTickStart_ = 0;
+    numPendingTicks_ = 0;
+    outputTime_ = 0;
 }
 
 void Renderer::syncTempo(const RenderSnapshot& snap) noexcept {
@@ -143,14 +146,19 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
         }
     }
 
+    const double spb = snap.samplesPerBeat();
     ProcessContext context;
     context.sampleRate = snap.sampleRate;
     context.samplePos = chunkStart;
-    context.beatPos = chunkStart / snap.samplesPerBeat();
+    context.beatPos = chunkStart / spb;
     context.tempo = snap.tempo;
     context.timeSigNum = snap.timeSigNum;
     context.timeSigDen = snap.timeSigDen;
     context.playing = playing_;
+    context.looping = flags.loop;
+    context.loopStartBeat = snap.loopStart / spb;
+    context.loopEndBeat = snap.loopEnd / spb;
+    context.offline = !flags.live;
 
     bool anySolo = false;
     for (const TrackRender& track : snap.tracks) {
@@ -165,8 +173,9 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
     std::fill_n(masterL, frames, 0.f);
     std::fill_n(masterR, frames, 0.f);
 
-    // 2. Tracks: clips and notes -> inserts -> fader/pan -> master.
-    for (const TrackRender& track : snap.tracks) {
+    // 2. Tracks: clips and notes -> inserts -> delay compensation -> fader/pan -> master.
+    for (size_t t = 0; t < snap.tracks.size(); ++t) {
+        const TrackRender& track = snap.tracks[t];
         float* left = trackLeft_.data();
         float* right = trackRight_.data();
         std::fill_n(left, frames, 0.f);
@@ -178,14 +187,11 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
         } else {
             numEvents_ = 0;
         }
+        processInserts(track, context, chunkStart, frames, spb);
 
-        context.inEvents = {events_.data(), static_cast<size_t>(numEvents_)};
-        float* channels[2] = {left, right};
-        for (const auto& insert : track.inserts) {
-            if (!insert->isEnabled()) continue;
-            if (insert->takeResetRequest()) insert->reset();
-            insert->process(context, channels, 2, frames);
-        }
+        DelayLine* delay = delayOverride_ ? (t < delayOverride_->size() ? (*delayOverride_)[t].get() : nullptr)
+                                          : track.delay.get();
+        if (delay) delay->process(left, right, frames, track.compensation);
 
         TrackParams& params = *track.params;
         const bool audible = !params.mute.load(std::memory_order_relaxed) &&
@@ -256,6 +262,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
     }
 
     // 4. Metronome, after the master fader (a click may still be ringing out).
+    renderTicks(frames);
     int cursor = 0;
     for (int t = 0; t < numTicks_; ++t) {
         metronome_.renderUntil(masterL, masterR, cursor, ticks_[t].offset);
@@ -263,6 +270,40 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
         cursor = ticks_[t].offset;
     }
     metronome_.renderUntil(masterL, masterR, cursor, frames);
+    outputTime_ += frames;
+}
+
+void Renderer::processInserts(const TrackRender& track, ProcessContext& context, int64_t chunkStart, int frames,
+                              double samplesPerBeat) noexcept {
+    bool any = false;
+    for (const auto& insert : track.inserts) {
+        if (!insert->isEnabled()) continue;
+        if (insert->takeResetRequest()) insert->reset();
+        any = true;
+    }
+    if (!any) return;
+
+    // One call per continuous stretch of the timeline, with the events that fall in it.
+    const bool split = playing_ && numSegments_ > 0;
+    const int slices = split ? numSegments_ : 1;
+    int next = 0;
+    for (int s = 0; s < slices; ++s) {
+        const int offset = split ? segments_[s].offset : 0;
+        const int length = split ? segments_[s].length : frames;
+        const int64_t position = split ? segments_[s].position : chunkStart;
+        const int first = next;
+        while (next < numEvents_ && (s == slices - 1 || events_[next].sampleOffset < offset + length)) {
+            events_[next].sampleOffset -= offset;
+            ++next;
+        }
+        context.samplePos = position;
+        context.beatPos = position / samplesPerBeat;
+        context.inEvents = {events_.data() + first, static_cast<size_t>(next - first)};
+        float* channels[2] = {trackLeft_.data() + offset, trackRight_.data() + offset};
+        for (const auto& insert : track.inserts) {
+            if (insert->isEnabled()) insert->process(context, channels, 2, length);
+        }
+    }
 }
 
 WarpVoice* Renderer::acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept {
@@ -436,7 +477,21 @@ void Renderer::scheduleTicks(const RenderSnapshot& snap, int64_t position, int l
         const int64_t t = std::llround(k * tickLength);
         if (t < position) continue;
         if (t >= position + length) break;
-        if (numTicks_ < kMaxTicks) ticks_[numTicks_++] = {offset + static_cast<int>(t - position), k % snap.timeSigNum == 0};
+        if (numPendingTicks_ == kMaxPendingTicks) break;
+        // Heard when the tracks' audio for this position is: after the compensation delay.
+        const int64_t time = outputTime_ + offset + (t - position) + snap.maxLatency;
+        pendingTicks_[(pendingTickStart_ + numPendingTicks_++) % kMaxPendingTicks] = {time, k % snap.timeSigNum == 0};
+    }
+}
+
+void Renderer::renderTicks(int frames) noexcept {
+    numTicks_ = 0;
+    while (numPendingTicks_ > 0 && numTicks_ < kMaxTicks) {
+        const PendingTick& tick = pendingTicks_[pendingTickStart_];
+        if (tick.time >= outputTime_ + frames) break;
+        ticks_[numTicks_++] = {static_cast<int>(std::max<int64_t>(0, tick.time - outputTime_)), tick.accent};
+        pendingTickStart_ = (pendingTickStart_ + 1) % kMaxPendingTicks;
+        --numPendingTicks_;
     }
 }
 

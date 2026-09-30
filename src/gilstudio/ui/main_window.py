@@ -22,8 +22,13 @@ from .. import _engine as ge
 from ..audio.engine_bridge import EngineBridge
 from ..audio.settings import AudioSettings
 from ..model.editor import ProjectEditor, is_instrument
-from ..model.project import Project
-from ..model.serialization import EXTENSION, ProjectFileError, load_project, save_project
+from ..model.project import PLUGIN_KIND, PluginRef, Project
+from ..model.serialization import (
+    EXTENSION,
+    ProjectFileError,
+    load_project,
+    save_project,
+)
 from . import icons
 from .arrangement.arrangement_view import ArrangementView
 from .arrangement.view_state import Selection
@@ -77,6 +82,12 @@ class MainWindow(QMainWindow):
         self.arrangement.locate_requested.connect(self.locate)
         self.browser.file_activated.connect(self.add_file_at_insert)
         self.browser.device_activated.connect(self.add_device_to_selected_track)
+        self.browser.plugin_activated.connect(lambda ref: self.add_device_to_selected_track(PLUGIN_KIND, ref))
+        plugins = self.browser.plugin_index
+        plugins.updated.connect(lambda: self.bridge.set_known_plugins(plugins.plugins))
+        self.bridge.owner_window = lambda: int(self.winId())  # plug-in editors float above this window
+        self.bridge.plugin_param_edited.connect(self._plugin_param_edited)
+        self.bridge.plugin_state_dirty.connect(self.undo_stack.resetClean)
         self.transport.play_requested.connect(self.toggle_play)
         self.transport.stop_requested.connect(self.stop_button)
         self.transport.preferences_requested.connect(self.show_preferences)
@@ -166,6 +177,7 @@ class MainWindow(QMainWindow):
 
         options = bar.addMenu("&Options")
         self._action(options, "&Preferences…", self.show_preferences, "Ctrl+,")
+        self._action(options, "&Rescan Plug-ins", self.browser.rescan_plugins)
 
         help_menu = bar.addMenu("&Help")
         self._action(help_menu, "&About GIL Studio", self.show_about)
@@ -255,17 +267,26 @@ class MainWindow(QMainWindow):
         else:
             self.show_message("Select a MIDI track (or a time range on one) to insert a MIDI clip.")
 
-    def add_device_to_selected_track(self, kind: str) -> None:
+    def add_device_to_selected_track(self, kind: str, plugin: PluginRef | None = None) -> None:
+        """A built-in device `kind`, or kind 'plugin' and a `plugin`."""
         track_id = self.selection.track_id
         has_track = bool(track_id) and self.project.has_track(track_id)
-        if is_instrument(kind) and not (has_track and self.project.track(track_id).is_midi):
+        if is_instrument(kind, plugin) and not (has_track and self.project.track(track_id).is_midi):
             # As in Ableton: an instrument chosen with no MIDI track selected gets a new one.
-            track = self.editor.add_midi_track(self._after_selected_track(), instrument=kind)
+            track = self.editor.add_midi_track(self._after_selected_track(), instrument=None if plugin else kind,
+                                               plugin=plugin)
             self.selection.select_track(track.id, focus_track=True)
         elif has_track:
-            self.editor.add_device(track_id, kind)
+            self.editor.add_device(track_id, kind, plugin=plugin)
         else:
             self.show_message("Select a track to add the device to.")
+
+    def _plugin_param_edited(self, track_id: str, device_id: str, param_id: str, value: float, old: float,
+                             gesture: int) -> None:
+        """A plug-in's own editor changed a parameter: an undo step (one per knob drag)."""
+        if self.project.has_track(track_id):
+            self.editor.set_device_param(track_id, device_id, param_id, value,
+                                         merge_key=("plugin edit", device_id, param_id, gesture), old=old)
 
     def delete_track(self) -> None:
         if self.selection.track_id and self.project.has_track(self.selection.track_id):
@@ -383,6 +404,7 @@ class MainWindow(QMainWindow):
         return self._save_to(Path(path))
 
     def _save_to(self, path: Path) -> bool:
+        self.bridge.store_plugin_states()
         try:
             save_project(self.project, path)
         except OSError as exc:
@@ -435,7 +457,8 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, f"About {APP_NAME}",
             f"<b>{APP_NAME}</b> {__version__}<br>A basic DAW: Python/Qt interface, C++ audio engine "
-            "(miniaudio, WASAPI).<br><br>VST3 and CLAP hosting are planned.")
+            "(miniaudio, WASAPI).<br><br>Hosts VST3 instruments and effects.<br>"
+            "VST is a registered trademark of Steinberg Media Technologies GmbH.")
 
     def _update_title(self, *_args) -> None:
         name = self.project.path.stem if self.project.path else "Untitled"
@@ -462,6 +485,7 @@ class MainWindow(QMainWindow):
         settings.setValue("window/splitter", self.splitter.saveState())
         self.bridge.stop()
         self.bridge.stop_preview()
+        self.bridge.close_all_editors()
         self.browser.shutdown()
         event.accept()
 

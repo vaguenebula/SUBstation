@@ -18,11 +18,22 @@ from .commands import (
     SetDeviceEnabledCommand,
     SetDeviceParamCommand,
     SetDevicesCommand,
+    SetDeviceStateCommand,
     SetTempoCommand,
     UpdateSettingsCommand,
     UpdateTrackCommand,
 )
-from .project import AnyClip, Clip, Device, MidiClip, Project, Track, new_id
+from .project import (
+    PLUGIN_KIND,
+    AnyClip,
+    Clip,
+    Device,
+    MidiClip,
+    PluginRef,
+    Project,
+    Track,
+    new_id,
+)
 from .timebase import TimeSignature
 
 ClipRef = tuple[str, str]  # (track id, clip id)
@@ -38,11 +49,28 @@ BUILTIN_CATEGORIES = {"Instruments": ["synth"], "Audio Effects": ["utility"]}
 DEFAULT_INSTRUMENT = "synth"  # new MIDI tracks come with it, ready to play
 
 
-def is_instrument(kind: str) -> bool:
+def is_instrument(kind: str, plugin: PluginRef | None = None) -> bool:
+    """Whether a device of this kind (and plug-in) is an instrument."""
+    if kind == PLUGIN_KIND:
+        return plugin is not None and plugin.instrument
     return kind in BUILTIN_CATEGORIES["Instruments"]
 
 
-def new_device(kind: str) -> Device:
+def device_is_instrument(device: Device) -> bool:
+    return is_instrument(device.kind, device.plugin)
+
+
+def device_name(device: Device) -> str:
+    if device.plugin is not None:
+        return device.plugin.name
+    return BUILTIN_DEVICES.get(device.kind, (device.kind,))[0]
+
+
+def new_device(kind: str, plugin: PluginRef | None = None) -> Device:
+    if kind == PLUGIN_KIND:
+        if plugin is None:
+            raise ValueError("a plug-in device needs a plug-in")
+        return Device(id=new_id(), kind=kind, plugin=plugin)
     return Device(id=new_id(), kind=kind, params=dict(BUILTIN_DEVICES[kind][1]))
 
 
@@ -64,10 +92,12 @@ class ProjectEditor:
         return p.track(track.id)
 
     def add_midi_track(self, index: int | None = None, name: str | None = None,
-                       instrument: str | None = DEFAULT_INSTRUMENT) -> Track:
+                       instrument: str | None = DEFAULT_INSTRUMENT, plugin: PluginRef | None = None) -> Track:
+        """A MIDI track with a built-in `instrument`, or with an instrument `plugin`."""
         p = self.project
+        devices = [new_device(PLUGIN_KIND, plugin)] if plugin else [new_device(instrument)] if instrument else []
         track = Track(id=new_id(), name=name or p.unique_track_name(f"{len(p.tracks) + 1} MIDI"),
-                      color=p.next_color(), kind="midi", devices=[new_device(instrument)] if instrument else [])
+                      color=p.next_color(), kind="midi", devices=devices)
         self._push(InsertTrackCommand(p, track, len(p.tracks) if index is None else index, "Insert MIDI Track"))
         return p.track(track.id)
 
@@ -344,23 +374,38 @@ class ProjectEditor:
 
     # --- Devices -----------------------------------------------------------------
 
-    def add_device(self, track_id: str, kind: str, index: int | None = None) -> Device | None:
-        """Add a device to a track's chain. An instrument only goes on a MIDI track
-        (None otherwise), where it comes first and replaces any other instrument."""
+    def add_device(self, track_id: str, kind: str, index: int | None = None,
+                   plugin: PluginRef | None = None) -> Device | None:
+        """Add a device (a built-in `kind`, or kind 'plugin' and a `plugin`) to a
+        track's chain. An instrument only goes on a MIDI track (None otherwise),
+        where it comes first and replaces any other instrument."""
         track = self.project.track(track_id)
         before = copy.deepcopy(track.devices)
         after = copy.deepcopy(before)
-        device = new_device(kind)
-        if is_instrument(kind):
+        device = new_device(kind, plugin)
+        if device_is_instrument(device):
             if not track.is_midi:
                 return None
-            after = [d for d in after if not is_instrument(d.kind)]
+            after = [d for d in after if not device_is_instrument(d)]
             after.insert(0, device)
         else:
-            first = 1 if after and is_instrument(after[0].kind) else 0  # effects go after the instrument
+            first = 1 if after and device_is_instrument(after[0]) else 0  # effects go after the instrument
             after.insert(len(after) if index is None else max(first, index), device)
-        self._push(SetDevicesCommand(self.project, track_id, before, after, f"Add {BUILTIN_DEVICES[kind][0]}"))
+        self._push(SetDevicesCommand(self.project, track_id, before, after, f"Add {device_name(device)}"))
         return device
+
+    def move_device(self, track_id: str, device_id: str, index: int) -> None:
+        """Move a device within its chain (an instrument stays first)."""
+        before = copy.deepcopy(self.project.track(track_id).devices)
+        after = copy.deepcopy(before)
+        [moving] = [d for d in after if d.id == device_id]
+        if device_is_instrument(moving):
+            return
+        after.remove(moving)
+        first = 1 if after and device_is_instrument(after[0]) else 0
+        after.insert(max(first, min(index, len(after))), moving)
+        if [d.id for d in after] != [d.id for d in before]:
+            self._push(SetDevicesCommand(self.project, track_id, before, after, "Move Device"))
 
     def remove_device(self, track_id: str, device_id: str) -> None:
         before = copy.deepcopy(self.project.track(track_id).devices)
@@ -368,10 +413,20 @@ class ProjectEditor:
         self._push(SetDevicesCommand(self.project, track_id, before, after, "Delete Device"))
 
     def set_device_param(self, track_id: str, device_id: str, param_id: str, value: float,
-                         merge_key: object | None = None) -> None:
-        old = self.project.device(track_id, device_id).params.get(param_id)
-        if old != value:
-            self._push(SetDeviceParamCommand(self.project, track_id, device_id, param_id, old, value, merge_key))
+                         merge_key: object | None = None, old: float | None = None) -> None:
+        """Change a parameter. `old` is its value before, if the model doesn't know
+        it (a plug-in's parameters live in the plug-in)."""
+        if old is None:
+            old = self.project.device(track_id, device_id).params.get(param_id)
+        if old is None or old != value:
+            self._push(SetDeviceParamCommand(self.project, track_id, device_id, param_id,
+                                             value if old is None else old, value, merge_key))
+
+    def set_device_state(self, track_id: str, device_id: str, old: str | None, new: str,
+                         text: str = "Load Preset") -> None:
+        """Replace a plug-in's whole state (base64), e.g. with a preset. `old` is
+        its state before, to go back to on undo."""
+        self._push(SetDeviceStateCommand(self.project, track_id, device_id, old, new, text))
 
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:
         if self.project.device(track_id, device_id).enabled != enabled:

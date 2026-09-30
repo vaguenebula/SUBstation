@@ -6,6 +6,11 @@
 // track's processors. It remembers which notes it started and when each ends,
 // so every note-on gets its note-off even if the arrangement changes while the
 // note sounds; stopping, locating and loop wraps release all sounding notes.
+//
+// Processors see continuous stretches of the timeline: a block the loop wraps
+// around in is processed in two parts. Tracks whose devices add less latency
+// than the slowest track are delayed to line up with it, and so is the
+// metronome, so the output lags the timeline by the snapshot's maxLatency.
 
 #include <array>
 #include <cstdint>
@@ -56,6 +61,8 @@ public:
     // renderer). Offline renders pass a fresh set so they neither disturb live
     // playback nor depend on it. Must outlive the rendering.
     void setWarpVoices(const WarpVoiceSet* voices) noexcept { voiceOverride_ = voices; }
+    // Likewise delay-compensation lines, one per snapshot track (null: none needed).
+    void setDelayLines(const std::vector<std::shared_ptr<DelayLine>>* lines) noexcept { delayOverride_ = lines; }
 
 private:
     struct ChunkFlags {
@@ -74,6 +81,10 @@ private:
         int offset;
         bool accent;
     };
+    struct PendingTick {
+        int64_t time;  // output sample (the metronome is delayed like the tracks)
+        bool accent;
+    };
     struct ActiveNote {
         uint32_t trackId;
         uint8_t key;
@@ -81,15 +92,19 @@ private:
     };
     static constexpr int kMaxSegments = 16;
     static constexpr int kMaxTicks = 64;
+    static constexpr int kMaxPendingTicks = 256;
     static constexpr int kMaxActiveNotes = 512;  // across all tracks
     static constexpr int kMaxEvents = 1024;      // per track and block
     static constexpr int kMaxPreviewNotes = 256;
 
     void renderChunk(const RenderSnapshot& snap, SharedState& shared, int frames, ChunkFlags flags) noexcept;
+    void processInserts(const TrackRender& track, ProcessContext& context, int64_t chunkStart, int frames,
+                        double samplesPerBeat) noexcept;
     void renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade,
                      const WarpVoiceSet& voices) noexcept;
     WarpVoice* acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept;
     void scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset) noexcept;
+    void renderTicks(int frames) noexcept;
     void mixPreview(SharedState& shared, int frames) noexcept;
     void buildNoteEvents(const TrackRender& track) noexcept;
     void releaseNotes(uint32_t trackId, int offset) noexcept;
@@ -105,11 +120,16 @@ private:
     std::vector<float> trackLeft_, trackRight_, masterLeft_, masterRight_;
     std::vector<float> warpLeft_, warpRight_;  // one warped clip's audio, before gain and fades
     const WarpVoiceSet* voiceOverride_ = nullptr;
+    const std::vector<std::shared_ptr<DelayLine>>* delayOverride_ = nullptr;
     uint64_t blockCounter_ = 1;  // stamps voice use; 0 means "never used"
     std::array<Segment, kMaxSegments> segments_{};
     int numSegments_ = 0;
-    std::array<Tick, kMaxTicks> ticks_{};
+    std::array<Tick, kMaxTicks> ticks_{};  // this chunk's, from pendingTicks_
     int numTicks_ = 0;
+    std::array<PendingTick, kMaxPendingTicks> pendingTicks_{};  // ring, in time order
+    int pendingTickStart_ = 0;
+    int numPendingTicks_ = 0;
+    int64_t outputTime_ = 0;  // output samples rendered so far
 
     // Notes. Sized in prepare(); the counts say how much is in use.
     std::vector<ActiveNote> activeNotes_;
