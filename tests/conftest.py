@@ -19,6 +19,8 @@ SAMPLE_RATE = 48000  # the engine's rate when no device is open
 TEST_PLUGINS = Path(_engine.__file__).parent / "_testplugins" / "GILTestPlugins.vst3"
 os.environ["GILSTUDIO_VST3_PATH"] = str(TEST_PLUGINS.parent)
 os.environ["GILSTUDIO_PLUGIN_CACHE"] = str(Path(tempfile.mkdtemp(prefix="gil-plugin-cache-")) / "vst3-cache.json")
+# Nor the browser's use counts (each window gets its own; see `window`).
+os.environ["GILSTUDIO_LIBRARY"] = str(Path(tempfile.mkdtemp(prefix="gil-library-")) / "library.json")
 
 
 def write_wav(path: Path, samples: np.ndarray, sample_rate: int = SAMPLE_RATE) -> Path:
@@ -81,6 +83,7 @@ def window(app, tmp_path):
     settings = QSettings()
     settings.clear()
     settings.setValue("browser/places", [str(tmp_path)])
+    os.environ["GILSTUDIO_LIBRARY"] = str(tmp_path / "library.json")
     # Exceptions raised inside Qt slots are only printed; collect them instead.
     errors = []
     previous_hook = sys.excepthook

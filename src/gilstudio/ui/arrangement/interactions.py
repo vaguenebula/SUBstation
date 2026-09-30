@@ -1,5 +1,5 @@
-"""Mouse gestures on the track lanes: move/copy clips, trim edges, time selection,
-rubber band, and hand-scrolling."""
+"""Mouse gestures on the track lanes: move/copy clips or a time selection, trim
+edges, time selection, rubber band, and hand-scrolling."""
 
 from __future__ import annotations
 
@@ -22,6 +22,14 @@ class ClipGesture:
     def ghosts(self) -> list[tuple[int, str, AnyClip]]:
         """(row index, track colour, clip) to draw as previews."""
         return []
+
+    def kept(self) -> list[tuple[int, str, AnyClip]]:
+        """(row index, track colour, clip) to draw, unselected, in place of hidden clips."""
+        return []
+
+    def time_range(self) -> tuple[float, float, list[str]] | None:
+        """Where to draw the time selection while dragging it, if it is being moved."""
+        return None
 
     def rubber_band(self) -> QRectF | None:
         return None
@@ -77,6 +85,82 @@ class MoveClipsGesture(ClipGesture):
         if new_refs:
             self.canvas.selection.set_clips(new_refs, track_id=new_refs[0][0])
             self.canvas.selection.set_insert(self.primary.start_beat + self.delta)  # follow the moved clip
+
+
+class MoveRangeGesture(ClipGesture):
+    """Drag inside a clip range: move (Ctrl: copy) the selected stretch of clips,
+    split at the range's edges. A click without dragging calls `on_click`."""
+
+    def __init__(self, canvas, press: QPointF, on_click):
+        self.canvas = canvas
+        self.press = press
+        self.on_click = on_click
+        self.start, self.end, track_ids = canvas.selection.time_range
+        self.track_ids = list(track_ids)
+        project = canvas.project
+        tempo = project.tempo
+        self.origin_beat = canvas.view.x_to_beat(press.x())
+        self.origin_row = canvas.row_index_at(press.y(), clamp=True)
+        self.touched: set[str] = set()
+        self.remnants: list[tuple[int, str, AnyClip]] = []
+        self.pieces: list[tuple[int, AnyClip]] = []
+        for tid in self.track_ids:
+            track = project.track(tid)
+            row = project.track_index(tid)
+            inside = [c for c in track.clips if c.start_beat < self.end and c.end_beat(tempo) > self.start]
+            self.touched |= {c.id for c in inside}
+            self.remnants += [(row, track.color, c) for c in edits.remove_range(inside, self.start, self.end, tempo)]
+            self.pieces += [(row, c) for c in edits.slice_range(inside, self.start, self.end, tempo)]
+        self.delta = 0.0
+        self.track_delta = 0
+        self.copy = False
+        self.active = False
+
+    def move(self, pos: QPointF, modifiers) -> None:
+        if not self.active:
+            if (pos - self.press).manhattanLength() < DRAG_THRESHOLD:
+                return
+            self.active = True
+        view = self.canvas.view
+        bypass = bool(modifiers & Qt.KeyboardModifier.AltModifier)
+        raw = view.x_to_beat(pos.x()) - self.origin_beat
+        self.delta = max(0.0, view.snap_beat(self.start + raw, bypass)) - self.start
+        row = self.canvas.row_index_at(pos.y(), clamp=True)
+        self.track_delta = self.canvas.editor.clamp_track_delta([(t, "") for t in self.track_ids],
+                                                                row - self.origin_row)
+        self.copy = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+
+    def hidden_ids(self) -> set[str]:
+        return self.touched if self.active and not self.copy else set()
+
+    def ghosts(self) -> list[tuple[int, str, AnyClip]]:
+        if not self.active:
+            return []
+        colors = [t.color for t in self.canvas.project.tracks]
+        return [(r + self.track_delta, colors[r + self.track_delta], replace(c, start_beat=c.start_beat + self.delta))
+                for r, c in self.pieces]
+
+    def kept(self) -> list[tuple[int, str, AnyClip]]:
+        return self.remnants if self.active and not self.copy else []
+
+    def time_range(self) -> tuple[float, float, list[str]] | None:
+        if not self.active:
+            return None
+        tracks = self.canvas.project.tracks
+        ids = [tracks[self.canvas.project.track_index(t) + self.track_delta].id for t in self.track_ids]
+        return self.start + self.delta, self.end + self.delta, ids
+
+    def finish(self) -> None:
+        if not self.active:
+            self.on_click()
+            return
+        start, track_ids = self.canvas.editor.move_range(self.start, self.end, self.track_ids, self.delta,
+                                                         self.track_delta, copy_clips=self.copy)
+        end = start + self.end - self.start
+        selection = self.canvas.selection
+        selection.set_time_range(start, end, track_ids,
+                                 clips=self.canvas.editor.clips_in_range(start, end, track_ids))
+        selection.set_insert(start)
 
 
 class TrimGesture(ClipGesture):
