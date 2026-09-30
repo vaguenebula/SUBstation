@@ -289,7 +289,9 @@ NB_MODULE(_engine, m) {
         .def("open_editor", &Engine::openEditor, "processor_id"_a, "owner_window"_a = 0, "title"_a = "",
              ReleaseGil(), "Show a plug-in's editor window (or raise it). False if it has none.")
         .def("close_editor", &Engine::closeEditor, "processor_id"_a)
-        .def("is_editor_open", &Engine::isEditorOpen, "processor_id"_a)
+        .def("is_editor_open", &Engine::isEditorOpen, "processor_id"_a, "Open and not hidden.")
+        .def("set_editor_visible", &Engine::setEditorVisible, "processor_id"_a, "visible"_a,
+             "Hide an open editor window or show it again (without focusing it). False if none is open.")
         .def("set_editor_title", &Engine::setEditorTitle, "processor_id"_a, "title"_a)
         .def("take_processor_events", &Engine::takeProcessorEvents,
              "What processors reported since the last call (edits in a plug-in's own editor, ...).")

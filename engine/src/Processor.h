@@ -150,7 +150,9 @@ public:
     virtual bool hasEditor() const { return false; }
     virtual bool openEditor(void* /*ownerWindow*/, const std::string& /*title*/) { return false; }
     virtual void closeEditor() {}
-    virtual bool isEditorOpen() const { return false; }
+    virtual bool isEditorOpen() const { return false; }  // open and not hidden
+    // Hides an open editor or shows it again; false if none is open.
+    virtual bool setEditorVisible(bool /*visible*/) { return false; }
     virtual void setEditorTitle(const std::string& /*title*/) {}
 
     // Switching a processor off also resets it, so when it comes back on it

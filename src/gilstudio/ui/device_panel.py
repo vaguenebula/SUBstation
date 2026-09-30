@@ -6,6 +6,12 @@ show alike: a knob per parameter (log-scaled where the engine says so), or a
 list for parameters that choose between named values. A plug-in shows its
 parameters a page at a time, with its own text for their values, and has a
 button for its own editor. Right-click a device for more (move, presets).
+
+Click a device (its title or background) to select it, Shift-click to select a
+range, Ctrl-click to add or remove one; Delete deletes the selection. Drag
+effects to reorder them (the instrument stays first). Ctrl+Alt-drag anywhere on
+the chain scrolls it, as in the arrangement. The chain scrolls to show a device
+when one is added, unless it was dropped on the chain (where it is in view).
 """
 
 from __future__ import annotations
@@ -14,16 +20,29 @@ import base64
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QMimeData,
+    QObject,
+    QPoint,
+    QSettings,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
+    QDrag,
     QDragEnterEvent,
+    QDragMoveEvent,
     QDropEvent,
     QFontMetrics,
+    QMouseEvent,
     QPainter,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -45,6 +64,7 @@ from ..model.editor import (
     device_name,
 )
 from ..model.project import PLUGIN_KIND, Device
+from .arrangement.lanes_canvas import is_pan_modifier
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from .widgets import Knob, ToggleButton
@@ -56,6 +76,9 @@ EFFECTS_HINT = "Drop audio effects here from the browser (Built-in or Plug-ins �
 INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in or Plug-ins › Instruments)"
 INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create › Insert MIDI Track)."
 PRESET_FILTER = "VST3 Preset (*.vstpreset)"
+DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
+AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
+AUTOSCROLL_INTERVAL = 16  # ms
 
 
 def _format_value(value: float, unit: str) -> str:
@@ -94,16 +117,25 @@ def _header_button(text: str, tooltip: str) -> QPushButton:
 
 class _DeviceFrame(QFrame):
     """What built-in and plug-in devices share: the frame, the header (on/off,
-    name, delete) and the right-click menu."""
+    name, delete), selecting and dragging it, and the right-click menu."""
+
+    pressed = Signal(str, object)  # device id, keyboard modifiers: select it
+    released = Signal(str, object)  # device id, modifiers: a click (not a drag) ended
+    drag_started = Signal(str)  # device id
+    menu_requested = Signal(str)  # device id: select it before its menu shows
 
     def __init__(self, track_id: str, device: Device, editor: ProjectEditor, parent: QWidget | None = None):
         super().__init__(parent)
         self.track_id = track_id
         self.device_id = device.id
         self.editor = editor
+        self.instrument = device_is_instrument(device)
+        self.selected = False
+        # What the menu's Delete does; the device view makes it delete all its selected devices.
+        self.remove_selected = lambda: editor.remove_device(track_id, self.device_id)
+        self._press: QPoint | None = None
         self.setObjectName("device")
-        self.setStyleSheet(f"#device {{ background: {theme.PANEL_ALT}; border: 1px solid {theme.BORDER};"
-                           f" border-radius: 4px; }}")
+        self._update_style()
 
         self.enabled = ToggleButton(role="activator", tooltip="Device On/Off")
         self.enabled.setFixedSize(14, 14)
@@ -123,7 +155,37 @@ class _DeviceFrame(QFrame):
     def device(self) -> Device:
         return self.editor.project.device(self.track_id, self.device_id)
 
+    def set_selected(self, selected: bool) -> None:
+        if selected != self.selected:
+            self.selected = selected
+            self._update_style()
+
+    def _update_style(self) -> None:
+        border = theme.ACCENT if self.selected else theme.BORDER
+        self.setStyleSheet(f"#device {{ background: {theme.PANEL_ALT}; border: 1px solid {border};"
+                           f" border-radius: 4px; }}")
+
+    # Clicks that reach the frame are on its background or labels: the controls take their own.
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press = event.position().toPoint()
+            self.pressed.emit(self.device_id, event.modifiers())
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if (self._press is not None and event.buttons() & Qt.MouseButton.LeftButton and not self.instrument
+                and (event.position().toPoint() - self._press).manhattanLength()
+                >= QApplication.startDragDistance()):
+            self._press = None
+            self.drag_started.emit(self.device_id)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._press is not None and event.button() == Qt.MouseButton.LeftButton:
+            self.released.emit(self.device_id, event.modifiers())
+        self._press = None
+
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        self.menu_requested.emit(self.device_id)
         menu = QMenu(self)
         self.add_menu_actions(menu)
         chain = [d.id for d in self.editor.project.track(self.track_id).devices]
@@ -136,7 +198,7 @@ class _DeviceFrame(QFrame):
                                    lambda: self.editor.move_device(self.track_id, self.device_id, index + 1))
             right.setEnabled(index < len(chain) - 1)
             menu.addSeparator()
-        menu.addAction("Delete", lambda: self.editor.remove_device(self.track_id, self.device_id))
+        menu.addAction("Delete", self.remove_selected)
         menu.exec(event.globalPos())
 
     def add_menu_actions(self, menu: QMenu) -> None:
@@ -244,6 +306,11 @@ class PluginDeviceWidget(_DeviceFrame):
         self.edit = ToggleButton("Edit", role="small", tooltip="Show the plug-in's own editor")
         self.edit.setFixedHeight(18)
         self.edit.toggled.connect(self._toggle_editor)
+        # The header goes into the frame's layout first: a widget shown before it
+        # has a parent becomes a window of its own, for a moment.
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.addLayout(self.header)
         at = self.header.indexOf(self.title) + 1
         for widget in (self.edit, self.previous, self.page_label, self.next):
             self.header.insertWidget(at, widget)
@@ -255,9 +322,6 @@ class PluginDeviceWidget(_DeviceFrame):
 
         self.params = QHBoxLayout()
         self.params.setSpacing(6)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 8)
-        layout.addLayout(self.header)
         if self.engine_id is None:
             message = QLabel(bridge.plugin_errors.get(device.id) or f"{plugin.name} is not loaded.")
             message.setWordWrap(True)
@@ -450,6 +514,8 @@ class DevicePanel(QFrame):
         self.track_id: str | None = None
         self.widgets: dict[str, _DeviceFrame] = {}
         self._pages: dict[str, int] = {}  # plug-in device id -> the parameter page it shows
+        self.selected: list[str] = []  # selected device ids, in chain order
+        self._anchor: str | None = None  # where a Shift-click range starts
         self.setFixedHeight(PANEL_HEIGHT)
         self.setAcceptDrops(True)
 
@@ -463,7 +529,7 @@ class DevicePanel(QFrame):
         self.chain_layout = QHBoxLayout(self.chain)
         self.chain_layout.setContentsMargins(0, 0, 0, 0)
         self.chain_layout.setSpacing(6)
-        scroll = QScrollArea()
+        self.scroll = scroll = QScrollArea()
         scroll.setWidget(self.chain)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -476,6 +542,21 @@ class DevicePanel(QFrame):
 
         self.hint = QLabel(EFFECTS_HINT)
         self.hint.setStyleSheet(f"color: {theme.TEXT_DISABLED};")
+        # Where dragged devices would go: a line between devices, outside the layout.
+        self.drop_marker = QFrame(self.chain)
+        self.drop_marker.setStyleSheet(f"background: {theme.ACCENT};")
+        self.drop_marker.hide()
+        # A drag held near the chain's left or right edge scrolls it.
+        self._drag_pos = QPoint()
+        self._scroll_step = 0
+        self._autoscroll = QTimer(self)
+        self._autoscroll.setInterval(AUTOSCROLL_INTERVAL)
+        self._autoscroll.timeout.connect(self._auto_scroll)
+        # Ctrl+Alt-drag scrolls the chain. The press usually lands on a device or a
+        # knob, so the panel watches the chain's mouse events before they do.
+        self._pan: tuple[float, int] | None = None  # (press x on screen, scroll value)
+        self._dropping = False  # devices added by a drop on the chain are already in view
+        QApplication.instance().installEventFilter(self)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
@@ -503,10 +584,174 @@ class DevicePanel(QFrame):
     def _on_selection(self) -> None:
         if self.selection.track_id != self.track_id:
             self.show_track(self.selection.track_id)
+        elif self.selection.focus != "devices" and self.selected:
+            self._set_selected([])  # the user went on to select something else
+
+    # --- Selecting devices -------------------------------------------------------------
+
+    def _chain_ids(self) -> list[str]:
+        return [d.id for d in self.project.track(self.track_id).devices] if self.track_id else []
+
+    def _set_selected(self, device_ids) -> None:
+        wanted = set(device_ids)
+        self.selected = [i for i in self._chain_ids() if i in wanted]
+        for device_id, widget in self.widgets.items():
+            widget.set_selected(device_id in wanted)
+        if self.selected:
+            self.selection.focus_devices()
+
+    def select_device(self, device_id: str, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
+        """A click on a device: Shift selects the range from the last one clicked,
+        Ctrl adds or removes it, and a plain click selects just it."""
+        chain = self._chain_ids()
+        if modifiers & Qt.KeyboardModifier.ShiftModifier and self._anchor in chain:
+            a, b = sorted((chain.index(self._anchor), chain.index(device_id)))
+            self._set_selected(chain[a:b + 1])
+            return
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            self._set_selected(set(self.selected) ^ {device_id})
+        else:
+            self._set_selected([device_id])
+        self._anchor = device_id
+
+    def _on_device_pressed(self, device_id: str, modifiers) -> None:
+        # A plain press on a device already selected keeps the others (to drag them
+        # all); if no drag follows, the release selects just it.
+        extend = modifiers & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)
+        if extend or device_id not in self.selected:
+            self.select_device(device_id, modifiers)
+        else:
+            self.selection.focus_devices()
+
+    def _on_device_released(self, device_id: str, modifiers) -> None:
+        extend = modifiers & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)
+        if not extend and len(self.selected) > 1:
+            self.select_device(device_id)
+
+    def _on_device_menu(self, device_id: str) -> None:
+        if device_id not in self.selected:
+            self.select_device(device_id)
+
+    def delete_selected(self) -> bool:
+        """Delete the selected devices (one undo step). False if there were none."""
+        if not self.track_id or not self.selected:
+            return False
+        device_ids, self.selected = self.selected, []
+        self.editor.remove_devices(self.track_id, device_ids)
+        return True
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._set_selected([])  # a click beside the devices
+
+    # --- Scrolling by hand -------------------------------------------------------------
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress:
+            if (event.button() == Qt.MouseButton.LeftButton and is_pan_modifier(event.modifiers())
+                    and isinstance(obj, QWidget) and self.scroll.isAncestorOf(obj)):
+                self._pan = (event.globalPosition().x(), self.scroll.horizontalScrollBar().value())
+                QApplication.setOverrideCursor(Qt.CursorShape.ClosedHandCursor)
+                return True
+        elif self._pan is not None and kind in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonRelease):
+            if kind == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.LeftButton:
+                x, value = self._pan
+                self.scroll.horizontalScrollBar().setValue(value - round(event.globalPosition().x() - x))
+            else:  # released (even if the release went elsewhere)
+                self._pan = None
+                QApplication.restoreOverrideCursor()
+            return True
+        return False
+
+    # --- Reordering ------------------------------------------------------------------
+
+    def _start_drag(self, device_id: str) -> None:
+        moving = [i for i in (self.selected if device_id in self.selected else [device_id])
+                  if not self.widgets[i].instrument]
+        if not moving or self.track_id is None:
+            return
+        mime = QMimeData()
+        mime.setData(DEVICE_MOVE_MIME, "\n".join([self.track_id, *moving]).encode())
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.setPixmap(self.widgets[device_id].grab().scaledToHeight(48, Qt.TransformationMode.SmoothTransformation))
+        drag.exec(Qt.DropAction.MoveAction)
+        self._drag_ended()
+
+    def _moving(self, mime) -> list[str]:
+        """The devices a drag moves, if it moves this track's."""
+        if not mime.hasFormat(DEVICE_MOVE_MIME):
+            return []
+        track_id, *device_ids = bytes(mime.data(DEVICE_MOVE_MIME)).decode().split("\n")
+        return device_ids if track_id == self.track_id else []
+
+    def _chain_widgets(self) -> list[_DeviceFrame]:
+        return [self.widgets[i] for i in self._chain_ids() if i in self.widgets]
+
+    def drop_index(self, pos: QPoint) -> int:
+        """Where in the chain a drop at `pos` (panel coordinates) goes."""
+        x = self.chain.mapFrom(self, pos).x()
+        return sum(1 for w in self._chain_widgets() if w.geometry().center().x() < x)
+
+    def _show_drop_marker(self, index: int) -> None:
+        chain = self._chain_widgets()
+        if not chain:
+            self.drop_marker.hide()
+            return
+        gap = self.chain_layout.spacing()
+        if index < len(chain):
+            x = chain[index].geometry().left() - gap // 2 - 1
+        else:
+            x = chain[-1].geometry().right() + gap // 2
+        top = min(w.geometry().top() for w in chain)
+        bottom = max(w.geometry().bottom() for w in chain)
+        self.drop_marker.setGeometry(x, top, 2, bottom - top + 1)
+        self.drop_marker.raise_()
+        self.drop_marker.show()
+
+    def _drag_at(self, pos: QPoint) -> None:
+        """A drag is over `pos` (panel coordinates): show where it would drop, and
+        scroll while it is near an edge of the chain."""
+        self._drag_pos = pos
+        viewport = self.scroll.viewport()
+        x = viewport.mapFrom(self, pos).x()
+        if x < AUTOSCROLL_EDGE:
+            self._scroll_step = -max(2, (AUTOSCROLL_EDGE - x) // 2)
+        elif x > viewport.width() - AUTOSCROLL_EDGE:
+            self._scroll_step = max(2, (x - viewport.width() + AUTOSCROLL_EDGE) // 2)
+        else:
+            self._scroll_step = 0
+        if self._scroll_step:
+            self._autoscroll.start()
+        else:
+            self._autoscroll.stop()
+        self._show_drop_marker(self.drop_index(pos))
+
+    def _auto_scroll(self) -> None:
+        bar = self.scroll.horizontalScrollBar()
+        bar.setValue(bar.value() + self._scroll_step)
+        self._show_drop_marker(self.drop_index(self._drag_pos))
+
+    def _drag_ended(self) -> None:
+        self._autoscroll.stop()
+        self.drop_marker.hide()
 
     def _on_devices_changed(self, track_id: str) -> None:
-        if track_id == self.track_id:
-            self.show_track(track_id)
+        if track_id != self.track_id:
+            return
+        old = set(self.widgets)
+        self.show_track(track_id)
+        added = [i for i in self._chain_ids() if i not in old]
+        if added and not self._dropping:
+            # After the chain is laid out, so the new device has its place.
+            QTimer.singleShot(0, lambda device_id=added[-1]: self._scroll_to(device_id))
+
+    def _scroll_to(self, device_id: str) -> None:
+        widget = self.widgets.get(device_id)
+        if widget is not None:
+            self.chain_layout.activate()  # so it has its place in the chain
+            self.scroll.ensureWidgetVisible(widget, 0, 0)
 
     def _on_param_changed(self, track_id: str, device_id: str, _param_id: str) -> None:
         if track_id == self.track_id and device_id in self.widgets:
@@ -538,7 +783,10 @@ class DevicePanel(QFrame):
     def show_track(self, track_id: str | None) -> None:
         if track_id is not None and not self.project.has_track(track_id):
             track_id = None
+        if track_id != self.track_id:
+            self.selected, self._anchor = [], None
         self.track_id = track_id
+        self.drop_marker.hide()
         while self.chain_layout.count():
             item = self.chain_layout.takeAt(0)
             if item.widget() and item.widget() is not self.hint:
@@ -556,26 +804,64 @@ class DevicePanel(QFrame):
                 widget.page_changed.connect(self._remember_page)
             else:
                 widget = DeviceWidget(track_id, device, self.editor, self.bridge)
+            widget.pressed.connect(self._on_device_pressed)
+            widget.released.connect(self._on_device_released)
+            widget.drag_started.connect(self._start_drag)
+            widget.menu_requested.connect(self._on_device_menu)
+            widget.remove_selected = self.delete_selected
             self.widgets[device.id] = widget
             self.chain_layout.addWidget(widget)
+            widget.show()  # now, not on Qt's next pass, so the chain can be laid out at once
         self.chain_layout.addWidget(self.hint)
         self.chain_layout.addStretch(1)
         needs_instrument = track.is_midi and not any(device_is_instrument(d) for d in track.devices)
         self.hint.setText(INSTRUMENT_HINT if needs_instrument else EFFECTS_HINT)
         self.hint.setVisible(needs_instrument or not track.devices)
+        kept = [i for i in self.selected if i in self.widgets]
+        self.selected = []
+        self._set_selected(kept)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         mime = event.mimeData()
-        if self.track_id is not None and (device_kinds(mime) or mime.hasFormat(PLUGIN_MIME)):
+        if self.track_id is not None and (device_kinds(mime) or mime.hasFormat(PLUGIN_MIME) or self._moving(mime)):
             event.acceptProposedAction()
+            self._drag_at(event.position().toPoint())
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        event.acceptProposedAction()
+        self._drag_at(event.position().toPoint())
+
+    def dragLeaveEvent(self, _event) -> None:
+        self._drag_ended()
 
     def dropEvent(self, event: QDropEvent) -> None:
+        self._drag_ended()
         mime = event.mimeData()
         if self.track_id is not None:
-            kinds = [k for k in device_kinds(mime) if k in BUILTIN_DEVICES]
-            added = [self.editor.add_device(self.track_id, kind) for kind in kinds]
-            added += [self.editor.add_device(self.track_id, PLUGIN_KIND, plugin=ref) for ref in plugin_refs(mime)]
-            if any(device is None for device in added):
+            index = self.drop_index(event.position().toPoint())
+            moving = self._moving(mime)
+            if moving:
+                self.editor.move_devices(self.track_id, moving, index)
+                event.acceptProposedAction()
+                return
+            # New effects go where they were dropped (an instrument always goes first).
+            new = [(kind, None) for kind in device_kinds(mime) if kind in BUILTIN_DEVICES]
+            new += [(PLUGIN_KIND, ref) for ref in plugin_refs(mime)]
+            refused = False
+            self._dropping = True
+            try:
+                for kind, ref in new:
+                    count = len(self.project.track(self.track_id).devices)
+                    device = self.editor.add_device(self.track_id, kind, index=index, plugin=ref)
+                    refused |= device is None
+                    chain = [d.id for d in self.project.track(self.track_id).devices]
+                    if device is not None and not device_is_instrument(device):
+                        index = chain.index(device.id) + 1  # the next one goes after it
+                    else:  # a new instrument (not one replacing another) went in first, before the drop point
+                        index += len(chain) - count
+            finally:
+                self._dropping = False
+            if refused:
                 self.status_message.emit(INSTRUMENT_REFUSED)
         event.acceptProposedAction()
 

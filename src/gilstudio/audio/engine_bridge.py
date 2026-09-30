@@ -26,6 +26,9 @@ from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Track
 from ..model.timebase import db_to_gain
 
 AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
+# Plug-in editors of tracks not shown are hidden but keep running (animating,
+# messaging their processors); this many at most, then the ones hidden longest close.
+MAX_HIDDEN_EDITORS = 8
 _WARP_MODES = {name: ge.WarpMode(index) for index, name in enumerate(WARP_MODES)}
 
 
@@ -109,6 +112,9 @@ class EngineBridge(QObject):
         self.plugin_errors: dict[str, str] = {}  # device id -> why its plug-in isn't loaded
         self.known_plugins: dict[str, str] = {}  # plug-in uid -> file, from the scan: finds moved plug-ins
         self.owner_window: Callable[[], int] = lambda: 0  # HWND owning plug-in editor windows
+        self._editors_wanted: set[str] = set()  # device ids whose editor the user left open
+        self._editors_track: str | None = None  # the track whose editors are shown (the selected one)
+        self._hidden_editors: list[int] = []  # processor ids of hidden editors, the longest hidden first
         self._sources: dict[str, ge.AudioSource] = {}
         self._loading: dict[str, list[Callable[[], None]]] = {}
         self._failed: dict[str, str] = {}
@@ -158,6 +164,8 @@ class EngineBridge(QObject):
         self._param_ids.clear()
         self.plugin_errors.clear()
         self.meters.clear()
+        self._editors_wanted.clear()
+        self._hidden_editors.clear()
         for track in self.project.tracks:
             self._add_engine_track(track)
         self._push_settings()
@@ -284,10 +292,14 @@ class EngineBridge(QObject):
 
     def _forget_processor(self, device_id: str, processor_id: int | None, remove: bool = True) -> None:
         """A device's processor goes away (with its track if not `remove`). A
-        plug-in's state is kept, in case the device comes back (undo)."""
+        plug-in's state is kept, in case the device comes back (undo), but not its
+        editor: undo and redo don't open editors."""
         self.plugin_errors.pop(device_id, None)
+        self._editors_wanted.discard(device_id)
         if processor_id is None:
             return
+        if processor_id in self._hidden_editors:
+            self._hidden_editors.remove(processor_id)
         if processor_id in self._plugin_ids:
             try:
                 self._plugin_states[device_id] = self.engine.processor_state(processor_id)
@@ -384,7 +396,7 @@ class EngineBridge(QObject):
         name = device.plugin.name if device.plugin else device.kind
         return f"{name} - {self.project.track(track_id).name}"
 
-    def open_plugin_editor(self, track_id: str, device_id: str) -> bool:
+    def open_plugin_editor(self, track_id: str, device_id: str, report: bool = True) -> bool:
         engine_id = self.engine_device_id(track_id, device_id)
         if engine_id is None:
             return False
@@ -393,22 +405,66 @@ class EngineBridge(QObject):
             opened = self.engine.open_editor(engine_id, self.owner_window(), self._editor_title(track_id, device_id))
         finally:
             self._busy -= 1
-        if not opened:
-            self.status_message.emit(f"{self.project.device(track_id, device_id).plugin.name} has no editor.")
+        if opened:
+            self._editors_wanted.add(device_id)
+        else:
+            self._editors_wanted.discard(device_id)
+            if report:
+                self.status_message.emit(f"{self.project.device(track_id, device_id).plugin.name} has no editor.")
         self.plugin_editor_changed.emit(track_id, device_id)
         return opened
 
     def close_plugin_editor(self, track_id: str, device_id: str) -> None:
+        self._editors_wanted.discard(device_id)
         engine_id = self.engine_device_id(track_id, device_id)
         if engine_id is not None:
+            if engine_id in self._hidden_editors:
+                self._hidden_editors.remove(engine_id)
             self.engine.close_editor(engine_id)
             self.plugin_editor_changed.emit(track_id, device_id)
+
+    def request_plugin_editor(self, track_id: str, device_id: str) -> None:
+        """Open a plug-in's editor now if its track is the one shown, or when it is."""
+        if track_id == self._editors_track:
+            self.open_plugin_editor(track_id, device_id, report=False)  # having none is fine here
+        else:
+            self._editors_wanted.add(device_id)
+
+    def show_plugin_editors(self, track_id: str | None) -> None:
+        """Show the editors of one track (the selected one): the ones the user left
+        open there come back where they were, and every other track's are hidden
+        until that track is shown again. Hidden editors keep running (they come back
+        as they were), but only MAX_HIDDEN_EDITORS of them: beyond that, the ones
+        hidden longest are closed, and open again (where they were) when shown."""
+        if track_id == self._editors_track:
+            return
+        self._editors_track = track_id
+        # A copy: opening an editor may run a message loop that changes the chains.
+        for chain_track, chain in [(t, list(c)) for t, c in self._devices.items()]:
+            for device_id, processor_id in chain:
+                if processor_id not in self._plugin_ids:
+                    continue
+                if chain_track != track_id:
+                    if self.engine.is_editor_open(processor_id):
+                        self.engine.set_editor_visible(processor_id, False)
+                        self._hidden_editors.append(processor_id)
+                        self.plugin_editor_changed.emit(chain_track, device_id)
+                elif device_id in self._editors_wanted and not self.engine.is_editor_open(processor_id):
+                    if processor_id in self._hidden_editors:
+                        self._hidden_editors.remove(processor_id)
+                    if self.engine.set_editor_visible(processor_id, True):
+                        self.plugin_editor_changed.emit(chain_track, device_id)
+                    else:  # it was closed meanwhile (too many hidden, or its plug-in reloaded)
+                        self.open_plugin_editor(chain_track, device_id, report=False)
+        while len(self._hidden_editors) > MAX_HIDDEN_EDITORS:
+            self.engine.close_editor(self._hidden_editors.pop(0))  # still wanted: it reopens when shown
 
     def is_plugin_editor_open(self, track_id: str, device_id: str) -> bool:
         engine_id = self.engine_device_id(track_id, device_id)
         return engine_id is not None and self.engine.is_editor_open(engine_id)
 
     def close_all_editors(self) -> None:
+        self._hidden_editors.clear()
         for chain in self._devices.values():
             for _, processor_id in chain:
                 if processor_id in self._plugin_ids:
@@ -427,7 +483,7 @@ class EngineBridge(QObject):
 
     def _update_editor_titles(self, track_id: str) -> None:
         for device_id, processor_id in self._devices.get(track_id, []):
-            if processor_id in self._plugin_ids and self.engine.is_editor_open(processor_id):
+            if processor_id in self._plugin_ids:  # hidden editors too; no-op without one
                 self.engine.set_editor_title(processor_id, self._editor_title(track_id, device_id))
 
     def _dispatch_processor_events(self) -> None:
@@ -452,9 +508,10 @@ class EngineBridge(QObject):
                 self._param_ids.pop(event.processor_id, None)
                 self.plugin_params_rebuilt.emit(*place)
             elif event.type == kind.EDITOR_CLOSED:
+                self._editors_wanted.discard(place[1])
                 self.plugin_editor_changed.emit(*place)
-            elif event.type == kind.EDITOR_REQUESTED:
-                self.open_plugin_editor(*place)
+            elif event.type == kind.EDITOR_REQUESTED:  # like any editor, shown with its track
+                self.request_plugin_editor(*place)
             elif event.type == kind.STATE_DIRTY:
                 dirty = True
         for place in changed:

@@ -3,14 +3,20 @@ undo, and projects. Drives the real main window offscreen with the test
 plug-ins (see tests/vst3_plugins); plug-in editors are real Win32 windows."""
 
 import base64
+import ctypes
 import json
+from ctypes import wintypes
+from dataclasses import asdict
+from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QDropEvent
+from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, Qt
+from PySide6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent, QMouseEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
+from gilstudio import _engine as ge
+from gilstudio.audio import engine_bridge
 from gilstudio.model.project import PLUGIN_KIND, PluginRef
 from gilstudio.ui.browser.browser_models import plugin_refs
 from gilstudio.ui.browser.file_index import plugin_ref
@@ -81,6 +87,35 @@ def test_plugins_in_the_browser(window):
     assert list(widget.knobs) == [12, 13, 14, 15] and widget.page_label.text() == "2/2"
     window.editor.add_device(track.id, "utility")  # the device view is rebuilt...
     assert list(window.devices.widgets[device.id].knobs) == [12, 13, 14, 15]  # ...on the same page
+
+
+class _WindowsShown(QObject):
+    """Every widget shown as a window of its own, however briefly."""
+
+    def __init__(self):
+        super().__init__()
+        self.shown = []
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Show and isinstance(watched, QWidget) and watched.isWindow():
+            self.shown.append(type(watched).__name__)
+        return False
+
+
+def test_showing_a_plugin_opens_no_stray_windows(window):
+    # The synth has two pages of parameters, so its device shows page buttons.
+    refs = installed(window)
+    spy = _WindowsShown()
+    QApplication.instance().installEventFilter(spy)
+    try:
+        track = window.editor.add_midi_track(instrument=None, plugin=refs["GIL Test Synth"])
+        window.selection.select_track(track.id)
+    finally:
+        QApplication.instance().removeEventFilter(spy)
+    assert window.devices.widgets[track.devices[0].id].pages == 2
+    assert spy.shown == []
+    QTest.qWait(1)  # it has no editor to show, and that's no news to report
+    assert "no editor" not in window.statusBar().currentMessage()
 
 
 def test_knobs_edit_plugins_undoably(window):
@@ -273,3 +308,335 @@ def test_editor_follows_its_device(window):
     window.close()  # and they all close with the main window
     assert not editor_window("GIL Test Effect - Bass")
     QTest.qWait(1)
+
+
+def window_rect(hwnd) -> tuple[int, int, int, int]:
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def test_plugin_editors_follow_the_selected_track(window):
+    effect = installed(window)["GIL Test Effect"]
+    drums = window.editor.add_audio_track(name="Drums")
+    bass = window.editor.add_audio_track(name="Bass")
+    window.selection.select_track(drums.id)
+    # Adding a plug-in shows its editor.
+    on_drums = window.editor.add_device(drums.id, PLUGIN_KIND, plugin=effect)
+    QTest.qWait(1)
+    assert window.bridge.is_plugin_editor_open(drums.id, on_drums.id)
+    assert window.devices.widgets[on_drums.id].edit.isChecked()
+    drums_frame = editor_window("GIL Test Effect - Drums")
+    user32.SetWindowPos(drums_frame, None, 40, 50, 0, 0, 0x0001 | 0x0004 | 0x0010)  # moved by the user
+    place = window_rect(drums_frame)
+
+    # Selecting another track hides it; a plug-in added there shows its own.
+    window.selection.select_track(bass.id)
+    assert not window.bridge.is_plugin_editor_open(drums.id, on_drums.id)
+    assert not user32.IsWindowVisible(drums_frame)
+    on_bass = window.editor.add_device(bass.id, PLUGIN_KIND, plugin=effect)
+    QTest.qWait(1)
+    assert window.bridge.is_plugin_editor_open(bass.id, on_bass.id)
+    window.devices.widgets[on_bass.id].edit.click()  # the user closes it
+    assert not editor_window("GIL Test Effect - Bass")
+
+    # Coming back shows the editor again, where it was; the one closed stays closed.
+    window.selection.select_track(drums.id)
+    assert window.bridge.is_plugin_editor_open(drums.id, on_drums.id) and user32.IsWindowVisible(drums_frame)
+    assert window_rect(drums_frame) == place and window.devices.widgets[on_drums.id].edit.isChecked()
+    window.selection.select_track(bass.id)
+    assert not window.bridge.is_plugin_editor_open(bass.id, on_bass.id)
+
+    # Closed with its own close button, it stays closed too.
+    window.selection.select_track(drums.id)
+    user32.SendMessageW(drums_frame, 0x0010, 0, 0)  # WM_CLOSE
+    poll(window)
+    window.selection.select_track(None)
+    window.selection.select_track(drums.id)
+    assert not window.bridge.is_plugin_editor_open(drums.id, on_drums.id)
+
+    # Undo and redo don't open editors (the last step added the effect on Bass).
+    window.selection.select_track(bass.id)
+    window.undo_stack.undo()
+    window.undo_stack.redo()
+    QTest.qWait(1)
+    assert not window.bridge.is_plugin_editor_open(bass.id, on_bass.id)
+    window.undo_stack.setClean()
+
+
+def test_selecting_deleting_and_reordering_devices(window):
+    refs = installed(window)
+    track, synth = synth_track(window)
+    effects = [window.editor.add_device(track.id, PLUGIN_KIND, plugin=refs[name])
+               for name in ("GIL Test Effect", "GIL Test Mono", "GIL Test Effect")]
+    window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    chain = lambda: [d.id for d in window.project.track(track.id).devices]
+    first, second, third, utility = chain()[1:]
+    assert [first, second, third] == [e.id for e in effects]
+
+    def click(device_id, modifiers=Qt.KeyboardModifier.NoModifier):
+        QTest.mouseClick(panel.widgets[device_id].title, Qt.MouseButton.LeftButton, modifiers)
+
+    # Clicks on a device's title select it; Shift selects a range, Ctrl one more or less.
+    click(first)
+    assert panel.selected == [first] and panel.widgets[first].selected and window.selection.focus == "devices"
+    click(utility, Qt.KeyboardModifier.ShiftModifier)
+    assert panel.selected == [first, second, third, utility]
+    click(second, Qt.KeyboardModifier.ControlModifier)
+    assert panel.selected == [first, third, utility] and not panel.widgets[second].selected
+    click(synth.id)
+    click(second, Qt.KeyboardModifier.ShiftModifier)  # the instrument can be selected too
+    assert panel.selected == [synth.id, first, second]
+
+    # Delete deletes them all, in one undo step.
+    steps = window.undo_stack.count()
+    window.delete_selection()
+    assert chain() == [third, utility] and window.undo_stack.count() == steps + 1
+    window.undo_stack.undo()
+    assert chain() == [synth.id, first, second, third, utility]
+    window.selection.set_clips(set())  # selecting something else deselects the devices
+    assert panel.selected == [] and not any(w.selected for w in panel.widgets.values())
+    window.delete_selection()
+    assert len(chain()) == 5
+
+    # Dragging effects (selected together) reorders them; the instrument stays first.
+    def drop_before(device_id, moving):
+        mime = QMimeData()
+        mime.setData("application/x-gilstudio-device-move", "\n".join([track.id, *moving]).encode())
+        widget = panel.widgets[device_id]
+        pos = widget.mapTo(panel, QPoint(2, widget.height() // 2))
+        panel.dropEvent(drop(QPointF(pos), mime))
+
+    drop_before(first, [third, utility])
+    assert chain() == [synth.id, third, utility, first, second]
+    assert window.undo_stack.undoText() == "Move Devices"
+    drop_before(synth.id, [second, synth.id])  # nothing goes before the instrument, which doesn't move
+    assert chain() == [synth.id, second, third, utility, first]
+    window.undo_stack.undo()
+    window.undo_stack.undo()
+    assert chain() == [synth.id, first, second, third, utility]
+    # A device's menu offers Delete for all the selected devices.
+    click(first)
+    click(second, Qt.KeyboardModifier.ShiftModifier)
+    panel.widgets[first].remove_selected()
+    assert chain() == [synth.id, third, utility]
+    window.undo_stack.setClean()
+
+
+def test_device_view_review_fixes(window, monkeypatch):
+    refs = installed(window)
+    panel = window.devices
+
+    # Dropped from the browser with an instrument, effects land where they were dropped.
+    track = window.editor.add_midi_track(instrument=None)
+    window.selection.select_track(track.id)
+    fx1 = window.editor.add_device(track.id, "utility").id
+    fx2 = window.editor.add_device(track.id, "utility").id
+    chain = lambda: [d.id for d in window.project.track(track.id).devices]
+
+    def drop_at(device_id, *plugins, kinds=()):
+        mime = QMimeData()
+        if plugins:
+            mime.setData("application/x-gilstudio-plugin", json.dumps([asdict(refs[n]) for n in plugins]).encode())
+        if kinds:
+            mime.setData("application/x-gilstudio-device", json.dumps(list(kinds)).encode())
+        QTest.qWait(1)  # the rebuilt device view laid out
+        widget = panel.widgets[device_id]
+        panel.dropEvent(drop(QPointF(widget.mapTo(panel, QPoint(2, widget.height() // 2))), mime))
+
+    drop_at(fx2, "GIL Test Synth", "GIL Test Effect")  # between the two utilities
+    synth, _, effect, _ = chain()
+    assert chain() == [synth, fx1, effect, fx2]
+    drop_at(synth, "GIL Test Mono", "GIL Test Effect")  # before the instrument: right after it, in order
+    names = [d.plugin.name if d.plugin else d.kind for d in window.project.track(track.id).devices]
+    assert names[1:3] == ["GIL Test Mono", "GIL Test Effect"] and chain()[0] == synth and chain()[3:] == [fx1, effect, fx2]
+
+    # With the devices in focus, a second Delete doesn't delete clips selected before.
+    clip = window.editor.add_midi_clip(track.id, 0.0, 4.0)
+    window.selection.set_clips({clip})
+    QTest.mouseClick(panel.widgets[fx1].title, Qt.MouseButton.LeftButton)
+    window.delete_selection()
+    window.delete_selection()
+    assert fx1 not in chain() and window.project.track(track.id).clips
+
+    # A hidden editor takes its track's new name.
+    window.selection.select_track(None)
+    assert not window.bridge.is_plugin_editor_open(track.id, effect)
+    window.editor.rename_track(track.id, "Sub")
+    window.selection.select_track(track.id)
+    assert window.bridge.is_plugin_editor_open(track.id, effect) and editor_window("GIL Test Effect - Sub")
+
+    # Reopening an editor may change the chains (a plug-in running a message loop).
+    window.selection.select_track(None)
+    window.engine.close_editor(engine_id(window, track, window.project.device(track.id, effect)))
+    reopen = window.bridge.open_plugin_editor
+
+    def open_and_add_a_track(*args, **kwargs):
+        window.editor.add_midi_track()  # a track with a device: a new chain
+        return reopen(*args, **kwargs)
+
+    monkeypatch.setattr(window.bridge, "open_plugin_editor", open_and_add_a_track)
+    window.selection.select_track(track.id)
+    assert reopen(track.id, effect)
+    window.undo_stack.setClean()
+
+
+class _EngineWithEvents:
+    """The engine, reporting some processor events of our own."""
+
+    def __init__(self, engine, events):
+        self._engine, self._events = engine, events
+
+    def take_processor_events(self):
+        events, self._events = self._events, []
+        return events
+
+    def __getattr__(self, name):
+        return getattr(self._engine, name)
+
+
+def test_plugin_editor_review_fixes(window, monkeypatch):
+    effect = installed(window)["GIL Test Effect"]
+    bridge = window.bridge
+
+    def track_with_editor(name):
+        track = window.editor.add_audio_track(name=name)
+        window.selection.select_track(track.id)
+        device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=effect)
+        QTest.qWait(1)
+        assert bridge.is_plugin_editor_open(track.id, device.id)
+        return track, device
+
+    # A device deleted with its editor open and restored by undo doesn't bring
+    # its editor back later, when its track is selected again.
+    one, on_one = track_with_editor("One")
+    window.editor.remove_device(one.id, on_one.id)
+    window.undo_stack.undo()
+    window.selection.select_track(None)
+    window.selection.select_track(one.id)
+    assert not bridge.is_plugin_editor_open(one.id, on_one.id)
+
+    # A plug-in asking for its editor gets it when its track is shown, not before.
+    two = window.editor.add_audio_track(name="Two")
+    window.selection.select_track(two.id)
+    asks = SimpleNamespace(type=ge.ProcessorEventType.EDITOR_REQUESTED, processor_id=engine_id(window, one, on_one))
+    monkeypatch.setattr(bridge, "engine", _EngineWithEvents(window.engine, [asks]))
+    poll(window)
+    assert not editor_window("GIL Test Effect - One")
+    monkeypatch.setattr(bridge, "engine", window.engine)
+    window.selection.select_track(one.id)
+    assert bridge.is_plugin_editor_open(one.id, on_one.id)
+    window.devices.widgets[on_one.id].edit.click()
+
+    # Only so many hidden editors keep running: the one hidden longest closes, and
+    # opens again where it was when its track is shown.
+    monkeypatch.setattr(engine_bridge, "MAX_HIDDEN_EDITORS", 2)
+    tracks = [track_with_editor("Hidden 0")]
+    user32.SetWindowPos(editor_window("GIL Test Effect - Hidden 0"), None, 40, 50, 0, 0,
+                        0x0001 | 0x0004 | 0x0010)  # moved by the user
+    tracks += [track_with_editor(f"Hidden {i}") for i in range(1, 4)]
+    window.selection.select_track(two.id)  # hides the last one too: 4 hidden
+    assert not editor_window("GIL Test Effect - Hidden 0") and not editor_window("GIL Test Effect - Hidden 1")
+    assert editor_window("GIL Test Effect - Hidden 2") and editor_window("GIL Test Effect - Hidden 3")
+    window.selection.select_track(tracks[0][0].id)
+    assert bridge.is_plugin_editor_open(tracks[0][0].id, tracks[0][1].id)
+    assert window_rect(editor_window("GIL Test Effect - Hidden 0"))[:2] == (40, 50)
+    window.undo_stack.setClean()
+
+
+def test_dragging_devices_scrolls_the_chain(window):
+    track = window.editor.add_audio_track()
+    window.selection.select_track(track.id)
+    for _ in range(12):
+        window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    bar = panel.scroll.horizontalScrollBar()
+    assert wait_until(lambda: bar.maximum() > 0), (panel.scroll.viewport().width(), panel.chain.width())
+    QTest.qWait(1)  # scrolled to the last device added
+    bar.setValue(0)
+    mime = QMimeData()
+    mime.setData("application/x-gilstudio-device-move", f"{track.id}\n{track.devices[0].id}".encode())
+    viewport = panel.scroll.viewport()
+
+    def drag_to(x):
+        pos = viewport.mapTo(panel, QPoint(x, viewport.height() // 2))
+        panel.dragMoveEvent(QDragMoveEvent(pos, Qt.DropAction.MoveAction, mime, Qt.MouseButton.LeftButton,
+                                           Qt.KeyboardModifier.NoModifier))
+
+    drag_to(viewport.width() - 5)  # held at the right edge, the chain scrolls on
+    assert wait_until(lambda: bar.value() == bar.maximum())
+    drag_to(viewport.width() // 2)  # away from the edges, it stops
+    stopped = bar.value()
+    drag_to(5)
+    assert wait_until(lambda: bar.value() < stopped)
+    panel.dragLeaveEvent(QDragLeaveEvent())
+    left = bar.value()
+    QTest.qWait(50)
+    assert bar.value() == left and not panel.drop_marker.isVisible()
+
+
+def test_ctrl_alt_drag_scrolls_the_chain(window):
+    track = window.editor.add_audio_track()
+    window.selection.select_track(track.id)
+    for _ in range(12):
+        window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    bar = panel.scroll.horizontalScrollBar()
+    assert wait_until(lambda: bar.maximum() > 0)
+    QTest.qWait(1)  # scrolled to the last device added
+    bar.setValue(0)
+    device = track.devices[0].id
+    knob = panel.widgets[device].findChildren(QWidget)[-1]  # the press can land on a knob
+    pan = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+    left = Qt.MouseButton.LeftButton
+    local = QPointF(knob.width() / 2, knob.height() / 2)
+    start = QPointF(knob.mapToGlobal(local.toPoint()))  # the mouse's screen position; the knob moves
+
+    def send(kind, x, buttons):
+        screen = start + QPointF(x, 0)
+        QApplication.sendEvent(knob, QMouseEvent(kind, local, screen, left, buttons, pan))
+
+    send(QEvent.Type.MouseButtonPress, 0, left)
+    send(QEvent.Type.MouseMove, -150, left)  # drag left: the chain scrolls right
+    assert bar.value() == min(150, bar.maximum())
+    send(QEvent.Type.MouseMove, -50, left)
+    assert bar.value() == 50
+    send(QEvent.Type.MouseButtonRelease, -50, Qt.MouseButton.NoButton)
+    assert panel.selected == [] and QApplication.overrideCursor() is None
+    send(QEvent.Type.MouseMove, -300, Qt.MouseButton.NoButton)  # the pan is over
+    assert bar.value() == 50
+
+
+def test_adding_a_plugin_scrolls_to_it(window):
+    refs = installed(window)
+    track = window.editor.add_midi_track(instrument=None)
+    window.selection.select_track(track.id)
+    for _ in range(12):
+        window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    bar = panel.scroll.horizontalScrollBar()
+    assert wait_until(lambda: bar.maximum() > 0)
+    viewport = panel.scroll.viewport()
+
+    def in_view(device_id):
+        widget = panel.widgets[device_id]
+        left = widget.mapTo(viewport, QPoint(0, 0)).x()
+        return left >= 0 and left + widget.width() <= viewport.width()
+
+    # Added from the browser while scrolled to the start: the chain scrolls to it.
+    bar.setValue(0)
+    window.add_device_to_selected_track(PLUGIN_KIND, refs["GIL Test Effect"])
+    added = track.devices[-1].id
+    assert wait_until(lambda: bar.value() > 0) and in_view(added)
+
+    # Dropped on the chain, where the user is looking, it doesn't scroll, even for
+    # an instrument, which goes first.
+    bar.setValue(bar.maximum())
+    mime = QMimeData()
+    mime.setData("application/x-gilstudio-plugin", json.dumps([asdict(refs["GIL Test Synth"])]).encode())
+    last = panel.widgets[added]
+    panel.dropEvent(drop(QPointF(last.mapTo(panel, QPoint(2, last.height() // 2))), mime))
+    assert track.devices[0].plugin == refs["GIL Test Synth"]
+    QTest.qWait(50)
+    assert in_view(added) and not in_view(track.devices[0].id)

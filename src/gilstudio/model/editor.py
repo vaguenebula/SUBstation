@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QUndoStack
 
 from . import edits, notes
@@ -74,8 +75,12 @@ def new_device(kind: str, plugin: PluginRef | None = None) -> Device:
     return Device(id=new_id(), kind=kind, params=dict(BUILTIN_DEVICES[kind][1]))
 
 
-class ProjectEditor:
+class ProjectEditor(QObject):
+    # (track id, device id) when the user adds a plug-in (not on undo or redo).
+    plugin_added = Signal(str, str)
+
     def __init__(self, project: Project, undo_stack: QUndoStack):
+        super().__init__()
         self.project = project
         self.undo_stack = undo_stack
 
@@ -99,6 +104,8 @@ class ProjectEditor:
         track = Track(id=new_id(), name=name or p.unique_track_name(f"{len(p.tracks) + 1} MIDI"),
                       color=p.next_color(), kind="midi", devices=devices)
         self._push(InsertTrackCommand(p, track, len(p.tracks) if index is None else index, "Insert MIDI Track"))
+        if plugin:
+            self.plugin_added.emit(track.id, devices[0].id)
         return p.track(track.id)
 
     def delete_tracks(self, track_ids: list[str]) -> None:
@@ -392,25 +399,45 @@ class ProjectEditor:
             first = 1 if after and device_is_instrument(after[0]) else 0  # effects go after the instrument
             after.insert(len(after) if index is None else max(first, index), device)
         self._push(SetDevicesCommand(self.project, track_id, before, after, f"Add {device_name(device)}"))
+        if device.is_plugin:
+            self.plugin_added.emit(track_id, device.id)
         return device
 
     def move_device(self, track_id: str, device_id: str, index: int) -> None:
-        """Move a device within its chain (an instrument stays first)."""
+        """Move a device to position `index` in its chain (an instrument stays first)."""
+        ids = [d.id for d in self.project.track(track_id).devices]
+        # move_devices counts positions in the chain before the move: moving right skips the device itself.
+        self.move_devices(track_id, [device_id], index + 1 if index > ids.index(device_id) else index)
+
+    def move_devices(self, track_id: str, device_ids, index: int) -> None:
+        """Move effects together (in their chain order) to before the device at
+        `index` in the chain as it is now (the end if past it). One undo step; an
+        instrument doesn't move, and nothing goes before it."""
         before = copy.deepcopy(self.project.track(track_id).devices)
-        after = copy.deepcopy(before)
-        [moving] = [d for d in after if d.id == device_id]
-        if device_is_instrument(moving):
+        ids = {d.id for d in before if d.id in set(device_ids) and not device_is_instrument(d)}
+        if not ids:
             return
-        after.remove(moving)
-        first = 1 if after and device_is_instrument(after[0]) else 0
-        after.insert(max(first, min(index, len(after))), moving)
+        moving = [d for d in copy.deepcopy(before) if d.id in ids]
+        staying = [d for d in copy.deepcopy(before) if d.id not in ids]
+        at = sum(1 for d in before[:max(0, index)] if d.id not in ids)
+        first = 1 if staying and device_is_instrument(staying[0]) else 0
+        at = max(first, min(at, len(staying)))
+        after = staying[:at] + moving + staying[at:]
         if [d.id for d in after] != [d.id for d in before]:
-            self._push(SetDevicesCommand(self.project, track_id, before, after, "Move Device"))
+            self._push(SetDevicesCommand(self.project, track_id, before, after,
+                                         "Move Device" if len(moving) == 1 else "Move Devices"))
 
     def remove_device(self, track_id: str, device_id: str) -> None:
+        self.remove_devices(track_id, [device_id])
+
+    def remove_devices(self, track_id: str, device_ids) -> None:
+        """Delete devices from a track's chain, in one undo step."""
+        ids = set(device_ids)
         before = copy.deepcopy(self.project.track(track_id).devices)
-        after = [d for d in copy.deepcopy(before) if d.id != device_id]
-        self._push(SetDevicesCommand(self.project, track_id, before, after, "Delete Device"))
+        after = [d for d in copy.deepcopy(before) if d.id not in ids]
+        if len(after) != len(before):
+            text = "Delete Device" if len(before) - len(after) == 1 else "Delete Devices"
+            self._push(SetDevicesCommand(self.project, track_id, before, after, text))
 
     def set_device_param(self, track_id: str, device_id: str, param_id: str, value: float,
                          merge_key: object | None = None, old: float | None = None) -> None:

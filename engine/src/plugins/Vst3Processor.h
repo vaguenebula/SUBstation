@@ -21,11 +21,13 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "Processor.h"
+#include "plugins/EditorWindow.h"
 #include "plugins/Vst3Support.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
@@ -33,12 +35,9 @@
 #include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
-#include "public.sdk/source/vst/hosting/connectionproxy.h"
 #include "public.sdk/source/vst/hosting/module.h"
 
 namespace gil::vst3 {
-
-class EditorWindow;
 
 class Vst3Processor final : public Processor {
 public:
@@ -72,6 +71,7 @@ public:
     bool openEditor(void* ownerWindow, const std::string& title) override;
     void closeEditor() override;
     bool isEditorOpen() const override;
+    bool setEditorVisible(bool visible) override;
     void setEditorTitle(const std::string& title) override;
 
 private:
@@ -119,6 +119,7 @@ private:
     void endEdit(Steinberg::Vst::ParamID id);
     void pushEvent(const ProcessorEvent& event);
     int indexOf(Steinberg::Vst::ParamID id) const;  // hold mutex_
+    void dropEditor();
 
     // The module outlives everything the plug-in made, so it comes first.
     VST3::Hosting::Module::Ptr module_;
@@ -130,8 +131,8 @@ private:
     Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
     Steinberg::IPtr<Steinberg::Vst::IEditController> controller_;
     Steinberg::IPtr<Steinberg::Vst::IMidiMapping> midiMapping_;
-    Steinberg::IPtr<Steinberg::Vst::ConnectionProxy> componentConnection_;
-    Steinberg::IPtr<Steinberg::Vst::ConnectionProxy> controllerConnection_;
+    Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> componentPoint_;
+    Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> controllerPoint_;
     bool singleComponent_ = false;  // the component is its own controller
     bool active_ = false;
     bool processing_ = false;
@@ -177,6 +178,7 @@ private:
     std::vector<ProcessorEvent> pending_;
 
     std::unique_ptr<EditorWindow> editor_;
+    std::optional<EditorWindow::Position> editorPosition_;  // where the last editor was: the next opens there
 };
 
 }  // namespace gil::vst3

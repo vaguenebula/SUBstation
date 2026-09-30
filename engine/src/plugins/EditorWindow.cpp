@@ -61,7 +61,8 @@ RECT frameInsets(HWND hwnd) {
 
 }  // namespace
 
-EditorWindow::EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* ownerWindow, const std::string& title)
+EditorWindow::EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* ownerWindow, const std::string& title,
+                           const Position* position)
     : view_(std::move(view)) {
     registerWindowClass();
     auto owner = static_cast<HWND>(ownerWindow);
@@ -69,8 +70,9 @@ EditorWindow::EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* own
     resizable_ = view_->canResize() == kResultTrue;
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
     if (resizable_) style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
-    hwnd_ = CreateWindowExW(0, kWindowClass, widen(title).c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT, 400, 300,
-                            owner, nullptr, thisModule(), this);
+    // Created where it will be (if known), so it has that screen's scale from the start.
+    hwnd_ = CreateWindowExW(0, kWindowClass, widen(title).c_str(), style, position ? position->x : CW_USEDEFAULT,
+                            position ? position->y : CW_USEDEFAULT, 400, 300, owner, nullptr, thisModule(), this);
     if (!hwnd_) {
         view_ = nullptr;
         return;
@@ -81,7 +83,11 @@ EditorWindow::EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* own
     if (view_->getSize(&rect) == kResultTrue && width(rect) > 0 && height(rect) > 0) {
         setClientSize(width(rect), height(rect));
     }
-    placeOverOwner(owner);
+    if (position) {
+        placeAt(*position);
+    } else {
+        placeOverOwner(owner);
+    }
     if (view_->attached(hwnd_, Steinberg::kPlatformTypeHWND) != kResultTrue) {
         view_->setFrame(nullptr);
         view_ = nullptr;
@@ -95,11 +101,13 @@ EditorWindow::EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* own
         setClientSize(width(rect), height(rect));
     }
     ShowWindow(hwnd_, SW_SHOW);
+    rememberPosition();
 }
 
 EditorWindow::~EditorWindow() {
     detachView();
     if (hwnd_) {
+        rememberPosition();
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
@@ -123,6 +131,20 @@ void EditorWindow::bringToFront() {
     SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     SetForegroundWindow(hwnd_);
 }
+
+void EditorWindow::setVisible(bool visible) {
+    if (hwnd_) ShowWindow(hwnd_, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+}
+
+bool EditorWindow::isVisible() const { return hwnd_ && IsWindowVisible(hwnd_); }
+
+EditorWindow::Position EditorWindow::position() const {
+    RECT window{};
+    if (hwnd_ && !IsIconic(hwnd_) && GetWindowRect(hwnd_, &window)) return {window.left, window.top};
+    return position_;
+}
+
+void EditorWindow::rememberPosition() { position_ = position(); }
 
 void EditorWindow::updateContentScale() {
     scale_ = static_cast<float>(GetDpiForWindow(hwnd_)) / USER_DEFAULT_SCREEN_DPI;
@@ -153,6 +175,20 @@ void EditorWindow::placeOverOwner(HWND owner) {
     int y = anchor.top + (anchor.bottom - anchor.top - h) / 3 + offset;
     x = std::max<int>(area.left, std::min<int>(x, area.right - w));
     y = std::max<int>(area.top, std::min<int>(y, area.bottom - h));
+    SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void EditorWindow::placeAt(Position position) {
+    RECT window{};
+    GetWindowRect(hwnd_, &window);
+    const int w = window.right - window.left;
+    const int h = window.bottom - window.top;
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    GetMonitorInfoW(MonitorFromPoint({position.x, position.y}, MONITOR_DEFAULTTONEAREST), &monitor);
+    const RECT area = monitor.rcWork;  // a screen may have gone, or the window grown, since
+    const int x = std::max<int>(area.left, std::min<int>(position.x, area.right - w));
+    const int y = std::max<int>(area.top, std::min<int>(position.y, area.bottom - h));
     SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
@@ -260,6 +296,7 @@ intptr_t EditorWindow::handleMessage(HWND hwnd, unsigned message, uintptr_t wPar
             return 0;
 
         case WM_DESTROY:
+            rememberPosition();
             // Destroyed with its owner: the plug-in's view goes while its parent still exists.
             if (view_) {
                 closed_ = true;

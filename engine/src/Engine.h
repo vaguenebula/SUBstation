@@ -146,6 +146,7 @@ public:
     bool openEditor(uint32_t processorId, uintptr_t ownerWindow, const std::string& title);
     void closeEditor(uint32_t processorId);
     bool isEditorOpen(uint32_t processorId);
+    bool setEditorVisible(uint32_t processorId, bool visible);
     void setEditorTitle(uint32_t processorId, const std::string& title);
     // What processors reported since the last call (edits in a plug-in's editor...).
     std::vector<ProcessorEventRecord> takeProcessorEvents();

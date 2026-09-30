@@ -431,6 +431,10 @@ void Engine::closeEditor(uint32_t processorId) { processor(processorId)->closeEd
 
 bool Engine::isEditorOpen(uint32_t processorId) { return processor(processorId)->isEditorOpen(); }
 
+bool Engine::setEditorVisible(uint32_t processorId, bool visible) {
+    return processor(processorId)->setEditorVisible(visible);
+}
+
 void Engine::setEditorTitle(uint32_t processorId, const std::string& title) {
     processor(processorId)->setEditorTitle(title);
 }

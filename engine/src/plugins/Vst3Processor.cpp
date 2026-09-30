@@ -184,18 +184,22 @@ void Vst3Processor::connect() {
     FUnknownPtr<IConnectionPoint> componentPoint(component_);
     FUnknownPtr<IConnectionPoint> controllerPoint(controller_);
     if (!componentPoint || !controllerPoint) return;
-    // The proxies drop messages sent from other threads than the main thread.
-    componentConnection_ = owned(new ConnectionProxy(componentPoint));
-    controllerConnection_ = owned(new ConnectionProxy(controllerPoint));
-    componentConnection_->connect(controllerPoint);
-    controllerConnection_->connect(componentPoint);
+    // Directly, not through the SDK's ConnectionProxy: it drops messages sent from
+    // any thread but the main thread, and plug-ins send them from their own threads
+    // too (FabFilter's editors ask for their analyzer data from their drawing thread).
+    componentPoint_ = componentPoint;
+    controllerPoint_ = controllerPoint;
+    componentPoint_->connect(controllerPoint_);
+    controllerPoint_->connect(componentPoint_);
 }
 
 void Vst3Processor::disconnect() {
-    if (componentConnection_) componentConnection_->disconnect();
-    if (controllerConnection_) controllerConnection_->disconnect();
-    componentConnection_ = nullptr;
-    controllerConnection_ = nullptr;
+    if (componentPoint_ && controllerPoint_) {
+        componentPoint_->disconnect(controllerPoint_);
+        controllerPoint_->disconnect(componentPoint_);
+    }
+    componentPoint_ = nullptr;
+    controllerPoint_ = nullptr;
 }
 
 void Vst3Processor::activate() {
@@ -688,7 +692,7 @@ void Vst3Processor::takeEvents(std::vector<ProcessorEvent>& out) {
 
 bool Vst3Processor::idle() {
     if (editor_ && editor_->wasClosed()) {
-        editor_.reset();
+        dropEditor();
         pushEvent({ProcessorEvent::Type::EditorClosed});
     }
 
@@ -794,11 +798,12 @@ bool Vst3Processor::openEditor(void* ownerWindow, const std::string& title) {
         editor_->bringToFront();
         return true;
     }
-    editor_.reset();
+    dropEditor();
     if (!controller_) return false;
     IPtr<IPlugView> view = owned(controller_->createView(ViewType::kEditor));
     if (!view || view->isPlatformTypeSupported(kPlatformTypeHWND) != kResultTrue) return false;
-    editor_ = std::make_unique<EditorWindow>(view, ownerWindow, title);
+    editor_ = std::make_unique<EditorWindow>(view, ownerWindow, title,
+                                             editorPosition_ ? &*editorPosition_ : nullptr);
     if (!editor_->isOpen()) {
         editor_.reset();
         return false;
@@ -806,9 +811,21 @@ bool Vst3Processor::openEditor(void* ownerWindow, const std::string& title) {
     return true;
 }
 
-void Vst3Processor::closeEditor() { editor_.reset(); }
+void Vst3Processor::closeEditor() { dropEditor(); }
 
-bool Vst3Processor::isEditorOpen() const { return editor_ && editor_->isOpen(); }
+void Vst3Processor::dropEditor() {
+    if (!editor_) return;
+    editorPosition_ = editor_->position();
+    editor_.reset();
+}
+
+bool Vst3Processor::isEditorOpen() const { return editor_ && editor_->isOpen() && editor_->isVisible(); }
+
+bool Vst3Processor::setEditorVisible(bool visible) {
+    if (!editor_ || !editor_->isOpen()) return false;
+    editor_->setVisible(visible);
+    return true;
+}
 
 void Vst3Processor::setEditorTitle(const std::string& title) {
     if (editor_) editor_->setTitle(title);
