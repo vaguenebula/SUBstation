@@ -8,7 +8,7 @@ import pytest
 
 from gilstudio import _engine as ge
 
-from .conftest import SAMPLE_RATE
+from .conftest import SAMPLE_RATE, write_wav
 
 SPB = SAMPLE_RATE * 60 / 120  # samples per beat at 120 BPM
 
@@ -183,6 +183,35 @@ def test_utility_device(engine, dc_wav):
     engine.remove_processor(device)
     with pytest.raises(ValueError):
         engine.processor_params(device)
+
+
+def test_over_the_top(engine, tmp_path):
+    """Soundgoodize at 100 % brings loud and quiet audio close together; at 0 % it only passes it through."""
+    rng = np.random.default_rng(7)
+    noise = rng.standard_normal(SAMPLE_RATE)
+    noise /= np.sqrt(np.mean(noise**2))
+
+    def rms_db(x):
+        return 20 * np.log10(np.sqrt(np.mean(x**2)))
+
+    def render(level_db, depth):
+        path = write_wav(tmp_path / f"n{level_db}.wav", noise * 10 ** (level_db / 20))
+        engine.load_source(str(path))
+        track = engine.add_track()
+        engine.set_track_clips(track, [ge.ClipDesc(str(path), 0.0, 1.0, 0.0, 1.0)])
+        device = engine.add_builtin_processor(track, "ott")
+        assert [p.id for p in engine.processor_params(device)] == ["depth", "output"]
+        engine.set_processor_param(device, 0, depth)
+        out = engine.render_offline(0.0, SAMPLE_RATE)[SAMPLE_RATE // 4 :, 0]
+        engine.remove_track(track)
+        return rms_db(out)
+
+    loud, quiet = -8.0, -45.0
+    assert render(loud, 0.0) == pytest.approx(loud, abs=0.5)  # the crossovers sum flat
+    assert render(quiet, 0.0) == pytest.approx(quiet, abs=0.5)
+    squashed = render(loud, 100.0), render(quiet, 100.0)
+    assert squashed[0] < loud - 3 and squashed[1] > quiet + 15  # down from above, up from below
+    assert squashed[0] - squashed[1] < 12  # 37 dB apart went in
 
 
 def test_source_peaks_and_samples(engine, ramp_wav):

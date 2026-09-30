@@ -44,9 +44,10 @@ BUILTIN_DEVICES = {
     "synth": ("Synth", {"wave": 2.0, "attack": 3.0, "decay": 300.0, "sustain": 70.0, "release": 200.0,
                         "cutoff": 4000.0, "resonance": 10.0, "volume": 0.0}),
     "utility": ("Utility", {"gain": 0.0, "pan": 0.0, "width": 100.0}),
+    "ott": ("Over The Top", {"depth": 100.0, "output": 0.0}),
 }
 # How the browser's Built-in category groups the devices above.
-BUILTIN_CATEGORIES = {"Instruments": ["synth"], "Audio Effects": ["utility"]}
+BUILTIN_CATEGORIES = {"Instruments": ["synth"], "Audio Effects": ["ott", "utility"]}
 DEFAULT_INSTRUMENT = "synth"  # new MIDI tracks come with it, ready to play
 
 

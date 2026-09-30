@@ -11,6 +11,7 @@
 #include "PathUtils.h"
 #include "miniaudio.h"
 #include "plugins/Vst3Format.h"
+#include "processors/Ott.h"
 #include "processors/Synth.h"
 #include "processors/Utility.h"
 
@@ -395,6 +396,8 @@ uint32_t Engine::addBuiltinProcessor(uint32_t trackId, const std::string& type, 
         processor = std::make_shared<UtilityProcessor>();
     } else if (type == "synth") {
         processor = std::make_shared<SynthProcessor>();
+    } else if (type == "ott") {
+        processor = std::make_shared<OttProcessor>();
     } else {
         throw std::invalid_argument("Unknown built-in device: " + type);
     }

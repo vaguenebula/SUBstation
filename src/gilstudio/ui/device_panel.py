@@ -135,6 +135,7 @@ class _DeviceFrame(QFrame):
         super().__init__(parent)
         self.track_id = track_id
         self.device_id = device.id
+        self.source = device  # the model's device object it was built for
         self.editor = editor
         self.instrument = device_is_instrument(device)
         self.selected = False
@@ -209,6 +210,7 @@ class _DeviceFrame(QFrame):
         while self.params.count():
             item = self.params.takeAt(0)
             if item.widget():
+                item.widget().hide()  # now: until deleted it would still be painted where it was
                 item.widget().deleteLater()
         self._clear_params()
         self.page_label.setText(f"{self.page + 1}/{self.pages}")
@@ -592,7 +594,7 @@ class DevicePanel(QFrame):
         bridge.plugin_params_changed.connect(self._on_plugin_values)
         bridge.plugin_params_rebuilt.connect(self._on_plugin_rebuilt)
         bridge.plugin_editor_changed.connect(self._on_plugin_editor)
-        bridge.devices_loaded.connect(self._on_devices_changed)
+        bridge.devices_loaded.connect(lambda track_id: self._on_devices_changed(track_id, rebuild=True))
         self.show_track(None)
 
     def paintEvent(self, _event) -> None:
@@ -756,8 +758,15 @@ class DevicePanel(QFrame):
         self._autoscroll.stop()
         self.drop_marker.hide()
 
-    def _on_devices_changed(self, track_id: str) -> None:
+    def _on_devices_changed(self, track_id: str, rebuild: bool = False) -> None:
         if track_id != self.track_id:
+            return
+        devices = self.project.track(track_id).devices
+        widgets = list(self.widgets.values())
+        if not rebuild and len(widgets) == len(devices) and all(w.source is d for w, d in zip(widgets, devices)):
+            # The same devices in the same order (one switched on or off): no need to rebuild.
+            for widget, device in zip(widgets, devices):
+                widget.refresh(device)
             return
         old = set(self.widgets)
         self.show_track(track_id)
@@ -785,7 +794,7 @@ class DevicePanel(QFrame):
         self._on_state_changed(track_id, device_id)
 
     def _on_plugin_rebuilt(self, track_id: str, _device_id: str) -> None:
-        self._on_devices_changed(track_id)
+        self._on_devices_changed(track_id, rebuild=True)
 
     def _on_plugin_editor(self, track_id: str, device_id: str) -> None:
         widget = self.widgets.get(device_id) if track_id == self.track_id else None
@@ -805,6 +814,7 @@ class DevicePanel(QFrame):
         while self.chain_layout.count():
             item = self.chain_layout.takeAt(0)
             if item.widget() and item.widget() is not self.hint:
+                item.widget().hide()  # now: until deleted it would still be painted where it was
                 item.widget().deleteLater()
         self.widgets.clear()
         if track_id is None:
