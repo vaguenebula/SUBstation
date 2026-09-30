@@ -22,6 +22,7 @@ from .. import APP_NAME, __version__
 from .. import _engine as ge
 from ..audio.engine_bridge import EngineBridge
 from ..audio.settings import AudioSettings
+from ..model import automation
 from ..model.editor import ProjectEditor, is_instrument
 from ..model.project import PLUGIN_KIND, PluginRef, Project
 from ..model.serialization import (
@@ -91,6 +92,9 @@ class MainWindow(QMainWindow):
         self.selection.changed.connect(lambda: self.bridge.show_plugin_editors(self.selection.track_id))
         self.editor.plugin_added.connect(self._plugin_added)
         self.bridge.plugin_param_edited.connect(self._plugin_param_edited)
+        self.bridge.plugin_param_touched.connect(
+            lambda track_id, device_id, param_id: self.editor.touch_parameter(
+                track_id, automation.device_key(device_id, param_id)))
         self.bridge.plugin_state_dirty.connect(self.undo_stack.resetClean)
         self.transport.play_requested.connect(self.toggle_play)
         self.transport.stop_requested.connect(self.stop_button)

@@ -589,6 +589,11 @@ class ProjectEditor(QObject):
                                              value if old is None else old, value, merge_key))
         self.parameter_touched.emit(track_id, automation.device_key(device_id, param_id))
 
+    def touch_parameter(self, owner: str, key: str) -> None:
+        """A parameter taken hold of (clicked) without changing it: as Ableton
+        does, the arrangement shows its automation."""
+        self.parameter_touched.emit(owner, key)
+
     def set_device_state(self, track_id: str, device_id: str, old: str | None, new: str,
                          text: str = "Load Preset") -> None:
         """Replace a plug-in's whole state (base64), e.g. with a preset. `old` is

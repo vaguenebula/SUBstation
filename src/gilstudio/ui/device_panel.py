@@ -112,6 +112,20 @@ def _header_button(text: str, tooltip: str) -> QPushButton:
     return button
 
 
+class _TouchFilter(QObject):
+    """Calls `touched` when a parameter's control (or its name) is pressed."""
+
+    def __init__(self, touched, parent: QObject):
+        super().__init__(parent)
+        self.touched = touched
+
+    def eventFilter(self, _obj: QObject, event: QEvent) -> bool:
+        if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick) \
+                and event.button() == Qt.MouseButton.LeftButton:
+            self.touched()
+        return False
+
+
 class _DeviceFrame(QFrame):
     """What built-in and plug-in devices share: the frame, the header (on/off,
     name, delete), the parameters' pages and their footer, selecting and
@@ -241,7 +255,14 @@ class _DeviceFrame(QFrame):
         name.setText(_elided(name_text, PARAM_WIDTH, name))
         name.setToolTip(name_text)
         column.addWidget(name)
+        if param_id is not None and self.bridge is not None:
+            self._watch_touch(cell, param_id)
         return cell, column
+
+    def _watch_touch(self, widget: QWidget, param_id: str) -> None:
+        """Pressing `widget` shows the parameter's automation, as clicking a control does in Ableton."""
+        widget.installEventFilter(_TouchFilter(
+            lambda: self.editor.touch_parameter(self.track_id, device_key(self.device_id, param_id)), widget))
 
     def _automation_menu(self, param_id: str, at: QPoint) -> None:
         editor, bridge, owner = self.editor, self.bridge, self.track_id
@@ -396,6 +417,7 @@ class DeviceWidget(_DeviceFrame):
             column.addWidget(choice)
             column.addStretch(1)
             self.choices[info.id] = choice
+            self._watch_touch(choice, info.id)
         else:
             knob = Knob(info.min_value, info.max_value, value, default=info.default_value,
                         bipolar=info.min_value < 0 < info.max_value and info.unit == "",
@@ -407,6 +429,7 @@ class DeviceWidget(_DeviceFrame):
             column.addWidget(knob, 0, Qt.AlignmentFlag.AlignHCenter)
             column.addWidget(readout)
             self.knobs[info.id] = (knob, readout, info.unit)
+            self._watch_touch(knob, info.id)
             knob.set_automation(self.automation_state(info.id))
         return cell
 
@@ -523,6 +546,7 @@ class PluginDeviceWidget(_DeviceFrame):
             column.addWidget(choice)
             column.addStretch(1)
             self.choices[index] = choice
+            self._watch_touch(choice, info.id)
         else:
             centred = info.steps == 0 and abs(info.default_value - 0.5 * (info.min_value + info.max_value)) < 1e-6
             knob = Knob(info.min_value, info.max_value, value, default=info.default_value, bipolar=centred,
@@ -533,6 +557,7 @@ class PluginDeviceWidget(_DeviceFrame):
             column.addWidget(knob, 0, Qt.AlignmentFlag.AlignHCenter)
             column.addWidget(readout)
             self.knobs[index] = (knob, readout)
+            self._watch_touch(knob, info.id)
             knob.set_automation(self.automation_state(info.id))
         return cell
 

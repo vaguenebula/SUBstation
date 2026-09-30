@@ -141,9 +141,10 @@ struct ProcessorEvent {
         EditorRequested,   // the plug-in asks for its editor to be opened
         StateDirty,        // the plug-in's state changed in a way no parameter shows
         LatencyChanged,
+        ParamTouched,      // the user took hold of a parameter in the plug-in's editor (paramIndex)
     };
     Type type = Type::ParamsChanged;
-    int paramIndex = -1;  // ParamEdited: which parameter,
+    int paramIndex = -1;  // ParamEdited, ParamTouched: which parameter,
     float value = 0.f;    // its new value
     float oldValue = 0.f; // and its value before the edit (or before the gesture started)
     uint32_t gesture = 0; // edits of one gesture (a knob drag) share this; 0: a single edit

@@ -90,6 +90,27 @@ def click(widget, at: QPoint, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
     QTest.mouseClick(widget, Qt.MouseButton.LeftButton, modifiers, at)
 
 
+def test_clicking_a_parameter_shows_its_lane(window, tracks):
+    a, _ = tracks
+    window.selection.select_track(a.id)
+    synth = window.project.track(a.id).devices[0]
+    widget = window.devices.widgets[synth.id]
+    knob = widget.knobs["attack"][0]
+    QTest.mousePress(knob, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(17, 17))
+    QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(17, 17))
+    view = window.project.track(a.id).automation_view
+    assert view.shown and view.key == automation.device_key(synth.id, "attack")
+    assert window.project.track(a.id).devices[0].params == synth.params  # nothing changed
+    assert window.undo_stack.count() == 2  # (the two tracks)
+    choice = widget.choices["wave"]
+    QTest.mousePress(choice, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(5, 5))
+    choice.hidePopup()  # (the press opened its list)
+    assert window.project.track(a.id).automation_view.key == automation.device_key(synth.id, "wave")
+    # A control taken hold of in a plug-in's own editor (VST3 beginEdit) does the same.
+    window.bridge.plugin_param_touched.emit(a.id, synth.id, "cutoff")
+    assert window.project.track(a.id).automation_view.key == automation.device_key(synth.id, "cutoff")
+
+
 def test_click_on_the_line_adds_breakpoints_and_dragging_moves_them(window, tracks):
     a, _ = tracks
     window.editor.show_automation(a.id, MIXER_PAN)

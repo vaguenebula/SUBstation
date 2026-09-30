@@ -175,7 +175,8 @@ NB_MODULE(_engine, m) {
         .value("EDITOR_CLOSED", gil::ProcessorEvent::Type::EditorClosed)
         .value("EDITOR_REQUESTED", gil::ProcessorEvent::Type::EditorRequested)
         .value("STATE_DIRTY", gil::ProcessorEvent::Type::StateDirty)
-        .value("LATENCY_CHANGED", gil::ProcessorEvent::Type::LatencyChanged);
+        .value("LATENCY_CHANGED", gil::ProcessorEvent::Type::LatencyChanged)
+        .value("PARAM_TOUCHED", gil::ProcessorEvent::Type::ParamTouched);
 
     nb::class_<gil::ProcessorEventRecord>(m, "ProcessorEvent")
         .def_ro("processor_id", &gil::ProcessorEventRecord::processorId)

@@ -663,7 +663,12 @@ std::string Vst3Processor::paramText(int index, float value) const {
 void Vst3Processor::beginEdit(ParamID id) {
     std::lock_guard lock(mutex_);
     const int index = indexOf(id);
-    if (index >= 0) gestures_[id] = {++gestureCounter_, values_[index].load()};
+    if (index < 0) return;
+    gestures_[id] = {++gestureCounter_, values_[index].load()};
+    ProcessorEvent event;  // clicking a control, before it changes anything: its automation shows
+    event.type = ProcessorEvent::Type::ParamTouched;
+    event.paramIndex = index;
+    pending_.push_back(event);
 }
 
 void Vst3Processor::performEdit(ParamID id, ParamValue value) {

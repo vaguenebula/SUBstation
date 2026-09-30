@@ -107,6 +107,7 @@ class EngineBridge(QObject):
     status_message = Signal(str)
     # Plug-ins (track id, device id first)
     plugin_param_edited = Signal(str, str, str, float, float, int)  # param id, value, value before, gesture
+    plugin_param_touched = Signal(str, str, str)  # param id: taken hold of in the plug-in's editor
     plugin_params_changed = Signal(str, str)  # values changed without edits (a preset, meters): show them
     plugin_params_rebuilt = Signal(str, str)  # the parameter list changed
     plugin_editor_changed = Signal(str, str)  # its editor opened or closed
@@ -563,6 +564,10 @@ class EngineBridge(QObject):
                 param_id = self.param_id(event.processor_id, event.param_index)
                 if param_id is not None:
                     self.plugin_param_edited.emit(*place, param_id, event.value, event.old_value, event.gesture)
+            elif event.type == kind.PARAM_TOUCHED:
+                param_id = self.param_id(event.processor_id, event.param_index)
+                if param_id is not None:
+                    self.plugin_param_touched.emit(*place, param_id)
             elif event.type in (kind.PARAMS_CHANGED, kind.LATENCY_CHANGED):
                 changed[place] = None
             elif event.type == kind.PARAM_INFO_CHANGED:
