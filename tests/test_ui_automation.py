@@ -410,6 +410,7 @@ def test_dragging_near_a_segment_moves_its_two_breakpoints(window, tracks):
     near = point(window, a.id, 4.0, 0.4) + QPoint(0, 10)  # below the line, not on it
     lanes._update_cursor(QPointF(near), Qt.KeyboardModifier.NoModifier)
     assert lanes._hover_point.kind == "segment" and lanes._hover_point.index == 1
+    assert lanes.cursor().shape() == Qt.CursorShape.ArrowCursor  # only the segment lights up
     far = point(window, a.id, 4.0, 0.4) + QPoint(0, 30)
     lanes._update_cursor(QPointF(far), Qt.KeyboardModifier.NoModifier)
     assert lanes._hover_point is None
@@ -437,7 +438,7 @@ def test_dragging_a_selected_range_moves_its_automation(window, tracks):
     assert window.selection.time_range[:2] == (2.0, 4.0)
     inside = point(window, a.id, 3.0, 0.8)
     lanes._update_cursor(QPointF(inside), Qt.KeyboardModifier.NoModifier)
-    assert lanes._hover_point.kind == "range" and lanes.cursor().shape() == Qt.CursorShape.SizeAllCursor
+    assert lanes._hover_point.kind == "range" and lanes.cursor().shape() == Qt.CursorShape.ArrowCursor
     # Up: the inside moves, with steps at the edges; the outside stays.
     height = area(window, a.id).values.height()
     steps = window.undo_stack.count()
@@ -456,3 +457,16 @@ def test_dragging_a_selected_range_moves_its_automation(window, tracks):
     assert automation.value_at(points, 5.0) == pytest.approx(0.375)  # what was at 3
     assert automation.value_at(points, 7.0) == pytest.approx(0.875)  # the rest as it was
     assert window.selection.time_range[:2] == (4.0, 6.0)
+
+
+def test_a_step_is_a_segment_to_drag(window, tracks):
+    a, _ = tracks
+    window.editor.show_automation(a.id, MIXER_PAN)
+    window.editor.set_envelope(a.id, MIXER_PAN, env((0.0, 0.2), (4.0, 0.2), (4.0, 0.8), (8.0, 0.8)))
+    lanes = window.arrangement.lanes
+    for at in (point(window, a.id, 4.0, 0.5), point(window, a.id, 4.0, 0.5) + QPoint(8, 0)):  # on it, and beside
+        lanes._update_cursor(QPointF(at), Qt.KeyboardModifier.NoModifier)
+        assert lanes._hover_point.kind == "segment" and lanes._hover_point.index == 1
+    drag(lanes, point(window, a.id, 4.0, 0.5), point(window, a.id, 6.0, 0.5))
+    points = window.project.envelope(a.id, MIXER_PAN)
+    assert [(p.beat, p.value) for p in points] == [(0.0, 0.2), (6.0, 0.2), (6.0, 0.8), (8.0, 0.8)]

@@ -12,7 +12,8 @@ In a lane (as in Ableton):
 - A click on a breakpoint deletes it; Shift- or Ctrl-click selects it instead
   (with the others selected), and Delete deletes the selected ones.
 - Near the line between two breakpoints (not on it), the segment lights up:
-  dragging it moves both breakpoints, in time and value.
+  dragging it moves both breakpoints, in time and value. A step (two
+  breakpoints at the same time) is a segment too, grabbed anywhere along it.
 - Dragging a breakpoint moves it, and the others selected with it, in time and
   value. Alt: off the grid; Shift while dragging: finer values. Breakpoints
   can't pass their neighbours.
@@ -32,6 +33,7 @@ envelope shows its own value as a faint line.
 from __future__ import annotations
 
 import bisect
+import math
 from dataclasses import dataclass
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
@@ -52,7 +54,6 @@ POINT_RADIUS = 3.0
 POINT_GRAB = 6.0  # pixels around a breakpoint that grab it
 LINE_GRAB = 4.0  # pixels around the envelope's line that count as on it
 SEGMENT_GRAB = 14.0  # pixels around it that grab the segment (beyond LINE_GRAB)
-SEGMENT_TINT = QColor(255, 74, 61, 30)
 CURVE_PIXELS = 150.0  # an Alt-drag this far bends a segment from straight to its most
 VALUE_PAD = 4.0  # between a lane's edges and its values' range
 SAMPLE_PIXELS = 3.0  # between the points a curved segment is drawn through
@@ -148,12 +149,56 @@ def _on_line(host, area: EnvelopeArea, points, pos: QPointF, grab: float = LINE_
     return any(_distance(pos, line[i], line[i + 1]) <= grab for i in range(line.size() - 1))
 
 
+def _segment_line(host, area: EnvelopeArea, points, i: int, x0: float = -math.inf,
+                  x1: float = math.inf) -> QPolygonF:
+    """The segment from breakpoint i to the next as drawn (between x0 and x1)."""
+    view = host.view
+    a, b = points[i], points[i + 1]
+    xa, xb = view.beat_to_x(a.beat), view.beat_to_x(b.beat)
+    if xb - xa < 1.0:  # a step: straight up or down
+        return QPolygonF([QPointF(xa, area.y(a.value)), QPointF(xb, area.y(b.value))])
+    return trace(view, area, points[i:i + 2], max(xa, x0), min(xb, x1), _quantizer(host, area))
+
+
+def _polyline_distance(pos: QPointF, line: QPolygonF) -> float:
+    if line.size() == 1:
+        return QLineF(line[0], pos).length()
+    return min(_distance(pos, line[i], line[i + 1]) for i in range(line.size() - 1))
+
+
 def segment_at(host, area: EnvelopeArea, points, pos: QPointF) -> int | None:
-    """The segment (its first breakpoint) `pos` is near, between two breakpoints."""
-    segment = automation.segment_index(points, host.view.x_to_beat(pos.x()))
-    if segment is None or not _on_line(host, area, points, pos, SEGMENT_GRAB):
+    """The segment (its first breakpoint) whose line `pos` is nearest to,
+    within SEGMENT_GRAB pixels. Steps count too."""
+    if len(points) < 2:
         return None
-    return segment
+    view = host.view
+    beats = [p.beat for p in points]
+    first = max(0, bisect.bisect_left(beats, view.x_to_beat(pos.x() - SEGMENT_GRAB)) - 1)
+    last = min(len(points) - 1, bisect.bisect_right(beats, view.x_to_beat(pos.x() + SEGMENT_GRAB)))
+    best, best_distance = None, SEGMENT_GRAB
+    for i in range(first, last):
+        line = _segment_line(host, area, points, i, pos.x() - SEGMENT_GRAB, pos.x() + SEGMENT_GRAB)
+        distance = _polyline_distance(pos, line)
+        if distance <= best_distance:
+            best, best_distance = i, distance
+    return best
+
+
+def _is_step(points, segment: int) -> bool:
+    return points[segment].beat == points[segment + 1].beat
+
+
+def _grab(host, area: EnvelopeArea, points, pos: QPointF, mods) -> tuple[str, object] | None:
+    """What a press off the breakpoints takes: ("add", (beat, value)) on the
+    line, or ("segment", index) near it. On a step there is nothing to add:
+    it takes the step."""
+    segment = segment_at(host, area, points, pos)
+    if segment is not None and _is_step(points, segment):
+        return "segment", segment
+    target = add_target(host, area, pos, mods)
+    if target is not None:
+        return "add", target
+    return ("segment", segment) if segment is not None else None
 
 
 def in_range(host, area: EnvelopeArea, pos: QPointF) -> bool:
@@ -294,10 +339,8 @@ def draw_area(p: QPainter, host, area: EnvelopeArea, visible: QRectF, hover: Hov
     quantize = spec.quantize if spec is not None and spec.discrete else None
     if (hover is not None and hover.ident == area.ident and hover.kind == "segment"
             and hover.index + 1 < len(points)):
-        xa, xb = host.view.beat_to_x(points[hover.index].beat), host.view.beat_to_x(points[hover.index + 1].beat)
-        p.fillRect(QRectF(xa, area.rect.top(), xb - xa, area.rect.height()), SEGMENT_TINT)
         p.setPen(QPen(color, 3.2))
-        p.drawPolyline(trace(host.view, area, points, max(xa, x0), min(xb, x1), quantize))
+        p.drawPolyline(_segment_line(host, area, points, hover.index, x0, x1))
     p.setPen(QPen(color, 1.6))
     p.drawPolyline(trace(host.view, area, points, x0, x1, quantize))
     selected = host.selection.selected_points(area.owner, area.key)
@@ -574,12 +617,11 @@ def press(host, area: EnvelopeArea, pos: QPointF, mods) -> ClipGesture:
             return CurveGesture(host, area, segment, pos)
     if in_range(host, area, pos):
         return RangeGesture(host, area, pos, mods)
-    target = add_target(host, area, pos, mods)
-    if target is not None:
-        return _add_and_drag(host, area, pos, mods, target)
-    segment = segment_at(host, area, points, pos)
-    if segment is not None:
-        return PointGesture(host, area, segment, pos, mods, segment=True)
+    grab = _grab(host, area, points, pos, mods)
+    if grab is not None and grab[0] == "add":
+        return _add_and_drag(host, area, pos, mods, grab[1])
+    if grab is not None:
+        return PointGesture(host, area, grab[1], pos, mods, segment=True)
     return LaneGesture(host, area, pos, mods)
 
 
@@ -593,15 +635,15 @@ def hover(host, area: EnvelopeArea | None, pos: QPointF, mods) -> tuple[Hover | 
         return Hover(area.ident, "point", index), Qt.CursorShape.PointingHandCursor
     if _alt(mods) and automation.segment_index(points, host.view.x_to_beat(pos.x())) is not None:
         return None, Qt.CursorShape.SizeVerCursor
-    target = add_target(host, area, pos, mods)
     if in_range(host, area, pos):  # a drag moves the range; a click on the line still adds
+        target = add_target(host, area, pos, mods)
         hovered = Hover(area.ident, "add", None, *target) if target is not None else Hover(area.ident, "range")
-        return hovered, Qt.CursorShape.SizeAllCursor
-    if target is not None:
-        return Hover(area.ident, "add", None, *target), add_cursor()
-    segment = segment_at(host, area, points, pos)
-    if segment is not None:
-        return Hover(area.ident, "segment", segment), Qt.CursorShape.SizeAllCursor
+        return hovered, Qt.CursorShape.ArrowCursor
+    grab = _grab(host, area, points, pos, mods)
+    if grab is not None and grab[0] == "add":
+        return Hover(area.ident, "add", None, *grab[1]), add_cursor()
+    if grab is not None:
+        return Hover(area.ident, "segment", grab[1]), Qt.CursorShape.ArrowCursor
     return None, Qt.CursorShape.ArrowCursor
 
 
