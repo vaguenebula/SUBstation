@@ -153,6 +153,20 @@ def test_devices_and_mixer_reach_engine(window, three_tracks):
     assert window.devices.widgets == {}
 
 
+def test_switching_a_device_keeps_the_chain(window, three_tracks):
+    """Switching a device on or off updates it in place: rebuilding the chain made it flash."""
+    track = window.project.tracks[0]
+    window.selection.select_track(track.id)
+    a, b = window.editor.add_device(track.id, "utility"), window.editor.add_device(track.id, "ott")
+    before = dict(window.devices.widgets)
+    before[b.id].enabled.click()
+    assert window.devices.widgets == before and not window.project.device(track.id, b.id).enabled
+    window.undo_stack.undo()
+    assert window.devices.widgets == before and before[b.id].enabled.isChecked()
+    window.editor.move_device(track.id, b.id, 0)  # a real change still rebuilds it
+    assert list(window.devices.widgets) == [b.id, a.id] and window.devices.widgets[a.id] is not before[a.id]
+
+
 def test_builtin_devices_in_browser(window, three_tracks):
     from PySide6.QtCore import QPointF
     from PySide6.QtGui import QDropEvent
@@ -170,9 +184,9 @@ def test_builtin_devices_in_browser(window, three_tracks):
     audio_effects = categories["Audio Effects"]
     browser.sidebar.setCurrentItem(audio_effects)
     settle(browser)
-    assert browser.list_model.rowCount() == 1
-    index = browser.list_model.index(0)
-    assert browser.list_model.item(index).name == "Utility"
+    rows = [browser.list_model.index(i) for i in range(browser.list_model.rowCount())]
+    assert sorted(browser.list_model.item(i).name for i in rows) == ["Over The Top", "Utility"]
+    [index] = [i for i in rows if browser.list_model.item(i).name == "Utility"]
     mime = browser.list_model.mimeData([index])
     assert device_kinds(mime) == ["utility"]
 

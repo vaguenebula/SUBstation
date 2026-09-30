@@ -24,6 +24,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
     - **Humanize** nudges starts and velocities at random. At 100 % a note moves by up to a 32nd note and its velocity by up to 24; the default is 25 %.
   - Notes you click, add or move are played on the track's instrument (the headphones button turns this off). The part of the clip that plays is lit; the rest is dimmed.
 - Synth: a polyphonic subtractive synth (16 voices) with sine, triangle, saw and square oscillators (band-limited saw and square), an ADSR envelope, a resonant low-pass filter and volume. Velocity sets the level.
+- Over The Top: a built-in multiband upward/downward compressor in the style of the one every drop uses, with a single big *Soundgoodize* knob (depth) and an output trim. Three bands (split at 88 Hz and 2.5 kHz), each squashed from above and dragged up from below. At 0 % it passes the audio through untouched.
 - VST3 plug-ins, instruments and effects (see below).
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
 - Master track, metronome, loop brace, follow mode, CPU meter.
@@ -31,7 +32,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
   - Instruments (built-in or plug-in) go on a MIDI track, replacing its instrument. With no MIDI track selected, double-clicking one or dropping it below the tracks makes one.
   - The files under the places are indexed in the background and the index is kept (`%LOCALAPPDATA%\GIL Studio\browser-index.bin`), so the next start shows it at once and only looks again at folders that changed. Files added, removed or renamed in a place show up while the program runs. Results show while a first scan is still going. Right-click › *Rescan* reads every folder again (for drives that don't report changes).
   - Searching 200 000 files takes about 10 ms and never holds up the window or the audio; see [benchmarks/README.md](benchmarks/README.md).
-- Device view with the built-in Synth instrument and Utility device (gain/pan/width), and plug-ins, all through the same `Processor` interface. Parameters that choose between named values get a list; frequency and time knobs turn logarithmically. Right-click a device to move it along the chain.
+- Device view with the built-in Synth instrument, Utility device (gain/pan/width) and Over The Top, and plug-ins, all through the same `Processor` interface. Parameters that choose between named values get a list; frequency and time knobs turn logarithmically. Right-click a device to move it along the chain.
 - Undo/redo for all edits, `.gilproj` projects (JSON), WAV export (16/24/32-bit float).
 - Audio devices: ASIO drivers (see below), or WASAPI shared or exclusive, with the sample rate and buffer size.
 
