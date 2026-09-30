@@ -1,53 +1,54 @@
-"""Filtering and ordering the browser's lists.
+"""Filtering and ordering the browser's lists: what to ask the search for.
 
-`find` is the one place a list is narrowed down and sorted, so it is where later
-filters (items hidden from search) and orders (similar sounds) go.
+The native backend does the searching (browser/src/Search.cpp), on its own
+thread; `scope_query` turns a sidebar entry into what it searches. An item
+matches when every word of the query is in its name or detail (folder, vendor,
+category), ignoring case. That is also where later filters (items hidden from
+search) and orders (similar sounds) go.
 
 Sort orders:
   "rank"  what you use most (and most recently) first, then the best name matches,
           then the list's own order. With nothing used yet, a search lists the
           names that start with what you typed first.
-  "name"  alphabetical."""
+  "name"  alphabetical.
+
+The list's own order: built-in devices, plug-ins (as the scan found them), then
+samples by name."""
 
 from __future__ import annotations
 
-import re
+from pathlib import Path
 
+from ... import _browser
 from .browser_models import BrowserItem
-from .library import Library
 
 SORTS = {"rank": "Rank", "name": "Name"}
-_WORD_START = re.compile(r"(?:^|[\s_\-.()\[\]])(\w)")
+
+# The groups of items searched, as the backend numbers them.
+AUDIO = _browser.AUDIO  # the index's files
+BUILTIN = 1
+PLUGINS = 2
 
 
-def match_quality(item: BrowserItem, terms: list[str]) -> int:
-    """How well the terms match the item: in its name beats in its folder or vendor,
-    and at the start of the name or of a word beats the middle of one."""
-    name = item.name.lower()
-    stem = name.rsplit(".", 1)[0] if item.kind == "audio" else name
-    quality = 8 if stem == " ".join(terms) else 0
-    word_starts = [m.start(1) for m in _WORD_START.finditer(name)]
-    for term in terms:
-        if name.startswith(term):
-            quality += 3
-        elif any(name.startswith(term, at) for at in word_starts):
-            quality += 2
-        elif term in name:
-            quality += 1
-    return quality
+def place_prefix(place: str) -> str:
+    """Files under a place have paths starting with this (in lower case)."""
+    return str(Path(place)).lower().rstrip("\\/") + "\\"
 
 
-def find(items: list[BrowserItem], query: str, library: Library, sort: str = "rank") -> list[BrowserItem]:
-    terms = query.lower().split()
-    if terms:
-        items = [i for i in items if i.matches(terms)]
-    if sort == "name":
-        return sorted(items, key=lambda i: i.name.casefold())
-    now = library.clock()
-    if not terms:  # only the used items move; the rest keep their order
-        used = [i for i in items if i.key in library.records]
-        if not used:
-            return items
-        ranks = {i.key: library.rank(i.key, now) for i in used}
-        return sorted(items, key=lambda i: -ranks.get(i.key, 0.0))
-    return sorted(items, key=lambda i: (-library.rank(i.key, now), -match_quality(i, terms)))
+def scope_query(scope: tuple) -> tuple[list[int], str, str]:
+    """What a sidebar entry lists: (groups in order, tag, place prefix)."""
+    kind, sub = scope[0], (scope[1] if len(scope) > 1 else "")
+    if kind == "all":
+        return [BUILTIN, PLUGINS, AUDIO], "", ""
+    if kind == "builtin":
+        return [BUILTIN], sub, ""
+    if kind == "plugins":
+        return [PLUGINS], sub, ""
+    if kind == "place":
+        return [AUDIO], "", place_prefix(sub)
+    return [AUDIO], "", ""
+
+
+def plugin_tag(item: BrowserItem) -> str:
+    """The Plug-ins category an item is listed under."""
+    return "Instruments" if item.plugin is not None and item.plugin.instrument else "Audio Effects"

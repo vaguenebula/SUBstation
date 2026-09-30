@@ -1,44 +1,71 @@
 """Background indexes for the browser: audio files under its places, and the
-installed plug-ins (scanned in child processes; see plugins/scanner.py)."""
+installed plug-ins (scanned in child processes; see plugins/scanner.py).
+
+The files are indexed, and all of the browser's lists searched, by a native
+backend (gilstudio._browser, from browser/src), on threads of its own:
+
+- One keeps an index of the folders under the places, at background CPU and I/O
+  priority. It is saved (browser-index.bin next to the plug-in cache), so the
+  next start shows it at once and only lists folders that changed; while running
+  it watches the places and lists again what changed in them.
+- Another runs searches over snapshots of it. A new search stops the one
+  running, and only the latest one's results are handed out.
+
+Neither calls into Python. When there are results, or the index changed, the
+backend sets a Win32 event; `FileIndex` takes them on the UI thread."""
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Signal
+import shiboken6
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
+from ... import _browser
 from ...audio.engine_bridge import AUDIO_EXTENSIONS
 from ...model.project import PluginRef
 from ...plugins.scanner import PluginInfo, PluginScanner, ScanFailure
 from .browser_models import BrowserItem
+from .library import HALF_LIFE_DAYS, Library
 
-MAX_FILES = 300_000
+try:
+    from PySide6.QtCore import QWinEventNotifier
+except ImportError:  # not Windows
+    QWinEventNotifier = None
+
+MAX_FILES = 300_000  # per place
 MAX_DEPTH = 16
+KINDS = ("audio", "plugin", "device")  # the backend's item kinds, by number
 
 
-def walk_audio(root: str) -> list[BrowserItem]:
-    items: list[BrowserItem] = []
-    stack = [(root, 0)]
-    while stack and len(items) < MAX_FILES:
-        folder, depth = stack.pop()
+def index_path() -> Path:
+    override = os.environ.get("GILSTUDIO_BROWSER_INDEX")
+    if override:
+        return Path(override)
+    base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    return base / "GIL Studio" / "browser-index.bin"
+
+
+def place_spec(root: str) -> tuple[str, str, str]:
+    """A place as the backend takes it: the root, its key (as in BrowserItem.key)
+    and the detail its own files show."""
+    return root, os.path.normcase(os.path.normpath(root)), os.path.basename(root)
+
+
+def usage_records(library: Library) -> list[tuple[str, float, float]]:
+    """The library's use counts as (key, score, last used or NaN)."""
+    records = []
+    for key, record in library.records.items():
         try:
-            entries = list(os.scandir(folder))
-        except OSError:
+            score = float(record["score"]) if record.get("score") else 0.0
+            last = record.get("last_used")
+            last = math.nan if last is None else float(last)
+        except (TypeError, ValueError):
             continue
-        for entry in entries:
-            name = entry.name
-            if name.startswith((".", "$")):
-                continue
-            try:
-                if entry.is_dir(follow_symlinks=False):
-                    if depth < MAX_DEPTH:
-                        stack.append((entry.path, depth + 1))
-                elif name.lower().endswith(AUDIO_EXTENSIONS):
-                    items.append(BrowserItem(name, entry.path, "audio", os.path.basename(folder)))
-            except OSError:
-                continue
-    return items
+        records.append((key, score, last))
+    return records
 
 
 def plugin_ref(info: PluginInfo) -> PluginRef:
@@ -53,59 +80,114 @@ def plugin_item(info: PluginInfo) -> BrowserItem:
     return BrowserItem(info.name, info.path, "plugin", info.vendor, plugin_ref(info), tooltip)
 
 
-class _IndexThread(QThread):
-    done = Signal(list)
+class SearchResult:
+    """A search's results, read a page at a time (see ItemListModel)."""
 
-    def __init__(self, places: list[str], parent: QObject | None = None):
-        super().__init__(parent)
-        self.places = places
+    def __init__(self, native, items: dict[str, BrowserItem]):
+        self.native = native
+        self._items = items  # the other items by key, as they were when the search ran
 
-    def run(self) -> None:
-        audio: dict[str, BrowserItem] = {}
-        for place in self.places:
-            for item in walk_audio(place):
-                audio.setdefault(os.path.normcase(item.path), item)
-        self.done.emit(sorted(audio.values(), key=lambda i: i.name.lower()))
+    @property
+    def total(self) -> int:
+        return self.native.total
+
+    def items(self, start: int, count: int) -> list[BrowserItem]:
+        out = []
+        for kind, name, path, detail, key in self.native.rows(start, count):
+            if not key:
+                out.append(BrowserItem(name, path, "audio", detail))
+            else:
+                out.append(self._items.get(key) or BrowserItem(name, path, KINDS[kind], detail))
+        return out
+
+    def find(self, item: BrowserItem) -> int:
+        """Row of the item, or -1."""
+        if item.kind == "audio" and item.key not in self._items:
+            return self.native.find(0, item.path)
+        return self.native.find(KINDS.index(item.kind), item.key)
 
 
 class FileIndex(QObject):
-    updated = Signal()
+    """The native backend, on the UI thread's side."""
+
+    updated = Signal()  # files were found or went, or indexing started or stopped
+    results = Signal(object)  # SearchResult of the latest search()
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
-        self.audio: list[BrowserItem] = []
-        self._thread: _IndexThread | None = None
-        self._pending: list[str] | None = None
+        self.native = _browser.Browser(str(index_path()), list(AUDIO_EXTENSIONS), MAX_FILES, MAX_DEPTH)
+        self._items: dict[str, BrowserItem] = {}  # the other items, by key
+        self._groups: dict[int, dict[str, BrowserItem]] = {}
+        self._state = (True, 0)  # indexing, index version
+        # The backend's event wakes the UI thread (without converting its handle
+        # for Python: QWinEventNotifier's signal goes straight to a timer's slot).
+        self._take_timer = QTimer(self, singleShot=True, interval=0)
+        self._take_timer.timeout.connect(self._take)
+        self._notifier = None
+        if QWinEventNotifier is not None:
+            self._notifier = QWinEventNotifier(shiboken6.VoidPtr(self.native.event_handle), self)
+            self._notifier.activated.connect(self._take_timer.start)
+        else:
+            self._take_timer.setSingleShot(False)
+            self._take_timer.setInterval(15)
+            self._take_timer.start()
+
+    # --- Index ------------------------------------------------------------------------
 
     @property
     def indexing(self) -> bool:
-        return self._thread is not None
+        return self.native.indexing
+
+    @property
+    def file_count(self) -> int:
+        return self.native.file_count
+
+    def set_places(self, places: list[str]) -> None:
+        """Index these places: new ones are scanned, gone ones dropped, the rest kept."""
+        self.native.set_places([place_spec(p) for p in places])
 
     def rebuild(self, places: list[str]) -> None:
-        if self._thread is not None:
-            self._pending = list(places)  # restart once the current scan finishes
-            return
-        self._thread = _IndexThread([p for p in places if Path(p).is_dir()], self)
-        self._thread.done.connect(self._on_done)
-        self._thread.finished.connect(self._on_finished)
-        self._thread.start()
-        self.updated.emit()
+        """Index these places, listing every folder again."""
+        self.set_places(places)
+        self.native.rescan()
 
-    def _on_done(self, audio: list) -> None:
-        self.audio = audio
+    # --- What else is searched ------------------------------------------------------------
 
-    def _on_finished(self) -> None:
-        self._thread.deleteLater()
-        self._thread = None
-        if self._pending is not None:
-            places, self._pending = self._pending, None
-            self.rebuild(places)
-        else:
+    def set_items(self, group: int, items: list[tuple[BrowserItem, str]]) -> None:
+        """Other items to list (built-in devices, plug-ins), each with a tag to filter by."""
+        self._groups[group] = {item.key: item for item, _ in items}
+        self._items = {key: item for g in self._groups.values() for key, item in g.items()}
+        self.native.set_external(group, [(KINDS.index(i.kind), i.name, i.path, i.detail, i.key, tag)
+                                          for i, tag in items])
+
+    def set_usage(self, library: Library) -> None:
+        self.native.set_usage(usage_records(library), HALF_LIFE_DAYS)
+
+    # --- Searching ------------------------------------------------------------------------
+
+    def search(self, text: str, sort: str, now: float, groups: list[int], tag: str = "",
+               place_prefix: str = "") -> int:
+        """Start a search (stopping any that runs); its results come as `results`."""
+        return self.native.search(text, sort, now, groups, tag, place_prefix)
+
+    def _take(self) -> None:
+        indexing, version, _files, result = self.native.take()
+        if result is not None:
+            self.results.emit(SearchResult(result, self._items))
+        if (indexing, version) != self._state:
+            self._state = (indexing, version)
             self.updated.emit()
 
-    def wait(self) -> None:
-        if self._thread is not None:
-            self._thread.wait()
+    def wait_idle(self, timeout: float = 10.0) -> bool:
+        """Block until the index settled and no search runs (tests, benchmarks)."""
+        return self.native.wait_idle(timeout)
+
+    def close(self) -> None:
+        """Stop the backend's threads (saving the index)."""
+        if self._notifier is not None:
+            self._notifier.setEnabled(False)
+        self._take_timer.stop()
+        self.native.close()
 
 
 class _PluginScanThread(QThread):

@@ -27,6 +27,16 @@ def wait_until(predicate, timeout=5.0):
     return False
 
 
+def settle(browser) -> None:
+    """Until the browser shows the results of its latest search (they come from another thread)."""
+    assert wait_until(lambda: not browser.searching)
+
+
+def indexed(browser, count: int) -> None:
+    """Until the browser's index is done and has `count` files at least."""
+    assert wait_until(lambda: not browser.index.indexing and browser.index.file_count >= count)
+
+
 def tone(seconds: float, freq: float) -> np.ndarray:
     t = np.arange(int(seconds * SAMPLE_RATE)) / SAMPLE_RATE
     return np.stack([0.5 * np.sin(2 * np.pi * freq * t), 0.3 * np.sin(2 * np.pi * freq * 1.5 * t)], axis=1)
@@ -173,6 +183,7 @@ def test_builtin_devices_in_browser(window, three_tracks):
     assert list(categories) == ["Instruments", "Audio Effects"] and builtin.isExpanded()
     audio_effects = categories["Audio Effects"]
     browser.sidebar.setCurrentItem(audio_effects)
+    settle(browser)
     rows = [browser.list_model.index(i) for i in range(browser.list_model.rowCount())]
     assert sorted(browser.list_model.item(i).name for i in rows) == ["Over The Top", "Utility"]
     [index] = [i for i in rows if browser.list_model.item(i).name == "Utility"]
@@ -217,9 +228,10 @@ def test_browser_indexes_and_searches(window, tmp_path):
     (folder / "notes.txt").write_text("not audio")
     browser = window.browser
     browser.index.rebuild([str(tmp_path)])
-    assert wait_until(lambda: not browser.index.indexing and len(browser.index.audio) >= 2)
+    indexed(browser, 2)
     browser.search.setText("kick")
     browser._refresh()
+    settle(browser)
     assert browser.list_model.rowCount() == 1
     item = browser.list_model.item(browser.list_model.index(0))
     assert item.name == "Kick Deep.wav"
@@ -233,7 +245,7 @@ def test_find_searches_all(window, tmp_path):
     write_wav(tmp_path / "Utility Hit.wav", tone(0.2, 60.0))
     browser = window.browser
     browser.index.rebuild([str(tmp_path)])
-    assert wait_until(lambda: not browser.index.indexing and browser.index.audio)
+    indexed(browser, 1)
     [samples] = [browser.sidebar.topLevelItem(i) for i in range(browser.sidebar.topLevelItemCount())
                  if browser.sidebar.topLevelItem(i).text(0) == "Samples"]
     browser.sidebar.setCurrentItem(samples)
@@ -241,19 +253,66 @@ def test_find_searches_all(window, tmp_path):
     assert browser._scope() == ("all",)
     browser.search.setText("utility")
     browser._refresh()
+    settle(browser)
     kinds = {browser.list_model.item(browser.list_model.index(r)).kind
              for r in range(browser.list_model.rowCount())}
     assert kinds == {"device", "audio"}  # the built-in Utility and the sample
+
+
+def select_scope(browser, scope: tuple) -> None:
+    from gilstudio.ui.browser.browser_panel import ROLE_SCOPE
+
+    sidebar = browser.sidebar
+    items = [sidebar.topLevelItem(i) for i in range(sidebar.topLevelItemCount())]
+    items += [item.child(j) for item in list(items) for j in range(item.childCount())]
+    [item] = [i for i in items if tuple(i.data(0, ROLE_SCOPE) or ()) == scope]
+    sidebar.setCurrentItem(item)
+
+
+def test_browser_keeps_its_place_when_files_change(window, tmp_path):
+    folder = tmp_path / "Drums"
+    folder.mkdir()
+    for name in ("Kick 1.wav", "Kick 2.wav", "Snare.wav"):
+        write_wav(folder / name, tone(0.1, 60.0))
+    browser = window.browser
+    browser.preview.setChecked(False)
+    indexed(browser, 3)
+    select_scope(browser, ("samples",))
+    assert wait_until(lambda: browser.list_model.total == 3 and not browser.searching)  # the index's news came
+    names = [browser.list_model.item(browser.list_model.index(r)).name for r in range(browser.list_model.rowCount())]
+    assert names == ["Kick 1.wav", "Kick 2.wav", "Snare.wav"]
+    browser.list_view.setCurrentIndex(browser.list_model.index(2))
+    # A file appears above it (found by watching the place): the list shows it, and stays on Snare.
+    write_wav(folder / "Big Kick.wav", tone(0.1, 60.0))
+    assert wait_until(lambda: browser.list_model.total == 4 and not browser.searching)
+    assert browser.list_model.item(browser.list_model.index(0)).name == "Big Kick.wav"
+    assert browser.list_model.item(browser.list_view.currentIndex()).name == "Snare.wav"
+
+
+def test_results_after_the_tree_was_shown_are_dropped(window, tmp_path):
+    write_wav(tmp_path / "Kick.wav", tone(0.1, 60.0))
+    browser = window.browser
+    indexed(browser, 1)
+    select_scope(browser, ("place", str(tmp_path)))
+    settle(browser)
+    assert browser.content.currentWidget() is browser.tree_view
+    browser.search.setText("kick")
+    browser._refresh()  # a search on its way...
+    browser.search.setText("")
+    browser._refresh()  # ...and the folder shown again before it came
+    QTest.qWait(100)
+    assert browser.content.currentWidget() is browser.tree_view and not browser.searching
 
 
 def test_enter_in_search_selects_then_adds(window, three_tracks):
     browser, track = window.browser, window.project.tracks[0]
     window.selection.select_track(track.id)
     window._focus_search()
-    browser.search.setText("utility")  # Enter before the delayed search ran
+    browser.search.setText("utility")  # Enter before the results came: the first is selected when they do
     QTest.keyClick(browser.search, Qt.Key.Key_Return)
+    assert wait_until(lambda: browser.list_model.item(browser.list_view.currentIndex()) is not None)
     current = browser.list_model.item(browser.list_view.currentIndex())
-    assert current is not None and current.kind == "device" and current.name == "Utility"
+    assert current.kind == "device" and current.name == "Utility"
     assert not track.devices
     QTest.keyClick(browser.list_view, Qt.Key.Key_Return)
     assert [d.kind for d in track.devices] == ["utility"]
@@ -740,11 +799,13 @@ def test_used_items_rank_first(window, three_tracks):
     def names() -> list[str]:
         browser.search.setText("e")
         browser._refresh()
+        settle(browser)
         return [browser.list_model.item(browser.list_model.index(r)).name
                 for r in range(browser.list_model.rowCount())]
 
     before = names()
     last = before[-1]
+    browser.list_model.ensure_rows(len(before))
     browser._activate_list(browser.list_model.index(len(before) - 1))  # a double-click
     assert browser.library.uses(browser.list_model.item(browser.list_model.index(len(before) - 1)).key) == 1
     assert names()[0] == last  # used, so first

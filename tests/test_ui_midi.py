@@ -12,7 +12,7 @@ from gilstudio.ui.browser.browser_models import device_kinds
 from gilstudio.ui.piano_roll.note_tools import SHOW_MS
 
 from .conftest import SAMPLE_RATE, write_wav
-from .test_ui_smoke import drag, tone
+from .test_ui_smoke import drag, settle, tone
 
 SPB = SAMPLE_RATE // 2  # samples per beat at 120 BPM
 
@@ -334,6 +334,7 @@ def test_instruments_from_the_browser(window):
                  if browser.sidebar.topLevelItem(i).text(0) == "Built-in"]
     browser.sidebar.setCurrentItem(builtin.child(0))
     assert builtin.child(0).text(0) == "Instruments"
+    settle(browser)
     index = browser.list_model.index(0)
     assert browser.list_model.item(index).name == "Synth"
     # With an audio track selected, double-clicking an instrument makes a MIDI track for it.

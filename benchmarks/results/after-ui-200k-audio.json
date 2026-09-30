@@ -1,0 +1,287 @@
+{
+ "size": 200000,
+ "library": "%TEMP%\\gil-browser-bench\\lib-200000-1",
+ "audio": true,
+ "python": "3.12.10",
+ "code": "after (this branch)",
+ "start": {
+  "first_results_ms": 50,
+  "indexed_ms": 668,
+  "files": 200000,
+  "max_stall_ms": 19.4,
+  "p99_stall_ms": 2.3
+ },
+ "restart": {
+  "first_results_ms": 135,
+  "indexed_ms": 262,
+  "max_stall_ms": 4.5,
+  "p99_stall_ms": 2.7
+ },
+ "query": {
+  "results": [
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "kick",
+    "ms": 17.8,
+    "rows_total": 13268
+   },
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "e",
+    "ms": 23.0,
+    "rows_total": 132674
+   },
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "808 bass",
+    "ms": 11.6,
+    "rows_total": 425
+   },
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "kick deep",
+    "ms": 10.9,
+    "rows_total": 249
+   },
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "zzqx",
+    "ms": 9.0,
+    "rows_total": 0
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "kick",
+    "ms": 10.0,
+    "rows_total": 13268
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "e",
+    "ms": 10.4,
+    "rows_total": 132674
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "808 bass",
+    "ms": 11.0,
+    "rows_total": 425
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "kick deep",
+    "ms": 11.0,
+    "rows_total": 249
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "zzqx",
+    "ms": 8.4,
+    "rows_total": 0
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "kick",
+    "ms": 11.7,
+    "rows_total": 13268
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "e",
+    "ms": 22.9,
+    "rows_total": 132676
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "808 bass",
+    "ms": 13.0,
+    "rows_total": 425
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "kick deep",
+    "ms": 12.1,
+    "rows_total": 249
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "zzqx",
+    "ms": 9.5,
+    "rows_total": 0
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "kick",
+    "ms": 10.0,
+    "rows_total": 13268
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "e",
+    "ms": 13.9,
+    "rows_total": 132676
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "808 bass",
+    "ms": 11.1,
+    "rows_total": 425
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "kick deep",
+    "ms": 11.3,
+    "rows_total": 249
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "zzqx",
+    "ms": 9.1,
+    "rows_total": 0
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "kick",
+    "ms": 22.0,
+    "rows_total": 13268
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "e",
+    "ms": 23.7,
+    "rows_total": 132674
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "808 bass",
+    "ms": 11.7,
+    "rows_total": 425
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "kick deep",
+    "ms": 12.8,
+    "rows_total": 249
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "zzqx",
+    "ms": 8.5,
+    "rows_total": 0
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "kick",
+    "ms": 12.0,
+    "rows_total": 13268
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "e",
+    "ms": 11.6,
+    "rows_total": 132674
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "808 bass",
+    "ms": 11.9,
+    "rows_total": 425
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "kick deep",
+    "ms": 13.8,
+    "rows_total": 249
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "zzqx",
+    "ms": 8.8,
+    "rows_total": 0
+   }
+  ],
+  "max_stall_ms": 10.1,
+  "p99_stall_ms": 3.6,
+  "median_ms": 11.6,
+  "max_ms": 23.7
+ },
+ "typing": {
+  "after_last_key_ms": 9.9,
+  "max_stall_ms": 4.4,
+  "p99_stall_ms": 2.2
+ },
+ "indexing": {
+  "results": [
+   {
+    "query": "kick",
+    "ms": 11.7,
+    "rows_total": 13268,
+    "indexing_at_end": true
+   },
+   {
+    "query": "e",
+    "ms": 23.0,
+    "rows_total": 132674,
+    "indexing_at_end": true
+   },
+   {
+    "query": "808 bass",
+    "ms": 11.0,
+    "rows_total": 425,
+    "indexing_at_end": true
+   },
+   {
+    "query": "kick deep",
+    "ms": 10.4,
+    "rows_total": 249,
+    "indexing_at_end": true
+   },
+   {
+    "query": "zzqx",
+    "ms": 9.1,
+    "rows_total": 0,
+    "indexing_at_end": true
+   }
+  ],
+  "max_stall_ms": 3.2,
+  "p99_stall_ms": 2.3
+ },
+ "playback": {
+  "cpu_load_max": 0.059,
+  "cpu_load_median": 0.048,
+  "playhead_max_lag_ms": 10.2,
+  "samples": 308,
+  "device": "Speakers (Focusrite USB Audio)",
+  "buffer_ms": 10.0
+ }
+}
