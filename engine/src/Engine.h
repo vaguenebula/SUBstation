@@ -12,6 +12,9 @@
 //    inside a call (a licence dialog), which can call back into the engine from
 //    the same thread, so `mutex_` is recursive and slow plug-in calls are made
 //    without holding it.
+//  * Audio devices, likewise, are opened and closed on the main thread. An
+//    ASIO driver's control panel may run a message loop too; the device stays
+//    as it is until the panel closes.
 
 #include <array>
 #include <atomic>
@@ -81,10 +84,13 @@ struct ProcessorEventRecord : ProcessorEvent {
 struct DeviceStatus {
     bool open = false;
     std::string name;
-    std::string backend;
+    std::string backend;  // the driver type: "WASAPI" or "ASIO"
     uint32_t sampleRate = 0;
     uint32_t bufferFrames = 0;
-    double latencyMs = 0.0;
+    double latencyMs = 0.0;       // output latency
+    double inputLatencyMs = 0.0;
+    std::vector<int> inputChannels;   // the device channels open, in the order the engine sees them
+    std::vector<int> outputChannels;  // the master plays on the first two (or mixed to mono on one)
     bool exclusive = false;
 };
 
@@ -96,13 +102,26 @@ public:
     Engine& operator=(const Engine&) = delete;
 
     // --- Device ---------------------------------------------------------------
-    std::vector<OutputDeviceInfo> outputDevices();
-    void openDevice(const std::string& name, uint32_t sampleRate, uint32_t bufferFrames, bool exclusive);
+    // Opening and closing devices and their control panels: from the thread that
+    // created the engine (ASIO drivers are COM objects in its apartment).
+    static std::vector<std::string> driverTypes() { return AudioDevice::driverTypes(); }
+    std::vector<AudioDeviceInfo> devices(const std::string& driver);
+    void openDevice(const DeviceConfig& config);
+    // Opens the last device again, with the settings its driver asked for: the
+    // answer to a "reset" event.
+    void reopenDevice();
     void closeDevice();
     DeviceStatus deviceStatus();
+    DeviceCaps deviceCapabilities();
+    // The driver's own settings dialog (ASIO). False if there is none.
+    bool showDeviceControlPanel();
     double sampleRate();
     float cpuLoad() const { return shared_.cpuLoad.load(std::memory_order_relaxed); }
-    std::string takeDeviceEvent();  // "", "stopped" or "rerouted"
+    // One event at a time: "", "stopped", "rerouted", "reset" (the driver needs
+    // reopenDevice()) or "latency" (the device status has new latencies).
+    std::string takeDeviceEvent();
+    // The peak level of each open input channel since the last call.
+    std::vector<float> takeInputMeters();
 
     // --- Sources --------------------------------------------------------------
     std::shared_ptr<AudioSource> loadSource(const std::string& path);  // cached; blocking
@@ -193,7 +212,7 @@ private:
         std::shared_ptr<DelayLine> delay;   // delay compensation, kept across snapshots
     };
 
-    void audioCallback(float* out, uint32_t frames, uint32_t channels) noexcept override;
+    void audioCallback(const AudioIO& io) noexcept override;
     void deviceEvent(DeviceEvent event) noexcept override;
 
     TrackModel& trackLocked(uint32_t trackId);
@@ -205,6 +224,7 @@ private:
     void pushCommandLocked(const TransportCommand& command);
     void serviceTransportIfIdleLocked();
     void collectGarbageLocked();
+    void openDeviceLocked(const DeviceConfig& config);
     void closeDeviceLocked();
     void reloadSourcesLocked();
     void suspendLiveLocked();
@@ -220,7 +240,8 @@ private:
 
     AudioDevice device_;
     bool deviceRunning_ = false;
-    std::atomic<int> pendingDeviceEvent_{0};
+    uint32_t openInputs_ = 0;                        // input channels of the running device
+    std::atomic<uint32_t> pendingDeviceEvents_{0};  // DeviceEvent flags
     std::atomic<bool> liveSuspended_{false};
     std::atomic<uint64_t> audioEpoch_{0};
 

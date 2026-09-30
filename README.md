@@ -2,7 +2,7 @@
 
 A basic DAW for Windows with an Ableton-style arrangement view. The UI and
 editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
-(miniaudio/WASAPI), bound with nanobind.
+(ASIO, or WASAPI through miniaudio), bound with nanobind.
 
 **What works today**
 - Arrangement timeline with any number of audio and MIDI tracks, waveforms and note previews, adaptive grid with snapping, zoom and scroll.
@@ -31,7 +31,17 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
   - Instruments (built-in or plug-in) go on a MIDI track, replacing its instrument. With no MIDI track selected, double-clicking one or dropping it below the tracks makes one.
 - Device view with the built-in Synth instrument and Utility device (gain/pan/width), and plug-ins, all through the same `Processor` interface. Parameters that choose between named values get a list; frequency and time knobs turn logarithmically. Right-click a device to move it along the chain.
 - Undo/redo for all edits, `.gilproj` projects (JSON), WAV export (16/24/32-bit float).
-- Audio device selection (WASAPI shared or exclusive, sample rate, buffer size).
+- Audio devices: ASIO drivers (see below), or WASAPI shared or exclusive, with the sample rate and buffer size.
+
+## ASIO
+
+- **Choosing a driver.** *Options › Preferences*: set *Driver Type* to ASIO and pick the driver. Changes there apply at once, because what a driver offers is only known while it runs: the *Sample Rate* and *Buffer Size* lists show what it supports, and *Output Channels* which pair of its outputs the master plays on (1/2, 3/4, ...; an odd last one plays in mono). A driver that sets its buffer size itself only offers that one.
+  - **Hardware Setup** opens the driver's own settings. When they change there (or in the driver's own app, or its clock follows another device), the driver asks for a reset and GIL Studio opens it again with the new buffer size and sample rate, keeping the outputs.
+  - The status line shows the input and output latency the driver reports.
+- **Next time** the program opens the same driver. If it can't run as saved (another clock, fewer outputs), it opens with the driver's own settings; if the driver is gone, with the system's default output (WASAPI).
+- Every sample format drivers use is converted (16, 24 and 32-bit integers in any alignment, 32 and 64-bit floats, either byte order); DSD drivers aren't supported. Integer formats are clipped at full scale.
+- Only one ASIO driver can be open in a program (the ASIO callbacks have no way to tell drivers apart).
+- **Inputs** already work in the engine: `open_device(..., input_channels=[...])` opens a driver's inputs, and every buffer of them reaches the audio callback (with its sample position and time), where the engine meters them (`take_input_meters()`). The preferences don't offer inputs yet; recording will.
 
 ## VST3 plug-ins
 
@@ -68,8 +78,20 @@ causes trouble, pick another one with `$env:CMAKE_GENERATOR="Visual Studio 17 20
 
 The parts of the VST 3 SDK the engine uses are included (`engine/third_party/vst3sdk`,
 MIT-licensed since SDK 3.8), so nothing else needs installing. The build also makes
-the small VST3 plug-ins the tests use (`tests/vst3_plugins`), installed next to the
-engine; turn that off with `-C cmake.define.GILSTUDIO_TEST_PLUGINS=OFF`.
+the small VST3 plug-ins and the fake ASIO driver the tests use (`tests/vst3_plugins`,
+`tests/asio_driver`), installed next to the engine; turn that off with
+`-C cmake.define.GILSTUDIO_TEST_PLUGINS=OFF`.
+
+**ASIO** needs Steinberg's ASIO SDK, which isn't in the repository (its licence doesn't
+allow passing it on). Download it from <https://www.steinberg.net/asiosdk> and unzip it
+into the project folder as it comes (`GIL-Studio\asiosdk_2.3.3_2019-06-14\common\...`);
+`.gitignore` keeps `asiosdk*` folders out of git. The build finds it in any folder of the
+project folder (or one level deeper), or an `asio*` folder beside the project or in the
+root of the drive; to keep it elsewhere, set `GILSTUDIO_ASIO_SDK` to its folder (the one
+containing `common`) before building. Only its headers are used. The build prints
+`ASIO SDK: <folder>` when it found it; without it, it warns and builds the engine with
+WASAPI only (the preferences then show ASIO greyed out). Re-run the install command after
+adding the SDK.
 
 ## Run
 
@@ -89,6 +111,7 @@ Add more with *Add Folder…*.
 python -m pytest
 ```
 
+- ASIO tests use a fake ASIO driver built with the engine (`tests/asio_driver`): a real in-process COM object, loaded from its DLL rather than registered (`GILSTUDIO_ASIO_DRIVERS`), so they never see the installed drivers and need no sound card. Its hooks (called through ctypes) let a test drive it a buffer at a time, feed its inputs, read back the bytes the engine wrote to its outputs, and send the engine what drivers send (reset requests, new latencies, a new sample rate). They check every sample format against numpy's decoding, output channels and mono, inputs, rates and buffer sizes, resets and the control panel, errors, playing on the driver's own thread, and the preferences and start-up in the application. They are skipped when the engine was built without the ASIO SDK.
 - Engine tests render offline, so no audio device is needed. They check sample-exact clip placement, gain/pan/mute/solo, looping, tempo changes, the metronome, fades, the Utility device and export.
 - Warp tests check that warped clips land on their beats at any tempo, keep their pitch, start sample-aligned (also after a locate), transpose to the right frequency, and that Re-Pitch filters rather than aliases.
 - MIDI engine tests check that notes start on their sample and follow the tempo, that the Synth plays the right pitch and level, and that loop wraps and offline renders leave no hanging notes.
@@ -144,7 +167,9 @@ engine/src/                    C++: everything on the audio thread, and plug-in 
   Renderer      mixing: clips and notes -> inserts -> fader/pan -> master; loop; metronome; preview
   Warp          stretch voices (time stretch / pitch shift) and the Re-Pitch resampler
   AudioSource   decoding (WAV/FLAC/MP3) at the engine rate + peak mipmaps
-  AudioDevice   miniaudio WASAPI output (the only backend-specific code)
+  AudioDevice   devices of any driver type: DeviceConfig in, planar duplex AudioIO callbacks out
+  backends/     WasapiBackend (miniaudio), AsioBackend (IASIO; only with the ASIO SDK),
+                AsioSupport.h (ASIO sample formats and buffer sizes, no SDK needed)
   Processor.h   insert-device interface (built-ins and plug-ins)
   processors/   built-in devices: Synth (instrument), Utility
   plugins/      PluginFormat.h (formats), Vst3Format (host context, modules, scanning),
@@ -153,7 +178,15 @@ engine/src/                    C++: everything on the audio thread, and plug-in 
   bindings.cpp  nanobind module gilstudio._engine
 engine/third_party/            miniaudio, Signalsmith Stretch, the VST 3 SDK (subset); all MIT
 tests/vst3_plugins/            the VST3 plug-ins the tests use
+tests/asio_driver/             the fake ASIO driver the tests use
 ```
+
+**Audio devices**
+- Each driver type is an `AudioBackend` (engine/src/AudioDevice.h); `AudioDevice` opens a `DeviceConfig` (driver type, device, rate, buffer size, the device's input and output channels) with whichever one it names.
+- Devices run duplex: each callback gets the open inputs and fills the open outputs, as separate float buffers of one length, with the device's sample position and the steady-clock time the callback began. That is what recording, input monitoring and MIDI input (timestamped against the same clock) will need; WASAPI opens outputs only so far.
+- A driver's events (the device went away, a reset request, new latencies) are flags the audio side sets; the UI takes them from `Engine::takeDeviceEvent()` and answers a reset with `reopenDevice()`, which asks the driver for the buffer size and sample rate it now has before closing it.
+- ASIO drivers are COM objects created on the UI thread, which has to be a single-threaded COM apartment for that: the engine makes its thread one before miniaudio would make it multithreaded (in the application Qt already has). A thread that is multithreaded all the same loads the driver from its DLL. The audio thread calls nothing on the driver but `outputReady()`.
+- A driver's control panel may run a message loop; the device can't be closed or reset until it returns.
 
 **Real-time safety**
 - The audio callback never locks, allocates, frees or touches Python, so the GIL cannot cause dropouts. (That is the host's part; what a plug-in does in its `process()` is up to the plug-in.)
@@ -188,9 +221,8 @@ tests/vst3_plugins/            the VST3 plug-ins the tests use
 
 ## Not yet implemented
 
-- Recording (audio or MIDI) and MIDI input from controllers.
+- Recording (audio or MIDI), input monitoring and MIDI input from controllers. (ASIO inputs already reach the engine; WASAPI has outputs only.)
 - Looping MIDI clips, MIDI effects, and editing several MIDI clips in the piano roll at once.
-- ASIO: the `AudioDevice` class is the only place a new backend has to go.
 - Automation (of plug-in parameters too), tempo changes over time.
 - CLAP plug-ins; side-chain inputs and multi-output instruments (plug-ins get the main buses only); MIDI effect plug-ins.
 - Warp markers (warping within a clip) and automatic tempo detection: a warped clip has one segment BPM, and you set it.

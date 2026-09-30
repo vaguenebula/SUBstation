@@ -53,22 +53,38 @@ std::string Engine::sourceKey(const std::string& path) {
 // ---------------------------------------------------------------------------
 // Device
 
-std::vector<OutputDeviceInfo> Engine::outputDevices() {
+std::vector<AudioDeviceInfo> Engine::devices(const std::string& driver) {
     std::lock_guard lock(mutex_);
-    return device_.outputDevices();
+    return device_.devices(driver);
 }
 
-void Engine::openDevice(const std::string& name, uint32_t sampleRate, uint32_t bufferFrames, bool exclusive) {
+void Engine::openDevice(const DeviceConfig& config) {
     std::lock_guard lock(mutex_);
+    openDeviceLocked(config);
+}
+
+void Engine::reopenDevice() {
+    std::lock_guard lock(mutex_);
+    if (!device_.hasConfig()) throw std::runtime_error("No audio device has been opened");
+    openDeviceLocked(device_.resetConfig());  // asks the open driver first, so before closing it
+}
+
+void Engine::openDeviceLocked(const DeviceConfig& config) {
+    // A driver's control panel may run a message loop that calls us back: its
+    // driver has to stay until the panel is closed.
+    if (device_.inControlPanel()) throw std::runtime_error("Close the driver's control panel first");
     closeDeviceLocked();
-    device_.init(name, sampleRate, bufferFrames, exclusive, this);
+    device_.open(config, this);
     try {
-        const double rate = device_.sampleRate();
+        const DeviceState state = device_.state();
+        const double rate = state.sampleRate;
         if (rate != sampleRate_) {
             sampleRate_ = rate;
             reloadSourcesLocked();
             warpVoices_ = {};  // stretchers are sized for the old rate; the next snapshot makes new ones
         }
+        openInputs_ = static_cast<uint32_t>(state.inputChannels.size());
+        for (auto& peak : shared_.inputPeaks) peak.store(0.f, std::memory_order_relaxed);
         // The audio thread is not running, so the preview can be dropped directly.
         shared_.previewSource.store(nullptr, std::memory_order_seq_cst);
         shared_.previewSerial.fetch_add(1, std::memory_order_seq_cst);
@@ -81,24 +97,27 @@ void Engine::openDevice(const std::string& name, uint32_t sampleRate, uint32_t b
         }
         rebuildSnapshotLocked();
         serviceTransportIfIdleLocked();
-        pendingDeviceEvent_.store(0);
+        pendingDeviceEvents_.store(0);  // about the device just closed
         device_.start();
         deviceRunning_ = true;
     } catch (...) {
         device_.close();
         deviceRunning_ = false;
+        openInputs_ = 0;
         throw;
     }
 }
 
 void Engine::closeDevice() {
     std::lock_guard lock(mutex_);
+    if (device_.inControlPanel()) throw std::runtime_error("Close the driver's control panel first");
     closeDeviceLocked();
 }
 
 void Engine::closeDeviceLocked() {
     if (device_.isOpen()) device_.close();  // waits for the audio thread to exit
     deviceRunning_ = false;
+    openInputs_ = 0;
     collectGarbageLocked();
     serviceTransportIfIdleLocked();
 }
@@ -107,15 +126,32 @@ DeviceStatus Engine::deviceStatus() {
     std::lock_guard lock(mutex_);
     DeviceStatus status;
     status.open = deviceRunning_;
-    status.backend = device_.backendName();
     if (device_.isOpen()) {
-        status.name = device_.deviceName();
-        status.sampleRate = device_.sampleRate();
-        status.bufferFrames = device_.bufferFrames();
-        status.latencyMs = device_.latencySeconds() * 1000.0;
-        status.exclusive = device_.exclusive();
+        const DeviceState state = device_.state();
+        status.name = state.name;
+        status.backend = state.driver;
+        status.sampleRate = state.sampleRate;
+        status.bufferFrames = state.bufferFrames;
+        if (state.sampleRate > 0) {
+            status.latencyMs = state.outputLatency * 1000.0 / state.sampleRate;
+            status.inputLatencyMs = state.inputLatency * 1000.0 / state.sampleRate;
+        }
+        status.inputChannels = state.inputChannels;
+        status.outputChannels = state.outputChannels;
+        status.exclusive = state.exclusive;
     }
     return status;
+}
+
+DeviceCaps Engine::deviceCapabilities() {
+    std::lock_guard lock(mutex_);
+    return device_.state().capabilities;
+}
+
+bool Engine::showDeviceControlPanel() {
+    // Holds the lock: nothing may close the driver while its panel is up.
+    std::lock_guard lock(mutex_);
+    return device_.showControlPanel();
 }
 
 double Engine::sampleRate() {
@@ -124,26 +160,57 @@ double Engine::sampleRate() {
 }
 
 std::string Engine::takeDeviceEvent() {
-    switch (static_cast<DeviceEvent>(pendingDeviceEvent_.exchange(0))) {
-        case DeviceEvent::Stopped: return "stopped";
-        case DeviceEvent::Rerouted: return "rerouted";
-        default: return "";
+    std::lock_guard lock(mutex_);
+    const auto take = [this](DeviceEvent event) {
+        const auto flag = static_cast<uint32_t>(event);
+        return (pendingDeviceEvents_.fetch_and(~flag) & flag) != 0;
+    };
+    if (take(DeviceEvent::Stopped)) {
+        pendingDeviceEvents_.store(0);  // the rest were about the device that is gone
+        return "stopped";
     }
+    if (!deviceRunning_) {
+        pendingDeviceEvents_.store(0);
+        return "";
+    }
+    if (!device_.inControlPanel() && take(DeviceEvent::ResetRequest)) return "reset";
+    if (take(DeviceEvent::Rerouted)) return "rerouted";
+    if (take(DeviceEvent::LatencyChanged)) {
+        device_.refreshLatencies();
+        return "latency";
+    }
+    return "";
 }
 
-void Engine::deviceEvent(DeviceEvent event) noexcept { pendingDeviceEvent_.store(static_cast<int>(event)); }
+std::vector<float> Engine::takeInputMeters() {
+    std::lock_guard lock(mutex_);
+    const size_t count = std::min<size_t>(openInputs_, SharedState::kMaxInputMeters);
+    std::vector<float> peaks(count);
+    for (size_t c = 0; c < count; ++c) peaks[c] = shared_.inputPeaks[c].exchange(0.f);
+    return peaks;
+}
 
-void Engine::audioCallback(float* out, uint32_t frames, uint32_t channels) noexcept {
+void Engine::deviceEvent(DeviceEvent event) noexcept {
+    pendingDeviceEvents_.fetch_or(static_cast<uint32_t>(event));
+}
+
+void Engine::audioCallback(const AudioIO& io) noexcept {
     ScopedNoDenormals noDenormals;
     const auto started = std::chrono::steady_clock::now();
+    const uint32_t metered = std::min<uint32_t>(io.numInputs, SharedState::kMaxInputMeters);
+    for (uint32_t c = 0; c < metered; ++c) {
+        float peak = 0.f;
+        for (uint32_t i = 0; i < io.frames; ++i) peak = std::max(peak, std::abs(io.inputs[c][i]));
+        atomicStoreMax(shared_.inputPeaks[c], peak);
+    }
     // seq_cst pairs with the store/epoch-load sequence in rebuildSnapshotLocked().
     const RenderSnapshot* snap = snapshot_.load(std::memory_order_seq_cst);
     if (!snap || liveSuspended_.load(std::memory_order_seq_cst)) {
-        std::fill_n(out, static_cast<size_t>(frames) * channels, 0.f);
+        for (uint32_t c = 0; c < io.numOutputs; ++c) std::fill_n(io.outputs[c], io.frames, 0.f);
     } else {
-        renderer_.processLive(*snap, shared_, out, frames, channels);
+        renderer_.processLive(*snap, shared_, io.outputs, io.numOutputs, io.frames);
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-        const double budget = frames / snap->sampleRate;
+        const double budget = io.frames / snap->sampleRate;
         const float load = static_cast<float>(elapsed / budget);
         const float previous = shared_.cpuLoad.load(std::memory_order_relaxed);
         shared_.cpuLoad.store(previous + 0.1f * (load - previous), std::memory_order_relaxed);
@@ -828,7 +895,7 @@ void Engine::idle() {
     std::vector<std::shared_ptr<Processor>> dead;
     {
         std::lock_guard lock(mutex_);
-        if (deviceRunning_ && pendingDeviceEvent_.load() == static_cast<int>(DeviceEvent::Stopped)) {
+        if (deviceRunning_ && (pendingDeviceEvents_.load() & static_cast<uint32_t>(DeviceEvent::Stopped))) {
             closeDeviceLocked();  // the backend lost the device; the UI reports it via takeDeviceEvent()
         }
         collectGarbageLocked();

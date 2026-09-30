@@ -58,21 +58,37 @@ NB_MODULE(_engine, m) {
     m.def("probe_file", &AudioSource::probe, "path"_a, ReleaseGil(),
           "Read an audio file's length and format without decoding it.");
 
-    nb::class_<gil::OutputDeviceInfo>(m, "OutputDeviceInfo")
-        .def_ro("name", &gil::OutputDeviceInfo::name)
-        .def_ro("is_default", &gil::OutputDeviceInfo::isDefault)
-        .def("__repr__", [](const gil::OutputDeviceInfo& d) {
-            return "OutputDeviceInfo('" + d.name + "'" + (d.isDefault ? ", default)" : ")");
+    m.def("driver_types", &Engine::driverTypes,
+          "The audio driver types this engine was built with: 'WASAPI', and 'ASIO' if it had the ASIO SDK.");
+
+    nb::class_<gil::AudioDeviceInfo>(m, "AudioDeviceInfo")
+        .def_ro("name", &gil::AudioDeviceInfo::name)
+        .def_ro("is_default", &gil::AudioDeviceInfo::isDefault)
+        .def("__repr__", [](const gil::AudioDeviceInfo& d) {
+            return "AudioDeviceInfo('" + d.name + "'" + (d.isDefault ? ", default)" : ")");
         });
 
     nb::class_<gil::DeviceStatus>(m, "DeviceStatus")
         .def_ro("open", &gil::DeviceStatus::open)
         .def_ro("name", &gil::DeviceStatus::name)
-        .def_ro("backend", &gil::DeviceStatus::backend)
+        .def_ro("backend", &gil::DeviceStatus::backend, "The driver type: 'WASAPI' or 'ASIO'.")
         .def_ro("sample_rate", &gil::DeviceStatus::sampleRate)
         .def_ro("buffer_frames", &gil::DeviceStatus::bufferFrames)
-        .def_ro("latency_ms", &gil::DeviceStatus::latencyMs)
+        .def_ro("latency_ms", &gil::DeviceStatus::latencyMs, "Output latency.")
+        .def_ro("input_latency_ms", &gil::DeviceStatus::inputLatencyMs)
+        .def_ro("input_channels", &gil::DeviceStatus::inputChannels,
+                "The device's input channels that are open (0-based), in the order take_input_meters() lists them.")
+        .def_ro("output_channels", &gil::DeviceStatus::outputChannels,
+                "The device's output channels that are open; the master plays on the first two.")
         .def_ro("exclusive", &gil::DeviceStatus::exclusive);
+
+    nb::class_<gil::DeviceCaps>(m, "DeviceCapabilities")
+        .def_ro("input_names", &gil::DeviceCaps::inputNames, "Names of all the device's inputs.")
+        .def_ro("output_names", &gil::DeviceCaps::outputNames)
+        .def_ro("sample_rates", &gil::DeviceCaps::sampleRates, "The rates it can run at; empty: any.")
+        .def_ro("buffer_sizes", &gil::DeviceCaps::bufferSizes, "The buffer sizes it offers; empty: any.")
+        .def_ro("preferred_buffer_frames", &gil::DeviceCaps::preferredBufferFrames)
+        .def_ro("has_control_panel", &gil::DeviceCaps::hasControlPanel);
 
     nb::class_<gil::ParamInfo>(m, "ParamInfo")
         .def_ro("id", &gil::ParamInfo::id)
@@ -224,15 +240,46 @@ NB_MODULE(_engine, m) {
     nb::class_<Engine>(m, "Engine")
         .def(nb::init<>())
         // Device
-        .def("list_output_devices", &Engine::outputDevices)
-        .def("open_device", &Engine::openDevice, "name"_a = "", "sample_rate"_a = 0, "buffer_frames"_a = 512,
-             "exclusive"_a = false, ReleaseGil(),
-             "Open an output device (empty name = system default, sample_rate 0 = native).")
+        .def("list_devices", &Engine::devices, "driver"_a = "WASAPI", ReleaseGil(),
+             "The devices of a driver type: WASAPI outputs, or installed ASIO drivers.")
+        .def(
+            "open_device",
+            [](Engine& self, const std::string& name, uint32_t sampleRate, uint32_t bufferFrames, bool exclusive,
+               const std::string& driver, const std::vector<int>& inputChannels,
+               const std::vector<int>& outputChannels, uintptr_t window) {
+                gil::DeviceConfig config;
+                config.driver = driver;
+                config.name = name;
+                config.sampleRate = sampleRate;
+                config.bufferFrames = bufferFrames;
+                config.exclusive = exclusive;
+                config.inputChannels = inputChannels;
+                config.outputChannels = outputChannels;
+                config.window = window;
+                nb::gil_scoped_release release;  // a driver may show a dialog (a message loop that calls Python)
+                self.openDevice(config);
+            },
+            "name"_a = "", "sample_rate"_a = 0, "buffer_frames"_a = 0, "exclusive"_a = false, nb::kw_only(),
+            "driver"_a = "WASAPI", "input_channels"_a = std::vector<int>(), "output_channels"_a = std::vector<int>(),
+            "window"_a = 0,
+            "Open an audio device, closing the one open. An empty name opens the system default output (WASAPI) "
+            "or the first driver (ASIO); sample_rate 0 keeps the device's rate, buffer_frames 0 takes its "
+            "preferred size. Channels are the device's (0-based): no inputs, and the first two outputs, unless "
+            "given. `window` is the main window's handle, for ASIO drivers' dialogs. Raises RuntimeError.")
+        .def("reopen_device", &Engine::reopenDevice, ReleaseGil(),
+             "Open the last device again, with the settings its driver asked for (after a 'reset' event).")
         .def("close_device", &Engine::closeDevice, ReleaseGil())
         .def_prop_ro("device_status", &Engine::deviceStatus)
+        .def_prop_ro("device_capabilities", &Engine::deviceCapabilities,
+                     "What the open device offers (channels, sample rates, buffer sizes).")
+        .def("show_device_control_panel", &Engine::showDeviceControlPanel, ReleaseGil(),
+             "Show the ASIO driver's own settings. False if it has none (or no device is open).")
         .def_prop_ro("sample_rate", &Engine::sampleRate)
         .def_prop_ro("cpu_load", &Engine::cpuLoad)
-        .def("take_device_event", &Engine::takeDeviceEvent)
+        .def("take_device_event", &Engine::takeDeviceEvent,
+             "The next device event: '', 'stopped', 'rerouted', 'reset' (call reopen_device()) or 'latency'.")
+        .def("take_input_meters", &Engine::takeInputMeters,
+             "Peak level of each open input channel (see DeviceStatus.input_channels) since the last call.")
         // Sources
         .def("load_source", &Engine::loadSource, "path"_a, ReleaseGil(),
              "Decode an audio file at the engine sample rate (cached). Blocking; call from a worker thread.")

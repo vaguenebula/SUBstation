@@ -5,10 +5,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if (NOT WIN32)
-    message(WARNING "GIL Studio targets Windows (WASAPI); other platforms are untested.")
+    message(WARNING "GIL Studio targets Windows (WASAPI, ASIO); other platforms are untested.")
 endif()
 
-option(GILSTUDIO_TEST_PLUGINS "Build the VST3 plug-ins the tests use" ON)
+option(GILSTUDIO_TEST_PLUGINS "Build the VST3 plug-ins and the ASIO driver the tests use" ON)
+option(GILSTUDIO_ASIO "Build ASIO support (needs Steinberg's ASIO SDK, see below)" ON)
 
 find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
 
@@ -78,10 +79,53 @@ target_link_libraries(vst3_hosting PUBLIC vst3_base ole32 shell32)
 # use the ANSI code page, and plug-ins with non-ASCII paths would not load.
 set_target_properties(vst3_hosting PROPERTIES CXX_STANDARD 17)
 
+# --- ASIO SDK (optional) ----------------------------------------------------------
+# Steinberg's ASIO SDK is not part of the repository: its licence doesn't allow
+# passing it on. Unzip it (https://www.steinberg.net/asiosdk) into the project
+# folder as it comes (.gitignore keeps asiosdk* folders out of git), or point
+# GILSTUDIO_ASIO_SDK (a CMake or environment variable) at it. Only its headers
+# are used. Without it the engine is built with WASAPI only.
+set(GILSTUDIO_ASIO_SDK "$ENV{GILSTUDIO_ASIO_SDK}" CACHE PATH "Steinberg's ASIO SDK: the folder containing common/iasiodrv.h")
+set(ASIO_SDK "")
+if (GILSTUDIO_ASIO)
+    if (GILSTUDIO_ASIO_SDK)
+        if (NOT EXISTS "${GILSTUDIO_ASIO_SDK}/common/iasiodrv.h")
+            message(FATAL_ERROR "GILSTUDIO_ASIO_SDK (${GILSTUDIO_ASIO_SDK}) has no common/iasiodrv.h")
+        endif()
+        set(ASIO_SDK "${GILSTUDIO_ASIO_SDK}")
+    else()
+        # Any folder in the project folder, or one inside it (some unzip tools add
+        # a level); else an asio* folder beside the project or in the drive's root.
+        set(_asio_patterns
+            "${CMAKE_CURRENT_SOURCE_DIR}/*/common/iasiodrv.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/*/*/common/iasiodrv.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../asio*/common/iasiodrv.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../asio*/*/common/iasiodrv.h")
+        if (WIN32 AND DEFINED ENV{SystemDrive})
+            list(APPEND _asio_patterns "$ENV{SystemDrive}/asio*/common/iasiodrv.h" "$ENV{SystemDrive}/asio*/*/common/iasiodrv.h")
+        endif()
+        file(GLOB _asio_headers ${_asio_patterns})
+        if (_asio_headers)
+            list(SORT _asio_headers ORDER DESCENDING)  # the newest of several (asiosdk_2.3.3_... after asiosdk2.3)
+            list(GET _asio_headers 0 _asio_header)
+            cmake_path(GET _asio_header PARENT_PATH _asio_common)
+            cmake_path(GET _asio_common PARENT_PATH ASIO_SDK)
+            cmake_path(NORMAL_PATH ASIO_SDK)
+        endif()
+    endif()
+    if (ASIO_SDK)
+        message(STATUS "ASIO SDK: ${ASIO_SDK}")
+    else()
+        message(WARNING "ASIO SDK not found, so the engine is built without ASIO. Unzip the SDK from "
+                        "https://www.steinberg.net/asiosdk into ${CMAKE_CURRENT_SOURCE_DIR} or set GILSTUDIO_ASIO_SDK.")
+    endif()
+endif()
+
 nanobind_add_module(_engine NB_STATIC
     engine/src/bindings.cpp
     engine/src/Engine.cpp
     engine/src/AudioDevice.cpp
+    engine/src/backends/WasapiBackend.cpp
     engine/src/AudioSource.cpp
     engine/src/Renderer.cpp
     engine/src/Metronome.cpp
@@ -97,8 +141,13 @@ target_include_directories(_engine PRIVATE engine/src)
 target_include_directories(_engine SYSTEM PRIVATE
     engine/third_party/signalsmith-stretch
     engine/third_party/signalsmith-linear)
-target_link_libraries(_engine PRIVATE miniaudio vst3_hosting user32)
+target_link_libraries(_engine PRIVATE miniaudio vst3_hosting user32 ole32 uuid advapi32)
 target_compile_definitions(_engine PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES)
+if (ASIO_SDK)
+    target_sources(_engine PRIVATE engine/src/backends/AsioBackend.cpp)
+    target_include_directories(_engine SYSTEM PRIVATE "${ASIO_SDK}/common")
+    target_compile_definitions(_engine PRIVATE GILSTUDIO_HAS_ASIO=1)
+endif()
 if (MSVC)
     target_compile_options(_engine PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
 endif()
@@ -135,4 +184,18 @@ if (GILSTUDIO_TEST_PLUGINS)
     endif()
     install(TARGETS gil_test_plugins
             LIBRARY DESTINATION gilstudio/_testplugins/GILTestPlugins.vst3/Contents/x86_64-win)
+
+    # A fake ASIO driver (tests/asio_driver), installed next to the engine. The
+    # tests load it through GILSTUDIO_ASIO_DRIVERS; it is never registered.
+    if (ASIO_SDK)
+        add_library(gil_test_asio MODULE tests/asio_driver/test_asio_driver.cpp tests/asio_driver/test_asio_driver.def)
+        target_include_directories(gil_test_asio SYSTEM PRIVATE "${ASIO_SDK}/common")
+        target_link_libraries(gil_test_asio PRIVATE ole32 uuid)
+        target_compile_definitions(gil_test_asio PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+        set_target_properties(gil_test_asio PROPERTIES OUTPUT_NAME "GILTestAsio" PREFIX "")
+        if (MSVC)
+            target_compile_options(gil_test_asio PRIVATE /W3 /utf-8)
+        endif()
+        install(TARGETS gil_test_asio LIBRARY DESTINATION gilstudio/_testdrivers)
+    endif()
 endif()

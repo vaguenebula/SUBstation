@@ -9,6 +9,10 @@ chain, so a plug-in keeps its state (and open editor) when the chain around it
 changes. When a plug-in device goes away (deleted, or its track), its state is
 kept here, so undo brings it back as it was. Edits made in a plug-in's own
 editor come back from the engine as `plugin_param_edited`, for the undo stack.
+
+Audio devices (WASAPI or ASIO) open as the preferences describe. An ASIO
+driver whose settings change (in its control panel, or its clock) asks to be
+reset; the bridge then opens it again, with its new settings.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 from .. import _engine as ge
 from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Track
 from ..model.timebase import db_to_gain
+from .settings import AudioSettings
 
 AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
 # Plug-in editors of tracks not shown are hidden but keep running (animating,
@@ -632,14 +637,43 @@ class EngineBridge(QObject):
 
     # --- Device ------------------------------------------------------------------
 
-    def open_device(self, name: str, sample_rate: int, buffer_frames: int, exclusive: bool) -> str | None:
-        """Returns an error message, or None on success."""
-        old_rate = self.engine.sample_rate
+    def open_device(self, settings: AudioSettings) -> str | None:
+        """Opens the device the settings describe, closing the one open. Returns
+        an error message, or None on success."""
+        return self._change_device(lambda: self.engine.open_device(
+            settings.device_name, settings.sample_rate, settings.buffer_frames, settings.exclusive,
+            driver=settings.driver, input_channels=list(settings.input_channels),
+            output_channels=list(settings.output_channels), window=self.owner_window()))
+
+    def reset_device(self) -> str | None:
+        """Opens the device again, as its driver asked: its settings changed (in
+        its control panel, or its clock)."""
+        error = self._change_device(self.engine.reopen_device)
+        if error:
+            self.status_message.emit(f"The audio device could not restart: {error}. "
+                                     "Choose a device in Options > Preferences.")
+        else:
+            self.status_message.emit("The audio driver restarted with its new settings.")
+        return error
+
+    def show_device_control_panel(self) -> bool:
+        """The ASIO driver's own settings. False if it has none."""
+        self._busy += 1  # its dialog may run a message loop that calls us back
         try:
-            self.engine.open_device(name, sample_rate, buffer_frames, exclusive)
+            return self.engine.show_device_control_panel()
+        finally:
+            self._busy -= 1
+
+    def _change_device(self, change: Callable[[], None]) -> str | None:
+        old_rate = self.engine.sample_rate
+        self._busy += 1  # a driver may show a dialog while it opens
+        try:
+            change()
             error = None
         except RuntimeError as exc:
             error = str(exc)
+        finally:
+            self._busy -= 1
         if self.engine.sample_rate != old_rate:
             self.refresh_sources()
         self.device_changed.emit()
@@ -675,10 +709,19 @@ class EngineBridge(QObject):
                 self.meters[key] = (reading.left, reading.right)
         self.meters_updated.emit()
         self.poll_plugins()
+        if not self._busy:  # not from a message loop inside a plug-in's or driver's call
+            self._poll_device()
+
+    def _poll_device(self) -> None:
+        """What happened to the device: one event per poll."""
         event = self.engine.take_device_event()
         if event == "stopped":
             self.status_message.emit("The audio device stopped. Choose a device in Options > Preferences.")
             self.device_changed.emit()
         elif event == "rerouted":
             self.status_message.emit("Audio output was rerouted to another device.")
+            self.device_changed.emit()
+        elif event == "reset":
+            self.reset_device()
+        elif event == "latency":
             self.device_changed.emit()

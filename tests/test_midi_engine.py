@@ -26,7 +26,7 @@ def engine():
 def live_engine():
     """An engine with a running output device (the default, else any that opens)."""
     e = ge.Engine()
-    for name in [""] + [d.name for d in e.list_output_devices()]:
+    for name in [""] + [d.name for d in e.list_devices("WASAPI")]:
         try:
             e.open_device(name, 0, 256, False)
             break

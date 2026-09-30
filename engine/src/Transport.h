@@ -1,7 +1,9 @@
 #pragma once
 // State shared between the API threads and the audio thread.
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 #include "AudioSource.h"
@@ -42,6 +44,9 @@ struct SharedState {
     std::atomic<float> masterPeakRight{0.f};
     std::atomic<bool> previewActive{false};
     std::atomic<float> cpuLoad{0.f};
+    // Peak level of each open input channel (beyond this many, none).
+    static constexpr size_t kMaxInputMeters = 256;
+    std::array<std::atomic<float>, kMaxInputMeters> inputPeaks{};
 };
 
 }  // namespace gil

@@ -75,8 +75,8 @@ void Renderer::publishTransport(SharedState& shared) const noexcept {
     shared.playing.store(playing_, std::memory_order_relaxed);
 }
 
-void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, float* out, uint32_t frames,
-                           uint32_t channels) noexcept {
+void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, float* const* outputs,
+                           uint32_t numOutputs, uint32_t frames) noexcept {
     syncTempo(snap);
     drainCommands(shared);
     drainPreviewNotes(shared);
@@ -89,16 +89,13 @@ void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, floa
         numPreviewNotes_ = 0;  // played in the first chunk
         mixPreview(shared, n);
 
-        float* dst = out + static_cast<size_t>(done) * channels;
-        if (channels == 1) {
+        if (numOutputs == 1) {
+            float* dst = outputs[0] + done;
             for (int i = 0; i < n; ++i) dst[i] = 0.5f * (masterLeft_[i] + masterRight_[i]);
-        } else {
-            for (int i = 0; i < n; ++i) {
-                float* frame = dst + static_cast<size_t>(i) * channels;
-                frame[0] = masterLeft_[i];
-                frame[1] = masterRight_[i];
-                for (uint32_t c = 2; c < channels; ++c) frame[c] = 0.f;
-            }
+        } else if (numOutputs >= 2) {
+            std::copy_n(masterLeft_.data(), n, outputs[0] + done);
+            std::copy_n(masterRight_.data(), n, outputs[1] + done);
+            for (uint32_t c = 2; c < numOutputs; ++c) std::fill_n(outputs[c] + done, n, 0.f);
         }
         done += static_cast<uint32_t>(n);
     }
