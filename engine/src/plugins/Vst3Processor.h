@@ -11,7 +11,9 @@
 // index for stepped ones (with the plug-in's value names for lists). Values
 // travel to the audio thread through a lock-free queue; the plug-in's own
 // output parameters come back through another and reach its controller (and
-// the UI) in idle().
+// the UI) in idle(). Automation goes to the processor sample-accurately with
+// the block's other parameter changes; the last automated values reach the
+// controller (so the plug-in's editor follows) and the UI in idle().
 //
 // Threads: process() and reset() on the rendering thread, all else on the main
 // thread. The component handler may be called from anywhere by badly behaved
@@ -107,6 +109,7 @@ private:
     // process call without audio (the device may not be running).
     void flushParameters();
     void forwardOutputParameters();
+    bool applyAutomatedValues();  // main thread; true if there were any
 
     // Rendering thread.
     void buildEvents(const ProcessContext& ctx);
@@ -165,6 +168,16 @@ private:
     ParamChangeQueue toAudio_;                      // parameter values for the plug-in's processor
     SpscQueue<ParamChange, 4096> fromAudio_;        // its output parameters, for its controller
     std::atomic<int32_t> pendingRestart_{0};        // IComponentHandler::restartComponent flags
+
+    // Automation. The rendering thread's copy of the parameter ids (by index) and
+    // the last automated value of each (normalized; NaN: none since the last
+    // idle()), set up with the buffers.
+    std::vector<Steinberg::Vst::ParamID> automationIds_;
+    std::unique_ptr<std::atomic<float>[]> automated_;
+    std::atomic<bool> automationPending_{false};
+    // While the controller hears of automated values: some plug-ins answer that
+    // with performEdit, which is no edit of the user's (it would override the automation).
+    std::atomic<bool> syncingAutomation_{false};
 
     // Parameters. mutex_ guards the lists against a component-handler call
     // from another thread; values_ is read anywhere.

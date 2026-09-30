@@ -7,6 +7,10 @@ list for parameters that choose between named values, four at a time in a 2×2
 grid with arrows for the other pages. A plug-in shows its own text for their
 values and has a button for its own editor. Right-click a device for more (move, presets).
 
+Automated parameters are marked (red: automated, grey: overridden) and follow
+their automation as it plays; right-click one to show its automation, delete it,
+or re-enable it. Changing one shows its automation in the arrangement.
+
 Click a device (its title or background) to select it, Shift-click to select a
 range, Ctrl-click to add or remove one; Delete deletes the selection. Drag
 effects to reorder them (the instrument stays first). Ctrl+Alt-drag anywhere on
@@ -59,14 +63,17 @@ from PySide6.QtWidgets import (
 
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
+from ..model.automation import device_key
 from ..model.editor import (
     BUILTIN_DEVICES,
     ProjectEditor,
     device_is_instrument,
     device_name,
 )
+from ..model.params import format_value
 from ..model.project import PLUGIN_KIND, Device
 from .arrangement.lanes_canvas import is_pan_modifier
+from .arrangement.track_headers import automation_state
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from .widgets import Knob, ToggleButton
@@ -85,22 +92,6 @@ PRESET_FILTER = "VST3 Preset (*.vstpreset)"
 DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
 AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
 AUTOSCROLL_INTERVAL = 16  # ms
-
-
-def _format_value(value: float, unit: str) -> str:
-    if unit == "dB":
-        return f"{value:.1f} dB"
-    if unit == "%":
-        return f"{value:.0f} %"
-    if unit == "":
-        return f"{value:+.2f}" if value else "0.00"
-    if unit == "Hz":
-        return f"{value / 1000:.2f} kHz" if value >= 1000 else f"{value:.0f} Hz"
-    if unit == "ms":
-        if value >= 1000:
-            return f"{value / 1000:.2f} s"
-        return f"{value:.1f} ms" if value < 10 else f"{value:.0f} ms"
-    return f"{value:.2f} {unit}"
 
 
 def _encode(state: bytes | None) -> str | None:
@@ -133,12 +124,14 @@ class _DeviceFrame(QFrame):
     menu_requested = Signal(str)  # device id: select it before its menu shows
     page_changed = Signal(str, int)  # device id, page
 
-    def __init__(self, track_id: str, device: Device, editor: ProjectEditor, parent: QWidget | None = None):
+    def __init__(self, track_id: str, device: Device, editor: ProjectEditor, parent: QWidget | None = None,
+                 bridge: EngineBridge | None = None):
         super().__init__(parent)
         self.track_id = track_id
         self.device_id = device.id
         self.source = device  # the model's device object it was built for
         self.editor = editor
+        self.bridge = bridge
         self.instrument = device_is_instrument(device)
         self.selected = False
         # What the menu's Delete does; the device view makes it delete all its selected devices.
@@ -230,11 +223,15 @@ class _DeviceFrame(QFrame):
         """The n-th parameter's name and knob (or list)."""
         raise NotImplementedError
 
-    @staticmethod
-    def _param_cell(name_text: str) -> tuple[QWidget, QVBoxLayout]:
-        """A parameter's column: its name on top; the caller adds the control."""
+    def _param_cell(self, name_text: str, param_id: str | None = None) -> tuple[QWidget, QVBoxLayout]:
+        """A parameter's column: its name on top; the caller adds the control.
+        Right-clicking it offers its automation."""
         cell = QWidget()
         cell.setFixedWidth(PARAM_WIDTH)
+        if param_id is not None and self.bridge is not None:
+            cell.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            cell.customContextMenuRequested.connect(
+                lambda pos, c=cell: self._automation_menu(param_id, c.mapToGlobal(pos)))
         column = QVBoxLayout(cell)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(1)
@@ -245,6 +242,29 @@ class _DeviceFrame(QFrame):
         name.setToolTip(name_text)
         column.addWidget(name)
         return cell, column
+
+    def _automation_menu(self, param_id: str, at: QPoint) -> None:
+        editor, bridge, owner = self.editor, self.bridge, self.track_id
+        key = device_key(self.device_id, param_id)
+        menu = QMenu(self)
+        menu.addAction("Show Automation", lambda: editor.show_automation(owner, key)).setEnabled(
+            bridge.can_automate(owner, key))
+        menu.addAction("Delete Automation", lambda: editor.clear_envelope(owner, key)).setEnabled(
+            bool(editor.project.envelope(owner, key)))
+        if bridge.is_overridden(owner, key):
+            menu.addAction("Re-Enable Automation", lambda: bridge.re_enable_automation(owner))
+        menu.exec(at)
+
+    def automation_state(self, param_id: str) -> str | None:
+        return automation_state(self.bridge, self.track_id, device_key(self.device_id, param_id)) \
+            if self.bridge is not None else None
+
+    def follows_automation(self) -> bool:
+        """Whether a parameter shown moves with automation (so the view refreshes it as it plays)."""
+        return False
+
+    def refresh_automation(self) -> None:
+        """Shows which parameters are automated, and their values as they play."""
 
     @staticmethod
     def _readout(text: str) -> QLabel:
@@ -349,7 +369,7 @@ class DeviceWidget(_DeviceFrame):
 
     def __init__(self, track_id: str, device: Device, editor: ProjectEditor, bridge: EngineBridge,
                  page: int = 0, parent: QWidget | None = None):
-        super().__init__(track_id, device, editor, parent)
+        super().__init__(track_id, device, editor, parent, bridge)
         self.knobs: dict[str, tuple[Knob, QLabel, str]] = {}
         self.choices: dict[str, QComboBox] = {}
         engine_id = bridge.engine_device_id(track_id, device.id)
@@ -364,7 +384,7 @@ class DeviceWidget(_DeviceFrame):
         info = self.infos[n]
         value = self.device().params.get(info.id, info.default_value)
         track_id, editor = self.track_id, self.editor
-        cell, column = self._param_cell(info.name)
+        cell, column = self._param_cell(info.name, info.id)
         if info.value_labels:
             choice = QComboBox()
             choice.addItems(info.value_labels)
@@ -379,15 +399,20 @@ class DeviceWidget(_DeviceFrame):
         else:
             knob = Knob(info.min_value, info.max_value, value, default=info.default_value,
                         bipolar=info.min_value < 0 < info.max_value and info.unit == "",
-                        log_scale=info.log_scale, formatter=lambda v, u=info.unit: _format_value(v, u))
+                        log_scale=info.log_scale, formatter=lambda v, u=info.unit: format_value(v, u))
             knob.setFixedSize(KNOB_SIZE, KNOB_SIZE)
-            readout = self._readout(_format_value(value, info.unit))
+            readout = self._readout(format_value(value, info.unit))
             knob.valueChanged.connect(
                 lambda v, key, pid=info.id: editor.set_device_param(track_id, self.device_id, pid, v, key))
             column.addWidget(knob, 0, Qt.AlignmentFlag.AlignHCenter)
             column.addWidget(readout)
             self.knobs[info.id] = (knob, readout, info.unit)
+            knob.set_automation(self.automation_state(info.id))
         return cell
+
+    def _build_page(self) -> None:
+        super()._build_page()
+        self.refresh_automation()
 
     def refresh(self, device: Device) -> None:
         super().refresh(device)
@@ -395,9 +420,32 @@ class DeviceWidget(_DeviceFrame):
             value = device.params.get(param_id)
             if value is not None:
                 knob.setValue(value)
-                readout.setText(_elided(_format_value(value, unit), PARAM_WIDTH, readout))
+                readout.setText(_elided(format_value(value, unit), PARAM_WIDTH, readout))
         for param_id, choice in self.choices.items():
             value = device.params.get(param_id)
+            if value is not None:
+                choice.setCurrentIndex(round(value))
+        self.refresh_automation()
+
+    def follows_automation(self) -> bool:
+        return any(self.automation_state(param_id) == "on" for param_id in [*self.knobs, *self.choices])
+
+    def refresh_automation(self) -> None:
+        """Automated parameters show their envelope's value (their own again when it stops)."""
+        device = self.device()
+        for param_id, (knob, readout, unit) in self.knobs.items():
+            state = self.automation_state(param_id)
+            knob.set_automation(state)
+            value = (self.bridge.current_value(self.track_id, device_key(self.device_id, param_id)) if state == "on"
+                     else device.params.get(param_id))
+            if value is not None:
+                knob.setValue(value)
+                readout.setText(_elided(format_value(value, unit), PARAM_WIDTH, readout))
+        for param_id, choice in self.choices.items():
+            if self.automation_state(param_id) == "on":
+                value = self.bridge.current_value(self.track_id, device_key(self.device_id, param_id))
+            else:
+                value = device.params.get(param_id)
             if value is not None:
                 choice.setCurrentIndex(round(value))
 
@@ -408,8 +456,7 @@ class PluginDeviceWidget(_DeviceFrame):
 
     def __init__(self, track_id: str, device: Device, editor: ProjectEditor, bridge: EngineBridge,
                  page: int = 0, parent: QWidget | None = None):
-        super().__init__(track_id, device, editor, parent)
-        self.bridge = bridge
+        super().__init__(track_id, device, editor, parent, bridge)
         self.engine = bridge.engine
         self.engine_id = bridge.engine_device_id(track_id, device.id)
         self.knobs: dict[int, tuple[Knob, QLabel]] = {}  # parameter index ->
@@ -455,11 +502,7 @@ class PluginDeviceWidget(_DeviceFrame):
     # --- Parameters ----------------------------------------------------------------
 
     def _text(self, index: int, value: float) -> str:
-        info = self.infos[index]
-        text = self.engine.processor_param_text(self.engine_id, index, value)
-        if not text:
-            return f"{value:.2f}"
-        return text if not info.unit or info.unit in text else f"{text} {info.unit}"
+        return self.bridge.plugin_param_text(self.engine_id, index, value)
 
     def _clear_params(self) -> None:
         self.knobs.clear()
@@ -469,7 +512,7 @@ class PluginDeviceWidget(_DeviceFrame):
         index = self.shown[n]
         info = self.infos[index]
         value = self.engine.processor_param(self.engine_id, index)
-        cell, column = self._param_cell(info.name)
+        cell, column = self._param_cell(info.name, info.id)
         if info.value_labels:
             choice = QComboBox()
             choice.addItems(info.value_labels)
@@ -490,7 +533,13 @@ class PluginDeviceWidget(_DeviceFrame):
             column.addWidget(knob, 0, Qt.AlignmentFlag.AlignHCenter)
             column.addWidget(readout)
             self.knobs[index] = (knob, readout)
+            knob.set_automation(self.automation_state(info.id))
         return cell
+
+    def refresh_automation(self) -> None:
+        """Marks automated parameters; the plug-in reports their values as they play (refresh_values)."""
+        for index, (knob, _readout) in self.knobs.items():
+            knob.set_automation(self.automation_state(self.infos[index].id))
 
     def _edit(self, index: int, value: float, gesture: object | None) -> None:
         old = self.engine.processor_param(self.engine_id, index)
@@ -505,6 +554,7 @@ class PluginDeviceWidget(_DeviceFrame):
             readout.setText(_elided(self._text(index, value), PARAM_WIDTH, readout))
         for index, choice in self.choices.items():
             choice.setCurrentIndex(round(self.engine.processor_param(self.engine_id, index)))
+        self.refresh_automation()
         self._update_tooltip()
 
     def refresh(self, device: Device) -> None:
@@ -641,7 +691,23 @@ class DevicePanel(QFrame):
         bridge.plugin_params_rebuilt.connect(self._on_plugin_rebuilt)
         bridge.plugin_editor_changed.connect(self._on_plugin_editor)
         bridge.devices_loaded.connect(lambda track_id: self._on_devices_changed(track_id, rebuild=True))
+        bridge.automation_state_changed.connect(self._on_automation_state)
+        bridge.position_changed.connect(self._follow_automation)
         self.show_track(None)
+
+    def _current_widgets(self) -> list[_DeviceFrame]:
+        """The widgets of devices still in the chain (it may be changing: they are rebuilt after)."""
+        return [self.widgets[i] for i in self._chain_ids() if i in self.widgets]
+
+    def _on_automation_state(self, owner: str) -> None:
+        if owner == self.track_id:
+            for widget in self._current_widgets():
+                widget.refresh_automation()
+
+    def _follow_automation(self) -> None:
+        for widget in self._current_widgets():
+            if widget.follows_automation():
+                widget.refresh_automation()
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)

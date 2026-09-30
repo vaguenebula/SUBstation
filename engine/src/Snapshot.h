@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "AudioSource.h"
+#include "Automation.h"
 #include "Processor.h"
 #include "Warp.h"
 #include "rt/RtUtils.h"
@@ -18,7 +19,8 @@
 namespace gil {
 
 // Per-track state that changes continuously and therefore lives outside the
-// snapshot. Shared between all snapshots that contain the track.
+// snapshot. Shared between all snapshots that contain the track. The master
+// has one too (it never mutes or solos).
 struct TrackParams {
     // Written by the API, read by the audio thread.
     std::atomic<float> gain{1.f};
@@ -30,10 +32,30 @@ struct TrackParams {
     std::atomic<float> peakLeft{0.f};
     std::atomic<float> peakRight{0.f};
 
-    // Audio-thread-only fader smoothing; persists across snapshots.
-    SmoothedValue gainLeft;
-    SmoothedValue gainRight;
+    // Audio-thread-only fader smoothing; persists across snapshots. Automation
+    // replaces volume or pan sample by sample; where it stops, the smoothing
+    // carries on from its last value.
+    SmoothedValue audible;  // 0 when muted (or another track is soloed), else 1
+    SmoothedValue volume;
+    SmoothedValue panLeft;
+    SmoothedValue panRight;
     double smoothingSampleRate = 0.0;
+};
+
+// An automation envelope as the renderer plays it: a processor's parameter, or
+// a mixer control of a track or the master.
+struct AutomationRender {
+    std::vector<AutomationNode> nodes;    // sorted by time; empty: not automated
+    std::shared_ptr<Processor> processor;  // null for a mixer control
+    int param = 0;                         // the processor's parameter index
+    int steps = 0;                         // > 0: a discrete parameter (values snap to its steps)
+    int insert = -1;                       // the processor's place in the track's chain
+    // How late the target hears the timeline: the latency of the devices before
+    // it (for a fader, the track's delay-compensated total). Its automation is
+    // delayed as much, so it stays with the audio.
+    int latency = 0;
+
+    bool empty() const noexcept { return nodes.empty(); }
 };
 
 struct ClipRender {
@@ -118,6 +140,8 @@ struct TrackRender {
     int latency = 0;                    // samples the enabled inserts add
     int compensation = 0;               // samples the track is delayed by to line up with the slowest one
     std::shared_ptr<DelayLine> delay;   // for the live renderer (offline renders bring their own)
+    std::vector<AutomationRender> automation;  // of its devices' parameters, in chain order
+    AutomationRender volume, pan;              // of its mixer
 };
 
 struct RenderSnapshot {
@@ -131,6 +155,8 @@ struct RenderSnapshot {
     int64_t clipFadeSamples = 0;
     int maxLatency = 0;  // the output lags the timeline by this much (tracks and metronome alike)
     std::vector<TrackRender> tracks;
+    std::shared_ptr<TrackParams> master;
+    AutomationRender masterVolume, masterPan;
     WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
 
     double samplesPerBeat() const { return sampleRate * 60.0 / tempo; }

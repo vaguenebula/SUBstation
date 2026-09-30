@@ -92,6 +92,8 @@ QPushButton:checked {{ background: {ACCENT}; color: {ACCENT_TEXT}; }}
 QPushButton[role="activator"]:checked {{ background: {ACTIVATOR_ON}; color: {ACCENT_TEXT}; }}
 QPushButton[role="solo"]:checked {{ background: {SOLO_ON}; color: {ACCENT_TEXT}; }}
 QPushButton[role="play"]:checked {{ background: {PLAY_ON}; }}
+QPushButton[role="re-enable"] {{ padding: 2px; min-width: 26px; min-height: 22px; }}
+QPushButton[role="re-enable"]:checked {{ background: {ACCENT}; }}
 QPushButton[role="tool"] {{ padding: 2px; min-width: 26px; min-height: 22px; }}
 QPushButton[role="activator"], QPushButton[role="solo"] {{
     padding: 0px; font-size: 8pt; font-weight: 600; border-radius: 2px;

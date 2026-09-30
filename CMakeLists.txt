@@ -130,6 +130,7 @@ nanobind_add_module(_engine NB_STATIC
     engine/src/Renderer.cpp
     engine/src/Metronome.cpp
     engine/src/Warp.cpp
+    engine/src/processors/BuiltinProcessor.cpp
     engine/src/processors/Synth.cpp
     engine/src/plugins/EditorWindow.cpp
     engine/src/plugins/Vst3Format.cpp

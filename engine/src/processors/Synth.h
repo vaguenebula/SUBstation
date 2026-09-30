@@ -8,12 +8,12 @@
 #include <cstdint>
 #include <vector>
 
-#include "Processor.h"
+#include "processors/BuiltinProcessor.h"
 #include "rt/RtUtils.h"
 
 namespace gil {
 
-class SynthProcessor final : public Processor {
+class SynthProcessor final : public BuiltinProcessor {
 public:
     enum Param { Wave = 0, Attack, Decay, Sustain, Release, Cutoff, Resonance, Volume, NumParams };
     enum class Waveform : uint8_t { Sine, Triangle, Saw, Square };
@@ -26,13 +26,11 @@ public:
 
     void prepare(double sampleRate, int maxBlockSize) override;
     void reset() override;
-    // Writes (does not add) the synth's output: it is the first device on a MIDI track.
-    void process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) override;
     int tailSamples() const override;
 
-    const std::vector<ParamInfo>& params() const override;
-    float getParam(int index) const override;
-    void setParam(int index, float value) override;
+protected:
+    // Writes (does not add) the synth's output: it is the first device on a MIDI track.
+    void render(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) override;
 
 private:
     enum class Stage : uint8_t { Attack, Decay, Release };  // Decay ends at, and holds, the sustain level
@@ -62,9 +60,7 @@ private:
     void noteOff(uint8_t key);
     void renderVoices(int from, int to, Waveform wave, const Envelope& env);
     Envelope envelope() const;
-    float param(Param p) const { return values_[p].load(std::memory_order_relaxed); }
 
-    std::array<std::atomic<float>, NumParams> values_{};
     std::array<Voice, kMaxVoices> voices_{};
     uint64_t noteCounter_ = 0;
     double sampleRate_ = 48000.0;

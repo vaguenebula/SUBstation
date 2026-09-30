@@ -1,7 +1,9 @@
 """Project files: JSON (.gilproj). Clip paths are stored both absolute and
 relative to the project file, so a project folder can be moved. MIDI tracks
 store their clips' notes inline, as [pitch, start, length, velocity]. Plug-in
-devices store which plug-in they are and its state (a .vstpreset, base64)."""
+devices store which plug-in they are and its state (a .vstpreset, base64).
+Automation is stored per track (and for the master) by target key, each
+envelope as [beat, value, curve] points, with what the arrangement shows of it."""
 
 from __future__ import annotations
 
@@ -9,6 +11,8 @@ import json
 import os
 from pathlib import Path
 
+from . import automation
+from .automation import AutomationPoint, AutomationView, Envelope
 from .notes import normalize
 from .project import (
     DEFAULT_TRACK_HEIGHT,
@@ -28,7 +32,7 @@ from .project import (
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 3  # 2: MIDI tracks, 3: plug-ins
+VERSION = 4  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan
 EXTENSION = ".gilproj"
 
 
@@ -97,6 +101,34 @@ def _device(d: dict) -> Device:
                   state=state if isinstance(state, str) else None)
 
 
+def _automation_to_dict(envelopes: dict[str, Envelope]) -> dict:
+    return {key: [[p.beat, p.value, p.curve] for p in points] for key, points in envelopes.items() if points}
+
+
+def _view_to_dict(view: AutomationView) -> dict:
+    return {"shown": view.shown, "key": view.key, "lanes": list(view.lanes)}
+
+
+def _automation(data) -> dict[str, Envelope]:
+    """Envelopes as saved; targets this version doesn't know are dropped."""
+    envelopes = {}
+    for key, points in (data or {}).items():
+        if not automation.is_key(key):
+            continue
+        envelope = automation.normalize(AutomationPoint(float(p[0]), float(p[1]), float(p[2]) if len(p) > 2 else 0.0)
+                                        for p in points)
+        if envelope:
+            envelopes[key] = envelope
+    return envelopes
+
+
+def _view(data) -> AutomationView:
+    data = data or {}
+    key = data.get("key")
+    return AutomationView(shown=bool(data.get("shown", False)), key=key if key and automation.is_key(key) else None,
+                          lanes=tuple(k for k in data.get("lanes", []) if automation.is_key(k)))
+
+
 def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
     base = project_file.parent if project_file else None
     return {
@@ -105,7 +137,9 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
         "tempo": project.tempo,
         "time_signature": [project.time_signature.numerator, project.time_signature.denominator],
         "loop": {"enabled": project.loop_enabled, "start": project.loop_start, "end": project.loop_end},
-        "master": {"volume_db": project.master_volume_db},
+        "master": {"volume_db": project.master_volume_db, "pan": project.master_pan,
+                   "automation": _automation_to_dict(project.master_automation),
+                   "automation_view": _view_to_dict(project.master_automation_view)},
         "tracks": [
             {
                 "id": t.id,
@@ -119,6 +153,8 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
                 "height": t.height,
                 "devices": [_device_to_dict(d) for d in t.devices],
                 "clips": [_clip_to_dict(c, base) for c in t.clips],
+                "automation": _automation_to_dict(t.automation),
+                "automation_view": _view_to_dict(t.automation_view),
             }
             for t in project.tracks
         ],
@@ -191,6 +227,8 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
                 key=lambda c: c.start_beat,
             ),
             kind=kind,
+            automation=_automation(t.get("automation")),
+            automation_view=_view(t.get("automation_view")),
         ))
     return tracks
 
@@ -207,13 +245,18 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
         raise ProjectFileError("This project was saved by a newer version of GIL Studio")
     num, den = data.get("time_signature", [4, 4])
     loop = data.get("loop", {})
+    master = data.get("master", {})
     project.replace_contents(
         tempo=float(data.get("tempo", 120.0)),
         time_signature=TimeSignature(int(num), int(den)),
         loop_enabled=bool(loop.get("enabled", False)),
         loop_start=float(loop.get("start", 0.0)),
         loop_end=float(loop.get("end", 16.0)),
-        master_volume_db=float(data.get("master", {}).get("volume_db", 0.0)),
+        master_volume_db=float(master.get("volume_db", 0.0)),
+        master_pan=max(-1.0, min(1.0, float(master.get("pan", 0.0)))),
+        master_automation={k: v for k, v in _automation(master.get("automation")).items()
+                           if k in automation.MIXER_KEYS},  # the master has no devices (yet)
+        master_automation_view=_view(master.get("automation_view")),
         tracks=tracks_from_dict(data, project_file),
         path=project_file,
     )

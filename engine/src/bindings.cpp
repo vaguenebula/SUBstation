@@ -103,7 +103,43 @@ NB_MODULE(_engine, m) {
         .def_ro("automatable", &gil::ParamInfo::automatable)
         .def_ro("read_only", &gil::ParamInfo::readOnly)
         .def_ro("hidden", &gil::ParamInfo::hidden)
+        .def_prop_ro("step_count", &gil::ParamInfo::stepCount,
+                     "Steps between the lowest and highest value of a discrete parameter; 0 if continuous.")
+        .def("to_normalized", &gil::ParamInfo::toNormalized, "plain"_a,
+             "A plain value as automation sees it (0..1).")
+        .def("from_normalized", &gil::ParamInfo::fromNormalized, "normalized"_a)
         .def("__repr__", [](const gil::ParamInfo& p) { return "ParamInfo('" + p.id + "', '" + p.name + "')"; });
+
+    nb::class_<gil::AutomationPoint>(m, "AutomationPoint")
+        .def(
+            "__init__",
+            [](gil::AutomationPoint* self, double beat, float value, float curve) {
+                new (self) gil::AutomationPoint{beat, value, curve};
+            },
+            "beat"_a, "value"_a, "curve"_a = 0.0f)
+        .def_rw("beat", &gil::AutomationPoint::beat)
+        .def_rw("value", &gil::AutomationPoint::value, "Normalized, 0..1.")
+        .def_rw("curve", &gil::AutomationPoint::curve, "How the segment to the next point bends (-1..1).")
+        .def("__repr__", [](const gil::AutomationPoint& a) {
+            return "AutomationPoint(" + std::to_string(a.beat) + ", " + std::to_string(a.value) + ", " +
+                   std::to_string(a.curve) + ")";
+        });
+
+    nb::class_<gil::AutomationLaneDesc>(m, "AutomationLane")
+        .def(
+            "__init__",
+            [](gil::AutomationLaneDesc* self, uint32_t processorId, std::string param,
+               std::vector<gil::AutomationPoint> points) {
+                new (self) gil::AutomationLaneDesc{processorId, std::move(param), std::move(points)};
+            },
+            "processor_id"_a, "param"_a, "points"_a,
+            "An envelope: of a device's parameter (by id), or with processor_id 0 of the mixer's "
+            "'volume' or 'pan'.")
+        .def_rw("processor_id", &gil::AutomationLaneDesc::processorId)
+        .def_rw("param", &gil::AutomationLaneDesc::param)
+        .def_rw("points", &gil::AutomationLaneDesc::points);
+    m.attr("AUTOMATION_CURVATURE") = gil::kAutomationCurvature;
+    m.attr("MAX_VOLUME_GAIN") = gil::kMaxVolumeGain;
 
     nb::class_<gil::PluginDescription>(m, "PluginDescription")
         .def_ro("format", &gil::PluginDescription::format)
@@ -298,6 +334,9 @@ NB_MODULE(_engine, m) {
         .def("set_track_mute", &Engine::setTrackMute, "track_id"_a, "mute"_a)
         .def("set_track_solo", &Engine::setTrackSolo, "track_id"_a, "solo"_a)
         .def("set_master_gain", &Engine::setMasterGain, "gain"_a)
+        .def("set_master_pan", &Engine::setMasterPan, "pan"_a)
+        .def("set_track_automation", &Engine::setTrackAutomation, "track_id"_a, "lanes"_a,
+             "Replace a track's automation (track_id 0: the master's) with these AutomationLanes.")
         .def("take_meters", &Engine::takeMeters, "Peak levels since the last call; track_id 0 is the master.")
         // Insert chain
         .def("add_builtin_processor", &Engine::addBuiltinProcessor, "track_id"_a, "type"_a, "index"_a = -1)

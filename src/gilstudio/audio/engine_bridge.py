@@ -13,6 +13,13 @@ editor come back from the engine as `plugin_param_edited`, for the undo stack.
 Audio devices (WASAPI or ASIO) open as the preferences describe. An ASIO
 driver whose settings change (in its control panel, or its clock) asks to be
 reset; the bridge then opens it again, with its new settings.
+
+Automation: every envelope of a track (or the master) goes to the engine, which
+plays it; its target follows it and the value the model holds for it (set by
+hand) counts again when the envelope goes. Changing an automated target by hand
+overrides its automation, as in Ableton: the engine stops playing that envelope
+until automation is re-enabled. Parameters of every kind are described to the
+UI as ParamSpecs (model/params.py).
 """
 
 from __future__ import annotations
@@ -26,6 +33,10 @@ from dataclasses import replace
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 
 from .. import _engine as ge
+from ..model import automation
+from ..model.automation import MASTER, MIXER_PAN, MIXER_VOLUME
+from ..model.editor import device_name
+from ..model.params import ParamSpec, format_value, mixer_specs
 from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Track
 from ..model.timebase import db_to_gain
 from .settings import AudioSettings
@@ -101,6 +112,8 @@ class EngineBridge(QObject):
     plugin_editor_changed = Signal(str, str)  # its editor opened or closed
     plugin_state_dirty = Signal()  # a plug-in changed in a way no edit shows: the project has changes
     devices_loaded = Signal(str)  # track id: its devices' processors were (re)created
+    # Automation owner (track id or MASTER): which of its envelopes play, or are overridden, changed.
+    automation_state_changed = Signal(str)
 
     def __init__(self, engine: ge.Engine, project: Project, parent: QObject | None = None):
         super().__init__(parent)
@@ -113,6 +126,11 @@ class EngineBridge(QObject):
         self._plugin_ids: dict[int, str] = {}  # engine id of each plug-in processor -> the path it came from
         self._plugin_states: dict[str, bytes] = {}  # device id -> its plug-in's state when it went away
         self._param_ids: dict[int, list[str]] = {}  # engine id -> parameter ids by index (cache)
+        self._param_infos: dict[int, list] = {}  # engine id -> its ParamInfos (cache)
+        self._param_specs: dict[int, list[ParamSpec]] = {}  # engine id -> its automatable parameters (cache)
+        self._automating: dict[str, set[str]] = {}  # owner -> the targets whose envelopes the engine plays
+        self._overridden: set[tuple[str, str]] = set()  # (owner, key) changed by hand while automated
+        self._mixer: dict[str, tuple[float, float]] = {}  # owner -> (volume dB, pan) the engine has
         self._busy = 0  # > 0 while a plug-in call may run a message loop that calls us back
         self.plugin_errors: dict[str, str] = {}  # device id -> why its plug-in isn't loaded
         self.known_plugins: dict[str, str] = {}  # plug-in uid -> file, from the scan: finds moved plug-ins
@@ -138,13 +156,14 @@ class EngineBridge(QObject):
         project.reset.connect(self._on_reset)
         project.track_inserted.connect(lambda tid, _i: self._add_engine_track(project.track(tid)))
         project.track_removed.connect(self._on_track_removed)
-        project.track_changed.connect(self._push_mixer)
+        project.track_changed.connect(self._on_track_changed)
         project.clips_changed.connect(self._push_clips)
         project.devices_changed.connect(self._sync_devices)
-        project.device_param_changed.connect(self._push_device_param)
+        project.device_param_changed.connect(self._on_device_param_changed)
         project.device_state_changed.connect(self._push_device_state)
         project.track_changed.connect(self._update_editor_titles)
         project.settings_changed.connect(self._push_settings)
+        project.automation_changed.connect(lambda owner, _key: self._push_automation(owner))
 
         self._position_timer = QTimer(self)
         self._position_timer.setInterval(16)
@@ -168,6 +187,11 @@ class EngineBridge(QObject):
         self._plugin_ids.clear()
         self._plugin_states.clear()
         self._param_ids.clear()
+        self._param_infos.clear()
+        self._param_specs.clear()
+        self._automating.clear()
+        self._overridden.clear()
+        self._mixer.clear()
         self.plugin_errors.clear()
         self.meters.clear()
         self._editors_wanted.clear()
@@ -175,6 +199,7 @@ class EngineBridge(QObject):
         for track in self.project.tracks:
             self._add_engine_track(track)
         self._push_settings()
+        self._push_automation(MASTER)
         # Forget decoded audio the new project doesn't use.
         used = {_key(c.path) for t in self.project.tracks if not t.is_midi for c in t.clips}
         self._sources = {k: s for k, s in self._sources.items() if k in used}
@@ -185,6 +210,7 @@ class EngineBridge(QObject):
         self._push_mixer(track.id)
         self._push_clips(track.id)
         self._sync_devices(track.id)
+        self._push_automation(track.id)
 
     def _on_track_removed(self, track_id: str, _index: int) -> None:
         for device_id, processor_id in self._devices.pop(track_id, []):
@@ -193,6 +219,26 @@ class EngineBridge(QObject):
         if engine_id is not None:
             self.engine.remove_track(engine_id)  # also removes its devices
         self.meters.pop(track_id, None)
+        self._automating.pop(track_id, None)
+        self._mixer.pop(track_id, None)
+        self._overridden = {(o, k) for o, k in self._overridden if o != track_id}
+
+    def _on_track_changed(self, track_id: str) -> None:
+        if track_id not in self._track_ids:
+            return
+        track = self.project.track(track_id)
+        self._override_changed_mixer(track_id, track.volume_db, track.pan)
+        self._push_mixer(track_id)
+
+    def _override_changed_mixer(self, owner: str, volume_db: float, pan: float) -> None:
+        """A mixer control changed by hand while automated: its automation stops."""
+        old = self._mixer.get(owner)
+        if old is None:
+            return
+        if volume_db != old[0]:
+            self.override_automation(owner, MIXER_VOLUME)
+        if pan != old[1]:
+            self.override_automation(owner, MIXER_PAN)
 
     def _push_mixer(self, track_id: str) -> None:
         engine_id = self._track_ids.get(track_id)
@@ -203,6 +249,7 @@ class EngineBridge(QObject):
         self.engine.set_track_pan(engine_id, track.pan)
         self.engine.set_track_mute(engine_id, track.mute)
         self.engine.set_track_solo(engine_id, track.solo)
+        self._mixer[track_id] = (track.volume_db, track.pan)
 
     def _push_clips(self, track_id: str) -> None:
         engine_id = self._track_ids.get(track_id)
@@ -233,6 +280,7 @@ class EngineBridge(QObject):
                      for d in track.devices]
             self._devices[track_id] = chain
             self.engine.set_track_processor_order(engine_track, [pid for _, pid in chain if pid is not None])
+            self._push_automation(track_id)  # its devices' envelopes go to the new processors
             self.devices_loaded.emit(track_id)
         self._push_enabled(track)
 
@@ -314,6 +362,8 @@ class EngineBridge(QObject):
             del self._plugin_ids[processor_id]
         self._enabled.pop(processor_id, None)
         self._param_ids.pop(processor_id, None)
+        self._param_infos.pop(processor_id, None)
+        self._param_specs.pop(processor_id, None)
         if remove:
             self.engine.remove_processor(processor_id)
 
@@ -323,11 +373,15 @@ class EngineBridge(QObject):
                 return engine_id
         return None
 
+    def _on_device_param_changed(self, track_id: str, device_id: str, param_id: str) -> None:
+        self.override_automation(track_id, automation.device_key(device_id, param_id))
+        self._push_device_param(track_id, device_id, param_id)
+
     def _push_device_param(self, track_id: str, device_id: str, param_id: str) -> None:
         engine_id = self.engine_device_id(track_id, device_id)
-        if engine_id is None:
+        value = self.project.device(track_id, device_id).params.get(param_id)
+        if engine_id is None or value is None:
             return
-        value = self.project.device(track_id, device_id).params[param_id]
         if engine_id in self._plugin_ids:
             index = self.engine.processor_param_index(engine_id, param_id)
             if index < 0 or self.engine.processor_param(engine_id, index) == value:
@@ -367,6 +421,7 @@ class EngineBridge(QObject):
                 self.engine.set_track_processor_order(self._track_ids[track_id],
                                                       [pid for _, pid in reloaded if pid is not None])
                 self._push_enabled(track)
+                self._push_automation(track_id)
                 self.devices_loaded.emit(track_id)
 
     def plugin_state(self, track_id: str, device_id: str) -> bytes | None:
@@ -512,6 +567,9 @@ class EngineBridge(QObject):
                 changed[place] = None
             elif event.type == kind.PARAM_INFO_CHANGED:
                 self._param_ids.pop(event.processor_id, None)
+                self._param_infos.pop(event.processor_id, None)
+                self._param_specs.pop(event.processor_id, None)
+                self._push_automation(place[0])  # its parameters may be elsewhere in the list now
                 self.plugin_params_rebuilt.emit(*place)
             elif event.type == kind.EDITOR_CLOSED:
                 self._editors_wanted.discard(place[1])
@@ -530,7 +588,187 @@ class EngineBridge(QObject):
         self.engine.tempo = p.tempo
         self.engine.set_time_signature(p.time_signature.numerator, p.time_signature.denominator)
         self.engine.set_loop(p.loop_enabled, p.loop_start, p.loop_end)
+        self._override_changed_mixer(MASTER, p.master_volume_db, p.master_pan)
+        self._push_master_mixer()
+
+    def _push_master_mixer(self) -> None:
+        p = self.project
         self.engine.set_master_gain(db_to_gain(p.master_volume_db))
+        self.engine.set_master_pan(p.master_pan)
+        self._mixer[MASTER] = (p.master_volume_db, p.master_pan)
+
+    # --- Automation ------------------------------------------------------------------
+
+    def _push_automation(self, owner: str) -> None:
+        """The owner's envelopes to the engine, but those overridden. Targets whose
+        envelope no longer plays go back to their own value."""
+        if owner == MASTER:
+            engine_id = 0
+        elif owner in self._track_ids:
+            engine_id = self._track_ids[owner]
+        else:
+            return
+        lanes, playing = [], set()
+        for key, points in self.project.automation(owner).items():
+            if not points or (owner, key) in self._overridden:
+                continue
+            lane = self._engine_lane(owner, key, points)
+            if lane is not None:
+                lanes.append(lane)
+                playing.add(key)
+        self.engine.set_track_automation(engine_id, lanes)
+        stopped = self._automating.get(owner, set()) - playing
+        self._automating[owner] = playing
+        for key in stopped:
+            self._push_own_value(owner, key)
+        self.automation_state_changed.emit(owner)
+
+    def _engine_lane(self, owner: str, key: str, points) -> ge.AutomationLane | None:
+        try:
+            target = automation.parse_key(key)
+        except ValueError:
+            return None
+        engine_points = [ge.AutomationPoint(p.beat, p.value, p.curve) for p in points]
+        if target[0] == "mixer":
+            return ge.AutomationLane(0, target[1], engine_points)
+        if owner == MASTER:
+            return None
+        processor_id = self.engine_device_id(owner, target[1])
+        return None if processor_id is None else ge.AutomationLane(processor_id, target[2], engine_points)
+
+    def _push_own_value(self, owner: str, key: str) -> None:
+        """A target no longer automated: back to the value it has in the model."""
+        if key in automation.MIXER_KEYS:
+            if owner == MASTER:
+                self._push_master_mixer()
+            elif self.project.has_track(owner):
+                self._push_mixer(owner)
+            return
+        device_id = automation.key_device(key)
+        if self.project.has_track(owner) and any(d.id == device_id for d in self.project.track(owner).devices):
+            self._push_device_param(owner, device_id, automation.parse_key(key)[2])
+
+    def is_automated(self, owner: str, key: str) -> bool:
+        """Whether the engine plays this target's envelope (it has one, not overridden)."""
+        return key in self._automating.get(owner, ())
+
+    def is_overridden(self, owner: str, key: str) -> bool:
+        return (owner, key) in self._overridden
+
+    @property
+    def has_overrides(self) -> bool:
+        return bool(self._overridden)
+
+    def override_automation(self, owner: str, key: str) -> None:
+        """The target was changed by hand: its automation stops until re-enabled."""
+        if self.is_automated(owner, key):
+            self._overridden.add((owner, key))
+            self._push_automation(owner)
+
+    def re_enable_automation(self, owner: str | None = None) -> None:
+        """Automation plays again where it was overridden (everywhere, or for one owner)."""
+        owners = {o for o, _ in self._overridden if owner is None or o == owner}
+        self._overridden = {(o, k) for o, k in self._overridden if o not in owners}
+        for o in owners:
+            self._push_automation(o)
+
+    def param_infos(self, processor_id: int) -> list:
+        infos = self._param_infos.get(processor_id)
+        if infos is None:
+            infos = self._param_infos[processor_id] = list(self.engine.processor_params(processor_id))
+        return infos
+
+    def plugin_param_text(self, processor_id: int, index: int, value: float) -> str:
+        """A plug-in's text for a value of its parameter, with its unit."""
+        info = self.param_infos(processor_id)[index]
+        text = self.engine.processor_param_text(processor_id, index, value)
+        if not text:
+            return f"{value:.2f}"
+        return text if not info.unit or info.unit in text else f"{text} {info.unit}"
+
+    def device_param_specs(self, track_id: str, device: Device) -> list[ParamSpec]:
+        """The parameters of a device that can be automated (none if it isn't loaded)."""
+        processor_id = self.engine_device_id(track_id, device.id)
+        if processor_id is None:
+            return []
+        specs = self._param_specs.get(processor_id)
+        if specs is None:
+            name = device_name(device)
+            is_plugin = processor_id in self._plugin_ids
+            specs = []
+            for index, info in enumerate(self.param_infos(processor_id)):
+                if not info.automatable or info.hidden or info.read_only:
+                    continue
+                text = (lambda v, i=index: self.plugin_param_text(processor_id, i, v)) if is_plugin else None
+                specs.append(ParamSpec.from_info(info, automation.device_key(device.id, info.id), name, text))
+            self._param_specs[processor_id] = specs
+        return specs
+
+    def param_groups(self, owner: str) -> list[tuple[str, str, list[ParamSpec]]]:
+        """What an owner has that can be automated, as (group id, name, specs): its
+        mixer ("mixer"), then each device (by id)."""
+        if owner == MASTER:
+            return [("mixer", "Mixer", mixer_specs(master=True))]
+        groups = [("mixer", "Mixer", mixer_specs())]
+        for device in self.project.track(owner).devices:
+            groups.append((device.id, device_name(device), self.device_param_specs(owner, device)))
+        return groups
+
+    def can_automate(self, owner: str, key: str) -> bool:
+        return any(spec.key == key for _, _, specs in self.param_groups(owner) for spec in specs)
+
+    def param_spec(self, owner: str, key: str) -> ParamSpec | None:
+        """A target's description; None if it doesn't exist (a device that is gone)."""
+        if key in automation.MIXER_KEYS:
+            return next(s for s in mixer_specs(master=owner == MASTER) if s.key == key)
+        if owner == MASTER or not self.project.has_track(owner):
+            return None
+        device_id = automation.key_device(key)
+        device = next((d for d in self.project.track(owner).devices if d.id == device_id), None)
+        if device is None:
+            return None
+        spec = next((s for s in self.device_param_specs(owner, device) if s.key == key), None)
+        if spec is None:  # not loaded: its values are still worth showing
+            param_id = automation.parse_key(key)[2]
+            spec = ParamSpec(key, param_id, device_name(device), text=lambda v: format_value(v, ""))
+        return spec
+
+    def own_value(self, owner: str, key: str) -> float | None:
+        """A target's value as set by hand (plain; None if not known)."""
+        if owner == MASTER:
+            return {MIXER_VOLUME: self.project.master_volume_db, MIXER_PAN: self.project.master_pan}.get(key)
+        if not self.project.has_track(owner):
+            return None
+        track = self.project.track(owner)
+        if key == MIXER_VOLUME:
+            return track.volume_db
+        if key == MIXER_PAN:
+            return track.pan
+        target = automation.parse_key(key)
+        device = next((d for d in track.devices if d.id == target[1]), None)
+        if device is None:
+            return None
+        processor_id = self.engine_device_id(owner, device.id)
+        if processor_id in self._plugin_ids:  # its values live in the plug-in
+            index = self.engine.processor_param_index(processor_id, target[2])
+            if index >= 0:
+                return self.engine.processor_param(processor_id, index)
+        value = device.params.get(target[2])
+        if value is None and processor_id is not None:
+            index = self.engine.processor_param_index(processor_id, target[2])
+            if index >= 0:
+                value = self.param_infos(processor_id)[index].default_value
+        return value
+
+    def current_value(self, owner: str, key: str, beat: float | None = None) -> float | None:
+        """What a target is at `beat` (default: the playhead): its envelope's value
+        while that plays, else its own (plain; None if not known)."""
+        spec = self.param_spec(owner, key)
+        if spec is not None and self.is_automated(owner, key):
+            value = automation.value_at(self.project.envelope(owner, key), self.position if beat is None else beat)
+            if value is not None:
+                return spec.from_normalized(spec.quantize(value))
+        return self.own_value(owner, key)
 
     # --- Sources -----------------------------------------------------------------
 

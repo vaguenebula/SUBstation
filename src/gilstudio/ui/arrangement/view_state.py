@@ -8,10 +8,14 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, Signal
 
+from ...model.automation import MASTER
 from ...model.editor import ProjectEditor
 from ...model.project import Project
 
 GRID_MIN_PIXELS = {-2: 6.0, -1: 11.0, 0: 20.0, 1: 40.0, 2: 80.0}  # narrowest .. widest
+AUTOMATION_LANE_HEIGHT = 44  # a lane shown below a track (or the master)
+# A track's own lane while its automation shows: room in its header for the choosers.
+MIN_AUTOMATION_ROW = 76
 
 
 class ViewState(QObject):
@@ -116,8 +120,12 @@ class Selection(QObject):
 
     A time selection made in the clips' band (or by clicking clips) is a clip
     range: `clips` holds the clips it touches (for the clip view) and Delete cuts
-    out just that range. Made lower in the lanes it is a lane range (for
-    automation, later)."""
+    out just that range. Made lower in the lanes it is a lane range; made in
+    automation lanes, `lanes` holds them (owner, target key), and Delete clears
+    their automation in the range.
+
+    Automation breakpoints can be selected too (`points`: owner, key, indices);
+    Delete deletes them."""
 
     changed = Signal()
     insert_changed = Signal()
@@ -129,16 +137,38 @@ class Selection(QObject):
         self.insert_beat = 0.0
         self.time_range: tuple[float, float, tuple[str, ...]] | None = None  # start, end, track ids
         self._range_selects_clips = False
-        self.focus = "clips"  # what Delete acts on: "clips", "track" or "devices" (the device view's)
+        self.lanes: tuple[tuple[str, str], ...] = ()  # automation lanes a lane range covers
+        self.points: tuple[str, str, frozenset[int]] | None = None  # selected automation breakpoints
+        # What Delete acts on: "clips", "track", "devices" (the device view's) or "automation" (breakpoints).
+        self.focus = "clips"
 
     def clear(self, track_id: str | None = None) -> None:
         """Select nothing (on `track_id`, if given: where the insert marker shows)."""
         self.clips = set()
         self.time_range = None
+        self.lanes = ()
+        self.points = None
         if track_id is not None:
             self.track_id = track_id
         self.focus = "clips"
         self.changed.emit()
+
+    def select_points(self, owner: str, key: str, indices) -> None:
+        """Select breakpoints of one envelope (none: select nothing)."""
+        indices = frozenset(indices)
+        self.clips = set()
+        self.time_range = None
+        self.lanes = ()
+        self.points = (owner, key, indices) if indices else None
+        if owner != MASTER:
+            self.track_id = owner
+        self.focus = "automation" if indices else "clips"
+        self.changed.emit()
+
+    def selected_points(self, owner: str, key: str) -> frozenset[int]:
+        if self.points is not None and self.points[:2] == (owner, key):
+            return self.points[2]
+        return frozenset()
 
     def select_clips(self, editor: ProjectEditor, refs, track_id: str | None = None) -> None:
         """Select the grid area that fully contains these clips: from the earliest
@@ -158,6 +188,8 @@ class Selection(QObject):
             self.focus = "track"
             self.clips = set()
             self.time_range = None
+            self.lanes = ()
+            self.points = None
         self.changed.emit()
 
     def focus_devices(self) -> None:
@@ -166,13 +198,17 @@ class Selection(QObject):
             self.focus = "devices"
             self.changed.emit()
 
-    def set_time_range(self, start: float, end: float, track_ids, clips=None) -> None:
+    def set_time_range(self, start: float, end: float, track_ids, clips=None, lanes=()) -> None:
         """Select a beat range across tracks. With `clips` (the clips it touches,
-        possibly none) it is a clip range, otherwise a lane range."""
+        possibly none) it is a clip range, otherwise a lane range: of automation
+        `lanes` (owner, key), if given (the master's have no track)."""
         track_ids = tuple(track_ids)
-        self.time_range = (start, end, track_ids) if end > start and track_ids else None
+        lanes = tuple(lanes) if clips is None else ()
+        self.time_range = (start, end, track_ids) if end > start and (track_ids or lanes) else None
         self._range_selects_clips = clips is not None
         self.clips = set(clips or ()) if self.time_range else set()
+        self.lanes = lanes if self.time_range else ()
+        self.points = None
         if track_ids:
             self.track_id = track_ids[0]
         self.focus = "clips"
@@ -189,31 +225,72 @@ class Selection(QObject):
         self.insert_changed.emit()
 
     def prune(self, project: Project) -> None:
-        """Drop references to clips/tracks that no longer exist."""
+        """Drop references to clips/tracks/breakpoints that no longer exist."""
         valid_tracks = {t.id for t in project.tracks}
         valid_clips = {(t.id, c.id) for t in project.tracks for c in t.clips}
         clips = self.clips & valid_clips
         track_id = self.track_id if self.track_id in valid_tracks else None
+        lanes = tuple(lane for lane in self.lanes if project.has_owner(lane[0]))
         time_range = self.time_range
         if time_range is not None:
             kept = tuple(t for t in time_range[2] if t in valid_tracks)
-            time_range = (time_range[0], time_range[1], kept) if kept else None
-        if clips != self.clips or track_id != self.track_id or time_range != self.time_range:
+            time_range = (time_range[0], time_range[1], kept) if kept or lanes else None
+        points = self.points
+        if points is not None:
+            owner, key, indices = points
+            count = len(project.envelope(owner, key)) if project.has_owner(owner) else 0
+            indices = frozenset(i for i in indices if i < count)
+            points = (owner, key, indices) if indices else None
+        if (clips != self.clips or track_id != self.track_id or time_range != self.time_range
+                or lanes != self.lanes or points != self.points):
             self.clips = clips
             self.track_id = track_id
             self.time_range = time_range
+            self.lanes = lanes if time_range else ()
+            self.points = points
+            if points is None and self.focus == "automation":
+                self.focus = "clips"
             self.changed.emit()
 
 
 @dataclass(frozen=True)
-class Row:
-    track_id: str
+class LaneRow:
+    """An automation lane shown below its owner's own lane."""
+
+    index: int  # in the owner's AutomationView.lanes
+    key: str
     top: int
     height: int
+
+
+@dataclass(frozen=True)
+class Row:
+    """A track: its own lane (clips; its automation too while that shows), then
+    the automation lanes shown below it."""
+
+    track_id: str
+    top: int
+    main_height: int  # the track's own lane
+    lanes: tuple[LaneRow, ...] = ()
+    automation: bool = False  # its automation shows
+
+    @property
+    def height(self) -> int:
+        return self.main_height + sum(lane.height for lane in self.lanes)
 
     @property
     def bottom(self) -> int:
         return self.top + self.height
+
+
+def automation_rows(view, top: int, main_height: int) -> tuple[int, tuple[LaneRow, ...]]:
+    """The height of an owner's own lane with its automation view, and the lanes below it."""
+    if not view.shown:
+        return main_height, ()
+    main_height = max(main_height, MIN_AUTOMATION_ROW)
+    lanes = tuple(LaneRow(i, key, top + main_height + i * AUTOMATION_LANE_HEIGHT, AUTOMATION_LANE_HEIGHT)
+                  for i, key in enumerate(view.lanes))
+    return main_height, lanes
 
 
 class TrackLayout:
@@ -230,8 +307,11 @@ class TrackLayout:
         self.rows = []
         y = 0
         for track in self.project.tracks:
-            self.rows.append(Row(track.id, y, track.height))
-            y += track.height
+            view = track.automation_view
+            main_height, lanes = automation_rows(view, y, track.height)
+            row = Row(track.id, y, main_height, lanes, view.shown)
+            self.rows.append(row)
+            y += row.height
         self._tops = [r.top for r in self.rows]
         self.total_height = y
 

@@ -1,15 +1,17 @@
-"""Ableton-style numeric field: drag vertically to change, double-click to type."""
+"""Ableton-style numeric field: drag vertically to change, double-click to type.
+A dot marks it automated (red) or its automation overridden (grey)."""
 
 from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QMouseEvent, QPainter, QWheelEvent
 from PySide6.QtWidgets import QLineEdit, QWidget
 
 from ... import theme
+from .knob import draw_automation_dot
 
 
 class ValueBox(QWidget):
@@ -37,6 +39,7 @@ class ValueBox(QWidget):
         self._wheel_gesture: tuple[object, float] | None = None
         self._editor: QLineEdit | None = None
         self._hover = False
+        self._automation: str | None = None
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setCursor(Qt.CursorShape.SizeVerCursor)
         self.setMinimumHeight(20)
@@ -50,6 +53,15 @@ class ValueBox(QWidget):
         value = self._constrain(value)
         if value != self._value:
             self._value = value
+            self.update()
+
+    def automation(self) -> str | None:
+        return self._automation
+
+    def set_automation(self, state: str | None) -> None:
+        """None, "on" (automated) or "off" (automation overridden)."""
+        if state != self._automation:
+            self._automation = state
             self.update()
 
     def _constrain(self, value: float) -> float:
@@ -82,6 +94,7 @@ class ValueBox(QWidget):
         p.drawRoundedRect(rect, 3, 3)
         p.setPen(QColor(theme.ACCENT if dragging else theme.TEXT))
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._format(self._value))
+        draw_automation_dot(p, self._automation, QPointF(6.0, rect.center().y()))
 
     def enterEvent(self, _event) -> None:
         self._hover = True

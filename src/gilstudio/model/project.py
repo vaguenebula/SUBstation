@@ -2,7 +2,11 @@
 
 The audio engine mirrors this model (see audio/engine_bridge.py). Mutating
 methods here are called only by undo commands (model/commands.py), which keeps
-every edit undoable and every change signalled.
+every edit undoable and every change signalled. (View state, like track heights
+and which automation shows, changes directly: it is saved but not undone.)
+
+Automation belongs to an owner: a track (its id) or the master (MASTER); see
+automation.py.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
+from .automation import MASTER, AutomationView, Envelope
 from .timebase import TimeSignature, beats_to_seconds, seconds_to_beats
 
 # Ableton-like clip/track colours.
@@ -190,6 +195,8 @@ class Track:
     clips: list[AnyClip] = field(default_factory=list)  # sorted by start_beat; MidiClips on MIDI tracks
     devices: list[Device] = field(default_factory=list)
     kind: str = "audio"  # one of TRACK_KINDS; fixed for the track's life
+    automation: dict[str, Envelope] = field(default_factory=dict)  # target key -> envelope (never empty)
+    automation_view: AutomationView = field(default_factory=AutomationView)
 
     @property
     def is_midi(self) -> bool:
@@ -204,7 +211,9 @@ class Project(QObject):
     devices_changed = Signal(str)  # track id: devices added/removed/toggled
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
     device_state_changed = Signal(str, str)  # track id, device id: a plug-in's whole state was set (a preset)
-    settings_changed = Signal()  # tempo, time signature, loop, master volume
+    settings_changed = Signal()  # tempo, time signature, loop, master volume and pan
+    automation_changed = Signal(str, str)  # owner (track id or MASTER), target key
+    automation_view_changed = Signal(str)  # owner: what its automation shows
     reset = Signal()  # everything replaced (new/open)
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -215,6 +224,9 @@ class Project(QObject):
         self.loop_start = 0.0
         self.loop_end = 16.0
         self.master_volume_db = 0.0
+        self.master_pan = 0.0
+        self.master_automation: dict[str, Envelope] = {}
+        self.master_automation_view = AutomationView()
         self.tracks: list[Track] = []
         self.path: Path | None = None
 
@@ -245,6 +257,23 @@ class Project(QObject):
         """End of the last clip (0 for an empty arrangement)."""
         return max((c.end_beat(self.tempo) for t in self.tracks for c in t.clips), default=0.0)
 
+    def has_owner(self, owner: str) -> bool:
+        return owner == MASTER or self.has_track(owner)
+
+    def automation(self, owner: str) -> dict[str, Envelope]:
+        """An owner's envelopes by target key (read only: change them through commands)."""
+        return self.master_automation if owner == MASTER else self.track(owner).automation
+
+    def envelope(self, owner: str, key: str) -> Envelope:
+        return self.automation(owner).get(key, ())
+
+    def automation_view(self, owner: str) -> AutomationView:
+        return self.master_automation_view if owner == MASTER else self.track(owner).automation_view
+
+    def owners(self) -> list[str]:
+        """Everything that has automation: the tracks, then the master."""
+        return [t.id for t in self.tracks] + [MASTER]
+
     def next_color(self) -> str:
         return TRACK_COLORS[len(self.tracks) % len(TRACK_COLORS)]
 
@@ -273,7 +302,8 @@ class Project(QObject):
     def update_track(self, track_id: str, **attrs) -> None:
         track = self.track(track_id)
         for name, value in attrs.items():
-            if not hasattr(track, name) or name in ("id", "kind", "clips", "devices"):
+            if not hasattr(track, name) or name in ("id", "kind", "clips", "devices", "automation",
+                                                    "automation_view"):
                 raise AttributeError(name)
             setattr(track, name, value)
         self.track_changed.emit(track_id)
@@ -306,20 +336,42 @@ class Project(QObject):
 
     def update_settings(self, **attrs) -> None:
         for name, value in attrs.items():
-            if name not in ("tempo", "time_signature", "loop_enabled", "loop_start", "loop_end", "master_volume_db"):
+            if name not in ("tempo", "time_signature", "loop_enabled", "loop_start", "loop_end", "master_volume_db",
+                            "master_pan"):
                 raise AttributeError(name)
             setattr(self, name, value)
         self.settings_changed.emit()
 
+    def set_envelope(self, owner: str, key: str, points: Envelope) -> None:
+        """Replace an envelope; an empty one removes the target's automation."""
+        envelopes = self.automation(owner)
+        if points:
+            envelopes[key] = tuple(points)
+        else:
+            envelopes.pop(key, None)
+        self.automation_changed.emit(owner, key)
+
+    def set_automation_view(self, owner: str, view: AutomationView) -> None:
+        if owner == MASTER:
+            self.master_automation_view = view
+        else:
+            self.track(owner).automation_view = view
+        self.automation_view_changed.emit(owner)
+
     def replace_contents(self, *, tempo: float, time_signature: TimeSignature, loop_enabled: bool,
                          loop_start: float, loop_end: float, master_volume_db: float,
-                         tracks: list[Track], path: Path | None) -> None:
+                         tracks: list[Track], path: Path | None, master_pan: float = 0.0,
+                         master_automation: dict[str, Envelope] | None = None,
+                         master_automation_view: AutomationView | None = None) -> None:
         self.tempo = tempo
         self.time_signature = time_signature
         self.loop_enabled = loop_enabled
         self.loop_start = loop_start
         self.loop_end = loop_end
         self.master_volume_db = master_volume_db
+        self.master_pan = master_pan
+        self.master_automation = dict(master_automation or {})
+        self.master_automation_view = master_automation_view or AutomationView()
         self.tracks = tracks
         self.path = path
         self.reset.emit()

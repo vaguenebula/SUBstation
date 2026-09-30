@@ -27,7 +27,14 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - Over The Top: a built-in multiband upward/downward compressor in the style of the one every drop uses, with a single big *Soundgoodize* knob (depth) and an output trim. Three bands (split at 88 Hz and 2.5 kHz), each squashed from above and dragged up from below. At 0 % it passes the audio through untouched.
 - VST3 plug-ins, instruments and effects (see below).
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
-- Master track, metronome, loop brace, follow mode, CPU meter.
+- Master track (volume and pan), metronome, loop brace, follow mode, CPU meter.
+- **Automation**, as in Ableton's arrangement, of every device parameter (built-in devices and plug-ins alike) and of each track's and the master's volume and pan.
+  - **A** shows (or hides) the automation of every track and the master. A track's automation shows in its own lane, over its clips (the clips' title bar still moves and selects them), with the parameter chosen in its header: a device chooser (*Mixer* or one of its devices) and a parameter chooser; automated ones are marked with a red dot. **+** shows another parameter in a lane below the track (**−** removes it). Right-click a track header (or the master's) to show or hide its automation.
+  - Changing a parameter by hand (a knob in the device view, a track's volume or pan, the master's, or a control in a plug-in's own editor) shows its track's automation with that parameter.
+  - In a lane: **click** to add a breakpoint (on the grid when snapping; Alt-click where there is no segment to bend: off the grid). **Drag** breakpoints to move them in time and value (Shift-click or Ctrl-click selects several, which move together; Alt drags off the grid, Shift finer; they can't pass their neighbours; the value shows as you drag). **Alt-drag** between two breakpoints to bend that segment (up bulges it upward). **Double-click** a breakpoint, or select breakpoints and press **Delete**, to delete them. Drag across lanes (not on a breakpoint) to select a time range on them: **Delete** clears their automation there (the envelope outside stays as it was), **Ctrl+D** duplicates it after the range. Right-click a lane for more (delete the envelope, remove the lane, hide the automation). All of it is undoable (one step per drag).
+  - Before its first breakpoint an envelope holds the first one's value, after its last the last one's; two breakpoints at the same time make a step. Parameters that choose between values (lists, steps) move in steps, and their lanes show them so.
+  - Automated controls follow their automation as it plays (and where the playhead is placed when stopped), in the device view, the track headers and plug-ins' own editors; they are marked with a red dot. Changing an automated parameter by hand **overrides** its automation, as in Ableton: its envelope turns grey and the parameter stays where you put it until **Re-Enable Automation** (the lit button next to Record, *Edit › Re-Enable Automation*, or a lane's or parameter's right-click menu). Right-click a parameter in the device view to show its automation, delete it or re-enable it.
+  - The engine plays envelopes sample-accurately: volume and pan sample by sample; device parameters at each breakpoint and every 64 samples along a slope (plug-ins get them as sample-accurate VST3 parameter changes; built-in devices process their blocks in pieces where values change). Automation is delayed along with a track's audio by the plug-in latency before it (delay compensation), and it is in exports.
 - Browser: categories (All, Samples, Built-in, Plug-ins), user "Places", instant search, click-to-preview, drag-and-drop or double-click to add clips. Lists sort by *Rank* (what you add most, and most recently, first; counts kept in `%LOCALAPPDATA%\GIL Studio\library.json`) or *Name*.
   - Instruments (built-in or plug-in) go on a MIDI track, replacing its instrument. With no MIDI track selected, double-clicking one or dropping it below the tracks makes one.
   - The files under the places are indexed in the background and the index is kept (`%LOCALAPPDATA%\GIL Studio\browser-index.bin`), so the next start shows it at once and only looks again at folders that changed. Files added, removed or renamed in a place show up while the program runs. Results show while a first scan is still going. Right-click › *Rescan* reads every folder again (for drives that don't report changes).
@@ -117,12 +124,12 @@ python -m pytest
 ```
 
 - ASIO tests use a fake ASIO driver built with the engine (`tests/asio_driver`): a real in-process COM object, loaded from its DLL rather than registered (`GILSTUDIO_ASIO_DRIVERS`), so they never see the installed drivers and need no sound card. Its hooks (called through ctypes) let a test drive it a buffer at a time, feed its inputs, read back the bytes the engine wrote to its outputs, and send the engine what drivers send (reset requests, new latencies, a new sample rate). They check every sample format against numpy's decoding, output channels and mono, inputs, rates and buffer sizes, resets and the control panel, errors, playing on the driver's own thread, and the preferences and start-up in the application. They are skipped when the engine was built without the ASIO SDK.
-- Engine tests render offline, so no audio device is needed. They check sample-exact clip placement, gain/pan/mute/solo, looping, tempo changes, the metronome, fades, the Utility device and export.
+- Engine tests render offline, so no audio device is needed. They check sample-exact clip placement, gain/pan/mute/solo, looping, tempo changes, the metronome, fades, the Utility device and export; and automation: volume and pan (tracks and master) sample by sample, curves, device parameters (split exactly where they change, discrete ones in steps), and the normalized mapping of parameters.
 - Warp tests check that warped clips land on their beats at any tempo, keep their pitch, start sample-aligned (also after a locate), transpose to the right frequency, and that Re-Pitch filters rather than aliases.
 - MIDI engine tests check that notes start on their sample and follow the tempo, that the Synth plays the right pitch and level, and that loop wraps and offline renders leave no hanging notes.
-- Model tests cover overlap resolution, trims, splits (audio and MIDI), note editing, undo/redo and save/load.
+- Model tests cover overlap resolution, trims, splits (audio and MIDI), note editing, undo/redo and save/load; and automation: envelope maths (curves, exact splits, range delete and duplicate), the parameter mappings against the engine's, undoable edits, what happens to a deleted device's automation, the lanes shown, and saving.
 - Browser tests hold the native backend to the Python code it replaced (`tests/browser_reference.py`, kept as it was): the same files from a folder tree (hidden names, depth and file limits, junctions and symbolic links, overlapping and missing places) in the same order, and the same results for random queries, sorts, filters and use counts, item for item. Python's own text rules (`str.lower`, `casefold`, `split`, the regex word starts) are checked for every Unicode character. Others check the saved index (checked by folder times, rescan, damaged files), changes seen while running, that only the latest search's results are handed out, paging, and that waiting releases the GIL.
-- The UI tests drive the real main window offscreen: mouse drags, drops, header controls, dialogs, and the piano roll.
+- The UI tests drive the real main window offscreen: mouse drags, drops, header controls, dialogs, and the piano roll; and automation lanes: A, parameters showing their lanes, clicking, dragging and bending breakpoints, deleting, time ranges, overriding and re-enabling, controls following automation, the master's lane, lanes below tracks, and saving.
 - VST3 tests use three test plug-ins built with the engine: an instrument with a separate controller (it reports the transport it gets back as parameters), a single-component effect with adjustable latency and a Win32 editor, and a mono effect without a controller. They check scanning (including a plug-in that crashes or hangs while loading), sample-exact notes, parameters, the transport and loop splitting, latency compensation, mono buses, state and presets, editor windows (resizing, closing, edits reported for undo), and the device view, browser, undo and projects in the application. Editor tests briefly show real windows. The tests see only these plug-ins, never the installed ones.
 
 ## Keyboard shortcuts
@@ -134,7 +141,10 @@ python -m pytest
 | Go to start | Home |
 | Insert audio track / MIDI track | Ctrl+T / Ctrl+Shift+T |
 | Insert MIDI clip (on the selected MIDI track, or over a time selection) | Ctrl+Shift+D (or Ctrl+Shift+M) |
-| Duplicate / split at insert marker / delete | Ctrl+D / Ctrl+E / Delete |
+| Duplicate / split at insert marker / delete (clips, or automation in a lane's time selection) | Ctrl+D / Ctrl+E / Delete |
+| Show / hide automation (every track and the master) | A |
+| Add an automation breakpoint / delete one | click in a lane / double-click it |
+| Bend an automation segment | Alt-drag between two breakpoints |
 | Select all clips | Ctrl+A |
 | Undo / redo | Ctrl+Z / Ctrl+Y |
 | Loop on/off | Ctrl+L |
@@ -161,12 +171,14 @@ In the piano roll, Delete, Ctrl+A and Ctrl+D act on notes, Ctrl+U quantizes them
 ```
 src/gilstudio/                 Python: UI, model, undo, file I/O
   model/        project.py (Project/Track/Clip/MidiClip/Note + Qt signals), edits.py (pure clip maths),
-                notes.py (pure note editing), editor.py (undoable operations),
+                notes.py (pure note editing), automation.py (pure envelope maths, targets, mixer mappings),
+                params.py (ParamSpec: any parameter described alike), editor.py (undoable operations),
                 commands.py (QUndoCommands), serialization.py
   audio/        engine_bridge.py: mirrors the model into the engine; async decoding;
                 polls the playhead (60 Hz) and meters (30 Hz)
   ui/           main_window, transport_bar, device_panel, dialogs, clip_view,
-                arrangement/ (custom-painted ruler, lanes, headers; numpy waveform tiles),
+                arrangement/ (custom-painted ruler, lanes, headers; numpy waveform tiles;
+                automation_lanes.py: drawing and editing envelopes; automation_header.py: the choosers),
                 piano_roll/ (keys, ruler, note grid, velocity lane),
                 browser/ (the panel, paged lists, use counts, preview; file_index.py drives the native backend)
   plugins/      scanner.py: finds VST3 plug-ins and reads them in child processes (scan_worker.py); cache
@@ -180,14 +192,16 @@ browser/src/                   C++: the browser's backend, module gilstudio._bro
 benchmarks/                    the browser's benchmarks and their results (not run by pytest)
 engine/src/                    C++: everything on the audio thread, and plug-in hosting
   Engine        public API; edit model; builds and publishes render snapshots
-  Renderer      mixing: clips and notes -> inserts -> fader/pan -> master; loop; metronome; preview
+  Renderer      mixing: clips and notes -> inserts -> fader/pan -> master; loop; metronome; preview; automation
+  Automation.h  envelopes: breakpoints, curves, evaluation, the mixer's lane mappings
   Warp          stretch voices (time stretch / pitch shift) and the Re-Pitch resampler
   AudioSource   decoding (WAV/FLAC/MP3) at the engine rate + peak mipmaps
   AudioDevice   devices of any driver type: DeviceConfig in, planar duplex AudioIO callbacks out
   backends/     WasapiBackend (miniaudio), AsioBackend (IASIO; only with the ASIO SDK),
                 AsioSupport.h (ASIO sample formats and buffer sizes, no SDK needed)
-  Processor.h   insert-device interface (built-ins and plug-ins)
-  processors/   built-in devices: Synth (instrument), Utility
+  Processor.h   insert-device interface (built-ins and plug-ins); ParamInfo (normalized mapping); automation inbox
+  processors/   built-in devices: BuiltinProcessor (their parameters and automation), Synth (instrument),
+                Utility, Ott
   plugins/      PluginFormat.h (formats), Vst3Format (host context, modules, scanning),
                 Vst3Processor (a VST3 plug-in as a Processor), EditorWindow (plug-in editors),
                 Vst3Support.h (allocation-free event and parameter lists for the audio thread)
@@ -226,6 +240,14 @@ tests/asio_driver/             the fake ASIO driver the tests use
 - Offline renders and exports use fresh voices with a fixed random seed, so they are repeatable and don't disturb live playback.
 - Clips at their own tempo with no transposition skip the stretcher and play bit-exact. Re-Pitch uses windowed-sinc resampling, with the cutoff lowered when speeding up.
 
+**Automation**
+- Every automatable thing is automated the same way, in normalized values (0..1). A device parameter is a `ParamInfo`, whatever the device: `toNormalized()`/`fromNormalized()` map plain values evenly, in log(value) or in whole steps (as VST3 maps stepped parameters, so plug-in values round-trip). The UI describes every parameter, the mixer's included, as a `ParamSpec` (model/params.py) with the same mapping, and the tests hold the two to each other.
+- Envelopes belong to a track or the master and are keyed by target: `mixer:volume`, `mixer:pan`, or `device:<device id>:<parameter id>`. Device ids are unique in a project, so a key finds its device wherever it sits. Deleting a device deletes its automation (in the same undo step).
+- The engine gets each track's envelopes (`set_track_automation`, track 0 is the master) and converts them to samples in the snapshot, as it does notes. Before each stretch a processor processes, the renderer hands it its parameters' values over the stretch (`Processor::automate`). How it applies them is the processor's own business: `BuiltinProcessor` renders its block in pieces between changes; `Vst3Processor` passes them to the plug-in as parameter changes at their sample offsets, and sends the last values to its controller in `idle()`, so its editor follows. Faders (tracks and master share one: `Renderer::applyFader`) follow volume and pan sample by sample; where automation stops, their smoothing carries on from its last value.
+- A new built-in device subclasses `BuiltinProcessor`: it lists its `ParamInfo`s and renders; automation, the device view's knobs and saving work for it at once. A new plug-in format's `Processor` applies what `automate()` hands it in `process()`. The mixer's controls are `processorId` 0 with a name (`volume`, `pan`); more (sends, mute) are more names.
+- Future group tracks are buses with a fader like the master's (`TrackParams` + `applyFader`, automated the same way). Devices inside a rack get their automation directly (the renderer calls `automate()` on the nested processor, whatever holds it), and a rack's macros are its own parameters, automated like any other.
+- The bridge overrides a target changed by hand (it stops sending its envelope) until re-enabled; the model's own value of a target counts again whenever its envelope doesn't play. What shows is view state (per track and the master: shown or not, the main lane's target, the lanes below), saved with the project but not undone, like track heights.
+
 **Plug-in hosting**
 - Plug-ins are created, configured, asked about and destroyed on the main thread, as VST3 requires; only `process()` runs on the audio thread. A removed plug-in waits until no snapshot uses it and is destroyed in `Engine::idle()`, on the main thread.
 - The audio thread never waits for a plug-in's main-thread work. When the main thread must take a plug-in away for a moment (restarting it for a new latency or bus layout, loading its state) it takes it with a lock-free handshake, and the audio thread passes the track's audio by it meanwhile.
@@ -247,7 +269,7 @@ tests/asio_driver/             the fake ASIO driver the tests use
 
 - Recording (audio or MIDI), input monitoring and MIDI input from controllers. (ASIO inputs already reach the engine; WASAPI has outputs only.)
 - Looping MIDI clips, MIDI effects, and editing several MIDI clips in the piano roll at once.
-- Automation (of plug-in parameters too), tempo changes over time.
+- Recording automation (writing it while playing), automation that moves with clips, and tempo changes over time. Automation lanes below a track have a fixed height.
 - CLAP plug-ins; side-chain inputs and multi-output instruments (plug-ins get the main buses only); MIDI effect plug-ins.
 - Warp markers (warping within a clip) and automatic tempo detection: a warped clip has one segment BPM, and you set it.
 - Streaming long files from disk: sources are decoded into memory.

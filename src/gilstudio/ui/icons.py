@@ -98,6 +98,24 @@ def follow(color: str = theme.TEXT) -> QIcon:
 
 
 @cache
+def re_enable_automation(color: str = theme.TEXT) -> QIcon:
+    """An envelope with a loop back: automation plays again."""
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        line = QPainterPath(QPointF(8, 50))
+        line.lineTo(24, 26)
+        line.lineTo(38, 40)
+        line.lineTo(56, 14)
+        p.drawPath(line)
+        p.setBrush(c)
+        p.setPen(Qt.PenStyle.NoPen)
+        for x, y in ((8, 50), (24, 26), (38, 40), (56, 14)):
+            p.drawEllipse(QPointF(x, y), 6, 6)
+    return _icon(draw, color)
+
+
+@cache
 def headphones(color: str = theme.TEXT) -> QIcon:
     def draw(p: QPainter, c: QColor):
         p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))

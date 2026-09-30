@@ -7,12 +7,11 @@ namespace gil {
 
 void Renderer::prepare(double sampleRate) {
     sampleRate_ = sampleRate;
-    for (auto* buffer : {&trackLeft_, &trackRight_, &masterLeft_, &masterRight_, &warpLeft_, &warpRight_}) {
+    for (auto* buffer : {&trackLeft_, &trackRight_, &masterLeft_, &masterRight_, &warpLeft_, &warpRight_, &autoGain_,
+                         &autoPanLeft_, &autoPanRight_}) {
         buffer->assign(kMaxBlock, 0.f);
     }
     metronome_.prepare(sampleRate);
-    masterGain_.reset(sampleRate, 0.02);
-    masterNeedsSnap_ = true;
     previewSource_ = nullptr;
     // Processors are prepared (silenced) along with the renderer.
     activeNotes_.assign(kMaxActiveNotes, {});
@@ -84,7 +83,7 @@ void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, floa
     uint32_t done = 0;
     while (done < frames) {
         const int n = static_cast<int>(std::min<uint32_t>(kMaxBlock, frames - done));
-        renderChunk(snap, shared, n,
+        renderChunk(snap, n,
                     {true, snap.loopEnabled, shared.metronome.load(std::memory_order_relaxed)});
         numPreviewNotes_ = 0;  // played in the first chunk
         mixPreview(shared, n);
@@ -102,13 +101,13 @@ void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, floa
     publishTransport(shared);
 }
 
-void Renderer::renderOffline(const RenderSnapshot& snap, SharedState& shared, float* outStereo, int64_t frames,
+void Renderer::renderOffline(const RenderSnapshot& snap, float* outStereo, int64_t frames,
                              bool loop, bool metronome) noexcept {
     syncTempo(snap);
     int64_t done = 0;
     while (done < frames) {
         const int n = static_cast<int>(std::min<int64_t>(kMaxBlock, frames - done));
-        renderChunk(snap, shared, n, {false, loop && snap.loopEnabled, metronome});
+        renderChunk(snap, n, {false, loop && snap.loopEnabled, metronome});
         float* dst = outStereo + done * 2;
         for (int i = 0; i < n; ++i) {
             dst[2 * i] = masterLeft_[i];
@@ -118,7 +117,7 @@ void Renderer::renderOffline(const RenderSnapshot& snap, SharedState& shared, fl
     }
 }
 
-void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int frames, ChunkFlags flags) noexcept {
+void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept {
     const int64_t chunkStart = position_;
     const WarpVoiceSet& voices = voiceOverride_ ? *voiceOverride_ : snap.warpVoices;
     ++blockCounter_;
@@ -190,72 +189,21 @@ void Renderer::renderChunk(const RenderSnapshot& snap, SharedState& shared, int 
                                           : track.delay.get();
         if (delay) delay->process(left, right, frames, track.compensation);
 
-        TrackParams& params = *track.params;
+        const TrackParams& params = *track.params;
         const bool audible = !params.mute.load(std::memory_order_relaxed) &&
                              (!anySolo || params.solo.load(std::memory_order_relaxed));
-        const float gain = audible ? params.gain.load(std::memory_order_relaxed) : 0.f;
-        float panL, panR;
-        balanceGains(params.pan.load(std::memory_order_relaxed), panL, panR);
-        const float targetL = gain * panL;
-        const float targetR = gain * panR;
-
-        if (flags.live) {
-            // Smoothing state lives with the track so it survives snapshot swaps.
-            if (params.smoothingSampleRate != snap.sampleRate) {
-                params.gainLeft.reset(snap.sampleRate, 0.02);
-                params.gainRight.reset(snap.sampleRate, 0.02);
-                params.gainLeft.snapTo(targetL);
-                params.gainRight.snapTo(targetR);
-                params.smoothingSampleRate = snap.sampleRate;
-            }
-            params.gainLeft.setTarget(targetL);
-            params.gainRight.setTarget(targetR);
-            float peakL = 0.f, peakR = 0.f;
-            for (int i = 0; i < frames; ++i) {
-                const float l = left[i] * params.gainLeft.next();
-                const float r = right[i] * params.gainRight.next();
-                masterL[i] += l;
-                masterR[i] += r;
-                peakL = std::max(peakL, std::abs(l));
-                peakR = std::max(peakR, std::abs(r));
-            }
-            atomicStoreMax(params.peakLeft, peakL);
-            atomicStoreMax(params.peakRight, peakR);
-        } else {
-            // Offline renders hold the engine lock, so parameters cannot change
-            // mid-render; apply them directly and leave the live ramps alone.
-            for (int i = 0; i < frames; ++i) {
-                masterL[i] += left[i] * targetL;
-                masterR[i] += right[i] * targetR;
-            }
+        applyFader(snap, *track.params, track.volume, track.pan, audible, left, right, frames, flags.live);
+        for (int i = 0; i < frames; ++i) {
+            masterL[i] += left[i];
+            masterR[i] += right[i];
         }
     }
 
     forgetNotesOfRemovedTracks(snap);
 
     // 3. Master fader and meter.
-    const float masterTarget = shared.masterGain.load(std::memory_order_relaxed);
-    if (flags.live) {
-        if (masterNeedsSnap_) {
-            masterGain_.snapTo(masterTarget);
-            masterNeedsSnap_ = false;
-        }
-        masterGain_.setTarget(masterTarget);
-        float peakL = 0.f, peakR = 0.f;
-        for (int i = 0; i < frames; ++i) {
-            const float g = masterGain_.next();
-            masterL[i] *= g;
-            masterR[i] *= g;
-            peakL = std::max(peakL, std::abs(masterL[i]));
-            peakR = std::max(peakR, std::abs(masterR[i]));
-        }
-        atomicStoreMax(shared.masterPeakLeft, peakL);
-        atomicStoreMax(shared.masterPeakRight, peakR);
-    } else {
-        for (int i = 0; i < frames; ++i) {
-            masterL[i] *= masterTarget;
-            masterR[i] *= masterTarget;
-        }
+    if (snap.master) {
+        applyFader(snap, *snap.master, snap.masterVolume, snap.masterPan, true, masterL, masterR, frames, flags.live);
     }
 
     // 4. Metronome, after the master fader (a click may still be ringing out).
@@ -297,10 +245,127 @@ void Renderer::processInserts(const TrackRender& track, ProcessContext& context,
         context.beatPos = position / samplesPerBeat;
         context.inEvents = {events_.data() + first, static_cast<size_t>(next - first)};
         float* channels[2] = {trackLeft_.data() + offset, trackRight_.data() + offset};
-        for (const auto& insert : track.inserts) {
-            if (insert->isEnabled()) insert->process(context, channels, 2, length);
+        for (size_t i = 0; i < track.inserts.size(); ++i) {
+            Processor& insert = *track.inserts[i];
+            if (!insert.isEnabled()) continue;
+            for (const AutomationRender& lane : track.automation) {
+                if (lane.insert == static_cast<int>(i)) automateInsert(lane, position, length, split);
+            }
+            insert.process(context, channels, 2, length);
+            insert.clearAutomation();
         }
     }
+}
+
+void Renderer::automateInsert(const AutomationRender& lane, int64_t position, int length, bool moving) noexcept {
+    Processor& processor = *lane.processor;
+    const auto& nodes = lane.nodes;
+    const int64_t from = automationTime(position, lane.latency);
+    size_t index = automationIndex(nodes, from);
+    if (!moving) {  // stopped: the value at the playhead
+        processor.automate(lane.param, automationQuantize(automationValueAt(nodes, index, from), lane.steps), 0);
+        return;
+    }
+    float last = -1.f;
+    for (int offset = 0; offset < length;) {
+        const int64_t t = from + offset;
+        while (index < nodes.size() && nodes[index].time <= t) ++index;
+        const float value = automationQuantize(automationValueAt(nodes, index, t), lane.steps);
+        if (value != last) {
+            if (!processor.automate(lane.param, value, offset)) return;
+            last = value;
+        }
+        int64_t step = kAutomationStep;
+        if (index < nodes.size()) step = std::min<int64_t>(step, nodes[index].time - t);  // > 0
+        offset += static_cast<int>(step);
+    }
+}
+
+void Renderer::fillLane(const AutomationRender& lane, int frames, float* out) const noexcept {
+    if (!playing_ || numSegments_ == 0) {
+        std::fill_n(out, frames, automationValue(lane.nodes, automationTime(position_, lane.latency)));
+        return;
+    }
+    for (int s = 0; s < numSegments_; ++s) {
+        const Segment& segment = segments_[s];
+        fillAutomation(lane.nodes, automationTime(segment.position, lane.latency), segment.length,
+                       out + segment.offset);
+    }
+}
+
+void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const AutomationRender& volume,
+                          const AutomationRender& pan, bool audible, float* left, float* right, int frames,
+                          bool live) noexcept {
+    const float* autoGain = nullptr;
+    const float* autoLeft = nullptr;
+    const float* autoRight = nullptr;
+    if (!volume.empty()) {
+        fillLane(volume, frames, autoGain_.data());
+        for (int i = 0; i < frames; ++i) autoGain_[i] = automationVolumeGain(autoGain_[i]);
+        autoGain = autoGain_.data();
+    }
+    if (!pan.empty()) {
+        fillLane(pan, frames, autoPanLeft_.data());
+        for (int i = 0; i < frames; ++i) {
+            balanceGains(automationPan(autoPanLeft_[i]), autoPanLeft_[i], autoPanRight_[i]);
+        }
+        autoLeft = autoPanLeft_.data();
+        autoRight = autoPanRight_.data();
+    }
+    const float on = audible ? 1.f : 0.f;
+    const float gain = params.gain.load(std::memory_order_relaxed);
+    float panLeft, panRight;
+    balanceGains(params.pan.load(std::memory_order_relaxed), panLeft, panRight);
+
+    if (!live) {
+        // Offline renders hold the engine lock, so parameters cannot change
+        // mid-render; apply them directly and leave the live ramps alone.
+        for (int i = 0; i < frames; ++i) {
+            const float g = on * (autoGain ? autoGain[i] : gain);
+            left[i] *= g * (autoLeft ? autoLeft[i] : panLeft);
+            right[i] *= g * (autoRight ? autoRight[i] : panRight);
+        }
+        return;
+    }
+    // Smoothing state lives with the track so it survives snapshot swaps.
+    if (params.smoothingSampleRate != snap.sampleRate) {
+        for (SmoothedValue* smoothed : {&params.audible, &params.volume, &params.panLeft, &params.panRight}) {
+            smoothed->reset(snap.sampleRate, 0.02);
+        }
+        params.audible.snapTo(on);
+        params.volume.snapTo(gain);
+        params.panLeft.snapTo(panLeft);
+        params.panRight.snapTo(panRight);
+        params.smoothingSampleRate = snap.sampleRate;
+    }
+    params.audible.setTarget(on);
+    params.volume.setTarget(gain);
+    params.panLeft.setTarget(panLeft);
+    params.panRight.setTarget(panRight);
+    float peakL = 0.f, peakR = 0.f;
+    for (int i = 0; i < frames; ++i) {
+        const float a = params.audible.next();
+        float g = params.volume.next();
+        float l = params.panLeft.next();
+        float r = params.panRight.next();
+        if (autoGain) g = autoGain[i];
+        if (autoLeft) {
+            l = autoLeft[i];
+            r = autoRight[i];
+        }
+        left[i] *= a * g * l;
+        right[i] *= a * g * r;
+        peakL = std::max(peakL, std::abs(left[i]));
+        peakR = std::max(peakR, std::abs(right[i]));
+    }
+    // Where automation stops (or is overridden), the manual value takes over from its last value.
+    if (autoGain && frames > 0) params.volume.snapTo(autoGain[frames - 1]);
+    if (autoLeft && frames > 0) {
+        params.panLeft.snapTo(autoLeft[frames - 1]);
+        params.panRight.snapTo(autoRight[frames - 1]);
+    }
+    atomicStoreMax(params.peakLeft, peakL);
+    atomicStoreMax(params.peakRight, peakR);
 }
 
 WarpVoice* Renderer::acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept {

@@ -11,18 +11,16 @@
 #include <atomic>
 #include <cmath>
 
-#include "Processor.h"
+#include "processors/BuiltinProcessor.h"
 #include "rt/RtUtils.h"
 
 namespace gil {
 
-class OttProcessor final : public Processor {
+class OttProcessor final : public BuiltinProcessor {
 public:
     enum Param { Depth = 0, Output, NumParams };
 
-    OttProcessor() {
-        for (int i = 0; i < NumParams; ++i) values_[i].store(infos()[i].defaultValue);
-    }
+    OttProcessor() : BuiltinProcessor(infos()) {}
 
     std::string typeId() const override { return "builtin:ott"; }
     std::string name() const override { return "Over The Top"; }
@@ -41,8 +39,8 @@ public:
         }
         depth_.reset(sampleRate, 0.03);
         output_.reset(sampleRate, 0.03);
-        depth_.snapTo(values_[Depth].load() / 100.f);
-        output_.snapTo(dbToGain(values_[Output].load()));
+        depth_.snapTo(param(Depth) / 100.f);
+        output_.snapTo(dbToGain(param(Output)));
         reset();
     }
 
@@ -51,9 +49,10 @@ public:
         env_.fill(0.f);
     }
 
-    void process(const ProcessContext&, float* const* ch, int numChannels, int numFrames) override {
-        depth_.setTarget(values_[Depth].load(std::memory_order_relaxed) / 100.f);
-        output_.setTarget(dbToGain(values_[Output].load(std::memory_order_relaxed)));
+protected:
+    void render(const ProcessContext&, float* const* ch, int numChannels, int numFrames) override {
+        depth_.setTarget(param(Depth) / 100.f);
+        output_.setTarget(dbToGain(param(Output)));
         const int n = std::min(numChannels, 2);
         if (n <= 0) return;
 
@@ -88,16 +87,6 @@ public:
                 ch[c][i] = sum * out;
             }
         }
-    }
-
-    const std::vector<ParamInfo>& params() const override { return infos(); }
-    float getParam(int index) const override {
-        return index >= 0 && index < NumParams ? values_[index].load() : 0.f;
-    }
-    void setParam(int index, float value) override {
-        if (index < 0 || index >= NumParams) return;
-        const auto& info = infos()[index];
-        values_[index].store(std::clamp(value, info.minValue, info.maxValue));
     }
 
 private:
@@ -199,7 +188,6 @@ private:
         return kInfos;
     }
 
-    std::array<std::atomic<float>, NumParams> values_{};
     double sampleRate_ = 48000.0;
     SvfCoeffs lowCross_, highCross_;
     std::array<Channel, 2> channels_{};
