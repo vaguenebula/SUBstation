@@ -199,6 +199,58 @@ class ProjectEditor(QObject):
         if before != after:
             self._push(SetClipsCommand(self.project, text, before, after, merge_key))
 
+    def _commit_moved(self, text: str, after: dict[str, list[AnyClip]], envelopes: dict[LaneRef, Envelope]) -> None:
+        """Clips that moved, and the automation that moved with them, as one undo step."""
+        if not envelopes:
+            self._commit(text, after)
+            return
+        self.undo_stack.beginMacro(text)
+        try:
+            self._commit(text, after)
+            for (owner, key), points in envelopes.items():
+                self.set_envelope(owner, key, points, text)
+        finally:
+            self.undo_stack.endMacro()
+
+    def _carried_automation(self, spans, delta_beats: float, copy_clips: bool) -> dict[LaneRef, Envelope]:
+        """The envelopes after the automation under moving (or copied) clips went
+        with them, unless automation is locked. `spans` are (source track,
+        destination track, start, end) of the clips. Only envelopes with
+        breakpoints under the clips move. Across tracks, only the mixer's
+        automation goes along (a device's belongs to its track); a device's
+        stays where it is."""
+        if self.project.automation_locked:
+            return {}
+        by_move: dict[tuple[str, str], list[tuple[float, float]]] = {}
+        for source, dest, start, end in spans:
+            if end > start:
+                by_move.setdefault((source, dest), []).append((start, end))
+        changed: dict[LaneRef, Envelope] = {}
+        edges: dict[LaneRef, set[float]] = {}
+
+        def current(owner: str, key: str) -> Envelope:
+            return changed.get((owner, key), self.project.envelope(owner, key))
+
+        pastes = []
+        for (source, dest), ranges in by_move.items():
+            if source == dest and delta_beats == 0 and not copy_clips:
+                continue
+            for start, end in automation.merge_spans(ranges):
+                for key, points in self.project.automation(source).items():
+                    if (dest != source and key not in automation.MIXER_KEYS
+                            or not automation.has_points_in(points, start, end)):
+                        continue
+                    pastes.append((dest, key, start + delta_beats, end - start,
+                                   automation.copy_range(points, start, end)))
+                    if not copy_clips:
+                        changed[(source, key)] = automation.remove_range(current(source, key), start, end)
+                        edges.setdefault((source, key), set()).update((start, end))
+        for dest, key, at, length, content in pastes:
+            changed[(dest, key)] = automation.paste_range(current(dest, key), content, at, length)
+            edges.setdefault((dest, key), set()).update((at, at + length))
+        changed = {lane: automation.drop_redundant(points, edges[lane]) for lane, points in changed.items()}
+        return {lane: points for lane, points in changed.items() if points != self.project.envelope(*lane)}
+
     def add_clips(self, track_id: str | None, start_beat: float, sources: list[tuple[str, float]],
                   track_index: int | None = None) -> list[ClipRef]:
         """Place audio files one after another; `sources` is [(path, duration_sec)].
@@ -303,7 +355,10 @@ class ProjectEditor(QObject):
             affected.add(dest)
             result.append((dest, moved.id))
         after = {tid: edits.resolve_overlaps(lists[tid], winners.get(tid, set()), tempo) for tid in affected}
-        self._commit("Copy Clips" if copy_clips else "Move Clips", after)
+        spans = [(tid, p.tracks[index + track_delta].id, clip.start_beat, clip.end_beat(tempo))
+                 for (tid, clip), index in zip(moving, indices, strict=True)]
+        self._commit_moved("Copy Clips" if copy_clips else "Move Clips", after,
+                           self._carried_automation(spans, delta_beats, copy_clips))
         return result
 
     def replace_clip(self, track_id: str, clip: AnyClip, text: str) -> None:
@@ -362,7 +417,8 @@ class ProjectEditor(QObject):
                 after[tid] = edits.resolve_overlaps(list(clips) + copies, ids, tempo)
                 result += [(tid, cid) for cid in ids]
         if after:
-            self._commit("Duplicate Time Selection", after)
+            spans = [(tid, tid, start, end) for tid in after]
+            self._commit_moved("Duplicate Time Selection", after, self._carried_automation(spans, length, True))
         return result
 
     def move_range(self, start: float, end: float, track_ids: list[str], delta_beats: float,
@@ -395,7 +451,9 @@ class ProjectEditor(QObject):
                 affected.add(dest)
         after = {tid: edits.resolve_overlaps(lists[tid], winners.get(tid, set()), tempo) for tid in affected}
         if after:
-            self._commit("Copy Time Selection" if copy_clips else "Move Time Selection", after)
+            spans = [(tid, dest, start, end) for tid, dest in zip(track_ids, dest_ids, strict=True) if pieces[tid]]
+            self._commit_moved("Copy Time Selection" if copy_clips else "Move Time Selection", after,
+                               self._carried_automation(spans, delta_beats, copy_clips))
         return start + delta_beats, dest_ids
 
     def clips_area(self, refs) -> tuple[float, float, list[str]] | None:
@@ -598,6 +656,12 @@ class ProjectEditor(QObject):
                 return points
             return automation.paste_range(points, automation.copy_range(points, start, end), end, end - start)
         self._each_lane("Duplicate Automation", lanes, duplicate)
+
+    def set_automation_locked(self, locked: bool) -> None:
+        """Lock Envelopes: whether automation stays in place when clips move
+        (unlocked, it moves with them). A setting, not an edit: not undoable."""
+        if locked != self.project.automation_locked:
+            self.project.update_settings(automation_locked=locked)
 
     # View state: what the arrangement shows of each owner's automation. Saved with
     # the project, but not undoable (like track heights).

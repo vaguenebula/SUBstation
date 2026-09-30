@@ -5,15 +5,18 @@ in its lane (MasterLane). Both hosts hand their lanes to the functions here as
 EnvelopeAreas.
 
 In a lane (as in Ableton):
-- A click adds a breakpoint there (on the grid when snapping is on; Alt-click
-  where there is no segment to bend: off the grid).
-- Dragging a breakpoint moves it, and the others selected with it (Shift- or
-  Ctrl-click selects several), in time and value. Alt: off the grid; Shift
-  while dragging: finer values. Breakpoints can't pass their neighbours.
+- A click on the envelope's line adds a breakpoint on it (on the grid when
+  snapping is on; Alt-click where there is no segment to bend: off the grid).
+  Where it would go shows while the mouse is over the line. A click off the
+  line adds nothing.
+- A click on a breakpoint deletes it; Shift- or Ctrl-click selects it instead
+  (with the others selected), and Delete deletes the selected ones.
+- Dragging a breakpoint moves it, and the others selected with it, in time and
+  value. Alt: off the grid; Shift while dragging: finer values. Breakpoints
+  can't pass their neighbours.
 - Alt-dragging between two breakpoints bends the segment: up bulges it upward.
-- Dragging from anywhere else selects a time range on the lanes it crosses;
-  Delete clears their automation there, Ctrl+D duplicates it.
-- Double-clicking a breakpoint deletes it; Delete deletes the selected ones.
+- Dragging from off the breakpoints selects a time range on the lanes it
+  crosses; Delete clears their automation there, Ctrl+D duplicates it.
 
 Envelopes are drawn red while they play, grey when overridden (the target was
 changed by hand: Re-Enable Automation brings them back); a target without an
@@ -25,8 +28,8 @@ from __future__ import annotations
 import bisect
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen, QPolygonF
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QCursor, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QMenu
 
 from ... import theme
@@ -37,9 +40,11 @@ from .interactions import DRAG_THRESHOLD, ClipGesture
 ENVELOPE = QColor("#ff4a3d")
 OVERRIDDEN = QColor("#8c8c8c")
 UNAUTOMATED = QColor(255, 74, 61, 110)
+GHOST = QColor(255, 74, 61, 170)  # where a click on the line would add a breakpoint
 LANE_BACKGROUND = QColor(0, 0, 0, 55)  # over the clips of a lane showing automation
 POINT_RADIUS = 3.0
 POINT_GRAB = 6.0  # pixels around a breakpoint that grab it
+LINE_GRAB = 4.0  # pixels around the envelope's line that count as on it
 CURVE_PIXELS = 150.0  # an Alt-drag this far bends a segment from straight to its most
 VALUE_PAD = 4.0  # between a lane's edges and its values' range
 SAMPLE_PIXELS = 3.0  # between the points a curved segment is drawn through
@@ -72,6 +77,17 @@ class EnvelopeArea:
         return min(1.0, max(0.0, (values.bottom() - y) / max(1.0, values.height())))
 
 
+@dataclass(frozen=True)
+class Hover:
+    """What is under the mouse in a lane: a breakpoint (`index`), or a place on
+    the line where a click adds one (`beat`, `value`)."""
+
+    ident: tuple[str, str, int]
+    index: int | None = None
+    beat: float = 0.0
+    value: float = 0.0
+
+
 def area_at(areas: list[EnvelopeArea], pos: QPointF) -> EnvelopeArea | None:
     return next((a for a in areas if a.rect.contains(pos)), None)
 
@@ -96,6 +112,83 @@ def point_at(view, area: EnvelopeArea, points, pos: QPointF) -> int | None:
         if distance <= best_distance:
             best, best_distance = i, distance
     return best
+
+
+def _unautomated_value(host, area: EnvelopeArea) -> float | None:
+    """Where a target without an envelope draws its line: its own value."""
+    value = host.bridge.own_value(area.owner, area.key)
+    spec = host.bridge.param_spec(area.owner, area.key)
+    return None if value is None or spec is None else spec.to_normalized(value)
+
+
+def _quantizer(host, area: EnvelopeArea):
+    spec = host.bridge.param_spec(area.owner, area.key)
+    return spec.quantize if spec is not None and spec.discrete else None
+
+
+def _on_line(host, area: EnvelopeArea, points, pos: QPointF) -> bool:
+    """Whether `pos` is on the envelope's line, as drawn."""
+    if not points:
+        value = _unautomated_value(host, area)
+        return value is not None and abs(area.y(value) - pos.y()) <= LINE_GRAB
+    line = trace(host.view, area, points, pos.x() - LINE_GRAB, pos.x() + LINE_GRAB, _quantizer(host, area))
+    if line.size() == 1:
+        return QLineF(line[0], pos).length() <= LINE_GRAB
+    return any(_distance(pos, line[i], line[i + 1]) <= LINE_GRAB for i in range(line.size() - 1))
+
+
+def _distance(pos: QPointF, a: QPointF, b: QPointF) -> float:
+    """From `pos` to the segment a-b."""
+    d = b - a
+    length = QPointF.dotProduct(d, d)
+    t = 0.0 if length == 0 else min(1.0, max(0.0, QPointF.dotProduct(pos - a, d) / length))
+    return QLineF(a + d * t, pos).length()
+
+
+def add_target(host, area: EnvelopeArea, pos: QPointF, mods) -> tuple[float, float] | None:
+    """Where a click at `pos` adds a breakpoint, (beat, value): on the line,
+    at the grid line nearest the mouse. None off the line."""
+    points = host.project.envelope(area.owner, area.key)
+    if not _on_line(host, area, points, pos):
+        return None
+    view = host.view
+    beat = max(0.0, view.snap_beat(view.x_to_beat(pos.x()), _alt(mods)))
+    value = automation.value_at(points, beat) if points else _unautomated_value(host, area)
+    if value is None:
+        return None
+    quantize = _quantizer(host, area)
+    return beat, quantize(value) if quantize is not None else value
+
+
+_ADD_CURSOR: list[QCursor] = []
+
+
+def add_cursor() -> QCursor:
+    """The arrow with a small plus beside it: a click adds a breakpoint."""
+    if not _ADD_CURSOR:
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        arrow = QPainterPath(QPointF(1, 1))
+        for x, y in ((1, 16), (4.5, 12.5), (7, 18), (9.5, 17), (7, 11.5), (12, 11.5)):
+            arrow.lineTo(x, y)
+        arrow.closeSubpath()
+        p.setPen(QPen(QColor(0, 0, 0), 1.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap,
+                      Qt.PenJoinStyle.MiterJoin))
+        p.setBrush(QColor(255, 255, 255))
+        p.drawPath(arrow)
+        plus = QPainterPath()
+        plus.moveTo(14, 18.5)
+        plus.lineTo(21, 18.5)
+        plus.moveTo(17.5, 15)
+        plus.lineTo(17.5, 22)
+        for color, width in ((QColor(0, 0, 0), 3.5), (QColor(255, 255, 255), 1.5)):
+            p.setPen(QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+            p.drawPath(plus)
+        p.end()
+        _ADD_CURSOR.append(QCursor(pixmap, 1, 1))
+    return _ADD_CURSOR[0]
 
 
 # --- Drawing -----------------------------------------------------------------------------
@@ -136,7 +229,17 @@ def trace(view, area: EnvelopeArea, points, x0: float, x1: float, quantize=None)
     return QPolygonF([QPointF(x, area.y(value)) for x, value in line])
 
 
-def draw_area(p: QPainter, host, area: EnvelopeArea, visible: QRectF, hover: tuple | None = None,
+def _draw_ghost(p: QPainter, host, area: EnvelopeArea, hover: Hover | None) -> None:
+    """Where a click would add a breakpoint (not while a gesture is under way)."""
+    if hover is None or hover.ident != area.ident or hover.index is not None or host._gesture is not None:
+        return
+    p.setPen(QPen(GHOST, 1.4))
+    p.setBrush(QColor(GHOST.red(), GHOST.green(), GHOST.blue(), 70))
+    radius = POINT_RADIUS + 1.0
+    p.drawEllipse(QPointF(host.view.beat_to_x(hover.beat), area.y(hover.value)), radius, radius)
+
+
+def draw_area(p: QPainter, host, area: EnvelopeArea, visible: QRectF, hover: Hover | None = None,
               shade: bool = True) -> None:
     """A lane's envelope (and, with `shade`, a veil over what is under it)."""
     clip = area.rect.intersected(visible)
@@ -151,11 +254,12 @@ def draw_area(p: QPainter, host, area: EnvelopeArea, visible: QRectF, hover: tup
     spec = host.bridge.param_spec(area.owner, area.key)
     x0, x1 = clip.left() - 2, clip.right() + 2
     if not points:
-        value = host.bridge.own_value(area.owner, area.key)
-        if value is not None and spec is not None:
+        value = _unautomated_value(host, area)
+        if value is not None:
             p.setPen(QPen(UNAUTOMATED, 1.5, Qt.PenStyle.DashLine))
-            y = area.y(spec.to_normalized(value))
+            y = area.y(value)
             p.drawLine(QPointF(x0, y), QPointF(x1, y))
+        _draw_ghost(p, host, area, hover)
         p.restore()
         return
     color = OVERRIDDEN if host.bridge.is_overridden(area.owner, area.key) else ENVELOPE
@@ -168,11 +272,12 @@ def draw_area(p: QPainter, host, area: EnvelopeArea, visible: QRectF, hover: tup
         x = view.beat_to_x(point.beat)
         if x < x0 - POINT_RADIUS or x > x1 + POINT_RADIUS:
             continue
-        hovered = hover == (area.ident, i)
+        hovered = hover is not None and hover.ident == area.ident and hover.index == i
         radius = POINT_RADIUS + (1.0 if hovered else 0.0)
         p.setPen(QPen(color, 1.4))
         p.setBrush(QColor(theme.SELECTION_OUTLINE) if i in selected else (color if hovered else QColor(theme.LANE)))
         p.drawEllipse(QPointF(x, area.y(point.value)), radius, radius)
+    _draw_ghost(p, host, area, hover)
     p.restore()
 
 
@@ -224,7 +329,8 @@ def _alt(mods) -> bool:
 
 
 class PointGesture(ClipGesture):
-    """Drag breakpoints: the one pressed, and the others selected with it."""
+    """Drag breakpoints: the one pressed, and the others selected with it. A
+    click without dragging deletes it (Shift/Ctrl: selects it instead)."""
 
     def __init__(self, host, area: EnvelopeArea, index: int, press: QPointF, mods):
         self.host = host
@@ -233,7 +339,8 @@ class PointGesture(ClipGesture):
         self.press = press
         self.original = host.project.envelope(area.owner, area.key)
         selected = set(host.selection.selected_points(area.owner, area.key))
-        if mods & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier):
+        self.selecting = bool(mods & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier))
+        if self.selecting:
             selected ^= {index}
         elif index not in selected:
             selected = {index}
@@ -266,6 +373,13 @@ class PointGesture(ClipGesture):
         return (QPointF(self.host.view.beat_to_x(point.beat), self.area.y(point.value)),
                 spec.format_normalized(spec.quantize(point.value)))
 
+    def finish(self) -> None:
+        if self.active or self.selecting:
+            return
+        owner, key = self.area.owner, self.area.key
+        self.host.editor.delete_automation_points(owner, key, [self.index])
+        self.host.selection.select_points(owner, key, ())
+
 
 class CurveGesture(ClipGesture):
     """Alt-drag between two breakpoints: bend the segment."""
@@ -286,8 +400,9 @@ class CurveGesture(ClipGesture):
 
 
 class LaneGesture(ClipGesture):
-    """A press on a lane off its breakpoints: a click adds one there; a drag
-    selects a time range on the lanes it crosses."""
+    """A press on a lane off its breakpoints: a click on the line adds one there
+    (elsewhere it sets the insert marker); a drag selects a time range on the
+    lanes it crosses."""
 
     def __init__(self, host, area: EnvelopeArea, press: QPointF, mods):
         self.host = host
@@ -296,6 +411,7 @@ class LaneGesture(ClipGesture):
         self.bypass = _alt(mods)
         view = host.view
         self.anchor = max(0.0, view.snap_beat(view.x_to_beat(press.x()), self.bypass))
+        self.target = add_target(host, area, press, mods)
         self.active = False
         host.selection.clear(track_id=None if area.owner == MASTER else area.owner)
 
@@ -324,18 +440,18 @@ class LaneGesture(ClipGesture):
     def finish(self) -> None:
         if self.active:
             return
-        owner, key = self.area.owner, self.area.key
-        value = self.area.value(self.press.y())
-        spec = self.host.bridge.param_spec(owner, key)
-        if spec is not None:
-            value = spec.quantize(value)
-        index = self.host.editor.add_automation_point(owner, key, self.anchor, value)
-        self.host.selection.select_points(owner, key, {index})
         self.host.selection.set_insert(self.anchor)
+        if self.target is None:
+            return
+        owner, key = self.area.owner, self.area.key
+        beat, value = self.target
+        index = self.host.editor.add_automation_point(owner, key, beat, value)
+        self.host.selection.select_points(owner, key, {index})
 
 
 def press(host, area: EnvelopeArea, pos: QPointF, mods) -> ClipGesture:
-    """The gesture a press on an automation lane starts."""
+    """The gesture a press on an automation lane starts. (Hosts start one on a
+    double-click too: each click of it counts.)"""
     points = host.project.envelope(area.owner, area.key)
     index = point_at(host.view, area, points, pos)
     if index is not None:
@@ -347,25 +463,20 @@ def press(host, area: EnvelopeArea, pos: QPointF, mods) -> ClipGesture:
     return LaneGesture(host, area, pos, mods)
 
 
-def double_click(host, area: EnvelopeArea, pos: QPointF) -> None:
-    """Double-clicking a breakpoint deletes it."""
-    index = point_at(host.view, area, host.project.envelope(area.owner, area.key), pos)
-    if index is not None:
-        host.editor.delete_automation_points(area.owner, area.key, [index])
-        host.selection.select_points(area.owner, area.key, ())
-
-
-def hover(host, area: EnvelopeArea | None, pos: QPointF, mods) -> tuple[tuple | None, Qt.CursorShape]:
-    """(the breakpoint under the mouse, the cursor) over a lane."""
+def hover(host, area: EnvelopeArea | None, pos: QPointF, mods) -> tuple[Hover | None, QCursor | Qt.CursorShape]:
+    """(what is under the mouse, the cursor) over a lane."""
     if area is None:
         return None, Qt.CursorShape.ArrowCursor
     points = host.project.envelope(area.owner, area.key)
     index = point_at(host.view, area, points, pos)
     if index is not None:
-        return (area.ident, index), Qt.CursorShape.PointingHandCursor
+        return Hover(area.ident, index), Qt.CursorShape.PointingHandCursor
     if _alt(mods) and automation.segment_index(points, host.view.x_to_beat(pos.x())) is not None:
         return None, Qt.CursorShape.SizeVerCursor
-    return None, Qt.CursorShape.CrossCursor
+    target = add_target(host, area, pos, mods)
+    if target is not None:
+        return Hover(area.ident, None, *target), add_cursor()
+    return None, Qt.CursorShape.ArrowCursor
 
 
 def add_menu_actions(host, area: EnvelopeArea, pos: QPointF, menu: QMenu) -> None:

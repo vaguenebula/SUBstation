@@ -61,6 +61,9 @@ class TransportBar(QWidget):
         self.re_enable = ToggleButton(icon=icons.re_enable_automation(), role="re-enable",
                                       tooltip="Re-Enable Automation")
         self.re_enable.setEnabled(False)
+        self.lock_envelopes = ToggleButton(icon=icons.lock_envelopes(), role="tool",
+                                           tooltip="Lock Envelopes: automation stays in place when clips move "
+                                                   "(off: it moves with them)")
         self.position = QLabel()
         self.position.setFont(theme.ui_font(11, bold=True))
         self.position.setMinimumWidth(96)
@@ -89,7 +92,7 @@ class TransportBar(QWidget):
                        self.metronome):
             layout.addWidget(widget)
         layout.addStretch(1)
-        for widget in (self.position, self.play, self.stop, self.record, self.re_enable):
+        for widget in (self.position, self.play, self.stop, self.record, self.re_enable, self.lock_envelopes):
             layout.addWidget(widget)
         layout.addStretch(1)
         for widget in (self.loop, self.follow, _separator(), self.cpu, self.device):
@@ -105,6 +108,7 @@ class TransportBar(QWidget):
         self.follow.toggled.connect(self._set_follow)
         self.device.clicked.connect(self.preferences_requested)
         self.re_enable.clicked.connect(self.re_enable_requested)
+        self.lock_envelopes.toggled.connect(self.editor.set_automation_locked)
 
         self.project.settings_changed.connect(self.refresh)
         self.project.reset.connect(self.refresh)
@@ -128,6 +132,7 @@ class TransportBar(QWidget):
         self.ts_num.setValue(p.time_signature.numerator)
         self.ts_den.setValue(p.time_signature.denominator)
         self.loop.set_checked_silently(p.loop_enabled)
+        self.lock_envelopes.set_checked_silently(p.automation_locked)
         self._show_position(self.bridge.position)
 
     def refresh_device(self) -> None:

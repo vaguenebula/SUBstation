@@ -28,7 +28,7 @@ from ...model.timebase import format_db, format_pan
 from ..widgets import Knob, MeterWidget, ToggleButton, ValueBox
 from . import automation_lanes
 from .automation_header import CHOOSER_HEIGHT, AutomationControls
-from .automation_lanes import EnvelopeArea
+from .automation_lanes import EnvelopeArea, Hover
 from .grid import draw_grid, draw_loop_region
 from .lanes_canvas import SELECTION_TINT, resize_track_by_wheel
 from .view_state import LaneRow, Row, Selection, TrackLayout, ViewState
@@ -439,7 +439,7 @@ class MasterLane(QWidget):
         self.lanes: tuple[LaneRow, ...] = ()
         self._playhead = 0.0
         self._gesture = None
-        self._hover_point: tuple | None = None
+        self._hover_point: Hover | None = None
         self.setMouseTracking(True)
         for signal in (view.changed, view.grid_changed, self.project.settings_changed, selection.changed,
                        self.project.automation_changed, self.project.automation_view_changed,
@@ -511,9 +511,8 @@ class MasterLane(QWidget):
         self.update()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        area = automation_lanes.area_at(self.envelope_areas(), event.position())
-        if event.button() == Qt.MouseButton.LeftButton and area is not None:
-            automation_lanes.double_click(self, area, event.position())
+        # Each click of a double-click counts on its own.
+        self.mousePressEvent(event)
 
     def _update_cursor(self, pos: QPointF, mods) -> None:
         area = automation_lanes.area_at(self.envelope_areas(), pos)

@@ -86,16 +86,28 @@ def test_changing_a_parameter_shows_its_lane(window, tracks):
     assert window.project.master_automation_view == automation.AutomationView(True, MIXER_VOLUME)
 
 
-def test_click_adds_breakpoints_and_dragging_moves_them(window, tracks):
+def click(widget, at: QPoint, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
+    QTest.mouseClick(widget, Qt.MouseButton.LeftButton, modifiers, at)
+
+
+def test_click_on_the_line_adds_breakpoints_and_dragging_moves_them(window, tracks):
     a, _ = tracks
     window.editor.show_automation(a.id, MIXER_PAN)
     lanes = window.arrangement.lanes
-    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
-                     point(window, a.id, 2.1, 0.25))  # snaps to the grid (a 16th here)
+    click(lanes, point(window, a.id, 2.1, 0.9))  # off the line (centred pan: 0.5)
+    assert window.project.envelope(a.id, MIXER_PAN) == ()
+    # Over the line, the cursor says a click adds a breakpoint, and where it would go shows.
+    lanes._update_cursor(QPointF(point(window, a.id, 2.1, 0.5)), Qt.KeyboardModifier.NoModifier)
+    hover = lanes._hover_point
+    assert hover.index is None and hover.beat == pytest.approx(2.0) and hover.value == pytest.approx(0.5)
+    assert lanes.cursor().shape() == Qt.CursorShape.BitmapCursor
+    click(lanes, point(window, a.id, 2.1, 0.5))  # snaps to the grid (a 16th here)
     [added] = window.project.envelope(a.id, MIXER_PAN)
-    assert added.beat == pytest.approx(2.0) and added.value == pytest.approx(0.25, abs=0.03)
+    assert added.beat == pytest.approx(2.0) and added.value == pytest.approx(0.5)
     assert window.selection.points == (a.id, MIXER_PAN, frozenset({0}))
-    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point(window, a.id, 6.0, 0.75))
+    click(lanes, point(window, a.id, 6.0, 0.75))  # off the line again
+    assert len(window.project.envelope(a.id, MIXER_PAN)) == 1
+    click(lanes, point(window, a.id, 6.0, 0.5))
     assert [p.beat for p in window.project.envelope(a.id, MIXER_PAN)] == [2.0, 6.0]
     # Drag the first one right and up: it stops at its neighbour, and it is one undo step.
     steps = window.undo_stack.count()
@@ -105,6 +117,18 @@ def test_click_adds_breakpoints_and_dragging_moves_them(window, tracks):
     assert window.undo_stack.count() == steps + 1
     window.undo_stack.undo()
     assert window.project.envelope(a.id, MIXER_PAN)[0] == added
+
+
+def test_a_new_breakpoint_goes_on_a_sloped_line(window, tracks):
+    a, _ = tracks
+    window.editor.show_automation(a.id, MIXER_PAN)
+    window.editor.set_envelope(a.id, MIXER_PAN, env((0.0, 0.0), (8.0, 1.0)))
+    lanes = window.arrangement.lanes
+    click(lanes, point(window, a.id, 4.0, 0.2))  # well below the line
+    assert len(window.project.envelope(a.id, MIXER_PAN)) == 2
+    click(lanes, point(window, a.id, 4.0, 0.5) + QPoint(0, 2))  # a little off it counts
+    points = window.project.envelope(a.id, MIXER_PAN)
+    assert [p.beat for p in points] == [0.0, 4.0, 8.0] and points[1].value == pytest.approx(0.5)
 
 
 def test_alt_drag_bends_a_segment(window, tracks):
@@ -126,13 +150,22 @@ def test_deleting_breakpoints(window, tracks):
     window.editor.show_automation(a.id, MIXER_PAN)
     window.editor.set_envelope(a.id, MIXER_PAN, env((1.0, 0.2), (3.0, 0.8), (5.0, 0.4), (7.0, 0.6)))
     lanes = window.arrangement.lanes
-    QTest.mouseDClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point(window, a.id, 3.0, 0.8))
+    click(lanes, point(window, a.id, 3.0, 0.8))  # a click deletes a breakpoint
     assert [p.beat for p in window.project.envelope(a.id, MIXER_PAN)] == [1.0, 5.0, 7.0]
-    # Select two (Shift adds) and press Delete.
-    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point(window, a.id, 1.0, 0.2))
-    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier,
-                     point(window, a.id, 7.0, 0.6))
+    window.undo_stack.undo()
+    # Each click of a double-click counts: the first deletes, the second (off the line now) does nothing.
+    at = point(window, a.id, 3.0, 0.8)
+    for kind in (QMouseEvent.Type.MouseButtonPress, QMouseEvent.Type.MouseButtonRelease,
+                 QMouseEvent.Type.MouseButtonDblClick, QMouseEvent.Type.MouseButtonRelease):
+        buttons = Qt.MouseButton.NoButton if kind == QMouseEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
+        QApplication.sendEvent(lanes, QMouseEvent(kind, QPointF(at), QPointF(lanes.mapToGlobal(at)),
+                                                  Qt.MouseButton.LeftButton, buttons, Qt.KeyboardModifier.NoModifier))
+    assert [p.beat for p in window.project.envelope(a.id, MIXER_PAN)] == [1.0, 5.0, 7.0]
+    # Shift- (or Ctrl-) clicks select instead; Delete deletes the selected ones.
+    click(lanes, point(window, a.id, 1.0, 0.2), Qt.KeyboardModifier.ShiftModifier)
+    click(lanes, point(window, a.id, 7.0, 0.6), Qt.KeyboardModifier.ShiftModifier)
     assert window.selection.points == (a.id, MIXER_PAN, frozenset({0, 2}))
+    assert len(window.project.envelope(a.id, MIXER_PAN)) == 3
     window.delete_selection()
     assert [p.beat for p in window.project.envelope(a.id, MIXER_PAN)] == [5.0]
 
@@ -210,8 +243,8 @@ def test_master_automation(window, tracks, tmp_path):
     assert wait_until(lambda: window.bridge.source(path) is not None)
     window.editor.show_automation(MASTER, MIXER_PAN)
     master = window.arrangement.master_lane
-    QTest.mouseClick(master, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
-                     point(window, MASTER, 0.0, 0.0))
+    click(master, point(window, MASTER, 0.0, 0.5))  # on its line: pan centred
+    drag(master, point(window, MASTER, 0.0, 0.5), point(window, MASTER, 0.0, 0.0))
     [added] = window.project.envelope(MASTER, MIXER_PAN)
     assert added.value == pytest.approx(0.0, abs=0.03)
     out = window.engine.render_offline(0.0, 1000)
@@ -230,9 +263,8 @@ def test_lanes_below_a_track(window, tracks):
     assert window.arrangement.layout_model.rows[1].top == before + row.lanes[0].height
     lane = area(window, a.id, MIXER_PAN)
     assert lane.lane == 0 and lane.rect.top() >= row.main_height - window.arrangement.view.scroll_y
-    QTest.mouseClick(window.arrangement.lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
-                     point(window, a.id, 1.0, 1.0, MIXER_PAN))
-    assert window.project.envelope(a.id, MIXER_PAN)[0].value == pytest.approx(1.0, abs=0.05)
+    click(window.arrangement.lanes, point(window, a.id, 1.0, 0.5, MIXER_PAN))
+    assert window.project.envelope(a.id, MIXER_PAN)[0].value == pytest.approx(0.5)
     assert not window.project.envelope(a.id, MIXER_VOLUME)
     header.automation._choose(header.automation.lanes[0], MIXER_VOLUME)
     assert window.project.track(a.id).automation_view.lanes == (MIXER_VOLUME,)
@@ -255,6 +287,32 @@ def test_automation_is_saved(window, tracks, tmp_path):
     assert reopened.automation_view.shown and window.project.master_pan == 0.25
     assert window.bridge.is_automated(reopened.id, MIXER_PAN)
     assert [(x.owner, x.key) for x in window.arrangement.lanes.envelope_areas()] == [(reopened.id, MIXER_PAN)]
+
+
+def test_unlocked_automation_moves_with_a_dragged_clip(window, tracks):
+    a, _ = tracks
+    window.editor.add_midi_clip(a.id, 0.0, 4.0)
+    window.editor.set_envelope(a.id, MIXER_PAN, env((0.0, 0.0), (4.0, 1.0)))
+    lanes = window.arrangement.lanes
+    row = window.arrangement.layout_model.rows[0]
+    title = int(row.top - window.arrangement.view.scroll_y + 5)  # the clip's title bar
+
+    def drag_clip(start: float, end: float) -> None:
+        drag(lanes, QPoint(round(window.arrangement.view.beat_to_x(start + 0.5)), title),
+             QPoint(round(window.arrangement.view.beat_to_x(end + 0.5)), title))
+
+    drag_clip(0.0, 8.0)
+    assert window.project.track(a.id).clips[0].start_beat == 8.0
+    assert [(p.beat, p.value) for p in window.project.envelope(a.id, MIXER_PAN)] == [(8.0, 0.0), (12.0, 1.0)]
+    window.undo_stack.undo()  # clip and automation together
+    assert window.project.track(a.id).clips[0].start_beat == 0.0
+    assert window.project.envelope(a.id, MIXER_PAN) == env((0.0, 0.0), (4.0, 1.0))
+    # Locked (the transport's button), the automation stays.
+    window.transport.lock_envelopes.click()
+    assert window.project.automation_locked and window.lock_action.isChecked()
+    drag_clip(0.0, 8.0)
+    assert window.project.track(a.id).clips[0].start_beat == 8.0
+    assert window.project.envelope(a.id, MIXER_PAN) == env((0.0, 0.0), (4.0, 1.0))
 
 
 def test_lane_screenshot(window, tracks, tmp_path):

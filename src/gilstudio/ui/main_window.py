@@ -196,6 +196,10 @@ class MainWindow(QMainWindow):
         options = bar.addMenu("&Options")
         self._action(options, "&Preferences…", self.show_preferences, "Ctrl+,")
         self._action(options, "&Rescan Plug-ins", self.browser.rescan_plugins)
+        options.addSeparator()
+        self.lock_action = self._action(options, "&Lock Envelopes", self.editor.set_automation_locked, checkable=True)
+        for signal in (self.project.settings_changed, self.project.reset):
+            signal.connect(lambda: self._sync_check(self.lock_action, self.project.automation_locked))
 
         help_menu = bar.addMenu("&Help")
         self._action(help_menu, "&About GIL Studio", self.show_about)

@@ -137,6 +137,7 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
         "tempo": project.tempo,
         "time_signature": [project.time_signature.numerator, project.time_signature.denominator],
         "loop": {"enabled": project.loop_enabled, "start": project.loop_start, "end": project.loop_end},
+        "automation_locked": project.automation_locked,
         "master": {"volume_db": project.master_volume_db, "pan": project.master_pan,
                    "automation": _automation_to_dict(project.master_automation),
                    "automation_view": _view_to_dict(project.master_automation_view)},
@@ -257,6 +258,7 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
         master_automation={k: v for k, v in _automation(master.get("automation")).items()
                            if k in automation.MIXER_KEYS},  # the master has no devices (yet)
         master_automation_view=_view(master.get("automation_view")),
+        automation_locked=bool(data.get("automation_locked", False)),
         tracks=tracks_from_dict(data, project_file),
         path=project_file,
     )

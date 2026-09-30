@@ -40,7 +40,7 @@ from ...model.project import (
 )
 from ..browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from . import automation_lanes
-from .automation_lanes import EnvelopeArea
+from .automation_lanes import EnvelopeArea, Hover
 from .grid import draw_grid, draw_loop_region
 from .interactions import (
     ClipGesture,
@@ -135,7 +135,7 @@ class LanesCanvas(QWidget):
         self._clip_anchor: tuple[str, str] | None = None  # the last clip clicked without Shift
         self._drop_preview: tuple[int | None, float, list[tuple[str, float]]] | None = None
         self._hover_edge: tuple[str, str] | None = None  # (clip id, "left"/"right") under the mouse
-        self._hover_point: tuple | None = None  # (lane, index) of the breakpoint under the mouse
+        self._hover_point: Hover | None = None  # the breakpoint (or place on a line) under the mouse
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -533,8 +533,9 @@ class LanesCanvas(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         area = self.envelope_area_at(event.position())
-        if area is not None:
-            automation_lanes.double_click(self, area, event.position())
+        if area is not None and not is_pan_modifier(event.modifiers()):
+            self._gesture = automation_lanes.press(self, area, event.position(), event.modifiers())
+            self.update()
             return
         hit = self.hit_clip(event.position())
         if hit is None:

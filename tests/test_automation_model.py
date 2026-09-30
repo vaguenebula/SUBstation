@@ -251,6 +251,7 @@ def test_save_and_load(editor):
     editor.set_master_pan(-0.25)
     editor.show_automation(track.id, device_key)
     editor.add_automation_lane(track.id)
+    editor.set_automation_locked(True)
     data = json.loads(json.dumps(project_to_dict(editor.project)))
     assert data["version"] == 4
     data["tracks"][0]["automation"]["mixer:unknown"] = [[0, 1, 0]]  # from a later version: dropped
@@ -261,7 +262,86 @@ def test_save_and_load(editor):
     assert restored.automation_view == editor.project.track(track.id).automation_view
     assert loaded.master_automation == {MIXER_VOLUME: env((1.0, 0.5))}
     assert loaded.master_pan == -0.25
+    assert loaded.automation_locked
     # Projects from before automation load without any.
     del data["tracks"][0]["automation"], data["tracks"][0]["automation_view"], data["master"]["pan"]
+    del data["automation_locked"]
     load_into(loaded, data)
-    assert loaded.tracks[0].automation == {} and loaded.master_pan == 0.0
+    assert loaded.tracks[0].automation == {} and loaded.master_pan == 0.0 and not loaded.automation_locked
+
+
+# --- Automation moving with clips (unless locked) -----------------------------------------
+
+
+def two_tracks(editor):
+    a = editor.add_midi_track()
+    b = editor.add_midi_track()
+    clip = editor.add_midi_clip(a.id, 4.0, 4.0)[1]  # under it: pan from 5 to 7, the cutoff's only point
+    synth = auto.device_key(a.devices[0].id, "cutoff")
+    editor.set_envelope(a.id, MIXER_PAN, env((0.0, 0.5), (5.0, 0.0), (7.0, 1.0), (12.0, 0.5)))
+    editor.set_envelope(a.id, synth, env((6.0, 0.25)))
+    editor.set_envelope(a.id, MIXER_VOLUME, env((0.0, 0.8), (2.0, 0.6)))  # nothing under the clip
+    return a, b, clip, synth
+
+
+def test_moving_a_clip_moves_its_automation(editor):
+    a, _, clip, synth = two_tracks(editor)
+    steps = editor.undo_stack.count()
+    editor.move_range(4.0, 8.0, [a.id], 8.0)
+    assert editor.project.clip(a.id, clip).start_beat == 12.0
+    pan = editor.project.envelope(a.id, MIXER_PAN)
+    # Moved: the stretch under the clip, what it replaced at 12..16, and a straight line where it was.
+    assert auto.value_at(pan, 13.0) == pytest.approx(0.0) and auto.value_at(pan, 15.0) == pytest.approx(1.0)
+    assert auto.value_at(pan, 5.0) == pytest.approx(0.3)  # (4, 0.1) to (8, 0.9)
+    assert auto.value_at(pan, 2.0) == pytest.approx(auto.value_at(two_tracks_pan(), 2.0))
+    assert [p.beat for p in editor.project.envelope(a.id, synth)] == [14.0]
+    assert editor.project.envelope(a.id, MIXER_VOLUME) == env((0.0, 0.8), (2.0, 0.6))  # untouched
+    assert editor.undo_stack.count() == steps + 1
+    editor.undo_stack.undo()
+    assert editor.project.envelope(a.id, MIXER_PAN) == two_tracks_pan()
+    assert editor.project.clip(a.id, clip).start_beat == 4.0
+
+
+def two_tracks_pan():
+    return env((0.0, 0.5), (5.0, 0.0), (7.0, 1.0), (12.0, 0.5))
+
+
+def test_locked_automation_stays(editor):
+    a, _, clip, synth = two_tracks(editor)
+    editor.set_automation_locked(True)
+    assert editor.undo_stack.count() == 6  # a setting, not an edit
+    editor.move_range(4.0, 8.0, [a.id], 8.0)
+    editor.duplicate_range(12.0, 16.0, [a.id])
+    assert editor.project.envelope(a.id, MIXER_PAN) == two_tracks_pan()
+    assert editor.project.envelope(a.id, synth) == env((6.0, 0.25))
+
+
+def test_copies_of_clips_copy_their_automation(editor):
+    a, _, clip, synth = two_tracks(editor)
+    editor.duplicate_range(4.0, 8.0, [a.id])  # Ctrl+D
+    pan = editor.project.envelope(a.id, MIXER_PAN)
+    assert auto.value_at(pan, 5.0) == pytest.approx(0.0) and auto.value_at(pan, 9.0) == pytest.approx(0.0)
+    assert auto.value_at(pan, 11.0) == pytest.approx(1.0)
+    assert [p.beat for p in editor.project.envelope(a.id, synth)] == [6.0, 10.0]
+    editor.move_range(4.0, 8.0, [a.id], 16.0, copy_clips=True)  # Ctrl-drag
+    assert editor.project.envelope(a.id, synth) == env((6.0, 0.25), (10.0, 0.25), (22.0, 0.25))
+
+
+def test_across_tracks_only_the_mixer_automation_goes_along(editor):
+    a, b, clip, synth = two_tracks(editor)
+    editor.move_range(4.0, 8.0, [a.id], 0.0, track_delta=1)
+    assert editor.project.clip(b.id, clip).start_beat == 4.0
+    pan = editor.project.envelope(b.id, MIXER_PAN)
+    assert auto.value_at(pan, 5.0) == pytest.approx(0.0) and auto.value_at(pan, 7.0) == pytest.approx(1.0)
+    assert all(not 4.0 < p.beat < 8.0 for p in editor.project.envelope(a.id, MIXER_PAN))  # gone from a
+    assert editor.project.envelope(a.id, synth) == env((6.0, 0.25))  # a device's stays on its track
+    assert not editor.project.automation(b.id).keys() - {MIXER_PAN}
+
+
+def test_moving_clips_by_reference_moves_their_automation(editor):
+    a, _, clip, synth = two_tracks(editor)
+    editor.move_clips([(a.id, clip)], -4.0)
+    assert [p.beat for p in editor.project.envelope(a.id, synth)] == [2.0]
+    editor.duplicate_clips([(a.id, clip)])
+    assert [p.beat for p in editor.project.envelope(a.id, synth)] == [2.0, 6.0]
+

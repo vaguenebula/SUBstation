@@ -211,7 +211,7 @@ class Project(QObject):
     devices_changed = Signal(str)  # track id: devices added/removed/toggled
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
     device_state_changed = Signal(str, str)  # track id, device id: a plug-in's whole state was set (a preset)
-    settings_changed = Signal()  # tempo, time signature, loop, master volume and pan
+    settings_changed = Signal()  # tempo, time signature, loop, master volume and pan, automation lock
     automation_changed = Signal(str, str)  # owner (track id or MASTER), target key
     automation_view_changed = Signal(str)  # owner: what its automation shows
     reset = Signal()  # everything replaced (new/open)
@@ -225,6 +225,9 @@ class Project(QObject):
         self.loop_end = 16.0
         self.master_volume_db = 0.0
         self.master_pan = 0.0
+        # Locked: automation stays where it is when clips move. Unlocked, the
+        # automation under clips moves (or is copied) with them, as in Ableton.
+        self.automation_locked = False
         self.master_automation: dict[str, Envelope] = {}
         self.master_automation_view = AutomationView()
         self.tracks: list[Track] = []
@@ -337,7 +340,7 @@ class Project(QObject):
     def update_settings(self, **attrs) -> None:
         for name, value in attrs.items():
             if name not in ("tempo", "time_signature", "loop_enabled", "loop_start", "loop_end", "master_volume_db",
-                            "master_pan"):
+                            "master_pan", "automation_locked"):
                 raise AttributeError(name)
             setattr(self, name, value)
         self.settings_changed.emit()
@@ -362,7 +365,8 @@ class Project(QObject):
                          loop_start: float, loop_end: float, master_volume_db: float,
                          tracks: list[Track], path: Path | None, master_pan: float = 0.0,
                          master_automation: dict[str, Envelope] | None = None,
-                         master_automation_view: AutomationView | None = None) -> None:
+                         master_automation_view: AutomationView | None = None,
+                         automation_locked: bool = False) -> None:
         self.tempo = tempo
         self.time_signature = time_signature
         self.loop_enabled = loop_enabled
@@ -372,6 +376,7 @@ class Project(QObject):
         self.master_pan = master_pan
         self.master_automation = dict(master_automation or {})
         self.master_automation_view = master_automation_view or AutomationView()
+        self.automation_locked = automation_locked
         self.tracks = tracks
         self.path = path
         self.reset.emit()

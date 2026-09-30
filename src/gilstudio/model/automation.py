@@ -324,5 +324,52 @@ def paste_range(points: Sequence[AutomationPoint], content: Sequence[AutomationP
     return _simplify(before + shifted + after)
 
 
+def _redundant(points: Sequence[AutomationPoint], i: int) -> bool:
+    """Whether the envelope stays the same without point i."""
+    p = points[i]
+    before = points[i - 1] if i > 0 else None
+    after = points[i + 1] if i + 1 < len(points) else None
+    if before is None or after is None:
+        other = before or after
+        return other is not None and other.value == p.value and other.beat != p.beat
+    if before.beat == p.beat or p.beat == after.beat:
+        return False  # part of a step
+    if before.value == p.value == after.value:
+        return True
+    if before.curve or p.curve:
+        return False
+    on_line = before.value + (after.value - before.value) * (p.beat - before.beat) / (after.beat - before.beat)
+    return abs(on_line - p.value) < 1e-9
+
+
+def drop_redundant(points: Sequence[AutomationPoint], beats: Iterable[float]) -> Envelope:
+    """Without the points at these beats that don't change the envelope (the
+    edges range edits add where the envelope is flat or straight)."""
+    beats = set(beats)
+    out = list(points)
+    i = 0
+    while i < len(out):
+        if out[i].beat in beats and _redundant(out, i):
+            del out[i]
+        else:
+            i += 1
+    return tuple(out)
+
+
+def has_points_in(points: Sequence[AutomationPoint], start: float, end: float) -> bool:
+    return any(start <= p.beat <= end for p in points)
+
+
+def merge_spans(spans: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Beat ranges, sorted, with those that overlap or touch joined."""
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def shift(points: Sequence[AutomationPoint], delta_beats: float) -> Envelope:
     return normalize(replace(p, beat=p.beat + delta_beats) for p in points)
