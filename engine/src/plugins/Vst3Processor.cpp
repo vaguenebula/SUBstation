@@ -184,18 +184,22 @@ void Vst3Processor::connect() {
     FUnknownPtr<IConnectionPoint> componentPoint(component_);
     FUnknownPtr<IConnectionPoint> controllerPoint(controller_);
     if (!componentPoint || !controllerPoint) return;
-    // The proxies drop messages sent from other threads than the main thread.
-    componentConnection_ = owned(new ConnectionProxy(componentPoint));
-    controllerConnection_ = owned(new ConnectionProxy(controllerPoint));
-    componentConnection_->connect(controllerPoint);
-    controllerConnection_->connect(componentPoint);
+    // Directly, not through the SDK's ConnectionProxy: it drops messages sent from
+    // any thread but the main thread, and plug-ins send them from their own threads
+    // too (FabFilter's editors ask for their analyzer data from their drawing thread).
+    componentPoint_ = componentPoint;
+    controllerPoint_ = controllerPoint;
+    componentPoint_->connect(controllerPoint_);
+    controllerPoint_->connect(componentPoint_);
 }
 
 void Vst3Processor::disconnect() {
-    if (componentConnection_) componentConnection_->disconnect();
-    if (controllerConnection_) controllerConnection_->disconnect();
-    componentConnection_ = nullptr;
-    controllerConnection_ = nullptr;
+    if (componentPoint_ && controllerPoint_) {
+        componentPoint_->disconnect(controllerPoint_);
+        controllerPoint_->disconnect(componentPoint_);
+    }
+    componentPoint_ = nullptr;
+    controllerPoint_ = nullptr;
 }
 
 void Vst3Processor::activate() {

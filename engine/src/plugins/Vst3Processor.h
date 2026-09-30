@@ -33,7 +33,6 @@
 #include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
-#include "public.sdk/source/vst/hosting/connectionproxy.h"
 #include "public.sdk/source/vst/hosting/module.h"
 
 namespace gil::vst3 {
@@ -130,8 +129,8 @@ private:
     Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
     Steinberg::IPtr<Steinberg::Vst::IEditController> controller_;
     Steinberg::IPtr<Steinberg::Vst::IMidiMapping> midiMapping_;
-    Steinberg::IPtr<Steinberg::Vst::ConnectionProxy> componentConnection_;
-    Steinberg::IPtr<Steinberg::Vst::ConnectionProxy> controllerConnection_;
+    Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> componentPoint_;
+    Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> controllerPoint_;
     bool singleComponent_ = false;  // the component is its own controller
     bool active_ = false;
     bool processing_ = false;
