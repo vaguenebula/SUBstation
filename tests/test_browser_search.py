@@ -2,10 +2,12 @@ import json
 
 import pytest
 
+from gilstudio import _browser
+from gilstudio.audio.engine_bridge import AUDIO_EXTENSIONS
 from gilstudio.model.project import PluginRef
 from gilstudio.ui.browser.browser_models import BrowserItem
+from gilstudio.ui.browser.file_index import KINDS, usage_records
 from gilstudio.ui.browser.library import HALF_LIFE_DAYS, Library
-from gilstudio.ui.browser.search import find, match_quality
 
 DAY = 86400.0
 
@@ -34,6 +36,25 @@ def audio(name: str, folder: str = "Drums") -> BrowserItem:
 
 def names(items: list[BrowserItem]) -> list[str]:
     return [i.name for i in items]
+
+
+def find(items: list[BrowserItem], query: str, library: Library, sort: str = "rank") -> list[BrowserItem]:
+    """Search a list with the native backend, as the browser does its lists."""
+    backend = _browser.Browser("", list(AUDIO_EXTENSIONS))
+    try:
+        backend.set_external(1, [(KINDS.index(i.kind), i.name, i.path, i.detail, i.key, "") for i in items])
+        backend.set_usage(usage_records(library), HALF_LIFE_DAYS)
+        backend.search(query, sort, library.clock(), [1])
+        assert backend.wait_idle(10)
+        result = backend.take()[3]
+        by_key = {i.key: i for i in items}
+        return [by_key[row[4]] for row in result.rows(0, result.total)]
+    finally:
+        backend.close()
+
+
+def match_quality(item: BrowserItem, query: str) -> int:
+    return _browser.match_quality(item.name, item.kind == "audio", query)
 
 
 def test_keys_identify_items():
@@ -71,10 +92,10 @@ def test_bad_file_is_ignored(tmp_path, clock):
 
 
 def test_match_quality_prefers_name_starts():
-    terms = ["kick"]
-    assert match_quality(audio("kick.wav"), terms) > match_quality(audio("Kick 01.wav"), terms) \
-        > match_quality(audio("Big_Kick.wav"), terms) > match_quality(audio("Bigkick.wav"), terms) \
-        > match_quality(audio("Snare.wav", "Kicks"), terms)
+    query = "kick"
+    assert match_quality(audio("kick.wav"), query) > match_quality(audio("Kick 01.wav"), query) \
+        > match_quality(audio("Big_Kick.wav"), query) > match_quality(audio("Bigkick.wav"), query) \
+        > match_quality(audio("Snare.wav", "Kicks"), query)
 
 
 def test_rank_puts_used_items_first(library, clock):

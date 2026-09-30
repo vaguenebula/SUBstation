@@ -1,0 +1,442 @@
+{
+ "size": 200000,
+ "library": "%TEMP%\\gil-browser-bench\\lib-200000-1",
+ "used_records": 500,
+ "cpu_count": 24,
+ "index": {
+  "python": {
+   "wall_ms": 885,
+   "files": 200000
+  },
+  "native_new": {
+   "first_files_ms": 33,
+   "wall_ms": 554,
+   "files": 200000,
+   "folders": 2364,
+   "load_ms": 0.0,
+   "build_ms": 48.1997,
+   "pass_ms": 504.8774,
+   "listed": 3612,
+   "checked": 0
+  },
+  "native_restart": {
+   "first_files_ms": 115,
+   "wall_ms": 236,
+   "files": 200000,
+   "folders": 2364,
+   "load_ms": 67.8958,
+   "build_ms": 50.1632,
+   "pass_ms": 121.0809,
+   "listed": 0,
+   "checked": 3612
+  }
+ },
+ "query": [
+  {
+   "scope": "samples",
+   "sort": "rank",
+   "query": "",
+   "results": 200000,
+   "python_ms": 21.6,
+   "python_first_ms": 229.2,
+   "native_search_ms": 2.44,
+   "native_end_to_end_ms": 2.98,
+   "first_page_ms": 0.2,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "rank",
+   "query": "kick",
+   "results": 13268,
+   "python_ms": 94.4,
+   "python_first_ms": 108.1,
+   "native_search_ms": 7.97,
+   "native_end_to_end_ms": 8.49,
+   "first_page_ms": 0.46,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "rank",
+   "query": "e",
+   "results": 132674,
+   "python_ms": 299.7,
+   "python_first_ms": 446.9,
+   "native_search_ms": 17.71,
+   "native_end_to_end_ms": 17.84,
+   "first_page_ms": 0.27,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "rank",
+   "query": "808 bass",
+   "results": 425,
+   "python_ms": 73.0,
+   "python_first_ms": 72.3,
+   "native_search_ms": 7.13,
+   "native_end_to_end_ms": 7.62,
+   "first_page_ms": 0.23,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "rank",
+   "query": "kick deep",
+   "results": 249,
+   "python_ms": 69.5,
+   "python_first_ms": 69.5,
+   "native_search_ms": 7.12,
+   "native_end_to_end_ms": 7.64,
+   "first_page_ms": 0.23,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "rank",
+   "query": "zzqx",
+   "results": 0,
+   "python_ms": 69.2,
+   "python_first_ms": 70.6,
+   "native_search_ms": 6.18,
+   "native_end_to_end_ms": 6.55,
+   "first_page_ms": 0.04,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "name",
+   "query": "",
+   "results": 200000,
+   "python_ms": 18.5,
+   "python_first_ms": 16.8,
+   "native_search_ms": 1.26,
+   "native_end_to_end_ms": 1.63,
+   "first_page_ms": 0.24,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "name",
+   "query": "kick",
+   "results": 13268,
+   "python_ms": 73.7,
+   "python_first_ms": 71.1,
+   "native_search_ms": 6.62,
+   "native_end_to_end_ms": 6.73,
+   "first_page_ms": 0.25,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "name",
+   "query": "e",
+   "results": 132674,
+   "python_ms": 71.7,
+   "python_first_ms": 72.8,
+   "native_search_ms": 5.96,
+   "native_end_to_end_ms": 6.07,
+   "first_page_ms": 0.3,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "name",
+   "query": "808 bass",
+   "results": 425,
+   "python_ms": 70.7,
+   "python_first_ms": 69.5,
+   "native_search_ms": 7.19,
+   "native_end_to_end_ms": 7.56,
+   "first_page_ms": 0.24,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "name",
+   "query": "kick deep",
+   "results": 249,
+   "python_ms": 71.9,
+   "python_first_ms": 71.5,
+   "native_search_ms": 7.2,
+   "native_end_to_end_ms": 7.69,
+   "first_page_ms": 0.26,
+   "same_results": true
+  },
+  {
+   "scope": "samples",
+   "sort": "name",
+   "query": "zzqx",
+   "results": 0,
+   "python_ms": 68.8,
+   "python_first_ms": 69.8,
+   "native_search_ms": 6.61,
+   "native_end_to_end_ms": 6.7,
+   "first_page_ms": 0.03,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "rank",
+   "query": "",
+   "results": 447,
+   "python_ms": 25.4,
+   "python_first_ms": 26.3,
+   "native_search_ms": 0.25,
+   "native_end_to_end_ms": 0.58,
+   "first_page_ms": 0.21,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "rank",
+   "query": "kick",
+   "results": 14,
+   "python_ms": 24.3,
+   "python_first_ms": 26.1,
+   "native_search_ms": 0.29,
+   "native_end_to_end_ms": 0.64,
+   "first_page_ms": 0.07,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "rank",
+   "query": "e",
+   "results": 343,
+   "python_ms": 25.5,
+   "python_first_ms": 26.0,
+   "native_search_ms": 0.33,
+   "native_end_to_end_ms": 0.56,
+   "first_page_ms": 0.15,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "rank",
+   "query": "808 bass",
+   "results": 0,
+   "python_ms": 24.9,
+   "python_first_ms": 24.9,
+   "native_search_ms": 0.28,
+   "native_end_to_end_ms": 0.59,
+   "first_page_ms": 0.02,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "rank",
+   "query": "kick deep",
+   "results": 1,
+   "python_ms": 23.6,
+   "python_first_ms": 24.5,
+   "native_search_ms": 0.35,
+   "native_end_to_end_ms": 0.6,
+   "first_page_ms": 0.01,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "rank",
+   "query": "zzqx",
+   "results": 0,
+   "python_ms": 26.6,
+   "python_first_ms": 27.8,
+   "native_search_ms": 0.33,
+   "native_end_to_end_ms": 0.57,
+   "first_page_ms": 0.01,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "name",
+   "query": "",
+   "results": 447,
+   "python_ms": 24.6,
+   "python_first_ms": 25.1,
+   "native_search_ms": 0.39,
+   "native_end_to_end_ms": 0.88,
+   "first_page_ms": 0.15,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "name",
+   "query": "kick",
+   "results": 14,
+   "python_ms": 24.8,
+   "python_first_ms": 25.7,
+   "native_search_ms": 0.44,
+   "native_end_to_end_ms": 0.62,
+   "first_page_ms": 0.1,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "name",
+   "query": "e",
+   "results": 343,
+   "python_ms": 24.5,
+   "python_first_ms": 26.3,
+   "native_search_ms": 0.36,
+   "native_end_to_end_ms": 0.63,
+   "first_page_ms": 0.17,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "name",
+   "query": "808 bass",
+   "results": 0,
+   "python_ms": 25.0,
+   "python_first_ms": 26.1,
+   "native_search_ms": 0.28,
+   "native_end_to_end_ms": 0.65,
+   "first_page_ms": 0.02,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "name",
+   "query": "kick deep",
+   "results": 1,
+   "python_ms": 23.7,
+   "python_first_ms": 24.2,
+   "native_search_ms": 0.4,
+   "native_end_to_end_ms": 0.65,
+   "first_page_ms": 0.01,
+   "same_results": true
+  },
+  {
+   "scope": "place",
+   "sort": "name",
+   "query": "zzqx",
+   "results": 0,
+   "python_ms": 24.4,
+   "python_first_ms": 26.8,
+   "native_search_ms": 0.3,
+   "native_end_to_end_ms": 0.57,
+   "first_page_ms": 0.01,
+   "same_results": true
+  }
+ ],
+ "all_results_same": true,
+ "indexing": [
+  {
+   "query": "",
+   "native_search_ms": 1.34,
+   "native_end_to_end_ms": 1.6,
+   "indexing": true
+  },
+  {
+   "query": "kick",
+   "native_search_ms": 7.55,
+   "native_end_to_end_ms": 7.98,
+   "indexing": true
+  },
+  {
+   "query": "e",
+   "native_search_ms": 17.29,
+   "native_end_to_end_ms": 17.64,
+   "indexing": true
+  },
+  {
+   "query": "808 bass",
+   "native_search_ms": 6.85,
+   "native_end_to_end_ms": 7.34,
+   "indexing": true
+  },
+  {
+   "query": "kick deep",
+   "native_search_ms": 6.67,
+   "native_end_to_end_ms": 7.04,
+   "indexing": true
+  },
+  {
+   "query": "zzqx",
+   "native_search_ms": 6.12,
+   "native_end_to_end_ms": 6.32,
+   "indexing": true
+  },
+  {
+   "query": "",
+   "native_search_ms": 1.39,
+   "native_end_to_end_ms": 1.61,
+   "indexing": true
+  },
+  {
+   "query": "kick",
+   "native_search_ms": 7.54,
+   "native_end_to_end_ms": 7.93,
+   "indexing": true
+  },
+  {
+   "query": "e",
+   "native_search_ms": 19.31,
+   "native_end_to_end_ms": 19.64,
+   "indexing": true
+  },
+  {
+   "query": "808 bass",
+   "native_search_ms": 6.8,
+   "native_end_to_end_ms": 6.99,
+   "indexing": true
+  },
+  {
+   "query": "kick deep",
+   "native_search_ms": 6.63,
+   "native_end_to_end_ms": 6.83,
+   "indexing": true
+  },
+  {
+   "query": "zzqx",
+   "native_search_ms": 6.4,
+   "native_end_to_end_ms": 6.53,
+   "indexing": true
+  },
+  {
+   "query": "",
+   "native_search_ms": 1.35,
+   "native_end_to_end_ms": 1.58,
+   "indexing": true
+  },
+  {
+   "query": "kick",
+   "native_search_ms": 8.1,
+   "native_end_to_end_ms": 8.44,
+   "indexing": true
+  },
+  {
+   "query": "e",
+   "native_search_ms": 16.51,
+   "native_end_to_end_ms": 16.7,
+   "indexing": true
+  },
+  {
+   "query": "808 bass",
+   "native_search_ms": 6.86,
+   "native_end_to_end_ms": 7.34,
+   "indexing": true
+  },
+  {
+   "query": "kick deep",
+   "native_search_ms": 7.26,
+   "native_end_to_end_ms": 7.56,
+   "indexing": true
+  },
+  {
+   "query": "zzqx",
+   "native_search_ms": 5.93,
+   "native_end_to_end_ms": 6.38,
+   "indexing": true
+  }
+ ],
+ "playback": {
+  "cpu_load_max": 0.057,
+  "cpu_load_median": 0.047,
+  "playhead_max_lag_ms": 10.4,
+  "device": "Speakers (Focusrite USB Audio)",
+  "buffer_ms": 10.0
+ }
+}

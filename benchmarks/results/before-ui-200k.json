@@ -1,0 +1,261 @@
+{
+ "size": 200000,
+ "library": "%TEMP%\\gil-browser-bench\\lib-200000-1",
+ "audio": false,
+ "python": "3.12.10",
+ "code": "before (63776d3)",
+ "start": {
+  "first_results_ms": 1522,
+  "indexed_ms": 1522,
+  "files": 200000,
+  "max_stall_ms": 410.8,
+  "p99_stall_ms": 21.7
+ },
+ "restart": {
+  "first_results_ms": 1855,
+  "indexed_ms": 1855,
+  "max_stall_ms": 331.0,
+  "p99_stall_ms": 22.2
+ },
+ "query": {
+  "results": [
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "kick",
+    "ms": 292.1,
+    "rows_total": 13268
+   },
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "e",
+    "ms": 637.6,
+    "rows_total": 132674
+   },
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "808 bass",
+    "ms": 246.0,
+    "rows_total": 425
+   },
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "kick deep",
+    "ms": 238.5,
+    "rows_total": 249
+   },
+   {
+    "scope": "samples",
+    "sort": "rank",
+    "query": "zzqx",
+    "ms": 238.4,
+    "rows_total": 0
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "kick",
+    "ms": 259.4,
+    "rows_total": 13268
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "e",
+    "ms": 381.4,
+    "rows_total": 132674
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "808 bass",
+    "ms": 244.5,
+    "rows_total": 425
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "kick deep",
+    "ms": 239.7,
+    "rows_total": 249
+   },
+   {
+    "scope": "samples",
+    "sort": "name",
+    "query": "zzqx",
+    "ms": 237.3,
+    "rows_total": 0
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "kick",
+    "ms": 301.7,
+    "rows_total": 13268
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "e",
+    "ms": 626.0,
+    "rows_total": 132676
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "808 bass",
+    "ms": 253.9,
+    "rows_total": 425
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "kick deep",
+    "ms": 253.6,
+    "rows_total": 249
+   },
+   {
+    "scope": "all",
+    "sort": "rank",
+    "query": "zzqx",
+    "ms": 251.7,
+    "rows_total": 0
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "kick",
+    "ms": 256.5,
+    "rows_total": 13268
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "e",
+    "ms": 380.5,
+    "rows_total": 132676
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "808 bass",
+    "ms": 243.0,
+    "rows_total": 425
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "kick deep",
+    "ms": 263.0,
+    "rows_total": 249
+   },
+   {
+    "scope": "all",
+    "sort": "name",
+    "query": "zzqx",
+    "ms": 247.1,
+    "rows_total": 0
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "kick",
+    "ms": 333.8,
+    "rows_total": 13268
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "e",
+    "ms": 685.2,
+    "rows_total": 132674
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "808 bass",
+    "ms": 292.9,
+    "rows_total": 425
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "kick deep",
+    "ms": 291.4,
+    "rows_total": 249
+   },
+   {
+    "scope": "place",
+    "sort": "rank",
+    "query": "zzqx",
+    "ms": 288.9,
+    "rows_total": 0
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "kick",
+    "ms": 305.2,
+    "rows_total": 13268
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "e",
+    "ms": 433.4,
+    "rows_total": 132674
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "808 bass",
+    "ms": 297.4,
+    "rows_total": 425
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "kick deep",
+    "ms": 291.0,
+    "rows_total": 249
+   },
+   {
+    "scope": "place",
+    "sort": "name",
+    "query": "zzqx",
+    "ms": 288.5,
+    "rows_total": 0
+   }
+  ],
+  "max_stall_ms": 536.7,
+  "p99_stall_ms": 3.1,
+  "median_ms": 288.7,
+  "max_ms": 685.2
+ },
+ "typing": {
+  "after_last_key_ms": 251.2,
+  "max_stall_ms": 96.6,
+  "p99_stall_ms": 1.9
+ },
+ "indexing": {
+  "results": [
+   {
+    "query": "kick",
+    "ms": 294.7,
+    "rows_total": 13268,
+    "indexing_at_end": true
+   },
+   {
+    "query": "e",
+    "ms": 1242.4,
+    "rows_total": 132674,
+    "indexing_at_end": false
+   }
+  ],
+  "max_stall_ms": 1242.2,
+  "p99_stall_ms": 97.6
+ }
+}

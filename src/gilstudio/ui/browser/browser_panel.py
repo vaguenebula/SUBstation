@@ -10,7 +10,13 @@ or a drag that is dropped somewhere; library.py keeps the counts.
 
 Plug-ins are listed as the background scan finds them (Plug-ins › Instruments /
 Audio Effects); the footer shows the scan's progress, and hovering over
-"Plug-ins" lists the files that could not be read."""
+"Plug-ins" lists the files that could not be read.
+
+Every list is a search, run by the native backend on its own thread (see
+file_index.py): the panel asks, and shows the results when they come, a page at
+a time. A search asked for replaces the one running. When the index changes
+(files found while scanning, or changed in a place), the list is searched again
+and keeps its current item where it can."""
 
 from __future__ import annotations
 
@@ -21,6 +27,7 @@ from PySide6.QtCore import (
     QEvent,
     QModelIndex,
     QObject,
+    QPoint,
     QSettings,
     Qt,
     QTimer,
@@ -52,12 +59,13 @@ from ...model.editor import BUILTIN_CATEGORIES, BUILTIN_DEVICES
 from .. import icons
 from ..widgets import ToggleButton
 from .browser_models import BrowserItem, ItemListModel, audio_key
-from .file_index import FileIndex, PluginIndex
+from .file_index import FileIndex, PluginIndex, SearchResult
 from .library import Library
-from .search import SORTS, find
+from .search import BUILTIN, PLUGINS, SORTS, plugin_tag, scope_query
 
 ROLE_SCOPE = Qt.ItemDataRole.UserRole + 1
 PLUGIN_CATEGORIES = ("Instruments", "Audio Effects")
+KEEP_WITHIN = 5000  # rows: a list searched again keeps its current item if it is this near the top
 
 
 def builtin_items(category: str | None = None) -> list[BrowserItem]:
@@ -113,19 +121,28 @@ class BrowserPanel(QWidget):
         settings = QSettings()
         stored = settings.value("browser/places")
         self.places: list[str] = [str(p) for p in stored] if isinstance(stored, list) and stored else default_places()
+        self.library = Library()
         self.index = FileIndex(self)
-        self.index.updated.connect(self._refresh)
+        self.index.updated.connect(self._index_updated)
+        self.index.results.connect(self._show_results)
+        self.index.set_items(BUILTIN, [(item, item.detail) for item in builtin_items()])
+        self.index.set_usage(self.library)
         self.plugin_index = PluginIndex(self)
         self.plugin_index.updated.connect(self._plugins_updated)
         self.plugin_index.progress.connect(self._scan_progress)
         self.plugin_index.status_message.connect(self.status_message)
         self._scan_text = ""
-        self.library = Library()
+        self._searching = False  # results asked for and not shown yet
+        self._select_first = False  # when they come (Enter was pressed before)
+        self._keep: tuple | None = None  # where the list was, to go back to when they come
+        self._restoring = False
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search  (Ctrl+F)")
         self.search.setClearButtonEnabled(True)
-        self._search_timer = QTimer(self, singleShot=True, interval=150)
+        # Searching doesn't hold up the UI, so there is no need to wait for typing
+        # to pause; this only merges changes that come together.
+        self._search_timer = QTimer(self, singleShot=True, interval=0)
         self._search_timer.timeout.connect(self._refresh)
         self.search.textChanged.connect(self._search_timer.start)
         self.search.returnPressed.connect(self._select_first_result)
@@ -204,8 +221,8 @@ class BrowserPanel(QWidget):
         layout.addWidget(splitter, 1)
         layout.addLayout(footer)
 
+        self.index.set_places(self.places)
         self._build_sidebar()
-        self.index.rebuild(self.places)
         self.plugin_index.scan()
 
     @staticmethod
@@ -303,8 +320,8 @@ class BrowserPanel(QWidget):
         if folder and folder not in self.places:
             self.places.append(str(Path(folder)))
             self._save_places()
+            self.index.set_places(self.places)  # scans the new one only
             self._build_sidebar(select=("place", str(Path(folder))))
-            self.index.rebuild(self.places)
         else:
             self._build_sidebar(select=self._scope())
 
@@ -312,8 +329,8 @@ class BrowserPanel(QWidget):
         if place in self.places:
             self.places.remove(place)
             self._save_places()
+            self.index.set_places(self.places)
             self._build_sidebar()
-            self.index.rebuild(self.places)
 
     def _save_places(self) -> None:
         QSettings().setValue("browser/places", self.places)
@@ -336,8 +353,9 @@ class BrowserPanel(QWidget):
             if failures:
                 self.status_message.emit(f"{failures} plug-in file{'s' if failures != 1 else ''} could not be read "
                                          "(hover over Plug-ins in the browser for details).")
+        self.index.set_items(PLUGINS, [(item, plugin_tag(item)) for item in self.plugin_index.items])
         self._update_plugins_tooltip()
-        self._refresh()
+        self._refresh(keep=True)
 
     def _update_plugins_tooltip(self) -> None:
         failures = self.plugin_index.failures
@@ -350,41 +368,88 @@ class BrowserPanel(QWidget):
                 lines.append(f"...and {len(failures) - 30} more")
         self._plugins_entry.setToolTip(0, "\n".join(lines))
 
-    def _plugin_items(self, category: str | None) -> list[BrowserItem]:
-        items = self.plugin_index.items
-        if category == "Instruments":
-            return [i for i in items if i.plugin.instrument]
-        if category == "Audio Effects":
-            return [i for i in items if not i.plugin.instrument]
-        return items
-
     # --- Content -------------------------------------------------------------------
 
-    def _refresh(self) -> None:
+    @property
+    def searching(self) -> bool:
+        """Results are on their way."""
+        return self._searching or self._search_timer.isActive()
+
+    def _showing_tree(self) -> bool:
         scope = self._scope()
-        terms = self.search.text().lower().split()
-        if scope[0] == "place" and not terms:
+        return scope[0] == "place" and not self.search.text().split()
+
+    def _refresh(self, keep: bool = False) -> None:
+        """Search for what the list should show. `keep`: the list is searched
+        again for a change elsewhere (the index, the plug-ins), so it keeps its
+        current item and scroll position."""
+        self._search_timer.stop()
+        scope = self._scope()
+        if self._showing_tree():
+            self._searching = False
+            self._select_first = False
             root = scope[1]
             self.fs_model.setRootPath(root)
             self.tree_view.setRootIndex(self.fs_model.index(root))
             self.content.setCurrentWidget(self.tree_view)
             self.status.setText(root)
             return
-
-        if scope[0] == "all":
-            items = builtin_items() + self.plugin_index.items + self.index.audio
-        elif scope[0] == "plugins":
-            items = self._plugin_items(scope[1] if len(scope) > 1 else None)
-        elif scope[0] == "builtin":
-            items = builtin_items(scope[1] if len(scope) > 1 else None)
-        elif scope[0] == "place":
-            prefix = str(Path(scope[1])).lower().rstrip("\\/") + "\\"
-            items = [i for i in self.index.audio if i.path.lower().startswith(prefix)]
+        groups, tag, prefix = scope_query(scope)
+        if keep and self.content.currentWidget() is self.list_view:
+            if self._keep is None:  # (a search replacing one that was to keep it keeps that)
+                self._keep = self._list_position()
         else:
-            items = self.index.audio
-        items = find(items, self.search.text(), self.library, self.sort.currentData())
-        self.list_model.set_items(items)
-        self.content.setCurrentWidget(self.list_view)
+            self._keep = None
+        self._searching = True
+        self.index.search(self.search.text(), self.sort.currentData(), self.library.clock(), groups, tag, prefix)
+
+    def _index_updated(self) -> None:
+        if self._showing_tree():
+            return  # the tree shows the folder itself
+        self._refresh(keep=True)
+
+    def _show_results(self, result: SearchResult) -> None:
+        if not self._searching:
+            return  # the tree was shown meanwhile
+        self._searching = False
+        keep, self._keep = self._keep, None
+        self._restoring = True
+        try:
+            self.list_model.set_source(result)
+            self.content.setCurrentWidget(self.list_view)
+            if keep is not None:
+                self._restore_position(keep, result)
+        finally:
+            self._restoring = False
+        self._update_status()
+        if self._select_first:
+            self._select_first = False
+            self._select_first_row()
+
+    def _list_position(self) -> tuple:
+        """(current item, its row on screen, first row on screen)."""
+        view = self.list_view
+        top = view.indexAt(QPoint(1, 1)).row()
+        current = view.currentIndex()
+        item = self.list_model.item(current)
+        return item, (current.row() - top if item is not None and top >= 0 else 0), max(top, 0)
+
+    def _restore_position(self, keep: tuple, result: SearchResult) -> None:
+        item, offset, top = keep
+        row = result.find(item) if item is not None else -1
+        if 0 <= row < KEEP_WITHIN:
+            top = max(0, row - offset)
+            self.list_model.ensure_rows(row + 1)
+            self.list_view.setCurrentIndex(self.list_model.index(row))
+        if top > 0:
+            self.list_model.ensure_rows(top + 1)
+            self.list_view.scrollTo(self.list_model.index(min(top, self.list_model.rowCount() - 1)),
+                                    QAbstractItemView.ScrollHint.PositionAtTop)
+
+    def _update_status(self) -> None:
+        scope = self._scope()
+        count = self.list_model.total
+        items = f"{count} item{'s' if count != 1 else ''}"
         if scope[0] == "plugins":
             failures = len(self.plugin_index.failures)
             if self.plugin_index.scanning:
@@ -392,19 +457,19 @@ class BrowserPanel(QWidget):
             elif not self.plugin_index.plugins:
                 self.status.setText("No VST3 plug-ins found")
             else:
-                note = f", {failures} could not be read" if failures and not terms else ""
-                self.status.setText(f"{len(items)} plug-in{'s' if len(items) != 1 else ''}{note}")
+                note = f", {failures} could not be read" if failures and not self.search.text().split() else ""
+                self.status.setText(f"{count} plug-in{'s' if count != 1 else ''}{note}")
         elif scope[0] == "all" and (self.index.indexing or self.plugin_index.scanning):
             busy = "Indexing" if self.index.indexing else "Scanning plug-ins"
-            self.status.setText(f"{len(items)} item{'s' if len(items) != 1 else ''} ({busy}…)")
-        elif self.index.indexing:
-            self.status.setText("Indexing…")
+            self.status.setText(f"{items} ({busy}…)")
+        elif scope[0] != "builtin" and self.index.indexing:
+            self.status.setText(f"{items} (Indexing…)")
         else:
-            self.status.setText(f"{len(items)} item{'s' if len(items) != 1 else ''}")
+            self.status.setText(items)
 
     def _list_current_changed(self, current: QModelIndex, _previous) -> None:
         item = self.list_model.item(current)
-        if item and item.kind == "audio":
+        if item and item.kind == "audio" and not self._restoring:
             self._maybe_preview(item.path)
 
     def _tree_current_changed(self, current: QModelIndex, _previous) -> None:
@@ -427,10 +492,15 @@ class BrowserPanel(QWidget):
     # Uses are counted but the list is not re-sorted then: the selection stays put.
 
     def _used_list(self, indexes: list[QModelIndex]) -> None:
-        self.library.record_use([item.key for item in map(self.list_model.item, indexes) if item])
+        self._record_use([item.key for item in map(self.list_model.item, indexes) if item])
 
     def _used_tree(self, indexes: list[QModelIndex]) -> None:
-        self.library.record_use([audio_key(self.fs_model.filePath(i)) for i in indexes if not self.fs_model.isDir(i)])
+        self._record_use([audio_key(self.fs_model.filePath(i)) for i in indexes if not self.fs_model.isDir(i)])
+
+    def _record_use(self, keys: list[str]) -> None:
+        if keys:
+            self.library.record_use(keys)
+            self.index.set_usage(self.library)
 
     def _activate_list(self, index: QModelIndex) -> None:
         item: BrowserItem | None = self.list_model.item(index)
@@ -450,9 +520,14 @@ class BrowserPanel(QWidget):
             self.file_activated.emit(self.fs_model.filePath(index))
 
     def _select_first_result(self) -> None:
-        if self._search_timer.isActive():  # Enter typed before the results caught up
-            self._search_timer.stop()
+        if self._search_timer.isActive():
             self._refresh()
+        if self._searching:  # Enter typed before the results came: select when they do
+            self._select_first = True
+            return
+        self._select_first_row()
+
+    def _select_first_row(self) -> None:
         view = self.content.currentWidget()
         first = view.model().index(0, 0, view.rootIndex())
         if first.isValid():
@@ -476,5 +551,5 @@ class BrowserPanel(QWidget):
         self.search.selectAll()
 
     def shutdown(self) -> None:
-        self.index.wait()
+        self.index.close()
         self.plugin_index.wait()

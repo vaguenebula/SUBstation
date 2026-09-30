@@ -29,6 +29,8 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - Master track, metronome, loop brace, follow mode, CPU meter.
 - Browser: categories (All, Samples, Built-in, Plug-ins), user "Places", instant search, click-to-preview, drag-and-drop or double-click to add clips. Lists sort by *Rank* (what you add most, and most recently, first; counts kept in `%LOCALAPPDATA%\GIL Studio\library.json`) or *Name*.
   - Instruments (built-in or plug-in) go on a MIDI track, replacing its instrument. With no MIDI track selected, double-clicking one or dropping it below the tracks makes one.
+  - The files under the places are indexed in the background and the index is kept (`%LOCALAPPDATA%\GIL Studio\browser-index.bin`), so the next start shows it at once and only looks again at folders that changed. Files added, removed or renamed in a place show up while the program runs. Results show while a first scan is still going. Right-click › *Rescan* reads every folder again (for drives that don't report changes).
+  - Searching 200 000 files takes about 10 ms and never holds up the window or the audio; see [benchmarks/README.md](benchmarks/README.md).
 - Device view with the built-in Synth instrument and Utility device (gain/pan/width), and plug-ins, all through the same `Processor` interface. Parameters that choose between named values get a list; frequency and time knobs turn logarithmically. Right-click a device to move it along the chain.
 - Undo/redo for all edits, `.gilproj` projects (JSON), WAV export (16/24/32-bit float).
 - Audio devices: ASIO drivers (see below), or WASAPI shared or exclusive, with the sample rate and buffer size.
@@ -73,7 +75,8 @@ python -m pip install --no-build-isolation -e .    # compiles gilstudio._engine
 ```
 
 Re-run the last command after changing any C++ code (the build is incremental,
-in `build/`). Python changes need no reinstall. If the newest Visual Studio
+in `build/`; it makes `gilstudio._engine` and `gilstudio._browser`). Python changes
+need no reinstall. If the newest Visual Studio
 causes trouble, pick another one with `$env:CMAKE_GENERATOR="Visual Studio 17 2022"`.
 
 The parts of the VST 3 SDK the engine uses are included (`engine/third_party/vst3sdk`,
@@ -116,6 +119,7 @@ python -m pytest
 - Warp tests check that warped clips land on their beats at any tempo, keep their pitch, start sample-aligned (also after a locate), transpose to the right frequency, and that Re-Pitch filters rather than aliases.
 - MIDI engine tests check that notes start on their sample and follow the tempo, that the Synth plays the right pitch and level, and that loop wraps and offline renders leave no hanging notes.
 - Model tests cover overlap resolution, trims, splits (audio and MIDI), note editing, undo/redo and save/load.
+- Browser tests hold the native backend to the Python code it replaced (`tests/browser_reference.py`, kept as it was): the same files from a folder tree (hidden names, depth and file limits, junctions and symbolic links, overlapping and missing places) in the same order, and the same results for random queries, sorts, filters and use counts, item for item. Python's own text rules (`str.lower`, `casefold`, `split`, the regex word starts) are checked for every Unicode character. Others check the saved index (checked by folder times, rescan, damaged files), changes seen while running, that only the latest search's results are handed out, paging, and that waiting releases the GIL.
 - The UI tests drive the real main window offscreen: mouse drags, drops, header controls, dialogs, and the piano roll.
 - VST3 tests use three test plug-ins built with the engine: an instrument with a separate controller (it reports the transport it gets back as parameters), a single-component effect with adjustable latency and a Win32 editor, and a mono effect without a controller. They check scanning (including a plug-in that crashes or hangs while loading), sample-exact notes, parameters, the transport and loop splitting, latency compensation, mono buses, state and presets, editor windows (resizing, closing, edits reported for undo), and the device view, browser, undo and projects in the application. Editor tests briefly show real windows. The tests see only these plug-ins, never the installed ones.
 
@@ -160,8 +164,16 @@ src/gilstudio/                 Python: UI, model, undo, file I/O
   ui/           main_window, transport_bar, device_panel, dialogs, clip_view,
                 arrangement/ (custom-painted ruler, lanes, headers; numpy waveform tiles),
                 piano_roll/ (keys, ruler, note grid, velocity lane),
-                browser/ (background file index, search and ranking, library of use counts, preview)
+                browser/ (the panel, paged lists, use counts, preview; file_index.py drives the native backend)
   plugins/      scanner.py: finds VST3 plug-ins and reads them in child processes (scan_worker.py); cache
+browser/src/                   C++: the browser's backend, module gilstudio._browser (independent of the engine)
+  Indexer       the saved index of the places' folders, kept up to date; publishes snapshots
+  Search        filtering and ordering over snapshots, as the Python search did
+  Text          Python's str.lower/casefold/split and regex classes, from UnicodeTables.inc
+                (generated by browser/tools/gen_unicode_tables.py)
+  Browser       the two threads, and the event that tells the UI there is something to take
+  Platform      listing folders, folder times, watching for changes, background priority (Win32)
+benchmarks/                    the browser's benchmarks and their results (not run by pytest)
 engine/src/                    C++: everything on the audio thread, and plug-in hosting
   Engine        public API; edit model; builds and publishes render snapshots
   Renderer      mixing: clips and notes -> inserts -> fader/pan -> master; loop; metronome; preview
@@ -218,6 +230,14 @@ tests/asio_driver/             the fake ASIO driver the tests use
 - A device's plug-in lives as long as the device is in its chain: reordering or changing the chain around it never reloads it. When a plug-in device goes away (deleted, or its track) its state is kept, so undo brings it back as it was.
 - Delay compensation: each track is delayed (after its devices, before its fader) to line up with the track whose enabled devices add the most latency; the metronome is delayed as much. Offline renders render that much ahead and drop it.
 - **CLAP** would be a second `PluginFormat` (engine/src/plugins/PluginFormat.h): its plug-ins become `Processor`s, its main-thread callbacks go in `Engine::idle()`, and the scanner, device view and projects work as they do for VST3.
+
+**Browser**
+- The backend (`browser/src`, module `gilstudio._browser`) shares nothing with the engine: no locks, no threads. It has two threads of its own: the indexer, at Windows' background priority for CPU, disk and memory (it yields to playback and to decoding), and one for searches.
+- The indexer keeps a tree of the folders under the places, each with its audio files, and saves it. On start it compares every folder's last-write time and lists only those that changed; while running, `ReadDirectoryChangesW` on each place says which folders to list again (all folders are compared again if too much changed at once). What it lists follows the walk the Python code did (depth first, last folder first, 16 folders deep, 300 000 files a place, no names starting with `.` or `$`, junctions but not symbolic links), so the lists are the same.
+- Searches never read that tree: the indexer publishes immutable snapshots of it (also every so often during a long scan), holding the files in the list's own order and in casefold order, so ordering a search is a pass over them rather than a sort. A new search makes the running one stop; only the latest one's results are handed out.
+- Neither thread calls into Python. When there are results or the index changed, the backend sets a Win32 event; `QWinEventNotifier` wakes the UI thread, which takes them. Calls from Python release the GIL.
+- Results cross into Python a page at a time (256 rows, more as the list scrolls): a view lays out every row it has, so a list of every file would cost the UI thread about 200 ms each time it changed.
+- Matching and ordering are defined by Python's `str.lower()`, `str.casefold()`, `str.split()` and the regex classes `\s`/`\w` (see `search.py`); the backend uses tables generated from Python itself, so they agree for every character. Item keys use Windows' own lower case, as `os.path.normcase` does.
 
 ## Not yet implemented
 
