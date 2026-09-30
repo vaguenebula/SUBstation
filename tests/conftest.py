@@ -19,8 +19,9 @@ SAMPLE_RATE = 48000  # the engine's rate when no device is open
 TEST_PLUGINS = Path(_engine.__file__).parent / "_testplugins" / "GILTestPlugins.vst3"
 os.environ["GILSTUDIO_VST3_PATH"] = str(TEST_PLUGINS.parent)
 os.environ["GILSTUDIO_PLUGIN_CACHE"] = str(Path(tempfile.mkdtemp(prefix="gil-plugin-cache-")) / "vst3-cache.json")
-# Nor the browser's use counts (each window gets its own; see `window`).
+# Nor the browser's use counts or its index (each window gets its own; see `window`).
 os.environ["GILSTUDIO_LIBRARY"] = str(Path(tempfile.mkdtemp(prefix="gil-library-")) / "library.json")
+os.environ["GILSTUDIO_BROWSER_INDEX"] = str(Path(tempfile.mkdtemp(prefix="gil-index-")) / "browser-index.bin")
 
 # The fake ASIO driver (tests/asio_driver), built with the engine when it has the
 # ASIO SDK. The tests see only it, never the drivers installed on the computer.
@@ -90,6 +91,7 @@ def window(app, tmp_path):
     settings.clear()
     settings.setValue("browser/places", [str(tmp_path)])
     os.environ["GILSTUDIO_LIBRARY"] = str(tmp_path / "library.json")
+    os.environ["GILSTUDIO_BROWSER_INDEX"] = str(tmp_path / "browser-index.bin")
     # Exceptions raised inside Qt slots are only printed; collect them instead.
     errors = []
     previous_hook = sys.excepthook

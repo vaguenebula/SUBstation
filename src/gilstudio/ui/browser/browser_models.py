@@ -59,23 +59,64 @@ class BrowserItem:
             return f"plugin:{self.plugin.format}:{self.plugin.uid}"
         return audio_key(self.path) if self.kind == "audio" else f"{self.kind}:{self.path}"
 
-    def matches(self, terms: list[str]) -> bool:
-        haystack = f"{self.name} {self.detail}".lower()
-        return all(term in haystack for term in terms)
+
+class _ListSource:
+    def __init__(self, items: list[BrowserItem]):
+        self._list = items
+        self.total = len(items)
+
+    def items(self, start: int, count: int) -> list[BrowserItem]:
+        return self._list[start:start + count]
 
 
 class ItemListModel(QAbstractListModel):
-    """Flat list of browser items (search results, samples, plug-ins); draggable."""
+    """Flat list of browser items (search results, samples, plug-ins); draggable.
+
+    It shows a source (a search's results) a page at a time: the first page at
+    once, more as the view scrolls near the end (Qt's fetchMore). Views lay out
+    every row they have, so a list of 200 000 files would cost the UI thread
+    that much each time it changed; this way it costs a page."""
+
+    PAGE = 256
 
     def __init__(self, library=None, parent=None):
         super().__init__(parent)
         self.library = library  # a Library, for how often each item was used
         self._items: list[BrowserItem] = []
+        self._source = _ListSource([])
+
+    @property
+    def total(self) -> int:
+        """Rows in the whole list, shown or not yet."""
+        return self._source.total
 
     def set_items(self, items: list[BrowserItem]) -> None:
+        self.set_source(_ListSource(items))
+
+    def set_source(self, source) -> None:
+        """Show a source: anything with `total` and `items(start, count)`."""
         self.beginResetModel()
-        self._items = items
+        self._source = source
+        self._items = source.items(0, min(self.PAGE, source.total))
         self.endResetModel()
+
+    def ensure_rows(self, rows: int) -> None:
+        """Have at least `rows` rows (or all there are)."""
+        rows = min(rows, self._source.total)
+        if rows <= len(self._items):
+            return
+        more = self._source.items(len(self._items), rows - len(self._items))
+        if more:
+            self.beginInsertRows(QModelIndex(), len(self._items), len(self._items) + len(more) - 1)
+            self._items.extend(more)
+            self.endInsertRows()
+
+    def canFetchMore(self, parent: QModelIndex = QModelIndex()) -> bool:
+        return not parent.isValid() and len(self._items) < self._source.total
+
+    def fetchMore(self, parent: QModelIndex = QModelIndex()) -> None:
+        if not parent.isValid():
+            self.ensure_rows(len(self._items) + self.PAGE)
 
     def item(self, index: QModelIndex) -> BrowserItem | None:
         return self._items[index.row()] if index.isValid() and index.row() < len(self._items) else None

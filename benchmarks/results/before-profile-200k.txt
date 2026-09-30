@@ -1,0 +1,80 @@
+﻿library: %TEMP%\gil-browser-bench\lib-200000-1
+walk_audio (warm cache)                                     809.6 ms
+walk_audio again                                            822.4 ms
+  audio items: 200000
+         3663768 function calls in 1.540 seconds
+
+   Ordered by: internal time
+   List reduced from 27 to 8 due to restriction <8>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.636    0.636    1.540    1.540 src\gilstudio\ui\browser\file_index.py:20(walk_audio)
+     3612    0.202    0.000    0.202    0.000 {built-in method nt.scandir}
+   200000    0.184    0.000    0.422    0.000 <frozen ntpath>:236(split)
+   200000    0.106    0.000    0.151    0.000 <frozen ntpath>:179(splitroot)
+   200000    0.102    0.000    0.102    0.000 <string>:2(__init__)
+   200000    0.036    0.000    0.458    0.000 <frozen ntpath>:268(basename)
+   260522    0.032    0.000    0.032    0.000 {method 'endswith' of 'str' objects}
+   260522    0.031    0.000    0.031    0.000 {method 'lower' of 'str' objects}
+
+
+
+bare os.scandir walk (floor for Python)                     468.5 ms
+index dedupe + sort by name                                 167.3 ms
+find('', rank) first time (keys uncached)                   212.5 ms
+find('', rank) again                                          5.1 ms
+  -> 200000 results
+find('k', rank) first time (keys uncached)                  196.0 ms
+find('k', rank) again                                       145.0 ms
+  -> 42682 results
+find('kick', rank) first time (keys uncached)               113.8 ms
+find('kick', rank) again                                    100.0 ms
+  -> 13268 results
+find('kick deep', rank) first time (keys uncached)           73.1 ms
+find('kick deep', rank) again                                73.7 ms
+  -> 249 results
+find('e', rank) first time (keys uncached)                  462.5 ms
+find('e', rank) again                                       312.8 ms
+  -> 132674 results
+find('808 bass', rank) first time (keys uncached)            76.8 ms
+find('808 bass', rank) again                                 73.5 ms
+  -> 425 results
+find('zzqx', rank) first time (keys uncached)                73.2 ms
+find('zzqx', rank) again                                     73.7 ms
+  -> 0 results
+find('', name) first time (keys uncached)                    19.5 ms
+find('', name) again                                         18.7 ms
+  -> 200000 results
+find('k', name) first time (keys uncached)                   75.0 ms
+find('k', name) again                                        74.3 ms
+  -> 42682 results
+find('kick', name) first time (keys uncached)                77.7 ms
+find('kick', name) again                                     73.7 ms
+  -> 13268 results
+find('kick deep', name) first time (keys uncached)           75.4 ms
+find('kick deep', name) again                                72.7 ms
+  -> 249 results
+find('e', name) first time (keys uncached)                   77.7 ms
+find('e', name) again                                        74.0 ms
+  -> 132674 results
+find('808 bass', name) first time (keys uncached)            75.0 ms
+find('808 bass', name) again                                 71.6 ms
+  -> 425 results
+find('zzqx', name) first time (keys uncached)                74.9 ms
+find('zzqx', name) again                                     73.5 ms
+  -> 0 results
+find('', rank) with 500 used records                         44.9 ms
+find('kick', rank) with 500 used records                    113.7 ms
+find('e', rank) with 500 used records                       339.0 ms
+  filter matches('e')                                        75.1 ms
+  keys (cached)                                              11.0 ms
+  keys (fresh objects: normpath+normcase)                   478.3 ms
+  library.rank for each                                      23.5 ms
+  match_quality for each                                    229.6 ms
+place prefix filter                                          43.6 ms
+All: builtin + plugins + audio concat                         1.4 ms
+set_items + processEvents (200000 rows)                     197.5 ms
+set_items + processEvents (100000 rows)                      99.4 ms
+set_items + processEvents (10000 rows)                        9.7 ms
+set_items + processEvents (100 rows)                          0.2 ms
+indexing in QThread: 1101 ms; UI tick gaps (5 ms timer): median 5 ms, p99 45 ms, max 104 ms, ticks 161 (ideal 220)

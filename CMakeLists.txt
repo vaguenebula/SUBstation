@@ -154,6 +154,30 @@ endif()
 
 install(TARGETS _engine LIBRARY DESTINATION gilstudio)
 
+# --- Browser backend -----------------------------------------------------------
+# The browser's file index and search (browser/src), independent of the engine:
+# its own threads, its own module (gilstudio._browser).
+add_library(gil_browser STATIC
+    browser/src/Browser.cpp
+    browser/src/Indexer.cpp
+    browser/src/Model.cpp
+    browser/src/Platform.cpp
+    browser/src/Search.cpp
+    browser/src/Text.cpp)
+target_include_directories(gil_browser PUBLIC browser/src)
+target_compile_definitions(gil_browser PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+set_target_properties(gil_browser PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if (MSVC)
+    target_compile_options(gil_browser PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
+endif()
+
+nanobind_add_module(_browser NB_STATIC browser/src/bindings.cpp)
+target_link_libraries(_browser PRIVATE gil_browser)
+if (MSVC)
+    target_compile_options(_browser PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
+endif()
+install(TARGETS _browser LIBRARY DESTINATION gilstudio)
+
 # --- Test plug-ins ------------------------------------------------------------
 # One VST3 bundle with a test instrument and effects (tests/vst3_plugins), installed
 # next to the engine so the tests can find it.

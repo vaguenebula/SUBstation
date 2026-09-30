@@ -23,7 +23,7 @@ from gilstudio.ui.browser.file_index import plugin_ref
 from gilstudio.ui.device_panel import PluginDeviceWidget
 
 from .conftest import TEST_PLUGINS
-from .test_ui_smoke import drag, wait_until
+from .test_ui_smoke import drag, settle, wait_until
 from .test_vst3_engine import EDIT_GAIN, FX_GAIN, GAIN, WAVE, editor_window, user32
 
 pytestmark = pytest.mark.skipif(not TEST_PLUGINS.exists(), reason="test plug-ins not built")
@@ -62,10 +62,12 @@ def test_plugins_in_the_browser(window):
     plugins = browser._plugins_entry
     assert [plugins.child(i).text(0) for i in range(plugins.childCount())] == ["Instruments", "Audio Effects"]
     browser.sidebar.setCurrentItem(plugins.child(1))
+    settle(browser)
     names = [browser.list_model.item(browser.list_model.index(i)).name for i in range(browser.list_model.rowCount())]
     assert names == ["GIL Test Effect", "GIL Test Mono"]
     assert browser.status.text() == "2 plug-ins"
     browser.sidebar.setCurrentItem(plugins.child(0))
+    settle(browser)
     index = browser.list_model.index(0)
     item = browser.list_model.item(index)
     assert item.name == "GIL Test Synth" and item.detail == "GIL Studio" and "Instrument" in item.tooltip
@@ -253,6 +255,7 @@ def test_dropping_plugins(window):
     lanes, arrangement = window.arrangement.lanes, window.arrangement
     browser = window.browser
     browser.sidebar.setCurrentItem(browser._plugins_entry)  # all plug-ins, by name
+    settle(browser)
     model = browser.list_model
     mime = {model.item(model.index(i)).name: model.mimeData([model.index(i)]) for i in range(model.rowCount())}
     row = arrangement.layout_model.rows[0]
