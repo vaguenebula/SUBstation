@@ -244,6 +244,11 @@ class PluginDeviceWidget(_DeviceFrame):
         self.edit = ToggleButton("Edit", role="small", tooltip="Show the plug-in's own editor")
         self.edit.setFixedHeight(18)
         self.edit.toggled.connect(self._toggle_editor)
+        # The header goes into the frame's layout first: a widget shown before it
+        # has a parent becomes a window of its own, for a moment.
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.addLayout(self.header)
         at = self.header.indexOf(self.title) + 1
         for widget in (self.edit, self.previous, self.page_label, self.next):
             self.header.insertWidget(at, widget)
@@ -255,9 +260,6 @@ class PluginDeviceWidget(_DeviceFrame):
 
         self.params = QHBoxLayout()
         self.params.setSpacing(6)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 8)
-        layout.addLayout(self.header)
         if self.engine_id is None:
             message = QLabel(bridge.plugin_errors.get(device.id) or f"{plugin.name} is not loaded.")
             message.setWordWrap(True)

@@ -6,10 +6,10 @@ import base64
 import json
 
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, Qt
 from PySide6.QtGui import QDropEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from gilstudio.model.project import PLUGIN_KIND, PluginRef
 from gilstudio.ui.browser.browser_models import plugin_refs
@@ -81,6 +81,33 @@ def test_plugins_in_the_browser(window):
     assert list(widget.knobs) == [12, 13, 14, 15] and widget.page_label.text() == "2/2"
     window.editor.add_device(track.id, "utility")  # the device view is rebuilt...
     assert list(window.devices.widgets[device.id].knobs) == [12, 13, 14, 15]  # ...on the same page
+
+
+class _WindowsShown(QObject):
+    """Every widget shown as a window of its own, however briefly."""
+
+    def __init__(self):
+        super().__init__()
+        self.shown = []
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Show and isinstance(watched, QWidget) and watched.isWindow():
+            self.shown.append(type(watched).__name__)
+        return False
+
+
+def test_showing_a_plugin_opens_no_stray_windows(window):
+    # The synth has two pages of parameters, so its device shows page buttons.
+    refs = installed(window)
+    spy = _WindowsShown()
+    QApplication.instance().installEventFilter(spy)
+    try:
+        track = window.editor.add_midi_track(instrument=None, plugin=refs["GIL Test Synth"])
+        window.selection.select_track(track.id)
+    finally:
+        QApplication.instance().removeEventFilter(spy)
+    assert window.devices.widgets[track.devices[0].id].pages == 2
+    assert spy.shown == []
 
 
 def test_knobs_edit_plugins_undoably(window):
