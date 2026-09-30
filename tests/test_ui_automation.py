@@ -381,3 +381,22 @@ def test_lane_screenshot(window, tracks, tmp_path):
     image = window.grab()
     QTest.mouseRelease(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start + QPoint(0, 20))
     assert not image.isNull()
+
+
+def test_dragging_up_from_a_lane_into_the_clips_selects_them(window, tracks):
+    """From an automation lane, up into the clips' title band (or past the top
+    track) selects the clips, as a drag in a lane without automation does."""
+    a, b = tracks
+    clip = window.editor.add_midi_clip(a.id, 0.0, 8.0)
+    window.editor.show_automation(a.id, MIXER_PAN)
+    lanes = window.arrangement.lanes
+    start = point(window, a.id, 1.0, 0.1)
+    for end in (QPoint(round(window.arrangement.view.beat_to_x(3.0)), -10),  # past the top track
+                QPoint(round(window.arrangement.view.beat_to_x(3.0)), 5)):  # its title band
+        window.selection.clear()
+        drag(lanes, start, end)
+        assert window.selection.clips == {clip}
+        assert window.selection.time_range[2] == (a.id,)
+    # Kept to the lanes, it is a range on the automation.
+    drag(lanes, start, point(window, a.id, 3.0, 0.1))
+    assert window.selection.lanes == ((a.id, MIXER_PAN),) and not window.selection.clips

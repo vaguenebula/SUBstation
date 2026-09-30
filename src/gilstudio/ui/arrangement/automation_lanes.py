@@ -16,7 +16,9 @@ In a lane (as in Ableton):
   can't pass their neighbours.
 - Alt-dragging between two breakpoints bends the segment: up bulges it upward.
 - Dragging from off the breakpoints selects a time range on the lanes it
-  crosses; Delete clears their automation there, Ctrl+D duplicates it.
+  crosses; Delete clears their automation there, Ctrl+D duplicates it. Up into
+  the clips' title band, or above the track, it selects clips instead, as a
+  drag in the clips does.
 
 Envelopes are drawn red while they play, grey when overridden (the target was
 changed by hand: Re-Enable Automation brings them back); a target without an
@@ -35,7 +37,7 @@ from PySide6.QtWidgets import QMenu
 from ... import theme
 from ...model import automation
 from ...model.automation import MASTER
-from .interactions import DRAG_THRESHOLD, ClipGesture
+from .interactions import DRAG_THRESHOLD, ClipGesture, TimeSelectGesture
 
 ENVELOPE = QColor("#ff4a3d")
 OVERRIDDEN = QColor("#8c8c8c")
@@ -420,7 +422,8 @@ def _add_and_drag(host, area: EnvelopeArea, pos: QPointF, mods, target: tuple[fl
 
 class LaneGesture(ClipGesture):
     """A press on a lane off its breakpoints and its line: a click sets the
-    insert marker; a drag selects a time range on the lanes it crosses."""
+    insert marker; a drag selects a time range on the lanes it crosses (on the
+    clips when it goes up into their title band or above the track)."""
 
     def __init__(self, host, area: EnvelopeArea, press: QPointF, mods):
         self.host = host
@@ -430,6 +433,11 @@ class LaneGesture(ClipGesture):
         view = host.view
         self.anchor = max(0.0, view.snap_beat(view.x_to_beat(press.x()), self.bypass))
         self.active = False
+        # A track's lanes are in the lanes canvas, among the clips: a drag can reach them.
+        self.clips: TimeSelectGesture | None = None
+        if area.owner != MASTER and hasattr(host, "in_clip_band"):
+            self.clips = TimeSelectGesture(host, press, self.bypass)
+            self.clips.anchor_row = next(i for i, r in enumerate(host.layout_model.rows) if r.track_id == area.owner)
         host.selection.clear(track_id=None if area.owner == MASTER else area.owner)
 
     def move(self, pos: QPointF, modifiers) -> None:
@@ -437,6 +445,9 @@ class LaneGesture(ClipGesture):
             if (pos - self.press).manhattanLength() < DRAG_THRESHOLD:
                 return
             self.active = True
+        if self._over_clips(pos):
+            self.clips.move(pos, modifiers)
+            return
         view = self.host.view
         beat = max(0.0, view.snap_beat(view.x_to_beat(pos.x()), _alt(modifiers)))
         start, end = sorted((self.anchor, beat))
@@ -453,6 +464,14 @@ class LaneGesture(ClipGesture):
         selection.set_time_range(start, end, track_ids, lanes=lanes)
         selection.set_insert(start)
         self.host.setCursor(Qt.CursorShape.IBeamCursor)
+
+    def _over_clips(self, pos: QPointF) -> bool:
+        """Whether the drag went up into the clips' title band or above its track."""
+        if self.clips is None:
+            return False
+        host = self.host
+        row = host.layout_model.rows[self.clips.anchor_row]
+        return host.in_clip_band(pos) or pos.y() + host.view.scroll_y < row.top
 
     def finish(self) -> None:
         if not self.active:
