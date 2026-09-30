@@ -764,10 +764,14 @@ class DevicePanel(QFrame):
             new += [(PLUGIN_KIND, ref) for ref in plugin_refs(mime)]
             refused = False
             for kind, ref in new:
+                count = len(self.project.track(self.track_id).devices)
                 device = self.editor.add_device(self.track_id, kind, index=index, plugin=ref)
                 refused |= device is None
+                chain = [d.id for d in self.project.track(self.track_id).devices]
                 if device is not None and not device_is_instrument(device):
-                    index += 1
+                    index = chain.index(device.id) + 1  # the next one goes after it
+                else:  # a new instrument (not one replacing another) went in first, before the drop point
+                    index += len(chain) - count
             if refused:
                 self.status_message.emit(INSTRUMENT_REFUSED)
         event.acceptProposedAction()

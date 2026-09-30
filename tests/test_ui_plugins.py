@@ -6,6 +6,7 @@ import base64
 import ctypes
 import json
 from ctypes import wintypes
+from dataclasses import asdict
 
 import pytest
 from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, Qt
@@ -417,4 +418,62 @@ def test_selecting_deleting_and_reordering_devices(window):
     click(second, Qt.KeyboardModifier.ShiftModifier)
     panel.widgets[first].remove_selected()
     assert chain() == [synth.id, third, utility]
+    window.undo_stack.setClean()
+
+
+def test_device_view_review_fixes(window, monkeypatch):
+    refs = installed(window)
+    panel = window.devices
+
+    # Dropped from the browser with an instrument, effects land where they were dropped.
+    track = window.editor.add_midi_track(instrument=None)
+    window.selection.select_track(track.id)
+    fx1 = window.editor.add_device(track.id, "utility").id
+    fx2 = window.editor.add_device(track.id, "utility").id
+    chain = lambda: [d.id for d in window.project.track(track.id).devices]
+
+    def drop_at(device_id, *plugins, kinds=()):
+        mime = QMimeData()
+        if plugins:
+            mime.setData("application/x-gilstudio-plugin", json.dumps([asdict(refs[n]) for n in plugins]).encode())
+        if kinds:
+            mime.setData("application/x-gilstudio-device", json.dumps(list(kinds)).encode())
+        QTest.qWait(1)  # the rebuilt device view laid out
+        widget = panel.widgets[device_id]
+        panel.dropEvent(drop(QPointF(widget.mapTo(panel, QPoint(2, widget.height() // 2))), mime))
+
+    drop_at(fx2, "GIL Test Synth", "GIL Test Effect")  # between the two utilities
+    synth, _, effect, _ = chain()
+    assert chain() == [synth, fx1, effect, fx2]
+    drop_at(synth, "GIL Test Mono", "GIL Test Effect")  # before the instrument: right after it, in order
+    names = [d.plugin.name if d.plugin else d.kind for d in window.project.track(track.id).devices]
+    assert names[1:3] == ["GIL Test Mono", "GIL Test Effect"] and chain()[0] == synth and chain()[3:] == [fx1, effect, fx2]
+
+    # With the devices in focus, a second Delete doesn't delete clips selected before.
+    clip = window.editor.add_midi_clip(track.id, 0.0, 4.0)
+    window.selection.set_clips({clip})
+    QTest.mouseClick(panel.widgets[fx1].title, Qt.MouseButton.LeftButton)
+    window.delete_selection()
+    window.delete_selection()
+    assert fx1 not in chain() and window.project.track(track.id).clips
+
+    # A hidden editor takes its track's new name.
+    window.selection.select_track(None)
+    assert not window.bridge.is_plugin_editor_open(track.id, effect)
+    window.editor.rename_track(track.id, "Sub")
+    window.selection.select_track(track.id)
+    assert window.bridge.is_plugin_editor_open(track.id, effect) and editor_window("GIL Test Effect - Sub")
+
+    # Reopening an editor may change the chains (a plug-in running a message loop).
+    window.selection.select_track(None)
+    window.engine.close_editor(engine_id(window, track, window.project.device(track.id, effect)))
+    reopen = window.bridge.open_plugin_editor
+
+    def open_and_add_a_track(*args, **kwargs):
+        window.editor.add_midi_track()  # a track with a device: a new chain
+        return reopen(*args, **kwargs)
+
+    monkeypatch.setattr(window.bridge, "open_plugin_editor", open_and_add_a_track)
+    window.selection.select_track(track.id)
+    assert reopen(track.id, effect)
     window.undo_stack.setClean()

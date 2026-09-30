@@ -426,7 +426,8 @@ class EngineBridge(QObject):
         if track_id == self._editors_track:
             return
         self._editors_track = track_id
-        for chain_track, chain in self._devices.items():
+        # A copy: opening an editor may run a message loop that changes the chains.
+        for chain_track, chain in [(t, list(c)) for t, c in self._devices.items()]:
             for device_id, processor_id in chain:
                 if processor_id not in self._plugin_ids:
                     continue
@@ -463,7 +464,7 @@ class EngineBridge(QObject):
 
     def _update_editor_titles(self, track_id: str) -> None:
         for device_id, processor_id in self._devices.get(track_id, []):
-            if processor_id in self._plugin_ids and self.engine.is_editor_open(processor_id):
+            if processor_id in self._plugin_ids:  # hidden editors too; no-op without one
                 self.engine.set_editor_title(processor_id, self._editor_title(track_id, device_id))
 
     def _dispatch_processor_events(self) -> None:

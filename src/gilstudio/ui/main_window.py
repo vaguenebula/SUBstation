@@ -302,7 +302,8 @@ class MainWindow(QMainWindow):
             self.editor.delete_tracks([self.selection.track_id])
 
     def delete_selection(self) -> None:
-        if self.selection.focus == "devices" and self.devices.delete_selected():
+        if self.selection.focus == "devices":
+            self.devices.delete_selected()  # not clips selected before: they aren't what the user is on
             return
         time_range = self.selection.time_range
         if time_range is not None:
