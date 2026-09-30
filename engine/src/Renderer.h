@@ -30,9 +30,10 @@ public:
     void prepare(double sampleRate);
 
     // Real-time. Applies transport commands, renders tracks, metronome and the
-    // browser preview into interleaved output, and publishes position/meters.
-    void processLive(const RenderSnapshot& snap, SharedState& shared, float* out, uint32_t frames,
-                     uint32_t channels) noexcept;
+    // browser preview, and publishes position/meters. The master goes to the
+    // first two outputs (mixed to mono if there is only one); any others are silent.
+    void processLive(const RenderSnapshot& snap, SharedState& shared, float* const* outputs, uint32_t numOutputs,
+                     uint32_t frames) noexcept;
 
     // Renders the timeline from the current position into interleaved stereo.
     // Never publishes meters or plays the preview; looping and the metronome

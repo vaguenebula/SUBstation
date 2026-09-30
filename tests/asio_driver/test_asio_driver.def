@@ -1,0 +1,19 @@
+LIBRARY GILTestAsio
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
+    GilTestAsio_Reset
+    GilTestAsio_SetSampleType
+    GilTestAsio_SetBufferSizes
+    GilTestAsio_SetLatencies
+    GilTestAsio_SetManual
+    GilTestAsio_SetInputLevel
+    GilTestAsio_FailInit
+    GilTestAsio_SetControlPanelChange
+    GilTestAsio_Process
+    GilTestAsio_ReadOutput
+    GilTestAsio_ClearOutput
+    GilTestAsio_SendMessage
+    GilTestAsio_ChangeSampleRate
+    GilTestAsio_Get
+    GilTestAsio_InitHandle

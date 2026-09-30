@@ -20,6 +20,12 @@ TEST_PLUGINS = Path(_engine.__file__).parent / "_testplugins" / "GILTestPlugins.
 os.environ["GILSTUDIO_VST3_PATH"] = str(TEST_PLUGINS.parent)
 os.environ["GILSTUDIO_PLUGIN_CACHE"] = str(Path(tempfile.mkdtemp(prefix="gil-plugin-cache-")) / "vst3-cache.json")
 
+# The fake ASIO driver (tests/asio_driver), built with the engine when it has the
+# ASIO SDK. The tests see only it, never the drivers installed on the computer.
+TEST_ASIO = Path(_engine.__file__).parent / "_testdrivers" / "GILTestAsio.dll"
+TEST_ASIO_NAME = "GIL Test ASIO"
+os.environ["GILSTUDIO_ASIO_DRIVERS"] = f"{TEST_ASIO_NAME}|{{5B2E8C1A-7F3D-4E6B-9C0A-1D2F3E4A5B6C}}|{TEST_ASIO}"
+
 
 def write_wav(path: Path, samples: np.ndarray, sample_rate: int = SAMPLE_RATE) -> Path:
     """Write float samples in [-1, 1) as 16-bit PCM. `samples` is (frames,) or (frames, channels)."""

@@ -3,6 +3,7 @@ view at the bottom, menus and keyboard shortcuts."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer
@@ -196,19 +197,26 @@ class MainWindow(QMainWindow):
 
     def start_audio(self) -> None:
         settings = AudioSettings.load()
-        error = self.bridge.open_device(settings.device_name, settings.sample_rate, settings.buffer_frames,
-                                        settings.exclusive)
-        if error and (settings.device_name or settings.exclusive or settings.sample_rate):
-            # The saved device may be gone; fall back to the system default.
-            fallback = self.bridge.open_device("", 0, settings.buffer_frames, False)
-            if fallback is None:
-                self.show_message(f"{error}. Using the system default output instead.")
+        error = self.bridge.open_device(settings)
+        if error is None:
+            return
+        # The device may not take the saved settings any more (an ASIO driver
+        # locked to another clock), or be gone: its own settings, then the system default.
+        fallbacks = [
+            (replace(settings, sample_rate=0, buffer_frames=0, output_channels=(), input_channels=()),
+             "Using the device's own settings instead."),
+            (AudioSettings(buffer_frames=settings.buffer_frames), "Using the system default output instead."),
+        ]
+        for fallback, note in fallbacks:
+            if fallback != settings and self.bridge.open_device(fallback) is None:
+                self.show_message(f"{error}. {note}")
                 return
-        if error:
-            self.show_message(f"Audio is off: {error}. Choose a device in Options > Preferences.")
+        self.show_message(f"Audio is off: {error}. Choose a device in Options > Preferences.")
 
     def show_preferences(self) -> None:
-        PreferencesDialog(self.bridge, self).exec()
+        dialog = PreferencesDialog(self.bridge, self)
+        dialog.exec()
+        dialog.deleteLater()
 
     # --- Transport -----------------------------------------------------------------
 
