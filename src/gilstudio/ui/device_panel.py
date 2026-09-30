@@ -18,7 +18,7 @@ import base64
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QPoint, QSettings, Qt, Signal
+from PySide6.QtCore import QMimeData, QPoint, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -65,6 +65,8 @@ INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in or Plug-in
 INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create › Insert MIDI Track)."
 PRESET_FILTER = "VST3 Preset (*.vstpreset)"
 DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
+AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
+AUTOSCROLL_INTERVAL = 16  # ms
 
 
 def _format_value(value: float, unit: str) -> str:
@@ -515,7 +517,7 @@ class DevicePanel(QFrame):
         self.chain_layout = QHBoxLayout(self.chain)
         self.chain_layout.setContentsMargins(0, 0, 0, 0)
         self.chain_layout.setSpacing(6)
-        scroll = QScrollArea()
+        self.scroll = scroll = QScrollArea()
         scroll.setWidget(self.chain)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -532,6 +534,12 @@ class DevicePanel(QFrame):
         self.drop_marker = QFrame(self.chain)
         self.drop_marker.setStyleSheet(f"background: {theme.ACCENT};")
         self.drop_marker.hide()
+        # A drag held near the chain's left or right edge scrolls it.
+        self._drag_pos = QPoint()
+        self._scroll_step = 0
+        self._autoscroll = QTimer(self)
+        self._autoscroll.setInterval(AUTOSCROLL_INTERVAL)
+        self._autoscroll.timeout.connect(self._auto_scroll)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
@@ -632,7 +640,7 @@ class DevicePanel(QFrame):
         drag.setMimeData(mime)
         drag.setPixmap(self.widgets[device_id].grab().scaledToHeight(48, Qt.TransformationMode.SmoothTransformation))
         drag.exec(Qt.DropAction.MoveAction)
-        self.drop_marker.hide()
+        self._drag_ended()
 
     def _moving(self, mime) -> list[str]:
         """The devices a drag moves, if it moves this track's."""
@@ -664,6 +672,33 @@ class DevicePanel(QFrame):
         self.drop_marker.setGeometry(x, top, 2, bottom - top + 1)
         self.drop_marker.raise_()
         self.drop_marker.show()
+
+    def _drag_at(self, pos: QPoint) -> None:
+        """A drag is over `pos` (panel coordinates): show where it would drop, and
+        scroll while it is near an edge of the chain."""
+        self._drag_pos = pos
+        viewport = self.scroll.viewport()
+        x = viewport.mapFrom(self, pos).x()
+        if x < AUTOSCROLL_EDGE:
+            self._scroll_step = -max(2, (AUTOSCROLL_EDGE - x) // 2)
+        elif x > viewport.width() - AUTOSCROLL_EDGE:
+            self._scroll_step = max(2, (x - viewport.width() + AUTOSCROLL_EDGE) // 2)
+        else:
+            self._scroll_step = 0
+        if self._scroll_step:
+            self._autoscroll.start()
+        else:
+            self._autoscroll.stop()
+        self._show_drop_marker(self.drop_index(pos))
+
+    def _auto_scroll(self) -> None:
+        bar = self.scroll.horizontalScrollBar()
+        bar.setValue(bar.value() + self._scroll_step)
+        self._show_drop_marker(self.drop_index(self._drag_pos))
+
+    def _drag_ended(self) -> None:
+        self._autoscroll.stop()
+        self.drop_marker.hide()
 
     def _on_devices_changed(self, track_id: str) -> None:
         if track_id == self.track_id:
@@ -740,17 +775,17 @@ class DevicePanel(QFrame):
         mime = event.mimeData()
         if self.track_id is not None and (device_kinds(mime) or mime.hasFormat(PLUGIN_MIME) or self._moving(mime)):
             event.acceptProposedAction()
-            self._show_drop_marker(self.drop_index(event.position().toPoint()))
+            self._drag_at(event.position().toPoint())
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         event.acceptProposedAction()
-        self._show_drop_marker(self.drop_index(event.position().toPoint()))
+        self._drag_at(event.position().toPoint())
 
     def dragLeaveEvent(self, _event) -> None:
-        self.drop_marker.hide()
+        self._drag_ended()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        self.drop_marker.hide()
+        self._drag_ended()
         mime = event.mimeData()
         if self.track_id is not None:
             index = self.drop_index(event.position().toPoint())

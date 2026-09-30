@@ -21,11 +21,13 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "Processor.h"
+#include "plugins/EditorWindow.h"
 #include "plugins/Vst3Support.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
@@ -36,8 +38,6 @@
 #include "public.sdk/source/vst/hosting/module.h"
 
 namespace gil::vst3 {
-
-class EditorWindow;
 
 class Vst3Processor final : public Processor {
 public:
@@ -119,6 +119,7 @@ private:
     void endEdit(Steinberg::Vst::ParamID id);
     void pushEvent(const ProcessorEvent& event);
     int indexOf(Steinberg::Vst::ParamID id) const;  // hold mutex_
+    void dropEditor();
 
     // The module outlives everything the plug-in made, so it comes first.
     VST3::Hosting::Module::Ptr module_;
@@ -177,6 +178,7 @@ private:
     std::vector<ProcessorEvent> pending_;
 
     std::unique_ptr<EditorWindow> editor_;
+    std::optional<EditorWindow::Position> editorPosition_;  // where the last editor was: the next opens there
 };
 
 }  // namespace gil::vst3

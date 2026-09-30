@@ -692,7 +692,7 @@ void Vst3Processor::takeEvents(std::vector<ProcessorEvent>& out) {
 
 bool Vst3Processor::idle() {
     if (editor_ && editor_->wasClosed()) {
-        editor_.reset();
+        dropEditor();
         pushEvent({ProcessorEvent::Type::EditorClosed});
     }
 
@@ -798,11 +798,12 @@ bool Vst3Processor::openEditor(void* ownerWindow, const std::string& title) {
         editor_->bringToFront();
         return true;
     }
-    editor_.reset();
+    dropEditor();
     if (!controller_) return false;
     IPtr<IPlugView> view = owned(controller_->createView(ViewType::kEditor));
     if (!view || view->isPlatformTypeSupported(kPlatformTypeHWND) != kResultTrue) return false;
-    editor_ = std::make_unique<EditorWindow>(view, ownerWindow, title);
+    editor_ = std::make_unique<EditorWindow>(view, ownerWindow, title,
+                                             editorPosition_ ? &*editorPosition_ : nullptr);
     if (!editor_->isOpen()) {
         editor_.reset();
         return false;
@@ -810,7 +811,13 @@ bool Vst3Processor::openEditor(void* ownerWindow, const std::string& title) {
     return true;
 }
 
-void Vst3Processor::closeEditor() { editor_.reset(); }
+void Vst3Processor::closeEditor() { dropEditor(); }
+
+void Vst3Processor::dropEditor() {
+    if (!editor_) return;
+    editorPosition_ = editor_->position();
+    editor_.reset();
+}
 
 bool Vst3Processor::isEditorOpen() const { return editor_ && editor_->isOpen() && editor_->isVisible(); }
 

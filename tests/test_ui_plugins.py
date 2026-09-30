@@ -7,13 +7,16 @@ import ctypes
 import json
 from ctypes import wintypes
 from dataclasses import asdict
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, Qt
-from PySide6.QtGui import QDropEvent
+from PySide6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
+from gilstudio import _engine as ge
+from gilstudio.audio import engine_bridge
 from gilstudio.model.project import PLUGIN_KIND, PluginRef
 from gilstudio.ui.browser.browser_models import plugin_refs
 from gilstudio.ui.browser.file_index import plugin_ref
@@ -477,3 +480,96 @@ def test_device_view_review_fixes(window, monkeypatch):
     window.selection.select_track(track.id)
     assert reopen(track.id, effect)
     window.undo_stack.setClean()
+
+
+class _EngineWithEvents:
+    """The engine, reporting some processor events of our own."""
+
+    def __init__(self, engine, events):
+        self._engine, self._events = engine, events
+
+    def take_processor_events(self):
+        events, self._events = self._events, []
+        return events
+
+    def __getattr__(self, name):
+        return getattr(self._engine, name)
+
+
+def test_plugin_editor_review_fixes(window, monkeypatch):
+    effect = installed(window)["GIL Test Effect"]
+    bridge = window.bridge
+
+    def track_with_editor(name):
+        track = window.editor.add_audio_track(name=name)
+        window.selection.select_track(track.id)
+        device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=effect)
+        QTest.qWait(1)
+        assert bridge.is_plugin_editor_open(track.id, device.id)
+        return track, device
+
+    # A device deleted with its editor open and restored by undo doesn't bring
+    # its editor back later, when its track is selected again.
+    one, on_one = track_with_editor("One")
+    window.editor.remove_device(one.id, on_one.id)
+    window.undo_stack.undo()
+    window.selection.select_track(None)
+    window.selection.select_track(one.id)
+    assert not bridge.is_plugin_editor_open(one.id, on_one.id)
+
+    # A plug-in asking for its editor gets it when its track is shown, not before.
+    two = window.editor.add_audio_track(name="Two")
+    window.selection.select_track(two.id)
+    asks = SimpleNamespace(type=ge.ProcessorEventType.EDITOR_REQUESTED, processor_id=engine_id(window, one, on_one))
+    monkeypatch.setattr(bridge, "engine", _EngineWithEvents(window.engine, [asks]))
+    poll(window)
+    assert not editor_window("GIL Test Effect - One")
+    monkeypatch.setattr(bridge, "engine", window.engine)
+    window.selection.select_track(one.id)
+    assert bridge.is_plugin_editor_open(one.id, on_one.id)
+    window.devices.widgets[on_one.id].edit.click()
+
+    # Only so many hidden editors keep running: the one hidden longest closes, and
+    # opens again where it was when its track is shown.
+    monkeypatch.setattr(engine_bridge, "MAX_HIDDEN_EDITORS", 2)
+    tracks = [track_with_editor("Hidden 0")]
+    user32.SetWindowPos(editor_window("GIL Test Effect - Hidden 0"), None, 40, 50, 0, 0,
+                        0x0001 | 0x0004 | 0x0010)  # moved by the user
+    tracks += [track_with_editor(f"Hidden {i}") for i in range(1, 4)]
+    window.selection.select_track(two.id)  # hides the last one too: 4 hidden
+    assert not editor_window("GIL Test Effect - Hidden 0") and not editor_window("GIL Test Effect - Hidden 1")
+    assert editor_window("GIL Test Effect - Hidden 2") and editor_window("GIL Test Effect - Hidden 3")
+    window.selection.select_track(tracks[0][0].id)
+    assert bridge.is_plugin_editor_open(tracks[0][0].id, tracks[0][1].id)
+    assert window_rect(editor_window("GIL Test Effect - Hidden 0"))[:2] == (40, 50)
+    window.undo_stack.setClean()
+
+
+def test_dragging_devices_scrolls_the_chain(window):
+    track = window.editor.add_audio_track()
+    window.selection.select_track(track.id)
+    for _ in range(12):
+        window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    bar = panel.scroll.horizontalScrollBar()
+    assert wait_until(lambda: bar.maximum() > 0), (panel.scroll.viewport().width(), panel.chain.width())
+    assert bar.value() == 0
+    mime = QMimeData()
+    mime.setData("application/x-gilstudio-device-move", f"{track.id}\n{track.devices[0].id}".encode())
+    viewport = panel.scroll.viewport()
+
+    def drag_to(x):
+        pos = viewport.mapTo(panel, QPoint(x, viewport.height() // 2))
+        panel.dragMoveEvent(QDragMoveEvent(pos, Qt.DropAction.MoveAction, mime, Qt.MouseButton.LeftButton,
+                                           Qt.KeyboardModifier.NoModifier))
+
+    drag_to(viewport.width() - 5)  # held at the right edge, the chain scrolls on
+    assert wait_until(lambda: bar.value() == bar.maximum())
+    drag_to(viewport.width() // 2)  # away from the edges, it stops
+    stopped = bar.value()
+    drag_to(5)
+    assert wait_until(lambda: bar.value() < stopped)
+    panel.dragLeaveEvent(QDragLeaveEvent())
+    left = bar.value()
+    QTest.qWait(50)
+    assert bar.value() == left and not panel.drop_marker.isVisible()

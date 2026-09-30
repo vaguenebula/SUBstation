@@ -21,8 +21,15 @@ namespace gil::vst3 {
 
 class EditorWindow final : public Steinberg::IPlugFrame {
 public:
-    // Opens the window and attaches the view to it; check isOpen() afterwards.
-    EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* ownerWindow, const std::string& title);
+    struct Position {  // the window's top-left corner, in screen coordinates
+        int x = 0;
+        int y = 0;
+    };
+
+    // Opens the window and attaches the view to it; check isOpen() afterwards. It
+    // goes at `position` (kept on screen) if given, else over the owner.
+    EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* ownerWindow, const std::string& title,
+                 const Position* position = nullptr);
     ~EditorWindow();
     EditorWindow(const EditorWindow&) = delete;
     EditorWindow& operator=(const EditorWindow&) = delete;
@@ -36,6 +43,8 @@ public:
     // it doesn't take the focus.
     void setVisible(bool visible);
     bool isVisible() const;
+    // Where the window is, or was when it went.
+    Position position() const;
 
     // IPlugFrame
     tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;
@@ -47,6 +56,8 @@ public:
 private:
     void setClientSize(int width, int height);
     void placeOverOwner(HWND owner);
+    void placeAt(Position position);
+    void rememberPosition();
     void updateContentScale();
     void detachView();
 
@@ -63,6 +74,7 @@ private:
     Size dpiChangeSize_;        // the size the view asked for during a DPI change
     bool closed_ = false;
     float scale_ = 1.f;
+    Position position_;  // kept when the window goes
 };
 
 }  // namespace gil::vst3
