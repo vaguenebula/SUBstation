@@ -624,10 +624,12 @@ class ProjectEditor(QObject):
         return index
 
     def move_automation_points(self, owner: str, key: str, original: Envelope, indices, delta_beats: float,
-                               delta_value: float, merge_key: object | None = None) -> None:
-        """Move points of `original` (the envelope when the drag began) together."""
-        self.set_envelope(owner, key, automation.move_points(original, indices, delta_beats, delta_value),
-                          "Move Automation", merge_key)
+                               delta_value: float, merge_key: object | None = None) -> dict[int, int]:
+        """Move points of `original` (the envelope when the drag began) together.
+        Returns where they are now ({index in `original`: index})."""
+        points, where = automation.move_points_mapped(original, indices, delta_beats, delta_value)
+        self.set_envelope(owner, key, points, "Move Automation", merge_key)
+        return where
 
     def delete_automation_points(self, owner: str, key: str, indices) -> None:
         points = automation.delete_points(self.project.envelope(owner, key), indices)

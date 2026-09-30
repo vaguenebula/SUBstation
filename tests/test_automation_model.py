@@ -126,6 +126,31 @@ def test_move_range():
     assert auto.value_at(auto.move_range(ramp, 2.0, 4.0, 0.0, 2.0), 3.0) == 1.0  # values stay in range
 
 
+def test_moving_a_range_keeps_the_envelope_outside_it():
+    # Every breakpoint is inside the range: the outside still holds its values.
+    points = env((1.5, 0.3), (4.0, 0.7))
+    moved = auto.move_range(points, 1.0, 4.0, 2.0, -0.2)
+    assert auto.value_at(moved, 0.5) == pytest.approx(0.3) and auto.value_at(moved, 7.0) == pytest.approx(0.7)
+    assert auto.value_at(moved, 3.5) == pytest.approx(0.1) and auto.value_at(moved, 5.99) == pytest.approx(0.5, abs=0.01)
+    # Moved over breakpoints, it replaces them.
+    busy = env((0.0, 0.5), (1.0, 0.5), (5.0, 0.9), (5.5, 0.1), (6.0, 0.9), (8.0, 0.5))
+    over = auto.move_range(busy, 0.0, 2.0, 5.0, 0.0)
+    assert auto.value_at(over, 5.5) == pytest.approx(0.5) and auto.value_at(over, 6.0) == pytest.approx(0.5)
+    assert all(p.value in (0.5, 0.6) for p in over if 5.0 < p.beat < 7.0)  # its own, not the 0.9s and 0.1
+
+
+def test_moving_several_points_overrides_where_they_land():
+    points = env((0.0, 0.5), (2.0, 0.2), (3.0, 0.9), (4.0, 0.3), (6.0, 0.5))
+    moved, where = auto.move_points_mapped(points, {1, 2}, 1.5, 0.0)
+    assert [p.beat for p in moved] == [0.0, 3.5, 4.5, 6.0] and where == {1: 1, 2: 2}
+    moved, where = auto.move_points_mapped(points, {1, 2}, 3.0, 0.0)
+    assert [p.beat for p in moved] == [0.0, 4.0, 5.0, 6.0, 6.0] and where == {1: 2, 2: 3}  # edges stay
+    moved, where = auto.move_points_mapped(points, {1, 2}, -2.0, 0.0)
+    assert [(p.beat, p.value) for p in moved[:3]] == [(0.0, 0.5), (0.0, 0.2), (1.0, 0.9)] and where == {1: 1, 2: 2}
+    # One point still stops at its neighbours.
+    assert [p.beat for p in auto.move_points(points, {1}, 5.0, 0.0)] == [0.0, 3.0, 3.0, 4.0, 6.0]
+
+
 def test_keys():
     key = auto.device_key("abc", "7:x")
     assert auto.parse_key(key) == ("device", "abc", "7:x") and auto.key_device(key) == "abc"

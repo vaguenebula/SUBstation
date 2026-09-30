@@ -222,21 +222,42 @@ def add_point(points: Sequence[AutomationPoint], beat: float, value: float) -> t
 
 def move_points(points: Sequence[AutomationPoint], indices: Iterable[int], delta_beats: float,
                 delta_value: float) -> Envelope:
-    """Move points together in time and value. In time they stay between the
-    points not moving (and after 0), so the envelope keeps its order."""
+    return move_points_mapped(points, indices, delta_beats, delta_value)[0]
+
+
+def move_points_mapped(points: Sequence[AutomationPoint], indices: Iterable[int], delta_beats: float,
+                       delta_value: float) -> tuple[Envelope, dict[int, int]]:
+    """Move points together in time and value; returns the envelope and where
+    each moved point is now ({old index: new index}). One point stays between
+    its neighbours (and after 0). Several override what they land on: the
+    points between the first and the last of them go."""
     chosen = sorted({i for i in indices if 0 <= i < len(points)})
     if not chosen:
-        return tuple(points)
+        return tuple(points), {}
     moving = set(chosen)
-    low, high = -math.inf, math.inf
-    for i in chosen:
+    if len(chosen) == 1:
+        i = chosen[0]
         before = next((points[j].beat for j in range(i - 1, -1, -1) if j not in moving), 0.0)
         after = next((points[j].beat for j in range(i + 1, len(points)) if j not in moving), math.inf)
-        low = max(low, before - points[i].beat)
-        high = min(high, after - points[i].beat)
-    delta_beats = min(high, max(low, delta_beats))
-    return tuple(replace(p, beat=p.beat + delta_beats, value=_clamp(p.value + delta_value)) if i in moving else p
-                 for i, p in enumerate(points))
+        delta_beats = min(after - points[i].beat, max(before - points[i].beat, delta_beats))
+        moved = tuple(replace(p, beat=p.beat + delta_beats, value=_clamp(p.value + delta_value)) if j == i else p
+                      for j, p in enumerate(points))
+        return moved, {i: i}
+    delta_beats = max(delta_beats, -min(points[i].beat for i in chosen))
+    low, high = points[chosen[0]].beat + delta_beats, points[chosen[-1]].beat + delta_beats
+    # (sort key, old index, point): kept points at the edges stay on their side.
+    entries = []
+    for j, p in enumerate(points):
+        if j in moving:
+            entries.append(((p.beat + delta_beats, 1), j, replace(p, beat=p.beat + delta_beats,
+                                                                  value=_clamp(p.value + delta_value))))
+        elif not low < p.beat < high:
+            side = 0 if p.beat < low or (p.beat == low and j < chosen[0]) else 2
+            if p.beat == low == high:
+                side = 0 if j < chosen[0] else 2
+            entries.append(((p.beat, side), j, p))
+    entries.sort(key=lambda e: e[0])  # stable: moved points keep their order
+    return tuple(e[2] for e in entries), {j: n for n, (_, j, _) in enumerate(entries) if j in moving}
 
 
 def delete_points(points: Sequence[AutomationPoint], indices: Iterable[int]) -> Envelope:
@@ -366,7 +387,11 @@ def move_range(points: Sequence[AutomationPoint], start: float, end: float, delt
         return tuple(points)
     delta_beats = max(delta_beats, -start)
     content = tuple(replace(p, value=_clamp(p.value + delta_value)) for p in copy_range(points, start, end))
-    base = remove_range(points, start, end) if delta_beats else tuple(points)
+    base = tuple(points)
+    if delta_beats:  # where it was, straight across (keeping the envelope outside, even if all of it moves)
+        edged = _edges(points, start, end)
+        base = _simplify([p for p in edged if p.beat < start] + [replace(_first_at(edged, start), curve=0.0)]
+                         + [_last_at(edged, end)] + [p for p in edged if p.beat > end])
     moved = paste_range(base, content, start + delta_beats, end - start)
     return drop_redundant(moved, (start, end, start + delta_beats, end + delta_beats))
 

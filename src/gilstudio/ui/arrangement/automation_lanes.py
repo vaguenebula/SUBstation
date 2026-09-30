@@ -15,15 +15,16 @@ In a lane (as in Ableton):
   dragging it moves both breakpoints, in time and value. A step (two
   breakpoints at the same time) is a segment too, grabbed anywhere along it.
 - Dragging a breakpoint moves it, and the others selected with it, in time and
-  value. Alt: off the grid; Shift while dragging: finer values. Breakpoints
-  can't pass their neighbours.
+  value. Alt: off the grid; Shift while dragging: finer values. One breakpoint
+  can't pass its neighbours; several override the breakpoints they land on.
 - Alt-dragging between two breakpoints bends the segment: up bulges it upward.
 - Dragging from off the breakpoints selects a time range on the lanes it
   crosses; Delete clears their automation there, Ctrl+D duplicates it. Up into
   the clips' title band, or above the track, it selects clips instead, as a
-  drag in the clips does. Dragging inside the selected range moves the
-  automation in it, on all its lanes, up, down, left and right: breakpoints at
-  the range's edges keep the envelope outside it as it was.
+  drag in the clips does. Dragging inside the selected range (off its
+  breakpoints and line) moves the automation in it, on all its lanes, up, down,
+  left and right, over what is where it lands: breakpoints at the range's edges
+  keep the envelope outside it as it was.
 
 Envelopes are drawn red while they play, grey when overridden (the target was
 changed by hand: Re-Enable Automation brings them back); a target without an
@@ -432,6 +433,7 @@ class PointGesture(ClipGesture):
             selected = {index}
         host.selection.select_points(area.owner, area.key, selected)
         self.indices = selected if index in selected else {index}
+        self.current = index  # where the pressed point is now
         self.active = False
         self.merge_key: object = self
 
@@ -447,16 +449,19 @@ class PointGesture(ClipGesture):
             beat = anchor.beat + view.x_to_beat(pos.x()) - view.x_to_beat(self.press.x())
             delta_beats = max(0.0, view.snap_beat(beat, _alt(modifiers))) - anchor.beat
         delta_value = (self.press.y() - pos.y()) / max(1.0, self.area.values.height()) * _fine(modifiers)
-        self.host.editor.move_automation_points(self.area.owner, self.area.key, self.original, self.indices,
-                                                delta_beats, delta_value, merge_key=self.merge_key)
+        where = self.host.editor.move_automation_points(self.area.owner, self.area.key, self.original, self.indices,
+                                                        delta_beats, delta_value, merge_key=self.merge_key)
+        # Several points override what they land on, so the points after them move up the list.
+        self.current = where.get(self.index, self.current)
+        self.host.selection.select_points(self.area.owner, self.area.key, set(where.values()))
         self.host.update()
 
     def readout(self) -> tuple[QPointF, str] | None:
         points = self.host.project.envelope(self.area.owner, self.area.key)
         spec = self.host.bridge.param_spec(self.area.owner, self.area.key)
-        if not self.active or spec is None or self.index >= len(points):
+        if not self.active or spec is None or self.current >= len(points):
             return None
-        point = points[self.index]
+        point = points[self.current]
         return (QPointF(self.host.view.beat_to_x(point.beat), self.area.y(point.value)),
                 spec.format_normalized(spec.quantize(point.value)))
 
@@ -464,7 +469,7 @@ class PointGesture(ClipGesture):
         if self.active or self.selecting or self.added:
             return
         owner, key = self.area.owner, self.area.key
-        self.host.editor.delete_automation_points(owner, key, [self.index])
+        self.host.editor.delete_automation_points(owner, key, [self.current])
         self.host.selection.select_points(owner, key, ())
 
 
@@ -489,8 +494,8 @@ class CurveGesture(ClipGesture):
 class RangeGesture(ClipGesture):
     """A press inside the selected time range on one of its lanes: a drag moves
     the automation in the range, on all its lanes, in time and value (the range
-    goes along). A click adds a breakpoint on the line, or elsewhere sets the
-    insert marker, as outside the range."""
+    goes along). (Its breakpoints and segments, and the line, are taken as
+    outside it.) A click sets the insert marker, as outside the range."""
 
     def __init__(self, host, area: EnvelopeArea, press: QPointF, mods):
         self.host = host
@@ -521,14 +526,7 @@ class RangeGesture(ClipGesture):
         self.host.update()
 
     def finish(self) -> None:
-        if self.active:
-            return
-        target = add_target(self.host, self.area, self.press, self.mods)
-        if target is not None:
-            owner, key = self.area.owner, self.area.key
-            index = self.host.editor.add_automation_point(owner, key, *target)
-            self.host.selection.select_points(owner, key, {index})
-        else:
+        if not self.active:
             LaneGesture(self.host, self.area, self.press, self.mods).finish()
 
 
@@ -615,9 +613,9 @@ def press(host, area: EnvelopeArea, pos: QPointF, mods) -> ClipGesture:
         segment = automation.segment_index(points, host.view.x_to_beat(pos.x()))
         if segment is not None:
             return CurveGesture(host, area, segment, pos)
-    if in_range(host, area, pos):
-        return RangeGesture(host, area, pos, mods)
     grab = _grab(host, area, points, pos, mods)
+    if grab is None and in_range(host, area, pos):
+        return RangeGesture(host, area, pos, mods)
     if grab is not None and grab[0] == "add":
         return _add_and_drag(host, area, pos, mods, grab[1])
     if grab is not None:
@@ -635,11 +633,9 @@ def hover(host, area: EnvelopeArea | None, pos: QPointF, mods) -> tuple[Hover | 
         return Hover(area.ident, "point", index), Qt.CursorShape.PointingHandCursor
     if _alt(mods) and automation.segment_index(points, host.view.x_to_beat(pos.x())) is not None:
         return None, Qt.CursorShape.SizeVerCursor
-    if in_range(host, area, pos):  # a drag moves the range; a click on the line still adds
-        target = add_target(host, area, pos, mods)
-        hovered = Hover(area.ident, "add", None, *target) if target is not None else Hover(area.ident, "range")
-        return hovered, Qt.CursorShape.ArrowCursor
     grab = _grab(host, area, points, pos, mods)
+    if grab is None and in_range(host, area, pos):
+        return Hover(area.ident, "range"), Qt.CursorShape.ArrowCursor
     if grab is not None and grab[0] == "add":
         return Hover(area.ident, "add", None, *grab[1]), add_cursor()
     if grab is not None:

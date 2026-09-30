@@ -470,3 +470,35 @@ def test_a_step_is_a_segment_to_drag(window, tracks):
     drag(lanes, point(window, a.id, 4.0, 0.5), point(window, a.id, 6.0, 0.5))
     points = window.project.envelope(a.id, MIXER_PAN)
     assert [(p.beat, p.value) for p in points] == [(0.0, 0.2), (6.0, 0.2), (6.0, 0.8), (8.0, 0.8)]
+
+
+def test_points_in_a_selected_range_move_on_their_own(window, tracks):
+    a, _ = tracks
+    window.editor.show_automation(a.id, MIXER_PAN)
+    window.editor.set_envelope(a.id, MIXER_PAN, env((0.0, 0.5), (2.5, 0.8), (3.5, 0.2), (6.0, 0.5)))
+    lanes = window.arrangement.lanes
+    drag(lanes, point(window, a.id, 2.0, 0.02), point(window, a.id, 4.0, 0.02))  # select 2..4
+    height = area(window, a.id).values.height()
+    drag(lanes, point(window, a.id, 3.0, 0.95), point(window, a.id, 3.0, 0.95) + QPoint(0, round(height * 0.1)))
+    moved = window.project.envelope(a.id, MIXER_PAN)
+    assert window.selection.time_range[:2] == (2.0, 4.0)
+    peak = next(p for p in moved if p.beat == 2.5)
+    # A breakpoint in the range: just it moves (the range doesn't).
+    drag(lanes, point(window, a.id, 2.5, peak.value), point(window, a.id, 2.5, peak.value - 0.2))
+    after = window.project.envelope(a.id, MIXER_PAN)
+    assert [p.beat for p in after] == [p.beat for p in moved]
+    changed = [(x.beat, x.value) for x, y in zip(moved, after, strict=True) if x != y]
+    assert len(changed) == 1 and changed[0][0] == 2.5
+
+
+def test_dragged_breakpoints_override_where_they_land(window, tracks):
+    a, _ = tracks
+    window.editor.show_automation(a.id, MIXER_PAN)
+    window.editor.set_envelope(a.id, MIXER_PAN, env((0.0, 0.5), (1.0, 0.5), (2.0, 0.5), (4.0, 0.9), (5.0, 0.1),
+                                                   (6.0, 0.5)))
+    lanes = window.arrangement.lanes
+    near = point(window, a.id, 1.5, 0.5) + QPoint(0, 10)  # the segment from 1 to 2
+    drag(lanes, near, near + QPoint(round(window.arrangement.view.px_per_beat * 3.5), 0))
+    points = window.project.envelope(a.id, MIXER_PAN)
+    assert [p.beat for p in points] == [0.0, 4.0, 4.5, 5.5, 6.0]  # the one at 5 went; 4 is before the pair
+    assert window.selection.points == (a.id, MIXER_PAN, frozenset({2, 3}))  # still the pair
