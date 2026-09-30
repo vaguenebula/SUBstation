@@ -8,7 +8,7 @@ import json
 from ctypes import wintypes
 
 import pytest
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, Qt
 from PySide6.QtGui import QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
@@ -357,4 +357,64 @@ def test_plugin_editors_follow_the_selected_track(window):
     window.undo_stack.redo()
     QTest.qWait(1)
     assert not window.bridge.is_plugin_editor_open(bass.id, on_bass.id)
+    window.undo_stack.setClean()
+
+
+def test_selecting_deleting_and_reordering_devices(window):
+    refs = installed(window)
+    track, synth = synth_track(window)
+    effects = [window.editor.add_device(track.id, PLUGIN_KIND, plugin=refs[name])
+               for name in ("GIL Test Effect", "GIL Test Mono", "GIL Test Effect")]
+    window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    chain = lambda: [d.id for d in window.project.track(track.id).devices]
+    first, second, third, utility = chain()[1:]
+    assert [first, second, third] == [e.id for e in effects]
+
+    def click(device_id, modifiers=Qt.KeyboardModifier.NoModifier):
+        QTest.mouseClick(panel.widgets[device_id].title, Qt.MouseButton.LeftButton, modifiers)
+
+    # Clicks on a device's title select it; Shift selects a range, Ctrl one more or less.
+    click(first)
+    assert panel.selected == [first] and panel.widgets[first].selected and window.selection.focus == "devices"
+    click(utility, Qt.KeyboardModifier.ShiftModifier)
+    assert panel.selected == [first, second, third, utility]
+    click(second, Qt.KeyboardModifier.ControlModifier)
+    assert panel.selected == [first, third, utility] and not panel.widgets[second].selected
+    click(synth.id)
+    click(second, Qt.KeyboardModifier.ShiftModifier)  # the instrument can be selected too
+    assert panel.selected == [synth.id, first, second]
+
+    # Delete deletes them all, in one undo step.
+    steps = window.undo_stack.count()
+    window.delete_selection()
+    assert chain() == [third, utility] and window.undo_stack.count() == steps + 1
+    window.undo_stack.undo()
+    assert chain() == [synth.id, first, second, third, utility]
+    window.selection.set_clips(set())  # selecting something else deselects the devices
+    assert panel.selected == [] and not any(w.selected for w in panel.widgets.values())
+    window.delete_selection()
+    assert len(chain()) == 5
+
+    # Dragging effects (selected together) reorders them; the instrument stays first.
+    def drop_before(device_id, moving):
+        mime = QMimeData()
+        mime.setData("application/x-gilstudio-device-move", "\n".join([track.id, *moving]).encode())
+        widget = panel.widgets[device_id]
+        pos = widget.mapTo(panel, QPoint(2, widget.height() // 2))
+        panel.dropEvent(drop(QPointF(pos), mime))
+
+    drop_before(first, [third, utility])
+    assert chain() == [synth.id, third, utility, first, second]
+    assert window.undo_stack.undoText() == "Move Devices"
+    drop_before(synth.id, [second, synth.id])  # nothing goes before the instrument, which doesn't move
+    assert chain() == [synth.id, second, third, utility, first]
+    window.undo_stack.undo()
+    window.undo_stack.undo()
+    assert chain() == [synth.id, first, second, third, utility]
+    # A device's menu offers Delete for all the selected devices.
+    click(first)
+    click(second, Qt.KeyboardModifier.ShiftModifier)
+    panel.widgets[first].remove_selected()
+    assert chain() == [synth.id, third, utility]
     window.undo_stack.setClean()

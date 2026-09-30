@@ -413,10 +413,35 @@ class ProjectEditor:
         if [d.id for d in after] != [d.id for d in before]:
             self._push(SetDevicesCommand(self.project, track_id, before, after, "Move Device"))
 
-    def remove_device(self, track_id: str, device_id: str) -> None:
+    def move_devices(self, track_id: str, device_ids, index: int) -> None:
+        """Move effects together (in their chain order) to before the device at
+        `index` in the chain as it is now (the end if past it). One undo step; an
+        instrument doesn't move, and nothing goes before it."""
         before = copy.deepcopy(self.project.track(track_id).devices)
-        after = [d for d in copy.deepcopy(before) if d.id != device_id]
-        self._push(SetDevicesCommand(self.project, track_id, before, after, "Delete Device"))
+        ids = {d.id for d in before if d.id in set(device_ids) and not device_is_instrument(d)}
+        if not ids:
+            return
+        moving = [d for d in copy.deepcopy(before) if d.id in ids]
+        staying = [d for d in copy.deepcopy(before) if d.id not in ids]
+        at = sum(1 for d in before[:max(0, index)] if d.id not in ids)
+        first = 1 if staying and device_is_instrument(staying[0]) else 0
+        at = max(first, min(at, len(staying)))
+        after = staying[:at] + moving + staying[at:]
+        if [d.id for d in after] != [d.id for d in before]:
+            self._push(SetDevicesCommand(self.project, track_id, before, after,
+                                         "Move Device" if len(moving) == 1 else "Move Devices"))
+
+    def remove_device(self, track_id: str, device_id: str) -> None:
+        self.remove_devices(track_id, [device_id])
+
+    def remove_devices(self, track_id: str, device_ids) -> None:
+        """Delete devices from a track's chain, in one undo step."""
+        ids = set(device_ids)
+        before = copy.deepcopy(self.project.track(track_id).devices)
+        after = [d for d in copy.deepcopy(before) if d.id not in ids]
+        if len(after) != len(before):
+            text = "Delete Device" if len(before) - len(after) == 1 else "Delete Devices"
+            self._push(SetDevicesCommand(self.project, track_id, before, after, text))
 
     def set_device_param(self, track_id: str, device_id: str, param_id: str, value: float,
                          merge_key: object | None = None, old: float | None = None) -> None:

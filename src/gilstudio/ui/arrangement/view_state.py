@@ -126,7 +126,7 @@ class Selection(QObject):
         self.insert_beat = 0.0
         self.time_range: tuple[float, float, tuple[str, ...]] | None = None  # start, end, track ids
         self._range_selects_clips = False
-        self.focus = "clips"  # what Delete acts on: "clips" or "track"
+        self.focus = "clips"  # what Delete acts on: "clips", "track" or "devices" (the device view's)
 
     def set_clips(self, refs, track_id: str | None = None) -> None:
         self.clips = set(refs)
@@ -150,6 +150,12 @@ class Selection(QObject):
             self.clips = set()
             self.time_range = None
         self.changed.emit()
+
+    def focus_devices(self) -> None:
+        """Devices were selected in the device view: Delete acts on them now."""
+        if self.focus != "devices":
+            self.focus = "devices"
+            self.changed.emit()
 
     def set_time_range(self, start: float, end: float, track_ids, clips=None) -> None:
         """Select a beat range across tracks. With `clips` (the clips it touches,
