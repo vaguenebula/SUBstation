@@ -8,11 +8,15 @@ letting the plug-in have it.
 
 Keys without Ctrl or Alt (Space, Delete, letters...) and the text-editing
 shortcuts (Ctrl+A/C/V/X/Z/Y) stay with the plug-in: it may be typing into a
-field of its own."""
+field of its own.
+
+Ctrl+W (the main window's Close Plug-in Editor) closes the foremost editor,
+from the main window or from any editor."""
 
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from ctypes import wintypes
 
@@ -24,6 +28,7 @@ EDITOR_WINDOW_CLASS = "GILStudioPluginEditor"  # EditorWindow.cpp's kWindowClass
 
 WM_KEYDOWN = 0x0100
 WM_SYSKEYDOWN = 0x0104
+WM_CLOSE = 0x0010
 VK_SHIFT, VK_CONTROL, VK_MENU = 0x10, 0x11, 0x12
 GA_ROOT = 2
 
@@ -49,15 +54,43 @@ def qt_key(vk: int) -> Qt.Key | None:
     return _VK_KEYS.get(vk)
 
 
+def _is_editor_class(hwnd) -> bool:
+    name = ctypes.create_unicode_buffer(64)
+    ctypes.windll.user32.GetClassNameW(hwnd, name, len(name))
+    return name.value == EDITOR_WINDOW_CLASS
+
+
 def is_plugin_editor(hwnd: int) -> bool:
     """Whether `hwnd` is (inside) a plug-in editor window."""
+    root = ctypes.windll.user32.GetAncestor(wintypes.HWND(hwnd), GA_ROOT)
+    return bool(root) and _is_editor_class(root)
+
+
+def foremost_editor() -> int | None:
+    """This process's shown plug-in editor that is highest in the z-order."""
     user32 = ctypes.windll.user32
-    root = user32.GetAncestor(wintypes.HWND(hwnd), GA_ROOT)
-    if not root:
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _lparam):  # top-level windows, from the top down
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == os.getpid() and user32.IsWindowVisible(hwnd) and _is_editor_class(hwnd):
+            found.append(hwnd)
+            return False
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return found[0] if found else None
+
+
+def close_foremost_editor() -> bool:
+    """Close the foremost plug-in editor, as its close button would. False if none is shown."""
+    hwnd = foremost_editor()
+    if hwnd is None:
         return False
-    name = ctypes.create_unicode_buffer(64)
-    user32.GetClassNameW(root, name, len(name))
-    return name.value == EDITOR_WINDOW_CLASS
+    ctypes.windll.user32.PostMessageW(wintypes.HWND(hwnd), WM_CLOSE, 0, 0)
+    return True
 
 
 def pressed_modifiers() -> Qt.KeyboardModifier:

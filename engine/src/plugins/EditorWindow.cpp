@@ -68,8 +68,9 @@ EditorWindow::EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* own
     auto owner = static_cast<HWND>(ownerWindow);
     if (owner && !IsWindow(owner)) owner = nullptr;
     resizable_ = view_->canResize() == kResultTrue;
-    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
-    if (resizable_) style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+    // Close only: no minimize or maximize.
+    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+    if (resizable_) style |= WS_THICKFRAME;
     // Created where it will be (if known), so it has that screen's scale from the start.
     hwnd_ = CreateWindowExW(0, kWindowClass, widen(title).c_str(), style, position ? position->x : CW_USEDEFAULT,
                             position ? position->y : CW_USEDEFAULT, 400, 300, owner, nullptr, thisModule(), this);
@@ -288,6 +289,16 @@ intptr_t EditorWindow::handleMessage(HWND hwnd, unsigned message, uintptr_t wPar
         case WM_SETFOCUS:
             if (HWND child = GetWindow(hwnd, GW_CHILD)) SetFocus(child);  // keys go to the plug-in
             return 0;
+
+        case WM_SYSCOMMAND:
+            switch (wParam & 0xFFF0) {  // keyboard shortcuts and the system menu too
+                case SC_MINIMIZE:
+                case SC_MAXIMIZE:
+                    return 0;
+                default:
+                    break;
+            }
+            break;
 
         case WM_CLOSE:
             closed_ = true;

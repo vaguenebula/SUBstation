@@ -124,6 +124,7 @@ class EngineBridge(QObject):
         self._loading: dict[str, list[Callable[[], None]]] = {}
         self._failed: dict[str, str] = {}
         self._file_info: dict[str, ge.AudioFileInfo] = {}
+        self._preview_request = 0  # the latest preview asked for (or stopped): a file still loading then is not played
         self.meters: dict[str, tuple[float, float]] = {}  # track id or "master" -> (left, right)
         self._last_position = -1.0
         self._last_playing = False
@@ -619,7 +620,12 @@ class EngineBridge(QObject):
     # --- Preview -----------------------------------------------------------------
 
     def preview_file(self, path: str) -> None:
+        self._preview_request += 1
+        request = self._preview_request
+
         def start() -> None:
+            if request != self._preview_request:
+                return  # stopped, or another file previewed, while this one loaded
             try:
                 self.engine.preview(path)
             except ValueError:
@@ -627,6 +633,7 @@ class EngineBridge(QObject):
         self.request_source(path, then=start)
 
     def stop_preview(self) -> None:
+        self._preview_request += 1
         self.engine.stop_preview()
 
     def preview_note(self, track_id: str, pitch: int, velocity: int) -> None:

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .notes import normalize
 from .project import (
+    DEFAULT_TRACK_HEIGHT,
     DEFAULT_WARP_MODE,
     LEGACY_WARP_MODES,
     TRACK_KINDS,
@@ -183,7 +184,7 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
             pan=float(t.get("pan", 0.0)),
             mute=bool(t.get("mute", False)),
             solo=bool(t.get("solo", False)),
-            height=int(t.get("height", 68)),
+            height=int(t.get("height", DEFAULT_TRACK_HEIGHT)),
             devices=[_device(d) for d in t.get("devices", [])],
             clips=sorted(
                 (_midi_clip(c) if kind == "midi" else _audio_clip(c, base) for c in t.get("clips", [])),

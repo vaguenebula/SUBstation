@@ -41,10 +41,9 @@ def cell(roll, beat: float, pitch: int) -> QPoint:
 
 @pytest.fixture
 def midi_clip(window):
-    """A MIDI track with a one-bar clip at beat 4, open in the piano roll (as by double-clicking the lane)."""
+    """A MIDI track with a one-bar clip at beat 4, open in the piano roll (as by right-clicking the lane)."""
     window.insert_midi_track()
-    QTest.mouseDClick(window.arrangement.lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
-                      lane_point(window, 0, 4.5))
+    window.arrangement.lanes.insert_midi_clip(window.project.tracks[0].id, lane_point(window, 0, 4.5).x())
     track = window.project.tracks[0]
     [clip] = track.clips
     return track, clip, window.arrangement.clip_view.piano_roll
@@ -60,7 +59,7 @@ def test_midi_track_with_the_synth_and_a_clip_in_the_piano_roll(window, midi_cli
     assert synth.pages == 2  # four at a time
     synth.next.click()
     assert "cutoff" in synth.knobs and not synth.choices
-    # Double-clicking empty space on a MIDI track made a one-bar clip at the grid line and opened it.
+    # Insert MIDI Clip on empty space of a MIDI track made a one-bar clip at the grid line and opened it.
     assert isinstance(clip, MidiClip) and (clip.start_beat, clip.duration_beats) == (4.0, 4.0)
     assert clip_view.isVisible() and clip_view.midi
     assert clip_view.body.currentWidget() is roll  # just the piano roll: no audio controls
@@ -132,7 +131,7 @@ def test_piano_roll_keys_take_precedence_over_arrangement_shortcuts(window, midi
     grid = roll.grid
     for beat in (0.0, 1.0):
         QTest.mouseDClick(grid, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, cell(roll, beat, 60))
-    window.selection.set_clips({(track.id, clip.id)})  # the arrangement clip is selected too
+    window.selection.select_clips(window.editor, {(track.id, clip.id)})  # the arrangement clip is selected too
     grid.setFocus()
     QTest.keyClick(grid, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
     assert len(roll.selected) == 2
@@ -301,7 +300,7 @@ def test_midi_clips_in_the_arrangement(window, midi_clip, tmp_path):
     window.arrangement.clip_view.close_view()
     assert not window.arrangement.lanes.grab().isNull()  # draws the notes inside the clip
     # Split at beat 6: each piece plays its own note; the notes stay in both.
-    window.selection.set_clips({(track.id, clip.id)})
+    window.selection.select_clips(window.editor, {(track.id, clip.id)})
     window.selection.set_insert(6.0)
     window.split()
     left, right = project.track(track.id).clips
@@ -357,3 +356,49 @@ def test_instruments_from_the_browser(window):
     # A MIDI track without an instrument asks for one.
     window.editor.remove_device(project.tracks[2].id, project.tracks[2].devices[0].id)
     assert "instrument" in window.devices.hint.text() and not window.devices.hint.isHidden()
+
+
+def test_inserting_a_midi_clip(window):
+    window.insert_midi_track()
+    window.insert_midi_track()
+    lanes, project, clip_view = window.arrangement.lanes, window.project, window.arrangement.clip_view
+    first, second = (t.id for t in project.tracks)
+
+    def spans(track_id: str) -> list[tuple[float, float]]:
+        return [(c.start_beat, c.end_beat()) for c in project.track(track_id).clips]
+
+    def opened() -> tuple[str, str]:
+        """The clip in the piano roll; closes it."""
+        assert clip_view.isVisible() and clip_view.midi
+        [lead] = clip_view.clip_refs
+        clip_view.close_view()
+        return lead
+
+    # Double-clicking empty space makes no clip.
+    point = lane_point(window, 0, 4.5)
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+    QTest.mouseDClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+    assert spans(first) == [] and not clip_view.isVisible()
+
+    # Right-click › Insert MIDI Clip inside a time selection fills it, and opens it in the piano roll.
+    drag(lanes, lane_point(window, 0, 2.0), lane_point(window, 0, 7.0))
+    assert window.selection.time_range == (2.0, 7.0, (first,))
+    ref = lanes.insert_midi_clip(first, lane_point(window, 0, 4.5).x())
+    assert spans(first) == [(2.0, 7.0)] and opened() == ref
+    # Outside a selection: a bar at the grid line.
+    lanes.insert_midi_clip(second, lane_point(window, 1, 0.5).x())
+    assert spans(second) == [(0.0, 4.0)]
+    opened()
+
+    # Ctrl+Shift+D fills a range across both tracks and opens the clips.
+    window.selection.set_time_range(12.0, 13.5, (first, second), clips=set())
+    QTest.keyClick(window, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+    assert spans(first)[-1] == spans(second)[-1] == (12.0, 13.5)
+    assert len(window.selection.clips) == 2
+    assert opened()[0] == first
+    # Without a selection: a bar at the insert marker on the selected track.
+    window.selection.select_track(second, focus_track=True)
+    window.selection.set_insert(8.0)
+    QTest.keyClick(window, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+    assert (8.0, 12.0) in spans(second)
+    assert opened()[0] == second

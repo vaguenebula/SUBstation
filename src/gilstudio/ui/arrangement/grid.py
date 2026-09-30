@@ -13,6 +13,8 @@ from ...model.timebase import is_multiple
 from .view_state import ViewState
 
 _COLORS = {"bar": QColor(theme.GRID_BAR), "beat": QColor(theme.GRID_BEAT), "sub": QColor(theme.GRID_SUB)}
+# Over clips: faint dark lines, so the grid shows through whatever colour a clip has.
+_OVER_CLIP_COLORS = {"bar": QColor(0, 0, 0, 70), "beat": QColor(0, 0, 0, 42), "sub": QColor(0, 0, 0, 24)}
 
 
 def grid_lines(view: ViewState, x0: float, x1: float, step: float | None = None) -> Iterator[tuple[float, float, str]]:
@@ -44,11 +46,14 @@ def label_step(view: ViewState, step: float) -> float:
     return candidates[-1]
 
 
-def draw_grid(painter: QPainter, view: ViewState, x0: float, x1: float, top: float, bottom: float) -> None:
+def draw_grid(painter: QPainter, view: ViewState, x0: float, x1: float, top: float, bottom: float,
+              over_clip: bool = False) -> None:
+    """The grid lines between x0 and x1; `over_clip` draws them faint, to show through a clip."""
     if bottom <= top:
         return
+    colors = _OVER_CLIP_COLORS if over_clip else _COLORS
     for x, _beat, kind in grid_lines(view, x0 - 1, x1 + 1):
-        painter.fillRect(QRectF(round(x), top, 1, bottom - top), _COLORS[kind])
+        painter.fillRect(QRectF(round(x), top, 1, bottom - top), colors[kind])
 
 
 def draw_loop_region(painter: QPainter, view: ViewState, x0: float, x1: float, top: float, bottom: float) -> None:

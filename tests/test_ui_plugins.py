@@ -11,7 +11,14 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, Qt
-from PySide6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent, QMouseEvent
+from PySide6.QtGui import (
+    QAction,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QKeySequence,
+    QMouseEvent,
+)
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
@@ -171,6 +178,71 @@ def test_edits_in_the_plugin_editor_are_undoable(window):
     user32.SendMessageW(frame, 0x0010, 0, 0)  # WM_CLOSE
     poll(window)
     assert not widget.edit.isChecked() and not window.engine.is_editor_open(pid)
+
+
+def test_devices_fit_the_device_view(window):
+    """The tallest devices (a page of knobs with page arrows, a plug-in's long error)
+    fit with the horizontal scroll bar showing: the chain never scrolls vertically."""
+    window.resize(900, 700)
+    window.show()
+    track, _ = synth_track(window)
+    window.editor.add_device(track.id, "ott")
+    missing = PluginRef(format="VST3", uid="0" * 32, name="Missing", path="C:/nowhere/Missing.vst3")
+    broken = window.editor.add_device(track.id, PLUGIN_KIND, plugin=missing)
+    window.bridge.plugin_errors[broken.id] = "Could not load this plug-in. " * 20
+    window.devices.show_track(None)
+    window.devices.show_track(track.id)
+    for _ in range(4):
+        window.editor.add_device(track.id, "utility")
+    QTest.qWait(10)
+    scroll = window.devices.scroll
+    assert scroll.horizontalScrollBar().isVisible()
+    assert scroll.verticalScrollBar().maximum() == 0
+    assert window.devices.chain.minimumSizeHint().height() <= scroll.viewport().height()
+
+
+def test_double_click_opens_and_ctrl_w_closes_the_editor(window, monkeypatch):
+    from gilstudio.ui import plugin_keys
+
+    track = window.editor.add_audio_track(name="Keys")
+    window.selection.select_track(track.id)
+    effect = installed(window)["GIL Test Effect"]
+    first = window.editor.add_device(track.id, PLUGIN_KIND, plugin=effect)
+    second = window.editor.add_device(track.id, PLUGIN_KIND, plugin=effect)
+    for device in (first, second):
+        window.bridge.close_plugin_editor(track.id, device.id)  # adding it may have shown it
+    assert plugin_keys.foremost_editor() is None
+    widgets = [window.devices.widgets[d.id] for d in (first, second)]
+
+    def double_click(widget) -> None:
+        QTest.mouseDClick(widget, Qt.MouseButton.LeftButton, pos=widget.title.geometry().center())
+
+    double_click(widgets[0])
+    first_frame = plugin_keys.foremost_editor()
+    assert first_frame and widgets[0].edit.isChecked()
+    double_click(widgets[1])
+    second_frame = plugin_keys.foremost_editor()
+    assert second_frame not in (None, first_frame)
+    double_click(widgets[0])  # open already: the same window comes to the front
+    assert plugin_keys.foremost_editor() == first_frame
+
+    # Ctrl+W in the main window closes the editor in front...
+    [close] = [a for a in window.findChildren(QAction) if a.shortcut() == QKeySequence("Ctrl+W")]
+    close.trigger()
+    assert wait_until(lambda: not user32.IsWindow(first_frame))
+    poll(window)
+    assert not widgets[0].edit.isChecked() and widgets[1].edit.isChecked()
+    assert plugin_keys.foremost_editor() == second_frame
+
+    # ...and so does Ctrl+W in an editor (the plug-in's view has the focus).
+    view = user32.GetWindow(second_frame, 5)  # GW_CHILD
+    monkeypatch.setattr(plugin_keys, "pressed_modifiers", lambda: Qt.KeyboardModifier.ControlModifier)
+    msg = wintypes.MSG(hWnd=view, message=plugin_keys.WM_KEYDOWN, wParam=ord("W"))
+    assert window._plugin_shortcuts.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(msg))[0]
+    assert wait_until(lambda: not user32.IsWindow(second_frame))
+    poll(window)
+    assert not widgets[1].edit.isChecked() and plugin_keys.foremost_editor() is None
+    close.trigger()  # none left: nothing happens
 
 
 def test_plugin_changes_mark_the_project_changed(window, tmp_path):
@@ -401,7 +473,7 @@ def test_selecting_deleting_and_reordering_devices(window):
     assert chain() == [third, utility] and window.undo_stack.count() == steps + 1
     window.undo_stack.undo()
     assert chain() == [synth.id, first, second, third, utility]
-    window.selection.set_clips(set())  # selecting something else deselects the devices
+    window.selection.clear()  # selecting something else deselects the devices
     assert panel.selected == [] and not any(w.selected for w in panel.widgets.values())
     window.delete_selection()
     assert len(chain()) == 5
@@ -460,7 +532,7 @@ def test_device_view_review_fixes(window, monkeypatch):
 
     # With the devices in focus, a second Delete doesn't delete clips selected before.
     clip = window.editor.add_midi_clip(track.id, 0.0, 4.0)
-    window.selection.set_clips({clip})
+    window.selection.select_clips(window.editor, {clip})
     QTest.mouseClick(panel.widgets[fx1].title, Qt.MouseButton.LeftButton)
     window.delete_selection()
     window.delete_selection()
@@ -646,3 +718,47 @@ def test_adding_a_plugin_scrolls_to_it(window):
     assert track.devices[0].plugin == refs["GIL Test Synth"]
     QTest.qWait(50)
     assert in_view(added) and not in_view(track.devices[0].id)
+
+
+def test_plugin_folders_in_preferences(window, tmp_path):
+    import shutil
+
+    from gilstudio.plugins.settings import custom_folders
+    from gilstudio.ui.dialogs import PreferencesDialog
+
+    index = window.browser.plugin_index
+    before = len(installed(window))
+    extra = tmp_path / "More VST3"
+    shutil.copytree(TEST_PLUGINS, extra / "Vendor" / TEST_PLUGINS.name)
+    (extra / "Broken.vst3").write_bytes(b"not a plug-in")
+
+    prefs = PreferencesDialog(window.bridge, window, plugins=index)
+    page = prefs.plugins
+    assert [prefs.tabs.tabText(i) for i in range(prefs.tabs.count())] == ["Audio", "Plug-ins"]
+    assert page.folders.count() == 1 and "(standard)" in page.folders.item(0).text()
+    page.folders.setCurrentRow(0)
+    assert not page.remove_button.isEnabled()  # the standard folders stay
+
+    # An added folder is kept, and its plug-ins (in folders inside it too) are found.
+    page.add_folder(str(extra))
+    page.add_folder(str(extra) + "\\")  # the same folder again: nothing changes
+    assert custom_folders() == [str(extra)]
+    assert page.folders.count() == 2 and page.remove_button.isEnabled()
+    assert wait_until(lambda: not index.scanning, timeout=30)
+    paths = {p.path for p in index.plugins}
+    assert len(index.plugins) == 2 * before and str(extra / "Vendor" / TEST_PLUGINS.name) in paths
+    assert [f.path for f in index.failures] == [str(extra / "Broken.vst3")]
+    assert page.scan_status.text() == f"{2 * before} plug-ins found · 1 file could not be read"
+    assert page.rescan_button.isEnabled()
+
+    # A rescan reads everything again; a removed folder's plug-ins go.
+    page.rescan()
+    assert index.scanning and not page.rescan_button.isEnabled()
+    assert wait_until(lambda: not index.scanning, timeout=30)
+    assert len(index.plugins) == 2 * before
+    page.remove_folder()
+    assert custom_folders() == [] and page.folders.count() == 1
+    assert wait_until(lambda: not index.scanning, timeout=30)
+    assert len(index.plugins) == before and not index.failures
+    assert page.scan_status.text() == f"{before} plug-ins found"
+    prefs.reject()
