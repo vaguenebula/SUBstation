@@ -28,6 +28,15 @@
 // to the RecordingSession's rings, tagged with the timeline position it was
 // taken at; the loop doesn't wrap then. A count-in clicks before the playhead
 // moves (the metronome, even if it is off).
+//
+// MIDI input (MidiInput.h): messages come stamped with the device sample they
+// play at; each chunk takes those due in it. A track whose MIDI input accepts
+// them hears them (while monitored: In, or Auto and armed), beside its clips'
+// notes and preview notes; with In its clips' notes don't play. The renderer
+// remembers the live notes it started, like the clips' notes, so each gets its
+// note-off even if the track stops hearing its input, stops existing, or the
+// transport stops while the key is held. A MIDI track being recorded sends what
+// it hears (monitored or not) to its MidiRecordingTake.
 
 #include <array>
 #include <cstdint>
@@ -51,7 +60,7 @@ public:
     // Real-time. Applies transport commands, renders tracks, metronome and the
     // browser preview, and publishes position/meters. The master goes to the
     // first two outputs (mixed to mono if there is only one); any others are silent.
-    // Monitored tracks hear the inputs; `recording` (if any) takes them.
+    // Monitored tracks hear the inputs, audio and MIDI; `recording` (if any) takes them.
     void processLive(const RenderSnapshot& snap, SharedState& shared, const AudioIO& io,
                      RecordingSession* recording = nullptr) noexcept;
 
@@ -114,12 +123,28 @@ private:
         uint8_t key;
         int64_t end;  // timeline sample of its note-off
     };
+    struct InputEvent {  // a MIDI input message due in this chunk
+        int offset;
+        uint16_t port;
+        uint8_t status;
+        uint8_t data1;
+        uint8_t data2;
+    };
+    struct LiveNote {  // a note a track's MIDI input started, not released yet
+        uint32_t trackId;
+        uint16_t port;
+        uint8_t channel;
+        uint8_t key;
+    };
     static constexpr int kMaxSegments = 16;
     static constexpr int kMaxTicks = 64;
     static constexpr int kMaxPendingTicks = 256;
     static constexpr int kMaxActiveNotes = 512;  // across all tracks
     static constexpr int kMaxEvents = 1024;      // per track and block
     static constexpr int kMaxPreviewNotes = 256;
+    static constexpr int kMaxPendingInput = 2048;  // MIDI input not due yet
+    static constexpr int kMaxInputEvents = 512;    // MIDI input in one chunk
+    static constexpr int kMaxLiveNotes = 512;      // across all tracks
 
     void renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept;
     // A strip's body, in place: inserts -> delay compensation -> fader and meter.
@@ -149,8 +174,17 @@ private:
     void scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset) noexcept;
     void renderTicks(int frames) noexcept;
     void mixPreview(SharedState& shared, int frames) noexcept;
-    void buildNoteEvents(const TrackRender& track) noexcept;
+    // A track's note events for this chunk: preview notes, its MIDI input (if
+    // `hearsInput`, or to `take`), then (if `clipNotes`) its clips' notes.
+    void buildNoteEvents(const TrackRender& track, bool hearsInput, bool clipNotes, MidiRecordingTake* take) noexcept;
     void releaseNotes(uint32_t trackId, int offset) noexcept;
+    void drainMidiInput(SharedState& shared) noexcept;
+    void gatherMidiInput(int frames) noexcept;
+    bool hearsMidiInput(const TrackRender& track, ChunkFlags flags) const noexcept;
+    MidiRecordingTake* midiTake(uint32_t trackId) const noexcept;
+    void routeMidiInput(const TrackRender& track, bool hears, MidiRecordingTake* take) noexcept;
+    void recordMidi(MidiRecordingTake* take, int offset, uint8_t channel, uint8_t key, uint8_t velocity) noexcept;
+    int findLiveNote(uint32_t trackId, uint16_t port, uint8_t channel, uint8_t key) const noexcept;
     void forgetNotesOfRemovedTracks(const RenderSnapshot& snap) noexcept;
     bool pushEvent(const ProcessEvent& event) noexcept;
 
@@ -192,6 +226,17 @@ private:
     int numEvents_ = 0;
     std::vector<PreviewNote> previewNotes_;
     int numPreviewNotes_ = 0;
+
+    // MIDI input (live renders only).
+    std::vector<MidiInputEvent> pendingInput_;  // arrived, not due yet; in arrival order
+    int numPendingInput_ = 0;
+    std::vector<InputEvent> inputEvents_;  // due in this chunk
+    int numInputEvents_ = 0;
+    std::vector<LiveNote> liveNotes_;
+    int numLiveNotes_ = 0;
+    int64_t deviceTime_ = 0;          // the chunk's first sample on the device's clock
+    bool releaseLiveNotes_ = false;   // the transport stopped: held keys are released
+    bool wasPlaying_ = false;
 
     Metronome metronome_;
 

@@ -19,6 +19,10 @@
 //    rings, and its own thread writes the files (Recorder.h). Anything that
 //    changes the device (or its sample rate), or renders offline, ends the
 //    recording first, cleanly: the takes so far are kept for stopRecording().
+//  * MIDI input devices are opened and closed on the main thread too. Their
+//    messages arrive on the drivers' threads, are stamped against the audio
+//    device's clock there and queued for the audio thread (MidiInput.h); they
+//    never take `mutex_`. Without a running audio device they are dropped.
 
 #include <array>
 #include <atomic>
@@ -32,6 +36,7 @@
 #include "AudioDevice.h"
 #include "AudioSource.h"
 #include "Automation.h"
+#include "MidiInput.h"
 #include "Processor.h"
 #include "Recorder.h"
 #include "Renderer.h"
@@ -68,19 +73,30 @@ struct NoteDesc {
 };
 
 // A track to record, and the file its take goes to (a WAV file, created anew).
+// No file: the track records its MIDI input instead.
 struct RecordTarget {
     uint32_t trackId = 0;
     std::string path;
 };
 
-// A take while it records, for the UI's live waveform.
+// A take while it records, for the UI's live waveform (or notes).
 struct RecordingProgress {
     uint32_t trackId = 0;
     bool started = false;     // the playhead moved (after any count-in) and input arrives
-    int64_t startSample = 0;  // where it goes on the timeline (latency-corrected, may be negative)
+    int64_t startSample = 0;  // where it goes on the timeline (audio: latency-corrected, may be negative)
     int64_t frames = 0;
     // Peaks since the last call: (min, max) pairs, each over kPeakFrames frames of all its channels.
     std::vector<float> peaks;
+    bool midi = false;
+    std::vector<RecordedNote> notes;  // a MIDI take's notes so far (held ones end at -1)
+};
+
+// The audio device's sample clock as MIDI input sees it (MidiInput.h).
+struct AudioClockStatus {
+    bool running = false;
+    int64_t hostTimeNs = 0;   // when the last callback began (hostTimeNs())
+    int64_t sampleTime = 0;   // the device sample it began with
+    int midiDelay = 0;        // frames between a MIDI message's arrival and when it plays
 };
 
 struct MeterReading {
@@ -195,6 +211,24 @@ public:
     std::vector<RecordingProgress> recordingProgress();
     static constexpr int kRecordPeakFrames = RecordingTake::kPeakFrames;
 
+    // --- MIDI input -------------------------------------------------------------
+    // Devices (main thread): those connected, by name; open ones play into the
+    // tracks whose MIDI input takes them. open throws std::runtime_error for the user.
+    std::vector<std::string> midiInputDevices();
+    void openMidiInput(const std::string& name);
+    void closeMidiInput(const std::string& name);
+    std::vector<std::string> openMidiInputs();
+    // A track's MIDI input: none (`enabled` false), every input ("") or one by
+    // name (open or not), on every channel (0) or one (1-16). With a MIDI input
+    // the track is recorded by a RecordTarget without a file; it hears the input
+    // while monitored (In, or Auto and armed).
+    void setTrackMidiInput(uint32_t trackId, bool enabled, const std::string& device, int channel);
+    // A message as if it came from the input `device` at `hostTimeNs` (the
+    // hostTimeNs() clock; 0: now), e.g. from a computer keyboard or a test. 1-3
+    // bytes, starting with a status byte. Dropped if no audio device runs.
+    void sendMidiInput(const std::string& device, const std::vector<uint8_t>& message, int64_t hostTimeNs = 0);
+    AudioClockStatus audioClock() const;
+
     // --- Automation -------------------------------------------------------------
     // Replaces the automation of a track (trackId 0: the master): an envelope per
     // target, either a mixer control (processorId 0, param "volume" or "pan") or
@@ -274,12 +308,17 @@ private:
         std::shared_ptr<DelayLine> delay;   // delay compensation, kept across snapshots
         std::vector<AutomationLaneDesc> automation;
         std::vector<int> inputChannels;  // device channels: the input edge
+        MidiInputRoute midiInput;
         MonitorMode monitor = MonitorMode::Auto;
         bool armed = false;
     };
 
     void audioCallback(const AudioIO& io) noexcept override;
     void deviceEvent(DeviceEvent event) noexcept override;
+    // Any thread: a MIDI message from input `port`, stamped and queued for the audio thread.
+    void midiInput(uint16_t port, const uint8_t* message, int size, int64_t hostTimeNs) noexcept;
+    uint16_t midiPortLocked(const std::string& name);
+    void discardMidiInputLocked();
 
     TrackModel& trackLocked(uint32_t trackId);           // the master too
     TrackModel& arrangementTrackLocked(uint32_t trackId);  // not the master
@@ -360,6 +399,11 @@ private:
     std::unique_ptr<RecordingSession> recording_;
     std::atomic<RecordingSession*> liveRecording_{nullptr};
     std::vector<RecordedTake> finishedTakes_;
+
+    // MIDI inputs: port ids are indices into midiPorts_ (names), kept for the
+    // engine's life, so that tracks can name inputs that aren't open (yet).
+    std::vector<std::string> midiPorts_;
+    MidiInputDevices midiDevices_;  // last: closed first, while the rest still stands
 };
 
 }  // namespace gil

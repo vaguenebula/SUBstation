@@ -1,7 +1,9 @@
 """Recording in the application, with the fake ASIO driver (tests/asio_driver)
 in manual mode: arming tracks and choosing their input and monitoring in the
 track headers, the record button, the live waveform, the takes becoming clips
-in one undo step, and what ends a recording."""
+in one undo step, and what ends a recording. MIDI tracks too: their MIDI input
+(played with send_midi_input()), live notes, record quantization, and the
+MIDI inputs in Preferences."""
 
 import time
 from datetime import UTC
@@ -10,7 +12,8 @@ import numpy as np
 import pytest
 
 from gilstudio.audio.engine_bridge import recordings_folder, take_path
-from gilstudio.audio.settings import AudioSettings
+from gilstudio.audio.settings import AudioSettings, record_quantize
+from gilstudio.model.project import MidiInput
 
 from .conftest import TEST_ASIO_NAME
 from .test_asio import (  # noqa: F401 - skipped without ASIO
@@ -69,7 +72,7 @@ def test_header_controls(studio, app):
     app.processEvents()
     h = header(window, track.id)
     assert h.arm.isVisible() and h.input.text() == "No Input" and h.monitor.text() == "Auto"
-    assert not header(window, midi.id).arm.isVisible()  # MIDI input comes later
+    assert header(window, midi.id).arm.isVisible() and header(window, midi.id).input.text() == "All Ins"
 
     menu = h.input_menu()
     labels = [a.text() for a in menu.actions() if a.text()]
@@ -175,9 +178,9 @@ def test_a_device_change_ends_the_recording(studio, app, driver):
 
 
 def test_nothing_to_record(window, studio):
-    assert window.bridge.start_recording() == "Arm an audio track that has an input to record."
+    assert window.bridge.start_recording() == "Arm a MIDI track, or an audio track that has an input, to record."
     window.toggle_record()
-    assert "Arm an audio track" in window.statusBar().currentMessage()
+    assert "Arm a MIDI track" in window.statusBar().currentMessage()
     assert not window.bridge.is_playing
 
 
@@ -189,3 +192,81 @@ def test_take_names(tmp_path):
     assert first.name == "Vox_ _lead_ 2026-10-01 123005.wav"
     first.write_bytes(b"")
     assert take_path(tmp_path, 'Vox: "lead"', when).name == "Vox_ _lead_ 2026-10-01 123005 2.wav"
+
+
+# --- MIDI -----------------------------------------------------------------------------
+
+
+def test_midi_header_controls(studio, app):
+    window = studio
+    track = window.editor.add_midi_track()
+    app.processEvents()
+    h = header(window, track.id)
+    assert h.input.isVisible() and h.monitor.isVisible() and h.input.text() == "All Ins"
+    menu = h.input_menu()
+    assert [a.text() for a in menu.actions() if a.text() and not a.menu()][:2] == ["No Input", "All Ins"]
+    channels = next(a.menu() for a in menu.actions() if a.menu())
+    choose(channels, "Channel 10")
+    assert track.midi_input == MidiInput("", 10) and h.input.text() == "All Ins · Ch 10"
+    choose(h.input_menu(), "No Input")
+    assert track.midi_input is None and h.input.text() == "No Input"
+    h.arm.click()
+    assert track.armed
+    assert "has no MIDI input" in window.statusBar().currentMessage()
+    window.undo_stack.undo()
+    assert track.midi_input == MidiInput("", 10)
+    # An input that isn't connected (now) can still be chosen, and shows as such.
+    window.editor.set_track_midi_input(track.id, MidiInput("Old Keyboard"))
+    assert any(a.text() == "Old Keyboard (not connected)" and a.isChecked() for a in h.input_menu().actions())
+
+
+def test_record_midi(studio, app, driver):
+    window = studio
+    track = window.editor.add_midi_track()
+    app.processEvents()
+    header(window, track.id).arm.click()
+    next(a for a in window.record_quantize_actions if a.text() == "1/16").trigger()
+    assert record_quantize() == 0.25
+    window.transport.record.click()
+    assert window.bridge.is_recording
+    driver.process(8)
+
+    def send(message):
+        clock = window.engine.audio_clock
+        window.engine.send_midi_input("Keys", message, clock.host_time_ns)  # plays in the next buffer
+
+    send([0x90, 60, 100])
+    driver.process(25)
+    send([0x80, 60, 0])
+    send([0x90, 67, 90])  # held when recording stops
+    driver.process(4)
+    window.bridge._poll_meters()
+    live = window.bridge.live_takes[track.id]
+    assert live.midi and live.started and live.notes[:, 2].tolist() == [60, 67] and live.notes[1, 1] == -1
+    window.arrangement.lanes.grab()  # draws the live notes
+
+    steps = window.undo_stack.index()
+    window.transport.record.click()
+    assert not window.bridge.is_recording and window.undo_stack.index() == steps + 1
+    [clip] = track.clips
+    assert clip.start_beat == 0.0 and window.selection.clips == {(track.id, clip.id)}
+    assert [(n.pitch, n.velocity) for n in clip.notes] == [(60, 100), (67, 90)]
+    assert all(n.start % 0.25 == 0 for n in clip.notes)  # record quantization
+    assert clip.notes[0].length == pytest.approx(25 * BUFFER / (RATE / 2))
+    assert clip.notes[1].end == pytest.approx(clip.duration_beats, abs=0.25)  # held: until recording stopped
+    window.undo_stack.undo()
+    assert track.clips == []
+
+
+def test_preferences_list_the_midi_inputs(window):
+    from gilstudio.ui.dialogs import PreferencesDialog
+
+    dialog = PreferencesDialog(window.bridge, window)
+    tabs = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+    assert tabs[:2] == ["Audio", "MIDI"]
+    names = window.bridge.midi_inputs()  # whatever this computer has
+    assert dialog.midi.inputs.count() == len(names)
+    if not names:
+        assert dialog.midi.status.text() == "No MIDI input is connected."
+    dialog.midi.refresh()
+    dialog.deleteLater()

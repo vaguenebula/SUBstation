@@ -7,7 +7,8 @@ envelope as [beat, value, curve] points, with what the arrangement shows of it.
 The master is stored apart from the tracks: its mixer, devices and automation.
 Files from before version 5 have no master devices; they load as they were.
 Tracks store their audio input (device channels), monitoring and whether they
-are armed (version 6; older files load with none, Auto, not armed)."""
+are armed (version 6; older files load with none, Auto, not armed), and MIDI
+tracks their MIDI input (version 7; older ones load hearing every input)."""
 
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ from .project import (
     Clip,
     Device,
     MidiClip,
+    MidiInput,
     Note,
     PluginRef,
     Project,
@@ -39,7 +41,8 @@ from .project import (
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 6  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs
+VERSION = 7  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
+# 7: MIDI inputs
 EXTENSION = ".gilproj"
 
 
@@ -180,6 +183,7 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
                 "automation": _automation_to_dict(t.automation),
                 "automation_view": _view_to_dict(t.automation_view),
                 "input": list(t.input),
+                **({"midi_input": _midi_input_to_dict(t.midi_input)} if t.is_midi else {}),
                 "monitor": t.monitor,
                 "armed": t.armed,
             }
@@ -257,10 +261,24 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
             automation=_automation(t.get("automation")),
             automation_view=_view(t.get("automation_view")),
             input=_input(t.get("input")),
+            midi_input=_midi_input(t.get("midi_input", {})) if kind == "midi" else MidiInput(),
             monitor=t.get("monitor") if t.get("monitor") in MONITOR_MODES else "auto",
-            armed=bool(t.get("armed", False)) and kind == "audio",
+            armed=bool(t.get("armed", False)),
         ))
     return tracks
+
+
+def _midi_input_to_dict(midi_input: MidiInput | None) -> dict | None:
+    if midi_input is None:
+        return None
+    return {"device": midi_input.device, "channel": midi_input.channel}
+
+
+def _midi_input(data) -> MidiInput | None:
+    if data is None:
+        return None
+    channel = int(data.get("channel", 0))
+    return MidiInput(device=str(data.get("device", "")), channel=channel if 0 <= channel <= 16 else 0)
 
 
 def _input(data) -> tuple[int, ...]:

@@ -11,6 +11,11 @@
 // The live waveform comes from here too, not from the file: the audio thread
 // sends each take's peaks (min/max of every kPeakFrames frames, all channels)
 // through a queue the UI drains.
+//
+// MIDI tracks record the notes played into them (MidiRecordingTake): the audio
+// thread sends each note-on and note-off, at the timeline position where it
+// played, through a queue; the edit side pairs them into notes. Nothing is
+// written to disk: the notes go into a MIDI clip.
 
 #include <atomic>
 #include <condition_variable>
@@ -98,20 +103,63 @@ struct RecordingTake {
     void push(const float* left, const float* right, int count, float* scratch) noexcept;
 };
 
+// A recorded note, in timeline samples.
+struct RecordedNote {
+    int64_t start = 0;
+    int64_t end = -1;  // -1: still held
+    uint8_t key = 60;
+    uint8_t velocity = 100;
+    uint8_t channel = 0;
+};
+
+// One MIDI track's take while it records.
+struct MidiRecordingTake {
+    struct Event {
+        int64_t time = 0;  // timeline sample where it played (before placement)
+        uint8_t channel = 0;
+        uint8_t key = 0;
+        uint8_t velocity = 0;  // 0: a note-off
+    };
+
+    explicit MidiRecordingTake(uint32_t trackId) : trackId(trackId) {}
+
+    const uint32_t trackId;
+    SpscQueue<Event, 1 << 14> events;  // audio thread -> edit side
+
+    // Written by the audio thread.
+    std::atomic<int64_t> start{RecordingTake::kNotStarted};  // timeline sample where it began
+    std::atomic<int64_t> frames{0};                          // how long it has recorded
+    std::atomic<int64_t> dropped{0};                         // events lost (nobody took them in time)
+
+    // Edit side: the notes so far (before placement), in the order they began.
+    std::vector<RecordedNote> notes;
+    void collect();  // pairs the events that came in
+
+    // Real-time.
+    void push(const Event& event) noexcept {
+        if (!events.push(event)) dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+};
+
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
 
-// What a finished take left: a WAV file and where it goes on the timeline.
+// What a finished take left: a WAV file, or a MIDI take's notes, and where it
+// goes on the timeline.
 struct RecordedTake {
     uint32_t trackId = 0;
-    std::string path;
-    int64_t startSample = 0;  // timeline sample of its first frame, latency-corrected; may be negative
+    std::string path;         // empty for a MIDI take
+    int64_t startSample = 0;  // timeline sample of its first frame (audio: latency-corrected; may be negative)
     int64_t frames = 0;       // 0: nothing was recorded (no file)
     int channels = 0;
     double sampleRate = 0.0;
     int64_t droppedFrames = 0;  // lost to overruns (silence in the file)
     std::string error;          // the file could not be written
+    bool midi = false;
+    // A MIDI take's notes, latency-corrected, in timeline samples, within the
+    // take; notes still held when it ended end with it.
+    std::vector<RecordedNote> notes;
 };
 
 // The tracks being recorded together, and their disk writer.
@@ -120,13 +168,22 @@ public:
     // Creates the files (throws std::runtime_error with a message for the user).
     // `placement`: how much later than the timeline the input arrives (the output
     // lag, the output and the input latency), subtracted from the takes' starts.
-    RecordingSession(std::vector<std::unique_ptr<RecordingTake>> takes, double sampleRate, int64_t placement);
+    // `midiPlacement`: likewise for MIDI notes (the output lag, the output
+    // latency and MIDI input's delay), subtracted from the notes' times. A MIDI
+    // take itself spans the timeline where it recorded.
+    RecordingSession(std::vector<std::unique_ptr<RecordingTake>> takes,
+                     std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes, double sampleRate,
+                     int64_t placement, int64_t midiPlacement);
     ~RecordingSession();
     RecordingSession(const RecordingSession&) = delete;
     RecordingSession& operator=(const RecordingSession&) = delete;
 
     std::vector<std::unique_ptr<RecordingTake>>& takes() noexcept { return takes_; }
+    std::vector<std::unique_ptr<MidiRecordingTake>>& midiTakes() noexcept { return midiTakes_; }
     int64_t placement() const noexcept { return placement_; }
+    // Edit side: a MIDI take's notes so far, latency-corrected as
+    // RecordedTake::notes has them (held notes keep end -1).
+    std::vector<RecordedNote> midiNotes(MidiRecordingTake& take);
     double sampleRate() const noexcept { return sampleRate_; }
 
     // Real-time: the playhead jumped while recording, so the takes end there.
@@ -144,8 +201,10 @@ private:
     static void writeSilence(RecordingTake& take, int64_t frames, std::vector<float>& buffer);
 
     std::vector<std::unique_ptr<RecordingTake>> takes_;
+    std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes_;
     double sampleRate_;
     int64_t placement_;
+    int64_t midiPlacement_;
     std::atomic<bool> interrupted_{false};
     std::mutex mutex_;
     std::condition_variable wake_;

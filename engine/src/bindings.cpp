@@ -30,6 +30,16 @@ std::vector<uint8_t> fromBytes(const nb::bytes& data) {
     return {begin, begin + data.size()};
 }
 
+// Recorded notes as an int64 array of shape (n, 5): start, end (-1: held), key, velocity, channel.
+nb::ndarray<nb::numpy, int64_t, nb::ndim<2>, nb::c_contig> notesArray(const std::vector<gil::RecordedNote>& notes) {
+    auto buffer = std::make_unique<std::vector<int64_t>>();
+    buffer->reserve(notes.size() * 5);
+    for (const gil::RecordedNote& n : notes) buffer->insert(buffer->end(), {n.start, n.end, n.key, n.velocity, n.channel});
+    int64_t* data = buffer->data();
+    nb::capsule owner(buffer.release(), [](void* p) noexcept { delete static_cast<std::vector<int64_t>*>(p); });
+    return {data, {notes.size(), size_t{5}}, owner};
+}
+
 }  // namespace
 
 using PeakArray = nb::ndarray<nb::numpy, const float, nb::ndim<3>, nb::c_contig>;
@@ -45,7 +55,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 4;
+    m.attr("API_VERSION") = 5;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -203,9 +213,14 @@ NB_MODULE(_engine, m) {
 
     nb::class_<gil::RecordedTake>(m, "RecordedTake")
         .def_ro("track_id", &gil::RecordedTake::trackId)
-        .def_ro("path", &gil::RecordedTake::path)
+        .def_ro("path", &gil::RecordedTake::path, "The WAV file; '' for a MIDI take.")
         .def_ro("start_sample", &gil::RecordedTake::startSample,
-                "Timeline sample of its first frame, latency-corrected (negative: it starts before the timeline).")
+                "Timeline sample of its first frame, latency-corrected (negative: it starts before the timeline). "
+                "A MIDI take starts where the playhead was when it began.")
+        .def_ro("midi", &gil::RecordedTake::midi)
+        .def_prop_ro("notes", [](const gil::RecordedTake& t) { return notesArray(t.notes); }, nb::rv_policy::automatic,
+                     "A MIDI take's notes, latency-corrected, as an int64 array of rows (start, end, key, velocity, "
+                     "channel) in timeline samples, within the take.")
         .def_ro("frames", &gil::RecordedTake::frames, "0: nothing was recorded, and there is no file.")
         .def_ro("channels", &gil::RecordedTake::channels)
         .def_ro("sample_rate", &gil::RecordedTake::sampleRate)
@@ -233,7 +248,19 @@ NB_MODULE(_engine, m) {
                 return nb::ndarray<nb::numpy, float, nb::ndim<2>, nb::c_contig>(data, {rows, size_t{2}}, owner);
             },
             nb::rv_policy::automatic,
-            "New (min, max) peaks since the last call, each over RECORD_PEAK_FRAMES frames: shape (n, 2).");
+            "New (min, max) peaks since the last call, each over RECORD_PEAK_FRAMES frames: shape (n, 2).")
+        .def_ro("midi", &gil::RecordingProgress::midi)
+        .def_prop_ro("notes", [](const gil::RecordingProgress& p) { return notesArray(p.notes); },
+                     nb::rv_policy::automatic,
+                     "A MIDI take's notes so far, as RecordedTake.notes has them (a held note's end is -1).");
+
+    nb::class_<gil::AudioClockStatus>(m, "AudioClock")
+        .def_ro("running", &gil::AudioClockStatus::running)
+        .def_ro("host_time_ns", &gil::AudioClockStatus::hostTimeNs, "When the last audio callback began (host_time_ns()).")
+        .def_ro("sample_time", &gil::AudioClockStatus::sampleTime, "The device sample it began with.")
+        .def_ro("midi_delay", &gil::AudioClockStatus::midiDelay,
+                "Samples between a MIDI message's arrival and when it plays (a device buffer).");
+    m.def("host_time_ns", &gil::hostTimeNs, "The clock MIDI input is stamped with (steady_clock), in ns.");
 
     nb::class_<gil::MeterReading>(m, "MeterReading")
         .def_ro("track_id", &gil::MeterReading::trackId)
@@ -459,12 +486,36 @@ NB_MODULE(_engine, m) {
             },
             "targets"_a, "count_in_beats"_a = 0.0,
             "Record each (track_id, wav_path)'s input from where the playhead moves next; starts playing (after "
-            "the count-in) if stopped. Raises RuntimeError for the user, ValueError for bad targets.")
+            "the count-in) if stopped. A path of '' records the track's MIDI input. Raises RuntimeError for the "
+            "user, ValueError for bad targets.")
         .def("stop_recording", &Engine::stopRecording, ReleaseGil(),
              "End the recording (playing goes on); its takes, and any of a recording a device change ended.")
         .def_prop_ro("is_recording", &Engine::isRecording,
                      "Recording and taking input (not after the playhead jumped or a device change).")
         .def("recording_progress", &Engine::recordingProgress, "The takes being recorded, for the live waveform.")
+        // MIDI input
+        .def("midi_input_devices", &Engine::midiInputDevices, "The MIDI inputs connected, by name.")
+        .def("open_midi_input", &Engine::openMidiInput, "name"_a, ReleaseGil(),
+             "Open a MIDI input (main thread). Raises RuntimeError for the user.")
+        .def("close_midi_input", &Engine::closeMidiInput, "name"_a, ReleaseGil())
+        .def("open_midi_inputs", &Engine::openMidiInputs)
+        .def("set_track_midi_input", &Engine::setTrackMidiInput, "track_id"_a, "enabled"_a, "device"_a = "",
+             "channel"_a = 0,
+             "A track's MIDI input: none (enabled False), every input (device '') or one by name, on every "
+             "channel (0) or one (1-16).")
+        .def(
+            "send_midi_input",
+            [](Engine& self, const std::string& device, const std::vector<int>& message, int64_t hostTime) {
+                std::vector<uint8_t> bytes;
+                for (const int b : message) {
+                    if (b < 0 || b > 255) throw nb::value_error("MIDI bytes are 0-255");
+                    bytes.push_back(static_cast<uint8_t>(b));
+                }
+                self.sendMidiInput(device, bytes, hostTime);
+            },
+            "device"_a, "message"_a, "host_time_ns"_a = 0,
+            "A MIDI message as if the input `device` sent it at host_time_ns (host_time_ns(); 0: now).")
+        .def_prop_ro("audio_clock", &Engine::audioClock, "The audio device's clock as MIDI input sees it.")
         // Transport
         .def("play", &Engine::play, "count_in_beats"_a = 0.0)
         .def_prop_ro("is_counting_in", &Engine::isCountingIn)

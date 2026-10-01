@@ -85,24 +85,25 @@ Tests
 ## Phase 3 — MIDI input
 
 Engine
-- [ ] MIDI device layer (WinMM first; Windows MIDI Services later), opened on
+- [x] MIDI device layer (WinMM first; Windows MIDI Services later), opened on
       the main thread like audio devices.
-- [ ] Timestamp incoming events against the audio callback clock; hand them to
+  - [ ] Windows MIDI Services backend.
+- [x] Timestamp incoming events against the audio callback clock; hand them to
       the audio thread lock-free.
-- [ ] Feed live events into the armed / monitored track's event list (beside
+- [x] Feed live events into the armed / monitored track's event list (beside
       `buildNoteEvents` and preview notes); note-offs are tracked like
       `activeNotes_` so nothing hangs on stop or track removal.
-- [ ] MIDI input selection per track (all inputs / one device / channel).
+- [x] MIDI input selection per track (all inputs / one device / channel).
 
 Model / UI
-- [ ] MIDI preferences: list and enable devices.
-- [ ] Recording notes into a `MidiClip`, reusing Phase 2's take/undo flow.
-- [ ] Optional: record quantize.
+- [x] MIDI preferences: list and enable devices.
+- [x] Recording notes into a `MidiClip`, reusing Phase 2's take/undo flow.
+- [x] Optional: record quantize.
 
 Tests
-- [ ] Live notes reach the instrument with correct offsets inside a block.
-- [ ] Recorded notes land on the beats they were played (latency-adjusted).
-- [ ] Stopping while keys are held releases them.
+- [x] Live notes reach the instrument with correct offsets inside a block.
+- [x] Recorded notes land on the beats they were played (latency-adjusted).
+- [x] Stopping while keys are held releases them.
 
 ---
 

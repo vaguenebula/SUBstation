@@ -36,6 +36,8 @@ from .project import (
     Clip,
     Device,
     MidiClip,
+    MidiInput,
+    Note,
     PluginRef,
     Project,
     Track,
@@ -49,12 +51,15 @@ ClipRef = tuple[str, str]  # (track id, clip id)
 @dataclass(frozen=True)
 class RecordedTake:
     """A recorded WAV file and where it starts: `start_sec` from the timeline's
-    start (negative: it began before it)."""
+    start (negative: it began before it). A MIDI take has no file but `notes`:
+    (start, end, pitch, velocity), in seconds on the timeline, within the take."""
 
     track_id: str
     path: str
     start_sec: float
     duration_sec: float
+    notes: tuple[tuple[float, float, int, int], ...] = ()
+    midi: bool = False
 LaneRef = tuple[str, str]  # (automation owner, target key)
 
 BUILTIN_DEVICES = {
@@ -212,27 +217,39 @@ class ProjectEditor(QObject):
         if mode != old:
             self._push(UpdateTrackCommand(self.project, track_id, "monitor", old, mode, "Change Monitoring"))
 
+    def set_track_midi_input(self, track_id: str, midi_input: MidiInput | None) -> None:
+        """A MIDI track's MIDI input (None: none)."""
+        if midi_input is not None and not 0 <= midi_input.channel <= 16:
+            raise ValueError("a MIDI channel is 1-16, or 0 for all")
+        old = self.project.track(track_id).midi_input
+        if midi_input != old:
+            self._push(UpdateTrackCommand(self.project, track_id, "midi_input", old, midi_input,
+                                          "Change MIDI Input"))
+
     def arm_tracks(self, track_ids, armed: bool, exclusive: bool = False) -> None:
         """Arm (or disarm) tracks for recording; `exclusive` (arming): every other
         track is disarmed. Like heights, arming is saved but not undone."""
         track_ids = set(track_ids)
         for track in self.project.tracks:
             wanted = armed if track.id in track_ids else (track.armed and not (exclusive and armed))
-            if track.is_midi:
-                wanted = False  # MIDI input comes later
             if wanted != track.armed:
                 self.project.update_track(track.id, armed=wanted)
 
-    def add_recordings(self, takes: list[RecordedTake]) -> list[ClipRef]:
-        """Finished takes become audio clips, one undo step. As in Ableton's
-        Arrangement recording, a take replaces what was under it."""
+    def add_recordings(self, takes: list[RecordedTake], quantize: float = 0.0) -> list[ClipRef]:
+        """Finished takes become clips, one undo step: audio clips, and MIDI clips
+        of the notes played (their starts on the grid of `quantize` beats, if
+        given: record quantization). As in Ableton's Arrangement recording, a
+        take replaces what was under it."""
         tempo = self.project.tempo
-        by_track: dict[str, list[Clip]] = {}
+        by_track: dict[str, list[AnyClip]] = {}
         for take in takes:
             if not self.project.has_track(take.track_id) or take.duration_sec <= 0:
                 continue
             track = self.project.track(take.track_id)
-            if track.is_midi:
+            if track.is_midi != take.midi:
+                continue
+            if take.midi:
+                by_track.setdefault(take.track_id, []).append(self._recorded_midi_clip(track, take, quantize))
                 continue
             start_beat = seconds_to_beats(take.start_sec, tempo)
             offset = 0.0
@@ -254,6 +271,25 @@ class ProjectEditor(QObject):
         if after:
             self._commit("Record", after)
         return refs
+
+    def _recorded_midi_clip(self, track: Track, take: RecordedTake, quantize: float) -> MidiClip:
+        tempo = self.project.tempo
+        start = max(0.0, seconds_to_beats(take.start_sec, tempo))
+        end = seconds_to_beats(take.start_sec + take.duration_sec, tempo)
+        clip_notes = []
+        for note_start, note_end, pitch, velocity in take.notes:
+            begin = seconds_to_beats(note_start, tempo) - start
+            length = seconds_to_beats(note_end, tempo) - start - begin
+            if quantize > 0:  # on the arrangement's grid, unless that is outside the clip
+                snapped = round((start + begin) / quantize) * quantize - start
+                if 0 <= snapped < end - start:
+                    begin = snapped
+            if begin < 0 or begin >= end - start or length <= 0:
+                continue
+            clip_notes.append(Note(pitch=max(0, min(127, int(pitch))), start=begin, length=length,
+                                   velocity=max(1, min(127, int(velocity)))))
+        return MidiClip(id=new_id(), name=track.name, start_beat=start, duration_beats=end - start,
+                        notes=notes.normalize(clip_notes))
 
     def set_track_height(self, track_id: str, height: int) -> None:
         # View state: saved with the project but not worth an undo step.
