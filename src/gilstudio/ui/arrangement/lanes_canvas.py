@@ -418,8 +418,11 @@ class LanesCanvas(QWidget):
             columns, index = columns[keep], index[keep]
             starts, at = np.unique(index, return_index=True)
             if len(starts):
-                lows = np.minimum.reduceat(peaks[:, 0], starts)
-                highs = np.maximum.reduceat(peaks[:, 1], starts)
+                # The last column ends where the next pixel would start, not at the take's end.
+                end = int((columns[-1] + 1 - take_x) * fpp / take.PEAK_FRAMES)
+                shown = peaks[:min(len(peaks), max(end, int(starts[-1]) + 1))]
+                lows = np.minimum.reduceat(shown[:, 0], starts)
+                highs = np.maximum.reduceat(shown[:, 1], starts)
                 mid, half = body.center().y(), body.height() / 2
                 p.setPen(QColor(theme.WAVEFORM))
                 for x, low, high in zip(columns[at], lows, highs, strict=True):

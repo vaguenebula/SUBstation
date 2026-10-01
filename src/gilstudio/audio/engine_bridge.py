@@ -103,6 +103,17 @@ class LiveTake:
     frames: int = 0
     peaks: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), np.float32))  # (min, max) per PEAK_FRAMES
     PEAK_FRAMES = ge.RECORD_PEAK_FRAMES
+    _buffer: np.ndarray = field(default_factory=lambda: np.zeros((1024, 2), np.float32), repr=False)
+
+    def add_peaks(self, peaks: np.ndarray) -> None:
+        """More peaks; `peaks` stays a view of the ones so far (the buffer grows by doubling)."""
+        filled = len(self.peaks)
+        if filled + len(peaks) > len(self._buffer):
+            grown = np.zeros((max(2 * len(self._buffer), filled + len(peaks)), 2), np.float32)
+            grown[:filled] = self._buffer[:filled]
+            self._buffer = grown
+        self._buffer[filled:filled + len(peaks)] = peaks
+        self.peaks = self._buffer[:filled + len(peaks)]
 
 
 def is_audio_file(path: str) -> bool:
@@ -355,10 +366,10 @@ class EngineBridge(QObject):
         names = self.engine.device_capabilities.input_names
         if any(c >= len(names) for c in channels):
             return  # not this device's: silent until a device that has them
-        settings = AudioSettings.load()
-        if settings.driver != "ASIO":
-            return
-        settings = replace(settings, input_channels=tuple(sorted(set(status.input_channels) | set(channels))))
+        # As it runs now (not as saved: it may have opened with its own settings instead).
+        settings = AudioSettings("ASIO", status.name, status.sample_rate, status.buffer_frames,
+                                 output_channels=tuple(status.output_channels),
+                                 input_channels=tuple(sorted(set(status.input_channels) | set(channels))))
         error = self.open_device(settings)
         if error is None:
             settings.save()
@@ -1035,7 +1046,7 @@ class EngineBridge(QObject):
             live.frames = progress.frames
             peaks = progress.peaks
             if len(peaks):
-                live.peaks = np.concatenate([live.peaks, peaks])
+                live.add_peaks(peaks)
         self.recording_updated.emit()
         if not self.engine.is_recording:  # a locate, or a device change, ended it
             if not self.engine.device_status.open or not self.engine.is_playing:
