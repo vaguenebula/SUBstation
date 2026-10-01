@@ -30,12 +30,19 @@ def _column_minmax(lo: np.ndarray, hi: np.ndarray, starts: np.ndarray, ends: np.
     return col_lo, col_hi
 
 
+def _smooth(values: np.ndarray) -> np.ndarray:
+    """[1 2 1]/4 along the last axis; the outer columns are padding and get dropped."""
+    return (values[..., :-2] + 2.0 * values[..., 1:-1] + values[..., 2:]) * 0.25
+
+
 def render_tile(source: ge.AudioSource, frames_per_px: float, index: int, height: int, split_channels: bool,
                 argb: int) -> QImage | None:
     frames = source.frames
-    edges = (index * TILE + np.arange(TILE + 1, dtype=np.float64)) * frames_per_px
-    if edges[0] >= frames or height < 2:
+    # One padding column each side, so the smoothing is seamless across tile borders.
+    edges = (index * TILE - 1 + np.arange(TILE + 3, dtype=np.float64)) * frames_per_px
+    if edges[1] >= frames or height < 2:
         return None
+    edges = np.maximum(edges, 0.0)
 
     level = -1
     for candidate in range(source.peak_levels - 1, -1, -1):
@@ -49,7 +56,7 @@ def render_tile(source: ge.AudioSource, frames_per_px: float, index: int, height
         hi = peaks[:, :, 1].T
         idx = np.floor(edges / ge.AudioSource.samples_per_peak(level)).astype(np.int64)
     else:
-        first = int(edges[0])
+        first = int(edges[1])
         count = min(frames, int(math.ceil(edges[-1])) + 1) - first
         lo = hi = source.samples(first, count)  # (channels, count)
         idx = np.floor(edges).astype(np.int64) - first
@@ -59,6 +66,15 @@ def render_tile(source: ge.AudioSource, frames_per_px: float, index: int, height
     starts = np.clip(idx[:-1], 0, n - 1)
     ends = np.maximum(np.clip(idx[1:], 0, n), starts + 1)
     col_lo, col_hi = _column_minmax(lo, hi, starts, ends)
+    col_lo = np.where(valid, col_lo, 0.0)
+    col_hi = np.where(valid, col_hi, 0.0)
+    if level >= 0:  # envelopes (not raw samples) read smoother with a light blur
+        col_lo = _smooth(col_lo)
+        col_hi = _smooth(col_hi)
+    else:
+        col_lo = col_lo[:, 1:-1]
+        col_hi = col_hi[:, 1:-1]
+    valid = valid[1:-1]
 
     if split_channels and col_lo.shape[0] == 2:
         half = height // 2
@@ -66,18 +82,30 @@ def render_tile(source: ge.AudioSource, frames_per_px: float, index: int, height
     else:
         lanes = [(col_lo.min(axis=0), col_hi.max(axis=0), 0, height)]
 
-    image = np.zeros((height, TILE), dtype=np.uint32)
-    rows = np.arange(height)[:, None]
+    # Anti-aliased: each row gets the fraction of it the envelope covers.
+    cover = np.zeros((height, TILE), dtype=np.float32)
+    rows = np.arange(height, dtype=np.float32)[:, None]
     for c_lo, c_hi, top, lane_h in lanes:
         center = top + lane_h / 2.0
         half = max(1.0, lane_h / 2.0 - 1.0)
-        y_top = np.clip(np.floor(center - np.clip(c_hi, -1, 1) * half), top, top + lane_h - 1)
-        y_bot = np.clip(np.ceil(center - np.clip(c_lo, -1, 1) * half), top, top + lane_h - 1)
-        y_bot = np.maximum(y_bot, y_top)
-        mask = (rows >= y_top[None, :]) & (rows <= y_bot[None, :]) & valid[None, :]
-        image[mask] = argb
+        y_top = np.clip(center - np.clip(c_hi, -1, 1) * half, top, top + lane_h).astype(np.float32)
+        y_bot = np.clip(center - np.clip(c_lo, -1, 1) * half, top, top + lane_h).astype(np.float32)
+        y_bot = np.minimum(np.maximum(y_bot, y_top + 1.0), top + lane_h)  # at least a pixel thick
+        y_top = np.minimum(y_top, y_bot - 1.0)
+        part = np.clip(np.minimum(rows + 1.0, y_bot[None, :]) - np.maximum(rows, y_top[None, :]), 0.0, 1.0)
+        part *= valid[None, :]
+        part[:top] = 0.0
+        part[top + lane_h:] = 0.0
+        cover = np.maximum(cover, part)
 
-    qimage = QImage(image.data, TILE, height, TILE * 4, QImage.Format.Format_ARGB32)
+    base_a = (argb >> 24) & 0xFF
+    channels = [((argb >> shift) & 0xFF) for shift in (16, 8, 0)]
+    a = cover * (base_a / 255.0)
+    image = ((a * 255.0 + 0.5).astype(np.uint32) << 24)
+    for shift, value in zip((16, 8, 0), channels):
+        image |= (a * value + 0.5).astype(np.uint32) << shift
+
+    qimage = QImage(image.data, TILE, height, TILE * 4, QImage.Format.Format_ARGB32_Premultiplied)
     return qimage.copy()  # detach from the numpy buffer
 
 
