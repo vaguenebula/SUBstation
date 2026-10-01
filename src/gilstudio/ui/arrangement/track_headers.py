@@ -214,11 +214,14 @@ class TrackHeader(QWidget):
                                         order=[t.id for t in self.project.tracks])
 
     def _solo_clicked(self, on: bool) -> None:
-        """Soloing a track unsoloes the others, unless Ctrl is held. Clicking a
-        selected track's solo acts on all the selected tracks."""
+        """Soloing a track unsoloes the others, and unsoloing one unsoloes them
+        all, unless Ctrl is held. Clicking a selected track's solo acts on all
+        the selected tracks."""
         selected = self.selection.track_ids
         tracks = selected if self.track_id in selected else (self.track_id,)
         exclusive = not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
+        if exclusive and not on:
+            tracks = [t.id for t in self.project.tracks]
         self.editor.solo_tracks(tracks, on, exclusive=exclusive)
         self.solo.set_checked_silently(self.track.solo)
 
