@@ -178,12 +178,42 @@ Model / UI
 - [ ] Device panel: rack with chain list, chain mixer, nested device view.
 - [ ] Group selected devices into a rack (Ctrl+G in the device panel), ungroup.
 - [ ] Macros (Python first): rack parameters mapped to (device, param, range) targets.
+- [ ] Rack presets: the save button / browser flow from "Device presets" below
+      also covers racks (chains, nested devices, plug-in state, macros).
 
 Tests
 - [ ] Parallel chains sum correctly; chain mute/solo.
 - [ ] Latent device in one chain doesn't smear the others.
 - [ ] Nested-device automation in time.
 - [ ] Instrument rack layers two synths.
+- [ ] Saved rack round-trips: save → load renders the same as the original,
+      including plug-in state and macro mappings; loading twice gives distinct ids.
+
+---
+
+## Device presets
+
+Plug-in presets don't depend on racks and can be built any time; rack presets
+plug into the same flow once Phase 6 lands.
+
+Model / UI
+- [ ] Small save button in every device's title bar (plug-ins, built-ins,
+      racks). Asks for a name and writes a preset file to the user library.
+- [ ] Preset file = the `Device` subtree via the project serializer: device
+      kind/plug-in id, parameter values and the plug-in's state chunk.
+- [ ] Browser "Presets" section, grouped by device (plug-in name / built-in /
+      racks). Drag onto a track's chain or double-click to insert a new device;
+      drop onto an existing device of the same kind to load the state into it.
+- [ ] Loading is one undo command; inserted devices get fresh ids.
+- [ ] Missing plug-in on load: keep the device, mark it missing (as project
+      loading does); inside a rack, don't fail the whole rack.
+- [ ] Rename / delete / show-in-folder from the browser's context menu.
+
+Tests
+- [ ] Plug-in preset round-trips: save → load restores parameters and state
+      (renders the same).
+- [ ] Loading a preset onto an existing device is undoable.
+- [ ] Preset for a missing plug-in loads as a missing device.
 
 ---
 
