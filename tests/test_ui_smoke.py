@@ -813,6 +813,33 @@ def test_drop_files_from_browser(window, tmp_path):
     assert wait_until(lambda: window.bridge.source(str(path)) is not None)
 
 
+
+def test_dropped_loop_is_set_up_in_the_same_undo_step(window, tmp_path):
+    """Warping and transposing a dropped loop isn't an edit of its own: one undo removes the sample."""
+    from PySide6.QtCore import QMimeData, QPointF, QUrl
+    from PySide6.QtGui import QDragMoveEvent, QDropEvent
+
+    from gilstudio.model.keys import Key
+
+    window.editor.set_key(Key(0))  # C major
+    path = write_wav(tmp_path / "Bass_Loop_100_D.wav", tone(1.0, 330.0))
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(path))])
+    lanes = window.arrangement.lanes
+    pos = QPointF(window.arrangement.view.beat_to_x(0.0) + 1, 20)
+    actions = Qt.DropAction.CopyAction
+    buttons, mods = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    steps = window.undo_stack.index()
+    lanes.dragMoveEvent(QDragMoveEvent(pos.toPoint(), actions, mime, buttons, mods))
+    lanes.dropEvent(QDropEvent(pos, actions, mime, buttons, mods))
+    window.arrangement.toggle_clip_view()  # showing it changes nothing
+    QApplication.processEvents()
+    [clip] = window.project.tracks[0].clips
+    assert clip.is_warped and clip.segment_bpm == 100.0 and clip.transpose == -2
+    assert window.undo_stack.index() == steps + 1
+    window.undo_stack.undo()
+    assert window.project.tracks == [] and window.project.key == Key(0)
+
 def test_header_controls_and_dialogs(window, three_tracks):
     track = window.project.tracks[0]
     header = window.arrangement.headers.headers[track.id]

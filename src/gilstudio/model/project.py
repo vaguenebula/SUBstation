@@ -23,6 +23,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from .automation import MASTER, AutomationView, Envelope
+from .keys import Key
 from .timebase import TimeSignature, beats_to_seconds, seconds_to_beats
 
 # Ableton-like clip/track colours.
@@ -226,7 +227,7 @@ class Project(QObject):
     devices_changed = Signal(str)  # track id: devices added/removed/toggled
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
     device_state_changed = Signal(str, str)  # track id, device id: a plug-in's whole state was set (a preset)
-    settings_changed = Signal()  # tempo, time signature, loop, automation lock
+    settings_changed = Signal()  # tempo, time signature, key, loop, automation lock
     automation_changed = Signal(str, str)  # owner (track id or MASTER), target key
     automation_view_changed = Signal(str)  # owner: what its automation shows
     reset = Signal()  # everything replaced (new/open)
@@ -235,6 +236,8 @@ class Project(QObject):
         super().__init__(parent)
         self.tempo = 120.0
         self.time_signature = TimeSignature()
+        # The project's key: audio added with a key in its file name is transposed to it.
+        self.key: Key | None = None
         self.loop_enabled = False
         self.loop_start = 0.0
         self.loop_end = 16.0
@@ -360,7 +363,7 @@ class Project(QObject):
 
     def update_settings(self, **attrs) -> None:
         for name, value in attrs.items():
-            if name not in ("tempo", "time_signature", "loop_enabled", "loop_start", "loop_end", "automation_locked"):
+            if name not in ("tempo", "time_signature", "key", "loop_enabled", "loop_start", "loop_end", "automation_locked"):
                 raise AttributeError(name)
             setattr(self, name, value)
         self.settings_changed.emit()
@@ -380,9 +383,11 @@ class Project(QObject):
 
     def replace_contents(self, *, tempo: float, time_signature: TimeSignature, loop_enabled: bool,
                          loop_start: float, loop_end: float, tracks: list[Track], path: Path | None,
-                         master: Track | None = None, automation_locked: bool = False) -> None:
+                         master: Track | None = None, automation_locked: bool = False,
+                         key: Key | None = None) -> None:
         self.tempo = tempo
         self.time_signature = time_signature
+        self.key = key
         self.loop_enabled = loop_enabled
         self.loop_start = loop_start
         self.loop_end = loop_end

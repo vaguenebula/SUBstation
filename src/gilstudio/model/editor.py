@@ -13,6 +13,7 @@ from PySide6.QtGui import QUndoStack
 
 from . import automation, edits, notes
 from .automation import MASTER, MIXER_PAN, MIXER_VOLUME, AutomationView, Envelope
+from .keys import Key, clip_settings
 from .commands import (
     InsertTrackCommand,
     RemoveTrackCommand,
@@ -198,6 +199,10 @@ class ProjectEditor(QObject):
     def set_time_signature(self, ts: TimeSignature) -> None:
         self._set_settings("Change Time Signature", time_signature=ts)
 
+    def set_key(self, key: Key | None) -> None:
+        """The project's key (None: none). Audio added afterwards is transposed to it."""
+        self._set_settings("Change Key", key=key)
+
     def set_loop(self, enabled: bool, start: float, end: float, merge_key: object | None = None) -> None:
         start = max(0.0, start)
         end = max(start + 0.25, end)
@@ -268,7 +273,9 @@ class ProjectEditor(QObject):
     def add_clips(self, track_id: str | None, start_beat: float, sources: list[tuple[str, float]],
                   track_index: int | None = None) -> list[ClipRef]:
         """Place audio files one after another; `sources` is [(path, duration_sec)].
-        With no track id (or a MIDI track's) a new audio track is created (at `track_index`)."""
+        With no track id (or a MIDI track's) a new audio track is created (at `track_index`).
+        A tempo or key in a file's name sets up its clip (see keys.clip_settings):
+        loops and long files are warped, and audio is transposed to the project's key."""
         if not sources:
             return []
         self.undo_stack.beginMacro("Add Clip" if len(sources) == 1 else "Add Clips")
@@ -281,7 +288,8 @@ class ProjectEditor(QObject):
             position = max(0.0, start_beat)
             for path, duration in sources:
                 clip = Clip(id=new_id(), path=path, name=Path(path).stem, start_beat=position,
-                            duration_sec=duration, source_duration_sec=duration)
+                            duration_sec=duration, source_duration_sec=duration,
+                            **clip_settings(Path(path).name, duration, tempo, self.project.key))
                 clips.append(clip)
                 new_ids.add(clip.id)
                 position = clip.end_beat(tempo)
