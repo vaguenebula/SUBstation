@@ -3,7 +3,7 @@ instrument comes first.
 
 Each device has a title bar, as in Ableton: its on/off switch and name, the
 arrows to its other parameter pages, the button for a plug-in's own editor, a
-save button (not wired up yet) and delete. It is lighter while the device is
+save button (not wired up yet). It is lighter while the device is
 selected.
 
 Parameter metadata comes from the engine, so built-in devices and plug-ins
@@ -161,7 +161,7 @@ class _TouchFilter(QObject):
 
 class _DeviceFrame(QFrame):
     """What built-in and plug-in devices share: the frame, the title bar (on/off,
-    name, parameter pages, save, delete), the parameters' pages, selecting and
+    name, parameter pages, save), the parameters' pages, selecting and
     dragging it, and the right-click menu. Subclasses say how many parameters
     there are (`_set_param_count`) and make each one's widget (`_param_widget`)."""
 
@@ -204,8 +204,6 @@ class _DeviceFrame(QFrame):
         self.next = _header_button("›", "Next parameters")
         self.next.clicked.connect(lambda: self.set_page(self.page + 1))
         self.save = _header_button("", "Save Preset", icons.save())  # not wired up yet
-        remove = _header_button("×", "Delete device")
-        remove.clicked.connect(lambda: editor.remove_device(track_id, self.device_id))
 
         # The title bar. Clicks on its background and name reach the frame (select, drag).
         self.header_bar = QFrame()
@@ -216,7 +214,7 @@ class _DeviceFrame(QFrame):
         self.header.addWidget(self.enabled)
         self.header.addSpacing(2)
         self.header.addWidget(self.title, 1)
-        for widget in (self.previous, self.page_label, self.next, self.save, remove):
+        for widget in (self.previous, self.page_label, self.next, self.save):
             self.header.addWidget(widget)
         self.params = QGridLayout()
         self.params.setContentsMargins(0, 0, 0, 0)
