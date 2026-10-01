@@ -2,8 +2,21 @@ import json
 
 import pytest
 
+from gilstudio.model.automation import (
+    MASTER,
+    MIXER_VOLUME,
+    AutomationPoint,
+    AutomationView,
+    device_key,
+)
 from gilstudio.model.project import Clip, Device, Project, Track
-from gilstudio.model.serialization import ProjectFileError, load_project, project_to_dict, save_project
+from gilstudio.model.serialization import (
+    ProjectFileError,
+    load_into,
+    load_project,
+    project_to_dict,
+    save_project,
+)
 from gilstudio.model.timebase import TimeSignature
 
 
@@ -12,7 +25,9 @@ def make_project(audio_path: str) -> Project:
     p.tempo = 97.5
     p.time_signature = TimeSignature(6, 8)
     p.loop_enabled, p.loop_start, p.loop_end = True, 3.0, 9.0
-    p.master_volume_db = -3.0
+    p.master.volume_db = -3.0
+    p.master.devices = [Device(id="m1", kind="utility", params={"gain": -1.0, "pan": 0.0, "width": 100.0})]
+    p.master.automation = {device_key("m1", "gain"): (AutomationPoint(0.0, 0.5),)}
     p.tracks = [
         Track(id="t1", name="Drums", color="#ff94a6", volume_db=-6.0, pan=0.25, mute=True, height=90,
               devices=[Device(id="d1", kind="utility", params={"gain": -2.0, "pan": 0.0, "width": 50.0})],
@@ -79,3 +94,44 @@ def test_old_warp_mode_names_load_as_their_equivalents(tmp_path):
         loaded = Project()
         load_project(loaded, target)
         assert loaded.tracks[0].clips[0].warp_mode == new, old
+
+
+def test_roundtrip_keeps_the_masters_devices(tmp_path):
+    audio = tmp_path / "kick.wav"
+    audio.write_bytes(b"")
+    target = tmp_path / "song.gilproj"
+    save_project(make_project(str(audio)), target)
+    loaded = Project()
+    load_project(loaded, target)
+    master = loaded.track(MASTER)
+    assert master is loaded.master and master.is_master and master not in loaded.tracks
+    assert [(d.id, d.kind, d.params["gain"]) for d in master.devices] == [("m1", "utility", -1.0)]
+    assert master.volume_db == -3.0 and master.automation == {device_key("m1", "gain"): (AutomationPoint(0.0, 0.5),)}
+
+
+def test_old_project_files_load_unchanged():
+    """A project saved before the master had devices (version 4)."""
+    old = {
+        "format": "gilstudio-project", "version": 4, "tempo": 128.0, "time_signature": [4, 4],
+        "loop": {"enabled": False, "start": 0.0, "end": 16.0}, "automation_locked": False,
+        "master": {"volume_db": -4.5, "pan": 0.25, "automation": {"mixer:volume": [[1.0, 0.75, 0.0]]},
+                   "automation_view": {"shown": True, "key": "mixer:volume", "lanes": []}},
+        "tracks": [{"id": "t1", "kind": "audio", "name": "Drums", "color": "#ff94a6", "volume_db": 0.0, "pan": 0.0,
+                    "mute": False, "solo": False, "height": 80, "devices": [], "clips": [], "automation": {},
+                    "automation_view": {"shown": False, "key": None, "lanes": []}}],
+    }
+    project = Project()
+    load_into(project, old)
+    master = project.master
+    assert (master.volume_db, master.pan, master.devices) == (-4.5, 0.25, [])
+    assert master.automation == {MIXER_VOLUME: (AutomationPoint(1.0, 0.75),)}
+    assert master.automation_view == AutomationView(True, MIXER_VOLUME)
+    assert [t.id for t in project.tracks] == ["t1"] and project.tempo == 128.0
+    # Saved again, it says the same, and that the master has no devices.
+    saved = project_to_dict(project)
+    assert saved["version"] == 5 and saved["master"] == {**old["master"], "devices": []}
+    assert saved["tracks"] == old["tracks"]
+    # Very old files have no master at all.
+    del old["master"]
+    load_into(project, old)
+    assert (project.master.volume_db, project.master.devices, project.master.automation) == (0.0, [], {})

@@ -60,6 +60,7 @@ private:
     void rememberPosition();
     void updateContentScale();
     void detachView();
+    void yieldActivation();
 
     struct Size {
         int cx = 0;

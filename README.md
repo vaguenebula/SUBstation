@@ -27,7 +27,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - Over The Top: a built-in multiband upward/downward compressor in the style of the one every drop uses, with a single big *Soundgoodize* knob (depth) and an output trim. Three bands (split at 88 Hz and 2.5 kHz), each squashed from above and dragged up from below. At 0 % it passes the audio through untouched.
 - VST3 plug-ins, instruments and effects (see below).
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
-- Master track (volume and pan), metronome, loop brace, follow mode, CPU meter.
+- Master track (volume, pan, and audio effects: click its header to show its chain in the device view), metronome, loop brace, follow mode, CPU meter.
 - **Automation**, as in Ableton's arrangement, of every device parameter (built-in devices and plug-ins alike) and of each track's and the master's volume and pan.
   - **A** shows (or hides) the automation of every track and the master. A track's automation shows in its own lane, over its clips (the clips' title bar still moves and selects them), with the parameter chosen in its header: a device chooser (*Mixer* or one of its devices) and a parameter chooser; automated ones are marked with a red dot. **+** shows another parameter in a lane below the track (**−** removes it). Right-click a track header (or the master's) to show or hide its automation.
   - Clicking a parameter (a knob, list or name in the device view, or a control in a plug-in's own editor) or changing one by hand (also a track's volume or pan, or the master's) shows its track's automation with that parameter.
@@ -196,7 +196,7 @@ browser/src/                   C++: the browser's backend, module gilstudio._bro
 benchmarks/                    the browser's benchmarks and their results (not run by pytest)
 engine/src/                    C++: everything on the audio thread, and plug-in hosting
   Engine        public API; edit model; builds and publishes render snapshots
-  Renderer      mixing: clips and notes -> inserts -> fader/pan -> master; loop; metronome; preview; automation
+  Renderer      mixing: strips (inserts -> delay compensation -> fader/pan), tracks -> master strip; loop; metronome; preview; automation
   Automation.h  envelopes: breakpoints, curves, evaluation, the mixer's lane mappings
   Warp          stretch voices (time stretch / pitch shift) and the Re-Pitch resampler
   AudioSource   decoding (WAV/FLAC/MP3) at the engine rate + peak mipmaps

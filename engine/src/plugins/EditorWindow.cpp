@@ -109,10 +109,20 @@ EditorWindow::~EditorWindow() {
     detachView();
     if (hwnd_) {
         rememberPosition();
+        yieldActivation();
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
+}
+
+// Before this window goes away or hides while it is the active one: activate the
+// owner. Otherwise Windows picks the next window in the z-order, which after an
+// Alt+Tab can be another application's (it only prefers the owner for WS_POPUP).
+void EditorWindow::yieldActivation() {
+    if (!hwnd_ || GetForegroundWindow() != hwnd_) return;
+    HWND owner = GetWindow(hwnd_, GW_OWNER);
+    if (owner && IsWindowVisible(owner) && IsWindowEnabled(owner)) SetForegroundWindow(owner);
 }
 
 void EditorWindow::detachView() {
@@ -134,7 +144,9 @@ void EditorWindow::bringToFront() {
 }
 
 void EditorWindow::setVisible(bool visible) {
-    if (hwnd_) ShowWindow(hwnd_, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+    if (!hwnd_) return;
+    if (!visible) yieldActivation();
+    ShowWindow(hwnd_, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
 }
 
 bool EditorWindow::isVisible() const { return hwnd_ && IsWindowVisible(hwnd_); }
@@ -302,6 +314,7 @@ intptr_t EditorWindow::handleMessage(HWND hwnd, unsigned message, uintptr_t wPar
 
         case WM_CLOSE:
             closed_ = true;
+            yieldActivation();
             detachView();
             DestroyWindow(hwnd);
             return 0;

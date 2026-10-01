@@ -271,3 +271,45 @@ def test_meters_are_empty_offline(engine, dc_wav):
     meters = {m.track_id: (m.left, m.right) for m in engine.take_meters()}
     assert set(meters) == {0, track}
     assert meters[track] == (0.0, 0.0)
+
+
+def read_wav24(path) -> np.ndarray:
+    with wave.open(str(path), "rb") as f:
+        raw = np.frombuffer(f.readframes(f.getnframes()), dtype=np.uint8).reshape(-1, 3)
+    ints = raw[:, 0].astype(np.int32) | (raw[:, 1].astype(np.int32) << 8) | (raw[:, 2].astype(np.int32) << 16)
+    return np.where(ints >= 1 << 23, ints - (1 << 24), ints).reshape(-1, 2) / float(1 << 23)
+
+
+def test_an_effect_on_the_master_changes_the_export(engine, dc_wav, tmp_path):
+    add_clip_track(engine, dc_wav, duration_sec=0.5)
+    add_clip_track(engine, dc_wav, duration_sec=0.5)
+    utility = engine.add_builtin_processor(ge.MASTER, "utility")
+    engine.set_processor_param(utility, engine.processor_param_index(utility, "gain"), 20 * math.log10(0.25))
+    target = tmp_path / "mix.wav"
+    engine.export_wav(str(target), 0.0, 1.0, bit_depth=24)
+    exported = read_wav24(target)
+    # The master's effect works on the tracks' sum (1.0), after which its fader applies.
+    np.testing.assert_allclose(exported[4000:], 0.25, atol=1e-5)
+    rendered = engine.render_offline(0.0, int(SPB))
+    np.testing.assert_allclose(exported[4000:], rendered[4000:], atol=2.0 / (1 << 23))  # past the gain's smoothing
+    engine.set_master_gain(0.5)
+    np.testing.assert_allclose(engine.render_offline(0.0, 8000)[4000:], 0.125, rtol=1e-4)
+    engine.set_processor_enabled(utility, False)
+    np.testing.assert_allclose(engine.render_offline(0.0, 100), 0.5)
+    engine.remove_processor(utility)
+    np.testing.assert_allclose(engine.render_offline(0.0, 100), 0.5)
+
+
+def test_the_master_is_a_track_without_clips(engine, dc_wav):
+    with pytest.raises(ValueError):
+        engine.set_track_clips(ge.MASTER, [])
+    with pytest.raises(ValueError):
+        engine.set_track_notes(ge.MASTER, [])
+    with pytest.raises(ValueError):
+        engine.remove_track(ge.MASTER)
+    add_clip_track(engine, dc_wav)
+    engine.set_track_gain(ge.MASTER, 0.5)  # its mixer, as the tracks'
+    engine.set_track_pan(ge.MASTER, 1.0)
+    out = engine.render_offline(0.0, 100)
+    assert out[50, 0] == pytest.approx(0.0, abs=1e-7) and out[50, 1] == pytest.approx(0.25)
+    assert engine.take_meters()[0].track_id == ge.MASTER

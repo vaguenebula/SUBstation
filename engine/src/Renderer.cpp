@@ -169,7 +169,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     std::fill_n(masterL, frames, 0.f);
     std::fill_n(masterR, frames, 0.f);
 
-    // 2. Tracks: clips and notes -> inserts -> delay compensation -> fader/pan -> master.
+    // 2. Tracks: clips and notes -> their strips -> the master's input.
     for (size_t t = 0; t < snap.tracks.size(); ++t) {
         const TrackRender& track = snap.tracks[t];
         float* left = trackLeft_.data();
@@ -183,16 +183,13 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
         } else {
             numEvents_ = 0;
         }
-        processInserts(track, context, chunkStart, frames, spb);
 
         DelayLine* delay = delayOverride_ ? (t < delayOverride_->size() ? (*delayOverride_)[t].get() : nullptr)
                                           : track.delay.get();
-        if (delay) delay->process(left, right, frames, track.compensation);
-
         const TrackParams& params = *track.params;
         const bool audible = !params.mute.load(std::memory_order_relaxed) &&
                              (!anySolo || params.solo.load(std::memory_order_relaxed));
-        applyFader(snap, *track.params, track.volume, track.pan, audible, left, right, frames, flags.live);
+        processStrip(snap, track, context, left, right, frames, audible, flags, delay);
         for (int i = 0; i < frames; ++i) {
             masterL[i] += left[i];
             masterR[i] += right[i];
@@ -201,9 +198,10 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
 
     forgetNotesOfRemovedTracks(snap);
 
-    // 3. Master fader and meter.
-    if (snap.master) {
-        applyFader(snap, *snap.master, snap.masterVolume, snap.masterPan, true, masterL, masterR, frames, flags.live);
+    // 3. The master strip (it never mutes, and nothing is later than it: no compensation).
+    if (snap.master.params) {
+        numEvents_ = 0;
+        processStrip(snap, snap.master, context, masterL, masterR, frames, true, flags, nullptr);
     }
 
     // 4. Metronome, after the master fader (a click may still be ringing out).
@@ -218,10 +216,18 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     outputTime_ += frames;
 }
 
-void Renderer::processInserts(const TrackRender& track, ProcessContext& context, int64_t chunkStart, int frames,
-                              double samplesPerBeat) noexcept {
+void Renderer::processStrip(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
+                            float* left, float* right, int frames, bool audible, ChunkFlags flags,
+                            DelayLine* delay) noexcept {
+    processInserts(strip, context, left, right, frames, snap.samplesPerBeat());
+    if (delay) delay->process(left, right, frames, strip.compensation);
+    applyFader(snap, *strip.params, strip.volume, strip.pan, audible, left, right, frames, flags.live);
+}
+
+void Renderer::processInserts(const StripRender& strip, ProcessContext& context, float* left, float* right,
+                              int frames, double samplesPerBeat) noexcept {
     bool any = false;
-    for (const auto& insert : track.inserts) {
+    for (const auto& insert : strip.inserts) {
         if (!insert->isEnabled()) continue;
         if (insert->takeResetRequest()) insert->reset();
         any = true;
@@ -235,7 +241,7 @@ void Renderer::processInserts(const TrackRender& track, ProcessContext& context,
     for (int s = 0; s < slices; ++s) {
         const int offset = split ? segments_[s].offset : 0;
         const int length = split ? segments_[s].length : frames;
-        const int64_t position = split ? segments_[s].position : chunkStart;
+        const int64_t position = split ? segments_[s].position : position_;  // stopped: it stays put
         const int first = next;
         while (next < numEvents_ && (s == slices - 1 || events_[next].sampleOffset < offset + length)) {
             events_[next].sampleOffset -= offset;
@@ -244,11 +250,11 @@ void Renderer::processInserts(const TrackRender& track, ProcessContext& context,
         context.samplePos = position;
         context.beatPos = position / samplesPerBeat;
         context.inEvents = {events_.data() + first, static_cast<size_t>(next - first)};
-        float* channels[2] = {trackLeft_.data() + offset, trackRight_.data() + offset};
-        for (size_t i = 0; i < track.inserts.size(); ++i) {
-            Processor& insert = *track.inserts[i];
+        float* channels[2] = {left + offset, right + offset};
+        for (size_t i = 0; i < strip.inserts.size(); ++i) {
+            Processor& insert = *strip.inserts[i];
             if (!insert.isEnabled()) continue;
-            for (const AutomationRender& lane : track.automation) {
+            for (const AutomationRender& lane : strip.automation) {
                 if (lane.insert == static_cast<int>(i)) automateInsert(lane, position, length, split);
             }
             insert.process(context, channels, 2, length);
@@ -540,8 +546,9 @@ void Renderer::scheduleTicks(const RenderSnapshot& snap, int64_t position, int l
         if (t < position) continue;
         if (t >= position + length) break;
         if (numPendingTicks_ == kMaxPendingTicks) break;
-        // Heard when the tracks' audio for this position is: after the compensation delay.
-        const int64_t time = outputTime_ + offset + (t - position) + snap.maxLatency;
+        // Heard when the tracks' audio for this position is: after the compensation delay
+        // and the master's devices.
+        const int64_t time = outputTime_ + offset + (t - position) + snap.outputLatency();
         pendingTicks_[(pendingTickStart_ + numPendingTicks_++) % kMaxPendingTicks] = {time, k % snap.timeSigNum == 0};
     }
 }

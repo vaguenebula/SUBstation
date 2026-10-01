@@ -7,6 +7,11 @@ and which automation shows, changes directly: it is saved but not undone.)
 
 Automation belongs to an owner: a track (its id) or the master (MASTER); see
 automation.py.
+
+The master is a Track too (kind "master", id MASTER), with devices, a mixer and
+automation, but no clips. It is `project.master`, not one of `project.tracks`
+(the arrangement's); `project.track(MASTER)` finds it, so whatever works on a
+track's devices, mixer or automation works on the master's.
 """
 
 from __future__ import annotations
@@ -35,6 +40,8 @@ LEGACY_WARP_MODES = {"Beats": "Transients", "Tones": "Standard", "Complex": "Sta
 
 # Audio tracks hold audio clips; MIDI tracks hold MIDI clips and an instrument.
 TRACK_KINDS = ("audio", "midi")
+MASTER_KIND = "master"  # the master's kind: no clips, effects only
+MASTER_COLOR = "#a0a0a0"
 
 DEFAULT_TRACK_HEIGHT = 80
 MIN_TRACK_HEIGHT = 24
@@ -194,7 +201,7 @@ class Track:
     height: int = DEFAULT_TRACK_HEIGHT
     clips: list[AnyClip] = field(default_factory=list)  # sorted by start_beat; MidiClips on MIDI tracks
     devices: list[Device] = field(default_factory=list)
-    kind: str = "audio"  # one of TRACK_KINDS; fixed for the track's life
+    kind: str = "audio"  # one of TRACK_KINDS (or MASTER_KIND: the master); fixed for the track's life
     automation: dict[str, Envelope] = field(default_factory=dict)  # target key -> envelope (never empty)
     automation_view: AutomationView = field(default_factory=AutomationView)
 
@@ -202,16 +209,24 @@ class Track:
     def is_midi(self) -> bool:
         return self.kind == "midi"
 
+    @property
+    def is_master(self) -> bool:
+        return self.kind == MASTER_KIND
+
+
+def new_master(**attrs) -> Track:
+    return Track(id=MASTER, name="Master", color=MASTER_COLOR, kind=MASTER_KIND, **attrs)
+
 
 class Project(QObject):
     track_inserted = Signal(str, int)  # track id, index
     track_removed = Signal(str, int)
-    track_changed = Signal(str)  # name, colour, mixer settings or height
+    track_changed = Signal(str)  # name, colour, mixer settings or height (MASTER: the master's mixer)
     clips_changed = Signal(str)  # track id
     devices_changed = Signal(str)  # track id: devices added/removed/toggled
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
     device_state_changed = Signal(str, str)  # track id, device id: a plug-in's whole state was set (a preset)
-    settings_changed = Signal()  # tempo, time signature, loop, master volume and pan, automation lock
+    settings_changed = Signal()  # tempo, time signature, loop, automation lock
     automation_changed = Signal(str, str)  # owner (track id or MASTER), target key
     automation_view_changed = Signal(str)  # owner: what its automation shows
     reset = Signal()  # everything replaced (new/open)
@@ -223,19 +238,19 @@ class Project(QObject):
         self.loop_enabled = False
         self.loop_start = 0.0
         self.loop_end = 16.0
-        self.master_volume_db = 0.0
-        self.master_pan = 0.0
         # Locked: automation stays where it is when clips move. Unlocked, the
         # automation under clips moves (or is copied) with them, as in Ableton.
         self.automation_locked = False
-        self.master_automation: dict[str, Envelope] = {}
-        self.master_automation_view = AutomationView()
+        self.master = new_master()
         self.tracks: list[Track] = []
         self.path: Path | None = None
 
     # --- Queries --------------------------------------------------------------
 
     def track(self, track_id: str) -> Track:
+        """A track of the arrangement, or the master (MASTER)."""
+        if track_id == MASTER:
+            return self.master
         for track in self.tracks:
             if track.id == track_id:
                 return track
@@ -248,6 +263,7 @@ class Project(QObject):
         raise KeyError(track_id)
 
     def has_track(self, track_id: str) -> bool:
+        """Whether this is a track of the arrangement (not the master: see has_owner)."""
         return any(t.id == track_id for t in self.tracks)
 
     def clip(self, track_id: str, clip_id: str) -> AnyClip:
@@ -261,17 +277,22 @@ class Project(QObject):
         return max((c.end_beat(self.tempo) for t in self.tracks for c in t.clips), default=0.0)
 
     def has_owner(self, owner: str) -> bool:
+        """Whether this is a track or the master: something with devices, a mixer and automation."""
         return owner == MASTER or self.has_track(owner)
+
+    def all_tracks(self) -> list[Track]:
+        """The arrangement's tracks, then the master."""
+        return [*self.tracks, self.master]
 
     def automation(self, owner: str) -> dict[str, Envelope]:
         """An owner's envelopes by target key (read only: change them through commands)."""
-        return self.master_automation if owner == MASTER else self.track(owner).automation
+        return self.track(owner).automation
 
     def envelope(self, owner: str, key: str) -> Envelope:
         return self.automation(owner).get(key, ())
 
     def automation_view(self, owner: str) -> AutomationView:
-        return self.master_automation_view if owner == MASTER else self.track(owner).automation_view
+        return self.track(owner).automation_view
 
     def owners(self) -> list[str]:
         """Everything that has automation: the tracks, then the master."""
@@ -339,8 +360,7 @@ class Project(QObject):
 
     def update_settings(self, **attrs) -> None:
         for name, value in attrs.items():
-            if name not in ("tempo", "time_signature", "loop_enabled", "loop_start", "loop_end", "master_volume_db",
-                            "master_pan", "automation_locked"):
+            if name not in ("tempo", "time_signature", "loop_enabled", "loop_start", "loop_end", "automation_locked"):
                 raise AttributeError(name)
             setattr(self, name, value)
         self.settings_changed.emit()
@@ -355,27 +375,18 @@ class Project(QObject):
         self.automation_changed.emit(owner, key)
 
     def set_automation_view(self, owner: str, view: AutomationView) -> None:
-        if owner == MASTER:
-            self.master_automation_view = view
-        else:
-            self.track(owner).automation_view = view
+        self.track(owner).automation_view = view
         self.automation_view_changed.emit(owner)
 
     def replace_contents(self, *, tempo: float, time_signature: TimeSignature, loop_enabled: bool,
-                         loop_start: float, loop_end: float, master_volume_db: float,
-                         tracks: list[Track], path: Path | None, master_pan: float = 0.0,
-                         master_automation: dict[str, Envelope] | None = None,
-                         master_automation_view: AutomationView | None = None,
-                         automation_locked: bool = False) -> None:
+                         loop_start: float, loop_end: float, tracks: list[Track], path: Path | None,
+                         master: Track | None = None, automation_locked: bool = False) -> None:
         self.tempo = tempo
         self.time_signature = time_signature
         self.loop_enabled = loop_enabled
         self.loop_start = loop_start
         self.loop_end = loop_end
-        self.master_volume_db = master_volume_db
-        self.master_pan = master_pan
-        self.master_automation = dict(master_automation or {})
-        self.master_automation_view = master_automation_view or AutomationView()
+        self.master = master or new_master()
         self.automation_locked = automation_locked
         self.tracks = tracks
         self.path = path
@@ -383,4 +394,4 @@ class Project(QObject):
 
     def clear(self) -> None:
         self.replace_contents(tempo=120.0, time_signature=TimeSignature(), loop_enabled=False, loop_start=0.0,
-                              loop_end=16.0, master_volume_db=0.0, tracks=[], path=None)
+                              loop_end=16.0, tracks=[], path=None)

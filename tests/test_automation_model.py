@@ -253,12 +253,15 @@ def test_touching_a_parameter_is_reported(editor):
     editor.set_track_param(track.id, "volume_db", -3.0)
     editor.set_track_param(track.id, "solo", True)  # not automatable
     editor.set_device_param(track.id, track.devices[0].id, "cutoff", 1000.0)
-    editor.set_master_pan(0.5)
+    editor.set_track_param(MASTER, "pan", 0.5)
     assert touched == [(track.id, MIXER_VOLUME), (track.id, auto.device_key(track.devices[0].id, "cutoff")),
                        (MASTER, MIXER_PAN)]
-    assert editor.project.master_pan == 0.5
+    assert editor.project.master.pan == 0.5
+    assert editor.undo_stack.undoText() == "Change Master Pan"
     editor.undo_stack.undo()
-    assert editor.project.master_pan == 0.0
+    assert editor.project.master.pan == 0.0
+    with pytest.raises(AttributeError):
+        editor.set_track_param(MASTER, "mute", True)  # the master is always heard
 
 
 def test_automation_view(editor):
@@ -286,26 +289,26 @@ def test_save_and_load(editor):
     device_key = auto.device_key(track.devices[0].id, "cutoff")
     editor.set_envelope(track.id, device_key, env((0.0, 0.2, 0.3), (2.0, 0.9)))
     editor.set_envelope(MASTER, MIXER_VOLUME, env((1.0, 0.5)))
-    editor.set_master_pan(-0.25)
+    editor.set_track_param(MASTER, "pan", -0.25)
     editor.show_automation(track.id, device_key)
     editor.add_automation_lane(track.id)
     editor.set_automation_locked(True)
     data = json.loads(json.dumps(project_to_dict(editor.project)))
-    assert data["version"] == 4
+    assert data["version"] == 5
     data["tracks"][0]["automation"]["mixer:unknown"] = [[0, 1, 0]]  # from a later version: dropped
     loaded = Project()
     load_into(loaded, data)
     restored = loaded.tracks[0]
     assert restored.automation == editor.project.track(track.id).automation
     assert restored.automation_view == editor.project.track(track.id).automation_view
-    assert loaded.master_automation == {MIXER_VOLUME: env((1.0, 0.5))}
-    assert loaded.master_pan == -0.25
+    assert loaded.master.automation == {MIXER_VOLUME: env((1.0, 0.5))}
+    assert loaded.master.pan == -0.25
     assert loaded.automation_locked
     # Projects from before automation load without any.
     del data["tracks"][0]["automation"], data["tracks"][0]["automation_view"], data["master"]["pan"]
     del data["automation_locked"]
     load_into(loaded, data)
-    assert loaded.tracks[0].automation == {} and loaded.master_pan == 0.0 and not loaded.automation_locked
+    assert loaded.tracks[0].automation == {} and loaded.master.pan == 0.0 and not loaded.automation_locked
 
 
 # --- Automation moving with clips (unless locked) -----------------------------------------
