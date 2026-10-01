@@ -185,6 +185,21 @@ def segment_at(host, area: EnvelopeArea, points, pos: QPointF) -> int | None:
     return best
 
 
+def end_at(host, area: EnvelopeArea, points, pos: QPointF) -> int | None:
+    """The first or last breakpoint when `pos` is within SEGMENT_GRAB pixels of
+    the flat line running out to the left or right of it."""
+    if not points:
+        return None
+    view = host.view
+    if pos.x() < view.beat_to_x(points[0].beat):
+        index = 0
+    elif pos.x() > view.beat_to_x(points[-1].beat):
+        index = len(points) - 1
+    else:
+        return None
+    return index if abs(area.y(points[index].value) - pos.y()) <= SEGMENT_GRAB else None
+
+
 def _is_step(points, segment: int) -> bool:
     return points[segment].beat == points[segment + 1].beat
 
@@ -342,6 +357,11 @@ def draw_area(p: QPainter, host, area: EnvelopeArea, visible: QRectF, hover: Hov
             and hover.index + 1 < len(points)):
         p.setPen(QPen(color, 3.2))
         p.drawPolyline(_segment_line(host, area, points, hover.index, x0, x1))
+    if hover is not None and hover.ident == area.ident and hover.kind == "end" and hover.index < len(points):
+        end = points[hover.index]
+        y, view_x = area.y(end.value), host.view.beat_to_x(end.beat)
+        p.setPen(QPen(color, 3.2))
+        p.drawLine(QPointF(view_x, y), QPointF(x0 if hover.index == 0 else x1, y))
     p.setPen(QPen(color, 1.6))
     p.drawPolyline(trace(host.view, area, points, x0, x1, quantize))
     selected = host.selection.selected_points(area.owner, area.key)
@@ -351,7 +371,7 @@ def draw_area(p: QPainter, host, area: EnvelopeArea, visible: QRectF, hover: Hov
         if x < x0 - POINT_RADIUS or x > x1 + POINT_RADIUS:
             continue
         hovered = (hover is not None and hover.ident == area.ident and hover.index is not None
-                   and (hover.index == i if hover.kind == "point" else hover.kind == "segment" and i - hover.index in (0, 1)))
+                   and (hover.index == i if hover.kind in ("point", "end") else hover.kind == "segment" and i - hover.index in (0, 1)))
         radius = POINT_RADIUS + (1.0 if hovered else 0.0)
         p.setPen(QPen(color, 1.4))
         p.setBrush(QColor(theme.SELECTION_OUTLINE) if i in selected else (color if hovered else QColor(theme.LANE)))
@@ -616,6 +636,9 @@ def press(host, area: EnvelopeArea, pos: QPointF, mods) -> ClipGesture:
     grab = _grab(host, area, points, pos, mods)
     if grab is None and in_range(host, area, pos):
         return RangeGesture(host, area, pos, mods)
+    end = end_at(host, area, points, pos)
+    if end is not None and (grab is None or grab[0] != "add"):  # near the line, not on it
+        return PointGesture(host, area, end, pos, mods, added=True)
     if grab is not None and grab[0] == "add":
         return _add_and_drag(host, area, pos, mods, grab[1])
     if grab is not None:
@@ -636,6 +659,9 @@ def hover(host, area: EnvelopeArea | None, pos: QPointF, mods) -> tuple[Hover | 
     grab = _grab(host, area, points, pos, mods)
     if grab is None and in_range(host, area, pos):
         return Hover(area.ident, "range"), Qt.CursorShape.ArrowCursor
+    end = end_at(host, area, points, pos)
+    if end is not None and (grab is None or grab[0] != "add"):
+        return Hover(area.ident, "end", end), Qt.CursorShape.ArrowCursor
     if grab is not None and grab[0] == "add":
         return Hover(area.ident, "add", None, *grab[1]), add_cursor()
     if grab is not None:

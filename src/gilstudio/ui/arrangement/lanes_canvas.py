@@ -625,7 +625,7 @@ class LanesCanvas(QWidget):
             if index is not None:
                 resize_track_by_wheel(self.editor, self.layout_model.rows[index].track_id, delta.y() or delta.x())
         elif mods & Qt.KeyboardModifier.ControlModifier:
-            self.view.zoom_at(event.position().x(), 1.15 ** (delta.y() / 120.0))
+            self.view.zoom_at(event.position().x(), 1.2 ** (delta.y() / 120.0))
         elif mods & Qt.KeyboardModifier.ShiftModifier or delta.x():
             pixels = -(delta.x() or delta.y()) / 120.0 * 80.0
             self.view.set_scroll_beats(self.view.scroll_beats + pixels / self.view.px_per_beat)

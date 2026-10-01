@@ -47,7 +47,10 @@ void Renderer::drainCommands(SharedState& shared) noexcept {
 
 void Renderer::applyCommand(const TransportCommand& command) noexcept {
     switch (command.type) {
-        case TransportCommand::Type::Play: playing_ = true; break;
+        case TransportCommand::Type::Play:
+            chasePending_ = chasePending_ || !playing_;  // (live playback only: offline renders start clean)
+            playing_ = true;
+            break;
         case TransportCommand::Type::Stop: playing_ = false; break;
         case TransportCommand::Type::Locate:
             setPosition(std::llround(std::max(0.0, command.beat) * samplesPerBeat_));
@@ -128,13 +131,16 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     numTicks_ = 0;
     if (playing_) {
         int done = 0;
+        bool chase = chasePending_;
+        chasePending_ = false;
         while (done < frames) {
             int length = frames - done;
             const bool looping = flags.loop && numSegments_ < kMaxSegments - 1;
             if (looping && position_ < snap.loopEnd && position_ + length > snap.loopEnd) {
                 length = static_cast<int>(snap.loopEnd - position_);
             }
-            segments_[numSegments_++] = {position_, length, done, position_ != expectedPosition_};
+            segments_[numSegments_++] = {position_, length, done, position_ != expectedPosition_, chase};
+            chase = false;
             if (flags.metronome) scheduleTicks(snap, position_, length, done);
             position_ += length;
             expectedPosition_ = position_;
@@ -490,8 +496,18 @@ void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
         if (segment.jump) releaseNotes(track.id, segment.offset);
         const int64_t segEnd = segment.position + segment.length;
 
-        // Note-ons: notes starting in this segment. Notes that started earlier
-        // are not chased, as in Ableton.
+        // Notes already underway where playback starts sound from there.
+        if (segment.chase) {
+            for (const NoteRender& note : track.notes) {
+                if (note.start >= segment.position) break;
+                if (note.end <= segment.position) continue;
+                if (numActiveNotes_ == static_cast<int>(activeNotes_.size())) break;
+                if (!pushEvent(ProcessEvent::noteOn(segment.offset, note.key, note.velocity))) break;
+                activeNotes_[numActiveNotes_++] = {track.id, note.key, note.end};
+            }
+        }
+
+        // Note-ons: notes starting in this segment.
         auto it = std::lower_bound(track.notes.begin(), track.notes.end(), segment.position,
                                    [](const NoteRender& note, int64_t value) { return note.start < value; });
         for (; it != track.notes.end() && it->start < segEnd; ++it) {
