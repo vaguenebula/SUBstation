@@ -62,7 +62,7 @@ def engine():
 
 def plugin_track(engine, uids, name, notes=()):
     track = engine.add_track()
-    processor = engine.add_plugin_processor(track, "VST3", PLUGINS, uids[name])
+    processor = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids[name])
     if notes:
         engine.set_track_notes(track, [ge.NoteDesc(*n) for n in notes])
     return track, processor
@@ -176,7 +176,7 @@ def test_offline_renders_are_repeatable(engine, uids):
 
 def test_an_effect_processes_the_track(engine, uids, dc_wav):
     track = clip_track(engine, dc_wav)
-    effect = engine.add_plugin_processor(track, "VST3", PLUGINS, uids["GIL Test Effect"])
+    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Effect"])
     params = engine.processor_params(effect)
     assert [p.name for p in params] == ["Gain", "Latency", "Bypass"]
     assert params[FX_BYPASS].hidden  # the device's own on/off switch stands for it
@@ -190,7 +190,7 @@ def test_an_effect_processes_the_track(engine, uids, dc_wav):
 
 def test_automation_reaches_the_plugin_and_its_controller(engine, uids, dc_wav):
     track = clip_track(engine, dc_wav)
-    effect = engine.add_plugin_processor(track, "VST3", PLUGINS, uids["GIL Test Effect"])
+    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Effect"])
     engine.take_processor_events()
     engine.set_track_automation(track, [ge.AutomationLane(effect, str(FX_GAIN), [ge.AutomationPoint(0.0, 0.25)])])
     np.testing.assert_allclose(engine.render_offline(0.0, 1000), 0.25)  # automated, as if set to 0.25
@@ -205,7 +205,7 @@ def test_automation_reaches_the_plugin_and_its_controller(engine, uids, dc_wav):
 def test_a_mono_plugin_on_a_stereo_track(engine, uids, make_wav):
     wav = make_wav(np.tile([0.5, 0.25], (SAMPLE_RATE, 1)))
     track = clip_track(engine, wav)
-    mono = engine.add_plugin_processor(track, "VST3", PLUGINS, uids["GIL Test Mono"])
+    mono = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Mono"])
     assert engine.processor_params(mono) == [] and not engine.processor_info(mono).has_editor  # no controller
     out = engine.render_offline(0.0, 1000)
     np.testing.assert_allclose(out, 0.5 * (0.5 + 0.25) / 2, atol=1e-4)  # mixed to mono, halved, on both sides
@@ -217,7 +217,7 @@ def test_latency_is_compensated(engine, uids, make_wav):
     wav = make_wav(click)
     late = clip_track(engine, wav, start_beat=1.0)
     direct = clip_track(engine, wav, start_beat=1.0)
-    effect = engine.add_plugin_processor(late, "VST3", PLUGINS, uids["GIL Test Effect"])
+    effect = engine.add_plugin_processor(engine.track_chain(late), "VST3", PLUGINS, uids["GIL Test Effect"])
     engine.set_processor_param(effect, FX_LATENCY, 100)
     engine.idle()  # the plug-in asked for a restart to change its latency
     assert [e.type for e in engine.take_processor_events()].count(ge.ProcessorEventType.LATENCY_CHANGED) == 1
@@ -267,37 +267,69 @@ def test_state_restores_a_plugin(engine, uids):
 def test_load_errors(engine, uids):
     track = engine.add_track()
     with pytest.raises(RuntimeError):
-        engine.add_plugin_processor(track, "VST3", str(TEST_PLUGINS.parent / "Missing.vst3"), uids["GIL Test Synth"])
+        engine.add_plugin_processor(engine.track_chain(track), "VST3", str(TEST_PLUGINS.parent / "Missing.vst3"), uids["GIL Test Synth"])
     with pytest.raises(RuntimeError, match="does not contain"):
-        engine.add_plugin_processor(track, "VST3", PLUGINS, "0" * 32)
+        engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, "0" * 32)
     with pytest.raises(ValueError):
-        engine.add_plugin_processor(track, "VST3", PLUGINS, "not a uid")
+        engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, "not a uid")
     with pytest.raises(ValueError):
-        engine.add_plugin_processor(track, "CLAP", PLUGINS, uids["GIL Test Synth"])
+        engine.add_plugin_processor(engine.track_chain(track), "CLAP", PLUGINS, uids["GIL Test Synth"])
     with pytest.raises(ValueError):
-        engine.add_plugin_processor(track + 99, "VST3", PLUGINS, uids["GIL Test Synth"])
+        engine.add_plugin_processor(engine.track_chain(track) + 99, "VST3", PLUGINS, uids["GIL Test Synth"])
 
 
 def test_chain_order(engine, uids):
     track, synth = plugin_track(engine, uids, "GIL Test Synth", [(0.0, 1.0, 60, 127)])
     engine.set_processor_param(synth, WAVE, 0)
-    effect = engine.add_plugin_processor(track, "VST3", PLUGINS, uids["GIL Test Effect"])
+    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Effect"])
     engine.set_processor_param(effect, FX_GAIN, 1.0)  # doubles
     np.testing.assert_allclose(engine.render_offline(0.0, 100), 2.0)
     # An instrument writes its output over what comes in: first the effect, then the synth.
-    engine.set_track_processor_order(track, [effect, synth])
+    engine.set_chain_order(engine.track_chain(track), [effect, synth])
     np.testing.assert_allclose(engine.render_offline(0.0, 100), 1.0)
     for bad in ([effect], [effect, effect], [effect, synth, 999]):
         with pytest.raises(ValueError):
-            engine.set_track_processor_order(track, bad)
+            engine.set_chain_order(engine.track_chain(track), bad)
     engine.remove_processor(effect)
     engine.remove_track(track)
     engine.idle()  # releases the plug-ins, on this thread
 
 
+def test_a_plugin_moves_to_another_track_as_it_is(engine, uids, make_wav):
+    click = np.zeros(1000)
+    click[0] = 0.5
+    wav = make_wav(click)
+    a = clip_track(engine, wav, start_beat=1.0)
+    b = clip_track(engine, wav, start_beat=1.0)
+    effect = engine.add_plugin_processor(engine.track_chain(a), "VST3", PLUGINS, uids["GIL Test Effect"])
+    engine.set_processor_param(effect, FX_GAIN, 1.0)  # doubles
+    engine.set_processor_param(effect, FX_LATENCY, 100)
+    engine.idle()
+    state = engine.processor_state(effect)
+
+    engine.move_processor(effect, engine.track_chain(b))
+    assert engine.processor_chain(effect) == engine.track_chain(b)
+    # The same processor, with its parameters and state: nothing loaded again.
+    assert engine.processor_param(effect, FX_GAIN) == 1.0
+    assert engine.processor_state(effect) == state
+    engine.set_track_clips(a, [])
+    out = engine.render_offline(0.0, 2 * SPB)[:, 0]
+    assert np.nonzero(out)[0].tolist() == [SPB]  # compensated on its new track
+    assert out[SPB] == pytest.approx(1.0, abs=1e-4)
+
+    # Its old track can go without it.
+    engine.remove_track(a)
+    engine.idle()
+    assert engine.processor_param(effect, FX_GAIN) == 1.0
+    engine.remove_track(b)
+    engine.idle()
+    with pytest.raises(ValueError):
+        engine.processor_info(effect)
+
+
 def test_editor_edits_resizes_and_closes(engine, uids, dc_wav):
     track = clip_track(engine, dc_wav)
-    effect = engine.add_plugin_processor(track, "VST3", PLUGINS, uids["GIL Test Effect"])
+    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Effect"])
     assert engine.open_editor(effect, 0, "GIL Test Effect - Audio")
     assert engine.is_editor_open(effect)
     frame = editor_window("GIL Test Effect - Audio")
@@ -358,7 +390,7 @@ def test_a_latent_plugin_on_the_master(engine, uids, make_wav, tmp_path):
     click = np.zeros(1000)
     click[0] = 0.5
     track = clip_track(engine, make_wav(click), start_beat=1.0)
-    effect = engine.add_plugin_processor(ge.MASTER, "VST3", PLUGINS, uids["GIL Test Effect"])
+    effect = engine.add_plugin_processor(engine.track_chain(ge.MASTER), "VST3", PLUGINS, uids["GIL Test Effect"])
     engine.set_processor_param(effect, FX_LATENCY, 100)
     engine.idle()  # the plug-in asked for a restart to change its latency
     # The click lands on beat 1 still: the render starts that much earlier.
@@ -383,12 +415,12 @@ def test_master_device_automation_plays_in_time(engine, uids, make_wav):
     """A master device hears the timeline as late as the slowest track, plus the
     master's devices before it: its automation is as late."""
     track = clip_track(engine, make_wav(np.full((2 * SAMPLE_RATE, 2), 0.5)), duration_sec=2.0)
-    late = engine.add_plugin_processor(track, "VST3", PLUGINS, uids["GIL Test Effect"])
+    late = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Effect"])
     engine.set_processor_param(late, FX_LATENCY, 100)
-    first = engine.add_plugin_processor(ge.MASTER, "VST3", PLUGINS, uids["GIL Test Effect"])
+    first = engine.add_plugin_processor(engine.track_chain(ge.MASTER), "VST3", PLUGINS, uids["GIL Test Effect"])
     engine.set_processor_param(first, FX_LATENCY, 50)
     engine.idle()
-    utility = engine.add_builtin_processor(ge.MASTER, "utility")
+    utility = engine.add_builtin_processor(engine.track_chain(ge.MASTER), "utility")
     gain = engine.processor_params(utility)[engine.processor_param_index(utility, "gain")]
     quiet, loud = gain.to_normalized(-60.0), gain.to_normalized(0.0)
     step = SPB + 400  # not on a block boundary of the render (which starts 150 samples early)

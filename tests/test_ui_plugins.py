@@ -27,6 +27,7 @@ from gilstudio.audio import engine_bridge
 from gilstudio.model import automation
 from gilstudio.model.automation import AutomationPoint
 from gilstudio.model.project import PLUGIN_KIND, PluginRef
+from gilstudio.ui.arrangement.lanes_canvas import DEVICE_MOVE_MIME
 from gilstudio.ui.browser.browser_models import plugin_refs
 from gilstudio.ui.browser.file_index import plugin_ref
 from gilstudio.ui.device_panel import PluginDeviceWidget
@@ -395,6 +396,46 @@ def test_dropping_plugins(window):
     assert midi.is_midi and [d.plugin.name for d in midi.devices] == ["GIL Test Synth"]
     window.devices.dropEvent(drop(QPointF(20, 20), mime["GIL Test Mono"]))  # the track shown
     assert [d.plugin.name for d in midi.devices] == ["GIL Test Synth", "GIL Test Mono"]
+
+
+def test_dragging_a_device_to_another_track_moves_its_processor(window):
+    refs = installed(window)
+    window.insert_track()
+    window.insert_track()
+    a, b = window.project.tracks
+    utility = window.editor.add_device(b.id, "utility")
+    effect = window.editor.add_device(a.id, PLUGIN_KIND, plugin=refs["GIL Test Effect"])
+    pid = engine_id(window, a, effect)
+    window.engine.set_processor_param(pid, FX_GAIN, 0.3)  # as if changed in its editor: only the plug-in knows
+    key = automation.device_key(effect.id, str(FX_GAIN))
+    window.editor.set_envelope(a.id, key, (AutomationPoint(0.0, 0.5),))
+    chain_of = {t.id: window.engine.track_chain(window.bridge._track_ids[t.id]) for t in (a, b)}
+
+    arrangement = window.arrangement
+    row = next(r for r in arrangement.layout_model.rows if r.track_id == b.id)
+    mime = QMimeData()
+    mime.setData(DEVICE_MOVE_MIME, f"{a.id}\n{effect.id}".encode())
+    arrangement.lanes.dropEvent(drop(QPointF(40, row.top - arrangement.view.scroll_y + 10), mime))
+    a, b = window.project.tracks
+    assert a.devices == [] and [d.id for d in b.devices] == [utility.id, effect.id]
+    # The same processor, moved in the engine: nothing loaded again, nothing lost.
+    assert engine_id(window, b, effect) == pid and engine_id(window, a, effect) is None
+    assert window.engine.processor_chain(pid) == chain_of[b.id]
+    assert window.engine.processor_param(pid, FX_GAIN) == pytest.approx(0.3)
+    assert window.project.envelope(b.id, key) and not window.project.envelope(a.id, key)  # automation goes along
+    assert window.selection.track_id == b.id  # shows where it went
+
+    window.undo_stack.undo()  # one step: back where it was
+    a, b = window.project.tracks
+    assert [d.id for d in a.devices] == [effect.id] and [d.id for d in b.devices] == [utility.id]
+    assert engine_id(window, a, effect) == pid and window.engine.processor_chain(pid) == chain_of[a.id]
+    assert window.project.envelope(a.id, key) and not window.project.envelope(b.id, key)
+    window.undo_stack.redo()
+    assert engine_id(window, window.project.tracks[1], effect) == pid
+
+    # The device panel starts such drags; dropped on its own track it does nothing here.
+    arrangement.lanes.dropEvent(drop(QPointF(40, row.top - arrangement.view.scroll_y + 10), mime))
+    assert [d.id for d in window.project.tracks[1].devices] == [utility.id, effect.id]
 
 
 def test_presets(window, tmp_path, monkeypatch):

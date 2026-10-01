@@ -61,7 +61,7 @@ def latent_effect(engine, track, latency):
     if not TEST_PLUGINS.exists():
         pytest.skip("test plug-ins not built")
     uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "GIL Test Effect")
-    effect = engine.add_plugin_processor(track, "VST3", str(TEST_PLUGINS), uid)
+    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", str(TEST_PLUGINS), uid)
     engine.set_processor_param(effect, FX_LATENCY, latency)
     engine.idle()  # the plug-in asked for a restart to change its latency
     assert engine.processor_info(effect).latency == latency

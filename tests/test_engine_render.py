@@ -170,7 +170,7 @@ def test_remove_track(engine, dc_wav):
 
 def test_utility_device(engine, dc_wav):
     track = add_clip_track(engine, dc_wav)
-    device = engine.add_builtin_processor(track, "utility")
+    device = engine.add_builtin_processor(engine.track_chain(track), "utility")
     names = [p.id for p in engine.processor_params(device)]
     assert names == ["gain", "pan", "width"]
     engine.set_processor_param(device, 0, 20 * math.log10(0.5))
@@ -199,7 +199,7 @@ def test_over_the_top(engine, tmp_path):
         engine.load_source(str(path))
         track = engine.add_track()
         engine.set_track_clips(track, [ge.ClipDesc(str(path), 0.0, 1.0, 0.0, 1.0)])
-        device = engine.add_builtin_processor(track, "ott")
+        device = engine.add_builtin_processor(engine.track_chain(track), "ott")
         assert [p.id for p in engine.processor_params(device)] == ["depth", "output"]
         engine.set_processor_param(device, 0, depth)
         out = engine.render_offline(0.0, SAMPLE_RATE)[SAMPLE_RATE // 4 :, 0]
@@ -280,10 +280,55 @@ def read_wav24(path) -> np.ndarray:
     return np.where(ints >= 1 << 23, ints - (1 << 24), ints).reshape(-1, 2) / float(1 << 23)
 
 
+def test_every_strip_has_its_own_chain(engine):
+    a, b = engine.add_track(), engine.add_track()
+    chains = [engine.track_chain(t) for t in (ge.MASTER, a, b)]
+    assert len(set(chains)) == 3
+    device = engine.add_builtin_processor(chains[1], "utility")
+    assert engine.processor_chain(device) == chains[1]
+    with pytest.raises(ValueError):
+        engine.add_builtin_processor(max(chains) + 1, "utility")
+    engine.remove_track(a)
+    with pytest.raises(ValueError):
+        engine.add_builtin_processor(chains[1], "utility")  # its chain went with it
+    with pytest.raises(ValueError):
+        engine.processor_chain(device)
+
+
+def test_move_processor_between_chains(engine, dc_wav):
+    a = add_clip_track(engine, dc_wav)
+    b = add_clip_track(engine, dc_wav)
+    chain_a, chain_b = engine.track_chain(a), engine.track_chain(b)
+    half = engine.add_builtin_processor(chain_a, "utility")
+    engine.set_processor_param(half, 0, 20 * math.log10(0.5))
+    assert engine.render_offline(0.0, 4000)[-1, 0] == pytest.approx(0.75, rel=1e-4)
+
+    # To the other track: its gain goes along.
+    engine.move_processor(half, chain_b)
+    assert engine.processor_chain(half) == chain_b
+    engine.set_track_clips(a, [])
+    assert engine.render_offline(0.0, 4000)[-1, 0] == pytest.approx(0.25, rel=1e-4)
+
+    # To the master, and to a position in a chain.
+    engine.move_processor(half, engine.track_chain(ge.MASTER))
+    assert engine.render_offline(0.0, 4000)[-1, 0] == pytest.approx(0.25, rel=1e-4)
+    other = engine.add_builtin_processor(chain_b, "utility")
+    engine.move_processor(half, chain_b, 0)
+    engine.set_chain_order(chain_b, [half, other])  # the order it has
+    with pytest.raises(ValueError):
+        engine.set_chain_order(chain_b, [other])
+    engine.move_processor(half, chain_b, 5)  # past the end: last
+    engine.set_chain_order(chain_b, [other, half])
+    with pytest.raises(ValueError):
+        engine.move_processor(half, chain_b + 99)
+    with pytest.raises(ValueError):
+        engine.move_processor(999, chain_b)
+
+
 def test_an_effect_on_the_master_changes_the_export(engine, dc_wav, tmp_path):
     add_clip_track(engine, dc_wav, duration_sec=0.5)
     add_clip_track(engine, dc_wav, duration_sec=0.5)
-    utility = engine.add_builtin_processor(ge.MASTER, "utility")
+    utility = engine.add_builtin_processor(engine.track_chain(ge.MASTER), "utility")
     engine.set_processor_param(utility, engine.processor_param_index(utility, "gain"), 20 * math.log10(0.25))
     target = tmp_path / "mix.wav"
     engine.export_wav(str(target), 0.0, 1.0, bit_depth=24)

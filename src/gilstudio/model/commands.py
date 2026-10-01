@@ -179,6 +179,23 @@ class SetDevicesCommand(QUndoCommand):
         self.project.set_devices(self.track_id, copy.deepcopy(self.before))
 
 
+class SetChainsCommand(QUndoCommand):
+    """Changes several tracks' devices in one go: devices moving between them stay
+    the same devices (a plug-in isn't loaded again)."""
+
+    def __init__(self, project: Project, before: dict[str, list[Device]], after: dict[str, list[Device]], text: str):
+        super().__init__(text)
+        self.project = project
+        self.before = before
+        self.after = after
+
+    def redo(self) -> None:
+        self.project.set_chains(copy.deepcopy(self.after))
+
+    def undo(self) -> None:
+        self.project.set_chains(copy.deepcopy(self.before))
+
+
 class SetDeviceParamCommand(_MergeableCommand):
     def __init__(self, project: Project, track_id: str, device_id: str, param_id: str, old: float, new: float,
                  merge_key: object | None = None):

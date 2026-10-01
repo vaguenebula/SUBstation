@@ -370,6 +370,14 @@ class Project(QObject):
         self.track(track_id).devices = devices
         self.devices_changed.emit(track_id)
 
+    def set_chains(self, chains: dict[str, list[Device]]) -> None:
+        """Change several tracks' devices at once (a device moving between them):
+        all of them change before anyone hears of it."""
+        for track_id, devices in chains.items():
+            self.track(track_id).devices = devices
+        for track_id in chains:
+            self.devices_changed.emit(track_id)
+
     def device(self, track_id: str, device_id: str) -> Device:
         for device in self.track(track_id).devices:
             if device.id == device_id:

@@ -39,6 +39,7 @@ Engine::Engine()
           midiInput(port, message, size, hostTime);
       }) {
     std::lock_guard lock(mutex_);
+    master_.chainId = addChainLocked(kMaster, 0);
     renderer_.prepare(sampleRate_);
     rebuildSnapshotLocked();
 }
@@ -99,10 +100,7 @@ void Engine::openDeviceLocked(const DeviceConfig& config) {
         previewHold_.reset();
 
         renderer_.prepare(sampleRate_);
-        for (auto& track : tracks_) {
-            for (auto& insert : track.inserts) insert->prepare(sampleRate_, Renderer::kMaxBlock);
-        }
-        for (auto& insert : master_.inserts) insert->prepare(sampleRate_, Renderer::kMaxBlock);
+        for (auto& [id, entry] : processors_) entry.processor->prepare(sampleRate_, Renderer::kMaxBlock);
         // MIDI input plays a device buffer after it arrives (MidiInput.h).
         shared_.midiInputDelay.store(state.bufferFrames > 0 ? static_cast<int>(state.bufferFrames) : 512);
         shared_.midiSampleRate.store(sampleRate_);
@@ -326,6 +324,7 @@ uint32_t Engine::addTrack() {
     TrackModel track;
     track.id = nextTrackId_++;
     track.params = std::make_shared<TrackParams>();
+    track.chainId = addChainLocked(track.id, 0);
     tracks_.push_back(std::move(track));
     rebuildSnapshotLocked();
     return tracks_.back().id;
@@ -333,9 +332,18 @@ uint32_t Engine::addTrack() {
 
 void Engine::removeTrack(uint32_t trackId) {
     std::lock_guard lock(mutex_);
-    for (auto& insert : arrangementTrackLocked(trackId).inserts) retireProcessorLocked(insert);
+    arrangementTrackLocked(trackId);
+    // Its chains go, with their devices.
+    for (auto it = processors_.begin(); it != processors_.end();) {
+        if (chainLocked(it->second.chainId).stripId == trackId) {
+            retireProcessorLocked(std::move(it->second.processor));
+            it = processors_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    std::erase_if(chains_, [&](const auto& entry) { return entry.second.stripId == trackId; });
     std::erase_if(tracks_, [&](const TrackModel& track) { return track.id == trackId; });
-    std::erase_if(processors_, [&](const auto& entry) { return entry.second.first == trackId; });
     rebuildSnapshotLocked();
 }
 
@@ -625,7 +633,7 @@ int Engine::insertLatency(const std::vector<std::shared_ptr<Processor>>& inserts
 
 void Engine::buildAutomationLocked(const TrackModel& track, int inputLatency, int faderLatency,
                                    double samplesPerBeat, StripRender& strip) {
-    const auto& inserts = track.inserts;
+    const auto& inserts = insertsLocked(track);
     for (const AutomationLaneDesc& desc : track.automation) {
         if (desc.points.empty()) continue;
         AutomationRender lane;
@@ -641,8 +649,8 @@ void Engine::buildAutomationLocked(const TrackModel& track, int inputLatency, in
             lane.latency = faderLatency;
         } else {
             const auto found = processors_.find(desc.processorId);
-            if (found == processors_.end() || found->second.first != track.id) continue;
-            const std::shared_ptr<Processor>& processor = found->second.second;
+            if (found == processors_.end() || found->second.chainId != track.chainId) continue;
+            const std::shared_ptr<Processor>& processor = found->second.processor;
             const auto place = std::find(inserts.begin(), inserts.end(), processor);
             if (place == inserts.end()) continue;
             const auto& infos = processor->params();
@@ -673,12 +681,39 @@ void Engine::buildAutomationLocked(const TrackModel& track, int inputLatency, in
 }
 
 // ---------------------------------------------------------------------------
-// Insert chain
+// Device chains
+
+Engine::ChainModel& Engine::chainLocked(uint32_t chainId) {
+    auto it = chains_.find(chainId);
+    if (it == chains_.end()) throw std::invalid_argument("Unknown chain id " + std::to_string(chainId));
+    return it->second;
+}
+
+const std::vector<std::shared_ptr<Processor>>& Engine::insertsLocked(const TrackModel& track) const {
+    return chains_.at(track.chainId).inserts;
+}
+
+uint32_t Engine::addChainLocked(uint32_t stripId, uint32_t parentRack) {
+    const uint32_t id = nextChainId_++;
+    chains_[id] = ChainModel{id, stripId, parentRack, {}};
+    return id;
+}
+
+uint32_t Engine::trackChain(uint32_t trackId) {
+    std::lock_guard lock(mutex_);
+    return trackLocked(trackId).chainId;
+}
+
+uint32_t Engine::processorChain(uint32_t processorId) {
+    std::lock_guard lock(mutex_);
+    processorLocked(processorId);
+    return processors_[processorId].chainId;
+}
 
 std::shared_ptr<Processor> Engine::processorLocked(uint32_t processorId) {
     auto it = processors_.find(processorId);
     if (it == processors_.end()) throw std::invalid_argument("Unknown device id " + std::to_string(processorId));
-    return it->second.second;
+    return it->second.processor;
 }
 
 std::shared_ptr<Processor> Engine::processor(uint32_t processorId) {
@@ -686,13 +721,21 @@ std::shared_ptr<Processor> Engine::processor(uint32_t processorId) {
     return processorLocked(processorId);
 }
 
-uint32_t Engine::insertProcessorLocked(uint32_t trackId, std::shared_ptr<Processor> processor, int index) {
-    TrackModel& track = trackLocked(trackId);
-    const auto count = static_cast<int>(track.inserts.size());
-    const int at = (index < 0 || index > count) ? count : index;
-    track.inserts.insert(track.inserts.begin() + at, processor);
+namespace {
+
+// Where `index` puts a device in a chain of `count` (-1 or past the end: last).
+int insertPosition(int index, size_t count) {
+    const auto size = static_cast<int>(count);
+    return (index < 0 || index > size) ? size : index;
+}
+
+}  // namespace
+
+uint32_t Engine::insertProcessorLocked(uint32_t chainId, std::shared_ptr<Processor> processor, int index) {
+    ChainModel& chain = chainLocked(chainId);
+    chain.inserts.insert(chain.inserts.begin() + insertPosition(index, chain.inserts.size()), processor);
     const uint32_t id = nextProcessorId_++;
-    processors_[id] = {trackId, std::move(processor)};
+    processors_[id] = {chainId, std::move(processor)};
     rebuildSnapshotLocked();
     return id;
 }
@@ -702,7 +745,7 @@ void Engine::retireProcessorLocked(std::shared_ptr<Processor> processor) {
     graveyard_.push_back(std::move(processor));  // destroyed in idle(), once no snapshot uses it
 }
 
-uint32_t Engine::addBuiltinProcessor(uint32_t trackId, const std::string& type, int index) {
+uint32_t Engine::addBuiltinProcessor(uint32_t chainId, const std::string& type, int index) {
     std::shared_ptr<Processor> processor;
     if (type == "utility") {
         processor = std::make_shared<UtilityProcessor>();
@@ -714,55 +757,75 @@ uint32_t Engine::addBuiltinProcessor(uint32_t trackId, const std::string& type, 
         throw std::invalid_argument("Unknown built-in device: " + type);
     }
     std::lock_guard lock(mutex_);
-    trackLocked(trackId);
+    chainLocked(chainId);
     processor->prepare(sampleRate_, Renderer::kMaxBlock);  // before the audio thread can see it
-    return insertProcessorLocked(trackId, std::move(processor), index);
+    return insertProcessorLocked(chainId, std::move(processor), index);
 }
 
-uint32_t Engine::addPluginProcessor(uint32_t trackId, const std::string& format, const std::string& path,
+uint32_t Engine::addPluginProcessor(uint32_t chainId, const std::string& format, const std::string& path,
                                     const std::string& uid, int index) {
     if (format != "VST3") throw std::invalid_argument("Unsupported plug-in format: " + format);
     double rate = 0.0;
     {
         std::lock_guard lock(mutex_);
-        trackLocked(trackId);
+        chainLocked(chainId);
         rate = sampleRate_;
     }
     // Loading can take a while (and show dialogs), so it doesn't hold the lock.
     auto plugin = vst3::Vst3Format::instance().instantiate(path, uid, rate, Renderer::kMaxBlock);
     std::lock_guard lock(mutex_);
     if (sampleRate_ != rate) plugin->prepare(sampleRate_, Renderer::kMaxBlock);  // the device changed meanwhile
-    return insertProcessorLocked(trackId, std::move(plugin), index);
+    if (!chains_.contains(chainId)) {  // its track went while the plug-in loaded (a dialog's message loop)
+        retireProcessorLocked(std::move(plugin));
+        throw std::invalid_argument("Unknown chain id " + std::to_string(chainId));
+    }
+    return insertProcessorLocked(chainId, std::move(plugin), index);
 }
 
 void Engine::removeProcessor(uint32_t processorId) {
     std::lock_guard lock(mutex_);
     auto processor = processorLocked(processorId);
-    TrackModel& track = trackLocked(processors_[processorId].first);
-    std::erase(track.inserts, processor);
+    std::erase(chainLocked(processors_[processorId].chainId).inserts, processor);
     processors_.erase(processorId);
     retireProcessorLocked(std::move(processor));
     rebuildSnapshotLocked();
 }
 
-void Engine::setTrackProcessorOrder(uint32_t trackId, const std::vector<uint32_t>& processorIds) {
+void Engine::setChainOrder(uint32_t chainId, const std::vector<uint32_t>& processorIds) {
     std::lock_guard lock(mutex_);
-    TrackModel& track = trackLocked(trackId);
+    ChainModel& chain = chainLocked(chainId);
     std::vector<std::shared_ptr<Processor>> order;
     for (const uint32_t id : processorIds) {
         auto it = processors_.find(id);
-        if (it == processors_.end() || it->second.first != trackId) {
-            throw std::invalid_argument("Device " + std::to_string(id) + " is not on track " + std::to_string(trackId));
+        if (it == processors_.end() || it->second.chainId != chainId) {
+            throw std::invalid_argument("Device " + std::to_string(id) + " is not in chain " + std::to_string(chainId));
         }
-        if (std::find(order.begin(), order.end(), it->second.second) != order.end()) {
+        if (std::find(order.begin(), order.end(), it->second.processor) != order.end()) {
             throw std::invalid_argument("Device " + std::to_string(id) + " is listed twice");
         }
-        order.push_back(it->second.second);
+        order.push_back(it->second.processor);
     }
-    if (order.size() != track.inserts.size()) {
-        throw std::invalid_argument("The order must list all of the track's devices");
+    if (order.size() != chain.inserts.size()) {
+        throw std::invalid_argument("The order must list all of the chain's devices");
     }
-    track.inserts = std::move(order);
+    chain.inserts = std::move(order);
+    rebuildSnapshotLocked();
+}
+
+void Engine::moveProcessor(uint32_t processorId, uint32_t toChainId, int index) {
+    std::lock_guard lock(mutex_);
+    auto processor = processorLocked(processorId);
+    ChainModel& to = chainLocked(toChainId);
+    ProcessorEntry& entry = processors_[processorId];
+    ChainModel& from = chainLocked(entry.chainId);
+    std::erase(from.inserts, processor);
+    to.inserts.insert(to.inserts.begin() + insertPosition(index, to.inserts.size()), processor);
+    if (from.stripId != to.stripId) {
+        // Another strip's signal: what it holds of the old one (a reverb's tail,
+        // notes that strip will release elsewhere) stops.
+        processor->requestReset();
+    }
+    entry.chainId = toChainId;
     rebuildSnapshotLocked();
 }
 
@@ -825,7 +888,7 @@ std::vector<ProcessorEventRecord> Engine::takeProcessorEvents() {
     std::vector<std::pair<uint32_t, std::shared_ptr<Processor>>> current;
     {
         std::lock_guard lock(mutex_);
-        for (const auto& [id, entry] : processors_) current.emplace_back(id, entry.second);
+        for (const auto& [id, entry] : processors_) current.emplace_back(id, entry.processor);
     }
     std::vector<ProcessorEventRecord> records;
     std::vector<ProcessorEvent> events;
@@ -971,14 +1034,10 @@ void Engine::resetProcessorsLocked() {
     // Offline renders share the processors with live playback. Resetting them
     // before keeps live notes (and a plug-in's reverb tail) out of the render;
     // after, keeps the render's last notes from hanging in live playback.
-    const auto reset = [](TrackModel& track) {
-        for (auto& insert : track.inserts) {
-            insert->resetOffline();
-            insert->requestReset();
-        }
-    };
-    for (auto& track : tracks_) reset(track);
-    reset(master_);
+    for (auto& [id, entry] : processors_) {
+        entry.processor->resetOffline();
+        entry.processor->requestReset();
+    }
 }
 
 void Engine::prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices,
@@ -1102,15 +1161,15 @@ void Engine::rebuildSnapshotLocked() {
     std::vector<int> latencies;
     latencies.reserve(tracks_.size());
     for (const TrackModel& track : tracks_) {
-        latencies.push_back(insertLatency(track.inserts));
+        latencies.push_back(insertLatency(insertsLocked(track)));
         snap->maxLatency = std::max(snap->maxLatency, latencies.back());
     }
 
     // The master: its input is the tracks' sum, which comes maxLatency late.
     StripRender& master = snap->master;
     master.params = master_.params;
-    master.inserts = master_.inserts;
-    master.latency = insertLatency(master_.inserts);
+    master.inserts = insertsLocked(master_);
+    master.latency = insertLatency(master.inserts);
     buildAutomationLocked(master_, snap->maxLatency, snap->outputLatency(), spb, master);
 
     const auto rate = static_cast<uint32_t>(sampleRate_);
@@ -1121,7 +1180,7 @@ void Engine::rebuildSnapshotLocked() {
         TrackRender render;
         render.id = track.id;
         render.params = track.params;
-        render.inserts = track.inserts;
+        render.inserts = insertsLocked(track);
         render.latency = latencies[t];
         render.compensation = snap->maxLatency - latencies[t];
         if (render.compensation > 0 && (!track.delay || track.delay->capacity() <= render.compensation)) {
@@ -1231,7 +1290,7 @@ void Engine::idle() {
         }
         collectGarbageLocked();
         serviceTransportIfIdleLocked();
-        for (const auto& [id, entry] : processors_) live.push_back(entry.second);
+        for (const auto& [id, entry] : processors_) live.push_back(entry.processor);
         // Removed processors that no snapshot holds any more.
         for (auto it = graveyard_.begin(); it != graveyard_.end();) {
             if (it->use_count() == 1) {

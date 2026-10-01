@@ -177,7 +177,7 @@ def test_mixer_mappings():
 def test_device_parameters_map_as_the_engine_does():
     engine = ge.Engine()
     track = engine.add_track()
-    synth = engine.add_builtin_processor(track, "synth")
+    synth = engine.add_builtin_processor(engine.track_chain(track), "synth")
     for info in engine.processor_params(synth):
         spec = ParamSpec.from_info(info, auto.device_key("d", info.id), "Synth")
         for value in (0.0, 0.1, 0.33, 0.5, 0.74, 0.76, 1.0):

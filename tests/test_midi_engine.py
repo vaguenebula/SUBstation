@@ -51,7 +51,7 @@ def synth_track(engine, notes, params=None):
     """A track with a Synth (sine, no filtering, short release unless `params` say
     otherwise) playing `notes`, each (start beat, length beats, key[, velocity])."""
     track = engine.add_track()
-    synth = engine.add_builtin_processor(track, "synth")
+    synth = engine.add_builtin_processor(engine.track_chain(track), "synth")
     settings = {WAVE: 0, CUTOFF: 20000.0, RELEASE: 5.0, SUSTAIN: 100.0} | (params or {})
     for index, value in settings.items():
         engine.set_processor_param(synth, index, value)
@@ -133,7 +133,7 @@ def test_loop_wrap_releases_and_retriggers_notes(engine):
 
 def test_instrument_output_goes_through_the_chain(engine):
     track, synth = synth_track(engine, [(0.0, 2.0, 60)])
-    utility = engine.add_builtin_processor(track, "utility")
+    utility = engine.add_builtin_processor(engine.track_chain(track), "utility")
     engine.set_processor_param(utility, 0, -6.0206)  # half the level
     assert rms(engine.render_offline(0.0, SPB)[SPB // 2 :, 0]) == pytest.approx(SINE_RMS / 2, rel=0.02)
     engine.set_processor_enabled(synth, False)
@@ -146,7 +146,7 @@ def test_notes_without_an_instrument_are_silent(engine):
     track = engine.add_track()
     engine.set_track_notes(track, [ge.NoteDesc(0.0, 1.0, 60)])
     assert np.abs(engine.render_offline(0.0, SPB)).max() == 0.0
-    engine.add_builtin_processor(track, "synth")
+    engine.add_builtin_processor(engine.track_chain(track), "synth")
     assert np.abs(engine.render_offline(0.0, SPB)).max() > 0.05
 
 
@@ -166,7 +166,7 @@ def test_cutoff_filters_the_saw(engine):
 
 def test_synth_parameters(engine):
     track = engine.add_track()
-    synth = engine.add_builtin_processor(track, "synth")
+    synth = engine.add_builtin_processor(engine.track_chain(track), "synth")
     params = engine.processor_params(synth)
     assert [p.id for p in params] == ["wave", "attack", "decay", "sustain", "release", "cutoff", "resonance",
                                       "volume"]

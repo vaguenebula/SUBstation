@@ -17,6 +17,7 @@ from .keys import Key, clip_settings
 from .commands import (
     InsertTrackCommand,
     RemoveTrackCommand,
+    SetChainsCommand,
     SetClipsCommand,
     SetDeviceEnabledCommand,
     SetDeviceParamCommand,
@@ -723,6 +724,41 @@ class ProjectEditor(QObject):
         if [d.id for d in after] != [d.id for d in before]:
             self._push(SetDevicesCommand(self.project, track_id, before, after,
                                          "Move Device" if len(moving) == 1 else "Move Devices"))
+
+    def move_devices_to_track(self, track_id: str, device_ids, to_track_id: str, index: int | None = None) -> bool:
+        """Move effects (in their chain order) to another track's (or the master's)
+        chain, before the device at `index` there (None: last; never before its
+        instrument). They stay the same devices, so plug-ins keep their state, and
+        their automation goes with them. One undo step; False if nothing moved."""
+        if to_track_id == track_id:
+            if index is not None:
+                self.move_devices(track_id, device_ids, index)
+            return False
+        source = self.project.track(track_id).devices
+        target = self.project.track(to_track_id).devices
+        ids = {d.id for d in source if d.id in set(device_ids) and not device_is_instrument(d)}
+        if not ids:
+            return False
+        moving = [d for d in copy.deepcopy(source) if d.id in ids]
+        staying = [d for d in copy.deepcopy(source) if d.id not in ids]
+        after = copy.deepcopy(target)
+        first = 1 if after and device_is_instrument(after[0]) else 0
+        at = len(after) if index is None else max(first, min(index, len(after)))
+        after[at:at] = moving
+        before = {track_id: copy.deepcopy(source), to_track_id: copy.deepcopy(target)}
+        text = "Move Device" if len(moving) == 1 else "Move Devices"
+        envelopes = {key: points for key, points in self.project.automation(track_id).items()
+                     if automation.key_device(key) in ids}
+        if not envelopes:
+            self._push(SetChainsCommand(self.project, before, {track_id: staying, to_track_id: after}, text))
+            return True
+        self.undo_stack.beginMacro(text)
+        self._push(SetChainsCommand(self.project, before, {track_id: staying, to_track_id: after}, text))
+        old = {(owner, key): self.project.envelope(owner, key) for key in envelopes for owner in (track_id, to_track_id)}
+        new = {(track_id, key): () for key in envelopes} | {(to_track_id, key): points for key, points in envelopes.items()}
+        self._push(SetEnvelopesCommand(self.project, old, new, text))
+        self.undo_stack.endMacro()
+        return True
 
     def remove_device(self, track_id: str, device_id: str) -> None:
         self.remove_devices(track_id, [device_id])
