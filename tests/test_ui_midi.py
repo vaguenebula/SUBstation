@@ -270,12 +270,26 @@ def test_note_tools_float_by_notes_selected_by_dragging(window, midi_clip):
     assert [n.start for n in clip_notes()] == pytest.approx([0.05, 1.025, 1.95, 3.1])
     window.undo_stack.undo()
 
-    # Legato acts on the selected notes: each reaches the next, the last the clip's end.
+    # Legato acts on the selected notes: each reaches the next, the last the next
+    # note after it (unselected here), not the clip's end.
     roll.set_selection(clip_notes()[:3])
     tools.legato.click()
     assert [(n.start, n.length) for n in clip_notes()] == [
-        (0.1, pytest.approx(0.95)), (1.05, pytest.approx(0.85)), (1.9, pytest.approx(2.1)), (3.2, 0.25)]
+        (0.1, pytest.approx(0.95)), (1.05, pytest.approx(0.85)), (1.9, pytest.approx(1.3)), (3.2, 0.25)]
     assert roll.selected == set(clip_notes()[:3])  # still selected
+    window.undo_stack.undo()
+
+    # ×2 and ÷2 scale the selected notes' timing from the first one, each one undo step.
+    roll.set_selection(clip_notes()[:2])
+    before = [(n.start, n.length) for n in clip_notes()[:2]]
+    tools.double_time.click()
+    assert window.undo_stack.undoText() == "Timing ×2"
+    doubled = [(n.start, n.length) for n in sorted(roll.selected, key=lambda n: n.start)]
+    assert doubled == [(0.1, pytest.approx(before[0][1] * 2)), (pytest.approx(2.0), pytest.approx(before[1][1] * 2))]
+    tools.half_time.click()
+    assert window.undo_stack.undoText() == "Timing ÷2"
+    assert [(n.start, n.length) for n in sorted(roll.selected, key=lambda n: n.start)] == pytest.approx(before)
+    window.undo_stack.undo()
     window.undo_stack.undo()
 
     # Humanize moves starts and velocities a little, lengths stay.
@@ -305,6 +319,14 @@ def test_midi_clips_in_the_arrangement(window, midi_clip, tmp_path):
     window.split()
     left, right = project.track(track.id).clips
     assert [len(c.played_notes()) for c in (left, right)] == [1, 1]
+    # Ctrl+J joins the two pieces back into one clip, which plays both notes, as one undo step.
+    window.selection.select_clips(window.editor, {(track.id, c.id) for c in (left, right)})
+    QTest.keyClick(window.arrangement.lanes, Qt.Key.Key_J, Qt.KeyboardModifier.ControlModifier)
+    [joined] = project.track(track.id).clips
+    assert (joined.start_beat, joined.end_beat(), len(joined.played_notes())) == (4.0, 8.0, 2)
+    assert window.undo_stack.undoText() == "Consolidate" and window.selection.clips == {(track.id, joined.id)}
+    window.undo_stack.undo()
+    left, right = project.track(track.id).clips
     # Ctrl+Shift+M on a time range makes a clip there.
     window.selection.set_time_range(12.0, 14.0, (track.id,), clips=set())
     window.insert_midi_clip()

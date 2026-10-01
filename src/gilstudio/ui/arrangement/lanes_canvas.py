@@ -17,6 +17,7 @@ from PySide6.QtGui import (
     QCursor,
     QDragEnterEvent,
     QDropEvent,
+    QKeySequence,
     QMouseEvent,
     QPainter,
     QPainterPath,
@@ -595,6 +596,12 @@ class LanesCanvas(QWidget):
                                           clips=self.editor.clips_in_range(end, end + length, track_ids))
             self.selection.set_insert(end)
 
+    def consolidate(self) -> None:
+        """Join the selected MIDI clips on each track into one (Ctrl+J), and select them."""
+        joined = self.editor.consolidate_clips(sorted(self.selection.clips))
+        if joined:
+            self.selection.select_clips(self.editor, joined)
+
     def keyPressEvent(self, event) -> None:
         self._on_modifiers(event.modifiers())
         super().keyPressEvent(event)
@@ -643,6 +650,10 @@ class LanesCanvas(QWidget):
             split_at = self.view.snap_beat(self.view.x_to_beat(pos.x()))
             menu.addAction("Split Here", lambda: self.editor.split_clips(refs, split_at))
             menu.addAction("Duplicate", self.duplicate_area)
+            consolidate = menu.addAction("Consolidate", self.consolidate)
+            consolidate.setShortcut(QKeySequence("Ctrl+J"))  # (as a tip: the window's action handles the key)
+            consolidate.setShortcutVisibleInContextMenu(True)
+            consolidate.setEnabled(bool(self.editor.consolidatable(refs)))
             menu.addSeparator()
             menu.addAction("Delete", self.delete_area)
         else:

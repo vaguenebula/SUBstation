@@ -158,6 +158,7 @@ class MainWindow(QMainWindow):
         edit.addSeparator()
         self._action(edit, "D&uplicate", self.duplicate, "Ctrl+D")
         self._action(edit, "&Split", self.split, "Ctrl+E")
+        self._action(edit, "&Consolidate", self.arrangement.lanes.consolidate, "Ctrl+J")
         self._action(edit, "&Delete", self.delete_selection, [QKeySequence.StandardKey.Delete, "Backspace"])
         self._action(edit, "Select &All", self.select_all, QKeySequence.StandardKey.SelectAll)
         edit.addSeparator()

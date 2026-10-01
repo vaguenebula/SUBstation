@@ -127,20 +127,36 @@ def untangle(notes: Iterable[Note]) -> list[Note]:
 
 def legato(targets: Iterable[Note], clip_notes: Iterable[Note], end: float) -> list[Note]:
     """Lengthen or shorten each target note to last until the next target starts
-    (a chord's notes all reach the next chord); the last ones reach `end`, the
-    clip's end. A note never runs into the next note on its own key."""
+    (a chord's notes all reach the next chord); the last ones reach the next note
+    in the clip after them, or `end`, the clip's end, if there is none. A note
+    never runs into the next note on its own key."""
     targets = list(targets)
+    clip_notes = list(clip_notes)
     starts = sorted({n.start for n in targets})
+    last = starts[-1] if starts else 0.0
+    after_last = [n.start for n in clip_notes if n.start > last + EPS]
+    last_stop = min(after_last, default=end)
     same_key: dict[int, list[float]] = {}
     for n in clip_notes:
         same_key.setdefault(n.pitch, []).append(n.start)
     result = []
     for n in targets:
         i = bisect.bisect_right(starts, n.start + EPS)
-        stop = min([starts[i] if i < len(starts) else end]
+        stop = min([starts[i] if i < len(starts) else last_stop]
                    + [s for s in same_key.get(n.pitch, ()) if s > n.start + EPS])
         result.append(replace(n, length=stop - n.start) if stop - n.start >= MIN_NOTE_BEATS else n)
     return result
+
+
+def time_scaled(notes: Iterable[Note], factor: float) -> list[Note]:
+    """Stretch (factor 2) or squeeze (factor 0.5) the notes' timing: starts move
+    away from or toward the earliest one, and lengths scale with them."""
+    notes = list(notes)
+    if not notes:
+        return []
+    origin = min(n.start for n in notes)
+    return untangle(replace(n, start=origin + (n.start - origin) * factor,
+                            length=max(MIN_NOTE_BEATS, n.length * factor)) for n in notes)
 
 
 def quantized(notes: Iterable[Note], step: float, amount: float = 1.0) -> list[Note]:

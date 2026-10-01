@@ -102,6 +102,17 @@ def test_time_selection_edits_on_midi_clips():
 # --- Notes ------------------------------------------------------------------------------
 
 
+def test_consolidate_joins_midi_clips_into_one():
+    # Two clips with a gap; the first hides a note past its end and cuts one at it.
+    a = MidiClip("a", "Bass", 4.0, 2.0, offset_beats=1.0,
+                 notes=(Note(60, 1.0, 0.5), Note(62, 2.5, 2.0), Note(64, 3.5, 1.0)))
+    b = MidiClip("b", "Lead", 8.0, 1.0, notes=(Note(67, 0.0, 0.5),))
+    joined = edits.consolidate_midi([b, a])
+    assert (joined.id, joined.name, joined.start_beat, joined.duration_beats, joined.offset_beats) == (
+        "a", "Bass", 4.0, 5.0, 0.0)
+    assert joined.notes == (Note(60, 0.0, 0.5), Note(62, 1.5, 0.5), Note(67, 4.0, 0.5))
+
+
 def test_note_names_follow_ableton():
     assert [notes.note_name(p) for p in (60, 61, 0, 127)] == ["C3", "C#3", "C-2", "G8"]
     assert notes.is_black_key(61) and not notes.is_black_key(64)
@@ -143,6 +154,16 @@ def test_legato_joins_notes_and_chords():
     assert notes.legato([Note(E, 0.0, 0.25)], [between], 4.0)[0].length == 1.0
     past_the_end = Note(C, 5.0, 1.0)
     assert notes.legato([past_the_end], [], 4.0) == [past_the_end]
+    # The last target stops at the next note after it, on any key, not the clip's end.
+    after = Note(G, 3.0, 0.5)
+    assert notes.legato([Note(C, 0.0, 0.25), Note(E, 1.0, 0.25)], [after], 4.0)[1].length == 2.0
+
+
+def test_time_scaled_doubles_and_halves_from_the_first_note():
+    group = [Note(C, 1.0, 0.5), Note(E, 2.0, 1.0)]
+    assert notes.time_scaled(group, 2.0) == [Note(C, 1.0, 1.0), Note(E, 3.0, 2.0)]
+    assert notes.time_scaled(group, 0.5) == [Note(C, 1.0, 0.25), Note(E, 1.5, 0.5)]
+    assert notes.time_scaled([], 2.0) == []
 
 
 def test_quantize_moves_starts_onto_the_grid():
