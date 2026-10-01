@@ -8,7 +8,8 @@
 //
 // Functions exported for ctypes (test_asio_driver.def) configure the next
 // driver instance, set what its inputs deliver, send the host driver messages,
-// and read back the bytes the host wrote to its outputs. Its sample formats are
+// and read back the bytes the host wrote to its outputs, or loop an output back
+// to an input as a cable would (GilTestAsio_SetLoopback). Its sample formats are
 // encoded here independently of the engine's conversions, which the tests
 // check against numpy's decoding.
 
@@ -23,6 +24,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -50,6 +52,7 @@ struct Config {
     long panelBufferSize = 0;  // what the control panel changes, if not 0
     double panelRate = 0.0;
     double inputLevels[kInputs] = {0.1, 0.2, 0.3, 0.4};
+    long loopOutput = -1, loopInput = -1;  // a cable from that output to that input
 };
 
 struct Stats {
@@ -122,6 +125,47 @@ void encode(long type, double value, uint8_t* dst) {
     }
 }
 
+int64_t loadInt(const uint8_t* src, int bytes, bool bigEndian) {
+    uint64_t value = 0;
+    for (int b = 0; b < bytes; ++b) value |= static_cast<uint64_t>(src[bigEndian ? bytes - 1 - b : b]) << (8 * b);
+    const int shift = 64 - 8 * bytes;
+    return static_cast<int64_t>(value << shift) >> shift;  // sign-extended
+}
+
+// The value of one sample in the driver's format (what encode() wrote back).
+double decode(long type, const uint8_t* src) {
+    const auto scaled = [](int64_t value, int bits) { return static_cast<double>(value) / ((int64_t{1} << (bits - 1)) - 1); };
+    switch (type) {
+        case ASIOSTInt16LSB: return scaled(loadInt(src, 2, false), 16);
+        case ASIOSTInt24LSB: return scaled(loadInt(src, 3, false), 24);
+        case ASIOSTInt32LSB: return scaled(loadInt(src, 4, false), 32);
+        case ASIOSTInt32LSB16: return scaled(loadInt(src, 4, false), 16);
+        case ASIOSTInt32LSB18: return scaled(loadInt(src, 4, false), 18);
+        case ASIOSTInt32LSB20: return scaled(loadInt(src, 4, false), 20);
+        case ASIOSTInt32LSB24: return scaled(loadInt(src, 4, false), 24);
+        case ASIOSTInt16MSB: return scaled(loadInt(src, 2, true), 16);
+        case ASIOSTInt24MSB: return scaled(loadInt(src, 3, true), 24);
+        case ASIOSTInt32MSB: return scaled(loadInt(src, 4, true), 32);
+        case ASIOSTFloat32LSB: {
+            float sample;
+            std::memcpy(&sample, src, 4);
+            return sample;
+        }
+        case ASIOSTFloat64LSB: {
+            double sample;
+            std::memcpy(&sample, src, 8);
+            return sample;
+        }
+        case ASIOSTFloat32MSB: {
+            const auto bits = static_cast<uint32_t>(loadInt(src, 4, true));
+            float sample;
+            std::memcpy(&sample, &bits, 4);
+            return sample;
+        }
+        default: return 0.0;
+    }
+}
+
 class TestAsio final : public IASIO {
 public:
     TestAsio() {
@@ -177,6 +221,10 @@ public:
             ++g_stats.starts;
             g_stats.running = 1;
             manual = g_config.manual;
+            // The cable: what leaves the output comes back at the input as late as
+            // the latencies the driver reports say.
+            const long delay = 2 * bufferSize_ + g_config.inputLatencyExtra + g_config.outputLatencyExtra;
+            loop_.assign(static_cast<size_t>(delay), 0.0);
         }
         if (!manual) {
             thread_ = std::thread([this] {
@@ -333,8 +381,12 @@ public:
             for (Buffer& buffer : buffers_) {
                 if (!buffer.isInput) continue;
                 uint8_t* half = buffer.memory.data() + index * bytes;
+                const bool looped = g_config.loopOutput >= 0 && buffer.channel == g_config.loopInput;
                 const double level = g_config.inputLevels[buffer.channel];
-                for (long i = 0; i < bufferSize_; ++i) encode(sampleType_, level, half + i * sampleBytes(sampleType_));
+                for (long i = 0; i < bufferSize_; ++i) {
+                    const double value = looped ? loop_[static_cast<size_t>(i)] : level;
+                    encode(sampleType_, value, half + i * sampleBytes(sampleType_));
+                }
             }
         }
         if (!callbacks) return;
@@ -351,6 +403,15 @@ public:
             callbacks->bufferSwitch(index, ASIOTrue);
         }
         std::lock_guard lock(g_mutex);
+        loop_.erase(loop_.begin(), loop_.begin() + bufferSize_);
+        const Buffer* cable = nullptr;
+        for (const Buffer& buffer : buffers_) {
+            if (!buffer.isInput && buffer.channel == g_config.loopOutput) cable = &buffer;
+        }
+        for (long i = 0; i < bufferSize_; ++i) {  // silence if no cable (or its output isn't open)
+            loop_.push_back(cable ? decode(sampleType_, cable->memory.data() + index * bytes + i * sampleBytes(sampleType_))
+                                  : 0.0);
+        }
         for (const Buffer& buffer : buffers_) {
             if (buffer.isInput) continue;
             auto& capture = g_capture[static_cast<size_t>(buffer.channel)];
@@ -386,6 +447,7 @@ private:
     bool timeInfo_ = false;
     std::atomic<int64_t> samplePosition_{0};
     std::vector<Buffer> buffers_;
+    std::deque<double> loop_;  // the cable's samples on their way (GilTestAsio_SetLoopback)
     std::atomic<bool> running_{false};
     std::thread thread_;
 };
@@ -465,6 +527,14 @@ void GilTestAsio_SetManual(int manual) {
 void GilTestAsio_SetInputLevel(int channel, double level) {
     std::lock_guard lock(g_mutex);
     if (channel >= 0 && channel < kInputs) g_config.inputLevels[channel] = level;
+}
+
+// A cable from an output to an input (-1, -1: none), delayed by the input and
+// output latencies the driver reports, as a real loopback would be.
+void GilTestAsio_SetLoopback(int output, int input) {
+    std::lock_guard lock(g_mutex);
+    g_config.loopOutput = output;
+    g_config.loopInput = input;
 }
 
 void GilTestAsio_FailInit(const char* message) {

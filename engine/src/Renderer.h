@@ -21,12 +21,21 @@
 // value at the start, then wherever it changes, every kAutomationStep samples
 // along a slope and at each breakpoint. Automated volume and pan are followed
 // sample by sample. While stopped, automated values follow the playhead.
+//
+// Input: a monitored track (MonitorMode) plays the device's input instead of
+// its clips, through its strip like any audio, but isn't delay-compensated
+// (compensationFor()). While recording, the input of the tracks recorded goes
+// to the RecordingSession's rings, tagged with the timeline position it was
+// taken at; the loop doesn't wrap then. A count-in clicks before the playhead
+// moves (the metronome, even if it is off).
 
 #include <array>
 #include <cstdint>
 #include <vector>
 
+#include "AudioDevice.h"
 #include "Metronome.h"
+#include "Recorder.h"
 #include "Snapshot.h"
 #include "Transport.h"
 
@@ -42,8 +51,9 @@ public:
     // Real-time. Applies transport commands, renders tracks, metronome and the
     // browser preview, and publishes position/meters. The master goes to the
     // first two outputs (mixed to mono if there is only one); any others are silent.
-    void processLive(const RenderSnapshot& snap, SharedState& shared, float* const* outputs, uint32_t numOutputs,
-                     uint32_t frames) noexcept;
+    // Monitored tracks hear the inputs; `recording` (if any) takes them.
+    void processLive(const RenderSnapshot& snap, SharedState& shared, const AudioIO& io,
+                     RecordingSession* recording = nullptr) noexcept;
 
     // Renders the timeline from the current position into interleaved stereo.
     // Never publishes meters or plays the preview; looping and the metronome
@@ -115,7 +125,15 @@ private:
     // A strip's body, in place: inserts -> delay compensation -> fader and meter.
     // Its input is in left/right already (and a track's note events in events_).
     void processStrip(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context, float* left,
-                      float* right, int frames, bool audible, ChunkFlags flags, DelayLine* delay) noexcept;
+                      float* right, int frames, bool audible, ChunkFlags flags, DelayLine* delay,
+                      int compensation) noexcept;
+    // How much a strip is delayed to line up with the slowest one.
+    static int compensationFor(const StripRender& strip, bool monitored) noexcept;
+    bool isMonitored(const TrackRender& track, ChunkFlags flags) const noexcept;
+    const float* inputChannel(int index, int offset) const noexcept;
+    void readInput(const InputEdge& input, float* left, float* right, int frames) const noexcept;
+    void recordInput() noexcept;
+    void scheduleCountIn(const RenderSnapshot& snap, int length) noexcept;
     void processInserts(const StripRender& strip, ProcessContext& context, float* left, float* right, int frames,
                         double samplesPerBeat) noexcept;
     void automateInsert(const AutomationRender& lane, int64_t position, int length, bool moving) noexcept;
@@ -142,6 +160,15 @@ private:
     int64_t expectedPosition_ = -1;  // where playback continues if the playhead doesn't jump
     bool playing_ = false;
     bool chasePending_ = false;  // playback just started: its first segment chases notes
+    int64_t countIn_ = 0;        // samples of count-in still to come before the playhead moves
+    int64_t countInTotal_ = 0;
+
+    // The live callback's inputs, and what records them (live renders only).
+    const float* const* inputs_ = nullptr;
+    int numInputs_ = 0;
+    int inputOffset_ = 0;  // the current chunk's first frame in them
+    RecordingSession* recording_ = nullptr;
+    std::vector<float> silence_, recordScratch_;
 
     std::vector<float> trackLeft_, trackRight_, masterLeft_, masterRight_;
     std::vector<float> warpLeft_, warpRight_;  // one warped clip's audio, before gain and fades

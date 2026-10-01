@@ -316,3 +316,56 @@ def test_turning_warp_off_trims_like_a_tempo_change(editor):
     # Unwarped, 2 s of audio is 4 beats at 120 BPM: cut where the next clip starts.
     editor.update_clips([(t.id, "w")], lambda c: replace(c, warp=False), "Toggle Warp")
     assert editor.project.clip(t.id, "w").end_beat(TEMPO) == pytest.approx(3.0)
+
+
+def test_track_input_and_monitoring_are_undoable_arming_is_not(editor):
+    a, b = editor.add_audio_track(), editor.add_audio_track()
+    midi = editor.add_midi_track()
+    steps = editor.undo_stack.count()
+    editor.set_track_input(a.id, (2, 3))
+    editor.set_track_monitor(a.id, "in")
+    assert (a.input, a.monitor) == ((2, 3), "in") and editor.undo_stack.count() == steps + 2
+    with pytest.raises(ValueError):
+        editor.set_track_monitor(a.id, "loud")
+    with pytest.raises(ValueError):
+        editor.set_track_input(a.id, (0, 1, 2))
+    editor.undo_stack.undo()
+    editor.undo_stack.undo()
+    assert (a.input, a.monitor) == ((), "auto")
+
+    editor.arm_tracks([a.id], True)
+    editor.arm_tracks([b.id, midi.id], True, exclusive=True)  # the others are disarmed; MIDI tracks don't arm yet
+    assert (a.armed, b.armed, midi.armed) == (False, True, False)
+    editor.arm_tracks([a.id], True, exclusive=False)
+    assert (a.armed, b.armed) == (True, True)
+    editor.arm_tracks([a.id, b.id], False)
+    assert (a.armed, b.armed) == (False, False)
+    assert editor.undo_stack.index() == steps and editor.undo_stack.count() == steps + 2  # still redoable
+
+
+def test_recorded_takes_become_clips_replacing_what_was_under_them(editor):
+    from gilstudio.model.editor import RecordedTake
+
+    project = editor.project
+    track = editor.add_audio_track()
+    editor.add_clips(track.id, 0.0, [("C:/x/loop.wav", 4.0)])  # 8 beats at 120 BPM
+    before = list(track.clips)
+    takes = [RecordedTake(track.id, "C:/rec/take 1.wav", start_sec=1.0, duration_sec=1.5),  # beats 2..5
+             RecordedTake("gone", "C:/rec/other.wav", 0.0, 1.0)]  # its track was deleted meanwhile
+    refs = editor.add_recordings(takes)
+    assert editor.undo_stack.undoText() == "Record"
+    assert len(refs) == 1 and refs[0][0] == track.id
+    take = project.clip(*refs[0])
+    assert (take.path, take.start_beat, take.duration_sec, take.offset_sec) == ("C:/rec/take 1.wav", 2.0, 1.5, 0.0)
+    assert spans(track.clips) == [(0, 2), (2, 5), (5, 8)]  # overdubbed: the take wins
+    editor.undo_stack.undo()  # the take goes, and with it the project's reference to its file
+    assert track.clips == before
+    assert not any(c.path == "C:/rec/take 1.wav" for t in project.tracks for c in t.clips)
+    editor.undo_stack.redo()
+    assert spans(track.clips) == [(0, 2), (2, 5), (5, 8)]
+
+    # A take that began before the timeline (recorded from the start, heard late) starts at 0.
+    refs = editor.add_recordings([RecordedTake(track.id, "C:/rec/take 2.wav", -0.25, 1.0)])
+    take = project.clip(*refs[0])
+    assert (take.start_beat, take.offset_sec, take.duration_sec, take.source_duration_sec) == (0.0, 0.25, 0.75, 1.0)
+    assert editor.add_recordings([RecordedTake(track.id, "C:/rec/empty.wav", -2.0, 1.0)]) == []

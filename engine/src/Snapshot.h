@@ -144,8 +144,32 @@ struct StripRender {
     AutomationRender volume, pan;              // of its mixer
 };
 
+// Where a strip's input comes from: a routing edge into it. For now the
+// device's inputs (a mono channel or a stereo pair); later another strip's
+// output (resampling) is another source.
+struct InputEdge {
+    enum class Source : uint8_t { None, Device };
+    Source source = Source::None;
+    // Indices into the device's open inputs (the callback's order); -1: not open
+    // (the input is silent). A mono input has both the same.
+    int left = -1;
+    int right = -1;
+
+    bool fromDevice() const noexcept { return source == Source::Device; }
+};
+
+// When a track hears its input instead of its clips (input monitoring).
+enum class MonitorMode : uint8_t {
+    Off,   // never
+    In,    // always
+    Auto,  // while armed, unless it plays back without recording
+};
+
 struct TrackRender : StripRender {
     uint32_t id = 0;
+    InputEdge input;
+    MonitorMode monitor = MonitorMode::Auto;
+    bool armed = false;
     std::vector<ClipRender> clips;  // sorted by start
     int64_t maxClipLength = 0;      // bounds the binary search window
     std::vector<NoteRender> notes;  // sorted by start

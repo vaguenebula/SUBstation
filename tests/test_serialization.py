@@ -129,9 +129,26 @@ def test_old_project_files_load_unchanged():
     assert [t.id for t in project.tracks] == ["t1"] and project.tempo == 128.0
     # Saved again, it says the same, and that the master has no devices.
     saved = project_to_dict(project)
-    assert saved["version"] == 5 and saved["master"] == {**old["master"], "devices": []}
-    assert saved["tracks"] == old["tracks"]
+    assert saved["version"] == 6 and saved["master"] == {**old["master"], "devices": []}
+    # Tracks from before version 6 have no input, Auto monitoring and aren't armed.
+    assert saved["tracks"] == [{**t, "input": [], "monitor": "auto", "armed": False} for t in old["tracks"]]
     # Very old files have no master at all.
     del old["master"]
     load_into(project, old)
     assert (project.master.volume_db, project.master.devices, project.master.automation) == (0.0, [], {})
+
+
+def test_roundtrip_keeps_inputs_monitoring_and_arming(tmp_path):
+    project = make_project(str(tmp_path / "kick.wav"))
+    project.tracks[0].input, project.tracks[0].monitor, project.tracks[0].armed = (2, 3), "in", True
+    project.tracks[1].input = (0,)
+    target = tmp_path / "song.gilproj"
+    save_project(project, target)
+    loaded = Project()
+    load_project(loaded, target)
+    assert [(t.input, t.monitor, t.armed) for t in loaded.tracks] == [((2, 3), "in", True), ((0,), "auto", False)]
+    # Anything this version doesn't know comes back as no input, Auto.
+    data = json.loads(target.read_text())
+    data["tracks"][0].update(input=[0, 1, 2], monitor="sometimes")
+    load_into(loaded, data)
+    assert (loaded.tracks[0].input, loaded.tracks[0].monitor) == ((), "auto")

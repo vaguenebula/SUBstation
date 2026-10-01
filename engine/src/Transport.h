@@ -15,6 +15,7 @@ struct TransportCommand {
     enum class Type : uint8_t { Play, Stop, Locate };
     Type type = Type::Stop;
     double beat = 0.0;  // Locate target
+    double countInBeats = 0.0;  // Play: the metronome counts in this long before the playhead moves
 };
 
 // A note played by hand (e.g. clicking the piano roll), sent straight to a
@@ -37,6 +38,7 @@ struct SharedState {
 
     // Audio thread -> API.
     std::atomic<bool> playing{false};
+    std::atomic<bool> countingIn{false};  // playing, but the count-in comes first
     std::atomic<int64_t> positionSamples{0};
     std::atomic<double> positionBeats{0.0};
     std::atomic<bool> previewActive{false};

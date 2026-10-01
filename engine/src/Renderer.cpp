@@ -8,9 +8,11 @@ namespace gil {
 void Renderer::prepare(double sampleRate) {
     sampleRate_ = sampleRate;
     for (auto* buffer : {&trackLeft_, &trackRight_, &masterLeft_, &masterRight_, &warpLeft_, &warpRight_, &autoGain_,
-                         &autoPanLeft_, &autoPanRight_}) {
+                         &autoPanLeft_, &autoPanRight_, &silence_}) {
         buffer->assign(kMaxBlock, 0.f);
     }
+    recordScratch_.assign(2 * kMaxBlock, 0.f);
+    countIn_ = countInTotal_ = 0;
     metronome_.prepare(sampleRate);
     previewSource_ = nullptr;
     // Processors are prepared (silenced) along with the renderer.
@@ -49,9 +51,15 @@ void Renderer::applyCommand(const TransportCommand& command) noexcept {
     switch (command.type) {
         case TransportCommand::Type::Play:
             chasePending_ = chasePending_ || !playing_;  // (live playback only: offline renders start clean)
+            if (!playing_ && command.countInBeats > 0.0 && samplesPerBeat_ > 0.0) {
+                countIn_ = countInTotal_ = std::llround(command.countInBeats * samplesPerBeat_);
+            }
             playing_ = true;
             break;
-        case TransportCommand::Type::Stop: playing_ = false; break;
+        case TransportCommand::Type::Stop:
+            playing_ = false;
+            countIn_ = 0;
+            break;
         case TransportCommand::Type::Locate:
             setPosition(std::llround(std::max(0.0, command.beat) * samplesPerBeat_));
             break;
@@ -75,17 +83,25 @@ void Renderer::publishTransport(SharedState& shared) const noexcept {
     shared.positionSamples.store(position_, std::memory_order_relaxed);
     shared.positionBeats.store(samplesPerBeat_ > 0.0 ? position_ / samplesPerBeat_ : 0.0, std::memory_order_relaxed);
     shared.playing.store(playing_, std::memory_order_relaxed);
+    shared.countingIn.store(playing_ && countIn_ > 0, std::memory_order_relaxed);
 }
 
-void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, float* const* outputs,
-                           uint32_t numOutputs, uint32_t frames) noexcept {
+void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, const AudioIO& io,
+                           RecordingSession* recording) noexcept {
     syncTempo(snap);
     drainCommands(shared);
     drainPreviewNotes(shared);
+    inputs_ = io.inputs;
+    numInputs_ = static_cast<int>(io.numInputs);
+    recording_ = recording;
+    float* const* outputs = io.outputs;
+    const uint32_t numOutputs = io.numOutputs;
+    const uint32_t frames = io.frames;
 
     uint32_t done = 0;
     while (done < frames) {
         const int n = static_cast<int>(std::min<uint32_t>(kMaxBlock, frames - done));
+        inputOffset_ = static_cast<int>(done);
         renderChunk(snap, n,
                     {true, snap.loopEnabled, shared.metronome.load(std::memory_order_relaxed)});
         numPreviewNotes_ = 0;  // played in the first chunk
@@ -102,6 +118,9 @@ void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, floa
         shared.pushScope(masterLeft_.data(), masterRight_.data(), n);
         done += static_cast<uint32_t>(n);
     }
+    inputs_ = nullptr;
+    numInputs_ = 0;
+    recording_ = nullptr;
     publishTransport(shared);
 }
 
@@ -131,11 +150,18 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     numTicks_ = 0;
     if (playing_) {
         int done = 0;
-        bool chase = chasePending_;
-        chasePending_ = false;
+        if (countIn_ > 0) {  // clicks only: the playhead waits
+            done = static_cast<int>(std::min<int64_t>(frames, countIn_));
+            scheduleCountIn(snap, done);
+            countIn_ -= done;
+        }
+        bool chase = chasePending_ && done < frames;
+        if (done < frames) chasePending_ = false;
+        // Recording goes straight on: the loop doesn't wrap (punching in and out of it comes later).
+        const bool loop = flags.loop && !recording_;
         while (done < frames) {
             int length = frames - done;
-            const bool looping = flags.loop && numSegments_ < kMaxSegments - 1;
+            const bool looping = loop && numSegments_ < kMaxSegments - 1;
             if (looping && position_ < snap.loopEnd && position_ + length > snap.loopEnd) {
                 length = static_cast<int>(snap.loopEnd - position_);
             }
@@ -158,7 +184,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     context.timeSigNum = snap.timeSigNum;
     context.timeSigDen = snap.timeSigDen;
     context.playing = playing_;
-    context.looping = flags.loop;
+    context.looping = flags.loop && !recording_;
     context.loopStartBeat = snap.loopStart / spb;
     context.loopEndBeat = snap.loopEnd / spb;
     context.offline = !flags.live;
@@ -170,6 +196,8 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
             break;
         }
     }
+
+    if (recording_ && numSegments_ > 0) recordInput();
 
     float* masterL = masterLeft_.data();
     float* masterR = masterRight_.data();
@@ -184,7 +212,12 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
         std::fill_n(left, frames, 0.f);
         std::fill_n(right, frames, 0.f);
 
-        for (int s = 0; s < numSegments_; ++s) renderClips(track, segments_[s], snap.clipFadeSamples, voices);
+        const bool monitored = isMonitored(track, flags);
+        if (monitored) {
+            readInput(track.input, left, right, frames);
+        } else {
+            for (int s = 0; s < numSegments_; ++s) renderClips(track, segments_[s], snap.clipFadeSamples, voices);
+        }
         if (!track.notes.empty() || numActiveNotes_ > 0 || numPreviewNotes_ > 0) {
             buildNoteEvents(track);
         } else {
@@ -196,7 +229,8 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
         const TrackParams& params = *track.params;
         const bool audible = !params.mute.load(std::memory_order_relaxed) &&
                              (!anySolo || params.solo.load(std::memory_order_relaxed));
-        processStrip(snap, track, context, left, right, frames, audible, flags, delay);
+        processStrip(snap, track, context, left, right, frames, audible, flags, delay,
+                     compensationFor(track, monitored));
         for (int i = 0; i < frames; ++i) {
             masterL[i] += left[i];
             masterR[i] += right[i];
@@ -208,7 +242,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     // 3. The master strip (it never mutes, and nothing is later than it: no compensation).
     if (snap.master.params) {
         numEvents_ = 0;
-        processStrip(snap, snap.master, context, masterL, masterR, frames, true, flags, nullptr);
+        processStrip(snap, snap.master, context, masterL, masterR, frames, true, flags, nullptr, 0);
     }
 
     // 4. Metronome, after the master fader (a click may still be ringing out).
@@ -225,10 +259,75 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
 
 void Renderer::processStrip(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
                             float* left, float* right, int frames, bool audible, ChunkFlags flags,
-                            DelayLine* delay) noexcept {
+                            DelayLine* delay, int compensation) noexcept {
     processInserts(strip, context, left, right, frames, snap.samplesPerBeat());
-    if (delay) delay->process(left, right, frames, strip.compensation);
+    if (delay) delay->process(left, right, frames, compensation);
     applyFader(snap, *strip.params, strip.volume, strip.pan, audible, left, right, frames, flags.live);
+}
+
+int Renderer::compensationFor(const StripRender& strip, bool monitored) noexcept {
+    // Strips are delayed to line up with the one whose devices add the most
+    // latency (strip.compensation, worked out with the snapshot). The exception:
+    // a monitored strip plays its live input as soon as it can, so a player hears
+    // themselves with only the latency of the strip's own devices (monitoring
+    // latency), not every other track's.
+    return monitored ? 0 : strip.compensation;
+}
+
+bool Renderer::isMonitored(const TrackRender& track, ChunkFlags flags) const noexcept {
+    if (!flags.live || !track.input.fromDevice()) return false;  // offline renders play the arrangement
+    switch (track.monitor) {
+        case MonitorMode::In: return true;
+        case MonitorMode::Auto: return track.armed && (!playing_ || recording_ != nullptr);
+        case MonitorMode::Off: break;
+    }
+    return false;
+}
+
+const float* Renderer::inputChannel(int index, int offset) const noexcept {
+    if (index < 0 || index >= numInputs_ || !inputs_) return silence_.data() + offset;  // not open
+    return inputs_[index] + inputOffset_ + offset;
+}
+
+void Renderer::readInput(const InputEdge& input, float* left, float* right, int frames) const noexcept {
+    std::copy_n(inputChannel(input.left, 0), frames, left);
+    std::copy_n(inputChannel(input.right, 0), frames, right);
+}
+
+void Renderer::recordInput() noexcept {
+    RecordingSession& session = *recording_;
+    for (int s = 0; s < numSegments_; ++s) {
+        if (session.interrupted()) return;
+        const Segment& segment = segments_[s];
+        for (const auto& take : session.takes()) {
+            if (take->start.load(std::memory_order_relaxed) == RecordingTake::kNotStarted) {
+                take->start.store(segment.position, std::memory_order_release);
+            } else if (segment.jump) {  // located, or stopped and started again: the takes end
+                session.interrupt();
+                return;
+            }
+        }
+        for (const auto& take : session.takes()) {
+            take->push(inputChannel(take->inputs[0], segment.offset), inputChannel(take->inputs[1], segment.offset),
+                       segment.length, recordScratch_.data());
+        }
+    }
+}
+
+void Renderer::scheduleCountIn(const RenderSnapshot& snap, int length) noexcept {
+    // A tick every beat (of the time signature) from the count-in's start, the
+    // first of each bar accented; it ends where the playhead starts.
+    const double tickLength = snap.samplesPerBeat() * 4.0 / snap.timeSigDen;
+    if (tickLength <= 0.0) return;
+    const int64_t from = countInTotal_ - countIn_;
+    for (int64_t k = static_cast<int64_t>(std::ceil(from / tickLength - 1e-9));; ++k) {
+        const int64_t t = std::llround(k * tickLength);
+        if (t < from) continue;
+        if (t >= from + length || t >= countInTotal_) break;
+        if (numPendingTicks_ == kMaxPendingTicks) break;
+        const int64_t time = outputTime_ + (t - from) + snap.outputLatency();  // as late as the tracks' audio
+        pendingTicks_[(pendingTickStart_ + numPendingTicks_++) % kMaxPendingTicks] = {time, k % snap.timeSigNum == 0};
+    }
 }
 
 void Renderer::processInserts(const StripRender& strip, ProcessContext& context, float* left, float* right,
@@ -243,12 +342,17 @@ void Renderer::processInserts(const StripRender& strip, ProcessContext& context,
 
     // One call per continuous stretch of the timeline, with the events that fall in it.
     const bool split = playing_ && numSegments_ > 0;
-    const int slices = split ? numSegments_ : 1;
+    // A count-in that ends in this chunk: the playhead stood still until the first segment.
+    const int lead = split && segments_[0].offset > 0 ? 1 : 0;
+    const int slices = split ? numSegments_ + lead : 1;
     int next = 0;
     for (int s = 0; s < slices; ++s) {
-        const int offset = split ? segments_[s].offset : 0;
-        const int length = split ? segments_[s].length : frames;
-        const int64_t position = split ? segments_[s].position : position_;  // stopped: it stays put
+        const int segment = s - lead;
+        const bool moving = split && segment >= 0;
+        const int offset = moving ? segments_[segment].offset : 0;
+        const int length = moving ? segments_[segment].length : split ? segments_[0].offset : frames;
+        // Stopped (or counting in): it stays put.
+        const int64_t position = moving ? segments_[segment].position : split ? segments_[0].position : position_;
         const int first = next;
         while (next < numEvents_ && (s == slices - 1 || events_[next].sampleOffset < offset + length)) {
             events_[next].sampleOffset -= offset;
@@ -262,7 +366,7 @@ void Renderer::processInserts(const StripRender& strip, ProcessContext& context,
             Processor& insert = *strip.inserts[i];
             if (!insert.isEnabled()) continue;
             for (const AutomationRender& lane : strip.automation) {
-                if (lane.insert == static_cast<int>(i)) automateInsert(lane, position, length, split);
+                if (lane.insert == static_cast<int>(i)) automateInsert(lane, position, length, moving);
             }
             insert.process(context, channels, 2, length);
             insert.clearAutomation();
@@ -298,6 +402,9 @@ void Renderer::fillLane(const AutomationRender& lane, int frames, float* out) co
     if (!playing_ || numSegments_ == 0) {
         std::fill_n(out, frames, automationValue(lane.nodes, automationTime(position_, lane.latency)));
         return;
+    }
+    if (segments_[0].offset > 0) {  // the end of a count-in: still at the first segment's start
+        std::fill_n(out, segments_[0].offset, automationValue(lane.nodes, automationTime(segments_[0].position, lane.latency)));
     }
     for (int s = 0; s < numSegments_; ++s) {
         const Segment& segment = segments_[s];

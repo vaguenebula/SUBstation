@@ -30,10 +30,16 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - Synth: a polyphonic subtractive synth (16 voices) with sine, triangle, saw and square oscillators (band-limited saw and square), an ADSR envelope, a resonant low-pass filter and volume. Velocity sets the level.
 - Over The Top: a built-in multiband upward/downward compressor in the style of the one every drop uses, with a single big *Soundgoodize* knob (depth) and an output trim. Three bands (split at 88 Hz and 2.5 kHz), each squashed from above and dragged up from below. At 0 % it passes the audio through untouched.
 - VST3 plug-ins, instruments and effects (see below).
-- Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
+- Track headers (on the right, like Ableton): activator (mute), solo, arm, volume, pan, input and monitoring (audio tracks), meters, rename, colour, resize.
   - Click a track's header to select it; **Ctrl-click** adds a track to the selection (or takes it out), **Shift-click** selects every track from the last one clicked. Delete deletes the selected tracks.
   - Soloing a track unsoloes the others, and unsoloing one unsoloes every track; **Ctrl-click** a solo button to solo (or unsolo) just that track, leaving the others as they are. Clicking the solo of a selected track solos (or unsoloes) all the selected tracks. **S** solos the selected tracks (unsoloing the rest), or, if they all are soloed already, unsoloes every track.
 - Master track (volume, pan, and audio effects: click its header to show its chain in the device view), metronome, loop brace, follow mode, CPU meter.
+- **Audio recording** (Arrangement recording, as in Ableton), from an ASIO driver's inputs.
+  - An audio track's header has an **arm** button (●; arming one disarms the others unless Ctrl is held, and clicking a selected track's arms all the selected tracks), its **input** (one of the driver's inputs, or a pair of them for stereo) and its **monitoring**: *In* (it always hears its input, not its clips), *Auto* (it hears its input while armed, unless playing back without recording) or *Off*. A monitored track's input goes through its devices and mixer like any audio; it isn't delayed to line up with latent plug-ins on other tracks, so you hear yourself with only the latency of the track's own devices. Choosing an input the driver hasn't open opens it (and keeps it open next time).
+  - **Record** (the button next to Stop, or **F9**) records every armed track that has an input: from the insert marker, after the **count-in** chosen next to it (none, 1, 2 or 4 bars: the metronome counts in even if it is off) if stopped, or from the playhead while playing (punch in). Record again to stop recording and keep playing; Stop or Space stop both. While recording the loop doesn't wrap.
+  - A take grows on its track as it records, with its waveform. When recording stops, the takes become clips in one undo step, replacing what was under them (overdub); undo takes them away again. They are WAV files (32-bit float) in the project's `Recordings` folder (for a project not saved yet, `Music\GIL Studio\Recordings`).
+  - Takes land where they were played: the engine moves them back by the driver's input and output latency and the delay compensation's lag, so what you played along to lines up.
+  - Changing the audio device (or its sample rate, or a reset by the driver) ends a recording; what was recorded so far is kept. So does moving the playhead.
 - An oscilloscope next to the transport controls shows the master output as it plays (as in FL Studio). It starts each picture at a rising zero crossing, so steady tones stand still.
 - **Automation**, as in Ableton's arrangement, of every device parameter (built-in devices and plug-ins alike) and of each track's and the master's volume and pan.
   - **A** shows (or hides) the automation of every track and the master. A track's automation shows in its own lane, over its clips (the clips' title bar still moves and selects them), with the parameter chosen in its header: a device chooser (*Mixer* or one of its devices) and a parameter chooser; automated ones are marked with a red dot. **+** shows another parameter in a lane below the track (**−** removes it). Right-click a track header (or the master's) to show or hide its automation.
@@ -59,7 +65,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - **Next time** the program opens the same driver. If it can't run as saved (another clock, fewer outputs), it opens with the driver's own settings; if the driver is gone, with the system's default output (WASAPI).
 - Every sample format drivers use is converted (16, 24 and 32-bit integers in any alignment, 32 and 64-bit floats, either byte order); DSD drivers aren't supported. Integer formats are clipped at full scale.
 - Only one ASIO driver can be open in a program (the ASIO callbacks have no way to tell drivers apart).
-- **Inputs** already work in the engine: `open_device(..., input_channels=[...])` opens a driver's inputs, and every buffer of them reaches the audio callback (with its sample position and time), where the engine meters them (`take_input_meters()`). The preferences don't offer inputs yet; recording will.
+- **Inputs**: a track's input opens the driver's inputs it needs (`open_device(..., input_channels=[...])`); every buffer of them reaches the audio callback (with its sample position and time), where the engine meters them (`take_input_meters()`), monitors and records them.
 
 ## VST3 plug-ins
 
@@ -135,6 +141,7 @@ python -m pytest
 ```
 
 - ASIO tests use a fake ASIO driver built with the engine (`tests/asio_driver`): a real in-process COM object, loaded from its DLL rather than registered (`GILSTUDIO_ASIO_DRIVERS`), so they never see the installed drivers and need no sound card. Its hooks (called through ctypes) let a test drive it a buffer at a time, feed its inputs, read back the bytes the engine wrote to its outputs, and send the engine what drivers send (reset requests, new latencies, a new sample rate). They check every sample format against numpy's decoding, output channels and mono, inputs, rates and buffer sizes, resets and the control panel, errors, playing on the driver's own thread, and the preferences and start-up in the application. They are skipped when the engine was built without the ASIO SDK.
+- Recording tests use the same driver; it can also loop an output back into an input, as a cable would, delayed by the latencies it reports. A take of what the engine played then lines up with the timeline sample for sample, with and without latent plug-ins (on a track or the master). Others check input monitoring (its modes, and that a monitored track isn't delayed by another track's latency), stereo and mono takes and their live peaks, punching in, the count-in, what ends a recording (a locate, a device change), and in the application: the header controls, the record button, takes becoming clips in one undo step (and undo removing them), Space and device changes during recording.
 - Engine tests render offline, so no audio device is needed. They check sample-exact clip placement, gain/pan/mute/solo, looping, tempo changes, the metronome, fades, the Utility device and export; and automation: volume and pan (tracks and master) sample by sample, curves, device parameters (split exactly where they change, discrete ones in steps), and the normalized mapping of parameters.
 - Warp tests check that warped clips land on their beats at any tempo, keep their pitch, start sample-aligned (also after a locate), transpose to the right frequency, and that Re-Pitch filters rather than aliases.
 - MIDI engine tests check that notes start on their sample and follow the tempo, that the Synth plays the right pitch and level, and that loop wraps and offline renders leave no hanging notes.
@@ -204,7 +211,9 @@ browser/src/                   C++: the browser's backend, module gilstudio._bro
 benchmarks/                    the browser's benchmarks and their results (not run by pytest)
 engine/src/                    C++: everything on the audio thread, and plug-in hosting
   Engine        public API; edit model; builds and publishes render snapshots
-  Renderer      mixing: strips (inserts -> delay compensation -> fader/pan), tracks -> master strip; loop; metronome; preview; automation
+  Renderer      mixing: strips (inserts -> delay compensation -> fader/pan), tracks -> master strip; loop; metronome;
+                count-in; preview; automation; input monitoring; hands input to the recorder
+  Recorder      recording: lock-free sample rings, live peaks, the disk-writer thread
   Automation.h  envelopes: breakpoints, curves, evaluation, the mixer's lane mappings
   Warp          stretch voices (time stretch / pitch shift) and the Re-Pitch resampler
   AudioSource   decoding (WAV/FLAC/MP3) at the engine rate + peak mipmaps
@@ -225,7 +234,13 @@ tests/asio_driver/             the fake ASIO driver the tests use
 
 **Audio devices**
 - Each driver type is an `AudioBackend` (engine/src/AudioDevice.h); `AudioDevice` opens a `DeviceConfig` (driver type, device, rate, buffer size, the device's input and output channels) with whichever one it names.
-- Devices run duplex: each callback gets the open inputs and fills the open outputs, as separate float buffers of one length, with the device's sample position and the steady-clock time the callback began. That is what recording, input monitoring and MIDI input (timestamped against the same clock) will need; WASAPI opens outputs only so far.
+- Devices run duplex: each callback gets the open inputs and fills the open outputs, as separate float buffers of one length, with the device's sample position and the steady-clock time the callback began. Recording and input monitoring use them; MIDI input will be timestamped against the same clock. WASAPI opens outputs only so far.
+
+**Recording**
+- A track's input is a routing edge into its strip (`InputEdge` in the snapshot): for now a mono channel or a stereo pair of the device's inputs; later another track's output. A monitored track's strip takes it instead of its clips; its delay compensation is left out (`Renderer::compensationFor`).
+- While recording, the renderer copies the recorded tracks' input into lock-free rings (`engine/src/Recorder.h`), with the timeline position where it was taken. A disk-writer thread empties them into WAV files; the audio thread never touches a file. If the writer falls behind and a ring fills, the input is dropped but its place is kept (the writer puts silence there) and the take reports how much was lost.
+- A take's start is moved back by the output lag (delay compensation and the master's devices) and the driver's output and input latency: a sample comes back through the input that much after the timeline was heard. The live waveform's peaks come through their own queue, not from the file.
+- Anything that changes the device, and offline renders, end a recording first; the takes so far are kept.
 - A driver's events (the device went away, a reset request, new latencies) are flags the audio side sets; the UI takes them from `Engine::takeDeviceEvent()` and answers a reset with `reopenDevice()`, which asks the driver for the buffer size and sample rate it now has before closing it.
 - ASIO drivers are COM objects created on the UI thread, which has to be a single-threaded COM apartment for that: the engine makes its thread one before miniaudio would make it multithreaded (in the application Qt already has). A thread that is multithreaded all the same loads the driver from its DLL. The audio thread calls nothing on the driver but `outputReady()`.
 - A driver's control panel may run a message loop; the device can't be closed or reset until it returns.
@@ -279,7 +294,7 @@ tests/asio_driver/             the fake ASIO driver the tests use
 
 ## Not yet implemented
 
-- Recording (audio or MIDI), input monitoring and MIDI input from controllers. (ASIO inputs already reach the engine; WASAPI has outputs only.)
+- MIDI recording and MIDI input from controllers; recording from WASAPI devices (it has outputs only); punching in and out at the loop, and stacking takes while looping.
 - Looping MIDI clips, MIDI effects, and editing several MIDI clips in the piano roll at once.
 - Recording automation (writing it while playing), and tempo changes over time. Automation lanes below a track have a fixed height.
 - CLAP plug-ins; side-chain inputs and multi-output instruments (plug-ins get the main buses only); MIDI effect plug-ins.

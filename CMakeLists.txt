@@ -128,6 +128,7 @@ nanobind_add_module(_engine NB_STATIC
     engine/src/backends/WasapiBackend.cpp
     engine/src/AudioSource.cpp
     engine/src/Renderer.cpp
+    engine/src/Recorder.cpp
     engine/src/Metronome.cpp
     engine/src/Warp.cpp
     engine/src/processors/BuiltinProcessor.cpp

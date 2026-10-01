@@ -8,6 +8,7 @@ EXPORTS
     GilTestAsio_SetLatencies
     GilTestAsio_SetManual
     GilTestAsio_SetInputLevel
+    GilTestAsio_SetLoopback
     GilTestAsio_FailInit
     GilTestAsio_SetControlPanelChange
     GilTestAsio_Process

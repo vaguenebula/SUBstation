@@ -6,7 +6,8 @@ APP_NAME = "GIL Studio"
 
 # The engine's bindings this code needs (engine/src/bindings.cpp: API_VERSION).
 # 2: ProcessorEventType.PARAM_TOUCHED. 3: the master (track id MASTER) has devices.
-ENGINE_API = 3
+# 4: input, monitoring and recording.
+ENGINE_API = 4
 
 
 def engine_mismatch() -> str | None:

@@ -42,6 +42,9 @@ LEGACY_WARP_MODES = {"Beats": "Transients", "Tones": "Standard", "Complex": "Sta
 # Audio tracks hold audio clips; MIDI tracks hold MIDI clips and an instrument.
 TRACK_KINDS = ("audio", "midi")
 MASTER_KIND = "master"  # the master's kind: no clips, effects only
+# Input monitoring: when a track hears its input instead of its clips. "auto":
+# while armed, unless it plays back without recording (as in Ableton).
+MONITOR_MODES = ("off", "in", "auto")
 MASTER_COLOR = "#a0a0a0"
 
 DEFAULT_TRACK_HEIGHT = 80
@@ -205,6 +208,10 @@ class Track:
     kind: str = "audio"  # one of TRACK_KINDS (or MASTER_KIND: the master); fixed for the track's life
     automation: dict[str, Envelope] = field(default_factory=dict)  # target key -> envelope (never empty)
     automation_view: AutomationView = field(default_factory=AutomationView)
+    # Audio input: device channels (0-based): () none, (c,) mono, (l, r) a stereo pair.
+    input: tuple[int, ...] = ()
+    monitor: str = "auto"  # one of MONITOR_MODES
+    armed: bool = False  # records when recording starts (saved, not undone)
 
     @property
     def is_midi(self) -> bool:

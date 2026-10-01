@@ -56,7 +56,7 @@ class Driver:
         signatures = {
             "Reset": (None, []), "SetSampleType": (None, [ctypes.c_long]),
             "SetBufferSizes": (None, [ctypes.c_long] * 4), "SetLatencies": (None, [ctypes.c_long] * 2),
-            "SetManual": (None, [ctypes.c_int]), "SetInputLevel": (None, [ctypes.c_int, ctypes.c_double]),
+            "SetManual": (None, [ctypes.c_int]), "SetInputLevel": (None, [ctypes.c_int, ctypes.c_double]), "SetLoopback": (None, [ctypes.c_int] * 2),
             "FailInit": (None, [ctypes.c_char_p]), "SetControlPanelChange": (None, [ctypes.c_long, ctypes.c_double]),
             "Process": (ctypes.c_int, [ctypes.c_int]),
             "ReadOutput": (ctypes.c_long, [ctypes.c_int, ctypes.c_void_p, ctypes.c_long]),
