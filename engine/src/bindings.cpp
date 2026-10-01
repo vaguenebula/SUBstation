@@ -321,6 +321,20 @@ NB_MODULE(_engine, m) {
              "The next device event: '', 'stopped', 'rerouted', 'reset' (call reopen_device()) or 'latency'.")
         .def("take_input_meters", &Engine::takeInputMeters,
              "Peak level of each open input channel (see DeviceStatus.input_channels) since the last call.")
+        .def(
+            "master_scope",
+            [](const Engine& self, size_t frames) {
+                auto buffer = std::make_unique<std::vector<float>>(self.masterScope(frames));
+                const size_t size = buffer->size();
+                float* data = buffer->data();
+                nb::capsule owner(buffer.release(),
+                                  [](void* p) noexcept { delete static_cast<std::vector<float>*>(p); });
+                return nb::ndarray<nb::numpy, float, nb::ndim<1>, nb::c_contig>(data, {size}, owner);
+            },
+            "frames"_a,
+            "The last `frames` samples of the master output as a float32 array (mono, oldest first; at most 4096).")
+        .def_prop_ro("master_scope_written", &Engine::masterScopeWritten,
+                     "Samples of the master output played so far (stands still while no device runs).")
         // Sources
         .def("load_source", &Engine::loadSource, "path"_a, ReleaseGil(),
              "Decode an audio file at the engine sample rate (cached). Blocking; call from a worker thread.")

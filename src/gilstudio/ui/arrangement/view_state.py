@@ -114,7 +114,7 @@ class ViewState(QObject):
 
 
 class Selection(QObject):
-    """The selected track (or MASTER), the insert (start) marker, and a time selection: a beat
+    """The selected track (or tracks, or MASTER), the insert (start) marker, and a time selection: a beat
     range spanning one or more adjacent tracks. Selecting is always on the grid:
     selecting a clip selects the area it covers.
 
@@ -125,7 +125,11 @@ class Selection(QObject):
     their automation in the range.
 
     Automation breakpoints can be selected too (`points`: owner, key, indices);
-    Delete deletes them."""
+    Delete deletes them.
+
+    Several tracks can be selected (Ctrl-click toggles one, Shift-click selects
+    the tracks from the last one clicked): `track_ids`. `track_id` is the one
+    the device view shows, the last one clicked."""
 
     changed = Signal()
     insert_changed = Signal()
@@ -134,6 +138,8 @@ class Selection(QObject):
         super().__init__(parent)
         self.clips: set[tuple[str, str]] = set()
         self.track_id: str | None = None
+        self._tracks: tuple[str, ...] = ()  # several selected tracks; only while track_id is one of them
+        self._anchor: str | None = None  # where a Shift-click selects tracks from
         self.insert_beat = 0.0
         self.time_range: tuple[float, float, tuple[str, ...]] | None = None  # start, end, track ids
         self._range_selects_clips = False
@@ -148,6 +154,7 @@ class Selection(QObject):
         self.time_range = None
         self.lanes = ()
         self.points = None
+        self._tracks = ()
         if track_id is not None:
             self.track_id = track_id
         self.focus = "clips"
@@ -160,6 +167,7 @@ class Selection(QObject):
         self.time_range = None
         self.lanes = ()
         self.points = (owner, key, indices) if indices else None
+        self._tracks = ()
         if owner != MASTER:
             self.track_id = owner
         self.focus = "automation" if indices else "clips"
@@ -182,7 +190,33 @@ class Selection(QObject):
         if track_id is not None and track_id in track_ids:
             self.track_id = track_id
 
-    def select_track(self, track_id: str | None, focus_track: bool = False) -> None:
+    @property
+    def track_ids(self) -> tuple[str, ...]:
+        """The selected tracks, in the order they were selected (track_id among them)."""
+        if self.track_id in self._tracks:
+            return self._tracks
+        return (self.track_id,) if self.track_id is not None else ()
+
+    def select_track(self, track_id: str | None, focus_track: bool = False, mode: str = "",
+                     order: list[str] | None = None) -> None:
+        """Select a track. `mode` "toggle" (Ctrl-click) adds it to the selected
+        tracks or takes it out; "range" (Shift-click) selects the tracks from the
+        last one clicked to it, in `order` (the tracks top to bottom)."""
+        if mode == "toggle" and track_id is not None:
+            tracks = self.track_ids
+            if track_id in tracks:
+                tracks = tuple(t for t in tracks if t != track_id)
+                track_id = tracks[-1] if tracks else None
+            else:
+                tracks = tracks + (track_id,)
+            self._tracks = tracks
+            self._anchor = track_id
+        elif mode == "range" and track_id is not None and order and self._anchor in order and track_id in order:
+            a, b = order.index(self._anchor), order.index(track_id)
+            self._tracks = tuple(order[min(a, b):max(a, b) + 1])
+        else:
+            self._tracks = ()
+            self._anchor = track_id
         self.track_id = track_id
         if focus_track:
             self.focus = "track"
@@ -209,6 +243,7 @@ class Selection(QObject):
         self.clips = set(clips or ()) if self.time_range else set()
         self.lanes = lanes if self.time_range else ()
         self.points = None
+        self._tracks = ()
         if track_ids:
             self.track_id = track_ids[0]
         self.focus = "clips"
@@ -229,7 +264,9 @@ class Selection(QObject):
         valid_tracks = {t.id for t in project.tracks}
         valid_clips = {(t.id, c.id) for t in project.tracks for c in t.clips}
         clips = self.clips & valid_clips
-        track_id = self.track_id if self.track_id in valid_tracks or self.track_id == MASTER else None
+        tracks = tuple(t for t in self._tracks if t in valid_tracks)
+        track_id = (self.track_id if self.track_id in valid_tracks or self.track_id == MASTER
+                    else (tracks[-1] if tracks else None))
         lanes = tuple(lane for lane in self.lanes if project.has_owner(lane[0]))
         time_range = self.time_range
         if time_range is not None:
@@ -242,9 +279,10 @@ class Selection(QObject):
             indices = frozenset(i for i in indices if i < count)
             points = (owner, key, indices) if indices else None
         if (clips != self.clips or track_id != self.track_id or time_range != self.time_range
-                or lanes != self.lanes or points != self.points):
+                or lanes != self.lanes or points != self.points or tracks != self._tracks):
             self.clips = clips
             self.track_id = track_id
+            self._tracks = tracks
             self.time_range = time_range
             self.lanes = lanes if time_range else ()
             self.points = points

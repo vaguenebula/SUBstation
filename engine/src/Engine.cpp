@@ -192,6 +192,19 @@ std::vector<float> Engine::takeInputMeters() {
     return peaks;
 }
 
+std::vector<float> Engine::masterScope(size_t frames) const {
+    frames = std::min(frames, SharedState::kScopeSize / 2);
+    const uint64_t written = shared_.scopeWritten.load(std::memory_order_acquire);
+    std::vector<float> samples(frames, 0.f);
+    const size_t available = static_cast<size_t>(std::min<uint64_t>(written, frames));
+    const uint64_t first = written - available;
+    for (size_t i = 0; i < available; ++i) {
+        samples[frames - available + i] =
+            shared_.scope[(first + i) & (SharedState::kScopeSize - 1)].load(std::memory_order_relaxed);
+    }
+    return samples;
+}
+
 void Engine::deviceEvent(DeviceEvent event) noexcept {
     pendingDeviceEvents_.fetch_or(static_cast<uint32_t>(event));
 }

@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         self.re_enable_action.setEnabled(False)
         self.bridge.automation_state_changed.connect(
             lambda _owner: self.re_enable_action.setEnabled(self.bridge.has_overrides))
+        self._action(edit, "Solo Selected Tracks", self.solo_selected_tracks, "S")
         edit.addSeparator()
         self._action(edit, "Play / Stop", self.toggle_play, "Space")
         self._action(edit, "Go to Start", lambda: self.locate(0.0), "Home")
@@ -178,7 +179,7 @@ class MainWindow(QMainWindow):
         self._action(create, "Insert &MIDI Track", self.insert_midi_track, "Ctrl+Shift+T")
         self._action(create, "Insert MIDI &Clip", self.insert_midi_clip, ["Ctrl+Shift+D", "Ctrl+Shift+M"])
         create.addSeparator()
-        self._action(create, "Delete Selected Track", self.delete_track)
+        self._action(create, "Delete Selected Tracks", self.delete_track)
 
         view = bar.addMenu("&View")
         self.browser_action = self._action(view, "&Browser", self.browser.setVisible, "Ctrl+Alt+B",
@@ -332,8 +333,16 @@ class MainWindow(QMainWindow):
                                          merge_key=("plugin edit", device_id, param_id, gesture), old=old)
 
     def delete_track(self) -> None:
-        if self.selection.track_id and self.project.has_track(self.selection.track_id):
-            self.editor.delete_tracks([self.selection.track_id])
+        self.editor.delete_tracks([t for t in self.selection.track_ids if self.project.has_track(t)])
+
+    def solo_selected_tracks(self) -> None:
+        """S: solo the selected tracks (and unsolo the rest); if they all are already, unsolo every track."""
+        tracks = [t for t in self.selection.track_ids if self.project.has_track(t)]
+        if tracks:
+            solo = not all(self.project.track(t).solo for t in tracks)
+            if not solo:
+                tracks = [t.id for t in self.project.tracks]
+            self.editor.solo_tracks(tracks, solo, exclusive=True)
 
     def delete_selection(self) -> None:
         selection = self.selection

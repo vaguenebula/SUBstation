@@ -44,6 +44,22 @@ struct SharedState {
     // Peak level of each open input channel (beyond this many, none).
     static constexpr size_t kMaxInputMeters = 256;
     std::array<std::atomic<float>, kMaxInputMeters> inputPeaks{};
+
+    // The latest master output (mono: the mean of left and right), for the
+    // oscilloscope. A ring the audio thread overwrites; scopeWritten counts the
+    // samples written so far. Readers may see a sample being overwritten, which
+    // only matters to a picture.
+    static constexpr size_t kScopeSize = 8192;
+    std::array<std::atomic<float>, kScopeSize> scope{};
+    std::atomic<uint64_t> scopeWritten{0};
+
+    void pushScope(const float* left, const float* right, int frames) noexcept {
+        uint64_t written = scopeWritten.load(std::memory_order_relaxed);
+        for (int i = 0; i < frames; ++i, ++written) {
+            scope[written & (kScopeSize - 1)].store(0.5f * (left[i] + right[i]), std::memory_order_relaxed);
+        }
+        scopeWritten.store(written, std::memory_order_release);
+    }
 };
 
 }  // namespace gil

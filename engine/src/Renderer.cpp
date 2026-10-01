@@ -96,6 +96,7 @@ void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, floa
             std::copy_n(masterRight_.data(), n, outputs[1] + done);
             for (uint32_t c = 2; c < numOutputs; ++c) std::fill_n(outputs[c] + done, n, 0.f);
         }
+        shared.pushScope(masterLeft_.data(), masterRight_.data(), n);
         done += static_cast<uint32_t>(n);
     }
     publishTransport(shared);
