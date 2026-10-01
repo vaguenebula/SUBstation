@@ -143,6 +143,16 @@ def test_legato_joins_notes_and_chords():
     assert notes.legato([Note(E, 0.0, 0.25)], [between], 4.0)[0].length == 1.0
     past_the_end = Note(C, 5.0, 1.0)
     assert notes.legato([past_the_end], [], 4.0) == [past_the_end]
+    # The last target stops at the next note after it, on any key, not the clip's end.
+    after = Note(G, 3.0, 0.5)
+    assert notes.legato([Note(C, 0.0, 0.25), Note(E, 1.0, 0.25)], [after], 4.0)[1].length == 2.0
+
+
+def test_time_scaled_doubles_and_halves_from_the_first_note():
+    group = [Note(C, 1.0, 0.5), Note(E, 2.0, 1.0)]
+    assert notes.time_scaled(group, 2.0) == [Note(C, 1.0, 1.0), Note(E, 3.0, 2.0)]
+    assert notes.time_scaled(group, 0.5) == [Note(C, 1.0, 0.25), Note(E, 1.5, 0.5)]
+    assert notes.time_scaled([], 2.0) == []
 
 
 def test_quantize_moves_starts_onto_the_grid():

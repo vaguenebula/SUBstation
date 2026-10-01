@@ -1,4 +1,4 @@
-"""The note tools: Legato, Quantize and Humanize, in a small floating bar that
+"""The note tools: Legato, timing ×2 and ÷2, Quantize and Humanize, in a small floating bar that
 glides in over the note grid next to a group of notes selected by dragging a
 rubber band or with Ctrl+A. Each tool is one undo step."""
 
@@ -57,7 +57,11 @@ class NoteTools(QWidget):
         self.count = QLabel()
         self.count.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 8pt;")
         self.legato = self._button("Legato", "Make the selected notes last until the next one starts;\n"
-                                             "the last ones until the end of the clip")
+                                             "the last ones until the next note after them, or the end of the clip")
+        self.double_time = self._button("×2", "Double the selected notes' timing: they spread out\n"
+                                              "from the first one and last twice as long")
+        self.half_time = self._button("÷2", "Halve the selected notes' timing: they draw in\n"
+                                            "toward the first one and last half as long")
         self.quantize = self._button("Quantize", "Move the selected notes' starts onto the grid chosen "
                                                  "next to it (Ctrl+U)")
         self.grid = QComboBox()
@@ -79,11 +83,14 @@ class NoteTools(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 5, 4)
         layout.setSpacing(5)
-        for widget in (self.count, _separator(), self.legato, _separator(), self.quantize, self.grid, self.amount,
+        for widget in (self.count, _separator(), self.legato, _separator(), self.double_time,
+                       self.half_time, _separator(), self.quantize, self.grid, self.amount,
                        _separator(), self.humanize, self.humanize_amount):
             layout.addWidget(widget)
 
         self.legato.clicked.connect(roll.legato)
+        self.double_time.clicked.connect(lambda: roll.scale_time(2.0))
+        self.half_time.clicked.connect(lambda: roll.scale_time(0.5))
         self.quantize.clicked.connect(roll.quantize)
         self.humanize.clicked.connect(roll.humanize)
 

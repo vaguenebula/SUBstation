@@ -19,7 +19,8 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
   - Delete, Ctrl+A, Ctrl+D (duplicate), Up/Down (Shift: an octave), Left/Right (a grid step; Shift: a bar).
   - Drag a stem in the velocity lane to change velocities; several selected notes change together.
   - Selecting a group of notes by dragging a rubber band (or with Ctrl+A) brings up a small tool bar that glides in next to them; clicking or drawing single notes doesn't. It acts on the selected notes and hides while you drag them:
-    - **Legato** makes each note last until the next one starts (a chord's notes together); the last ones reach the clip's end. A note never runs into the next note on its own key.
+    - **Legato** makes each note last until the next one starts (a chord's notes together); the last ones reach the next note after them, or the clip's end if there is none. A note never runs into the next note on its own key.
+    - **×2** and **÷2** double or halve the notes' timing: they spread out from (or draw in toward) the first one, and their lengths scale with them.
     - **Quantize** (Ctrl+U) moves note starts onto a grid (1/4 to 1/32, or triplets), by an amount from 0 to 100 %. Lengths stay. With nothing selected, Ctrl+U quantizes every note.
     - **Humanize** nudges starts and velocities at random. At 100 % a note moves by up to a 32nd note and its velocity by up to 24; the default is 25 %.
   - Notes you click, add or move are played on the track's instrument (the headphones button turns this off). The part of the clip that plays is lit; the rest is dimmed.

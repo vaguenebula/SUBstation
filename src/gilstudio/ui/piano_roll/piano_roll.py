@@ -1,7 +1,7 @@
 """Piano roll: the clip view of a MIDI clip, laid out like Ableton's MIDI editor.
 The ruler on top; keys on the left, the notes in the middle, velocities below.
 Selecting a group of notes by dragging (or Ctrl+A) brings up the note tools
-(legato, quantize, humanize) by them.
+(legato, timing ×2 and ÷2, quantize, humanize) by them.
 
 Times are beats of the clip's content (the ruler's 1 is its first beat). The
 part the clip plays in the arrangement is lit; notes outside it are kept but
@@ -185,6 +185,10 @@ class PianoRoll(QWidget):
         clip, targets = self.clip(), self.tool_targets()
         if clip is not None:
             self._apply_tool(targets, notes.legato(targets, clip.notes, clip.window_end), "Legato")
+
+    def scale_time(self, factor: float) -> None:
+        targets = self.tool_targets()
+        self._apply_tool(targets, notes.time_scaled(targets, factor), "Timing ×2" if factor > 1 else "Timing ÷2")
 
     def quantize(self) -> None:
         targets = self.tool_targets()
