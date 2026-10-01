@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import automation
 from .automation import AutomationPoint, AutomationView, Envelope
+from .keys import key_from_name
 from .notes import normalize
 from .project import (
     DEFAULT_TRACK_HEIGHT,
@@ -155,6 +156,7 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
         "format": FORMAT,
         "version": VERSION,
         "tempo": project.tempo,
+        "key": project.key.name if project.key else None,
         "time_signature": [project.time_signature.numerator, project.time_signature.denominator],
         "loop": {"enabled": project.loop_enabled, "start": project.loop_start, "end": project.loop_end},
         "automation_locked": project.automation_locked,
@@ -272,6 +274,7 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
         loop_end=float(loop.get("end", 16.0)),
         master=_master(data.get("master", {})),
         automation_locked=bool(data.get("automation_locked", False)),
+        key=key_from_name(data.get("key")),
         tracks=tracks_from_dict(data, project_file),
         path=project_file,
     )

@@ -1,14 +1,15 @@
-"""Top control bar: tempo, time signature, metronome | transport, oscilloscope | loop, follow, CPU."""
+"""Top control bar: tempo, time signature, metronome, key | transport, oscilloscope | loop, follow, CPU."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QWidget
 
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
 from ..model.editor import ProjectEditor
+from ..model.keys import ALL_KEYS
 from ..model.timebase import TimeSignature, VALID_DENOMINATORS, split_position
 from . import icons
 from .arrangement.view_state import ViewState
@@ -50,6 +51,15 @@ class TransportBar(QWidget):
         self.ts_den = ValueBox(4, 1, 32, decimals=0, choices=VALID_DENOMINATORS, formatter=lambda v: str(int(v)),
                                sample_text="32")
         self.metronome = ToggleButton(icon=icons.metronome(), role="tool", tooltip="Metronome")
+        # The project's key: audio added with a key in its file name is transposed to it.
+        self.key = QComboBox()
+        self.key.addItem("No Key")
+        for key in ALL_KEYS:
+            self.key.addItem(key.label)
+        self.key.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.key.setMaxVisibleItems(25)
+        self.key.setToolTip("Project key. Audio files with a key in their name (\"Loop_128_Am\")\n"
+                            "are transposed to it when added; a tempo in the name warps them to it.")
 
         self.play = ToggleButton(icon=icons.play(), role="play", tooltip="Play / Stop (Space)")
         self.stop = ToggleButton(icon=icons.stop(), role="tool", checkable=False,
@@ -91,7 +101,7 @@ class TransportBar(QWidget):
         tempo_label.setStyleSheet(f"color: {theme.TEXT_DIM};")
         slash = QLabel("/")
         for widget in (self.tempo, tempo_label, _separator(), self.ts_num, slash, self.ts_den, _separator(),
-                       self.metronome):
+                       self.metronome, self.key):
             layout.addWidget(widget)
         layout.addStretch(1)
         for widget in (self.position, self.play, self.stop, self.record, self.re_enable, self.lock_envelopes):
@@ -106,6 +116,7 @@ class TransportBar(QWidget):
         self.ts_num.valueChanged.connect(lambda v, _k: self._set_signature(numerator=int(v)))
         self.ts_den.valueChanged.connect(lambda v, _k: self._set_signature(denominator=int(v)))
         self.metronome.toggled.connect(bridge.set_metronome)
+        self.key.activated.connect(lambda i: self.editor.set_key(ALL_KEYS[i - 1] if i > 0 else None))
         self.play.clicked.connect(self._play_clicked)
         self.stop.clicked.connect(self.stop_requested)
         self.loop.toggled.connect(self.editor.set_loop_enabled)
@@ -135,6 +146,7 @@ class TransportBar(QWidget):
         self.tempo.setValue(p.tempo)
         self.ts_num.setValue(p.time_signature.numerator)
         self.ts_den.setValue(p.time_signature.denominator)
+        self.key.setCurrentIndex(ALL_KEYS.index(p.key) + 1 if p.key else 0)
         self.loop.set_checked_silently(p.loop_enabled)
         self.lock_envelopes.set_checked_silently(p.automation_locked)
         self._show_position(self.bridge.position)
