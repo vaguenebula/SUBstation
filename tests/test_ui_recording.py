@@ -129,7 +129,8 @@ def test_record_a_take_through_the_cable(studio, app, driver, make_wav):
     assert take.source_duration_sec == pytest.approx((RATE // BUFFER * BUFFER) / RATE)
     assert [c.id for c in player.clips] != [] and window.selection.clips == {(recorder.id, take.id)}
 
-    # It holds what the player played, in time with it.
+    # It holds what the player played, in time with it (once its file is decoded: that's in the background).
+    assert wait_until(app, lambda: window.bridge.source(take.path) is not None)
     window.toggle_play()
     window.engine.set_track_mute(window.bridge._track_ids[player.id], True)
     out = window.engine.render_offline(0.0, RATE // 2)[:, 0]
