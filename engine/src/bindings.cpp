@@ -55,7 +55,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 5;
+    m.attr("API_VERSION") = 6;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -426,14 +426,20 @@ NB_MODULE(_engine, m) {
         .def("set_track_automation", &Engine::setTrackAutomation, "track_id"_a, "lanes"_a,
              "Replace a track's automation (track_id 0: the master's) with these AutomationLanes.")
         .def("take_meters", &Engine::takeMeters, "Peak levels since the last call; track_id 0 is the master.")
-        // Insert chain
-        .def("add_builtin_processor", &Engine::addBuiltinProcessor, "track_id"_a, "type"_a, "index"_a = -1,
-             "Add a built-in device to a track's chain (track_id MASTER: the master's).")
-        .def("add_plugin_processor", &Engine::addPluginProcessor, "track_id"_a, "format"_a, "path"_a, "uid"_a,
+        // Device chains: every track (and the master) has a main chain, by id.
+        .def("track_chain", &Engine::trackChain, "track_id"_a, "A track's (or the master's) main device chain.")
+        .def("processor_chain", &Engine::processorChain, "processor_id"_a, "The chain a device is in.")
+        .def("add_builtin_processor", &Engine::addBuiltinProcessor, "chain_id"_a, "type"_a, "index"_a = -1,
+             "Add a built-in device to a chain.")
+        .def("add_plugin_processor", &Engine::addPluginProcessor, "chain_id"_a, "format"_a, "path"_a, "uid"_a,
              "index"_a = -1, ReleaseGil(),
-             "Load a plug-in into a track's chain (main thread). Raises RuntimeError if it can't be loaded.")
+             "Load a plug-in into a chain (main thread). Raises RuntimeError if it can't be loaded.")
         .def("remove_processor", &Engine::removeProcessor, "processor_id"_a)
-        .def("set_track_processor_order", &Engine::setTrackProcessorOrder, "track_id"_a, "processor_ids"_a)
+        .def("set_chain_order", &Engine::setChainOrder, "chain_id"_a, "processor_ids"_a,
+             "Reorder a chain: processor_ids lists all of its devices.")
+        .def("move_processor", &Engine::moveProcessor, "processor_id"_a, "to_chain_id"_a, "index"_a = -1,
+             "Move a device into a chain (another track's too), keeping its state: index counts the "
+             "chain without it, -1 is last.")
         .def("processor_info", &Engine::processorInfo, "processor_id"_a)
         .def("processor_params", &Engine::processorParams, "processor_id"_a)
         .def("processor_param_index", &Engine::processorParamIndex, "processor_id"_a, "param_id"_a)

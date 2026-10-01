@@ -238,15 +238,26 @@ public:
     // counts again once its envelope is taken away.
     void setTrackAutomation(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes);
 
-    // --- Devices on tracks and the master (insert chain) -----------------------
-    uint32_t addBuiltinProcessor(uint32_t trackId, const std::string& type, int index);
+    // --- Device chains ------------------------------------------------------------
+    // Devices live in chains, each with an id: every track and the master has a
+    // main chain (later, each chain of a rack is one more). Processor ids are
+    // unique across chains, so a processor can move from one chain to another
+    // and keep its state (a plug-in isn't loaded again).
+    uint32_t trackChain(uint32_t trackId);  // a track's (or the master's) main chain
+    uint32_t processorChain(uint32_t processorId);
+    // `index`: where in the chain (-1 or past the end: last).
+    uint32_t addBuiltinProcessor(uint32_t chainId, const std::string& type, int index);
     // Loads a plug-in ("VST3" format) into the chain. Main thread; throws
     // std::runtime_error with a message for the user if it can't be loaded.
-    uint32_t addPluginProcessor(uint32_t trackId, const std::string& format, const std::string& path,
+    uint32_t addPluginProcessor(uint32_t chainId, const std::string& format, const std::string& path,
                                 const std::string& uid, int index);
     void removeProcessor(uint32_t processorId);
-    // Reorders a track's chain; `processorIds` must be the track's processors.
-    void setTrackProcessorOrder(uint32_t trackId, const std::vector<uint32_t>& processorIds);
+    // Reorders a chain; `processorIds` must be the chain's processors, each once.
+    void setChainOrder(uint32_t chainId, const std::vector<uint32_t>& processorIds);
+    // Moves a processor to position `index` of a chain (its own or another, on
+    // any strip), as the chain is without it (-1: last). Its state goes with it;
+    // its automation stays with the strip it came from, and plays again if it comes back.
+    void moveProcessor(uint32_t processorId, uint32_t toChainId, int index);
     ProcessorInfo processorInfo(uint32_t processorId);
     std::vector<ParamInfo> processorParams(uint32_t processorId);
     int processorParamIndex(uint32_t processorId, const std::string& paramId);  // -1: no such parameter
@@ -304,7 +315,7 @@ private:
         std::vector<ClipDesc> clips;
         std::vector<std::string> clipKeys;  // sourceKey() of each clip's path
         std::vector<NoteDesc> notes;
-        std::vector<std::shared_ptr<Processor>> inserts;
+        uint32_t chainId = 0;               // its main chain
         std::shared_ptr<DelayLine> delay;   // delay compensation, kept across snapshots
         std::vector<AutomationLaneDesc> automation;
         std::vector<int> inputChannels;  // device channels: the input edge
@@ -320,11 +331,26 @@ private:
     uint16_t midiPortLocked(const std::string& name);
     void discardMidiInputLocked();
 
+    // A chain of devices: a strip's main chain, or (later) a chain of a rack on it.
+    struct ChainModel {
+        uint32_t id = 0;
+        uint32_t stripId = 0;     // the track (or kMaster) whose signal it processes
+        uint32_t parentRack = 0;  // the rack processor it belongs to; 0: a strip's main chain
+        std::vector<std::shared_ptr<Processor>> inserts;
+    };
+    struct ProcessorEntry {
+        uint32_t chainId = 0;
+        std::shared_ptr<Processor> processor;
+    };
+
     TrackModel& trackLocked(uint32_t trackId);           // the master too
     TrackModel& arrangementTrackLocked(uint32_t trackId);  // not the master
     std::shared_ptr<Processor> processorLocked(uint32_t processorId);
     std::shared_ptr<Processor> processor(uint32_t processorId);  // locks
-    uint32_t insertProcessorLocked(uint32_t trackId, std::shared_ptr<Processor> processor, int index);
+    ChainModel& chainLocked(uint32_t chainId);
+    const std::vector<std::shared_ptr<Processor>>& insertsLocked(const TrackModel& track) const;
+    uint32_t addChainLocked(uint32_t stripId, uint32_t parentRack);
+    uint32_t insertProcessorLocked(uint32_t chainId, std::shared_ptr<Processor> processor, int index);
     void retireProcessorLocked(std::shared_ptr<Processor> processor);
     void rebuildSnapshotLocked();
     void pushCommandLocked(const TransportCommand& command);
@@ -381,7 +407,9 @@ private:
     std::vector<TrackModel> tracks_;
     uint32_t nextTrackId_ = 1;
     TrackModel master_{kMaster, std::make_shared<TrackParams>()};  // never has clips or notes
-    std::unordered_map<uint32_t, std::pair<uint32_t, std::shared_ptr<Processor>>> processors_;  // id -> track, processor
+    std::unordered_map<uint32_t, ChainModel> chains_;              // id -> chain (with its owning strip and rack)
+    uint32_t nextChainId_ = 1;
+    std::unordered_map<uint32_t, ProcessorEntry> processors_;      // id -> chain, processor
     uint32_t nextProcessorId_ = 1;
     // Removed processors wait here until no snapshot uses them, so that they are
     // destroyed in idle(), on the main thread (plug-ins require it).

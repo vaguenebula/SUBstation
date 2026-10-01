@@ -119,7 +119,7 @@ def utility_gain_index(engine, pid):
 
 def test_device_parameter_automation(engine, long_dc_wav):
     track = dc_track(engine, long_dc_wav)
-    pid = engine.add_builtin_processor(track, "utility")
+    pid = engine.add_builtin_processor(engine.track_chain(track), "utility")
     info = engine.processor_params(pid)[utility_gain_index(engine, pid)]
     minus_12 = info.to_normalized(-12.0)
     assert info.from_normalized(minus_12) == pytest.approx(-12.0, abs=1e-4)
@@ -137,7 +137,7 @@ def test_device_parameter_automation(engine, long_dc_wav):
 def test_automation_splits_a_builtin_device_block_where_values_change(engine, long_dc_wav):
     """A step in the middle of a block takes effect there, not at the block's start."""
     track = dc_track(engine, long_dc_wav)
-    pid = engine.add_builtin_processor(track, "utility")
+    pid = engine.add_builtin_processor(engine.track_chain(track), "utility")
     info = engine.processor_params(pid)[utility_gain_index(engine, pid)]
     step = int(SPB) + 100  # well inside a block (blocks are MAX_BLOCK long from 0)
     assert step % ge.MAX_BLOCK > 200
@@ -151,7 +151,7 @@ def test_automation_splits_a_builtin_device_block_where_values_change(engine, lo
 
 def test_discrete_parameters_take_whole_steps(engine):
     track = engine.add_track()
-    pid = engine.add_builtin_processor(track, "synth")
+    pid = engine.add_builtin_processor(engine.track_chain(track), "synth")
     wave = engine.processor_param_index(pid, "wave")
     info = engine.processor_params(pid)[wave]
     assert info.step_count == 3
@@ -165,7 +165,7 @@ def test_discrete_parameters_take_whole_steps(engine):
 
 def test_envelopes_of_missing_devices_or_parameters_are_ignored(engine, long_dc_wav):
     track = dc_track(engine, long_dc_wav)
-    pid = engine.add_builtin_processor(track, "utility")
+    pid = engine.add_builtin_processor(engine.track_chain(track), "utility")
     engine.set_track_automation(track, [ge.AutomationLane(pid, "nonsense", points((0.0, 0.0))),
                                         ge.AutomationLane(pid + 100, "gain", points((0.0, 0.0))),
                                         ge.AutomationLane(0, "nonsense", points((0.0, 0.0)))])
@@ -186,7 +186,7 @@ def test_automation_follows_tempo(engine, long_dc_wav):
 
 def test_normalized_mapping(engine):
     track = engine.add_track()
-    synth = engine.add_builtin_processor(track, "synth")
+    synth = engine.add_builtin_processor(engine.track_chain(track), "synth")
     cutoff = engine.processor_params(synth)[engine.processor_param_index(synth, "cutoff")]
     assert cutoff.log_scale
     middle = math.sqrt(20.0 * 20000.0)  # log scale: the geometric mean is halfway

@@ -6,8 +6,9 @@ in a small thread pool; the engine releases the GIL while decoding.
 
 Plug-ins: a device's engine processor lives as long as the device is in its
 chain, so a plug-in keeps its state (and open editor) when the chain around it
-changes. When a plug-in device goes away (deleted, or its track), its state is
-kept here, so undo brings it back as it was. Edits made in a plug-in's own
+changes. A device moved to another track's chain takes its processor along (one
+engine move_processor, nothing loads again). When a plug-in device goes away
+(deleted, or its track), its state is kept here, so undo brings it back as it was. Edits made in a plug-in's own
 editor come back from the engine as `plugin_param_edited`, for the undo stack.
 
 Audio devices (WASAPI or ASIO) open as the preferences describe. An ASIO
@@ -205,6 +206,10 @@ class EngineBridge(QObject):
         self.engine = engine
         self.project = project
         self._track_ids: dict[str, int] = {MASTER: ge.MASTER}  # model track id -> engine track id
+        self._chains: dict[str, int] = {MASTER: engine.track_chain(ge.MASTER)}  # track id -> its engine chain id
+        # Devices that left a chain for another track's, which hasn't taken them up
+        # yet: device id -> engine id (already in that track's engine chain)
+        self._arriving: dict[str, int | None] = {}
         # track id -> [(model device id, engine id)]; the engine id is None when a plug-in didn't load
         self._devices: dict[str, list[tuple[str, int | None]]] = {}
         self._enabled: dict[int, bool] = {}  # engine id -> what the engine was told
@@ -270,6 +275,7 @@ class EngineBridge(QObject):
     def _on_reset(self) -> None:
         self._remove_engine_tracks()
         self._devices.clear()
+        self._arriving.clear()
         self._enabled.clear()
         self._plugin_ids.clear()
         self._plugin_states.clear()
@@ -300,10 +306,12 @@ class EngineBridge(QObject):
             if track_id != MASTER:
                 self.engine.remove_track(engine_id)
                 del self._track_ids[track_id]
+                del self._chains[track_id]
 
     def _add_engine_track(self, track: Track) -> None:
         if not track.is_master:  # the engine always has the master
             self._track_ids[track.id] = self.engine.add_track()
+            self._chains[track.id] = self.engine.track_chain(self._track_ids[track.id])
         self._push_mixer(track.id)
         self._push_input(track.id)
         self._push_clips(track.id)
@@ -314,6 +322,7 @@ class EngineBridge(QObject):
         for device_id, processor_id in self._devices.pop(track_id, []):
             self._forget_processor(device_id, processor_id, remove=False)
         engine_id = self._track_ids.pop(track_id, None)
+        self._chains.pop(track_id, None)
         if engine_id is not None:
             self.engine.remove_track(engine_id)  # also removes its devices
         self.meters.pop(track_id, None)
@@ -456,25 +465,63 @@ class EngineBridge(QObject):
         self.engine.set_track_clips(engine_id, [clip_desc(c) for c in track.clips])
 
     def _sync_devices(self, track_id: str) -> None:
-        engine_track = self._track_ids.get(track_id)
-        if engine_track is None:
+        chain_id = self._chains.get(track_id)
+        if chain_id is None:
             return
         track = self.project.track(track_id)
         current = dict(self._devices.get(track_id, []))
         if list(current) != [d.id for d in track.devices]:
             # The chain changed. Devices still in it keep their processors (a
-            # plug-in keeps its state and editor); new ones get one; the rest go.
+            # plug-in keeps its state and editor), and so do devices moved here from
+            # another track; new ones get one; the rest go.
             wanted = {d.id for d in track.devices}
             for device_id, processor_id in current.items():
-                if device_id not in wanted:
+                if device_id not in wanted and not self._hand_over(track_id, device_id, processor_id):
                     self._forget_processor(device_id, processor_id)
-            chain = [(d.id, current[d.id] if d.id in current else self._create_processor(engine_track, d))
-                     for d in track.devices]
+            chain = []
+            moved_in = False
+            for device in track.devices:
+                if device.id in current:
+                    chain.append((device.id, current[device.id]))
+                    continue
+                found, processor_id = self._take_over(track_id, device.id)
+                moved_in |= found
+                chain.append((device.id, processor_id if found else self._create_processor(chain_id, device)))
             self._devices[track_id] = chain
-            self.engine.set_track_processor_order(engine_track, [pid for _, pid in chain if pid is not None])
+            self.engine.set_chain_order(chain_id, [pid for _, pid in chain if pid is not None])
             self._push_automation(track_id)  # its devices' envelopes go to the new processors
+            if moved_in:
+                self._update_editor_titles(track_id)
             self.devices_loaded.emit(track_id)
         self._push_enabled(track)
+
+    def _hand_over(self, track_id: str, device_id: str, processor_id: int | None) -> bool:
+        """A device left this track's chain: if it went to another track's, its
+        processor goes into that chain in the engine, for the track to take up."""
+        to = next((t.id for t in self.project.all_tracks()
+                   if t.id != track_id and t.id in self._chains and any(d.id == device_id for d in t.devices)), None)
+        if to is None:
+            return False
+        if processor_id is not None:
+            self.engine.move_processor(processor_id, self._chains[to])
+        self._arriving[device_id] = processor_id
+        return True
+
+    def _take_over(self, track_id: str, device_id: str) -> tuple[bool, int | None]:
+        """A device new to this track's chain: whether it came from another
+        track's, and its processor then, which moves along in the engine."""
+        if device_id in self._arriving:
+            return True, self._arriving.pop(device_id)
+        for other, chain in self._devices.items():  # the track it left doesn't know yet
+            if other == track_id:
+                continue
+            for i, (did, processor_id) in enumerate(chain):
+                if did == device_id:
+                    del chain[i]
+                    if processor_id is not None:
+                        self.engine.move_processor(processor_id, self._chains[track_id])
+                    return True, processor_id
+        return False, None
 
     def _push_enabled(self, track: Track) -> None:
         for device, (_, processor_id) in zip(track.devices, self._devices.get(track.id, []), strict=True):
@@ -482,10 +529,10 @@ class EngineBridge(QObject):
                 self.engine.set_processor_enabled(processor_id, device.enabled)
                 self._enabled[processor_id] = device.enabled
 
-    def _create_processor(self, engine_track: int, device: Device) -> int | None:
+    def _create_processor(self, chain_id: int, device: Device) -> int | None:
         if device.is_plugin:
-            return self._load_plugin(engine_track, device)
-        processor_id = self.engine.add_builtin_processor(engine_track, device.kind)
+            return self._load_plugin(chain_id, device)
+        processor_id = self.engine.add_builtin_processor(chain_id, device.kind)
         for param_id, value in device.params.items():
             self._set_param(processor_id, param_id, value)
         return processor_id
@@ -496,7 +543,7 @@ class EngineBridge(QObject):
             return plugin.path
         return self.known_plugins.get(plugin.uid)
 
-    def _load_plugin(self, engine_track: int, device: Device) -> int | None:
+    def _load_plugin(self, chain_id: int, device: Device) -> int | None:
         plugin = device.plugin
         path = self.plugin_path(plugin)
         if path is None:
@@ -504,7 +551,7 @@ class EngineBridge(QObject):
             return None
         self._busy += 1
         try:
-            processor_id = self.engine.add_plugin_processor(engine_track, plugin.format, path, plugin.uid)
+            processor_id = self.engine.add_plugin_processor(chain_id, plugin.format, path, plugin.uid)
         except (RuntimeError, ValueError) as exc:
             self._plugin_failed(device, f"{plugin.name} could not be loaded: {exc}")
             return None
@@ -605,13 +652,12 @@ class EngineBridge(QObject):
             if not any(pid is None for _, pid in chain):
                 continue
             devices = {d.id: d for d in track.devices}
-            reloaded = [(did, self._load_plugin(self._track_ids[track_id], devices[did])
+            reloaded = [(did, self._load_plugin(self._chains[track_id], devices[did])
                          if pid is None and devices[did].is_plugin and self.plugin_path(devices[did].plugin)
                          else pid) for did, pid in chain]
             if reloaded != chain:
                 self._devices[track_id] = reloaded
-                self.engine.set_track_processor_order(self._track_ids[track_id],
-                                                      [pid for _, pid in reloaded if pid is not None])
+                self.engine.set_chain_order(self._chains[track_id], [pid for _, pid in reloaded if pid is not None])
                 self._push_enabled(track)
                 self._push_automation(track_id)
                 self.devices_loaded.emit(track_id)

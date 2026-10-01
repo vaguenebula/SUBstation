@@ -34,7 +34,7 @@ def synth(engine, track) -> int:
     if not TEST_PLUGINS.exists():
         pytest.skip("test plug-ins not built")
     uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "GIL Test Synth")
-    synth = engine.add_plugin_processor(track, "VST3", str(TEST_PLUGINS), uid)
+    synth = engine.add_plugin_processor(engine.track_chain(track), "VST3", str(TEST_PLUGINS), uid)
     engine.set_processor_param(synth, engine.processor_param_index(synth, "1"), 0.0)  # Wave: DC
     return synth
 

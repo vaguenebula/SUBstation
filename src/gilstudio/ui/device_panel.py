@@ -18,7 +18,8 @@ or re-enable it. Changing one shows its automation in the arrangement.
 
 Click a device (its title or background) to select it, Shift-click to select a
 range, Ctrl-click to add or remove one; Delete deletes the selection. Drag
-effects to reorder them (the instrument stays first). Ctrl+Alt-drag anywhere on
+effects to reorder them (the instrument stays first), or onto another track in
+the arrangement to move them there (plug-ins keep their state). Ctrl+Alt-drag anywhere on
 the chain scrolls it, as in the arrangement. The chain scrolls to show a device
 when one is added, unless it was dropped on the chain (where it is in view).
 """
@@ -81,7 +82,7 @@ from ..model.editor import (
 )
 from ..model.params import format_value
 from ..model.project import PLUGIN_KIND, Device
-from .arrangement.lanes_canvas import is_pan_modifier
+from .arrangement.lanes_canvas import DEVICE_MOVE_MIME, is_pan_modifier, moved_devices
 from .arrangement.track_headers import automation_state
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
@@ -99,7 +100,6 @@ INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in or Plug-in
 INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create › Insert MIDI Track)."
 MESSAGE_LINES = 4  # a plug-in's error message is cut to this; its tooltip has it all
 PRESET_FILTER = "VST3 Preset (*.vstpreset)"
-DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
 AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
 AUTOSCROLL_INTERVAL = 16  # ms
 
@@ -880,10 +880,8 @@ class DevicePanel(QFrame):
 
     def _moving(self, mime) -> list[str]:
         """The devices a drag moves, if it moves this track's."""
-        if not mime.hasFormat(DEVICE_MOVE_MIME):
-            return []
-        track_id, *device_ids = bytes(mime.data(DEVICE_MOVE_MIME)).decode().split("\n")
-        return device_ids if track_id == self.track_id else []
+        moved = moved_devices(mime)
+        return moved[1] if moved and moved[0] == self.track_id else []
 
     def _chain_widgets(self) -> list[_DeviceFrame]:
         return [self.widgets[i] for i in self._chain_ids() if i in self.widgets]

@@ -112,6 +112,17 @@ def resize_track_by_wheel(editor: ProjectEditor, track_id: str, delta: int) -> N
     editor.set_track_height(track_id, max(MIN_TRACK_HEIGHT, min(MAX_TRACK_HEIGHT, height)))
 
 
+DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
+
+
+def moved_devices(mime) -> tuple[str, list[str]] | None:
+    """Devices dragged from a track's chain (the device panel): (track id, device ids)."""
+    if not mime.hasFormat(DEVICE_MOVE_MIME):
+        return None
+    track_id, *device_ids = bytes(mime.data(DEVICE_MOVE_MIME)).decode().split("\n")
+    return track_id, device_ids
+
+
 def dropped_devices(mime) -> list[tuple[str, PluginRef | None]]:
     """Devices dragged from the browser, as (kind, plug-in): built-in ones, then plug-ins."""
     devices: list[tuple[str, PluginRef | None]] = [(k, None) for k in device_kinds(mime) if k in BUILTIN_DEVICES]
@@ -745,12 +756,21 @@ class LanesCanvas(QWidget):
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         mime = event.mimeData()
-        if audio_paths(mime) or device_kinds(mime) or mime.hasFormat(PLUGIN_MIME):
+        if audio_paths(mime) or device_kinds(mime) or mime.hasFormat(PLUGIN_MIME) or moved_devices(mime):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event) -> None:
+        moved = moved_devices(event.mimeData())
+        if moved:
+            # Devices from a track's chain move to another track's, the one under the mouse.
+            index = self.row_index_at(event.position().y())
+            if index is not None and self.layout_model.rows[index].track_id != moved[0]:
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
         paths = audio_paths(event.mimeData())
         if not paths:
             # Devices drop onto the track under the mouse; an instrument below the
@@ -785,6 +805,14 @@ class LanesCanvas(QWidget):
         self.update()
         devices = dropped_devices(event.mimeData())
         index = self.row_index_at(event.position().y())
+        moved = moved_devices(event.mimeData())
+        if moved:
+            if index is not None:
+                track_id = self.layout_model.rows[index].track_id
+                if self.editor.move_devices_to_track(moved[0], moved[1], track_id):
+                    self.selection.select_track(track_id)  # show them where they went
+                    event.acceptProposedAction()
+            return
         if devices:
             if index is not None:
                 track_id = self.layout_model.rows[index].track_id

@@ -109,12 +109,12 @@ Tests
 
 ## Phase 4 — Chain ids in the engine API
 
-- [ ] Every device chain gets an id (each track's / the master's main chain,
+- [x] Every device chain gets an id (each track's / the master's main chain,
       later each rack chain).
-- [ ] `addBuiltinProcessor(chainId, …)`, `addPluginProcessor(chainId, …)`,
+- [x] `addBuiltinProcessor(chainId, …)`, `addPluginProcessor(chainId, …)`,
       `setChainOrder(chainId, ids)`, `moveProcessor(id, toChainId, index)`.
-- [ ] `processors_`: id → (chain, processor); chains: id → (owning strip, parent rack).
-- [ ] Update bindings and `engine_bridge.py`; dragging a device between tracks
+- [x] `processors_`: id → (chain, processor); chains: id → (owning strip, parent rack).
+- [x] Update bindings and `engine_bridge.py`; dragging a device between tracks
       becomes one `moveProcessor` (keeps plug-in state, no reload).
 
 ---
