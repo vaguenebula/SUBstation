@@ -29,7 +29,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
   - Click a track's header to select it; **Ctrl-click** adds a track to the selection (or takes it out), **Shift-click** selects every track from the last one clicked. Delete deletes the selected tracks.
   - Soloing a track unsoloes the others, and unsoloing one unsoloes every track; **Ctrl-click** a solo button to solo (or unsolo) just that track, leaving the others as they are. Clicking the solo of a selected track solos (or unsoloes) all the selected tracks. **S** solos the selected tracks (unsoloing the rest), or, if they all are soloed already, unsoloes every track.
-- Master track (volume and pan), metronome, loop brace, follow mode, CPU meter.
+- Master track (volume, pan, and audio effects: click its header to show its chain in the device view), metronome, loop brace, follow mode, CPU meter.
 - An oscilloscope next to the transport controls shows the master output as it plays (as in FL Studio). It starts each picture at a rising zero crossing, so steady tones stand still.
 - **Automation**, as in Ableton's arrangement, of every device parameter (built-in devices and plug-ins alike) and of each track's and the master's volume and pan.
   - **A** shows (or hides) the automation of every track and the master. A track's automation shows in its own lane, over its clips (the clips' title bar still moves and selects them), with the parameter chosen in its header: a device chooser (*Mixer* or one of its devices) and a parameter chooser; automated ones are marked with a red dot. **+** shows another parameter in a lane below the track (**−** removes it). Right-click a track header (or the master's) to show or hide its automation.
@@ -199,7 +199,7 @@ browser/src/                   C++: the browser's backend, module gilstudio._bro
 benchmarks/                    the browser's benchmarks and their results (not run by pytest)
 engine/src/                    C++: everything on the audio thread, and plug-in hosting
   Engine        public API; edit model; builds and publishes render snapshots
-  Renderer      mixing: clips and notes -> inserts -> fader/pan -> master; loop; metronome; preview; automation
+  Renderer      mixing: strips (inserts -> delay compensation -> fader/pan), tracks -> master strip; loop; metronome; preview; automation
   Automation.h  envelopes: breakpoints, curves, evaluation, the mixer's lane mappings
   Warp          stretch voices (time stretch / pitch shift) and the Re-Pitch resampler
   AudioSource   decoding (WAV/FLAC/MP3) at the engine rate + peak mipmaps

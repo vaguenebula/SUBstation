@@ -114,7 +114,7 @@ class ViewState(QObject):
 
 
 class Selection(QObject):
-    """The selected track (or tracks), the insert (start) marker, and a time selection: a beat
+    """The selected track (or tracks, or MASTER), the insert (start) marker, and a time selection: a beat
     range spanning one or more adjacent tracks. Selecting is always on the grid:
     selecting a clip selects the area it covers.
 
@@ -265,7 +265,8 @@ class Selection(QObject):
         valid_clips = {(t.id, c.id) for t in project.tracks for c in t.clips}
         clips = self.clips & valid_clips
         tracks = tuple(t for t in self._tracks if t in valid_tracks)
-        track_id = self.track_id if self.track_id in valid_tracks else (tracks[-1] if tracks else None)
+        track_id = (self.track_id if self.track_id in valid_tracks or self.track_id == MASTER
+                    else (tracks[-1] if tracks else None))
         lanes = tuple(lane for lane in self.lanes if project.has_owner(lane[0]))
         time_range = self.time_range
         if time_range is not None:

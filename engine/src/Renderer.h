@@ -7,10 +7,14 @@
 // so every note-on gets its note-off even if the arrangement changes while the
 // note sounds; stopping, locating and loop wraps release all sounding notes.
 //
+// Tracks and the master are strips (processStrip): devices, delay compensation,
+// fader and meter. The tracks' sum is the master's input.
+//
 // Processors see continuous stretches of the timeline: a block the loop wraps
 // around in is processed in two parts. Tracks whose devices add less latency
-// than the slowest track are delayed to line up with it, and so is the
-// metronome, so the output lags the timeline by the snapshot's maxLatency.
+// than the slowest track are delayed to line up with it; the master's devices
+// add theirs after that. The metronome is delayed as much, so the output lags
+// the timeline by the snapshot's outputLatency().
 //
 // Automation: before each stretch a processor processes, the renderer hands it
 // its automated parameters' values over the stretch (Processor::automate): the
@@ -107,7 +111,11 @@ private:
     static constexpr int kMaxPreviewNotes = 256;
 
     void renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept;
-    void processInserts(const TrackRender& track, ProcessContext& context, int64_t chunkStart, int frames,
+    // A strip's body, in place: inserts -> delay compensation -> fader and meter.
+    // Its input is in left/right already (and a track's note events in events_).
+    void processStrip(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context, float* left,
+                      float* right, int frames, bool audible, ChunkFlags flags, DelayLine* delay) noexcept;
+    void processInserts(const StripRender& strip, ProcessContext& context, float* left, float* right, int frames,
                         double samplesPerBeat) noexcept;
     void automateInsert(const AutomationRender& lane, int64_t position, int length, bool moving) noexcept;
     // Volume and pan (automated or not), in place; live renders also smooth and meter.

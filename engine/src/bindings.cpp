@@ -44,8 +44,9 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 2;
+    m.attr("API_VERSION") = 3;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
+    m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
 
     nb::class_<gil::AudioFileInfo>(m, "AudioFileInfo")
@@ -340,6 +341,7 @@ NB_MODULE(_engine, m) {
         .def("cached_source", &Engine::cachedSource, "path"_a)
         .def("release_unused_sources", &Engine::releaseUnusedSources)
         // Tracks
+        // Tracks. Track id MASTER (0) is the master: devices, mixer and automation, no clips or notes.
         .def("add_track", &Engine::addTrack)
         .def("remove_track", &Engine::removeTrack, "track_id"_a)
         .def("set_track_clips", &Engine::setTrackClips, "track_id"_a, "clips"_a)
@@ -357,7 +359,8 @@ NB_MODULE(_engine, m) {
              "Replace a track's automation (track_id 0: the master's) with these AutomationLanes.")
         .def("take_meters", &Engine::takeMeters, "Peak levels since the last call; track_id 0 is the master.")
         // Insert chain
-        .def("add_builtin_processor", &Engine::addBuiltinProcessor, "track_id"_a, "type"_a, "index"_a = -1)
+        .def("add_builtin_processor", &Engine::addBuiltinProcessor, "track_id"_a, "type"_a, "index"_a = -1,
+             "Add a built-in device to a track's chain (track_id MASTER: the master's).")
         .def("add_plugin_processor", &Engine::addPluginProcessor, "track_id"_a, "format"_a, "path"_a, "uid"_a,
              "index"_a = -1, ReleaseGil(),
              "Load a plug-in into a track's chain (main thread). Raises RuntimeError if it can't be loaded.")

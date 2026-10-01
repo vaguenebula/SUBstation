@@ -814,3 +814,60 @@ def test_plugin_folders_in_preferences(window, tmp_path):
     assert len(index.plugins) == before and not index.failures
     assert page.scan_status.text() == f"{before} plug-ins found"
     prefs.reject()
+
+
+def test_effects_on_the_master(window, tmp_path):
+    """The master is selected by clicking its header; the device view then shows its
+    chain, which takes effects (not instruments), plays and saves like a track's."""
+    import numpy as np
+
+    from gilstudio.model.automation import MASTER
+
+    from .conftest import SAMPLE_RATE, write_wav
+
+    path = str(write_wav(tmp_path / "dc.wav", np.full((SAMPLE_RATE, 2), 0.5)))
+    window.editor.add_clips(None, 0.0, [(path, 1.0)])
+    assert wait_until(lambda: window.bridge.source(path) is not None)
+    header = window.arrangement.master_header
+    QTest.mouseClick(header, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(40, 10))
+    assert window.selection.track_id == MASTER and header.selected
+    assert window.devices.track_id == MASTER
+
+    window.add_device_to_selected_track("utility")  # from the browser
+    [utility] = window.project.master.devices
+    assert list(window.devices.widgets) == [utility.id]
+    processor = window.bridge.engine_device_id(MASTER, utility.id)
+    assert processor is not None
+    window.editor.set_device_param(MASTER, utility.id, "gain", -6.0206)
+    assert window.engine.render_offline(0.0, 8000)[6000, 0] == pytest.approx(0.25, rel=1e-3)
+    assert window.editor.add_device(MASTER, "synth") is None  # instruments go on MIDI tracks
+
+    effect = window.editor.add_device(MASTER, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    assert window.bridge.engine_device_id(MASTER, effect.id) is not None
+    assert [d.id for d in window.project.master.devices] == [utility.id, effect.id]
+    poll(window)
+    assert window.bridge.plugin_errors == {}
+
+    # Its devices can be automated, in the master's lanes.
+    groups = [group for group, _name, _specs in window.bridge.param_groups(MASTER)]
+    assert groups == ["mixer", utility.id, effect.id]
+    key = automation.device_key(utility.id, "gain")
+    window.editor.set_envelope(MASTER, key, (AutomationPoint(0.0, 0.0),))
+    assert window.bridge.is_automated(MASTER, key)
+    assert window.engine.render_offline(0.0, 8000)[6000, 0] < 0.01  # the utility's lowest gain
+
+    # Saved and opened again: with its plug-in's state.
+    target = tmp_path / "master.gilproj"
+    assert window._save_to(target)
+    window.new_project()
+    assert window.project.master.devices == [] and window.devices.track_id is None
+    window.open_project(str(target))
+    assert [d.id for d in window.project.master.devices] == [utility.id, effect.id]
+    assert window.bridge.engine_device_id(MASTER, effect.id) is not None
+    assert window.bridge.is_automated(MASTER, key)
+
+    # Undo takes a device off the master again.
+    window.editor.remove_device(MASTER, effect.id)
+    assert [d.id for d in window.project.master.devices] == [utility.id]
+    window.undo_stack.undo()
+    assert window.bridge.engine_device_id(MASTER, effect.id) is not None

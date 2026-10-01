@@ -78,7 +78,7 @@ class ArrangementView(QWidget):
         self.grid_info = GridInfo(self.view)
         self.grid_info.setFixedWidth(HEADER_WIDTH)
         self.master_lane = MasterLane(editor, self.view, selection, bridge)
-        self.master_header = MasterHeader(editor, bridge)
+        self.master_header = MasterHeader(editor, bridge, selection)
         self.master_header.setFixedWidth(HEADER_WIDTH)
         self._update_master_height()
         self.hbar = QScrollBar(Qt.Orientation.Horizontal)
@@ -145,7 +145,7 @@ class ArrangementView(QWidget):
             self.headers.relayout()
 
     def _update_master_height(self) -> None:
-        main_height, lanes = automation_rows(self.project.master_automation_view, 0, MASTER_HEIGHT)
+        main_height, lanes = automation_rows(self.project.master.automation_view, 0, MASTER_HEIGHT)
         height = main_height + sum(lane.height for lane in lanes)
         self.master_lane.setFixedHeight(height)
         self.master_header.setFixedHeight(height)

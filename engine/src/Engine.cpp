@@ -96,6 +96,7 @@ void Engine::openDeviceLocked(const DeviceConfig& config) {
         for (auto& track : tracks_) {
             for (auto& insert : track.inserts) insert->prepare(sampleRate_, Renderer::kMaxBlock);
         }
+        for (auto& insert : master_.inserts) insert->prepare(sampleRate_, Renderer::kMaxBlock);
         rebuildSnapshotLocked();
         serviceTransportIfIdleLocked();
         pendingDeviceEvents_.store(0);  // about the device just closed
@@ -293,6 +294,12 @@ void Engine::reloadSourcesLocked() {
 // Tracks
 
 Engine::TrackModel& Engine::trackLocked(uint32_t trackId) {
+    if (trackId == kMaster) return master_;
+    return arrangementTrackLocked(trackId);
+}
+
+Engine::TrackModel& Engine::arrangementTrackLocked(uint32_t trackId) {
+    if (trackId == kMaster) throw std::invalid_argument("The master has no clips or notes, and stays");
     for (auto& track : tracks_) {
         if (track.id == trackId) return track;
     }
@@ -311,7 +318,7 @@ uint32_t Engine::addTrack() {
 
 void Engine::removeTrack(uint32_t trackId) {
     std::lock_guard lock(mutex_);
-    for (auto& insert : trackLocked(trackId).inserts) retireProcessorLocked(insert);
+    for (auto& insert : arrangementTrackLocked(trackId).inserts) retireProcessorLocked(insert);
     std::erase_if(tracks_, [&](const TrackModel& track) { return track.id == trackId; });
     std::erase_if(processors_, [&](const auto& entry) { return entry.second.first == trackId; });
     rebuildSnapshotLocked();
@@ -319,7 +326,7 @@ void Engine::removeTrack(uint32_t trackId) {
 
 void Engine::setTrackClips(uint32_t trackId, const std::vector<ClipDesc>& clips) {
     std::lock_guard lock(mutex_);
-    TrackModel& track = trackLocked(trackId);
+    TrackModel& track = arrangementTrackLocked(trackId);
     track.clips = clips;
     track.clipKeys.clear();
     for (const auto& clip : clips) track.clipKeys.push_back(sourceKey(clip.path));
@@ -328,13 +335,13 @@ void Engine::setTrackClips(uint32_t trackId, const std::vector<ClipDesc>& clips)
 
 void Engine::setTrackNotes(uint32_t trackId, const std::vector<NoteDesc>& notes) {
     std::lock_guard lock(mutex_);
-    trackLocked(trackId).notes = notes;
+    arrangementTrackLocked(trackId).notes = notes;
     rebuildSnapshotLocked();
 }
 
 void Engine::previewNote(uint32_t trackId, int key, int velocity) {
     std::lock_guard lock(mutex_);
-    trackLocked(trackId);
+    arrangementTrackLocked(trackId);
     shared_.previewNotes.push({trackId, static_cast<uint8_t>(std::clamp(key, 0, 127)),
                                static_cast<uint8_t>(std::clamp(velocity, 0, 127))});
     serviceTransportIfIdleLocked();
@@ -360,15 +367,11 @@ void Engine::setTrackSolo(uint32_t trackId, bool solo) {
     trackLocked(trackId).params->solo.store(solo);
 }
 
-void Engine::setMasterGain(float gain) { master_->gain.store(std::max(0.f, gain)); }
-
-void Engine::setMasterPan(float pan) { master_->pan.store(std::clamp(pan, -1.f, 1.f)); }
-
 std::vector<MeterReading> Engine::takeMeters() {
     std::lock_guard lock(mutex_);
     std::vector<MeterReading> meters;
     meters.reserve(tracks_.size() + 1);
-    meters.push_back({0, master_->peakLeft.exchange(0.f), master_->peakRight.exchange(0.f)});
+    meters.push_back({kMaster, master_.params->peakLeft.exchange(0.f), master_.params->peakRight.exchange(0.f)});
     for (const auto& track : tracks_) {
         meters.push_back({track.id, track.params->peakLeft.exchange(0.f), track.params->peakRight.exchange(0.f)});
     }
@@ -380,34 +383,38 @@ std::vector<MeterReading> Engine::takeMeters() {
 
 void Engine::setTrackAutomation(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes) {
     std::lock_guard lock(mutex_);
-    if (trackId == 0) {
-        masterAutomation_ = lanes;
-    } else {
-        trackLocked(trackId).automation = lanes;
-    }
+    trackLocked(trackId).automation = lanes;
     rebuildSnapshotLocked();
 }
 
-void Engine::buildAutomationLocked(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes,
-                                   const std::vector<std::shared_ptr<Processor>>& inserts, int faderLatency,
-                                   double samplesPerBeat, std::vector<AutomationRender>& processorLanes,
-                                   AutomationRender& volume, AutomationRender& pan) {
-    for (const AutomationLaneDesc& desc : lanes) {
+int Engine::insertLatency(const std::vector<std::shared_ptr<Processor>>& inserts) {
+    constexpr int kMaxLatency = 1 << 20;
+    int latency = 0;
+    for (const auto& insert : inserts) {
+        if (insert->isEnabled()) latency = std::min(kMaxLatency, latency + std::max(0, insert->latencySamples()));
+    }
+    return latency;
+}
+
+void Engine::buildAutomationLocked(const TrackModel& track, int inputLatency, int faderLatency,
+                                   double samplesPerBeat, StripRender& strip) {
+    const auto& inserts = track.inserts;
+    for (const AutomationLaneDesc& desc : track.automation) {
         if (desc.points.empty()) continue;
         AutomationRender lane;
         AutomationRender* target = nullptr;
         if (desc.processorId == 0) {
             if (desc.param == "volume") {
-                target = &volume;
+                target = &strip.volume;
             } else if (desc.param == "pan") {
-                target = &pan;
+                target = &strip.pan;
             } else {
                 continue;
             }
             lane.latency = faderLatency;
         } else {
             const auto found = processors_.find(desc.processorId);
-            if (found == processors_.end() || found->second.first != trackId) continue;
+            if (found == processors_.end() || found->second.first != track.id) continue;
             const std::shared_ptr<Processor>& processor = found->second.second;
             const auto place = std::find(inserts.begin(), inserts.end(), processor);
             if (place == inserts.end()) continue;
@@ -419,9 +426,7 @@ void Engine::buildAutomationLocked(uint32_t trackId, const std::vector<Automatio
             lane.param = static_cast<int>(info - infos.begin());
             lane.steps = info->stepCount();
             lane.insert = static_cast<int>(place - inserts.begin());
-            for (auto it = inserts.begin(); it != place; ++it) {
-                if ((*it)->isEnabled()) lane.latency += std::max(0, (*it)->latencySamples());
-            }
+            lane.latency = inputLatency + insertLatency({inserts.begin(), place});
         }
         lane.nodes.reserve(desc.points.size());
         for (const AutomationPoint& point : desc.points) {
@@ -433,10 +438,10 @@ void Engine::buildAutomationLocked(uint32_t trackId, const std::vector<Automatio
         if (target) {
             *target = std::move(lane);
         } else {
-            processorLanes.push_back(std::move(lane));
+            strip.automation.push_back(std::move(lane));
         }
     }
-    std::stable_sort(processorLanes.begin(), processorLanes.end(),
+    std::stable_sort(strip.automation.begin(), strip.automation.end(),
                      [](const AutomationRender& a, const AutomationRender& b) { return a.insert < b.insert; });
 }
 
@@ -732,12 +737,14 @@ void Engine::resetProcessorsLocked() {
     // Offline renders share the processors with live playback. Resetting them
     // before keeps live notes (and a plug-in's reverb tail) out of the render;
     // after, keeps the render's last notes from hanging in live playback.
-    for (auto& track : tracks_) {
+    const auto reset = [](TrackModel& track) {
         for (auto& insert : track.inserts) {
             insert->resetOffline();
             insert->requestReset();
         }
-    }
+    };
+    for (auto& track : tracks_) reset(track);
+    reset(master_);
 }
 
 void Engine::prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices,
@@ -774,7 +781,7 @@ void Engine::renderOfflineLocked(double startBeat, int64_t frames, float* out, b
     std::vector<std::shared_ptr<DelayLine>> delays;
     prepareOfflineLocked(offline, voices, delays, startBeat);
     // With delay compensation the output lags the timeline: render the lag first and drop it.
-    if (const int64_t lag = snapshotHold_->maxLatency; lag > 0) {
+    if (const int64_t lag = snapshotHold_->outputLatency(); lag > 0) {
         std::vector<float> discarded(static_cast<size_t>(lag) * 2);
         offline.renderOffline(*snapshotHold_, discarded.data(), lag, loop, metronome);
     }
@@ -824,7 +831,7 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
 
     constexpr int64_t kChunk = 16384;
     std::vector<float> rendered(kChunk * 2);
-    for (int64_t lag = snapshotHold_->maxLatency; lag > 0;) {  // see renderOfflineLocked()
+    for (int64_t lag = snapshotHold_->outputLatency(); lag > 0;) {  // see renderOfflineLocked()
         const int64_t n = std::min(kChunk, lag);
         offline.renderOffline(*snapshotHold_, rendered.data(), n);
         lag -= n;
@@ -858,23 +865,19 @@ void Engine::rebuildSnapshotLocked() {
 
     // Plug-in delay compensation: each track is delayed to line up with the one
     // whose enabled devices add the most latency.
-    constexpr int kMaxLatency = 1 << 20;
     std::vector<int> latencies;
     latencies.reserve(tracks_.size());
     for (const TrackModel& track : tracks_) {
-        int latency = 0;
-        for (const auto& insert : track.inserts) {
-            if (insert->isEnabled()) latency = std::min(kMaxLatency, latency + std::max(0, insert->latencySamples()));
-        }
-        latencies.push_back(latency);
-        snap->maxLatency = std::max(snap->maxLatency, latency);
+        latencies.push_back(insertLatency(track.inserts));
+        snap->maxLatency = std::max(snap->maxLatency, latencies.back());
     }
 
-    // The master: its fader only (it has no devices yet).
-    snap->master = master_;
-    std::vector<AutomationRender> masterDeviceLanes;
-    buildAutomationLocked(0, masterAutomation_, {}, snap->maxLatency, spb, masterDeviceLanes, snap->masterVolume,
-                          snap->masterPan);
+    // The master: its input is the tracks' sum, which comes maxLatency late.
+    StripRender& master = snap->master;
+    master.params = master_.params;
+    master.inserts = master_.inserts;
+    master.latency = insertLatency(master_.inserts);
+    buildAutomationLocked(master_, snap->maxLatency, snap->outputLatency(), spb, master);
 
     const auto rate = static_cast<uint32_t>(sampleRate_);
     std::array<size_t, kNumStretchConfigs> voicesNeeded{};
@@ -891,8 +894,7 @@ void Engine::rebuildSnapshotLocked() {
             track.delay = std::make_shared<DelayLine>(2 * render.compensation + Renderer::kMaxBlock);
         }
         render.delay = track.delay;
-        buildAutomationLocked(track.id, track.automation, track.inserts, snap->maxLatency, spb, render.automation,
-                              render.volume, render.pan);
+        buildAutomationLocked(track, 0, snap->maxLatency, spb, render);
         render.notes.reserve(track.notes.size());
         for (const NoteDesc& note : track.notes) {
             NoteRender nr;

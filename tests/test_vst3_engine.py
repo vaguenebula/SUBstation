@@ -352,3 +352,48 @@ def test_plugins_without_an_editor(engine, uids):
     assert not engine.open_editor(synth, 0, "x") and not engine.is_editor_open(synth)
     _, mono = plugin_track(engine, uids, "GIL Test Mono")
     assert not engine.open_editor(mono, 0, "x")
+
+
+def test_a_latent_plugin_on_the_master(engine, uids, make_wav, tmp_path):
+    click = np.zeros(1000)
+    click[0] = 0.5
+    track = clip_track(engine, make_wav(click), start_beat=1.0)
+    effect = engine.add_plugin_processor(ge.MASTER, "VST3", PLUGINS, uids["GIL Test Effect"])
+    engine.set_processor_param(effect, FX_LATENCY, 100)
+    engine.idle()  # the plug-in asked for a restart to change its latency
+    # The click lands on beat 1 still: the render starts that much earlier.
+    out = engine.render_offline(0.0, 2 * SPB)[:, 0]
+    assert np.nonzero(out)[0].tolist() == [SPB] and out[SPB] == pytest.approx(0.5, abs=1e-4)
+    target = tmp_path / "mix.wav"
+    engine.export_wav(str(target), 0.0, 2.0, bit_depth=32)
+    with open(target, "rb") as f:
+        data = f.read()
+    exported = np.frombuffer(data[data.index(b"data") + 8:], dtype="<f4").reshape(-1, 2)[:, 0]
+    assert np.nonzero(exported)[0].tolist() == [SPB]
+
+    # The metronome is mixed after the master's devices: it waits for them too.
+    engine.set_track_clips(track, [])
+    with_latency = engine.render_offline(0.0, SPB, metronome=True)
+    assert np.abs(with_latency).max() > 0.1
+    engine.set_processor_enabled(effect, False)
+    np.testing.assert_allclose(engine.render_offline(0.0, SPB, metronome=True), with_latency, atol=1e-6)
+
+
+def test_master_device_automation_plays_in_time(engine, uids, make_wav):
+    """A master device hears the timeline as late as the slowest track, plus the
+    master's devices before it: its automation is as late."""
+    track = clip_track(engine, make_wav(np.full((2 * SAMPLE_RATE, 2), 0.5)), duration_sec=2.0)
+    late = engine.add_plugin_processor(track, "VST3", PLUGINS, uids["GIL Test Effect"])
+    engine.set_processor_param(late, FX_LATENCY, 100)
+    first = engine.add_plugin_processor(ge.MASTER, "VST3", PLUGINS, uids["GIL Test Effect"])
+    engine.set_processor_param(first, FX_LATENCY, 50)
+    engine.idle()
+    utility = engine.add_builtin_processor(ge.MASTER, "utility")
+    gain = engine.processor_params(utility)[engine.processor_param_index(utility, "gain")]
+    quiet, loud = gain.to_normalized(-60.0), gain.to_normalized(0.0)
+    step = SPB + 400  # not on a block boundary of the render (which starts 150 samples early)
+    engine.set_track_automation(ge.MASTER, [ge.AutomationLane(utility, "gain", [
+        ge.AutomationPoint(0.0, quiet), ge.AutomationPoint(step / SPB, quiet), ge.AutomationPoint(step / SPB, loud)])])
+    out = engine.render_offline(0.0, step + 2000)[:, 0]
+    assert np.abs(out[step - 300 : step]).max() < 0.001  # still at -60 dB right up to the step
+    assert out[step + 40] > 0.01  # and rising from it at once (smoothed)

@@ -886,3 +886,30 @@ def test_used_items_rank_first(window, three_tracks):
     browser.sort.setCurrentIndex(browser.sort.findData("name"))
     assert names() == sorted(before, key=str.casefold)
     assert QSettings().value("browser/sort") == "name"
+
+
+def test_open_recent(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    first, second = tmp_path / "first.gilproj", tmp_path / "second & more.gilproj"
+    assert window._save_to(first)
+    assert window._save_to(second)
+    window._save_to(first)  # back to the top, not listed twice
+    assert window.recent_projects() == [str(first.resolve()), str(second.resolve())]
+
+    window._fill_recent_menu()
+    labels = [a.text() for a in window.recent_menu.actions() if not a.isSeparator()]
+    assert labels == ["&1  first.gilproj", "&2  second && more.gilproj", "&Clear List"]
+
+    window.recent_menu.actions()[1].trigger()
+    assert window.project.path.resolve() == second.resolve()
+    assert window.recent_projects()[0] == str(second.resolve())
+
+    second.unlink()  # a missing file is dropped from the list
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    window._open_recent(str(second.resolve()))
+    assert window.recent_projects() == [str(first.resolve())]
+
+    window.recent_menu.actions()[-1].trigger()  # Clear List
+    window._fill_recent_menu()
+    assert [a.isEnabled() for a in window.recent_menu.actions()] == [False]

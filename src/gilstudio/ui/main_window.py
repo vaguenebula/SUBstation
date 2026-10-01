@@ -40,6 +40,8 @@ from .dialogs import ExportDialog, PreferencesDialog
 from .transport_bar import TransportBar
 
 PROJECT_FILTER = f"GIL Studio Project (*{EXTENSION})"
+RECENT_KEY = "files/recent"
+MAX_RECENT = 10
 
 
 class MainWindow(QMainWindow):
@@ -136,6 +138,8 @@ class MainWindow(QMainWindow):
         file = bar.addMenu("&File")
         self._action(file, "&New Project", self.new_project, QKeySequence.StandardKey.New)
         self._action(file, "&Open…", lambda: self.open_project(), QKeySequence.StandardKey.Open)
+        self.recent_menu = file.addMenu("Open &Recent")
+        self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         file.addSeparator()
         self._action(file, "&Save", self.save_project, QKeySequence.StandardKey.Save)
         self._action(file, "Save &As…", self.save_project_as, "Ctrl+Shift+S")
@@ -304,7 +308,7 @@ class MainWindow(QMainWindow):
     def add_device_to_selected_track(self, kind: str, plugin: PluginRef | None = None) -> None:
         """A built-in device `kind`, or kind 'plugin' and a `plugin`."""
         track_id = self.selection.track_id
-        has_track = bool(track_id) and self.project.has_track(track_id)
+        has_track = bool(track_id) and self.project.has_owner(track_id)  # a track or the master
         if is_instrument(kind, plugin) and not (has_track and self.project.track(track_id).is_midi):
             # As in Ableton: an instrument chosen with no MIDI track selected gets a new one.
             track = self.editor.add_midi_track(self._after_selected_track(), instrument=None if plugin else kind,
@@ -318,13 +322,13 @@ class MainWindow(QMainWindow):
     def _plugin_added(self, track_id: str, device_id: str) -> None:
         # After the add is done (the track may be selected just after it, and a drop
         # finished): the editor opens when its track is shown.
-        QTimer.singleShot(0, lambda: self.project.has_track(track_id)
+        QTimer.singleShot(0, lambda: self.project.has_owner(track_id)
                           and self.bridge.request_plugin_editor(track_id, device_id))
 
     def _plugin_param_edited(self, track_id: str, device_id: str, param_id: str, value: float, old: float,
                              gesture: int) -> None:
         """A plug-in's own editor changed a parameter: an undo step (one per knob drag)."""
-        if self.project.has_track(track_id):
+        if self.project.has_owner(track_id):
             self.editor.set_device_param(track_id, device_id, param_id, value,
                                          merge_key=("plugin edit", device_id, param_id, gesture), old=old)
 
@@ -434,6 +438,7 @@ class MainWindow(QMainWindow):
             return
         self._reset_session()
         QSettings().setValue("files/last_dir", str(Path(path).parent))
+        self._add_recent(Path(path))
         self.arrangement.zoom_to_arrangement()
         self.show_message(f"Opened {Path(path).name}")
 
@@ -458,6 +463,7 @@ class MainWindow(QMainWindow):
             return False
         self.undo_stack.setClean()
         QSettings().setValue("files/last_dir", str(path.parent))
+        self._add_recent(path)
         self._update_title()
         self.show_message(f"Saved {path.name}")
         return True
@@ -490,6 +496,45 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         self.show_message(f"Exported {Path(path).name}")
+
+    @staticmethod
+    def recent_projects() -> list[str]:
+        stored = QSettings().value(RECENT_KEY)
+        if isinstance(stored, str):  # QSettings gives a one-item list back as a string
+            stored = [stored]
+        return [str(p) for p in stored] if isinstance(stored, list) else []
+
+    @staticmethod
+    def _set_recent(paths: list[str]) -> None:
+        QSettings().setValue(RECENT_KEY, paths[:MAX_RECENT])
+
+    def _add_recent(self, path: Path) -> None:
+        entry = str(path.resolve())
+        key = entry.casefold()
+        self._set_recent([entry] + [p for p in self.recent_projects() if p.casefold() != key])
+
+    def _fill_recent_menu(self) -> None:
+        menu = self.recent_menu
+        menu.clear()
+        paths = self.recent_projects()
+        if not paths:
+            menu.addAction("No Recent Projects").setEnabled(False)
+            return
+        for i, path in enumerate(paths):
+            name = Path(path).name.replace("&", "&&")  # a literal "&", not a mnemonic
+            action = menu.addAction(f"&{i + 1}  {name}" if i < 9 else f"{i + 1}  {name}")
+            action.setToolTip(path)
+            action.setStatusTip(path)
+            action.triggered.connect(lambda _checked=False, p=path: self._open_recent(p))
+        menu.addSeparator()
+        menu.addAction("&Clear List", lambda: self._set_recent([]))
+
+    def _open_recent(self, path: str) -> None:
+        if not Path(path).is_file():
+            QMessageBox.warning(self, APP_NAME, f"{Path(path).name} can't be found. It was removed from the list.")
+            self._set_recent([p for p in self.recent_projects() if p != path])
+            return
+        self.open_project(path)
 
     def _last_dir(self) -> str:
         return str(QSettings().value("files/last_dir", str(Path.home() / "Music")))

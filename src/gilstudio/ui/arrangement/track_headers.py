@@ -2,7 +2,8 @@
 volume, pan, meter, and while a track's automation shows, its automation
 choosers (and those of the lanes below it). Plus the master track's header and
 lane, which show the master's automation likewise. Volume and pan follow their
-automation while it plays."""
+automation while it plays. Click the master's header to select it: the device
+view shows its effects."""
 
 from __future__ import annotations
 
@@ -367,38 +368,47 @@ class MasterHeader(QWidget):
     """The master's volume, pan and meter; and while its automation shows, its
     automation choosers (and those of the lanes below it)."""
 
-    def __init__(self, editor: ProjectEditor, bridge: EngineBridge, parent: QWidget | None = None):
+    def __init__(self, editor: ProjectEditor, bridge: EngineBridge, selection: Selection | None = None,
+                 parent: QWidget | None = None):
         super().__init__(parent)
         self.editor = editor
         self.project = editor.project
         self.bridge = bridge
+        self.selection = selection
         self.main_height = MASTER_HEIGHT
         self.lanes: tuple[LaneRow, ...] = ()
-        self.volume = volume_box(self.project.master_volume_db)
+        self.volume = volume_box(self.project.master.volume_db)
         self.volume.setParent(self)
         self.volume.setToolTip("Master Volume")
         self.pan = Knob(-1.0, 1.0, 0.0, default=0.0, bipolar=True, formatter=format_pan, parent=self)
         self.pan.setToolTip("Master Pan")
         self.meter = MeterWidget(self)
         self.automation = AutomationControls(MASTER, editor, bridge, self)
-        self.volume.valueChanged.connect(lambda v, key: self.editor.set_master_volume(v, key))
-        self.pan.valueChanged.connect(lambda v, key: self.editor.set_master_pan(v, key))
-        self.project.settings_changed.connect(self.refresh)
+        self.volume.valueChanged.connect(lambda v, key: self.editor.set_track_param(MASTER, "volume_db", v, key))
+        self.pan.valueChanged.connect(lambda v, key: self.editor.set_track_param(MASTER, "pan", v, key))
+        for signal in (self.project.track_changed, self.project.devices_changed):
+            signal.connect(lambda track_id: self.refresh() if track_id == MASTER else None)
+        bridge.plugin_params_rebuilt.connect(lambda track_id, _device_id: self.refresh() if track_id == MASTER else None)
         self.project.reset.connect(self.refresh)
+        if selection is not None:
+            selection.changed.connect(self.update)
         bridge.automation_state_changed.connect(lambda owner: self.refresh() if owner == MASTER else None)
         bridge.position_changed.connect(self._follow_automation)
-        bridge.meters_updated.connect(lambda: self.meter.set_levels(*bridge.meters.get("master", (0.0, 0.0))))
+        bridge.meters_updated.connect(lambda: self.meter.set_levels(*bridge.meters.get(MASTER, (0.0, 0.0))))
         self.refresh()
 
     def refresh(self) -> None:
-        show_mixer_values(self.bridge, MASTER, self.volume, self.pan,
-                          (self.project.master_volume_db, self.project.master_pan))
+        self._show_mixer()
         self.automation.refresh()
+        self.update()
+
+    def _show_mixer(self) -> None:
+        master = self.project.master
+        show_mixer_values(self.bridge, MASTER, self.volume, self.pan, (master.volume_db, master.pan))
 
     def _follow_automation(self) -> None:
         if self.volume.automation() == "on" or self.pan.automation() == "on":
-            show_mixer_values(self.bridge, MASTER, self.volume, self.pan,
-                              (self.project.master_volume_db, self.project.master_pan))
+            self._show_mixer()
 
     def set_rows(self, main_height: int, lanes: tuple[LaneRow, ...]) -> None:
         self.main_height = main_height
@@ -417,13 +427,17 @@ class MasterHeader(QWidget):
         self.meter.setGeometry(w - 12, 4, 8, MASTER_HEIGHT - 8)
         self.volume.setGeometry(w - 12 - 6 - 76, (MASTER_HEIGHT - 20) // 2, 76, 20)
         self.pan.setGeometry(w - 12 - 6 - 76 - 32, (MASTER_HEIGHT - 26) // 2, 26, 26)
-        shown = self.project.master_automation_view.shown
+        shown = self.project.master.automation_view.shown
         main = QRect(12, MASTER_HEIGHT + 6, w - 12 - 18, CHOOSER_HEIGHT) if shown else None
         self.automation.place(main, [rect.adjusted(12, 0, -18, 0) for rect in self._lane_rects()])
 
+    @property
+    def selected(self) -> bool:
+        return self.selection is not None and self.selection.track_id == MASTER
+
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(theme.PANEL_ALT))
+        p.fillRect(self.rect(), QColor(theme.LANE_SELECTED if self.selected else theme.PANEL_ALT))
         paint_lane_headers(p, self._lane_rects(), self.width())
         p.fillRect(QRect(0, 0, 5, self.height()), QColor(theme.TEXT_DIM))
         p.fillRect(QRect(0, 0, self.width(), 1), QColor(theme.BORDER))
@@ -432,14 +446,20 @@ class MasterHeader(QWidget):
         p.setFont(theme.ui_font(9, bold=True))
         p.drawText(QRect(12, 0, 100, MASTER_HEIGHT), Qt.AlignmentFlag.AlignVCenter, "Master")
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.selection is not None:
+            self.selection.select_track(MASTER, focus_track=True)  # the device view shows its effects
+
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        if self.selection is not None:
+            self.selection.select_track(MASTER, focus_track=True)
         menu = QMenu(self)
-        if self.project.master_automation_view.shown:
+        if self.project.master.automation_view.shown:
             menu.addAction("Hide Automation", lambda: self.editor.hide_automation(MASTER))
             menu.addAction("Show Automation in New Lane", lambda: self.editor.add_automation_lane(MASTER))
         else:
             menu.addAction("Show Automation", lambda: self.editor.show_automation(MASTER))
-        if any(self.bridge.is_overridden(MASTER, key) for key in self.project.master_automation):
+        if any(self.bridge.is_overridden(MASTER, key) for key in self.project.master.automation):
             menu.addAction("Re-Enable Automation", lambda: self.bridge.re_enable_automation(MASTER))
         menu.exec(event.globalPos())
 
@@ -464,7 +484,7 @@ class MasterLane(QWidget):
         self.setMouseTracking(True)
         for signal in (view.changed, view.grid_changed, self.project.settings_changed, selection.changed,
                        self.project.automation_changed, self.project.automation_view_changed,
-                       bridge.automation_state_changed):
+                       self.project.devices_changed, bridge.automation_state_changed):
             signal.connect(lambda *_args: self.update())
 
     def set_rows(self, main_height: int, lanes: tuple[LaneRow, ...]) -> None:
@@ -479,7 +499,7 @@ class MasterLane(QWidget):
         self._playhead = beat
 
     def envelope_areas(self) -> list[EnvelopeArea]:
-        view = self.project.master_automation_view
+        view = self.project.master.automation_view
         if not view.shown:
             return []
         width = float(self.width())
@@ -562,7 +582,7 @@ class MasterLane(QWidget):
         area = automation_lanes.area_at(self.envelope_areas(), pos)
         if area is not None:
             automation_lanes.add_menu_actions(self, area, pos, menu)
-        elif self.project.master_automation_view.shown:
+        elif self.project.master.automation_view.shown:
             menu.addAction("Hide Automation", lambda: self.editor.hide_automation(MASTER))
         else:
             menu.addAction("Show Automation", lambda: self.editor.show_automation(MASTER))

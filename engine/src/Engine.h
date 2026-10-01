@@ -135,6 +135,9 @@ public:
     void releaseUnusedSources();
 
     // --- Tracks ---------------------------------------------------------------
+    // Track id 0 is the master: it has devices, a mixer and automation like a
+    // track, but no clips or notes, and it never mutes or solos.
+    static constexpr uint32_t kMaster = 0;
     uint32_t addTrack();
     void removeTrack(uint32_t trackId);
     void setTrackClips(uint32_t trackId, const std::vector<ClipDesc>& clips);
@@ -142,12 +145,12 @@ public:
     // Plays a note on the track's instrument right away (velocity 0 releases it),
     // e.g. while editing notes. Only heard while a device runs.
     void previewNote(uint32_t trackId, int key, int velocity);
-    void setTrackGain(uint32_t trackId, float gain);
+    void setTrackGain(uint32_t trackId, float gain);  // also the master's (and pan)
     void setTrackPan(uint32_t trackId, float pan);
     void setTrackMute(uint32_t trackId, bool mute);
     void setTrackSolo(uint32_t trackId, bool solo);
-    void setMasterGain(float gain);
-    void setMasterPan(float pan);
+    void setMasterGain(float gain) { setTrackGain(kMaster, gain); }
+    void setMasterPan(float pan) { setTrackPan(kMaster, pan); }
     std::vector<MeterReading> takeMeters();
 
     // --- Automation -------------------------------------------------------------
@@ -159,7 +162,7 @@ public:
     // counts again once its envelope is taken away.
     void setTrackAutomation(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes);
 
-    // --- Devices on tracks (insert chain) ------------------------------------
+    // --- Devices on tracks and the master (insert chain) -----------------------
     uint32_t addBuiltinProcessor(uint32_t trackId, const std::string& type, int index);
     // Loads a plug-in ("VST3" format) into the chain. Main thread; throws
     // std::runtime_error with a message for the user if it can't be loaded.
@@ -232,7 +235,8 @@ private:
     void audioCallback(const AudioIO& io) noexcept override;
     void deviceEvent(DeviceEvent event) noexcept override;
 
-    TrackModel& trackLocked(uint32_t trackId);
+    TrackModel& trackLocked(uint32_t trackId);           // the master too
+    TrackModel& arrangementTrackLocked(uint32_t trackId);  // not the master
     std::shared_ptr<Processor> processorLocked(uint32_t processorId);
     std::shared_ptr<Processor> processor(uint32_t processorId);  // locks
     uint32_t insertProcessorLocked(uint32_t trackId, std::shared_ptr<Processor> processor, int index);
@@ -251,11 +255,13 @@ private:
                               std::vector<std::shared_ptr<DelayLine>>& delays, double startBeat);
     void resetProcessorsLocked();
     void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
-    // The snapshot's envelopes for a track (or the master: no inserts), in samples.
-    void buildAutomationLocked(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes,
-                               const std::vector<std::shared_ptr<Processor>>& inserts, int faderLatency,
-                               double samplesPerBeat, std::vector<AutomationRender>& processorLanes,
-                               AutomationRender& volume, AutomationRender& pan);
+    // A strip's envelopes in the snapshot, in samples. `inputLatency`: how late
+    // the strip's input hears the timeline (0 for a track; the tracks' latency
+    // for the master). Its devices hear it that much later, plus the latency of
+    // the devices before them; its fader after all of them and its compensation.
+    void buildAutomationLocked(const TrackModel& track, int inputLatency, int faderLatency, double samplesPerBeat,
+                               StripRender& strip);
+    static int insertLatency(const std::vector<std::shared_ptr<Processor>>& inserts);
     static std::string sourceKey(const std::string& path);
 
     mutable std::recursive_mutex mutex_;
@@ -285,8 +291,7 @@ private:
 
     std::vector<TrackModel> tracks_;
     uint32_t nextTrackId_ = 1;
-    std::shared_ptr<TrackParams> master_ = std::make_shared<TrackParams>();
-    std::vector<AutomationLaneDesc> masterAutomation_;
+    TrackModel master_{kMaster, std::make_shared<TrackParams>()};  // never has clips or notes
     std::unordered_map<uint32_t, std::pair<uint32_t, std::shared_ptr<Processor>>> processors_;  // id -> track, processor
     uint32_t nextProcessorId_ = 1;
     // Removed processors wait here until no snapshot uses them, so that they are
