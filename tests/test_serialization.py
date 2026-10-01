@@ -129,7 +129,7 @@ def test_old_project_files_load_unchanged():
     assert [t.id for t in project.tracks] == ["t1"] and project.tempo == 128.0
     # Saved again, it says the same, and that the master has no devices.
     saved = project_to_dict(project)
-    assert saved["version"] == 6 and saved["master"] == {**old["master"], "devices": []}
+    assert saved["version"] == 7 and saved["master"] == {**old["master"], "devices": []}
     # Tracks from before version 6 have no input, Auto monitoring and aren't armed.
     assert saved["tracks"] == [{**t, "input": [], "monitor": "auto", "armed": False} for t in old["tracks"]]
     # Very old files have no master at all.

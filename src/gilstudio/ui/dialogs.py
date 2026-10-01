@@ -1,4 +1,4 @@
-"""Preferences (audio device, plug-in folders) and export dialogs."""
+"""Preferences (audio device, MIDI inputs, plug-in folders) and export dialogs."""
 
 from __future__ import annotations
 
@@ -32,7 +32,13 @@ from PySide6.QtWidgets import (
 from .. import _engine as ge
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
-from ..audio.settings import BUFFER_SIZES, DRIVERS, SAMPLE_RATES, AudioSettings
+from ..audio.settings import (
+    BUFFER_SIZES,
+    DRIVERS,
+    SAMPLE_RATES,
+    AudioSettings,
+    disabled_midi_inputs,
+)
 from ..plugins.scanner import standard_paths
 from ..plugins.settings import custom_folders, set_custom_folders
 
@@ -126,6 +132,8 @@ class PreferencesDialog(QDialog):
         audio_layout.addStretch(1)
         self.tabs = QTabWidget()
         self.tabs.addTab(audio, "Audio")
+        self.midi = MidiPage(bridge)
+        self.tabs.addTab(self.midi, "MIDI")
         self.plugins = PluginsPage(plugins) if plugins is not None else None
         if self.plugins is not None:
             self.tabs.addTab(self.plugins, "Plug-ins")
@@ -306,6 +314,66 @@ class PreferencesDialog(QDialog):
             self.setEnabled(True)
         if not shown:
             self._refresh("The driver has no settings dialog of its own.")
+
+
+class MidiPage(QWidget):
+    """The MIDI inputs connected: each on (tracks can hear and record it) or off.
+    Inputs plugged in later show up with Refresh (and on the next start)."""
+
+    def __init__(self, bridge: EngineBridge, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.bridge = bridge
+        self.inputs = QListWidget()
+        self.inputs.setToolTip("MIDI tracks hear the inputs that are on (all of them, or the one they choose).")
+        self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.setToolTip("Look for MIDI inputs plugged in or taken out since.")
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet(f"color: {theme.TEXT_DIM};")
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.refresh_button)
+        row.addWidget(self.status, 1)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("MIDI Inputs"))
+        layout.addWidget(self.inputs, 1)
+        layout.addLayout(row)
+
+        self.inputs.itemChanged.connect(self._toggled)
+        self.refresh_button.clicked.connect(self.refresh)
+        self._show()
+
+    def refresh(self) -> None:
+        self.bridge.open_midi_inputs()
+        self._show()
+
+    def _show(self) -> None:
+        disabled = disabled_midi_inputs()
+        with _quiet(self.inputs):
+            self.inputs.clear()
+            for name in self.bridge.midi_inputs():
+                item = QListWidgetItem(name)
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Unchecked if name in disabled else Qt.CheckState.Checked)
+                error = self.bridge.midi_errors.get(name)
+                if error:
+                    item.setForeground(QColor("#ff6b5e"))
+                    item.setToolTip(error)
+                self.inputs.addItem(item)
+        count = self.inputs.count()
+        if count == 0:
+            self.status.setText("No MIDI input is connected.")
+        elif self.bridge.midi_errors:
+            self.status.setText(f"{len(self.bridge.midi_errors)} could not be opened (see their tooltips).")
+        else:
+            self.status.setText(f"{count} MIDI input{'s' if count != 1 else ''}")
+
+    def _toggled(self, item: QListWidgetItem) -> None:
+        self.bridge.set_midi_input_enabled(item.data(Qt.ItemDataRole.UserRole),
+                                           item.checkState() == Qt.CheckState.Checked)
+        self._show()
 
 
 def _same_folder(a: str | Path, b: str | Path) -> bool:

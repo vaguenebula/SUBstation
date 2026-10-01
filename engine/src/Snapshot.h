@@ -165,9 +165,25 @@ enum class MonitorMode : uint8_t {
     Auto,  // while armed, unless it plays back without recording
 };
 
+// Which MIDI input a track hears (and records): one input or all of them, one
+// channel or all.
+struct MidiInputRoute {
+    static constexpr int kAllPorts = -1;
+    static constexpr int kAllChannels = -1;
+    bool enabled = false;
+    int port = kAllPorts;        // the engine's port id of an input
+    int channel = kAllChannels;  // 0-15
+
+    bool accepts(uint16_t fromPort, uint8_t status) const noexcept {
+        return enabled && (port == kAllPorts || port == fromPort) &&
+               (channel == kAllChannels || channel == (status & 0x0F));
+    }
+};
+
 struct TrackRender : StripRender {
     uint32_t id = 0;
     InputEdge input;
+    MidiInputRoute midiInput;
     MonitorMode monitor = MonitorMode::Auto;
     bool armed = false;
     std::vector<ClipRender> clips;  // sorted by start

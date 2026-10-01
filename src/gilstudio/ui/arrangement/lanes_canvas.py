@@ -391,7 +391,8 @@ class LanesCanvas(QWidget):
     def _draw_live_take(self, p: QPainter, track_color: str, take, row_top: float, row_height: int,
                         visible: QRectF) -> None:
         """A take while it records: a clip that grows, its waveform drawn from the
-        peaks the engine sends (the file isn't read until the take is done)."""
+        peaks the engine sends (the file isn't read until the take is done), or
+        a MIDI take's notes so far."""
         rate = self.bridge.engine.sample_rate
         tempo = self.project.tempo
         start = take.start_sample / rate * tempo / 60.0
@@ -408,7 +409,9 @@ class LanesCanvas(QWidget):
             p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), title_h), QColor(theme.RECORD_ON))
         body = rect.adjusted(0, title_h + 1, 0, -1)
         peaks = take.peaks
-        if len(peaks) and body.height() > 2:
+        if take.midi:
+            self._draw_live_notes(p, take, end, body, visible)
+        elif len(peaks) and body.height() > 2:
             # One column per pixel: the extremes of the peaks it covers.
             fpp = self.view.frames_per_pixel(rate)
             take_x = self.view.beat_to_x(start)
@@ -431,6 +434,23 @@ class LanesCanvas(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(rect.adjusted(0.5, 0.5, -0.5, -0.5))
         p.restore()
+
+    def _draw_live_notes(self, p: QPainter, take, take_end: float, area: QRectF, visible: QRectF) -> None:
+        """A MIDI take's notes while it records, laid out as a clip's (held ones reach its end)."""
+        notes = take.notes
+        if not len(notes) or area.height() < 3:
+            return
+        beats_per_sample = self.project.tempo / 60.0 / self.bridge.engine.sample_rate
+        low, high = int(notes[:, 2].min()), int(notes[:, 2].max())
+        row = min(area.height() / (high - low + 1), max(2.0, area.height() / 12))
+        top = area.top() + (area.height() - row * (high - low + 1)) / 2
+        gap = 1.0 if row > 3 else 0.0
+        for start, end, key, _velocity, _channel in notes.tolist():
+            x0 = self.view.beat_to_x(start * beats_per_sample)
+            x1 = self.view.beat_to_x(end * beats_per_sample if end >= 0 else take_end)
+            if x1 >= visible.left() and x0 <= visible.right():
+                p.fillRect(QRectF(x0, top + (high - key) * row, max(1.0, x1 - x0 - gap), max(1.0, row - gap)),
+                           theme.WAVEFORM)
 
     def _draw_notes(self, p: QPainter, clip: MidiClip, area: QRectF, visible: QRectF) -> None:
         """The notes a MIDI clip plays, fitted to the clip's height (as in Ableton)."""

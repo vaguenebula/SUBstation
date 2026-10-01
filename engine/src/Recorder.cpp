@@ -103,9 +103,14 @@ void RecordingTake::push(const float* left, const float* right, int count, float
 // ---------------------------------------------------------------------------
 // RecordingSession
 
-RecordingSession::RecordingSession(std::vector<std::unique_ptr<RecordingTake>> takes, double sampleRate,
-                                   int64_t placement)
-    : takes_(std::move(takes)), sampleRate_(sampleRate), placement_(placement) {
+RecordingSession::RecordingSession(std::vector<std::unique_ptr<RecordingTake>> takes,
+                                   std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes, double sampleRate,
+                                   int64_t placement, int64_t midiPlacement)
+    : takes_(std::move(takes)),
+      midiTakes_(std::move(midiTakes)),
+      sampleRate_(sampleRate),
+      placement_(placement),
+      midiPlacement_(midiPlacement) {
     try {
         for (auto& take : takes_) {
             const std::filesystem::path path = pathFromUtf8(take->path);
@@ -224,7 +229,63 @@ std::vector<RecordedTake> RecordingSession::finish() {
         }
         results.push_back(std::move(result));
     }
+    for (auto& take : midiTakes_) {
+        RecordedTake result;
+        result.trackId = take->trackId;
+        result.sampleRate = sampleRate_;
+        result.midi = true;
+        result.notes = midiNotes(*take);
+        const int64_t start = take->start.load();
+        if (start != RecordingTake::kNotStarted) {
+            result.startSample = start;
+            result.frames = take->frames.load();
+        }
+        const int64_t end = result.startSample + result.frames;
+        std::erase_if(result.notes, [&](const RecordedNote& note) { return note.start >= end; });
+        for (RecordedNote& note : result.notes) {
+            if (note.end < 0 || note.end > end) note.end = end;  // still held: it ends with the take
+        }
+        if (const int64_t lost = take->dropped.load(); lost > 0) {
+            result.error = std::to_string(lost) + " MIDI events were lost while recording";
+        }
+        results.push_back(std::move(result));
+    }
     return results;
+}
+
+std::vector<RecordedNote> RecordingSession::midiNotes(MidiRecordingTake& take) {
+    take.collect();
+    // Where each note was heard against the timeline; none before the take's start.
+    const int64_t start = take.start.load();
+    std::vector<RecordedNote> notes;
+    notes.reserve(take.notes.size());
+    for (RecordedNote note : take.notes) {
+        note.start = std::max(note.start - midiPlacement_, start);
+        if (note.end >= 0) note.end = std::max(note.end - midiPlacement_, note.start + 1);
+        notes.push_back(note);
+    }
+    return notes;
+}
+
+// ---------------------------------------------------------------------------
+// MidiRecordingTake
+
+void MidiRecordingTake::collect() {
+    Event event;
+    while (events.pop(event)) {
+        if (event.velocity > 0) {
+            notes.push_back({event.time, -1, event.key, event.velocity, event.channel});
+            continue;
+        }
+        // A note-off ends the earliest note held on its key (one whose note-on
+        // came before the take began has none).
+        for (RecordedNote& note : notes) {
+            if (note.end < 0 && note.key == event.key && note.channel == event.channel) {
+                note.end = std::max(event.time, note.start + 1);
+                break;
+            }
+        }
+    }
 }
 
 }  // namespace gil

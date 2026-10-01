@@ -193,6 +193,19 @@ class Device:
         return self.kind == PLUGIN_KIND
 
 
+@dataclass(frozen=True)
+class MidiInput:
+    """Which MIDI input a MIDI track hears and records: every input ("") or one
+    by name, on every channel (0) or one (1-16)."""
+
+    device: str = ""
+    channel: int = 0
+
+    @property
+    def all_devices(self) -> bool:
+        return not self.device
+
+
 @dataclass
 class Track:
     id: str
@@ -210,6 +223,8 @@ class Track:
     automation_view: AutomationView = field(default_factory=AutomationView)
     # Audio input: device channels (0-based): () none, (c,) mono, (l, r) a stereo pair.
     input: tuple[int, ...] = ()
+    # MIDI input (MIDI tracks); None: none. New MIDI tracks hear every input, as in Ableton.
+    midi_input: MidiInput | None = field(default_factory=MidiInput)
     monitor: str = "auto"  # one of MONITOR_MODES
     armed: bool = False  # records when recording starts (saved, not undone)
 
@@ -220,6 +235,11 @@ class Track:
     @property
     def is_master(self) -> bool:
         return self.kind == MASTER_KIND
+
+    @property
+    def has_input(self) -> bool:
+        """Whether it has something to record: an audio input, or a MIDI track's MIDI input."""
+        return self.midi_input is not None if self.is_midi else bool(self.input)
 
 
 def new_master(**attrs) -> Track:

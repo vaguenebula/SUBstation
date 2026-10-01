@@ -786,7 +786,7 @@ def test_plugin_folders_in_preferences(window, tmp_path):
 
     prefs = PreferencesDialog(window.bridge, window, plugins=index)
     page = prefs.plugins
-    assert [prefs.tabs.tabText(i) for i in range(prefs.tabs.count())] == ["Audio", "Plug-ins"]
+    assert [prefs.tabs.tabText(i) for i in range(prefs.tabs.count())] == ["Audio", "MIDI", "Plug-ins"]
     assert page.folders.count() == 1 and "(standard)" in page.folders.item(0).text()
     page.folders.setCurrentRow(0)
     assert not page.remove_button.isEnabled()  # the standard folders stay

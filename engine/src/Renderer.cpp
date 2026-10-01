@@ -22,6 +22,14 @@ void Renderer::prepare(double sampleRate) {
     numEvents_ = 0;
     previewNotes_.assign(kMaxPreviewNotes, {});
     numPreviewNotes_ = 0;
+    pendingInput_.assign(kMaxPendingInput, {});
+    numPendingInput_ = 0;
+    inputEvents_.assign(kMaxInputEvents, {});
+    numInputEvents_ = 0;
+    liveNotes_.assign(kMaxLiveNotes, {});
+    numLiveNotes_ = 0;
+    releaseLiveNotes_ = false;
+    wasPlaying_ = false;
     expectedPosition_ = -1;
     pendingTickStart_ = 0;
     numPendingTicks_ = 0;
@@ -91,6 +99,7 @@ void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, cons
     syncTempo(snap);
     drainCommands(shared);
     drainPreviewNotes(shared);
+    drainMidiInput(shared);
     inputs_ = io.inputs;
     numInputs_ = static_cast<int>(io.numInputs);
     recording_ = recording;
@@ -102,9 +111,12 @@ void Renderer::processLive(const RenderSnapshot& snap, SharedState& shared, cons
     while (done < frames) {
         const int n = static_cast<int>(std::min<uint32_t>(kMaxBlock, frames - done));
         inputOffset_ = static_cast<int>(done);
+        deviceTime_ = io.sampleTime + done;
+        gatherMidiInput(n);
         renderChunk(snap, n,
                     {true, snap.loopEnabled, shared.metronome.load(std::memory_order_relaxed)});
         numPreviewNotes_ = 0;  // played in the first chunk
+        numInputEvents_ = 0;
         mixPreview(shared, n);
 
         if (numOutputs == 1) {
@@ -198,6 +210,8 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     }
 
     if (recording_ && numSegments_ > 0) recordInput();
+    if (wasPlaying_ && !playing_) releaseLiveNotes_ = true;
+    wasPlaying_ = playing_;
 
     float* masterL = masterLeft_.data();
     float* masterR = masterRight_.data();
@@ -218,8 +232,11 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
         } else {
             for (int s = 0; s < numSegments_; ++s) renderClips(track, segments_[s], snap.clipFadeSamples, voices);
         }
-        if (!track.notes.empty() || numActiveNotes_ > 0 || numPreviewNotes_ > 0) {
-            buildNoteEvents(track);
+        const bool hearsMidi = hearsMidiInput(track, flags);
+        MidiRecordingTake* take = recording_ ? midiTake(track.id) : nullptr;
+        if (!track.notes.empty() || numActiveNotes_ > 0 || numPreviewNotes_ > 0 || numInputEvents_ > 0 ||
+            numLiveNotes_ > 0) {
+            buildNoteEvents(track, hearsMidi, !(hearsMidi && track.monitor == MonitorMode::In), take);
         } else {
             numEvents_ = 0;
         }
@@ -238,6 +255,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     }
 
     forgetNotesOfRemovedTracks(snap);
+    releaseLiveNotes_ = false;
 
     // 3. The master strip (it never mutes, and nothing is later than it: no compensation).
     if (snap.master.params) {
@@ -299,17 +317,177 @@ void Renderer::recordInput() noexcept {
     for (int s = 0; s < numSegments_; ++s) {
         if (session.interrupted()) return;
         const Segment& segment = segments_[s];
-        for (const auto& take : session.takes()) {
-            if (take->start.load(std::memory_order_relaxed) == RecordingTake::kNotStarted) {
-                take->start.store(segment.position, std::memory_order_release);
-            } else if (segment.jump) {  // located, or stopped and started again: the takes end
-                session.interrupt();
-                return;
+        bool jumped = false;
+        const auto begin = [&](std::atomic<int64_t>& start) {
+            if (start.load(std::memory_order_relaxed) == RecordingTake::kNotStarted) {
+                start.store(segment.position, std::memory_order_release);
+            } else if (segment.jump) {
+                jumped = true;
             }
+        };
+        for (const auto& take : session.takes()) begin(take->start);
+        for (const auto& take : session.midiTakes()) begin(take->start);
+        if (jumped) {  // located, or stopped and started again: the takes end
+            session.interrupt();
+            return;
         }
         for (const auto& take : session.takes()) {
             take->push(inputChannel(take->inputs[0], segment.offset), inputChannel(take->inputs[1], segment.offset),
                        segment.length, recordScratch_.data());
+        }
+        for (const auto& take : session.midiTakes()) {
+            take->frames.fetch_add(segment.length, std::memory_order_release);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MIDI input
+
+void Renderer::drainMidiInput(SharedState& shared) noexcept {
+    while (numPendingInput_ < kMaxPendingInput && shared.midiInput.pop(pendingInput_[numPendingInput_])) {
+        ++numPendingInput_;
+    }
+}
+
+void Renderer::gatherMidiInput(int frames) noexcept {
+    // The messages due in this chunk, in the order they came. Those more than a
+    // second off weren't stamped against this run of the clock (it was reset, or
+    // live output was suspended meanwhile): they play now, but a note-on that
+    // late is dropped rather than played out of time (its note-off is harmless).
+    numInputEvents_ = 0;
+    const int64_t end = deviceTime_ + frames;
+    const auto second = static_cast<int64_t>(sampleRate_);
+    int kept = 0;
+    bool deferring = false;  // one was put off: so are those that came after it
+    for (int i = 0; i < numPendingInput_; ++i) {
+        const MidiInputEvent& event = pendingInput_[i];
+        const uint8_t type = event.status & 0xF0;
+        const bool stale = event.time < deviceTime_ - second || event.time > end + second;
+        if (stale && type == 0x90 && event.data2 > 0) continue;
+        bool due = !deferring && (event.time < end || stale);
+        if (due && numInputEvents_ == kMaxInputEvents) due = false;
+        int offset = stale ? 0 : static_cast<int>(std::clamp<int64_t>(event.time - deviceTime_, 0, frames - 1));
+        if (due && (type == 0x80 || (type == 0x90 && event.data2 == 0))) {
+            // A note-off never plays before its note-on (they may be stamped out
+            // of order, or both late): just after it, or in the next chunk.
+            for (int j = numInputEvents_ - 1; j >= 0; --j) {
+                const InputEvent& on = inputEvents_[j];
+                if (on.port != event.port || (on.status & 0x0F) != (event.status & 0x0F) || on.data1 != event.data1 ||
+                    (on.status & 0xF0) != 0x90 || on.data2 == 0) {
+                    continue;
+                }
+                if (on.offset >= offset) {
+                    if (on.offset + 1 < frames) {
+                        offset = on.offset + 1;
+                    } else {
+                        due = false;
+                    }
+                }
+                break;
+            }
+        }
+        if (due) {
+            inputEvents_[numInputEvents_++] = {offset, event.port, event.status, event.data1, event.data2};
+        } else {
+            deferring = deferring || event.time < end || stale;
+            pendingInput_[kept++] = event;
+        }
+    }
+    numPendingInput_ = kept;
+}
+
+bool Renderer::hearsMidiInput(const TrackRender& track, ChunkFlags flags) const noexcept {
+    if (!flags.live || !track.midiInput.enabled) return false;  // offline renders play the arrangement
+    switch (track.monitor) {
+        case MonitorMode::In: return true;
+        case MonitorMode::Auto: return track.armed;  // clips' notes go on playing alongside
+        case MonitorMode::Off: break;
+    }
+    return false;
+}
+
+MidiRecordingTake* Renderer::midiTake(uint32_t trackId) const noexcept {
+    if (!recording_ || recording_->interrupted()) return nullptr;
+    for (const auto& take : recording_->midiTakes()) {
+        if (take->trackId == trackId) return take.get();
+    }
+    return nullptr;
+}
+
+int Renderer::findLiveNote(uint32_t trackId, uint16_t port, uint8_t channel, uint8_t key) const noexcept {
+    for (int i = 0; i < numLiveNotes_; ++i) {
+        const LiveNote& note = liveNotes_[i];
+        if (note.trackId == trackId && note.port == port && note.channel == channel && note.key == key) return i;
+    }
+    return -1;
+}
+
+void Renderer::recordMidi(MidiRecordingTake* take, int offset, uint8_t channel, uint8_t key,
+                          uint8_t velocity) noexcept {
+    // Where the playhead was at that offset; nothing is recorded while it stands (a count-in).
+    if (!take || !playing_) return;
+    for (int s = 0; s < numSegments_; ++s) {
+        const Segment& segment = segments_[s];
+        if (offset >= segment.offset && offset < segment.offset + segment.length) {
+            take->push({segment.position + (offset - segment.offset), channel, key, velocity});
+            return;
+        }
+    }
+}
+
+void Renderer::routeMidiInput(const TrackRender& track, bool hears, MidiRecordingTake* take) noexcept {
+    // Live notes the track no longer hears (its input or monitoring changed, or
+    // the transport stopped) are released at the chunk's start.
+    for (int i = 0; i < numLiveNotes_;) {
+        const LiveNote& note = liveNotes_[i];
+        if (note.trackId != track.id ||
+            (hears && !releaseLiveNotes_ && track.midiInput.accepts(note.port, note.channel))) {
+            ++i;
+            continue;
+        }
+        ProcessEvent off = ProcessEvent::noteOff(0, note.key);
+        off.data[2] = note.channel;
+        if (!pushEvent(off)) return;  // next chunk
+        recordMidi(take, 0, note.channel, note.key, 0);
+        liveNotes_[i] = liveNotes_[--numLiveNotes_];
+    }
+    if (!hears && !take) return;
+    for (int e = 0; e < numInputEvents_; ++e) {
+        const InputEvent& in = inputEvents_[e];
+        if (!track.midiInput.accepts(in.port, in.status)) continue;
+        const uint8_t type = in.status & 0xF0;
+        const uint8_t channel = in.status & 0x0F;
+        if (type == 0x90 && in.data2 > 0) {
+            recordMidi(take, in.offset, channel, in.data1, in.data2);
+            if (!hears) continue;
+            if (const int held = findLiveNote(track.id, in.port, channel, in.data1); held >= 0) {
+                ProcessEvent off = ProcessEvent::noteOff(in.offset, in.data1);  // played again: it starts over
+                off.data[2] = channel;
+                if (!pushEvent(off)) break;
+                liveNotes_[held] = liveNotes_[--numLiveNotes_];
+            }
+            if (numLiveNotes_ == kMaxLiveNotes) continue;  // it couldn't be released: not played
+            ProcessEvent on = ProcessEvent::noteOn(in.offset, in.data1, in.data2);
+            on.data[2] = channel;
+            if (!pushEvent(on)) break;
+            liveNotes_[numLiveNotes_++] = {track.id, in.port, channel, in.data1};
+        } else if (type == 0x80 || type == 0x90) {
+            recordMidi(take, in.offset, channel, in.data1, 0);
+            const int held = findLiveNote(track.id, in.port, channel, in.data1);
+            if (held < 0) continue;  // not one this track started
+            ProcessEvent off = ProcessEvent::noteOff(in.offset, in.data1);
+            off.data[2] = channel;
+            if (!pushEvent(off)) break;
+            liveNotes_[held] = liveNotes_[--numLiveNotes_];
+        } else if (hears && type >= 0xA0 && type <= 0xE0) {  // pressure, controllers, programs, pitch bend
+            ProcessEvent raw;
+            raw.type = ProcessEvent::Type::Midi;
+            raw.sampleOffset = in.offset;
+            raw.data[0] = in.status;
+            raw.data[1] = in.data1;
+            raw.data[2] = in.data2;
+            if (!pushEvent(raw)) break;
         }
     }
 }
@@ -583,7 +761,8 @@ void Renderer::releaseNotes(uint32_t trackId, int offset) noexcept {
     }
 }
 
-void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
+void Renderer::buildNoteEvents(const TrackRender& track, bool hearsInput, bool clipNotes,
+                               MidiRecordingTake* take) noexcept {
     // Notes played by hand come first, all at the block start and in the order
     // they were played: dragging a note across keys releases one key and plays
     // the next several times within a block, and reordering those would leave
@@ -596,9 +775,10 @@ void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
                                     : ProcessEvent::noteOff(0, note.key));
     }
     const int previewEvents = numEvents_;
-    if (!playing_) releaseNotes(track.id, 0);
+    routeMidiInput(track, hearsInput, take);
+    if (!playing_ || !clipNotes) releaseNotes(track.id, 0);
 
-    for (int s = 0; s < numSegments_; ++s) {
+    for (int s = 0; s < numSegments_ && clipNotes; ++s) {
         const Segment& segment = segments_[s];
         if (segment.jump) releaseNotes(track.id, segment.offset);
         const int64_t segEnd = segment.position + segment.length;
@@ -638,9 +818,9 @@ void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
         }
     }
 
-    // The arrangement's notes in time order; at the same offset a note-off comes
-    // first, so a note that ends where the next one on its key starts doesn't cut
-    // the new one short.
+    // The arrangement's notes and the input in time order; at the same offset a
+    // note-off comes first, so a note that ends where the next one on its key
+    // starts doesn't cut the new one short.
     std::sort(events_.begin() + previewEvents, events_.begin() + numEvents_,
               [](const ProcessEvent& a, const ProcessEvent& b) {
                   if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
@@ -650,14 +830,22 @@ void Renderer::buildNoteEvents(const TrackRender& track) noexcept {
 
 void Renderer::forgetNotesOfRemovedTracks(const RenderSnapshot& snap) noexcept {
     // Their instruments are gone along with the track.
+    const auto exists = [&snap](uint32_t id) {
+        return std::any_of(snap.tracks.begin(), snap.tracks.end(),
+                           [id](const TrackRender& track) { return track.id == id; });
+    };
     for (int a = 0; a < numActiveNotes_;) {
-        const uint32_t id = activeNotes_[a].trackId;
-        const bool exists = std::any_of(snap.tracks.begin(), snap.tracks.end(),
-                                        [id](const TrackRender& track) { return track.id == id; });
-        if (exists) {
+        if (exists(activeNotes_[a].trackId)) {
             ++a;
         } else {
             activeNotes_[a] = activeNotes_[--numActiveNotes_];
+        }
+    }
+    for (int a = 0; a < numLiveNotes_;) {
+        if (exists(liveNotes_[a].trackId)) {
+            ++a;
+        } else {
+            liveNotes_[a] = liveNotes_[--numLiveNotes_];
         }
     }
 }

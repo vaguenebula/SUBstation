@@ -5,8 +5,10 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 #include "AudioSource.h"
+#include "MidiInput.h"
 #include "rt/RtUtils.h"
 
 namespace gil {
@@ -35,6 +37,11 @@ struct SharedState {
     std::atomic<const AudioSource*> previewSource{nullptr};
     std::atomic<uint32_t> previewSerial{0};
     std::atomic<float> previewGain{0.8f};
+    // MIDI input, from any thread: producers push holding midiInputMutex (see MidiInput.h).
+    SpscQueue<MidiInputEvent, 4096> midiInput;
+    std::mutex midiInputMutex;
+    std::atomic<int> midiInputDelay{256};  // frames between a message's arrival and when it plays
+    std::atomic<double> midiSampleRate{48000.0};
 
     // Audio thread -> API.
     std::atomic<bool> playing{false};
@@ -43,6 +50,7 @@ struct SharedState {
     std::atomic<double> positionBeats{0.0};
     std::atomic<bool> previewActive{false};
     std::atomic<float> cpuLoad{0.f};
+    AudioClock clock;  // the device's sample clock against the host clock (MIDI input timing)
     // Peak level of each open input channel (beyond this many, none).
     static constexpr size_t kMaxInputMeters = 256;
     std::array<std::atomic<float>, kMaxInputMeters> inputPeaks{};

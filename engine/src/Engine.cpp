@@ -34,7 +34,10 @@ private:
 
 }  // namespace
 
-Engine::Engine() {
+Engine::Engine()
+    : midiDevices_([this](uint16_t port, const uint8_t* message, int size, int64_t hostTime) {
+          midiInput(port, message, size, hostTime);
+      }) {
     std::lock_guard lock(mutex_);
     renderer_.prepare(sampleRate_);
     rebuildSnapshotLocked();
@@ -42,6 +45,7 @@ Engine::Engine() {
 
 Engine::~Engine() {
     std::lock_guard lock(mutex_);
+    midiDevices_.closeAll();
     closeDeviceLocked();
 }
 
@@ -99,6 +103,9 @@ void Engine::openDeviceLocked(const DeviceConfig& config) {
             for (auto& insert : track.inserts) insert->prepare(sampleRate_, Renderer::kMaxBlock);
         }
         for (auto& insert : master_.inserts) insert->prepare(sampleRate_, Renderer::kMaxBlock);
+        // MIDI input plays a device buffer after it arrives (MidiInput.h).
+        shared_.midiInputDelay.store(state.bufferFrames > 0 ? static_cast<int>(state.bufferFrames) : 512);
+        shared_.midiSampleRate.store(sampleRate_);
         rebuildSnapshotLocked();
         serviceTransportIfIdleLocked();
         pendingDeviceEvents_.store(0);  // about the device just closed
@@ -121,6 +128,7 @@ void Engine::closeDevice() {
 
 void Engine::closeDeviceLocked() {
     if (device_.isOpen()) device_.close();  // waits for the audio thread to exit
+    shared_.clock.stop();  // MIDI input is dropped from here on
     deviceRunning_ = false;
     openInputs_ = 0;
     openInputChannels_.clear();
@@ -217,6 +225,7 @@ void Engine::deviceEvent(DeviceEvent event) noexcept {
 void Engine::audioCallback(const AudioIO& io) noexcept {
     ScopedNoDenormals noDenormals;
     const auto started = std::chrono::steady_clock::now();
+    shared_.clock.update(io.hostTimeNs, io.sampleTime);
     const uint32_t metered = std::min<uint32_t>(io.numInputs, SharedState::kMaxInputMeters);
     for (uint32_t c = 0; c < metered; ++c) {
         float peak = 0.f;
@@ -428,22 +437,35 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
     if (targets.empty()) throw std::invalid_argument("Nothing to record");
     const auto ringFrames = static_cast<size_t>(sampleRate_ * 8.0);  // the writer may fall this far behind
     std::vector<std::unique_ptr<RecordingTake>> takes;
+    std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes;
     for (const RecordTarget& target : targets) {
         const TrackModel& track = arrangementTrackLocked(target.trackId);
+        const auto listed = [&](const auto& list) {
+            return std::any_of(list.begin(), list.end(), [&](const auto& t) { return t->trackId == target.trackId; });
+        };
+        if (listed(takes) || listed(midiTakes)) throw std::invalid_argument("A track is listed twice");
+        if (target.path.empty()) {
+            if (!track.midiInput.enabled) {
+                throw std::invalid_argument("Track " + std::to_string(target.trackId) + " has no MIDI input");
+            }
+            midiTakes.push_back(std::make_unique<MidiRecordingTake>(target.trackId));
+            continue;
+        }
         const InputEdge edge = inputEdgeLocked(track);
         if (!edge.fromDevice()) throw std::invalid_argument("Track " + std::to_string(target.trackId) + " has no input");
         if (edge.left < 0 || edge.right < 0) throw std::runtime_error("A track's input is not open on the audio device");
-        for (const auto& other : takes) {
-            if (other->trackId == target.trackId) throw std::invalid_argument("A track is listed twice");
-        }
         takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path, edge.left, edge.right, ringFrames));
     }
     // A sample taken in a block came back through the input after leaving the
     // output, where the timeline was heard this much earlier than the renderer was.
+    // A MIDI message was played in response to what was heard when it arrived:
+    // the renderer meets it one MIDI delay later, a block ahead of the output.
     const DeviceState state = device_.state();
-    const int64_t placement =
-        static_cast<int64_t>(snapshotHold_->outputLatency()) + state.inputLatency + state.outputLatency;
-    recording_ = std::make_unique<RecordingSession>(std::move(takes), sampleRate_, placement);
+    const auto lag = static_cast<int64_t>(snapshotHold_->outputLatency());
+    const int64_t placement = lag + state.inputLatency + state.outputLatency;
+    const int64_t midiPlacement = lag + state.outputLatency + shared_.midiInputDelay.load();
+    recording_ = std::make_unique<RecordingSession>(std::move(takes), std::move(midiTakes), sampleRate_, placement,
+                                                    midiPlacement);
     liveRecording_.store(recording_.get(), std::memory_order_seq_cst);
     if (!requestedPlaying_.load()) {
         requestedPlaying_.store(true);
@@ -475,6 +497,17 @@ std::vector<RecordingProgress> Engine::recordingProgress() {
     std::lock_guard lock(mutex_);
     std::vector<RecordingProgress> progress;
     if (!recording_) return progress;
+    for (const auto& take : recording_->midiTakes()) {
+        RecordingProgress p;
+        p.trackId = take->trackId;
+        p.midi = true;
+        const int64_t start = take->start.load(std::memory_order_acquire);
+        p.started = start != RecordingTake::kNotStarted;
+        p.startSample = p.started ? start : 0;
+        p.frames = take->frames.load(std::memory_order_acquire);
+        p.notes = recording_->midiNotes(*take);
+        progress.push_back(std::move(p));
+    }
     for (const auto& take : recording_->takes()) {
         RecordingProgress p;
         p.trackId = take->trackId;
@@ -490,6 +523,86 @@ std::vector<RecordingProgress> Engine::recordingProgress() {
         progress.push_back(std::move(p));
     }
     return progress;
+}
+
+// ---------------------------------------------------------------------------
+// MIDI input
+
+std::vector<std::string> Engine::midiInputDevices() { return midiDevices_.available(); }
+
+void Engine::openMidiInput(const std::string& name) {
+    uint16_t port = 0;
+    {
+        std::lock_guard lock(mutex_);
+        port = midiPortLocked(name);
+    }
+    midiDevices_.open(name, port);  // main thread only, like the other device calls
+}
+
+void Engine::closeMidiInput(const std::string& name) { midiDevices_.close(name); }
+
+std::vector<std::string> Engine::openMidiInputs() { return midiDevices_.openNames(); }
+
+uint16_t Engine::midiPortLocked(const std::string& name) {
+    const auto it = std::find(midiPorts_.begin(), midiPorts_.end(), name);
+    if (it != midiPorts_.end()) return static_cast<uint16_t>(it - midiPorts_.begin());
+    if (midiPorts_.size() >= 0xFFFF) throw std::runtime_error("Too many MIDI inputs");
+    midiPorts_.push_back(name);
+    return static_cast<uint16_t>(midiPorts_.size() - 1);
+}
+
+void Engine::setTrackMidiInput(uint32_t trackId, bool enabled, const std::string& device, int channel) {
+    if (channel < 0 || channel > 16) throw std::invalid_argument("A MIDI channel is 1-16, or 0 for all");
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    MidiInputRoute route;
+    route.enabled = enabled;
+    route.port = device.empty() ? MidiInputRoute::kAllPorts : midiPortLocked(device);
+    route.channel = channel == 0 ? MidiInputRoute::kAllChannels : channel - 1;
+    track.midiInput = enabled ? route : MidiInputRoute{};
+    rebuildSnapshotLocked();
+}
+
+void Engine::sendMidiInput(const std::string& device, const std::vector<uint8_t>& message, int64_t hostTime) {
+    if (message.empty() || message.size() > 3 || !(message[0] & 0x80) ||
+        std::any_of(message.begin() + 1, message.end(), [](uint8_t b) { return (b & 0x80) != 0; })) {
+        throw std::invalid_argument("A MIDI message is a status byte and up to two data bytes");
+    }
+    uint16_t port = 0;
+    {
+        std::lock_guard lock(mutex_);
+        port = midiPortLocked(device);
+    }
+    midiInput(port, message.data(), static_cast<int>(message.size()), hostTime != 0 ? hostTime : hostTimeNs());
+}
+
+void Engine::midiInput(uint16_t port, const uint8_t* message, int size, int64_t hostTime) noexcept {
+    // Where on the device's clock this arrived, from the last callback's start;
+    // it plays one MIDI delay (a buffer) later, in the next block.
+    const AudioClock::Reading clock = shared_.clock.read();
+    if (!clock.running || size < 1) return;
+    const double elapsed = static_cast<double>(hostTime - clock.hostTimeNs) * 1e-9;
+    MidiInputEvent event;
+    event.time = clock.sampleTime + std::llround(elapsed * shared_.midiSampleRate.load(std::memory_order_relaxed)) +
+                 shared_.midiInputDelay.load(std::memory_order_relaxed);
+    event.port = port;
+    event.status = message[0];
+    event.data1 = size > 1 ? message[1] : 0;
+    event.data2 = size > 2 ? message[2] : 0;
+    std::lock_guard lock(shared_.midiInputMutex);  // the producers' side only: the audio thread never waits
+    shared_.midiInput.push(event);                  // full: dropped
+}
+
+void Engine::discardMidiInputLocked() {
+    // Only while no callback runs (it is the queue's consumer otherwise).
+    MidiInputEvent event;
+    while (shared_.midiInput.pop(event)) {
+    }
+}
+
+AudioClockStatus Engine::audioClock() const {
+    const AudioClock::Reading clock = shared_.clock.read();
+    return {clock.running, clock.hostTimeNs, clock.sampleTime, shared_.midiInputDelay.load()};
 }
 
 // ---------------------------------------------------------------------------
@@ -745,6 +858,7 @@ void Engine::serviceTransportIfIdleLocked() {
     renderer_.drainCommands(shared_);
     renderer_.publishTransport(shared_);
     Renderer::discardPreviewNotes(shared_);  // nobody would hear them, and a stale note-on could hang
+    discardMidiInputLocked();
 }
 
 void Engine::play(double countInBeats) {
@@ -1015,6 +1129,7 @@ void Engine::rebuildSnapshotLocked() {
         }
         render.delay = track.delay;
         render.input = inputEdgeLocked(track);
+        render.midiInput = track.midiInput;
         render.monitor = track.monitor;
         render.armed = track.armed;
         buildAutomationLocked(track, 0, snap->maxLatency, spb, render);

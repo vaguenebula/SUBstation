@@ -9,8 +9,8 @@ from PySide6.QtGui import QUndoStack
 
 from gilstudio.audio.engine_bridge import note_descs
 from gilstudio.model import edits, notes
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.project import MidiClip, Note, Project, Track
+from gilstudio.model.editor import ProjectEditor, RecordedTake
+from gilstudio.model.project import MidiClip, MidiInput, Note, Project, Track
 from gilstudio.model.serialization import (
     ProjectFileError,
     load_project,
@@ -257,7 +257,88 @@ def test_clips_only_move_onto_tracks_of_their_kind(editor):
     assert not editor.project.track(new_track).is_midi
 
 
+# --- Recording ---------------------------------------------------------------------------
+
+SEC = 0.5  # seconds per beat at 120 BPM
+
+
+def midi_take(track_id, start, beats, played):
+    """A MIDI take from `start` (beats) lasting `beats`, of notes (start, end, pitch, velocity) in beats."""
+    return RecordedTake(track_id, "", start * SEC, beats * SEC,
+                        notes=tuple((s * SEC, e * SEC, pitch, velocity) for s, e, pitch, velocity in played), midi=True)
+
+
+def test_midi_tracks_hear_every_input_and_can_be_armed(editor):
+    track = editor.add_midi_track()
+    assert track.midi_input == MidiInput() and track.has_input
+    editor.arm_tracks([track.id], True)
+    assert track.armed
+    editor.set_track_midi_input(track.id, MidiInput("Keys", 3))
+    assert track.midi_input == MidiInput("Keys", 3) and editor.undo_stack.undoText() == "Change MIDI Input"
+    editor.set_track_midi_input(track.id, None)
+    assert track.midi_input is None and not track.has_input
+    editor.undo_stack.undo()
+    assert track.midi_input == MidiInput("Keys", 3)
+    with pytest.raises(ValueError):
+        editor.set_track_midi_input(track.id, MidiInput("", 17))
+
+
+def test_a_recorded_midi_take_becomes_a_clip(editor):
+    track = editor.add_midi_track()
+    old = editor.add_midi_clip(track.id, 0.0, 16.0)
+    editor.set_clip_notes(old, [Note(C, 5.0, 1.0)], "Add Note")
+    audio = editor.add_audio_track()
+    takes = [midi_take(track.id, 4.0, 4.0, [(4.0, 4.5, C, 100), (5.26, 6.0, E, 80), (7.5, 8.0, G, 127)]),
+             midi_take(audio.id, 0.0, 4.0, [(0.0, 1.0, C, 100)])]  # not a MIDI track: ignored
+    steps = editor.undo_stack.index()
+    [ref] = editor.add_recordings(takes)
+    assert editor.undo_stack.index() == steps + 1 and editor.undo_stack.undoText() == "Record"
+    clip = editor.project.clip(*ref)
+    assert (clip.name, clip.start_beat, clip.duration_beats) == (track.name, 4.0, 4.0)
+    assert [(n.pitch, round(n.start, 6), round(n.length, 6), n.velocity) for n in clip.notes] == [
+        (C, 0.0, 0.5, 100), (E, 1.26, 0.74, 80), (G, 3.5, 0.5, 127)]
+    # It replaced what was under it (as in Arrangement recording, without overdub).
+    assert [(c.start_beat, c.end_beat()) for c in track.clips] == [(0.0, 4.0), (4.0, 8.0), (8.0, 16.0)]
+    editor.undo_stack.undo()
+    assert [c.id for c in track.clips] == [old[1]]
+
+
+def test_record_quantization(editor):
+    track = editor.add_midi_track()
+    take = midi_take(track.id, 1.1, 3.0, [(1.1, 1.3, C, 100), (1.6, 2.2, E, 100), (3.95, 4.05, G, 100)])
+    [ref] = editor.add_recordings([take], quantize=0.5)
+    clip = editor.project.clip(*ref)
+    # Starts on the arrangement's grid, lengths as played; a note the grid would
+    # take out of the clip (before where recording began) stays where it was played.
+    assert [(n.pitch, round(clip.start_beat + n.start, 6), round(n.length, 6)) for n in clip.notes] == [
+        (C, 1.1, 0.2), (E, 1.5, 0.6), (G, 4.0, 0.1)]
+    [ref] = editor.add_recordings([take])
+    assert [round(n.start + 1.1, 6) for n in editor.project.clip(*ref).notes] == [1.1, 1.6, 3.95]
+
+
 # --- Files -------------------------------------------------------------------------------
+
+
+def test_midi_inputs_roundtrip(tmp_path, qapp):
+    project = Project()
+    project.tracks = [Track(id="a", name="A", color="#fff", kind="midi", armed=True, monitor="in"),
+                      Track(id="b", name="B", color="#fff", kind="midi", midi_input=MidiInput("Keys", 10)),
+                      Track(id="c", name="C", color="#fff", kind="midi", midi_input=None)]
+    target = tmp_path / "song.gilproj"
+    save_project(project, target)
+    loaded = Project()
+    load_project(loaded, target)
+    assert [(t.midi_input, t.armed, t.monitor) for t in loaded.tracks] == [
+        (MidiInput(), True, "in"), (MidiInput("Keys", 10), False, "auto"), (None, False, "auto")]
+    # MIDI tracks saved before there was MIDI input hear every input.
+    data = json.loads(target.read_text(encoding="utf-8"))
+    for track in data["tracks"]:
+        del track["midi_input"]
+    data["version"] = 6
+    target.write_text(json.dumps(data), encoding="utf-8")
+    load_project(loaded, target)
+    assert [t.midi_input for t in loaded.tracks] == [MidiInput()] * 3
+
 
 
 def test_midi_tracks_roundtrip(tmp_path, qapp):

@@ -334,12 +334,12 @@ def test_track_input_and_monitoring_are_undoable_arming_is_not(editor):
     assert (a.input, a.monitor) == ((), "auto")
 
     editor.arm_tracks([a.id], True)
-    editor.arm_tracks([b.id, midi.id], True, exclusive=True)  # the others are disarmed; MIDI tracks don't arm yet
-    assert (a.armed, b.armed, midi.armed) == (False, True, False)
+    editor.arm_tracks([b.id, midi.id], True, exclusive=True)  # the others are disarmed
+    assert (a.armed, b.armed, midi.armed) == (False, True, True)
     editor.arm_tracks([a.id], True, exclusive=False)
-    assert (a.armed, b.armed) == (True, True)
-    editor.arm_tracks([a.id, b.id], False)
-    assert (a.armed, b.armed) == (False, False)
+    assert (a.armed, b.armed, midi.armed) == (True, True, True)
+    editor.arm_tracks([a.id, b.id, midi.id], False)
+    assert (a.armed, b.armed, midi.armed) == (False, False, False)
     assert editor.undo_stack.index() == steps and editor.undo_stack.count() == steps + 2  # still redoable
 
 

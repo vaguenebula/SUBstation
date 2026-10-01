@@ -76,6 +76,7 @@ class TransportBar(QWidget):
         self.key.setToolTip("Project key. Audio files with a key in their name (\"Loop_128_Am\")\n"
                             "are transposed to it when added; a tempo in the name warps them to it.")
 
+        self.computer_keys = ToggleButton("⌨", role="tool", tooltip="Computer MIDI Keyboard (M)")
         self.play = ToggleButton(icon=icons.play(), role="play", tooltip="Play / Stop (Space)")
         self.stop = ToggleButton(icon=icons.stop(), role="tool", checkable=False,
                                  tooltip="Stop (press again to return to the start)")
@@ -121,7 +122,7 @@ class TransportBar(QWidget):
         tempo_label.setStyleSheet(f"color: {theme.TEXT_DIM};")
         slash = QLabel("/")
         for widget in (self.tempo, tempo_label, _separator(), self.ts_num, slash, self.ts_den, _separator(),
-                       self.metronome, self.key):
+                       self.metronome, self.key, self.computer_keys):
             layout.addWidget(widget)
         layout.addStretch(1)
         for widget in (self.position, self.play, self.stop, self.record, self.count_in, self.re_enable,

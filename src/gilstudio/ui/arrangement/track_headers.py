@@ -1,5 +1,6 @@
 """Track headers (right of the lanes, as in Ableton): name, activator, solo,
-arm (audio tracks), volume, pan, input and monitoring (audio tracks), meter, and while a track's automation shows, its automation
+arm, volume, pan, input (audio channels, or a MIDI track's MIDI input) and
+monitoring, meter, and while a track's automation shows, its automation
 choosers (and those of the lanes below it). Plus the master track's header and
 lane, which show the master's automation likewise. Volume and pan follow their
 automation while it plays. Click the master's header to select it: the device
@@ -24,7 +25,7 @@ from ... import theme
 from ...audio.engine_bridge import EngineBridge
 from ...model.automation import MASTER, MIXER_PAN, MIXER_VOLUME
 from ...model.editor import ProjectEditor
-from ...model.project import MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT, TRACK_COLORS
+from ...model.project import MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT, TRACK_COLORS, MidiInput
 from ...model.timebase import format_db, format_pan, parse_pan
 from ..widgets import Knob, MeterWidget, ToggleButton, ValueBox
 from . import automation_lanes
@@ -94,12 +95,21 @@ MONITOR_LABELS = {"in": "In", "auto": "Auto", "off": "Off"}
 MONITOR_TIPS = {"in": "In: always hears its input, never its clips",
                 "auto": "Auto: hears its input while armed, unless playing back",
                 "off": "Off: never hears its input"}
+# A MIDI track's clips play on while it hears its input (Auto), as in Ableton.
+MIDI_MONITOR_TIPS = {**MONITOR_TIPS, "auto": "Auto: hears its input while armed, beside its clips"}
 
 
 def input_label(channels: tuple[int, ...]) -> str:
     if not channels:
         return "No Input"
     return "In " + "/".join(str(c + 1) for c in channels)
+
+
+def midi_input_label(midi_input: MidiInput | None) -> str:
+    if midi_input is None:
+        return "No Input"
+    name = midi_input.device or "All Ins"
+    return f"{name} · Ch {midi_input.channel}" if midi_input.channel else name
 
 
 def input_choices(names: list[str]) -> list[tuple[str, tuple[int, ...]]]:
@@ -138,7 +148,6 @@ class TrackHeader(QWidget):
         self.input = QPushButton(parent=self)
         self.input.setProperty("role", "small")
         self.input.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.input.setToolTip("Audio input (the audio device's channels)")
         self.monitor = QPushButton(parent=self)
         self.monitor.setProperty("role", "small")
         self.monitor.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -171,9 +180,15 @@ class TrackHeader(QWidget):
         self.activator.set_checked_silently(not track.mute)
         self.solo.set_checked_silently(track.solo)
         self.arm.set_checked_silently(track.armed)
-        self.input.setText(input_label(track.input))
+        if track.is_midi:
+            self.input.setText(midi_input_label(track.midi_input))
+            self.input.setToolTip("MIDI input (the MIDI inputs on in Preferences, and a channel)")
+        else:
+            self.input.setText(input_label(track.input))
+            self.input.setToolTip("Audio input (the audio device's channels)")
         self.monitor.setText(MONITOR_LABELS.get(track.monitor, "Auto"))
-        self.monitor.setToolTip(f"Monitoring. {MONITOR_TIPS.get(track.monitor, '')}")
+        tips = MIDI_MONITOR_TIPS if track.is_midi else MONITOR_TIPS
+        self.monitor.setToolTip(f"Monitoring. {tips.get(track.monitor, '')}")
         self._layout()
         self.refresh_mixer()
         self.automation.refresh()
@@ -224,17 +239,13 @@ class TrackHeader(QWidget):
         meter_w = 8
         self.meter.setGeometry(w - meter_w - 4, 4, meter_w, max(8, h - 9))
         right = w - meter_w - 10
-        audio = not self.track.is_midi  # MIDI input comes later
-        self.arm.setVisible(audio)
-        arm_w = 20 if audio else 0
+        arm_w = 20
         self.arm.setGeometry(right - 18, 4, 18, 17)
         self.solo.setGeometry(right - arm_w - 22, 4, 22, 17)
         self.activator.setGeometry(right - arm_w - 22 - 30, 4, 28, 17)
         second_row = h >= 48
-        for widget in (self.volume, self.pan):
+        for widget in (self.volume, self.pan, self.input, self.monitor):
             widget.setVisible(second_row)
-        for widget in (self.input, self.monitor):
-            widget.setVisible(second_row and audio)
         if second_row:
             self.volume.setGeometry(10, NAME_ROW + 4, 76, 20)
             self.pan.setGeometry(92, NAME_ROW + 1, 26, 26)
@@ -316,10 +327,13 @@ class TrackHeader(QWidget):
         exclusive = not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
         self.editor.arm_tracks(tracks, on, exclusive=exclusive)
         self.arm.set_checked_silently(self.track.armed)
-        if on and not self.track.input:
-            self.bridge.status_message.emit(f"{self.track.name} has no input: choose one to record.")
+        if on and not self.track.has_input:
+            kind = "MIDI input" if self.track.is_midi else "input"
+            self.bridge.status_message.emit(f"{self.track.name} has no {kind}: choose one to record.")
 
     def input_menu(self) -> QMenu:
+        if self.track.is_midi:
+            return self.midi_input_menu()
         menu = QMenu(self)
         current = self.track.input
         none = menu.addAction("No Input", lambda: self.editor.set_track_input(self.track_id, ()))
@@ -336,13 +350,56 @@ class TrackHeader(QWidget):
             action.setChecked(channels == current)
         return menu
 
+    def midi_input_menu(self) -> QMenu:
+        """No input, every input or one (those connected, and the one chosen if it
+        isn't), and in a submenu the channel."""
+        menu = QMenu(self)
+        current = self.track.midi_input
+        channel = current.channel if current is not None else 0
+
+        def choose(device: str | None) -> None:
+            midi_input = None if device is None else MidiInput(device, channel)
+            self.editor.set_track_midi_input(self.track_id, midi_input)
+
+        def add(label: str, device: str | None) -> None:
+            action = menu.addAction(label, lambda: choose(device))
+            action.setCheckable(True)
+            action.setChecked(current == MidiInput(device, channel) if device is not None else current is None)
+
+        add("No Input", None)
+        add("All Ins", "")
+        names = self.bridge.midi_input_choices()
+        if current is not None and current.device and current.device not in names:
+            names.append(current.device)
+        if names:
+            menu.addSeparator()
+        for name in names:
+            connected = name in self.bridge.midi_input_choices()
+            add(name if connected else f"{name} (not connected)", name)
+        if not names:
+            menu.addAction("No MIDI input is connected").setEnabled(False)
+        menu.addSeparator()
+        channels = menu.addMenu(f"Channel: {channel or 'All'}")
+        channels.setEnabled(current is not None)
+        for number in range(17):
+            action = channels.addAction(
+                "All Channels" if number == 0 else f"Channel {number}",
+                lambda n=number: self.editor.set_track_midi_input(
+                    self.track_id, MidiInput(current.device if current else "", n)))
+            action.setCheckable(True)
+            action.setChecked(number == channel)
+            if number == 0:
+                channels.addSeparator()
+        return menu
+
     def _choose_input(self) -> None:
         self.input_menu().exec(self.input.mapToGlobal(self.input.rect().bottomLeft()))
 
     def monitor_menu(self) -> QMenu:
         menu = QMenu(self)
+        tips = MIDI_MONITOR_TIPS if self.track.is_midi else MONITOR_TIPS
         for mode in ("in", "auto", "off"):
-            action = menu.addAction(MONITOR_TIPS[mode], lambda m=mode: self.editor.set_track_monitor(self.track_id, m))
+            action = menu.addAction(tips[mode], lambda m=mode: self.editor.set_track_monitor(self.track_id, m))
             action.setCheckable(True)
             action.setChecked(self.track.monitor == mode)
         return menu

@@ -32,6 +32,13 @@ recording ends (stopped, or a device change or a locate ended it) the takes
 come out as `takes_recorded`, for one undo step that adds them as clips. A
 track given an input the device hasn't open gets it: the device opens again
 with that input too (ASIO).
+
+MIDI input: every MIDI input connected is opened, but those turned off in the
+preferences. MIDI tracks hear their MIDI input (every input, or one, on every
+channel or one) while monitored, and record it when armed: their takes come
+back with the notes played, for MIDI clips. Their live takes hold the notes so far.
+The computer MIDI keyboard (ui/computer_keyboard.py) is one more MIDI input,
+COMPUTER_KEYBOARD, always there.
 """
 
 from __future__ import annotations
@@ -62,13 +69,14 @@ from ..model.editor import RecordedTake, device_name
 from ..model.params import ParamSpec, format_value, mixer_specs
 from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Track
 from ..model.timebase import db_to_gain
-from .settings import AudioSettings
+from .settings import AudioSettings, disabled_midi_inputs, set_midi_input_disabled
 
 AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
 # Plug-in editors of tracks not shown are hidden but keep running (animating,
 # messaging their processors); this many at most, then the ones hidden longest close.
 MAX_HIDDEN_EDITORS = 8
 _WARP_MODES = {name: ge.WarpMode(index) for index, name in enumerate(WARP_MODES)}
+COMPUTER_KEYBOARD = "Computer Keyboard"  # the MIDI input the computer keyboard plays into
 _MONITOR_MODES = {"off": ge.MonitorMode.OFF, "in": ge.MonitorMode.IN, "auto": ge.MonitorMode.AUTO}
 
 
@@ -95,13 +103,18 @@ def take_path(folder: Path, track_name: str, when: datetime) -> Path:
 
 @dataclass
 class LiveTake:
-    """A take while it records, as the arrangement draws it."""
+    """A take while it records, as the arrangement draws it: an audio take's
+    peaks, or a MIDI take's notes."""
 
     track_id: str
     start_sample: int = 0  # timeline sample of its first frame
     started: bool = False
     frames: int = 0
     peaks: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), np.float32))  # (min, max) per PEAK_FRAMES
+    midi: bool = False
+    # A MIDI take's notes so far: rows of (start, end, key, velocity, channel) in
+    # timeline samples; a held note's end is -1.
+    notes: np.ndarray = field(default_factory=lambda: np.zeros((0, 5), np.int64))
     PEAK_FRAMES = ge.RECORD_PEAK_FRAMES
     _buffer: np.ndarray = field(default_factory=lambda: np.zeros((1024, 2), np.float32), repr=False)
 
@@ -221,6 +234,7 @@ class EngineBridge(QObject):
         self._last_playing = False
         self._recording: dict[int, str] = {}  # engine track id -> track id, while recording
         self.live_takes: dict[str, LiveTake] = {}  # track id -> its take while recording
+        self.midi_errors: dict[str, str] = {}  # MIDI input -> why it couldn't be opened
 
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(2)
@@ -344,7 +358,8 @@ class EngineBridge(QObject):
             return
         track = self.project.track(track_id)
         channels = tuple(track.input) if not track.is_midi else ()
-        state = (channels, track.monitor, track.armed and not track.is_midi)
+        midi_input = track.midi_input if track.is_midi else None
+        state = (channels, track.monitor, track.armed, midi_input)
         old = self._inputs.get(track_id)
         if state == old:
             return  # (a mixer change)
@@ -355,6 +370,11 @@ class EngineBridge(QObject):
             self.engine.set_track_monitor(engine_id, _MONITOR_MODES.get(track.monitor, ge.MonitorMode.AUTO))
         if old is None or old[2] != state[2]:
             self.engine.set_track_armed(engine_id, state[2])
+        if old is None or old[3] != state[3]:
+            if midi_input is None:
+                self.engine.set_track_midi_input(engine_id, False)
+            else:
+                self.engine.set_track_midi_input(engine_id, True, midi_input.device, midi_input.channel)
         if channels and not self.is_recording:
             self._open_inputs(channels)
 
@@ -381,6 +401,47 @@ class EngineBridge(QObject):
         if not self.engine.device_status.open:
             return []
         return list(self.engine.device_capabilities.input_names)
+
+    # --- MIDI input ------------------------------------------------------------------
+
+    def midi_inputs(self) -> list[str]:
+        """The MIDI inputs connected, by name."""
+        return list(self.engine.midi_input_devices())
+
+    def midi_input_choices(self) -> list[str]:
+        """What a track's MIDI input can be: the inputs connected, and the computer keyboard."""
+        return [*self.midi_inputs(), COMPUTER_KEYBOARD]
+
+    def send_midi(self, message: list[int], device: str = COMPUTER_KEYBOARD) -> None:
+        """Plays a MIDI message now, as if `device` sent it (dropped while no audio device runs)."""
+        self.engine.send_midi_input(device, message)
+
+    def is_midi_input_open(self, name: str) -> bool:
+        return name in self.engine.open_midi_inputs()
+
+    def open_midi_inputs(self) -> None:
+        """Opens every MIDI input connected but those turned off, and closes those
+        turned off (or gone). Inputs that can't be opened are reported once."""
+        disabled = disabled_midi_inputs()
+        connected = self.midi_inputs()
+        for name in self.engine.open_midi_inputs():
+            if name in disabled or name not in connected:
+                self.engine.close_midi_input(name)
+        failed = {}
+        for name in connected:
+            if name in disabled or self.is_midi_input_open(name):
+                continue
+            try:
+                self.engine.open_midi_input(name)
+            except RuntimeError as exc:
+                failed[name] = str(exc)
+                if name not in self.midi_errors:
+                    self.status_message.emit(str(exc))
+        self.midi_errors = failed
+
+    def set_midi_input_enabled(self, name: str, enabled: bool) -> None:
+        set_midi_input_disabled(name, not enabled)
+        self.open_midi_inputs()
 
     def _push_clips(self, track_id: str) -> None:
         engine_id = self._track_ids.get(track_id)
@@ -669,6 +730,8 @@ class EngineBridge(QObject):
         self._remove_engine_tracks()
         self._devices.clear()
         self._plugin_ids.clear()
+        for name in self.engine.open_midi_inputs():
+            self.engine.close_midi_input(name)
         self.engine.idle()
 
     def _update_editor_titles(self, track_id: str) -> None:
@@ -971,8 +1034,8 @@ class EngineBridge(QObject):
         return self.engine.is_counting_in
 
     def record_targets(self) -> list[Track]:
-        """The tracks that record: armed audio tracks with an input."""
-        return [t for t in self.project.tracks if t.armed and t.input and not t.is_midi]
+        """The tracks that record: armed tracks with an input (audio, or MIDI for MIDI tracks)."""
+        return [t for t in self.project.tracks if t.armed and t.has_input]
 
     def start_recording(self, count_in_beats: float = 0.0) -> str | None:
         """Records the armed tracks (playing, after the count-in, if stopped).
@@ -981,19 +1044,24 @@ class EngineBridge(QObject):
             return None
         tracks = self.record_targets()
         if not tracks:
-            return "Arm an audio track that has an input to record."
+            return "Arm a MIDI track, or an audio track that has an input, to record."
         if not self.engine.device_status.open:
             return "No audio device is open. Choose one in Options > Preferences."
-        for track in tracks:
+        audio = [track for track in tracks if not track.is_midi]
+        for track in audio:
             self._open_inputs(track.input)
         folder = recordings_folder(self.project)
-        try:
-            folder.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            return f"Could not create the recordings folder {folder}: {exc}"
+        if audio:
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return f"Could not create the recordings folder {folder}: {exc}"
         now = datetime.now().astimezone()  # local time, in the file names
         targets, paths = [], set()
         for track in tracks:
+            if track.is_midi:
+                targets.append((self._track_ids[track.id], ""))  # its notes, no file
+                continue
             path = take_path(folder, track.name, now)
             while path in paths:  # two tracks of the same name
                 path = path.with_name(path.stem + "_.wav")
@@ -1004,7 +1072,7 @@ class EngineBridge(QObject):
         except (RuntimeError, ValueError) as exc:
             return str(exc)
         self._recording = {engine_id: track.id for (engine_id, _), track in zip(targets, tracks, strict=True)}
-        self.live_takes = {track.id: LiveTake(track.id) for track in tracks}
+        self.live_takes = {track.id: LiveTake(track.id, midi=track.is_midi) for track in tracks}
         self.recording_changed.emit(True)
         self._poll_position()
         return None
@@ -1025,8 +1093,11 @@ class EngineBridge(QObject):
             track_id = recording.get(take.track_id)
             if track_id is None or take.frames <= 0:
                 continue
-            takes.append(RecordedTake(track_id, take.path, take.start_sample / take.sample_rate,
-                                      take.frames / take.sample_rate))
+            rate = take.sample_rate
+            notes = tuple((int(start) / rate, int(end) / rate, int(key), int(velocity))
+                          for start, end, key, velocity, _channel in take.notes)
+            takes.append(RecordedTake(track_id, take.path, take.start_sample / rate, take.frames / rate,
+                                      notes=notes, midi=take.midi))
         self.recording_changed.emit(False)
         self.recording_updated.emit()
         if takes:
@@ -1044,6 +1115,9 @@ class EngineBridge(QObject):
             live.started = progress.started
             live.start_sample = progress.start_sample
             live.frames = progress.frames
+            if progress.midi:
+                live.notes = progress.notes
+                continue
             peaks = progress.peaks
             if len(peaks):
                 live.add_peaks(peaks)

@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QUndoStack
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence, QUndoStack
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -21,7 +21,12 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME, __version__
 from .. import _engine as ge
 from ..audio.engine_bridge import EngineBridge
-from ..audio.settings import AudioSettings
+from ..audio.settings import (
+    RECORD_QUANTIZE,
+    AudioSettings,
+    record_quantize,
+    set_record_quantize,
+)
 from ..model import automation
 from ..model.editor import ProjectEditor, is_instrument
 from ..model.project import PLUGIN_KIND, PluginRef, Project
@@ -35,6 +40,7 @@ from . import icons, plugin_keys
 from .arrangement.arrangement_view import ArrangementView
 from .arrangement.view_state import Selection
 from .browser.browser_panel import BrowserPanel
+from .computer_keyboard import ComputerKeyboard
 from .device_panel import DevicePanel
 from .dialogs import ExportDialog, PreferencesDialog
 from .transport_bar import TransportBar
@@ -106,6 +112,9 @@ class MainWindow(QMainWindow):
         self.transport.re_enable_requested.connect(self.bridge.re_enable_automation)
         self.undo_stack.cleanChanged.connect(self._update_title)
         self.project.reset.connect(self._update_title)
+        self.computer_keyboard = ComputerKeyboard(self.bridge, self)
+        self.transport.computer_keys.toggled.connect(self.computer_keyboard.set_enabled)
+        self.computer_keyboard.changed.connect(self._show_computer_keyboard)
 
         self._create_actions()
         # The Ctrl/Alt shortcuts work while a plug-in's editor has the focus too.
@@ -172,6 +181,15 @@ class MainWindow(QMainWindow):
         edit.addSeparator()
         self._action(edit, "Play / Stop", self.toggle_play, "Space")
         self._action(edit, "Record", self.toggle_record, "F9")
+        quantize = edit.addMenu("Record &Quantization")
+        quantize.setToolTip("Where recorded MIDI notes start: as played, or on this grid")
+        group = QActionGroup(self)
+        self.record_quantize_actions = []
+        for label, grid in RECORD_QUANTIZE:
+            action = self._action(quantize, label, lambda on, g=grid: on and set_record_quantize(g), checkable=True,
+                                  checked=abs(grid - record_quantize()) < 1e-9)
+            group.addAction(action)
+            self.record_quantize_actions.append(action)
         self._action(edit, "Go to Start", lambda: self.locate(0.0), "Home")
         self.loop_action = self._action(edit, "Loop", self.editor.set_loop_enabled, "Ctrl+L", checkable=True)
         self.project.settings_changed.connect(lambda: self._sync_check(self.loop_action, self.project.loop_enabled))
@@ -209,6 +227,8 @@ class MainWindow(QMainWindow):
         options = bar.addMenu("&Options")
         self._action(options, "&Preferences…", self.show_preferences, "Ctrl+,")
         self._action(options, "&Rescan Plug-ins", self.browser.rescan_plugins)
+        self.computer_keyboard_action = self._action(options, "Computer &MIDI Keyboard",
+                                                      self.computer_keyboard.set_enabled, "M", checkable=True)
         options.addSeparator()
         self.lock_action = self._action(options, "&Lock Envelopes", self.editor.set_automation_locked, checkable=True)
         for signal in (self.project.settings_changed, self.project.reset):
@@ -216,6 +236,14 @@ class MainWindow(QMainWindow):
 
         help_menu = bar.addMenu("&Help")
         self._action(help_menu, "&About GIL Studio", self.show_about)
+
+    def _show_computer_keyboard(self) -> None:
+        keyboard = self.computer_keyboard
+        self._sync_check(self.computer_keyboard_action, keyboard.enabled)
+        self.transport.computer_keys.set_checked_silently(keyboard.enabled)
+        self.transport.computer_keys.setToolTip(
+            f"Computer MIDI Keyboard (M): A S D F... play the white keys from {keyboard.octave_label()}, "
+            "W E T Y U... the black keys; Z and X change the octave")
 
     @staticmethod
     def _sync_check(action: QAction, checked: bool) -> None:
@@ -227,6 +255,7 @@ class MainWindow(QMainWindow):
     # --- Audio device ------------------------------------------------------------
 
     def start_audio(self) -> None:
+        self.bridge.open_midi_inputs()
         settings = AudioSettings.load()
         error = self.bridge.open_device(settings)
         if error is None:
@@ -275,7 +304,7 @@ class MainWindow(QMainWindow):
             self.show_message(error)
 
     def _add_takes(self, takes) -> None:
-        refs = self.editor.add_recordings(takes)
+        refs = self.editor.add_recordings(takes, record_quantize())
         if refs:
             self.selection.select_clips(self.editor, refs)
 
