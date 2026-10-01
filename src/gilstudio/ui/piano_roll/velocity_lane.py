@@ -74,6 +74,7 @@ class VelocityLane(QWidget):
                     p.setPen(QColor(theme.TEXT))
                     p.drawText(QRectF(x + 5, y - 7, 30, 12), Qt.AlignmentFlag.AlignLeft, str(note.velocity))
         p.fillRect(QRectF(visible.left(), 0, visible.width(), 1), QColor(theme.BORDER))
+        roll.draw_start_marker(p, self.height())
         roll.draw_playhead(p, self.height())
 
     def mousePressEvent(self, event: QMouseEvent) -> None:

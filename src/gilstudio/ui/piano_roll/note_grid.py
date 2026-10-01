@@ -228,6 +228,7 @@ class NoteGrid(QWidget):
             p.setPen(QPen(QColor(theme.ACCENT), 1))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(band)
+        roll.draw_start_marker(p, self.height())
         roll.draw_playhead(p, self.height())
 
     def _draw_note(self, p: QPainter, note: Note, rect: QRectF, color: QColor, selected: bool,

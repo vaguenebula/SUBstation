@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QMouseEvent, QPainter, QWheelEvent
+from PySide6.QtGui import QColor, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QWheelEvent
 from PySide6.QtWidgets import QLineEdit, QWidget
 
 from ... import theme
@@ -23,7 +23,7 @@ class ValueBox(QWidget):
                  formatter: Callable[[float], str] | None = None,
                  parser: Callable[[str], float | None] | None = None,
                  choices: Sequence[float] | None = None, sample_text: str | None = None,
-                 parent: QWidget | None = None):
+                 default: float | None = None, wheel: bool = True, parent: QWidget | None = None):
         super().__init__(parent)
         self._value = value
         self._min = minimum
@@ -38,9 +38,12 @@ class ValueBox(QWidget):
         self._gesture: object | None = None
         self._wheel_gesture: tuple[object, float] | None = None
         self._editor: QLineEdit | None = None
+        self._wheel = wheel
+        self._default = default  # if set: double-click resets, and typing a number edits
+        self.relative = True  # whether the last user change was a drag/wheel (vs typed or reset)
         self._hover = False
         self._automation: str | None = None
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus if default is None else Qt.FocusPolicy.ClickFocus)
         self.setCursor(Qt.CursorShape.SizeVerCursor)
         self.setMinimumHeight(20)
 
@@ -68,6 +71,10 @@ class ValueBox(QWidget):
         if self._choices:
             return min(self._choices, key=lambda c: abs(c - value))
         return round(max(self._min, min(self._max, value)), self._decimals)
+
+    def _set_user(self, value: float, gesture: object, relative: bool) -> None:
+        self.relative = relative
+        self._set_from_user(value, gesture)
 
     def _set_from_user(self, value: float, gesture: object) -> None:
         value = self._constrain(value)
@@ -117,6 +124,7 @@ class ValueBox(QWidget):
             return
         start_y, start_value = self._drag_origin
         dy = start_y - event.position().y()
+        self.relative = True
         if self._choices:
             index = self._choices.index(self._constrain(start_value)) + int(dy / 10)
             self._set_from_user(self._choices[max(0, min(len(self._choices) - 1, index))], self._gesture)
@@ -130,12 +138,19 @@ class ValueBox(QWidget):
         self.update()
 
     def mouseDoubleClickEvent(self, _event: QMouseEvent) -> None:
-        self._open_editor()
+        if self._default is None:
+            self._open_editor()
+        else:
+            self._set_user(self._default, object(), relative=False)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
+        if not self._wheel:
+            event.ignore()
+            return
         notches = event.angleDelta().y() / 120.0
         if not notches:
             return
+        self.relative = True
         now = time.monotonic()
         if self._wheel_gesture is None or now - self._wheel_gesture[1] > 0.6:
             self._wheel_gesture = (object(), now)
@@ -147,13 +162,20 @@ class ValueBox(QWidget):
             self._set_from_user(self._value + notches * self._step * 10, self._wheel_gesture[0])
         event.accept()
 
-    def _open_editor(self) -> None:
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self._default is not None and event.text() and event.text() in "0123456789-+.":
+            self._open_editor(event.text())
+        else:
+            super().keyPressEvent(event)
+
+    def _open_editor(self, initial: str | None = None) -> None:
         if self._editor:
             return
-        editor = QLineEdit(self._format(self._value).split(" ")[0], self)
+        editor = QLineEdit(self._format(self._value).split(" ")[0] if initial is None else initial, self)
         editor.setGeometry(self.rect())
         editor.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        editor.selectAll()
+        if initial is None:
+            editor.selectAll()
         editor.setFocus()
         editor.show()
         editor.editingFinished.connect(lambda: self._close_editor(editor))
@@ -166,7 +188,7 @@ class ValueBox(QWidget):
         parsed = self._parse(editor.text())
         editor.deleteLater()
         if parsed is not None:
-            self._set_from_user(parsed, object())
+            self._set_user(parsed, object(), relative=False)
 
 
 def _parse_float(text: str) -> float | None:

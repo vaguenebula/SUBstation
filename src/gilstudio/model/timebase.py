@@ -94,6 +94,22 @@ def format_db(db: float) -> str:
     return "-inf dB" if db <= -70.0 else f"{db:.1f} dB"
 
 
+def parse_pan(text: str) -> float | None:
+    """"25L", "30R", "C" or a plain -50..50 number (negative = left) as -1..1."""
+    cleaned = text.strip().lower()
+    if cleaned in ("c", "center", "centre"):
+        return 0.0
+    sign = 1.0
+    if cleaned.endswith("l"):
+        sign, cleaned = -1.0, cleaned[:-1]
+    elif cleaned.endswith("r"):
+        cleaned = cleaned[:-1]
+    try:
+        return max(-1.0, min(1.0, sign * float(cleaned) / 50))
+    except ValueError:
+        return None
+
+
 def format_pan(pan: float) -> str:
     value = round(pan * 50)
     if value == 0:

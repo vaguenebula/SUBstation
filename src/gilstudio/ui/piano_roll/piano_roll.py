@@ -14,7 +14,7 @@ import math
 import random
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QWheelEvent
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPolygonF, QWheelEvent
 from PySide6.QtWidgets import QGridLayout, QLabel, QScrollBar, QWidget
 
 from ... import theme
@@ -45,8 +45,10 @@ PREVIEW_VELOCITY = 100
 class PianoRoll(QWidget):
     locate_requested = Signal(float)  # an arrangement beat
 
-    def __init__(self, editor: ProjectEditor, bridge: EngineBridge, parent: QWidget | None = None):
+    def __init__(self, editor: ProjectEditor, bridge: EngineBridge, parent: QWidget | None = None,
+                 selection=None):
         super().__init__(parent)
+        self.selection = selection  # the arrangement's: where playback starts next
         self.editor = editor
         self.project = editor.project
         self.bridge = bridge
@@ -107,7 +109,10 @@ class PianoRoll(QWidget):
         self.project.clips_changed.connect(lambda track_id: self.refresh() if track_id == self.track_id else None)
         self.project.settings_changed.connect(self.repaint_all)
         self.project.track_changed.connect(lambda track_id: self.repaint_all() if track_id == self.track_id else None)
+        if selection is not None:
+            selection.insert_changed.connect(self.repaint_all)
         bridge.position_changed.connect(self._on_position)
+        bridge.transport_changed.connect(lambda _playing: self._on_position(bridge.position))
 
     # --- The clip ------------------------------------------------------------------
 
@@ -295,7 +300,7 @@ class PianoRoll(QWidget):
     def _on_position(self, beat: float) -> None:
         clip = self.clip()
         playhead = None
-        if clip is not None and clip.start_beat <= beat < clip.end_beat():
+        if clip is not None and self.bridge.is_playing and clip.start_beat <= beat < clip.end_beat():
             playhead = beat - clip.start_beat + clip.offset_beats
         if playhead == self.playhead:
             return
@@ -305,6 +310,21 @@ class PianoRoll(QWidget):
                     x = int(self.view.beat_to_x(b))
                     widget.update(QRect(x - 6, 0, 13, widget.height()))
         self.playhead = playhead
+
+    def start_beat(self) -> float | None:
+        """Where playback starts next, as a content beat (None: outside the clip)."""
+        clip = self.clip()
+        if clip is None or self.selection is None:
+            return None
+        beat = self.selection.insert_beat
+        if not clip.start_beat <= beat <= clip.end_beat():
+            return None
+        return beat - clip.start_beat + clip.offset_beats
+
+    def draw_start_marker(self, p: QPainter, height: float) -> None:
+        beat = self.start_beat()
+        if beat is not None:
+            p.fillRect(QRectF(round(self.view.beat_to_x(beat)), 0, 1, height), QColor(theme.INSERT_MARKER))
 
     def draw_playhead(self, p: QPainter, height: float) -> None:
         if self.playhead is not None:
@@ -364,6 +384,12 @@ class PianoRuler(QWidget):
                 p.setPen(QColor(theme.TEXT))
                 p.drawText(QPointF(round(x) + 3, 12), format_bar_label(beat, roll.project.time_signature))
         p.fillRect(QRectF(rect.left(), self.height() - 1, rect.width(), 1), QColor(theme.BORDER))
+        start = roll.start_beat()
+        if start is not None:
+            sx = view.beat_to_x(start)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(theme.INSERT_MARKER))
+            p.drawPolygon(QPolygonF([QPointF(sx - 5, 1), QPointF(sx + 5, 1), QPointF(sx, 8)]))
         if roll.playhead is not None:
             x = round(view.beat_to_x(roll.playhead))
             path = QPainterPath(QPointF(x - 5, self.height() - 8))

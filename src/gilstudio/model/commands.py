@@ -110,6 +110,23 @@ class UpdateTrackCommand(_MergeableCommand):
         self.project.update_track(self.key[0], **{self.key[1]: self.old})
 
 
+class UpdateTracksCommand(_MergeableCommand):
+    """One mixer setting on several tracks at once; `old`/`new` map track id to value."""
+
+    def __init__(self, project: Project, attr: str, old: dict, new: dict, text: str,
+                 merge_key: object | None = None):
+        super().__init__(text, (attr, tuple(old)), old, new, merge_key)
+        self.project = project
+
+    def redo(self) -> None:
+        for track_id, value in self.new.items():
+            self.project.update_track(track_id, **{self.key[0]: value})
+
+    def undo(self) -> None:
+        for track_id, value in self.old.items():
+            self.project.update_track(track_id, **{self.key[0]: value})
+
+
 class SetTempoCommand(_MergeableCommand):
     """Tempo change plus the clip trims that keep unwarped clips from overlapping.
     `old`/`new` are (tempo, {track id: clips}). While a tempo drag merges, `old`

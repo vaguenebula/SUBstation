@@ -130,8 +130,14 @@ Model
 
 Engine
 - [ ] Strip `output` = bus id (0: master). The engine sees routing, not groups.
-- [ ] Snapshot orders strips so every strip comes before the bus it feeds;
-      `TrackRender.outputIndex` points at its destination's buffer.
+- [ ] Routing is a general graph, not a tree: strips are nodes, and bus
+      outputs (later sends, sidechains, resampling) are all edges. The snapshot
+      topologically sorts it; `TrackRender.outputIndex` points at its
+      destination's buffer. Each node carries its input count, so a future
+      parallel scheduler can run any strip whose inputs are done (dependency
+      counters, not "children before parent" levels).
+- [ ] No cycles: the model rejects an edge that would close one (a group fed by
+      its own descendant, A↔B); the snapshot builder asserts the graph is acyclic.
 - [ ] Bus accumulation buffers (`kMaxBlock`) allocated edit-side, kept across
       snapshots in `TrackModel` (like `DelayLine`).
 - [ ] Delay compensation at every summing point, bottom-up:
@@ -223,6 +229,19 @@ Tests
       per edge).
 - [ ] Track input from another track (resampling) — an input edge.
 - [ ] Sidechain inputs for plug-ins — an edge into a processor.
+  - Tap point per edge: pre-fader, post-fader or after a given device. First
+    version: the consumer waits for the whole source strip; splitting a strip
+    at the tap (so it can start earlier) is a later optimisation.
+  - Each edge has its own buffer, allocated edit-side like bus buffers (it must
+    stay valid until the consumer reads it, possibly on another thread).
+  - Delay compensation per edge: align the source's arrival with the consumer's
+    latency before that device (the Phase 5 function).
+  - Source picker greys out sources that would make a cycle (e.g. a track
+    inside the group being sidechained).
+  - VST3: activate and arrange the aux input bus edit-side
+    (`activateBus`, `setBusArrangements`), never in the callback.
+  - Expect less parallelism: a sidechain serialises source → consumer, so
+    "kick ducks everything" turns into kick, then the rest.
 - [ ] Macro automation in the engine (a lane fanning out to its targets).
 - [ ] Key/velocity zones on rack chains.
 - [ ] Freeze / flatten.

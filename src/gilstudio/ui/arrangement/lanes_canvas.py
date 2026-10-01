@@ -132,7 +132,7 @@ class LanesCanvas(QWidget):
         self.selection = selection
         self.bridge = bridge
         self.waveforms = waveforms
-        self._playhead = 0.0
+        self._playhead: float | None = None
         self._gesture: ClipGesture | None = None
         self._clip_anchor: tuple[str, str] | None = None  # the last clip clicked without Shift
         self._drop_preview: tuple[int | None, float, list[tuple[str, float]]] | None = None
@@ -233,10 +233,12 @@ class LanesCanvas(QWidget):
 
     # --- Playhead ------------------------------------------------------------------
 
-    def set_playhead(self, beat: float) -> None:
+    def set_playhead(self, beat: float | None) -> None:
+        """None hides it (playback stopped)."""
         for b in (self._playhead, beat):
-            x = int(self.view.beat_to_x(b))
-            self.update(QRect(x - 2, 0, 5, self.height()))
+            if b is not None:
+                x = int(self.view.beat_to_x(b))
+                self.update(QRect(x - 2, 0, 5, self.height()))
         self._playhead = beat
 
     # --- Painting ------------------------------------------------------------------
@@ -321,9 +323,10 @@ class LanesCanvas(QWidget):
             x = round(view.beat_to_x(self.selection.insert_beat))
             p.fillRect(QRectF(x, row.top - view.scroll_y, 1, row.height - 1), QColor(theme.INSERT_MARKER))
 
-        x = round(view.beat_to_x(self._playhead))
-        if visible.left() - 2 <= x <= visible.right() + 2:
-            p.fillRect(QRectF(x, 0, 1, self.height()), QColor(theme.PLAYHEAD))
+        if self._playhead is not None:
+            x = round(view.beat_to_x(self._playhead))
+            if visible.left() - 2 <= x <= visible.right() + 2:
+                p.fillRect(QRectF(x, 0, 1, self.height()), QColor(theme.PLAYHEAD))
         automation_lanes.draw_readout(p, self, gesture)
 
 

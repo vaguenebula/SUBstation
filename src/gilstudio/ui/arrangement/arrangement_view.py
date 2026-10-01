@@ -118,13 +118,14 @@ class ArrangementView(QWidget):
         self.lanes.status_message.connect(self.status_message)
 
         # Double-clicking a clip opens the clip view over the whole arrangement.
-        self.clip_view = ClipView(editor, bridge, self)
+        self.clip_view = ClipView(editor, bridge, self, selection=self.selection)
         self.clip_view.hide()
         self.lanes.clip_view_requested.connect(
             lambda track_id, clip_id: self.open_clips(self.selection.clips, lead=(track_id, clip_id)))
         self.clip_view.closed.connect(self.lanes.setFocus)
         self.clip_view.locate_requested.connect(self.locate_requested)
         bridge.position_changed.connect(self._on_position)
+        bridge.transport_changed.connect(self._on_transport)
         self._on_reset()
 
     # --- Model changes -----------------------------------------------------------
@@ -223,10 +224,14 @@ class ArrangementView(QWidget):
 
     # --- Playhead ------------------------------------------------------------------
 
+    def _on_transport(self, _playing: bool) -> None:
+        self._on_position(self.bridge.position)
+
     def _on_position(self, beat: float) -> None:
-        self.lanes.set_playhead(beat)
-        self.ruler.set_playhead(beat)
-        self.master_lane.set_playhead(beat)
+        shown = beat if self.bridge.is_playing else None  # stopped: only the start marker shows
+        self.lanes.set_playhead(shown)
+        self.ruler.set_playhead(shown)
+        self.master_lane.set_playhead(shown)
         if self.view.follow and self.bridge.is_playing:
             x = self.view.beat_to_x(beat)
             width = self.lanes.width()
