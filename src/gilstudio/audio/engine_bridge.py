@@ -18,6 +18,9 @@ reset; the bridge then opens it again, with its new settings.
 The master is a track to the engine as to the model (engine track id MASTER):
 its devices, mixer and automation go the same way as a track's.
 
+Groups are tracks to the engine too. It knows only where each track's output
+goes: into the engine track of the group it is in, or the master.
+
 Automation: every envelope of a track (or the master) goes to the engine, which
 plays it; its target follows it and the value the model holds for it (set by
 hand) counts again when the envelope goes. Changing an automated target by hand
@@ -222,6 +225,7 @@ class EngineBridge(QObject):
         self._overridden: set[tuple[str, str]] = set()  # (owner, key) changed by hand while automated
         self._mixer: dict[str, tuple[float, float]] = {}  # owner -> (volume dB, pan) the engine has
         self._inputs: dict[str, tuple] = {}  # track id -> (input, monitor, armed) the engine has
+        self._outputs: dict[str, int] = {}  # track id -> the engine track its output goes into
         self._busy = 0  # > 0 while a plug-in call may run a message loop that calls us back
         self.plugin_errors: dict[str, str] = {}  # device id -> why its plug-in isn't loaded
         self.known_plugins: dict[str, str] = {}  # plug-in uid -> file, from the scan: finds moved plug-ins
@@ -251,6 +255,7 @@ class EngineBridge(QObject):
         project.track_inserted.connect(lambda tid, _i: self._add_engine_track(project.track(tid)))
         project.track_removed.connect(self._on_track_removed)
         project.track_changed.connect(self._on_track_changed)
+        project.tracks_arranged.connect(self._push_outputs)
         project.clips_changed.connect(self._push_clips)
         project.devices_changed.connect(self._sync_devices)
         project.device_param_changed.connect(self._on_device_param_changed)
@@ -286,12 +291,14 @@ class EngineBridge(QObject):
         self._overridden.clear()
         self._mixer.clear()
         self._inputs.clear()
+        self._outputs.clear()
         self.plugin_errors.clear()
         self.meters.clear()
         self._editors_wanted.clear()
         self._hidden_editors.clear()
         for track in self.project.all_tracks():
             self._add_engine_track(track)
+        self._push_outputs()
         self._push_settings()
         # Forget decoded audio the new project doesn't use.
         used = {_key(c.path) for t in self.project.tracks if not t.is_midi for c in t.clips}
@@ -317,6 +324,8 @@ class EngineBridge(QObject):
         self._push_clips(track.id)
         self._sync_devices(track.id)
         self._push_automation(track.id)
+        if not track.is_master:  # into its group, and what is in it (back) into it
+            self._push_outputs()
 
     def _on_track_removed(self, track_id: str, _index: int) -> None:
         for device_id, processor_id in self._devices.pop(track_id, []):
@@ -329,6 +338,9 @@ class EngineBridge(QObject):
         self._automating.pop(track_id, None)
         self._mixer.pop(track_id, None)
         self._inputs.pop(track_id, None)
+        self._outputs.pop(track_id, None)
+        # What went into it goes to the engine's master now (the model has its say next).
+        self._outputs = {t: ge.MASTER if out == engine_id else out for t, out in self._outputs.items()}
         self._overridden = {(o, k) for o, k in self._overridden if o != track_id}
 
     def _on_track_changed(self, track_id: str) -> None:
@@ -360,6 +372,24 @@ class EngineBridge(QObject):
             self.engine.set_track_mute(engine_id, track.mute)
             self.engine.set_track_solo(engine_id, track.solo)
         self._mixer[track_id] = (track.volume_db, track.pan)
+
+    def _push_outputs(self) -> None:
+        """Every track's output into its group's engine track (or the master).
+        Changed routes go to the master first, so that no step closes a cycle
+        (a group moving into what was in it)."""
+        wanted = {}
+        for track in self.project.tracks:
+            if track.id in self._track_ids:
+                wanted[track.id] = self._track_ids.get(track.parent, ge.MASTER) if track.parent else ge.MASTER
+        changed = {t: out for t, out in wanted.items() if self._outputs.get(t, ge.MASTER) != out}
+        for track_id in changed:
+            if self._outputs.get(track_id, ge.MASTER) != ge.MASTER:
+                self.engine.set_track_output(self._track_ids[track_id], ge.MASTER)
+                self._outputs[track_id] = ge.MASTER
+        for track_id, out in changed.items():
+            if out != ge.MASTER:
+                self.engine.set_track_output(self._track_ids[track_id], out)
+            self._outputs[track_id] = out
 
     def _push_input(self, track_id: str) -> None:
         engine_id = self._track_ids.get(track_id)

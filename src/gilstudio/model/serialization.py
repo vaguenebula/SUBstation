@@ -8,7 +8,10 @@ The master is stored apart from the tracks: its mixer, devices and automation.
 Files from before version 5 have no master devices; they load as they were.
 Tracks store their audio input (device channels), monitoring and whether they
 are armed (version 6; older files load with none, Auto, not armed), and MIDI
-tracks their MIDI input (version 7; older ones load hearing every input)."""
+tracks their MIDI input (version 7; older ones load hearing every input).
+Tracks store the group they are in ("parent") and whether they are folded
+(version 8); a track that can't be in its group (the file was edited)
+loads out of it."""
 
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ from .notes import normalize
 from .project import (
     DEFAULT_TRACK_HEIGHT,
     DEFAULT_WARP_MODE,
+    GROUP_KIND,
     LEGACY_WARP_MODES,
     MONITOR_MODES,
     TRACK_KINDS,
@@ -37,12 +41,13 @@ from .project import (
     Project,
     Track,
     new_master,
+    repair_tree,
 )
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 7  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
-# 7: MIDI inputs
+VERSION = 8  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
+# 7: MIDI inputs, 8: group tracks
 EXTENSION = ".gilproj"
 
 
@@ -186,6 +191,8 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
                 **({"midi_input": _midi_input_to_dict(t.midi_input)} if t.is_midi else {}),
                 "monitor": t.monitor,
                 "armed": t.armed,
+                "parent": t.parent,
+                "folded": t.folded,
             }
             for t in project.tracks
         ],
@@ -256,15 +263,18 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
             clips=sorted(
                 (_midi_clip(c) if kind == "midi" else _audio_clip(c, base) for c in t.get("clips", [])),
                 key=lambda c: c.start_beat,
-            ),
+            ) if kind != GROUP_KIND else [],
             kind=kind,
             automation=_automation(t.get("automation")),
             automation_view=_view(t.get("automation_view")),
             input=_input(t.get("input")),
             midi_input=_midi_input(t.get("midi_input", {})) if kind == "midi" else MidiInput(),
             monitor=t.get("monitor") if t.get("monitor") in MONITOR_MODES else "auto",
-            armed=bool(t.get("armed", False)),
+            armed=bool(t.get("armed", False)) and kind != GROUP_KIND,
+            parent=t.get("parent") if isinstance(t.get("parent"), str) else None,
+            folded=bool(t.get("folded", False)),
         ))
+    repair_tree(tracks)
     return tracks
 
 

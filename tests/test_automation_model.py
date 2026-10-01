@@ -294,7 +294,7 @@ def test_save_and_load(editor):
     editor.add_automation_lane(track.id)
     editor.set_automation_locked(True)
     data = json.loads(json.dumps(project_to_dict(editor.project)))
-    assert data["version"] == 7
+    assert data["version"] == 8
     data["tracks"][0]["automation"]["mixer:unknown"] = [[0, 1, 0]]  # from a later version: dropped
     loaded = Project()
     load_into(loaded, data)

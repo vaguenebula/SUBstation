@@ -4,7 +4,14 @@ monitoring, meter, and while a track's automation shows, its automation
 choosers (and those of the lanes below it). Plus the master track's header and
 lane, which show the master's automation likewise. Volume and pan follow their
 automation while it plays. Click the master's header to select it: the device
-view shows its effects."""
+view shows its effects.
+
+Group tracks have a header too (no arm or input: they record nothing). Every
+header has a fold button: a track's (a triangle in a circle) folds it to its
+name row; a group's (bars in a circle, filled while folded) hides its tracks.
+Folded, neither shows its automation. The tracks in a group are indented under
+it, with a band in the colour of each group they are in. Drag headers to move tracks:
+between two tracks, or onto a group's header to put them in it."""
 
 from __future__ import annotations
 
@@ -16,6 +23,8 @@ from PySide6.QtGui import (
     QIcon,
     QMouseEvent,
     QPainter,
+    QPainterPath,
+    QPen,
     QPixmap,
     QWheelEvent,
 )
@@ -37,6 +46,8 @@ from .view_state import LaneRow, Row, Selection, TrackLayout, ViewState
 
 RESIZE_GRAB = 4
 NAME_ROW = 22
+INDENT = 6  # per group a track is in: the group's colour band
+FOLD_WIDTH = 14  # a group's fold triangle, before its name
 CHOOSER_ROW = NAME_ROW + 30  # the automation choosers, below volume and pan
 MASTER_HEIGHT = 40
 
@@ -138,6 +149,8 @@ class TrackHeader(QWidget):
         self.row = Row(track_id, 0, self.project.track(track_id).height)
         self._resize: tuple[float, int] | None = None
         self._rename: QLineEdit | None = None
+        self._press: QPointF | None = None  # where a press that may start dragging the track was
+        self._dragging = False
         self.setMouseTracking(True)
 
         self.activator = ToggleButton("1", role="activator", tooltip="Track Activator (unmute)", parent=self)
@@ -180,7 +193,11 @@ class TrackHeader(QWidget):
         self.activator.set_checked_silently(not track.mute)
         self.solo.set_checked_silently(track.solo)
         self.arm.set_checked_silently(track.armed)
-        if track.is_midi:
+        self.solo.setToolTip("Solo (S): a group solos what is in it; Ctrl-click to solo it along with others"
+                             if track.is_group else "Solo (S); Ctrl-click to solo it along with others")
+        if track.is_group:
+            pass  # nothing to record: no input
+        elif track.is_midi:
             self.input.setText(midi_input_label(track.midi_input))
             self.input.setToolTip("MIDI input (the MIDI inputs on in Preferences, and a channel)")
         else:
@@ -223,6 +240,16 @@ class TrackHeader(QWidget):
             self._layout()
             self.update()
 
+    @property
+    def indent(self) -> int:
+        return self.row.depth * INDENT
+
+    def _name_left(self) -> int:
+        return self.indent + 10 + FOLD_WIDTH
+
+    def _fold_rect(self) -> QRect:
+        return QRect(self.indent + 7, 3, FOLD_WIDTH, NAME_ROW - 4)
+
     def set_number(self, number: int) -> None:
         if number != self.number:
             self.number = number
@@ -240,19 +267,28 @@ class TrackHeader(QWidget):
         self.meter.setGeometry(w - meter_w - 4, 4, meter_w, max(8, h - 9))
         right = w - meter_w - 10
         arm_w = 20
+        group = self.track.is_group
         self.arm.setGeometry(right - 18, 4, 18, 17)
+        self.arm.setVisible(not group)
         self.solo.setGeometry(right - arm_w - 22, 4, 22, 17)
         self.activator.setGeometry(right - arm_w - 22 - 30, 4, 28, 17)
         second_row = h >= 48
-        for widget in (self.volume, self.pan, self.input, self.monitor):
+        for widget in (self.volume, self.pan):
             widget.setVisible(second_row)
+        for widget in (self.input, self.monitor):
+            widget.setVisible(second_row and not group)
+        # Everything below the name row starts after the group bands and ends where the
+        # buttons above do; the monitor button is as wide as its label needs.
+        left = 10 + self.indent
         if second_row:
-            self.volume.setGeometry(10, NAME_ROW + 4, 76, 20)
-            self.pan.setGeometry(92, NAME_ROW + 1, 26, 26)
-            self.monitor.setGeometry(right - 34, NAME_ROW + 4, 34, 20)
-            self.input.setGeometry(124, NAME_ROW + 4, right - 34 - 4 - 124, 20)
-        main = QRect(10, CHOOSER_ROW, right - 10, CHOOSER_HEIGHT) if self.row.automation else None
-        self.automation.place(main, [rect.adjusted(10, 0, -(w - right), 0) for rect in self._lane_rects()])
+            self.volume.setGeometry(left, NAME_ROW + 4, 72, 20)
+            self.pan.setGeometry(left + 77, NAME_ROW + 1, 26, 26)
+            monitor_w = max(40, self.monitor.sizeHint().width() + 4)
+            self.monitor.setGeometry(right - monitor_w, NAME_ROW + 4, monitor_w, 20)
+            input_left = left + 108
+            self.input.setGeometry(input_left, NAME_ROW + 4, max(20, right - monitor_w - 4 - input_left), 20)
+        main = QRect(left, CHOOSER_ROW, right - left, CHOOSER_HEIGHT) if self.row.automation else None
+        self.automation.place(main, [rect.adjusted(left, 0, -(w - right), 0) for rect in self._lane_rects()])
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
@@ -260,15 +296,61 @@ class TrackHeader(QWidget):
         selected = self.track_id in self.selection.track_ids
         p.fillRect(self.rect(), QColor(theme.LANE_SELECTED if selected else theme.PANEL_ALT))
         paint_lane_headers(p, self._lane_rects(), self.width())
-        p.fillRect(QRect(0, 0, 5, self.height() - 1), QColor(track.color))
+        # A band for each group it is in (outermost first), then its own colour.
+        for depth, group_id in enumerate(reversed(self.project.ancestors(self.track_id))):
+            p.fillRect(QRect(depth * INDENT, 0, INDENT - 1, self.height()), QColor(self.project.track(group_id).color))
+        p.fillRect(QRect(self.indent, 0, 5, self.height() - 1), QColor(track.color))
+        self._paint_fold(p, track.is_group, track.folded)
         if self._rename is None:
             p.setPen(QColor(theme.TEXT if not track.mute else theme.TEXT_DIM))
-            p.setFont(theme.ui_font(9, bold=selected))
-            name_rect = QRect(10, 3, self.activator.x() - 14, NAME_ROW - 4)
+            p.setFont(theme.ui_font(9, bold=selected or track.is_group))
+            left = self._name_left()
+            name_rect = QRect(left, 3, self.activator.x() - left - 4, NAME_ROW - 4)
             name = p.fontMetrics().elidedText(track.name, Qt.TextElideMode.ElideRight, name_rect.width())
             p.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
         p.fillRect(QRect(0, self.height() - 1, self.width(), 1), QColor(theme.BORDER))
         p.fillRect(QRect(0, 0, 1, self.height()), QColor(theme.BORDER))
+
+    def _paint_fold(self, p: QPainter, group: bool, folded: bool) -> None:
+        """The fold button, in a circle. A track's: a triangle, pointing right while
+        folded, down while open. A group's: three bars (its tracks), the circle
+        filled while folded (its tracks tucked away)."""
+        rect = QRectF(self._fold_rect())
+        c = rect.center()
+        radius = 5.5
+        ink = QColor(theme.TEXT)
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(ink, 1.2))
+        p.setBrush(ink if group and folded else Qt.BrushStyle.NoBrush)
+        p.drawEllipse(c, radius, radius)
+        if group:
+            bars = QColor(theme.PANEL_ALT) if folded else ink
+            for dy in (-2.5, 0.0, 2.5):
+                half = 2.8 if dy == 0.0 else 2.2
+                p.fillRect(QRectF(c.x() - half, c.y() + dy - 0.6, 2 * half, 1.2), bars)
+        else:
+            path = QPainterPath()
+            if folded:
+                path.moveTo(c.x() - 1.5, c.y() - 3.0)
+                path.lineTo(c.x() + 2.5, c.y())
+                path.lineTo(c.x() - 1.5, c.y() + 3.0)
+            else:
+                path.moveTo(c.x() - 3.0, c.y() - 1.5)
+                path.lineTo(c.x() + 3.0, c.y() - 1.5)
+                path.lineTo(c.x(), c.y() + 2.5)
+            path.closeSubpath()
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(ink)
+            p.drawPath(path)
+        p.restore()
+
+    def toggle_fold(self) -> None:
+        """Fold or unfold it; when it is one of several selected tracks, they all
+        take its new state."""
+        folded = not self.track.folded
+        for track_id in self.dragged_tracks():
+            self.editor.set_folded(track_id, folded)
 
     # --- Interaction -----------------------------------------------------------------
 
@@ -292,7 +374,10 @@ class TrackHeader(QWidget):
         return True
 
     def _in_resize_zone(self, y: float) -> bool:
-        """The bottom edge of the track's own lane (automation lanes below keep their height)."""
+        """The bottom edge of the track's own lane (automation lanes below keep their
+        height). A folded track keeps the height it had: it can't be resized."""
+        if self.row.folded:
+            return False
         return self.row.main_height - RESIZE_GRAB <= y < self.row.main_height
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -300,12 +385,21 @@ class TrackHeader(QWidget):
             return
         if self._in_resize_zone(event.position().y()):
             self._resize = (event.globalPosition().y(), self.row.main_height)  # as tall as it shows
+        elif self._fold_rect().contains(event.position().toPoint()):
+            self.toggle_fold()
         else:
             mods = event.modifiers()
             mode = ("toggle" if mods & Qt.KeyboardModifier.ControlModifier
                     else "range" if mods & Qt.KeyboardModifier.ShiftModifier else "")
-            self.selection.select_track(self.track_id, focus_track=True, mode=mode,
-                                        order=[t.id for t in self.project.tracks])
+            if not (mode == "" and self.track_id in self.selection.track_ids and len(self.selection.track_ids) > 1):
+                self.selection.select_track(self.track_id, focus_track=True, mode=mode,
+                                            order=[t.id for t in self.project.tracks])
+            self._press = event.position()  # dragging moves the track (the selected tracks)
+
+    def dragged_tracks(self) -> list[str]:
+        """What dragging this header moves: the selected tracks if it is one of them."""
+        selected = [t for t in self.selection.track_ids if self.project.has_track(t)]
+        return selected if self.track_id in selected else [self.track_id]
 
     def _solo_clicked(self, on: bool) -> None:
         """Soloing a track unsoloes the others, and unsoloing one unsoloes them
@@ -413,21 +507,43 @@ class TrackHeader(QWidget):
             height = int(start_h + event.globalPosition().y() - start_y)
             self.editor.set_track_height(self.track_id, max(MIN_TRACK_HEIGHT, min(MAX_TRACK_HEIGHT, height)))
             return
+        column = self.parentWidget()
+        if self._press is not None:  # the left button is down (pressed here)
+            if not self._dragging and (event.position() - self._press).manhattanLength() >= \
+                    QApplication.startDragDistance():
+                self._dragging = True
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            if self._dragging and isinstance(column, TrackHeaderColumn):
+                column.drag_tracks(self.dragged_tracks(), column.mapFromGlobal(event.globalPosition().toPoint()).y())
+            return
         resize = self._in_resize_zone(event.position().y())
         self.setCursor(Qt.CursorShape.SplitVCursor if resize else Qt.CursorShape.ArrowCursor)
 
-    def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._resize = None
+        dragging, self._dragging = self._dragging, False
+        pressed, self._press = self._press, None
+        column = self.parentWidget()
+        if dragging and isinstance(column, TrackHeaderColumn):
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            column.drop_tracks(self.dragged_tracks(), column.mapFromGlobal(event.globalPosition().toPoint()).y())
+        elif pressed is not None and self.track_id in self.selection.track_ids and len(self.selection.track_ids) > 1 \
+                and not event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            # A click (not a drag) on one of several selected tracks selects just it.
+            self.selection.select_track(self.track_id, focus_track=True)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.position().y() < NAME_ROW:
+        if self._fold_rect().contains(event.position().toPoint()):
+            self.toggle_fold()  # each click of a double-click counts
+        elif event.position().y() < NAME_ROW:
             self.start_rename()
 
     def start_rename(self) -> None:
         if self._rename:
             return
         editor = QLineEdit(self.track.name, self)
-        editor.setGeometry(8, 2, self.activator.x() - 12, NAME_ROW - 2)
+        left = self._name_left() - 2
+        editor.setGeometry(left, 2, self.activator.x() - left - 4, NAME_ROW - 2)
         editor.selectAll()
         editor.show()
         editor.setFocus()
@@ -456,13 +572,31 @@ class TrackHeader(QWidget):
         for color in TRACK_COLORS:
             colors.addAction(color_swatch(color), color, lambda c=color: self.editor.set_track_color(self.track_id, c))
         menu.addSeparator()
-        index = self.project.track_index(self.track_id)
-        menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(index + 1))
-        menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(index + 1))
+        index, parent = self.editor.insertion_point(self.track_id)
+        menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(index, parent=parent))
+        menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(index, parent=parent))
         menu.addAction("Delete Track" if len(selected) == 1 else "Delete Tracks",
                        lambda: self.editor.delete_tracks(list(selected)))
         menu.addSeparator()
-        if self.track.automation_view.shown:
+        group = menu.addAction("Group Tracks", lambda: self._group(list(selected)))
+        group.setShortcut("Ctrl+G")  # (as a tip: the window's action handles the key)
+        group.setShortcutVisibleInContextMenu(True)
+        groups = [t for t in selected if self.project.track(t).is_group]
+        if groups:
+            ungroup = menu.addAction("Ungroup Tracks", lambda: self.editor.ungroup(groups))
+            ungroup.setShortcut("Ctrl+Shift+G")
+            ungroup.setShortcutVisibleInContextMenu(True)
+        folding = [self.project.track(t) for t in self.dragged_tracks()]
+        kind = ("Groups" if all(t.is_group for t in folding) else "Tracks") if len(folding) > 1             else "Group" if self.track.is_group else "Track"
+        menu.addAction(f"Unfold {kind}" if self.track.folded else f"Fold {kind}", self.toggle_fold)
+        if self.track.parent is not None:
+            menu.addAction("Move Out of Group", lambda: self.editor.move_tracks(
+                list(selected), self.project.subtree_end(self.project.track_index(self.track.parent)),
+                self.project.track(self.track.parent).parent))
+        menu.addSeparator()
+        if self.track.folded:
+            pass  # its automation doesn't show while folded: unfold it first
+        elif self.track.automation_view.shown:
             menu.addAction("Hide Automation", lambda: self.editor.hide_automation(self.track_id))
             menu.addAction("Show Automation in New Lane", lambda: self.editor.add_automation_lane(self.track_id))
         else:
@@ -471,6 +605,31 @@ class TrackHeader(QWidget):
         if any(overridden(self.track_id, key) for key in self.track.automation):
             menu.addAction("Re-Enable Automation", lambda: self.bridge.re_enable_automation(self.track_id))
         menu.exec(event.globalPos())
+
+    def _group(self, track_ids: list[str]) -> None:
+        group = self.editor.group_tracks(track_ids)
+        if group is not None:
+            self.selection.select_track(group.id, focus_track=True)
+
+
+class _DropMarker(QWidget):
+    """Where dragged tracks would go: a line between tracks, or a frame around
+    the group they would go into."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.into = False
+        self.hide()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        color = QColor(theme.ACCENT)
+        if self.into:
+            p.setPen(QPen(color, 2))
+            p.drawRect(QRectF(self.rect()).adjusted(1, 1, -1, -1))
+        else:
+            p.fillRect(self.rect(), color)
 
 
 class TrackHeaderColumn(QWidget):
@@ -485,6 +644,7 @@ class TrackHeaderColumn(QWidget):
         self.selection = selection
         self.bridge = bridge
         self.headers: dict[str, TrackHeader] = {}
+        self._marker = _DropMarker(self)
         selection.changed.connect(self._repaint_headers)
         bridge.meters_updated.connect(self._update_meters)
         bridge.position_changed.connect(self._follow_automation)
@@ -514,9 +674,65 @@ class TrackHeaderColumn(QWidget):
         for index, row in enumerate(self.layout_model.rows):
             header = self.headers.get(row.track_id)
             if header:
+                header.setVisible(not row.hidden)  # in a folded group
                 header.setGeometry(0, row.top - self.view.scroll_y, self.width(), row.height)
                 header.set_row(row)
                 header.set_number(index + 1)
+                header.update()  # its group bands follow the groups
+        self._marker.raise_()
+
+    # --- Dragging tracks ----------------------------------------------------------
+
+    def drop_target(self, track_ids: list[str], y: float) -> tuple[int, str | None, str | None, int] | None:
+        """Where tracks dropped at `y` go: (index, group, the group shown as
+        taking them or None, y of the line between tracks). None: nowhere they can go.
+        Onto the middle of a group's header: into it, last; on the upper half of
+        a header: before it, in its group; on the lower half: after it (into an
+        open group, first)."""
+        project = self.editor.project
+        content_y = y + self.view.scroll_y
+        target = None
+        for index, row in enumerate(self.layout_model.rows):
+            if row.hidden or content_y >= row.bottom:
+                continue
+            track = project.tracks[index]
+            offset = content_y - row.top
+            if track.is_group and row.main_height * 0.25 <= offset <= row.main_height * 0.75:
+                target = (project.subtree_end(index), track.id, track.id, row.top)
+            elif offset < row.main_height / 2:
+                target = (index, track.parent, None, row.top)
+            else:
+                after = project.subtree_end(index) if track.is_group and track.folded else index + 1
+                target = (after, project.parent_at(after), None, row.bottom)
+            break
+        if target is None:  # below the tracks: last, in no group
+            target = (len(project.tracks), None, None, self.layout_model.total_height)
+        index, parent, _, _ = target
+        return target if self.editor.can_move_tracks(track_ids, index, parent) else None
+
+    def drag_tracks(self, track_ids: list[str], y: float) -> None:
+        """Tracks being dragged over the headers: show where they would go."""
+        target = self.drop_target(track_ids, y)
+        if target is None:
+            self._marker.hide()
+            return
+        _, _, into, line = target
+        if into is not None:
+            row = self.layout_model.row_for(into)
+            self._marker.into = True
+            self._marker.setGeometry(0, row.top - self.view.scroll_y, self.width(), row.main_height)
+        else:
+            self._marker.into = False
+            self._marker.setGeometry(0, line - self.view.scroll_y - 1, self.width(), 3)
+        self._marker.show()
+        self._marker.raise_()
+        self._marker.update()
+
+    def drop_tracks(self, track_ids: list[str], y: float) -> None:
+        self._marker.hide()
+        target = self.drop_target(track_ids, y)
+        if target is not None:
+            self.editor.move_tracks(track_ids, target[0], target[1])
 
     def _follow_automation(self) -> None:
         for header in self.headers.values():

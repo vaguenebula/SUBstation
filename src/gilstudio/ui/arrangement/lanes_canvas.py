@@ -1,6 +1,7 @@
 """The track lanes: clips, grid, loop, playhead, and all clip mouse editing;
 and the tracks' automation, over their clips and in lanes below them
-(see automation_lanes.py).
+(see automation_lanes.py). A group's lane shows a summary of the clips of the
+tracks in it (folded or not); the tracks in a folded group have no lane.
 
 Custom-painted for speed: each paint only touches what intersects the dirty
 rectangle, and playhead motion repaints just two thin strips.
@@ -56,7 +57,13 @@ from .waveform_cache import WaveformCache
 
 EDGE_GRAB = 6  # trim handles: this many pixels inside each end of a clip's title bar
 TITLE_HEIGHT = 16  # also the grab area for selecting/moving the clip
-MIN_TITLE_ROW = 30  # clips in shorter rows have no title bar: the whole clip moves it
+MIN_TITLE_ROW = 30  # clips in shorter rows (folded tracks) have a thin title bar instead
+SHORT_TITLE_HEIGHT = 9  # that thin bar: grab it to move the clip; below it, select time as on any lane
+
+
+def clip_title_height(clip_height: float) -> int:
+    """The title bar of a clip this high: where it is grabbed (the rest selects time)."""
+    return TITLE_HEIGHT if clip_height >= MIN_TITLE_ROW else SHORT_TITLE_HEIGHT
 HEIGHT_STEP = 12  # pixels per wheel notch when Alt+wheel resizes a track
 SELECTION_TINT = QColor(80, 150, 210, 150)  # selected clips and time selections, as in Ableton
 
@@ -108,7 +115,10 @@ def is_pan_modifier(mods) -> bool:
 
 
 def resize_track_by_wheel(editor: ProjectEditor, track_id: str, delta: int) -> None:
-    height = editor.project.track(track_id).height + round(delta / 120.0 * HEIGHT_STEP)
+    track = editor.project.track(track_id)
+    if track.folded:
+        return  # a folded track is its name row
+    height = track.height + round(delta / 120.0 * HEIGHT_STEP)
     editor.set_track_height(track_id, max(MIN_TRACK_HEIGHT, min(MAX_TRACK_HEIGHT, height)))
 
 
@@ -175,7 +185,7 @@ class LanesCanvas(QWidget):
     def row_index_at(self, y: float, clamp: bool = False) -> int | None:
         index = self.layout_model.row_index_at(y + self.view.scroll_y)
         if index is None and clamp and self.layout_model.rows:
-            return 0 if y + self.view.scroll_y < 0 else len(self.layout_model.rows) - 1
+            return 0 if y + self.view.scroll_y < 0 else self.layout_model.last_shown_index()
         return index
 
     def _clip_rect(self, clip: AnyClip, row_top: float, row_height: int) -> QRectF:
@@ -230,7 +240,7 @@ class LanesCanvas(QWidget):
             # Only inside the clip: next to it, or on a neighbour's side of a
             # shared boundary, you are not trimming this clip.
             if rect.left() <= pos.x() <= rect.right():
-                if not (rect.height() < MIN_TITLE_ROW or pos.y() < rect.top() + TITLE_HEIGHT):
+                if pos.y() >= rect.top() + clip_title_height(rect.height()):
                     return row.track_id, clip, "body"
                 grab = min(EDGE_GRAB, rect.width() / 3)
                 if pos.x() <= rect.left() + grab:
@@ -274,6 +284,8 @@ class LanesCanvas(QWidget):
         for _, row in rows:
             track = self.project.track(row.track_id)
             y = row.top - view.scroll_y
+            if track.is_group:
+                self._draw_group_summary(p, track.id, y, row.main_height, visible)
             for clip in track.clips:
                 if clip.id in hidden:
                     continue
@@ -294,10 +306,14 @@ class LanesCanvas(QWidget):
         if gesture:
             for row_index, color, clip in gesture.kept():
                 row = self.layout_model.rows[row_index]
+                if row.hidden:
+                    continue
                 rect = self._clip_rect(clip, row.top - view.scroll_y, row.main_height)
                 self._draw_clip(p, color, clip, rect, visible, False)
             for row_index, color, clip in gesture.ghosts():
                 row = self.layout_model.rows[row_index]
+                if row.hidden:
+                    continue
                 rect = self._clip_rect(clip, row.top - view.scroll_y, row.main_height)
                 self._draw_clip(p, color, clip, rect, visible, True, ghost=True)
         areas = self.envelope_areas()
@@ -320,7 +336,7 @@ class LanesCanvas(QWidget):
             x0, x1 = view.beat_to_x(start), view.beat_to_x(end)
             for track_id in track_ids:
                 row = self.layout_model.row_for(track_id)
-                if row is None:
+                if row is None or row.hidden:
                     continue
                 area = QRectF(x0, row.top - view.scroll_y, x1 - x0, row.main_height - 1)
                 if not self.selection.clip_range and row.main_height >= MIN_TITLE_ROW:
@@ -344,7 +360,7 @@ class LanesCanvas(QWidget):
     def _draw_clip(self, p: QPainter, track_color: str, clip: AnyClip, rect: QRectF, visible: QRectF,
                    selected: bool, ghost: bool = False) -> None:
         base = QColor(track_color)
-        title_h = TITLE_HEIGHT if rect.height() >= MIN_TITLE_ROW else 0
+        title_h = clip_title_height(rect.height())
         body = rect.adjusted(0, title_h, 0, 0)
         body_color = QColor(base)
         body_color.setHsvF(base.hsvHueF(), base.hsvSaturationF() * 0.6, min(1.0, base.valueF() * 0.78))
@@ -362,7 +378,7 @@ class LanesCanvas(QWidget):
         title = QRectF(rect.left(), rect.top(), rect.width(), title_h)
         if title_h:
             p.fillRect(title, base.lighter(115) if selected else base)
-        if title_h and rect.width() > 16:
+        if title_h >= TITLE_HEIGHT and rect.width() > 16:  # (no name in a thin bar)
             p.setPen(QColor(theme.ACCENT_TEXT))
             p.setFont(theme.ui_font(7.5))
             text_rect = title.adjusted(4, 0, -3, 0)
@@ -397,6 +413,32 @@ class LanesCanvas(QWidget):
         if hover is not None and hover[0] == clip.id and not ghost:
             x = rect.left() if hover[1] == "left" else rect.right() - 2
             p.fillRect(QRectF(x, rect.top(), 2, rect.height()), QColor(theme.SELECTION_OUTLINE))
+        p.restore()
+
+    def _draw_group_summary(self, p: QPainter, group_id: str, row_top: float, row_height: int,
+                            visible: QRectF) -> None:
+        """What is in a group, at a glance: the clips of its tracks as bars in their
+        colours, overlapping, as in Ableton's group lanes."""
+        area = QRectF(visible.left(), row_top + 2, visible.width(), row_height - 5)
+        if area.height() < 3:
+            return
+        tempo = self.project.tempo
+        p.save()
+        p.setClipRect(area)
+        for track in self.project.descendants(group_id):
+            color = QColor(track.color)
+            color.setAlphaF(0.85)
+            fill = QColor(color)
+            fill.setAlphaF(0.15)  # light enough that the grid (and overlapping clips) show through
+            for clip in track.clips:
+                x0, x1 = self.view.beat_to_x(clip.start_beat), self.view.beat_to_x(clip.end_beat(tempo))
+                if x1 < visible.left():
+                    continue
+                if x0 > visible.right():
+                    break
+                rect = QRectF(x0, area.top(), max(1.0, x1 - x0), area.height())
+                p.fillRect(rect, fill)
+                p.fillRect(QRectF(x0, area.top(), rect.width(), min(4.0, area.height())), color)
         p.restore()
 
     def _draw_live_take(self, p: QPainter, track_color: str, take, row_top: float, row_height: int,
@@ -740,13 +782,13 @@ class LanesCanvas(QWidget):
             menu.addAction("Delete", self.delete_area)
         else:
             index = self.row_index_at(pos.y())
-            at = None if index is None else index + 1
+            at, parent = self.editor.insertion_point(None if index is None else self.layout_model.rows[index].track_id)
             if index is not None and self.project.track(self.layout_model.rows[index].track_id).is_midi:
                 track_id = self.layout_model.rows[index].track_id
                 menu.addAction("Insert MIDI Clip", lambda: self.insert_midi_clip(track_id, pos.x()))
                 menu.addSeparator()
-            menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(at))
-            menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(at))
+            menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(at, parent=parent))
+            menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(at, parent=parent))
             if index is not None:
                 track_id = self.layout_model.rows[index].track_id
                 menu.addAction("Delete Track", lambda: self.editor.delete_tracks([track_id]))
@@ -784,8 +826,8 @@ class LanesCanvas(QWidget):
             return
         pos = event.position()
         index = self.row_index_at(pos.y())
-        if index is not None and self.project.track(self.layout_model.rows[index].track_id).is_midi:
-            index = None  # audio can't go on a MIDI track: it gets a new track
+        if index is not None and not self.project.track(self.layout_model.rows[index].track_id).is_audio:
+            index = None  # audio goes only on an audio track: otherwise it gets a new track
         beat = max(0.0, self.view.snap_beat(self.view.x_to_beat(pos.x())))
         sources = []
         for path in paths:

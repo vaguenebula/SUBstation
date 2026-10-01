@@ -12,6 +12,17 @@ The master is a Track too (kind "master", id MASTER), with devices, a mixer and
 automation, but no clips. It is `project.master`, not one of `project.tracks`
 (the arrangement's); `project.track(MASTER)` finds it, so whatever works on a
 track's devices, mixer or automation works on the master's.
+
+Group tracks (kind "group") hold other tracks: what is in a group goes into it,
+through its devices and mixer, and on to the master (or the group it is in).
+A group has no clips. The hierarchy lives here, as each track's `parent` (the
+group it is in, or None); `project.tracks` stays flat, with the invariant that
+a group's descendants follow it, together (tree_problem). The engine sees only
+where each track's output goes.
+
+Any track can be folded (view state): a folded track shows as a thin row, its
+automation hidden; a folded group keeps its row but hides its tracks (and its
+automation).
 """
 
 from __future__ import annotations
@@ -39,8 +50,10 @@ DEFAULT_WARP_MODE = "Standard"
 LEGACY_WARP_MODES = {"Beats": "Transients", "Tones": "Standard", "Complex": "Standard",
                      "Texture": "Smooth", "Complex Pro": "Formants"}
 
-# Audio tracks hold audio clips; MIDI tracks hold MIDI clips and an instrument.
-TRACK_KINDS = ("audio", "midi")
+# Audio tracks hold audio clips; MIDI tracks hold MIDI clips and an instrument;
+# group tracks hold other tracks.
+GROUP_KIND = "group"
+TRACK_KINDS = ("audio", "midi", GROUP_KIND)
 MASTER_KIND = "master"  # the master's kind: no clips, effects only
 # Input monitoring: when a track hears its input instead of its clips. "auto":
 # while armed, unless it plays back without recording (as in Ableton).
@@ -227,10 +240,20 @@ class Track:
     midi_input: MidiInput | None = field(default_factory=MidiInput)
     monitor: str = "auto"  # one of MONITOR_MODES
     armed: bool = False  # records when recording starts (saved, not undone)
+    parent: str | None = None  # the group it is in (None: none); see tree_problem
+    folded: bool = False  # a thin row, automation hidden; a group: its tracks hidden (saved, not undone)
 
     @property
     def is_midi(self) -> bool:
         return self.kind == "midi"
+
+    @property
+    def is_audio(self) -> bool:
+        return self.kind == "audio"
+
+    @property
+    def is_group(self) -> bool:
+        return self.kind == GROUP_KIND
 
     @property
     def is_master(self) -> bool:
@@ -239,6 +262,8 @@ class Track:
     @property
     def has_input(self) -> bool:
         """Whether it has something to record: an audio input, or a MIDI track's MIDI input."""
+        if self.is_group:
+            return False
         return self.midi_input is not None if self.is_midi else bool(self.input)
 
 
@@ -246,10 +271,50 @@ def new_master(**attrs) -> Track:
     return Track(id=MASTER, name="Master", color=MASTER_COLOR, kind=MASTER_KIND, **attrs)
 
 
+def tree_problem(tracks: list[Track]) -> str | None:
+    """Why these tracks, in this order, don't make a valid tree (None if they
+    do): a track's parent must be a group listed before it, and everything
+    between a group and its last descendant must be a descendant of it. Then a
+    group's tracks follow it, together, and no group is in itself."""
+    path: list[str] = []  # the groups the next track can be in (outermost first)
+    seen = set()
+    for track in tracks:
+        if track.id in seen:
+            return f"{track.name} is listed twice"
+        seen.add(track.id)
+        if track.parent is None:
+            path = []
+        elif track.parent in path:
+            del path[path.index(track.parent) + 1:]
+        else:
+            return f"{track.name} is not with the other tracks of its group"
+        if track.is_group:
+            path.append(track.id)
+    return None
+
+
+def repair_tree(tracks: list[Track]) -> None:
+    """Takes tracks out of groups they can't be in (see tree_problem), keeping their order."""
+    path: list[str] = []
+    for track in tracks:
+        if track.parent is not None and track.parent not in path:
+            track.parent = None
+        if track.parent is None:
+            path = []
+        else:
+            del path[path.index(track.parent) + 1:]
+        if track.is_group:
+            path.append(track.id)
+
+
+TrackTree = tuple[tuple[str, str | None], ...]  # every track's (id, parent), in order
+
+
 class Project(QObject):
     track_inserted = Signal(str, int)  # track id, index
     track_removed = Signal(str, int)
     track_changed = Signal(str)  # name, colour, mixer settings or height (MASTER: the master's mixer)
+    tracks_arranged = Signal()  # the tracks' order or groups changed (not which tracks there are)
     clips_changed = Signal(str)  # track id
     devices_changed = Signal(str)  # track id: devices added/removed/toggled
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
@@ -328,6 +393,51 @@ class Project(QObject):
         """Everything that has automation: the tracks, then the master."""
         return [t.id for t in self.tracks] + [MASTER]
 
+    # --- Groups ---------------------------------------------------------------
+
+    def subtree_end(self, index: int) -> int:
+        """The index just past the last descendant of the track at `index` (index + 1 if it has none)."""
+        track_id = self.tracks[index].id
+        end = index + 1
+        while end < len(self.tracks) and self.is_descendant(self.tracks[end].id, track_id):
+            end += 1
+        return end
+
+    def descendants(self, track_id: str) -> list[Track]:
+        """What is in a group (the tracks in groups in it too), in order."""
+        index = self.track_index(track_id)
+        return self.tracks[index + 1:self.subtree_end(index)]
+
+    def children(self, track_id: str) -> list[Track]:
+        return [t for t in self.tracks if t.parent == track_id]
+
+    def ancestors(self, track_id: str) -> list[str]:
+        """The groups a track is in, the nearest first."""
+        result = []
+        parent = self.track(track_id).parent
+        while parent is not None:
+            result.append(parent)
+            parent = self.track(parent).parent
+        return result
+
+    def is_descendant(self, track_id: str, group_id: str) -> bool:
+        return group_id in self.ancestors(track_id)
+
+    def depth(self, track_id: str) -> int:
+        return len(self.ancestors(track_id))
+
+    def is_hidden(self, track_id: str) -> bool:
+        """Whether a group it is in is folded (the arrangement doesn't show it)."""
+        return any(self.track(g).folded for g in self.ancestors(track_id))
+
+    def parent_at(self, index: int) -> str | None:
+        """The group a track inserted at `index` goes into: that of the track it goes
+        before (amid a group's tracks it has to be in that group)."""
+        return self.tracks[index].parent if 0 <= index < len(self.tracks) else None
+
+    def tree(self) -> TrackTree:
+        return tuple((t.id, t.parent) for t in self.tracks)
+
     def next_color(self) -> str:
         return TRACK_COLORS[len(self.tracks) % len(TRACK_COLORS)]
 
@@ -353,11 +463,29 @@ class Project(QObject):
         self.track_removed.emit(track_id, index)
         return track, index
 
+    def arrange_tracks(self, tree: TrackTree) -> None:
+        """Put the tracks in this order and these groups (`tree`: every track's id and
+        parent). Raises ValueError, changing nothing, if that isn't a valid tree."""
+        by_id = {t.id: t for t in self.tracks}
+        if sorted(by_id) != sorted(track_id for track_id, _ in tree):
+            raise ValueError("an arrangement lists every track once")
+        old_tracks, old_parents = self.tracks, {t.id: t.parent for t in self.tracks}
+        self.tracks = [by_id[track_id] for track_id, _ in tree]
+        for track_id, parent in tree:
+            by_id[track_id].parent = parent
+        problem = tree_problem(self.tracks)
+        if problem is not None:
+            self.tracks = old_tracks
+            for track in old_tracks:
+                track.parent = old_parents[track.id]
+            raise ValueError(problem)
+        self.tracks_arranged.emit()
+
     def update_track(self, track_id: str, **attrs) -> None:
         track = self.track(track_id)
         for name, value in attrs.items():
             if not hasattr(track, name) or name in ("id", "kind", "clips", "devices", "automation",
-                                                    "automation_view"):
+                                                    "automation_view", "parent"):
                 raise AttributeError(name)
             setattr(track, name, value)
         self.track_changed.emit(track_id)

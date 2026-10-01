@@ -201,6 +201,9 @@ class MainWindow(QMainWindow):
         self._action(create, "Insert &MIDI Track", self.insert_midi_track, "Ctrl+Shift+T")
         self._action(create, "Insert MIDI &Clip", self.insert_midi_clip, ["Ctrl+Shift+D", "Ctrl+Shift+M"])
         create.addSeparator()
+        self._action(create, "&Group Tracks", self.group_selected_tracks, "Ctrl+G")
+        self._action(create, "&Ungroup Tracks", self.ungroup_selected_tracks, "Ctrl+Shift+G")
+        create.addSeparator()
         self._action(create, "Delete Selected Tracks", self.delete_track)
 
         view = bar.addMenu("&View")
@@ -322,18 +325,34 @@ class MainWindow(QMainWindow):
 
     # --- Editing -------------------------------------------------------------------
 
-    def _after_selected_track(self) -> int | None:
-        if self.selection.track_id and self.project.has_track(self.selection.track_id):
-            return self.project.track_index(self.selection.track_id) + 1
-        return None
+    def _after_selected_track(self) -> dict:
+        """Where a new track goes: after the selected one (and what is in it), in its group."""
+        index, parent = self.editor.insertion_point(self.selection.track_id)
+        return {"index": index, "parent": parent}
 
     def insert_track(self) -> None:
-        track = self.editor.add_audio_track(self._after_selected_track())
+        track = self.editor.add_audio_track(**self._after_selected_track())
         self.selection.select_track(track.id, focus_track=True)
 
     def insert_midi_track(self) -> None:
-        track = self.editor.add_midi_track(self._after_selected_track())
+        track = self.editor.add_midi_track(**self._after_selected_track())
         self.selection.select_track(track.id, focus_track=True)
+
+    def group_selected_tracks(self) -> None:
+        """Ctrl+G: the selected tracks go into a new group, which is selected."""
+        group = self.editor.group_tracks([t for t in self.selection.track_ids if self.project.has_track(t)])
+        if group is None:
+            self.show_message("Select the tracks to group.")
+        else:
+            self.selection.select_track(group.id, focus_track=True)
+
+    def ungroup_selected_tracks(self) -> None:
+        """Ctrl+Shift+G: the selected groups go; what was in them stays."""
+        groups = [t for t in self.selection.track_ids if self.project.has_track(t) and self.project.track(t).is_group]
+        if groups:
+            self.editor.ungroup(groups)
+        else:
+            self.show_message("Select a group track to ungroup.")
 
     def insert_midi_clip(self) -> None:
         """Ctrl+Shift+D / Ctrl+Shift+M: a MIDI clip over the time selection on each MIDI
@@ -363,7 +382,7 @@ class MainWindow(QMainWindow):
         has_track = bool(track_id) and self.project.has_owner(track_id)  # a track or the master
         if is_instrument(kind, plugin) and not (has_track and self.project.track(track_id).is_midi):
             # As in Ableton: an instrument chosen with no MIDI track selected gets a new one.
-            track = self.editor.add_midi_track(self._after_selected_track(), instrument=None if plugin else kind,
+            track = self.editor.add_midi_track(**self._after_selected_track(), instrument=None if plugin else kind,
                                                plugin=plugin)
             self.selection.select_track(track.id, focus_track=True)
         elif has_track:

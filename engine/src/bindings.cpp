@@ -55,7 +55,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 6;
+    m.attr("API_VERSION") = 7;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -421,6 +421,10 @@ NB_MODULE(_engine, m) {
         .def("set_track_pan", &Engine::setTrackPan, "track_id"_a, "pan"_a)
         .def("set_track_mute", &Engine::setTrackMute, "track_id"_a, "mute"_a)
         .def("set_track_solo", &Engine::setTrackSolo, "track_id"_a, "solo"_a)
+        .def("set_track_output", &Engine::setTrackOutput, "track_id"_a, "output_track_id"_a,
+             "Where a track's output goes: MASTER, or another track (a group's bus), which sums it into its input. "
+             "Raises ValueError for a route that would close a cycle.")
+        .def("track_output", &Engine::trackOutput, "track_id"_a)
         .def("set_master_gain", &Engine::setMasterGain, "gain"_a)
         .def("set_master_pan", &Engine::setMasterPan, "pan"_a)
         .def("set_track_automation", &Engine::setTrackAutomation, "track_id"_a, "lanes"_a,
