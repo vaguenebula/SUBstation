@@ -369,3 +369,70 @@ def test_recorded_takes_become_clips_replacing_what_was_under_them(editor):
     take = project.clip(*refs[0])
     assert (take.start_beat, take.offset_sec, take.duration_sec, take.source_duration_sec) == (0.0, 0.25, 0.75, 1.0)
     assert editor.add_recordings([RecordedTake(track.id, "C:/rec/empty.wav", -2.0, 1.0)]) == []
+
+
+def test_copy_paste_takes_just_the_range_and_pastes_at_a_track(editor):
+    t1 = editor.add_audio_track()
+    t2 = editor.add_audio_track()
+    t3 = editor.add_audio_track()
+    editor.add_clips(t1.id, 0.0, [("a.wav", 2.0)])  # beats 0-4
+    editor.add_clips(t2.id, 2.0, [("b.wav", 1.0)])  # beats 2-4
+    content = editor.copy_range(1.0, 3.0, [t1.id, t2.id])
+    assert content.length == 2.0 and [c.row for c in content.tracks] == [0, 1]
+    assert spans(content.tracks[0].clips) == [(0, 2)] and spans(content.tracks[1].clips) == [(1, 2)]
+    assert editor.copy_range(10.0, 12.0, [t1.id]) is None  # nothing there
+
+    # Onto the second track: the content's second row lands on the third.
+    area = editor.paste(content, 8.0, t2.id)
+    assert area == (8.0, 10.0, [t2.id, t3.id])
+    assert spans(editor.project.track(t2.id).clips) == [(2, 4), (8, 10)]
+    assert spans(editor.project.track(t3.id).clips) == [(9, 10)]
+    # Pasting again makes new clips; one undo step each.
+    editor.paste(content, 10.0, t2.id)
+    ids = [c.id for c in editor.project.track(t2.id).clips]
+    assert len(set(ids)) == 3
+    editor.undo_stack.undo()
+    editor.undo_stack.undo()
+    assert spans(editor.project.track(t3.id).clips) == []
+
+
+def test_paste_replaces_what_is_there_and_cut_takes_it_out(editor):
+    t = editor.add_audio_track()
+    editor.add_clips(t.id, 0.0, [("a.wav", 4.0)])  # beats 0-8
+    content = editor.cut_range(2.0, 4.0, [t.id])
+    assert spans(editor.project.track(t.id).clips) == [(0, 2), (4, 8)]
+    assert editor.undo_stack.undoText() == "Cut"
+    editor.paste(content, 5.0, t.id)
+    assert spans(editor.project.track(t.id).clips) == [(0, 2), (4, 5), (5, 7), (7, 8)]
+    editor.undo_stack.undo()
+    editor.undo_stack.undo()
+    assert spans(editor.project.track(t.id).clips) == [(0, 8)]
+
+
+def test_paste_onto_another_kind_of_track_goes_back_where_it_came_from(editor):
+    audio = editor.add_audio_track()
+    midi = editor.add_midi_track()
+    editor.add_clips(audio.id, 0.0, [("a.wav", 1.0)])
+    content = editor.copy_range(0.0, 2.0, [audio.id])
+    assert editor.paste_targets(content, midi.id) == [audio.id]
+    assert editor.paste(content, 4.0, midi.id) == (4.0, 6.0, [audio.id])
+    assert editor.project.track(midi.id).clips == []
+    editor.delete_tracks([audio.id])
+    assert editor.paste(content, 4.0, midi.id) is None
+
+
+def test_copied_automation_comes_along_unless_locked(editor):
+    from gilstudio.model.automation import MIXER_VOLUME, AutomationPoint
+
+    t1 = editor.add_audio_track()
+    t2 = editor.add_audio_track()
+    editor.add_clips(t1.id, 0.0, [("a.wav", 1.0)])
+    editor.set_envelope(t1.id, MIXER_VOLUME, (AutomationPoint(0.0, 0.2), AutomationPoint(2.0, 0.6)))
+    content = editor.copy_range(0.0, 2.0, [t1.id])
+    editor.paste(content, 4.0, t2.id)
+    assert [(p.beat, p.value) for p in editor.project.envelope(t2.id, MIXER_VOLUME)] == [(4.0, 0.2), (6.0, 0.6)]
+
+    editor.set_automation_locked(True)
+    assert editor.copy_range(0.0, 2.0, [t1.id]).tracks[0].automation == ()
+    editor.cut_range(0.0, 2.0, [t1.id])
+    assert len(editor.project.envelope(t1.id, MIXER_VOLUME)) == 2  # locked: it stays

@@ -67,6 +67,26 @@ class RecordedTake:
     midi: bool = False
 LaneRef = tuple[str, str]  # (automation owner, target key)
 
+
+@dataclass(frozen=True)
+class CopiedTrack:
+    """One track's part of copied clip content: its clips (starts from the copied
+    range's start), and the automation under them (key: points from beat 0)."""
+
+    track_id: str
+    kind: str
+    row: int  # tracks below the topmost copied one
+    clips: tuple[AnyClip, ...]
+    automation: tuple[tuple[str, Envelope], ...] = ()
+
+
+@dataclass(frozen=True)
+class ClipboardContent:
+    """Clip content copied from a time selection (Ctrl+C / Ctrl+X), `length` beats long."""
+
+    length: float
+    tracks: tuple[CopiedTrack, ...]
+
 BUILTIN_DEVICES = {
     # kind: (display name, {param id: default})
     "synth": ("Synth", {"wave": 2.0, "attack": 3.0, "decay": 300.0, "sustain": 70.0, "release": 200.0,
@@ -695,6 +715,98 @@ class ProjectEditor(QObject):
             spans = [(tid, tid, start, end) for tid in after]
             self._commit_moved("Duplicate Time Selection", after, self._carried_automation(spans, length, True))
         return result
+
+    def copy_range(self, start: float, end: float, track_ids) -> ClipboardContent | None:
+        """Ctrl+C on a time selection: just the clip content between two beats on these
+        tracks (clips across its edges are cut there), with the automation under it
+        unless automation is locked. None if there is no clip content there."""
+        p = self.project
+        tempo = p.tempo
+        ids = sorted((t for t in set(track_ids) if p.has_track(t)), key=p.track_index)
+        if end <= start:
+            return None
+        copied = []
+        for tid in ids:
+            track = p.track(tid)
+            clips = tuple(replace(c, start_beat=c.start_beat - start)
+                          for c in edits.slice_range(track.clips, start, end, tempo))
+            if not clips:
+                continue
+            lanes = () if p.automation_locked else tuple(
+                (key, automation.copy_range(points, start, end)) for key, points in p.automation(tid).items()
+                if automation.has_points_in(points, start, end))
+            copied.append((p.track_index(tid), CopiedTrack(tid, track.kind, 0, clips, lanes)))
+        if not copied:
+            return None
+        top = copied[0][0]  # rows count from the topmost track with content
+        return ClipboardContent(end - start, tuple(replace(c, row=index - top) for index, c in copied))
+
+    def cut_range(self, start: float, end: float, track_ids) -> ClipboardContent | None:
+        """Ctrl+X on a time selection: copy it (see copy_range), then take the clip
+        content, and the automation copied with it, out. One undo step."""
+        content = self.copy_range(start, end, track_ids)
+        if content is None:
+            return None
+        tempo = self.project.tempo
+        after = {c.track_id: edits.remove_range(self.project.track(c.track_id).clips, start, end, tempo)
+                 for c in content.tracks}
+        envelopes = {}
+        for c in content.tracks:
+            for key, _points in c.automation:
+                points = automation.remove_range(self.project.envelope(c.track_id, key), start, end)
+                envelopes[(c.track_id, key)] = automation.drop_redundant(points, (start, end))
+        self._commit_moved("Cut", after, {lane: points for lane, points in envelopes.items()
+                                          if points != self.project.envelope(*lane)})
+        return content
+
+    def paste_targets(self, content: ClipboardContent, track_id: str | None) -> list[str] | None:
+        """Where pasted content goes: its top track onto `track_id` and the rest onto
+        the tracks below, as they were copied. If they aren't all tracks of the
+        content's kind (audio, MIDI), the tracks it was copied from; None if those are gone."""
+        p = self.project
+        if track_id is not None and p.has_track(track_id):
+            rows = [p.track_index(track_id) + c.row for c in content.tracks]
+            if all(r < len(p.tracks) and p.tracks[r].kind == c.kind for r, c in zip(rows, content.tracks, strict=True)):
+                return [p.tracks[r].id for r in rows]
+        if all(p.has_track(c.track_id) and p.track(c.track_id).kind == c.kind for c in content.tracks):
+            return [c.track_id for c in content.tracks]
+        return None
+
+    def paste(self, content: ClipboardContent, at_beat: float,
+              track_id: str | None = None) -> tuple[float, float, list[str]] | None:
+        """Ctrl+V: copied clip content at `at_beat` (see paste_targets for which
+        tracks), replacing what is there, as new clips. Its automation comes along
+        unless automation is locked; onto another track, only the mixer's (a
+        device's belongs to its track). One undo step. Returns the area pasted
+        over (start, end, the tracks from the top one to the lowest); None if the
+        content has nowhere to go."""
+        p = self.project
+        dests = self.paste_targets(content, track_id)
+        if dests is None:
+            return None
+        tempo = p.tempo
+        at = max(0.0, at_beat)
+        lists: dict[str, list[AnyClip]] = {}
+        winners: dict[str, set[str]] = {}
+        changed: dict[LaneRef, Envelope] = {}
+        for copied, dest in zip(content.tracks, dests, strict=True):
+            pasted = [replace(c, id=new_id(), start_beat=c.start_beat + at) for c in copied.clips]
+            lists.setdefault(dest, list(p.track(dest).clips)).extend(pasted)
+            winners.setdefault(dest, set()).update(c.id for c in pasted)
+            if p.automation_locked:
+                continue
+            for key, points in copied.automation:
+                if dest == copied.track_id or key in automation.MIXER_KEYS:
+                    lane = (dest, key)
+                    changed[lane] = automation.paste_range(changed.get(lane, p.envelope(*lane)), points, at,
+                                                           content.length)
+        after = {tid: edits.resolve_overlaps(clips, winners[tid], tempo) for tid, clips in lists.items()}
+        edges = (at, at + content.length)
+        envelopes = {lane: automation.drop_redundant(points, edges) for lane, points in changed.items()}
+        self._commit_moved("Paste", after, {lane: points for lane, points in envelopes.items()
+                                            if points != p.envelope(*lane)})
+        rows = sorted(p.track_index(d) for d in dests)
+        return at, at + content.length, [t.id for t in p.tracks[rows[0]:rows[-1] + 1]]
 
     def move_range(self, start: float, end: float, track_ids: list[str], delta_beats: float,
                    track_delta: int = 0, copy_clips: bool = False) -> tuple[float, list[str]]:
