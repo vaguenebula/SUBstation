@@ -28,7 +28,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - VST3 plug-ins, instruments and effects (see below).
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
   - Click a track's header to select it; **Ctrl-click** adds a track to the selection (or takes it out), **Shift-click** selects every track from the last one clicked. Delete deletes the selected tracks.
-  - Soloing a track unsoloes the others, and unsoloing one unsoloes every track; **Ctrl-click** a solo button to solo (or unsolo) just that track, leaving the others as they are. Clicking the solo of a selected track solos (or unsoloes) all the selected tracks. **S** solos the selected tracks (unsoloing the rest), or unsoloes them if they all are soloed already.
+  - Soloing a track unsoloes the others, and unsoloing one unsoloes every track; **Ctrl-click** a solo button to solo (or unsolo) just that track, leaving the others as they are. Clicking the solo of a selected track solos (or unsoloes) all the selected tracks. **S** solos the selected tracks (unsoloing the rest), or, if they all are soloed already, unsoloes every track.
 - Master track (volume and pan), metronome, loop brace, follow mode, CPU meter.
 - An oscilloscope next to the transport controls shows the master output as it plays (as in FL Studio). It starts each picture at a rising zero crossing, so steady tones stand still.
 - **Automation**, as in Ableton's arrangement, of every device parameter (built-in devices and plug-ins alike) and of each track's and the master's volume and pan.

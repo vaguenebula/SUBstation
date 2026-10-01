@@ -332,10 +332,12 @@ class MainWindow(QMainWindow):
         self.editor.delete_tracks([t for t in self.selection.track_ids if self.project.has_track(t)])
 
     def solo_selected_tracks(self) -> None:
-        """S: solo the selected tracks (and unsolo the rest); if they all are already, unsolo them."""
+        """S: solo the selected tracks (and unsolo the rest); if they all are already, unsolo every track."""
         tracks = [t for t in self.selection.track_ids if self.project.has_track(t)]
         if tracks:
             solo = not all(self.project.track(t).solo for t in tracks)
+            if not solo:
+                tracks = [t.id for t in self.project.tracks]
             self.editor.solo_tracks(tracks, solo, exclusive=True)
 
     def delete_selection(self) -> None:
