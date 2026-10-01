@@ -5,7 +5,9 @@ devices store which plug-in they are and its state (a .vstpreset, base64).
 Automation is stored per track (and for the master) by target key, each
 envelope as [beat, value, curve] points, with what the arrangement shows of it.
 The master is stored apart from the tracks: its mixer, devices and automation.
-Files from before version 5 have no master devices; they load as they were."""
+Files from before version 5 have no master devices; they load as they were.
+Tracks store their audio input (device channels), monitoring and whether they
+are armed (version 6; older files load with none, Auto, not armed)."""
 
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ from .project import (
     DEFAULT_TRACK_HEIGHT,
     DEFAULT_WARP_MODE,
     LEGACY_WARP_MODES,
+    MONITOR_MODES,
     TRACK_KINDS,
     WARP_MODES,
     AnyClip,
@@ -36,7 +39,7 @@ from .project import (
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 5  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices
+VERSION = 6  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs
 EXTENSION = ".gilproj"
 
 
@@ -176,6 +179,9 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
                 "clips": [_clip_to_dict(c, base) for c in t.clips],
                 "automation": _automation_to_dict(t.automation),
                 "automation_view": _view_to_dict(t.automation_view),
+                "input": list(t.input),
+                "monitor": t.monitor,
+                "armed": t.armed,
             }
             for t in project.tracks
         ],
@@ -250,8 +256,16 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
             kind=kind,
             automation=_automation(t.get("automation")),
             automation_view=_view(t.get("automation_view")),
+            input=_input(t.get("input")),
+            monitor=t.get("monitor") if t.get("monitor") in MONITOR_MODES else "auto",
+            armed=bool(t.get("armed", False)) and kind == "audio",
         ))
     return tracks
+
+
+def _input(data) -> tuple[int, ...]:
+    channels = tuple(int(c) for c in (data or ()) if int(c) >= 0)
+    return channels if len(channels) <= 2 else ()
 
 
 def _warp_mode(name) -> str:

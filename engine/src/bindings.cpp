@@ -6,6 +6,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
@@ -44,7 +45,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 3;
+    m.attr("API_VERSION") = 4;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -193,6 +194,46 @@ NB_MODULE(_engine, m) {
             return "ProcessorEvent(" + std::to_string(e.processorId) + ", type=" +
                    std::to_string(static_cast<int>(e.type)) + ", param=" + std::to_string(e.paramIndex) + ")";
         });
+
+    nb::enum_<gil::MonitorMode>(m, "MonitorMode")
+        .value("OFF", gil::MonitorMode::Off)
+        .value("IN", gil::MonitorMode::In)
+        .value("AUTO", gil::MonitorMode::Auto);
+    m.attr("RECORD_PEAK_FRAMES") = Engine::kRecordPeakFrames;
+
+    nb::class_<gil::RecordedTake>(m, "RecordedTake")
+        .def_ro("track_id", &gil::RecordedTake::trackId)
+        .def_ro("path", &gil::RecordedTake::path)
+        .def_ro("start_sample", &gil::RecordedTake::startSample,
+                "Timeline sample of its first frame, latency-corrected (negative: it starts before the timeline).")
+        .def_ro("frames", &gil::RecordedTake::frames, "0: nothing was recorded, and there is no file.")
+        .def_ro("channels", &gil::RecordedTake::channels)
+        .def_ro("sample_rate", &gil::RecordedTake::sampleRate)
+        .def_ro("dropped_frames", &gil::RecordedTake::droppedFrames,
+                "Input lost because the disk fell behind (silence in the file).")
+        .def_ro("error", &gil::RecordedTake::error)
+        .def("__repr__", [](const gil::RecordedTake& t) {
+            return "RecordedTake(" + std::to_string(t.trackId) + ", '" + t.path + "', start=" +
+                   std::to_string(t.startSample) + ", frames=" + std::to_string(t.frames) + ")";
+        });
+
+    nb::class_<gil::RecordingProgress>(m, "RecordingProgress")
+        .def_ro("track_id", &gil::RecordingProgress::trackId)
+        .def_ro("started", &gil::RecordingProgress::started)
+        .def_ro("start_sample", &gil::RecordingProgress::startSample)
+        .def_ro("frames", &gil::RecordingProgress::frames)
+        .def_prop_ro(
+            "peaks",
+            [](const gil::RecordingProgress& p) {
+                auto buffer = std::make_unique<std::vector<float>>(p.peaks);
+                const size_t rows = buffer->size() / 2;
+                float* data = buffer->data();
+                nb::capsule owner(buffer.release(),
+                                  [](void* q) noexcept { delete static_cast<std::vector<float>*>(q); });
+                return nb::ndarray<nb::numpy, float, nb::ndim<2>, nb::c_contig>(data, {rows, size_t{2}}, owner);
+            },
+            nb::rv_policy::automatic,
+            "New (min, max) peaks since the last call, each over RECORD_PEAK_FRAMES frames: shape (n, 2).");
 
     nb::class_<gil::MeterReading>(m, "MeterReading")
         .def_ro("track_id", &gil::MeterReading::trackId)
@@ -402,8 +443,31 @@ NB_MODULE(_engine, m) {
         .def("set_editor_title", &Engine::setEditorTitle, "processor_id"_a, "title"_a)
         .def("take_processor_events", &Engine::takeProcessorEvents,
              "What processors reported since the last call (edits in a plug-in's own editor, ...).")
+        // Input and recording
+        .def("set_track_input", &Engine::setTrackInput, "track_id"_a, "channels"_a,
+             "A track's input: device channels (as DeviceStatus.input_channels numbers them): [] none, [c] mono, "
+             "[l, r] a stereo pair. Channels not open on the device are silent.")
+        .def("set_track_monitor", &Engine::setTrackMonitor, "track_id"_a, "mode"_a)
+        .def("set_track_armed", &Engine::setTrackArmed, "track_id"_a, "armed"_a)
+        .def(
+            "start_recording",
+            [](Engine& self, const std::vector<std::pair<uint32_t, std::string>>& targets, double countInBeats) {
+                std::vector<gil::RecordTarget> list;
+                for (const auto& [trackId, path] : targets) list.push_back({trackId, path});
+                nb::gil_scoped_release release;
+                self.startRecording(list, countInBeats);
+            },
+            "targets"_a, "count_in_beats"_a = 0.0,
+            "Record each (track_id, wav_path)'s input from where the playhead moves next; starts playing (after "
+            "the count-in) if stopped. Raises RuntimeError for the user, ValueError for bad targets.")
+        .def("stop_recording", &Engine::stopRecording, ReleaseGil(),
+             "End the recording (playing goes on); its takes, and any of a recording a device change ended.")
+        .def_prop_ro("is_recording", &Engine::isRecording,
+                     "Recording and taking input (not after the playhead jumped or a device change).")
+        .def("recording_progress", &Engine::recordingProgress, "The takes being recorded, for the live waveform.")
         // Transport
-        .def("play", &Engine::play)
+        .def("play", &Engine::play, "count_in_beats"_a = 0.0)
+        .def_prop_ro("is_counting_in", &Engine::isCountingIn)
         .def("stop", &Engine::stop)
         .def_prop_ro("is_playing", &Engine::isPlaying)
         .def_prop_rw("position_beats", &Engine::positionBeats, &Engine::setPositionBeats)

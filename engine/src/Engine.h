@@ -15,6 +15,10 @@
 //  * Audio devices, likewise, are opened and closed on the main thread. An
 //    ASIO driver's control panel may run a message loop too; the device stays
 //    as it is until the panel closes.
+//  * Recording: the audio thread hands the input to a RecordingSession's
+//    rings, and its own thread writes the files (Recorder.h). Anything that
+//    changes the device (or its sample rate), or renders offline, ends the
+//    recording first, cleanly: the takes so far are kept for stopRecording().
 
 #include <array>
 #include <atomic>
@@ -29,6 +33,7 @@
 #include "AudioSource.h"
 #include "Automation.h"
 #include "Processor.h"
+#include "Recorder.h"
 #include "Renderer.h"
 #include "Snapshot.h"
 #include "Transport.h"
@@ -60,6 +65,22 @@ struct NoteDesc {
     double lengthBeats = 0.25;
     int key = 60;  // MIDI note number; 60 = C3
     int velocity = 100;
+};
+
+// A track to record, and the file its take goes to (a WAV file, created anew).
+struct RecordTarget {
+    uint32_t trackId = 0;
+    std::string path;
+};
+
+// A take while it records, for the UI's live waveform.
+struct RecordingProgress {
+    uint32_t trackId = 0;
+    bool started = false;     // the playhead moved (after any count-in) and input arrives
+    int64_t startSample = 0;  // where it goes on the timeline (latency-corrected, may be negative)
+    int64_t frames = 0;
+    // Peaks since the last call: (min, max) pairs, each over kPeakFrames frames of all its channels.
+    std::vector<float> peaks;
 };
 
 struct MeterReading {
@@ -153,6 +174,27 @@ public:
     void setMasterPan(float pan) { setTrackPan(kMaster, pan); }
     std::vector<MeterReading> takeMeters();
 
+    // --- Input and recording ------------------------------------------------------
+    // A track's input: device channels (0-based, as DeviceStatus lists them): none,
+    // one (mono) or two (a stereo pair). Channels the device hasn't open are silent.
+    void setTrackInput(uint32_t trackId, const std::vector<int>& channels);
+    void setTrackMonitor(uint32_t trackId, MonitorMode mode);
+    // Armed tracks are what Auto monitoring listens to; what records is up to startRecording().
+    void setTrackArmed(uint32_t trackId, bool armed);
+    // Records the targets' inputs from the next block the playhead moves in, and
+    // starts playing (after `countInBeats` of count-in) if stopped. Throws
+    // std::runtime_error (for the user) if no device runs, a target's input isn't
+    // open, or a file can't be created; std::invalid_argument for a bad target.
+    void startRecording(const std::vector<RecordTarget>& targets, double countInBeats = 0.0);
+    // Ends the recording (the transport plays on) and returns its takes, and those
+    // of a recording ended otherwise since the last call (a device change).
+    std::vector<RecordedTake> stopRecording();
+    // Recording and still taking input: not after the playhead jumped (a locate,
+    // stopping), nor once something else ended it.
+    bool isRecording();
+    std::vector<RecordingProgress> recordingProgress();
+    static constexpr int kRecordPeakFrames = RecordingTake::kPeakFrames;
+
     // --- Automation -------------------------------------------------------------
     // Replaces the automation of a track (trackId 0: the master): an envelope per
     // target, either a mixer control (processorId 0, param "volume" or "pan") or
@@ -190,7 +232,8 @@ public:
     std::vector<ProcessorEventRecord> takeProcessorEvents();
 
     // --- Transport ------------------------------------------------------------
-    void play();
+    void play(double countInBeats = 0.0);  // a count-in: the metronome clicks, then the playhead moves
+    bool isCountingIn() const { return shared_.countingIn.load(std::memory_order_relaxed); }
     void stop();
     bool isPlaying() const { return requestedPlaying_.load(std::memory_order_relaxed); }
     double positionBeats() const { return shared_.positionBeats.load(std::memory_order_relaxed); }
@@ -230,6 +273,9 @@ private:
         std::vector<std::shared_ptr<Processor>> inserts;
         std::shared_ptr<DelayLine> delay;   // delay compensation, kept across snapshots
         std::vector<AutomationLaneDesc> automation;
+        std::vector<int> inputChannels;  // device channels: the input edge
+        MonitorMode monitor = MonitorMode::Auto;
+        bool armed = false;
     };
 
     void audioCallback(const AudioIO& io) noexcept override;
@@ -248,6 +294,9 @@ private:
     void openDeviceLocked(const DeviceConfig& config);
     void closeDeviceLocked();
     void reloadSourcesLocked();
+    void waitForCallbackLocked();
+    InputEdge inputEdgeLocked(const TrackModel& track) const;
+    void finishRecordingLocked();
     void suspendLiveLocked();
     void resumeLiveLocked();
     void renderOfflineLocked(double startBeat, int64_t frames, float* out, bool loop, bool metronome);
@@ -269,6 +318,7 @@ private:
     AudioDevice device_;
     bool deviceRunning_ = false;
     uint32_t openInputs_ = 0;                        // input channels of the running device
+    std::vector<int> openInputChannels_;             // which they are (device channels, callback order)
     std::atomic<uint32_t> pendingDeviceEvents_{0};  // DeviceEvent flags
     std::atomic<bool> liveSuspended_{false};
     std::atomic<uint64_t> audioEpoch_{0};
@@ -304,6 +354,12 @@ private:
 
     std::unordered_map<std::string, std::shared_ptr<AudioSource>> sources_;
     std::shared_ptr<const AudioSource> previewHold_;
+
+    // The recording: the audio thread sees it through liveRecording_ (published
+    // and taken away like the snapshot).
+    std::unique_ptr<RecordingSession> recording_;
+    std::atomic<RecordingSession*> liveRecording_{nullptr};
+    std::vector<RecordedTake> finishedTakes_;
 };
 
 }  // namespace gil

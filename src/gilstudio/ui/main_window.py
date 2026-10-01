@@ -99,6 +99,8 @@ class MainWindow(QMainWindow):
                 track_id, automation.device_key(device_id, param_id)))
         self.bridge.plugin_state_dirty.connect(self.undo_stack.resetClean)
         self.transport.play_requested.connect(self.toggle_play)
+        self.transport.record_requested.connect(self.toggle_record)
+        self.bridge.takes_recorded.connect(self._add_takes)
         self.transport.stop_requested.connect(self.stop_button)
         self.transport.preferences_requested.connect(self.show_preferences)
         self.transport.re_enable_requested.connect(self.bridge.re_enable_automation)
@@ -169,6 +171,7 @@ class MainWindow(QMainWindow):
         self._action(edit, "Solo Selected Tracks", self.solo_selected_tracks, "S")
         edit.addSeparator()
         self._action(edit, "Play / Stop", self.toggle_play, "Space")
+        self._action(edit, "Record", self.toggle_record, "F9")
         self._action(edit, "Go to Start", lambda: self.locate(0.0), "Home")
         self.loop_action = self._action(edit, "Loop", self.editor.set_loop_enabled, "Ctrl+L", checkable=True)
         self.project.settings_changed.connect(lambda: self._sync_check(self.loop_action, self.project.loop_enabled))
@@ -256,6 +259,25 @@ class MainWindow(QMainWindow):
             self._play_start = self.selection.insert_beat
             self.bridge.locate(self._play_start)
             self.bridge.play()
+
+    def toggle_record(self) -> None:
+        """F9 / the record button: record the armed tracks from the insert marker
+        (after the count-in) or, while playing, from where the playhead is; again: stop recording."""
+        if self.bridge.is_recording:
+            self.bridge.stop_recording()  # punch out: playing goes on
+            return
+        playing = self.bridge.is_playing
+        if not playing:
+            self._play_start = self.selection.insert_beat
+            self.bridge.locate(self._play_start)
+        error = self.bridge.start_recording(0.0 if playing else self.transport.count_in_beats())
+        if error:
+            self.show_message(error)
+
+    def _add_takes(self, takes) -> None:
+        refs = self.editor.add_recordings(takes)
+        if refs:
+            self.selection.select_clips(self.editor, refs)
 
     def stop_button(self) -> None:
         if self.bridge.is_playing:

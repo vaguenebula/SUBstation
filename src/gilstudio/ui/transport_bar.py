@@ -1,8 +1,9 @@
-"""Top control bar: tempo, time signature, metronome, key | transport, oscilloscope | loop, follow, CPU."""
+"""Top control bar: tempo, time signature, metronome, key | transport (record and its
+count-in), oscilloscope | loop, follow, CPU."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QWidget
 
@@ -31,7 +32,21 @@ def _separator() -> QFrame:
     return line
 
 
+COUNT_IN_BARS = (0, 1, 2, 4)
+COUNT_IN_KEY = "transport/count_in_bars"
+
+
+def count_in_bars() -> int:
+    """The count-in before recording, in bars (saved with the preferences)."""
+    try:
+        bars = int(QSettings().value(COUNT_IN_KEY, 0))
+    except (TypeError, ValueError):
+        return 0
+    return bars if bars in COUNT_IN_BARS else 0
+
+
 class TransportBar(QWidget):
+    record_requested = Signal()
     play_requested = Signal()
     stop_requested = Signal()
     preferences_requested = Signal()
@@ -64,9 +79,14 @@ class TransportBar(QWidget):
         self.play = ToggleButton(icon=icons.play(), role="play", tooltip="Play / Stop (Space)")
         self.stop = ToggleButton(icon=icons.stop(), role="tool", checkable=False,
                                  tooltip="Stop (press again to return to the start)")
-        self.record = ToggleButton(icon=icons.record(), role="tool", checkable=False,
-                                   tooltip="Recording is not available in this version")
-        self.record.setEnabled(False)
+        self.record = ToggleButton(icon=icons.record(), role="record",
+                                   tooltip="Arrangement Record (F9): records the armed tracks")
+        self.count_in = QComboBox()
+        for bars in COUNT_IN_BARS:
+            self.count_in.addItem("No Count-In" if bars == 0 else f"Count-In {bars} Bar{'s' if bars > 1 else ''}", bars)
+        self.count_in.setCurrentIndex(COUNT_IN_BARS.index(count_in_bars()))
+        self.count_in.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.count_in.setToolTip("Count-in: the metronome counts in this long before recording starts")
         # Lit while automation is overridden (a target changed by hand): a click brings it back.
         self.re_enable = ToggleButton(icon=icons.re_enable_automation(), role="re-enable",
                                       tooltip="Re-Enable Automation")
@@ -104,7 +124,8 @@ class TransportBar(QWidget):
                        self.metronome, self.key):
             layout.addWidget(widget)
         layout.addStretch(1)
-        for widget in (self.position, self.play, self.stop, self.record, self.re_enable, self.lock_envelopes):
+        for widget in (self.position, self.play, self.stop, self.record, self.count_in, self.re_enable,
+                       self.lock_envelopes):
             layout.addWidget(widget)
         layout.addSpacing(6)
         layout.addWidget(self.scope)
@@ -119,6 +140,8 @@ class TransportBar(QWidget):
         self.key.activated.connect(lambda i: self.editor.set_key(ALL_KEYS[i - 1] if i > 0 else None))
         self.play.clicked.connect(self._play_clicked)
         self.stop.clicked.connect(self.stop_requested)
+        self.record.clicked.connect(self._record_clicked)
+        self.count_in.activated.connect(lambda i: QSettings().setValue(COUNT_IN_KEY, COUNT_IN_BARS[i]))
         self.loop.toggled.connect(self.editor.set_loop_enabled)
         self.follow.toggled.connect(self._set_follow)
         self.device.clicked.connect(self.preferences_requested)
@@ -129,6 +152,7 @@ class TransportBar(QWidget):
         self.project.reset.connect(self.refresh)
         bridge.position_changed.connect(self._show_position)
         bridge.transport_changed.connect(self.play.set_checked_silently)
+        bridge.recording_changed.connect(self.record.set_checked_silently)
         bridge.device_changed.connect(self.refresh_device)
         bridge.meters_updated.connect(self._show_cpu)
         bridge.automation_state_changed.connect(self._show_overrides)
@@ -169,6 +193,15 @@ class TransportBar(QWidget):
 
     def _set_follow(self, enabled: bool) -> None:
         self.view.follow = enabled
+
+    def count_in_beats(self) -> float:
+        """The chosen count-in, in beats of the project's time signature."""
+        ts = self.project.time_signature
+        return COUNT_IN_BARS[self.count_in.currentIndex()] * ts.numerator * 4.0 / ts.denominator
+
+    def _record_clicked(self) -> None:
+        self.record.set_checked_silently(self.bridge.is_recording)  # state follows the bridge
+        self.record_requested.emit()
 
     def _play_clicked(self) -> None:
         self.play.set_checked_silently(self.bridge.is_playing)  # state follows the engine

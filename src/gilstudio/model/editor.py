@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import math
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -29,6 +29,7 @@ from .commands import (
     UpdateTrackCommand,
 )
 from .project import (
+    MONITOR_MODES,
     PLUGIN_KIND,
     AnyClip,
     Clip,
@@ -39,9 +40,20 @@ from .project import (
     Track,
     new_id,
 )
-from .timebase import TimeSignature
+from .timebase import TimeSignature, seconds_to_beats
 
 ClipRef = tuple[str, str]  # (track id, clip id)
+
+
+@dataclass(frozen=True)
+class RecordedTake:
+    """A recorded WAV file and where it starts: `start_sec` from the timeline's
+    start (negative: it began before it)."""
+
+    track_id: str
+    path: str
+    start_sec: float
+    duration_sec: float
 LaneRef = tuple[str, str]  # (automation owner, target key)
 
 BUILTIN_DEVICES = {
@@ -166,6 +178,65 @@ class ProjectEditor(QObject):
         for track_id, old, new in changes:
             self._push(UpdateTrackCommand(self.project, track_id, "solo", old, new, text))
         self.undo_stack.endMacro()
+
+    def set_track_input(self, track_id: str, channels) -> None:
+        """A track's audio input: device channels, () for none."""
+        channels = tuple(int(c) for c in channels)
+        if len(channels) > 2:
+            raise ValueError("an input is one channel or a pair")
+        old = self.project.track(track_id).input
+        if channels != old:
+            self._push(UpdateTrackCommand(self.project, track_id, "input", old, channels, "Change Track Input"))
+
+    def set_track_monitor(self, track_id: str, mode: str) -> None:
+        if mode not in MONITOR_MODES:
+            raise ValueError(mode)
+        old = self.project.track(track_id).monitor
+        if mode != old:
+            self._push(UpdateTrackCommand(self.project, track_id, "monitor", old, mode, "Change Monitoring"))
+
+    def arm_tracks(self, track_ids, armed: bool, exclusive: bool = False) -> None:
+        """Arm (or disarm) tracks for recording; `exclusive` (arming): every other
+        track is disarmed. Like heights, arming is saved but not undone."""
+        track_ids = set(track_ids)
+        for track in self.project.tracks:
+            wanted = armed if track.id in track_ids else (track.armed and not (exclusive and armed))
+            if track.is_midi:
+                wanted = False  # MIDI input comes later
+            if wanted != track.armed:
+                self.project.update_track(track.id, armed=wanted)
+
+    def add_recordings(self, takes: list[RecordedTake]) -> list[ClipRef]:
+        """Finished takes become audio clips, one undo step. As in Ableton's
+        Arrangement recording, a take replaces what was under it."""
+        tempo = self.project.tempo
+        by_track: dict[str, list[Clip]] = {}
+        for take in takes:
+            if not self.project.has_track(take.track_id) or take.duration_sec <= 0:
+                continue
+            track = self.project.track(take.track_id)
+            if track.is_midi:
+                continue
+            start_beat = seconds_to_beats(take.start_sec, tempo)
+            offset = 0.0
+            if start_beat < 0:  # it began before the timeline (the count-in's latency)
+                offset = -take.start_sec
+                start_beat = 0.0
+            duration = take.duration_sec - offset
+            if duration <= 0:
+                continue
+            by_track.setdefault(take.track_id, []).append(Clip(
+                id=new_id(), path=take.path, name=Path(take.path).stem, start_beat=start_beat,
+                duration_sec=duration, offset_sec=offset, source_duration_sec=take.duration_sec))
+        after = {}
+        refs = []
+        for track_id, clips in by_track.items():
+            new_ids = {c.id for c in clips}
+            after[track_id] = edits.resolve_overlaps(list(self.project.track(track_id).clips) + clips, new_ids, tempo)
+            refs += [(track_id, c.id) for c in clips]
+        if after:
+            self._commit("Record", after)
+        return refs
 
     def set_track_height(self, track_id: str, height: int) -> None:
         # View state: saved with the project but not worth an undo step.

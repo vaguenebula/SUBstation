@@ -23,6 +23,15 @@ hand) counts again when the envelope goes. Changing an automated target by hand
 overrides its automation, as in Ableton: the engine stops playing that envelope
 until automation is re-enabled. Parameters of every kind are described to the
 UI as ParamSpecs (model/params.py).
+
+Recording: armed audio tracks with an input record when recording starts; the
+engine writes each take to a WAV file in the recordings folder (the project's
+"Recordings" folder once it is saved). While it records, the bridge collects
+each take's peaks (`live_takes`) for the arrangement's live waveform. When the
+recording ends (stopped, or a device change or a locate ended it) the takes
+come out as `takes_recorded`, for one undo step that adds them as clips. A
+track given an input the device hasn't open gets it: the device opens again
+with that input too (ASIO).
 """
 
 from __future__ import annotations
@@ -30,15 +39,26 @@ from __future__ import annotations
 import base64
 import math
 import os
+import re
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
+from datetime import datetime
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
+import numpy as np
+from PySide6.QtCore import (
+    QObject,
+    QRunnable,
+    QStandardPaths,
+    QThreadPool,
+    QTimer,
+    Signal,
+)
 
 from .. import _engine as ge
 from ..model import automation
 from ..model.automation import MASTER, MIXER_PAN, MIXER_VOLUME
-from ..model.editor import device_name
+from ..model.editor import RecordedTake, device_name
 from ..model.params import ParamSpec, format_value, mixer_specs
 from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Track
 from ..model.timebase import db_to_gain
@@ -49,6 +69,40 @@ AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
 # messaging their processors); this many at most, then the ones hidden longest close.
 MAX_HIDDEN_EDITORS = 8
 _WARP_MODES = {name: ge.WarpMode(index) for index, name in enumerate(WARP_MODES)}
+_MONITOR_MODES = {"off": ge.MonitorMode.OFF, "in": ge.MonitorMode.IN, "auto": ge.MonitorMode.AUTO}
+
+
+def recordings_folder(project: Project) -> Path:
+    """Where takes go: the project's "Recordings" folder once it is saved,
+    else GILSTUDIO_RECORDINGS or the user's Music folder."""
+    if project.path is not None:
+        return Path(project.path).parent / "Recordings"
+    if os.environ.get("GILSTUDIO_RECORDINGS"):
+        return Path(os.environ["GILSTUDIO_RECORDINGS"])
+    music = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MusicLocation) or str(Path.home())
+    return Path(music) / "GIL Studio" / "Recordings"
+
+
+def take_path(folder: Path, track_name: str, when: datetime) -> Path:
+    """A new file for a take: the track's name and the time, numbered if taken."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", track_name).strip(" .") or "Audio"
+    stem = f"{name} {when:%Y-%m-%d %H%M%S}"
+    path, n = folder / f"{stem}.wav", 2
+    while path.exists():
+        path, n = folder / f"{stem} {n}.wav", n + 1
+    return path
+
+
+@dataclass
+class LiveTake:
+    """A take while it records, as the arrangement draws it."""
+
+    track_id: str
+    start_sample: int = 0  # timeline sample of its first frame
+    started: bool = False
+    frames: int = 0
+    peaks: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), np.float32))  # (min, max) per PEAK_FRAMES
+    PEAK_FRAMES = ge.RECORD_PEAK_FRAMES
 
 
 def is_audio_file(path: str) -> bool:
@@ -118,6 +172,9 @@ class EngineBridge(QObject):
     devices_loaded = Signal(str)  # track id: its devices' processors were (re)created
     # Automation owner (track id or MASTER): which of its envelopes play, or are overridden, changed.
     automation_state_changed = Signal(str)
+    recording_changed = Signal(bool)  # recording started or ended
+    recording_updated = Signal()  # live takes grew
+    takes_recorded = Signal(list)  # [RecordedTake]: a recording ended with these
 
     def __init__(self, engine: ge.Engine, project: Project, parent: QObject | None = None):
         super().__init__(parent)
@@ -135,6 +192,7 @@ class EngineBridge(QObject):
         self._automating: dict[str, set[str]] = {}  # owner -> the targets whose envelopes the engine plays
         self._overridden: set[tuple[str, str]] = set()  # (owner, key) changed by hand while automated
         self._mixer: dict[str, tuple[float, float]] = {}  # owner -> (volume dB, pan) the engine has
+        self._inputs: dict[str, tuple] = {}  # track id -> (input, monitor, armed) the engine has
         self._busy = 0  # > 0 while a plug-in call may run a message loop that calls us back
         self.plugin_errors: dict[str, str] = {}  # device id -> why its plug-in isn't loaded
         self.known_plugins: dict[str, str] = {}  # plug-in uid -> file, from the scan: finds moved plug-ins
@@ -150,6 +208,8 @@ class EngineBridge(QObject):
         self.meters: dict[str, tuple[float, float]] = {}  # track id or MASTER -> (left, right)
         self._last_position = -1.0
         self._last_playing = False
+        self._recording: dict[int, str] = {}  # engine track id -> track id, while recording
+        self.live_takes: dict[str, LiveTake] = {}  # track id -> its take while recording
 
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(2)
@@ -194,6 +254,7 @@ class EngineBridge(QObject):
         self._automating.clear()
         self._overridden.clear()
         self._mixer.clear()
+        self._inputs.clear()
         self.plugin_errors.clear()
         self.meters.clear()
         self._editors_wanted.clear()
@@ -219,6 +280,7 @@ class EngineBridge(QObject):
         if not track.is_master:  # the engine always has the master
             self._track_ids[track.id] = self.engine.add_track()
         self._push_mixer(track.id)
+        self._push_input(track.id)
         self._push_clips(track.id)
         self._sync_devices(track.id)
         self._push_automation(track.id)
@@ -232,6 +294,7 @@ class EngineBridge(QObject):
         self.meters.pop(track_id, None)
         self._automating.pop(track_id, None)
         self._mixer.pop(track_id, None)
+        self._inputs.pop(track_id, None)
         self._overridden = {(o, k) for o, k in self._overridden if o != track_id}
 
     def _on_track_changed(self, track_id: str) -> None:
@@ -240,6 +303,7 @@ class EngineBridge(QObject):
         track = self.project.track(track_id)
         self._override_changed_mixer(track_id, track.volume_db, track.pan)
         self._push_mixer(track_id)
+        self._push_input(track_id)
 
     def _override_changed_mixer(self, owner: str, volume_db: float, pan: float) -> None:
         """A mixer control changed by hand while automated: its automation stops."""
@@ -262,6 +326,50 @@ class EngineBridge(QObject):
             self.engine.set_track_mute(engine_id, track.mute)
             self.engine.set_track_solo(engine_id, track.solo)
         self._mixer[track_id] = (track.volume_db, track.pan)
+
+    def _push_input(self, track_id: str) -> None:
+        engine_id = self._track_ids.get(track_id)
+        if engine_id is None or track_id == MASTER:
+            return
+        track = self.project.track(track_id)
+        channels = tuple(track.input) if not track.is_midi else ()
+        state = (channels, track.monitor, track.armed and not track.is_midi)
+        old = self._inputs.get(track_id)
+        if state == old:
+            return  # (a mixer change)
+        self._inputs[track_id] = state
+        if old is None or old[0] != state[0]:
+            self.engine.set_track_input(engine_id, list(channels))
+        if old is None or old[1] != state[1]:
+            self.engine.set_track_monitor(engine_id, _MONITOR_MODES.get(track.monitor, ge.MonitorMode.AUTO))
+        if old is None or old[2] != state[2]:
+            self.engine.set_track_armed(engine_id, state[2])
+        if channels and not self.is_recording:
+            self._open_inputs(channels)
+
+    def _open_inputs(self, channels) -> None:
+        """An ASIO device that hasn't these inputs open opens again with them too."""
+        status = self.engine.device_status
+        if not status.open or status.backend != "ASIO" or set(channels) <= set(status.input_channels):
+            return
+        names = self.engine.device_capabilities.input_names
+        if any(c >= len(names) for c in channels):
+            return  # not this device's: silent until a device that has them
+        settings = AudioSettings.load()
+        if settings.driver != "ASIO":
+            return
+        settings = replace(settings, input_channels=tuple(sorted(set(status.input_channels) | set(channels))))
+        error = self.open_device(settings)
+        if error is None:
+            settings.save()
+        else:
+            self.status_message.emit(f"The input could not be opened: {error}")
+
+    def input_names(self) -> list[str]:
+        """The device's inputs, by channel (none while no device is open)."""
+        if not self.engine.device_status.open:
+            return []
+        return list(self.engine.device_capabilities.input_names)
 
     def _push_clips(self, track_id: str) -> None:
         engine_id = self._track_ids.get(track_id)
@@ -837,7 +945,102 @@ class EngineBridge(QObject):
 
     def stop(self) -> None:
         self.engine.stop()
+        if self._recording:
+            self.stop_recording()
         self._poll_position()
+
+    # --- Recording -----------------------------------------------------------------
+
+    @property
+    def is_recording(self) -> bool:
+        return bool(self._recording)
+
+    @property
+    def is_counting_in(self) -> bool:
+        return self.engine.is_counting_in
+
+    def record_targets(self) -> list[Track]:
+        """The tracks that record: armed audio tracks with an input."""
+        return [t for t in self.project.tracks if t.armed and t.input and not t.is_midi]
+
+    def start_recording(self, count_in_beats: float = 0.0) -> str | None:
+        """Records the armed tracks (playing, after the count-in, if stopped).
+        Returns why it couldn't, or None."""
+        if self._recording:
+            return None
+        tracks = self.record_targets()
+        if not tracks:
+            return "Arm an audio track that has an input to record."
+        if not self.engine.device_status.open:
+            return "No audio device is open. Choose one in Options > Preferences."
+        for track in tracks:
+            self._open_inputs(track.input)
+        folder = recordings_folder(self.project)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return f"Could not create the recordings folder {folder}: {exc}"
+        now = datetime.now().astimezone()  # local time, in the file names
+        targets, paths = [], set()
+        for track in tracks:
+            path = take_path(folder, track.name, now)
+            while path in paths:  # two tracks of the same name
+                path = path.with_name(path.stem + "_.wav")
+            paths.add(path)
+            targets.append((self._track_ids[track.id], str(path)))
+        try:
+            self.engine.start_recording(targets, count_in_beats)
+        except (RuntimeError, ValueError) as exc:
+            return str(exc)
+        self._recording = {engine_id: track.id for (engine_id, _), track in zip(targets, tracks, strict=True)}
+        self.live_takes = {track.id: LiveTake(track.id) for track in tracks}
+        self.recording_changed.emit(True)
+        self._poll_position()
+        return None
+
+    def stop_recording(self) -> list[RecordedTake]:
+        """Ends the recording (playing goes on); its takes go out as `takes_recorded`."""
+        if not self._recording:
+            return []
+        recording, self._recording = self._recording, {}
+        self.live_takes = {}
+        takes = []
+        for take in self.engine.stop_recording():
+            if take.error:
+                self.status_message.emit(take.error)
+            if take.dropped_frames:
+                self.status_message.emit(f"The disk fell behind while recording: {take.dropped_frames} samples "
+                                         "were lost (silence in the take).")
+            track_id = recording.get(take.track_id)
+            if track_id is None or take.frames <= 0:
+                continue
+            takes.append(RecordedTake(track_id, take.path, take.start_sample / take.sample_rate,
+                                      take.frames / take.sample_rate))
+        self.recording_changed.emit(False)
+        self.recording_updated.emit()
+        if takes:
+            self.takes_recorded.emit(takes)
+        return takes
+
+    def _poll_recording(self) -> None:
+        if not self._recording:
+            return
+        for progress in self.engine.recording_progress():
+            track_id = self._recording.get(progress.track_id)
+            live = self.live_takes.get(track_id) if track_id else None
+            if live is None:
+                continue
+            live.started = progress.started
+            live.start_sample = progress.start_sample
+            live.frames = progress.frames
+            peaks = progress.peaks
+            if len(peaks):
+                live.peaks = np.concatenate([live.peaks, peaks])
+        self.recording_updated.emit()
+        if not self.engine.is_recording:  # a locate, or a device change, ended it
+            if not self.engine.device_status.open or not self.engine.is_playing:
+                self.status_message.emit("Recording stopped.")
+            self.stop_recording()
 
     def locate(self, beat: float) -> None:
         self.engine.position_beats = max(0.0, beat)
@@ -922,6 +1125,8 @@ class EngineBridge(QObject):
     def close_device(self) -> None:
         self.engine.close_device()
         self.device_changed.emit()
+        if self._recording:
+            self.stop_recording()
 
     # --- Polling -----------------------------------------------------------------
 
@@ -942,6 +1147,7 @@ class EngineBridge(QObject):
             self._dispatch_processor_events()
 
     def _poll_meters(self) -> None:
+        self._poll_recording()
         by_engine_id = {engine_id: track_id for track_id, engine_id in self._track_ids.items()}
         for reading in self.engine.take_meters():
             key = by_engine_id.get(reading.track_id)

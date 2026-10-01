@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 
 #include "PathUtils.h"
 #include "miniaudio.h"
@@ -85,6 +86,7 @@ void Engine::openDeviceLocked(const DeviceConfig& config) {
             warpVoices_ = {};  // stretchers are sized for the old rate; the next snapshot makes new ones
         }
         openInputs_ = static_cast<uint32_t>(state.inputChannels.size());
+        openInputChannels_ = state.inputChannels;
         for (auto& peak : shared_.inputPeaks) peak.store(0.f, std::memory_order_relaxed);
         // The audio thread is not running, so the preview can be dropped directly.
         shared_.previewSource.store(nullptr, std::memory_order_seq_cst);
@@ -106,6 +108,7 @@ void Engine::openDeviceLocked(const DeviceConfig& config) {
         device_.close();
         deviceRunning_ = false;
         openInputs_ = 0;
+        openInputChannels_.clear();
         throw;
     }
 }
@@ -120,6 +123,8 @@ void Engine::closeDeviceLocked() {
     if (device_.isOpen()) device_.close();  // waits for the audio thread to exit
     deviceRunning_ = false;
     openInputs_ = 0;
+    openInputChannels_.clear();
+    finishRecordingLocked();  // a device change (or a new sample rate) ends a recording
     collectGarbageLocked();
     serviceTransportIfIdleLocked();
 }
@@ -220,10 +225,11 @@ void Engine::audioCallback(const AudioIO& io) noexcept {
     }
     // seq_cst pairs with the store/epoch-load sequence in rebuildSnapshotLocked().
     const RenderSnapshot* snap = snapshot_.load(std::memory_order_seq_cst);
+    RecordingSession* recording = liveRecording_.load(std::memory_order_seq_cst);
     if (!snap || liveSuspended_.load(std::memory_order_seq_cst)) {
         for (uint32_t c = 0; c < io.numOutputs; ++c) std::fill_n(io.outputs[c], io.frames, 0.f);
     } else {
-        renderer_.processLive(*snap, shared_, io.outputs, io.numOutputs, io.frames);
+        renderer_.processLive(*snap, shared_, io, recording);
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         const double budget = io.frames / snap->sampleRate;
         const float load = static_cast<float>(elapsed / budget);
@@ -376,6 +382,114 @@ std::vector<MeterReading> Engine::takeMeters() {
         meters.push_back({track.id, track.params->peakLeft.exchange(0.f), track.params->peakRight.exchange(0.f)});
     }
     return meters;
+}
+
+// ---------------------------------------------------------------------------
+// Input and recording
+
+void Engine::setTrackInput(uint32_t trackId, const std::vector<int>& channels) {
+    if (channels.size() > 2 || std::any_of(channels.begin(), channels.end(), [](int c) { return c < 0; })) {
+        throw std::invalid_argument("An input is no channel, one, or a pair");
+    }
+    std::lock_guard lock(mutex_);
+    arrangementTrackLocked(trackId).inputChannels = channels;
+    rebuildSnapshotLocked();
+}
+
+void Engine::setTrackMonitor(uint32_t trackId, MonitorMode mode) {
+    std::lock_guard lock(mutex_);
+    arrangementTrackLocked(trackId).monitor = mode;
+    rebuildSnapshotLocked();
+}
+
+void Engine::setTrackArmed(uint32_t trackId, bool armed) {
+    std::lock_guard lock(mutex_);
+    arrangementTrackLocked(trackId).armed = armed;
+    rebuildSnapshotLocked();
+}
+
+InputEdge Engine::inputEdgeLocked(const TrackModel& track) const {
+    InputEdge edge;
+    if (track.inputChannels.empty()) return edge;
+    const auto index = [this](int channel) {
+        const auto it = std::find(openInputChannels_.begin(), openInputChannels_.end(), channel);
+        return it == openInputChannels_.end() ? -1 : static_cast<int>(it - openInputChannels_.begin());
+    };
+    edge.source = InputEdge::Source::Device;
+    edge.left = index(track.inputChannels[0]);
+    edge.right = track.inputChannels.size() > 1 ? index(track.inputChannels[1]) : edge.left;
+    return edge;
+}
+
+void Engine::startRecording(const std::vector<RecordTarget>& targets, double countInBeats) {
+    std::lock_guard lock(mutex_);
+    if (!deviceRunning_) throw std::runtime_error("No audio device is running");
+    if (recording_) throw std::runtime_error("Already recording");
+    if (targets.empty()) throw std::invalid_argument("Nothing to record");
+    const auto ringFrames = static_cast<size_t>(sampleRate_ * 8.0);  // the writer may fall this far behind
+    std::vector<std::unique_ptr<RecordingTake>> takes;
+    for (const RecordTarget& target : targets) {
+        const TrackModel& track = arrangementTrackLocked(target.trackId);
+        const InputEdge edge = inputEdgeLocked(track);
+        if (!edge.fromDevice()) throw std::invalid_argument("Track " + std::to_string(target.trackId) + " has no input");
+        if (edge.left < 0 || edge.right < 0) throw std::runtime_error("A track's input is not open on the audio device");
+        for (const auto& other : takes) {
+            if (other->trackId == target.trackId) throw std::invalid_argument("A track is listed twice");
+        }
+        takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path, edge.left, edge.right, ringFrames));
+    }
+    // A sample taken in a block came back through the input after leaving the
+    // output, where the timeline was heard this much earlier than the renderer was.
+    const DeviceState state = device_.state();
+    const int64_t placement =
+        static_cast<int64_t>(snapshotHold_->outputLatency()) + state.inputLatency + state.outputLatency;
+    recording_ = std::make_unique<RecordingSession>(std::move(takes), sampleRate_, placement);
+    liveRecording_.store(recording_.get(), std::memory_order_seq_cst);
+    if (!requestedPlaying_.load()) {
+        requestedPlaying_.store(true);
+        pushCommandLocked({TransportCommand::Type::Play, 0.0, std::max(0.0, countInBeats)});
+    }
+}
+
+void Engine::finishRecordingLocked() {
+    if (!recording_) return;
+    liveRecording_.store(nullptr, std::memory_order_seq_cst);
+    waitForCallbackLocked();  // the audio thread no longer sees it
+    auto takes = recording_->finish();
+    recording_.reset();
+    for (auto& take : takes) finishedTakes_.push_back(std::move(take));
+}
+
+std::vector<RecordedTake> Engine::stopRecording() {
+    std::lock_guard lock(mutex_);
+    finishRecordingLocked();
+    return std::exchange(finishedTakes_, {});
+}
+
+bool Engine::isRecording() {
+    std::lock_guard lock(mutex_);
+    return recording_ && !recording_->interrupted();
+}
+
+std::vector<RecordingProgress> Engine::recordingProgress() {
+    std::lock_guard lock(mutex_);
+    std::vector<RecordingProgress> progress;
+    if (!recording_) return progress;
+    for (const auto& take : recording_->takes()) {
+        RecordingProgress p;
+        p.trackId = take->trackId;
+        const int64_t start = take->start.load(std::memory_order_acquire);
+        p.started = start != RecordingTake::kNotStarted;
+        p.startSample = p.started ? start - recording_->placement() : 0;
+        p.frames = take->frames.load(std::memory_order_acquire);
+        RecordingTake::Peak peak;
+        while (take->peaks.pop(peak)) {
+            p.peaks.push_back(peak.min);
+            p.peaks.push_back(peak.max);
+        }
+        progress.push_back(std::move(p));
+    }
+    return progress;
 }
 
 // ---------------------------------------------------------------------------
@@ -633,10 +747,10 @@ void Engine::serviceTransportIfIdleLocked() {
     Renderer::discardPreviewNotes(shared_);  // nobody would hear them, and a stale note-on could hang
 }
 
-void Engine::play() {
+void Engine::play(double countInBeats) {
     std::lock_guard lock(mutex_);
     requestedPlaying_.store(true);
-    pushCommandLocked({TransportCommand::Type::Play});
+    pushCommandLocked({TransportCommand::Type::Play, 0.0, std::max(0.0, countInBeats)});
 }
 
 void Engine::stop() {
@@ -720,10 +834,16 @@ void Engine::stopPreview() {
 // Offline rendering
 
 void Engine::suspendLiveLocked() {
+    finishRecordingLocked();  // its input would have a hole
     if (!deviceRunning_) return;
     liveSuspended_.store(true, std::memory_order_seq_cst);
     // Once the epoch advances, any callback that started before the flag was
     // visible has finished; later callbacks output silence.
+    waitForCallbackLocked();
+}
+
+void Engine::waitForCallbackLocked() {
+    if (!deviceRunning_) return;
     const uint64_t start = audioEpoch_.load(std::memory_order_seq_cst);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     while (audioEpoch_.load(std::memory_order_seq_cst) <= start && std::chrono::steady_clock::now() < deadline) {
@@ -894,6 +1014,9 @@ void Engine::rebuildSnapshotLocked() {
             track.delay = std::make_shared<DelayLine>(2 * render.compensation + Renderer::kMaxBlock);
         }
         render.delay = track.delay;
+        render.input = inputEdgeLocked(track);
+        render.monitor = track.monitor;
+        render.armed = track.armed;
         buildAutomationLocked(track, 0, snap->maxLatency, spb, render);
         render.notes.reserve(track.notes.size());
         for (const NoteDesc& note : track.notes) {

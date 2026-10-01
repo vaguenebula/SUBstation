@@ -51,34 +51,34 @@ Tests
 ## Phase 2 — Audio input and recording
 
 Engine
-- [ ] Track **input source**: none | device channels (mono/stereo pair) |
+- [x] Track **input source**: none | device channels (mono/stereo pair) |
       *(later)* another track's output. Store it as a routing edge.
-- [ ] Input monitoring (off / in / auto): a monitored strip's input is the
+- [x] Input monitoring (off / in / auto): a monitored strip's input is the
       live input instead of clips, through `processStrip`.
-- [ ] Monitored strips skip delay compensation (monitoring latency); note this
+- [x] Monitored strips skip delay compensation (monitoring latency); note this
       exception in the compensation function.
-- [ ] Lock-free ring buffer from the audio callback to a disk-writer thread;
+- [x] Lock-free ring buffer from the audio callback to a disk-writer thread;
       the audio thread never touches files.
-- [ ] Disk writer thread: WAV files in the project's recordings folder;
+- [x] Disk writer thread: WAV files in the project's recordings folder;
       handles overruns and reports them.
-- [ ] Arm/record API: arm per track, record start/stop with the transport,
+- [x] Arm/record API: arm per track, record start/stop with the transport,
       punch in/out from the loop range (later).
-- [ ] Recorded clip placement: shift by input latency + output latency +
+- [x] Recorded clip placement: shift by input latency + output latency +
       delay-compensation lag (`DeviceStatus` reports both driver latencies).
-- [ ] Device changes or sample-rate changes during recording stop it cleanly.
+- [x] Device changes or sample-rate changes during recording stop it cleanly.
 
 Model / UI
-- [ ] Track header: arm button, input selector, monitor mode.
-- [ ] Finished take → audio clip(s) via one undo command; overdub replaces
+- [x] Track header: arm button, input selector, monitor mode.
+- [x] Finished take → audio clip(s) via one undo command; overdub replaces
       what's under the take (as in Arrangement recording).
-- [ ] Record button and count-in in the transport bar.
-- [ ] Live waveform while recording (from the meter/ring buffer, not the file).
+- [x] Record button and count-in in the transport bar.
+- [x] Live waveform while recording (from the meter/ring buffer, not the file).
 
 Tests
-- [ ] Loopback test (test ASIO driver feeds a known signal): the recorded clip
+- [x] Loopback test (test ASIO driver feeds a known signal): the recorded clip
       lines up with the timeline, with and without latent plug-ins.
-- [ ] Undo removes a take and its file reference.
-- [ ] Monitoring through a latent plug-in isn't delayed by compensation.
+- [x] Undo removes a take and its file reference.
+- [x] Monitoring through a latent plug-in isn't delayed by compensation.
 
 ---
 

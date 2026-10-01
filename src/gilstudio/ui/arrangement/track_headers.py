@@ -1,5 +1,5 @@
 """Track headers (right of the lanes, as in Ableton): name, activator, solo,
-volume, pan, meter, and while a track's automation shows, its automation
+arm (audio tracks), volume, pan, input and monitoring (audio tracks), meter, and while a track's automation shows, its automation
 choosers (and those of the lanes below it). Plus the master track's header and
 lane, which show the master's automation likewise. Volume and pan follow their
 automation while it plays. Click the master's header to select it: the device
@@ -18,7 +18,7 @@ from PySide6.QtGui import (
     QPixmap,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QPushButton, QWidget
 
 from ... import theme
 from ...audio.engine_bridge import EngineBridge
@@ -67,6 +67,25 @@ def volume_box(value: float = 0.0) -> ValueBox:
     return ValueBox(value, -70.0, 6.0, step=0.25, decimals=1, formatter=format_db, sample_text="-70.0 dB")
 
 
+MONITOR_LABELS = {"in": "In", "auto": "Auto", "off": "Off"}
+MONITOR_TIPS = {"in": "In: always hears its input, never its clips",
+                "auto": "Auto: hears its input while armed, unless playing back",
+                "off": "Off: never hears its input"}
+
+
+def input_label(channels: tuple[int, ...]) -> str:
+    if not channels:
+        return "No Input"
+    return "In " + "/".join(str(c + 1) for c in channels)
+
+
+def input_choices(names: list[str]) -> list[tuple[str, tuple[int, ...]]]:
+    """(label, channels) for a device's inputs: each one (mono), then each pair."""
+    choices = [(f"{input_label((c,))}  ({name})", (c,)) for c, name in enumerate(names)]
+    choices += [(input_label((c, c + 1)), (c, c + 1)) for c in range(0, len(names) - 1, 2)]
+    return choices
+
+
 def color_swatch(color: str) -> QIcon:
     pixmap = QPixmap(14, 14)
     pixmap.fill(QColor(color))
@@ -91,6 +110,15 @@ class TrackHeader(QWidget):
         self.activator = ToggleButton("1", role="activator", tooltip="Track Activator (unmute)", parent=self)
         self.solo = ToggleButton("S", role="solo", tooltip="Solo (S); Ctrl-click to solo it along with others",
                                  parent=self)
+        self.arm = ToggleButton("●", role="arm", tooltip="Arm Recording; Ctrl-click to arm it along with others",
+                                parent=self)
+        self.input = QPushButton(parent=self)
+        self.input.setProperty("role", "small")
+        self.input.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.input.setToolTip("Audio input (the audio device's channels)")
+        self.monitor = QPushButton(parent=self)
+        self.monitor.setProperty("role", "small")
+        self.monitor.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.volume = volume_box()
         self.volume.setParent(self)
         self.volume.setToolTip("Track Volume (drag, double-click to type)")
@@ -99,10 +127,14 @@ class TrackHeader(QWidget):
 
         self.activator.toggled.connect(lambda on: self.editor.set_track_param(self.track_id, "mute", not on))
         self.solo.clicked.connect(self._solo_clicked)
+        self.arm.clicked.connect(self._arm_clicked)
+        self.input.clicked.connect(self._choose_input)
+        self.monitor.clicked.connect(self._choose_monitor)
         self.volume.valueChanged.connect(
             lambda v, key: self.editor.set_track_param(self.track_id, "volume_db", v, key))
         self.pan.valueChanged.connect(lambda v, key: self.editor.set_track_param(self.track_id, "pan", v, key))
-        for widget in (self.volume, self.pan, self.activator, self.solo, self.meter):
+        for widget in (self.volume, self.pan, self.activator, self.solo, self.arm, self.input, self.monitor,
+                       self.meter):
             widget.installEventFilter(self)  # Alt+wheel over a control still resizes the track
         self.automation = AutomationControls(track_id, editor, bridge, self)
         self.refresh()
@@ -115,6 +147,11 @@ class TrackHeader(QWidget):
         track = self.track
         self.activator.set_checked_silently(not track.mute)
         self.solo.set_checked_silently(track.solo)
+        self.arm.set_checked_silently(track.armed)
+        self.input.setText(input_label(track.input))
+        self.monitor.setText(MONITOR_LABELS.get(track.monitor, "Auto"))
+        self.monitor.setToolTip(f"Monitoring. {MONITOR_TIPS.get(track.monitor, '')}")
+        self._layout()
         self.refresh_mixer()
         self.automation.refresh()
         self.update()
@@ -150,14 +187,22 @@ class TrackHeader(QWidget):
         meter_w = 8
         self.meter.setGeometry(w - meter_w - 4, 4, meter_w, max(8, h - 9))
         right = w - meter_w - 10
-        self.solo.setGeometry(right - 22, 4, 22, 17)
-        self.activator.setGeometry(right - 22 - 30, 4, 28, 17)
+        audio = not self.track.is_midi  # MIDI input comes later
+        self.arm.setVisible(audio)
+        arm_w = 20 if audio else 0
+        self.arm.setGeometry(right - 18, 4, 18, 17)
+        self.solo.setGeometry(right - arm_w - 22, 4, 22, 17)
+        self.activator.setGeometry(right - arm_w - 22 - 30, 4, 28, 17)
         second_row = h >= 48
         for widget in (self.volume, self.pan):
             widget.setVisible(second_row)
+        for widget in (self.input, self.monitor):
+            widget.setVisible(second_row and audio)
         if second_row:
             self.volume.setGeometry(10, NAME_ROW + 4, 76, 20)
             self.pan.setGeometry(92, NAME_ROW + 1, 26, 26)
+            self.monitor.setGeometry(right - 34, NAME_ROW + 4, 34, 20)
+            self.input.setGeometry(124, NAME_ROW + 4, right - 34 - 4 - 124, 20)
         main = QRect(10, CHOOSER_ROW, right - 10, CHOOSER_HEIGHT) if self.row.automation else None
         self.automation.place(main, [rect.adjusted(10, 0, -(w - right), 0) for rect in self._lane_rects()])
 
@@ -225,6 +270,48 @@ class TrackHeader(QWidget):
             tracks = [t.id for t in self.project.tracks]
         self.editor.solo_tracks(tracks, on, exclusive=exclusive)
         self.solo.set_checked_silently(self.track.solo)
+
+    def _arm_clicked(self, on: bool) -> None:
+        """Arming a track disarms the others, unless Ctrl is held (as in Ableton).
+        Clicking a selected track's arm acts on all the selected tracks."""
+        selected = self.selection.track_ids
+        tracks = selected if self.track_id in selected else (self.track_id,)
+        exclusive = not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
+        self.editor.arm_tracks(tracks, on, exclusive=exclusive)
+        self.arm.set_checked_silently(self.track.armed)
+        if on and not self.track.input:
+            self.bridge.status_message.emit(f"{self.track.name} has no input: choose one to record.")
+
+    def input_menu(self) -> QMenu:
+        menu = QMenu(self)
+        current = self.track.input
+        none = menu.addAction("No Input", lambda: self.editor.set_track_input(self.track_id, ()))
+        none.setCheckable(True)
+        none.setChecked(not current)
+        names = self.bridge.input_names()
+        if not names:
+            menu.addAction("The audio device has no inputs (choose an ASIO driver)").setEnabled(False)
+        for label, channels in input_choices(names):
+            if len(channels) == 2 and len(names) > 2 and channels == (0, 1):
+                menu.addSeparator()
+            action = menu.addAction(label, lambda c=channels: self.editor.set_track_input(self.track_id, c))
+            action.setCheckable(True)
+            action.setChecked(channels == current)
+        return menu
+
+    def _choose_input(self) -> None:
+        self.input_menu().exec(self.input.mapToGlobal(self.input.rect().bottomLeft()))
+
+    def monitor_menu(self) -> QMenu:
+        menu = QMenu(self)
+        for mode in ("in", "auto", "off"):
+            action = menu.addAction(MONITOR_TIPS[mode], lambda m=mode: self.editor.set_track_monitor(self.track_id, m))
+            action.setCheckable(True)
+            action.setChecked(self.track.monitor == mode)
+        return menu
+
+    def _choose_monitor(self) -> None:
+        self.monitor_menu().exec(self.monitor.mapToGlobal(self.monitor.rect().bottomLeft()))
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._resize:

@@ -45,6 +45,7 @@ OUTSIDE_CLIP = QColor(0, 0, 0, 110)  # content a clip has but doesn't play
 ACTIVATOR_ON = "#ffc233"
 SOLO_ON = "#4fa3ff"
 PLAY_ON = "#5fd35f"
+RECORD_ON = "#ff5a4d"
 METER_LOW = QColor("#3fcf55")
 METER_MID = QColor("#f2d024")
 METER_HIGH = QColor("#ff4a3d")
@@ -97,6 +98,9 @@ QPushButton:checked {{ background: {ACCENT}; color: {ACCENT_TEXT}; }}
 QPushButton[role="activator"]:checked {{ background: {ACTIVATOR_ON}; color: {ACCENT_TEXT}; }}
 QPushButton[role="solo"]:checked {{ background: {SOLO_ON}; color: {ACCENT_TEXT}; }}
 QPushButton[role="play"]:checked {{ background: {PLAY_ON}; }}
+QPushButton[role="record"] {{ padding: 2px; min-width: 26px; min-height: 22px; }}
+QPushButton[role="record"]:checked, QPushButton[role="arm"]:checked {{ background: {RECORD_ON}; color: {ACCENT_TEXT}; }}
+QPushButton[role="arm"] {{ padding: 0px; font-size: 8pt; border-radius: 8px; }}
 QPushButton[role="re-enable"] {{ padding: 2px; min-width: 26px; min-height: 22px; }}
 QPushButton[role="re-enable"]:checked {{ background: {ACCENT}; }}
 QPushButton[role="tool"] {{ padding: 2px; min-width: 26px; min-height: 22px; }}

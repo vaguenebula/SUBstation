@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
@@ -146,7 +147,7 @@ class LanesCanvas(QWidget):
                        selection.insert_changed, self.project.settings_changed, bridge.source_ready,
                        bridge.source_failed, self.project.clips_changed, self.project.track_changed,
                        self.project.automation_changed, self.project.automation_view_changed,
-                       self.project.devices_changed, bridge.automation_state_changed):
+                       self.project.devices_changed, bridge.automation_state_changed, bridge.recording_updated):
             signal.connect(lambda *_args: self.update())
         # A parameter set by hand: lanes without an envelope draw its value.
         for signal in (self.project.device_param_changed, self.project.device_state_changed,
@@ -269,6 +270,9 @@ class LanesCanvas(QWidget):
                 if rect.right() < visible.left():
                     continue
                 self._draw_clip(p, track.color, clip, rect, visible, False)  # the selected area is tinted
+            live = self.bridge.live_takes.get(track.id)
+            if live is not None and live.started:
+                self._draw_live_take(p, track.color, live, y, row.main_height, visible)
             for lane in row.lanes:  # automation lanes below the track
                 p.fillRect(QRectF(visible.left(), lane.top - view.scroll_y - 1, visible.width(), 1),
                            QColor(theme.GRID_BAR))
@@ -379,6 +383,47 @@ class LanesCanvas(QWidget):
         if hover is not None and hover[0] == clip.id and not ghost:
             x = rect.left() if hover[1] == "left" else rect.right() - 2
             p.fillRect(QRectF(x, rect.top(), 2, rect.height()), QColor(theme.SELECTION_OUTLINE))
+        p.restore()
+
+    def _draw_live_take(self, p: QPainter, track_color: str, take, row_top: float, row_height: int,
+                        visible: QRectF) -> None:
+        """A take while it records: a clip that grows, its waveform drawn from the
+        peaks the engine sends (the file isn't read until the take is done)."""
+        rate = self.bridge.engine.sample_rate
+        tempo = self.project.tempo
+        start = take.start_sample / rate * tempo / 60.0
+        end = (take.start_sample + take.frames) / rate * tempo / 60.0
+        x0, x1 = self.view.beat_to_x(max(0.0, start)), self.view.beat_to_x(end)
+        rect = QRectF(x0, row_top + 1, max(1.0, x1 - x0), row_height - 3)
+        if rect.right() < visible.left() or rect.left() > visible.right():
+            return
+        p.save()
+        p.setClipRect(rect.intersected(visible).adjusted(-1, -1, 1, 1))
+        title_h = TITLE_HEIGHT if rect.height() >= MIN_TITLE_ROW else 0
+        p.fillRect(rect, QColor(track_color).darker(160))
+        if title_h:
+            p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), title_h), QColor(theme.RECORD_ON))
+        body = rect.adjusted(0, title_h + 1, 0, -1)
+        peaks = take.peaks
+        if len(peaks) and body.height() > 2:
+            # One column per pixel: the extremes of the peaks it covers.
+            fpp = self.view.frames_per_pixel(rate)
+            take_x = self.view.beat_to_x(start)
+            columns = np.arange(int(max(rect.left(), visible.left())), int(min(rect.right(), visible.right())) + 1)
+            index = ((columns - take_x) * fpp / take.PEAK_FRAMES).astype(np.int64)
+            keep = (index >= 0) & (index < len(peaks))
+            columns, index = columns[keep], index[keep]
+            starts, at = np.unique(index, return_index=True)
+            if len(starts):
+                lows = np.minimum.reduceat(peaks[:, 0], starts)
+                highs = np.maximum.reduceat(peaks[:, 1], starts)
+                mid, half = body.center().y(), body.height() / 2
+                p.setPen(QColor(theme.WAVEFORM))
+                for x, low, high in zip(columns[at], lows, highs, strict=True):
+                    p.drawLine(QPointF(float(x), mid - high * half), QPointF(float(x), mid - low * half))
+        p.setPen(QPen(QColor(theme.RECORD_ON), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(rect.adjusted(0.5, 0.5, -0.5, -0.5))
         p.restore()
 
     def _draw_notes(self, p: QPainter, clip: MidiClip, area: QRectF, visible: QRectF) -> None:
