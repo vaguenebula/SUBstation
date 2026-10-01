@@ -145,6 +145,21 @@ class ProjectEditor(QObject):
         if touched:
             self.parameter_touched.emit(track_id, touched)
 
+    def solo_tracks(self, track_ids, solo: bool, exclusive: bool = False) -> None:
+        """Solo (or unsolo) these tracks, one undo step. `exclusive` (soloing):
+        every other track is unsoloed."""
+        track_ids = set(track_ids)
+        changes = [(t.id, t.solo, t.id in track_ids and solo) for t in self.project.tracks
+                   if t.id in track_ids or (exclusive and solo)]
+        changes = [change for change in changes if change[1] != change[2]]
+        if not changes:
+            return
+        text = "Toggle Solo" if len(track_ids) == 1 else "Solo Tracks" if solo else "Unsolo Tracks"
+        self.undo_stack.beginMacro(text)
+        for track_id, old, new in changes:
+            self._push(UpdateTrackCommand(self.project, track_id, "solo", old, new, text))
+        self.undo_stack.endMacro()
+
     def set_track_height(self, track_id: str, height: int) -> None:
         # View state: saved with the project but not worth an undo step.
         self.project.update_track(track_id, height=height)

@@ -17,7 +17,7 @@ from PySide6.QtGui import (
     QPixmap,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QLineEdit, QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QWidget
 
 from ... import theme
 from ...audio.engine_bridge import EngineBridge
@@ -88,7 +88,8 @@ class TrackHeader(QWidget):
         self.setMouseTracking(True)
 
         self.activator = ToggleButton("1", role="activator", tooltip="Track Activator (unmute)", parent=self)
-        self.solo = ToggleButton("S", role="solo", tooltip="Solo", parent=self)
+        self.solo = ToggleButton("S", role="solo", tooltip="Solo (S); Ctrl-click to solo it along with others",
+                                 parent=self)
         self.volume = volume_box()
         self.volume.setParent(self)
         self.volume.setToolTip("Track Volume (drag, double-click to type)")
@@ -96,7 +97,7 @@ class TrackHeader(QWidget):
         self.meter = MeterWidget(self)
 
         self.activator.toggled.connect(lambda on: self.editor.set_track_param(self.track_id, "mute", not on))
-        self.solo.toggled.connect(lambda on: self.editor.set_track_param(self.track_id, "solo", on))
+        self.solo.clicked.connect(self._solo_clicked)
         self.volume.valueChanged.connect(
             lambda v, key: self.editor.set_track_param(self.track_id, "volume_db", v, key))
         self.pan.valueChanged.connect(lambda v, key: self.editor.set_track_param(self.track_id, "pan", v, key))
@@ -162,7 +163,7 @@ class TrackHeader(QWidget):
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         track = self.track
-        selected = self.selection.track_id == self.track_id
+        selected = self.track_id in self.selection.track_ids
         p.fillRect(self.rect(), QColor(theme.LANE_SELECTED if selected else theme.PANEL_ALT))
         paint_lane_headers(p, self._lane_rects(), self.width())
         p.fillRect(QRect(0, 0, 5, self.height() - 1), QColor(track.color))
@@ -206,7 +207,20 @@ class TrackHeader(QWidget):
         if self._in_resize_zone(event.position().y()):
             self._resize = (event.globalPosition().y(), self.row.main_height)  # as tall as it shows
         else:
-            self.selection.select_track(self.track_id, focus_track=True)
+            mods = event.modifiers()
+            mode = ("toggle" if mods & Qt.KeyboardModifier.ControlModifier
+                    else "range" if mods & Qt.KeyboardModifier.ShiftModifier else "")
+            self.selection.select_track(self.track_id, focus_track=True, mode=mode,
+                                        order=[t.id for t in self.project.tracks])
+
+    def _solo_clicked(self, on: bool) -> None:
+        """Soloing a track unsoloes the others, unless Ctrl is held. Clicking a
+        selected track's solo acts on all the selected tracks."""
+        selected = self.selection.track_ids
+        tracks = selected if self.track_id in selected else (self.track_id,)
+        exclusive = not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
+        self.editor.solo_tracks(tracks, on, exclusive=exclusive)
+        self.solo.set_checked_silently(self.track.solo)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._resize:
@@ -247,7 +261,10 @@ class TrackHeader(QWidget):
         self.update()
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        self.selection.select_track(self.track_id, focus_track=True)
+        selected = self.selection.track_ids
+        if self.track_id not in selected:
+            self.selection.select_track(self.track_id, focus_track=True)
+            selected = (self.track_id,)
         menu = QMenu(self)
         menu.addAction("Rename", self.start_rename)
         colors = menu.addMenu("Color")
@@ -257,7 +274,8 @@ class TrackHeader(QWidget):
         index = self.project.track_index(self.track_id)
         menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(index + 1))
         menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(index + 1))
-        menu.addAction("Delete Track", lambda: self.editor.delete_tracks([self.track_id]))
+        menu.addAction("Delete Track" if len(selected) == 1 else "Delete Tracks",
+                       lambda: self.editor.delete_tracks(list(selected)))
         menu.addSeparator()
         if self.track.automation_view.shown:
             menu.addAction("Hide Automation", lambda: self.editor.hide_automation(self.track_id))

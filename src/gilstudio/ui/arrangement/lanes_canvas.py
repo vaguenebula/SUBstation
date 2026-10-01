@@ -248,7 +248,7 @@ class LanesCanvas(QWidget):
         rows = self.layout_model.visible_rows(view.scroll_y + visible.top(), view.scroll_y + visible.bottom() + 1)
         for _, row in rows:
             y = row.top - view.scroll_y
-            color = theme.LANE_SELECTED if row.track_id == self.selection.track_id else theme.LANE
+            color = theme.LANE_SELECTED if row.track_id in self.selection.track_ids else theme.LANE
             p.fillRect(QRectF(visible.left(), y, visible.width(), row.height), QColor(color))
         # The grid goes all the way down: below the tracks too, where selecting works on it as well.
         draw_grid(p, view, visible.left(), visible.right(), visible.top(), visible.bottom() + 1)
