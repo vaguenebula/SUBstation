@@ -89,7 +89,7 @@ def test_notes_drawn_in_the_piano_roll_are_heard(window, midi_clip):
     QTest.mouseClick(roll.ruler, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
                      QPoint(int(roll.view.beat_to_x(2.0)), 10))
     assert window.bridge.position == pytest.approx(6.0)
-    assert roll.playhead == pytest.approx(2.0)
+    assert roll.playhead is None  # stopped: no playhead, just the start position
     assert window.undo_stack.undoText() == "Add Note"
     window.undo_stack.undo()
     assert len(window.project.clip(track.id, clip.id).notes) == 1

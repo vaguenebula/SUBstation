@@ -96,6 +96,18 @@ def test_finding_plugin_files(tmp_path, monkeypatch):
     files = find_plugin_files([tmp_path / "A", tmp_path / "B", tmp_path / "Missing"])
     assert [os.path.relpath(f, tmp_path) for f in files] == [os.path.join("A", "Bundle.vst3"),
                                                              os.path.join("A", "Vendor", "Single.vst3")]
+    # A vendor folder that is a link to somewhere else (as some installers make)
+    # is looked in; a link back up to the root doesn't loop.
+    (tmp_path / "Elsewhere").mkdir()
+    (tmp_path / "Elsewhere" / "Linked.vst3").write_bytes(b"")
+    try:
+        os.symlink(tmp_path / "Elsewhere", tmp_path / "B" / "Vendor", target_is_directory=True)
+        os.symlink(tmp_path / "B", tmp_path / "Elsewhere" / "Back", target_is_directory=True)
+    except OSError:
+        pass  # creating links needs Developer Mode or admin on Windows
+    else:
+        linked = find_plugin_files([tmp_path / "B"])
+        assert [os.path.relpath(f, tmp_path) for f in linked] == [os.path.join("B", "Vendor", "Linked.vst3")]
     monkeypatch.setenv("GILSTUDIO_VST3_PATH", os.pathsep.join([str(tmp_path / "A"), str(tmp_path / "B")]))
     assert search_paths() == [tmp_path / "A", tmp_path / "B"]
     # The user's own folders come after the standard ones, each folder once.

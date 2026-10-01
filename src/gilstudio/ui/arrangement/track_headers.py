@@ -25,7 +25,7 @@ from ...audio.engine_bridge import EngineBridge
 from ...model.automation import MASTER, MIXER_PAN, MIXER_VOLUME
 from ...model.editor import ProjectEditor
 from ...model.project import MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT, TRACK_COLORS
-from ...model.timebase import format_db, format_pan
+from ...model.timebase import format_db, format_pan, parse_pan
 from ..widgets import Knob, MeterWidget, ToggleButton, ValueBox
 from . import automation_lanes
 from .automation_header import CHOOSER_HEIGHT, AutomationControls
@@ -64,7 +64,30 @@ def paint_lane_headers(p: QPainter, rects: list[QRect], width: int) -> None:
 
 
 def volume_box(value: float = 0.0) -> ValueBox:
-    return ValueBox(value, -70.0, 6.0, step=0.25, decimals=1, formatter=format_db, sample_text="-70.0 dB")
+    return ValueBox(value, -70.0, 6.0, step=0.25, decimals=1, formatter=format_db, sample_text="-70.0 dB",
+                    default=0.0, wheel=False)
+
+
+class _TouchFilter(QObject):
+    """Pressing a mixer control shows its automation (clicking one, as in Ableton)."""
+
+    def __init__(self, editor: ProjectEditor, owner: str, key: str, parent: QObject):
+        super().__init__(parent)
+        self.editor, self.owner, self.key = editor, owner, key
+
+    def eventFilter(self, _obj: QObject, event: QEvent) -> bool:
+        if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick)                 and event.button() == Qt.MouseButton.LeftButton:
+            self.editor.touch_parameter(self.owner, self.key)
+        return False
+
+
+def watch_mixer_touch(editor: ProjectEditor, owner: str, volume: ValueBox, pan: Knob) -> None:
+    volume.installEventFilter(_TouchFilter(editor, owner, MIXER_VOLUME, volume))
+    pan.installEventFilter(_TouchFilter(editor, owner, MIXER_PAN, pan))
+
+
+def pan_knob(parent: QWidget) -> Knob:
+    return Knob(-1.0, 1.0, 0.0, default=0.0, bipolar=True, formatter=format_pan, parser=parse_pan, wheel=False, parent=parent)
 
 
 def color_swatch(color: str) -> QIcon:
@@ -93,17 +116,17 @@ class TrackHeader(QWidget):
                                  parent=self)
         self.volume = volume_box()
         self.volume.setParent(self)
-        self.volume.setToolTip("Track Volume (drag, double-click to type)")
-        self.pan = Knob(-1.0, 1.0, 0.0, default=0.0, bipolar=True, formatter=format_pan, parent=self)
+        self.volume.setToolTip("Track Volume (drag; select and type a number; double-click to reset)")
+        self.pan = pan_knob(self)
         self.meter = MeterWidget(self)
 
         self.activator.toggled.connect(lambda on: self.editor.set_track_param(self.track_id, "mute", not on))
         self.solo.clicked.connect(self._solo_clicked)
-        self.volume.valueChanged.connect(
-            lambda v, key: self.editor.set_track_param(self.track_id, "volume_db", v, key))
-        self.pan.valueChanged.connect(lambda v, key: self.editor.set_track_param(self.track_id, "pan", v, key))
+        self.volume.valueChanged.connect(lambda v, key: self._mixer_changed("volume_db", self.volume, v, key))
+        self.pan.valueChanged.connect(lambda v, key: self._mixer_changed("pan", self.pan, v, key))
         for widget in (self.volume, self.pan, self.activator, self.solo, self.meter):
             widget.installEventFilter(self)  # Alt+wheel over a control still resizes the track
+        watch_mixer_touch(editor, track_id, self.volume, self.pan)
         self.automation = AutomationControls(track_id, editor, bridge, self)
         self.refresh()
 
@@ -118,6 +141,20 @@ class TrackHeader(QWidget):
         self.refresh_mixer()
         self.automation.refresh()
         self.update()
+
+    def _mixer_changed(self, attr: str, widget, value: float, key: object) -> None:
+        """Volume or pan changed here; on a selected track, every selected track follows
+        (by the same amount when dragged, to the same value when typed or reset)."""
+        selected = self.selection.track_ids
+        if self.track_id not in selected or len(selected) < 2:
+            self.editor.set_track_param(self.track_id, attr, value, key)
+            return
+        delta = value - getattr(self.track, attr)
+        values = {}
+        for track in self.project.tracks:
+            if track.id in selected:
+                values[track.id] = (getattr(track, attr) + delta) if widget.relative else value
+        self.editor.set_tracks_param(values, attr, key)
 
     def refresh_mixer(self) -> None:
         track = self.track
@@ -380,10 +417,11 @@ class MasterHeader(QWidget):
         self.volume = volume_box(self.project.master.volume_db)
         self.volume.setParent(self)
         self.volume.setToolTip("Master Volume")
-        self.pan = Knob(-1.0, 1.0, 0.0, default=0.0, bipolar=True, formatter=format_pan, parent=self)
+        self.pan = pan_knob(self)
         self.pan.setToolTip("Master Pan")
         self.meter = MeterWidget(self)
         self.automation = AutomationControls(MASTER, editor, bridge, self)
+        watch_mixer_touch(editor, MASTER, self.volume, self.pan)
         self.volume.valueChanged.connect(lambda v, key: self.editor.set_track_param(MASTER, "volume_db", v, key))
         self.pan.valueChanged.connect(lambda v, key: self.editor.set_track_param(MASTER, "pan", v, key))
         for signal in (self.project.track_changed, self.project.devices_changed):
@@ -478,7 +516,7 @@ class MasterLane(QWidget):
         self.bridge = bridge
         self.main_height = MASTER_HEIGHT
         self.lanes: tuple[LaneRow, ...] = ()
-        self._playhead = 0.0
+        self._playhead: float | None = None
         self._gesture = None
         self._hover_point: Hover | None = None
         self.setMouseTracking(True)
@@ -492,10 +530,12 @@ class MasterLane(QWidget):
         self.lanes = lanes
         self.update()
 
-    def set_playhead(self, beat: float) -> None:
+    def set_playhead(self, beat: float | None) -> None:
+        """None hides it (playback stopped)."""
         for b in (self._playhead, beat):
-            x = int(self.view.beat_to_x(b))
-            self.update(QRect(x - 2, 0, 5, self.height()))
+            if b is not None:
+                x = int(self.view.beat_to_x(b))
+                self.update(QRect(x - 2, 0, 5, self.height()))
         self._playhead = beat
 
     def envelope_areas(self) -> list[EnvelopeArea]:
@@ -523,8 +563,9 @@ class MasterLane(QWidget):
         for area in areas:
             automation_lanes.draw_area(p, self, area, visible, self._hover_point, shade=False)
         automation_lanes.draw_range(p, self, areas, SELECTION_TINT)
-        x = round(self.view.beat_to_x(self._playhead))
-        p.fillRect(QRectF(x, 0, 1, self.height()), QColor(theme.PLAYHEAD))
+        if self._playhead is not None:
+            x = round(self.view.beat_to_x(self._playhead))
+            p.fillRect(QRectF(x, 0, 1, self.height()), QColor(theme.PLAYHEAD))
         automation_lanes.draw_readout(p, self, self._gesture)
 
     # --- Mouse: automation -----------------------------------------------------------
