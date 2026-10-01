@@ -190,6 +190,35 @@ def plugin(color: str = theme.TEXT_DIM) -> QIcon:
 
 
 @cache
+def plugin_window(color: str = theme.TEXT) -> QIcon:
+    """A window with a title bar: shows a plug-in's own editor."""
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(8, 12, 48, 40), 4, 4)
+        p.fillRect(QRectF(8, 12, 48, 11), c)
+    return _icon(draw, color)
+
+
+@cache
+def save(color: str = theme.TEXT) -> QIcon:
+    """A floppy disk."""
+    def draw(p: QPainter, c: QColor):
+        body = QPainterPath(QPointF(10, 10))
+        body.lineTo(46, 10)
+        body.lineTo(54, 18)
+        body.lineTo(54, 54)
+        body.lineTo(10, 54)
+        body.closeSubpath()
+        p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(body)
+        p.fillRect(QRectF(20, 10, 22, 13), c)
+        p.drawRect(QRectF(19, 35, 26, 19))
+    return _icon(draw, color)
+
+
+@cache
 def search(color: str = theme.TEXT_DIM) -> QIcon:
     def draw(p: QPainter, c: QColor):
         p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))

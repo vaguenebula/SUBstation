@@ -49,6 +49,8 @@ METER_LOW = QColor("#3fcf55")
 METER_MID = QColor("#f2d024")
 METER_HIGH = QColor("#ff4a3d")
 METER_BG = QColor("#141414")
+DEVICE_HEADER = "#3e3e3e"  # a device's title bar
+DEVICE_HEADER_SELECTED = "#575757"
 SCOPE_LINE = QColor("#ffb84d")
 SCOPE_GLOW = QColor(255, 166, 43, 60)
 SCOPE_AXIS = QColor(255, 255, 255, 22)
@@ -104,6 +106,12 @@ QPushButton[role="activator"], QPushButton[role="solo"] {{
 QPushButton[role="flat"] {{ padding: 0px; border: none; background: transparent; color: {TEXT_DIM}; }}
 QPushButton[role="small"] {{ padding: 0px 6px; font-size: 8pt; }}
 QPushButton[role="flat"]:hover {{ color: {TEXT}; }}
+QPushButton[role="device-header"] {{
+    padding: 0px; border: none; border-radius: 2px; background: transparent; color: {TEXT_DIM};
+}}
+QPushButton[role="device-header"]:hover {{ background: rgba(255, 255, 255, 28); color: {TEXT}; }}
+QPushButton[role="device-header"]:checked {{ background: {ACCENT}; color: {ACCENT_TEXT}; }}
+QPushButton[role="device-header"]:disabled {{ color: {TEXT_DISABLED}; background: transparent; }}
 
 QComboBox {{
     background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 3px; padding: 3px 8px;

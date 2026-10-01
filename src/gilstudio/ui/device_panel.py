@@ -1,11 +1,16 @@
 """Bottom 'detail view': the selected track's device chain. On a MIDI track the
 instrument comes first.
 
+Each device has a title bar, as in Ableton: its on/off switch and name, the
+arrows to its other parameter pages, the button for a plug-in's own editor, a
+save button (not wired up yet) and delete. It is lighter while the device is
+selected.
+
 Parameter metadata comes from the engine, so built-in devices and plug-ins
 show alike: a knob per parameter (log-scaled where the engine says so), or a
 list for parameters that choose between named values, four at a time in a 2×2
-grid with arrows for the other pages. A plug-in shows its own text for their
-values and has a button for its own editor. Right-click a device for more (move, presets).
+grid. A plug-in shows its own text for their values. Right-click a device for
+more (move, presets).
 
 Automated parameters are marked (red: automated, grey: overridden) and follow
 their automation as it plays; right-click one to show its automation, delete it,
@@ -30,6 +35,7 @@ from PySide6.QtCore import (
     QObject,
     QPoint,
     QSettings,
+    QSize,
     Qt,
     QTimer,
     Signal,
@@ -43,7 +49,9 @@ from PySide6.QtGui import (
     QDropEvent,
     QFontMetrics,
     QMouseEvent,
+    QIcon,
     QPainter,
+    QPalette,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -56,6 +64,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStyle,
     QVBoxLayout,
     QWidget,
@@ -76,6 +85,7 @@ from .arrangement.lanes_canvas import is_pan_modifier
 from .arrangement.track_headers import automation_state
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
+from . import icons
 from .widgets import Knob, ToggleButton
 
 PANEL_MARGIN = 8  # above and below the chain
@@ -102,14 +112,37 @@ def _elided(text: str, width: int, label: QLabel) -> str:
     return QFontMetrics(label.font()).elidedText(text, Qt.TextElideMode.ElideRight, width)
 
 
-def _header_button(text: str, tooltip: str) -> QPushButton:
+HEADER_BUTTON = 16
+
+
+def _header_button(text: str, tooltip: str, icon: QIcon | None = None) -> QPushButton:
+    """A small button on a device's title bar."""
     button = QPushButton(text)
-    button.setProperty("role", "flat")
+    button.setProperty("role", "device-header")
     button.setFont(theme.ui_font(11))
-    button.setFixedSize(18, 18)
+    button.setFixedSize(HEADER_BUTTON, HEADER_BUTTON)
     button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     button.setToolTip(tooltip)
+    if icon is not None:
+        button.setIcon(icon)
+        button.setIconSize(button.size() - QSize(5, 5))
     return button
+
+
+class _TitleLabel(QLabel):
+    """A device's name: elided to the room the title bar leaves it."""
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(16)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setFont(self.font())
+        p.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        text = p.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
 
 
 class _TouchFilter(QObject):
@@ -127,8 +160,8 @@ class _TouchFilter(QObject):
 
 
 class _DeviceFrame(QFrame):
-    """What built-in and plug-in devices share: the frame, the header (on/off,
-    name, delete), the parameters' pages and their footer, selecting and
+    """What built-in and plug-in devices share: the frame, the title bar (on/off,
+    name, parameter pages, save, delete), the parameters' pages, selecting and
     dragging it, and the right-click menu. Subclasses say how many parameters
     there are (`_set_param_count`) and make each one's widget (`_param_widget`)."""
 
@@ -162,41 +195,45 @@ class _DeviceFrame(QFrame):
         self.enabled.setFixedSize(14, 14)
         self.enabled.setChecked(device.enabled)
         self.enabled.toggled.connect(lambda on: editor.set_device_enabled(track_id, self.device_id, on))
-        self.title = QLabel(device_name(device))
+        self.title = _TitleLabel(device_name(device))
         self.title.setFont(theme.ui_font(9, bold=True))
-        remove = _header_button("×", "Delete device")
-        remove.clicked.connect(lambda: editor.remove_device(track_id, self.device_id))
-        self.header = QHBoxLayout()
-        self.header.setSpacing(6)
-        self.header.addWidget(self.enabled)
-        self.header.addWidget(self.title)
-        self.header.addStretch(1)
-        self.header.addWidget(remove)
-
         self.previous = _header_button("‹", "Previous parameters")
         self.previous.clicked.connect(lambda: self.set_page(self.page - 1))
         self.page_label = QLabel()
-        self.page_label.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 8pt;")
+        self.page_label.setObjectName("devicePage")
         self.next = _header_button("›", "Next parameters")
         self.next.clicked.connect(lambda: self.set_page(self.page + 1))
-        self.footer = QHBoxLayout()
-        self.footer.setSpacing(4)
-        self.footer.addStretch(1)
-        for widget in (self.previous, self.page_label, self.next):
-            self.footer.addWidget(widget)
+        self.save = _header_button("", "Save Preset", icons.save())  # not wired up yet
+        remove = _header_button("×", "Delete device")
+        remove.clicked.connect(lambda: editor.remove_device(track_id, self.device_id))
+
+        # The title bar. Clicks on its background and name reach the frame (select, drag).
+        self.header_bar = QFrame()
+        self.header_bar.setObjectName("deviceHeader")
+        self.header = QHBoxLayout(self.header_bar)
+        self.header.setContentsMargins(5, 2, 3, 2)
+        self.header.setSpacing(3)
+        self.header.addWidget(self.enabled)
+        self.header.addSpacing(2)
+        self.header.addWidget(self.title, 1)
+        for widget in (self.previous, self.page_label, self.next, self.save, remove):
+            self.header.addWidget(widget)
         self.params = QGridLayout()
         self.params.setContentsMargins(0, 0, 0, 0)
         self.params.setHorizontalSpacing(16)
         self.params.setVerticalSpacing(6)
         # Widgets go into the frame's layout before they are shown: one shown
         # before it has a parent becomes a window of its own, for a moment.
-        self.body = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(1, 1, 1, 1)  # inside the border
+        outer.setSpacing(0)
+        outer.addWidget(self.header_bar)
+        self.body = QVBoxLayout()
         self.body.setContentsMargins(8, 6, 8, 6)
         self.body.setSpacing(4)
-        self.body.addLayout(self.header)
         self.body.addLayout(self.params)
         self.body.addStretch(1)
-        self.body.addLayout(self.footer)
+        outer.addLayout(self.body)
 
     # --- Parameter pages -------------------------------------------------------------
 
@@ -305,8 +342,12 @@ class _DeviceFrame(QFrame):
 
     def _update_style(self) -> None:
         border = theme.ACCENT if self.selected else theme.BORDER
+        header = theme.DEVICE_HEADER_SELECTED if self.selected else theme.DEVICE_HEADER
         self.setStyleSheet(f"#device {{ background: {theme.PANEL_ALT}; border: 1px solid {border};"
-                           f" border-radius: 4px; }}")
+                           f" border-radius: 4px; }}"
+                           f"#deviceHeader {{ background: {header}; border: none;"
+                           f" border-top-left-radius: 3px; border-top-right-radius: 3px; }}"
+                           f"#devicePage {{ color: {theme.TEXT_DIM}; font-size: 8pt; }}")
 
     # Clicks that reach the frame are on its background or labels: the controls take their own.
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -490,13 +531,15 @@ class PluginDeviceWidget(_DeviceFrame):
         self.shown = shown or [i for i, p in enumerate(self.infos) if not p.hidden and not p.read_only]
 
         plugin = device.plugin
-        self.title.setText(_elided(plugin.name, DEVICE_WIDTH - 60, self.title))
+        self.title.setText(plugin.name)
         self._update_tooltip()
 
-        self.edit = ToggleButton("Edit", role="small", tooltip="Show the plug-in's own editor")
-        self.edit.setFixedHeight(18)
+        self.edit = ToggleButton(icon=icons.plugin_window(), role="device-header",
+                                 tooltip="Show the plug-in's own editor")
+        self.edit.setFixedSize(HEADER_BUTTON, HEADER_BUTTON)
+        self.edit.setIconSize(self.edit.size() - QSize(5, 5))
         self.edit.toggled.connect(self._toggle_editor)
-        self.footer.insertWidget(0, self.edit)
+        self.header.insertWidget(self.header.indexOf(self.title) + 1, self.edit)
         self.edit.setEnabled(self.engine_id is not None)
         self.update_editor_button()
 
