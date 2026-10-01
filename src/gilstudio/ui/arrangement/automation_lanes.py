@@ -91,8 +91,9 @@ class EnvelopeArea:
 class Hover:
     """What is under the mouse in a lane: a breakpoint ("point", `index`), a
     place on the line where a click adds one ("add", `beat`, `value`), a segment
-    to drag ("segment", `index`: its first breakpoint), or the selected range
-    ("range")."""
+    to drag ("segment", `index`: its first breakpoint), the flat line out from
+    the first or last breakpoint ("end", `index`, `beat`: under the mouse), or
+    the selected range ("range")."""
 
     ident: tuple[str, str, int]
     kind: str
@@ -197,7 +198,9 @@ def end_at(host, area: EnvelopeArea, points, pos: QPointF) -> int | None:
         index = len(points) - 1
     else:
         return None
-    return index if abs(area.y(points[index].value) - pos.y()) <= SEGMENT_GRAB else None
+    quantize = _quantizer(host, area)
+    value = quantize(points[index].value) if quantize is not None else points[index].value
+    return index if abs(area.y(value) - pos.y()) <= SEGMENT_GRAB else None
 
 
 def _is_step(points, segment: int) -> bool:
@@ -359,9 +362,9 @@ def draw_area(p: QPainter, host, area: EnvelopeArea, visible: QRectF, hover: Hov
         p.drawPolyline(_segment_line(host, area, points, hover.index, x0, x1))
     if hover is not None and hover.ident == area.ident and hover.kind == "end" and hover.index < len(points):
         end = points[hover.index]
-        y, view_x = area.y(end.value), host.view.beat_to_x(end.beat)
+        y = area.y(quantize(end.value) if quantize is not None else end.value)
         p.setPen(QPen(color, 3.2))
-        p.drawLine(QPointF(view_x, y), QPointF(x0 if hover.index == 0 else x1, y))
+        p.drawLine(QPointF(host.view.beat_to_x(end.beat), y), QPointF(x0 if hover.beat < end.beat else x1, y))
     p.setPen(QPen(color, 1.6))
     p.drawPolyline(trace(host.view, area, points, x0, x1, quantize))
     selected = host.selection.selected_points(area.owner, area.key)
@@ -661,7 +664,7 @@ def hover(host, area: EnvelopeArea | None, pos: QPointF, mods) -> tuple[Hover | 
         return Hover(area.ident, "range"), Qt.CursorShape.ArrowCursor
     end = end_at(host, area, points, pos)
     if end is not None and (grab is None or grab[0] != "add"):
-        return Hover(area.ident, "end", end), Qt.CursorShape.ArrowCursor
+        return Hover(area.ident, "end", end, host.view.x_to_beat(pos.x())), Qt.CursorShape.ArrowCursor
     if grab is not None and grab[0] == "add":
         return Hover(area.ident, "add", None, *grab[1]), add_cursor()
     if grab is not None:
