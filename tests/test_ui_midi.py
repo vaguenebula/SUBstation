@@ -319,6 +319,14 @@ def test_midi_clips_in_the_arrangement(window, midi_clip, tmp_path):
     window.split()
     left, right = project.track(track.id).clips
     assert [len(c.played_notes()) for c in (left, right)] == [1, 1]
+    # Ctrl+J joins the two pieces back into one clip, which plays both notes, as one undo step.
+    window.selection.select_clips(window.editor, {(track.id, c.id) for c in (left, right)})
+    QTest.keyClick(window.arrangement.lanes, Qt.Key.Key_J, Qt.KeyboardModifier.ControlModifier)
+    [joined] = project.track(track.id).clips
+    assert (joined.start_beat, joined.end_beat(), len(joined.played_notes())) == (4.0, 8.0, 2)
+    assert window.undo_stack.undoText() == "Consolidate" and window.selection.clips == {(track.id, joined.id)}
+    window.undo_stack.undo()
+    left, right = project.track(track.id).clips
     # Ctrl+Shift+M on a time range makes a clip there.
     window.selection.set_time_range(12.0, 14.0, (track.id,), clips=set())
     window.insert_midi_clip()

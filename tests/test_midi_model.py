@@ -102,6 +102,17 @@ def test_time_selection_edits_on_midi_clips():
 # --- Notes ------------------------------------------------------------------------------
 
 
+def test_consolidate_joins_midi_clips_into_one():
+    # Two clips with a gap; the first hides a note past its end and cuts one at it.
+    a = MidiClip("a", "Bass", 4.0, 2.0, offset_beats=1.0,
+                 notes=(Note(60, 1.0, 0.5), Note(62, 2.5, 2.0), Note(64, 3.5, 1.0)))
+    b = MidiClip("b", "Lead", 8.0, 1.0, notes=(Note(67, 0.0, 0.5),))
+    joined = edits.consolidate_midi([b, a])
+    assert (joined.id, joined.name, joined.start_beat, joined.duration_beats, joined.offset_beats) == (
+        "a", "Bass", 4.0, 5.0, 0.0)
+    assert joined.notes == (Note(60, 0.0, 0.5), Note(62, 1.5, 0.5), Note(67, 4.0, 0.5))
+
+
 def test_note_names_follow_ableton():
     assert [notes.note_name(p) for p in (60, 61, 0, 127)] == ["C3", "C#3", "C-2", "G8"]
     assert notes.is_black_key(61) and not notes.is_black_key(64)

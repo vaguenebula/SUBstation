@@ -514,6 +514,31 @@ class ProjectEditor(QObject):
         if after:
             self._commit("Split", after)
 
+    def consolidatable(self, refs) -> dict[str, list[MidiClip]]:
+        """The MIDI clips among `refs` that Consolidate joins: on each track with two or more."""
+        by_track: dict[str, list[MidiClip]] = {}
+        for tid, cid in refs:
+            clip = self.project.clip(tid, cid)
+            if isinstance(clip, MidiClip):
+                by_track.setdefault(tid, []).append(clip)
+        return {tid: clips for tid, clips in by_track.items() if len(clips) > 1}
+
+    def consolidate_clips(self, refs) -> list[ClipRef]:
+        """Join the selected MIDI clips on each track into one clip spanning them
+        (Ctrl+J), as one undo step. The new clips; [] if there was nothing to join."""
+        tempo = self.project.tempo
+        after: dict[str, list[AnyClip]] = {}
+        joined: list[ClipRef] = []
+        for tid, clips in self.consolidatable(refs).items():
+            clip = edits.consolidate_midi(clips)
+            ids = {c.id for c in clips}
+            kept = [c for c in self.project.track(tid).clips if c.id not in ids]
+            after[tid] = edits.resolve_overlaps(kept + [clip], {clip.id}, tempo)
+            joined.append((tid, clip.id))
+        if after:
+            self._commit("Consolidate", after)
+        return joined
+
     def clips_at(self, track_ids: list[str], beat: float) -> list[ClipRef]:
         tempo = self.project.tempo
         return [(tid, c.id) for tid in track_ids for c in self.project.track(tid).clips

@@ -150,6 +150,7 @@ python -m pytest
 | Insert audio track / MIDI track | Ctrl+T / Ctrl+Shift+T |
 | Insert MIDI clip (on the selected MIDI track, or over a time selection) | Ctrl+Shift+D (or Ctrl+Shift+M) |
 | Duplicate / split at insert marker / delete (clips, or automation in a lane's time selection) | Ctrl+D / Ctrl+E / Delete |
+| Consolidate the selected MIDI clips on each track into one (also in the clip's right-click menu) | Ctrl+J |
 | Show / hide automation (every track and the master) | A |
 | Add an automation breakpoint / delete one | click on the envelope's line / click the breakpoint |
 | Bend an automation segment | Alt-drag between two breakpoints |

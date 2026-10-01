@@ -10,7 +10,8 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from .project import AnyClip, MidiClip, new_id
+from . import notes
+from .project import AnyClip, MidiClip, Note, new_id
 
 MIN_CLIP_SEC = 0.005
 MIN_MIDI_CLIP_BEATS = 1 / 64
@@ -169,3 +170,14 @@ def trim_end(clip: AnyClip, new_end_beat: float, tempo: float) -> AnyClip:
 
 def selection_span(clips: list[AnyClip], tempo: float) -> tuple[float, float]:
     return min(c.start_beat for c in clips), max(c.end_beat(tempo) for c in clips)
+
+
+def consolidate_midi(clips: list[MidiClip]) -> MidiClip:
+    """Ableton's Consolidate (Ctrl+J): one MIDI clip from the first clip's start to
+    the last one's end, holding just the notes the clips play, where they play
+    them (cut at their clip's end). It keeps the first clip's id and name."""
+    clips = sorted(clips, key=lambda c: c.start_beat)
+    start, end = selection_span(clips, 0.0)
+    played = [Note(n.pitch, a - start, b - a, n.velocity) for c in clips for a, b, n in c.played_notes()]
+    return MidiClip(id=clips[0].id, name=clips[0].name, start_beat=start, duration_beats=end - start,
+                    notes=notes.normalize(notes.untangle(played)))
