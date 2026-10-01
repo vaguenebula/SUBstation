@@ -135,9 +135,15 @@ class ProjectEditor(QObject):
             self._push(UpdateTrackCommand(self.project, track_id, "color", old, color, "Change Track Color"))
 
     def set_track_param(self, track_id: str, attr: str, value, merge_key: object | None = None) -> None:
-        """Mixer settings: volume_db, pan, mute, solo."""
+        """Mixer settings: volume_db, pan, mute, solo (the master: volume_db and pan)."""
         labels = {"volume_db": "Change Volume", "pan": "Change Pan", "mute": "Toggle Track Activator",
                   "solo": "Toggle Solo"}
+        if track_id == MASTER:
+            if attr not in ("volume_db", "pan"):
+                raise AttributeError(attr)  # the master is always heard
+            labels = {"volume_db": "Change Master Volume", "pan": "Change Master Pan"}
+        if attr == "pan":
+            value = max(-1.0, min(1.0, value))
         old = getattr(self.project.track(track_id), attr)
         if value != old:
             self._push(UpdateTrackCommand(self.project, track_id, attr, old, value, labels[attr], merge_key))
@@ -184,14 +190,6 @@ class ProjectEditor(QObject):
 
     def set_loop_enabled(self, enabled: bool) -> None:
         self._set_settings("Toggle Loop", loop_enabled=enabled)
-
-    def set_master_volume(self, db: float, merge_key: object | None = None) -> None:
-        self._set_settings("Change Master Volume", merge_key, master_volume_db=db)
-        self.parameter_touched.emit(MASTER, MIXER_VOLUME)
-
-    def set_master_pan(self, pan: float, merge_key: object | None = None) -> None:
-        self._set_settings("Change Master Pan", merge_key, master_pan=max(-1.0, min(1.0, pan)))
-        self.parameter_touched.emit(MASTER, MIXER_PAN)
 
     # --- Clips -------------------------------------------------------------------
 
@@ -511,8 +509,8 @@ class ProjectEditor(QObject):
     def add_device(self, track_id: str, kind: str, index: int | None = None,
                    plugin: PluginRef | None = None) -> Device | None:
         """Add a device (a built-in `kind`, or kind 'plugin' and a `plugin`) to a
-        track's chain. An instrument only goes on a MIDI track (None otherwise),
-        where it comes first and replaces any other instrument."""
+        track's (or the master's) chain. An instrument only goes on a MIDI track
+        (None otherwise), where it comes first and replaces any other instrument."""
         track = self.project.track(track_id)
         before = copy.deepcopy(track.devices)
         after = copy.deepcopy(before)

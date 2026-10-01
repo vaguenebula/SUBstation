@@ -303,7 +303,7 @@ class MainWindow(QMainWindow):
     def add_device_to_selected_track(self, kind: str, plugin: PluginRef | None = None) -> None:
         """A built-in device `kind`, or kind 'plugin' and a `plugin`."""
         track_id = self.selection.track_id
-        has_track = bool(track_id) and self.project.has_track(track_id)
+        has_track = bool(track_id) and self.project.has_owner(track_id)  # a track or the master
         if is_instrument(kind, plugin) and not (has_track and self.project.track(track_id).is_midi):
             # As in Ableton: an instrument chosen with no MIDI track selected gets a new one.
             track = self.editor.add_midi_track(self._after_selected_track(), instrument=None if plugin else kind,
@@ -317,13 +317,13 @@ class MainWindow(QMainWindow):
     def _plugin_added(self, track_id: str, device_id: str) -> None:
         # After the add is done (the track may be selected just after it, and a drop
         # finished): the editor opens when its track is shown.
-        QTimer.singleShot(0, lambda: self.project.has_track(track_id)
+        QTimer.singleShot(0, lambda: self.project.has_owner(track_id)
                           and self.bridge.request_plugin_editor(track_id, device_id))
 
     def _plugin_param_edited(self, track_id: str, device_id: str, param_id: str, value: float, old: float,
                              gesture: int) -> None:
         """A plug-in's own editor changed a parameter: an undo step (one per knob drag)."""
-        if self.project.has_track(track_id):
+        if self.project.has_owner(track_id):
             self.editor.set_device_param(track_id, device_id, param_id, value,
                                          merge_key=("plugin edit", device_id, param_id, gesture), old=old)
 

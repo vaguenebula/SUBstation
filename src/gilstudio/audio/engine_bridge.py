@@ -14,6 +14,9 @@ Audio devices (WASAPI or ASIO) open as the preferences describe. An ASIO
 driver whose settings change (in its control panel, or its clock) asks to be
 reset; the bridge then opens it again, with its new settings.
 
+The master is a track to the engine as to the model (engine track id MASTER):
+its devices, mixer and automation go the same way as a track's.
+
 Automation: every envelope of a track (or the master) goes to the engine, which
 plays it; its target follows it and the value the model holds for it (set by
 hand) counts again when the envelope goes. Changing an automated target by hand
@@ -120,7 +123,7 @@ class EngineBridge(QObject):
         super().__init__(parent)
         self.engine = engine
         self.project = project
-        self._track_ids: dict[str, int] = {}  # model track id -> engine track id
+        self._track_ids: dict[str, int] = {MASTER: ge.MASTER}  # model track id -> engine track id
         # track id -> [(model device id, engine id)]; the engine id is None when a plug-in didn't load
         self._devices: dict[str, list[tuple[str, int | None]]] = {}
         self._enabled: dict[int, bool] = {}  # engine id -> what the engine was told
@@ -144,7 +147,7 @@ class EngineBridge(QObject):
         self._failed: dict[str, str] = {}
         self._file_info: dict[str, ge.AudioFileInfo] = {}
         self._preview_request = 0  # the latest preview asked for (or stopped): a file still loading then is not played
-        self.meters: dict[str, tuple[float, float]] = {}  # track id or "master" -> (left, right)
+        self.meters: dict[str, tuple[float, float]] = {}  # track id or MASTER -> (left, right)
         self._last_position = -1.0
         self._last_playing = False
 
@@ -180,9 +183,7 @@ class EngineBridge(QObject):
     # --- Model -> engine -----------------------------------------------------------
 
     def _on_reset(self) -> None:
-        for engine_id in self._track_ids.values():
-            self.engine.remove_track(engine_id)
-        self._track_ids.clear()
+        self._remove_engine_tracks()
         self._devices.clear()
         self._enabled.clear()
         self._plugin_ids.clear()
@@ -197,17 +198,26 @@ class EngineBridge(QObject):
         self.meters.clear()
         self._editors_wanted.clear()
         self._hidden_editors.clear()
-        for track in self.project.tracks:
+        for track in self.project.all_tracks():
             self._add_engine_track(track)
         self._push_settings()
-        self._push_automation(MASTER)
         # Forget decoded audio the new project doesn't use.
         used = {_key(c.path) for t in self.project.tracks if not t.is_midi for c in t.clips}
         self._sources = {k: s for k, s in self._sources.items() if k in used}
         self.engine.release_unused_sources()
 
+    def _remove_engine_tracks(self) -> None:
+        """Every track goes from the engine, with its devices; the master stays, without its devices."""
+        for device_id, processor_id in self._devices.pop(MASTER, []):
+            self._forget_processor(device_id, processor_id)
+        for track_id, engine_id in list(self._track_ids.items()):
+            if track_id != MASTER:
+                self.engine.remove_track(engine_id)
+                del self._track_ids[track_id]
+
     def _add_engine_track(self, track: Track) -> None:
-        self._track_ids[track.id] = self.engine.add_track()
+        if not track.is_master:  # the engine always has the master
+            self._track_ids[track.id] = self.engine.add_track()
         self._push_mixer(track.id)
         self._push_clips(track.id)
         self._sync_devices(track.id)
@@ -248,13 +258,14 @@ class EngineBridge(QObject):
         track = self.project.track(track_id)
         self.engine.set_track_gain(engine_id, db_to_gain(track.volume_db))
         self.engine.set_track_pan(engine_id, track.pan)
-        self.engine.set_track_mute(engine_id, track.mute)
-        self.engine.set_track_solo(engine_id, track.solo)
+        if not track.is_master:
+            self.engine.set_track_mute(engine_id, track.mute)
+            self.engine.set_track_solo(engine_id, track.solo)
         self._mixer[track_id] = (track.volume_db, track.pan)
 
     def _push_clips(self, track_id: str) -> None:
         engine_id = self._track_ids.get(track_id)
-        if engine_id is None:
+        if engine_id is None or track_id == MASTER:
             return
         track = self.project.track(track_id)
         if track.is_midi:
@@ -434,7 +445,7 @@ class EngineBridge(QObject):
 
     def store_plugin_states(self) -> None:
         """Copy every plug-in's state into the model, for saving the project."""
-        for track in self.project.tracks:
+        for track in self.project.all_tracks():
             for device in track.devices:
                 engine_id = self.engine_device_id(track.id, device.id)
                 if engine_id is None or engine_id not in self._plugin_ids:
@@ -536,9 +547,7 @@ class EngineBridge(QObject):
         """Unload every plug-in now, while the application is still whole (not
         whenever the engine happens to be garbage-collected)."""
         self.close_all_editors()
-        for engine_id in self._track_ids.values():
-            self.engine.remove_track(engine_id)
-        self._track_ids.clear()
+        self._remove_engine_tracks()
         self._devices.clear()
         self._plugin_ids.clear()
         self.engine.idle()
@@ -593,25 +602,14 @@ class EngineBridge(QObject):
         self.engine.tempo = p.tempo
         self.engine.set_time_signature(p.time_signature.numerator, p.time_signature.denominator)
         self.engine.set_loop(p.loop_enabled, p.loop_start, p.loop_end)
-        self._override_changed_mixer(MASTER, p.master_volume_db, p.master_pan)
-        self._push_master_mixer()
-
-    def _push_master_mixer(self) -> None:
-        p = self.project
-        self.engine.set_master_gain(db_to_gain(p.master_volume_db))
-        self.engine.set_master_pan(p.master_pan)
-        self._mixer[MASTER] = (p.master_volume_db, p.master_pan)
 
     # --- Automation ------------------------------------------------------------------
 
     def _push_automation(self, owner: str) -> None:
         """The owner's envelopes to the engine, but those overridden. Targets whose
         envelope no longer plays go back to their own value."""
-        if owner == MASTER:
-            engine_id = 0
-        elif owner in self._track_ids:
-            engine_id = self._track_ids[owner]
-        else:
+        engine_id = self._track_ids.get(owner)
+        if engine_id is None:
             return
         lanes, playing = [], set()
         for key, points in self.project.automation(owner).items():
@@ -636,21 +634,17 @@ class EngineBridge(QObject):
         engine_points = [ge.AutomationPoint(p.beat, p.value, p.curve) for p in points]
         if target[0] == "mixer":
             return ge.AutomationLane(0, target[1], engine_points)
-        if owner == MASTER:
-            return None
         processor_id = self.engine_device_id(owner, target[1])
         return None if processor_id is None else ge.AutomationLane(processor_id, target[2], engine_points)
 
     def _push_own_value(self, owner: str, key: str) -> None:
         """A target no longer automated: back to the value it has in the model."""
         if key in automation.MIXER_KEYS:
-            if owner == MASTER:
-                self._push_master_mixer()
-            elif self.project.has_track(owner):
+            if self.project.has_owner(owner):
                 self._push_mixer(owner)
             return
         device_id = automation.key_device(key)
-        if self.project.has_track(owner) and any(d.id == device_id for d in self.project.track(owner).devices):
+        if self.project.has_owner(owner) and any(d.id == device_id for d in self.project.track(owner).devices):
             self._push_device_param(owner, device_id, automation.parse_key(key)[2])
 
     def is_automated(self, owner: str, key: str) -> bool:
@@ -712,9 +706,7 @@ class EngineBridge(QObject):
     def param_groups(self, owner: str) -> list[tuple[str, str, list[ParamSpec]]]:
         """What an owner has that can be automated, as (group id, name, specs): its
         mixer ("mixer"), then each device (by id)."""
-        if owner == MASTER:
-            return [("mixer", "Mixer", mixer_specs(master=True))]
-        groups = [("mixer", "Mixer", mixer_specs())]
+        groups = [("mixer", "Mixer", mixer_specs(master=owner == MASTER))]
         for device in self.project.track(owner).devices:
             groups.append((device.id, device_name(device), self.device_param_specs(owner, device)))
         return groups
@@ -726,7 +718,7 @@ class EngineBridge(QObject):
         """A target's description; None if it doesn't exist (a device that is gone)."""
         if key in automation.MIXER_KEYS:
             return next(s for s in mixer_specs(master=owner == MASTER) if s.key == key)
-        if owner == MASTER or not self.project.has_track(owner):
+        if not self.project.has_owner(owner):
             return None
         device_id = automation.key_device(key)
         device = next((d for d in self.project.track(owner).devices if d.id == device_id), None)
@@ -740,9 +732,7 @@ class EngineBridge(QObject):
 
     def own_value(self, owner: str, key: str) -> float | None:
         """A target's value as set by hand (plain; None if not known)."""
-        if owner == MASTER:
-            return {MIXER_VOLUME: self.project.master_volume_db, MIXER_PAN: self.project.master_pan}.get(key)
-        if not self.project.has_track(owner):
+        if not self.project.has_owner(owner):
             return None
         track = self.project.track(owner)
         if key == MIXER_VOLUME:
@@ -954,7 +944,7 @@ class EngineBridge(QObject):
     def _poll_meters(self) -> None:
         by_engine_id = {engine_id: track_id for track_id, engine_id in self._track_ids.items()}
         for reading in self.engine.take_meters():
-            key = "master" if reading.track_id == 0 else by_engine_id.get(reading.track_id)
+            key = by_engine_id.get(reading.track_id)
             if key is not None:
                 self.meters[key] = (reading.left, reading.right)
         self.meters_updated.emit()

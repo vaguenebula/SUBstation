@@ -60,7 +60,7 @@ def test_a_shows_and_hides_every_lane(window, tracks):
     assert not window.arrangement.layout_model.rows[0].automation
     action.trigger()
     rows = window.arrangement.layout_model.rows
-    assert all(r.automation for r in rows) and window.project.master_automation_view.shown
+    assert all(r.automation for r in rows) and window.project.master.automation_view.shown
     assert [(x.owner, x.key) for x in window.arrangement.lanes.envelope_areas()] == [(a.id, MIXER_VOLUME),
                                                                                      (b.id, MIXER_VOLUME)]
     assert window.arrangement.master_lane.height() > 40  # room for its lane and choosers
@@ -82,8 +82,8 @@ def test_changing_a_parameter_shows_its_lane(window, tracks):
     assert window.arrangement.headers.headers[a.id].automation.main.device.text() == "Utility"
     window.editor.set_track_param(a.id, "pan", 0.5)  # the header's controls too
     assert window.project.track(a.id).automation_view.key == MIXER_PAN
-    window.editor.set_master_volume(-3.0)
-    assert window.project.master_automation_view == automation.AutomationView(True, MIXER_VOLUME)
+    window.editor.set_track_param(MASTER, "volume_db", -3.0)
+    assert window.project.master.automation_view == automation.AutomationView(True, MIXER_VOLUME)
 
 
 def click(widget, at: QPoint, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
@@ -325,7 +325,7 @@ def test_lanes_below_a_track(window, tracks):
 def test_automation_is_saved(window, tracks, tmp_path):
     a, _ = tracks
     window.editor.set_envelope(a.id, MIXER_PAN, env((0.0, 0.1), (4.0, 0.9, 0.3)))
-    window.editor.set_master_pan(0.25)
+    window.editor.set_track_param(MASTER, "pan", 0.25)
     window.editor.show_automation(a.id, MIXER_PAN)
     target = tmp_path / "auto.gilproj"
     assert window._save_to(target)
@@ -333,7 +333,7 @@ def test_automation_is_saved(window, tracks, tmp_path):
     window.open_project(str(target))
     reopened = window.project.tracks[0]
     assert reopened.automation == {MIXER_PAN: env((0.0, 0.1), (4.0, 0.9, 0.3))}
-    assert reopened.automation_view.shown and window.project.master_pan == 0.25
+    assert reopened.automation_view.shown and window.project.master.pan == 0.25
     assert window.bridge.is_automated(reopened.id, MIXER_PAN)
     assert [(x.owner, x.key) for x in window.arrangement.lanes.envelope_areas()] == [(reopened.id, MIXER_PAN)]
 

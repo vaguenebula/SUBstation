@@ -1,5 +1,5 @@
-"""Bottom 'detail view': the selected track's device chain. On a MIDI track the
-instrument comes first.
+"""Bottom 'detail view': the selected track's (or the master's) device chain. On
+a MIDI track the instrument comes first; the master takes effects only.
 
 Parameter metadata comes from the engine, so built-in devices and plug-ins
 show alike: a knob per parameter (log-scaled where the engine says so), or a
@@ -942,7 +942,7 @@ class DevicePanel(QFrame):
         self._pages[device_id] = page
 
     def show_track(self, track_id: str | None) -> None:
-        if track_id is not None and not self.project.has_track(track_id):
+        if track_id is not None and not self.project.has_owner(track_id):
             track_id = None
         if track_id != self.track_id:
             self.selected, self._anchor = [], None

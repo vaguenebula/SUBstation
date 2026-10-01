@@ -49,10 +49,11 @@ struct AutomationRender {
     std::shared_ptr<Processor> processor;  // null for a mixer control
     int param = 0;                         // the processor's parameter index
     int steps = 0;                         // > 0: a discrete parameter (values snap to its steps)
-    int insert = -1;                       // the processor's place in the track's chain
+    int insert = -1;                       // the processor's place in the strip's chain
     // How late the target hears the timeline: the latency of the devices before
-    // it (for a fader, the track's delay-compensated total). Its automation is
-    // delayed as much, so it stays with the audio.
+    // it (for a fader, the strip's delay-compensated total; on the master, the
+    // tracks' latency comes first). Its automation is delayed as much, so it
+    // stays with the audio.
     int latency = 0;
 
     bool empty() const noexcept { return nodes.empty(); }
@@ -130,18 +131,24 @@ struct NoteRender {
     uint8_t velocity = 100;
 };
 
-struct TrackRender {
-    uint32_t id = 0;
+// What every strip has: a chain of devices, delay compensation, and a fader
+// with its meter. Tracks are strips fed by their clips and notes; the master is
+// the strip fed by the sum of the tracks.
+struct StripRender {
     std::shared_ptr<TrackParams> params;
-    std::vector<ClipRender> clips;  // sorted by start
-    int64_t maxClipLength = 0;      // bounds the binary search window
-    std::vector<NoteRender> notes;  // sorted by start
     std::vector<std::shared_ptr<Processor>> inserts;
     int latency = 0;                    // samples the enabled inserts add
-    int compensation = 0;               // samples the track is delayed by to line up with the slowest one
+    int compensation = 0;               // samples the strip is delayed by to line up with the slowest one
     std::shared_ptr<DelayLine> delay;   // for the live renderer (offline renders bring their own)
     std::vector<AutomationRender> automation;  // of its devices' parameters, in chain order
     AutomationRender volume, pan;              // of its mixer
+};
+
+struct TrackRender : StripRender {
+    uint32_t id = 0;
+    std::vector<ClipRender> clips;  // sorted by start
+    int64_t maxClipLength = 0;      // bounds the binary search window
+    std::vector<NoteRender> notes;  // sorted by start
 };
 
 struct RenderSnapshot {
@@ -153,12 +160,14 @@ struct RenderSnapshot {
     int64_t loopStart = 0;
     int64_t loopEnd = 0;
     int64_t clipFadeSamples = 0;
-    int maxLatency = 0;  // the output lags the timeline by this much (tracks and metronome alike)
+    int maxLatency = 0;  // the tracks reach the master this late (delay-compensated alike)
     std::vector<TrackRender> tracks;
-    std::shared_ptr<TrackParams> master;
-    AutomationRender masterVolume, masterPan;
+    StripRender master;  // its params are null in a snapshot made without an engine
     WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
 
+    // The output lags the timeline by this much: the tracks' latency, then the
+    // master's devices. The metronome is delayed as much.
+    int outputLatency() const { return maxLatency + master.latency; }
     double samplesPerBeat() const { return sampleRate * 60.0 / tempo; }
 };
 

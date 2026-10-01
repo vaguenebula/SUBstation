@@ -3,7 +3,9 @@ relative to the project file, so a project folder can be moved. MIDI tracks
 store their clips' notes inline, as [pitch, start, length, velocity]. Plug-in
 devices store which plug-in they are and its state (a .vstpreset, base64).
 Automation is stored per track (and for the master) by target key, each
-envelope as [beat, value, curve] points, with what the arrangement shows of it."""
+envelope as [beat, value, curve] points, with what the arrangement shows of it.
+The master is stored apart from the tracks: its mixer, devices and automation.
+Files from before version 5 have no master devices; they load as they were."""
 
 from __future__ import annotations
 
@@ -28,11 +30,12 @@ from .project import (
     PluginRef,
     Project,
     Track,
+    new_master,
 )
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 4  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan
+VERSION = 5  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices
 EXTENSION = ".gilproj"
 
 
@@ -129,6 +132,23 @@ def _view(data) -> AutomationView:
                           lanes=tuple(k for k in data.get("lanes", []) if automation.is_key(k)))
 
 
+def _master_to_dict(master: Track) -> dict:
+    return {"volume_db": master.volume_db, "pan": master.pan,
+            "devices": [_device_to_dict(d) for d in master.devices],
+            "automation": _automation_to_dict(master.automation),
+            "automation_view": _view_to_dict(master.automation_view)}
+
+
+def _master(data: dict) -> Track:
+    return new_master(
+        volume_db=float(data.get("volume_db", 0.0)),
+        pan=max(-1.0, min(1.0, float(data.get("pan", 0.0)))),
+        devices=[_device(d) for d in data.get("devices", [])],  # none before version 5
+        automation=_automation(data.get("automation")),
+        automation_view=_view(data.get("automation_view")),
+    )
+
+
 def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
     base = project_file.parent if project_file else None
     return {
@@ -138,9 +158,7 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
         "time_signature": [project.time_signature.numerator, project.time_signature.denominator],
         "loop": {"enabled": project.loop_enabled, "start": project.loop_start, "end": project.loop_end},
         "automation_locked": project.automation_locked,
-        "master": {"volume_db": project.master_volume_db, "pan": project.master_pan,
-                   "automation": _automation_to_dict(project.master_automation),
-                   "automation_view": _view_to_dict(project.master_automation_view)},
+        "master": _master_to_dict(project.master),
         "tracks": [
             {
                 "id": t.id,
@@ -246,18 +264,13 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
         raise ProjectFileError("This project was saved by a newer version of GIL Studio")
     num, den = data.get("time_signature", [4, 4])
     loop = data.get("loop", {})
-    master = data.get("master", {})
     project.replace_contents(
         tempo=float(data.get("tempo", 120.0)),
         time_signature=TimeSignature(int(num), int(den)),
         loop_enabled=bool(loop.get("enabled", False)),
         loop_start=float(loop.get("start", 0.0)),
         loop_end=float(loop.get("end", 16.0)),
-        master_volume_db=float(master.get("volume_db", 0.0)),
-        master_pan=max(-1.0, min(1.0, float(master.get("pan", 0.0)))),
-        master_automation={k: v for k, v in _automation(master.get("automation")).items()
-                           if k in automation.MIXER_KEYS},  # the master has no devices (yet)
-        master_automation_view=_view(master.get("automation_view")),
+        master=_master(data.get("master", {})),
         automation_locked=bool(data.get("automation_locked", False)),
         tracks=tracks_from_dict(data, project_file),
         path=project_file,
