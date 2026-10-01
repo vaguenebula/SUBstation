@@ -40,6 +40,8 @@ from .dialogs import ExportDialog, PreferencesDialog
 from .transport_bar import TransportBar
 
 PROJECT_FILTER = f"GIL Studio Project (*{EXTENSION})"
+RECENT_KEY = "files/recent"
+MAX_RECENT = 10
 
 
 class MainWindow(QMainWindow):
@@ -136,6 +138,8 @@ class MainWindow(QMainWindow):
         file = bar.addMenu("&File")
         self._action(file, "&New Project", self.new_project, QKeySequence.StandardKey.New)
         self._action(file, "&Open…", lambda: self.open_project(), QKeySequence.StandardKey.Open)
+        self.recent_menu = file.addMenu("Open &Recent")
+        self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         file.addSeparator()
         self._action(file, "&Save", self.save_project, QKeySequence.StandardKey.Save)
         self._action(file, "Save &As…", self.save_project_as, "Ctrl+Shift+S")
@@ -425,6 +429,7 @@ class MainWindow(QMainWindow):
             return
         self._reset_session()
         QSettings().setValue("files/last_dir", str(Path(path).parent))
+        self._add_recent(Path(path))
         self.arrangement.zoom_to_arrangement()
         self.show_message(f"Opened {Path(path).name}")
 
@@ -449,6 +454,7 @@ class MainWindow(QMainWindow):
             return False
         self.undo_stack.setClean()
         QSettings().setValue("files/last_dir", str(path.parent))
+        self._add_recent(path)
         self._update_title()
         self.show_message(f"Saved {path.name}")
         return True
@@ -481,6 +487,45 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         self.show_message(f"Exported {Path(path).name}")
+
+    @staticmethod
+    def recent_projects() -> list[str]:
+        stored = QSettings().value(RECENT_KEY)
+        if isinstance(stored, str):  # QSettings gives a one-item list back as a string
+            stored = [stored]
+        return [str(p) for p in stored] if isinstance(stored, list) else []
+
+    @staticmethod
+    def _set_recent(paths: list[str]) -> None:
+        QSettings().setValue(RECENT_KEY, paths[:MAX_RECENT])
+
+    def _add_recent(self, path: Path) -> None:
+        entry = str(path.resolve())
+        key = entry.casefold()
+        self._set_recent([entry] + [p for p in self.recent_projects() if p.casefold() != key])
+
+    def _fill_recent_menu(self) -> None:
+        menu = self.recent_menu
+        menu.clear()
+        paths = self.recent_projects()
+        if not paths:
+            menu.addAction("No Recent Projects").setEnabled(False)
+            return
+        for i, path in enumerate(paths):
+            name = Path(path).name.replace("&", "&&")  # a literal "&", not a mnemonic
+            action = menu.addAction(f"&{i + 1}  {name}" if i < 9 else f"{i + 1}  {name}")
+            action.setToolTip(path)
+            action.setStatusTip(path)
+            action.triggered.connect(lambda _checked=False, p=path: self._open_recent(p))
+        menu.addSeparator()
+        menu.addAction("&Clear List", lambda: self._set_recent([]))
+
+    def _open_recent(self, path: str) -> None:
+        if not Path(path).is_file():
+            QMessageBox.warning(self, APP_NAME, f"{Path(path).name} can't be found. It was removed from the list.")
+            self._set_recent([p for p in self.recent_projects() if p != path])
+            return
+        self.open_project(path)
 
     def _last_dir(self) -> str:
         return str(QSettings().value("files/last_dir", str(Path.home() / "Music")))
