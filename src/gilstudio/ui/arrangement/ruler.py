@@ -31,7 +31,7 @@ class TimelineRuler(QWidget):
         self.editor = editor
         self.project = editor.project
         self.selection = selection
-        self._playhead = 0.0
+        self._playhead: float | None = None
         self._drag: dict | None = None
         self.setFixedHeight(HEIGHT)
         self.setMouseTracking(True)
@@ -45,10 +45,12 @@ class TimelineRuler(QWidget):
 
     # --- Playhead ------------------------------------------------------------------
 
-    def set_playhead(self, beat: float) -> None:
+    def set_playhead(self, beat: float | None) -> None:
+        """None hides it (playback stopped)."""
         for b in (self._playhead, beat):
-            x = int(self.view.beat_to_x(b))
-            self.update(QRect(x - 6, 0, 13, self.height()))
+            if b is not None:
+                x = int(self.view.beat_to_x(b))
+                self.update(QRect(x - 6, 0, 13, self.height()))
         self._playhead = beat
 
     # --- Painting ------------------------------------------------------------------
@@ -92,12 +94,13 @@ class TimelineRuler(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(theme.INSERT_MARKER))
         p.drawPolygon(marker)
-        px = round(self.view.beat_to_x(self._playhead))
-        path = QPainterPath(QPointF(px - 5, self.height() - 8))
-        path.lineTo(px + 6, self.height() - 8)
-        path.lineTo(px + 0.5, self.height() - 1)
-        path.closeSubpath()
-        p.fillPath(path, QColor(theme.PLAYHEAD))
+        if self._playhead is not None:
+            px = round(self.view.beat_to_x(self._playhead))
+            path = QPainterPath(QPointF(px - 5, self.height() - 8))
+            path.lineTo(px + 6, self.height() - 8)
+            path.lineTo(px + 0.5, self.height() - 1)
+            path.closeSubpath()
+            p.fillPath(path, QColor(theme.PLAYHEAD))
 
     # --- Interaction ---------------------------------------------------------------
 

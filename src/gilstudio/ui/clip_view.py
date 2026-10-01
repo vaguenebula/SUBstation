@@ -233,7 +233,8 @@ class ClipView(QFrame):
     closed = Signal()
     locate_requested = Signal(float)
 
-    def __init__(self, editor: ProjectEditor, bridge: EngineBridge, parent: QWidget | None = None):
+    def __init__(self, editor: ProjectEditor, bridge: EngineBridge, parent: QWidget | None = None,
+                 selection=None):
         super().__init__(parent)
         self.editor = editor
         self.project = editor.project
@@ -366,7 +367,7 @@ class ClipView(QFrame):
         audio.setSpacing(0)
         audio.addWidget(scroll)
         audio.addWidget(self.waveform, 1)
-        self.piano_roll = PianoRoll(editor, bridge)
+        self.piano_roll = PianoRoll(editor, bridge, selection=selection)
         self.piano_roll.locate_requested.connect(self.locate_requested)
         self.body = QStackedWidget()
         self.body.addWidget(self.audio_page)

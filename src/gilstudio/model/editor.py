@@ -27,6 +27,7 @@ from .commands import (
     SetTempoCommand,
     UpdateSettingsCommand,
     UpdateTrackCommand,
+    UpdateTracksCommand,
 )
 from .project import (
     PLUGIN_KIND,
@@ -150,6 +151,22 @@ class ProjectEditor(QObject):
             self._push(UpdateTrackCommand(self.project, track_id, attr, old, value, labels[attr], merge_key))
         touched = {"volume_db": MIXER_VOLUME, "pan": MIXER_PAN}.get(attr)
         if touched:
+            self.parameter_touched.emit(track_id, touched)
+
+    def set_tracks_param(self, values: dict[str, float], attr: str, merge_key: object | None = None) -> None:
+        """volume_db or pan on several tracks (track id -> value) as one undo step."""
+        limits = (-70.0, 6.0) if attr == "volume_db" else (-1.0, 1.0)
+        new = {t: max(limits[0], min(limits[1], v)) for t, v in values.items()}
+        old = {t: getattr(self.project.track(t), attr) for t in new}
+        if len(new) == 1:
+            (track_id, value), = new.items()
+            self.set_track_param(track_id, attr, value, merge_key)
+            return
+        if new != old:
+            text = "Change Volume" if attr == "volume_db" else "Change Pan"
+            self._push(UpdateTracksCommand(self.project, attr, old, new, text, merge_key))
+        touched = MIXER_VOLUME if attr == "volume_db" else MIXER_PAN
+        for track_id in new:
             self.parameter_touched.emit(track_id, touched)
 
     def solo_tracks(self, track_ids, solo: bool, exclusive: bool = False) -> None:

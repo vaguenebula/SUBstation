@@ -9,8 +9,8 @@ import math
 from collections.abc import Callable
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QWheelEvent
-from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen, QWheelEvent
+from PySide6.QtWidgets import QLineEdit, QWidget
 
 from ... import theme
 
@@ -25,7 +25,8 @@ class Knob(QWidget):
     def __init__(self, minimum: float = 0.0, maximum: float = 1.0, value: float = 0.0, *,
                  default: float | None = None, bipolar: bool = False,
                  formatter: Callable[[float], str] | None = None, color: str = theme.ACCENT,
-                 log_scale: bool = False, step: float = 0.0, parent: QWidget | None = None):
+                 log_scale: bool = False, step: float = 0.0,
+                 parser: Callable[[str], float | None] | None = None, wheel: bool = True, parent: QWidget | None = None):
         super().__init__(parent)
         self._min = minimum
         self._max = maximum
@@ -38,7 +39,11 @@ class Knob(QWidget):
         self._color = QColor(color)
         self._drag: tuple[float, float, object] | None = None
         self._automation: str | None = None
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._wheel = wheel
+        self._parse = parser  # if set: typing a number edits
+        self._editor: QLineEdit | None = None
+        self.relative = True  # whether the last user change was a drag/wheel (vs typed or reset)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus if parser is None else Qt.FocusPolicy.ClickFocus)
         self.setMinimumSize(22, 22)
         self._update_tooltip()
 
@@ -126,6 +131,7 @@ class Knob(QWidget):
         if self._drag is None:
             return
         start_y, start_value, gesture = self._drag
+        self.relative = True
         pixels_for_full_range = 1000.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 150.0
         delta = (start_y - event.position().y()) / pixels_for_full_range
         self._set_from_user(self._from_fraction(self._fraction(start_value) + delta), gesture)
@@ -134,9 +140,44 @@ class Knob(QWidget):
         self._drag = None
 
     def mouseDoubleClickEvent(self, _event: QMouseEvent) -> None:
+        self.relative = False
         self._set_from_user(self._default, object())
 
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self._parse is not None and event.text() and event.text() in "0123456789-+.":
+            self._open_editor(event.text())
+        else:
+            super().keyPressEvent(event)
+
+    def _open_editor(self, initial: str) -> None:
+        if self._editor:
+            return
+        editor = QLineEdit(initial, self.window())
+        editor.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        width = max(48, editor.fontMetrics().horizontalAdvance("100%") + 16)
+        origin = self.mapTo(self.window(), self.rect().center())
+        editor.setGeometry(origin.x() - width // 2, origin.y() - 10, width, 20)
+        editor.show()
+        editor.raise_()
+        editor.setFocus()
+        editor.editingFinished.connect(lambda: self._close_editor(editor))
+        self._editor = editor
+
+    def _close_editor(self, editor: QLineEdit) -> None:
+        if self._editor is not editor:
+            return
+        self._editor = None
+        parsed = self._parse(editor.text()) if self._parse else None
+        editor.deleteLater()
+        if parsed is not None:
+            self.relative = False
+            self._set_from_user(parsed, object())
+
     def wheelEvent(self, event: QWheelEvent) -> None:
+        if not self._wheel:
+            event.ignore()
+            return
+        self.relative = True
         notches = event.angleDelta().y() / 120.0
         self._set_from_user(self._from_fraction(self._fraction(self._value) + notches / 50.0), object())
         event.accept()

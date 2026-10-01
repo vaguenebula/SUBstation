@@ -75,8 +75,10 @@ def search_paths(custom: list[str] | tuple[str, ...] = ()) -> list[Path]:
 
 def find_plugin_files(roots: list[Path] | None = None) -> list[str]:
     """The .vst3 bundles and files under the search paths (bundles are folders;
-    nothing inside one is listed)."""
+    nothing inside one is listed). Linked folders (symlinks, junctions) are
+    followed, each real folder once, so a link back up can't loop."""
     found: dict[str, str] = {}
+    seen: set[str] = set()  # real paths of the folders already listed
     for root in search_paths() if roots is None else roots:
         if root.suffix.lower() == ".vst3" and root.exists():
             found.setdefault(os.path.normcase(str(root)), str(root))
@@ -87,6 +89,10 @@ def find_plugin_files(roots: list[Path] | None = None) -> list[str]:
         while stack:
             folder = stack.pop()
             try:
+                real = os.path.normcase(os.path.realpath(folder))
+                if real in seen:
+                    continue
+                seen.add(real)
                 entries = list(os.scandir(folder))
             except OSError:
                 continue
@@ -95,7 +101,7 @@ def find_plugin_files(roots: list[Path] | None = None) -> list[str]:
                     found.setdefault(os.path.normcase(entry.path), entry.path)
                 else:
                     try:
-                        if entry.is_dir(follow_symlinks=False):
+                        if entry.is_dir():
                             stack.append(Path(entry.path))
                     except OSError:
                         continue
