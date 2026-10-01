@@ -123,6 +123,11 @@ public:
     std::string takeDeviceEvent();
     // The peak level of each open input channel since the last call.
     std::vector<float> takeInputMeters();
+    // The last `frames` samples of the master output (mono, oldest first; at
+    // most half the scope ring), and how many samples have been played in all
+    // (it stands still while no device runs).
+    std::vector<float> masterScope(size_t frames) const;
+    uint64_t masterScopeWritten() const { return shared_.scopeWritten.load(std::memory_order_acquire); }
 
     // --- Sources --------------------------------------------------------------
     std::shared_ptr<AudioSource> loadSource(const std::string& path);  // cached; blocking

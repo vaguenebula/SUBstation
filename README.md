@@ -28,6 +28,7 @@ editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
 - VST3 plug-ins, instruments and effects (see below).
 - Track headers (on the right, like Ableton): activator (mute), solo, volume, pan, meters, rename, colour, resize.
 - Master track (volume and pan), metronome, loop brace, follow mode, CPU meter.
+- An oscilloscope next to the transport controls shows the master output as it plays (as in FL Studio). It starts each picture at a rising zero crossing, so steady tones stand still.
 - **Automation**, as in Ableton's arrangement, of every device parameter (built-in devices and plug-ins alike) and of each track's and the master's volume and pan.
   - **A** shows (or hides) the automation of every track and the master. A track's automation shows in its own lane, over its clips (the clips' title bar still moves and selects them), with the parameter chosen in its header: a device chooser (*Mixer* or one of its devices) and a parameter chooser; automated ones are marked with a red dot. **+** shows another parameter in a lane below the track (**−** removes it). Right-click a track header (or the master's) to show or hide its automation.
   - Clicking a parameter (a knob, list or name in the device view, or a control in a plug-in's own editor) or changing one by hand (also a track's volume or pan, or the master's) shows its track's automation with that parameter.

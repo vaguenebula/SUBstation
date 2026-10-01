@@ -49,6 +49,9 @@ METER_LOW = QColor("#3fcf55")
 METER_MID = QColor("#f2d024")
 METER_HIGH = QColor("#ff4a3d")
 METER_BG = QColor("#141414")
+SCOPE_LINE = QColor("#ffb84d")
+SCOPE_GLOW = QColor(255, 166, 43, 60)
+SCOPE_AXIS = QColor(255, 255, 255, 22)
 
 MONO_FONT = "Consolas"
 

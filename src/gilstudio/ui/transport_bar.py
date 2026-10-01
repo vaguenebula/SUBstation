@@ -1,4 +1,4 @@
-"""Top control bar: tempo, time signature, metronome | transport | loop, follow, CPU."""
+"""Top control bar: tempo, time signature, metronome | transport, oscilloscope | loop, follow, CPU."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from ..model.editor import ProjectEditor
 from ..model.timebase import TimeSignature, VALID_DENOMINATORS, split_position
 from . import icons
 from .arrangement.view_state import ViewState
-from .widgets import ToggleButton, ValueBox
+from .widgets import Oscilloscope, ToggleButton, ValueBox
 
 
 class _ClickableLabel(QLabel):
@@ -71,6 +71,8 @@ class TransportBar(QWidget):
         self.position.setStyleSheet(
             f"background: {theme.SURFACE}; border: 1px solid {theme.BORDER}; border-radius: 3px; padding: 1px 6px;")
 
+        self.scope = Oscilloscope(bridge.engine)
+
         self.loop = ToggleButton(icon=icons.loop(), role="tool", tooltip="Loop (Ctrl+L)")
         self.follow = ToggleButton(icon=icons.follow(), role="tool", tooltip="Follow the playhead")
         self.follow.setChecked(view.follow)
@@ -94,6 +96,8 @@ class TransportBar(QWidget):
         layout.addStretch(1)
         for widget in (self.position, self.play, self.stop, self.record, self.re_enable, self.lock_envelopes):
             layout.addWidget(widget)
+        layout.addSpacing(6)
+        layout.addWidget(self.scope)
         layout.addStretch(1)
         for widget in (self.loop, self.follow, _separator(), self.cpu, self.device):
             layout.addWidget(widget)
