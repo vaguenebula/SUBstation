@@ -201,13 +201,21 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     context.loopEndBeat = snap.loopEnd / spb;
     context.offline = !flags.live;
 
+    // Solo follows routing: a soloed track keeps the buses it goes through heard,
+    // and a soloed bus everything that feeds it.
     bool anySolo = false;
+    for (const TrackRender& track : snap.tracks) track.params->soloHeld = false;
     for (const TrackRender& track : snap.tracks) {
-        if (track.params->solo.load(std::memory_order_relaxed)) {
-            anySolo = true;
-            break;
-        }
+        if (!track.params->solo.load(std::memory_order_relaxed)) continue;
+        anySolo = true;
+        for (const int ancestor : track.ancestors) snap.tracks[ancestor].params->soloHeld = true;
     }
+    const auto soloed = [&snap](const TrackRender& track) {
+        if (track.params->soloHeld || track.params->solo.load(std::memory_order_relaxed)) return true;
+        return std::any_of(track.ancestors.begin(), track.ancestors.end(), [&snap](int ancestor) {
+            return snap.tracks[ancestor].params->solo.load(std::memory_order_relaxed);
+        });
+    };
 
     if (recording_ && numSegments_ > 0) recordInput();
     if (wasPlaying_ && !playing_) releaseLiveNotes_ = true;
@@ -218,19 +226,30 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     std::fill_n(masterL, frames, 0.f);
     std::fill_n(masterR, frames, 0.f);
 
-    // 2. Tracks: clips and notes -> their strips -> the master's input.
+    // 2. Tracks, in routing order (each after what feeds it): clips and notes, and
+    // what goes into it -> its strip -> the bus it goes into, or the master.
+    for (const TrackRender& track : snap.tracks) {
+        if (track.bus) {
+            std::fill_n(track.bus->left.data(), frames, 0.f);
+            std::fill_n(track.bus->right.data(), frames, 0.f);
+        }
+    }
     for (size_t t = 0; t < snap.tracks.size(); ++t) {
         const TrackRender& track = snap.tracks[t];
-        float* left = trackLeft_.data();
-        float* right = trackRight_.data();
-        std::fill_n(left, frames, 0.f);
-        std::fill_n(right, frames, 0.f);
+        float* left = track.bus ? track.bus->left.data() : trackLeft_.data();  // a bus holds its inputs' sum already
+        float* right = track.bus ? track.bus->right.data() : trackRight_.data();
+        if (!track.bus) {
+            std::fill_n(left, frames, 0.f);
+            std::fill_n(right, frames, 0.f);
+        }
 
         const bool monitored = isMonitored(track, flags);
         if (monitored) {
             readInput(track.input, left, right, frames);
         } else {
-            for (int s = 0; s < numSegments_; ++s) renderClips(track, segments_[s], snap.clipFadeSamples, voices);
+            for (int s = 0; s < numSegments_; ++s) {
+                renderClips(track, segments_[s], snap.clipFadeSamples, voices, left, right);
+            }
         }
         const bool hearsMidi = hearsMidiInput(track, flags);
         MidiRecordingTake* take = recording_ ? midiTake(track.id) : nullptr;
@@ -243,14 +262,19 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
 
         DelayLine* delay = delayOverride_ ? (t < delayOverride_->size() ? (*delayOverride_)[t].get() : nullptr)
                                           : track.delay.get();
-        const TrackParams& params = *track.params;
-        const bool audible = !params.mute.load(std::memory_order_relaxed) &&
-                             (!anySolo || params.solo.load(std::memory_order_relaxed));
+        const bool audible = !track.params->mute.load(std::memory_order_relaxed) && (!anySolo || soloed(track));
         processStrip(snap, track, context, left, right, frames, audible, flags, delay,
                      compensationFor(track, monitored));
+        float* outL = masterL;
+        float* outR = masterR;
+        if (track.outputIndex >= 0) {
+            const TrackRender& to = snap.tracks[static_cast<size_t>(track.outputIndex)];
+            outL = to.bus->left.data();
+            outR = to.bus->right.data();
+        }
         for (int i = 0; i < frames; ++i) {
-            masterL[i] += left[i];
-            masterR[i] += right[i];
+            outL[i] += left[i];
+            outR[i] += right[i];
         }
     }
 
@@ -308,8 +332,12 @@ const float* Renderer::inputChannel(int index, int offset) const noexcept {
 }
 
 void Renderer::readInput(const InputEdge& input, float* left, float* right, int frames) const noexcept {
-    std::copy_n(inputChannel(input.left, 0), frames, left);
-    std::copy_n(inputChannel(input.right, 0), frames, right);
+    const float* inL = inputChannel(input.left, 0);
+    const float* inR = inputChannel(input.right, 0);
+    for (int i = 0; i < frames; ++i) {
+        left[i] += inL[i];
+        right[i] += inR[i];
+    }
 }
 
 void Renderer::recordInput() noexcept {
@@ -687,11 +715,11 @@ WarpVoice* Renderer::acquireVoice(const WarpVoiceSet& voices, const ClipRender& 
 }
 
 void Renderer::renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade,
-                           const WarpVoiceSet& voices) noexcept {
+                           const WarpVoiceSet& voices, float* left, float* right) noexcept {
     const int64_t segStart = segment.position;
     const int64_t segEnd = segStart + segment.length;
-    float* outL = trackLeft_.data() + segment.offset;
-    float* outR = trackRight_.data() + segment.offset;
+    float* outL = left + segment.offset;
+    float* outR = right + segment.offset;
 
     // Clips are sorted by start; no clip starting before this bound can reach the segment.
     const int64_t earliest = segStart - track.maxClipLength;

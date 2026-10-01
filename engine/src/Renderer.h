@@ -8,13 +8,18 @@
 // note sounds; stopping, locating and loop wraps release all sounding notes.
 //
 // Tracks and the master are strips (processStrip): devices, delay compensation,
-// fader and meter. The tracks' sum is the master's input.
+// fader and meter. A track's output goes into a bus (another track's input: a
+// group) or the master (Routing.h); the snapshot lists the tracks so that each
+// comes after what feeds it, so one pass renders them all. Mute and solo follow
+// the routing: a soloed bus is heard with everything that feeds it, and a
+// soloed track with the buses it goes through.
 //
 // Processors see continuous stretches of the timeline: a block the loop wraps
 // around in is processed in two parts. Tracks whose devices add less latency
-// than the slowest track are delayed to line up with it; the master's devices
-// add theirs after that. The metronome is delayed as much, so the output lags
-// the timeline by the snapshot's outputLatency().
+// than the slowest track going into the same bus (or the master) are delayed to
+// line up with it, at every level; the master's devices add theirs after that.
+// The metronome is delayed as much, so the output lags the timeline by the
+// snapshot's outputLatency().
 //
 // Automation: before each stretch a processor processes, the renderer hands it
 // its automated parameters' values over the stretch (Processor::automate): the
@@ -168,8 +173,9 @@ private:
                     bool live) noexcept;
     void fillLane(const AutomationRender& lane, int frames, float* out) const noexcept;
     static int64_t automationTime(int64_t t, int latency) noexcept { return t > latency ? t - latency : 0; }
+    // Adds the clips' audio over the segment to left/right (the chunk's buffers).
     void renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade,
-                     const WarpVoiceSet& voices) noexcept;
+                     const WarpVoiceSet& voices, float* left, float* right) noexcept;
     WarpVoice* acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept;
     void scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset) noexcept;
     void renderTicks(int frames) noexcept;

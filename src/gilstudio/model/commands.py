@@ -12,7 +12,7 @@ from typing import Any
 from PySide6.QtGui import QUndoCommand
 
 from .automation import Envelope
-from .project import Clip, Device, Project, Track
+from .project import Clip, Device, Project, Track, TrackTree
 
 _MERGE_ID = 0x6E1
 
@@ -274,3 +274,21 @@ class SetEnvelopeCommand(_MergeableCommand):
 
     def undo(self) -> None:
         self.project.set_envelope(*self.key, self.old)
+
+
+class ArrangeTracksCommand(QUndoCommand):
+    """Reorders the tracks and changes which group each is in (grouping,
+    ungrouping, moving tracks into or out of a group): `before`/`after` list
+    every track's (id, parent) in order."""
+
+    def __init__(self, project: Project, before: TrackTree, after: TrackTree, text: str):
+        super().__init__(text)
+        self.project = project
+        self.before = before
+        self.after = after
+
+    def redo(self) -> None:
+        self.project.arrange_tracks(self.after)
+
+    def undo(self) -> None:
+        self.project.arrange_tracks(self.before)

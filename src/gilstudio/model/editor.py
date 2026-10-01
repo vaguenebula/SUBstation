@@ -15,6 +15,7 @@ from . import automation, edits, notes
 from .automation import MASTER, MIXER_PAN, MIXER_VOLUME, AutomationView, Envelope
 from .keys import Key, clip_settings
 from .commands import (
+    ArrangeTracksCommand,
     InsertTrackCommand,
     RemoveTrackCommand,
     SetChainsCommand,
@@ -31,6 +32,7 @@ from .commands import (
     UpdateTracksCommand,
 )
 from .project import (
+    GROUP_KIND,
     MONITOR_MODES,
     PLUGIN_KIND,
     AnyClip,
@@ -43,10 +45,12 @@ from .project import (
     Project,
     Track,
     new_id,
+    tree_problem,
 )
 from .timebase import TimeSignature, seconds_to_beats
 
 ClipRef = tuple[str, str]  # (track id, clip id)
+AT_INDEX = object()  # a new track's group: the one where it is inserted (Project.parent_at)
 
 
 @dataclass(frozen=True)
@@ -117,32 +121,154 @@ class ProjectEditor(QObject):
 
     # --- Tracks -----------------------------------------------------------------
 
-    def add_audio_track(self, index: int | None = None, name: str | None = None) -> Track:
+    def _insert_track(self, track: Track, index: int | None, parent, text: str) -> Track:
+        """Insert a new track at `index` (None: last) in group `parent` (AT_INDEX: the
+        group at that place). A group it can't be in there gives way to that one."""
+        p = self.project
+        index = len(p.tracks) if index is None else max(0, min(index, len(p.tracks)))
+        track.parent = p.parent_at(index) if parent is AT_INDEX else parent
+        if tree_problem(p.tracks[:index] + [track] + p.tracks[index:]) is not None:
+            track.parent = p.parent_at(index)
+        self._push(InsertTrackCommand(p, track, index, text))
+        return p.track(track.id)
+
+    def insertion_point(self, track_id: str | None) -> tuple[int | None, str | None]:
+        """Where a track inserted "after" this one goes: after it and what is in it,
+        in its group. (None, None) without a track: last, in no group."""
+        if track_id is None or not self.project.has_track(track_id):
+            return None, None
+        index = self.project.track_index(track_id)
+        return self.project.subtree_end(index), self.project.track(track_id).parent
+
+    def add_audio_track(self, index: int | None = None, name: str | None = None, parent=AT_INDEX) -> Track:
         p = self.project
         track = Track(id=new_id(), name=name or p.unique_track_name(f"{len(p.tracks) + 1} Audio"),
                       color=p.next_color())
-        self._push(InsertTrackCommand(p, track, len(p.tracks) if index is None else index, "Insert Audio Track"))
-        return p.track(track.id)
+        return self._insert_track(track, index, parent, "Insert Audio Track")
 
     def add_midi_track(self, index: int | None = None, name: str | None = None,
-                       instrument: str | None = DEFAULT_INSTRUMENT, plugin: PluginRef | None = None) -> Track:
+                       instrument: str | None = DEFAULT_INSTRUMENT, plugin: PluginRef | None = None,
+                       parent=AT_INDEX) -> Track:
         """A MIDI track with a built-in `instrument`, or with an instrument `plugin`."""
         p = self.project
         devices = [new_device(PLUGIN_KIND, plugin)] if plugin else [new_device(instrument)] if instrument else []
         track = Track(id=new_id(), name=name or p.unique_track_name(f"{len(p.tracks) + 1} MIDI"),
                       color=p.next_color(), kind="midi", devices=devices)
-        self._push(InsertTrackCommand(p, track, len(p.tracks) if index is None else index, "Insert MIDI Track"))
+        track = self._insert_track(track, index, parent, "Insert MIDI Track")
         if plugin:
             self.plugin_added.emit(track.id, devices[0].id)
-        return p.track(track.id)
+        return track
 
     def delete_tracks(self, track_ids: list[str]) -> None:
-        if not track_ids:
+        """Delete tracks; a group goes with what is in it. One undo step."""
+        p = self.project
+        doomed = {t for t in track_ids if p.has_track(t)}
+        doomed |= {d.id for t in list(doomed) for d in p.descendants(t)}
+        if not doomed:
             return
-        self.undo_stack.beginMacro("Delete Track" if len(track_ids) == 1 else "Delete Tracks")
-        for track_id in track_ids:
-            self._push(RemoveTrackCommand(self.project, track_id))
+        self.undo_stack.beginMacro("Delete Track" if len(doomed) == 1 else "Delete Tracks")
+        # The last first: undo brings back each group before what is in it.
+        for track in reversed(p.tracks):
+            if track.id in doomed:
+                self._push(RemoveTrackCommand(p, track.id))
         self.undo_stack.endMacro()
+
+    # --- Groups -------------------------------------------------------------------
+
+    def _roots(self, track_ids) -> list[str]:
+        """The tracks among these that aren't in a group among them, in track order."""
+        p = self.project
+        wanted = {t for t in track_ids if p.has_track(t)}
+        return [t.id for t in p.tracks if t.id in wanted and not any(a in wanted for a in p.ancestors(t.id))]
+
+    def _arranged(self, roots: list[str], at: int, parent: str | None) -> list[tuple[str, str | None]]:
+        """The tree with these tracks (and what is in them) taken out and put, in
+        their order, before the track at `at` (in the tree as it is), in `parent`."""
+        p = self.project
+        moving = set(roots) | {d.id for r in roots for d in p.descendants(r)}
+        staying = [(t.id, t.parent) for t in p.tracks if t.id not in moving]
+        block = [(t.id, parent if t.id in roots else t.parent) for t in p.tracks if t.id in moving]
+        position = sum(1 for t in p.tracks[:max(0, at)] if t.id not in moving)
+        return staying[:position] + block + staying[position:]
+
+    def _arrange(self, tree, text: str) -> None:
+        tree = tuple(tree)
+        if tree != self.project.tree():
+            self._push(ArrangeTracksCommand(self.project, self.project.tree(), tree, text))
+
+    def _valid(self, tree) -> bool:
+        tracks = {t.id: t for t in self.project.tracks}
+        arranged = [Track(id=i, name=tracks[i].name, color="", kind=tracks[i].kind, parent=parent) for i, parent in tree]
+        return tree_problem(arranged) is None
+
+    def group_tracks(self, track_ids) -> Track | None:
+        """Ctrl+G: a new group holding these tracks (and what is in them), where
+        the first of them was, in its group. One undo step; the new group."""
+        p = self.project
+        roots = self._roots(track_ids)
+        if not roots:
+            return None
+        first = p.track(roots[0])
+        index = p.track_index(first.id)
+        group = Track(id=new_id(), name=p.unique_track_name(f"{len(p.tracks) + 1} Group"), color=p.next_color(),
+                      kind=GROUP_KIND, parent=first.parent)
+        text = "Group Tracks"
+        self.undo_stack.beginMacro(text)
+        try:
+            self._push(InsertTrackCommand(p, group, index, text))
+            self._arrange(self._arranged(roots, p.track_index(group.id) + 1, group.id), text)
+        finally:
+            self.undo_stack.endMacro()
+        return p.track(group.id)
+
+    def ungroup(self, group_ids) -> None:
+        """Ctrl+Shift+G: the groups go, and what was in them takes their place, in
+        their groups. One undo step."""
+        p = self.project
+        groups = [t for t in self._roots(group_ids) if p.track(t).is_group]
+        groups += [d.id for g in list(groups) for d in p.descendants(g) if d.is_group and d.id in set(group_ids)]
+        if not groups:
+            return
+        text = "Ungroup Tracks"
+        self.undo_stack.beginMacro(text)
+        try:
+            tree = list(p.tree())
+            for group_id in groups:
+                parent = dict(tree)[group_id]
+                tree = [(t, parent if t_parent == group_id else t_parent) for t, t_parent in tree]
+            self._arrange(tree, text)
+            for group_id in reversed(groups):
+                self._push(RemoveTrackCommand(p, group_id, text))
+        finally:
+            self.undo_stack.endMacro()
+
+    def can_move_tracks(self, track_ids, index: int, parent: str | None) -> bool:
+        """Whether move_tracks would do something with these."""
+        p = self.project
+        roots = self._roots(track_ids)
+        if not roots or (parent is not None and (not p.has_track(parent) or not p.track(parent).is_group)):
+            return False
+        if parent in roots or any(parent is not None and p.is_descendant(parent, r) for r in roots):
+            return False  # a group can't go into itself
+        tree = self._arranged(roots, index, parent)
+        return tuple(tree) != p.tree() and self._valid(tree)
+
+    def move_tracks(self, track_ids, index: int, parent: str | None) -> bool:
+        """Move tracks (and what is in them) to before the track at `index` (as the
+        tracks are now; past the end: last), into group `parent` (None: none). One
+        undo step; False if they can't go there (a group into itself, or amid
+        another group's tracks)."""
+        if not self.can_move_tracks(track_ids, index, parent):
+            return False
+        roots = self._roots(track_ids)
+        self._arrange(self._arranged(roots, index, parent), "Move Track" if len(roots) == 1 else "Move Tracks")
+        return True
+
+    def set_folded(self, track_id: str, folded: bool) -> None:
+        """Fold or unfold a track: folded, it is a thin row without its automation;
+        a folded group hides what is in it. View state: saved, not undone."""
+        if self.project.track(track_id).folded != folded:
+            self.project.update_track(track_id, folded=folded)
 
     def rename_track(self, track_id: str, name: str) -> None:
         old = self.project.track(track_id).name
@@ -232,6 +358,8 @@ class ProjectEditor(QObject):
         track is disarmed. Like heights, arming is saved but not undone."""
         track_ids = set(track_ids)
         for track in self.project.tracks:
+            if track.is_group:
+                continue  # nothing to record
             wanted = armed if track.id in track_ids else (track.armed and not (exclusive and armed))
             if wanted != track.armed:
                 self.project.update_track(track.id, armed=wanted)
@@ -398,14 +526,14 @@ class ProjectEditor(QObject):
     def add_clips(self, track_id: str | None, start_beat: float, sources: list[tuple[str, float]],
                   track_index: int | None = None) -> list[ClipRef]:
         """Place audio files one after another; `sources` is [(path, duration_sec)].
-        With no track id (or a MIDI track's) a new audio track is created (at `track_index`).
+        With no track id (or one of a MIDI or group track) a new audio track is created (at `track_index`).
         A tempo or key in a file's name sets up its clip (see keys.clip_settings):
         loops and long files are warped, and audio is transposed to the project's key."""
         if not sources:
             return []
         self.undo_stack.beginMacro("Add Clip" if len(sources) == 1 else "Add Clips")
         try:
-            if track_id is None or self.project.track(track_id).is_midi:
+            if track_id is None or not self.project.track(track_id).is_audio:
                 track_id = self.add_audio_track(index=track_index, name=Path(sources[0][0]).stem).id
             tempo = self.project.tempo
             clips = list(self.project.track(track_id).clips)

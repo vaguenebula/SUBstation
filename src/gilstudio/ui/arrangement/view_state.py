@@ -14,6 +14,8 @@ from ...model.project import Project
 
 GRID_MIN_PIXELS = {-2: 6.0, -1: 11.0, 0: 20.0, 1: 40.0, 2: 80.0}  # narrowest .. widest
 AUTOMATION_LANE_HEIGHT = 44  # a lane shown below a track (or the master)
+FOLDED_HEIGHT = 28  # a folded track: its name row, with room around it
+FOLDED_GROUP_HEIGHT = 32  # a folded group: a little taller, so it stands out
 # A track's own lane while its automation shows: room in its header for the choosers.
 MIN_AUTOMATION_ROW = 76
 
@@ -304,13 +306,19 @@ class LaneRow:
 @dataclass(frozen=True)
 class Row:
     """A track: its own lane (clips; its automation too while that shows), then
-    the automation lanes shown below it."""
+    the automation lanes shown below it. A track in a folded group has a row
+    too, but `hidden`, with no height: rows stay one per track, in order. A
+    folded track's row is FOLDED_HEIGHT high (a folded group's a little more,
+    FOLDED_GROUP_HEIGHT); neither shows automation."""
 
     track_id: str
     top: int
     main_height: int  # the track's own lane
     lanes: tuple[LaneRow, ...] = ()
     automation: bool = False  # its automation shows
+    hidden: bool = False  # in a folded group
+    folded: bool = False  # the track itself is folded
+    depth: int = 0  # how many groups it is in
 
     @property
     def height(self) -> int:
@@ -344,19 +352,36 @@ class TrackLayout:
     def rebuild(self) -> None:
         self.rows = []
         y = 0
+        folded: set[str] = set()  # folded groups, and the groups in them
         for track in self.project.tracks:
-            view = track.automation_view
-            main_height, lanes = automation_rows(view, y, track.height)
-            row = Row(track.id, y, main_height, lanes, view.shown)
+            hidden = track.parent in folded
+            if track.is_group and (hidden or track.folded):
+                folded.add(track.id)
+            depth = 0 if track.parent is None else next(r.depth for r in reversed(self.rows)
+                                                        if r.track_id == track.parent) + 1
+            if hidden:
+                row = Row(track.id, y, 0, hidden=True, depth=depth)
+            elif track.folded:  # just its name row, no automation
+                row = Row(track.id, y, FOLDED_GROUP_HEIGHT if track.is_group else FOLDED_HEIGHT, folded=True,
+                          depth=depth)
+            else:
+                view = track.automation_view
+                main_height, lanes = automation_rows(view, y, track.height)
+                row = Row(track.id, y, main_height, lanes, view.shown, depth=depth)
             self.rows.append(row)
             y += row.height
         self._tops = [r.top for r in self.rows]
         self.total_height = y
 
     def row_index_at(self, content_y: float) -> int | None:
+        """The row at a height (never a hidden one: it has none, and the row
+        shown after it starts where it does)."""
         if content_y < 0 or content_y >= self.total_height:
             return None
         return bisect.bisect_right(self._tops, content_y) - 1
+
+    def last_shown_index(self) -> int | None:
+        return next((i for i in range(len(self.rows) - 1, -1, -1) if not self.rows[i].hidden), None)
 
     def row_for(self, track_id: str) -> Row | None:
         for row in self.rows:
@@ -371,5 +396,6 @@ class TrackLayout:
             row = self.rows[index]
             if row.top >= bottom:
                 break
-            result.append((index, row))
+            if not row.hidden:
+                result.append((index, row))
         return result

@@ -21,6 +21,10 @@ namespace gil {
 // Per-track state that changes continuously and therefore lives outside the
 // snapshot. Shared between all snapshots that contain the track. The master
 // has one too (it never mutes or solos).
+//
+// Solo follows routing: soloing a bus (a group) makes what feeds it heard, and
+// soloing a track keeps the buses it goes through heard (but not the other
+// tracks in them).
 struct TrackParams {
     // Written by the API, read by the audio thread.
     std::atomic<float> gain{1.f};
@@ -40,6 +44,7 @@ struct TrackParams {
     SmoothedValue panLeft;
     SmoothedValue panRight;
     double smoothingSampleRate = 0.0;
+    bool soloHeld = false;  // audio-thread scratch, per chunk: something soloed goes through this strip
 };
 
 // An automation envelope as the renderer plays it: a processor's parameter, or
@@ -50,10 +55,10 @@ struct AutomationRender {
     int param = 0;                         // the processor's parameter index
     int steps = 0;                         // > 0: a discrete parameter (values snap to its steps)
     int insert = -1;                       // the processor's place in the strip's chain
-    // How late the target hears the timeline: the latency of the devices before
-    // it (for a fader, the strip's delay-compensated total; on the master, the
-    // tracks' latency comes first). Its automation is delayed as much, so it
-    // stays with the audio.
+    // How late the target hears the timeline: the latency on its path before it
+    // (what feeds its strip, then the devices before it; for a fader, the
+    // strip's delay-compensated total). Its automation is delayed as much, so
+    // it stays with the audio.
     int latency = 0;
 
     bool empty() const noexcept { return nodes.empty(); }
@@ -180,8 +185,27 @@ struct MidiInputRoute {
     }
 };
 
+// What feeds a bus, summed: a strip that other strips output into. Rendering-
+// thread scratch (cleared every chunk); the edit side allocates it and keeps it
+// across snapshots, like a DelayLine.
+struct BusBuffer {
+    std::vector<float> left, right;
+    explicit BusBuffer(int frames) : left(static_cast<size_t>(frames), 0.f), right(static_cast<size_t>(frames), 0.f) {}
+};
+
+// A track in the routing graph (Routing.h). The snapshot lists tracks in an
+// order in which each comes after everything that feeds it; `outputIndex` is
+// where its output goes. A track's input is its clips and notes (or the live
+// input), plus whatever other tracks output into it (`bus`).
 struct TrackRender : StripRender {
     uint32_t id = 0;
+    int outputIndex = -1;           // the snapshot track its output goes into; -1: the master
+    int inputCount = 0;             // tracks that output into it (a scheduler could run it once they are done)
+    // How late it hears what feeds it. (Its own clips and notes play on time:
+    // they aren't delayed to line up with its inputs. Groups have none.)
+    int inputLatency = 0;
+    std::vector<int> ancestors;     // the buses its output goes through to the master, nearest first
+    std::shared_ptr<BusBuffer> bus; // where its inputs are summed (null: nothing feeds it)
     InputEdge input;
     MidiInputRoute midiInput;
     MonitorMode monitor = MonitorMode::Auto;
@@ -201,7 +225,7 @@ struct RenderSnapshot {
     int64_t loopEnd = 0;
     int64_t clipFadeSamples = 0;
     int maxLatency = 0;  // the tracks reach the master this late (delay-compensated alike)
-    std::vector<TrackRender> tracks;
+    std::vector<TrackRender> tracks;  // in routing order: every track after those that feed it
     StripRender master;  // its params are null in a snapshot made without an engine
     WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
 

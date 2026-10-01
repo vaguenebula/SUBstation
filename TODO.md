@@ -122,44 +122,94 @@ Tests
 ## Phase 5 — Group tracks (bus tree)
 
 Model
-- [ ] `Track.parent: str | None`, `kind="group"`; `project.tracks` stays flat.
-- [ ] Invariant: a group's descendants follow it contiguously. Validate in
+- [x] `Track.parent: str | None`, `kind="group"`; `project.tracks` stays flat.
+- [x] Invariant: a group's descendants follow it contiguously. Validate in
       every command that reorders or regroups.
-- [ ] `folded` as view state (saved, not undone).
-- [ ] Commands: group selected tracks (Ctrl+G), ungroup, move into / out of a
+- [x] `folded` as view state (saved, not undone).
+- [x] Commands: group selected tracks (Ctrl+G), ungroup, move into / out of a
       group, delete group (with or without contents).
 
 Engine
-- [ ] Strip `output` = bus id (0: master). The engine sees routing, not groups.
-- [ ] Routing is a general graph, not a tree: strips are nodes, and bus
+- [x] Strip `output` = bus id (0: master). The engine sees routing, not groups.
+- [x] Routing is a general graph, not a tree: strips are nodes, and bus
       outputs (later sends, sidechains, resampling) are all edges. The snapshot
       topologically sorts it; `TrackRender.outputIndex` points at its
       destination's buffer. Each node carries its input count, so a future
       parallel scheduler can run any strip whose inputs are done (dependency
       counters, not "children before parent" levels).
-- [ ] No cycles: the model rejects an edge that would close one (a group fed by
+- [x] No cycles: the model rejects an edge that would close one (a group fed by
       its own descendant, A↔B); the snapshot builder asserts the graph is acyclic.
-- [ ] Bus accumulation buffers (`kMaxBlock`) allocated edit-side, kept across
+- [x] Bus accumulation buffers (`kMaxBlock`) allocated edit-side, kept across
       snapshots in `TrackModel` (like `DelayLine`).
-- [ ] Delay compensation at every summing point, bottom-up:
+- [x] Delay compensation at every summing point, bottom-up:
       `arrival = inputLatency + ownInserts`, `inputLatency(bus) = max(arrival of its inputs)`,
       `compensation(child) = inputLatency(bus) − arrival(child)`. One function,
       reused by racks.
-- [ ] Automation latency per target = latency before that point on its path.
-- [ ] Solo: soloing a group solos its contents; soloing a track keeps its
+- [x] Automation latency per target = latency before that point on its path.
+- [x] Solo: soloing a group solos its contents; soloing a track keeps its
       ancestor groups audible. Ancestor indices in the snapshot; audibility
       worked out once per chunk from the solo atomics.
 
 UI
-- [ ] Track headers: group header with fold toggle, indentation, group colour band.
-- [ ] Arrangement: folded groups show a summary lane; drag tracks into/out of groups.
-- [ ] Group automation lanes and devices (free: groups are tracks).
+- [x] Track headers: group header with fold toggle, indentation, group colour band.
+- [x] Arrangement: folded groups show a summary lane; drag tracks into/out of groups.
+- [x] Group automation lanes and devices (free: groups are tracks).
 
 Tests
-- [ ] Group effect processes the sum of its children.
-- [ ] Compensation: nested groups, unbalanced trees, latent plug-ins on a group.
-- [ ] Solo/mute combinations across levels.
-- [ ] Group/ungroup/undo round-trips; serialization.
+- [x] Group effect processes the sum of its children.
+- [x] Compensation: nested groups, unbalanced trees, latent plug-ins on a group.
+- [x] Solo/mute combinations across levels.
+- [x] Group/ungroup/undo round-trips; serialization.
+
+---
+
+## Phase 5½ — Parallel track processing
+
+Before racks: Phase 6 adds scratch state (buffers per nesting depth), which
+should be per worker from the start. Phase 5's graph (topological order,
+`outputIndex`, `inputCount`) is what the scheduler runs. A strip's own chain
+(and later a rack's chains) stays serial on one worker; parallel rack chains
+come later.
+
+Engine — untangle shared state first (useful and testable on one thread)
+- [ ] Per-track output buffers, allocated edit-side and kept in `TrackModel`
+      (like `bus`), replacing the shared `trackLeft_` / `trackRight_`.
+- [ ] Buses pull instead of children pushing: `TrackRender.inputs` (indices);
+      a bus sums its inputs' buffers in a fixed order when it starts, and the
+      master sums its inputs in order after the graph. No two threads write one
+      buffer, and the result doesn't depend on which thread finishes first.
+- [ ] `WorkerScratch` (warp buffers, `autoGain_`, `autoPan*_`, events),
+      one per worker, allocated in `Renderer::prepare`.
+- [ ] MIDI in a serial prologue: build every track's events (active, live,
+      preview and input notes, MIDI recording) before the graph, into per-track
+      event buffers.
+- [ ] Split `renderChunk`: serial prologue (segments, solo, recording input,
+      MIDI) → graph (`renderTrack(t, scratch)`) → serial epilogue (master sum,
+      master strip, metronome).
+
+Engine — scheduler
+- [ ] `Scheduler`: a fixed pool of workers plus the audio thread; workers join
+      MMCSS ("Pro Audio") and set `ScopedNoDenormals` every chunk.
+- [ ] Per chunk: reset each node's counter to `inputCount`, queue the nodes
+      with none; a finished node decrements its destination's counter and
+      queues it at zero. Lock-free, no allocation; idle workers spin briefly,
+      then wait on a semaphore.
+- [ ] Serial fallback below a threshold (few tracks, small blocks), where
+      waking workers costs more than it saves.
+- [ ] Offline render / export use the same path.
+- [ ] Later: measure per-strip cost and start the most expensive path first.
+
+Model / UI
+- [ ] Preferences: number of audio worker threads (default: cores − 1; 1 = off).
+
+Tests
+- [ ] Benchmark first: N tracks of the built-in synth / a heavy plug-in,
+      serial vs. parallel.
+- [ ] Offline renders are bit-identical with and without workers: random
+      graphs, nested groups, latent plug-ins, solo/mute.
+- [ ] Stress: many tracks, many runs (no thread sanitizer on MSVC).
+- [ ] A plug-in processed on different workers across blocks keeps its state.
+- [ ] Held, preview and recorded MIDI notes behave as before.
 
 ---
 

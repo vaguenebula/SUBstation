@@ -22,7 +22,7 @@ from .track_headers import MASTER_HEIGHT, MasterHeader, MasterLane, TrackHeaderC
 from .view_state import Selection, TrackLayout, ViewState, automation_rows
 from .waveform_cache import WaveformCache
 
-HEADER_WIDTH = 236
+HEADER_WIDTH = 252
 DROP_ZONE = 120  # empty space below the last track for dropping files
 
 
@@ -101,7 +101,7 @@ class ArrangementView(QWidget):
         grid.setRowStretch(1, 1)
 
         p = self.project
-        for signal in (p.track_inserted, p.track_removed):
+        for signal in (p.track_inserted, p.track_removed, p.tracks_arranged):
             signal.connect(self._on_structure_changed)
         p.reset.connect(self._on_reset)
         p.track_changed.connect(self._on_track_changed)
@@ -170,9 +170,10 @@ class ArrangementView(QWidget):
 
     def _on_track_changed(self, track_id: str) -> None:
         old_height = self.layout_model.total_height
+        old_row = self.layout_model.row_for(track_id)
         self.layout_model.rebuild()
         self.headers.refresh(track_id)
-        if self.layout_model.total_height != old_height:
+        if self.layout_model.total_height != old_height or self.layout_model.row_for(track_id) != old_row:
             self.headers.relayout()
             self._update_vbar()
         self.lanes.update()

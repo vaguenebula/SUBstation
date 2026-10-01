@@ -1,6 +1,7 @@
 #include "Engine.h"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cwctype>
@@ -10,6 +11,7 @@
 #include <utility>
 
 #include "PathUtils.h"
+#include "Routing.h"
 #include "miniaudio.h"
 #include "plugins/Vst3Format.h"
 #include "processors/Ott.h"
@@ -333,6 +335,9 @@ uint32_t Engine::addTrack() {
 void Engine::removeTrack(uint32_t trackId) {
     std::lock_guard lock(mutex_);
     arrangementTrackLocked(trackId);
+    for (TrackModel& track : tracks_) {  // what went into it goes to the master
+        if (track.output == trackId) track.output = kMaster;
+    }
     // Its chains go, with their devices.
     for (auto it = processors_.begin(); it != processors_.end();) {
         if (chainLocked(it->second.chainId).stripId == trackId) {
@@ -388,6 +393,40 @@ void Engine::setTrackMute(uint32_t trackId, bool mute) {
 void Engine::setTrackSolo(uint32_t trackId, bool solo) {
     std::lock_guard lock(mutex_);
     trackLocked(trackId).params->solo.store(solo);
+}
+
+int Engine::trackIndexLocked(uint32_t trackId) const {
+    for (size_t i = 0; i < tracks_.size(); ++i) {
+        if (tracks_[i].id == trackId) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+std::vector<int> Engine::outputIndicesLocked() const {
+    std::vector<int> outputs;
+    outputs.reserve(tracks_.size());
+    for (const TrackModel& track : tracks_) outputs.push_back(track.output == kMaster ? -1 : trackIndexLocked(track.output));
+    return outputs;
+}
+
+void Engine::setTrackOutput(uint32_t trackId, uint32_t outputTrackId) {
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    if (outputTrackId != kMaster) {
+        arrangementTrackLocked(outputTrackId);
+        if (wouldCycle(outputIndicesLocked(), trackIndexLocked(trackId), trackIndexLocked(outputTrackId))) {
+            throw std::invalid_argument("Track " + std::to_string(trackId) + " can't go into track " +
+                                        std::to_string(outputTrackId) + ": that track feeds it");
+        }
+    }
+    if (track.output == outputTrackId) return;
+    track.output = outputTrackId;
+    rebuildSnapshotLocked();
+}
+
+uint32_t Engine::trackOutput(uint32_t trackId) {
+    std::lock_guard lock(mutex_);
+    return arrangementTrackLocked(trackId).output;
 }
 
 std::vector<MeterReading> Engine::takeMeters() {
@@ -1156,16 +1195,35 @@ void Engine::rebuildSnapshotLocked() {
     snap->loopEnabled = loopEnabled_ && snap->loopEnd - snap->loopStart >= 256;
     snap->clipFadeSamples = std::llround(clipFadeMs_ * 0.001 * sampleRate_);
 
-    // Plug-in delay compensation: each track is delayed to line up with the one
-    // whose enabled devices add the most latency.
-    std::vector<int> latencies;
-    latencies.reserve(tracks_.size());
-    for (const TrackModel& track : tracks_) {
-        latencies.push_back(insertLatency(insertsLocked(track)));
-        snap->maxLatency = std::max(snap->maxLatency, latencies.back());
+    // Routing: the tracks in an order in which each comes after what feeds it.
+    std::vector<int> outputs = outputIndicesLocked();
+    std::vector<int> order = topologicalOrder(outputs);
+    if (order.size() != tracks_.size()) {
+        // setTrackOutput() refuses cycles, so there is none; were there one, the
+        // tracks would play straight into the master.
+        assert(false && "the routing graph has a cycle");
+        for (TrackModel& track : tracks_) track.output = kMaster;
+        outputs = outputIndicesLocked();
+        order = topologicalOrder(outputs);
+    }
+    std::vector<int> position(tracks_.size());  // tracks_ index -> snapshot index
+    for (size_t i = 0; i < order.size(); ++i) position[order[i]] = static_cast<int>(i);
+    std::vector<int> inputCounts(tracks_.size(), 0);
+    for (const int out : outputs) {
+        if (out >= 0) ++inputCounts[out];
     }
 
-    // The master: its input is the tracks' sum, which comes maxLatency late.
+    // Plug-in delay compensation at every summing point, bottom-up: each bus (and
+    // the master) hears its inputs as late as the latest of them, which their
+    // enabled devices (and those of what feeds them) make; the others are delayed
+    // to line up with it.
+    std::vector<int> latencies;
+    latencies.reserve(tracks_.size());
+    for (const TrackModel& track : tracks_) latencies.push_back(insertLatency(insertsLocked(track)));
+    const GraphLatencies aligned = alignGraph(order, outputs, latencies);
+    snap->maxLatency = aligned.masterInput;
+
+    // The master: its input is the sum of what goes into it, which comes maxLatency late.
     StripRender& master = snap->master;
     master.params = master_.params;
     master.inserts = insertsLocked(master_);
@@ -1175,23 +1233,34 @@ void Engine::rebuildSnapshotLocked() {
     const auto rate = static_cast<uint32_t>(sampleRate_);
     std::array<size_t, kNumStretchConfigs> voicesNeeded{};
     snap->tracks.reserve(tracks_.size());
-    for (size_t t = 0; t < tracks_.size(); ++t) {
+    for (const int t : order) {
         TrackModel& track = tracks_[t];
         TrackRender render;
         render.id = track.id;
         render.params = track.params;
         render.inserts = insertsLocked(track);
         render.latency = latencies[t];
-        render.compensation = snap->maxLatency - latencies[t];
+        render.inputLatency = aligned.inputLatency[t];
+        render.compensation = aligned.compensation[t];
         if (render.compensation > 0 && (!track.delay || track.delay->capacity() <= render.compensation)) {
             track.delay = std::make_shared<DelayLine>(2 * render.compensation + Renderer::kMaxBlock);
         }
         render.delay = track.delay;
+        render.outputIndex = outputs[t] >= 0 ? position[outputs[t]] : -1;
+        for (int node = outputs[t]; node >= 0; node = outputs[node]) render.ancestors.push_back(position[node]);
+        render.inputCount = inputCounts[t];
+        if (render.inputCount > 0) {
+            if (!track.bus) track.bus = std::make_shared<BusBuffer>(Renderer::kMaxBlock);
+            render.bus = track.bus;
+        }
         render.input = inputEdgeLocked(track);
         render.midiInput = track.midiInput;
         render.monitor = track.monitor;
         render.armed = track.armed;
-        buildAutomationLocked(track, 0, snap->maxLatency, spb, render);
+        // Its devices hear the timeline as late as its input; its fader as late as
+        // the summing point it goes into.
+        const int faderLatency = render.inputLatency + render.latency + render.compensation;
+        buildAutomationLocked(track, render.inputLatency, faderLatency, spb, render);
         render.notes.reserve(track.notes.size());
         for (const NoteDesc& note : track.notes) {
             NoteRender nr;

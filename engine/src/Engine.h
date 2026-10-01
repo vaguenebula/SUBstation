@@ -1,6 +1,10 @@
 #pragma once
 // Public engine API used by the Python bindings.
 //
+// Routing (Routing.h): every track's output goes to the master or into another
+// track (a bus: a group track). The snapshot lists the tracks so that each
+// comes after what feeds it, and lines up the inputs of every bus.
+//
 // Threading model:
 //  * The audio thread (device callback) only reads the published RenderSnapshot
 //    and atomics. It never locks, allocates, frees, or touches Python.
@@ -186,6 +190,14 @@ public:
     void setTrackPan(uint32_t trackId, float pan);
     void setTrackMute(uint32_t trackId, bool mute);
     void setTrackSolo(uint32_t trackId, bool solo);
+    // Routing: where a track's output goes, the master (kMaster) or another
+    // track, which then sums it into its own input (a group's bus). The engine
+    // sees only these edges, never groups. Throws std::invalid_argument for an
+    // unknown track, or a route that would close a cycle (a track into itself,
+    // or into a track it feeds). When a track goes, what went into it goes to
+    // the master. Delay compensation lines up the inputs of every bus.
+    void setTrackOutput(uint32_t trackId, uint32_t outputTrackId);
+    uint32_t trackOutput(uint32_t trackId);
     void setMasterGain(float gain) { setTrackGain(kMaster, gain); }
     void setMasterPan(float pan) { setTrackPan(kMaster, pan); }
     std::vector<MeterReading> takeMeters();
@@ -317,6 +329,8 @@ private:
         std::vector<NoteDesc> notes;
         uint32_t chainId = 0;               // its main chain
         std::shared_ptr<DelayLine> delay;   // delay compensation, kept across snapshots
+        uint32_t output = 0;                // where its output goes: kMaster or a track (a routing edge)
+        std::shared_ptr<BusBuffer> bus;     // its inputs' sum, while tracks output into it; kept across snapshots
         std::vector<AutomationLaneDesc> automation;
         std::vector<int> inputChannels;  // device channels: the input edge
         MidiInputRoute midiInput;
@@ -370,11 +384,15 @@ private:
     void resetProcessorsLocked();
     void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
     // A strip's envelopes in the snapshot, in samples. `inputLatency`: how late
-    // the strip's input hears the timeline (0 for a track; the tracks' latency
-    // for the master). Its devices hear it that much later, plus the latency of
-    // the devices before them; its fader after all of them and its compensation.
+    // the strip's input hears the timeline (0 for a track fed by nothing else; for
+    // a bus or the master, as late as the latest of what feeds it). Its devices
+    // hear it that much later, plus the latency of the devices before them; its
+    // fader after all of them and its compensation (`faderLatency`).
     void buildAutomationLocked(const TrackModel& track, int inputLatency, int faderLatency, double samplesPerBeat,
                                StripRender& strip);
+    // The tracks' outputs as indices into tracks_ (-1: the master).
+    std::vector<int> outputIndicesLocked() const;
+    int trackIndexLocked(uint32_t trackId) const;  // -1: the master (or none)
     static int insertLatency(const std::vector<std::shared_ptr<Processor>>& inserts);
     static std::string sourceKey(const std::string& path);
 
