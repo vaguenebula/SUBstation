@@ -89,6 +89,7 @@ private:
         int length;
         int offset;
         bool jump;  // the playhead jumped here (locate, loop wrap): sounding notes stop
+        bool chase;  // playback starts here: notes already underway sound
     };
     struct Tick {
         int offset;
@@ -140,6 +141,7 @@ private:
     int64_t position_ = 0;
     int64_t expectedPosition_ = -1;  // where playback continues if the playhead doesn't jump
     bool playing_ = false;
+    bool chasePending_ = false;  // playback just started: its first segment chases notes
 
     std::vector<float> trackLeft_, trackRight_, masterLeft_, masterRight_;
     std::vector<float> warpLeft_, warpRight_;  // one warped clip's audio, before gain and fades

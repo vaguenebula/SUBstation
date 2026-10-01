@@ -357,7 +357,7 @@ class NoteGrid(QWidget):
             # Qt may report Alt+wheel as horizontal scrolling, so accept either axis.
             self.roll.zoom_rows((delta.y() or delta.x()) / 120.0, event.position().y())
         elif mods & Qt.KeyboardModifier.ControlModifier:
-            view.zoom_at(event.position().x(), 1.15 ** (delta.y() / 120.0))
+            view.zoom_at(event.position().x(), 1.2 ** (delta.y() / 120.0))
         elif mods & Qt.KeyboardModifier.ShiftModifier or delta.x():
             pixels = -(delta.x() or delta.y()) / 120.0 * 80.0
             view.set_scroll_beats(view.scroll_beats + pixels / view.px_per_beat)
