@@ -18,6 +18,14 @@ FOLDED_HEIGHT = 28  # a folded track: its name row, with room around it
 FOLDED_GROUP_HEIGHT = 32  # a folded group: a little taller, so it stands out
 # A track's own lane while its automation shows: room in its header for the choosers.
 MIN_AUTOMATION_ROW = 76
+# The send knobs' row in a track's header, while there are return tracks (below
+# volume and pan): the choosers go below it.
+SENDS_ROW = 24
+
+
+def min_automation_row(project: Project) -> int:
+    """How tall a track's own lane is at least while its automation shows."""
+    return MIN_AUTOMATION_ROW + (SENDS_ROW if project.returns else 0)
 
 
 class ViewState(QObject):
@@ -116,7 +124,7 @@ class ViewState(QObject):
 
 
 class Selection(QObject):
-    """The selected track (or tracks, or MASTER), the insert (start) marker, and a time selection: a beat
+    """The selected track (or tracks, a return track, or MASTER), the insert (start) marker, and a time selection: a beat
     range spanning one or more adjacent tracks. Selecting is always on the grid:
     selecting a clip selects the area it covers.
 
@@ -264,10 +272,11 @@ class Selection(QObject):
     def prune(self, project: Project) -> None:
         """Drop references to clips/tracks/breakpoints that no longer exist."""
         valid_tracks = {t.id for t in project.tracks}
+        selectable = valid_tracks | {t.id for t in project.returns}
         valid_clips = {(t.id, c.id) for t in project.tracks for c in t.clips}
         clips = self.clips & valid_clips
-        tracks = tuple(t for t in self._tracks if t in valid_tracks)
-        track_id = (self.track_id if self.track_id in valid_tracks or self.track_id == MASTER
+        tracks = tuple(t for t in self._tracks if t in selectable)
+        track_id = (self.track_id if self.track_id in selectable or self.track_id == MASTER
                     else (tracks[-1] if tracks else None))
         lanes = tuple(lane for lane in self.lanes if project.has_owner(lane[0]))
         time_range = self.time_range
@@ -329,11 +338,13 @@ class Row:
         return self.top + self.height
 
 
-def automation_rows(view, top: int, main_height: int) -> tuple[int, tuple[LaneRow, ...]]:
-    """The height of an owner's own lane with its automation view, and the lanes below it."""
+def automation_rows(view, top: int, main_height: int,
+                    min_row: int = MIN_AUTOMATION_ROW) -> tuple[int, tuple[LaneRow, ...]]:
+    """The height of an owner's own lane with its automation view (at least
+    `min_row` while it shows), and the lanes below it."""
     if not view.shown:
         return main_height, ()
-    main_height = max(main_height, MIN_AUTOMATION_ROW)
+    main_height = max(main_height, min_row)
     lanes = tuple(LaneRow(i, key, top + main_height + i * AUTOMATION_LANE_HEIGHT, AUTOMATION_LANE_HEIGHT)
                   for i, key in enumerate(view.lanes))
     return main_height, lanes
@@ -352,6 +363,7 @@ class TrackLayout:
     def rebuild(self) -> None:
         self.rows = []
         y = 0
+        min_row = min_automation_row(self.project)
         folded: set[str] = set()  # folded groups, and the groups in them
         for track in self.project.tracks:
             hidden = track.parent in folded
@@ -366,7 +378,7 @@ class TrackLayout:
                           depth=depth)
             else:
                 view = track.automation_view
-                main_height, lanes = automation_rows(view, y, track.height)
+                main_height, lanes = automation_rows(view, y, track.height, min_row)
                 row = Row(track.id, y, main_height, lanes, view.shown, depth=depth)
             self.rows.append(row)
             y += row.height

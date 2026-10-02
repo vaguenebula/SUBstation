@@ -166,7 +166,7 @@ class AutomationControls(QObject):
     def _group_of(self, key: str | None) -> str | None:
         if key is None:
             return None
-        return "mixer" if key in automation.MIXER_KEYS else automation.key_device(key)
+        return "mixer" if automation.is_mixer_key(key) else automation.key_device(key)
 
     def _choose(self, controls: _LaneControls, key: str) -> None:
         self.editor.set_automation_lane(self.owner, controls.lane, key)

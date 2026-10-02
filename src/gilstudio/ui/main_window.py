@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
         create = bar.addMenu("&Create")
         self._action(create, "Insert Audio &Track", self.insert_track, "Ctrl+T")
         self._action(create, "Insert &MIDI Track", self.insert_midi_track, "Ctrl+Shift+T")
+        self._action(create, "Insert &Return Track", self.insert_return_track, "Ctrl+Alt+T")
         self._action(create, "Insert MIDI &Clip", self.insert_midi_clip, ["Ctrl+Shift+D", "Ctrl+Shift+M"])
         create.addSeparator()
         self._action(create, "&Group Tracks", self.group_selected_tracks, "Ctrl+G")
@@ -261,6 +262,7 @@ class MainWindow(QMainWindow):
     # --- Audio device ------------------------------------------------------------
 
     def start_audio(self) -> None:
+        self.bridge.apply_audio_threads()
         self.bridge.open_midi_inputs()
         settings = AudioSettings.load()
         error = self.bridge.open_device(settings)
@@ -341,6 +343,13 @@ class MainWindow(QMainWindow):
         track = self.editor.add_midi_track(**self._after_selected_track())
         self.selection.select_track(track.id, focus_track=True)
 
+    def insert_return_track(self) -> None:
+        """Ctrl+Alt+T: a return track, after the others (or after the selected one); it is selected."""
+        track_id = self.selection.track_id
+        index = self.project.return_index(track_id) + 1 if track_id and self.project.has_return(track_id) else None
+        track = self.editor.add_return_track(index)
+        self.selection.select_track(track.id, focus_track=True)
+
     def group_selected_tracks(self) -> None:
         """Ctrl+G: the selected tracks go into a new group, which is selected."""
         group = self.editor.group_tracks([t for t in self.selection.track_ids if self.project.has_track(t)])
@@ -407,15 +416,17 @@ class MainWindow(QMainWindow):
                                          merge_key=("plugin edit", device_id, param_id, gesture), old=old)
 
     def delete_track(self) -> None:
-        self.editor.delete_tracks([t for t in self.selection.track_ids if self.project.has_track(t)])
+        """The selected tracks (and return tracks)."""
+        self.editor.delete_tracks([t for t in self.selection.track_ids
+                                   if self.project.has_track(t) or self.project.has_return(t)])
 
     def solo_selected_tracks(self) -> None:
         """S: solo the selected tracks (and unsolo the rest); if they all are already, unsolo every track."""
-        tracks = [t for t in self.selection.track_ids if self.project.has_track(t)]
+        tracks = [t for t in self.selection.track_ids if self.project.has_track(t) or self.project.has_return(t)]
         if tracks:
             solo = not all(self.project.track(t).solo for t in tracks)
             if not solo:
-                tracks = [t.id for t in self.project.tracks]
+                tracks = [t.id for t in self.project.senders()]
             self.editor.solo_tracks(tracks, solo, exclusive=True)
 
     def delete_selection(self) -> None:

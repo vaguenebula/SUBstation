@@ -23,6 +23,15 @@ where each track's output goes.
 Any track can be folded (view state): a folded track shows as a thin row, its
 automation hidden; a folded group keeps its row but hides its tracks (and its
 automation).
+
+Return tracks (kind "return") are fed by sends: any track, group or return can
+send its signal to a return, at a level, after its fader or before it
+(`Track.sends`, by return id). A return has no clips; it goes to the master,
+through its devices and mixer, and may send on into another return, but never
+back into one that feeds it (would_cycle). Returns are `project.returns`, apart
+from the arrangement's tracks (and the master); `project.track()` finds them
+too, as it does the master, so whatever works on a track's devices, mixer or
+automation works on a return's. They are named by letter, in order (A, B...).
 """
 
 from __future__ import annotations
@@ -33,7 +42,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from .automation import MASTER, AutomationView, Envelope
+from .automation import MASTER, MIN_VOLUME_DB, AutomationView, Envelope
 from .keys import Key
 from .timebase import TimeSignature, beats_to_seconds, seconds_to_beats
 
@@ -55,6 +64,7 @@ LEGACY_WARP_MODES = {"Beats": "Transients", "Tones": "Standard", "Complex": "Sta
 GROUP_KIND = "group"
 TRACK_KINDS = ("audio", "midi", GROUP_KIND)
 MASTER_KIND = "master"  # the master's kind: no clips, effects only
+RETURN_KIND = "return"  # a return track's: fed by sends, no clips
 # Input monitoring: when a track hears its input instead of its clips. "auto":
 # while armed, unless it plays back without recording (as in Ableton).
 MONITOR_MODES = ("off", "in", "auto")
@@ -219,6 +229,16 @@ class MidiInput:
         return not self.device
 
 
+@dataclass(frozen=True)
+class Send:
+    """A track's send to a return track: its level (dB; MIN_VOLUME_DB or below
+    is silent) and where it taps the track's signal: after its fader (and pan),
+    or before it. A muted track sends nothing either way."""
+
+    level_db: float = MIN_VOLUME_DB
+    pre_fader: bool = False
+
+
 @dataclass
 class Track:
     id: str
@@ -242,6 +262,7 @@ class Track:
     armed: bool = False  # records when recording starts (saved, not undone)
     parent: str | None = None  # the group it is in (None: none); see tree_problem
     folded: bool = False  # a thin row, automation hidden; a group: its tracks hidden (saved, not undone)
+    sends: dict[str, Send] = field(default_factory=dict)  # return id -> its send (replaced whole, never changed)
 
     @property
     def is_midi(self) -> bool:
@@ -260,15 +281,34 @@ class Track:
         return self.kind == MASTER_KIND
 
     @property
+    def is_return(self) -> bool:
+        return self.kind == RETURN_KIND
+
+    @property
+    def has_clips(self) -> bool:
+        """Whether it is a track of the arrangement that plays clips (audio or MIDI)."""
+        return self.kind in ("audio", "midi")
+
+    @property
     def has_input(self) -> bool:
         """Whether it has something to record: an audio input, or a MIDI track's MIDI input."""
-        if self.is_group:
+        if not self.has_clips:
             return False
         return self.midi_input is not None if self.is_midi else bool(self.input)
 
 
 def new_master(**attrs) -> Track:
     return Track(id=MASTER, name="Master", color=MASTER_COLOR, kind=MASTER_KIND, **attrs)
+
+
+def return_letter(index: int) -> str:
+    """A, B, ... Z, AA, AB...: what a return (by its place among the returns) is called."""
+    letters = ""
+    index += 1
+    while index > 0:
+        index, rest = divmod(index - 1, 26)
+        letters = chr(ord("A") + rest) + letters
+    return letters
 
 
 def tree_problem(tracks: list[Track]) -> str | None:
@@ -307,13 +347,36 @@ def repair_tree(tracks: list[Track]) -> None:
             path.append(track.id)
 
 
+def would_cycle(returns: list[Track], track_id: str, return_id: str) -> bool:
+    """Whether a send from a track into a return would close a cycle: the return
+    is the track, or feeds it. Only a return can be fed by a return (they go to
+    the master, and send only into returns), so only a return's sends can."""
+    if track_id == return_id:
+        return True
+    by_id = {r.id: r for r in returns}
+    if track_id not in by_id:
+        return False
+    seen, stack = set(), [return_id]
+    while stack:
+        current = stack.pop()
+        if current == track_id:
+            return True
+        if current in seen or current not in by_id:
+            continue
+        seen.add(current)
+        stack.extend(by_id[current].sends)
+    return False
+
+
 TrackTree = tuple[tuple[str, str | None], ...]  # every track's (id, parent), in order
 
 
 class Project(QObject):
     track_inserted = Signal(str, int)  # track id, index
     track_removed = Signal(str, int)
-    track_changed = Signal(str)  # name, colour, mixer settings or height (MASTER: the master's mixer)
+    return_inserted = Signal(str, int)  # return id, index in project.returns
+    return_removed = Signal(str, int)
+    track_changed = Signal(str)  # name, colour, mixer settings, sends or height (MASTER: the master's mixer)
     tracks_arranged = Signal()  # the tracks' order or groups changed (not which tracks there are)
     clips_changed = Signal(str)  # track id
     devices_changed = Signal(str)  # track id: devices added/removed/toggled
@@ -338,15 +401,19 @@ class Project(QObject):
         self.automation_locked = False
         self.master = new_master()
         self.tracks: list[Track] = []
+        self.returns: list[Track] = []  # return tracks, in order (A, B, ...)
         self.path: Path | None = None
 
     # --- Queries --------------------------------------------------------------
 
     def track(self, track_id: str) -> Track:
-        """A track of the arrangement, or the master (MASTER)."""
+        """A track of the arrangement, a return track, or the master (MASTER)."""
         if track_id == MASTER:
             return self.master
         for track in self.tracks:
+            if track.id == track_id:
+                return track
+        for track in self.returns:
             if track.id == track_id:
                 return track
         raise KeyError(track_id)
@@ -372,12 +439,12 @@ class Project(QObject):
         return max((c.end_beat(self.tempo) for t in self.tracks for c in t.clips), default=0.0)
 
     def has_owner(self, owner: str) -> bool:
-        """Whether this is a track or the master: something with devices, a mixer and automation."""
-        return owner == MASTER or self.has_track(owner)
+        """Whether this is a track, a return or the master: something with devices, a mixer and automation."""
+        return owner == MASTER or self.has_track(owner) or self.has_return(owner)
 
     def all_tracks(self) -> list[Track]:
-        """The arrangement's tracks, then the master."""
-        return [*self.tracks, self.master]
+        """The arrangement's tracks, the returns, then the master."""
+        return [*self.tracks, *self.returns, self.master]
 
     def automation(self, owner: str) -> dict[str, Envelope]:
         """An owner's envelopes by target key (read only: change them through commands)."""
@@ -390,8 +457,36 @@ class Project(QObject):
         return self.track(owner).automation_view
 
     def owners(self) -> list[str]:
-        """Everything that has automation: the tracks, then the master."""
-        return [t.id for t in self.tracks] + [MASTER]
+        """Everything that has automation: the tracks, the returns, then the master."""
+        return [t.id for t in self.tracks] + [t.id for t in self.returns] + [MASTER]
+
+    # --- Returns and sends ------------------------------------------------------
+
+    def has_return(self, track_id: str) -> bool:
+        return any(t.id == track_id for t in self.returns)
+
+    def return_index(self, track_id: str) -> int:
+        for index, track in enumerate(self.returns):
+            if track.id == track_id:
+                return index
+        raise KeyError(track_id)
+
+    def return_letter(self, track_id: str) -> str:
+        return return_letter(self.return_index(track_id))
+
+    def senders(self) -> list[Track]:
+        """Everything that can send: the tracks (groups too), then the returns."""
+        return [*self.tracks, *self.returns]
+
+    def would_cycle(self, track_id: str, return_id: str) -> bool:
+        """Whether a send from a track into a return would close a cycle (see would_cycle)."""
+        return would_cycle(self.returns, track_id, return_id)
+
+    def send_targets(self, track_id: str) -> list[Track]:
+        """The returns a track (or return) can send to: all but those that would close a cycle."""
+        if track_id == MASTER:
+            return []
+        return [r for r in self.returns if not self.would_cycle(track_id, r.id)]
 
     # --- Groups ---------------------------------------------------------------
 
@@ -442,7 +537,7 @@ class Project(QObject):
         return TRACK_COLORS[len(self.tracks) % len(TRACK_COLORS)]
 
     def unique_track_name(self, base: str) -> str:
-        names = {t.name for t in self.tracks}
+        names = {t.name for t in self.tracks} | {t.name for t in self.returns}
         if base not in names:
             return base
         n = 2
@@ -461,6 +556,18 @@ class Project(QObject):
         index = self.track_index(track_id)
         track = self.tracks.pop(index)
         self.track_removed.emit(track_id, index)
+        return track, index
+
+    def insert_return(self, track: Track, index: int) -> None:
+        index = max(0, min(index, len(self.returns)))
+        self.returns.insert(index, track)
+        self.return_inserted.emit(track.id, index)
+
+    def remove_return(self, track_id: str) -> tuple[Track, int]:
+        """Takes a return away (the sends into it go first: see ProjectEditor.delete_tracks)."""
+        index = self.return_index(track_id)
+        track = self.returns.pop(index)
+        self.return_removed.emit(track_id, index)
         return track, index
 
     def arrange_tracks(self, tree: TrackTree) -> None:
@@ -547,7 +654,7 @@ class Project(QObject):
     def replace_contents(self, *, tempo: float, time_signature: TimeSignature, loop_enabled: bool,
                          loop_start: float, loop_end: float, tracks: list[Track], path: Path | None,
                          master: Track | None = None, automation_locked: bool = False,
-                         key: Key | None = None) -> None:
+                         key: Key | None = None, returns: list[Track] | None = None) -> None:
         self.tempo = tempo
         self.time_signature = time_signature
         self.key = key
@@ -557,6 +664,7 @@ class Project(QObject):
         self.master = master or new_master()
         self.automation_locked = automation_locked
         self.tracks = tracks
+        self.returns = returns or []
         self.path = path
         self.reset.emit()
 

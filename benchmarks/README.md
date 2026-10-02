@@ -98,3 +98,56 @@ the design (same library, warm cache):
 So the native backend keeps a saved index and updates it by folder, searches on its
 own thread with no Python in between, and the list is filled a page (256 rows) at a
 time as it scrolls.
+
+# Parallel track processing
+
+```powershell
+python -m benchmarks.parallel_render_bench [--tracks 32] [--device synth|ott|plugin] [--live 64,256] [--json out.json]
+```
+
+Every track plays eight-voice chords on the built-in Synth (`--device ott`: through
+an OTT; `--device plugin --plugin PATH --name NAME`: a noise clip and the notes
+through a VST3 plug-in). It renders offline (1024-frame chunks, best of three) on
+1, 2, 4 and the default number of threads, and fails if any render differs from
+the one on one thread. `--live` plays the same through the fake ASIO driver
+(tests/asio_driver) in manual mode, buffers back to back on one thread: the time
+per buffer against its length is the audio thread's load.
+
+## Results
+
+Intel Core Ultra 7 270K Plus (24 logical cores, so 23 threads by default), Windows 11,
+Python 3.12. Raw reports are in `results/parallel-*.json`.
+
+32 Synth tracks, 10 s:
+
+| threads | offline | speed-up | live, 64 frames (mean / p99) | live, 256 frames (mean / p99) |
+|---|---|---|---|---|
+| 1 | 0.657 s (15× realtime) | 1.00× | 94 / 192 µs | 359 / 613 µs |
+| 2 | 0.335 s | 1.96× | 55 / 99 µs | 195 / 332 µs |
+| 4 | 0.176 s | 3.74× | 33 / 64 µs | 108 / 229 µs |
+| 23 | 0.072 s (139× realtime) | 9.11× | 22 / 101 µs | 55 / 158 µs |
+
+8 Synth → OTT tracks, 10 s: 1.96× on 2 threads, 3.69× on 4, 5.19× on 23 (there are
+only 8 tracks to share). Live at 64 frames: 46 µs per buffer on one thread, 15 µs on 4.
+
+A project with two tracks renders at 32 frames as it did on one thread (below the
+threshold, chunks render serially) and a little faster at 128 (13 → 9 µs).
+
+### Starting the heaviest tracks first
+
+`--heavy N` puts a chain of OTTs on the last N tracks (the last in routing order,
+so without cost ordering they start last); `--compare-ordering` renders each
+thread count both ways. 16 Synth tracks, 2 of them with 8 OTTs, 10 s
+(`results/parallel-16-heavy-ordering.json`):
+
+| threads | heaviest first | routing order | live, 128 frames (mean): heaviest first / routing order |
+|---|---|---|---|
+| 1 | 0.665 s | (same) | 182 µs |
+| 2 | 0.334 s | 0.336 s | 99 / 98 µs |
+| 4 | 0.200 s | 0.267 s | 59 / 79 µs |
+| 8 | 0.193 s | 0.244 s | 66 / 78 µs |
+
+With 4 threads or more the render is down to about as long as the heaviest track
+takes alone. With 2 threads the order hardly matters: every track starts within
+the first few slots anyway. With 32 equal tracks both orders are the same within
+noise, and timing every track costs nothing measurable on one thread.

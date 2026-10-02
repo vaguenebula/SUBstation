@@ -11,7 +11,10 @@ are armed (version 6; older files load with none, Auto, not armed), and MIDI
 tracks their MIDI input (version 7; older ones load hearing every input).
 Tracks store the group they are in ("parent") and whether they are folded
 (version 8); a track that can't be in its group (the file was edited)
-loads out of it."""
+loads out of it. Return tracks are stored apart from the tracks ("returns"),
+and every track (and return) its sends, by return id (version 9; older files
+have none). Sends to a return that isn't there, or that would close a cycle,
+are dropped."""
 
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ from .project import (
     GROUP_KIND,
     LEGACY_WARP_MODES,
     MONITOR_MODES,
+    RETURN_KIND,
     TRACK_KINDS,
     WARP_MODES,
     AnyClip,
@@ -39,15 +43,17 @@ from .project import (
     Note,
     PluginRef,
     Project,
+    Send,
     Track,
     new_master,
     repair_tree,
+    would_cycle,
 )
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 8  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
-# 7: MIDI inputs, 8: group tracks
+VERSION = 9  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
+# 7: MIDI inputs, 8: group tracks, 9: return tracks and sends
 EXTENSION = ".gilproj"
 
 
@@ -161,6 +167,57 @@ def _master(data: dict) -> Track:
     )
 
 
+def _sends_to_dict(sends: dict[str, Send]) -> dict:
+    return {return_id: {"level_db": send.level_db, "pre_fader": send.pre_fader} for return_id, send in sends.items()}
+
+
+def _sends(data) -> dict[str, Send]:
+    sends = {}
+    for return_id, send in (data or {}).items():
+        sends[str(return_id)] = Send(level_db=max(automation.MIN_VOLUME_DB, min(automation.MAX_VOLUME_DB,
+                                                                                float(send.get("level_db", 0.0)))),
+                                     pre_fader=bool(send.get("pre_fader", False)))
+    return sends
+
+
+def _return_to_dict(track: Track) -> dict:
+    return {"id": track.id, "kind": track.kind, "name": track.name, "color": track.color,
+            "volume_db": track.volume_db, "pan": track.pan, "mute": track.mute, "solo": track.solo,
+            "height": track.height, "devices": [_device_to_dict(d) for d in track.devices],
+            "automation": _automation_to_dict(track.automation),
+            "automation_view": _view_to_dict(track.automation_view),
+            "sends": _sends_to_dict(track.sends)}
+
+
+def _return(t: dict) -> Track:
+    return Track(id=t["id"], name=t["name"], color=t["color"], kind=RETURN_KIND,
+                 volume_db=float(t.get("volume_db", 0.0)), pan=float(t.get("pan", 0.0)),
+                 mute=bool(t.get("mute", False)), solo=bool(t.get("solo", False)),
+                 height=int(t.get("height", DEFAULT_TRACK_HEIGHT)),
+                 devices=[_device(d) for d in t.get("devices", [])],
+                 automation=_automation(t.get("automation")), automation_view=_view(t.get("automation_view")),
+                 sends=_sends(t.get("sends")))
+
+
+def returns_from_dict(data: dict) -> list[Track]:
+    return [_return(t) for t in data.get("returns", [])]
+
+
+def repair_sends(tracks: list[Track], returns: list[Track]) -> None:
+    """Drops the sends a project can't have (the file was edited): to a return that
+    isn't there, and those closing a cycle among returns (the later ones)."""
+    ids = {r.id for r in returns}
+    for track in tracks:
+        track.sends = {r: send for r, send in track.sends.items() if r in ids}
+    saved = {ret.id: ret.sends for ret in returns}
+    for ret in returns:  # made again in order: each checked against those before it
+        ret.sends = {}
+    for ret in returns:
+        for return_id, send in saved[ret.id].items():
+            if return_id in ids and not would_cycle(returns, ret.id, return_id):
+                ret.sends = {**ret.sends, return_id: send}
+
+
 def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
     base = project_file.parent if project_file else None
     return {
@@ -193,9 +250,11 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
                 "armed": t.armed,
                 "parent": t.parent,
                 "folded": t.folded,
+                "sends": _sends_to_dict(t.sends),
             }
             for t in project.tracks
         ],
+        "returns": [_return_to_dict(t) for t in project.returns],
     }
 
 
@@ -273,6 +332,7 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
             armed=bool(t.get("armed", False)) and kind != GROUP_KIND,
             parent=t.get("parent") if isinstance(t.get("parent"), str) else None,
             folded=bool(t.get("folded", False)),
+            sends=_sends(t.get("sends")),
         ))
     repair_tree(tracks)
     return tracks
@@ -308,6 +368,9 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
         raise ProjectFileError("This project was saved by a newer version of GIL Studio")
     num, den = data.get("time_signature", [4, 4])
     loop = data.get("loop", {})
+    tracks = tracks_from_dict(data, project_file)
+    returns = returns_from_dict(data)
+    repair_sends(tracks, returns)
     project.replace_contents(
         tempo=float(data.get("tempo", 120.0)),
         time_signature=TimeSignature(int(num), int(den)),
@@ -317,7 +380,8 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
         master=_master(data.get("master", {})),
         automation_locked=bool(data.get("automation_locked", False)),
         key=key_from_name(data.get("key")),
-        tracks=tracks_from_dict(data, project_file),
+        tracks=tracks,
+        returns=returns,
         path=project_file,
     )
 

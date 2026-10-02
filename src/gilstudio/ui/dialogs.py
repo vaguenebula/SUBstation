@@ -37,7 +37,9 @@ from ..audio.settings import (
     DRIVERS,
     SAMPLE_RATES,
     AudioSettings,
+    audio_threads,
     disabled_midi_inputs,
+    set_audio_threads,
 )
 from ..plugins.scanner import standard_paths
 from ..plugins.settings import custom_folders, set_custom_folders
@@ -105,6 +107,14 @@ class PreferencesDialog(QDialog):
         self.sample_rate = QComboBox()
         self.buffer = QComboBox()
         self.exclusive = QCheckBox("Exclusive mode (lower latency; other apps are silenced)")
+        self.threads = QComboBox()
+        self.threads.setToolTip("Tracks render on this many threads at once (the audio thread and its "
+                                "helpers). 1 renders every track on the audio thread.")
+        default_threads = ge.Engine.default_audio_threads()
+        for count in range(1, max(os.cpu_count() or 1, default_threads, 2) + 1):
+            label = f"{count}" + (" (off)" if count == 1 else "") + (" (default)" if count == default_threads else "")
+            self.threads.addItem(label, count)
+        self._select(self.threads, audio_threads() or default_threads)
 
         self.status = QLabel()
         self.status.setWordWrap(True)
@@ -121,6 +131,7 @@ class PreferencesDialog(QDialog):
         self.form.addRow("Sample Rate", self.sample_rate)
         self.form.addRow("Buffer Size", self.buffer)
         self.form.addRow("", self.exclusive)
+        self.form.addRow("Audio Threads", self.threads)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -148,6 +159,7 @@ class PreferencesDialog(QDialog):
             combo.currentIndexChanged.connect(self._setting_chosen)
         self.exclusive.toggled.connect(self._setting_chosen)
         self.control_panel.clicked.connect(self._show_control_panel)
+        self.threads.currentIndexChanged.connect(self._threads_chosen)
         bridge.device_changed.connect(self._refresh)  # a driver that restarted, or a device that went away
         self._refresh()
 
@@ -304,6 +316,11 @@ class PreferencesDialog(QDialog):
         if error is None:
             self.settings.save()
         self._refresh(error)
+
+    def _threads_chosen(self) -> None:
+        threads = int(self.threads.currentData())
+        set_audio_threads(0 if threads == ge.Engine.default_audio_threads() else threads)
+        self.bridge.apply_audio_threads()
 
     def _show_control_panel(self) -> None:
         # The driver's dialog may run a message loop; this dialog waits for it.

@@ -21,6 +21,12 @@ its devices, mixer and automation go the same way as a track's.
 Groups are tracks to the engine too. It knows only where each track's output
 goes: into the engine track of the group it is in, or the master.
 
+Return tracks are engine tracks as well, going to the master, and a track's
+sends are engine sends into them (at the send's level, before or after the
+fader). A send automated without having been set yet is made, silent, so that
+its automation plays. Sends are pushed as each track changes, those going away
+first, so that no step closes a cycle.
+
 Automation: every envelope of a track (or the master) goes to the engine, which
 plays it; its target follows it and the value the model holds for it (set by
 hand) counts again when the envelope goes. Changing an automated target by hand
@@ -71,9 +77,14 @@ from ..model import automation
 from ..model.automation import MASTER, MIXER_PAN, MIXER_VOLUME
 from ..model.editor import RecordedTake, device_name
 from ..model.params import ParamSpec, format_value, mixer_specs
-from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Track
+from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Send, Track
 from ..model.timebase import db_to_gain
-from .settings import AudioSettings, disabled_midi_inputs, set_midi_input_disabled
+from .settings import (
+    AudioSettings,
+    audio_threads,
+    disabled_midi_inputs,
+    set_midi_input_disabled,
+)
 
 AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
 # Plug-in editors of tracks not shown are hidden but keep running (animating,
@@ -226,6 +237,8 @@ class EngineBridge(QObject):
         self._mixer: dict[str, tuple[float, float]] = {}  # owner -> (volume dB, pan) the engine has
         self._inputs: dict[str, tuple] = {}  # track id -> (input, monitor, armed) the engine has
         self._outputs: dict[str, int] = {}  # track id -> the engine track its output goes into
+        self._sends: dict[str, dict[int, tuple[float, bool]]] = {}  # track id -> {engine return: (gain, pre-fader)}
+        self._send_levels: dict[str, dict[str, float]] = {}  # track id -> {return id: level dB} the engine has
         self._busy = 0  # > 0 while a plug-in call may run a message loop that calls us back
         self.plugin_errors: dict[str, str] = {}  # device id -> why its plug-in isn't loaded
         self.known_plugins: dict[str, str] = {}  # plug-in uid -> file, from the scan: finds moved plug-ins
@@ -254,6 +267,8 @@ class EngineBridge(QObject):
         project.reset.connect(self._on_reset)
         project.track_inserted.connect(lambda tid, _i: self._add_engine_track(project.track(tid)))
         project.track_removed.connect(self._on_track_removed)
+        project.return_inserted.connect(lambda tid, _i: self._add_engine_track(project.track(tid)))
+        project.return_removed.connect(self._on_track_removed)
         project.track_changed.connect(self._on_track_changed)
         project.tracks_arranged.connect(self._push_outputs)
         project.clips_changed.connect(self._push_clips)
@@ -262,7 +277,7 @@ class EngineBridge(QObject):
         project.device_state_changed.connect(self._push_device_state)
         project.track_changed.connect(self._update_editor_titles)
         project.settings_changed.connect(self._push_settings)
-        project.automation_changed.connect(lambda owner, _key: self._push_automation(owner))
+        project.automation_changed.connect(self._on_automation_changed)
 
         self._position_timer = QTimer(self)
         self._position_timer.setInterval(16)
@@ -292,6 +307,8 @@ class EngineBridge(QObject):
         self._mixer.clear()
         self._inputs.clear()
         self._outputs.clear()
+        self._sends.clear()
+        self._send_levels.clear()
         self.plugin_errors.clear()
         self.meters.clear()
         self._editors_wanted.clear()
@@ -299,6 +316,7 @@ class EngineBridge(QObject):
         for track in self.project.all_tracks():
             self._add_engine_track(track)
         self._push_outputs()
+        self._push_all_sends()  # (into returns added after the tracks sending to them)
         self._push_settings()
         # Forget decoded audio the new project doesn't use.
         used = {_key(c.path) for t in self.project.tracks if not t.is_midi for c in t.clips}
@@ -326,6 +344,10 @@ class EngineBridge(QObject):
         self._push_automation(track.id)
         if not track.is_master:  # into its group, and what is in it (back) into it
             self._push_outputs()
+        if track.is_return:  # its sends, and the sends into it
+            self._push_all_sends()
+        elif not track.is_master:
+            self._push_sends(track.id)
 
     def _on_track_removed(self, track_id: str, _index: int) -> None:
         for device_id, processor_id in self._devices.pop(track_id, []):
@@ -339,8 +361,13 @@ class EngineBridge(QObject):
         self._mixer.pop(track_id, None)
         self._inputs.pop(track_id, None)
         self._outputs.pop(track_id, None)
-        # What went into it goes to the engine's master now (the model has its say next).
+        self._sends.pop(track_id, None)
+        self._send_levels.pop(track_id, None)
+        # What went into it goes to the engine's master now, and the sends into it
+        # are gone (the model has its say next).
         self._outputs = {t: ge.MASTER if out == engine_id else out for t, out in self._outputs.items()}
+        for sends in self._sends.values():
+            sends.pop(engine_id, None)
         self._overridden = {(o, k) for o, k in self._overridden if o != track_id}
 
     def _on_track_changed(self, track_id: str) -> None:
@@ -348,8 +375,21 @@ class EngineBridge(QObject):
             return
         track = self.project.track(track_id)
         self._override_changed_mixer(track_id, track.volume_db, track.pan)
+        self._override_changed_sends(track)
         self._push_mixer(track_id)
         self._push_input(track_id)
+        self._push_sends(track_id)
+
+    def _override_changed_sends(self, track: Track) -> None:
+        """A send level changed by hand while automated: its automation stops."""
+        old = self._send_levels.get(track.id)
+        new = {return_id: send.level_db for return_id, send in track.sends.items()}
+        self._send_levels[track.id] = new
+        if old is None:
+            return
+        for return_id, level in new.items():
+            if old.get(return_id) != level:
+                self.override_automation(track.id, automation.send_key(return_id))
 
     def _override_changed_mixer(self, owner: str, volume_db: float, pan: float) -> None:
         """A mixer control changed by hand while automated: its automation stops."""
@@ -390,6 +430,42 @@ class EngineBridge(QObject):
             if out != ge.MASTER:
                 self.engine.set_track_output(self._track_ids[track_id], out)
             self._outputs[track_id] = out
+
+    def _wanted_sends(self, track: Track) -> dict[int, tuple[float, bool]]:
+        """The engine sends a track should have: its sends, and silent ones for
+        those automated without having been set (so that the automation plays)."""
+        sends = dict(track.sends)
+        for key in track.automation:
+            return_id = automation.key_send(key)
+            if return_id is not None and return_id not in sends and self.project.has_return(return_id) \
+                    and not self.project.would_cycle(track.id, return_id):
+                sends[return_id] = Send()
+        return {self._track_ids[r]: (db_to_gain(send.level_db), send.pre_fader) for r, send in sends.items()
+                if r in self._track_ids and self.project.has_return(r)}
+
+    def _push_sends(self, track_id: str) -> None:
+        """A track's sends to the engine: those going away first (no step closes a cycle)."""
+        engine_id = self._track_ids.get(track_id)
+        if engine_id is None or track_id == MASTER:
+            return
+        wanted = self._wanted_sends(self.project.track(track_id))
+        current = self._sends.setdefault(track_id, {})
+        for return_engine_id in [r for r in current if r not in wanted]:
+            self.engine.remove_track_send(engine_id, return_engine_id)
+            del current[return_engine_id]
+        for return_engine_id, (gain, pre_fader) in wanted.items():
+            if current.get(return_engine_id) == (gain, pre_fader):
+                continue
+            try:
+                self.engine.set_track_send(engine_id, return_engine_id, gain, pre_fader)
+            except ValueError:
+                continue  # a cycle with a send another track hasn't given up yet: it comes with that track's turn
+            current[return_engine_id] = (gain, pre_fader)
+        self._send_levels.setdefault(track_id, {r: s.level_db for r, s in self.project.track(track_id).sends.items()})
+
+    def _push_all_sends(self) -> None:
+        for track in self.project.senders():
+            self._push_sends(track.id)
 
     def _push_input(self, track_id: str) -> None:
         engine_id = self._track_ids.get(track_id)
@@ -440,6 +516,12 @@ class EngineBridge(QObject):
         if not self.engine.device_status.open:
             return []
         return list(self.engine.device_capabilities.input_names)
+
+    # --- Audio threads ---------------------------------------------------------------
+
+    def apply_audio_threads(self) -> None:
+        """Renders on as many threads as the preferences say (the engine's default unless chosen)."""
+        self.engine.audio_threads = audio_threads() or ge.Engine.default_audio_threads()
 
     # --- MIDI input ------------------------------------------------------------------
 
@@ -863,6 +945,11 @@ class EngineBridge(QObject):
 
     # --- Automation ------------------------------------------------------------------
 
+    def _on_automation_changed(self, owner: str, key: str) -> None:
+        if automation.key_send(key) is not None:
+            self._push_sends(owner)  # a send automated before it was set is made
+        self._push_automation(owner)
+
     def _push_automation(self, owner: str) -> None:
         """The owner's envelopes to the engine, but those overridden. Targets whose
         envelope no longer plays go back to their own value."""
@@ -892,6 +979,9 @@ class EngineBridge(QObject):
         engine_points = [ge.AutomationPoint(p.beat, p.value, p.curve) for p in points]
         if target[0] == "mixer":
             return ge.AutomationLane(0, target[1], engine_points)
+        if target[0] == "send":
+            return_id = self._track_ids.get(target[1])
+            return None if return_id is None else ge.AutomationLane(0, f"send:{return_id}", engine_points)
         processor_id = self.engine_device_id(owner, target[1])
         return None if processor_id is None else ge.AutomationLane(processor_id, target[2], engine_points)
 
@@ -901,6 +991,8 @@ class EngineBridge(QObject):
             if self.project.has_owner(owner):
                 self._push_mixer(owner)
             return
+        if automation.key_send(key) is not None:
+            return  # the engine kept the send's own level
         device_id = automation.key_device(key)
         if self.project.has_owner(owner) and any(d.id == device_id for d in self.project.track(owner).devices):
             self._push_device_param(owner, device_id, automation.parse_key(key)[2])
@@ -961,10 +1053,16 @@ class EngineBridge(QObject):
             self._param_specs[processor_id] = specs
         return specs
 
+    def mixer_specs(self, owner: str) -> list[ParamSpec]:
+        """An owner's mixer controls: volume, pan, and its sends (to the returns it can send to)."""
+        sends = tuple((r.id, self.project.return_letter(r.id)) for r in self.project.send_targets(owner)) \
+            if self.project.has_owner(owner) else ()
+        return mixer_specs(master=owner == MASTER, sends=sends)
+
     def param_groups(self, owner: str) -> list[tuple[str, str, list[ParamSpec]]]:
         """What an owner has that can be automated, as (group id, name, specs): its
-        mixer ("mixer"), then each device (by id)."""
-        groups = [("mixer", "Mixer", mixer_specs(master=owner == MASTER))]
+        mixer ("mixer", with its sends), then each device (by id)."""
+        groups = [("mixer", "Mixer", self.mixer_specs(owner))]
         for device in self.project.track(owner).devices:
             groups.append((device.id, device_name(device), self.device_param_specs(owner, device)))
         return groups
@@ -974,8 +1072,8 @@ class EngineBridge(QObject):
 
     def param_spec(self, owner: str, key: str) -> ParamSpec | None:
         """A target's description; None if it doesn't exist (a device that is gone)."""
-        if key in automation.MIXER_KEYS:
-            return next(s for s in mixer_specs(master=owner == MASTER) if s.key == key)
+        if automation.is_mixer_key(key):
+            return next((s for s in self.mixer_specs(owner) if s.key == key), None)  # (a return that is gone)
         if not self.project.has_owner(owner):
             return None
         device_id = automation.key_device(key)
@@ -997,6 +1095,8 @@ class EngineBridge(QObject):
             return track.volume_db
         if key == MIXER_PAN:
             return track.pan
+        if (return_id := automation.key_send(key)) is not None:
+            return track.sends.get(return_id, Send()).level_db
         target = automation.parse_key(key)
         device = next((d for d in track.devices if d.id == target[1]), None)
         if device is None:

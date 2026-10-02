@@ -10,8 +10,9 @@ once (`processStrip`) and reuse it everywhere.
 
 Keep routing open for later: the engine knows **edges** (a strip's output
 target), not hierarchy. Hierarchy (which track is in which group) lives in the
-Python model. That keeps sends, return tracks, resampling and sidechains
-possible without a redesign.
+Python model. Sends, return tracks, resampling and sidechains are more edges;
+Phase 6 lets a strip have several outgoing edges (until then each has one),
+and Phases 7 and 8 add edge kinds before racks build on the routing.
 
 ---
 
@@ -165,69 +166,239 @@ Tests
 
 ## Phase 5½ — Parallel track processing
 
-Before racks: Phase 6 adds scratch state (buffers per nesting depth), which
+Before racks: Phase 9 adds scratch state (buffers per nesting depth), which
 should be per worker from the start. Phase 5's graph (topological order,
 `outputIndex`, `inputCount`) is what the scheduler runs. A strip's own chain
 (and later a rack's chains) stays serial on one worker; parallel rack chains
 come later.
 
 Engine — untangle shared state first (useful and testable on one thread)
-- [ ] Per-track output buffers, allocated edit-side and kept in `TrackModel`
+- [x] Per-track output buffers, allocated edit-side and kept in `TrackModel`
       (like `bus`), replacing the shared `trackLeft_` / `trackRight_`.
-- [ ] Buses pull instead of children pushing: `TrackRender.inputs` (indices);
+- [x] Buses pull instead of children pushing: `TrackRender.inputs` (indices);
       a bus sums its inputs' buffers in a fixed order when it starts, and the
       master sums its inputs in order after the graph. No two threads write one
       buffer, and the result doesn't depend on which thread finishes first.
-- [ ] `WorkerScratch` (warp buffers, `autoGain_`, `autoPan*_`, events),
-      one per worker, allocated in `Renderer::prepare`.
-- [ ] MIDI in a serial prologue: build every track's events (active, live,
+- [x] `WorkerScratch` (warp buffers, `autoGain_`, `autoPan*_`),
+      one per worker, allocated in `Renderer::prepare`. (Events went per
+      track instead, into `TrackBuffers`: see the next item.)
+- [x] MIDI in a serial prologue: build every track's events (active, live,
       preview and input notes, MIDI recording) before the graph, into per-track
-      event buffers.
-- [ ] Split `renderChunk`: serial prologue (segments, solo, recording input,
+      event buffers. Stretched clips get their voices there too (the voice
+      pool is shared between tracks).
+- [x] Split `renderChunk`: serial prologue (segments, solo, recording input,
       MIDI) → graph (`renderTrack(t, scratch)`) → serial epilogue (master sum,
       master strip, metronome).
 
 Engine — scheduler
-- [ ] `Scheduler`: a fixed pool of workers plus the audio thread; workers join
+- [x] `Scheduler`: a fixed pool of workers plus the audio thread; workers join
       MMCSS ("Pro Audio") and set `ScopedNoDenormals` every chunk.
-- [ ] Per chunk: reset each node's counter to `inputCount`, queue the nodes
+- [x] Per chunk: reset each node's counter to `inputCount`, queue the nodes
       with none; a finished node decrements its destination's counter and
       queues it at zero. Lock-free, no allocation; idle workers spin briefly,
-      then wait on a semaphore.
-- [ ] Serial fallback below a threshold (few tracks, small blocks), where
+      then wait on the run state (`atomic::wait`, i.e. WaitOnAddress).
+- [x] Serial fallback below a threshold (few tracks, small blocks), where
       waking workers costs more than it saves.
-- [ ] Offline render / export use the same path.
-- [ ] Later: measure per-strip cost and start the most expensive path first.
+- [x] Offline render / export use the same path.
+- [x] Measure per-strip cost and start the most expensive path first: each
+      track's render is timed (smoothed, ns per frame, in `TrackBuffers`); the
+      prologue ranks every node by the cost from it to the master and queues
+      the tracks without inputs by rank (`TaskGraph::orderRoots()`).
+  - [ ] Maybe: an "urgent" slot so a bus that becomes ready mid-run on the
+        critical path goes before the leaves still queued (only if a benchmark
+        shows it matters).
+  - [ ] Per-track CPU meters in the UI (`track_costs()` has the numbers).
+  - [ ] Serial fallback from measured cost instead of counting busy tracks.
 
 Model / UI
-- [ ] Preferences: number of audio worker threads (default: cores − 1; 1 = off).
+- [x] Preferences: number of audio worker threads (default: cores − 1; 1 = off).
 
 Tests
-- [ ] Benchmark first: N tracks of the built-in synth / a heavy plug-in,
-      serial vs. parallel.
-- [ ] Offline renders are bit-identical with and without workers: random
+- [x] Benchmark first: N tracks of the built-in synth / a heavy plug-in,
+      serial vs. parallel (`benchmarks/parallel_render_bench.py`).
+- [x] Offline renders are bit-identical with and without workers: random
       graphs, nested groups, latent plug-ins, solo/mute.
-- [ ] Stress: many tracks, many runs (no thread sanitizer on MSVC).
-- [ ] A plug-in processed on different workers across blocks keeps its state.
-- [ ] Held, preview and recorded MIDI notes behave as before.
+- [x] Stress: many tracks, many runs (no thread sanitizer on MSVC).
+- [x] A plug-in processed on different workers across blocks keeps its state.
+- [x] Held, preview and recorded MIDI notes behave as before.
 
 ---
 
-## Phase 6 — Device groups (racks)
+## Phase 6 — Return tracks and sends (the graph fans out)
+
+Phases 5 and 5½ call routing a graph, but every part of it assumes one output
+per track, so in practice it is a tree:
+- `topologicalOrder`, `wouldCycle` and `alignGraph` (Routing.h) take a single
+  `outputs[i]`; `wouldCycle` only walks that one chain;
+- delay compensation (and its `DelayLine`) is per track: "delay this track to
+  line up where it goes";
+- `TaskGraph` keeps one output per node and ranks by `cost + rank[output]`;
+- solo walks one `ancestors` chain.
+
+Sends, resampling and sidechains each give a track a second output, so all of
+this changes once, whichever comes first. Sends are the simplest (an edge with
+a gain, no plug-in involved), so they make the change; Phases 7 and 8 then add
+edge kinds. Before racks: the routing and scheduler code is fresh, the
+bit-identical tests are a ready safety net, and racks barely touch the edges
+between strips.
+
+Engine — edges
+- [x] `EdgeRender { from, to, kind, tap, compensation, delay, state, level }`:
+      kind = output | send (later: input, sidechain); tap = post-fader
+      (default) or pre-fader; the gain is in `EdgeState` (an atomic, kept
+      across snapshots, like `TrackParams`). A strip has one output edge and
+      any number of sends. The snapshot keeps the edges (`snap.edges`) and each
+      node's outgoing and incoming ones; `TrackRender.inputs` became `incoming`.
+- [x] Routing.h on edge lists (`RouteEdge`): topological order over all edges;
+      the cycle check searches every path from the new edge's destination back
+      to its source; `alignGraph` aligns each summing point over its incoming
+      edges (per edge `tapLatency`, ready for after-device taps).
+- [x] Delay compensation per edge, not per track:
+      `arrival(edge) = inputLatency(from) + latency of from's devices before the tap`;
+      a summing point delays each incoming edge to the latest arrival. One
+      `DelayLine` per edge (edit-side, kept across snapshots). A track that sends
+      to two returns with different latencies is delayed differently on each edge.
+      The delay now comes after the source's fader (it was before it), so fader
+      automation is as late as the strip's own arrival.
+- [x] Edge buffers: a pre-fader tap needs the signal before the fader, so the
+      source writes it to the edge's own buffer; so does an edge delayed on its
+      own (compensation > 0); other post-fader edges read the source's track
+      buffer. The destination applies the send gain while it sums its inputs,
+      in a fixed order (as buses do now), so results stay independent of threads.
+- [x] Return tracks: no clips, fed only by sends, output to the master. A return
+      may send to another return; cycles refused. (To the engine they're just
+      tracks; it refuses a send to the master.)
+- [x] Send level is a mixer target like volume and pan (automation lane
+      `processorId 0, param "send:<return's engine id>"`). The gain is applied
+      where the edge is summed, after its delay, so its lane latency is the
+      edge's arrival plus its compensation: the destination's input latency.
+- [x] Mute: a muted track's sends go silent too (pre-fader ones as well: they
+      take the fader's mute ramp).
+- [x] Solo across sends: an edge plays if its source is downstream of a solo
+      (soloed or fed by something soloed: solo in place, the returns it sends
+      to included) or its destination upstream of one (soloed or feeding
+      something soloed: what sends to a soloed return keeps sending, but not
+      into the master). A track none of whose edges play is silenced at its
+      fader. Worked out once per chunk (`Renderer::workOutSolo`); live, an
+      edge's level and solo ramp like a fader (`EdgeState`).
+- [x] Scheduler: `TaskGraph` with outgoing-edge lists (flat arrays); a
+      finished node counts down every destination; `inputCount` counts incoming
+      edges; rank = cost + the highest rank among its destinations.
+
+Model / UI
+- [x] Return tracks in `project.returns` (beside `project.tracks` and the
+      master); `Track.sends: {return id: Send(level_db, pre_fader)}`.
+      Serialization (version 9; older projects simply have none; sends to a
+      missing return or closing a cycle are dropped on load).
+- [x] Create / delete return tracks (Ctrl+Alt+T); deleting one removes the
+      sends to it (and their automation), as one undo command.
+- [x] Send knobs on track headers (groups and returns too: they're tracks);
+      pre/post toggle (the knob's right-click menu); send automation lanes
+      (*Mixer › Send A*). Returns show as compact rows pinned above the master
+      (headers and lanes like the master's), not among the arrangement's rows.
+  - [ ] Maybe: returns in the scrolling lanes after the tracks, resizable, as
+        in Ableton (the lanes canvas indexes rows by `project.tracks`: clip
+        drags, time selections and drops would need to skip them).
+  - [ ] A mixer view (sends of every track side by side).
+
+Tests
+- [x] Post- and pre-fader sends at their levels; a return's effect processes
+      the sum of what is sent to it.
+- [x] Compensation: a latent plug-in on a return; a latent track sending; one
+      track sending to two returns of different latency; a pre-fader tap after
+      a latent device. Clicks line up at the master.
+- [x] Cycles refused across sends, outputs and returns.
+- [x] Solo/mute across sends.
+- [x] Random graphs with sends (fan-out, pre/post taps): bit-identical with and
+      without workers (`add_returns` beside `random_project` in tests/test_parallel_engine.py).
+- [x] Undo and serialization round-trips.
+
+---
+
+## Phase 7 — Resampling (track input from another track)
+
+Small once edges exist: `InputEdge` already has room for another source.
+
+Engine
+- [ ] `InputEdge::Source::Track`: an incoming edge from another strip (tap
+      post-fader). The source renders first; a track can't take input from
+      something it feeds (the Phase 6 cycle check).
+- [ ] Monitoring as with device input: a monitored track hears its source
+      instead of its clips, not delay-compensated (`compensationFor`).
+- [ ] Recording: the renderer hands the source's buffer to the take, like
+      device input (its ring, its disk writer). Placement: no device latencies;
+      the take lands where the source was heard (moved back by the edge's
+      arrival, not by input + output latency).
+- [ ] The master as a source ("Resampling"): the master renders after the
+      graph, so it is recorded in the epilogue; a track resampling the master
+      can't monitor it (that would feed back).
+
+Model / UI
+- [ ] Input selector lists tracks, groups, returns and "Resampling" (the
+      master); sources that would make a cycle are greyed out.
+- [ ] Recording reuses Phase 2's take/undo flow.
+
+Tests
+- [ ] A take resampled from a track equals that track's render sample for
+      sample, with latent plug-ins on the source (and on the master).
+- [ ] Cycles refused; monitoring a resampled source isn't delayed.
+- [ ] Undo removes the take.
+
+---
+
+## Phase 8 — Sidechain inputs
+
+An edge that ends at a device instead of at a strip's input.
+
+Engine
+- [ ] `kind = sidechain` edges into a processor (`to` = strip + processor id;
+      processor ids survive moves between chains and, later, racks).
+- [ ] Tap point per edge: pre-fader, post-fader or after a given device. First
+      version: the consumer waits for the whole source strip; splitting a strip
+      at the tap (so it can start earlier) is a later optimisation.
+- [ ] Each edge has its own buffer (Phase 6), valid until the consumer reads it,
+      possibly on another thread.
+- [ ] Delay compensation per edge: align the source's arrival with the
+      consumer's latency before that device (the Phase 5 function).
+- [ ] VST3: activate and arrange the aux input bus edit-side (`activateBus`,
+      `setBusArrangements`), never in the callback; the adapter fills it from the
+      edge's buffer (silence flags set when there is no source).
+- [ ] Expect less parallelism: a sidechain serialises source → consumer, so
+      "kick ducks everything" turns into kick, then the rest. Cost ordering
+      (Phase 5½) already ranks the source by what waits on it.
+
+Model / UI
+- [ ] `Device.sidechain: (track id, tap) | None`, only for devices with an aux
+      input; serialized; a deleted source track turns it off (undoable).
+- [ ] Source picker in the device title bar; sources that would make a cycle
+      (e.g. a track inside the group being sidechained) are greyed out.
+
+Tests
+- [ ] A test plug-in with an aux input (tests/vst3_plugins) hears the source
+      sample-exactly, with latent plug-ins before the tap and on the consumer's
+      track.
+- [ ] Cycles refused; deleting the source; undo and serialization.
+- [ ] Random graphs with sidechains: bit-identical with and without workers.
+
+---
+
+## Phase 9 — Device groups (racks)
 
 Engine
 - [ ] Rack structure lives in the snapshot (not a self-mutating composite
       `Processor`): `InsertNode { processor | chains }`,
       `ChainRender { id, params (TrackParams), inserts, compensation, delay, automation, volume, pan }`.
 - [ ] Renderer: rack copies its input to each chain, `processStrip`s it, sums.
-- [ ] Scratch buffers per nesting depth, preallocated in `Renderer::prepare`;
-      cap the depth (e.g. 8) in the API.
+- [ ] Scratch buffers per nesting depth, preallocated in `Renderer::prepare`
+      (per worker: `WorkerScratch`); cap the depth (e.g. 8) in the API.
 - [ ] Rack latency = slowest chain; other chains compensated internally (the
       Phase 5 function).
 - [ ] Automation: walk the tree when building lanes; nested devices keep
       `automate()` direct calls; lane latency = path latency.
 - [ ] MIDI: chains get the track's events (instrument racks / layering).
 - [ ] Chain meters (`MeterReading` by chain id).
+- [ ] Sidechains (Phase 8) into a device inside a rack: its latency before the
+      device includes the rack's chain up to it.
 
 Model / UI
 - [ ] `Device(kind="rack", chains=[Chain(id, name, devices, volume_db, pan, mute, solo)])`.
@@ -251,7 +422,7 @@ Tests
 ## Device presets
 
 Plug-in presets don't depend on racks and can be built any time; rack presets
-plug into the same flow once Phase 6 lands.
+plug into the same flow once Phase 9 lands.
 
 Model / UI
 - [ ] Small save button in every device's title bar (plug-ins, built-ins,
@@ -276,23 +447,20 @@ Tests
 
 ## Later
 
-- [ ] Return tracks and sends (a send = second edge with a gain; compensation
-      per edge).
-- [ ] Track input from another track (resampling) — an input edge.
-- [ ] Sidechain inputs for plug-ins — an edge into a processor.
-  - Tap point per edge: pre-fader, post-fader or after a given device. First
-    version: the consumer waits for the whole source strip; splitting a strip
-    at the tap (so it can start earlier) is a later optimisation.
-  - Each edge has its own buffer, allocated edit-side like bus buffers (it must
-    stay valid until the consumer reads it, possibly on another thread).
-  - Delay compensation per edge: align the source's arrival with the consumer's
-    latency before that device (the Phase 5 function).
-  - Source picker greys out sources that would make a cycle (e.g. a track
-    inside the group being sidechained).
-  - VST3: activate and arrange the aux input bus edit-side
-    (`activateBus`, `setBusArrangements`), never in the callback.
-  - Expect less parallelism: a sidechain serialises source → consumer, so
-    "kick ducks everything" turns into kick, then the rest.
+- [ ] Freeze / flatten. Imposes nothing on the engine's design (an offline
+      render of one track's output; the per-track buffers make that easy), but
+      it has to decide what happens with every routing feature, so it is easier
+      to specify once those exist:
+  - a frozen track plays its rendered audio; its plug-ins are unloaded, their
+    state kept for unfreezing;
+  - sends and sidechain sources tap the frozen audio (post-fader taps only;
+    pre-fader and after-device taps keep the track from freezing, or are
+    rendered as their own stems);
+  - a frozen group renders its bus; frozen device automation is baked, volume
+    and pan stay live;
+  - a tempo change re-renders (or plays the frozen audio warped);
+  - flatten = keep the rendered clip, drop the devices: one undo command.
+  - If CPU becomes the pressing problem earlier, a first version can ship
+    before Phase 6 and simply refuse tracks with sends or sidechains.
 - [ ] Macro automation in the engine (a lane fanning out to its targets).
 - [ ] Key/velocity zones on rack chains.
-- [ ] Freeze / flatten.

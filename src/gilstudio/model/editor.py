@@ -12,11 +12,13 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QUndoStack
 
 from . import automation, edits, notes
-from .automation import MASTER, MIXER_PAN, MIXER_VOLUME, AutomationView, Envelope
+from .automation import MASTER, MAX_VOLUME_DB, MIN_VOLUME_DB, MIXER_PAN, MIXER_VOLUME, AutomationView, Envelope
 from .keys import Key, clip_settings
 from .commands import (
     ArrangeTracksCommand,
+    InsertReturnCommand,
     InsertTrackCommand,
+    RemoveReturnCommand,
     RemoveTrackCommand,
     SetChainsCommand,
     SetClipsCommand,
@@ -35,6 +37,7 @@ from .project import (
     GROUP_KIND,
     MONITOR_MODES,
     PLUGIN_KIND,
+    RETURN_KIND,
     AnyClip,
     Clip,
     Device,
@@ -43,8 +46,10 @@ from .project import (
     Note,
     PluginRef,
     Project,
+    Send,
     Track,
     new_id,
+    return_letter,
     tree_problem,
 )
 from .timebase import TimeSignature, seconds_to_beats
@@ -180,18 +185,69 @@ class ProjectEditor(QObject):
         return track
 
     def delete_tracks(self, track_ids: list[str]) -> None:
-        """Delete tracks; a group goes with what is in it. One undo step."""
+        """Delete tracks (and return tracks); a group goes with what is in it, a
+        return with the sends into it (and their automation). One undo step."""
         p = self.project
         doomed = {t for t in track_ids if p.has_track(t)}
         doomed |= {d.id for t in list(doomed) for d in p.descendants(t)}
-        if not doomed:
+        returns = {t for t in track_ids if p.has_return(t)}
+        if not doomed and not returns:
             return
-        self.undo_stack.beginMacro("Delete Track" if len(doomed) == 1 else "Delete Tracks")
+        count = len(doomed) + len(returns)
+        text = "Delete Return Track" if not doomed and count == 1 else "Delete Track" if count == 1 else "Delete Tracks"
+        self.undo_stack.beginMacro(text)
         # The last first: undo brings back each group before what is in it.
         for track in reversed(p.tracks):
             if track.id in doomed:
-                self._push(RemoveTrackCommand(p, track.id))
+                self._push(RemoveTrackCommand(p, track.id, text))
+        if returns:
+            for track in p.senders():
+                kept = {r: send for r, send in track.sends.items() if r not in returns}
+                if track.id not in returns and kept != track.sends:
+                    self._push(UpdateTrackCommand(p, track.id, "sends", track.sends, kept, text))
+                for key in [k for k in track.automation if automation.key_send(k) in returns]:
+                    self._push(SetEnvelopeCommand(p, track.id, key, p.envelope(track.id, key), (), text))
+            for track in reversed(p.returns):
+                if track.id in returns:
+                    self._push(RemoveReturnCommand(p, track.id, text))
         self.undo_stack.endMacro()
+
+    # --- Returns and sends --------------------------------------------------------
+
+    def add_return_track(self, index: int | None = None, name: str | None = None) -> Track:
+        """Ctrl+Alt+T: a return track, last (or at `index` among the returns)."""
+        p = self.project
+        index = len(p.returns) if index is None else max(0, min(index, len(p.returns)))
+        track = Track(id=new_id(), name=name or p.unique_track_name(f"{return_letter(index)} Return"),
+                      color=p.next_color(), kind=RETURN_KIND)
+        self._push(InsertReturnCommand(p, track, index))
+        return p.track(track.id)
+
+    def set_send(self, track_id: str, return_id: str, level_db: float | None = None, pre_fader: bool | None = None,
+                 merge_key: object | None = None) -> None:
+        """A track's (or a group's, or a return's) send to a return: its level and
+        where it taps. A send not made yet starts silent and after the fader.
+        Raises ValueError for a send the routing can't have (into itself, or a
+        cycle among returns)."""
+        p = self.project
+        track = p.track(track_id)
+        if track.is_master or not p.has_return(return_id) or p.would_cycle(track_id, return_id):
+            raise ValueError(f"{track.name} can't send to that track")
+        old = track.sends.get(return_id, Send())
+        new = Send(old.level_db if level_db is None else max(MIN_VOLUME_DB, min(MAX_VOLUME_DB, level_db)),
+                   old.pre_fader if pre_fader is None else pre_fader)
+        if return_id not in track.sends or new != old:
+            text = "Change Send" if new.pre_fader == old.pre_fader else "Toggle Pre-Fader Send"
+            self._push(UpdateTrackCommand(p, track_id, "sends", track.sends, {**track.sends, return_id: new}, text,
+                                          merge_key))
+        if level_db is not None:
+            self.parameter_touched.emit(track_id, automation.send_key(return_id))
+
+    def remove_send(self, track_id: str, return_id: str) -> None:
+        track = self.project.track(track_id)
+        if return_id in track.sends:
+            kept = {r: send for r, send in track.sends.items() if r != return_id}
+            self._push(UpdateTrackCommand(self.project, track_id, "sends", track.sends, kept, "Remove Send"))
 
     # --- Groups -------------------------------------------------------------------
 
@@ -337,7 +393,7 @@ class ProjectEditor(QObject):
         """Solo (or unsolo) these tracks, one undo step. `exclusive` (soloing):
         every other track is unsoloed."""
         track_ids = set(track_ids)
-        changes = [(t.id, t.solo, t.id in track_ids and solo) for t in self.project.tracks
+        changes = [(t.id, t.solo, t.id in track_ids and solo) for t in self.project.senders()
                    if t.id in track_ids or (exclusive and solo)]
         changes = [change for change in changes if change[1] != change[2]]
         if not changes:
@@ -529,7 +585,7 @@ class ProjectEditor(QObject):
                 continue
             for start, end in automation.merge_spans(ranges):
                 for key, points in self.project.automation(source).items():
-                    if (dest != source and key not in automation.MIXER_KEYS
+                    if (dest != source and not automation.is_mixer_key(key)
                             or not automation.has_points_in(points, start, end)):
                         continue
                     pastes.append((dest, key, start + delta_beats, end - start,
