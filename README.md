@@ -1,4 +1,4 @@
-# GIL Studio
+# SUBstation
 
 A basic DAW for Windows with an Ableton-style arrangement view. The UI and
 editing logic are Python (PySide6/Qt 6); the real-time audio engine is C++
