@@ -123,6 +123,13 @@ struct ParamInfo {
     }
 };
 
+// A stream of values a device's own editor draws besides its parameters: a
+// meter's readings, a curve, samples for an analyser (Processor::displays()).
+struct DisplayInfo {
+    std::string id;           // what the editor asks for it by ("reduction")
+    int samplesPerValue = 1;  // the audio each value stands for: 1 for samples, more for a meter
+};
+
 // A change the host's automation makes to a parameter within a process() call.
 struct ParamAutomation {
     int32_t sampleOffset = 0;
@@ -242,6 +249,20 @@ public:
         sidechain_[0] = left;
         sidechain_[1] = right;
     }
+    // Rendering thread: whether the device has a sidechain at all (a source was
+    // chosen), so one can key from its own input without one, yet hear silence
+    // when solo leaves its source out. Set before each process() call.
+    void setSidechainConnected(bool connected) noexcept { sidechainConnected_ = connected; }
+
+    // --- Display ---------------------------------------------------------------
+    // What a device's own editor draws besides its parameters, as streams of
+    // values that process() publishes. readDisplay() appends stream `index`'s
+    // values since `position` (0 at first) to `out` and returns where to read
+    // from next; any thread may call it, any number of readers may follow a stream.
+    virtual std::vector<DisplayInfo> displays() const { return {}; }
+    virtual uint64_t readDisplay(int /*index*/, uint64_t position, std::vector<float>& /*out*/) const {
+        return position;
+    }
 
 protected:
     // In process(): the automation for this call (processors may sort it).
@@ -249,9 +270,11 @@ protected:
     size_t numAutomation() const noexcept { return numAutomation_; }
     // In process(): the sidechain's channel (0 or 1) for this call; null: silence.
     const float* sidechain(int channel) const noexcept { return sidechain_[channel & 1]; }
+    bool sidechainConnected() const noexcept { return sidechainConnected_; }
 
 private:
     const float* sidechain_[2] = {nullptr, nullptr};
+    bool sidechainConnected_ = false;
     std::atomic<bool> enabled_{true};
     std::atomic<bool> resetRequested_{false};
     std::vector<ParamAutomation> automation_ = std::vector<ParamAutomation>(kMaxAutomation);

@@ -140,4 +140,47 @@ inline void balanceGains(float pan, float& left, float& right) noexcept {
     right = pan < 0.f ? std::cos(-pan * kHalfPi) : 1.f;
 }
 
+// Values one thread publishes for others to draw (a meter's readings, samples
+// for an analyser). The writer never waits and never fails: it overwrites the
+// oldest values. Each reader keeps its own position, so any number can follow
+// the stream, and one that falls behind skips to the latest `capacity` values.
+// (A reader overtaken while it reads may get a newer value in an older one's
+// place; for drawing that is harmless.)
+class DisplayStream {
+public:
+    // `capacity` is rounded up to a power of two.
+    explicit DisplayStream(size_t capacity) {
+        size_t size = 1;
+        while (size < capacity) size <<= 1;
+        slots_ = std::vector<std::atomic<float>>(size);
+        mask_ = size - 1;
+    }
+
+    // Writer thread (real-time).
+    void push(float value) noexcept {
+        const uint64_t head = head_.load(std::memory_order_relaxed);
+        slots_[head & mask_].store(value, std::memory_order_relaxed);
+        head_.store(head + 1, std::memory_order_release);
+    }
+
+    // Any thread: appends the values published since `position` (a previous
+    // call's result; 0 the first time) to `out`, oldest first, and returns the
+    // position to read from next.
+    uint64_t read(uint64_t position, std::vector<float>& out) const {
+        const uint64_t head = head_.load(std::memory_order_acquire);
+        const uint64_t capacity = mask_ + 1;
+        if (position > head) position = head;  // (a position from another stream)
+        if (head - position > capacity) position = head - capacity;
+        for (uint64_t i = position; i < head; ++i) out.push_back(slots_[i & mask_].load(std::memory_order_relaxed));
+        return head;
+    }
+
+    uint64_t written() const noexcept { return head_.load(std::memory_order_acquire); }
+
+private:
+    std::vector<std::atomic<float>> slots_;
+    size_t mask_ = 0;
+    std::atomic<uint64_t> head_{0};
+};
+
 }  // namespace gil

@@ -1189,8 +1189,9 @@ class ProjectEditor(QObject):
 
     def set_device_state(self, track_id: str, device_id: str, old: str | None, new: str,
                          text: str = "Load Preset") -> None:
-        """Replace a plug-in's whole state (base64), e.g. with a preset. `old` is
-        its state before, to go back to on undo."""
+        """Replace a device's state (base64): a plug-in's, e.g. with a preset, or
+        a built-in device's besides its parameters. `old` is its state before,
+        to go back to on undo."""
         self._push(SetDeviceStateCommand(self.project, track_id, device_id, old, new, text))
 
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:

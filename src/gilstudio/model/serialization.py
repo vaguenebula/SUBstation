@@ -115,6 +115,8 @@ def _device_to_dict(device: Device) -> dict:
         data["plugin"] = {"format": p.format, "uid": p.uid, "name": p.name, "vendor": p.vendor, "path": p.path,
                           "instrument": p.instrument}
         data["state"] = device.state
+    elif device.state is not None:
+        data["state"] = device.state
     if device.sidechain is not None:
         data["sidechain"] = {"track": device.sidechain.track_id, "tap": device.sidechain.tap}
     return data

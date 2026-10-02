@@ -854,7 +854,9 @@ void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& str
         for (size_t i = 0; i < strip.inserts.size(); ++i) {
             Processor& insert = *strip.inserts[i];
             if (insert.isEnabled()) {
-                if (const int e = i < strip.sidechains.size() ? strip.sidechains[i] : -1; e >= 0) {
+                const int e = i < strip.sidechains.size() ? strip.sidechains[i] : -1;
+                insert.setSidechainConnected(e >= 0);
+                if (e >= 0) {
                     const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
                     // The strip's signal waits for a sidechain that comes later than it (but
                     // not while monitored: a player hears only the devices' own latency).

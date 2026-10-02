@@ -227,7 +227,7 @@ def test_builtin_devices_in_browser(window, three_tracks):
     browser.sidebar.setCurrentItem(audio_effects)
     settle(browser)
     rows = [browser.list_model.index(i) for i in range(browser.list_model.rowCount())]
-    assert sorted(browser.list_model.item(i).name for i in rows) == ["Over The Top", "Utility"]
+    assert sorted(browser.list_model.item(i).name for i in rows) == ["Compressor", "Over The Top", "Utility"]
     [index] = [i for i in rows if browser.list_model.item(i).name == "Utility"]
     mime = browser.list_model.mimeData([index])
     assert device_kinds(mime) == ["utility"]

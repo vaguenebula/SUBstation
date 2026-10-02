@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import automation
+from .notes import note_name
 from .timebase import format_db, format_pan
 
 
@@ -26,6 +27,12 @@ def format_value(value: float, unit: str) -> str:
         return f"{value:.0f} %"
     if unit == "":
         return f"{value:+.2f}" if value else "0.00"
+    if unit == ":1":  # a ratio
+        return f"{value:.1f}:1"
+    if unit == "note":  # a MIDI key
+        return note_name(round(value))
+    if unit in ("st", "ct"):  # semitones, cents
+        return f"{round(value):+d} {unit}" if round(value) else f"0 {unit}"
     if unit == "Hz":
         return f"{value / 1000:.2f} kHz" if value >= 1000 else f"{value:.0f} Hz"
     if unit == "ms":

@@ -356,8 +356,9 @@ def test_instruments_from_the_browser(window):
     browser.sidebar.setCurrentItem(builtin.child(0))
     assert builtin.child(0).text(0) == "Instruments"
     settle(browser)
-    index = browser.list_model.index(0)
-    assert browser.list_model.item(index).name == "Synth"
+    rows = [browser.list_model.index(i) for i in range(browser.list_model.rowCount())]
+    assert [browser.list_model.item(i).name for i in rows] == ["Sampler", "Synth"]
+    index = rows[1]
     # With an audio track selected, double-clicking an instrument makes a MIDI track for it.
     window.insert_track()
     browser._activate_list(index)

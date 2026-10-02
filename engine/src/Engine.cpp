@@ -14,6 +14,7 @@
 #include "Routing.h"
 #include "miniaudio.h"
 #include "plugins/Vst3Format.h"
+#include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
 
 namespace gil {
@@ -963,6 +964,11 @@ void Engine::retireProcessorLocked(std::shared_ptr<Processor> processor) {
 
 uint32_t Engine::addBuiltinProcessor(uint32_t chainId, const std::string& type, int index) {
     auto processor = BuiltinRegistry::instance().create(type);
+    // Files a device loads (a sampler's sample) come from the shared cache, at
+    // the engine's rate. (Processors go before the engine does.)
+    if (auto* builtin = dynamic_cast<BuiltinProcessor*>(processor.get())) {
+        builtin->setSourceLoader([this](const std::string& path) { return loadSource(path); });
+    }
     std::lock_guard lock(mutex_);
     chainLocked(chainId);
     processor->prepare(sampleRate_, Renderer::kMaxBlock);  // before the audio thread can see it
@@ -1115,6 +1121,14 @@ void Engine::setProcessorParam(uint32_t processorId, int index, float value) {
 
 std::string Engine::processorParamText(uint32_t processorId, int index, float value) {
     return processor(processorId)->paramText(index, value);
+}
+
+std::vector<DisplayInfo> Engine::processorDisplays(uint32_t processorId) {
+    return processor(processorId)->displays();
+}
+
+uint64_t Engine::readProcessorDisplay(uint32_t processorId, int index, uint64_t position, std::vector<float>& out) {
+    return processor(processorId)->readDisplay(index, position, out);
 }
 
 void Engine::setProcessorEnabled(uint32_t processorId, bool enabled) {

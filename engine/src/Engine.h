@@ -354,6 +354,11 @@ public:
     float processorParam(uint32_t processorId, int index);
     void setProcessorParam(uint32_t processorId, int index, float value);
     std::string processorParamText(uint32_t processorId, int index, float value);
+    // What a device's own editor draws besides its parameters (Processor::displays()),
+    // and display `index`'s values since `position` (0 at first), appended to
+    // `out`; returns where to read from next.
+    std::vector<DisplayInfo> processorDisplays(uint32_t processorId);
+    uint64_t readProcessorDisplay(uint32_t processorId, int index, uint64_t position, std::vector<float>& out);
     void setProcessorEnabled(uint32_t processorId, bool enabled);
     std::vector<uint8_t> processorState(uint32_t processorId);
     void setProcessorState(uint32_t processorId, const std::vector<uint8_t>& state);

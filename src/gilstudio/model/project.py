@@ -242,10 +242,12 @@ class Device:
     """An insert device on a track: a built-in one ('synth', 'utility'), or a
     plug-in (kind 'plugin', with `plugin` saying which).
 
-    A built-in device's parameters are its whole state. A plug-in keeps its own
-    state; `state` holds it (base64) as last saved, for loading the project.
-    Its `params` only record values changed from the host, for undo. A device
-    with a sidechain (aux) input may hear a track there (`sidechain`)."""
+    A built-in device's state is its `params`, and `state` for what isn't a
+    parameter (a sampler's sample: see device_state.py), base64; the engine
+    follows the model. A plug-in keeps its own state; `state` holds it (base64)
+    as last saved, for loading the project. Its `params` only record values
+    changed from the host, for undo. A device with a sidechain (aux) input may
+    hear a track there (`sidechain`)."""
 
     id: str
     kind: str
@@ -463,7 +465,7 @@ class Project(QObject):
     clips_changed = Signal(str)  # track id
     devices_changed = Signal(str)  # track id: devices added/removed/toggled, or a sidechain changed
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
-    device_state_changed = Signal(str, str)  # track id, device id: a plug-in's whole state was set (a preset)
+    device_state_changed = Signal(str, str)  # track id, device id: its state was set (a preset, a sample)
     settings_changed = Signal()  # tempo, time signature, key, loop, automation lock
     automation_changed = Signal(str, str)  # owner (track id or MASTER), target key
     automation_view_changed = Signal(str)  # owner: what its automation shows
