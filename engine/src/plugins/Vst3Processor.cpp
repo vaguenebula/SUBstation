@@ -269,7 +269,9 @@ void Vst3Processor::setupBuses() {
     if (!arrange(true, true) && !(auxInput_ >= 0 && arrange(true, false))) arrange(false, false);
 
     if (mainInput_ >= 0) component_->activateBus(kAudio, kInput, mainInput_, true);
-    if (auxInput_ >= 0) component_->activateBus(kAudio, kInput, auxInput_, true);
+    if (auxInput_ >= 0 && component_->activateBus(kAudio, kInput, auxInput_, true) != kResultTrue) {
+        auxInput_ = -1;  // it won't process that bus: no sidechain (the bus gets silence, as other extras)
+    }
     if (mainOutput_ >= 0) component_->activateBus(kAudio, kOutput, mainOutput_, true);
     if (eventInput_ >= 0) component_->activateBus(kEvent, kInput, eventInput_, true);
 
