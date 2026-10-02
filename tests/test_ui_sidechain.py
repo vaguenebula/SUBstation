@@ -53,7 +53,10 @@ def test_the_sidechain_button(window, app):
     editor.remove_device(kick.id, eq.id)  # before the fader, until it comes back
     app.processEvents()
     assert actions(widget.sidechain_menu())["Pre Fader"].isChecked()
+    assert button.toolTip() == "Sidechain: Kick, pre fader"  # (the kick's chain changed, not the bass's)
     window.undo_stack.undo()
+    app.processEvents()
+    assert button.toolTip() == "Sidechain: Kick, After Utility"
     actions(widget.sidechain_menu())["Pre Fader"].trigger()
     assert p.device(bass.id, keyed.id).sidechain == Sidechain(kick.id, PRE_FADER)
     actions(widget.sidechain_menu())[ret.name].trigger()  # another source: taken in the same place

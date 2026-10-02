@@ -381,7 +381,8 @@ Engine
       later (`GraphLatencies::deviceLatency`: its automation, its edges). Not
       while the consumer is monitored (monitoring latency).
 - [x] Mute and solo: a sidechain isn't heard on its own. Solo goes up it
-      (soloing the consumer keeps the source keying it) but not down (soloing the
+      (while the consumer is heard: soloed, fed by a solo or feeding one, the
+      source keeps keying it) but not down (soloing the
       source doesn't make the consumer heard); into the master's devices it always
       plays. Mute and solo silence it only after the source's fader (a muted
       kick still keys from before it).

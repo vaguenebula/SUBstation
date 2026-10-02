@@ -1027,6 +1027,8 @@ class DevicePanel(QFrame):
 
     def _on_devices_changed(self, track_id: str, rebuild: bool = False) -> None:
         if track_id != self.track_id:
+            for widget in self._current_widgets():  # a sidechain's source may have lost (or got back) its tap
+                widget.update_sidechain()
             return
         devices = self.project.track(track_id).devices
         widgets = list(self.widgets.values())

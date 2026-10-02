@@ -433,9 +433,10 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
     // Each solo button is read once, so the chunk sees one consistent state. An
     // input edge only counts while its track hears it (monitored): otherwise its
     // track plays its clips, and the edge only feeds a recording. A sidechain
-    // isn't heard: solo goes up it (what keys a soloed strip keeps keying it; the
-    // master's devices are always heard) but not down it (soloing what keys a
-    // strip doesn't make that strip heard).
+    // isn't heard: solo goes up it (what keys a strip that is heard keeps keying
+    // it: one soloed, fed by a solo or feeding one; the master's devices are
+    // always heard) but not down it (soloing what keys a strip doesn't make that
+    // strip heard).
     const auto passes = [&snap](const EdgeRender& edge) {  // its signal goes on into its destination's
         return edge.sums() || (edge.kind == EdgeRender::Kind::Input &&
                                snap.tracks[static_cast<size_t>(edge.to)].buffers->monitored);
@@ -443,9 +444,12 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
     const auto carries = [&passes](const EdgeRender& edge) {
         return passes(edge) || edge.kind == EdgeRender::Kind::Sidechain;
     };
-    const auto upstream = [&snap](const EdgeRender& edge) {  // where it goes is soloed or feeds a solo
-        return edge.to >= 0 ? snap.tracks[static_cast<size_t>(edge.to)].buffers->soloUp
-                            : edge.kind == EdgeRender::Kind::Sidechain;
+    // Where it goes is soloed or feeds a solo; for a sidechain, also fed by one
+    // (soloDown is worked out before soloUp: sources come first).
+    const auto upstream = [&snap](const EdgeRender& edge) {
+        if (edge.to < 0) return edge.kind == EdgeRender::Kind::Sidechain;
+        const TrackBuffers& to = *snap.tracks[static_cast<size_t>(edge.to)].buffers;
+        return to.soloUp || (edge.kind == EdgeRender::Kind::Sidechain && to.soloDown);
     };
     bool anySolo = false;
     for (const TrackRender& track : snap.tracks) {

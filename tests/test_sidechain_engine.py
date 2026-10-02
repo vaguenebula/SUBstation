@@ -262,6 +262,15 @@ def test_mute_and_solo(engine, uids, click_wav):
     assert clicks(render(engine)) == {}
     engine.set_processor_sidechain(pid, source, ge.SidechainTap.PRE_FADER)
     assert clicks(render(engine)) == {SPB: CLICK}  # before the fader: muting doesn't change it
+    # A keyed device on a group stays keyed while a track in the group is soloed (the group is heard).
+    engine.set_processor_sidechain(pid, source)
+    group = engine.add_track()
+    inside = clip_track(engine, click_wav, output=group)
+    engine.set_processor_sidechain(keyed(engine, uids, group), source)
+    engine.set_track_mute(source, False)
+    engine.set_track_solo(inside, True)
+    assert clicks(render(engine)) == {SPB: 2 * CLICK}  # the track and the group's key, not the source
+    engine.set_track_solo(inside, False)
     # Into the master's devices, the sidechain plays whatever is soloed.
     engine.set_track_mute(source, False)
     engine.set_processor_sidechain(pid, source)
