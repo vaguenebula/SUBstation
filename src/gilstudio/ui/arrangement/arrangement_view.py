@@ -16,6 +16,7 @@ from ... import theme
 from ...audio.engine_bridge import EngineBridge
 from ...model.automation import MASTER
 from ...model.editor import ProjectEditor
+from ...model.project import routing_graph
 from ..clip_view import ClipView
 from .lanes_canvas import LanesCanvas
 from .ruler import TimelineRuler
@@ -247,10 +248,11 @@ class ArrangementView(QWidget):
     def _refresh_sends(self) -> None:
         """Every send knob: which can be used depends on the whole routing graph
         (groups, sends, inputs and sidechains)."""
+        graph = routing_graph(self.project.tracks, self.project.returns)  # once, not per knob
         for _lane, header in self._returns.values():
-            header.sends.refresh()
+            header.sends.refresh(graph)
         for header in self.headers.headers.values():
-            header.sends.refresh()
+            header.sends.refresh(graph)
 
     def _on_track_changed(self, track_id: str) -> None:
         for track in self.project.tracks:  # what takes its output as its input shows its name

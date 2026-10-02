@@ -55,7 +55,10 @@ from ...model.project import (
     MIN_TRACK_HEIGHT,
     TRACK_COLORS,
     MidiInput,
+    RoutingGraph,
     Send,
+    feeds,
+    routing_graph,
 )
 from ...model.timebase import format_db, format_pan, parse_pan
 from ..widgets import Knob, MeterWidget, ToggleButton, ValueBox
@@ -198,10 +201,13 @@ class SendControls(QObject):
             label.setVisible(visible)
             knob.setVisible(visible)
 
-    def refresh(self) -> None:
-        """Values, automation, letters and which can be used, as they are now."""
+    def refresh(self, graph: RoutingGraph | None = None) -> None:
+        """Values, automation, letters and which can be used, as they are now.
+        `graph` is the project's routing graph, when the caller has it already."""
         if not self.project.has_owner(self.owner):
             return
+        if graph is None:
+            graph = routing_graph(self.project.tracks, self.project.returns)
         track = self.project.track(self.owner)
         for return_id, (label, knob) in self.knobs.items():
             if not self.project.has_return(return_id):
@@ -215,12 +221,15 @@ class SendControls(QObject):
                 level = self.bridge.current_value(self.owner, key)
             knob.set_automation(state)
             knob.setValue(automation_model.volume_to_normalized(level))
-            usable = not self.project.would_cycle(self.owner, return_id)
+            usable = not feeds(graph, return_id, self.owner)
             knob.setEnabled(usable)
             label.setEnabled(usable)
-            label.setText(letter)
+            if label.text() != letter:
+                label.setText(letter)
             color = theme.ACCENT if send.pre_fader and return_id in track.sends else theme.TEXT_DIM
-            label.setStyleSheet(f"color: {color};")
+            if label.property("sendColor") != color:  # a style sheet is slow to apply: only when it changes
+                label.setProperty("sendColor", color)
+                label.setStyleSheet(f"color: {color};")
             name = self.project.track(return_id).name
             if not usable:
                 tip = f"Send {letter} ({name}): it feeds this track"
