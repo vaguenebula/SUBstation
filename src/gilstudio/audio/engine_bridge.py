@@ -14,7 +14,9 @@ Racks: a rack is an engine rack, its chains engine chains of it (with their
 faders), and the devices in them processors there, as on a track's own chain.
 A rack's macros are the model's business (they set parameters there). When a plug-in device goes away
 (deleted, or its track), its state is kept here, so undo brings it back as it was. Edits made in a plug-in's own
-editor come back from the engine as `plugin_param_edited`, for the undo stack.
+editor come back from the engine as `plugin_param_edited`, for the undo stack; only while
+that editor shows (a plug-in may report its own changes as edits, as some do while their
+state is restored: a copy pasted, a track duplicated, an undo).
 
 Audio devices (WASAPI or ASIO) open as the preferences describe. An ASIO
 driver whose settings change (in its control panel, or its clock) asks to be
@@ -1128,10 +1130,13 @@ class EngineBridge(QObject):
             return None
         return self.engine.processor_state(engine_id)
 
-    def store_plugin_states(self) -> None:
-        """Copy every plug-in's state into the model, for saving the project."""
+    def store_plugin_states(self, device_ids=None) -> None:
+        """Copy every plug-in's state (or those of `device_ids`) into the model, for
+        saving the project (or copying the devices)."""
         for track in self.project.all_tracks():
             for device in iter_devices(track.devices):
+                if device_ids is not None and device.id not in device_ids:
+                    continue
                 engine_id = self.engine_device_id(track.id, device.id)
                 if engine_id is None or engine_id not in self._plugin_ids:
                     continue
@@ -1258,6 +1263,12 @@ class EngineBridge(QObject):
         for event in events:
             place = places.get(event.processor_id)
             if place is None:
+                continue
+            if event.type in (kind.PARAM_EDITED, kind.PARAM_TOUCHED) and not self.engine.is_editor_open(
+                    event.processor_id):
+                # Not the user (who edits in the editor): the plug-in itself, as some do when
+                # their state is restored. Not an edit to undo; its parameters show anew.
+                changed[place] = None
                 continue
             if event.type == kind.PARAM_EDITED:
                 param_id = self.param_id(event.processor_id, event.param_index)

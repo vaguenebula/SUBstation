@@ -234,6 +234,19 @@ def save(color: str = theme.TEXT) -> QIcon:
 
 
 @cache
+def fold(folded: bool, color: str = theme.TEXT) -> QIcon:
+    """A device's fold button: a triangle pointing down while it is open, right while folded."""
+    def draw(p: QPainter, c: QColor):
+        points = ((22, 14), (46, 32), (22, 50)) if folded else ((14, 22), (50, 22), (32, 46))
+        path = QPainterPath(QPointF(*points[0]))
+        for point in points[1:]:
+            path.lineTo(QPointF(*point))
+        path.closeSubpath()
+        p.fillPath(path, c)
+    return _icon(draw, color)
+
+
+@cache
 def search(color: str = theme.TEXT_DIM) -> QIcon:
     def draw(p: QPainter, c: QColor):
         p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))

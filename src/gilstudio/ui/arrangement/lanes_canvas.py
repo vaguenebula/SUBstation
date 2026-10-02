@@ -9,6 +9,7 @@ rectangle, and playhead motion repaints just two thin strips.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,7 @@ from ...audio.engine_bridge import EngineBridge, is_audio_file
 from ...model.editor import (
     BUILTIN_DEVICES,
     ClipboardContent,
+    CopiedAutomation,
     ProjectEditor,
     is_instrument,
 )
@@ -70,6 +72,7 @@ def clip_title_height(clip_height: float) -> int:
     """The title bar of a clip this high: where it is grabbed (the rest selects time)."""
     return TITLE_HEIGHT if clip_height >= MIN_TITLE_ROW else SHORT_TITLE_HEIGHT
 HEIGHT_STEP = 12  # pixels per wheel notch when Alt+wheel resizes a track
+WHEEL_GESTURE = 0.4  # s: wheel events closer together than this resize (or fold) the same track
 SELECTION_TINT = QColor(80, 150, 210, 150)  # selected clips and time selections, as in Ableton
 
 
@@ -119,12 +122,49 @@ def is_pan_modifier(mods) -> bool:
     return bool(mods & Qt.KeyboardModifier.ControlModifier and mods & Qt.KeyboardModifier.AltModifier)
 
 
-def resize_track_by_wheel(editor: ProjectEditor, track_id: str, delta: int) -> None:
-    track = editor.project.track(track_id)
-    if track.folded:
-        return  # a folded track is its name row
-    height = track.height + round(delta / 120.0 * HEIGHT_STEP)
-    editor.set_track_height(track_id, max(MIN_TRACK_HEIGHT, min(MAX_TRACK_HEIGHT, height)))
+class _WheelResize:
+    """Alt+wheel over a track (its header or its lane), as one gesture: down
+    shrinks it, and once it is as small as it gets, folds it (a group: hides its
+    tracks too); up unfolds a folded track, then makes it taller. A turn of the
+    wheel acts on the track it started on: the tracks below move up under the
+    mouse as it shrinks or folds."""
+
+    def __init__(self):
+        self._last: tuple[str, float] | None = None  # the track turned last, and when
+
+    def __call__(self, editor: ProjectEditor, track_id: str, delta: int) -> None:
+        project = editor.project
+        now = time.monotonic()
+        if self._last is not None and now - self._last[1] < WHEEL_GESTURE and project.has_track(self._last[0]):
+            track_id = self._last[0]
+        self._last = (track_id, now)
+        if not delta or not project.has_track(track_id):
+            return
+        track = project.track(track_id)
+        if track.folded:
+            if delta > 0:
+                editor.set_folded(track_id, False)  # (at the height it had)
+        elif delta < 0 and track.height <= MIN_TRACK_HEIGHT:
+            editor.set_folded(track_id, True)
+        else:
+            height = track.height + round(delta / 120.0 * HEIGHT_STEP)
+            editor.set_track_height(track_id, max(MIN_TRACK_HEIGHT, min(MAX_TRACK_HEIGHT, height)))
+
+
+resize_track_by_wheel = _WheelResize()
+
+
+def wheel_action(editor: ProjectEditor, track_id: str, event: QWheelEvent) -> bool:
+    """Alt+wheel resizes a track, folding and unfolding it at its smallest (Qt
+    may report it as horizontal scrolling, so either axis counts). False for
+    other wheel events."""
+    mods = event.modifiers()
+    if not mods & Qt.KeyboardModifier.AltModifier or mods & Qt.KeyboardModifier.ControlModifier:
+        return False
+    delta = event.angleDelta()
+    resize_track_by_wheel(editor, track_id, delta.y() or delta.x())
+    event.accept()
+    return True
 
 
 DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
@@ -164,7 +204,8 @@ class LanesCanvas(QWidget):
         self._drop_preview: tuple[int | None, float, list[tuple[str, float]]] | None = None
         self._hover_edge: tuple[str, str] | None = None  # (clip id, "left"/"right") under the mouse
         self._hover_point: Hover | None = None  # the breakpoint (or place on a line) under the mouse
-        self.clipboard: ClipboardContent | None = None  # clip content copied or cut (Ctrl+C / Ctrl+X)
+        # Clip content, or automation, copied or cut (Ctrl+C / Ctrl+X): the last copied is what Ctrl+V pastes.
+        self.clipboard: ClipboardContent | CopiedAutomation | None = None
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -747,12 +788,53 @@ class LanesCanvas(QWidget):
             self.clipboard = content
             self.selection.set_time_range(start, end, track_ids, clips=set())
 
+    def copy_automation(self) -> None:
+        """Copy the automation in the selected lane range (Ctrl+C)."""
+        if self.selection.time_range is not None and self.selection.lanes:
+            content = self.editor.copy_automation_range(*self.selection.time_range[:2], self.selection.lanes)
+            if content is None:
+                self.status_message.emit("There is no automation in the selection to copy.")
+            else:
+                self.clipboard = content
+
+    def cut_automation(self) -> None:
+        """Copy the automation in the selected lane range, and delete it (Ctrl+X);
+        the range stays selected."""
+        if self.selection.time_range is not None and self.selection.lanes:
+            content = self.editor.cut_automation_range(*self.selection.time_range[:2], self.selection.lanes)
+            if content is None:
+                self.status_message.emit("There is no automation in the selection to cut.")
+            else:
+                self.clipboard = content
+
+    def _paste_automation(self, content: CopiedAutomation, at_beat: float, lanes=None) -> None:
+        """Copied automation at `at_beat`: onto `lanes` (default: the selected
+        ones) as ProjectEditor.automation_paste_targets puts it, else the lanes it
+        came from. The pasted range is selected, and the insert marker goes to its end."""
+        selection = self.selection
+        if lanes is None:
+            lanes = selection.lanes if selection.time_range is not None else ()
+            if not lanes and selection.points is not None:
+                lanes = (selection.points[:2],)
+        pasted = self.editor.paste_automation(content, at_beat, lanes)
+        if not pasted:
+            self.status_message.emit("The copied automation can't go there: its lanes are gone.")
+            return
+        at = max(0.0, at_beat)
+        track_ids = list(dict.fromkeys(owner for owner, _key in pasted if self.project.has_track(owner)))
+        selection.set_time_range(at, at + content.length, track_ids, lanes=tuple(pasted))
+        selection.set_insert(at + content.length)
+
     def paste(self, at_beat: float | None = None, track_id: str | None = None) -> None:
         """Paste copied clip content (Ctrl+V) at `at_beat` (default: the insert
         marker), its top track onto `track_id` (default: the selected track), and
-        select it. The insert marker goes to its end, so pasting again appends."""
+        select it; or copied automation (see _paste_automation). The insert marker
+        goes to its end, so pasting again appends."""
         if self.clipboard is None:
-            self.status_message.emit("Nothing to paste: copy (Ctrl+C) or cut (Ctrl+X) clips first.")
+            self.status_message.emit("Nothing to paste: copy (Ctrl+C) or cut (Ctrl+X) clips or automation first.")
+            return
+        if isinstance(self.clipboard, CopiedAutomation):
+            self._paste_automation(self.clipboard, self.selection.insert_beat if at_beat is None else at_beat)
             return
         area = self.editor.paste(self.clipboard, self.selection.insert_beat if at_beat is None else at_beat,
                                  track_id or self.selection.track_id)
@@ -786,11 +868,10 @@ class LanesCanvas(QWidget):
         delta = event.angleDelta()
         mods = event.modifiers()
         if mods & Qt.KeyboardModifier.AltModifier and not mods & Qt.KeyboardModifier.ControlModifier:
-            # Alt+wheel resizes the track under the mouse. Qt may report Alt+wheel
-            # as horizontal scrolling, so accept either axis.
+            # Alt+wheel resizes the track under the mouse, folding (or unfolding) it at its smallest.
             index = self.row_index_at(event.position().y())
             if index is not None:
-                resize_track_by_wheel(self.editor, self.layout_model.rows[index].track_id, delta.y() or delta.x())
+                wheel_action(self.editor, self.layout_model.rows[index].track_id, event)
         elif mods & Qt.KeyboardModifier.ControlModifier:
             self.view.zoom_at(event.position().x(), 1.2 ** (delta.y() / 120.0))
         elif mods & Qt.KeyboardModifier.ShiftModifier or delta.x():
@@ -805,6 +886,20 @@ class LanesCanvas(QWidget):
         menu = QMenu(self)
         area = self.envelope_area_at(pos)
         if area is not None:
+            in_range = automation_lanes.in_range(self, area, pos)
+            for text, slot, key in (("Cut", self.cut_automation, QKeySequence.StandardKey.Cut),
+                                    ("Copy", self.copy_automation, QKeySequence.StandardKey.Copy)):
+                action = menu.addAction(text, slot)
+                self._show_shortcut(action, key)
+                action.setEnabled(in_range)
+            # At the insert marker: onto the selected lanes if this is one of them, else onto this one.
+            selected = self.selection.time_range is not None and (area.owner, area.key) in self.selection.lanes
+            lanes = self.selection.lanes if selected else ((area.owner, area.key),)
+            content = self.clipboard
+            paste = menu.addAction("Paste", lambda: self._paste_automation(content, self.selection.insert_beat, lanes))
+            self._show_shortcut(paste, QKeySequence.StandardKey.Paste)
+            paste.setEnabled(isinstance(content, CopiedAutomation))
+            menu.addSeparator()
             automation_lanes.add_menu_actions(self, area, pos, menu)
             menu.exec(event.globalPos())
             return
