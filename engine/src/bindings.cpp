@@ -57,9 +57,10 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 14;
+    m.attr("API_VERSION") = 15;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
+    m.attr("MAX_RACK_DEPTH") = Engine::kMaxRackDepth;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
 
     nb::class_<gil::AudioFileInfo>(m, "AudioFileInfo")
@@ -344,7 +345,8 @@ NB_MODULE(_engine, m) {
     nb::class_<gil::MeterReading>(m, "MeterReading")
         .def_ro("track_id", &gil::MeterReading::trackId)
         .def_ro("left", &gil::MeterReading::left)
-        .def_ro("right", &gil::MeterReading::right);
+        .def_ro("right", &gil::MeterReading::right)
+        .def_ro("chain_id", &gil::MeterReading::chainId, "A rack chain's fader (on track track_id); 0: the track's own.");
 
     nb::enum_<gil::WarpMode>(m, "WarpMode")
         .value("TRANSIENTS", gil::WarpMode::Transients)
@@ -513,7 +515,9 @@ NB_MODULE(_engine, m) {
         .def("set_master_gain", &Engine::setMasterGain, "gain"_a)
         .def("set_master_pan", &Engine::setMasterPan, "pan"_a)
         .def("set_track_automation", &Engine::setTrackAutomation, "track_id"_a, "lanes"_a,
-             "Replace a track's automation (track_id 0: the master's) with these AutomationLanes.")
+             "Replace a track's automation (track_id 0: the master's) with these AutomationLanes: of its mixer, "
+             "its devices' parameters (in racks too), or a rack chain's fader (the rack's id, param "
+             "'chain:<chain id>:volume' or ':pan').")
         .def("take_meters", &Engine::takeMeters, "Peak levels since the last call; track_id 0 is the master.")
         // Device chains: every track (and the master) has a main chain, by id.
         .def("track_chain", &Engine::trackChain, "track_id"_a, "A track's (or the master's) main device chain.")
@@ -529,6 +533,22 @@ NB_MODULE(_engine, m) {
         .def("move_processor", &Engine::moveProcessor, "processor_id"_a, "to_chain_id"_a, "index"_a = -1,
              "Move a device into a chain (another track's too), keeping its state (and sidechain: ValueError if "
              "that would close a cycle there): index counts the chain without it, -1 is last.")
+        // Racks
+        .def("add_rack", &Engine::addRack, "chain_id"_a, "index"_a = -1,
+             "Add a rack (a device group) to a chain: its chains each process its input, side by side, and it "
+             "puts out their sum (without chains, its input). Racks nest at most MAX_RACK_DEPTH deep (ValueError).")
+        .def("add_rack_chain", &Engine::addRackChain, "rack_id"_a, "index"_a = -1,
+             "A new chain of a rack (a chain id, for add_*_processor and move_processor), at `index` (-1: last).")
+        .def("remove_rack_chain", &Engine::removeRackChain, "chain_id"_a, "A rack's chain goes, with its devices.")
+        .def("set_rack_chain_order", &Engine::setRackChainOrder, "rack_id"_a, "chain_ids"_a)
+        .def("rack_chains", &Engine::rackChains, "rack_id"_a, "A rack's chains, in order.")
+        .def("chain_rack", &Engine::chainRack, "chain_id"_a, "The rack a chain belongs to; 0: a track's own chain.")
+        .def("chain_processors", &Engine::chainProcessors, "chain_id"_a, "A chain's devices, in order.")
+        .def("set_chain_gain", &Engine::setChainGain, "chain_id"_a, "gain"_a, "A rack chain's fader.")
+        .def("set_chain_pan", &Engine::setChainPan, "chain_id"_a, "pan"_a)
+        .def("set_chain_mute", &Engine::setChainMute, "chain_id"_a, "mute"_a)
+        .def("set_chain_solo", &Engine::setChainSolo, "chain_id"_a, "solo"_a,
+             "Soloed chains are the only ones of their rack heard.")
         .def("processor_info", &Engine::processorInfo, "processor_id"_a)
         .def("set_processor_sidechain", &Engine::setProcessorSidechain, "processor_id"_a, "source_track_id"_a,
              "tap"_a = gil::SidechainTap::PostFader, "tap_processor_id"_a = 0,

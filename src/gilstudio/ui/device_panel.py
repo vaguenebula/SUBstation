@@ -27,6 +27,15 @@ effects to reorder them (the instrument stays first), or onto another track in
 the arrangement to move them there (plug-ins keep their state). Ctrl+Alt-drag anywhere on
 the chain scrolls it, as in the arrangement. The chain scrolls to show a device
 when one is added, unless it was dropped on the chain (where it is in view).
+
+Racks (device groups) show their macros and their chains (rack_view); the
+chain clicked shows its devices right after the rack, in a bracket, where they
+are selected, dragged and dropped onto as on the track's own chain (and racks
+in it show theirs, further along). Ctrl+G groups the selected devices (of one
+chain) into a rack; Ctrl+Shift+G ungroups a rack. Right-click a parameter of a
+device in a rack to map one of the rack's macros to it. A rack's save button
+saves it as a preset (everything in it, plug-ins' states and macros too);
+right-click beside the devices to load one.
 """
 
 from __future__ import annotations
@@ -88,12 +97,23 @@ from ..model.editor import (
 )
 from ..model.params import format_value
 from ..model.project import (
+    MACRO_COUNT,
     PLUGIN_KIND,
     POST_FADER,
     PRE_FADER,
     PRE_FX,
+    Chain,
     Device,
     Sidechain,
+    chain_devices,
+    container_of,
+    iter_devices,
+)
+from ..model.serialization import (
+    PRESET_EXTENSION,
+    ProjectFileError,
+    load_preset,
+    save_preset,
 )
 from . import icons
 from .arrangement.lanes_canvas import DEVICE_MOVE_MIME, is_pan_modifier, moved_devices
@@ -101,6 +121,7 @@ from .arrangement.track_headers import automation_state
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
 from .device_editors import editor_for
+from .rack_view import ChainList, MacroPanel
 from .widgets import Knob, ToggleButton
 
 PANEL_MARGIN = 8  # above and below the chain
@@ -114,6 +135,8 @@ INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in or Plug-in
 INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create › Insert MIDI Track)."
 MESSAGE_LINES = 4  # a plug-in's error message is cut to this; its tooltip has it all
 PRESET_FILTER = "VST3 Preset (*.vstpreset)"
+RACK_PRESET_FILTER = f"GIL Studio Preset (*{PRESET_EXTENSION})"
+RACK_WIDTH = 420
 AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
 AUTOSCROLL_INTERVAL = 16  # ms
 
@@ -201,8 +224,9 @@ class _DeviceFrame(QFrame):
         self.bridge = bridge
         self.instrument = device_is_instrument(device)
         self.selected = False
-        # What the menu's Delete does; the device view makes it delete all its selected devices.
+        # What the menu's Delete (and Group) does; the device view makes it act on all its selected devices.
         self.remove_selected = lambda: editor.remove_device(track_id, self.device_id)
+        self.group_selected = lambda: editor.group_devices(track_id, [self.device_id])
         self._press: QPoint | None = None
         self.setObjectName("device")
         self.setFixedWidth(self.device_width)
@@ -341,7 +365,26 @@ class _DeviceFrame(QFrame):
             bool(editor.project.envelope(owner, key)))
         if bridge.is_overridden(owner, key):
             menu.addAction("Re-Enable Automation", lambda: bridge.re_enable_automation(owner))
+        rack_id = self.enclosing_rack()
+        if rack_id is not None:  # its rack's macros can move it
+            menu.addSeparator()
+            mapped = editor.macro_of(owner, self.device_id, param_id)
+            macros = menu.addMenu("Map to Macro")
+            for index in range(MACRO_COUNT):
+                action = macros.addAction(f"Macro {index + 1}", lambda i=index: editor.map_macro(
+                    owner, rack_id, i, self.device_id, param_id))
+                action.setCheckable(True)
+                action.setChecked(mapped == (rack_id, index))
+            if mapped is not None:
+                menu.addAction(f"Unmap from Macro {mapped[1] + 1}",
+                               lambda: editor.unmap_macro(owner, mapped[0], self.device_id, param_id))
         menu.exec(at)
+
+    def enclosing_rack(self) -> str | None:
+        """The rack the device is in (None: on the track's own chain)."""
+        project = self.editor.project
+        chain = container_of(project.track(self.track_id).devices, self.device_id)
+        return None if chain is None else project.chain_rack(self.track_id, chain).id
 
     def automation_state(self, param_id: str) -> str | None:
         return automation_state(self.bridge, self.track_id, device_key(self.device_id, param_id)) \
@@ -413,16 +456,26 @@ class _DeviceFrame(QFrame):
         self.menu_requested.emit(self.device_id)
         menu = QMenu(self)
         self.add_menu_actions(menu)
-        chain = [d.id for d in self.editor.project.track(self.track_id).devices]
+        devices = self.editor.project.track(self.track_id).devices
+        siblings = chain_devices(devices, container_of(devices, self.device_id))
+        chain = [d.id for d in siblings]
         index = chain.index(self.device_id)
         if not device_is_instrument(self.device()):
             left = menu.addAction("Move Left", lambda: self.editor.move_device(self.track_id, self.device_id, index - 1))
-            first = 1 if device_is_instrument(self.editor.project.track(self.track_id).devices[0]) else 0
+            first = 1 if device_is_instrument(siblings[0]) else 0
             left.setEnabled(index > first)
             right = menu.addAction("Move Right",
                                    lambda: self.editor.move_device(self.track_id, self.device_id, index + 1))
             right.setEnabled(index < len(chain) - 1)
             menu.addSeparator()
+        group = menu.addAction("Group", self.group_selected)
+        group.setShortcut("Ctrl+G")  # (as a tip: the window's action handles the key)
+        group.setShortcutVisibleInContextMenu(True)
+        if self.device().is_rack:
+            ungroup = menu.addAction("Ungroup", lambda: self.editor.ungroup_rack(self.track_id, self.device_id))
+            ungroup.setShortcut("Ctrl+Shift+G")
+            ungroup.setShortcutVisibleInContextMenu(True)
+        menu.addSeparator()
         menu.addAction("Delete", self.remove_selected)
         menu.exec(event.globalPos())
 
@@ -830,6 +883,108 @@ class PluginDeviceWidget(_DeviceFrame):
             self.bridge.status_message.emit(f"Could not save the preset: {exc}")
 
 
+def preset_folder() -> str:
+    """Where presets are saved and loaded from: where the last one was, else Documents."""
+    stored = QSettings().value("presets/dir")
+    if stored and os.path.isdir(str(stored)):
+        return str(stored)
+    return str(Path.home() / "Documents")
+
+
+class RackWidget(_DeviceFrame):
+    """A rack: its macros and its chains (the device view shows the chain
+    clicked beside it). Its save button saves it as a preset."""
+
+    device_width = RACK_WIDTH
+    chain_clicked = Signal(str, str)  # rack id, chain id
+
+    def __init__(self, track_id: str, device: Device, editor: ProjectEditor, bridge: EngineBridge,
+                 page: int = 0, parent: QWidget | None = None):
+        super().__init__(track_id, device, editor, parent, bridge)
+        self.save.setToolTip("Save Rack Preset")
+        self.save.clicked.connect(self.save_preset)
+        self.macros = MacroPanel(track_id, device, editor, bridge)
+        self.chains = ChainList(track_id, device, editor, bridge)
+        self.chains.chain_clicked.connect(lambda chain_id: self.chain_clicked.emit(self.device_id, chain_id))
+        self.content.addWidget(self.macros)
+        self.content.addWidget(self.chains, 1)
+        self._set_param_count(0, page)
+        self._update_tooltip()
+
+    def _param_widget(self, n: int) -> QWidget:
+        raise IndexError(n)  # (it has none: its macros and chains instead)
+
+    def _update_tooltip(self) -> None:
+        latency = self.bridge.engine.processor_info(self.bridge.engine_device_id(self.track_id, self.device_id)).latency \
+            if self.bridge.engine_device_id(self.track_id, self.device_id) is not None else 0
+        self.title.setToolTip(device_name(self.device()) + (f"\nLatency: {latency} samples (compensated)" if latency
+                                                            else ""))
+
+    def refresh(self, device: Device) -> None:
+        super().refresh(device)
+        self.title.setText(device_name(device))
+        self.macros.refresh(device)
+        self.chains.refresh(device)
+        self._update_tooltip()
+
+    def refresh_chain(self, chain: Chain) -> None:
+        self.chains.refresh_chain(chain)
+
+    def show_chain(self, chain_id: str | None) -> None:
+        self.chains.set_selected(chain_id)
+
+    def follows_automation(self) -> bool:
+        return self.chains.follows_automation()
+
+    def refresh_automation(self) -> None:
+        self.chains.refresh_automation()
+
+    def refresh_displays(self) -> None:
+        self.chains.refresh_meters()
+
+    def add_menu_actions(self, menu: QMenu) -> None:
+        menu.addAction("Add Chain", lambda: self.editor.add_rack_chain(self.track_id, self.device_id))
+        menu.addAction("Save Preset…", self.save_preset)
+        menu.addSeparator()
+
+    def save_preset(self) -> None:
+        """Save the rack, with everything in it, as a preset file."""
+        self.bridge.store_plugin_states()  # (the plug-ins' states as they are now)
+        suggested = str(Path(preset_folder()) / f"{device_name(self.device())}{PRESET_EXTENSION}")
+        path, _ = QFileDialog.getSaveFileName(self, "Save Rack Preset", suggested, RACK_PRESET_FILTER)
+        if not path:
+            return
+        QSettings().setValue("presets/dir", str(Path(path).parent))
+        try:
+            save_preset(self.device(), Path(path))
+        except OSError as exc:
+            self.bridge.status_message.emit(f"Could not save the preset: {exc}")
+
+
+class _ChainView(QFrame):
+    """A rack's chain shown beside the rack: its devices, in a bracket."""
+
+    def __init__(self, chain_id: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.chain_id = chain_id
+        self.setObjectName("chainView")
+        self.setStyleSheet(f"#chainView {{ background: {theme.EMPTY_AREA}; border-left: 2px solid {theme.ACCENT};"
+                           f" border-right: 2px solid {theme.ACCENT}; border-radius: 3px; }}")
+        self.devices = QHBoxLayout(self)
+        self.devices.setContentsMargins(6, 0, 6, 0)
+        self.devices.setSpacing(6)
+        self.hint = QLabel("Drop devices here")
+        self.hint.setStyleSheet(f"color: {theme.TEXT_DISABLED};")
+
+    def depth(self) -> int:
+        """How many chain views it is in."""
+        depth, parent = 0, self.parentWidget()
+        while parent is not None:
+            depth += isinstance(parent, _ChainView)
+            parent = parent.parentWidget()
+        return depth
+
+
 class DevicePanel(QFrame):
     status_message = Signal(str)
 
@@ -841,7 +996,9 @@ class DevicePanel(QFrame):
         self.selection = selection
         self.bridge = bridge
         self.track_id: str | None = None
-        self.widgets: dict[str, _DeviceFrame] = {}
+        self.widgets: dict[str, _DeviceFrame] = {}  # every device shown (in racks too)
+        self._chain_views: dict[str, _ChainView] = {}  # rack chain id -> its view (the chains shown)
+        self._shown_chains: dict[str, str] = {}  # rack id -> the chain it shows (view state)
         self._pages: dict[str, int] = {}  # plug-in device id -> the parameter page it shows
         self.selected: list[str] = []  # selected device ids, in chain order
         self._anchor: str | None = None  # where a Shift-click range starts
@@ -893,6 +1050,7 @@ class DevicePanel(QFrame):
         self.project.track_changed.connect(self._on_track_changed)
         self.project.device_param_changed.connect(self._on_param_changed)
         self.project.device_state_changed.connect(self._on_state_changed)
+        self.project.chain_changed.connect(self._on_chain_changed)
         self.project.reset.connect(lambda: self.show_track(None))
         self.project.track_removed.connect(lambda tid, _i: self.show_track(None) if tid == self.track_id else None)
         bridge.plugin_params_changed.connect(self._on_plugin_values)
@@ -935,8 +1093,20 @@ class DevicePanel(QFrame):
 
     # --- Selecting devices -------------------------------------------------------------
 
+    def _devices(self) -> list[Device]:
+        return self.project.track(self.track_id).devices if self.track_id else []
+
     def _chain_ids(self) -> list[str]:
-        return [d.id for d in self.project.track(self.track_id).devices] if self.track_id else []
+        """Every device on the track, depth first (those in racks after their rack)."""
+        return [d.id for d in iter_devices(self._devices())]
+
+    def _container_ids(self, chain: str | None) -> list[str]:
+        """The devices of one chain: the track's own (None) or a rack's."""
+        devices = chain_devices(self._devices(), chain)
+        return [d.id for d in devices] if devices is not None else []
+
+    def _container(self, device_id: str) -> str | None:
+        return container_of(self._devices(), device_id)
 
     def _set_selected(self, device_ids) -> None:
         wanted = set(device_ids)
@@ -949,13 +1119,14 @@ class DevicePanel(QFrame):
     def select_device(self, device_id: str, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
         """A click on a device: Shift selects the range from the last one clicked,
         Ctrl adds or removes it, and a plain click selects just it."""
-        chain = self._chain_ids()
+        container = self._container(device_id)  # a selection is of one chain's devices
+        chain = self._container_ids(container)
         if modifiers & Qt.KeyboardModifier.ShiftModifier and self._anchor in chain:
             a, b = sorted((chain.index(self._anchor), chain.index(device_id)))
             self._set_selected(chain[a:b + 1])
             return
         if modifiers & Qt.KeyboardModifier.ControlModifier:
-            self._set_selected(set(self.selected) ^ {device_id})
+            self._set_selected({i for i in self.selected if i in chain} ^ {device_id})
         else:
             self._set_selected([device_id])
         self._anchor = device_id
@@ -984,6 +1155,57 @@ class DevicePanel(QFrame):
             return False
         device_ids, self.selected = self.selected, []
         self.editor.remove_devices(self.track_id, device_ids)
+        return True
+
+    def group_selected(self) -> bool:
+        """Ctrl+G: the selected devices go into a new rack, which is selected. False if none were selected."""
+        if not self.track_id or not self.selected:
+            return False
+        rack = self.editor.group_devices(self.track_id, self.selected)
+        if rack is None:
+            self.status_message.emit("Racks nest at most 8 deep.")
+            return False
+        self.select_device(rack.id)
+        return True
+
+    def ungroup_selected(self) -> bool:
+        """Ctrl+Shift+G: the selected racks go, their devices take their place. False if none was selected."""
+        racks = [i for i in self.selected if self.project.device(self.track_id, i).is_rack] if self.track_id else []
+        if not racks:
+            return False
+        self.selected = []
+        self.editor.undo_stack.beginMacro("Ungroup Rack" if len(racks) == 1 else "Ungroup Racks")
+        try:
+            for rack_id in racks:
+                self.editor.ungroup_rack(self.track_id, rack_id)
+        finally:
+            self.editor.undo_stack.endMacro()
+        return True
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        """Beside the devices: load a preset there."""
+        if self.track_id is None:
+            return
+        chain, index = self.drop_target(event.pos())
+        menu = QMenu(self)
+        menu.addAction("Load Preset…", lambda: self.load_preset(chain, index))
+        menu.exec(event.globalPos())
+
+    def load_preset(self, chain: str | None = None, index: int | None = None) -> bool:
+        """A preset file's device (a rack) into a chain of the track shown."""
+        path, _ = QFileDialog.getOpenFileName(self, "Load Preset", preset_folder(), RACK_PRESET_FILTER)
+        if not path or self.track_id is None:
+            return False
+        QSettings().setValue("presets/dir", str(Path(path).parent))
+        try:
+            device = load_preset(Path(path))
+        except ProjectFileError as exc:
+            self.status_message.emit(str(exc))
+            return False
+        if not self.editor.insert_device(self.track_id, device, index, chain, f"Load Preset {Path(path).stem}"):
+            self.status_message.emit(INSTRUMENT_REFUSED if device_is_instrument(device) else
+                                     "The preset can't go there: racks nest at most 8 deep.")
+            return False
         return True
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -1030,26 +1252,48 @@ class DevicePanel(QFrame):
         moved = moved_devices(mime)
         return moved[1] if moved and moved[0] == self.track_id else []
 
-    def _chain_widgets(self) -> list[_DeviceFrame]:
-        return [self.widgets[i] for i in self._chain_ids() if i in self.widgets]
+    def _chain_widgets(self, chain: str | None = None) -> list[_DeviceFrame]:
+        """The widgets of a chain's devices: the track's own (None), or a rack's chain shown."""
+        return [self.widgets[i] for i in self._container_ids(chain) if i in self.widgets]
+
+    def drop_target(self, pos: QPoint) -> tuple[str | None, int]:
+        """Where a drop at `pos` (panel coordinates) goes: the chain (None: the
+        track's own; the innermost rack chain shown there, or the one whose row
+        it is on in a rack's chain list: last), and the index in it."""
+        for widget in self.widgets.values():
+            if isinstance(widget, RackWidget) and widget.isVisible():
+                list_pos = widget.chains.mapFrom(self, pos)
+                chain_id = widget.chains.chain_at(list_pos) if widget.chains.rect().contains(list_pos) else None
+                if chain_id is not None:
+                    return chain_id, len(self._container_ids(chain_id))
+        chain = None
+        deepest = -1
+        for chain_id, view in self._chain_views.items():
+            if view.isVisible() and view.rect().contains(view.mapFrom(self, pos)) and view.depth() > deepest:
+                chain, deepest = chain_id, view.depth()
+        x = pos.x()
+        index = sum(1 for w in self._chain_widgets(chain) if w.mapTo(self, w.rect().center()).x() < x)
+        return chain, index
 
     def drop_index(self, pos: QPoint) -> int:
-        """Where in the chain a drop at `pos` (panel coordinates) goes."""
-        x = self.chain.mapFrom(self, pos).x()
-        return sum(1 for w in self._chain_widgets() if w.geometry().center().x() < x)
+        """Where in its chain a drop at `pos` (panel coordinates) goes."""
+        return self.drop_target(pos)[1]
 
-    def _show_drop_marker(self, index: int) -> None:
-        chain = self._chain_widgets()
-        if not chain:
-            self.drop_marker.hide()
-            return
+    def _show_drop_marker(self, chain: str | None, index: int) -> None:
+        widgets = self._chain_widgets(chain)
         gap = self.chain_layout.spacing()
-        if index < len(chain):
-            x = chain[index].geometry().left() - gap // 2 - 1
+        view = self._chain_views.get(chain)
+        if not widgets:
+            if view is None:
+                self.drop_marker.hide()
+                return
+            corner = view.mapTo(self.chain, QPoint(0, 0))
+            x, top, bottom = corner.x() + 3, corner.y(), corner.y() + view.height() - 1
         else:
-            x = chain[-1].geometry().right() + gap // 2
-        top = min(w.geometry().top() for w in chain)
-        bottom = max(w.geometry().bottom() for w in chain)
+            rects = [w.rect().translated(w.mapTo(self.chain, QPoint(0, 0))) for w in widgets]
+            x = rects[index].left() - gap // 2 - 1 if index < len(rects) else rects[-1].right() + gap // 2
+            top = min(r.top() for r in rects)
+            bottom = max(r.bottom() for r in rects)
         self.drop_marker.setGeometry(x, top, 2, bottom - top + 1)
         self.drop_marker.raise_()
         self.drop_marker.show()
@@ -1070,12 +1314,12 @@ class DevicePanel(QFrame):
             self._autoscroll.start()
         else:
             self._autoscroll.stop()
-        self._show_drop_marker(self.drop_index(pos))
+        self._show_drop_marker(*self.drop_target(pos))
 
     def _auto_scroll(self) -> None:
         bar = self.scroll.horizontalScrollBar()
         bar.setValue(bar.value() + self._scroll_step)
-        self._show_drop_marker(self.drop_index(self._drag_pos))
+        self._show_drop_marker(*self.drop_target(self._drag_pos))
 
     def _drag_ended(self) -> None:
         self._autoscroll.stop()
@@ -1086,12 +1330,12 @@ class DevicePanel(QFrame):
             for widget in self._current_widgets():  # a sidechain's source may have lost (or got back) its tap
                 widget.update_sidechain()
             return
-        devices = self.project.track(track_id).devices
-        widgets = list(self.widgets.values())
-        if not rebuild and len(widgets) == len(devices) and all(w.source is d for w, d in zip(widgets, devices)):
-            # The same devices in the same order (one switched on or off): no need to rebuild.
-            for widget, device in zip(widgets, devices):
-                widget.refresh(device)
+        devices = list(iter_devices(self.project.track(track_id).devices))
+        if not rebuild and len(self.widgets) == len(devices) and all(
+                self.widgets.get(d.id) is not None and self.widgets[d.id].source is d for d in devices):
+            # The same devices in the same places (one switched on or off, a rack's macros mapped): no need to rebuild.
+            for device in devices:
+                self.widgets[device.id].refresh(device)
             return
         old = set(self.widgets)
         self.show_track(track_id)
@@ -1099,6 +1343,19 @@ class DevicePanel(QFrame):
         if added and not self._dropping:
             # After the chain is laid out, so the new device has its place.
             QTimer.singleShot(0, lambda device_id=added[-1]: self._scroll_to(device_id))
+
+    def _on_chain_changed(self, track_id: str, chain_id: str) -> None:
+        if track_id != self.track_id:
+            return
+        rack = self.widgets.get(self.project.chain_rack(track_id, chain_id).id)
+        if isinstance(rack, RackWidget):
+            rack.refresh_chain(self.project.chain(track_id, chain_id))
+
+    def _show_chain(self, rack_id: str, chain_id: str) -> None:
+        """Show a rack's chain beside it (the one clicked in its chain list)."""
+        if self._shown_chains.get(rack_id) != chain_id or chain_id not in self._chain_views:
+            self._shown_chains[rack_id] = chain_id
+            self.show_track(self.track_id)
 
     def _on_track_changed(self, _track_id: str) -> None:
         for widget in self._current_widgets():  # a sidechain's source may have a new name
@@ -1148,24 +1405,14 @@ class DevicePanel(QFrame):
                 item.widget().hide()  # now: until deleted it would still be painted where it was
                 item.widget().deleteLater()
         self.widgets.clear()
+        self._chain_views.clear()
         if track_id is None:
             self.hint.setText("No track selected")
             self.chain_layout.addWidget(self.hint)
             self.hint.show()
             return
         track = self.project.track(track_id)
-        for device in track.devices:
-            widget_type = PluginDeviceWidget if device.is_plugin else editor_for(device.kind) or DeviceWidget
-            widget = widget_type(track_id, device, self.editor, self.bridge, self._pages.get(device.id, 0))
-            widget.page_changed.connect(self._remember_page)
-            widget.pressed.connect(self._on_device_pressed)
-            widget.released.connect(self._on_device_released)
-            widget.drag_started.connect(self._start_drag)
-            widget.menu_requested.connect(self._on_device_menu)
-            widget.remove_selected = self.delete_selected
-            self.widgets[device.id] = widget
-            self.chain_layout.addWidget(widget)
-            widget.show()  # now, not on Qt's next pass, so the chain can be laid out at once
+        self._add_devices(self.chain_layout, track_id, track.devices)
         self.chain_layout.addWidget(self.hint)
         self.chain_layout.addStretch(1)
         needs_instrument = track.is_midi and not any(device_is_instrument(d) for d in track.devices)
@@ -1174,6 +1421,38 @@ class DevicePanel(QFrame):
         kept = [i for i in self.selected if i in self.widgets]
         self.selected = []
         self._set_selected(kept)
+
+    def _add_devices(self, layout: QHBoxLayout, track_id: str, devices: list[Device]) -> None:
+        """A chain's devices into a layout; after a rack, the chain it shows (and so on, inside)."""
+        for device in devices:
+            if device.is_rack:
+                widget_type = RackWidget
+            else:
+                widget_type = PluginDeviceWidget if device.is_plugin else editor_for(device.kind) or DeviceWidget
+            widget = widget_type(track_id, device, self.editor, self.bridge, self._pages.get(device.id, 0))
+            widget.page_changed.connect(self._remember_page)
+            widget.pressed.connect(self._on_device_pressed)
+            widget.released.connect(self._on_device_released)
+            widget.drag_started.connect(self._start_drag)
+            widget.menu_requested.connect(self._on_device_menu)
+            widget.remove_selected = self.delete_selected
+            widget.group_selected = lambda w=widget: (self.group_selected() if w.device_id in self.selected
+                                                      else self.editor.group_devices(track_id, [w.device_id]))
+            self.widgets[device.id] = widget
+            layout.addWidget(widget)
+            widget.show()  # now, not on Qt's next pass, so the chain can be laid out at once
+            if not isinstance(widget, RackWidget) or not device.chains:
+                continue
+            widget.chain_clicked.connect(self._show_chain)
+            chain = next((c for c in device.chains if c.id == self._shown_chains.get(device.id)), device.chains[0])
+            widget.show_chain(chain.id)
+            view = _ChainView(chain.id)
+            self._chain_views[chain.id] = view
+            layout.addWidget(view)
+            view.show()
+            self._add_devices(view.devices, track_id, chain.devices)
+            view.devices.addWidget(view.hint)
+            view.hint.setVisible(not chain.devices)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         mime = event.mimeData()
@@ -1192,10 +1471,11 @@ class DevicePanel(QFrame):
         self._drag_ended()
         mime = event.mimeData()
         if self.track_id is not None:
-            index = self.drop_index(event.position().toPoint())
+            target, index = self.drop_target(event.position().toPoint())
             moving = self._moving(mime)
             if moving:
-                self.editor.move_devices(self.track_id, moving, index)
+                if not self.editor.move_devices(self.track_id, moving, index, target) and target is not None:
+                    self.status_message.emit("A rack can't go into itself, and racks nest at most 8 deep.")
                 event.acceptProposedAction()
                 return
             # New effects go where they were dropped (an instrument always goes first).
@@ -1205,10 +1485,10 @@ class DevicePanel(QFrame):
             self._dropping = True
             try:
                 for kind, ref in new:
-                    count = len(self.project.track(self.track_id).devices)
-                    device = self.editor.add_device(self.track_id, kind, index=index, plugin=ref)
+                    count = len(self._container_ids(target))
+                    device = self.editor.add_device(self.track_id, kind, index=index, plugin=ref, chain=target)
                     refused |= device is None
-                    chain = [d.id for d in self.project.track(self.track_id).devices]
+                    chain = self._container_ids(target)
                     if device is not None and not device_is_instrument(device):
                         index = chain.index(device.id) + 1  # the next one goes after it
                     else:  # a new instrument (not one replacing another) went in first, before the drop point

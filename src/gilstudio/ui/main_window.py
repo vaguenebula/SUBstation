@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self.editor = ProjectEditor(self.project, self.undo_stack)
         self.selection = Selection(self)
         self.bridge = EngineBridge(engine, self.project, self)
+        self.editor.set_param_info(self.bridge.device_param_info)  # (plug-ins' parameters, for macros)
         self._play_start = 0.0
 
         self.arrangement = ArrangementView(self.editor, self.selection, self.bridge)
@@ -205,7 +206,7 @@ class MainWindow(QMainWindow):
         self._action(create, "Insert &Return Track", self.insert_return_track, "Ctrl+Alt+T")
         self._action(create, "Insert MIDI &Clip", self.insert_midi_clip, ["Ctrl+Shift+D", "Ctrl+Shift+M"])
         create.addSeparator()
-        self._action(create, "&Group Tracks", self.group_selected_tracks, "Ctrl+G")
+        self._action(create, "&Group Tracks", self.group_selected_tracks, "Ctrl+G")  # (devices, in the device view)
         self._action(create, "&Ungroup Tracks", self.ungroup_selected_tracks, "Ctrl+Shift+G")
         create.addSeparator()
         self._action(create, "Delete Selected Tracks", self.delete_track)
@@ -351,7 +352,12 @@ class MainWindow(QMainWindow):
         self.selection.select_track(track.id, focus_track=True)
 
     def group_selected_tracks(self) -> None:
-        """Ctrl+G: the selected tracks go into a new group, which is selected."""
+        """Ctrl+G: the selected tracks go into a new group, which is selected; in
+        the device view, the selected devices into a rack."""
+        if self.selection.focus == "devices":
+            if not self.devices.group_selected():
+                self.show_message("Select the devices to group.")
+            return
         group = self.editor.group_tracks([t for t in self.selection.track_ids if self.project.has_track(t)])
         if group is None:
             self.show_message("Select the tracks to group.")
@@ -359,7 +365,12 @@ class MainWindow(QMainWindow):
             self.selection.select_track(group.id, focus_track=True)
 
     def ungroup_selected_tracks(self) -> None:
-        """Ctrl+Shift+G: the selected groups go; what was in them stays."""
+        """Ctrl+Shift+G: the selected groups go; what was in them stays (in the
+        device view: the selected racks)."""
+        if self.selection.focus == "devices":
+            if not self.devices.ungroup_selected():
+                self.show_message("Select a rack to ungroup.")
+            return
         groups = [t for t in self.selection.track_ids if self.project.has_track(t) and self.project.track(t).is_group]
         if groups:
             self.editor.ungroup(groups)

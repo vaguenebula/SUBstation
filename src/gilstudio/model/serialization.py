@@ -18,7 +18,14 @@ are dropped. Audio tracks store the track whose output they take as their
 input ("input_track", or MASTER: resampling; version 10); one that isn't there,
 or that would close a cycle, is dropped. Devices store their sidechain (the
 track and where it is tapped; version 11); one from a track that isn't there,
-or that would close a cycle, is dropped."""
+or that would close a cycle, is dropped. Racks store their chains (each with
+its devices and mixer) and macro mappings (version 12; a mapping to a device
+not in its rack is dropped).
+
+Presets: a device (a rack with everything in it too) on its own, in a file of
+its own (device_to_preset, preset_device): what the project file stores of it.
+A preset loads as new devices (new ids), without sidechains (they name tracks
+of the project it came from)."""
 
 from __future__ import annotations
 
@@ -35,14 +42,17 @@ from .project import (
     DEFAULT_WARP_MODE,
     GROUP_KIND,
     LEGACY_WARP_MODES,
+    MACRO_COUNT,
     MONITOR_MODES,
     POST_FADER,
     RETURN_KIND,
     TRACK_KINDS,
     WARP_MODES,
     AnyClip,
+    Chain,
     Clip,
     Device,
+    MacroMapping,
     MidiClip,
     MidiInput,
     Note,
@@ -52,7 +62,9 @@ from .project import (
     Sidechain,
     Track,
     feeds,
+    iter_devices,
     new_master,
+    refresh_ids,
     repair_tree,
     routing_graph,
     sidechain_would_cycle,
@@ -61,8 +73,12 @@ from .project import (
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 11  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
-# 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10: inputs from tracks (resampling), 11: sidechains
+VERSION = 12  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
+# 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10: inputs from tracks (resampling), 11: sidechains,
+# 12: racks
+PRESET_FORMAT = "gilstudio-preset"
+PRESET_VERSION = 1
+PRESET_EXTENSION = ".gilpreset"
 EXTENSION = ".gilproj"
 
 
@@ -119,6 +135,11 @@ def _device_to_dict(device: Device) -> dict:
         data["state"] = device.state
     if device.sidechain is not None:
         data["sidechain"] = {"track": device.sidechain.track_id, "tap": device.sidechain.tap}
+    if device.is_rack:
+        data["chains"] = [{"id": c.id, "name": c.name, "volume_db": c.volume_db, "pan": c.pan, "mute": c.mute,
+                           "solo": c.solo, "devices": [_device_to_dict(d) for d in c.devices]} for c in device.chains]
+        data["macros"] = [{"macro": m.macro, "device": m.device_id, "param": m.param_id, "low": m.low,
+                           "high": m.high} for m in device.macros]
     return data
 
 
@@ -130,9 +151,28 @@ def _device(d: dict) -> Device:
                            vendor=str(p.get("vendor", "")), path=str(p.get("path", "")),
                            instrument=bool(p.get("instrument", False)))
     state = d.get("state")
-    return Device(id=d["id"], kind=d["kind"], enabled=bool(d.get("enabled", True)),
-                  params={k: float(v) for k, v in d.get("params", {}).items()}, plugin=plugin,
-                  state=state if isinstance(state, str) else None, sidechain=_sidechain(d.get("sidechain")))
+    device = Device(id=d["id"], kind=d["kind"], enabled=bool(d.get("enabled", True)),
+                    params={k: float(v) for k, v in d.get("params", {}).items()}, plugin=plugin,
+                    state=state if isinstance(state, str) else None, sidechain=_sidechain(d.get("sidechain")))
+    if device.is_rack:
+        device.chains = [_chain(c) for c in d.get("chains", [])]
+        inside = {x.id for x in iter_devices([device])} - {device.id}
+        device.macros = tuple(_macro(m) for m in d.get("macros", [])
+                              if str(m.get("device")) in inside and 0 <= int(m.get("macro", -1)) < MACRO_COUNT)
+    return device
+
+
+def _chain(c: dict) -> Chain:
+    return Chain(id=str(c["id"]), name=str(c.get("name", "Chain")),
+                 devices=[_device(d) for d in c.get("devices", [])],
+                 volume_db=max(automation.MIN_VOLUME_DB, min(automation.MAX_VOLUME_DB, float(c.get("volume_db", 0.0)))),
+                 pan=max(-1.0, min(1.0, float(c.get("pan", 0.0)))), mute=bool(c.get("mute", False)),
+                 solo=bool(c.get("solo", False)))
+
+
+def _macro(m: dict) -> MacroMapping:
+    return MacroMapping(int(m["macro"]), str(m["device"]), str(m["param"]), float(m.get("low", 0.0)),
+                        float(m.get("high", 1.0)))
 
 
 def _sidechain(data) -> Sidechain | None:
@@ -248,7 +288,7 @@ def repair_routing(tracks: list[Track], returns: list[Track], master: Track | No
             track.input_track = source
             track.input = ()
     owners = [*tracks, *returns, *([master] if master is not None else [])]
-    sidechained = [(owner, device, device.sidechain) for owner in owners for device in owner.devices
+    sidechained = [(owner, device, device.sidechain) for owner in owners for device in iter_devices(owner.devices)
                    if device.sidechain is not None]
     for _, device, _ in sidechained:
         device.sidechain = None
@@ -428,6 +468,55 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
         returns=returns,
         path=project_file,
     )
+
+
+def device_to_preset(device: Device) -> dict:
+    """A device as a preset: what the project file stores of it (a rack with its
+    chains, the devices in them and its macros; plug-ins' states as last stored
+    in the model), without its sidechains."""
+    data = _device_to_dict(device)
+
+    def strip(d: dict) -> None:
+        d.pop("sidechain", None)
+        for chain in d.get("chains", []):
+            for inner in chain["devices"]:
+                strip(inner)
+
+    strip(data)
+    return {"format": PRESET_FORMAT, "version": PRESET_VERSION, "device": data}
+
+
+def preset_device(data: dict) -> Device:
+    """A preset's device, new: fresh ids for it and everything in it. Raises
+    ProjectFileError for something that isn't a preset."""
+    if not isinstance(data, dict) or data.get("format") != PRESET_FORMAT:
+        raise ProjectFileError("Not a GIL Studio preset")
+    if int(data.get("version", 0)) > PRESET_VERSION:
+        raise ProjectFileError("This preset was saved by a newer version of GIL Studio")
+    try:
+        device = _device(data["device"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProjectFileError(f"The preset is damaged: {exc}") from exc
+    for inner in iter_devices([device]):
+        inner.sidechain = None
+    refresh_ids(device)
+    return device
+
+
+def save_preset(device: Device, path: Path) -> None:
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(device_to_preset(device), indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def load_preset(path: Path) -> Device:
+    path = Path(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProjectFileError(f"Could not read {path.name}: {exc}") from exc
+    return preset_device(data)
 
 
 def save_project(project: Project, path: Path) -> None:

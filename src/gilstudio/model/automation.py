@@ -9,10 +9,11 @@ model, the editor, the UI and the engine bridge.
   the shape of curved segments and the mixer's mappings here must match it.
 - An envelope belongs to an owner, a track id or MASTER, and is keyed by its
   target: MIXER_VOLUME, MIXER_PAN, send_key(return id) (the level of the
-  owner's send to a return track), or device_key(device id, parameter id).
-  Device ids are unique in the project, so a key keeps pointing at its device
-  wherever the device sits (in future, inside a rack). A send's level maps as
-  a volume does.
+  owner's send to a return track), device_key(device id, parameter id), or
+  chain_key(rack id, chain id, CHAIN_VOLUME or CHAIN_PAN) (a rack chain's
+  fader: a target of its rack). Device ids are unique in the project, so a key
+  keeps pointing at its device wherever the device sits (inside a rack too). A
+  send's level, and a chain's volume, map as a volume does.
 - Before its first breakpoint an envelope holds the first one's value, after the
   last the last one's. Breakpoints may share a beat (a step): from that beat on,
   the later one's value counts.
@@ -73,6 +74,34 @@ def device_key(device_id: str, param_id: str) -> str:
 
 def send_key(return_id: str) -> str:
     return f"{SEND_PREFIX}{return_id}"
+
+
+# A rack chain's fader is a target of its rack, as a parameter "chain:<chain id>:volume" (or ":pan").
+CHAIN_VOLUME = "volume"
+CHAIN_PAN = "pan"
+CHAIN_PREFIX = "chain:"
+
+
+def chain_key(rack_id: str, chain_id: str, control: str) -> str:
+    return device_key(rack_id, f"{CHAIN_PREFIX}{chain_id}:{control}")
+
+
+def key_chain(key: str) -> str | None:
+    """The rack chain whose fader a key targets (None for anything else)."""
+    control = key_chain_control(key)
+    return None if control is None else control[0]
+
+
+def key_chain_control(key: str) -> tuple[str, str] | None:
+    """(chain id, CHAIN_VOLUME or CHAIN_PAN) of a key targeting a rack chain's fader."""
+    try:
+        parts = parse_key(key)
+    except ValueError:
+        return None
+    if parts[0] != "device" or not parts[2].startswith(CHAIN_PREFIX):
+        return None
+    chain_id, _, control = parts[2][len(CHAIN_PREFIX):].partition(":")
+    return (chain_id, control) if chain_id and control in (CHAIN_VOLUME, CHAIN_PAN) else None
 
 
 def parse_key(key: str) -> tuple[str, ...]:

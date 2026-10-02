@@ -1,7 +1,8 @@
 """Parameters, whatever they belong to: a track's or the master's mixer, a
 built-in device, or a plug-in of any format.
 
-A ParamSpec describes one: its name, range, units and how its values read. It
+A ParamSpec describes one: its name, range, units and how its values read.
+(A rack's chains' faders are its parameters, as far as automation goes: chain_specs.) It
 maps plain values (in the parameter's own units) to and from normalized ones
 (0..1), which is how automation stores them. Device parameters come from the
 engine's ParamInfo (ParamSpec.from_info) and map as it does; the mixer's
@@ -125,3 +126,15 @@ def send_spec(return_id: str, letter: str) -> ParamSpec:
     """A send's level to a return (lettered as it shows), automated as a volume is."""
     return ParamSpec(automation.send_key(return_id), f"Send {letter}", "Mixer", automation.MIN_VOLUME_DB,
                      automation.MAX_VOLUME_DB, automation.MIN_VOLUME_DB, "dB", scale="fader", text=format_db)
+
+
+def chain_specs(rack_id: str, chains: list[tuple[str, str]], group: str) -> list[ParamSpec]:
+    """A rack's chains' faders ((chain id, name) each): volume and pan, automated as a track's are."""
+    specs = []
+    for chain_id, name in chains:
+        specs.append(ParamSpec(automation.chain_key(rack_id, chain_id, automation.CHAIN_VOLUME), f"{name} Volume", group,
+                               automation.MIN_VOLUME_DB, automation.MAX_VOLUME_DB, 0.0, "dB", scale="fader",
+                               text=format_db))
+        specs.append(ParamSpec(automation.chain_key(rack_id, chain_id, automation.CHAIN_PAN), f"{name} Pan", group,
+                               -1.0, 1.0, 0.0, text=format_pan))
+    return specs

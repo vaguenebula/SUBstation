@@ -60,6 +60,11 @@ void Renderer::setScheduler(Scheduler* scheduler) {
                              &scratch.autoPanRight, &scratch.audible, &scratch.edgeGain}) {
             buffer->assign(kMaxBlock, 0.f);
         }
+        for (WorkerScratch::Rack& rack : scratch.racks) {
+            for (auto* buffer : {&rack.sumLeft, &rack.sumRight, &rack.chainLeft, &rack.chainRight}) {
+                buffer->assign(kMaxBlock, 0.f);
+            }
+        }
     }
 }
 
@@ -340,7 +345,7 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
     }
     ProcessContext context = chunkContext_;  // its own: the inserts move it along the chunk's stretches
     processInserts(snap, track, context, buffers.events.data(), buffers.numEvents, left, right, frames,
-                   buffers.monitored);
+                   buffers.monitored, scratch);
     // Pre-fader taps take the signal here, into their own buffers (taps after a
     // device took theirs as it processed).
     bool preFaderSend = false;
@@ -392,7 +397,7 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
 void Renderer::processStrip(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
                             ProcessEvent* events, int numEvents, float* left, float* right, int frames, bool audible,
                             ChunkFlags flags, WorkerScratch& scratch, float* audibleOut) noexcept {
-    processInserts(snap, strip, context, events, numEvents, left, right, frames, false);
+    processInserts(snap, strip, context, events, numEvents, left, right, frames, false, scratch);
     applyFader(snap, *strip.params, strip.volume, strip.pan, audible, left, right, frames, flags.live, scratch,
                audibleOut);
 }
@@ -415,6 +420,15 @@ DelayLine* Renderer::deviceDelayLine(const EdgeRender& edge, int e) const noexce
     if (!delayOverride_) return edge.deviceDelayLine.get();
     if (!deviceDelayOverride_ || static_cast<size_t>(e) >= deviceDelayOverride_->size()) return nullptr;
     return (*deviceDelayOverride_)[static_cast<size_t>(e)].get();
+}
+
+DelayLine* Renderer::chainDelayLine(const ChainRender& chain) const noexcept {
+    if (!delayOverride_) return chain.delay.get();
+    if (!chainDelayOverride_ || chain.delayIndex < 0 ||
+        static_cast<size_t>(chain.delayIndex) >= chainDelayOverride_->size()) {
+        return nullptr;
+    }
+    return (*chainDelayOverride_)[static_cast<size_t>(chain.delayIndex)].get();
 }
 
 void Renderer::edgeSignal(const RenderSnapshot& snap, const EdgeRender& edge, const float*& left,
@@ -802,34 +816,52 @@ void Renderer::scheduleCountIn(const RenderSnapshot& snap, int length) noexcept 
     }
 }
 
+namespace {
+
+// A tap after a device takes the signal there, into its edge's own buffer.
+void tapInto(const RenderSnapshot& snap, int e, const float* left, const float* right, int frames) noexcept {
+    EdgeState& state = *snap.edges[static_cast<size_t>(e)].state;
+    std::copy_n(left, frames, state.left.data());
+    std::copy_n(right, frames, state.right.data());
+}
+
+}  // namespace
+
+bool Renderer::takeResets(const StripRender& chain) noexcept {
+    bool any = false;
+    for (size_t i = 0; i < chain.inserts.size(); ++i) {
+        Processor& insert = *chain.inserts[i];
+        if (!insert.isEnabled()) continue;
+        any = true;
+        if (!insert.takeResetRequest()) continue;
+        insert.reset();
+        // A rack's devices reset as they run next (and so, in turn, do those of racks in it).
+        if (const RackRender* rack = i < chain.racks.size() ? chain.racks[i].get() : nullptr) {
+            for (const ChainRender& inner : rack->chains) {
+                for (const auto& device : inner.inserts) device->requestReset();
+            }
+        }
+    }
+    return any;
+}
+
 void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
                               ProcessEvent* events, int numEvents, float* left, float* right, int frames,
-                              bool monitored) noexcept {
-    const double samplesPerBeat = snap.samplesPerBeat();
-    // A tap after a device takes the signal there, into its edge's own buffer.
-    const auto tapInto = [&snap](int e, const float* fromL, const float* fromR, int offset, int length) {
-        EdgeState& state = *snap.edges[static_cast<size_t>(e)].state;
-        std::copy_n(fromL, length, state.left.data() + offset);
-        std::copy_n(fromR, length, state.right.data() + offset);
-    };
-    bool any = false;
-    for (const auto& insert : strip.inserts) {
-        if (!insert->isEnabled()) continue;
-        if (insert->takeResetRequest()) insert->reset();
-        any = true;
-    }
-    if (!any) {  // nothing changes the signal along the chain
-        for (const int e : strip.deviceTaps) tapInto(e, left, right, 0, frames);
+                              bool monitored, WorkerScratch& scratch) noexcept {
+    if (!takeResets(strip)) {  // nothing changes the signal along the chain
+        for (const int e : strip.deviceTaps) tapInto(snap, e, left, right, frames);
         return;
     }
 
     // One call per continuous stretch of the timeline, with the events that fall in it.
+    static_assert(kMaxSegments + 1 <= std::tuple_size_v<decltype(Slices::slice)>);
+    Slices slices;
     const bool split = playing_ && numSegments_ > 0;
     // A count-in that ends in this chunk: the playhead stood still until the first segment.
     const int lead = split && segments_[0].offset > 0 ? 1 : 0;
-    const int slices = split ? numSegments_ + lead : 1;
+    slices.count = split ? numSegments_ + lead : 1;
     int next = 0;
-    for (int s = 0; s < slices; ++s) {
+    for (int s = 0; s < slices.count; ++s) {
         const int segment = s - lead;
         const bool moving = split && segment >= 0;
         const int offset = moving ? segments_[segment].offset : 0;
@@ -837,53 +869,99 @@ void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& str
         // Stopped (or counting in): it stays put.
         const int64_t position = moving ? segments_[segment].position : split ? segments_[0].position : position_;
         const int first = next;
-        while (next < numEvents && (s == slices - 1 || events[next].sampleOffset < offset + length)) {
+        while (next < numEvents && (s == slices.count - 1 || events[next].sampleOffset < offset + length)) {
             events[next].sampleOffset -= offset;
             ++next;
         }
-        context.samplePos = position;
-        context.beatPos = position / samplesPerBeat;
-        context.inEvents = {events + first, static_cast<size_t>(next - first)};
-        float* channels[2] = {left + offset, right + offset};
-        size_t tap = 0;  // strip.deviceTaps, by device
-        for (; tap < strip.deviceTaps.size(); ++tap) {  // those before the first device
-            const int e = strip.deviceTaps[tap];
-            if (snap.edges[static_cast<size_t>(e)].tapDevice >= 0) break;
-            tapInto(e, channels[0], channels[1], offset, length);
-        }
-        for (size_t i = 0; i < strip.inserts.size(); ++i) {
-            Processor& insert = *strip.inserts[i];
-            if (insert.isEnabled()) {
-                const int e = i < strip.sidechains.size() ? strip.sidechains[i] : -1;
-                insert.setSidechainConnected(e >= 0);
-                if (e >= 0) {
-                    const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
-                    // The strip's signal waits for a sidechain that comes later than it (but
-                    // not while monitored: a player hears only the devices' own latency).
-                    if (DelayLine* line = deviceDelayLine(edge, e)) {
-                        line->process(channels[0], channels[1], length, monitored ? 0 : edge.deviceDelay);
-                    }
-                    if (edge.state->live) {  // (solo may leave it out)
-                        const float* keyL;
-                        const float* keyR;
-                        edgeSignal(snap, edge, keyL, keyR);
-                        insert.setSidechain(keyL + offset, keyR + offset);
-                    }
+        slices.slice[static_cast<size_t>(s)] = {offset, length, position, moving, first, next};
+    }
+    processChain(snap, strip, context, slices, events, left, right, frames, monitored, scratch);
+}
+
+void Renderer::processChain(const RenderSnapshot& snap, const StripRender& chain, ProcessContext& context,
+                            const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
+                            bool monitored, WorkerScratch& scratch) noexcept {
+    // Each device over the whole chunk, then the next: a device sees the same
+    // calls as if they went stretch by stretch through the chain, and a rack can
+    // run its chains over the chunk.
+    const double samplesPerBeat = snap.samplesPerBeat();
+    size_t tap = 0;  // chain.deviceTaps, by device
+    for (; tap < chain.deviceTaps.size(); ++tap) {  // those before the first device
+        const int e = chain.deviceTaps[tap];
+        if (snap.edges[static_cast<size_t>(e)].tapDevice >= 0) break;
+        tapInto(snap, e, left, right, frames);
+    }
+    for (size_t i = 0; i < chain.inserts.size(); ++i) {
+        Processor& insert = *chain.inserts[i];
+        const RackRender* rack = i < chain.racks.size() ? chain.racks[i].get() : nullptr;
+        if (insert.isEnabled() && rack) {
+            processRack(snap, *rack, context, slices, events, left, right, frames, monitored, scratch);
+        } else if (insert.isEnabled()) {
+            const int e = i < chain.sidechains.size() ? chain.sidechains[i] : -1;
+            insert.setSidechainConnected(e >= 0);
+            const EdgeRender* edge = e >= 0 ? &snap.edges[static_cast<size_t>(e)] : nullptr;
+            DelayLine* wait = edge ? deviceDelayLine(*edge, e) : nullptr;
+            const float* keyL = nullptr;
+            const float* keyR = nullptr;
+            if (edge && edge->state->live) edgeSignal(snap, *edge, keyL, keyR);  // (solo may leave it out)
+            for (int s = 0; s < slices.count; ++s) {
+                const Slice& slice = slices.slice[static_cast<size_t>(s)];
+                float* channels[2] = {left + slice.offset, right + slice.offset};
+                // The strip's signal waits for a sidechain that comes later than it (but
+                // not while monitored: a player hears only the devices' own latency).
+                if (wait) wait->process(channels[0], channels[1], slice.length, monitored ? 0 : edge->deviceDelay);
+                if (keyL) insert.setSidechain(keyL + slice.offset, keyR + slice.offset);
+                context.samplePos = slice.position;
+                context.beatPos = slice.position / samplesPerBeat;
+                context.inEvents = {events + slice.firstEvent, static_cast<size_t>(slice.endEvent - slice.firstEvent)};
+                for (const AutomationRender& lane : chain.automation) {
+                    if (lane.insert == static_cast<int>(i)) automateInsert(lane, slice.position, slice.length, slice.moving);
                 }
-                for (const AutomationRender& lane : strip.automation) {
-                    if (lane.insert == static_cast<int>(i)) automateInsert(lane, position, length, moving);
-                }
-                insert.process(context, channels, 2, length);
+                insert.process(context, channels, 2, slice.length);
                 insert.clearAutomation();
                 insert.setSidechain(nullptr, nullptr);
             }
-            for (; tap < strip.deviceTaps.size(); ++tap) {
-                const int e = strip.deviceTaps[tap];
-                if (snap.edges[static_cast<size_t>(e)].tapDevice > static_cast<int>(i)) break;
-                tapInto(e, channels[0], channels[1], offset, length);
-            }
+        }
+        for (; tap < chain.deviceTaps.size(); ++tap) {
+            const int e = chain.deviceTaps[tap];
+            if (snap.edges[static_cast<size_t>(e)].tapDevice > static_cast<int>(i)) break;
+            tapInto(snap, e, left, right, frames);
         }
     }
+}
+
+void Renderer::processRack(const RenderSnapshot& snap, const RackRender& rack, ProcessContext& context,
+                           const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
+                           bool monitored, WorkerScratch& scratch) noexcept {
+    if (rack.chains.empty()) return;  // it passes its input on
+    WorkerScratch::Rack& buffers = scratch.racks[static_cast<size_t>(std::clamp(rack.depth, 0, kMaxRackDepth - 1))];
+    float* sumL = buffers.sumLeft.data();
+    float* sumR = buffers.sumRight.data();
+    float* chainL = buffers.chainLeft.data();
+    float* chainR = buffers.chainRight.data();
+    std::fill_n(sumL, frames, 0.f);
+    std::fill_n(sumR, frames, 0.f);
+    // Solo among the rack's chains: read once, so its chains agree.
+    bool anySolo = false;
+    for (const ChainRender& chain : rack.chains) anySolo = anySolo || chain.params->solo.load(std::memory_order_relaxed);
+    for (const ChainRender& chain : rack.chains) {
+        std::copy_n(left, frames, chainL);
+        std::copy_n(right, frames, chainR);
+        if (takeResets(chain)) processChain(snap, chain, context, slices, events, chainL, chainR, frames, monitored, scratch);
+        const bool audible = !chain.params->mute.load(std::memory_order_relaxed) &&
+                             (!anySolo || chain.params->solo.load(std::memory_order_relaxed));
+        applyFader(snap, *chain.params, chain.volume, chain.pan, audible, chainL, chainR, frames, chunkFlags_.live,
+                   scratch, nullptr);
+        // Lined up with the slowest chain (not skipped while monitored: chains
+        // out of line with each other would comb-filter).
+        if (DelayLine* delay = chainDelayLine(chain)) delay->process(chainL, chainR, frames, chain.compensation);
+        for (int i = 0; i < frames; ++i) {
+            sumL[i] += chainL[i];
+            sumR[i] += chainR[i];
+        }
+    }
+    std::copy_n(sumL, frames, left);
+    std::copy_n(sumR, frames, right);
 }
 
 void Renderer::automateInsert(const AutomationRender& lane, int64_t position, int length, bool moving) noexcept {
