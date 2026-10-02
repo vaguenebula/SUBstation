@@ -31,7 +31,12 @@ from PySide6.QtWidgets import QMenu, QWidget
 
 from ... import theme
 from ...audio.engine_bridge import EngineBridge, is_audio_file
-from ...model.editor import BUILTIN_DEVICES, ProjectEditor, is_instrument
+from ...model.editor import (
+    BUILTIN_DEVICES,
+    ClipboardContent,
+    ProjectEditor,
+    is_instrument,
+)
 from ...model.project import (
     DEFAULT_TRACK_HEIGHT,
     MAX_TRACK_HEIGHT,
@@ -159,6 +164,7 @@ class LanesCanvas(QWidget):
         self._drop_preview: tuple[int | None, float, list[tuple[str, float]]] | None = None
         self._hover_edge: tuple[str, str] | None = None  # (clip id, "left"/"right") under the mouse
         self._hover_point: Hover | None = None  # the breakpoint (or place on a line) under the mouse
+        self.clipboard: ClipboardContent | None = None  # clip content copied or cut (Ctrl+C / Ctrl+X)
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -720,6 +726,43 @@ class LanesCanvas(QWidget):
                                           clips=self.editor.clips_in_range(end, end + length, track_ids))
             self.selection.set_insert(end)
 
+    def copy_area(self) -> None:
+        """Copy the clip content of the selected area (Ctrl+C)."""
+        if self.selection.clip_range:
+            content = self.editor.copy_range(*self.selection.time_range)
+            if content is None:
+                self.status_message.emit("There are no clips in the selection to copy.")
+            else:
+                self.clipboard = content
+
+    def cut_area(self) -> None:
+        """Copy the clip content of the selected area, and take it out (Ctrl+X); the
+        (now empty) area stays selected."""
+        if self.selection.clip_range:
+            start, end, track_ids = self.selection.time_range
+            content = self.editor.cut_range(start, end, track_ids)
+            if content is None:
+                self.status_message.emit("There are no clips in the selection to cut.")
+                return
+            self.clipboard = content
+            self.selection.set_time_range(start, end, track_ids, clips=set())
+
+    def paste(self, at_beat: float | None = None, track_id: str | None = None) -> None:
+        """Paste copied clip content (Ctrl+V) at `at_beat` (default: the insert
+        marker), its top track onto `track_id` (default: the selected track), and
+        select it. The insert marker goes to its end, so pasting again appends."""
+        if self.clipboard is None:
+            self.status_message.emit("Nothing to paste: copy (Ctrl+C) or cut (Ctrl+X) clips first.")
+            return
+        area = self.editor.paste(self.clipboard, self.selection.insert_beat if at_beat is None else at_beat,
+                                 track_id or self.selection.track_id)
+        if area is None:
+            self.status_message.emit("The copied clips can't go there: paste them onto tracks of their kind.")
+            return
+        start, end, track_ids = area
+        self.selection.set_time_range(start, end, track_ids, clips=self.editor.clips_in_range(start, end, track_ids))
+        self.selection.set_insert(end)
+
     def consolidate(self) -> None:
         """Join the selected MIDI clips on each track into one (Ctrl+J), and select them."""
         joined = self.editor.consolidate_clips(sorted(self.selection.clips))
@@ -772,27 +815,46 @@ class LanesCanvas(QWidget):
                 self.selection.select_clips(self.editor, [(track_id, clip.id)])
             refs = sorted(self.selection.clips)
             split_at = self.view.snap_beat(self.view.x_to_beat(pos.x()))
+            self._add_clipboard_actions(menu)
+            menu.addSeparator()
             menu.addAction("Split Here", lambda: self.editor.split_clips(refs, split_at))
             menu.addAction("Duplicate", self.duplicate_area)
             consolidate = menu.addAction("Consolidate", self.consolidate)
-            consolidate.setShortcut(QKeySequence("Ctrl+J"))  # (as a tip: the window's action handles the key)
-            consolidate.setShortcutVisibleInContextMenu(True)
+            self._show_shortcut(consolidate, "Ctrl+J")
             consolidate.setEnabled(bool(self.editor.consolidatable(refs)))
             menu.addSeparator()
             menu.addAction("Delete", self.delete_area)
         else:
             index = self.row_index_at(pos.y())
-            at, parent = self.editor.insertion_point(None if index is None else self.layout_model.rows[index].track_id)
-            if index is not None and self.project.track(self.layout_model.rows[index].track_id).is_midi:
-                track_id = self.layout_model.rows[index].track_id
-                menu.addAction("Insert MIDI Clip", lambda: self.insert_midi_clip(track_id, pos.x()))
+            track_id = None if index is None else self.layout_model.rows[index].track_id
+            at, parent = self.editor.insertion_point(track_id)
+            if track_id is not None:
+                beat = max(0.0, self.view.snap_beat(self.view.x_to_beat(pos.x())))
+                paste = menu.addAction("Paste", lambda: self.paste(beat, track_id))
+                self._show_shortcut(paste, QKeySequence.StandardKey.Paste)
+                paste.setEnabled(self.clipboard is not None)
                 menu.addSeparator()
+                if self.project.track(track_id).is_midi:
+                    menu.addAction("Insert MIDI Clip", lambda: self.insert_midi_clip(track_id, pos.x()))
+                    menu.addSeparator()
             menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(at, parent=parent))
             menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(at, parent=parent))
-            if index is not None:
-                track_id = self.layout_model.rows[index].track_id
+            if track_id is not None:
                 menu.addAction("Delete Track", lambda: self.editor.delete_tracks([track_id]))
         menu.exec(event.globalPos())
+
+    @staticmethod
+    def _show_shortcut(action, key) -> None:
+        action.setShortcut(QKeySequence(key))  # (as a tip: the window's action handles the key)
+        action.setShortcutVisibleInContextMenu(True)
+
+    def _add_clipboard_actions(self, menu: QMenu) -> None:
+        """Cut, Copy and Paste (at the insert marker), for the clicked clips."""
+        for text, slot, key in (("Cut", self.cut_area, QKeySequence.StandardKey.Cut),
+                                ("Copy", self.copy_area, QKeySequence.StandardKey.Copy),
+                                ("Paste", lambda: self.paste(), QKeySequence.StandardKey.Paste)):
+            self._show_shortcut(menu.addAction(text, slot), key)
+        menu.actions()[-1].setEnabled(self.clipboard is not None)
 
     # --- Drag & drop from the browser -------------------------------------------
 

@@ -167,9 +167,12 @@ class MainWindow(QMainWindow):
         edit.addAction(undo)
         edit.addAction(redo)
         edit.addSeparator()
+        self._action(edit, "Cu&t", self.cut, QKeySequence.StandardKey.Cut)
+        self._action(edit, "&Copy", self.copy, QKeySequence.StandardKey.Copy)
+        self._action(edit, "&Paste", self.paste, QKeySequence.StandardKey.Paste)
         self._action(edit, "D&uplicate", self.duplicate, "Ctrl+D")
         self._action(edit, "&Split", self.split, "Ctrl+E")
-        self._action(edit, "&Consolidate", self.arrangement.lanes.consolidate, "Ctrl+J")
+        self._action(edit, "C&onsolidate", self.arrangement.lanes.consolidate, "Ctrl+J")
         self._action(edit, "&Delete", self.delete_selection, [QKeySequence.StandardKey.Delete, "Backspace"])
         self._action(edit, "Select &All", self.select_all, QKeySequence.StandardKey.SelectAll)
         edit.addSeparator()
@@ -430,6 +433,28 @@ class MainWindow(QMainWindow):
             self.arrangement.lanes.delete_area()
         elif selection.focus == "track":
             self.delete_track()
+
+    def _clip_range_selected(self, verb: str) -> bool:
+        """Whether clips are what Cut/Copy act on now; if automation is, says so."""
+        selection = self.selection
+        if selection.focus == "devices":
+            return False
+        if selection.points is not None or (selection.time_range is not None and selection.lanes):
+            self.show_message(f"Only clips can be {verb}: select clips, not automation.")
+            return False
+        return selection.clip_range
+
+    def cut(self) -> None:
+        if self._clip_range_selected("cut"):
+            self.arrangement.lanes.cut_area()
+
+    def copy(self) -> None:
+        if self._clip_range_selected("copied"):
+            self.arrangement.lanes.copy_area()
+
+    def paste(self) -> None:
+        if self.selection.focus != "devices":
+            self.arrangement.lanes.paste()
 
     def duplicate(self) -> None:
         selection = self.selection

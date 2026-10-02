@@ -113,6 +113,48 @@ def test_edit_commands(window, three_tracks):
     assert window.windowTitle().startswith("Untitled*")
 
 
+def test_cut_copy_paste_clips(window, three_tracks):
+    project, selection, lanes = window.project, window.selection, window.arrangement.lanes
+    first, second, third = project.tracks  # clips at beats 0-4, 2-8 and 4-12
+    window.activateWindow()
+
+    def press(key) -> None:
+        QTest.keyClick(lanes, key, Qt.KeyboardModifier.ControlModifier)
+        QTest.qWait(10)
+
+    # Nothing copied yet: pasting says so and changes nothing.
+    press(Qt.Key.Key_V)
+    assert window.undo_stack.count() == 3
+
+    selection.select_clips(window.editor, [(first.id, first.clips[0].id)])
+    press(Qt.Key.Key_C)
+    # Pasted at the insert marker on the selected track, and selected.
+    selection.select_track(third.id)
+    selection.set_insert(20.0)
+    press(Qt.Key.Key_V)
+    assert [(c.start_beat, c.end_beat(project.tempo)) for c in project.track(third.id).clips] == [(4, 12), (20, 24)]
+    pasted = project.track(third.id).clips[1]
+    assert pasted.path == first.clips[0].path and pasted.id != first.clips[0].id
+    assert selection.time_range == (20.0, 24.0, (third.id,)) and selection.clips == {(third.id, pasted.id)}
+    # The insert marker moves to its end, so pasting again appends.
+    assert selection.insert_beat == 24.0
+    press(Qt.Key.Key_V)
+    assert [c.start_beat for c in project.track(third.id).clips] == [4, 20, 24]
+
+    # Cut takes just the selected stretch out; the empty area stays selected.
+    selection.set_time_range(5.0, 7.0, [second.id], clips=window.editor.clips_in_range(5.0, 7.0, [second.id]))
+    press(Qt.Key.Key_X)
+    assert [(c.start_beat, c.end_beat(project.tempo)) for c in project.track(second.id).clips] == [(2, 5), (7, 8)]
+    assert selection.time_range == (5.0, 7.0, (second.id,)) and not selection.clips
+    assert window.undo_stack.undoText() == "Cut"
+    selection.set_insert(12.0)
+    press(Qt.Key.Key_V)
+    assert [c.start_beat for c in project.track(second.id).clips] == [2, 7, 12]
+    window.undo_stack.undo()
+    window.undo_stack.undo()
+    assert [(c.start_beat, c.end_beat(project.tempo)) for c in project.track(second.id).clips] == [(2, 8)]
+
+
 def test_zoom_scroll_and_follow(window, three_tracks):
     view = window.arrangement.view
     before = view.px_per_beat
