@@ -351,9 +351,14 @@ class TrackHeader(QWidget):
         elif track.is_midi:
             self.input.setText(midi_input_label(track.midi_input))
             self.input.setToolTip("MIDI input (the MIDI inputs on in Preferences, and a channel)")
+        elif track.input_track is not None:
+            name = self.project.input_name(track.input_track)
+            self.input.setText(name)
+            self.input.setToolTip("Audio input: the master's output (resampling: recorded, not heard)"
+                                  if track.input_track == MASTER else f"Audio input: {name}'s output, after its fader")
         else:
             self.input.setText(input_label(track.input))
-            self.input.setToolTip("Audio input (the audio device's channels)")
+            self.input.setToolTip("Audio input (the audio device's channels, or another track's output)")
         self.monitor.setText(MONITOR_LABELS.get(track.monitor, "Auto"))
         tips = MIDI_MONITOR_TIPS if track.is_midi else MONITOR_TIPS
         self.monitor.setToolTip(f"Monitoring. {tips.get(track.monitor, '')}")
@@ -584,13 +589,17 @@ class TrackHeader(QWidget):
             self.bridge.status_message.emit(f"{self.track.name} has no {kind}: choose one to record.")
 
     def input_menu(self) -> QMenu:
+        """No input, the audio device's inputs (each, then each pair), then the
+        master's output (resampling) and the other tracks', groups' and returns'
+        (those it feeds greyed out: taking theirs would close a cycle)."""
         if self.track.is_midi:
             return self.midi_input_menu()
         menu = QMenu(self)
-        current = self.track.input
+        track = self.track
+        current = track.input if track.input_track is None else None
         none = menu.addAction("No Input", lambda: self.editor.set_track_input(self.track_id, ()))
         none.setCheckable(True)
-        none.setChecked(not current)
+        none.setChecked(not track.has_input)
         names = self.bridge.input_names()
         if not names:
             menu.addAction("The audio device has no inputs (choose an ASIO driver)").setEnabled(False)
@@ -600,6 +609,20 @@ class TrackHeader(QWidget):
             action = menu.addAction(label, lambda c=channels: self.editor.set_track_input(self.track_id, c))
             action.setCheckable(True)
             action.setChecked(channels == current)
+        menu.addSeparator()
+        for source in [None, *self.project.input_sources(self.track_id)]:
+            source_id = MASTER if source is None else source.id
+            usable = not self.project.input_would_cycle(self.track_id, source_id)
+            label = self.project.input_name(source_id)
+            action = menu.addAction(label if usable else f"{label} (it takes this track's output)",
+                                    lambda s=source_id: self.editor.set_track_input_track(self.track_id, s))
+            action.setCheckable(True)
+            action.setChecked(track.input_track == source_id)
+            action.setEnabled(usable)
+            if source is None:
+                action.setToolTip("The master's output: recorded, not heard (it would feed back)")
+                menu.addSeparator()
+        menu.setToolTipsVisible(True)
         return menu
 
     def midi_input_menu(self) -> QMenu:

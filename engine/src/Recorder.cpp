@@ -49,11 +49,26 @@ size_t SampleRing::available() const noexcept {
 // ---------------------------------------------------------------------------
 // RecordingTake
 
-RecordingTake::RecordingTake(uint32_t trackId_, std::string path_, int inputLeft, int inputRight, size_t ringFrames)
+RecordingTake::RecordingTake(uint32_t trackId_, std::string path_, int inputLeft, int inputRight, size_t ringFrames,
+                             int64_t placement_)
     : trackId(trackId_),
       path(std::move(path_)),
       channels(inputRight >= 0 && inputRight != inputLeft ? 2 : 1),
       inputs{inputLeft, inputRight >= 0 ? inputRight : inputLeft},
+      source(Source::Device),
+      sourceTrackId(0),
+      placement(placement_),
+      ring(ringFrames * static_cast<size_t>(channels)) {}
+
+RecordingTake::RecordingTake(uint32_t trackId_, std::string path_, Source source_, uint32_t sourceTrackId_,
+                             size_t ringFrames, int64_t placement_)
+    : trackId(trackId_),
+      path(std::move(path_)),
+      channels(2),
+      inputs{-1, -1},
+      source(source_),
+      sourceTrackId(sourceTrackId_),
+      placement(placement_),
       ring(ringFrames * static_cast<size_t>(channels)) {}
 
 void RecordingTake::push(const float* left, const float* right, int count, float* scratch) noexcept {
@@ -105,11 +120,10 @@ void RecordingTake::push(const float* left, const float* right, int count, float
 
 RecordingSession::RecordingSession(std::vector<std::unique_ptr<RecordingTake>> takes,
                                    std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes, double sampleRate,
-                                   int64_t placement, int64_t midiPlacement)
+                                   int64_t midiPlacement)
     : takes_(std::move(takes)),
       midiTakes_(std::move(midiTakes)),
       sampleRate_(sampleRate),
-      placement_(placement),
       midiPlacement_(midiPlacement) {
     try {
         for (auto& take : takes_) {
@@ -222,7 +236,7 @@ std::vector<RecordedTake> RecordingSession::finish() {
         result.error = take->error;
         const int64_t start = take->start.load();
         result.frames = start == RecordingTake::kNotStarted ? 0 : take->written;
-        result.startSample = start == RecordingTake::kNotStarted ? 0 : start - placement_;
+        result.startSample = start == RecordingTake::kNotStarted ? 0 : start - take->placement;
         if (result.frames == 0) {
             std::error_code ignored;
             std::filesystem::remove(pathFromUtf8(take->path), ignored);

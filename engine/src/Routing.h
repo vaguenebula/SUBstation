@@ -1,8 +1,9 @@
 #pragma once
 // Routing as a graph: strips are nodes, and every way a strip's signal goes on
 // is an edge. Each strip has one output edge (into a group's bus, or the
-// master) and any number of sends (into return tracks); later, sidechains and
-// resampling are more edges. The engine sees only edges, never groups. The
+// master) and any number of sends (into return tracks); a track resampling
+// another takes its input on an input edge; later, sidechains are more edges.
+// The engine sees only edges, never groups. The
 // graph must be acyclic: an edge that would close a cycle is refused where it
 // is made (wouldCycle), and the snapshot builder sorts the graph so that every
 // strip comes after everything that feeds it.
@@ -12,7 +13,9 @@
 // late; a summing point (a bus, a return, the master, later a rack) hears its
 // inputs as late as the latest of them, and delays each of the other edges by
 // the difference. A strip going to two places of different latency is delayed
-// differently on each edge.
+// differently on each edge. An input edge isn't summed (the track hears it
+// instead of its clips, while monitored, and records it): it orders the graph
+// and can close cycles like any edge, but isn't aligned.
 
 #include <algorithm>
 #include <cstddef>
@@ -24,6 +27,7 @@ namespace gil {
 struct RouteEdge {
     int from = 0;
     int to = -1;
+    bool sums = true;  // `to` sums it into its input (false: an input edge, not aligned)
 };
 
 // Lines up the inputs of one summing point: `arrivals[i]` is how late input i
@@ -98,7 +102,7 @@ inline bool wouldCycle(int count, const std::vector<RouteEdge>& edges, int from,
 // topologicalOrder(); `tapLatency[e]` is the latency of edge e's source devices
 // before its tap (all of them, for a strip's output or a send).
 struct GraphLatencies {
-    std::vector<int> inputLatency;  // how late each node hears its inputs (0: nothing feeds it)
+    std::vector<int> inputLatency;  // how late each node hears its summed inputs (0: nothing feeds it)
     std::vector<int> compensation;  // per edge: how much it is delayed to line up at its destination
     int masterInput = 0;            // how late the master hears its inputs
 };
@@ -114,6 +118,7 @@ inline GraphLatencies alignGraph(const std::vector<int>& order, const std::vecto
     // arrivals of the edges leaving it are needed.
     std::vector<std::vector<int>> incoming(count + 1);  // the last one: the master
     for (size_t e = 0; e < edges.size(); ++e) {
+        if (!edges[e].sums) continue;  // (compensation 0)
         const int to = edges[e].to;
         incoming[to >= 0 && static_cast<size_t>(to) < count ? static_cast<size_t>(to) : count].push_back(static_cast<int>(e));
     }

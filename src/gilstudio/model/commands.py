@@ -110,6 +110,21 @@ class UpdateTrackCommand(_MergeableCommand):
         self.project.update_track(self.key[0], **{self.key[1]: self.old})
 
 
+class UpdateTrackFieldsCommand(_MergeableCommand):
+    """Several settings of one track at once (one change): `old`/`new` map attribute names to values."""
+
+    def __init__(self, project: Project, track_id: str, old: dict, new: dict, text: str,
+                 merge_key: object | None = None):
+        super().__init__(text, (track_id, tuple(old)), old, new, merge_key)
+        self.project = project
+
+    def redo(self) -> None:
+        self.project.update_track(self.key[0], **self.new)
+
+    def undo(self) -> None:
+        self.project.update_track(self.key[0], **self.old)
+
+
 class UpdateTracksCommand(_MergeableCommand):
     """One mixer setting on several tracks at once; `old`/`new` map track id to value."""
 

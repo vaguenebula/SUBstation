@@ -1,7 +1,9 @@
 #pragma once
 // Recording. The audio thread copies the input of the tracks being recorded
 // into lock-free rings; a disk-writer thread empties them into WAV files. The
-// audio thread never touches files, allocates, frees or waits.
+// audio thread never touches files, allocates, frees or waits. A track's input
+// is the device's (some of its channels), or another track's output or the
+// master's (resampling), which the renderer hands over once it has rendered it.
 //
 // Overruns (the writer fell behind and a ring was full): the audio thread drops
 // that input, but counts it and tells the writer where the gap is, so the
@@ -69,12 +71,29 @@ struct RecordingTake {
         int64_t frames = 0;  // of silence
     };
 
-    RecordingTake(uint32_t trackId, std::string path, int inputLeft, int inputRight, size_t ringFrames);
+    // Where its input comes from.
+    enum class Source : uint8_t {
+        Device,  // the device's inputs
+        Track,   // a track's output (post-fader)
+        Master,  // the master's output (after its devices and fader, before the metronome)
+    };
+
+    // From the device's inputs: indices into its open inputs (callback order);
+    // `inputRight` the same as `inputLeft`, or -1, records mono.
+    // `placement`: how much later than the timeline its input arrives (subtracted from its start).
+    RecordingTake(uint32_t trackId, std::string path, int inputLeft, int inputRight, size_t ringFrames,
+                  int64_t placement);
+    // From a track's output (Source::Track, `sourceTrackId`) or the master's: stereo.
+    RecordingTake(uint32_t trackId, std::string path, Source source, uint32_t sourceTrackId, size_t ringFrames,
+                  int64_t placement);
 
     const uint32_t trackId;
     const std::string path;
     const int channels;  // 1 or 2
-    const int inputs[2];  // indices into the device's open inputs (callback order)
+    const int inputs[2];  // Device: indices into the device's open inputs (callback order)
+    const Source source;
+    const uint32_t sourceTrackId;  // Track: the track whose output it records
+    const int64_t placement;       // its start is moved back this much (the latency its input arrives with)
 
     SampleRing ring;                   // interleaved samples, audio thread -> writer
     SpscQueue<Gap, 256> gaps;          // overruns, audio thread -> writer
@@ -166,21 +185,19 @@ struct RecordedTake {
 class RecordingSession {
 public:
     // Creates the files (throws std::runtime_error with a message for the user).
-    // `placement`: how much later than the timeline the input arrives (the output
-    // lag, the output and the input latency), subtracted from the takes' starts.
-    // `midiPlacement`: likewise for MIDI notes (the output lag, the output
-    // latency and MIDI input's delay), subtracted from the notes' times. A MIDI
-    // take itself spans the timeline where it recorded.
+    // Each audio take has its placement (RecordingTake::placement). `midiPlacement`:
+    // how much later than the timeline MIDI notes arrive (the output lag, the
+    // output latency and MIDI input's delay), subtracted from the notes' times.
+    // A MIDI take itself spans the timeline where it recorded.
     RecordingSession(std::vector<std::unique_ptr<RecordingTake>> takes,
                      std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes, double sampleRate,
-                     int64_t placement, int64_t midiPlacement);
+                     int64_t midiPlacement);
     ~RecordingSession();
     RecordingSession(const RecordingSession&) = delete;
     RecordingSession& operator=(const RecordingSession&) = delete;
 
     std::vector<std::unique_ptr<RecordingTake>>& takes() noexcept { return takes_; }
     std::vector<std::unique_ptr<MidiRecordingTake>>& midiTakes() noexcept { return midiTakes_; }
-    int64_t placement() const noexcept { return placement_; }
     // Edit side: a MIDI take's notes so far, latency-corrected as
     // RecordedTake::notes has them (held notes keep end -1).
     std::vector<RecordedNote> midiNotes(MidiRecordingTake& take);
@@ -203,7 +220,6 @@ private:
     std::vector<std::unique_ptr<RecordingTake>> takes_;
     std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes_;
     double sampleRate_;
-    int64_t placement_;
     int64_t midiPlacement_;
     std::atomic<bool> interrupted_{false};
     std::mutex mutex_;

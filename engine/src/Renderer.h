@@ -36,12 +36,17 @@
 // sample by sample, as are a send's level where its edge is summed. While
 // stopped, automated values follow the playhead.
 //
-// Input: a monitored track (MonitorMode) plays the device's input instead of
-// its clips, through its strip like any audio, but isn't delay-compensated
-// (compensationFor()). While recording, the input of the tracks recorded goes
-// to the RecordingSession's rings, tagged with the timeline position it was
-// taken at; the loop doesn't wrap then. A count-in clicks before the playhead
-// moves (the metronome, even if it is off).
+// Input: a monitored track (MonitorMode) plays its input instead of its clips,
+// through its strip like any audio, but isn't delay-compensated
+// (compensationFor()). Its input is the device's, or another track's output
+// after its fader (an input edge: resampling), which renders first; or the
+// master's, which renders last, so it is recorded but never heard (monitoring
+// it would feed it back). While recording, the input of the tracks recorded
+// goes to the RecordingSession's rings, tagged with the timeline position it
+// was taken at: the device's in the prologue, the tracks' and the master's in
+// the epilogue (the master's after its fader, before the metronome); the loop
+// doesn't wrap then. A count-in clicks before the playhead moves (the
+// metronome, even if it is off).
 //
 // MIDI input (MidiInput.h): messages come stamped with the device sample they
 // play at; each chunk takes those due in it. A track whose MIDI input accepts
@@ -217,7 +222,11 @@ private:
     bool isMonitored(const TrackRender& track, ChunkFlags flags) const noexcept;
     const float* inputChannel(int index, int offset) const noexcept;
     void readInput(const InputEdge& input, float* left, float* right, int frames) const noexcept;
+    // Prologue: starts the takes (or ends them, if the playhead jumped) and
+    // records the device's input over the chunk's stretches (recordSegments_).
     void recordInput() noexcept;
+    // Epilogue: records the tracks' and the master's outputs over the same stretches.
+    void recordRendered(const RenderSnapshot& snap) noexcept;
     void scheduleCountIn(const RenderSnapshot& snap, int length) noexcept;
     void processInserts(const StripRender& strip, ProcessContext& context, ProcessEvent* events, int numEvents,
                         float* left, float* right, int frames, double samplesPerBeat) noexcept;
@@ -268,6 +277,7 @@ private:
     int numInputs_ = 0;
     int inputOffset_ = 0;  // the current chunk's first frame in them
     RecordingSession* recording_ = nullptr;
+    int recordSegments_ = 0;  // the chunk's segments recorded (from the first; fewer if the playhead jumped)
     std::vector<float> silence_, recordScratch_;
 
     std::vector<float> masterLeft_, masterRight_;

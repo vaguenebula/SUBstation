@@ -41,7 +41,9 @@ each take's peaks (`live_takes`) for the arrangement's live waveform. When the
 recording ends (stopped, or a device change or a locate ended it) the takes
 come out as `takes_recorded`, for one undo step that adds them as clips. A
 track given an input the device hasn't open gets it: the device opens again
-with that input too (ASIO).
+with that input too (ASIO). A track taking its input from another track's
+output (or the master's: resampling) records that, in stereo, placed where it
+was heard.
 
 MIDI input: every MIDI input connected is opened, but those turned off in the
 preferences. MIDI tracks hear their MIDI input (every input, or one, on every
@@ -235,7 +237,7 @@ class EngineBridge(QObject):
         self._automating: dict[str, set[str]] = {}  # owner -> the targets whose envelopes the engine plays
         self._overridden: set[tuple[str, str]] = set()  # (owner, key) changed by hand while automated
         self._mixer: dict[str, tuple[float, float]] = {}  # owner -> (volume dB, pan) the engine has
-        self._inputs: dict[str, tuple] = {}  # track id -> (input, monitor, armed) the engine has
+        self._inputs: dict[str, tuple] = {}  # track id -> (input, source, monitor, armed, MIDI input) the engine has
         self._outputs: dict[str, int] = {}  # track id -> the engine track its output goes into
         self._sends: dict[str, dict[int, tuple[float, bool]]] = {}  # track id -> {engine return: (gain, pre-fader)}
         self._send_levels: dict[str, dict[str, float]] = {}  # track id -> {return id: level dB} the engine has
@@ -317,6 +319,7 @@ class EngineBridge(QObject):
             self._add_engine_track(track)
         self._push_outputs()
         self._push_all_sends()  # (into returns added after the tracks sending to them)
+        self._push_all_inputs()  # (from tracks added after the tracks taking them)
         self._push_settings()
         # Forget decoded audio the new project doesn't use.
         used = {_key(c.path) for t in self.project.tracks if not t.is_midi for c in t.clips}
@@ -348,6 +351,8 @@ class EngineBridge(QObject):
             self._push_all_sends()
         elif not track.is_master:
             self._push_sends(track.id)
+        if not track.is_master:  # the inputs taken from it (back)
+            self._push_all_inputs()
 
     def _on_track_removed(self, track_id: str, _index: int) -> None:
         for device_id, processor_id in self._devices.pop(track_id, []):
@@ -364,10 +369,13 @@ class EngineBridge(QObject):
         self._sends.pop(track_id, None)
         self._send_levels.pop(track_id, None)
         # What went into it goes to the engine's master now, and the sends into it
-        # are gone (the model has its say next).
+        # and the inputs from it are gone (the model has its say next).
         self._outputs = {t: ge.MASTER if out == engine_id else out for t, out in self._outputs.items()}
         for sends in self._sends.values():
             sends.pop(engine_id, None)
+        for track, state in list(self._inputs.items()):
+            if state[1] == engine_id:
+                self._inputs[track] = (state[0], None, *state[2:])
         self._overridden = {(o, k) for o, k in self._overridden if o != track_id}
 
     def _on_track_changed(self, track_id: str) -> None:
@@ -467,6 +475,13 @@ class EngineBridge(QObject):
         for track in self.project.senders():
             self._push_sends(track.id)
 
+    def _input_source(self, track: Track) -> int | None:
+        """The engine track whose output a track takes as its input (ge.MASTER: the
+        master's); None: none, or one the engine hasn't (yet)."""
+        if track.input_track is None or not track.is_audio:
+            return None
+        return ge.MASTER if track.input_track == MASTER else self._track_ids.get(track.input_track)
+
     def _push_input(self, track_id: str) -> None:
         engine_id = self._track_ids.get(track_id)
         if engine_id is None or track_id == MASTER:
@@ -474,24 +489,36 @@ class EngineBridge(QObject):
         track = self.project.track(track_id)
         channels = tuple(track.input) if not track.is_midi else ()
         midi_input = track.midi_input if track.is_midi else None
-        state = (channels, track.monitor, track.armed, midi_input)
+        state = (channels, self._input_source(track), track.monitor, track.armed, midi_input)
         old = self._inputs.get(track_id)
         if state == old:
             return  # (a mixer change)
+        if old is None or old[:2] != state[:2]:
+            if state[1] is None:
+                self.engine.set_track_input(engine_id, list(channels))
+            else:
+                try:
+                    self.engine.set_track_input_track(engine_id, state[1])
+                except ValueError:
+                    # A cycle with a route another change hasn't undone yet: it comes with that change.
+                    self.engine.set_track_input(engine_id, [])
+                    state = ((), None, *state[2:])
         self._inputs[track_id] = state
-        if old is None or old[0] != state[0]:
-            self.engine.set_track_input(engine_id, list(channels))
-        if old is None or old[1] != state[1]:
-            self.engine.set_track_monitor(engine_id, _MONITOR_MODES.get(track.monitor, ge.MonitorMode.AUTO))
         if old is None or old[2] != state[2]:
-            self.engine.set_track_armed(engine_id, state[2])
+            self.engine.set_track_monitor(engine_id, _MONITOR_MODES.get(track.monitor, ge.MonitorMode.AUTO))
         if old is None or old[3] != state[3]:
+            self.engine.set_track_armed(engine_id, state[3])
+        if old is None or old[4] != state[4]:
             if midi_input is None:
                 self.engine.set_track_midi_input(engine_id, False)
             else:
                 self.engine.set_track_midi_input(engine_id, True, midi_input.device, midi_input.channel)
         if channels and not self.is_recording:
             self._open_inputs(channels)
+
+    def _push_all_inputs(self) -> None:
+        for track in self.project.tracks:
+            self._push_input(track.id)
 
     def _open_inputs(self, channels) -> None:
         """An ASIO device that hasn't these inputs open opens again with them too."""
@@ -1225,7 +1252,9 @@ class EngineBridge(QObject):
             return "No audio device is open. Choose one in Options > Preferences."
         audio = [track for track in tracks if not track.is_midi]
         for track in audio:
-            self._open_inputs(track.input)
+            self._push_input(track.id)  # (a source the engine couldn't take before)
+            if track.input:
+                self._open_inputs(track.input)
         folder = recordings_folder(self.project)
         if audio:
             try:

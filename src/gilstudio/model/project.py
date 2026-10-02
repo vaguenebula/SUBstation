@@ -32,6 +32,14 @@ back into one that feeds it (would_cycle). Returns are `project.returns`, apart
 from the arrangement's tracks (and the master); `project.track()` finds them
 too, as it does the master, so whatever works on a track's devices, mixer or
 automation works on a return's. They are named by letter, in order (A, B...).
+
+An audio track's input is some of the audio device's channels (`Track.input`),
+or another track's output, after its fader (`Track.input_track`: a track, a
+group or a return), or the master's (MASTER: resampling). Taking a track's
+output is an edge of the routing graph, like a send: a track can't take the
+output of one it feeds (routing_graph, feeds). The master is no part of that
+graph: everything reaches it, and a track recording it never plays it back
+into it (it can't monitor it).
 """
 
 from __future__ import annotations
@@ -256,6 +264,9 @@ class Track:
     automation_view: AutomationView = field(default_factory=AutomationView)
     # Audio input: device channels (0-based): () none, (c,) mono, (l, r) a stereo pair.
     input: tuple[int, ...] = ()
+    # An audio track's input from another track's output instead (its id; MASTER:
+    # the master's, resampling); `input` is () then. None: the device's channels.
+    input_track: str | None = None
     # MIDI input (MIDI tracks); None: none. New MIDI tracks hear every input, as in Ableton.
     midi_input: MidiInput | None = field(default_factory=MidiInput)
     monitor: str = "auto"  # one of MONITOR_MODES
@@ -291,10 +302,11 @@ class Track:
 
     @property
     def has_input(self) -> bool:
-        """Whether it has something to record: an audio input, or a MIDI track's MIDI input."""
+        """Whether it has something to record: an audio input (or another track's
+        output), or a MIDI track's MIDI input."""
         if not self.has_clips:
             return False
-        return self.midi_input is not None if self.is_midi else bool(self.input)
+        return self.midi_input is not None if self.is_midi else bool(self.input) or self.input_track is not None
 
 
 def new_master(**attrs) -> Track:
@@ -347,25 +359,46 @@ def repair_tree(tracks: list[Track]) -> None:
             path.append(track.id)
 
 
-def would_cycle(returns: list[Track], track_id: str, return_id: str) -> bool:
-    """Whether a send from a track into a return would close a cycle: the return
-    is the track, or feeds it. Only a return can be fed by a return (they go to
-    the master, and send only into returns), so only a return's sends can."""
-    if track_id == return_id:
-        return True
-    by_id = {r.id: r for r in returns}
-    if track_id not in by_id:
-        return False
-    seen, stack = set(), [return_id]
+RoutingGraph = dict[str, list[str]]  # track id -> the tracks its signal goes into
+
+
+def routing_graph(tracks: list[Track], returns: list[Track]) -> RoutingGraph:
+    """Where each track's (and return's) signal goes: into its group, into the
+    returns it sends to, and into the tracks taking their input from it. (Not
+    the master, which isn't in the graph.)"""
+    graph: RoutingGraph = {t.id: [] for t in [*tracks, *returns]}
+    for track in [*tracks, *returns]:
+        if track.parent in graph:
+            graph[track.id].append(track.parent)
+        graph[track.id].extend(r for r in track.sends if r in graph)
+        if track.input_track in graph:
+            graph[track.input_track].append(track.id)
+    return graph
+
+
+def feeds(graph: RoutingGraph, source: str, target: str) -> bool:
+    """Whether `source`'s signal reaches `target` (or `source` is `target`)."""
+    seen, stack = set(), [source]
     while stack:
         current = stack.pop()
-        if current == track_id:
+        if current == target:
             return True
-        if current in seen or current not in by_id:
-            continue
-        seen.add(current)
-        stack.extend(by_id[current].sends)
+        if current not in seen:
+            seen.add(current)
+            stack.extend(graph.get(current, ()))
     return False
+
+
+def would_cycle(tracks: list[Track], returns: list[Track], track_id: str, return_id: str) -> bool:
+    """Whether a send from a track into a return would close a cycle: the return
+    is the track, or feeds it (through outputs, sends and inputs)."""
+    return feeds(routing_graph(tracks, returns), return_id, track_id)
+
+
+def input_would_cycle(tracks: list[Track], returns: list[Track], track_id: str, source_id: str) -> bool:
+    """Whether taking its input from `source_id`'s output would close a cycle: the
+    source is the track, or the track feeds it. Never the master's."""
+    return source_id != MASTER and feeds(routing_graph(tracks, returns), track_id, source_id)
 
 
 TrackTree = tuple[tuple[str, str | None], ...]  # every track's (id, parent), in order
@@ -480,7 +513,24 @@ class Project(QObject):
 
     def would_cycle(self, track_id: str, return_id: str) -> bool:
         """Whether a send from a track into a return would close a cycle (see would_cycle)."""
-        return would_cycle(self.returns, track_id, return_id)
+        return would_cycle(self.tracks, self.returns, track_id, return_id)
+
+    # --- Inputs ----------------------------------------------------------------
+
+    def input_would_cycle(self, track_id: str, source_id: str) -> bool:
+        """Whether a track taking its input from another's output (or a return's)
+        would close a cycle (see input_would_cycle)."""
+        return input_would_cycle(self.tracks, self.returns, track_id, source_id)
+
+    def input_sources(self, track_id: str) -> list[Track]:
+        """The tracks (groups too) and returns whose output a track could take as
+        its input, but itself, in order (some would close a cycle: input_would_cycle).
+        The master's (resampling) can be taken too."""
+        return [t for t in [*self.tracks, *self.returns] if t.id != track_id]
+
+    def input_name(self, source_id: str) -> str:
+        """What an input from a track's output is called: the track's name, or "Resampling" (the master's)."""
+        return "Resampling" if source_id == MASTER else self.track(source_id).name
 
     def send_targets(self, track_id: str) -> list[Track]:
         """The returns a track (or return) can send to: all but those that would close a cycle."""

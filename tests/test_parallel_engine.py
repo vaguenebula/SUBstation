@@ -229,6 +229,28 @@ def test_random_graphs_with_sends_render_the_same_on_any_threads(engine, make_wa
     np.testing.assert_array_equal(parallel, serial)
 
 
+@pytest.mark.parametrize("seed", range(6))
+def test_random_graphs_with_inputs_render_the_same_on_any_threads(engine, make_wav, uids, seed):
+    """Tracks taking their input from others (resampling): an input edge isn't
+    heard offline, but orders the graph like any edge (the source first)."""
+    rng = np.random.default_rng(200 + seed)
+    groups, leaves = random_project(engine, rng, make_wav, uids, tracks=int(rng.integers(4, 16)))
+    tracks = groups + leaves + add_returns(engine, rng, uids, groups + leaves, count=int(rng.integers(0, 3)))
+    inputs = 0
+    for track in leaves:
+        if rng.random() < 0.6:
+            try:
+                engine.set_track_input_track(track, int(rng.choice([ge.MASTER, *tracks])))
+                inputs += 1
+            except ValueError:
+                pass  # itself, or a track it feeds
+    assert inputs > 0 or not leaves
+    settle(engine)
+    serial = render(engine, 1, 8 * SPB)
+    parallel = render(engine, THREADS, 8 * SPB)
+    np.testing.assert_array_equal(parallel, serial)
+
+
 def test_nested_groups_on_any_threads(engine, make_wav, uids):
     """Groups three deep, with tracks at every level: each bus sums what goes into it in a fixed order."""
     rng = np.random.default_rng(7)

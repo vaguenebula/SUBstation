@@ -129,7 +129,7 @@ def test_old_project_files_load_unchanged():
     assert [t.id for t in project.tracks] == ["t1"] and project.tempo == 128.0
     # Saved again, it says the same, and that the master has no devices.
     saved = project_to_dict(project)
-    assert saved["version"] == 9 and saved["master"] == {**old["master"], "devices": []}
+    assert saved["version"] == 10 and saved["master"] == {**old["master"], "devices": []}
     # Tracks from before version 6 have no input, Auto monitoring and aren't armed; before 8, no group;
     # before 9, no sends (nor returns).
     assert saved["tracks"] == [{**t, "input": [], "monitor": "auto", "armed": False, "parent": None,

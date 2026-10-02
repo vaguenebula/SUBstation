@@ -243,6 +243,9 @@ class ArrangementView(QWidget):
         self.lanes.update()
 
     def _on_track_changed(self, track_id: str) -> None:
+        for track in self.project.tracks:  # what takes its output as its input shows its name
+            if track.input_track == track_id:
+                self.headers.refresh(track.id)
         if track_id in self._returns:  # its name, mixer or sends: and which returns the others can send to
             self._returns[track_id][1].refresh()
             for _lane, header in self._returns.values():

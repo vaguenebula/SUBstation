@@ -168,9 +168,12 @@ struct EdgeState {
 // An edge of the routing graph (Routing.h): a strip's signal going into another
 // strip (a group's bus, a return), or into the master. Each track has one
 // output edge (post-fader) and any number of sends, tapped after its fader or
-// before it. The destination sums its incoming edges, each at its level.
+// before it. The destination sums its incoming edges, each at its level. An
+// input edge (resampling) is a track's input taken from another track's output
+// (post-fader): it isn't summed, but heard instead of the track's clips while
+// the track is monitored (InputEdge), and recorded; it isn't delay-compensated.
 struct EdgeRender {
-    enum class Kind : uint8_t { Output, Send };  // later: input (resampling), sidechain
+    enum class Kind : uint8_t { Output, Send, Input };  // later: sidechain
     enum class Tap : uint8_t { PostFader, PreFader };
 
     int from = 0;   // the snapshot track it leaves
@@ -188,20 +191,26 @@ struct EdgeRender {
     // pre-fader tap (the source's buffer holds it after the fader), or a signal
     // delayed for this edge alone. Otherwise the destination reads the source's buffer.
     bool ownSignal() const noexcept { return tap == Tap::PreFader || compensation > 0; }
+    // Whether its destination sums it into its input (an input edge is heard only while monitored).
+    bool sums() const noexcept { return kind != Kind::Input; }
 };
 
-// Where a strip's input comes from: a routing edge into it. For now the
-// device's inputs (a mono channel or a stereo pair); later another strip's
-// output (resampling) is another source.
+// Where a strip's input comes from: the device's inputs (a mono channel or a
+// stereo pair), another track's output (an input edge: resampling it), or the
+// master's output (resampling the mix: it is recorded after the master, so it
+// can't be monitored, which would feed it back).
 struct InputEdge {
-    enum class Source : uint8_t { None, Device };
+    enum class Source : uint8_t { None, Device, Track, Master };
     Source source = Source::None;
-    // Indices into the device's open inputs (the callback's order); -1: not open
-    // (the input is silent). A mono input has both the same.
+    // Device: indices into the device's open inputs (the callback's order); -1:
+    // not open (the input is silent). A mono input has both the same.
     int left = -1;
     int right = -1;
+    int edge = -1;  // Track: the snapshot edge (Kind::Input) it comes in on
 
     bool fromDevice() const noexcept { return source == Source::Device; }
+    // Whether the track can hear it (monitoring): the device's, or another track's.
+    bool monitorable() const noexcept { return source == Source::Device || source == Source::Track; }
 };
 
 // When a track hears its input instead of its clips (input monitoring).
@@ -267,15 +276,17 @@ struct TrackBuffers {
 
 // A track in the routing graph (Routing.h). The snapshot lists tracks in an
 // order in which each comes after everything that feeds it. A track's input is
-// what comes in on its incoming edges (summed in that order), plus its clips and
-// notes (or the live input); its signal leaves on its outgoing edges.
+// what comes in on its incoming edges (summed in that order, but for an input
+// edge), plus its clips and notes (or the live input); its signal leaves on its
+// outgoing edges.
 struct TrackRender : StripRender {
     uint32_t id = 0;
     std::vector<int> incoming;      // edges into it (snapshot edges), in the order it sums them
-    std::vector<int> outgoing;      // edges out of it: its output first, then its sends
+    std::vector<int> outgoing;      // edges out of it: its output first, then its sends (and input edges, by destination)
     int inputCount = 0;             // incoming.size(): the scheduler runs it once they are done
-    // How late it hears what feeds it. (Its own clips and notes play on time:
-    // they aren't delayed to line up with its inputs. Groups and returns have none.)
+    // How late it hears what its summed edges bring. (Its own clips and notes
+    // play on time: they aren't delayed to line up with its inputs, and nor is
+    // the input it monitors. Groups and returns have none.)
     int inputLatency = 0;
     std::shared_ptr<TrackBuffers> buffers;  // its signal and chunk state (never null in an engine's snapshot)
     InputEdge input;

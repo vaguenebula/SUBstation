@@ -31,6 +31,7 @@ from .commands import (
     SetTempoCommand,
     UpdateSettingsCommand,
     UpdateTrackCommand,
+    UpdateTrackFieldsCommand,
     UpdateTracksCommand,
 )
 from .project import (
@@ -48,8 +49,10 @@ from .project import (
     Project,
     Send,
     Track,
+    feeds,
     new_id,
     return_letter,
+    routing_graph,
     tree_problem,
 )
 from .timebase import TimeSignature, seconds_to_beats
@@ -196,6 +199,7 @@ class ProjectEditor(QObject):
         count = len(doomed) + len(returns)
         text = "Delete Return Track" if not doomed and count == 1 else "Delete Track" if count == 1 else "Delete Tracks"
         self.undo_stack.beginMacro(text)
+        self._drop_inputs(doomed | returns, text)  # (first: undo brings them back after their sources)
         # The last first: undo brings back each group before what is in it.
         for track in reversed(p.tracks):
             if track.id in doomed:
@@ -268,9 +272,32 @@ class ProjectEditor(QObject):
         return staying[:position] + block + staying[position:]
 
     def _arrange(self, tree, text: str) -> None:
+        """Arranges the tracks so. A track taking its input from a group it comes
+        into (or from what that group feeds) loses that input first: it would
+        close a cycle."""
         tree = tuple(tree)
-        if tree != self.project.tree():
-            self._push(ArrangeTracksCommand(self.project, self.project.tree(), tree, text))
+        if tree == self.project.tree():
+            return
+        p = self.project
+        parents = dict(tree)
+        arranged = [replace(t, parent=parents.get(t.id)) for t in p.tracks]  # (copies: inputs go one by one)
+        cycling = []
+        for track in arranged:
+            source, track.input_track = track.input_track, None
+            if source is not None and feeds(routing_graph(arranged, p.returns), track.id, source):
+                cycling.append(track.id)
+            else:
+                track.input_track = source
+        if not cycling:
+            self._push(ArrangeTracksCommand(p, p.tree(), tree, text))
+            return
+        self.undo_stack.beginMacro(text)
+        try:
+            for track_id in cycling:
+                self._push(UpdateTrackCommand(p, track_id, "input_track", p.track(track_id).input_track, None, text))
+            self._push(ArrangeTracksCommand(p, p.tree(), tree, text))
+        finally:
+            self.undo_stack.endMacro()
 
     def _valid(self, tree) -> bool:
         tracks = {t.id: t for t in self.project.tracks}
@@ -308,6 +335,7 @@ class ProjectEditor(QObject):
         text = "Ungroup Tracks"
         self.undo_stack.beginMacro(text)
         try:
+            self._drop_inputs(set(groups), text)
             tree = list(p.tree())
             for group_id in groups:
                 parent = dict(tree)[group_id]
@@ -409,9 +437,33 @@ class ProjectEditor(QObject):
         channels = tuple(int(c) for c in channels)
         if len(channels) > 2:
             raise ValueError("an input is one channel or a pair")
-        old = self.project.track(track_id).input
-        if channels != old:
-            self._push(UpdateTrackCommand(self.project, track_id, "input", old, channels, "Change Track Input"))
+        self._set_input(track_id, channels, None)
+
+    def set_track_input_track(self, track_id: str, source_id: str | None) -> None:
+        """An audio track's input from another track's output, after its fader (a
+        track, a group or a return), or the master's (MASTER: resampling), instead
+        of device channels; None: no input. Raises ValueError for a source it
+        can't take (itself, or a track it feeds: a cycle)."""
+        p = self.project
+        track = p.track(track_id)
+        if source_id is not None and (
+                not track.is_audio or not (source_id == MASTER or p.has_track(source_id) or p.has_return(source_id))
+                or p.input_would_cycle(track_id, source_id)):
+            raise ValueError(f"{track.name} can't take its input from that track")
+        self._set_input(track_id, (), source_id)
+
+    def _set_input(self, track_id: str, channels: tuple[int, ...], source_id: str | None) -> None:
+        track = self.project.track(track_id)
+        old = {"input": track.input, "input_track": track.input_track}
+        new = {"input": channels, "input_track": source_id}
+        if new != old:
+            self._push(UpdateTrackFieldsCommand(self.project, track_id, old, new, "Change Track Input"))
+
+    def _drop_inputs(self, source_ids: set[str], text: str) -> None:
+        """The tracks taking their input from these (going away) have none."""
+        for track in self.project.tracks:
+            if track.input_track in source_ids:
+                self._push(UpdateTrackCommand(self.project, track.id, "input_track", track.input_track, None, text))
 
     def set_track_monitor(self, track_id: str, mode: str) -> None:
         if mode not in MONITOR_MODES:

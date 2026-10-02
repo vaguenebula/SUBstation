@@ -320,29 +320,36 @@ Tests
 Small once edges exist: `InputEdge` already has room for another source.
 
 Engine
-- [ ] `InputEdge::Source::Track`: an incoming edge from another strip (tap
-      post-fader). The source renders first; a track can't take input from
-      something it feeds (the Phase 6 cycle check).
-- [ ] Monitoring as with device input: a monitored track hears its source
+- [x] `InputEdge::Source::Track`: an incoming edge from another strip (tap
+      post-fader; `EdgeRender::Kind::Input`). The source renders first; a track
+      can't take input from something it feeds (the Phase 6 cycle check). The
+      edge isn't summed or aligned (`RouteEdge::sums`), and solo crosses it only
+      while its track monitors it.
+- [x] Monitoring as with device input: a monitored track hears its source
       instead of its clips, not delay-compensated (`compensationFor`).
-- [ ] Recording: the renderer hands the source's buffer to the take, like
-      device input (its ring, its disk writer). Placement: no device latencies;
-      the take lands where the source was heard (moved back by the edge's
-      arrival, not by input + output latency).
-- [ ] The master as a source ("Resampling"): the master renders after the
-      graph, so it is recorded in the epilogue; a track resampling the master
-      can't monitor it (that would feed back).
+- [x] Recording: the renderer hands the source's buffer to the take, like
+      device input (its ring, its disk writer), in the epilogue. Placement: no
+      device latencies; the take lands where the source was heard (moved back
+      by the edge's arrival, not by input + output latency): each take has its
+      own placement.
+- [x] The master as a source ("Resampling", `InputEdge::Source::Master`): the
+      master renders after the graph, so it is recorded in the epilogue (after
+      its fader, before the metronome); a track resampling the master can't
+      monitor it (that would feed back).
 
 Model / UI
-- [ ] Input selector lists tracks, groups, returns and "Resampling" (the
+- [x] `Track.input_track` (a track, group or return id, or MASTER), project
+      version 10; inputs that would close a cycle (moving a track into its
+      source's group) or whose source goes are dropped in the same undo step.
+- [x] Input selector lists tracks, groups, returns and "Resampling" (the
       master); sources that would make a cycle are greyed out.
-- [ ] Recording reuses Phase 2's take/undo flow.
+- [x] Recording reuses Phase 2's take/undo flow.
 
 Tests
-- [ ] A take resampled from a track equals that track's render sample for
+- [x] A take resampled from a track equals that track's render sample for
       sample, with latent plug-ins on the source (and on the master).
-- [ ] Cycles refused; monitoring a resampled source isn't delayed.
-- [ ] Undo removes the take.
+- [x] Cycles refused; monitoring a resampled source isn't delayed.
+- [x] Undo removes the take.
 
 ---
 

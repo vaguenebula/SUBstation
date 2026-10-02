@@ -231,7 +231,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     context.loopEndBeat = snap.loopEnd / spb;
     context.offline = !flags.live;
 
-    workOutSolo(snap);  // and mute: which tracks and edges are heard
+    recordSegments_ = 0;
     if (recording_ && numSegments_ > 0) recordInput();
     if (wasPlaying_ && !playing_) releaseLiveNotes_ = true;
     wasPlaying_ = playing_;
@@ -253,6 +253,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     }
     forgetNotesOfRemovedTracks(snap);
     releaseLiveNotes_ = false;
+    workOutSolo(snap);  // and mute: which tracks and edges are heard (after monitoring: input edges count while monitored)
 
     // 3. The tracks, each after what feeds it (on any thread): its inputs, clips
     // and notes -> its strip -> its buffer, which the bus it goes into reads.
@@ -287,6 +288,9 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     if (snap.master.params) {
         processStrip(snap, snap.master, context, nullptr, 0, masterL, masterR, frames, true, flags, scratch_[0]);
     }
+    // What the tracks being recorded take from other tracks' outputs, or the
+    // master's (resampling), now that they are rendered.
+    if (recordSegments_ > 0) recordRendered(snap);
 
     // 5. Metronome, after the master fader (a click may still be ringing out).
     renderTicks(frames);
@@ -318,9 +322,16 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
     // A bus (a group, a return): what goes into it, in a fixed order (it is done:
     // the scheduler runs it after its sources), so the sum is the same whichever
     // finished first.
-    for (const int e : track.incoming) sumEdge(snap, snap.edges[static_cast<size_t>(e)], left, right, frames, scratch);
-    if (buffers.monitored) {
-        readInput(track.input, left, right, frames);
+    for (const int e : track.incoming) {
+        const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+        if (edge.sums()) sumEdge(snap, edge, left, right, frames, scratch);
+    }
+    if (buffers.monitored) {  // its input: the device's, or another track's output (rendered: it fed this one)
+        if (track.input.source == InputEdge::Source::Track) {
+            sumEdge(snap, snap.edges[static_cast<size_t>(track.input.edge)], left, right, frames, scratch);
+        } else {
+            readInput(track.input, left, right, frames);
+        }
     } else {
         int nextVoice = 0;
         for (int s = 0; s < numSegments_; ++s) {
@@ -395,7 +406,12 @@ int Renderer::compensationFor(const EdgeRender& edge, bool monitored) noexcept {
 }
 
 void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
-    // Each solo button is read once, so the chunk sees one consistent state.
+    // Each solo button is read once, so the chunk sees one consistent state. An
+    // input edge only counts while its track hears it (monitored): otherwise its
+    // track plays its clips, and the edge only feeds a recording.
+    const auto carries = [&snap](const EdgeRender& edge) {
+        return edge.sums() || snap.tracks[static_cast<size_t>(edge.to)].buffers->monitored;
+    };
     bool anySolo = false;
     for (const TrackRender& track : snap.tracks) {
         TrackBuffers& buffers = *track.buffers;
@@ -407,15 +423,16 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
         for (const TrackRender& track : snap.tracks) {
             bool down = track.buffers->soloed;
             for (const int e : track.incoming) {
-                down = down || snap.tracks[static_cast<size_t>(snap.edges[static_cast<size_t>(e)].from)].buffers->soloDown;
+                const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+                down = down || (carries(edge) && snap.tracks[static_cast<size_t>(edge.from)].buffers->soloDown);
             }
             track.buffers->soloDown = down;
         }
         for (auto it = snap.tracks.rbegin(); it != snap.tracks.rend(); ++it) {
             bool up = it->buffers->soloed;
             for (const int e : it->outgoing) {
-                const int to = snap.edges[static_cast<size_t>(e)].to;
-                up = up || (to >= 0 && snap.tracks[static_cast<size_t>(to)].buffers->soloUp);
+                const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+                up = up || (edge.to >= 0 && carries(edge) && snap.tracks[static_cast<size_t>(edge.to)].buffers->soloUp);
             }
             it->buffers->soloUp = up;
         }
@@ -425,8 +442,9 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
                            (edge.to >= 0 && snap.tracks[static_cast<size_t>(edge.to)].buffers->soloUp);
     }
     for (const TrackRender& track : snap.tracks) {
-        const bool heard = std::any_of(track.outgoing.begin(), track.outgoing.end(), [&snap](int e) {
-            return snap.edges[static_cast<size_t>(e)].state->live;
+        const bool heard = std::any_of(track.outgoing.begin(), track.outgoing.end(), [&](int e) {
+            const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+            return edge.state->live && carries(edge);
         });
         track.buffers->audible = !track.params->mute.load(std::memory_order_relaxed) && heard;
     }
@@ -498,7 +516,9 @@ void Renderer::sumEdge(const RenderSnapshot& snap, const EdgeRender& edge, float
 }
 
 bool Renderer::isMonitored(const TrackRender& track, ChunkFlags flags) const noexcept {
-    if (!flags.live || !track.input.fromDevice()) return false;  // offline renders play the arrangement
+    // Offline renders play the arrangement. The master's output can't be heard
+    // on a track: the track goes into it.
+    if (!flags.live || !track.input.monitorable()) return false;
     switch (track.monitor) {
         case MonitorMode::In: return true;
         case MonitorMode::Auto: return track.armed && (!playing_ || recording_ != nullptr);
@@ -541,11 +561,37 @@ void Renderer::recordInput() noexcept {
             return;
         }
         for (const auto& take : session.takes()) {
+            if (take->source != RecordingTake::Source::Device) continue;  // (once rendered: recordRendered())
             take->push(inputChannel(take->inputs[0], segment.offset), inputChannel(take->inputs[1], segment.offset),
                        segment.length, recordScratch_.data());
         }
         for (const auto& take : session.midiTakes()) {
             take->frames.fetch_add(segment.length, std::memory_order_release);
+        }
+        recordSegments_ = s + 1;
+    }
+}
+
+void Renderer::recordRendered(const RenderSnapshot& snap) noexcept {
+    // The same stretches of the chunk recordInput() took from the device.
+    for (const auto& take : recording_->takes()) {
+        if (take->source == RecordingTake::Source::Device) continue;
+        const float* left = silence_.data();  // a source gone meanwhile: silence, so the take stays in time
+        const float* right = silence_.data();
+        if (take->source == RecordingTake::Source::Master) {
+            left = masterLeft_.data();
+            right = masterRight_.data();
+        } else {
+            for (const TrackRender& track : snap.tracks) {
+                if (track.id != take->sourceTrackId) continue;
+                left = track.buffers->left.data();  // after its fader, before any edge's delay
+                right = track.buffers->right.data();
+                break;
+            }
+        }
+        for (int s = 0; s < recordSegments_; ++s) {
+            const Segment& segment = segments_[s];
+            take->push(left + segment.offset, right + segment.offset, segment.length, recordScratch_.data());
         }
     }
 }

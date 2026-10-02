@@ -3,8 +3,9 @@
 //
 // Routing (Routing.h): every track's output goes to the master or into another
 // track (a bus: a group track), and its sends into other tracks (return
-// tracks). The snapshot lists the tracks so that each comes after what feeds
-// it, and lines up the edges going into every bus.
+// tracks); a track may take its input from another track's output (an input
+// edge: resampling). The snapshot lists the tracks so that each comes after
+// what feeds it, and lines up the edges going into every bus.
 //
 // Threading model:
 //  * The audio thread (device callback) only reads the published RenderSnapshot
@@ -37,6 +38,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -236,6 +238,17 @@ public:
     // A track's input: device channels (0-based, as DeviceStatus lists them): none,
     // one (mono) or two (a stereo pair). Channels the device hasn't open are silent.
     void setTrackInput(uint32_t trackId, const std::vector<int>& channels);
+    // A track's input from another track's output, after its fader (resampling
+    // it: an input edge), or from the master's (kMaster: resampling the mix),
+    // instead of device channels (setTrackInput() goes back to those). The source
+    // renders first. Monitored, the track hears a track's output instead of its
+    // clips, without delay compensation, as it hears the device; never the
+    // master's (that would feed back), which it can only record. Throws
+    // std::invalid_argument for an unknown track, the track itself, or a track
+    // it feeds (a cycle, through outputs, sends and inputs alike). When the
+    // source goes, the input goes too.
+    void setTrackInputTrack(uint32_t trackId, uint32_t sourceTrackId);
+    std::optional<uint32_t> trackInputTrack(uint32_t trackId);  // none: its input is the device's (or none)
     void setTrackMonitor(uint32_t trackId, MonitorMode mode);
     // Armed tracks are what Auto monitoring listens to; what records is up to startRecording().
     void setTrackArmed(uint32_t trackId, bool armed);
@@ -243,6 +256,9 @@ public:
     // starts playing (after `countInBeats` of count-in) if stopped. Throws
     // std::runtime_error (for the user) if no device runs, a target's input isn't
     // open, or a file can't be created; std::invalid_argument for a bad target.
+    // A take lands where what it recorded was heard: device input is moved back
+    // by the output's lag and the device's latencies; a track's output by how
+    // late it leaves the track (its edge's arrival); the master's by the lag.
     void startRecording(const std::vector<RecordTarget>& targets, double countInBeats = 0.0);
     // Ends the recording (the transport plays on) and returns its takes, and those
     // of a recording ended otherwise since the last call (a device change).
@@ -388,7 +404,10 @@ private:
         std::vector<SendModel> sends;       // more edges, in the order they were made
         std::shared_ptr<TrackBuffers> buffers;  // its signal and chunk state, kept across snapshots (not the master)
         std::vector<AutomationLaneDesc> automation;
-        std::vector<int> inputChannels;  // device channels: the input edge
+        std::vector<int> inputChannels;  // device channels: its input (unless inputTrack)
+        // Its input from a track's output (an input edge) or the master's (kMaster), instead of device channels.
+        std::optional<uint32_t> inputTrack;
+        std::shared_ptr<EdgeState> inputState;  // the input edge's (once it had one), kept across snapshots
         MidiInputRoute midiInput;
         MonitorMode monitor = MonitorMode::Auto;
         bool armed = false;
@@ -450,8 +469,11 @@ private:
     // An envelope's breakpoints in samples, sorted.
     static std::vector<AutomationNode> automationNodes(const AutomationLaneDesc& desc, double samplesPerBeat);
     // The routing graph's edges, as indices into tracks_ (-1: the master): each
-    // track's output, then its sends. `origins` (if given) gets which each is:
-    // (track index, send index; -1: its output).
+    // track's output, then its sends; then the input edges. `origins` (if given)
+    // gets which each is: (the track it belongs to, send index; kOutputEdge: its
+    // output, kInputEdge: its input, whose source is the edge's `from`).
+    static constexpr int kOutputEdge = -1;
+    static constexpr int kInputEdge = -2;
     std::vector<RouteEdge> routeEdgesLocked(std::vector<std::pair<int, int>>* origins = nullptr) const;
     // Throws std::invalid_argument if an edge from `from` into `to` would close a cycle.
     void checkRouteLocked(uint32_t from, uint32_t to, const char* what) const;

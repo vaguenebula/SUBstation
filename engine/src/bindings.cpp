@@ -5,6 +5,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
@@ -55,7 +56,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 10;
+    m.attr("API_VERSION") = 11;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -535,6 +536,12 @@ NB_MODULE(_engine, m) {
         .def("set_track_input", &Engine::setTrackInput, "track_id"_a, "channels"_a,
              "A track's input: device channels (as DeviceStatus.input_channels numbers them): [] none, [c] mono, "
              "[l, r] a stereo pair. Channels not open on the device are silent.")
+        .def("set_track_input_track", &Engine::setTrackInputTrack, "track_id"_a, "source_track_id"_a,
+             "A track's input from another track's output, after its fader (resampling it), or MASTER's "
+             "(resampling the mix: recorded, never monitored), instead of device channels (set_track_input() goes "
+             "back to those). Raises ValueError for the track itself or a track it feeds (a cycle).")
+        .def("track_input_track", &Engine::trackInputTrack, "track_id"_a,
+             "The track whose output a track takes as its input (MASTER: the master's); None: the device's.")
         .def("set_track_monitor", &Engine::setTrackMonitor, "track_id"_a, "mode"_a)
         .def("set_track_armed", &Engine::setTrackArmed, "track_id"_a, "armed"_a)
         .def(
@@ -547,8 +554,9 @@ NB_MODULE(_engine, m) {
             },
             "targets"_a, "count_in_beats"_a = 0.0,
             "Record each (track_id, wav_path)'s input from where the playhead moves next; starts playing (after "
-            "the count-in) if stopped. A path of '' records the track's MIDI input. Raises RuntimeError for the "
-            "user, ValueError for bad targets.")
+            "the count-in) if stopped. A path of '' records the track's MIDI input. A track whose input is another "
+            "track's (or the master's) records that, in stereo. Raises RuntimeError for the user, ValueError for "
+            "bad targets.")
         .def("stop_recording", &Engine::stopRecording, ReleaseGil(),
              "End the recording (playing goes on); its takes, and any of a recording a device change ended.")
         .def_prop_ro("is_recording", &Engine::isRecording,

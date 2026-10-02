@@ -339,9 +339,11 @@ uint32_t Engine::addTrack() {
 void Engine::removeTrack(uint32_t trackId) {
     std::lock_guard lock(mutex_);
     arrangementTrackLocked(trackId);
-    for (TrackModel& track : tracks_) {  // what went into it goes to the master; the sends into it go
+    // What went into it goes to the master; the sends into it go, and so do the inputs from it.
+    for (TrackModel& track : tracks_) {
         if (track.output == trackId) track.output = kMaster;
         std::erase_if(track.sends, [trackId](const SendModel& send) { return send.to == trackId; });
+        if (track.inputTrack == trackId) track.inputTrack.reset();
     }
     // Its chains go, with their devices.
     for (auto it = processors_.begin(); it != processors_.end();) {
@@ -414,11 +416,19 @@ std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<std::pair<int, int>>
         const TrackModel& track = tracks_[t];
         const int from = static_cast<int>(t);
         edges.push_back({from, track.output == kMaster ? -1 : trackIndexLocked(track.output)});
-        if (origins) origins->emplace_back(from, -1);
+        if (origins) origins->emplace_back(from, kOutputEdge);
         for (size_t s = 0; s < track.sends.size(); ++s) {
             edges.push_back({from, trackIndexLocked(track.sends[s].to)});
             if (origins) origins->emplace_back(from, static_cast<int>(s));
         }
+    }
+    // Last, so that each track's own edges lead its outgoing ones. (The master
+    // as a source is no edge: it renders after every track.)
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        const TrackModel& track = tracks_[t];
+        if (!track.inputTrack || *track.inputTrack == kMaster) continue;
+        edges.push_back({trackIndexLocked(*track.inputTrack), static_cast<int>(t), false});
+        if (origins) origins->emplace_back(static_cast<int>(t), kInputEdge);
     }
     return edges;
 }
@@ -508,7 +518,26 @@ void Engine::setTrackInput(uint32_t trackId, const std::vector<int>& channels) {
         throw std::invalid_argument("An input is no channel, one, or a pair");
     }
     std::lock_guard lock(mutex_);
-    arrangementTrackLocked(trackId).inputChannels = channels;
+    TrackModel& track = arrangementTrackLocked(trackId);
+    track.inputChannels = channels;
+    track.inputTrack.reset();
+    rebuildSnapshotLocked();
+}
+
+void Engine::setTrackInputTrack(uint32_t trackId, uint32_t sourceTrackId) {
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    if (sourceTrackId != kMaster) {
+        arrangementTrackLocked(sourceTrackId);
+        if (wouldCycle(static_cast<int>(tracks_.size()), routeEdgesLocked(), trackIndexLocked(sourceTrackId),
+                       trackIndexLocked(trackId))) {
+            throw std::invalid_argument("Track " + std::to_string(trackId) + " can't take its input from track " +
+                                        std::to_string(sourceTrackId) + ": it feeds that track");
+        }
+    }
+    if (track.inputTrack == sourceTrackId) return;
+    track.inputTrack = sourceTrackId;
+    if (!track.inputState) track.inputState = std::make_shared<EdgeState>(0);  // (it never needs a signal of its own)
     rebuildSnapshotLocked();
 }
 
@@ -524,8 +553,17 @@ void Engine::setTrackArmed(uint32_t trackId, bool armed) {
     rebuildSnapshotLocked();
 }
 
+std::optional<uint32_t> Engine::trackInputTrack(uint32_t trackId) {
+    std::lock_guard lock(mutex_);
+    return arrangementTrackLocked(trackId).inputTrack;
+}
+
 InputEdge Engine::inputEdgeLocked(const TrackModel& track) const {
     InputEdge edge;
+    if (track.inputTrack) {  // (the snapshot fills in a track's edge)
+        edge.source = *track.inputTrack == kMaster ? InputEdge::Source::Master : InputEdge::Source::Track;
+        return edge;
+    }
     if (track.inputChannels.empty()) return edge;
     const auto index = [this](int channel) {
         const auto it = std::find(openInputChannels_.begin(), openInputChannels_.end(), channel);
@@ -543,6 +581,22 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
     if (recording_) throw std::runtime_error("Already recording");
     if (targets.empty()) throw std::invalid_argument("Nothing to record");
     const auto ringFrames = static_cast<size_t>(sampleRate_ * 8.0);  // the writer may fall this far behind
+    // A sample taken in a block came back through the input after leaving the
+    // output, where the timeline was heard this much earlier than the renderer was.
+    // A MIDI message was played in response to what was heard when it arrived:
+    // the renderer meets it one MIDI delay later, a block ahead of the output.
+    // A track's output leaves it as late as its devices and what feeds it make
+    // it (its edges' arrival); the master's, as late as the output's lag.
+    const DeviceState state = device_.state();
+    const auto lag = static_cast<int64_t>(snapshotHold_->outputLatency());
+    const int64_t devicePlacement = lag + state.inputLatency + state.outputLatency;
+    const int64_t midiPlacement = lag + state.outputLatency + shared_.midiInputDelay.load();
+    const auto arrival = [this](uint32_t trackId) -> int64_t {
+        for (const TrackRender& render : snapshotHold_->tracks) {
+            if (render.id == trackId) return render.inputLatency + render.latency;
+        }
+        return 0;
+    };
     std::vector<std::unique_ptr<RecordingTake>> takes;
     std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes;
     for (const RecordTarget& target : targets) {
@@ -559,20 +613,28 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
             continue;
         }
         const InputEdge edge = inputEdgeLocked(track);
-        if (!edge.fromDevice()) throw std::invalid_argument("Track " + std::to_string(target.trackId) + " has no input");
-        if (edge.left < 0 || edge.right < 0) throw std::runtime_error("A track's input is not open on the audio device");
-        takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path, edge.left, edge.right, ringFrames));
+        switch (edge.source) {
+            case InputEdge::Source::None:
+                throw std::invalid_argument("Track " + std::to_string(target.trackId) + " has no input");
+            case InputEdge::Source::Device:
+                if (edge.left < 0 || edge.right < 0) {
+                    throw std::runtime_error("A track's input is not open on the audio device");
+                }
+                takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path, edge.left, edge.right,
+                                                                ringFrames, devicePlacement));
+                break;
+            case InputEdge::Source::Track:
+                takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path,
+                                                                RecordingTake::Source::Track, *track.inputTrack,
+                                                                ringFrames, arrival(*track.inputTrack)));
+                break;
+            case InputEdge::Source::Master:
+                takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path,
+                                                                RecordingTake::Source::Master, kMaster, ringFrames, lag));
+                break;
+        }
     }
-    // A sample taken in a block came back through the input after leaving the
-    // output, where the timeline was heard this much earlier than the renderer was.
-    // A MIDI message was played in response to what was heard when it arrived:
-    // the renderer meets it one MIDI delay later, a block ahead of the output.
-    const DeviceState state = device_.state();
-    const auto lag = static_cast<int64_t>(snapshotHold_->outputLatency());
-    const int64_t placement = lag + state.inputLatency + state.outputLatency;
-    const int64_t midiPlacement = lag + state.outputLatency + shared_.midiInputDelay.load();
-    recording_ = std::make_unique<RecordingSession>(std::move(takes), std::move(midiTakes), sampleRate_, placement,
-                                                    midiPlacement);
+    recording_ = std::make_unique<RecordingSession>(std::move(takes), std::move(midiTakes), sampleRate_, midiPlacement);
     liveRecording_.store(recording_.get(), std::memory_order_seq_cst);
     if (!requestedPlaying_.load()) {
         requestedPlaying_.store(true);
@@ -620,7 +682,7 @@ std::vector<RecordingProgress> Engine::recordingProgress() {
         p.trackId = take->trackId;
         const int64_t start = take->start.load(std::memory_order_acquire);
         p.started = start != RecordingTake::kNotStarted;
-        p.startSample = p.started ? start - recording_->placement() : 0;
+        p.startSample = p.started ? start - take->placement : 0;
         p.frames = take->frames.load(std::memory_order_acquire);
         RecordingTake::Peak peak;
         while (take->peaks.pop(peak)) {
@@ -1309,8 +1371,8 @@ void Engine::rebuildSnapshotLocked() {
     snap->clipFadeSamples = std::llround(clipFadeMs_ * 0.001 * sampleRate_);
 
     // Routing: the tracks in an order in which each comes after what feeds it
-    // (through outputs and sends alike).
-    std::vector<std::pair<int, int>> origins;  // per edge: (track index, send index; -1: its output)
+    // (through outputs, sends and inputs alike).
+    std::vector<std::pair<int, int>> origins;  // per edge: (its track's index, send index, or kOutputEdge, kInputEdge)
     std::vector<RouteEdge> edges = routeEdgesLocked(&origins);
     const int count = static_cast<int>(tracks_.size());
     std::vector<int> order = topologicalOrder(count, edges);
@@ -1321,6 +1383,7 @@ void Engine::rebuildSnapshotLocked() {
         for (TrackModel& track : tracks_) {
             track.output = kMaster;
             track.sends.clear();
+            if (track.inputTrack != kMaster) track.inputTrack.reset();
         }
         edges = routeEdgesLocked(&origins);
         order = topologicalOrder(count, edges);
@@ -1332,7 +1395,8 @@ void Engine::rebuildSnapshotLocked() {
     // group, a return, the master) hears its inputs as late as the latest of
     // them, which the enabled devices before each edge's tap (and those of what
     // feeds them) make; the other edges are delayed to line up with it. Both
-    // taps (pre- and post-fader) come after every device of a strip.
+    // taps (pre- and post-fader) come after every device of a strip. Input edges
+    // aren't summed, so nothing lines up with them.
     std::vector<int> latencies;
     latencies.reserve(tracks_.size());
     for (const TrackModel& track : tracks_) latencies.push_back(insertLatency(insertsLocked(track)));
@@ -1343,30 +1407,38 @@ void Engine::rebuildSnapshotLocked() {
     snap->maxLatency = aligned.masterInput;
 
     // The edges in snapshot order (by source; each track's output, then its
-    // sends), each node's incoming and outgoing ones (what a bus sums, in that
-    // order), and the graph the scheduler runs.
+    // sends, then the input edges it feeds), each node's incoming and outgoing
+    // ones (what a bus sums, in that order), and the graph the scheduler runs.
     std::vector<std::vector<int>> edgesOf(tracks_.size());
     for (size_t e = 0; e < edges.size(); ++e) edgesOf[static_cast<size_t>(edges[e].from)].push_back(static_cast<int>(e));
     std::vector<std::vector<int>> incoming(tracks_.size()), outgoing(tracks_.size());  // by snapshot index
+    std::vector<int> inputEdge(tracks_.size(), -1);  // by snapshot index: the input edge it takes, if any
     std::vector<std::pair<int, int>> graphEdges;
     snap->edges.reserve(edges.size());
     for (const int t : order) {
         TrackModel& track = tracks_[static_cast<size_t>(t)];
         for (const int e : edgesOf[static_cast<size_t>(t)]) {
-            const int send = origins[static_cast<size_t>(e)].second;
+            const auto [owner, send] = origins[static_cast<size_t>(e)];
             const int to = edges[static_cast<size_t>(e)].to;
             EdgeRender edge;
             edge.from = position[static_cast<size_t>(t)];
             edge.to = to >= 0 ? position[static_cast<size_t>(to)] : -1;
             edge.compensation = aligned.compensation[static_cast<size_t>(e)];
-            std::shared_ptr<DelayLine>& delay = send < 0 ? track.delay : track.sends[static_cast<size_t>(send)].delay;
-            if (edge.compensation > 0 && (!delay || delay->capacity() <= edge.compensation)) {
-                delay = std::make_shared<DelayLine>(2 * edge.compensation + Renderer::kMaxBlock);
-            }
-            edge.delay = delay;
-            if (send < 0) {
-                edge.state = track.outputState;
+            if (send == kInputEdge) {  // the destination's input: not summed, nor delayed
+                edge.kind = EdgeRender::Kind::Input;
+                edge.state = tracks_[static_cast<size_t>(owner)].inputState;
+                inputEdge[static_cast<size_t>(edge.to)] = static_cast<int>(snap->edges.size());
             } else {
+                std::shared_ptr<DelayLine>& delay =
+                    send == kOutputEdge ? track.delay : track.sends[static_cast<size_t>(send)].delay;
+                if (edge.compensation > 0 && (!delay || delay->capacity() <= edge.compensation)) {
+                    delay = std::make_shared<DelayLine>(2 * edge.compensation + Renderer::kMaxBlock);
+                }
+                edge.delay = delay;
+            }
+            if (send == kOutputEdge) {
+                edge.state = track.outputState;
+            } else if (send != kInputEdge) {
                 const SendModel& model = track.sends[static_cast<size_t>(send)];
                 edge.kind = EdgeRender::Kind::Send;
                 edge.tap = model.preFader ? EdgeRender::Tap::PreFader : EdgeRender::Tap::PostFader;
@@ -1416,6 +1488,7 @@ void Engine::rebuildSnapshotLocked() {
         render.inputCount = static_cast<int>(render.incoming.size());
         render.buffers = track.buffers;
         render.input = inputEdgeLocked(track);
+        render.input.edge = inputEdge[at];
         render.midiInput = track.midiInput;
         render.monitor = track.monitor;
         render.armed = track.armed;

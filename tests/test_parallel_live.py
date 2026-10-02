@@ -1,5 +1,5 @@
 """Live playback with workers, through the fake ASIO driver in manual mode: the
-MIDI input and recording tests again, with silent tracks beside theirs (each
+MIDI input, recording and resampling tests again, with silent tracks beside theirs (each
 with a device) so that every buffer's tracks are shared out among threads.
 Live, held, recorded and preview notes and recorded audio behave as on one
 thread. Skipped without ASIO, like the tests they repeat."""
@@ -35,6 +35,11 @@ from .test_recording import (  # noqa: F401
     test_loopback_take_lines_up_with_the_timeline,
     test_monitoring_through_a_latent_plugin_is_not_delayed_by_compensation,
     test_what_ends_a_recording,
+)
+from .test_resampling_engine import (  # noqa: F401
+    test_a_resampled_take_equals_its_sources_render,
+    test_monitoring_a_track_is_not_delayed,
+    test_solo_across_a_monitored_input,
 )
 
 THREADS = 4
