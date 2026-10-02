@@ -1,10 +1,11 @@
-#pragma once
 // Built-in "Utility" device: gain, pan and stereo width.
 
-#include "processors/BuiltinProcessor.h"
+#include "builtin/BuiltinProcessor.h"
+#include "builtin/BuiltinRegistry.h"
 #include "rt/RtUtils.h"
 
 namespace gil {
+namespace {
 
 class UtilityProcessor final : public BuiltinProcessor {
 public:
@@ -72,5 +73,9 @@ private:
 
     SmoothedValue gainL_, gainR_, width_;
 };
+
+}  // namespace
+
+GIL_REGISTER_BUILTIN(UtilityProcessor, AudioEffect);
 
 }  // namespace gil

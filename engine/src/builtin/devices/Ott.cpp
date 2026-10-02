@@ -1,4 +1,3 @@
-#pragma once
 // Built-in "Over The Top" device: multiband upward + downward compression, the
 // sound of every drop since 2014. Three bands split by Linkwitz-Riley
 // crossovers; each band is squashed hard from above and pulled up hard from
@@ -11,10 +10,12 @@
 #include <atomic>
 #include <cmath>
 
-#include "processors/BuiltinProcessor.h"
+#include "builtin/BuiltinProcessor.h"
+#include "builtin/BuiltinRegistry.h"
 #include "rt/RtUtils.h"
 
 namespace gil {
+namespace {
 
 class OttProcessor final : public BuiltinProcessor {
 public:
@@ -194,5 +195,9 @@ private:
     std::array<float, kBands> env_{}, attack_{}, release_{};
     SmoothedValue depth_, output_;
 };
+
+}  // namespace
+
+GIL_REGISTER_BUILTIN(OttProcessor, AudioEffect);
 
 }  // namespace gil

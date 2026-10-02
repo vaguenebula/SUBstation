@@ -11,6 +11,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QUndoStack
 
+from .. import _engine as ge
 from . import automation, edits, notes
 from .automation import MASTER, MAX_VOLUME_DB, MIN_VOLUME_DB, MIXER_PAN, MIXER_VOLUME, AutomationView, Envelope
 from .keys import Key, clip_settings
@@ -97,15 +98,17 @@ class ClipboardContent:
     length: float
     tracks: tuple[CopiedTrack, ...]
 
+
+# The built-in devices come from the engine (engine/src/builtin/devices/), so a new one
+# needs nothing here. kind: (display name, {param id: default}).
 BUILTIN_DEVICES = {
-    # kind: (display name, {param id: default})
-    "synth": ("Synth", {"wave": 2.0, "attack": 3.0, "decay": 300.0, "sustain": 70.0, "release": 200.0,
-                        "cutoff": 4000.0, "resonance": 10.0, "volume": 0.0}),
-    "utility": ("Utility", {"gain": 0.0, "pan": 0.0, "width": 100.0}),
-    "ott": ("Over The Top", {"depth": 100.0, "output": 0.0}),
+    d.id: (d.name, {p.id: p.default_value for p in d.params}) for d in ge.builtin_devices()
 }
 # How the browser's Built-in category groups the devices above.
-BUILTIN_CATEGORIES = {"Instruments": ["synth"], "Audio Effects": ["ott", "utility"]}
+BUILTIN_CATEGORIES: dict[str, list[str]] = {}
+for _device in ge.builtin_devices():
+    BUILTIN_CATEGORIES.setdefault(_device.category, []).append(_device.id)
+BUILTIN_INSTRUMENTS = frozenset(d.id for d in ge.builtin_devices() if d.is_instrument)
 DEFAULT_INSTRUMENT = "synth"  # new MIDI tracks come with it, ready to play
 
 
@@ -113,7 +116,7 @@ def is_instrument(kind: str, plugin: PluginRef | None = None) -> bool:
     """Whether a device of this kind (and plug-in) is an instrument."""
     if kind == PLUGIN_KIND:
         return plugin is not None and plugin.instrument
-    return kind in BUILTIN_CATEGORIES["Instruments"]
+    return kind in BUILTIN_INSTRUMENTS
 
 
 def device_is_instrument(device: Device) -> bool:
@@ -1186,8 +1189,9 @@ class ProjectEditor(QObject):
 
     def set_device_state(self, track_id: str, device_id: str, old: str | None, new: str,
                          text: str = "Load Preset") -> None:
-        """Replace a plug-in's whole state (base64), e.g. with a preset. `old` is
-        its state before, to go back to on undo."""
+        """Replace a device's state (base64): a plug-in's, e.g. with a preset, or
+        a built-in device's besides its parameters. `old` is its state before,
+        to go back to on undo."""
         self._push(SetDeviceStateCommand(self.project, track_id, device_id, old, new, text))
 
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:

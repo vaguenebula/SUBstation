@@ -13,7 +13,9 @@ Parameter metadata comes from the engine, so built-in devices and plug-ins
 show alike: a knob per parameter (log-scaled where the engine says so), or a
 list for parameters that choose between named values, four at a time in a 2×2
 grid. A plug-in shows its own text for their values. Right-click a device for
-more (move, presets).
+more (move, presets). A built-in device may have an editor of its own instead
+(see device_editors), which can also draw what the engine reports as it plays
+(its displays: meters, curves).
 
 Automated parameters are marked (red: automated, grey: overridden) and follow
 their automation as it plays; right-click one to show its automation, delete it,
@@ -33,6 +35,7 @@ import base64
 import os
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import (
     QEvent,
     QMimeData,
@@ -97,6 +100,7 @@ from .arrangement.lanes_canvas import DEVICE_MOVE_MIME, is_pan_modifier, moved_d
 from .arrangement.track_headers import automation_state
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
+from .device_editors import editor_for
 from .widgets import Knob, ToggleButton
 
 PANEL_MARGIN = 8  # above and below the chain
@@ -173,7 +177,13 @@ class _DeviceFrame(QFrame):
     """What built-in and plug-in devices share: the frame, the title bar (on/off,
     name, parameter pages, save), the parameters' pages, selecting and
     dragging it, and the right-click menu. Subclasses say how many parameters
-    there are (`_set_param_count`) and make each one's widget (`_param_widget`)."""
+    there are (`_set_param_count`) and make each one's widget (`_param_widget`).
+    Device editors may lay out more parameters at a time, and add widgets beside
+    them (`content`)."""
+
+    device_width = DEVICE_WIDTH
+    params_per_page = PARAMS_PER_PAGE
+    param_columns = PARAM_COLUMNS
 
     pressed = Signal(str, object)  # device id, keyboard modifiers: select it
     released = Signal(str, object)  # device id, modifiers: a click (not a drag) ended
@@ -195,7 +205,7 @@ class _DeviceFrame(QFrame):
         self.remove_selected = lambda: editor.remove_device(track_id, self.device_id)
         self._press: QPoint | None = None
         self.setObjectName("device")
-        self.setFixedWidth(DEVICE_WIDTH)
+        self.setFixedWidth(self.device_width)
         self._update_style()
         self.param_count = 0
         self.pages = 1
@@ -247,7 +257,11 @@ class _DeviceFrame(QFrame):
         self.body = QVBoxLayout()
         self.body.setContentsMargins(8, 6, 8, 6)
         self.body.setSpacing(4)
-        self.body.addLayout(self.params)
+        self.content = QHBoxLayout()  # the parameters, and whatever an editor shows beside them
+        self.content.setContentsMargins(0, 0, 0, 0)
+        self.content.setSpacing(12)
+        self.content.addLayout(self.params)
+        self.body.addLayout(self.content)
         self.body.addStretch(1)
         outer.addLayout(self.body)
 
@@ -255,7 +269,7 @@ class _DeviceFrame(QFrame):
 
     def _set_param_count(self, count: int, page: int = 0) -> None:
         self.param_count = count
-        self.pages = max(1, -(-count // PARAMS_PER_PAGE))
+        self.pages = max(1, -(-count // self.params_per_page))
         self.page = max(0, min(page, self.pages - 1))
         for widget in (self.previous, self.page_label, self.next):
             widget.setVisible(self.pages > 1)
@@ -278,9 +292,9 @@ class _DeviceFrame(QFrame):
         self.page_label.setText(f"{self.page + 1}/{self.pages}")
         self.previous.setEnabled(self.page > 0)
         self.next.setEnabled(self.page < self.pages - 1)
-        first = self.page * PARAMS_PER_PAGE
-        for slot, n in enumerate(range(first, min(first + PARAMS_PER_PAGE, self.param_count))):
-            self.params.addWidget(self._param_widget(n), slot // PARAM_COLUMNS, slot % PARAM_COLUMNS,
+        first = self.page * self.params_per_page
+        for slot, n in enumerate(range(first, min(first + self.params_per_page, self.param_count))):
+            self.params.addWidget(self._param_widget(n), slot // self.param_columns, slot % self.param_columns,
                                   Qt.AlignmentFlag.AlignTop)
 
     def _clear_params(self) -> None:
@@ -339,6 +353,9 @@ class _DeviceFrame(QFrame):
 
     def refresh_automation(self) -> None:
         """Shows which parameters are automated, and their values as they play."""
+
+    def refresh_displays(self) -> None:
+        """Draws what the engine reported since (meters, curves); called as the meters are."""
 
     @staticmethod
     def _readout(text: str) -> QLabel:
@@ -537,9 +554,28 @@ class DeviceWidget(_DeviceFrame):
         super().__init__(track_id, device, editor, parent, bridge)
         self.knobs: dict[str, tuple[Knob, QLabel, str]] = {}
         self.choices: dict[str, QComboBox] = {}
-        engine_id = bridge.engine_device_id(track_id, device.id)
-        self.infos = bridge.engine.processor_params(engine_id) if engine_id is not None else []
+        self.engine_id = bridge.engine_device_id(track_id, device.id)
+        self.infos = bridge.engine.processor_params(self.engine_id) if self.engine_id is not None else []
+        displays = bridge.engine.processor_displays(self.engine_id) if self.engine_id is not None else []
+        self.displays = {d.id: index for index, d in enumerate(displays)}
+        self._display_positions: dict[str, int] = {}
         self._set_param_count(len(self.infos), page)
+
+    def read_display(self, display_id: str) -> np.ndarray:
+        """The display's values the engine published since the last call (float32; empty without any)."""
+        index = self.displays.get(display_id)
+        if index is None:
+            return np.zeros(0, np.float32)
+        try:
+            values, self._display_positions[display_id] = self.bridge.engine.read_processor_display(
+                self.engine_id, index, self._display_positions.get(display_id, 0))
+        except ValueError:  # its processor went before the widget did (it is about to be rebuilt)
+            return np.zeros(0, np.float32)
+        return values
+
+    def refresh_state(self) -> None:
+        """The device's state besides its parameters changed (Device.state): an
+        editor that shows it (a sampler's sample) shows it anew."""
 
     def _clear_params(self) -> None:
         self.knobs.clear()
@@ -564,7 +600,7 @@ class DeviceWidget(_DeviceFrame):
             self._watch_touch(choice, info.id)
         else:
             knob = Knob(info.min_value, info.max_value, value, default=info.default_value,
-                        bipolar=info.min_value < 0 < info.max_value and info.unit == "",
+                        bipolar=info.min_value < 0 < info.max_value and info.unit in ("", "st", "ct"),
                         log_scale=info.log_scale, formatter=lambda v, u=info.unit: format_value(v, u))
             knob.setFixedSize(KNOB_SIZE, KNOB_SIZE)
             readout = self._readout(format_value(value, info.unit))
@@ -865,6 +901,7 @@ class DevicePanel(QFrame):
         bridge.devices_loaded.connect(lambda track_id: self._on_devices_changed(track_id, rebuild=True))
         bridge.automation_state_changed.connect(self._on_automation_state)
         bridge.position_changed.connect(self._follow_automation)
+        bridge.meters_updated.connect(self._refresh_displays)
         self.show_track(None)
 
     def _current_widgets(self) -> list[_DeviceFrame]:
@@ -880,6 +917,10 @@ class DevicePanel(QFrame):
         for widget in self._current_widgets():
             if widget.follows_automation():
                 widget.refresh_automation()
+
+    def _refresh_displays(self) -> None:
+        for widget in self._current_widgets():
+            widget.refresh_displays()
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
@@ -1077,6 +1118,8 @@ class DevicePanel(QFrame):
         widget = self.widgets.get(device_id) if track_id == self.track_id else None
         if isinstance(widget, PluginDeviceWidget):
             widget.refresh_values()
+        elif isinstance(widget, DeviceWidget):
+            widget.refresh_state()
 
     def _on_plugin_values(self, track_id: str, device_id: str) -> None:
         self._on_state_changed(track_id, device_id)
@@ -1112,7 +1155,7 @@ class DevicePanel(QFrame):
             return
         track = self.project.track(track_id)
         for device in track.devices:
-            widget_type = PluginDeviceWidget if device.is_plugin else DeviceWidget
+            widget_type = PluginDeviceWidget if device.is_plugin else editor_for(device.kind) or DeviceWidget
             widget = widget_type(track_id, device, self.editor, self.bridge, self._pages.get(device.id, 0))
             widget.page_changed.connect(self._remember_page)
             widget.pressed.connect(self._on_device_pressed)

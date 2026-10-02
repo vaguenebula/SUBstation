@@ -1,12 +1,70 @@
-#include "processors/BuiltinProcessor.h"
+#include "builtin/BuiltinProcessor.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace gil {
 
-BuiltinProcessor::BuiltinProcessor(const std::vector<ParamInfo>& infos)
-    : infos_(infos), values_(std::make_unique<std::atomic<float>[]>(infos.size())) {
+BuiltinProcessor::BuiltinProcessor(const std::vector<ParamInfo>& infos, std::vector<DisplayInfo> displays)
+    : infos_(infos), values_(std::make_unique<std::atomic<float>[]>(infos.size())), displayInfos_(std::move(displays)) {
     for (size_t i = 0; i < infos.size(); ++i) values_[i].store(infos[i].defaultValue);
+    for (size_t i = 0; i < displayInfos_.size(); ++i) {
+        displayStreams_.push_back(std::make_unique<DisplayStream>(kDisplayCapacity));
+    }
+}
+
+uint64_t BuiltinProcessor::readDisplay(int index, uint64_t position, std::vector<float>& out) const {
+    if (index < 0 || index >= static_cast<int>(displayStreams_.size())) return position;
+    return displayStreams_[static_cast<size_t>(index)]->read(position, out);
+}
+
+std::vector<uint8_t> BuiltinProcessor::encodeState(const StateValues& values) {
+    std::string text;
+    for (const auto& [name, value] : values) {
+        text += name;
+        text += '=';
+        for (const char c : value) {
+            if (c == '\\') {
+                text += "\\\\";
+            } else if (c == '\n') {
+                text += "\\n";
+            } else {
+                text += c;
+            }
+        }
+        text += '\n';
+    }
+    return {text.begin(), text.end()};
+}
+
+BuiltinProcessor::StateValues BuiltinProcessor::decodeState(const std::vector<uint8_t>& state) {
+    StateValues values;
+    const std::string text(state.begin(), state.end());
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        const size_t equals = text.find('=', start);
+        if (equals < end) {
+            std::string value;
+            for (size_t i = equals + 1; i < end; ++i) {
+                if (text[i] == '\\' && i + 1 < end) {
+                    ++i;
+                    value += text[i] == 'n' ? '\n' : text[i];
+                } else {
+                    value += text[i];
+                }
+            }
+            values[text.substr(start, equals - start)] = std::move(value);
+        }
+        start = end + 1;
+    }
+    return values;
+}
+
+std::shared_ptr<const AudioSource> BuiltinProcessor::loadSource(const std::string& path) const {
+    if (loader_) return loader_(path);
+    return AudioSource::load(path, AudioSource::probe(path).sampleRate);
 }
 
 float BuiltinProcessor::getParam(int index) const {
@@ -21,6 +79,7 @@ void BuiltinProcessor::setParam(int index, float value) {
 
 void BuiltinProcessor::process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) {
     const size_t count = numAutomation();
+    stretchStart_ = 0;
     if (count == 0) {
         render(ctx, channels, numChannels, numFrames);
         return;
@@ -59,6 +118,7 @@ void BuiltinProcessor::process(const ProcessContext& ctx, float* const* channels
         if (samplesPerBeat > 0.0) stretch.beatPos = ctx.beatPos + position / samplesPerBeat;
         stretch.inEvents = {events_.data(), numEvents};
         for (int c = 0; c < numOut; ++c) part[c] = channels[c] + position;
+        stretchStart_ = position;
         render(stretch, part, numOut, end - position);
         position = end;
     }

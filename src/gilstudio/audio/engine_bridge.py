@@ -213,6 +213,31 @@ class _LoadTask(QRunnable):
             self.signals.loaded.emit(self.path, source)
 
 
+class _StateSignals(QObject):
+    failed = Signal(str)  # a device's state couldn't be restored: why
+
+
+class _StateTask(QRunnable):
+    """Restores a built-in device's state off the UI thread: it may load files
+    (a sampler's sample)."""
+
+    def __init__(self, engine: ge.Engine, processor_id: int, name: str, state: bytes, signals: _StateSignals):
+        super().__init__()
+        self.engine = engine
+        self.processor_id = processor_id
+        self.name = name
+        self.state = state
+        self.signals = signals
+
+    def run(self) -> None:
+        try:
+            self.engine.set_processor_state(self.processor_id, self.state)
+        except ValueError:
+            pass  # the device went meanwhile
+        except RuntimeError as exc:
+            self.signals.failed.emit(f"{self.name}: {exc}")
+
+
 class EngineBridge(QObject):
     source_ready = Signal(str)  # a file finished decoding (waveform available)
     source_failed = Signal(str, str)
@@ -285,6 +310,12 @@ class EngineBridge(QObject):
         self._load_signals = _LoadSignals(self)
         self._load_signals.loaded.connect(self._on_loaded)
         self._load_signals.failed.connect(self._on_failed)
+        # Built-in devices' states are restored one at a time, in the order they
+        # were set, so the last one set wins.
+        self._state_pool = QThreadPool(self)
+        self._state_pool.setMaxThreadCount(1)
+        self._state_signals = _StateSignals(self)
+        self._state_signals.failed.connect(self.status_message)
 
         project.reset.connect(self._on_reset)
         project.track_inserted.connect(lambda tid, _i: self._add_engine_track(project.track(tid)))
@@ -759,6 +790,8 @@ class EngineBridge(QObject):
         processor_id = self.engine.add_builtin_processor(chain_id, device.kind)
         for param_id, value in device.params.items():
             self._set_param(processor_id, param_id, value)
+        if device.state:
+            self._set_builtin_state(processor_id, device)
         return processor_id
 
     def plugin_path(self, plugin: PluginRef) -> str | None:
@@ -862,9 +895,25 @@ class EngineBridge(QObject):
     def _push_device_state(self, track_id: str, device_id: str) -> None:
         engine_id = self.engine_device_id(track_id, device_id)
         device = self.project.device(track_id, device_id)
-        if engine_id is not None and device.state:
-            self._set_plugin_state(engine_id, device.plugin.name if device.plugin else device.kind,
-                                   base64.b64decode(device.state))
+        if engine_id is None:
+            return
+        if not device.is_plugin:
+            self._set_builtin_state(engine_id, device)
+        elif device.state:
+            self._set_plugin_state(engine_id, device.plugin.name, base64.b64decode(device.state))
+
+    def _set_builtin_state(self, processor_id: int, device: Device) -> None:
+        """A built-in device's state is the model's (none: its defaults); it is
+        restored in the background, as it may load files."""
+        try:
+            state = base64.b64decode(device.state) if device.state else b""
+        except ValueError:
+            state = b""
+        self._state_pool.start(_StateTask(self.engine, processor_id, device_name(device), state, self._state_signals))
+
+    def wait_for_device_states(self) -> None:
+        """Until every built-in device's state is restored (before rendering offline)."""
+        self._state_pool.waitForDone()
 
     # --- Plug-ins ------------------------------------------------------------------
 
@@ -998,6 +1047,7 @@ class EngineBridge(QObject):
         """Unload every plug-in now, while the application is still whole (not
         whenever the engine happens to be garbage-collected)."""
         self.close_all_editors()
+        self.wait_for_device_states()
         self._remove_engine_tracks()
         self._devices.clear()
         self._plugin_ids.clear()

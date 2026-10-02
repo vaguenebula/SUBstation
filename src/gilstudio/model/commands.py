@@ -225,7 +225,8 @@ class SetDeviceParamCommand(_MergeableCommand):
 
 
 class SetDeviceStateCommand(QUndoCommand):
-    """Replaces a plug-in's whole state (loading a preset); states are base64."""
+    """Replaces a device's state: a plug-in's whole state (loading a preset), a
+    built-in device's besides its parameters (a sampler's sample); base64."""
 
     def __init__(self, project: Project, track_id: str, device_id: str, old: str | None, new: str, text: str):
         super().__init__(text)

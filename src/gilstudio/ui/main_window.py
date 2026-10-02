@@ -596,6 +596,7 @@ class MainWindow(QMainWindow):
             self.toggle_play()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
+            self.bridge.wait_for_device_states()  # samples still loading
             self.engine.export_wav(path, start, end, int(dialog.bit_depth.currentData()))
         except (RuntimeError, ValueError) as exc:
             QMessageBox.warning(self, APP_NAME, f"Export failed: {exc}")

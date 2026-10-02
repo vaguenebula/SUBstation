@@ -13,6 +13,7 @@
 
 #include "Engine.h"
 #include "plugins/Vst3Format.h"
+#include "builtin/BuiltinRegistry.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -56,7 +57,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 12;
+    m.attr("API_VERSION") = 14;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -105,6 +106,15 @@ NB_MODULE(_engine, m) {
         .def_ro("buffer_sizes", &gil::DeviceCaps::bufferSizes, "The buffer sizes it offers; empty: any.")
         .def_ro("preferred_buffer_frames", &gil::DeviceCaps::preferredBufferFrames)
         .def_ro("has_control_panel", &gil::DeviceCaps::hasControlPanel);
+
+    nb::class_<gil::BuiltinInfo>(m, "BuiltinDevice", "A built-in device type, as the registry describes it.")
+        .def_ro("id", &gil::BuiltinInfo::id, "What add_builtin_processor takes.")
+        .def_ro("name", &gil::BuiltinInfo::name)
+        .def_prop_ro("category", [](const gil::BuiltinInfo& d) { return d.isInstrument() ? "Instruments" : "Audio Effects"; })
+        .def_prop_ro("is_instrument", &gil::BuiltinInfo::isInstrument)
+        .def_ro("params", &gil::BuiltinInfo::params);
+    m.def("builtin_devices", [] { return gil::BuiltinRegistry::instance().devices(); },
+          "Every built-in device, instruments first, then by name.");
 
     nb::class_<gil::ParamInfo>(m, "ParamInfo")
         .def_ro("id", &gil::ParamInfo::id)
@@ -184,6 +194,11 @@ NB_MODULE(_engine, m) {
         .def_ro("tail", &gil::ProcessorInfo::tail)
         .def_ro("has_editor", &gil::ProcessorInfo::hasEditor)
         .def_ro("has_sidechain", &gil::ProcessorInfo::hasSidechain, "It has a sidechain (aux) input.");
+
+    nb::class_<gil::DisplayInfo>(m, "DisplayInfo", "A stream of values a device's own editor draws.")
+        .def_ro("id", &gil::DisplayInfo::id)
+        .def_ro("samples_per_value", &gil::DisplayInfo::samplesPerValue,
+                "The audio each value stands for: 1 for samples, more for a meter.");
 
     nb::enum_<gil::SidechainTap>(m, "SidechainTap")
         .value("POST_FADER", gil::SidechainTap::PostFader)
@@ -532,6 +547,23 @@ NB_MODULE(_engine, m) {
         .def("processor_param_text", &Engine::processorParamText, "processor_id"_a, "index"_a, "value"_a,
              "The processor's own text for a value ('' if it has none).")
         .def("set_processor_enabled", &Engine::setProcessorEnabled, "processor_id"_a, "enabled"_a)
+        .def("processor_displays", &Engine::processorDisplays, "processor_id"_a,
+             "What a device's own editor draws besides its parameters: streams of values (meters, curves).")
+        .def(
+            "read_processor_display",
+            [](Engine& self, uint32_t processorId, int index, uint64_t position) {
+                auto buffer = std::make_unique<std::vector<float>>();
+                const uint64_t next = self.readProcessorDisplay(processorId, index, position, *buffer);
+                const size_t size = buffer->size();
+                float* data = buffer->data();
+                nb::capsule owner(buffer.release(),
+                                  [](void* p) noexcept { delete static_cast<std::vector<float>*>(p); });
+                return nb::make_tuple(nb::ndarray<nb::numpy, float, nb::ndim<1>, nb::c_contig>(data, {size}, owner),
+                                      next);
+            },
+            "processor_id"_a, "index"_a, "position"_a = 0,
+            "(values, next position): display `index`'s values since `position` (0 at first), oldest first, as "
+            "float32; at most the latest 8192. Pass the position back next time.")
         .def(
             "processor_state",
             [](Engine& self, uint32_t processorId) {
@@ -542,7 +574,9 @@ NB_MODULE(_engine, m) {
                 }
                 return toBytes(state);
             },
-            "processor_id"_a, "A plug-in's settings (a .vstpreset); empty for built-in devices.")
+            "processor_id"_a,
+            "A device's own state: a plug-in's settings (a .vstpreset); a built-in device's besides its "
+            "parameters, as lines \"name=value\" (a sampler's sample; empty if it has none).")
         .def(
             "set_processor_state",
             [](Engine& self, uint32_t processorId, const nb::bytes& state) {
@@ -550,7 +584,9 @@ NB_MODULE(_engine, m) {
                 nb::gil_scoped_release release;
                 self.setProcessorState(processorId, data);
             },
-            "processor_id"_a, "state"_a)
+            "processor_id"_a, "state"_a,
+            "Restore a device's own state. A built-in device loads the files it names (a sample) first, which "
+            "may take a while (call it off the UI thread), and raises RuntimeError if one can't be loaded.")
         .def("open_editor", &Engine::openEditor, "processor_id"_a, "owner_window"_a = 0, "title"_a = "",
              ReleaseGil(), "Show a plug-in's editor window (or raise it). False if it has none.")
         .def("close_editor", &Engine::closeEditor, "processor_id"_a)
