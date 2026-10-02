@@ -12,7 +12,7 @@ from typing import Any
 from PySide6.QtGui import QUndoCommand
 
 from .automation import Envelope
-from .project import Clip, Device, Project, Track, TrackTree
+from .project import Clip, Device, Project, Sidechain, Track, TrackTree
 
 _MERGE_ID = 0x6E1
 
@@ -255,6 +255,25 @@ class SetDeviceEnabledCommand(QUndoCommand):
 
     def undo(self) -> None:
         self.project.set_device_enabled(self.track_id, self.device_id, not self.enabled)
+
+
+class SetDeviceSidechainCommand(QUndoCommand):
+    """A device's sidechain (None: none)."""
+
+    def __init__(self, project: Project, track_id: str, device_id: str, old: Sidechain | None,
+                 new: Sidechain | None, text: str):
+        super().__init__(text)
+        self.project = project
+        self.track_id = track_id
+        self.device_id = device_id
+        self.old = old
+        self.new = new
+
+    def redo(self) -> None:
+        self.project.set_device_sidechain(self.track_id, self.device_id, self.new)
+
+    def undo(self) -> None:
+        self.project.set_device_sidechain(self.track_id, self.device_id, self.old)
 
 
 class SetEnvelopesCommand(_MergeableCommand):

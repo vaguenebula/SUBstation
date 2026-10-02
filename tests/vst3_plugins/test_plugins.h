@@ -13,6 +13,7 @@ inline const Steinberg::FUID kSynthProcessorUID(0x6A1C0D5E, 0x3B7F4E21, 0x9C8D2A
 inline const Steinberg::FUID kSynthControllerUID(0x6A1C0D5E, 0x3B7F4E21, 0x9C8D2A10, 0x5E4F7B02);
 inline const Steinberg::FUID kEffectUID(0x6A1C0D5E, 0x3B7F4E21, 0x9C8D2A10, 0x5E4F7B03);
 inline const Steinberg::FUID kMonoUID(0x6A1C0D5E, 0x3B7F4E21, 0x9C8D2A10, 0x5E4F7B04);
+inline const Steinberg::FUID kSidechainUID(0x6A1C0D5E, 0x3B7F4E21, 0x9C8D2A10, 0x5E4F7B05);
 
 // The last value a parameter queue holds in this block, if any.
 inline bool lastValue(Steinberg::Vst::IParamValueQueue* queue, Steinberg::Vst::ParamValue& value) {
@@ -24,5 +25,8 @@ inline bool lastValue(Steinberg::Vst::IParamValueQueue* queue, Steinberg::Vst::P
 // GIL Test Effect (test_effect.cpp).
 Steinberg::FUnknown* createTestEffect(void*);
 extern const wchar_t* const kEffectViewClass;
+
+// GIL Test Sidechain (test_sidechain.cpp).
+Steinberg::FUnknown* createTestSidechain(void*);
 
 }  // namespace gil_test

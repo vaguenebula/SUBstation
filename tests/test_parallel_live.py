@@ -9,6 +9,7 @@ import pytest
 
 from gilstudio import _engine as ge
 
+from .conftest import TEST_PLUGINS
 from .test_asio import open_asio
 from .test_midi_input import (  # noqa: F401 - the fixtures and the tests, again (with the engine below)
     NOTE_ON,
@@ -112,4 +113,31 @@ def test_sends_ramp_live(engine, driver, dc_wav):
     glides_to(0.5)
     engine.set_track_mute(track, True)
     glides_to(0.0)
+    assert engine.nodes_on_workers > 0
+
+
+@pytest.mark.skipif(not TEST_PLUGINS.exists(), reason="test plug-ins not built")
+def test_a_sidechain_lines_up_live(engine, driver, make_wav):
+    """Live, with the source on one thread and the device's track perhaps on
+    another, a sidechain still lines up at its device: the source's click and
+    the track's (and its device's copy of the source's) fall on one sample."""
+    plugins = str(TEST_PLUGINS)
+    uids = {d.name: d.uid for d in ge.scan_vst3(plugins)}
+    open_asio(engine, sample_rate=RATE, buffer_frames=BUFFER)
+    click = np.zeros(1000)
+    click[0] = 0.25
+    path = make_wav(click)
+    engine.load_source(path)
+    source, track = engine.add_track(), engine.add_track()
+    for t in (source, track):
+        engine.set_track_clips(t, [ge.ClipDesc(path, 0.25, 1000 / RATE)])
+    latent = engine.add_plugin_processor(engine.track_chain(source), "VST3", plugins, uids["GIL Test Effect"])
+    engine.set_processor_param(latent, 1, 300)  # Latency
+    engine.idle()
+    keyed = engine.add_plugin_processor(engine.track_chain(track), "VST3", plugins, uids["GIL Test Sidechain"])
+    engine.set_processor_sidechain(keyed, source)  # it comes 300 samples late: the track waits for it
+    engine.play()
+    out = heard(driver, (RATE // 8 + 300) // BUFFER + 8)
+    loud = np.nonzero(np.abs(out) > 1e-7)[0]
+    assert len(loud) == 1 and out[loud[0]] == pytest.approx(0.75)
     assert engine.nodes_on_workers > 0

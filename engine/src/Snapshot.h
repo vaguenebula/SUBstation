@@ -143,13 +143,21 @@ struct NoteRender {
 struct StripRender {
     std::shared_ptr<TrackParams> params;
     std::vector<std::shared_ptr<Processor>> inserts;
-    int latency = 0;                    // samples the enabled inserts add
+    // Samples the enabled inserts add, and the delays before sidechained ones
+    // (to line them up with their sidechain: EdgeRender::deviceDelay).
+    int latency = 0;
     std::vector<AutomationRender> automation;  // of its devices' parameters, in chain order
     AutomationRender volume, pan;              // of its mixer
+    // Per insert, the edge going into its sidechain (aux) input, if any (-1:
+    // none); empty if none has one.
+    std::vector<int> sidechains;
+    // The edges leaving it after one of its devices (EdgeRender::Tap::AfterDevice), by
+    // device: those before its first device (tapDevice -1) first.
+    std::vector<int> deviceTaps;
 };
 
 // A routing edge's state outside the snapshot: the edit side allocates it with
-// the edge (a track's output, a send) and keeps it while the edge exists.
+// the edge (a track's output, a send, a sidechain) and keeps it while the edge exists.
 struct EdgeState {
     std::atomic<float> gain{1.f};  // a send's level (an output's stays 1). Written by the API.
 
@@ -172,27 +180,40 @@ struct EdgeState {
 // input edge (resampling) is a track's input taken from another track's output
 // (post-fader): it isn't summed, but heard instead of the track's clips while
 // the track is monitored (InputEdge), and recorded; it isn't delay-compensated.
+// A sidechain goes into one device of its destination (a track's, or the
+// master's), into its aux input: tapped after the source's fader, before it,
+// after one of its devices or before all of them, and lined up with the destination's signal at that
+// device. It isn't heard on its own, so the source's mute (and solo) silence it
+// only after the fader.
 struct EdgeRender {
-    enum class Kind : uint8_t { Output, Send, Input };  // later: sidechain
-    enum class Tap : uint8_t { PostFader, PreFader };
+    enum class Kind : uint8_t { Output, Send, Input, Sidechain };
+    enum class Tap : uint8_t { PostFader, PreFader, AfterDevice };
 
     int from = 0;   // the snapshot track it leaves
     int to = -1;    // the snapshot track it goes into; -1: the master
     Kind kind = Kind::Output;
     Tap tap = Tap::PostFader;
+    int tapDevice = -1;  // AfterDevice: the source's insert it is taken after (-1: before the first)
     int compensation = 0;              // samples it is delayed to line up with the latest edge into `to`
     std::shared_ptr<DelayLine> delay;  // for the live renderer (offline renders bring their own)
     std::shared_ptr<EdgeState> state;  // never null in an engine's snapshot
     // A send's automated level (as a fader's volume). Applied where the edge is
     // summed, after its delay: its latency is how late the destination hears its inputs.
     AutomationRender level;
+    // A sidechain: the destination's insert whose aux input it feeds, and how much
+    // the destination's own signal is delayed just before that insert to line up
+    // with it (when it arrives later than that signal; else the edge is delayed).
+    int device = -1;
+    int deviceDelay = 0;
+    std::shared_ptr<DelayLine> deviceDelayLine;  // for the live renderer (offline renders bring their own)
 
     // Whether the source writes the edge's signal into the edge's own buffer: a
-    // pre-fader tap (the source's buffer holds it after the fader), or a signal
-    // delayed for this edge alone. Otherwise the destination reads the source's buffer.
-    bool ownSignal() const noexcept { return tap == Tap::PreFader || compensation > 0; }
-    // Whether its destination sums it into its input (an input edge is heard only while monitored).
-    bool sums() const noexcept { return kind != Kind::Input; }
+    // tap before the fader (the source's buffer holds it after the fader), or a
+    // signal delayed for this edge alone. Otherwise the destination reads the source's buffer.
+    bool ownSignal() const noexcept { return tap != Tap::PostFader || compensation > 0; }
+    // Whether its destination sums it into its input (an input edge is heard
+    // only while monitored, a sidechain only by its device).
+    bool sums() const noexcept { return kind == Kind::Output || kind == Kind::Send; }
 };
 
 // Where a strip's input comes from: the device's inputs (a mono channel or a
@@ -282,7 +303,7 @@ struct TrackBuffers {
 struct TrackRender : StripRender {
     uint32_t id = 0;
     std::vector<int> incoming;      // edges into it (snapshot edges), in the order it sums them
-    std::vector<int> outgoing;      // edges out of it: its output first, then its sends (and input edges, by destination)
+    std::vector<int> outgoing;      // edges out of it: its output first, then its sends (and input edges and sidechains)
     int inputCount = 0;             // incoming.size(): the scheduler runs it once they are done
     // How late it hears what its summed edges bring. (Its own clips and notes
     // play on time: they aren't delayed to line up with its inputs, and nor is
@@ -310,7 +331,7 @@ struct RenderSnapshot {
     int maxLatency = 0;  // the tracks reach the master this late (delay-compensated alike)
     std::vector<TrackRender> tracks;  // in routing order: every track after those that feed it
     std::vector<EdgeRender> edges;    // the routing graph's edges, by source in snapshot order
-    std::vector<int> masterInputs;    // the edges into the master, in snapshot order
+    std::vector<int> masterInputs;    // the edges the master sums, in snapshot order (not sidechains into its devices)
     // The tracks' dependencies, for the scheduler (null: the tracks render in order).
     std::shared_ptr<TaskGraph> graph;
     int parallelWork = 0;  // tracks worth a thread of their own (devices, stretched clips)

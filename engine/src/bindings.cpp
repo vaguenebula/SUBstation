@@ -56,7 +56,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 11;
+    m.attr("API_VERSION") = 12;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -182,7 +182,25 @@ NB_MODULE(_engine, m) {
         .def_ro("name", &gil::ProcessorInfo::name)
         .def_ro("latency", &gil::ProcessorInfo::latency)
         .def_ro("tail", &gil::ProcessorInfo::tail)
-        .def_ro("has_editor", &gil::ProcessorInfo::hasEditor);
+        .def_ro("has_editor", &gil::ProcessorInfo::hasEditor)
+        .def_ro("has_sidechain", &gil::ProcessorInfo::hasSidechain, "It has a sidechain (aux) input.");
+
+    nb::enum_<gil::SidechainTap>(m, "SidechainTap")
+        .value("POST_FADER", gil::SidechainTap::PostFader)
+        .value("PRE_FADER", gil::SidechainTap::PreFader)
+        .value("AFTER_DEVICE", gil::SidechainTap::AfterDevice)
+        .value("PRE_FX", gil::SidechainTap::PreFx);
+
+    nb::class_<gil::SidechainInfo>(m, "SidechainInfo")
+        .def_ro("track_id", &gil::SidechainInfo::trackId, "Its source.")
+        .def_ro("tap", &gil::SidechainInfo::tap)
+        .def_ro("tap_processor_id", &gil::SidechainInfo::tapProcessorId,
+                "AFTER_DEVICE: the source's device it is taken after (0 otherwise).")
+        .def("__repr__", [](const gil::SidechainInfo& s) {
+            const char* taps[] = {"post-fader", "pre-fader", "after device ", "pre-fx"};
+            return "SidechainInfo(" + std::to_string(s.trackId) + ", " + taps[static_cast<int>(s.tap)] +
+                   (s.tap == gil::SidechainTap::AfterDevice ? std::to_string(s.tapProcessorId) : "") + ")";
+        });
 
     nb::enum_<gil::ProcessorEvent::Type>(m, "ProcessorEventType")
         .value("PARAM_EDITED", gil::ProcessorEvent::Type::ParamEdited)
@@ -494,9 +512,19 @@ NB_MODULE(_engine, m) {
         .def("set_chain_order", &Engine::setChainOrder, "chain_id"_a, "processor_ids"_a,
              "Reorder a chain: processor_ids lists all of its devices.")
         .def("move_processor", &Engine::moveProcessor, "processor_id"_a, "to_chain_id"_a, "index"_a = -1,
-             "Move a device into a chain (another track's too), keeping its state: index counts the "
-             "chain without it, -1 is last.")
+             "Move a device into a chain (another track's too), keeping its state (and sidechain: ValueError if "
+             "that would close a cycle there): index counts the chain without it, -1 is last.")
         .def("processor_info", &Engine::processorInfo, "processor_id"_a)
+        .def("set_processor_sidechain", &Engine::setProcessorSidechain, "processor_id"_a, "source_track_id"_a,
+             "tap"_a = gil::SidechainTap::PostFader, "tap_processor_id"_a = 0,
+             "A device's sidechain (its aux input: ProcessorInfo.has_sidechain): a track's signal after its fader, "
+             "before it, after one of its devices (tap_processor_id) or before them all (PRE_FX), lined up with the "
+             "signal at the device. "
+             "Raises ValueError for the master, a device without a sidechain input, or a sidechain that would "
+             "close a cycle (its own track, or one its track feeds).")
+        .def("clear_processor_sidechain", &Engine::clearProcessorSidechain, "processor_id"_a)
+        .def("processor_sidechain", &Engine::processorSidechain, "processor_id"_a,
+             "A device's sidechain (None: none). It goes when its source does.")
         .def("processor_params", &Engine::processorParams, "processor_id"_a)
         .def("processor_param_index", &Engine::processorParamIndex, "processor_id"_a, "param_id"_a)
         .def("processor_param", &Engine::processorParam, "processor_id"_a, "index"_a)

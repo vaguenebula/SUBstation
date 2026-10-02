@@ -3,7 +3,10 @@
 //
 // The track is stereo. The plug-in's main audio buses get stereo if it accepts
 // it; a mono plug-in gets the channels mixed down and its output copied to
-// both. Every other bus gets a buffer of its own (silence in, output ignored).
+// both. Its first aux audio input is its sidechain (Processor::hasSidechain):
+// arranged (stereo if it accepts it) and activated with the other buses, on the
+// main thread, it hears the device's sidechain, or silence (flagged as such)
+// without one. Every other bus gets a buffer of its own (silence in, output ignored).
 // Notes go to the first event input bus; raw MIDI controllers are mapped to
 // parameters through IMidiMapping.
 //
@@ -56,6 +59,7 @@ public:
     void resetOffline() override;
     void process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) override;
     int latencySamples() const override { return latency_.load(std::memory_order_relaxed); }
+    bool hasSidechain() const override { return auxInput_ >= 0; }
     int tailSamples() const override { return tail_; }
 
     const std::vector<ParamInfo>& params() const override { return params_; }
@@ -150,6 +154,7 @@ private:
     std::vector<Steinberg::Vst::AudioBusBuffers> inputs_, outputs_;
     int mainInput_ = -1;   // audio bus indices, -1 = none
     int mainOutput_ = -1;
+    int auxInput_ = -1;    // the sidechain
     int eventInput_ = -1;
 
     // Rendering-thread state.

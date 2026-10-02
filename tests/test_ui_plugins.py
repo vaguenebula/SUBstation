@@ -74,8 +74,8 @@ def test_plugins_in_the_browser(window):
     browser.sidebar.setCurrentItem(plugins.child(1))
     settle(browser)
     names = [browser.list_model.item(browser.list_model.index(i)).name for i in range(browser.list_model.rowCount())]
-    assert names == ["GIL Test Effect", "GIL Test Mono"]
-    assert browser.status.text() == "2 plug-ins"
+    assert names == ["GIL Test Effect", "GIL Test Mono", "GIL Test Sidechain"]
+    assert browser.status.text() == "3 plug-ins"
     browser.sidebar.setCurrentItem(plugins.child(0))
     settle(browser)
     index = browser.list_model.index(0)

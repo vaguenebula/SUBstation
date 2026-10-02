@@ -358,34 +358,69 @@ Tests
 An edge that ends at a device instead of at a strip's input.
 
 Engine
-- [ ] `kind = sidechain` edges into a processor (`to` = strip + processor id;
-      processor ids survive moves between chains and, later, racks).
-- [ ] Tap point per edge: pre-fader, post-fader or after a given device. First
-      version: the consumer waits for the whole source strip; splitting a strip
-      at the tap (so it can start earlier) is a later optimisation.
-- [ ] Each edge has its own buffer (Phase 6), valid until the consumer reads it,
-      possibly on another thread.
-- [ ] Delay compensation per edge: align the source's arrival with the
-      consumer's latency before that device (the Phase 5 function).
-- [ ] VST3: activate and arrange the aux input bus edit-side (`activateBus`,
-      `setBusArrangements`), never in the callback; the adapter fills it from the
-      edge's buffer (silence flags set when there is no source).
-- [ ] Expect less parallelism: a sidechain serialises source → consumer, so
+- [x] `kind = sidechain` edges into a processor (`EdgeRender::Kind::Sidechain`:
+      `to` = the strip, `device` = the insert). The engine keeps a sidechain with
+      its processor id (`setProcessorSidechain`), so it survives moves between
+      chains and, later, racks; `moveProcessor` refuses a move that would make it
+      a cycle. It isn't summed (`RouteEdge::sums`), but orders the graph and
+      closes cycles like any edge; one into the master's devices never can.
+- [x] Tap point per edge: post-fader, pre-fader, after a given device or
+      before them all (`Tap::AfterDevice`: `processInserts` copies the signal
+      after that insert, or before the first (`SidechainTap::PreFx`), into the
+      edge's buffer; while the device isn't on the source, before the fader). A
+      tap leaves as late as the devices before it, not counting a delay before
+      the next one (which waits for its own sidechain). The consumer waits for
+      the whole source strip.
+  - [ ] Maybe: splitting a strip at the tap, so the consumer can start earlier
+        (only if a benchmark shows it matters).
+- [x] Each edge has its own buffer (Phase 6), but an undelayed post-fader tap
+      (it reads the source's): the source writes it, the consumer's device reads
+      it in the same chunk, on whichever thread (the scheduler runs the source first).
+- [x] Delay compensation per edge: `alignGraph` walks each strip's chain and
+      lines every sidechain up with the signal at its device (`alignInputs`, the
+      Phase 5 function, over the two). The earlier one is delayed: the
+      sidechain, or the consumer's own signal just before the device
+      (`EdgeRender::deviceDelay`), which makes everything after it on that strip
+      later (`GraphLatencies::deviceLatency`: its automation, its edges). Not
+      while the consumer is monitored (monitoring latency).
+- [x] Mute and solo: a sidechain isn't heard on its own. Solo goes up it
+      (while the consumer is heard: soloed, fed by a solo or feeding one, the
+      source keeps keying it) but not down (soloing the
+      source doesn't make the consumer heard); into the master's devices it always
+      plays. Mute and solo silence it only after the source's fader (a muted
+      kick still keys from before it).
+- [x] VST3: the first aux input bus is the sidechain, arranged (stereo if the
+      plug-in takes it) and activated edit-side with the other buses, never in
+      the callback; the adapter fills it from the edge's buffer (silence flags
+      set when there is no source, or solo leaves it out). `Processor::hasSidechain()`,
+      `setSidechain()`: a built-in device could have one too.
+- [x] Expect less parallelism: a sidechain serialises source → consumer, so
       "kick ducks everything" turns into kick, then the rest. Cost ordering
       (Phase 5½) already ranks the source by what waits on it.
 
 Model / UI
-- [ ] `Device.sidechain: (track id, tap) | None`, only for devices with an aux
-      input; serialized; a deleted source track turns it off (undoable).
-- [ ] Source picker in the device title bar; sources that would make a cycle
-      (e.g. a track inside the group being sidechained) are greyed out.
+- [x] `Device.sidechain: Sidechain(track id, tap) | None` (tap: post-fader,
+      pre-fader, pre-FX or a device id; pre-FX on a MIDI track is after its
+      instrument), offered only for devices with an aux input
+      (`ProcessorInfo.has_sidechain`); serialized (project version 11; one from a
+      missing track, the master, or closing a cycle is dropped on load). A deleted
+      source track turns it off (in the same undo step), as do ungrouping a group
+      it comes from and moving tracks into groups (or the device to a track)
+      where it would close a cycle. Sidechains are edges of the model's routing
+      graph, so sends and inputs that would close a cycle with one are refused.
+- [x] Source picker in the device title bar (the sidechain button, lit while
+      set): the tracks, groups and returns, those that would make a cycle (e.g.
+      the group the device's track is in) greyed out; then where it is taken,
+      along the signal as in Ableton: Pre FX, after each device, Post FX, Post Mixer.
+  - [ ] Maybe: a built-in compressor (or a gate) with a sidechain, as Ableton's.
 
 Tests
-- [ ] A test plug-in with an aux input (tests/vst3_plugins) hears the source
-      sample-exactly, with latent plug-ins before the tap and on the consumer's
-      track.
-- [ ] Cycles refused; deleting the source; undo and serialization.
-- [ ] Random graphs with sidechains: bit-identical with and without workers.
+- [x] A test plug-in with an aux input (GIL Test Sidechain: its input plus its
+      sidechain) hears the source sample-exactly, with latent plug-ins before
+      and after the tap and on the consumer's track before and after the device;
+      into groups' and the master's devices; live with workers too.
+- [x] Cycles refused; deleting the source; undo and serialization.
+- [x] Random graphs with sidechains: bit-identical with and without workers.
 
 ---
 

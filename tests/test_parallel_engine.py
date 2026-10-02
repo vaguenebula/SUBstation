@@ -251,6 +251,52 @@ def test_random_graphs_with_inputs_render_the_same_on_any_threads(engine, make_w
     np.testing.assert_array_equal(parallel, serial)
 
 
+def add_sidechains(engine, rng, uids, tracks):
+    """GIL Test Sidechain on some tracks (and the master), keyed at random by
+    others: after their fader, before it or after one of their devices (latent
+    ones too). Those that would close a cycle are refused."""
+    keyed = 0
+    for consumer in [ge.MASTER, *tracks]:
+        if rng.random() < (0.7 if consumer == ge.MASTER else 0.35):
+            pid = engine.add_plugin_processor(engine.track_chain(consumer), "VST3", PLUGINS,
+                                              uids["GIL Test Sidechain"], int(rng.integers(0, 3)) - 1)
+            if consumer != ge.MASTER and rng.random() < 0.3:
+                latent_effect(engine, uids, consumer, int(rng.integers(1, 400)))  # after it
+            source = int(rng.choice(tracks))
+            taps, device = [ge.SidechainTap.POST_FADER, ge.SidechainTap.PRE_FADER, ge.SidechainTap.PRE_FX], 0
+            if rng.random() < 0.4:  # a device to tap after, before the source's others
+                device = latent_effect(engine, uids, source, int(rng.integers(0, 500)))
+                engine.move_processor(device, engine.track_chain(source), 0)
+                taps.append(ge.SidechainTap.AFTER_DEVICE)
+            tap = taps[int(rng.integers(0, len(taps)))]
+            try:
+                engine.set_processor_sidechain(pid, source, tap, device if tap == ge.SidechainTap.AFTER_DEVICE else 0)
+                keyed += 1
+            except ValueError:
+                pass  # its own track, or one it feeds
+    return keyed
+
+
+@needs_plugins
+@pytest.mark.parametrize("seed", range(10))
+def test_random_graphs_with_sidechains_render_the_same_on_any_threads(engine, make_wav, uids, seed):
+    """Sidechains serialise their source before the device's track, and line up
+    at the device (the sidechain delayed, or the track's signal before it)."""
+    rng = np.random.default_rng(300 + seed)
+    groups, leaves = random_project(engine, rng, make_wav, uids, tracks=int(rng.integers(4, 16)))
+    tracks = groups + leaves + add_returns(engine, rng, uids, groups + leaves, count=int(rng.integers(0, 3)))
+    assert add_sidechains(engine, rng, uids, tracks) > 0
+    settle(engine)
+    serial = render(engine, 1, 8 * SPB)
+    parallel = render(engine, THREADS, 8 * SPB)
+    assert np.abs(serial).max() > 0.0
+    np.testing.assert_array_equal(parallel, serial)
+    engine.set_loop(True, 2.0, 5.0)
+    serial = render(engine, 1, 6 * SPB, 1.5, loop=True, metronome=True)
+    parallel = render(engine, THREADS, 6 * SPB, 1.5, loop=True, metronome=True)
+    np.testing.assert_array_equal(parallel, serial)
+
+
 def test_nested_groups_on_any_threads(engine, make_wav, uids):
     """Groups three deep, with tracks at every level: each bus sums what goes into it in a fixed order."""
     rng = np.random.default_rng(7)

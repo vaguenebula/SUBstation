@@ -1,4 +1,4 @@
-// GIL Studio's test plug-ins: three tiny VST3 plug-ins whose output the tests
+// GIL Studio's test plug-ins: four tiny VST3 plug-ins whose output the tests
 // can predict exactly. They cover the host's code paths rather than sounding
 // good:
 //
@@ -11,6 +11,10 @@
 //    audio and reports it, a bypass parameter, state, and a Win32 editor that
 //    can resize itself and edit a parameter on request.
 //  * GIL Test Mono: mono in, mono out, no edit controller.
+//  * GIL Test Sidechain: a single-component effect with a sidechain (a stereo
+//    aux input, inactive until the host activates it): its output is its input
+//    plus its sidechain, and a read-only parameter, Key Silent, says whether the
+//    host flagged the sidechain silent.
 //
 // Environment variables make the module misbehave on purpose, for the scanner
 // tests: GIL_TEST_PLUGIN_CRASH=1 kills the process as the module loads,
@@ -297,5 +301,8 @@ DEF_CLASS2(INLINE_UID_FROM_FUID(gil_test::kEffectUID), PClassInfo::kManyInstance
 DEF_CLASS2(INLINE_UID_FROM_FUID(gil_test::kMonoUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "GIL Test Mono", Vst::kDistributable, "Fx", "1.0.0", kVstVersionString,
            gil_test::MonoEffect::createInstance)
+
+DEF_CLASS2(INLINE_UID_FROM_FUID(gil_test::kSidechainUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "GIL Test Sidechain", 0, "Fx|Dynamics", "1.0.0", kVstVersionString, gil_test::createTestSidechain)
 
 END_FACTORY

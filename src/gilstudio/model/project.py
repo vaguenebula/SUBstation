@@ -40,6 +40,14 @@ output is an edge of the routing graph, like a send: a track can't take the
 output of one it feeds (routing_graph, feeds). The master is no part of that
 graph: everything reaches it, and a track recording it never plays it back
 into it (it can't monitor it).
+
+A device with a sidechain (aux) input can hear a track's (a group's, a
+return's) signal there (`Device.sidechain`): after its fader, before it, or
+after one of its devices. That is an edge of the routing graph too, from the
+source to the track the device is on (sidechain_would_cycle); the master's
+devices can take any track's. Should the source go, the sidechain goes (in the
+same undo step); should the device it taps after leave the source, it taps
+before the fader until the device comes back.
 """
 
 from __future__ import annotations
@@ -202,6 +210,32 @@ class PluginRef:
 
 PLUGIN_KIND = "plugin"
 
+# Where a sidechain takes its source's signal (Sidechain.tap), unless after one of its
+# devices: as Ableton's Post Mixer, Post FX and Pre FX.
+POST_FADER = "post"
+PRE_FADER = "pre"
+PRE_FX = "pre-fx"
+
+
+@dataclass(frozen=True)
+class Sidechain:
+    """What a device's sidechain (aux) input hears: a track's signal (a group's,
+    a return's: `track_id`), after its fader and pan (POST_FADER), before it
+    (PRE_FADER, after all its devices), before all its devices (PRE_FX: what
+    they hear; on a MIDI track, after its instrument), or after one of its
+    devices (`tap`: that device's id; before the fader while that device isn't
+    on the track). It
+    isn't heard on its own, so the source's mute and solo silence it only after
+    the fader."""
+
+    track_id: str
+    tap: str = POST_FADER
+
+    @property
+    def tap_device(self) -> str | None:
+        """The device it is taken after (None: after the fader, before it, or before the devices)."""
+        return None if self.tap in (POST_FADER, PRE_FADER, PRE_FX) else self.tap
+
 
 @dataclass
 class Device:
@@ -210,7 +244,8 @@ class Device:
 
     A built-in device's parameters are its whole state. A plug-in keeps its own
     state; `state` holds it (base64) as last saved, for loading the project.
-    Its `params` only record values changed from the host, for undo."""
+    Its `params` only record values changed from the host, for undo. A device
+    with a sidechain (aux) input may hear a track there (`sidechain`)."""
 
     id: str
     kind: str
@@ -218,6 +253,7 @@ class Device:
     params: dict[str, float] = field(default_factory=dict)
     plugin: PluginRef | None = None
     state: str | None = None
+    sidechain: Sidechain | None = None
 
     @property
     def is_plugin(self) -> bool:
@@ -364,8 +400,9 @@ RoutingGraph = dict[str, list[str]]  # track id -> the tracks its signal goes in
 
 def routing_graph(tracks: list[Track], returns: list[Track]) -> RoutingGraph:
     """Where each track's (and return's) signal goes: into its group, into the
-    returns it sends to, and into the tracks taking their input from it. (Not
-    the master, which isn't in the graph.)"""
+    returns it sends to, into the tracks taking their input from it, and into
+    the tracks whose devices take it as their sidechain. (Not the master, which
+    isn't in the graph.)"""
     graph: RoutingGraph = {t.id: [] for t in [*tracks, *returns]}
     for track in [*tracks, *returns]:
         if track.parent in graph:
@@ -373,6 +410,9 @@ def routing_graph(tracks: list[Track], returns: list[Track]) -> RoutingGraph:
         graph[track.id].extend(r for r in track.sends if r in graph)
         if track.input_track in graph:
             graph[track.input_track].append(track.id)
+        for device in track.devices:
+            if device.sidechain is not None and device.sidechain.track_id in graph:
+                graph[device.sidechain.track_id].append(track.id)
     return graph
 
 
@@ -401,6 +441,15 @@ def input_would_cycle(tracks: list[Track], returns: list[Track], track_id: str, 
     return source_id != MASTER and feeds(routing_graph(tracks, returns), track_id, source_id)
 
 
+def sidechain_would_cycle(tracks: list[Track], returns: list[Track], track_id: str, source_id: str) -> bool:
+    """Whether a device on `track_id` taking `source_id`'s signal as its sidechain
+    would close a cycle: the source is the device's track, or that track feeds
+    it. Never on the master (everything goes into it); the master is never a source."""
+    if source_id == MASTER:
+        return True
+    return track_id != MASTER and feeds(routing_graph(tracks, returns), track_id, source_id)
+
+
 TrackTree = tuple[tuple[str, str | None], ...]  # every track's (id, parent), in order
 
 
@@ -412,7 +461,7 @@ class Project(QObject):
     track_changed = Signal(str)  # name, colour, mixer settings, sends or height (MASTER: the master's mixer)
     tracks_arranged = Signal()  # the tracks' order or groups changed (not which tracks there are)
     clips_changed = Signal(str)  # track id
-    devices_changed = Signal(str)  # track id: devices added/removed/toggled
+    devices_changed = Signal(str)  # track id: devices added/removed/toggled, or a sidechain changed
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
     device_state_changed = Signal(str, str)  # track id, device id: a plug-in's whole state was set (a preset)
     settings_changed = Signal()  # tempo, time signature, key, loop, automation lock
@@ -521,6 +570,17 @@ class Project(QObject):
         """Whether a track taking its input from another's output (or a return's)
         would close a cycle (see input_would_cycle)."""
         return input_would_cycle(self.tracks, self.returns, track_id, source_id)
+
+    def sidechain_would_cycle(self, track_id: str, source_id: str) -> bool:
+        """Whether a device on a track (or the master) taking another's signal as
+        its sidechain would close a cycle (see sidechain_would_cycle)."""
+        return sidechain_would_cycle(self.tracks, self.returns, track_id, source_id)
+
+    def sidechain_sources(self, track_id: str) -> list[Track]:
+        """The tracks (groups too) and returns a device on a track (or the
+        master) could take as its sidechain, but its own, in order (some would
+        close a cycle: sidechain_would_cycle)."""
+        return [t for t in [*self.tracks, *self.returns] if t.id != track_id]
 
     def input_sources(self, track_id: str) -> list[Track]:
         """The tracks (groups too) and returns whose output a track could take as
@@ -675,6 +735,10 @@ class Project(QObject):
 
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:
         self.device(track_id, device_id).enabled = enabled
+        self.devices_changed.emit(track_id)
+
+    def set_device_sidechain(self, track_id: str, device_id: str, sidechain: Sidechain | None) -> None:
+        self.device(track_id, device_id).sidechain = sidechain
         self.devices_changed.emit(track_id)
 
     def set_device_state(self, track_id: str, device_id: str, state: str | None) -> None:

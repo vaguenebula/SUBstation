@@ -201,6 +201,21 @@ def plugin_window(color: str = theme.TEXT) -> QIcon:
 
 
 @cache
+def sidechain(color: str = theme.TEXT) -> QIcon:
+    """An arrow coming in from the side: a device's sidechain input."""
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(48, 10), QPointF(48, 54))  # what it goes into
+        p.drawLine(QPointF(8, 32), QPointF(36, 32))
+        head = QPainterPath(QPointF(26, 20))
+        head.lineTo(38, 32)
+        head.lineTo(26, 44)
+        p.drawPath(head)
+    return _icon(draw, color)
+
+
+@cache
 def save(color: str = theme.TEXT) -> QIcon:
     """A floppy disk."""
     def draw(p: QPainter, c: QColor):

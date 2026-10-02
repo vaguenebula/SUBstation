@@ -171,7 +171,7 @@ public:
     // Real-time. Processes planar channel buffers in place.
     virtual void process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) = 0;
 
-    virtual int latencySamples() const { return 0; }  // compensated by delaying the other tracks
+    virtual int latencySamples() const { return 0; }  // compensated by delaying the other tracks (and sidechains)
     virtual int tailSamples() const { return 0; }
 
     // Plain (not normalised) values. getParam is thread-safe.
@@ -232,12 +232,26 @@ public:
     }
     void clearAutomation() noexcept { numAutomation_ = 0; }
 
+    // --- Sidechain -------------------------------------------------------------
+    // A processor with a sidechain (aux) input says so (main thread). Before each
+    // process() call the renderer hands it what goes into that input over the
+    // call's frames (two channels, as long as the call), or null for nothing
+    // (silence: no source, or solo leaves it out); after the call, null again.
+    virtual bool hasSidechain() const { return false; }
+    void setSidechain(const float* left, const float* right) noexcept {
+        sidechain_[0] = left;
+        sidechain_[1] = right;
+    }
+
 protected:
     // In process(): the automation for this call (processors may sort it).
     ParamAutomation* automation() noexcept { return automation_.data(); }
     size_t numAutomation() const noexcept { return numAutomation_; }
+    // In process(): the sidechain's channel (0 or 1) for this call; null: silence.
+    const float* sidechain(int channel) const noexcept { return sidechain_[channel & 1]; }
 
 private:
+    const float* sidechain_[2] = {nullptr, nullptr};
     std::atomic<bool> enabled_{true};
     std::atomic<bool> resetRequested_{false};
     std::vector<ParamAutomation> automation_ = std::vector<ParamAutomation>(kMaxAutomation);

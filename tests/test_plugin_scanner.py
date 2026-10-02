@@ -40,6 +40,7 @@ def test_scan_reads_plugins_and_caches_them(tmp_path, plugins):
     assert [(p.name, p.vendor, p.category, p.instrument) for p in result.plugins] == [
         ("GIL Test Effect", "GIL Studio", "Fx|Delay", False),
         ("GIL Test Mono", "GIL Studio", "Fx", False),
+        ("GIL Test Sidechain", "GIL Studio", "Fx|Dynamics", False),
         ("GIL Test Synth", "GIL Studio", "Instrument|Synth", True),
     ]
     assert all(p.path == bundle and p.format == "VST3" and len(p.uid) == 32 for p in result.plugins)
