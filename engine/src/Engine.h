@@ -113,8 +113,9 @@ struct AudioClockStatus {
 };
 
 // Where a sidechain takes its source's signal: after its fader (and pan), before
-// it (after all its devices), or after one of its devices.
-enum class SidechainTap : uint8_t { PostFader, PreFader, AfterDevice };
+// it (after all its devices), after one of its devices, or before all of them
+// (PreFx: the strip's own input, as its devices hear it).
+enum class SidechainTap : uint8_t { PostFader, PreFader, AfterDevice, PreFx };
 
 // A device's sidechain (Engine::processorSidechain()).
 struct SidechainInfo {
@@ -333,8 +334,9 @@ public:
     // A device's sidechain: what its aux input hears (hasSidechain in its
     // ProcessorInfo), from a track (a track, a group or a return; not the master,
     // which renders after everything), tapped after the track's fader, before it,
-    // or after one of its devices (`tapProcessorId`, in the track's main chain;
-    // should that device leave it, the tap is before the fader). It is lined up
+    // after one of its devices (`tapProcessorId`, in the track's main chain;
+    // should that device leave it, the tap is before the fader), or before all of
+    // them (PreFx). It is lined up
     // with the signal at the device: delayed, or that signal is (just before the
     // device). Throws std::invalid_argument for an unknown device or track, a
     // device without a sidechain input, the master, or a sidechain that would

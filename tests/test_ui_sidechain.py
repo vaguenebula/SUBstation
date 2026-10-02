@@ -1,13 +1,20 @@
 """Sidechains in the window: a device with a sidechain input has a sidechain
 button in its title bar, lit while it has one; its menu lists the tracks,
 groups and returns it can come from (greyed out where that would close a
-cycle) and where it is taken: after the fader, before it, or after one of the
-source's devices."""
+cycle) and where it is taken, along the source's signal as in Ableton: Pre FX
+(before its devices; after a MIDI track's instrument), after one of its
+devices, Post FX (before its fader) or Post Mixer (after it)."""
 
 import pytest
 
 from gilstudio.model.automation import MASTER
-from gilstudio.model.project import PLUGIN_KIND, POST_FADER, PRE_FADER, Sidechain
+from gilstudio.model.project import (
+    PLUGIN_KIND,
+    POST_FADER,
+    PRE_FADER,
+    PRE_FX,
+    Sidechain,
+)
 
 from .conftest import TEST_PLUGINS
 from .test_ui_plugins import installed
@@ -42,29 +49,33 @@ def test_the_sidechain_button(window, app):
     assert choices["No Sidechain"].isChecked() and not choices[f"{group.name} (this track feeds it)"].isEnabled()
     choices["Kick"].trigger()
     assert p.device(bass.id, keyed.id).sidechain == Sidechain(kick.id, POST_FADER)
-    assert button.isChecked() and button.toolTip() == "Sidechain: Kick, post fader"
+    assert button.isChecked() and button.toolTip() == "Sidechain: Kick, Post Mixer"
 
     choices = actions(widget.sidechain_menu())  # now with the taps
-    assert list(choices)[-3:] == ["Post Fader", "Pre Fader", "After Utility"]
-    assert choices["Kick"].isChecked() and choices["Post Fader"].isChecked()
-    choices["After Utility"].trigger()
+    assert list(choices)[-4:] == ["Pre FX", "After Utility", "Post FX", "Post Mixer"]
+    assert choices["Kick"].isChecked() and choices["Post Mixer"].isChecked()
+    choices["Pre FX"].trigger()
+    assert p.device(bass.id, keyed.id).sidechain == Sidechain(kick.id, PRE_FX)
+    assert button.toolTip() == "Sidechain: Kick, Pre FX"
+    assert actions(widget.sidechain_menu())["Pre FX"].isChecked()
+    actions(widget.sidechain_menu())["After Utility"].trigger()
     assert p.device(bass.id, keyed.id).sidechain == Sidechain(kick.id, eq.id)
     assert button.toolTip() == "Sidechain: Kick, After Utility"
     editor.remove_device(kick.id, eq.id)  # before the fader, until it comes back
     app.processEvents()
-    assert actions(widget.sidechain_menu())["Pre Fader"].isChecked()
-    assert button.toolTip() == "Sidechain: Kick, pre fader"  # (the kick's chain changed, not the bass's)
+    assert actions(widget.sidechain_menu())["Post FX"].isChecked()
+    assert button.toolTip() == "Sidechain: Kick, Post FX"  # (the kick's chain changed, not the bass's)
     window.undo_stack.undo()
     app.processEvents()
     assert button.toolTip() == "Sidechain: Kick, After Utility"
-    actions(widget.sidechain_menu())["Pre Fader"].trigger()
+    actions(widget.sidechain_menu())["Post FX"].trigger()
     assert p.device(bass.id, keyed.id).sidechain == Sidechain(kick.id, PRE_FADER)
     actions(widget.sidechain_menu())[ret.name].trigger()  # another source: taken in the same place
     assert p.device(bass.id, keyed.id).sidechain == Sidechain(ret.id, PRE_FADER)
 
     editor.rename_track(ret.id, "Verb")
     app.processEvents()
-    assert button.toolTip() == "Sidechain: Verb, pre fader"  # it follows its source's name
+    assert button.toolTip() == "Sidechain: Verb, Post FX"  # it follows its source's name
     # The sidechain is a routing edge: the bass can't send to the return keying it.
     assert ret not in p.send_targets(bass.id)
     actions(widget.sidechain_menu())["No Sidechain"].trigger()
@@ -79,6 +90,14 @@ def test_the_sidechain_button(window, app):
     window.undo_stack.undo()
     app.processEvents()
     assert button.isChecked()
+
+    # A MIDI track's own audio is its instrument's: Pre FX is after it, so it isn't listed.
+    keys = editor.add_midi_track(name="Keys")
+    actions(widget.sidechain_menu())["Keys"].trigger()
+    assert list(actions(widget.sidechain_menu()))[-3:] == ["Pre FX", "Post FX", "Post Mixer"]
+    editor.set_device_sidechain(bass.id, keyed.id, Sidechain(keys.id, keys.devices[0].id))
+    app.processEvents()
+    assert actions(widget.sidechain_menu())["Pre FX"].isChecked() and button.toolTip() == "Sidechain: Keys, Pre FX"
 
 
 def test_the_masters_devices_take_any_track(window, app):

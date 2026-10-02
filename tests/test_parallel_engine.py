@@ -263,7 +263,7 @@ def add_sidechains(engine, rng, uids, tracks):
             if consumer != ge.MASTER and rng.random() < 0.3:
                 latent_effect(engine, uids, consumer, int(rng.integers(1, 400)))  # after it
             source = int(rng.choice(tracks))
-            taps, device = [ge.SidechainTap.POST_FADER, ge.SidechainTap.PRE_FADER], 0
+            taps, device = [ge.SidechainTap.POST_FADER, ge.SidechainTap.PRE_FADER, ge.SidechainTap.PRE_FX], 0
             if rng.random() < 0.4:  # a device to tap after, before the source's others
                 device = latent_effect(engine, uids, source, int(rng.integers(0, 500)))
                 engine.move_processor(device, engine.track_chain(source), 0)

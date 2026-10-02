@@ -1,6 +1,6 @@
 """Sidechains in the model: a device taking a track's (a group's, a return's)
-signal into its sidechain input, after its fader, before it or after one of its
-devices; cycles refused, and sidechains that would close one dropped when tracks
+signal into its sidechain input, after its fader, before it, before its devices
+(after a MIDI track's instrument) or after one of them; cycles refused, and sidechains that would close one dropped when tracks
 move into groups or devices to other tracks; a source going takes the
 sidechains from it along (one undo step); saving; and the engine taking it all
 (through the bridge)."""
@@ -15,6 +15,7 @@ from gilstudio.model.project import (
     PLUGIN_KIND,
     POST_FADER,
     PRE_FADER,
+    PRE_FX,
     PluginRef,
     Project,
     Sidechain,
@@ -259,6 +260,19 @@ def test_the_engine_takes_sidechains(app):
         load_into(project, project_to_dict(project))
         pad, keyed = project.track(pad.id), project.device(pad.id, keyed.id)
         assert engine_sidechain(pad, keyed) == (bridge._track_ids[later.id], ge.SidechainTap.PRE_FADER, 0)
+        # Before the source's devices; a MIDI track's own audio is its instrument's.
+        editor.set_device_sidechain(pad.id, keyed.id, Sidechain(later.id, PRE_FX))
+        load_into(project, project_to_dict(project))
+        pad, keyed = project.track(pad.id), project.device(pad.id, keyed.id)
+        assert keyed.sidechain == Sidechain(later.id, PRE_FX)
+        assert engine_sidechain(pad, keyed) == (bridge._track_ids[later.id], ge.SidechainTap.PRE_FX, 0)
+        keys = editor.add_midi_track()
+        editor.set_device_sidechain(pad.id, keyed.id, Sidechain(keys.id, PRE_FX))
+        synth = bridge.engine_device_id(keys.id, keys.devices[0].id)
+        assert engine_sidechain(pad, keyed) == (bridge._track_ids[keys.id], ge.SidechainTap.AFTER_DEVICE, synth)
+        editor.add_device(keys.id, "synth")  # another instrument, in its place
+        synth = bridge.engine_device_id(keys.id, project.track(keys.id).devices[0].id)
+        assert engine_sidechain(pad, keyed) == (bridge._track_ids[keys.id], ge.SidechainTap.AFTER_DEVICE, synth)
     finally:
         bridge.shutdown()
         engine.close_device()

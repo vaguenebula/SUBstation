@@ -1,5 +1,5 @@
 """Sidechains in the engine: a device's aux input hearing another track's
-signal, after its fader, before it or after one of its devices; lined up with
+signal, after its fader, before it, before its devices or after one of them; lined up with
 the signal at the device sample for sample, whatever the latency before the tap
 and on the device's own track (the sidechain is delayed, or the track's signal
 is, before the device); cycles refused; the source going; mute and solo.
@@ -101,13 +101,14 @@ def test_devices_without_a_sidechain_input(engine, uids):
 
 
 def test_taps(engine, uids, click_wav):
-    """After the source's fader, before it, or after one of its devices."""
+    """After the source's fader, before it, before its devices, or after one of them."""
     source = clip_track(engine, click_wav)
     first, second = effect(engine, uids, source, gain=0.5), effect(engine, uids, source, gain=0.5)
     engine.set_track_gain(source, 0.5)
     pid = keyed(engine, uids, engine.add_track())
     heard = CLICK * 0.5 * 0.5 * 0.5  # the source itself: its devices, then its fader
-    for tap, after, key in [(ge.SidechainTap.POST_FADER, 0, heard),
+    for tap, after, key in [(ge.SidechainTap.PRE_FX, 0, CLICK),
+                            (ge.SidechainTap.POST_FADER, 0, heard),
                             (ge.SidechainTap.PRE_FADER, 0, CLICK * 0.25),
                             (ge.SidechainTap.AFTER_DEVICE, first, CLICK * 0.5),
                             (ge.SidechainTap.AFTER_DEVICE, second, CLICK * 0.25)]:
@@ -142,7 +143,7 @@ def test_a_tap_after_a_device_that_leaves_the_source_is_before_the_fader(engine,
     (300, 0, 200, 50),  # some of each
     (0, 450, 120, 0),
 ])
-@pytest.mark.parametrize("tap", ["post", "pre", "device"])
+@pytest.mark.parametrize("tap", ["post", "pre", "device", "pre-fx"])
 def test_the_sidechain_lines_up_with_the_signal_at_its_device(engine, uids, click_wav, before_tap, after_tap,
                                                               before_device, after_device, tap):
     """The source and the device's track click on the same beat: at the device
@@ -158,9 +159,35 @@ def test_the_sidechain_lines_up_with_the_signal_at_its_device(engine, uids, clic
     if tap == "device":
         engine.set_processor_sidechain(pid, source, ge.SidechainTap.AFTER_DEVICE, tapped)
     else:
-        engine.set_processor_sidechain(pid, source, ge.SidechainTap.POST_FADER if tap == "post"
-                                       else ge.SidechainTap.PRE_FADER)
+        taps = {"post": ge.SidechainTap.POST_FADER, "pre": ge.SidechainTap.PRE_FADER, "pre-fx": ge.SidechainTap.PRE_FX}
+        engine.set_processor_sidechain(pid, source, taps[tap])
     assert clicks(render(engine)) == {SPB: 3 * CLICK}
+
+
+@pytest.mark.parametrize("waits_first", [False, True])
+@pytest.mark.parametrize("tap", ["pre-fx", "device", "post"])
+def test_a_tap_before_a_device_waiting_for_its_own_sidechain(engine, uids, click_wav, tap, waits_first):
+    """The source's own signal waits for a late sidechain before one of its
+    devices: a tap before that wait (before its devices, or after a device
+    before it) leaves the source that much earlier than one after it."""
+    late = clip_track(engine, click_wav)
+    effect(engine, uids, late, 300)
+    source = clip_track(engine, click_wav)
+    if waits_first:
+        waiting, fx = keyed(engine, uids, source), effect(engine, uids, source, 40)
+    else:
+        fx, waiting = effect(engine, uids, source, 40), keyed(engine, uids, source)
+    engine.set_processor_sidechain(waiting, late)
+    pid = keyed(engine, uids, clip_track(engine, click_wav))
+    if tap == "device":
+        engine.set_processor_sidechain(pid, source, ge.SidechainTap.AFTER_DEVICE, fx)
+    else:
+        engine.set_processor_sidechain(pid, source, ge.SidechainTap.PRE_FX if tap == "pre-fx"
+                                       else ge.SidechainTap.POST_FADER)
+    # The late track, the source with its sidechain, the keyed track with the
+    # source's click (and the late one, after the device that waits for it).
+    after_the_wait = tap == "post" or (tap == "device" and waits_first)
+    assert clicks(render(engine)) == {SPB: pytest.approx((5 + after_the_wait) * CLICK)}
 
 
 def test_a_sidechain_into_a_group_and_into_the_master(engine, uids, click_wav):

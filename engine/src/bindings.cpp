@@ -188,7 +188,8 @@ NB_MODULE(_engine, m) {
     nb::enum_<gil::SidechainTap>(m, "SidechainTap")
         .value("POST_FADER", gil::SidechainTap::PostFader)
         .value("PRE_FADER", gil::SidechainTap::PreFader)
-        .value("AFTER_DEVICE", gil::SidechainTap::AfterDevice);
+        .value("AFTER_DEVICE", gil::SidechainTap::AfterDevice)
+        .value("PRE_FX", gil::SidechainTap::PreFx);
 
     nb::class_<gil::SidechainInfo>(m, "SidechainInfo")
         .def_ro("track_id", &gil::SidechainInfo::trackId, "Its source.")
@@ -196,7 +197,7 @@ NB_MODULE(_engine, m) {
         .def_ro("tap_processor_id", &gil::SidechainInfo::tapProcessorId,
                 "AFTER_DEVICE: the source's device it is taken after (0 otherwise).")
         .def("__repr__", [](const gil::SidechainInfo& s) {
-            const char* taps[] = {"post-fader", "pre-fader", "after device "};
+            const char* taps[] = {"post-fader", "pre-fader", "after device ", "pre-fx"};
             return "SidechainInfo(" + std::to_string(s.trackId) + ", " + taps[static_cast<int>(s.tap)] +
                    (s.tap == gil::SidechainTap::AfterDevice ? std::to_string(s.tapProcessorId) : "") + ")";
         });
@@ -517,7 +518,8 @@ NB_MODULE(_engine, m) {
         .def("set_processor_sidechain", &Engine::setProcessorSidechain, "processor_id"_a, "source_track_id"_a,
              "tap"_a = gil::SidechainTap::PostFader, "tap_processor_id"_a = 0,
              "A device's sidechain (its aux input: ProcessorInfo.has_sidechain): a track's signal after its fader, "
-             "before it, or after one of its devices (tap_processor_id), lined up with the signal at the device. "
+             "before it, after one of its devices (tap_processor_id) or before them all (PRE_FX), lined up with the "
+             "signal at the device. "
              "Raises ValueError for the master, a device without a sidechain input, or a sidechain that would "
              "close a cycle (its own track, or one its track feeds).")
         .def("clear_processor_sidechain", &Engine::clearProcessorSidechain, "processor_id"_a)

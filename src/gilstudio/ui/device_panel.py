@@ -52,8 +52,8 @@ from PySide6.QtGui import (
     QDragMoveEvent,
     QDropEvent,
     QFontMetrics,
-    QMouseEvent,
     QIcon,
+    QMouseEvent,
     QPainter,
     QPalette,
 )
@@ -84,12 +84,19 @@ from ..model.editor import (
     device_name,
 )
 from ..model.params import format_value
-from ..model.project import PLUGIN_KIND, POST_FADER, PRE_FADER, Device, Sidechain
+from ..model.project import (
+    PLUGIN_KIND,
+    POST_FADER,
+    PRE_FADER,
+    PRE_FX,
+    Device,
+    Sidechain,
+)
+from . import icons
 from .arrangement.lanes_canvas import DEVICE_MOVE_MIME, is_pan_modifier, moved_devices
 from .arrangement.track_headers import automation_state
 from .arrangement.view_state import Selection
 from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
-from . import icons
 from .widgets import Knob, ToggleButton
 
 PANEL_MARGIN = 8  # above and below the chain
@@ -412,21 +419,29 @@ class _DeviceFrame(QFrame):
     # --- Sidechain -------------------------------------------------------------------
 
     def _tap_choices(self, source_id: str) -> list[tuple[str, str]]:
-        """Where a sidechain from a track can be taken: (label, tap)."""
+        """Where a sidechain from a track can be taken, along its signal, as in
+        Ableton: before its devices, after each, after them all, after its fader
+        (label, tap). On a MIDI track, Pre FX is after the instrument."""
         devices = self.editor.project.track(source_id).devices
         names = [device_name(d) for d in devices]
-        choices = [("Post Fader", POST_FADER), ("Pre Fader", PRE_FADER)]
+        choices = [("Pre FX", PRE_FX)]
         for device, name in zip(devices, names, strict=True):
             if names.count(name) > 1:
                 name = f"{name} ({names[:devices.index(device) + 1].count(name)})"
-            choices.append((f"After {name}", device.id))
-        return choices
+            if not device_is_instrument(device):
+                choices.append((f"After {name}", device.id))
+        return [*choices, ("Post FX", PRE_FADER), ("Post Mixer", POST_FADER)]
 
     def _tap_of(self, sidechain: Sidechain) -> str:
-        """Where it is taken now: after a device that has left its source, before the fader."""
-        source = self.editor.project.track(sidechain.track_id)
-        if sidechain.tap_device is not None and all(d.id != sidechain.tap for d in source.devices):
-            return PRE_FADER
+        """Where it is taken now: after a device that has left its source, before
+        the fader; after its instrument, before its effects."""
+        devices = self.editor.project.track(sidechain.track_id).devices
+        if sidechain.tap_device is not None:
+            device = next((d for d in devices if d.id == sidechain.tap), None)
+            if device is None:
+                return PRE_FADER
+            if device_is_instrument(device):
+                return PRE_FX
         return sidechain.tap
 
     def update_sidechain(self) -> None:
@@ -443,7 +458,7 @@ class _DeviceFrame(QFrame):
         tap = self._tap_of(sidechain)
         where = next(label for label, t in self._tap_choices(sidechain.track_id) if t == tap)
         name = self.editor.project.track(sidechain.track_id).name
-        self.sidechain.setToolTip(f"Sidechain: {name}, {where.lower() if tap in (POST_FADER, PRE_FADER) else where}")
+        self.sidechain.setToolTip(f"Sidechain: {name}, {where}")
 
     def sidechain_menu(self) -> QMenu:
         """No sidechain, or the tracks, groups and returns it can come from

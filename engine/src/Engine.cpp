@@ -461,6 +461,10 @@ std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<EdgeOrigin>* origins
 }
 
 int Engine::sidechainTapLocked(const SidechainModel& sidechain, EdgeRender::Tap& tap) const {
+    if (sidechain.tap == SidechainTap::PreFx) {  // before its first device
+        tap = EdgeRender::Tap::AfterDevice;
+        return 0;
+    }
     tap = sidechain.tap == SidechainTap::PostFader ? EdgeRender::Tap::PostFader : EdgeRender::Tap::PreFader;
     if (sidechain.tap != SidechainTap::AfterDevice) return -1;
     const int source = trackIndexLocked(sidechain.source);

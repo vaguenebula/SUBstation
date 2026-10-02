@@ -210,17 +210,21 @@ class PluginRef:
 
 PLUGIN_KIND = "plugin"
 
-# Where a sidechain takes its source's signal (Sidechain.tap), unless after one of its devices.
+# Where a sidechain takes its source's signal (Sidechain.tap), unless after one of its
+# devices: as Ableton's Post Mixer, Post FX and Pre FX.
 POST_FADER = "post"
 PRE_FADER = "pre"
+PRE_FX = "pre-fx"
 
 
 @dataclass(frozen=True)
 class Sidechain:
     """What a device's sidechain (aux) input hears: a track's signal (a group's,
     a return's: `track_id`), after its fader and pan (POST_FADER), before it
-    (PRE_FADER, after all its devices), or after one of its devices (`tap`: that
-    device's id; before the fader while that device isn't on the track). It
+    (PRE_FADER, after all its devices), before all its devices (PRE_FX: what
+    they hear; on a MIDI track, after its instrument), or after one of its
+    devices (`tap`: that device's id; before the fader while that device isn't
+    on the track). It
     isn't heard on its own, so the source's mute and solo silence it only after
     the fader."""
 
@@ -229,8 +233,8 @@ class Sidechain:
 
     @property
     def tap_device(self) -> str | None:
-        """The device it is taken after (None: after the fader, or before it)."""
-        return None if self.tap in (POST_FADER, PRE_FADER) else self.tap
+        """The device it is taken after (None: after the fader, before it, or before the devices)."""
+        return None if self.tap in (POST_FADER, PRE_FADER, PRE_FX) else self.tap
 
 
 @dataclass

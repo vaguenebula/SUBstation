@@ -84,11 +84,12 @@ from PySide6.QtCore import (
 from .. import _engine as ge
 from ..model import automation
 from ..model.automation import MASTER, MIXER_PAN, MIXER_VOLUME
-from ..model.editor import RecordedTake, device_name
+from ..model.editor import RecordedTake, device_is_instrument, device_name
 from ..model.params import ParamSpec, format_value, mixer_specs
 from ..model.project import (
     POST_FADER,
     PRE_FADER,
+    PRE_FX,
     WARP_MODES,
     Clip,
     Device,
@@ -707,6 +708,14 @@ class EngineBridge(QObject):
             return None
         if sidechain.tap == POST_FADER:
             return source, ge.SidechainTap.POST_FADER, 0
+        if sidechain.tap == PRE_FX:
+            # A MIDI track's own audio is its instrument's: before its effects.
+            devices = self.project.track(sidechain.track_id).devices
+            if devices and device_is_instrument(devices[0]):
+                instrument = self.engine_device_id(sidechain.track_id, devices[0].id)
+                if instrument is not None:
+                    return source, ge.SidechainTap.AFTER_DEVICE, instrument
+            return source, ge.SidechainTap.PRE_FX, 0
         tapped = None if sidechain.tap == PRE_FADER else self.engine_device_id(sidechain.track_id, sidechain.tap)
         if tapped is None:  # before the fader (also while the device it is taken after isn't on the source)
             return source, ge.SidechainTap.PRE_FADER, 0

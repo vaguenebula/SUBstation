@@ -32,8 +32,9 @@ struct RouteEdge {
     int from = 0;
     int to = -1;
     bool sums = true;  // `to` sums it into its input (false: an input edge or a sidechain)
-    // Where it leaves `from`: after the first `tap` of its devices; -1: after all of
-    // them (an output, a send, a pre-fader tap).
+    // Where it leaves `from`: after the first `tap` of its devices (0: before them
+    // all), as it leaves the last of them (before any delay lining up the next
+    // one); -1: after all of them (an output, a send, a pre-fader tap).
     int tap = -1;
     // A sidechain: the device of `to` it goes into (its place in `to`'s chain),
     // where it is aligned; -1: none (or one not aligned: a device switched off).
@@ -147,9 +148,14 @@ inline GraphLatencies alignGraph(const std::vector<int>& order, const std::vecto
     }
     const auto arrival = [&](int e) {
         const RouteEdge& edge = edges[static_cast<size_t>(e)];
-        const auto& at = result.deviceLatency[static_cast<size_t>(edge.from)];
-        const size_t tap = edge.tap < 0 ? at.size() - 1 : std::min(static_cast<size_t>(edge.tap), at.size() - 1);
-        return result.inputLatency[static_cast<size_t>(edge.from)] + at[tap];
+        const size_t from = static_cast<size_t>(edge.from);
+        const auto& at = result.deviceLatency[from];
+        const size_t last = at.size() - 1;  // after all of its devices
+        const size_t tap = edge.tap < 0 ? last : std::min(static_cast<size_t>(edge.tap), last);
+        // After device tap - 1: as late as it hears its signal, plus its own latency
+        // (not at[tap]: that has the delay before device tap in it, which comes later).
+        const int latency = tap == last ? at[last] : tap == 0 ? 0 : at[tap - 1] + std::max(0, chains[from][tap - 1]);
+        return result.inputLatency[from] + latency;
     };
     std::vector<int> arrivals, compensation;
     const auto align = [&](size_t node) {

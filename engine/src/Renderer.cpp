@@ -846,6 +846,11 @@ void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& str
         context.inEvents = {events + first, static_cast<size_t>(next - first)};
         float* channels[2] = {left + offset, right + offset};
         size_t tap = 0;  // strip.deviceTaps, by device
+        for (; tap < strip.deviceTaps.size(); ++tap) {  // those before the first device
+            const int e = strip.deviceTaps[tap];
+            if (snap.edges[static_cast<size_t>(e)].tapDevice >= 0) break;
+            tapInto(e, channels[0], channels[1], offset, length);
+        }
         for (size_t i = 0; i < strip.inserts.size(); ++i) {
             Processor& insert = *strip.inserts[i];
             if (insert.isEnabled()) {

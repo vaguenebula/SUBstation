@@ -364,10 +364,13 @@ Engine
       chains and, later, racks; `moveProcessor` refuses a move that would make it
       a cycle. It isn't summed (`RouteEdge::sums`), but orders the graph and
       closes cycles like any edge; one into the master's devices never can.
-- [x] Tap point per edge: post-fader, pre-fader or after a given device
-      (`Tap::AfterDevice`: `processInserts` copies the signal after that insert
-      into the edge's buffer; while the device isn't on the source, before the
-      fader). The consumer waits for the whole source strip.
+- [x] Tap point per edge: post-fader, pre-fader, after a given device or
+      before them all (`Tap::AfterDevice`: `processInserts` copies the signal
+      after that insert, or before the first (`SidechainTap::PreFx`), into the
+      edge's buffer; while the device isn't on the source, before the fader). A
+      tap leaves as late as the devices before it, not counting a delay before
+      the next one (which waits for its own sidechain). The consumer waits for
+      the whole source strip.
   - [ ] Maybe: splitting a strip at the tap, so the consumer can start earlier
         (only if a benchmark shows it matters).
 - [x] Each edge has its own buffer (Phase 6), but an undelayed post-fader tap
@@ -397,7 +400,8 @@ Engine
 
 Model / UI
 - [x] `Device.sidechain: Sidechain(track id, tap) | None` (tap: post-fader,
-      pre-fader or a device id), offered only for devices with an aux input
+      pre-fader, pre-FX or a device id; pre-FX on a MIDI track is after its
+      instrument), offered only for devices with an aux input
       (`ProcessorInfo.has_sidechain`); serialized (project version 11; one from a
       missing track, the master, or closing a cycle is dropped on load). A deleted
       source track turns it off (in the same undo step), as do ungrouping a group
@@ -406,7 +410,8 @@ Model / UI
       graph, so sends and inputs that would close a cycle with one are refused.
 - [x] Source picker in the device title bar (the sidechain button, lit while
       set): the tracks, groups and returns, those that would make a cycle (e.g.
-      the group the device's track is in) greyed out; then where it is taken.
+      the group the device's track is in) greyed out; then where it is taken,
+      along the signal as in Ableton: Pre FX, after each device, Post FX, Post Mixer.
   - [ ] Maybe: a built-in compressor (or a gate) with a sidechain, as Ableton's.
 
 Tests

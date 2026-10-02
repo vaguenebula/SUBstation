@@ -151,7 +151,8 @@ struct StripRender {
     // Per insert, the edge going into its sidechain (aux) input, if any (-1:
     // none); empty if none has one.
     std::vector<int> sidechains;
-    // The edges leaving it after one of its devices (EdgeRender::Tap::AfterDevice), by device.
+    // The edges leaving it after one of its devices (EdgeRender::Tap::AfterDevice), by
+    // device: those before its first device (tapDevice -1) first.
     std::vector<int> deviceTaps;
 };
 
@@ -180,8 +181,8 @@ struct EdgeState {
 // (post-fader): it isn't summed, but heard instead of the track's clips while
 // the track is monitored (InputEdge), and recorded; it isn't delay-compensated.
 // A sidechain goes into one device of its destination (a track's, or the
-// master's), into its aux input: tapped after the source's fader, before it, or
-// after one of its devices, and lined up with the destination's signal at that
+// master's), into its aux input: tapped after the source's fader, before it,
+// after one of its devices or before all of them, and lined up with the destination's signal at that
 // device. It isn't heard on its own, so the source's mute (and solo) silence it
 // only after the fader.
 struct EdgeRender {
@@ -192,7 +193,7 @@ struct EdgeRender {
     int to = -1;    // the snapshot track it goes into; -1: the master
     Kind kind = Kind::Output;
     Tap tap = Tap::PostFader;
-    int tapDevice = -1;  // AfterDevice: the source's insert it is taken after
+    int tapDevice = -1;  // AfterDevice: the source's insert it is taken after (-1: before the first)
     int compensation = 0;              // samples it is delayed to line up with the latest edge into `to`
     std::shared_ptr<DelayLine> delay;  // for the live renderer (offline renders bring their own)
     std::shared_ptr<EdgeState> state;  // never null in an engine's snapshot
