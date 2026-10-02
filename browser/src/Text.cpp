@@ -7,7 +7,7 @@
 #include <windows.h>
 #endif
 
-namespace gil::browser {
+namespace sub::browser {
 
 namespace {
 
@@ -265,4 +265,4 @@ std::string ntLower(std::wstring_view s) {
 std::string ntLower(std::wstring_view s) { return pyLower(toUtf8(s)); }
 #endif
 
-}  // namespace gil::browser
+}  // namespace sub::browser

@@ -14,7 +14,7 @@
 struct ma_context;
 struct ma_device;
 
-namespace gil {
+namespace sub {
 
 class WasapiBackend final : public AudioBackend {
 public:
@@ -47,4 +47,4 @@ private:
     int64_t sampleTime_ = 0;
 };
 
-}  // namespace gil
+}  // namespace sub

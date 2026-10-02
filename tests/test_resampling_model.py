@@ -7,11 +7,11 @@ taking it all (through the bridge)."""
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio import _engine as ge
-from gilstudio.model.automation import MASTER
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.project import Project
-from gilstudio.model.serialization import load_into, project_to_dict
+from substation import _engine as ge
+from substation.model.automation import MASTER
+from substation.model.editor import ProjectEditor
+from substation.model.project import Project
+from substation.model.serialization import load_into, project_to_dict
 
 
 @pytest.fixture
@@ -150,7 +150,7 @@ def test_inputs_are_saved_and_loaded(editor):
 
 
 def test_the_engine_takes_inputs(app):
-    from gilstudio.audio.engine_bridge import EngineBridge
+    from substation.audio.engine_bridge import EngineBridge
 
     engine = ge.Engine()
     project = Project()

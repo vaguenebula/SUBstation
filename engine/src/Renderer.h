@@ -100,7 +100,7 @@
 #include "Snapshot.h"
 #include "Transport.h"
 
-namespace gil {
+namespace sub {
 
 class Renderer {
 public:
@@ -397,4 +397,4 @@ private:
     int64_t previewPosition_ = 0;
 };
 
-}  // namespace gil
+}  // namespace sub

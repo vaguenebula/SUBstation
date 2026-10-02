@@ -1,4 +1,4 @@
-"""Application entry point: `python -m gilstudio [project.gilproj]`."""
+"""Application entry point: `python -m substation [project.gilproj]`."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _set_windows_app_id() -> None:
     if sys.platform == "win32":
         import ctypes
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GILStudio.DAW")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SUBstation.DAW")
 
 
 def main(argv: list[str] | None = None) -> int:

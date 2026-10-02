@@ -125,13 +125,13 @@ _MONITOR_MODES = {"off": ge.MonitorMode.OFF, "in": ge.MonitorMode.IN, "auto": ge
 
 def recordings_folder(project: Project) -> Path:
     """Where takes go: the project's "Recordings" folder once it is saved,
-    else GILSTUDIO_RECORDINGS or the user's Music folder."""
+    else SUBSTATION_RECORDINGS or the user's Music folder."""
     if project.path is not None:
         return Path(project.path).parent / "Recordings"
-    if os.environ.get("GILSTUDIO_RECORDINGS"):
-        return Path(os.environ["GILSTUDIO_RECORDINGS"])
+    if os.environ.get("SUBSTATION_RECORDINGS"):
+        return Path(os.environ["SUBSTATION_RECORDINGS"])
     music = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MusicLocation) or str(Path.home())
-    return Path(music) / "GIL Studio" / "Recordings"
+    return Path(music) / "SUBstation" / "Recordings"
 
 
 def take_path(folder: Path, track_name: str, when: datetime) -> Path:

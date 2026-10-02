@@ -12,7 +12,7 @@
 #include <vector>
 #include <xmmintrin.h>
 
-namespace gil {
+namespace sub {
 
 // Enables flush-to-zero / denormals-are-zero for the current scope. Denormal
 // floats make recursive DSP (filters, reverb tails, plugins) extremely slow.
@@ -183,4 +183,4 @@ private:
     std::atomic<uint64_t> head_{0};
 };
 
-}  // namespace gil
+}  // namespace sub

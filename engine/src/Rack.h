@@ -11,7 +11,7 @@
 
 #include "Processor.h"
 
-namespace gil {
+namespace sub {
 
 class RackProcessor final : public Processor {
 public:
@@ -35,4 +35,4 @@ private:
     std::atomic<int> latency_{0};
 };
 
-}  // namespace gil
+}  // namespace sub

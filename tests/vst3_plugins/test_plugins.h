@@ -7,7 +7,7 @@
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 
-namespace gil_test {
+namespace sub_test {
 
 inline const Steinberg::FUID kSynthProcessorUID(0x6A1C0D5E, 0x3B7F4E21, 0x9C8D2A10, 0x5E4F7B01);
 inline const Steinberg::FUID kSynthControllerUID(0x6A1C0D5E, 0x3B7F4E21, 0x9C8D2A10, 0x5E4F7B02);
@@ -22,11 +22,11 @@ inline bool lastValue(Steinberg::Vst::IParamValueQueue* queue, Steinberg::Vst::P
     return points > 0 && queue->getPoint(points - 1, offset, value) == Steinberg::kResultTrue;
 }
 
-// GIL Test Effect (test_effect.cpp).
+// SUB Test Effect (test_effect.cpp).
 Steinberg::FUnknown* createTestEffect(void*);
 extern const wchar_t* const kEffectViewClass;
 
-// GIL Test Sidechain (test_sidechain.cpp).
+// SUB Test Sidechain (test_sidechain.cpp).
 Steinberg::FUnknown* createTestSidechain(void*);
 
-}  // namespace gil_test
+}  // namespace sub_test

@@ -19,11 +19,11 @@ HALF_LIFE_DAYS = 30.0  # a use counts half as much after this long
 
 
 def library_path() -> Path:
-    override = os.environ.get("GILSTUDIO_LIBRARY")
+    override = os.environ.get("SUBSTATION_LIBRARY")
     if override:
         return Path(override)
     base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    return base / "GIL Studio" / "library.json"
+    return base / "SUBstation" / "library.json"
 
 
 class Library:

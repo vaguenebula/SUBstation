@@ -9,7 +9,7 @@
 #include "builtin/BuiltinRegistry.h"
 #include "plugins/Vst3Format.h"
 
-namespace gil {
+namespace sub {
 
 // ---------------------------------------------------------------------------
 // Device chains
@@ -497,4 +497,4 @@ std::vector<ProcessorEventRecord> Engine::takeProcessorEvents() {
     return records;
 }
 
-}  // namespace gil
+}  // namespace sub

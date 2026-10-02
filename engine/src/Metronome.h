@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace gil {
+namespace sub {
 
 class Metronome {
 public:
@@ -24,4 +24,4 @@ private:
     size_t voicePos_ = 0;
 };
 
-}  // namespace gil
+}  // namespace sub

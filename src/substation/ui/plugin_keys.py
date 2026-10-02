@@ -24,7 +24,7 @@ from PySide6.QtCore import QAbstractNativeEventFilter, QKeyCombination, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QWidget
 
-EDITOR_WINDOW_CLASS = "GILStudioPluginEditor"  # EditorWindow.cpp's kWindowClass
+EDITOR_WINDOW_CLASS = "SUBstationPluginEditor"  # EditorWindow.cpp's kWindowClass
 
 WM_KEYDOWN = 0x0100
 WM_SYSKEYDOWN = 0x0104

@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 from PySide6.QtTest import QTest
 
-from gilstudio.ui.device_editors import editor_for
-from gilstudio.ui.device_editors.compressor import CompressorWidget
-from gilstudio.ui.device_panel import DeviceWidget, device_height
+from substation.ui.device_editors import editor_for
+from substation.ui.device_editors.compressor import CompressorWidget
+from substation.ui.device_panel import DeviceWidget, device_height
 
 from .conftest import SAMPLE_RATE, write_wav
 
@@ -67,9 +67,9 @@ def _press(widget, x, y=40):
 
 
 def test_sampler_editor_loads_a_sample_undoably(window, tmp_path):
-    from gilstudio.model import device_state
-    from gilstudio.model.project import Note
-    from gilstudio.ui.device_editors.sampler import SamplerWidget
+    from substation.model import device_state
+    from substation.model.project import Note
+    from substation.ui.device_editors.sampler import SamplerWidget
 
     t = np.arange(SAMPLE_RATE) / SAMPLE_RATE
     path = str(write_wav(tmp_path / "tone.wav", 0.5 * np.sin(2 * np.pi * 440 * t)))
@@ -116,8 +116,8 @@ def test_sampler_markers_drop_and_saving(window, tmp_path):
     from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
     from PySide6.QtGui import QDropEvent
 
-    from gilstudio.model import device_state
-    from gilstudio.model.serialization import load_project, save_project
+    from substation.model import device_state
+    from substation.model.serialization import load_project, save_project
 
     path = str(write_wav(tmp_path / "dc.wav", np.full((SAMPLE_RATE, 2), 0.5)))
     track, device, widget = _sampler(window)

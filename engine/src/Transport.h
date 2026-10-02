@@ -11,7 +11,7 @@
 #include "MidiInput.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 
 struct TransportCommand {
     enum class Type : uint8_t { Play, Stop, Locate };
@@ -72,4 +72,4 @@ struct SharedState {
     }
 };
 
-}  // namespace gil
+}  // namespace sub

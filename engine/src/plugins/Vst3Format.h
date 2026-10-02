@@ -1,5 +1,5 @@
 #pragma once
-// VST3 hosting: the host context plug-ins see ("GIL Studio"), loaded modules
+// VST3 hosting: the host context plug-ins see ("SUBstation"), loaded modules
 // (shared by all instances from the same file and unloaded with the last one),
 // scanning and instantiation.
 
@@ -12,7 +12,7 @@
 #include "plugins/PluginFormat.h"
 #include "public.sdk/source/vst/hosting/module.h"
 
-namespace gil::vst3 {
+namespace sub::vst3 {
 
 class Vst3Format final : public PluginFormat {
 public:
@@ -32,4 +32,4 @@ private:
     std::map<std::string, std::weak_ptr<VST3::Hosting::Module>> modules_;  // by normalised path
 };
 
-}  // namespace gil::vst3
+}  // namespace sub::vst3

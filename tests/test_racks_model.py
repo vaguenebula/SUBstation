@@ -10,11 +10,11 @@ import numpy as np
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio import _engine as ge
-from gilstudio.model import automation
-from gilstudio.model.automation import AutomationPoint
-from gilstudio.model.editor import ProjectEditor, device_is_instrument, device_name
-from gilstudio.model.project import (
+from substation import _engine as ge
+from substation.model import automation
+from substation.model.automation import AutomationPoint
+from substation.model.editor import ProjectEditor, device_is_instrument, device_name
+from substation.model.project import (
     MAX_RACK_DEPTH,
     PLUGIN_KIND,
     RACK_KIND,
@@ -27,7 +27,7 @@ from gilstudio.model.project import (
     iter_devices,
     macro_param,
 )
-from gilstudio.model.serialization import (
+from substation.model.serialization import (
     ProjectFileError,
     device_to_preset,
     load_into,
@@ -280,7 +280,7 @@ def test_presets_load_as_new_devices(editor, tmp_path):
 
 @pytest.fixture
 def bridged(app):
-    from gilstudio.audio.engine_bridge import EngineBridge
+    from substation.audio.engine_bridge import EngineBridge
 
     engine = ge.Engine()
     engine.set_clip_fade_ms(0)
@@ -294,7 +294,7 @@ def bridged(app):
 
 
 def noise_track(editor, bridge, make_wav, seed=1):
-    from gilstudio.model.project import Clip
+    from substation.model.project import Clip
 
     path = make_wav(np.random.default_rng(seed).uniform(-0.5, 0.5, (SAMPLE_RATE, 2)))
     bridge.engine.load_source(path)
@@ -401,7 +401,7 @@ def test_macros_reach_the_engine(bridged, make_wav, uids_effect):
     fx = editor.add_device(track.id, PLUGIN_KIND, plugin=uids_effect)
     rack = editor.group_devices(track.id, [fx.id])
     pid = bridge.engine_device_id(track.id, fx.id)
-    gain = engine.processor_params(pid)[0]  # GIL Test Effect's gain (0..1: 0..2 times)
+    gain = engine.processor_params(pid)[0]  # SUB Test Effect's gain (0..1: 0..2 times)
     editor.map_macro(track.id, rack.id, 0, fx.id, gain.id)
     editor.set_macro(track.id, rack.id, 0, 0.25)
     assert engine.processor_param(pid, 0) == pytest.approx(gain.from_normalized(0.25))
@@ -413,8 +413,8 @@ def test_macros_reach_the_engine(bridged, make_wav, uids_effect):
 def uids_effect():
     if not TEST_PLUGINS.exists():
         pytest.skip("test plug-ins not built")
-    uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "GIL Test Effect")
-    return PluginRef(format="VST3", uid=uid, name="GIL Test Effect", path=str(TEST_PLUGINS))
+    uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "SUB Test Effect")
+    return PluginRef(format="VST3", uid=uid, name="SUB Test Effect", path=str(TEST_PLUGINS))
 
 
 def test_a_saved_rack_loads_and_renders_the_same(bridged, make_wav, uids_effect, tmp_path):

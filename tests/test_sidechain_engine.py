@@ -3,20 +3,20 @@ signal, after its fader, before it, before its devices or after one of them; lin
 the signal at the device sample for sample, whatever the latency before the tap
 and on the device's own track (the sidechain is delayed, or the track's signal
 is, before the device); cycles refused; the source going; mute and solo.
-Rendered offline with GIL Test Sidechain (its output: its input plus its
+Rendered offline with SUB Test Sidechain (its output: its input plus its
 sidechain), so no audio device is needed."""
 
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import SAMPLE_RATE, TEST_PLUGINS
 
 SPB = SAMPLE_RATE // 2  # samples per beat at 120 BPM
 PLUGINS = str(TEST_PLUGINS)
-FX_GAIN, FX_LATENCY = 0, 1  # GIL Test Effect's parameters
-KEY_SILENT = 0  # GIL Test Sidechain's (read-only)
+FX_GAIN, FX_LATENCY = 0, 1  # SUB Test Effect's parameters
+KEY_SILENT = 0  # SUB Test Sidechain's (read-only)
 CLICK = 0.25
 
 pytestmark = pytest.mark.skipif(not TEST_PLUGINS.exists(), reason="test plug-ins not built")
@@ -52,8 +52,8 @@ def clip_track(engine, path, start_beat=1.0, output=None, seconds=1000 / SAMPLE_
 
 
 def effect(engine, uids, track, latency=0, gain=1.0):
-    """GIL Test Effect: `gain` times its input, `latency` samples late."""
-    pid = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Effect"])
+    """SUB Test Effect: `gain` times its input, `latency` samples late."""
+    pid = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["SUB Test Effect"])
     engine.set_processor_param(pid, FX_GAIN, gain / 2)  # (0..1 is 0..2 times)
     engine.set_processor_param(pid, FX_LATENCY, latency)  # (in steps: samples)
     engine.idle()  # the plug-in asked for a restart to change its latency
@@ -62,8 +62,8 @@ def effect(engine, uids, track, latency=0, gain=1.0):
 
 
 def keyed(engine, uids, track):
-    """GIL Test Sidechain on a track (its output: its input plus its sidechain)."""
-    return engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Sidechain"])
+    """SUB Test Sidechain on a track (its output: its input plus its sidechain)."""
+    return engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["SUB Test Sidechain"])
 
 
 def render(engine, beats=2.0):

@@ -10,13 +10,13 @@ import os
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import SAMPLE_RATE, TEST_PLUGINS
 
 SPB = SAMPLE_RATE // 2  # samples per beat at 120 BPM
 PLUGINS = str(TEST_PLUGINS)
-FX_GAIN, FX_LATENCY = 0, 1  # GIL Test Effect's parameters
+FX_GAIN, FX_LATENCY = 0, 1  # SUB Test Effect's parameters
 # Workers run whatever the computer's cores (oversubscribed on fewer).
 THREADS = 4
 
@@ -72,7 +72,7 @@ def utility(engine, track, gain_db):
 
 
 def latent_effect(engine, uids, track, latency, gain=1.0):
-    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Effect"])
+    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["SUB Test Effect"])
     engine.set_processor_param(effect, FX_LATENCY, latency)
     engine.set_processor_param(effect, FX_GAIN, gain)
     engine.idle()  # the plug-in asked for a restart to change its latency
@@ -252,14 +252,14 @@ def test_random_graphs_with_inputs_render_the_same_on_any_threads(engine, make_w
 
 
 def add_sidechains(engine, rng, uids, tracks):
-    """GIL Test Sidechain on some tracks (and the master), keyed at random by
+    """SUB Test Sidechain on some tracks (and the master), keyed at random by
     others: after their fader, before it or after one of their devices (latent
     ones too). Those that would close a cycle are refused."""
     keyed = 0
     for consumer in [ge.MASTER, *tracks]:
         if rng.random() < (0.7 if consumer == ge.MASTER else 0.35):
             pid = engine.add_plugin_processor(engine.track_chain(consumer), "VST3", PLUGINS,
-                                              uids["GIL Test Sidechain"], int(rng.integers(0, 3)) - 1)
+                                              uids["SUB Test Sidechain"], int(rng.integers(0, 3)) - 1)
             if consumer != ge.MASTER and rng.random() < 0.3:
                 latent_effect(engine, uids, consumer, int(rng.integers(1, 400)))  # after it
             source = int(rng.choice(tracks))

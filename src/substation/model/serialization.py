@@ -448,9 +448,9 @@ def _warp_mode(name) -> str:
 
 def load_into(project: Project, data: dict, project_file: Path | None = None) -> None:
     if data.get("format") != FORMAT:
-        raise ProjectFileError("Not a GIL Studio project")
+        raise ProjectFileError("Not a SUBstation project")
     if int(data.get("version", 0)) > VERSION:
-        raise ProjectFileError("This project was saved by a newer version of GIL Studio")
+        raise ProjectFileError("This project was saved by a newer version of SUBstation")
     num, den = data.get("time_signature", [4, 4])
     loop = data.get("loop", {})
     tracks = tracks_from_dict(data, project_file)
@@ -492,10 +492,10 @@ def preset_device(data: dict) -> Device:
     """A preset's device, new: fresh ids for it and everything in it. Raises
     ProjectFileError for something that isn't a preset."""
     if not isinstance(data, dict) or data.get("format") != PRESET_FORMAT:
-        raise ProjectFileError("Not a GIL Studio preset")
+        raise ProjectFileError("Not a SUBstation preset")
     try:
         if int(data.get("version", 0)) > PRESET_VERSION:
-            raise ProjectFileError("This preset was saved by a newer version of GIL Studio")
+            raise ProjectFileError("This preset was saved by a newer version of SUBstation")
         device = _device(data["device"])
         if rack_height(device) > MAX_RACK_DEPTH:
             raise ProjectFileError("The preset nests racks too deep")

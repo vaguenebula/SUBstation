@@ -7,7 +7,7 @@
 #include "PathUtils.h"
 #include "miniaudio.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 // RAII wrapper so every error path uninitialises the decoder.
@@ -165,4 +165,4 @@ void AudioSource::buildPeaks() {
     }
 }
 
-}  // namespace gil
+}  // namespace sub

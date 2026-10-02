@@ -4,7 +4,7 @@
 
 #include "Text.h"
 
-namespace gil::browser {
+namespace sub::browser {
 
 std::shared_ptr<const FolderFiles> FolderFiles::make(std::vector<Name> names) {
     auto out = std::shared_ptr<FolderFiles>(new FolderFiles());
@@ -32,7 +32,7 @@ std::shared_ptr<const FolderFiles> FolderFiles::make(std::vector<Name> names) {
                 f.fold = add(fold);
                 f.foldLen = static_cast<uint16_t>(fold.size());
             }
-            const std::string nt = gil::browser::ntLower(toWide(n.name));
+            const std::string nt = sub::browser::ntLower(toWide(n.name));
             if (nt != n.lower) {
                 f.ntLower = add(nt);
                 f.ntLowerLen = static_cast<uint16_t>(nt.size());
@@ -97,4 +97,4 @@ int64_t Result::find(Kind kind, std::string_view identity) const {
     return -1;
 }
 
-}  // namespace gil::browser
+}  // namespace sub::browser

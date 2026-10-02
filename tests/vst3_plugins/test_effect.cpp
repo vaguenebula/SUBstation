@@ -1,4 +1,4 @@
-// GIL Test Effect: see test_plugins.cpp.
+// SUB Test Effect: see test_plugins.cpp.
 
 // First, so that its setState renaming applies (see test_plugins.h).
 #include "public.sdk/source/vst/vstsinglecomponenteffect.h"
@@ -22,9 +22,9 @@ using namespace Steinberg::Vst;
 
 extern HINSTANCE ghInst;  // this module (dllmain.cpp)
 
-namespace gil_test {
+namespace sub_test {
 
-const wchar_t* const kEffectViewClass = L"GILTestEffectView";
+const wchar_t* const kEffectViewClass = L"SUBTestEffectView";
 
 enum EffectParam : ParamID { kFxGain = 0, kFxLatency, kFxBypass };
 constexpr int32 kMaxLatency = 4096;
@@ -181,7 +181,7 @@ public:
             wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(GRAY_BRUSH));
             RegisterClassW(&wc);
         }
-        hwnd_ = CreateWindowExW(0, kEffectViewClass, L"GIL Test Effect", WS_CHILD | WS_VISIBLE, 0, 0, rect.getWidth(),
+        hwnd_ = CreateWindowExW(0, kEffectViewClass, L"SUB Test Effect", WS_CHILD | WS_VISIBLE, 0, 0, rect.getWidth(),
                                 rect.getHeight(), static_cast<HWND>(systemWindow), nullptr, ghInst, nullptr);
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     }
@@ -220,4 +220,4 @@ IPlugView* PLUGIN_API TestEffect::createView(FIDString name) {
 
 FUnknown* createTestEffect(void*) { return static_cast<IAudioProcessor*>(new TestEffect); }
 
-}  // namespace gil_test
+}  // namespace sub_test

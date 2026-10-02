@@ -11,9 +11,9 @@ from datetime import UTC
 import numpy as np
 import pytest
 
-from gilstudio.audio.engine_bridge import recordings_folder, take_path
-from gilstudio.audio.settings import AudioSettings, record_quantize
-from gilstudio.model.project import MidiInput
+from substation.audio.engine_bridge import recordings_folder, take_path
+from substation.audio.settings import AudioSettings, record_quantize
+from substation.model.project import MidiInput
 
 from .conftest import TEST_ASIO_NAME
 from .test_asio import (  # noqa: F401 - skipped without ASIO
@@ -38,7 +38,7 @@ def driver():
 @pytest.fixture
 def studio(window, driver, tmp_path, monkeypatch):
     """The main window playing through the test driver (its settings saved, as Preferences would)."""
-    monkeypatch.setenv("GILSTUDIO_RECORDINGS", str(tmp_path / "Recordings"))
+    monkeypatch.setenv("SUBSTATION_RECORDINGS", str(tmp_path / "Recordings"))
     settings = AudioSettings("ASIO", TEST_ASIO_NAME, RATE, BUFFER)
     assert window.bridge.open_device(settings) is None
     settings.save()
@@ -260,7 +260,7 @@ def test_record_midi(studio, app, driver):
 
 
 def test_preferences_list_the_midi_inputs(window):
-    from gilstudio.ui.dialogs import PreferencesDialog
+    from substation.ui.dialogs import PreferencesDialog
 
     dialog = PreferencesDialog(window.bridge, window)
     tabs = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]

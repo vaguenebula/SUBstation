@@ -8,7 +8,7 @@
 #include "PathUtils.h"
 #include "miniaudio.h"
 
-namespace gil {
+namespace sub {
 
 // ---------------------------------------------------------------------------
 // SampleRing
@@ -302,4 +302,4 @@ void MidiRecordingTake::collect() {
     }
 }
 
-}  // namespace gil
+}  // namespace sub

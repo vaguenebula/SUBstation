@@ -15,20 +15,20 @@
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 #include "public.sdk/source/vst/utility/stringconvert.h"
 
-namespace gil::vst3 {
+namespace sub::vst3 {
 namespace {
 
 // What plug-ins see of us (IHostApplication, and the interfaces we support).
-class GilHostApplication final : public Steinberg::Vst::HostApplication {
+class SubHostApplication final : public Steinberg::Vst::HostApplication {
 public:
     Steinberg::tresult PLUGIN_API getName(Steinberg::Vst::String128 name) override {
-        return Steinberg::Vst::StringConvert::convert("GIL Studio", name) ? Steinberg::kResultTrue
+        return Steinberg::Vst::StringConvert::convert("SUBstation", name) ? Steinberg::kResultTrue
                                                                            : Steinberg::kInternalError;
     }
 };
 
 Steinberg::FUnknown* hostContext() {
-    static auto* host = new GilHostApplication;  // never freed: plug-ins may keep it until they unload
+    static auto* host = new SubHostApplication;  // never freed: plug-ins may keep it until they unload
     return host;
 }
 
@@ -131,4 +131,4 @@ std::shared_ptr<Processor> Vst3Format::instantiate(const std::string& path, cons
     throw std::runtime_error(utf8(pathFromUtf8(path).filename()) + " does not contain this plug-in any more.");
 }
 
-}  // namespace gil::vst3
+}  // namespace sub::vst3

@@ -3,9 +3,9 @@ from dataclasses import replace
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio.model import edits
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.project import Clip, Project, new_id
+from substation.model import edits
+from substation.model.editor import ProjectEditor
+from substation.model.project import Clip, Project, new_id
 
 TEMPO = 120.0  # 1 beat = 0.5 s
 
@@ -344,7 +344,7 @@ def test_track_input_and_monitoring_are_undoable_arming_is_not(editor):
 
 
 def test_recorded_takes_become_clips_replacing_what_was_under_them(editor):
-    from gilstudio.model.editor import RecordedTake
+    from substation.model.editor import RecordedTake
 
     project = editor.project
     track = editor.add_audio_track()
@@ -422,7 +422,7 @@ def test_paste_onto_another_kind_of_track_goes_back_where_it_came_from(editor):
 
 
 def test_copied_automation_comes_along_unless_locked(editor):
-    from gilstudio.model.automation import MIXER_VOLUME, AutomationPoint
+    from substation.model.automation import MIXER_VOLUME, AutomationPoint
 
     t1 = editor.add_audio_track()
     t2 = editor.add_audio_track()

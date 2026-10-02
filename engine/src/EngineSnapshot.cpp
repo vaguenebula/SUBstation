@@ -9,7 +9,7 @@
 #include "Rack.h"
 #include "Routing.h"
 
-namespace gil {
+namespace sub {
 
 // ---------------------------------------------------------------------------
 // Snapshot building
@@ -444,4 +444,4 @@ void Engine::ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>
     }
 }
 
-}  // namespace gil
+}  // namespace sub

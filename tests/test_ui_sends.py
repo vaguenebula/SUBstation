@@ -5,9 +5,9 @@ pre/post-fader tap, send automation lanes, and deleting a return."""
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 
-from gilstudio.model import automation
-from gilstudio.model.project import Send
-from gilstudio.model.serialization import load_into, project_to_dict
+from substation.model import automation
+from substation.model.project import Send
+from substation.model.serialization import load_into, project_to_dict
 
 
 def press_key(window, key, modifiers=Qt.KeyboardModifier.NoModifier) -> None:

@@ -6,7 +6,7 @@
 
 #include "Routing.h"
 
-namespace gil {
+namespace sub {
 
 // ---------------------------------------------------------------------------
 // Tracks
@@ -278,4 +278,4 @@ void Engine::setTrackAutomation(uint32_t trackId, const std::vector<AutomationLa
     rebuildSnapshotLocked();
 }
 
-}  // namespace gil
+}  // namespace sub

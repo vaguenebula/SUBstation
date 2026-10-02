@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace gil::browser {
+namespace sub::browser {
 
 enum class Kind : uint8_t { Audio = 0, Plugin = 1, Device = 2 };
 
@@ -143,4 +143,4 @@ struct Result {
     int64_t find(Kind kind, std::string_view identity) const;
 };
 
-}  // namespace gil::browser
+}  // namespace sub::browser

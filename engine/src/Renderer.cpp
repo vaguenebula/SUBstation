@@ -4,7 +4,7 @@
 #include <chrono>
 #include <cmath>
 
-namespace gil {
+namespace sub {
 
 namespace {
 
@@ -1328,4 +1328,4 @@ void Renderer::mixPreview(SharedState& shared, int frames) noexcept {
     }
 }
 
-}  // namespace gil
+}  // namespace sub

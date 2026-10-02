@@ -31,7 +31,7 @@
 
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 
 // The rings' indices sit on separate cache lines (MSVC warns about the padding).
 #ifdef _MSC_VER
@@ -229,4 +229,4 @@ private:
     std::thread writer_;
 };
 
-}  // namespace gil
+}  // namespace sub

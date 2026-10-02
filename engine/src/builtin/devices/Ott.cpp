@@ -14,7 +14,7 @@
 #include "builtin/BuiltinRegistry.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 class OttProcessor final : public BuiltinProcessor {
@@ -198,6 +198,6 @@ private:
 
 }  // namespace
 
-GIL_REGISTER_BUILTIN(OttProcessor, AudioEffect);
+SUB_REGISTER_BUILTIN(OttProcessor, AudioEffect);
 
-}  // namespace gil
+}  // namespace sub

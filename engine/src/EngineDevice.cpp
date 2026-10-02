@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <thread>
 
-namespace gil {
+namespace sub {
 
 // ---------------------------------------------------------------------------
 // Device
@@ -207,4 +207,4 @@ void Engine::waitForCallbackLocked() {
     }
 }
 
-}  // namespace gil
+}  // namespace sub

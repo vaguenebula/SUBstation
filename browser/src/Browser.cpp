@@ -1,6 +1,6 @@
 #include "Browser.h"
 
-namespace gil::browser {
+namespace sub::browser {
 
 Browser::Browser(std::wstring store, Limits limits)
     : indexer_(std::move(store), std::move(limits), [this] { event_.set(); }) {
@@ -101,4 +101,4 @@ void Browser::searchLoop() {
     }
 }
 
-}  // namespace gil::browser
+}  // namespace sub::browser

@@ -1,6 +1,6 @@
 import pytest
 
-from gilstudio.model.timebase import (
+from substation.model.timebase import (
     TimeSignature,
     beats_to_seconds,
     format_bar_label,

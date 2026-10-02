@@ -11,9 +11,9 @@ from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
-from gilstudio import _engine as ge
-from gilstudio.audio.engine_bridge import clip_desc
-from gilstudio.ui.clip_view import WARP_MODES
+from substation import _engine as ge
+from substation.audio.engine_bridge import clip_desc
+from substation.ui.clip_view import WARP_MODES
 
 from .conftest import SAMPLE_RATE, write_wav
 
@@ -213,7 +213,7 @@ def test_builtin_devices_in_browser(window, three_tracks):
     from PySide6.QtCore import QPointF
     from PySide6.QtGui import QDropEvent
 
-    from gilstudio.ui.browser.browser_models import device_kinds
+    from substation.ui.browser.browser_models import device_kinds
 
     browser, devices = window.browser, window.devices
     tracks = window.project.tracks
@@ -323,7 +323,7 @@ def test_find_searches_all(window, tmp_path):
 
 
 def select_scope(browser, scope: tuple) -> None:
-    from gilstudio.ui.browser.browser_panel import ROLE_SCOPE
+    from substation.ui.browser.browser_panel import ROLE_SCOPE
 
     sidebar = browser.sidebar
     items = [sidebar.topLevelItem(i) for i in range(sidebar.topLevelItemCount())]
@@ -861,7 +861,7 @@ def test_dropped_loop_is_set_up_in_the_same_undo_step(window, tmp_path):
     from PySide6.QtCore import QMimeData, QPointF, QUrl
     from PySide6.QtGui import QDragMoveEvent, QDropEvent
 
-    from gilstudio.model.keys import Key
+    from substation.model.keys import Key
 
     window.editor.set_key(Key(0))  # C major
     path = write_wav(tmp_path / "Bass_Loop_100_D.wav", tone(1.0, 330.0))
@@ -898,7 +898,7 @@ def test_header_controls_and_dialogs(window, three_tracks):
     header._rename.editingFinished.emit()
     assert window.project.track(track.id).name == "Drums"
 
-    from gilstudio.ui.dialogs import ExportDialog, PreferencesDialog
+    from substation.ui.dialogs import ExportDialog, PreferencesDialog
 
     prefs = PreferencesDialog(window.bridge, window)
     assert prefs.device.count() >= 1
@@ -910,9 +910,9 @@ def test_header_controls_and_dialogs(window, three_tracks):
 
 def test_audio_threads_preference(window):
     """Preferences > Audio Threads applies at once and is remembered (the default unless chosen)."""
-    from gilstudio import _engine as ge
-    from gilstudio.audio.settings import audio_threads
-    from gilstudio.ui.dialogs import PreferencesDialog
+    from substation import _engine as ge
+    from substation.audio.settings import audio_threads
+    from substation.ui.dialogs import PreferencesDialog
 
     engine, default = window.engine, ge.Engine.default_audio_threads()
     assert audio_threads() == 0 and engine.audio_threads == default
@@ -939,7 +939,7 @@ def test_shortcuts_from_plugin_editor(window, monkeypatch):
     import ctypes
     from ctypes import wintypes
 
-    from gilstudio.ui import plugin_keys
+    from substation.ui import plugin_keys
 
     shortcuts = window._plugin_shortcuts
     ctrl = Qt.KeyboardModifier.ControlModifier

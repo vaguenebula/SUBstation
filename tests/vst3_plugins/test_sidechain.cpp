@@ -1,4 +1,4 @@
-// GIL Test Sidechain: see test_plugins.cpp.
+// SUB Test Sidechain: see test_plugins.cpp.
 
 // First, so that its setState renaming applies (see test_plugins.h).
 #include "public.sdk/source/vst/vstsinglecomponenteffect.h"
@@ -11,7 +11,7 @@
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
-namespace gil_test {
+namespace sub_test {
 
 enum SidechainParam : ParamID { kKeySilent = 0 };
 
@@ -58,4 +58,4 @@ public:
 
 FUnknown* createTestSidechain(void*) { return static_cast<IAudioProcessor*>(new TestSidechain); }
 
-}  // namespace gil_test
+}  // namespace sub_test

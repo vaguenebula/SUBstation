@@ -13,7 +13,7 @@
 #pragma warning(pop)
 #endif
 
-namespace gil {
+namespace sub {
 namespace {
 
 // Fixed seed: the stretcher randomises some phases, and offline renders should
@@ -194,4 +194,4 @@ void renderResampled(const ClipRender& clip, int64_t position, int frames, float
     }
 }
 
-}  // namespace gil
+}  // namespace sub

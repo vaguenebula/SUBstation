@@ -4,7 +4,7 @@ Not part of the test suite. They make a synthetic sample library (`library_gen.p
 packs, categories and sub-folders of 20-150 files, names like real sample names,
 mostly WAV with some FLAC/MP3, Ableton `.asd` files and artwork beside them; the
 files are empty, the browser only reads names) once per size, in
-`%TEMP%\gil-browser-bench`, and measure on it. Nothing touches your settings, use
+`%TEMP%\sub-browser-bench`, and measure on it. Nothing touches your settings, use
 counts, index or plug-ins.
 
 ```powershell
@@ -18,8 +18,8 @@ python -m benchmarks.browser_ui_bench --size 200000 [--audio] [--json out.json] 
 - `browser_ui_bench` measures the real `BrowserPanel`: time until results are laid
   out and painted, and the longest time the UI thread couldn't run (a 1 ms timer's
   gaps). It only uses what the panel had before and after the native backend, so
-  `--code DIR` runs it against another copy of the `gilstudio` package, for example
-  the one before (`git archive 63776d3 src/gilstudio`, with the built
+  `--code DIR` runs it against another copy of the `substation` package, for example
+  the one before (`git archive 63776d3 src/substation`, with the built
   `_engine*.pyd` copied into it; the engine didn't change).
 - `--audio` plays an arrangement (8 tracks, half of them time-stretched) through the
   default output the whole time, silently (master gain 0). It reports the engine's

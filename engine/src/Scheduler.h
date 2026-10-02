@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-namespace gil {
+namespace sub {
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -125,4 +125,4 @@ private:
 #pragma warning(pop)
 #endif
 
-}  // namespace gil
+}  // namespace sub

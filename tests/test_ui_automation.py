@@ -8,8 +8,8 @@ from PySide6.QtGui import QKeySequence, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from gilstudio.model import automation
-from gilstudio.model.automation import MASTER, MIXER_PAN, MIXER_VOLUME, AutomationPoint
+from substation.model import automation
+from substation.model.automation import MASTER, MIXER_PAN, MIXER_VOLUME, AutomationPoint
 
 from .conftest import SAMPLE_RATE
 from .test_ui_smoke import drag, wait_until, write_wav

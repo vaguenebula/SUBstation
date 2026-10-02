@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from gilstudio.plugins.scanner import (
+from substation.plugins.scanner import (
     PluginScanner,
     _friendly,
     find_plugin_files,
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(not TEST_PLUGINS.exists(), reason="test plug-ins
 @pytest.fixture
 def plugins(tmp_path):
     """A copy of the test bundle, and two files that are not plug-ins."""
-    bundle = tmp_path / "VST3" / "GILTestPlugins.vst3"
+    bundle = tmp_path / "VST3" / "SUBTestPlugins.vst3"
     shutil.copytree(TEST_PLUGINS, bundle)
     junk = tmp_path / "VST3" / "Junk.vst3"
     junk.write_bytes(b"not a plug-in")
@@ -38,10 +38,10 @@ def test_scan_reads_plugins_and_caches_them(tmp_path, plugins):
     result = scanner.scan([bundle, junk], progress=lambda done, total, path: read.append((done, total, path)))
     assert read == [(0, 2, bundle), (1, 2, junk)]
     assert [(p.name, p.vendor, p.category, p.instrument) for p in result.plugins] == [
-        ("GIL Test Effect", "GIL Studio", "Fx|Delay", False),
-        ("GIL Test Mono", "GIL Studio", "Fx", False),
-        ("GIL Test Sidechain", "GIL Studio", "Fx|Dynamics", False),
-        ("GIL Test Synth", "GIL Studio", "Instrument|Synth", True),
+        ("SUB Test Effect", "SUBstation", "Fx|Delay", False),
+        ("SUB Test Mono", "SUBstation", "Fx", False),
+        ("SUB Test Sidechain", "SUBstation", "Fx|Dynamics", False),
+        ("SUB Test Synth", "SUBstation", "Instrument|Synth", True),
     ]
     assert all(p.path == bundle and p.format == "VST3" and len(p.uid) == 32 for p in result.plugins)
     [failure] = result.failures
@@ -52,7 +52,7 @@ def test_scan_reads_plugins_and_caches_them(tmp_path, plugins):
     again = scanner.scan([bundle, junk], progress=lambda *args: read.append(args))
     assert read == [] and again.plugins == result.plugins and again.failures == result.failures
     # ...changed ones are...
-    binary = os.path.join(bundle, "Contents", "x86_64-win", "GILTestPlugins.vst3")
+    binary = os.path.join(bundle, "Contents", "x86_64-win", "SUBTestPlugins.vst3")
     later = time.time() + 10
     os.utime(binary, (later, later))
     scanner.scan([bundle, junk], progress=lambda *args: read.append(args))
@@ -65,11 +65,11 @@ def test_scan_reads_plugins_and_caches_them(tmp_path, plugins):
 
 def test_a_crashing_plugin_costs_only_itself(tmp_path, plugins, monkeypatch):
     bundle, junk, more_junk = plugins
-    monkeypatch.setenv("GIL_TEST_PLUGIN_CRASH", "1")  # the test plug-ins kill the process as they load
+    monkeypatch.setenv("SUB_TEST_PLUGIN_CRASH", "1")  # the test plug-ins kill the process as they load
     result = PluginScanner(cache_file=tmp_path / "cache.json").scan([junk, bundle, more_junk])
     assert result.plugins == []
     reasons = {os.path.basename(f.path): f.reason for f in result.failures}
-    assert reasons["GILTestPlugins.vst3"] == "The plug-in crashed while loading."
+    assert reasons["SUBTestPlugins.vst3"] == "The plug-in crashed while loading."
     # The files before and after it were read, the latter by a new worker.
     assert reasons["Junk.vst3"].startswith("Windows could not load it")
     assert reasons["More Junk.vst3"].startswith("Windows could not load it")
@@ -77,12 +77,12 @@ def test_a_crashing_plugin_costs_only_itself(tmp_path, plugins, monkeypatch):
 
 def test_a_hanging_plugin_times_out(tmp_path, plugins, monkeypatch):
     bundle, junk, _ = plugins
-    monkeypatch.setenv("GIL_TEST_PLUGIN_HANG", "1")
+    monkeypatch.setenv("SUB_TEST_PLUGIN_HANG", "1")
     started = time.monotonic()
     result = PluginScanner(cache_file=tmp_path / "cache.json", timeout=2.0).scan([bundle, junk])
     assert time.monotonic() - started < 10
     reasons = {os.path.basename(f.path): f.reason for f in result.failures}
-    assert reasons == {"GILTestPlugins.vst3": "The plug-in timed out.",
+    assert reasons == {"SUBTestPlugins.vst3": "The plug-in timed out.",
                        "Junk.vst3": "Windows could not load it: it is not a 64-bit Windows plug-in."}
 
 
@@ -109,13 +109,13 @@ def test_finding_plugin_files(tmp_path, monkeypatch):
     else:
         linked = find_plugin_files([tmp_path / "B"])
         assert [os.path.relpath(f, tmp_path) for f in linked] == [os.path.join("B", "Vendor", "Linked.vst3")]
-    monkeypatch.setenv("GILSTUDIO_VST3_PATH", os.pathsep.join([str(tmp_path / "A"), str(tmp_path / "B")]))
+    monkeypatch.setenv("SUBSTATION_VST3_PATH", os.pathsep.join([str(tmp_path / "A"), str(tmp_path / "B")]))
     assert search_paths() == [tmp_path / "A", tmp_path / "B"]
     # The user's own folders come after the standard ones, each folder once.
     assert search_paths([str(tmp_path / "C"), str(tmp_path / "a") + os.sep]) == [
         tmp_path / "A", tmp_path / "B", tmp_path / "C"]
     assert search_paths([str(tmp_path / "C")]) == [tmp_path / "A", tmp_path / "B", tmp_path / "C"]
-    monkeypatch.setenv("GILSTUDIO_VST3_PATH", "")
+    monkeypatch.setenv("SUBSTATION_VST3_PATH", "")
     assert search_paths() == []
 
 

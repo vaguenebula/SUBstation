@@ -6,13 +6,13 @@ landing on the beats they were played, latency and all.
 
 Messages are sent with send_midi_input(), stamped against the audio clock the
 engine reports after the last buffer, so where each one plays is known to the
-sample. The instrument is GIL Test Synth in its DC mode: each held note adds its
+sample. The instrument is SUB Test Synth in its DC mode: each held note adds its
 velocity (/127) to every sample, which shows exactly when it starts and stops."""
 
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import TEST_PLUGINS
 from .test_recording import (  # noqa: F401 - the fixtures; skipped without ASIO
@@ -33,7 +33,7 @@ NOTE_ON, NOTE_OFF = 0x90, 0x80
 def synth(engine, track) -> int:
     if not TEST_PLUGINS.exists():
         pytest.skip("test plug-ins not built")
-    uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "GIL Test Synth")
+    uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "SUB Test Synth")
     synth = engine.add_plugin_processor(engine.track_chain(track), "VST3", str(TEST_PLUGINS), uid)
     engine.set_processor_param(synth, engine.processor_param_index(synth, "1"), 0.0)  # Wave: DC
     return synth

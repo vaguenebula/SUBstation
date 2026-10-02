@@ -1,5 +1,5 @@
 """The browser's backend alone, before (the Python index and search, kept in
-tests/browser_reference.py) and after (the native gilstudio._browser), on a
+tests/browser_reference.py) and after (the native substation._browser), on a
 large library. Every query's results are compared item by item as well.
 
     python -m benchmarks.browser_backend_bench [--size 200000] [--audio] [--json out.json]
@@ -27,18 +27,18 @@ import time
 from pathlib import Path
 
 from benchmarks.library_gen import make_library
-from gilstudio import _browser
-from gilstudio.audio.engine_bridge import AUDIO_EXTENSIONS
-from gilstudio.ui.browser.browser_models import BrowserItem
-from gilstudio.ui.browser.file_index import (
+from substation import _browser
+from substation.audio.engine_bridge import AUDIO_EXTENSIONS
+from substation.ui.browser.browser_models import BrowserItem
+from substation.ui.browser.file_index import (
     MAX_DEPTH,
     MAX_FILES,
     SearchResult,
     place_spec,
     usage_records,
 )
-from gilstudio.ui.browser.library import HALF_LIFE_DAYS, Library
-from gilstudio.ui.browser.search import place_prefix
+from substation.ui.browser.library import HALF_LIFE_DAYS, Library
+from substation.ui.browser.search import place_prefix
 from tests import browser_reference as ref
 
 QUERIES = ["", "kick", "e", "808 bass", "kick deep", "zzqx"]
@@ -66,7 +66,7 @@ def native_query(backend, text, sort, prefix="") -> tuple[object, float]:
 
 def run(size: int, audio: bool, used: int) -> dict:
     root = make_library(size)
-    tmp = Path(tempfile.mkdtemp(prefix="gil-backend-bench-"))
+    tmp = Path(tempfile.mkdtemp(prefix="sub-backend-bench-"))
     report: dict = {"size": size, "library": str(root), "used_records": used, "cpu_count": os.cpu_count()}
     playback = Playback() if audio else None
 
@@ -153,7 +153,7 @@ class Playback:
 
     def __init__(self):
         from benchmarks.browser_ui_bench import _start_playback
-        from gilstudio import _engine as ge
+        from substation import _engine as ge
 
         self.engine = ge.Engine()
         _start_playback(self.engine)

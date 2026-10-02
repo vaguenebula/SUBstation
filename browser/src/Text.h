@@ -16,7 +16,7 @@
 #include <string_view>
 #include <vector>
 
-namespace gil::browser {
+namespace sub::browser {
 
 std::string toUtf8(std::wstring_view s);
 std::wstring toWide(std::string_view s);
@@ -39,4 +39,4 @@ const char* unicodeVersion();
 // os.path.normcase() uses, so item keys come out as Python made them.
 std::string ntLower(std::wstring_view s);
 
-}  // namespace gil::browser
+}  // namespace sub::browser

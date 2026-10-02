@@ -2,12 +2,12 @@ import json
 
 import pytest
 
-from gilstudio import _browser
-from gilstudio.audio.engine_bridge import AUDIO_EXTENSIONS
-from gilstudio.model.project import PluginRef
-from gilstudio.ui.browser.browser_models import BrowserItem
-from gilstudio.ui.browser.file_index import KINDS, usage_records
-from gilstudio.ui.browser.library import HALF_LIFE_DAYS, Library
+from substation import _browser
+from substation.audio.engine_bridge import AUDIO_EXTENSIONS
+from substation.model.project import PluginRef
+from substation.ui.browser.browser_models import BrowserItem
+from substation.ui.browser.file_index import KINDS, usage_records
+from substation.ui.browser.library import HALF_LIFE_DAYS, Library
 
 DAY = 86400.0
 

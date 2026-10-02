@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <utility>
 
-namespace gil {
+namespace sub {
 
 BuiltinProcessor::BuiltinProcessor(const std::vector<ParamInfo>& infos, std::vector<DisplayInfo> displays)
     : infos_(infos), values_(std::make_unique<std::atomic<float>[]>(infos.size())), displayInfos_(std::move(displays)) {
@@ -125,4 +125,4 @@ void BuiltinProcessor::process(const ProcessContext& ctx, float* const* channels
     while (next < count) apply(changes[next++]);  // at or after the block's end
 }
 
-}  // namespace gil
+}  // namespace sub

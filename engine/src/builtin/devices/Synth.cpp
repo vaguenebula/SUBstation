@@ -13,7 +13,7 @@
 #include "builtin/BuiltinRegistry.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 class SynthProcessor final : public BuiltinProcessor {
@@ -290,6 +290,6 @@ void SynthProcessor::render(const ProcessContext& ctx, float* const* channels, i
     }
 }
 
-GIL_REGISTER_BUILTIN(SynthProcessor, Instrument);
+SUB_REGISTER_BUILTIN(SynthProcessor, Instrument);
 
-}  // namespace gil
+}  // namespace sub

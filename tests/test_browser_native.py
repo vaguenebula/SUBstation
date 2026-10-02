@@ -1,4 +1,4 @@
-"""The browser's native backend (browser/src, gilstudio._browser): that it
+"""The browser's native backend (browser/src, substation._browser): that it
 indexes, matches and orders exactly as the Python code before it did (kept in
 browser_reference.py), keeps its index up to date incrementally, and runs its
 searches off the caller's thread, latest first."""
@@ -15,18 +15,18 @@ from pathlib import Path
 
 import pytest
 
-from gilstudio import _browser
-from gilstudio.audio.engine_bridge import AUDIO_EXTENSIONS
-from gilstudio.model.project import PluginRef
-from gilstudio.ui.browser.browser_models import BrowserItem, ItemListModel
-from gilstudio.ui.browser.file_index import (
+from substation import _browser
+from substation.audio.engine_bridge import AUDIO_EXTENSIONS
+from substation.model.project import PluginRef
+from substation.ui.browser.browser_models import BrowserItem, ItemListModel
+from substation.ui.browser.file_index import (
     KINDS,
     SearchResult,
     place_spec,
     usage_records,
 )
-from gilstudio.ui.browser.library import HALF_LIFE_DAYS, Library
-from gilstudio.ui.browser.search import place_prefix
+from substation.ui.browser.library import HALF_LIFE_DAYS, Library
+from substation.ui.browser.search import place_prefix
 
 from . import browser_reference as ref
 

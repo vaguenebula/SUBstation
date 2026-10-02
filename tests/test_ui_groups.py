@@ -4,7 +4,7 @@ lane, dragging headers into and out of groups, and the device view."""
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtTest import QTest
 
-from gilstudio.model.project import Clip
+from substation.model.project import Clip
 
 
 def press_key(window, key, modifiers=Qt.KeyboardModifier.NoModifier) -> None:

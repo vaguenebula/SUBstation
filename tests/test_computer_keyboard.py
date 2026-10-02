@@ -8,8 +8,8 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit
 
-from gilstudio.audio.engine_bridge import COMPUTER_KEYBOARD
-from gilstudio.model.project import MidiInput
+from substation.audio.engine_bridge import COMPUTER_KEYBOARD
+from substation.model.project import MidiInput
 
 ON, OFF = 0x90, 0x80
 

@@ -27,7 +27,7 @@
 #include "Processor.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 
 class BuiltinProcessor : public Processor {
 public:
@@ -100,4 +100,4 @@ private:
     SourceLoader loader_;
 };
 
-}  // namespace gil
+}  // namespace sub

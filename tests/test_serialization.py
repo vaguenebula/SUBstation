@@ -2,22 +2,22 @@ import json
 
 import pytest
 
-from gilstudio.model.automation import (
+from substation.model.automation import (
     MASTER,
     MIXER_VOLUME,
     AutomationPoint,
     AutomationView,
     device_key,
 )
-from gilstudio.model.project import Clip, Device, Project, Track
-from gilstudio.model.serialization import (
+from substation.model.project import Clip, Device, Project, Track
+from substation.model.serialization import (
     ProjectFileError,
     load_into,
     load_project,
     project_to_dict,
     save_project,
 )
-from gilstudio.model.timebase import TimeSignature
+from substation.model.timebase import TimeSignature
 
 
 def make_project(audio_path: str) -> Project:

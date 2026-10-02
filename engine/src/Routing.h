@@ -34,7 +34,7 @@
 #include <functional>
 #include <vector>
 
-namespace gil {
+namespace sub {
 
 // Node `from`'s signal goes into node `to` (-1: the master).
 struct RouteEdge {
@@ -274,4 +274,4 @@ inline GraphLatencies alignGraph(const std::vector<int>& order, const std::vecto
     return result;
 }
 
-}  // namespace gil
+}  // namespace sub

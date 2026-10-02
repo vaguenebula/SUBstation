@@ -32,7 +32,7 @@
 #include "Model.h"
 #include "Platform.h"
 
-namespace gil::browser {
+namespace sub::browser {
 
 struct Limits {
     uint32_t maxFiles = 300000;  // per place
@@ -169,4 +169,4 @@ private:
     Clock::time_point saveAt_ = Clock::time_point::max();
 };
 
-}  // namespace gil::browser
+}  // namespace sub::browser

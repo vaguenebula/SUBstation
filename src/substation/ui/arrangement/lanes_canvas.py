@@ -127,7 +127,7 @@ def resize_track_by_wheel(editor: ProjectEditor, track_id: str, delta: int) -> N
     editor.set_track_height(track_id, max(MIN_TRACK_HEIGHT, min(MAX_TRACK_HEIGHT, height)))
 
 
-DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
+DEVICE_MOVE_MIME = "application/x-substation-device-move"  # track id, then device ids, a line each
 
 
 def moved_devices(mime) -> tuple[str, list[str]] | None:

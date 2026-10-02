@@ -9,7 +9,7 @@
 
 #include "Text.h"
 
-namespace gil::browser {
+namespace sub::browser {
 
 using namespace std::chrono_literals;
 
@@ -701,4 +701,4 @@ bool Indexer::load() {
     return true;
 }
 
-}  // namespace gil::browser
+}  // namespace sub::browser

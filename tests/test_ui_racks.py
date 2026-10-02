@@ -8,11 +8,11 @@ from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
 from PySide6.QtGui import QDropEvent
 from PySide6.QtTest import QTest
 
-from gilstudio.model import automation
-from gilstudio.model.project import macro_param
-from gilstudio.ui.arrangement.lanes_canvas import DEVICE_MOVE_MIME
-from gilstudio.ui.browser.browser_models import DEVICE_MIME
-from gilstudio.ui.device_panel import RackWidget
+from substation.model import automation
+from substation.model.project import macro_param
+from substation.ui.arrangement.lanes_canvas import DEVICE_MOVE_MIME
+from substation.ui.browser.browser_models import DEVICE_MIME
+from substation.ui.device_panel import RackWidget
 
 
 def drop(pos: QPoint, mime) -> QDropEvent:

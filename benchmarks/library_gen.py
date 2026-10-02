@@ -53,14 +53,14 @@ def sample_name(rng: random.Random, number: int) -> str:
 
 
 def default_root(n_audio: int, seed: int) -> Path:
-    return Path(tempfile.gettempdir()) / "gil-browser-bench" / f"lib-{n_audio}-{seed}"
+    return Path(tempfile.gettempdir()) / "sub-browser-bench" / f"lib-{n_audio}-{seed}"
 
 
 def make_library(n_audio: int, seed: int = 1, root: Path | None = None) -> Path:
     """A library of about `n_audio` audio files (and ~40 % as many other files)."""
     root = Path(root) if root is not None else default_root(n_audio, seed)
     marker = root / "LIBRARY.txt"
-    description = f"GIL Studio browser benchmark library: {n_audio} audio files, seed {seed}\n"
+    description = f"SUBstation browser benchmark library: {n_audio} audio files, seed {seed}\n"
     if marker.exists() and marker.read_text(encoding="utf-8") == description:
         return root
     rng = random.Random(seed)

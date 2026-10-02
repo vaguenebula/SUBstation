@@ -7,11 +7,11 @@ from dataclasses import replace
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio.audio.engine_bridge import note_descs
-from gilstudio.model import edits, notes
-from gilstudio.model.editor import ProjectEditor, RecordedTake
-from gilstudio.model.project import MidiClip, MidiInput, Note, Project, Track
-from gilstudio.model.serialization import (
+from substation.audio.engine_bridge import note_descs
+from substation.model import edits, notes
+from substation.model.editor import ProjectEditor, RecordedTake
+from substation.model.project import MidiClip, MidiInput, Note, Project, Track
+from substation.model.serialization import (
     ProjectFileError,
     load_project,
     project_to_dict,

@@ -22,7 +22,7 @@
 #include "Platform.h"
 #include "Search.h"
 
-namespace gil::browser {
+namespace sub::browser {
 
 class Browser {
 public:
@@ -72,4 +72,4 @@ private:
     std::thread thread_;
 };
 
-}  // namespace gil::browser
+}  // namespace sub::browser

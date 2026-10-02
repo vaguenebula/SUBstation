@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio import _engine as ge
-from gilstudio.model import automation
-from gilstudio.model.automation import AutomationPoint
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.project import Clip, Project, Send, return_letter
-from gilstudio.model.serialization import load_into, project_to_dict
+from substation import _engine as ge
+from substation.model import automation
+from substation.model.automation import AutomationPoint
+from substation.model.editor import ProjectEditor
+from substation.model.project import Clip, Project, Send, return_letter
+from substation.model.serialization import load_into, project_to_dict
 
 from .conftest import SAMPLE_RATE
 
@@ -152,7 +152,7 @@ def test_returns_and_sends_are_saved_and_loaded(editor):
 
 
 def test_the_engine_hears_returns_and_sends(app, make_wav):
-    from gilstudio.audio.engine_bridge import EngineBridge
+    from substation.audio.engine_bridge import EngineBridge
 
     engine = ge.Engine()
     engine.set_clip_fade_ms(0)

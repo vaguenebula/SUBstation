@@ -31,7 +31,7 @@ def _quiet() -> object:
 
 def main() -> int:
     answers = _quiet()
-    from gilstudio import _engine as ge
+    from substation import _engine as ge
 
     answers.write(json.dumps({"ready": True}) + "\n")
     answers.flush()

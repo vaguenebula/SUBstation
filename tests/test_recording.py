@@ -11,7 +11,7 @@ the arrangement it was recorded against."""
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import TEST_PLUGINS
 from .test_asio import (  # noqa: F401 - skipped without ASIO
@@ -25,7 +25,7 @@ from .test_asio import (  # noqa: F401 - skipped without ASIO
 RATE = 48000
 SPB = RATE // 2  # samples per beat at 120 BPM
 BUFFER = 256
-FX_LATENCY = 1  # GIL Test Effect's latency parameter
+FX_LATENCY = 1  # SUB Test Effect's latency parameter
 
 
 @pytest.fixture
@@ -60,7 +60,7 @@ def read_take(engine, take) -> np.ndarray:
 def latent_effect(engine, track, latency):
     if not TEST_PLUGINS.exists():
         pytest.skip("test plug-ins not built")
-    uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "GIL Test Effect")
+    uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "SUB Test Effect")
     effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", str(TEST_PLUGINS), uid)
     engine.set_processor_param(effect, FX_LATENCY, latency)
     engine.idle()  # the plug-in asked for a restart to change its latency

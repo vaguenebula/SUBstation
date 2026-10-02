@@ -5,7 +5,7 @@
 //
 // Hosting notes:
 //  * Scanning loads plug-in code, so the UI runs it in a child process: a
-//    crashing plug-in cannot take the DAW down (gilstudio/plugins/scanner.py).
+//    crashing plug-in cannot take the DAW down (substation/plugins/scanner.py).
 //  * Plug-ins are created, configured and destroyed on the main thread.
 //  * Main-thread work plug-ins ask for (restarts, parameter updates, editor
 //    events) is done in Engine::idle(), which the UI calls on a timer.
@@ -16,7 +16,7 @@
 
 #include "Processor.h"
 
-namespace gil {
+namespace sub {
 
 struct PluginDescription {
     std::string format;     // "VST3"
@@ -45,4 +45,4 @@ public:
                                                    double sampleRate, int maxBlockSize) = 0;
 };
 
-}  // namespace gil
+}  // namespace sub
