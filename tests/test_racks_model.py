@@ -4,6 +4,8 @@ automation of nested devices and chain faders, sidechains into devices in
 racks, undo, saving, presets (fresh ids, plug-in states, macro mappings); and
 the engine taking it all through the bridge, rendering as the model says."""
 
+import copy
+
 import numpy as np
 import pytest
 from PySide6.QtGui import QUndoStack
@@ -449,3 +451,55 @@ def test_a_saved_rack_loads_and_renders_the_same(bridged, make_wav, uids_effect,
     editor.set_macro(t2.id, r2.id, 0, 0.0)
     assert p.device(t2.id, inner_gain.id).params["gain"] == -60.0
     assert p.device(track.id, gain.id).params["gain"] == pytest.approx(-60 + 0.6 * 84)
+
+
+def test_ungrouping_layered_instruments_is_refused(editor):
+    p = editor.project
+    keys = editor.add_midi_track()
+    rack = editor.group_devices(keys.id, [keys.devices[0].id])
+    second = editor.add_rack_chain(keys.id, rack.id)
+    editor.add_device(keys.id, "synth", chain=second.id)  # two instruments: a chain has one
+    steps = editor.undo_stack.count()
+    assert editor.ungroup_rack(keys.id, rack.id) is False
+    assert editor.undo_stack.count() == steps and p.device(keys.id, rack.id).is_rack
+
+
+def test_a_device_leaving_its_rack_leaves_its_macro_mapping(editor):
+    p = editor.project
+    track, other = editor.add_audio_track(), editor.add_audio_track()
+    a, b, _c = utilities(editor, track, 3)
+    rack = editor.group_devices(track.id, [a.id, b.id])
+    editor.map_macro(track.id, rack.id, 0, a.id, "gain")
+    editor.map_macro(track.id, rack.id, 1, b.id, "gain")
+    assert editor.move_devices(track.id, [a.id], 0)  # out of the rack, onto the track's own chain
+    assert p.device(track.id, rack.id).macros == (MacroMapping(1, b.id, "gain"),)
+    editor.undo_stack.undo()
+    assert len(p.device(track.id, rack.id).macros) == 2
+    assert editor.move_devices_to_track(track.id, [b.id], other.id)  # to another track
+    assert p.device(track.id, rack.id).macros == (MacroMapping(0, a.id, "gain"),)
+
+
+@pytest.mark.parametrize("damage", [
+    {"version": "x"},
+    {"device": {"kind": "utility", "params": []}},
+    {"device": {"kind": "rack", "macros": ["x"], "chains": []}},
+])
+def test_damaged_presets_are_project_file_errors(editor, damage):
+    track = editor.add_audio_track()
+    a, b = utilities(editor, track, 2)
+    rack = editor.group_devices(track.id, [a.id, b.id])
+    with pytest.raises(ProjectFileError):
+        preset_device({**device_to_preset(rack), **damage})
+
+
+def test_presets_nesting_too_deep_are_refused(editor):
+    track = editor.add_audio_track()
+    device = editor.add_device(track.id, "utility")
+    for _ in range(MAX_RACK_DEPTH):
+        device = editor.group_devices(track.id, [device.id])
+    assert device is not None
+    data = device_to_preset(device)
+    wrapper = copy.deepcopy(data["device"])  # one more rack around the deepest allowed
+    wrapper["chains"][0]["devices"] = [data["device"]]
+    with pytest.raises(ProjectFileError, match="too deep"):
+        preset_device({**data, "device": wrapper})

@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
         self.selection = Selection(self)
         self.bridge = EngineBridge(engine, self.project, self)
         self.editor.set_param_info(self.bridge.device_param_info)  # (plug-ins' parameters, for macros)
+        self.editor.set_own_value(self.bridge.own_value)  # (what a plug-in's editor set: to undo a macro to)
         self._play_start = 0.0
 
         self.arrangement = ArrangementView(self.editor, self.selection, self.bridge)

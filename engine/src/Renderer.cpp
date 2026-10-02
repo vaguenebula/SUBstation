@@ -947,7 +947,9 @@ void Renderer::processRack(const RenderSnapshot& snap, const RackRender& rack, P
     for (const ChainRender& chain : rack.chains) {
         std::copy_n(left, frames, chainL);
         std::copy_n(right, frames, chainR);
-        if (takeResets(chain)) processChain(snap, chain, context, slices, events, chainL, chainR, frames, monitored, scratch);
+        // (Never as monitored: a chain skipping its sidechain waits would play early
+        // against the chains lined up to it by chain.compensation.)
+        if (takeResets(chain)) processChain(snap, chain, context, slices, events, chainL, chainR, frames, false, scratch);
         const bool audible = !chain.params->mute.load(std::memory_order_relaxed) &&
                              (!anySolo || chain.params->solo.load(std::memory_order_relaxed));
         applyFader(snap, *chain.params, chain.volume, chain.pan, audible, chainL, chainR, frames, chunkFlags_.live,

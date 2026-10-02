@@ -472,12 +472,16 @@ class _DeviceFrame(QFrame):
         group.setShortcut("Ctrl+G")  # (as a tip: the window's action handles the key)
         group.setShortcutVisibleInContextMenu(True)
         if self.device().is_rack:
-            ungroup = menu.addAction("Ungroup", lambda: self.editor.ungroup_rack(self.track_id, self.device_id))
+            ungroup = menu.addAction("Ungroup", self._ungroup)
             ungroup.setShortcut("Ctrl+Shift+G")
             ungroup.setShortcutVisibleInContextMenu(True)
         menu.addSeparator()
         menu.addAction("Delete", self.remove_selected)
         menu.exec(event.globalPos())
+
+    def _ungroup(self) -> None:
+        if not self.editor.ungroup_rack(self.track_id, self.device_id) and self.bridge is not None:
+            self.bridge.status_message.emit("A rack of several instruments can't be ungrouped: a chain has one.")
 
     def add_menu_actions(self, menu: QMenu) -> None:
         """Device-specific entries at the top of the right-click menu."""
@@ -1177,7 +1181,8 @@ class DevicePanel(QFrame):
         self.editor.undo_stack.beginMacro("Ungroup Rack" if len(racks) == 1 else "Ungroup Racks")
         try:
             for rack_id in racks:
-                self.editor.ungroup_rack(self.track_id, rack_id)
+                if not self.editor.ungroup_rack(self.track_id, rack_id):
+                    self.status_message.emit("A rack of several instruments can't be ungrouped: a chain has one.")
         finally:
             self.editor.undo_stack.endMacro()
         return True

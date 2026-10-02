@@ -1160,6 +1160,18 @@ class ProjectEditor(QObject):
         self.move_devices(track_id, [device_id], index + 1 if index > ids.index(device_id) else index, chain)
 
     @staticmethod
+    def _prune_macros(devices: list[Device]) -> None:
+        """Drop the macro mappings whose device isn't (any longer) inside its rack:
+        a macro moves parameters of devices in its rack."""
+        for rack in iter_devices(devices):
+            if not rack.macros:
+                continue
+            inside = device_ids_of(rack) - {rack.id}
+            kept = tuple(m for m in rack.macros if m.device_id in inside)
+            if kept != rack.macros:
+                rack.macros = kept
+
+    @staticmethod
     def _outermost(devices: list[Device], device_ids) -> list[Device]:
         """The devices of these ids (not instruments), in their order on the track,
         but those in racks among them (they go along with their rack)."""
@@ -1192,6 +1204,7 @@ class ProjectEditor(QObject):
         first = 1 if target and device_is_instrument(target[0]) else 0
         at = max(first, min(at, len(target)))
         target[at:at] = moving
+        self._prune_macros(after)  # (a device out of its rack leaves its macros)
         if after == before:
             return False
         self._push(SetDevicesCommand(self.project, track_id, before, after,
@@ -1228,6 +1241,8 @@ class ProjectEditor(QObject):
         first = 1 if target and device_is_instrument(target[0]) else 0
         at = len(target) if index is None else max(first, min(index, len(target)))
         target[at:at] = moving
+        self._prune_macros(source)
+        self._prune_macros(target_devices)
         before = {track_id: copy.deepcopy(self.project.track(track_id).devices),
                   to_track_id: copy.deepcopy(self.project.track(to_track_id).devices)}
         text = "Move Device" if len(moving) == 1 else "Move Devices"
@@ -1271,10 +1286,7 @@ class ProjectEditor(QObject):
         mappings of macros to them (in the same undo step)."""
         gone = device_ids_of_list(before) - device_ids_of_list(after)
         chains_gone = {c.id for _, c in iter_chains(before)} - {c.id for _, c in iter_chains(after)}
-        for rack in iter_devices(after):
-            kept = tuple(m for m in rack.macros if m.device_id not in gone)
-            if kept != rack.macros:
-                rack.macros = kept
+        self._prune_macros(after)
         orphans = [key for key in self.project.track(track_id).automation
                    if automation.key_device(key) in gone or automation.key_chain(key) in chains_gone]
         if not orphans:
@@ -1316,7 +1328,8 @@ class ProjectEditor(QObject):
         """Ctrl+Shift+G: a rack goes, and its chains' devices take its place, one
         chain after another (an instrument coming out goes first). The automation
         of its chains' faders and its macros go too. One undo step; False if it
-        isn't a rack."""
+        isn't a rack, or several instruments would come out of it (layered
+        instruments: a chain has just one)."""
         track = self.project.track(track_id)
         rack = find_device(track.devices, rack_id)
         if rack is None or not rack.is_rack:
@@ -1326,6 +1339,8 @@ class ProjectEditor(QObject):
         devices = chain_devices(after, container_of(after, rack_id))
         at = next(i for i, d in enumerate(devices) if d.id == rack_id)
         devices[at:at + 1] = [d for chain in devices[at].chains for d in chain.devices]
+        if sum(1 for d in devices if device_is_instrument(d)) > 1:
+            return False
         instrument = next((d for d in devices if device_is_instrument(d)), None)
         if instrument is not None and devices[0] is not instrument:
             devices.remove(instrument)
@@ -1412,6 +1427,11 @@ class ProjectEditor(QObject):
         describe(track id, device id, param id)."""
         self._describe = describe
 
+    def set_own_value(self, read: Callable[[str, str], float | None]) -> None:
+        """Where set_macro() learns what a plug-in's parameter is now, as set in
+        the plug-in's own editor (the model doesn't have it): read(owner, key)."""
+        self._read_own = read
+
     def param_info(self, track_id: str, device_id: str, param_id: str):
         device = self.project.device(track_id, device_id)
         if not device.is_plugin and not device.is_rack:
@@ -1439,7 +1459,10 @@ class ProjectEditor(QObject):
         old = {}
         for device_id, param_id in new:
             own = self.project.device(track_id, device_id).params.get(param_id)
-            if own is None:  # a plug-in's or a default value: as it was
+            read = getattr(self, "_read_own", None)
+            if own is None and read is not None:  # set in a plug-in's own editor
+                own = read(track_id, automation.device_key(device_id, param_id))
+            if own is None:  # a default value: as it was
                 info = self.param_info(track_id, device_id, param_id)
                 own = new[(device_id, param_id)] if info is None else getattr(info, "default_value",
                                                                               getattr(info, "default", 0.0))

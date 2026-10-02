@@ -31,7 +31,7 @@ from .. import theme
 from ..audio.engine_bridge import EngineBridge
 from ..model import automation
 from ..model.editor import ProjectEditor, device_name
-from ..model.project import MACRO_COUNT, Chain, Device, macro_param
+from ..model.project import MACRO_COUNT, Chain, Device, iter_chains, macro_param
 from .arrangement.track_headers import automation_state, pan_knob, volume_box
 from .widgets import Knob, ToggleButton
 from .widgets.meter import MeterWidget
@@ -218,10 +218,9 @@ class _ChainRow(QFrame):
             self.editor.rename_chain(self.track_id, self.chain_id, name)
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        self.clicked.emit(self.chain_id)
         editor, track_id, chain_id = self.editor, self.track_id, self.chain_id
         menu = QMenu(self)
-        menu.addAction("Rename", self.start_rename)
+        rename = menu.addAction("Rename", self.start_rename)
         menu.addAction("Duplicate", lambda: editor.duplicate_rack_chain(track_id, chain_id))
         menu.addAction("Delete", lambda: editor.remove_rack_chains(track_id, [chain_id]))
         menu.addSeparator()
@@ -230,7 +229,12 @@ class _ChainRow(QFrame):
         menu.addSeparator()
         menu.addAction("Show Volume Automation", lambda: editor.show_automation(track_id, volume))
         menu.addAction("Show Pan Automation", lambda: editor.show_automation(track_id, pan))
-        menu.exec(event.globalPos())
+        chosen = menu.exec(event.globalPos())
+        # Showing the chain rebuilds the panel (and this row with it): so after the menu's
+        # action, not before it; and not for a rename (it edits this row) or a deleted chain.
+        if chosen is not rename and any(c.id == chain_id for _, c in iter_chains(
+                editor.project.track(track_id).devices)):
+            self.clicked.emit(chain_id)
 
 
 class ChainList(QFrame):

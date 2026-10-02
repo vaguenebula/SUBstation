@@ -43,6 +43,7 @@ from .project import (
     GROUP_KIND,
     LEGACY_WARP_MODES,
     MACRO_COUNT,
+    MAX_RACK_DEPTH,
     MONITOR_MODES,
     POST_FADER,
     RETURN_KIND,
@@ -64,6 +65,7 @@ from .project import (
     feeds,
     iter_devices,
     new_master,
+    rack_height,
     refresh_ids,
     repair_tree,
     routing_graph,
@@ -491,11 +493,13 @@ def preset_device(data: dict) -> Device:
     ProjectFileError for something that isn't a preset."""
     if not isinstance(data, dict) or data.get("format") != PRESET_FORMAT:
         raise ProjectFileError("Not a GIL Studio preset")
-    if int(data.get("version", 0)) > PRESET_VERSION:
-        raise ProjectFileError("This preset was saved by a newer version of GIL Studio")
     try:
+        if int(data.get("version", 0)) > PRESET_VERSION:
+            raise ProjectFileError("This preset was saved by a newer version of GIL Studio")
         device = _device(data["device"])
-    except (KeyError, TypeError, ValueError) as exc:
+        if rack_height(device) > MAX_RACK_DEPTH:
+            raise ProjectFileError("The preset nests racks too deep")
+    except (KeyError, TypeError, ValueError, AttributeError, RecursionError) as exc:
         raise ProjectFileError(f"The preset is damaged: {exc}") from exc
     for inner in iter_devices([device]):
         inner.sidechain = None
