@@ -1496,7 +1496,7 @@ class DevicePanel(QFrame):
             for widget in self._current_widgets():  # a sidechain's source may have lost (or got back) its tap
                 widget.update_sidechain()
             return
-        devices = list(iter_devices(self.project.track(track_id).devices))
+        devices = self._shown_devices(self.project.track(track_id).devices)
         if not rebuild and len(self.widgets) == len(devices) and all(
                 self.widgets.get(d.id) is not None and self.widgets[d.id].source is d for d in devices):
             # The same devices in the same places (one switched on or off, a rack's macros mapped): no need to rebuild.
@@ -1588,6 +1588,20 @@ class DevicePanel(QFrame):
         self.selected = []
         self._set_selected(kept)
 
+    def _shown_chain(self, rack: Device) -> Chain:
+        """The chain a rack shows (the one last clicked, else its first)."""
+        return next((c for c in rack.chains if c.id == self._shown_chains.get(rack.id)), rack.chains[0])
+
+    def _shown_devices(self, devices: list[Device]) -> list[Device]:
+        """The devices _add_devices shows of these: those in the chain each
+        rack shows (not a folded one's), after it."""
+        shown = []
+        for device in devices:
+            shown.append(device)
+            if device.is_rack and device.chains and not self.project.is_device_folded(device.id):
+                shown += self._shown_devices(self._shown_chain(device).devices)
+        return shown
+
     def _add_devices(self, layout: QHBoxLayout, track_id: str, devices: list[Device]) -> None:
         """A chain's devices into a layout; after a rack, the chain it shows (and so on, inside)."""
         for device in devices:
@@ -1612,7 +1626,7 @@ class DevicePanel(QFrame):
             if not isinstance(widget, RackWidget) or not device.chains or widget.folded:
                 continue
             widget.chain_clicked.connect(self._show_chain)
-            chain = next((c for c in device.chains if c.id == self._shown_chains.get(device.id)), device.chains[0])
+            chain = self._shown_chain(device)
             widget.show_chain(chain.id)
             view = _ChainView(chain.id)
             self._chain_views[chain.id] = view

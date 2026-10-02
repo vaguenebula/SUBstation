@@ -182,3 +182,17 @@ def test_cut_copy_paste_and_duplicate_devices(window):
     assert copy.params["gain"] == 0.3 and panel.selected == [copy.id]
     clips = window.arrangement.lanes.clipboard
     assert clips is None  # (the clips' clipboard is another)
+
+
+def test_switching_a_device_off_beside_racks_doesnt_rebuild_the_view(window):
+    panel = window.devices
+    track, (a, b, _c) = shown_track(window)
+    rack = window.editor.group_devices(track.id, [b.id])
+    window.editor.add_device(track.id, "utility", chain=window.editor.add_rack_chain(track.id, rack.id).id)
+    for fold in (False, True):  # a chain not shown; then the rack folded
+        window.editor.set_devices_folded(track.id, [rack.id], fold)
+        widgets = dict(panel.widgets)
+        window.editor.set_device_enabled(track.id, a.id, False)
+        assert panel.widgets == widgets  # the same widgets, refreshed
+        assert not panel.widgets[a.id].source.enabled
+        window.editor.set_device_enabled(track.id, a.id, True)
