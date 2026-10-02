@@ -121,6 +121,9 @@ if (GILSTUDIO_ASIO)
     endif()
 endif()
 
+# Every built-in device is one .cpp in builtin/devices/; a new file is picked up on the next configure.
+file(GLOB BUILTIN_DEVICE_SOURCES CONFIGURE_DEPENDS engine/src/builtin/devices/*.cpp)
+
 nanobind_add_module(_engine NB_STATIC
     engine/src/bindings.cpp
     engine/src/Engine.cpp
@@ -133,8 +136,9 @@ nanobind_add_module(_engine NB_STATIC
     engine/src/Metronome.cpp
     engine/src/MidiInput.cpp
     engine/src/Warp.cpp
-    engine/src/processors/BuiltinProcessor.cpp
-    engine/src/processors/Synth.cpp
+    engine/src/builtin/BuiltinProcessor.cpp
+    engine/src/builtin/BuiltinRegistry.cpp
+    ${BUILTIN_DEVICE_SOURCES}
     engine/src/plugins/EditorWindow.cpp
     engine/src/plugins/Vst3Format.cpp
     engine/src/plugins/Vst3Processor.cpp

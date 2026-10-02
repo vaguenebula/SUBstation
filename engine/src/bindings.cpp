@@ -13,6 +13,7 @@
 
 #include "Engine.h"
 #include "plugins/Vst3Format.h"
+#include "builtin/BuiltinRegistry.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -56,7 +57,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 12;
+    m.attr("API_VERSION") = 13;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -105,6 +106,15 @@ NB_MODULE(_engine, m) {
         .def_ro("buffer_sizes", &gil::DeviceCaps::bufferSizes, "The buffer sizes it offers; empty: any.")
         .def_ro("preferred_buffer_frames", &gil::DeviceCaps::preferredBufferFrames)
         .def_ro("has_control_panel", &gil::DeviceCaps::hasControlPanel);
+
+    nb::class_<gil::BuiltinInfo>(m, "BuiltinDevice", "A built-in device type, as the registry describes it.")
+        .def_ro("id", &gil::BuiltinInfo::id, "What add_builtin_processor takes.")
+        .def_ro("name", &gil::BuiltinInfo::name)
+        .def_prop_ro("category", [](const gil::BuiltinInfo& d) { return d.isInstrument() ? "Instruments" : "Audio Effects"; })
+        .def_prop_ro("is_instrument", &gil::BuiltinInfo::isInstrument)
+        .def_ro("params", &gil::BuiltinInfo::params);
+    m.def("builtin_devices", [] { return gil::BuiltinRegistry::instance().devices(); },
+          "Every built-in device, instruments first, then by name.");
 
     nb::class_<gil::ParamInfo>(m, "ParamInfo")
         .def_ro("id", &gil::ParamInfo::id)

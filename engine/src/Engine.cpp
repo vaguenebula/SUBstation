@@ -14,9 +14,7 @@
 #include "Routing.h"
 #include "miniaudio.h"
 #include "plugins/Vst3Format.h"
-#include "processors/Ott.h"
-#include "processors/Synth.h"
-#include "processors/Utility.h"
+#include "builtin/BuiltinRegistry.h"
 
 namespace gil {
 namespace {
@@ -964,16 +962,7 @@ void Engine::retireProcessorLocked(std::shared_ptr<Processor> processor) {
 }
 
 uint32_t Engine::addBuiltinProcessor(uint32_t chainId, const std::string& type, int index) {
-    std::shared_ptr<Processor> processor;
-    if (type == "utility") {
-        processor = std::make_shared<UtilityProcessor>();
-    } else if (type == "synth") {
-        processor = std::make_shared<SynthProcessor>();
-    } else if (type == "ott") {
-        processor = std::make_shared<OttProcessor>();
-    } else {
-        throw std::invalid_argument("Unknown built-in device: " + type);
-    }
+    auto processor = BuiltinRegistry::instance().create(type);
     std::lock_guard lock(mutex_);
     chainLocked(chainId);
     processor->prepare(sampleRate_, Renderer::kMaxBlock);  // before the audio thread can see it

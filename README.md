@@ -255,8 +255,8 @@ engine/src/                    C++: everything on the audio thread, and plug-in 
   backends/     WasapiBackend (miniaudio), AsioBackend (IASIO; only with the ASIO SDK),
                 AsioSupport.h (ASIO sample formats and buffer sizes, no SDK needed)
   Processor.h   insert-device interface (built-ins and plug-ins); ParamInfo (normalized mapping); automation inbox
-  processors/   built-in devices: BuiltinProcessor (their parameters and automation), Synth (instrument),
-                Utility, Ott
+  builtin/      built-in devices: BuiltinProcessor (their parameters and automation), BuiltinRegistry
+                (devices register themselves; created by id), devices/ (Synth, Utility, Ott: one .cpp each)
   plugins/      PluginFormat.h (formats), Vst3Format (host context, modules, scanning),
                 Vst3Processor (a VST3 plug-in as a Processor), EditorWindow (plug-in editors),
                 Vst3Support.h (allocation-free event and parameter lists for the audio thread)
