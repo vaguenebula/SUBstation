@@ -98,3 +98,29 @@ def test_record_a_resampled_take(studio, app, driver, make_wav, source):
 
     window.undo_stack.undo()
     assert recorder.clips == []
+
+
+def test_send_knobs_follow_inputs(studio, app):
+    """A track's input is a routing edge: it changes which sends other tracks
+    can make (a group whose track takes a return's output can't send to it)."""
+    window = studio
+    editor = window.editor
+    track = editor.add_audio_track()
+    other = editor.add_audio_track()
+    group = editor.group_tracks([track.id])
+    ret = editor.add_return_track()
+    app.processEvents()
+
+    def usable(owner) -> bool:
+        return header(window, owner).sends.knobs[ret.id][1].isEnabled()
+    assert usable(group.id) and usable(other.id)
+    editor.set_track_input_track(track.id, ret.id)  # ret -> track -> group
+    assert not usable(group.id) and not usable(track.id) and usable(other.id)
+    window.undo_stack.undo()
+    assert usable(group.id)
+    editor.set_track_input_track(other.id, ret.id)
+    assert not usable(other.id) and usable(group.id)
+    editor.move_tracks([other.id], window.project.track_index(track.id) + 1, group.id)
+    app.processEvents()
+    assert other.parent == group.id and other.input_track == ret.id
+    assert not usable(group.id)  # moved into the group: ret -> other -> group

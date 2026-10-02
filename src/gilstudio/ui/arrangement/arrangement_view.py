@@ -238,20 +238,26 @@ class ArrangementView(QWidget):
     def _on_structure_changed(self, *_args) -> None:
         self.layout_model.rebuild()
         self.headers.sync()
+        self._refresh_sends()  # a track into or out of a group: which sends would close a cycle
         self.selection.prune(self.project)
         self._update_vbar()
         self.lanes.update()
+
+    def _refresh_sends(self) -> None:
+        """Every send knob: which can be used depends on the whole routing graph
+        (groups, sends and inputs)."""
+        for _lane, header in self._returns.values():
+            header.sends.refresh()
+        for header in self.headers.headers.values():
+            header.sends.refresh()
 
     def _on_track_changed(self, track_id: str) -> None:
         for track in self.project.tracks:  # what takes its output as its input shows its name
             if track.input_track == track_id:
                 self.headers.refresh(track.id)
-        if track_id in self._returns:  # its name, mixer or sends: and which returns the others can send to
+        self._refresh_sends()  # its sends or its input: which sends would close a cycle
+        if track_id in self._returns:  # its name and mixer
             self._returns[track_id][1].refresh()
-            for _lane, header in self._returns.values():
-                header.sends.refresh()
-            for header in self.headers.headers.values():
-                header.sends.refresh()
             return
         old_height = self.layout_model.total_height
         old_row = self.layout_model.row_for(track_id)
