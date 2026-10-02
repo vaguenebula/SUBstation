@@ -2,9 +2,12 @@
 a MIDI track the instrument comes first; the master takes effects only.
 
 Each device has a title bar, as in Ableton: its on/off switch and name, the
-arrows to its other parameter pages, the button for a plug-in's own editor, a
-save button (not wired up yet). It is lighter while the device is
-selected.
+button for a plug-in's own editor, the sidechain button of a device with a
+sidechain (aux) input, the arrows to its other parameter pages, a save button
+(not wired up yet). It is lighter while the device is selected. The sidechain
+button is lit while the device has a sidechain; clicking it picks the track it
+comes from (those that would close a cycle greyed out) and where it is taken:
+after the track's fader, before it, or after one of its devices.
 
 Parameter metadata comes from the engine, so built-in devices and plug-ins
 show alike: a knob per parameter (log-scaled where the engine says so), or a
@@ -81,7 +84,7 @@ from ..model.editor import (
     device_name,
 )
 from ..model.params import format_value
-from ..model.project import PLUGIN_KIND, Device
+from ..model.project import PLUGIN_KIND, POST_FADER, PRE_FADER, Device, Sidechain
 from .arrangement.lanes_canvas import DEVICE_MOVE_MIME, is_pan_modifier, moved_devices
 from .arrangement.track_headers import automation_state
 from .arrangement.view_state import Selection
@@ -204,6 +207,12 @@ class _DeviceFrame(QFrame):
         self.next = _header_button("›", "Next parameters")
         self.next.clicked.connect(lambda: self.set_page(self.page + 1))
         self.save = _header_button("", "Save Preset", icons.save())  # not wired up yet
+        self.sidechain = None  # its sidechain's button, if it has a sidechain input
+        if bridge is not None and bridge.has_sidechain_input(track_id, device.id):
+            self.sidechain = ToggleButton(icon=icons.sidechain(), role="device-header")
+            self.sidechain.setFixedSize(HEADER_BUTTON, HEADER_BUTTON)
+            self.sidechain.setIconSize(self.sidechain.size() - QSize(5, 5))
+            self.sidechain.clicked.connect(self._show_sidechain_menu)
 
         # The title bar. Clicks on its background and name reach the frame (select, drag).
         self.header_bar = QFrame()
@@ -214,8 +223,10 @@ class _DeviceFrame(QFrame):
         self.header.addWidget(self.enabled)
         self.header.addSpacing(2)
         self.header.addWidget(self.title, 1)
-        for widget in (self.previous, self.page_label, self.next, self.save):
-            self.header.addWidget(widget)
+        for widget in (self.sidechain, self.previous, self.page_label, self.next, self.save):
+            if widget is not None:
+                self.header.addWidget(widget)
+        self.update_sidechain()
         self.params = QGridLayout()
         self.params.setContentsMargins(0, 0, 0, 0)
         self.params.setHorizontalSpacing(16)
@@ -396,6 +407,85 @@ class _DeviceFrame(QFrame):
 
     def refresh(self, device: Device) -> None:
         self.enabled.set_checked_silently(device.enabled)
+        self.update_sidechain()
+
+    # --- Sidechain -------------------------------------------------------------------
+
+    def _tap_choices(self, source_id: str) -> list[tuple[str, str]]:
+        """Where a sidechain from a track can be taken: (label, tap)."""
+        devices = self.editor.project.track(source_id).devices
+        names = [device_name(d) for d in devices]
+        choices = [("Post Fader", POST_FADER), ("Pre Fader", PRE_FADER)]
+        for device, name in zip(devices, names, strict=True):
+            if names.count(name) > 1:
+                name = f"{name} ({names[:devices.index(device) + 1].count(name)})"
+            choices.append((f"After {name}", device.id))
+        return choices
+
+    def _tap_of(self, sidechain: Sidechain) -> str:
+        """Where it is taken now: after a device that has left its source, before the fader."""
+        source = self.editor.project.track(sidechain.track_id)
+        if sidechain.tap_device is not None and all(d.id != sidechain.tap for d in source.devices):
+            return PRE_FADER
+        return sidechain.tap
+
+    def update_sidechain(self) -> None:
+        """The sidechain button: lit while the device has one, which its tooltip names."""
+        if self.sidechain is None:
+            return
+        sidechain = self.device().sidechain
+        if sidechain is not None and not self.editor.project.has_owner(sidechain.track_id):
+            sidechain = None  # (its source is going: so is the sidechain)
+        self.sidechain.set_checked_silently(sidechain is not None)
+        if sidechain is None:
+            self.sidechain.setToolTip("Sidechain: none (click to choose a track)")
+            return
+        tap = self._tap_of(sidechain)
+        where = next(label for label, t in self._tap_choices(sidechain.track_id) if t == tap)
+        name = self.editor.project.track(sidechain.track_id).name
+        self.sidechain.setToolTip(f"Sidechain: {name}, {where.lower() if tap in (POST_FADER, PRE_FADER) else where}")
+
+    def sidechain_menu(self) -> QMenu:
+        """No sidechain, or the tracks, groups and returns it can come from
+        (those that would close a cycle greyed out); then where it is taken."""
+        project = self.editor.project
+        current = self.device().sidechain
+        if current is not None and not project.has_owner(current.track_id):
+            current = None
+        menu = QMenu(self)
+        none = menu.addAction("No Sidechain", lambda: self._set_sidechain(None))
+        none.setCheckable(True)
+        none.setChecked(current is None)
+        menu.addSeparator()
+        for source in project.sidechain_sources(self.track_id):
+            usable = not project.sidechain_would_cycle(self.track_id, source.id)
+            # A new source: taken where the old one was (after its fader if after a device of it).
+            tap = POST_FADER if current is None or current.tap_device is not None else current.tap
+            action = menu.addAction(source.name if usable else f"{source.name} (this track feeds it)",
+                                    lambda s=source.id, t=tap: self._set_sidechain(Sidechain(s, t)))
+            action.setCheckable(True)
+            action.setChecked(current is not None and current.track_id == source.id)
+            action.setEnabled(usable)
+        if current is not None:
+            menu.addSeparator()
+            tap = self._tap_of(current)
+            for label, choice in self._tap_choices(current.track_id):
+                action = menu.addAction(label, lambda c=choice: self._set_sidechain(Sidechain(current.track_id, c)))
+                action.setCheckable(True)
+                action.setChecked(choice == tap)
+        return menu
+
+    def _show_sidechain_menu(self) -> None:
+        self.update_sidechain()  # (the click toggled it)
+        self.sidechain_menu().exec(self.sidechain.mapToGlobal(QPoint(0, self.sidechain.height())))
+
+    def _set_sidechain(self, sidechain: Sidechain | None) -> None:
+        try:
+            self.editor.set_device_sidechain(self.track_id, self.device_id, sidechain)
+        except ValueError as exc:  # (its source went meanwhile)
+            if self.bridge is not None:
+                self.bridge.status_message.emit(str(exc))
+        self.update_sidechain()
 
 
 class _TallestDevice(_DeviceFrame):
@@ -749,6 +839,7 @@ class DevicePanel(QFrame):
 
         selection.changed.connect(self._on_selection)
         self.project.devices_changed.connect(self._on_devices_changed)
+        self.project.track_changed.connect(self._on_track_changed)
         self.project.device_param_changed.connect(self._on_param_changed)
         self.project.device_state_changed.connect(self._on_state_changed)
         self.project.reset.connect(lambda: self.show_track(None))
@@ -950,6 +1041,10 @@ class DevicePanel(QFrame):
         if added and not self._dropping:
             # After the chain is laid out, so the new device has its place.
             QTimer.singleShot(0, lambda device_id=added[-1]: self._scroll_to(device_id))
+
+    def _on_track_changed(self, _track_id: str) -> None:
+        for widget in self._current_widgets():  # a sidechain's source may have a new name
+            widget.update_sidechain()
 
     def _scroll_to(self, device_id: str) -> None:
         widget = self.widgets.get(device_id)

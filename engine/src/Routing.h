@@ -2,11 +2,11 @@
 // Routing as a graph: strips are nodes, and every way a strip's signal goes on
 // is an edge. Each strip has one output edge (into a group's bus, or the
 // master) and any number of sends (into return tracks); a track resampling
-// another takes its input on an input edge; later, sidechains are more edges.
-// The engine sees only edges, never groups. The
-// graph must be acyclic: an edge that would close a cycle is refused where it
-// is made (wouldCycle), and the snapshot builder sorts the graph so that every
-// strip comes after everything that feeds it.
+// another takes its input on an input edge; a device's sidechain (its aux
+// input) is an edge that ends at that device, not at its strip's input. The
+// engine sees only edges, never groups. The graph must be acyclic: an edge that
+// would close a cycle is refused where it is made (wouldCycle), and the snapshot
+// builder sorts the graph so that every strip comes after everything that feeds it.
 //
 // Delay compensation happens at every summing point, per edge: a signal leaves
 // its strip `arrival = inputLatency + latency of the devices before its tap`
@@ -15,7 +15,11 @@
 // the difference. A strip going to two places of different latency is delayed
 // differently on each edge. An input edge isn't summed (the track hears it
 // instead of its clips, while monitored, and records it): it orders the graph
-// and can close cycles like any edge, but isn't aligned.
+// and can close cycles like any edge, but isn't aligned. A sidechain is aligned
+// where it ends: with the strip's signal at its device (as late as the strip's
+// input plus the devices before it). The earlier of the two is delayed: the
+// sidechain, or the strip's own signal just before the device, which makes
+// everything after it on the strip that much later.
 
 #include <algorithm>
 #include <cstddef>
@@ -27,7 +31,13 @@ namespace gil {
 struct RouteEdge {
     int from = 0;
     int to = -1;
-    bool sums = true;  // `to` sums it into its input (false: an input edge, not aligned)
+    bool sums = true;  // `to` sums it into its input (false: an input edge or a sidechain)
+    // Where it leaves `from`: after the first `tap` of its devices; -1: after all of
+    // them (an output, a send, a pre-fader tap).
+    int tap = -1;
+    // A sidechain: the device of `to` it goes into (its place in `to`'s chain),
+    // where it is aligned; -1: none (or one not aligned: a device switched off).
+    int device = -1;
 };
 
 // Lines up the inputs of one summing point: `arrivals[i]` is how late input i
@@ -99,40 +109,84 @@ inline bool wouldCycle(int count, const std::vector<RouteEdge>& edges, int from,
 }
 
 // Delay compensation for a whole graph, bottom-up. `order` from
-// topologicalOrder(); `tapLatency[e]` is the latency of edge e's source devices
-// before its tap (all of them, for a strip's output or a send).
+// topologicalOrder(); `chains[n]` lists the latency of each of node n's devices
+// (0 for one switched off), and `chains[count]` the master's.
 struct GraphLatencies {
     std::vector<int> inputLatency;  // how late each node hears its summed inputs (0: nothing feeds it)
     std::vector<int> compensation;  // per edge: how much it is delayed to line up at its destination
-    int masterInput = 0;            // how late the master hears its inputs
+    // Per edge, a sidechain's: how much its destination's signal is delayed just
+    // before the device, to line up with it (0 for other edges).
+    std::vector<int> deviceDelay;
+    // Per node, and the master last: how late each of its devices hears the
+    // strip's input (the devices before it, and the delays before sidechained
+    // ones), then how late its signal leaves the last of them (its latency).
+    std::vector<std::vector<int>> deviceLatency;
+    int masterInput = 0;  // how late the master hears its inputs
 };
 
 inline GraphLatencies alignGraph(const std::vector<int>& order, const std::vector<RouteEdge>& edges,
-                                 const std::vector<int>& tapLatency) {
+                                 const std::vector<std::vector<int>>& chains) {
     const size_t count = order.size();
     GraphLatencies result;
     result.inputLatency.assign(count, 0);
     result.compensation.assign(edges.size(), 0);
-    // Each summing point's incoming edges. Sources come before their
-    // destination in `order`, so a node's input latency is known before the
-    // arrivals of the edges leaving it are needed.
-    std::vector<std::vector<int>> incoming(count + 1);  // the last one: the master
+    result.deviceDelay.assign(edges.size(), 0);
+    result.deviceLatency.assign(count + 1, {});
+    // Each summing point's incoming edges, and the sidechains into each strip's
+    // devices (the last: the master's). Sources come before their destination in
+    // `order`, so their latencies are known before the arrivals of the edges
+    // leaving them are needed.
+    const auto point = [count](int to) { return to >= 0 && static_cast<size_t>(to) < count ? static_cast<size_t>(to) : count; };
+    std::vector<std::vector<int>> incoming(count + 1), sidechains(count + 1);
     for (size_t e = 0; e < edges.size(); ++e) {
-        if (!edges[e].sums) continue;  // (compensation 0)
-        const int to = edges[e].to;
-        incoming[to >= 0 && static_cast<size_t>(to) < count ? static_cast<size_t>(to) : count].push_back(static_cast<int>(e));
+        if (edges[e].sums) {
+            incoming[point(edges[e].to)].push_back(static_cast<int>(e));
+        } else if (edges[e].device >= 0) {
+            sidechains[point(edges[e].to)].push_back(static_cast<int>(e));
+        }
     }
+    const auto arrival = [&](int e) {
+        const RouteEdge& edge = edges[static_cast<size_t>(e)];
+        const auto& at = result.deviceLatency[static_cast<size_t>(edge.from)];
+        const size_t tap = edge.tap < 0 ? at.size() - 1 : std::min(static_cast<size_t>(edge.tap), at.size() - 1);
+        return result.inputLatency[static_cast<size_t>(edge.from)] + at[tap];
+    };
     std::vector<int> arrivals, compensation;
-    const auto align = [&](size_t point) {
+    const auto align = [&](size_t node) {
         arrivals.clear();
-        for (const int e : incoming[point]) {
-            arrivals.push_back(result.inputLatency[static_cast<size_t>(edges[static_cast<size_t>(e)].from)] +
-                               tapLatency[static_cast<size_t>(e)]);
-        }
+        for (const int e : incoming[node]) arrivals.push_back(arrival(e));
         const int heard = alignInputs(arrivals, compensation);
-        for (size_t i = 0; i < incoming[point].size(); ++i) {
-            result.compensation[static_cast<size_t>(incoming[point][i])] = compensation[i];
+        for (size_t i = 0; i < incoming[node].size(); ++i) {
+            result.compensation[static_cast<size_t>(incoming[node][i])] = compensation[i];
         }
+        // Down the chain, each sidechain lined up with the signal at its device.
+        static const std::vector<int> kNoDevices;
+        const std::vector<int>& chain = node < chains.size() ? chains[node] : kNoDevices;
+        auto& at = result.deviceLatency[node];
+        at.assign(chain.size() + 1, 0);
+        auto& into = sidechains[node];
+        std::stable_sort(into.begin(), into.end(), [&](int a, int b) {
+            return edges[static_cast<size_t>(a)].device < edges[static_cast<size_t>(b)].device;
+        });
+        int latency = 0;  // from the strip's input
+        size_t next = 0;
+        for (size_t d = 0; d < chain.size(); ++d) {
+            const size_t first = next;
+            arrivals.assign(1, latency);
+            for (; next < into.size() && edges[static_cast<size_t>(into[next])].device == static_cast<int>(d); ++next) {
+                arrivals.push_back(arrival(into[next]) - heard);
+            }
+            if (next > first) {
+                latency = alignInputs(arrivals, compensation);
+                for (size_t i = first; i < next; ++i) {
+                    result.compensation[static_cast<size_t>(into[i])] = compensation[i - first + 1];
+                    result.deviceDelay[static_cast<size_t>(into[i])] = compensation[0];
+                }
+            }
+            at[d] = latency;
+            latency += std::max(0, chain[d]);
+        }
+        at[chain.size()] = latency;
         return heard;
     };
     for (const int node : order) result.inputLatency[static_cast<size_t>(node)] = align(static_cast<size_t>(node));

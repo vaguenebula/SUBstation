@@ -4,8 +4,9 @@
 // Routing (Routing.h): every track's output goes to the master or into another
 // track (a bus: a group track), and its sends into other tracks (return
 // tracks); a track may take its input from another track's output (an input
-// edge: resampling). The snapshot lists the tracks so that each comes after
-// what feeds it, and lines up the edges going into every bus.
+// edge: resampling), and a device its sidechain from another track's signal (an
+// edge into that device). The snapshot lists the tracks so that each comes after
+// what feeds it, and lines up the edges going into every bus and device.
 //
 // Threading model:
 //  * The audio thread (device callback) only reads the published RenderSnapshot
@@ -111,6 +112,17 @@ struct AudioClockStatus {
     int midiDelay = 0;        // frames between a MIDI message's arrival and when it plays
 };
 
+// Where a sidechain takes its source's signal: after its fader (and pan), before
+// it (after all its devices), or after one of its devices.
+enum class SidechainTap : uint8_t { PostFader, PreFader, AfterDevice };
+
+// A device's sidechain (Engine::processorSidechain()).
+struct SidechainInfo {
+    uint32_t trackId = 0;  // its source
+    SidechainTap tap = SidechainTap::PostFader;
+    uint32_t tapProcessorId = 0;  // AfterDevice: the source's device it is taken after
+};
+
 // A track's send (Engine::trackSends()).
 struct SendInfo {
     uint32_t trackId = 0;  // the track it goes into (a return)
@@ -137,6 +149,7 @@ struct ProcessorInfo {
     int latency = 0;  // samples
     int tail = 0;
     bool hasEditor = false;
+    bool hasSidechain = false;  // it has a sidechain (aux) input: setProcessorSidechain()
 };
 
 // A ProcessorEvent and the processor it came from.
@@ -313,9 +326,26 @@ public:
     // Reorders a chain; `processorIds` must be the chain's processors, each once.
     void setChainOrder(uint32_t chainId, const std::vector<uint32_t>& processorIds);
     // Moves a processor to position `index` of a chain (its own or another, on
-    // any strip), as the chain is without it (-1: last). Its state goes with it;
+    // any strip), as the chain is without it (-1: last). Its state goes with it,
+    // and its sidechain (std::invalid_argument if that would make a cycle there);
     // its automation stays with the strip it came from, and plays again if it comes back.
     void moveProcessor(uint32_t processorId, uint32_t toChainId, int index);
+    // A device's sidechain: what its aux input hears (hasSidechain in its
+    // ProcessorInfo), from a track (a track, a group or a return; not the master,
+    // which renders after everything), tapped after the track's fader, before it,
+    // or after one of its devices (`tapProcessorId`, in the track's main chain;
+    // should that device leave it, the tap is before the fader). It is lined up
+    // with the signal at the device: delayed, or that signal is (just before the
+    // device). Throws std::invalid_argument for an unknown device or track, a
+    // device without a sidechain input, the master, or a sidechain that would
+    // close a cycle (its own track, or one its track feeds: through outputs,
+    // sends, inputs and sidechains alike). It stays with the device when the
+    // device moves (moveProcessor refuses a move that would make it a cycle);
+    // when its track goes, it goes too.
+    void setProcessorSidechain(uint32_t processorId, uint32_t sourceTrackId,
+                               SidechainTap tap = SidechainTap::PostFader, uint32_t tapProcessorId = 0);
+    void clearProcessorSidechain(uint32_t processorId);
+    std::optional<SidechainInfo> processorSidechain(uint32_t processorId);
     ProcessorInfo processorInfo(uint32_t processorId);
     std::vector<ParamInfo> processorParams(uint32_t processorId);
     int processorParamIndex(uint32_t processorId, const std::string& paramId);  // -1: no such parameter
@@ -427,9 +457,20 @@ private:
         uint32_t parentRack = 0;  // the rack processor it belongs to; 0: a strip's main chain
         std::vector<std::shared_ptr<Processor>> inserts;
     };
+    // A device's sidechain (a routing edge into it), with its state and delay
+    // lines kept across snapshots.
+    struct SidechainModel {
+        uint32_t source = 0;  // the track
+        SidechainTap tap = SidechainTap::PostFader;
+        uint32_t tapProcessor = 0;  // AfterDevice: the source's device
+        std::shared_ptr<EdgeState> state;
+        std::shared_ptr<DelayLine> delay;        // the sidechain's
+        std::shared_ptr<DelayLine> deviceDelay;  // the device's own signal's, before it
+    };
     struct ProcessorEntry {
         uint32_t chainId = 0;
         std::shared_ptr<Processor> processor;
+        std::optional<SidechainModel> sidechain;
     };
 
     TrackModel& trackLocked(uint32_t trackId);           // the master too
@@ -454,31 +495,46 @@ private:
     void suspendLiveLocked();
     void resumeLiveLocked();
     void renderOfflineLocked(double startBeat, int64_t frames, float* out, bool loop, bool metronome);
-    void prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices,
-                              std::vector<std::shared_ptr<DelayLine>>& delays, double startBeat);
+    void prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices, std::vector<std::shared_ptr<DelayLine>>& delays,
+                              std::vector<std::shared_ptr<DelayLine>>& deviceDelays, double startBeat);
     void resetProcessorsLocked();
     void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
     // A strip's envelopes in the snapshot, in samples. `inputLatency`: how late
     // the strip's input hears the timeline (0 for a track fed by nothing else; for
     // a bus or the master, as late as the latest of what feeds it). Its devices
-    // hear it that much later, plus the latency of the devices before them; its
-    // fader after all of them (`faderLatency`; delay compensation comes after
-    // the fader, on the strip's edges).
-    void buildAutomationLocked(const TrackModel& track, int inputLatency, int faderLatency, double samplesPerBeat,
-                               StripRender& strip);
+    // hear it that much later, plus `deviceLatency` (GraphLatencies: the devices
+    // before them, and the delays before sidechained ones); its fader after all
+    // of them (`faderLatency`; delay compensation comes after the fader, on the
+    // strip's edges).
+    void buildAutomationLocked(const TrackModel& track, int inputLatency, const std::vector<int>& deviceLatency,
+                               int faderLatency, double samplesPerBeat, StripRender& strip);
     // An envelope's breakpoints in samples, sorted.
     static std::vector<AutomationNode> automationNodes(const AutomationLaneDesc& desc, double samplesPerBeat);
     // The routing graph's edges, as indices into tracks_ (-1: the master): each
-    // track's output, then its sends; then the input edges. `origins` (if given)
-    // gets which each is: (the track it belongs to, send index; kOutputEdge: its
-    // output, kInputEdge: its input, whose source is the edge's `from`).
+    // track's output, then its sends; then the input edges; then the sidechains,
+    // by destination and device. `origins` (if given) gets what each is.
     static constexpr int kOutputEdge = -1;
     static constexpr int kInputEdge = -2;
-    std::vector<RouteEdge> routeEdgesLocked(std::vector<std::pair<int, int>>* origins = nullptr) const;
+    static constexpr int kSidechainEdge = -3;
+    struct EdgeOrigin {
+        // The track (index) it belongs to: its source, or its destination for an
+        // input or a sidechain (-1: the master).
+        int track = 0;
+        int send = kOutputEdge;  // its send index, or kOutputEdge, kInputEdge, kSidechainEdge
+        uint32_t processor = 0;  // a sidechain's device
+        int device = -1;         // and that device's place in its chain
+    };
+    std::vector<RouteEdge> routeEdgesLocked(std::vector<EdgeOrigin>* origins = nullptr) const;
+    // Where a sidechain leaves its source: after its fader, before it, or after
+    // its first `n` devices (returns n; -1: after all of them). A tap after a
+    // device that isn't in the source's main chain (any more) is before the fader.
+    int sidechainTapLocked(const SidechainModel& sidechain, EdgeRender::Tap& tap) const;
+    // Throws std::invalid_argument if a sidechain from `source` into a device on `strip` would close a cycle.
+    void checkSidechainLocked(uint32_t source, uint32_t strip) const;
     // Throws std::invalid_argument if an edge from `from` into `to` would close a cycle.
     void checkRouteLocked(uint32_t from, uint32_t to, const char* what) const;
     int trackIndexLocked(uint32_t trackId) const;  // -1: the master (or none)
-    static int insertLatency(const std::vector<std::shared_ptr<Processor>>& inserts);
+    static int insertLatency(const Processor& insert);  // its latency (0 when switched off)
     static std::string sourceKey(const std::string& path);
 
     mutable std::recursive_mutex mutex_;

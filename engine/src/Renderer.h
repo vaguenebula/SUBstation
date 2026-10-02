@@ -29,6 +29,16 @@
 // The master's devices add their latency after that. The metronome is delayed
 // as much, so the output lags the timeline by the snapshot's outputLatency().
 //
+// Sidechains: a device with an aux input hears a sidechain edge (Snapshot.h)
+// from another strip: its signal after its fader, before it, or after one of its
+// devices, which the source copies into the edge's own buffer as it renders (the
+// scheduler runs it first). The edge lines up with the destination's signal at
+// that device: it is delayed, or the destination's own signal is, just before
+// the device (EdgeRender::deviceDelay). A sidechain isn't heard on its own, so
+// solo doesn't go down it (soloing its source doesn't make its destination
+// heard) but up it (what keys a soloed track keeps keying it), and one into the
+// master's devices always plays; mute and solo silence it only after the fader.
+//
 // Automation: before each stretch a processor processes, the renderer hands it
 // its automated parameters' values over the stretch (Processor::automate): the
 // value at the start, then wherever it changes, every kAutomationStep samples
@@ -136,8 +146,13 @@ public:
     // renderer). Offline renders pass a fresh set so they neither disturb live
     // playback nor depend on it. Must outlive the rendering.
     void setWarpVoices(const WarpVoiceSet* voices) noexcept { voiceOverride_ = voices; }
-    // Likewise delay-compensation lines, one per snapshot edge (null: none needed).
-    void setDelayLines(const std::vector<std::shared_ptr<DelayLine>>* lines) noexcept { delayOverride_ = lines; }
+    // Likewise delay-compensation lines, one per snapshot edge (null: none needed),
+    // and those delaying sidechains' destinations before their devices (deviceDelay).
+    void setDelayLines(const std::vector<std::shared_ptr<DelayLine>>* lines,
+                       const std::vector<std::shared_ptr<DelayLine>>* deviceLines = nullptr) noexcept {
+        delayOverride_ = lines;
+        deviceDelayOverride_ = deviceLines;
+    }
 
 private:
     static constexpr int kAutomationStep = 64;  // samples between a slope's values for processors
@@ -210,6 +225,13 @@ private:
     // Adds an edge's signal at its level to a destination's left/right.
     void sumEdge(const RenderSnapshot& snap, const EdgeRender& edge, float* left, float* right, int frames,
                  WorkerScratch& scratch) noexcept;
+    // An edge's signal over the chunk: its own buffer, or its source's.
+    static void edgeSignal(const RenderSnapshot& snap, const EdgeRender& edge, const float*& left,
+                           const float*& right) noexcept;
+    // The delay line of snapshot edge `e` (the offline render's own, if it brought them), and that
+    // delaying a sidechain's destination before its device; null: none.
+    DelayLine* edgeDelayLine(const EdgeRender& edge, int e) const noexcept;
+    DelayLine* deviceDelayLine(const EdgeRender& edge, int e) const noexcept;
     // A strip's body, in place: inserts (with its note events) -> fader and
     // meter. Its input is in left/right already. `audibleOut` (if any) gets the
     // fader's mute ramp, per sample.
@@ -228,8 +250,12 @@ private:
     // Epilogue: records the tracks' and the master's outputs over the same stretches.
     void recordRendered(const RenderSnapshot& snap) noexcept;
     void scheduleCountIn(const RenderSnapshot& snap, int length) noexcept;
-    void processInserts(const StripRender& strip, ProcessContext& context, ProcessEvent* events, int numEvents,
-                        float* left, float* right, int frames, double samplesPerBeat) noexcept;
+    // A strip's devices, in place, with their sidechains; the taps after its
+    // devices take the signal into their edges' buffers. A monitored strip's
+    // sidechained devices don't wait for their sidechains (monitoring latency).
+    void processInserts(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
+                        ProcessEvent* events, int numEvents, float* left, float* right, int frames,
+                        bool monitored) noexcept;
     void automateInsert(const AutomationRender& lane, int64_t position, int length, bool moving) noexcept;
     // Volume and pan (automated or not), in place; live renders also smooth and
     // meter. `audibleOut` (if any) gets the mute ramp, per sample.
@@ -291,6 +317,7 @@ private:
     ProcessContext chunkContext_;
     const WarpVoiceSet* voiceOverride_ = nullptr;
     const std::vector<std::shared_ptr<DelayLine>>* delayOverride_ = nullptr;
+    const std::vector<std::shared_ptr<DelayLine>>* deviceDelayOverride_ = nullptr;
     uint64_t blockCounter_ = 1;  // stamps voice use; 0 means "never used"
     std::array<Segment, kMaxSegments> segments_{};
     int numSegments_ = 0;

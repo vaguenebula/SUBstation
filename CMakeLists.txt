@@ -203,6 +203,7 @@ if (GILSTUDIO_TEST_PLUGINS)
     add_library(gil_test_plugins MODULE
         tests/vst3_plugins/test_plugins.cpp
         tests/vst3_plugins/test_effect.cpp
+        tests/vst3_plugins/test_sidechain.cpp
         ${VST3_SDK}/public.sdk/source/main/dllmain.cpp)
     target_link_libraries(gil_test_plugins PRIVATE vst3_plugin_sdk user32 gdi32)
     target_compile_definitions(gil_test_plugins PRIVATE UNICODE _UNICODE NOMINMAX)

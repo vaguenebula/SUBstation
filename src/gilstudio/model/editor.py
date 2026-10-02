@@ -25,6 +25,7 @@ from .commands import (
     SetDeviceEnabledCommand,
     SetDeviceParamCommand,
     SetDevicesCommand,
+    SetDeviceSidechainCommand,
     SetDeviceStateCommand,
     SetEnvelopeCommand,
     SetEnvelopesCommand,
@@ -48,6 +49,7 @@ from .project import (
     PluginRef,
     Project,
     Send,
+    Sidechain,
     Track,
     feeds,
     new_id,
@@ -189,7 +191,8 @@ class ProjectEditor(QObject):
 
     def delete_tracks(self, track_ids: list[str]) -> None:
         """Delete tracks (and return tracks); a group goes with what is in it, a
-        return with the sends into it (and their automation). One undo step."""
+        return with the sends into it (and their automation). The inputs and
+        sidechains they were the source of go too. One undo step."""
         p = self.project
         doomed = {t for t in track_ids if p.has_track(t)}
         doomed |= {d.id for t in list(doomed) for d in p.descendants(t)}
@@ -200,6 +203,7 @@ class ProjectEditor(QObject):
         text = "Delete Return Track" if not doomed and count == 1 else "Delete Track" if count == 1 else "Delete Tracks"
         self.undo_stack.beginMacro(text)
         self._drop_inputs(doomed | returns, text)  # (first: undo brings them back after their sources)
+        self._drop_sidechains(doomed | returns, text)
         # The last first: undo brings back each group before what is in it.
         for track in reversed(p.tracks):
             if track.id in doomed:
@@ -274,27 +278,41 @@ class ProjectEditor(QObject):
     def _arrange(self, tree, text: str) -> None:
         """Arranges the tracks so. A track taking its input from a group it comes
         into (or from what that group feeds) loses that input first: it would
-        close a cycle."""
+        close a cycle; and so does a device taking its sidechain from one."""
         tree = tuple(tree)
         if tree == self.project.tree():
             return
         p = self.project
         parents = dict(tree)
-        arranged = [replace(t, parent=parents.get(t.id)) for t in p.tracks]  # (copies: inputs go one by one)
-        cycling = []
-        for track in arranged:
-            source, track.input_track = track.input_track, None
-            if source is not None and feeds(routing_graph(arranged, p.returns), track.id, source):
+        # Copies, without their inputs and sidechains, which come back one by one
+        # unless they close a cycle with those before them.
+        arranged = [replace(t, parent=parents.get(t.id), input_track=None,
+                            devices=[d for d in t.devices if d.sidechain is None]) for t in p.tracks]
+        returns = [replace(r, devices=[d for d in r.devices if d.sidechain is None]) for r in p.returns]
+        cycling, cycling_sidechains = [], []
+        for track, original in zip(arranged, p.tracks, strict=True):
+            source = original.input_track
+            if source is not None and feeds(routing_graph(arranged, returns), track.id, source):
                 cycling.append(track.id)
             else:
                 track.input_track = source
-        if not cycling:
+        for track, original in zip([*arranged, *returns], [*p.tracks, *p.returns], strict=True):
+            for device in original.devices:
+                if device.sidechain is None:
+                    continue
+                if feeds(routing_graph(arranged, returns), track.id, device.sidechain.track_id):
+                    cycling_sidechains.append((track.id, device))
+                else:
+                    track.devices.append(device)
+        if not cycling and not cycling_sidechains:
             self._push(ArrangeTracksCommand(p, p.tree(), tree, text))
             return
         self.undo_stack.beginMacro(text)
         try:
             for track_id in cycling:
                 self._push(UpdateTrackCommand(p, track_id, "input_track", p.track(track_id).input_track, None, text))
+            for track_id, device in cycling_sidechains:
+                self._push(SetDeviceSidechainCommand(p, track_id, device.id, device.sidechain, None, text))
             self._push(ArrangeTracksCommand(p, p.tree(), tree, text))
         finally:
             self.undo_stack.endMacro()
@@ -336,6 +354,7 @@ class ProjectEditor(QObject):
         self.undo_stack.beginMacro(text)
         try:
             self._drop_inputs(set(groups), text)
+            self._drop_sidechains(set(groups), text)
             tree = list(p.tree())
             for group_id in groups:
                 parent = dict(tree)[group_id]
@@ -464,6 +483,17 @@ class ProjectEditor(QObject):
         for track in self.project.tracks:
             if track.input_track in source_ids:
                 self._push(UpdateTrackCommand(self.project, track.id, "input_track", track.input_track, None, text))
+
+    def _drop_sidechains(self, source_ids: set[str], text: str) -> None:
+        """The devices taking their sidechain from these (going away, with their
+        own devices) have none. (Those on them keep theirs: they come back together.)"""
+        for track in self.project.all_tracks():
+            if track.id in source_ids:
+                continue
+            for device in track.devices:
+                if device.sidechain is not None and device.sidechain.track_id in source_ids:
+                    self._push(SetDeviceSidechainCommand(self.project, track.id, device.id, device.sidechain, None,
+                                                         text))
 
     def set_track_monitor(self, track_id: str, mode: str) -> None:
         if mode not in MONITOR_MODES:
@@ -1077,7 +1107,8 @@ class ProjectEditor(QObject):
         """Move effects (in their chain order) to another track's (or the master's)
         chain, before the device at `index` there (None: last; never before its
         instrument). They stay the same devices, so plug-ins keep their state, and
-        their automation goes with them. One undo step; False if nothing moved."""
+        their automation goes with them, and their sidechains (unless one would
+        close a cycle there). One undo step; False if nothing moved."""
         if to_track_id == track_id:
             if index is not None:
                 self.move_devices(track_id, device_ids, index)
@@ -1088,6 +1119,10 @@ class ProjectEditor(QObject):
         if not ids:
             return False
         moving = [d for d in copy.deepcopy(source) if d.id in ids]
+        for device in moving:  # a sidechain from where they go (or what that feeds) would close a cycle
+            if device.sidechain is not None and self.project.sidechain_would_cycle(to_track_id,
+                                                                                  device.sidechain.track_id):
+                device.sidechain = None
         staying = [d for d in copy.deepcopy(source) if d.id not in ids]
         after = copy.deepcopy(target)
         first = 1 if after and device_is_instrument(after[0]) else 0
@@ -1158,6 +1193,24 @@ class ProjectEditor(QObject):
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:
         if self.project.device(track_id, device_id).enabled != enabled:
             self._push(SetDeviceEnabledCommand(self.project, track_id, device_id, enabled))
+
+    def set_device_sidechain(self, track_id: str, device_id: str, sidechain: Sidechain | None) -> None:
+        """What a device's sidechain (aux) input hears: a track's (a group's, a
+        return's) signal, after its fader, before it, or after one of its devices
+        (Sidechain); None: nothing. Raises ValueError for a source it can't take
+        (the master, its own track, or one its track feeds: a cycle) or a tap
+        after a device that isn't on the source."""
+        p = self.project
+        device = p.device(track_id, device_id)
+        if sidechain is not None:
+            source = sidechain.track_id
+            if not (p.has_track(source) or p.has_return(source)) or p.sidechain_would_cycle(track_id, source):
+                raise ValueError(f"{device_name(device)} can't take its sidechain from that track")
+            if sidechain.tap_device is not None and not any(d.id == sidechain.tap for d in p.track(source).devices):
+                raise ValueError("a sidechain can only be taken after one of its source's devices")
+        if sidechain != device.sidechain:
+            text = "Remove Sidechain" if sidechain is None else "Change Sidechain"
+            self._push(SetDeviceSidechainCommand(p, track_id, device_id, device.sidechain, sidechain, text))
 
     # --- Automation ---------------------------------------------------------------
     # Envelopes are normalized (see automation.py); an owner is a track id or MASTER.

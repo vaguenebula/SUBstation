@@ -243,17 +243,31 @@ void Vst3Processor::setupBuses() {
     };
     mainInput_ = mainBus(kInput, numInputs);
     mainOutput_ = mainBus(kOutput, numOutputs);
+    auxInput_ = -1;
+    for (int32 i = 0; i < numInputs && auxInput_ < 0; ++i) {
+        BusInfo info{};
+        if (i != mainInput_ && component_->getBusInfo(kAudio, kInput, i, info) == kResultOk && info.busType == kAux) {
+            auxInput_ = i;
+        }
+    }
 
-    // Stereo main buses if the plug-in takes them; otherwise it keeps its own.
+    // Stereo main buses (and sidechain) if the plug-in takes them; otherwise it keeps its own.
     std::vector<SpeakerArrangement> inputs(numInputs, SpeakerArr::kStereo);
     std::vector<SpeakerArrangement> outputs(numOutputs, SpeakerArr::kStereo);
     for (int32 i = 0; i < numInputs; ++i) processor_->getBusArrangement(kInput, i, inputs[i]);
     for (int32 i = 0; i < numOutputs; ++i) processor_->getBusArrangement(kOutput, i, outputs[i]);
     if (mainInput_ >= 0) inputs[mainInput_] = SpeakerArr::kStereo;
     if (mainOutput_ >= 0) outputs[mainOutput_] = SpeakerArr::kStereo;
-    processor_->setBusArrangements(inputs.data(), numInputs, outputs.data(), numOutputs);
+    if (auxInput_ >= 0) inputs[auxInput_] = SpeakerArr::kStereo;
+    if (processor_->setBusArrangements(inputs.data(), numInputs, outputs.data(), numOutputs) != kResultTrue &&
+        auxInput_ >= 0) {
+        // Perhaps it takes stereo on its main buses only: its sidechain as it wants it.
+        processor_->getBusArrangement(kInput, auxInput_, inputs[auxInput_]);
+        processor_->setBusArrangements(inputs.data(), numInputs, outputs.data(), numOutputs);
+    }
 
     if (mainInput_ >= 0) component_->activateBus(kAudio, kInput, mainInput_, true);
+    if (auxInput_ >= 0) component_->activateBus(kAudio, kInput, auxInput_, true);
     if (mainOutput_ >= 0) component_->activateBus(kAudio, kOutput, mainOutput_, true);
     if (eventInput_ >= 0) component_->activateBus(kEvent, kInput, eventInput_, true);
 
@@ -356,16 +370,25 @@ void Vst3Processor::process(const ProcessContext& ctx, float* const* channels, i
 
     float* left = channels[0];
     float* right = numChannels > 1 ? channels[1] : channels[0];
+    const float* keyLeft = sidechain(0);
+    const float* keyRight = sidechain(1) ? sidechain(1) : keyLeft;
     for (size_t b = 0; b < inputBuses_.size(); ++b) {
         Bus& bus = inputBuses_[b];
         const int count = static_cast<int>(bus.channels.size());
-        if (static_cast<int>(b) == mainInput_ && count > 0) {
+        // The track's signal into the main input, the sidechain into the aux one.
+        const float* fromLeft = static_cast<int>(b) == mainInput_ ? left : nullptr;
+        const float* fromRight = right;
+        if (static_cast<int>(b) == auxInput_ && keyLeft) {
+            fromLeft = keyLeft;
+            fromRight = keyRight;
+        }
+        if (fromLeft && count > 0) {
             if (count == 1) {
                 float* mono = bus.pointers[0];
-                for (int i = 0; i < numFrames; ++i) mono[i] = 0.5f * (left[i] + right[i]);
+                for (int i = 0; i < numFrames; ++i) mono[i] = 0.5f * (fromLeft[i] + fromRight[i]);
             } else {
-                std::copy_n(left, numFrames, bus.pointers[0]);
-                std::copy_n(right, numFrames, bus.pointers[1]);
+                std::copy_n(fromLeft, numFrames, bus.pointers[0]);
+                std::copy_n(fromRight, numFrames, bus.pointers[1]);
                 for (int c = 2; c < count; ++c) std::fill_n(bus.pointers[c], numFrames, 0.f);
             }
             uint64 silence = 0;

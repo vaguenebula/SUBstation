@@ -133,6 +133,7 @@ class ArrangementView(QWidget):
             signal.connect(self._on_returns_changed)
         p.reset.connect(self._on_reset)
         p.track_changed.connect(self._on_track_changed)
+        p.devices_changed.connect(lambda _tid: self._refresh_sends())  # (a sidechain is a routing edge too)
         p.automation_view_changed.connect(self._on_automation_view_changed)
         p.automation_changed.connect(lambda *_args: self.selection.prune(self.project))
         editor.parameter_touched.connect(self._on_parameter_touched)
@@ -245,7 +246,7 @@ class ArrangementView(QWidget):
 
     def _refresh_sends(self) -> None:
         """Every send knob: which can be used depends on the whole routing graph
-        (groups, sends and inputs)."""
+        (groups, sends, inputs and sidechains)."""
         for _lane, header in self._returns.values():
             header.sends.refresh()
         for header in self.headers.headers.values():

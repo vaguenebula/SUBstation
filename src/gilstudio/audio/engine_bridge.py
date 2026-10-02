@@ -27,6 +27,13 @@ fader). A send automated without having been set yet is made, silent, so that
 its automation plays. Sends are pushed as each track changes, those going away
 first, so that no step closes a cycle.
 
+Sidechains: a device's sidechain is the engine processor's, from the source's
+engine track, tapped as the model says (after a device that has left the
+source: before the fader). They are pushed whenever devices or routes change,
+those changing taken away first; one the engine refuses for now (a cycle with a
+route another change hasn't undone yet) comes with that change. A processor
+moving to another chain gives up its sidechain in the engine until it is there.
+
 Automation: every envelope of a track (or the master) goes to the engine, which
 plays it; its target follows it and the value the model holds for it (set by
 hand) counts again when the envelope goes. Changing an automated target by hand
@@ -79,7 +86,17 @@ from ..model import automation
 from ..model.automation import MASTER, MIXER_PAN, MIXER_VOLUME
 from ..model.editor import RecordedTake, device_name
 from ..model.params import ParamSpec, format_value, mixer_specs
-from ..model.project import WARP_MODES, Clip, Device, PluginRef, Project, Send, Track
+from ..model.project import (
+    POST_FADER,
+    PRE_FADER,
+    WARP_MODES,
+    Clip,
+    Device,
+    PluginRef,
+    Project,
+    Send,
+    Track,
+)
 from ..model.timebase import db_to_gain
 from .settings import (
     AudioSettings,
@@ -241,6 +258,8 @@ class EngineBridge(QObject):
         self._outputs: dict[str, int] = {}  # track id -> the engine track its output goes into
         self._sends: dict[str, dict[int, tuple[float, bool]]] = {}  # track id -> {engine return: (gain, pre-fader)}
         self._send_levels: dict[str, dict[str, float]] = {}  # track id -> {return id: level dB} the engine has
+        # Processor id -> (source engine track, tap, tap processor) of the sidechain the engine has
+        self._sidechains: dict[int, tuple[int, ge.SidechainTap, int]] = {}
         self._busy = 0  # > 0 while a plug-in call may run a message loop that calls us back
         self.plugin_errors: dict[str, str] = {}  # device id -> why its plug-in isn't loaded
         self.known_plugins: dict[str, str] = {}  # plug-in uid -> file, from the scan: finds moved plug-ins
@@ -311,6 +330,7 @@ class EngineBridge(QObject):
         self._outputs.clear()
         self._sends.clear()
         self._send_levels.clear()
+        self._sidechains.clear()
         self.plugin_errors.clear()
         self.meters.clear()
         self._editors_wanted.clear()
@@ -320,6 +340,7 @@ class EngineBridge(QObject):
         self._push_outputs()
         self._push_all_sends()  # (into returns added after the tracks sending to them)
         self._push_all_inputs()  # (from tracks added after the tracks taking them)
+        self._push_sidechains()
         self._push_settings()
         # Forget decoded audio the new project doesn't use.
         used = {_key(c.path) for t in self.project.tracks if not t.is_midi for c in t.clips}
@@ -353,6 +374,7 @@ class EngineBridge(QObject):
             self._push_sends(track.id)
         if not track.is_master:  # the inputs taken from it (back)
             self._push_all_inputs()
+        self._push_sidechains()  # its devices', and those it is the source of
 
     def _on_track_removed(self, track_id: str, _index: int) -> None:
         for device_id, processor_id in self._devices.pop(track_id, []):
@@ -376,6 +398,7 @@ class EngineBridge(QObject):
         for track, state in list(self._inputs.items()):
             if state[1] == engine_id:
                 self._inputs[track] = (state[0], None, *state[2:])
+        self._sidechains = {p: state for p, state in self._sidechains.items() if state[0] != engine_id}
         self._overridden = {(o, k) for o, k in self._overridden if o != track_id}
 
     def _on_track_changed(self, track_id: str) -> None:
@@ -387,6 +410,7 @@ class EngineBridge(QObject):
         self._push_mixer(track_id)
         self._push_input(track_id)
         self._push_sends(track_id)
+        self._push_sidechains()  # (a route that stood in a sidechain's way may have gone)
 
     def _override_changed_sends(self, track: Track) -> None:
         """A send level changed by hand while automated: its automation stops."""
@@ -438,6 +462,8 @@ class EngineBridge(QObject):
             if out != ge.MASTER:
                 self.engine.set_track_output(self._track_ids[track_id], out)
             self._outputs[track_id] = out
+        if changed:
+            self._push_sidechains()
 
     def _wanted_sends(self, track: Track) -> dict[int, tuple[float, bool]]:
         """The engine sends a track should have: its sends, and silent ones for
@@ -633,6 +659,7 @@ class EngineBridge(QObject):
                 self._update_editor_titles(track_id)
             self.devices_loaded.emit(track_id)
         self._push_enabled(track)
+        self._push_sidechains()  # (the new processors', or a sidechain changed)
 
     def _hand_over(self, track_id: str, device_id: str, processor_id: int | None) -> bool:
         """A device left this track's chain: if it went to another track's, its
@@ -642,6 +669,7 @@ class EngineBridge(QObject):
         if to is None:
             return False
         if processor_id is not None:
+            self._drop_sidechain(processor_id)
             self.engine.move_processor(processor_id, self._chains[to])
         self._arriving[device_id] = processor_id
         return True
@@ -658,9 +686,57 @@ class EngineBridge(QObject):
                 if did == device_id:
                     del chain[i]
                     if processor_id is not None:
+                        self._drop_sidechain(processor_id)
                         self.engine.move_processor(processor_id, self._chains[track_id])
                     return True, processor_id
         return False, None
+
+    def has_sidechain_input(self, track_id: str, device_id: str) -> bool:
+        """Whether a device has a sidechain (aux) input (not while its plug-in isn't loaded)."""
+        processor_id = self.engine_device_id(track_id, device_id)
+        return processor_id is not None and self.engine.processor_info(processor_id).has_sidechain
+
+    def _wanted_sidechain(self, device: Device, processor_id: int) -> tuple[int, ge.SidechainTap, int] | None:
+        """The sidechain the engine should give a device's processor (None: none, or
+        one from a track the engine hasn't yet)."""
+        sidechain = device.sidechain
+        if sidechain is None or sidechain.track_id == MASTER:
+            return None
+        source = self._track_ids.get(sidechain.track_id)
+        if source is None or not self.engine.processor_info(processor_id).has_sidechain:
+            return None
+        if sidechain.tap == POST_FADER:
+            return source, ge.SidechainTap.POST_FADER, 0
+        tapped = None if sidechain.tap == PRE_FADER else self.engine_device_id(sidechain.track_id, sidechain.tap)
+        if tapped is None:  # before the fader (also while the device it is taken after isn't on the source)
+            return source, ge.SidechainTap.PRE_FADER, 0
+        return source, ge.SidechainTap.AFTER_DEVICE, tapped
+
+    def _push_sidechains(self) -> None:
+        """Every device's sidechain to the engine: those changing go first, so that
+        no step closes a cycle."""
+        wanted = {}
+        for track in self.project.all_tracks():
+            devices = {d.id: d for d in track.devices if d.sidechain is not None}
+            for device_id, processor_id in self._devices.get(track.id, []):
+                if processor_id is not None and device_id in devices:
+                    state = self._wanted_sidechain(devices[device_id], processor_id)
+                    if state is not None:
+                        wanted[processor_id] = state
+        for processor_id in [p for p, state in self._sidechains.items() if wanted.get(p) != state]:
+            self._drop_sidechain(processor_id)
+        for processor_id, state in wanted.items():
+            if processor_id in self._sidechains:
+                continue
+            try:
+                self.engine.set_processor_sidechain(processor_id, *state)
+            except ValueError:
+                continue  # a cycle with a route another change hasn't undone yet: it comes with that change
+            self._sidechains[processor_id] = state
+
+    def _drop_sidechain(self, processor_id: int) -> None:
+        if self._sidechains.pop(processor_id, None) is not None:
+            self.engine.clear_processor_sidechain(processor_id)
 
     def _push_enabled(self, track: Track) -> None:
         for device, (_, processor_id) in zip(track.devices, self._devices.get(track.id, []), strict=True):
@@ -739,6 +815,7 @@ class EngineBridge(QObject):
                 pass
             del self._plugin_ids[processor_id]
         self._enabled.pop(processor_id, None)
+        self._sidechains.pop(processor_id, None)
         self._param_ids.pop(processor_id, None)
         self._param_infos.pop(processor_id, None)
         self._param_specs.pop(processor_id, None)

@@ -16,6 +16,8 @@ and every track (and return) its sends, by return id (version 9; older files
 have none). Sends to a return that isn't there, or that would close a cycle,
 are dropped. Audio tracks store the track whose output they take as their
 input ("input_track", or MASTER: resampling; version 10); one that isn't there,
+or that would close a cycle, is dropped. Devices store their sidechain (the
+track and where it is tapped; version 11); one from a track that isn't there,
 or that would close a cycle, is dropped."""
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from .project import (
     GROUP_KIND,
     LEGACY_WARP_MODES,
     MONITOR_MODES,
+    POST_FADER,
     RETURN_KIND,
     TRACK_KINDS,
     WARP_MODES,
@@ -46,18 +49,20 @@ from .project import (
     PluginRef,
     Project,
     Send,
+    Sidechain,
     Track,
     feeds,
     new_master,
     repair_tree,
     routing_graph,
+    sidechain_would_cycle,
     would_cycle,
 )
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 10  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
-# 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10: inputs from tracks (resampling)
+VERSION = 11  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
+# 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10: inputs from tracks (resampling), 11: sidechains
 EXTENSION = ".gilproj"
 
 
@@ -110,6 +115,8 @@ def _device_to_dict(device: Device) -> dict:
         data["plugin"] = {"format": p.format, "uid": p.uid, "name": p.name, "vendor": p.vendor, "path": p.path,
                           "instrument": p.instrument}
         data["state"] = device.state
+    if device.sidechain is not None:
+        data["sidechain"] = {"track": device.sidechain.track_id, "tap": device.sidechain.tap}
     return data
 
 
@@ -123,7 +130,14 @@ def _device(d: dict) -> Device:
     state = d.get("state")
     return Device(id=d["id"], kind=d["kind"], enabled=bool(d.get("enabled", True)),
                   params={k: float(v) for k, v in d.get("params", {}).items()}, plugin=plugin,
-                  state=state if isinstance(state, str) else None)
+                  state=state if isinstance(state, str) else None, sidechain=_sidechain(d.get("sidechain")))
+
+
+def _sidechain(data) -> Sidechain | None:
+    if not isinstance(data, dict) or not isinstance(data.get("track"), str):
+        return None
+    tap = data.get("tap", POST_FADER)
+    return Sidechain(data["track"], tap if isinstance(tap, str) and tap else POST_FADER)
 
 
 def _automation_to_dict(envelopes: dict[str, Envelope]) -> dict:
@@ -207,10 +221,10 @@ def returns_from_dict(data: dict) -> list[Track]:
     return [_return(t) for t in data.get("returns", [])]
 
 
-def repair_routing(tracks: list[Track], returns: list[Track]) -> None:
-    """Drops the sends and inputs a project can't have (the file was edited): to
-    a return (or from a track) that isn't there, and those closing a cycle (the
-    later ones; sends first)."""
+def repair_routing(tracks: list[Track], returns: list[Track], master: Track | None = None) -> None:
+    """Drops the sends, inputs and sidechains a project can't have (the file was
+    edited): to a return (or from a track) that isn't there, and those closing a
+    cycle (the later ones; sends first, then inputs)."""
     ids = {r.id for r in returns}
     for track in tracks:
         track.sends = {r: send for r, send in track.sends.items() if r in ids}
@@ -231,6 +245,16 @@ def repair_routing(tracks: list[Track], returns: list[Track]) -> None:
                 source == MASTER or not feeds(routing_graph(tracks, returns), track.id, source)):
             track.input_track = source
             track.input = ()
+    owners = [*tracks, *returns, *([master] if master is not None else [])]
+    sidechained = [(owner, device, device.sidechain) for owner in owners for device in owner.devices
+                   if device.sidechain is not None]
+    for _, device, _ in sidechained:
+        device.sidechain = None
+    for owner, device, sidechain in sidechained:
+        owner_id = MASTER if owner is master else owner.id
+        if sidechain.track_id in sources - {MASTER} and not sidechain_would_cycle(tracks, returns, owner_id,
+                                                                               sidechain.track_id):
+            device.sidechain = sidechain
 
 
 def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
@@ -387,14 +411,15 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
     loop = data.get("loop", {})
     tracks = tracks_from_dict(data, project_file)
     returns = returns_from_dict(data)
-    repair_routing(tracks, returns)
+    master = _master(data.get("master", {}))
+    repair_routing(tracks, returns, master)
     project.replace_contents(
         tempo=float(data.get("tempo", 120.0)),
         time_signature=TimeSignature(int(num), int(den)),
         loop_enabled=bool(loop.get("enabled", False)),
         loop_start=float(loop.get("start", 0.0)),
         loop_end=float(loop.get("end", 16.0)),
-        master=_master(data.get("master", {})),
+        master=master,
         automation_locked=bool(data.get("automation_locked", False)),
         key=key_from_name(data.get("key")),
         tracks=tracks,

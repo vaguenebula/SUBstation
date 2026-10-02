@@ -845,7 +845,9 @@ class TrackHeaderColumn(QWidget):
         wanted = [row.track_id for row in self.layout_model.rows]
         for track_id in list(self.headers):
             if track_id not in wanted:
-                self.headers.pop(track_id).deleteLater()
+                header = self.headers.pop(track_id)
+                header.hide()  # now: until deleted it would still be painted (its track gone)
+                header.deleteLater()
         for track_id in wanted:
             if track_id not in self.headers:
                 header = TrackHeader(track_id, self.editor, self.selection, self.bridge, self)

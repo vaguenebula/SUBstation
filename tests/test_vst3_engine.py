@@ -81,7 +81,7 @@ def events_of(engine, kind):
 
 def test_scan_lists_the_classes_of_a_module():
     found = {d.name: d for d in ge.scan_vst3(PLUGINS)}
-    assert sorted(found) == ["GIL Test Effect", "GIL Test Mono", "GIL Test Synth"]  # not the controller class
+    assert sorted(found) == ["GIL Test Effect", "GIL Test Mono", "GIL Test Sidechain", "GIL Test Synth"]  # not the controller class
     synth = found["GIL Test Synth"]
     assert synth.is_instrument and synth.category == "Instrument|Synth" and synth.vendor == "GIL Studio"
     assert not found["GIL Test Effect"].is_instrument and found["GIL Test Effect"].category == "Fx|Delay"

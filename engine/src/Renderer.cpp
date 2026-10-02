@@ -339,42 +339,43 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
         }
     }
     ProcessContext context = chunkContext_;  // its own: the inserts move it along the chunk's stretches
-    processInserts(track, context, buffers.events.data(), buffers.numEvents, left, right, frames,
-                   snap.samplesPerBeat());
-    // Pre-fader taps take the signal here, into their own buffers.
-    bool preFader = false;
+    processInserts(snap, track, context, buffers.events.data(), buffers.numEvents, left, right, frames,
+                   buffers.monitored);
+    // Pre-fader taps take the signal here, into their own buffers (taps after a
+    // device took theirs as it processed).
+    bool preFaderSend = false;
     for (const int e : track.outgoing) {
         const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
         if (edge.tap != EdgeRender::Tap::PreFader) continue;
         std::copy_n(left, frames, edge.state->left.data());
         std::copy_n(right, frames, edge.state->right.data());
-        preFader = true;
+        preFaderSend = preFaderSend || edge.kind != EdgeRender::Kind::Sidechain;
     }
-    float* audible = preFader ? scratch.audible.data() : nullptr;
+    float* audible = preFaderSend ? scratch.audible.data() : nullptr;
     applyFader(snap, *track.params, track.volume, track.pan, buffers.audible, left, right, frames, chunkFlags_.live,
                scratch, audible);
-    // The edges that need a signal of their own: a pre-fader tap is muted with
-    // the track; a post-fader edge delayed for its destination alone is a copy.
-    // Then each is delayed to line up where it goes.
+    // The edges that need a signal of their own: a pre-fader send is muted with
+    // the track (a sidechain isn't: it isn't heard); a post-fader edge delayed
+    // for its destination alone is a copy. Then each is delayed to line up where it goes.
     for (const int e : track.outgoing) {
         const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
         if (!edge.ownSignal()) continue;
         float* edgeL = edge.state->left.data();
         float* edgeR = edge.state->right.data();
         if (edge.tap == EdgeRender::Tap::PreFader) {
-            for (int i = 0; i < frames; ++i) {
-                edgeL[i] *= audible[i];
-                edgeR[i] *= audible[i];
+            if (edge.kind != EdgeRender::Kind::Sidechain) {
+                for (int i = 0; i < frames; ++i) {
+                    edgeL[i] *= audible[i];
+                    edgeR[i] *= audible[i];
+                }
             }
-        } else {
+        } else if (edge.tap == EdgeRender::Tap::PostFader) {
             std::copy_n(left, frames, edgeL);
             std::copy_n(right, frames, edgeR);
         }
-        DelayLine* delay = delayOverride_ ? (static_cast<size_t>(e) < delayOverride_->size()
-                                                 ? (*delayOverride_)[static_cast<size_t>(e)].get()
-                                                 : nullptr)
-                                          : edge.delay.get();
-        if (delay) delay->process(edgeL, edgeR, frames, compensationFor(edge, buffers.monitored));
+        if (DelayLine* delay = edgeDelayLine(edge, e)) {
+            delay->process(edgeL, edgeR, frames, compensationFor(edge, buffers.monitored));
+        }
     }
 
     // Smoothed over roughly the last ten chunks: a synth costs more while it
@@ -391,7 +392,7 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
 void Renderer::processStrip(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
                             ProcessEvent* events, int numEvents, float* left, float* right, int frames, bool audible,
                             ChunkFlags flags, WorkerScratch& scratch, float* audibleOut) noexcept {
-    processInserts(strip, context, events, numEvents, left, right, frames, snap.samplesPerBeat());
+    processInserts(snap, strip, context, events, numEvents, left, right, frames, false);
     applyFader(snap, *strip.params, strip.volume, strip.pan, audible, left, right, frames, flags.live, scratch,
                audibleOut);
 }
@@ -405,12 +406,46 @@ int Renderer::compensationFor(const EdgeRender& edge, bool monitored) noexcept {
     return monitored ? 0 : edge.compensation;
 }
 
+DelayLine* Renderer::edgeDelayLine(const EdgeRender& edge, int e) const noexcept {
+    if (!delayOverride_) return edge.delay.get();
+    return static_cast<size_t>(e) < delayOverride_->size() ? (*delayOverride_)[static_cast<size_t>(e)].get() : nullptr;
+}
+
+DelayLine* Renderer::deviceDelayLine(const EdgeRender& edge, int e) const noexcept {
+    if (!delayOverride_) return edge.deviceDelayLine.get();
+    if (!deviceDelayOverride_ || static_cast<size_t>(e) >= deviceDelayOverride_->size()) return nullptr;
+    return (*deviceDelayOverride_)[static_cast<size_t>(e)].get();
+}
+
+void Renderer::edgeSignal(const RenderSnapshot& snap, const EdgeRender& edge, const float*& left,
+                          const float*& right) noexcept {
+    if (edge.ownSignal()) {
+        left = edge.state->left.data();
+        right = edge.state->right.data();
+        return;
+    }
+    const TrackBuffers& source = *snap.tracks[static_cast<size_t>(edge.from)].buffers;
+    left = source.left.data();
+    right = source.right.data();
+}
+
 void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
     // Each solo button is read once, so the chunk sees one consistent state. An
     // input edge only counts while its track hears it (monitored): otherwise its
-    // track plays its clips, and the edge only feeds a recording.
-    const auto carries = [&snap](const EdgeRender& edge) {
-        return edge.sums() || snap.tracks[static_cast<size_t>(edge.to)].buffers->monitored;
+    // track plays its clips, and the edge only feeds a recording. A sidechain
+    // isn't heard: solo goes up it (what keys a soloed strip keeps keying it; the
+    // master's devices are always heard) but not down it (soloing what keys a
+    // strip doesn't make that strip heard).
+    const auto passes = [&snap](const EdgeRender& edge) {  // its signal goes on into its destination's
+        return edge.sums() || (edge.kind == EdgeRender::Kind::Input &&
+                               snap.tracks[static_cast<size_t>(edge.to)].buffers->monitored);
+    };
+    const auto carries = [&passes](const EdgeRender& edge) {
+        return passes(edge) || edge.kind == EdgeRender::Kind::Sidechain;
+    };
+    const auto upstream = [&snap](const EdgeRender& edge) {  // where it goes is soloed or feeds a solo
+        return edge.to >= 0 ? snap.tracks[static_cast<size_t>(edge.to)].buffers->soloUp
+                            : edge.kind == EdgeRender::Kind::Sidechain;
     };
     bool anySolo = false;
     for (const TrackRender& track : snap.tracks) {
@@ -424,7 +459,7 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
             bool down = track.buffers->soloed;
             for (const int e : track.incoming) {
                 const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
-                down = down || (carries(edge) && snap.tracks[static_cast<size_t>(edge.from)].buffers->soloDown);
+                down = down || (passes(edge) && snap.tracks[static_cast<size_t>(edge.from)].buffers->soloDown);
             }
             track.buffers->soloDown = down;
         }
@@ -432,14 +467,13 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
             bool up = it->buffers->soloed;
             for (const int e : it->outgoing) {
                 const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
-                up = up || (edge.to >= 0 && carries(edge) && snap.tracks[static_cast<size_t>(edge.to)].buffers->soloUp);
+                up = up || (carries(edge) && upstream(edge));
             }
             it->buffers->soloUp = up;
         }
     }
     for (const EdgeRender& edge : snap.edges) {
-        edge.state->live = !anySolo || snap.tracks[static_cast<size_t>(edge.from)].buffers->soloDown ||
-                           (edge.to >= 0 && snap.tracks[static_cast<size_t>(edge.to)].buffers->soloUp);
+        edge.state->live = !anySolo || snap.tracks[static_cast<size_t>(edge.from)].buffers->soloDown || upstream(edge);
     }
     for (const TrackRender& track : snap.tracks) {
         const bool heard = std::any_of(track.outgoing.begin(), track.outgoing.end(), [&](int e) {
@@ -453,9 +487,9 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
 void Renderer::sumEdge(const RenderSnapshot& snap, const EdgeRender& edge, float* left, float* right, int frames,
                        WorkerScratch& scratch) noexcept {
     EdgeState& state = *edge.state;
-    const TrackBuffers& source = *snap.tracks[static_cast<size_t>(edge.from)].buffers;
-    const float* srcL = edge.ownSignal() ? state.left.data() : source.left.data();
-    const float* srcR = edge.ownSignal() ? state.right.data() : source.right.data();
+    const float* srcL;
+    const float* srcR;
+    edgeSignal(snap, edge, srcL, srcR);
     const float on = state.live ? 1.f : 0.f;
     const float gain = state.gain.load(std::memory_order_relaxed);
     const float* gains = nullptr;
@@ -764,15 +798,26 @@ void Renderer::scheduleCountIn(const RenderSnapshot& snap, int length) noexcept 
     }
 }
 
-void Renderer::processInserts(const StripRender& strip, ProcessContext& context, ProcessEvent* events,
-                              int numEvents, float* left, float* right, int frames, double samplesPerBeat) noexcept {
+void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
+                              ProcessEvent* events, int numEvents, float* left, float* right, int frames,
+                              bool monitored) noexcept {
+    const double samplesPerBeat = snap.samplesPerBeat();
+    // A tap after a device takes the signal there, into its edge's own buffer.
+    const auto tapInto = [&snap](int e, const float* fromL, const float* fromR, int offset, int length) {
+        EdgeState& state = *snap.edges[static_cast<size_t>(e)].state;
+        std::copy_n(fromL, length, state.left.data() + offset);
+        std::copy_n(fromR, length, state.right.data() + offset);
+    };
     bool any = false;
     for (const auto& insert : strip.inserts) {
         if (!insert->isEnabled()) continue;
         if (insert->takeResetRequest()) insert->reset();
         any = true;
     }
-    if (!any) return;
+    if (!any) {  // nothing changes the signal along the chain
+        for (const int e : strip.deviceTaps) tapInto(e, left, right, 0, frames);
+        return;
+    }
 
     // One call per continuous stretch of the timeline, with the events that fall in it.
     const bool split = playing_ && numSegments_ > 0;
@@ -796,14 +841,36 @@ void Renderer::processInserts(const StripRender& strip, ProcessContext& context,
         context.beatPos = position / samplesPerBeat;
         context.inEvents = {events + first, static_cast<size_t>(next - first)};
         float* channels[2] = {left + offset, right + offset};
+        size_t tap = 0;  // strip.deviceTaps, by device
         for (size_t i = 0; i < strip.inserts.size(); ++i) {
             Processor& insert = *strip.inserts[i];
-            if (!insert.isEnabled()) continue;
-            for (const AutomationRender& lane : strip.automation) {
-                if (lane.insert == static_cast<int>(i)) automateInsert(lane, position, length, moving);
+            if (insert.isEnabled()) {
+                if (const int e = i < strip.sidechains.size() ? strip.sidechains[i] : -1; e >= 0) {
+                    const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+                    // The strip's signal waits for a sidechain that comes later than it (but
+                    // not while monitored: a player hears only the devices' own latency).
+                    if (DelayLine* line = deviceDelayLine(edge, e)) {
+                        line->process(channels[0], channels[1], length, monitored ? 0 : edge.deviceDelay);
+                    }
+                    if (edge.state->live) {  // (solo may leave it out)
+                        const float* keyL;
+                        const float* keyR;
+                        edgeSignal(snap, edge, keyL, keyR);
+                        insert.setSidechain(keyL + offset, keyR + offset);
+                    }
+                }
+                for (const AutomationRender& lane : strip.automation) {
+                    if (lane.insert == static_cast<int>(i)) automateInsert(lane, position, length, moving);
+                }
+                insert.process(context, channels, 2, length);
+                insert.clearAutomation();
+                insert.setSidechain(nullptr, nullptr);
             }
-            insert.process(context, channels, 2, length);
-            insert.clearAutomation();
+            for (; tap < strip.deviceTaps.size(); ++tap) {
+                const int e = strip.deviceTaps[tap];
+                if (snap.edges[static_cast<size_t>(e)].tapDevice > static_cast<int>(i)) break;
+                tapInto(e, channels[0], channels[1], offset, length);
+            }
         }
     }
 }
