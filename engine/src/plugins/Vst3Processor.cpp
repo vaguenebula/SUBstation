@@ -251,20 +251,22 @@ void Vst3Processor::setupBuses() {
         }
     }
 
-    // Stereo main buses (and sidechain) if the plug-in takes them; otherwise it keeps its own.
-    std::vector<SpeakerArrangement> inputs(numInputs, SpeakerArr::kStereo);
-    std::vector<SpeakerArrangement> outputs(numOutputs, SpeakerArr::kStereo);
-    for (int32 i = 0; i < numInputs; ++i) processor_->getBusArrangement(kInput, i, inputs[i]);
-    for (int32 i = 0; i < numOutputs; ++i) processor_->getBusArrangement(kOutput, i, outputs[i]);
-    if (mainInput_ >= 0) inputs[mainInput_] = SpeakerArr::kStereo;
-    if (mainOutput_ >= 0) outputs[mainOutput_] = SpeakerArr::kStereo;
-    if (auxInput_ >= 0) inputs[auxInput_] = SpeakerArr::kStereo;
-    if (processor_->setBusArrangements(inputs.data(), numInputs, outputs.data(), numOutputs) != kResultTrue &&
-        auxInput_ >= 0) {
-        // Perhaps it takes stereo on its main buses only: its sidechain as it wants it.
-        processor_->getBusArrangement(kInput, auxInput_, inputs[auxInput_]);
-        processor_->setBusArrangements(inputs.data(), numInputs, outputs.data(), numOutputs);
-    }
+    // Stereo main buses (and sidechain) if the plug-in takes them; else stereo
+    // main buses and its own sidechain; else its own layout, as it was. (A
+    // refused arrangement may leave any bus changed: each try asks for every one.)
+    std::vector<SpeakerArrangement> ownInputs(numInputs, SpeakerArr::kStereo);
+    std::vector<SpeakerArrangement> ownOutputs(numOutputs, SpeakerArr::kStereo);
+    for (int32 i = 0; i < numInputs; ++i) processor_->getBusArrangement(kInput, i, ownInputs[i]);
+    for (int32 i = 0; i < numOutputs; ++i) processor_->getBusArrangement(kOutput, i, ownOutputs[i]);
+    const auto arrange = [&](bool stereoMain, bool stereoAux) {
+        auto inputs = ownInputs;
+        auto outputs = ownOutputs;
+        if (stereoMain && mainInput_ >= 0) inputs[mainInput_] = SpeakerArr::kStereo;
+        if (stereoMain && mainOutput_ >= 0) outputs[mainOutput_] = SpeakerArr::kStereo;
+        if (stereoAux && auxInput_ >= 0) inputs[auxInput_] = SpeakerArr::kStereo;
+        return processor_->setBusArrangements(inputs.data(), numInputs, outputs.data(), numOutputs) == kResultTrue;
+    };
+    if (!arrange(true, true) && !(auxInput_ >= 0 && arrange(true, false))) arrange(false, false);
 
     if (mainInput_ >= 0) component_->activateBus(kAudio, kInput, mainInput_, true);
     if (auxInput_ >= 0) component_->activateBus(kAudio, kInput, auxInput_, true);
@@ -288,6 +290,9 @@ void Vst3Processor::setupBuses() {
     };
     readBuses(kInput, numInputs, inputBuses_);
     readBuses(kOutput, numOutputs, outputBuses_);
+    if (auxInput_ >= 0 && inputBuses_[static_cast<size_t>(auxInput_)].channels.empty()) {
+        auxInput_ = -1;  // it settled on no channels there: no sidechain
+    }
 }
 
 void Vst3Processor::allocateBuffers() {
