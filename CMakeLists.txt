@@ -127,6 +127,12 @@ file(GLOB BUILTIN_DEVICE_SOURCES CONFIGURE_DEPENDS engine/src/builtin/devices/*.
 nanobind_add_module(_engine NB_STATIC
     engine/src/bindings.cpp
     engine/src/Engine.cpp
+    engine/src/EngineChains.cpp
+    engine/src/EngineDevice.cpp
+    engine/src/EngineInput.cpp
+    engine/src/EngineOffline.cpp
+    engine/src/EngineSnapshot.cpp
+    engine/src/EngineTracks.cpp
     engine/src/AudioDevice.cpp
     engine/src/backends/WasapiBackend.cpp
     engine/src/AudioSource.cpp
