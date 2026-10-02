@@ -5,6 +5,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
@@ -55,7 +56,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
-    m.attr("API_VERSION") = 7;
+    m.attr("API_VERSION") = 11;
     m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
@@ -262,6 +263,51 @@ NB_MODULE(_engine, m) {
                 "Samples between a MIDI message's arrival and when it plays (a device buffer).");
     m.def("host_time_ns", &gil::hostTimeNs, "The clock MIDI input is stamped with (steady_clock), in ns.");
 
+    nb::class_<gil::TrackCost>(m, "TrackCost")
+        .def_ro("track_id", &gil::TrackCost::trackId)
+        .def_ro("ns_per_frame", &gil::TrackCost::nsPerFrame)
+        .def("__repr__", [](const gil::TrackCost& c) {
+            return "TrackCost(" + std::to_string(c.trackId) + ", " + std::to_string(c.nsPerFrame) + " ns/frame)";
+        });
+    // The graph's queue order and ranks, for tests.
+    const auto taskGraphOrder = [](const std::vector<std::vector<int>>& destinations, const std::vector<float>& costs) {
+        if (costs.size() != destinations.size()) throw std::invalid_argument("One cost per node");
+        std::vector<std::pair<int, int>> edges;
+        for (size_t i = 0; i < destinations.size(); ++i) {
+            for (const int to : destinations[i]) {
+                if (to >= 0 && static_cast<size_t>(to) <= i) throw std::invalid_argument("A node goes into one listed before it");
+                edges.emplace_back(static_cast<int>(i), to);
+            }
+        }
+        gil::TaskGraph graph(static_cast<int>(destinations.size()), edges);
+        std::vector<float> ranks;
+        for (int i = 0; i < graph.size(); ++i) graph.setCost(i, costs[static_cast<size_t>(i)]);
+        graph.orderRoots();
+        for (int i = 0; i < graph.size(); ++i) ranks.push_back(graph.rank(i));
+        return std::make_pair(graph.roots(), ranks);
+    };
+    m.def(
+        "task_graph_order",
+        [taskGraphOrder](const std::vector<int>& outputs, const std::vector<float>& costs) {
+            std::vector<std::vector<int>> destinations;
+            for (const int out : outputs) destinations.push_back(out >= 0 ? std::vector<int>{out} : std::vector<int>{});
+            return taskGraphOrder(destinations, costs);
+        },
+        "outputs"_a, "costs"_a,
+        "For tests: the order a render graph queues its nodes without inputs, and each node's rank (the cost "
+        "from it to the end of its longest path). Node i goes into outputs[i] (-1: none), listed after its inputs.");
+    m.def("task_graph_order", taskGraphOrder, "destinations"_a, "costs"_a,
+          "As above, with any number of edges per node: node i goes into each of destinations[i].");
+
+    nb::class_<gil::SendInfo>(m, "SendInfo")
+        .def_ro("track_id", &gil::SendInfo::trackId, "The track it goes into.")
+        .def_ro("gain", &gil::SendInfo::gain)
+        .def_ro("pre_fader", &gil::SendInfo::preFader)
+        .def("__repr__", [](const gil::SendInfo& s) {
+            return "SendInfo(" + std::to_string(s.trackId) + ", " + std::to_string(s.gain) +
+                   (s.preFader ? ", pre-fader)" : ")");
+        });
+
     nb::class_<gil::MeterReading>(m, "MeterReading")
         .def_ro("track_id", &gil::MeterReading::trackId)
         .def_ro("left", &gil::MeterReading::left)
@@ -425,6 +471,12 @@ NB_MODULE(_engine, m) {
              "Where a track's output goes: MASTER, or another track (a group's bus), which sums it into its input. "
              "Raises ValueError for a route that would close a cycle.")
         .def("track_output", &Engine::trackOutput, "track_id"_a)
+        .def("set_track_send", &Engine::setTrackSend, "track_id"_a, "to_track_id"_a, "gain"_a, "pre_fader"_a = false,
+             "A send: the track's signal also goes into another track (a return), at `gain`, after its fader or "
+             "before it. Setting it again changes it. Raises ValueError for a send that would close a cycle. "
+             "Automated by a lane (processor 0, param 'send:<to_track_id>') of the sending track.")
+        .def("remove_track_send", &Engine::removeTrackSend, "track_id"_a, "to_track_id"_a)
+        .def("track_sends", &Engine::trackSends, "track_id"_a, "A track's sends, in the order they were made.")
         .def("set_master_gain", &Engine::setMasterGain, "gain"_a)
         .def("set_master_pan", &Engine::setMasterPan, "pan"_a)
         .def("set_track_automation", &Engine::setTrackAutomation, "track_id"_a, "lanes"_a,
@@ -484,6 +536,12 @@ NB_MODULE(_engine, m) {
         .def("set_track_input", &Engine::setTrackInput, "track_id"_a, "channels"_a,
              "A track's input: device channels (as DeviceStatus.input_channels numbers them): [] none, [c] mono, "
              "[l, r] a stereo pair. Channels not open on the device are silent.")
+        .def("set_track_input_track", &Engine::setTrackInputTrack, "track_id"_a, "source_track_id"_a,
+             "A track's input from another track's output, after its fader (resampling it), or MASTER's "
+             "(resampling the mix: recorded, never monitored), instead of device channels (set_track_input() goes "
+             "back to those). Raises ValueError for the track itself or a track it feeds (a cycle).")
+        .def("track_input_track", &Engine::trackInputTrack, "track_id"_a,
+             "The track whose output a track takes as its input (MASTER: the master's); None: the device's.")
         .def("set_track_monitor", &Engine::setTrackMonitor, "track_id"_a, "mode"_a)
         .def("set_track_armed", &Engine::setTrackArmed, "track_id"_a, "armed"_a)
         .def(
@@ -496,8 +554,9 @@ NB_MODULE(_engine, m) {
             },
             "targets"_a, "count_in_beats"_a = 0.0,
             "Record each (track_id, wav_path)'s input from where the playhead moves next; starts playing (after "
-            "the count-in) if stopped. A path of '' records the track's MIDI input. Raises RuntimeError for the "
-            "user, ValueError for bad targets.")
+            "the count-in) if stopped. A path of '' records the track's MIDI input. A track whose input is another "
+            "track's (or the master's) records that, in stereo. Raises RuntimeError for the user, ValueError for "
+            "bad targets.")
         .def("stop_recording", &Engine::stopRecording, ReleaseGil(),
              "End the recording (playing goes on); its takes, and any of a recording a device change ended.")
         .def_prop_ro("is_recording", &Engine::isRecording,
@@ -559,5 +618,19 @@ NB_MODULE(_engine, m) {
             "Render the arrangement to a (frames, 2) float32 array.")
         .def("export_wav", &Engine::exportWav, "path"_a, "start_beat"_a, "end_beat"_a, "bit_depth"_a = 24,
              ReleaseGil())
+        // Audio threads
+        .def_static("default_audio_threads", &Engine::defaultAudioThreads,
+                    "The audio threads used unless set: one per core but one (at least 1).")
+        .def_prop_rw("audio_threads", &Engine::audioThreads, &Engine::setAudioThreads,
+                     "Threads rendering tracks: the audio thread and its workers (1: no workers). "
+                     "Renders are the same whatever the number.")
+        .def_prop_ro("nodes_on_workers", &Engine::nodesOnWorkers,
+                     "Tracks the worker threads have rendered (not the audio thread's) since audio_threads was "
+                     "last set.")
+        .def_prop_rw("cost_ordering", &Engine::costOrdering, &Engine::setCostOrdering,
+                     "Start the tracks with the most work hanging off them first (default); off: in routing "
+                     "order (for benchmarks). Renders are the same either way.")
+        .def("track_costs", &Engine::trackCosts,
+             "What rendering each track takes lately (smoothed, in ns per frame; 0: not rendered yet).")
         .def("idle", &Engine::idle, ReleaseGil(), "Housekeeping; call periodically from the UI thread.");
 }

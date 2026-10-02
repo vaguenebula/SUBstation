@@ -1,0 +1,116 @@
+{
+  "tracks": 16,
+  "device": "synth",
+  "heavy": 2,
+  "heavy_otts": 8,
+  "cores": 24,
+  "offline": [
+    {
+      "threads": 1,
+      "ordering": "cost",
+      "seconds": 0.6649923999993916,
+      "realtime": 15.037765845157251
+    },
+    {
+      "threads": 2,
+      "ordering": "cost",
+      "seconds": 0.33442229999855044,
+      "realtime": 29.90231213661094
+    },
+    {
+      "threads": 2,
+      "ordering": "routing",
+      "seconds": 0.33562009999877773,
+      "realtime": 29.795593291451908
+    },
+    {
+      "threads": 4,
+      "ordering": "cost",
+      "seconds": 0.1995788000003813,
+      "realtime": 50.105522229720265
+    },
+    {
+      "threads": 4,
+      "ordering": "routing",
+      "seconds": 0.26678240000001097,
+      "realtime": 37.4837320602843
+    },
+    {
+      "threads": 8,
+      "ordering": "cost",
+      "seconds": 0.19323719999920286,
+      "realtime": 51.74987010803951
+    },
+    {
+      "threads": 8,
+      "ordering": "routing",
+      "seconds": 0.24387639999986277,
+      "realtime": 41.00437762737857
+    }
+  ],
+  "live": [
+    {
+      "buffer": 128,
+      "threads": 1,
+      "ordering": "cost",
+      "mean_us": 182.4604266701499,
+      "p99_us": 430.60000098193996,
+      "max_us": 601.2999983795453,
+      "load": 0.06842266000130622
+    },
+    {
+      "buffer": 128,
+      "threads": 2,
+      "ordering": "cost",
+      "mean_us": 98.93509335427856,
+      "p99_us": 228.49999913887586,
+      "max_us": 1535.9999997599516,
+      "load": 0.03710066000785446
+    },
+    {
+      "buffer": 128,
+      "threads": 2,
+      "ordering": "routing",
+      "mean_us": 97.76389334874693,
+      "p99_us": 260.0999996502651,
+      "max_us": 414.8999996687053,
+      "load": 0.036661460005780105
+    },
+    {
+      "buffer": 128,
+      "threads": 4,
+      "ordering": "cost",
+      "mean_us": 58.94373332266696,
+      "p99_us": 189.59999943035655,
+      "max_us": 351.9000001688255,
+      "load": 0.02210389999600011
+    },
+    {
+      "buffer": 128,
+      "threads": 4,
+      "ordering": "routing",
+      "mean_us": 79.0125333345107,
+      "p99_us": 185.59999989520293,
+      "max_us": 879.4000004854752,
+      "load": 0.029629700000441517
+    },
+    {
+      "buffer": 128,
+      "threads": 8,
+      "ordering": "cost",
+      "mean_us": 65.63653335809553,
+      "p99_us": 149.1999992140336,
+      "max_us": 272.9999996518018,
+      "load": 0.024613700009285824
+    },
+    {
+      "buffer": 128,
+      "threads": 8,
+      "ordering": "routing",
+      "mean_us": 78.0359466385562,
+      "p99_us": 143.39999870571773,
+      "max_us": 781.0000006429618,
+      "load": 0.029263479989458573
+    }
+  ]
+}

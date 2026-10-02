@@ -110,6 +110,21 @@ class UpdateTrackCommand(_MergeableCommand):
         self.project.update_track(self.key[0], **{self.key[1]: self.old})
 
 
+class UpdateTrackFieldsCommand(_MergeableCommand):
+    """Several settings of one track at once (one change): `old`/`new` map attribute names to values."""
+
+    def __init__(self, project: Project, track_id: str, old: dict, new: dict, text: str,
+                 merge_key: object | None = None):
+        super().__init__(text, (track_id, tuple(old)), old, new, merge_key)
+        self.project = project
+
+    def redo(self) -> None:
+        self.project.update_track(self.key[0], **self.new)
+
+    def undo(self) -> None:
+        self.project.update_track(self.key[0], **self.old)
+
+
 class UpdateTracksCommand(_MergeableCommand):
     """One mixer setting on several tracks at once; `old`/`new` map track id to value."""
 
@@ -292,3 +307,34 @@ class ArrangeTracksCommand(QUndoCommand):
 
     def undo(self) -> None:
         self.project.arrange_tracks(self.before)
+
+
+class InsertReturnCommand(QUndoCommand):
+    def __init__(self, project: Project, track: Track, index: int, text: str = "Insert Return Track"):
+        super().__init__(text)
+        self.project = project
+        self.track = track
+        self.index = index
+
+    def redo(self) -> None:
+        self.project.insert_return(copy.deepcopy(self.track), self.index)
+
+    def undo(self) -> None:
+        self.project.remove_return(self.track.id)
+
+
+class RemoveReturnCommand(QUndoCommand):
+    """Takes a return away; the sends into it are taken away first, in the same macro."""
+
+    def __init__(self, project: Project, track_id: str, text: str = "Delete Return Track"):
+        super().__init__(text)
+        self.project = project
+        self.track_id = track_id
+        self.saved: tuple[Track, int] | None = None
+
+    def redo(self) -> None:
+        self.saved = self.project.remove_return(self.track_id)
+
+    def undo(self) -> None:
+        track, index = self.saved
+        self.project.insert_return(track, index)

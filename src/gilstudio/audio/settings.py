@@ -56,6 +56,23 @@ class AudioSettings:
         s.setValue("audio/input_channels", ",".join(map(str, self.input_channels)))
 
 
+AUDIO_THREADS_KEY = "audio/threads"
+
+
+def audio_threads() -> int:
+    """The threads chosen to render audio (the audio thread and its workers);
+    0: the engine's default (one per core but one)."""
+    try:
+        value = int(QSettings().value(AUDIO_THREADS_KEY, 0))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, value)
+
+
+def set_audio_threads(threads: int) -> None:
+    QSettings().setValue(AUDIO_THREADS_KEY, max(0, int(threads)))
+
+
 MIDI_DISABLED_KEY = "midi/disabled_inputs"
 RECORD_QUANTIZE_KEY = "record/quantize"
 # Record quantization choices: (label, grid in beats); 0 = off.

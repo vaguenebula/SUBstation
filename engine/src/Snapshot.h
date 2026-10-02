@@ -5,6 +5,7 @@
 // samples, so the audio thread never deals with beats or seconds.
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -13,6 +14,7 @@
 #include "AudioSource.h"
 #include "Automation.h"
 #include "Processor.h"
+#include "Scheduler.h"
 #include "Warp.h"
 #include "rt/RtUtils.h"
 
@@ -22,9 +24,9 @@ namespace gil {
 // snapshot. Shared between all snapshots that contain the track. The master
 // has one too (it never mutes or solos).
 //
-// Solo follows routing: soloing a bus (a group) makes what feeds it heard, and
-// soloing a track keeps the buses it goes through heard (but not the other
-// tracks in them).
+// Solo follows routing (Renderer.h): soloing a track keeps everything it feeds
+// heard (its groups, the returns it sends to), but not the other tracks going
+// into them; soloing a bus (a group, a return) keeps what feeds it going into it.
 struct TrackParams {
     // Written by the API, read by the audio thread.
     std::atomic<float> gain{1.f};
@@ -44,11 +46,10 @@ struct TrackParams {
     SmoothedValue panLeft;
     SmoothedValue panRight;
     double smoothingSampleRate = 0.0;
-    bool soloHeld = false;  // audio-thread scratch, per chunk: something soloed goes through this strip
 };
 
 // An automation envelope as the renderer plays it: a processor's parameter, or
-// a mixer control of a track or the master.
+// a mixer control of a track or the master (or a send's level).
 struct AutomationRender {
     std::vector<AutomationNode> nodes;    // sorted by time; empty: not automated
     std::shared_ptr<Processor> processor;  // null for a mixer control
@@ -89,8 +90,8 @@ struct ClipRender {
     double sourceAt(int64_t t) const noexcept { return sourceOffset + static_cast<double>(t - start) * rate; }
 };
 
-// Delays a track's output so that it lines up with the track whose devices add
-// the most latency (plug-in delay compensation). Rendering-thread state; the
+// Delays a routing edge's signal so that it lines up with the latest one going
+// into the same place (plug-in delay compensation). Rendering-thread state; the
 // edit side allocates it and keeps it across snapshots.
 class DelayLine {
 public:
@@ -136,31 +137,80 @@ struct NoteRender {
     uint8_t velocity = 100;
 };
 
-// What every strip has: a chain of devices, delay compensation, and a fader
-// with its meter. Tracks are strips fed by their clips and notes; the master is
-// the strip fed by the sum of the tracks.
+// What every strip has: a chain of devices, and a fader with its meter. Tracks
+// are strips fed by their clips and notes (and what goes into them); the master
+// is the strip fed by what goes into it. Delay compensation is the edges'.
 struct StripRender {
     std::shared_ptr<TrackParams> params;
     std::vector<std::shared_ptr<Processor>> inserts;
     int latency = 0;                    // samples the enabled inserts add
-    int compensation = 0;               // samples the strip is delayed by to line up with the slowest one
-    std::shared_ptr<DelayLine> delay;   // for the live renderer (offline renders bring their own)
     std::vector<AutomationRender> automation;  // of its devices' parameters, in chain order
     AutomationRender volume, pan;              // of its mixer
 };
 
-// Where a strip's input comes from: a routing edge into it. For now the
-// device's inputs (a mono channel or a stereo pair); later another strip's
-// output (resampling) is another source.
+// A routing edge's state outside the snapshot: the edit side allocates it with
+// the edge (a track's output, a send) and keeps it while the edge exists.
+struct EdgeState {
+    std::atomic<float> gain{1.f};  // a send's level (an output's stays 1). Written by the API.
+
+    // Rendering-thread state.
+    std::vector<float> left, right;  // its own signal, if it needs one (EdgeRender::ownSignal())
+    bool live = true;                // per chunk: solo lets it through (Renderer.h)
+    // Live renders: its level and whether solo lets it through, ramped like a
+    // fader. Automation replaces the level sample by sample, as it does a fader's.
+    SmoothedValue level;
+    SmoothedValue audible;
+    double smoothingSampleRate = 0.0;
+
+    explicit EdgeState(int frames) : left(static_cast<size_t>(frames), 0.f), right(static_cast<size_t>(frames), 0.f) {}
+};
+
+// An edge of the routing graph (Routing.h): a strip's signal going into another
+// strip (a group's bus, a return), or into the master. Each track has one
+// output edge (post-fader) and any number of sends, tapped after its fader or
+// before it. The destination sums its incoming edges, each at its level. An
+// input edge (resampling) is a track's input taken from another track's output
+// (post-fader): it isn't summed, but heard instead of the track's clips while
+// the track is monitored (InputEdge), and recorded; it isn't delay-compensated.
+struct EdgeRender {
+    enum class Kind : uint8_t { Output, Send, Input };  // later: sidechain
+    enum class Tap : uint8_t { PostFader, PreFader };
+
+    int from = 0;   // the snapshot track it leaves
+    int to = -1;    // the snapshot track it goes into; -1: the master
+    Kind kind = Kind::Output;
+    Tap tap = Tap::PostFader;
+    int compensation = 0;              // samples it is delayed to line up with the latest edge into `to`
+    std::shared_ptr<DelayLine> delay;  // for the live renderer (offline renders bring their own)
+    std::shared_ptr<EdgeState> state;  // never null in an engine's snapshot
+    // A send's automated level (as a fader's volume). Applied where the edge is
+    // summed, after its delay: its latency is how late the destination hears its inputs.
+    AutomationRender level;
+
+    // Whether the source writes the edge's signal into the edge's own buffer: a
+    // pre-fader tap (the source's buffer holds it after the fader), or a signal
+    // delayed for this edge alone. Otherwise the destination reads the source's buffer.
+    bool ownSignal() const noexcept { return tap == Tap::PreFader || compensation > 0; }
+    // Whether its destination sums it into its input (an input edge is heard only while monitored).
+    bool sums() const noexcept { return kind != Kind::Input; }
+};
+
+// Where a strip's input comes from: the device's inputs (a mono channel or a
+// stereo pair), another track's output (an input edge: resampling it), or the
+// master's output (resampling the mix: it is recorded after the master, so it
+// can't be monitored, which would feed it back).
 struct InputEdge {
-    enum class Source : uint8_t { None, Device };
+    enum class Source : uint8_t { None, Device, Track, Master };
     Source source = Source::None;
-    // Indices into the device's open inputs (the callback's order); -1: not open
-    // (the input is silent). A mono input has both the same.
+    // Device: indices into the device's open inputs (the callback's order); -1:
+    // not open (the input is silent). A mono input has both the same.
     int left = -1;
     int right = -1;
+    int edge = -1;  // Track: the snapshot edge (Kind::Input) it comes in on
 
     bool fromDevice() const noexcept { return source == Source::Device; }
+    // Whether the track can hear it (monitoring): the device's, or another track's.
+    bool monitorable() const noexcept { return source == Source::Device || source == Source::Track; }
 };
 
 // When a track hears its input instead of its clips (input monitoring).
@@ -185,27 +235,60 @@ struct MidiInputRoute {
     }
 };
 
-// What feeds a bus, summed: a strip that other strips output into. Rendering-
-// thread scratch (cleared every chunk); the edit side allocates it and keeps it
-// across snapshots, like a DelayLine.
-struct BusBuffer {
-    std::vector<float> left, right;
-    explicit BusBuffer(int frames) : left(static_cast<size_t>(frames), 0.f), right(static_cast<size_t>(frames), 0.f) {}
+// A track's working state for one chunk (rendering-thread scratch): its signal,
+// and what the serial part of the chunk worked out for it before the graph
+// runs (Renderer.h). Every track has its own, so tracks can render on any
+// thread; the edit side allocates it and keeps it across snapshots, like a
+// DelayLine. A bus reads the signals of the tracks that go into it from theirs.
+struct TrackBuffers {
+    static constexpr int kMaxEvents = 1024;     // note events per chunk
+    static constexpr int kMaxClipVoices = 32;   // stretched clips playing per chunk
+    struct ClipVoice {                           // the stretcher a clip plays through in this chunk
+        const ClipRender* clip = nullptr;
+        WarpVoice* voice = nullptr;
+        bool continuing = false;                 // it played this clip in the block before
+    };
+
+    std::vector<float> left, right;  // its inputs summed, its clips (or live input), then its strip
+    std::vector<ProcessEvent> events;  // its note events, in the order its devices get them
+    int numEvents = 0;
+    std::array<ClipVoice, kMaxClipVoices> voices{};  // in the order its clips play
+    int numVoices = 0;
+    bool monitored = false;  // plays its live input instead of its clips
+    bool audible = true;     // not muted, and solo lets one of its edges through
+    // Solo, per chunk: it is soloed; it is soloed or fed by something soloed
+    // (downstream of a solo); it is soloed or feeds something soloed (upstream).
+    bool soloed = false;
+    bool soloDown = false;
+    bool soloUp = false;
+    // What rendering it takes, in nanoseconds per frame, smoothed over the last
+    // chunks (the thread that renders it measures; the scheduler orders by it).
+    std::atomic<float> cost{0.f};
+
+    explicit TrackBuffers(int frames)
+        : left(static_cast<size_t>(frames), 0.f), right(static_cast<size_t>(frames), 0.f), events(kMaxEvents) {}
+    bool pushEvent(const ProcessEvent& event) noexcept {
+        if (numEvents >= static_cast<int>(events.size())) return false;
+        events[static_cast<size_t>(numEvents++)] = event;
+        return true;
+    }
 };
 
 // A track in the routing graph (Routing.h). The snapshot lists tracks in an
-// order in which each comes after everything that feeds it; `outputIndex` is
-// where its output goes. A track's input is its clips and notes (or the live
-// input), plus whatever other tracks output into it (`bus`).
+// order in which each comes after everything that feeds it. A track's input is
+// what comes in on its incoming edges (summed in that order, but for an input
+// edge), plus its clips and notes (or the live input); its signal leaves on its
+// outgoing edges.
 struct TrackRender : StripRender {
     uint32_t id = 0;
-    int outputIndex = -1;           // the snapshot track its output goes into; -1: the master
-    int inputCount = 0;             // tracks that output into it (a scheduler could run it once they are done)
-    // How late it hears what feeds it. (Its own clips and notes play on time:
-    // they aren't delayed to line up with its inputs. Groups have none.)
+    std::vector<int> incoming;      // edges into it (snapshot edges), in the order it sums them
+    std::vector<int> outgoing;      // edges out of it: its output first, then its sends (and input edges, by destination)
+    int inputCount = 0;             // incoming.size(): the scheduler runs it once they are done
+    // How late it hears what its summed edges bring. (Its own clips and notes
+    // play on time: they aren't delayed to line up with its inputs, and nor is
+    // the input it monitors. Groups and returns have none.)
     int inputLatency = 0;
-    std::vector<int> ancestors;     // the buses its output goes through to the master, nearest first
-    std::shared_ptr<BusBuffer> bus; // where its inputs are summed (null: nothing feeds it)
+    std::shared_ptr<TrackBuffers> buffers;  // its signal and chunk state (never null in an engine's snapshot)
     InputEdge input;
     MidiInputRoute midiInput;
     MonitorMode monitor = MonitorMode::Auto;
@@ -226,6 +309,11 @@ struct RenderSnapshot {
     int64_t clipFadeSamples = 0;
     int maxLatency = 0;  // the tracks reach the master this late (delay-compensated alike)
     std::vector<TrackRender> tracks;  // in routing order: every track after those that feed it
+    std::vector<EdgeRender> edges;    // the routing graph's edges, by source in snapshot order
+    std::vector<int> masterInputs;    // the edges into the master, in snapshot order
+    // The tracks' dependencies, for the scheduler (null: the tracks render in order).
+    std::shared_ptr<TaskGraph> graph;
+    int parallelWork = 0;  // tracks worth a thread of their own (devices, stretched clips)
     StripRender master;  // its params are null in a snapshot made without an engine
     WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
 

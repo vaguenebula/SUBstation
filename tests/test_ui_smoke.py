@@ -908,6 +908,32 @@ def test_header_controls_and_dialogs(window, three_tracks):
     export.reject()
 
 
+def test_audio_threads_preference(window):
+    """Preferences > Audio Threads applies at once and is remembered (the default unless chosen)."""
+    from gilstudio import _engine as ge
+    from gilstudio.audio.settings import audio_threads
+    from gilstudio.ui.dialogs import PreferencesDialog
+
+    engine, default = window.engine, ge.Engine.default_audio_threads()
+    assert audio_threads() == 0 and engine.audio_threads == default
+    prefs = PreferencesDialog(window.bridge, window)
+    assert prefs.threads.currentData() == default
+    assert prefs.threads.itemText(0) == "1 (off)" and "(default)" in prefs.threads.currentText()
+    chosen = 1 if default != 1 else 2
+    prefs.threads.setCurrentIndex(prefs.threads.findData(chosen))
+    assert engine.audio_threads == chosen and audio_threads() == chosen
+    prefs.reject()
+
+    engine.audio_threads = 3
+    window.bridge.apply_audio_threads()  # (on start-up)
+    assert engine.audio_threads == chosen
+    prefs = PreferencesDialog(window.bridge, window)
+    assert prefs.threads.currentData() == chosen
+    prefs.threads.setCurrentIndex(prefs.threads.findData(default))
+    assert engine.audio_threads == default and audio_threads() == 0  # back to the default: not pinned
+    prefs.reject()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="plug-in editors are Win32 windows")
 def test_shortcuts_from_plugin_editor(window, monkeypatch):
     import ctypes

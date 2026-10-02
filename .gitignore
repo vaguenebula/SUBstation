@@ -13,3 +13,5 @@ __pycache__/
 /asio-sdk*/
 # Logs plug-ins write into the working folder (e.g. kiloHearts.log)
 *.log
+profile.svg
+uv.lock

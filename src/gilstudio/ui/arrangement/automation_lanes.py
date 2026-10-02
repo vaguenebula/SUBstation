@@ -606,7 +606,7 @@ class LaneGesture(ClipGesture):
         else:
             covered = areas[min(first, here):max(first, here) + 1]
         lanes = list(dict.fromkeys((a.owner, a.key) for a in covered))
-        track_ids = list(dict.fromkeys(a.owner for a in covered if a.owner != MASTER))
+        track_ids = list(dict.fromkeys(a.owner for a in covered if self.host.project.has_track(a.owner)))
         selection = self.host.selection
         selection.set_time_range(start, end, track_ids, lanes=lanes)
         selection.set_insert(start)

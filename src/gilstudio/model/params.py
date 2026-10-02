@@ -5,7 +5,8 @@ A ParamSpec describes one: its name, range, units and how its values read. It
 maps plain values (in the parameter's own units) to and from normalized ones
 (0..1), which is how automation stores them. Device parameters come from the
 engine's ParamInfo (ParamSpec.from_info) and map as it does; the mixer's
-controls are described here (mixer_specs). The UI shows every kind alike."""
+controls (volume, pan and sends) are described here (mixer_specs). The UI
+shows every kind alike."""
 
 from __future__ import annotations
 
@@ -101,11 +102,19 @@ class ParamSpec:
         return self.format(self.from_normalized(value))
 
 
-def mixer_specs(master: bool = False) -> list[ParamSpec]:
-    """The mixer controls of a track (or the master) that can be automated."""
+def mixer_specs(master: bool = False, sends: tuple[tuple[str, str], ...] = ()) -> list[ParamSpec]:
+    """The mixer controls of a track (or the master) that can be automated: its
+    volume and pan, and its sends to `sends` ((return id, letter) each)."""
     who = "Master" if master else "Track"
     return [
         ParamSpec(automation.MIXER_VOLUME, f"{who} Volume", "Mixer", automation.MIN_VOLUME_DB,
                   automation.MAX_VOLUME_DB, 0.0, "dB", scale="fader", text=format_db),
         ParamSpec(automation.MIXER_PAN, f"{who} Pan", "Mixer", -1.0, 1.0, 0.0, text=format_pan),
+        *(send_spec(return_id, letter) for return_id, letter in sends),
     ]
+
+
+def send_spec(return_id: str, letter: str) -> ParamSpec:
+    """A send's level to a return (lettered as it shows), automated as a volume is."""
+    return ParamSpec(automation.send_key(return_id), f"Send {letter}", "Mixer", automation.MIN_VOLUME_DB,
+                     automation.MAX_VOLUME_DB, automation.MIN_VOLUME_DB, "dB", scale="fader", text=format_db)

@@ -8,9 +8,11 @@ model, the editor, the UI and the engine bridge.
   or the master. The engine plays the same envelopes (engine/src/Automation.h);
   the shape of curved segments and the mixer's mappings here must match it.
 - An envelope belongs to an owner, a track id or MASTER, and is keyed by its
-  target: MIXER_VOLUME, MIXER_PAN, or device_key(device id, parameter id).
+  target: MIXER_VOLUME, MIXER_PAN, send_key(return id) (the level of the
+  owner's send to a return track), or device_key(device id, parameter id).
   Device ids are unique in the project, so a key keeps pointing at its device
-  wherever the device sits (in future, inside a rack).
+  wherever the device sits (in future, inside a rack). A send's level maps as
+  a volume does.
 - Before its first breakpoint an envelope holds the first one's value, after the
   last the last one's. Breakpoints may share a beat (a step): from that beat on,
   the later one's value counts.
@@ -32,6 +34,7 @@ MASTER = "master"  # the master's automation owner id
 MIXER_VOLUME = "mixer:volume"
 MIXER_PAN = "mixer:pan"
 MIXER_KEYS = (MIXER_VOLUME, MIXER_PAN)
+SEND_PREFIX = "send:"
 
 # The faders' range. On a volume lane the gain is the cube of the value, so the
 # lane's 1 is +6 dB, 0 dB sits at about 0.79 and 0 is silence (engine: kMaxVolumeGain).
@@ -68,10 +71,16 @@ def device_key(device_id: str, param_id: str) -> str:
     return f"device:{device_id}:{param_id}"
 
 
+def send_key(return_id: str) -> str:
+    return f"{SEND_PREFIX}{return_id}"
+
+
 def parse_key(key: str) -> tuple[str, ...]:
-    """('mixer', 'volume' / 'pan') or ('device', device id, parameter id)."""
+    """('mixer', 'volume' / 'pan'), ('send', return id) or ('device', device id, parameter id)."""
     kind, _, rest = key.partition(":")
     if kind == "mixer" and key in MIXER_KEYS:
+        return kind, rest
+    if kind == "send" and rest:
         return kind, rest
     if kind == "device":
         device_id, sep, param_id = rest.partition(":")
@@ -89,9 +98,19 @@ def is_key(key: str) -> bool:
 
 
 def key_device(key: str) -> str | None:
-    """The device a key targets (None for the mixer)."""
+    """The device a key targets (None for the mixer and sends)."""
     parts = parse_key(key)
     return parts[1] if parts[0] == "device" else None
+
+
+def key_send(key: str) -> str | None:
+    """The return track whose send a key targets (None for anything else)."""
+    return (key[len(SEND_PREFIX):] or None) if key.startswith(SEND_PREFIX) else None
+
+
+def is_mixer_key(key: str) -> bool:
+    """Whether a key targets the owner's mixer: its volume, pan or a send (not a device)."""
+    return key in MIXER_KEYS or key_send(key) is not None
 
 
 # --- Mixer mappings ----------------------------------------------------------------------

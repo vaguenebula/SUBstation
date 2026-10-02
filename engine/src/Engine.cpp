@@ -42,6 +42,8 @@ Engine::Engine()
       }) {
     std::lock_guard lock(mutex_);
     master_.chainId = addChainLocked(kMaster, 0);
+    scheduler_ = std::make_unique<Scheduler>(defaultAudioThreads());
+    renderer_.setScheduler(scheduler_.get());
     renderer_.prepare(sampleRate_);
     rebuildSnapshotLocked();
 }
@@ -327,6 +329,8 @@ uint32_t Engine::addTrack() {
     track.id = nextTrackId_++;
     track.params = std::make_shared<TrackParams>();
     track.chainId = addChainLocked(track.id, 0);
+    track.buffers = std::make_shared<TrackBuffers>(Renderer::kMaxBlock);
+    track.outputState = std::make_shared<EdgeState>(Renderer::kMaxBlock);
     tracks_.push_back(std::move(track));
     rebuildSnapshotLocked();
     return tracks_.back().id;
@@ -335,8 +339,11 @@ uint32_t Engine::addTrack() {
 void Engine::removeTrack(uint32_t trackId) {
     std::lock_guard lock(mutex_);
     arrangementTrackLocked(trackId);
-    for (TrackModel& track : tracks_) {  // what went into it goes to the master
+    // What went into it goes to the master; the sends into it go, and so do the inputs from it.
+    for (TrackModel& track : tracks_) {
         if (track.output == trackId) track.output = kMaster;
+        std::erase_if(track.sends, [trackId](const SendModel& send) { return send.to == trackId; });
+        if (track.inputTrack == trackId) track.inputTrack.reset();
     }
     // Its chains go, with their devices.
     for (auto it = processors_.begin(); it != processors_.end();) {
@@ -402,11 +409,35 @@ int Engine::trackIndexLocked(uint32_t trackId) const {
     return -1;
 }
 
-std::vector<int> Engine::outputIndicesLocked() const {
-    std::vector<int> outputs;
-    outputs.reserve(tracks_.size());
-    for (const TrackModel& track : tracks_) outputs.push_back(track.output == kMaster ? -1 : trackIndexLocked(track.output));
-    return outputs;
+std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<std::pair<int, int>>* origins) const {
+    std::vector<RouteEdge> edges;
+    if (origins) origins->clear();
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        const TrackModel& track = tracks_[t];
+        const int from = static_cast<int>(t);
+        edges.push_back({from, track.output == kMaster ? -1 : trackIndexLocked(track.output)});
+        if (origins) origins->emplace_back(from, kOutputEdge);
+        for (size_t s = 0; s < track.sends.size(); ++s) {
+            edges.push_back({from, trackIndexLocked(track.sends[s].to)});
+            if (origins) origins->emplace_back(from, static_cast<int>(s));
+        }
+    }
+    // Last, so that each track's own edges lead its outgoing ones. (The master
+    // as a source is no edge: it renders after every track.)
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        const TrackModel& track = tracks_[t];
+        if (!track.inputTrack || *track.inputTrack == kMaster) continue;
+        edges.push_back({trackIndexLocked(*track.inputTrack), static_cast<int>(t), false});
+        if (origins) origins->emplace_back(static_cast<int>(t), kInputEdge);
+    }
+    return edges;
+}
+
+void Engine::checkRouteLocked(uint32_t from, uint32_t to, const char* what) const {
+    if (wouldCycle(static_cast<int>(tracks_.size()), routeEdgesLocked(), trackIndexLocked(from), trackIndexLocked(to))) {
+        throw std::invalid_argument("Track " + std::to_string(from) + " can't " + what + " track " +
+                                    std::to_string(to) + ": that track feeds it");
+    }
 }
 
 void Engine::setTrackOutput(uint32_t trackId, uint32_t outputTrackId) {
@@ -414,10 +445,7 @@ void Engine::setTrackOutput(uint32_t trackId, uint32_t outputTrackId) {
     TrackModel& track = arrangementTrackLocked(trackId);
     if (outputTrackId != kMaster) {
         arrangementTrackLocked(outputTrackId);
-        if (wouldCycle(outputIndicesLocked(), trackIndexLocked(trackId), trackIndexLocked(outputTrackId))) {
-            throw std::invalid_argument("Track " + std::to_string(trackId) + " can't go into track " +
-                                        std::to_string(outputTrackId) + ": that track feeds it");
-        }
+        checkRouteLocked(trackId, outputTrackId, "go into");
     }
     if (track.output == outputTrackId) return;
     track.output = outputTrackId;
@@ -427,6 +455,48 @@ void Engine::setTrackOutput(uint32_t trackId, uint32_t outputTrackId) {
 uint32_t Engine::trackOutput(uint32_t trackId) {
     std::lock_guard lock(mutex_);
     return arrangementTrackLocked(trackId).output;
+}
+
+void Engine::setTrackSend(uint32_t trackId, uint32_t toTrackId, float gain, bool preFader) {
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    arrangementTrackLocked(toTrackId);  // not the master: everything reaches it anyway
+    gain = std::max(0.f, gain);
+    const auto it = std::find_if(track.sends.begin(), track.sends.end(),
+                                 [toTrackId](const SendModel& send) { return send.to == toTrackId; });
+    if (it != track.sends.end()) {
+        it->state->gain.store(gain);
+        if (it->preFader != preFader) {
+            it->preFader = preFader;
+            rebuildSnapshotLocked();
+        }
+        return;
+    }
+    checkRouteLocked(trackId, toTrackId, "send to");
+    SendModel send;
+    send.to = toTrackId;
+    send.preFader = preFader;
+    send.state = std::make_shared<EdgeState>(Renderer::kMaxBlock);
+    send.state->gain.store(gain);
+    track.sends.push_back(std::move(send));
+    rebuildSnapshotLocked();
+}
+
+void Engine::removeTrackSend(uint32_t trackId, uint32_t toTrackId) {
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    if (std::erase_if(track.sends, [toTrackId](const SendModel& send) { return send.to == toTrackId; }) > 0) {
+        rebuildSnapshotLocked();
+    }
+}
+
+std::vector<SendInfo> Engine::trackSends(uint32_t trackId) {
+    std::lock_guard lock(mutex_);
+    std::vector<SendInfo> sends;
+    for (const SendModel& send : arrangementTrackLocked(trackId).sends) {
+        sends.push_back({send.to, send.state->gain.load(), send.preFader});
+    }
+    return sends;
 }
 
 std::vector<MeterReading> Engine::takeMeters() {
@@ -448,7 +518,26 @@ void Engine::setTrackInput(uint32_t trackId, const std::vector<int>& channels) {
         throw std::invalid_argument("An input is no channel, one, or a pair");
     }
     std::lock_guard lock(mutex_);
-    arrangementTrackLocked(trackId).inputChannels = channels;
+    TrackModel& track = arrangementTrackLocked(trackId);
+    track.inputChannels = channels;
+    track.inputTrack.reset();
+    rebuildSnapshotLocked();
+}
+
+void Engine::setTrackInputTrack(uint32_t trackId, uint32_t sourceTrackId) {
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    if (sourceTrackId != kMaster) {
+        arrangementTrackLocked(sourceTrackId);
+        if (wouldCycle(static_cast<int>(tracks_.size()), routeEdgesLocked(), trackIndexLocked(sourceTrackId),
+                       trackIndexLocked(trackId))) {
+            throw std::invalid_argument("Track " + std::to_string(trackId) + " can't take its input from track " +
+                                        std::to_string(sourceTrackId) + ": it feeds that track");
+        }
+    }
+    if (track.inputTrack == sourceTrackId) return;
+    track.inputTrack = sourceTrackId;
+    if (!track.inputState) track.inputState = std::make_shared<EdgeState>(0);  // (it never needs a signal of its own)
     rebuildSnapshotLocked();
 }
 
@@ -464,8 +553,17 @@ void Engine::setTrackArmed(uint32_t trackId, bool armed) {
     rebuildSnapshotLocked();
 }
 
+std::optional<uint32_t> Engine::trackInputTrack(uint32_t trackId) {
+    std::lock_guard lock(mutex_);
+    return arrangementTrackLocked(trackId).inputTrack;
+}
+
 InputEdge Engine::inputEdgeLocked(const TrackModel& track) const {
     InputEdge edge;
+    if (track.inputTrack) {  // (the snapshot fills in a track's edge)
+        edge.source = *track.inputTrack == kMaster ? InputEdge::Source::Master : InputEdge::Source::Track;
+        return edge;
+    }
     if (track.inputChannels.empty()) return edge;
     const auto index = [this](int channel) {
         const auto it = std::find(openInputChannels_.begin(), openInputChannels_.end(), channel);
@@ -483,6 +581,22 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
     if (recording_) throw std::runtime_error("Already recording");
     if (targets.empty()) throw std::invalid_argument("Nothing to record");
     const auto ringFrames = static_cast<size_t>(sampleRate_ * 8.0);  // the writer may fall this far behind
+    // A sample taken in a block came back through the input after leaving the
+    // output, where the timeline was heard this much earlier than the renderer was.
+    // A MIDI message was played in response to what was heard when it arrived:
+    // the renderer meets it one MIDI delay later, a block ahead of the output.
+    // A track's output leaves it as late as its devices and what feeds it make
+    // it (its edges' arrival); the master's, as late as the output's lag.
+    const DeviceState state = device_.state();
+    const auto lag = static_cast<int64_t>(snapshotHold_->outputLatency());
+    const int64_t devicePlacement = lag + state.inputLatency + state.outputLatency;
+    const int64_t midiPlacement = lag + state.outputLatency + shared_.midiInputDelay.load();
+    const auto arrival = [this](uint32_t trackId) -> int64_t {
+        for (const TrackRender& render : snapshotHold_->tracks) {
+            if (render.id == trackId) return render.inputLatency + render.latency;
+        }
+        return 0;
+    };
     std::vector<std::unique_ptr<RecordingTake>> takes;
     std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes;
     for (const RecordTarget& target : targets) {
@@ -499,20 +613,28 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
             continue;
         }
         const InputEdge edge = inputEdgeLocked(track);
-        if (!edge.fromDevice()) throw std::invalid_argument("Track " + std::to_string(target.trackId) + " has no input");
-        if (edge.left < 0 || edge.right < 0) throw std::runtime_error("A track's input is not open on the audio device");
-        takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path, edge.left, edge.right, ringFrames));
+        switch (edge.source) {
+            case InputEdge::Source::None:
+                throw std::invalid_argument("Track " + std::to_string(target.trackId) + " has no input");
+            case InputEdge::Source::Device:
+                if (edge.left < 0 || edge.right < 0) {
+                    throw std::runtime_error("A track's input is not open on the audio device");
+                }
+                takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path, edge.left, edge.right,
+                                                                ringFrames, devicePlacement));
+                break;
+            case InputEdge::Source::Track:
+                takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path,
+                                                                RecordingTake::Source::Track, *track.inputTrack,
+                                                                ringFrames, arrival(*track.inputTrack)));
+                break;
+            case InputEdge::Source::Master:
+                takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path,
+                                                                RecordingTake::Source::Master, kMaster, ringFrames, lag));
+                break;
+        }
     }
-    // A sample taken in a block came back through the input after leaving the
-    // output, where the timeline was heard this much earlier than the renderer was.
-    // A MIDI message was played in response to what was heard when it arrived:
-    // the renderer meets it one MIDI delay later, a block ahead of the output.
-    const DeviceState state = device_.state();
-    const auto lag = static_cast<int64_t>(snapshotHold_->outputLatency());
-    const int64_t placement = lag + state.inputLatency + state.outputLatency;
-    const int64_t midiPlacement = lag + state.outputLatency + shared_.midiInputDelay.load();
-    recording_ = std::make_unique<RecordingSession>(std::move(takes), std::move(midiTakes), sampleRate_, placement,
-                                                    midiPlacement);
+    recording_ = std::make_unique<RecordingSession>(std::move(takes), std::move(midiTakes), sampleRate_, midiPlacement);
     liveRecording_.store(recording_.get(), std::memory_order_seq_cst);
     if (!requestedPlaying_.load()) {
         requestedPlaying_.store(true);
@@ -560,7 +682,7 @@ std::vector<RecordingProgress> Engine::recordingProgress() {
         p.trackId = take->trackId;
         const int64_t start = take->start.load(std::memory_order_acquire);
         p.started = start != RecordingTake::kNotStarted;
-        p.startSample = p.started ? start - recording_->placement() : 0;
+        p.startSample = p.started ? start - take->placement : 0;
         p.frames = take->frames.load(std::memory_order_acquire);
         RecordingTake::Peak peak;
         while (take->peaks.pop(peak)) {
@@ -670,6 +792,18 @@ int Engine::insertLatency(const std::vector<std::shared_ptr<Processor>>& inserts
     return latency;
 }
 
+std::vector<AutomationNode> Engine::automationNodes(const AutomationLaneDesc& desc, double samplesPerBeat) {
+    std::vector<AutomationNode> nodes;
+    nodes.reserve(desc.points.size());
+    for (const AutomationPoint& point : desc.points) {
+        nodes.push_back({std::llround(std::max(0.0, point.beat) * samplesPerBeat), std::clamp(point.value, 0.f, 1.f),
+                         std::clamp(point.curve, -1.f, 1.f)});
+    }
+    std::stable_sort(nodes.begin(), nodes.end(),
+                     [](const AutomationNode& a, const AutomationNode& b) { return a.time < b.time; });
+    return nodes;
+}
+
 void Engine::buildAutomationLocked(const TrackModel& track, int inputLatency, int faderLatency,
                                    double samplesPerBeat, StripRender& strip) {
     const auto& inserts = insertsLocked(track);
@@ -702,13 +836,7 @@ void Engine::buildAutomationLocked(const TrackModel& track, int inputLatency, in
             lane.insert = static_cast<int>(place - inserts.begin());
             lane.latency = inputLatency + insertLatency({inserts.begin(), place});
         }
-        lane.nodes.reserve(desc.points.size());
-        for (const AutomationPoint& point : desc.points) {
-            lane.nodes.push_back({std::llround(std::max(0.0, point.beat) * samplesPerBeat),
-                                  std::clamp(point.value, 0.f, 1.f), std::clamp(point.curve, -1.f, 1.f)});
-        }
-        std::stable_sort(lane.nodes.begin(), lane.nodes.end(),
-                         [](const AutomationNode& a, const AutomationNode& b) { return a.time < b.time; });
+        lane.nodes = automationNodes(desc, samplesPerBeat);
         if (target) {
             *target = std::move(lane);
         } else {
@@ -1089,9 +1217,11 @@ void Engine::prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices,
             voices[c].push_back(std::make_shared<WarpVoice>(static_cast<StretchConfig>(c), sampleRate_));
         }
     }
-    for (const TrackRender& track : snapshotHold_->tracks) {
-        delays.push_back(track.compensation > 0 ? std::make_shared<DelayLine>(track.compensation + 1) : nullptr);
+    for (const EdgeRender& edge : snapshotHold_->edges) {
+        delays.push_back(edge.compensation > 0 ? std::make_shared<DelayLine>(edge.compensation + 1) : nullptr);
     }
+    offline.setScheduler(scheduler_.get());
+    offline.setCostOrdering(renderer_.costOrdering());
     offline.prepare(sampleRate_);
     offline.setWarpVoices(&voices);
     offline.setDelayLines(&delays);
@@ -1181,6 +1311,51 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
 }
 
 // ---------------------------------------------------------------------------
+// Audio threads
+
+int Engine::defaultAudioThreads() {
+    const auto cores = static_cast<int>(std::thread::hardware_concurrency());
+    return std::clamp(cores - 1, 1, kMaxAudioThreads);
+}
+
+void Engine::setAudioThreads(int threads) {
+    threads = std::clamp(threads, 1, kMaxAudioThreads);
+    std::lock_guard lock(mutex_);
+    if (scheduler_->threads() == threads) return;
+    // The audio thread mustn't be inside the scheduler (or the renderer's
+    // scratch) while they change: it outputs silence meanwhile. A recording goes
+    // on (the playhead waits as well).
+    const bool suspended = liveSuspended_.exchange(true, std::memory_order_seq_cst);
+    waitForCallbackLocked();
+    auto old = std::exchange(scheduler_, std::make_unique<Scheduler>(threads));
+    renderer_.setScheduler(scheduler_.get());
+    old.reset();  // its workers end
+    if (!suspended) resumeLiveLocked();
+}
+
+int Engine::audioThreads() {
+    std::lock_guard lock(mutex_);
+    return scheduler_->threads();
+}
+
+uint64_t Engine::nodesOnWorkers() {
+    std::lock_guard lock(mutex_);
+    return scheduler_->nodesOnWorkers();
+}
+
+void Engine::setCostOrdering(bool on) { renderer_.setCostOrdering(on); }  // offline renders copy it
+
+std::vector<TrackCost> Engine::trackCosts() {
+    std::lock_guard lock(mutex_);
+    std::vector<TrackCost> costs;
+    costs.reserve(tracks_.size());
+    for (const TrackModel& track : tracks_) {
+        costs.push_back({track.id, track.buffers->cost.load(std::memory_order_relaxed)});
+    }
+    return costs;
+}
+
+// ---------------------------------------------------------------------------
 // Snapshot publishing and housekeeping
 
 void Engine::rebuildSnapshotLocked() {
@@ -1195,33 +1370,99 @@ void Engine::rebuildSnapshotLocked() {
     snap->loopEnabled = loopEnabled_ && snap->loopEnd - snap->loopStart >= 256;
     snap->clipFadeSamples = std::llround(clipFadeMs_ * 0.001 * sampleRate_);
 
-    // Routing: the tracks in an order in which each comes after what feeds it.
-    std::vector<int> outputs = outputIndicesLocked();
-    std::vector<int> order = topologicalOrder(outputs);
-    if (order.size() != tracks_.size()) {
-        // setTrackOutput() refuses cycles, so there is none; were there one, the
-        // tracks would play straight into the master.
+    // Routing: the tracks in an order in which each comes after what feeds it
+    // (through outputs, sends and inputs alike).
+    std::vector<std::pair<int, int>> origins;  // per edge: (its track's index, send index, or kOutputEdge, kInputEdge)
+    std::vector<RouteEdge> edges = routeEdgesLocked(&origins);
+    const int count = static_cast<int>(tracks_.size());
+    std::vector<int> order = topologicalOrder(count, edges);
+    if (static_cast<int>(order.size()) != count) {
+        // setTrackOutput() and setTrackSend() refuse cycles, so there is none; were
+        // there one, the tracks would play straight into the master, without sends.
         assert(false && "the routing graph has a cycle");
-        for (TrackModel& track : tracks_) track.output = kMaster;
-        outputs = outputIndicesLocked();
-        order = topologicalOrder(outputs);
+        for (TrackModel& track : tracks_) {
+            track.output = kMaster;
+            track.sends.clear();
+            if (track.inputTrack != kMaster) track.inputTrack.reset();
+        }
+        edges = routeEdgesLocked(&origins);
+        order = topologicalOrder(count, edges);
     }
     std::vector<int> position(tracks_.size());  // tracks_ index -> snapshot index
     for (size_t i = 0; i < order.size(); ++i) position[order[i]] = static_cast<int>(i);
-    std::vector<int> inputCounts(tracks_.size(), 0);
-    for (const int out : outputs) {
-        if (out >= 0) ++inputCounts[out];
-    }
 
-    // Plug-in delay compensation at every summing point, bottom-up: each bus (and
-    // the master) hears its inputs as late as the latest of them, which their
-    // enabled devices (and those of what feeds them) make; the others are delayed
-    // to line up with it.
+    // Plug-in delay compensation at every summing point, per edge: each bus (a
+    // group, a return, the master) hears its inputs as late as the latest of
+    // them, which the enabled devices before each edge's tap (and those of what
+    // feeds them) make; the other edges are delayed to line up with it. Both
+    // taps (pre- and post-fader) come after every device of a strip. Input edges
+    // aren't summed, so nothing lines up with them.
     std::vector<int> latencies;
     latencies.reserve(tracks_.size());
     for (const TrackModel& track : tracks_) latencies.push_back(insertLatency(insertsLocked(track)));
-    const GraphLatencies aligned = alignGraph(order, outputs, latencies);
+    std::vector<int> tapLatency;
+    tapLatency.reserve(edges.size());
+    for (const RouteEdge& edge : edges) tapLatency.push_back(latencies[static_cast<size_t>(edge.from)]);
+    const GraphLatencies aligned = alignGraph(order, edges, tapLatency);
     snap->maxLatency = aligned.masterInput;
+
+    // The edges in snapshot order (by source; each track's output, then its
+    // sends, then the input edges it feeds), each node's incoming and outgoing
+    // ones (what a bus sums, in that order), and the graph the scheduler runs.
+    std::vector<std::vector<int>> edgesOf(tracks_.size());
+    for (size_t e = 0; e < edges.size(); ++e) edgesOf[static_cast<size_t>(edges[e].from)].push_back(static_cast<int>(e));
+    std::vector<std::vector<int>> incoming(tracks_.size()), outgoing(tracks_.size());  // by snapshot index
+    std::vector<int> inputEdge(tracks_.size(), -1);  // by snapshot index: the input edge it takes, if any
+    std::vector<std::pair<int, int>> graphEdges;
+    snap->edges.reserve(edges.size());
+    for (const int t : order) {
+        TrackModel& track = tracks_[static_cast<size_t>(t)];
+        for (const int e : edgesOf[static_cast<size_t>(t)]) {
+            const auto [owner, send] = origins[static_cast<size_t>(e)];
+            const int to = edges[static_cast<size_t>(e)].to;
+            EdgeRender edge;
+            edge.from = position[static_cast<size_t>(t)];
+            edge.to = to >= 0 ? position[static_cast<size_t>(to)] : -1;
+            edge.compensation = aligned.compensation[static_cast<size_t>(e)];
+            if (send == kInputEdge) {  // the destination's input: not summed, nor delayed
+                edge.kind = EdgeRender::Kind::Input;
+                edge.state = tracks_[static_cast<size_t>(owner)].inputState;
+                inputEdge[static_cast<size_t>(edge.to)] = static_cast<int>(snap->edges.size());
+            } else {
+                std::shared_ptr<DelayLine>& delay =
+                    send == kOutputEdge ? track.delay : track.sends[static_cast<size_t>(send)].delay;
+                if (edge.compensation > 0 && (!delay || delay->capacity() <= edge.compensation)) {
+                    delay = std::make_shared<DelayLine>(2 * edge.compensation + Renderer::kMaxBlock);
+                }
+                edge.delay = delay;
+            }
+            if (send == kOutputEdge) {
+                edge.state = track.outputState;
+            } else if (send != kInputEdge) {
+                const SendModel& model = track.sends[static_cast<size_t>(send)];
+                edge.kind = EdgeRender::Kind::Send;
+                edge.tap = model.preFader ? EdgeRender::Tap::PreFader : EdgeRender::Tap::PostFader;
+                edge.state = model.state;
+                // Its level is applied where it is summed: as late as its destination hears its inputs.
+                const std::string param = "send:" + std::to_string(model.to);
+                for (const AutomationLaneDesc& desc : track.automation) {
+                    if (desc.processorId != 0 || desc.param != param || desc.points.empty()) continue;
+                    edge.level.nodes = automationNodes(desc, spb);
+                    edge.level.latency = aligned.inputLatency[static_cast<size_t>(to)];
+                }
+            }
+            const int index = static_cast<int>(snap->edges.size());
+            outgoing[static_cast<size_t>(edge.from)].push_back(index);
+            if (edge.to >= 0) {
+                incoming[static_cast<size_t>(edge.to)].push_back(index);
+                graphEdges.emplace_back(edge.from, edge.to);
+            } else {
+                snap->masterInputs.push_back(index);
+            }
+            snap->edges.push_back(std::move(edge));
+        }
+    }
+    snap->graph = std::make_shared<TaskGraph>(count, graphEdges);
 
     // The master: its input is the sum of what goes into it, which comes maxLatency late.
     StripRender& master = snap->master;
@@ -1241,25 +1482,19 @@ void Engine::rebuildSnapshotLocked() {
         render.inserts = insertsLocked(track);
         render.latency = latencies[t];
         render.inputLatency = aligned.inputLatency[t];
-        render.compensation = aligned.compensation[t];
-        if (render.compensation > 0 && (!track.delay || track.delay->capacity() <= render.compensation)) {
-            track.delay = std::make_shared<DelayLine>(2 * render.compensation + Renderer::kMaxBlock);
-        }
-        render.delay = track.delay;
-        render.outputIndex = outputs[t] >= 0 ? position[outputs[t]] : -1;
-        for (int node = outputs[t]; node >= 0; node = outputs[node]) render.ancestors.push_back(position[node]);
-        render.inputCount = inputCounts[t];
-        if (render.inputCount > 0) {
-            if (!track.bus) track.bus = std::make_shared<BusBuffer>(Renderer::kMaxBlock);
-            render.bus = track.bus;
-        }
+        const size_t at = static_cast<size_t>(position[static_cast<size_t>(t)]);
+        render.incoming = std::move(incoming[at]);
+        render.outgoing = std::move(outgoing[at]);
+        render.inputCount = static_cast<int>(render.incoming.size());
+        render.buffers = track.buffers;
         render.input = inputEdgeLocked(track);
+        render.input.edge = inputEdge[at];
         render.midiInput = track.midiInput;
         render.monitor = track.monitor;
         render.armed = track.armed;
-        // Its devices hear the timeline as late as its input; its fader as late as
-        // the summing point it goes into.
-        const int faderLatency = render.inputLatency + render.latency + render.compensation;
+        // Its devices hear the timeline as late as its input; its fader after them
+        // (its edges are delayed after the fader, to line up where they go).
+        const int faderLatency = render.inputLatency + render.latency;
         buildAutomationLocked(track, render.inputLatency, faderLatency, spb, render);
         render.notes.reserve(track.notes.size());
         for (const NoteDesc& note : track.notes) {
@@ -1321,6 +1556,13 @@ void Engine::rebuildSnapshotLocked() {
         for (int c = 0; c < kNumStretchConfigs; ++c) voicesNeeded[c] += std::min<size_t>(stretching[c], 3);
         std::sort(render.clips.begin(), render.clips.end(),
                   [](const ClipRender& a, const ClipRender& b) { return a.start < b.start; });
+        // Worth a thread of its own: devices to run, or clips to stretch.
+        const bool enabledDevice = std::any_of(render.inserts.begin(), render.inserts.end(),
+                                               [](const auto& insert) { return insert->isEnabled(); });
+        const bool warping = std::any_of(render.clips.begin(), render.clips.end(), [](const ClipRender& clip) {
+            return clip.playback != ClipRender::Playback::Direct;
+        });
+        if (enabledDevice || warping) ++snap->parallelWork;
         snap->tracks.push_back(std::move(render));
     }
     ensureWarpVoicesLocked(voicesNeeded);

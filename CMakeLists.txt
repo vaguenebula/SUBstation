@@ -128,6 +128,7 @@ nanobind_add_module(_engine NB_STATIC
     engine/src/backends/WasapiBackend.cpp
     engine/src/AudioSource.cpp
     engine/src/Renderer.cpp
+    engine/src/Scheduler.cpp
     engine/src/Recorder.cpp
     engine/src/Metronome.cpp
     engine/src/MidiInput.cpp
@@ -144,7 +145,7 @@ target_include_directories(_engine PRIVATE engine/src)
 target_include_directories(_engine SYSTEM PRIVATE
     engine/third_party/signalsmith-stretch
     engine/third_party/signalsmith-linear)
-target_link_libraries(_engine PRIVATE miniaudio vst3_hosting user32 ole32 uuid advapi32 winmm)
+target_link_libraries(_engine PRIVATE miniaudio vst3_hosting user32 ole32 uuid advapi32 winmm avrt)
 target_compile_definitions(_engine PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES)
 if (ASIO_SDK)
     target_sources(_engine PRIVATE engine/src/backends/AsioBackend.cpp)

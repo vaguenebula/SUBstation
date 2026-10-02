@@ -76,7 +76,8 @@ def test_header_controls(studio, app):
 
     menu = h.input_menu()
     labels = [a.text() for a in menu.actions() if a.text()]
-    assert labels == ["No Input"] + [f"In {i}  (Test In {i})" for i in range(1, 5)] + ["In 1/2", "In 3/4"]
+    assert labels == (["No Input"] + [f"In {i}  (Test In {i})" for i in range(1, 5)] + ["In 1/2", "In 3/4"]
+                      + ["Resampling", other.name, midi.name])  # (other tracks' outputs: resampling)
     choose(menu, "In 3/4")
     assert track.input == (2, 3) and h.input.text() == "In 3/4"
     # The device didn't have them open: it has now (and keeps them).

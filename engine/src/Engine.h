@@ -2,8 +2,10 @@
 // Public engine API used by the Python bindings.
 //
 // Routing (Routing.h): every track's output goes to the master or into another
-// track (a bus: a group track). The snapshot lists the tracks so that each
-// comes after what feeds it, and lines up the inputs of every bus.
+// track (a bus: a group track), and its sends into other tracks (return
+// tracks); a track may take its input from another track's output (an input
+// edge: resampling). The snapshot lists the tracks so that each comes after
+// what feeds it, and lines up the edges going into every bus.
 //
 // Threading model:
 //  * The audio thread (device callback) only reads the published RenderSnapshot
@@ -27,12 +29,16 @@
 //    messages arrive on the drivers' threads, are stamped against the audio
 //    device's clock there and queued for the audio thread (MidiInput.h); they
 //    never take `mutex_`. Without a running audio device they are dropped.
+//  * Audio threads (Scheduler.h): the thread rendering (the audio thread, or the
+//    one rendering offline) shares the tracks of each chunk with a pool of
+//    workers. They touch only what the snapshot hands them, like the audio thread.
 
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -44,6 +50,8 @@
 #include "Processor.h"
 #include "Recorder.h"
 #include "Renderer.h"
+#include "Routing.h"
+#include "Scheduler.h"
 #include "Snapshot.h"
 #include "Transport.h"
 #include "rt/RtUtils.h"
@@ -101,6 +109,19 @@ struct AudioClockStatus {
     int64_t hostTimeNs = 0;   // when the last callback began (hostTimeNs())
     int64_t sampleTime = 0;   // the device sample it began with
     int midiDelay = 0;        // frames between a MIDI message's arrival and when it plays
+};
+
+// A track's send (Engine::trackSends()).
+struct SendInfo {
+    uint32_t trackId = 0;  // the track it goes into (a return)
+    float gain = 1.f;
+    bool preFader = false;
+};
+
+// What rendering a track takes lately (Engine::trackCosts()).
+struct TrackCost {
+    uint32_t trackId = 0;
+    float nsPerFrame = 0.f;  // 0: not rendered yet
 };
 
 struct MeterReading {
@@ -198,6 +219,17 @@ public:
     // the master. Delay compensation lines up the inputs of every bus.
     void setTrackOutput(uint32_t trackId, uint32_t outputTrackId);
     uint32_t trackOutput(uint32_t trackId);
+    // Sends: a track's signal also goes into another track (a return track), at
+    // `gain`, taken after its fader or before it (`preFader`; a muted track's
+    // sends are silent either way). One send per pair; setting it again changes
+    // it (a new gain alone is cheap: no new snapshot). Throws
+    // std::invalid_argument for an unknown track, the master, or a send that
+    // would close a cycle (through outputs and sends alike). When a track goes,
+    // the sends into it go too. Its automation: a lane of the sending track,
+    // processorId 0 and param "send:<track id>" (as volume: 0..1, +6 dB at 1).
+    void setTrackSend(uint32_t trackId, uint32_t toTrackId, float gain, bool preFader);
+    void removeTrackSend(uint32_t trackId, uint32_t toTrackId);
+    std::vector<SendInfo> trackSends(uint32_t trackId);
     void setMasterGain(float gain) { setTrackGain(kMaster, gain); }
     void setMasterPan(float pan) { setTrackPan(kMaster, pan); }
     std::vector<MeterReading> takeMeters();
@@ -206,6 +238,17 @@ public:
     // A track's input: device channels (0-based, as DeviceStatus lists them): none,
     // one (mono) or two (a stereo pair). Channels the device hasn't open are silent.
     void setTrackInput(uint32_t trackId, const std::vector<int>& channels);
+    // A track's input from another track's output, after its fader (resampling
+    // it: an input edge), or from the master's (kMaster: resampling the mix),
+    // instead of device channels (setTrackInput() goes back to those). The source
+    // renders first. Monitored, the track hears a track's output instead of its
+    // clips, without delay compensation, as it hears the device; never the
+    // master's (that would feed back), which it can only record. Throws
+    // std::invalid_argument for an unknown track, the track itself, or a track
+    // it feeds (a cycle, through outputs, sends and inputs alike). When the
+    // source goes, the input goes too.
+    void setTrackInputTrack(uint32_t trackId, uint32_t sourceTrackId);
+    std::optional<uint32_t> trackInputTrack(uint32_t trackId);  // none: its input is the device's (or none)
     void setTrackMonitor(uint32_t trackId, MonitorMode mode);
     // Armed tracks are what Auto monitoring listens to; what records is up to startRecording().
     void setTrackArmed(uint32_t trackId, bool armed);
@@ -213,6 +256,9 @@ public:
     // starts playing (after `countInBeats` of count-in) if stopped. Throws
     // std::runtime_error (for the user) if no device runs, a target's input isn't
     // open, or a file can't be created; std::invalid_argument for a bad target.
+    // A take lands where what it recorded was heard: device input is moved back
+    // by the output's lag and the device's latencies; a track's output by how
+    // late it leaves the track (its edge's arrival); the master's by the lag.
     void startRecording(const std::vector<RecordTarget>& targets, double countInBeats = 0.0);
     // Ends the recording (the transport plays on) and returns its takes, and those
     // of a recording ended otherwise since the last call (a device change).
@@ -314,6 +360,23 @@ public:
                                      bool metronome = false);  // interleaved stereo
     void exportWav(const std::string& path, double startBeat, double endBeat, int bitDepth);
 
+    // --- Audio threads -----------------------------------------------------------
+    // How many threads render (the audio thread and the workers); 1 renders
+    // every track on the audio thread. Renders are the same whatever the number.
+    static int defaultAudioThreads();  // one per core but one (at least 1)
+    static constexpr int kMaxAudioThreads = 64;
+    void setAudioThreads(int threads);
+    int audioThreads();
+    // Tracks the workers have rendered since the number of threads was last set
+    // (tests and benchmarks see them work).
+    uint64_t nodesOnWorkers();
+    // Each track's render is timed. Tracks start with those with the most work
+    // hanging off them (their own and the groups they go into), unless this is
+    // off (for benchmarks): then in routing order. Results are the same either way.
+    void setCostOrdering(bool on);
+    bool costOrdering() const { return renderer_.costOrdering(); }
+    std::vector<TrackCost> trackCosts();
+
     // --- Housekeeping ---------------------------------------------------------
     // Call regularly from the UI thread: frees retired snapshots and removed
     // processors, handles device loss, and does the main-thread work plug-ins
@@ -321,6 +384,13 @@ public:
     void idle();
 
 private:
+    // A send (a routing edge), with its state and delay line kept across snapshots.
+    struct SendModel {
+        uint32_t to = 0;
+        bool preFader = false;
+        std::shared_ptr<EdgeState> state;
+        std::shared_ptr<DelayLine> delay;
+    };
     struct TrackModel {
         uint32_t id = 0;
         std::shared_ptr<TrackParams> params;
@@ -328,11 +398,16 @@ private:
         std::vector<std::string> clipKeys;  // sourceKey() of each clip's path
         std::vector<NoteDesc> notes;
         uint32_t chainId = 0;               // its main chain
-        std::shared_ptr<DelayLine> delay;   // delay compensation, kept across snapshots
         uint32_t output = 0;                // where its output goes: kMaster or a track (a routing edge)
-        std::shared_ptr<BusBuffer> bus;     // its inputs' sum, while tracks output into it; kept across snapshots
+        std::shared_ptr<EdgeState> outputState;  // its output edge's, kept across snapshots (not the master)
+        std::shared_ptr<DelayLine> delay;   // its output edge's delay compensation, kept across snapshots
+        std::vector<SendModel> sends;       // more edges, in the order they were made
+        std::shared_ptr<TrackBuffers> buffers;  // its signal and chunk state, kept across snapshots (not the master)
         std::vector<AutomationLaneDesc> automation;
-        std::vector<int> inputChannels;  // device channels: the input edge
+        std::vector<int> inputChannels;  // device channels: its input (unless inputTrack)
+        // Its input from a track's output (an input edge) or the master's (kMaster), instead of device channels.
+        std::optional<uint32_t> inputTrack;
+        std::shared_ptr<EdgeState> inputState;  // the input edge's (once it had one), kept across snapshots
         MidiInputRoute midiInput;
         MonitorMode monitor = MonitorMode::Auto;
         bool armed = false;
@@ -387,11 +462,21 @@ private:
     // the strip's input hears the timeline (0 for a track fed by nothing else; for
     // a bus or the master, as late as the latest of what feeds it). Its devices
     // hear it that much later, plus the latency of the devices before them; its
-    // fader after all of them and its compensation (`faderLatency`).
+    // fader after all of them (`faderLatency`; delay compensation comes after
+    // the fader, on the strip's edges).
     void buildAutomationLocked(const TrackModel& track, int inputLatency, int faderLatency, double samplesPerBeat,
                                StripRender& strip);
-    // The tracks' outputs as indices into tracks_ (-1: the master).
-    std::vector<int> outputIndicesLocked() const;
+    // An envelope's breakpoints in samples, sorted.
+    static std::vector<AutomationNode> automationNodes(const AutomationLaneDesc& desc, double samplesPerBeat);
+    // The routing graph's edges, as indices into tracks_ (-1: the master): each
+    // track's output, then its sends; then the input edges. `origins` (if given)
+    // gets which each is: (the track it belongs to, send index; kOutputEdge: its
+    // output, kInputEdge: its input, whose source is the edge's `from`).
+    static constexpr int kOutputEdge = -1;
+    static constexpr int kInputEdge = -2;
+    std::vector<RouteEdge> routeEdgesLocked(std::vector<std::pair<int, int>>* origins = nullptr) const;
+    // Throws std::invalid_argument if an edge from `from` into `to` would close a cycle.
+    void checkRouteLocked(uint32_t from, uint32_t to, const char* what) const;
     int trackIndexLocked(uint32_t trackId) const;  // -1: the master (or none)
     static int insertLatency(const std::vector<std::shared_ptr<Processor>>& inserts);
     static std::string sourceKey(const std::string& path);
@@ -410,6 +495,7 @@ private:
     std::shared_ptr<const RenderSnapshot> snapshotHold_;
     DeferredReleasePool releasePool_;
     SharedState shared_;
+    std::unique_ptr<Scheduler> scheduler_;  // the live and offline renderers share it (never at once)
     Renderer renderer_;
     std::atomic<bool> requestedPlaying_{false};
 

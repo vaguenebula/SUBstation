@@ -1,5 +1,6 @@
 """Composes the arrangement: ruler on top, lanes with track headers on the right
-(as in Ableton), the master track pinned at the bottom, shared scrollbars.
+(as in Ableton), the return tracks and the master pinned at the bottom (the
+returns above the master, a compact row each), shared scrollbars.
 
 Automation shows per track (and for the master): 'A' shows or hides it all, and
 changing a parameter by hand shows its track's automation with that parameter
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter
-from PySide6.QtWidgets import QGridLayout, QScrollBar, QWidget
+from PySide6.QtWidgets import QGridLayout, QScrollBar, QSizePolicy, QVBoxLayout, QWidget
 
 from ... import theme
 from ...audio.engine_bridge import EngineBridge
@@ -18,7 +19,15 @@ from ...model.editor import ProjectEditor
 from ..clip_view import ClipView
 from .lanes_canvas import LanesCanvas
 from .ruler import TimelineRuler
-from .track_headers import MASTER_HEIGHT, MasterHeader, MasterLane, TrackHeaderColumn
+from .track_headers import (
+    MASTER_HEIGHT,
+    BusLane,
+    MasterHeader,
+    MasterLane,
+    ReturnHeader,
+    TrackHeaderColumn,
+    return_rows,
+)
 from .view_state import Selection, TrackLayout, ViewState, automation_rows
 from .waveform_cache import WaveformCache
 
@@ -56,6 +65,16 @@ class GridInfo(QWidget):
         self.view.set_snap(not self.view.snap)
 
 
+def _stack() -> tuple[QWidget, QVBoxLayout]:
+    """A column of rows of fixed height (the returns' lanes, or their headers)."""
+    widget = QWidget()
+    layout = QVBoxLayout(widget)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    return widget, layout
+
+
 class ArrangementView(QWidget):
     locate_requested = Signal(float)
     status_message = Signal(str)
@@ -81,6 +100,11 @@ class ArrangementView(QWidget):
         self.master_header = MasterHeader(editor, bridge, selection)
         self.master_header.setFixedWidth(HEADER_WIDTH)
         self._update_master_height()
+        # The return tracks: a lane and a header each, above the master's.
+        self.return_lanes, self._return_lane_layout = _stack()
+        self.return_headers, self._return_header_layout = _stack()
+        self.return_headers.setFixedWidth(HEADER_WIDTH)
+        self._returns: dict[str, tuple[BusLane, ReturnHeader]] = {}
         self.hbar = QScrollBar(Qt.Orientation.Horizontal)
         self.vbar = QScrollBar(Qt.Orientation.Vertical)
         for bar in (self.hbar, self.vbar):
@@ -93,16 +117,20 @@ class ArrangementView(QWidget):
         grid.addWidget(self.grid_info, 0, 1, 1, 2)
         grid.addWidget(self.lanes, 1, 0)
         grid.addWidget(self.headers, 1, 1)
-        grid.addWidget(self.vbar, 1, 2, 2, 1)
-        grid.addWidget(self.master_lane, 2, 0)
-        grid.addWidget(self.master_header, 2, 1)
-        grid.addWidget(self.hbar, 3, 0)
+        grid.addWidget(self.vbar, 1, 2, 3, 1)
+        grid.addWidget(self.return_lanes, 2, 0)
+        grid.addWidget(self.return_headers, 2, 1)
+        grid.addWidget(self.master_lane, 3, 0)
+        grid.addWidget(self.master_header, 3, 1)
+        grid.addWidget(self.hbar, 4, 0)
         grid.setColumnStretch(0, 1)
         grid.setRowStretch(1, 1)
 
         p = self.project
         for signal in (p.track_inserted, p.track_removed, p.tracks_arranged):
             signal.connect(self._on_structure_changed)
+        for signal in (p.return_inserted, p.return_removed):
+            signal.connect(self._on_returns_changed)
         p.reset.connect(self._on_reset)
         p.track_changed.connect(self._on_track_changed)
         p.automation_view_changed.connect(self._on_automation_view_changed)
@@ -134,16 +162,62 @@ class ArrangementView(QWidget):
         self.waveforms.clear()
         self.view.scroll_beats = 0.0
         self.view.scroll_y = 0
+        self._sync_returns()
         self._on_structure_changed()
+        self.headers.refresh_all()
         self._update_master_height()
         self.view.changed.emit()
 
     def _on_automation_view_changed(self, owner: str) -> None:
         if owner == MASTER:
             self._update_master_height()
+        elif self.project.has_return(owner):
+            self._update_return_height(owner)
         elif self.project.has_track(owner):
             self._on_track_changed(owner)
             self.headers.relayout()
+
+    def _on_returns_changed(self, *_args) -> None:
+        """A return came or went: its rows, and every header's send knobs (their
+        letters, and how tall a track's lane is while its automation shows)."""
+        self._sync_returns()
+        self.headers.refresh_all()
+        self._on_structure_changed()
+        self.headers.relayout()
+
+    def _sync_returns(self) -> None:
+        """A lane and a header for each return, in their order."""
+        wanted = [r.id for r in self.project.returns]
+        for return_id in [r for r in self._returns if r not in wanted]:
+            for widget in self._returns.pop(return_id):
+                widget.hide()
+                widget.deleteLater()
+        for index, return_id in enumerate(wanted):
+            if return_id not in self._returns:
+                lane = BusLane(return_id, self.editor, self.view, self.selection, self.bridge)
+                header = ReturnHeader(return_id, self.editor, self.bridge, self.selection)
+                header.setFixedWidth(HEADER_WIDTH)
+                self._returns[return_id] = (lane, header)
+            lane, header = self._returns[return_id]
+            self._return_lane_layout.insertWidget(index, lane)
+            self._return_header_layout.insertWidget(index, header)
+            header.refresh()
+            self._update_return_height(return_id)
+        self.return_lanes.setVisible(bool(wanted))
+        self.return_headers.setVisible(bool(wanted))
+
+    def _update_return_height(self, return_id: str) -> None:
+        if return_id not in self._returns:
+            return
+        main_height, lanes = return_rows(self.project, return_id)
+        height = main_height + sum(lane.height for lane in lanes)
+        for widget in self._returns[return_id]:
+            widget.setFixedHeight(height)
+            widget.set_rows(main_height, lanes)
+
+    def return_row(self, return_id: str) -> tuple[BusLane, ReturnHeader] | None:
+        """A return's lane and header (for tests)."""
+        return self._returns.get(return_id)
 
     def _update_master_height(self) -> None:
         main_height, lanes = automation_rows(self.project.master.automation_view, 0, MASTER_HEIGHT)
@@ -164,11 +238,27 @@ class ArrangementView(QWidget):
     def _on_structure_changed(self, *_args) -> None:
         self.layout_model.rebuild()
         self.headers.sync()
+        self._refresh_sends()  # a track into or out of a group: which sends would close a cycle
         self.selection.prune(self.project)
         self._update_vbar()
         self.lanes.update()
 
+    def _refresh_sends(self) -> None:
+        """Every send knob: which can be used depends on the whole routing graph
+        (groups, sends and inputs)."""
+        for _lane, header in self._returns.values():
+            header.sends.refresh()
+        for header in self.headers.headers.values():
+            header.sends.refresh()
+
     def _on_track_changed(self, track_id: str) -> None:
+        for track in self.project.tracks:  # what takes its output as its input shows its name
+            if track.input_track == track_id:
+                self.headers.refresh(track.id)
+        self._refresh_sends()  # its sends or its input: which sends would close a cycle
+        if track_id in self._returns:  # its name and mixer
+            self._returns[track_id][1].refresh()
+            return
         old_height = self.layout_model.total_height
         old_row = self.layout_model.row_for(track_id)
         self.layout_model.rebuild()
@@ -233,6 +323,8 @@ class ArrangementView(QWidget):
         self.lanes.set_playhead(shown)
         self.ruler.set_playhead(shown)
         self.master_lane.set_playhead(shown)
+        for lane, _header in self._returns.values():
+            lane.set_playhead(shown)
         if self.view.follow and self.bridge.is_playing:
             x = self.view.beat_to_x(beat)
             width = self.lanes.width()
