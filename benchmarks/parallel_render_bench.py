@@ -77,12 +77,12 @@ def build(engine: ge.Engine, args, beats: float) -> None:
         engine.set_track_notes(track, notes)
         if args.device == "ott":
             engine.add_builtin_processor(chain, "ott")
-        if t >= args.tracks - args.heavy:
-            for _ in range(args.heavy_otts):
-                engine.add_builtin_processor(chain, "ott")
         elif args.device == "plugin":
             engine.set_track_clips(track, [ge.ClipDesc(noise, 0.0, beats / 2)])
             engine.add_plugin_processor(chain, "VST3", args.plugin, plugin_uid)
+        if t >= args.tracks - args.heavy:  # heavy tracks go on through their OTTs, after their device
+            for _ in range(args.heavy_otts):
+                engine.add_builtin_processor(chain, "ott")
         engine.set_track_gain(track, 1.0 / args.tracks)
     engine.idle()
 

@@ -98,7 +98,14 @@ void TaskGraph::push(int node) noexcept {
 Scheduler::Scheduler(int threads) {
     const int workers = std::max(0, threads - 1);
     workers_.reserve(static_cast<size_t>(workers));
-    for (int w = 1; w <= workers; ++w) workers_.emplace_back([this, w] { workerMain(w); });
+    try {
+        for (int w = 1; w <= workers; ++w) workers_.emplace_back([this, w] { workerMain(w); });
+    } catch (...) {  // a thread couldn't start: those that did end (the destructor won't run)
+        state_.store(kQuit, std::memory_order_seq_cst);
+        state_.notify_all();
+        for (auto& worker : workers_) worker.join();
+        throw;
+    }
 }
 
 Scheduler::~Scheduler() {
