@@ -48,11 +48,23 @@ source to the track the device is on (sidechain_would_cycle); the master's
 devices can take any track's. Should the source go, the sidechain goes (in the
 same undo step); should the device it taps after leave the source, it taps
 before the fader until the device comes back.
+
+A device may be a rack (kind "rack": a device group). Its chains each process
+its input, side by side, through their devices (racks too, at most
+MAX_RACK_DEPTH deep) and a mixer of their own (volume, pan, mute, solo among
+the rack's chains), and it puts out their sum; its chains' devices all hear
+the track's notes, so a rack of instruments layers them. Devices nested in
+racks are the track's devices as much as those in its own chain: device ids
+are unique in the project, so `project.device()` finds them wherever they
+sit, and their automation is the track's (by device id). A rack's macros are
+its parameters ("macro1"..): each can be mapped to parameters of devices in it
+(MacroMapping), which follow it across their range.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -209,6 +221,15 @@ class PluginRef:
 
 
 PLUGIN_KIND = "plugin"
+RACK_KIND = "rack"  # a device group: chains side by side
+MAX_RACK_DEPTH = 8  # racks nest at most this deep (the engine's MAX_RACK_DEPTH)
+MACRO_COUNT = 8  # a rack's macros: its parameters macro_param(0..7)
+
+
+def macro_param(index: int) -> str:
+    """A rack's macro's parameter id: "macro1" for the first."""
+    return f"macro{index + 1}"
+
 
 # Where a sidechain takes its source's signal (Sidechain.tap), unless after one of its
 # devices: as Ableton's Post Mixer, Post FX and Pre FX.
@@ -237,17 +258,36 @@ class Sidechain:
         return None if self.tap in (POST_FADER, PRE_FADER, PRE_FX) else self.tap
 
 
+@dataclass(frozen=True)
+class MacroMapping:
+    """A rack's macro (0-based) moving a parameter of a device in the rack:
+    the macro's 0..1 is the parameter's `low`..`high` (normalized, as
+    automation is; `low` > `high` turns it the other way)."""
+
+    macro: int
+    device_id: str
+    param_id: str
+    low: float = 0.0
+    high: float = 1.0
+
+    def target(self, value: float) -> float:
+        """The parameter's normalized value for the macro at `value` (0..1)."""
+        return self.low + max(0.0, min(1.0, value)) * (self.high - self.low)
+
+
 @dataclass
 class Device:
-    """An insert device on a track: a built-in one ('synth', 'utility'), or a
-    plug-in (kind 'plugin', with `plugin` saying which).
+    """An insert device on a track: a built-in one ('synth', 'utility'), a
+    plug-in (kind 'plugin', with `plugin` saying which), or a rack (kind 'rack':
+    its `chains`, and its macros' `macros` mappings).
 
     A built-in device's state is its `params`, and `state` for what isn't a
     parameter (a sampler's sample: see device_state.py), base64; the engine
     follows the model. A plug-in keeps its own state; `state` holds it (base64)
     as last saved, for loading the project. Its `params` only record values
-    changed from the host, for undo. A device with a sidechain (aux) input may
-    hear a track there (`sidechain`)."""
+    changed from the host, for undo. A rack's params are its macros' values
+    (macro_param()). A device with a sidechain (aux) input may hear a track
+    there (`sidechain`)."""
 
     id: str
     kind: str
@@ -256,10 +296,119 @@ class Device:
     plugin: PluginRef | None = None
     state: str | None = None
     sidechain: Sidechain | None = None
+    chains: list[Chain] = field(default_factory=list)  # a rack's
+    macros: tuple[MacroMapping, ...] = ()  # a rack's
 
     @property
     def is_plugin(self) -> bool:
         return self.kind == PLUGIN_KIND
+
+    @property
+    def is_rack(self) -> bool:
+        return self.kind == RACK_KIND
+
+
+@dataclass
+class Chain:
+    """A chain of a rack: its devices, and its mixer (volume, pan, mute, and
+    solo: while any of a rack's chains is soloed, only those are heard)."""
+
+    id: str
+    name: str
+    devices: list[Device] = field(default_factory=list)
+    volume_db: float = 0.0
+    pan: float = 0.0
+    mute: bool = False
+    solo: bool = False
+
+
+def iter_devices(devices: list[Device]) -> Iterator[Device]:
+    """Every device in a chain, depth first: each, then (a rack) those in its chains."""
+    for device in devices:
+        yield device
+        for chain in device.chains:
+            yield from iter_devices(chain.devices)
+
+
+def iter_chains(devices: list[Device]) -> Iterator[tuple[Device, Chain]]:
+    """Every rack chain in a chain (and in racks in it), with its rack, depth first."""
+    for device in devices:
+        for chain in device.chains:
+            yield device, chain
+            yield from iter_chains(chain.devices)
+
+
+def device_path(devices: list[Device], device_id: str) -> tuple[int, ...] | None:
+    """Where a device is: its index in the chain, or for one in a rack the rack's
+    index, the chain's and its own in that chain (and so on, deeper); None: nowhere."""
+    for index, device in enumerate(devices):
+        if device.id == device_id:
+            return (index,)
+        for c, chain in enumerate(device.chains):
+            inner = device_path(chain.devices, device_id)
+            if inner is not None:
+                return (index, c, *inner)
+    return None
+
+
+def device_at(devices: list[Device], path: tuple[int, ...]) -> Device:
+    device = devices[path[0]]
+    for i in range(1, len(path), 2):
+        device = device.chains[path[i]].devices[path[i + 1]]
+    return device
+
+
+def find_device(devices: list[Device], device_id: str) -> Device | None:
+    path = device_path(devices, device_id)
+    return None if path is None else device_at(devices, path)
+
+
+def chain_devices(devices: list[Device], chain: str | None) -> list[Device] | None:
+    """The devices of a chain (the list itself): `devices` (chain None: a
+    track's own) or the rack chain with that id in it; None: not there."""
+    if chain is None:
+        return devices
+    return next((c.devices for _, c in iter_chains(devices) if c.id == chain), None)
+
+
+def container_of(devices: list[Device], device_id: str) -> str | None:
+    """The chain a device is in: None for the track's own (or nowhere), else the rack chain's id."""
+    path = device_path(devices, device_id)
+    if path is None or len(path) == 1:
+        return None
+    parent = device_at(devices, path[:-2])
+    return parent.chains[path[-2]].id
+
+
+def rack_depth(devices: list[Device], chain: str | None) -> int:
+    """How many racks a chain is in (0: a track's own)."""
+    if chain is None:
+        return 0
+    for rack, c in iter_chains(devices):
+        if c.id == chain:
+            return 1 + rack_depth(devices, container_of(devices, rack.id))
+    return 0
+
+
+def refresh_ids(device: Device) -> None:
+    """New ids for a device and everything in it (its chains too), in place:
+    a copy (a preset loaded, a chain duplicated) of devices that exist. Its
+    macro mappings follow their devices; mappings to devices not in it go."""
+    renamed: dict[str, str] = {}
+    for inner in iter_devices([device]):
+        renamed[inner.id] = inner.id = new_id()
+    for _rack, chain in iter_chains([device]):
+        chain.id = new_id()
+    for rack in iter_devices([device]):
+        rack.macros = tuple(MacroMapping(m.macro, renamed[m.device_id], m.param_id, m.low, m.high)
+                            for m in rack.macros if m.device_id in renamed)
+
+
+def rack_height(device: Device) -> int:
+    """How deep racks nest in a device: 0 for a device, 1 for a rack without racks in it."""
+    if not device.is_rack:
+        return 0
+    return 1 + max((rack_height(d) for c in device.chains for d in c.devices), default=0)
 
 
 @dataclass(frozen=True)
@@ -412,7 +561,7 @@ def routing_graph(tracks: list[Track], returns: list[Track]) -> RoutingGraph:
         graph[track.id].extend(r for r in track.sends if r in graph)
         if track.input_track in graph:
             graph[track.input_track].append(track.id)
-        for device in track.devices:
+        for device in iter_devices(track.devices):
             if device.sidechain is not None and device.sidechain.track_id in graph:
                 graph[device.sidechain.track_id].append(track.id)
     return graph
@@ -463,7 +612,8 @@ class Project(QObject):
     track_changed = Signal(str)  # name, colour, mixer settings, sends or height (MASTER: the master's mixer)
     tracks_arranged = Signal()  # the tracks' order or groups changed (not which tracks there are)
     clips_changed = Signal(str)  # track id
-    devices_changed = Signal(str)  # track id: devices added/removed/toggled, or a sidechain changed
+    devices_changed = Signal(str)  # track id: devices added/removed/toggled (in racks too), a sidechain or macros changed
+    chain_changed = Signal(str, str)  # track id, rack chain id: its name or mixer
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
     device_state_changed = Signal(str, str)  # track id, device id: its state was set (a preset, a sample)
     settings_changed = Signal()  # tempo, time signature, key, loop, automation lock
@@ -726,14 +876,60 @@ class Project(QObject):
             self.devices_changed.emit(track_id)
 
     def device(self, track_id: str, device_id: str) -> Device:
-        for device in self.track(track_id).devices:
-            if device.id == device_id:
-                return device
-        raise KeyError(device_id)
+        """A device of a track (in a rack too)."""
+        device = find_device(self.track(track_id).devices, device_id)
+        if device is None:
+            raise KeyError(device_id)
+        return device
+
+    def has_device(self, track_id: str, device_id: str) -> bool:
+        return self.has_owner(track_id) and find_device(self.track(track_id).devices, device_id) is not None
+
+    def device_owner(self, device_id: str) -> str | None:
+        """The track (return, or MASTER) a device is on, in a rack or not; None: none."""
+        return next((t.id for t in self.all_tracks() if find_device(t.devices, device_id) is not None), None)
+
+    def chain(self, track_id: str, chain_id: str) -> Chain:
+        """A rack chain on a track."""
+        for _rack, chain in iter_chains(self.track(track_id).devices):
+            if chain.id == chain_id:
+                return chain
+        raise KeyError(chain_id)
+
+    def chain_rack(self, track_id: str, chain_id: str) -> Device:
+        for rack, chain in iter_chains(self.track(track_id).devices):
+            if chain.id == chain_id:
+                return rack
+        raise KeyError(chain_id)
+
+    def update_chain(self, track_id: str, chain_id: str, **attrs) -> None:
+        """A rack chain's name or mixer (volume_db, pan, mute, solo)."""
+        chain = self.chain(track_id, chain_id)
+        for name, value in attrs.items():
+            if name not in ("name", "volume_db", "pan", "mute", "solo"):
+                raise AttributeError(name)
+            setattr(chain, name, value)
+        self.chain_changed.emit(track_id, chain_id)
+
+    def update_device(self, track_id: str, device_id: str, **attrs) -> None:
+        """A rack's macro mappings."""
+        device = self.device(track_id, device_id)
+        for name, value in attrs.items():
+            if name != "macros":
+                raise AttributeError(name)
+            setattr(device, name, value)
+        self.devices_changed.emit(track_id)
 
     def set_device_param(self, track_id: str, device_id: str, param_id: str, value: float) -> None:
         self.device(track_id, device_id).params[param_id] = value
         self.device_param_changed.emit(track_id, device_id, param_id)
+
+    def set_device_params(self, track_id: str, values: dict[tuple[str, str], float]) -> None:
+        """Several parameters at once ((device id, param id) -> value): a macro and what it moves."""
+        for (device_id, param_id), value in values.items():
+            self.device(track_id, device_id).params[param_id] = value
+        for device_id, param_id in values:
+            self.device_param_changed.emit(track_id, device_id, param_id)
 
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:
         self.device(track_id, device_id).enabled = enabled

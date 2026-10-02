@@ -9,7 +9,7 @@ APP_NAME = "GIL Studio"
 # 4: input, monitoring and recording. 5: MIDI input. 6: chain ids. 7: track outputs (group buses).
 # 8: audio threads. 9: track costs, cost ordering. 10: sends (routing edges). 11: track inputs (resampling).
 # 12: sidechains.
-ENGINE_API = 14
+ENGINE_API = 15
 
 
 def engine_mismatch() -> str | None:

@@ -6,8 +6,13 @@ in a small thread pool; the engine releases the GIL while decoding.
 
 Plug-ins: a device's engine processor lives as long as the device is in its
 chain, so a plug-in keeps its state (and open editor) when the chain around it
-changes. A device moved to another track's chain takes its processor along (one
-engine move_processor, nothing loads again). When a plug-in device goes away
+changes. A device moved to another chain (another track's, or a rack's) takes
+its processor along (one engine move_processor, nothing loads again); a rack
+moves with its chains and everything in them.
+
+Racks: a rack is an engine rack, its chains engine chains of it (with their
+faders), and the devices in them processors there, as on a track's own chain.
+A rack's macros are the model's business (they set parameters there). When a plug-in device goes away
 (deleted, or its track), its state is kept here, so undo brings it back as it was. Edits made in a plug-in's own
 editor come back from the engine as `plugin_param_edited`, for the undo stack.
 
@@ -85,7 +90,7 @@ from .. import _engine as ge
 from ..model import automation
 from ..model.automation import MASTER, MIXER_PAN, MIXER_VOLUME
 from ..model.editor import RecordedTake, device_is_instrument, device_name
-from ..model.params import ParamSpec, format_value, mixer_specs
+from ..model.params import ParamSpec, chain_specs, format_value, mixer_specs
 from ..model.project import (
     POST_FADER,
     PRE_FADER,
@@ -97,6 +102,9 @@ from ..model.project import (
     Project,
     Send,
     Track,
+    find_device,
+    iter_chains,
+    iter_devices,
 )
 from ..model.timebase import db_to_gain
 from .settings import (
@@ -265,12 +273,17 @@ class EngineBridge(QObject):
         self.engine = engine
         self.project = project
         self._track_ids: dict[str, int] = {MASTER: ge.MASTER}  # model track id -> engine track id
-        self._chains: dict[str, int] = {MASTER: engine.track_chain(ge.MASTER)}  # track id -> its engine chain id
-        # Devices that left a chain for another track's, which hasn't taken them up
-        # yet: device id -> engine id (already in that track's engine chain)
-        self._arriving: dict[str, int | None] = {}
-        # track id -> [(model device id, engine id)]; the engine id is None when a plug-in didn't load
+        # Chain key (a track's id for its own chain, a rack chain's id) -> its engine chain id
+        self._chains: dict[str, int] = {MASTER: engine.track_chain(ge.MASTER)}
+        self._chain_owner: dict[str, str] = {MASTER: MASTER}  # chain key -> the track it is on
+        self._rack_of_chain: dict[str, str] = {}  # rack chain id -> its rack's device id
+        self._rack_orders: dict[str, list[int]] = {}  # rack device id -> its engine chains, in the order the engine has
+        # chain key -> [(model device id, engine id)]; the engine id is None when a plug-in didn't load
         self._devices: dict[str, list[tuple[str, int | None]]] = {}
+        self._pids: dict[str, int | None] = {}  # device id -> its processor (None: not loaded)
+        self._where: dict[str, str] = {}  # device id -> the chain key its processor is in
+        self._chain_mixer: dict[str, tuple] = {}  # rack chain id -> (volume dB, pan, mute, solo) the engine has
+        self._syncing: set[str] = set()  # tracks whose devices are being synced (not again from inside)
         self._enabled: dict[int, bool] = {}  # engine id -> what the engine was told
         self._plugin_ids: dict[int, str] = {}  # engine id of each plug-in processor -> the path it came from
         self._plugin_states: dict[str, bytes] = {}  # device id -> its plug-in's state when it went away
@@ -299,6 +312,7 @@ class EngineBridge(QObject):
         self._file_info: dict[str, ge.AudioFileInfo] = {}
         self._preview_request = 0  # the latest preview asked for (or stopped): a file still loading then is not played
         self.meters: dict[str, tuple[float, float]] = {}  # track id or MASTER -> (left, right)
+        self.chain_meters: dict[str, tuple[float, float]] = {}  # rack chain id -> (left, right)
         self._last_position = -1.0
         self._last_playing = False
         self._recording: dict[int, str] = {}  # engine track id -> track id, while recording
@@ -326,6 +340,7 @@ class EngineBridge(QObject):
         project.tracks_arranged.connect(self._push_outputs)
         project.clips_changed.connect(self._push_clips)
         project.devices_changed.connect(self._sync_devices)
+        project.chain_changed.connect(self._on_chain_changed)
         project.device_param_changed.connect(self._on_device_param_changed)
         project.device_state_changed.connect(self._push_device_state)
         project.track_changed.connect(self._update_editor_titles)
@@ -348,7 +363,13 @@ class EngineBridge(QObject):
     def _on_reset(self) -> None:
         self._remove_engine_tracks()
         self._devices.clear()
-        self._arriving.clear()
+        self._pids.clear()
+        self._where.clear()
+        self._chain_owner = {MASTER: MASTER}
+        self._rack_of_chain.clear()
+        self._rack_orders.clear()
+        self._chain_mixer.clear()
+        self.chain_meters.clear()
         self._enabled.clear()
         self._plugin_ids.clear()
         self._plugin_states.clear()
@@ -381,18 +402,20 @@ class EngineBridge(QObject):
 
     def _remove_engine_tracks(self) -> None:
         """Every track goes from the engine, with its devices; the master stays, without its devices."""
-        for device_id, processor_id in self._devices.pop(MASTER, []):
-            self._forget_processor(device_id, processor_id)
+        self._forget_chain_devices(MASTER, remove=True)
         for track_id, engine_id in list(self._track_ids.items()):
             if track_id != MASTER:
+                self._forget_chain_devices(track_id, remove=False)
                 self.engine.remove_track(engine_id)
                 del self._track_ids[track_id]
-                del self._chains[track_id]
+                self._drop_chain(track_id)
+        self._chain_owner.setdefault(MASTER, MASTER)
 
     def _add_engine_track(self, track: Track) -> None:
         if not track.is_master:  # the engine always has the master
             self._track_ids[track.id] = self.engine.add_track()
             self._chains[track.id] = self.engine.track_chain(self._track_ids[track.id])
+            self._chain_owner[track.id] = track.id
         self._push_mixer(track.id)
         self._push_input(track.id)
         self._push_clips(track.id)
@@ -409,10 +432,9 @@ class EngineBridge(QObject):
         self._push_sidechains()  # its devices', and those it is the source of
 
     def _on_track_removed(self, track_id: str, _index: int) -> None:
-        for device_id, processor_id in self._devices.pop(track_id, []):
-            self._forget_processor(device_id, processor_id, remove=False)
+        self._forget_chain_devices(track_id, remove=False)
         engine_id = self._track_ids.pop(track_id, None)
-        self._chains.pop(track_id, None)
+        self._drop_chain(track_id)
         if engine_id is not None:
             self.engine.remove_track(engine_id)  # also removes its devices
         self.meters.pop(track_id, None)
@@ -661,67 +683,158 @@ class EngineBridge(QObject):
             self.request_source(clip.path)
         self.engine.set_track_clips(engine_id, [clip_desc(c) for c in track.clips])
 
+    # --- Devices ----------------------------------------------------------------------
+    # The engine's chains by key: a track's own chain by the track's id, a rack's
+    # chain by the chain's (ids are unique in the project). Each device's
+    # processor is in the chain the bridge last put it in (`_where`).
+
+    def _model_chains(self) -> dict[str, tuple[str, list[Device]]]:
+        """Every chain in the project, by key: (its track, its devices)."""
+        chains = {}
+        for track in self.project.all_tracks():
+            chains[track.id] = (track.id, track.devices)
+            for _rack, chain in iter_chains(track.devices):
+                chains[chain.id] = (track.id, chain.devices)
+        return chains
+
+    def _owned_chains(self, track_id: str) -> list[str]:
+        return [key for key, owner in self._chain_owner.items() if owner == track_id]
+
     def _sync_devices(self, track_id: str) -> None:
-        chain_id = self._chains.get(track_id)
-        if chain_id is None:
+        """A track's devices (in racks too) to the engine. Devices still there keep
+        their processors (a plug-in keeps its state and editor), and so do devices
+        that moved here from another chain (of this track or another, into or out
+        of a rack), or a rack with everything in it; new ones get one; the rest go."""
+        if track_id not in self._chains or track_id in self._syncing:
             return
-        track = self.project.track(track_id)
-        current = dict(self._devices.get(track_id, []))
-        if list(current) != [d.id for d in track.devices]:
-            # The chain changed. Devices still in it keep their processors (a
-            # plug-in keeps its state and editor), and so do devices moved here from
-            # another track; new ones get one; the rest go.
-            wanted = {d.id for d in track.devices}
-            for device_id, processor_id in current.items():
-                if device_id not in wanted and not self._hand_over(track_id, device_id, processor_id):
-                    self._forget_processor(device_id, processor_id)
-            chain = []
-            moved_in = False
-            for device in track.devices:
-                if device.id in current:
-                    chain.append((device.id, current[device.id]))
-                    continue
-                found, processor_id = self._take_over(track_id, device.id)
-                moved_in |= found
-                chain.append((device.id, processor_id if found else self._create_processor(chain_id, device)))
-            self._devices[track_id] = chain
-            self.engine.set_chain_order(chain_id, [pid for _, pid in chain if pid is not None])
+        self._syncing.add(track_id)
+        changed: set[str] = set()  # chain keys whose devices changed
+        try:
+            track = self.project.track(track_id)
+            before = {key: list(self._devices.get(key, [])) for key in self._owned_chains(track_id)}
+            self._place(track_id, track_id, track.devices, changed)  # every chain, top down
+            model = self._model_chains()
+            for key, entries in before.items():  # what left its chain, and isn't in another of this track's
+                wanted = {d.id for d in model[key][1]} if key in model else set()
+                for device_id, processor_id in entries:
+                    if device_id not in wanted and self._where.get(device_id) == key:
+                        self._dispose(track_id, key, device_id, processor_id)
+                        changed.add(key)
+            for key in self._owned_chains(track_id):  # rack chains that went (their racks stay)
+                if key not in model and key != track_id:
+                    try:
+                        self.engine.remove_rack_chain(self._chains[key])
+                    except ValueError:
+                        pass
+                    self._drop_chain(key)
+            for key in [track_id, *(c.id for _, c in iter_chains(track.devices))]:
+                ids = [d for d, _ in self._devices.get(key, [])]
+                if key in changed or ids != [d for d, _ in before.get(key, [])]:
+                    self.engine.set_chain_order(self._chains[key], [p for _, p in self._devices[key] if p is not None])
+                    changed.add(key)
+            for rack in iter_devices(track.devices):
+                processor_id = self._pids.get(rack.id)
+                if rack.is_rack and processor_id is not None:
+                    order = [self._chains[c.id] for c in rack.chains]
+                    if self._rack_orders.get(rack.id) != order:
+                        self.engine.set_rack_chain_order(processor_id, order)
+                        self._rack_orders[rack.id] = order
+        finally:
+            self._syncing.discard(track_id)
+        if changed:
             self._push_automation(track_id)  # its devices' envelopes go to the new processors
-            if moved_in:
-                self._update_editor_titles(track_id)
+            self._update_editor_titles(track_id)
             self.devices_loaded.emit(track_id)
         self._push_enabled(track)
+        self._push_chain_mixers(track_id)
         self._push_sidechains()  # (the new processors', or a sidechain changed)
 
-    def _hand_over(self, track_id: str, device_id: str, processor_id: int | None) -> bool:
-        """A device left this track's chain: if it went to another track's, its
-        processor goes into that chain in the engine, for the track to take up."""
-        to = next((t.id for t in self.project.all_tracks()
-                   if t.id != track_id and t.id in self._chains and any(d.id == device_id for d in t.devices)), None)
-        if to is None:
-            return False
-        if processor_id is not None:
-            self._drop_sidechain(processor_id)
-            self.engine.move_processor(processor_id, self._chains[to])
-        self._arriving[device_id] = processor_id
-        return True
+    def _place(self, track_id: str, key: str, devices: list[Device], changed: set[str]) -> None:
+        """A chain's devices into its engine chain (in no particular order yet),
+        then the chains of the racks among them."""
+        current = {d: p for d, p in self._devices.get(key, []) if self._where.get(d) == key}
+        chain = []
+        for device in devices:
+            if device.id in current:
+                processor_id = current[device.id]
+            else:
+                found, processor_id = self._take_over(track_id, key, device)
+                if not found:
+                    processor_id = self._create_processor(self._chains[key], device)
+                    self._pids[device.id] = processor_id
+                self._where[device.id] = key
+                changed.add(key)
+            chain.append((device.id, processor_id))
+        self._devices[key] = chain
+        for device, (_, processor_id) in zip(devices, chain, strict=True):
+            if device.is_rack and processor_id is not None:
+                self._place_rack(track_id, device, processor_id, changed)
 
-    def _take_over(self, track_id: str, device_id: str) -> tuple[bool, int | None]:
-        """A device new to this track's chain: whether it came from another
-        track's, and its processor then, which moves along in the engine."""
-        if device_id in self._arriving:
-            return True, self._arriving.pop(device_id)
-        for other, chain in self._devices.items():  # the track it left doesn't know yet
-            if other == track_id:
-                continue
-            for i, (did, processor_id) in enumerate(chain):
-                if did == device_id:
-                    del chain[i]
-                    if processor_id is not None:
-                        self._drop_sidechain(processor_id)
-                        self.engine.move_processor(processor_id, self._chains[track_id])
-                    return True, processor_id
-        return False, None
+    def _place_rack(self, track_id: str, rack: Device, processor_id: int, changed: set[str]) -> None:
+        for chain in rack.chains:
+            engine_chain = self._chains.get(chain.id)
+            if engine_chain is not None and self._rack_of_chain.get(chain.id) != rack.id:
+                # The chain is another rack's now: a new engine chain, with its devices.
+                moved = self.engine.add_rack_chain(processor_id)
+                for _, inner in self._devices.get(chain.id, []):
+                    if inner is not None:
+                        self.engine.move_processor(inner, moved)
+                try:
+                    self.engine.remove_rack_chain(engine_chain)
+                except ValueError:
+                    pass
+                engine_chain = moved
+            elif engine_chain is None:
+                engine_chain = self.engine.add_rack_chain(processor_id)
+                self._devices[chain.id] = []
+                changed.add(chain.id)
+            self._chains[chain.id] = engine_chain
+            self._chain_owner[chain.id] = track_id
+            self._rack_of_chain[chain.id] = rack.id
+            self._place(track_id, chain.id, chain.devices, changed)
+
+    def _take_over(self, track_id: str, key: str, device: Device) -> tuple[bool, int | None]:
+        """A device new to a chain: whether its processor is in another chain (of
+        any track: it moved here), and which then; it moves along in the engine
+        (a rack with its chains and everything in them)."""
+        old = self._where.get(device.id)
+        if old is None or old == key or device.id not in self._pids:
+            return False, None
+        processor_id = self._pids[device.id]
+        self._devices[old] = [(d, p) for d, p in self._devices.get(old, []) if d != device.id]
+        if processor_id is not None:
+            if self._chain_owner.get(old) != track_id:  # its sidechains come back once there (if they can)
+                for inner in iter_devices([device]):
+                    if self._pids.get(inner.id) is not None:
+                        self._drop_sidechain(self._pids[inner.id])
+            self.engine.move_processor(processor_id, self._chains[key])
+        for _rack, chain in iter_chains([device]):
+            if chain.id in self._chain_owner:
+                self._chain_owner[chain.id] = track_id
+        return True, processor_id
+
+    def _dispose(self, track_id: str, key: str, device_id: str, processor_id: int | None) -> None:
+        """A device left a chain of this track and isn't on it any more: if it went
+        to another track, that track takes it over now; otherwise it goes (and a
+        rack with what is in it, but what of that went elsewhere)."""
+        owner = self.project.device_owner(device_id)
+        if owner is not None and owner != track_id and owner in self._chains and owner not in self._syncing:
+            self._sync_devices(owner)
+            if self._where.get(device_id) != key:
+                return
+        for chain in self._chains_of(device_id):
+            for inner, inner_id in list(self._devices.get(chain, [])):
+                if self._where.get(inner) == chain:
+                    self._dispose(track_id, chain, inner, inner_id)
+        self._forget_processor(device_id, processor_id)
+
+    def _chains_of(self, rack_id: str) -> list[str]:
+        return [chain for chain, rack in self._rack_of_chain.items() if rack == rack_id]
+
+    def _drop_chain(self, key: str) -> None:
+        for mapping in (self._chains, self._devices, self._chain_owner, self._rack_of_chain, self._chain_mixer,
+                        self.chain_meters):
+            mapping.pop(key, None)
 
     def has_sidechain_input(self, track_id: str, device_id: str) -> bool:
         """Whether a device has a sidechain (aux) input (not while its plug-in isn't loaded)."""
@@ -740,7 +853,7 @@ class EngineBridge(QObject):
         if sidechain.tap == POST_FADER:
             return source, ge.SidechainTap.POST_FADER, 0
         if sidechain.tap == PRE_FX:
-            # A MIDI track's own audio is its instrument's: before its effects.
+            # A MIDI track's own audio is its instrument's (or its instrument rack's): before its effects.
             devices = self.project.track(sidechain.track_id).devices
             if devices and device_is_instrument(devices[0]):
                 instrument = self.engine_device_id(sidechain.track_id, devices[0].id)
@@ -753,14 +866,14 @@ class EngineBridge(QObject):
         return source, ge.SidechainTap.AFTER_DEVICE, tapped
 
     def _push_sidechains(self) -> None:
-        """Every device's sidechain to the engine: those changing go first, so that
-        no step closes a cycle."""
+        """Every device's sidechain to the engine (devices in racks too): those
+        changing go first, so that no step closes a cycle."""
         wanted = {}
         for track in self.project.all_tracks():
-            devices = {d.id: d for d in track.devices if d.sidechain is not None}
-            for device_id, processor_id in self._devices.get(track.id, []):
-                if processor_id is not None and device_id in devices:
-                    state = self._wanted_sidechain(devices[device_id], processor_id)
+            for device in iter_devices(track.devices):
+                processor_id = self.engine_device_id(track.id, device.id) if device.sidechain is not None else None
+                if processor_id is not None:
+                    state = self._wanted_sidechain(device, processor_id)
                     if state is not None:
                         wanted[processor_id] = state
         for processor_id in [p for p, state in self._sidechains.items() if wanted.get(p) != state]:
@@ -779,12 +892,50 @@ class EngineBridge(QObject):
             self.engine.clear_processor_sidechain(processor_id)
 
     def _push_enabled(self, track: Track) -> None:
-        for device, (_, processor_id) in zip(track.devices, self._devices.get(track.id, []), strict=True):
+        for device in iter_devices(track.devices):
+            processor_id = self.engine_device_id(track.id, device.id)
             if processor_id is not None and self._enabled.get(processor_id) != device.enabled:
                 self.engine.set_processor_enabled(processor_id, device.enabled)
                 self._enabled[processor_id] = device.enabled
 
+    def _on_chain_changed(self, track_id: str, chain_id: str) -> None:
+        chain = self.project.chain(track_id, chain_id)
+        old = self._chain_mixer.get(chain_id)
+        if old is not None:  # changed by hand while automated: its automation stops
+            rack = self.project.chain_rack(track_id, chain_id)
+            if chain.volume_db != old[0]:
+                self.override_automation(track_id, automation.chain_key(rack.id, chain_id, automation.CHAIN_VOLUME))
+            if chain.pan != old[1]:
+                self.override_automation(track_id, automation.chain_key(rack.id, chain_id, automation.CHAIN_PAN))
+        self._push_chain_mixers(track_id)
+
+    def _push_chain_mixers(self, track_id: str) -> None:
+        """A track's rack chains' faders to the engine (those that changed)."""
+        if not self.project.has_owner(track_id):
+            return
+        for _rack, chain in iter_chains(self.project.track(track_id).devices):
+            engine_chain = self._chains.get(chain.id)
+            state = (chain.volume_db, chain.pan, chain.mute, chain.solo)
+            old = self._chain_mixer.get(chain.id)
+            if engine_chain is None or old == state:
+                continue
+            if old is None or old[0] != state[0]:
+                self.engine.set_chain_gain(engine_chain, db_to_gain(chain.volume_db))
+            if old is None or old[1] != state[1]:
+                self.engine.set_chain_pan(engine_chain, chain.pan)
+            if old is None or old[2] != state[2]:
+                self.engine.set_chain_mute(engine_chain, chain.mute)
+            if old is None or old[3] != state[3]:
+                self.engine.set_chain_solo(engine_chain, chain.solo)
+            self._chain_mixer[chain.id] = state
+
     def _create_processor(self, chain_id: int, device: Device) -> int | None:
+        if device.is_rack:  # (its chains come next: _place_rack)
+            try:
+                return self.engine.add_rack(chain_id)
+            except ValueError as exc:  # nested too deep (a file edited by hand)
+                self.status_message.emit(str(exc))
+                return None
         if device.is_plugin:
             return self._load_plugin(chain_id, device)
         processor_id = self.engine.add_builtin_processor(chain_id, device.kind)
@@ -841,9 +992,18 @@ class EngineBridge(QObject):
             self._busy -= 1
 
     def _forget_processor(self, device_id: str, processor_id: int | None, remove: bool = True) -> None:
-        """A device's processor goes away (with its track if not `remove`). A
-        plug-in's state is kept, in case the device comes back (undo), but not its
-        editor: undo and redo don't open editors."""
+        """A device's processor goes away (with its track if not `remove`; a rack
+        with its chains and what is still in them). A plug-in's state is kept, in
+        case the device comes back (undo), but not its editor: undo and redo
+        don't open editors."""
+        for chain in self._chains_of(device_id):  # (the engine removes them with the rack)
+            for inner, inner_id in self._devices.get(chain, []):
+                if self._where.get(inner) == chain:
+                    self._forget_processor(inner, inner_id, remove=False)
+            self._drop_chain(chain)
+        self._rack_orders.pop(device_id, None)
+        self._pids.pop(device_id, None)
+        self._where.pop(device_id, None)
         self.plugin_errors.pop(device_id, None)
         self._editors_wanted.discard(device_id)
         if processor_id is None:
@@ -864,11 +1024,30 @@ class EngineBridge(QObject):
         if remove:
             self.engine.remove_processor(processor_id)
 
+    def _forget_chain_devices(self, key: str, remove: bool) -> None:
+        """Every device of a chain goes (a track's own chain: with its track if not `remove`)."""
+        for device_id, processor_id in list(self._devices.get(key, [])):
+            if self._where.get(device_id) == key:
+                self._forget_processor(device_id, processor_id, remove)
+        self._devices.pop(key, None)
+
     def engine_device_id(self, track_id: str, device_id: str) -> int | None:
-        for model_id, engine_id in self._devices.get(track_id, []):
-            if model_id == device_id:
-                return engine_id
-        return None
+        """A device's processor, if it is on that track (in a rack too) and loaded."""
+        key = self._where.get(device_id)
+        if key is None or self._chain_owner.get(key) != track_id:
+            return None
+        return self._pids.get(device_id)
+
+    def engine_chain_id(self, chain_id: str) -> int | None:
+        """A rack chain's engine chain."""
+        return self._chains.get(chain_id) if chain_id in self._rack_of_chain else None
+
+    def device_param_info(self, track_id: str, device_id: str, param_id: str):
+        """A device's parameter as the engine describes it (ParamInfo; None: not loaded, or no such one)."""
+        processor_id = self.engine_device_id(track_id, device_id)
+        if processor_id is None:
+            return None
+        return next((p for p in self.param_infos(processor_id) if p.id == param_id), None)
 
     def _on_device_param_changed(self, track_id: str, device_id: str, param_id: str) -> None:
         self.override_automation(track_id, automation.device_key(device_id, param_id))
@@ -921,20 +1100,26 @@ class EngineBridge(QObject):
         """The scanned plug-ins (PluginInfo): lets projects find plug-ins that moved.
         Devices whose plug-in wasn't found get another try."""
         self.known_plugins = {p.uid: p.path for p in plugins}
-        for track_id, chain in self._devices.items():
-            track = self.project.track(track_id)
-            if not any(pid is None for _, pid in chain):
+        reloaded_tracks = set()
+        for key, (track_id, devices) in self._model_chains().items():
+            chain = self._devices.get(key)
+            if chain is None or not any(pid is None for _, pid in chain):
                 continue
-            devices = {d.id: d for d in track.devices}
-            reloaded = [(did, self._load_plugin(self._chains[track_id], devices[did])
-                         if pid is None and devices[did].is_plugin and self.plugin_path(devices[did].plugin)
-                         else pid) for did, pid in chain]
+            by_id = {d.id: d for d in devices}
+            reloaded = []
+            for device_id, processor_id in chain:
+                device = by_id.get(device_id)
+                if processor_id is None and device is not None and device.is_plugin and self.plugin_path(device.plugin):
+                    processor_id = self._pids[device_id] = self._load_plugin(self._chains[key], device)
+                reloaded.append((device_id, processor_id))
             if reloaded != chain:
-                self._devices[track_id] = reloaded
-                self.engine.set_chain_order(self._chains[track_id], [pid for _, pid in reloaded if pid is not None])
-                self._push_enabled(track)
-                self._push_automation(track_id)
-                self.devices_loaded.emit(track_id)
+                self._devices[key] = reloaded
+                self.engine.set_chain_order(self._chains[key], [pid for _, pid in reloaded if pid is not None])
+                reloaded_tracks.add(track_id)
+        for track_id in reloaded_tracks:
+            self._push_enabled(self.project.track(track_id))
+            self._push_automation(track_id)
+            self.devices_loaded.emit(track_id)
 
     def plugin_state(self, track_id: str, device_id: str) -> bytes | None:
         """A plug-in device's current state (a .vstpreset), None if it isn't loaded."""
@@ -946,7 +1131,7 @@ class EngineBridge(QObject):
     def store_plugin_states(self) -> None:
         """Copy every plug-in's state into the model, for saving the project."""
         for track in self.project.all_tracks():
-            for device in track.devices:
+            for device in iter_devices(track.devices):
                 engine_id = self.engine_device_id(track.id, device.id)
                 if engine_id is None or engine_id not in self._plugin_ids:
                     continue
@@ -1013,7 +1198,7 @@ class EngineBridge(QObject):
             return
         self._editors_track = track_id
         # A copy: opening an editor may run a message loop that changes the chains.
-        for chain_track, chain in [(t, list(c)) for t, c in self._devices.items()]:
+        for chain_track, chain in [(self._chain_owner.get(k), list(c)) for k, c in self._devices.items()]:
             for device_id, processor_id in chain:
                 if processor_id not in self._plugin_ids:
                     continue
@@ -1056,15 +1241,17 @@ class EngineBridge(QObject):
         self.engine.idle()
 
     def _update_editor_titles(self, track_id: str) -> None:
-        for device_id, processor_id in self._devices.get(track_id, []):
-            if processor_id in self._plugin_ids:  # hidden editors too; no-op without one
-                self.engine.set_editor_title(processor_id, self._editor_title(track_id, device_id))
+        for key in self._owned_chains(track_id):
+            for device_id, processor_id in self._devices.get(key, []):
+                if processor_id in self._plugin_ids:  # hidden editors too; no-op without one
+                    self.engine.set_editor_title(processor_id, self._editor_title(track_id, device_id))
 
     def _dispatch_processor_events(self) -> None:
         events = self.engine.take_processor_events()
         if not events:
             return
-        places = {pid: (tid, did) for tid, chain in self._devices.items() for did, pid in chain if pid is not None}
+        places = {pid: (self._chain_owner[key], did) for key, chain in self._devices.items() for did, pid in chain
+                  if pid is not None and key in self._chain_owner}
         changed: dict[tuple[str, str], None] = {}
         dirty = False
         kind = ge.ProcessorEventType
@@ -1146,6 +1333,11 @@ class EngineBridge(QObject):
             return_id = self._track_ids.get(target[1])
             return None if return_id is None else ge.AutomationLane(0, f"send:{return_id}", engine_points)
         processor_id = self.engine_device_id(owner, target[1])
+        if (control := automation.key_chain_control(key)) is not None:  # a rack chain's fader
+            chain = self.engine_chain_id(control[0])
+            if processor_id is None or chain is None:
+                return None
+            return ge.AutomationLane(processor_id, f"chain:{chain}:{control[1]}", engine_points)
         return None if processor_id is None else ge.AutomationLane(processor_id, target[2], engine_points)
 
     def _push_own_value(self, owner: str, key: str) -> None:
@@ -1154,10 +1346,10 @@ class EngineBridge(QObject):
             if self.project.has_owner(owner):
                 self._push_mixer(owner)
             return
-        if automation.key_send(key) is not None:
-            return  # the engine kept the send's own level
+        if automation.key_send(key) is not None or automation.key_chain(key) is not None:
+            return  # the engine kept the send's (or the chain's fader's) own level
         device_id = automation.key_device(key)
-        if self.project.has_owner(owner) and any(d.id == device_id for d in self.project.track(owner).devices):
+        if self.project.has_device(owner, device_id):
             self._push_device_param(owner, device_id, automation.parse_key(key)[2])
 
     def is_automated(self, owner: str, key: str) -> bool:
@@ -1199,7 +1391,10 @@ class EngineBridge(QObject):
         return text if not info.unit or info.unit in text else f"{text} {info.unit}"
 
     def device_param_specs(self, track_id: str, device: Device) -> list[ParamSpec]:
-        """The parameters of a device that can be automated (none if it isn't loaded)."""
+        """The parameters of a device that can be automated (none if it isn't
+        loaded); a rack's: its chains' faders."""
+        if device.is_rack:
+            return chain_specs(device.id, [(c.id, c.name) for c in device.chains], device_name(device))
         processor_id = self.engine_device_id(track_id, device.id)
         if processor_id is None:
             return []
@@ -1226,7 +1421,7 @@ class EngineBridge(QObject):
         """What an owner has that can be automated, as (group id, name, specs): its
         mixer ("mixer", with its sends), then each device (by id)."""
         groups = [("mixer", "Mixer", self.mixer_specs(owner))]
-        for device in self.project.track(owner).devices:
+        for device in iter_devices(self.project.track(owner).devices):
             groups.append((device.id, device_name(device), self.device_param_specs(owner, device)))
         return groups
 
@@ -1240,7 +1435,7 @@ class EngineBridge(QObject):
         if not self.project.has_owner(owner):
             return None
         device_id = automation.key_device(key)
-        device = next((d for d in self.project.track(owner).devices if d.id == device_id), None)
+        device = find_device(self.project.track(owner).devices, device_id)
         if device is None:
             return None
         spec = next((s for s in self.device_param_specs(owner, device) if s.key == key), None)
@@ -1260,8 +1455,11 @@ class EngineBridge(QObject):
             return track.pan
         if (return_id := automation.key_send(key)) is not None:
             return track.sends.get(return_id, Send()).level_db
+        if (control := automation.key_chain_control(key)) is not None:
+            chain = next((c for _, c in iter_chains(track.devices) if c.id == control[0]), None)
+            return None if chain is None else chain.volume_db if control[1] == automation.CHAIN_VOLUME else chain.pan
         target = automation.parse_key(key)
-        device = next((d for d in track.devices if d.id == target[1]), None)
+        device = find_device(track.devices, target[1])
         if device is None:
             return None
         processor_id = self.engine_device_id(owner, device.id)
@@ -1575,7 +1773,13 @@ class EngineBridge(QObject):
     def _poll_meters(self) -> None:
         self._poll_recording()
         by_engine_id = {engine_id: track_id for track_id, engine_id in self._track_ids.items()}
+        by_chain = {self._chains[c]: c for c in self._rack_of_chain if c in self._chains}
         for reading in self.engine.take_meters():
+            if reading.chain_id:
+                chain = by_chain.get(reading.chain_id)
+                if chain is not None:
+                    self.chain_meters[chain] = (reading.left, reading.right)
+                continue
             key = by_engine_id.get(reading.track_id)
             if key is not None:
                 self.meters[key] = (reading.left, reading.right)

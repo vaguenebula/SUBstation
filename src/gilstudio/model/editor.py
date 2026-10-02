@@ -13,8 +13,15 @@ from PySide6.QtGui import QUndoStack
 
 from .. import _engine as ge
 from . import automation, edits, notes
-from .automation import MASTER, MAX_VOLUME_DB, MIN_VOLUME_DB, MIXER_PAN, MIXER_VOLUME, AutomationView, Envelope
-from .keys import Key, clip_settings
+from .automation import (
+    MASTER,
+    MAX_VOLUME_DB,
+    MIN_VOLUME_DB,
+    MIXER_PAN,
+    MIXER_VOLUME,
+    AutomationView,
+    Envelope,
+)
 from .commands import (
     ArrangeTracksCommand,
     InsertReturnCommand,
@@ -25,25 +32,34 @@ from .commands import (
     SetClipsCommand,
     SetDeviceEnabledCommand,
     SetDeviceParamCommand,
+    SetDeviceParamsCommand,
     SetDevicesCommand,
     SetDeviceSidechainCommand,
     SetDeviceStateCommand,
     SetEnvelopeCommand,
     SetEnvelopesCommand,
+    SetMacrosCommand,
     SetTempoCommand,
+    UpdateChainCommand,
     UpdateSettingsCommand,
     UpdateTrackCommand,
     UpdateTrackFieldsCommand,
     UpdateTracksCommand,
 )
+from .keys import Key, clip_settings
 from .project import (
     GROUP_KIND,
+    MACRO_COUNT,
+    MAX_RACK_DEPTH,
     MONITOR_MODES,
     PLUGIN_KIND,
+    RACK_KIND,
     RETURN_KIND,
     AnyClip,
+    Chain,
     Clip,
     Device,
+    MacroMapping,
     MidiClip,
     MidiInput,
     Note,
@@ -52,8 +68,17 @@ from .project import (
     Send,
     Sidechain,
     Track,
+    chain_devices,
+    container_of,
     feeds,
+    find_device,
+    iter_chains,
+    iter_devices,
+    macro_param,
     new_id,
+    rack_depth,
+    rack_height,
+    refresh_ids,
     return_letter,
     routing_graph,
     tree_problem,
@@ -120,10 +145,15 @@ def is_instrument(kind: str, plugin: PluginRef | None = None) -> bool:
 
 
 def device_is_instrument(device: Device) -> bool:
+    """An instrument, or a rack with one in it (an instrument rack: it plays the track's notes)."""
+    if device.is_rack:
+        return any(device_is_instrument(d) for chain in device.chains for d in chain.devices)
     return is_instrument(device.kind, device.plugin)
 
 
 def device_name(device: Device) -> str:
+    if device.is_rack:
+        return "Instrument Rack" if device_is_instrument(device) else "Audio Effect Rack"
     if device.plugin is not None:
         return device.plugin.name
     return BUILTIN_DEVICES.get(device.kind, (device.kind,))[0]
@@ -134,7 +164,34 @@ def new_device(kind: str, plugin: PluginRef | None = None) -> Device:
         if plugin is None:
             raise ValueError("a plug-in device needs a plug-in")
         return Device(id=new_id(), kind=kind, plugin=plugin)
+    if kind == RACK_KIND:
+        return new_rack([])
     return Device(id=new_id(), kind=kind, params=dict(BUILTIN_DEVICES[kind][1]))
+
+
+def new_rack(chains: list[Chain]) -> Device:
+    """A rack with these chains, its macros at 0."""
+    return Device(id=new_id(), kind=RACK_KIND, params={macro_param(i): 0.0 for i in range(MACRO_COUNT)},
+                  chains=chains)
+
+
+def new_chain(name: str, devices: list[Device] | None = None) -> Chain:
+    return Chain(id=new_id(), name=name, devices=devices or [])
+
+
+def builtin_param_info(kind: str, param_id: str):
+    """A built-in device's parameter as the engine describes it (None: no such one)."""
+    return next((p for d in ge.builtin_devices() if d.id == kind for p in d.params if p.id == param_id), None)
+
+
+def device_ids_of_list(devices: list[Device]) -> set[str]:
+    """The ids of these devices and of everything in them."""
+    return {d.id for d in iter_devices(devices)}
+
+
+def device_ids_of(device: Device) -> set[str]:
+    """A device's id, and those of everything in it (a rack)."""
+    return device_ids_of_list([device])
 
 
 class ProjectEditor(QObject):
@@ -289,9 +346,9 @@ class ProjectEditor(QObject):
         parents = dict(tree)
         # Copies, without their inputs and sidechains, which come back one by one
         # unless they close a cycle with those before them.
-        arranged = [replace(t, parent=parents.get(t.id), input_track=None,
-                            devices=[d for d in t.devices if d.sidechain is None]) for t in p.tracks]
-        returns = [replace(r, devices=[d for d in r.devices if d.sidechain is None]) for r in p.returns]
+        # (Their devices only as far as sidechains go: those kept, one by one, flat.)
+        arranged = [replace(t, parent=parents.get(t.id), input_track=None, devices=[]) for t in p.tracks]
+        returns = [replace(r, devices=[]) for r in p.returns]
         cycling, cycling_sidechains = [], []
         for track, original in zip(arranged, p.tracks, strict=True):
             source = original.input_track
@@ -300,13 +357,13 @@ class ProjectEditor(QObject):
             else:
                 track.input_track = source
         for track, original in zip([*arranged, *returns], [*p.tracks, *p.returns], strict=True):
-            for device in original.devices:
+            for device in iter_devices(original.devices):
                 if device.sidechain is None:
                     continue
                 if feeds(routing_graph(arranged, returns), track.id, device.sidechain.track_id):
                     cycling_sidechains.append((track.id, device))
                 else:
-                    track.devices.append(device)
+                    track.devices.append(replace(device, chains=[]))
         if not cycling and not cycling_sidechains:
             self._push(ArrangeTracksCommand(p, p.tree(), tree, text))
             return
@@ -493,7 +550,7 @@ class ProjectEditor(QObject):
         for track in self.project.all_tracks():
             if track.id in source_ids:
                 continue
-            for device in track.devices:
+            for device in iter_devices(track.devices):
                 if device.sidechain is not None and device.sidechain.track_id in source_ids:
                     self._push(SetDeviceSidechainCommand(self.project, track.id, device.id, device.sidechain, None,
                                                          text))
@@ -1061,85 +1118,142 @@ class ProjectEditor(QObject):
     # --- Devices -----------------------------------------------------------------
 
     def add_device(self, track_id: str, kind: str, index: int | None = None,
-                   plugin: PluginRef | None = None) -> Device | None:
-        """Add a device (a built-in `kind`, or kind 'plugin' and a `plugin`) to a
-        track's (or the master's) chain. An instrument only goes on a MIDI track
-        (None otherwise), where it comes first and replaces any other instrument."""
+                   plugin: PluginRef | None = None, chain: str | None = None) -> Device | None:
+        """Add a device (a built-in `kind`, kind 'plugin' and a `plugin`, or an
+        empty rack) to a track's (or the master's) chain, or to a rack's chain on
+        it (`chain`: its id). An instrument only goes on a MIDI track (None
+        otherwise), where it comes first in its chain and replaces any other
+        instrument there."""
+        device = new_device(kind, plugin)
+        return device if self.insert_device(track_id, device, index, chain, f"Add {device_name(device)}") else None
+
+    def insert_device(self, track_id: str, device: Device, index: int | None = None, chain: str | None = None,
+                      text: str | None = None) -> bool:
+        """Put a new device (a whole rack too: a preset) into a chain, as add_device
+        does. One undo step; False if it can't go there."""
         track = self.project.track(track_id)
         before = copy.deepcopy(track.devices)
         after = copy.deepcopy(before)
-        device = new_device(kind, plugin)
+        devices = chain_devices(after, chain)
+        if devices is None or rack_depth(after, chain) + rack_height(device) > MAX_RACK_DEPTH:
+            return False
         if device_is_instrument(device):
             if not track.is_midi:
-                return None
-            after = [d for d in after if not device_is_instrument(d)]
-            after.insert(0, device)
+                return False
+            devices[:] = [d for d in devices if not device_is_instrument(d)]
+            devices.insert(0, device)
         else:
-            first = 1 if after and device_is_instrument(after[0]) else 0  # effects go after the instrument
-            after.insert(len(after) if index is None else max(first, index), device)
-        self._set_devices(track_id, before, after, f"Add {device_name(device)}")
-        if device.is_plugin:
-            self.plugin_added.emit(track_id, device.id)
-        return device
+            first = 1 if devices and device_is_instrument(devices[0]) else 0  # effects go after the instrument
+            devices.insert(len(devices) if index is None else max(first, min(index, len(devices))), device)
+        self._set_devices(track_id, before, after, text or f"Add {device_name(device)}")
+        for added in iter_devices([device]):
+            if added.is_plugin:
+                self.plugin_added.emit(track_id, added.id)
+        return True
 
     def move_device(self, track_id: str, device_id: str, index: int) -> None:
         """Move a device to position `index` in its chain (an instrument stays first)."""
-        ids = [d.id for d in self.project.track(track_id).devices]
+        devices = self.project.track(track_id).devices
+        chain = container_of(devices, device_id)
+        ids = [d.id for d in chain_devices(devices, chain)]
         # move_devices counts positions in the chain before the move: moving right skips the device itself.
-        self.move_devices(track_id, [device_id], index + 1 if index > ids.index(device_id) else index)
+        self.move_devices(track_id, [device_id], index + 1 if index > ids.index(device_id) else index, chain)
 
-    def move_devices(self, track_id: str, device_ids, index: int) -> None:
-        """Move effects together (in their chain order) to before the device at
-        `index` in the chain as it is now (the end if past it). One undo step; an
-        instrument doesn't move, and nothing goes before it."""
+    @staticmethod
+    def _prune_macros(devices: list[Device]) -> None:
+        """Drop the macro mappings whose device isn't (any longer) inside its rack:
+        a macro moves parameters of devices in its rack."""
+        for rack in iter_devices(devices):
+            if not rack.macros:
+                continue
+            inside = device_ids_of(rack) - {rack.id}
+            kept = tuple(m for m in rack.macros if m.device_id in inside)
+            if kept != rack.macros:
+                rack.macros = kept
+
+    @staticmethod
+    def _outermost(devices: list[Device], device_ids) -> list[Device]:
+        """The devices of these ids (not instruments), in their order on the track,
+        but those in racks among them (they go along with their rack)."""
+        wanted = set(device_ids)
+        found = [d for d in iter_devices(devices) if d.id in wanted and not device_is_instrument(d)]
+        inside = {i for d in found for i in device_ids_of(d) if i != d.id}
+        return [d for d in found if d.id not in inside]
+
+    def move_devices(self, track_id: str, device_ids, index: int, chain: str | None = None) -> bool:
+        """Move devices together (in their order on the track) to before the
+        device at `index` in a chain of the track as it is now (the end if past
+        it): its own (`chain` None) or a rack's. One undo step; an instrument
+        doesn't move, and nothing goes before one; a rack doesn't go into itself,
+        nor nest too deep. False if nothing moved."""
         before = copy.deepcopy(self.project.track(track_id).devices)
-        ids = {d.id for d in before if d.id in set(device_ids) and not device_is_instrument(d)}
-        if not ids:
-            return
-        moving = [d for d in copy.deepcopy(before) if d.id in ids]
-        staying = [d for d in copy.deepcopy(before) if d.id not in ids]
-        at = sum(1 for d in before[:max(0, index)] if d.id not in ids)
-        first = 1 if staying and device_is_instrument(staying[0]) else 0
-        at = max(first, min(at, len(staying)))
-        after = staying[:at] + moving + staying[at:]
-        if [d.id for d in after] != [d.id for d in before]:
-            self._push(SetDevicesCommand(self.project, track_id, before, after,
-                                         "Move Device" if len(moving) == 1 else "Move Devices"))
+        after = copy.deepcopy(before)
+        target = chain_devices(after, chain)
+        moving = self._outermost(after, device_ids)
+        if not moving or target is None:
+            return False
+        inside = set().union(*(device_ids_of(m) for m in moving))
+        if chain is not None and self.project.chain_rack(track_id, chain).id in inside:
+            return False  # into itself
+        depth = rack_depth(after, chain)
+        if any(depth + rack_height(d) > MAX_RACK_DEPTH for d in moving):
+            return False
+        at = sum(1 for d in target[:max(0, index)] if d.id not in inside)
+        for device in moving:  # out of wherever they are
+            chain_devices(after, container_of(after, device.id)).remove(device)
+        first = 1 if target and device_is_instrument(target[0]) else 0
+        at = max(first, min(at, len(target)))
+        target[at:at] = moving
+        self._prune_macros(after)  # (a device out of its rack leaves its macros)
+        if after == before:
+            return False
+        self._push(SetDevicesCommand(self.project, track_id, before, after,
+                                     "Move Device" if len(moving) == 1 else "Move Devices"))
+        return True
 
-    def move_devices_to_track(self, track_id: str, device_ids, to_track_id: str, index: int | None = None) -> bool:
-        """Move effects (in their chain order) to another track's (or the master's)
-        chain, before the device at `index` there (None: last; never before its
+    def move_devices_to_track(self, track_id: str, device_ids, to_track_id: str, index: int | None = None,
+                              chain: str | None = None) -> bool:
+        """Move effects (racks too, with everything in them; in their order on the
+        track) to another track's (or the master's) chain, or a rack's chain there
+        (`chain`), before the device at `index` (None: last; never before its
         instrument). They stay the same devices, so plug-ins keep their state, and
         their automation goes with them, and their sidechains (unless one would
         close a cycle there). One undo step; False if nothing moved."""
         if to_track_id == track_id:
-            if index is not None:
-                self.move_devices(track_id, device_ids, index)
+            if index is None and chain is None:
+                return False
+            target = chain_devices(self.project.track(track_id).devices, chain) or []
+            return self.move_devices(track_id, device_ids, len(target) if index is None else index, chain)
+        source = copy.deepcopy(self.project.track(track_id).devices)
+        target_devices = copy.deepcopy(self.project.track(to_track_id).devices)
+        moving = self._outermost(source, device_ids)
+        target = chain_devices(target_devices, chain)
+        if not moving or target is None:
             return False
-        source = self.project.track(track_id).devices
-        target = self.project.track(to_track_id).devices
-        ids = {d.id for d in source if d.id in set(device_ids) and not device_is_instrument(d)}
-        if not ids:
+        if any(rack_depth(target_devices, chain) + rack_height(d) > MAX_RACK_DEPTH for d in moving):
             return False
-        moving = [d for d in copy.deepcopy(source) if d.id in ids]
-        for device in moving:  # a sidechain from where they go (or what that feeds) would close a cycle
-            if device.sidechain is not None and self.project.sidechain_would_cycle(to_track_id,
-                                                                                  device.sidechain.track_id):
-                device.sidechain = None
-        staying = [d for d in copy.deepcopy(source) if d.id not in ids]
-        after = copy.deepcopy(target)
-        first = 1 if after and device_is_instrument(after[0]) else 0
-        at = len(after) if index is None else max(first, min(index, len(after)))
-        after[at:at] = moving
-        before = {track_id: copy.deepcopy(source), to_track_id: copy.deepcopy(target)}
+        for device in moving:
+            chain_devices(source, container_of(source, device.id)).remove(device)
+            for inner in iter_devices([device]):  # a sidechain from where they go (or what that feeds) would close a cycle
+                if inner.sidechain is not None and self.project.sidechain_would_cycle(to_track_id,
+                                                                                     inner.sidechain.track_id):
+                    inner.sidechain = None
+        first = 1 if target and device_is_instrument(target[0]) else 0
+        at = len(target) if index is None else max(first, min(index, len(target)))
+        target[at:at] = moving
+        self._prune_macros(source)
+        self._prune_macros(target_devices)
+        before = {track_id: copy.deepcopy(self.project.track(track_id).devices),
+                  to_track_id: copy.deepcopy(self.project.track(to_track_id).devices)}
         text = "Move Device" if len(moving) == 1 else "Move Devices"
+        moved = set().union(*(device_ids_of(d) for d in moving))
         envelopes = {key: points for key, points in self.project.automation(track_id).items()
-                     if automation.key_device(key) in ids}
+                     if automation.key_device(key) in moved}
         if not envelopes:
-            self._push(SetChainsCommand(self.project, before, {track_id: staying, to_track_id: after}, text))
+            self._push(SetChainsCommand(self.project, before, {track_id: source, to_track_id: target_devices}, text))
             return True
         self.undo_stack.beginMacro(text)
-        self._push(SetChainsCommand(self.project, before, {track_id: staying, to_track_id: after}, text))
+        self._push(SetChainsCommand(self.project, before, {track_id: source, to_track_id: target_devices}, text))
         old = {(owner, key): self.project.envelope(owner, key) for key in envelopes for owner in (track_id, to_track_id)}
         new = {(track_id, key): () for key in envelopes} | {(to_track_id, key): points for key, points in envelopes.items()}
         self._push(SetEnvelopesCommand(self.project, old, new, text))
@@ -1150,18 +1264,31 @@ class ProjectEditor(QObject):
         self.remove_devices(track_id, [device_id])
 
     def remove_devices(self, track_id: str, device_ids) -> None:
-        """Delete devices from a track's chain, in one undo step."""
+        """Delete devices from a track (in racks too; a rack with what is in it), in one undo step."""
         ids = set(device_ids)
         before = copy.deepcopy(self.project.track(track_id).devices)
-        after = [d for d in copy.deepcopy(before) if d.id not in ids]
-        if len(after) != len(before):
-            text = "Delete Device" if len(before) - len(after) == 1 else "Delete Devices"
-            self._set_devices(track_id, before, after, text)
+        after = copy.deepcopy(before)
+
+        def prune(devices: list[Device]) -> None:
+            devices[:] = [d for d in devices if d.id not in ids]
+            for device in devices:
+                for chain in device.chains:
+                    prune(chain.devices)
+
+        prune(after)
+        if after != before:
+            removed = len(device_ids_of_list(before)) - len(device_ids_of_list(after))
+            self._set_devices(track_id, before, after, "Delete Device" if removed == 1 else "Delete Devices")
 
     def _set_devices(self, track_id: str, before: list[Device], after: list[Device], text: str) -> None:
-        """Change a chain; the automation of devices that leave it goes with them (in the same undo step)."""
-        gone = {d.id for d in before} - {d.id for d in after}
-        orphans = [key for key in self.project.track(track_id).automation if automation.key_device(key) in gone]
+        """Change a track's devices; the automation of devices that leave it goes
+        with them (their parameters', and a rack's chains' faders'), and so do the
+        mappings of macros to them (in the same undo step)."""
+        gone = device_ids_of_list(before) - device_ids_of_list(after)
+        chains_gone = {c.id for _, c in iter_chains(before)} - {c.id for _, c in iter_chains(after)}
+        self._prune_macros(after)
+        orphans = [key for key in self.project.track(track_id).automation
+                   if automation.key_device(key) in gone or automation.key_chain(key) in chains_gone]
         if not orphans:
             self._push(SetDevicesCommand(self.project, track_id, before, after, text))
             return
@@ -1170,6 +1297,208 @@ class ProjectEditor(QObject):
         for key in orphans:
             self._push(SetEnvelopeCommand(self.project, track_id, key, self.project.envelope(track_id, key), (), text))
         self.undo_stack.endMacro()
+
+    # --- Racks ---------------------------------------------------------------------
+
+    def group_devices(self, track_id: str, device_ids) -> Device | None:
+        """Ctrl+G in the device view: these devices (in one chain, in its order)
+        go into a new rack, in one chain, where the first of them was. One undo
+        step; the rack (None if they aren't all in one chain, or it would nest
+        too deep)."""
+        track = self.project.track(track_id)
+        wanted = {i for i in device_ids if find_device(track.devices, i) is not None}
+        containers = {container_of(track.devices, i) for i in wanted}
+        if len(containers) != 1:
+            return None
+        chain = containers.pop()
+        before = copy.deepcopy(track.devices)
+        after = copy.deepcopy(before)
+        devices = chain_devices(after, chain)
+        grouped = [d for d in devices if d.id in wanted]
+        if rack_depth(after, chain) + 1 + max(rack_height(d) for d in grouped) > MAX_RACK_DEPTH:
+            return None
+        rack = new_rack([new_chain(device_name(grouped[0]), grouped)])
+        at = devices.index(grouped[0])
+        devices[:] = [d for d in devices if d.id not in wanted]
+        devices.insert(at, rack)
+        self._push(SetDevicesCommand(self.project, track_id, before, after, "Group Devices"))
+        return self.project.device(track_id, rack.id)
+
+    def ungroup_rack(self, track_id: str, rack_id: str) -> bool:
+        """Ctrl+Shift+G: a rack goes, and its chains' devices take its place, one
+        chain after another (an instrument coming out goes first). The automation
+        of its chains' faders and its macros go too. One undo step; False if it
+        isn't a rack, or several instruments would come out of it (layered
+        instruments: a chain has just one)."""
+        track = self.project.track(track_id)
+        rack = find_device(track.devices, rack_id)
+        if rack is None or not rack.is_rack:
+            return False
+        before = copy.deepcopy(track.devices)
+        after = copy.deepcopy(before)
+        devices = chain_devices(after, container_of(after, rack_id))
+        at = next(i for i, d in enumerate(devices) if d.id == rack_id)
+        devices[at:at + 1] = [d for chain in devices[at].chains for d in chain.devices]
+        if sum(1 for d in devices if device_is_instrument(d)) > 1:
+            return False
+        instrument = next((d for d in devices if device_is_instrument(d)), None)
+        if instrument is not None and devices[0] is not instrument:
+            devices.remove(instrument)
+            devices.insert(0, instrument)
+        self._set_devices(track_id, before, after, "Ungroup Rack")
+        return True
+
+    def add_rack_chain(self, track_id: str, rack_id: str, index: int | None = None,
+                       name: str | None = None) -> Chain:
+        """A new, empty chain of a rack (last, or at `index`)."""
+        before = copy.deepcopy(self.project.track(track_id).devices)
+        after = copy.deepcopy(before)
+        rack = find_device(after, rack_id)
+        if rack is None or not rack.is_rack:
+            raise ValueError("chains belong to racks")
+        chain = new_chain(name or f"Chain {len(rack.chains) + 1}")
+        rack.chains.insert(len(rack.chains) if index is None else max(0, min(index, len(rack.chains))), chain)
+        self._push(SetDevicesCommand(self.project, track_id, before, after, "Add Chain"))
+        return self.project.chain(track_id, chain.id)
+
+    def remove_rack_chains(self, track_id: str, chain_ids) -> None:
+        """Delete chains of racks, with their devices (and their automation, and
+        their faders'). One undo step."""
+        ids = set(chain_ids)
+        before = copy.deepcopy(self.project.track(track_id).devices)
+        after = copy.deepcopy(before)
+        for rack, _chain in list(iter_chains(after)):
+            rack.chains = [c for c in rack.chains if c.id not in ids]
+        if after != before:
+            self._set_devices(track_id, before, after, "Delete Chain" if len(ids) == 1 else "Delete Chains")
+
+    def duplicate_rack_chain(self, track_id: str, chain_id: str) -> Chain:
+        """A copy of a chain right after it: new devices with the same settings
+        (plug-ins in the state they were last saved in, as presets are)."""
+        before = copy.deepcopy(self.project.track(track_id).devices)
+        after = copy.deepcopy(before)
+        rack = next(r for r, c in iter_chains(after) if c.id == chain_id)
+        index = next(i for i, c in enumerate(rack.chains) if c.id == chain_id)
+        holder = new_rack([copy.deepcopy(rack.chains[index])])
+        refresh_ids(holder)
+        rack.chains.insert(index + 1, holder.chains[0])
+        self._push(SetDevicesCommand(self.project, track_id, before, after, "Duplicate Chain"))
+        return self.project.chain(track_id, holder.chains[0].id)
+
+    def move_rack_chain(self, track_id: str, chain_id: str, index: int) -> None:
+        """Reorder a rack's chains: this one to `index` (among the others)."""
+        before = copy.deepcopy(self.project.track(track_id).devices)
+        after = copy.deepcopy(before)
+        rack = next(r for r, c in iter_chains(after) if c.id == chain_id)
+        chain = next(c for c in rack.chains if c.id == chain_id)
+        rack.chains.remove(chain)
+        rack.chains.insert(max(0, min(index, len(rack.chains))), chain)
+        if after != before:
+            self._push(SetDevicesCommand(self.project, track_id, before, after, "Move Chain"))
+
+    def rename_chain(self, track_id: str, chain_id: str, name: str) -> None:
+        old = self.project.chain(track_id, chain_id).name
+        if name and name != old:
+            self._push(UpdateChainCommand(self.project, track_id, chain_id, "name", old, name, "Rename Chain"))
+
+    def set_chain_param(self, track_id: str, chain_id: str, attr: str, value, merge_key: object | None = None) -> None:
+        """A rack chain's mixer: volume_db, pan, mute, solo."""
+        labels = {"volume_db": "Change Chain Volume", "pan": "Change Chain Pan", "mute": "Toggle Chain Activator",
+                  "solo": "Toggle Chain Solo"}
+        if attr == "volume_db":
+            value = max(MIN_VOLUME_DB, min(MAX_VOLUME_DB, value))
+        elif attr == "pan":
+            value = max(-1.0, min(1.0, value))
+        old = getattr(self.project.chain(track_id, chain_id), attr)
+        if value != old:
+            self._push(UpdateChainCommand(self.project, track_id, chain_id, attr, old, value, labels[attr], merge_key))
+        touched = {"volume_db": automation.CHAIN_VOLUME, "pan": automation.CHAIN_PAN}.get(attr)
+        if touched:
+            rack = self.project.chain_rack(track_id, chain_id)
+            self.parameter_touched.emit(track_id, automation.chain_key(rack.id, chain_id, touched))
+
+    # Macros: a rack's parameters, each moving the parameters mapped to it. Their
+    # values are normalized. param_info() describes a device's parameter (its
+    # normalized mapping: a ParamInfo or ParamSpec); the UI hands it plug-ins'
+    # (set_param_info); built-in devices' are known without it.
+
+    def set_param_info(self, describe: Callable[[str, str, str], object | None]) -> None:
+        """Where param_info() learns about parameters it doesn't know (plug-ins'):
+        describe(track id, device id, param id)."""
+        self._describe = describe
+
+    def set_own_value(self, read: Callable[[str, str], float | None]) -> None:
+        """Where set_macro() learns what a plug-in's parameter is now, as set in
+        the plug-in's own editor (the model doesn't have it): read(owner, key)."""
+        self._read_own = read
+
+    def param_info(self, track_id: str, device_id: str, param_id: str):
+        device = self.project.device(track_id, device_id)
+        if not device.is_plugin and not device.is_rack:
+            return builtin_param_info(device.kind, param_id)
+        describe = getattr(self, "_describe", None)
+        return describe(track_id, device_id, param_id) if describe is not None else None
+
+    def macro_targets(self, track_id: str, rack_id: str, index: int, value: float) -> dict[tuple[str, str], float]:
+        """What a rack's macro at `value` sets: itself, and each parameter mapped to it (plain values)."""
+        rack = self.project.device(track_id, rack_id)
+        value = max(0.0, min(1.0, value))
+        values = {(rack_id, macro_param(index)): value}
+        for mapping in rack.macros:
+            if mapping.macro != index or not self.project.has_device(track_id, mapping.device_id):
+                continue
+            info = self.param_info(track_id, mapping.device_id, mapping.param_id)
+            if info is not None:
+                values[(mapping.device_id, mapping.param_id)] = info.from_normalized(mapping.target(value))
+        return values
+
+    def set_macro(self, track_id: str, rack_id: str, index: int, value: float, merge_key: object | None = None) -> None:
+        """Turn a rack's macro: it and every parameter mapped to it, one undo step
+        (one per gesture, with a `merge_key`)."""
+        new = self.macro_targets(track_id, rack_id, index, value)
+        old = {}
+        for device_id, param_id in new:
+            own = self.project.device(track_id, device_id).params.get(param_id)
+            read = getattr(self, "_read_own", None)
+            if own is None and read is not None:  # set in a plug-in's own editor
+                own = read(track_id, automation.device_key(device_id, param_id))
+            if own is None:  # a default value: as it was
+                info = self.param_info(track_id, device_id, param_id)
+                own = new[(device_id, param_id)] if info is None else getattr(info, "default_value",
+                                                                              getattr(info, "default", 0.0))
+            old[(device_id, param_id)] = own
+        if old != new:
+            self._push(SetDeviceParamsCommand(self.project, track_id, old, new, "Change Macro", merge_key))
+
+    def map_macro(self, track_id: str, rack_id: str, index: int, device_id: str, param_id: str,
+                  low: float = 0.0, high: float = 1.0) -> None:
+        """Map a rack's macro to a parameter of a device in it (a parameter is
+        mapped to one macro of the rack at a time)."""
+        rack = self.project.device(track_id, rack_id)
+        if not rack.is_rack or not 0 <= index < MACRO_COUNT or device_id == rack_id \
+                or device_id not in device_ids_of(rack):
+            raise ValueError("a macro moves parameters of devices in its rack")
+        kept = tuple(m for m in rack.macros if (m.device_id, m.param_id) != (device_id, param_id))
+        new = (*kept, MacroMapping(index, device_id, param_id, low, high))
+        self._push(SetMacrosCommand(self.project, track_id, rack_id, rack.macros, new, "Map Macro"))
+
+    def unmap_macro(self, track_id: str, rack_id: str, device_id: str, param_id: str) -> None:
+        rack = self.project.device(track_id, rack_id)
+        kept = tuple(m for m in rack.macros if (m.device_id, m.param_id) != (device_id, param_id))
+        if kept != rack.macros:
+            self._push(SetMacrosCommand(self.project, track_id, rack_id, rack.macros, kept, "Remove Macro Mapping"))
+
+    def macro_of(self, track_id: str, device_id: str, param_id: str) -> tuple[str, int] | None:
+        """The rack and macro a parameter is mapped to (the nearest rack's), if any."""
+        devices = self.project.track(track_id).devices
+        chain = container_of(devices, device_id)
+        while chain is not None:
+            rack = self.project.chain_rack(track_id, chain)
+            for mapping in rack.macros:
+                if (mapping.device_id, mapping.param_id) == (device_id, param_id):
+                    return rack.id, mapping.macro
+            chain = container_of(devices, rack.id)
+        return None
 
     def set_device_param(self, track_id: str, device_id: str, param_id: str, value: float,
                          merge_key: object | None = None, old: float | None = None) -> None:

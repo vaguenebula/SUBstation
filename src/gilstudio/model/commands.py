@@ -224,6 +224,55 @@ class SetDeviceParamCommand(_MergeableCommand):
         self.project.set_device_param(*self.key, self.old)
 
 
+class SetDeviceParamsCommand(_MergeableCommand):
+    """Several parameters of a track's devices at once, {(device id, param id):
+    value}: a rack's macro and the parameters mapped to it."""
+
+    def __init__(self, project: Project, track_id: str, old: dict, new: dict, text: str,
+                 merge_key: object | None = None):
+        super().__init__(text, (track_id, tuple(new)), old, new, merge_key)
+        self.project = project
+
+    def redo(self) -> None:
+        self.project.set_device_params(self.key[0], self.new)
+
+    def undo(self) -> None:
+        self.project.set_device_params(self.key[0], self.old)
+
+
+class UpdateChainCommand(_MergeableCommand):
+    """A rack chain's name or mixer setting."""
+
+    def __init__(self, project: Project, track_id: str, chain_id: str, attr: str, old: Any, new: Any, text: str,
+                 merge_key: object | None = None):
+        super().__init__(text, (track_id, chain_id, attr), old, new, merge_key)
+        self.project = project
+
+    def redo(self) -> None:
+        self.project.update_chain(self.key[0], self.key[1], **{self.key[2]: self.new})
+
+    def undo(self) -> None:
+        self.project.update_chain(self.key[0], self.key[1], **{self.key[2]: self.old})
+
+
+class SetMacrosCommand(QUndoCommand):
+    """A rack's macro mappings."""
+
+    def __init__(self, project: Project, track_id: str, rack_id: str, old: tuple, new: tuple, text: str):
+        super().__init__(text)
+        self.project = project
+        self.track_id = track_id
+        self.rack_id = rack_id
+        self.old = old
+        self.new = new
+
+    def redo(self) -> None:
+        self.project.update_device(self.track_id, self.rack_id, macros=self.new)
+
+    def undo(self) -> None:
+        self.project.update_device(self.track_id, self.rack_id, macros=self.old)
+
+
 class SetDeviceStateCommand(QUndoCommand):
     """Replaces a device's state: a plug-in's whole state (loading a preset), a
     built-in device's besides its parameters (a sampler's sample); base64."""

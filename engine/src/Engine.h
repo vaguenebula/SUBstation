@@ -141,6 +141,7 @@ struct MeterReading {
     uint32_t trackId = 0;  // 0 = master
     float left = 0.f;
     float right = 0.f;
+    uint32_t chainId = 0;  // a rack chain's fader (on track trackId); 0: the track's own
 };
 
 // A processor's description for the UI.
@@ -246,6 +247,7 @@ public:
     std::vector<SendInfo> trackSends(uint32_t trackId);
     void setMasterGain(float gain) { setTrackGain(kMaster, gain); }
     void setMasterPan(float pan) { setTrackPan(kMaster, pan); }
+    // Peak levels since the last call: the master, each track, then each rack chain (chainId set).
     std::vector<MeterReading> takeMeters();
 
     // --- Input and recording ------------------------------------------------------
@@ -303,9 +305,11 @@ public:
 
     // --- Automation -------------------------------------------------------------
     // Replaces the automation of a track (trackId 0: the master): an envelope per
-    // target, either a mixer control (processorId 0, param "volume" or "pan") or
-    // a parameter (by id) of one of the track's devices. Envelopes of devices
-    // that are gone, or parameters they don't have, are kept but not played.
+    // target, either a mixer control (processorId 0, param "volume" or "pan"), a
+    // parameter (by id) of one of the track's devices (in a rack too), or the
+    // fader of a rack's chain (the rack's id, param "chain:<chain id>:volume" or
+    // "...:pan"). Envelopes of devices that are gone (or are on another track),
+    // or parameters they don't have, are kept but not played.
     // A target automated here follows its envelope; its own value (set above)
     // counts again once its envelope is taken away.
     void setTrackAutomation(uint32_t trackId, const std::vector<AutomationLaneDesc>& lanes);
@@ -323,14 +327,38 @@ public:
     // std::runtime_error with a message for the user if it can't be loaded.
     uint32_t addPluginProcessor(uint32_t chainId, const std::string& format, const std::string& path,
                                 const std::string& uid, int index);
+    // Removes a device (a rack with its chains and everything in them).
     void removeProcessor(uint32_t processorId);
     // Reorders a chain; `processorIds` must be the chain's processors, each once.
     void setChainOrder(uint32_t chainId, const std::vector<uint32_t>& processorIds);
     // Moves a processor to position `index` of a chain (its own or another, on
-    // any strip), as the chain is without it (-1: last). Its state goes with it,
-    // and its sidechain (std::invalid_argument if that would make a cycle there);
-    // its automation stays with the strip it came from, and plays again if it comes back.
+    // any strip, in a rack too), as the chain is without it (-1: last). Its state
+    // goes with it (a rack's chains and devices too), and its sidechain (and
+    // those of the devices in a rack; std::invalid_argument if one would make a
+    // cycle there, as for a rack moving into itself or nesting too deep); its
+    // automation stays with the strip it came from, and plays again if it comes back.
     void moveProcessor(uint32_t processorId, uint32_t toChainId, int index);
+
+    // Racks (device groups): a rack is a device in a chain whose own chains each
+    // process its input, side by side; it puts out their sum (an empty rack
+    // passes its input on). Each chain has its devices (racks too, at most
+    // kMaxRackDepth deep), and a fader: gain, pan, mute and solo (solo among the
+    // rack's chains), metered like a track's. The rack's latency is its slowest
+    // chain's: the others are delayed to line up with it. Every chain's devices
+    // hear the track's notes (layering instruments). Throws std::invalid_argument
+    // for an unknown chain or rack, or a rack nested too deep.
+    static constexpr int kMaxRackDepth = gil::kMaxRackDepth;
+    uint32_t addRack(uint32_t chainId, int index);
+    uint32_t addRackChain(uint32_t rackId, int index);  // a new chain, at `index` (-1: last)
+    void removeRackChain(uint32_t chainId);              // with its devices
+    void setRackChainOrder(uint32_t rackId, const std::vector<uint32_t>& chainIds);
+    std::vector<uint32_t> rackChains(uint32_t rackId);
+    uint32_t chainRack(uint32_t chainId);  // the rack a chain belongs to; 0: a strip's main chain
+    std::vector<uint32_t> chainProcessors(uint32_t chainId);  // in order
+    void setChainGain(uint32_t chainId, float gain);
+    void setChainPan(uint32_t chainId, float pan);
+    void setChainMute(uint32_t chainId, bool mute);
+    void setChainSolo(uint32_t chainId, bool solo);
     // A device's sidechain: what its aux input hears (hasSidechain in its
     // ProcessorInfo), from a track (a track, a group or a return; not the master,
     // which renders after everything), tapped after the track's fader, before it,
@@ -457,12 +485,14 @@ private:
     uint16_t midiPortLocked(const std::string& name);
     void discardMidiInputLocked();
 
-    // A chain of devices: a strip's main chain, or (later) a chain of a rack on it.
+    // A chain of devices: a strip's main chain, or a chain of a rack on it.
     struct ChainModel {
         uint32_t id = 0;
         uint32_t stripId = 0;     // the track (or kMaster) whose signal it processes
         uint32_t parentRack = 0;  // the rack processor it belongs to; 0: a strip's main chain
         std::vector<std::shared_ptr<Processor>> inserts;
+        std::shared_ptr<TrackParams> params;  // a rack chain's fader (null for a main chain)
+        std::shared_ptr<DelayLine> delay;     // a rack chain's delay compensation, kept across snapshots
     };
     // A device's sidechain (a routing edge into it), with its state and delay
     // lines kept across snapshots.
@@ -478,7 +508,22 @@ private:
         uint32_t chainId = 0;
         std::shared_ptr<Processor> processor;
         std::optional<SidechainModel> sidechain;
+        bool rack = false;             // a RackProcessor:
+        std::vector<uint32_t> chains;  // its chains, in order
     };
+    // A strip's devices depth first (Routing.h's slots): each device of its main
+    // chain, and after a rack the devices of its chains, chain by chain.
+    struct StripSlot {
+        uint32_t processorId = 0;
+        std::shared_ptr<Processor> processor;
+        uint32_t chainId = 0;  // the chain it is in
+        int index = 0;         // its place there
+        int rack = -1;         // the slot of the rack that chain belongs to (-1: the strip's main chain)
+        int chain = 0;         // and which of its chains it is
+        bool enabled = true;   // it is switched on, and so is every rack it is in
+        bool isRack = false;
+    };
+    using ProcessorIds = std::unordered_map<const Processor*, uint32_t>;
 
     TrackModel& trackLocked(uint32_t trackId);           // the master too
     TrackModel& arrangementTrackLocked(uint32_t trackId);  // not the master
@@ -487,8 +532,19 @@ private:
     ChainModel& chainLocked(uint32_t chainId);
     const std::vector<std::shared_ptr<Processor>>& insertsLocked(const TrackModel& track) const;
     uint32_t addChainLocked(uint32_t stripId, uint32_t parentRack);
-    uint32_t insertProcessorLocked(uint32_t chainId, std::shared_ptr<Processor> processor, int index);
+    uint32_t insertProcessorLocked(uint32_t chainId, std::shared_ptr<Processor> processor, int index,
+                                   bool rack = false);
     void retireProcessorLocked(std::shared_ptr<Processor> processor);
+    // Removes a rack chain and everything in it (not from its rack's list).
+    void removeChainContentsLocked(uint32_t chainId);
+    ProcessorEntry& rackLocked(uint32_t rackId);
+    ChainModel& rackChainLocked(uint32_t chainId);  // a rack's chain (not a strip's main chain)
+    int chainDepthLocked(uint32_t chainId) const;  // how many racks a chain is in (0: a strip's main chain)
+    int rackHeightLocked(uint32_t rackId) const;   // 1 + the deepest nesting of racks in it
+    // The devices in a rack's chains (and in the racks in them), and those chains, appended.
+    void rackContentsLocked(uint32_t rackId, std::vector<uint32_t>& processors, std::vector<uint32_t>& chains) const;
+    ProcessorIds processorIdsLocked() const;
+    std::vector<StripSlot> stripSlotsLocked(const TrackModel& track, const ProcessorIds& ids) const;
     void rebuildSnapshotLocked();
     void pushCommandLocked(const TransportCommand& command);
     void serviceTransportIfIdleLocked();
@@ -502,19 +558,37 @@ private:
     void suspendLiveLocked();
     void resumeLiveLocked();
     void renderOfflineLocked(double startBeat, int64_t frames, float* out, bool loop, bool metronome);
-    void prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices, std::vector<std::shared_ptr<DelayLine>>& delays,
-                              std::vector<std::shared_ptr<DelayLine>>& deviceDelays, double startBeat);
+    // Delay lines an offline render brings, so that it neither disturbs live playback nor depends on it.
+    struct OfflineLines {
+        WarpVoiceSet voices;
+        std::vector<std::shared_ptr<DelayLine>> delays, deviceDelays, chainDelays;
+    };
+    void prepareOfflineLocked(Renderer& offline, OfflineLines& lines, double startBeat);
     void resetProcessorsLocked();
     void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
-    // A strip's envelopes in the snapshot, in samples. `inputLatency`: how late
-    // the strip's input hears the timeline (0 for a track fed by nothing else; for
-    // a bus or the master, as late as the latest of what feeds it). Its devices
-    // hear it that much later, plus `deviceLatency` (GraphLatencies: the devices
-    // before them, and the delays before sidechained ones); its fader after all
-    // of them (`faderLatency`; delay compensation comes after the fader, on the
-    // strip's edges).
-    void buildAutomationLocked(const TrackModel& track, int inputLatency, const std::vector<int>& deviceLatency,
-                               int faderLatency, double samplesPerBeat, StripRender& strip);
+    // What building a strip's part of the snapshot needs to know about it.
+    struct StripBuild {
+        const TrackModel* track = nullptr;
+        const std::vector<StripSlot>* slots = nullptr;
+        std::unordered_map<const Processor*, int> slotOf;  // its devices' slots
+        int inputLatency = 0;  // how late the strip's input hears the timeline
+        // GraphLatencies' for this strip: from its input, by slot.
+        const std::vector<int>* deviceLatency = nullptr;
+        const std::vector<std::vector<int>>* chainEnd = nullptr;
+        const std::vector<std::vector<int>>* chainCompensation = nullptr;
+        std::vector<int> sidechainOf;  // per slot: the snapshot edge into its sidechain input (-1: none)
+        double samplesPerBeat = 0.0;
+    };
+    // A strip's mixer envelopes in the snapshot, in samples, as late as
+    // `faderLatency` (delay compensation comes after the fader, on the strip's
+    // edges). Its devices' come with them (buildChainLocked).
+    void buildAutomationLocked(const StripBuild& build, int faderLatency, StripRender& strip);
+    // A chain's devices in the snapshot (a strip's main chain, or a rack's chain,
+    // into `chain`), with the sidechains into them, their envelopes and racks. A
+    // device hears the timeline as late as the strip's input, plus the latency
+    // before it (the devices before it, and the delays before sidechained ones).
+    void buildChainLocked(uint32_t chainId, const StripBuild& build, int depth, RenderSnapshot& snap,
+                          StripRender& chain);
     // An envelope's breakpoints in samples, sorted.
     static std::vector<AutomationNode> automationNodes(const AutomationLaneDesc& desc, double samplesPerBeat);
     // The routing graph's edges, as indices into tracks_ (-1: the master): each
@@ -534,10 +608,13 @@ private:
     std::vector<RouteEdge> routeEdgesLocked(std::vector<EdgeOrigin>* origins = nullptr) const;
     // Where a sidechain leaves its source: after its fader, before it, or after
     // its first `n` devices (returns n; -1: after all of them). A tap after a
-    // device that isn't in the source's main chain (any more) is before the fader.
+    // device that isn't in the source's main chain (any more; or is in a rack
+    // there) is before the fader.
     int sidechainTapLocked(const SidechainModel& sidechain, EdgeRender::Tap& tap) const;
     // Throws std::invalid_argument if a sidechain from `source` into a device on `strip` would close a cycle.
     void checkSidechainLocked(uint32_t source, uint32_t strip) const;
+    // The same for every sidechained device in a rack's chains (it moves to `strip`).
+    void checkRackSidechainsLocked(uint32_t rackId, uint32_t strip);
     // Throws std::invalid_argument if an edge from `from` into `to` would close a cycle.
     void checkRouteLocked(uint32_t from, uint32_t to, const char* what) const;
     int trackIndexLocked(uint32_t trackId) const;  // -1: the master (or none)

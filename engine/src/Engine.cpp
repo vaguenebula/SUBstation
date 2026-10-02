@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "PathUtils.h"
+#include "Rack.h"
 #include "Routing.h"
 #include "miniaudio.h"
 #include "plugins/Vst3Format.h"
@@ -433,25 +434,25 @@ std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<EdgeOrigin>* origins
         edges.push_back({trackIndexLocked(*track.inputTrack), static_cast<int>(t), false});
         if (origins) origins->push_back({static_cast<int>(t), kInputEdge});
     }
-    // Then the sidechains, by destination (the tracks, then the master's devices) and device.
-    std::unordered_map<const Processor*, uint32_t> sidechained;
-    for (const auto& [id, entry] : processors_) {
-        if (entry.sidechain) sidechained.emplace(entry.processor.get(), id);
+    // Then the sidechains, by destination (the tracks, then the master's devices)
+    // and device (its slot: devices in racks too).
+    if (std::none_of(processors_.begin(), processors_.end(), [](const auto& p) { return p.second.sidechain.has_value(); })) {
+        return edges;
     }
-    if (sidechained.empty()) return edges;
+    const ProcessorIds ids = processorIdsLocked();
     const auto addSidechains = [&](const TrackModel& strip, int to) {
-        const auto& inserts = insertsLocked(strip);
-        for (size_t d = 0; d < inserts.size(); ++d) {
-            const auto found = sidechained.find(inserts[d].get());
-            if (found == sidechained.end()) continue;
-            const SidechainModel& sidechain = *processors_.at(found->second).sidechain;
+        const std::vector<StripSlot> slots = stripSlotsLocked(strip, ids);
+        for (size_t d = 0; d < slots.size(); ++d) {
+            const auto found = processors_.find(slots[d].processorId);
+            if (found == processors_.end() || !found->second.sidechain) continue;
+            const SidechainModel& sidechain = *found->second.sidechain;
             RouteEdge edge{trackIndexLocked(sidechain.source), to, false};
             if (edge.from < 0) continue;  // (its source went: removeTrack() takes it away)
             EdgeRender::Tap tap;
             edge.tap = sidechainTapLocked(sidechain, tap);
-            edge.device = inserts[d]->isEnabled() ? static_cast<int>(d) : -1;  // one switched off isn't lined up
+            edge.device = slots[d].enabled ? static_cast<int>(d) : -1;  // one switched off isn't lined up
             edges.push_back(edge);
-            if (origins) origins->push_back({to, kSidechainEdge, found->second, static_cast<int>(d)});
+            if (origins) origins->push_back({to, kSidechainEdge, found->first, static_cast<int>(d)});
         }
     };
     for (size_t t = 0; t < tracks_.size(); ++t) addSidechains(tracks_[t], static_cast<int>(t));
@@ -559,6 +560,10 @@ std::vector<MeterReading> Engine::takeMeters() {
     meters.push_back({kMaster, master_.params->peakLeft.exchange(0.f), master_.params->peakRight.exchange(0.f)});
     for (const auto& track : tracks_) {
         meters.push_back({track.id, track.params->peakLeft.exchange(0.f), track.params->peakRight.exchange(0.f)});
+    }
+    for (const auto& [id, chain] : chains_) {
+        if (!chain.params) continue;  // a strip's main chain: its strip's fader
+        meters.push_back({chain.stripId, chain.params->peakLeft.exchange(0.f), chain.params->peakRight.exchange(0.f), id});
     }
     return meters;
 }
@@ -853,47 +858,107 @@ std::vector<AutomationNode> Engine::automationNodes(const AutomationLaneDesc& de
     return nodes;
 }
 
-void Engine::buildAutomationLocked(const TrackModel& track, int inputLatency, const std::vector<int>& deviceLatency,
-                                   int faderLatency, double samplesPerBeat, StripRender& strip) {
-    const auto& inserts = insertsLocked(track);
-    for (const AutomationLaneDesc& desc : track.automation) {
-        if (desc.points.empty()) continue;
-        AutomationRender lane;
-        AutomationRender* target = nullptr;
-        if (desc.processorId == 0) {
-            if (desc.param == "volume") {
-                target = &strip.volume;
-            } else if (desc.param == "pan") {
-                target = &strip.pan;
-            } else {
-                continue;
-            }
-            lane.latency = faderLatency;
-        } else {
-            const auto found = processors_.find(desc.processorId);
-            if (found == processors_.end() || found->second.chainId != track.chainId) continue;
-            const std::shared_ptr<Processor>& processor = found->second.processor;
-            const auto place = std::find(inserts.begin(), inserts.end(), processor);
-            if (place == inserts.end()) continue;
-            const auto& infos = processor->params();
-            const auto info = std::find_if(infos.begin(), infos.end(),
-                                           [&](const ParamInfo& p) { return p.id == desc.param; });
-            if (info == infos.end() || info->readOnly) continue;
-            lane.processor = processor;
-            lane.param = static_cast<int>(info - infos.begin());
-            lane.steps = info->stepCount();
-            lane.insert = static_cast<int>(place - inserts.begin());
-            const auto at = static_cast<size_t>(lane.insert);
-            lane.latency = inputLatency + (at < deviceLatency.size() ? deviceLatency[at] : 0);
-        }
-        lane.nodes = automationNodes(desc, samplesPerBeat);
-        if (target) {
-            *target = std::move(lane);
-        } else {
-            strip.automation.push_back(std::move(lane));
-        }
+namespace {
+
+// A delay line long enough for `samples` (kept if it is: it holds what it delays).
+void ensureDelay(std::shared_ptr<DelayLine>& delay, int samples) {
+    if (samples > 0 && (!delay || delay->capacity() <= samples)) {
+        delay = std::make_shared<DelayLine>(2 * samples + Renderer::kMaxBlock);
     }
-    std::stable_sort(strip.automation.begin(), strip.automation.end(),
+}
+
+// A rack chain's fader lane: "chain:<chain id>:volume" (or ":pan") of the rack.
+std::string chainLaneParam(uint32_t chainId, const char* control) {
+    return "chain:" + std::to_string(chainId) + ":" + control;
+}
+
+}  // namespace
+
+void Engine::buildAutomationLocked(const StripBuild& build, int faderLatency, StripRender& strip) {
+    for (const AutomationLaneDesc& desc : build.track->automation) {
+        if (desc.points.empty() || desc.processorId != 0) continue;
+        AutomationRender* target = desc.param == "volume" ? &strip.volume : desc.param == "pan" ? &strip.pan : nullptr;
+        if (!target) continue;  // (a send's: its edge's)
+        target->nodes = automationNodes(desc, build.samplesPerBeat);
+        target->latency = faderLatency;
+    }
+}
+
+void Engine::buildChainLocked(uint32_t chainId, const StripBuild& build, int depth, RenderSnapshot& snap,
+                              StripRender& out) {
+    const ChainModel& chain = chains_.at(chainId);
+    out.inserts = chain.inserts;
+    const std::vector<StripSlot>& slots = *build.slots;
+    std::vector<int> sidechains(chain.inserts.size(), -1);
+    std::vector<std::shared_ptr<const RackRender>> racks(chain.inserts.size());
+    bool anySidechain = false, anyRack = false;
+    for (size_t i = 0; i < chain.inserts.size(); ++i) {
+        const auto found = build.slotOf.find(chain.inserts[i].get());
+        if (found == build.slotOf.end()) continue;
+        const auto s = static_cast<size_t>(found->second);
+        if (s < build.sidechainOf.size() && build.sidechainOf[s] >= 0) {
+            sidechains[i] = build.sidechainOf[s];
+            anySidechain = true;
+        }
+        if (!slots[s].isRack) continue;
+        anyRack = true;
+        auto rack = std::make_shared<RackRender>();
+        rack->depth = depth;
+        const std::vector<int>& ends = (*build.chainEnd)[s];
+        const std::vector<int>& lineUp = (*build.chainCompensation)[s];
+        const ProcessorEntry& entry = processors_.at(slots[s].processorId);
+        for (size_t c = 0; c < entry.chains.size(); ++c) {
+            ChainModel& model = chains_.at(entry.chains[c]);
+            ChainRender render;
+            render.id = model.id;
+            render.params = model.params;
+            render.compensation = c < lineUp.size() ? lineUp[c] : 0;
+            ensureDelay(model.delay, render.compensation);
+            render.delay = model.delay;
+            render.delayIndex = static_cast<int>(snap.chainDelays.size());
+            snap.chainDelays.push_back(render.compensation);
+            // Its fader hears the timeline as late as the end of its devices.
+            const int faderLatency = build.inputLatency + (c < ends.size() ? ends[c] : 0);
+            render.latency = c < ends.size() ? ends[c] - (*build.deviceLatency)[s] : 0;
+            const std::string volume = chainLaneParam(model.id, "volume"), pan = chainLaneParam(model.id, "pan");
+            for (const AutomationLaneDesc& desc : build.track->automation) {
+                if (desc.processorId != slots[s].processorId || desc.points.empty()) continue;
+                AutomationRender* target = desc.param == volume ? &render.volume : desc.param == pan ? &render.pan : nullptr;
+                if (!target) continue;
+                target->nodes = automationNodes(desc, build.samplesPerBeat);
+                target->latency = faderLatency;
+            }
+            buildChainLocked(model.id, build, depth + 1, snap, render);
+            rack->chains.push_back(std::move(render));
+        }
+        racks[i] = std::move(rack);
+    }
+    if (anySidechain) out.sidechains = std::move(sidechains);
+    if (anyRack) out.racks = std::move(racks);
+
+    // The envelopes of the chain's devices' parameters, each as late as the strip's
+    // input plus the latency before its device.
+    for (const AutomationLaneDesc& desc : build.track->automation) {
+        if (desc.points.empty() || desc.processorId == 0) continue;
+        const auto found = processors_.find(desc.processorId);
+        if (found == processors_.end() || found->second.chainId != chainId) continue;
+        const std::shared_ptr<Processor>& processor = found->second.processor;
+        const auto place = std::find(chain.inserts.begin(), chain.inserts.end(), processor);
+        if (place == chain.inserts.end()) continue;
+        const auto& infos = processor->params();
+        const auto info = std::find_if(infos.begin(), infos.end(), [&](const ParamInfo& p) { return p.id == desc.param; });
+        if (info == infos.end() || info->readOnly) continue;
+        AutomationRender lane;
+        lane.processor = processor;
+        lane.param = static_cast<int>(info - infos.begin());
+        lane.steps = info->stepCount();
+        lane.insert = static_cast<int>(place - chain.inserts.begin());
+        const auto slot = build.slotOf.find(processor.get());
+        lane.latency = build.inputLatency + (slot != build.slotOf.end() ? (*build.deviceLatency)[static_cast<size_t>(slot->second)] : 0);
+        lane.nodes = automationNodes(desc, build.samplesPerBeat);
+        out.automation.push_back(std::move(lane));
+    }
+    std::stable_sort(out.automation.begin(), out.automation.end(),
                      [](const AutomationRender& a, const AutomationRender& b) { return a.insert < b.insert; });
 }
 
@@ -948,13 +1013,190 @@ int insertPosition(int index, size_t count) {
 
 }  // namespace
 
-uint32_t Engine::insertProcessorLocked(uint32_t chainId, std::shared_ptr<Processor> processor, int index) {
+uint32_t Engine::insertProcessorLocked(uint32_t chainId, std::shared_ptr<Processor> processor, int index, bool rack) {
     ChainModel& chain = chainLocked(chainId);
     chain.inserts.insert(chain.inserts.begin() + insertPosition(index, chain.inserts.size()), processor);
     const uint32_t id = nextProcessorId_++;
-    processors_[id] = {chainId, std::move(processor)};
+    processors_[id] = {chainId, std::move(processor), std::nullopt, rack, {}};
     rebuildSnapshotLocked();
     return id;
+}
+
+Engine::ProcessorIds Engine::processorIdsLocked() const {
+    ProcessorIds ids;
+    ids.reserve(processors_.size());
+    for (const auto& [id, entry] : processors_) ids.emplace(entry.processor.get(), id);
+    return ids;
+}
+
+std::vector<Engine::StripSlot> Engine::stripSlotsLocked(const TrackModel& track, const ProcessorIds& ids) const {
+    std::vector<StripSlot> slots;
+    const auto collect = [&](const auto& self, uint32_t chainId, int rack, int chain, bool enabled) -> void {
+        const auto& inserts = chains_.at(chainId).inserts;
+        for (size_t i = 0; i < inserts.size(); ++i) {
+            StripSlot slot;
+            slot.processor = inserts[i];
+            const auto id = ids.find(inserts[i].get());
+            slot.processorId = id != ids.end() ? id->second : 0;
+            slot.chainId = chainId;
+            slot.index = static_cast<int>(i);
+            slot.rack = rack;
+            slot.chain = chain;
+            slot.enabled = enabled && inserts[i]->isEnabled();
+            const auto entry = processors_.find(slot.processorId);
+            slot.isRack = entry != processors_.end() && entry->second.rack;
+            const int at = static_cast<int>(slots.size());
+            slots.push_back(slot);
+            if (!slot.isRack) continue;
+            const std::vector<uint32_t>& chains = entry->second.chains;
+            for (size_t c = 0; c < chains.size(); ++c) self(self, chains[c], at, static_cast<int>(c), slot.enabled);
+        }
+    };
+    collect(collect, track.chainId, -1, 0, true);
+    return slots;
+}
+
+void Engine::rackContentsLocked(uint32_t rackId, std::vector<uint32_t>& processors, std::vector<uint32_t>& chains) const {
+    for (const uint32_t chain : processors_.at(rackId).chains) {
+        chains.push_back(chain);
+        for (const auto& [id, entry] : processors_) {
+            if (entry.chainId != chain) continue;
+            processors.push_back(id);
+            if (entry.rack) rackContentsLocked(id, processors, chains);
+        }
+    }
+}
+
+void Engine::removeChainContentsLocked(uint32_t chainId) {
+    std::vector<uint32_t> doomed, chains{chainId};
+    for (const auto& [id, entry] : processors_) {
+        if (entry.chainId != chainId) continue;
+        doomed.push_back(id);
+        if (entry.rack) rackContentsLocked(id, doomed, chains);
+    }
+    for (const uint32_t id : doomed) {
+        retireProcessorLocked(std::move(processors_.at(id).processor));
+        processors_.erase(id);
+    }
+    for (const uint32_t chain : chains) chains_.erase(chain);
+}
+
+Engine::ProcessorEntry& Engine::rackLocked(uint32_t rackId) {
+    processorLocked(rackId);
+    ProcessorEntry& entry = processors_.at(rackId);
+    if (!entry.rack) throw std::invalid_argument("Device " + std::to_string(rackId) + " is not a rack");
+    return entry;
+}
+
+Engine::ChainModel& Engine::rackChainLocked(uint32_t chainId) {
+    ChainModel& chain = chainLocked(chainId);
+    if (chain.parentRack == 0) throw std::invalid_argument("Chain " + std::to_string(chainId) + " is no rack's");
+    return chain;
+}
+
+int Engine::chainDepthLocked(uint32_t chainId) const {
+    int depth = 0;
+    for (const ChainModel* chain = &chains_.at(chainId); chain->parentRack != 0;
+         chain = &chains_.at(processors_.at(chain->parentRack).chainId)) {
+        ++depth;
+    }
+    return depth;
+}
+
+int Engine::rackHeightLocked(uint32_t rackId) const {
+    int deepest = 0;
+    for (const uint32_t chain : processors_.at(rackId).chains) {
+        for (const auto& [id, entry] : processors_) {
+            if (entry.chainId == chain && entry.rack) deepest = std::max(deepest, rackHeightLocked(id));
+        }
+    }
+    return 1 + deepest;
+}
+
+void Engine::checkRackSidechainsLocked(uint32_t rackId, uint32_t strip) {
+    std::vector<uint32_t> inside, chains;
+    rackContentsLocked(rackId, inside, chains);
+    for (const uint32_t id : inside) {
+        const ProcessorEntry& entry = processors_.at(id);
+        if (entry.sidechain) checkSidechainLocked(entry.sidechain->source, strip);
+    }
+}
+
+uint32_t Engine::addRack(uint32_t chainId, int index) {
+    std::lock_guard lock(mutex_);
+    chainLocked(chainId);
+    if (chainDepthLocked(chainId) >= kMaxRackDepth) {
+        throw std::invalid_argument("Racks nest at most " + std::to_string(kMaxRackDepth) + " deep");
+    }
+    return insertProcessorLocked(chainId, std::make_shared<RackProcessor>(), index, true);
+}
+
+uint32_t Engine::addRackChain(uint32_t rackId, int index) {
+    std::lock_guard lock(mutex_);
+    const uint32_t strip = chainLocked(rackLocked(rackId).chainId).stripId;
+    const uint32_t id = addChainLocked(strip, rackId);
+    chains_.at(id).params = std::make_shared<TrackParams>();
+    std::vector<uint32_t>& chains = processors_.at(rackId).chains;
+    chains.insert(chains.begin() + insertPosition(index, chains.size()), id);
+    rebuildSnapshotLocked();
+    return id;
+}
+
+void Engine::removeRackChain(uint32_t chainId) {
+    std::lock_guard lock(mutex_);
+    const uint32_t rack = rackChainLocked(chainId).parentRack;
+    std::erase(processors_.at(rack).chains, chainId);
+    removeChainContentsLocked(chainId);
+    rebuildSnapshotLocked();
+}
+
+void Engine::setRackChainOrder(uint32_t rackId, const std::vector<uint32_t>& chainIds) {
+    std::lock_guard lock(mutex_);
+    ProcessorEntry& rack = rackLocked(rackId);
+    std::vector<uint32_t> sorted = chainIds, current = rack.chains;
+    std::sort(sorted.begin(), sorted.end());
+    std::sort(current.begin(), current.end());
+    if (sorted != current) throw std::invalid_argument("The order must list each of the rack's chains once");
+    rack.chains = chainIds;
+    rebuildSnapshotLocked();
+}
+
+std::vector<uint32_t> Engine::rackChains(uint32_t rackId) {
+    std::lock_guard lock(mutex_);
+    return rackLocked(rackId).chains;
+}
+
+uint32_t Engine::chainRack(uint32_t chainId) {
+    std::lock_guard lock(mutex_);
+    return chainLocked(chainId).parentRack;
+}
+
+std::vector<uint32_t> Engine::chainProcessors(uint32_t chainId) {
+    std::lock_guard lock(mutex_);
+    const ProcessorIds ids = processorIdsLocked();
+    std::vector<uint32_t> order;
+    for (const auto& insert : chainLocked(chainId).inserts) order.push_back(ids.at(insert.get()));
+    return order;
+}
+
+void Engine::setChainGain(uint32_t chainId, float gain) {
+    std::lock_guard lock(mutex_);
+    rackChainLocked(chainId).params->gain.store(std::max(0.f, gain));
+}
+
+void Engine::setChainPan(uint32_t chainId, float pan) {
+    std::lock_guard lock(mutex_);
+    rackChainLocked(chainId).params->pan.store(std::clamp(pan, -1.f, 1.f));
+}
+
+void Engine::setChainMute(uint32_t chainId, bool mute) {
+    std::lock_guard lock(mutex_);
+    rackChainLocked(chainId).params->mute.store(mute);
+}
+
+void Engine::setChainSolo(uint32_t chainId, bool solo) {
+    std::lock_guard lock(mutex_);
+    rackChainLocked(chainId).params->solo.store(solo);
 }
 
 void Engine::retireProcessorLocked(std::shared_ptr<Processor> processor) {
@@ -999,6 +1241,11 @@ void Engine::removeProcessor(uint32_t processorId) {
     std::lock_guard lock(mutex_);
     auto processor = processorLocked(processorId);
     std::erase(chainLocked(processors_[processorId].chainId).inserts, processor);
+    if (processors_[processorId].rack) {  // its chains go, with everything in them
+        for (const uint32_t chain : std::vector<uint32_t>(processors_[processorId].chains)) {
+            removeChainContentsLocked(chain);
+        }
+    }
     processors_.erase(processorId);
     retireProcessorLocked(std::move(processor));
     rebuildSnapshotLocked();
@@ -1031,13 +1278,34 @@ void Engine::moveProcessor(uint32_t processorId, uint32_t toChainId, int index) 
     ChainModel& to = chainLocked(toChainId);
     ProcessorEntry& entry = processors_[processorId];
     ChainModel& from = chainLocked(entry.chainId);
-    if (entry.sidechain && from.stripId != to.stripId) checkSidechainLocked(entry.sidechain->source, to.stripId);
+    if (entry.rack) {
+        // Not into itself, nor nested too deep.
+        for (uint32_t chain = toChainId; chains_.at(chain).parentRack != 0;
+             chain = processors_.at(chains_.at(chain).parentRack).chainId) {
+            if (chains_.at(chain).parentRack == processorId) {
+                throw std::invalid_argument("A rack can't go into one of its own chains");
+            }
+        }
+        if (chainDepthLocked(toChainId) + rackHeightLocked(processorId) > kMaxRackDepth) {
+            throw std::invalid_argument("Racks nest at most " + std::to_string(kMaxRackDepth) + " deep");
+        }
+    }
+    if (from.stripId != to.stripId) {
+        if (entry.sidechain) checkSidechainLocked(entry.sidechain->source, to.stripId);
+        if (entry.rack) checkRackSidechainsLocked(processorId, to.stripId);
+    }
     std::erase(from.inserts, processor);
     to.inserts.insert(to.inserts.begin() + insertPosition(index, to.inserts.size()), processor);
     if (from.stripId != to.stripId) {
         // Another strip's signal: what it holds of the old one (a reverb's tail,
-        // notes that strip will release elsewhere) stops.
+        // notes that strip will release elsewhere) stops; a rack's devices go along.
         processor->requestReset();
+        if (entry.rack) {
+            std::vector<uint32_t> inside, chains;
+            rackContentsLocked(processorId, inside, chains);
+            for (const uint32_t chain : chains) chains_.at(chain).stripId = to.stripId;
+            for (const uint32_t id : inside) processors_.at(id).processor->requestReset();
+        }
     }
     entry.chainId = toChainId;
     rebuildSnapshotLocked();
@@ -1315,26 +1583,26 @@ void Engine::resetProcessorsLocked() {
     }
 }
 
-void Engine::prepareOfflineLocked(Renderer& offline, WarpVoiceSet& voices,
-                                  std::vector<std::shared_ptr<DelayLine>>& delays,
-                                  std::vector<std::shared_ptr<DelayLine>>& deviceDelays, double startBeat) {
+void Engine::prepareOfflineLocked(Renderer& offline, OfflineLines& lines, double startBeat) {
     // Fresh stretchers, as many as live playback has, so an offline render
     // starts from a clean state and leaves the live voices alone. Likewise
     // delay-compensation lines.
     for (int c = 0; c < kNumStretchConfigs; ++c) {
         for (size_t i = 0; i < snapshotHold_->warpVoices[c].size(); ++i) {
-            voices[c].push_back(std::make_shared<WarpVoice>(static_cast<StretchConfig>(c), sampleRate_));
+            lines.voices[c].push_back(std::make_shared<WarpVoice>(static_cast<StretchConfig>(c), sampleRate_));
         }
     }
+    const auto line = [](int samples) { return samples > 0 ? std::make_shared<DelayLine>(samples + 1) : nullptr; };
     for (const EdgeRender& edge : snapshotHold_->edges) {
-        delays.push_back(edge.compensation > 0 ? std::make_shared<DelayLine>(edge.compensation + 1) : nullptr);
-        deviceDelays.push_back(edge.deviceDelay > 0 ? std::make_shared<DelayLine>(edge.deviceDelay + 1) : nullptr);
+        lines.delays.push_back(line(edge.compensation));
+        lines.deviceDelays.push_back(line(edge.deviceDelay));
     }
+    for (const int samples : snapshotHold_->chainDelays) lines.chainDelays.push_back(line(samples));
     offline.setScheduler(scheduler_.get());
     offline.setCostOrdering(renderer_.costOrdering());
     offline.prepare(sampleRate_);
-    offline.setWarpVoices(&voices);
-    offline.setDelayLines(&delays, &deviceDelays);
+    offline.setWarpVoices(&lines.voices);
+    offline.setDelayLines(&lines.delays, &lines.deviceDelays, &lines.chainDelays);
     offline.syncTempo(*snapshotHold_);
     offline.setPosition(std::llround(std::max(0.0, startBeat) * snapshotHold_->samplesPerBeat()));
     offline.setPlaying(true);
@@ -1349,9 +1617,8 @@ void Engine::renderOfflineLocked(double startBeat, int64_t frames, float* out, b
         resumeLiveLocked();
     });
     Renderer offline;
-    WarpVoiceSet voices;
-    std::vector<std::shared_ptr<DelayLine>> delays, deviceDelays;
-    prepareOfflineLocked(offline, voices, delays, deviceDelays, startBeat);
+    OfflineLines lines;
+    prepareOfflineLocked(offline, lines, startBeat);
     // With delay compensation the output lags the timeline: render the lag first and drop it.
     if (const int64_t lag = snapshotHold_->outputLatency(); lag > 0) {
         std::vector<float> discarded(static_cast<size_t>(lag) * 2);
@@ -1397,9 +1664,8 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
         resumeLiveLocked();
     });
     Renderer offline;
-    WarpVoiceSet voices;
-    std::vector<std::shared_ptr<DelayLine>> delays, deviceDelays;
-    prepareOfflineLocked(offline, voices, delays, deviceDelays, startBeat);
+    OfflineLines lines;
+    prepareOfflineLocked(offline, lines, startBeat);
 
     constexpr int64_t kChunk = 16384;
     std::vector<float> rendered(kChunk * 2);
@@ -1511,33 +1777,47 @@ void Engine::rebuildSnapshotLocked() {
     // aren't summed, so nothing lines up with them. A sidechain lines up with the
     // signal at its device (Routing.h): it is delayed, or that signal is, just
     // before the device.
-    const auto chainLatencies = [this](const TrackModel& track) {
+    // Racks (Routing.h) line up their chains inside the strip they are on.
+    const ProcessorIds ids = processorIdsLocked();
+    std::vector<std::vector<StripSlot>> slotsOf;  // each track's devices (by tracks_ index), then the master's
+    slotsOf.reserve(tracks_.size() + 1);
+    for (const TrackModel& track : tracks_) slotsOf.push_back(stripSlotsLocked(track, ids));
+    slotsOf.push_back(stripSlotsLocked(master_, ids));
+    std::vector<std::vector<ChainSlot>> chains;  // the same, as delay compensation sees them
+    chains.reserve(slotsOf.size());
+    for (const auto& slots : slotsOf) {
         constexpr int kMaxChainLatency = 1 << 20;  // in all
-        std::vector<int> latencies;
         int total = 0;
-        for (const auto& insert : insertsLocked(track)) {
-            latencies.push_back(std::min(insertLatency(*insert), kMaxChainLatency - total));
-            total += latencies.back();
+        auto& chain = chains.emplace_back();
+        for (const StripSlot& slot : slots) {
+            ChainSlot device;
+            device.rack = slot.rack;
+            device.chain = slot.chain;
+            device.enabled = slot.enabled;
+            if (slot.isRack) {
+                device.chains = static_cast<int>(processors_.at(slot.processorId).chains.size());
+            } else if (slot.enabled) {
+                device.latency = std::min(insertLatency(*slot.processor), kMaxChainLatency - total);
+                total += device.latency;
+            }
+            chain.push_back(device);
         }
-        return latencies;
-    };
-    std::vector<std::vector<int>> chains;  // each track's devices' latencies, then the master's
-    chains.reserve(tracks_.size() + 1);
-    for (const TrackModel& track : tracks_) chains.push_back(chainLatencies(track));
-    chains.push_back(chainLatencies(master_));
+    }
     const GraphLatencies aligned = alignGraph(order, edges, chains);
     snap->maxLatency = aligned.masterInput;
+    for (size_t node = 0; node < slotsOf.size(); ++node) {  // what each rack adds, for the UI
+        for (size_t s = 0; s < slotsOf[node].size(); ++s) {
+            if (!slotsOf[node][s].isRack) continue;
+            static_cast<RackProcessor&>(*slotsOf[node][s].processor)
+                .setLatency(aligned.deviceOut[node][s] - aligned.deviceLatency[node][s]);
+        }
+    }
 
     // The edges in snapshot order (by source; each track's output, then its
     // sends, then the input edges and sidechains it feeds), each node's incoming
     // and outgoing ones (what a bus sums, in that order), the sidechains into
     // each strip's devices and the taps after its devices, and the graph the
     // scheduler runs.
-    const auto ensureDelay = [](std::shared_ptr<DelayLine>& delay, int samples) {
-        if (samples > 0 && (!delay || delay->capacity() <= samples)) {
-            delay = std::make_shared<DelayLine>(2 * samples + Renderer::kMaxBlock);
-        }
-    };
     std::vector<std::vector<int>> edgesOf(tracks_.size());
     for (size_t e = 0; e < edges.size(); ++e) edgesOf[static_cast<size_t>(edges[e].from)].push_back(static_cast<int>(e));
     std::vector<std::vector<int>> incoming(tracks_.size()), outgoing(tracks_.size());  // by snapshot index
@@ -1612,24 +1892,36 @@ void Engine::rebuildSnapshotLocked() {
             return snap->edges[static_cast<size_t>(a)].tapDevice < snap->edges[static_cast<size_t>(b)].tapDevice;
         });
     }
-    const auto sidechainsOf = [&](size_t strip, size_t devices) {
-        std::vector<int> into;
-        if (sidechains[strip].empty()) return into;
-        into.assign(devices, -1);
+    // What building each strip's devices needs: `node` is its place in slotsOf
+    // (and GraphLatencies), `strip` its snapshot index (tracks_.size(): the master).
+    const auto stripBuild = [&](const TrackModel& track, size_t node, size_t strip, int inputLatency) {
+        StripBuild build;
+        build.track = &track;
+        build.slots = &slotsOf[node];
+        for (size_t s = 0; s < slotsOf[node].size(); ++s) build.slotOf[slotsOf[node][s].processor.get()] = static_cast<int>(s);
+        build.inputLatency = inputLatency;
+        build.deviceLatency = &aligned.deviceLatency[node];
+        build.chainEnd = &aligned.chainEnd[node];
+        build.chainCompensation = &aligned.chainCompensation[node];
+        build.sidechainOf.assign(slotsOf[node].size(), -1);
         for (const auto [device, edge] : sidechains[strip]) {
-            if (device >= 0 && static_cast<size_t>(device) < devices) into[static_cast<size_t>(device)] = edge;
+            if (device >= 0 && static_cast<size_t>(device) < build.sidechainOf.size()) {
+                build.sidechainOf[static_cast<size_t>(device)] = edge;
+            }
         }
-        return into;
+        build.samplesPerBeat = spb;
+        return build;
     };
 
     // The master: its input is the sum of what goes into it, which comes maxLatency late.
     StripRender& master = snap->master;
     master.params = master_.params;
-    master.inserts = insertsLocked(master_);
-    const std::vector<int>& masterDevices = aligned.deviceLatency[tracks_.size()];
-    master.latency = masterDevices.back();
-    master.sidechains = sidechainsOf(tracks_.size(), master.inserts.size());
-    buildAutomationLocked(master_, snap->maxLatency, masterDevices, snap->outputLatency(), spb, master);
+    master.latency = aligned.deviceLatency[tracks_.size()].back();
+    {
+        const StripBuild build = stripBuild(master_, tracks_.size(), tracks_.size(), snap->maxLatency);
+        buildChainLocked(master_.chainId, build, 0, *snap, master);
+        buildAutomationLocked(build, snap->outputLatency(), master);
+    }
 
     const auto rate = static_cast<uint32_t>(sampleRate_);
     std::array<size_t, kNumStretchConfigs> voicesNeeded{};
@@ -1639,15 +1931,14 @@ void Engine::rebuildSnapshotLocked() {
         TrackRender render;
         render.id = track.id;
         render.params = track.params;
-        render.inserts = insertsLocked(track);
-        const std::vector<int>& devices = aligned.deviceLatency[t];
-        render.latency = devices.back();
+        render.latency = aligned.deviceLatency[t].back();
         render.inputLatency = aligned.inputLatency[t];
         const size_t at = static_cast<size_t>(position[static_cast<size_t>(t)]);
         render.incoming = std::move(incoming[at]);
         render.outgoing = std::move(outgoing[at]);
-        render.sidechains = sidechainsOf(at, render.inserts.size());
         render.deviceTaps = std::move(deviceTaps[at]);
+        const StripBuild build = stripBuild(track, static_cast<size_t>(t), at, render.inputLatency);
+        buildChainLocked(track.chainId, build, 0, *snap, render);
         render.inputCount = static_cast<int>(render.incoming.size());
         render.buffers = track.buffers;
         render.input = inputEdgeLocked(track);
@@ -1657,8 +1948,7 @@ void Engine::rebuildSnapshotLocked() {
         render.armed = track.armed;
         // Its devices hear the timeline as late as its input; its fader after them
         // (its edges are delayed after the fader, to line up where they go).
-        const int faderLatency = render.inputLatency + render.latency;
-        buildAutomationLocked(track, render.inputLatency, devices, faderLatency, spb, render);
+        buildAutomationLocked(build, render.inputLatency + render.latency, render);
         render.notes.reserve(track.notes.size());
         for (const NoteDesc& note : track.notes) {
             NoteRender nr;

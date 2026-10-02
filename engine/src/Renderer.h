@@ -39,6 +39,14 @@
 // heard) but up it (what keys a soloed track keeps keying it), and one into the
 // master's devices always plays; mute and solo silence it only after the fader.
 //
+// Racks: a device in a chain may be a rack (RackRender), whose chains each
+// process its input, side by side: their devices (which hear the strip's notes),
+// their fader (muted, or left out by solo among the rack's chains), then a delay
+// lining each up with the slowest; the rack puts out their sum. A strip's
+// devices process the whole chunk one after the other (each in the chunk's
+// stretches), so a rack runs each of its chains over the chunk too, in scratch
+// of its depth. Its chains' faders meter like a strip's.
+//
 // Automation: before each stretch a processor processes, the renderer hands it
 // its automated parameters' values over the stretch (Processor::automate): the
 // value at the start, then wherever it changes, every kAutomationStep samples
@@ -147,11 +155,14 @@ public:
     // playback nor depend on it. Must outlive the rendering.
     void setWarpVoices(const WarpVoiceSet* voices) noexcept { voiceOverride_ = voices; }
     // Likewise delay-compensation lines, one per snapshot edge (null: none needed),
-    // and those delaying sidechains' destinations before their devices (deviceDelay).
+    // those delaying sidechains' destinations before their devices (deviceDelay),
+    // and those of rack chains (by ChainRender::delayIndex).
     void setDelayLines(const std::vector<std::shared_ptr<DelayLine>>* lines,
-                       const std::vector<std::shared_ptr<DelayLine>>* deviceLines = nullptr) noexcept {
+                       const std::vector<std::shared_ptr<DelayLine>>* deviceLines = nullptr,
+                       const std::vector<std::shared_ptr<DelayLine>>* chainLines = nullptr) noexcept {
         delayOverride_ = lines;
         deviceDelayOverride_ = deviceLines;
+        chainDelayOverride_ = chainLines;
     }
 
 private:
@@ -164,6 +175,26 @@ private:
         std::vector<float> autoGain, autoPanLeft, autoPanRight;  // automated fader, per sample
         std::vector<float> audible;   // the fader's mute (and solo) ramp, for pre-fader taps
         std::vector<float> edgeGain;  // an automated send level, per sample
+        struct Rack {
+            std::vector<float> sumLeft, sumRight;      // its chains' sum
+            std::vector<float> chainLeft, chainRight;  // the chain it runs
+        };
+        std::array<Rack, kMaxRackDepth> racks;  // by depth
+    };
+
+    // The stretches of a chunk a strip's devices process: one per continuous
+    // stretch of the timeline (and the end of a count-in), with its note events.
+    struct Slice {
+        int offset;
+        int length;
+        int64_t position;  // where the playhead is (stays, if not moving)
+        bool moving;
+        int firstEvent;
+        int endEvent;
+    };
+    struct Slices {
+        std::array<Slice, 17> slice;  // kMaxSegments + a count-in's end
+        int count = 0;
     };
 
     struct ChunkFlags {
@@ -255,7 +286,20 @@ private:
     // sidechained devices don't wait for their sidechains (monitoring latency).
     void processInserts(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
                         ProcessEvent* events, int numEvents, float* left, float* right, int frames,
-                        bool monitored) noexcept;
+                        bool monitored, WorkerScratch& scratch) noexcept;
+    // A chain's devices (a strip's own, or a rack's chain's), in place, one after
+    // the other over the chunk's slices (events already relative to their slice).
+    void processChain(const RenderSnapshot& snap, const StripRender& chain, ProcessContext& context,
+                      const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
+                      bool monitored, WorkerScratch& scratch) noexcept;
+    // A rack, in place: its chains (each from its input) summed.
+    void processRack(const RenderSnapshot& snap, const RackRender& rack, ProcessContext& context,
+                     const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
+                     bool monitored, WorkerScratch& scratch) noexcept;
+    // Takes the reset requests of a chain's devices (those switched on); a rack
+    // asked to reset passes it on to everything in it.
+    static bool takeResets(const StripRender& chain) noexcept;
+    DelayLine* chainDelayLine(const ChainRender& chain) const noexcept;
     void automateInsert(const AutomationRender& lane, int64_t position, int length, bool moving) noexcept;
     // Volume and pan (automated or not), in place; live renders also smooth and
     // meter. `audibleOut` (if any) gets the mute ramp, per sample.
@@ -318,6 +362,7 @@ private:
     const WarpVoiceSet* voiceOverride_ = nullptr;
     const std::vector<std::shared_ptr<DelayLine>>* delayOverride_ = nullptr;
     const std::vector<std::shared_ptr<DelayLine>>* deviceDelayOverride_ = nullptr;
+    const std::vector<std::shared_ptr<DelayLine>>* chainDelayOverride_ = nullptr;
     uint64_t blockCounter_ = 1;  // stamps voice use; 0 means "never used"
     std::array<Segment, kMaxSegments> segments_{};
     int numSegments_ = 0;

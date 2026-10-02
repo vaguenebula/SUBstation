@@ -427,36 +427,46 @@ Tests
 ## Phase 9 — Device groups (racks)
 
 Engine
-- [ ] Rack structure lives in the snapshot (not a self-mutating composite
-      `Processor`): `InsertNode { processor | chains }`,
-      `ChainRender { id, params (TrackParams), inserts, compensation, delay, automation, volume, pan }`.
-- [ ] Renderer: rack copies its input to each chain, `processStrip`s it, sums.
-- [ ] Scratch buffers per nesting depth, preallocated in `Renderer::prepare`
-      (per worker: `WorkerScratch`); cap the depth (e.g. 8) in the API.
-- [ ] Rack latency = slowest chain; other chains compensated internally (the
-      Phase 5 function).
-- [ ] Automation: walk the tree when building lanes; nested devices keep
-      `automate()` direct calls; lane latency = path latency.
-- [ ] MIDI: chains get the track's events (instrument racks / layering).
-- [ ] Chain meters (`MeterReading` by chain id).
-- [ ] Sidechains (Phase 8) into a device inside a rack: its latency before the
-      device includes the rack's chain up to it.
+- [x] Rack structure lives in the snapshot (not a self-mutating composite
+      `Processor`): a rack is a `RackProcessor` (its place, switch and id) in a
+      chain, `StripRender.racks` per insert, and `RackRender { chains }` with
+      `ChainRender : StripRender { id, params (TrackParams), inserts, compensation, delay, automation, volume, pan }`.
+- [x] Renderer: rack copies its input to each chain, runs its devices
+      (`processChain`, the same code as a strip's), its fader, delay; sums. A
+      strip's devices now process the whole chunk one after another (each in the
+      chunk's stretches), so a rack runs its chains over the chunk.
+- [x] Scratch buffers per nesting depth, preallocated in `Renderer::prepare`
+      (per worker: `WorkerScratch::racks`); depth capped at `kMaxRackDepth` (8)
+      in the API (`addRack`, `moveProcessor`).
+- [x] Rack latency = slowest chain; other chains compensated internally (the
+      Phase 5 function, in `alignGraph`'s walk of each strip's device tree: `ChainSlot`).
+- [x] Automation: lanes built per chain walking the tree (`buildChainLocked`);
+      nested devices keep `automate()` direct calls; lane latency = path latency.
+      Chain faders are lanes of their rack (`"chain:<id>:volume"`, `":pan"`).
+- [x] MIDI: chains get the track's events (instrument racks / layering).
+- [x] Chain meters (`MeterReading.chainId`).
+- [x] Sidechains (Phase 8) into a device inside a rack: its latency before the
+      device includes the rack's chain up to it (and a delay before it makes its chain, and so the rack, later).
+  - [ ] Maybe: taps after a device inside a rack (taps are after devices of the source's own chain; a rack counts as one).
+  - [ ] Maybe: a rack's chains on several workers (only if a benchmark shows it matters).
 
 Model / UI
-- [ ] `Device(kind="rack", chains=[Chain(id, name, devices, volume_db, pan, mute, solo)])`.
-- [ ] Recursive device lookup (`device_path()`); serialization recurses.
-- [ ] Device panel: rack with chain list, chain mixer, nested device view.
-- [ ] Group selected devices into a rack (Ctrl+G in the device panel), ungroup.
-- [ ] Macros (Python first): rack parameters mapped to (device, param, range) targets.
-- [ ] Rack presets: the save button / browser flow from "Device presets" below
-      also covers racks (chains, nested devices, plug-in state, macros).
+- [x] `Device(kind="rack", chains=[Chain(id, name, devices, volume_db, pan, mute, solo)], macros=(MacroMapping...))`.
+- [x] Recursive device lookup (`device_path()`, `find_device()`, `project.device()`); serialization recurses (version 12).
+- [x] Device panel: rack with chain list, chain mixer (and meters), nested device view (the chain clicked, beside the rack).
+- [x] Group selected devices into a rack (Ctrl+G in the device panel), ungroup (Ctrl+Shift+G).
+- [x] Macros (Python first): rack parameters mapped to (device, param, range) targets.
+- [x] Rack presets: the save button saves a rack (chains, nested devices,
+      plug-in state, macros) as a `.gilpreset`; right-click beside the devices to load one.
+  - [ ] The browser's Presets section (see "Device presets" below) lists them too.
+  - [ ] Maybe: macros' ranges edited in the UI (the menu maps the full range).
 
 Tests
-- [ ] Parallel chains sum correctly; chain mute/solo.
-- [ ] Latent device in one chain doesn't smear the others.
-- [ ] Nested-device automation in time.
-- [ ] Instrument rack layers two synths.
-- [ ] Saved rack round-trips: save → load renders the same as the original,
+- [x] Parallel chains sum correctly; chain mute/solo.
+- [x] Latent device in one chain doesn't smear the others.
+- [x] Nested-device automation in time.
+- [x] Instrument rack layers two synths.
+- [x] Saved rack round-trips: save → load renders the same as the original,
       including plug-in state and macro mappings; loading twice gives distinct ids.
 
 ---

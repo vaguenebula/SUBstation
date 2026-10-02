@@ -137,9 +137,16 @@ struct NoteRender {
     uint8_t velocity = 100;
 };
 
+// How deep racks nest: a rack in a strip's own chain is at depth 0, one in a
+// chain of that rack at depth 1, and so on. The renderer has scratch for each depth.
+constexpr int kMaxRackDepth = 8;
+
+struct RackRender;
+
 // What every strip has: a chain of devices, and a fader with its meter. Tracks
 // are strips fed by their clips and notes (and what goes into them); the master
 // is the strip fed by what goes into it. Delay compensation is the edges'.
+// A rack's chains are strips too (ChainRender), inside the strip they are on.
 struct StripRender {
     std::shared_ptr<TrackParams> params;
     std::vector<std::shared_ptr<Processor>> inserts;
@@ -152,8 +159,28 @@ struct StripRender {
     // none); empty if none has one.
     std::vector<int> sidechains;
     // The edges leaving it after one of its devices (EdgeRender::Tap::AfterDevice), by
-    // device: those before its first device (tapDevice -1) first.
+    // device: those before its first device (tapDevice -1) first. (Not a rack's chains'.)
     std::vector<int> deviceTaps;
+    // Per insert, its chains if it is a rack (null: a device); empty if none is.
+    std::vector<std::shared_ptr<const RackRender>> racks;
+};
+
+// A chain of a rack: a strip inside a strip. The rack hands each chain its own
+// input, and sums what they put out: its devices, then its fader (with its
+// mute, and solo among the rack's chains), then a delay that lines it up with
+// the rack's slowest chain (Routing.h). Its devices hear the strip's notes.
+struct ChainRender : StripRender {
+    uint32_t id = 0;
+    int compensation = 0;  // samples it is delayed to line up with the rack's slowest chain
+    int delayIndex = -1;   // its place in RenderSnapshot::chainDelays (offline renders bring lines of their own)
+    std::shared_ptr<DelayLine> delay;  // for the live renderer
+};
+
+// A rack as the renderer runs it (Renderer::processRack). Without chains it
+// passes its input on.
+struct RackRender {
+    std::vector<ChainRender> chains;
+    int depth = 0;  // how many racks it is in (its scratch: < kMaxRackDepth)
 };
 
 // A routing edge's state outside the snapshot: the edit side allocates it with
@@ -337,6 +364,8 @@ struct RenderSnapshot {
     int parallelWork = 0;  // tracks worth a thread of their own (devices, stretched clips)
     StripRender master;  // its params are null in a snapshot made without an engine
     WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
+    // Every rack chain's compensation, by its delayIndex (offline renders make lines that long).
+    std::vector<int> chainDelays;
 
     // The output lags the timeline by this much: the tracks' latency, then the
     // master's devices. The metronome is delayed as much.
