@@ -396,33 +396,6 @@ def test_copy_paste_takes_just_the_range_and_pastes_at_a_track(editor):
     assert spans(editor.project.track(t3.id).clips) == []
 
 
-@pytest.mark.parametrize("tempo, end", [(60.0, 10.5), (240.0, 15.0)])
-def test_paste_bounds_follow_pasted_clips_at_current_tempo(editor, tempo, end):
-    top = editor.add_audio_track()
-    middle = editor.add_audio_track()
-    bottom = editor.add_audio_track()
-    editor.add_clips(top.id, 0.0, [("a.wav", 1.0)])  # beats 0-2
-    editor.add_clips(bottom.id, 1.0, [("b.wav", 1.5)])  # beats 1-4
-    editor.add_clips(top.id, 40.0, [("existing.wav", 1.0)])
-    content = editor.copy_range(0.0, 6.0, [top.id, bottom.id])
-    editor.set_tempo(tempo)
-
-    assert editor.paste(content, 8.0) == (8.0, end, [top.id, middle.id, bottom.id])
-    pasted = [c for t in (top, bottom) for c in t.clips if 8.0 <= c.start_beat < 40.0]
-    assert max(c.end_beat(tempo) for c in pasted) == end
-
-
-def test_paste_bounds_fall_back_to_copied_length_without_clips(editor):
-    track = editor.add_audio_track()
-    editor.add_clips(track.id, 0.0, [("a.wav", 4.0)])
-    content = editor.copy_range(0.0, 2.0, [track.id])
-    content = replace(content, tracks=(replace(content.tracks[0], clips=()),))
-    before = list(track.clips)
-
-    assert editor.paste(content, 3.0) == (3.0, 5.0, [track.id])
-    assert track.clips == before
-
-
 def test_paste_replaces_what_is_there_and_cut_takes_it_out(editor):
     t = editor.add_audio_track()
     editor.add_clips(t.id, 0.0, [("a.wav", 4.0)])  # beats 0-8

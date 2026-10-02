@@ -805,10 +805,8 @@ class ProjectEditor(QObject):
         envelopes = {lane: automation.drop_redundant(points, edges) for lane, points in changed.items()}
         self._commit_moved("Paste", after, {lane: points for lane, points in envelopes.items()
                                             if points != p.envelope(*lane)})
-        end = max((c.end_beat(tempo) for tid, clips in after.items() for c in clips if c.id in winners[tid]),
-                  default=at + content.length)
         rows = sorted(p.track_index(d) for d in dests)
-        return at, end, [t.id for t in p.tracks[rows[0]:rows[-1] + 1]]
+        return at, at + content.length, [t.id for t in p.tracks[rows[0]:rows[-1] + 1]]
 
     def move_range(self, start: float, end: float, track_ids: list[str], delta_beats: float,
                    track_delta: int = 0, copy_clips: bool = False) -> tuple[float, list[str]]:
