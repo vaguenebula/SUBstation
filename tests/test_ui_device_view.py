@@ -8,7 +8,8 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QUndoStack
 from PySide6.QtTest import QTest
 
-from substation.model.editor import ProjectEditor, device_is_instrument
+from substation.model.devices import device_is_instrument
+from substation.model.editor import ProjectEditor
 from substation.model.project import MacroMapping, Project, Sidechain, iter_devices
 from substation.model.serialization import load_into, project_to_dict
 from substation.ui.device_panel import FOLDED_WIDTH, RackWidget

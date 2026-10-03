@@ -70,7 +70,7 @@ from PySide6.QtWidgets import (
 
 from ... import theme
 from ...audio.engine_bridge import AUDIO_EXTENSIONS, EngineBridge, is_audio_file
-from ...model.editor import BUILTIN_CATEGORIES, BUILTIN_DEVICES
+from ...model.devices import BUILTIN_CATEGORIES, BUILTIN_DEVICES
 from ...model.presets import rename_preset
 from .. import icons
 from ..widgets import ToggleButton

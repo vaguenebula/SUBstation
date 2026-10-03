@@ -1,6 +1,6 @@
 """The project model: the single source of truth for the UI, undo and saving.
 
-The audio engine mirrors this model (see audio/engine_bridge.py). Mutating
+The audio engine mirrors this model (see audio/engine_bridge/). Mutating
 methods here are called only by undo commands (model/commands.py), which keeps
 every edit undoable and every change signalled. (View state, like track heights
 and which automation shows, changes directly: it is saved but not undone.)

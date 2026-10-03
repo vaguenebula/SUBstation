@@ -11,7 +11,8 @@ from PySide6.QtGui import QUndoStack
 from substation import _engine as ge
 from substation.model import automation
 from substation.model.automation import AutomationPoint
-from substation.model.editor import ProjectEditor, device_name, loads_into, new_device
+from substation.model.devices import device_name, loads_into, new_device
+from substation.model.editor import ProjectEditor
 from substation.model.presets import (
     DEFAULTS,
     clear_default,

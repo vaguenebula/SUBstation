@@ -12,13 +12,13 @@ each part has its own pages (see the [index](README.md)).
   Python         │ ui/            widgets, arrangement, piano roll, device view │
   (Qt main       │   │ calls                          ▲ Qt signals           │
   thread)        │   ▼                                │                       │
-                 │ model/editor.py  ──► model/commands.py (QUndoCommand)       │
+                 │ model/editor/    ──► model/commands.py (QUndoCommand)       │
                  │                              │ mutate                       │
                  │                              ▼                              │
                  │                      model/project.py  (single source of    │
                  │                              │ Qt signals   truth, saved)   │
                  │                              ▼                              │
-                 │ audio/engine_bridge.py  (mirrors the model into the engine; │
+                 │ audio/engine_bridge/    (mirrors the model into the engine; │
                  │                          polls playhead, meters, events)    │
                  └──────────────┬──────────────────────────────▲───────────────┘
                      nanobind   │ substation._engine           │ atomics, queues
@@ -47,7 +47,7 @@ each part has its own pages (see the [index](README.md)).
 
 ## The life of an edit
 
-1. A widget calls a method on the `ProjectEditor` ([model/editor.py](../src/substation/model/editor.py)),
+1. A widget calls a method on the `ProjectEditor` ([model/editor/](../src/substation/model/editor)),
    such as moving clips or setting a device parameter.
 2. The editor works out the new state (clip maths in [edits.py](../src/substation/model/edits.py),
    note maths in [notes.py](../src/substation/model/notes.py), envelope maths in
@@ -58,7 +58,7 @@ each part has its own pages (see the [index](README.md)).
 3. The command mutates the `Project` ([project.py](../src/substation/model/project.py)),
    which emits a Qt signal (`clips_changed`, `devices_changed`, `automation_changed`, ...).
 4. The UI repaints from the signal, and the engine bridge
-   ([engine_bridge.py](../src/substation/audio/engine_bridge.py)) pushes the change into
+   ([engine_bridge/](../src/substation/audio/engine_bridge)) pushes the change into
    the engine through the `substation._engine` bindings.
 5. The engine updates its edit model under its mutex, builds a new `RenderSnapshot`
    (positions already converted to samples) and publishes it with one atomic pointer

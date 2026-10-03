@@ -153,7 +153,7 @@ the last folder first (a stack), at most 16 folders deep (`maxDepth`), and no fu
 symbolic links to folders are not (`listFolder` reads `FILE_ATTRIBUTE_REPARSE_POINT` and `IO_REPARSE_TAG_SYMLINK`, as
 `DirEntry.is_dir(follow_symlinks=False)` does). Entries come in the order the file system lists them, as
 `os.scandir` gives them, and only names ending in one of the audio extensions (`AUDIO_EXTENSIONS` in
-`audio/engine_bridge.py`: `.wav`, `.wave`, `.flac`, `.mp3`) are kept.
+`audio/engine_bridge/sources.py`: `.wav`, `.wave`, `.flac`, `.mp3`) are kept.
 
 During a pass a folder is listed again if it was never listed, is marked dirty, or its last-write time
 (`folderTime`; for a junction, the time of the folder it leads to) differs from the one saved when it was listed.
