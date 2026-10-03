@@ -13,7 +13,7 @@
 
 #include "PathUtils.h"
 
-namespace gil {
+namespace sub {
 
 Engine::Engine()
     : midiDevices_([this](uint16_t port, const uint8_t* message, int size, int64_t hostTime) {
@@ -282,4 +282,4 @@ void Engine::idle() {
     }
 }
 
-}  // namespace gil
+}  // namespace sub

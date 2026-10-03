@@ -5,13 +5,13 @@ Rendered offline, so no audio device is needed."""
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import SAMPLE_RATE, TEST_PLUGINS
 
 SPB = SAMPLE_RATE // 2  # samples per beat at 120 BPM
 PLUGINS = str(TEST_PLUGINS)
-FX_GAIN, FX_LATENCY = 0, 1  # GIL Test Effect's parameters
+FX_GAIN, FX_LATENCY = 0, 1  # SUB Test Effect's parameters
 
 needs_plugins = pytest.mark.skipif(not TEST_PLUGINS.exists(), reason="test plug-ins not built")
 
@@ -52,7 +52,7 @@ def utility(engine, track, gain_db):
 
 
 def latent_effect(engine, uids, track, latency):
-    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["GIL Test Effect"])
+    effect = engine.add_plugin_processor(engine.track_chain(track), "VST3", PLUGINS, uids["SUB Test Effect"])
     engine.set_processor_param(effect, FX_LATENCY, latency)
     engine.idle()  # the plug-in asked for a restart to change its latency
     return effect

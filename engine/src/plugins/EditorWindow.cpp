@@ -7,13 +7,13 @@
 #include "PathUtils.h"
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 
-namespace gil::vst3 {
+namespace sub::vst3 {
 namespace {
 
 using Steinberg::kResultTrue;
 using Steinberg::ViewRect;
 
-constexpr wchar_t kWindowClass[] = L"GILStudioPluginEditor";
+constexpr wchar_t kWindowClass[] = L"SUBstationPluginEditor";
 
 LRESULT CALLBACK editorWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_NCCREATE) {
@@ -339,4 +339,4 @@ intptr_t EditorWindow::handleMessage(HWND hwnd, unsigned message, uintptr_t wPar
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-}  // namespace gil::vst3
+}  // namespace sub::vst3

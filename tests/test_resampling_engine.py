@@ -8,7 +8,7 @@ without ASIO, like the recording tests."""
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .test_asio import open_asio
 from .test_recording import (  # noqa: F401 - skipped without ASIO

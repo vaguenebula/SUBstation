@@ -16,7 +16,7 @@
 #include "builtin/BuiltinRegistry.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 class CompressorProcessor final : public BuiltinProcessor {
@@ -143,6 +143,6 @@ private:
 
 }  // namespace
 
-GIL_REGISTER_BUILTIN(CompressorProcessor, AudioEffect);
+SUB_REGISTER_BUILTIN(CompressorProcessor, AudioEffect);
 
-}  // namespace gil
+}  // namespace sub

@@ -1,4 +1,4 @@
-// Python bindings for the browser's backend (module gilstudio._browser).
+// Python bindings for the browser's backend (module substation._browser).
 //
 // Thin: arguments are converted while holding the GIL, then it is released for
 // the call. The backend's threads never call into Python; the UI learns that
@@ -18,7 +18,7 @@
 
 namespace nb = nanobind;
 using namespace nb::literals;
-using namespace gil::browser;
+using namespace sub::browser;
 
 namespace {
 
@@ -63,7 +63,7 @@ using ResultPtr = std::shared_ptr<Result>;
 }  // namespace
 
 NB_MODULE(_browser, m) {
-    m.doc() = "GIL Studio browser backend: file index and search";
+    m.doc() = "SUBstation browser backend: file index and search";
     nb::set_leak_warnings(false);
     m.attr("AUDIO") = kAudioGroup;
     m.attr("UNICODE_VERSION") = unicodeVersion();

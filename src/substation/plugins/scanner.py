@@ -2,7 +2,7 @@
 
 Reading a plug-in file means running its code, and a broken plug-in can crash
 or hang the process that loads it. So files are read in a child process
-(`python -m gilstudio.plugins.scan_worker`), many per process: if one takes the
+(`python -m substation.plugins.scan_worker`), many per process: if one takes the
 process down or doesn't answer in time, it is marked as failed and the rest
 carry on in a new process. Results are cached per file, so a file is read
 again only when it changes (or on a rescan).
@@ -55,9 +55,9 @@ class ScanResult:
 
 
 def standard_paths() -> list[Path]:
-    """The standard VST3 folders, or those in GILSTUDIO_VST3_PATH (separated by
+    """The standard VST3 folders, or those in SUBSTATION_VST3_PATH (separated by
     os.pathsep; empty for none)."""
-    override = os.environ.get("GILSTUDIO_VST3_PATH")
+    override = os.environ.get("SUBSTATION_VST3_PATH")
     if override is not None:
         return [Path(p) for p in override.split(os.pathsep) if p]
     common = Path(os.environ.get("CommonProgramFiles", r"C:\Program Files\Common Files"))
@@ -109,11 +109,11 @@ def find_plugin_files(roots: list[Path] | None = None) -> list[str]:
 
 
 def cache_path() -> Path:
-    override = os.environ.get("GILSTUDIO_PLUGIN_CACHE")
+    override = os.environ.get("SUBSTATION_PLUGIN_CACHE")
     if override:
         return Path(override)
     base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    return base / "GIL Studio" / "vst3-cache.json"
+    return base / "SUBstation" / "vst3-cache.json"
 
 
 def _binary(path: str) -> Path:
@@ -153,7 +153,7 @@ class PluginScanner:
         self.folders = folders  # where to look (default: the standard folders)
         self.cache_file = cache_path() if cache_file is None else Path(cache_file)
         self.timeout = timeout
-        self.worker = worker or [sys.executable, "-m", "gilstudio.plugins.scan_worker"]
+        self.worker = worker or [sys.executable, "-m", "substation.plugins.scan_worker"]
 
     # --- Cache ---------------------------------------------------------------------
 

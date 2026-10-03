@@ -46,7 +46,7 @@ from .device_panel import DevicePanel
 from .dialogs import ExportDialog, PreferencesDialog
 from .transport_bar import TransportBar
 
-PROJECT_FILTER = f"GIL Studio Project (*{EXTENSION})"
+PROJECT_FILTER = f"SUBstation Project (*{EXTENSION})"
 RECENT_KEY = "files/recent"
 MAX_RECENT = 10
 
@@ -245,7 +245,7 @@ class MainWindow(QMainWindow):
             signal.connect(lambda: self._sync_check(self.lock_action, self.project.automation_locked))
 
         help_menu = bar.addMenu("&Help")
-        self._action(help_menu, "&About GIL Studio", self.show_about)
+        self._action(help_menu, "&About SUBstation", self.show_about)
 
     def _show_computer_keyboard(self) -> None:
         keyboard = self.computer_keyboard

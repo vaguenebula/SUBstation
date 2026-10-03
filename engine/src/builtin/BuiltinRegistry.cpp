@@ -4,7 +4,7 @@
 #include <numeric>
 #include <stdexcept>
 
-namespace gil {
+namespace sub {
 
 BuiltinRegistry& BuiltinRegistry::instance() {
     static BuiltinRegistry registry;  // built on first use: the registrars run in no fixed order
@@ -45,4 +45,4 @@ std::shared_ptr<Processor> BuiltinRegistry::create(const std::string& id) const 
     throw std::invalid_argument("Unknown built-in device: " + id);
 }
 
-}  // namespace gil
+}  // namespace sub

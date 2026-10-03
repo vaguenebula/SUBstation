@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace gil {
+namespace sub {
 
 // A breakpoint as the UI sends it, in timeline beats.
 struct AutomationPoint {
@@ -116,4 +116,4 @@ inline float automationVolumeGain(float value) noexcept {
 }
 inline float automationPan(float value) noexcept { return std::clamp(value, 0.f, 1.f) * 2.f - 1.f; }
 
-}  // namespace gil
+}  // namespace sub

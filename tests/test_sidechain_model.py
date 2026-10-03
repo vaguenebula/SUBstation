@@ -8,10 +8,10 @@ sidechains from it along (one undo step); saving; and the engine taking it all
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio import _engine as ge
-from gilstudio.model.automation import MASTER
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.project import (
+from substation import _engine as ge
+from substation.model.automation import MASTER
+from substation.model.editor import ProjectEditor
+from substation.model.project import (
     PLUGIN_KIND,
     POST_FADER,
     PRE_FADER,
@@ -20,7 +20,7 @@ from gilstudio.model.project import (
     Project,
     Sidechain,
 )
-from gilstudio.model.serialization import load_into, project_to_dict
+from substation.model.serialization import load_into, project_to_dict
 
 from .conftest import TEST_PLUGINS
 
@@ -204,15 +204,15 @@ def test_sidechains_are_saved_and_loaded(editor):
 
 @pytest.mark.skipif(not TEST_PLUGINS.exists(), reason="test plug-ins not built")
 def test_the_engine_takes_sidechains(app):
-    from gilstudio.audio.engine_bridge import EngineBridge
+    from substation.audio.engine_bridge import EngineBridge
 
     engine = ge.Engine()
     project = Project()
     stack = QUndoStack()
     editor = ProjectEditor(project, stack)
     bridge = EngineBridge(engine, project)
-    uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "GIL Test Sidechain")
-    ref = PluginRef(format="VST3", uid=uid, name="GIL Test Sidechain", path=str(TEST_PLUGINS))
+    uid = next(d.uid for d in ge.scan_vst3(str(TEST_PLUGINS)) if d.name == "SUB Test Sidechain")
+    ref = PluginRef(format="VST3", uid=uid, name="SUB Test Sidechain", path=str(TEST_PLUGINS))
     try:
         def engine_sidechain(track, dev):
             info = engine.processor_sidechain(bridge.engine_device_id(track.id, dev.id))

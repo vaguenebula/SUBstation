@@ -2,7 +2,7 @@
 
 #include <windows.h>
 
-namespace gil::browser::platform {
+namespace sub::browser::platform {
 
 bool listFolder(const std::wstring& path, std::vector<Entry>& out) {
     out.clear();
@@ -117,4 +117,4 @@ FolderWatcher::Changes FolderWatcher::take(std::vector<std::wstring>& paths) {
     return result;
 }
 
-}  // namespace gil::browser::platform
+}  // namespace sub::browser::platform

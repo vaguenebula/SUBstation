@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace gil {
+namespace sub {
 namespace {
 
 std::vector<float> makeClick(double sampleRate, double frequency, float amplitude) {
@@ -42,4 +42,4 @@ void Metronome::start(bool accent) {
     voicePos_ = 0;
 }
 
-}  // namespace gil
+}  // namespace sub

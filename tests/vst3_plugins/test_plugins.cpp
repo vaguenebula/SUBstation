@@ -1,24 +1,24 @@
-// GIL Studio's test plug-ins: four tiny VST3 plug-ins whose output the tests
+// SUBstation's test plug-ins: four tiny VST3 plug-ins whose output the tests
 // can predict exactly. They cover the host's code paths rather than sounding
 // good:
 //
-//  * GIL Test Synth (instrument): a processor with a separate edit controller.
+//  * SUB Test Synth (instrument): a processor with a separate edit controller.
 //    Each held note adds velocity/127 (DC) or a sine at the note's pitch, times
 //    Gain. It reports the transport it was given in read-only parameters, and
 //    has ten Macro parameters that only its controller keeps (in its own state).
-//  * GIL Test Effect: a single-component effect (processor and controller in one
+//  * SUB Test Effect: a single-component effect (processor and controller in one
 //    object, like most JUCE plug-ins). Gain, a Latency parameter that delays the
 //    audio and reports it, a bypass parameter, state, and a Win32 editor that
 //    can resize itself and edit a parameter on request.
-//  * GIL Test Mono: mono in, mono out, no edit controller.
-//  * GIL Test Sidechain: a single-component effect with a sidechain (a stereo
+//  * SUB Test Mono: mono in, mono out, no edit controller.
+//  * SUB Test Sidechain: a single-component effect with a sidechain (a stereo
 //    aux input, inactive until the host activates it): its output is its input
 //    plus its sidechain, and a read-only parameter, Key Silent, says whether the
 //    host flagged the sidechain silent.
 //
 // Environment variables make the module misbehave on purpose, for the scanner
-// tests: GIL_TEST_PLUGIN_CRASH=1 kills the process as the module loads,
-// GIL_TEST_PLUGIN_HANG=1 makes loading hang.
+// tests: SUB_TEST_PLUGIN_CRASH=1 kills the process as the module loads,
+// SUB_TEST_PLUGIN_HANG=1 makes loading hang.
 
 #include <windows.h>
 
@@ -44,7 +44,7 @@ using namespace Steinberg::Vst;
 
 extern HINSTANCE ghInst;  // this module (dllmain.cpp)
 
-namespace gil_test {
+namespace sub_test {
 
 constexpr double kPi = 3.14159265358979323846;
 
@@ -57,7 +57,7 @@ void writeOutputParam(ProcessData& data, ParamID id, ParamValue value) {
 }
 
 // ---------------------------------------------------------------------------
-// GIL Test Synth
+// SUB Test Synth
 
 enum SynthParam : ParamID { kSynthGain = 0, kSynthWave, kSynthTempo, kSynthPlaying, kSynthBeat, kSynthLoop, kSynthMacro };
 constexpr int kNumMacros = 10;
@@ -233,7 +233,7 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// GIL Test Mono
+// SUB Test Mono
 
 class MonoEffect : public AudioEffect {
 public:
@@ -264,45 +264,45 @@ public:
     }
 };
 
-}  // namespace gil_test
+}  // namespace sub_test
 
 // ---------------------------------------------------------------------------
 // Module entry points
 
 bool InitModule() {
     char value[8] = {};
-    if (GetEnvironmentVariableA("GIL_TEST_PLUGIN_CRASH", value, sizeof(value)) && value[0] == '1') {
+    if (GetEnvironmentVariableA("SUB_TEST_PLUGIN_CRASH", value, sizeof(value)) && value[0] == '1') {
         TerminateProcess(GetCurrentProcess(), 3);
     }
-    if (GetEnvironmentVariableA("GIL_TEST_PLUGIN_HANG", value, sizeof(value)) && value[0] == '1') {
+    if (GetEnvironmentVariableA("SUB_TEST_PLUGIN_HANG", value, sizeof(value)) && value[0] == '1') {
         Sleep(INFINITE);
     }
     return true;
 }
 
 bool DeinitModule() {
-    UnregisterClassW(gil_test::kEffectViewClass, ghInst);  // its window procedure goes with the module
+    UnregisterClassW(sub_test::kEffectViewClass, ghInst);  // its window procedure goes with the module
     return true;
 }
 
-BEGIN_FACTORY_DEF("GIL Studio", "https://example.invalid/gilstudio", "mailto:none@example.invalid")
+BEGIN_FACTORY_DEF("SUBstation", "https://example.invalid/substation", "mailto:none@example.invalid")
 
-DEF_CLASS2(INLINE_UID_FROM_FUID(gil_test::kSynthProcessorUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
-           "GIL Test Synth", Vst::kDistributable, "Instrument|Synth", "1.0.0", kVstVersionString,
-           gil_test::SynthProcessor::createInstance)
+DEF_CLASS2(INLINE_UID_FROM_FUID(sub_test::kSynthProcessorUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "SUB Test Synth", Vst::kDistributable, "Instrument|Synth", "1.0.0", kVstVersionString,
+           sub_test::SynthProcessor::createInstance)
 
-DEF_CLASS2(INLINE_UID_FROM_FUID(gil_test::kSynthControllerUID), PClassInfo::kManyInstances,
-           kVstComponentControllerClass, "GIL Test Synth Controller", 0, "", "1.0.0", kVstVersionString,
-           gil_test::SynthController::createInstance)
+DEF_CLASS2(INLINE_UID_FROM_FUID(sub_test::kSynthControllerUID), PClassInfo::kManyInstances,
+           kVstComponentControllerClass, "SUB Test Synth Controller", 0, "", "1.0.0", kVstVersionString,
+           sub_test::SynthController::createInstance)
 
-DEF_CLASS2(INLINE_UID_FROM_FUID(gil_test::kEffectUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
-           "GIL Test Effect", 0, "Fx|Delay", "1.0.0", kVstVersionString, gil_test::createTestEffect)
+DEF_CLASS2(INLINE_UID_FROM_FUID(sub_test::kEffectUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "SUB Test Effect", 0, "Fx|Delay", "1.0.0", kVstVersionString, sub_test::createTestEffect)
 
-DEF_CLASS2(INLINE_UID_FROM_FUID(gil_test::kMonoUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
-           "GIL Test Mono", Vst::kDistributable, "Fx", "1.0.0", kVstVersionString,
-           gil_test::MonoEffect::createInstance)
+DEF_CLASS2(INLINE_UID_FROM_FUID(sub_test::kMonoUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "SUB Test Mono", Vst::kDistributable, "Fx", "1.0.0", kVstVersionString,
+           sub_test::MonoEffect::createInstance)
 
-DEF_CLASS2(INLINE_UID_FROM_FUID(gil_test::kSidechainUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
-           "GIL Test Sidechain", 0, "Fx|Dynamics", "1.0.0", kVstVersionString, gil_test::createTestSidechain)
+DEF_CLASS2(INLINE_UID_FROM_FUID(sub_test::kSidechainUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "SUB Test Sidechain", 0, "Fx|Dynamics", "1.0.0", kVstVersionString, sub_test::createTestSidechain)
 
 END_FACTORY

@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace gil {
+namespace sub {
 
 // Python hands us UTF-8; Windows file APIs want UTF-16.
 inline std::filesystem::path pathFromUtf8(const std::string& utf8) {
@@ -12,4 +12,4 @@ inline std::filesystem::path pathFromUtf8(const std::string& utf8) {
 
 inline std::wstring widen(const std::string& utf8) { return pathFromUtf8(utf8).wstring(); }
 
-}  // namespace gil
+}  // namespace sub

@@ -10,8 +10,8 @@ from PySide6.QtCore import QAbstractListModel, QMimeData, QModelIndex, Qt, QUrl
 from ...model.project import PluginRef
 from .. import icons
 
-PLUGIN_MIME = "application/x-gilstudio-plugin"  # JSON list of PluginRef fields
-DEVICE_MIME = "application/x-gilstudio-device"  # JSON list of built-in device kinds
+PLUGIN_MIME = "application/x-substation-plugin"  # JSON list of PluginRef fields
+DEVICE_MIME = "application/x-substation-device"  # JSON list of built-in device kinds
 
 
 def device_kinds(mime) -> list[str]:

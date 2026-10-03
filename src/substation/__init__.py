@@ -1,8 +1,8 @@
-"""GIL Studio: a basic DAW with a Python/Qt UI and a C++ audio engine."""
+"""SUBstation: a basic DAW with a Python/Qt UI and a C++ audio engine."""
 
 __version__ = "0.1.0"
 
-APP_NAME = "GIL Studio"
+APP_NAME = "SUBstation"
 
 # The engine's bindings this code needs (engine/src/bindings.cpp: API_VERSION).
 # 2: ProcessorEventType.PARAM_TOUCHED. 3: the master (track id MASTER) has devices.

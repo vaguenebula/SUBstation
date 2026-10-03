@@ -82,7 +82,7 @@ TRACK_COLORS = [
     "#5cffe8", "#8bc5ff", "#5480e4", "#92a7ff", "#d86ce4", "#e553a0", "#ffb3a0",
 ]
 
-# Warp modes, in the engine's order (gilstudio._engine.WarpMode).
+# Warp modes, in the engine's order (substation._engine.WarpMode).
 WARP_MODES = ["Transients", "Standard", "Smooth", "Formants", "Re-Pitch"]
 DEFAULT_WARP_MODE = "Standard"
 # Names used by earlier versions, mapped to the mode that plays the same way.

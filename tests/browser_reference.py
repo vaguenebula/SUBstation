@@ -9,8 +9,8 @@ import os
 import re
 from pathlib import Path
 
-from gilstudio.ui.browser.browser_models import BrowserItem
-from gilstudio.ui.browser.library import Library
+from substation.ui.browser.browser_models import BrowserItem
+from substation.ui.browser.library import Library
 
 AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
 MAX_FILES = 300_000

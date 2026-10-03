@@ -8,10 +8,10 @@ import numpy as np
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio import _engine as ge
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.project import Clip, Project, Track, tree_problem
-from gilstudio.model.serialization import load_into, project_to_dict
+from substation import _engine as ge
+from substation.model.editor import ProjectEditor
+from substation.model.project import Clip, Project, Track, tree_problem
+from substation.model.serialization import load_into, project_to_dict
 
 from .conftest import SAMPLE_RATE
 
@@ -172,7 +172,7 @@ def test_groups_are_saved_and_loaded(editor, app):
 
 
 def test_the_engine_hears_groups_as_buses(app, make_wav):
-    from gilstudio.audio.engine_bridge import EngineBridge
+    from substation.audio.engine_bridge import EngineBridge
 
     engine = ge.Engine()
     engine.set_clip_fade_ms(0)

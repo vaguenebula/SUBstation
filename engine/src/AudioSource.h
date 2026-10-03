@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace gil {
+namespace sub {
 
 struct AudioFileInfo {
     int64_t frames = 0;        // at the file's own sample rate
@@ -59,4 +59,4 @@ private:
     std::vector<std::vector<float>> peaks_;
 };
 
-}  // namespace gil
+}  // namespace sub

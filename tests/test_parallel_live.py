@@ -7,7 +7,7 @@ thread. Skipped without ASIO, like the tests they repeat."""
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import TEST_PLUGINS
 from .test_asio import open_asio
@@ -131,10 +131,10 @@ def test_a_sidechain_lines_up_live(engine, driver, make_wav):
     source, track = engine.add_track(), engine.add_track()
     for t in (source, track):
         engine.set_track_clips(t, [ge.ClipDesc(path, 0.25, 1000 / RATE)])
-    latent = engine.add_plugin_processor(engine.track_chain(source), "VST3", plugins, uids["GIL Test Effect"])
+    latent = engine.add_plugin_processor(engine.track_chain(source), "VST3", plugins, uids["SUB Test Effect"])
     engine.set_processor_param(latent, 1, 300)  # Latency
     engine.idle()
-    keyed = engine.add_plugin_processor(engine.track_chain(track), "VST3", plugins, uids["GIL Test Sidechain"])
+    keyed = engine.add_plugin_processor(engine.track_chain(track), "VST3", plugins, uids["SUB Test Sidechain"])
     engine.set_processor_sidechain(keyed, source)  # it comes 300 samples late: the track waits for it
     engine.play()
     out = heard(driver, (RATE // 8 + 300) // BUFFER + 8)

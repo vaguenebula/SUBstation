@@ -167,7 +167,7 @@ def wheel_action(editor: ProjectEditor, track_id: str, event: QWheelEvent) -> bo
     return True
 
 
-DEVICE_MOVE_MIME = "application/x-gilstudio-device-move"  # track id, then device ids, a line each
+DEVICE_MOVE_MIME = "application/x-substation-device-move"  # track id, then device ids, a line each
 
 
 def moved_devices(mime) -> tuple[str, list[str]] | None:

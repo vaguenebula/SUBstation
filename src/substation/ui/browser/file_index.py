@@ -2,7 +2,7 @@
 installed plug-ins (scanned in child processes; see plugins/scanner.py).
 
 The files are indexed, and all of the browser's lists searched, by a native
-backend (gilstudio._browser, from browser/src), on threads of its own:
+backend (substation._browser, from browser/src), on threads of its own:
 
 - One keeps an index of the folders under the places, at background CPU and I/O
   priority. It is saved (browser-index.bin next to the plug-in cache), so the
@@ -42,11 +42,11 @@ KINDS = ("audio", "plugin", "device")  # the backend's item kinds, by number
 
 
 def index_path() -> Path:
-    override = os.environ.get("GILSTUDIO_BROWSER_INDEX")
+    override = os.environ.get("SUBSTATION_BROWSER_INDEX")
     if override:
         return Path(override)
     base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    return base / "GIL Studio" / "browser-index.bin"
+    return base / "SUBstation" / "browser-index.bin"
 
 
 def place_spec(root: str) -> tuple[str, str, str]:

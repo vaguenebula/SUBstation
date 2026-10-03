@@ -2,7 +2,7 @@
 // The list of built-in devices. A device registers itself where it is defined:
 // each .cpp in builtin/devices/ ends with
 //
-//     GIL_REGISTER_BUILTIN(MyProcessor, AudioEffect);
+//     SUB_REGISTER_BUILTIN(MyProcessor, AudioEffect);
 //
 // and that's all: the engine creates it by id, and the UI's device list, names,
 // categories and parameter defaults all come from here (see builtin_devices() in
@@ -16,7 +16,7 @@
 
 #include "Processor.h"
 
-namespace gil {
+namespace sub {
 
 enum class BuiltinCategory { Instrument, AudioEffect };
 
@@ -61,9 +61,9 @@ struct BuiltinRegistrar {
     }
 };
 
-}  // namespace gil
+}  // namespace sub
 
-#define GIL_REGISTER_BUILTIN(Class, category)                                                  \
-    static const ::gil::BuiltinRegistrar gilBuiltin##Class {                                    \
-        ::gil::BuiltinCategory::category, [] { return std::make_shared<Class>(); }              \
+#define SUB_REGISTER_BUILTIN(Class, category)                                                  \
+    static const ::sub::BuiltinRegistrar subBuiltin##Class {                                    \
+        ::sub::BuiltinCategory::category, [] { return std::make_shared<Class>(); }              \
     }

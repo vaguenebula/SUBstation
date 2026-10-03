@@ -415,7 +415,7 @@ Model / UI
   - [ ] Maybe: a built-in compressor (or a gate) with a sidechain, as Ableton's.
 
 Tests
-- [x] A test plug-in with an aux input (GIL Test Sidechain: its input plus its
+- [x] A test plug-in with an aux input (SUB Test Sidechain: its input plus its
       sidechain) hears the source sample-exactly, with latent plug-ins before
       and after the tap and on the consumer's track before and after the device;
       into groups' and the master's devices; live with workers too.

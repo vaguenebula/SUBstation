@@ -6,7 +6,7 @@ import time
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import SAMPLE_RATE
 

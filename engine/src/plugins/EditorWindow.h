@@ -17,7 +17,7 @@
 struct HWND__;
 using HWND = HWND__*;
 
-namespace gil::vst3 {
+namespace sub::vst3 {
 
 class EditorWindow final : public Steinberg::IPlugFrame {
 public:
@@ -48,7 +48,7 @@ public:
 
     // IPlugFrame
     tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;
-    GIL_HOST_OWNED_FUNKNOWN(Steinberg::IPlugFrame)
+    SUB_HOST_OWNED_FUNKNOWN(Steinberg::IPlugFrame)
 
     // The window procedure's work (called by it, from the message loop).
     intptr_t handleMessage(HWND hwnd, unsigned message, uintptr_t wParam, intptr_t lParam);
@@ -78,4 +78,4 @@ private:
     Position position_;  // kept when the window goes
 };
 
-}  // namespace gil::vst3
+}  // namespace sub::vst3

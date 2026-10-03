@@ -14,7 +14,7 @@ import time
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import SAMPLE_RATE, TEST_ASIO, TEST_ASIO_NAME
 
@@ -65,7 +65,7 @@ class Driver:
             "InitHandle": (ctypes.c_void_p, []),
         }
         for name, (restype, argtypes) in signatures.items():
-            function = getattr(dll, "GilTestAsio_" + name)
+            function = getattr(dll, "SubTestAsio_" + name)
             function.restype = restype
             function.argtypes = argtypes
             setattr(self, name, function)
@@ -206,7 +206,7 @@ def test_sample_rates(engine, driver):
     assert engine.device_status.sample_rate == 44100 and engine.sample_rate == 44100.0
     open_asio(engine, sample_rate=96000)
     assert engine.device_status.sample_rate == 96000 and driver.get("rate") == 96000
-    with pytest.raises(RuntimeError, match="GIL Test ASIO can't run at 22050 Hz"):
+    with pytest.raises(RuntimeError, match="SUB Test ASIO can't run at 22050 Hz"):
         open_asio(engine, sample_rate=22050)
     assert not engine.device_status.open
 
@@ -298,15 +298,15 @@ def test_control_panel(engine, driver):
 
 def test_errors_leave_no_driver_open(engine, driver):
     driver.FailInit(b"the interface is unplugged")
-    with pytest.raises(RuntimeError, match="^GIL Test ASIO could not be started: the interface is unplugged$"):
+    with pytest.raises(RuntimeError, match="^SUB Test ASIO could not be started: the interface is unplugged$"):
         open_asio(engine)
     driver.FailInit(None)
     assert not engine.device_status.open and driver.get("instances") == 0
     with pytest.raises(RuntimeError, match="^ASIO driver not found: Nope$"):
         engine.open_device("Nope", driver="ASIO")
-    with pytest.raises(RuntimeError, match="^GIL Test ASIO has no output 7$"):
+    with pytest.raises(RuntimeError, match="^SUB Test ASIO has no output 7$"):
         open_asio(engine, output_channels=[6])
-    with pytest.raises(RuntimeError, match="^GIL Test ASIO has no input 5$"):
+    with pytest.raises(RuntimeError, match="^SUB Test ASIO has no input 5$"):
         open_asio(engine, input_channels=[4])
     with pytest.raises(RuntimeError, match="listed twice"):
         open_asio(engine, output_channels=[1, 1])
@@ -346,8 +346,8 @@ def test_plays_on_the_drivers_thread(engine, driver, dc_wav):
 
 
 def test_preferences_open_asio(window, driver):
-    from gilstudio.audio.settings import AudioSettings
-    from gilstudio.ui.dialogs import PreferencesDialog
+    from substation.audio.settings import AudioSettings
+    from substation.ui.dialogs import PreferencesDialog
 
     prefs = PreferencesDialog(window.bridge, window)
     prefs.driver.setCurrentIndex(prefs.driver.findData("ASIO"))
@@ -368,7 +368,7 @@ def test_preferences_open_asio(window, driver):
     status = engine.device_status
     assert (status.buffer_frames, status.sample_rate, status.output_channels) == (128, 48000, [2, 3])
     assert AudioSettings.load() == AudioSettings("ASIO", TEST_ASIO_NAME, 48000, 128, False, (2, 3), ())
-    assert "GIL Test ASIO" in window.transport.device.text()
+    assert "SUB Test ASIO" in window.transport.device.text()
 
     prefs.control_panel.click()
     assert driver.get("control_panels") == 1
@@ -390,7 +390,7 @@ def test_preferences_open_asio(window, driver):
 
 
 def test_start_audio_falls_back_to_the_drivers_own_settings(window, driver):
-    from gilstudio.audio.settings import AudioSettings
+    from substation.audio.settings import AudioSettings
 
     AudioSettings("ASIO", TEST_ASIO_NAME, 22050, 128, False, (2, 3), ()).save()  # a rate it no longer runs at
     window.start_audio()

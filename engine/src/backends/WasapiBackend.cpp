@@ -6,7 +6,7 @@
 
 #include "miniaudio.h"
 
-namespace gil {
+namespace sub {
 
 struct WasapiCallbacks {
     static void data(ma_device* device, void* output, const void*, ma_uint32 frames) {
@@ -161,4 +161,4 @@ DeviceState WasapiBackend::state() const {
     return state;
 }
 
-}  // namespace gil
+}  // namespace sub

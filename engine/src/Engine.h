@@ -57,7 +57,7 @@
 #include "Transport.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 
 struct ClipDesc {
     std::string path;
@@ -347,7 +347,7 @@ public:
     // chain's: the others are delayed to line up with it. Every chain's devices
     // hear the track's notes (layering instruments). Throws std::invalid_argument
     // for an unknown chain or rack, or a rack nested too deep.
-    static constexpr int kMaxRackDepth = gil::kMaxRackDepth;
+    static constexpr int kMaxRackDepth = sub::kMaxRackDepth;
     uint32_t addRack(uint32_t chainId, int index);
     uint32_t addRackChain(uint32_t rackId, int index);  // a new chain, at `index` (-1: last)
     void removeRackChain(uint32_t chainId);              // with its devices
@@ -678,4 +678,4 @@ private:
     MidiInputDevices midiDevices_;  // last: closed first, while the rest still stands
 };
 
-}  // namespace gil
+}  // namespace sub

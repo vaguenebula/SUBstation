@@ -15,7 +15,7 @@
 #include "public.sdk/source/vst/utility/stringconvert.h"
 #include "public.sdk/source/vst/vstpresetfile.h"
 
-namespace gil::vst3 {
+namespace sub::vst3 {
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
@@ -906,4 +906,4 @@ void Vst3Processor::setEditorTitle(const std::string& title) {
     if (editor_) editor_->setTitle(title);
 }
 
-}  // namespace gil::vst3
+}  // namespace sub::vst3

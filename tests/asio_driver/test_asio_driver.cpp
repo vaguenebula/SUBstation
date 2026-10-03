@@ -1,15 +1,15 @@
-// GIL Test ASIO: a fake ASIO driver for the tests (tests/test_asio.py).
+// SUB Test ASIO: a fake ASIO driver for the tests (tests/test_asio.py).
 //
 // It is an in-process COM object like a real driver, loaded through
-// GILSTUDIO_ASIO_DRIVERS rather than registered. Once started, a thread calls
+// SUBSTATION_ASIO_DRIVERS rather than registered. Once started, a thread calls
 // the host's bufferSwitch at the pace a sound card would; in manual mode the
-// test drives it instead, a buffer at a time (GilTestAsio_Process), so that
+// test drives it instead, a buffer at a time (SubTestAsio_Process), so that
 // what the host plays can be checked sample by sample.
 //
 // Functions exported for ctypes (test_asio_driver.def) configure the next
 // driver instance, set what its inputs deliver, send the host driver messages,
 // and read back the bytes the host wrote to its outputs, or loop an output back
-// to an input as a cable would (GilTestAsio_SetLoopback). Its sample formats are
+// to an input as a cable would (SubTestAsio_SetLoopback). Its sample formats are
 // encoded here independently of the engine's conversions, which the tests
 // check against numpy's decoding.
 
@@ -41,7 +41,7 @@ constexpr long kInputs = 4;
 constexpr long kOutputs = 6;
 constexpr size_t kMaxCapture = size_t{8} << 20;  // bytes per output channel
 
-// How the next instance behaves (GilTestAsio_Reset restores this).
+// How the next instance behaves (SubTestAsio_Reset restores this).
 struct Config {
     long sampleType = ASIOSTInt32LSB;
     long minSize = 32, maxSize = 2048, preferredSize = 256, granularity = -1;
@@ -207,7 +207,7 @@ public:
         sampleType_ = g_config.sampleType;
         return error_.empty() ? ASIOTrue : ASIOFalse;
     }
-    void getDriverName(char* name) override { snprintf(name, 32, "GIL Test ASIO"); }
+    void getDriverName(char* name) override { snprintf(name, 32, "SUB Test ASIO"); }
     long getDriverVersion() override { return 1; }
     void getErrorMessage(char* text) override { snprintf(text, 124, "%s", error_.c_str()); }
 
@@ -447,7 +447,7 @@ private:
     bool timeInfo_ = false;
     std::atomic<int64_t> samplePosition_{0};
     std::vector<Buffer> buffers_;
-    std::deque<double> loop_;  // the cable's samples on their way (GilTestAsio_SetLoopback)
+    std::deque<double> loop_;  // the cable's samples on their way (SubTestAsio_SetLoopback)
     std::atomic<bool> running_{false};
     std::thread thread_;
 };
@@ -490,7 +490,7 @@ STDAPI DllCanUnloadNow() { return S_FALSE; }
 
 extern "C" {
 
-void GilTestAsio_Reset() {
+void SubTestAsio_Reset() {
     std::lock_guard lock(g_mutex);
     g_config = {};
     const long instances = g_stats.instances;
@@ -500,12 +500,12 @@ void GilTestAsio_Reset() {
     for (auto& capture : g_capture) capture.clear();
 }
 
-void GilTestAsio_SetSampleType(long type) {
+void SubTestAsio_SetSampleType(long type) {
     std::lock_guard lock(g_mutex);
     g_config.sampleType = type;
 }
 
-void GilTestAsio_SetBufferSizes(long minSize, long maxSize, long preferred, long granularity) {
+void SubTestAsio_SetBufferSizes(long minSize, long maxSize, long preferred, long granularity) {
     std::lock_guard lock(g_mutex);
     g_config.minSize = minSize;
     g_config.maxSize = maxSize;
@@ -513,43 +513,43 @@ void GilTestAsio_SetBufferSizes(long minSize, long maxSize, long preferred, long
     g_config.granularity = granularity;
 }
 
-void GilTestAsio_SetLatencies(long inputExtra, long outputExtra) {
+void SubTestAsio_SetLatencies(long inputExtra, long outputExtra) {
     std::lock_guard lock(g_mutex);
     g_config.inputLatencyExtra = inputExtra;
     g_config.outputLatencyExtra = outputExtra;
 }
 
-void GilTestAsio_SetManual(int manual) {
+void SubTestAsio_SetManual(int manual) {
     std::lock_guard lock(g_mutex);
     g_config.manual = manual != 0;
 }
 
-void GilTestAsio_SetInputLevel(int channel, double level) {
+void SubTestAsio_SetInputLevel(int channel, double level) {
     std::lock_guard lock(g_mutex);
     if (channel >= 0 && channel < kInputs) g_config.inputLevels[channel] = level;
 }
 
 // A cable from an output to an input (-1, -1: none), delayed by the input and
 // output latencies the driver reports, as a real loopback would be.
-void GilTestAsio_SetLoopback(int output, int input) {
+void SubTestAsio_SetLoopback(int output, int input) {
     std::lock_guard lock(g_mutex);
     g_config.loopOutput = output;
     g_config.loopInput = input;
 }
 
-void GilTestAsio_FailInit(const char* message) {
+void SubTestAsio_FailInit(const char* message) {
     std::lock_guard lock(g_mutex);
     g_config.initError = message ? message : "";
 }
 
-void GilTestAsio_SetControlPanelChange(long bufferSize, double rate) {
+void SubTestAsio_SetControlPanelChange(long bufferSize, double rate) {
     std::lock_guard lock(g_mutex);
     g_config.panelBufferSize = bufferSize;
     g_config.panelRate = rate;
 }
 
 // Manual mode: runs `buffers` periods now, on the caller's thread. Returns how many ran.
-int GilTestAsio_Process(int buffers) {
+int SubTestAsio_Process(int buffers) {
     TestAsio* driver = g_driver;
     if (!driver || !driver->running() || !driver->manual()) return 0;
     for (int i = 0; i < buffers; ++i) driver->switchBuffers();
@@ -558,7 +558,7 @@ int GilTestAsio_Process(int buffers) {
 
 // Copies what the host wrote to an output so far (raw, in the driver's format).
 // With no destination, returns how many bytes there are.
-long GilTestAsio_ReadOutput(int channel, void* destination, long maxBytes) {
+long SubTestAsio_ReadOutput(int channel, void* destination, long maxBytes) {
     std::lock_guard lock(g_mutex);
     if (channel < 0 || channel >= kOutputs) return 0;
     const auto& capture = g_capture[static_cast<size_t>(channel)];
@@ -568,13 +568,13 @@ long GilTestAsio_ReadOutput(int channel, void* destination, long maxBytes) {
     return static_cast<long>(count);
 }
 
-void GilTestAsio_ClearOutput() {
+void SubTestAsio_ClearOutput() {
     std::lock_guard lock(g_mutex);
     for (auto& capture : g_capture) capture.clear();
 }
 
 // Sends the host a driver message now, from the caller's thread. -1 if no host listens.
-long GilTestAsio_SendMessage(long selector, long value) {
+long SubTestAsio_SendMessage(long selector, long value) {
     ASIOCallbacks* callbacks;
     {
         std::lock_guard lock(g_mutex);
@@ -584,7 +584,7 @@ long GilTestAsio_SendMessage(long selector, long value) {
 }
 
 // The "hardware" changes its rate (an external clock), and tells the host.
-void GilTestAsio_ChangeSampleRate(double rate) {
+void SubTestAsio_ChangeSampleRate(double rate) {
     ASIOCallbacks* callbacks;
     {
         std::lock_guard lock(g_mutex);
@@ -595,7 +595,7 @@ void GilTestAsio_ChangeSampleRate(double rate) {
     if (callbacks) callbacks->sampleRateDidChange(rate);
 }
 
-double GilTestAsio_Get(const char* key) {
+double SubTestAsio_Get(const char* key) {
     std::lock_guard lock(g_mutex);
     const std::string name = key;
     if (name == "instances") return g_stats.instances;
@@ -613,7 +613,7 @@ double GilTestAsio_Get(const char* key) {
     return -1.0;
 }
 
-void* GilTestAsio_InitHandle() {
+void* SubTestAsio_InitHandle() {
     std::lock_guard lock(g_mutex);
     return g_stats.initHandle;
 }

@@ -29,7 +29,7 @@
 
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 
 // A short MIDI message on its way to the audio thread.
 struct MidiInputEvent {
@@ -121,4 +121,4 @@ private:
     std::vector<std::unique_ptr<Device>> open_;
 };
 
-}  // namespace gil
+}  // namespace sub

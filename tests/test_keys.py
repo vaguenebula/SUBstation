@@ -1,10 +1,10 @@
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio.model import serialization
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.keys import Key, clip_settings, key_from_name, parse_filename, transpose_to
-from gilstudio.model.project import Project
+from substation.model import serialization
+from substation.model.editor import ProjectEditor
+from substation.model.keys import Key, clip_settings, key_from_name, parse_filename, transpose_to
+from substation.model.project import Project
 
 C, A_MINOR = Key(0), Key(9, minor=True)
 

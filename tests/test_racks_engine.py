@@ -9,13 +9,13 @@ the fake ASIO driver."""
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 from .conftest import SAMPLE_RATE, TEST_PLUGINS
 
 SPB = SAMPLE_RATE // 2  # samples per beat at 120 BPM
 PLUGINS = str(TEST_PLUGINS)
-FX_GAIN, FX_LATENCY = 0, 1  # GIL Test Effect's parameters
+FX_GAIN, FX_LATENCY = 0, 1  # SUB Test Effect's parameters
 CLICK = 0.25
 
 needs_plugins = pytest.mark.skipif(not TEST_PLUGINS.exists(), reason="test plug-ins not built")
@@ -55,8 +55,8 @@ def rack(engine, chain, chains=2, index=-1):
 
 
 def effect(engine, uids, chain, latency=0, gain=1.0):
-    """GIL Test Effect in a chain: `gain` times its input, `latency` samples late."""
-    pid = engine.add_plugin_processor(chain, "VST3", PLUGINS, uids["GIL Test Effect"])
+    """SUB Test Effect in a chain: `gain` times its input, `latency` samples late."""
+    pid = engine.add_plugin_processor(chain, "VST3", PLUGINS, uids["SUB Test Effect"])
     engine.set_processor_param(pid, FX_GAIN, gain / 2)  # (0..1 is 0..2 times)
     engine.set_processor_param(pid, FX_LATENCY, latency)
     engine.idle()  # the plug-in asked for a restart to change its latency
@@ -237,7 +237,7 @@ def test_an_instrument_rack_layers_two_synths(engine):
 ])
 def test_a_sidechain_into_a_device_in_a_rack_lines_up(engine, uids, click_wav, before_rack, before_device,
                                                       other_chain):
-    """GIL Test Sidechain puts out its input plus its sidechain: both clicks land
+    """SUB Test Sidechain puts out its input plus its sidechain: both clicks land
     on beat 1 together, whatever the latency before the rack and in it."""
     source = clip_track(engine, click_wav)
     track = clip_track(engine, click_wav)
@@ -247,7 +247,7 @@ def test_a_sidechain_into_a_device_in_a_rack_lines_up(engine, uids, click_wav, b
     engine.set_chain_mute(b, True)
     if before_device:
         effect(engine, uids, a, latency=before_device)
-    keyed = engine.add_plugin_processor(a, "VST3", PLUGINS, uids["GIL Test Sidechain"])
+    keyed = engine.add_plugin_processor(a, "VST3", PLUGINS, uids["SUB Test Sidechain"])
     if other_chain:
         effect(engine, uids, b, latency=other_chain)
     engine.set_track_gain(source, 0.0)  # heard only through the sidechain (taken before the fader)
@@ -307,7 +307,7 @@ def test_a_sidechain_moving_with_a_rack_cant_close_a_cycle(engine, uids, click_w
         pytest.skip("test plug-ins not built")
     source, track = clip_track(engine, click_wav), engine.add_track()
     rid, (a,) = rack(engine, engine.track_chain(track), chains=1)
-    keyed = engine.add_plugin_processor(a, "VST3", PLUGINS, uids["GIL Test Sidechain"])
+    keyed = engine.add_plugin_processor(a, "VST3", PLUGINS, uids["SUB Test Sidechain"])
     engine.set_processor_sidechain(keyed, source)
     with pytest.raises(ValueError):  # onto its own source
         engine.move_processor(rid, engine.track_chain(source))

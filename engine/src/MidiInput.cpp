@@ -8,7 +8,7 @@
 #include <stdexcept>
 
 
-namespace gil {
+namespace sub {
 
 int64_t hostTimeNs() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -135,4 +135,4 @@ std::vector<std::string> MidiInputDevices::openNames() const {
     return names;
 }
 
-}  // namespace gil
+}  // namespace sub

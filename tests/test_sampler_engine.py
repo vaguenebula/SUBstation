@@ -4,8 +4,8 @@ it across the keyboard, and swapping it while it plays. Rendered offline."""
 import numpy as np
 import pytest
 
-from gilstudio import _engine as ge
-from gilstudio.model import device_state
+from substation import _engine as ge
+from substation.model import device_state
 
 from .conftest import SAMPLE_RATE
 from .test_midi_engine import dominant_freq, rms

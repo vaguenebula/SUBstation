@@ -1,4 +1,4 @@
-// Python bindings for the engine (module gilstudio._engine).
+// Python bindings for the engine (module substation._engine).
 //
 // Long-running calls release the GIL. The audio thread never calls into Python,
 // so audio keeps running no matter what the interpreter is doing.
@@ -18,8 +18,8 @@
 namespace nb = nanobind;
 using namespace nb::literals;
 
-using gil::AudioSource;
-using gil::Engine;
+using sub::AudioSource;
+using sub::Engine;
 
 namespace {
 
@@ -33,10 +33,10 @@ std::vector<uint8_t> fromBytes(const nb::bytes& data) {
 }
 
 // Recorded notes as an int64 array of shape (n, 5): start, end (-1: held), key, velocity, channel.
-nb::ndarray<nb::numpy, int64_t, nb::ndim<2>, nb::c_contig> notesArray(const std::vector<gil::RecordedNote>& notes) {
+nb::ndarray<nb::numpy, int64_t, nb::ndim<2>, nb::c_contig> notesArray(const std::vector<sub::RecordedNote>& notes) {
     auto buffer = std::make_unique<std::vector<int64_t>>();
     buffer->reserve(notes.size() * 5);
-    for (const gil::RecordedNote& n : notes) buffer->insert(buffer->end(), {n.start, n.end, n.key, n.velocity, n.channel});
+    for (const sub::RecordedNote& n : notes) buffer->insert(buffer->end(), {n.start, n.end, n.key, n.velocity, n.channel});
     int64_t* data = buffer->data();
     nb::capsule owner(buffer.release(), [](void* p) noexcept { delete static_cast<std::vector<int64_t>*>(p); });
     return {data, {notes.size(), size_t{5}}, owner};
@@ -51,24 +51,24 @@ using StereoArray = nb::ndarray<nb::numpy, float, nb::ndim<2>, nb::c_contig>;
 using ReleaseGil = nb::call_guard<nb::gil_scoped_release>;
 
 NB_MODULE(_engine, m) {
-    m.doc() = "GIL Studio real-time audio engine";
+    m.doc() = "SUBstation real-time audio engine";
     // Qt/PySide can keep engine objects alive until interpreter teardown; that
     // is harmless, so don't print nanobind's leak report at exit.
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
-    // refuses to start with an engine built from older code (gilstudio.ENGINE_API).
+    // refuses to start with an engine built from older code (substation.ENGINE_API).
     m.attr("API_VERSION") = 15;
-    m.attr("MAX_BLOCK") = gil::Renderer::kMaxBlock;
+    m.attr("MAX_BLOCK") = sub::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("MAX_RACK_DEPTH") = Engine::kMaxRackDepth;
     m.attr("PEAK_LEVELS") = AudioSource::kNumPeakLevels;
 
-    nb::class_<gil::AudioFileInfo>(m, "AudioFileInfo")
-        .def_ro("frames", &gil::AudioFileInfo::frames)
-        .def_ro("channels", &gil::AudioFileInfo::channels)
-        .def_ro("sample_rate", &gil::AudioFileInfo::sampleRate)
-        .def_ro("duration", &gil::AudioFileInfo::duration)
-        .def("__repr__", [](const gil::AudioFileInfo& info) {
+    nb::class_<sub::AudioFileInfo>(m, "AudioFileInfo")
+        .def_ro("frames", &sub::AudioFileInfo::frames)
+        .def_ro("channels", &sub::AudioFileInfo::channels)
+        .def_ro("sample_rate", &sub::AudioFileInfo::sampleRate)
+        .def_ro("duration", &sub::AudioFileInfo::duration)
+        .def("__repr__", [](const sub::AudioFileInfo& info) {
             return "AudioFileInfo(frames=" + std::to_string(info.frames) + ", channels=" +
                    std::to_string(info.channels) + ", sample_rate=" + std::to_string(info.sampleRate) + ")";
         });
@@ -79,202 +79,202 @@ NB_MODULE(_engine, m) {
     m.def("driver_types", &Engine::driverTypes,
           "The audio driver types this engine was built with: 'WASAPI', and 'ASIO' if it had the ASIO SDK.");
 
-    nb::class_<gil::AudioDeviceInfo>(m, "AudioDeviceInfo")
-        .def_ro("name", &gil::AudioDeviceInfo::name)
-        .def_ro("is_default", &gil::AudioDeviceInfo::isDefault)
-        .def("__repr__", [](const gil::AudioDeviceInfo& d) {
+    nb::class_<sub::AudioDeviceInfo>(m, "AudioDeviceInfo")
+        .def_ro("name", &sub::AudioDeviceInfo::name)
+        .def_ro("is_default", &sub::AudioDeviceInfo::isDefault)
+        .def("__repr__", [](const sub::AudioDeviceInfo& d) {
             return "AudioDeviceInfo('" + d.name + "'" + (d.isDefault ? ", default)" : ")");
         });
 
-    nb::class_<gil::DeviceStatus>(m, "DeviceStatus")
-        .def_ro("open", &gil::DeviceStatus::open)
-        .def_ro("name", &gil::DeviceStatus::name)
-        .def_ro("backend", &gil::DeviceStatus::backend, "The driver type: 'WASAPI' or 'ASIO'.")
-        .def_ro("sample_rate", &gil::DeviceStatus::sampleRate)
-        .def_ro("buffer_frames", &gil::DeviceStatus::bufferFrames)
-        .def_ro("latency_ms", &gil::DeviceStatus::latencyMs, "Output latency.")
-        .def_ro("input_latency_ms", &gil::DeviceStatus::inputLatencyMs)
-        .def_ro("input_channels", &gil::DeviceStatus::inputChannels,
+    nb::class_<sub::DeviceStatus>(m, "DeviceStatus")
+        .def_ro("open", &sub::DeviceStatus::open)
+        .def_ro("name", &sub::DeviceStatus::name)
+        .def_ro("backend", &sub::DeviceStatus::backend, "The driver type: 'WASAPI' or 'ASIO'.")
+        .def_ro("sample_rate", &sub::DeviceStatus::sampleRate)
+        .def_ro("buffer_frames", &sub::DeviceStatus::bufferFrames)
+        .def_ro("latency_ms", &sub::DeviceStatus::latencyMs, "Output latency.")
+        .def_ro("input_latency_ms", &sub::DeviceStatus::inputLatencyMs)
+        .def_ro("input_channels", &sub::DeviceStatus::inputChannels,
                 "The device's input channels that are open (0-based), in the order take_input_meters() lists them.")
-        .def_ro("output_channels", &gil::DeviceStatus::outputChannels,
+        .def_ro("output_channels", &sub::DeviceStatus::outputChannels,
                 "The device's output channels that are open; the master plays on the first two.")
-        .def_ro("exclusive", &gil::DeviceStatus::exclusive);
+        .def_ro("exclusive", &sub::DeviceStatus::exclusive);
 
-    nb::class_<gil::DeviceCaps>(m, "DeviceCapabilities")
-        .def_ro("input_names", &gil::DeviceCaps::inputNames, "Names of all the device's inputs.")
-        .def_ro("output_names", &gil::DeviceCaps::outputNames)
-        .def_ro("sample_rates", &gil::DeviceCaps::sampleRates, "The rates it can run at; empty: any.")
-        .def_ro("buffer_sizes", &gil::DeviceCaps::bufferSizes, "The buffer sizes it offers; empty: any.")
-        .def_ro("preferred_buffer_frames", &gil::DeviceCaps::preferredBufferFrames)
-        .def_ro("has_control_panel", &gil::DeviceCaps::hasControlPanel);
+    nb::class_<sub::DeviceCaps>(m, "DeviceCapabilities")
+        .def_ro("input_names", &sub::DeviceCaps::inputNames, "Names of all the device's inputs.")
+        .def_ro("output_names", &sub::DeviceCaps::outputNames)
+        .def_ro("sample_rates", &sub::DeviceCaps::sampleRates, "The rates it can run at; empty: any.")
+        .def_ro("buffer_sizes", &sub::DeviceCaps::bufferSizes, "The buffer sizes it offers; empty: any.")
+        .def_ro("preferred_buffer_frames", &sub::DeviceCaps::preferredBufferFrames)
+        .def_ro("has_control_panel", &sub::DeviceCaps::hasControlPanel);
 
-    nb::class_<gil::BuiltinInfo>(m, "BuiltinDevice", "A built-in device type, as the registry describes it.")
-        .def_ro("id", &gil::BuiltinInfo::id, "What add_builtin_processor takes.")
-        .def_ro("name", &gil::BuiltinInfo::name)
-        .def_prop_ro("category", [](const gil::BuiltinInfo& d) { return d.isInstrument() ? "Instruments" : "Audio Effects"; })
-        .def_prop_ro("is_instrument", &gil::BuiltinInfo::isInstrument)
-        .def_ro("params", &gil::BuiltinInfo::params);
-    m.def("builtin_devices", [] { return gil::BuiltinRegistry::instance().devices(); },
+    nb::class_<sub::BuiltinInfo>(m, "BuiltinDevice", "A built-in device type, as the registry describes it.")
+        .def_ro("id", &sub::BuiltinInfo::id, "What add_builtin_processor takes.")
+        .def_ro("name", &sub::BuiltinInfo::name)
+        .def_prop_ro("category", [](const sub::BuiltinInfo& d) { return d.isInstrument() ? "Instruments" : "Audio Effects"; })
+        .def_prop_ro("is_instrument", &sub::BuiltinInfo::isInstrument)
+        .def_ro("params", &sub::BuiltinInfo::params);
+    m.def("builtin_devices", [] { return sub::BuiltinRegistry::instance().devices(); },
           "Every built-in device, instruments first, then by name.");
 
-    nb::class_<gil::ParamInfo>(m, "ParamInfo")
-        .def_ro("id", &gil::ParamInfo::id)
-        .def_ro("name", &gil::ParamInfo::name)
-        .def_ro("unit", &gil::ParamInfo::unit)
-        .def_ro("min_value", &gil::ParamInfo::minValue)
-        .def_ro("max_value", &gil::ParamInfo::maxValue)
-        .def_ro("default_value", &gil::ParamInfo::defaultValue)
-        .def_ro("log_scale", &gil::ParamInfo::logScale)
-        .def_ro("value_labels", &gil::ParamInfo::valueLabels)
-        .def_ro("steps", &gil::ParamInfo::steps)
-        .def_ro("automatable", &gil::ParamInfo::automatable)
-        .def_ro("read_only", &gil::ParamInfo::readOnly)
-        .def_ro("hidden", &gil::ParamInfo::hidden)
-        .def_prop_ro("step_count", &gil::ParamInfo::stepCount,
+    nb::class_<sub::ParamInfo>(m, "ParamInfo")
+        .def_ro("id", &sub::ParamInfo::id)
+        .def_ro("name", &sub::ParamInfo::name)
+        .def_ro("unit", &sub::ParamInfo::unit)
+        .def_ro("min_value", &sub::ParamInfo::minValue)
+        .def_ro("max_value", &sub::ParamInfo::maxValue)
+        .def_ro("default_value", &sub::ParamInfo::defaultValue)
+        .def_ro("log_scale", &sub::ParamInfo::logScale)
+        .def_ro("value_labels", &sub::ParamInfo::valueLabels)
+        .def_ro("steps", &sub::ParamInfo::steps)
+        .def_ro("automatable", &sub::ParamInfo::automatable)
+        .def_ro("read_only", &sub::ParamInfo::readOnly)
+        .def_ro("hidden", &sub::ParamInfo::hidden)
+        .def_prop_ro("step_count", &sub::ParamInfo::stepCount,
                      "Steps between the lowest and highest value of a discrete parameter; 0 if continuous.")
-        .def("to_normalized", &gil::ParamInfo::toNormalized, "plain"_a,
+        .def("to_normalized", &sub::ParamInfo::toNormalized, "plain"_a,
              "A plain value as automation sees it (0..1).")
-        .def("from_normalized", &gil::ParamInfo::fromNormalized, "normalized"_a)
-        .def("__repr__", [](const gil::ParamInfo& p) { return "ParamInfo('" + p.id + "', '" + p.name + "')"; });
+        .def("from_normalized", &sub::ParamInfo::fromNormalized, "normalized"_a)
+        .def("__repr__", [](const sub::ParamInfo& p) { return "ParamInfo('" + p.id + "', '" + p.name + "')"; });
 
-    nb::class_<gil::AutomationPoint>(m, "AutomationPoint")
+    nb::class_<sub::AutomationPoint>(m, "AutomationPoint")
         .def(
             "__init__",
-            [](gil::AutomationPoint* self, double beat, float value, float curve) {
-                new (self) gil::AutomationPoint{beat, value, curve};
+            [](sub::AutomationPoint* self, double beat, float value, float curve) {
+                new (self) sub::AutomationPoint{beat, value, curve};
             },
             "beat"_a, "value"_a, "curve"_a = 0.0f)
-        .def_rw("beat", &gil::AutomationPoint::beat)
-        .def_rw("value", &gil::AutomationPoint::value, "Normalized, 0..1.")
-        .def_rw("curve", &gil::AutomationPoint::curve, "How the segment to the next point bends (-1..1).")
-        .def("__repr__", [](const gil::AutomationPoint& a) {
+        .def_rw("beat", &sub::AutomationPoint::beat)
+        .def_rw("value", &sub::AutomationPoint::value, "Normalized, 0..1.")
+        .def_rw("curve", &sub::AutomationPoint::curve, "How the segment to the next point bends (-1..1).")
+        .def("__repr__", [](const sub::AutomationPoint& a) {
             return "AutomationPoint(" + std::to_string(a.beat) + ", " + std::to_string(a.value) + ", " +
                    std::to_string(a.curve) + ")";
         });
 
-    nb::class_<gil::AutomationLaneDesc>(m, "AutomationLane")
+    nb::class_<sub::AutomationLaneDesc>(m, "AutomationLane")
         .def(
             "__init__",
-            [](gil::AutomationLaneDesc* self, uint32_t processorId, std::string param,
-               std::vector<gil::AutomationPoint> points) {
-                new (self) gil::AutomationLaneDesc{processorId, std::move(param), std::move(points)};
+            [](sub::AutomationLaneDesc* self, uint32_t processorId, std::string param,
+               std::vector<sub::AutomationPoint> points) {
+                new (self) sub::AutomationLaneDesc{processorId, std::move(param), std::move(points)};
             },
             "processor_id"_a, "param"_a, "points"_a,
             "An envelope: of a device's parameter (by id), or with processor_id 0 of the mixer's "
             "'volume' or 'pan'.")
-        .def_rw("processor_id", &gil::AutomationLaneDesc::processorId)
-        .def_rw("param", &gil::AutomationLaneDesc::param)
-        .def_rw("points", &gil::AutomationLaneDesc::points);
-    m.attr("AUTOMATION_CURVATURE") = gil::kAutomationCurvature;
-    m.attr("MAX_VOLUME_GAIN") = gil::kMaxVolumeGain;
+        .def_rw("processor_id", &sub::AutomationLaneDesc::processorId)
+        .def_rw("param", &sub::AutomationLaneDesc::param)
+        .def_rw("points", &sub::AutomationLaneDesc::points);
+    m.attr("AUTOMATION_CURVATURE") = sub::kAutomationCurvature;
+    m.attr("MAX_VOLUME_GAIN") = sub::kMaxVolumeGain;
 
-    nb::class_<gil::PluginDescription>(m, "PluginDescription")
-        .def_ro("format", &gil::PluginDescription::format)
-        .def_ro("path", &gil::PluginDescription::path)
-        .def_ro("uid", &gil::PluginDescription::uid)
-        .def_ro("name", &gil::PluginDescription::name)
-        .def_ro("vendor", &gil::PluginDescription::vendor)
-        .def_ro("version", &gil::PluginDescription::version)
-        .def_ro("category", &gil::PluginDescription::category)
-        .def_ro("is_instrument", &gil::PluginDescription::isInstrument)
-        .def("__repr__", [](const gil::PluginDescription& d) {
+    nb::class_<sub::PluginDescription>(m, "PluginDescription")
+        .def_ro("format", &sub::PluginDescription::format)
+        .def_ro("path", &sub::PluginDescription::path)
+        .def_ro("uid", &sub::PluginDescription::uid)
+        .def_ro("name", &sub::PluginDescription::name)
+        .def_ro("vendor", &sub::PluginDescription::vendor)
+        .def_ro("version", &sub::PluginDescription::version)
+        .def_ro("category", &sub::PluginDescription::category)
+        .def_ro("is_instrument", &sub::PluginDescription::isInstrument)
+        .def("__repr__", [](const sub::PluginDescription& d) {
             return "PluginDescription('" + d.name + "', " + d.format + ", " + d.uid + ")";
         });
 
     m.def(
-        "scan_vst3", [](const std::string& path) { return gil::vst3::Vst3Format::instance().scanFile(path); },
+        "scan_vst3", [](const std::string& path) { return sub::vst3::Vst3Format::instance().scanFile(path); },
         "path"_a, ReleaseGil(),
         "List the plug-ins in a VST3 file or bundle. Loads its code: the UI calls this in a child process.");
-    m.def("vst3_search_paths", [] { return gil::vst3::Vst3Format::instance().defaultSearchPaths(); },
+    m.def("vst3_search_paths", [] { return sub::vst3::Vst3Format::instance().defaultSearchPaths(); },
           "The standard VST3 folders.");
 
-    nb::class_<gil::ProcessorInfo>(m, "ProcessorInfo")
-        .def_ro("type_id", &gil::ProcessorInfo::typeId)
-        .def_ro("name", &gil::ProcessorInfo::name)
-        .def_ro("latency", &gil::ProcessorInfo::latency)
-        .def_ro("tail", &gil::ProcessorInfo::tail)
-        .def_ro("has_editor", &gil::ProcessorInfo::hasEditor)
-        .def_ro("has_sidechain", &gil::ProcessorInfo::hasSidechain, "It has a sidechain (aux) input.");
+    nb::class_<sub::ProcessorInfo>(m, "ProcessorInfo")
+        .def_ro("type_id", &sub::ProcessorInfo::typeId)
+        .def_ro("name", &sub::ProcessorInfo::name)
+        .def_ro("latency", &sub::ProcessorInfo::latency)
+        .def_ro("tail", &sub::ProcessorInfo::tail)
+        .def_ro("has_editor", &sub::ProcessorInfo::hasEditor)
+        .def_ro("has_sidechain", &sub::ProcessorInfo::hasSidechain, "It has a sidechain (aux) input.");
 
-    nb::class_<gil::DisplayInfo>(m, "DisplayInfo", "A stream of values a device's own editor draws.")
-        .def_ro("id", &gil::DisplayInfo::id)
-        .def_ro("samples_per_value", &gil::DisplayInfo::samplesPerValue,
+    nb::class_<sub::DisplayInfo>(m, "DisplayInfo", "A stream of values a device's own editor draws.")
+        .def_ro("id", &sub::DisplayInfo::id)
+        .def_ro("samples_per_value", &sub::DisplayInfo::samplesPerValue,
                 "The audio each value stands for: 1 for samples, more for a meter.");
 
-    nb::enum_<gil::SidechainTap>(m, "SidechainTap")
-        .value("POST_FADER", gil::SidechainTap::PostFader)
-        .value("PRE_FADER", gil::SidechainTap::PreFader)
-        .value("AFTER_DEVICE", gil::SidechainTap::AfterDevice)
-        .value("PRE_FX", gil::SidechainTap::PreFx);
+    nb::enum_<sub::SidechainTap>(m, "SidechainTap")
+        .value("POST_FADER", sub::SidechainTap::PostFader)
+        .value("PRE_FADER", sub::SidechainTap::PreFader)
+        .value("AFTER_DEVICE", sub::SidechainTap::AfterDevice)
+        .value("PRE_FX", sub::SidechainTap::PreFx);
 
-    nb::class_<gil::SidechainInfo>(m, "SidechainInfo")
-        .def_ro("track_id", &gil::SidechainInfo::trackId, "Its source.")
-        .def_ro("tap", &gil::SidechainInfo::tap)
-        .def_ro("tap_processor_id", &gil::SidechainInfo::tapProcessorId,
+    nb::class_<sub::SidechainInfo>(m, "SidechainInfo")
+        .def_ro("track_id", &sub::SidechainInfo::trackId, "Its source.")
+        .def_ro("tap", &sub::SidechainInfo::tap)
+        .def_ro("tap_processor_id", &sub::SidechainInfo::tapProcessorId,
                 "AFTER_DEVICE: the source's device it is taken after (0 otherwise).")
-        .def("__repr__", [](const gil::SidechainInfo& s) {
+        .def("__repr__", [](const sub::SidechainInfo& s) {
             const char* taps[] = {"post-fader", "pre-fader", "after device ", "pre-fx"};
             return "SidechainInfo(" + std::to_string(s.trackId) + ", " + taps[static_cast<int>(s.tap)] +
-                   (s.tap == gil::SidechainTap::AfterDevice ? std::to_string(s.tapProcessorId) : "") + ")";
+                   (s.tap == sub::SidechainTap::AfterDevice ? std::to_string(s.tapProcessorId) : "") + ")";
         });
 
-    nb::enum_<gil::ProcessorEvent::Type>(m, "ProcessorEventType")
-        .value("PARAM_EDITED", gil::ProcessorEvent::Type::ParamEdited)
-        .value("PARAMS_CHANGED", gil::ProcessorEvent::Type::ParamsChanged)
-        .value("PARAM_INFO_CHANGED", gil::ProcessorEvent::Type::ParamInfoChanged)
-        .value("EDITOR_CLOSED", gil::ProcessorEvent::Type::EditorClosed)
-        .value("EDITOR_REQUESTED", gil::ProcessorEvent::Type::EditorRequested)
-        .value("STATE_DIRTY", gil::ProcessorEvent::Type::StateDirty)
-        .value("LATENCY_CHANGED", gil::ProcessorEvent::Type::LatencyChanged)
-        .value("PARAM_TOUCHED", gil::ProcessorEvent::Type::ParamTouched);
+    nb::enum_<sub::ProcessorEvent::Type>(m, "ProcessorEventType")
+        .value("PARAM_EDITED", sub::ProcessorEvent::Type::ParamEdited)
+        .value("PARAMS_CHANGED", sub::ProcessorEvent::Type::ParamsChanged)
+        .value("PARAM_INFO_CHANGED", sub::ProcessorEvent::Type::ParamInfoChanged)
+        .value("EDITOR_CLOSED", sub::ProcessorEvent::Type::EditorClosed)
+        .value("EDITOR_REQUESTED", sub::ProcessorEvent::Type::EditorRequested)
+        .value("STATE_DIRTY", sub::ProcessorEvent::Type::StateDirty)
+        .value("LATENCY_CHANGED", sub::ProcessorEvent::Type::LatencyChanged)
+        .value("PARAM_TOUCHED", sub::ProcessorEvent::Type::ParamTouched);
 
-    nb::class_<gil::ProcessorEventRecord>(m, "ProcessorEvent")
-        .def_ro("processor_id", &gil::ProcessorEventRecord::processorId)
-        .def_prop_ro("type", [](const gil::ProcessorEventRecord& e) { return e.type; })
-        .def_prop_ro("param_index", [](const gil::ProcessorEventRecord& e) { return e.paramIndex; })
-        .def_prop_ro("value", [](const gil::ProcessorEventRecord& e) { return e.value; })
-        .def_prop_ro("old_value", [](const gil::ProcessorEventRecord& e) { return e.oldValue; })
-        .def_prop_ro("gesture", [](const gil::ProcessorEventRecord& e) { return e.gesture; })
-        .def("__repr__", [](const gil::ProcessorEventRecord& e) {
+    nb::class_<sub::ProcessorEventRecord>(m, "ProcessorEvent")
+        .def_ro("processor_id", &sub::ProcessorEventRecord::processorId)
+        .def_prop_ro("type", [](const sub::ProcessorEventRecord& e) { return e.type; })
+        .def_prop_ro("param_index", [](const sub::ProcessorEventRecord& e) { return e.paramIndex; })
+        .def_prop_ro("value", [](const sub::ProcessorEventRecord& e) { return e.value; })
+        .def_prop_ro("old_value", [](const sub::ProcessorEventRecord& e) { return e.oldValue; })
+        .def_prop_ro("gesture", [](const sub::ProcessorEventRecord& e) { return e.gesture; })
+        .def("__repr__", [](const sub::ProcessorEventRecord& e) {
             return "ProcessorEvent(" + std::to_string(e.processorId) + ", type=" +
                    std::to_string(static_cast<int>(e.type)) + ", param=" + std::to_string(e.paramIndex) + ")";
         });
 
-    nb::enum_<gil::MonitorMode>(m, "MonitorMode")
-        .value("OFF", gil::MonitorMode::Off)
-        .value("IN", gil::MonitorMode::In)
-        .value("AUTO", gil::MonitorMode::Auto);
+    nb::enum_<sub::MonitorMode>(m, "MonitorMode")
+        .value("OFF", sub::MonitorMode::Off)
+        .value("IN", sub::MonitorMode::In)
+        .value("AUTO", sub::MonitorMode::Auto);
     m.attr("RECORD_PEAK_FRAMES") = Engine::kRecordPeakFrames;
 
-    nb::class_<gil::RecordedTake>(m, "RecordedTake")
-        .def_ro("track_id", &gil::RecordedTake::trackId)
-        .def_ro("path", &gil::RecordedTake::path, "The WAV file; '' for a MIDI take.")
-        .def_ro("start_sample", &gil::RecordedTake::startSample,
+    nb::class_<sub::RecordedTake>(m, "RecordedTake")
+        .def_ro("track_id", &sub::RecordedTake::trackId)
+        .def_ro("path", &sub::RecordedTake::path, "The WAV file; '' for a MIDI take.")
+        .def_ro("start_sample", &sub::RecordedTake::startSample,
                 "Timeline sample of its first frame, latency-corrected (negative: it starts before the timeline). "
                 "A MIDI take starts where the playhead was when it began.")
-        .def_ro("midi", &gil::RecordedTake::midi)
-        .def_prop_ro("notes", [](const gil::RecordedTake& t) { return notesArray(t.notes); }, nb::rv_policy::automatic,
+        .def_ro("midi", &sub::RecordedTake::midi)
+        .def_prop_ro("notes", [](const sub::RecordedTake& t) { return notesArray(t.notes); }, nb::rv_policy::automatic,
                      "A MIDI take's notes, latency-corrected, as an int64 array of rows (start, end, key, velocity, "
                      "channel) in timeline samples, within the take.")
-        .def_ro("frames", &gil::RecordedTake::frames, "0: nothing was recorded, and there is no file.")
-        .def_ro("channels", &gil::RecordedTake::channels)
-        .def_ro("sample_rate", &gil::RecordedTake::sampleRate)
-        .def_ro("dropped_frames", &gil::RecordedTake::droppedFrames,
+        .def_ro("frames", &sub::RecordedTake::frames, "0: nothing was recorded, and there is no file.")
+        .def_ro("channels", &sub::RecordedTake::channels)
+        .def_ro("sample_rate", &sub::RecordedTake::sampleRate)
+        .def_ro("dropped_frames", &sub::RecordedTake::droppedFrames,
                 "Input lost because the disk fell behind (silence in the file).")
-        .def_ro("error", &gil::RecordedTake::error)
-        .def("__repr__", [](const gil::RecordedTake& t) {
+        .def_ro("error", &sub::RecordedTake::error)
+        .def("__repr__", [](const sub::RecordedTake& t) {
             return "RecordedTake(" + std::to_string(t.trackId) + ", '" + t.path + "', start=" +
                    std::to_string(t.startSample) + ", frames=" + std::to_string(t.frames) + ")";
         });
 
-    nb::class_<gil::RecordingProgress>(m, "RecordingProgress")
-        .def_ro("track_id", &gil::RecordingProgress::trackId)
-        .def_ro("started", &gil::RecordingProgress::started)
-        .def_ro("start_sample", &gil::RecordingProgress::startSample)
-        .def_ro("frames", &gil::RecordingProgress::frames)
+    nb::class_<sub::RecordingProgress>(m, "RecordingProgress")
+        .def_ro("track_id", &sub::RecordingProgress::trackId)
+        .def_ro("started", &sub::RecordingProgress::started)
+        .def_ro("start_sample", &sub::RecordingProgress::startSample)
+        .def_ro("frames", &sub::RecordingProgress::frames)
         .def_prop_ro(
             "peaks",
-            [](const gil::RecordingProgress& p) {
+            [](const sub::RecordingProgress& p) {
                 auto buffer = std::make_unique<std::vector<float>>(p.peaks);
                 const size_t rows = buffer->size() / 2;
                 float* data = buffer->data();
@@ -284,23 +284,23 @@ NB_MODULE(_engine, m) {
             },
             nb::rv_policy::automatic,
             "New (min, max) peaks since the last call, each over RECORD_PEAK_FRAMES frames: shape (n, 2).")
-        .def_ro("midi", &gil::RecordingProgress::midi)
-        .def_prop_ro("notes", [](const gil::RecordingProgress& p) { return notesArray(p.notes); },
+        .def_ro("midi", &sub::RecordingProgress::midi)
+        .def_prop_ro("notes", [](const sub::RecordingProgress& p) { return notesArray(p.notes); },
                      nb::rv_policy::automatic,
                      "A MIDI take's notes so far, as RecordedTake.notes has them (a held note's end is -1).");
 
-    nb::class_<gil::AudioClockStatus>(m, "AudioClock")
-        .def_ro("running", &gil::AudioClockStatus::running)
-        .def_ro("host_time_ns", &gil::AudioClockStatus::hostTimeNs, "When the last audio callback began (host_time_ns()).")
-        .def_ro("sample_time", &gil::AudioClockStatus::sampleTime, "The device sample it began with.")
-        .def_ro("midi_delay", &gil::AudioClockStatus::midiDelay,
+    nb::class_<sub::AudioClockStatus>(m, "AudioClock")
+        .def_ro("running", &sub::AudioClockStatus::running)
+        .def_ro("host_time_ns", &sub::AudioClockStatus::hostTimeNs, "When the last audio callback began (host_time_ns()).")
+        .def_ro("sample_time", &sub::AudioClockStatus::sampleTime, "The device sample it began with.")
+        .def_ro("midi_delay", &sub::AudioClockStatus::midiDelay,
                 "Samples between a MIDI message's arrival and when it plays (a device buffer).");
-    m.def("host_time_ns", &gil::hostTimeNs, "The clock MIDI input is stamped with (steady_clock), in ns.");
+    m.def("host_time_ns", &sub::hostTimeNs, "The clock MIDI input is stamped with (steady_clock), in ns.");
 
-    nb::class_<gil::TrackCost>(m, "TrackCost")
-        .def_ro("track_id", &gil::TrackCost::trackId)
-        .def_ro("ns_per_frame", &gil::TrackCost::nsPerFrame)
-        .def("__repr__", [](const gil::TrackCost& c) {
+    nb::class_<sub::TrackCost>(m, "TrackCost")
+        .def_ro("track_id", &sub::TrackCost::trackId)
+        .def_ro("ns_per_frame", &sub::TrackCost::nsPerFrame)
+        .def("__repr__", [](const sub::TrackCost& c) {
             return "TrackCost(" + std::to_string(c.trackId) + ", " + std::to_string(c.nsPerFrame) + " ns/frame)";
         });
     // The graph's queue order and ranks, for tests.
@@ -313,7 +313,7 @@ NB_MODULE(_engine, m) {
                 edges.emplace_back(static_cast<int>(i), to);
             }
         }
-        gil::TaskGraph graph(static_cast<int>(destinations.size()), edges);
+        sub::TaskGraph graph(static_cast<int>(destinations.size()), edges);
         std::vector<float> ranks;
         for (int i = 0; i < graph.size(); ++i) graph.setCost(i, costs[static_cast<size_t>(i)]);
         graph.orderRoots();
@@ -333,64 +333,64 @@ NB_MODULE(_engine, m) {
     m.def("task_graph_order", taskGraphOrder, "destinations"_a, "costs"_a,
           "As above, with any number of edges per node: node i goes into each of destinations[i].");
 
-    nb::class_<gil::SendInfo>(m, "SendInfo")
-        .def_ro("track_id", &gil::SendInfo::trackId, "The track it goes into.")
-        .def_ro("gain", &gil::SendInfo::gain)
-        .def_ro("pre_fader", &gil::SendInfo::preFader)
-        .def("__repr__", [](const gil::SendInfo& s) {
+    nb::class_<sub::SendInfo>(m, "SendInfo")
+        .def_ro("track_id", &sub::SendInfo::trackId, "The track it goes into.")
+        .def_ro("gain", &sub::SendInfo::gain)
+        .def_ro("pre_fader", &sub::SendInfo::preFader)
+        .def("__repr__", [](const sub::SendInfo& s) {
             return "SendInfo(" + std::to_string(s.trackId) + ", " + std::to_string(s.gain) +
                    (s.preFader ? ", pre-fader)" : ")");
         });
 
-    nb::class_<gil::MeterReading>(m, "MeterReading")
-        .def_ro("track_id", &gil::MeterReading::trackId)
-        .def_ro("left", &gil::MeterReading::left)
-        .def_ro("right", &gil::MeterReading::right)
-        .def_ro("chain_id", &gil::MeterReading::chainId, "A rack chain's fader (on track track_id); 0: the track's own.");
+    nb::class_<sub::MeterReading>(m, "MeterReading")
+        .def_ro("track_id", &sub::MeterReading::trackId)
+        .def_ro("left", &sub::MeterReading::left)
+        .def_ro("right", &sub::MeterReading::right)
+        .def_ro("chain_id", &sub::MeterReading::chainId, "A rack chain's fader (on track track_id); 0: the track's own.");
 
-    nb::enum_<gil::WarpMode>(m, "WarpMode")
-        .value("TRANSIENTS", gil::WarpMode::Transients)
-        .value("STANDARD", gil::WarpMode::Standard)
-        .value("SMOOTH", gil::WarpMode::Smooth)
-        .value("FORMANTS", gil::WarpMode::Formants)
-        .value("RE_PITCH", gil::WarpMode::RePitch);
+    nb::enum_<sub::WarpMode>(m, "WarpMode")
+        .value("TRANSIENTS", sub::WarpMode::Transients)
+        .value("STANDARD", sub::WarpMode::Standard)
+        .value("SMOOTH", sub::WarpMode::Smooth)
+        .value("FORMANTS", sub::WarpMode::Formants)
+        .value("RE_PITCH", sub::WarpMode::RePitch);
 
-    nb::class_<gil::ClipDesc>(m, "ClipDesc")
+    nb::class_<sub::ClipDesc>(m, "ClipDesc")
         .def(
             "__init__",
-            [](gil::ClipDesc* self, std::string path, double startBeat, double durationSec, double offsetSec,
-               float gain, float pan, bool warp, double segmentBpm, gil::WarpMode warpMode, double transpose,
+            [](sub::ClipDesc* self, std::string path, double startBeat, double durationSec, double offsetSec,
+               float gain, float pan, bool warp, double segmentBpm, sub::WarpMode warpMode, double transpose,
                std::string id) {
-                new (self) gil::ClipDesc{std::move(path), startBeat, durationSec, offsetSec, gain, pan,
+                new (self) sub::ClipDesc{std::move(path), startBeat, durationSec, offsetSec, gain, pan,
                                          warp, segmentBpm, warpMode, transpose, std::move(id)};
             },
             "path"_a, "start_beat"_a, "duration_sec"_a, "offset_sec"_a = 0.0, "gain"_a = 1.0f, nb::kw_only(),
-            "pan"_a = 0.0f, "warp"_a = false, "segment_bpm"_a = 0.0, "warp_mode"_a = gil::WarpMode::Standard,
+            "pan"_a = 0.0f, "warp"_a = false, "segment_bpm"_a = 0.0, "warp_mode"_a = sub::WarpMode::Standard,
             "transpose"_a = 0.0, "id"_a = "")
-        .def_rw("path", &gil::ClipDesc::path)
-        .def_rw("start_beat", &gil::ClipDesc::startBeat)
-        .def_rw("duration_sec", &gil::ClipDesc::durationSec)
-        .def_rw("offset_sec", &gil::ClipDesc::offsetSec)
-        .def_rw("gain", &gil::ClipDesc::gain)
-        .def_rw("pan", &gil::ClipDesc::pan)
-        .def_rw("warp", &gil::ClipDesc::warp)
-        .def_rw("segment_bpm", &gil::ClipDesc::segmentBpm)
-        .def_rw("warp_mode", &gil::ClipDesc::warpMode)
-        .def_rw("transpose", &gil::ClipDesc::transpose)
-        .def_rw("id", &gil::ClipDesc::id);
+        .def_rw("path", &sub::ClipDesc::path)
+        .def_rw("start_beat", &sub::ClipDesc::startBeat)
+        .def_rw("duration_sec", &sub::ClipDesc::durationSec)
+        .def_rw("offset_sec", &sub::ClipDesc::offsetSec)
+        .def_rw("gain", &sub::ClipDesc::gain)
+        .def_rw("pan", &sub::ClipDesc::pan)
+        .def_rw("warp", &sub::ClipDesc::warp)
+        .def_rw("segment_bpm", &sub::ClipDesc::segmentBpm)
+        .def_rw("warp_mode", &sub::ClipDesc::warpMode)
+        .def_rw("transpose", &sub::ClipDesc::transpose)
+        .def_rw("id", &sub::ClipDesc::id);
 
-    nb::class_<gil::NoteDesc>(m, "NoteDesc")
+    nb::class_<sub::NoteDesc>(m, "NoteDesc")
         .def(
             "__init__",
-            [](gil::NoteDesc* self, double startBeat, double lengthBeats, int key, int velocity) {
-                new (self) gil::NoteDesc{startBeat, lengthBeats, key, velocity};
+            [](sub::NoteDesc* self, double startBeat, double lengthBeats, int key, int velocity) {
+                new (self) sub::NoteDesc{startBeat, lengthBeats, key, velocity};
             },
             "start_beat"_a, "length_beats"_a, "key"_a, "velocity"_a = 100)
-        .def_rw("start_beat", &gil::NoteDesc::startBeat)
-        .def_rw("length_beats", &gil::NoteDesc::lengthBeats)
-        .def_rw("key", &gil::NoteDesc::key)
-        .def_rw("velocity", &gil::NoteDesc::velocity)
-        .def("__repr__", [](const gil::NoteDesc& n) {
+        .def_rw("start_beat", &sub::NoteDesc::startBeat)
+        .def_rw("length_beats", &sub::NoteDesc::lengthBeats)
+        .def_rw("key", &sub::NoteDesc::key)
+        .def_rw("velocity", &sub::NoteDesc::velocity)
+        .def("__repr__", [](const sub::NoteDesc& n) {
             return "NoteDesc(" + std::to_string(n.startBeat) + ", " + std::to_string(n.lengthBeats) + ", key=" +
                    std::to_string(n.key) + ", velocity=" + std::to_string(n.velocity) + ")";
         });
@@ -437,7 +437,7 @@ NB_MODULE(_engine, m) {
             [](Engine& self, const std::string& name, uint32_t sampleRate, uint32_t bufferFrames, bool exclusive,
                const std::string& driver, const std::vector<int>& inputChannels,
                const std::vector<int>& outputChannels, uintptr_t window) {
-                gil::DeviceConfig config;
+                sub::DeviceConfig config;
                 config.driver = driver;
                 config.name = name;
                 config.sampleRate = sampleRate;
@@ -551,7 +551,7 @@ NB_MODULE(_engine, m) {
              "Soloed chains are the only ones of their rack heard.")
         .def("processor_info", &Engine::processorInfo, "processor_id"_a)
         .def("set_processor_sidechain", &Engine::setProcessorSidechain, "processor_id"_a, "source_track_id"_a,
-             "tap"_a = gil::SidechainTap::PostFader, "tap_processor_id"_a = 0,
+             "tap"_a = sub::SidechainTap::PostFader, "tap_processor_id"_a = 0,
              "A device's sidechain (its aux input: ProcessorInfo.has_sidechain): a track's signal after its fader, "
              "before it, after one of its devices (tap_processor_id) or before them all (PRE_FX), lined up with the "
              "signal at the device. "
@@ -631,7 +631,7 @@ NB_MODULE(_engine, m) {
         .def(
             "start_recording",
             [](Engine& self, const std::vector<std::pair<uint32_t, std::string>>& targets, double countInBeats) {
-                std::vector<gil::RecordTarget> list;
+                std::vector<sub::RecordTarget> list;
                 for (const auto& [trackId, path] : targets) list.push_back({trackId, path});
                 nb::gil_scoped_release release;
                 self.startRecording(list, countInBeats);

@@ -18,7 +18,7 @@
 #include "Warp.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 
 // Per-track state that changes continuously and therefore lives outside the
 // snapshot. Shared between all snapshots that contain the track. The master
@@ -373,4 +373,4 @@ struct RenderSnapshot {
     double samplesPerBeat() const { return sampleRate * 60.0 / tempo; }
 };
 
-}  // namespace gil
+}  // namespace sub

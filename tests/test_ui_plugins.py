@@ -22,15 +22,15 @@ from PySide6.QtGui import (
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
-from gilstudio import _engine as ge
-from gilstudio.audio import engine_bridge
-from gilstudio.model import automation
-from gilstudio.model.automation import AutomationPoint
-from gilstudio.model.project import PLUGIN_KIND, PluginRef
-from gilstudio.ui.arrangement.lanes_canvas import DEVICE_MOVE_MIME
-from gilstudio.ui.browser.browser_models import plugin_refs
-from gilstudio.ui.browser.file_index import plugin_ref
-from gilstudio.ui.device_panel import PluginDeviceWidget
+from substation import _engine as ge
+from substation.audio import engine_bridge
+from substation.model import automation
+from substation.model.automation import AutomationPoint
+from substation.model.project import PLUGIN_KIND, PluginRef
+from substation.ui.arrangement.lanes_canvas import DEVICE_MOVE_MIME
+from substation.ui.browser.browser_models import plugin_refs
+from substation.ui.browser.file_index import plugin_ref
+from substation.ui.device_panel import PluginDeviceWidget
 
 from .conftest import TEST_PLUGINS
 from .test_ui_smoke import drag, settle, wait_until
@@ -51,7 +51,7 @@ def installed(window) -> dict[str, PluginRef]:
 
 
 def synth_track(window):
-    track = window.editor.add_midi_track(instrument=None, plugin=installed(window)["GIL Test Synth"])
+    track = window.editor.add_midi_track(instrument=None, plugin=installed(window)["SUB Test Synth"])
     window.selection.select_track(track.id)
     [device] = track.devices
     return track, device
@@ -74,20 +74,20 @@ def test_plugins_in_the_browser(window):
     browser.sidebar.setCurrentItem(plugins.child(1))
     settle(browser)
     names = [browser.list_model.item(browser.list_model.index(i)).name for i in range(browser.list_model.rowCount())]
-    assert names == ["GIL Test Effect", "GIL Test Mono", "GIL Test Sidechain"]
+    assert names == ["SUB Test Effect", "SUB Test Mono", "SUB Test Sidechain"]
     assert browser.status.text() == "3 plug-ins"
     browser.sidebar.setCurrentItem(plugins.child(0))
     settle(browser)
     index = browser.list_model.index(0)
     item = browser.list_model.item(index)
-    assert item.name == "GIL Test Synth" and item.detail == "GIL Studio" and "Instrument" in item.tooltip
-    assert plugin_refs(browser.list_model.mimeData([index])) == [refs["GIL Test Synth"]]
+    assert item.name == "SUB Test Synth" and item.detail == "SUBstation" and "Instrument" in item.tooltip
+    assert plugin_refs(browser.list_model.mimeData([index])) == [refs["SUB Test Synth"]]
 
     # Double-clicking an instrument with no MIDI track selected makes one for it.
     browser._activate_list(index)
     [track] = window.project.tracks
     [device] = track.devices
-    assert track.is_midi and device.kind == PLUGIN_KIND and device.plugin == refs["GIL Test Synth"]
+    assert track.is_midi and device.kind == PLUGIN_KIND and device.plugin == refs["SUB Test Synth"]
     widget = window.devices.widgets[device.id]
     assert isinstance(widget, PluginDeviceWidget)
     # The generic editor offers what the user can change (not the read-only
@@ -123,7 +123,7 @@ def test_showing_a_plugin_opens_no_stray_windows(window):
     spy = _WindowsShown()
     QApplication.instance().installEventFilter(spy)
     try:
-        track = window.editor.add_midi_track(instrument=None, plugin=refs["GIL Test Synth"])
+        track = window.editor.add_midi_track(instrument=None, plugin=refs["SUB Test Synth"])
         window.selection.select_track(track.id)
     finally:
         QApplication.instance().removeEventFilter(spy)
@@ -172,7 +172,7 @@ def test_a_plugin_reporting_its_own_changes_makes_no_undo_steps(window):
     a shown editor are the user's."""
     track = window.editor.add_audio_track(name="Bus")
     window.selection.select_track(track.id, focus_track=True)
-    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
     window.editor.group_devices(track.id, [device.id])
     window.duplicate()
     [copy] = [t for t in window.project.tracks if t.id in window.selection.track_ids]
@@ -203,12 +203,12 @@ def test_a_plugin_reporting_its_own_changes_makes_no_undo_steps(window):
 def test_edits_in_the_plugin_editor_are_undoable(window):
     track = window.editor.add_audio_track(name="Drums")
     window.selection.select_track(track.id)
-    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
     pid = engine_id(window, track, device)
     widget = window.devices.widgets[device.id]
     widget.edit.click()  # shows the editor
     assert widget.edit.isChecked() and window.engine.is_editor_open(pid)
-    frame = editor_window("GIL Test Effect - Drums")
+    frame = editor_window("SUB Test Effect - Drums")
     view = user32.GetWindow(frame, 5)
     commands = window.undo_stack.count()
 
@@ -224,7 +224,7 @@ def test_edits_in_the_plugin_editor_are_undoable(window):
 
     # Renaming the track renames the editor window.
     window.editor.rename_track(track.id, "Loops")
-    assert editor_window("GIL Test Effect - Loops") == frame
+    assert editor_window("SUB Test Effect - Loops") == frame
     # Closing the window unchecks the button.
     user32.SendMessageW(frame, 0x0010, 0, 0)  # WM_CLOSE
     poll(window)
@@ -239,7 +239,7 @@ def test_automating_plugin_parameters(window):
     centre = QPoint(knob.width() // 2, knob.height() // 2)
     drag(knob, centre, centre + QPoint(0, 30))  # turning it shows its automation
     assert window.project.track(track.id).automation_view.key == key
-    assert window.arrangement.headers.headers[track.id].automation.main.device.text() == "GIL Test Synth"
+    assert window.arrangement.headers.headers[track.id].automation.main.device.text() == "SUB Test Synth"
     assert window.bridge.param_spec(track.id, key).name == "Gain"
     # An envelope drives it: the plug-in, its controller and the knob follow.
     window.editor.set_envelope(track.id, key, (AutomationPoint(0.0, 0.25),))
@@ -262,7 +262,7 @@ def test_automating_plugin_parameters(window):
 def test_edits_in_a_plugin_editor_override_its_automation(window):
     track = window.editor.add_audio_track(name="Drums")
     window.selection.select_track(track.id)
-    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
     pid = engine_id(window, track, device)
     key = automation.device_key(device.id, str(FX_GAIN))
     window.editor.set_envelope(track.id, key, (AutomationPoint(0.0, 0.8),))
@@ -271,7 +271,7 @@ def test_edits_in_a_plugin_editor_override_its_automation(window):
     assert window.engine.processor_param(pid, FX_GAIN) == pytest.approx(0.8)
     widget = window.devices.widgets[device.id]
     widget.edit.click()  # shows the editor
-    view = user32.GetWindow(editor_window("GIL Test Effect - Drums"), 5)
+    view = user32.GetWindow(editor_window("SUB Test Effect - Drums"), 5)
     user32.SendMessageW(view, EDIT_GAIN, 0, 0)  # the editor sets 0.3
     poll(window)
     assert window.bridge.is_overridden(track.id, key)
@@ -303,11 +303,11 @@ def test_devices_fit_the_device_view(window):
 
 
 def test_double_click_opens_and_ctrl_w_closes_the_editor(window, monkeypatch):
-    from gilstudio.ui import plugin_keys
+    from substation.ui import plugin_keys
 
     track = window.editor.add_audio_track(name="Keys")
     window.selection.select_track(track.id)
-    effect = installed(window)["GIL Test Effect"]
+    effect = installed(window)["SUB Test Effect"]
     first = window.editor.add_device(track.id, PLUGIN_KIND, plugin=effect)
     second = window.editor.add_device(track.id, PLUGIN_KIND, plugin=effect)
     for device in (first, second):
@@ -348,10 +348,10 @@ def test_double_click_opens_and_ctrl_w_closes_the_editor(window, monkeypatch):
 
 def test_plugin_changes_mark_the_project_changed(window, tmp_path):
     track = window.editor.add_audio_track()
-    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
     assert window._save_to(tmp_path / "song.gilproj") and window.undo_stack.isClean()
     window.bridge.open_plugin_editor(track.id, device.id)
-    view = user32.GetWindow(editor_window(f"GIL Test Effect - {track.name}"), 5)
+    view = user32.GetWindow(editor_window(f"SUB Test Effect - {track.name}"), 5)
     user32.SendMessageW(view, 0x403, 0, 0)  # the plug-in says its state changed
     poll(window)
     assert not window.undo_stack.isClean() and window.windowTitle().startswith("song*")
@@ -384,7 +384,7 @@ def test_projects_keep_plugins_and_their_state(window, tmp_path):
     path = tmp_path / "song.gilproj"
     assert window._save_to(path)
     [saved] = json.loads(path.read_text(encoding="utf-8"))["tracks"][0]["devices"]
-    assert saved["kind"] == "plugin" and saved["plugin"]["name"] == "GIL Test Synth"
+    assert saved["kind"] == "plugin" and saved["plugin"]["name"] == "SUB Test Synth"
     assert saved["plugin"]["path"] == str(TEST_PLUGINS) and saved["plugin"]["instrument"] is True
     assert base64.b64decode(saved["state"])[:4] == b"VST3"
 
@@ -401,7 +401,7 @@ def test_missing_and_moved_plugins(window, tmp_path):
     window._save_to(path)
     data = json.loads(path.read_text(encoding="utf-8"))
     devices = data["tracks"][0]["devices"]
-    devices[0]["plugin"]["path"] = str(tmp_path / "moved away" / "GILTestPlugins.vst3")  # found by its id
+    devices[0]["plugin"]["path"] = str(tmp_path / "moved away" / "SUBTestPlugins.vst3")  # found by its id
     devices.append(json.loads(json.dumps(devices[0])) | {"id": "gone"})
     devices[1]["plugin"] |= {"uid": "0" * 32, "name": "Gone Synth", "instrument": False}
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -418,7 +418,7 @@ def test_missing_and_moved_plugins(window, tmp_path):
     window._save_to(path)
     kept = json.loads(path.read_text(encoding="utf-8"))["tracks"][0]["devices"]
     assert kept[1]["plugin"]["name"] == "Gone Synth" and kept[1]["state"] == devices[1]["state"]
-    assert kept[0]["plugin"]["path"] == refs["GIL Test Synth"].path  # remembers where it was found
+    assert kept[0]["plugin"]["path"] == refs["SUB Test Synth"].path  # remembers where it was found
 
 
 def test_dropping_plugins(window):
@@ -434,16 +434,16 @@ def test_dropping_plugins(window):
     row = arrangement.layout_model.rows[0]
     on_track = QPointF(40, row.top - arrangement.view.scroll_y + 10)
 
-    lanes.dropEvent(drop(on_track, mime["GIL Test Effect"]))
-    assert [d.plugin for d in audio.devices] == [refs["GIL Test Effect"]]
-    lanes.dropEvent(drop(on_track, mime["GIL Test Synth"]))  # not on an audio track
+    lanes.dropEvent(drop(on_track, mime["SUB Test Effect"]))
+    assert [d.plugin for d in audio.devices] == [refs["SUB Test Effect"]]
+    lanes.dropEvent(drop(on_track, mime["SUB Test Synth"]))  # not on an audio track
     assert len(audio.devices) == 1 and "MIDI" in window.statusBar().currentMessage()
     below = QPointF(40, arrangement.layout_model.total_height + 20)
-    lanes.dropEvent(drop(below, mime["GIL Test Synth"]))  # below the tracks: a new MIDI track
+    lanes.dropEvent(drop(below, mime["SUB Test Synth"]))  # below the tracks: a new MIDI track
     midi = window.project.tracks[1]
-    assert midi.is_midi and [d.plugin.name for d in midi.devices] == ["GIL Test Synth"]
-    window.devices.dropEvent(drop(QPointF(20, 20), mime["GIL Test Mono"]))  # the track shown
-    assert [d.plugin.name for d in midi.devices] == ["GIL Test Synth", "GIL Test Mono"]
+    assert midi.is_midi and [d.plugin.name for d in midi.devices] == ["SUB Test Synth"]
+    window.devices.dropEvent(drop(QPointF(20, 20), mime["SUB Test Mono"]))  # the track shown
+    assert [d.plugin.name for d in midi.devices] == ["SUB Test Synth", "SUB Test Mono"]
 
 
 def test_dragging_a_device_to_another_track_moves_its_processor(window):
@@ -452,7 +452,7 @@ def test_dragging_a_device_to_another_track_moves_its_processor(window):
     window.insert_track()
     a, b = window.project.tracks
     utility = window.editor.add_device(b.id, "utility")
-    effect = window.editor.add_device(a.id, PLUGIN_KIND, plugin=refs["GIL Test Effect"])
+    effect = window.editor.add_device(a.id, PLUGIN_KIND, plugin=refs["SUB Test Effect"])
     pid = engine_id(window, a, effect)
     window.engine.set_processor_param(pid, FX_GAIN, 0.3)  # as if changed in its editor: only the plug-in knows
     key = automation.device_key(effect.id, str(FX_GAIN))
@@ -506,26 +506,26 @@ def test_presets(window, tmp_path, monkeypatch):
     assert window.engine.processor_param(pid, GAIN) == pytest.approx(0.8)
 
     # Another plug-in's preset is refused, and changes nothing.
-    other = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    other = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
     window.devices.widgets[other.id].save_preset()
     commands = window.undo_stack.count()
     widget = window.devices.widgets[device.id]
     widget.load_preset()
-    assert window.undo_stack.count() == commands and "not for GIL Test Synth" in window.statusBar().currentMessage()
+    assert window.undo_stack.count() == commands and "not for SUB Test Synth" in window.statusBar().currentMessage()
 
 
 def test_editor_follows_its_device(window):
     track = window.editor.add_audio_track(name="Bass")
-    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
     assert window.bridge.open_plugin_editor(track.id, device.id)
-    assert editor_window("GIL Test Effect - Bass")
+    assert editor_window("SUB Test Effect - Bass")
     window.editor.remove_device(track.id, device.id)  # its editor closes with it
-    assert not editor_window("GIL Test Effect - Bass")
+    assert not editor_window("SUB Test Effect - Bass")
     window.undo_stack.undo()
     assert window.bridge.open_plugin_editor(track.id, device.id)
     window.undo_stack.setClean()  # no "save changes?" question
     window.close()  # and they all close with the main window
-    assert not editor_window("GIL Test Effect - Bass")
+    assert not editor_window("SUB Test Effect - Bass")
     QTest.qWait(1)
 
 
@@ -536,7 +536,7 @@ def window_rect(hwnd) -> tuple[int, int, int, int]:
 
 
 def test_plugin_editors_follow_the_selected_track(window):
-    effect = installed(window)["GIL Test Effect"]
+    effect = installed(window)["SUB Test Effect"]
     drums = window.editor.add_audio_track(name="Drums")
     bass = window.editor.add_audio_track(name="Bass")
     window.selection.select_track(drums.id)
@@ -545,7 +545,7 @@ def test_plugin_editors_follow_the_selected_track(window):
     QTest.qWait(1)
     assert window.bridge.is_plugin_editor_open(drums.id, on_drums.id)
     assert window.devices.widgets[on_drums.id].edit.isChecked()
-    drums_frame = editor_window("GIL Test Effect - Drums")
+    drums_frame = editor_window("SUB Test Effect - Drums")
     user32.SetWindowPos(drums_frame, None, 40, 50, 0, 0, 0x0001 | 0x0004 | 0x0010)  # moved by the user
     place = window_rect(drums_frame)
 
@@ -557,7 +557,7 @@ def test_plugin_editors_follow_the_selected_track(window):
     QTest.qWait(1)
     assert window.bridge.is_plugin_editor_open(bass.id, on_bass.id)
     window.devices.widgets[on_bass.id].edit.click()  # the user closes it
-    assert not editor_window("GIL Test Effect - Bass")
+    assert not editor_window("SUB Test Effect - Bass")
 
     # Coming back shows the editor again, where it was; the one closed stays closed.
     window.selection.select_track(drums.id)
@@ -587,7 +587,7 @@ def test_selecting_deleting_and_reordering_devices(window):
     refs = installed(window)
     track, synth = synth_track(window)
     effects = [window.editor.add_device(track.id, PLUGIN_KIND, plugin=refs[name])
-               for name in ("GIL Test Effect", "GIL Test Mono", "GIL Test Effect")]
+               for name in ("SUB Test Effect", "SUB Test Mono", "SUB Test Effect")]
     window.editor.add_device(track.id, "utility")
     panel = window.devices
     chain = lambda: [d.id for d in window.project.track(track.id).devices]
@@ -622,7 +622,7 @@ def test_selecting_deleting_and_reordering_devices(window):
     # Dragging effects (selected together) reorders them; the instrument stays first.
     def drop_before(device_id, moving):
         mime = QMimeData()
-        mime.setData("application/x-gilstudio-device-move", "\n".join([track.id, *moving]).encode())
+        mime.setData("application/x-substation-device-move", "\n".join([track.id, *moving]).encode())
         widget = panel.widgets[device_id]
         pos = widget.mapTo(panel, QPoint(2, widget.height() // 2))
         panel.dropEvent(drop(QPointF(pos), mime))
@@ -657,19 +657,19 @@ def test_device_view_review_fixes(window, monkeypatch):
     def drop_at(device_id, *plugins, kinds=()):
         mime = QMimeData()
         if plugins:
-            mime.setData("application/x-gilstudio-plugin", json.dumps([asdict(refs[n]) for n in plugins]).encode())
+            mime.setData("application/x-substation-plugin", json.dumps([asdict(refs[n]) for n in plugins]).encode())
         if kinds:
-            mime.setData("application/x-gilstudio-device", json.dumps(list(kinds)).encode())
+            mime.setData("application/x-substation-device", json.dumps(list(kinds)).encode())
         QTest.qWait(1)  # the rebuilt device view laid out
         widget = panel.widgets[device_id]
         panel.dropEvent(drop(QPointF(widget.mapTo(panel, QPoint(2, widget.height() // 2))), mime))
 
-    drop_at(fx2, "GIL Test Synth", "GIL Test Effect")  # between the two utilities
+    drop_at(fx2, "SUB Test Synth", "SUB Test Effect")  # between the two utilities
     synth, _, effect, _ = chain()
     assert chain() == [synth, fx1, effect, fx2]
-    drop_at(synth, "GIL Test Mono", "GIL Test Effect")  # before the instrument: right after it, in order
+    drop_at(synth, "SUB Test Mono", "SUB Test Effect")  # before the instrument: right after it, in order
     names = [d.plugin.name if d.plugin else d.kind for d in window.project.track(track.id).devices]
-    assert names[1:3] == ["GIL Test Mono", "GIL Test Effect"] and chain()[0] == synth and chain()[3:] == [fx1, effect, fx2]
+    assert names[1:3] == ["SUB Test Mono", "SUB Test Effect"] and chain()[0] == synth and chain()[3:] == [fx1, effect, fx2]
 
     # With the devices in focus, a second Delete doesn't delete clips selected before.
     clip = window.editor.add_midi_clip(track.id, 0.0, 4.0)
@@ -684,7 +684,7 @@ def test_device_view_review_fixes(window, monkeypatch):
     assert not window.bridge.is_plugin_editor_open(track.id, effect)
     window.editor.rename_track(track.id, "Sub")
     window.selection.select_track(track.id)
-    assert window.bridge.is_plugin_editor_open(track.id, effect) and editor_window("GIL Test Effect - Sub")
+    assert window.bridge.is_plugin_editor_open(track.id, effect) and editor_window("SUB Test Effect - Sub")
 
     # Reopening an editor may change the chains (a plug-in running a message loop).
     window.selection.select_track(None)
@@ -716,7 +716,7 @@ class _EngineWithEvents:
 
 
 def test_plugin_editor_review_fixes(window, monkeypatch):
-    effect = installed(window)["GIL Test Effect"]
+    effect = installed(window)["SUB Test Effect"]
     bridge = window.bridge
 
     def track_with_editor(name):
@@ -742,7 +742,7 @@ def test_plugin_editor_review_fixes(window, monkeypatch):
     asks = SimpleNamespace(type=ge.ProcessorEventType.EDITOR_REQUESTED, processor_id=engine_id(window, one, on_one))
     monkeypatch.setattr(bridge, "engine", _EngineWithEvents(window.engine, [asks]))
     poll(window)
-    assert not editor_window("GIL Test Effect - One")
+    assert not editor_window("SUB Test Effect - One")
     monkeypatch.setattr(bridge, "engine", window.engine)
     window.selection.select_track(one.id)
     assert bridge.is_plugin_editor_open(one.id, on_one.id)
@@ -752,15 +752,15 @@ def test_plugin_editor_review_fixes(window, monkeypatch):
     # opens again where it was when its track is shown.
     monkeypatch.setattr(engine_bridge, "MAX_HIDDEN_EDITORS", 2)
     tracks = [track_with_editor("Hidden 0")]
-    user32.SetWindowPos(editor_window("GIL Test Effect - Hidden 0"), None, 40, 50, 0, 0,
+    user32.SetWindowPos(editor_window("SUB Test Effect - Hidden 0"), None, 40, 50, 0, 0,
                         0x0001 | 0x0004 | 0x0010)  # moved by the user
     tracks += [track_with_editor(f"Hidden {i}") for i in range(1, 4)]
     window.selection.select_track(two.id)  # hides the last one too: 4 hidden
-    assert not editor_window("GIL Test Effect - Hidden 0") and not editor_window("GIL Test Effect - Hidden 1")
-    assert editor_window("GIL Test Effect - Hidden 2") and editor_window("GIL Test Effect - Hidden 3")
+    assert not editor_window("SUB Test Effect - Hidden 0") and not editor_window("SUB Test Effect - Hidden 1")
+    assert editor_window("SUB Test Effect - Hidden 2") and editor_window("SUB Test Effect - Hidden 3")
     window.selection.select_track(tracks[0][0].id)
     assert bridge.is_plugin_editor_open(tracks[0][0].id, tracks[0][1].id)
-    assert window_rect(editor_window("GIL Test Effect - Hidden 0"))[:2] == (40, 50)
+    assert window_rect(editor_window("SUB Test Effect - Hidden 0"))[:2] == (40, 50)
     window.undo_stack.setClean()
 
 
@@ -775,7 +775,7 @@ def test_dragging_devices_scrolls_the_chain(window):
     QTest.qWait(1)  # scrolled to the last device added
     bar.setValue(0)
     mime = QMimeData()
-    mime.setData("application/x-gilstudio-device-move", f"{track.id}\n{track.devices[0].id}".encode())
+    mime.setData("application/x-substation-device-move", f"{track.id}\n{track.devices[0].id}".encode())
     viewport = panel.scroll.viewport()
 
     def drag_to(x):
@@ -845,7 +845,7 @@ def test_adding_a_plugin_scrolls_to_it(window):
 
     # Added from the browser while scrolled to the start: the chain scrolls to it.
     bar.setValue(0)
-    window.add_device_to_selected_track(PLUGIN_KIND, refs["GIL Test Effect"])
+    window.add_device_to_selected_track(PLUGIN_KIND, refs["SUB Test Effect"])
     added = track.devices[-1].id
     assert wait_until(lambda: bar.value() > 0) and in_view(added)
 
@@ -853,10 +853,10 @@ def test_adding_a_plugin_scrolls_to_it(window):
     # an instrument, which goes first.
     bar.setValue(bar.maximum())
     mime = QMimeData()
-    mime.setData("application/x-gilstudio-plugin", json.dumps([asdict(refs["GIL Test Synth"])]).encode())
+    mime.setData("application/x-substation-plugin", json.dumps([asdict(refs["SUB Test Synth"])]).encode())
     last = panel.widgets[added]
     panel.dropEvent(drop(QPointF(last.mapTo(panel, QPoint(2, last.height() // 2))), mime))
-    assert track.devices[0].plugin == refs["GIL Test Synth"]
+    assert track.devices[0].plugin == refs["SUB Test Synth"]
     QTest.qWait(50)
     assert in_view(added) and not in_view(track.devices[0].id)
 
@@ -864,8 +864,8 @@ def test_adding_a_plugin_scrolls_to_it(window):
 def test_plugin_folders_in_preferences(window, tmp_path):
     import shutil
 
-    from gilstudio.plugins.settings import custom_folders
-    from gilstudio.ui.dialogs import PreferencesDialog
+    from substation.plugins.settings import custom_folders
+    from substation.ui.dialogs import PreferencesDialog
 
     index = window.browser.plugin_index
     before = len(installed(window))
@@ -910,7 +910,7 @@ def test_effects_on_the_master(window, tmp_path):
     chain, which takes effects (not instruments), plays and saves like a track's."""
     import numpy as np
 
-    from gilstudio.model.automation import MASTER
+    from substation.model.automation import MASTER
 
     from .conftest import SAMPLE_RATE, write_wav
 
@@ -931,7 +931,7 @@ def test_effects_on_the_master(window, tmp_path):
     assert window.engine.render_offline(0.0, 8000)[6000, 0] == pytest.approx(0.25, rel=1e-3)
     assert window.editor.add_device(MASTER, "synth") is None  # instruments go on MIDI tracks
 
-    effect = window.editor.add_device(MASTER, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    effect = window.editor.add_device(MASTER, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
     assert window.bridge.engine_device_id(MASTER, effect.id) is not None
     assert [d.id for d in window.project.master.devices] == [utility.id, effect.id]
     poll(window)

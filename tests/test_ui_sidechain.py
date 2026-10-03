@@ -7,8 +7,8 @@ devices, Post FX (before its fader) or Post Mixer (after it)."""
 
 import pytest
 
-from gilstudio.model.automation import MASTER
-from gilstudio.model.project import (
+from substation.model.automation import MASTER
+from substation.model.project import (
     PLUGIN_KIND,
     POST_FADER,
     PRE_FADER,
@@ -35,8 +35,8 @@ def test_the_sidechain_button(window, app):
     group = editor.group_tracks([bass.id])
     ret = editor.add_return_track()
     window.selection.select_track(bass.id)
-    keyed = editor.add_device(bass.id, PLUGIN_KIND, plugin=refs["GIL Test Sidechain"])
-    plain = editor.add_device(bass.id, PLUGIN_KIND, plugin=refs["GIL Test Effect"])
+    keyed = editor.add_device(bass.id, PLUGIN_KIND, plugin=refs["SUB Test Sidechain"])
+    plain = editor.add_device(bass.id, PLUGIN_KIND, plugin=refs["SUB Test Effect"])
     app.processEvents()
     widget = window.devices.widgets[keyed.id]
     assert window.devices.widgets[plain.id].sidechain is None  # no sidechain input: no button
@@ -104,7 +104,7 @@ def test_the_masters_devices_take_any_track(window, app):
     editor = window.editor
     track = editor.add_audio_track(name="Kick")
     window.selection.select_track(MASTER)
-    keyed = editor.add_device(MASTER, PLUGIN_KIND, plugin=installed(window)["GIL Test Sidechain"])
+    keyed = editor.add_device(MASTER, PLUGIN_KIND, plugin=installed(window)["SUB Test Sidechain"])
     app.processEvents()
     choices = actions(window.devices.widgets[keyed.id].sidechain_menu())
     assert list(choices) == ["No Sidechain", "Kick"] and choices["Kick"].isEnabled()

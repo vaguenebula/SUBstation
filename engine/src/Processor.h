@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace gil {
+namespace sub {
 
 // A timestamped event delivered to a processor within a block. The renderer
 // sends each track's notes to every processor on the track (audio effects
@@ -281,4 +281,4 @@ private:
     size_t numAutomation_ = 0;
 };
 
-}  // namespace gil
+}  // namespace sub

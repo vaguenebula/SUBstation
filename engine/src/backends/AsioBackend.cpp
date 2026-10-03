@@ -16,7 +16,7 @@
 //  * When the driver's settings change (in its control panel, or its clock) it
 //    asks for a reset, and the UI thread closes it and opens it again
 //    (Engine::reopenDevice) with the buffer size and sample rate it now has.
-//  * GILSTUDIO_ASIO_DRIVERS lists drivers to use instead of the installed ones,
+//  * SUBSTATION_ASIO_DRIVERS lists drivers to use instead of the installed ones,
 //    loaded straight from their DLLs, unregistered (the tests' driver):
 //    "Name|{CLSID}|C:\path\driver.dll", several separated by ';'.
 
@@ -40,7 +40,7 @@
 #include "AsioSupport.h"
 #include "iasiodrv.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -122,7 +122,7 @@ struct DriverEntry {
     std::string name;
     CLSID clsid{};
     std::wstring server;  // its DLL (InprocServer32)
-    bool viaCom = true;   // false: from GILSTUDIO_ASIO_DRIVERS, loaded from `server` rather than through COM
+    bool viaCom = true;   // false: from SUBSTATION_ASIO_DRIVERS, loaded from `server` rather than through COM
 };
 
 std::wstring registryString(HKEY key, const std::wstring& subKey, const wchar_t* value, DWORD types) {
@@ -149,9 +149,9 @@ std::wstring serverOf(const std::wstring& clsid) {
 
 std::vector<DriverEntry> listDrivers() {
     std::vector<DriverEntry> drivers;
-    if (const DWORD needed = GetEnvironmentVariableW(L"GILSTUDIO_ASIO_DRIVERS", nullptr, 0); needed > 0) {
+    if (const DWORD needed = GetEnvironmentVariableW(L"SUBSTATION_ASIO_DRIVERS", nullptr, 0); needed > 0) {
         std::wstring list(needed, L'\0');
-        list.resize(GetEnvironmentVariableW(L"GILSTUDIO_ASIO_DRIVERS", list.data(), needed));
+        list.resize(GetEnvironmentVariableW(L"SUBSTATION_ASIO_DRIVERS", list.data(), needed));
         for (const std::wstring& item : split(list, L';')) {
             const std::vector<std::wstring> fields = split(item, L'|');
             DriverEntry driver;
@@ -480,7 +480,7 @@ private:
         for (const int channel : channels) {
             const long type = types[static_cast<size_t>(channel)];
             if (asio::sampleFormat(type).bytes == 0) {
-                throw std::runtime_error(name_ + " uses a sample format GIL Studio can't play (type " +
+                throw std::runtime_error(name_ + " uses a sample format SUBstation can't play (type " +
                                          std::to_string(type) + ")");
             }
             result.push_back(type);
@@ -690,4 +690,4 @@ long onMessage(long selector, long value, void*, double*) {
 
 std::unique_ptr<AudioBackend> createAsioBackend() { return std::make_unique<AsioBackend>(); }
 
-}  // namespace gil
+}  // namespace sub

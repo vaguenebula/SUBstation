@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace gil::browser::platform {
+namespace sub::browser::platform {
 
 struct Entry {
     std::wstring name;
@@ -66,4 +66,4 @@ private:
     bool armed_ = false;
 };
 
-}  // namespace gil::browser::platform
+}  // namespace sub::browser::platform

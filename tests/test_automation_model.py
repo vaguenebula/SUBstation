@@ -7,19 +7,19 @@ import math
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio import _engine as ge
-from gilstudio.model import automation as auto
-from gilstudio.model.automation import (
+from substation import _engine as ge
+from substation.model import automation as auto
+from substation.model.automation import (
     MASTER,
     MIXER_PAN,
     MIXER_VOLUME,
     AutomationPoint,
     AutomationView,
 )
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.params import ParamSpec, mixer_specs
-from gilstudio.model.project import Project
-from gilstudio.model.serialization import load_into, project_to_dict
+from substation.model.editor import ProjectEditor
+from substation.model.params import ParamSpec, mixer_specs
+from substation.model.project import Project
+from substation.model.serialization import load_into, project_to_dict
 
 
 def env(*points):
@@ -389,10 +389,10 @@ def test_moving_clips_by_reference_moves_their_automation(editor):
 
 
 def test_the_app_checks_the_engine_matches(monkeypatch):
-    import gilstudio
+    import substation
 
-    assert gilstudio.engine_mismatch() is None
-    monkeypatch.setattr(ge, "API_VERSION", gilstudio.ENGINE_API - 1)
-    assert "older code" in gilstudio.engine_mismatch() and "pip install" in gilstudio.engine_mismatch()
+    assert substation.engine_mismatch() is None
+    monkeypatch.setattr(ge, "API_VERSION", substation.ENGINE_API - 1)
+    assert "older code" in substation.engine_mismatch() and "pip install" in substation.engine_mismatch()
     monkeypatch.delattr(ge, "API_VERSION")  # built before there was one
-    assert "older code" in gilstudio.engine_mismatch()
+    assert "older code" in substation.engine_mismatch()

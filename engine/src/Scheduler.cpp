@@ -11,7 +11,7 @@
 
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 // How long an idle worker waits for the next run before it sleeps: consecutive
@@ -202,4 +202,4 @@ void Scheduler::workerMain(int worker) noexcept {
 #endif
 }
 
-}  // namespace gil
+}  // namespace sub

@@ -9,7 +9,7 @@
 #include "PathUtils.h"
 #include "miniaudio.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 // Runs a callable when the scope ends (used to resume live output).
@@ -154,4 +154,4 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
     ma_encoder_uninit(&encoder);
 }
 
-}  // namespace gil
+}  // namespace sub

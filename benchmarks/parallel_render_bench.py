@@ -32,16 +32,16 @@ from pathlib import Path
 
 import numpy as np
 
-from gilstudio import _engine as ge
+from substation import _engine as ge
 
 RATE = 48000
 SPB = RATE // 2  # samples per beat at 120 BPM
-TEST_ASIO = Path(ge.__file__).parent / "_testdrivers" / "GILTestAsio.dll"
-TEST_ASIO_NAME = "GIL Test ASIO"
+TEST_ASIO = Path(ge.__file__).parent / "_testdrivers" / "SUBTestAsio.dll"
+TEST_ASIO_NAME = "SUB Test ASIO"
 
 
 def noise_wav(seconds: float) -> str:
-    path = Path(tempfile.mkdtemp(prefix="gil-parallel-bench-")) / "noise.wav"
+    path = Path(tempfile.mkdtemp(prefix="sub-parallel-bench-")) / "noise.wav"
     rng = np.random.default_rng(0)
     pcm = np.round(rng.uniform(-0.25, 0.25, (int(seconds * RATE), 2)) * 32767).astype("<i2")
     with wave.open(str(path), "wb") as f:
@@ -119,7 +119,7 @@ class Driver:
         dll = ctypes.CDLL(str(TEST_ASIO))
         for name, restype, argtypes in [("Reset", None, []), ("SetManual", None, [ctypes.c_int]),
                                         ("Process", ctypes.c_int, [ctypes.c_int]), ("ClearOutput", None, [])]:
-            function = getattr(dll, "GilTestAsio_" + name)
+            function = getattr(dll, "SubTestAsio_" + name)
             function.restype, function.argtypes = restype, argtypes
             setattr(self, name, function)
         self.Reset()
@@ -203,7 +203,7 @@ def main() -> None:
         if "ASIO" not in ge.driver_types() or not TEST_ASIO.exists():
             print("\nLive: skipped (the engine was built without the ASIO SDK)")
         else:
-            os.environ["GILSTUDIO_ASIO_DRIVERS"] = (
+            os.environ["SUBSTATION_ASIO_DRIVERS"] = (
                 f"{TEST_ASIO_NAME}|{{5B2E8C1A-7F3D-4E6B-9C0A-1D2F3E4A5B6C}}|{TEST_ASIO}")
             print(f"\nLive, {args.live_seconds:g} s per run (time per buffer; load = time / buffer length):")
             print(f"{'buffer':>7} {'threads':>8} {'order':>8} {'mean':>9} {'p99':>9} {'max':>9} {'load':>7}")

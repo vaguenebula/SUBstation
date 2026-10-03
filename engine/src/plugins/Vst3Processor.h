@@ -42,7 +42,7 @@
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "public.sdk/source/vst/hosting/module.h"
 
-namespace gil::vst3 {
+namespace sub::vst3 {
 
 class Vst3Processor final : public Processor {
 public:
@@ -199,4 +199,4 @@ private:
     std::optional<EditorWindow::Position> editorPosition_;  // where the last editor was: the next opens there
 };
 
-}  // namespace gil::vst3
+}  // namespace sub::vst3

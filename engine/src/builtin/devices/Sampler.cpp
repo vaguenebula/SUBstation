@@ -26,7 +26,7 @@
 #include "builtin/BuiltinRegistry.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 constexpr int kMeterSamples = 256;
@@ -395,6 +395,6 @@ float SamplerProcessor::playhead() const noexcept {
     return static_cast<float>(std::min(1.0, newest->position / static_cast<double>(frames)));
 }
 
-GIL_REGISTER_BUILTIN(SamplerProcessor, Instrument);
+SUB_REGISTER_BUILTIN(SamplerProcessor, Instrument);
 
-}  // namespace gil
+}  // namespace sub

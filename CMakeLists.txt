@@ -1,15 +1,15 @@
 cmake_minimum_required(VERSION 3.26)
-project(gilstudio_engine LANGUAGES C CXX)
+project(substation_engine LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if (NOT WIN32)
-    message(WARNING "GIL Studio targets Windows (WASAPI, ASIO); other platforms are untested.")
+    message(WARNING "SUBstation targets Windows (WASAPI, ASIO); other platforms are untested.")
 endif()
 
-option(GILSTUDIO_TEST_PLUGINS "Build the VST3 plug-ins and the ASIO driver the tests use" ON)
-option(GILSTUDIO_ASIO "Build ASIO support (needs Steinberg's ASIO SDK, see below)" ON)
+option(SUBSTATION_TEST_PLUGINS "Build the VST3 plug-ins and the ASIO driver the tests use" ON)
+option(SUBSTATION_ASIO "Build ASIO support (needs Steinberg's ASIO SDK, see below)" ON)
 
 find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
 
@@ -32,7 +32,7 @@ endif()
 # --- VST3 SDK (MIT; the parts we use are vendored in engine/third_party/vst3sdk) ---
 set(VST3_SDK ${CMAKE_CURRENT_SOURCE_DIR}/engine/third_party/vst3sdk)
 
-function(gil_vst3_sdk_library name)
+function(sub_vst3_sdk_library name)
     add_library(${name} STATIC ${ARGN})
     target_include_directories(${name} SYSTEM PUBLIC ${VST3_SDK})
     target_compile_definitions(${name} PRIVATE UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS NOMINMAX)
@@ -43,7 +43,7 @@ function(gil_vst3_sdk_library name)
 endfunction()
 
 # Interfaces, the SDK's base library and helpers both sides use.
-gil_vst3_sdk_library(vst3_base
+sub_vst3_sdk_library(vst3_base
     ${VST3_SDK}/base/source/baseiids.cpp
     ${VST3_SDK}/base/source/fbuffer.cpp
     ${VST3_SDK}/base/source/fdebug.cpp
@@ -68,7 +68,7 @@ gil_vst3_sdk_library(vst3_base
     ${VST3_SDK}/public.sdk/source/vst/vstpresetfile.cpp)
 
 # The host side: loading modules, host context, component/controller connection.
-gil_vst3_sdk_library(vst3_hosting
+sub_vst3_sdk_library(vst3_hosting
     ${VST3_SDK}/public.sdk/source/vst/hosting/connectionproxy.cpp
     ${VST3_SDK}/public.sdk/source/vst/hosting/hostclasses.cpp
     ${VST3_SDK}/public.sdk/source/vst/hosting/module.cpp
@@ -83,16 +83,16 @@ set_target_properties(vst3_hosting PROPERTIES CXX_STANDARD 17)
 # Steinberg's ASIO SDK is not part of the repository: its licence doesn't allow
 # passing it on. Unzip it (https://www.steinberg.net/asiosdk) into the project
 # folder as it comes (.gitignore keeps asiosdk* folders out of git), or point
-# GILSTUDIO_ASIO_SDK (a CMake or environment variable) at it. Only its headers
+# SUBSTATION_ASIO_SDK (a CMake or environment variable) at it. Only its headers
 # are used. Without it the engine is built with WASAPI only.
-set(GILSTUDIO_ASIO_SDK "$ENV{GILSTUDIO_ASIO_SDK}" CACHE PATH "Steinberg's ASIO SDK: the folder containing common/iasiodrv.h")
+set(SUBSTATION_ASIO_SDK "$ENV{SUBSTATION_ASIO_SDK}" CACHE PATH "Steinberg's ASIO SDK: the folder containing common/iasiodrv.h")
 set(ASIO_SDK "")
-if (GILSTUDIO_ASIO)
-    if (GILSTUDIO_ASIO_SDK)
-        if (NOT EXISTS "${GILSTUDIO_ASIO_SDK}/common/iasiodrv.h")
-            message(FATAL_ERROR "GILSTUDIO_ASIO_SDK (${GILSTUDIO_ASIO_SDK}) has no common/iasiodrv.h")
+if (SUBSTATION_ASIO)
+    if (SUBSTATION_ASIO_SDK)
+        if (NOT EXISTS "${SUBSTATION_ASIO_SDK}/common/iasiodrv.h")
+            message(FATAL_ERROR "SUBSTATION_ASIO_SDK (${SUBSTATION_ASIO_SDK}) has no common/iasiodrv.h")
         endif()
-        set(ASIO_SDK "${GILSTUDIO_ASIO_SDK}")
+        set(ASIO_SDK "${SUBSTATION_ASIO_SDK}")
     else()
         # Any folder in the project folder, or one inside it (some unzip tools add
         # a level); else an asio* folder beside the project or in the drive's root.
@@ -117,7 +117,7 @@ if (GILSTUDIO_ASIO)
         message(STATUS "ASIO SDK: ${ASIO_SDK}")
     else()
         message(WARNING "ASIO SDK not found, so the engine is built without ASIO. Unzip the SDK from "
-                        "https://www.steinberg.net/asiosdk into ${CMAKE_CURRENT_SOURCE_DIR} or set GILSTUDIO_ASIO_SDK.")
+                        "https://www.steinberg.net/asiosdk into ${CMAKE_CURRENT_SOURCE_DIR} or set SUBSTATION_ASIO_SDK.")
     endif()
 endif()
 
@@ -160,43 +160,43 @@ target_compile_definitions(_engine PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _USE_MAT
 if (ASIO_SDK)
     target_sources(_engine PRIVATE engine/src/backends/AsioBackend.cpp)
     target_include_directories(_engine SYSTEM PRIVATE "${ASIO_SDK}/common")
-    target_compile_definitions(_engine PRIVATE GILSTUDIO_HAS_ASIO=1)
+    target_compile_definitions(_engine PRIVATE SUBSTATION_HAS_ASIO=1)
 endif()
 if (MSVC)
     target_compile_options(_engine PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
 endif()
 
-install(TARGETS _engine LIBRARY DESTINATION gilstudio)
+install(TARGETS _engine LIBRARY DESTINATION substation)
 
 # --- Browser backend -----------------------------------------------------------
 # The browser's file index and search (browser/src), independent of the engine:
-# its own threads, its own module (gilstudio._browser).
-add_library(gil_browser STATIC
+# its own threads, its own module (substation._browser).
+add_library(sub_browser STATIC
     browser/src/Browser.cpp
     browser/src/Indexer.cpp
     browser/src/Model.cpp
     browser/src/Platform.cpp
     browser/src/Search.cpp
     browser/src/Text.cpp)
-target_include_directories(gil_browser PUBLIC browser/src)
-target_compile_definitions(gil_browser PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
-set_target_properties(gil_browser PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(sub_browser PUBLIC browser/src)
+target_compile_definitions(sub_browser PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+set_target_properties(sub_browser PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if (MSVC)
-    target_compile_options(gil_browser PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
+    target_compile_options(sub_browser PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
 endif()
 
 nanobind_add_module(_browser NB_STATIC browser/src/bindings.cpp)
-target_link_libraries(_browser PRIVATE gil_browser)
+target_link_libraries(_browser PRIVATE sub_browser)
 if (MSVC)
     target_compile_options(_browser PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
 endif()
-install(TARGETS _browser LIBRARY DESTINATION gilstudio)
+install(TARGETS _browser LIBRARY DESTINATION substation)
 
 # --- Test plug-ins ------------------------------------------------------------
 # One VST3 bundle with a test instrument and effects (tests/vst3_plugins), installed
 # next to the engine so the tests can find it.
-if (GILSTUDIO_TEST_PLUGINS)
-    gil_vst3_sdk_library(vst3_plugin_sdk
+if (SUBSTATION_TEST_PLUGINS)
+    sub_vst3_sdk_library(vst3_plugin_sdk
         ${VST3_SDK}/public.sdk/source/common/pluginview.cpp
         ${VST3_SDK}/public.sdk/source/main/pluginfactory.cpp
         ${VST3_SDK}/public.sdk/source/vst/vstaudioeffect.cpp
@@ -210,31 +210,31 @@ if (GILSTUDIO_TEST_PLUGINS)
     # vsteditcontroller.cpp is compiled on its own, not inside vstsinglecomponenteffect.cpp.
     target_compile_definitions(vst3_plugin_sdk PRIVATE PROJECT_INCLUDES_VSTEDITCONTROLLER=1)
 
-    add_library(gil_test_plugins MODULE
+    add_library(sub_test_plugins MODULE
         tests/vst3_plugins/test_plugins.cpp
         tests/vst3_plugins/test_effect.cpp
         tests/vst3_plugins/test_sidechain.cpp
         ${VST3_SDK}/public.sdk/source/main/dllmain.cpp)
-    target_link_libraries(gil_test_plugins PRIVATE vst3_plugin_sdk user32 gdi32)
-    target_compile_definitions(gil_test_plugins PRIVATE UNICODE _UNICODE NOMINMAX)
-    set_target_properties(gil_test_plugins PROPERTIES OUTPUT_NAME "GILTestPlugins" PREFIX "" SUFFIX ".vst3")
+    target_link_libraries(sub_test_plugins PRIVATE vst3_plugin_sdk user32 gdi32)
+    target_compile_definitions(sub_test_plugins PRIVATE UNICODE _UNICODE NOMINMAX)
+    set_target_properties(sub_test_plugins PROPERTIES OUTPUT_NAME "SUBTestPlugins" PREFIX "" SUFFIX ".vst3")
     if (MSVC)
-        target_compile_options(gil_test_plugins PRIVATE /W3 /utf-8 /Zc:__cplusplus)
+        target_compile_options(sub_test_plugins PRIVATE /W3 /utf-8 /Zc:__cplusplus)
     endif()
-    install(TARGETS gil_test_plugins
-            LIBRARY DESTINATION gilstudio/_testplugins/GILTestPlugins.vst3/Contents/x86_64-win)
+    install(TARGETS sub_test_plugins
+            LIBRARY DESTINATION substation/_testplugins/SUBTestPlugins.vst3/Contents/x86_64-win)
 
     # A fake ASIO driver (tests/asio_driver), installed next to the engine. The
-    # tests load it through GILSTUDIO_ASIO_DRIVERS; it is never registered.
+    # tests load it through SUBSTATION_ASIO_DRIVERS; it is never registered.
     if (ASIO_SDK)
-        add_library(gil_test_asio MODULE tests/asio_driver/test_asio_driver.cpp tests/asio_driver/test_asio_driver.def)
-        target_include_directories(gil_test_asio SYSTEM PRIVATE "${ASIO_SDK}/common")
-        target_link_libraries(gil_test_asio PRIVATE ole32 uuid)
-        target_compile_definitions(gil_test_asio PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-        set_target_properties(gil_test_asio PROPERTIES OUTPUT_NAME "GILTestAsio" PREFIX "")
+        add_library(sub_test_asio MODULE tests/asio_driver/test_asio_driver.cpp tests/asio_driver/test_asio_driver.def)
+        target_include_directories(sub_test_asio SYSTEM PRIVATE "${ASIO_SDK}/common")
+        target_link_libraries(sub_test_asio PRIVATE ole32 uuid)
+        target_compile_definitions(sub_test_asio PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+        set_target_properties(sub_test_asio PROPERTIES OUTPUT_NAME "SUBTestAsio" PREFIX "")
         if (MSVC)
-            target_compile_options(gil_test_asio PRIVATE /W3 /utf-8)
+            target_compile_options(sub_test_asio PRIVATE /W3 /utf-8)
         endif()
-        install(TARGETS gil_test_asio LIBRARY DESTINATION gilstudio/_testdrivers)
+        install(TARGETS sub_test_asio LIBRARY DESTINATION substation/_testdrivers)
     endif()
 endif()

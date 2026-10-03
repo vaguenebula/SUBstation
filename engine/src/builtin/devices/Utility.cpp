@@ -4,7 +4,7 @@
 #include "builtin/BuiltinRegistry.h"
 #include "rt/RtUtils.h"
 
-namespace gil {
+namespace sub {
 namespace {
 
 class UtilityProcessor final : public BuiltinProcessor {
@@ -76,6 +76,6 @@ private:
 
 }  // namespace
 
-GIL_REGISTER_BUILTIN(UtilityProcessor, AudioEffect);
+SUB_REGISTER_BUILTIN(UtilityProcessor, AudioEffect);
 
-}  // namespace gil
+}  // namespace sub

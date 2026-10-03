@@ -10,7 +10,7 @@
 #include <iterator>
 #include <vector>
 
-namespace gil::asio {
+namespace sub::asio {
 
 enum SampleType : long {
     Int16MSB = 0,
@@ -192,4 +192,4 @@ inline long chooseBufferSize(uint32_t requested, long minSize, long maxSize, lon
     return best;
 }
 
-}  // namespace gil::asio
+}  // namespace sub::asio

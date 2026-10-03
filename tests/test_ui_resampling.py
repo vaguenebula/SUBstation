@@ -7,7 +7,7 @@ step."""
 import numpy as np
 import pytest
 
-from gilstudio.model.automation import MASTER
+from substation.model.automation import MASTER
 
 from .test_asio import pytestmark  # noqa: F401 - skipped without ASIO
 from .test_ui_recording import (  # noqa: F401

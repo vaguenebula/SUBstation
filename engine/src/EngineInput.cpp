@@ -8,7 +8,7 @@
 
 #include "Routing.h"
 
-namespace gil {
+namespace sub {
 
 // ---------------------------------------------------------------------------
 // Input and recording
@@ -274,4 +274,4 @@ AudioClockStatus Engine::audioClock() const {
     return {clock.running, clock.hostTimeNs, clock.sampleTime, shared_.midiInputDelay.load()};
 }
 
-}  // namespace gil
+}  // namespace sub

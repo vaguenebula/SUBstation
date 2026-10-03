@@ -14,7 +14,7 @@
 #include <memory>
 #include <vector>
 
-namespace gil {
+namespace sub {
 
 struct ClipRender;
 
@@ -69,4 +69,4 @@ using WarpVoiceSet = std::array<std::vector<std::shared_ptr<WarpVoice>>, kNumStr
 // Writes (does not add) `frames` frames starting at timeline sample `position`.
 void renderResampled(const ClipRender& clip, int64_t position, int frames, float* outL, float* outR) noexcept;
 
-}  // namespace gil
+}  // namespace sub

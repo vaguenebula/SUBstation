@@ -1,5 +1,5 @@
 // Filtering and ordering, exactly as the browser's Python search did it
-// (see src/gilstudio/ui/browser/search.py for the orders):
+// (see src/substation/ui/browser/search.py for the orders):
 //
 //   An item matches when every word of the query is in its lower-case name or
 //   detail (folder, vendor, category).
@@ -19,7 +19,7 @@
 
 #include "Model.h"
 
-namespace gil::browser {
+namespace sub::browser {
 
 // How well the query's terms match a lower-case name: in the name beats in its
 // detail, and at the start of the name or of a word beats the middle of one.
@@ -46,4 +46,4 @@ struct SearchInputs {
 std::shared_ptr<Result> runSearch(const Query& query, uint64_t generation, const SearchInputs& inputs,
                                   const std::atomic<uint64_t>& latest, UsageCache& cache);
 
-}  // namespace gil::browser
+}  // namespace sub::browser

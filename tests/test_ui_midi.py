@@ -7,9 +7,9 @@ from PySide6.QtGui import QDropEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from gilstudio.model.project import MidiClip, Note
-from gilstudio.ui.browser.browser_models import device_kinds
-from gilstudio.ui.piano_roll.note_tools import SHOW_MS
+from substation.model.project import MidiClip, Note
+from substation.ui.browser.browser_models import device_kinds
+from substation.ui.piano_roll.note_tools import SHOW_MS
 
 from .conftest import SAMPLE_RATE, write_wav
 from .test_ui_smoke import drag, settle, tone

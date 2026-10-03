@@ -6,7 +6,7 @@
 
 #include "Text.h"
 
-namespace gil::browser {
+namespace sub::browser {
 
 namespace {
 
@@ -340,4 +340,4 @@ std::shared_ptr<Result> runSearch(const Query& query, uint64_t generation, const
     return Search(query, generation, inputs, latest, cache).run();
 }
 
-}  // namespace gil::browser
+}  // namespace sub::browser

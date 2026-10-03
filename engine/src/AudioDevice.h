@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace gil {
+namespace sub {
 
 struct AudioDeviceInfo {
     std::string name;
@@ -153,4 +153,4 @@ private:
     bool hasConfig_ = false;
 };
 
-}  // namespace gil
+}  // namespace sub

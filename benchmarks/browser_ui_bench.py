@@ -18,7 +18,7 @@ wall clock at worst (a late audio callback is a dropout, and leaves it behind).
 
 Only surfaces that the browser had before and after its native backend are used,
 so the same script measures both: --code runs it with another copy of the
-gilstudio package (say, from before; see benchmarks/README.md). Nothing touches the
+substation package (say, from before; see benchmarks/README.md). Nothing touches the
 user's settings, library or plug-ins: settings, use counts, the index and the
 plug-in paths are all temporary."""
 
@@ -39,12 +39,12 @@ def _parse_args():
     parser.add_argument("--size", type=int, default=200_000)
     parser.add_argument("--audio", action="store_true", help="play (silently) through the default output")
     parser.add_argument("--json", help="write the report here")
-    parser.add_argument("--code", help="a folder holding the gilstudio package to measure instead")
+    parser.add_argument("--code", help="a folder holding the substation package to measure instead")
     return parser.parse_args()
 
 
 def _use_code(folder: str) -> None:
-    """Import gilstudio from `folder` instead of the (editable) installation."""
+    """Import substation from `folder` instead of the (editable) installation."""
     sys.meta_path[:] = [f for f in sys.meta_path if not type(f).__module__.startswith("_editable_")]
     sys.path.insert(0, folder)
 
@@ -55,11 +55,11 @@ if __name__ == "__main__":
         _use_code(ARGS.code)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-_tmp = Path(tempfile.mkdtemp(prefix="gil-ui-bench-"))
-os.environ["GILSTUDIO_LIBRARY"] = str(_tmp / "library.json")
-os.environ["GILSTUDIO_BROWSER_INDEX"] = str(_tmp / "browser-index.bin")
-os.environ["GILSTUDIO_PLUGIN_CACHE"] = str(_tmp / "vst3-cache.json")
-os.environ["GILSTUDIO_VST3_PATH"] = str(_tmp / "no-plugins")
+_tmp = Path(tempfile.mkdtemp(prefix="sub-ui-bench-"))
+os.environ["SUBSTATION_LIBRARY"] = str(_tmp / "library.json")
+os.environ["SUBSTATION_BROWSER_INDEX"] = str(_tmp / "browser-index.bin")
+os.environ["SUBSTATION_PLUGIN_CACHE"] = str(_tmp / "vst3-cache.json")
+os.environ["SUBSTATION_VST3_PATH"] = str(_tmp / "no-plugins")
 (_tmp / "no-plugins").mkdir()
 
 from PySide6.QtCore import (  # noqa: E402
@@ -178,7 +178,7 @@ def indexed_files(browser) -> int:
 
 
 def select(browser, scope: tuple) -> None:
-    from gilstudio.ui.browser.browser_panel import ROLE_SCOPE
+    from substation.ui.browser.browser_panel import ROLE_SCOPE
 
     sidebar = browser.sidebar
     items = [sidebar.topLevelItem(i) for i in range(sidebar.topLevelItemCount())]
@@ -230,7 +230,7 @@ def query_once(app, browser, watch: ResultWatch, text: str) -> dict:
 
 
 def new_panel(bridge):
-    from gilstudio.ui.browser.browser_panel import BrowserPanel
+    from substation.ui.browser.browser_panel import BrowserPanel
 
     browser = BrowserPanel(bridge)
     browser.resize(320, 800)
@@ -240,26 +240,26 @@ def new_panel(bridge):
 
 def run(size: int, audio: bool) -> dict:
     root = make_library(size)
-    QCoreApplication.setOrganizationName("GIL Studio Bench")
-    QCoreApplication.setApplicationName("GIL Studio Bench")
+    QCoreApplication.setOrganizationName("SUBstation Bench")
+    QCoreApplication.setApplicationName("SUBstation Bench")
     app = QApplication.instance() or QApplication([])
     settings = QSettings()
     settings.clear()
     settings.setValue("browser/places", [str(root)])
     settings.setValue("browser/sort", "rank")
 
-    import gilstudio
-    from gilstudio import _engine as ge
-    from gilstudio.audio.engine_bridge import EngineBridge
-    from gilstudio.model.project import Project
-    from gilstudio.ui.browser import (
+    import substation
+    from substation import _engine as ge
+    from substation.audio.engine_bridge import EngineBridge
+    from substation.model.project import Project
+    from substation.ui.browser import (
         browser_panel,  # noqa: F401  (imported before anything is timed)
     )
 
     engine = ge.Engine()
     bridge = EngineBridge(engine, Project())
     report: dict = {"size": size, "library": str(root), "audio": audio, "python": sys.version.split()[0],
-                    "code": str(Path(gilstudio.__file__).parent)}
+                    "code": str(Path(substation.__file__).parent)}
     playback = Playback(engine)
     if audio:
         _start_playback(engine)
@@ -357,7 +357,7 @@ def _start_playback(engine) -> None:
 
     import numpy as np
 
-    from gilstudio import _engine as ge
+    from substation import _engine as ge
 
     engine.open_device()
     engine.set_master_gain(0.0)

@@ -14,7 +14,7 @@
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "rt/RtUtils.h"
 
-namespace gil::vst3 {
+namespace sub::vst3 {
 
 using Steinberg::int32;
 using Steinberg::tresult;
@@ -24,7 +24,7 @@ using Steinberg::Vst::ParamValue;
 
 // FUnknown for objects the host owns: plug-ins may addRef/release them, but
 // their lifetime is the host's business.
-#define GIL_HOST_OWNED_FUNKNOWN(Interface)                                                   \
+#define SUB_HOST_OWNED_FUNKNOWN(Interface)                                                   \
     tresult PLUGIN_API queryInterface(const Steinberg::TUID queried, void** obj) override {  \
         if (Steinberg::FUnknownPrivate::iidEqual(queried, Interface::iid) ||                \
             Steinberg::FUnknownPrivate::iidEqual(queried, Steinberg::FUnknown::iid)) {      \
@@ -115,7 +115,7 @@ public:
     tresult PLUGIN_API addEvent(Steinberg::Vst::Event& event) override {
         return add(event) ? Steinberg::kResultOk : Steinberg::kOutOfMemory;
     }
-    GIL_HOST_OWNED_FUNKNOWN(Steinberg::Vst::IEventList)
+    SUB_HOST_OWNED_FUNKNOWN(Steinberg::Vst::IEventList)
 
 private:
     std::vector<Steinberg::Vst::Event> events_;
@@ -163,7 +163,7 @@ public:
         index = at;
         return Steinberg::kResultOk;
     }
-    GIL_HOST_OWNED_FUNKNOWN(Steinberg::Vst::IParamValueQueue)
+    SUB_HOST_OWNED_FUNKNOWN(Steinberg::Vst::IParamValueQueue)
 
 private:
     struct Point {
@@ -219,7 +219,7 @@ public:
         index = used_;
         return &queues_[used_++];
     }
-    GIL_HOST_OWNED_FUNKNOWN(Steinberg::Vst::IParameterChanges)
+    SUB_HOST_OWNED_FUNKNOWN(Steinberg::Vst::IParameterChanges)
 
 private:
     std::vector<HostParamQueue> queues_;
@@ -250,4 +250,4 @@ private:
     SpscQueue<ParamChange, 4096> queue_;
 };
 
-}  // namespace gil::vst3
+}  // namespace sub::vst3

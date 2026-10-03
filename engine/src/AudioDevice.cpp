@@ -3,20 +3,20 @@
 #include <stdexcept>
 
 #include "backends/WasapiBackend.h"
-#if GILSTUDIO_HAS_ASIO
+#if SUBSTATION_HAS_ASIO
 #include "backends/AsioBackend.h"
 #endif
 
-namespace gil {
+namespace sub {
 
 AudioDevice::AudioDevice() {
-#if GILSTUDIO_HAS_ASIO
+#if SUBSTATION_HAS_ASIO
     // First: ASIO needs this thread in a single-threaded COM apartment, which
     // miniaudio would otherwise make multithreaded.
     auto asio = createAsioBackend();
 #endif
     backends_.push_back(std::make_unique<WasapiBackend>());
-#if GILSTUDIO_HAS_ASIO
+#if SUBSTATION_HAS_ASIO
     backends_.push_back(std::move(asio));
 #endif
 }
@@ -24,7 +24,7 @@ AudioDevice::AudioDevice() {
 AudioDevice::~AudioDevice() { close(); }
 
 std::vector<std::string> AudioDevice::driverTypes() {
-#if GILSTUDIO_HAS_ASIO
+#if SUBSTATION_HAS_ASIO
     return {"WASAPI", "ASIO"};
 #else
     return {"WASAPI"};
@@ -35,7 +35,7 @@ AudioBackend& AudioDevice::backend(const std::string& driver) {
     for (auto& backend : backends_) {
         if (backend->name() == driver) return *backend;
     }
-    if (driver == "ASIO") throw std::runtime_error("This build of GIL Studio has no ASIO support (the ASIO SDK was missing)");
+    if (driver == "ASIO") throw std::runtime_error("This build of SUBstation has no ASIO support (the ASIO SDK was missing)");
     throw std::runtime_error("Unknown driver type: " + driver);
 }
 
@@ -78,4 +78,4 @@ void AudioDevice::refreshLatencies() {
     if (isOpen()) current_->refreshLatencies();
 }
 
-}  // namespace gil
+}  // namespace sub
