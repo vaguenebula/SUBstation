@@ -19,8 +19,10 @@ python -m benchmarks.browser_ui_bench --size 200000 [--audio] [--json out.json] 
   out and painted, and the longest time the UI thread couldn't run (a 1 ms timer's
   gaps). It only uses what the panel had before and after the native backend, so
   `--code DIR` runs it against another copy of the `substation` package, for example
-  the one before (`git archive 63776d3 src/substation`, with the built
-  `_engine*.pyd` copied into it; the engine didn't change).
+  the one before. Commit 63776d3 predates the rename to SUBstation, so its package is
+  `src/gilstudio`: extract it (`git archive 63776d3 src/gilstudio`), rename the folder
+  to `substation`, replace `gilstudio` with `substation` in its `.py` files, and copy
+  the built `_engine*.pyd` into it (the engine didn't change).
 - `--audio` plays an arrangement (8 tracks, half of them time-stretched) through the
   default output the whole time, silently (master gain 0). It reports the engine's
   CPU load, and how far its playhead fell behind the wall clock at worst: a late
