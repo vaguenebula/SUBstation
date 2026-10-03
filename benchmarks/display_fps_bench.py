@@ -12,7 +12,10 @@ difference. It does not include the window system's compositing or the engine's 
 thread, which are the same at either rate except for the number of frames presented.
 
 Also runs all displays together under a real 1 ms-timer stall probe at 30 and at 60 Hz
-(QTimer-driven, like the app) to read the longest stretch the UI thread couldn't run."""
+(QTimer-driven, like the app) to read the longest stretch the UI thread couldn't run.
+The probe's tick also paints synchronously with `render()`: offscreen, `update()` only
+paints the first window, so letting the event loop paint would leave most of the cost out.
+Its percentage is therefore the timer callbacks' own work (update plus paint)."""
 
 from __future__ import annotations
 
@@ -130,7 +133,7 @@ def _time_case(case: Case, seconds: float) -> dict:
 
 
 def _stall_probe(cases, hz: int, seconds: float) -> dict:
-    """All displays refreshed from one `hz` timer, while a 1 ms timer logs how late it fires."""
+    """All displays refreshed (updated and painted) from one `hz` timer, while a 1 ms timer logs how late it fires."""
     busy = 0.0
     gaps = []
     last = [time.perf_counter()]
@@ -162,7 +165,7 @@ def _stall_probe(cases, hz: int, seconds: float) -> dict:
     probe_timer.stop()
     tick_timer.stop()
     gaps = sorted(gaps[5:])
-    return {"hz": hz, "ui_busy_pct": busy / seconds * 100, "longest_gap_ms": gaps[-1] * 1e3,
+    return {"hz": hz, "tick_work_pct": busy / seconds * 100, "longest_gap_ms": gaps[-1] * 1e3,
             "p99_gap_ms": gaps[int(len(gaps) * 0.99)] * 1e3}
 
 
@@ -185,7 +188,7 @@ def main():
     for hz in (30, 60, 30, 60):  # twice, to show run-to-run noise
         report["stall"].append(_stall_probe(cases, hz, args.seconds))
         s = report["stall"][-1]
-        print(f"timer @ {hz} Hz: UI busy {s['ui_busy_pct']:.2f}%, p99 gap {s['p99_gap_ms']:.2f} ms, "
+        print(f"timer @ {hz} Hz: tick work {s['tick_work_pct']:.2f}%, p99 gap {s['p99_gap_ms']:.2f} ms, "
               f"longest gap {s['longest_gap_ms']:.2f} ms")
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))
