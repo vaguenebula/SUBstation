@@ -28,7 +28,8 @@ from ..audio.settings import (
     set_record_quantize,
 )
 from ..model import automation
-from ..model.editor import ProjectEditor, device_is_instrument, is_instrument
+from ..model.devices import device_is_instrument, is_instrument
+from ..model.editor import ProjectEditor
 from ..model.presets import default_device
 from ..model.project import PLUGIN_KIND, PluginRef, Project
 from ..model.serialization import (

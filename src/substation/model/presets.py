@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .editor import BUILTIN_DEVICES, kind_name
+from .devices import BUILTIN_DEVICES, kind_name
 from .project import PLUGIN_KIND, RACK_KIND, Device, PluginRef
 from .serialization import PRESET_EXTENSION, ProjectFileError, load_preset, save_preset
 

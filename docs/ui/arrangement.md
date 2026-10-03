@@ -21,7 +21,9 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 | [ruler.py](../../src/substation/ui/arrangement/ruler.py) | `TimelineRuler`: the loop brace strip and the scrub area |
 | [lanes_canvas.py](../../src/substation/ui/arrangement/lanes_canvas.py) | `LanesCanvas`: painting clips, group summaries, live takes, the selection, markers; hit-testing; mouse, wheel, keys, context menus, drag and drop; the clipboard; Alt+wheel resizing (`wheel_action`) |
 | [interactions.py](../../src/substation/ui/arrangement/interactions.py) | the clip gestures: `ClipGesture` (base), `MoveRangeGesture`, `TrimGesture`, `TimeSelectGesture`, `PanGesture` |
-| [track_headers.py](../../src/substation/ui/arrangement/track_headers.py) | `TrackHeader`, `TrackHeaderColumn`, `SendControls`, `MasterHeader`, `ReturnHeader`, `BusLane`, `MasterLane`; `duplicate_tracks()`, `automation_state()`, input menus |
+| [track_headers.py](../../src/substation/ui/arrangement/track_headers.py) | `TrackHeader`, `TrackHeaderColumn`; `duplicate_tracks()`, input menus |
+| [mixer_controls.py](../../src/substation/ui/arrangement/mixer_controls.py) | What every strip's header has: `volume_box()`, `pan_knob()`, `SendControls`; `automation_state()`, `show_mixer_values()` |
+| [bus_tracks.py](../../src/substation/ui/arrangement/bus_tracks.py) | The master and return tracks' rows: `MasterHeader`, `ReturnHeader`, `BusLane`, `MasterLane`; `return_rows()` |
 | [automation_lanes.py](../../src/substation/ui/arrangement/automation_lanes.py) | envelopes drawn and edited: `EnvelopeArea`, `Hover`, hit-testing, `trace()`, `draw_area()`, the automation gestures and `press()`/`hover()` |
 | [automation_header.py](../../src/substation/ui/arrangement/automation_header.py) | `AutomationControls`: the device and parameter choosers in a header |
 | [waveform_cache.py](../../src/substation/ui/arrangement/waveform_cache.py) | `render_tile()` (numpy rasterising) and `WaveformCache` (an LRU of `QImage` tiles) |
@@ -341,7 +343,9 @@ The canvas accepts three kinds of drops:
 
 ## Track headers
 
-[track_headers.py](../../src/substation/ui/arrangement/track_headers.py).
+[track_headers.py](../../src/substation/ui/arrangement/track_headers.py); their volume, pan and send controls are in
+[mixer_controls.py](../../src/substation/ui/arrangement/mixer_controls.py), the master's and returns' rows in
+[bus_tracks.py](../../src/substation/ui/arrangement/bus_tracks.py).
 
 ### TrackHeaderColumn
 
