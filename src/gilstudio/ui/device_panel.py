@@ -36,6 +36,20 @@ chain) into a rack; Ctrl+Shift+G ungroups a rack. Right-click a parameter of a
 device in a rack to map one of the rack's macros to it. A rack's save button
 saves it as a preset (everything in it, plug-ins' states and macros too);
 right-click beside the devices to load one.
+
+The fold button (a triangle, first on the title bar) folds a device to a
+narrow strip with its name; a folded rack hides its chains too. Click the
+triangle again (or double-click the strip) to unfold it. Ctrl+double-click a
+device (its title or background) to fold or unfold it too. With several devices selected,
+folding one of them folds them all. Folding is saved with the project, not an
+undo step.
+
+Ctrl+C, Ctrl+X and Ctrl+V (and Ctrl+D) copy, cut and paste (and duplicate) the
+selected devices while the device view has the focus (devices clicked, or the
+space beside them): pasted devices go after the selected ones, or at the end of
+the track's chain, as new devices with the same settings (plug-ins in their
+state when copied, sidechains kept where they can be). Their right-click menus
+have them too; right-click beside the devices to paste there.
 """
 
 from __future__ import annotations
@@ -139,6 +153,7 @@ RACK_PRESET_FILTER = f"GIL Studio Preset (*{PRESET_EXTENSION})"
 RACK_WIDTH = 420
 AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
 AUTOSCROLL_INTERVAL = 16  # ms
+FOLDED_WIDTH = 26  # a folded device: a strip with its name
 
 
 def _encode(state: bytes | None) -> str | None:
@@ -180,6 +195,31 @@ class _TitleLabel(QLabel):
         p.setPen(self.palette().color(QPalette.ColorRole.WindowText))
         text = p.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+
+
+class _VerticalTitle(QWidget):
+    """A folded device's name, reading upwards from near the top, as in Ableton (it takes the
+    device's title as it changes)."""
+
+    def __init__(self, title: QLabel):
+        super().__init__()
+        self.source = title
+        self.setFont(title.font())
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
+        self.setMinimumHeight(16)
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.fontMetrics().height(), 16)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setFont(self.font())
+        p.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        p.translate(0, self.height())
+        p.rotate(-90)
+        text = p.fontMetrics().elidedText(self.source.text(), Qt.TextElideMode.ElideRight, self.height())
+        p.drawText(0, 0, self.height(), self.width(), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                   text)
 
 
 class _TouchFilter(QObject):
@@ -224,9 +264,13 @@ class _DeviceFrame(QFrame):
         self.bridge = bridge
         self.instrument = device_is_instrument(device)
         self.selected = False
-        # What the menu's Delete (and Group) does; the device view makes it act on all its selected devices.
+        # What the menu's Delete (and Group, and folding) does; the device view makes it act on all its
+        # selected devices, and adds its clipboard's entries (Cut, Copy, Paste) to the menu.
         self.remove_selected = lambda: editor.remove_device(track_id, self.device_id)
         self.group_selected = lambda: editor.group_devices(track_id, [self.device_id])
+        self.toggle_fold = lambda: editor.set_devices_folded(track_id, [self.device_id], not self.folded)
+        self.clipboard_menu = None  # (menu) -> None
+        self.folded = editor.project.is_device_folded(device.id)
         self._press: QPoint | None = None
         self.setObjectName("device")
         self.setFixedWidth(self.device_width)
@@ -235,6 +279,8 @@ class _DeviceFrame(QFrame):
         self.pages = 1
         self.page = 0
 
+        self.fold_button = _header_button("", "Unfold" if self.folded else "Fold", icons.fold(self.folded))
+        self.fold_button.clicked.connect(lambda: self.toggle_fold())
         self.enabled = ToggleButton(role="activator", tooltip="Device On/Off")
         self.enabled.setFixedSize(14, 14)
         self.enabled.setChecked(device.enabled)
@@ -259,9 +305,11 @@ class _DeviceFrame(QFrame):
         self.header_bar = QFrame()
         self.header_bar.setObjectName("deviceHeader")
         self.header = QHBoxLayout(self.header_bar)
-        self.header.setContentsMargins(5, 2, 3, 2)
+        self.header.setContentsMargins(3, 2, 3, 2)
         self.header.setSpacing(3)
-        self.header.addWidget(self.enabled)
+        if not self.folded:
+            self.header.addWidget(self.fold_button)
+            self.header.addWidget(self.enabled)
         self.header.addSpacing(2)
         self.header.addWidget(self.title, 1)
         for widget in (self.sidechain, self.previous, self.page_label, self.next, self.save):
@@ -278,7 +326,19 @@ class _DeviceFrame(QFrame):
         outer.setContentsMargins(1, 1, 1, 1)  # inside the border
         outer.setSpacing(0)
         outer.addWidget(self.header_bar)
-        self.body = QVBoxLayout()
+        # Folded, a strip instead: the fold button, the on/off switch and the name, upwards.
+        self.folded_bar = QFrame()
+        self.folded_bar.setObjectName("deviceHeader")
+        strip = QVBoxLayout(self.folded_bar)
+        strip.setContentsMargins(2, 4, 2, 4)
+        strip.setSpacing(4)
+        if self.folded:
+            strip.addWidget(self.fold_button, 0, Qt.AlignmentFlag.AlignHCenter)
+            strip.addWidget(self.enabled, 0, Qt.AlignmentFlag.AlignHCenter)
+        strip.addWidget(_VerticalTitle(self.title), 1)  # (no alignment: it takes the height left)
+        outer.addWidget(self.folded_bar, 1)
+        self.body_widget = QWidget()  # what folding hides
+        self.body = QVBoxLayout(self.body_widget)
         self.body.setContentsMargins(8, 6, 8, 6)
         self.body.setSpacing(4)
         self.content = QHBoxLayout()  # the parameters, and whatever an editor shows beside them
@@ -287,7 +347,12 @@ class _DeviceFrame(QFrame):
         self.content.addLayout(self.params)
         self.body.addLayout(self.content)
         self.body.addStretch(1)
-        outer.addLayout(self.body)
+        outer.addWidget(self.body_widget, 1)
+        self.header_bar.setVisible(not self.folded)
+        self.body_widget.setVisible(not self.folded)
+        self.folded_bar.setVisible(self.folded)
+        if self.folded:
+            self.setFixedWidth(FOLDED_WIDTH)
 
     # --- Parameter pages -------------------------------------------------------------
 
@@ -446,7 +511,10 @@ class _DeviceFrame(QFrame):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self.open_editor()
+            if self.folded or event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.toggle_fold()  # (Ctrl+double-click folds it, as the triangle does)
+            else:
+                self.open_editor()
         event.accept()
 
     def open_editor(self) -> None:
@@ -456,6 +524,11 @@ class _DeviceFrame(QFrame):
         self.menu_requested.emit(self.device_id)
         menu = QMenu(self)
         self.add_menu_actions(menu)
+        menu.addAction("Unfold" if self.folded else "Fold", self.toggle_fold)
+        menu.addSeparator()
+        if self.clipboard_menu is not None:
+            self.clipboard_menu(menu)
+            menu.addSeparator()
         devices = self.editor.project.track(self.track_id).devices
         siblings = chain_devices(devices, container_of(devices, self.device_id))
         chain = [d.id for d in siblings]
@@ -598,6 +671,7 @@ class _TallestDevice(_DeviceFrame):
 def device_height(editor: ProjectEditor) -> int:
     """The height the tallest device needs."""
     probe = _TallestDevice(editor)
+    probe.body.activate()  # (now, not when Qt gets to it: the frame's layout sees the body's size)
     height = probe.minimumSizeHint().height()
     probe.deleteLater()
     return height
@@ -1006,6 +1080,8 @@ class DevicePanel(QFrame):
         self._pages: dict[str, int] = {}  # plug-in device id -> the parameter page it shows
         self.selected: list[str] = []  # selected device ids, in chain order
         self._anchor: str | None = None  # where a Shift-click range starts
+        self.clipboard: list[Device] = []  # devices copied or cut (Ctrl+C / Ctrl+X), as they were
+        self._clipboard_folded: frozenset[str] = frozenset()  # those of them (and in them) that were folded
         self.setAcceptDrops(True)
 
         self.chain = QWidget()
@@ -1055,6 +1131,7 @@ class DevicePanel(QFrame):
         self.project.device_param_changed.connect(self._on_param_changed)
         self.project.device_state_changed.connect(self._on_state_changed)
         self.project.chain_changed.connect(self._on_chain_changed)
+        self.project.devices_folded.connect(lambda tid: self.show_track(tid) if tid == self.track_id else None)
         self.project.reset.connect(lambda: self.show_track(None))
         self.project.track_removed.connect(lambda tid, _i: self.show_track(None) if tid == self.track_id else None)
         bridge.plugin_params_changed.connect(self._on_plugin_values)
@@ -1187,12 +1264,94 @@ class DevicePanel(QFrame):
             self.editor.undo_stack.endMacro()
         return True
 
+    # --- Folding -----------------------------------------------------------------------
+
+    def toggle_fold(self, device_id: str) -> None:
+        """Fold or unfold a device; when it is one of several selected, they all take its new state."""
+        if self.track_id is None:
+            return
+        devices = self.selected if device_id in self.selected else [device_id]
+        self.editor.set_devices_folded(self.track_id, devices, not self.project.is_device_folded(device_id))
+
+    # --- Clipboard -----------------------------------------------------------------------
+
+    def copy_selected(self) -> bool:
+        """Ctrl+C: copy the selected devices. False if none were selected."""
+        if not self.track_id or not self.selected:
+            return False
+        inside = {d.id for copied in self.editor.copy_devices(self.track_id, self.selected)
+                  for d in iter_devices([copied])}
+        self.bridge.store_plugin_states(inside)  # (the plug-ins' states as they are now)
+        self.clipboard = self.editor.copy_devices(self.track_id, self.selected)
+        self._clipboard_folded = frozenset(i for i in inside if self.project.is_device_folded(i))
+        return True
+
+    def cut_selected(self) -> bool:
+        """Ctrl+X: copy the selected devices and delete them. False if none were selected."""
+        return self.copy_selected() and self.delete_selected()
+
+    def paste(self, chain: str | None = None, index: int | None = None, after_selection: bool = True) -> bool:
+        """Ctrl+V: new devices like those copied, into a chain of the track shown
+        (`chain`, None: its own) before the device at `index` (None: last); by
+        default after the selected devices, if any. They are selected."""
+        if not self.clipboard:
+            self.status_message.emit("Nothing to paste: copy (Ctrl+C) or cut (Ctrl+X) devices first.")
+            return False
+        if self.track_id is None:
+            self.status_message.emit("Select a track to paste the devices onto.")
+            return False
+        if after_selection and self.selected:
+            chain = self._container(self.selected[-1])
+            index = self._container_ids(chain).index(self.selected[-1]) + 1
+        pasted = self.editor.paste_devices(self.track_id, self.clipboard, index, chain, self._clipboard_folded)
+        if len(pasted) < len(self.clipboard):
+            instrument_refused = not self.project.track(self.track_id).is_midi and any(
+                device_is_instrument(d) for d in self.clipboard)
+            self.status_message.emit(INSTRUMENT_REFUSED if instrument_refused else
+                                     "The devices can't all go there: racks nest at most 8 deep.")
+        if not pasted:
+            return False
+        self._set_selected([d.id for d in pasted])
+        self._anchor = pasted[-1].id
+        return True
+
+    def duplicate_selected(self) -> bool:
+        """Ctrl+D: copies of the selected devices right after them (what was copied stays copied)."""
+        clipboard, folded = self.clipboard, self._clipboard_folded
+        try:
+            return self.copy_selected() and self.paste()
+        finally:
+            self.clipboard, self._clipboard_folded = clipboard, folded
+
+    def _clipboard_actions(self, menu: QMenu, device_id: str) -> None:
+        """A device's right-click menu: Cut, Copy and Duplicate (it, or the selected
+        devices), and Paste after it."""
+        def add(text: str, slot, key: str):
+            action = menu.addAction(text, slot)
+            action.setShortcut(key)  # (as a tip: the window's action handles the key)
+            action.setShortcutVisibleInContextMenu(True)
+            return action
+
+        add("Cut", self.cut_selected, "Ctrl+X")
+        add("Copy", self.copy_selected, "Ctrl+C")
+        add("Paste", lambda: self._paste_after(device_id), "Ctrl+V").setEnabled(bool(self.clipboard))
+        add("Duplicate", self.duplicate_selected, "Ctrl+D")
+
+    def _paste_after(self, device_id: str) -> None:
+        if self.track_id is not None and self.project.has_device(self.track_id, device_id):
+            chain = self._container(device_id)
+            self.paste(chain, self._container_ids(chain).index(device_id) + 1, after_selection=False)
+
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        """Beside the devices: load a preset there."""
+        """Beside the devices: paste there, or load a preset there."""
         if self.track_id is None:
             return
         chain, index = self.drop_target(event.pos())
+        self.selection.focus_devices()
         menu = QMenu(self)
+        paste = menu.addAction("Paste", lambda: self.paste(chain, index, after_selection=False))
+        paste.setEnabled(bool(self.clipboard))
+        menu.addSeparator()
         menu.addAction("Load Preset…", lambda: self.load_preset(chain, index))
         menu.exec(event.globalPos())
 
@@ -1216,6 +1375,8 @@ class DevicePanel(QFrame):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._set_selected([])  # a click beside the devices
+            if self.track_id is not None:
+                self.selection.focus_devices()  # (Ctrl+V pastes here)
 
     # --- Scrolling by hand -------------------------------------------------------------
 
@@ -1266,7 +1427,7 @@ class DevicePanel(QFrame):
         track's own; the innermost rack chain shown there, or the one whose row
         it is on in a rack's chain list: last), and the index in it."""
         for widget in self.widgets.values():
-            if isinstance(widget, RackWidget) and widget.isVisible():
+            if isinstance(widget, RackWidget) and widget.chains.isVisible():  # (not folded)
                 list_pos = widget.chains.mapFrom(self, pos)
                 chain_id = widget.chains.chain_at(list_pos) if widget.chains.rect().contains(list_pos) else None
                 if chain_id is not None:
@@ -1335,7 +1496,7 @@ class DevicePanel(QFrame):
             for widget in self._current_widgets():  # a sidechain's source may have lost (or got back) its tap
                 widget.update_sidechain()
             return
-        devices = list(iter_devices(self.project.track(track_id).devices))
+        devices = self._shown_devices(self.project.track(track_id).devices)
         if not rebuild and len(self.widgets) == len(devices) and all(
                 self.widgets.get(d.id) is not None and self.widgets[d.id].source is d for d in devices):
             # The same devices in the same places (one switched on or off, a rack's macros mapped): no need to rebuild.
@@ -1427,6 +1588,20 @@ class DevicePanel(QFrame):
         self.selected = []
         self._set_selected(kept)
 
+    def _shown_chain(self, rack: Device) -> Chain:
+        """The chain a rack shows (the one last clicked, else its first)."""
+        return next((c for c in rack.chains if c.id == self._shown_chains.get(rack.id)), rack.chains[0])
+
+    def _shown_devices(self, devices: list[Device]) -> list[Device]:
+        """The devices _add_devices shows of these: those in the chain each
+        rack shows (not a folded one's), after it."""
+        shown = []
+        for device in devices:
+            shown.append(device)
+            if device.is_rack and device.chains and not self.project.is_device_folded(device.id):
+                shown += self._shown_devices(self._shown_chain(device).devices)
+        return shown
+
     def _add_devices(self, layout: QHBoxLayout, track_id: str, devices: list[Device]) -> None:
         """A chain's devices into a layout; after a rack, the chain it shows (and so on, inside)."""
         for device in devices:
@@ -1441,15 +1616,17 @@ class DevicePanel(QFrame):
             widget.drag_started.connect(self._start_drag)
             widget.menu_requested.connect(self._on_device_menu)
             widget.remove_selected = self.delete_selected
+            widget.toggle_fold = lambda i=device.id: self.toggle_fold(i)
+            widget.clipboard_menu = lambda menu, i=device.id: self._clipboard_actions(menu, i)
             widget.group_selected = lambda w=widget: (self.group_selected() if w.device_id in self.selected
                                                       else self.editor.group_devices(track_id, [w.device_id]))
             self.widgets[device.id] = widget
             layout.addWidget(widget)
             widget.show()  # now, not on Qt's next pass, so the chain can be laid out at once
-            if not isinstance(widget, RackWidget) or not device.chains:
+            if not isinstance(widget, RackWidget) or not device.chains or widget.folded:
                 continue
             widget.chain_clicked.connect(self._show_chain)
-            chain = next((c for c in device.chains if c.id == self._shown_chains.get(device.id)), device.chains[0])
+            chain = self._shown_chain(device)
             widget.show_chain(chain.id)
             view = _ChainView(chain.id)
             self._chain_views[chain.id] = view

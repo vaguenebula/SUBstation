@@ -208,3 +208,14 @@ def test_the_engine_hears_returns_and_sends(app, make_wav):
     finally:
         bridge.shutdown()
         engine.close_device()
+
+
+def test_soloing_is_not_undone(editor):
+    a, b = editor.add_audio_track(), editor.add_audio_track()
+    steps = editor.undo_stack.count()
+    editor.solo_tracks([a.id], True, exclusive=True)
+    editor.set_track_param(b.id, "solo", True)
+    assert editor.project.track(a.id).solo and editor.project.track(b.id).solo
+    assert editor.undo_stack.count() == steps
+    editor.solo_tracks([b.id], True, exclusive=True)  # the others unsoloed
+    assert not editor.project.track(a.id).solo and editor.undo_stack.count() == steps

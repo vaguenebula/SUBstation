@@ -38,6 +38,7 @@ from ..model.serialization import (
 )
 from . import icons, plugin_keys
 from .arrangement.arrangement_view import ArrangementView
+from .arrangement.track_headers import duplicate_tracks
 from .arrangement.view_state import Selection
 from .browser.browser_panel import BrowserPanel
 from .computer_keyboard import ComputerKeyboard
@@ -457,36 +458,61 @@ class MainWindow(QMainWindow):
         elif selection.focus == "track":
             self.delete_track()
 
-    def _clip_range_selected(self, verb: str) -> bool:
-        """Whether clips are what Cut/Copy act on now; if automation is, says so."""
+    def _what_is_copied(self, verb: str) -> str | None:
+        """What Cut/Copy act on now: "devices", "automation" (a lane range), "clips"
+        (a clip range) or None (nothing they can; breakpoints: says so)."""
         selection = self.selection
         if selection.focus == "devices":
-            return False
-        if selection.points is not None or (selection.time_range is not None and selection.lanes):
-            self.show_message(f"Only clips can be {verb}: select clips, not automation.")
-            return False
-        return selection.clip_range
+            return "devices"
+        if selection.time_range is not None and selection.lanes:
+            return "automation"
+        if selection.points is not None:
+            self.show_message(f"Breakpoints can't be {verb}: select a time range on the automation lane.")
+            return None
+        return "clips" if selection.clip_range else None
 
     def cut(self) -> None:
-        if self._clip_range_selected("cut"):
+        what = self._what_is_copied("cut")
+        if what == "devices":
+            self.devices.cut_selected()
+        elif what == "automation":
+            self.arrangement.lanes.cut_automation()
+        elif what == "clips":
             self.arrangement.lanes.cut_area()
 
     def copy(self) -> None:
-        if self._clip_range_selected("copied"):
+        what = self._what_is_copied("copied")
+        if what == "devices":
+            self.devices.copy_selected()
+        elif what == "automation":
+            self.arrangement.lanes.copy_automation()
+        elif what == "clips":
             self.arrangement.lanes.copy_area()
 
     def paste(self) -> None:
-        if self.selection.focus != "devices":
+        if self.selection.focus == "devices":
+            self.devices.paste()
+        else:
             self.arrangement.lanes.paste()
 
     def duplicate(self) -> None:
         selection = self.selection
+        if selection.focus == "devices":
+            self.devices.duplicate_selected()
+            return
         if selection.time_range is not None and selection.lanes:
             start, end, track_ids = selection.time_range
             lanes = selection.lanes
             self.editor.duplicate_automation_range(start, end, list(lanes))
             selection.set_time_range(end, 2 * end - start, track_ids, lanes=lanes)  # the copy
             selection.set_insert(end)
+            return
+        if selection.focus == "track" and selection.time_range is None:
+            tracks = [t for t in selection.track_ids if self.project.has_track(t)]
+            if tracks:
+                duplicate_tracks(self.editor, self.bridge, selection, tracks)
+            else:
+                self.show_message("Only the arrangement's tracks can be duplicated, not returns or the master.")
             return
         self.arrangement.lanes.duplicate_area()
 

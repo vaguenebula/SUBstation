@@ -102,9 +102,11 @@ def test_chains_and_their_mixers(editor):
     assert p.chain(track.id, second.id).name == "Wet"
     editor.set_chain_param(track.id, second.id, "volume_db", 100.0)  # clamped like a fader
     assert p.chain(track.id, second.id).volume_db == automation.MAX_VOLUME_DB
-    for _ in range(6):
+    for _ in range(5):  # (solo isn't undone: a listening aid)
         stack.undo()
     assert p.chain(track.id, second.id).volume_db == 0.0 and p.chain(track.id, second.id).name == "Chain 2"
+    assert p.chain(track.id, second.id).solo
+    editor.set_chain_param(track.id, second.id, "solo", False)
     copy = editor.duplicate_rack_chain(track.id, second.id)  # new devices, the same settings
     assert copy.id != second.id and len(copy.devices) == 1 and copy.devices[0].id != inner.id
     editor.move_rack_chain(track.id, copy.id, 0)
