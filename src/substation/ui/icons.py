@@ -190,6 +190,18 @@ def plugin(color: str = theme.TEXT_DIM) -> QIcon:
 
 
 @cache
+def preset(color: str = theme.TEXT_DIM) -> QIcon:
+    """Three sliders, set: a device's settings saved."""
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for y, x in ((14, 40), (32, 20), (50, 34)):
+            p.drawLine(QPointF(8, y), QPointF(56, y))
+            p.setBrush(c)
+            p.drawEllipse(QPointF(x, y), 5, 5)
+    return _icon(draw, color)
+
+
+@cache
 def plugin_window(color: str = theme.TEXT) -> QIcon:
     """A window with a title bar: shows a plug-in's own editor."""
     def draw(p: QPainter, c: QColor):

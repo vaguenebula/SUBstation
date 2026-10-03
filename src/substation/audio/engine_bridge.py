@@ -940,7 +940,11 @@ class EngineBridge(QObject):
                 return None
         if device.is_plugin:
             return self._load_plugin(chain_id, device)
-        processor_id = self.engine.add_builtin_processor(chain_id, device.kind)
+        try:
+            processor_id = self.engine.add_builtin_processor(chain_id, device.kind)
+        except (RuntimeError, ValueError):  # a device of a newer version (a preset, a project): missing, as a plug-in
+            self._plugin_failed(device, f"{device_name(device)} is not a device this version of SUBstation has.")
+            return None
         for param_id, value in device.params.items():
             self._set_param(processor_id, param_id, value)
         if device.state:

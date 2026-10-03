@@ -31,6 +31,7 @@ from .commands import (
     SetChainsCommand,
     SetClipsCommand,
     SetDeviceEnabledCommand,
+    SetDeviceNameCommand,
     SetDeviceParamCommand,
     SetDeviceParamsCommand,
     SetDevicesCommand,
@@ -175,7 +176,27 @@ def device_is_instrument(device: Device) -> bool:
     return is_instrument(device.kind, device.plugin)
 
 
+def loads_into(preset: Device, device: Device) -> bool:
+    """Whether a preset can be loaded into a device in place: a device of the
+    same kind (the same plug-in; a rack into a rack, both instrument racks or
+    neither)."""
+    if preset.kind != device.kind or device_is_instrument(preset) != device_is_instrument(device):
+        return False
+    if preset.is_plugin:
+        return preset.plugin is not None and device.plugin is not None and preset.plugin.uid == device.plugin.uid
+    return True
+
+
 def device_name(device: Device) -> str:
+    """What a device is called: a rack by its own name if it has one (its
+    preset's), else every device by its kind (kind_name)."""
+    if device.is_rack and device.name:
+        return device.name
+    return kind_name(device)
+
+
+def kind_name(device: Device) -> str:
+    """The name of a device's kind: a plug-in's, a built-in device's, Audio Effect Rack or Instrument Rack."""
     if device.is_rack:
         return "Instrument Rack" if device_is_instrument(device) else "Audio Effect Rack"
     if device.plugin is not None:
@@ -263,14 +284,28 @@ class ProjectEditor(QObject):
     def add_midi_track(self, index: int | None = None, name: str | None = None,
                        instrument: str | None = DEFAULT_INSTRUMENT, plugin: PluginRef | None = None,
                        parent=AT_INDEX) -> Track:
-        """A MIDI track with a built-in `instrument`, or with an instrument `plugin`."""
+        """A MIDI track with a built-in `instrument`, or with an instrument `plugin`
+        (as its default preset has it, if there is one)."""
         p = self.project
-        devices = [new_device(PLUGIN_KIND, plugin)] if plugin else [new_device(instrument)] if instrument else []
+        devices = [self._new_device(PLUGIN_KIND, plugin)] if plugin else [self._new_device(instrument)] if instrument \
+            else []
         track = Track(id=new_id(), name=name or p.unique_track_name(f"{len(p.tracks) + 1} MIDI"),
                       color=p.next_color(), kind="midi", devices=devices)
         track = self._insert_track(track, index, parent, "Insert MIDI Track")
         if plugin:
             self.plugin_added.emit(track.id, devices[0].id)
+        return track
+
+    def add_midi_track_with(self, device: Device, index: int | None = None, parent=AT_INDEX,
+                            text: str = "Insert MIDI Track") -> Track:
+        """A MIDI track with an instrument device on it (an instrument preset: a
+        plug-in, a built-in one or an instrument rack). One undo step."""
+        self.undo_stack.beginMacro(text)
+        try:
+            track = self.add_midi_track(index, instrument=None, parent=parent)
+            self.insert_device(track.id, device, text=text, show_editors=not device.is_rack)
+        finally:
+            self.undo_stack.endMacro()
         return track
 
     def delete_tracks(self, track_ids: list[str]) -> None:
@@ -1191,21 +1226,34 @@ class ProjectEditor(QObject):
 
     # --- Devices -----------------------------------------------------------------
 
+    def set_device_defaults(self, default: Callable[[str, PluginRef | None], Device | None]) -> None:
+        """Where new devices come from: default(kind, plugin) is a new device as
+        the user's default preset for that kind has it, or None (as it comes;
+        presets.default_device). Without it, devices start as they come."""
+        self._default_device = default
+
+    def _new_device(self, kind: str, plugin: PluginRef | None = None) -> Device:
+        """A new device of a kind: as its default preset has it, if there is one."""
+        default = getattr(self, "_default_device", None)
+        device = default(kind, plugin) if default is not None else None
+        return device if device is not None else new_device(kind, plugin)
+
     def add_device(self, track_id: str, kind: str, index: int | None = None,
                    plugin: PluginRef | None = None, chain: str | None = None) -> Device | None:
         """Add a device (a built-in `kind`, kind 'plugin' and a `plugin`, or an
         empty rack) to a track's (or the master's) chain, or to a rack's chain on
-        it (`chain`: its id). An instrument only goes on a MIDI track (None
-        otherwise), where it comes first in its chain and replaces any other
-        instrument there."""
-        device = new_device(kind, plugin)
+        it (`chain`: its id), as its default preset has it if there is one. An
+        instrument only goes on a MIDI track (None otherwise), where it comes
+        first in its chain and replaces any other instrument there."""
+        device = self._new_device(kind, plugin)
         return device if self.insert_device(track_id, device, index, chain, f"Add {device_name(device)}") else None
 
     def insert_device(self, track_id: str, device: Device, index: int | None = None, chain: str | None = None,
-                      text: str | None = None) -> bool:
+                      text: str | None = None, show_editors: bool = True) -> bool:
         """Put a new device (a whole rack too: a preset) into a chain, as add_device
         does. One undo step; False if it can't go there."""
-        return bool(self.insert_devices(track_id, [device], index, chain, text or f"Add {device_name(device)}"))
+        return bool(self.insert_devices(track_id, [device], index, chain, text or f"Add {device_name(device)}",
+                                        show_editors))
 
     def insert_devices(self, track_id: str, devices: list[Device], index: int | None = None,
                        chain: str | None = None, text: str = "Add Devices", show_editors: bool = True) -> list[Device]:
@@ -1659,6 +1707,58 @@ class ProjectEditor(QObject):
         a built-in device's besides its parameters. `old` is its state before,
         to go back to on undo."""
         self._push(SetDeviceStateCommand(self.project, track_id, device_id, old, new, text))
+
+    def load_preset_into(self, track_id: str, device_id: str, preset: Device, text: str = "Load Preset") -> bool:
+        """Load a preset (a device: serialization.load_preset) into a device of the
+        same kind (loads_into), which stays where it is, with its id, on/off
+        switch and sidechain: a plug-in takes the preset's state, a built-in
+        device its parameters and state, a rack its chains (new devices) and
+        macros. One undo step; False if it can't (another kind of device, or a
+        rack that would nest too deep there). A plug-in's state before is the
+        model's: store it first (EngineBridge.store_plugin_states)."""
+        p = self.project
+        device = p.device(track_id, device_id)
+        if not loads_into(preset, device):
+            return False
+        if device.is_rack:
+            before = copy.deepcopy(p.track(track_id).devices)
+            if rack_depth(before, container_of(before, device_id)) + rack_height(preset) > MAX_RACK_DEPTH:
+                return False
+            after = copy.deepcopy(before)
+            rack = find_device(after, device_id)
+            rack.chains, rack.macros, rack.params = copy.deepcopy(preset.chains), preset.macros, dict(preset.params)
+            rack.name = preset.name
+            self._set_devices(track_id, before, after, text)
+            return True
+        commands = []
+        if not device.is_plugin:  # (a plug-in's parameters are in its state)
+            new = {(device_id, k): v for k, v in preset.params.items()}
+            old = {}
+            for key, value in new.items():
+                own = device.params.get(key[1])
+                if own is None:  # (a parameter the device has no value for: at its default)
+                    info = builtin_param_info(device.kind, key[1])
+                    own = value if info is None else info.default_value
+                old[key] = own
+            if old != new:
+                commands.append(SetDeviceParamsCommand(p, track_id, old, new, text))
+        if preset.state != device.state and (preset.state is not None or not device.is_plugin):
+            commands.append(SetDeviceStateCommand(p, track_id, device_id, device.state, preset.state, text))
+        if len(commands) == 1:
+            self._push(commands[0])
+        elif commands:
+            self.undo_stack.beginMacro(text)
+            for command in commands:
+                self._push(command)
+            self.undo_stack.endMacro()
+        return True
+
+    def rename_rack(self, track_id: str, device_id: str, name: str | None, text: str = "Rename Rack") -> None:
+        """A rack's name (None or "": named by its kind again)."""
+        device = self.project.device(track_id, device_id)
+        name = name or None
+        if device.is_rack and device.name != name:
+            self._push(SetDeviceNameCommand(self.project, track_id, device_id, device.name, name, text))
 
     def set_device_enabled(self, track_id: str, device_id: str, enabled: bool) -> None:
         if self.project.device(track_id, device_id).enabled != enabled:

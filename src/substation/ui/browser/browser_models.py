@@ -4,14 +4,40 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from functools import cached_property
+from pathlib import Path
 
 from PySide6.QtCore import QAbstractListModel, QMimeData, QModelIndex, Qt, QUrl
 
-from ...model.project import PluginRef
+from ...model.project import Device, PluginRef
+from ...model.serialization import ProjectFileError, load_preset
 from .. import icons
 
 PLUGIN_MIME = "application/x-substation-plugin"  # JSON list of PluginRef fields
 DEVICE_MIME = "application/x-substation-device"  # JSON list of built-in device kinds
+PRESET_MIME = "application/x-substation-preset"  # JSON list of preset file paths
+
+
+def preset_paths(mime) -> list[str]:
+    """Presets (their files) dragged from the browser, if any."""
+    if not mime.hasFormat(PRESET_MIME):
+        return []
+    try:
+        paths = json.loads(bytes(mime.data(PRESET_MIME)).decode())
+    except ValueError:
+        return []
+    return [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
+
+
+def read_presets(paths: list[str]) -> tuple[list[tuple[str, Device]], list[str]]:
+    """The devices of preset files, new (fresh ids each time), with the presets'
+    names; and why those that couldn't be read couldn't."""
+    devices, errors = [], []
+    for path in paths:
+        try:
+            devices.append((Path(path).stem, load_preset(Path(path))))
+        except ProjectFileError as exc:
+            errors.append(str(exc))
+    return devices, errors
 
 
 def device_kinds(mime) -> list[str]:
@@ -47,8 +73,8 @@ def audio_key(path: str) -> str:
 class BrowserItem:
     name: str
     path: str
-    kind: str  # "audio", "plugin" or "device" (built-in; `path` is the device kind)
-    detail: str = ""  # parent folder, plug-in vendor, or device category
+    kind: str  # "audio", "plugin", "device" (built-in; `path` is the device kind) or "preset" (`path`: its file)
+    detail: str = ""  # parent folder, plug-in vendor, device category, or the device a preset is for
     plugin: PluginRef | None = None
     tooltip: str = ""
 
@@ -129,12 +155,14 @@ class ItemListModel(QAbstractListModel):
         if item is None:
             return None
         if role == Qt.ItemDataRole.DisplayRole:
-            return f"{item.name}   ({item.detail})" if item.kind == "plugin" and item.detail else item.name
+            return f"{item.name}   ({item.detail})" if item.kind in ("plugin", "preset") and item.detail else item.name
         if role == Qt.ItemDataRole.ToolTipRole:
             uses = self.library.uses(item.key) if self.library is not None else 0
             used = f"\nUsed {uses} time{'s' if uses != 1 else ''}" if uses else ""
             return (item.tooltip or item.path) + used
         if role == Qt.ItemDataRole.DecorationRole:
+            if item.kind == "preset":
+                return icons.preset()
             return icons.waveform() if item.kind == "audio" else icons.plugin()
         return None
 
@@ -143,7 +171,7 @@ class ItemListModel(QAbstractListModel):
         return base | Qt.ItemFlag.ItemIsDragEnabled if index.isValid() else base
 
     def mimeTypes(self) -> list[str]:
-        return ["text/uri-list", PLUGIN_MIME, DEVICE_MIME]
+        return ["text/uri-list", PLUGIN_MIME, DEVICE_MIME, PRESET_MIME]
 
     def mimeData(self, indexes) -> QMimeData:
         mime = QMimeData()
@@ -157,4 +185,7 @@ class ItemListModel(QAbstractListModel):
         devices = [i.path for i in items if i.kind == "device"]
         if devices:
             mime.setData(DEVICE_MIME, json.dumps(devices).encode())
+        presets = [i.path for i in items if i.kind == "preset"]
+        if presets:
+            mime.setData(PRESET_MIME, json.dumps(presets).encode())
         return mime

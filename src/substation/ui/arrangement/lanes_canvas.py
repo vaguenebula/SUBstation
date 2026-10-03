@@ -37,6 +37,7 @@ from ...model.editor import (
     ClipboardContent,
     CopiedAutomation,
     ProjectEditor,
+    device_is_instrument,
     is_instrument,
 )
 from ...model.project import (
@@ -48,7 +49,13 @@ from ...model.project import (
     MidiClip,
     PluginRef,
 )
-from ..browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
+from ..browser.browser_models import (
+    PLUGIN_MIME,
+    device_kinds,
+    plugin_refs,
+    preset_paths,
+    read_presets,
+)
 from . import automation_lanes
 from .automation_lanes import EnvelopeArea, Hover
 from .grid import draw_grid, draw_loop_region
@@ -955,7 +962,8 @@ class LanesCanvas(QWidget):
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         mime = event.mimeData()
-        if audio_paths(mime) or device_kinds(mime) or mime.hasFormat(PLUGIN_MIME) or moved_devices(mime):
+        if (audio_paths(mime) or device_kinds(mime) or mime.hasFormat(PLUGIN_MIME) or preset_paths(mime)
+                or moved_devices(mime)):
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -972,11 +980,12 @@ class LanesCanvas(QWidget):
             return
         paths = audio_paths(event.mimeData())
         if not paths:
-            # Devices drop onto the track under the mouse; an instrument below the
-            # tracks makes a new MIDI track.
+            # Devices (and presets) drop onto the track under the mouse; an
+            # instrument below the tracks makes a new MIDI track.
             devices = dropped_devices(event.mimeData())
-            on_track = devices and self.row_index_at(event.position().y()) is not None
-            if on_track or any(is_instrument(*d) for d in devices):
+            presets = preset_paths(event.mimeData())
+            on_track = (devices or presets) and self.row_index_at(event.position().y()) is not None
+            if on_track or presets or any(is_instrument(*d) for d in devices):
                 event.acceptProposedAction()
             else:
                 event.ignore()
@@ -994,6 +1003,28 @@ class LanesCanvas(QWidget):
         self._drop_preview = (index, beat, sources)
         event.acceptProposedAction()
         self.update()
+
+    def _drop_presets(self, paths: list[str], track_id: str | None) -> bool:
+        """Presets dropped onto a track (None: below the tracks, where an
+        instrument preset makes a MIDI track, and the others go on it): new
+        devices. Whether any went in."""
+        loaded, errors = read_presets(paths)
+        for error in errors:
+            self.status_message.emit(error)
+        if track_id is None:
+            instrument = next(((name, d) for name, d in loaded if device_is_instrument(d)), None)
+            if instrument is None:
+                return False
+            name, device = instrument
+            track_id = self.editor.add_midi_track_with(device, text=f"Load Preset {name}").id
+            loaded.remove(instrument)
+        refused = [name for name, device in loaded
+                   if not self.editor.insert_device(track_id, device, text=f"Load Preset {name}",
+                                                    show_editors=not device.is_rack)]
+        if refused:
+            self.status_message.emit("Instruments go on MIDI tracks. Drop one below the tracks to make one.")
+        self.selection.select_track(track_id)  # show its devices
+        return True
 
     def dragLeaveEvent(self, _event) -> None:
         self._drop_preview = None
@@ -1029,6 +1060,11 @@ class LanesCanvas(QWidget):
                         self.editor.add_device(track_id, kind, plugin=plugin)
             self.selection.select_track(track_id)  # show its devices
             event.acceptProposedAction()
+            return
+        presets = preset_paths(event.mimeData())
+        if presets:
+            if self._drop_presets(presets, None if index is None else self.layout_model.rows[index].track_id):
+                event.acceptProposedAction()
             return
         if not preview or not preview[2]:
             return

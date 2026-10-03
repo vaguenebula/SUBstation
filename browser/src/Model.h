@@ -14,7 +14,7 @@
 
 namespace sub::browser {
 
-enum class Kind : uint8_t { Audio = 0, Plugin = 1, Device = 2 };
+enum class Kind : uint8_t { Audio = 0, Plugin = 1, Device = 2, Preset = 3 };
 
 // The audio files of one folder, in the order the folder listed them.
 class FolderFiles {
@@ -80,7 +80,7 @@ struct Snapshot {
     static std::string join(std::string_view folder, std::string_view name);
 };
 
-// An item the UI lists besides the files (a built-in device, a plug-in).
+// An item the UI lists besides the files (a built-in device, a plug-in, a preset).
 struct ExternalItem {
     Kind kind = Kind::Plugin;
     std::string name, path, detail, key, tag;

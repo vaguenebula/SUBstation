@@ -8,9 +8,10 @@ the project. **Ctrl+Alt+B** (*View › Browser*) shows or hides it.
 
 The sidebar has two sections:
 
-- **Categories**: *All* (built-in devices, plug-ins and samples at once), *Samples*
-  (the audio files under your places), *Built-in* (*Instruments*, *Audio Effects*) and
-  *Plug-ins* (*Instruments*, *Audio Effects*; see [plugins.md](plugins.md)).
+- **Categories**: *All* (built-in devices, plug-ins, presets and samples at once),
+  *Samples* (the audio files under your places), *Built-in* (*Instruments*, *Audio
+  Effects*), *Plug-ins* (*Instruments*, *Audio Effects*; see [plugins.md](plugins.md))
+  and *Presets* (by device; see [Presets](#presets)).
 - **Places**: folders of your own, which you browse as a folder tree. The browser starts
   with your Music folder as a place. Add more with *Add Folder…* (at the end of the
   list, or in the right-click menu); right-click a place › *Remove from Places* to take
@@ -52,6 +53,20 @@ on or off. A preview stops when you click anywhere outside the browser.
   selected track.
 - Instruments (built-in or plug-in) go on a MIDI track, replacing its instrument. With
   no MIDI track selected, double-clicking one or dropping it below the tracks makes one.
+
+## Presets
+
+- *Presets* lists the presets saved with devices' save buttons (see
+  [devices.md](devices.md#presets)), with a sub-entry per device they are for (a
+  plug-in's name, a built-in device's, *Audio Effect Rack*, *Instrument Rack*).
+- They are the `.gilpreset` files in `Documents\SUBstation\Presets` (a folder per
+  device; presets put straight in that folder are listed under *Other*; default presets,
+  in its `Defaults` folder, aren't listed). Changes made there in Explorer show up while
+  the program runs.
+- Drag a preset onto the device view or a track, or double-click it, to add it as a new
+  device; drop it onto a device of its kind to load it into that device.
+- Right-click a preset › *Rename…*, *Delete* (to the Recycle Bin, after asking) or
+  *Show in Folder*. Right-click *Presets* › *Show in Folder* opens the library.
 
 ## The index
 

@@ -183,7 +183,9 @@ the track's device tree top down (`_place`, `_place_rack`):
   into it.
 - A new device gets a processor (`_create_processor`): a rack (`add_rack`, refused past the
   nesting limit with a status message), a plug-in (`_load_plugin`) or a built-in device
-  (`add_builtin_processor`, then its `params`, then its `state` in the background).
+  (`add_builtin_processor`, then its `params`, then its `state` in the background). A
+  built-in kind the engine doesn't know (a preset or project from a later version) gets
+  none, and an entry in `plugin_errors`, as a missing plug-in does.
 - Devices that left a chain and aren't anywhere else on this track are **disposed**: if the
   device is now on another track, that track is synced first so it takes the processor over;
   otherwise the processor goes (`_forget_processor`), a rack with what is still in it.

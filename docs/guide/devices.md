@@ -25,7 +25,7 @@ Each device has a title bar, as in Ableton (lighter while the device is selected
 - the **sidechain** button, on devices with a sidechain input (see
   [mixing.md](mixing.md#sidechains));
 - the **parameter page arrows** ‹ ›;
-- a **save** button. A rack's saves it as a preset; the others' aren't wired up yet.
+- a **save** button: saves the device as a preset (see [Presets](#presets)).
 
 ### Parameters
 
@@ -170,12 +170,42 @@ choose *Map to Macro* to have one of them move it across its range (*Unmap from
 Macro* undoes that). A macro can move several parameters; right-click a macro to see
 or unmap them. Turning a macro sets what it moves, as one undo step.
 
-### Presets
+## Presets
 
-A rack's save button (or *Save Preset…* in its right-click menu) saves it as a
-**preset** (`.gilpreset`: its chains, the devices in them with plug-ins' states, its
-macros). Right-click beside the devices › *Load Preset…* to load one. A loaded preset
-is a new rack (loaded twice, two racks), without sidechains.
+- Every device's **save** button (or *Save Preset…* in its right-click menu) saves it
+  as a **preset**, under a name you give it: a built-in device's settings, a plug-in's
+  whole state, or a rack with everything in it (its chains, the devices in them with
+  plug-ins' states, its macros). Saving under a name that is taken asks before
+  replacing that preset.
+- Presets go into your preset library, `Documents\SUBstation\Presets`, in a folder per
+  device (named as the device: a plug-in's name, *Utility*, *Audio Effect Rack*…). The
+  browser lists them under *Presets*, by device (see [browser.md](browser.md#presets)).
+- Drag a preset from the browser onto the chain, or onto a track in the arrangement, or
+  double-click it, to add it as a new device. An instrument preset goes on a MIDI track;
+  with none selected (or dropped below the tracks) it makes one.
+- Drop a preset **onto a device of its kind** (the same plug-in, the same built-in
+  device, or a rack of the same kind) to load it into that device: the device is
+  outlined while the drag is over it. It keeps its place, its on/off switch and its
+  sidechain; a rack's chains and macros are replaced (and the automation of the devices
+  that leave with them). Dropped onto another kind of device, the preset goes in beside
+  it as a new device.
+- Loading a preset is one undo step. Loaded devices are new ones (a preset loaded twice
+  makes two), without sidechains.
+- A rack is titled with the name of the preset it was saved as or loaded from (loaded
+  into another rack, that rack takes the name too). A rack that never was a preset is
+  called *Audio Effect Rack* or *Instrument Rack*. The name is saved with the project.
+- **Default presets**: right-click a device › *Save as Default Preset*, and every new
+  device of that kind (that plug-in, that built-in device) starts as this one is now:
+  added from the browser, dropped, or as a new MIDI track's instrument. *Clear Default
+  Preset* makes new ones start as they come again. Racks have none. Defaults are kept in
+  the library's `Defaults` folder (`<device>.gilpreset`, or `<plug-in> (<class
+  id>).gilpreset`), which the browser doesn't list.
+- A preset of a plug-in that isn't installed loads as a missing device, as in a
+  project: it keeps its settings and loads once the plug-in is back. In a rack, the rest
+  of the rack works.
+- Right-click beside the devices › *Load Preset…* loads a preset file from anywhere.
+- Plug-ins also read and write their own `.vstpreset` files (see
+  [plugins.md](plugins.md#presets)).
 
 ## Folding
 
