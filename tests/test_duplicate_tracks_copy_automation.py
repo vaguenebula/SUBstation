@@ -6,10 +6,10 @@ came from)."""
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from gilstudio.model import automation
-from gilstudio.model.automation import MIXER_PAN, MIXER_VOLUME, AutomationPoint
-from gilstudio.model.editor import ProjectEditor
-from gilstudio.model.project import Project, Sidechain, iter_devices
+from substation.model import automation
+from substation.model.automation import MIXER_PAN, MIXER_VOLUME, AutomationPoint
+from substation.model.editor import ProjectEditor
+from substation.model.project import Project, Sidechain, iter_devices
 
 
 @pytest.fixture

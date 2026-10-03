@@ -529,8 +529,8 @@ def test_alt_wheel_resizes_tracks(window, three_tracks):
 
 
 def test_alt_wheel_folds_a_track_at_its_smallest_and_unfolds_it(window, three_tracks, monkeypatch):
-    from gilstudio.model.project import MIN_TRACK_HEIGHT
-    from gilstudio.ui.arrangement import lanes_canvas
+    from substation.model.project import MIN_TRACK_HEIGHT
+    from substation.ui.arrangement import lanes_canvas
 
     clock = [100.0]
     monkeypatch.setattr(lanes_canvas.time, "monotonic", lambda: clock[0])

@@ -172,7 +172,7 @@ def test_a_plugin_reporting_its_own_changes_makes_no_undo_steps(window):
     a shown editor are the user's."""
     track = window.editor.add_audio_track(name="Bus")
     window.selection.select_track(track.id, focus_track=True)
-    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
     window.editor.group_devices(track.id, [device.id])
     window.duplicate()
     [copy] = [t for t in window.project.tracks if t.id in window.selection.track_ids]
