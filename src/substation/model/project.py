@@ -22,7 +22,9 @@ where each track's output goes.
 
 Any track can be folded (view state): a folded track shows as a thin row, its
 automation hidden; a folded group keeps its row but hides its tracks (and its
-automation).
+automation). So can any device (`Project.folded_devices`, by id: view state too,
+so undoing a change to the devices doesn't unfold them): the device view shows
+it as a narrow strip with its name, and a folded rack hides its chains.
 
 Return tracks (kind "return") are fed by sends: any track, group or return can
 send its signal to a return, at a level, after its fader or before it
@@ -616,6 +618,7 @@ class Project(QObject):
     chain_changed = Signal(str, str)  # track id, rack chain id: its name or mixer
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
     device_state_changed = Signal(str, str)  # track id, device id: its state was set (a preset, a sample)
+    devices_folded = Signal(str)  # track id: devices on it were folded or unfolded
     settings_changed = Signal()  # tempo, time signature, key, loop, automation lock
     automation_changed = Signal(str, str)  # owner (track id or MASTER), target key
     automation_view_changed = Signal(str)  # owner: what its automation shows
@@ -636,6 +639,7 @@ class Project(QObject):
         self.master = new_master()
         self.tracks: list[Track] = []
         self.returns: list[Track] = []  # return tracks, in order (A, B, ...)
+        self.folded_devices: set[str] = set()  # ids of the devices shown folded (view state)
         self.path: Path | None = None
 
     # --- Queries --------------------------------------------------------------
@@ -943,6 +947,20 @@ class Project(QObject):
         self.device(track_id, device_id).state = state
         self.device_state_changed.emit(track_id, device_id)
 
+    def is_device_folded(self, device_id: str) -> bool:
+        return device_id in self.folded_devices
+
+    def set_devices_folded(self, track_id: str, device_ids, folded: bool) -> None:
+        """Fold or unfold devices of a track (view state: not undone)."""
+        ids = set(device_ids)
+        before = set(self.folded_devices)
+        if folded:
+            self.folded_devices |= ids
+        else:
+            self.folded_devices -= ids
+        if self.folded_devices != before:
+            self.devices_folded.emit(track_id)
+
     def update_settings(self, **attrs) -> None:
         for name, value in attrs.items():
             if name not in ("tempo", "time_signature", "key", "loop_enabled", "loop_start", "loop_end", "automation_locked"):
@@ -966,7 +984,8 @@ class Project(QObject):
     def replace_contents(self, *, tempo: float, time_signature: TimeSignature, loop_enabled: bool,
                          loop_start: float, loop_end: float, tracks: list[Track], path: Path | None,
                          master: Track | None = None, automation_locked: bool = False,
-                         key: Key | None = None, returns: list[Track] | None = None) -> None:
+                         key: Key | None = None, returns: list[Track] | None = None,
+                         folded_devices=()) -> None:
         self.tempo = tempo
         self.time_signature = time_signature
         self.key = key
@@ -977,6 +996,7 @@ class Project(QObject):
         self.automation_locked = automation_locked
         self.tracks = tracks
         self.returns = returns or []
+        self.folded_devices = set(folded_devices)
         self.path = path
         self.reset.emit()
 

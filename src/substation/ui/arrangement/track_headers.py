@@ -9,7 +9,9 @@ view shows its effects.
 Group tracks have a header too (no arm or input: they record nothing). Every
 header has a fold button: a track's (a triangle in a circle) folds it to its
 name row; a group's (bars in a circle, filled while folded) hides its tracks.
-Folded, neither shows its automation. The tracks in a group are indented under
+Folded, neither shows its automation. Alt+wheel over a header resizes its
+track: down shrinks it and, at its smallest, folds it; up unfolds it, then
+makes it taller. The tracks in a group are indented under
 it, with a band in the colour of each group they are in. Drag headers to move tracks:
 between two tracks, or onto a group's header to put them in it.
 
@@ -58,6 +60,7 @@ from ...model.project import (
     RoutingGraph,
     Send,
     feeds,
+    iter_devices,
     routing_graph,
 )
 from ...model.timebase import format_db, format_pan, parse_pan
@@ -66,7 +69,7 @@ from . import automation_lanes
 from .automation_header import CHOOSER_HEIGHT, AutomationControls
 from .automation_lanes import EnvelopeArea, Hover
 from .grid import draw_grid, draw_loop_region
-from .lanes_canvas import SELECTION_TINT, resize_track_by_wheel
+from .lanes_canvas import SELECTION_TINT, wheel_action
 from .view_state import (
     SENDS_ROW,
     LaneRow,
@@ -114,6 +117,21 @@ def volume_box(value: float = 0.0) -> ValueBox:
     return ValueBox(value, -70.0, 6.0, step=0.25, decimals=1, formatter=format_db, sample_text="-70.0 dB",
                     default=0.0, wheel=False)
 
+
+
+def duplicate_tracks(editor: ProjectEditor, bridge: EngineBridge, selection: Selection, track_ids) -> list[str]:
+    """Ctrl+D on tracks: copies of them (groups with what is in them; see
+    ProjectEditor.duplicate_tracks), their plug-ins as they are now. The copies
+    are selected; their ids."""
+    project = editor.project
+    track_ids = [t for t in track_ids if project.has_track(t)]
+    devices = {d.id for t in track_ids for track in [project.track(t), *project.descendants(t)]
+               for d in iter_devices(track.devices)}
+    bridge.store_plugin_states(devices)
+    copies = [t.id for t in editor.duplicate_tracks(track_ids)]
+    for i, track_id in enumerate(copies):
+        selection.select_track(track_id, focus_track=True, mode="toggle" if i else "")
+    return copies
 
 class _TouchFilter(QObject):
     """Pressing a mixer control shows its automation (clicking one, as in Ableton)."""
@@ -338,7 +356,7 @@ class TrackHeader(QWidget):
         self.pan.valueChanged.connect(lambda v, key: self._mixer_changed("pan", self.pan, v, key))
         for widget in (self.volume, self.pan, self.activator, self.solo, self.arm, self.input, self.monitor,
                        self.meter):
-            widget.installEventFilter(self)  # Alt+wheel over a control still resizes the track
+            widget.installEventFilter(self)  # Alt+wheel over a control still resizes (or folds) the track
         watch_mixer_touch(editor, track_id, self.volume, self.pan)
         self.sends = SendControls(track_id, editor, bridge, self)
         self.automation = AutomationControls(track_id, editor, bridge, self)
@@ -536,14 +554,8 @@ class TrackHeader(QWidget):
             event.ignore()
 
     def _alt_wheel(self, event: QWheelEvent) -> bool:
-        """Alt+wheel resizes this track (Qt may report it on either axis)."""
-        mods = event.modifiers()
-        if not mods & Qt.KeyboardModifier.AltModifier or mods & Qt.KeyboardModifier.ControlModifier:
-            return False
-        delta = event.angleDelta()
-        resize_track_by_wheel(self.editor, self.track_id, delta.y() or delta.x())
-        event.accept()
-        return True
+        """Alt+wheel resizes this track, folding (or unfolding) it at its smallest."""
+        return wheel_action(self.editor, self.track_id, event)
 
     def _in_resize_zone(self, y: float) -> bool:
         """The bottom edge of the track's own lane (automation lanes below keep their
@@ -766,6 +778,10 @@ class TrackHeader(QWidget):
         menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(index, parent=parent))
         menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(index, parent=parent))
         menu.addAction("Insert Return Track", self.editor.add_return_track)
+        duplicate = menu.addAction("Duplicate Track" if len(selected) == 1 else "Duplicate Tracks",
+                                   lambda: duplicate_tracks(self.editor, self.bridge, self.selection, list(selected)))
+        duplicate.setShortcut("Ctrl+D")  # (as a tip: the window's action handles the key)
+        duplicate.setShortcutVisibleInContextMenu(True)
         menu.addAction("Delete Track" if len(selected) == 1 else "Delete Tracks",
                        lambda: self.editor.delete_tracks(list(selected)))
         menu.addSeparator()

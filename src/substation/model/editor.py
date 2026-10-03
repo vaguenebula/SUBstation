@@ -124,6 +124,30 @@ class ClipboardContent:
     tracks: tuple[CopiedTrack, ...]
 
 
+@dataclass(frozen=True)
+class CopiedAutomation:
+    """Automation copied from a lane range (Ctrl+C / Ctrl+X), `length` beats long:
+    each lane's envelope over it (points from beat 0), in the lanes' order."""
+
+    length: float
+    lanes: tuple[tuple[LaneRef, Envelope], ...]
+
+
+def _renamed_key(key: str, ids: dict[str, str]) -> str:
+    """An automation key with the devices (and rack chains) it names renamed by `ids`."""
+    try:
+        parts = automation.parse_key(key)
+    except ValueError:
+        return key
+    if parts[0] != "device":
+        return key
+    _kind, device_id, param_id = parts
+    chain = automation.key_chain_control(key)
+    if chain is not None:
+        return automation.chain_key(ids.get(device_id, device_id), ids.get(chain[0], chain[0]), chain[1])
+    return automation.device_key(ids.get(device_id, device_id), param_id)
+
+
 # The built-in devices come from the engine (engine/src/builtin/devices/), so a new one
 # needs nothing here. kind: (display name, {param id: default}).
 BUILTIN_DEVICES = {
@@ -453,6 +477,58 @@ class ProjectEditor(QObject):
         if self.project.track(track_id).folded != folded:
             self.project.update_track(track_id, folded=folded)
 
+    def duplicate_tracks(self, track_ids) -> list[Track]:
+        """Ctrl+D on tracks: a copy of each (a group with what is in it), together
+        after the last of them (and what is in it), in its group. The copies have
+        new clips and devices (plug-ins in the state last stored in the model:
+        store their states first) and the same automation, sends, inputs and
+        sidechains (from the copies, where they came from tracks copied with
+        them); they aren't armed. One undo step; the copies of these tracks."""
+        p = self.project
+        roots = self._roots(track_ids)
+        if not roots:
+            return []
+        originals = [t for r in roots for t in [p.track(r), *p.descendants(r)]]
+        renamed: dict[str, str] = {t.id: new_id() for t in originals}
+        last = roots[-1]
+        index, parent = p.subtree_end(p.track_index(last)), p.track(last).parent
+        copies = []
+        for original in originals:
+            track = copy.deepcopy(original)
+            track.id = renamed[original.id]
+            track.name = p.unique_track_name(original.name)
+            track.armed = False
+            track.parent = parent if original.id in roots else renamed[original.parent]
+            track.clips = [replace(c, id=new_id()) for c in track.clips]
+            ids: dict[str, str] = {}  # its devices' and rack chains' ids: the copies'
+            for device in track.devices:
+                old = [d.id for d in iter_devices([device])] + [c.id for _r, c in iter_chains([device])]
+                refresh_ids(device)
+                new = [d.id for d in iter_devices([device])] + [c.id for _r, c in iter_chains([device])]
+                ids.update(zip(old, new, strict=True))
+            for device in iter_devices(track.devices):
+                if device.sidechain is not None and device.sidechain.track_id in renamed:
+                    device.sidechain = replace(device.sidechain, track_id=renamed[device.sidechain.track_id])
+            p.folded_devices |= {new for old, new in ids.items() if old in p.folded_devices}
+            if track.input_track in renamed:
+                track.input_track = renamed[track.input_track]
+            track.automation = {_renamed_key(k, ids): points for k, points in track.automation.items()}
+            view = track.automation_view
+            track.automation_view = replace(view, key=view.key and _renamed_key(view.key, ids),
+                                            lanes=tuple(_renamed_key(k, ids) for k in view.lanes))
+            copies.append(track)
+        text = "Duplicate Track" if len(roots) == 1 else "Duplicate Tracks"
+        self.undo_stack.beginMacro(text)
+        try:
+            for offset, track in enumerate(copies):
+                if track.parent == parent:  # (a group the tree doesn't let it be in: the one there)
+                    self._insert_track(track, index + offset, parent, text)
+                else:
+                    self._push(InsertTrackCommand(p, track, index + offset, text))
+        finally:
+            self.undo_stack.endMacro()
+        return [p.track(renamed[r]) for r in roots]
+
     def rename_track(self, track_id: str, name: str) -> None:
         old = self.project.track(track_id).name
         if name and name != old:
@@ -464,13 +540,16 @@ class ProjectEditor(QObject):
             self._push(UpdateTrackCommand(self.project, track_id, "color", old, color, "Change Track Color"))
 
     def set_track_param(self, track_id: str, attr: str, value, merge_key: object | None = None) -> None:
-        """Mixer settings: volume_db, pan, mute, solo (the master: volume_db and pan)."""
-        labels = {"volume_db": "Change Volume", "pan": "Change Pan", "mute": "Toggle Track Activator",
-                  "solo": "Toggle Solo"}
+        """Mixer settings: volume_db, pan, mute, solo (the master: volume_db and pan).
+        Solo is a listening aid: saved, but not undone (see solo_tracks)."""
+        labels = {"volume_db": "Change Volume", "pan": "Change Pan", "mute": "Toggle Track Activator"}
         if track_id == MASTER:
             if attr not in ("volume_db", "pan"):
                 raise AttributeError(attr)  # the master is always heard
             labels = {"volume_db": "Change Master Volume", "pan": "Change Master Pan"}
+        if attr == "solo":
+            self.solo_tracks([track_id], value)
+            return
         if attr == "pan":
             value = max(-1.0, min(1.0, value))
         old = getattr(self.project.track(track_id), attr)
@@ -497,19 +576,14 @@ class ProjectEditor(QObject):
             self.parameter_touched.emit(track_id, touched)
 
     def solo_tracks(self, track_ids, solo: bool, exclusive: bool = False) -> None:
-        """Solo (or unsolo) these tracks, one undo step. `exclusive` (soloing):
-        every other track is unsoloed."""
+        """Solo (or unsolo) these tracks. `exclusive` (soloing): every other track
+        is unsoloed. A listening aid, as in Ableton: saved, but not an undo step."""
         track_ids = set(track_ids)
-        changes = [(t.id, t.solo, t.id in track_ids and solo) for t in self.project.senders()
-                   if t.id in track_ids or (exclusive and solo)]
-        changes = [change for change in changes if change[1] != change[2]]
-        if not changes:
-            return
-        text = "Toggle Solo" if len(track_ids) == 1 else "Solo Tracks" if solo else "Unsolo Tracks"
-        self.undo_stack.beginMacro(text)
-        for track_id, old, new in changes:
-            self._push(UpdateTrackCommand(self.project, track_id, "solo", old, new, text))
-        self.undo_stack.endMacro()
+        for track in self.project.senders():
+            if track.id in track_ids or (exclusive and solo):
+                new = track.id in track_ids and solo
+                if track.solo != new:
+                    self.project.update_track(track.id, solo=new)
 
     def set_track_input(self, track_id: str, channels) -> None:
         """A track's audio input: device channels, () for none."""
@@ -1131,25 +1205,85 @@ class ProjectEditor(QObject):
                       text: str | None = None) -> bool:
         """Put a new device (a whole rack too: a preset) into a chain, as add_device
         does. One undo step; False if it can't go there."""
+        return bool(self.insert_devices(track_id, [device], index, chain, text or f"Add {device_name(device)}"))
+
+    def insert_devices(self, track_id: str, devices: list[Device], index: int | None = None,
+                       chain: str | None = None, text: str = "Add Devices", show_editors: bool = True) -> list[Device]:
+        """Put new devices (racks too) into a chain, in their order, before the
+        device at `index` (None: last), as add_device does: an instrument only on
+        a MIDI track, first, replacing the one there. One undo step; the devices
+        that went in (none: nothing changed). Their plug-ins' editors show if
+        `show_editors`."""
         track = self.project.track(track_id)
         before = copy.deepcopy(track.devices)
         after = copy.deepcopy(before)
-        devices = chain_devices(after, chain)
-        if devices is None or rack_depth(after, chain) + rack_height(device) > MAX_RACK_DEPTH:
-            return False
-        if device_is_instrument(device):
-            if not track.is_midi:
-                return False
-            devices[:] = [d for d in devices if not device_is_instrument(d)]
-            devices.insert(0, device)
-        else:
-            first = 1 if devices and device_is_instrument(devices[0]) else 0  # effects go after the instrument
-            devices.insert(len(devices) if index is None else max(first, min(index, len(devices))), device)
-        self._set_devices(track_id, before, after, text or f"Add {device_name(device)}")
-        for added in iter_devices([device]):
-            if added.is_plugin:
-                self.plugin_added.emit(track_id, added.id)
-        return True
+        target = chain_devices(after, chain)
+        if target is None:
+            return []
+        depth = rack_depth(after, chain)
+        first = 1 if target and device_is_instrument(target[0]) else 0  # effects go after the instrument
+        at = len(target) if index is None else max(first, min(index, len(target)))
+        added = []
+        for device in devices:
+            if depth + rack_height(device) > MAX_RACK_DEPTH:
+                continue
+            if device_is_instrument(device):
+                if not track.is_midi:
+                    continue
+                kept = [d for d in target if not device_is_instrument(d)]
+                at += len(kept) - len(target) + 1  # (one may have gone from before it; this one goes first)
+                target[:] = [device, *kept]
+            else:
+                first = 1 if target and device_is_instrument(target[0]) else 0
+                at = max(first, at)
+                target.insert(at, device)
+                at += 1
+            added.append(device)
+        if not added:
+            return []
+        self._set_devices(track_id, before, after, text)
+        if show_editors:
+            for added_device in iter_devices(added):
+                if added_device.is_plugin:
+                    self.plugin_added.emit(track_id, added_device.id)
+        return added
+
+    def copy_devices(self, track_id: str, device_ids) -> list[Device]:
+        """Copies of devices (racks with everything in them; those in a selected
+        rack go with it), in their order on the track, for pasting: plug-ins in the
+        state last stored in the model (store their states first)."""
+        wanted = set(device_ids)
+        found = [d for d in iter_devices(self.project.track(track_id).devices) if d.id in wanted]
+        inside = {i for d in found for i in device_ids_of(d) if i != d.id}
+        return [copy.deepcopy(d) for d in found if d.id not in inside]
+
+    def paste_devices(self, track_id: str, copied: list[Device], index: int | None = None,
+                      chain: str | None = None, folded=frozenset(), text: str | None = None) -> list[Device]:
+        """New devices like the copied ones (copy_devices) into a chain of a track,
+        before the device at `index` (None: last), as insert_devices puts them.
+        Their sidechains stay, unless the source is gone or would close a cycle
+        here. Those whose originals are `folded` are folded too. One undo step;
+        the devices pasted."""
+        devices = []
+        for original in copied:
+            device = copy.deepcopy(original)
+            old_ids = [d.id for d in iter_devices([device])]
+            refresh_ids(device)
+            for old_id, inner in zip(old_ids, iter_devices([device]), strict=True):
+                if old_id in folded:
+                    self.project.folded_devices.add(inner.id)
+                if inner.sidechain is not None and (not self.project.has_owner(inner.sidechain.track_id)
+                                                    or self.project.sidechain_would_cycle(
+                                                        track_id, inner.sidechain.track_id)):
+                    inner.sidechain = None
+            devices.append(device)
+        if text is None:
+            text = f"Paste {device_name(devices[0])}" if len(devices) == 1 else "Paste Devices"
+        return self.insert_devices(track_id, devices, index, chain, text, show_editors=False)
+
+    def set_devices_folded(self, track_id: str, device_ids, folded: bool) -> None:
+        """Fold or unfold devices in the device view. View state: saved, not undone."""
+        self.project.set_devices_folded(track_id, device_ids, folded)
 
     def move_device(self, track_id: str, device_id: str, index: int) -> None:
         """Move a device to position `index` in its chain (an instrument stays first)."""
@@ -1402,9 +1536,12 @@ class ProjectEditor(QObject):
             self._push(UpdateChainCommand(self.project, track_id, chain_id, "name", old, name, "Rename Chain"))
 
     def set_chain_param(self, track_id: str, chain_id: str, attr: str, value, merge_key: object | None = None) -> None:
-        """A rack chain's mixer: volume_db, pan, mute, solo."""
-        labels = {"volume_db": "Change Chain Volume", "pan": "Change Chain Pan", "mute": "Toggle Chain Activator",
-                  "solo": "Toggle Chain Solo"}
+        """A rack chain's mixer: volume_db, pan, mute, solo (saved, but not undone, as a track's)."""
+        if attr == "solo":
+            if self.project.chain(track_id, chain_id).solo != value:
+                self.project.update_chain(track_id, chain_id, solo=value)
+            return
+        labels = {"volume_db": "Change Chain Volume", "pan": "Change Chain Pan", "mute": "Toggle Chain Activator"}
         if attr == "volume_db":
             value = max(MIN_VOLUME_DB, min(MAX_VOLUME_DB, value))
         elif attr == "pan":
@@ -1617,6 +1754,65 @@ class ProjectEditor(QObject):
                 return points
             return automation.paste_range(points, automation.copy_range(points, start, end), end, end - start)
         self._each_lane("Duplicate Automation", lanes, duplicate)
+
+    def copy_automation_range(self, start: float, end: float, lanes) -> CopiedAutomation | None:
+        """Ctrl+C on a lane range: the automation between two beats on these lanes
+        (those that have any). None if none of them has."""
+        if end <= start:
+            return None
+        copied = tuple((lane, automation.copy_range(self.project.envelope(*lane), start, end))
+                       for lane in dict.fromkeys(lanes) if self.project.has_owner(lane[0]))
+        copied = tuple((lane, points) for lane, points in copied if points)
+        return CopiedAutomation(end - start, copied) if copied else None
+
+    def cut_automation_range(self, start: float, end: float, lanes) -> CopiedAutomation | None:
+        """Ctrl+X on a lane range: copy it (copy_automation_range), then delete it. One undo step."""
+        content = self.copy_automation_range(start, end, lanes)
+        if content is not None:
+            self._each_lane("Cut Automation", [lane for lane, _ in content.lanes],
+                            lambda points: automation.remove_range(points, start, end))
+        return content
+
+    def automation_paste_targets(self, content: CopiedAutomation, lanes=()) -> list[LaneRef | None]:
+        """Where each copied lane goes: onto `lanes` (the selected ones, in order)
+        one to one if there are as many, or one copied lane onto each of them;
+        otherwise onto the lanes it was copied from. None for a lane that is gone
+        (its owner, or the device or send it automates)."""
+        lanes = list(dict.fromkeys(lanes))
+        if lanes and len(content.lanes) in (1, len(lanes)):
+            targets = lanes
+        else:
+            targets = [lane for lane, _ in content.lanes]
+        return [lane if self._lane_exists(lane) else None for lane in targets]
+
+    def _lane_exists(self, lane: LaneRef) -> bool:
+        owner, key = lane
+        if not self.project.has_owner(owner) or not automation.is_key(key):
+            return False
+        device = automation.key_device(key)
+        if device is not None:
+            return self.project.has_device(owner, device)
+        send = automation.key_send(key)
+        return send is None or send in self.project.track(owner).sends
+
+    def paste_automation(self, content: CopiedAutomation, at_beat: float, lanes=()) -> list[LaneRef]:
+        """Ctrl+V: copied automation at `at_beat`, replacing what is there, onto the
+        lanes automation_paste_targets picks. One undo step; the lanes pasted onto."""
+        at = max(0.0, at_beat)
+        targets = self.automation_paste_targets(content, lanes)
+        sources = [points for _lane, points in content.lanes]
+        if len(sources) == 1:
+            sources *= len(targets)
+        pasted = {lane: points for lane, points in zip(targets, sources, strict=True) if lane is not None}
+        edges = (at, at + content.length)
+        current = {lane: self.project.envelope(*lane) for lane in pasted}
+        new = {lane: automation.drop_redundant(automation.paste_range(current[lane], points, at, content.length),
+                                               edges) for lane, points in pasted.items()}
+        changed = {lane: points for lane, points in new.items() if points != current[lane]}
+        if changed:
+            self._push(SetEnvelopesCommand(self.project, {lane: current[lane] for lane in changed}, changed,
+                                           "Paste Automation"))
+        return list(pasted)
 
     def set_automation_locked(self, locked: bool) -> None:
         """Lock Envelopes: whether automation stays in place when clips move

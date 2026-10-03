@@ -515,15 +515,54 @@ def test_alt_wheel_resizes_tracks(window, three_tracks):
     lanes, view, rows = arrangement.lanes, arrangement.view, arrangement.layout_model.rows
     track = window.project.tracks[1]
     before = track.height
-    wheel(lanes, QPoint(200, rows[1].top - view.scroll_y + 10), 2, Qt.KeyboardModifier.AltModifier)
+    alt = Qt.KeyboardModifier.AltModifier
+    wheel(lanes, QPoint(200, rows[1].top - view.scroll_y + 10), 2, alt)
     assert window.project.track(track.id).height == before + 24
     assert arrangement.layout_model.rows[2].top == arrangement.layout_model.rows[1].top + before + 24
     header = arrangement.headers.headers[track.id]
-    wheel(header.pan, QPoint(5, 5), -1, Qt.KeyboardModifier.AltModifier)  # over a control, too
+    wheel(header.pan, QPoint(5, 5), -1, alt)  # over a control, too
     assert window.project.track(track.id).height == before + 12
     assert window.project.track(track.id).pan == 0.0
-    wheel(header, QPoint(20, 5), -100, Qt.KeyboardModifier.AltModifier)
+    wheel(header, QPoint(20, 5), -100, alt)
     assert window.project.track(track.id).height == 24  # MIN_TRACK_HEIGHT
+    assert not window.project.track(track.id).folded  # (it got there in this turn)
+
+
+def test_alt_wheel_folds_a_track_at_its_smallest_and_unfolds_it(window, three_tracks, monkeypatch):
+    from gilstudio.model.project import MIN_TRACK_HEIGHT
+    from gilstudio.ui.arrangement import lanes_canvas
+
+    clock = [100.0]
+    monkeypatch.setattr(lanes_canvas.time, "monotonic", lambda: clock[0])
+    arrangement, project = window.arrangement, window.project
+    lanes, view = arrangement.lanes, arrangement.view
+    second, third = (t.id for t in project.tracks[1:])
+    alt = Qt.KeyboardModifier.AltModifier
+
+    def over_lane(track_id: str) -> QPoint:
+        row = next(r for r in arrangement.layout_model.rows if r.track_id == track_id)
+        return QPoint(200, row.top - view.scroll_y + 5)
+
+    def turn(widget, pos, notches):
+        clock[0] += 0.1  # one turn of the wheel, a notch at a time
+        wheel(widget, pos, notches, alt)
+
+    height = project.track(second).height
+    for _ in range(-(-(height - MIN_TRACK_HEIGHT) // lanes_canvas.HEIGHT_STEP)):  # down: it shrinks...
+        assert not project.track(second).folded
+        turn(lanes, over_lane(second), -1)
+    assert project.track(second).height == MIN_TRACK_HEIGHT and not project.track(second).folded
+    turn(lanes, over_lane(second), -1)  # ...and at its smallest, folds
+    assert project.track(second).folded
+    # The same turn goes on with that track, though the next is under the mouse now.
+    turn(lanes, over_lane(third), -1)
+    assert project.track(second).folded and not project.track(third).folded
+    assert project.track(third).height == height
+    clock[0] += 1.0  # a turn of its own, over a control of its header
+    turn(arrangement.headers.headers[second].pan, QPoint(5, 5), 1)  # up: unfolds it...
+    assert not project.track(second).folded and project.track(second).height == MIN_TRACK_HEIGHT
+    turn(arrangement.headers.headers[second], QPoint(20, 5), 1)  # ...then makes it taller
+    assert project.track(second).height == MIN_TRACK_HEIGHT + lanes_canvas.HEIGHT_STEP
 
 
 def test_ctrl_alt_drag_scrolls_both_ways(window, three_tracks):
@@ -956,8 +995,25 @@ def test_shortcuts_from_plugin_editor(window, monkeypatch):
     assert not key_down(1234, ord("C"))  # the plug-in keeps its copy / paste / undo...
     assert not key_down(1234, ord("K"))  # ...and keys that are no shortcut
     assert not key_down(999, ord("F"))  # other windows' keys are Qt's
+    # Space and S without Ctrl/Alt: the window's (the DAW comes first); other keys: the plug-in's.
     monkeypatch.setattr(plugin_keys, "pressed_modifiers", lambda: Qt.KeyboardModifier.NoModifier)
-    assert not key_down(1234, 0x20)  # Space without Ctrl/Alt: the plug-in's
+    played = []
+    monkeypatch.setattr(window.bridge, "play", lambda: played.append("play"))
+    assert key_down(1234, 0x20) and played == ["play"]
+    msg = wintypes.MSG(hWnd=1234, message=plugin_keys.WM_KEYDOWN, wParam=0x20, lParam=plugin_keys.REPEAT_BIT)
+    assert shortcuts.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(msg))[0]
+    assert played == ["play"]  # held down: once
+    window.insert_track()
+    track = window.project.tracks[-1]
+    window.selection.select_track(track.id)
+    assert key_down(1234, ord("S")) and window.project.track(track.id).solo
+    assert not key_down(1234, ord("D")) and not key_down(1234, 0x2E)  # Delete
+    monkeypatch.setattr(plugin_keys, "is_text_field", lambda hwnd: True)  # typing into an Edit control
+    assert not key_down(1234, 0x20) and played == ["play"]
+    monkeypatch.setattr(plugin_keys, "is_text_field", lambda hwnd: False)
+    window.computer_keyboard.set_enabled(True)  # S plays a note, as in the window
+    assert not key_down(1234, ord("S")) and key_down(1234, 0x20)
+    window.computer_keyboard.set_enabled(False)
 
 
 def test_used_items_rank_first(window, three_tracks):

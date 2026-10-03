@@ -20,7 +20,8 @@ or that would close a cycle, is dropped. Devices store their sidechain (the
 track and where it is tapped; version 11); one from a track that isn't there,
 or that would close a cycle, is dropped. Racks store their chains (each with
 its devices and mixer) and macro mappings (version 12; a mapping to a device
-not in its rack is dropped).
+not in its rack is dropped). The devices shown folded are stored by id
+("folded_devices"; files without it load with none folded).
 
 Presets: a device (a rack with everything in it too) on its own, in a file of
 its own (device_to_preset, preset_device): what the project file stores of it.
@@ -312,6 +313,8 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
         "loop": {"enabled": project.loop_enabled, "start": project.loop_start, "end": project.loop_end},
         "automation_locked": project.automation_locked,
         "master": _master_to_dict(project.master),
+        "folded_devices": sorted(project.folded_devices & {d.id for t in project.all_tracks()
+                                                            for d in iter_devices(t.devices)}),
         "tracks": [
             {
                 "id": t.id,
@@ -469,6 +472,7 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
         tracks=tracks,
         returns=returns,
         path=project_file,
+        folded_devices=[str(i) for i in data.get("folded_devices", [])],
     )
 
 

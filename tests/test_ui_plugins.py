@@ -152,6 +152,54 @@ def test_knobs_edit_plugins_undoably(window):
     assert window.engine.processor_param(pid, GAIN) == pytest.approx(0.5, abs=0.02)
 
 
+class _Reports:
+    """The engine, but with these plug-in reports to take (as if the plug-ins sent them)."""
+
+    def __init__(self, engine, events):
+        self._engine, self._events = engine, events
+
+    def take_processor_events(self):
+        events, self._events = self._events, []
+        return events + list(self._engine.take_processor_events())
+
+    def __getattr__(self, name):
+        return getattr(self._engine, name)
+
+
+def test_a_plugin_reporting_its_own_changes_makes_no_undo_steps(window):
+    """Some plug-ins report their parameters as edited while their state is
+    restored (a track with them duplicated, pasted, undone): only edits made in
+    a shown editor are the user's."""
+    track = window.editor.add_audio_track(name="Bus")
+    window.selection.select_track(track.id, focus_track=True)
+    device = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["GIL Test Effect"])
+    window.editor.group_devices(track.id, [device.id])
+    window.duplicate()
+    [copy] = [t for t in window.project.tracks if t.id in window.selection.track_ids]
+    copied = copy.devices[0].chains[0].devices[0]
+    pid = engine_id(window, copy, copied)
+    assert pid is not None and not window.engine.is_editor_open(pid)
+
+    def report(processor_id, gesture=0):
+        edited = SimpleNamespace(type=ge.ProcessorEventType.PARAM_EDITED, processor_id=processor_id,
+                                 param_index=FX_GAIN, value=0.4, old_value=0.5, gesture=gesture)
+        engine = window.bridge.engine
+        window.bridge.engine = _Reports(engine, [edited])
+        try:
+            poll(window)
+        finally:
+            window.bridge.engine = engine
+
+    steps = window.undo_stack.count()
+    report(pid)
+    assert window.undo_stack.count() == steps and window.undo_stack.undoText() == "Duplicate Track"
+    # From a shown editor, it is the user's: an undo step.
+    window.bridge.open_plugin_editor(copy.id, copied.id)
+    assert window.engine.is_editor_open(pid)
+    report(pid, gesture=7)
+    assert window.undo_stack.count() == steps + 1 and window.undo_stack.undoText() == "Change Device Parameter"
+
+
 def test_edits_in_the_plugin_editor_are_undoable(window):
     track = window.editor.add_audio_track(name="Drums")
     window.selection.select_track(track.id)

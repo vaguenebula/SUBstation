@@ -106,6 +106,10 @@ class ComputerKeyboard(QObject):
         if state != Qt.ApplicationState.ApplicationActive:
             self.release_all()  # its key-ups would go elsewhere
 
+    def takes_key(self, key: int) -> bool:
+        """Whether this key (without modifiers) plays (or changes the octave) while it is on."""
+        return self.enabled and (key in NOTE_KEYS or key in OCTAVE_KEYS)
+
     def _handles(self, event: QKeyEvent) -> bool:
         if not self.enabled or event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
             return False
