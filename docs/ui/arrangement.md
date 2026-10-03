@@ -578,4 +578,4 @@ reset. The clip view keeps its own cache (200 tiles).
 | [test_ui_groups.py](../../tests/test_ui_groups.py) | Ctrl+G, folding (and its automation), the group's summary lane, dragging headers into and out of groups, folded tracks as a grid to select on |
 | [test_ui_sends.py](../../tests/test_ui_sends.py) | Ctrl+Alt+T, the returns' rows above the master, send knobs on every header, pre/post-fader, send automation lanes, deleting a return |
 | [test_ui_recording.py](../../tests/test_ui_recording.py), [test_ui_resampling.py](../../tests/test_ui_resampling.py) | arm, input and monitoring controls, the input menu with resampling sources greyed out, the live waveform, takes becoming clips |
-| [test_duplicate_tracks_copy_automation.py](../../tests/test_duplicate_tracks_copy_automation.py) | duplicating tracks with their automation |
+| [test_duplicate_tracks_copy_automation.py](../../tests/test_duplicate_tracks_copy_automation.py) | duplicating tracks (automation and routing following the copies), and cutting, copying and pasting automation ranges onto the selected lanes or those they came from |

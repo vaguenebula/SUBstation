@@ -86,8 +86,10 @@ directly: it is saved, but isn't an undo step.
   cause dropouts. (That is the host's part; what a plug-in does in its `process()` is up
   to the plug-in.)
 - Edits build an immutable `RenderSnapshot`, published with one atomic pointer swap.
-  Retired snapshots are freed on the main thread once the audio thread's epoch counter
-  shows they are no longer in use.
+  Retired snapshots are freed once the audio thread's epoch counter shows they are no
+  longer in use, never by the audio thread: by whichever thread makes the next API call
+  (`collectGarbageLocked()`, also run by `idle()`). Plug-ins are destroyed only on the
+  main thread, in `idle()`.
 - Continuous controls (volume, pan, mute, solo, device parameters) are atomics, smoothed
   on the audio thread.
 - The UI never waits on the audio thread: the playhead, meters and CPU load are read from
@@ -112,7 +114,7 @@ group) lives in the Python model. Delay compensation is worked out per edge. See
 ## Parameters and automation
 
 Every automatable thing (device parameters of built-ins and plug-ins, volume, pan,
-sends, rack chains, macros) is described the same way: a normalized 0..1 value with a
+sends, rack chains' volume and pan) is described the same way: a normalized 0..1 value with a
 mapping (linear, logarithmic, or stepped). The engine's `ParamInfo` and the UI's
 `ParamSpec` implement the same mapping and the tests hold them to each other. See
 [engine/automation.md](engine/automation.md) and [python/model.md](python/model.md).

@@ -42,7 +42,7 @@ python -m pip install scikit-build-core nanobind cmake ninja pytest ruff PySide6
 python -m pip install --no-build-isolation -e .    # compiles substation._engine and substation._browser
 ```
 
-Re-run the last command after changing any C++ code (the build is incremental, in
+Re-run the last command after changing any C++ code (the build is incremental, under
 `build/`). Python changes need no reinstall.
 
 **ASIO** needs Steinberg's ASIO SDK, which isn't in the repository (its licence
@@ -82,7 +82,7 @@ offline; UI tests drive the real main window offscreen. See
 src/substation/     Python: UI (ui/), project model and undo (model/), engine bridge (audio/), plug-in scanner (plugins/)
 engine/src/         C++: the real-time audio engine and plug-in hosting (module substation._engine)
 browser/src/        C++: the browser's file index and search (module substation._browser)
-engine/third_party/ miniaudio, Signalsmith Stretch, the VST 3 SDK (subset); all MIT
+engine/third_party/ miniaudio (public domain / MIT-0), Signalsmith Stretch, the VST 3 SDK subset (MIT)
 tests/              pytest suite, the fake ASIO driver and the test VST3 plug-ins
 benchmarks/         browser and renderer benchmarks (not run by pytest)
 docs/               documentation

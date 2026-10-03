@@ -178,9 +178,9 @@ device switched off isn't aligned (`RouteEdge::device` -1).
 **Playing it.** The source writes its signal at the tap into the edge's buffer as it renders (a
 tap after a device as `processChain()` passes it), and the renderer hands that to the device
 before each `process()` call (`setSidechain()`); the scheduler runs the source first, since the
-sidechain is a graph edge. A missing (or soloed-out) sidechain reaches the device as unconnected
-(`setSidechainConnected(false)`), which the VST3 adapter flags as silence on its aux bus
-([plugins.md](plugins.md)). Solo and mute across sidechains are in
+sidechain is a graph edge. A device with no sidechain edge is told so (`setSidechainConnected(false)`); one
+whose edge solo leaves out this chunk gets no key signal (`setSidechain()` isn't called). The VST3
+adapter then flags its aux bus as silent ([plugins.md](plugins.md)). Solo and mute across sidechains are in
 [rendering.md](rendering.md#solo-and-mute).
 
 The sidechain stays with the device when it moves (to another chain, track or rack); a move that
