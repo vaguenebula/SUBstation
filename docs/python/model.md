@@ -51,6 +51,7 @@ into undo commands. The audio engine only mirrors this model (see
 | [keys.py](../../src/substation/model/keys.py) | Musical keys (`Key`), reading tempo and key from file names (`parse_filename`), what a dropped clip starts with (`clip_settings`) |
 | [device_state.py](../../src/substation/model/device_state.py) | A built-in device's state besides its parameters (a sampler's sample), in the engine's text format, base64 in `Device.state` |
 | [serialization.py](../../src/substation/model/serialization.py) | `.gilproj` and `.gilpreset` files: see [serialization.md](serialization.md) |
+| [presets.py](../../src/substation/model/presets.py) | The user's preset library: `library_dir`, `save_to_library`, `list_presets`, `rename_preset`; see [serialization.md](serialization.md#the-library-presetspy) |
 
 ## Key types
 
@@ -386,7 +387,9 @@ Main operations, by area:
   their state; their automation moves with them in the same step), `remove_device(s)`,
   `set_device_param` (`old` passed in for plug-ins, whose values the model doesn't hold),
   `set_device_state`, `set_device_enabled`, `set_device_sidechain`, `set_devices_folded`,
-  `touch_parameter`. `_set_devices` deletes the automation of devices (and rack chains) that
+  `touch_parameter`, `load_preset_into` (a preset into a device of its kind: `loads_into`),
+  `add_midi_track_with` (a new MIDI track with an instrument preset, one step),
+  `rename_rack`, `set_device_defaults` (where new devices come from: default presets). `_set_devices` deletes the automation of devices (and rack chains) that
   left the track, and macro mappings to them, in the same step.
 - **Racks**: `group_devices` (Ctrl+G: devices of one chain into a new rack), `ungroup_rack`
   (refused if several instruments would come out), `add_rack_chain`, `remove_rack_chains`,

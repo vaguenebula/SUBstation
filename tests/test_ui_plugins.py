@@ -486,19 +486,19 @@ def test_dragging_a_device_to_another_track_moves_its_processor(window):
     assert [d.id for d in window.project.tracks[1].devices] == [utility.id, effect.id]
 
 
-def test_presets(window, tmp_path, monkeypatch):
+def test_vst3_presets(window, tmp_path, monkeypatch):
     track, device = synth_track(window)
     pid = engine_id(window, track, device)
     widget = window.devices.widgets[device.id]
     window.engine.set_processor_param(pid, GAIN, 0.25)
     preset = tmp_path / "Quiet.vstpreset"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(preset), ""))
-    widget.save_preset()
+    widget.save_vst3_preset()
     assert preset.read_bytes()[:4] == b"VST3"
 
     window.engine.set_processor_param(pid, GAIN, 0.8)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(preset), ""))
-    widget.load_preset()
+    widget.load_vst3_preset()
     assert window.engine.processor_param(pid, GAIN) == pytest.approx(0.25)
     assert window.undo_stack.undoText() == "Load Preset Quiet"
     assert window.devices.widgets[device.id].knobs[GAIN][0].value() == pytest.approx(0.25)
@@ -507,10 +507,10 @@ def test_presets(window, tmp_path, monkeypatch):
 
     # Another plug-in's preset is refused, and changes nothing.
     other = window.editor.add_device(track.id, PLUGIN_KIND, plugin=installed(window)["SUB Test Effect"])
-    window.devices.widgets[other.id].save_preset()
+    window.devices.widgets[other.id].save_vst3_preset()
     commands = window.undo_stack.count()
     widget = window.devices.widgets[device.id]
-    widget.load_preset()
+    widget.load_vst3_preset()
     assert window.undo_stack.count() == commands and "not for SUB Test Synth" in window.statusBar().currentMessage()
 
 

@@ -28,11 +28,13 @@ from ..audio.settings import (
     set_record_quantize,
 )
 from ..model import automation
-from ..model.editor import ProjectEditor, is_instrument
+from ..model.editor import ProjectEditor, device_is_instrument, is_instrument
+from ..model.presets import default_device
 from ..model.project import PLUGIN_KIND, PluginRef, Project
 from ..model.serialization import (
     EXTENSION,
     ProjectFileError,
+    load_preset,
     load_project,
     save_project,
 )
@@ -62,6 +64,7 @@ class MainWindow(QMainWindow):
         self.bridge = EngineBridge(engine, self.project, self)
         self.editor.set_param_info(self.bridge.device_param_info)  # (plug-ins' parameters, for macros)
         self.editor.set_own_value(self.bridge.own_value)  # (what a plug-in's editor set: to undo a macro to)
+        self.editor.set_device_defaults(default_device)  # (new devices start as their default presets have them)
         self._play_start = 0.0
 
         self.arrangement = ArrangementView(self.editor, self.selection, self.bridge)
@@ -96,6 +99,8 @@ class MainWindow(QMainWindow):
         self.browser.file_activated.connect(self.add_file_at_insert)
         self.browser.device_activated.connect(self.add_device_to_selected_track)
         self.browser.plugin_activated.connect(lambda ref: self.add_device_to_selected_track(PLUGIN_KIND, ref))
+        self.browser.preset_activated.connect(self.add_preset_to_selected_track)
+        self.devices.preset_saved.connect(lambda _path: self.browser.presets_changed())
         plugins = self.browser.plugin_index
         plugins.updated.connect(lambda: self.bridge.set_known_plugins(plugins.plugins))
         self.bridge.owner_window = lambda: int(self.winId())  # plug-in editors float above this window
@@ -414,6 +419,24 @@ class MainWindow(QMainWindow):
             self.editor.add_device(track_id, kind, plugin=plugin)
         else:
             self.show_message("Select a track to add the device to.")
+
+    def add_preset_to_selected_track(self, path: str) -> None:
+        """A preset's device, new, on the selected track (an instrument with no MIDI track selected: on a new one)."""
+        try:
+            device = load_preset(Path(path))
+        except ProjectFileError as exc:
+            self.show_message(str(exc))
+            return
+        text = f"Load Preset {Path(path).stem}"
+        track_id = self.selection.track_id
+        has_track = bool(track_id) and self.project.has_owner(track_id)
+        if device_is_instrument(device) and not (has_track and self.project.track(track_id).is_midi):
+            track = self.editor.add_midi_track_with(device, **self._after_selected_track(), text=text)
+            self.selection.select_track(track.id, focus_track=True)
+        elif not has_track:
+            self.show_message("Select a track to add the preset to.")
+        elif not self.editor.insert_device(track_id, device, text=text, show_editors=not device.is_rack):
+            self.show_message("The preset can't go there: racks nest at most 8 deep.")
 
     def _plugin_added(self, track_id: str, device_id: str) -> None:
         # After the add is done (the track may be selected just after it, and a drop

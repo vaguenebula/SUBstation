@@ -25,6 +25,8 @@ os.environ["SUBSTATION_PLUGIN_CACHE"] = str(Path(tempfile.mkdtemp(prefix="sub-pl
 # Nor the browser's use counts or its index (each window gets its own; see `window`).
 os.environ["SUBSTATION_LIBRARY"] = str(Path(tempfile.mkdtemp(prefix="sub-library-")) / "library.json")
 os.environ["SUBSTATION_BROWSER_INDEX"] = str(Path(tempfile.mkdtemp(prefix="sub-index-")) / "browser-index.bin")
+# Nor the user's preset library.
+os.environ["SUBSTATION_PRESETS"] = str(Path(tempfile.mkdtemp(prefix="sub-presets-")) / "Presets")
 
 # The fake ASIO driver (tests/asio_driver), built with the engine when it has the
 # ASIO SDK. The tests see only it, never the drivers installed on the computer.
@@ -95,6 +97,7 @@ def window(app, tmp_path):
     settings.setValue("browser/places", [str(tmp_path)])
     os.environ["SUBSTATION_LIBRARY"] = str(tmp_path / "library.json")
     os.environ["SUBSTATION_BROWSER_INDEX"] = str(tmp_path / "browser-index.bin")
+    os.environ["SUBSTATION_PRESETS"] = str(tmp_path / "Presets")
     # Exceptions raised inside Qt slots are only printed; collect them instead.
     errors = []
     previous_hook = sys.excepthook

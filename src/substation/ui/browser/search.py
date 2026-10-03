@@ -12,8 +12,8 @@ Sort orders:
           names that start with what you typed first.
   "name"  alphabetical.
 
-The list's own order: built-in devices, plug-ins (as the scan found them), then
-samples by name."""
+The list's own order: built-in devices, plug-ins (as the scan found them),
+presets (by the device they are for, then by name), then samples by name."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ SORTS = {"rank": "Rank", "name": "Name"}
 AUDIO = _browser.AUDIO  # the index's files
 BUILTIN = 1
 PLUGINS = 2
+PRESETS = 3
 
 
 def place_prefix(place: str) -> str:
@@ -39,11 +40,13 @@ def scope_query(scope: tuple) -> tuple[list[int], str, str]:
     """What a sidebar entry lists: (groups in order, tag, place prefix)."""
     kind, sub = scope[0], (scope[1] if len(scope) > 1 else "")
     if kind == "all":
-        return [BUILTIN, PLUGINS, AUDIO], "", ""
+        return [BUILTIN, PLUGINS, PRESETS, AUDIO], "", ""
     if kind == "builtin":
         return [BUILTIN], sub, ""
     if kind == "plugins":
         return [PLUGINS], sub, ""
+    if kind == "presets":
+        return [PRESETS], sub, ""
     if kind == "place":
         return [AUDIO], "", place_prefix(sub)
     return [AUDIO], "", ""

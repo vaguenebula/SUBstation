@@ -60,6 +60,7 @@ window.
 | `SUBSTATION_VST3_PATH` = the test plug-ins' folder | The scanner sees only the test plug-ins, never the installed ones. |
 | `SUBSTATION_PLUGIN_CACHE` = a temporary file | The tests keep their own scan cache. |
 | `SUBSTATION_LIBRARY`, `SUBSTATION_BROWSER_INDEX` = temporary files | Nor the user's use counts or browser index (each `window` gets its own). |
+| `SUBSTATION_PRESETS` = a temporary folder | Nor the user's preset library (each `window` gets its own). |
 | `SUBSTATION_ASIO_DRIVERS` = `SUB Test ASIO\|{5B2E8C1A-7F3D-4E6B-9C0A-1D2F3E4A5B6C}\|<SUBTestAsio.dll>` | The engine lists only the fake driver, loaded from its DLL, never the installed drivers. |
 
 Constants: `SAMPLE_RATE = 48000` (the engine's rate when no device is open), `TEST_PLUGINS` (the
@@ -256,6 +257,20 @@ parameters, and a saved rack rendering as the original; in the window: Ctrl+G an
 dropped into, chain mixers and macros. ([test_racks_engine.py](../tests/test_racks_engine.py),
 [test_racks_model.py](../tests/test_racks_model.py), [test_ui_racks.py](../tests/test_ui_racks.py))
 
+### Presets
+
+The preset library: presets saved by device and listed by group then name, names as file names, renaming. Loading
+a preset into a device of its kind (a built-in device, a plug-in, a rack) as one undo step, and refusing other kinds.
+Through the bridge: a plug-in preset renders as the device it was saved from, as a new device and loaded into another
+(undone and redone); a built-in one reaches the engine; a preset of a missing plug-in, or of a built-in device this
+version doesn't have, loads as a missing device, and the rest of a rack around it works. In the window: every
+device's save button, the browser's Presets section (searched in *All*), drops between devices and onto devices of
+the preset's kind or another, double-clicking (an instrument preset making a MIDI track), drops on a track, renaming
+and deleting. Default presets: new devices (and new MIDI tracks' instruments) starting
+as them, per plug-in, unreadable ones ignored, a plug-in's state reaching the engine; and racks named as their
+presets (saved, loaded, loaded into, in projects, older files without names). The tests use their own library (`SUBSTATION_PRESETS`, set in `conftest.py`).
+([test_presets.py](../tests/test_presets.py), [test_ui_presets.py](../tests/test_ui_presets.py))
+
 ### Parallel rendering
 
 Parallel tests render with and without the audio thread's workers: random routing graphs (nested groups, returns and
@@ -348,6 +363,7 @@ installed ones. ([test_vst3_engine.py](../tests/test_vst3_engine.py), [test_plug
 | [test_parallel_engine.py](../tests/test_parallel_engine.py) | 14 | Rendering on several threads, bit-identical to one thread on random routing graphs; cost ordering. |
 | [test_parallel_live.py](../tests/test_parallel_live.py) | 4 | The MIDI input, recording and resampling tests again, live with workers, through the fake driver. |
 | [test_plugin_scanner.py](../tests/test_plugin_scanner.py) | 5 | Scanning in child processes (a crashing or hanging plug-in costs only itself), the cache, finding plug-in files, friendly messages. |
+| [test_presets.py](../tests/test_presets.py) | 14 | The preset library, loading presets into devices (one undo step), and through the bridge: plug-in presets rendering as saved, missing plug-ins and devices. |
 | [test_racks_engine.py](../tests/test_racks_engine.py) | 13 | Racks in the engine: chains, faders, mute and solo, delay compensation, automation, instrument racks, sidechains, moves, nesting, meters, workers. |
 | [test_racks_model.py](../tests/test_racks_model.py) | 17 | Racks in the model: grouping, chains, moves, nesting, macros, automation, sidechains, undo, saving, presets, and the engine through the bridge. |
 | [test_recording.py](../tests/test_recording.py) | 8 | Audio input and recording in the engine: inputs, monitoring, takes and their placement (loopback), count-in, what ends a recording. |
@@ -366,6 +382,7 @@ installed ones. ([test_vst3_engine.py](../tests/test_vst3_engine.py), [test_plug
 | [test_ui_groups.py](../tests/test_ui_groups.py) | 7 | Group tracks in the window: Ctrl+G, folding, headers and the summary lane, dragging into and out of groups. |
 | [test_ui_midi.py](../tests/test_ui_midi.py) | 10 | MIDI tracks, clips and the piano roll in the window. |
 | [test_ui_plugins.py](../tests/test_ui_plugins.py) | 26 | VST3 plug-ins in the application: the browser, the device view, editors, undo and projects. |
+| [test_ui_presets.py](../tests/test_ui_presets.py) | 8 | Presets in the window: the save button, the browser's Presets section, dropping, double-clicking, renaming and deleting. |
 | [test_ui_racks.py](../tests/test_ui_racks.py) | 4 | Racks in the device view: Ctrl+G and Ctrl+Shift+G, chains, dropping devices, chain mixers and macros. |
 | [test_ui_recording.py](../tests/test_ui_recording.py) | 9 | Recording in the window: arming, inputs, monitoring, the record button, live waveforms, takes as clips; MIDI tracks and the MIDI preferences. |
 | [test_ui_resampling.py](../tests/test_ui_resampling.py) | 3 | The input menu (Resampling and other tracks, cycles greyed out) and takes recorded from a track and the master. |

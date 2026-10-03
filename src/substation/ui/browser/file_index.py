@@ -38,7 +38,7 @@ except ImportError:  # not Windows
 
 MAX_FILES = 300_000  # per place
 MAX_DEPTH = 16
-KINDS = ("audio", "plugin", "device")  # the backend's item kinds, by number
+KINDS = ("audio", "plugin", "device", "preset")  # the backend's item kinds, by number
 
 
 def index_path() -> Path:
