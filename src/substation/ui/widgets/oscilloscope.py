@@ -12,8 +12,8 @@ from ... import theme
 # Samples shown (~21 ms at 48 kHz). Read twice as many to find a trigger in; the
 # engine keeps 4096. Fixed, as the engine's sample rate is behind its edit lock.
 WINDOW = 1024
-UPDATE_MS = 33  # ~30 fps: plenty for a 150 px trace, and half the repaints of 60
-FADE_PER_UPDATE = 0.64  # while no audio comes, the trace shrinks to a flat line
+UPDATE_MS = 16  # ~60 fps
+FADE_PER_UPDATE = 0.8  # while no audio comes, the trace shrinks to a flat line (as fast as 0.64 per 33 ms)
 SILENT = 1e-4  # below this the trace counts as flat and stops repainting
 
 
