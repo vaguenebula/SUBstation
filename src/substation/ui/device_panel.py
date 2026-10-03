@@ -153,6 +153,7 @@ RACK_PRESET_FILTER = f"SUBstation Preset (*{PRESET_EXTENSION})"
 RACK_WIDTH = 420
 AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
 AUTOSCROLL_INTERVAL = 16  # ms
+DISPLAY_UPDATE_MS = 16  # the editors' displays: ~60 fps
 FOLDED_WIDTH = 26  # a folded device: a strip with its name
 
 
@@ -1140,7 +1141,11 @@ class DevicePanel(QFrame):
         bridge.devices_loaded.connect(lambda track_id: self._on_devices_changed(track_id, rebuild=True))
         bridge.automation_state_changed.connect(self._on_automation_state)
         bridge.position_changed.connect(self._follow_automation)
-        bridge.meters_updated.connect(self._refresh_displays)
+        # The editors' displays run at ~60 fps, on their own timer: the meters stay at the bridge's 33 ms.
+        self._display_timer = QTimer(self)
+        self._display_timer.setInterval(DISPLAY_UPDATE_MS)
+        self._display_timer.timeout.connect(self._tick_displays)
+        self._display_timer.start()
         self.show_track(None)
 
     def _current_widgets(self) -> list[_DeviceFrame]:
@@ -1156,6 +1161,10 @@ class DevicePanel(QFrame):
         for widget in self._current_widgets():
             if widget.follows_automation():
                 widget.refresh_automation()
+
+    def _tick_displays(self) -> None:
+        if self.isVisible():
+            self._refresh_displays()
 
     def _refresh_displays(self) -> None:
         for widget in self._current_widgets():
