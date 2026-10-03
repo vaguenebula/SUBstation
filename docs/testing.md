@@ -28,7 +28,8 @@ fail in confusing ways.
 
 | Condition | Skipped |
 |---|---|
-| Engine built without the ASIO SDK (`"ASIO" not in driver_types()`, or no `SUBTestAsio.dll`) | ASIO, recording, resampling, MIDI input and live parallel tests, and parts of the rack tests |
+| Engine built without the ASIO SDK (`"ASIO" not in driver_types()`) | ASIO, recording, resampling, MIDI input and live parallel tests, and the rack test `test_chain_meters` |
+| ASIO SDK there but no fake driver (`SUBTestAsio.dll` missing: built with `SUBSTATION_TEST_PLUGINS=OFF`) | ASIO, recording, resampling, MIDI input and live parallel tests (they use `test_asio.py`'s marker, which checks both). `test_chain_meters` checks only `driver_types()`, so it **fails** rather than skips here. |
 | Test plug-ins not built (`SUBSTATION_TEST_PLUGINS=OFF`) | VST3, scanner, sidechain, rack, send, group and parallel tests that use them |
 | Not Windows | the browser's file system tests, plug-in editor tests |
 | `_browser.UNICODE_VERSION` differs from the running Python's | the browser's every-character text tests |
