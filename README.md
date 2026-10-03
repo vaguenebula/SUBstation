@@ -72,7 +72,8 @@ python -m pytest
 ```
 
 The tests need no sound card and see none of the installed plug-ins: the build
-makes a fake ASIO driver and a few test VST3 plug-ins for them. Engine tests render
+makes a few test VST3 plug-ins for them, and a fake ASIO driver when the ASIO SDK is
+there (without it, the ASIO tests are skipped). Engine tests render
 offline; UI tests drive the real main window offscreen. See
 [docs/testing.md](docs/testing.md).
 

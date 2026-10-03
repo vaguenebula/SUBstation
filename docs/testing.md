@@ -1,7 +1,7 @@
 # Testing
 
 The test suite is pytest, in [tests/](../tests). It needs no sound card and no installed plug-ins: the engine renders
-offline, a fake ASIO driver and small VST3 plug-ins are built with the engine, and the UI tests drive the real main
+offline, small VST3 plug-ins (and, with the ASIO SDK, a fake ASIO driver) are built with the engine, and the UI tests drive the real main
 window offscreen. Benchmarks live apart, in [benchmarks/](../benchmarks), and are not run by pytest.
 
 ## Running the tests
@@ -59,7 +59,7 @@ window.
 | `SUBSTATION_VST3_PATH` = the test plug-ins' folder | The scanner sees only the test plug-ins, never the installed ones. |
 | `SUBSTATION_PLUGIN_CACHE` = a temporary file | The tests keep their own scan cache. |
 | `SUBSTATION_LIBRARY`, `SUBSTATION_BROWSER_INDEX` = temporary files | Nor the user's use counts or browser index (each `window` gets its own). |
-| `SUBSTATION_ASIO_DRIVERS` = `SUB Test ASIO|{5B2E8C1A-7F3D-4E6B-9C0A-1D2F3E4A5B6C}|<SUBTestAsio.dll>` | The engine lists only the fake driver, loaded from its DLL, never the installed drivers. |
+| `SUBSTATION_ASIO_DRIVERS` = `SUB Test ASIO\|{5B2E8C1A-7F3D-4E6B-9C0A-1D2F3E4A5B6C}\|<SUBTestAsio.dll>` | The engine lists only the fake driver, loaded from its DLL, never the installed drivers. |
 
 Constants: `SAMPLE_RATE = 48000` (the engine's rate when no device is open), `TEST_PLUGINS` (the
 `SUBTestPlugins.vst3` bundle next to `_engine`), `TEST_ASIO` (`_testdrivers/SUBTestAsio.dll`) and

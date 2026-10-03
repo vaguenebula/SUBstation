@@ -58,7 +58,9 @@ on or off. A preview stops when you click anywhere outside the browser.
 - The files under the places are indexed in the background and the index is kept
   (`%LOCALAPPDATA%\SUBstation\browser-index.bin`), so the next start shows it at once and
   only looks again at folders that changed.
-- Files added, removed or renamed in a place show up while the program runs.
+- Files added, removed or renamed in a place show up while the program runs. Only the
+  first 63 places are watched like this; in places after those, changes show after a
+  *Rescan* (or the next start).
 - Results show while a first scan is still going.
 - Right-click › *Rescan* reads every folder again (for drives that don't report
   changes).

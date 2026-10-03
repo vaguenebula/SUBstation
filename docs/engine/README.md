@@ -40,8 +40,12 @@ added to its source list there.
 
 The header comment of [Engine.h](../../engine/src/Engine.h) is the rule book. In short:
 
-- **The audio thread** (the device callback) only reads the published `RenderSnapshot` and
-  atomics. It never locks, allocates, frees or touches Python, so the GIL cannot cause dropouts.
+- **The audio thread** (the device callback) reads the published `RenderSnapshot`, which is
+  never changed once published, and atomics. It also writes the render state the snapshot
+  points at but doesn't own: `TrackBuffers`, the edges' `EdgeState`s and `DelayLine`s, and the
+  meters and fader smoothing in `TrackParams` (allocated on the edit side; only the audio thread
+  and its workers write them while a snapshot is live). It never locks, allocates, frees or
+  touches Python, so the GIL cannot cause dropouts.
   (That is the host's part; what a plug-in does in its `process()` is up to the plug-in.)
 - **API calls** may come from any Python thread. They serialise on `mutex_` (a
   `std::recursive_mutex`), change the edit model, then rebuild and publish a new snapshot.
