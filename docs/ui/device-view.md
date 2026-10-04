@@ -408,7 +408,7 @@ The left column (`CONTROLS_WIDTH` 260, scrollable) has three sections:
   "Mixed", when the clips differ), *Seg. BPM* (`ValueBox`, 20 to 999), and :2 / ×2.
 - **Pitch**: Transpose (±48 semitones, whole numbers) and Detune (±50 cents). Disabled,
   with a note, when every clip is warped in Re-Pitch.
-- **Mix**: clip volume (-70 to +24 dB) and pan.
+- **Mix**: clip gain (-70 to +24 dB; `ClipWaveform` draws each waveform scaled by it) and pan.
 
 Every control edits all open clips through `editor.update_clips(refs, change, text,
 merge_key)` with a function from clip to new clip:

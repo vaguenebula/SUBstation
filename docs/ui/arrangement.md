@@ -20,13 +20,13 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 | [grid.py](../../src/substation/ui/arrangement/grid.py) | `grid_lines()`, `label_step()`, `draw_grid()`, `draw_loop_region()`: shared by the ruler, the lanes, the bus lanes and the piano roll |
 | [ruler.py](../../src/substation/ui/arrangement/ruler.py) | `TimelineRuler`: the loop brace strip and the scrub area |
 | [lanes_canvas.py](../../src/substation/ui/arrangement/lanes_canvas.py) | `LanesCanvas`: painting clips, group summaries, live takes, the selection, markers; hit-testing; mouse, wheel, keys, context menus, drag and drop; the clipboard; Alt+wheel resizing (`wheel_action`) |
-| [interactions.py](../../src/substation/ui/arrangement/interactions.py) | the clip gestures: `ClipGesture` (base), `MoveRangeGesture`, `TrimGesture`, `TimeSelectGesture`, `PanGesture` |
+| [interactions.py](../../src/substation/ui/arrangement/interactions.py) | the clip gestures: `ClipGesture` (base), `MoveRangeGesture`, `TrimGesture` (both heard as they drag: `bridge.preview_clips`), `TimeSelectGesture`, `PanGesture` |
 | [track_headers.py](../../src/substation/ui/arrangement/track_headers.py) | `TrackHeader`, `TrackHeaderColumn`; `duplicate_tracks()`, input menus |
 | [mixer_controls.py](../../src/substation/ui/arrangement/mixer_controls.py) | What every strip's header has: `volume_box()`, `pan_knob()`, `SendControls`; `automation_state()`, `show_mixer_values()` |
 | [bus_tracks.py](../../src/substation/ui/arrangement/bus_tracks.py) | The master and return tracks' rows: `MasterHeader`, `ReturnHeader`, `BusLane`, `MasterLane`; `return_rows()` |
 | [automation_lanes.py](../../src/substation/ui/arrangement/automation_lanes.py) | envelopes drawn and edited: `EnvelopeArea`, `Hover`, hit-testing, `trace()`, `draw_area()`, the automation gestures and `press()`/`hover()` |
 | [automation_header.py](../../src/substation/ui/arrangement/automation_header.py) | `AutomationControls`: the device and parameter choosers in a header |
-| [waveform_cache.py](../../src/substation/ui/arrangement/waveform_cache.py) | `render_tile()` (numpy rasterising) and `WaveformCache` (an LRU of `QImage` tiles) |
+| [waveform_cache.py](../../src/substation/ui/arrangement/waveform_cache.py) | `render_tile()` (numpy rasterising, scaled by a clip's gain) and `WaveformCache` (an LRU of `QImage` tiles) |
 
 ## Layout
 
@@ -96,7 +96,8 @@ in display order) and makes one `Row` per track:
 | `lanes` | `LaneRow`s: the automation lanes shown below it, `AUTOMATION_LANE_HEIGHT` (44 px) each |
 | `automation` | its automation shows |
 | `hidden` | it is in a folded group: a row with no height |
-| `folded` | it is folded itself: `FOLDED_HEIGHT` (28), or `FOLDED_GROUP_HEIGHT` (32) for a group, and no automation |
+| `folded` | it is folded itself: `FOLDED_HEIGHT` (22), or `FOLDED_GROUP_HEIGHT` (24) for a group, and no automation |
+| `bars` | folded, and not a group: its clips are drawn and grabbed as bars, and its lane is no grid (see [hit-testing](#hit-testing)) |
 | `depth` | how many groups it is in (for the header's indent) |
 
 Rows stay one per track, in order, hidden or not, so a row's index is the track's
@@ -140,6 +141,13 @@ Selecting is always on the grid: selecting a clip selects the area it covers.
 latest end, the tracks from the first clip's to the last's) and sets a clip range with
 `clips_in_range()` over it. So a clip selection *is* a time selection; there is no
 separate per-clip selection to keep in step.
+
+A time range over tracks is everything in it: every one made on the grid is a clip range
+(`TimeSelectGesture` always passes `clips=`), and the editor's range operations act on
+the clips and the automation of every track in it (see
+[python/model.md](../python/model.md)). A drag that crosses a group's row takes in what is
+in the group (`project.with_contents`), folded away or not. Only ranges made on automation
+lanes (`lanes`) are about automation alone.
 
 `select_track(track_id, focus_track, mode, order)`: `mode="toggle"` (Ctrl-click) adds
 or removes one; `mode="range"` (Shift-click) takes the tracks between `_anchor` and it
@@ -187,34 +195,44 @@ signals about one track's parameters only repaint when that track's automation s
 `paintEvent` works only on the rows that meet the dirty rectangle, in this order:
 
 1. The empty area colour, then each row's background (lighter if its track is
-   selected).
+   selected). The time selection's tinted areas are worked out (`_selected_areas`: each
+   track's stretch, its automation lanes too unless automation is locked).
 2. The grid, all the way down (below the tracks too, where selecting works as well),
    and the loop region.
-3. For each row: a group's summary (`_draw_group_summary`: the clips of every track in
-   the group as translucent bars with a solid top edge, as in Ableton's group lanes);
-   its clips, skipping those the current gesture hides; a live take while recording;
-   the lines between its automation lanes; its bottom border.
+3. For each row: a folded track's tint (under its clips' bars, which stay as they are);
+   a group's summary (`_draw_group_summary`: the clips of every track in the group as
+   translucent bars with a solid top edge, as in Ableton's group lanes); its clips,
+   skipping those the current gesture hides; a live take while recording; the lines
+   between its automation lanes; its bottom border.
 4. The gesture's previews: `kept()` (what stays of moved clips) and `ghosts()` (where
    they go, translucent).
 5. The envelope areas (`automation_lanes.draw_area`), shaded over the clips in a
    track's own lane.
 6. A drop preview (files dragged in from the browser), or the empty-arrangement hint.
 7. The time selection: over the automation lanes it covers (`draw_range`), or as a tint
-   over each track's lane (below the title band for a lane range).
+   (`theme.SELECTION`) over each track's stretch; then the title bars and outlines of the
+   clips drawn there again over it (`_draw_clip_frame`, clipped to the tint), so selecting
+   never lights up a clip's title bar.
 8. The insert marker on the selected track (when nothing is selected), the playhead,
    and a gesture's readout (a breakpoint's value while dragging it).
 
 `_draw_clip` draws a clip's body (the track colour, desaturated), the faint grid over
-it, its title bar (16 px; a 9 px bar with no name in rows under 30 px, such as folded
-tracks), then a MIDI clip's `played_notes()` fitted to the clip's height (`_draw_notes`)
-or an audio clip's waveform from the `WaveformCache`, with the clip's
-`frames_per_pixel` at its own tempo (`source_tempo`). Channels are drawn apart when the
+it, a MIDI clip's `played_notes()` fitted to the clip's height (`_draw_notes`) or an audio
+clip's waveform from the `WaveformCache` (`_draw_content`), with the clip's
+`frames_per_pixel` at its own tempo (`source_tempo`) and scaled by its gain
+(`db_to_gain(gain_db)`: louder is taller, cut off at the body's edges); then its frame
+(`_draw_clip_frame`): its title bar (16 px; a 9 px bar with no name in rows under 30 px)
+and its outline. A folded track's clip (`clip_title_height(h, folded=True)`) is all title
+bar: a bar with its name, as in Ableton's folded tracks. Channels are drawn apart when the
 body is at least 44 px. Without a decoded source it says "Loading…" or "Missing file"
-(`bridge.load_error`). Selection isn't drawn per clip: the selected area's tint does it.
+(`bridge.load_error`). Selection isn't drawn per clip: the selected area's tint does it
+(under a folded track's bars, which show they are selected by a white outline).
 
 `_draw_live_take` draws a take while it records, from `bridge.live_takes`: a red-titled
-clip from `start_sample` to `start_sample + frames`, its waveform from the peaks the
-engine sends (`take.peaks`, `PEAK_FRAMES` frames each, reduced to one column per pixel
+clip from `start_sample` to the playhead (what has come in, `start_sample + frames`, lags
+it by the input's latency and arrives a buffer at a time; `set_playhead` repaints the strip
+between the old and new playhead while takes record, so it grows smoothly), its waveform
+from the peaks the engine sends (`take.peaks`, `PEAK_FRAMES` frames each, reduced to one column per pixel
 with `np.minimum.reduceat` / `np.maximum.reduceat`), or a MIDI take's notes so far
 (`_draw_live_notes`; a held note reaches the take's end). The file isn't read until
 the take is done. See [engine/recording.md](../engine/recording.md).
@@ -231,7 +249,8 @@ and 96 % of the width.
 - `hit_clip(pos)` → `(track id, clip, zone)`, the topmost clip first. Zones: `left` and
   `right` (trim handles: `EDGE_GRAB` 6 px, or a third of a narrow clip, inside each end
   of the title bar), `title` (select and move), `body` (the rest: time selection or
-  insert marker, as on an empty lane). Only points inside a clip count: next to it, or
+  insert marker, as on an empty lane). A folded track's clips (`row.bars`) have no body:
+  all of a bar is title. Only points inside a clip count: next to it, or
   on a neighbour's side of a shared edge, you aren't trimming this one. Automation
   lanes below a track never hit clips.
 - `in_clip_band(pos)`: the top band of a lane (the title bar's height), or all of a
@@ -254,11 +273,17 @@ on a clip's title                    → select its area (Shift: the area holdin
                                        the range's start; MoveRangeGesture
 anywhere else (clip body, empty lane,→ clear the selection on that track; insert
   below the tracks)                    marker at the snapped beat; TimeSelectGesture
+                                       (not on a folded track's lane: no grid there,
+                                       the click only sets the insert marker)
 ```
+
+A press while a gesture is still there (its release never came) ends what that gesture
+previewed (`bridge.end_clip_preview()`) first.
 
 `mouseMoveEvent` forwards to the gesture, or updates the cursor and hover state
 (`_update_cursor`: Ableton's `[`/`]` bracket cursors from `trim_cursor()`, a pointing
-hand over titles and inside the clip range, an I-beam elsewhere, the open hand while
+hand over titles and inside the clip range, an I-beam elsewhere (an arrow on a folded
+track's lane, which isn't a grid), the open hand while
 Ctrl+Alt is held, and the automation cursors). Key presses and releases update the
 cursor too, so holding Ctrl+Alt shows the hand without moving the mouse.
 `mouseReleaseEvent` calls the gesture's `finish()`.
@@ -283,9 +308,9 @@ in `finish()`, so a drag is one undo step and the model isn't touched while drag
 
 | Gesture | Does |
 |---|---|
-| `MoveRangeGesture` | Drag a clip range (a selected clip is one): moves it, Ctrl copies, Alt off the grid. Up to `DRAG_THRESHOLD` (4 px) it is still a click (calls `on_click`). At the press it works out, per track, the clips inside the range cut at its edges (`edits.slice_range`: the pieces that move) and what stays (`edits.remove_range`). While dragging: the time delta snapped against the range's start, and the track delta clamped by `editor.clamp_track_delta` (clips only move onto tracks of their kind). `finish()` calls `editor.move_range(start, end, track_ids, delta, track_delta, copy_clips=...)` and selects where it landed. |
-| `TrimGesture` | Drag a trim handle: `edits.trim_start` / `trim_end` to the snapped beat; `finish()` calls `editor.replace_clip(track_id, result, "Trim Clip")` and reselects the clip so the selection follows its new edges. |
-| `TimeSelectGesture` | Click: the insert marker (set at the press). Drag: a range over the rows from where it started to where it is. If the drag is in the clip band, or above the row it started in, it is a clip range (`clips=` the clips it touches); otherwise a lane range. The cursor shows which. |
+| `MoveRangeGesture` | Drag a clip range (a selected clip is one): moves it, Ctrl copies, Alt off the grid. Up to `DRAG_THRESHOLD` (4 px) it is still a click (calls `on_click`). At the press it works out, per track, the clips inside the range cut at its edges (`edits.slice_range`: the pieces that move) and what stays (`edits.remove_range`). While dragging: the time delta snapped against the range's start, and the track delta clamped by `editor.clamp_track_delta` (clips only move onto tracks of their kind); whenever they change, `editor.moved_range` (what the move would make of the clips) goes to `bridge.preview_clips`, so the clips are heard where they would land. `finish()` calls `editor.move_range(start, end, track_ids, delta, track_delta, copy_clips=...)`, `bridge.end_clip_preview()`, and selects where it landed. |
+| `TrimGesture` | Drag a trim handle: `edits.trim_start` / `trim_end` to the snapped beat, previewed in the engine as it changes; `finish()` calls `editor.replace_clip(track_id, result, "Trim Clip")`, ends the preview and reselects the clip so the selection follows its new edges. |
+| `TimeSelectGesture` | Click: the insert marker (set at the press). Drag: a range over the rows from where it started to where it is, and what is in the groups among them (`project.with_contents`): always a clip range (`clips=` the clips it touches), wherever in the lanes it goes. |
 | `PanGesture` | Ctrl+Alt drag: scrolls both ways. |
 
 The automation gestures (`PointGesture`, `CurveGesture`, `RangeGesture`, `LaneGesture`)
@@ -299,12 +324,13 @@ gestures they edit the model as they go, with a merge key per drag.
 
 | Method | Editor call | Afterwards |
 |---|---|---|
-| `delete_area()` | `delete_range` | the empty area stays selected |
+| `delete_area()` | `delete_range` (clips and automation) | the empty area stays selected |
 | `duplicate_area()` | `duplicate_range` | the copy is selected, the insert marker at its start |
 | `copy_area()` / `cut_area()` | `copy_range` / `cut_range` | (cut) the empty area stays selected |
 | `copy_automation()` / `cut_automation()` | `copy_automation_range` / `cut_automation_range` | |
 | `paste(at_beat, track_id)` | `paste` (clips) or `paste_automation` | the pasted range is selected; the insert marker goes to its end, so pasting again appends |
 | `consolidate()` | `consolidate_clips` (Ctrl+J) | the joined clips are selected |
+| `reverse_selection()` | `bridge.render_reversed` for each audio file in the range not reversed yet (a reversed clip whose file is there goes back to it), then `reverse_range` (R) | the range stays selected |
 | `insert_midi_clip(track_id, x)` | `add_midi_clips_over` (inside the time selection) or `midi_clip_span` + `add_midi_clip` | selected, opened in the piano roll |
 
 Automation paste goes onto the selected lanes if there is a lane range (or the lane of
@@ -316,8 +342,9 @@ the selected breakpoints), else onto the lanes it came from
 `contextMenuEvent`: on an automation lane, Cut/Copy (enabled inside the selected
 range), Paste (onto the selected lanes if this is one of them, else this lane) and the
 lane's own entries (`automation_lanes.add_menu_actions`). On a clip (it is selected
-first unless it already was): Cut, Copy, Paste, Split Here (at the snapped beat under
-the mouse), Duplicate, Consolidate (enabled by `editor.consolidatable`), Delete.
+first unless it already was), or anywhere in the selected time range: Cut, Copy, Paste,
+Split Here (on a clip: at the snapped beat under the mouse), Duplicate, Consolidate
+(enabled by `editor.consolidatable`), Reverse (enabled with an audio clip in it), Delete.
 Elsewhere: Paste at the snapped beat on that track, Insert MIDI Clip (MIDI tracks),
 Insert Audio/MIDI Track (after it, in its group: `editor.insertion_point`), Delete
 Track.
@@ -522,7 +549,7 @@ Choosing calls `editor.set_automation_lane(owner, lane, key)`.
 
 [waveform_cache.py](../../src/substation/ui/arrangement/waveform_cache.py).
 
-`render_tile(source, frames_per_px, index, height, split_channels, argb)` rasterises
+`render_tile(source, frames_per_px, index, height, split_channels, argb, gain)` rasterises
 256 px (`TILE`) of a source's waveform into a premultiplied ARGB `QImage` with numpy:
 
 1. Column edges in source frames, with one padding column each side so smoothing is
@@ -531,16 +558,18 @@ Choosing calls `editor.set_automation_lane(owner, lane, key)`.
    `AudioSource.samples_per_peak`) with no more frames per peak than per pixel; when
    zoomed in past level 0, the raw samples (`source.samples`). See
    [engine/warp.md](../engine/warp.md) for the peaks.
-3. Each column's min and max (`np.minimum.reduceat` / `np.maximum.reduceat`); a
-   [1 2 1]/4 blur for peak data (envelopes read smoother), none for raw samples.
+3. Each column's min and max (`np.minimum.reduceat` / `np.maximum.reduceat`), times
+   the clip's gain (linear; cut off at the lane's edges); a [1 2 1]/4 blur for peak data
+   (envelopes read smoother), none for raw samples.
 4. Antialiased coverage: each pixel row gets the fraction of it between the column's
    top and bottom (at least a pixel thick), per channel lane when split.
 
 `WaveformCache` keeps up to `MAX_TILES` (800) tiles in an `OrderedDict` used as an LRU,
 keyed by `(path, frames, sample rate, frames per pixel, tile index, height, split,
-colour)`. Tiles are anchored to the start of the source file, not the clip, so moving
+colour, gain)` (the gain rounded to 1 %, so turning a gain knob renders a few tiles, not
+one per value). Tiles are anchored to the start of the source file, not the clip, so moving
 or trimming a clip reuses them; only zooming, a tempo change (frames per pixel) or a
-new lane height renders new ones. `draw()` works out which tiles the visible part of a
+new lane height or gain renders new ones. `draw()` works out which tiles the visible part of a
 clip body needs from the clip's x and `offset_sec`. The cache is cleared on project
 reset. The clip view keeps its own cache (200 tiles).
 
@@ -579,7 +608,8 @@ reset. The clip view keeps its own cache (200 tiles).
 |---|---|
 | [test_ui_smoke.py](../../tests/test_ui_smoke.py) | dragging and Ctrl-dragging clips and undo, trimming, selecting below the tracks, the clip body setting the insert marker, title clicks setting the playback start, Shift-click ranges, drags ending in the clip band, moving clip ranges, cut/copy/paste, the ruler's loop brace and scrub zoom, Alt+wheel resizing and folding, Ctrl+Alt drag, zoom, scroll and follow, dropping files, double-click opening the clip view |
 | [test_ui_automation.py](../../tests/test_ui_automation.py) | A, parameters showing their lanes, clicking on the line, dragging and bending breakpoints, segments and steps, deleting, time ranges (clear, duplicate, move), overriding and re-enabling, controls following automation, the master's lane, lanes below tracks, saving, automation moving with a dragged clip, dragging up into the clips |
-| [test_ui_groups.py](../../tests/test_ui_groups.py) | Ctrl+G, folding (and its automation), the group's summary lane, dragging headers into and out of groups, folded tracks as a grid to select on |
+| [test_ui_groups.py](../../tests/test_ui_groups.py) | Ctrl+G, folding (and its automation), the group's summary lane, dragging headers into and out of groups, a folded track's clips as bars to click and drag (its lane no grid) |
+| [test_ui_clip_edits.py](../../tests/test_ui_clip_edits.py) | reversing audio clips (R, and part of a clip), clip gain (its knob's name, the waveform's height), clips heard where a drag (or trim) takes them before it ends, time selections over groups (delete, copy and paste, Ctrl+A), the live take reaching the playhead |
 | [test_ui_sends.py](../../tests/test_ui_sends.py) | Ctrl+Alt+T, the returns' rows above the master, send knobs on every header, pre/post-fader, send automation lanes, deleting a return |
 | [test_ui_recording.py](../../tests/test_ui_recording.py), [test_ui_resampling.py](../../tests/test_ui_resampling.py) | arm, input and monitoring controls, the input menu with resampling sources greyed out, the live waveform, takes becoming clips |
 | [test_duplicate_tracks_copy_automation.py](../../tests/test_duplicate_tracks_copy_automation.py) | duplicating tracks (automation and routing following the copies), and cutting, copying and pasting automation ranges onto the selected lanes or those they came from |

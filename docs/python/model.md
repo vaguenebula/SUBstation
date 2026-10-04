@@ -77,7 +77,9 @@ stays put on the timeline.
   (`is_warped`: `warp` and `segment_bpm > 0`), the audio is taken to be at `segment_bpm`, so
   its length in beats is fixed. `source_tempo()`, `beats_to_source()` and
   `source_to_beats()` convert between the two. `segment_bpm` 0 means "not set" (shown as the
-  project tempo).
+  project tempo). A reversed clip plays a reversed copy of a file (its `path`, written by the
+  bridge); `reversed_from` is the file it was made from (reversing again goes back to it),
+  empty for a clip that isn't reversed.
 - `MidiClip`: `start_beat`, `duration_beats`, `offset_beats` (the content beat at the clip's
   start) and `notes`, a tuple of `Note` sorted by start then pitch. Its length is in beats,
   so it doesn't change with the tempo. Notes outside the window are kept but not played, so
@@ -171,8 +173,9 @@ won't set it.
 - The editor's `freeze_tracks({track: Freeze})` (one step; disarms them; a track in a group
   frozen with it is left out), `unfreeze_tracks()` and `flatten_tracks()` (a
   `ReplaceTrackCommand` per track: an audio track of the same id playing `Freeze.clip()`, no
-  devices, no device automation). The render itself is the bridge's (`render_freeze()`);
-  [ui/freezing.py](../../src/substation/ui/freezing.py) does both.
+  devices, no device automation). The render itself is the bridge's (`render_freeze()`, or
+  `start_freeze()` and `finish_freeze()` in the background);
+  [ui/freezing.py](../../src/substation/ui/freezing.py) does both, its progress shown.
 - What frozen audio holds can't change. `ProjectEditor._push()` refuses (and says why on
   `refused`; the checks are in [editor/freezing.py](../../src/substation/model/editor/freezing.py)) commands changing a frozen track's (or a track in a frozen group's) clips,
   devices or device automation, and the mixer automation of a track in a frozen group
@@ -188,7 +191,8 @@ Groups hold other tracks. `project.tracks` stays **flat**; the hierarchy is each
 `parent`. The invariant (`tree_problem`) is that a track's parent is a group listed before
 it, and everything between a group and its last descendant is a descendant of it: a group's
 tracks follow it, together, and no group is in itself. `repair_tree` takes tracks out of
-groups they can't be in (an edited file). Queries: `subtree_end`, `descendants`, `children`,
+groups they can't be in (an edited file). Queries: `subtree_end`, `descendants`,
+`with_contents(ids)` (those tracks and what is in the groups among them, in order), `children`,
 `ancestors`, `is_descendant`, `depth`, `is_hidden` (a group it is in is folded),
 `parent_at(index)` (a track inserted there goes into the group of the track it goes before),
 `tree()` (every track's `(id, parent)`: a `TrackTree`). The engine sees only where each
@@ -402,13 +406,17 @@ Main operations, by area:
   `set_clip_notes`, `move_clips` (with `clamp_track_delta`: only onto tracks of the same
   kind), `replace_clip`, `update_clips`, `delete_clips`, `split_clips`, `duplicate_clips`,
   `consolidate_clips` (Ctrl+J), time selections (`delete_range`, `duplicate_range`,
-  `copy_range`, `cut_range`, `paste`, `paste_targets`, `move_range`, `clips_area`,
-  `clips_in_range`, `clips_at`), and `add_recordings` (takes become clips in one step; MIDI
-  takes quantized to the record grid).
-- **Automation carried by clips**: unless `automation_locked`, moving, copying, duplicating,
-  cutting and pasting clip content takes the automation under it along
-  (`_carried_automation`): only envelopes with breakpoints under the clips; across tracks only
-  the mixer's (a device's automation belongs to its track).
+  `copy_range`, `cut_range`, `paste`, `paste_targets`, `move_range`, `moved_range` (what
+  `move_range` would make of the clips, without making it: for a drag's preview),
+  `reverse_range` (the audio clips in a range play reversed copies of their files, given by
+  the caller; split at the range's edges), `clips_area`, `clips_in_range`, `clips_at`), and
+  `add_recordings` (takes become clips in one step; MIDI takes quantized to the record grid).
+- **A time selection is everything in it**: unless `automation_locked`, deleting, moving,
+  copying, duplicating, cutting and pasting a range acts on the automation of every track in
+  it as on its clips, whether the track has clips there or not (a group's too)
+  (`_carried_automation`, `_cleared_automation`): only envelopes with breakpoints in the
+  range; across tracks only the mixer's (a device's automation belongs to its track).
+  `copy_range` copies a track with automation and no clips too.
 - **Devices**: `add_device`, `insert_device(s)` (an instrument only on a MIDI track, first,
   replacing the one there; effects never before it), `copy_devices`, `paste_devices`
   (sidechains kept unless the source is gone or would close a cycle; folded copies stay
@@ -453,7 +461,8 @@ they are tested directly.
 - `remove_range`, `slice_range` (new clips holding just a range; `keep_ids` for clips wholly
   inside), `split_clip`, `trim_start` (a MIDI clip revealing time before its content shifts
   its notes so they stay put), `trim_end` (audio limited by the source), `fit_to_tempo`
-  (returns the same list object when nothing changed), `consolidate_midi`.
+  (returns the same list object when nothing changed), `consolidate_midi`, `reverse_clip` (a
+  clip playing a reversed copy of its file: the same stretch of audio, its offset mirrored).
 - Minimum sizes: `MIN_CLIP_SEC` (5 ms), `MIN_MIDI_CLIP_BEATS` and `MIN_NOTE_BEATS` (1/64).
 - `notes.place(notes, removed, added)` is how the piano roll commits: added notes win where
   they overlap others on their key (`resolve_overlaps`); notes changed together are made
@@ -516,7 +525,8 @@ they are tested directly.
 
 - [test_edits.py](../../tests/test_edits.py): overlaps, trims, splits, ranges, tempo fitting,
   moves across tracks, gesture merging, inputs undoable and arming not, recorded takes,
-  copy/paste and automation carried with clips.
+  copy/paste and automation carried with clips, time selections over groups and tracks
+  without clips, `moved_range`, reversing.
 - [test_midi_model.py](../../tests/test_midi_model.py): MIDI clips and notes, the piano roll's
   tools, MIDI takes.
 - [test_automation_model.py](../../tests/test_automation_model.py): envelope maths, the

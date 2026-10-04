@@ -5,7 +5,9 @@
 #include "Engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cwctype>
+#include <iterator>
 #include <stdexcept>
 #include <thread>
 #include <unordered_set>
@@ -29,6 +31,11 @@ Engine::Engine()
 
 Engine::~Engine() {
     std::lock_guard lock(mutex_);
+    if (RenderJob* job = std::exchange(job_, nullptr)) {  // its thread mustn't outlive the engine
+        job->cancel();
+        if (job->thread_.joinable()) job->thread_.join();
+        job->engine_ = nullptr;
+    }
     midiDevices_.closeAll();
     closeDeviceLocked();
 }
@@ -211,6 +218,7 @@ void Engine::setAudioThreads(int threads) {
     threads = std::clamp(threads, 1, kMaxAudioThreads);
     std::lock_guard lock(mutex_);
     if (scheduler_->threads() == threads) return;
+    checkNotRenderingLocked();  // (a render in the background uses the scheduler)
     // The audio thread mustn't be inside the scheduler (or the renderer's
     // scratch) while they change: it outputs silence meanwhile. A recording goes
     // on (the playhead waits as well).
@@ -251,17 +259,20 @@ void Engine::collectGarbageLocked() {
     releasePool_.collect(audioEpoch_.load(std::memory_order_seq_cst), !deviceRunning_);
 }
 
-void Engine::idle() {
+void Engine::idle(bool releaseAll) {
     std::vector<std::shared_ptr<Processor>> live;
     std::vector<std::shared_ptr<Processor>> dead;
     {
         std::lock_guard lock(mutex_);
+        const bool rendering = job_ != nullptr;  // processors wait (a plug-in restarting would leave a gap in it)
         if (deviceRunning_ && (pendingDeviceEvents_.load() & static_cast<uint32_t>(DeviceEvent::Stopped))) {
             closeDeviceLocked();  // the backend lost the device; the UI reports it via takeDeviceEvent()
         }
         collectGarbageLocked();
         serviceTransportIfIdleLocked();
-        for (const auto& [id, entry] : processors_) live.push_back(entry.processor);
+        if (!rendering) {
+            for (const auto& [id, entry] : processors_) live.push_back(entry.processor);
+        }
         // Removed processors that no snapshot holds any more.
         for (auto it = graveyard_.begin(); it != graveyard_.end();) {
             if (it->use_count() == 1) {
@@ -272,7 +283,20 @@ void Engine::idle() {
             }
         }
     }
-    dead.clear();  // plug-ins may take their time to go: not under the lock
+    // Plug-ins may take their time to go: not under the lock, and a few at a
+    // time; those left wait for the next call.
+    constexpr auto kReleaseBudget = std::chrono::milliseconds(20);
+    const auto started = std::chrono::steady_clock::now();
+    size_t released = 0;
+    while (released < dead.size() && (releaseAll || std::chrono::steady_clock::now() - started < kReleaseBudget)) {
+        dead[released++].reset();
+    }
+    if (released < dead.size()) {
+        std::lock_guard lock(mutex_);
+        graveyard_.insert(graveyard_.begin(), std::make_move_iterator(dead.begin() + static_cast<std::ptrdiff_t>(released)),
+                          std::make_move_iterator(dead.end()));
+    }
+    dead.clear();
 
     bool realign = false;
     for (const auto& p : live) realign |= p->idle();

@@ -497,11 +497,13 @@ def test_clip_body_sets_insert_and_selects_time(window, three_tracks):
     assert window.selection.insert_beat == pytest.approx(1.0)
     assert window.selection.track_id == tracks[0].id
     # Dragging selects a time range across the tracks it covers; play starts at its start.
+    # It selects everything in it, the clips it touches too, whether the drag was in their bodies or titles.
     end_y = rows[1].top - view.scroll_y + rows[1].height // 2
     drag(lanes, QPoint(int(view.beat_to_x(3.0)), body_y), QPoint(int(view.beat_to_x(1.0)), end_y))
     assert window.selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id))
     assert window.selection.insert_beat == pytest.approx(1.0)
-    assert window.selection.clips == set()
+    assert window.selection.clip_range
+    assert window.selection.clips == {(t.id, t.clips[0].id) for t in tracks[:2]}
     window.editor.delete_tracks([tracks[1].id])
     assert window.selection.time_range[2] == (tracks[0].id,)
 
@@ -681,30 +683,23 @@ def test_double_click_clip_opens_clip_view(window, three_tracks):
     assert not clip_view.isVisible()
 
 
-def test_drag_ending_in_clip_band_selects_clip_range(window, three_tracks):
+def test_a_drag_on_the_lanes_selects_everything_in_its_range(window, three_tracks):
     arrangement = window.arrangement
     lanes, view, rows = arrangement.lanes, arrangement.view, arrangement.layout_model.rows
     selection, tracks = window.selection, window.project.tracks
     tempo = window.project.tempo
     body_y = rows[0].top - view.scroll_y + rows[0].height // 2
     lane_y = rows[1].top - view.scroll_y + rows[1].height - 8
-    # Ending lower in the lane selects time (for automation later); Delete leaves clips alone.
-    drag(lanes, QPoint(int(view.beat_to_x(1.0)), body_y), QPoint(int(view.beat_to_x(3.0)), lane_y))
-    assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id))
-    assert not selection.clip_range and selection.clips == set()
-    window.delete_selection()
-    assert [len(t.clips) for t in tracks] == [1, 1, 1]
-    # Going up into the lanes above selects the clips, wherever in the lane it ends.
-    drag(lanes, QPoint(int(view.beat_to_x(1.0)), lane_y), QPoint(int(view.beat_to_x(3.0)), body_y))
-    assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id)) and selection.clip_range
-    selection.clear()
-    # Ending in the top (clip) band makes a clip range: it persists, and it knows
-    # the clips it touches (for the clip view).
     band_y = rows[1].top - view.scroll_y + 5
-    drag(lanes, QPoint(int(view.beat_to_x(1.0)), body_y), QPoint(int(view.beat_to_x(3.0)), band_y))
-    assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id))
-    assert selection.clip_range
-    assert selection.clips == {(tracks[0].id, tracks[0].clips[0].id), (tracks[1].id, tracks[1].clips[0].id)}
+    # Wherever in the lanes it ends (low in a lane, or in the clips' top band), a drag
+    # selects everything in its range: it persists, and it knows the clips it
+    # touches (for the clip view); Delete, Cut, Copy and Duplicate act on all of it.
+    touched = {(tracks[0].id, tracks[0].clips[0].id), (tracks[1].id, tracks[1].clips[0].id)}
+    for start_y, end_y in ((body_y, lane_y), (lane_y, body_y), (body_y, band_y)):
+        selection.clear()
+        drag(lanes, QPoint(int(view.beat_to_x(1.0)), start_y), QPoint(int(view.beat_to_x(3.0)), end_y))
+        assert selection.time_range == (1.0, 3.0, (tracks[0].id, tracks[1].id))
+        assert selection.clip_range and selection.clips == touched
     assert not lanes.grab().isNull()
     # Delete cuts out only the range: clip 0 (beats 0-4) keeps its start and end,
     # clip 1 (beats 2-8) loses its first beat, track 3 is outside the range.
@@ -735,11 +730,15 @@ def test_drag_ending_in_clip_band_selects_clip_range(window, three_tracks):
                      QPoint(int(view.beat_to_x(5.0)), rows[1].top - view.scroll_y + 6))
     assert selection.time_range == (2.0, 8.0, (tracks[1].id,)) and selection.clip_range
     assert selection.clips == {(tracks[1].id, tracks[1].clips[0].id)}
-    # ...and draws it highlighted.
+    # ...and draws it highlighted, but for its title bar.
     body = QPoint(int(view.beat_to_x(5.0)), rows[1].top - view.scroll_y + rows[1].height // 2)
-    highlighted = lanes.grab().toImage().pixelColor(body)
+    title = QPoint(int(view.beat_to_x(5.0)), rows[1].top - view.scroll_y + 6)
+    image = lanes.grab().toImage()
+    highlighted, title_color = image.pixelColor(body), image.pixelColor(title)
     selection.clear()
-    assert lanes.grab().toImage().pixelColor(body) != highlighted
+    image = lanes.grab().toImage()
+    assert image.pixelColor(body) != highlighted
+    assert image.pixelColor(title) == title_color
 
 
 def test_dragging_a_clip_range_moves_it(window, three_tracks):
@@ -1019,6 +1018,12 @@ def test_shortcuts_from_plugin_editor(window, monkeypatch):
     window.computer_keyboard.set_enabled(True)  # S plays a note, as in the window
     assert not key_down(1234, ord("S")) and key_down(1234, 0x20)
     window.computer_keyboard.set_enabled(False)
+    # While a render's dialog is up the window takes no keys, from plug-ins' editors either.
+    from substation.ui import rendering
+
+    monkeypatch.setattr(rendering, "active", lambda: object())
+    played.clear()
+    assert not key_down(1234, 0x20) and not played
 
 
 def test_used_items_rank_first(window, three_tracks):

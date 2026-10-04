@@ -256,17 +256,37 @@ class ClipEdits:
                  for tid, ids in ids_by_track.items()}
         self._commit("Delete Clips" if len(refs) > 1 else "Delete Clip", after)
 
+    def _cleared_automation(self, start: float, end: float, track_ids) -> dict[LaneRef, Envelope]:
+        """The envelopes of these tracks with their automation between two beats
+        deleted (none if automation is locked: it stays where it is)."""
+        p = self.project
+        if p.automation_locked:
+            return {}
+        changed = {}
+        for tid in track_ids:
+            for key, points in p.automation(tid).items():
+                if automation.has_points_in(points, start, end):
+                    cleared = automation.drop_redundant(automation.remove_range(points, start, end), (start, end))
+                    if cleared != points:
+                        changed[(tid, key)] = cleared
+        return changed
+
     def delete_range(self, start: float, end: float, track_ids: list[str]) -> None:
-        """Delete the clip content between two beats on the given tracks."""
+        """Delete what is between two beats on the given tracks: the clip content,
+        and the automation (unless automation is locked)."""
         tempo = self.project.tempo
-        self._commit("Delete Time Selection", {
-            tid: edits.remove_range(self.project.track(tid).clips, start, end, tempo) for tid in track_ids})
+        track_ids = [t for t in track_ids if self.project.has_track(t)]
+        self._commit_moved("Delete Time Selection", {
+            tid: edits.remove_range(self.project.track(tid).clips, start, end, tempo) for tid in track_ids},
+            self._cleared_automation(start, end, track_ids))
 
     def duplicate_range(self, start: float, end: float, track_ids: list[str]) -> list[ClipRef]:
-        """Ableton's Ctrl+D on a time selection: copy just the clip content between
-        two beats to right after `end`, replacing what was there. Returns the copies."""
+        """Ableton's Ctrl+D on a time selection: copy what is between two beats (the
+        clip content, and the automation unless it is locked) to right after
+        `end`, replacing what was there. Returns the copies."""
         tempo = self.project.tempo
         length = end - start
+        track_ids = [t for t in track_ids if self.project.has_track(t)]
         after: dict[str, list[AnyClip]] = {}
         result: list[ClipRef] = []
         for tid in track_ids:
@@ -276,15 +296,14 @@ class ClipEdits:
                 ids = {c.id for c in copies}
                 after[tid] = edits.resolve_overlaps(list(clips) + copies, ids, tempo)
                 result += [(tid, cid) for cid in ids]
-        if after:
-            spans = [(tid, tid, start, end) for tid in after]
-            self._commit_moved("Duplicate Time Selection", after, self._carried_automation(spans, length, True))
+        spans = [(tid, tid, start, end) for tid in track_ids]
+        self._commit_moved("Duplicate Time Selection", after, self._carried_automation(spans, length, True))
         return result
 
     def copy_range(self, start: float, end: float, track_ids) -> ClipboardContent | None:
-        """Ctrl+C on a time selection: just the clip content between two beats on these
-        tracks (clips across its edges are cut there), with the automation under it
-        unless automation is locked. None if there is no clip content there."""
+        """Ctrl+C on a time selection: what is between two beats on these tracks:
+        the clip content (clips across its edges are cut there) and the
+        automation, unless automation is locked. None if there is nothing there."""
         p = self.project
         tempo = p.tempo
         ids = sorted((t for t in set(track_ids) if p.has_track(t)), key=p.track_index)
@@ -295,15 +314,15 @@ class ClipEdits:
             track = p.track(tid)
             clips = tuple(replace(c, start_beat=c.start_beat - start)
                           for c in edits.slice_range(track.clips, start, end, tempo))
-            if not clips:
-                continue
             lanes = () if p.automation_locked else tuple(
                 (key, automation.copy_range(points, start, end)) for key, points in p.automation(tid).items()
                 if automation.has_points_in(points, start, end))
+            if not clips and not lanes:
+                continue
             copied.append((p.track_index(tid), CopiedTrack(tid, track.kind, 0, clips, lanes)))
         if not copied:
             return None
-        top = copied[0][0]  # rows count from the topmost track with content
+        top = copied[0][0]  # rows count from the topmost track with content (clips or automation)
         return ClipboardContent(end - start, tuple(replace(c, row=index - top) for index, c in copied))
 
     def cut_range(self, start: float, end: float, track_ids) -> ClipboardContent | None:
@@ -373,12 +392,11 @@ class ClipEdits:
         rows = sorted(p.track_index(d) for d in dests)
         return at, at + content.length, [t.id for t in p.tracks[rows[0]:rows[-1] + 1]]
 
-    def move_range(self, start: float, end: float, track_ids: list[str], delta_beats: float,
-                   track_delta: int = 0, copy_clips: bool = False) -> tuple[float, list[str]]:
-        """Ableton's drag of a time selection: move (or copy) just the clip content
-        between two beats, in time and across tracks. Clips across the range's edges
-        are split there; the moved content replaces what it lands on. Returns where
-        the range ended up: its new start and tracks."""
+    def moved_range(self, start: float, end: float, track_ids: list[str], delta_beats: float,
+                    track_delta: int = 0, copy_clips: bool = False) -> tuple[dict[str, list[AnyClip]], float, int]:
+        """What move_range would make of the clips, without making it: the tracks'
+        clips after it, and the time and track deltas it would move by (within
+        the timeline, and onto tracks of their kind). For previews while dragging."""
         p = self.project
         tempo = p.tempo
         delta_beats = max(delta_beats, -start)
@@ -386,12 +404,10 @@ class ClipEdits:
         lists = {t.id: list(t.clips) for t in p.tracks}
         affected: set[str] = set()
         winners: dict[str, set[str]] = {}
-        dest_ids = []
         # Moved clips that were wholly inside the range stay the same clips.
         pieces = {tid: edits.slice_range(lists[tid], start, end, tempo, keep_ids=not copy_clips) for tid in track_ids}
+        dest_ids = [p.tracks[p.track_index(tid) + track_delta].id for tid in track_ids]
         for tid in track_ids:
-            dest = p.tracks[p.track_index(tid) + track_delta].id
-            dest_ids.append(dest)
             if not copy_clips and pieces[tid]:
                 lists[tid] = edits.remove_range(lists[tid], start, end, tempo)
                 affected.add(tid)
@@ -401,12 +417,52 @@ class ClipEdits:
                 lists[dest] += moved
                 winners.setdefault(dest, set()).update(c.id for c in moved)
                 affected.add(dest)
-        after = {tid: edits.resolve_overlaps(lists[tid], winners.get(tid, set()), tempo) for tid in affected}
-        if after:
-            spans = [(tid, dest, start, end) for tid, dest in zip(track_ids, dest_ids, strict=True) if pieces[tid]]
-            self._commit_moved("Copy Time Selection" if copy_clips else "Move Time Selection", after,
-                               self._carried_automation(spans, delta_beats, copy_clips))
+        return ({tid: edits.resolve_overlaps(lists[tid], winners.get(tid, set()), tempo) for tid in affected},
+                delta_beats, track_delta)
+
+    def move_range(self, start: float, end: float, track_ids: list[str], delta_beats: float,
+                   track_delta: int = 0, copy_clips: bool = False) -> tuple[float, list[str]]:
+        """Ableton's drag of a time selection: move (or copy) what is between two
+        beats, in time and across tracks: the clip content, and the automation
+        (unless it is locked; across tracks, only the mixer's). Clips across the
+        range's edges are split there; what moves replaces what it lands on.
+        Returns where the range ended up: its new start and tracks."""
+        p = self.project
+        after, delta_beats, track_delta = self.moved_range(start, end, track_ids, delta_beats, track_delta,
+                                                           copy_clips)
+        dest_ids = [p.tracks[p.track_index(tid) + track_delta].id for tid in track_ids]
+        spans = [(tid, dest, start, end) for tid, dest in zip(track_ids, dest_ids, strict=True)]
+        self._commit_moved("Copy Time Selection" if copy_clips else "Move Time Selection", after,
+                           self._carried_automation(spans, delta_beats, copy_clips))
         return start + delta_beats, dest_ids
+
+    def reverse_range(self, start: float, end: float, track_ids,
+                      reversed_files: dict[str, tuple[str, float]]) -> list[ClipRef]:
+        """Reverse the audio between two beats on these tracks: each audio clip
+        whose file is in `reversed_files` ({file: (its reversed copy, its length
+        in seconds)}) is split at the range's edges, and the part inside plays
+        the reversed copy, backwards (see edits.reverse_clip). One undo step.
+        Returns the reversed clips."""
+        p = self.project
+        tempo = p.tempo
+        after: dict[str, list[AnyClip]] = {}
+        result: list[ClipRef] = []
+        for tid in track_ids:
+            if not p.has_track(tid):
+                continue
+            clips = list(p.track(tid).clips)
+            inside = [c for c in clips if isinstance(c, Clip) and c.path in reversed_files
+                      and c.start_beat < end and c.end_beat(tempo) > start]
+            if not inside:
+                continue
+            ids = {c.id for c in inside}
+            kept = [c for c in clips if c.id not in ids] + edits.remove_range(inside, start, end, tempo)
+            flipped = [edits.reverse_clip(c, *reversed_files[c.path])
+                       for c in edits.slice_range(inside, start, end, tempo, keep_ids=True)]
+            after[tid] = sorted(kept + flipped, key=lambda c: c.start_beat)
+            result += [(tid, c.id) for c in flipped]
+        self._commit("Reverse Clip" if len(result) == 1 else "Reverse Clips", after)
+        return result
 
     def clips_area(self, refs) -> tuple[float, float, list[str]] | None:
         """The grid area that fully contains these clips: the earliest start to the

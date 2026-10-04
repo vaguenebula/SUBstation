@@ -33,6 +33,10 @@
 //  * Audio threads (Scheduler.h): the thread rendering (the audio thread, or the
 //    one rendering offline) shares the tracks of each chunk with a pool of
 //    workers. They touch only what the snapshot hands them, like the audio thread.
+//  * Renders in the background (RenderJob.h) run on a thread of their own, on
+//    the snapshot they began with (which they hold), without `mutex_`; live
+//    output is silent until the main thread finishes them. Meanwhile processors
+//    aren't idled (a plug-in restarting would leave a gap in the render).
 
 #include <array>
 #include <atomic>
@@ -51,6 +55,7 @@
 #include "MidiInput.h"
 #include "Processor.h"
 #include "Recorder.h"
+#include "RenderJob.h"
 #include "Renderer.h"
 #include "Routing.h"
 #include "Scheduler.h"
@@ -429,7 +434,7 @@ public:
     bool isPreviewing() const { return shared_.previewActive.load(std::memory_order_relaxed); }
 
     // --- Offline rendering ----------------------------------------------------
-    // Both temporarily silence live output and render the same graph.
+    // All of them temporarily silence live output and render the same graph.
     std::vector<float> renderOffline(double startBeat, int64_t frames, bool loop = false,
                                      bool metronome = false);  // interleaved stereo
     void exportWav(const std::string& path, double startBeat, double endBeat, int bitDepth);
@@ -443,6 +448,16 @@ public:
     // Returns the frames written.
     int64_t renderTrackToWav(uint32_t trackId, const std::string& path, double startBeat, double endBeat,
                              double tailSeconds);
+    // exportWav() and renderTrackToWav() on a thread of their own (RenderJob.h):
+    // they return at once with the job, its file created (or throw why not).
+    // One job at a time. Until it is finished live output is silent, and what
+    // would disturb it is refused (std::runtime_error): another render, opening
+    // a device, the audio threads, recording. Other changes are taken, but the
+    // job renders the project as it was when it started.
+    std::shared_ptr<RenderJob> startExport(const std::string& path, double startBeat, double endBeat, int bitDepth);
+    std::shared_ptr<RenderJob> startTrackRender(uint32_t trackId, const std::string& path, double startBeat,
+                                                double endBeat, double tailSeconds);
+    bool isRendering();  // a job is running (or done, not finished yet)
 
     // --- Audio threads -----------------------------------------------------------
     // How many threads render (the audio thread and the workers); 1 renders
@@ -464,8 +479,11 @@ public:
     // --- Housekeeping ---------------------------------------------------------
     // Call regularly from the UI thread: frees retired snapshots and removed
     // processors, handles device loss, and does the main-thread work plug-ins
-    // asked for (restarts, parameter updates, editor events).
-    void idle();
+    // asked for (restarts, parameter updates, editor events). Plug-ins take
+    // their time to go, so a call destroys removed processors for a few
+    // milliseconds at most (a project closed doesn't hold up the UI), and the
+    // next calls go on; `releaseAll` destroys every one now (shutting down).
+    void idle(bool releaseAll = false);
 
 private:
     // A send (a routing edge), with its state and delay line kept across snapshots.
@@ -584,7 +602,24 @@ private:
         WarpVoiceSet voices;
         std::vector<std::shared_ptr<DelayLine>> delays, deviceDelays, chainDelays;
     };
-    void prepareOfflineLocked(Renderer& offline, OfflineLines& lines, double startBeat);
+    void prepareOfflineLocked(const RenderSnapshot& snap, Renderer& offline, OfflineLines& lines, double startBeat);
+    // A render in the background: its own renderer and delay lines, and the snapshot it renders.
+    struct OfflineRender {
+        std::shared_ptr<const RenderSnapshot> snapshot;
+        Renderer renderer;
+        OfflineLines lines;
+    };
+    // Silences live output and resets the processors (as every offline render
+    // does), and prepares a render of the snapshot from startBeat.
+    std::shared_ptr<OfflineRender> beginOfflineLocked(double startBeat);
+    void endOfflineLocked();  // the processors reset again, live output back
+    // Starts `body` as the background job (RenderJob::start) on a begun render;
+    // if it can't start, the render ends.
+    std::shared_ptr<RenderJob> startJobLocked(const std::string& path, int64_t total,
+                                              std::function<std::optional<int64_t>(RenderJob&)> body);
+    void checkNotRenderingLocked() const;  // throws std::runtime_error while a job runs
+    friend class RenderJob;
+    void endJob(RenderJob& job);  // RenderJob::finish(): it is over
     // renderTrackOffline(): `frames` of the track's signal, handed to `sink` a
     // piece at a time (interleaved stereo, and how many frames).
     void renderTrackLocked(uint32_t trackId, double startBeat, int64_t frames,
@@ -662,6 +697,7 @@ private:
     SharedState shared_;
     std::unique_ptr<Scheduler> scheduler_;  // the live and offline renderers share it (never at once)
     Renderer renderer_;
+    RenderJob* job_ = nullptr;  // the render in the background, until finished (it holds itself)
     std::atomic<bool> requestedPlaying_{false};
 
     double sampleRate_ = 48000.0;

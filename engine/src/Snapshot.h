@@ -326,6 +326,7 @@ struct TrackBuffers {
     std::array<ClipVoice, kMaxClipVoices> voices{};  // in the order its clips play
     int numVoices = 0;
     bool monitored = false;  // plays its live input instead of its clips
+    bool recorded = false;   // being recorded: its clips are silent (the take replaces them)
     bool audible = true;     // not muted, and solo lets one of its edges through
     // Solo, per chunk: it is soloed; it is soloed or fed by something soloed
     // (downstream of a solo); it is soloed or feeds something soloed (upstream).

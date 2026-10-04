@@ -25,7 +25,9 @@ not in its rack is dropped). The devices shown folded are stored by id
 own name, if they have one (the preset's they were saved as or loaded from;
 version 13; older files have none: racks are named by their kind). Frozen
 tracks (and returns) store their frozen audio ("frozen": its file, absolute and
-relative, its length and the tempo it was rendered at; version 14).
+relative, its length and the tempo it was rendered at; version 14). Reversed
+audio clips store the file they were reversed from ("reversed_from", absolute
+and relative; version 15).
 
 Presets: a device (a rack with everything in it too) on its own, in a file of
 its own (device_to_preset, preset_device): what the project file stores of it.
@@ -82,9 +84,9 @@ from .project import (
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 14  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
+VERSION = 15  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
 # 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10: inputs from tracks (resampling), 11: sidechains,
-# 12: racks, 13: rack names, 14: frozen tracks
+# 12: racks, 13: rack names, 14: frozen tracks, 15: reversed clips
 PRESET_FORMAT = "gilstudio-preset"
 PRESET_VERSION = 1
 PRESET_EXTENSION = ".gilpreset"
@@ -130,6 +132,8 @@ def _clip_to_dict(clip: AnyClip, base: Path | None) -> dict:
         "transpose": clip.transpose,
         "detune": clip.detune,
         "pan": clip.pan,
+        **({"reversed_from": clip.reversed_from, "reversed_from_relative": _relative(clip.reversed_from, base)}
+           if clip.reversed_from else {}),
     }
 
 
@@ -376,10 +380,10 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
     }
 
 
-def _resolve_clip_path(data: dict, base: Path | None) -> str:
-    path = data["path"]
-    if not os.path.exists(path) and base is not None and data.get("relative_path"):
-        candidate = os.path.normpath(base / data["relative_path"])
+def _resolve_clip_path(data: dict, base: Path | None, key: str = "path", relative: str = "relative_path") -> str:
+    path = data[key]
+    if not os.path.exists(path) and base is not None and data.get(relative):
+        candidate = os.path.normpath(base / data[relative])
         if os.path.exists(candidate):
             return candidate
     return path
@@ -401,6 +405,8 @@ def _audio_clip(c: dict, base: Path | None) -> Clip:
         transpose=int(c.get("transpose", 0)),
         detune=float(c.get("detune", 0.0)),
         pan=float(c.get("pan", 0.0)),
+        reversed_from=(_resolve_clip_path(c, base, "reversed_from", "reversed_from_relative")
+                       if c.get("reversed_from") else ""),
     )
 
 

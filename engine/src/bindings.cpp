@@ -58,7 +58,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (substation.ENGINE_API).
-    m.attr("API_VERSION") = 17;
+    m.attr("API_VERSION") = 18;
     m.attr("MAX_BLOCK") = sub::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("MAX_RACK_DEPTH") = Engine::kMaxRackDepth;
@@ -446,6 +446,17 @@ NB_MODULE(_engine, m) {
             return "AudioSource('" + s.path() + "', " + std::to_string(s.frames()) + " frames)";
         });
 
+    nb::class_<sub::RenderJob>(m, "RenderJob",
+                               "A render on a thread of its own (Engine.start_export, Engine.start_track_render).")
+        .def_prop_ro("path", &sub::RenderJob::path)
+        .def_prop_ro("progress", &sub::RenderJob::progress, "How far it got: 0..1.")
+        .def_prop_ro("done", &sub::RenderJob::done, "It has ended: finish() returns at once.")
+        .def_prop_ro("cancelled", &sub::RenderJob::cancelled)
+        .def("cancel", &sub::RenderJob::cancel, "Stops it soon; its file goes.")
+        .def("finish", &sub::RenderJob::finish, ReleaseGil(),
+             "Waits for it, gives live output back, and returns the frames written (None: it was cancelled). "
+             "Raises what went wrong. From the thread that started it.");
+
     nb::class_<Engine>(m, "Engine")
         .def(nb::init<>())
         // Device
@@ -746,6 +757,12 @@ NB_MODULE(_engine, m) {
              "tail_seconds"_a = 0.0, ReleaseGil(),
              "The same from start_beat to end_beat, then on for up to tail_seconds while it isn't silent, into a "
              "new 32-bit float WAV file (freezing the track). Returns the frames written.")
+        .def("start_export", &Engine::startExport, "path"_a, "start_beat"_a, "end_beat"_a, "bit_depth"_a = 24,
+             "export_wav in the background: returns the RenderJob at once (the file created). One at a time; "
+             "live output is silent until it is finished.")
+        .def("start_track_render", &Engine::startTrackRender, "track_id"_a, "path"_a, "start_beat"_a, "end_beat"_a,
+             "tail_seconds"_a = 0.0, "render_track_to_wav in the background: returns the RenderJob at once.")
+        .def_prop_ro("is_rendering", &Engine::isRendering, "A RenderJob runs (or isn't finished yet).")
         // Audio threads
         .def_static("default_audio_threads", &Engine::defaultAudioThreads,
                     "The audio threads used unless set: one per core but one (at least 1).")
@@ -760,5 +777,7 @@ NB_MODULE(_engine, m) {
                      "order (for benchmarks). Renders are the same either way.")
         .def("track_costs", &Engine::trackCosts,
              "What rendering each track takes lately (smoothed, in ns per frame; 0: not rendered yet).")
-        .def("idle", &Engine::idle, ReleaseGil(), "Housekeeping; call periodically from the UI thread.");
+        .def("idle", &Engine::idle, "release_all"_a = false, ReleaseGil(),
+             "Housekeeping; call periodically from the UI thread. Removed plug-ins go a few at a time "
+             "(release_all: every one now).");
 }

@@ -73,7 +73,7 @@ the transport (`publishTransport()`).
 prologue (serial, the rendering thread)
   1. segments: the chunk split where the loop wraps; count-in; metronome ticks scheduled
   2. ProcessContext for the chunk; the recording's device input (recordInput)
-  3. per track, in snapshot order: monitored?, note events (preview, MIDI input, clips),
+  3. per track, in snapshot order: monitored? recorded?, note events (preview, MIDI input, clips),
      stretch voices for its clips             -> its TrackBuffers
   4. workOutSolo: which edges and tracks are heard
 graph (Scheduler: the rendering thread and the workers)
@@ -130,7 +130,8 @@ clips playing without a re-seek ([warp.md](warp.md)).
    level (`sumEdge()`). Only edges that sum (outputs and sends) are added: a bus (a group, a
    return) hears what goes into it in a fixed order, whichever thread finished first.
 2. Its own audio: if monitored, its input (the device's channels, or another track's output on
-   its input edge); otherwise its clips over each segment (`renderClips()`).
+   its input edge); otherwise its clips over each segment (`renderClips()`), unless it is being
+   recorded (`TrackBuffers::recorded`: its take replaces them, so it plays none).
 3. Its devices (`processInserts()`), with their note events, sidechains and automation. Taps
    after a device copy the signal into their edge's buffer as the chain goes along.
 4. Pre-fader taps copy the signal into their edges' own buffers.
@@ -288,7 +289,9 @@ delay) and the master's (after its fader, before the metronome) over the same se
 ## Offline renders
 
 `Engine::renderOffline()` and `exportWav()` use a separate `Renderer` (see
-[README.md](README.md#offline-renders)). Differences from live:
+[README.md](README.md#offline-renders)); exports and freezes run on a thread of their own
+(`RenderJob`, see [README.md](README.md#in-the-background)), rendering the snapshot they
+started with. Differences from live:
 
 - `ChunkFlags::live` is false: no smoothing, no meters, no monitoring, no MIDI input, no preview.
 - Looping and the metronome are opt-in (`render_offline(..., loop=, metronome=)`); exports leave
@@ -307,7 +310,8 @@ whole graph the same way, but put out one track's signal after its devices, befo
 were soloed. The signal lags the timeline by the track's `inputLatency` plus its devices'
 latency, so that much is rendered first and dropped. `renderTrackToWav()` writes 32-bit float
 (nothing above full scale is clipped), and renders on past the end for up to `tailSeconds`,
-cut where it falls below -100 dB.
+cut where it falls below -100 dB. `startTrackRender()` is the same in the background (freezing
+from the UI).
 
 ## Invariants and real-time rules
 

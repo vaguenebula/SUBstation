@@ -36,7 +36,7 @@ from .. import theme
 from ..audio.engine_bridge import EngineBridge
 from ..model.editor import ClipRef, ProjectEditor
 from ..model.project import WARP_MODES, AnyClip, Clip, MidiClip
-from ..model.timebase import beats_to_seconds, format_db, format_pan
+from ..model.timebase import beats_to_seconds, db_to_gain, format_db, format_pan
 from .arrangement.waveform_cache import WaveformCache
 from .piano_roll import PianoRoll
 from .widgets import Knob, ToggleButton, ValueBox
@@ -185,7 +185,7 @@ class ClipWaveform(QWidget):
         p.save()
         p.setClipRect(area)
         self.waveforms.draw(p, source, area, area.left(), 0.0, source.frames / max(1.0, area.width()),
-                            color, split_channels=split, visible=area)
+                            color, split_channels=split, visible=area, gain=db_to_gain(clip.gain_db))
         p.restore()
         dim = QColor(0, 0, 0, 120)
         p.fillRect(QRectF(area.left(), area.top(), x0 - area.left(), area.height()), dim)
@@ -323,7 +323,8 @@ class ClipView(QFrame):
 
         # --- Mix ---
         mix_box, mix_layout = _section("Mix")
-        self.gain = KnobControl("Volume", -70.0, 24.0, 0.0, format_db)
+        self.gain = KnobControl("Gain", -70.0, 24.0, 0.0, format_db,
+                                tooltip="Clip gain: how loud the clip plays (its waveform grows with it)")
         self.pan = KnobControl("Pan", -1.0, 1.0, 0.0, format_pan, bipolar=True)
         row = QHBoxLayout()
         row.addWidget(self.gain)
@@ -332,7 +333,7 @@ class ClipView(QFrame):
 
         for control, attr, text, integer in ((self.transpose, "transpose", "Transpose Clips", True),
                                              (self.detune, "detune", "Detune Clips", False),
-                                             (self.gain, "gain_db", "Change Clip Volume", False),
+                                             (self.gain, "gain_db", "Change Clip Gain", False),
                                              (self.pan, "pan", "Change Clip Pan", False)):
             control.knob.valueChanged.connect(
                 lambda v, key, c=control, a=attr, t=text, i=integer: self._nudge_all(c, a, v, key, t, i))

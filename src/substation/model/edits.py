@@ -8,10 +8,11 @@ stays where it is on the timeline.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import replace
 
 from . import notes
-from .project import AnyClip, MidiClip, Note, new_id
+from .project import AnyClip, Clip, MidiClip, Note, new_id
 
 MIN_CLIP_SEC = 0.005
 MIN_MIDI_CLIP_BEATS = 1 / 64
@@ -166,6 +167,18 @@ def trim_end(clip: AnyClip, new_end_beat: float, tempo: float) -> AnyClip:
     duration = clip.beats_to_source(new_end_beat - clip.start_beat, tempo)
     available = clip.source_duration_sec - clip.offset_sec if clip.source_duration_sec > 0 else math.inf
     return replace(clip, duration_sec=max(MIN_CLIP_SEC, min(duration, available)))
+
+
+def reverse_clip(clip: Clip, path: str, total_sec: float) -> Clip:
+    """`clip` playing `path` (its file reversed, `total_sec` long) instead: the
+    same stretch of audio, backwards, in the same place on the timeline. Going
+    back to the file it was reversed from forgets it; otherwise it remembers
+    its file, to go back to."""
+    offset = max(0.0, total_sec - clip.offset_sec - clip.duration_sec)
+    back = os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(clip.reversed_from)) \
+        if clip.reversed_from else False
+    return replace(clip, path=path, offset_sec=offset, source_duration_sec=total_sec,
+                   duration_sec=min(clip.duration_sec, total_sec - offset), reversed_from="" if back else clip.path)
 
 
 def selection_span(clips: list[AnyClip], tempo: float) -> tuple[float, float]:

@@ -2,7 +2,7 @@
 
 Double-click an audio clip to open it in the clip view, which covers the arrangement:
 clip controls on the left, large waveforms on the right. Here you warp clips, change
-their pitch, volume and pan. Audio added from a file is set up from its name. MIDI clips
+their pitch, gain and pan. Audio added from a file is set up from its name. MIDI clips
 open in the piano roll instead (see [midi.md](midi.md)).
 
 ## The clip view
@@ -21,7 +21,10 @@ Its controls come in three sections:
 |---|---|
 | Warp | **Warp** switch, warp mode, **Seg. BPM**, :2 and ×2 |
 | Pitch | **Transpose** (±48 semitones), **Detune** (±50 cents) |
-| Mix | Clip **Volume** (−70 to +24 dB), clip **Pan** |
+| Mix | Clip **Gain** (−70 to +24 dB), clip **Pan** |
+
+A clip's gain changes how loud it plays, and its waveform with it (in the arrangement
+and in the clip view): louder clips draw taller, cut off at the lane's edges.
 
 ## Warping
 
@@ -44,6 +47,16 @@ play twice as fast, or half as fast).
 | *Re-Pitch* | No stretching: speed and pitch change together, like a turntable |
 
 Projects saved with the earlier Ableton-style names load into the equivalent mode.
+
+## Reversing
+
+**R** (or *Reverse* in a clip's right-click menu) reverses the selected audio clips: each
+plays its stretch of audio backwards, in the same place. If the selection covers just
+part of a clip, that part is split off and reversed. As in Ableton, a reversed clip
+plays a reversed copy of its file (`name R.wav`), made the first time and kept in the
+project's `Reversed` folder (for a project not saved yet,
+`Music\SUBstation\Recordings\Reversed`). Reversing it again plays its own file again.
+Reversing is one undo step; MIDI clips aren't reversed.
 
 ## Transpose and detune
 

@@ -172,7 +172,9 @@ class PluginDeviceWidget(_DeviceFrame):
 
         if self.engine_id is None or not self.shown:
             text = "No parameters to show here: use the plug-in's editor."
-            if self.engine_id is None:
+            if self.engine_id is None and bridge.plugin_pending(device.id):
+                text = f"{plugin.name} is loading…"  # (a project just opened: its plug-ins load one by one)
+            elif self.engine_id is None:
                 text = bridge.plugin_errors.get(device.id) or f"{plugin.name} is not loaded."
             message = QLabel(text)
             message.setWordWrap(True)

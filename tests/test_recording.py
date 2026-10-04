@@ -221,6 +221,36 @@ def test_auto_monitoring_while_recording(engine, driver, tmp_path):
     assert take.start_sample == 2 * BUFFER - (2 * BUFFER + 32 + 64)  # where the playhead was, heard
 
 
+def test_a_track_being_recorded_plays_none_of_its_clips(engine, driver, tmp_path, make_wav):
+    """Its take replaces them: unmonitored, the track is silent while it records."""
+    driver.SetInputLevel(0, 0.25)
+    open_asio(engine, sample_rate=RATE, buffer_frames=BUFFER, input_channels=[0])
+    wav = make_wav(np.full(4 * RATE, 0.5))
+    engine.load_source(wav)
+    track = engine.add_track()
+    engine.set_track_clips(track, [ge.ClipDesc(wav, 0.0, 4.0)])
+    engine.set_track_input(track, [0])
+    engine.set_track_monitor(track, ge.MonitorMode.OFF)
+    engine.set_track_armed(track, True)
+
+    def heard():
+        driver.ClearOutput()
+        driver.process(3)
+        return output(driver)[-BUFFER:]
+
+    engine.play()
+    np.testing.assert_allclose(heard(), 0.5, atol=1e-6)  # playing back: its clip
+    engine.start_recording([(track, str(tmp_path / "take.wav"))])  # punch in
+    assert np.all(heard() == 0.0)  # neither its clip nor its input
+    engine.stop_recording()
+    np.testing.assert_allclose(heard(), 0.5, atol=1e-6)  # punched out: its clip again
+
+    engine.set_track_monitor(track, ge.MonitorMode.IN)  # monitored: its input, as before
+    engine.start_recording([(track, str(tmp_path / "take2.wav"))])
+    np.testing.assert_allclose(heard(), 0.25, atol=1e-6)
+    engine.stop_recording()
+
+
 def test_count_in(engine, driver, tmp_path):
     driver.SetInputLevel(0, 0.5)
     open_asio(engine, sample_rate=RATE, buffer_frames=BUFFER, input_channels=[0])

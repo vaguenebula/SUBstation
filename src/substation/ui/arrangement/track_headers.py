@@ -140,13 +140,15 @@ def add_freeze_actions(menu: QMenu, editor: ProjectEditor, bridge: EngineBridge,
     """Freeze (or Unfreeze) and Flatten, for the tracks a track menu acts on."""
     p = editor.project
     plural = len(track_ids) > 1
+    window = menu.parentWidget().window() if menu.parentWidget() is not None else None  # (over which renders show)
     if all(p.is_frozen(t) for t in track_ids):
         action = menu.addAction("Unfreeze Tracks" if plural else "Unfreeze Track",
                                 lambda: freezing.unfreeze_tracks(editor, track_ids))
     else:
         action = menu.addAction("Freeze Tracks" if plural else "Freeze Track",
                                 lambda: freezing.freeze_tracks(editor, bridge,
-                                                               [t for t in track_ids if not p.is_frozen(t)]))
+                                                               [t for t in track_ids if not p.is_frozen(t)],
+                                                               window))
         problems = [p.freeze_problem(t) for t in track_ids if not p.is_frozen(t)]
         action.setEnabled(any(problem is None for problem in problems))
         if not action.isEnabled() and problems:

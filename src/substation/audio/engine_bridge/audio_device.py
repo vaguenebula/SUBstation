@@ -60,7 +60,10 @@ class AudioDevice:
             self.stop_recording()
 
     def _poll_device(self) -> None:
-        """What happened to the device: one event per poll."""
+        """What happened to the device: one event per poll (not while rendering:
+        the device can't be reopened then, so the event waits)."""
+        if self.engine.is_rendering:
+            return
         event = self.engine.take_device_event()
         if event == "stopped":
             self.status_message.emit("The audio device stopped. Choose a device in Options > Preferences.")

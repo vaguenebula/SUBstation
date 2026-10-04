@@ -11,6 +11,7 @@ from substation.model.automation import (
 )
 from substation.model.project import Clip, Device, Project, Track
 from substation.model.serialization import (
+    VERSION,
     ProjectFileError,
     load_into,
     load_project,
@@ -67,6 +68,27 @@ def test_relative_path_fallback_when_folder_moves(tmp_path):
     loaded = Project()
     load_project(loaded, moved / "song.gilproj")
     assert loaded.tracks[0].clips[0].path == str(moved / "audio" / "kick.wav")
+
+
+def test_a_reversed_clip_keeps_the_file_it_came_from(tmp_path):
+    folder = tmp_path / "old"
+    (folder / "Reversed").mkdir(parents=True)
+    original, backwards = folder / "kick.wav", folder / "Reversed" / "kick R.wav"
+    for path in (original, backwards):
+        path.write_bytes(b"")
+    project = Project()
+    project.tracks = [Track(id="t1", name="Drums", color="#ff94a6",
+                            clips=[Clip(id="c1", path=str(backwards), name="kick", start_beat=0.0, duration_sec=1.0,
+                                        reversed_from=str(original))])]
+    save_project(project, folder / "song.gilproj")
+
+    moved = tmp_path / "new"
+    folder.rename(moved)  # (both files are found again, relative to the project)
+    loaded = Project()
+    load_project(loaded, moved / "song.gilproj")
+    clip = loaded.tracks[0].clips[0]
+    assert (clip.path, clip.reversed_from) == (str(moved / "Reversed" / "kick R.wav"), str(moved / "kick.wav"))
+    assert project_to_dict(loaded)["tracks"][0]["clips"][0]["reversed_from"] == str(moved / "kick.wav")
 
 
 def test_rejects_foreign_files(tmp_path):
@@ -129,7 +151,7 @@ def test_old_project_files_load_unchanged():
     assert [t.id for t in project.tracks] == ["t1"] and project.tempo == 128.0
     # Saved again, it says the same, and that the master has no devices.
     saved = project_to_dict(project)
-    assert saved["version"] == 14 and saved["master"] == {**old["master"], "devices": []}
+    assert saved["version"] == VERSION and saved["master"] == {**old["master"], "devices": []}
     # Tracks from before version 6 have no input, Auto monitoring and aren't armed; before 8, no group;
     # before 9, no sends (nor returns).
     assert saved["tracks"] == [{**t, "input": [], "monitor": "auto", "armed": False, "parent": None,

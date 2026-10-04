@@ -436,3 +436,89 @@ def test_copied_automation_comes_along_unless_locked(editor):
     assert editor.copy_range(0.0, 2.0, [t1.id]).tracks[0].automation == ()
     editor.cut_range(0.0, 2.0, [t1.id])
     assert len(editor.project.envelope(t1.id, MIXER_VOLUME)) == 2  # locked: it stays
+
+
+def test_a_time_selection_takes_everything_in_it_on_every_track(editor):
+    """Delete, Copy, Duplicate and moving a time selection act on the clips and the
+    automation of every track in it: a group's too, and tracks without clips there."""
+    from substation.model.automation import MIXER_VOLUME, AutomationPoint
+
+    p = editor.project
+    a = editor.add_audio_track()
+    b = editor.add_audio_track()
+    group = editor.group_tracks([a.id, b.id])
+    assert p.with_contents([group.id]) == [group.id, a.id, b.id]
+    assert p.with_contents([b.id, group.id]) == [group.id, a.id, b.id]  # (in the arrangement's order, once)
+    editor.add_clips(a.id, 0.0, [("a.wav", 2.0)])  # beats 0-4
+    rise = (AutomationPoint(1.0, 0.2), AutomationPoint(3.0, 0.8))
+    for track_id in (group.id, b.id):  # automation, no clips
+        editor.set_envelope(track_id, MIXER_VOLUME, rise)
+    tracks = p.with_contents([group.id])
+
+    content = editor.copy_range(0.0, 4.0, tracks)
+    assert [(c.track_id, c.row, bool(c.clips), bool(c.automation)) for c in content.tracks] == [
+        (group.id, 0, False, True), (a.id, 1, True, False), (b.id, 2, False, True)]
+
+    editor.duplicate_range(0.0, 4.0, tracks)
+    assert spans(p.track(a.id).clips) == [(0, 4), (4, 8)]
+    for track_id in (group.id, b.id):
+        assert {(pt.beat, pt.value) for pt in p.envelope(track_id, MIXER_VOLUME)} >= {(5.0, 0.2), (7.0, 0.8)}
+    editor.undo_stack.undo()
+
+    start, moved = editor.move_range(0.0, 4.0, tracks, 8.0)
+    assert (start, moved) == (8.0, tracks) and spans(p.track(a.id).clips) == [(8, 12)]
+    for track_id in (group.id, b.id):
+        assert [(pt.beat, pt.value) for pt in p.envelope(track_id, MIXER_VOLUME)
+                if pt.beat > 8.0] == [(9.0, 0.2), (11.0, 0.8)]
+    editor.undo_stack.undo()
+
+    editor.delete_range(0.0, 4.0, tracks)
+    assert p.track(a.id).clips == [] and editor.undo_stack.undoText() == "Delete Time Selection"
+    assert p.envelope(group.id, MIXER_VOLUME) == () and p.envelope(b.id, MIXER_VOLUME) == ()
+    editor.undo_stack.undo()
+    assert p.envelope(group.id, MIXER_VOLUME) == rise and len(p.track(a.id).clips) == 1
+
+    editor.set_automation_locked(True)  # locked: the automation stays where it is
+    editor.delete_range(0.0, 4.0, tracks)
+    assert p.track(a.id).clips == [] and p.envelope(group.id, MIXER_VOLUME) == rise
+
+
+def test_moved_range_is_what_move_range_makes(editor):
+    t1 = editor.add_audio_track()
+    t2 = editor.add_audio_track()
+    editor.add_clips(t1.id, 0.0, [("a.wav", 2.0)])  # beats 0-4
+    before = snapshot(editor.project)
+    after, delta, track_delta = editor.moved_range(1.0, 3.0, [t1.id], 4.0, 1)
+    assert (delta, track_delta) == (4.0, 1)
+    assert spans(after[t1.id]) == [(0, 1), (3, 4)] and spans(after[t2.id]) == [(5, 7)]
+    assert snapshot(editor.project) == before  # nothing changed yet
+    editor.move_range(1.0, 3.0, [t1.id], 4.0, 1)
+    assert {t: spans(editor.project.track(t).clips) for t in after} == {t: spans(c) for t, c in after.items()}
+    assert editor.moved_range(1.0, 3.0, [t1.id], -9.0)[1] == -1.0  # (not before the timeline's start)
+
+
+def test_reversing_plays_a_stretch_backwards_and_again_forwards(editor):
+    t = editor.add_audio_track()
+    editor.add_clips(t.id, 0.0, [("a.wav", 4.0)])  # beats 0-8, all of a 4 s file
+    clip = editor.project.track(t.id).clips[0]
+    flipped = edits.reverse_clip(replace(clip, offset_sec=0.5, duration_sec=2.0), "a R.wav", 4.0)
+    # It plays seconds 0.5-2.5 of the file backwards: seconds 1.5-3.5 of the reversed copy.
+    assert (flipped.path, flipped.offset_sec, flipped.duration_sec) == ("a R.wav", 1.5, 2.0)
+    assert flipped.reversed_from == "a.wav" and flipped.start_beat == clip.start_beat
+
+    # A time range inside a clip: it is split there, and just the part inside is reversed.
+    refs = editor.reverse_range(2.0, 4.0, [t.id], {"a.wav": ("a R.wav", 4.0)})
+    clips = editor.project.track(t.id).clips
+    assert spans(clips) == [(0, 2), (2, 4), (4, 8)] and refs == [(t.id, clips[1].id)]
+    assert editor.undo_stack.undoText() == "Reverse Clip"
+    assert (clips[1].path, clips[1].offset_sec, clips[1].reversed_from) == ("a R.wav", 2.0, "a.wav")
+    assert clips[0].path == clips[2].path == "a.wav"
+    # Reversed again, it plays its file again (forwards), as it did.
+    editor.reverse_range(2.0, 4.0, [t.id], {"a R.wav": ("a.wav", 4.0)})
+    middle = editor.project.track(t.id).clips[1]
+    assert (middle.path, middle.offset_sec, middle.reversed_from) == ("a.wav", 1.0, "")
+    editor.undo_stack.undo()
+    editor.undo_stack.undo()
+    assert spans(editor.project.track(t.id).clips) == [(0, 8)]
+    # Clips whose files have no reversed copy stay as they are.
+    assert editor.reverse_range(0.0, 8.0, [t.id], {}) == []

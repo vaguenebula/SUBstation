@@ -4,9 +4,11 @@ devices' processors gone until it is unfrozen)."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from ... import _engine as ge
 from ...model.automation import MASTER
 from ...model.project import Freeze, Project, iter_devices
 from .recording import recordings_folder, take_path
@@ -21,6 +23,15 @@ def freeze_folder(project: Project) -> Path:
     if project.path is not None:
         return Path(project.path).parent / "Freeze"
     return recordings_folder(project) / "Freeze"
+
+
+@dataclass
+class FreezeRender:
+    """A track's render for freezing it, in the background (start_freeze)."""
+
+    track_id: str
+    job: ge.RenderJob  # its progress, cancel()
+    tempo: float  # the project's when it started
 
 
 class FreezeSync:
@@ -59,7 +70,15 @@ class FreezeSync:
         bus) from the timeline's start to the arrangement's end, and its tail,
         into a new WAV file in the freeze folder: its frozen audio. Raises
         ValueError (with a message for the user) if there is nothing to render,
-        OSError or RuntimeError if the file can't be written."""
+        OSError or RuntimeError if the file can't be written. (The UI renders in
+        the background instead: start_freeze.)"""
+        self.wait_for_device_states()  # plug-ins and samples still loading
+        return self.finish_freeze(self.start_freeze(track_id))
+
+    def start_freeze(self, track_id: str) -> FreezeRender:
+        """render_freeze in the background: starts the render (the devices
+        should be ready: devices_ready) and returns at once; finish_freeze makes
+        it the track's frozen audio. Raises as render_freeze does."""
         track = self.project.track(track_id)
         engine_id = self._track_ids.get(track_id)
         end = self.project.end_beat()
@@ -72,16 +91,20 @@ class FreezeSync:
         path = take_path(folder, f"{track.name} Freeze", datetime.now().astimezone())
         if self.is_playing:
             self.stop()
-        self.wait_for_device_states()  # samples still loading
-        try:
-            frames = self.engine.render_track_to_wav(engine_id, str(path), 0.0, end, FREEZE_TAIL_SECONDS)
-        except (OSError, RuntimeError, ValueError):
-            path.unlink(missing_ok=True)  # (what was written of it)
-            raise
+        job = self.engine.start_track_render(engine_id, str(path), 0.0, end, FREEZE_TAIL_SECONDS)
+        return FreezeRender(track_id, job, self.project.tempo)
+
+    def finish_freeze(self, render: FreezeRender) -> Freeze | None:
+        """A freeze's render, ended: its frozen audio (decoded), or None if it was
+        cancelled (its file is gone). Raises OSError or RuntimeError if it failed."""
+        frames = render.job.finish()
+        if frames is None:
+            return None
+        path = render.job.path
         # Decoded now, so that it plays as soon as the track is frozen (no gap while it loads).
-        self._sources[_key(str(path))] = self.engine.load_source(str(path))
-        self.source_ready.emit(str(path))
-        return Freeze(path=str(path), duration_sec=frames / self.engine.sample_rate, tempo=self.project.tempo)
+        self._sources[_key(path)] = self.engine.load_source(path)
+        self.source_ready.emit(path)
+        return Freeze(path=path, duration_sec=frames / self.engine.sample_rate, tempo=render.tempo)
 
     def discard_freeze(self, freeze: Freeze) -> None:
         """A render no track plays (no undo step holds it): its decoded audio is

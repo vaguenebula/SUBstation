@@ -16,7 +16,7 @@ code is put together, [../README.md](../README.md).
 | [mixing.md](mixing.md) | Solo and mute, groups in the mix, return tracks and sends, sidechains, delay compensation, freezing and flattening |
 | [devices.md](devices.md) | The device view, the built-in devices (Synth, Sampler, Utility, Over The Top, Compressor), racks, macros and presets, folding, cut/copy/paste |
 | [plugins.md](plugins.md) | VST3 plug-ins: finding them, using them, their editors and presets, projects, latency |
-| [audio-clips.md](audio-clips.md) | The clip view for audio clips: warping, warp modes, transpose and detune, clip volume and pan, tempo and key from file names |
+| [audio-clips.md](audio-clips.md) | The clip view for audio clips: warping, warp modes, transpose and detune, clip gain and pan, reversing, tempo and key from file names |
 | [midi.md](midi.md) | MIDI clips, the piano roll and its note tools, MIDI input, the computer MIDI keyboard |
 | [recording.md](recording.md) | Arming, inputs, monitoring, the count-in, takes, resampling |
 | [automation.md](automation.md) | Automation lanes and editing envelopes, Lock Envelopes, overriding and re-enabling |

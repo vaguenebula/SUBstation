@@ -32,6 +32,7 @@ void Engine::openDeviceLocked(const DeviceConfig& config) {
     // A driver's control panel may run a message loop that calls us back: its
     // driver has to stay until the panel is closed.
     if (device_.inControlPanel()) throw std::runtime_error("Close the driver's control panel first");
+    checkNotRenderingLocked();  // (its processors would be prepared anew under it)
     closeDeviceLocked();
     device_.open(config, this);
     try {

@@ -31,6 +31,7 @@ LOOP_ON = "#c9c9c9"
 LOOP_OFF = "#5d5d5d"
 LOOP_REGION = QColor(255, 255, 255, 12)
 SELECTION_OUTLINE = "#ffffff"
+SELECTION = QColor(168, 200, 235, 72)  # a time selection on the grid (selected clips are one), and automation ranges
 RUBBER_BAND = QColor(255, 166, 43, 40)
 WAVEFORM = QColor(22, 22, 22, 230)  # also MIDI notes drawn in clips
 

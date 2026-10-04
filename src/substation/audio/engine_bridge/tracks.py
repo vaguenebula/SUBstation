@@ -31,8 +31,13 @@ def clip_desc(clip: Clip) -> ge.ClipDesc:
 
 def note_descs(track: Track) -> list[ge.NoteDesc]:
     """The notes a MIDI track plays, from all of its clips, in timeline beats."""
+    return clip_note_descs(track.clips)
+
+
+def clip_note_descs(clips) -> list[ge.NoteDesc]:
+    """The notes these MIDI clips play, in timeline beats."""
     return [ge.NoteDesc(start, end - start, note.pitch, note.velocity)
-            for clip in track.clips for start, end, note in clip.played_notes()]
+            for clip in clips for start, end, note in clip.played_notes()]
 
 
 class TrackSync:
@@ -67,8 +72,15 @@ class TrackSync:
         self.meters.clear()
         self._editors_wanted.clear()
         self._hidden_editors.clear()
-        for track in self.project.all_tracks():
-            self._add_engine_track(track)
+        self._previewing.clear()
+        self._reversed.clear()
+        self._stop_loading_plugins()
+        self._deferring = True  # its plug-ins load after it shows (loading.py)
+        try:
+            for track in self.project.all_tracks():
+                self._add_engine_track(track)
+        finally:
+            self._deferring = False
         self._push_outputs()
         self._push_all_sends()  # (into returns added after the tracks sending to them)
         self._push_all_inputs()  # (from tracks added after the tracks taking them)
@@ -79,6 +91,7 @@ class TrackSync:
         used |= {_key(t.frozen.path) for t in self.project.all_tracks() if t.frozen is not None}
         self._sources = {k: s for k, s in self._sources.items() if k in used}
         self.engine.release_unused_sources()
+        self._start_loading_plugins()
 
     def _remove_engine_tracks(self) -> None:
         """Every track goes from the engine, with its devices; the master stays, without its devices."""
@@ -257,6 +270,32 @@ class TrackSync:
         for clip in track.clips:
             self.request_source(clip.path)
         self.engine.set_track_clips(engine_id, [clip_desc(c) for c in track.clips])
+
+    def preview_clips(self, clips_by_track: dict[str, list]) -> None:
+        """Play these clips on these tracks instead of the model's, until
+        end_clip_preview() (or the next change to their clips): what a drag would
+        make of them, heard while it goes on. Frozen tracks play on as they are."""
+        for track_id, clips in clips_by_track.items():
+            engine_id = self._track_ids.get(track_id)
+            if engine_id is None or not self.project.has_track(track_id) or self.project.is_frozen(track_id):
+                continue
+            self._previewing.add(track_id)
+            if self.project.track(track_id).is_midi:
+                self.engine.set_track_notes(engine_id, clip_note_descs(clips))
+            else:
+                self.engine.set_track_clips(engine_id, [clip_desc(c) for c in clips])
+        # Tracks previewed before but not now play their own clips again.
+        for track_id in [t for t in self._previewing if t not in clips_by_track]:
+            self._previewing.discard(track_id)
+            if self.project.has_track(track_id):
+                self._push_clips(track_id)
+
+    def end_clip_preview(self) -> None:
+        """The previewed tracks play the model's clips again."""
+        previewed, self._previewing = self._previewing, set()
+        for track_id in previewed:
+            if self.project.has_track(track_id):
+                self._push_clips(track_id)
 
     def _push_settings(self) -> None:
         p = self.project

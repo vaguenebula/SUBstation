@@ -42,6 +42,9 @@ A monitored track's input goes through its devices and mixer like any audio; it 
 delayed to line up with latent plug-ins on other tracks, so you hear yourself with only
 the latency of the track's own devices.
 
+While a track records it plays none of its clips (nor a MIDI track its clips' notes):
+its take replaces them. With monitoring *Off* it is silent until recording stops.
+
 ## Recording
 
 - **Record** (the button next to Stop, or **F9**) records every armed track that has an
@@ -54,7 +57,8 @@ the latency of the track's own devices.
 
 ## Takes
 
-- A take grows on its track as it records, with its waveform.
+- A take grows on its track as it records, right up to the playhead, with its waveform
+  (which comes in a little behind, by the input's latency).
 - When recording stops, the takes become clips in one undo step, replacing what was
   under them (overdub); undo takes them away again.
 - They are WAV files (32-bit float) in the project's `Recordings` folder (for a project

@@ -19,6 +19,8 @@ graph, in [routing.md](routing.md).
   inputs, another track's output (resampling), or the master's.
 - A monitored track's strip takes its input instead of its clips; its delay compensation is left out,
   so a player hears themselves with only the latency of the track's own devices.
+- A track being recorded plays none of its clips (a MIDI track none of its clips' notes): its take
+  replaces them. Unmonitored, it is silent while it records.
 - While recording, the renderer copies the recorded tracks' input into lock-free rings, with the
   timeline position where it was taken. A disk-writer thread empties them into WAV files (32-bit
   float); the audio thread never touches a file.
@@ -53,7 +55,7 @@ graph, in [routing.md](routing.md).
 | [Recorder.cpp](../../engine/src/Recorder.cpp) | The ring, `RecordingTake::push` (real-time), the writer loop, `finish()`, MIDI note pairing |
 | [EngineInput.cpp](../../engine/src/EngineInput.cpp) | `setTrackInput`, `setTrackInputTrack`, `setTrackMonitor`, `setTrackArmed`, `inputEdgeLocked`, `startRecording` (placements), `finishRecordingLocked`, `stopRecording`, `isRecording`, `recordingProgress`; and MIDI input (see [midi.md](midi.md)) |
 | [Snapshot.h](../../engine/src/Snapshot.h) | `InputEdge`, `MonitorMode`, `EdgeRender::Kind::Input`, `TrackBuffers::monitored` |
-| [Renderer.cpp](../../engine/src/Renderer.cpp) | `isMonitored`, `readInput`, `inputChannel`, `recordInput` (prologue), `recordRendered` (epilogue), `compensationFor` |
+| [Renderer.cpp](../../engine/src/Renderer.cpp) | `isMonitored`, `isRecorded`, `readInput`, `inputChannel`, `recordInput` (prologue), `recordRendered` (epilogue), `compensationFor` |
 | [EngineDevice.cpp](../../engine/src/EngineDevice.cpp), [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | Where a device change and an offline render end the recording (`closeDeviceLocked`, `suspendLiveLocked`) |
 
 ## Key types
@@ -136,6 +138,12 @@ In the prologue, each track's `TrackBuffers::monitored` is worked out by `isMoni
 
 - never in offline renders (they play the arrangement), never for a master input;
 - `In`: always; `Auto`: armed and (stopped, or recording); `Off`: never.
+
+`TrackBuffers::recorded` is worked out there too, by `isRecorded()`: a take of the track records
+(the session isn't interrupted; live renders only). Such a track renders none of its clips
+(`renderTrack()`, `assignVoices()`) and gets none of its clips' notes (`buildNoteEvents()` with
+`clipNotes` false, which releases those sounding): the take replaces them, so with monitoring Off
+the track is silent while it records, and monitored it hears only its input.
 
 In `renderTrack()`, a monitored track takes its input instead of its clips: a track source through
 `sumEdge()` of its input edge (the source has rendered: it fed this one), device input through
@@ -264,7 +272,8 @@ see [python/engine-bridge.md](../python/engine-bridge.md).
   loopback patches an output back into an input, delayed by the latencies the driver reports):
   monitoring modes, monitoring through a latent plug-in not delayed by compensation, a loopback take
   lining up with the timeline sample for sample (with and without latent plug-ins on a track or the
-  master), stereo takes and their live peaks, Auto monitoring while recording, the count-in, what ends a
+  master), stereo takes and their live peaks, Auto monitoring while recording, a track being recorded
+  playing none of its clips (silent with monitoring Off), the count-in, what ends a
   recording (a locate, a device change, stopping before anything came in), and needing an open input.
 - [tests/test_resampling_engine.py](../../tests/test_resampling_engine.py): a resampled take equal to its
   source's offline render (latent plug-ins on the source, in the group and on the master, a slower track

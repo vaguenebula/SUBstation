@@ -14,8 +14,8 @@ from ...model.project import Project
 
 GRID_MIN_PIXELS = {-2: 6.0, -1: 11.0, 0: 20.0, 1: 40.0, 2: 80.0}  # narrowest .. widest
 AUTOMATION_LANE_HEIGHT = 44  # a lane shown below a track (or the master)
-FOLDED_HEIGHT = 28  # a folded track: its name row, with room around it
-FOLDED_GROUP_HEIGHT = 32  # a folded group: a little taller, so it stands out
+FOLDED_HEIGHT = 22  # a folded track: its name row (its clips are bars, as in Ableton)
+FOLDED_GROUP_HEIGHT = 24  # a folded group: a little taller, so it stands out
 # A track's own lane while its automation shows: room in its header for the choosers.
 MIN_AUTOMATION_ROW = 76
 # The send knobs' row in a track's header, while there are return tracks (below
@@ -335,7 +335,9 @@ class Row:
     the automation lanes shown below it. A track in a folded group has a row
     too, but `hidden`, with no height: rows stay one per track, in order. A
     folded track's row is FOLDED_HEIGHT high (a folded group's a little more,
-    FOLDED_GROUP_HEIGHT); neither shows automation."""
+    FOLDED_GROUP_HEIGHT); neither shows automation. A folded track (not a
+    group) shows its clips as `bars`, as Ableton does: they are clicked and
+    dragged, but the row isn't a grid to select time on."""
 
     track_id: str
     top: int
@@ -345,6 +347,7 @@ class Row:
     hidden: bool = False  # in a folded group
     folded: bool = False  # the track itself is folded
     depth: int = 0  # how many groups it is in
+    bars: bool = False  # folded, and not a group: its clips are bars
 
     @property
     def height(self) -> int:
@@ -392,7 +395,7 @@ class TrackLayout:
                 row = Row(track.id, y, 0, hidden=True, depth=depth)
             elif track.folded:  # just its name row, no automation
                 row = Row(track.id, y, FOLDED_GROUP_HEIGHT if track.is_group else FOLDED_HEIGHT, folded=True,
-                          depth=depth)
+                          depth=depth, bars=not track.is_group)
             else:
                 view = track.automation_view
                 main_height, lanes = automation_rows(view, y, track.height, min_row)
