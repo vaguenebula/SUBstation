@@ -307,9 +307,10 @@ loading), `stop_preview`, `preview_note(track, pitch, velocity)` (velocity 0 rel
   device isn't loaded are left out. It emits `automation_state_changed(owner)`.
 - A target whose envelope stops playing (deleted, or overridden) goes back to the value the
   model holds for it (`_push_own_value`: the mixer is pushed again, a device parameter is
-  set; sends and chain faders keep their own level in the engine). A plug-in's parameter is
-  sent its own value as the engine holds it, again: the model may not hold it, and the
-  plug-in was left where its automation took it.
+  set; sends and chain faders keep their own level in the engine). A plug-in's own values
+  are the engine's, which follow its envelopes while they play; so when a plug-in
+  parameter's envelope starts playing its own value is kept (`_plugin_own`), `own_value`
+  answers with it, and it is sent back when the envelope stops.
 - **Overrides**, as in Ableton: changing an automated target by hand (a track's volume or
   pan, a send level, a chain's fader, a device parameter: the bridge sees the model's value
   change) calls `override_automation(owner, key)`, which stops sending that envelope.

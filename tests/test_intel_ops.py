@@ -183,6 +183,12 @@ def test_frozen_tracks_refuse_edits_but_take_names(runner):
     assert p.track(inner).parent == group
 
 
+def test_reading_a_track_without_clips(runner):
+    track = runner.run("add_audio_track", {"name": "Empty"})["track"]["id"]
+    result = runner.run("get_track", {"track_id": track})["track"]
+    assert result["name"] == "Empty" and "clips" not in result
+
+
 def test_the_activity_log(runner, tmp_path):
     runner.activity = ActivityLog(tmp_path / "activity.jsonl")
     track = runner.run("add_audio_track", {"name": "A"}, AGENT)["track"]["id"]
@@ -394,8 +400,10 @@ def test_automation_on_a_plugin_parameter_plays_in_time_and_setting_it_overrides
     # Plain values in (a plug-in's own 0..1): x0.5 for the first second, x1.5 after (its gain is 2 * value).
     r.run("write_automation", {"owner": track, "target": gain, "points": [[0, 0.25], [2, 0.25], [2, 0.75]]}, AGENT)
     out = render(window)[:, 0]
+    window.bridge.poll_plugins()  # (as the app does: the engine's values follow the envelope)
     np.testing.assert_allclose(out[1000:SAMPLE_RATE - 1000], 0.25, atol=1e-4)
     np.testing.assert_allclose(out[SAMPLE_RATE + 1000:2 * SAMPLE_RATE], 0.75, atol=1e-4)
+    assert window.bridge.own_value(track, gain) == pytest.approx(0.5)  # its own, not the envelope's
     # Setting it by hand overrides its automation, as turning its knob does; the result says so.
     result = r.run("set_device_param", {"track_id": track, "device_id": device["id"], "param_id": params[0]["id"],
                                         "value": 0.5}, AGENT)
@@ -404,6 +412,10 @@ def test_automation_on_a_plugin_parameter_plays_in_time_and_setting_it_overrides
     np.testing.assert_allclose(render(window)[1000:2 * SAMPLE_RATE, 0], 0.5, atol=1e-4)
     r.run("re_enable_automation", {"owner": track}, AGENT)
     np.testing.assert_allclose(render(window)[1000:SAMPLE_RATE - 1000, 0], 0.25, atol=1e-4)
+    window.bridge.poll_plugins()
+    # Without its envelope it is back at its own value, not the envelope's last.
+    r.run("clear_automation", {"owner": track, "target": gain}, AGENT)
+    np.testing.assert_allclose(render(window)[1000:2 * SAMPLE_RATE, 0], 0.5, atol=1e-4)
 
 
 def test_a_swell_on_an_unautomated_parameter_keeps_its_value_outside(window, tmp_path):
@@ -483,6 +495,24 @@ def test_a_main_thread_that_doesnt_answer_is_busy(window):
     worker.join(5.0)  # (the main thread is in join: it can't answer)
     assert errors == ["busy"]
     QTest.qWait(50)  # the call that timed out never runs
+
+
+def test_a_call_that_starts_but_doesnt_finish_in_time_is_busy(window):
+    errors = []
+    started = threading.Event()
+
+    def slow():
+        started.set()
+        QTest.qWait(400)  # (still on the main thread: the worker's second wait runs out)
+        return 1
+
+    worker = threading.Thread(target=lambda: errors.append(
+        _call_or_error(lambda: window.intel.dispatcher.call(slow, timeout=0.15))))
+    worker.start()
+    assert wait_until(started.is_set)
+    while worker.is_alive():
+        QTest.qWait(10)
+    assert errors == ["busy"]
 
 
 def _call_or_error(call):

@@ -287,11 +287,14 @@ from it.
   dispatcher wraps the run in a macro labelled `"Auto: Rename Track"` or
   `"Agent (Claude Code): Add Device"`. The Edit menu then shows who did what,
   without touching `ProjectEditor`.
-- **Revision counter.** `IntelRevision` connects to every `Project` signal and
-  increments. Writes accept an optional `if_revision`: an agent that read
+- **Revision counter.** `IntelRevision` connects to every `Project` signal but
+  those of view state alone (`automation_view_changed`, `devices_folded`) and
+  increments; so showing a lane or folding a device doesn't invalidate an
+  `if_revision`. Writes accept an optional `if_revision`: an agent that read
   revision 41 and acts on stale state gets `conflict` instead of clobbering
   your edit.
-- **Activity log.** Every non-user operation is recorded as
+- **Activity log.** Every write by an actor other than the user (reads aren't
+  logged; failures are) is recorded as
   `{time, actor, op, args, result, undo_index}`: in memory for the panel, and
   appended to `%LOCALAPPDATA%\SUBstation\activity.jsonl` (rotated). Because the
   log records `undo_index`, the layer can tell when you undo one of its
@@ -1154,8 +1157,9 @@ As built (differences from the plan above):
   and play/stop/locate: what the operations need that the UI also gets from the
   bridge. The meter ring is fed by `meters_updated`, which `_poll_meters` emits.
 - Setting an automated parameter overrides its automation even when the value is
-  unchanged; for that, the bridge now sends a plug-in parameter its own value again
-  when its envelope stops (it used to stay where automation left it).
+  unchanged; for that, the bridge now keeps a plug-in parameter's own value while
+  its envelope plays and gives it back when the envelope stops (it used to stay
+  where automation left it).
 - Clips are addressed by id alone (clip ids are unique in the project). A batch's
   call can use an earlier call's result (`"$0.track.id"`).
 - Only writes are logged in the activity log (reads would drown it), failures too.

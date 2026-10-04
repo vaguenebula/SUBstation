@@ -47,7 +47,11 @@ class MainThreadDispatcher(QObject):
         except FutureTimeout:
             if future.cancel():
                 raise OpError(BUSY, f"The program didn't answer within {timeout:g} s") from None
-            return future.result(timeout)  # it started just now: let it finish
+            try:
+                return future.result(timeout)  # it started just now: let it finish
+            except FutureTimeout:  # (a long one: a render)
+                raise OpError(BUSY, f"The call didn't finish within {2 * timeout:g} s; it goes on, and its "
+                                    "result is lost") from None
         except CancelledError:
             raise OpError(BUSY, "The call was cancelled") from None
 

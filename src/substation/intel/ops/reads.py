@@ -73,7 +73,7 @@ def get_track(ctx: OpContext, track_id: TrackId) -> dict:
     track = ctx.owner(track_id)
     context = describe_track(ctx.project, track, describe_params(ctx), _plugin_categories(ctx))
     result = context.to_dict("full")
-    if track.has_clips:
+    if track.clips:  # (an audio or MIDI track may have none)
         result["clips"]["list"] = [clip_dict(ctx, track_id, c) for c in track.clips]
     return {"track": result}
 

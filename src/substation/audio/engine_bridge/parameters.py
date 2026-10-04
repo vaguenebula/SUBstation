@@ -34,6 +34,8 @@ class ParameterSync:
             if lane is not None:
                 lanes.append(lane)
                 playing.add(key)
+        for key in playing - self._automating.get(owner, set()):
+            self._keep_plugin_own_value(owner, key)
         self.engine.set_track_automation(engine_id, lanes)
         stopped = self._automating.get(owner, set()) - playing
         self._automating[owner] = playing
@@ -73,14 +75,26 @@ class ParameterSync:
             return
         param_id = automation.parse_key(key)[2]
         processor_id = self.engine_device_id(owner, device_id)
+        own = self._plugin_own.pop((owner, key), None)
         if processor_id in self._plugin_ids:
-            # A plug-in's own value is the engine's (the model may not hold it), and the
-            # plug-in was left where its automation took it: send it its own value again.
+            # A plug-in's own value is the engine's (the model may not hold it), which followed
+            # the envelope: it gets back the value it had before the envelope played.
             index = self.engine.processor_param_index(processor_id, param_id)
-            if index >= 0:
-                self.engine.set_processor_param(processor_id, index, self.engine.processor_param(processor_id, index))
+            if index >= 0 and own is not None:
+                self.engine.set_processor_param(processor_id, index, own)
             return
         self._push_device_param(owner, device_id, param_id)
+
+    def _keep_plugin_own_value(self, owner: str, key: str) -> None:
+        """A plug-in parameter's envelope starts playing: keep its own value, which the
+        engine's will follow the envelope from now on."""
+        device_id = automation.key_device(key) if automation.key_chain(key) is None else None
+        processor_id = self.engine_device_id(owner, device_id) if device_id is not None else None
+        if processor_id not in self._plugin_ids:
+            return
+        index = self.engine.processor_param_index(processor_id, automation.parse_key(key)[2])
+        if index >= 0:
+            self._plugin_own[(owner, key)] = self.engine.processor_param(processor_id, index)
 
     def is_automated(self, owner: str, key: str) -> bool:
         """Whether the engine plays this target's envelope (it has one, not overridden)."""
@@ -196,6 +210,8 @@ class ParameterSync:
             return None
         processor_id = self.engine_device_id(owner, device.id)
         if processor_id in self._plugin_ids:  # its values live in the plug-in
+            if (owner, key) in self._plugin_own and self.is_automated(owner, key):  # (the plug-in's follows it)
+                return self._plugin_own[(owner, key)]
             index = self.engine.processor_param_index(processor_id, target[2])
             if index >= 0:
                 return self.engine.processor_param(processor_id, index)

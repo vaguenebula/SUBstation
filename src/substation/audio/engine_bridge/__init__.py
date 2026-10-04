@@ -159,6 +159,9 @@ class EngineBridge(TrackSync, InputSync, DeviceSync, PluginHost, ParameterSync, 
         self._param_specs: dict[int, list[ParamSpec]] = {}  # engine id -> its automatable parameters (cache)
         self._automating: dict[str, set[str]] = {}  # owner -> the targets whose envelopes the engine plays
         self._overridden: set[tuple[str, str]] = set()  # (owner, key) changed by hand while automated
+        # (owner, key) -> a plug-in parameter's own value, kept while its envelope plays (the
+        # engine's value follows the envelope then)
+        self._plugin_own: dict[tuple[str, str], float] = {}
         self._mixer: dict[str, tuple[float, float]] = {}  # owner -> (volume dB, pan) the engine has
         self._inputs: dict[str, tuple] = {}  # track id -> (input, source, monitor, armed, MIDI input) the engine has
         self._outputs: dict[str, int] = {}  # track id -> the engine track its output goes into
