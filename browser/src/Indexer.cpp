@@ -225,6 +225,9 @@ void Indexer::run() {
                 placesChanged_ = false;
                 publishNow();  // what is known already (the saved index), at once
             }
+            // Watch new places before their folders are looked at, but after what
+            // is known is shown: on Linux watching a tree means walking it.
+            rewatch();
             bool changed = false;
             listed_ = checked_ = 0;
             const auto passStart = Clock::now();
@@ -363,7 +366,7 @@ void Indexer::applyPlaces(std::vector<PlaceSpec> specs) {
             } else {
                 place.node = addNode(root, NativeString(), place.spec.key, place.spec.detail, -1);
             }
-            place.watcher = std::make_unique<platform::FolderWatcher>(root);
+            // Its watcher comes with the next rewatch(), before the pass looks at it.
         }
         places.push_back(std::move(place));
     }

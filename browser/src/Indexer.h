@@ -125,6 +125,8 @@ private:
     // Watching
     void takeWatcherChanges(Place& place);
     void markChanged(const Place& place, const platform::NativeString& relative);
+    // Starts watching places that aren't watched (new ones, or whose watcher
+    // failed), once their root is there.
     void rewatch();
 
     // The saved index

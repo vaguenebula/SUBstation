@@ -25,23 +25,14 @@
 #include <QtTest>
 
 #include <chrono>
-#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
-
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
 
 #include "browser/PathKeys.h"
 #include "plugins/PluginIndex.h"
@@ -55,80 +46,42 @@ using namespace sub::app;
 
 namespace fake {
 
-std::string quote(const std::string& text) {
-    std::string out = "\"";
-    for (const char c : text) {
-        if (c == '\n') {
-            out += "\\n";
-        } else if (c == '\r') {
-            out += "\\r";
-        } else {
-            if (c == '"' || c == '\\') out += '\\';
-            out += c;
-        }
-    }
-    return out + "\"";
-}
-
-// The JSON string on a line (the paths here are ASCII; anything else reads as '?').
-std::string unquote(const std::string& line) {
-    std::string out;
-    size_t at = line.find('"');
-    if (at == std::string::npos) return out;
-    for (++at; at < line.size() && line[at] != '"'; ++at) {
-        if (line[at] != '\\' || at + 1 >= line.size()) {
-            out += line[at];
-            continue;
-        }
-        const char escaped = line[++at];
-        if (escaped == 'u' && at + 4 < line.size()) {
-            const unsigned code = static_cast<unsigned>(std::stoul(line.substr(at + 1, 4), nullptr, 16));
-            out += code < 0x80 ? static_cast<char>(code) : '?';
-            at += 4;
-        } else {
-            out += escaped == 'n' ? '\n' : escaped == 't' ? '\t' : escaped;
-        }
-    }
-    return out;
-}
-
-int processId() {
-#ifdef _WIN32
-    return _getpid();
-#else
-    return static_cast<int>(getpid());
-#endif
-}
-
-int run(const std::string& mode) {
+// (Qt's strings, JSON and files work before a QCoreApplication is made.)
+int run(const QByteArray& mode) {
     if (mode == "exit") return 3;
     std::cout << "a plug-in saying hello (not JSON: skipped)" << std::endl;
     if (mode != "silent") std::cout << "{\"ready\": true}" << std::endl;
+    const QString log = qEnvironmentVariable("SUB_FAKE_SCANNER_LOG");
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
-        const std::string path = unquote(line);
-        if (const char* log = std::getenv("SUB_FAKE_SCANNER_LOG"); log && *log)
-            std::ofstream(log, std::ios::app) << processId() << ' ' << path << '\n';
-        if (mode == "silent") continue;
-        std::stringstream content;
-        content << std::ifstream(path, std::ios::binary).rdbuf();
-        std::string text = content.str();
-        if (text.starts_with("crash")) std::_Exit(3);
-        if (text.starts_with("hang"))
-            for (;;) std::this_thread::sleep_for(std::chrono::hours(1));
-        if (text.starts_with("noise")) {
-            std::cout << "[1, 2]\n{\"path\": \"somewhere else\", \"plugins\": []}\ngarbage {\n" << std::flush;
-            text = text.substr(5);
+        // One JSON string a line.
+        const QJsonArray wrapped = QJsonDocument::fromJson("[" + QByteArray::fromStdString(line) + "]").array();
+        if (wrapped.isEmpty() || !wrapped[0].isString()) continue;
+        const QString path = wrapped[0].toString();
+        if (!log.isEmpty()) {
+            QFile file(log);
+            if (file.open(QIODevice::Append))
+                file.write(QByteArray::number(QCoreApplication::applicationPid()) + ' ' + path.toUtf8() + '\n');
         }
-        std::string answer = "{\"path\": " + quote(path);
-        if (text.starts_with("plugins:"))
-            answer += ", \"plugins\": " + text.substr(8) + "}";
-        else if (text.starts_with("error:"))
-            answer += ", \"error\": " + quote(text.substr(6)) + "}";
+        if (mode == "silent") continue;
+        QFile file(path);
+        QByteArray text = file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        if (text.startsWith("crash")) std::_Exit(3);
+        if (text.startsWith("hang"))
+            for (;;) std::this_thread::sleep_for(std::chrono::hours(1));
+        if (text.startsWith("noise")) {
+            std::cout << "[1, 2]\n{\"path\": \"somewhere else\", \"plugins\": []}\ngarbage {\n" << std::flush;
+            text = text.mid(5);
+        }
+        QJsonObject reply{{QStringLiteral("path"), path}};
+        if (text.startsWith("plugins:"))
+            reply.insert(QStringLiteral("plugins"), QJsonDocument::fromJson(text.mid(8)).array());
+        else if (text.startsWith("error:"))
+            reply.insert(QStringLiteral("error"), QString::fromUtf8(text.mid(6)));
         else
-            answer += ", \"error\": \"not a plug-in\"}";
-        std::cout << answer << std::endl;
+            reply.insert(QStringLiteral("error"), QStringLiteral("not a plug-in"));
+        std::cout << QJsonDocument(reply).toJson(QJsonDocument::Compact).toStdString() << std::endl;
     }
     return 0;
 }
@@ -138,8 +91,8 @@ int run(const std::string& mode) {
 namespace {
 
 [[maybe_unused]] const bool kFakeScanner = [] {
-    const char* mode = std::getenv("SUB_FAKE_SCANNER");
-    if (mode && *mode) std::exit(fake::run(mode));
+    const QByteArray mode = qgetenv("SUB_FAKE_SCANNER");
+    if (!mode.isEmpty()) std::exit(fake::run(mode));
     return false;
 }();
 
