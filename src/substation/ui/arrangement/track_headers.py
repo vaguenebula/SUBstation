@@ -409,10 +409,12 @@ class TrackHeader(QWidget):
                 values[track.id] = (getattr(track, attr) + delta) if widget.relative else value
         self.editor.set_tracks_param(values, attr, key)
 
-    def refresh_mixer(self) -> None:
+    def refresh_mixer(self, graph: RoutingGraph | None = None, sends: bool = True) -> None:
+        """Volume, pan and (with `sends`) the send knobs; `graph` as SendControls.refresh takes it."""
         track = self.track
         show_mixer_values(self.bridge, self.track_id, self.volume, self.pan, (track.volume_db, track.pan))
-        self.sends.refresh()
+        if sends:
+            self.sends.refresh(graph)
 
     @property
     def mixer_automated(self) -> bool:
@@ -949,9 +951,14 @@ class TrackHeaderColumn(QWidget):
             self.editor.move_tracks(track_ids, target[0], target[1])
 
     def _follow_automation(self) -> None:
-        for header in self.headers.values():
-            if header.mixer_automated:
-                header.refresh_mixer()
+        # Every frame while playing: only what automation moves, with one routing graph for all.
+        following = [header for header in self.headers.values() if header.mixer_automated]
+        if not following:
+            return
+        project = self.editor.project
+        graph = routing_graph(project.tracks, project.returns) if any(h.sends.automated for h in following) else None
+        for header in following:
+            header.refresh_mixer(graph, sends=header.sends.automated)
 
     def resizeEvent(self, _event) -> None:
         self.relayout()

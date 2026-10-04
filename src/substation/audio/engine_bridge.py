@@ -1445,6 +1445,8 @@ class EngineBridge(QObject):
 
     def param_spec(self, owner: str, key: str) -> ParamSpec | None:
         """A target's description; None if it doesn't exist (a device that is gone)."""
+        if key in automation.MIXER_KEYS:  # every owner has these: no need to work out its sends
+            return mixer_specs(master=owner == MASTER)[automation.MIXER_KEYS.index(key)]
         if automation.is_mixer_key(key):
             return next((s for s in self.mixer_specs(owner) if s.key == key), None)  # (a return that is gone)
         if not self.project.has_owner(owner):

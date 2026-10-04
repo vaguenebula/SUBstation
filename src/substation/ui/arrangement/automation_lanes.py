@@ -43,7 +43,7 @@ from PySide6.QtWidgets import QMenu
 
 from ... import theme
 from ...model import automation
-from ...model.automation import MASTER
+from ...model.automation import MASTER, point_beat
 from .interactions import DRAG_THRESHOLD, ClipGesture, TimeSelectGesture
 
 ENVELOPE = QColor("#ff4a3d")
@@ -117,9 +117,8 @@ def point_at(view, area: EnvelopeArea, points, pos: QPointF) -> int | None:
     """The breakpoint under `pos` (the one on top where several are)."""
     if not points:
         return None
-    beats = [p.beat for p in points]
-    first = bisect.bisect_left(beats, view.x_to_beat(pos.x() - POINT_GRAB))
-    last = bisect.bisect_right(beats, view.x_to_beat(pos.x() + POINT_GRAB))
+    first = bisect.bisect_left(points, view.x_to_beat(pos.x() - POINT_GRAB), key=point_beat)
+    last = bisect.bisect_right(points, view.x_to_beat(pos.x() + POINT_GRAB), key=point_beat)
     best, best_distance = None, POINT_GRAB
     for i in range(first, last):
         distance = max(abs(view.beat_to_x(points[i].beat) - pos.x()), abs(area.y(points[i].value) - pos.y()))
@@ -174,9 +173,8 @@ def segment_at(host, area: EnvelopeArea, points, pos: QPointF) -> int | None:
     if len(points) < 2:
         return None
     view = host.view
-    beats = [p.beat for p in points]
-    first = max(0, bisect.bisect_left(beats, view.x_to_beat(pos.x() - SEGMENT_GRAB)) - 1)
-    last = min(len(points) - 1, bisect.bisect_right(beats, view.x_to_beat(pos.x() + SEGMENT_GRAB)))
+    first = max(0, bisect.bisect_left(points, view.x_to_beat(pos.x() - SEGMENT_GRAB), key=point_beat) - 1)
+    last = min(len(points) - 1, bisect.bisect_right(points, view.x_to_beat(pos.x() + SEGMENT_GRAB), key=point_beat))
     best, best_distance = None, SEGMENT_GRAB
     for i in range(first, last):
         line = _segment_line(host, area, points, i, pos.x() - SEGMENT_GRAB, pos.x() + SEGMENT_GRAB)
@@ -290,9 +288,8 @@ def trace(view, area: EnvelopeArea, points, x0: float, x1: float, quantize=None)
     """The envelope's line from x0 to x1: through its breakpoints, and along
     curved segments every few pixels. A discrete target (`quantize`) steps."""
     b0, b1 = view.x_to_beat(x0), view.x_to_beat(x1)
-    beats = [p.beat for p in points]
-    first = max(0, bisect.bisect_right(beats, b0) - 1)
-    last = min(len(points) - 1, bisect.bisect_left(beats, b1))
+    first = max(0, bisect.bisect_right(points, b0, key=point_beat) - 1)
+    last = min(len(points) - 1, bisect.bisect_left(points, b1, key=point_beat))
     line: list[tuple[float, float]] = []
     if b0 < points[0].beat:
         line.append((x0, points[0].value))

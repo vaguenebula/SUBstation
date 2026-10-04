@@ -164,6 +164,10 @@ if (ASIO_SDK)
 endif()
 if (MSVC)
     target_compile_options(_engine PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
+    # The audio path is float loops: let the compiler vectorize them with AVX2 and
+    # reorder float math. Needs a CPU with AVX2 (Intel Haswell / AMD Zen and later).
+    # /fp:fast assumes no NaN or infinity, so the engine must not rely on them.
+    target_compile_options(_engine PRIVATE /arch:AVX2 /fp:fast)
 endif()
 
 install(TARGETS _engine LIBRARY DESTINATION substation)

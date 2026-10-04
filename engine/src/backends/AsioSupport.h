@@ -4,6 +4,7 @@
 // sizes. The numbers are ASIO's own (ASIOSampleType in asio.h).
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -78,9 +79,13 @@ inline uint64_t loadBytes(const uint8_t* src, int bytes, bool bigEndian) noexcep
 }
 
 inline double clampSample(float x) noexcept {
+    // NaN (from a broken plug-in) plays as silence. Tested on its bits, and first:
+    // the engine builds with /fp:fast, which may fold `x == x` to true or let NaN
+    // pass the comparisons below.
+    if ((std::bit_cast<uint32_t>(x) & 0x7fffffffu) > 0x7f800000u) return 0.0;
     if (x > 1.f) return 1.0;
     if (x < -1.f) return -1.0;
-    return x == x ? x : 0.0;  // NaN (from a broken plug-in) plays as silence
+    return x;
 }
 
 }  // namespace detail

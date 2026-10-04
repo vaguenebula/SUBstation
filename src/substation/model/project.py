@@ -753,7 +753,8 @@ class Project(QObject):
         """The returns a track (or return) can send to: all but those that would close a cycle."""
         if track_id == MASTER:
             return []
-        return [r for r in self.returns if not self.would_cycle(track_id, r.id)]
+        graph = routing_graph(self.tracks, self.returns)  # once, not once per return
+        return [r for r in self.returns if not feeds(graph, r.id, track_id)]
 
     # --- Groups ---------------------------------------------------------------
 

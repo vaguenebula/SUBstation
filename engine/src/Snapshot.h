@@ -111,7 +111,18 @@ public:
         }
         if (delay == 0) return;
         const int size = capacity();
-        for (int i = 0; i < frames; ++i) {
+        if (frames + delay <= size) {
+            // The whole chunk goes in before anything comes out: what it reads from
+            // before this chunk (delay samples back) is out of the way of its writes.
+            const int read = write_ - delay < 0 ? write_ - delay + size : write_ - delay;
+            toRing(left_, write_, left, frames);
+            toRing(right_, write_, right, frames);
+            fromRing(left_, read, left, frames);
+            fromRing(right_, read, right, frames);
+            write_ = (write_ + frames) % size;
+            return;
+        }
+        for (int i = 0; i < frames; ++i) {  // a line shorter than delay + chunk (offline lines are just long enough)
             left_[write_] = left[i];
             right_[write_] = right[i];
             int read = write_ - delay;
@@ -123,6 +134,18 @@ public:
     }
 
 private:
+    // Copies n samples into / out of the ring from position `at`, wrapping once.
+    static void toRing(std::vector<float>& ring, int at, const float* from, int n) noexcept {
+        const int first = std::min(n, static_cast<int>(ring.size()) - at);
+        std::copy_n(from, first, ring.data() + at);
+        std::copy_n(from + first, n - first, ring.data());
+    }
+    static void fromRing(const std::vector<float>& ring, int at, float* to, int n) noexcept {
+        const int first = std::min(n, static_cast<int>(ring.size()) - at);
+        std::copy_n(ring.data() + at, first, to);
+        std::copy_n(ring.data(), n - first, to + first);
+    }
+
     std::vector<float> left_, right_;
     int write_ = 0;
     int delay_ = 0;

@@ -1057,6 +1057,31 @@ void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const
     params.panLeft.setTarget(panLeft);
     params.panRight.setTarget(panRight);
     float peakL = 0.f, peakR = 0.f;
+    const bool ramping = params.audible.isSmoothing() || params.volume.isSmoothing() ||
+                         params.panLeft.isSmoothing() || params.panRight.isSmoothing();
+    if (!ramping && !autoGain && !autoLeft) {
+        // Settled and unautomated (most strips, most of the time): the gains are
+        // constant for the whole chunk, so the ramps' next() would change nothing.
+        const float a = params.audible.current();
+        if (audibleOut) std::fill_n(audibleOut, frames, a);
+        if (a == 0.f) {
+            std::fill_n(left, frames, 0.f);
+            std::fill_n(right, frames, 0.f);
+        } else {
+            const float g = a * params.volume.current();  // a * g * l, in the loop's order
+            const float l = g * params.panLeft.current();
+            const float r = g * params.panRight.current();
+            for (int i = 0; i < frames; ++i) {
+                left[i] *= l;
+                right[i] *= r;
+                peakL = std::max(peakL, std::abs(left[i]));
+                peakR = std::max(peakR, std::abs(right[i]));
+            }
+        }
+        atomicStoreMax(params.peakLeft, peakL);
+        atomicStoreMax(params.peakRight, peakR);
+        return;
+    }
     for (int i = 0; i < frames; ++i) {
         const float a = params.audible.next();
         if (audibleOut) audibleOut[i] = a;

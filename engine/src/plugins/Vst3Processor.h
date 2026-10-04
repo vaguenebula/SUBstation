@@ -175,8 +175,10 @@ private:
     std::atomic<int32_t> pendingRestart_{0};        // IComponentHandler::restartComponent flags
 
     // Automation. The rendering thread's copy of the parameter ids (by index) and
-    // the last automated value of each (normalized; NaN: none since the last
-    // idle()), set up with the buffers.
+    // the last automated value of each (normalized, 0-1; kNotAutomated: none since
+    // the last idle()), set up with the buffers. Not NaN: the engine builds with
+    // /fp:fast, which may drop NaN checks.
+    static constexpr float kNotAutomated = -1.f;
     std::vector<Steinberg::Vst::ParamID> automationIds_;
     std::unique_ptr<std::atomic<float>[]> automated_;
     std::atomic<bool> automationPending_{false};
