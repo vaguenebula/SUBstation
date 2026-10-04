@@ -30,6 +30,7 @@ from ...model.params import format_value
 from .. import icons
 from ..device_panel import KNOB_SIZE, DeviceWidget
 from ..widgets import Knob, ToggleButton
+from ..widgets.knob import DRAG_PIXELS, FINE_DRAG_PIXELS
 from ..widgets.value_box import ValueBox
 from . import device_editor
 
@@ -102,10 +103,9 @@ class LogValueBox(ValueBox):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_origin is None:
             return
-        start_y, start_value = self._drag_origin
-        fine = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        pixels = FINE_DRAG_PIXELS if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else DRAG_PIXELS
         self.relative = True
-        self._set_from_user(self._moved(start_value, (start_y - event.position().y()) / (1000.0 if fine else 150.0)),
+        self._set_from_user(self._drag_by(event.position().y(), lambda value, up: self._moved(value, up / pixels)),
                             self._gesture)
 
     def wheelEvent(self, event: QWheelEvent) -> None:

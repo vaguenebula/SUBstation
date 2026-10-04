@@ -13,6 +13,9 @@ from PySide6.QtWidgets import QLineEdit, QWidget
 from ... import theme
 from .knob import draw_automation_dot
 
+DRAG_RATE = 0.5  # steps per pixel dragged
+FINE_DRAG_RATE = 0.05  # with Shift
+
 
 class ValueBox(QWidget):
     # (new value, gesture key). Values from one drag share a key so undo merges them.
@@ -34,7 +37,10 @@ class ValueBox(QWidget):
         self._parse = parser or _parse_float
         self._choices = list(choices) if choices else None
         self._sample_text = sample_text
-        self._drag_origin: tuple[float, float] | None = None
+        self._drag_origin: tuple[float, float] | None = None  # press y, value
+        # While dragging: the last y and the value dragged to there, unrounded, so
+        # slow (fine) drags add up.
+        self._drag_last: tuple[float, float] | None = None
         self._gesture: object | None = None
         self._wheel_gesture: tuple[object, float] | None = None
         self._editor: QLineEdit | None = None
@@ -116,6 +122,7 @@ class ValueBox(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_origin = (event.position().y(), self._value)
+            self._drag_last = self._drag_origin
             self._gesture = object()
             self.update()
 
@@ -130,10 +137,21 @@ class ValueBox(QWidget):
             self._set_from_user(self._choices[max(0, min(len(self._choices) - 1, index))], self._gesture)
             return
         fine = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-        self._set_from_user(start_value + dy * self._step * (0.1 if fine else 1.0), self._gesture)
+        self._set_from_user(self._drag_by(event.position().y(), lambda value, pixels: value + pixels * self._step * (
+            FINE_DRAG_RATE if fine else DRAG_RATE)), self._gesture)
+
+    def _drag_by(self, y: float, moved: Callable[[float, float], float]) -> float:
+        """The value dragged to at `y`: `moved(value, pixels up)` from where the
+        mouse was last, so pressing or letting go of Shift mid-drag changes the
+        rate from here on (not the whole drag)."""
+        last_y, value = self._drag_last
+        value = max(self._min, min(self._max, moved(value, last_y - y)))
+        self._drag_last = (y, value)
+        return value
 
     def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
         self._drag_origin = None
+        self._drag_last = None
         self._gesture = None
         self.update()
 

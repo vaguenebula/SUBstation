@@ -501,10 +501,16 @@ class MainWindow(QMainWindow):
 
     def _what_is_copied(self, verb: str) -> str | None:
         """What Cut/Copy act on now: "devices", "automation" (a lane range), "clips"
-        (a clip range) or None (nothing they can; breakpoints: says so)."""
+        (a clip range), "tracks" or None (nothing they can; breakpoints, returns:
+        says so)."""
         selection = self.selection
         if selection.focus == "devices":
             return "devices"
+        if selection.focus == "track" and selection.time_range is None:
+            if any(self.project.has_track(t) for t in selection.track_ids):
+                return "tracks"
+            self.show_message(f"Only the arrangement's tracks can be {verb}, not returns or the master.")
+            return None
         if selection.time_range is not None and selection.lanes:
             return "automation"
         if selection.points is not None:
@@ -520,6 +526,8 @@ class MainWindow(QMainWindow):
             self.arrangement.lanes.cut_automation()
         elif what == "clips":
             self.arrangement.lanes.cut_area()
+        elif what == "tracks":
+            self.arrangement.lanes.cut_tracks(list(self.selection.track_ids))
 
     def copy(self) -> None:
         what = self._what_is_copied("copied")
@@ -529,6 +537,8 @@ class MainWindow(QMainWindow):
             self.arrangement.lanes.copy_automation()
         elif what == "clips":
             self.arrangement.lanes.copy_area()
+        elif what == "tracks":
+            self.arrangement.lanes.copy_tracks(list(self.selection.track_ids))
 
     def paste(self) -> None:
         if self.selection.focus == "devices":

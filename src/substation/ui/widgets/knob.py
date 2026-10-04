@@ -17,6 +17,8 @@ from ... import theme
 AUTOMATION_COLORS = {"on": "#ff4a3d", "off": "#8c8c8c"}  # automated / automation overridden
 START_ANGLE = 225.0  # degrees, Qt convention (0 = 3 o'clock, counter-clockwise)
 SPAN = 270.0
+DRAG_PIXELS = 300.0  # dragged this far, a knob turns through its whole range
+FINE_DRAG_PIXELS = 3000.0  # with Shift
 
 
 class Knob(QWidget):
@@ -37,7 +39,7 @@ class Knob(QWidget):
         self._bipolar = bipolar
         self._format = formatter or (lambda v: f"{v:.2f}")
         self._color = QColor(color)
-        self._drag: tuple[float, float, object] | None = None
+        self._drag: tuple[float, float, object] | None = None  # last y, position there (0..1), gesture
         self._automation: str | None = None
         self._wheel = wheel
         self._parse = parser  # if set: typing a number edits
@@ -129,16 +131,20 @@ class Knob(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag = (event.position().y(), self._value, object())
+            self._drag = (event.position().y(), self._fraction(self._value), object())
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag is None:
             return
-        start_y, start_value, gesture = self._drag
+        # Moved on from where the mouse was last, so pressing or letting go of
+        # Shift mid-drag changes the rate from here on (not the whole drag).
+        last_y, fraction, gesture = self._drag
+        y = event.position().y()
+        pixels = FINE_DRAG_PIXELS if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else DRAG_PIXELS
+        fraction = max(0.0, min(1.0, fraction + (last_y - y) / pixels))
+        self._drag = (y, fraction, gesture)
         self.relative = True
-        pixels_for_full_range = 1000.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 150.0
-        delta = (start_y - event.position().y()) / pixels_for_full_range
-        self._set_from_user(self._from_fraction(self._fraction(start_value) + delta), gesture)
+        self._set_from_user(self._from_fraction(fraction), gesture)
 
     def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
         self._drag = None

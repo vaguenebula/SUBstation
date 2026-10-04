@@ -46,6 +46,8 @@ class ViewState(QObject):
         self.grid_level = 0
         self.snap = True
         self.follow = True
+        # Scrolled by hand while playing: following stops until playback stops or starts again.
+        self.follow_paused = False
 
     # --- Coordinates -------------------------------------------------------------
 
@@ -67,6 +69,12 @@ class ViewState(QObject):
         if beats != self.scroll_beats:
             self.scroll_beats = beats
             self.changed.emit()
+
+    def scroll_by_hand(self, beats: float) -> None:
+        """Scroll as the user asked: the view stops following the playhead
+        (which would pull it back) until playback stops or starts again."""
+        self.follow_paused = True
+        self.set_scroll_beats(beats)
 
     def set_scroll_y(self, y: float) -> None:
         y = max(0, min(self.max_scroll_y, int(y)))

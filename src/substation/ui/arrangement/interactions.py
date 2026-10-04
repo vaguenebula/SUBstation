@@ -206,5 +206,6 @@ class PanGesture(ClipGesture):
     def move(self, pos: QPointF, modifiers) -> None:
         view = self.canvas.view
         delta = pos - self.press
-        view.set_scroll_beats(self.scroll_beats - delta.x() / view.px_per_beat)
+        if delta.x():
+            view.scroll_by_hand(self.scroll_beats - delta.x() / view.px_per_beat)
         view.set_scroll_y(self.scroll_y - delta.y())

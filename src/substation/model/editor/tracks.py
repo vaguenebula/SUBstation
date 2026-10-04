@@ -65,6 +65,17 @@ class RecordedTake:
     midi: bool = False
 
 
+@dataclass(frozen=True)
+class CopiedTracks:
+    """Tracks copied (Ctrl+C / Ctrl+X on tracks), as they were then: each of
+    `roots` (in track order) followed by what is in it, if a group. `folded`:
+    their devices that were folded."""
+
+    roots: tuple[str, ...]
+    tracks: tuple[Track, ...]
+    folded: frozenset[str] = frozenset()
+
+
 def _renamed_key(key: str, ids: dict[str, str]) -> str:
     """An automation key with the devices (and rack chains) it names renamed by `ids`."""
     try:
@@ -356,6 +367,34 @@ class TrackEdits:
         if self.project.track(track_id).folded != folded:
             self.project.update_track(track_id, folded=folded)
 
+    def copy_tracks(self, track_ids) -> CopiedTracks | None:
+        """Ctrl+C on tracks: them (a group with what is in it) as they are now, to
+        paste later (plug-ins in the state last stored in the model: store their
+        states first). None if none of them is a track of the arrangement."""
+        p = self.project
+        roots = self._roots(track_ids)
+        if not roots:
+            return None
+        originals = [t for r in roots for t in [p.track(r), *p.descendants(r)]]
+        devices = {d.id for t in originals for d in iter_devices(t.devices)}
+        return CopiedTracks(tuple(roots), tuple(copy.deepcopy(originals)), frozenset(devices & p.folded_devices))
+
+    def cut_tracks(self, track_ids) -> CopiedTracks | None:
+        """Ctrl+X on tracks: copy them (see copy_tracks), then delete them."""
+        copied = self.copy_tracks(track_ids)
+        if copied is not None:
+            self.delete_tracks(list(copied.roots))
+        return copied
+
+    def paste_tracks(self, copied: CopiedTracks, after: str | None = None) -> list[Track]:
+        """Ctrl+V of copied tracks: new copies of them, together after track `after`
+        (and what is in it), in its group (None: last). As duplicate_tracks
+        makes them; what they took their input or sidechain from, or sent to, is
+        let go of if it is gone now. One undo step; the copies of the roots."""
+        index, parent = self.insertion_point(after)
+        return self._insert_copies(copied, len(self.project.tracks) if index is None else index, parent,
+                                   "Paste Track" if len(copied.roots) == 1 else "Paste Tracks")
+
     def duplicate_tracks(self, track_ids) -> list[Track]:
         """Ctrl+D on tracks: a copy of each (a group with what is in it), together
         after the last of them (and what is in it), in its group. The copies have
@@ -363,16 +402,31 @@ class TrackEdits:
         store their states first) and the same automation, sends, inputs and
         sidechains (from the copies, where they came from tracks copied with
         them); they aren't armed. One undo step; the copies of these tracks."""
-        p = self.project
-        roots = self._roots(track_ids)
-        if not roots:
+        copied = self.copy_tracks(track_ids)
+        if copied is None:
             return []
-        originals = [t for r in roots for t in [p.track(r), *p.descendants(r)]]
-        renamed: dict[str, str] = {t.id: new_id() for t in originals}
-        last = roots[-1]
-        index, parent = self._outside_frozen(p.subtree_end(p.track_index(last)), p.track(last).parent)
+        p = self.project
+        last = copied.roots[-1]
+        return self._insert_copies(copied, p.subtree_end(p.track_index(last)), p.track(last).parent,
+                                   "Duplicate Track" if len(copied.roots) == 1 else "Duplicate Tracks")
+
+    def _insert_copies(self, copied: CopiedTracks, index: int, parent: str | None, text: str) -> list[Track]:
+        """New copies of copied tracks (see duplicate_tracks), at `index` in group
+        `parent` (unless that is frozen: after it). The copies of the roots."""
+        p = self.project
+        roots = copied.roots
+        renamed: dict[str, str] = {t.id: new_id() for t in copied.tracks}
+
+        def source(track_id: str | None) -> str | None:
+            """A track a copy hears (its input, a sidechain): the copy of it, if
+            copied too; None if it is gone."""
+            if track_id in renamed:
+                return renamed[track_id]
+            return track_id if track_id == MASTER or p.has_track(track_id) or p.has_return(track_id) else None
+
+        index, parent = self._outside_frozen(index, parent)
         copies = []
-        for original in originals:
+        for original in copied.tracks:
             track = copy.deepcopy(original)
             track.id = renamed[original.id]
             track.name = p.unique_track_name(original.name)
@@ -386,17 +440,19 @@ class TrackEdits:
                 new = [d.id for d in iter_devices([device])] + [c.id for _r, c in iter_chains([device])]
                 ids.update(zip(old, new, strict=True))
             for device in iter_devices(track.devices):
-                if device.sidechain is not None and device.sidechain.track_id in renamed:
-                    device.sidechain = replace(device.sidechain, track_id=renamed[device.sidechain.track_id])
-            p.folded_devices |= {new for old, new in ids.items() if old in p.folded_devices}
-            if track.input_track in renamed:
-                track.input_track = renamed[track.input_track]
-            track.automation = {_renamed_key(k, ids): points for k, points in track.automation.items()}
+                if device.sidechain is not None:
+                    heard = source(device.sidechain.track_id)
+                    device.sidechain = None if heard is None else replace(device.sidechain, track_id=heard)
+            p.folded_devices |= {new for old, new in ids.items() if old in copied.folded}
+            if track.input_track is not None:
+                track.input_track = source(track.input_track)
+            track.sends = {r: send for r, send in track.sends.items() if p.has_return(r)}
+            track.automation = {_renamed_key(k, ids): points for k, points in track.automation.items()
+                                if automation.key_send(k) is None or p.has_return(automation.key_send(k))}
             view = track.automation_view
             track.automation_view = replace(view, key=view.key and _renamed_key(view.key, ids),
                                             lanes=tuple(_renamed_key(k, ids) for k in view.lanes))
             copies.append(track)
-        text = "Duplicate Track" if len(roots) == 1 else "Duplicate Tracks"
         self.undo_stack.beginMacro(text)
         try:
             for offset, track in enumerate(copies):
@@ -406,7 +462,7 @@ class TrackEdits:
                     self._push(InsertTrackCommand(p, track, index + offset, text))
         finally:
             self.undo_stack.endMacro()
-        return [p.track(renamed[r]) for r in roots]
+        return [p.track(renamed[r]) for r in roots if p.has_track(renamed[r])]
 
     def rename_track(self, track_id: str, name: str) -> None:
         old = self.project.track(track_id).name

@@ -139,7 +139,7 @@ def test_knobs_edit_plugins_undoably(window):
     widget = window.devices.widgets[device.id]
     knob, readout = widget.knobs[GAIN]
     centre = QPoint(knob.width() // 2, knob.height() // 2)
-    drag(knob, centre, centre + QPoint(0, 75))  # half the range down
+    drag(knob, centre, centre + QPoint(0, 150))  # half the range down
     assert window.engine.processor_param(pid, GAIN) == pytest.approx(0.5, abs=0.02)
     assert readout.text().startswith("0.5") and window.undo_stack.count() == 2  # the track, one knob drag
     widget.choices[WAVE].activated.emit(0)

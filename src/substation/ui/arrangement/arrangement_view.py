@@ -287,7 +287,7 @@ class ArrangementView(QWidget):
         self.hbar.blockSignals(False)
 
     def _on_hbar(self, value: int) -> None:
-        self.view.set_scroll_beats(value / self.view.px_per_beat)
+        self.view.scroll_by_hand(value / self.view.px_per_beat)
 
     def _update_vbar(self) -> None:
         viewport = max(1, self.lanes.height())
@@ -319,6 +319,7 @@ class ArrangementView(QWidget):
     # --- Playhead ------------------------------------------------------------------
 
     def _on_transport(self, _playing: bool) -> None:
+        self.view.follow_paused = False  # stopping or starting playback follows again
         self._on_position(self.bridge.position)
 
     def _on_position(self, beat: float) -> None:
@@ -328,7 +329,7 @@ class ArrangementView(QWidget):
         self.master_lane.set_playhead(shown)
         for lane, _header in self._returns.values():
             lane.set_playhead(shown)
-        if self.view.follow and self.bridge.is_playing:
+        if self.view.follow and not self.view.follow_paused and self.bridge.is_playing:
             x = self.view.beat_to_x(beat)
             width = self.lanes.width()
             if x > width * 0.96 or x < 0:

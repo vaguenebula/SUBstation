@@ -925,7 +925,7 @@ def test_dropped_loop_is_set_up_in_the_same_undo_step(window, tmp_path):
 def test_header_controls_and_dialogs(window, three_tracks):
     track = window.project.tracks[0]
     header = window.arrangement.headers.headers[track.id]
-    drag(header.volume, QPoint(30, 10), QPoint(30, -30))  # drag up 40 px
+    drag(header.volume, QPoint(30, 10), QPoint(30, -70))  # drag up 80 px
     assert window.project.track(track.id).volume_db == pytest.approx(6.0)  # clamped at +6 dB
     window.undo_stack.undo()
     assert window.project.track(track.id).volume_db == 0.0

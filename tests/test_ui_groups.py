@@ -216,3 +216,29 @@ def test_folding_one_of_the_selected_tracks_folds_them_all(window):
     # An unselected track's fold button folds just it.
     QTest.mouseClick(headers[b], Qt.MouseButton.LeftButton, pos=headers[b]._fold_rect().center())
     assert project.track(b).folded and not project.track(a).folded
+
+
+def test_groups_can_be_cut_copied_and_pasted(window):
+    a, b, c = make_tracks(window)
+    project, selection = window.project, window.selection
+    group = window.editor.group_tracks([a, b])
+    selection.select_track(group.id, focus_track=True)
+    press_key(window, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    selection.select_track(c, focus_track=True)
+    press_key(window, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)  # after C
+    assert len(project.tracks) == 7  # the group, A, B, C, then the copies
+    pasted = project.tracks[4]
+    assert pasted.is_group and pasted.parent is None and selection.track_ids == (pasted.id,)
+    inside = project.descendants(pasted.id)
+    assert [len(t.clips) for t in inside] == [1, 1] and {t.id for t in inside}.isdisjoint({a, b})
+    assert window.undo_stack.undoText() == "Paste Track"
+
+    selection.select_track(group.id, focus_track=True)
+    press_key(window, Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier)
+    assert not project.has_track(group.id) and not project.has_track(a) and len(project.tracks) == 4
+    selection.select_track(c, focus_track=True)
+    press_key(window, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+    assert len(project.tracks) == 7 and project.tracks[1].is_group  # after C, before the first copy
+    window.undo_stack.undo()
+    window.undo_stack.undo()
+    assert project.has_track(group.id) and [t.id for t in project.descendants(group.id)] == [a, b]
