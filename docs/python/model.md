@@ -11,7 +11,7 @@ into undo commands. The audio engine only mirrors this model (see
 ## Overview
 
 ```
- UI widget ──calls──► ProjectEditor (editor.py)
+ UI widget ──calls──► ProjectEditor (editor/)
                           │  works out the new state with the pure modules:
                           │  edits.py (clips), notes.py (notes), automation.py (envelopes)
                           ▼
@@ -33,7 +33,7 @@ into undo commands. The audio engine only mirrors this model (see
   Envelopes) is saved with the project but changes directly, without an undo step, as in
   Ableton.
 - Everything runs on the Qt main thread. Nothing in `model/` touches the engine except
-  `editor.py`, which asks `substation._engine` for the list of built-in devices at import
+  `devices.py`, which asks `substation._engine` for the list of built-in devices at import
   time.
 
 ## Files
@@ -45,7 +45,8 @@ into undo commands. The audio engine only mirrors this model (see
 | [notes.py](../../src/substation/model/notes.py) | Pure note maths for the piano roll: overlaps on a key, moves, resizes, velocity, legato, ×2/÷2, quantize, humanize; note names |
 | [automation.py](../../src/substation/model/automation.py) | Envelopes (`AutomationPoint`, `Envelope`), target keys, the mixer's normalized mappings, evaluation (`value_at`), and every envelope edit (points, curves, ranges); `AutomationView` |
 | [params.py](../../src/substation/model/params.py) | `ParamSpec`: any automatable parameter (mixer, built-in device, plug-in, rack chain fader) described alike, with the engine's normalized mapping; `mixer_specs`, `send_spec`, `chain_specs`, `format_value` |
-| [editor.py](../../src/substation/model/editor.py) | `ProjectEditor`: every undoable operation the UI uses; device helpers (`new_device`, `device_name`, `device_is_instrument`, `BUILTIN_DEVICES`...); clipboard types (`ClipboardContent`, `CopiedAutomation`); `RecordedTake` |
+| [editor/](../../src/substation/model/editor) | `ProjectEditor` ([`__init__.py`](../../src/substation/model/editor/__init__.py)): every undoable operation the UI uses, one mixin per module: [tracks.py](../../src/substation/model/editor/tracks.py) (tracks, returns and sends, groups, inputs, recordings; `RecordedTake`), [settings.py](../../src/substation/model/editor/settings.py) (tempo, time signature, key, loop), [clips.py](../../src/substation/model/editor/clips.py) (clips and time selections; `ClipboardContent`, `CopiedTrack`, `ClipRef`), [device_chains.py](../../src/substation/model/editor/device_chains.py) (devices in chains), [racks.py](../../src/substation/model/editor/racks.py) (racks, their chains and macros), [device_settings.py](../../src/substation/model/editor/device_settings.py) (a device's parameters, state, presets, switch, sidechain), [automation_edits.py](../../src/substation/model/editor/automation_edits.py) (envelopes and the lanes shown; `CopiedAutomation`, `LaneRef`), [freezing.py](../../src/substation/model/editor/freezing.py) (freezing, unfreezing, flattening, and what frozen tracks refuse) |
+| [devices.py](../../src/substation/model/devices.py) | Kinds of devices: `BUILTIN_DEVICES`, `BUILTIN_CATEGORIES`, `BUILTIN_INSTRUMENTS`, `DEFAULT_INSTRUMENT`; `new_device`, `new_rack`, `new_chain`; `device_name`, `kind_name`, `is_instrument`, `device_is_instrument`, `loads_into`, `builtin_param_info`, `device_ids_of` |
 | [commands.py](../../src/substation/model/commands.py) | The `QUndoCommand` subclasses; merging of continuous gestures |
 | [timebase.py](../../src/substation/model/timebase.py) | `TimeSignature`, beats/seconds, bar.beat.sixteenth formatting and parsing, dB and pan text |
 | [keys.py](../../src/substation/model/keys.py) | Musical keys (`Key`), reading tempo and key from file names (`parse_filename`), what a dropped clip starts with (`clip_settings`) |
@@ -122,7 +123,7 @@ anything with devices, a mixer and automation. `all_tracks()` is tracks, returns
   for what isn't a parameter (see `device_state.py`). The engine follows the model. The
   list of built-in devices, their names, categories, default parameters and which are
   instruments come from the engine (`ge.builtin_devices()` → `BUILTIN_DEVICES`,
-  `BUILTIN_CATEGORIES`, `BUILTIN_INSTRUMENTS` in editor.py), so a new device needs nothing
+  `BUILTIN_CATEGORIES`, `BUILTIN_INSTRUMENTS` in devices.py), so a new device needs nothing
   in Python. `DEFAULT_INSTRUMENT` is `"synth"`.
 - **Plug-in** (`kind` `"plugin"`, `PLUGIN_KIND`): `plugin` is a `PluginRef` (`format`
   `"VST3"`, `uid` the class id, `name`, `vendor`, `path` where it was last loaded,
@@ -173,7 +174,7 @@ won't set it.
   devices, no device automation). The render itself is the bridge's (`render_freeze()`);
   [ui/freezing.py](../../src/substation/ui/freezing.py) does both.
 - What frozen audio holds can't change. `ProjectEditor._push()` refuses (and says why on
-  `refused`) commands changing a frozen track's (or a track in a frozen group's) clips,
+  `refused`; the checks are in [editor/freezing.py](../../src/substation/model/editor/freezing.py)) commands changing a frozen track's (or a track in a frozen group's) clips,
   devices or device automation, and the mixer automation of a track in a frozen group
   (`lane_frozen()`); a frozen track's own mixer and every send stay live, and a sidechain may
   still go when its source does. `_arrange()`, `delete_tracks()`, `group_tracks()` and
@@ -370,7 +371,9 @@ How it fits together:
 
 ### ProjectEditor
 
-[editor.py](../../src/substation/model/editor.py) is the API the UI calls. Its signals:
+[editor/](../../src/substation/model/editor) is the API the UI calls: one class,
+`ProjectEditor`, made of a mixin per kind of edit (the files above), which all push their
+commands through `_push`. A new operation goes in the mixin for what it edits. Its signals:
 `plugin_added(track id, device id)` when the user adds a plug-in (the UI opens its editor;
 not on undo or redo), and `parameter_touched(owner, key)` when the user changes or clicks a
 parameter that can be automated (the arrangement shows its lane).
@@ -495,8 +498,10 @@ they are tested directly.
 
 - `Project` mutators don't check that a change is undoable; calling them from the UI skips
   undo. Only view state may do that.
-- `editor.py` imports `substation._engine` at import time (for the built-in devices), so the
-  model can't be imported without a built engine.
+- `devices.py` imports `substation._engine` at import time (for the built-in devices), so the
+  editor (and presets, serialization's callers) can't be imported without a built engine.
+- New modules need the editable install again (`pip install --no-build-isolation -e .`):
+  scikit-build-core's editable install maps each file it knew of when installed.
 - A plug-in's `Device.state` is only as fresh as the last `EngineBridge.store_plugin_states()`.
   Copying devices, duplicating tracks or chains and saving presets must store states first
   (the UI does).

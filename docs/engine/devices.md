@@ -142,7 +142,7 @@ in no fixed order).
 The engine creates devices by id (`Engine::addBuiltinProcessor(chainId, type, index)`: it sets the source loader,
 calls `prepare()` before the audio thread can see the processor, and inserts it). The UI's device list, names,
 categories and parameter defaults all come from the registry through `builtin_devices()` in the bindings: the model's
-`BUILTIN_DEVICES`, `BUILTIN_CATEGORIES` and `BUILTIN_INSTRUMENTS` ([model/editor.py](../../src/substation/model/editor.py))
+`BUILTIN_DEVICES`, `BUILTIN_CATEGORIES` and `BUILTIN_INSTRUMENTS` ([model/devices.py](../../src/substation/model/devices.py))
 and the browser's *Built-in* category are built from it. A model `Device` of a built-in device has the registry id
 as its `kind`.
 

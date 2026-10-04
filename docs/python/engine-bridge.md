@@ -3,7 +3,7 @@
 The engine bridge keeps the C++ engine (`substation._engine`) in step with the
 [project model](model.md), and feeds the UI with what the engine knows (playhead, meters,
 plug-in reports, device events) through Qt signals. It lives in
-[src/substation/audio/engine_bridge.py](../../src/substation/audio/engine_bridge.py), next to
+[src/substation/audio/engine_bridge/](../../src/substation/audio/engine_bridge), next to
 the persistent audio and MIDI preferences in
 [audio/settings.py](../../src/substation/audio/settings.py). This page also covers how the
 application starts: [app.py](../../src/substation/app.py),
@@ -50,7 +50,17 @@ application starts: [app.py](../../src/substation/app.py),
 
 | File | What it holds |
 |---|---|
-| [audio/engine_bridge.py](../../src/substation/audio/engine_bridge.py) | `EngineBridge`; `LiveTake` (a take while it records); `clip_desc`, `note_descs` (model → engine descriptions); `recordings_folder`, `take_path`; `is_audio_file`, `AUDIO_EXTENSIONS`; `COMPUTER_KEYBOARD`; `MAX_HIDDEN_EDITORS`; the decoding and state tasks |
+| [audio/engine_bridge/\_\_init\_\_.py](../../src/substation/audio/engine_bridge/__init__.py) | `EngineBridge`: its signals, state and start-up (`__init__`), `shutdown`; made of one mixin per module below, and re-exports their public names |
+| [engine_bridge/tracks.py](../../src/substation/audio/engine_bridge/tracks.py) | `TrackSync`: engine tracks, mixers, outputs, sends, clips, tempo and loop; `clip_desc`, `note_descs` (model → engine descriptions) |
+| [engine_bridge/inputs.py](../../src/substation/audio/engine_bridge/inputs.py) | `InputSync`: tracks' audio and MIDI inputs and monitoring, the MIDI inputs open; `COMPUTER_KEYBOARD` |
+| [engine_bridge/devices.py](../../src/substation/audio/engine_bridge/devices.py) | `DeviceSync`: devices' processors in every chain, racks, sidechains, parameters, states; the state task |
+| [engine_bridge/plugins.py](../../src/substation/audio/engine_bridge/plugins.py) | `PluginHost`: plug-ins' states, editors (`MAX_HIDDEN_EDITORS`) and events |
+| [engine_bridge/parameters.py](../../src/substation/audio/engine_bridge/parameters.py) | `ParameterSync`: automation pushed to the engine, overrides, `ParamSpec`s for the UI |
+| [engine_bridge/sources.py](../../src/substation/audio/engine_bridge/sources.py) | `SourceLoader`: decoding audio files in a thread pool; `is_audio_file`, `AUDIO_EXTENSIONS` |
+| [engine_bridge/transport.py](../../src/substation/audio/engine_bridge/transport.py) | `Transport`: play, stop, locate, metronome, previews; polling the playhead and meters |
+| [engine_bridge/recording.py](../../src/substation/audio/engine_bridge/recording.py) | `Recorder`: recording takes; `LiveTake` (a take while it records), `recordings_folder`, `take_path` |
+| [engine_bridge/freezing.py](../../src/substation/audio/engine_bridge/freezing.py) | `FreezeSync`: frozen tracks in the engine, `render_freeze`; `freeze_folder` |
+| [engine_bridge/audio_device.py](../../src/substation/audio/engine_bridge/audio_device.py) | `AudioDevice`: opening the audio device, resets, its control panel, its events |
 | [audio/settings.py](../../src/substation/audio/settings.py) | `AudioSettings` (QSettings), `audio_threads`/`set_audio_threads`, `disabled_midi_inputs`/`set_midi_input_disabled`, `record_quantize`/`set_record_quantize`, `RECORD_QUANTIZE`, `DRIVERS`, `BUFFER_SIZES`, `SAMPLE_RATES` |
 | [app.py](../../src/substation/app.py) | `main()`: the QApplication, the engine API check, the main window, start-up and shut-down |
 | [\_\_init\_\_.py](../../src/substation/__init__.py) | `__version__`, `APP_NAME`, `ENGINE_API`, `engine_mismatch()` |

@@ -224,7 +224,7 @@ so exports are aligned.
 ## Overrides (engine side)
 
 The engine has no notion of an override. The bridge
-([audio/engine_bridge.py](../../src/substation/audio/engine_bridge.py)) does it:
+([audio/engine_bridge/parameters.py](../../src/substation/audio/engine_bridge/parameters.py)) does it:
 
 - `override_automation(owner, key)`: when an automated target is changed by hand (a knob, a fader, a plug-in's own
   editor, a chain's fader, a send knob), its `(owner, key)` goes into `_overridden` and `_push_automation()` sends

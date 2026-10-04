@@ -4,7 +4,7 @@ The device view is the bottom panel: the selected track's (or a return's, or the
 master's) chain of devices, built-in and plug-ins alike, with racks showing their
 macros and chains. The clip view is the overlay that a double-clicked clip opens over
 the arrangement: clip controls and waveforms for audio, the piano roll for MIDI. The
-code is [device_panel.py](../../src/substation/ui/device_panel.py),
+code is [device_panel/](../../src/substation/ui/device_panel),
 [rack_view.py](../../src/substation/ui/rack_view.py),
 [device_editors/](../../src/substation/ui/device_editors) and
 [clip_view.py](../../src/substation/ui/clip_view.py).
@@ -18,7 +18,9 @@ code.
 
 | File | What it holds |
 |---|---|
-| [device_panel.py](../../src/substation/ui/device_panel.py) | `DevicePanel` (the chain: building it, selecting, the clipboard, drag and drop, scrolling); `_DeviceFrame` (what every device shares: frame, title bar, parameter pages, sidechain button, menu, folding); `DeviceWidget` (built-in), `PluginDeviceWidget`, `RackWidget`; `_ChainView`; `device_height()` |
+| [device_panel/panel.py](../../src/substation/ui/device_panel/panel.py) | `DevicePanel` (the chain: building it, selecting, the clipboard, drag and drop, scrolling); `_ChainView`; `preset_folder()` |
+| [device_panel/frame.py](../../src/substation/ui/device_panel/frame.py) | `_DeviceFrame` (what every device shares: frame, title bar, parameter pages, sidechain button, menu, presets, folding); `device_height()`; the sizes (`DEVICE_WIDTH`, `PARAM_WIDTH`, `FOLDED_WIDTH`...) |
+| [device_panel/device_widgets.py](../../src/substation/ui/device_panel/device_widgets.py) | `DeviceWidget` (built-in), `PluginDeviceWidget`, `RackWidget` |
 | [rack_view.py](../../src/substation/ui/rack_view.py) | `MacroPanel` (a rack's eight macros), `ChainList` and `_ChainRow` (its chains with their mixers) |
 | [device_editors/\_\_init\_\_.py](../../src/substation/ui/device_editors/__init__.py) | the editor registry: `@device_editor(kind)`, `editor_for(kind)` |
 | [device_editors/compressor.py](../../src/substation/ui/device_editors/compressor.py) | `CompressorWidget` and `ReductionGraph` |
@@ -257,7 +259,7 @@ button saves the rack, with everything in it, as every device's does. `chain_cli
   `bridge.chain_meters`.
 - `_ChainRow`: activator, name (double-click to rename in place), solo, volume
   (`volume_box`) and pan (`pan_knob`) from
-  [track_headers.py](../../src/substation/ui/arrangement/track_headers.py), meter.
+  [mixer_controls.py](../../src/substation/ui/arrangement/mixer_controls.py), meter.
   Edits go through `editor.set_chain_param(track, chain, attr, value, key)`. Chain
   volume and pan are automatable (`automation.chain_key(rack, chain, CHAIN_VOLUME /
   CHAIN_PAN)`) and follow their automation as rows do in headers. Right-click: rename,

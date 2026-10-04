@@ -32,14 +32,8 @@ from PySide6.QtWidgets import QMenu, QWidget
 
 from ... import theme
 from ...audio.engine_bridge import EngineBridge, is_audio_file
-from ...model.editor import (
-    BUILTIN_DEVICES,
-    ClipboardContent,
-    CopiedAutomation,
-    ProjectEditor,
-    device_is_instrument,
-    is_instrument,
-)
+from ...model.devices import BUILTIN_DEVICES, device_is_instrument, is_instrument
+from ...model.editor import ClipboardContent, CopiedAutomation, ProjectEditor
 from ...model.project import (
     DEFAULT_TRACK_HEIGHT,
     MAX_TRACK_HEIGHT,

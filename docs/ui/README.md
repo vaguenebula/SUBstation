@@ -24,7 +24,7 @@ about how the code does it.
 | [plugin_keys.py](../../src/substation/ui/plugin_keys.py) | `PluginEditorShortcuts`: the main window's shortcuts while a plug-in's (Win32) editor has the focus |
 | [arrangement/](../../src/substation/ui/arrangement) | the arrangement view: [arrangement.md](arrangement.md) |
 | [piano_roll/](../../src/substation/ui/piano_roll) | the MIDI clip editor: [piano-roll.md](piano-roll.md) |
-| [device_panel.py](../../src/substation/ui/device_panel.py), [rack_view.py](../../src/substation/ui/rack_view.py), [device_editors/](../../src/substation/ui/device_editors), [clip_view.py](../../src/substation/ui/clip_view.py) | the device view and the clip view: [device-view.md](device-view.md) |
+| [device_panel/](../../src/substation/ui/device_panel), [rack_view.py](../../src/substation/ui/rack_view.py), [device_editors/](../../src/substation/ui/device_editors), [clip_view.py](../../src/substation/ui/clip_view.py) | the device view and the clip view: [device-view.md](device-view.md) |
 | [browser/](../../src/substation/ui/browser) | the browser panel: [browser.md](../browser.md) |
 
 ## How the UI talks to the rest
@@ -36,11 +36,11 @@ about how the code does it.
   widget (header, lanes, device view, ...)
        │ calls                         reads (never writes)
        ▼                                     │
-  ProjectEditor (model/editor.py) ──► QUndoCommand ──► Project ──► Qt signals ──┐
+  ProjectEditor (model/editor/)   ──► QUndoCommand ──► Project ──► Qt signals ──┐
                                                                                  │
        ┌───────────────────────── repaint / refresh ◄────────────────────────────┤
        │                                                                         ▼
-  widgets                                             EngineBridge (audio/engine_bridge.py)
+  widgets                                             EngineBridge (audio/engine_bridge/)
        ▲                                                         │ substation._engine
        │  position_changed (16 ms), meters_updated (33 ms),       ▼
        └─ automation_state_changed, plugin_* signals, ...  ◄──  Engine
@@ -402,5 +402,5 @@ controls, dialogs, the piano roll, devices' own editors and automation lanes.
 |---|---|
 | [arrangement.md](arrangement.md) | `ui/arrangement/`: `ViewState`, `Selection` and `TrackLayout`, the grid, the ruler, the lanes canvas and its gestures, track/return/master headers, automation lanes and choosers, waveform tiles, folding |
 | [piano-roll.md](piano-roll.md) | `ui/piano_roll/`: the keys, ruler, note grid, velocity lane and note tools |
-| [device-view.md](device-view.md) | `device_panel.py`, `rack_view.py`, `device_editors/`, and the clip view (`clip_view.py`) |
+| [device-view.md](device-view.md) | `device_panel/`, `rack_view.py`, `device_editors/`, and the clip view (`clip_view.py`) |
 | [../browser.md](../browser.md) | `ui/browser/` and its native backend |

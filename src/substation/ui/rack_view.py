@@ -30,9 +30,10 @@ from PySide6.QtWidgets import (
 from .. import theme
 from ..audio.engine_bridge import EngineBridge
 from ..model import automation
-from ..model.editor import ProjectEditor, device_name
+from ..model.devices import device_name
+from ..model.editor import ProjectEditor
 from ..model.project import MACRO_COUNT, Chain, Device, iter_chains, macro_param
-from .arrangement.track_headers import automation_state, pan_knob, volume_box
+from .arrangement.mixer_controls import automation_state, pan_knob, volume_box
 from .widgets import Knob, ToggleButton
 from .widgets.meter import MeterWidget
 
