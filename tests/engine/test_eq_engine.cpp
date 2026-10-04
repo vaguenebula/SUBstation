@@ -70,7 +70,7 @@ double response(int kind, double freq, double gain, double q, int slope, double 
 }  // namespace
 
 TEST_CASE("the EQ is listed with its parameters") {
-    const sub::BuiltinInfo& info = builtinInfo("eq");
+    const sub::BuiltinInfo info = builtinInfo("eq");
     CHECK_EQ(info.name, std::string("EQ"));
     const std::vector<std::string> ids = paramIds(info.params);
     REQUIRE(ids.size() == 24 * 8 + 2);

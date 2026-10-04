@@ -152,7 +152,7 @@ inline uint32_t utilityOn(sub::Engine& engine, uint32_t chain, float gainDb = 0.
 }
 
 // A built-in device type as the registry lists it.
-inline const sub::BuiltinInfo& builtinInfo(const std::string& id) {
+inline sub::BuiltinInfo builtinInfo(const std::string& id) {
     for (const sub::BuiltinInfo& info : sub::BuiltinRegistry::instance().devices())
         if (info.id == id) return info;
     throw std::invalid_argument("no built-in device " + id);

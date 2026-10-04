@@ -94,8 +94,8 @@ public:
 
 #define CHECK_EQ(a, b)                                                                                    \
     do {                                                                                                  \
-        const auto& subtest_a = (a);                                                                      \
-        const auto& subtest_b = (b);                                                                      \
+        const auto subtest_a = (a); /* (copies: `a` may be a member of a temporary) */                   \
+        const auto subtest_b = (b);                                                                       \
         if (!(subtest_a == subtest_b))                                                                    \
             ::subtest::fail(__FILE__, __LINE__,                                                           \
                             "CHECK_EQ(" #a ", " #b "): " + ::subtest::show(subtest_a) + " != " +           \

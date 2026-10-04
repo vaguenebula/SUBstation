@@ -87,7 +87,7 @@ Samples leftFrom(const Samples& out, int64_t from, int64_t to = std::numeric_lim
 }  // namespace
 
 TEST_CASE("the sampler is an instrument, listed with its parameters") {
-    const sub::BuiltinInfo& info = builtinInfo("sampler");
+    const sub::BuiltinInfo info = builtinInfo("sampler");
     CHECK_EQ(info.name, std::string("Sampler"));
     CHECK(info.isInstrument());
     CHECK(paramIds(info.params) == (std::vector<std::string>{"root", "tune", "fine", "start", "end", "loop", "attack",

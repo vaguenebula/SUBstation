@@ -66,7 +66,7 @@ int64_t firstEcho(const Samples& channel, double threshold = 0.05) {
 }  // namespace
 
 TEST_CASE("the delay is listed with its parameters") {
-    const sub::BuiltinInfo& info = builtinInfo("delay");
+    const sub::BuiltinInfo info = builtinInfo("delay");
     CHECK_EQ(info.name, std::string("Delay"));
     const std::vector<std::string> ids = paramIds(info.params);
     REQUIRE(ids.size() >= 4);

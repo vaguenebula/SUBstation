@@ -42,13 +42,6 @@ std::pair<uint32_t, uint32_t> pluginTrack(sub::Engine& engine, const std::string
     return {track, processor};
 }
 
-std::vector<sub::ProcessorEventRecord> eventsOf(sub::Engine& engine, EventType type) {
-    std::vector<sub::ProcessorEventRecord> found;
-    for (const auto& e : engine.takeProcessorEvents())
-        if (e.type == type) found.push_back(e);
-    return found;
-}
-
 bool hasEvent(const std::vector<sub::ProcessorEventRecord>& events, EventType type) {
     return std::any_of(events.begin(), events.end(), [&](const auto& e) { return e.type == type; });
 }
@@ -66,6 +59,13 @@ std::string clickWav() {
 }
 
 #ifdef _WIN32
+std::vector<sub::ProcessorEventRecord> eventsOf(sub::Engine& engine, EventType type) {
+    std::vector<sub::ProcessorEventRecord> found;
+    for (const auto& e : engine.takeProcessorEvents())
+        if (e.type == type) found.push_back(e);
+    return found;
+}
+
 constexpr UINT kEditGain = WM_USER + 1, kResize = WM_USER + 2, kDirty = WM_USER + 3;  // what the effect's editor understands
 
 HWND editorWindow(const wchar_t* title) { return FindWindowW(L"SUBstationPluginEditor", title); }
