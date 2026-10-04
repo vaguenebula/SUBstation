@@ -374,6 +374,11 @@ def test_eq_editor(window):
     window_.grab()
     window.editor.remove_device(track.id, device.id)
     assert (track.id, device.id) not in eq._WINDOWS
+    # Gone, it hears nothing more (no slot left behind to call into it).
+    QApplication.processEvents()
+    window.bridge.automation_state_changed.emit(track.id)
+    window.editor.delete_tracks([track.id])
+    QApplication.processEvents()
 
 
 def _wheel(pos, delta):
@@ -389,6 +394,7 @@ def test_sidechain_editor(window, tmp_path):
     from PySide6.QtWidgets import QApplication
 
     from substation.model.project import PRE_FADER, Sidechain
+    from substation.model.timebase import TimeSignature
     from substation.ui.device_editors import sidechain as sc
 
     assert editor_for("sidechain") is sc.SidechainWidget
@@ -478,6 +484,11 @@ def test_sidechain_editor(window, tmp_path):
     widget.sync_button.click()
     assert value("sync") == 1.0 and widget.length_stack.currentIndex() == 1
     assert widget.length_ms() == pytest.approx(500.0)  # 1/4 at 120
+    widget.set_params({"rate": float(sc.RATES.index("1 Bar"))})
+    window.editor.set_time_signature(TimeSignature(3, 4))
+    assert widget.length_ms() == pytest.approx(1500.0)  # a bar of 3/4, as the engine has it
+    window.undo_stack.undo()
+    window.undo_stack.undo()
     widget.sync_button.click()
     widget.lows.click()
     assert value("range") == 1.0 and widget.controls["crossover"][0].isEnabled()

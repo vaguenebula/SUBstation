@@ -266,7 +266,7 @@ order and ranks, see [scheduler.md](scheduler.md)). `MASTER` is track id 0.
 - Leak warnings are turned off: Qt/PySide can keep engine objects alive until interpreter
   teardown, which is harmless.
 
-`API_VERSION` (currently 15) is set on the module. It is bumped whenever the Python code comes
+`API_VERSION` (currently 16) is set on the module. It is bumped whenever the Python code comes
 to depend on a change in the bindings; `ENGINE_API` in
 [src/substation/\_\_init\_\_.py](../../src/substation/__init__.py) must be bumped with it. The app
 and the tests refuse to start with an engine built from older (or newer) code, and say to

@@ -1348,9 +1348,9 @@ class EqWindow(QWidget):
         project = editor.project
         project.device_param_changed.connect(self._on_param)
         project.devices_changed.connect(self._check)
-        project.track_removed.connect(lambda *_: self._check())
+        project.track_removed.connect(self._on_track_removed)
         project.reset.connect(self.close)
-        bridge.automation_state_changed.connect(lambda owner: self.eq.sync() if owner == track_id else None)
+        bridge.automation_state_changed.connect(self._on_automation_state)
         bridge.position_changed.connect(self._follow)
         self._timer = QTimer(self)
         self._timer.setInterval(16)
@@ -1380,11 +1380,21 @@ class EqWindow(QWidget):
         if self._alive() and any(self.automation_state(p) == "on" for p in self.defaults):
             self.eq.sync()
 
+    def _on_track_removed(self, *_args) -> None:
+        self._check()
+
+    def _on_automation_state(self, owner: str) -> None:
+        if owner == self.track_id:
+            self.eq.sync()
+
     def closeEvent(self, event) -> None:
         _WINDOWS.pop((self.track_id, self.device_id), None)
         self._timer.stop()
+        # (bound methods, all of them: a lambda would outlive the window and call into it once it is gone)
         for signal, slot in ((self.editor.project.device_param_changed, self._on_param),
                              (self.editor.project.devices_changed, self._check),
+                             (self.editor.project.track_removed, self._on_track_removed),
+                             (self.bridge.automation_state_changed, self._on_automation_state),
                              (self.bridge.position_changed, self._follow)):
             try:
                 signal.disconnect(slot)

@@ -881,7 +881,7 @@ class SidechainWidget(DeviceWidget):
         if self.value("sync") >= 0.5:
             beats = RATE_BEATS[round(self.value("rate"))]
             if beats < 0:
-                beats = 4.0  # a bar (of 4/4)
+                beats = self.editor.project.time_signature.beats_per_bar  # a bar, as the engine has it
             return beats * 60000.0 / self.tempo()
         return max(1.0, self.value("length"))
 
