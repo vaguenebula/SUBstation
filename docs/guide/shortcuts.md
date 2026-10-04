@@ -32,6 +32,7 @@ the focus. Most are also in the menus, which show their keys.
 | Insert return track | Ctrl+Alt+T |
 | Duplicate the selected tracks (a track header clicked) | Ctrl+D |
 | Group / ungroup the selected tracks | Ctrl+G / Ctrl+Shift+G |
+| Freeze the selected tracks (or unfreeze them, if they all are frozen) | Ctrl+Shift+F |
 | Solo the selected tracks (or unsolo every track) | S |
 | Resize the track under the mouse; at its smallest, fold it (wheel down) or unfold it (wheel up) (piano roll: the keys' rows) | Alt+wheel |
 

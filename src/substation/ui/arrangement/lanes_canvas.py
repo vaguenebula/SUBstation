@@ -222,7 +222,8 @@ class LanesCanvas(QWidget):
                        selection.insert_changed, self.project.settings_changed, bridge.source_ready,
                        bridge.source_failed, self.project.clips_changed, self.project.track_changed,
                        self.project.automation_changed, self.project.automation_view_changed,
-                       self.project.devices_changed, bridge.automation_state_changed, bridge.recording_updated):
+                       self.project.devices_changed, self.project.freeze_changed, bridge.automation_state_changed,
+                       bridge.recording_updated):
             signal.connect(lambda *_args: self.update())
         # A parameter set by hand: lanes without an envelope draw its value.
         for signal in (self.project.device_param_changed, self.project.device_state_changed,
@@ -349,6 +350,8 @@ class LanesCanvas(QWidget):
                 if rect.right() < visible.left():
                     continue
                 self._draw_clip(p, track.color, clip, rect, visible, False)  # the selected area is tinted
+            if self.project.is_frozen(track.id):  # its clips play as frozen: tinted, as in Ableton
+                p.fillRect(QRectF(visible.left(), y, visible.width(), row.main_height - 1), theme.FROZEN_TINT)
             live = self.bridge.live_takes.get(track.id)
             if live is not None and live.started:
                 self._draw_live_take(p, track.color, live, y, row.main_height, visible)

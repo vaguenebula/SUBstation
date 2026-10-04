@@ -1221,6 +1221,7 @@ class DevicePanel(QFrame):
         self.project.device_state_changed.connect(self._on_state_changed)
         self.project.chain_changed.connect(self._on_chain_changed)
         self.project.devices_folded.connect(lambda tid: self.show_track(tid) if tid == self.track_id else None)
+        self.project.freeze_changed.connect(lambda _tid: self.show_track(self.track_id))  # (it, or its group)
         self.project.reset.connect(lambda: self.show_track(None))
         self.project.track_removed.connect(lambda tid, _i: self.show_track(None) if tid == self.track_id else None)
         bridge.plugin_params_changed.connect(self._on_plugin_values)
@@ -1741,6 +1742,18 @@ class DevicePanel(QFrame):
             self.hint.show()
             return
         track = self.project.track(track_id)
+        holder = self.project.frozen_by(track_id)
+        if holder is not None:  # its devices are in its frozen audio (unloaded, if it is frozen itself)
+            name = self.project.track(holder).name
+            self.hint.setText(f"{track.name} is frozen: unfreeze it (Ctrl+Shift+F) to change its devices"
+                              if holder == track_id else
+                              f"{track.name} is in {name}, which is frozen: unfreeze {name} (Ctrl+Shift+F) to "
+                              "change its devices")
+            self.chain_layout.addWidget(self.hint)
+            self.chain_layout.addStretch(1)
+            self.hint.show()
+            self.selected = []
+            return
         self._add_devices(self.chain_layout, track_id, track.devices)
         self.chain_layout.addWidget(self.hint)
         self.chain_layout.addStretch(1)

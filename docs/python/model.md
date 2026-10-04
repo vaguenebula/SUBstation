@@ -155,6 +155,32 @@ Device ids are unique in the whole project, so a device is found wherever it sit
   macro mappings follow their devices and mappings to devices not in it go. Used for presets,
   pasted devices, duplicated chains and duplicated tracks.
 
+### Freezing
+
+A track, group or return can be frozen: `Track.frozen` is a `Freeze` (its frozen audio's
+`path`, `duration_sec`, and the `tempo` it was rendered at; `Freeze.clip()` is the warped clip
+that plays it from beat 0). `Project.set_frozen()` emits `freeze_changed`; `update_track()`
+won't set it.
+
+- `frozen_by(track)`: the frozen track holding a track's audio (itself, or the outermost
+  frozen group it is in); `is_frozen(track)`: it has one.
+- `freeze_problem(track)`: why it can't be frozen (the master, frozen already, in a frozen
+  group, or a sidechain taps its signal Pre FX or after one of its devices).
+  `flatten_problem(track)`: only frozen audio and MIDI tracks flatten.
+- The editor's `freeze_tracks({track: Freeze})` (one step; disarms them; a track in a group
+  frozen with it is left out), `unfreeze_tracks()` and `flatten_tracks()` (a
+  `ReplaceTrackCommand` per track: an audio track of the same id playing `Freeze.clip()`, no
+  devices, no device automation). The render itself is the bridge's (`render_freeze()`);
+  [ui/freezing.py](../../src/substation/ui/freezing.py) does both.
+- What frozen audio holds can't change. `ProjectEditor._push()` refuses (and says why on
+  `refused`) commands changing a frozen track's (or a track in a frozen group's) clips,
+  devices or device automation, and the mixer automation of a track in a frozen group
+  (`lane_frozen()`); a frozen track's own mixer and every send stay live, and a sidechain may
+  still go when its source does. `_arrange()`, `delete_tracks()`, `group_tracks()` and
+  `ungroup()` refuse moving tracks into or out of a frozen group (a frozen group being
+  ungrouped holds nothing any more); new tracks and duplicates meant for a frozen group go
+  after it (`_outside_frozen()`); `arm_tracks()` leaves frozen tracks unarmed.
+
 ### Groups
 
 Groups hold other tracks. `project.tracks` stays **flat**; the hierarchy is each track's

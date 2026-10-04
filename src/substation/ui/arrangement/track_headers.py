@@ -64,6 +64,7 @@ from ...model.project import (
     routing_graph,
 )
 from ...model.timebase import format_db, format_pan, parse_pan
+from .. import freezing, icons
 from ..widgets import Knob, MeterWidget, ToggleButton, ValueBox
 from . import automation_lanes
 from .automation_header import CHOOSER_HEIGHT, AutomationControls
@@ -313,6 +314,46 @@ def color_swatch(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+SNOWFLAKE = 12  # the frozen mark before a frozen track's name
+
+
+def paint_frozen(p: QPainter, project, track_id: str, x: int) -> bool:
+    """A snowflake at `x` in the name row if the track is frozen (dimmer if it is
+    in a frozen group, not frozen itself); whether it is."""
+    holder = project.frozen_by(track_id)
+    if holder is None:
+        return False
+    p.save()
+    p.setOpacity(1.0 if holder == track_id else 0.5)
+    icons.snowflake().paint(p, QRect(x, (NAME_ROW - SNOWFLAKE) // 2 + 1, SNOWFLAKE, SNOWFLAKE))
+    p.restore()
+    return True
+
+
+def add_freeze_actions(menu: QMenu, editor: ProjectEditor, bridge: EngineBridge, selection: Selection,
+                       track_ids: list[str]) -> None:
+    """Freeze (or Unfreeze) and Flatten, for the tracks a track menu acts on."""
+    p = editor.project
+    plural = len(track_ids) > 1
+    if all(p.is_frozen(t) for t in track_ids):
+        action = menu.addAction("Unfreeze Tracks" if plural else "Unfreeze Track",
+                                lambda: freezing.unfreeze_tracks(editor, track_ids))
+    else:
+        action = menu.addAction("Freeze Tracks" if plural else "Freeze Track",
+                                lambda: freezing.freeze_tracks(editor, bridge,
+                                                               [t for t in track_ids if not p.is_frozen(t)]))
+        problems = [p.freeze_problem(t) for t in track_ids if not p.is_frozen(t)]
+        action.setEnabled(any(problem is None for problem in problems))
+        if not action.isEnabled() and problems:
+            action.setToolTip(problems[0])
+    action.setShortcut("Ctrl+Shift+F")  # (as a tip: the window's action handles the key)
+    action.setShortcutVisibleInContextMenu(True)
+    flatten = menu.addAction("Flatten Tracks" if plural else "Flatten Track",
+                             lambda: freezing.flatten_tracks(editor, selection, track_ids))
+    flatten.setEnabled(any(p.has_track(t) and p.flatten_problem(t) is None for t in track_ids))
+    menu.setToolTipsVisible(True)
+
+
 class TrackHeader(QWidget):
     def __init__(self, track_id: str, editor: ProjectEditor, selection: Selection, bridge: EngineBridge,
                  parent: QWidget | None = None):
@@ -432,7 +473,7 @@ class TrackHeader(QWidget):
         return self.row.depth * INDENT
 
     def _name_left(self) -> int:
-        return self.indent + 10 + FOLD_WIDTH
+        return self.indent + 10 + FOLD_WIDTH + (SNOWFLAKE + 3 if self.project.is_frozen(self.track_id) else 0)
 
     def _fold_rect(self) -> QRect:
         return QRect(self.indent + 7, 3, FOLD_WIDTH, NAME_ROW - 4)
@@ -493,6 +534,7 @@ class TrackHeader(QWidget):
             p.fillRect(QRect(depth * INDENT, 0, INDENT - 1, self.height()), QColor(self.project.track(group_id).color))
         p.fillRect(QRect(self.indent, 0, 5, self.height() - 1), QColor(track.color))
         self._paint_fold(p, track.is_group, track.folded)
+        paint_frozen(p, self.project, self.track_id, self._fold_rect().right() + 4)
         if self._rename is None:
             p.setPen(QColor(theme.TEXT if not track.mute else theme.TEXT_DIM))
             p.setFont(theme.ui_font(9, bold=selected or track.is_group))
@@ -803,6 +845,8 @@ class TrackHeader(QWidget):
                 list(selected), self.project.subtree_end(self.project.track_index(self.track.parent)),
                 self.project.track(self.track.parent).parent))
         menu.addSeparator()
+        add_freeze_actions(menu, self.editor, self.bridge, self.selection, list(selected))
+        menu.addSeparator()
         if self.track.folded:
             pass  # its automation doesn't show while folded: unfold it first
         elif self.track.automation_view.shown:
@@ -859,6 +903,7 @@ class TrackHeaderColumn(QWidget):
         bridge.position_changed.connect(self._follow_automation)
         bridge.automation_state_changed.connect(self.refresh)
         editor.project.devices_changed.connect(self.refresh)
+        editor.project.freeze_changed.connect(lambda _track_id: self._repaint_headers())  # (and what is in it)
         bridge.plugin_params_rebuilt.connect(lambda track_id, _device_id: self.refresh(track_id))
         view.vscroll_changed.connect(self.relayout)
 
@@ -1127,9 +1172,10 @@ class ReturnHeader(QWidget):
         bridge.meters_updated.connect(self._update_meter)
         bridge.position_changed.connect(self._follow_automation)
         bridge.automation_state_changed.connect(self._automation_state_changed)
+        self.project.freeze_changed.connect(self._repaint)
         self.refresh()
 
-    def _repaint(self) -> None:
+    def _repaint(self, *_args) -> None:
         self.update()
 
     def _update_meter(self) -> None:
@@ -1212,10 +1258,11 @@ class ReturnHeader(QWidget):
         p.fillRect(QRect(0, 0, 5, self.height()), QColor(track.color))
         p.fillRect(QRect(0, 0, self.width(), 1), QColor(theme.BORDER))
         p.fillRect(QRect(0, 0, 1, self.height()), QColor(theme.BORDER))
+        left = 10 + (SNOWFLAKE + 3 if paint_frozen(p, self.project, self.track_id, 10) else 0)
         if self._rename is None:
             p.setPen(QColor(theme.TEXT if not track.mute else theme.TEXT_DIM))
             p.setFont(theme.ui_font(9, bold=True))
-            name_rect = QRect(10, 3, self.activator.x() - 14, NAME_ROW - 4)
+            name_rect = QRect(left, 3, self.activator.x() - left - 4, NAME_ROW - 4)
             name = p.fontMetrics().elidedText(track.name, Qt.TextElideMode.ElideRight, name_rect.width())
             p.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
 
@@ -1277,6 +1324,8 @@ class ReturnHeader(QWidget):
         insert.setShortcutVisibleInContextMenu(True)
         menu.addAction("Delete Return Track" if len(selected) == 1 else "Delete Tracks",
                        lambda: self.editor.delete_tracks(list(selected)))
+        menu.addSeparator()
+        add_freeze_actions(menu, self.editor, self.bridge, self.selection, list(selected))
         menu.addSeparator()
         if self.track.automation_view.shown:
             menu.addAction("Hide Automation", lambda: self.editor.hide_automation(self.track_id))

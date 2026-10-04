@@ -28,6 +28,7 @@ from .commands import (
     InsertTrackCommand,
     RemoveReturnCommand,
     RemoveTrackCommand,
+    ReplaceTrackCommand,
     SetChainsCommand,
     SetClipsCommand,
     SetDeviceEnabledCommand,
@@ -39,6 +40,7 @@ from .commands import (
     SetDeviceStateCommand,
     SetEnvelopeCommand,
     SetEnvelopesCommand,
+    SetFreezeCommand,
     SetMacrosCommand,
     SetTempoCommand,
     UpdateChainCommand,
@@ -60,6 +62,7 @@ from .project import (
     Chain,
     Clip,
     Device,
+    Freeze,
     MacroMapping,
     MidiClip,
     MidiInput,
@@ -246,13 +249,57 @@ class ProjectEditor(QObject):
     # automated (not on undo or redo): its automation lane shows it.
     parameter_touched = Signal(str, str)
 
+    # Why an edit wasn't made: it would change what a frozen track's audio holds.
+    refused = Signal(str)
+
     def __init__(self, project: Project, undo_stack: QUndoStack):
         super().__init__()
         self.project = project
         self.undo_stack = undo_stack
 
     def _push(self, command) -> None:
+        problem = self._frozen_problem(command)
+        if problem is not None:
+            self.refused.emit(problem)
+            return
         self.undo_stack.push(command)
+
+    def _frozen_problem(self, command) -> str | None:
+        """Why a command can't be made: it changes the clips, devices or device
+        automation of a frozen track (or of a track in a frozen group); None: it can.
+        (Taking away a sidechain whose source goes is fine.)"""
+        p = self.project
+        tracks: list[str] = []
+        what = "devices"
+        if isinstance(command, SetClipsCommand):
+            tracks, what = [t for t, clips in command.after.items() if clips != command.before.get(t)], "clips"
+        elif isinstance(command, SetChainsCommand):
+            tracks = list(command.after)
+        elif isinstance(command, (SetDeviceParamCommand, SetDeviceParamsCommand, UpdateChainCommand)):
+            tracks = [command.key[0]]
+        elif isinstance(command, SetDeviceSidechainCommand):
+            tracks = [command.track_id] if command.new is not None else []
+        elif isinstance(command, (SetDevicesCommand, SetDeviceEnabledCommand, SetDeviceStateCommand,
+                                  SetMacrosCommand, SetDeviceNameCommand)):
+            tracks = [command.track_id]
+        elif isinstance(command, SetEnvelopeCommand):
+            tracks, what = ([command.key[0]] if self.lane_frozen(*command.key) else []), "automation"
+        elif isinstance(command, SetEnvelopesCommand):
+            tracks, what = [owner for owner, key in command.new if self.lane_frozen(owner, key)], "automation"
+        holder = next((p.frozen_by(t) for t in tracks if p.has_owner(t) and p.is_frozen(t)), None)
+        if holder is None:
+            return None
+        return f"{p.track(holder).name} is frozen: unfreeze it to change its {what}"
+
+    def lane_frozen(self, owner: str, key: str) -> bool:
+        """Whether an automation lane is baked into frozen audio: a device's of a
+        frozen track (or one in a frozen group), and the mixer's of a track in a
+        frozen group. (A frozen track's own mixer and every send stay live.)"""
+        p = self.project
+        holder = p.frozen_by(owner) if p.has_owner(owner) else None
+        if holder is None or automation.key_send(key) is not None:
+            return False
+        return holder != owner or not automation.is_mixer_key(key)
 
     # --- Tracks -----------------------------------------------------------------
 
@@ -264,8 +311,18 @@ class ProjectEditor(QObject):
         track.parent = p.parent_at(index) if parent is AT_INDEX else parent
         if tree_problem(p.tracks[:index] + [track] + p.tracks[index:]) is not None:
             track.parent = p.parent_at(index)
+        index, track.parent = self._outside_frozen(index, track.parent)
         self._push(InsertTrackCommand(p, track, index, text))
         return p.track(track.id)
+
+    def _outside_frozen(self, index: int, parent: str | None) -> tuple[int, str | None]:
+        """Where a track meant for `index` in `parent` goes: there, unless that is in
+        a frozen group (which would then hear it): then after that group, in its group."""
+        p = self.project
+        holder = p.frozen_by(parent) if parent is not None else None
+        if holder is None:
+            return index, parent
+        return p.subtree_end(p.track_index(holder)), p.track(holder).parent
 
     def insertion_point(self, track_id: str | None) -> tuple[int | None, str | None]:
         """Where a track inserted "after" this one goes: after it and what is in it,
@@ -318,6 +375,11 @@ class ProjectEditor(QObject):
         returns = {t for t in track_ids if p.has_return(t)}
         if not doomed and not returns:
             return
+        for track_id in doomed:  # what is in a frozen group is in its audio
+            holder = p.frozen_by(track_id)
+            if holder is not None and holder not in doomed:
+                self.refused.emit(f"{p.track(holder).name} is frozen: unfreeze it to change what is in it")
+                return
         count = len(doomed) + len(returns)
         text = "Delete Return Track" if not doomed and count == 1 else "Delete Track" if count == 1 else "Delete Tracks"
         self.undo_stack.beginMacro(text)
@@ -394,12 +456,40 @@ class ProjectEditor(QObject):
         position = sum(1 for t in p.tracks[:max(0, at)] if t.id not in moving)
         return staying[:position] + block + staying[position:]
 
-    def _arrange(self, tree, text: str) -> None:
+    def _arrangement_problem(self, tree, going=frozenset()) -> str | None:
+        """Why the tracks can't be arranged so (None: they can): a track would go
+        into or out of a frozen group (or a group in one), whose audio holds what
+        is in it. (Groups `going` go next: those frozen hold nothing then.)"""
+        p = self.project
+        before, after = dict(p.tree()), dict(tree)
+
+        def holder(track_id: str, parents: dict) -> str | None:
+            parent = parents.get(track_id)
+            while parent is not None:
+                if parent not in going and p.track(parent).frozen is not None:
+                    return parent
+                parent = parents.get(parent)
+            return None
+
+        for track_id, parent in tree:
+            if parent == before.get(track_id):
+                continue
+            frozen = holder(track_id, before) or holder(track_id, after)
+            if frozen is not None:
+                return f"{p.track(frozen).name} is frozen: unfreeze it to change what is in it"
+        return None
+
+    def _arrange(self, tree, text: str, going=frozenset()) -> None:
         """Arranges the tracks so. A track taking its input from a group it comes
         into (or from what that group feeds) loses that input first: it would
-        close a cycle; and so does a device taking its sidechain from one."""
+        close a cycle; and so does a device taking its sidechain from one.
+        Nothing goes into or out of a frozen group (refused)."""
         tree = tuple(tree)
         if tree == self.project.tree():
+            return
+        problem = self._arrangement_problem(tree, going)
+        if problem is not None:
+            self.refused.emit(problem)
             return
         p = self.project
         parents = dict(tree)
@@ -448,6 +538,9 @@ class ProjectEditor(QObject):
         roots = self._roots(track_ids)
         if not roots:
             return None
+        if (problem := self._held_problem(roots)) is not None:
+            self.refused.emit(problem)
+            return None
         first = p.track(roots[0])
         index = p.track_index(first.id)
         group = Track(id=new_id(), name=p.unique_track_name(f"{len(p.tracks) + 1} Group"), color=p.next_color(),
@@ -461,6 +554,15 @@ class ProjectEditor(QObject):
             self.undo_stack.endMacro()
         return p.track(group.id)
 
+    def _held_problem(self, track_ids) -> str | None:
+        """Why these tracks can't leave their groups: one is in a frozen group."""
+        p = self.project
+        for track_id in track_ids:
+            holder = p.frozen_by(track_id)
+            if holder is not None and holder != track_id:
+                return f"{p.track(holder).name} is frozen: unfreeze it to change what is in it"
+        return None
+
     def ungroup(self, group_ids) -> None:
         """Ctrl+Shift+G: the groups go, and what was in them takes their place, in
         their groups. One undo step."""
@@ -468,6 +570,9 @@ class ProjectEditor(QObject):
         groups = [t for t in self._roots(group_ids) if p.track(t).is_group]
         groups += [d.id for g in list(groups) for d in p.descendants(g) if d.is_group and d.id in set(group_ids)]
         if not groups:
+            return
+        if (problem := self._held_problem(groups)) is not None:
+            self.refused.emit(problem)
             return
         text = "Ungroup Tracks"
         self.undo_stack.beginMacro(text)
@@ -478,7 +583,7 @@ class ProjectEditor(QObject):
             for group_id in groups:
                 parent = dict(tree)[group_id]
                 tree = [(t, parent if t_parent == group_id else t_parent) for t, t_parent in tree]
-            self._arrange(tree, text)
+            self._arrange(tree, text, going=set(groups))
             for group_id in reversed(groups):
                 self._push(RemoveTrackCommand(p, group_id, text))
         finally:
@@ -493,7 +598,7 @@ class ProjectEditor(QObject):
         if parent in roots or any(parent is not None and p.is_descendant(parent, r) for r in roots):
             return False  # a group can't go into itself
         tree = self._arranged(roots, index, parent)
-        return tuple(tree) != p.tree() and self._valid(tree)
+        return tuple(tree) != p.tree() and self._valid(tree) and self._arrangement_problem(tree) is None
 
     def move_tracks(self, track_ids, index: int, parent: str | None) -> bool:
         """Move tracks (and what is in them) to before the track at `index` (as the
@@ -526,7 +631,7 @@ class ProjectEditor(QObject):
         originals = [t for r in roots for t in [p.track(r), *p.descendants(r)]]
         renamed: dict[str, str] = {t.id: new_id() for t in originals}
         last = roots[-1]
-        index, parent = p.subtree_end(p.track_index(last)), p.track(last).parent
+        index, parent = self._outside_frozen(p.subtree_end(p.track_index(last)), p.track(last).parent)
         copies = []
         for original in originals:
             track = copy.deepcopy(original)
@@ -684,8 +789,10 @@ class ProjectEditor(QObject):
         """Arm (or disarm) tracks for recording; `exclusive` (arming): every other
         track is disarmed. Like heights, arming is saved but not undone."""
         track_ids = set(track_ids)
+        if armed and any(self.project.has_track(t) and self.project.is_frozen(t) for t in track_ids):
+            self.refused.emit("A frozen track doesn't record: unfreeze it first")
         for track in self.project.tracks:
-            if track.is_group:
+            if track.is_group or (armed and track.id in track_ids and self.project.is_frozen(track.id)):
                 continue  # nothing to record
             wanted = armed if track.id in track_ids else (track.armed and not (exclusive and armed))
             if wanted != track.armed:
@@ -746,6 +853,74 @@ class ProjectEditor(QObject):
                                    velocity=max(1, min(127, int(velocity)))))
         return MidiClip(id=new_id(), name=track.name, start_beat=start, duration_beats=end - start,
                         notes=notes.normalize(clip_notes))
+
+    # --- Freezing -------------------------------------------------------------------
+
+    def freeze_tracks(self, freezes: dict[str, Freeze]) -> list[str]:
+        """Freezes tracks (and groups, returns) with their rendered audio
+        (EngineBridge.render_freeze), one undo step; they are disarmed. Tracks in
+        a group frozen with them, or that can't be frozen (freeze_problem), are
+        left as they are. Returns those frozen."""
+        p = self.project
+        frozen = [t for t in freezes if p.has_owner(t) and p.freeze_problem(t) is None
+                  and not (p.has_track(t) and any(a in freezes for a in p.ancestors(t)))]
+        if not frozen:
+            return []
+        self.arm_tracks([t for t in frozen if p.has_track(t)], False)
+        text = "Freeze Track" if len(frozen) == 1 else "Freeze Tracks"
+        self.undo_stack.beginMacro(text)
+        try:
+            for track_id in frozen:
+                self._push(SetFreezeCommand(p, track_id, None, freezes[track_id], text))
+        finally:
+            self.undo_stack.endMacro()
+        return frozen
+
+    def unfreeze_tracks(self, track_ids) -> list[str]:
+        """Unfreezes tracks, one undo step: their devices load again. (A track in a
+        frozen group stays as it is until the group is unfrozen.) Returns those unfrozen."""
+        p = self.project
+        thawed = [t for t in dict.fromkeys(track_ids) if p.has_owner(t) and p.frozen_by(t) == t]
+        if not thawed:
+            return []
+        text = "Unfreeze Track" if len(thawed) == 1 else "Unfreeze Tracks"
+        self.undo_stack.beginMacro(text)
+        try:
+            for track_id in thawed:
+                self._push(SetFreezeCommand(p, track_id, p.track(track_id).frozen, None, text))
+        finally:
+            self.undo_stack.endMacro()
+        return thawed
+
+    def flatten_tracks(self, track_ids) -> list[str]:
+        """Flattens frozen audio and MIDI tracks: each becomes an audio track
+        playing its frozen audio as a clip, without its devices or their
+        automation (its mixer, sends and routing stay). One undo step; returns
+        those flattened."""
+        p = self.project
+        flat = [t for t in dict.fromkeys(track_ids) if p.has_track(t) and p.flatten_problem(t) is None]
+        if not flat:
+            return []
+        text = "Flatten Track" if len(flat) == 1 else "Flatten Tracks"
+        self.undo_stack.beginMacro(text)
+        try:
+            for track_id in flat:
+                track = p.track(track_id)
+                after = copy.deepcopy(track)
+                after.kind = "audio"
+                after.clips = [replace(track.frozen.clip(track_id, track.name), id=new_id())]
+                after.devices = []
+                after.frozen = None
+                after.automation = {k: points for k, points in track.automation.items()
+                                    if automation.key_device(k) is None}
+                view = track.automation_view
+                after.automation_view = replace(
+                    view, key=None if view.key is not None and automation.key_device(view.key) else view.key,
+                    lanes=tuple(k for k in view.lanes if automation.key_device(k) is None))
+                self._push(ReplaceTrackCommand(p, copy.deepcopy(track), after, text))
+        finally:
+            self.undo_stack.endMacro()
+        return flat
 
     def set_track_height(self, track_id: str, height: int) -> None:
         # View state: saved with the project but not worth an undo step.
@@ -858,6 +1033,10 @@ class ProjectEditor(QObject):
         loops and long files are warped, and audio is transposed to the project's key."""
         if not sources:
             return []
+        if track_id is not None and self.project.is_frozen(track_id) and self.project.track(track_id).is_audio:
+            self.refused.emit(f"{self.project.track(self.project.frozen_by(track_id)).name} is frozen: "
+                              "unfreeze it to change its clips")
+            return []
         self.undo_stack.beginMacro("Add Clip" if len(sources) == 1 else "Add Clips")
         try:
             if track_id is None or not self.project.track(track_id).is_audio:
@@ -887,7 +1066,7 @@ class ProjectEditor(QObject):
         clip = MidiClip(id=new_id(), name=track.name, start_beat=max(0.0, start_beat), duration_beats=length_beats)
         self._commit("Insert MIDI Clip", {track_id: edits.resolve_overlaps(list(track.clips) + [clip], {clip.id},
                                                                            self.project.tempo)})
-        return track_id, clip.id
+        return (track_id, clip.id) if any(c.id == clip.id for c in track.clips) else None  # (not on a frozen track)
 
     def add_midi_clips_over(self, start_beat: float, end_beat: float, track_ids) -> list[ClipRef]:
         """An empty MIDI clip over a time range on each MIDI track of `track_ids`."""
@@ -1466,6 +1645,9 @@ class ProjectEditor(QObject):
         """Change a track's devices; the automation of devices that leave it goes
         with them (their parameters', and a rack's chains' faders'), and so do the
         mappings of macros to them (in the same undo step)."""
+        if (problem := self._frozen_problem(SetDevicesCommand(self.project, track_id, before, after, text))):
+            self.refused.emit(problem)
+            return
         gone = device_ids_of_list(before) - device_ids_of_list(after)
         chains_gone = {c.id for _, c in iter_chains(before)} - {c.id for _, c in iter_chains(after)}
         self._prune_macros(after)

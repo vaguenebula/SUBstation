@@ -364,6 +364,9 @@ struct TrackRender : StripRender {
     MidiInputRoute midiInput;
     MonitorMode monitor = MonitorMode::Auto;
     bool armed = false;
+    // Frozen (Engine::setTrackFrozen): it plays its clips (its frozen audio)
+    // and doesn't hear what goes into it; it has no devices, notes or input then.
+    bool frozen = false;
     std::vector<ClipRender> clips;  // sorted by start
     int64_t maxClipLength = 0;      // bounds the binary search window
     std::vector<NoteRender> notes;  // sorted by start

@@ -58,7 +58,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (substation.ENGINE_API).
-    m.attr("API_VERSION") = 16;
+    m.attr("API_VERSION") = 17;
     m.attr("MAX_BLOCK") = sub::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("MAX_RACK_DEPTH") = Engine::kMaxRackDepth;
@@ -525,6 +525,11 @@ NB_MODULE(_engine, m) {
              "Where a track's output goes: MASTER, or another track (a group's bus), which sums it into its input. "
              "Raises ValueError for a route that would close a cycle.")
         .def("track_output", &Engine::trackOutput, "track_id"_a)
+        .def("set_track_frozen", &Engine::setTrackFrozen, "track_id"_a, "frozen"_a,
+             "Frozen, a track plays its clips (its frozen audio) through its fader, and nothing else: not its "
+             "devices, notes, input, nor what goes into it. A track every edge of which ends at frozen tracks "
+             "isn't rendered at all.")
+        .def("track_frozen", &Engine::trackFrozen, "track_id"_a)
         .def("set_track_send", &Engine::setTrackSend, "track_id"_a, "to_track_id"_a, "gain"_a, "pre_fader"_a = false,
              "A send: the track's signal also goes into another track (a return), at `gain`, after its fader or "
              "before it. Setting it again changes it. Raises ValueError for a send that would close a cycle. "
@@ -721,6 +726,26 @@ NB_MODULE(_engine, m) {
             "Render the arrangement to a (frames, 2) float32 array.")
         .def("export_wav", &Engine::exportWav, "path"_a, "start_beat"_a, "end_beat"_a, "bit_depth"_a = 24,
              ReleaseGil())
+        .def(
+            "render_track_offline",
+            [](Engine& self, uint32_t trackId, double startBeat, int64_t frames) {
+                auto buffer = std::make_unique<std::vector<float>>();
+                {
+                    nb::gil_scoped_release release;
+                    *buffer = self.renderTrackOffline(trackId, startBeat, frames);
+                }
+                float* data = buffer->data();
+                nb::capsule owner(buffer.release(),
+                                  [](void* p) noexcept { delete static_cast<std::vector<float>*>(p); });
+                return StereoArray(data, {static_cast<size_t>(frames), size_t{2}}, owner);
+            },
+            "track_id"_a, "start_beat"_a, "frames"_a,
+            "A track's signal before its fader (after its devices: what freezing it keeps), lined up with the "
+            "timeline, as a (frames, 2) float32 array. Solo is ignored.")
+        .def("render_track_to_wav", &Engine::renderTrackToWav, "track_id"_a, "path"_a, "start_beat"_a, "end_beat"_a,
+             "tail_seconds"_a = 0.0, ReleaseGil(),
+             "The same from start_beat to end_beat, then on for up to tail_seconds while it isn't silent, into a "
+             "new 32-bit float WAV file (freezing the track). Returns the frames written.")
         // Audio threads
         .def_static("default_audio_threads", &Engine::defaultAudioThreads,
                     "The audio threads used unless set: one per core but one (at least 1).")

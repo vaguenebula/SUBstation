@@ -12,7 +12,7 @@ from typing import Any
 from PySide6.QtGui import QUndoCommand
 
 from .automation import Envelope
-from .project import Clip, Device, Project, Sidechain, Track, TrackTree
+from .project import Clip, Device, Freeze, Project, Sidechain, Track, TrackTree
 
 _MERGE_ID = 0x6E1
 
@@ -75,6 +75,40 @@ class RemoveTrackCommand(QUndoCommand):
     def undo(self) -> None:
         track, index = self.saved
         self.project.insert_track(track, index)
+
+
+class ReplaceTrackCommand(QUndoCommand):
+    """Puts another track in a track's place, of the same id (a track flattened:
+    an audio track now)."""
+
+    def __init__(self, project: Project, before: Track, after: Track, text: str):
+        super().__init__(text)
+        self.project = project
+        self.before = before
+        self.after = after
+
+    def redo(self) -> None:
+        self.project.replace_track(copy.deepcopy(self.after))
+
+    def undo(self) -> None:
+        self.project.replace_track(copy.deepcopy(self.before))
+
+
+class SetFreezeCommand(QUndoCommand):
+    """Freezes a track (its frozen audio), or unfreezes it (None)."""
+
+    def __init__(self, project: Project, track_id: str, old: Freeze | None, new: Freeze | None, text: str):
+        super().__init__(text)
+        self.project = project
+        self.track_id = track_id
+        self.old = old
+        self.new = new
+
+    def redo(self) -> None:
+        self.project.set_frozen(self.track_id, self.new)
+
+    def undo(self) -> None:
+        self.project.set_frozen(self.track_id, self.old)
 
 
 class _MergeableCommand(QUndoCommand):

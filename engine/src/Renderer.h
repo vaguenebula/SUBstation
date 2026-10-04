@@ -133,6 +133,13 @@ public:
     void renderOffline(const RenderSnapshot& snap, float* outStereo, int64_t frames,
                        bool loop = false, bool metronome = false) noexcept;
 
+    // Renders the timeline from the current position, like renderOffline(), but
+    // puts out snapshot track `track`'s signal before its fader (after its
+    // devices) instead of the master's, as it leaves them (a caller lining it up
+    // with the timeline drops its latency). Solo is ignored: every strip is heard
+    // as if nothing were soloed. Freezing a track renders this.
+    void renderTrackOffline(const RenderSnapshot& snap, int track, float* outStereo, int64_t frames) noexcept;
+
     // Transport state. Only one thread drives a renderer at a time: the audio
     // thread while a device runs, otherwise the engine under its edit mutex.
     void syncTempo(const RenderSnapshot& snap) noexcept;
@@ -351,6 +358,10 @@ private:
     std::vector<float> silence_, recordScratch_;
 
     std::vector<float> masterLeft_, masterRight_;
+    // renderTrackOffline(): the track whose signal is taken before its fader, into these (-1: none).
+    int captureTrack_ = -1;
+    std::vector<float> captureLeft_, captureRight_;
+    bool ignoreSolo_ = false;
     Scheduler* scheduler_ = nullptr;
     std::atomic<bool> costOrdering_{true};
     std::vector<WorkerScratch> scratch_;  // one per thread: [0] the rendering thread's

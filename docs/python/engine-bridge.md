@@ -264,6 +264,21 @@ the engine hasn't, or the master. Changing ones are cleared first
 with a route another change hasn't undone yet) comes with that change.
 `has_sidechain_input(track, device)` tells the device view whether to show the button.
 
+### Freezing
+
+`render_freeze(track)` renders the track's signal before its fader from beat 0 to the
+arrangement's end (and on for up to `FREEZE_TAIL_SECONDS`, while it sounds) with
+`render_track_to_wav()`, into `freeze_folder()` (the project's *Freeze* folder, or one in the
+recordings folder), decodes it at once (so it plays without a gap) and returns the `Freeze`.
+
+On `freeze_changed` (`_on_freeze_changed`): the plug-ins' states go into the model (so a
+frozen track saves them), the engine track is frozen (`set_track_frozen`), its clips become
+the frozen audio (`_push_clips`; a MIDI track's notes go), and `_sync_devices` takes its
+processors away: the bridge sees a frozen track as having no devices (`_loaded_devices`), so
+its devices go as if deleted, their plug-ins' states kept, and come back on unfreezing. The
+tracks in a frozen group keep their processors; the engine just doesn't render them. Frozen
+tracks don't record.
+
 ### Settings and transport
 
 `_push_settings` sets the engine's `tempo`, time signature and loop. Transport: `play`,

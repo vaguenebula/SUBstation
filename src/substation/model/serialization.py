@@ -23,7 +23,9 @@ its devices and mixer) and macro mappings (version 12; a mapping to a device
 not in its rack is dropped). The devices shown folded are stored by id
 ("folded_devices"; files without it load with none folded). Racks store their
 own name, if they have one (the preset's they were saved as or loaded from;
-version 13; older files have none: racks are named by their kind).
+version 13; older files have none: racks are named by their kind). Frozen
+tracks (and returns) store their frozen audio ("frozen": its file, absolute and
+relative, its length and the tempo it was rendered at; version 14).
 
 Presets: a device (a rack with everything in it too) on its own, in a file of
 its own (device_to_preset, preset_device): what the project file stores of it.
@@ -57,6 +59,7 @@ from .project import (
     Chain,
     Clip,
     Device,
+    Freeze,
     MacroMapping,
     MidiClip,
     MidiInput,
@@ -79,9 +82,9 @@ from .project import (
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 13  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
+VERSION = 14  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
 # 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10: inputs from tracks (resampling), 11: sidechains,
-# 12: racks, 13: rack names
+# 12: racks, 13: rack names, 14: frozen tracks
 PRESET_FORMAT = "gilstudio-preset"
 PRESET_VERSION = 1
 PRESET_EXTENSION = ".gilpreset"
@@ -250,27 +253,47 @@ def _sends(data) -> dict[str, Send]:
     return sends
 
 
-def _return_to_dict(track: Track) -> dict:
+def _freeze_to_dict(freeze: Freeze | None, base: Path | None) -> dict:
+    if freeze is None:
+        return {}
+    return {"frozen": {"path": freeze.path, "relative_path": _relative(freeze.path, base),
+                       "duration_sec": freeze.duration_sec, "tempo": freeze.tempo}}
+
+
+def _freeze(data, base: Path | None) -> Freeze | None:
+    if not isinstance(data, dict) or not data.get("path"):
+        return None
+    try:
+        duration, tempo = float(data["duration_sec"]), float(data["tempo"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if duration <= 0 or tempo <= 0:
+        return None
+    return Freeze(path=_resolve_clip_path(data, base), duration_sec=duration, tempo=tempo)
+
+
+def _return_to_dict(track: Track, base: Path | None = None) -> dict:
     return {"id": track.id, "kind": track.kind, "name": track.name, "color": track.color,
             "volume_db": track.volume_db, "pan": track.pan, "mute": track.mute, "solo": track.solo,
             "height": track.height, "devices": [_device_to_dict(d) for d in track.devices],
             "automation": _automation_to_dict(track.automation),
             "automation_view": _view_to_dict(track.automation_view),
-            "sends": _sends_to_dict(track.sends)}
+            "sends": _sends_to_dict(track.sends), **_freeze_to_dict(track.frozen, base)}
 
 
-def _return(t: dict) -> Track:
+def _return(t: dict, base: Path | None = None) -> Track:
     return Track(id=t["id"], name=t["name"], color=t["color"], kind=RETURN_KIND,
                  volume_db=float(t.get("volume_db", 0.0)), pan=float(t.get("pan", 0.0)),
                  mute=bool(t.get("mute", False)), solo=bool(t.get("solo", False)),
                  height=int(t.get("height", DEFAULT_TRACK_HEIGHT)),
                  devices=[_device(d) for d in t.get("devices", [])],
                  automation=_automation(t.get("automation")), automation_view=_view(t.get("automation_view")),
-                 sends=_sends(t.get("sends")))
+                 sends=_sends(t.get("sends")), frozen=_freeze(t.get("frozen"), base))
 
 
-def returns_from_dict(data: dict) -> list[Track]:
-    return [_return(t) for t in data.get("returns", [])]
+def returns_from_dict(data: dict, project_file: Path | None = None) -> list[Track]:
+    base = project_file.parent if project_file else None
+    return [_return(t, base) for t in data.get("returns", [])]
 
 
 def repair_routing(tracks: list[Track], returns: list[Track], master: Track | None = None) -> None:
@@ -345,10 +368,11 @@ def project_to_dict(project: Project, project_file: Path | None = None) -> dict:
                 "parent": t.parent,
                 "folded": t.folded,
                 "sends": _sends_to_dict(t.sends),
+                **_freeze_to_dict(t.frozen, base),
             }
             for t in project.tracks
         ],
-        "returns": [_return_to_dict(t) for t in project.returns],
+        "returns": [_return_to_dict(t, base) for t in project.returns],
     }
 
 
@@ -428,6 +452,7 @@ def tracks_from_dict(data: dict, project_file: Path | None = None) -> list[Track
             parent=t.get("parent") if isinstance(t.get("parent"), str) else None,
             folded=bool(t.get("folded", False)),
             sends=_sends(t.get("sends")),
+            frozen=_freeze(t.get("frozen"), base),
         ))
     repair_tree(tracks)
     return tracks
@@ -464,7 +489,7 @@ def load_into(project: Project, data: dict, project_file: Path | None = None) ->
     num, den = data.get("time_signature", [4, 4])
     loop = data.get("loop", {})
     tracks = tracks_from_dict(data, project_file)
-    returns = returns_from_dict(data)
+    returns = returns_from_dict(data, project_file)
     master = _master(data.get("master", {}))
     repair_routing(tracks, returns, master)
     project.replace_contents(

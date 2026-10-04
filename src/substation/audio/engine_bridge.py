@@ -65,6 +65,14 @@ channel or one) while monitored, and record it when armed: their takes come
 back with the notes played, for MIDI clips. Their live takes hold the notes so far.
 The computer MIDI keyboard (ui/computer_keyboard.py) is one more MIDI input,
 COMPUTER_KEYBOARD, always there.
+
+Freezing: render_freeze renders a track's signal before its fader (a group's
+bus, a return's) from the timeline's start into a WAV file in the freeze
+folder (the project's "Freeze" folder once it is saved), with its tail. A
+frozen track is frozen in the engine too: it plays its frozen audio as its only
+clip, and its devices' processors go (a plug-in's state is kept, as for a
+device deleted, and comes back when it is unfrozen). The tracks in a frozen
+group keep theirs, but the engine doesn't render them.
 """
 
 from __future__ import annotations
@@ -100,6 +108,7 @@ from ..model.project import (
     WARP_MODES,
     Clip,
     Device,
+    Freeze,
     PluginRef,
     Project,
     Send,
@@ -122,6 +131,7 @@ AUDIO_EXTENSIONS = (".wav", ".wave", ".flac", ".mp3")
 MAX_HIDDEN_EDITORS = 8
 _WARP_MODES = {name: ge.WarpMode(index) for index, name in enumerate(WARP_MODES)}
 COMPUTER_KEYBOARD = "Computer Keyboard"  # the MIDI input the computer keyboard plays into
+FREEZE_TAIL_SECONDS = 10.0  # a frozen track renders on past the arrangement's end this long, while it sounds
 _MONITOR_MODES = {"off": ge.MonitorMode.OFF, "in": ge.MonitorMode.IN, "auto": ge.MonitorMode.AUTO}
 
 
@@ -134,6 +144,14 @@ def recordings_folder(project: Project) -> Path:
         return Path(os.environ["SUBSTATION_RECORDINGS"])
     music = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MusicLocation) or str(Path.home())
     return Path(music) / "SUBstation" / "Recordings"
+
+
+def freeze_folder(project: Project) -> Path:
+    """Where frozen tracks' audio goes: the project's "Freeze" folder once it is
+    saved, else a "Freeze" folder in the recordings folder (see recordings_folder)."""
+    if project.path is not None:
+        return Path(project.path).parent / "Freeze"
+    return recordings_folder(project) / "Freeze"
 
 
 def take_path(folder: Path, track_name: str, when: datetime) -> Path:
@@ -298,6 +316,7 @@ class EngineBridge(QObject):
         self._inputs: dict[str, tuple] = {}  # track id -> (input, source, monitor, armed, MIDI input) the engine has
         self._outputs: dict[str, int] = {}  # track id -> the engine track its output goes into
         self._sends: dict[str, dict[int, tuple[float, bool]]] = {}  # track id -> {engine return: (gain, pre-fader)}
+        self._frozen: set[str] = set()  # tracks the engine has frozen
         self._send_levels: dict[str, dict[str, float]] = {}  # track id -> {return id: level dB} the engine has
         # Processor id -> (source engine track, tap, tap processor) of the sidechain the engine has
         self._sidechains: dict[int, tuple[int, ge.SidechainTap, int]] = {}
@@ -342,6 +361,7 @@ class EngineBridge(QObject):
         project.tracks_arranged.connect(self._push_outputs)
         project.clips_changed.connect(self._push_clips)
         project.devices_changed.connect(self._sync_devices)
+        project.freeze_changed.connect(self._on_freeze_changed)
         project.chain_changed.connect(self._on_chain_changed)
         project.device_param_changed.connect(self._on_device_param_changed)
         project.device_state_changed.connect(self._push_device_state)
@@ -385,6 +405,7 @@ class EngineBridge(QObject):
         self._outputs.clear()
         self._sends.clear()
         self._send_levels.clear()
+        self._frozen.clear()
         self._sidechains.clear()
         self.plugin_errors.clear()
         self.meters.clear()
@@ -399,6 +420,7 @@ class EngineBridge(QObject):
         self._push_settings()
         # Forget decoded audio the new project doesn't use.
         used = {_key(c.path) for t in self.project.tracks if not t.is_midi for c in t.clips}
+        used |= {_key(t.frozen.path) for t in self.project.all_tracks() if t.frozen is not None}
         self._sources = {k: s for k, s in self._sources.items() if k in used}
         self.engine.release_unused_sources()
 
@@ -420,6 +442,7 @@ class EngineBridge(QObject):
             self._chain_owner[track.id] = track.id
         self._push_mixer(track.id)
         self._push_input(track.id)
+        self._push_frozen(track.id)
         self._push_clips(track.id)
         self._sync_devices(track.id)
         self._push_automation(track.id)
@@ -446,6 +469,7 @@ class EngineBridge(QObject):
         self._outputs.pop(track_id, None)
         self._sends.pop(track_id, None)
         self._send_levels.pop(track_id, None)
+        self._frozen.discard(track_id)
         # What went into it goes to the engine's master now, and the sends into it
         # and the inputs from it are gone (the model has its say next).
         self._outputs = {t: ge.MASTER if out == engine_id else out for t, out in self._outputs.items()}
@@ -674,10 +698,19 @@ class EngineBridge(QObject):
         self.open_midi_inputs()
 
     def _push_clips(self, track_id: str) -> None:
+        """A track's clips (a MIDI track's notes) to the engine; a frozen track's
+        frozen audio instead."""
         engine_id = self._track_ids.get(track_id)
         if engine_id is None or track_id == MASTER:
             return
         track = self.project.track(track_id)
+        if track.frozen is not None:
+            clip = track.frozen.clip(track_id, track.name)
+            self.request_source(clip.path)
+            if track.is_midi:
+                self.engine.set_track_notes(engine_id, [])
+            self.engine.set_track_clips(engine_id, [clip_desc(clip)])
+            return
         if track.is_midi:
             self.engine.set_track_notes(engine_id, note_descs(track))
             return
@@ -685,17 +718,78 @@ class EngineBridge(QObject):
             self.request_source(clip.path)
         self.engine.set_track_clips(engine_id, [clip_desc(c) for c in track.clips])
 
+    # --- Freezing ---------------------------------------------------------------------
+
+    def _push_frozen(self, track_id: str) -> None:
+        engine_id = self._track_ids.get(track_id)
+        if engine_id is None or track_id == MASTER:
+            return
+        frozen = self.project.track(track_id).frozen is not None
+        if frozen != (track_id in self._frozen):
+            self.engine.set_track_frozen(engine_id, frozen)
+            if frozen:
+                self._frozen.add(track_id)
+            else:
+                self._frozen.discard(track_id)
+
+    def _on_freeze_changed(self, track_id: str) -> None:
+        """Frozen: it plays its frozen audio, and its devices go (their states kept);
+        unfrozen, they come back."""
+        engine_id = self._track_ids.get(track_id)
+        if engine_id is None:
+            return
+        track = self.project.track(track_id)
+        if track.frozen is not None:  # its plug-ins go: their states into the model, to be saved while it is frozen
+            self.store_plugin_states({d.id for d in iter_devices(track.devices)})
+        self._push_frozen(track_id)
+        if track.frozen is None and track.is_midi:
+            self.engine.set_track_clips(engine_id, [])  # (its frozen audio: it plays its notes again)
+        self._push_clips(track_id)
+        self._sync_devices(track_id)
+        self._push_sidechains()
+
+    def render_freeze(self, track_id: str) -> Freeze:
+        """Renders a track's signal before its fader (after its devices; a group's
+        bus) from the timeline's start to the arrangement's end, and its tail,
+        into a new WAV file in the freeze folder: its frozen audio. Raises
+        ValueError (with a message for the user) if there is nothing to render,
+        OSError or RuntimeError if the file can't be written."""
+        track = self.project.track(track_id)
+        engine_id = self._track_ids.get(track_id)
+        end = self.project.end_beat()
+        if engine_id is None or track_id == MASTER:
+            raise ValueError(f"{track.name} can't be frozen")
+        if end <= 0:
+            raise ValueError("There is nothing to freeze yet: the arrangement is empty")
+        folder = freeze_folder(self.project)
+        folder.mkdir(parents=True, exist_ok=True)
+        path = take_path(folder, f"{track.name} Freeze", datetime.now().astimezone())
+        if self.is_playing:
+            self.stop()
+        self.wait_for_device_states()  # samples still loading
+        frames = self.engine.render_track_to_wav(engine_id, str(path), 0.0, end, FREEZE_TAIL_SECONDS)
+        # Decoded now, so that it plays as soon as the track is frozen (no gap while it loads).
+        self._sources[_key(str(path))] = self.engine.load_source(str(path))
+        self.source_ready.emit(str(path))
+        return Freeze(path=str(path), duration_sec=frames / self.engine.sample_rate, tempo=self.project.tempo)
+
     # --- Devices ----------------------------------------------------------------------
     # The engine's chains by key: a track's own chain by the track's id, a rack's
     # chain by the chain's (ids are unique in the project). Each device's
     # processor is in the chain the bridge last put it in (`_where`).
 
+    @staticmethod
+    def _loaded_devices(track: Track) -> list[Device]:
+        """The devices of a track the engine has: none while it is frozen."""
+        return [] if track.frozen is not None else track.devices
+
     def _model_chains(self) -> dict[str, tuple[str, list[Device]]]:
-        """Every chain in the project, by key: (its track, its devices)."""
+        """Every chain in the project the engine has, by key: (its track, its devices)."""
         chains = {}
         for track in self.project.all_tracks():
-            chains[track.id] = (track.id, track.devices)
-            for _rack, chain in iter_chains(track.devices):
+            devices = self._loaded_devices(track)
+            chains[track.id] = (track.id, devices)
+            for _rack, chain in iter_chains(devices):
                 chains[chain.id] = (track.id, chain.devices)
         return chains
 
@@ -713,8 +807,9 @@ class EngineBridge(QObject):
         changed: set[str] = set()  # chain keys whose devices changed
         try:
             track = self.project.track(track_id)
+            devices = self._loaded_devices(track)
             before = {key: list(self._devices.get(key, [])) for key in self._owned_chains(track_id)}
-            self._place(track_id, track_id, track.devices, changed)  # every chain, top down
+            self._place(track_id, track_id, devices, changed)  # every chain, top down
             model = self._model_chains()
             for key, entries in before.items():  # what left its chain, and isn't in another of this track's
                 wanted = {d.id for d in model[key][1]} if key in model else set()
@@ -729,12 +824,12 @@ class EngineBridge(QObject):
                     except ValueError:
                         pass
                     self._drop_chain(key)
-            for key in [track_id, *(c.id for _, c in iter_chains(track.devices))]:
+            for key in [track_id, *(c.id for _, c in iter_chains(devices))]:
                 ids = [d for d, _ in self._devices.get(key, [])]
                 if key in changed or ids != [d for d, _ in before.get(key, [])]:
                     self.engine.set_chain_order(self._chains[key], [p for _, p in self._devices[key] if p is not None])
                     changed.add(key)
-            for rack in iter_devices(track.devices):
+            for rack in iter_devices(devices):
                 processor_id = self._pids.get(rack.id)
                 if rack.is_rack and processor_id is not None:
                     order = [self._chains[c.id] for c in rack.chains]
@@ -1589,7 +1684,7 @@ class EngineBridge(QObject):
 
     def record_targets(self) -> list[Track]:
         """The tracks that record: armed tracks with an input (audio, or MIDI for MIDI tracks)."""
-        return [t for t in self.project.tracks if t.armed and t.has_input]
+        return [t for t in self.project.tracks if t.armed and t.has_input and not self.project.is_frozen(t.id)]
 
     def start_recording(self, count_in_beats: float = 0.0) -> str | None:
         """Records the armed tracks (playing, after the count-in, if stopped).

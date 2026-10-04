@@ -107,6 +107,19 @@ void Engine::setTrackSolo(uint32_t trackId, bool solo) {
     trackLocked(trackId).params->solo.store(solo);
 }
 
+void Engine::setTrackFrozen(uint32_t trackId, bool frozen) {
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    if (track.frozen == frozen) return;
+    track.frozen = frozen;
+    rebuildSnapshotLocked();
+}
+
+bool Engine::trackFrozen(uint32_t trackId) {
+    std::lock_guard lock(mutex_);
+    return arrangementTrackLocked(trackId).frozen;
+}
+
 int Engine::trackIndexLocked(uint32_t trackId) const {
     for (size_t i = 0; i < tracks_.size(); ++i) {
         if (tracks_[i].id == trackId) return static_cast<int>(i);
