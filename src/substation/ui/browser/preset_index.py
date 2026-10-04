@@ -48,7 +48,8 @@ class PresetIndex(QObject):
             self.updated.emit()
 
     def _watch(self) -> None:
-        """Watch the library and its folders (those there now)."""
+        """Watch the library and its folders (those there now); while there is no
+        library, the nearest folder above it that there is, to see it made."""
         folders = []
         if self.root.is_dir():
             folders.append(str(self.root))
@@ -56,6 +57,12 @@ class PresetIndex(QObject):
                 folders += [e.path for e in os.scandir(self.root) if e.is_dir() and not e.name.startswith(".")]
             except OSError:
                 pass
+        else:
+            above = self.root.parent
+            while not above.is_dir() and above != above.parent:
+                above = above.parent
+            if above.is_dir():
+                folders.append(str(above))
         watched = set(self._watcher.directories())
         gone = [f for f in watched if f not in folders]
         if gone:
