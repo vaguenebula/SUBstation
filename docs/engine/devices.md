@@ -22,6 +22,10 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Utility.cpp](../../engine/src/builtin/devices/Utility.cpp) | Utility: gain, pan, width |
 | [builtin/devices/Ott.cpp](../../engine/src/builtin/devices/Ott.cpp) | Over The Top: multiband upward/downward compression |
 | [builtin/devices/Compressor.cpp](../../engine/src/builtin/devices/Compressor.cpp) | Compressor, with sidechain and displays |
+| [builtin/devices/Delay.cpp](../../engine/src/builtin/devices/Delay.cpp) | Delay: synced or free times per side, filter, modes, ping pong, freeze |
+| [builtin/devices/Eq.cpp](../../engine/src/builtin/devices/Eq.cpp) | EQ: 24 bands, placement, output gain, gain scale |
+| [builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h) | The EQ's filter design, shared with the bindings (`eq_response`) |
+| [builtin/devices/Sidechain.cpp](../../engine/src/builtin/devices/Sidechain.cpp) | Sidechain: a curve from each hit in the key (or on the beat), lookahead, lows only |
 | [Rack.h](../../engine/src/Rack.h) | `RackProcessor`: a rack's place in a chain (its chains are run by the renderer) |
 | [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) | `SmoothedValue`, `SpscQueue`, `DisplayStream`, `dbToGain`, `balanceGains` |
 | [EngineChains.cpp](../../engine/src/EngineChains.cpp) | `addBuiltinProcessor()`, the processor API the bindings expose |
@@ -289,6 +293,137 @@ Linked stereo: both channels get the gain the louder one calls for.
   once and, beside them, the gain reduction over the last second and meters of what keys it (the threshold marked)
   and of its output.
 
+### Delay (`builtin:delay`, AudioEffect)
+
+A stereo delay after Ableton's.
+
+| id | Name | Unit | Range | Default |
+|---|---|---|---|---|
+| `l_sync` | L Sync | | Off, On (a list) | On |
+| `l_division` | L 16th | | 1, 2, 3, 4, 5, 6, 8, 16 (a list) | 3 |
+| `l_time` | L Time | ms | 1..5000, log | 250 |
+| `l_offset` | L Offset | % | -33..33 | 0 |
+| `r_sync`, `r_division`, `r_time`, `r_offset` | R ... | | as the left's | On, 4, 375, 0 |
+| `link` | Link | | Off, On | Off |
+| `feedback` | Feedback | % | 0..95 | 50 |
+| `freeze` | Freeze | | Off, On | Off |
+| `filter` | Filter | | Off, On | On |
+| `freq` | Filter Freq | Hz | 50..18000, log | 1000 |
+| `width` | Filter Width | | 0.5..9 (octaves) | 8 |
+| `mode` | Mode | | Repitch, Fade, Jump | Repitch |
+| `ping_pong` | Ping Pong | | Off, On | Off |
+| `mix` | Dry/Wet | % | 0..100 | 50 |
+
+- **Times**: synced, `division × (15 / tempo) × (1 + offset / 100)` seconds; free, the
+  time in ms. Linked, the right side uses the left's four parameters. At most 10 s
+  (`kMaxDelaySeconds`); each delay line is that long (rounded up to a power of two),
+  allocated in `prepare()`. Read with 4-point Hermite interpolation.
+- **Per side**: the line is read (`echo`), filtered (`wet`: the output, and what feeds
+  back), and written with the input plus feedback × wet. Ping pong: the input summed to
+  mono goes into the left line, and each side's wet feeds the other's line. Frozen,
+  each line is written with its own unfiltered echo (an exact loop) and the input is
+  ignored; feedback is 1.
+- **Filter**: a TPT state-variable high-pass at `freq / 2^(width/2)` then low-pass at
+  `freq × 2^(width/2)`, both Butterworth, limited to 0.49 of the sample rate.
+- **Modes**: Repitch glides the delay to its target with a one-pole (120 ms), so the
+  read speed (pitch) changes; Fade crossfades (equal power, 60 ms) from the old time to
+  the new, starting a new fade only when the last one is done; Jump switches at once.
+- Dry/Wet and feedback are ramped over 20 ms (snapped on `reset()`). On one channel the
+  two sides' wet are averaged. `tailSamples()`: until feedback takes the echoes down
+  60 dB, at most 60 s.
+- **Display**: `input`, one value per sample: the input summed to mono. The editor
+  draws its spectrum behind the filter curve.
+
+### EQ (`builtin:eq`, AudioEffect)
+
+An equalizer after Pro-Q: 24 bands, then an output gain.
+
+| id | Name | Unit | Range | Default |
+|---|---|---|---|---|
+| `b1_used` .. `b24_used` | Band n Used | | Off, On (hidden, not automatable) | Off |
+| `bn_on` | Band n On | | Off, On | On |
+| `bn_type` | Band n Type | | Bell, Low Shelf, Low Cut, High Shelf, High Cut, Notch, Band Pass, Tilt Shelf | Bell |
+| `bn_freq` | Band n Freq | Hz | 10..22000, log | 1000 |
+| `bn_gain` | Band n Gain | dB | -30..30 | 0 |
+| `bn_q` | Band n Q | | 0.025..40, log | 1 |
+| `bn_slope` | Band n Slope | | 6, 12, 18, 24, 30, 36, 48, 72, 96 dB/oct (a list) | 12 |
+| `bn_place` | Band n Placement | | Stereo, Left, Right, Mid, Side | Stereo |
+| `output` | Output | dB | -36..36 | 0 |
+| `scale` | Gain Scale | % | 0..200 | 100 |
+
+- A band plays while it is `used` and `on`. Its gain is times `scale` / 100 (bells,
+  shelves, tilt).
+- **Design** ([EqDesign.h](../../engine/src/builtin/EqDesign.h), `eq::design`): each band
+  is a cascade of analog sections: a bell, notch or band pass is one second-order
+  section; a cut or shelf of slope `6n` dB/octave is of order `n` (one first-order
+  section if odd, then pairs) with Butterworth Qs, the most resonant times `Q / 0.7071`;
+  a shelf's gain is shared out over its sections; a tilt shelf is a high shelf down
+  half its gain. Each section is made digital by matching (Vicanek, 2016): poles by
+  impulse invariance (their frequency kept below 0.97 of Nyquist), the numerator so
+  that the magnitude is the analog one's at 0 Hz, Nyquist and the section's frequency.
+  Where no real numerator has all three (a resonant cut, a notch high up), Nyquist's
+  gives way. So bells and shelves high up keep their analog shape, not the bilinear
+  transform's squeezed one.
+- **Processing**: per 32 samples, each band glides its frequency and Q (in log) and gain
+  towards its parameters (a one-pole, about 15 ms) and is designed again while they
+  move; a band switched on starts from its parameters, silent. Sections run in double,
+  transposed direct form II; their states are flushed below 1e-20. Placement Mid or
+  Side converts the chunk to mid and side and back around the band; on one channel,
+  every band but Side's applies. The output gain is ramped over 20 ms.
+- `tailSamples()`: 7 Q / (π f) for the narrowest band (at most 5 s).
+- **Displays**: `input` and `output`, one value per sample, each summed to mono: the
+  editor's analyzer.
+- **Binding**: `eq_response(type, freq, gain, q, slope, sample_rate, freqs)` returns a
+  band's response in dB (float64) at `freqs`, from the same design, for the editor's
+  curves.
+
+### Sidechain (`builtin:sidechain`, AudioEffect, with a sidechain input)
+
+Ducks its input along a curve from each hit: for a bass under a kick.
+
+| id | Name | Unit | Range | Default |
+|---|---|---|---|---|
+| `trigger` | Trigger | | Sidechain, Every Bar, Every 1/2, Every 1/4, Every 1/8, Every 1/16 | Sidechain |
+| `threshold` | Threshold | dB | -60..0 | -24 |
+| `depth` | Depth | % | 0..100 | 100 |
+| `sync` | Sync | | Off, On | Off |
+| `length` | Length | ms | 10..2000, log | 250 |
+| `rate` | Length (Synced) | | 1/32, 1/16, 1/8, 3/16, 1/4, 3/8, 1/2, 1 Bar | 1/4 |
+| `smooth` | Smooth | ms | 0..30 | 1 |
+| `lookahead` | Lookahead | ms | 0..20 (not automatable: it is the latency) | 0 |
+| `range` | Range | | Full, Lows | Full |
+| `crossover` | Crossover | Hz | 30..1000, log | 150 |
+| `autofit` | Auto Fit | | Off, On (hidden, not automatable; the editor's) | Off |
+| `character` | Fit Character | | Tight, Natural, Loose (hidden, not automatable; the editor's) | Natural |
+| `p1_used` .. `p16_used` | Point n Used | | Off, On (hidden, not automatable, as are the three below) | On for 1..3 |
+| `pn_x` | Point n Time | | 0..1 of the length | 0, 0.1, 1 |
+| `pn_y` | Point n Level | | 0 (ducked by the depth)..1 (untouched) | 0, 0, 1 |
+| `pn_curve` | Point n Curve | | -1..1: how the segment after it bends | 0, -0.45, 0 |
+
+- **Hits**: with `trigger` Sidechain and a sidechain chosen, the first sample whose
+  key (the louder channel) is at the threshold, once re-armed: the key's level (falling
+  over 10 ms) has dropped 3 dB below the threshold, and 20 ms have passed. Without a
+  sidechain, none (a ducker keyed by its own input would only duck its own notes). On
+  the beat: at every multiple of the interval (a bar from the time signature) while
+  playing, sample-accurately; a beat that rounds to both sides of a stretch's start
+  hits once.
+- **The curve**: the used points sorted by x; at `t` samples after a hit, x = t /
+  length (in ms, or `rate` at the tempo with `sync`), evaluated as automation is
+  (`automationShape`, a point's curve bending the segment after it); before the first
+  point its y, after the last (and until the next hit, and before any) the last's.
+  The gain is `1 - depth (1 - y)`, smoothed by a one-pole of `smooth` ms (none at 0).
+- **Lookahead** delays the input (a delay line for 20 ms at most); `latencySamples()`
+  reports it and `idle()` asks for the tracks to be realigned when it changes. The key
+  isn't delayed, so the curve starts that much before the kick.
+- **Range** Lows: the delayed input is split by a Linkwitz-Riley crossover (two
+  Butterworth sections per band, in double), and only the low band is ducked
+  (`high + gain * low`); the bands add up to the input's magnitude, flat.
+- **Displays**: `key` (the sidechain summed to mono), `input` (the input before the
+  lookahead, summed to mono) and `phase` (samples since the latest hit; -1 once its curve
+  is over), one value per sample each, pushed together so they stay in step. The
+  editor finds the hits (the phase's 0s) and fits the curve to the kick
+  (model/sidechain_fit.py).
+
 ### Racks
 
 A rack is a `RackProcessor` ([Rack.h](../../engine/src/Rack.h), `typeId()` `"rack"`): only its place in a chain, its
@@ -415,6 +550,13 @@ See [ui/device-view.md](../ui/device-view.md) for `DeviceWidget` itself.
   moving processors between chains.
 - [tests/test_compressor_engine.py](../../tests/test_compressor_engine.py): its curve (hard knee follows the ratio;
   nothing below the knee), attack holding on low notes, sidechain keying, and its displays.
+- [tests/test_delay_engine.py](../../tests/test_delay_engine.py): synced and free times, offset, link,
+  feedback, ping pong, freeze, the filter, the modes (with automation changing the time), and its display.
+- [tests/test_eq_engine.py](../../tests/test_eq_engine.py): each band type plays as `eq_response` draws it,
+  matching the analog filters, placement (left, mid, side), output gain and gain scale, extremes, the displays.
+- [tests/test_sidechain_device_engine.py](../../tests/test_sidechain_device_engine.py): hits to the sample, the
+  curve sample by sample (straight and bent), depth and smoothing, the threshold and re-arming, lookahead (as
+  latency), Lows Only keeping the highs, hits on the beat, the synced length, the displays, extremes.
 - [tests/test_sampler_engine.py](../../tests/test_sampler_engine.py): listing and parameters, pitch from key, root and
   tuning at any file rate, start, end and loop, velocity, its state's text (escaping), a missing file, unknown
   values, swapping samples while notes play, and the position display.

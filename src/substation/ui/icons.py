@@ -246,6 +246,51 @@ def save(color: str = theme.TEXT) -> QIcon:
 
 
 @cache
+def link(color: str = theme.TEXT) -> QIcon:
+    """Two chain links: one side follows the other."""
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.save()
+        p.translate(32, 32)
+        p.rotate(-45)
+        p.drawRoundedRect(QRectF(-26, -9, 30, 18), 9, 9)
+        p.drawRoundedRect(QRectF(-4, -9, 30, 18), 9, 9)
+        p.restore()
+    return _icon(draw, color)
+
+
+@cache
+def infinity(color: str = theme.TEXT) -> QIcon:
+    """A lemniscate: what is held goes round for ever (a delay's Freeze)."""
+    def draw(p: QPainter, c: QColor):
+        path = QPainterPath(QPointF(32, 32))
+        path.cubicTo(QPointF(42, 16), QPointF(58, 20), QPointF(58, 32))
+        path.cubicTo(QPointF(58, 44), QPointF(42, 48), QPointF(32, 32))
+        path.cubicTo(QPointF(22, 16), QPointF(6, 20), QPointF(6, 32))
+        path.cubicTo(QPointF(6, 44), QPointF(22, 48), QPointF(32, 32))
+        p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+    return _icon(draw, color)
+
+
+@cache
+def expand(color: str = theme.TEXT) -> QIcon:
+    """Two arrows apart: show it bigger, in a window of its own."""
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(14, 50), QPointF(50, 14))
+        for corner, dx, dy in (((50, 14), -1, 1), ((14, 50), 1, -1)):
+            path = QPainterPath(QPointF(corner[0] + 18 * dx, corner[1]))
+            path.lineTo(QPointF(*corner))
+            path.lineTo(QPointF(corner[0], corner[1] + 18 * dy))
+            p.drawPath(path)
+    return _icon(draw, color)
+
+
+@cache
 def fold(folded: bool, color: str = theme.TEXT) -> QIcon:
     """A device's fold button: a triangle pointing down while it is open, right while folded."""
     def draw(p: QPainter, c: QColor):

@@ -51,6 +51,7 @@ into undo commands. The audio engine only mirrors this model (see
 | [keys.py](../../src/substation/model/keys.py) | Musical keys (`Key`), reading tempo and key from file names (`parse_filename`), what a dropped clip starts with (`clip_settings`) |
 | [device_state.py](../../src/substation/model/device_state.py) | A built-in device's state besides its parameters (a sampler's sample), in the engine's text format, base64 in `Device.state` |
 | [serialization.py](../../src/substation/model/serialization.py) | `.gilproj` and `.gilpreset` files: see [serialization.md](serialization.md) |
+| [sidechain_fit.py](../../src/substation/model/sidechain_fit.py) | Fitting the Sidechain device's curve to a kick: `Capture` (its displays, by absolute index, and the hits), `spectra` (where the kick and the input clash), `clash_envelope`, `reduction`, `fit_points`, `analyze` → `Fit`; pure numpy |
 | [presets.py](../../src/substation/model/presets.py) | The user's preset library: `library_dir`, `save_to_library`, `list_presets`, `rename_preset`; see [serialization.md](serialization.md#the-library-presetspy) |
 
 ## Key types
@@ -386,6 +387,8 @@ Main operations, by area:
   folded), `move_device(s)`, `move_devices_to_track` (the same devices, so plug-ins keep
   their state; their automation moves with them in the same step), `remove_device(s)`,
   `set_device_param` (`old` passed in for plug-ins, whose values the model doesn't hold),
+  `set_device_params` (several of a built-in device's at once: one step, merging per gesture
+  while the same parameters change),
   `set_device_state`, `set_device_enabled`, `set_device_sidechain`, `set_devices_folded`,
   `touch_parameter`, `load_preset_into` (a preset into a device of its kind: `loads_into`),
   `add_midi_track_with` (a new MIDI track with an instrument preset, one step),

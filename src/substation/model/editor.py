@@ -1696,6 +1696,24 @@ class ProjectEditor(QObject):
                                              value if old is None else old, value, merge_key))
         self.parameter_touched.emit(track_id, automation.device_key(device_id, param_id))
 
+    def set_device_params(self, track_id: str, device_id: str, values: dict[str, float],
+                          merge_key: object | None = None, text: str = "Change Device Parameters") -> None:
+        """Change several of a built-in device's parameters ({param id: value}) as one undo step
+        (one per gesture, with a `merge_key`, while the same parameters change)."""
+        device = self.project.device(track_id, device_id)
+        new = {(device_id, param_id): float(value) for param_id, value in values.items()}
+        old = {}
+        for (_, param_id), value in new.items():
+            own = device.params.get(param_id)
+            if own is None:  # a default value: as it was
+                info = self.param_info(track_id, device_id, param_id)
+                own = value if info is None else info.default_value
+            old[(device_id, param_id)] = own
+        if old != new:
+            self._push(SetDeviceParamsCommand(self.project, track_id, old, new, text, merge_key))
+        if values:
+            self.parameter_touched.emit(track_id, automation.device_key(device_id, next(iter(values))))
+
     def touch_parameter(self, owner: str, key: str) -> None:
         """A parameter taken hold of (clicked) without changing it: as Ableton
         does, the arrangement shows its automation."""

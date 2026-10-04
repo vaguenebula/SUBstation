@@ -252,7 +252,8 @@ wraps `Engine` method by method in snake_case (`add_track`, `set_track_output`,
 `render_offline`, ...), with properties for `tempo`, `position_beats`, `metronome`,
 `audio_threads`, `cost_ordering`, `is_playing` and so on, and the API's structs as read-only
 classes. Module-level functions: `probe_file`, `driver_types`, `builtin_devices`,
-`vst3_search_paths`, `host_time_ns`, and `task_graph_order` (for tests: the scheduler's queue
+`vst3_search_paths`, `host_time_ns`, `eq_response` (an EQ band's response, see
+[devices.md](devices.md)), and `task_graph_order` (for tests: the scheduler's queue
 order and ranks, see [scheduler.md](scheduler.md)). `MASTER` is track id 0.
 
 - Long-running calls release the GIL (`ReleaseGil`, or an explicit `nb::gil_scoped_release`

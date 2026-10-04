@@ -14,6 +14,7 @@
 #include "Engine.h"
 #include "plugins/Vst3Format.h"
 #include "builtin/BuiltinRegistry.h"
+#include "builtin/EqDesign.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -57,7 +58,7 @@ NB_MODULE(_engine, m) {
     nb::set_leak_warnings(false);
     // Bumped whenever the Python code comes to depend on a change here; the app
     // refuses to start with an engine built from older code (substation.ENGINE_API).
-    m.attr("API_VERSION") = 15;
+    m.attr("API_VERSION") = 16;
     m.attr("MAX_BLOCK") = sub::Renderer::kMaxBlock;
     m.attr("MASTER") = Engine::kMaster;
     m.attr("MAX_RACK_DEPTH") = Engine::kMaxRackDepth;
@@ -116,6 +117,24 @@ NB_MODULE(_engine, m) {
         .def_ro("params", &sub::BuiltinInfo::params);
     m.def("builtin_devices", [] { return sub::BuiltinRegistry::instance().devices(); },
           "Every built-in device, instruments first, then by name.");
+    m.def(
+        "eq_response",
+        [](int type, double freq, double gain, double q, int slope, double sampleRate,
+           nb::ndarray<const double, nb::ndim<1>> freqs) {
+            const sub::eq::Design design = sub::eq::design(type, freq, gain, q, slope, sampleRate);
+            const size_t size = freqs.shape(0);
+            auto buffer = std::make_unique<std::vector<double>>(size);
+            for (size_t i = 0; i < size; ++i) {
+                const double w = 2.0 * sub::eq::kPi * std::min(freqs(i), 0.5 * sampleRate) / sampleRate;
+                (*buffer)[i] = 10.0 * std::log10(std::max(design.magnitudeSquared(w), 1e-30));
+            }
+            double* data = buffer->data();
+            nb::capsule owner(buffer.release(), [](void* p) noexcept { delete static_cast<std::vector<double>*>(p); });
+            return nb::ndarray<nb::numpy, double, nb::ndim<1>, nb::c_contig>(data, {size}, owner);
+        },
+        "type"_a, "freq"_a, "gain"_a, "q"_a, "slope"_a, "sample_rate"_a, "freqs"_a,
+        "An EQ band's response in dB at each of `freqs` (Hz, float64): as the EQ device plays it. `type` and "
+        "`slope` are its parameters' list indexes.");
 
     nb::class_<sub::ParamInfo>(m, "ParamInfo")
         .def_ro("id", &sub::ParamInfo::id)

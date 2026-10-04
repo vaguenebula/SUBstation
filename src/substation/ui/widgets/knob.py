@@ -60,6 +60,10 @@ class Knob(QWidget):
             self._update_tooltip()
             self.update()
 
+    def set_color(self, color) -> None:
+        self._color = QColor(color)
+        self.update()
+
     def _fraction(self, value: float) -> float:
         if self._log:
             return math.log(value / self._min) / math.log(self._max / self._min)

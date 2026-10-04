@@ -159,6 +159,7 @@ from .rack_view import ChainList, MacroPanel
 from .widgets import Knob, ToggleButton
 
 PANEL_MARGIN = 8  # above and below the chain
+EXTRA_HEIGHT = 12  # px the devices get beyond what the tallest needs (room for editors' graphs)
 PARAM_COLUMNS = 2
 PARAMS_PER_PAGE = 4  # a 2×2 grid
 PARAM_WIDTH = 84
@@ -362,14 +363,17 @@ class _DeviceFrame(QFrame):
         outer.addWidget(self.folded_bar, 1)
         self.body_widget = QWidget()  # what folding hides
         self.body = QVBoxLayout(self.body_widget)
-        self.body.setContentsMargins(8, 6, 8, 6)
+        self.body.setContentsMargins(8, 6, 8, 4)
         self.body.setSpacing(4)
-        self.content = QHBoxLayout()  # the parameters, and whatever an editor shows beside them
+        # The parameters, and whatever an editor shows beside them. It takes all the height there is
+        # (the view's, and the scroll bar's while that is hidden): an editor's graphs grow into it,
+        # and the knobs stay at the top.
+        self.content = QHBoxLayout()
         self.content.setContentsMargins(0, 0, 0, 0)
         self.content.setSpacing(12)
         self.content.addLayout(self.params)
-        self.body.addLayout(self.content)
-        self.body.addStretch(1)
+        self.content.setAlignment(self.params, Qt.AlignmentFlag.AlignTop)
+        self.body.addLayout(self.content, 1)
         outer.addWidget(self.body_widget, 1)
         self.header_bar.setVisible(not self.folded)
         self.body_widget.setVisible(not self.folded)
@@ -1208,7 +1212,7 @@ class DevicePanel(QFrame):
         # Room for the tallest device with the horizontal scroll bar showing: no vertical scrolling.
         bar = scroll.horizontalScrollBar()
         bar_height = scroll.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent, None, bar)
-        self.setFixedHeight(2 * PANEL_MARGIN + device_height(editor) + bar_height)
+        self.setFixedHeight(2 * PANEL_MARGIN + device_height(editor) + EXTRA_HEIGHT + bar_height)
 
         selection.changed.connect(self._on_selection)
         self.project.devices_changed.connect(self._on_devices_changed)

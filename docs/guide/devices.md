@@ -7,8 +7,8 @@ their own page: [plugins.md](plugins.md).
 
 ## The device view
 
-- It shows the built-in Synth and Sampler instruments, the Utility device, Over The Top
-  and Compressor, and plug-ins, all through the same interface: they show alike.
+- It shows the built-in Synth and Sampler instruments, the Utility device, Over The Top,
+  Compressor, Delay, EQ and Sidechain, and plug-ins, all through the same interface: they show alike.
 - On a MIDI track the instrument comes first; the master takes audio effects only.
 - **Ctrl+Alt+L** (*View › Device View*) shows or hides it.
 - Add a device by dragging it from the browser onto the chain or onto a track, or by
@@ -32,7 +32,8 @@ Each device has a title bar, as in Ableton (lighter while the device is selected
 - Each parameter gets a knob, or a list for parameters that choose between named
   values. Frequency and time knobs turn logarithmically.
 - Most devices show four parameters at a time, in a 2×2 grid; the page arrows show the
-  others. The Compressor and the Sampler have editors of their own (below).
+  others. The Compressor, the Delay, the EQ, the Sidechain and the Sampler have editors of
+  their own (below).
 - Clicking a parameter shows its automation in the arrangement. Right-click one to
   *Show Automation*, *Delete Automation* or *Re-Enable Automation*, and, in a rack,
   *Map to Macro* (see [automation.md](automation.md) and [Macros](#macros)).
@@ -127,6 +128,98 @@ signal (for ducking; see [mixing.md](mixing.md#sidechains)).
 Its editor shows every knob at once and, beside them, the gain reduction over the last
 second (growing downward, up to 24 dB) and meters of what keys it (the threshold
 marked) and of its output, from −60 to 0 dBFS.
+
+### Delay
+
+A stereo delay after Ableton's, with an editor laid out like it.
+
+- **Left / Right**: each side's time. With **Sync** on it is 1 to 16 sixteenths of the
+  tempo (the grid), lengthened or shortened by up to 33 % (the field under it, for a
+  swing feel); with Sync off, a time knob (1 ms to 5 s). The **link** button between
+  them makes the right side follow the left (its controls grey out).
+- **Filter**: a band-pass on the echoes (and so on what feeds back), from a 12 dB/octave
+  high-pass to a 12 dB/octave low-pass, **Width** octaves apart around its frequency.
+  Drag the curve's dot across for the frequency, up and down for the width. Behind the
+  curve is a spectrum of the delay's input.
+- **Mode**: how a change of time sounds. **Repitch** glides to it, pitching the echoes as
+  a tape delay does; **Fade** crossfades to it; **Jump** switches at once.
+- **Ping Pong**: the input, in mono, goes left first, and the echoes bounce from side to
+  side.
+- **Feedback** (0 to 95 %) and **Freeze** (∞): frozen, what is in the delay goes round
+  for ever and new input is ignored.
+- **Dry/Wet**: 0 to 100 %.
+
+### EQ
+
+An equalizer after FabFilter's Pro-Q: up to 24 bands on one curve.
+
+- **Adding a band**: hover the curve and a ghost band shows where a click adds one, and
+  its type, which depends on where it is: a **low cut** at the far left, then a **low
+  shelf**, **bells** across the middle, a **high shelf**, and a **high cut** at the far
+  right. Keep the button down to drag it straight on. Double-clicking anywhere adds one
+  too.
+- **Moving a band**: drag its dot across for its frequency, up and down for its gain (a
+  cut, notch or band pass: its Q). Shift drags finely; Ctrl-drag sets the Q.
+- **The wheel** over a band (or the selected band) sets its Q; Alt-wheel sets its slope.
+  While dragging a low or high cut, the wheel sets its slope.
+- **Double-click** a band to switch it off and on; **Alt-click** it (or select it and
+  press Delete) to remove it. Right-click it for its type, slope, placement and the rest.
+- **Types**: bell, low and high shelf, low and high cut, notch, band pass and tilt shelf.
+  Cuts and shelves have a **slope** of 6 to 96 dB/octave; a cut's Q above 0.71 makes it
+  resonant at its frequency.
+- **Placement**: a band works on both channels (Stereo), or only the Left, Right, Mid or
+  Side (shown by a letter beside its dot).
+- **The panel** beside the curve has the selected band's controls (on/off, delete, type,
+  Freq, Gain, Q, slope, placement), then **Output** (±36 dB) and **Scale** (0 to 200 %:
+  every band's gain at once).
+- **The analyzer** behind the curve shows the input (a line) and the output (filled),
+  tilted 4.5 dB/octave so music looks about level. Click its label at the top left to
+  switch between Pre, Post, both and off, and the label at the top right for the
+  curve's range (±3, 6, 12 or 30 dB); right-click the background for both.
+- **The expand button** (top right) opens the EQ, bigger, in a window of its own. It
+  stays open as you change tracks, and closes when the device is deleted.
+- The curve is the one the engine plays: its filters are matched to analog ones, so a
+  bell high up keeps its shape instead of squeezing against the top of the spectrum.
+
+### Sidechain
+
+Ducks a track (a bass) out of the way of a kick along a curve that you draw, or that is
+fitted to the kick.
+
+- **Choosing the kick**: put the Sidechain on the bass's track and choose the kick's
+  track with the sidechain button in the device's title bar (or click the hint over
+  the curve). Each kick is a **hit**, found to the sample: the first sample at the
+  **Threshold**, once the kick has dropped 3 dB below it again (and at least 20 ms
+  after the last hit). The meter at the curve's right shows the kick against the
+  threshold, and lights up at each hit.
+- **Trigger**: *Sidechain* (the kick), or *Every Bar*, *1/2*, *1/4*, *1/8* or *1/16*:
+  hits on the beat while the transport plays, with no kick needed, for pumping.
+- **The curve** runs from each hit for its **Length** (in ms, or in notes with **Sync**),
+  then holds its last value until the next hit. At the top the input is untouched,
+  at the bottom it is down by the **Depth**. Drag a point to move it (the first and
+  last only up and down). Drag the curve between points to bend it, or use the wheel
+  there; double-click a bend to straighten it. Click anywhere else to add a point (keep
+  the button down to drag it). Double-click a point, Alt-click it, or select it and
+  press Delete to remove it. Shift drags finely. Right-click for **Shapes** (Pump,
+  Smooth, Snappy, Linear, Hold, Gentle, Bounce, Stutter), *Fit to Kick*, *Flip Curve*
+  (ducking becomes swelling) and *Reset Curve*. As hits come, a playhead rides the
+  curve.
+- **Fit**: as the kick plays (and the bass with it), the view beside the curve compares
+  their spectra: the kick in orange, the bass in blue, and in pink where they **clash**,
+  that is, where both are loud. **Fit** (or a click on that view) fits the curve to the
+  kick there: the input is fully out of the way from the hit until the kick's energy
+  in the clash peaks, then comes back as that energy dies away. It sets the curve's
+  points, its length and the crossover. Behind the curve the kick's envelope there
+  shows in orange, and the curve the fit calls for shows dashed. **Tight** brings the
+  input back while the kick is still loud (12 dB down), **Natural** later (20 dB), and
+  **Loose** only once the kick has all but gone (30 dB). **Auto** fits again at every
+  hit (an undo takes back all of those fits at once).
+- **Smooth** (0 to 30 ms) rounds off the curve's jumps so they don't click (0: they do,
+  if you want that).
+- **Lookahead** (0 to 20 ms) starts the curve that much before the kick. The rest of the
+  mix is delayed to match.
+- **Lows Only** ducks only what is below the **Crossover**, so the bass's upper
+  harmonics carry on through the kick. The fit puts the crossover above the clash.
 
 ## Racks
 
