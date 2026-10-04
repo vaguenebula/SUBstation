@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <random>
 #include <string>
 #include <vector>
@@ -224,6 +225,55 @@ bool allclose(const std::vector<A>& actual, const D& desired, double rtol = 1e-5
 
 // np.testing.assert_array_equal.
 #define CHECK_ARRAY_EQUAL(actual, desired) CHECK_ALLCLOSE(actual, desired, 0.0, 0.0)
+
+namespace subtest {
+
+// --- Clicks ----------------------------------------------------------------------------------
+
+using Clicks = std::map<int64_t, double>;
+
+// Where a channel isn't silent (|x| > threshold), and its values there rounded to 6 decimals.
+template <typename T>
+Clicks clicksOf(const std::vector<T>& channel, double threshold = 1e-7) {
+    Clicks found;
+    for (size_t i = 0; i < channel.size(); ++i) {
+        if (std::fabs(static_cast<double>(channel[i])) > threshold)
+            found[static_cast<int64_t>(i)] = std::round(static_cast<double>(channel[i]) * 1e6) / 1e6;
+    }
+    return found;
+}
+
+inline std::string showClicks(const Clicks& clicks) {
+    std::string text = "{";
+    for (const auto& [at, value] : clicks) {
+        if (text.size() > 200) return text + ", ...}";
+        if (text.size() > 1) text += ", ";
+        text += std::to_string(at) + ": " + show(value);
+    }
+    return text + "}";
+}
+
+// The same places, and values as pytest.approx sees them (relative 1e-6).
+inline bool sameClicks(const Clicks& got, const Clicks& want) {
+    if (got.size() != want.size()) return false;
+    for (auto g = got.begin(), w = want.begin(); g != got.end(); ++g, ++w) {
+        if (g->first != w->first || !(std::fabs(g->second - w->second) <= approxTolerance(w->second, 1e-6, 1e-12)))
+            return false;
+    }
+    return true;
+}
+
+}  // namespace subtest
+
+// The clicks of a render are these: {{at, value}, ...}.
+#define CHECK_CLICKS(got, ...)                                                                                 \
+    do {                                                                                                       \
+        const ::subtest::Clicks subtest_got = (got);                                                           \
+        const ::subtest::Clicks subtest_want = __VA_ARGS__;                                                    \
+        if (!::subtest::sameClicks(subtest_got, subtest_want))                                                 \
+            ::subtest::fail(__FILE__, __LINE__, "CHECK_CLICKS(" #got "): " + ::subtest::showClicks(subtest_got) + \
+                                                    " != " + ::subtest::showClicks(subtest_want));             \
+    } while (0)
 
 namespace subtest {
 
