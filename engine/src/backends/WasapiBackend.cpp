@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <stdexcept>
 
 #include "miniaudio.h"
@@ -26,9 +27,19 @@ struct WasapiCallbacks {
 };
 
 WasapiBackend::WasapiBackend() : context_(std::make_unique<ma_context>()) {
+#ifdef _WIN32
     const ma_backend backends[] = {ma_backend_wasapi};
     contextReady_ = ma_context_init(backends, 1, nullptr, context_.get()) == MA_SUCCESS;
     if (!contextReady_) contextReady_ = ma_context_init(nullptr, 0, nullptr, context_.get()) == MA_SUCCESS;
+#else
+    // The system's backends, in miniaudio's order, but never its null backend: it
+    // "plays" faster than real time, so the playhead would race with no sound.
+    const ma_backend backends[] = {ma_backend_coreaudio, ma_backend_pulseaudio, ma_backend_alsa, ma_backend_jack,
+                                   ma_backend_sndio,     ma_backend_audio4,     ma_backend_oss,  ma_backend_aaudio,
+                                   ma_backend_opensl};
+    contextReady_ = ma_context_init(backends, static_cast<ma_uint32>(std::size(backends)), nullptr, context_.get()) ==
+                    MA_SUCCESS;
+#endif
     scratch_.assign(static_cast<size_t>(kChunk) * outputs_.size(), 0.f);
     for (size_t c = 0; c < outputs_.size(); ++c) outputs_[c] = scratch_.data() + c * kChunk;
 }
