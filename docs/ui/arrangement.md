@@ -330,7 +330,7 @@ gestures they edit the model as they go, with a merge key per drag.
 | `copy_automation()` / `cut_automation()` | `copy_automation_range` / `cut_automation_range` | |
 | `paste(at_beat, track_id)` | `paste` (clips) or `paste_automation` | the pasted range is selected; the insert marker goes to its end, so pasting again appends |
 | `consolidate()` | `consolidate_clips` (Ctrl+J) | the joined clips are selected |
-| `reverse_selection()` | `bridge.render_reversed` for each audio file in the range not reversed yet (a reversed clip whose file is there goes back to it), then `reverse_range` (R) | the range stays selected |
+| `reverse_selection()` | a reversed copy of each audio file in the range (`bridge.reversed_copy`, or written with `start_reversed`: more than `REVERSE_IN_PLACE_SECONDS` of them in the background, in the render dialog, whose Cancel changes nothing; a reversed clip whose file is there goes back to it), then `reverse_range` (R) | the range stays selected |
 | `insert_midi_clip(track_id, x)` | `add_midi_clips_over` (inside the time selection) or `midi_clip_span` + `add_midi_clip` | selected, opened in the piano roll |
 
 Automation paste goes onto the selected lanes if there is a lane range (or the lane of

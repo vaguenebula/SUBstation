@@ -61,7 +61,7 @@ application starts: [app.py](../../src/substation/app.py),
 | [engine_bridge/transport.py](../../src/substation/audio/engine_bridge/transport.py) | `Transport`: play, stop, locate, metronome, previews; polling the playhead and meters |
 | [engine_bridge/recording.py](../../src/substation/audio/engine_bridge/recording.py) | `Recorder`: recording takes; `LiveTake` (a take while it records), `recordings_folder`, `take_path` |
 | [engine_bridge/freezing.py](../../src/substation/audio/engine_bridge/freezing.py) | `FreezeSync`: frozen tracks in the engine, `render_freeze`, `start_freeze`/`finish_freeze` (in the background); `FreezeRender`, `freeze_folder` |
-| [engine_bridge/reversing.py](../../src/substation/audio/engine_bridge/reversing.py) | `ReverseSync`: `render_reversed` (a reversed copy of a file, for reversed clips); `reversed_folder`, `reversed_path`, `write_float_wav` |
+| [engine_bridge/reversing.py](../../src/substation/audio/engine_bridge/reversing.py) | `ReverseSync`: reversed copies of files, for reversed clips (`reversed_copy`, `start_reversed`/`finish_reversed`, `render_reversed`); `ReverseJob`, `reversed_folder`, `reversed_path`, `float_wav_header`, `write_float_wav` |
 | [engine_bridge/audio_device.py](../../src/substation/audio/engine_bridge/audio_device.py) | `AudioDevice`: opening the audio device, resets, its control panel, its events |
 | [audio/settings.py](../../src/substation/audio/settings.py) | `AudioSettings` (QSettings), `audio_threads`/`set_audio_threads`, `disabled_midi_inputs`/`set_midi_input_disabled`, `record_quantize`/`set_record_quantize`, `RECORD_QUANTIZE`, `DRIVERS`, `BUFFER_SIZES`, `SAMPLE_RATES` |
 | [app.py](../../src/substation/app.py) | `main()`: the QApplication, the engine API check, the main window, start-up and shut-down |
@@ -341,13 +341,25 @@ tracks don't record.
 
 ### Reversing
 
-`render_reversed(path)` writes the reversed copy of an audio file a reversed clip plays: the
-decoded source (it must be decoded: otherwise `ValueError`, with a message for the user)
-backwards, as a 32-bit float WAV (`write_float_wav`) named `name R.wav` (`reversed_path`,
+A reversed clip plays a reversed copy of its file, named `name R.wav` (`reversed_path`,
 numbered if taken) in `reversed_folder()` (the project's *Reversed* folder, or one in the
-recordings folder). It decodes the copy at once (so it plays without a gap) and returns its
-path and length in seconds. A file reversed before in this session gives the same copy again
-(`_reversed`, cleared on reset). The UI turns clips to it with `editor.reverse_range`.
+recordings folder):
+
+- `reversed_copy(path)`: the copy there is already, if any: one made this session
+  (`_reversed`, cleared on reset), or one a clip of the project plays (its `reversed_from` is
+  `path`: saved with the project), so reopening a project doesn't make a second one. Not
+  decoded yet, it is asked for.
+- `start_reversed(path)` starts a `ReverseJob`: the decoded source (it must be decoded:
+  otherwise `ValueError`, with a message for the user) written backwards as a 32-bit float
+  WAV, `REVERSE_CHUNK` frames at a time from its end, on a thread of its own, then decoded
+  there. It has the engine's `RenderJob`'s `progress`, `done` and `cancel()`, so the UI's
+  render dialog follows it; cancelled or failed, its file goes.
+- `finish_reversed(path, job)` waits for it: the copy's path and length in seconds (decoded,
+  so it plays without a gap, and remembered for `path`), None if cancelled, or `OSError`.
+- `render_reversed(path)` is the three of them, waited for.
+
+The UI turns clips to it with `editor.reverse_range`
+([ui/arrangement.md](../ui/arrangement.md)).
 
 ### Settings and transport
 

@@ -9,6 +9,7 @@ rectangle, and playhead motion repaints just two thin strips.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from pathlib import Path
@@ -34,7 +35,12 @@ from PySide6.QtWidgets import QMenu, QWidget
 from ... import theme
 from ...audio.engine_bridge import EngineBridge, is_audio_file
 from ...model.devices import BUILTIN_DEVICES, device_is_instrument, is_instrument
-from ...model.editor import ClipboardContent, CopiedAutomation, CopiedTracks, ProjectEditor
+from ...model.editor import (
+    ClipboardContent,
+    CopiedAutomation,
+    CopiedTracks,
+    ProjectEditor,
+)
 from ...model.project import (
     DEFAULT_TRACK_HEIGHT,
     MAX_TRACK_HEIGHT,
@@ -54,6 +60,7 @@ from ..browser.browser_models import (
     preset_paths,
     read_presets,
 )
+from ..rendering import RenderProgress
 from . import automation_lanes
 from .automation_lanes import EnvelopeArea, Hover
 from .grid import draw_grid, draw_loop_region
@@ -85,6 +92,7 @@ def clip_title_height(clip_height: float, folded: bool = False) -> float:
 HEIGHT_STEP = 12  # pixels per wheel notch when Alt+wheel resizes a track
 WHEEL_GESTURE = 0.4  # s: wheel events closer together than this resize (or fold) the same track
 SELECTION_TINT = theme.SELECTION  # time selections (and so selected clips), over all but the clips' title bars
+REVERSE_IN_PLACE_SECONDS = 30.0  # reversing less audio than this is quick: no progress dialog
 
 
 def audio_paths(mime) -> list[str]:
@@ -971,8 +979,9 @@ class LanesCanvas(QWidget):
             self.status_message.emit("There are no audio clips in the selection to reverse.")
             return
         reversed_files: dict[str, tuple[str, float]] = {}
+        to_write: list[str] = []  # files with no reversed copy yet
         for clip in clips:
-            if clip.path in reversed_files:
+            if clip.path in reversed_files or clip.path in to_write:
                 continue
             source = self.bridge.source(clip.path)
             if clip.reversed_from and os.path.exists(clip.reversed_from):  # back to the file it came from
@@ -980,12 +989,49 @@ class LanesCanvas(QWidget):
                 if length > 0:
                     reversed_files[clip.path] = (clip.reversed_from, length)
                     continue
-            try:
-                reversed_files[clip.path] = self.bridge.render_reversed(clip.path)
-            except (ValueError, OSError) as exc:
-                self.status_message.emit(str(exc))
+            copy = self.bridge.reversed_copy(clip.path)
+            if copy is not None and source is not None:
+                reversed_files[clip.path] = (copy, source.frames / source.sample_rate)
+            else:
+                to_write.append(clip.path)
+        if not self._write_reversed(to_write, reversed_files):
+            return  # (cancelled)
         if reversed_files and self.editor.reverse_range(start, end, track_ids, reversed_files):
             selection.set_time_range(start, end, track_ids, clips=self.editor.clips_in_range(start, end, track_ids))
+
+    def _write_reversed(self, paths: list[str], reversed_files: dict[str, tuple[str, float]]) -> bool:
+        """Reversed copies of these files, into `reversed_files` (those that can't
+        be made are said). Short ones are written at once; longer ones in the
+        background, their progress in a dialog (rendering.py), whose Cancel
+        makes none: False then."""
+        jobs = []
+        for path in paths:
+            try:
+                jobs.append((path, self.bridge.start_reversed(path)))
+            except ValueError as exc:
+                self.status_message.emit(str(exc))
+        if not jobs:
+            return True
+        long = sum(job.seconds for _path, job in jobs) > REVERSE_IN_PLACE_SECONDS
+        with RenderProgress(self.window(), "Reverse Clips") if long else contextlib.nullcontext() as progress:
+            for index, (path, job) in enumerate(jobs):
+                if progress is not None:
+                    progress.follow(job, f"Reversing {Path(path).name}…", (index, len(jobs)))
+                try:
+                    result = self.bridge.finish_reversed(path, job)
+                except OSError as exc:
+                    self.status_message.emit(str(exc))
+                    continue
+                if result is None or (progress is not None and progress.cancelled):  # cancelled: the rest too
+                    for other_path, other in jobs[index + 1:]:
+                        other.cancel()
+                        try:
+                            self.bridge.finish_reversed(other_path, other)  # (one done already is kept for next time)
+                        except OSError:
+                            pass
+                    return False
+                reversed_files[path] = result
+        return True
 
     def consolidate(self) -> None:
         """Join the selected MIDI clips on each track into one (Ctrl+J), and select them."""
@@ -1062,7 +1108,9 @@ class LanesCanvas(QWidget):
             consolidate.setEnabled(bool(self.editor.consolidatable(refs)))
             reverse = menu.addAction("Reverse", self.reverse_selection)
             self._show_shortcut(reverse, "R")
-            reverse.setEnabled(any(isinstance(self.project.clip(*ref), Clip) for ref in refs))
+            # (What R reverses: the audio clips in the selected area, whichever are selected as clips.)
+            in_range = self.editor.clips_in_range(*self.selection.time_range) if self.selection.clip_range else ()
+            reverse.setEnabled(any(isinstance(self.project.clip(*ref), Clip) for ref in in_range))
             menu.addSeparator()
             self._show_shortcut(menu.addAction("Delete", self.delete_area), QKeySequence.StandardKey.Delete)
         else:

@@ -1,6 +1,6 @@
-"""Renders in the background (exporting, freezing): while the engine renders on
-a thread of its own (RenderJob), a modal dialog shows how far it got and
-cancels it. The window goes on meanwhile (it repaints, its meters move), but
+"""Renders in the background (exporting, freezing, reversing long clips): while
+the engine renders on a thread of its own (RenderJob; or a ReverseJob), a modal
+dialog shows how far it got and cancels it. The window goes on meanwhile (it repaints, its meters move), but
 takes no edits: the render is of the project as it was when it started.
 
     with RenderProgress(window, "Export Audio") as progress:
@@ -13,7 +13,7 @@ takes no edits: the render is of the project as it was when it started.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Self
+from typing import Protocol, Self
 
 from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtWidgets import (
@@ -25,12 +25,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import _engine as ge
-
 POLL_MS = 30  # how often the dialog looks at the render
 STEPS = 1000  # the progress bar's resolution
 
 _active: list[RenderProgress] = []  # the dialog showing, if any
+
+
+class Job(Protocol):
+    """What a dialog follows: the engine's RenderJob, or a ReverseJob (engine_bridge/reversing.py)."""
+
+    @property
+    def progress(self) -> float: ...  # 0..1
+
+    @property
+    def done(self) -> bool: ...
+
+    def cancel(self) -> None: ...
 
 
 def active() -> RenderProgress | None:
@@ -106,7 +116,7 @@ class RenderProgress(QDialog):
 
         return self.wait_until(bridge.devices_ready, label)
 
-    def follow(self, job: ge.RenderJob, label: str, part: tuple[int, int] = (0, 1)) -> None:
+    def follow(self, job: Job, label: str, part: tuple[int, int] = (0, 1)) -> None:
         """Shows a render's progress (as part `i` of `n` of the bar) until it ends
         (cancelled, if the user cancels). Its caller then finishes it."""
         index, count = part

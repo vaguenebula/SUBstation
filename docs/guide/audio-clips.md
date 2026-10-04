@@ -55,8 +55,10 @@ plays its stretch of audio backwards, in the same place. If the selection covers
 part of a clip, that part is split off and reversed. As in Ableton, a reversed clip
 plays a reversed copy of its file (`name R.wav`), made the first time and kept in the
 project's `Reversed` folder (for a project not saved yet,
-`Music\SUBstation\Recordings\Reversed`). Reversing it again plays its own file again.
-Reversing is one undo step; MIDI clips aren't reversed.
+`Music\SUBstation\Recordings\Reversed`); reopening the project uses it again. Reversing
+it again plays its own file again. Reversing long recordings (more than half a minute of
+audio) shows its progress, with **Cancel**. Reversing is one undo step; MIDI clips aren't
+reversed.
 
 ## Transpose and detune
 

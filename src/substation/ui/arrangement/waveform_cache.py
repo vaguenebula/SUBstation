@@ -111,6 +111,15 @@ def render_tile(source: ge.AudioSource, frames_per_px: float, index: int, height
     return qimage.copy()  # detach from the numpy buffer
 
 
+def quantized_gain(gain: float) -> float:
+    """A gain (linear) to 0.1 dB: steps that look the same (turning a gain knob
+    renders fewer tiles), and a quiet clip's waveform stays as small as it is
+    (never flat, as rounding the linear gain would make it)."""
+    if gain <= 0.0:
+        return 0.0
+    return 10.0 ** (round(20.0 * math.log10(gain), 1) / 20.0)
+
+
 class WaveformCache:
     def __init__(self, max_tiles: int = MAX_TILES):
         self._tiles: OrderedDict[tuple, QImage | None] = OrderedDict()
@@ -145,7 +154,7 @@ class WaveformCache:
         last = int(math.floor((x1 - clip_x + u_offset) / TILE))
         height = int(body.height())
         argb = color.rgba()
-        gain = round(gain, 2)  # (1 % steps look the same, and turning a gain knob renders fewer tiles)
+        gain = quantized_gain(gain)
         for index in range(max(0, first), last + 1):
             tile = self._tile(source, frames_per_px, index, height, split_channels, argb, gain)
             if tile is None:

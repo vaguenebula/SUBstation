@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QLabel
 from substation import theme
 from substation.audio.engine_bridge import LiveTake
 from substation.model.project import Clip
-from substation.ui.arrangement.waveform_cache import render_tile
+from substation.ui.arrangement.waveform_cache import quantized_gain, render_tile
 
 from .conftest import SAMPLE_RATE
 from .test_ui_smoke import drag, wait_until, write_wav
@@ -77,6 +77,88 @@ def test_r_reverses_the_selected_audio_clips_and_again_puts_them_back(window, tm
     assert clips[1].offset_sec == pytest.approx(1.0)  # it played seconds 0.5-1: 1-1.5 of the copy
 
 
+def test_a_reversed_copy_saved_with_the_project_is_used_again(window, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBSTATION_RECORDINGS", str(tmp_path / "Recordings"))
+    ramp = np.arange(SAMPLE_RATE) / SAMPLE_RATE
+    track_id, clip_id, path = audio_track(window, tmp_path, ramp)
+    window.selection.select_clips(window.editor, [(track_id, clip_id)])
+    press_key(window, Qt.Key.Key_R)
+    copy = window.project.track(track_id).clips[0].path
+    saved = tmp_path / "song.gilproj"
+    assert window._save_to(saved)
+    window.open_project(str(saved))  # (what this session wrote is forgotten)
+    assert wait_until(lambda: window.bridge.source(path) is not None or window.bridge.request_source(path))
+    # Another clip of the same file, reversed: the copy the project has is used again.
+    [(other, other_clip)] = window.editor.add_clips(None, 8.0, [(path, 1.0)])
+    window.selection.select_clips(window.editor, [(other, other_clip)])
+    press_key(window, Qt.Key.Key_R)
+    assert window.project.track(other).clips[0].path == copy
+    assert [p.name for p in (Path(copy).parent).iterdir()] == ["ramp R.wav"]
+
+
+def test_long_clips_reverse_in_the_background(window, tmp_path, monkeypatch):
+    from substation.audio.engine_bridge import reversing
+    from substation.ui import rendering
+    from substation.ui.arrangement import lanes_canvas
+
+    monkeypatch.setenv("SUBSTATION_RECORDINGS", str(tmp_path / "Recordings"))
+    monkeypatch.setattr(lanes_canvas, "REVERSE_IN_PLACE_SECONDS", 0.0)  # (any clip is "long" here)
+    monkeypatch.setattr(reversing, "REVERSE_CHUNK", 1000)  # (written in many pieces)
+    ramp = np.arange(2 * SAMPLE_RATE) / (2 * SAMPLE_RATE)
+    track_id, clip_id, path = audio_track(window, tmp_path, ramp)
+    window.selection.select_clips(window.editor, [(track_id, clip_id)])
+    seen, cancel = [], [True]
+    follow = rendering.RenderProgress.follow
+
+    def recording(dialog, job, label, part=(0, 1)):
+        seen.append((dialog.windowTitle(), label))
+        if cancel[0]:
+            dialog.reject()
+        follow(dialog, job, label, part)
+
+    monkeypatch.setattr(rendering.RenderProgress, "follow", recording)
+    undo_text = window.undo_stack.undoText()
+    press_key(window, Qt.Key.Key_R)  # cancelled: nothing changes, no copy is left
+    assert seen == [("Reverse Clips", "Reversing ramp.wav…")]
+    assert window.undo_stack.undoText() == undo_text and window.project.track(track_id).clips[0].path == path
+    assert not list((tmp_path / "Recordings" / "Reversed").iterdir())
+
+    cancel[0] = False
+    window.activateWindow()
+    QTest.qWait(10)
+    press_key(window, Qt.Key.Key_R)
+    clip = window.project.track(track_id).clips[0]
+    assert Path(clip.path).name == "ramp R.wav" and window.undo_stack.undoText() == "Reverse Clip"
+    source, backwards = window.bridge.source(path), window.bridge.source(clip.path)
+    np.testing.assert_array_equal(np.array(backwards.samples(0, source.frames)),
+                                  np.array(source.samples(0, source.frames))[:, ::-1])
+
+
+def test_reverse_in_the_menu_follows_the_selected_area(window, tmp_path, monkeypatch):
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QMenu
+
+    from substation.ui.arrangement import lanes_canvas
+
+    track_id, clip_id, _path = audio_track(window, tmp_path, np.full(2 * SAMPLE_RATE, 0.5), name="dc")
+    menus = []
+
+    class Menu(QMenu):
+        def exec(self, *_args):  # (not shown)
+            menus.append({a.text(): a.isEnabled() for a in self.actions() if a.text()})
+
+    monkeypatch.setattr(lanes_canvas, "QMenu", Menu)
+    lanes, view = window.arrangement.lanes, window.arrangement.view
+    row = window.arrangement.layout_model.row_for(track_id)
+    window.selection.set_time_range(1.0, 2.0, [track_id], clips={(track_id, clip_id)})
+    window.delete_selection()
+    window.undo_stack.undo()  # the clip is back in the (still selected) area
+    assert window.selection.clip_range and not window.selection.clips
+    pos = QPoint(int(view.beat_to_x(1.5)), row.top - view.scroll_y + row.main_height - 4)
+    lanes.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, pos, lanes.mapToGlobal(pos)))
+    assert menus and menus[-1]["Reverse"]
+
+
 def test_reversing_needs_audio_clips(window):
     track = window.editor.add_midi_track()
     ref = window.editor.add_midi_clip(track.id, 0.0, 4.0)
@@ -110,6 +192,9 @@ def test_clip_gain_is_called_gain_and_makes_the_waveform_taller(window, tmp_path
     assert drawn_rows(1.0) == pytest.approx(16, abs=2)  # a quarter of the lane's height each way
     assert drawn_rows(2.0) == pytest.approx(32, abs=2)  # twice as loud: twice as tall
     assert drawn_rows(8.0) >= 62  # too loud for the lane: cut off at its edges
+    # Drawn at 0.1 dB steps: the same tiles for gains that look the same, a quiet one not flat.
+    assert quantized_gain(1.004) == quantized_gain(1.0) == pytest.approx(1.0)
+    assert quantized_gain(10 ** (-60 / 20)) == pytest.approx(0.001) and quantized_gain(0.0) == 0.0
     window.grab()  # (the arrangement draws it with its gain)
 
 

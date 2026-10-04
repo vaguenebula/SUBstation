@@ -84,9 +84,10 @@ the engine's RenderJob at once; the UI shows its progress, may cancel it, and
 finishes it (finish_freeze gives the frozen audio). Meanwhile live output is
 silent, and the device isn't reopened.
 
-Reversing: a reversed clip plays a reversed copy of its file, which
-render_reversed writes (once a session per file) into the reversed folder (the
-project's "Reversed" folder once it is saved).
+Reversing: a reversed clip plays a reversed copy of its file, written once
+(reversed_copy finds it again, after reopening too) into the reversed folder
+(the project's "Reversed" folder once it is saved), on a thread of its own
+(start_reversed: a ReverseJob, followed like a render).
 
 Previews: while a clip is dragged, preview_clips hands the engine what the drag
 would make of the tracks' clips, so they are heard where they are going; the
