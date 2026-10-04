@@ -170,10 +170,13 @@ An equalizer after FabFilter's Pro-Q: up to 24 bands on one curve.
 - **Placement**: a band works on both channels (Stereo), or only the Left, Right, Mid or
   Side (shown by a letter beside its dot).
 - **The panel** beside the curve has the selected band's controls (on/off, delete, type,
-  Freq, Gain, Q, slope, placement), then **Output** (±36 dB) and **Scale** (0 to 200 %:
-  every band's gain at once).
+  Freq, Gain, Q, slope, placement). It starts collapsed, so the device takes less room:
+  the faders button (top right, beside the expand button) shows or collapses it, for
+  every EQ. **Output** (±36 dB) and **Scale** (0 to 200 %: every band's gain at once)
+  sit in the curve's bottom corners.
 - **The analyzer** behind the curve shows the input (a line) and the output (filled),
-  tilted 4.5 dB/octave so music looks about level. Click its label at the top left to
+  tilted 4.5 dB/octave so music looks about level (but not near its floor: silence stays
+  flat). Click its label at the top left to
   switch between Pre, Post, both and off, and the label at the top right for the
   curve's range (±3, 6, 12 or 30 dB); right-click the background for both.
 - **The expand button** (top right) opens the EQ, bigger, in a window of its own. It

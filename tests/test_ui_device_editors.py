@@ -229,6 +229,7 @@ def test_eq_editor(window):
     from substation.ui.device_editors import eq
 
     assert editor_for("eq") is eq.EqWidget
+    eq.VIEW["panel"] = False  # (shared by every EQ: as the app starts)
     window.insert_midi_track()
     track = window.project.tracks[0]
     window.selection.select_track(track.id)
@@ -238,6 +239,19 @@ def test_eq_editor(window):
     assert widget.minimumSizeHint().height() <= device_height(window.editor)  # fits the view
     view, graph = widget.eq, widget.eq.graph
     QApplication.processEvents()  # laid out: the graph at its size
+
+    # The band's controls start collapsed; the button beside the expand button shows them (the device widens).
+    assert not view.panel.isVisible() and widget.width() == eq.EqWidget.collapsed_width
+    view.panel_button.click()
+    assert view.panel.isVisible() and widget.width() == eq.EqWidget.device_width and eq.VIEW["panel"]
+    view.panel_button.click()
+    assert not view.panel.isVisible() and widget.width() == eq.EqWidget.collapsed_width
+    view.panel_button.click()  # (shown for the rest)
+    QApplication.processEvents()
+
+    # Silence (or a spectrum falling back to it) draws flat along the floor: the tilt doesn't lift its top end.
+    floor = eq.Analyzer().columns("input", np.geomspace(20.0, 20000.0, 200))
+    assert np.allclose(floor, eq.SPECTRUM_FLOOR)
 
     def value(pid):
         return window.project.device(track.id, device.id).params.get(pid)

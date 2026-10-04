@@ -88,9 +88,11 @@ FFT_SIZE = 8192
 SPECTRUM_FLOOR, SPECTRUM_CEIL = -96.0, 6.0  # dBFS (after the tilt) at the bottom and top
 SPECTRUM_TILT = 4.5  # dB/octave around 1 kHz, as Pro-Q's: music looks about level
 SPECTRUM_RISE, SPECTRUM_FALL = 0.55, 0.09  # per display refresh, towards the latest
+TILT_FADE = 18.0  # dB above the floor over which the tilt comes in (the floor itself stays flat)
 
-# What every editor shows (not saved): the curve's range and the analyzer's mode.
-VIEW = {"range": 12.0, "analyzer": 3}
+# What every editor shows (not saved): the curve's range, the analyzer's mode, and whether the
+# device view shows the selected band's controls beside the curve.
+VIEW = {"range": 12.0, "analyzer": 3, "panel": False}
 
 CURVE_COLOR = QColor("#ffd68a")
 BACKGROUND_TOP, BACKGROUND_BOTTOM = QColor("#1d2027"), QColor("#101216")
@@ -190,7 +192,9 @@ class Analyzer:
         peaks = np.maximum.reduceat(levels, first) if len(first) else values
         values = np.where(has_bins, np.maximum(values, peaks), values)
         values = np.convolve(np.pad(values, 1, mode="edge"), (0.25, 0.5, 0.25), mode="valid")
-        return values + tilt
+        # Tilted, but not near the floor: silence (or a spectrum falling back to it) stays flat
+        # instead of the tilt lifting its high end into view.
+        return values + tilt * np.clip((values - SPECTRUM_FLOOR) / TILT_FADE, 0.0, 1.0)
 
 
 class EqGraph(QWidget):
@@ -1053,14 +1057,20 @@ class EqEditor(QWidget):
         self.globals: dict[str, tuple[Knob, QLabel, str]] = {}
         self.corners = {"scale": self._corner("scale", "Scale", "%", 0.0, 200.0, 100.0, left=True),
                         "output": self._corner("output", "Output", "dB", -36.0, 36.0, 0.0, left=False)}
+        self.windowed = windowed
         self.expand: ToggleButton | None = None
+        self.panel_button: ToggleButton | None = None
         if not windowed:
             self.expand = ToggleButton(icon=icons.expand(), checkable=False, tooltip="Open in a window",
                                        parent=self.graph)
-            self.expand.setFixedSize(18, 16)
-            self.expand.setIconSize(QSize(10, 10))
+            self.panel_button = ToggleButton(icon=icons.sliders(), tooltip="Show the band's controls",
+                                             parent=self.graph)
+            for button in (self.expand, self.panel_button):
+                button.setFixedSize(18, 16)
+                button.setIconSize(QSize(10, 10))
             self.expand.clicked.connect(lambda: self.host.open_window())
-            self.graph.right_inset = self.expand.width() + 4
+            self.panel_button.clicked.connect(self.show_panel)
+            self.graph.right_inset = 2 * (self.expand.width() + 4)
         if windowed:  # the graph over a bar with the band's controls
             layout = QVBoxLayout(self)
             controls = QHBoxLayout()
@@ -1077,7 +1087,27 @@ class EqEditor(QWidget):
             layout.setContentsMargins(0, 0, PANEL_INSET, 0)
             self.panel.layout().setContentsMargins(0, 5, 0, 4)
         layout.setSpacing(SPACING)
+        self._layout = layout
+        if not windowed:
+            self._apply_panel()
         self.sync()
+
+    def show_panel(self, shown: bool) -> None:
+        """Shows (or collapses) the selected band's controls beside the curve, in every EQ in the
+        device view."""
+        VIEW["panel"] = bool(shown)
+        for editor in list(_EDITORS) + ([self] if self not in _EDITORS else []):
+            if not editor.windowed:
+                editor._apply_panel()
+
+    def _apply_panel(self) -> None:
+        shown = bool(VIEW["panel"])
+        self.panel.setVisible(shown)
+        self._layout.setContentsMargins(0, 0, PANEL_INSET if shown else 0, 0)
+        self.panel_button.set_checked_silently(shown)
+        self.panel_button.setToolTip("Collapse the band's controls" if shown else "Show the band's controls")
+        if hasattr(self.host, "panel_shown"):
+            self.host.panel_shown(shown)
 
     def _corner(self, name: str, title: str, unit: str, low: float, high: float, default: float,
                 left: bool) -> QFrame:
@@ -1124,6 +1154,7 @@ class EqEditor(QWidget):
             corner.move(x, rect.height() - corner.height() - 4)
         if self.expand is not None:
             self.expand.move(rect.width() - self.expand.width() - 4, 4)
+            self.panel_button.move(self.expand.x() - self.panel_button.width() - 4, 4)
 
     # --- The model ------------------------------------------------------------------------
 
@@ -1218,7 +1249,8 @@ _WINDOWS: dict[tuple[str, str], EqWindow] = {}  # (track id, device id): its win
 
 @device_editor("eq")
 class EqWidget(DeviceWidget):
-    device_width = GRAPH_WIDTH + SPACING + PANEL_WIDTH + PANEL_INSET + 2
+    device_width = GRAPH_WIDTH + SPACING + PANEL_WIDTH + PANEL_INSET + 2  # with the band's controls
+    collapsed_width = GRAPH_WIDTH + 2  # without them (the default)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1258,6 +1290,11 @@ class EqWidget(DeviceWidget):
 
     def open_window(self) -> None:
         open_window(self.editor, self.bridge, self.track_id, self.device_id)
+
+    def panel_shown(self, shown: bool) -> None:
+        """The band's controls were shown or collapsed: the device grows or shrinks to fit."""
+        if not self.folded:
+            self.setFixedWidth(self.device_width if shown else self.collapsed_width)
 
     # --- The device view ----------------------------------------------------------------
 

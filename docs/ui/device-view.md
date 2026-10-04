@@ -314,7 +314,10 @@ editors (see [engine/devices.md](../engine/devices.md)).
   automation menu, and pressing it touches the parameter.
 - **EQ** ([eq.py](../../src/substation/ui/device_editors/eq.py)): no pages. `EqEditor`
   is the editor, for a host: the device's `EqWidget` (no body margins: the graph from the
-  title bar to the bottom edge, the `BandPanel` beside it), or an `EqWindow`
+  title bar to the bottom edge, the `BandPanel` beside it while `VIEW["panel"]`: it starts
+  collapsed, the faders button beside the expand button shows it in every EQ, and
+  `EqWidget.panel_shown` sets the device's width, `device_width` or `collapsed_width`),
+  or an `EqWindow`
   (`open_window()`, from the expand button over the graph's top right: the graph over
   a bar with the panel; a top-level window per device in
   `_WINDOWS`, with its own display timer, that closes when the device goes). A host has
@@ -333,7 +336,8 @@ editors (see [engine/devices.md](../engine/devices.md)).
     selected. `VIEW` (range, analyzer mode) is shared by every editor and not saved.
   - `Analyzer`: an 8192-point Hann FFT of the displays `input` and `output`, rising
     0.55 and falling 0.09 of the way per refresh, mapped to columns (the loudest bin
-    between columns, `np.maximum.reduceat`), smoothed and tilted 4.5 dB/octave.
+    between columns, `np.maximum.reduceat`), smoothed and tilted 4.5 dB/octave (the tilt fading in over `TILT_FADE` dB above the
+    floor, so a spectrum at or falling to the floor stays flat).
 - **Sidechain** ([sidechain.py](../../src/substation/ui/device_editors/sidechain.py)): no
   pages; no margins (the graph from edge to edge). `CurveGraph` (the curve), then
   `ClashView` with Fit, Auto and the character, then the controls (Trigger and Sync,

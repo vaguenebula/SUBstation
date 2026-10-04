@@ -291,6 +291,21 @@ def expand(color: str = theme.TEXT) -> QIcon:
 
 
 @cache
+def sliders(color: str = theme.TEXT) -> QIcon:
+    """Three faders: show a device's controls."""
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        faders = ((16, 40), (32, 22), (48, 34))  # (x, the knob's y)
+        for x, _knob in faders:
+            p.drawLine(QPointF(x, 10), QPointF(x, 54))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(c)
+        for x, knob in faders:
+            p.drawRoundedRect(QRectF(x - 8, knob - 5, 16, 10), 3, 3)
+    return _icon(draw, color)
+
+
+@cache
 def fold(folded: bool, color: str = theme.TEXT) -> QIcon:
     """A device's fold button: a triangle pointing down while it is open, right while folded."""
     def draw(p: QPainter, c: QColor):
