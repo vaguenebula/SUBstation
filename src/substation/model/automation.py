@@ -29,6 +29,7 @@ import bisect
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
+from operator import attrgetter
 
 CURVATURE = 6.0  # engine: kAutomationCurvature
 MASTER = "master"  # the master's automation owner id
@@ -190,8 +191,12 @@ def segment_value(start: AutomationPoint, end: AutomationPoint, beat: float) -> 
     return start.value + (end.value - start.value) * shape(x, _bend(start, end))
 
 
+# Points are kept sorted by beat: bisect them by it (without copying the beats out first).
+point_beat = attrgetter("beat")
+
+
 def count_at_or_before(points: Sequence[AutomationPoint], beat: float) -> int:
-    return bisect.bisect_right([p.beat for p in points], beat)
+    return bisect.bisect_right(points, beat, key=point_beat)
 
 
 def value_at(points: Sequence[AutomationPoint], beat: float) -> float | None:
@@ -210,7 +215,7 @@ def left_value(points: Sequence[AutomationPoint], beat: float) -> float | None:
     """The value just before `beat` (where a step at `beat` hasn't happened yet)."""
     if not points:
         return None
-    index = bisect.bisect_left([p.beat for p in points], beat)
+    index = bisect.bisect_left(points, beat, key=point_beat)
     if index == 0:
         return points[0].value
     if index >= len(points):

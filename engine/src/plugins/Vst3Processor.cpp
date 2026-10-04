@@ -322,7 +322,7 @@ void Vst3Processor::allocateBuffers() {
         for (const ParamMeta& meta : meta_) automationIds_.push_back(meta.id);
     }
     automated_ = std::make_unique<std::atomic<float>[]>(automationIds_.size());
-    for (size_t i = 0; i < automationIds_.size(); ++i) automated_[i].store(std::numeric_limits<float>::quiet_NaN());
+    for (size_t i = 0; i < automationIds_.size(); ++i) automated_[i].store(kNotAutomated);
     automationPending_.store(false);
     events_.setCapacity(kMaxEvents);
     outputEvents_.setCapacity(kMaxEvents);
@@ -804,8 +804,8 @@ bool Vst3Processor::applyAutomatedValues() {
         const size_t count = std::min(automationIds_.size(), meta_.size());
         for (size_t i = 0; i < count; ++i) {
             const float value =
-                automated_[i].exchange(std::numeric_limits<float>::quiet_NaN(), std::memory_order_relaxed);
-            if (std::isnan(value)) continue;
+                automated_[i].exchange(kNotAutomated, std::memory_order_relaxed);
+            if (value < 0.f) continue;
             values_[i].store(toPlain(value, meta_[i].steps));
             updates.emplace_back(meta_[i].id, value);
         }

@@ -12,6 +12,8 @@ are built by CMake through scikit-build-core when the package is installed; [CMa
 - Visual Studio 2022 or newer with the *Desktop development with C++* workload. The code is C++20.
 - CMake (3.26 or newer) and Ninja are installed into the venv from PyPI; nothing else needs installing system-wide.
 - Optional: Steinberg's ASIO SDK, for ASIO support (see [ASIO SDK](#asio-sdk)).
+- A CPU with AVX2 (Intel Haswell, AMD Zen or later) to run it: the engine is compiled with `/arch:AVX2 /fp:fast`. The
+  engine must not rely on NaN or infinity (`/fp:fast` may drop checks for them); test for NaN on the bits instead.
 
 ## Setting up
 
