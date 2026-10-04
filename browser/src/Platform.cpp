@@ -184,8 +184,7 @@ bool Waiter::add(WaitHandle handle) {
 int Waiter::wait(std::optional<std::chrono::milliseconds> timeout) {
     DWORD ms = INFINITE;
     if (timeout) ms = static_cast<DWORD>(std::clamp<long long>(timeout->count(), 0, 0x7FFFFFFF));
-    const DWORD woke = WaitForMultipleObjects(static_cast<DWORD>(handles_.size()),
-                                              reinterpret_cast<const HANDLE*>(handles_.data()), FALSE, ms);
+    const DWORD woke = WaitForMultipleObjects(static_cast<DWORD>(handles_.size()), handles_.data(), FALSE, ms);
     if (woke == WAIT_TIMEOUT) return kTimeout;
     const DWORD index = woke - WAIT_OBJECT_0;
     if (index < handles_.size()) return static_cast<int>(index);

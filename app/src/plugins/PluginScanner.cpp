@@ -4,7 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QHash>
+#include <QMap>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
@@ -201,7 +201,7 @@ ScanResult PluginScanner::scan(const std::optional<QStringList>& filesGiven, boo
                                const Cancelled& cancelled) {
     const QStringList files = filesGiven ? *filesGiven : folders_ ? findPluginFiles(*folders_) : findPluginFiles();
     const QJsonObject cache = rescan ? QJsonObject() : loadCache();
-    QHash<QString, QJsonObject> entries;
+    QMap<QString, QJsonObject> entries;
     QStringList todo;
     for (const QString& path : files) {
         const QString key = caseKey(path);
