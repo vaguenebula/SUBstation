@@ -1,10 +1,46 @@
+// The browser's platform layer on Windows (see Platform.h).
+
 #include "Platform.h"
 
 #include <windows.h>
 
+#include <algorithm>
+
+#include "Text.h"
+
 namespace sub::browser::platform {
 
-bool listFolder(const std::wstring& path, std::vector<Entry>& out) {
+namespace {
+
+// Windows' own lower case (LCMapStringEx, invariant locale): what
+// os.path.normcase() uses, so item keys come out as Python made them.
+std::wstring lowerCase(std::wstring_view s) {
+    if (s.empty()) return {};
+    std::wstring lowered(s.size(), L'\0');
+    const int n = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, s.data(), static_cast<int>(s.size()),
+                                lowered.data(), static_cast<int>(lowered.size()), nullptr, nullptr, 0);
+    if (n <= 0) return std::wstring(s);
+    lowered.resize(static_cast<size_t>(n));
+    return lowered;
+}
+
+}  // namespace
+
+std::string toUtf8(const NativeString& s) { return sub::browser::toUtf8(s); }
+
+NativeString fromUtf8(std::string_view s) { return sub::browser::toWide(s); }
+
+bool isSeparator(char c) { return c == '\\' || c == '/'; }
+
+std::string nameKey(std::string_view name) { return sub::browser::toUtf8(lowerCase(sub::browser::toWide(name))); }
+
+std::string pathKey(std::string_view path) {
+    std::wstring wide = sub::browser::toWide(path);
+    std::replace(wide.begin(), wide.end(), L'/', L'\\');
+    return sub::browser::toUtf8(lowerCase(wide));
+}
+
+bool listFolder(const NativeString& path, std::vector<Entry>& out) {
     out.clear();
     // The pattern os.scandir uses: path, a backslash unless it ends in one, '*'.
     std::wstring pattern = path;
@@ -27,7 +63,7 @@ bool listFolder(const std::wstring& path, std::vector<Entry>& out) {
     return true;
 }
 
-std::optional<uint64_t> folderTime(const std::wstring& path) {
+std::optional<uint64_t> folderTime(const NativeString& path) {
     WIN32_FILE_ATTRIBUTE_DATA data;
     if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) {
         const DWORD error = GetLastError();
@@ -51,6 +87,12 @@ std::optional<uint64_t> folderTime(const std::wstring& path) {
 
 void enterBackgroundMode() { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN); }
 
+bool replaceFile(const NativeString& from, const NativeString& to) {
+    return MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+}
+
+// --- Event ----------------------------------------------------------------------------
+
 Event::Event() : handle_(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {}
 
 Event::~Event() {
@@ -59,53 +101,67 @@ Event::~Event() {
 
 void Event::set() { SetEvent(handle_); }
 
-FolderWatcher::FolderWatcher(const std::wstring& root) : buffer_(64 * 1024 / sizeof(unsigned long)) {
+void Event::reset() { ResetEvent(handle_); }
+
+// --- FolderWatcher -------------------------------------------------------------------
+
+struct FolderWatcher::State {
+    HANDLE dir = nullptr;
+    HANDLE event = nullptr;
+    OVERLAPPED overlapped{};
+    std::vector<unsigned long> buffer = std::vector<unsigned long>(64 * 1024 / sizeof(unsigned long));
+    bool armed = false;
+
+    bool arm() {
+        ResetEvent(event);
+        return ReadDirectoryChangesW(dir, buffer.data(), static_cast<DWORD>(buffer.size() * sizeof(unsigned long)),
+                                     TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, nullptr,
+                                     &overlapped, nullptr) != 0;
+    }
+};
+
+FolderWatcher::FolderWatcher(const NativeString& root) : state_(std::make_unique<State>()) {
     HANDLE dir = CreateFileW(root.c_str(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                              nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
     if (dir == INVALID_HANDLE_VALUE) return;
-    dir_ = dir;
-    event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    auto* overlapped = new OVERLAPPED{};
-    overlapped->hEvent = event_;
-    overlapped_ = overlapped;
-    armed_ = arm();
+    state_->dir = dir;
+    state_->event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    state_->overlapped.hEvent = state_->event;
+    state_->armed = state_->arm();
 }
 
 FolderWatcher::~FolderWatcher() {
-    auto* overlapped = static_cast<OVERLAPPED*>(overlapped_);
-    if (dir_) {
-        if (armed_) {
-            CancelIoEx(dir_, overlapped);
+    State& s = *state_;
+    if (s.dir) {
+        if (s.armed) {
+            CancelIoEx(s.dir, &s.overlapped);
             DWORD bytes = 0;
-            GetOverlappedResult(dir_, overlapped, &bytes, TRUE);  // the buffer stays until it's done with
+            GetOverlappedResult(s.dir, &s.overlapped, &bytes, TRUE);  // the buffer stays until it's done with
         }
-        CloseHandle(dir_);
+        CloseHandle(s.dir);
     }
-    if (event_) CloseHandle(event_);
-    delete overlapped;
+    if (s.event) CloseHandle(s.event);
 }
 
-bool FolderWatcher::arm() {
-    ResetEvent(event_);
-    return ReadDirectoryChangesW(dir_, buffer_.data(), static_cast<DWORD>(buffer_.size() * sizeof(unsigned long)), TRUE,
-                                 FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, nullptr,
-                                 static_cast<OVERLAPPED*>(overlapped_), nullptr) != 0;
-}
+bool FolderWatcher::ok() const { return state_->armed; }
 
-FolderWatcher::Changes FolderWatcher::take(std::vector<std::wstring>& paths) {
+WaitHandle FolderWatcher::handle() const { return state_->event; }
+
+FolderWatcher::Changes FolderWatcher::take(std::vector<NativeString>& paths) {
+    State& s = *state_;
     paths.clear();
-    if (!armed_) return Changes::Failed;
+    if (!s.armed) return Changes::Failed;
     DWORD bytes = 0;
-    if (!GetOverlappedResult(dir_, static_cast<OVERLAPPED*>(overlapped_), &bytes, FALSE)) {
+    if (!GetOverlappedResult(s.dir, &s.overlapped, &bytes, FALSE)) {
         if (GetLastError() == ERROR_IO_INCOMPLETE) return Changes::Paths;  // nothing yet
-        armed_ = false;
+        s.armed = false;
         return Changes::Failed;
     }
     Changes result = Changes::Paths;
     if (bytes == 0) {
         result = Changes::Overflow;
     } else {
-        const auto* at = reinterpret_cast<const unsigned char*>(buffer_.data());
+        const auto* at = reinterpret_cast<const unsigned char*>(s.buffer.data());
         for (;;) {
             const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(at);
             paths.emplace_back(info->FileName, info->FileNameLength / sizeof(WCHAR));
@@ -113,8 +169,27 @@ FolderWatcher::Changes FolderWatcher::take(std::vector<std::wstring>& paths) {
             at += info->NextEntryOffset;
         }
     }
-    armed_ = arm();
+    s.armed = s.arm();
     return result;
+}
+
+// --- Waiter --------------------------------------------------------------------------
+
+bool Waiter::add(WaitHandle handle) {
+    if (handles_.size() >= kMaxHandles) return false;
+    handles_.push_back(handle);
+    return true;
+}
+
+int Waiter::wait(std::optional<std::chrono::milliseconds> timeout) {
+    DWORD ms = INFINITE;
+    if (timeout) ms = static_cast<DWORD>(std::clamp<long long>(timeout->count(), 0, 0x7FFFFFFF));
+    const DWORD woke = WaitForMultipleObjects(static_cast<DWORD>(handles_.size()),
+                                              reinterpret_cast<const HANDLE*>(handles_.data()), FALSE, ms);
+    if (woke == WAIT_TIMEOUT) return kTimeout;
+    const DWORD index = woke - WAIT_OBJECT_0;
+    if (index < handles_.size()) return static_cast<int>(index);
+    return kFailed;
 }
 
 }  // namespace sub::browser::platform

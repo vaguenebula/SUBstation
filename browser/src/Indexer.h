@@ -61,9 +61,9 @@ struct IndexStatus {
 
 class Indexer {
 public:
-    // `store`: where the index is saved ('' for nowhere). `changed` is called
-    // (from the indexer's thread) when a snapshot or the status changed.
-    Indexer(std::wstring store, Limits limits, std::function<void()> changed);
+    // `store`: where the index is saved (UTF-8; '' for nowhere). `changed` is
+    // called (from the indexer's thread) when a snapshot or the status changed.
+    Indexer(std::string store, Limits limits, std::function<void()> changed);
     ~Indexer();
     Indexer(const Indexer&) = delete;
     Indexer& operator=(const Indexer&) = delete;
@@ -81,8 +81,8 @@ private:
     using Clock = std::chrono::steady_clock;
 
     struct Node {
-        std::wstring path;  // as shown
-        std::wstring name;  // in its parent ('' for a place's root)
+        platform::NativeString path;  // as shown
+        platform::NativeString name;  // in its parent ('' for a place's root)
         std::string key;    // normcase(path)
         std::string pathUtf8, pathLower, detail, detailLower;
         int32_t parent = -1;
@@ -105,8 +105,9 @@ private:
     bool pendingCommands() const;
 
     // The tree
-    uint32_t addNode(std::wstring path, std::wstring name, std::string key, std::string detail, int32_t parent);
-    void setPath(Node& node, std::wstring path);
+    uint32_t addNode(platform::NativeString path, platform::NativeString name, std::string key, std::string detail,
+                     int32_t parent);
+    void setPath(Node& node, platform::NativeString path);
     bool removeUnreachable();  // true if any folder went
     Node& node(uint32_t id) { return *nodes_[id]; }
 
@@ -123,14 +124,14 @@ private:
 
     // Watching
     void takeWatcherChanges(Place& place);
-    void markChanged(const Place& place, const std::wstring& relative);
+    void markChanged(const Place& place, const platform::NativeString& relative);
     void rewatch();
 
     // The saved index
     bool load();
     void save();
 
-    const std::wstring store_;
+    const platform::NativeString store_;
     const Limits limits_;
     const std::function<void()> changed_;
 
@@ -145,7 +146,7 @@ private:
     bool scheduled_ = false;  // work from watchers is waiting or running
     std::shared_ptr<const Snapshot> snapshot_;
     IndexStatus status_;
-    platform::Event wake_;
+    platform::Event wake_;  // a command came in (the thread waits for it and the watchers)
     std::thread thread_;
     std::atomic<bool> interrupt_{false};  // commands are waiting: a pass should stop and let them in
 

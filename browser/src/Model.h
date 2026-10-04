@@ -32,14 +32,15 @@ public:
     std::string_view fold(size_t i) const { return view(files_[i].fold, files_[i].foldLen); }
     // Casefolding the name gives its lower case (true of every ASCII name).
     bool foldIsLower(size_t i) const { return files_[i].fold == files_[i].lower; }
-    // Windows' lower case of the name, as in the item's key (os.path.normcase).
-    std::string_view ntLower(size_t i) const { return view(files_[i].ntLower, files_[i].ntLowerLen); }
+    // The name as in the item's key (platform::nameKey: Windows' lower case on
+    // Windows, as it is elsewhere).
+    std::string_view key(size_t i) const { return view(files_[i].key, files_[i].keyLen); }
     bool sameNames(const std::vector<Name>& names) const;
 
 private:
     struct File {
-        uint32_t name, lower, fold, ntLower;
-        uint16_t nameLen, lowerLen, foldLen, ntLowerLen;
+        uint32_t name, lower, fold, key;
+        uint16_t nameLen, lowerLen, foldLen, keyLen;
     };
     std::string_view view(uint32_t at, uint16_t len) const { return {text_.data() + at, len}; }
     std::string text_;
@@ -50,8 +51,8 @@ private:
 struct SnapFolder {
     std::shared_ptr<const FolderFiles> files;
     std::string path;         // as shown: the place's root as given, then the folder names
-    std::string pathLower;    // pyLower(path), for the Places filter
-    std::string key;          // os.path.normcase(path), for use counts
+    std::string pathLower;    // pyLower(path), for the Places filter where names ignore case
+    std::string key;          // os.path.normcase(path) (platform::pathKey), for use counts
     std::string detail;       // what its files show as detail: the folder's name
     std::string detailLower;
 };
@@ -76,7 +77,8 @@ struct Snapshot {
     std::unordered_map<std::string_view, uint32_t> folderByKey;
     std::unordered_map<std::string_view, uint32_t> folderByPath;
 
-    // `folder.path` joined with a file name, as os.scandir joins them.
+    // `folder.path` joined with a file name, as os.scandir joins them (with the
+    // platform's separator).
     static std::string join(std::string_view folder, std::string_view name);
 };
 
@@ -117,13 +119,19 @@ enum class Sort : uint8_t { Rank, Name };
 // Groups: 0 is the index's audio files, others are external groups.
 inline constexpr int kAudioGroup = 0;
 
+// What Query::placePrefix is for a place (its root as given, UTF-8): as Python's
+// str(Path(place)).lower().rstrip("\\/") + "\\" with the platform's separator,
+// in lower case only where file names ignore case (Windows). Elsewhere "Drums"
+// and "drums" are different folders, and the filter keeps them apart.
+std::string placePrefix(std::string_view root);
+
 struct Query {
     std::string text;
     Sort sort = Sort::Rank;
     double now = 0.0;             // for how recent uses are
     std::vector<int> groups;      // what to list, in this order
     std::string tag;              // external items with this tag only ('' for all)
-    std::string placePrefix;      // files under this folder only: its lower-case path and '\' ('' for all)
+    std::string placePrefix;      // files under this folder only ('' for all): placePrefix(root)
 };
 
 struct Hit {

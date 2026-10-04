@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstring>
 
+#include "Platform.h"
 #include "Text.h"
 
 namespace sub::browser {
@@ -27,10 +28,12 @@ bool contains(std::string_view hay, std::string_view needle) {
     return false;
 }
 
-// (lower-case path + '\').startswith(prefix)
-bool underFolder(std::string_view pathLower, std::string_view prefix) {
-    if (prefix.size() <= pathLower.size()) return pathLower.starts_with(prefix);
-    return prefix.size() == pathLower.size() + 1 && prefix.back() == '\\' && prefix.starts_with(pathLower);
+// (path + separator).startswith(prefix), the path in lower case where names
+// ignore case (see placePrefix()).
+bool underFolder(const SnapFolder& folder, std::string_view prefix) {
+    const std::string_view path = platform::kCaseSensitivePaths ? folder.path : folder.pathLower;
+    if (prefix.size() <= path.size()) return path.starts_with(prefix);
+    return prefix.size() == path.size() + 1 && prefix.back() == platform::kSeparator && prefix.starts_with(path);
 }
 
 struct Scored {
@@ -120,7 +123,7 @@ private:
         const size_t folders = snap->folders.size();
         std::vector<uint8_t> folderOk(folders, 1);
         if (!query_.placePrefix.empty())
-            for (size_t f = 0; f < folders; ++f) folderOk[f] = underFolder(snap->folders[f].pathLower, query_.placePrefix);
+            for (size_t f = 0; f < folders; ++f) folderOk[f] = underFolder(snap->folders[f], query_.placePrefix);
         // Whether each term is in each folder's detail: then its files all have it.
         std::vector<uint8_t> inDetail(terms_.size() * folders);
         for (size_t t = 0; t < terms_.size(); ++t)
@@ -198,15 +201,16 @@ private:
             std::string_view key = usage->records[r].key;
             if (!key.starts_with("audio:")) continue;
             key.remove_prefix(6);
-            const size_t cut = key.rfind('\\');
+            const size_t cut = key.rfind(platform::kSeparator);
             if (cut == std::string_view::npos) continue;
             const std::string_view name = key.substr(cut + 1);
             auto folder = snap->folderByKey.find(key.substr(0, cut));
-            if (folder == snap->folderByKey.end()) folder = snap->folderByKey.find(key.substr(0, cut + 1));  // "c:\"
+            if (folder == snap->folderByKey.end())
+                folder = snap->folderByKey.find(key.substr(0, cut + 1));  // a drive's root ("c:\", "/")
             if (folder == snap->folderByKey.end()) continue;
             const FolderFiles& files = *snap->folders[folder->second].files;
             for (uint32_t i = 0; i < files.size(); ++i) {
-                if (files.ntLower(i) != name) continue;
+                if (files.key(i) != name) continue;
                 if (position.empty()) {
                     position.resize(folderStart.back());
                     for (uint32_t p = 0; p < snap->audio.size(); ++p)
