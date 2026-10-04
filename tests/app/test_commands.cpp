@@ -39,7 +39,7 @@ void fill(Project& project) {
 class TestCommands : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
 
     void insertingAndRemovingTracks() {

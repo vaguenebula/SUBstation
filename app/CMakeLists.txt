@@ -11,11 +11,11 @@ file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 qt_add_library(sub_app STATIC ${APP_SOURCES})
 add_library(sub::app ALIAS sub_app)
 target_include_directories(sub_app PUBLIC src)
-# The engine's built-in devices register themselves from objects nothing else
-# refers to (engine/src/builtin/devices/), which a linker drops from a static
-# library: whatever links the application layer takes the whole engine, so
-# BuiltinRegistry knows every device.
-target_link_libraries(sub_app PUBLIC Qt6::Core Qt6::Gui "$<LINK_LIBRARY:WHOLE_ARCHIVE,sub_engine>")
+target_link_libraries(sub_app PUBLIC Qt6::Core Qt6::Gui sub_engine)
+# Qt's keywords (signals, slots, emit, foreach) are macros that break other
+# code's identifiers (the engine has `slots`): the app layer, and everything
+# built on it, writes Q_SIGNALS, Q_SLOTS and Q_EMIT.
+target_compile_definitions(sub_app PUBLIC QT_NO_KEYWORDS)
 if (TARGET sub_browser)
     target_link_libraries(sub_app PUBLIC sub_browser)
 endif()

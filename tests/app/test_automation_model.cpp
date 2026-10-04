@@ -41,7 +41,7 @@ std::vector<double> beatsOf(const Envelope& points) {
 class TestAutomationModel : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
 
     // --- Envelope maths ---

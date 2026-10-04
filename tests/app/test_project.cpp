@@ -52,7 +52,7 @@ void fill(Project& project) {
 class TestProject : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
 
     void theTreeInvariant() {

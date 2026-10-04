@@ -78,7 +78,7 @@ void writeJson(const QString& path, const QJsonObject& data) {
 class TestMidiModel : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
 
     // --- Clips ---

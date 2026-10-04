@@ -16,7 +16,7 @@ const TimeSignature kSixEight{6, 8};
 class TestTimebase : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
 
     void timeSignatureLengths() {

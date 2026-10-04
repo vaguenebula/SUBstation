@@ -47,7 +47,7 @@ Device presetOf(const Device& device) { return presetDevice(deviceToPreset(devic
 class TestPresets : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
 
     void theLibraryIsWhereTheEnvironmentSays() {

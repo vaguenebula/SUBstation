@@ -25,7 +25,7 @@ const Key kAMinor{9, true};
 class TestKeys : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
 
     void parseFilename_data() {

@@ -47,7 +47,7 @@ bool near(double a, double b, double tolerance = 1e-9) { return std::abs(a - b) 
 class TestEdits : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
 
     void overlapTrimsPartiallyCoveredClips() {
