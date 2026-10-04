@@ -3,8 +3,13 @@ a MIDI track the instrument comes first; the master takes effects only.
 
 Each device has a title bar, as in Ableton: its on/off switch and name, the
 button for a plug-in's own editor, the sidechain button of a device with a
-sidechain (aux) input, the arrows to its other parameter pages, a save button
-(not wired up yet). It is lighter while the device is selected. The sidechain
+sidechain (aux) input, the arrows to its other parameter pages, and its save
+button, which saves it as a preset in the user's library (model/presets.py),
+under a name asked for (everything in a rack too: plug-ins' states, macros).
+A rack takes the name of the preset it is saved as (or loaded from) as its
+title. Right-click › Save as Default Preset makes it what new devices of its kind (that
+plug-in) start as; Clear Default Preset undoes that. It is lighter while the
+device is selected. The sidechain
 button is lit while the device has a sidechain; clicking it picks the track it
 comes from (those that would close a cycle greyed out) and where it is taken:
 after the track's fader, before it, or after one of its devices.
@@ -13,7 +18,7 @@ Parameter metadata comes from the engine, so built-in devices and plug-ins
 show alike: a knob per parameter (log-scaled where the engine says so), or a
 list for parameters that choose between named values, four at a time in a 2×2
 grid. A plug-in shows its own text for their values. Right-click a device for
-more (move, presets). A built-in device may have an editor of its own instead
+more (move, presets; a plug-in's VST3 presets too). A built-in device may have an editor of its own instead
 (see device_editors), which can also draw what the engine reports as it plays
 (its displays: meters, curves).
 
@@ -33,9 +38,13 @@ chain clicked shows its devices right after the rack, in a bracket, where they
 are selected, dragged and dropped onto as on the track's own chain (and racks
 in it show theirs, further along). Ctrl+G groups the selected devices (of one
 chain) into a rack; Ctrl+Shift+G ungroups a rack. Right-click a parameter of a
-device in a rack to map one of the rack's macros to it. A rack's save button
-saves it as a preset (everything in it, plug-ins' states and macros too);
-right-click beside the devices to load one.
+device in a rack to map one of the rack's macros to it.
+
+Presets dragged from the browser go where they are dropped, as new devices, or
+load into the device they are dropped onto if it is of their kind (the same
+plug-in, built-in device, or kind of rack; it is outlined while the drag is
+over it): one undo step. Right-click beside the devices to load a preset file
+there.
 
 The fold button (a triangle, first on the title bar) folds a device to a
 narrow strip with its name; a folded rack hides its chains too. Click the
@@ -90,8 +99,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -106,10 +117,20 @@ from ..model.automation import device_key
 from ..model.editor import (
     BUILTIN_DEVICES,
     ProjectEditor,
+    device_ids_of,
     device_is_instrument,
     device_name,
+    loads_into,
 )
 from ..model.params import format_value
+from ..model.presets import (
+    clear_default,
+    has_default,
+    library_dir,
+    preset_path,
+    save_default,
+    save_to_library,
+)
 from ..model.project import (
     MACRO_COUNT,
     PLUGIN_KIND,
@@ -127,13 +148,12 @@ from ..model.serialization import (
     PRESET_EXTENSION,
     ProjectFileError,
     load_preset,
-    save_preset,
 )
 from . import icons
 from .arrangement.lanes_canvas import DEVICE_MOVE_MIME, is_pan_modifier, moved_devices
 from .arrangement.track_headers import automation_state
 from .arrangement.view_state import Selection
-from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs
+from .browser.browser_models import PLUGIN_MIME, device_kinds, plugin_refs, preset_paths
 from .device_editors import editor_for
 from .rack_view import ChainList, MacroPanel
 from .widgets import Knob, ToggleButton
@@ -148,8 +168,8 @@ EFFECTS_HINT = "Drop audio effects here from the browser (Built-in or Plug-ins �
 INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in or Plug-ins › Instruments)"
 INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create › Insert MIDI Track)."
 MESSAGE_LINES = 4  # a plug-in's error message is cut to this; its tooltip has it all
-PRESET_FILTER = "VST3 Preset (*.vstpreset)"
-RACK_PRESET_FILTER = f"SUBstation Preset (*{PRESET_EXTENSION})"
+VST3_PRESET_FILTER = "VST3 Preset (*.vstpreset)"
+PRESET_FILTER = f"SUBstation Preset (*{PRESET_EXTENSION})"
 RACK_WIDTH = 420
 AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
 AUTOSCROLL_INTERVAL = 16  # ms
@@ -254,6 +274,7 @@ class _DeviceFrame(QFrame):
     drag_started = Signal(str)  # device id
     menu_requested = Signal(str)  # device id: select it before its menu shows
     page_changed = Signal(str, int)  # device id, page
+    preset_saved = Signal(str)  # the preset file: the device was saved to the library
 
     def __init__(self, track_id: str, device: Device, editor: ProjectEditor, parent: QWidget | None = None,
                  bridge: EngineBridge | None = None):
@@ -294,7 +315,8 @@ class _DeviceFrame(QFrame):
         self.page_label.setObjectName("devicePage")
         self.next = _header_button("›", "Next parameters")
         self.next.clicked.connect(lambda: self.set_page(self.page + 1))
-        self.save = _header_button("", "Save Preset", icons.save())  # not wired up yet
+        self.save = _header_button("", "Save Preset", icons.save())
+        self.save.clicked.connect(lambda: self.save_to_library())
         self.sidechain = None  # its sidechain's button, if it has a sidechain input
         if bridge is not None and bridge.has_sidechain_input(track_id, device.id):
             self.sidechain = ToggleButton(icon=icons.sidechain(), role="device-header")
@@ -542,6 +564,13 @@ class _DeviceFrame(QFrame):
                                    lambda: self.editor.move_device(self.track_id, self.device_id, index + 1))
             right.setEnabled(index < len(chain) - 1)
             menu.addSeparator()
+        menu.addAction("Save Preset…", lambda: self.save_to_library())
+        device = self.device()
+        if not device.is_rack:
+            menu.addAction("Save as Default Preset", self.save_as_default)
+            menu.addAction("Clear Default Preset", self.clear_default).setEnabled(
+                has_default(device.kind, device.plugin))
+        menu.addSeparator()
         group = menu.addAction("Group", self.group_selected)
         group.setShortcut("Ctrl+G")  # (as a tip: the window's action handles the key)
         group.setShortcutVisibleInContextMenu(True)
@@ -559,6 +588,67 @@ class _DeviceFrame(QFrame):
 
     def add_menu_actions(self, menu: QMenu) -> None:
         """Device-specific entries at the top of the right-click menu."""
+
+    def save_to_library(self, name: str | None = None) -> Path | None:
+        """The save button: save the device (a rack with everything in it) as a
+        preset in the library, under a name asked for (or `name`; asked before
+        replacing one of that name then). The preset's file (None: not saved)."""
+        device = self.device()
+        if self.bridge is not None:
+            self.bridge.store_plugin_states(device_ids_of(device))  # (as they are now)
+        asked = name is None
+        if asked:
+            name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:", text=device_name(device))
+            if not ok:
+                return None
+        name = name.strip()
+        try:
+            path = preset_path(device, name)
+        except ValueError as exc:
+            self._report(str(exc))
+            return None
+        if asked and path.exists() and QMessageBox.question(
+                self, "Save Preset", f"There is a {path.parent.name} preset called \u201c{path.stem}\u201d already. "
+                "Replace it?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) != QMessageBox.StandardButton.Yes:
+            return None
+        try:
+            save_to_library(device, name)
+        except OSError as exc:
+            self._report(f"Could not save the preset: {exc}")
+            return None
+        self._report(f"Saved the preset {path.stem} ({path.parent.name}).")
+        if device.is_rack:  # (a rack is named as its preset)
+            self.editor.rename_rack(self.track_id, self.device_id, path.stem, f"Save Preset {path.stem}")
+        self.preset_saved.emit(str(path))
+        return path
+
+    def save_as_default(self) -> Path | None:
+        """The device as the default preset of its kind: new devices of that kind
+        (that plug-in) start as it is now. Its file (None: not saved)."""
+        device = self.device()
+        if self.bridge is not None:
+            self.bridge.store_plugin_states({device.id})
+        try:
+            path = save_default(device)
+        except (OSError, ValueError) as exc:
+            self._report(f"Could not save the default preset: {exc}")
+            return None
+        self._report(f"New {device_name(device)} devices will start like this one.")
+        return path
+
+    def clear_default(self) -> None:
+        """New devices of this kind start as they come again."""
+        device = self.device()
+        try:
+            if clear_default(device.kind, device.plugin):
+                self._report(f"New {device_name(device)} devices will start as they come.")
+        except OSError as exc:
+            self._report(f"Could not clear the default preset: {exc}")
+
+    def _report(self, message: str) -> None:
+        if self.bridge is not None:
+            self.bridge.status_message.emit(message)
 
     def refresh(self, device: Device) -> None:
         self.enabled.set_checked_silently(device.enabled)
@@ -919,8 +1009,8 @@ class PluginDeviceWidget(_DeviceFrame):
     def add_menu_actions(self, menu: QMenu) -> None:
         loaded = self.engine_id is not None
         menu.addAction("Show Editor", lambda: self._toggle_editor(True)).setEnabled(loaded)
-        menu.addAction("Load Preset…", self.load_preset).setEnabled(loaded)
-        menu.addAction("Save Preset…", self.save_preset).setEnabled(loaded)
+        menu.addAction("Load VST3 Preset…", self.load_vst3_preset).setEnabled(loaded)
+        menu.addAction("Save VST3 Preset…", self.save_vst3_preset).setEnabled(loaded)
         menu.addSeparator()
 
     def _preset_folder(self) -> str:
@@ -932,8 +1022,9 @@ class PluginDeviceWidget(_DeviceFrame):
         folder = Path.home() / "Documents" / "VST3 Presets" / (plugin.vendor or "Unknown") / plugin.name
         return str(folder if folder.is_dir() else Path.home() / "Documents")
 
-    def load_preset(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Load Preset", self._preset_folder(), PRESET_FILTER)
+    def load_vst3_preset(self) -> None:
+        """A .vstpreset (the plug-in's own preset format) into the plug-in."""
+        path, _ = QFileDialog.getOpenFileName(self, "Load VST3 Preset", self._preset_folder(), VST3_PRESET_FILTER)
         if not path:
             return
         QSettings().setValue("plugins/preset_dir", str(Path(path).parent))
@@ -947,10 +1038,11 @@ class PluginDeviceWidget(_DeviceFrame):
         self.editor.set_device_state(self.track_id, self.device_id, _encode(old), _encode(data),
                                      f"Load Preset {Path(path).stem}")
 
-    def save_preset(self) -> None:
+    def save_vst3_preset(self) -> None:
+        """The plug-in's state as a .vstpreset, for other hosts (the save button saves a SUBstation preset)."""
         plugin = self.device().plugin
         suggested = str(Path(self._preset_folder()) / f"{plugin.name}.vstpreset")
-        path, _ = QFileDialog.getSaveFileName(self, "Save Preset", suggested, PRESET_FILTER)
+        path, _ = QFileDialog.getSaveFileName(self, "Save VST3 Preset", suggested, VST3_PRESET_FILTER)
         if not path:
             return
         QSettings().setValue("plugins/preset_dir", str(Path(path).parent))
@@ -963,16 +1055,16 @@ class PluginDeviceWidget(_DeviceFrame):
 
 
 def preset_folder() -> str:
-    """Where presets are saved and loaded from: where the last one was, else Documents."""
+    """Where preset files are loaded from: where the last one was, else the library (else Documents)."""
     stored = QSettings().value("presets/dir")
     if stored and os.path.isdir(str(stored)):
         return str(stored)
-    return str(Path.home() / "Documents")
+    return str(library_dir() if library_dir().is_dir() else Path.home() / "Documents")
 
 
 class RackWidget(_DeviceFrame):
     """A rack: its macros and its chains (the device view shows the chain
-    clicked beside it). Its save button saves it as a preset."""
+    clicked beside it). Its save button saves it, with everything in it."""
 
     device_width = RACK_WIDTH
     chain_clicked = Signal(str, str)  # rack id, chain id
@@ -980,8 +1072,6 @@ class RackWidget(_DeviceFrame):
     def __init__(self, track_id: str, device: Device, editor: ProjectEditor, bridge: EngineBridge,
                  page: int = 0, parent: QWidget | None = None):
         super().__init__(track_id, device, editor, parent, bridge)
-        self.save.setToolTip("Save Rack Preset")
-        self.save.clicked.connect(self.save_preset)
         self.macros = MacroPanel(track_id, device, editor, bridge)
         self.chains = ChainList(track_id, device, editor, bridge)
         self.chains.chain_clicked.connect(lambda chain_id: self.chain_clicked.emit(self.device_id, chain_id))
@@ -1023,21 +1113,7 @@ class RackWidget(_DeviceFrame):
 
     def add_menu_actions(self, menu: QMenu) -> None:
         menu.addAction("Add Chain", lambda: self.editor.add_rack_chain(self.track_id, self.device_id))
-        menu.addAction("Save Preset…", self.save_preset)
         menu.addSeparator()
-
-    def save_preset(self) -> None:
-        """Save the rack, with everything in it, as a preset file."""
-        self.bridge.store_plugin_states()  # (the plug-ins' states as they are now)
-        suggested = str(Path(preset_folder()) / f"{device_name(self.device())}{PRESET_EXTENSION}")
-        path, _ = QFileDialog.getSaveFileName(self, "Save Rack Preset", suggested, RACK_PRESET_FILTER)
-        if not path:
-            return
-        QSettings().setValue("presets/dir", str(Path(path).parent))
-        try:
-            save_preset(self.device(), Path(path))
-        except OSError as exc:
-            self.bridge.status_message.emit(f"Could not save the preset: {exc}")
 
 
 class _ChainView(QFrame):
@@ -1066,6 +1142,7 @@ class _ChainView(QFrame):
 
 class DevicePanel(QFrame):
     status_message = Signal(str)
+    preset_saved = Signal(str)  # a device was saved to the preset library (its file)
 
     def __init__(self, editor: ProjectEditor, selection: Selection, bridge: EngineBridge,
                  parent: QWidget | None = None):
@@ -1106,6 +1183,13 @@ class DevicePanel(QFrame):
         self.drop_marker = QFrame(self.chain)
         self.drop_marker.setStyleSheet(f"background: {theme.ACCENT};")
         self.drop_marker.hide()
+        # The device a dragged preset would load into: outlined.
+        self.load_marker = QFrame(self.chain)
+        self.load_marker.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.load_marker.setStyleSheet(f"border: 2px solid {theme.ACCENT}; border-radius: 4px; background: transparent;")
+        self.load_marker.hide()
+        self._drag_presets: dict[str, Device | None] = {}  # the presets dragged over the chain, read (None: unreadable)
+        self._dragged_presets: list[str] = []  # the files of the presets dragged over the chain
         # A drag held near the chain's left or right edge scrolls it.
         self._drag_pos = QPoint()
         self._scroll_step = 0
@@ -1365,19 +1449,46 @@ class DevicePanel(QFrame):
         menu.exec(event.globalPos())
 
     def load_preset(self, chain: str | None = None, index: int | None = None) -> bool:
-        """A preset file's device (a rack) into a chain of the track shown."""
-        path, _ = QFileDialog.getOpenFileName(self, "Load Preset", preset_folder(), RACK_PRESET_FILTER)
+        """A preset file (asked for) into a chain of the track shown, as a new device."""
+        path, _ = QFileDialog.getOpenFileName(self, "Load Preset", preset_folder(), PRESET_FILTER)
         if not path or self.track_id is None:
             return False
         QSettings().setValue("presets/dir", str(Path(path).parent))
+        return self.insert_preset(path, chain, index)
+
+    def _read_preset(self, path: str) -> Device | None:
         try:
-            device = load_preset(Path(path))
+            return load_preset(Path(path))
         except ProjectFileError as exc:
             self.status_message.emit(str(exc))
+            return None
+
+    def insert_preset(self, path: str, chain: str | None = None, index: int | None = None) -> bool:
+        """A preset's device, new, into a chain of the track shown (`chain`, None:
+        its own) before the device at `index` (None: last). One undo step."""
+        device = self._read_preset(path)
+        if device is None or self.track_id is None:
             return False
-        if not self.editor.insert_device(self.track_id, device, index, chain, f"Load Preset {Path(path).stem}"):
+        if not self.editor.insert_device(self.track_id, device, index, chain, f"Load Preset {Path(path).stem}",
+                                         show_editors=not device.is_rack):
             self.status_message.emit(INSTRUMENT_REFUSED if device_is_instrument(device) else
                                      "The preset can't go there: racks nest at most 8 deep.")
+            return False
+        return True
+
+    def load_preset_into(self, device_id: str, path: str) -> bool:
+        """Load a preset into a device of the track shown, of its kind (the device
+        stays, with its new settings). One undo step."""
+        preset = self._read_preset(path)
+        if preset is None or self.track_id is None:
+            return False
+        device = self.project.device(self.track_id, device_id)
+        if not loads_into(preset, device):
+            self.status_message.emit(f"A {device_name(preset)} preset can't load into {device_name(device)}.")
+            return False
+        self.bridge.store_plugin_states({device_id})  # (to undo to)
+        if not self.editor.load_preset_into(self.track_id, device_id, preset, f"Load Preset {Path(path).stem}"):
+            self.status_message.emit("The preset can't go there: racks nest at most 8 deep.")
             return False
         return True
 
@@ -1450,6 +1561,29 @@ class DevicePanel(QFrame):
         index = sum(1 for w in self._chain_widgets(chain) if w.mapTo(self, w.rect().center()).x() < x)
         return chain, index
 
+    def preset_target(self, pos: QPoint, paths: list[str]) -> str | None:
+        """The device a preset dropped at `pos` (panel coordinates) loads into:
+        the one there, if it is of the preset's kind (not on a rack's chain list,
+        where it goes into the chain). None: it goes in as a new device."""
+        if len(paths) != 1:
+            return None
+        for device_id, widget in self.widgets.items():
+            if not widget.isVisible() or not widget.rect().contains(widget.mapFrom(self, pos)):
+                continue
+            if isinstance(widget, RackWidget) and widget.chains.isVisible():
+                list_pos = widget.chains.mapFrom(self, pos)
+                if widget.chains.rect().contains(list_pos) and widget.chains.chain_at(list_pos) is not None:
+                    return None
+            if paths[0] not in self._drag_presets:
+                try:
+                    self._drag_presets[paths[0]] = load_preset(Path(paths[0]))
+                except ProjectFileError:
+                    self._drag_presets[paths[0]] = None
+            preset = self._drag_presets[paths[0]]
+            device = self.project.device(self.track_id, device_id)
+            return device_id if preset is not None and loads_into(preset, device) else None
+        return None
+
     def drop_index(self, pos: QPoint) -> int:
         """Where in its chain a drop at `pos` (panel coordinates) goes."""
         return self.drop_target(pos)[1]
@@ -1489,16 +1623,32 @@ class DevicePanel(QFrame):
             self._autoscroll.start()
         else:
             self._autoscroll.stop()
-        self._show_drop_marker(*self.drop_target(pos))
+        self._show_drop_markers(pos)
 
     def _auto_scroll(self) -> None:
         bar = self.scroll.horizontalScrollBar()
         bar.setValue(bar.value() + self._scroll_step)
-        self._show_drop_marker(*self.drop_target(self._drag_pos))
+        self._show_drop_markers(self._drag_pos)
+
+    def _show_drop_markers(self, pos: QPoint) -> None:
+        """Where a drag at `pos` would go: between devices, or (a preset) into the device outlined."""
+        target = self.preset_target(pos, self._dragged_presets)
+        if target is None:
+            self.load_marker.hide()
+            self._show_drop_marker(*self.drop_target(pos))
+            return
+        widget = self.widgets[target]
+        self.drop_marker.hide()
+        self.load_marker.setGeometry(widget.rect().translated(widget.mapTo(self.chain, QPoint(0, 0))))
+        self.load_marker.raise_()
+        self.load_marker.show()
 
     def _drag_ended(self) -> None:
         self._autoscroll.stop()
         self.drop_marker.hide()
+        self.load_marker.hide()
+        self._dragged_presets = []
+        self._drag_presets.clear()
 
     def _on_devices_changed(self, track_id: str, rebuild: bool = False) -> None:
         if track_id != self.track_id:
@@ -1624,6 +1774,7 @@ class DevicePanel(QFrame):
             widget.released.connect(self._on_device_released)
             widget.drag_started.connect(self._start_drag)
             widget.menu_requested.connect(self._on_device_menu)
+            widget.preset_saved.connect(self.preset_saved)
             widget.remove_selected = self.delete_selected
             widget.toggle_fold = lambda i=device.id: self.toggle_fold(i)
             widget.clipboard_menu = lambda menu, i=device.id: self._clipboard_actions(menu, i)
@@ -1647,7 +1798,9 @@ class DevicePanel(QFrame):
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         mime = event.mimeData()
-        if self.track_id is not None and (device_kinds(mime) or mime.hasFormat(PLUGIN_MIME) or self._moving(mime)):
+        if self.track_id is not None and (device_kinds(mime) or mime.hasFormat(PLUGIN_MIME) or preset_paths(mime)
+                                          or self._moving(mime)):
+            self._dragged_presets = preset_paths(mime)
             event.acceptProposedAction()
             self._drag_at(event.position().toPoint())
 
@@ -1662,11 +1815,30 @@ class DevicePanel(QFrame):
         self._drag_ended()
         mime = event.mimeData()
         if self.track_id is not None:
-            target, index = self.drop_target(event.position().toPoint())
+            pos = event.position().toPoint()
+            target, index = self.drop_target(pos)
             moving = self._moving(mime)
             if moving:
                 if not self.editor.move_devices(self.track_id, moving, index, target) and target is not None:
                     self.status_message.emit("A rack can't go into itself, and racks nest at most 8 deep.")
+                event.acceptProposedAction()
+                return
+            presets = preset_paths(mime)
+            if presets:
+                into = self.preset_target(pos, presets)
+                self._drag_presets.clear()
+                if into is not None:
+                    self.load_preset_into(into, presets[0])
+                    event.acceptProposedAction()
+                    return
+                self._dropping = True
+                try:
+                    for path in presets:
+                        count = len(self._container_ids(target))
+                        if self.insert_preset(path, target, index):  # (the next one goes after it)
+                            index += len(self._container_ids(target)) - count
+                finally:
+                    self._dropping = False
                 event.acceptProposedAction()
                 return
             # New effects go where they were dropped (an instrument always goes first).

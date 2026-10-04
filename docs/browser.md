@@ -64,25 +64,27 @@ The backend is built as the static library `sub_browser` and the module `_browse
 
 | File | What it holds |
 |---|---|
-| [browser_panel.py](../src/substation/ui/browser/browser_panel.py) | `BrowserPanel`: the sidebar (categories and places), search field, sort list, result list, the folder tree, preview, Enter/Down handling, use counting. |
+| [browser_panel.py](../src/substation/ui/browser/browser_panel.py) | `BrowserPanel`: the sidebar (categories and places), search field, sort list, result list, the folder tree, preview, Enter/Down handling, use counting, the presets' menu (rename, delete, show in folder). |
+| [preset_index.py](../src/substation/ui/browser/preset_index.py) | `PresetIndex`: the presets in the user's library as items, listed again when they change (`QFileSystemWatcher`) or the app saves one (`rescan`). |
 | [file_index.py](../src/substation/ui/browser/file_index.py) | `FileIndex` (the native backend on the UI thread's side), `SearchResult` (a result read a page at a time), `PluginIndex` (the background VST3 scan), `index_path()`, `place_spec()`, `usage_records()`. |
-| [browser_models.py](../src/substation/ui/browser/browser_models.py) | `BrowserItem` (and its `key`), `ItemListModel` (paged, draggable), the drag MIME types and their readers (`plugin_refs`, `device_kinds`). |
+| [browser_models.py](../src/substation/ui/browser/browser_models.py) | `BrowserItem` (and its `key`), `ItemListModel` (paged, draggable), the drag MIME types and their readers (`plugin_refs`, `device_kinds`, `preset_paths`; `read_presets`). |
 | [library.py](../src/substation/ui/browser/library.py) | `Library`: use counts kept in `library.json`, and `rank()`. |
-| [search.py](../src/substation/ui/browser/search.py) | What to ask the search for: `SORTS`, the group numbers (`AUDIO`, `BUILTIN`, `PLUGINS`), `scope_query()`, `place_prefix()`, `plugin_tag()`. The sort orders are documented here. |
+| [search.py](../src/substation/ui/browser/search.py) | What to ask the search for: `SORTS`, the group numbers (`AUDIO`, `BUILTIN`, `PLUGINS`, `PRESETS`), `scope_query()`, `place_prefix()`, `plugin_tag()`. The sort orders are documented here. |
 
 ## Key types and concepts
 
 ### Items and keys
 
-A `BrowserItem` (frozen dataclass) has a `name`, a `path`, a `kind` (`"audio"`, `"plugin"` or `"device"`; for a built-in
-device `path` is the device kind), a `detail` (the parent folder, the plug-in's vendor, or the device's category), an
-optional `PluginRef` and a tooltip. Its `key` says who it is, for what the browser remembers about it:
+A `BrowserItem` (frozen dataclass) has a `name`, a `path`, a `kind` (`"audio"`, `"plugin"`, `"device"` or `"preset"`;
+for a built-in device `path` is the device kind, for a preset its file), a `detail` (the parent folder, the plug-in's
+vendor, the device's category, or the device a preset is for), an optional `PluginRef` and a tooltip. Its `key` says who it is, for what the browser remembers about it:
 
 | Kind | Key |
 |---|---|
 | audio | `audio:` + `os.path.normcase(os.path.normpath(path))` (`audio_key()`) |
 | plugin | `plugin:<format>:<uid>` |
 | device | `device:<kind>` |
+| preset | `preset:<path>` |
 
 The native side makes the same keys for indexed files without Python: a folder's key is the place's
 `normcase(normpath(root))` joined with `ntLower()` of each folder name, and `ntLower` uses `LCMapStringEx` with the
@@ -92,18 +94,19 @@ invariant locale, Windows' own lower case, as `os.path.normcase` does.
 
 Every list is a search over one or more **groups**, in order. Group 0 (`_browser.AUDIO`, `kAudioGroup`) is the index's
 audio files; other numbers are external groups the UI hands over with `set_external`: `BUILTIN = 1` (built-in
-devices) and `PLUGINS = 2` (plug-ins). `scope_query()` turns a sidebar entry into (groups, tag, place prefix):
+devices), `PLUGINS = 2` (plug-ins) and `PRESETS = 3` (presets; their native kind is `Kind::Preset`). `scope_query()` turns a sidebar entry into (groups, tag, place prefix):
 
 | Sidebar entry (scope) | Groups | Tag | Place prefix |
 |---|---|---|---|
-| All `("all",)` | BUILTIN, PLUGINS, AUDIO | | |
+| All `("all",)` | BUILTIN, PLUGINS, PRESETS, AUDIO | | |
 | Samples `("samples",)` | AUDIO | | |
 | Built-in, or a category `("builtin", name)` | BUILTIN | the category | |
 | Plug-ins, or *Instruments* / *Audio Effects* | PLUGINS | the category (`plugin_tag()`) | |
+| Presets, or a device's `("presets", name)` | PRESETS | the device's name | |
 | A place `("place", path)` | AUDIO | | `place_prefix(path)` |
 
 An external item's tag is what `tag` filters on: a built-in device's category, a plug-in's *Instruments* or
-*Audio Effects*. The place prefix is the place's lower-case path with one trailing `\`.
+*Audio Effects*, the device a preset is for. The place prefix is the place's lower-case path with one trailing `\`.
 
 ### Snapshots
 
@@ -314,6 +317,14 @@ often it was used.
 Plug-ins*; a scan asked for while one runs is run after it. Its items go to the backend as group `PLUGINS`; see
 [python/plugin-scanner.md](python/plugin-scanner.md).
 
+**Presets.** `PresetIndex` lists the library (`model/presets.py`) on the UI thread (it is small): at start, when
+the device view saves a preset (`DevicePanel.preset_saved` → `presets_changed()`), after a rename or delete from the
+list's menu, and when the library's folders change (a `QFileSystemWatcher` on the library and its folders, merged
+by a 200 ms timer). Its items go to the backend as group `PRESETS`, tagged with their group; when the groups change
+the sidebar is made again (*Presets* has an entry per group). A preset double-clicked is `preset_activated(path)`
+(`MainWindow.add_preset_to_selected_track`); dragged, its path goes under `PRESET_MIME`. *Delete* moves the file to
+the recycle bin (`QFile.moveToTrash`).
+
 **Preview.** Selecting an audio file (in the list or the tree) previews it through the bridge
 (`EngineBridge.preview_file`) while the headphones button is on; a click anywhere outside the browser stops it (an
 application-wide event filter). See [python/engine-bridge.md](python/engine-bridge.md).
@@ -363,7 +374,7 @@ Making rows into Python objects holds it, which is why results are read a page a
 
 - **A new sort order**: add it to `Sort` in `Model.h`, implement it in `Search::run()`, parse its name in
   `bindings.cpp` (`search`), and add it to `SORTS` in `search.py`.
-- **A new kind of item to list** (say, presets): give it a group number in `search.py`, hand its items over with
+- **A new kind of item to list** (as presets are): give it a group number in `search.py`, hand its items over with
   `FileIndex.set_items(group, [(item, tag), ...])`, and add a scope to `scope_query()` and the sidebar. A new kind
   name goes into `KINDS` and `Kind` together.
 - **New filters** (items hidden from search) and orders (similar sounds) belong in `search.py`'s `scope_query` and the
@@ -405,6 +416,8 @@ Making rows into Python objects holds it, which is why results are read a page a
   results dropped after the tree was shown, Enter selecting then adding, drops from the browser, built-in devices in
   the browser, used items ranking first.
 - [tests/test_ui_plugins.py](../tests/test_ui_plugins.py): plug-ins in the browser.
+- [tests/test_ui_presets.py](../tests/test_ui_presets.py): presets in the browser: listed by device, searched in
+  *All*, dragged, double-clicked, renamed and deleted.
 
 The benchmarks ([benchmarks/README.md](../benchmarks/README.md)) compare the backend with the reference and the panel
 before and after; see [testing.md](testing.md#benchmarks).

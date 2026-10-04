@@ -13,6 +13,12 @@ Plug-ins are listed as the background scan finds them (Plug-ins › Instruments 
 Audio Effects); the footer shows the scan's progress, and hovering over
 "Plug-ins" lists the files that could not be read.
 
+Presets (saved with a device's save button) are listed by the device they are
+for (Presets › the device's name); see preset_index.py. Dropped or
+double-clicked, a preset adds a new device; dropped onto a device of its kind in
+the device view, it loads into it. Right-click one to rename it, delete it (to
+the recycle bin) or show it in its folder.
+
 Every list is a search, run by the native backend on its own thread (see
 file_index.py): the panel asks, and shows the results when they come, a page at
 a time. A search asked for replaces the one running. When the index changes
@@ -21,20 +27,25 @@ and keeps its current item where it can."""
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import (
     QDir,
     QEvent,
+    QFile,
     QModelIndex,
     QObject,
     QPoint,
     QSettings,
     Qt,
     QTimer,
+    QUrl,
     Signal,
 )
-from PySide6.QtGui import QColor, QDrag, QIcon
+from PySide6.QtGui import QColor, QDesktopServices, QDrag, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -42,10 +53,12 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFileSystemModel,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListView,
     QMenu,
+    QMessageBox,
     QSplitter,
     QStackedWidget,
     QTreeView,
@@ -58,12 +71,14 @@ from PySide6.QtWidgets import (
 from ... import theme
 from ...audio.engine_bridge import AUDIO_EXTENSIONS, EngineBridge, is_audio_file
 from ...model.editor import BUILTIN_CATEGORIES, BUILTIN_DEVICES
+from ...model.presets import rename_preset
 from .. import icons
 from ..widgets import ToggleButton
 from .browser_models import BrowserItem, ItemListModel, audio_key
 from .file_index import FileIndex, PluginIndex, SearchResult
 from .library import Library
-from .search import BUILTIN, PLUGINS, SORTS, plugin_tag, scope_query
+from .preset_index import PresetIndex
+from .search import BUILTIN, PLUGINS, PRESETS, SORTS, plugin_tag, scope_query
 
 ROLE_SCOPE = Qt.ItemDataRole.UserRole + 1
 PLUGIN_CATEGORIES = ("Instruments", "Audio Effects")
@@ -115,6 +130,7 @@ class BrowserPanel(QWidget):
     file_activated = Signal(str)  # double-click: add the file to the arrangement
     device_activated = Signal(str)  # double-click a built-in device: add it to the selected track
     plugin_activated = Signal(object)  # double-click a plug-in (a PluginRef): add it to the selected track
+    preset_activated = Signal(str)  # double-click a preset (its file): add its device to the selected track
     status_message = Signal(str)
 
     def __init__(self, bridge: EngineBridge, parent: QWidget | None = None):
@@ -133,6 +149,9 @@ class BrowserPanel(QWidget):
         self.plugin_index.updated.connect(self._plugins_updated)
         self.plugin_index.progress.connect(self._scan_progress)
         self.plugin_index.status_message.connect(self.status_message)
+        self.preset_index = PresetIndex(self)
+        self.preset_index.updated.connect(self._presets_updated)
+        self.index.set_items(PRESETS, [(item, item.detail) for item in self.preset_index.items])
         self._scan_text = ""
         self._searching = False  # results asked for and not shown yet
         self._select_first = False  # when they come (Enter was pressed before)
@@ -174,6 +193,8 @@ class BrowserPanel(QWidget):
         self.list_view.doubleClicked.connect(self._activate_list)
         self.list_view.dropped.connect(self._used_list)
         self.list_view.selectionModel().currentChanged.connect(self._list_current_changed)
+        self.list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_view.customContextMenuRequested.connect(self._list_menu)
 
         self.fs_model = QFileSystemModel(self)
         self.fs_model.setFilter(QDir.Filter.AllDirs | QDir.Filter.Files | QDir.Filter.NoDotAndDotDot)
@@ -279,6 +300,14 @@ class BrowserPanel(QWidget):
         plugins.setExpanded(True)
         self._plugins_entry = plugins
         self._update_plugins_tooltip()
+        presets = entry("Presets", ("presets",), icons.preset(),
+                        f"Saved with a device's save button\n{self.preset_index.root}")
+        for name in self.preset_index.groups:
+            child = QTreeWidgetItem([name])
+            child.setData(0, ROLE_SCOPE, ("presets", name))
+            child.setIcon(0, icons.preset())
+            presets.addChild(child)
+        presets.setExpanded(True)
         section("PLACES")
         for place in self.places:
             entry(Path(place).name or place, ("place", place), icons.folder(), place)
@@ -314,6 +343,9 @@ class BrowserPanel(QWidget):
             menu.addAction("Remove from Places", lambda: self.remove_place(scope[1]))
         if scope and scope[0] == "plugins":
             menu.addAction("Rescan Plug-ins", self.rescan_plugins)
+            menu.addSeparator()
+        if scope and scope[0] == "presets":
+            menu.addAction("Show in Folder", lambda: self.show_in_folder(self._preset_folder(scope)))
             menu.addSeparator()
         menu.addAction("Add Folder…", self.add_place)
         menu.addAction("Rescan", lambda: self.index.rebuild(self.places))
@@ -371,6 +403,86 @@ class BrowserPanel(QWidget):
             if len(failures) > 30:
                 lines.append(f"...and {len(failures) - 30} more")
         self._plugins_entry.setToolTip(0, "\n".join(lines))
+
+    # --- Presets -------------------------------------------------------------------
+
+    def presets_changed(self) -> None:
+        """The library's presets changed (one was saved): list them again."""
+        self.preset_index.rescan()
+
+    def _presets_updated(self) -> None:
+        self.index.set_items(PRESETS, [(item, item.detail) for item in self.preset_index.items])
+        presets = self._sidebar_entry(("presets",))
+        shown = [presets.child(i).text(0) for i in range(presets.childCount())] if presets is not None else []
+        if shown != self.preset_index.groups:  # the sidebar lists the groups: made again
+            scope = self._scope()
+            if scope[0] == "presets" and len(scope) > 1 and scope[1] not in self.preset_index.groups:
+                scope = ("presets",)  # (its group went)
+            self._build_sidebar(select=scope)  # (it searches again)
+        else:
+            self._refresh(keep=True)
+
+    def _sidebar_entry(self, scope: tuple) -> QTreeWidgetItem | None:
+        items = [self.sidebar.topLevelItem(i) for i in range(self.sidebar.topLevelItemCount())]
+        items += [item.child(j) for item in list(items) for j in range(item.childCount())]
+        return next((item for item in items if tuple(item.data(0, ROLE_SCOPE) or ()) == tuple(scope)), None)
+
+    def _preset_folder(self, scope: tuple) -> str:
+        """The library folder a Presets entry lists (the library itself for the section)."""
+        if len(scope) > 1:
+            item = next((i for i in self.preset_index.items if i.detail == scope[1]), None)
+            if item is not None:
+                return str(Path(item.path).parent)
+        return str(self.preset_index.root)
+
+    def _list_menu(self, pos) -> None:
+        item = self.list_model.item(self.list_view.indexAt(pos))
+        if item is None or item.kind != "preset":
+            return
+        menu = QMenu(self)
+        menu.addAction("Rename…", lambda: self.rename_preset(item.path))
+        menu.addAction("Delete", lambda: self.delete_preset(item.path))
+        menu.addSeparator()
+        menu.addAction("Show in Folder", lambda: self.show_in_folder(item.path))
+        menu.exec(self.list_view.viewport().mapToGlobal(pos))
+
+    def rename_preset(self, path: str, name: str | None = None) -> str | None:
+        """Give a preset another name (asked for, if not given); its new path (None: not renamed)."""
+        if name is None:
+            name, ok = QInputDialog.getText(self, "Rename Preset", "Name:", text=Path(path).stem)
+            if not ok:
+                return None
+        name = name.strip()
+        if not name or name == Path(path).stem:
+            return None
+        try:
+            new = rename_preset(Path(path), name)
+        except (OSError, ValueError) as exc:
+            self.status_message.emit(f"Could not rename the preset: {exc}")
+            return None
+        self.preset_index.rescan()
+        return str(new)
+
+    def delete_preset(self, path: str, confirm: bool = True) -> bool:
+        """Move a preset to the recycle bin (after asking, if `confirm`)."""
+        if confirm and QMessageBox.question(
+                self, "Delete Preset", f"Move the preset \u201c{Path(path).stem}\u201d to the Recycle Bin?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return False
+        if not QFile.moveToTrash(path):
+            self.status_message.emit(f"Could not delete the preset {Path(path).stem}.")
+            return False
+        self.preset_index.rescan()
+        return True
+
+    @staticmethod
+    def show_in_folder(path: str) -> None:
+        """Explorer at a file (selected) or a folder."""
+        if sys.platform == "win32" and os.path.isfile(path):
+            subprocess.Popen(["explorer", f"/select,{os.path.normpath(path)}"])
+        else:
+            folder = path if os.path.isdir(path) else os.path.dirname(path)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     # --- Content -------------------------------------------------------------------
 
@@ -454,7 +566,11 @@ class BrowserPanel(QWidget):
         scope = self._scope()
         count = self.list_model.total
         items = f"{count} item{'s' if count != 1 else ''}"
-        if scope[0] == "plugins":
+        if scope[0] == "presets" and not self.preset_index.items:
+            self.status.setText("No presets yet: save one with a device's save button")
+        elif scope[0] == "presets":
+            self.status.setText(f"{count} preset{'s' if count != 1 else ''}")
+        elif scope[0] == "plugins":
             failures = len(self.plugin_index.failures)
             if self.plugin_index.scanning:
                 self.status.setText(self._scan_text or "Scanning plug-ins…")
@@ -522,6 +638,8 @@ class BrowserPanel(QWidget):
             self.device_activated.emit(item.path)
         elif item.kind == "plugin" and item.plugin is not None:
             self.plugin_activated.emit(item.plugin)
+        elif item.kind == "preset":
+            self.preset_activated.emit(item.path)
 
     def _activate_tree(self, index: QModelIndex) -> None:
         if not self.fs_model.isDir(index):

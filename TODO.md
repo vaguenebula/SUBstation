@@ -458,7 +458,7 @@ Model / UI
 - [x] Macros (Python first): rack parameters mapped to (device, param, range) targets.
 - [x] Rack presets: the save button saves a rack (chains, nested devices,
       plug-in state, macros) as a `.gilpreset`; right-click beside the devices to load one.
-  - [ ] The browser's Presets section (see "Device presets" below) lists them too.
+  - [x] The browser's Presets section (see "Device presets" below) lists them too.
   - [ ] Maybe: macros' ranges edited in the UI (the menu maps the full range).
 
 Tests
@@ -477,23 +477,40 @@ Plug-in presets don't depend on racks and can be built any time; rack presets
 plug into the same flow once Phase 9 lands.
 
 Model / UI
-- [ ] Small save button in every device's title bar (plug-ins, built-ins,
-      racks). Asks for a name and writes a preset file to the user library.
-- [ ] Preset file = the `Device` subtree via the project serializer: device
+- [x] Small save button in every device's title bar (plug-ins, built-ins,
+      racks). Asks for a name and writes a preset file to the user library
+      (`Documents\SUBstation\Presets\<device name>\<name>.gilpreset`;
+      `model/presets.py`), asking before replacing one.
+- [x] Preset file = the `Device` subtree via the project serializer: device
       kind/plug-in id, parameter values and the plug-in's state chunk.
-- [ ] Browser "Presets" section, grouped by device (plug-in name / built-in /
+- [x] Browser "Presets" section, grouped by device (plug-in name / built-in /
       racks). Drag onto a track's chain or double-click to insert a new device;
-      drop onto an existing device of the same kind to load the state into it.
-- [ ] Loading is one undo command; inserted devices get fresh ids.
-- [ ] Missing plug-in on load: keep the device, mark it missing (as project
-      loading does); inside a rack, don't fail the whole rack.
-- [ ] Rename / delete / show-in-folder from the browser's context menu.
+      drop onto an existing device of the same kind to load the state into it
+      (`ProjectEditor.load_preset_into`; the device is outlined while the drag
+      is over it). Presets are searched in "All" too; dropped on a track in the
+      arrangement they go on it, and an instrument preset makes a MIDI track.
+- [x] Loading is one undo command; inserted devices get fresh ids.
+- [x] Missing plug-in on load: keep the device, mark it missing (as project
+      loading does); inside a rack, don't fail the whole rack. (A built-in
+      device this version doesn't have is missing the same way.)
+- [x] Rename / delete / show-in-folder from the browser's context menu
+      (delete: to the recycle bin). The library is watched, so changes made in
+      Explorer show up.
+- [x] Racks are titled with the name of the preset they were saved as or loaded
+      from (`Device.name`, project version 13).
+  - [ ] Maybe: rename a rack by hand (double-click its title), and plug-ins and
+        built-in devices titled with their presets' names too.
+- [x] Default presets: right-click a device › Save as Default Preset; new devices
+      of that kind (that plug-in) start as it (`Defaults` folder of the library;
+      Clear Default Preset).
+  - [ ] Maybe: a preset of the device under the mouse while browsing (hot-swap,
+        as in Ableton).
 
 Tests
-- [ ] Plug-in preset round-trips: save → load restores parameters and state
+- [x] Plug-in preset round-trips: save → load restores parameters and state
       (renders the same).
-- [ ] Loading a preset onto an existing device is undoable.
-- [ ] Preset for a missing plug-in loads as a missing device.
+- [x] Loading a preset onto an existing device is undoable.
+- [x] Preset for a missing plug-in loads as a missing device.
 
 ---
 

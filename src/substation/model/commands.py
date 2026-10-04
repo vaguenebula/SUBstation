@@ -255,6 +255,24 @@ class UpdateChainCommand(_MergeableCommand):
         self.project.update_chain(self.key[0], self.key[1], **{self.key[2]: self.old})
 
 
+class SetDeviceNameCommand(QUndoCommand):
+    """A rack's name (None: named by its kind)."""
+
+    def __init__(self, project: Project, track_id: str, device_id: str, old: str | None, new: str | None, text: str):
+        super().__init__(text)
+        self.project = project
+        self.track_id = track_id
+        self.device_id = device_id
+        self.old = old
+        self.new = new
+
+    def redo(self) -> None:
+        self.project.update_device(self.track_id, self.device_id, name=self.new)
+
+    def undo(self) -> None:
+        self.project.update_device(self.track_id, self.device_id, name=self.old)
+
+
 class SetMacrosCommand(QUndoCommand):
     """A rack's macro mappings."""
 

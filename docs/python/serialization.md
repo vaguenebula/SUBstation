@@ -50,7 +50,7 @@ seconds; volumes are dB; pan is -1..1; automation values are normalized 0..1.
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | `"gilstudio-project"` | must match, or the file is refused ("Not a SUBstation project") |
-| `version` | int | `VERSION`, now 12; a larger one is refused ("saved by a newer version") |
+| `version` | int | `VERSION`, now 13; a larger one is refused ("saved by a newer version") |
 | `tempo` | float | BPM (default 120) |
 | `key` | string or null | the project key as `Key.name` (`"Am"`, `"F#"`, `"Bb"`); null: *No Key* |
 | `time_signature` | `[numerator, denominator]` | default `[4, 4]` |
@@ -186,6 +186,7 @@ current version.
 | 10 | inputs from tracks (`input_track`, resampling) | none |
 | 11 | sidechains | none |
 | 12 | racks (chains, macros) | none |
+| 13 | rack names (`"name"` on a rack) | none: racks named by their kind |
 
 `folded_devices` has no version of its own: files without it load with no device folded.
 The project key, `automation_locked` and the clip fields default the same way.
@@ -236,8 +237,9 @@ Not saved:
 
 ## Presets (.gilpreset)
 
-A rack's save button saves it, with everything in it, as a preset; right-clicking beside the
-devices loads one (see [guide/devices.md](../guide/devices.md)).
+A device's save button saves it (a rack with everything in it) as a preset in the user's
+library ([presets.py](../../src/substation/model/presets.py), below); the browser lists them,
+and right-clicking beside the devices loads a file (see [guide/devices.md](../guide/devices.md#presets)).
 
 ```json
 {"format": "gilstudio-preset", "version": 1, "device": { ...a device, as in a project... }}
@@ -253,8 +255,45 @@ devices loads one (see [guide/devices.md](../guide/devices.md)).
   clears sidechains and gives the device and everything in it **fresh ids**
   (`refresh_ids`, which also renames macro mappings). So a preset loaded twice is two racks.
 - `save_preset` / `load_preset` write and read the file (temporary file and `os.replace`).
+- A preset of a plug-in that isn't installed (or of a built-in device this version doesn't
+  have) loads as is: the bridge gives it no processor and reports it in `plugin_errors`, as
+  for a project, and the rest of a rack around it works.
 
-Plug-ins' own `.vstpreset` files (*Load Preset…* / *Save Preset…* on a plug-in) are a
+### The library (presets.py)
+
+- `library_dir()`: `Documents\SUBstation\Presets`, or `SUBSTATION_PRESETS` (the tests set it).
+- A folder per kind of device, named by `group_of(device)`: `device_name` as a file name
+  (a plug-in's name, *Utility*, *Audio Effect Rack*, *Instrument Rack*).
+- `file_name(name)`: characters Windows refuses become `_`; trailing dots and spaces go;
+  an empty or reserved name (`CON`, `NUL`...) raises `ValueError`.
+- `preset_path(device, name)`, `save_to_library(device, name)` (makes the folder, replaces
+  a preset of that name), `list_presets()` (`PresetFile(path, name, group)`, by group then
+  name; files straight in the library have group `""`), `rename_preset(path, name)`
+  (`FileExistsError` on a clash; a change of case is none).
+- Loading into an existing device: `editor.loads_into(preset, device)` (same kind; the
+  same plug-in uid; a rack into a rack, instrument racks only into instrument racks) and
+  `ProjectEditor.load_preset_into(track, device, preset, text)`: one undo step. A plug-in
+  takes the preset's state (`SetDeviceStateCommand`; the state before is the model's, so
+  the UI stores it first), a built-in device its parameters (`SetDeviceParamsCommand`) and
+  state, a rack its chains, macros and macro values (`_set_devices`, which drops the
+  automation of the devices that leave). The device keeps its id, place, switch and
+  sidechain.
+- Rack names: `Device.name` (racks only; `editor.device_name` shows it, `kind_name` is the
+  kind's name, which groups presets). `load_preset(path)` names a rack after the file;
+  saving a rack from the device view names it after the preset (`rename_rack`, an undo
+  step); `load_preset_into` gives the rack the preset's name. Saved in projects and
+  presets as `"name"` (version 13; absent before).
+- Default presets: `default_path(kind, plugin)` (`Defaults/<kind name>.gilpreset`, or
+  `Defaults/<plug-in name> (<uid>).gilpreset`; None for racks), `save_default`,
+  `has_default`, `clear_default`, and `default_device(kind, plugin)`: a new device as the
+  default has it (fresh ids; a plug-in keeps the `PluginRef` asked for; a built-in device's
+  missing parameters at their defaults), None if there is none, or it can't be read, or it
+  is for another device. `list_presets` skips the `Defaults` folder (a device whose name is
+  "Defaults" groups under "Defaults (Device)"). `ProjectEditor.set_device_defaults` takes
+  it (`MainWindow` sets `default_device`); `add_device` and `add_midi_track` make new
+  devices through it (`_new_device`). Pasted, duplicated and loaded devices don't use it.
+
+Plug-ins' own `.vstpreset` files (*Load VST3 Preset…* / *Save VST3 Preset…* on a plug-in) are a
 different thing: the engine reads and writes them, and loading one is an undoable
 `SetDeviceStateCommand`.
 

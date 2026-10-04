@@ -64,8 +64,10 @@ sit in the device view beside the built-in devices (see [devices.md](devices.md)
 
 ### Presets
 
-Right-click a plug-in: *Load Preset…* / *Save Preset…* read and write standard
-`.vstpreset` files (loading one is undoable).
+A plug-in's save button saves it as a SUBstation preset, in your preset library (see
+[devices.md](devices.md#presets)). Right-click a plug-in: *Load VST3 Preset…* / *Save
+VST3 Preset…* read and write standard `.vstpreset` files, for sharing settings with
+other hosts (loading one is undoable).
 
 ## Projects
 

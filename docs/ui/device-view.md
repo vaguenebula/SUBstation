@@ -103,7 +103,9 @@ dropped.
 | `cut_selected()` | copy, then delete | |
 | `paste(chain, index, after_selection)` | `paste_devices(track, clipboard, index, chain, folded)` | after the selected devices by default, else at the end; refused instruments and nesting limits are reported |
 | `duplicate_selected()` | copy and paste | the clipboard is left as it was |
-| `load_preset(chain, index)` | `load_preset` from [serialization](../python/serialization.md), then `insert_device` | right-click beside the devices; folders remembered in `QSettings` `presets/dir` |
+| `load_preset(chain, index)` | `insert_preset` of a file asked for | right-click beside the devices; folders remembered in `QSettings` `presets/dir` (else the preset library) |
+| `insert_preset(path, chain, index)` | `load_preset` from [serialization](../python/serialization.md), then `insert_device` | a new device; a plug-in's editor opens, a rack's plug-ins' don't |
+| `load_preset_into(device_id, path)` | `bridge.store_plugin_states({device})`, then `editor.load_preset_into` | only into a device of the preset's kind (`loads_into`) |
 | `toggle_fold(device_id)` | `set_devices_folded` | all the selected if it is one of them; view state, not undone |
 
 ### Dragging and dropping
@@ -125,7 +127,14 @@ dropped.
   chain)`; built-in kinds and plug-in refs from the browser (`device_kinds`,
   `plugin_refs`) → `editor.add_device(..., index, plugin, chain)` one after the other,
   each after the last (an instrument goes first whatever the index, so the index is
-  adjusted by how many devices went in before it).
+  adjusted by how many devices went in before it). Presets (`preset_paths`) go in the
+  same way (`insert_preset`), unless one preset is dropped onto a device of its kind:
+  then it loads into that device (`load_preset_into`).
+- **Onto a device**: `preset_target(pos, paths)` is the device under the mouse if a
+  single preset is dragged and `loads_into` it (not on a rack's chain list row, which
+  takes it as a new device in that chain). The presets are read once per drag
+  (`_drag_presets`, cleared when it ends). While there is one, `load_marker` (a frame
+  over the chain, transparent for the mouse) outlines it instead of the drop line.
 - **Ctrl+Alt-drag** scrolls the chain by hand, as in the arrangement. The press usually
   lands on a knob or a device, so the panel installs itself as an application event
   filter and takes such presses on any widget inside its scroll area before they do.
@@ -141,6 +150,15 @@ The base of every device widget. Subclasses say how many parameters there are
   (`_TitleLabel`, elided), the sidechain button (if any), the page arrows and page
   label (only with more than one page), the save button. Clicks on its background and
   name reach the frame (select, drag).
+- **Save button** (and *Save Preset…* in the menu): `save_to_library(name=None)` stores
+  the plug-in states in it, asks for a name (`QInputDialog`, the device's name to start
+  with), asks before replacing a preset of that name (`QMessageBox`; not when `name` is
+  passed), saves with `presets.save_to_library` and emits `preset_saved(path)`, which the
+  panel passes on (`DevicePanel.preset_saved`) for the browser to list it. A rack is
+  renamed after the preset (`editor.rename_rack`), so its title is the preset's name.
+- **Default presets**: the menu's *Save as Default Preset* (`save_as_default`:
+  `presets.save_default` after storing the plug-in's state) and *Clear Default Preset*
+  (`clear_default`, enabled when there is one); not on racks.
 - **Pages**: `params_per_page` (4) in a grid of `param_columns` (2), each cell
   `PARAM_WIDTH` (84 px). `set_page` rebuilds the page's widgets and emits
   `page_changed`. Device editors set other numbers.
@@ -158,7 +176,8 @@ The base of every device widget. Subclasses say how many parameters there are
   editor).
 - **Context menu**: device entries (`add_menu_actions`), Fold/Unfold, the clipboard
   entries from the panel, Move Left/Right (an instrument doesn't move, and nothing goes
-  before it), Group (Ctrl+G), Ungroup (racks), Delete.
+  before it), Save Preset…, Save as Default Preset / Clear Default Preset (not racks),
+  Group (Ctrl+G), Ungroup (racks), Delete.
 - **Sidechain**: the button exists when `bridge.has_sidechain_input(track, device)`.
   `update_sidechain()` lights it and names the source and tap in its tooltip.
   `sidechain_menu()` lists *No Sidechain* and `project.sidechain_sources(track)`, those
@@ -203,11 +222,13 @@ old=...)` with the value before, so undo can restore it.
 - The **Edit** button (`plugin_window` icon) toggles `bridge.open_plugin_editor` /
   `close_plugin_editor`; its state follows `bridge.is_plugin_editor_open` on
   `plugin_editor_changed`.
-- **Presets**: *Load Preset…* reads a `.vstpreset`, applies it with
-  `engine.set_processor_state` (which fails for another plug-in's), then records
-  `editor.set_device_state(track, device, old, new, text)` with both states in base64,
-  so it can be undone. *Save Preset…* writes `bridge.plugin_state`. The folder is
-  remembered (`plugins/preset_dir`), else `Documents\VST3 Presets\<vendor>\<name>`.
+- **VST3 presets**: *Load VST3 Preset…* (`load_vst3_preset`) reads a `.vstpreset`,
+  applies it with `engine.set_processor_state` (which fails for another plug-in's),
+  then records `editor.set_device_state(track, device, old, new, text)` with both states
+  in base64, so it can be undone. *Save VST3 Preset…* (`save_vst3_preset`) writes
+  `bridge.plugin_state`. The folder is remembered (`plugins/preset_dir`), else
+  `Documents\VST3 Presets\<vendor>\<name>`. (The save button saves a SUBstation preset,
+  as every device's does.)
 - A plug-in that isn't loaded (missing, failed) shows `bridge.plugin_errors[device]` in
   its body and keeps its place.
 - The title's tooltip has the name, vendor, path and the latency it reports.
@@ -220,9 +241,8 @@ How plug-ins are hosted: [engine/plugins.md](../engine/plugins.md).
 
 `RackWidget` (`RACK_WIDTH` 420) has no parameter pages; its content is a `MacroPanel`
 and a `ChainList` from [rack_view.py](../../src/substation/ui/rack_view.py). Its save
-button saves the rack as a preset (`save_preset` from serialization, after storing the
-plug-ins' states). `chain_clicked` → `DevicePanel._show_chain` rebuilds with that chain
-shown.
+button saves the rack, with everything in it, as every device's does. `chain_clicked` →
+`DevicePanel._show_chain` rebuilds with that chain shown.
 
 - `MacroPanel`: eight knobs (`MACRO_COUNT`), four to a row, 0..1, reading
   `rack.params[macro_param(i)]`; turning one calls `editor.set_macro(track, rack, i,
@@ -361,8 +381,9 @@ Warping and its modes in the engine: [engine/warp.md](../engine/warp.md).
   catches the engine's `ValueError`, and widgets check `engine_id is not None`.
 - **A chain row's menu rebuilds the panel**: anything after `menu.exec` must not use
   the row if its chain was deleted.
-- **The save button** on built-in devices and plug-ins isn't wired up yet; only a
-  rack's saves (a preset).
+- **Saving stores plug-in states first.** `save_to_library` calls
+  `bridge.store_plugin_states` for the device and everything in it, since a preset is
+  the model's device: without it a plug-in would be saved as it was last stored.
 
 ## Tests
 
@@ -372,5 +393,6 @@ Warping and its modes in the engine: [engine/warp.md](../engine/warp.md).
 | [test_ui_device_editors.py](../../tests/test_ui_device_editors.py) | the registry; the Compressor's graph; the Sampler's loading, undo, playhead, markers, drop and saving |
 | [test_ui_racks.py](../../tests/test_ui_racks.py) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain clicked shown beside the rack and dropped into, chain mixers, mapping to a macro, the view's height staying put |
 | [test_ui_plugins.py](../../tests/test_ui_plugins.py) | knobs editing plug-ins undoably, parameter pages, automating plug-in parameters, devices fitting the device view, double-click and Ctrl+W, presets, dropping plug-ins, dragging a device to another track, selecting, deleting and reordering, auto-scroll and Ctrl+Alt-drag, scrolling to a new plug-in, the master's effects |
+| [test_ui_presets.py](../../tests/test_ui_presets.py) | the save button on every kind of device (asking before replacing), presets listed in the browser, dropped between devices and onto a device of their kind (outlined; one undo step) or of another, double-clicked (an instrument making a MIDI track), dropped on a track, renamed and deleted |
 | [test_ui_sidechain.py](../../tests/test_ui_sidechain.py) | the sidechain button and its menu: sources, cycles greyed out, taps |
 | [test_ui_smoke.py](../../tests/test_ui_smoke.py) | devices and mixer reaching the engine, switching a device keeping the chain, the clip view editing several clips in unison, warping reaching the audio, double-click opening it |

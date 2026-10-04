@@ -300,6 +300,7 @@ class Device:
     sidechain: Sidechain | None = None
     chains: list[Chain] = field(default_factory=list)  # a rack's
     macros: tuple[MacroMapping, ...] = ()  # a rack's
+    name: str | None = None  # a rack's own name (the preset it was saved as or loaded from); None: by its kind
 
     @property
     def is_plugin(self) -> bool:
@@ -916,10 +917,10 @@ class Project(QObject):
         self.chain_changed.emit(track_id, chain_id)
 
     def update_device(self, track_id: str, device_id: str, **attrs) -> None:
-        """A rack's macro mappings."""
+        """A rack's macro mappings or name."""
         device = self.device(track_id, device_id)
         for name, value in attrs.items():
-            if name != "macros":
+            if name not in ("macros", "name"):
                 raise AttributeError(name)
             setattr(device, name, value)
         self.devices_changed.emit(track_id)

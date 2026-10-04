@@ -28,7 +28,6 @@ What SUBstation doesn't do yet, by area.
 - Multi-output instruments: plug-ins get their main buses and a sidechain only.
 - MIDI effect plug-ins.
 - The Sampler plays one sample (no zones or multisamples).
-- The save button on devices other than racks isn't wired up yet.
 
 ## Audio clips
 

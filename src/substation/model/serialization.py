@@ -21,12 +21,15 @@ track and where it is tapped; version 11); one from a track that isn't there,
 or that would close a cycle, is dropped. Racks store their chains (each with
 its devices and mixer) and macro mappings (version 12; a mapping to a device
 not in its rack is dropped). The devices shown folded are stored by id
-("folded_devices"; files without it load with none folded).
+("folded_devices"; files without it load with none folded). Racks store their
+own name, if they have one (the preset's they were saved as or loaded from;
+version 13; older files have none: racks are named by their kind).
 
 Presets: a device (a rack with everything in it too) on its own, in a file of
 its own (device_to_preset, preset_device): what the project file stores of it.
 A preset loads as new devices (new ids), without sidechains (they name tracks
-of the project it came from)."""
+of the project it came from). A rack loaded from a preset file is named as the
+file is."""
 
 from __future__ import annotations
 
@@ -76,9 +79,9 @@ from .project import (
 from .timebase import TimeSignature
 
 FORMAT = "gilstudio-project"
-VERSION = 12  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
+VERSION = 13  # 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices, 6: inputs,
 # 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10: inputs from tracks (resampling), 11: sidechains,
-# 12: racks
+# 12: racks, 13: rack names
 PRESET_FORMAT = "gilstudio-preset"
 PRESET_VERSION = 1
 PRESET_EXTENSION = ".gilpreset"
@@ -143,6 +146,8 @@ def _device_to_dict(device: Device) -> dict:
                            "solo": c.solo, "devices": [_device_to_dict(d) for d in c.devices]} for c in device.chains]
         data["macros"] = [{"macro": m.macro, "device": m.device_id, "param": m.param_id, "low": m.low,
                            "high": m.high} for m in device.macros]
+        if device.name:
+            data["name"] = device.name
     return data
 
 
@@ -162,6 +167,8 @@ def _device(d: dict) -> Device:
         inside = {x.id for x in iter_devices([device])} - {device.id}
         device.macros = tuple(_macro(m) for m in d.get("macros", [])
                               if str(m.get("device")) in inside and 0 <= int(m.get("macro", -1)) < MACRO_COUNT)
+        name = d.get("name")
+        device.name = name if isinstance(name, str) and name.strip() else None  # (none before version 13)
     return device
 
 
@@ -524,7 +531,10 @@ def load_preset(path: Path) -> Device:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ProjectFileError(f"Could not read {path.name}: {exc}") from exc
-    return preset_device(data)
+    device = preset_device(data)
+    if device.is_rack:
+        device.name = path.stem  # (the preset's name, renamed or not)
+    return device
 
 
 def save_project(project: Project, path: Path) -> None:
