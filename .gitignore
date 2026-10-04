@@ -14,4 +14,5 @@ __pycache__/
 # Logs plug-ins write into the working folder (e.g. kiloHearts.log)
 *.log
 profile.svg
-uv.lock
+uv.lock/build*/
+/.cache/

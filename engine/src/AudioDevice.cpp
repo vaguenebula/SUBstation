@@ -25,9 +25,9 @@ AudioDevice::~AudioDevice() { close(); }
 
 std::vector<std::string> AudioDevice::driverTypes() {
 #if SUBSTATION_HAS_ASIO
-    return {"WASAPI", "ASIO"};
+    return {WasapiBackend::kName, "ASIO"};
 #else
-    return {"WASAPI"};
+    return {WasapiBackend::kName};
 #endif
 }
 

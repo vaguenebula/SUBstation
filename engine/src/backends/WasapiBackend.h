@@ -1,7 +1,9 @@
 #pragma once
 // WASAPI output through miniaudio, shared or exclusive. Output only for now:
 // a capture device (for recording) would open as miniaudio's duplex mode and
-// fill AudioIO::inputs.
+// fill AudioIO::inputs. On platforms other than Windows the same backend opens
+// miniaudio's default backend instead (ALSA, PulseAudio, Core Audio...), as the
+// "System" driver.
 
 #include <array>
 #include <atomic>
@@ -21,7 +23,8 @@ public:
     WasapiBackend();
     ~WasapiBackend() override;
 
-    std::string name() const override { return "WASAPI"; }
+    static constexpr const char* kName = kDefaultDriver;
+    std::string name() const override { return kName; }
     std::vector<AudioDeviceInfo> devices() override;
     void open(const DeviceConfig& config, AudioCallback* callback) override;
     void start() override;

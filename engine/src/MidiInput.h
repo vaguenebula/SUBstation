@@ -93,7 +93,8 @@ private:
 // callbacks with (std::chrono::steady_clock, i.e. QueryPerformanceCounter).
 int64_t hostTimeNs() noexcept;
 
-// The system's MIDI input devices (WinMM). Main thread, except the handler,
+// The system's MIDI input devices (WinMM on Windows: backends/MidiWinMM.cpp;
+// none elsewhere: backends/MidiNone.cpp). Main thread, except the handler,
 // which the driver calls on its own thread for every short message (channel
 // and system messages; System Exclusive is ignored).
 class MidiInputDevices {
