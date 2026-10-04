@@ -1,0 +1,247 @@
+#include "model/Edits.h"
+
+#include "model/Ids.h"
+#include "model/Notes.h"
+
+#include <QDir>
+#include <QFileInfo>
+
+#include <algorithm>
+#include <limits>
+
+namespace sub::app::edits {
+
+namespace {
+
+void sortByStart(std::vector<Clip>& clips) {
+    std::stable_sort(clips.begin(), clips.end(), [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
+}
+
+// The part of `clip` between two beats, its content left in place on the
+// timeline; none if that is too short to keep.
+std::optional<Clip> piece(const Clip& clip, double start, double end, double tempo, const QString& clipId) {
+    Clip part = clip;
+    part.id = clipId;
+    part.startBeat = start;
+    if (clip.isMidi()) {
+        if (end - start < kMinMidiClipBeats) return std::nullopt;
+        part.durationBeats = end - start;
+        part.offsetBeats = clip.offsetBeats + (start - clip.startBeat);
+        return part;
+    }
+    const double duration = clip.beatsToSource(end - start, tempo);
+    if (duration < kMinClipSec) return std::nullopt;
+    part.durationSec = duration;
+    part.offsetSec = clip.offsetSec + clip.beatsToSource(start - clip.startBeat, tempo);
+    return part;
+}
+
+// A path as compared with another: absolute, clean, and (on Windows) in any case.
+QString comparablePath(const QString& path) {
+    const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+#ifdef Q_OS_WIN
+    return clean.toCaseFolded();
+#else
+    return clean;
+#endif
+}
+
+}  // namespace
+
+std::vector<Interval> subtractIntervals(double start, double end, const std::vector<Interval>& cuts) {
+    std::vector<Interval> pieces{{start, end}};
+    for (const auto& [cutStart, cutEnd] : cuts) {
+        std::vector<Interval> next;
+        for (const auto& [a, b] : pieces) {
+            if (cutEnd <= a + kEps || cutStart >= b - kEps) {
+                next.emplace_back(a, b);
+                continue;
+            }
+            if (cutStart > a + kEps) next.emplace_back(a, cutStart);
+            if (cutEnd < b - kEps) next.emplace_back(cutEnd, b);
+        }
+        pieces = std::move(next);
+    }
+    return pieces;
+}
+
+std::vector<Clip> resolveOverlaps(const std::vector<Clip>& clips, const QSet<QString>& winners, double tempo) {
+    std::vector<Interval> cuts;
+    for (const Clip& c : clips) {
+        if (winners.contains(c.id)) cuts.emplace_back(c.startBeat, c.endBeat(tempo));
+    }
+    std::sort(cuts.begin(), cuts.end());
+    std::vector<Clip> result;
+    if (cuts.empty()) {
+        result = clips;
+        sortByStart(result);
+        return result;
+    }
+    for (const Clip& clip : clips) {
+        if (winners.contains(clip.id)) {
+            result.push_back(clip);
+        } else {
+            for (Clip& part : cutClip(clip, cuts, tempo)) result.push_back(std::move(part));
+        }
+    }
+    sortByStart(result);
+    return result;
+}
+
+std::vector<Clip> cutClip(const Clip& clip, const std::vector<Interval>& cuts, double tempo) {
+    const double end = clip.endBeat(tempo);
+    const std::vector<Interval> pieces = subtractIntervals(clip.startBeat, end, cuts);
+    if (pieces.size() == 1 && pieces.front() == Interval{clip.startBeat, end}) {
+        return {clip};  // untouched: avoid float drift from recomputing it
+    }
+    std::vector<Clip> result;
+    for (const auto& [a, b] : pieces) {
+        if (auto part = piece(clip, a, b, tempo, result.empty() ? clip.id : newId())) result.push_back(std::move(*part));
+    }
+    return result;
+}
+
+std::vector<Clip> removeRange(const std::vector<Clip>& clips, double start, double end, double tempo) {
+    std::vector<Clip> result;
+    for (const Clip& clip : clips) {
+        for (Clip& part : cutClip(clip, {{start, end}}, tempo)) result.push_back(std::move(part));
+    }
+    sortByStart(result);
+    return result;
+}
+
+std::vector<Clip> fitToTempo(const std::vector<Clip>& clips, double tempo, bool* changed) {
+    std::vector<Clip> ordered = clips;
+    sortByStart(ordered);
+    std::vector<Clip> result;
+    bool anyChange = false;
+    for (size_t i = 0; i < ordered.size(); ++i) {
+        const Clip& clip = ordered[i];
+        if (i + 1 < ordered.size() && clip.endBeat(tempo) > ordered[i + 1].startBeat + kEps) {
+            anyChange = true;
+            auto trimmed = piece(clip, clip.startBeat, ordered[i + 1].startBeat, tempo, clip.id);
+            if (!trimmed) continue;  // fully covered
+            result.push_back(std::move(*trimmed));
+        } else {
+            result.push_back(clip);
+        }
+    }
+    if (changed != nullptr) *changed = anyChange;
+    return anyChange ? result : clips;
+}
+
+std::vector<Clip> sliceRange(const std::vector<Clip>& clips, double start, double end, double tempo, bool keepIds) {
+    std::vector<Clip> result;
+    for (const Clip& clip : clips) {
+        const double clipEnd = clip.endBeat(tempo);
+        if (clip.startBeat >= start - kEps && clipEnd <= end + kEps) {
+            if (clip.startBeat < end && clipEnd > start) {
+                Clip whole = clip;
+                if (!keepIds) whole.id = newId();
+                result.push_back(std::move(whole));
+            }
+            continue;
+        }
+        if (auto part = piece(clip, std::max(start, clip.startBeat), std::min(end, clipEnd), tempo, newId())) {
+            result.push_back(std::move(*part));
+        }
+    }
+    return result;
+}
+
+std::optional<std::pair<Clip, Clip>> splitClip(const Clip& clip, double atBeat, double tempo) {
+    if (clip.isMidi()) {
+        auto left = piece(clip, clip.startBeat, atBeat, tempo, clip.id);
+        auto right = piece(clip, atBeat, clip.endBeat(), tempo, newId());
+        if (!left || !right) return std::nullopt;
+        return std::make_pair(std::move(*left), std::move(*right));
+    }
+    const double leftSec = clip.beatsToSource(atBeat - clip.startBeat, tempo);
+    if (leftSec < kMinClipSec || clip.durationSec - leftSec < kMinClipSec) return std::nullopt;
+    Clip left = clip;
+    left.durationSec = leftSec;
+    Clip right = clip;
+    right.id = newId();
+    right.startBeat = atBeat;
+    right.offsetSec = clip.offsetSec + leftSec;
+    right.durationSec = clip.durationSec - leftSec;
+    return std::make_pair(std::move(left), std::move(right));
+}
+
+Clip trimStart(const Clip& clip, double newStartBeat, double tempo) {
+    Clip trimmed = clip;
+    if (clip.isMidi()) {
+        const double end = clip.endBeat();
+        const double start = std::max(0.0, std::min(newStartBeat, end - kMinMidiClipBeats));
+        double offset = clip.offsetBeats + (start - clip.startBeat);
+        if (offset < 0) {
+            // Revealing time before the first content beat: the content grows at
+            // its start, so every note moves along to stay put on the timeline.
+            for (Note& n : trimmed.notes) n.start -= offset;
+            offset = 0.0;
+        }
+        trimmed.startBeat = start;
+        trimmed.durationBeats = end - start;
+        trimmed.offsetBeats = offset;
+        return trimmed;
+    }
+    double delta = clip.beatsToSource(newStartBeat - clip.startBeat, tempo);
+    delta = std::max(delta, -clip.offsetSec);  // cannot reveal audio before the file starts
+    delta = std::max(delta, -clip.beatsToSource(clip.startBeat, tempo));  // nor move before beat 0
+    delta = std::min(delta, clip.durationSec - kMinClipSec);
+    trimmed.startBeat = clip.startBeat + clip.sourceToBeats(delta, tempo);
+    trimmed.offsetSec = clip.offsetSec + delta;
+    trimmed.durationSec = clip.durationSec - delta;
+    return trimmed;
+}
+
+Clip trimEnd(const Clip& clip, double newEndBeat, double tempo) {
+    Clip trimmed = clip;
+    if (clip.isMidi()) {
+        trimmed.durationBeats = std::max(kMinMidiClipBeats, newEndBeat - clip.startBeat);
+        return trimmed;
+    }
+    const double duration = clip.beatsToSource(newEndBeat - clip.startBeat, tempo);
+    const double available = clip.sourceDurationSec > 0 ? clip.sourceDurationSec - clip.offsetSec
+                                                        : std::numeric_limits<double>::infinity();
+    trimmed.durationSec = std::max(kMinClipSec, std::min(duration, available));
+    return trimmed;
+}
+
+Clip reverseClip(const Clip& clip, const QString& path, double totalSec) {
+    const double offset = std::max(0.0, totalSec - clip.offsetSec - clip.durationSec);
+    const bool back = !clip.reversedFrom.isEmpty() && comparablePath(path) == comparablePath(clip.reversedFrom);
+    Clip reversed = clip;
+    reversed.path = path;
+    reversed.offsetSec = offset;
+    reversed.sourceDurationSec = totalSec;
+    reversed.durationSec = std::min(clip.durationSec, totalSec - offset);
+    reversed.reversedFrom = back ? QString() : clip.path;
+    return reversed;
+}
+
+std::pair<double, double> selectionSpan(const std::vector<Clip>& clips, double tempo) {
+    double start = clips.front().startBeat;
+    double end = clips.front().endBeat(tempo);
+    for (const Clip& c : clips) {
+        start = std::min(start, c.startBeat);
+        end = std::max(end, c.endBeat(tempo));
+    }
+    return {start, end};
+}
+
+Clip consolidateMidi(const std::vector<Clip>& clips) {
+    std::vector<Clip> ordered = clips;
+    sortByStart(ordered);
+    const auto [start, end] = selectionSpan(ordered, 0.0);
+    std::vector<Note> played;
+    for (const Clip& c : ordered) {
+        for (const PlayedNote& p : c.playedNotes()) {
+            played.push_back(Note{p.note.pitch, p.start - start, p.end - p.start, p.note.velocity});
+        }
+    }
+    return Clip::midi(ordered.front().id, ordered.front().name, start, end - start, 0.0,
+                      notes::normalize(notes::untangle(played)));
+}
+
+}  // namespace sub::app::edits
