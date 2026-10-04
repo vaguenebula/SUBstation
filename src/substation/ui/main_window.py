@@ -11,8 +11,10 @@ from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence, QUnd
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -39,7 +41,7 @@ from ..model.serialization import (
     load_project,
     save_project,
 )
-from . import freezing, icons, plugin_keys
+from . import freezing, icons, plugin_keys, rendering
 from .arrangement.arrangement_view import ArrangementView
 from .arrangement.track_headers import duplicate_tracks
 from .arrangement.view_state import Selection
@@ -107,6 +109,8 @@ class MainWindow(QMainWindow):
         self.bridge.owner_window = lambda: int(self.winId())  # plug-in editors float above this window
         # Only the selected track's plug-in editors are shown; a new plug-in shows its editor.
         self.selection.changed.connect(lambda: self.bridge.show_plugin_editors(self.selection.track_id))
+        # A project's plug-ins load after it opens: the selected track's first.
+        self.selection.changed.connect(lambda: self.bridge.prioritize_plugins(self.selection.track_id))
         self.editor.plugin_added.connect(self._plugin_added)
         self.editor.refused.connect(self.show_message)  # (an edit a frozen track can't take)
         self.bridge.plugin_param_edited.connect(self._plugin_param_edited)
@@ -135,6 +139,14 @@ class MainWindow(QMainWindow):
         self._restore_window()
         self._update_title()
         self.statusBar().showMessage("Ready")
+        self.plugins_label = QLabel()
+        self.plugins_bar = QProgressBar()
+        self.plugins_bar.setFixedSize(120, 10)
+        self.plugins_bar.setTextVisible(False)
+        for widget in (self.plugins_label, self.plugins_bar):
+            self.statusBar().addPermanentWidget(widget)
+            widget.hide()
+        self.bridge.plugins_loading.connect(self._show_plugins_loading)
 
     # --- Menus & shortcuts ---------------------------------------------------------
 
@@ -184,6 +196,7 @@ class MainWindow(QMainWindow):
         self._action(edit, "&Rename", self.rename, "Ctrl+R")
         self._action(edit, "&Split", self.split, "Ctrl+E")
         self._action(edit, "C&onsolidate", self.arrangement.lanes.consolidate, "Ctrl+J")
+        self._action(edit, "Re&verse Clips", self.arrangement.lanes.reverse_selection, "R")
         edit.addSeparator()
         self._action(edit, "&Freeze / Unfreeze Track", self.toggle_freeze, "Ctrl+Shift+F")
         self._action(edit, "Flatten Track", self.flatten_tracks)
@@ -470,7 +483,7 @@ class MainWindow(QMainWindow):
 
     def toggle_freeze(self) -> None:
         """Ctrl+Shift+F: freeze the selected tracks (and returns), or unfreeze them if they all are."""
-        changed = freezing.toggle_freeze(self.editor, self.bridge, self.selection.track_ids)
+        changed = freezing.toggle_freeze(self.editor, self.bridge, self.selection.track_ids, self)
         if changed:
             names = ", ".join(self.project.track(t).name for t in changed)
             self.show_message(f"{'Froze' if self.project.is_frozen(changed[0]) else 'Unfroze'} {names}")
@@ -587,7 +600,13 @@ class MainWindow(QMainWindow):
             self.editor.split_clips(refs, self.selection.insert_beat)
 
     def select_all(self) -> None:
-        self.selection.select_clips(self.editor, [(t.id, c.id) for t in self.project.tracks for c in t.clips])
+        """Ctrl+A: the grid from the first clip's start to the last one's end, on every track."""
+        area = self.editor.clips_area([(t.id, c.id) for t in self.project.tracks for c in t.clips])
+        if area is None:
+            return
+        start, end, _ = area
+        tracks = [t.id for t in self.project.tracks]
+        self.selection.set_time_range(start, end, tracks, clips=self.editor.clips_in_range(start, end, tracks))
 
     def add_file_at_insert(self, path: str) -> None:
         info = self.bridge.file_info(path)
@@ -676,6 +695,16 @@ class MainWindow(QMainWindow):
         self.show_message(f"Saved {path.name}")
         return True
 
+    def _show_plugins_loading(self, loaded: int, total: int) -> None:
+        """A project's plug-ins loading after it opened: how far, at the right of
+        the status bar (gone once they all are)."""
+        for widget in (self.plugins_label, self.plugins_bar):
+            widget.setVisible(total > 0)
+        if total > 0:
+            self.plugins_label.setText(f"Loading plug-ins: {loaded} of {total}")
+            self.plugins_bar.setRange(0, total)
+            self.plugins_bar.setValue(loaded)
+
     def export_audio(self) -> None:
         project = self.project
         dialog = ExportDialog(project.loop_enabled and project.loop_end > project.loop_start, self)
@@ -695,16 +724,22 @@ class MainWindow(QMainWindow):
             return
         if self.bridge.is_playing:
             self.toggle_play()
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            self.bridge.wait_for_device_states()  # samples still loading
-            self.engine.export_wav(path, start, end, int(dialog.bit_depth.currentData()))
-        except (RuntimeError, ValueError) as exc:
-            QMessageBox.warning(self, APP_NAME, f"Export failed: {exc}")
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-        self.show_message(f"Exported {Path(path).name}")
+        # In the background (rendering.py): the progress in a dialog, with Cancel.
+        frames, error = None, None
+        with rendering.RenderProgress(self, "Export Audio") as progress:
+            if progress.wait_for_devices(self.bridge):  # plug-ins, samples still loading
+                try:
+                    job = self.engine.start_export(path, start, end, int(dialog.bit_depth.currentData()))
+                    progress.follow(job, f"Exporting {Path(path).name}…")
+                    frames = job.finish()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    error = exc
+        if error is not None:
+            QMessageBox.warning(self, APP_NAME, f"Export failed: {error}")
+        elif frames is None:
+            self.show_message("Export cancelled")
+        else:
+            self.show_message(f"Exported {Path(path).name}")
 
     @staticmethod
     def recent_projects() -> list[str]:
@@ -777,6 +812,10 @@ class MainWindow(QMainWindow):
             self.splitter.restoreState(splitter)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if (render := rendering.active()) is not None:  # (it ends first: its dialog's Cancel)
+            render.reject()
+            event.ignore()
+            return
         if not self._confirm_discard():
             event.ignore()
             return

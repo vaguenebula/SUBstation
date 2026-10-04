@@ -51,15 +51,17 @@ application starts: [app.py](../../src/substation/app.py),
 | File | What it holds |
 |---|---|
 | [audio/engine_bridge/\_\_init\_\_.py](../../src/substation/audio/engine_bridge/__init__.py) | `EngineBridge`: its signals, state and start-up (`__init__`), `shutdown`; made of one mixin per module below, and re-exports their public names |
-| [engine_bridge/tracks.py](../../src/substation/audio/engine_bridge/tracks.py) | `TrackSync`: engine tracks, mixers, outputs, sends, clips, tempo and loop; `clip_desc`, `note_descs` (model → engine descriptions) |
+| [engine_bridge/tracks.py](../../src/substation/audio/engine_bridge/tracks.py) | `TrackSync`: engine tracks, mixers, outputs, sends, clips (and a drag's preview of them), tempo and loop; `clip_desc`, `note_descs`, `clip_note_descs` (model → engine descriptions) |
 | [engine_bridge/inputs.py](../../src/substation/audio/engine_bridge/inputs.py) | `InputSync`: tracks' audio and MIDI inputs and monitoring, the MIDI inputs open; `COMPUTER_KEYBOARD` |
 | [engine_bridge/devices.py](../../src/substation/audio/engine_bridge/devices.py) | `DeviceSync`: devices' processors in every chain, racks, sidechains, parameters, states; the state task |
 | [engine_bridge/plugins.py](../../src/substation/audio/engine_bridge/plugins.py) | `PluginHost`: plug-ins' states, editors (`MAX_HIDDEN_EDITORS`) and events |
+| [engine_bridge/loading.py](../../src/substation/audio/engine_bridge/loading.py) | `PluginLoader`: a project's plug-ins loading after it opens, one at a time |
 | [engine_bridge/parameters.py](../../src/substation/audio/engine_bridge/parameters.py) | `ParameterSync`: automation pushed to the engine, overrides, `ParamSpec`s for the UI |
 | [engine_bridge/sources.py](../../src/substation/audio/engine_bridge/sources.py) | `SourceLoader`: decoding audio files in a thread pool; `is_audio_file`, `AUDIO_EXTENSIONS` |
 | [engine_bridge/transport.py](../../src/substation/audio/engine_bridge/transport.py) | `Transport`: play, stop, locate, metronome, previews; polling the playhead and meters |
 | [engine_bridge/recording.py](../../src/substation/audio/engine_bridge/recording.py) | `Recorder`: recording takes; `LiveTake` (a take while it records), `recordings_folder`, `take_path` |
-| [engine_bridge/freezing.py](../../src/substation/audio/engine_bridge/freezing.py) | `FreezeSync`: frozen tracks in the engine, `render_freeze`; `freeze_folder` |
+| [engine_bridge/freezing.py](../../src/substation/audio/engine_bridge/freezing.py) | `FreezeSync`: frozen tracks in the engine, `render_freeze`, `start_freeze`/`finish_freeze` (in the background); `FreezeRender`, `freeze_folder` |
+| [engine_bridge/reversing.py](../../src/substation/audio/engine_bridge/reversing.py) | `ReverseSync`: reversed copies of files, for reversed clips (`reversed_copy`, `start_reversed`/`finish_reversed`, `render_reversed`); `ReverseJob`, `reversed_folder`, `reversed_path`, `float_wav_header`, `write_float_wav` |
 | [engine_bridge/audio_device.py](../../src/substation/audio/engine_bridge/audio_device.py) | `AudioDevice`: opening the audio device, resets, its control panel, its events |
 | [audio/settings.py](../../src/substation/audio/settings.py) | `AudioSettings` (QSettings), `audio_threads`/`set_audio_threads`, `disabled_midi_inputs`/`set_midi_input_disabled`, `record_quantize`/`set_record_quantize`, `RECORD_QUANTIZE`, `DRIVERS`, `BUFFER_SIZES`, `SAMPLE_RATES` |
 | [app.py](../../src/substation/app.py) | `main()`: the QApplication, the engine API check, the main window, start-up and shut-down |
@@ -111,15 +113,17 @@ returns a message saying whether the engine is older or newer and to re-run
 `python -m pip install --no-build-isolation -e .`; `main()` shows it and exits with 1, and
 [tests/conftest.py](../../tests/conftest.py) stops the test run with it. When Python code
 comes to need a change in `bindings.cpp`, bump both together (see
-[building.md](../building.md)). Both are 15 now.
+[building.md](../building.md)). Both are 18 now.
 
 ### Shut-down
 
 After the event loop ends, `main()` closes the audio device, then `EngineBridge.shutdown()`
 closes every plug-in editor, waits for built-in devices' states to finish restoring,
 removes every engine track (so plug-ins unload now, while the application is still whole,
-not whenever the engine is garbage-collected), closes MIDI inputs and runs `engine.idle()`
-once more (it destroys removed plug-ins on the main thread).
+not whenever the engine is garbage-collected), closes MIDI inputs and runs
+`engine.idle(release_all=True)` once more (it destroys every removed plug-in on the main
+thread; a normal `idle()` destroys only a few at a time). Plug-ins still waiting to load
+(see [Opening a project](#opening-a-project)) are forgotten first.
 
 ## How the model is mirrored
 
@@ -177,6 +181,11 @@ track (in a rack too) and loaded; `engine_chain_id(chain_id)` a rack chain's eng
 - MIDI tracks: the UI flattens the track's clips into the notes they play
   (`note_descs`: `MidiClip.played_notes()` in timeline beats) and calls `set_track_notes`.
   See [engine/midi.md](../engine/midi.md).
+- Previews: while a clip is dragged (moved or trimmed), `preview_clips({track: clips})`
+  pushes what the drag would make of those tracks' clips (or notes) instead of the model's,
+  so they are heard where they are going; the model changes once, when the drag ends.
+  `end_clip_preview()` pushes the model's clips again for every track previewed (the drop
+  changed them, or not). Frozen tracks aren't previewed. `_previewing` holds the tracks.
 
 ### Devices and racks
 
@@ -274,12 +283,53 @@ the engine hasn't, or the master. Changing ones are cleared first
 with a route another change hasn't undone yet) comes with that change.
 `has_sidechain_input(track, device)` tells the device view whether to show the button.
 
+### Opening a project
+
+On `reset` (a project opened, or a new one) `_on_reset` builds the engine's tracks, clips,
+mixers and built-in devices at once, but a plug-in device found where it was (or by its
+id) doesn't load then: `_load_plugin` sees `_deferring` and hands it to `PluginLoader`
+([loading.py](../../src/substation/audio/engine_bridge/loading.py)), which keeps its device
+id in `_pending_plugins`. Until its turn the device is in the engine as a missing plug-in
+is: in its chain with no processor (`None`). A missing plug-in ("not installed") is said at
+once.
+
+`_load_next_plugin`, on a single-shot timer, takes the next device that waits
+and loads it: it takes the device out of the chain the bridge has for it (wherever it is by
+then: moved to another track or into a rack, it loads there) and syncs that track's devices,
+so the device is new to its chain and gets its processor, state, parameters, automation and
+sidechain as a device added does (and `devices_loaded` rebuilds the device view). One a turn
+of the event loop, `PLUGIN_GAP_MS` (20 ms) apart, so the window goes on between them (it
+paints, takes the mouse and keys); not while a plug-in's call runs a
+message loop (`_busy`) or a chain is being synced. A device that went meanwhile is skipped;
+one that came back (undo) has loaded already, as any device added.
+
+- `plugins_loading(loaded, total)` reports the progress (the main window's status bar), and
+  `(0, 0)` once all are loaded.
+- `prioritize_plugins(track)` puts a track's first (the main window calls it with the
+  selected track); `request_plugin_editor` loads its device's plug-in now
+  (`load_plugin_now`); `load_pending_plugins()` loads every one now.
+- `plugin_pending(device)` says a device's waits (the device view says it is loading),
+  `plugins_pending` how many do.
+- Renders wait for them: `wait_for_device_states()` loads them (and waits for built-in
+  devices' states); `devices_ready()` says, without waiting, whether nothing is left (the
+  render dialog waits on it, so the timer goes on loading them meanwhile).
+- Saving meanwhile keeps a waiting device's state as it was in the file (its model `state`
+  hasn't changed).
+
+Plug-ins load on the UI thread all the same: see
+[engine/plugins.md](../engine/plugins.md#threads-and-the-engine-lock) for why not on another.
+
 ### Freezing
 
 `render_freeze(track)` renders the track's signal before its fader from beat 0 to the
-arrangement's end (and on for up to `FREEZE_TAIL_SECONDS`, while it sounds) with
-`render_track_to_wav()`, into `freeze_folder()` (the project's *Freeze* folder, or one in the
-recordings folder), decodes it at once (so it plays without a gap) and returns the `Freeze`.
+arrangement's end (and on for up to `FREEZE_TAIL_SECONDS`, while it sounds) into
+`freeze_folder()` (the project's *Freeze* folder, or one in the recordings folder), decodes it
+at once (so it plays without a gap) and returns the `Freeze`. It is `start_freeze(track)`
+(which starts the engine's `start_track_render()` and returns a `FreezeRender`: the track, the
+`RenderJob`, the tempo) and `finish_freeze(render)` (which finishes the job: the `Freeze`, or
+None if it was cancelled), waited for; the UI calls those two itself, showing the job's
+progress between them ([ui/README.md](../ui/README.md#renders-in-the-background)). While a
+render runs, `_poll_device` leaves the device's events for later: it can't be reopened then.
 
 On `freeze_changed` (`_on_freeze_changed`): the plug-ins' states go into the model (so a
 frozen track saves them), the engine track is frozen (`set_track_frozen`), its clips become
@@ -288,6 +338,28 @@ processors away: the bridge sees a frozen track as having no devices (`_loaded_d
 its devices go as if deleted, their plug-ins' states kept, and come back on unfreezing. The
 tracks in a frozen group keep their processors; the engine just doesn't render them. Frozen
 tracks don't record.
+
+### Reversing
+
+A reversed clip plays a reversed copy of its file, named `name R.wav` (`reversed_path`,
+numbered if taken) in `reversed_folder()` (the project's *Reversed* folder, or one in the
+recordings folder):
+
+- `reversed_copy(path)`: the copy there is already, if any: one made this session
+  (`_reversed`, cleared on reset), or one a clip of the project plays (its `reversed_from` is
+  `path`: saved with the project), so reopening a project doesn't make a second one. Not
+  decoded yet, it is asked for.
+- `start_reversed(path)` starts a `ReverseJob`: the decoded source (it must be decoded:
+  otherwise `ValueError`, with a message for the user) written backwards as a 32-bit float
+  WAV, `REVERSE_CHUNK` frames at a time from its end, on a thread of its own, then decoded
+  there. It has the engine's `RenderJob`'s `progress`, `done` and `cancel()`, so the UI's
+  render dialog follows it; cancelled or failed, its file goes.
+- `finish_reversed(path, job)` waits for it: the copy's path and length in seconds (decoded,
+  so it plays without a gap, and remembered for `path`), None if cancelled, or `OSError`.
+- `render_reversed(path)` is the three of them, waited for.
+
+The UI turns clips to it with `editor.reverse_range`
+([ui/arrangement.md](../ui/arrangement.md)).
 
 ### Settings and transport
 
@@ -345,9 +417,12 @@ calls `engine.release_unused_sources()`. See [engine/warp.md](../engine/warp.md)
   2. `engine.take_meters()` into `meters` (track id or `MASTER` → (left, right)) and
      `chain_meters` (rack chain id → (left, right)); `meters_updated`.
   3. `poll_plugins()`: `engine.idle()` (the engine's main-thread housekeeping: freeing
-     retired snapshots, destroying removed plug-ins, plug-in main-thread work) and, unless
-     busy, the plug-in reports.
-  4. Unless busy, `_poll_device`.
+     retired snapshots, destroying removed plug-ins a few at a time, plug-in main-thread
+     work) and, unless busy, the plug-in reports.
+  4. Unless busy, `_poll_device` (not while a render runs in the background).
+
+None of these wait for a render in the background (`engine.is_rendering`): it renders
+without the engine's lock.
 
 ## Device events
 

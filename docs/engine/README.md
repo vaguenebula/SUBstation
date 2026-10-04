@@ -20,7 +20,8 @@ For the layers above it (Python model, bridge, UI) and the threads of the whole 
 | [EngineInput.cpp](../../engine/src/EngineInput.cpp) | Track inputs (device channels or another track's output), monitoring, arming, recording, MIDI input. See [recording.md](recording.md) and [midi.md](midi.md). |
 | [EngineChains.cpp](../../engine/src/EngineChains.cpp) | Device chains, racks, sidechains, and the processor calls (parameters, state, editors, events). See [routing.md](routing.md), [devices.md](devices.md), [plugins.md](plugins.md). |
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | Building the `RenderSnapshot` from the edit model, and publishing it. See [rendering.md](rendering.md) and [routing.md](routing.md). |
-| [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | `renderOffline()` and `exportWav()`: suspending live output, a separate `Renderer`, fresh delay lines and stretch voices. |
+| [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | `renderOffline()` and `exportWav()`: suspending live output, a separate `Renderer`, fresh delay lines and stretch voices; renders in the background (`startExport()`, `startTrackRender()`) and `RenderJob`. |
+| [RenderJob.h](../../engine/src/RenderJob.h) | A render on a thread of its own: its progress, `cancel()`, `finish()`. |
 | [Snapshot.h](../../engine/src/Snapshot.h) | The snapshot's types. See [rendering.md](rendering.md). |
 | [Renderer.h](../../engine/src/Renderer.h) / [.cpp](../../engine/src/Renderer.cpp) | Turns a snapshot into audio. See [rendering.md](rendering.md). |
 | [Routing.h](../../engine/src/Routing.h), [Rack.h](../../engine/src/Rack.h) | The routing graph, delay compensation, racks. See [routing.md](routing.md). |
@@ -179,10 +180,14 @@ most 500 ms), after setting `liveSuspended_` so later callbacks output silence.
 - applies transport commands itself while no device runs (`serviceTransportIfIdleLocked()`:
   without a callback nobody else would, so `position_beats` and `is_playing` stay right);
 - destroys removed processors that no snapshot holds any more (`use_count() == 1` in
-  `graveyard_`), outside the lock, since plug-ins may take their time to go;
+  `graveyard_`), outside the lock, since plug-ins may take their time to go: for 20 ms at most
+  a call (closing a project with many plug-ins doesn't hold up the UI), the rest go back to
+  `graveyard_` for the next calls. `idle(releaseAll = true)` destroys them all (shutting down);
 - calls every processor's `idle()` outside the lock: the main-thread work plug-ins asked for
   (restarts, parameter updates to their controller, editor events). If any reports a new
-  latency, the snapshot is rebuilt, for new delay compensation.
+  latency, the snapshot is rebuilt, for new delay compensation. Not while a render runs in the
+  background: a plug-in restarting then would leave a gap in it (the work waits for the next
+  call after it).
 
 ## Transport
 
@@ -235,14 +240,40 @@ the real-time side.
 
 ## Offline renders
 
-`renderOffline()` and `exportWav()` ([EngineOffline.cpp](../../engine/src/EngineOffline.cpp))
+`renderOffline()` and `renderTrackOffline()` ([EngineOffline.cpp](../../engine/src/EngineOffline.cpp))
 hold `mutex_` throughout. They end a recording, suspend live output (silence, after one
 callback has passed), reset every processor (`resetOffline()` and `requestReset()`) before and
 after, and render with a fresh `Renderer` that shares the scheduler and the live renderer's cost
 ordering but brings its own stretch voices and delay lines, so it neither disturbs live
 playback nor depends on it. With delay compensation the output lags the timeline by the
-snapshot's `outputLatency()`: they render that much first and drop it. `exportWav()` writes 16
-(triangle dither), 24 or 32-bit float WAV through miniaudio's encoder, 16384 frames at a time.
+snapshot's `outputLatency()`: they render that much first and drop it.
+
+### In the background
+
+`startExport()` and `startTrackRender()` do the same on a thread of their own and return a
+`RenderJob` ([RenderJob.h](../../engine/src/RenderJob.h)) at once; `exportWav()` and
+`renderTrackToWav()` are those, waited for. Under the lock, on the calling (main) thread, they
+create the file (a `WavWriter`: miniaudio's encoder, 16-bit with triangle dither, 24-bit or
+32-bit float), suspend live output, reset the processors and prepare an `OfflineRender`: the
+renderer, its lines, and a `shared_ptr` to the snapshot as it is, which keeps its processors,
+sources and buffers alive whatever the UI changes meanwhile. The job's thread then renders that
+snapshot without the lock (4096 frames at a time), so the UI's calls (meters, the playhead,
+`idle()`) don't wait for it:
+
+- `progress()` is the frames rendered over the frames to render; `done()` says the thread has
+  ended.
+- `cancel()` stops it before its next chunk. The file is deleted when the render's state goes
+  (on its thread) unless it was kept at the end: a cancelled or failed render leaves nothing.
+- `finish()`, on the main thread, joins the thread, resets the processors again and gives live
+  output back (`endJob()`), then returns the frames written, `nullopt` if cancelled, or throws
+  what the render threw (a short write: "Could not write").
+- One job at a time (`job_`). Until it is finished, what would disturb it is refused
+  (`checkNotRenderingLocked()`, std::runtime_error "Wait for the render to finish"): another
+  render, opening a device (its processors would be prepared anew), the audio threads (the job
+  uses the scheduler), recording. Other changes are taken but not heard in the render.
+- A job let go of unfinished cancels and finishes itself; an engine going while its job runs
+  cancels it and waits for its thread first.
+
 See [rendering.md](rendering.md#offline-renders).
 
 ## bindings.cpp and API_VERSION
@@ -259,14 +290,15 @@ order and ranks, see [scheduler.md](scheduler.md)). `MASTER` is track id 0.
 - Long-running calls release the GIL (`ReleaseGil`, or an explicit `nb::gil_scoped_release`
   where arguments must be converted first): loading sources, opening devices (a driver may show
   a dialog whose message loop calls Python), plug-in state, recording, offline renders,
-  `idle()`. The audio thread never calls into Python.
+  `RenderJob.finish()`, `idle()`. The audio thread never calls into Python. A `RenderJob`'s
+  thread never touches Python either.
 - Byte strings (processor state) and arrays (`render_offline` returns a `(frames, 2)` float32
   array, recorded notes an `(n, 5)` int64 array) are handed over with capsules that own the
   buffer.
 - Leak warnings are turned off: Qt/PySide can keep engine objects alive until interpreter
   teardown, which is harmless.
 
-`API_VERSION` (currently 16) is set on the module. It is bumped whenever the Python code comes
+`API_VERSION` (currently 18) is set on the module. It is bumped whenever the Python code comes
 to depend on a change in the bindings; `ENGINE_API` in
 [src/substation/\_\_init\_\_.py](../../src/substation/__init__.py) must be bumped with it. The app
 and the tests refuse to start with an engine built from older (or newer) code, and say to
@@ -292,8 +324,9 @@ on the edit side with the track (as `TrackBuffers` and `EdgeState` are), keep it
 - `rebuildSnapshotLocked()` is not cheap for big projects: it rebuilds everything. Calls the UI
   makes continuously (fader drags) must stay atomics.
 - `setTrackSend()` to the master is refused (everything reaches the master anyway).
-- A removed processor lives until no snapshot holds it *and* `idle()` runs. Tests that check
-  plug-in destruction call `idle()`.
+- A removed processor lives until no snapshot holds it *and* `idle()` runs (a render in the
+  background holds its snapshot until it is finished). Tests that check plug-in destruction
+  call `idle()`; many slow plug-ins take more than one call.
 - Without a device, preview notes are discarded and transport commands applied by the edit
   side, so state stays consistent in tests that render offline.
 

@@ -21,7 +21,7 @@ from PySide6.QtGui import (
     QWheelEvent,
 )
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QWidget
 
 from substation import _engine as ge
 from substation.audio.engine_bridge import plugins as bridge_plugins
@@ -391,8 +391,19 @@ def test_projects_keep_plugins_and_their_state(window, tmp_path):
 
     window.new_project()
     window.open_project(str(path))
+    # The project is there at once; its plug-ins load after it, one at a time (with their state).
     track = window.project.tracks[0]
-    assert window.engine.processor_param(engine_id(window, track, track.devices[0]), GAIN) == pytest.approx(0.3)
+    device = track.devices[0]
+    assert engine_id(window, track, device) is None and window.bridge.plugin_pending(device.id)
+    assert window.plugins_label.text() == "Loading plug-ins: 0 of 1" and not window.plugins_label.isHidden()
+    window.selection.select_track(track.id)
+    texts = [label.text() for label in window.devices.widgets[device.id].findChildren(QLabel)]
+    assert "SUB Test Synth is loading…" in texts
+    assert wait_until(lambda: not window.bridge.plugins_pending)
+    assert window.plugins_label.isHidden() and window.plugins_bar.isHidden()
+    assert window.engine.processor_param(engine_id(window, track, device), GAIN) == pytest.approx(0.3)
+    texts = [label.text() for label in window.devices.widgets[device.id].findChildren(QLabel)]
+    assert "SUB Test Synth is loading…" not in texts
 
 
 def test_missing_and_moved_plugins(window, tmp_path):
@@ -410,8 +421,9 @@ def test_missing_and_moved_plugins(window, tmp_path):
     window.open_project(str(path))
     track = window.project.tracks[0]
     moved, gone = track.devices
+    assert window.bridge.plugin_errors["gone"] == "Gone Synth is not installed."  # (known at once)
+    assert window.bridge.plugins_pending == 1 and wait_until(lambda: not window.bridge.plugins_pending)
     assert engine_id(window, track, moved) is not None and engine_id(window, track, gone) is None
-    assert window.bridge.plugin_errors["gone"] == "Gone Synth is not installed."
     window.selection.select_track(track.id)
     widget = window.devices.widgets["gone"]
     assert not widget.edit.isEnabled()
@@ -986,6 +998,7 @@ def test_effects_on_the_master(window, tmp_path):
     assert window.project.master.devices == [] and window.devices.track_id is None
     window.open_project(str(target))
     assert [d.id for d in window.project.master.devices] == [utility.id, effect.id]
+    assert wait_until(lambda: not window.bridge.plugins_pending)
     assert window.bridge.engine_device_id(MASTER, effect.id) is not None
     assert window.bridge.is_automated(MASTER, key)
 

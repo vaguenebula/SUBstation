@@ -337,6 +337,9 @@ class DeviceSync:
         if path is None:
             self._plugin_failed(device, f"{plugin.name} is not installed.")
             return None
+        if self._deferring:  # it loads after the project shows (loading.py)
+            self._defer_plugin(device.id)
+            return None
         self._busy += 1
         try:
             processor_id = self.engine.add_plugin_processor(chain_id, plugin.format, path, plugin.uid)
@@ -471,5 +474,12 @@ class DeviceSync:
         self._state_pool.start(_StateTask(self.engine, processor_id, device_name(device), state, self._state_signals))
 
     def wait_for_device_states(self) -> None:
-        """Until every built-in device's state is restored (before rendering offline)."""
+        """Until every device is ready to render offline: the plug-ins waiting to
+        load loaded, and every built-in device's state restored."""
+        self.load_pending_plugins()
         self._state_pool.waitForDone()
+
+    def devices_ready(self) -> bool:
+        """Whether every device is ready to render offline (without waiting): no
+        plug-in waits to load, and no built-in device's state is being restored."""
+        return not self._pending_plugins and self._state_pool.waitForDone(0)

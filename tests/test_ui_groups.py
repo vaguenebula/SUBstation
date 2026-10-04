@@ -157,28 +157,54 @@ def test_folding_a_track_or_group_hides_its_automation(window):
     assert layout.row_for(group.id).lanes and headers[group.id].automation.main.device.isVisible()
 
 
-def test_a_folded_track_is_a_grid_to_select_on(window):
-    a, _b = make_tracks(window, 2)
+def drag_lanes(window, start: QPoint, end: QPoint) -> None:
+    lanes = window.arrangement.lanes
+    QTest.mousePress(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+    QTest.mouseMove(lanes, start + QPoint(10, 0))
+    QTest.mouseMove(lanes, end)
+    QTest.mouseRelease(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
+    QTest.qWait(10)
+
+
+def test_a_folded_tracks_clips_are_bars_to_click_and_drag(window):
+    """As in Ableton: a folded track shows its clips as bars with their names, a
+    click selects one and a drag moves it; its lane isn't a grid to select time on."""
+    a, b = make_tracks(window, 2)
     window.editor.set_folded(a, True)
     QTest.qWait(10)
     lanes = window.arrangement.lanes
     view = window.arrangement.view
-    row = window.arrangement.layout_model.row_for(a)
-    body_y = row.top - view.scroll_y + row.main_height - 5  # below the clip's thin title bar
-    x0, x1 = int(view.beat_to_x(0.5)), int(view.beat_to_x(3.0))  # inside clip c0 (beats 0-4)
+    project = window.project
+    layout = window.arrangement.layout_model
+    row = layout.row_for(a)
+    assert row.bars and row.main_height < layout.row_for(b).main_height
+    low_y = row.top - view.scroll_y + row.main_height - 5  # low in the bar: still the clip's
+    x = int(view.beat_to_x(1.0))  # inside clip c0 (beats 0-4)
+    assert lanes.hit_clip(QPointF(x, low_y))[2] == "title"
 
-    # In the clip, below its title bar: a drag selects time on the grid, the clip stays put.
-    QTest.mousePress(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x0, body_y))
-    QTest.mouseMove(lanes, QPoint(x0 + 10, body_y))
-    QTest.mouseMove(lanes, QPoint(x1, body_y))
-    QTest.mouseRelease(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x1, body_y))
-    start, end, track_ids = window.selection.time_range
-    assert track_ids == (a,) and window.selection.clip_range
-    assert (start, end) == (view.snap_beat(view.x_to_beat(x0)), view.snap_beat(view.x_to_beat(x1)))
-    assert window.project.track(a).clips[0].start_beat == 0.0
-    assert lanes.hit_clip(QPointF(x0, body_y))[2] == "body"
-    # Its thin title bar still grabs the clip.
-    assert lanes.hit_clip(QPointF(x0 + 20, row.top - view.scroll_y + 4))[2] == "title"
+    # A click on a bar selects its clip (and draws it selected).
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(x, low_y))
+    assert window.selection.clips == {(a, "c0")} and window.selection.time_range == (0.0, 4.0, (a,))
+    window.grab()
+    # A drag moves it.
+    drag_lanes(window, QPoint(x, low_y), QPoint(int(view.beat_to_x(3.0)), low_y))
+    assert project.track(a).clips[0].start_beat == view.snap_beat(2.0)
+    assert window.undo_stack.undoText() == "Move Time Selection"
+    window.undo_stack.undo()
+
+    # Beside its clips, a drag selects nothing: a click there only moves the insert marker.
+    window.selection.clear()
+    drag_lanes(window, QPoint(int(view.beat_to_x(5.0)), low_y), QPoint(int(view.beat_to_x(7.0)), low_y))
+    assert window.selection.time_range is None and not window.selection.clips
+    assert window.selection.insert_beat == view.snap_beat(5.0) and window.selection.track_id == a
+    assert lanes.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+    # A selection made on the grid of other tracks takes in the folded one, and its clips.
+    other = layout.row_for(b)
+    other_y = other.top - view.scroll_y + other.main_height // 2
+    drag_lanes(window, QPoint(int(view.beat_to_x(1.0)), other_y), QPoint(int(view.beat_to_x(6.0)), low_y))
+    assert window.selection.time_range == (1.0, 6.0, (a, b))
+    assert window.selection.clips == {(a, "c0"), (b, "c1")}
     window.grab()
 
 

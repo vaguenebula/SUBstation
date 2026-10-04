@@ -76,6 +76,20 @@ plug-in it is. A plug-in that moved is found again by its class id; a missing on
 its place and settings in the project, shows what's wrong in the device view, and loads
 when it's back (after a rescan).
 
+Opening a project shows it at once, and its plug-ins load after it, one at a time, while
+you work (the right end of the status bar counts them: *Loading plug-ins: 3 of 12*).
+Meanwhile:
+
+- a plug-in still waiting says so in the device view (*… is loading*), and its track plays
+  without it (an instrument's track is silent);
+- the selected track's plug-ins load first, and opening a plug-in's editor loads it at once;
+- you can edit, move or delete devices as usual, and save: a plug-in not loaded yet keeps
+  its settings as they were;
+- exporting and freezing wait for them (their progress dialog says how many are left).
+
+They load on the window's own thread, as plug-ins require, so a slow one can still make
+the window pause while it loads; the project around it doesn't wait.
+
 ## Latency
 
 Latency that plug-ins report (look-ahead limiters, linear-phase EQs) is compensated:

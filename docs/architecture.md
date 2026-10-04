@@ -76,6 +76,7 @@ directly: it is saved, but isn't an undo step.
 | Render workers | tracks of the routing graph ([Scheduler](engine/scheduler.md)) | same as the audio thread |
 | Decoding pool (`QThreadPool`) | decoding audio files into engine sources (the engine releases the GIL) | touch the model |
 | Recorder's disk writer | empties recording rings into WAV files | — |
+| Render job ([RenderJob](engine/README.md#in-the-background)) | an export or a freeze's render, on the snapshot it began with (live output is silent meanwhile) | take the engine's mutex, touch Python |
 | MIDI driver threads | stamp incoming messages against the audio clock and queue them | take the engine's mutex |
 | Browser indexer / search threads | keep the file index, run searches | call into Python |
 | Plug-in scan child processes | load VST3 modules to read their classes | — (a crash only marks the file failed) |

@@ -9,6 +9,8 @@ rectangle, and playhead motion repaints just two thin strips.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import time
 from pathlib import Path
 
@@ -33,17 +35,24 @@ from PySide6.QtWidgets import QMenu, QWidget
 from ... import theme
 from ...audio.engine_bridge import EngineBridge, is_audio_file
 from ...model.devices import BUILTIN_DEVICES, device_is_instrument, is_instrument
-from ...model.editor import ClipboardContent, CopiedAutomation, CopiedTracks, ProjectEditor
+from ...model.editor import (
+    ClipboardContent,
+    CopiedAutomation,
+    CopiedTracks,
+    ProjectEditor,
+)
 from ...model.project import (
     DEFAULT_TRACK_HEIGHT,
     MAX_TRACK_HEIGHT,
     MIN_TRACK_HEIGHT,
     PLUGIN_KIND,
     AnyClip,
+    Clip,
     MidiClip,
     PluginRef,
     iter_devices,
 )
+from ...model.timebase import db_to_gain
 from ..browser.browser_models import (
     PLUGIN_MIME,
     device_kinds,
@@ -51,6 +60,7 @@ from ..browser.browser_models import (
     preset_paths,
     read_presets,
 )
+from ..rendering import RenderProgress
 from . import automation_lanes
 from .automation_lanes import EnvelopeArea, Hover
 from .grid import draw_grid, draw_loop_region
@@ -66,16 +76,23 @@ from .waveform_cache import WaveformCache
 
 EDGE_GRAB = 6  # trim handles: this many pixels inside each end of a clip's title bar
 TITLE_HEIGHT = 16  # also the grab area for selecting/moving the clip
-MIN_TITLE_ROW = 30  # clips in shorter rows (folded tracks) have a thin title bar instead
+MIN_TITLE_ROW = 30  # clips in shorter rows have a thin title bar instead
 SHORT_TITLE_HEIGHT = 9  # that thin bar: grab it to move the clip; below it, select time as on any lane
 
 
-def clip_title_height(clip_height: float) -> int:
-    """The title bar of a clip this high: where it is grabbed (the rest selects time)."""
+def clip_title_height(clip_height: float, folded: bool = False) -> float:
+    """The title bar of a clip this high: where it is grabbed (the rest selects
+    time). A folded track's clips are all title bar, as in Ableton: a bar with
+    the clip's name, grabbed anywhere."""
+    if folded:
+        return clip_height
     return TITLE_HEIGHT if clip_height >= MIN_TITLE_ROW else SHORT_TITLE_HEIGHT
+
+
 HEIGHT_STEP = 12  # pixels per wheel notch when Alt+wheel resizes a track
 WHEEL_GESTURE = 0.4  # s: wheel events closer together than this resize (or fold) the same track
-SELECTION_TINT = QColor(80, 150, 210, 150)  # selected clips and time selections, as in Ableton
+SELECTION_TINT = theme.SELECTION  # time selections (and so selected clips), over all but the clips' title bars
+REVERSE_IN_PLACE_SECONDS = 30.0  # reversing less audio than this is quick: no progress dialog
 
 
 def audio_paths(mime) -> list[str]:
@@ -286,7 +303,7 @@ class LanesCanvas(QWidget):
     def hit_clip(self, pos: QPointF) -> tuple[str, AnyClip, str] | None:
         """(track id, clip, zone) under `pos`; zone is left/right (trim handles, at
         the ends of the title bar), title (select & move) or body (time selection
-        / insert marker)."""
+        / insert marker). A folded track's clips are all title bar."""
         index = self.row_index_at(pos.y())
         if index is None:
             return None
@@ -299,7 +316,7 @@ class LanesCanvas(QWidget):
             # Only inside the clip: next to it, or on a neighbour's side of a
             # shared boundary, you are not trimming this clip.
             if rect.left() <= pos.x() <= rect.right():
-                if pos.y() >= rect.top() + clip_title_height(rect.height()):
+                if not row.bars and pos.y() >= rect.top() + clip_title_height(rect.height()):
                     return row.track_id, clip, "body"
                 grab = min(EDGE_GRAB, rect.width() / 3)
                 if pos.x() <= rect.left() + grab:
@@ -314,12 +331,17 @@ class LanesCanvas(QWidget):
     # --- Playhead ------------------------------------------------------------------
 
     def set_playhead(self, beat: float | None) -> None:
-        """None hides it (playback stopped)."""
-        for b in (self._playhead, beat):
-            if b is not None:
-                x = int(self.view.beat_to_x(b))
-                self.update(QRect(x - 2, 0, 5, self.height()))
-        self._playhead = beat
+        """None hides it (playback stopped). While recording, the takes grow up to
+        it, so what lies between where it was and where it is repaints too."""
+        old, self._playhead = self._playhead, beat
+        xs = [int(self.view.beat_to_x(b)) for b in (old, beat) if b is not None]
+        if not xs:
+            return
+        if len(xs) == 2 and self.bridge.live_takes and abs(xs[1] - xs[0]) < self.width():
+            self.update(QRect(min(xs) - 2, 0, abs(xs[1] - xs[0]) + 5, self.height()))
+            return
+        for x in xs:
+            self.update(QRect(x - 2, 0, 5, self.height()))
 
     # --- Painting ------------------------------------------------------------------
 
@@ -339,10 +361,19 @@ class LanesCanvas(QWidget):
         draw_loop_region(p, view, visible.left(), visible.right(), 0.0, float(self.height()))
 
         gesture = self._gesture
+        time_range = (gesture.time_range() if gesture else None) or self.selection.time_range
+        on_lanes = time_range is not None and bool(self.selection.lanes) and not (gesture and gesture.time_range())
+        tinted = {} if time_range is None or on_lanes else self._selected_areas(time_range)
+        frames = []  # the clips drawn: (track id, colour, clip, rect, selected, ghost, folded)
+
         hidden = gesture.hidden_ids() if gesture else set()
+        selected_clips = self.selection.clips
         for _, row in rows:
             track = self.project.track(row.track_id)
             y = row.top - view.scroll_y
+            bars = row.bars
+            if bars and track.id in tinted:  # under its clips' bars, which stay as they are
+                p.fillRect(tinted.pop(track.id), SELECTION_TINT)
             if track.is_group:
                 self._draw_group_summary(p, track.id, y, row.main_height, visible)
             for clip in track.clips:
@@ -353,7 +384,10 @@ class LanesCanvas(QWidget):
                     break
                 if rect.right() < visible.left():
                     continue
-                self._draw_clip(p, track.color, clip, rect, visible, False)  # the selected area is tinted
+                # The selected area is tinted; a folded track's bars show they are selected by their outline.
+                selected = bars and (track.id, clip.id) in selected_clips
+                self._draw_clip(p, track.color, clip, rect, visible, selected, folded=bars)
+                frames.append((track.id, track.color, clip, rect, selected, False, bars))
             if self.project.is_frozen(track.id):  # its clips play as frozen: tinted, as in Ableton
                 p.fillRect(QRectF(visible.left(), y, visible.width(), row.main_height - 1), theme.FROZEN_TINT)
             live = self.bridge.live_takes.get(track.id)
@@ -370,13 +404,15 @@ class LanesCanvas(QWidget):
                 if row.hidden:
                     continue
                 rect = self._clip_rect(clip, row.top - view.scroll_y, row.main_height)
-                self._draw_clip(p, color, clip, rect, visible, False)
+                self._draw_clip(p, color, clip, rect, visible, False, folded=row.bars)
+                frames.append((row.track_id, color, clip, rect, False, False, row.bars))
             for row_index, color, clip in gesture.ghosts():
                 row = self.layout_model.rows[row_index]
                 if row.hidden:
                     continue
                 rect = self._clip_rect(clip, row.top - view.scroll_y, row.main_height)
-                self._draw_clip(p, color, clip, rect, visible, True, ghost=True)
+                self._draw_clip(p, color, clip, rect, visible, True, ghost=True, folded=row.bars)
+                frames.append((row.track_id, color, clip, rect, True, True, row.bars))
         areas = self.envelope_areas()
         for area in areas:
             automation_lanes.draw_area(p, self, area, visible, self._hover_point, shade=area.lane < 0)
@@ -389,21 +425,18 @@ class LanesCanvas(QWidget):
                        "Drag audio files here from the browser\nor press Ctrl+T to create an audio track,"
                        " Ctrl+Shift+T for a MIDI track")
 
-        time_range = (gesture.time_range() if gesture else None) or self.selection.time_range
-        if time_range is not None and self.selection.lanes and not (gesture and gesture.time_range()):
+        if on_lanes:
             automation_lanes.draw_range(p, self, areas, SELECTION_TINT)  # on the automation lanes it covers
-        elif time_range is not None:
-            start, end, track_ids = time_range
-            x0, x1 = view.beat_to_x(start), view.beat_to_x(end)
-            for track_id in track_ids:
-                row = self.layout_model.row_for(track_id)
-                if row is None or row.hidden:
-                    continue
-                area = QRectF(x0, row.top - view.scroll_y, x1 - x0, row.main_height - 1)
-                if not self.selection.clip_range and row.main_height >= MIN_TITLE_ROW:
-                    # A lane range leaves the clips' title band alone.
-                    area.setTop(area.top() + TITLE_HEIGHT + 1)
-                p.fillRect(area, SELECTION_TINT)
+        for area in tinted.values():
+            p.fillRect(area, SELECTION_TINT)
+        # Over the tint, the clips' title bars (and outlines) as they were: selecting doesn't light them up.
+        for track_id, color, clip, rect, selected, ghost, folded in frames:
+            area = tinted.get(track_id)
+            if area is not None and area.intersects(rect):
+                p.save()
+                p.setClipRect(area.intersected(visible))
+                self._draw_clip_frame(p, color, clip, rect, selected, ghost, folded)
+                p.restore()
 
         # Insert marker on the selected track (Ableton's blinking cursor, minus the blink)
         row = self.layout_model.row_for(self.selection.track_id) if self.selection.track_id else None
@@ -417,35 +450,46 @@ class LanesCanvas(QWidget):
                 p.fillRect(QRectF(x, 0, 1, self.height()), QColor(theme.PLAYHEAD))
         automation_lanes.draw_readout(p, self, gesture)
 
+    def _selected_areas(self, time_range) -> dict[str, QRectF]:
+        """Where a time selection over tracks is tinted, by track: its stretch of
+        each track's lane, and of the automation lanes below it (unless automation
+        is locked: then the selection leaves it where it is)."""
+        start, end, track_ids = time_range
+        x0, x1 = self.view.beat_to_x(start), self.view.beat_to_x(end)
+        areas = {}
+        for track_id in track_ids:
+            row = self.layout_model.row_for(track_id)
+            if row is None or row.hidden:
+                continue
+            height = row.main_height if self.project.automation_locked else row.height
+            areas[track_id] = QRectF(x0, row.top - self.view.scroll_y, x1 - x0, height - 1)
+        return areas
 
     def _draw_clip(self, p: QPainter, track_color: str, clip: AnyClip, rect: QRectF, visible: QRectF,
-                   selected: bool, ghost: bool = False) -> None:
+                   selected: bool, ghost: bool = False, folded: bool = False) -> None:
+        """A clip: its body (the waveform or notes), then its title bar and outline
+        (_draw_clip_frame). A folded track's clip is all title bar."""
         base = QColor(track_color)
-        title_h = clip_title_height(rect.height())
+        title_h = clip_title_height(rect.height(), folded)
         body = rect.adjusted(0, title_h, 0, 0)
-        body_color = QColor(base)
-        body_color.setHsvF(base.hsvHueF(), base.hsvSaturationF() * 0.6, min(1.0, base.valueF() * 0.78))
-        if ghost:
-            body_color.setAlphaF(0.75)
         p.save()
         p.setClipRect(rect.intersected(visible).adjusted(-1, -1, 1, 1))
-        p.fillRect(body, body_color)
-        if selected:
-            p.fillRect(body, SELECTION_TINT)
-        # The grid shows through the body, faintly (under the notes and the waveform);
-        # the title bar, where the clip is grabbed, stays solid.
-        draw_grid(p, self.view, max(rect.left() + 1, visible.left()), min(rect.right() - 1, visible.right()),
-                  body.top(), body.bottom(), over_clip=True)
-        title = QRectF(rect.left(), rect.top(), rect.width(), title_h)
-        if title_h:
-            p.fillRect(title, base.lighter(115) if selected else base)
-        if title_h >= TITLE_HEIGHT and rect.width() > 16:  # (no name in a thin bar)
-            p.setPen(QColor(theme.ACCENT_TEXT))
-            p.setFont(theme.ui_font(7.5))
-            text_rect = title.adjusted(4, 0, -3, 0)
-            name = p.fontMetrics().elidedText(clip.name, Qt.TextElideMode.ElideRight, int(text_rect.width()))
-            p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
+        if body.height() > 0:
+            body_color = QColor(base)
+            body_color.setHsvF(base.hsvHueF(), base.hsvSaturationF() * 0.6, min(1.0, base.valueF() * 0.78))
+            if ghost:
+                body_color.setAlphaF(0.75)
+            p.fillRect(body, body_color)
+            # The grid shows through the body, faintly (under the notes and the waveform);
+            # the title bar, where the clip is grabbed, stays solid.
+            draw_grid(p, self.view, max(rect.left() + 1, visible.left()), min(rect.right() - 1, visible.right()),
+                      body.top(), body.bottom(), over_clip=True)
+            self._draw_content(p, clip, rect, body, visible)
+        self._draw_clip_frame(p, track_color, clip, rect, selected, ghost, folded)
+        p.restore()
 
+    def _draw_content(self, p: QPainter, clip: AnyClip, rect: QRectF, body: QRectF, visible: QRectF) -> None:
+        """A MIDI clip's notes, or an audio clip's waveform (as loud as its gain makes it)."""
         source = None if isinstance(clip, MidiClip) else self.bridge.source(clip.path)
         if isinstance(clip, MidiClip):
             self._draw_notes(p, clip, body.adjusted(0, 2, 0, -2), visible)
@@ -454,8 +498,8 @@ class LanesCanvas(QWidget):
             p.setClipRect(wave_area.intersected(visible))
             self.waveforms.draw(p, source, wave_area, rect.left(), clip.offset_sec,
                                 self.view.frames_per_pixel(source.sample_rate, clip.source_tempo(self.project.tempo)),
-                                theme.WAVEFORM,
-                                split_channels=wave_area.height() >= 44, visible=visible)
+                                theme.WAVEFORM, split_channels=wave_area.height() >= 44, visible=visible,
+                                gain=db_to_gain(clip.gain_db))
             p.setClipRect(rect.intersected(visible).adjusted(-1, -1, 1, 1))
         elif body.height() > 10 and rect.width() > 40:
             error = self.bridge.load_error(clip.path)
@@ -466,6 +510,21 @@ class LanesCanvas(QWidget):
             p.drawText(body.adjusted(4, 0, -2, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                        "Missing file" if error else "Loading…")
 
+    def _draw_clip_frame(self, p: QPainter, track_color: str, clip: AnyClip, rect: QRectF, selected: bool,
+                         ghost: bool = False, folded: bool = False) -> None:
+        """A clip's title bar (its name, if there is room) and its outline: white
+        if `selected`, and the trim handle under the mouse."""
+        base = QColor(track_color)
+        title_h = clip_title_height(rect.height(), folded)
+        title = QRectF(rect.left(), rect.top(), rect.width(), title_h)
+        if title_h:
+            p.fillRect(title, base)
+        if (title_h >= TITLE_HEIGHT or folded) and rect.width() > 16:  # (no name in a thin bar)
+            p.setPen(QColor(theme.ACCENT_TEXT))
+            p.setFont(theme.ui_font(7.5))
+            text_rect = title.adjusted(4, 0, -3, 0)
+            name = p.fontMetrics().elidedText(clip.name, Qt.TextElideMode.ElideRight, int(text_rect.width()))
+            p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
         outline = QColor(theme.SELECTION_OUTLINE) if selected else base.darker(170)
         p.setPen(QPen(outline, 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
@@ -474,7 +533,6 @@ class LanesCanvas(QWidget):
         if hover is not None and hover[0] == clip.id and not ghost:
             x = rect.left() if hover[1] == "left" else rect.right() - 2
             p.fillRect(QRectF(x, rect.top(), 2, rect.height()), QColor(theme.SELECTION_OUTLINE))
-        p.restore()
 
     def _draw_group_summary(self, p: QPainter, group_id: str, row_top: float, row_height: int,
                             visible: QRectF) -> None:
@@ -506,11 +564,15 @@ class LanesCanvas(QWidget):
                         visible: QRectF) -> None:
         """A take while it records: a clip that grows, its waveform drawn from the
         peaks the engine sends (the file isn't read until the take is done), or
-        a MIDI take's notes so far."""
+        a MIDI take's notes so far. It ends at the playhead, which it follows
+        smoothly: what has come in lags it by the input's latency, and comes in
+        a buffer at a time."""
         rate = self.bridge.engine.sample_rate
         tempo = self.project.tempo
         start = take.start_sample / rate * tempo / 60.0
         end = (take.start_sample + take.frames) / rate * tempo / 60.0
+        if self._playhead is not None:
+            end = max(start, self._playhead)
         x0, x1 = self.view.beat_to_x(max(0.0, start)), self.view.beat_to_x(end)
         rect = QRectF(x0, row_top + 1, max(1.0, x1 - x0), row_height - 3)
         if rect.right() < visible.left() or rect.left() > visible.right():
@@ -608,6 +670,9 @@ class LanesCanvas(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        if self._gesture is not None:  # (one whose release never came: what it previewed goes)
+            self._gesture = None
+            self.bridge.end_clip_preview()
         pos = event.position()
         mods = event.modifiers()
         if is_pan_modifier(mods):
@@ -639,9 +704,13 @@ class LanesCanvas(QWidget):
 
     def _in_clip_range(self, pos: QPointF) -> bool:
         """Whether `pos` is in the clip band inside the selected clip range."""
+        return self.in_clip_band(pos) and self._in_selection(pos)
+
+    def _in_selection(self, pos: QPointF) -> bool:
+        """Whether `pos` is on a track's lane inside the selected time range over tracks."""
         time_range = self.selection.time_range
         index = self.row_index_at(pos.y())
-        if not self.selection.clip_range or index is None or not self.in_clip_band(pos):
+        if not self.selection.clip_range or index is None:
             return False
         start, end, track_ids = time_range
         return self.layout_model.rows[index].track_id in track_ids and start <= self.view.x_to_beat(pos.x()) <= end
@@ -667,11 +736,13 @@ class LanesCanvas(QWidget):
             return
         # Clip body, empty lane or below the tracks: a click sets the insert marker,
         # a drag selects time on the grid (from below the tracks, starting at the last one).
+        # A folded track's lane is no grid: a click there only sets the insert marker.
         index = self.row_index_at(pos.y())
         gesture = TimeSelectGesture(self, pos, bool(mods & Qt.KeyboardModifier.AltModifier))
         self.selection.clear(track_id=None if index is None else self.layout_model.rows[index].track_id)
         self.selection.set_insert(gesture.anchor)
-        self._gesture = gesture
+        if index is None or not self.layout_model.rows[index].bars:
+            self._gesture = gesture
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._gesture:
@@ -702,7 +773,10 @@ class LanesCanvas(QWidget):
                 self.setCursor(trim_cursor(zone))
                 return
             grab = zone == "title" or self._in_clip_range(pos)
-            shape = Qt.CursorShape.PointingHandCursor if grab else Qt.CursorShape.IBeamCursor
+            index = self.row_index_at(pos.y())
+            grid = index is None or not self.layout_model.rows[index].bars  # (a folded track's lane isn't)
+            shape = (Qt.CursorShape.PointingHandCursor if grab
+                     else Qt.CursorShape.IBeamCursor if grid else Qt.CursorShape.ArrowCursor)
         self._set_hover_edge(None)
         self.setCursor(shape)
 
@@ -766,14 +840,15 @@ class LanesCanvas(QWidget):
         return ref
 
     def delete_area(self) -> None:
-        """Cut the clips out of the selected area; the (now empty) area stays selected."""
+        """Delete what is in the selected area (its stretch of the clips, and the
+        automation under it); the (now empty) area stays selected."""
         if self.selection.clip_range:
             start, end, track_ids = self.selection.time_range
             self.editor.delete_range(start, end, list(track_ids))
             self.selection.set_time_range(start, end, track_ids, clips=set())
 
     def duplicate_area(self) -> None:
-        """Copy the selected area to right after it, and select the copy."""
+        """Copy the selected area (clips and automation) to right after it, and select the copy."""
         if self.selection.clip_range:
             start, end, track_ids = self.selection.time_range
             length = end - start
@@ -783,22 +858,22 @@ class LanesCanvas(QWidget):
             self.selection.set_insert(end)
 
     def copy_area(self) -> None:
-        """Copy the clip content of the selected area (Ctrl+C)."""
+        """Copy what is in the selected area: its clips, and the automation under them (Ctrl+C)."""
         if self.selection.clip_range:
             content = self.editor.copy_range(*self.selection.time_range)
             if content is None:
-                self.status_message.emit("There are no clips in the selection to copy.")
+                self.status_message.emit("There is nothing in the selection to copy.")
             else:
                 self.clipboard = content
 
     def cut_area(self) -> None:
-        """Copy the clip content of the selected area, and take it out (Ctrl+X); the
-        (now empty) area stays selected."""
+        """Copy what is in the selected area (see copy_area), and take it out
+        (Ctrl+X); the (now empty) area stays selected."""
         if self.selection.clip_range:
             start, end, track_ids = self.selection.time_range
             content = self.editor.cut_range(start, end, track_ids)
             if content is None:
-                self.status_message.emit("There are no clips in the selection to cut.")
+                self.status_message.emit("There is nothing in the selection to cut.")
                 return
             self.clipboard = content
             self.selection.set_time_range(start, end, track_ids, clips=set())
@@ -888,6 +963,76 @@ class LanesCanvas(QWidget):
         self.selection.set_time_range(start, end, track_ids, clips=self.editor.clips_in_range(start, end, track_ids))
         self.selection.set_insert(end)
 
+    def reverse_selection(self) -> None:
+        """Reverse the audio clips in the selected area (R): the stretch of each
+        inside it plays its file backwards, as in Ableton (a reversed copy of the
+        file, made once). Reversing them again goes back to their files."""
+        selection = self.selection
+        if not selection.clip_range:
+            self.status_message.emit("Select audio clips (or a time range over them) to reverse them.")
+            return
+        start, end, track_ids = selection.time_range
+        tempo = self.project.tempo
+        clips = [c for t in track_ids if self.project.has_track(t) for c in self.project.track(t).clips
+                 if isinstance(c, Clip) and c.start_beat < end and c.end_beat(tempo) > start]
+        if not clips:
+            self.status_message.emit("There are no audio clips in the selection to reverse.")
+            return
+        reversed_files: dict[str, tuple[str, float]] = {}
+        to_write: list[str] = []  # files with no reversed copy yet
+        for clip in clips:
+            if clip.path in reversed_files or clip.path in to_write:
+                continue
+            source = self.bridge.source(clip.path)
+            if clip.reversed_from and os.path.exists(clip.reversed_from):  # back to the file it came from
+                length = source.frames / source.sample_rate if source is not None else clip.source_duration_sec
+                if length > 0:
+                    reversed_files[clip.path] = (clip.reversed_from, length)
+                    continue
+            copy = self.bridge.reversed_copy(clip.path)
+            if copy is not None and source is not None:
+                reversed_files[clip.path] = (copy, source.frames / source.sample_rate)
+            else:
+                to_write.append(clip.path)
+        if not self._write_reversed(to_write, reversed_files):
+            return  # (cancelled)
+        if reversed_files and self.editor.reverse_range(start, end, track_ids, reversed_files):
+            selection.set_time_range(start, end, track_ids, clips=self.editor.clips_in_range(start, end, track_ids))
+
+    def _write_reversed(self, paths: list[str], reversed_files: dict[str, tuple[str, float]]) -> bool:
+        """Reversed copies of these files, into `reversed_files` (those that can't
+        be made are said). Short ones are written at once; longer ones in the
+        background, their progress in a dialog (rendering.py), whose Cancel
+        makes none: False then."""
+        jobs = []
+        for path in paths:
+            try:
+                jobs.append((path, self.bridge.start_reversed(path)))
+            except ValueError as exc:
+                self.status_message.emit(str(exc))
+        if not jobs:
+            return True
+        long = sum(job.seconds for _path, job in jobs) > REVERSE_IN_PLACE_SECONDS
+        with RenderProgress(self.window(), "Reverse Clips") if long else contextlib.nullcontext() as progress:
+            for index, (path, job) in enumerate(jobs):
+                if progress is not None:
+                    progress.follow(job, f"Reversing {Path(path).name}…", (index, len(jobs)))
+                try:
+                    result = self.bridge.finish_reversed(path, job)
+                except OSError as exc:
+                    self.status_message.emit(str(exc))
+                    continue
+                if result is None or (progress is not None and progress.cancelled):  # cancelled: the rest too
+                    for other_path, other in jobs[index + 1:]:
+                        other.cancel()
+                        try:
+                            self.bridge.finish_reversed(other_path, other)  # (one done already is kept for next time)
+                        except OSError:
+                            pass
+                    return False
+                reversed_files[path] = result
+        return True
+
     def consolidate(self) -> None:
         """Join the selected MIDI clips on each track into one (Ctrl+J), and select them."""
         joined = self.editor.consolidate_clips(sorted(self.selection.clips))
@@ -947,21 +1092,27 @@ class LanesCanvas(QWidget):
             menu.exec(event.globalPos())
             return
         hit = self.hit_clip(pos)
-        if hit:
-            track_id, clip, _ = hit
-            if (track_id, clip.id) not in self.selection.clips:
-                self.selection.select_clips(self.editor, [(track_id, clip.id)])
+        if hit or self._in_selection(pos):
+            # On a clip (selected first, unless it is), or anywhere in the selected area: what acts on it.
+            if hit and (hit[0], hit[1].id) not in self.selection.clips:
+                self.selection.select_clips(self.editor, [(hit[0], hit[1].id)])
             refs = sorted(self.selection.clips)
-            split_at = self.view.snap_beat(self.view.x_to_beat(pos.x()))
             self._add_clipboard_actions(menu)
             menu.addSeparator()
-            menu.addAction("Split Here", lambda: self.editor.split_clips(refs, split_at))
-            menu.addAction("Duplicate", self.duplicate_area)
+            if hit:
+                split_at = self.view.snap_beat(self.view.x_to_beat(pos.x()))
+                menu.addAction("Split Here", lambda: self.editor.split_clips(refs, split_at))
+            self._show_shortcut(menu.addAction("Duplicate", self.duplicate_area), "Ctrl+D")
             consolidate = menu.addAction("Consolidate", self.consolidate)
             self._show_shortcut(consolidate, "Ctrl+J")
             consolidate.setEnabled(bool(self.editor.consolidatable(refs)))
+            reverse = menu.addAction("Reverse", self.reverse_selection)
+            self._show_shortcut(reverse, "R")
+            # (What R reverses: the audio clips in the selected area, whichever are selected as clips.)
+            in_range = self.editor.clips_in_range(*self.selection.time_range) if self.selection.clip_range else ()
+            reverse.setEnabled(any(isinstance(self.project.clip(*ref), Clip) for ref in in_range))
             menu.addSeparator()
-            menu.addAction("Delete", self.delete_area)
+            self._show_shortcut(menu.addAction("Delete", self.delete_area), QKeySequence.StandardKey.Delete)
         else:
             index = self.row_index_at(pos.y())
             track_id = None if index is None else self.layout_model.rows[index].track_id

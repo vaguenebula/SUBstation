@@ -63,8 +63,10 @@
 // goes to the RecordingSession's rings, tagged with the timeline position it
 // was taken at: the device's in the prologue, the tracks' and the master's in
 // the epilogue (the master's after its fader, before the metronome); the loop
-// doesn't wrap then. A count-in clicks before the playhead moves (the
-// metronome, even if it is off).
+// doesn't wrap then. A track being recorded plays none of its clips (nor a
+// MIDI track its clips' notes): the take replaces them, so unmonitored it is
+// silent (TrackBuffers::recorded). A count-in clicks before the playhead moves
+// (the metronome, even if it is off).
 //
 // MIDI input (MidiInput.h): messages come stamped with the device sample they
 // play at; each chunk takes those due in it. A track whose MIDI input accepts
@@ -334,6 +336,8 @@ private:
     void drainMidiInput(SharedState& shared) noexcept;
     void gatherMidiInput(int frames) noexcept;
     bool hearsMidiInput(const TrackRender& track, ChunkFlags flags) const noexcept;
+    // Whether a take of the track records now: it plays none of its clips then.
+    bool isRecorded(uint32_t trackId) const noexcept;
     MidiRecordingTake* midiTake(uint32_t trackId) const noexcept;
     void routeMidiInput(const TrackRender& track, bool hears, MidiRecordingTake* take, TrackBuffers& out) noexcept;
     void recordMidi(MidiRecordingTake* take, int offset, uint8_t channel, uint8_t key, uint8_t velocity) noexcept;

@@ -30,6 +30,8 @@ from PySide6.QtCore import QAbstractNativeEventFilter, QKeyCombination, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QWidget
 
+from . import rendering
+
 EDITOR_WINDOW_CLASS = "SUBstationPluginEditor"  # EditorWindow.cpp's kWindowClass
 
 WM_KEYDOWN = 0x0100
@@ -135,6 +137,8 @@ class PluginEditorShortcuts(QAbstractNativeEventFilter):
             return False, 0
         msg = wintypes.MSG.from_address(int(message))
         if msg.message not in (WM_KEYDOWN, WM_SYSKEYDOWN) or not is_plugin_editor(msg.hWnd):
+            return False, 0
+        if rendering.active() is not None:  # (a render's dialog is up: the window takes no keys meanwhile)
             return False, 0
         mods = pressed_modifiers()
         action = self.action_for(msg.wParam, mods, text_field=is_text_field(msg.hWnd))

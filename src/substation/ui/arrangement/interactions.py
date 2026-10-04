@@ -1,5 +1,9 @@
 """Mouse gestures on the track lanes: move/copy a time selection (a selected clip
-is one too), trim edges, time selection, and hand-scrolling."""
+is one too), trim edges, time selection, and hand-scrolling.
+
+Moving and trimming clips are heard as they go: the engine plays what the drag
+would make of the clips (EngineBridge.preview_clips) while the model waits for
+the drag to end, which makes one undo step."""
 
 from __future__ import annotations
 
@@ -42,7 +46,8 @@ class ClipGesture:
 
 class MoveRangeGesture(ClipGesture):
     """Drag inside a clip range: move (Ctrl: copy) the selected stretch of clips,
-    split at the range's edges. A click without dragging calls `on_click`."""
+    split at the range's edges (and the automation under it). A click without
+    dragging calls `on_click`. While it drags, the clips play where they would land."""
 
     def __init__(self, canvas, press: QPointF, on_click=None):
         self.canvas = canvas
@@ -68,6 +73,7 @@ class MoveRangeGesture(ClipGesture):
         self.track_delta = 0
         self.copy = False
         self.active = False
+        self._previewed: tuple[float, int, bool] | None = None  # (delta, track delta, copy) the engine plays
 
     def move(self, pos: QPointF, modifiers) -> None:
         if not self.active:
@@ -82,6 +88,17 @@ class MoveRangeGesture(ClipGesture):
         self.track_delta = self.canvas.editor.clamp_track_delta([(t, "") for t in self.track_ids],
                                                                 row - self.origin_row)
         self.copy = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        self._preview()
+
+    def _preview(self) -> None:
+        """The engine plays the clips where they would land (only when that changes)."""
+        state = (self.delta, self.track_delta, self.copy)
+        if state == self._previewed:
+            return
+        self._previewed = state
+        after, _, _ = self.canvas.editor.moved_range(self.start, self.end, self.track_ids, self.delta,
+                                                     self.track_delta, copy_clips=self.copy)
+        self.canvas.bridge.preview_clips(after)
 
     def hidden_ids(self) -> set[str]:
         return self.touched if self.active and not self.copy else set()
@@ -108,8 +125,11 @@ class MoveRangeGesture(ClipGesture):
             if self.on_click:
                 self.on_click()
             return
-        start, track_ids = self.canvas.editor.move_range(self.start, self.end, self.track_ids, self.delta,
-                                                         self.track_delta, copy_clips=self.copy)
+        try:
+            start, track_ids = self.canvas.editor.move_range(self.start, self.end, self.track_ids, self.delta,
+                                                             self.track_delta, copy_clips=self.copy)
+        finally:
+            self.canvas.bridge.end_clip_preview()  # (the model's clips: where they went, or back if refused)
         end = start + self.end - self.start
         selection = self.canvas.selection
         selection.set_time_range(start, end, track_ids,
@@ -118,6 +138,8 @@ class MoveRangeGesture(ClipGesture):
 
 
 class TrimGesture(ClipGesture):
+    """Drag a clip's edge: trim it. While it drags, the clip plays trimmed."""
+
     def __init__(self, canvas, track_id: str, clip: AnyClip, edge: str):
         self.canvas = canvas
         self.track_id = track_id
@@ -131,10 +153,15 @@ class TrimGesture(ClipGesture):
         view = self.canvas.view
         tempo = self.canvas.project.tempo
         beat = view.snap_beat(view.x_to_beat(pos.x()), bool(modifiers & Qt.KeyboardModifier.AltModifier))
+        previous = self.result
         if self.edge == "left":
             self.result = edits.trim_start(self.clip, beat, tempo)
         else:
             self.result = edits.trim_end(self.clip, beat, tempo)
+        if self.result != previous:
+            clips = [self.result if c.id == self.clip.id else c for c in self.canvas.project.track(self.track_id).clips]
+            self.canvas.bridge.preview_clips(
+                {self.track_id: edits.resolve_overlaps(clips, {self.clip.id}, tempo)})
 
     def hidden_ids(self) -> set[str]:
         return {self.clip.id} if self.result else set()
@@ -148,19 +175,22 @@ class TrimGesture(ClipGesture):
         return self.result.start_beat, self.result.end_beat(self.canvas.project.tempo), [self.track_id]
 
     def finish(self) -> None:
-        if self.result and self.result != self.clip:
-            self.canvas.editor.replace_clip(self.track_id, self.result, "Trim Clip")
-            # The selection (and where playback starts) follows the clip's new edges.
-            selection = self.canvas.selection
-            selection.select_clips(self.canvas.editor, [(self.track_id, self.clip.id)])
-            selection.set_insert(selection.time_range[0])
+        try:
+            if self.result and self.result != self.clip:
+                self.canvas.editor.replace_clip(self.track_id, self.result, "Trim Clip")
+                # The selection (and where playback starts) follows the clip's new edges.
+                selection = self.canvas.selection
+                selection.select_clips(self.canvas.editor, [(self.track_id, self.clip.id)])
+                selection.set_insert(selection.time_range[0])
+        finally:
+            self.canvas.bridge.end_clip_preview()  # (the model's clips: trimmed, or as they were)
 
 
 class TimeSelectGesture(ClipGesture):
-    """Click places the insert marker; drag selects across tracks. Where the drag
-    ends decides what: in a lane's clip (title) band, or anywhere above the lane it
-    started in, it selects the clips it touches; lower down it selects a time range
-    (later: automation)."""
+    """Click places the insert marker; drag selects a time range on the grid,
+    across the tracks it crosses: everything on them in that range (the clips it
+    touches, and the automation), and on every track in a group it crosses, as
+    in Ableton. Delete, Cut, Copy, Paste and Duplicate act on all of it."""
 
     def __init__(self, canvas, press: QPointF, bypass_snap: bool):
         self.canvas = canvas
@@ -181,18 +211,10 @@ class TimeSelectGesture(ClipGesture):
         row = self.canvas.row_index_at(pos.y(), clamp=True)
         first, last = sorted((self.anchor_row, row))
         rows = self.canvas.layout_model.rows[first:last + 1]
-        track_ids = [r.track_id for r in rows]
+        track_ids = self.canvas.project.with_contents(r.track_id for r in rows)
         selection = self.canvas.selection
-        # Up into the lanes above (or past the first track) selects clips too: only
-        # a drag kept to the lower part of lanes at or below its start is a lane range.
-        above = pos.y() + view.scroll_y < self.canvas.layout_model.rows[self.anchor_row].top
-        if above or self.canvas.in_clip_band(pos):
-            selection.set_time_range(start, end, track_ids,
-                                     clips=self.canvas.editor.clips_in_range(start, end, track_ids))
-            self.canvas.setCursor(Qt.CursorShape.PointingHandCursor)
-        else:
-            selection.set_time_range(start, end, track_ids)
-            self.canvas.setCursor(Qt.CursorShape.IBeamCursor)
+        selection.set_time_range(start, end, track_ids, clips=self.canvas.editor.clips_in_range(start, end, track_ids))
+        self.canvas.setCursor(Qt.CursorShape.IBeamCursor)
         selection.set_insert(start)
 
 

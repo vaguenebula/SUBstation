@@ -19,7 +19,7 @@ from substation.model.automation import (
 from substation.model.editor import ProjectEditor
 from substation.model.params import ParamSpec, mixer_specs
 from substation.model.project import Project
-from substation.model.serialization import load_into, project_to_dict
+from substation.model.serialization import VERSION, load_into, project_to_dict
 
 
 def env(*points):
@@ -294,7 +294,7 @@ def test_save_and_load(editor):
     editor.add_automation_lane(track.id)
     editor.set_automation_locked(True)
     data = json.loads(json.dumps(project_to_dict(editor.project)))
-    assert data["version"] == 14
+    assert data["version"] == VERSION
     data["tracks"][0]["automation"]["mixer:unknown"] = [[0, 1, 0]]  # from a later version: dropped
     loaded = Project()
     load_into(loaded, data)

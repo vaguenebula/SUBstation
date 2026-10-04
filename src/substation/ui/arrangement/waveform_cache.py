@@ -1,7 +1,9 @@
 """Waveform drawing: vectorised numpy rasterisation into cached QImage tiles.
 
 Tiles are anchored to the start of the source file (not the clip), so trimming
-or moving a clip reuses them; only zoom or lane-height changes render new ones.
+or moving a clip reuses them; only zoom, lane-height or gain changes render new
+ones. A clip's gain scales its waveform (louder is taller, cut off at the lane's
+edges), as it scales its audio.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ def _smooth(values: np.ndarray) -> np.ndarray:
 
 
 def render_tile(source: ge.AudioSource, frames_per_px: float, index: int, height: int, split_channels: bool,
-                argb: int) -> QImage | None:
+                argb: int, gain: float = 1.0) -> QImage | None:
     frames = source.frames
     # One padding column each side, so the smoothing is seamless across tile borders.
     edges = (index * TILE - 1 + np.arange(TILE + 3, dtype=np.float64)) * frames_per_px
@@ -66,8 +68,8 @@ def render_tile(source: ge.AudioSource, frames_per_px: float, index: int, height
     starts = np.clip(idx[:-1], 0, n - 1)
     ends = np.maximum(np.clip(idx[1:], 0, n), starts + 1)
     col_lo, col_hi = _column_minmax(lo, hi, starts, ends)
-    col_lo = np.where(valid, col_lo, 0.0)
-    col_hi = np.where(valid, col_hi, 0.0)
+    col_lo = np.where(valid, col_lo, 0.0) * gain
+    col_hi = np.where(valid, col_hi, 0.0) * gain
     if level >= 0:  # envelopes (not raw samples) read smoother with a light blur
         col_lo = _smooth(col_lo)
         col_hi = _smooth(col_hi)
@@ -109,6 +111,15 @@ def render_tile(source: ge.AudioSource, frames_per_px: float, index: int, height
     return qimage.copy()  # detach from the numpy buffer
 
 
+def quantized_gain(gain: float) -> float:
+    """A gain (linear) to 0.1 dB: steps that look the same (turning a gain knob
+    renders fewer tiles), and a quiet clip's waveform stays as small as it is
+    (never flat, as rounding the linear gain would make it)."""
+    if gain <= 0.0:
+        return 0.0
+    return 10.0 ** (round(20.0 * math.log10(gain), 1) / 20.0)
+
+
 class WaveformCache:
     def __init__(self, max_tiles: int = MAX_TILES):
         self._tiles: OrderedDict[tuple, QImage | None] = OrderedDict()
@@ -118,21 +129,22 @@ class WaveformCache:
         self._tiles.clear()
 
     def _tile(self, source: ge.AudioSource, fpp: float, index: int, height: int, split: bool,
-              argb: int) -> QImage | None:
-        key = (source.path, source.frames, source.sample_rate, round(fpp, 9), index, height, split, argb)
+              argb: int, gain: float) -> QImage | None:
+        key = (source.path, source.frames, source.sample_rate, round(fpp, 9), index, height, split, argb, gain)
         if key in self._tiles:
             self._tiles.move_to_end(key)
             return self._tiles[key]
-        tile = render_tile(source, fpp, index, height, split, argb)
+        tile = render_tile(source, fpp, index, height, split, argb, gain)
         self._tiles[key] = tile
         while len(self._tiles) > self._max_tiles:
             self._tiles.popitem(last=False)
         return tile
 
     def draw(self, painter: QPainter, source: ge.AudioSource, body: QRectF, clip_x: float, offset_sec: float,
-             frames_per_px: float, color: QColor, split_channels: bool, visible: QRectF) -> None:
-        """Draw the waveform for a clip body. `clip_x` is the screen x of the clip
-        start; the painter should already be clipped to the body."""
+             frames_per_px: float, color: QColor, split_channels: bool, visible: QRectF, gain: float = 1.0) -> None:
+        """Draw the waveform for a clip body, scaled by `gain` (linear). `clip_x`
+        is the screen x of the clip start; the painter should already be clipped
+        to the body."""
         x0 = max(body.left(), visible.left())
         x1 = min(body.right(), visible.right())
         if x1 <= x0 or frames_per_px <= 0:
@@ -142,8 +154,9 @@ class WaveformCache:
         last = int(math.floor((x1 - clip_x + u_offset) / TILE))
         height = int(body.height())
         argb = color.rgba()
+        gain = quantized_gain(gain)
         for index in range(max(0, first), last + 1):
-            tile = self._tile(source, frames_per_px, index, height, split_channels, argb)
+            tile = self._tile(source, frames_per_px, index, height, split_channels, argb, gain)
             if tile is None:
                 break
             x = clip_x + index * TILE - u_offset

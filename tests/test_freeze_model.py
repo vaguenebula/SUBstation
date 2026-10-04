@@ -327,7 +327,7 @@ def test_automation_doesnt_move_without_the_frozen_clips_under_it(editor):
     assert "frozen" in editor.messages[-1]
 
 
-def test_renders_no_track_plays_are_deleted(bridged, dc_wav, monkeypatch):
+def test_renders_no_track_plays_are_deleted(app, bridged, dc_wav, monkeypatch):
     from substation.ui import freezing
 
     editor, bridge, engine = bridged
@@ -338,15 +338,17 @@ def test_renders_no_track_plays_are_deleted(bridged, dc_wav, monkeypatch):
         editor._commit("Add", {track.id: [clip(name + "c", path=dc_wav)]})
         tracks.append(track.id)
     rendered = []
-    render = bridge.render_freeze
+    finish = bridge.finish_freeze
 
-    def failing(track_id):
-        if track_id == tracks[1]:
+    def failing(render):
+        if render.track_id == tracks[1]:
+            render.job.cancel()
+            render.job.finish()
             raise RuntimeError("Could not write it")
-        rendered.append(render(track_id))
+        rendered.append(finish(render))
         return rendered[-1]
 
-    monkeypatch.setattr(bridge, "render_freeze", failing)
+    monkeypatch.setattr(bridge, "finish_freeze", failing)
     assert freezing.freeze_tracks(editor, bridge, tracks) == []
     assert len(rendered) == 1 and not Path(rendered[0].path).exists()  # A's render, played by no track
     assert editor.project.track(tracks[0]).frozen is None and "could not be frozen" in editor.messages[-1]

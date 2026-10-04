@@ -127,7 +127,9 @@ class Clip:
     """An audio clip. `offset_sec` and `duration_sec` measure the source audio it
     plays. Unwarped, that plays at its own speed, so the clip's length in beats
     follows the tempo. Warped, the audio is taken to be at `segment_bpm` and is
-    stretched to the project tempo, so its length in beats is fixed (as in Ableton)."""
+    stretched to the project tempo, so its length in beats is fixed (as in Ableton).
+    A reversed clip plays a reversed copy of a file (`path`); `reversed_from` is
+    the file it was made from, which reversing it again goes back to."""
 
     id: str
     path: str
@@ -137,6 +139,7 @@ class Clip:
     offset_sec: float = 0.0
     source_duration_sec: float = 0.0
     gain_db: float = 0.0
+    reversed_from: str = ""
     # Clip view settings.
     warp: bool = False
     warp_mode: str = DEFAULT_WARP_MODE  # one of WARP_MODES
@@ -803,6 +806,11 @@ class Project(QObject):
         """What is in a group (the tracks in groups in it too), in order."""
         index = self.track_index(track_id)
         return self.tracks[index + 1:self.subtree_end(index)]
+
+    def with_contents(self, track_ids) -> list[str]:
+        """These tracks and what is in those that are groups, in the arrangement's order."""
+        wanted = {t for t in track_ids if self.has_track(t)}
+        return [t.id for t in self.tracks if t.id in wanted or any(g in wanted for g in self.ancestors(t.id))]
 
     def children(self, track_id: str) -> list[Track]:
         return [t for t in self.tracks if t.parent == track_id]

@@ -20,6 +20,8 @@ about how the code does it.
 | [widgets/](../../src/substation/ui/widgets) | `Knob`, `ValueBox`, `MeterWidget`, `Oscilloscope`, `ToggleButton` |
 | [transport_bar.py](../../src/substation/ui/transport_bar.py) | `TransportBar`: tempo, time signature, metronome, project key, computer keyboard button, position, play/stop/record, count-in, Re-Enable Automation, Lock Envelopes, oscilloscope, loop, follow, CPU, device status |
 | [dialogs.py](../../src/substation/ui/dialogs.py) | `PreferencesDialog` (Audio tab), `MidiPage`, `PluginsPage`, `ExportDialog`; `output_choices()` |
+| [rendering.py](../../src/substation/ui/rendering.py) | `RenderProgress`: a render in the background's progress dialog, with Cancel; `active()` |
+| [freezing.py](../../src/substation/ui/freezing.py) | freezing (in the background), unfreezing and flattening the selected tracks |
 | [computer_keyboard.py](../../src/substation/ui/computer_keyboard.py) | `ComputerKeyboard`: letter keys as a MIDI input, through an application event filter |
 | [plugin_keys.py](../../src/substation/ui/plugin_keys.py) | `PluginEditorShortcuts`: the main window's shortcuts while a plug-in's (Win32) editor has the focus |
 | [arrangement/](../../src/substation/ui/arrangement) | the arrangement view: [arrangement.md](arrangement.md) |
@@ -125,13 +127,14 @@ Several actions mean different things depending on what the user is working on. 
 is `Selection.focus` (`"clips"`, `"track"`, `"devices"` or `"automation"`) plus what is
 selected:
 
-| Action | `focus == "devices"` | lane range with `lanes` | `points` | clip range | `focus == "track"` |
+| Action | `focus == "devices"` | lane range with `lanes` | `points` | time range over tracks (clips and their automation) | `focus == "track"` |
 |---|---|---|---|---|---|
 | Delete | `devices.delete_selected()` | `editor.delete_automation_range` | `editor.delete_automation_points` | `lanes.delete_area()` | `delete_track()` |
 | Cut / Copy | `devices.cut_selected()` / `copy_selected()` | `lanes.cut_automation()` / `copy_automation()` | refused, with a message | `lanes.cut_area()` / `copy_area()` | — |
 | Paste | `devices.paste()` | `lanes.paste()` (the arrangement keeps one clipboard for clips and automation) | | | |
 | Ctrl+D | `devices.duplicate_selected()` | `editor.duplicate_automation_range`, selects the copy | | `lanes.duplicate_area()` | `duplicate_tracks()` |
 | Ctrl+G / Ctrl+Shift+G | `devices.group_selected()` / `ungroup_selected()` | | | | `editor.group_tracks` / `editor.ungroup` |
+| R | | | | `lanes.reverse_selection()` (its audio clips) | |
 
 The piano roll takes Delete, Ctrl+A, Ctrl+D and Ctrl+U before these actions fire (see
 [piano-roll.md](piano-roll.md#keys)).
@@ -162,8 +165,39 @@ first). `QSettings` gives a one-item list back as a plain string, which
 `recent_projects()` turns back into a list.
 
 `export_audio()` shows the `ExportDialog` (range: the arrangement, or the loop if it is
-on and not empty; 16-bit, 24-bit or 32-bit float), stops playback, waits for samples
-still loading (`bridge.wait_for_device_states()`), then calls `engine.export_wav`.
+on and not empty; 16-bit, 24-bit or 32-bit float), stops playback, and renders in the
+background (`engine.start_export`) with its progress in a `RenderProgress` (see
+[Renders in the background](#renders-in-the-background)): "Exported …", "Export cancelled",
+or a message box saying why it failed.
+
+Opening a project shows it at once: its plug-ins load after it
+([engine-bridge.md](../python/engine-bridge.md#opening-a-project)), and the status bar's
+right end says how far they got ("Loading plug-ins: 3 of 12", with a bar) until they all
+have. The selected track's load first.
+
+### Renders in the background
+
+Exporting and freezing (Ctrl+Shift+F, the track menus: [freezing.py](../../src/substation/ui/freezing.py))
+render on the engine's thread, a `RenderJob`
+([engine/README.md](../engine/README.md#in-the-background)), while a `RenderProgress`
+([rendering.py](../../src/substation/ui/rendering.py)) shows. It is application-modal: the
+window goes on (it repaints, its meters and timers run, plug-ins still waiting to load go on
+loading) but takes no edits, since the render is of the project as it was when it started.
+Used as a context manager:
+
+- `wait_for_devices(bridge)`: a busy bar ("Loading plug-ins (3 to go)…") until
+  `bridge.devices_ready()`;
+- `follow(job, label, (i, n))`: the bar at part `i` of `n` as the job goes, until it ends;
+  the caller then finishes it (`job.finish()`, `bridge.finish_freeze()`): None is cancelled.
+- Cancel (the button, Esc, the close button) only sets `cancelled`: the job is cancelled at
+  the next poll (every 30 ms) and the dialog stays until its caller is done. The button takes
+  no focus, so Space doesn't cancel.
+- Freezing several tracks renders them one after another in the same dialog ("Freezing Bass
+  (2 of 3)…"); cancelled or failed, the renders done are deleted (`discard_freeze`) and
+  nothing is frozen (no undo step).
+- Closing the main window while a render runs cancels the render instead
+  (`rendering.active()`); the window stays.
+- Each poll runs a local `QEventLoop` (`_spin`), so the callers read as straight code.
 
 ### Audio start-up
 
@@ -392,6 +426,7 @@ controls, dialogs, the piano roll, devices' own editors and automation lanes.
 | Test file | Covers here |
 |---|---|
 | [test_ui_smoke.py](../../tests/test_ui_smoke.py) | the window mirrored into the engine, edit commands, transport and locate, zoom, scroll and follow, save/open, `test_header_controls_and_dialogs` (Preferences, Export), `test_audio_threads_preference`, `test_shortcuts_from_plugin_editor` (`plugin_keys.action_for`), `test_open_recent` |
+| [test_ui_rendering.py](../../tests/test_ui_rendering.py) | exporting and freezing in the background (the dialog, Cancel, closing the window meanwhile), a project's plug-ins loading after it opens (the selected track's first, moved or deleted meanwhile, renders waiting for them, saving meanwhile) |
 | [test_computer_keyboard.py](../../tests/test_computer_keyboard.py) | M, notes and octaves, text fields and modifiers keeping their keys, recording from it |
 | [test_ui_plugins.py](../../tests/test_ui_plugins.py) | Ctrl+W closing editors, edits in an editor becoming undo steps, editors following the selected track, the Plug-ins page of Preferences |
 | [test_ui_recording.py](../../tests/test_ui_recording.py) | the record button, count-in, the MIDI page of Preferences |

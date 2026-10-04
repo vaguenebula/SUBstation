@@ -50,7 +50,7 @@ seconds; volumes are dB; pan is -1..1; automation values are normalized 0..1.
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | `"gilstudio-project"` | must match, or the file is refused ("Not a SUBstation project") |
-| `version` | int | `VERSION`, now 14; a larger one is refused ("saved by a newer version") |
+| `version` | int | `VERSION`, now 15; a larger one is refused ("saved by a newer version") |
 | `tempo` | float | BPM (default 120) |
 | `key` | string or null | the project key as `Key.name` (`"Am"`, `"F#"`, `"Bb"`); null: *No Key* |
 | `time_signature` | `[numerator, denominator]` | default `[4, 4]` |
@@ -108,13 +108,15 @@ always `"master"`, which is also the automation owner and the input source for r
 | `relative_path` | the path relative to the project file's folder, or null (unsaved project, or another drive) |
 | `start_beat` | where it starts on the timeline |
 | `duration_sec`, `offset_sec`, `source_duration_sec` | the window onto the source, in source seconds |
-| `gain_db`, `pan` | clip volume and pan |
+| `gain_db`, `pan` | clip gain and pan |
 | `warp`, `warp_mode`, `segment_bpm` | warping (`segment_bpm` 0: not set) |
 | `transpose`, `detune` | semitones (int), cents |
+| `reversed_from`, `reversed_from_relative` | only for a reversed clip: the file `path` (its reversed copy) was made from, absolute and relative |
 
 On load, `path` is used if it exists; otherwise, if the project file's folder plus
-`relative_path` exists, that is used. So a project folder (with its samples and its
-`Recordings` folder) can be moved or copied to another computer.
+`relative_path` exists, that is used (and the same for `reversed_from`). So a project
+folder (with its samples and its `Recordings` and `Reversed` folders) can be moved or
+copied to another computer.
 
 ### MIDI clips
 
@@ -189,6 +191,7 @@ current version.
 | 12 | racks (chains, macros) | none |
 | 13 | rack names (`"name"` on a rack) | none: racks named by their kind |
 | 14 | frozen tracks (`frozen`) | none frozen |
+| 15 | reversed clips (`reversed_from`) | none reversed |
 
 `folded_devices` has no version of its own: files without it load with no device folded.
 The project key, `automation_locked` and the clip fields default the same way.

@@ -108,6 +108,7 @@ class PluginHost:
 
     def request_plugin_editor(self, track_id: str, device_id: str) -> None:
         """Open a plug-in's editor now if its track is the one shown, or when it is."""
+        self.load_plugin_now(device_id)  # (if it waits to load)
         if track_id == self._editors_track:
             self.open_plugin_editor(track_id, device_id, report=False)  # having none is fine here
         else:

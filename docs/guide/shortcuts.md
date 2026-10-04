@@ -41,10 +41,11 @@ the focus. Most are also in the menus, which show their keys.
 | Action | Keys |
 |---|---|
 | Insert MIDI clip (on the selected MIDI track, or over a time selection) | Ctrl+Shift+D (or Ctrl+Shift+M) |
-| Duplicate / split at insert marker / delete (clips, or automation in a lane's time selection) | Ctrl+D / Ctrl+E / Delete (or Backspace) |
-| Cut / copy / paste clips, or automation in a lane's time selection (the last copied is what pastes) | Ctrl+X / Ctrl+C / Ctrl+V |
+| Duplicate / split at insert marker / delete (what is selected: clips and the automation with them, or automation in a lane's time selection) | Ctrl+D / Ctrl+E / Delete (or Backspace) |
+| Cut / copy / paste what is selected (clips and the automation with them, or automation in a lane's time selection; the last copied is what pastes) | Ctrl+X / Ctrl+C / Ctrl+V |
 | Consolidate the selected MIDI clips on each track into one (also in the clip's right-click menu) | Ctrl+J |
-| Select all clips | Ctrl+A |
+| Reverse the selected audio clips (again: forwards) | R |
+| Select everything from the first clip to the last | Ctrl+A |
 | Copy clips while dragging | hold Ctrl |
 | Bypass snapping while dragging | hold Alt |
 | Show / hide the clip view | Shift+Tab |

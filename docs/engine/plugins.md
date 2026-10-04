@@ -86,7 +86,11 @@ so the module outlives everything the plug-in made.
 ### Threads and the engine lock
 
 Plug-ins are created, configured, asked about and destroyed on the main thread, as VST3 requires; only `process()`
-(and `reset()`, which only sets a flag) runs on the rendering thread.
+(and `reset()`, which only sets a flag) runs on the rendering thread (the audio thread, its workers, or a render in
+the background). Loading them on another thread isn't an option: JUCE plug-ins take the thread that creates their
+first instance for their message thread (their timers and async calls run there), and Komplete Kontrol hung when
+its module was loaded off the main thread. A project's plug-ins load after it opens, one at a time between the
+UI's events, instead (the bridge's [loading.py](../../src/substation/audio/engine_bridge/loading.py)).
 
 - Plug-ins may run a message loop inside a call (a licence dialog) that calls back into the engine or the UI. The
   engine's lock (`Engine::mutex_`) is recursive, and slow plug-in calls don't hold it: `addPluginProcessor()` loads
@@ -96,7 +100,8 @@ Plug-ins are created, configured, asked about and destroyed on the main thread, 
   call returns (the bridge's `_busy` counter).
 - A removed plug-in waits until no snapshot uses it and is destroyed in `Engine::idle()`, on the main thread
   (`retireProcessorLocked()` closes its editor and moves it to `graveyard_`; `idle()` destroys those only the
-  graveyard holds, outside the lock, since plug-ins may take their time to go).
+  graveyard holds, outside the lock, since plug-ins may take their time to go: 20 ms of them a call, the rest
+  in the next calls, so closing a project full of plug-ins doesn't hold up the UI).
 - The component handler may be called from anywhere by badly behaved plug-ins, so what it touches is thread-safe
   (`mutex_` for the parameter lists and pending events; atomics for restart flags).
 

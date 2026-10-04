@@ -73,6 +73,26 @@ frozen track is frozen in the engine too: it plays its frozen audio as its only
 clip, and its devices' processors go (a plug-in's state is kept, as for a
 device deleted, and comes back when it is unfrozen). The tracks in a frozen
 group keep theirs, but the engine doesn't render them.
+
+Opening a project: its plug-ins load after it shows (loading.py), one at a
+time between the UI's events; plugins_loading reports how far they got. The
+project plays without them meanwhile. Renders wait for them (and for built-in
+devices' states: wait_for_device_states, devices_ready).
+
+Renders in the background: start_freeze (and the engine's start_export) return
+the engine's RenderJob at once; the UI shows its progress, may cancel it, and
+finishes it (finish_freeze gives the frozen audio). Meanwhile live output is
+silent, and the device isn't reopened.
+
+Reversing: a reversed clip plays a reversed copy of its file, written once
+(reversed_copy finds it again, after reopening too) into the reversed folder
+(the project's "Reversed" folder once it is saved), on a thread of its own
+(start_reversed: a ReverseJob, followed like a render).
+
+Previews: while a clip is dragged, preview_clips hands the engine what the drag
+would make of the tracks' clips, so they are heard where they are going; the
+model changes only when the drag ends (end_clip_preview puts the model's clips
+back if it changed nothing).
 """
 
 from __future__ import annotations
@@ -87,11 +107,13 @@ from ...model.params import ParamSpec
 from ...model.project import Project
 from .audio_device import AudioDevice
 from .devices import DeviceSync, _StateSignals
-from .freezing import FREEZE_TAIL_SECONDS, FreezeSync, freeze_folder
+from .freezing import FREEZE_TAIL_SECONDS, FreezeRender, FreezeSync, freeze_folder
 from .inputs import COMPUTER_KEYBOARD, InputSync
+from .loading import PluginLoader
 from .parameters import ParameterSync
 from .plugins import MAX_HIDDEN_EDITORS, PluginHost
 from .recording import LiveTake, Recorder, recordings_folder, take_path
+from .reversing import ReverseSync, reversed_folder
 from .sources import AUDIO_EXTENSIONS, SourceLoader, _LoadSignals, is_audio_file
 from .tracks import TrackSync, clip_desc, note_descs
 from .transport import Transport
@@ -102,18 +124,20 @@ __all__ = [
     "FREEZE_TAIL_SECONDS",
     "MAX_HIDDEN_EDITORS",
     "EngineBridge",
+    "FreezeRender",
     "LiveTake",
     "clip_desc",
     "freeze_folder",
     "is_audio_file",
     "note_descs",
     "recordings_folder",
+    "reversed_folder",
     "take_path",
 ]
 
 
-class EngineBridge(TrackSync, InputSync, DeviceSync, PluginHost, ParameterSync, SourceLoader, Transport, Recorder,
-                   FreezeSync, AudioDevice, QObject):
+class EngineBridge(TrackSync, InputSync, DeviceSync, PluginHost, PluginLoader, ParameterSync, SourceLoader, Transport,
+                   Recorder, FreezeSync, ReverseSync, AudioDevice, QObject):
     source_ready = Signal(str)  # a file finished decoding (waveform available)
     source_failed = Signal(str, str)
     position_changed = Signal(float)
@@ -129,6 +153,7 @@ class EngineBridge(TrackSync, InputSync, DeviceSync, PluginHost, ParameterSync, 
     plugin_editor_changed = Signal(str, str)  # its editor opened or closed
     plugin_state_dirty = Signal()  # a plug-in changed in a way no edit shows: the project has changes
     devices_loaded = Signal(str)  # track id: its devices' processors were (re)created
+    plugins_loading = Signal(int, int)  # a project's plug-ins loading: loaded, of how many ((0, 0): all done)
     # Automation owner (track id or MASTER): which of its envelopes play, or are overridden, changed.
     automation_state_changed = Signal(str)
     recording_changed = Signal(bool)  # recording started or ended
@@ -185,7 +210,15 @@ class EngineBridge(TrackSync, InputSync, DeviceSync, PluginHost, ParameterSync, 
         self._last_playing = False
         self._recording: dict[int, str] = {}  # engine track id -> track id, while recording
         self.live_takes: dict[str, LiveTake] = {}  # track id -> its take while recording
+        self._previewing: set[str] = set()  # tracks playing a dragged clip's preview (preview_clips)
+        self._reversed: dict[str, str] = {}  # file -> its reversed copy, written this session
         self.midi_errors: dict[str, str] = {}  # MIDI input -> why it couldn't be opened
+        self._deferring = False  # plug-ins added now wait to load (a project opening)
+        self._pending_plugins: dict[str, None] = {}  # device ids whose plug-ins wait to load, in order
+        self._plugins_total = 0  # of those, and those loaded since the project opened
+        self._plugin_timer = QTimer(self)
+        self._plugin_timer.setSingleShot(True)
+        self._plugin_timer.timeout.connect(self._load_next_plugin)
 
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(2)
@@ -230,6 +263,7 @@ class EngineBridge(TrackSync, InputSync, DeviceSync, PluginHost, ParameterSync, 
     def shutdown(self) -> None:
         """Unload every plug-in now, while the application is still whole (not
         whenever the engine happens to be garbage-collected)."""
+        self._stop_loading_plugins()
         self.close_all_editors()
         self.wait_for_device_states()
         self._remove_engine_tracks()
@@ -237,4 +271,4 @@ class EngineBridge(TrackSync, InputSync, DeviceSync, PluginHost, ParameterSync, 
         self._plugin_ids.clear()
         for name in self.engine.open_midi_inputs():
             self.engine.close_midi_input(name)
-        self.engine.idle()
+        self.engine.idle(release_all=True)

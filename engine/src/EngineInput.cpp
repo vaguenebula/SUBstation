@@ -79,6 +79,7 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
     std::lock_guard lock(mutex_);
     if (!deviceRunning_) throw std::runtime_error("No audio device is running");
     if (recording_) throw std::runtime_error("Already recording");
+    checkNotRenderingLocked();
     if (targets.empty()) throw std::invalid_argument("Nothing to record");
     const auto ringFrames = static_cast<size_t>(sampleRate_ * 8.0);  // the writer may fall this far behind
     // A sample taken in a block came back through the input after leaving the

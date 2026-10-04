@@ -271,12 +271,14 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     for (const TrackRender& track : snap.tracks) {
         TrackBuffers& buffers = *track.buffers;
         buffers.monitored = isMonitored(track, flags);
+        buffers.recorded = flags.live && isRecorded(track.id);
         const bool hearsMidi = hearsMidiInput(track, flags);
         MidiRecordingTake* take = recording_ ? midiTake(track.id) : nullptr;
         buffers.numEvents = 0;
         if (!track.notes.empty() || numActiveNotes_ > 0 || numPreviewNotes_ > 0 || numInputEvents_ > 0 ||
             numLiveNotes_ > 0) {
-            buildNoteEvents(track, buffers, hearsMidi, !(hearsMidi && track.monitor == MonitorMode::In), take);
+            const bool clipNotes = !buffers.recorded && !(hearsMidi && track.monitor == MonitorMode::In);
+            buildNoteEvents(track, buffers, hearsMidi, clipNotes, take);
         }
         assignVoices(track, voices, buffers);
     }
@@ -362,7 +364,7 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
         } else {
             readInput(track.input, left, right, frames);
         }
-    } else {
+    } else if (!buffers.recorded) {  // (being recorded, unmonitored: silence; the take replaces its clips)
         int nextVoice = 0;
         for (int s = 0; s < numSegments_; ++s) {
             renderClips(track, segments_[s], snap.clipFadeSamples, buffers, nextVoice, scratch, left, right);
@@ -741,6 +743,15 @@ bool Renderer::hearsMidiInput(const TrackRender& track, ChunkFlags flags) const 
         case MonitorMode::Off: break;
     }
     return false;
+}
+
+bool Renderer::isRecorded(uint32_t trackId) const noexcept {
+    // A take of it records (until the playhead jumps: the takes end there).
+    if (!recording_ || recording_->interrupted()) return false;
+    for (const auto& take : recording_->takes()) {
+        if (take->trackId == trackId) return true;
+    }
+    return midiTake(trackId) != nullptr;
 }
 
 MidiRecordingTake* Renderer::midiTake(uint32_t trackId) const noexcept {
@@ -1161,7 +1172,7 @@ void Renderer::assignVoices(const TrackRender& track, const WarpVoiceSet& voices
     // In the order renderClips() plays the clips, one entry per stretched clip
     // (without a voice if there are more than voices: it stays silent).
     buffers.numVoices = 0;
-    if (buffers.monitored) return;
+    if (buffers.monitored || buffers.recorded) return;
     for (int s = 0; s < numSegments_; ++s) {
         const Segment& segment = segments_[s];
         forEachClip(track, segment.position, segment.position + segment.length,
