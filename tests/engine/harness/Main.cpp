@@ -23,6 +23,7 @@ std::vector<Case>& registry() {
 
 int failures = 0;
 std::filesystem::path currentDir;
+std::vector<std::string> context;  // INFO()s in scope
 
 }  // namespace
 
@@ -30,8 +31,13 @@ Registrar::Registrar(const char* name, const char* file, TestFn fn) { registry()
 
 void fail(const char* file, int line, const std::string& message) {
     ++failures;
-    std::cerr << "    " << std::filesystem::path(file).filename().string() << ":" << line << ": " << message << "\n";
+    std::cerr << "    " << std::filesystem::path(file).filename().string() << ":" << line << ": " << message;
+    for (const std::string& about : context) std::cerr << " [" << about << "]";
+    std::cerr << "\n";
 }
+
+Info::Info(std::string text) { context.push_back(std::move(text)); }
+Info::~Info() { context.pop_back(); }
 
 std::filesystem::path tempDir() {
     if (currentDir.empty()) {

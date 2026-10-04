@@ -7,10 +7,18 @@
 // CHECK records a failure and goes on; REQUIRE ends the test. SKIP(reason) ends
 // it as skipped. Run `engine_tests [substring...]` to run only the tests whose
 // names contain one of the substrings; `--list` lists them.
+//
+// The Python tests' comparisons: CHECK_APPROX is pytest.approx (relative 1e-6),
+// CHECK_APPROX_REL and CHECK_NEAR are approx(rel=...) and approx(abs=...), and
+// CHECK_APPROX_TOL is approx(rel=..., abs=...) (either may hold).
+// CHECK_THROWS_MATCHING is pytest.raises(..., match=...): the message is searched
+// with the regular expression. INFO(text) adds what a failure in its scope was
+// about (a parameter, a seed) to the failure's message.
 
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -44,6 +52,22 @@ std::string show(const T& value) {
 
 // A fresh folder for the running test (removed after it).
 std::filesystem::path tempDir();
+
+// pytest.approx's tolerance: the larger of `rel` times the expected value and
+// `abs`; with only `abs` given (rel < 0), just that.
+inline double approxTolerance(double expected, double rel, double abs) {
+    if (rel < 0.0) return abs;
+    return std::fmax(rel * std::fabs(expected), abs);
+}
+
+// What a failure in its scope was about (INFO).
+class Info {
+public:
+    explicit Info(std::string text);
+    ~Info();
+    Info(const Info&) = delete;
+    Info& operator=(const Info&) = delete;
+};
 
 }  // namespace subtest
 
@@ -86,6 +110,40 @@ std::filesystem::path tempDir();
             ::subtest::fail(__FILE__, __LINE__,                                                           \
                             "CHECK_NEAR(" #a ", " #b ", " #tolerance "): " + ::subtest::show(subtest_a) + \
                                 " vs " + ::subtest::show(subtest_b));                                     \
+    } while (0)
+
+#define CHECK_APPROX_TOL(a, b, rel, abs_)                                                                \
+    do {                                                                                                  \
+        const double subtest_a = static_cast<double>(a);                                                  \
+        const double subtest_b = static_cast<double>(b);                                                  \
+        if (!(std::fabs(subtest_a - subtest_b) <= ::subtest::approxTolerance(subtest_b, rel, abs_)))      \
+            ::subtest::fail(__FILE__, __LINE__,                                                           \
+                            "CHECK_APPROX(" #a ", " #b "): " + ::subtest::show(subtest_a) + " vs " +       \
+                                ::subtest::show(subtest_b));                                              \
+    } while (0)
+#define CHECK_APPROX(a, b) CHECK_APPROX_TOL(a, b, 1e-6, 1e-12)
+#define CHECK_APPROX_REL(a, b, rel) CHECK_APPROX_TOL(a, b, rel, 1e-12)
+
+#define SUBTEST_INFO_NAME SUBTEST_CAT(subtest_info_, __LINE__)
+#define INFO(text) const ::subtest::Info SUBTEST_INFO_NAME(text)
+
+#define CHECK_THROWS_MATCHING(expr, Type, pattern)                                                   \
+    do {                                                                                             \
+        std::string subtest_message;                                                                 \
+        bool subtest_threw = false;                                                                  \
+        try {                                                                                        \
+            (void)(expr);                                                                            \
+        } catch (const Type& subtest_e) {                                                            \
+            subtest_threw = true;                                                                    \
+            subtest_message = subtest_e.what();                                                      \
+        } catch (...) {                                                                              \
+        }                                                                                            \
+        if (!subtest_threw)                                                                          \
+            ::subtest::fail(__FILE__, __LINE__, "CHECK_THROWS_MATCHING(" #expr ", " #Type "): no " #Type); \
+        else if (!std::regex_search(subtest_message, std::regex(pattern)))                           \
+            ::subtest::fail(__FILE__, __LINE__,                                                      \
+                            "CHECK_THROWS_MATCHING(" #expr "): \"" + subtest_message +              \
+                                "\" doesn't match \"" + std::string(pattern) + "\"");               \
     } while (0)
 
 #define CHECK_THROWS_AS(expr, Type)                                                                   \
