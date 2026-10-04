@@ -422,7 +422,7 @@ Ducks its input along a curve from each hit: for a bass under a kick.
   lookahead, summed to mono) and `phase` (samples since the latest hit; -1 once its curve
   is over), one value per sample each, pushed together so they stay in step. The
   editor finds the hits (the phase's 0s) and fits the curve to the kick
-  (model/sidechain_fit.py).
+  ([analysis/sidechain_fit.py](../../src/substation/analysis/sidechain_fit.py)).
 
 ### Racks
 

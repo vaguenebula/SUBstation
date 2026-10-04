@@ -13,7 +13,7 @@ threshold.
 
 The clash view compares the kick's spectrum with the input's and marks where
 they clash. Fit (or a click on the view) fits the curve to the kick there
-(model.sidechain_fit): its points, length and crossover, in one undo step;
+(analysis.sidechain_fit): its points, length and crossover, in one undo step;
 Auto fits again at every hit (all one step while nothing else changes), Tight,
 Natural or Loose say how long the input keeps out of the way.
 
@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import theme
-from ...model import sidechain_fit
+from ...analysis import sidechain_fit
 from ...model.automation import device_key
 from ...model.params import format_value
 from ..device_panel import DeviceWidget

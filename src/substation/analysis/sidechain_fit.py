@@ -28,7 +28,7 @@ from itertools import pairwise
 
 import numpy as np
 
-from .automation import CURVATURE
+from ..model.automation import CURVATURE
 
 CHARACTERS = ("Tight", "Natural", "Loose")
 RANGE_DB = (12.0, 20.0, 30.0)  # per character: how far below its peak the kick still ducks the input

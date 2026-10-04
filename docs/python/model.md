@@ -51,7 +51,6 @@ into undo commands. The audio engine only mirrors this model (see
 | [keys.py](../../src/substation/model/keys.py) | Musical keys (`Key`), reading tempo and key from file names (`parse_filename`), what a dropped clip starts with (`clip_settings`) |
 | [device_state.py](../../src/substation/model/device_state.py) | A built-in device's state besides its parameters (a sampler's sample), in the engine's text format, base64 in `Device.state` |
 | [serialization.py](../../src/substation/model/serialization.py) | `.gilproj` and `.gilpreset` files: see [serialization.md](serialization.md) |
-| [sidechain_fit.py](../../src/substation/model/sidechain_fit.py) | Fitting the Sidechain device's curve to a kick: `Capture` (its displays, by absolute index, and the hits), `spectra` (where the kick and the input clash), `clash_envelope`, `reduction`, `fit_points`, `analyze` → `Fit`; pure numpy |
 | [presets.py](../../src/substation/model/presets.py) | The user's preset library: `library_dir`, `save_to_library`, `list_presets`, `rename_preset`; see [serialization.md](serialization.md#the-library-presetspy) |
 
 ## Key types

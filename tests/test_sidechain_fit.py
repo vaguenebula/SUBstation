@@ -1,11 +1,11 @@
-"""Fitting the Sidechain device's curve to a kick (model/sidechain_fit): the clash between the kick and
+"""Fitting the Sidechain device's curve to a kick (analysis/sidechain_fit): the clash between the kick and
 the input, the kick's envelope there, the reduction it calls for, the points, and capturing hits."""
 
 import numpy as np
 import pytest
 
+from substation.analysis import sidechain_fit as sf
 from substation.model import automation
-from substation.model import sidechain_fit as sf
 
 RATE = 48000
 
