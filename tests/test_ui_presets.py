@@ -6,6 +6,7 @@ double-clicked it goes on the selected track (an instrument with no MIDI track
 selected: on a new one); dropped on a track in the arrangement, on that track.
 Presets are renamed and deleted from the browser."""
 
+import time
 import types
 from pathlib import Path
 
@@ -13,9 +14,11 @@ from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QDropEvent
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 
-from substation.model.serialization import PRESET_EXTENSION, load_preset
+from substation.model.project import Device
+from substation.model.serialization import PRESET_EXTENSION, load_preset, save_preset
 from substation.ui.browser import browser_panel
 from substation.ui.browser.browser_models import preset_paths
+from substation.ui.browser.preset_index import PresetIndex
 from substation.ui.device_panel import RackWidget
 
 from .test_ui_smoke import settle
@@ -228,3 +231,18 @@ def test_a_rack_is_titled_as_its_preset(window, monkeypatch):
     assert devices.insert_preset(str(path))
     new = window.project.track(track.id).devices[-1]
     assert devices.widgets[new.id].title.text() == "Glue"
+
+
+def test_the_preset_index_sees_the_library_made(app, tmp_path):
+    """No library yet: the nearest folder above it is watched, so the library made
+    (outside the app) is listed."""
+    root = tmp_path / "SUBstation" / "Presets"
+    index = PresetIndex(root=root)
+    assert index.items == [] and index._watcher.directories()
+    (root / "Utility").mkdir(parents=True)
+    save_preset(Device(id="u", kind="utility"), root / "Utility" / f"Warm{PRESET_EXTENSION}")
+    deadline = time.monotonic() + 5
+    while not index.items and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    assert [item.name for item in index.items] == ["Warm"]
