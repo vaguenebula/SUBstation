@@ -442,6 +442,12 @@ def test_a_plugin_parameters_own_value_survives_presets_and_freezing(window, tmp
     old = bridge.plugin_state(track, device)
     window.editor.set_device_state(track, device, base64.b64encode(old).decode(), base64.b64encode(preset).decode())
     assert bridge.own_value(track, gain) == pytest.approx(0.8)
+    # A state the plug-in refuses changes nothing kept (its values are still the envelope's).
+    render(window)
+    bridge.poll_plugins()
+    window.editor.set_device_state(track, device, base64.b64encode(preset).decode(),
+                                   base64.b64encode(b"not a preset").decode())
+    assert bridge.own_value(track, gain) == pytest.approx(0.8)
     r.run("clear_automation", {"owner": track, "target": gain})
     np.testing.assert_allclose(render(window)[1000:2 * SAMPLE_RATE, 0], 0.8, atol=1e-4)
     # Frozen and unfrozen while it plays: the state it comes back with holds the envelope's value, not its own.

@@ -362,14 +362,17 @@ class DeviceSync:
         self.plugin_errors[device.id] = message
         self.status_message.emit(message)
 
-    def _set_plugin_state(self, processor_id: int, name: str, state: bytes) -> None:
+    def _set_plugin_state(self, processor_id: int, name: str, state: bytes) -> bool:
+        """Whether the plug-in took the state (if not, it says why on status_message)."""
         self._busy += 1
         try:
             self.engine.set_processor_state(processor_id, state)
         except (RuntimeError, ValueError) as exc:
             self.status_message.emit(f"{name}: its settings could not be restored ({exc})")
+            return False
         finally:
             self._busy -= 1
+        return True
 
     def _forget_processor(self, device_id: str, processor_id: int | None, remove: bool = True) -> None:
         """A device's processor goes away (with its track if not `remove`; a rack
@@ -458,9 +461,8 @@ class DeviceSync:
             return
         if not device.is_plugin:
             self._set_builtin_state(engine_id, device)
-        elif device.state:
-            self._set_plugin_state(engine_id, device.plugin.name, base64.b64decode(device.state))
-            self._refresh_plugin_own_values(track_id, device_id, engine_id)
+        elif device.state and self._set_plugin_state(engine_id, device.plugin.name, base64.b64decode(device.state)):
+            self._refresh_plugin_own_values(track_id, device_id, engine_id)  # (one refused: they are as they were)
 
     def _set_builtin_state(self, processor_id: int, device: Device) -> None:
         """A built-in device's state is the model's (none: its defaults); it is
