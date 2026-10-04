@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "Platform.h"
 #include "Text.h"
 
 namespace sub::browser {
@@ -23,21 +24,22 @@ std::shared_ptr<const FolderFiles> FolderFiles::make(std::vector<Name> names) {
         f.nameLen = static_cast<uint16_t>(n.name.size());
         f.lower = n.lower == n.name ? f.name : add(n.lower);
         f.lowerLen = static_cast<uint16_t>(n.lower.size());
-        f.fold = f.ntLower = f.lower;  // the same for ASCII names
-        f.foldLen = f.ntLowerLen = f.lowerLen;
-        if (!isAscii(n.name)) {
+        f.fold = f.lower;  // the same for ASCII names
+        f.foldLen = f.lowerLen;
+        const bool ascii = isAscii(n.name);
+        if (!ascii) {
             // str.casefold() of the name (not of its lower case), as the Name sort used.
             const std::string fold = pyCasefold(n.name);
             if (fold != n.lower) {
                 f.fold = add(fold);
                 f.foldLen = static_cast<uint16_t>(fold.size());
             }
-            const std::string nt = sub::browser::ntLower(toWide(n.name));
-            if (nt != n.lower) {
-                f.ntLower = add(nt);
-                f.ntLowerLen = static_cast<uint16_t>(nt.size());
-            }
         }
+        // The name as in its key. Where keys ignore case an ASCII name's is its
+        // lower case; elsewhere it is mostly the name itself. Either shares a copy.
+        const std::string key = ascii && !platform::kCaseSensitivePaths ? n.lower : platform::nameKey(n.name);
+        f.key = key == n.lower ? f.lower : key == n.name ? f.name : add(key);
+        f.keyLen = static_cast<uint16_t>(key.size());
         out->files_.push_back(f);
     }
     return out;
@@ -55,9 +57,21 @@ std::string Snapshot::join(std::string_view folder, std::string_view name) {
     path.reserve(folder.size() + 1 + name.size());
     path.append(folder);
     const char last = folder.empty() ? '\0' : folder.back();
-    if (last != '\\' && last != '/' && last != ':') path.push_back('\\');
+#ifdef _WIN32
+    const bool separated = last == '\\' || last == '/' || last == ':';  // "C:" alone is that drive's own folder
+#else
+    const bool separated = last == '/';
+#endif
+    if (!separated) path.push_back(platform::kSeparator);
     path.append(name);
     return path;
+}
+
+std::string placePrefix(std::string_view root) {
+    std::string prefix = platform::kCaseSensitivePaths ? std::string(root) : pyLower(root);
+    while (!prefix.empty() && platform::isSeparator(prefix.back())) prefix.pop_back();
+    prefix.push_back(platform::kSeparator);
+    return prefix;
 }
 
 void ExternalItem::prepare() {

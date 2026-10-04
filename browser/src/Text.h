@@ -7,7 +7,8 @@
 //
 // Strings are WTF-8: UTF-8 that may also hold unpaired surrogates, which Windows
 // file names (and so Python strings) can contain. Byte order is code point order,
-// so comparing bytes compares strings as Python does.
+// so comparing bytes compares strings as Python does. (How file names compare in
+// item keys is the platform's: see nameKey() in Platform.h.)
 
 #pragma once
 
@@ -18,6 +19,7 @@
 
 namespace sub::browser {
 
+// WTF-8 and UTF-16 (in wchar_t, as Windows' wide calls take it), both ways.
 std::string toUtf8(std::wstring_view s);
 std::wstring toWide(std::string_view s);
 
@@ -34,9 +36,5 @@ void wordStarts(std::string_view s, std::vector<uint32_t>& out);
 
 // The Unicode version of the tables (Python's unicodedata.unidata_version).
 const char* unicodeVersion();
-
-// Windows' own lower case (LCMapStringEx, invariant locale): what
-// os.path.normcase() uses, so item keys come out as Python made them.
-std::string ntLower(std::wstring_view s);
 
 }  // namespace sub::browser

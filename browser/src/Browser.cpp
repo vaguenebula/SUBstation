@@ -2,14 +2,14 @@
 
 namespace sub::browser {
 
-Browser::Browser(std::wstring store, Limits limits)
-    : indexer_(std::move(store), std::move(limits), [this] { event_.set(); }) {
+Browser::Browser(std::string store, Limits limits) : indexer_(std::move(store), std::move(limits), [this] { wake(); }) {
     thread_ = std::thread([this] { searchLoop(); });
 }
 
 Browser::~Browser() { close(); }
 
 void Browser::close() {
+    setWakeCallback(nullptr);
     {
         std::lock_guard lock(mutex_);
         stop_ = true;
@@ -19,6 +19,20 @@ void Browser::close() {
     if (thread_.joinable()) thread_.join();
     idle_.notify_all();
     indexer_.close();
+}
+
+void Browser::setWakeCallback(std::function<void()> wake) {
+    std::lock_guard lock(wakeMutex_);
+    wakeCallback_ = std::move(wake);
+    if (signalled_ && wakeCallback_) wakeCallback_();
+}
+
+void Browser::wake() {
+    // As a set event stays set until it's taken: one call until the next take().
+    std::lock_guard lock(wakeMutex_);
+    if (signalled_) return;
+    signalled_ = true;
+    if (wakeCallback_) wakeCallback_();
 }
 
 void Browser::setExternal(int group, std::vector<ExternalItem> items) {
@@ -52,6 +66,11 @@ uint64_t Browser::search(Query query) {
 }
 
 Browser::Update Browser::take() {
+    {
+        // Unset before looking: whatever happens from here on calls the callback again.
+        std::lock_guard lock(wakeMutex_);
+        signalled_ = false;
+    }
     Update update;
     update.status = indexer_.status();
     std::lock_guard lock(mutex_);
@@ -97,7 +116,7 @@ void Browser::searchLoop() {
             if (job.first != latest_.load()) continue;
             finished_ = std::move(result);
         }
-        event_.set();
+        wake();
     }
 }
 

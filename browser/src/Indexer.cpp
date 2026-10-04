@@ -1,11 +1,12 @@
 #include "Indexer.h"
 
-#include <windows.h>
-
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <numeric>
+#include <utility>
 
 #include "Text.h"
 
@@ -15,26 +16,40 @@ using namespace std::chrono_literals;
 
 namespace {
 
+using NativeString = platform::NativeString;
+using NativeChar = NativeString::value_type;
+using NativeView = std::basic_string_view<NativeChar>;
+
 constexpr auto kSettle = 250ms;         // after the last change seen, before looking
 constexpr auto kSettleAtMost = 1000ms;  // after the first
 constexpr auto kSaveAfter = 5s;
 constexpr double kFirstPublishMs = 30.0;   // while scanning, with no files shown yet
 constexpr double kPublishEveryMs = 150.0;  // while scanning; more if building takes long
+constexpr std::chrono::milliseconds kWaitAtMost = 60s;  // it looks at its deadlines again at least this often
+constexpr NativeChar kSeparator = static_cast<NativeChar>(platform::kSeparator);
 
-bool hidden(std::wstring_view name) { return !name.empty() && (name[0] == L'.' || name[0] == L'$'); }
+bool hidden(NativeView name) {
+    return !name.empty() && (name[0] == static_cast<NativeChar>('.') || name[0] == static_cast<NativeChar>('$'));
+}
 
-std::wstring joinPath(const std::wstring& folder, std::wstring_view name) {
-    std::wstring path = folder;
-    const wchar_t last = path.empty() ? L'\0' : path.back();
-    if (last != L'\\' && last != L'/' && last != L':') path += L'\\';
+NativeString joinPath(const NativeString& folder, NativeView name) {
+    NativeString path = folder;
+    const NativeChar last = path.empty() ? NativeChar() : path.back();
+#ifdef _WIN32
+    const bool separated = last == L'\\' || last == L'/' || last == L':';
+#else
+    const bool separated = last == '/';
+#endif
+    if (!separated) path += kSeparator;
     path += name;
     return path;
 }
 
-std::string joinKey(const std::string& folderKey, std::wstring_view name) {
+// A folder's key and a name (or names, joined by the separator) below it.
+std::string joinKey(const std::string& folderKey, NativeView name) {
     std::string key = folderKey;
-    if (key.empty() || key.back() != '\\') key += '\\';
-    key += ntLower(name);
+    if (key.empty() || key.back() != platform::kSeparator) key += platform::kSeparator;
+    key += platform::pathKey(platform::toUtf8(NativeString(name)));
     return key;
 }
 
@@ -105,8 +120,8 @@ private:
 
 }  // namespace
 
-Indexer::Indexer(std::wstring store, Limits limits, std::function<void()> changed)
-    : store_(std::move(store)), limits_(std::move(limits)), changed_(std::move(changed)) {
+Indexer::Indexer(std::string store, Limits limits, std::function<void()> changed)
+    : store_(platform::fromUtf8(store)), limits_(std::move(limits)), changed_(std::move(changed)) {
     status_.busy = true;
     thread_ = std::thread([this] { run(); });
 }
@@ -174,10 +189,14 @@ void Indexer::run() {
         status_.loadMs = std::chrono::duration<double, std::milli>(Clock::now() - loadStart).count();
     }
     bool needPass = true;
+    platform::Waiter waiter;
     for (;;) {
         std::optional<std::vector<PlaceSpec>> places;
         bool rescan = false;
         uint64_t target = 0;
+        // Unset before the commands are taken: one asked for after this sets it
+        // again, so the wait below can't miss it.
+        wake_.reset();
         {
             std::lock_guard lock(mutex_);
             if (stop_) break;
@@ -206,6 +225,9 @@ void Indexer::run() {
                 placesChanged_ = false;
                 publishNow();  // what is known already (the saved index), at once
             }
+            // Watch new places before their folders are looked at, but after what
+            // is known is shown: on Linux watching a tree means walking it.
+            rewatch();
             bool changed = false;
             listed_ = checked_ = 0;
             const auto passStart = Clock::now();
@@ -234,27 +256,28 @@ void Indexer::run() {
         }
 
         // Wait for a command, a change in a place, or a deadline.
-        std::vector<HANDLE> handles{static_cast<HANDLE>(wake_.handle())};
+        waiter.clear();
+        waiter.add(wake_.handle());
         std::vector<size_t> watched;
-        for (size_t p = 0; p < places_.size() && handles.size() < MAXIMUM_WAIT_OBJECTS; ++p) {
+        for (size_t p = 0; p < places_.size() && waiter.size() < platform::Waiter::kMaxHandles; ++p) {
             if (places_[p].watcher && places_[p].watcher->ok()) {
-                handles.push_back(static_cast<HANDLE>(places_[p].watcher->event()));
+                waiter.add(places_[p].watcher->handle());
                 watched.push_back(p);
             }
         }
         auto deadline = Clock::time_point::max();
         if (changesWaiting_) deadline = std::min(lastChange_ + kSettle, firstChange_ + kSettleAtMost);
         if (unsaved_) deadline = std::min(deadline, saveAt_);
-        DWORD timeout = INFINITE;
+        std::optional<std::chrono::milliseconds> timeout;
         if (deadline != Clock::time_point::max()) {
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
-            timeout = static_cast<DWORD>(std::clamp<long long>(ms + 1, 0, 60'000));
+            timeout = std::chrono::milliseconds(std::clamp<long long>(ms + 1, 0, kWaitAtMost.count()));
         }
-        const DWORD woke = WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), FALSE, timeout);
-        if (woke > WAIT_OBJECT_0 && woke < WAIT_OBJECT_0 + handles.size())
-            takeWatcherChanges(places_[watched[woke - WAIT_OBJECT_0 - 1]]);
-        else if (woke == WAIT_FAILED)
-            Sleep(50);
+        const int woke = waiter.wait(timeout);
+        if (woke > 0)
+            takeWatcherChanges(places_[watched[static_cast<size_t>(woke) - 1]]);
+        else if (woke == platform::Waiter::kFailed)
+            std::this_thread::sleep_for(50ms);
         if (unsaved_ && Clock::now() >= saveAt_) save();
     }
     if (unsaved_) save();
@@ -263,7 +286,7 @@ void Indexer::run() {
 
 // --- The tree -----------------------------------------------------------------------
 
-uint32_t Indexer::addNode(std::wstring path, std::wstring name, std::string key, std::string detail, int32_t parent) {
+uint32_t Indexer::addNode(NativeString path, NativeString name, std::string key, std::string detail, int32_t parent) {
     uint32_t id;
     if (!free_.empty()) {
         id = free_.back();
@@ -285,9 +308,9 @@ uint32_t Indexer::addNode(std::wstring path, std::wstring name, std::string key,
     return id;
 }
 
-void Indexer::setPath(Node& n, std::wstring path) {
+void Indexer::setPath(Node& n, NativeString path) {
     n.path = std::move(path);
-    n.pathUtf8 = toUtf8(n.path);
+    n.pathUtf8 = platform::toUtf8(n.path);
     n.pathLower = pyLower(n.pathUtf8);
 }
 
@@ -330,7 +353,7 @@ void Indexer::applyPlaces(std::vector<PlaceSpec> specs) {
             place.spec = std::move(spec);
         } else {
             place.spec = std::move(spec);
-            const std::wstring root = toWide(place.spec.root);
+            const NativeString root = platform::fromUtf8(place.spec.root);
             const auto known = byKey_.find(place.spec.key);
             if (known != byKey_.end()) {
                 place.node = known->second;
@@ -341,9 +364,9 @@ void Indexer::applyPlaces(std::vector<PlaceSpec> specs) {
                     n.detailLower = pyLower(n.detail);
                 }
             } else {
-                place.node = addNode(root, L"", place.spec.key, place.spec.detail, -1);
+                place.node = addNode(root, NativeString(), place.spec.key, place.spec.detail, -1);
             }
-            place.watcher = std::make_unique<platform::FolderWatcher>(root);
+            // Its watcher comes with the next rewatch(), before the pass looks at it.
         }
         places.push_back(std::move(place));
     }
@@ -386,7 +409,7 @@ bool Indexer::list(uint32_t id) {
     const auto time = platform::folderTime(n.path);
     std::vector<platform::Entry> entries;
     std::vector<FolderFiles::Name> files;
-    std::vector<std::wstring> folders;
+    std::vector<NativeString> folders;
     if (time && platform::listFolder(n.path, entries)) {
         for (auto& entry : entries) {
             if (hidden(entry.name)) continue;
@@ -394,7 +417,7 @@ bool Indexer::list(uint32_t id) {
                 folders.push_back(std::move(entry.name));
                 continue;
             }
-            std::string name = toUtf8(entry.name);
+            std::string name = platform::toUtf8(entry.name);
             std::string lower = pyLower(name);
             const bool audio = std::any_of(limits_.extensions.begin(), limits_.extensions.end(),
                                            [&](const std::string& ext) { return lower.ends_with(ext); });
@@ -418,7 +441,7 @@ bool Indexer::list(uint32_t id) {
             if (child.parent < 0 && known->second != id) child.parent = static_cast<int32_t>(id);
             children.push_back(known->second);
         } else {
-            std::string detail = toUtf8(name);
+            std::string detail = platform::toUtf8(name);
             children.push_back(addNode(joinPath(n.path, name), name, std::move(key), std::move(detail),
                                        static_cast<int32_t>(id)));
         }
@@ -538,7 +561,7 @@ void Indexer::publishWhileScanning() {
 // --- Watching -------------------------------------------------------------------------
 
 void Indexer::takeWatcherChanges(Place& place) {
-    std::vector<std::wstring> paths;
+    std::vector<NativeString> paths;
     const auto result = place.watcher->take(paths);
     if (result == platform::FolderWatcher::Changes::Paths) {
         if (paths.empty()) return;
@@ -556,13 +579,13 @@ void Indexer::takeWatcherChanges(Place& place) {
     scheduled_ = true;
 }
 
-void Indexer::markChanged(const Place& place, const std::wstring& relative) {
+void Indexer::markChanged(const Place& place, const NativeString& relative) {
     // The folder the change was in, or the nearest one above it that is known
     // (new folders are found by listing that one).
-    std::wstring_view leaf = relative;
-    size_t cut = leaf.find_last_of(L'\\');
-    std::wstring_view folder = cut == std::wstring_view::npos ? std::wstring_view() : leaf.substr(0, cut);
-    leaf = cut == std::wstring_view::npos ? leaf : leaf.substr(cut + 1);
+    NativeView leaf = relative;
+    size_t cut = leaf.find_last_of(kSeparator);
+    NativeView folder = cut == NativeView::npos ? NativeView() : leaf.substr(0, cut);
+    leaf = cut == NativeView::npos ? leaf : leaf.substr(cut + 1);
     if (hidden(leaf)) return;  // never listed
     for (;;) {
         const std::string key = folder.empty() ? place.spec.key : joinKey(place.spec.key, folder);
@@ -572,10 +595,10 @@ void Indexer::markChanged(const Place& place, const std::wstring& relative) {
             return;
         }
         if (folder.empty()) return;
-        cut = folder.find_last_of(L'\\');
-        const std::wstring_view below = cut == std::wstring_view::npos ? folder : folder.substr(cut + 1);
+        cut = folder.find_last_of(kSeparator);
+        const NativeView below = cut == NativeView::npos ? folder : folder.substr(cut + 1);
         if (hidden(below)) return;  // inside a folder that is never listed
-        folder = cut == std::wstring_view::npos ? std::wstring_view() : folder.substr(0, cut);
+        folder = cut == NativeView::npos ? NativeView() : folder.substr(0, cut);
     }
 }
 
@@ -609,7 +632,7 @@ void Indexer::save() {
         if (!n) continue;
         w.u32(static_cast<uint32_t>(n->parent >= 0 ? index[static_cast<size_t>(n->parent)] : -1));
         w.str(n->pathUtf8);
-        w.str(toUtf8(n->name));
+        w.str(platform::toUtf8(n->name));
         w.str(n->key);
         w.str(n->detail);
         w.u64(n->time);
@@ -624,13 +647,14 @@ void Indexer::save() {
     const std::filesystem::path path(store_);
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
-    const std::filesystem::path temp = path.wstring() + L".tmp";
+    NativeString temp = store_;
+    for (const char c : std::string_view(".tmp")) temp += static_cast<NativeChar>(c);
     {
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        std::ofstream out(std::filesystem::path(temp), std::ios::binary | std::ios::trunc);
         out.write(w.data.data(), static_cast<std::streamsize>(w.data.size()));
         if (!out) return;
     }
-    MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    platform::replaceFile(temp, store_);  // a store that can't be written only costs a scan
 }
 
 bool Indexer::load() {
@@ -689,7 +713,8 @@ bool Indexer::load() {
             return false;
     }
     for (auto& l : loaded) {
-        const uint32_t id = addNode(toWide(l.path), toWide(l.name), std::move(l.key), std::move(l.detail), l.parent);
+        const uint32_t id = addNode(platform::fromUtf8(l.path), platform::fromUtf8(l.name), std::move(l.key),
+                                    std::move(l.detail), l.parent);
         Node& n = node(id);
         n.children = std::move(l.children);
         foundFiles_ += l.files.size();
