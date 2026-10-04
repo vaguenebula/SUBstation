@@ -516,20 +516,20 @@ Tests
 
 ## Later
 
-- [ ] Freeze / flatten. Imposes nothing on the engine's design (an offline
-      render of one track's output; the per-track buffers make that easy), but
-      it has to decide what happens with every routing feature, so it is easier
-      to specify once those exist:
-  - a frozen track plays its rendered audio; its plug-ins are unloaded, their
+- [x] Freeze / flatten (Ctrl+Shift+F; *Edit › Flatten Track*). An offline
+      render of one track's signal before its fader (`render_track_to_wav`),
+      from beat 0 to the arrangement's end plus its tail:
+  - [x] a frozen track plays its rendered audio; its plug-ins are unloaded, their
     state kept for unfreezing;
-  - sends and sidechain sources tap the frozen audio (post-fader taps only;
-    pre-fader and after-device taps keep the track from freezing, or are
-    rendered as their own stems);
-  - a frozen group renders its bus; frozen device automation is baked, volume
+  - [x] sends and sidechain sources tap the frozen audio: the render is before the
+    fader, so post- and pre-fader taps both work; Pre FX and after-device taps
+    keep the track from freezing;
+  - [x] a frozen group renders its bus, and the engine stops rendering what goes only
+    into it; what is in it is locked; frozen device automation is baked, volume
     and pan stay live;
-  - a tempo change re-renders (or plays the frozen audio warped);
-  - flatten = keep the rendered clip, drop the devices: one undo command.
-  - If CPU becomes the pressing problem earlier, a first version can ship
-    before Phase 6 and simply refuse tracks with sends or sidechains.
+  - [x] a tempo change plays the frozen audio warped;
+  - [x] flatten = keep the rendered clip, drop the devices: one undo command.
+  - [ ] Maybe: render only from the track's first sound (smaller files).
+  - [ ] Maybe: re-render frozen tracks after a tempo change, instead of warping.
 - [ ] Macro automation in the engine (a lane fanning out to its targets).
 - [ ] Key/velocity zones on rack chains.

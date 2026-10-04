@@ -300,6 +300,15 @@ delay) and the master's (after its fader, before the metronome) over the same se
 - The scheduler is the live one (live output is suspended meanwhile), so offline renders use the
   same threads, and are bit-identical whatever their number.
 
+**One track** (freezing it): `Engine::renderTrackOffline()` and `renderTrackToWav()` render the
+whole graph the same way, but put out one track's signal after its devices, before its fader
+(`Renderer::renderTrackOffline()`: the track is copied out of `renderTrack()` as it leaves
+`processInserts()`). Solo is ignored (`ignoreSolo_`), so a group's bus is heard as if nothing
+were soloed. The signal lags the timeline by the track's `inputLatency` plus its devices'
+latency, so that much is rendered first and dropped. `renderTrackToWav()` writes 32-bit float
+(nothing above full scale is clipped), and renders on past the end for up to `tailSeconds`,
+cut where it falls below -100 dB.
+
 ## Invariants and real-time rules
 
 - The renderer never allocates after `prepare()`/`setScheduler()`: all buffers (scratch per

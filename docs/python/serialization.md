@@ -50,7 +50,7 @@ seconds; volumes are dB; pan is -1..1; automation values are normalized 0..1.
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | `"gilstudio-project"` | must match, or the file is refused ("Not a SUBstation project") |
-| `version` | int | `VERSION`, now 13; a larger one is refused ("saved by a newer version") |
+| `version` | int | `VERSION`, now 14; a larger one is refused ("saved by a newer version") |
 | `tempo` | float | BPM (default 120) |
 | `key` | string or null | the project key as `Key.name` (`"Am"`, `"F#"`, `"Bb"`); null: *No Key* |
 | `time_signature` | `[numerator, denominator]` | default `[4, 4]` |
@@ -82,6 +82,7 @@ Each entry of `tracks`:
 | `parent` | the id of the group it is in, or null |
 | `folded` | bool |
 | `sends` | `{return id: {"level_db": float, "pre_fader": bool}}` |
+| `frozen` | only when frozen: `{"path", "relative_path", "duration_sec", "tempo"}`, its frozen audio (the file found as a clip's is); an incomplete one loads unfrozen |
 
 The tracks are stored flat in arrangement order; the group tree is only the `parent`
 fields. On load, `repair_tree` takes any track out of a group it can't be in (a group's
@@ -91,7 +92,7 @@ tracks must follow it, together), keeping the order.
 
 Each entry of `returns` has `id`, `kind` (`"return"`), `name`, `color`, `volume_db`, `pan`,
 `mute`, `solo`, `height`, `devices`, `automation`, `automation_view` and `sends` (a return
-can send on into another return). No clips, inputs, arming, parent or folding.
+can send on into another return), and `frozen` when it is. No clips, inputs, arming, parent or folding.
 
 ### Master
 
@@ -187,6 +188,7 @@ current version.
 | 11 | sidechains | none |
 | 12 | racks (chains, macros) | none |
 | 13 | rack names (`"name"` on a rack) | none: racks named by their kind |
+| 14 | frozen tracks (`frozen`) | none frozen |
 
 `folded_devices` has no version of its own: files without it load with no device folded.
 The project key, `automation_locked` and the clip fields default the same way.

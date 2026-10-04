@@ -13,7 +13,7 @@ code is put together, [../README.md](../README.md).
 | Page | What it covers |
 |---|---|
 | [arrangement.md](arrangement.md) | The timeline, clips and selecting, tracks and their headers, group tracks, folding, the master, the transport bar, projects, undo and export |
-| [mixing.md](mixing.md) | Solo and mute, groups in the mix, return tracks and sends, sidechains, delay compensation |
+| [mixing.md](mixing.md) | Solo and mute, groups in the mix, return tracks and sends, sidechains, delay compensation, freezing and flattening |
 | [devices.md](devices.md) | The device view, the built-in devices (Synth, Sampler, Utility, Over The Top, Compressor), racks, macros and presets, folding, cut/copy/paste |
 | [plugins.md](plugins.md) | VST3 plug-ins: finding them, using them, their editors and presets, projects, latency |
 | [audio-clips.md](audio-clips.md) | The clip view for audio clips: warping, warp modes, transpose and detune, clip volume and pan, tempo and key from file names |
@@ -32,6 +32,7 @@ code is put together, [../README.md](../README.md).
 - Clip editing (move, copy, trim, split, duplicate, delete) with an always-on grid
   selection, as in Ableton.
 - Group tracks, return tracks and sends, sidechains, and delay compensation everywhere.
+- Freezing tracks, groups and returns (Ctrl+Shift+F), and flattening frozen tracks.
 - Built-in Synth and Sampler instruments; Utility, Over The Top and Compressor effects;
   VST3 instruments and effects; racks with chains and macros.
 - Warping and transposing audio, set up from the file name.

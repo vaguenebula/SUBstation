@@ -226,6 +226,31 @@ strip input --+--> [dev A] --+--> rack R ----------------------------------+--> 
 slots:        0              1   2 (B, rack 1, chain 0)  3 (C, rack 1, chain 1)  4 (D)
 ```
 
+## Freezing
+
+`setTrackFrozen(track, true)` freezes a track: it plays its clips (its frozen audio, which
+the bridge gives it as its only clip) through its fader and on along its edges, and nothing
+else. In `rebuildSnapshotLocked()`:
+
+- A frozen track has no devices in the snapshot (no inserts, device automation, sidechains
+  into them or latency), no notes, and isn't monitored or armed (`TrackRender::frozen`).
+  The renderer doesn't sum what goes into it.
+- Edges into a frozen track line up with nothing: for delay compensation they don't sum and
+  go into no device (a copy of the edges, `aligning`). So a frozen group hears nothing late,
+  and nothing waits for the latency of what is in it, or of its own devices.
+- A track every edge of which ends at a frozen track, or at a track like it (`idle`), isn't
+  rendered: no clips, notes or devices. That is what is in a frozen group, but a track in it
+  that also sends to a return outside it, or keys a sidechain there, still renders. Worked
+  out destinations first (backwards over the topological order). An edge into the master's
+  devices keeps its source rendered.
+- Neither kind of track changes the graph: its edges stay, so the order and the cycle checks
+  are as before, and solo still goes along them.
+- Devices left out (`TrackModel::silenced`) are reset (`requestReset()`) when they play
+  again, so they don't replay a stale tail.
+
+The frozen audio itself is a render of the track's signal before its fader:
+`renderTrackOffline()` / `renderTrackToWav()` ([rendering.md](rendering.md#offline-renders)).
+
 ## Extending it
 
 - **A new kind of edge**: add it to `routeEdgesLocked()` (with an `EdgeOrigin`), decide whether
@@ -263,5 +288,9 @@ slots:        0              1   2 (B, rack 1, chain 0)  3 (C, rack 1, chain 1) 
   cycles through racks, workers.
 - [test_resampling_engine.py](../../tests/test_resampling_engine.py): input edges and their
   cycles.
+- [test_freeze_engine.py](../../tests/test_freeze_engine.py): a track's signal before its fader
+  (lined up, solo ignored, a group's bus, its tail into a WAV file), frozen tracks playing
+  their render through their faders, frozen groups not hearing their tracks, what goes only
+  into frozen tracks, sends tapping frozen audio, no latency from frozen tracks.
 - The model side of the same rules: `test_groups_model.py`, `test_sends_model.py`,
   `test_sidechain_model.py`, `test_racks_model.py`, `test_resampling_model.py`.

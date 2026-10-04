@@ -144,7 +144,7 @@ The message says whether the engine is older or newer than the app, and to re-ru
 
 **The rule:** when Python code comes to need a change in `engine/src/bindings.cpp`, bump `API_VERSION` there and
 `ENGINE_API` in `src/substation/__init__.py` together, and note what the new version brought in the comment above
-`ENGINE_API`. Both are 16 now.
+`ENGINE_API`. Both are 17 now.
 
 `_browser` has no such check; after changing its bindings, rebuild before running.
 

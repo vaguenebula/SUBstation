@@ -55,6 +55,8 @@ DEVICE_HEADER_SELECTED = "#575757"
 SCOPE_LINE = QColor("#ffb84d")
 SCOPE_GLOW = QColor(255, 166, 43, 60)
 SCOPE_AXIS = QColor(255, 255, 255, 22)
+FROZEN = "#8fd3ff"  # a frozen track's snowflake
+FROZEN_TINT = QColor(143, 211, 255, 34)  # over a frozen track's lane
 
 MONO_FONT = "Consolas"
 

@@ -1,8 +1,9 @@
-// Engine: offline rendering and WAV export.
+// Engine: offline rendering, WAV export, and rendering one track (freezing it).
 #include "Engine.h"
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <stdexcept>
 #include <utility>
 
@@ -152,6 +153,97 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
         done += n;
     }
     ma_encoder_uninit(&encoder);
+}
+
+// ---------------------------------------------------------------------------
+// One track (freezing)
+
+void Engine::renderTrackLocked(uint32_t trackId, double startBeat, int64_t frames,
+                               const std::function<void(const float*, int64_t)>& sink) {
+    arrangementTrackLocked(trackId);  // (throws for an unknown track)
+    const RenderSnapshot& snap = *snapshotHold_;
+    const auto found = std::find_if(snap.tracks.begin(), snap.tracks.end(),
+                                    [trackId](const TrackRender& track) { return track.id == trackId; });
+    if (found == snap.tracks.end()) throw std::invalid_argument("Unknown track id " + std::to_string(trackId));
+    const int track = static_cast<int>(found - snap.tracks.begin());
+    ScopedNoDenormals noDenormals;
+    suspendLiveLocked();
+    resetProcessorsLocked();
+    ScopeExit resume([this] {
+        resetProcessorsLocked();
+        resumeLiveLocked();
+    });
+    Renderer offline;
+    OfflineLines lines;
+    prepareOfflineLocked(offline, lines, startBeat);
+    // Its signal before its fader lags the timeline by what feeds it (a group's
+    // bus hears its tracks that late) and its own devices: render that first and drop it.
+    constexpr int64_t kChunk = 16384;
+    std::vector<float> rendered(kChunk * 2);
+    for (int64_t lag = found->inputLatency + found->latency; lag > 0;) {
+        const int64_t n = std::min(kChunk, lag);
+        offline.renderTrackOffline(snap, track, rendered.data(), n);
+        lag -= n;
+    }
+    for (int64_t done = 0; done < frames;) {
+        const int64_t n = std::min(kChunk, frames - done);
+        offline.renderTrackOffline(snap, track, rendered.data(), n);
+        sink(rendered.data(), n);
+        done += n;
+    }
+}
+
+std::vector<float> Engine::renderTrackOffline(uint32_t trackId, double startBeat, int64_t frames) {
+    if (frames < 0) throw std::invalid_argument("frames must be >= 0");
+    std::vector<float> out;
+    out.reserve(static_cast<size_t>(frames) * 2);
+    std::lock_guard lock(mutex_);
+    renderTrackLocked(trackId, startBeat, frames,
+                      [&out](const float* samples, int64_t n) { out.insert(out.end(), samples, samples + n * 2); });
+    return out;
+}
+
+int64_t Engine::renderTrackToWav(uint32_t trackId, const std::string& path, double startBeat, double endBeat,
+                                 double tailSeconds) {
+    if (endBeat <= startBeat) throw std::invalid_argument("Render range is empty");
+    std::lock_guard lock(mutex_);
+    arrangementTrackLocked(trackId);
+    const int64_t frames = std::llround((endBeat - startBeat) * snapshotHold_->samplesPerBeat());
+    const int64_t tail = std::llround(std::clamp(tailSeconds, 0.0, 600.0) * sampleRate_);
+
+    ma_encoder_config config =
+        ma_encoder_config_init(ma_encoding_format_wav, ma_format_f32, 2, static_cast<ma_uint32>(sampleRate_));
+    ma_encoder encoder;
+    if (ma_encoder_init_file_w(widen(path).c_str(), &config, &encoder) != MA_SUCCESS) {
+        throw std::runtime_error("Could not create " + path);
+    }
+    ScopeExit close([&encoder] { ma_encoder_uninit(&encoder); });
+    // A short write (a full disk) fails the render: the file would be shorter than the frames returned.
+    const auto write = [&](const float* samples, int64_t n) {
+        ma_uint64 written = 0;
+        if (ma_encoder_write_pcm_frames(&encoder, samples, static_cast<ma_uint64>(n), &written) != MA_SUCCESS ||
+            written != static_cast<ma_uint64>(n)) {
+            throw std::runtime_error("Could not write " + path);
+        }
+    };
+    // The range as it comes; the tail is kept back until it is known where it falls silent.
+    int64_t done = 0;
+    std::vector<float> tailSamples;
+    tailSamples.reserve(static_cast<size_t>(tail) * 2);
+    renderTrackLocked(trackId, startBeat, frames + tail, [&](const float* samples, int64_t n) {
+        const int64_t inRange = std::clamp<int64_t>(frames - done, 0, n);
+        if (inRange > 0) write(samples, inRange);
+        tailSamples.insert(tailSamples.end(), samples + inRange * 2, samples + n * 2);
+        done += n;
+    });
+    constexpr float kSilence = 1e-5f;  // -100 dB
+    int64_t kept = static_cast<int64_t>(tailSamples.size() / 2);
+    while (kept > 0 && std::abs(tailSamples[static_cast<size_t>(kept) * 2 - 2]) < kSilence &&
+           std::abs(tailSamples[static_cast<size_t>(kept) * 2 - 1]) < kSilence) {
+        --kept;
+    }
+    if (kept > 0) write(tailSamples.data(), kept);
+    return frames + kept;
 }
 
 }  // namespace sub

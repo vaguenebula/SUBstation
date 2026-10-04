@@ -27,7 +27,9 @@ void forEachClip(const TrackRender& track, int64_t segStart, int64_t segEnd, F&&
 
 void Renderer::prepare(double sampleRate) {
     sampleRate_ = sampleRate;
-    for (auto* buffer : {&masterLeft_, &masterRight_, &silence_}) buffer->assign(kMaxBlock, 0.f);
+    for (auto* buffer : {&masterLeft_, &masterRight_, &silence_, &captureLeft_, &captureRight_}) {
+        buffer->assign(kMaxBlock, 0.f);
+    }
     setScheduler(scheduler_);
     recordScratch_.assign(2 * kMaxBlock, 0.f);
     countIn_ = countInTotal_ = 0;
@@ -184,6 +186,28 @@ void Renderer::renderOffline(const RenderSnapshot& snap, float* outStereo, int64
     }
 }
 
+void Renderer::renderTrackOffline(const RenderSnapshot& snap, int track, float* outStereo,
+                                  int64_t frames) noexcept {
+    syncTempo(snap);
+    captureTrack_ = track;
+    ignoreSolo_ = true;
+    int64_t done = 0;
+    while (done < frames) {
+        const int n = static_cast<int>(std::min<int64_t>(kMaxBlock, frames - done));
+        std::fill_n(captureLeft_.data(), n, 0.f);  // (a track not in the snapshot: silence)
+        std::fill_n(captureRight_.data(), n, 0.f);
+        renderChunk(snap, n, {false, false, false});
+        float* dst = outStereo + done * 2;
+        for (int i = 0; i < n; ++i) {
+            dst[2 * i] = captureLeft_[i];
+            dst[2 * i + 1] = captureRight_[i];
+        }
+        done += n;
+    }
+    captureTrack_ = -1;
+    ignoreSolo_ = false;
+}
+
 void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept {
     const int64_t chunkStart = position_;
     const WarpVoiceSet& voices = voiceOverride_ ? *voiceOverride_ : snap.warpVoices;
@@ -327,9 +351,10 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
     // A bus (a group, a return): what goes into it, in a fixed order (it is done:
     // the scheduler runs it after its sources), so the sum is the same whichever
     // finished first.
+    // (Frozen, it plays its frozen audio instead: what went into it is in that.)
     for (const int e : track.incoming) {
         const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
-        if (edge.sums()) sumEdge(snap, edge, left, right, frames, scratch);
+        if (edge.sums() && !track.frozen) sumEdge(snap, edge, left, right, frames, scratch);
     }
     if (buffers.monitored) {  // its input: the device's, or another track's output (rendered: it fed this one)
         if (track.input.source == InputEdge::Source::Track) {
@@ -346,6 +371,10 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
     ProcessContext context = chunkContext_;  // its own: the inserts move it along the chunk's stretches
     processInserts(snap, track, context, buffers.events.data(), buffers.numEvents, left, right, frames,
                    buffers.monitored, scratch);
+    if (t == captureTrack_) {  // what freezing it keeps
+        std::copy_n(left, frames, captureLeft_.data());
+        std::copy_n(right, frames, captureRight_.data());
+    }
     // Pre-fader taps take the signal here, into their own buffers (taps after a
     // device took theirs as it processed).
     bool preFaderSend = false;
@@ -468,7 +497,7 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
     bool anySolo = false;
     for (const TrackRender& track : snap.tracks) {
         TrackBuffers& buffers = *track.buffers;
-        buffers.soloed = track.params->solo.load(std::memory_order_relaxed);
+        buffers.soloed = !ignoreSolo_ && track.params->solo.load(std::memory_order_relaxed);
         anySolo = anySolo || buffers.soloed;
     }
     if (anySolo) {

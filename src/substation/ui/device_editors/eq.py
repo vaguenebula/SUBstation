@@ -51,7 +51,7 @@ from ... import theme
 from ...model.automation import device_key
 from ...model.params import format_value
 from .. import icons
-from ..arrangement.track_headers import automation_state
+from ..arrangement.mixer_controls import automation_state
 from ..device_panel import DeviceWidget
 from ..widgets import Knob, ToggleButton
 from . import device_editor

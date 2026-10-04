@@ -8,8 +8,8 @@ APP_NAME = "SUBstation"
 # 2: ProcessorEventType.PARAM_TOUCHED. 3: the master (track id MASTER) has devices.
 # 4: input, monitoring and recording. 5: MIDI input. 6: chain ids. 7: track outputs (group buses).
 # 8: audio threads. 9: track costs, cost ordering. 10: sends (routing edges). 11: track inputs (resampling).
-# 12: sidechains. 16: eq_response (the EQ's curves).
-ENGINE_API = 16
+# 12: sidechains. 16: eq_response (the EQ's curves). 17: freezing (set_track_frozen, render_track_to_wav).
+ENGINE_API = 17
 
 
 def engine_mismatch() -> str | None:

@@ -18,17 +18,17 @@ from ...model.automation import MASTER
 from ...model.editor import ProjectEditor
 from ...model.project import routing_graph
 from ..clip_view import ClipView
-from .lanes_canvas import LanesCanvas
-from .ruler import TimelineRuler
-from .track_headers import (
+from .bus_tracks import (
     MASTER_HEIGHT,
     BusLane,
     MasterHeader,
     MasterLane,
     ReturnHeader,
-    TrackHeaderColumn,
     return_rows,
 )
+from .lanes_canvas import LanesCanvas
+from .ruler import TimelineRuler
+from .track_headers import TrackHeaderColumn
 from .view_state import Selection, TrackLayout, ViewState, automation_rows
 from .waveform_cache import WaveformCache
 

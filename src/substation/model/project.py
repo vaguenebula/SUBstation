@@ -1,6 +1,6 @@
 """The project model: the single source of truth for the UI, undo and saving.
 
-The audio engine mirrors this model (see audio/engine_bridge.py). Mutating
+The audio engine mirrors this model (see audio/engine_bridge/). Mutating
 methods here are called only by undo commands (model/commands.py), which keeps
 every edit undoable and every change signalled. (View state, like track heights
 and which automation shows, changes directly: it is saved but not undone.)
@@ -61,6 +61,19 @@ are unique in the project, so `project.device()` finds them wherever they
 sit, and their automation is the track's (by device id). A rack's macros are
 its parameters ("macro1"..): each can be mapped to parameters of devices in it
 (MacroMapping), which follow it across their range.
+
+A track (a group, a return) can be frozen (`Track.frozen`: a Freeze): its
+signal before its fader, after its devices (a group's: its bus, with what is in
+it), is rendered from the timeline's start into a file, and the track plays
+that instead: its devices are unloaded (their state kept for unfreezing), its
+clips, notes and device automation are baked in, its mixer, sends and output
+stay live. What goes into a frozen group or return is in its frozen audio, so
+nothing in a frozen group can be changed (is_frozen) until it is unfrozen. A
+tempo change plays the frozen audio warped. A track whose signal another
+track's sidechain takes after one of its devices (or before them) can't be
+frozen: that tap isn't in the frozen audio (freeze_problem). Flattening a
+frozen audio or MIDI track makes it an audio track playing its frozen audio as
+a clip, without its devices (one undo step).
 """
 
 from __future__ import annotations
@@ -415,6 +428,24 @@ def rack_height(device: Device) -> int:
 
 
 @dataclass(frozen=True)
+class Freeze:
+    """A frozen track's audio: its signal before its fader (after its devices),
+    from the timeline's start, in the WAV file `path`, `duration_sec` long,
+    rendered at `tempo` (it plays warped to others, its length in beats fixed)."""
+
+    path: str
+    duration_sec: float
+    tempo: float
+
+    def clip(self, track_id: str, name: str) -> Clip:
+        """The clip that plays it, from the timeline's start (warped from `tempo`:
+        at that tempo it plays its samples as they are)."""
+        return Clip(id=f"frozen-{track_id}", path=self.path, name=name, start_beat=0.0,
+                    duration_sec=self.duration_sec, source_duration_sec=self.duration_sec,
+                    warp=True, warp_mode=DEFAULT_WARP_MODE, segment_bpm=self.tempo)
+
+
+@dataclass(frozen=True)
 class MidiInput:
     """Which MIDI input a MIDI track hears and records: every input ("") or one
     by name, on every channel (0) or one (1-16)."""
@@ -449,7 +480,7 @@ class Track:
     height: int = DEFAULT_TRACK_HEIGHT
     clips: list[AnyClip] = field(default_factory=list)  # sorted by start_beat; MidiClips on MIDI tracks
     devices: list[Device] = field(default_factory=list)
-    kind: str = "audio"  # one of TRACK_KINDS (or MASTER_KIND: the master); fixed for the track's life
+    kind: str = "audio"  # one of TRACK_KINDS (or MASTER_KIND: the master); fixed (flattening replaces the track)
     automation: dict[str, Envelope] = field(default_factory=dict)  # target key -> envelope (never empty)
     automation_view: AutomationView = field(default_factory=AutomationView)
     # Audio input: device channels (0-based): () none, (c,) mono, (l, r) a stereo pair.
@@ -464,6 +495,7 @@ class Track:
     parent: str | None = None  # the group it is in (None: none); see tree_problem
     folded: bool = False  # a thin row, automation hidden; a group: its tracks hidden (saved, not undone)
     sends: dict[str, Send] = field(default_factory=dict)  # return id -> its send (replaced whole, never changed)
+    frozen: Freeze | None = None  # its frozen audio (None: not frozen); see Freeze
 
     @property
     def is_midi(self) -> bool:
@@ -620,6 +652,7 @@ class Project(QObject):
     device_param_changed = Signal(str, str, str)  # track id, device id, param id
     device_state_changed = Signal(str, str)  # track id, device id: its state was set (a preset, a sample)
     devices_folded = Signal(str)  # track id: devices on it were folded or unfolded
+    freeze_changed = Signal(str)  # track id: it was frozen or unfrozen
     settings_changed = Signal()  # tempo, time signature, key, loop, automation lock
     automation_changed = Signal(str, str)  # owner (track id or MASTER), target key
     automation_view_changed = Signal(str)  # owner: what its automation shows
@@ -798,6 +831,52 @@ class Project(QObject):
         before (amid a group's tracks it has to be in that group)."""
         return self.tracks[index].parent if 0 <= index < len(self.tracks) else None
 
+    # --- Freezing ---------------------------------------------------------------
+
+    def frozen_by(self, track_id: str) -> str | None:
+        """The frozen track that holds a track's audio: itself, or the outermost
+        frozen group it is in; None: neither (it plays live)."""
+        if track_id == MASTER or not self.has_owner(track_id):
+            return None
+        holder = track_id if self.track(track_id).frozen is not None else None
+        for group in self.ancestors(track_id) if self.has_track(track_id) else ():
+            if self.track(group).frozen is not None:
+                holder = group
+        return holder
+
+    def is_frozen(self, track_id: str) -> bool:
+        """Whether a track is frozen, or in a frozen group: its clips, devices and
+        device automation can't change."""
+        return self.frozen_by(track_id) is not None
+
+    def freeze_problem(self, track_id: str) -> str | None:
+        """Why a track can't be frozen (None: it can)."""
+        if track_id == MASTER:
+            return "The master can't be frozen"
+        track = self.track(track_id)
+        if track.frozen is not None:
+            return f"{track.name} is frozen already"
+        holder = self.frozen_by(track_id)
+        if holder is not None:
+            return f"{track.name} is in {self.track(holder).name}, which is frozen"
+        for owner in self.all_tracks():
+            for device in iter_devices(owner.devices):
+                sidechain = device.sidechain
+                if sidechain is not None and sidechain.track_id == track_id and sidechain.tap not in (
+                        POST_FADER, PRE_FADER):
+                    return (f"{owner.name} takes {track.name}'s signal before its devices or after one of them "
+                            "as a sidechain, which its frozen audio doesn't have")
+        return None
+
+    def flatten_problem(self, track_id: str) -> str | None:
+        """Why a track can't be flattened (None: it can): only frozen audio and MIDI tracks can."""
+        track = self.track(track_id)
+        if not track.has_clips:
+            return f"{track.name} can't be flattened: only audio and MIDI tracks can"
+        if track.frozen is None:
+            return f"Freeze {track.name} first"
+        return None
+
     def tree(self) -> TrackTree:
         return tuple((t.id, t.parent) for t in self.tracks)
 
@@ -860,10 +939,25 @@ class Project(QObject):
         track = self.track(track_id)
         for name, value in attrs.items():
             if not hasattr(track, name) or name in ("id", "kind", "clips", "devices", "automation",
-                                                    "automation_view", "parent"):
+                                                    "automation_view", "parent", "frozen"):
                 raise AttributeError(name)
             setattr(track, name, value)
         self.track_changed.emit(track_id)
+
+    def replace_track(self, track: Track) -> Track:
+        """Puts `track` where the track of its id is (a track flattened: of another
+        kind), as if that one went and this one came; returns the one it replaces."""
+        index = self.track_index(track.id)
+        old = self.tracks[index]
+        self.tracks.pop(index)
+        self.track_removed.emit(track.id, index)
+        self.tracks.insert(index, track)
+        self.track_inserted.emit(track.id, index)
+        return old
+
+    def set_frozen(self, track_id: str, freeze: Freeze | None) -> None:
+        self.track(track_id).frozen = freeze
+        self.freeze_changed.emit(track_id)
 
     def set_clips(self, track_id: str, clips: list[AnyClip]) -> None:
         self.track(track_id).clips = sorted(clips, key=lambda c: c.start_beat)

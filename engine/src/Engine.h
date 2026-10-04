@@ -37,6 +37,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -245,6 +246,14 @@ public:
     void setTrackSend(uint32_t trackId, uint32_t toTrackId, float gain, bool preFader);
     void removeTrackSend(uint32_t trackId, uint32_t toTrackId);
     std::vector<SendInfo> trackSends(uint32_t trackId);
+    // Freezing: a frozen track plays its clips (its frozen audio: see
+    // renderTrackToWav()) through its fader and on along its edges, and nothing
+    // else: its devices, notes, input and what goes into it (outputs, sends) are
+    // left out, and so is their latency. A track every edge of which ends at a
+    // frozen track (or at a track like it: what is in a frozen group) isn't
+    // rendered at all. Devices left out are reset when they play again.
+    void setTrackFrozen(uint32_t trackId, bool frozen);
+    bool trackFrozen(uint32_t trackId);
     void setMasterGain(float gain) { setTrackGain(kMaster, gain); }
     void setMasterPan(float pan) { setTrackPan(kMaster, pan); }
     // Peak levels since the last call: the master, each track, then each rack chain (chainId set).
@@ -424,6 +433,16 @@ public:
     std::vector<float> renderOffline(double startBeat, int64_t frames, bool loop = false,
                                      bool metronome = false);  // interleaved stereo
     void exportWav(const std::string& path, double startBeat, double endBeat, int bitDepth);
+    // One track's signal before its fader (after its devices: what freezing it
+    // keeps), lined up with the timeline: what it plays at startBeat comes first.
+    // Solo is ignored (what goes into a group is heard as if nothing were
+    // soloed); mute isn't. Interleaved stereo.
+    std::vector<float> renderTrackOffline(uint32_t trackId, double startBeat, int64_t frames);
+    // The same from startBeat to endBeat, then on for up to `tailSeconds` while
+    // it isn't silent (a reverb's tail), into a new 32-bit float WAV file.
+    // Returns the frames written.
+    int64_t renderTrackToWav(uint32_t trackId, const std::string& path, double startBeat, double endBeat,
+                             double tailSeconds);
 
     // --- Audio threads -----------------------------------------------------------
     // How many threads render (the audio thread and the workers); 1 renders
@@ -476,6 +495,8 @@ private:
         MidiInputRoute midiInput;
         MonitorMode monitor = MonitorMode::Auto;
         bool armed = false;
+        bool frozen = false;  // plays its clips through its fader, nothing else (setTrackFrozen)
+        bool silenced = false;  // its devices were left out of the last snapshot (frozen, or not rendered)
     };
 
     void audioCallback(const AudioIO& io) noexcept override;
@@ -564,6 +585,10 @@ private:
         std::vector<std::shared_ptr<DelayLine>> delays, deviceDelays, chainDelays;
     };
     void prepareOfflineLocked(Renderer& offline, OfflineLines& lines, double startBeat);
+    // renderTrackOffline(): `frames` of the track's signal, handed to `sink` a
+    // piece at a time (interleaved stereo, and how many frames).
+    void renderTrackLocked(uint32_t trackId, double startBeat, int64_t frames,
+                           const std::function<void(const float*, int64_t)>& sink);
     void resetProcessorsLocked();
     void ensureWarpVoicesLocked(const std::array<size_t, kNumStretchConfigs>& needed);
     // What building a strip's part of the snapshot needs to know about it.

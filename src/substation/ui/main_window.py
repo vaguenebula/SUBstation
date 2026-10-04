@@ -28,7 +28,8 @@ from ..audio.settings import (
     set_record_quantize,
 )
 from ..model import automation
-from ..model.editor import ProjectEditor, device_is_instrument, is_instrument
+from ..model.devices import device_is_instrument, is_instrument
+from ..model.editor import ProjectEditor
 from ..model.presets import default_device
 from ..model.project import PLUGIN_KIND, PluginRef, Project
 from ..model.serialization import (
@@ -38,7 +39,7 @@ from ..model.serialization import (
     load_project,
     save_project,
 )
-from . import icons, plugin_keys
+from . import freezing, icons, plugin_keys
 from .arrangement.arrangement_view import ArrangementView
 from .arrangement.track_headers import duplicate_tracks
 from .arrangement.view_state import Selection
@@ -107,6 +108,7 @@ class MainWindow(QMainWindow):
         # Only the selected track's plug-in editors are shown; a new plug-in shows its editor.
         self.selection.changed.connect(lambda: self.bridge.show_plugin_editors(self.selection.track_id))
         self.editor.plugin_added.connect(self._plugin_added)
+        self.editor.refused.connect(self.show_message)  # (an edit a frozen track can't take)
         self.bridge.plugin_param_edited.connect(self._plugin_param_edited)
         self.bridge.plugin_param_touched.connect(
             lambda track_id, device_id, param_id: self.editor.touch_parameter(
@@ -181,6 +183,9 @@ class MainWindow(QMainWindow):
         self._action(edit, "D&uplicate", self.duplicate, "Ctrl+D")
         self._action(edit, "&Split", self.split, "Ctrl+E")
         self._action(edit, "C&onsolidate", self.arrangement.lanes.consolidate, "Ctrl+J")
+        edit.addSeparator()
+        self._action(edit, "&Freeze / Unfreeze Track", self.toggle_freeze, "Ctrl+Shift+F")
+        self._action(edit, "Flatten Track", self.flatten_tracks)
         self._action(edit, "&Delete", self.delete_selection, [QKeySequence.StandardKey.Delete, "Backspace"])
         self._action(edit, "Select &All", self.select_all, QKeySequence.StandardKey.SelectAll)
         edit.addSeparator()
@@ -450,6 +455,19 @@ class MainWindow(QMainWindow):
         if self.project.has_owner(track_id):
             self.editor.set_device_param(track_id, device_id, param_id, value,
                                          merge_key=("plugin edit", device_id, param_id, gesture), old=old)
+
+    def toggle_freeze(self) -> None:
+        """Ctrl+Shift+F: freeze the selected tracks (and returns), or unfreeze them if they all are."""
+        changed = freezing.toggle_freeze(self.editor, self.bridge, self.selection.track_ids)
+        if changed:
+            names = ", ".join(self.project.track(t).name for t in changed)
+            self.show_message(f"{'Froze' if self.project.is_frozen(changed[0]) else 'Unfroze'} {names}")
+
+    def flatten_tracks(self) -> None:
+        """The selected frozen tracks become audio tracks playing their frozen audio."""
+        flat = freezing.flatten_tracks(self.editor, self.selection, self.selection.track_ids)
+        if flat:
+            self.show_message(f"Flattened {', '.join(self.project.track(t).name for t in flat)}")
 
     def delete_track(self) -> None:
         """The selected tracks (and return tracks)."""

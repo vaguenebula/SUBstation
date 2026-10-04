@@ -1,7 +1,7 @@
 # Mixing
 
 How tracks are heard: solo and mute, group tracks in the mix, return tracks and sends,
-sidechains, and delay compensation. The controls are in the track headers (see
+sidechains, delay compensation, and freezing tracks to save CPU. The controls are in the track headers (see
 [arrangement.md](arrangement.md)) and, for sidechains, in the device view (see
 [devices.md](devices.md)).
 
@@ -129,6 +129,44 @@ Latency that plug-ins report (look-ahead limiters, linear-phase EQs) is compensa
 
 A device's tooltip shows its latency. A track you monitor live isn't delayed to line up
 with others (see [recording.md](recording.md#monitoring)).
+
+## Freezing and flattening
+
+Freezing a track renders what its devices put out into an audio file, and the track
+plays that instead, so its plug-ins cost no CPU.
+
+- **Ctrl+Shift+F** (*Edit › Freeze / Unfreeze Track*, or *Freeze Track* in a track's
+  right-click menu) freezes the selected tracks, groups and returns. If they are all
+  frozen already, it unfreezes them.
+- A frozen track shows a snowflake before its name, and its lane is tinted blue. The
+  device view shows no devices: they are unloaded, and their settings (a plug-in's whole
+  state too) come back when you unfreeze it.
+- What is frozen: the track's clips or notes and its devices, with their automation.
+  What stays live: its volume, pan, mute and solo (and their automation), its sends, and
+  where its output goes. Sends and sidechains taking its signal after its fader or before
+  it hear the frozen audio.
+- While it is frozen you can't change its clips, devices or their automation; the
+  status bar says why when you try. Unfreeze it first. A frozen track isn't armed.
+- Freezing a **group** renders its bus: what is in it, through the group's devices.
+  The tracks in it then aren't played (unless they also send to a return, or key a
+  sidechain, outside the group), and nothing in it can change, move in or out, or be
+  deleted until you unfreeze the group. A new track inserted after one of them goes
+  after the group.
+- Freezing a **return** renders what the sends into it brought; changing those sends
+  doesn't change it until you unfreeze it.
+- The render goes from the start of the arrangement to the end of its last clip, then on
+  for as long as the track still sounds (up to ten seconds: a reverb's tail). The files
+  go into a *Freeze* folder next to the project (in the recordings folder while the
+  project isn't saved).
+- Changing the tempo plays the frozen audio warped (stretched to the new tempo); freeze
+  the track again for a fresh render.
+- A track can't be frozen while another track's sidechain takes its signal before its
+  devices (Pre FX) or after one of them: the frozen audio doesn't have that signal.
+
+**Flattening** (*Edit › Flatten Track*, or *Flatten Track* in the track's menu) turns a
+frozen audio or MIDI track into an audio track that plays its frozen audio as a clip,
+without its devices. A MIDI track becomes an audio track. One undo step brings the
+track back as it was, frozen. Groups and returns can't be flattened.
 
 ---
 

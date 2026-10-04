@@ -23,7 +23,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from substation import _engine as ge
-from substation.audio import engine_bridge
+from substation.audio.engine_bridge import plugins as bridge_plugins
 from substation.model import automation
 from substation.model.automation import AutomationPoint
 from substation.model.project import PLUGIN_KIND, PluginRef
@@ -750,7 +750,7 @@ def test_plugin_editor_review_fixes(window, monkeypatch):
 
     # Only so many hidden editors keep running: the one hidden longest closes, and
     # opens again where it was when its track is shown.
-    monkeypatch.setattr(engine_bridge, "MAX_HIDDEN_EDITORS", 2)
+    monkeypatch.setattr(bridge_plugins, "MAX_HIDDEN_EDITORS", 2)
     tracks = [track_with_editor("Hidden 0")]
     user32.SetWindowPos(editor_window("SUB Test Effect - Hidden 0"), None, 40, 50, 0, 0,
                         0x0001 | 0x0004 | 0x0010)  # moved by the user

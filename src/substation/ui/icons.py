@@ -228,6 +228,20 @@ def sidechain(color: str = theme.TEXT) -> QIcon:
 
 
 @cache
+def snowflake(color: str = theme.FROZEN) -> QIcon:
+    """Six spokes with a pair of twigs each: a frozen track."""
+    def draw(p: QPainter, c: QColor):
+        p.setPen(QPen(c, 4.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.translate(32, 32)
+        for _ in range(6):
+            p.drawLine(QPointF(0, 0), QPointF(0, -26))
+            p.drawLine(QPointF(0, -15), QPointF(-8, -23))
+            p.drawLine(QPointF(0, -15), QPointF(8, -23))
+            p.rotate(60)
+    return _icon(draw, color)
+
+
+@cache
 def save(color: str = theme.TEXT) -> QIcon:
     """A floppy disk."""
     def draw(p: QPainter, c: QColor):

@@ -173,6 +173,33 @@ void Engine::rebuildSnapshotLocked() {
     std::vector<int> position(tracks_.size());  // tracks_ index -> snapshot index
     for (size_t i = 0; i < order.size(); ++i) position[order[i]] = static_cast<int>(i);
 
+    // Freezing: a frozen track plays its clips through its fader, without its
+    // devices, and doesn't hear what goes into it. A track every edge of which
+    // ends at a frozen track (or one like it) isn't rendered (`idle`): what is in
+    // a frozen group. Worked out destinations first. Neither has devices here.
+    std::vector<char> frozen(tracks_.size(), 0), idle(tracks_.size(), 0), silent(tracks_.size(), 0);
+    {
+        std::vector<std::vector<int>> destinations(tracks_.size());
+        for (const RouteEdge& edge : edges) destinations[static_cast<size_t>(edge.from)].push_back(edge.to);
+        for (auto it = order.rbegin(); it != order.rend(); ++it) {
+            const auto t = static_cast<size_t>(*it);
+            frozen[t] = tracks_[t].frozen;
+            const auto& to = destinations[t];
+            idle[t] = !to.empty() && std::all_of(to.begin(), to.end(), [&](int d) {
+                return d >= 0 && silent[static_cast<size_t>(d)];
+            });
+            silent[t] = frozen[t] || idle[t];
+        }
+    }
+    // What goes into a frozen track lines up with nothing: it isn't heard.
+    std::vector<RouteEdge> aligning = edges;
+    for (RouteEdge& edge : aligning) {
+        if (edge.to >= 0 && frozen[static_cast<size_t>(edge.to)]) {
+            edge.sums = false;
+            edge.device = -1;
+        }
+    }
+
     // Plug-in delay compensation at every summing point, per edge: each bus (a
     // group, a return, the master) hears its inputs as late as the latest of
     // them, which the enabled devices before each edge's tap (and those of what
@@ -185,7 +212,16 @@ void Engine::rebuildSnapshotLocked() {
     const ProcessorIds ids = processorIdsLocked();
     std::vector<std::vector<StripSlot>> slotsOf;  // each track's devices (by tracks_ index), then the master's
     slotsOf.reserve(tracks_.size() + 1);
-    for (const TrackModel& track : tracks_) slotsOf.push_back(stripSlotsLocked(track, ids));
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        TrackModel& track = tracks_[t];
+        std::vector<StripSlot> slots = stripSlotsLocked(track, ids);
+        // Devices left out start again from silence when they come back (no stale tail).
+        if (track.silenced && !silent[t]) {
+            for (const StripSlot& slot : slots) slot.processor->requestReset();
+        }
+        track.silenced = silent[t];
+        slotsOf.push_back(silent[t] ? std::vector<StripSlot>{} : std::move(slots));
+    }
     slotsOf.push_back(stripSlotsLocked(master_, ids));
     std::vector<std::vector<ChainSlot>> chains;  // the same, as delay compensation sees them
     chains.reserve(slotsOf.size());
@@ -207,7 +243,7 @@ void Engine::rebuildSnapshotLocked() {
             chain.push_back(device);
         }
     }
-    const GraphLatencies aligned = alignGraph(order, edges, chains);
+    const GraphLatencies aligned = alignGraph(order, aligning, chains);
     snap->maxLatency = aligned.masterInput;
     for (size_t node = 0; node < slotsOf.size(); ++node) {  // what each rack adds, for the UI
         for (size_t s = 0; s < slotsOf[node].size(); ++s) {
@@ -342,19 +378,22 @@ void Engine::rebuildSnapshotLocked() {
         render.outgoing = std::move(outgoing[at]);
         render.deviceTaps = std::move(deviceTaps[at]);
         const StripBuild build = stripBuild(track, static_cast<size_t>(t), at, render.inputLatency);
-        buildChainLocked(track.chainId, build, 0, *snap, render);
+        if (!silent[static_cast<size_t>(t)]) buildChainLocked(track.chainId, build, 0, *snap, render);
+        render.frozen = track.frozen;
         render.inputCount = static_cast<int>(render.incoming.size());
         render.buffers = track.buffers;
         render.input = inputEdgeLocked(track);
         render.input.edge = inputEdge[at];
         render.midiInput = track.midiInput;
-        render.monitor = track.monitor;
-        render.armed = track.armed;
+        render.monitor = track.frozen ? MonitorMode::Off : track.monitor;
+        render.armed = track.armed && !track.frozen;
         // Its devices hear the timeline as late as its input; its fader after them
         // (its edges are delayed after the fader, to line up where they go).
         buildAutomationLocked(build, render.inputLatency + render.latency, render);
-        render.notes.reserve(track.notes.size());
-        for (const NoteDesc& note : track.notes) {
+        static const std::vector<NoteDesc> kNoNotes;
+        const std::vector<NoteDesc>& notes = silent[static_cast<size_t>(t)] ? kNoNotes : track.notes;
+        render.notes.reserve(notes.size());
+        for (const NoteDesc& note : notes) {
             NoteRender nr;
             nr.start = std::max<int64_t>(0, std::llround(note.startBeat * spb));
             nr.end = std::max<int64_t>(nr.start + 1, std::llround((note.startBeat + note.lengthBeats) * spb));
@@ -366,7 +405,7 @@ void Engine::rebuildSnapshotLocked() {
             return a.start != b.start ? a.start < b.start : a.key < b.key;
         });
         std::array<size_t, kNumStretchConfigs> stretching{};
-        for (size_t i = 0; i < track.clips.size(); ++i) {
+        for (size_t i = 0; i < (idle[static_cast<size_t>(t)] ? 0 : track.clips.size()); ++i) {  // (idle: no use)
             const ClipDesc& clip = track.clips[i];
             auto it = sources_.find(track.clipKeys[i]);
             if (it == sources_.end() || it->second->sampleRate() != rate) continue;  // still loading

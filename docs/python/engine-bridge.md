@@ -3,7 +3,7 @@
 The engine bridge keeps the C++ engine (`substation._engine`) in step with the
 [project model](model.md), and feeds the UI with what the engine knows (playhead, meters,
 plug-in reports, device events) through Qt signals. It lives in
-[src/substation/audio/engine_bridge.py](../../src/substation/audio/engine_bridge.py), next to
+[src/substation/audio/engine_bridge/](../../src/substation/audio/engine_bridge), next to
 the persistent audio and MIDI preferences in
 [audio/settings.py](../../src/substation/audio/settings.py). This page also covers how the
 application starts: [app.py](../../src/substation/app.py),
@@ -50,7 +50,17 @@ application starts: [app.py](../../src/substation/app.py),
 
 | File | What it holds |
 |---|---|
-| [audio/engine_bridge.py](../../src/substation/audio/engine_bridge.py) | `EngineBridge`; `LiveTake` (a take while it records); `clip_desc`, `note_descs` (model → engine descriptions); `recordings_folder`, `take_path`; `is_audio_file`, `AUDIO_EXTENSIONS`; `COMPUTER_KEYBOARD`; `MAX_HIDDEN_EDITORS`; the decoding and state tasks |
+| [audio/engine_bridge/\_\_init\_\_.py](../../src/substation/audio/engine_bridge/__init__.py) | `EngineBridge`: its signals, state and start-up (`__init__`), `shutdown`; made of one mixin per module below, and re-exports their public names |
+| [engine_bridge/tracks.py](../../src/substation/audio/engine_bridge/tracks.py) | `TrackSync`: engine tracks, mixers, outputs, sends, clips, tempo and loop; `clip_desc`, `note_descs` (model → engine descriptions) |
+| [engine_bridge/inputs.py](../../src/substation/audio/engine_bridge/inputs.py) | `InputSync`: tracks' audio and MIDI inputs and monitoring, the MIDI inputs open; `COMPUTER_KEYBOARD` |
+| [engine_bridge/devices.py](../../src/substation/audio/engine_bridge/devices.py) | `DeviceSync`: devices' processors in every chain, racks, sidechains, parameters, states; the state task |
+| [engine_bridge/plugins.py](../../src/substation/audio/engine_bridge/plugins.py) | `PluginHost`: plug-ins' states, editors (`MAX_HIDDEN_EDITORS`) and events |
+| [engine_bridge/parameters.py](../../src/substation/audio/engine_bridge/parameters.py) | `ParameterSync`: automation pushed to the engine, overrides, `ParamSpec`s for the UI |
+| [engine_bridge/sources.py](../../src/substation/audio/engine_bridge/sources.py) | `SourceLoader`: decoding audio files in a thread pool; `is_audio_file`, `AUDIO_EXTENSIONS` |
+| [engine_bridge/transport.py](../../src/substation/audio/engine_bridge/transport.py) | `Transport`: play, stop, locate, metronome, previews; polling the playhead and meters |
+| [engine_bridge/recording.py](../../src/substation/audio/engine_bridge/recording.py) | `Recorder`: recording takes; `LiveTake` (a take while it records), `recordings_folder`, `take_path` |
+| [engine_bridge/freezing.py](../../src/substation/audio/engine_bridge/freezing.py) | `FreezeSync`: frozen tracks in the engine, `render_freeze`; `freeze_folder` |
+| [engine_bridge/audio_device.py](../../src/substation/audio/engine_bridge/audio_device.py) | `AudioDevice`: opening the audio device, resets, its control panel, its events |
 | [audio/settings.py](../../src/substation/audio/settings.py) | `AudioSettings` (QSettings), `audio_threads`/`set_audio_threads`, `disabled_midi_inputs`/`set_midi_input_disabled`, `record_quantize`/`set_record_quantize`, `RECORD_QUANTIZE`, `DRIVERS`, `BUFFER_SIZES`, `SAMPLE_RATES` |
 | [app.py](../../src/substation/app.py) | `main()`: the QApplication, the engine API check, the main window, start-up and shut-down |
 | [\_\_init\_\_.py](../../src/substation/__init__.py) | `__version__`, `APP_NAME`, `ENGINE_API`, `engine_mismatch()` |
@@ -263,6 +273,21 @@ the engine hasn't, or the master. Changing ones are cleared first
 (`clear_processor_sidechain`), then the rest set; one the engine refuses for now (a cycle
 with a route another change hasn't undone yet) comes with that change.
 `has_sidechain_input(track, device)` tells the device view whether to show the button.
+
+### Freezing
+
+`render_freeze(track)` renders the track's signal before its fader from beat 0 to the
+arrangement's end (and on for up to `FREEZE_TAIL_SECONDS`, while it sounds) with
+`render_track_to_wav()`, into `freeze_folder()` (the project's *Freeze* folder, or one in the
+recordings folder), decodes it at once (so it plays without a gap) and returns the `Freeze`.
+
+On `freeze_changed` (`_on_freeze_changed`): the plug-ins' states go into the model (so a
+frozen track saves them), the engine track is frozen (`set_track_frozen`), its clips become
+the frozen audio (`_push_clips`; a MIDI track's notes go), and `_sync_devices` takes its
+processors away: the bridge sees a frozen track as having no devices (`_loaded_devices`), so
+its devices go as if deleted, their plug-ins' states kept, and come back on unfreezing. The
+tracks in a frozen group keep their processors; the engine just doesn't render them. Frozen
+tracks don't record.
 
 ### Settings and transport
 
