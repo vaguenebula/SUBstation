@@ -3,7 +3,9 @@
 // First, so that its setState renaming applies (see test_plugins.h).
 #include "public.sdk/source/vst/vstsinglecomponenteffect.h"
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -20,7 +22,9 @@
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+#ifdef _WIN32
 extern HINSTANCE ghInst;  // this module (dllmain.cpp)
+#endif
 
 namespace sub_test {
 
@@ -28,11 +32,13 @@ const wchar_t* const kEffectViewClass = L"SUBTestEffectView";
 
 enum EffectParam : ParamID { kFxGain = 0, kFxLatency, kFxBypass };
 constexpr int32 kMaxLatency = 4096;
+#ifdef _WIN32
 constexpr uint32 kEditGainMessage = WM_USER + 1;  // the editor edits Gain like a user dragging a knob
 constexpr uint32 kResizeMessage = WM_USER + 2;    // the editor asks the host for a new size
 constexpr uint32 kDirtyMessage = WM_USER + 3;     // the controller says its state changed
 
 class EffectView;
+#endif
 
 class TestEffect : public SingleComponentEffect {
 public:
@@ -150,6 +156,9 @@ private:
     int32 write_ = 0;
 };
 
+#ifdef _WIN32
+// The editor: a Win32 child window that does what the tests ask with window
+// messages, as a user's clicks would reach a real plug-in's editor.
 class EffectView : public CPluginView {
 public:
     explicit EffectView(TestEffect* effect) : effect_(effect) {
@@ -217,6 +226,10 @@ private:
 IPlugView* PLUGIN_API TestEffect::createView(FIDString name) {
     return strcmp(name, ViewType::kEditor) == 0 ? new EffectView(this) : nullptr;
 }
+#else
+// No editor elsewhere: the host gets no view.
+IPlugView* PLUGIN_API TestEffect::createView(FIDString) { return nullptr; }
+#endif
 
 FUnknown* createTestEffect(void*) { return static_cast<IAudioProcessor*>(new TestEffect); }
 

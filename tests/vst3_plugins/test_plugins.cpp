@@ -9,7 +9,8 @@
 //  * SUB Test Effect: a single-component effect (processor and controller in one
 //    object, like most JUCE plug-ins). Gain, a Latency parameter that delays the
 //    audio and reports it, a bypass parameter, state, and a Win32 editor that
-//    can resize itself and edit a parameter on request.
+//    can resize itself and edit a parameter on request (on Windows; elsewhere
+//    it has no editor).
 //  * SUB Test Mono: mono in, mono out, no edit controller.
 //  * SUB Test Sidechain: a single-component effect with a sidechain (a stereo
 //    aux input, inactive until the host activates it): its output is its input
@@ -20,13 +21,17 @@
 // tests: SUB_TEST_PLUGIN_CRASH=1 kills the process as the module loads,
 // SUB_TEST_PLUGIN_HANG=1 makes loading hang.
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "base/source/fstreamer.h"
@@ -42,7 +47,9 @@
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+#ifdef _WIN32
 extern HINSTANCE ghInst;  // this module (dllmain.cpp)
+#endif
 
 namespace sub_test {
 
@@ -269,6 +276,7 @@ public:
 // ---------------------------------------------------------------------------
 // Module entry points
 
+#ifdef _WIN32
 bool InitModule() {
     char value[8] = {};
     if (GetEnvironmentVariableA("SUB_TEST_PLUGIN_CRASH", value, sizeof(value)) && value[0] == '1') {
@@ -284,6 +292,21 @@ bool DeinitModule() {
     UnregisterClassW(sub_test::kEffectViewClass, ghInst);  // its window procedure goes with the module
     return true;
 }
+#else
+bool InitModule() {
+    const auto set = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value && value[0] == '1';
+    };
+    if (set("SUB_TEST_PLUGIN_CRASH")) std::_Exit(3);
+    if (set("SUB_TEST_PLUGIN_HANG")) {
+        for (;;) std::this_thread::sleep_for(std::chrono::hours(1));
+    }
+    return true;
+}
+
+bool DeinitModule() { return true; }
+#endif
 
 BEGIN_FACTORY_DEF("SUBstation", "https://example.invalid/substation", "mailto:none@example.invalid")
 

@@ -128,6 +128,29 @@ set(SUBSTATION_ASIO_SDK_DIR "${ASIO_SDK}" CACHE INTERNAL "The ASIO SDK found (em
 # --- The engine ---------------------------------------------------------------------
 # Every built-in device is one .cpp in builtin/devices/; a new file is picked up on the next configure.
 file(GLOB BUILTIN_DEVICE_SOURCES CONFIGURE_DEPENDS src/builtin/devices/*.cpp)
+# Each defines an empty function named after its file, which BuiltinDevices.cpp
+# calls: or a program linking the (static) engine would leave the devices'
+# files out, nothing else referring to them (see builtin/BuiltinRegistry.h).
+set(_anchor_declarations "")
+set(_anchor_calls "")
+foreach (_source IN LISTS BUILTIN_DEVICE_SOURCES)
+    get_filename_component(_stem "${_source}" NAME_WE)
+    string(MAKE_C_IDENTIFIER "subBuiltinAnchor_${_stem}" _anchor)
+    set_property(SOURCE "${_source}" APPEND PROPERTY COMPILE_DEFINITIONS "SUB_BUILTIN_ANCHOR=${_anchor}")
+    string(APPEND _anchor_declarations "void ${_anchor}();\n")
+    string(APPEND _anchor_calls "    ${_anchor}();\n")
+endforeach()
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinDevices.cpp CONTENT
+"// Written by engine/CMakeLists.txt from builtin/devices/*.cpp (see builtin/BuiltinRegistry.h).
+
+namespace sub {
+
+@_anchor_declarations@
+void linkBuiltinDevices() {
+@_anchor_calls@}
+
+}  // namespace sub
+" @ONLY)
 
 add_library(sub_engine STATIC
     src/Engine.cpp
@@ -149,6 +172,7 @@ add_library(sub_engine STATIC
     src/builtin/BuiltinProcessor.cpp
     src/builtin/BuiltinRegistry.cpp
     ${BUILTIN_DEVICE_SOURCES}
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinDevices.cpp
     src/plugins/Vst3Format.cpp
     src/plugins/Vst3Processor.cpp
 )

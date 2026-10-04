@@ -6,8 +6,13 @@
 
 namespace sub {
 
+// Refers to every device's file, so that a program linking the engine keeps
+// them (BuiltinDevices.cpp, written by engine/CMakeLists.txt; see BuiltinRegistry.h).
+void linkBuiltinDevices();
+
 BuiltinRegistry& BuiltinRegistry::instance() {
     static BuiltinRegistry registry;  // built on first use: the registrars run in no fixed order
+    linkBuiltinDevices();
     return registry;
 }
 

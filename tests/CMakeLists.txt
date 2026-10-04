@@ -6,7 +6,7 @@ add_test(NAME boundaries
 # --- Test plug-ins ------------------------------------------------------------------
 # One VST3 bundle with a test instrument and effects (vst3_plugins/), next to the
 # test executables, laid out as a VST3 bundle is on this platform.
-if (SUBSTATION_TEST_PLUGINS AND WIN32)
+if (SUBSTATION_TEST_PLUGINS)
     include(TestPlugins.cmake)
 endif()
 
@@ -15,6 +15,7 @@ file(GLOB ENGINE_TEST_SOURCES CONFIGURE_DEPENDS engine/*.cpp)
 add_executable(engine_tests engine/harness/Main.cpp ${ENGINE_TEST_SOURCES})
 target_include_directories(engine_tests PRIVATE engine)
 target_link_libraries(engine_tests PRIVATE sub_engine)
+sub_project_warnings(engine_tests)
 if (TARGET sub_test_plugins)
     add_dependencies(engine_tests sub_test_plugins)
     target_compile_definitions(engine_tests PRIVATE SUBSTATION_TEST_PLUGINS_BUNDLE="${SUBSTATION_TEST_PLUGINS_BUNDLE}")
