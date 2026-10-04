@@ -278,7 +278,7 @@ class ArrangementView(QWidget):
             return True
         header = self.headers.headers.get(track_id)
         row = self.layout_model.row_for(track_id)
-        if header is None or row is None:  # the master, or a track folded away in its group
+        if header is None or row is None or row.hidden:  # the master, or a track folded away in its group
             return False
         if not self.view.scroll_y <= row.top <= self.view.scroll_y + self.headers.height() - NAME_ROW:
             self.view.set_scroll_y(row.top)

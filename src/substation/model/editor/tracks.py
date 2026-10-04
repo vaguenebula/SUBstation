@@ -380,10 +380,14 @@ class TrackEdits:
         return CopiedTracks(tuple(roots), tuple(copy.deepcopy(originals)), frozenset(devices & p.folded_devices))
 
     def cut_tracks(self, track_ids) -> CopiedTracks | None:
-        """Ctrl+X on tracks: copy them (see copy_tracks), then delete them."""
+        """Ctrl+X on tracks: copy them (see copy_tracks), then delete them. None
+        if they weren't deleted (refused: in a frozen group), so nothing is cut."""
         copied = self.copy_tracks(track_ids)
-        if copied is not None:
-            self.delete_tracks(list(copied.roots))
+        if copied is None:
+            return None
+        self.delete_tracks(list(copied.roots))
+        if any(self.project.has_track(root) for root in copied.roots):
+            return None
         return copied
 
     def paste_tracks(self, copied: CopiedTracks, after: str | None = None) -> list[Track]:

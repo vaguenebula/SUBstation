@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QKeyEvent, QMouseEvent, QPainter, QPen, QWheelEvent
 from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
 
@@ -21,19 +21,26 @@ DRAG_PIXELS = 600.0  # dragged this far, a knob turns through its whole range
 FINE_DRAG_PIXELS = 6000.0  # with Shift
 
 
-class DragCursor:
+class DragCursor(QObject):
     """Hides the mouse cursor while a knob or value box is dragged (from the
     first move: a click leaves it be), then puts it back where the drag started.
     Meanwhile, at the top or bottom of the screen it jumps to the middle, so a
-    drag never runs out of room."""
+    drag never runs out of room. A popup opening mid-drag (a right-click menu)
+    ends the drag: the release goes to the popup."""
 
     def __init__(self):
+        super().__init__()
         self._start: QPoint | None = None
         self._hidden = False
+
+    @property
+    def dragging(self) -> bool:
+        return self._start is not None
 
     def press(self, event: QMouseEvent) -> None:
         self.release()
         self._start = event.globalPosition().toPoint()
+        QApplication.instance().installEventFilter(self)
 
     def moved(self, widget: QWidget, event: QMouseEvent, jump: bool = True) -> float:
         """The mouse moved while dragging `widget`: the y (in it) to measure the
@@ -55,11 +62,19 @@ class DragCursor:
         return y
 
     def release(self) -> None:
+        if self._start is not None:
+            QApplication.instance().removeEventFilter(self)
         if self._hidden:
             QApplication.restoreOverrideCursor()
             QCursor.setPos(self._start)
         self._start = None
         self._hidden = False
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if (event.type() == QEvent.Type.Show and isinstance(obj, QWidget)
+                and obj.windowType() == Qt.WindowType.Popup):
+            self.release()
+        return False
 
 
 class Knob(QWidget):
@@ -177,7 +192,7 @@ class Knob(QWidget):
             self._cursor.press(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._drag is None:
+        if self._drag is None or not self._cursor.dragging:
             return
         # Moved on from where the mouse was last, so pressing or letting go of
         # Shift mid-drag changes the rate from here on (not the whole drag).

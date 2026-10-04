@@ -100,3 +100,26 @@ def test_a_drag_carries_on_past_the_bottom_of_the_screen(app):
     assert box.value() == pytest.approx(round(expected, 2), abs=0.01)
     QTest.mouseRelease(box, Qt.MouseButton.LeftButton, NONE, start)
     box.close()
+
+
+def test_a_popup_mid_drag_ends_the_drag(app):
+    """A right-click menu opening while dragging gets the release: the cursor
+    comes back now, and the knob stops following the mouse."""
+    from PySide6.QtWidgets import QMenu
+
+    knob = Knob(0.0, 1.0, 0.5)
+    knob.show()
+    QTest.mousePress(knob, Qt.MouseButton.LeftButton, NONE, QPoint(10, 100))
+    move(knob, 70)
+    assert QApplication.overrideCursor() is not None
+    value = knob.value()
+    menu = QMenu()
+    menu.addAction("Show Automation")
+    menu.popup(knob.mapToGlobal(QPoint(10, 70)))
+    assert QApplication.overrideCursor() is None
+    menu.close()
+    move(knob, 20)
+    assert knob.value() == value
+    QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, NONE, QPoint(10, 20))
+    assert QApplication.overrideCursor() is None
+    knob.close()

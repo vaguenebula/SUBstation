@@ -101,7 +101,7 @@ class LogValueBox(ValueBox):
         return value * (self._max / self._min) ** fraction
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._drag_origin is None:
+        if self._drag_origin is None or not self._cursor.dragging:
             return
         pixels = FINE_DRAG_PIXELS if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else DRAG_PIXELS
         self.relative = True

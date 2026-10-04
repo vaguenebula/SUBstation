@@ -129,7 +129,7 @@ class ValueBox(QWidget):
             self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._drag_origin is None:
+        if self._drag_origin is None or not self._cursor.dragging:
             return
         start_y, start_value = self._drag_origin
         dy = start_y - event.position().y()

@@ -615,6 +615,8 @@ class TrackHeader(QWidget):
         if self.track_id not in selected:
             self.selection.select_track(self.track_id, focus_track=True)
             selected = (self.track_id,)
+        else:
+            self.selection.focus_tracks()  # (its Cut and Copy: these tracks, not devices or clips)
         menu = QMenu(self)
         menu.addAction("Rename", self.start_rename)
         colors = menu.addMenu("Color")

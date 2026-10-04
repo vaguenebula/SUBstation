@@ -237,12 +237,21 @@ class Selection(QObject):
             self._anchor = track_id
         self.track_id = track_id
         if focus_track:
-            self.focus = "track"
-            self.clips = set()
-            self.time_range = None
-            self.lanes = ()
-            self.points = None
+            self._focus_tracks()
         self.changed.emit()
+
+    def focus_tracks(self) -> None:
+        """The selected tracks (as they are) are what Cut, Copy and Delete act on now."""
+        if self.focus != "track" or self.time_range is not None or self.clips or self.points is not None:
+            self._focus_tracks()
+            self.changed.emit()
+
+    def _focus_tracks(self) -> None:
+        self.focus = "track"
+        self.clips = set()
+        self.time_range = None
+        self.lanes = ()
+        self.points = None
 
     def focus_devices(self) -> None:
         """Devices were selected in the device view: Delete acts on them now."""
