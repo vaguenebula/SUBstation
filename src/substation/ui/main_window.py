@@ -181,6 +181,7 @@ class MainWindow(QMainWindow):
         self._action(edit, "&Copy", self.copy, QKeySequence.StandardKey.Copy)
         self._action(edit, "&Paste", self.paste, QKeySequence.StandardKey.Paste)
         self._action(edit, "D&uplicate", self.duplicate, "Ctrl+D")
+        self._action(edit, "&Rename", self.rename, "Ctrl+R")
         self._action(edit, "&Split", self.split, "Ctrl+E")
         self._action(edit, "C&onsolidate", self.arrangement.lanes.consolidate, "Ctrl+J")
         edit.addSeparator()
@@ -455,6 +456,17 @@ class MainWindow(QMainWindow):
         if self.project.has_owner(track_id):
             self.editor.set_device_param(track_id, device_id, param_id, value,
                                          merge_key=("plugin edit", device_id, param_id, gesture), old=old)
+
+    def rename(self) -> None:
+        """Ctrl+R: rename the preset selected in the browser, the rack chain last
+        clicked (in the device view), or the track last clicked."""
+        if self.browser.rename_current():
+            return
+        if self.selection.focus == "devices" and self.devices.rename_chain():
+            return
+        track_id = self.selection.track_id
+        if track_id is None or not self.arrangement.rename_track(track_id):
+            self.show_message("Select a track, a rack chain or a preset to rename.")
 
     def toggle_freeze(self) -> None:
         """Ctrl+Shift+F: freeze the selected tracks (and returns), or unfreeze them if they all are."""

@@ -185,6 +185,13 @@ def test_renaming_and_deleting_presets_in_the_browser(window, monkeypatch):
     new = browser.rename_preset(str(path), "New")
     assert Path(new).name == f"New{PRESET_EXTENSION}" and not path.exists()
     assert list(listed(browser)) == ["New"]
+    # Ctrl+R with the list focused renames the preset selected there.
+    browser.list_view.setCurrentIndex(browser.list_model.index(0, 0))
+    browser.list_view.setFocus()
+    monkeypatch.setattr(browser_panel.QInputDialog, "getText", lambda *_a, **_k: ("Newer", True))
+    window.rename()
+    new = str(Path(new).with_name(f"Newer{PRESET_EXTENSION}"))
+    assert list(listed(browser)) == ["Newer"] and Path(new).exists()
 
     trashed = []  # (not the computer's recycle bin)
     monkeypatch.setattr(browser_panel, "QFile", types.SimpleNamespace(

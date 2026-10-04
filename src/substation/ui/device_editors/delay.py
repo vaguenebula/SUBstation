@@ -105,7 +105,7 @@ class LogValueBox(ValueBox):
             return
         pixels = FINE_DRAG_PIXELS if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else DRAG_PIXELS
         self.relative = True
-        self._set_from_user(self._drag_by(event.position().y(), lambda value, up: self._moved(value, up / pixels)),
+        self._set_from_user(self._drag_by(event, lambda value, up: self._moved(value, up / pixels)),
                             self._gesture)
 
     def wheelEvent(self, event: QWheelEvent) -> None:

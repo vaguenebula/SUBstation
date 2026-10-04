@@ -134,3 +134,42 @@ def test_chain_faders_are_automation_targets(window):
     assert groups[rack.id] == [automation.chain_key(rack.id, chain.id, automation.CHAIN_VOLUME),
                                automation.chain_key(rack.id, chain.id, automation.CHAIN_PAN)]
     assert automation.device_key(a.id, "gain") in groups[a.id]  # the devices in it too
+
+
+def test_ctrl_r_renames_the_track_or_the_rack_chain_clicked(window, app):
+    from PySide6.QtGui import QAction, QKeySequence
+
+    (action,) = [a for a in window.findChildren(QAction) if a.shortcut() == QKeySequence("Ctrl+R")]
+    assert action.text() == "&Rename"
+    panel = window.devices
+    track, (a, _b) = shown_track(window)
+    header = window.arrangement.headers.headers[track.id]
+    QTest.mouseDClick(header, Qt.MouseButton.LeftButton, pos=QPoint(60, 8))  # a double-click no longer renames
+    assert header._rename is None
+    window.selection.select_track(track.id, focus_track=True)
+    window.rename()  # Ctrl+R: the track
+    header._rename.setText("Drums")
+    header._rename.editingFinished.emit()
+    assert window.project.track(track.id).name == "Drums"
+
+    rack = window.editor.group_devices(track.id, [a.id])
+    panel.widgets[rack.id].chains.add.click()
+    second = window.project.device(track.id, rack.id).chains[1]
+    row = panel.widgets[rack.id].chains.rows[second.id]
+    QTest.mouseDClick(row, Qt.MouseButton.LeftButton, pos=row.name.geometry().center())
+    assert row._editing is None
+    QTest.mouseClick(panel.widgets[rack.id].chains.rows[second.id], Qt.MouseButton.LeftButton)
+    assert window.selection.focus == "devices"
+    window.rename()  # Ctrl+R: the chain clicked
+    row = panel.widgets[rack.id].chains.rows[second.id]
+    row._editing.setText("Wet")
+    row._editing.editingFinished.emit()
+    assert window.project.chain(track.id, second.id).name == "Wet"
+    assert window.project.track(track.id).name == "Drums"
+    # A device clicked since: Ctrl+R renames the track again.
+    panel.select_device(rack.id)
+    window.rename()
+    assert header._rename is not None
+    header._rename.setText("")
+    header._rename.editingFinished.emit()  # (an empty name keeps the old one)
+    assert window.project.track(track.id).name == "Drums"

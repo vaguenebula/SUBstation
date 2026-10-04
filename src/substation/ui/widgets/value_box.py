@@ -1,4 +1,5 @@
-"""Ableton-style numeric field: drag vertically to change, double-click to type.
+"""Ableton-style numeric field: drag vertically to change (the cursor hides
+meanwhile), double-click to type.
 A dot marks it automated (red) or its automation overridden (grey)."""
 
 from __future__ import annotations
@@ -11,10 +12,10 @@ from PySide6.QtGui import QColor, QFontMetrics, QKeyEvent, QMouseEvent, QPainter
 from PySide6.QtWidgets import QLineEdit, QWidget
 
 from ... import theme
-from .knob import draw_automation_dot
+from .knob import DragCursor, draw_automation_dot
 
-DRAG_RATE = 0.5  # steps per pixel dragged
-FINE_DRAG_RATE = 0.05  # with Shift
+DRAG_RATE = 0.25  # steps per pixel dragged
+FINE_DRAG_RATE = 0.025  # with Shift
 
 
 class ValueBox(QWidget):
@@ -41,6 +42,7 @@ class ValueBox(QWidget):
         # While dragging: the last y and the value dragged to there, unrounded, so
         # slow (fine) drags add up.
         self._drag_last: tuple[float, float] | None = None
+        self._cursor = DragCursor()
         self._gesture: object | None = None
         self._wheel_gesture: tuple[object, float] | None = None
         self._editor: QLineEdit | None = None
@@ -50,7 +52,6 @@ class ValueBox(QWidget):
         self._hover = False
         self._automation: str | None = None
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus if default is None else Qt.FocusPolicy.ClickFocus)
-        self.setCursor(Qt.CursorShape.SizeVerCursor)
         self.setMinimumHeight(20)
 
     # --- Value -------------------------------------------------------------------
@@ -123,6 +124,7 @@ class ValueBox(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_origin = (event.position().y(), self._value)
             self._drag_last = self._drag_origin
+            self._cursor.press(event)
             self._gesture = object()
             self.update()
 
@@ -132,26 +134,28 @@ class ValueBox(QWidget):
         start_y, start_value = self._drag_origin
         dy = start_y - event.position().y()
         self.relative = True
-        if self._choices:
+        if self._choices:  # (counted from the press: the cursor doesn't jump)
+            self._cursor.moved(self, event, jump=False)
             index = self._choices.index(self._constrain(start_value)) + int(dy / 10)
             self._set_from_user(self._choices[max(0, min(len(self._choices) - 1, index))], self._gesture)
             return
         fine = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-        self._set_from_user(self._drag_by(event.position().y(), lambda value, pixels: value + pixels * self._step * (
+        self._set_from_user(self._drag_by(event, lambda value, pixels: value + pixels * self._step * (
             FINE_DRAG_RATE if fine else DRAG_RATE)), self._gesture)
 
-    def _drag_by(self, y: float, moved: Callable[[float, float], float]) -> float:
-        """The value dragged to at `y`: `moved(value, pixels up)` from where the
-        mouse was last, so pressing or letting go of Shift mid-drag changes the
-        rate from here on (not the whole drag)."""
+    def _drag_by(self, event: QMouseEvent, moved: Callable[[float, float], float]) -> float:
+        """The value dragged to: `moved(value, pixels up)` from where the mouse
+        was last, so pressing or letting go of Shift mid-drag changes the rate
+        from here on (not the whole drag). The cursor hides (see DragCursor)."""
         last_y, value = self._drag_last
-        value = max(self._min, min(self._max, moved(value, last_y - y)))
-        self._drag_last = (y, value)
+        value = max(self._min, min(self._max, moved(value, last_y - event.position().y())))
+        self._drag_last = (self._cursor.moved(self, event), value)
         return value
 
     def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
         self._drag_origin = None
         self._drag_last = None
+        self._cursor.release()
         self._gesture = None
         self.update()
 

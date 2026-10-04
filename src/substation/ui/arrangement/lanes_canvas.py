@@ -623,6 +623,7 @@ class LanesCanvas(QWidget):
         if hit and hit[2] in ("left", "right"):
             track_id, clip, zone = hit
             self.selection.select_clips(self.editor, [(track_id, clip.id)])
+            self.selection.set_insert(self.selection.time_range[0])  # (as a click on its body does)
             self._gesture = TrimGesture(self, track_id, clip, zone)
             return
         if self._in_clip_range(pos) and not mods & Qt.KeyboardModifier.ShiftModifier:

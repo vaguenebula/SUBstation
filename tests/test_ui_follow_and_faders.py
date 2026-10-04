@@ -23,21 +23,21 @@ def move(widget, y: int, modifiers=NONE) -> None:
 def test_pressing_shift_mid_drag_carries_on_from_there(app):
     knob = Knob(0.0, 1.0, 0.5)
     QTest.mousePress(knob, Qt.MouseButton.LeftButton, NONE, QPoint(10, 100))
-    move(knob, 70)  # 30 px up: a tenth of the range
-    assert knob.value() == pytest.approx(0.6)
-    move(knob, 40, SHIFT)  # 30 px more, fine: a hundredth (not back to near where it started)
-    assert knob.value() == pytest.approx(0.61)
+    move(knob, 70)  # 30 px up: a twentieth of the range
+    assert knob.value() == pytest.approx(0.55)
+    move(knob, 40, SHIFT)  # 30 px more, fine: a tenth of that (not back to near where it started)
+    assert knob.value() == pytest.approx(0.555)
     move(knob, 10)  # and Shift let go of: coarse again from there
-    assert knob.value() == pytest.approx(0.71)
+    assert knob.value() == pytest.approx(0.605)
     QTest.mouseRelease(knob, Qt.MouseButton.LeftButton, NONE, QPoint(10, 10))
 
-    box = ValueBox(0.0, -70.0, 6.0, step=0.25, decimals=2)
+    box = ValueBox(0.0, -70.0, 6.0, step=0.25, decimals=3)
     QTest.mousePress(box, Qt.MouseButton.LeftButton, NONE, QPoint(10, 100))
-    move(box, 60)  # 40 px up at half a step each: 5
-    assert box.value() == pytest.approx(5.0)
+    move(box, 60)  # 40 px up at a quarter of a step each: 2.5
+    assert box.value() == pytest.approx(2.5)
     for y in range(59, 39, -1):  # 20 px, fine, a pixel at a time: they add up
         move(box, y, SHIFT)
-    assert box.value() == pytest.approx(5.25)
+    assert box.value() == pytest.approx(2.625)
     QTest.mouseRelease(box, Qt.MouseButton.LeftButton, NONE, QPoint(10, 40))
 
 
@@ -70,3 +70,33 @@ def test_scrolling_by_hand_stops_following_the_playhead_until_playback_restarts(
         assert view.scroll_beats > scrolled
     finally:
         bridge.stop()
+
+
+def test_the_cursor_hides_while_dragging_and_comes_back_where_it_was(app):
+    for widget in (Knob(0.0, 1.0, 0.5), ValueBox(0.0, -70.0, 6.0, step=0.25)):
+        QTest.mousePress(widget, Qt.MouseButton.LeftButton, NONE, QPoint(10, 100))
+        assert QApplication.overrideCursor() is None  # a click alone leaves it be
+        move(widget, 80)
+        assert QApplication.overrideCursor().shape() == Qt.CursorShape.BlankCursor
+        move(widget, 60)
+        QTest.mouseRelease(widget, Qt.MouseButton.LeftButton, NONE, QPoint(10, 60))
+        assert QApplication.overrideCursor() is None
+
+
+def test_a_drag_carries_on_past_the_bottom_of_the_screen(app):
+    """The hidden cursor jumps to the middle of the screen at its edge (and the
+    drag goes on from there), so a slow fine drag can go all the way."""
+    box = ValueBox(0.0, -70.0, 6.0, step=0.25, decimals=2)
+    box.show()
+    area = box.screen().geometry()
+    start = box.mapFromGlobal(QPoint(area.center().x(), area.center().y()))
+    QTest.mousePress(box, Qt.MouseButton.LeftButton, NONE, start)
+    middle = start.y()
+    bottom = box.mapFromGlobal(QPoint(0, area.bottom())).y()
+    for _ in range(3):  # to the bottom: the cursor jumps back to the middle each time
+        move(box, middle + 1, SHIFT)
+        move(box, bottom, SHIFT)
+    expected = -3 * (bottom - middle) * 0.25 * 0.025
+    assert box.value() == pytest.approx(round(expected, 2), abs=0.01)
+    QTest.mouseRelease(box, Qt.MouseButton.LeftButton, NONE, start)
+    box.close()

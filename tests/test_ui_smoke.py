@@ -444,6 +444,10 @@ def test_mouse_trim_and_selecting_below_the_tracks(window, three_tracks):
     drag(lanes, QPoint(left_edge, y), QPoint(int(view.beat_to_x(1.0)), y))
     trimmed = window.project.track(track.id).clips[0]
     assert (trimmed.start_beat, trimmed.offset_sec) == (1.0, pytest.approx(0.5))
+    assert window.selection.insert_beat == 1.0  # playback starts from the trimmed clip
+    window.selection.set_insert(6.0)
+    QTest.mouseClick(lanes, Qt.MouseButton.LeftButton, pos=QPoint(int(view.beat_to_x(trimmed.end_beat(window.project.tempo))) - 2, y))
+    assert window.selection.insert_beat == 1.0  # a click on its edge selects it, as on its body
 
     # Trim handles are only just inside a clip's ends, shown with bracket cursors.
     start_x = int(view.beat_to_x(trimmed.start_beat))
@@ -925,7 +929,7 @@ def test_dropped_loop_is_set_up_in_the_same_undo_step(window, tmp_path):
 def test_header_controls_and_dialogs(window, three_tracks):
     track = window.project.tracks[0]
     header = window.arrangement.headers.headers[track.id]
-    drag(header.volume, QPoint(30, 10), QPoint(30, -70))  # drag up 80 px
+    drag(header.volume, QPoint(30, 10), QPoint(30, -110))  # drag up 120 px
     assert window.project.track(track.id).volume_db == pytest.approx(6.0)  # clamped at +6 dB
     window.undo_stack.undo()
     assert window.project.track(track.id).volume_db == 0.0

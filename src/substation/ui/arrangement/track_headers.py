@@ -586,8 +586,6 @@ class TrackHeader(QWidget):
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if self._fold_rect().contains(event.position().toPoint()):
             self.toggle_fold()  # each click of a double-click counts
-        elif event.position().y() < NAME_ROW:
-            self.start_rename()
 
     def start_rename(self) -> None:
         if self._rename:

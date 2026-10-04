@@ -686,6 +686,14 @@ class BrowserPanel(QWidget):
             widget = widget.parentWidget()
         return False
 
+    def rename_current(self) -> bool:
+        """Ctrl+R while the list has focus: rename the preset there (False: none is)."""
+        item = self.list_model.item(self.list_view.currentIndex()) if self.list_view.hasFocus() else None
+        if item is None or item.kind != "preset":
+            return False
+        self.rename_preset(item.path)
+        return True
+
     def focus_search(self) -> None:
         """Search everything: switch to "All" and focus the search field."""
         if self._scope() != ("all",):

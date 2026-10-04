@@ -150,8 +150,10 @@ class TrimGesture(ClipGesture):
     def finish(self) -> None:
         if self.result and self.result != self.clip:
             self.canvas.editor.replace_clip(self.track_id, self.result, "Trim Clip")
-            # The selection follows the clip's new edges.
-            self.canvas.selection.select_clips(self.canvas.editor, [(self.track_id, self.clip.id)])
+            # The selection (and where playback starts) follows the clip's new edges.
+            selection = self.canvas.selection
+            selection.select_clips(self.canvas.editor, [(self.track_id, self.clip.id)])
+            selection.set_insert(selection.time_range[0])
 
 
 class TimeSelectGesture(ClipGesture):
