@@ -1,7 +1,7 @@
 #pragma once
 // The EQ's filters: each band, from its type, frequency, gain, Q and slope, as
 // a cascade of second-order (and one first-order) sections. Shared by the EQ
-// device (builtin/devices/Eq.cpp) and the bindings (eq_response), so the curve
+// device (builtin/devices/Eq.cpp) and its editor (responseDb()), so the curve
 // the editor draws is the one the engine plays.
 //
 // Each section is an analog prototype made digital with matched poles and a
@@ -189,6 +189,13 @@ inline Design design(int type, double freq, double gain, double q, int slope, do
             break;
     }
     return d;
+}
+
+// A band's response in dB at `frequency` (Hz; above Nyquist: Nyquist's), as the
+// EQ device plays it: the curve its editor draws.
+inline double responseDb(const Design& design, double frequency, double sampleRate) noexcept {
+    const double w = 2.0 * kPi * std::min(frequency, 0.5 * sampleRate) / sampleRate;
+    return 10.0 * std::log10(std::max(design.magnitudeSquared(w), 1e-30));
 }
 
 }  // namespace sub::eq
