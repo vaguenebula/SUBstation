@@ -65,7 +65,7 @@ public:
     // One update (the timer's): reads the feed if it moved, else fades.
     Q_INVOKABLE void poll();
 
-signals:
+Q_SIGNALS:
     void feedChanged();
 
 protected:

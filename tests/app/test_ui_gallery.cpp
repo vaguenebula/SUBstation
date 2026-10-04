@@ -190,7 +190,7 @@ bool near(QRgb a, QColor b, int tolerance = 3) {
 class TestUiGallery : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void initTestCase() {
         if (QGuiApplication::platformName() == QLatin1String("offscreen") ||
             QGuiApplication::platformName() == QLatin1String("minimal"))

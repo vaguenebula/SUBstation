@@ -24,7 +24,7 @@ void OscilloscopeItem::setFeed(QObject* feed) {
         return;
     feed_ = feed;
     hasWritten_ = false;
-    emit feedChanged();
+    Q_EMIT feedChanged();
 }
 
 int OscilloscopeItem::trigger(const float* samples, int count, int window) {

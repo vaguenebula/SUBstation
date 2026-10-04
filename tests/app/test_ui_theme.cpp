@@ -62,7 +62,7 @@ QColor strongest(const QImage& image) {
 class TestUiTheme : public QObject {
     Q_OBJECT
 
-private slots:
+private Q_SLOTS:
     void colorsAreTheme() {
         // theme.py's constants, value for value.
         const QList<std::pair<const char*, QColor>> expected = {

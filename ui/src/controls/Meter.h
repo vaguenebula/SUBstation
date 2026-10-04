@@ -38,7 +38,7 @@ public:
     Q_INVOKABLE void reset();
     Q_INVOKABLE void clearClip();
 
-signals:
+Q_SIGNALS:
     void levelsChanged();
     void clippedChanged();
 

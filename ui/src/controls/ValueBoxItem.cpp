@@ -64,14 +64,14 @@ void ValueBoxItem::setValue(qreal value) {
     value_ = value;
     updateText();
     update();
-    emit valueChanged();
+    Q_EMIT valueChanged();
 }
 
 void ValueBoxItem::setFrom(qreal from) {
     if (from == from_)
         return;
     from_ = from;
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
     if (isComponentComplete())
         setValue(value_);
 }
@@ -80,7 +80,7 @@ void ValueBoxItem::setTo(qreal to) {
     if (to == to_)
         return;
     to_ = to;
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
     if (isComponentComplete()) {
         setValue(value_);
         updateImplicitSize();
@@ -91,14 +91,14 @@ void ValueBoxItem::setStep(qreal step) {
     if (step == step_)
         return;
     step_ = step;
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
 }
 
 void ValueBoxItem::setDecimals(int decimals) {
     if (decimals == decimals_)
         return;
     decimals_ = decimals;
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
     updateText();
     updateImplicitSize();
     if (isComponentComplete())
@@ -109,7 +109,7 @@ void ValueBoxItem::setChoices(const QList<qreal>& choices) {
     if (choices == choices_)
         return;
     choices_ = choices;
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
     if (isComponentComplete())
         setValue(value_);
 }
@@ -123,14 +123,14 @@ void ValueBoxItem::setDefaultValue(const QVariant& value) {
     if (number == default_)
         return;
     default_ = number;
-    emit defaultValueChanged();
+    Q_EMIT defaultValueChanged();
 }
 
 void ValueBoxItem::setWheel(bool wheel) {
     if (wheel == wheel_)
         return;
     wheel_ = wheel;
-    emit wheelChanged();
+    Q_EMIT wheelChanged();
 }
 
 void ValueBoxItem::setAutomation(const QString& state) {
@@ -138,7 +138,7 @@ void ValueBoxItem::setAutomation(const QString& state) {
         return;
     automation_ = state;
     update();
-    emit lookChanged();
+    Q_EMIT lookChanged();
 }
 
 void ValueBoxItem::setFormatter(const QJSValue& formatter) {
@@ -149,7 +149,7 @@ void ValueBoxItem::setFormatter(const QJSValue& formatter) {
 
 void ValueBoxItem::setParser(const QJSValue& parser) {
     parser_ = parser;
-    emit parserChanged();
+    Q_EMIT parserChanged();
 }
 
 void ValueBoxItem::setFormatFunction(std::function<QString(double)> format) {
@@ -160,7 +160,7 @@ void ValueBoxItem::setFormatFunction(std::function<QString(double)> format) {
 
 void ValueBoxItem::setParseFunction(std::function<std::optional<double>(const QString&)> parse) {
     parse_ = std::move(parse);
-    emit parserChanged();
+    Q_EMIT parserChanged();
 }
 
 void ValueBoxItem::setSampleText(const QString& text) {
@@ -168,7 +168,7 @@ void ValueBoxItem::setSampleText(const QString& text) {
         return;
     sampleText_ = text;
     updateImplicitSize();
-    emit lookChanged();
+    Q_EMIT lookChanged();
 }
 
 void ValueBoxItem::setFont(const QFont& font) {
@@ -177,7 +177,7 @@ void ValueBoxItem::setFont(const QFont& font) {
     font_ = font;
     updateImplicitSize();
     update();
-    emit lookChanged();
+    Q_EMIT lookChanged();
 }
 
 QString ValueBoxItem::format(double value) const {
@@ -192,7 +192,7 @@ void ValueBoxItem::updateText() {
     const QString text = format(value_);
     if (text != text_) {
         text_ = text;
-        emit textChanged();
+        Q_EMIT textChanged();
     }
 }
 
@@ -207,7 +207,7 @@ void ValueBoxItem::setRelative(bool relative) {
     if (relative == relative_)
         return;
     relative_ = relative;
-    emit relativeChanged();
+    Q_EMIT relativeChanged();
 }
 
 void ValueBoxItem::setUser(double value, const QString& gesture, bool relative) {
@@ -222,8 +222,8 @@ void ValueBoxItem::setFromUser(double value, const QString& gesture) {
     value_ = value;
     updateText();
     update();
-    emit valueChanged();
-    emit moved(value, gesture);
+    Q_EMIT valueChanged();
+    Q_EMIT moved(value, gesture);
 }
 
 std::optional<double> ValueBoxItem::parseFloat(const QString& text) {
@@ -279,13 +279,13 @@ void ValueBoxItem::paint(SgPainter& p) {
 void ValueBoxItem::hoverEnterEvent(QHoverEvent*) {
     hovered_ = true;
     update();
-    emit hoveredChanged();
+    Q_EMIT hoveredChanged();
 }
 
 void ValueBoxItem::hoverLeaveEvent(QHoverEvent*) {
     hovered_ = false;
     update();
-    emit hoveredChanged();
+    Q_EMIT hoveredChanged();
 }
 
 // --- Interaction -----------------------------------------------------------------------
@@ -295,7 +295,7 @@ void ValueBoxItem::mousePressEvent(QMouseEvent* event) {
         event->ignore();
         return;
     }
-    emit touched();
+    Q_EMIT touched();
     if (typeable())
         forceActiveFocus(Qt::MouseFocusReason);  // so typing a digit edits
     const bool wasDragging = dragging();
@@ -304,7 +304,7 @@ void ValueBoxItem::mousePressEvent(QMouseEvent* event) {
     cursor_.press(event->globalPosition());
     update();
     if (!wasDragging)
-        emit draggingChanged();
+        Q_EMIT draggingChanged();
     event->accept();
 }
 
@@ -335,7 +335,7 @@ void ValueBoxItem::endDrag() {
     if (drag_) {
         drag_.reset();
         update();
-        emit draggingChanged();
+        Q_EMIT draggingChanged();
     }
 }
 
@@ -348,9 +348,9 @@ void ValueBoxItem::mouseDoubleClickEvent(QMouseEvent* event) {
         event->ignore();
         return;
     }
-    emit touched();
+    Q_EMIT touched();
     if (!default_)
-        emit editRequested(format(value_).split(QLatin1Char(' ')).first(), true);
+        Q_EMIT editRequested(format(value_).split(QLatin1Char(' ')).first(), true);
     else
         setUser(*default_, newGestureKey(), false);
 }
@@ -378,7 +378,7 @@ void ValueBoxItem::wheelEvent(QWheelEvent* event) {
 
 void ValueBoxItem::keyPressEvent(QKeyEvent* event) {
     if (default_ && !event->text().isEmpty() && kTypingKeys.contains(event->text())) {
-        emit editRequested(event->text(), false);
+        Q_EMIT editRequested(event->text(), false);
         event->accept();
         return;
     }

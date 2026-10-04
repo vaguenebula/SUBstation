@@ -68,14 +68,14 @@ void KnobItem::setValue(qreal value) {
     value_ = value;
     updateText();
     update();
-    emit valueChanged();
+    Q_EMIT valueChanged();
 }
 
 void KnobItem::setFrom(qreal from) {
     if (from == from_)
         return;
     from_ = from;
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
     if (isComponentComplete())
         setValue(value_);
     update();
@@ -85,7 +85,7 @@ void KnobItem::setTo(qreal to) {
     if (to == to_)
         return;
     to_ = to;
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
     if (isComponentComplete())
         setValue(value_);
     update();
@@ -95,12 +95,12 @@ void KnobItem::setDefaultValue(qreal value) {
     if (default_ && *default_ == value)
         return;
     default_ = value;
-    emit defaultValueChanged();
+    Q_EMIT defaultValueChanged();
 }
 
 void KnobItem::resetDefaultValue() {
     default_.reset();
-    emit defaultValueChanged();
+    Q_EMIT defaultValueChanged();
 }
 
 void KnobItem::setBipolar(bool bipolar) {
@@ -108,7 +108,7 @@ void KnobItem::setBipolar(bool bipolar) {
         return;
     bipolar_ = bipolar;
     update();
-    emit lookChanged();
+    Q_EMIT lookChanged();
 }
 
 void KnobItem::setLogScale(bool logScale) {
@@ -116,21 +116,21 @@ void KnobItem::setLogScale(bool logScale) {
         return;
     logScale_ = logScale;
     update();
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
 }
 
 void KnobItem::setStep(qreal step) {
     if (step == step_)
         return;
     step_ = step;
-    emit rangeChanged();
+    Q_EMIT rangeChanged();
 }
 
 void KnobItem::setWheel(bool wheel) {
     if (wheel == wheel_)
         return;
     wheel_ = wheel;
-    emit wheelChanged();
+    Q_EMIT wheelChanged();
 }
 
 void KnobItem::setColor(const QColor& color) {
@@ -138,7 +138,7 @@ void KnobItem::setColor(const QColor& color) {
         return;
     color_ = color;
     update();
-    emit lookChanged();
+    Q_EMIT lookChanged();
 }
 
 void KnobItem::setAutomation(const QString& state) {
@@ -146,7 +146,7 @@ void KnobItem::setAutomation(const QString& state) {
         return;
     automation_ = state;
     update();
-    emit lookChanged();
+    Q_EMIT lookChanged();
 }
 
 void KnobItem::setFormatter(const QJSValue& formatter) {
@@ -156,7 +156,7 @@ void KnobItem::setFormatter(const QJSValue& formatter) {
 
 void KnobItem::setParser(const QJSValue& parser) {
     parser_ = parser;
-    emit typeableChanged();
+    Q_EMIT typeableChanged();
 }
 
 void KnobItem::setFormatFunction(std::function<QString(double)> format) {
@@ -166,7 +166,7 @@ void KnobItem::setFormatFunction(std::function<QString(double)> format) {
 
 void KnobItem::setParseFunction(std::function<std::optional<double>(const QString&)> parse) {
     parse_ = std::move(parse);
-    emit typeableChanged();
+    Q_EMIT typeableChanged();
 }
 
 bool KnobItem::typeable() const { return bool(parse_) || parser_.isCallable(); }
@@ -181,7 +181,7 @@ void KnobItem::updateText() {
         text = QString::number(value_, 'f', 2);
     if (text != text_) {
         text_ = text;
-        emit textChanged();
+        Q_EMIT textChanged();
     }
 }
 
@@ -204,7 +204,7 @@ void KnobItem::setRelative(bool relative) {
     if (relative == relative_)
         return;
     relative_ = relative;
-    emit relativeChanged();
+    Q_EMIT relativeChanged();
 }
 
 void KnobItem::setFromUser(double value, const QString& gesture) {
@@ -216,8 +216,8 @@ void KnobItem::setFromUser(double value, const QString& gesture) {
     value_ = value;
     updateText();
     update();
-    emit valueChanged();
-    emit moved(value, gesture);
+    Q_EMIT valueChanged();
+    Q_EMIT moved(value, gesture);
 }
 
 bool KnobItem::applyTyped(const QString& text) {
@@ -262,14 +262,14 @@ void KnobItem::mousePressEvent(QMouseEvent* event) {
         event->ignore();
         return;
     }
-    emit touched();
+    Q_EMIT touched();
     if (typeable())
         forceActiveFocus(Qt::MouseFocusReason);  // so typing a digit edits
     const bool wasDragging = dragging();
     drag_ = Drag{event->position().y(), fraction(value_), newGestureKey()};
     cursor_.press(event->globalPosition());
     if (!wasDragging)
-        emit draggingChanged();
+        Q_EMIT draggingChanged();
     event->accept();
 }
 
@@ -290,7 +290,7 @@ void KnobItem::endDrag() {
     cursor_.release();
     if (drag_) {
         drag_.reset();
-        emit draggingChanged();
+        Q_EMIT draggingChanged();
     }
 }
 
@@ -303,7 +303,7 @@ void KnobItem::mouseDoubleClickEvent(QMouseEvent* event) {
         event->ignore();
         return;
     }
-    emit touched();
+    Q_EMIT touched();
     setRelative(false);
     setFromUser(defaultValue(), newGestureKey());
 }
@@ -321,7 +321,7 @@ void KnobItem::wheelEvent(QWheelEvent* event) {
 
 void KnobItem::keyPressEvent(QKeyEvent* event) {
     if (typeable() && !event->text().isEmpty() && kTypingKeys.contains(event->text())) {
-        emit editRequested(event->text());
+        Q_EMIT editRequested(event->text());
         event->accept();
         return;
     }

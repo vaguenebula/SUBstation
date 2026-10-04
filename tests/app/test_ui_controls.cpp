@@ -93,7 +93,7 @@ class TestUiControls : public QObject {
         return found;
     }
 
-private slots:
+private Q_SLOTS:
     void initTestCase() {
         if (QGuiApplication::platformName() == QLatin1String("offscreen") ||
             QGuiApplication::platformName() == QLatin1String("minimal"))

@@ -111,7 +111,7 @@ public:
     // The text field's text: parsed and set as a user change. False if it didn't parse.
     Q_INVOKABLE bool applyTyped(const QString& text);
 
-signals:
+Q_SIGNALS:
     void valueChanged();
     void rangeChanged();
     void defaultValueChanged();

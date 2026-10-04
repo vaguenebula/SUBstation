@@ -113,7 +113,7 @@ public:
     // own, not relative). False if it didn't parse.
     Q_INVOKABLE bool applyTyped(const QString& text);
 
-signals:
+Q_SIGNALS:
     void valueChanged();
     void rangeChanged();
     void defaultValueChanged();

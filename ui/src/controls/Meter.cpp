@@ -34,11 +34,11 @@ void Meter::setLevels(qreal left, qreal right) {
         }
     }
     if (changed)
-        emit levelsChanged();
+        Q_EMIT levelsChanged();
     if (std::max(left, right) >= 1.0 && !clipped_) {
         clipped_ = true;
         changed = true;
-        emit clippedChanged();
+        Q_EMIT clippedChanged();
     }
     if (changed)
         update();
@@ -46,7 +46,7 @@ void Meter::setLevels(qreal left, qreal right) {
 
 void Meter::reset() {
     display_[0] = display_[1] = 0.0;
-    emit levelsChanged();
+    Q_EMIT levelsChanged();
     clearClip();
     update();
 }
@@ -55,7 +55,7 @@ void Meter::clearClip() {
     if (!clipped_)
         return;
     clipped_ = false;
-    emit clippedChanged();
+    Q_EMIT clippedChanged();
     update();
 }
 
