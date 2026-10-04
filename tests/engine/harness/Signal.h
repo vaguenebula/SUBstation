@@ -151,7 +151,7 @@ size_t countNonzero(const std::vector<T>& v) {
 
 template <typename T>
 bool allFinite(const std::vector<T>& v) {
-    // (Checked on the bits: the engine is built with fast math, but this file isn't.)
+    // (The engine is built with fast math, which assumes no infinity or NaN; the tests aren't.)
     return std::all_of(v.begin(), v.end(), [](T x) { return std::isfinite(static_cast<double>(x)); });
 }
 
