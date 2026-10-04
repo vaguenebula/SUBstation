@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QDropEvent,
     QKeySequence,
     QMouseEvent,
+    QWheelEvent,
 )
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
@@ -139,7 +140,7 @@ def test_knobs_edit_plugins_undoably(window):
     widget = window.devices.widgets[device.id]
     knob, readout = widget.knobs[GAIN]
     centre = QPoint(knob.width() // 2, knob.height() // 2)
-    drag(knob, centre, centre + QPoint(0, 75))  # half the range down
+    drag(knob, centre, centre + QPoint(0, 300))  # half the range down
     assert window.engine.processor_param(pid, GAIN) == pytest.approx(0.5, abs=0.02)
     assert readout.text().startswith("0.5") and window.undo_stack.count() == 2  # the track, one knob drag
     widget.choices[WAVE].activated.emit(0)
@@ -283,7 +284,7 @@ def test_edits_in_a_plugin_editor_override_its_automation(window):
 
 def test_devices_fit_the_device_view(window):
     """The tallest devices (a page of knobs with page arrows, a plug-in's long error)
-    fit with the horizontal scroll bar showing: the chain never scrolls vertically."""
+    fit: the chain never scrolls vertically, and shows no scroll bar either way."""
     window.resize(900, 700)
     window.show()
     track, _ = synth_track(window)
@@ -297,7 +298,7 @@ def test_devices_fit_the_device_view(window):
         window.editor.add_device(track.id, "utility")
     QTest.qWait(10)
     scroll = window.devices.scroll
-    assert scroll.horizontalScrollBar().isVisible()
+    assert scroll.horizontalScrollBar().maximum() > 0 and not scroll.horizontalScrollBar().isVisible()
     assert scroll.verticalScrollBar().maximum() == 0
     assert window.devices.chain.minimumSizeHint().height() <= scroll.viewport().height()
 
@@ -825,6 +826,39 @@ def test_ctrl_alt_drag_scrolls_the_chain(window):
     assert panel.selected == [] and QApplication.overrideCursor() is None
     send(QEvent.Type.MouseMove, -300, Qt.MouseButton.NoButton)  # the pan is over
     assert bar.value() == 50
+
+
+def test_shift_wheel_scrolls_the_chain_and_the_wheel_never_turns_a_knob(window):
+    from substation.ui.widgets.knob import Knob
+    from substation.ui.widgets.value_box import ValueBox
+
+    track = window.editor.add_audio_track()
+    window.selection.select_track(track.id)
+    for _ in range(12):
+        window.editor.add_device(track.id, "utility")
+    panel = window.devices
+    bar = panel.scroll.horizontalScrollBar()
+    assert wait_until(lambda: bar.maximum() > 0)
+    QTest.qWait(1)  # scrolled to the last device added
+    bar.setValue(0)
+    controls = [w for w in panel.widgets[track.devices[0].id].findChildren(QWidget) if isinstance(w, (Knob, ValueBox))]
+    assert controls
+
+    def wheel(widget, notches, modifiers):
+        at = QPointF(widget.width() / 2, widget.height() / 2)
+        QApplication.sendEvent(widget, QWheelEvent(at, QPointF(widget.mapToGlobal(at.toPoint())), QPoint(),
+                                                   QPoint(0, 120 * notches), Qt.MouseButton.NoButton, modifiers,
+                                                   Qt.ScrollPhase.NoScrollPhase, False))
+
+    values, steps = [c.value() for c in controls], window.undo_stack.count()
+    for control in controls:
+        wheel(control, 3, Qt.KeyboardModifier.NoModifier)
+    assert [c.value() for c in controls] == values and bar.value() == 0 and window.undo_stack.count() == steps
+    wheel(controls[0], -2, Qt.KeyboardModifier.ShiftModifier)  # Shift+wheel, even over a knob, scrolls
+    assert bar.value() == 160
+    wheel(panel.scroll.viewport(), 1, Qt.KeyboardModifier.ShiftModifier)
+    assert bar.value() == 80
+    assert [c.value() for c in controls] == values and window.undo_stack.count() == steps
 
 
 def test_adding_a_plugin_scrolls_to_it(window):

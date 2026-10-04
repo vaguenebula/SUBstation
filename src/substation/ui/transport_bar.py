@@ -34,6 +34,7 @@ def _separator() -> QFrame:
 
 COUNT_IN_BARS = (0, 1, 2, 4)
 COUNT_IN_KEY = "transport/count_in_bars"
+CONTROL_HEIGHT = 28  # px: every box, button and the scope in the bar, alike
 
 
 def count_in_bars() -> int:
@@ -130,6 +131,10 @@ class TransportBar(QWidget):
             layout.addWidget(widget)
         layout.addSpacing(6)
         layout.addWidget(self.scope)
+        for widget in (self.tempo, self.ts_num, self.ts_den, self.metronome, self.key, self.computer_keys,
+                       self.position, self.play, self.stop, self.record, self.count_in, self.re_enable,
+                       self.lock_envelopes, self.scope, self.loop, self.follow):
+            widget.setFixedHeight(CONTROL_HEIGHT)
         layout.addStretch(1)
         for widget in (self.loop, self.follow, _separator(), self.cpu, self.device):
             layout.addWidget(widget)

@@ -46,6 +46,8 @@ class ViewState(QObject):
         self.grid_level = 0
         self.snap = True
         self.follow = True
+        # Scrolled by hand while playing: following stops until playback stops or starts again.
+        self.follow_paused = False
 
     # --- Coordinates -------------------------------------------------------------
 
@@ -67,6 +69,12 @@ class ViewState(QObject):
         if beats != self.scroll_beats:
             self.scroll_beats = beats
             self.changed.emit()
+
+    def scroll_by_hand(self, beats: float) -> None:
+        """Scroll as the user asked: the view stops following the playhead
+        (which would pull it back) until playback stops or starts again."""
+        self.follow_paused = True
+        self.set_scroll_beats(beats)
 
     def set_scroll_y(self, y: float) -> None:
         y = max(0, min(self.max_scroll_y, int(y)))
@@ -229,12 +237,21 @@ class Selection(QObject):
             self._anchor = track_id
         self.track_id = track_id
         if focus_track:
-            self.focus = "track"
-            self.clips = set()
-            self.time_range = None
-            self.lanes = ()
-            self.points = None
+            self._focus_tracks()
         self.changed.emit()
+
+    def focus_tracks(self) -> None:
+        """The selected tracks (as they are) are what Cut, Copy and Delete act on now."""
+        if self.focus != "track" or self.time_range is not None or self.clips or self.points is not None:
+            self._focus_tracks()
+            self.changed.emit()
+
+    def _focus_tracks(self) -> None:
+        self.focus = "track"
+        self.clips = set()
+        self.time_range = None
+        self.lanes = ()
+        self.points = None
 
     def focus_devices(self) -> None:
         """Devices were selected in the device view: Delete acts on them now."""

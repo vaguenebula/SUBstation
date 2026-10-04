@@ -33,7 +33,7 @@ from PySide6.QtWidgets import QMenu, QWidget
 from ... import theme
 from ...audio.engine_bridge import EngineBridge, is_audio_file
 from ...model.devices import BUILTIN_DEVICES, device_is_instrument, is_instrument
-from ...model.editor import ClipboardContent, CopiedAutomation, ProjectEditor
+from ...model.editor import ClipboardContent, CopiedAutomation, CopiedTracks, ProjectEditor
 from ...model.project import (
     DEFAULT_TRACK_HEIGHT,
     MAX_TRACK_HEIGHT,
@@ -42,6 +42,7 @@ from ...model.project import (
     AnyClip,
     MidiClip,
     PluginRef,
+    iter_devices,
 )
 from ..browser.browser_models import (
     PLUGIN_MIME,
@@ -168,6 +169,15 @@ def wheel_action(editor: ProjectEditor, track_id: str, event: QWheelEvent) -> bo
     return True
 
 
+def store_plugin_states(editor: ProjectEditor, bridge: EngineBridge, track_ids) -> None:
+    """Store the plug-ins' states on these tracks (and what is in them, if
+    groups) in the model, as they are now: before copying them."""
+    project = editor.project
+    bridge.store_plugin_states({d.id for t in track_ids if project.has_track(t)
+                                for track in [project.track(t), *project.descendants(t)]
+                                for d in iter_devices(track.devices)})
+
+
 DEVICE_MOVE_MIME = "application/x-substation-device-move"  # track id, then device ids, a line each
 
 
@@ -205,8 +215,8 @@ class LanesCanvas(QWidget):
         self._drop_preview: tuple[int | None, float, list[tuple[str, float]]] | None = None
         self._hover_edge: tuple[str, str] | None = None  # (clip id, "left"/"right") under the mouse
         self._hover_point: Hover | None = None  # the breakpoint (or place on a line) under the mouse
-        # Clip content, or automation, copied or cut (Ctrl+C / Ctrl+X): the last copied is what Ctrl+V pastes.
-        self.clipboard: ClipboardContent | CopiedAutomation | None = None
+        # Clip content, automation or tracks, copied or cut (Ctrl+C / Ctrl+X): the last copied is what Ctrl+V pastes.
+        self.clipboard: ClipboardContent | CopiedAutomation | CopiedTracks | None = None
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -613,6 +623,7 @@ class LanesCanvas(QWidget):
         if hit and hit[2] in ("left", "right"):
             track_id, clip, zone = hit
             self.selection.select_clips(self.editor, [(track_id, clip.id)])
+            self.selection.set_insert(self.selection.time_range[0])  # (as a click on its body does)
             self._gesture = TrimGesture(self, track_id, clip, zone)
             return
         if self._in_clip_range(pos) and not mods & Qt.KeyboardModifier.ShiftModifier:
@@ -811,6 +822,29 @@ class LanesCanvas(QWidget):
             else:
                 self.clipboard = content
 
+    def copy_tracks(self, track_ids) -> None:
+        """Copy tracks (a group with what is in it), their plug-ins as they are now (Ctrl+C)."""
+        store_plugin_states(self.editor, self.bridge, track_ids)
+        content = self.editor.copy_tracks(track_ids)
+        if content is not None:
+            self.clipboard = content
+
+    def cut_tracks(self, track_ids) -> None:
+        """Copy tracks (see copy_tracks), and delete them (Ctrl+X)."""
+        store_plugin_states(self.editor, self.bridge, track_ids)
+        content = self.editor.cut_tracks(track_ids)
+        if content is not None:
+            self.clipboard = content
+
+    def _paste_tracks(self, content: CopiedTracks, after: str | None) -> None:
+        """Copies of copied tracks after track `after` (and what is in it), in its
+        group (None: last); they are selected."""
+        if after is not None and not self.project.has_track(after):
+            after = None  # (a return, or the master: last)
+        copies = self.editor.paste_tracks(content, after)
+        for i, track in enumerate(copies):
+            self.selection.select_track(track.id, focus_track=True, mode="toggle" if i else "")
+
     def _paste_automation(self, content: CopiedAutomation, at_beat: float, lanes=None) -> None:
         """Copied automation at `at_beat`: onto `lanes` (default: the selected
         ones) as ProjectEditor.automation_paste_targets puts it, else the lanes it
@@ -832,10 +866,15 @@ class LanesCanvas(QWidget):
     def paste(self, at_beat: float | None = None, track_id: str | None = None) -> None:
         """Paste copied clip content (Ctrl+V) at `at_beat` (default: the insert
         marker), its top track onto `track_id` (default: the selected track), and
-        select it; or copied automation (see _paste_automation). The insert marker
+        select it; or copied automation (see _paste_automation), or copied tracks
+        (after that track: see _paste_tracks). The insert marker
         goes to its end, so pasting again appends."""
         if self.clipboard is None:
-            self.status_message.emit("Nothing to paste: copy (Ctrl+C) or cut (Ctrl+X) clips or automation first.")
+            self.status_message.emit(
+                "Nothing to paste: copy (Ctrl+C) or cut (Ctrl+X) clips, automation or tracks first.")
+            return
+        if isinstance(self.clipboard, CopiedTracks):
+            self._paste_tracks(self.clipboard, track_id or self.selection.track_id)
             return
         if isinstance(self.clipboard, CopiedAutomation):
             self._paste_automation(self.clipboard, self.selection.insert_beat if at_beat is None else at_beat)
@@ -880,7 +919,7 @@ class LanesCanvas(QWidget):
             self.view.zoom_at(event.position().x(), 1.2 ** (delta.y() / 120.0))
         elif mods & Qt.KeyboardModifier.ShiftModifier or delta.x():
             pixels = -(delta.x() or delta.y()) / 120.0 * 80.0
-            self.view.set_scroll_beats(self.view.scroll_beats + pixels / self.view.px_per_beat)
+            self.view.scroll_by_hand(self.view.scroll_beats + pixels / self.view.px_per_beat)
         else:
             self.view.set_scroll_y(self.view.scroll_y - delta.y() / 120.0 * 48)
         event.accept()

@@ -27,6 +27,7 @@ from PySide6.QtGui import (
     QDropEvent,
     QMouseEvent,
     QPainter,
+    QWheelEvent,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -68,6 +69,8 @@ from ..browser.browser_models import (
     preset_paths,
 )
 from ..device_editors import editor_for
+from ..widgets.knob import Knob
+from ..widgets.value_box import ValueBox
 from .device_widgets import DeviceWidget, PluginDeviceWidget, RackWidget
 from .frame import _DeviceFrame, device_height
 
@@ -77,6 +80,7 @@ EFFECTS_HINT = "Drop audio effects here from the browser (Built-in or Plug-ins �
 INSTRUMENT_HINT = "Drop an instrument here from the browser (Built-in or Plug-ins › Instruments)"
 INSTRUMENT_REFUSED = "Instruments go on MIDI tracks (Create › Insert MIDI Track)."
 PRESET_FILTER = f"SUBstation Preset (*{PRESET_EXTENSION})"
+WHEEL_SCROLL = 80  # px Shift+wheel scrolls the chain by a notch
 AUTOSCROLL_EDGE = 40  # px from the chain's edge where a drag scrolls it
 AUTOSCROLL_INTERVAL = 16  # ms
 DISPLAY_UPDATE_MS = 16  # the editors' displays: ~60 fps
@@ -132,6 +136,7 @@ class DevicePanel(QFrame):
         self._pages: dict[str, int] = {}  # plug-in device id -> the parameter page it shows
         self.selected: list[str] = []  # selected device ids, in chain order
         self._anchor: str | None = None  # where a Shift-click range starts
+        self._clicked_chain: tuple[str, str] | None = None  # (rack id, chain id) last clicked: Ctrl+R renames it
         self.clipboard: list[Device] = []  # devices copied or cut (Ctrl+C / Ctrl+X), as they were
         self._clipboard_folded: frozenset[str] = frozenset()  # those of them (and in them) that were folded
         self.setAcceptDrops(True)
@@ -145,6 +150,8 @@ class DevicePanel(QFrame):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # No scroll bar either way (Shift+wheel or Ctrl+Alt-drag scrolls): its room goes to the devices.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # Let the panel's own background show through (a plain `background:` rule
         # would cascade into every child widget).
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
@@ -179,7 +186,7 @@ class DevicePanel(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, PANEL_MARGIN, 10, PANEL_MARGIN)
         layout.addWidget(scroll, 1)
-        # Room for the tallest device with the horizontal scroll bar showing: no vertical scrolling.
+        # Room for the tallest device, and what a horizontal scroll bar would have taken besides.
         bar = scroll.horizontalScrollBar()
         bar_height = scroll.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent, None, bar)
         self.setFixedHeight(2 * PANEL_MARGIN + device_height(editor) + EXTRA_HEIGHT + bar_height)
@@ -260,6 +267,8 @@ class DevicePanel(QFrame):
     def _set_selected(self, device_ids) -> None:
         wanted = set(device_ids)
         self.selected = [i for i in self._chain_ids() if i in wanted]
+        if wanted:
+            self._clicked_chain = None
         for device_id, widget in self.widgets.items():
             widget.set_selected(device_id in wanted)
         if self.selected:
@@ -470,6 +479,7 @@ class DevicePanel(QFrame):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._set_selected([])  # a click beside the devices
+            self._clicked_chain = None
             if self.track_id is not None:
                 self.selection.focus_devices()  # (Ctrl+V pastes here)
 
@@ -477,6 +487,8 @@ class DevicePanel(QFrame):
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         kind = event.type()
+        if kind == QEvent.Type.Wheel and isinstance(obj, QWidget) and self.scroll.isAncestorOf(obj):
+            return self._wheel(obj, event)
         if kind == QEvent.Type.MouseButtonPress:
             if (event.button() == Qt.MouseButton.LeftButton and is_pan_modifier(event.modifiers())
                     and isinstance(obj, QWidget) and self.scroll.isAncestorOf(obj)):
@@ -492,6 +504,15 @@ class DevicePanel(QFrame):
                 QApplication.restoreOverrideCursor()
             return True
         return False
+
+    def _wheel(self, obj: QWidget, event: QWheelEvent) -> bool:
+        """Shift+wheel scrolls the chain; the wheel never turns a knob here."""
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            delta = event.angleDelta().y() or event.angleDelta().x()
+            bar = self.scroll.horizontalScrollBar()
+            bar.setValue(bar.value() - round(delta * WHEEL_SCROLL / 120))
+            return True
+        return isinstance(obj, (Knob, ValueBox))
 
     # --- Reordering ------------------------------------------------------------------
 
@@ -656,6 +677,19 @@ class DevicePanel(QFrame):
         if self._shown_chains.get(rack_id) != chain_id or chain_id not in self._chain_views:
             self._shown_chains[rack_id] = chain_id
             self.show_track(self.track_id)
+        self._clicked_chain = (rack_id, chain_id)
+        self.selection.focus_devices()
+
+    def rename_chain(self) -> bool:
+        """Ctrl+R: rename the rack chain last clicked, in place (False: none is)."""
+        rack_id, chain_id = self._clicked_chain or (None, None)
+        rack = self.widgets.get(rack_id)
+        row = rack.chains.rows.get(chain_id) if isinstance(rack, RackWidget) else None
+        if row is None:
+            return False
+        self._scroll_to(rack_id)
+        row.start_rename()
+        return True
 
     def _on_track_changed(self, _track_id: str) -> None:
         for widget in self._current_widgets():  # a sidechain's source may have a new name
@@ -696,7 +730,7 @@ class DevicePanel(QFrame):
         if track_id is not None and not self.project.has_owner(track_id):
             track_id = None
         if track_id != self.track_id:
-            self.selected, self._anchor = [], None
+            self.selected, self._anchor, self._clicked_chain = [], None, None
         self.track_id = track_id
         self.drop_marker.hide()
         while self.chain_layout.count():

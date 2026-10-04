@@ -286,10 +286,6 @@ class ReturnHeader(QWidget):
             mode = "toggle" if event.modifiers() & Qt.KeyboardModifier.ControlModifier else ""
             self.selection.select_track(self.track_id, focus_track=True, mode=mode)
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.position().y() < NAME_ROW:
-            self.start_rename()
-
     def _solo_clicked(self, on: bool) -> None:
         """As a track's: soloing it unsoloes the others unless Ctrl is held."""
         selected = self.selection.track_ids

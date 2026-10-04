@@ -5,7 +5,7 @@ Macros: eight knobs, each turning the parameters mapped to it (right-click a
 device's parameter in the rack to map it; right-click a macro to see what it
 moves, or unmap it). Chains: a row each, with its activator (mute), name,
 solo, volume, pan and meter, as a track header has. Click a chain to show its
-devices beside the rack; double-click its name to rename it; right-click for
+devices beside the rack; Ctrl+R then renames it; right-click for
 more (add, duplicate, delete). Solo among a rack's chains leaves the others out.
 """
 
@@ -189,11 +189,6 @@ class _ChainRow(QFrame):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self.chain_id)
-        event.accept()
-
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.name.geometry().contains(event.position().toPoint()):
-            self.start_rename()
         event.accept()
 
     def start_rename(self) -> None:

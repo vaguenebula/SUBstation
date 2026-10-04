@@ -216,3 +216,68 @@ def test_folding_one_of_the_selected_tracks_folds_them_all(window):
     # An unselected track's fold button folds just it.
     QTest.mouseClick(headers[b], Qt.MouseButton.LeftButton, pos=headers[b]._fold_rect().center())
     assert project.track(b).folded and not project.track(a).folded
+
+
+def test_groups_can_be_cut_copied_and_pasted(window):
+    a, b, c = make_tracks(window)
+    project, selection = window.project, window.selection
+    group = window.editor.group_tracks([a, b])
+    selection.select_track(group.id, focus_track=True)
+    press_key(window, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    selection.select_track(c, focus_track=True)
+    press_key(window, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)  # after C
+    assert len(project.tracks) == 7  # the group, A, B, C, then the copies
+    pasted = project.tracks[4]
+    assert pasted.is_group and pasted.parent is None and selection.track_ids == (pasted.id,)
+    inside = project.descendants(pasted.id)
+    assert [len(t.clips) for t in inside] == [1, 1] and {t.id for t in inside}.isdisjoint({a, b})
+    assert window.undo_stack.undoText() == "Paste Track"
+
+    selection.select_track(group.id, focus_track=True)
+    press_key(window, Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier)
+    assert not project.has_track(group.id) and not project.has_track(a) and len(project.tracks) == 4
+    selection.select_track(c, focus_track=True)
+    press_key(window, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+    assert len(project.tracks) == 7 and project.tracks[1].is_group  # after C, before the first copy
+    window.undo_stack.undo()
+    window.undo_stack.undo()
+    assert project.has_track(group.id) and [t.id for t in project.descendants(group.id)] == [a, b]
+
+
+def test_a_refused_cut_leaves_the_clipboard_and_the_header_menu_acts_on_tracks(window, monkeypatch):
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QMenu
+
+    a, b, c = make_tracks(window)
+    project, selection, lanes = window.project, window.selection, window.arrangement.lanes
+    group = window.editor.group_tracks([a, b])
+    # Cutting a track in a frozen group is refused: nothing is cut, the clipboard keeps what it had.
+    lanes.clipboard = before = object()
+    monkeypatch.setattr(project, "frozen_by", lambda t: group.id if t in (a, b) else None)
+    selection.select_track(a, focus_track=True)
+    press_key(window, Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier)
+    assert project.has_track(a) and lanes.clipboard is before
+    monkeypatch.undo()
+
+    # Right-clicking a selected track's header: its Cut and Copy act on the selected
+    # tracks, not on a clip range selected since.
+    selection.select_track(c, focus_track=True)
+    selection.set_time_range(0.0, 4.0, [c], clips=window.editor.clips_in_range(0.0, 4.0, [c]))
+    assert selection.track_id == c and selection.focus == "clips"
+    from substation.ui.arrangement import track_headers
+
+    class Menu(QMenu):
+        def exec(self, *_args):  # (not shown)
+            return None
+
+    monkeypatch.setattr(track_headers, "QMenu", Menu)
+    header = window.arrangement.headers.headers[c]
+    header.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(20, 8), header.mapToGlobal(QPoint(20, 8))))
+    assert selection.focus == "track" and selection.time_range is None and selection.track_ids == (c,)
+    assert window._what_is_copied("copied") == "tracks"
+
+    # Ctrl+R doesn't rename a track hidden in a folded group.
+    window.editor.set_folded(group.id, True)
+    QTest.qWait(10)
+    assert not window.arrangement.rename_track(a)
+    assert window.arrangement.rename_track(group.id)

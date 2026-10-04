@@ -24,7 +24,7 @@ from .device_settings import DeviceSettingsEdits
 from .freezing import FreezeEdits
 from .racks import RackEdits
 from .settings import SettingsEdits
-from .tracks import AT_INDEX, RecordedTake, TrackEdits
+from .tracks import AT_INDEX, CopiedTracks, RecordedTake, TrackEdits
 
 __all__ = [
     "AT_INDEX",
@@ -32,6 +32,7 @@ __all__ = [
     "ClipboardContent",
     "CopiedAutomation",
     "CopiedTrack",
+    "CopiedTracks",
     "LaneRef",
     "ProjectEditor",
     "RecordedTake",

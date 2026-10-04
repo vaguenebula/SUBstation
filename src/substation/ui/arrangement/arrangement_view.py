@@ -28,7 +28,7 @@ from .bus_tracks import (
 )
 from .lanes_canvas import LanesCanvas
 from .ruler import TimelineRuler
-from .track_headers import TrackHeaderColumn
+from .track_headers import NAME_ROW, TrackHeaderColumn
 from .view_state import Selection, TrackLayout, ViewState, automation_rows
 from .waveform_cache import WaveformCache
 
@@ -271,6 +271,20 @@ class ArrangementView(QWidget):
             self._update_vbar()
         self.lanes.update()
 
+    def rename_track(self, track_id: str) -> bool:
+        """Ctrl+R: rename a track (or a return) in place, scrolled into view (False: it can't be)."""
+        if track_id in self._returns:
+            self._returns[track_id][1].start_rename()
+            return True
+        header = self.headers.headers.get(track_id)
+        row = self.layout_model.row_for(track_id)
+        if header is None or row is None or row.hidden:  # the master, or a track folded away in its group
+            return False
+        if not self.view.scroll_y <= row.top <= self.view.scroll_y + self.headers.height() - NAME_ROW:
+            self.view.set_scroll_y(row.top)
+        header.start_rename()
+        return True
+
     # --- Scrolling ---------------------------------------------------------------
 
     def _update_hbar(self, *_args) -> None:
@@ -287,7 +301,7 @@ class ArrangementView(QWidget):
         self.hbar.blockSignals(False)
 
     def _on_hbar(self, value: int) -> None:
-        self.view.set_scroll_beats(value / self.view.px_per_beat)
+        self.view.scroll_by_hand(value / self.view.px_per_beat)
 
     def _update_vbar(self) -> None:
         viewport = max(1, self.lanes.height())
@@ -319,6 +333,7 @@ class ArrangementView(QWidget):
     # --- Playhead ------------------------------------------------------------------
 
     def _on_transport(self, _playing: bool) -> None:
+        self.view.follow_paused = False  # stopping or starting playback follows again
         self._on_position(self.bridge.position)
 
     def _on_position(self, beat: float) -> None:
@@ -328,7 +343,7 @@ class ArrangementView(QWidget):
         self.master_lane.set_playhead(shown)
         for lane, _header in self._returns.values():
             lane.set_playhead(shown)
-        if self.view.follow and self.bridge.is_playing:
+        if self.view.follow and not self.view.follow_paused and self.bridge.is_playing:
             x = self.view.beat_to_x(beat)
             width = self.lanes.width()
             if x > width * 0.96 or x < 0:

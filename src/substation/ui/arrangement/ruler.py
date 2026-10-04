@@ -168,7 +168,7 @@ class TimelineRuler(QWidget):
                 d["pan"] = abs(dx) > abs(dy)
             if d["moved"]:
                 if d["pan"]:
-                    self.view.set_scroll_beats(d["scroll"] - dx / self.view.px_per_beat)
+                    self.view.scroll_by_hand(d["scroll"] - dx / self.view.px_per_beat)
                 else:
                     self.view.zoom_at(d["x"], 1.012 ** (pos.y() - d["last_y"]))
                     d["last_y"] = pos.y()

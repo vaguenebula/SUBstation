@@ -46,13 +46,12 @@ from ...model.project import (
     TRACK_COLORS,
     MidiInput,
     RoutingGraph,
-    iter_devices,
     routing_graph,
 )
 from .. import freezing, icons
 from ..widgets import MeterWidget, ToggleButton
 from .automation_header import CHOOSER_HEIGHT, AutomationControls
-from .lanes_canvas import wheel_action
+from .lanes_canvas import store_plugin_states, wheel_action
 from .mixer_controls import (
     SendControls,
     pan_knob,
@@ -79,11 +78,7 @@ def duplicate_tracks(editor: ProjectEditor, bridge: EngineBridge, selection: Sel
     """Ctrl+D on tracks: copies of them (groups with what is in them; see
     ProjectEditor.duplicate_tracks), their plug-ins as they are now. The copies
     are selected; their ids."""
-    project = editor.project
-    track_ids = [t for t in track_ids if project.has_track(t)]
-    devices = {d.id for t in track_ids for track in [project.track(t), *project.descendants(t)]
-               for d in iter_devices(track.devices)}
-    bridge.store_plugin_states(devices)
+    store_plugin_states(editor, bridge, track_ids)
     copies = [t.id for t in editor.duplicate_tracks(track_ids)]
     for i, track_id in enumerate(copies):
         selection.select_track(track_id, focus_track=True, mode="toggle" if i else "")
@@ -591,8 +586,6 @@ class TrackHeader(QWidget):
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if self._fold_rect().contains(event.position().toPoint()):
             self.toggle_fold()  # each click of a double-click counts
-        elif event.position().y() < NAME_ROW:
-            self.start_rename()
 
     def start_rename(self) -> None:
         if self._rename:
@@ -622,6 +615,8 @@ class TrackHeader(QWidget):
         if self.track_id not in selected:
             self.selection.select_track(self.track_id, focus_track=True)
             selected = (self.track_id,)
+        else:
+            self.selection.focus_tracks()  # (its Cut and Copy: these tracks, not devices or clips)
         menu = QMenu(self)
         menu.addAction("Rename", self.start_rename)
         colors = menu.addMenu("Color")
@@ -632,6 +627,12 @@ class TrackHeader(QWidget):
         menu.addAction("Insert Audio Track", lambda: self.editor.add_audio_track(index, parent=parent))
         menu.addAction("Insert MIDI Track", lambda: self.editor.add_midi_track(index, parent=parent))
         menu.addAction("Insert Return Track", self.editor.add_return_track)
+        window = self.window()
+        for text, slot, key in (("Cut", "cut", "Ctrl+X"), ("Copy", "copy", "Ctrl+C"), ("Paste", "paste", "Ctrl+V")):
+            if hasattr(window, slot):  # (the window's Cut, Copy and Paste: on the selected tracks)
+                action = menu.addAction(text, getattr(window, slot))
+                action.setShortcut(key)  # (as a tip: the window's action handles the key)
+                action.setShortcutVisibleInContextMenu(True)
         duplicate = menu.addAction("Duplicate Track" if len(selected) == 1 else "Duplicate Tracks",
                                    lambda: duplicate_tracks(self.editor, self.bridge, self.selection, list(selected)))
         duplicate.setShortcut("Ctrl+D")  # (as a tip: the window's action handles the key)

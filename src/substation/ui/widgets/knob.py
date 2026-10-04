@@ -1,4 +1,4 @@
-"""Rotary knob: drag vertically, Shift for fine control, double-click resets.
+"""Rotary knob: drag vertically (the cursor hides meanwhile), Shift for fine control, double-click resets.
 With `log_scale` (for frequencies and times) it moves evenly in log(value);
 with `step` it only takes multiples of it (from the minimum). A dot in its
 corner marks it automated (red) or its automation overridden (grey)."""
@@ -8,15 +8,73 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen, QWheelEvent
-from PySide6.QtWidgets import QLineEdit, QWidget
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QCursor, QGuiApplication, QKeyEvent, QMouseEvent, QPainter, QPen, QWheelEvent
+from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
 
 from ... import theme
 
 AUTOMATION_COLORS = {"on": "#ff4a3d", "off": "#8c8c8c"}  # automated / automation overridden
 START_ANGLE = 225.0  # degrees, Qt convention (0 = 3 o'clock, counter-clockwise)
 SPAN = 270.0
+DRAG_PIXELS = 600.0  # dragged this far, a knob turns through its whole range
+FINE_DRAG_PIXELS = 6000.0  # with Shift
+
+
+class DragCursor(QObject):
+    """Hides the mouse cursor while a knob or value box is dragged (from the
+    first move: a click leaves it be), then puts it back where the drag started.
+    Meanwhile, at the top or bottom of the screen it jumps to the middle, so a
+    drag never runs out of room. A popup opening mid-drag (a right-click menu)
+    ends the drag: the release goes to the popup."""
+
+    def __init__(self):
+        super().__init__()
+        self._start: QPoint | None = None
+        self._hidden = False
+
+    @property
+    def dragging(self) -> bool:
+        return self._start is not None
+
+    def press(self, event: QMouseEvent) -> None:
+        self.release()
+        self._start = event.globalPosition().toPoint()
+        QApplication.instance().installEventFilter(self)
+
+    def moved(self, widget: QWidget, event: QMouseEvent, jump: bool = True) -> float:
+        """The mouse moved while dragging `widget`: the y (in it) to measure the
+        next move from: where it is, or where it jumped to (unless not `jump`)."""
+        y = event.position().y()
+        if self._start is None:
+            return y
+        if not self._hidden:
+            QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+            self._hidden = True
+        at = event.globalPosition().toPoint()
+        screen = QGuiApplication.screenAt(at)
+        if jump and screen is not None:
+            area = screen.geometry()
+            if at.y() <= area.top() + 1 or at.y() >= area.bottom() - 1:
+                middle = QPoint(at.x(), area.center().y())
+                QCursor.setPos(middle)
+                return widget.mapFromGlobal(middle).y()
+        return y
+
+    def release(self) -> None:
+        if self._start is not None:
+            QApplication.instance().removeEventFilter(self)
+        if self._hidden:
+            QApplication.restoreOverrideCursor()
+            QCursor.setPos(self._start)
+        self._start = None
+        self._hidden = False
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if (event.type() == QEvent.Type.Show and isinstance(obj, QWidget)
+                and obj.windowType() == Qt.WindowType.Popup):
+            self.release()
+        return False
 
 
 class Knob(QWidget):
@@ -37,7 +95,8 @@ class Knob(QWidget):
         self._bipolar = bipolar
         self._format = formatter or (lambda v: f"{v:.2f}")
         self._color = QColor(color)
-        self._drag: tuple[float, float, object] | None = None
+        self._drag: tuple[float, float, object] | None = None  # last y, position there (0..1), gesture
+        self._cursor = DragCursor()
         self._automation: str | None = None
         self._wheel = wheel
         self._parse = parser  # if set: typing a number edits
@@ -129,19 +188,25 @@ class Knob(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag = (event.position().y(), self._value, object())
+            self._drag = (event.position().y(), self._fraction(self._value), object())
+            self._cursor.press(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._drag is None:
+        if self._drag is None or not self._cursor.dragging:
             return
-        start_y, start_value, gesture = self._drag
+        # Moved on from where the mouse was last, so pressing or letting go of
+        # Shift mid-drag changes the rate from here on (not the whole drag).
+        last_y, fraction, gesture = self._drag
+        y = event.position().y()
+        pixels = FINE_DRAG_PIXELS if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else DRAG_PIXELS
+        fraction = max(0.0, min(1.0, fraction + (last_y - y) / pixels))
+        self._drag = (self._cursor.moved(self, event), fraction, gesture)
         self.relative = True
-        pixels_for_full_range = 1000.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 150.0
-        delta = (start_y - event.position().y()) / pixels_for_full_range
-        self._set_from_user(self._from_fraction(self._fraction(start_value) + delta), gesture)
+        self._set_from_user(self._from_fraction(fraction), gesture)
 
     def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
         self._drag = None
+        self._cursor.release()
 
     def mouseDoubleClickEvent(self, _event: QMouseEvent) -> None:
         self.relative = False
