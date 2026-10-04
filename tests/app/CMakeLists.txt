@@ -1,7 +1,11 @@
 # Qt Test: each test_*.cpp is an executable of its own (QTEST_MAIN or
 # QTEST_GUILESS_MAIN), run offscreen. App-layer tests link sub_app; tests whose
-# file name starts with test_ui_ link the UI (sub_ui) too.
+# file name starts with test_ui_ link the UI (sub_ui) too, and run on a real
+# (virtual) display where there is one: Qt's offscreen platform renders Qt Quick
+# in software, which draws none of the UI's scene-graph geometry. On Linux they
+# run under xvfb-run with the xcb platform (Mesa renders OpenGL in software).
 find_package(Qt6 REQUIRED COMPONENTS Test)
+find_program(XVFB_RUN xvfb-run)
 file(GLOB APP_TEST_SOURCES CONFIGURE_DEPENDS test_*.cpp)
 file(GLOB APP_TEST_SUPPORT CONFIGURE_DEPENDS support/*.cpp support/*.h)
 if (APP_TEST_SUPPORT)
@@ -26,6 +30,13 @@ foreach (_source IN LISTS APP_TEST_SOURCES)
     target_compile_definitions(${_name} PRIVATE SUBSTATION_SCANNER="$<TARGET_FILE:substation-scan>")
     add_dependencies(${_name} substation-scan)
     set_target_properties(${_name} PROPERTIES WIN32_EXECUTABLE OFF)
-    add_test(NAME ${_name} COMMAND ${_name})
-    set_tests_properties(${_name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    if (_name MATCHES "^test_ui_" AND XVFB_RUN AND NOT WIN32)
+        add_test(NAME ${_name} COMMAND ${XVFB_RUN} -a -s "-screen 0 1920x1080x24" $<TARGET_FILE:${_name}>)
+        set_tests_properties(${_name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb")
+    elseif (_name MATCHES "^test_ui_")
+        add_test(NAME ${_name} COMMAND ${_name})
+    else()
+        add_test(NAME ${_name} COMMAND ${_name})
+        set_tests_properties(${_name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
 endforeach()
