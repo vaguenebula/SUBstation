@@ -27,6 +27,8 @@ os.environ["SUBSTATION_LIBRARY"] = str(Path(tempfile.mkdtemp(prefix="sub-library
 os.environ["SUBSTATION_BROWSER_INDEX"] = str(Path(tempfile.mkdtemp(prefix="sub-index-")) / "browser-index.bin")
 # Nor the user's preset library.
 os.environ["SUBSTATION_PRESETS"] = str(Path(tempfile.mkdtemp(prefix="sub-presets-")) / "Presets")
+# Nor the intelligence layer's activity log.
+os.environ["SUBSTATION_ACTIVITY_LOG"] = str(Path(tempfile.mkdtemp(prefix="sub-activity-")) / "activity.jsonl")
 
 # The fake ASIO driver (tests/asio_driver), built with the engine when it has the
 # ASIO SDK. The tests see only it, never the drivers installed on the computer.

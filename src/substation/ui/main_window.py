@@ -27,6 +27,7 @@ from ..audio.settings import (
     record_quantize,
     set_record_quantize,
 )
+from ..intel.qt.controller import IntelController
 from ..model import automation
 from ..model.devices import device_is_instrument, is_instrument
 from ..model.editor import ProjectEditor
@@ -47,6 +48,7 @@ from .browser.browser_panel import BrowserPanel
 from .computer_keyboard import ComputerKeyboard
 from .device_panel import DevicePanel
 from .dialogs import ExportDialog, PreferencesDialog
+from .intel.facts import WindowFacts
 from .transport_bar import TransportBar
 
 PROJECT_FILTER = f"SUBstation Project (*{EXTENSION})"
@@ -125,6 +127,8 @@ class MainWindow(QMainWindow):
         self.computer_keyboard = ComputerKeyboard(self.bridge, self)
         self.transport.computer_keys.toggled.connect(self.computer_keyboard.set_enabled)
         self.computer_keyboard.changed.connect(self._show_computer_keyboard)
+        # The intelligence layer: operations on the song for agents and suggestions (intel/).
+        self.intel = IntelController(self.project, self.editor, self.bridge, WindowFacts(self), parent=self)
 
         self._create_actions()
         # The Ctrl/Alt shortcuts work while a plug-in's editor has the focus too.

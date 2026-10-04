@@ -80,6 +80,10 @@ class TrackSync:
         self._sources = {k: s for k, s in self._sources.items() if k in used}
         self.engine.release_unused_sources()
 
+    def engine_track_id(self, track_id: str) -> int | None:
+        """A track's (group's, return's, the master's) engine track."""
+        return self._track_ids.get(track_id)
+
     def _remove_engine_tracks(self) -> None:
         """Every track goes from the engine, with its devices; the master stays, without its devices."""
         self._forget_chain_devices(MASTER, remove=True)

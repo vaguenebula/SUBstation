@@ -61,6 +61,7 @@ window.
 | `SUBSTATION_PLUGIN_CACHE` = a temporary file | The tests keep their own scan cache. |
 | `SUBSTATION_LIBRARY`, `SUBSTATION_BROWSER_INDEX` = temporary files | Nor the user's use counts or browser index (each `window` gets its own). |
 | `SUBSTATION_PRESETS` = a temporary folder | Nor the user's preset library (each `window` gets its own). |
+| `SUBSTATION_ACTIVITY_LOG` = a temporary file | Nor the intelligence layer's activity log. |
 | `SUBSTATION_ASIO_DRIVERS` = `SUB Test ASIO\|{5B2E8C1A-7F3D-4E6B-9C0A-1D2F3E4A5B6C}\|<SUBTestAsio.dll>` | The engine lists only the fake driver, loaded from its DLL, never the installed drivers. |
 
 Constants: `SAMPLE_RATE = 48000` (the engine's rate when no device is open), `TEST_PLUGINS` (the
@@ -293,6 +294,17 @@ after a locate), transpose to the right frequency, and that Re-Pitch filters rat
 MIDI engine tests check that notes start on their sample and follow the tempo, that the Synth plays the right pitch
 and level, and that loop wraps and offline renders leave no hanging notes. ([test_midi_engine.py](../tests/test_midi_engine.py))
 
+### Intelligence layer
+
+Operation tests run the layer's operations through its runner, on a bare editor (labels, batches, revisions, frozen
+tracks, the activity log) and in the window, where every write operation is run as an agent and undone, and the
+model and an offline render must be as they were; others render MIDI clips made with notes, automation written on
+SUB Test Effect's parameter and a swell on an unautomated Utility, and call in from another thread. The schemas'
+snapshot (`tests/snapshots/intel_ops.json`) fails on any change to an operation's arguments: rewrite it with
+`UPDATE_SNAPSHOTS=1` when the change is meant. Context tests classify hand-built tracks.
+([test_intel_ops.py](../tests/test_intel_ops.py), [test_intel_context.py](../tests/test_intel_context.py),
+[test_intel_imports.py](../tests/test_intel_imports.py))
+
 ### Model
 
 Model tests cover overlap resolution, trims, splits (audio and MIDI), note editing, undo/redo and save/load; and
@@ -362,6 +374,9 @@ installed ones. ([test_vst3_engine.py](../tests/test_vst3_engine.py), [test_plug
 | [test_freeze_model.py](../tests/test_freeze_model.py) | 14 | Freezing in the model: what can be frozen, undo, what frozen tracks and frozen groups refuse, flattening, saving; through the bridge, frozen audio playing with the devices unloaded and coming back (a plug-in's state too). |
 | [test_groups_engine.py](../tests/test_groups_engine.py) | 8 | Group buses in the engine, delay compensation at every summing point, solo and mute across levels. |
 | [test_groups_model.py](../tests/test_groups_model.py) | 9 | Group tracks in the model: grouping, ungrouping, moving, folding, saving, and the engine hearing a group as a bus. |
+| [test_intel_context.py](../tests/test_intel_context.py) | 14 | The intelligence layer's song context: names cleaned, track roles from file names, devices and MIDI, MIDI statistics of the notes that play, the context's details, the builder rebuilding only what changed. |
+| [test_intel_imports.py](../tests/test_intel_imports.py) | 2 | The intelligence layer's import rules (no UI, Qt only in `intel/qt/`, the engine only in its adapter). |
+| [test_intel_ops.py](../tests/test_intel_ops.py) | 19 | The intelligence layer's operations: schemas (and their snapshot), argument checks, undo steps labelled by actor, all-or-nothing batches, stale revisions, frozen tracks, the activity log; every write operation undoing to the model and render as they were; MIDI clips, plug-in automation and shapes through the engine; the selection, the main-thread dispatcher, meter history. |
 | [test_keys.py](../tests/test_keys.py) | 6 | Tempo and key from file names, transposing by the shortest way (relative keys alike), key names, the project key (undoable, saved). |
 | [test_midi_engine.py](../tests/test_midi_engine.py) | 12 | Note scheduling and the built-in Synth, offline. |
 | [test_midi_input.py](../tests/test_midi_input.py) | 10 | MIDI input with the fake driver: live notes at their offsets, routing by input and channel, monitoring, releases, recorded notes on their beats. |

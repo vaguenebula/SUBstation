@@ -37,6 +37,7 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 |---|---|
 | [Model](python/model.md) | `model/`: the project, pure edit maths, the editor, undo commands |
 | [Analysis](python/analysis.md) | `analysis/`: signal maths for the editors (the Sidechain's fit) |
+| [Intelligence layer](python/intel.md) | `intel/`: operations for agents and suggestions, the song context, track roles |
 | [Serialization](python/serialization.md) | `.gilproj` projects and `.gilpreset` rack presets |
 | [Engine bridge](python/engine-bridge.md) | `audio/`, `app.py`: start-up, mirroring the model into the engine |
 | [Plug-in scanner](python/plugin-scanner.md) | `plugins/`: finding and reading VST3 plug-ins in child processes |

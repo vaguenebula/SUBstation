@@ -137,7 +137,8 @@ The bridge maps model ids to engine ids:
 | `_pids`, `_where` | device id → its processor; → the chain key its processor is in now |
 
 `engine_device_id(track_id, device_id)` gives a device's processor if the device is on that
-track (in a rack too) and loaded; `engine_chain_id(chain_id)` a rack chain's engine chain.
+track (in a rack too) and loaded; `engine_chain_id(chain_id)` a rack chain's engine chain;
+`engine_track_id(track_id)` a track's (group's, return's, the master's) engine track.
 
 ### Tracks, groups, returns, master
 
@@ -306,7 +307,9 @@ loading), `stop_preview`, `preview_note(track, pitch, velocity)` (velocity 0 rel
   device isn't loaded are left out. It emits `automation_state_changed(owner)`.
 - A target whose envelope stops playing (deleted, or overridden) goes back to the value the
   model holds for it (`_push_own_value`: the mixer is pushed again, a device parameter is
-  set; sends and chain faders keep their own level in the engine).
+  set; sends and chain faders keep their own level in the engine). A plug-in's parameter is
+  sent its own value as the engine holds it, again: the model may not hold it, and the
+  plug-in was left where its automation took it.
 - **Overrides**, as in Ableton: changing an automated target by hand (a track's volume or
   pan, a send level, a chain's fader, a device parameter: the bridge sees the model's value
   change) calls `override_automation(owner, key)`, which stops sending that envelope.

@@ -41,6 +41,7 @@ each part has its own pages (see the [index](README.md)).
 | Project model, undo, saving | [src/substation/model](../src/substation/model) | [python/model.md](python/model.md), [python/serialization.md](python/serialization.md) |
 | Engine bridge, start-up, settings | [src/substation/audio](../src/substation/audio), [app.py](../src/substation/app.py) | [python/engine-bridge.md](python/engine-bridge.md) |
 | Plug-in scanner | [src/substation/plugins](../src/substation/plugins) | [python/plugin-scanner.md](python/plugin-scanner.md) |
+| Intelligence layer (operations for agents, the song context) | [src/substation/intel](../src/substation/intel) | [python/intel.md](python/intel.md) |
 | Audio engine | [engine/src](../engine/src) | [engine/](engine/README.md) |
 | Browser backend | [browser/src](../browser/src) | [browser.md](browser.md) |
 | Build, tests, benchmarks | [CMakeLists.txt](../CMakeLists.txt), [tests](../tests), [benchmarks](../benchmarks) | [building.md](building.md), [testing.md](testing.md) |

@@ -69,8 +69,18 @@ class ParameterSync:
         if automation.key_send(key) is not None or automation.key_chain(key) is not None:
             return  # the engine kept the send's (or the chain's fader's) own level
         device_id = automation.key_device(key)
-        if self.project.has_device(owner, device_id):
-            self._push_device_param(owner, device_id, automation.parse_key(key)[2])
+        if not self.project.has_device(owner, device_id):
+            return
+        param_id = automation.parse_key(key)[2]
+        processor_id = self.engine_device_id(owner, device_id)
+        if processor_id in self._plugin_ids:
+            # A plug-in's own value is the engine's (the model may not hold it), and the
+            # plug-in was left where its automation took it: send it its own value again.
+            index = self.engine.processor_param_index(processor_id, param_id)
+            if index >= 0:
+                self.engine.set_processor_param(processor_id, index, self.engine.processor_param(processor_id, index))
+            return
+        self._push_device_param(owner, device_id, param_id)
 
     def is_automated(self, owner: str, key: str) -> bool:
         """Whether the engine plays this target's envelope (it has one, not overridden)."""
