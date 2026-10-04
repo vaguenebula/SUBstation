@@ -35,7 +35,9 @@ def format_value(value: float, unit: str) -> str:
     if unit in ("st", "ct"):  # semitones, cents
         return f"{round(value):+d} {unit}" if round(value) else f"0 {unit}"
     if unit == "Hz":
-        return f"{value / 1000:.2f} kHz" if value >= 1000 else f"{value:.0f} Hz"
+        if value >= 1000:
+            return f"{value / 1000:.2f} kHz"
+        return f"{value:.2f} Hz" if value < 10 else f"{value:.0f} Hz"
     if unit == "ms":
         if value >= 1000:
             return f"{value / 1000:.2f} s"

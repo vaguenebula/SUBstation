@@ -386,6 +386,8 @@ Main operations, by area:
   folded), `move_device(s)`, `move_devices_to_track` (the same devices, so plug-ins keep
   their state; their automation moves with them in the same step), `remove_device(s)`,
   `set_device_param` (`old` passed in for plug-ins, whose values the model doesn't hold),
+  `set_device_params` (several of a built-in device's at once: one step, merging per gesture
+  while the same parameters change),
   `set_device_state`, `set_device_enabled`, `set_device_sidechain`, `set_devices_folded`,
   `touch_parameter`, `load_preset_into` (a preset into a device of its kind: `loads_into`),
   `add_midi_track_with` (a new MIDI track with an instrument preset, one step),

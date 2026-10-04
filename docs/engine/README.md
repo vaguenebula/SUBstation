@@ -252,7 +252,8 @@ wraps `Engine` method by method in snake_case (`add_track`, `set_track_output`,
 `render_offline`, ...), with properties for `tempo`, `position_beats`, `metronome`,
 `audio_threads`, `cost_ordering`, `is_playing` and so on, and the API's structs as read-only
 classes. Module-level functions: `probe_file`, `driver_types`, `builtin_devices`,
-`vst3_search_paths`, `host_time_ns`, and `task_graph_order` (for tests: the scheduler's queue
+`vst3_search_paths`, `host_time_ns`, `eq_response` (an EQ band's response, see
+[devices.md](devices.md)), and `task_graph_order` (for tests: the scheduler's queue
 order and ranks, see [scheduler.md](scheduler.md)). `MASTER` is track id 0.
 
 - Long-running calls release the GIL (`ReleaseGil`, or an explicit `nb::gil_scoped_release`
@@ -265,7 +266,7 @@ order and ranks, see [scheduler.md](scheduler.md)). `MASTER` is track id 0.
 - Leak warnings are turned off: Qt/PySide can keep engine objects alive until interpreter
   teardown, which is harmless.
 
-`API_VERSION` (currently 15) is set on the module. It is bumped whenever the Python code comes
+`API_VERSION` (currently 16) is set on the module. It is bumped whenever the Python code comes
 to depend on a change in the bindings; `ENGINE_API` in
 [src/substation/\_\_init\_\_.py](../../src/substation/__init__.py) must be bumped with it. The app
 and the tests refuse to start with an engine built from older (or newer) code, and say to

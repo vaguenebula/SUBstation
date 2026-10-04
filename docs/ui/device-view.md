@@ -22,6 +22,9 @@ code.
 | [rack_view.py](../../src/substation/ui/rack_view.py) | `MacroPanel` (a rack's eight macros), `ChainList` and `_ChainRow` (its chains with their mixers) |
 | [device_editors/\_\_init\_\_.py](../../src/substation/ui/device_editors/__init__.py) | the editor registry: `@device_editor(kind)`, `editor_for(kind)` |
 | [device_editors/compressor.py](../../src/substation/ui/device_editors/compressor.py) | `CompressorWidget` and `ReductionGraph` |
+| [device_editors/delay.py](../../src/substation/ui/device_editors/delay.py) | `DelayWidget`, `FilterGraph`, `LogValueBox`, `filter_response()` |
+| [device_editors/eq.py](../../src/substation/ui/device_editors/eq.py) | `EqWidget`, `EqEditor`, `EqGraph`, `BandPanel`, `Analyzer`, `EqWindow` |
+| [device_editors/sidechain.py](../../src/substation/ui/device_editors/sidechain.py) | `SidechainWidget`, `CurveGraph`, `ClashView`, `Point`, `curve_value()`, `points_values()`, `SHAPES` |
 | [device_editors/sampler.py](../../src/substation/ui/device_editors/sampler.py) | `SamplerWidget`, `SampleView`, `waveform_columns()` |
 | [clip_view.py](../../src/substation/ui/clip_view.py) | `ClipView` (the overlay), `ClipWaveform`, `KnobControl` |
 
@@ -74,8 +77,8 @@ that `follows_automation()` refresh), `meters_updated` (`refresh_displays()`).
 
 The panel never scrolls vertically. `device_height(editor)` builds a probe,
 `_TallestDevice` (a page of knobs with page arrows: as tall as any device gets), asks
-its minimum size, and deletes it; the panel's fixed height is that plus its margins and
-the horizontal scroll bar. That way it fits whatever the fonts and the screen's scale.
+its minimum size, and deletes it; the panel's fixed height is that plus `EXTRA_HEIGHT`
+(12 px, room for editors' graphs), its margins and the horizontal scroll bar. That way it fits whatever the fonts and the screen's scale.
 A plug-in's error message is cut to `MESSAGE_LINES` (4) lines for the same reason
 (the whole text is in its tooltip).
 
@@ -282,10 +285,12 @@ class CompressorWidget(DeviceWidget):
 at import: the editors import the device panel, which imports the registry), so a new
 module needs nothing else. Registering two editors for one kind raises.
 
-An editor sets parameters as the knobs do (`editor.set_device_param`), so undo,
-automation and saving work alike. It can add widgets beside the parameters
-(`self.content.addWidget`), and draw the device's displays in `refresh_displays()`,
-which the panel calls as the meters update (about 30 times a second), from
+An editor sets parameters as the knobs do (`editor.set_device_param`, or
+`set_device_params` for several in one step), so undo, automation and saving work
+alike. It can add widgets beside the parameters (`self.content.addWidget`); `content`
+takes all the device's height (the view's, and the scroll bar's while that is hidden),
+so an editor's graphs can grow into it, while the knobs stay at the top. It draws the
+device's displays in `refresh_displays()`, which the panel calls as the meters update (about 30 times a second), from
 `read_display()`. Displays are what the engine's built-in devices publish for their
 editors (see [engine/devices.md](../engine/devices.md)).
 
@@ -295,6 +300,64 @@ editors (see [engine/devices.md](../engine/devices.md)).
   gradient; an *In* meter of what keys it with the threshold marked by an accent notch;
   an *Out* meter (both -60 to 0 dBFS); the current reduction and the threshold in
   figures. It reads the displays `reduction`, `input` and `output`.
+- **Delay** ([delay.py](../../src/substation/ui/device_editors/delay.py)): no pages
+  (`_set_param_count` only hides the arrows); its own layout, as Ableton's: per side a
+  Sync button, then (a `QStackedWidget`) a grid of sixteenths and an offset field, or a
+  time knob; the link button; a `FilterGraph` (the filter's response from
+  `filter_response()` on a 20 Hz..20 kHz log axis, its dot dragged across for the
+  frequency and up and down for the width, over a spectrum of the display `input`: a
+  4096-point Hann FFT of the latest samples, falling 1 dB per refresh), the Filter
+  button and the frequency (`LogValueBox`, dragging in log) and width fields; the Mode
+  buttons and Ping Pong; Feedback with Freeze beside it over Dry/Wet. Each control is
+  bound with `_bind(widget, param, update)`: `_sync()` shows every parameter as it is now
+  (`value()`: the envelope's value while automation plays), right-click gives its
+  automation menu, and pressing it touches the parameter.
+- **EQ** ([eq.py](../../src/substation/ui/device_editors/eq.py)): no pages. `EqEditor`
+  is the editor, for a host: the device's `EqWidget` (no body margins: the graph from the
+  title bar to the bottom edge, the `BandPanel` beside it while `VIEW["panel"]`: it starts
+  collapsed, the faders button beside the expand button shows it in every EQ, and
+  `EqWidget.panel_shown` sets the device's width, `device_width` or `collapsed_width`),
+  or an `EqWindow`
+  (`open_window()`, from the expand button over the graph's top right: the graph over
+  a bar with the panel; a top-level window per device in
+  `_WINDOWS`, with its own display timer, that closes when the device goes). A host has
+  `value(id)`, `set_params(values, gesture, text)`, `touch(id)`, `automation_state(id)`,
+  `automation_menu(id, at)`, `sample_rate` and `read_display(id)`. `sync()` reads the
+  bands into `Band`s; every change goes through `ProjectEditor.set_device_params`, so a
+  drag (adding a band and dragging it on, too: the same parameters every move) is one
+  undo step.
+  - `EqGraph`: 10 Hz..22 kHz, ± `VIEW["range"]` dB; each band's curve and the total
+    from `ge.eq_response` (cached per band), the selected and hovered bands filled in
+    their colours (`band_color`), the total with a glow. Scale and Output are knobs over its bottom left and right
+    corners (`_corner`, placed by `place_overlays()` as it resizes). The ghost shows within
+    `CURVE_HIT` px of the curve, its type from `ZONES` (`type_at`). Dots ease between
+    sizes on a 16 ms timer that stops when they settle. The wheel sets a band's Q, or
+    while a cut is dragged its slope. Delete takes the ShortcutOverride while a band is
+    selected. `VIEW` (range, analyzer mode) is shared by every editor and not saved.
+  - `Analyzer`: an 8192-point Hann FFT of the displays `input` and `output`, rising
+    0.55 and falling 0.09 of the way per refresh, mapped to columns (the loudest bin
+    between columns, `np.maximum.reduceat`), smoothed and tilted 4.5 dB/octave (the tilt fading in over `TILT_FADE` dB above the
+    floor, so a spectrum at or falling to the floor stays flat).
+- **Sidechain** ([sidechain.py](../../src/substation/ui/device_editors/sidechain.py)): no
+  pages; no margins (the graph from edge to edge). `CurveGraph` (the curve), then
+  `ClashView` with Fit, Auto and the character, then the controls (Trigger and Sync,
+  six small knobs; Lows Only over the crossover). The curve's points are always written
+  whole (`points_values`: every slot's four parameters), through
+  `ProjectEditor.set_device_params`, so a drag (adding a point and dragging it on, too)
+  is one undo step, and Auto's fits merge into one while nothing else is done.
+  - `refresh_displays()` reads the three displays itself (`_read`: with the absolute
+    index of the first value) into a `sidechain_fit.Capture`, so the key, the input and
+    the phase line up to the sample. The phase gives the playhead (`CurveGraph.tick`,
+    a trail of the latest positions) and the hits; each hit's kick, once it has come,
+    is analysed (`sidechain_fit.analyze`, over the latest `KEEP_KICKS`) into `fit`,
+    which the graph (the kick's envelope, the dashed target) and `ClashView` (the
+    spectra, the clash band) draw. Fit writes `fit_values(fit)`: the points, the
+    length (sync off) and the crossover (1.5 times the clash band's top).
+  - `CurveGraph`: points within `HIT_RADIUS`, else the curve within `CURVE_HIT` (a
+    segment, to bend: up bulges up); elsewhere a press adds a point. The first and
+    last points keep their x. The hint over the curve (no sidechain while triggered by
+    it) opens the sidechain menu. Delete takes the ShortcutOverride while a point is
+    selected.
 - **Sampler** ([sampler.py](../../src/substation/ui/device_editors/sampler.py)): two
   pages (the sample's six parameters, then the amplitude's), three columns, and a
   `SampleView`: the sample's waveform from its peaks (`waveform_columns()`, cached per
