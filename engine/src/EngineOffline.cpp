@@ -218,13 +218,21 @@ int64_t Engine::renderTrackToWav(uint32_t trackId, const std::string& path, doub
         throw std::runtime_error("Could not create " + path);
     }
     ScopeExit close([&encoder] { ma_encoder_uninit(&encoder); });
+    // A short write (a full disk) fails the render: the file would be shorter than the frames returned.
+    const auto write = [&](const float* samples, int64_t n) {
+        ma_uint64 written = 0;
+        if (ma_encoder_write_pcm_frames(&encoder, samples, static_cast<ma_uint64>(n), &written) != MA_SUCCESS ||
+            written != static_cast<ma_uint64>(n)) {
+            throw std::runtime_error("Could not write " + path);
+        }
+    };
     // The range as it comes; the tail is kept back until it is known where it falls silent.
     int64_t done = 0;
     std::vector<float> tailSamples;
     tailSamples.reserve(static_cast<size_t>(tail) * 2);
     renderTrackLocked(trackId, startBeat, frames + tail, [&](const float* samples, int64_t n) {
         const int64_t inRange = std::clamp<int64_t>(frames - done, 0, n);
-        if (inRange > 0) ma_encoder_write_pcm_frames(&encoder, samples, static_cast<ma_uint64>(inRange), nullptr);
+        if (inRange > 0) write(samples, inRange);
         tailSamples.insert(tailSamples.end(), samples + inRange * 2, samples + n * 2);
         done += n;
     });
@@ -234,7 +242,7 @@ int64_t Engine::renderTrackToWav(uint32_t trackId, const std::string& path, doub
            std::abs(tailSamples[static_cast<size_t>(kept) * 2 - 1]) < kSilence) {
         --kept;
     }
-    if (kept > 0) ma_encoder_write_pcm_frames(&encoder, tailSamples.data(), static_cast<ma_uint64>(kept), nullptr);
+    if (kept > 0) write(tailSamples.data(), kept);
     return frames + kept;
 }
 

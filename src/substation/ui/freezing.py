@@ -41,10 +41,16 @@ def freeze_tracks(editor: ProjectEditor, bridge: EngineBridge, track_ids) -> lis
                 freezes[track_id] = bridge.render_freeze(track_id)
             except (ValueError, OSError, RuntimeError) as exc:
                 editor.refused.emit(f"{p.track(track_id).name} could not be frozen: {exc}")
+                for freeze in freezes.values():  # renders no track will play
+                    bridge.discard_freeze(freeze)
                 return []
     finally:
         QApplication.restoreOverrideCursor()
-    return editor.freeze_tracks(freezes)
+    frozen = editor.freeze_tracks(freezes)
+    for track_id, freeze in freezes.items():
+        if track_id not in frozen:  # (the editor refused it)
+            bridge.discard_freeze(freeze)
+    return frozen
 
 
 def unfreeze_tracks(editor: ProjectEditor, track_ids) -> list[str]:

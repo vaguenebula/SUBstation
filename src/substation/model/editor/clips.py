@@ -52,6 +52,11 @@ class ClipEdits:
         if not envelopes:
             self._commit(text, after)
             return
+        # Clips a frozen track won't take: their automation doesn't move without them.
+        before = {tid: list(self.project.track(tid).clips) for tid in after}
+        if (problem := self._frozen_problem(SetClipsCommand(self.project, text, before, after))) is not None:
+            self.refused.emit(problem)
+            return
         self.undo_stack.beginMacro(text)
         try:
             self._commit(text, after)

@@ -73,8 +73,21 @@ class FreezeSync:
         if self.is_playing:
             self.stop()
         self.wait_for_device_states()  # samples still loading
-        frames = self.engine.render_track_to_wav(engine_id, str(path), 0.0, end, FREEZE_TAIL_SECONDS)
+        try:
+            frames = self.engine.render_track_to_wav(engine_id, str(path), 0.0, end, FREEZE_TAIL_SECONDS)
+        except (OSError, RuntimeError, ValueError):
+            path.unlink(missing_ok=True)  # (what was written of it)
+            raise
         # Decoded now, so that it plays as soon as the track is frozen (no gap while it loads).
         self._sources[_key(str(path))] = self.engine.load_source(str(path))
         self.source_ready.emit(str(path))
         return Freeze(path=str(path), duration_sec=frames / self.engine.sample_rate, tempo=self.project.tempo)
+
+    def discard_freeze(self, freeze: Freeze) -> None:
+        """A render no track plays (no undo step holds it): its decoded audio is
+        forgotten and its file deleted."""
+        self._sources.pop(_key(freeze.path), None)
+        self.engine.release_unused_sources()
+        # (which also lets go of others no track plays: those are decoded again when asked for)
+        self._sources = {k: src for k, src in self._sources.items() if self.engine.cached_source(src.path) is not None}
+        Path(freeze.path).unlink(missing_ok=True)

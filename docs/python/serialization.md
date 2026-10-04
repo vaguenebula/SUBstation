@@ -50,7 +50,7 @@ seconds; volumes are dB; pan is -1..1; automation values are normalized 0..1.
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | `"gilstudio-project"` | must match, or the file is refused ("Not a SUBstation project") |
-| `version` | int | `VERSION`, now 13; a larger one is refused ("saved by a newer version") |
+| `version` | int | `VERSION`, now 14; a larger one is refused ("saved by a newer version") |
 | `tempo` | float | BPM (default 120) |
 | `key` | string or null | the project key as `Key.name` (`"Am"`, `"F#"`, `"Bb"`); null: *No Key* |
 | `time_signature` | `[numerator, denominator]` | default `[4, 4]` |

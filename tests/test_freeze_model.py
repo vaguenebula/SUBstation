@@ -4,6 +4,7 @@ saving; and through the bridge, a frozen track playing its frozen audio with its
 devices unloaded, and coming back as it was."""
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -313,3 +314,39 @@ def test_a_plugin_comes_back_as_it_was(bridged, dc_wav):
     editor.unfreeze_tracks([track.id])
     processor = bridge.engine_device_id(track.id, effect.id)
     assert processor is not None and engine.processor_param(processor, 0) == pytest.approx(0.25)
+
+
+def test_automation_doesnt_move_without_the_frozen_clips_under_it(editor):
+    p = editor.project
+    a = audio_track(editor)
+    editor.set_envelope(a, automation.MIXER_VOLUME, [AutomationPoint(0.5, 0.2), AutomationPoint(1.5, 0.8)])
+    editor.freeze_tracks({a: FREEZE})
+    envelope = p.envelope(a, automation.MIXER_VOLUME)
+    editor.move_clips([(a, "Ac")], 4.0)  # (its mixer's automation would go with them)
+    assert p.track(a).clips[0].start_beat == 0.0 and p.envelope(a, automation.MIXER_VOLUME) == envelope
+    assert "frozen" in editor.messages[-1]
+
+
+def test_renders_no_track_plays_are_deleted(bridged, dc_wav, monkeypatch):
+    from substation.ui import freezing
+
+    editor, bridge, engine = bridged
+    engine.load_source(dc_wav)
+    tracks = []
+    for name in ("A", "B"):
+        track = editor.add_audio_track(name=name)
+        editor._commit("Add", {track.id: [clip(name + "c", path=dc_wav)]})
+        tracks.append(track.id)
+    rendered = []
+    render = bridge.render_freeze
+
+    def failing(track_id):
+        if track_id == tracks[1]:
+            raise RuntimeError("Could not write it")
+        rendered.append(render(track_id))
+        return rendered[-1]
+
+    monkeypatch.setattr(bridge, "render_freeze", failing)
+    assert freezing.freeze_tracks(editor, bridge, tracks) == []
+    assert len(rendered) == 1 and not Path(rendered[0].path).exists()  # A's render, played by no track
+    assert editor.project.track(tracks[0]).frozen is None and "could not be frozen" in editor.messages[-1]
