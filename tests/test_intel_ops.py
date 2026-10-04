@@ -6,6 +6,7 @@ MIDI clips that play, automation on a plug-in's parameter, shapes on an
 unautomated parameter, the selection pinned while a batch made from it waits,
 the main-thread dispatcher and the meter history."""
 
+import base64
 import json
 import os
 import threading
@@ -416,6 +417,44 @@ def test_automation_on_a_plugin_parameter_plays_in_time_and_setting_it_overrides
     # Without its envelope it is back at its own value, not the envelope's last.
     r.run("clear_automation", {"owner": track, "target": gain}, AGENT)
     np.testing.assert_allclose(render(window)[1000:2 * SAMPLE_RATE, 0], 0.5, atol=1e-4)
+
+
+@pytest.mark.skipif(not TEST_PLUGINS.exists(), reason="test plug-ins not built")
+def test_a_plugin_parameters_own_value_survives_presets_and_freezing(window, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBSTATION_RECORDINGS", str(tmp_path / "Recordings"))  # (freezing writes there)
+    r, bridge = window.intel.runner, window.bridge
+    index = window.browser.plugin_index
+    assert wait_until(lambda: not index.scanning and index.plugins)
+    uid = r.run("list_available_devices", {"query": "sub test effect"})["devices"][0]["id"]
+    wav = write_wav(tmp_path / "Pad.wav", np.full((SAMPLE_RATE * 3, 2), 0.5))
+    track = r.run("add_clip_from_file", {"path": str(wav)})["track"]["id"]
+    assert wait_until(lambda: bridge.source(str(wav)) is not None)
+    device = r.run("add_device", {"track_id": track, "device": uid})["device"]["id"]
+    gain = automation.device_key(device, "0")
+    r.run("set_device_param", {"track_id": track, "device_id": device, "param_id": "0", "value": 0.8})
+    preset = bridge.plugin_state(track, device)  # (its gain at 0.8)
+    r.run("set_device_param", {"track_id": track, "device_id": device, "param_id": "0", "value": 0.5})
+
+    # A preset loaded while the envelope plays: its value is the one to go back to.
+    r.run("write_automation", {"owner": track, "target": gain, "points": [[0, 0.25]]})
+    render(window)
+    bridge.poll_plugins()  # (the engine's value follows the envelope)
+    old = bridge.plugin_state(track, device)
+    window.editor.set_device_state(track, device, base64.b64encode(old).decode(), base64.b64encode(preset).decode())
+    assert bridge.own_value(track, gain) == pytest.approx(0.8)
+    r.run("clear_automation", {"owner": track, "target": gain})
+    np.testing.assert_allclose(render(window)[1000:2 * SAMPLE_RATE, 0], 0.8, atol=1e-4)
+    # Frozen and unfrozen while it plays: the state it comes back with holds the envelope's value, not its own.
+    r.run("write_automation", {"owner": track, "target": gain, "points": [[0, 0.25]]})
+    render(window)
+    bridge.poll_plugins()
+    r.run("freeze_tracks", {"track_ids": [track]})
+    r.run("unfreeze_tracks", {"track_ids": [track]})
+    render(window)
+    bridge.poll_plugins()
+    assert bridge.own_value(track, gain) == pytest.approx(0.8)
+    r.run("clear_automation", {"owner": track, "target": gain})
+    np.testing.assert_allclose(render(window)[1000:2 * SAMPLE_RATE, 0], 0.8, atol=1e-4)
 
 
 def test_a_swell_on_an_unautomated_parameter_keeps_its_value_outside(window, tmp_path):

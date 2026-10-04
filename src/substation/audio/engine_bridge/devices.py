@@ -460,6 +460,7 @@ class DeviceSync:
             self._set_builtin_state(engine_id, device)
         elif device.state:
             self._set_plugin_state(engine_id, device.plugin.name, base64.b64decode(device.state))
+            self._refresh_plugin_own_values(track_id, device_id, engine_id)
 
     def _set_builtin_state(self, processor_id: int, device: Device) -> None:
         """A built-in device's state is the model's (none: its defaults); it is

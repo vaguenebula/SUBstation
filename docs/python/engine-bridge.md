@@ -310,7 +310,11 @@ loading), `stop_preview`, `preview_note(track, pitch, velocity)` (velocity 0 rel
   set; sends and chain faders keep their own level in the engine). A plug-in's own values
   are the engine's, which follow its envelopes while they play; so when a plug-in
   parameter's envelope starts playing its own value is kept (`_plugin_own`), `own_value`
-  answers with it, and it is sent back when the envelope stops.
+  answers with it, and it is sent back when the envelope stops. A new state (a preset)
+  replaces the values kept for that plug-in; while it isn't loaded (frozen, deleted) they
+  are kept for when it comes back, since the state it comes back with holds the envelope's
+  values. (Across saving and loading they aren't kept: the saved state holds what the
+  plug-in was at.)
 - **Overrides**, as in Ableton: changing an automated target by hand (a track's volume or
   pan, a send level, a chain's fader, a device parameter: the bridge sees the model's value
   change) calls `override_automation(owner, key)`, which stops sending that envelope.
