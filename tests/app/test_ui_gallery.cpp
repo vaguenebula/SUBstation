@@ -445,6 +445,17 @@ ApplicationWindow {
             Item { Layout.fillWidth: true }
         }
 
+        Heading { text: "Not in the style: the Basic style's, in the theme's palette" }
+        RowLayout {
+            spacing: 10
+            Slider { value: 0.4; implicitWidth: 120 }
+            SpinBox { value: 4; implicitWidth: 100; focusPolicy: Qt.NoFocus }
+            RadioButton { text: "WASAPI"; checked: true }
+            RadioButton { text: "ASIO" }
+            Switch { checked: true }
+            Item { Layout.fillWidth: true }
+        }
+
         Heading { text: "SgPainter: lanes, clips, waveform columns, an envelope, a selection, the playhead; a piano roll; an EQ curve" }
         GalleryCanvas {
             Layout.fillWidth: true
