@@ -6,7 +6,7 @@ add_test(NAME boundaries
 # --- Test plug-ins ------------------------------------------------------------------
 # One VST3 bundle with a test instrument and effects (vst3_plugins/), next to the
 # test executables, laid out as a VST3 bundle is on this platform.
-if (SUBSTATION_TEST_PLUGINS AND WIN32)
+if (SUBSTATION_TEST_PLUGINS)
     include(TestPlugins.cmake)
 endif()
 
