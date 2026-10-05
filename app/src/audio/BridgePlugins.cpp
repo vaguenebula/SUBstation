@@ -82,6 +82,20 @@ std::optional<QByteArray> EngineBridge::pluginState(const QString& trackId, cons
     return QByteArray(reinterpret_cast<const char*>(state.data()), static_cast<qsizetype>(state.size()));
 }
 
+QString EngineBridge::applyPluginState(const QString& trackId, const QString& deviceId, const QByteArray& state) {
+    const auto processorId = engineDeviceId(trackId, deviceId);
+    if (!processorId || !d_->pluginIds.contains(*processorId)) return QStringLiteral("the plug-in isn't loaded.");
+    QString problem;
+    ++d_->busy;  // (the plug-in may run a message loop)
+    try {
+        engine_.setProcessorState(*processorId, std::vector<uint8_t>(state.begin(), state.end()));
+    } catch (const std::exception& error) {  // another plug-in's settings
+        problem = QString::fromStdString(error.what());
+    }
+    --d_->busy;
+    return problem;
+}
+
 void EngineBridge::storePluginStates(const std::optional<QSet<QString>>& deviceIds) {
     std::vector<std::pair<QString, QString>> plugins;  // (track, device)
     for (const Track* track : project_->allTracks()) {

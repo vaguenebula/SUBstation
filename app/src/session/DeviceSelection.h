@@ -181,6 +181,19 @@ public:
     Q_INVOKABLE void clearDefault(const QString& deviceId);
     Q_INVOKABLE bool hasDefault(const QString& deviceId) const;
 
+    // --- A plug-in's own presets (.vstpreset files, to share settings with other hosts) ---
+    // Where their file dialogs start: where the last one was, else Documents/VST3
+    // Presets/<vendor>/<plug-in> (where VST3 presets usually live), else Documents.
+    Q_INVOKABLE QString vst3PresetFolder(const QString& deviceId) const;
+    // Load VST3 Preset… (the UI asks for the file): its settings into the
+    // plug-in, then one undo step ("Load Preset <name>") with the state before
+    // and after. Another plug-in's file changes nothing (a statusMessage says
+    // why). The folder is remembered. Whether it loaded.
+    Q_INVOKABLE bool loadVst3Preset(const QString& deviceId, const QString& path);
+    // Save VST3 Preset…: the plug-in's state as a .vstpreset (the save button
+    // saves a SUBstation preset). The folder is remembered. Whether it was saved.
+    Q_INVOKABLE bool saveVst3Preset(const QString& deviceId, const QString& path);
+
     // --- Drops on the device view ---
     // Devices of this track's chain dragged to `index` of `chain` ("": its own).
     Q_INVOKABLE bool dropMoved(const QStringList& deviceIds, const QString& chain, int index);

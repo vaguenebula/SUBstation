@@ -118,4 +118,24 @@ QStringList presetPaths(const QByteArray& data) { return strings(data); }
 
 QStringList presetPaths(const QMimeData* mime) { return presetPaths(dataOf(mime, kPresetMime)); }
 
+QByteArray movedDevicesData(const QString& trackId, const QStringList& deviceIds) {
+    return (QStringList{trackId} + deviceIds).join(u'\n').toUtf8();
+}
+
+std::optional<MovedDevices> movedDevices(const QByteArray& data) {
+    QStringList lines = QString::fromUtf8(data).split(u'\n');
+    if (lines.isEmpty() || lines.front().isEmpty()) return std::nullopt;
+    MovedDevices moved;
+    moved.trackId = lines.takeFirst();
+    for (const QString& line : std::as_const(lines)) {
+        if (!line.isEmpty()) moved.deviceIds << line;
+    }
+    return moved;
+}
+
+std::optional<MovedDevices> movedDevices(const QMimeData* mime) {
+    if (mime == nullptr || !mime->hasFormat(QString::fromLatin1(kDeviceMoveMime))) return std::nullopt;
+    return movedDevices(mime->data(QString::fromLatin1(kDeviceMoveMime)));
+}
+
 }  // namespace sub::app

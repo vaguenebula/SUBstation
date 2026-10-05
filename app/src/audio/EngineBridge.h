@@ -292,6 +292,10 @@ public:
     std::optional<QString> pluginPath(const PluginRef& plugin) const;
     // A plug-in device's current state (a .vstpreset); none if it isn't loaded.
     std::optional<QByteArray> pluginState(const QString& trackId, const QString& deviceId);
+    // Gives a loaded plug-in device a state (a .vstpreset read from a file) now,
+    // as the plug-in's own (no undo step: the caller records one). "" if the
+    // plug-in took it, else why not (another plug-in's settings, a broken file).
+    QString applyPluginState(const QString& trackId, const QString& deviceId, const QByteArray& state);
     // Copies every loaded plug-in's state (or those of `deviceIds`) into the
     // model, for saving the project (or copying devices, duplicating tracks,
     // saving presets), and where a plug-in was found if it moved. Device::state
