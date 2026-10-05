@@ -399,7 +399,7 @@ private Q_SLOTS:
             solo(studio, copy);
             QVERIFY(allClose(settled(studio), original, 1e-6));  // alone, it sounds as the original
         }
-        const auto& [t1, r1] = loaded[0];
+        const Device& r1 = loaded[0].second;
         const auto& [t2, r2] = loaded[1];
         QVERIFY(r1.id != r2.id && r1.id != rack);
         // Its macros move its own devices.

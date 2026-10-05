@@ -408,7 +408,7 @@ std::optional<quint32> EngineBridge::createProcessor(quint32 chainId, const Devi
     for (auto it = device.params.constBegin(); it != device.params.constEnd(); ++it) {
         setParam(processorId, it.key(), it.value());
     }
-    if (device.state) setBuiltinState(processorId, device);
+    if (device.state && !device.state->isEmpty()) setBuiltinState(processorId, device);
     return processorId;
 }
 
