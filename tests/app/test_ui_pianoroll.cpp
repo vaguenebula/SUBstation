@@ -444,7 +444,7 @@ private Q_SLOTS:
         QCOMPARE(count(), QStringLiteral("2 notes"));
         waitForTools();
         QVERIFY(bar->isVisible());
-        QCOMPARE(bar->opacity(), 1.0);
+        QTRY_COMPARE(bar->opacity(), 1.0);  // (on a slow machine the fade may still be ending)
         QVERIFY(bar->y() + bar->height() - 1 < roll()->noteRect(clipNotes()[1]).top());
         test::screenshot(window_, QStringLiteral("piano-roll-tools"));
         // They hide while the group is dragged, and come back where it ends up.

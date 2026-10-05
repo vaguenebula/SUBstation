@@ -151,7 +151,12 @@ std::optional<std::array<int64_t, 2>> pluginSignature(const QString& path) {
     // A folder has no size of its own (as Windows reports it).
     const uintmax_t size = std::filesystem::is_directory(status) ? 0 : std::filesystem::file_size(file, error);
     if (error) return std::nullopt;
+    // Nanoseconds since 1970, as Python's st_mtime_ns (caches it wrote stay valid).
+#ifdef _MSC_VER
+    const auto sinceEpoch = std::chrono::clock_cast<std::chrono::system_clock>(written).time_since_epoch();
+#else
     const auto sinceEpoch = std::chrono::file_clock::to_sys(written).time_since_epoch();
+#endif
     const int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(sinceEpoch).count();
     return std::array<int64_t, 2>{ns, static_cast<int64_t>(size)};
 }

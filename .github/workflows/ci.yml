@@ -31,7 +31,7 @@ jobs:
       - name: Configure
         run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
       - name: Build
-        run: ninja -C build
+        run: ninja -C build -k 0
       - name: Test
         run: ctest --test-dir build --output-on-failure -j4
 
@@ -49,6 +49,6 @@ jobs:
       - name: Configure
         run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
       - name: Build
-        run: ninja -C build
+        run: ninja -C build -k 0
       - name: Test
         run: ctest --test-dir build --output-on-failure -j4
