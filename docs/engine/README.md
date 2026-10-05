@@ -286,10 +286,9 @@ See [rendering.md](rendering.md#offline-renders).
 
 [Engine.h](../../engine/src/Engine.h) is the API: the `Engine` class's methods (`addTrack`,
 `setTrackOutput`, `renderOffline`, ...), its plain structs, and `Engine::kMaster` (track id 0).
-Its callers are the application layer's engine bridge (plain C++, on the main thread, and its
-decoding threads for `loadSource()`) and the engine's tests. (Until the Python application went,
-nanobind wrapped it as `substation._engine`.) What the bindings had as module-level functions is
-plain C++:
+Its callers are the application layer's engine bridge (on the main thread, and its decoding threads
+for `loadSource()`), the scanner process `substation-scan` (`Vst3Format` only) and the engine's tests.
+What the application needs besides an `Engine` is plain functions and singletons:
 
 | What | Where |
 |---|---|
