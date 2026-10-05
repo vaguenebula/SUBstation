@@ -7,7 +7,8 @@ sit in the device view beside the built-in devices (see [devices.md](devices.md)
 ## Finding them
 
 - The browser lists the plug-ins in the standard VST3 folders
-  (`C:\Program Files\Common Files\VST3` and `%LOCALAPPDATA%\Programs\Common\VST3`)
+  (`C:\Program Files\Common Files\VST3` and `%LOCALAPPDATA%\Programs\Common\VST3`; on
+  Linux `~/.vst3`, `/usr/lib/vst3` and `/usr/local/lib/vst3`)
   under *Plug-ins › Instruments / Audio Effects*, with their vendor. A module with
   several plug-ins (an instrument and its FX version) shows each.
 - Besides the standard VST3 folders, plug-ins are looked for in folders of your own:
@@ -22,7 +23,8 @@ sit in the device view beside the built-in devices (see [devices.md](devices.md)
   browser for the list and the reasons (the *Plug-ins* page of the preferences shows
   them too).
 - The scan runs in the background at start-up and reads only new or changed files; the
-  results are cached in `%LOCALAPPDATA%\SUBstation\vst3-cache.json`. The browser's
+  results are cached in `%LOCALAPPDATA%\SUBstation\vst3-cache.json` (on Linux
+  `~/.local/share/SUBstation/vst3-cache.json`). The browser's
   footer shows its progress.
 - *Options › Rescan Plug-ins* (or the button in *Preferences › Plug-ins*, or right-click
   *Plug-ins* in the browser) reads everything again, also the files that could not be
@@ -53,7 +55,7 @@ sit in the device view beside the built-in devices (see [devices.md](devices.md)
 - It follows the plug-in's resize requests, lets you resize it within the plug-in's
   limits (if it can resize), and tells the plug-in when it moves to a screen with
   another scale.
-- **Ctrl+W** closes the plug-in editor in front.
+- **Ctrl+W** (*View › Close Plug-in Editor*) closes the plug-in editor in front.
 - Turning knobs in the plug-in's editor is recorded for undo like any other edit: one
   step per knob drag. A plug-in that changes in a way no parameter shows (a preset
   picked in its editor) marks the project as changed.
@@ -61,6 +63,8 @@ sit in the device view beside the built-in devices (see [devices.md](devices.md)
   [automation.md](automation.md).
 - Which keys reach the editor and which go to SUBstation is in
   [shortcuts.md](shortcuts.md#plug-in-editors).
+- On Linux plug-ins' editor windows don't open: the status line says the plug-in has no
+  editor, and you edit its parameters in the device view.
 
 ### Presets
 
@@ -114,5 +118,5 @@ tempo-synced plug-ins stay in time.
 ---
 
 For developers: [../engine/plugins.md](../engine/plugins.md),
-[../python/plugin-scanner.md](../python/plugin-scanner.md),
+[../app/plugin-scanner.md](../app/plugin-scanner.md),
 [../ui/device-view.md](../ui/device-view.md).

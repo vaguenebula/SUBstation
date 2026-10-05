@@ -3,7 +3,8 @@
 Audio recording works as Ableton's Arrangement recording, from an ASIO driver's inputs;
 MIDI tracks record along with audio ones, and any track can record another track's (or
 the master's) output by resampling. This page covers arming, inputs, monitoring, the
-count-in, takes and resampling.
+count-in, takes and resampling. On Linux there are no device inputs: audio records by
+resampling, and MIDI from the computer MIDI keyboard.
 
 ## Arming
 
@@ -23,8 +24,8 @@ An audio track's **input** menu lists:
   [Resampling](#resampling)).
 
 Choosing an input the driver hasn't open opens it (and keeps it open next time). With
-WASAPI there are no device inputs: the menu says to choose an ASIO driver (see
-[audio-setup.md](audio-setup.md)).
+WASAPI (and the *System* driver on Linux) there are no device inputs: the menu says to
+choose an ASIO driver (see [audio-setup.md](audio-setup.md)).
 
 A MIDI track's input is a MIDI input and a channel; see [midi.md](midi.md#midi-input).
 
@@ -95,10 +96,11 @@ other track, group and return: the track then takes that one's output, after its
 - A source the track feeds (its own group, a return it sends to) is greyed out.
 - Moving a track into the group it takes its input from, or deleting its source, leaves
   it with no input (in the same undo step).
-- Resampling needs no audio inputs, so it records with WASAPI devices too.
+- Resampling needs no audio inputs, so it records with WASAPI devices (and on Linux)
+  too.
 
 ---
 
 For developers: [../engine/recording.md](../engine/recording.md),
-[../engine/midi.md](../engine/midi.md), [../ui/arrangement.md](../ui/arrangement.md)
-(track_headers.py).
+[../engine/midi.md](../engine/midi.md),
+[../ui/arrangement.md](../ui/arrangement.md#track-headers) (the track headers).

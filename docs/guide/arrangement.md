@@ -199,5 +199,5 @@ stops; press it again to return to the start. **Home** goes to the start.
 ---
 
 For developers: [../ui/arrangement.md](../ui/arrangement.md),
-[../ui/README.md](../ui/README.md), [../python/model.md](../python/model.md),
-[../python/serialization.md](../python/serialization.md).
+[../ui/README.md](../ui/README.md), [../app/model.md](../app/model.md),
+[../app/serialization.md](../app/serialization.md).
