@@ -109,7 +109,7 @@ class Session : public QObject {
     Q_PROPERTY(QVariantList countInChoices READ countInChoices CONSTANT)
     // Record quantization: where recorded MIDI notes start (beats; 0: as played).
     Q_PROPERTY(double recordQuantize READ recordQuantize WRITE setRecordQuantize NOTIFY recordQuantizeChanged)
-    // [{label ("Off", "1/16"...), value: beats}]
+    // [{label ("No Quantization", "1/16"...), value: beats}]
     Q_PROPERTY(QVariantList recordQuantizeChoices READ recordQuantizeChoices CONSTANT)
     // Whether automation was overridden somewhere (Re-Enable Automation is enabled, its button lit).
     Q_PROPERTY(bool automationOverridden READ automationOverridden NOTIFY automationOverriddenChanged)
