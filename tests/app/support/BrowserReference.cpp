@@ -10,6 +10,13 @@
 #include <system_error>
 #include <utility>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include "Platform.h"
 #include "Text.h"
 #include "browser/PathKeys.h"
@@ -44,13 +51,22 @@ QString fromFs(const std::filesystem::path& path) {
 
 bool hiddenName(const QString& name) { return name.startsWith(QLatin1Char('.')) || name.startsWith(QLatin1Char('$')); }
 
+// DirEntry.is_dir(follow_symlinks=False): a directory, a junction too on
+// Windows, but not a symbolic link. (On Windows from the file's own attributes:
+// MinGW's std::filesystem sees neither links nor junctions.)
 bool isFolderNotLink(const std::filesystem::directory_entry& entry) {
+#ifdef _WIN32
+    WIN32_FIND_DATAW data;
+    const HANDLE find = FindFirstFileW(entry.path().c_str(), &data);
+    if (find == INVALID_HANDLE_VALUE) return false;
+    FindClose(find);
+    const bool symlink = (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && data.dwReserved0 == IO_REPARSE_TAG_SYMLINK;
+    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !symlink;
+#else
     std::error_code error;
     const auto type = entry.symlink_status(error).type();
-#ifdef _MSC_VER
-    if (type == std::filesystem::file_type::junction) return true;
-#endif
     return !error && type == std::filesystem::file_type::directory;
+#endif
 }
 
 std::vector<BrowserItem> walkAudio(const QString& root, uint32_t maxFiles, uint32_t maxDepth) {

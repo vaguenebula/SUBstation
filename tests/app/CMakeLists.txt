@@ -42,4 +42,10 @@ foreach (_source IN LISTS APP_TEST_SOURCES)
         add_test(NAME ${_name} COMMAND ${_name})
         set_tests_properties(${_name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1")
     endif()
+    # On Windows the tests showing windows share one desktop, where one window at
+    # a time is active (has the keyboard): they take turns. (The UI's tests, and
+    # those opening plug-in editors. On Linux each UI test has an X server of its own.)
+    if (WIN32 AND _name MATCHES "^test_ui_|^test_bridge_plugins$|^test_session_renders$")
+        set_tests_properties(${_name} PROPERTIES RESOURCE_LOCK desktop)
+    endif()
 endforeach()

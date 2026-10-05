@@ -211,7 +211,9 @@ private:
 #if SUBTEST_HAVE_ASIO
     template <typename F>
     void bind(F& function, const char* name) {
-        function = reinterpret_cast<F>(GetProcAddress(module_, ("SubTestAsio_" + std::string(name)).c_str()));
+        // (through void*: GCC warns of a cast between function types otherwise)
+        function = reinterpret_cast<F>(
+            reinterpret_cast<void*>(GetProcAddress(module_, ("SubTestAsio_" + std::string(name)).c_str())));
         REQUIRE(function != nullptr);
     }
     HMODULE module_ = nullptr;

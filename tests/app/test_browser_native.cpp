@@ -29,6 +29,13 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include "Browser.h"
 #include "BrowserReference.h"
 #include "Platform.h"
@@ -49,6 +56,45 @@ namespace {
 namespace reference = sub::app::test::reference;
 using reference::fsPath;
 using reference::lower;
+
+// A folder's modification time, put back later. (On Windows by its handle:
+// MinGW's std::filesystem can't set a folder's.)
+class FolderTime {
+public:
+    explicit FolderTime(const QString& path) : path_(path) {
+#ifdef _WIN32
+        const HANDLE folder = open();
+        QVERIFY(folder != INVALID_HANDLE_VALUE);
+        GetFileTime(folder, nullptr, nullptr, &time_);
+        CloseHandle(folder);
+#else
+        time_ = std::filesystem::last_write_time(fsPath(path_));
+#endif
+    }
+    void restore() {
+#ifdef _WIN32
+        const HANDLE folder = open();
+        QVERIFY(folder != INVALID_HANDLE_VALUE);
+        QVERIFY(SetFileTime(folder, nullptr, nullptr, &time_));
+        CloseHandle(folder);
+#else
+        std::filesystem::last_write_time(fsPath(path_), time_);
+#endif
+    }
+
+private:
+#ifdef _WIN32
+    HANDLE open() const {
+        return CreateFileW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(path_).utf16()),
+                           FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    }
+    FILETIME time_{};
+#else
+    std::filesystem::file_time_type time_;
+#endif
+    QString path_;
+};
 
 constexpr double kDay = 86400.0;
 constexpr uint32_t kMaxFiles = 300000;
@@ -672,10 +718,9 @@ private Q_SLOTS:
             QVERIFY(first.wait());
         }
         // A file the folder's time doesn't tell about (the time is put back).
-        const auto drums = fsPath(lib + QStringLiteral("/Drums"));
-        const auto time = std::filesystem::last_write_time(drums);
+        FolderTime drums(lib + QStringLiteral("/Drums"));
         touch(lib + QStringLiteral("/Drums/Snare.wav"));
-        std::filesystem::last_write_time(drums, time);
+        drums.restore();
         Backend b({lib}, store);
         QVERIFY(b.wait());
         QCOMPARE(names(b.items()), QStringList{QStringLiteral("Kick.wav")});  // checked by time only
