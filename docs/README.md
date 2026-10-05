@@ -5,10 +5,12 @@ pages go into detail: how to use it, and how each part of the code works.
 
 ## Start here
 
-- [Architecture](architecture.md): the layers, the threads, the life of an edit, the
-  real-time rules.
-- [Building](building.md): requirements, the build, the ASIO SDK, native module versions.
-- [Testing](testing.md): the test suite, the fake ASIO driver and test plug-ins, benchmarks.
+- [Architecture](architecture.md): the layers and their boundaries, the life of an edit,
+  the threads, the real-time rules.
+- [Building](building.md): requirements, the build, options and targets, the ASIO SDK,
+  third-party code.
+- [Testing](testing.md): the test suite, the fake ASIO driver and test plug-ins, CI,
+  benchmarks.
 
 ## User guide
 
@@ -31,26 +33,13 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 
 ## Code reference
 
-### Python ([src/substation](../src/substation))
+### Audio engine
+
+[engine/src](../engine/src), no Qt: everything on the audio thread, and the plug-in hosting.
 
 | Page | Covers |
 |---|---|
-| [Model](python/model.md) | `model/`: the project, pure edit maths, the editor, undo commands |
-| [Analysis](python/analysis.md) | `analysis/`: signal maths for the editors (the Sidechain's fit) |
-| [Serialization](python/serialization.md) | `.gilproj` projects and `.gilpreset` rack presets |
-| [Engine bridge](python/engine-bridge.md) | `audio/`, `app.py`: start-up, mirroring the model into the engine |
-| [Plug-in scanner](python/plugin-scanner.md) | `plugins/`: finding and reading VST3 plug-ins in child processes |
-| [UI overview](ui/README.md) | main window, transport bar, dialogs, widgets, theme |
-| [Arrangement view](ui/arrangement.md) | `ui/arrangement/`: ruler, lanes, headers, automation lanes |
-| [Piano roll](ui/piano-roll.md) | `ui/piano_roll/` |
-| [Device view](ui/device-view.md) | device panel, racks, built-in devices' editors, clip view |
-| [Browser](browser.md) | the native backend (`browser/src`) and the panel (`ui/browser/`) |
-
-### Audio engine ([engine/src](../engine/src))
-
-| Page | Covers |
-|---|---|
-| [Engine overview](engine/README.md) | the `Engine` API, edit model, snapshots, bindings |
+| [Engine overview](engine/README.md) | the `Engine` API, edit model, snapshots |
 | [Rendering](engine/rendering.md) | the `Renderer`: chunks, strips, faders, metronome, loop |
 | [Routing](engine/routing.md) | edges, groups, returns and sends, sidechains, racks, delay compensation |
 | [Scheduler](engine/scheduler.md) | rendering the graph on several threads, deterministically |
@@ -61,3 +50,35 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | [Warping and sources](engine/warp.md) | time stretching, Re-Pitch, decoding, peaks |
 | [Devices](engine/devices.md) | the `Processor` interface and the built-in devices; adding one |
 | [Plug-in hosting](engine/plugins.md) | VST3 hosting, editors, threading |
+
+### Application layer
+
+[app/src](../app/src), Qt Core and Gui, no Qt Quick: the project and everything that works on it.
+
+| Page | Covers |
+|---|---|
+| [Model](app/model.md) | `model/`, `editor/`: the project, its types and signals, pure edit maths, the editor, undo commands |
+| [Serialization](app/serialization.md) | `io/`: `.gilproj` projects, `.gilpreset` presets, the preset library |
+| [Engine bridge](app/engine-bridge.md) | `audio/`: mirroring the project into the engine, transport, plug-ins, recording, renders, settings |
+| [Session](app/session.md) | `session/`: the main window's logic: files, transport, Edit and Create commands, renders, preferences |
+| [Plug-in scanner](app/plugin-scanner.md) | `plugins/`, `tools/scanner`: finding and reading VST3 plug-ins in child processes |
+| [Analysis](app/analysis.md) | `analysis/`: signal maths for the devices' editors (the Sidechain's fit, spectra) |
+
+### UI
+
+[ui/](../ui), Qt Quick: QML for the layout, C++ scene-graph items for what draws time.
+
+| Page | Covers |
+|---|---|
+| [UI overview](ui/README.md) | the main window, transport bar, dialogs, controls, the scene-graph painter, theme |
+| [Arrangement view](ui/arrangement.md) | ruler, lanes, headers, automation lanes |
+| [Piano roll](ui/piano-roll.md) | the piano roll: notes, keys, velocity lane, note tools |
+| [Device view](ui/device-view.md) | the device panel, racks, built-in devices' editors, the clip view |
+
+### Browser
+
+[browser/src](../browser/src), no Qt, and its application side in [app/src/browser](../app/src/browser).
+
+| Page | Covers |
+|---|---|
+| [Browser](browser.md) | the backend (`browser/src`) and its application side (`app/src/browser`), the panel |
