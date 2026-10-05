@@ -56,7 +56,7 @@ session's ([session.md](session.md)).
 | [RecordedTake.h](../../app/src/model/RecordedTake.h) | `RecordedTake`, `RecordedTakeNote`: what a recording hands the editor |
 | [Errors.h](../../app/src/model/Errors.h) | `EditError` (an edit the user can't make), `ProjectFileError` (a file that can't be read or written); both carry a `QString` message for the user |
 | [Ids.h](../../app/src/model/Ids.h), [OrderedMap.h](../../app/src/model/OrderedMap.h), [Numbers.h](../../app/src/model/Numbers.h) | `newId()`; a map that keeps its keys in insertion order; rounding half to even, floor division that stays exact (`floorDiv`), fixed-point text |
-| [editor/](../../app/src/editor) | `ProjectEditor` ([ProjectEditor.h](../../app/src/editor/ProjectEditor.h)), one source file per area: `EditorTracks.cpp` (tracks, returns and sends, groups, inputs, recordings), `EditorSettings.cpp` (tempo, time signature, key, loop), `EditorClips.cpp` (clips and time selections), `EditorDeviceChains.cpp` (devices in chains), `EditorRacks.cpp` (racks, their chains and macros), `EditorDeviceSettings.cpp` (a device's parameters, state, presets, switch, sidechain), `EditorAutomation.cpp` (envelopes and the lanes shown), `EditorFreezing.cpp` (freezing, unfreezing, flattening, and what frozen tracks refuse). Its value types: `ClipRef`/`ClipRefs`, `TimeRange`, `MovedRange`, `ClipboardContent`/`CopiedTrack`, `CopiedTracks`, `CopiedAutomation`, `TrackParent`/`InsertionPoint` |
+| [editor/](../../app/src/editor) | `ProjectEditor` ([ProjectEditor.h](../../app/src/editor/ProjectEditor.h)), one source file per area: `EditorTracks.cpp` (tracks, returns and sends, groups, inputs, recordings), `EditorSettings.cpp` (tempo, time signature, key, loop), `EditorClips.cpp` (clips and time selections), `EditorDeviceChains.cpp` (devices in chains), `EditorRacks.cpp` (racks, their chains and macros), `EditorDeviceSettings.cpp` (a device's parameters, state, presets, switch, sidechain), `EditorAutomation.cpp` (envelopes and the lanes shown), `EditorFreezing.cpp` (freezing, unfreezing, flattening, and what frozen tracks refuse). Its value types: `ClipRef`/`ClipRefs`, `TimeRange`, `MovedRange`, `ClipboardContent`/`CopiedTrack`/`CopiedFreeze`, `CopiedTracks`, `CopiedAutomation`, `TrackParent`/`InsertionPoint` |
 | [io/Serialization.h](../../app/src/io/Serialization.h), [io/Presets.h](../../app/src/io/Presets.h) | Project and preset files, the preset library: see [serialization.md](serialization.md) |
 
 ## Key types
@@ -160,8 +160,16 @@ Device ids are unique in the whole project, so a device is found wherever it sit
 ### Freezing
 
 A track, group or return can be frozen: `Track::frozen` is a `Freeze` (its frozen audio's `path`, `durationSec`, and
-the `tempo` it was rendered at; `Freeze::clip()` is the warped clip that plays it from beat 0).
+the `tempo` it was rendered at; `Freeze::clip()` is the warped clip that plays all of it from beat 0).
 `Project::setFrozen()` emits `freezeChanged`; `updateTrack()` can't set it (there is no `TrackField` for it).
+
+What of the render plays are its **segments**: `Freeze::segments`, audio clips into the render file (warped from its
+`tempo`, as `clip()` is; `Freeze::segment(id, start, offset, length)` makes one). None (as frozen, and as projects saved
+before segments load) means all of it, from beat 0; `Freeze::playing(trackId)` is what plays either way (the bridge
+plays it, flattening turns it into clips). Edits of a time selection over a frozen track change them as they change
+its clips (below), so the arrangement and what plays stay in step. `Project::setFrozenSegments()` sets them (sorted)
+and emits `clipsChanged`: what the track plays changed, not whether it is frozen. Unfreezing drops the freeze, segments
+and all, and leaves the clips as edited.
 
 - `Project::frozenBy(track)`: the frozen track holding a track's audio (itself, or the outermost frozen group it is
   in); `isFrozen(track)`: it has one.
@@ -169,7 +177,8 @@ the `tempo` it was rendered at; `Freeze::clip()` is the warped clip that plays i
   its signal Pre FX or after one of its devices). `flattenProblem(track)`: only frozen audio and MIDI tracks flatten.
 - The editor's `freezeTracks(OrderedMap<id, Freeze>)` (one step; disarms them; a track in a group frozen with it is
   left out), `unfreezeTracks()` and `flattenTracks()` (a `ReplaceTrackCommand` per track: an audio track of the same
-  id playing `Freeze::clip()`, no devices, no device automation). The render itself is the bridge's
+  id playing `Freeze::playing()` as clips named after it, no devices, no device automation). The render itself is
+  the bridge's
   (`renderFreeze()`, or `startFreeze()` and `finishFreeze()` in the background); the session does both, its progress
   shown ([session.md](session.md#renders-in-the-background)).
 - What frozen audio holds can't change. `ProjectEditor::push()` refuses (and says why on `refused`; the checks are in
@@ -179,6 +188,28 @@ the `tempo` it was rendered at; `Freeze::clip()` is the warped clip that plays i
   does. Rearranging tracks, deleting, grouping and ungrouping refuse moving tracks into or out of a frozen group (a
   frozen group being ungrouped holds nothing any more); new tracks and duplicates meant for a frozen group go after it;
   `armTracks()` leaves frozen tracks unarmed.
+- **Except time selections, which take the frozen audio along.** `deleteRange`, `moveRange` (and Ctrl-drag copies),
+  `duplicateRange`, `cutRange` and `paste` over a frozen track (or what is in a frozen group: the group holds the
+  render) do to the segments of each frozen render they touch (`frozenRenders()`: frozen tracks among them and frozen
+  groups they are in) what they do to the clips, and move the automation baked into it (its devices', and the mixer's
+  of what is in a frozen group) with it. One `SetClipsCommand` carries the clips and the segments (`frozenBefore`,
+  `frozenAfter`), so it is one undo step restoring both; `frozenProblem()` lets a clip change on a frozen track through
+  only if it carries all the frozen renders holding it (`carriesFrozen()`), and `commitMoved()` lets automation baked
+  into frozen audio change only with that audio. The rules, kept simple so clips and audio can't drift apart:
+  - On a frozen track a stretch that is moved, copied, duplicated or pasted **replaces everything where it lands**,
+    empty parts too, as its audio does (on other tracks only the clips it brings replace what they land on).
+  - A stretch of only some of a frozen group is refused (`frozenAreaProblem()`: *select the whole group*): its audio is
+    one render of all of it. A selection over the group's row takes in all of it.
+  - Clips don't move between a frozen track (or one in a frozen group) and another track: a move with a track delta
+    is refused; in time only, it moves.
+  - `copyRange` copies the frozen audio there of each frozen render the selection takes in whole
+    (`ClipboardContent::frozen`, `CopiedFreeze{trackId, path, segments}`; a frozen track with audio there and no
+    clips is a row of its own, to paste back onto). Pasted onto tracks that aren't frozen, the clips go as they are.
+    Into a frozen track (or a frozen group's tracks) only content carrying its frozen audio, the same render (`path`),
+    pastes, onto the tracks it came from; anything else is refused (*only what was copied from it can be pasted into
+    it*).
+  - Everything else that changes a frozen track's clips (trimming, splitting, consolidating, reversing, clip settings,
+    `moveClips`, adding clips) stays refused, as do its devices.
 
 ### Groups
 
@@ -282,7 +313,7 @@ file path (see [ui/device-view.md](../ui/device-view.md)).
 | `returnInserted(id, index)`, `returnRemoved(id, index)` | a return came or went |
 | `trackChanged(id)` | name, colour, mixer, sends, input, monitoring, arming, height, folding (`kMaster`: the master's mixer) |
 | `tracksArranged()` | the order or groups changed (not which tracks there are) |
-| `clipsChanged(track id)` | a track's clips were replaced |
+| `clipsChanged(track id)` | a track's clips were replaced, or what of its frozen audio plays |
 | `devicesChanged(track id)` | devices added, removed, moved, toggled (in racks too), a sidechain, macros or a rack's name changed |
 | `chainChanged(track id, chain id)` | a rack chain's name or mixer |
 | `deviceParamChanged(track id, device id, param id)` | one parameter |
@@ -298,8 +329,9 @@ file path (see [ui/device-view.md](../ui/device-view.md)).
 Mutators, called only from commands (or directly for view state): `insertTrack`, `removeTrack`, `insertReturn`,
 `removeReturn`, `arrangeTracks(tree)` (validates with `treeProblem` and throws `EditError`, changing nothing),
 `updateTrack(id, field, value)` and `updateTrack(id, values)` (the settings a `TrackField` names; one `trackChanged`),
-`replaceTrack` (a flattened track), `setFrozen`, `setClips` (sorts), `setDevices`, `setChains` (several tracks'
-devices at once, all changed before any signal: a device moving between tracks), `updateChain`, `setDeviceMacros`,
+`replaceTrack` (a flattened track), `setFrozen`, `setFrozenSegments` (sorts; `clipsChanged`), `setClips` (sorts),
+`setDevices`, `setChains` (several tracks' devices at once, all changed before any signal: a device moving between
+tracks), `updateChain`, `setDeviceMacros`,
 `setDeviceName`, `setDeviceParam(s)`, `setDeviceEnabled`, `setDeviceSidechain`, `setDeviceState`,
 `setDevicesFolded`, `addFoldedDevices`, `updateSettings`, `setEnvelope` (an empty envelope removes the target's
 automation), `setAutomationView`, `replaceContents` (loading; emits `reset`), `clear`, `setPath`.
@@ -325,7 +357,7 @@ The session owns one `QUndoStack` and one `ProjectEditor(project, undoStack)`. T
 
 | Command | Changes |
 |---|---|
-| `SetClipsCommand` | clip lists of one or more tracks (before and after by track id) |
+| `SetClipsCommand` | clip lists of one or more tracks (before and after by track id), and for a time selection over frozen tracks their frozen audio's segments |
 | `InsertTrackCommand`, `RemoveTrackCommand` | an arrangement track |
 | `ReplaceTrackCommand` | a track replaced by another of the same id (flattening) |
 | `SetFreezeCommand` | a track frozen (its `Freeze`) or unfrozen |
@@ -409,14 +441,17 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
   needed), `addMidiClip`, `addMidiClipsOver`, `midiClipSpan`, `setClipNotes`, `moveClips` (with `clampTrackDelta`:
   only onto tracks of the same kind), `replaceClip`, `updateClips`, `deleteClips`, `splitClips`, `duplicateClips`,
   `consolidateClips` (Ctrl+J), time selections (`deleteRange` [Q], `duplicateRange`, `copyRange`, `cutRange`,
-  `paste`, `pasteTargets`, `moveRange`, `movedRange` (what `moveRange` would make of the clips, without making it: a
-  drag's preview), `reverseRange` (the audio clips in a range play reversed copies of their files, given by the
+  `paste`, `pasteTargets`, `moveRange`, `movedRange` (what `moveRange` would make of the clips, and of frozen
+  tracks' segments, without making it: a drag's preview), `reverseRange` (the audio clips in a range play reversed
+  copies of their files, given by the
   caller; split at the range's edges), `clipsArea`, `clipsInRange`, `clipsAt`), and `addRecordings` (takes become
   clips in one step; MIDI takes quantized to the record grid).
 - **A time selection is everything in it**: unless `automationLocked`, deleting, moving, copying, duplicating,
   cutting and pasting a range acts on the automation of every track in it as on its clips, whether the track has
   clips there or not (a group's too): only envelopes with breakpoints in the range; across tracks only the mixer's (a
-  device's automation belongs to its track). `copyRange` copies a track with automation and no clips too.
+  device's automation belongs to its track). `copyRange` copies a track with automation and no clips too. Over
+  frozen tracks they take the frozen audio along ([Freezing](#freezing)); refused, `deleteRange` returns false,
+  `duplicateRange`, `cutRange` and `paste` none, and `moveRange` where the range still is.
 - **Devices**: `addDevice` [Q], `insertDevice(s)` (an instrument only on a MIDI track, first, replacing the one there;
   effects never before it), `copyDevices`, `pasteDevices` (sidechains kept unless the source is gone or would close a
   cycle; folded copies stay folded), `moveDevice(s)` [Q], `moveDevicesToTrack` [Q] (the same devices, so plug-ins
@@ -548,6 +583,9 @@ refused because of frozen audio are said on `refused` too. The session shows `re
   [test_editor_racks.cpp](../../tests/app/test_editor_racks.cpp),
   [test_editor_presets.cpp](../../tests/app/test_editor_presets.cpp),
   [test_editor_freeze.cpp](../../tests/app/test_editor_freeze.cpp): each feature's rules, undo, cycles refused.
+- [test_editor_frozen_areas.cpp](../../tests/app/test_editor_frozen_areas.cpp): time selections over frozen tracks
+  and groups (delete, move, copy, duplicate, cut, paste) with their frozen audio, in one undo step; what is refused;
+  unfreezing and flattening afterwards.
 - [test_session_engine.cpp](../../tests/app/test_session_engine.cpp) and the `test_bridge_*` tests: the engine
   hearing the editor's edits.
 

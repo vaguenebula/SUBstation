@@ -89,7 +89,7 @@ Each entry of `tracks`:
 | `parent` | the id of the group it is in, or null |
 | `folded` | bool |
 | `sends` | `{return id: {"level_db": float, "pre_fader": bool}}` |
-| `frozen` | only when frozen: `{"path", "relative_path", "duration_sec", "tempo"}`, its frozen audio (the file found as a clip's is); an incomplete one loads unfrozen |
+| `frozen` | only when frozen: `{"path", "relative_path", "duration_sec", "tempo"}`, its frozen audio (the file found as a clip's is); an incomplete one loads unfrozen. Once a time selection over it was edited, also `"segments"`: what of it plays, `[{"id", "start_beat", "offset_sec", "duration_sec"}]` (`Freeze::segments`: clips into the render, the rest of each is the freeze's: its file, warped from its tempo); none plays all of it, `[]` nothing; a damaged segment is left out |
 
 The tracks are stored flat in arrangement order; the group tree is only the `parent` fields. On load, `repairTree`
 takes any track out of a group it can't be in (a group's tracks must follow it, together), keeping the order.
@@ -193,6 +193,7 @@ that makes an older file load as it was, and saving writes the current version.
 | 13 | rack names (`"name"` on a rack) | none: racks named by their kind |
 | 14 | frozen tracks (`frozen`) | none frozen |
 | 15 | reversed clips (`reversed_from`) | none reversed |
+| 16 | what of frozen audio plays (`frozen.segments`) | all of it (a freeze as rendered) |
 
 `folded_devices` has no version of its own: files without it load with no device folded. The project key,
 `automation_locked` and the clip fields default the same way.

@@ -299,10 +299,21 @@ QJsonObject sendsToJson(const SendMap& sends) {
 
 void addFreeze(QJsonObject& data, const std::optional<Freeze>& freeze, const QString& base) {
     if (!freeze) return;
-    data[QStringLiteral("frozen")] = QJsonObject{{QStringLiteral("path"), freeze->path},
-                                                 {QStringLiteral("relative_path"), relative(freeze->path, base)},
-                                                 {QStringLiteral("duration_sec"), freeze->durationSec},
-                                                 {QStringLiteral("tempo"), freeze->tempo}};
+    QJsonObject frozen{{QStringLiteral("path"), freeze->path},
+                       {QStringLiteral("relative_path"), relative(freeze->path, base)},
+                       {QStringLiteral("duration_sec"), freeze->durationSec},
+                       {QStringLiteral("tempo"), freeze->tempo}};
+    if (freeze->segments) {  // (what of it plays, once a time selection over it was edited)
+        QJsonArray segments;
+        for (const Clip& segment : *freeze->segments) {
+            segments.append(QJsonObject{{QStringLiteral("id"), segment.id},
+                                        {QStringLiteral("start_beat"), segment.startBeat},
+                                        {QStringLiteral("offset_sec"), segment.offsetSec},
+                                        {QStringLiteral("duration_sec"), segment.durationSec}});
+        }
+        frozen[QStringLiteral("segments")] = segments;
+    }
+    data[QStringLiteral("frozen")] = frozen;
 }
 
 QJsonArray devicesToJson(const std::vector<Device>& devices) {
@@ -471,7 +482,31 @@ std::optional<Freeze> freezeFromJson(const QJsonValue& value, const QString& bas
         return std::nullopt;  // an incomplete one loads unfrozen
     }
     if (duration <= 0 || tempo <= 0) return std::nullopt;
-    return Freeze{resolveClipPath(data, base), duration, tempo};
+    Freeze freeze{resolveClipPath(data, base), duration, tempo};
+    // What of it plays (none, as files from before version 16 have it: all of
+    // it). A damaged segment is left out.
+    const QJsonValue segments = data.value(QStringLiteral("segments"));
+    if (segments.isArray()) {
+        std::vector<Clip> clips;
+        for (const QJsonValue& value : segments.toArray()) {
+            try {
+                const QJsonObject segment = asObject(value);
+                const double length = toFloat(need(segment, QStringLiteral("duration_sec")));
+                const double start = toFloat(need(segment, QStringLiteral("start_beat")));
+                const QJsonValue at = segment.value(QStringLiteral("offset_sec"));
+                const double offset = at.isUndefined() ? 0.0 : toFloat(at);
+                if (!(length > 0) || !std::isfinite(length + start + offset)) continue;
+                clips.push_back(freeze.segment(toStr(need(segment, QStringLiteral("id"))), std::max(0.0, start),
+                                               std::max(0.0, offset), length));
+            } catch (const Damaged&) {
+                continue;
+            }
+        }
+        std::stable_sort(clips.begin(), clips.end(),
+                         [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
+        freeze.segments = std::move(clips);
+    }
+    return freeze;
 }
 
 QString warpModeOf(const QJsonValue& value) {

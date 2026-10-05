@@ -290,19 +290,34 @@ public:
     // is locked, its edits act on the automation of every track in it as on its
     // clips, whether the track has clips there or not (a group's too); across
     // tracks only the mixer's (a device's automation belongs to its track).
+    //
+    // Over frozen tracks (and what is in frozen groups) these edits take the
+    // frozen audio along: they do to its segments (Freeze::segments) what they
+    // do to the clips, in the same undo step, so what plays stays in step with
+    // the arrangement (and the automation baked into it goes with them too). On
+    // a frozen track a stretch that is moved, copied, duplicated or pasted
+    // replaces everything where it lands, as its audio does (on other tracks
+    // only the clips it brings replace what they land on). Refused (`refused`
+    // says why) when a selection takes in some of what a frozen group holds
+    // but not all of it (its audio is one render of all of it), when clips
+    // would move between a frozen track and another track, and when what is
+    // pasted into a frozen track wasn't copied from it (see paste).
+    //
     // Delete what is between two beats on the given tracks: the clip content,
-    // and the automation (unless automation is locked).
-    Q_INVOKABLE void deleteRange(double start, double end, const QStringList& trackIds);
+    // and the automation (unless automation is locked). False if refused.
+    Q_INVOKABLE bool deleteRange(double start, double end, const QStringList& trackIds);
     // Ableton's Ctrl+D on a time selection: copy what is between two beats (the
     // clip content, and the automation unless it is locked) to right after
-    // `end`, replacing what was there. The copies.
-    ClipRefs duplicateRange(double start, double end, const QStringList& trackIds);
+    // `end`, replacing what was there. The copies; none if refused.
+    std::optional<ClipRefs> duplicateRange(double start, double end, const QStringList& trackIds);
     // Ctrl+C on a time selection: what is between two beats on these tracks: the
     // clip content (clips across its edges are cut there) and the automation,
-    // unless automation is locked. None if there is nothing there.
+    // unless automation is locked; and the frozen audio there of each frozen
+    // track (or group) the selection takes in whole. None if there is nothing there.
     std::optional<ClipboardContent> copyRange(double start, double end, const QStringList& trackIds) const;
     // Ctrl+X on a time selection: copy it, then take the clip content, and the
-    // automation copied with it, out. One undo step.
+    // automation copied with it, out. One undo step. None if there was nothing
+    // to cut, or it was refused.
     std::optional<ClipboardContent> cutRange(double start, double end, const QStringList& trackIds);
     // Where pasted content goes: its top track onto `trackId` and the rest onto
     // the tracks below, as they were copied. If they aren't all tracks of the
@@ -311,8 +326,13 @@ public:
     // Ctrl+V: copied clip content at `atBeat` (see pasteTargets for which
     // tracks), replacing what is there, as new clips. Its automation comes along
     // unless automation is locked; onto another track, only the mixer's volume
-    // and pan. One undo step. The area pasted over (from the top track to the
-    // lowest); none if the content has nowhere to go.
+    // and pan. Onto unfrozen tracks the clips go as they are (copied from a
+    // frozen track too). Into a frozen track (or what is in a frozen group)
+    // only content copied from it pastes, carrying its frozen audio (the same
+    // render), onto the tracks it came from: it replaces everything where it
+    // lands, frozen audio and clips alike; other content is refused. One undo
+    // step. The area pasted over (from the top track to the lowest); none if
+    // the content has nowhere to go, or was refused.
     std::optional<TimeRange> paste(const ClipboardContent& content, double atBeat, const QString& trackId = {});
     // What moveRange would make of the clips, without making it. For previews while dragging.
     MovedRange movedRange(double start, double end, const QStringList& trackIds, double deltaBeats,
@@ -321,7 +341,8 @@ public:
     // beats, in time and across tracks: the clip content, and the automation
     // (unless it is locked; across tracks, only the mixer's). Clips across the
     // range's edges are split there; what moves replaces what it lands on.
-    // Where the range ended up: its new start and tracks.
+    // Frozen tracks move in time only, their frozen audio along. Where the
+    // range ended up: its new start and tracks (where it was, if refused).
     std::pair<double, QStringList> moveRange(double start, double end, const QStringList& trackIds,
                                              double deltaBeats, int trackDelta = 0, bool copyClips = false);
     // Reverse the audio between two beats on these tracks: each audio clip whose
@@ -643,8 +664,8 @@ private:
     void setSettings(const QString& text, const SettingsValues& values, const QString& mergeKey = {});
 
     // Clips.
-    void commitMoved(const QString& text, const QMap<QString, std::vector<Clip>>& after,
-                     const QMap<LaneRef, Envelope>& envelopes);
+    bool commitMoved(const QString& text, const QMap<QString, std::vector<Clip>>& after,
+                     const QMap<LaneRef, Envelope>& envelopes, const QMap<QString, std::vector<Clip>>& frozen = {});
     struct Span {
         QString source;
         QString dest;
@@ -665,6 +686,11 @@ private:
 
     // Freezing.
     std::optional<QString> frozenProblem(const QUndoCommand& command) const;
+    QStringList frozenRenders(const QStringList& trackIds) const;
+    bool carriesFrozen(const QString& trackId, const QStringList& renders) const;
+    bool coversFrozen(const QString& holder, const QStringList& trackIds) const;
+    std::optional<QString> frozenAreaProblem(const QStringList& trackIds) const;
+    std::vector<Clip> frozenSegments(const QString& trackId) const;
     std::pair<int, std::optional<QString>> outsideFrozen(int index, const std::optional<QString>& parent) const;
     std::optional<QString> heldProblem(const QStringList& trackIds) const;
     std::optional<QString> arrangementProblem(const TrackTree& tree, const QSet<QString>& going = {}) const;

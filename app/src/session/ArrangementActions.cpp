@@ -59,7 +59,7 @@ void ArrangementActions::requestClipView(const ClipRefs& refs, const ClipRef& le
 void ArrangementActions::deleteArea() {
     if (!selection_->clipRange()) return;
     const TimeRange range = *selection_->timeRange();
-    editor_->deleteRange(range.start, range.end, range.trackIds);
+    if (!editor_->deleteRange(range.start, range.end, range.trackIds)) return;  // (refused: the editor said why)
     selection_->setTimeRange(range.start, range.end, range.trackIds, QSet<ClipRef>());
 }
 
@@ -67,7 +67,7 @@ void ArrangementActions::duplicateArea() {
     if (!selection_->clipRange()) return;
     const TimeRange range = *selection_->timeRange();
     const double length = range.end - range.start;
-    editor_->duplicateRange(range.start, range.end, range.trackIds);
+    if (!editor_->duplicateRange(range.start, range.end, range.trackIds)) return;
     selection_->setTimeRange(range.end, range.end + length, range.trackIds,
                              editor_->clipsInRange(range.end, range.end + length, range.trackIds));
     selection_->setInsert(range.end);
@@ -87,11 +87,12 @@ void ArrangementActions::copyArea() {
 void ArrangementActions::cutArea() {
     if (!selection_->clipRange()) return;
     const TimeRange range = *selection_->timeRange();
-    auto content = editor_->cutRange(range.start, range.end, range.trackIds);
-    if (!content) {
+    if (!editor_->copyRange(range.start, range.end, range.trackIds)) {
         Q_EMIT statusMessage(QStringLiteral("There is nothing in the selection to cut."));
         return;
     }
+    auto content = editor_->cutRange(range.start, range.end, range.trackIds);
+    if (!content) return;  // (refused: the editor said why)
     setClipboard(std::move(*content));
     selection_->setTimeRange(range.start, range.end, range.trackIds, QSet<ClipRef>());
 }
@@ -190,11 +191,12 @@ void ArrangementActions::paste(double atBeat, const QString& trackId) {
         return;
     }
     const ClipboardContent content = std::get<ClipboardContent>(clipboard_);
-    const auto area = editor_->paste(content, atBeat, onto);
-    if (!area) {
+    if (!editor_->pasteTargets(content, onto)) {
         Q_EMIT statusMessage(QStringLiteral("The copied clips can't go there: paste them onto tracks of their kind."));
         return;
     }
+    const auto area = editor_->paste(content, atBeat, onto);
+    if (!area) return;  // (refused: the editor said why)
     selection_->setTimeRange(area->start, area->end, area->trackIds,
                              editor_->clipsInRange(area->start, area->end, area->trackIds));
     selection_->setInsert(area->end);

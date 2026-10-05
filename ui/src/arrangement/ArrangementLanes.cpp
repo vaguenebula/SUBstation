@@ -355,6 +355,7 @@ void ArrangementLanes::paint(SgPainter& p) {
             if (row.hidden) continue;
             const QRectF rect = clipRect(kept.clip, row.top - scroll, row.mainHeight);
             drawClip(p, kept.color, kept.clip, rect, visible, false, false, row.bars);
+            if (project.isFrozen(row.trackId)) p.fillRect(rect, Theme::kFrozenTint);  // (as its row's clips are)
             frames.push_back({row.trackId, kept.color, kept.clip, rect, false, false, row.bars});
         }
         for (const GestureClip& ghost : gesture->ghosts()) {
@@ -363,6 +364,7 @@ void ArrangementLanes::paint(SgPainter& p) {
             if (row.hidden) continue;
             const QRectF rect = clipRect(ghost.clip, row.top - scroll, row.mainHeight);
             drawClip(p, ghost.color, ghost.clip, rect, visible, true, true, row.bars);
+            if (project.isFrozen(row.trackId)) p.fillRect(rect, Theme::kFrozenTint);
             frames.push_back({row.trackId, ghost.color, ghost.clip, rect, true, true, row.bars});
         }
     }

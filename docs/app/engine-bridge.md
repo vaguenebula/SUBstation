@@ -20,7 +20,7 @@ preferences ([AudioSettings.h](../../app/src/audio/AudioSettings.h)) and where t
   devicesChanged                 ─► syncDevices ──────────────────► addBuiltinProcessor, addPluginProcessor,
                                                                     moveProcessor, setChainOrder, addRack,
                                                                     addRackChain, setProcessorSidechain...
-  freezeChanged                  ─► onFreezeChanged ──────────────► setTrackFrozen, the frozen audio as its clip
+  freezeChanged                  ─► onFreezeChanged ──────────────► setTrackFrozen, the frozen audio as its clips
   chainChanged                   ─► onChainChanged ───────────────► setChainGain/Pan/Mute/Solo
   deviceParamChanged             ─► onDeviceParamChanged ─────────► setProcessorParam
   deviceStateChanged             ─► pushDeviceState ──────────────► setProcessorState
@@ -177,11 +177,15 @@ too, and loaded) and `engineChainId(chain)` (a rack chain's engine chain) give t
   semitones. Every clip's file is requested for decoding first.
 - MIDI tracks: the track's clips are flattened into the notes they play (`Clip::playedNotes()` in timeline beats) and
   set with `setTrackNotes`. See [engine/midi.md](../engine/midi.md).
-- A frozen track plays its frozen audio as its only clip instead (`Freeze::clip()`); a MIDI track's notes go.
-- Previews: while a clip is dragged (moved or trimmed), `previewClips(track → clips)` pushes what the drag would make
-  of those tracks' clips (or notes) instead of the model's, so they are heard where they are going; the model changes
-  once, when the drag ends. `endClipPreview()` pushes the model's clips again for every track previewed (the drop
-  changed them, or not). Frozen tracks aren't previewed.
+- A frozen track plays its frozen audio instead, as clips into the render: its segments (`Freeze::playing()`: all of
+  it from beat 0 until a time selection over it is edited, then what the edits left, where they put it; see
+  [model.md](model.md#freezing)); a MIDI track's notes go. Segments changing come as `clipsChanged` of the frozen
+  track (or group), so `pushClips` plays them.
+- Previews: while a clip is dragged (moved or trimmed), `previewClips(track → clips, frozen track → segments)` pushes
+  what the drag would make of those tracks' clips (or notes) instead of the model's, and of frozen tracks' segments
+  (`MovedRange::frozen`), so they are heard where they are going; the model changes once, when the drag ends.
+  `endClipPreview()` pushes the model's clips again for every track previewed (the drop changed them, or not). A
+  frozen track's clips aren't previewed (it plays its frozen audio), only its segments.
 
 ### Devices and racks
 
@@ -312,7 +316,7 @@ it failed), waited for; the session calls those two itself, showing the render's
 file. While a render runs, `pollDevice` leaves the device's events for later: it can't be reopened then.
 
 On `freezeChanged` (`onFreezeChanged`): the plug-ins' states go into the model (so a frozen track saves them), the
-engine track is frozen (`setTrackFrozen`), its clips become the frozen audio (a MIDI track's notes go), and
+engine track is frozen (`setTrackFrozen`), its clips become the frozen audio's segments (a MIDI track's notes go), and
 `syncDevices` takes its processors away: the bridge sees a frozen track as having no devices, so its devices go as if
 deleted, their plug-ins' states kept, and come back on unfreezing. The tracks in a frozen group keep their processors;
 the engine just doesn't render them. Frozen tracks don't record.
@@ -539,8 +543,8 @@ same driver next time. Other parts keep their own keys: the session's (recent fi
   presets.
 - [test_bridge_plugins.cpp](../../tests/app/test_bridge_plugins.cpp): plug-in loading (after a project opens too),
   missing and moved plug-ins, editors, edits for undo, automating plug-in parameters.
-- [test_bridge_freeze.cpp](../../tests/app/test_bridge_freeze.cpp): frozen tracks in the engine, renders in the
-  background, reversed copies.
+- [test_bridge_freeze.cpp](../../tests/app/test_bridge_freeze.cpp): frozen tracks in the engine (their frozen audio
+  where a time selection moved it, and where a drag would take it), renders in the background, reversed copies.
 - [test_bridge_recording.cpp](../../tests/app/test_bridge_recording.cpp): what records, inputs and monitoring in the
   engine, takes.
 - [test_bridge_settings.cpp](../../tests/app/test_bridge_settings.cpp): `AudioSettings` and the other keys, the files'

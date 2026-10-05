@@ -292,6 +292,10 @@ public:
     // kind), as if that one went and this one came; returns the one it replaces.
     Track replaceTrack(Track track);
     void setFrozen(const QString& trackId, const std::optional<Freeze>& freeze);
+    // What of a frozen track's audio plays (Freeze::segments; sorted here by
+    // start). Emits clipsChanged: what the track plays changed, not whether it
+    // is frozen. Nothing for a track that isn't frozen.
+    void setFrozenSegments(const QString& trackId, std::optional<std::vector<Clip>> segments);
     // A track's clips (sorted here by start).
     void setClips(const QString& trackId, std::vector<Clip> clips);
     void setDevices(const QString& trackId, std::vector<Device> devices);

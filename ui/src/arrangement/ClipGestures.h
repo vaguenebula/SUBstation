@@ -24,7 +24,10 @@ namespace sub::ui::arrangement {
 
 // Drag inside a clip range: move (Ctrl: copy) the selected stretch of clips,
 // split at the range's edges (and the automation under it). A click without
-// dragging calls `onClick`. While it drags, the clips play where they would land.
+// dragging calls `onClick`. While it drags, the clips play where they would
+// land (frozen tracks: their frozen audio, which moves with them). On a frozen
+// track the stretch replaces everything where it lands, as its audio does: the
+// clips there are drawn cut away.
 class MoveRangeGesture : public Gesture {
 public:
     MoveRangeGesture(LanesHost& host, const QPointF& press, std::function<void()> onClick = {});
@@ -40,6 +43,13 @@ public:
 private:
     void preview();
 
+    // A frozen track's clips: all of them are drawn by the gesture (`kept`).
+    struct FrozenRow {
+        int row = 0;
+        QColor color;
+        std::vector<app::Clip> clips;
+    };
+
     LanesHost& host_;
     QPointF press_;
     std::function<void()> onClick_;
@@ -51,6 +61,9 @@ private:
     QSet<QString> touched_;
     std::vector<GestureClip> remnants_;
     std::vector<std::pair<int, app::Clip>> pieces_;
+    std::vector<FrozenRow> frozen_;
+    QSet<QString> frozenIds_;
+    std::vector<GestureClip> frozenKept_;  // what stays of frozen tracks' clips where they are
     double delta_ = 0.0;
     int trackDelta_ = 0;
     bool copy_ = false;

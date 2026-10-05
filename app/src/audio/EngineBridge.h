@@ -81,10 +81,12 @@
 // Freezing: renderFreeze renders a track's signal before its fader (a group's
 // bus, a return's) from the timeline's start into a WAV file in the freeze
 // folder (the project's "Freeze" folder once it is saved), with its tail. A
-// frozen track is frozen in the engine too: it plays its frozen audio as its only
-// clip, and its devices' processors go (a plug-in's state is kept, as for a
-// device deleted, and comes back when it is unfrozen). The tracks in a frozen
-// group keep theirs, but the engine doesn't render them.
+// frozen track is frozen in the engine too: it plays its frozen audio as its
+// clips (its segments: Freeze::playing; at first one playing all of it), and
+// its devices' processors go (a plug-in's state is kept, as for a device
+// deleted, and comes back when it is unfrozen). The tracks in a frozen group
+// keep theirs, but the engine doesn't render them. A time selection edited
+// over a frozen track changes its segments (clipsChanged): they play again.
 //
 // Opening a project: its plug-ins load after it shows, one at a time between
 // the UI's events (each in a turn of the event loop of its own, kPluginGapMs
@@ -238,8 +240,11 @@ public:
     Q_INVOKABLE void previewNote(const QString& trackId, int pitch, int velocity);
     // Plays these clips on these tracks instead of the model's, until
     // endClipPreview() (or the next change to their clips): what a drag would
-    // make of them, heard while it goes on. Frozen tracks play on as they are.
-    void previewClips(const QMap<QString, std::vector<Clip>>& clipsByTrack);
+    // make of them, heard while it goes on. Frozen tracks play their frozen
+    // audio: the segments of it in `frozenByTrack` (what the drag would make of
+    // them), or as they are.
+    void previewClips(const QMap<QString, std::vector<Clip>>& clipsByTrack,
+                      const QMap<QString, std::vector<Clip>>& frozenByTrack = {});
     // The previewed tracks play the model's clips again.
     void endClipPreview();
     // Renders on as many threads as the preferences say (the engine's default unless chosen).

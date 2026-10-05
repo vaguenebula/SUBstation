@@ -28,6 +28,9 @@ struct MovedRange {
     QMap<QString, std::vector<Clip>> clips;  // track id -> its clips after the move
     double deltaBeats = 0.0;
     int trackDelta = 0;
+    // Frozen track id -> what of its frozen audio plays after the move
+    // (Freeze::segments; the frozen audio moves with the clips).
+    QMap<QString, std::vector<Clip>> frozen = {};
 
     friend bool operator==(const MovedRange&, const MovedRange&) = default;
 };

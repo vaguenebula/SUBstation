@@ -1,5 +1,5 @@
 // Freezing: rendering a track's signal before its fader into its frozen audio,
-// and a frozen track in the engine (its frozen audio as its only clip, its
+// and a frozen track in the engine (its frozen audio as its clips, its
 // devices' processors gone until it is unfrozen). And exporting the
 // arrangement, the other render in the background.
 

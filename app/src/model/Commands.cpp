@@ -13,28 +13,40 @@ QList<SettingsField> fieldsOf(const SettingsValues& values) { return values.keys
 // --- SetClipsCommand ---
 
 SetClipsCommand::SetClipsCommand(Project* project, const QString& text, ClipLists before, ClipLists after,
-                                 QString mergeKey)
+                                 QString mergeKey, FrozenSegments frozenBefore, FrozenSegments frozenAfter)
     : QUndoCommand(text),
       project_(project),
       before_(std::move(before)),
       after_(std::move(after)),
-      mergeKey_(std::move(mergeKey)) {}
+      mergeKey_(std::move(mergeKey)),
+      frozenBefore_(std::move(frozenBefore)),
+      frozenAfter_(std::move(frozenAfter)) {}
 
 int SetClipsCommand::id() const { return mergeKey_.isEmpty() ? -1 : kMergeId; }
 
 bool SetClipsCommand::mergeWith(const QUndoCommand* other) {
     const auto* next = dynamic_cast<const SetClipsCommand*>(other);
-    if (next == nullptr || next->mergeKey_ != mergeKey_ || next->after_.keys() != after_.keys()) return false;
+    if (next == nullptr || next->mergeKey_ != mergeKey_ || next->after_.keys() != after_.keys() ||
+        next->frozenAfter_.keys() != frozenAfter_.keys()) {
+        return false;
+    }
     after_ = next->after_;
+    frozenAfter_ = next->frozenAfter_;
     return true;
 }
 
 void SetClipsCommand::redo() {
     for (auto it = after_.constBegin(); it != after_.constEnd(); ++it) project_->setClips(it.key(), it.value());
+    for (auto it = frozenAfter_.constBegin(); it != frozenAfter_.constEnd(); ++it) {
+        project_->setFrozenSegments(it.key(), it.value());
+    }
 }
 
 void SetClipsCommand::undo() {
     for (auto it = before_.constBegin(); it != before_.constEnd(); ++it) project_->setClips(it.key(), it.value());
+    for (auto it = frozenBefore_.constBegin(); it != frozenBefore_.constEnd(); ++it) {
+        project_->setFrozenSegments(it.key(), it.value());
+    }
 }
 
 // --- Tracks ---

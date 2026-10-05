@@ -499,6 +499,18 @@ void Project::setFrozen(const QString& trackId, const std::optional<Freeze>& fre
     Q_EMIT freezeChanged(trackId);
 }
 
+void Project::setFrozenSegments(const QString& trackId, std::optional<std::vector<Clip>> segments) {
+    std::optional<Freeze>& frozen = trackRef(trackId).frozen;
+    if (!frozen) return;
+    if (segments) {
+        std::stable_sort(segments->begin(), segments->end(),
+                         [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
+    }
+    if (frozen->segments == segments) return;
+    frozen->segments = std::move(segments);
+    Q_EMIT clipsChanged(trackId);
+}
+
 void Project::setClips(const QString& trackId, std::vector<Clip> clips) {
     std::stable_sort(clips.begin(), clips.end(), [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
     trackRef(trackId).clips = std::move(clips);

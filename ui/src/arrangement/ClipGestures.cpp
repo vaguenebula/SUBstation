@@ -46,6 +46,10 @@ MoveRangeGesture::MoveRangeGesture(LanesHost& host, const QPointF& press, std::f
         const app::Track* track = project.findTrack(id);
         if (!track || !project.hasTrack(id)) continue;
         const int row = project.trackIndex(id);
+        if (project.isFrozen(id) && track->hasClips()) {
+            frozen_.push_back({row, QColor(track->color), track->clips});
+            for (const app::Clip& c : track->clips) frozenIds_.insert(c.id);
+        }
         std::vector<app::Clip> inside;
         for (const app::Clip& c : track->clips) {
             if (c.startBeat < end_ && c.endBeat(tempo) > start_) inside.push_back(c);
@@ -71,6 +75,16 @@ void MoveRangeGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers)
     for (const QString& id : trackIds_) refs.append({id, QString()});
     trackDelta_ = host_.hostSession()->editor()->clampTrackDelta(refs, row - originRow_);
     copy_ = modifiers & Qt::ControlModifier;
+    // Frozen tracks' clips where they stay: on a frozen track the moved stretch
+    // replaces everything where it lands.
+    frozenKept_.clear();
+    const double tempo = host_.hostSession()->project()->tempo();
+    for (const FrozenRow& frozen : frozen_) {
+        std::vector<app::Clip> clips =
+            copy_ ? frozen.clips : app::edits::removeRange(frozen.clips, start_, end_, tempo);
+        if (trackDelta_ == 0) clips = app::edits::removeRange(clips, start_ + delta_, end_ + delta_, tempo);
+        for (const app::Clip& c : clips) frozenKept_.push_back({frozen.row, frozen.color, c});
+    }
     preview();
 }
 
@@ -81,10 +95,13 @@ void MoveRangeGesture::preview() {
     previewed_ = state;
     app::Session& session = *host_.hostSession();
     const app::MovedRange after = session.editor()->movedRange(start_, end_, trackIds_, delta_, trackDelta_, copy_);
-    session.bridge()->previewClips(after.clips);
+    session.bridge()->previewClips(after.clips, after.frozen);
 }
 
-QSet<QString> MoveRangeGesture::hiddenIds() const { return active_ && !copy_ ? touched_ : QSet<QString>(); }
+QSet<QString> MoveRangeGesture::hiddenIds() const {
+    if (!active_) return {};
+    return copy_ ? frozenIds_ : touched_ + frozenIds_;
+}
 
 std::vector<GestureClip> MoveRangeGesture::ghosts() const {
     if (!active_) return {};
@@ -101,7 +118,16 @@ std::vector<GestureClip> MoveRangeGesture::ghosts() const {
 }
 
 std::vector<GestureClip> MoveRangeGesture::kept() const {
-    return active_ && !copy_ ? remnants_ : std::vector<GestureClip>();
+    if (!active_) return {};
+    std::vector<GestureClip> kept = frozenKept_;
+    if (copy_) return kept;
+    const auto frozenRow = [&](int row) {
+        return std::any_of(frozen_.begin(), frozen_.end(), [&](const FrozenRow& f) { return f.row == row; });
+    };
+    for (const GestureClip& remnant : remnants_) {
+        if (!frozenRow(remnant.row)) kept.push_back(remnant);
+    }
+    return kept;
 }
 
 std::optional<app::TimeRange> MoveRangeGesture::timeRange() const {

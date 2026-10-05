@@ -1,6 +1,6 @@
 // Editing clips: adding, moving, trimming, splitting and consolidating them,
 // and time selections (delete, duplicate, copy, cut, paste and move a range,
-// with the automation under it).
+// with the automation under it, and over frozen tracks with their frozen audio).
 
 #include "editor/EditorSupport.h"
 #include "editor/ProjectEditor.h"
@@ -27,6 +27,24 @@ namespace {
 
 std::vector<double> beats(const std::set<double>& edges) { return {edges.begin(), edges.end()}; }
 
+// Clips (or frozen audio's segments) with the stretch between two beats moved
+// (or copied) by `delta` as a block: it replaces everything where it lands,
+// empty parts too, as a stretch of frozen audio does. Clips across its edges
+// are split there; those wholly inside a moved stretch keep their ids.
+std::vector<Clip> movedBlock(const std::vector<Clip>& clips, double start, double end, double delta, bool copy,
+                             double tempo) {
+    std::vector<Clip> pieces = edits::sliceRange(clips, start, end, tempo, !copy);
+    std::vector<Clip> kept = copy ? clips : edits::removeRange(clips, start, end, tempo);
+    kept = edits::removeRange(kept, start + delta, end + delta, tempo);
+    QSet<QString> ids;
+    for (Clip& piece : pieces) {
+        piece.startBeat += delta;
+        ids.insert(piece.id);
+        kept.push_back(std::move(piece));
+    }
+    return edits::resolveOverlaps(kept, ids, tempo);
+}
+
 // Clip ids by track, in the order the tracks come in `refs`.
 OrderedMap<QString, QSet<QString>> idsByTrack(const ClipRefs& refs) {
     OrderedMap<QString, QSet<QString>> ids;
@@ -43,24 +61,52 @@ void ProjectEditor::commitClips(const QString& text, const QMap<QString, std::ve
     if (before != after) push(std::make_unique<SetClipsCommand>(project_, text, before, after, mergeKey));
 }
 
-void ProjectEditor::commitMoved(const QString& text, const QMap<QString, std::vector<Clip>>& after,
-                                const QMap<LaneRef, Envelope>& envelopes) {
-    if (envelopes.isEmpty()) {
-        commitClips(text, after);
-        return;
-    }
-    // Clips a frozen track won't take: their automation doesn't move without them.
+bool ProjectEditor::commitMoved(const QString& text, const QMap<QString, std::vector<Clip>>& after,
+                                const QMap<LaneRef, Envelope>& envelopes,
+                                const QMap<QString, std::vector<Clip>>& frozen) {
+    // A time selection's edit, as one undo step: the clips, what of frozen
+    // tracks' audio plays (`frozen`: it goes along with their clips), and the
+    // automation going with them. Refused (false; `refused` says why) if it
+    // would change what frozen audio holds without taking that audio along: the
+    // clips of a frozen track, or automation baked into frozen audio.
+    const Project& p = *project_;
     ClipLists before;
-    for (auto it = after.constBegin(); it != after.constEnd(); ++it) before.insert(it.key(), project_->track(it.key()).clips);
-    if (const auto problem = frozenProblem(SetClipsCommand(project_, text, before, after))) {
+    for (auto it = after.constBegin(); it != after.constEnd(); ++it) before.insert(it.key(), p.track(it.key()).clips);
+    FrozenSegments frozenBefore;
+    FrozenSegments frozenAfter;
+    bool frozenChanges = false;
+    for (auto it = frozen.constBegin(); it != frozen.constEnd(); ++it) {
+        frozenBefore.insert(it.key(), p.track(it.key()).frozen->segments);
+        frozenAfter.insert(it.key(), it.value());
+        frozenChanges = frozenChanges || frozenSegments(it.key()) != it.value();
+    }
+    auto command =
+        std::make_unique<SetClipsCommand>(project_, text, before, after, QString(), frozenBefore, frozenAfter);
+    if (const auto problem = frozenProblem(*command)) {
         Q_EMIT refused(*problem);
-        return;
+        return false;
     }
-    Macro macro(undoStack_, text);
-    commitClips(text, after);
+    const QStringList carried = frozen.keys();
     for (auto it = envelopes.constBegin(); it != envelopes.constEnd(); ++it) {
-        setEnvelope(it.key().first, it.key().second, it.value(), text);
+        const auto& [owner, key] = it.key();
+        if (laneFrozen(owner, key) && !carriesFrozen(owner, carried)) {
+            Q_EMIT refused(QStringLiteral("%1 is frozen: unfreeze it to change its automation")
+                               .arg(p.track(*p.frozenBy(owner)).name));
+            return false;
+        }
     }
+    std::optional<Macro> macro;
+    if (!envelopes.isEmpty()) macro.emplace(undoStack_, text);
+    if (before != after || frozenChanges) undoStack_->push(command.release());
+    for (auto it = envelopes.constBegin(); it != envelopes.constEnd(); ++it) {  // (checked above)
+        const auto& [owner, key] = it.key();
+        const Envelope nw = automation::normalize(it.value());
+        const Envelope old = p.envelope(owner, key);
+        if (nw != old) {
+            undoStack_->push(std::make_unique<SetEnvelopeCommand>(project_, owner, key, old, nw, text).release());
+        }
+    }
+    return true;
 }
 
 QMap<LaneRef, Envelope> ProjectEditor::carriedAutomation(const std::vector<Span>& spans, double deltaBeats,
@@ -442,7 +488,7 @@ QMap<LaneRef, Envelope> ProjectEditor::clearedAutomation(double start, double en
     return changed;
 }
 
-void ProjectEditor::deleteRange(double start, double end, const QStringList& trackIds) {
+bool ProjectEditor::deleteRange(double start, double end, const QStringList& trackIds) {
     const double tempo = project_->tempo();
     QStringList tracks;
     QMap<QString, std::vector<Clip>> after;
@@ -451,25 +497,36 @@ void ProjectEditor::deleteRange(double start, double end, const QStringList& tra
         tracks.append(id);
         after.insert(id, edits::removeRange(project_->track(id).clips, start, end, tempo));
     }
-    commitMoved(QStringLiteral("Delete Time Selection"), after, clearedAutomation(start, end, tracks));
+    if (const auto problem = frozenAreaProblem(tracks)) {
+        Q_EMIT refused(*problem);
+        return false;
+    }
+    QMap<QString, std::vector<Clip>> frozen;
+    for (const QString& holder : frozenRenders(tracks)) {
+        frozen.insert(holder, edits::removeRange(frozenSegments(holder), start, end, tempo));
+    }
+    return commitMoved(QStringLiteral("Delete Time Selection"), after, clearedAutomation(start, end, tracks), frozen);
 }
 
-ClipRefs ProjectEditor::duplicateRange(double start, double end, const QStringList& trackIds) {
-    const double tempo = project_->tempo();
+std::optional<ClipRefs> ProjectEditor::duplicateRange(double start, double end, const QStringList& trackIds) {
+    const Project& p = *project_;
+    const double tempo = p.tempo();
     const double length = end - start;
     QStringList tracks;
     QMap<QString, std::vector<Clip>> after;
     ClipRefs result;
     std::vector<Span> spans;
     for (const QString& id : trackIds) {
-        if (!project_->hasTrack(id)) continue;
+        if (!p.hasTrack(id)) continue;
         tracks.append(id);
         spans.push_back({id, id, start, end});
-        const auto& clips = project_->track(id).clips;
+        const auto& clips = p.track(id).clips;
         std::vector<Clip> copies = edits::sliceRange(clips, start, end, tempo);
-        if (copies.empty()) continue;
+        // On a frozen track the copy replaces everything where it lands, as its frozen audio's does.
+        const bool frozen = p.isFrozen(id);
+        if (copies.empty() && !frozen) continue;
         QSet<QString> ids;
-        std::vector<Clip> all = clips;
+        std::vector<Clip> all = frozen ? edits::removeRange(clips, end, end + length, tempo) : clips;
         for (Clip& copy : copies) {
             copy.startBeat += length;
             ids.insert(copy.id);
@@ -478,7 +535,16 @@ ClipRefs ProjectEditor::duplicateRange(double start, double end, const QStringLi
         }
         after.insert(id, edits::resolveOverlaps(all, ids, tempo));
     }
-    commitMoved(QStringLiteral("Duplicate Time Selection"), after, carriedAutomation(spans, length, true));
+    if (const auto problem = frozenAreaProblem(tracks)) {
+        Q_EMIT refused(*problem);
+        return std::nullopt;
+    }
+    QMap<QString, std::vector<Clip>> frozen;
+    for (const QString& holder : frozenRenders(tracks)) {
+        frozen.insert(holder, movedBlock(frozenSegments(holder), start, end, length, true, tempo));
+    }
+    const QString text = QStringLiteral("Duplicate Time Selection");
+    if (!commitMoved(text, after, carriedAutomation(spans, length, true), frozen)) return std::nullopt;
     return result;
 }
 
@@ -492,7 +558,14 @@ std::optional<ClipboardContent> ProjectEditor::copyRange(double start, double en
     }
     std::sort(ids.begin(), ids.end(), [&](const QString& a, const QString& b) { return p.trackIndex(a) < p.trackIndex(b); });
     ClipboardContent content{end - start, {}};
-    int top = -1;  // rows count from the topmost track with content (clips or automation)
+    // The frozen audio there of each frozen track (or group) the selection takes in whole.
+    for (const QString& holder : frozenRenders(ids)) {
+        if (!coversFrozen(holder, ids)) continue;
+        std::vector<Clip> segments = edits::sliceRange(frozenSegments(holder), start, end, tempo);
+        for (Clip& segment : segments) segment.startBeat -= start;
+        content.frozen.push_back({holder, p.track(holder).frozen->path, std::move(segments)});
+    }
+    int top = -1;  // rows count from the topmost track with content (clips, automation, its frozen audio)
     for (const QString& id : ids) {
         const Track& track = p.track(id);
         CopiedTrack copied{id, track.kind, 0, edits::sliceRange(track.clips, start, end, tempo), {}};
@@ -504,7 +577,10 @@ std::optional<ClipboardContent> ProjectEditor::copyRange(double start, double en
                 }
             }
         }
-        if (copied.clips.empty() && copied.automation.empty()) continue;
+        // (A frozen track (not a group) with frozen audio there is copied too, to paste it back onto.)
+        const CopiedFreeze* audio = track.isGroup() ? nullptr : content.frozenOf(id);
+        const bool audible = audio != nullptr && !audio->segments.empty();
+        if (copied.clips.empty() && copied.automation.empty() && !audible) continue;
         const int index = p.trackIndex(id);
         if (top < 0) top = index;
         copied.row = index - top;
@@ -515,6 +591,14 @@ std::optional<ClipboardContent> ProjectEditor::copyRange(double start, double en
 }
 
 std::optional<ClipboardContent> ProjectEditor::cutRange(double start, double end, const QStringList& trackIds) {
+    QStringList tracks;
+    for (const QString& id : trackIds) {
+        if (project_->hasTrack(id) && !tracks.contains(id)) tracks.append(id);
+    }
+    if (const auto problem = frozenAreaProblem(tracks)) {
+        Q_EMIT refused(*problem);
+        return std::nullopt;
+    }
     auto content = copyRange(start, end, trackIds);
     if (!content) return std::nullopt;
     const double tempo = project_->tempo();
@@ -528,7 +612,11 @@ std::optional<ClipboardContent> ProjectEditor::cutRange(double start, double end
             if (points != current) envelopes.insert({copied.trackId, key}, points);
         }
     }
-    commitMoved(QStringLiteral("Cut"), after, envelopes);
+    QMap<QString, std::vector<Clip>> frozen;
+    for (const QString& holder : frozenRenders(tracks)) {
+        frozen.insert(holder, edits::removeRange(frozenSegments(holder), start, end, tempo));
+    }
+    if (!commitMoved(QStringLiteral("Cut"), after, envelopes, frozen)) return std::nullopt;
     return content;
 }
 
@@ -559,9 +647,44 @@ std::optional<TimeRange> ProjectEditor::paste(const ClipboardContent& content, d
     if (!dests) return std::nullopt;
     const double tempo = p.tempo();
     const double at = std::max(0.0, atBeat);
+    // Into frozen tracks (and what is in frozen groups) only what was copied
+    // from them, with their frozen audio (the same render), onto the tracks it
+    // came from.
+    const QStringList renders = frozenRenders(*dests);
+    for (const QString& holder : renders) {
+        const CopiedFreeze* audio = content.frozenOf(holder);
+        bool same = audio != nullptr && audio->path == p.track(holder).frozen->path;
+        for (qsizetype i = 0; same && i < dests->size(); ++i) {
+            const QString& dest = dests->at(i);
+            const bool held = dest == holder || p.isDescendant(dest, holder);
+            if (held && dest != content.tracks[static_cast<size_t>(i)].trackId) same = false;
+        }
+        if (!same) {
+            Q_EMIT refused(QStringLiteral("%1 is frozen: only what was copied from it can be pasted into it")
+                               .arg(p.track(holder).name));
+            return std::nullopt;
+        }
+    }
     QMap<QString, std::vector<Clip>> lists;
     QMap<QString, QSet<QString>> winners;
     QMap<LaneRef, Envelope> changed;
+    QMap<QString, std::vector<Clip>> frozen;
+    for (const QString& holder : renders) {
+        // What is pasted replaces everything where it lands, as its frozen audio does.
+        for (const QString& id : p.withContents({holder})) {
+            if (p.track(id).hasClips() && !lists.contains(id)) {
+                lists.insert(id, edits::removeRange(p.track(id).clips, at, at + content.length, tempo));
+            }
+        }
+        std::vector<Clip> segments = edits::removeRange(frozenSegments(holder), at, at + content.length, tempo);
+        for (const Clip& segment : content.frozenOf(holder)->segments) {
+            Clip pasted = segment;
+            pasted.id = newId();
+            pasted.startBeat = segment.startBeat + at;
+            segments.push_back(std::move(pasted));
+        }
+        frozen.insert(holder, segments);
+    }
     for (std::size_t i = 0; i < content.tracks.size(); ++i) {
         const CopiedTrack& copied = content.tracks[i];
         const QString& dest = dests->at(static_cast<qsizetype>(i));
@@ -591,7 +714,7 @@ std::optional<TimeRange> ProjectEditor::paste(const ClipboardContent& content, d
         const Envelope points = automation::dropRedundant(it.value(), {at, at + content.length});
         if (points != p.envelope(it.key().first, it.key().second)) envelopes.insert(it.key(), points);
     }
-    commitMoved(QStringLiteral("Paste"), after, envelopes);
+    if (!commitMoved(QStringLiteral("Paste"), after, envelopes, frozen)) return std::nullopt;
     TimeRange area{at, at + content.length, {}};
     std::vector<int> rows;
     for (const QString& dest : *dests) {
@@ -626,6 +749,21 @@ MovedRange ProjectEditor::movedRange(double start, double end, const QStringList
             affected.insert(id);
         }
     }
+    // Frozen tracks move in time only (moveRange refuses more), their frozen
+    // audio along; there the moved stretch replaces everything where it lands,
+    // as that audio does.
+    if (moved.trackDelta == 0) {
+        for (const QString& id : trackIds) {
+            if (!p.isFrozen(id)) continue;
+            const double at = start + moved.deltaBeats;
+            lists.insert(id, edits::removeRange(lists.value(id), at, at + end - start, tempo));
+            affected.insert(id);
+        }
+        for (const QString& holder : frozenRenders(trackIds)) {
+            moved.frozen.insert(holder,
+                                movedBlock(frozenSegments(holder), start, end, moved.deltaBeats, copyClips, tempo));
+        }
+    }
     for (const QString& id : trackIds) {
         const QString dest = p.tracks()[p.trackIndex(id) + moved.trackDelta].id;
         for (const Clip& c : pieces.value(id)) {
@@ -653,8 +791,24 @@ std::pair<double, QStringList> ProjectEditor::moveRange(double start, double end
         dests.append(dest);
         spans.push_back({id, dest, start, end});
     }
-    commitMoved(copyClips ? QStringLiteral("Copy Time Selection") : QStringLiteral("Move Time Selection"), moved.clips,
-                carriedAutomation(spans, moved.deltaBeats, copyClips));
+    const std::pair<double, QStringList> stays{start, trackIds};
+    if (moved.trackDelta != 0) {  // (frozen audio is its own track's)
+        for (const QString& id : trackIds + dests) {
+            if (const auto holder = p.frozenBy(id)) {
+                Q_EMIT refused(QStringLiteral("%1 is frozen: clips can't move between it and other tracks")
+                                   .arg(p.track(*holder).name));
+                return stays;
+            }
+        }
+    }
+    if (const auto problem = frozenAreaProblem(trackIds)) {
+        Q_EMIT refused(*problem);
+        return stays;
+    }
+    if (!commitMoved(copyClips ? QStringLiteral("Copy Time Selection") : QStringLiteral("Move Time Selection"),
+                     moved.clips, carriedAutomation(spans, moved.deltaBeats, copyClips), moved.frozen)) {
+        return stays;
+    }
     return {start + moved.deltaBeats, dests};
 }
 

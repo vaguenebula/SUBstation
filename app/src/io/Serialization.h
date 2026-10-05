@@ -27,8 +27,11 @@
 // loaded from; version 13; older files have none: racks are named by their
 // kind). Frozen tracks (and returns) store their frozen audio ("frozen": its
 // file, absolute and relative, its length and the tempo it was rendered at;
-// version 14). Reversed audio clips store the file they were reversed from
-// ("reversed_from", absolute and relative; version 15).
+// version 14), and what of it plays once a time selection over its track was
+// edited ("segments": each one's id, start beat, offset and length in seconds;
+// version 16; older files have none: all of it plays). Reversed audio clips
+// store the file they were reversed from ("reversed_from", absolute and
+// relative; version 15).
 //
 // There is no per-version migration code: each addition has a default that
 // makes an older file load as it was, and saving writes the current version.
@@ -67,7 +70,7 @@ inline const QString kProjectFormat = QStringLiteral("gilstudio-project");
 // 6: inputs, 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10:
 // inputs from tracks (resampling), 11: sidechains, 12: racks, 13: rack names, 14:
 // frozen tracks, 15: reversed clips
-inline constexpr int kProjectVersion = 15;
+inline constexpr int kProjectVersion = 16;
 inline const QString kPresetFormat = QStringLiteral("gilstudio-preset");
 inline constexpr int kPresetVersion = 1;
 inline const QString kPresetExtension = QStringLiteral(".gilpreset");
