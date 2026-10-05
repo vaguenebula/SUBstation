@@ -8,23 +8,23 @@ mixer's volume, pan and send levels, and of a rack chain's fader. The envelope m
 [Renderer.cpp](../../engine/src/Renderer.cpp).
 
 The user's view of automation (lanes, editing, lock envelopes, overrides) is in
-[guide/automation.md](../guide/automation.md). The model side (envelope editing, keys, `ParamSpec`, undo) is in
-[python/model.md](../python/model.md).
+[guide/automation.md](../guide/automation.md). The application layer's side (envelope editing, keys, `ParamSpec`, undo)
+is in [app/model.md](../app/model.md); overrides are the engine bridge's ([below](#overrides-engine-side)).
 
 ## Overview
 
 - Every automatable thing is automated the same way, in **normalized values (0..1)**. A device parameter is a
   `ParamInfo`, whatever the device: `toNormalized()` / `fromNormalized()` map plain values evenly, in log(value) or
   in whole steps (as VST3 maps stepped parameters, so plug-in values round-trip).
-- The UI describes every parameter, the mixer's included, as a `ParamSpec`
-  ([model/params.py](../../src/substation/model/params.py)) with the same mapping, and the tests hold the two to each
-  other. The UI's copy of the envelope rules (curves, values between points) is
-  [model/automation.py](../../src/substation/model/automation.py): both must agree.
+- The application layer describes every parameter, the mixer's included, as a `ParamSpec`
+  ([app/src/model/ParamSpec.h](../../app/src/model/ParamSpec.h)) with the same mapping, and the tests hold the two to
+  each other. Its copy of the envelope rules (curves, values between points) is namespace `automation` in
+  [app/src/model/Automation.h](../../app/src/model/Automation.h): both must agree.
 - Envelopes belong to a track or the master. The model keys them by target: `mixer:volume`, `mixer:pan`,
   `send:<return id>`, or `device:<device id>:<parameter id>` (and a rack chain's fader). Device ids are unique in a
   project, so a key finds its device wherever it sits. Deleting a device deletes its automation (in the same undo
   step; a model rule).
-- The engine gets each track's envelopes (`set_track_automation`, track 0 is the master) and converts them to samples
+- The engine gets each track's envelopes (`setTrackAutomation`, track 0 is the master) and converts them to samples
   in the snapshot, as it does notes. The renderer then plays them sample-accurately: volume, pan and send levels
   sample by sample; device parameters at each breakpoint and every 64 samples along a slope.
 - Automation is delayed along with a track's audio by the plug-in latency before it (delay compensation), and it is
@@ -42,7 +42,6 @@ The user's view of automation (lanes, editing, lock envelopes, overrides) is in
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | `automationNodes()`, `buildAutomationLocked()` (faders), `buildChainLocked()` (device parameters and rack chain faders), send levels on edges |
 | [EngineTracks.cpp](../../engine/src/EngineTracks.cpp) | `Engine::setTrackAutomation()` |
 | [Renderer.h](../../engine/src/Renderer.h), [Renderer.cpp](../../engine/src/Renderer.cpp) | `automateInsert()`, `fillLane()`, `applyFader()`, `sumEdge()`, `automationTime()`, `kAutomationStep` |
-| [bindings.cpp](../../engine/src/bindings.cpp) | `AutomationPoint`, `AutomationLane`, `ParamInfo` (with `to_normalized` / `from_normalized`), `AUTOMATION_CURVATURE`, `MAX_VOLUME_GAIN` |
 
 ## Key types
 
@@ -65,9 +64,9 @@ The user's view of automation (lanes, editing, lock envelopes, overrides) is in
   - log: `min * (max / min) ^ n`;
   - otherwise linear.
 
-The Python side reads the same fields from the bindings (`ParamInfo.to_normalized`, `from_normalized`, `step_count`),
-and `ParamSpec.from_info()` copies them into a `ParamSpec`, which maps the same way. `ParamSpec` also has a `"fader"`
-scale for the mixer's volume, which uses `automation.volume_to_normalized()`.
+The application layer's `ParamSpec::fromInfo()` copies these fields into a `ParamSpec`, which maps the same way
+(`toNormalized()`, `fromNormalized()`, `quantize()`). `ParamSpec` also has a `Scale::Fader` for the mixer's volume,
+which uses `automation::volumeToNormalized()`.
 
 Plug-ins present their parameters as plain values too: 0..1 for continuous ones and the step index for stepped ones
 (see [plugins.md](plugins.md)). Their `minValue` is 0 and `maxValue` is 1 or the step count, so the mapping above is
@@ -104,23 +103,23 @@ VST3's own.
 ### The mixer's mappings
 
 - Volume: `automationVolumeGain(v) = v^3 * kMaxVolumeGain`. 1 is +6 dB (`kMaxVolumeGain` = 1.99526231), about 0.79
-  is 0 dB, 0 is silence, and a straight line is a smooth fade. The model's `volume_to_normalized()` is the inverse,
-  in dB, with a floor of -70 dB.
+  is 0 dB, 0 is silence, and a straight line is a smooth fade. The application's `automation::volumeToNormalized()`
+  is the inverse, in dB, with a floor of -70 dB (`automation::kMinVolumeDb`).
 - Pan: `automationPan(v) = v * 2 - 1`: -1 (left) at 0, 1 (right) at 1.
 - A send's level maps as volume does (0..1, +6 dB at 1).
 
-These constants are exported to Python as `AUTOMATION_CURVATURE` and `MAX_VOLUME_GAIN`; the model's tests check that
-it uses the same curve and volume law.
+The application layer keeps its own copies (`automation::kCurvature`, `automation::kMaxVolumeDb`); its tests check them,
+and its curve, against the engine's `kAutomationCurvature`, `kMaxVolumeGain` and `automationShape()`.
 
 ## How it works
 
 ```
- UI / model                     edit side (UI thread, engine lock)            audio thread
- ----------                     ----------------------------------            ------------
+ app layer                      edit side (main thread, engine lock)          audio thread
+ ---------                      ------------------------------------          ------------
  envelopes (beats, 0..1)
-   | bridge._push_automation()
+   | EngineBridge::pushAutomation()
    v
- set_track_automation(track, lanes) --> TrackModel.automation
+ setTrackAutomation(track, lanes) --> TrackModel.automation
                                           | rebuildSnapshotLocked()
                                           v
                                    automationNodes(): beats -> samples
@@ -223,19 +222,22 @@ so exports are aligned.
 
 ## Overrides (engine side)
 
-The engine has no notion of an override. The bridge
-([audio/engine_bridge/parameters.py](../../src/substation/audio/engine_bridge/parameters.py)) does it:
+The engine has no notion of an override. The application layer's engine bridge
+([app/src/audio/BridgeParameters.cpp](../../app/src/audio/BridgeParameters.cpp); see
+[app/engine-bridge.md](../app/engine-bridge.md)) does it:
 
-- `override_automation(owner, key)`: when an automated target is changed by hand (a knob, a fader, a plug-in's own
-  editor, a chain's fader, a send knob), its `(owner, key)` goes into `_overridden` and `_push_automation()` sends
-  the owner's lanes again *without* that one.
-- `_push_automation()` sends every envelope with points that isn't overridden, remembers which keys play
-  (`_automating`), and for keys that stopped playing calls `_push_own_value()`: the model's own value of the target
-  counts again (a device parameter is set back; the mixer is pushed again). Sends and chain faders keep the level
-  the engine already has.
-- `re_enable_automation(owner=None)` clears the overrides (everywhere or for one owner) and pushes again.
-- `is_automated()` and `is_overridden()` drive the red dots and the grey envelopes in the UI.
-- A send automated before it was set is made, silent, so that its automation plays.
+- `EngineBridge::overrideAutomation(owner, key)`: when an automated target is changed by hand (a knob, a fader, a
+  plug-in's own editor, a chain's fader, a send knob), its `(owner, key)` goes into the bridge's `overridden` set and
+  `pushAutomation()` sends the owner's lanes again *without* that one.
+- `pushAutomation()` sends every envelope with points that isn't overridden (`engineLane()` turns each key into an
+  `AutomationLaneDesc`), remembers which keys play (`automating`), and for keys that stopped playing calls
+  `pushOwnValue()`: the model's own value of the target counts again (a device parameter is set back; the mixer is
+  pushed again). Sends and chain faders keep the level the engine already has.
+- `reEnableAutomation(owner)` clears the overrides (everywhere, with no owner, or for one owner) and pushes again.
+- `isAutomated()` and `isOverridden()` drive the red dots and the grey envelopes in the UI
+  (`automationStateChanged(owner)` tells it when they change).
+- A send automated before it was set is made, silent, so that its automation plays (`onAutomationChanged()` pushes
+  the owner's sends first).
 
 The playing side needs nothing for this: a target without a lane falls back to its atomic value, and the fader and
 send smoothing carry on from the last automated value.
@@ -248,18 +250,21 @@ send smoothing carry on from the last automated value.
   When the user drags a device to another track, the model moves its lanes to that track, and the bridge sends both
   tracks' automation again.
 - A chain's volume and pan are automated on the rack's processor id (`chain:<chain id>:volume` / `:pan`), in time
-  with the latency before them. The model describes them as `ParamSpec`s with `chain_specs()` (*Chain Volume*,
+  with the latency before them. The model describes them as `ParamSpec`s with `chainSpecs()` (*Chain Volume*,
   *Chain Pan* under the rack in a lane's device chooser).
 - **Macros are not engine parameters.** The engine's `RackProcessor` ([Rack.h](../../engine/src/Rack.h)) has no
-  parameters. A rack's eight macros (`macro1`..`macro8`) live in the model (`Device.params` of the rack and its
+  parameters. A rack's eight macros (`macro1`..`macro8`) live in the model (`Device::params` of the rack and its
   `MacroMapping`s); turning one sets the mapped parameters through the editor, as one undo step. The bridge offers
-  only a rack's chain faders for automation (`device_param_specs()`), so macros themselves can't be automated today.
+  only a rack's chain faders for automation (`EngineBridge::deviceParamSpecs()`), so macros themselves can't be
+  automated today.
 
 ## The mixer's control names
 
 The mixer is `processorId` 0 with a name: `volume`, `pan`, `send:<engine track id>`. More (mute, say) would be more
-names: a branch in `buildAutomationLocked()` and a target in `StripRender`, plus a `ParamSpec` in
-`model/params.py` `mixer_specs()` and a key in `model/automation.py`.
+names: a branch in `buildAutomationLocked()` and a target in `StripRender`, plus, in the application layer, a
+`ParamSpec` in `mixerSpecs()` ([ParamSpec.h](../../app/src/model/ParamSpec.h)), a key in
+[Automation.h](../../app/src/model/Automation.h) (`automation::kMixerKeys`) and its lane in
+`EngineBridge::engineLane()`.
 
 ## Invariants and real-time rules
 
@@ -282,7 +287,8 @@ names: a branch in `buildAutomationLocked()` and a target in `StripRender`, plus
 
 ## Gotchas
 
-- The Python and C++ curve maths must stay identical: `automationShape` and `model/automation.py` `shape()`.
+- The engine's and the application layer's curve maths must stay identical: `automationShape()` and
+  `automation::shape()` ([app/src/model/Automation.h](../../app/src/model/Automation.h)).
 - `ParamInfo::isLog()` silently ignores `logScale` on a range that starts at or below 0.
 - A VST3 parameter queue (`HostParamQueue`) holds 16 points per block; when full, the latest value replaces the last
   point. With 64-sample steps a 1024-sample block fits.
@@ -293,20 +299,21 @@ names: a branch in `buildAutomationLocked()` and a target in `StripRender`, plus
 
 ## Tests
 
-- [tests/test_automation_engine.py](../../tests/test_automation_engine.py): volume and pan (tracks and master) sample
-  by sample, a volume lane replacing the fader until removed, mute over automation, curves, device parameters split
-  exactly where they change, discrete parameters in whole steps, envelopes of missing devices or parameters
-  ignored, following tempo, and the normalized mapping.
-- [tests/test_automation_model.py](../../tests/test_automation_model.py): the model's curve and volume law against the
-  engine's, and device parameters mapping as the engine does.
-- [tests/test_sends_engine.py](../../tests/test_sends_engine.py): send automation in time.
-- [tests/test_racks_engine.py](../../tests/test_racks_engine.py): automation of a nested device and of a chain's fader
-  in time behind latent devices.
-- [tests/test_sidechain_engine.py](../../tests/test_sidechain_engine.py): a device after one that waits for its
-  sidechain keeps its automation in time.
-- [tests/test_vst3_engine.py](../../tests/test_vst3_engine.py): automation reaching the plug-in and its controller,
-  and the master's device automation in time.
-- [tests/test_ui_automation.py](../../tests/test_ui_automation.py): overriding and re-enabling, controls following
-  automation.
+- [tests/engine/test_automation_engine.cpp](../../tests/engine/test_automation_engine.cpp): volume and pan (tracks
+  and master) sample by sample, a volume lane replacing the fader until removed, mute over automation, curves, device
+  parameters split exactly where they change, discrete parameters in whole steps, envelopes of missing devices or
+  parameters ignored, following tempo, and the normalized mapping.
+- [tests/app/test_automation_model.cpp](../../tests/app/test_automation_model.cpp): the application layer's curve and
+  volume law against the engine's, and device parameters mapping as the engine does.
+- [tests/engine/test_sends_engine.cpp](../../tests/engine/test_sends_engine.cpp): send automation in time.
+- [tests/engine/test_racks_engine.cpp](../../tests/engine/test_racks_engine.cpp): automation of a nested device and of
+  a chain's fader in time behind latent devices.
+- [tests/engine/test_sidechain_engine.cpp](../../tests/engine/test_sidechain_engine.cpp): a device after one that waits
+  for its sidechain keeps its automation in time.
+- [tests/engine/test_vst3_engine.cpp](../../tests/engine/test_vst3_engine.cpp): automation reaching the plug-in and its
+  controller, and the master's device automation in time.
+- [tests/app/test_ui_arrangement_automation.cpp](../../tests/app/test_ui_arrangement_automation.cpp) and
+  [tests/app/test_bridge_tracks.cpp](../../tests/app/test_bridge_tracks.cpp): overriding and re-enabling, controls
+  following automation, a send's level changed by hand overriding its envelope.
 
 See [testing.md](../testing.md) for the whole suite.

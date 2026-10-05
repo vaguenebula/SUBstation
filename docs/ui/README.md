@@ -1,441 +1,514 @@
 # UI overview
 
-The UI is PySide6 (Qt 6) code in [src/substation/ui](../../src/substation/ui), plus the
-look in [theme.py](../../src/substation/theme.py). Nearly everything that shows time
-(the ruler, the lanes, the piano roll, envelopes, waveforms) is custom-painted with
-`QPainter`; the rest is ordinary Qt widgets styled by one stylesheet. This page covers
-the main window and the small parts every view shares; the big views have pages of
+The UI is Qt Quick: QML in [ui/qml](../../ui/qml) lays out and styles everything, and C++ scene-graph items in
+[ui/src](../../ui/src) draw what shows time (the ruler, the lanes, the piano roll, envelopes, waveforms, meters,
+the device editors' curves) on the GPU. Together they are the QML module `SUBstation` (the static library `sub_ui`);
+the standard controls' look is a Qt Quick Controls style of its own, `SUBstation.Style` ([ui/style](../../ui/style)).
+The UI holds no project state: it shows the application layer ([app/src](../../app/src)) and calls it. This page
+covers how the UI is put together, the main window and the parts every view shares; the big views have pages of
 their own (see [the map](#the-other-ui-pages)).
 
-For what the user sees and does, read the [user guide](../guide/README.md); this page is
-about how the code does it.
+For what the user sees and does, read the [user guide](../guide/README.md); this page is about how the code does it.
 
 ## Files
 
-| File | What it holds |
+| Where | What it holds |
 |---|---|
-| [main_window.py](../../src/substation/ui/main_window.py) | `MainWindow`: builds the model, undo stack, editor, selection and bridge; lays out the panes; every menu action and shortcut; transport, recording, files, export, recent projects |
-| [../theme.py](../../src/substation/theme.py) | colours (as module constants), `ui_font()`, `MONO_FONT`, the Fusion style, palette and `STYLESHEET`; `apply(app)` |
-| [icons.py](../../src/substation/ui/icons.py) | vector icons drawn with `QPainter` at 64 px, cached (`functools.cache`), with a disabled variant |
-| [widgets/](../../src/substation/ui/widgets) | `Knob`, `ValueBox`, `MeterWidget`, `Oscilloscope`, `ToggleButton` |
-| [transport_bar.py](../../src/substation/ui/transport_bar.py) | `TransportBar`: tempo, time signature, metronome, project key, computer keyboard button, position, play/stop/record, count-in, Re-Enable Automation, Lock Envelopes, oscilloscope, loop, follow, CPU, device status |
-| [dialogs.py](../../src/substation/ui/dialogs.py) | `PreferencesDialog` (Audio tab), `MidiPage`, `PluginsPage`, `ExportDialog`; `output_choices()` |
-| [rendering.py](../../src/substation/ui/rendering.py) | `RenderProgress`: a render in the background's progress dialog, with Cancel; `active()` |
-| [freezing.py](../../src/substation/ui/freezing.py) | freezing (in the background), unfreezing and flattening the selected tracks |
-| [computer_keyboard.py](../../src/substation/ui/computer_keyboard.py) | `ComputerKeyboard`: letter keys as a MIDI input, through an application event filter |
-| [plugin_keys.py](../../src/substation/ui/plugin_keys.py) | `PluginEditorShortcuts`: the main window's shortcuts while a plug-in's (Win32) editor has the focus |
-| [arrangement/](../../src/substation/ui/arrangement) | the arrangement view: [arrangement.md](arrangement.md) |
-| [piano_roll/](../../src/substation/ui/piano_roll) | the MIDI clip editor: [piano-roll.md](piano-roll.md) |
-| [device_panel/](../../src/substation/ui/device_panel), [rack_view.py](../../src/substation/ui/rack_view.py), [device_editors/](../../src/substation/ui/device_editors), [clip_view.py](../../src/substation/ui/clip_view.py) | the device view and the clip view: [device-view.md](device-view.md) |
-| [browser/](../../src/substation/ui/browser) | the browser panel: [browser.md](../browser.md) |
+| [ui/main.cpp](../../ui/main.cpp) | The `substation` executable: makes the `sub::Engine`, the `sub::app::Session` on it, registers the session for QML, loads `Main.qml`, starts audio and opens the project given on the command line (both on the next turn of the event loop), and shuts the session down after the event loop. |
+| [ui/src/Ui.h](../../ui/src/Ui.h) | `setUpApplication()` (the style, the UI font, the palette, the window icon) and `setUpEngine(QQmlEngine&)` (the import path, the icon provider). |
+| [ui/src/app/](../../ui/src/app) | `AppTypes`: `registerSession()` makes the session the `Session` singleton and registers the application layer's types QML sees (uncreatable). |
+| [ui/src/sg/](../../ui/src/sg) | The scene-graph toolkit: `SgCanvas`, `SgPainter`, `SgTextureCache` ([below](#the-scene-graph-toolkit)). |
+| [ui/src/theme/](../../ui/src/theme) | `Theme` (every colour, the fonts, the metrics, the buttons' looks) and `Icons` (vector icons, and the `image://icons` provider). |
+| [ui/src/controls/](../../ui/src/controls) | `KnobItem`, `ValueBoxItem`, `Meter`, `OscilloscopeItem`, `DragCursor`. |
+| [ui/src/timeline/](../../ui/src/timeline) | `timeline::Timeline` (zoom, scroll, the adaptive grid), `gridLines()`, `labelStep()`, `drawGrid()`, `drawLoopRegion()`: the arrangement's and the piano roll's time axis. |
+| [ui/src/mainwindow/](../../ui/src/mainwindow) | `TransportState` (what the transport bar works out), `WindowState` (the window's place and splitters), `FileUrls` (paths and the file dialogs' URLs), `OutsidePresses`, `PagedRows`, `FolderTreeModel` (the browser panel's helpers). |
+| [ui/src/platform/](../../ui/src/platform) | `PluginEditorKeys`: the window's shortcuts while a plug-in's editor has the focus (Windows). |
+| [ui/src/arrangement/](../../ui/src/arrangement), [ui/qml/arrangement/](../../ui/qml/arrangement) | The arrangement view: [arrangement.md](arrangement.md). |
+| [ui/src/pianoroll/](../../ui/src/pianoroll), [ui/qml/pianoroll/](../../ui/qml/pianoroll), [ui/qml/clipview/](../../ui/qml/clipview) | The piano roll and the clip view: [piano-roll.md](piano-roll.md). |
+| [ui/src/devices/](../../ui/src/devices), [ui/qml/devices/](../../ui/qml/devices) | The device view and the built-in devices' editors: [device-view.md](device-view.md). |
+| [ui/qml/browser/](../../ui/qml/browser) | The browser panel: [browser.md](../browser.md). |
+| [ui/qml/Main.qml](../../ui/qml/Main.qml) | The main window ([below](#the-main-window)). |
+| [ui/qml/transport/](../../ui/qml/transport) | `TransportBar.qml`. |
+| [ui/qml/dialogs/](../../ui/qml/dialogs) | Preferences (`PreferencesDialog`, `AudioPage`, `MidiPage`, `PluginsPage`), `ExportDialog`, `RenderDialog`, `AboutDialog`, `UnsavedChangesDialog`, and what they share: `MessageBox`, `ChoiceBox`. |
+| [ui/qml/](../../ui/qml) (top level) | The shared controls: `Knob`, `ValueBox`, `Oscilloscope`, `RoleButton`, `ToggleButton`, `IconButton`, `Icon`, `ButtonBackground`, `ButtonContent`; `Placeholder`. |
+| [ui/style/](../../ui/style) | The style: `ApplicationWindow`, `Button`, `CheckBox`, `ComboBox`, `Dialog`, `DialogButtonBox`, `Frame`, `GroupBox`, `ItemDelegate`, `Label`, `Menu`, `MenuBar`, `MenuBarItem`, `MenuItem`, `MenuSeparator`, `Pane`, `Popup`, `ProgressBar`, `ScrollBar`, `ScrollIndicator`, `SplitView`, `TabBar`, `TabButton`, `TextField`, `ToolButton`, `ToolTip`; the Basic style for the rest. |
+
+Every QML file is part of the module `SUBstation`, so its type name is its file name, unique across folders. A QML
+file starting with `pragma Singleton` is registered as a singleton (`DeviceEditors`, `EqWindows`). C++ items are
+registered with `QML_ELEMENT` (`QML_SINGLETON` for `Theme`, `Icons`, `FileUrls`, `EqView`). Sources and QML files are
+globbed ([ui/CMakeLists.txt](../../ui/CMakeLists.txt)): a new one is picked up by the next build. Every folder under
+`ui/src` is an include directory, because Qt's QML registration includes each item's header by its bare name.
 
 ## How the UI talks to the rest
 
 ```
    user input
        │
-       ▼
-  widget (header, lanes, device view, ...)
-       │ calls                         reads (never writes)
-       ▼                                     │
-  ProjectEditor (model/editor/)   ──► QUndoCommand ──► Project ──► Qt signals ──┐
-                                                                                 │
-       ┌───────────────────────── repaint / refresh ◄────────────────────────────┤
-       │                                                                         ▼
-  widgets                                             EngineBridge (audio/engine_bridge/)
-       ▲                                                         │ substation._engine
-       │  position_changed (16 ms), meters_updated (33 ms),       ▼
-       └─ automation_state_changed, plugin_* signals, ...  ◄──  Engine
+       ├──────────────────────────────┐
+       ▼                              ▼
+  QML (layout, bindings)        C++ items (ui/src, SgCanvas subclasses)
+       │ Session.editor.setTempo(...)  │ session()->editor()->moveRange(...)
+       │ Session.togglePlay() ...      │ session()->selection(), ->bridge() ...
+       ▼                              ▼
+  Session (app/src/session) ─ ProjectEditor ─► QUndoCommand ─► Project ─► Qt signals ─┐
+       │                                                                              │
+       └─ EngineBridge (app/src/audio) ─► sub::Engine (engine/src)                    │
+             positionChanged (16 ms), metersUpdated (33 ms),                          │
+             automationStateChanged, plugin*, sourceReady ... ────────────────────────┤
+                                                                                      ▼
+                                   QML bindings re-evaluate, items update() and repaint
 ```
 
-- **Edits go through the editor.** A widget never changes the `Project` itself: it calls
-  a `ProjectEditor` method (`set_track_param`, `move_range`, `set_clip_notes`,
-  `set_device_param`, ...). The editor pushes a `QUndoCommand`; the command mutates the
-  project; the project emits a signal (`clips_changed`, `track_changed`,
-  `devices_changed`, `automation_changed`, `automation_view_changed`, `settings_changed`,
-  `reset`, ...); widgets repaint from the signal. See [python/model.md](../python/model.md)
-  and the life of an edit in [architecture.md](../architecture.md#the-life-of-an-edit).
-- **Continuous gestures are one undo step.** `Knob.valueChanged` and
-  `ValueBox.valueChanged` carry `(value, gesture key)`: every value of one drag (or a
-  run of wheel notches less than 0.6 s apart, in a `ValueBox`) shares a key object, and
-  the widget passes it to the editor as `merge_key`. Gestures in the lanes and the piano
-  roll do the same with their own key (often the gesture object itself).
-- **View state skips undo.** Track heights, folding, which automation lanes show, the
-  zoom and the scroll change the project (or `ViewState`) directly.
-- **The engine is read through the bridge.** Widgets ask the `EngineBridge` for what
-  only the engine knows: `position`, `is_playing`, `meters`, `chain_meters`,
-  `live_takes`, decoded `source(path)` and `load_error(path)`, parameter metadata
-  (`param_spec`, `param_groups`, `can_automate`), automation state (`is_automated`,
-  `is_overridden`, `current_value`, `own_value`), plug-in editors
-  (`open_plugin_editor`, `request_plugin_editor`, `show_plugin_editors`). Some views use
-  `bridge.engine` directly for reads (`processor_params`, `processor_param`,
-  `read_processor_display`, `master_scope`, `cpu_load`, `device_status`). The bridge
-  polls the playhead every 16 ms and the meters every 33 ms and emits
-  `position_changed` and `meters_updated`; the UI never waits on the audio thread. See
-  [python/engine-bridge.md](../python/engine-bridge.md).
-- **Some actions talk to the bridge, not the editor**: transport (`play`, `stop`,
-  `locate`, `start_recording`), the metronome, previews (`preview_note`, `send_midi`),
-  re-enabling automation, opening devices. They aren't project edits.
-- **Status text.** The bridge, the browser, the arrangement and the device view each
-  have a `status_message(str)` signal; `MainWindow.show_message` shows it in the status
-  bar for 8 seconds.
+- **QML reaches the application through the `Session` singleton** (`import SUBstation`): `Session.project`,
+  `Session.undoStack`, `Session.editor`, `Session.selection`, `Session.bridge`, `Session.browser`,
+  `Session.plugins`, and the session's parts (`arrangement`, `deviceSelection`, `render`, `computerKeyboard`,
+  `audioPreferences`, `midiPreferences`). It reads their properties and calls their `Q_INVOKABLE`s: what the
+  session is and does is in [app/session.md](../app/session.md). `registerSession()` in
+  [AppTypes.cpp](../../ui/src/app/AppTypes.cpp) registers each of their types as uncreatable ("made by the
+  session"); a new application-layer type that QML uses is registered there too.
+- **C++ items take the session as a property** (`Q_PROPERTY(sub::app::Session* session ...)`, set from QML as
+  `session: Session`). They read the model and call the editor, the selection and the bridge in C++: that is where
+  mouse gestures live (an item's mouse, hover, wheel and key handlers). Views with state of their own share it in a
+  plain `QObject` the items point to: `Arrangement` for the arrangement's items, `PianoRoll` for the piano roll's.
+- **Edits go through the editor.** Nothing in the UI changes the `Project` itself: it calls a `ProjectEditor`
+  method (`setTrackParam`, `moveRange`, `setClipNotes`, `setDeviceParam`, ...), or the session's or a part's
+  action. The editor pushes a `QUndoCommand`; the command changes the project; the project emits a signal
+  (`clipsChanged`, `trackChanged`, `devicesChanged`, `automationChanged`, `automationViewChanged`,
+  `settingsChanged`, `reset`, ...); the UI repaints from it. See [app/model.md](../app/model.md) and the life of an
+  edit in [architecture.md](../architecture.md).
+- **No editing logic in QML.** What an action does, which tracks a gesture affects, what a menu holds: C++ (the
+  item, or the application layer if it isn't about the view). QML is layout, styling, bindings and calls. Menus
+  that depend on the state are worked out in C++ as entries and shown by QML (`MenuEntries` and
+  `ArrangementMenu.qml`, [arrangement.md](arrangement.md#menus)).
+- **Continuous gestures are one undo step.** `Knob` and `ValueBox` emit `moved(value, gestureKey)`: every value of
+  one drag (or a run of wheel notches less than 0.6 s apart, in a `ValueBox`) shares a key, a fresh
+  `QUuid` string (`newGestureKey()`), and QML passes it to the editor as the merge key. The items' gestures do the
+  same with a key of their own.
+- **View state skips undo.** Track heights, folding and which automation lanes show change the project without an
+  undo step (they are saved); the zoom and the scroll are the views' own (`Arrangement`, `PianoRoll`) and not saved.
+- **Never the engine.** The UI may not include the engine's headers (`ctest -R boundaries` checks it, see
+  [building.md](../building.md#the-layers-boundaries)). What only the engine knows comes through the application
+  layer's types, whose headers don't include it: the bridge's `position`, `playing`, `meters()`, `chainMeters()`,
+  `liveTakes()`, `waveform(path)` (a `Waveform`: frames, channels, peaks), `loadError(path)`, parameter metadata
+  (`paramSpec`, `paramGroups`, `canAutomate`, `deviceParams`), automation state (`isAutomated`, `isOverridden`,
+  `currentValue`, `ownValue`), processor displays (`readProcessorDisplay`), the scope (`scopeWritten`,
+  `scopeSamples`), `cpuLoad`, `deviceStatus`. The bridge polls the playhead every 16 ms and the meters every 33 ms
+  and emits `positionChanged` and `metersUpdated`; the UI never waits on the audio thread. See
+  [app/engine-bridge.md](../app/engine-bridge.md).
+- **Status text.** The session forwards what the bridge, the browser, the plug-in index, the arrangement's and the
+  device view's actions, the computer keyboard and the editor's refusals (`refused`) say, as
+  `Session.statusMessage`; the views' own `statusMessage` signals (the arrangement view, the device panel, the clip
+  view) reach the main window directly. `Main.qml`'s `showMessage()` shows a message for `Session.statusTimeout`
+  (8000 ms). What were message boxes come as `Session.warning` and `Session.information`.
 
-## MainWindow
+## The main window
 
-`MainWindow(engine)` is made by [app.py](../../src/substation/app.py) after
-`theme.apply(app)`; `app.py` then shows it and calls `start_audio()` on the next turn of
-the event loop.
+[Main.qml](../../ui/qml/Main.qml) is an `ApplicationWindow` (1440 × 860 at first):
 
-The constructor owns the shared objects and hands them to the views:
+```
+┌───────────────────────────────────────────────────────────────────┐
+│ menu bar                                                          │
+│ TransportBar (header)                                             │
+├────────────┬──────────────────────────────────────────────────────┤
+│ Browser-   │ ArrangementView   (or the ClipView covering it)      │
+│ Panel      │                                                      │
+│ (300 px,   ├──────────────────────────────────────────────────────┤
+│  min 120)  │ DevicePanel (as tall as its tallest device needs)    │
+├────────────┴──────────────────────────────────────────────────────┤
+│ status line                        Loading plug-ins: 3 of 12 ▓▓░  │
+└───────────────────────────────────────────────────────────────────┘
+```
 
-| Object | Kind | Shared with |
-|---|---|---|
-| `project` | `Project` | everything (through the editor) |
-| `undo_stack` | `QUndoStack` | the editor; Edit › Undo/Redo; the title's `*` |
-| `editor` | `ProjectEditor` | every view |
-| `selection` | `Selection` ([view_state.py](../../src/substation/ui/arrangement/view_state.py)) | arrangement, device view, piano roll |
-| `bridge` | `EngineBridge` | every view |
+The body is a horizontal `SplitView` (`splitter`) of the browser and, on the right, a vertical `SplitView` (`right`)
+of the arrangement area over the device view. The arrangement area holds the `ArrangementView` and the `ClipView`
+on top of each other: clips open in the clip view (a double-click, Shift+Tab, a new MIDI clip:
+`Session.arrangement.clipViewRequested`) cover the arrangement until Esc, × or Shift+Tab go back
+(`arrangementArea.closeClipView()`, which gives the lanes the keyboard again). The device view's height is fixed
+to its `implicitHeight`. View › Browser (Ctrl+Alt+B) and View › Device View (Ctrl+Alt+L) show and hide them.
 
-Layout: the `TransportBar` on top; below it a horizontal splitter with the
-`BrowserPanel` on the left and, on the right, a vertical splitter of the
-`ArrangementView` over the `DevicePanel`. The window geometry and the outer splitter's
-state are saved in `QSettings` (`window/geometry`, `window/splitter`).
+The window reaches the views only through their interfaces, each call guarded (a `Placeholder` standing in for a
+view has none): the arrangement's `zoom(factor)`, `zoomToArrangement()`, `narrowGrid()`, `widenGrid()`,
+`openClipView()`, `renameTrack(trackId)`, `focusLanes()`, `snap`, `follow`, `gridStep`, `gridLevel`; the device
+panel's `startChainRename(rackId, chainId)` and `focusDevices()`; the browser panel's `startRename(path)` and
+`listFocused`.
 
-Wiring done here:
+### Menus and actions
 
-- `selection.changed` → `bridge.show_plugin_editors(selection.track_id)`: only the
-  selected track's plug-in editors show. `editor.plugin_added` opens a new plug-in's
-  editor on the next event-loop turn (after the add and any drop finish).
-- `bridge.plugin_param_edited` → `editor.set_device_param(..., merge_key=("plugin edit",
-  device_id, param_id, gesture), old=...)`: knob drags in a plug-in's own editor become
-  undo steps, one per gesture. `plugin_param_touched` → `editor.touch_parameter` (shows
-  its automation). `plugin_state_dirty` → `undo_stack.resetClean()` (the project shows
-  as changed).
-- `editor.set_param_info(bridge.device_param_info)` and
-  `editor.set_own_value(bridge.own_value)`: what the editor needs from the engine for
-  macros.
-- `bridge.takes_recorded` → `editor.add_recordings(takes, record_quantize())`, then
-  the new clips are selected.
+Every menu entry is an `Action` with an `objectName` (for the tests and `PluginEditorKeys`), and calls the session:
 
-### Actions and the focus
+| Menu | Entries (shortcut → what it calls) |
+|---|---|
+| File | New Project (Ctrl+N), Open… (Ctrl+O), Open Recent, Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export Audio… (Ctrl+Shift+R), Quit (Ctrl+Q) |
+| Edit | Undo (Ctrl+Z) and Redo (Ctrl+Y, Ctrl+Shift+Z) on `Session.undoStack`, their text following `undoText`/`redoText`; Cut, Copy, Paste, Duplicate (Ctrl+D), Rename (Ctrl+R), Split (Ctrl+E), Consolidate (Ctrl+J), Reverse Clips (R); Freeze / Unfreeze Track (Ctrl+Shift+F), Flatten Track, Delete (Del, Backspace), Select All (Ctrl+A); Re-Enable Automation (enabled while `Session.automationOverridden`), Solo Selected Tracks (S); Play / Stop (Space), Record (F9), Record Quantization (a checkable entry per `Session.recordQuantizeChoices`), Go to Start (Home), Loop (Ctrl+L), Find in Browser (Ctrl+F) |
+| Create | Insert Audio Track (Ctrl+T), Insert MIDI Track (Ctrl+Shift+T), Insert Return Track (Ctrl+Alt+T), Insert MIDI Clip (Ctrl+Shift+D, Ctrl+Shift+M: on the arrangement's grid when snapping), Group Tracks (Ctrl+G), Ungroup Tracks (Ctrl+Shift+G), Delete Selected Tracks |
+| View | Browser, Device View, Clip View (Shift+Tab), Automation (A: `editor.toggleAllAutomation()`), Close Plug-in Editor (Ctrl+W, Windows only), Zoom In (+, =), Zoom Out (-), Zoom to Arrangement (Z), Narrow Grid (Ctrl+1), Widen Grid (Ctrl+2), Snap to Grid (Ctrl+4) |
+| Options | Preferences… (Ctrl+,), Rescan Plug-ins, Computer MIDI Keyboard (M), Lock Envelopes |
+| Help | About SUBstation |
 
-Every shortcut is a `QAction` on the menu bar, made by `_action()`. Context menus show
-the same shortcuts with `setShortcutVisibleInContextMenu`, only as a tip: the window's
-action handles the key.
+An `Action` has one shortcut; the others (Ctrl+Shift+Z, Backspace, Ctrl+Shift+M, =, the platform's zoom keys) are
+`Shortcut`s that trigger the action. Checkable entries show the model's state: their `checked` is a binding to it
+(`Session.project.loopEnabled`, `Session.computerKeyboard.enabled`, ...), and a click asks for the change and then
+binds `checked` again, so the menu shows what the model made of it.
 
-Several actions mean different things depending on what the user is working on. That
-is `Selection.focus` (`"clips"`, `"track"`, `"devices"` or `"automation"`) plus what is
-selected:
+Context menus show the same shortcuts as hints only: the window's actions handle the keys.
 
-| Action | `focus == "devices"` | lane range with `lanes` | `points` | time range over tracks (clips and their automation) | `focus == "track"` |
+### What an action acts on
+
+Several Edit and Create commands mean different things depending on what the user is working on. The session
+decides (`Session.cut()`, `copy()`, `paste()`, `duplicate()`, `deleteSelection()`, `groupSelected()`,
+`ungroupSelected()`; [app/session.md](../app/session.md)), from `Selection.focus` (`Clips`, `Track`, `Devices`,
+`Automation`) and what is selected:
+
+| Command | focus `Devices` | lane range with `lanes` | `points` | time range over tracks (clips and their automation) | focus `Track` |
 |---|---|---|---|---|---|
-| Delete | `devices.delete_selected()` | `editor.delete_automation_range` | `editor.delete_automation_points` | `lanes.delete_area()` | `delete_track()` |
-| Cut / Copy | `devices.cut_selected()` / `copy_selected()` | `lanes.cut_automation()` / `copy_automation()` | refused, with a message | `lanes.cut_area()` / `copy_area()` | — |
-| Paste | `devices.paste()` | `lanes.paste()` (the arrangement keeps one clipboard for clips and automation) | | | |
-| Ctrl+D | `devices.duplicate_selected()` | `editor.duplicate_automation_range`, selects the copy | | `lanes.duplicate_area()` | `duplicate_tracks()` |
-| Ctrl+G / Ctrl+Shift+G | `devices.group_selected()` / `ungroup_selected()` | | | | `editor.group_tracks` / `editor.ungroup` |
-| R | | | | `lanes.reverse_selection()` (its audio clips) | |
+| Delete | `deviceSelection.deleteSelected()` | `editor.deleteAutomationRange` | `editor.deleteAutomationPoints` | `arrangement.deleteArea()` | `deleteSelectedTracks()` |
+| Cut / Copy | `deviceSelection.cutSelected()` / `copySelected()` | `arrangement.cutAutomation()` / `copyAutomation()` | refused, with a message | `arrangement.cutArea()` / `copyArea()` | `arrangement.cutTracks()` / `copyTracks()` (not returns or the master) |
+| Paste | `deviceSelection.paste()` | `arrangement.paste()`: one clipboard for clips, automation and tracks | | | |
+| Ctrl+D | `deviceSelection.duplicateSelected()` | `editor.duplicateAutomationRange`, the copy selected | | `arrangement.duplicateArea()` | `arrangement.duplicateTracks()` |
+| Ctrl+G / Ctrl+Shift+G | `deviceSelection.groupSelected()` / `ungroupSelected()` | | | | `editor.groupTracks` / `editor.ungroup` |
+| R | | | | `arrangement.reverseSelection()` (its audio clips) | |
 
-The piano roll takes Delete, Ctrl+A, Ctrl+D and Ctrl+U before these actions fire (see
-[piano-roll.md](piano-roll.md#keys)).
+Ctrl+R asks `Session.renameTarget(browser.listFocused)` what to rename (the preset current in the browser's list
+while it has the focus, the rack chain last clicked in the device view, or the track last clicked) and starts the
+rename where it shows. The piano roll's note grid takes Delete, Backspace, Ctrl+A, Ctrl+D, Ctrl+U and the arrows
+before these actions fire while it has the focus (see [piano-roll.md](piano-roll.md#keys)), and the computer MIDI
+keyboard takes its letters while it is on ([below](#the-computer-midi-keyboard)).
 
 ### Transport
 
-- `toggle_play()` (Space): playing → `stop()` and `locate()` back to `_play_start`, as
-  Ableton does; stopped → `_play_start = selection.insert_beat`, locate, `play()`.
-- `stop_button()`: while playing, as above; stopped, locates to 0.
-- `toggle_record()` (F9): while recording, `stop_recording()` (punch out, playing goes
-  on). Otherwise records from the insert marker after the count-in
-  (`transport.count_in_beats()`) when stopped, or from the playhead with no count-in
-  while playing.
-- `locate(beat)` sets the insert marker, `_play_start` and the engine's position; the
-  rulers' `locate_requested` signals end up here.
+Play / Stop, Record, the stop button and the rulers' clicks call `Session.togglePlay()`, `toggleRecord()`, `stop()`
+and `locate(beat)`; the rules (back to where playback started, as Ableton does; recording from the insert marker
+after the count-in, or from the playhead while playing; punch out) are the session's. Go to Start is
+`Session.locate(0)`.
 
-### Files
+### Files and unsaved changes
 
-`new_project`, `open_project`, `save_project`, `save_project_as` and `_save_to` use
-[serialization](../python/serialization.md) (`load_project`, `save_project`). Before
-saving, `bridge.store_plugin_states()` asks every plug-in for its state. Discarding
-unsaved changes asks first (`_confirm_discard`, from `undo_stack.isClean()`).
-`_reset_session()` stops, clears the undo stack, the selection and the insert marker.
+The session reads and writes projects ([app/serialization.md](../app/serialization.md)); the window asks the user
+what it needs:
 
-Recent projects are a list in `QSettings` (`files/recent`, at most 10, compared with
-`casefold()`); `files/last_dir` is the folder dialogs start in (the Music folder at
-first). `QSettings` gives a one-item list back as a plain string, which
-`recent_projects()` turns back into a list.
+- `confirmDiscard(then)`: before New, Open, Open Recent and Quit, if `Session.clean` is false, the
+  `UnsavedChangesDialog` asks `Session.confirmDiscardText` ("Save changes to the current project?": Save, Discard,
+  Cancel). Save saves first and goes on only if it worked; Discard goes on; Cancel (or Esc) stops.
+- Save calls `Session.saveProject()`. A project never saved makes the session emit `saveAsRequested`; the window
+  then shows the Save As dialog (starting at `Session.suggestedSavePath()`, `<last folder>/Untitled.gilproj`) and
+  calls `saveProjectAs(path)`, then runs what was waiting for the save.
+- Open… shows a `FileDialog` in `Session.lastFolder` (`files/last_dir`; ~/Music at first) filtered by
+  `Session.projectFilter`. Open Recent is filled as it opens, from `Session.recentMenuItems()` ("&1  song.gilproj",
+  the path as the tooltip; "No Recent Projects" when empty, and Clear List); a project whose file is gone is taken
+  off the list with a warning (`recentProjectAvailable`). The list is `files/recent` in `QSettings`, at most 10,
+  compared case-folded.
+- Closing the window (Quit, or its close button) first asks `Session.requestClose()`: a render running is cancelled
+  instead and the window stays. Then unsaved changes are asked about, and the window's state is saved.
+- A project opened shows all of it (`Session.projectOpened` → the arrangement's `zoomToArrangement()`). Its
+  plug-ins load after it ([app/engine-bridge.md](../app/engine-bridge.md)); the status line's right end says how far
+  they got (`Session.pluginsLoadingText`, "Loading plug-ins: 3 of 12", with a bar) until they all have.
+- File › Export Audio… shows the `ExportDialog`; its choice goes through `Session.exportProblem(range)` (an
+  information box if there is nothing to export), then a save dialog starting at `Session.suggestedExportPath()`,
+  then `Session.exportAudio(path, range, bitDepth)`.
 
-`export_audio()` shows the `ExportDialog` (range: the arrangement, or the loop if it is
-on and not empty; 16-bit, 24-bit or 32-bit float), stops playback, and renders in the
-background (`engine.start_export`) with its progress in a `RenderProgress` (see
-[Renders in the background](#renders-in-the-background)): "Exported …", "Export cancelled",
-or a message box saying why it failed.
-
-Opening a project shows it at once: its plug-ins load after it
-([engine-bridge.md](../python/engine-bridge.md#opening-a-project)), and the status bar's
-right end says how far they got ("Loading plug-ins: 3 of 12", with a bar) until they all
-have. The selected track's load first.
+Session warnings and informations queue in one `MessageBox`, shown one after another.
 
 ### Renders in the background
 
-Exporting and freezing (Ctrl+Shift+F, the track menus: [freezing.py](../../src/substation/ui/freezing.py))
-render on the engine's thread, a `RenderJob`
-([engine/README.md](../engine/README.md#in-the-background)), while a `RenderProgress`
-([rendering.py](../../src/substation/ui/rendering.py)) shows. It is application-modal: the
-window goes on (it repaints, its meters and timers run, plug-ins still waiting to load go on
-loading) but takes no edits, since the render is of the project as it was when it started.
-Used as a context manager:
+Exporting, freezing (Ctrl+Shift+F, the track menus) and reversing long clips render in the background on the
+engine's render job ([engine/README.md](../engine/README.md#in-the-background)); the session drives them as state
+machines (`session/Renders.h`, no nested event loops) and shows them in `Session.render` (a `RenderProgress`).
+[RenderDialog.qml](../../ui/qml/dialogs/RenderDialog.qml) shows while `render.active`: modal, its `title`, its
+`label` ("Freezing Bass (2 of 3)…"), a bar at `progress` or a busy bar while `busy` (plug-ins or samples still
+loading). The window goes on behind it (it repaints, its meters move, plug-ins waiting to load go on loading) but
+takes no edits, its shortcuts included, since the render is of the project as it was when it started. Cancel (the
+button or Esc) calls `render.cancel()`: the label says "Cancelling…", Cancel is disabled, and the dialog goes once
+the render has stopped. Cancel never takes the keyboard focus, so Space doesn't cancel. When the dialog closes the
+window takes the keyboard again.
 
-- `wait_for_devices(bridge)`: a busy bar ("Loading plug-ins (3 to go)…") until
-  `bridge.devices_ready()`;
-- `follow(job, label, (i, n))`: the bar at part `i` of `n` as the job goes, until it ends;
-  the caller then finishes it (`job.finish()`, `bridge.finish_freeze()`): None is cancelled.
-- Cancel (the button, Esc, the close button) only sets `cancelled`: the job is cancelled at
-  the next poll (every 30 ms) and the dialog stays until its caller is done. The button takes
-  no focus, so Space doesn't cancel.
-- Freezing several tracks renders them one after another in the same dialog ("Freezing Bass
-  (2 of 3)…"); cancelled or failed, the renders done are deleted (`discard_freeze`) and
-  nothing is frozen (no undo step).
-- Closing the main window while a render runs cancels the render instead
-  (`rendering.active()`); the window stays.
-- Each poll runs a local `QEventLoop` (`_spin`), so the callers read as straight code.
+### Status line
 
-### Audio start-up
+The footer: a 22 px `PANEL` strip with a `BORDER` line above, the message in `TEXT_DIM` ("Ready" at first, cleared
+after `statusTimeout`), and at its right the plug-ins loading, shown while `Session.pluginsTotal` > 0.
 
-`start_audio()` applies the audio thread count, opens the MIDI inputs and opens the
-saved device (`AudioSettings.load()`). If that fails it tries the device's own
-settings (rate, buffer and channels left to the driver), then the system default
-output, and says which in the status bar. See
-[python/engine-bridge.md](../python/engine-bridge.md).
+### Window state
 
-## Theme
+[WindowState](../../ui/src/mainwindow/WindowState.h) keeps the window between runs in `QSettings`:
 
-[theme.py](../../src/substation/theme.py) sits beside `ui/`, not in it.
-`theme.apply(app)` sets the Fusion style, `ui_font()` (Segoe UI, 9 pt), a dark palette
-and `STYLESHEET`.
+| Key | What |
+|---|---|
+| `window/geometry` | The window's normal geometry (as last seen neither maximized nor full screen) and whether it was maximized. A saved place no screen shows any more is moved onto the primary screen. |
+| `window/splitter` | The browser's split (`SplitView.saveState()`). |
+| `window/device_splitter` | The arrangement's over the device view. |
 
-- Colours are module constants (`WINDOW`, `PANEL`, `SURFACE`, `ACCENT`, `LANE`,
-  `GRID_BAR`, `PLAYHEAD`, `KEY_WHITE`, `METER_LOW`, `SCOPE_LINE`, ...), hex strings or
-  `QColor`s with alpha. Painting code uses them directly (`QColor(theme.LANE)`).
-- Buttons are coloured by a dynamic property, `role`: the stylesheet has rules for
-  `QPushButton[role="activator"]`, `"solo"`, `"play"`, `"record"`, `"arm"`,
-  `"re-enable"`, `"tool"`, `"flat"`, `"small"` and `"device-header"`. `ToggleButton`
-  takes `role=` in its constructor.
-- A stylesheet is slow to apply. Code that changes a widget's colour often checks
-  first whether it changed (`SendControls.refresh` keeps the colour in a
-  `sendColor` property).
+They are restored when the window is made and saved when it closes. What a widget version of the program saved
+under those keys (`QWidget::saveGeometry`'s bytes, a `QSplitter`'s state) is ignored: the window starts at its
+default size.
 
-## Icons
+## The scene-graph toolkit
 
-[icons.py](../../src/substation/ui/icons.py) draws each icon on a 64 px transparent
-pixmap with antialiasing, once in its colour and once in `TEXT_DISABLED` for the
-disabled mode, so icons stay sharp at any scale. Each function is `@cache`d by its
-arguments. `lock_envelopes()` has On and Off states (a closed and an open padlock);
-`fold(folded)` points right while folded, down while open. Add an icon by writing a
-`draw(p, colour)` function and returning `_icon(draw, colour)`.
+Everything that draws time is an [SgCanvas](../../ui/src/sg/SgCanvas.h): a `QQuickItem` whose subclass implements
+`paint(SgPainter&)` the way a widget implemented `paintEvent` with a `QPainter`, and calls `update()` when it must
+be drawn again. `updatePaintNode()` runs `paint()` and turns what it drew into scene-graph nodes, reusing the last
+frame's nodes and buffers.
 
-## Widgets
+- **Threading.** `paint()` runs on the scene graph's render thread, during the sync step, while the GUI thread is
+  blocked. It may read anything (the item's state, the application layer's models) but must change nothing: no
+  property writes, no signals, no JavaScript, no `QObject`s made. What to draw is worked out on the GUI thread (in
+  setters, slots, `updatePolish()`) and kept in members; `paint()` only reads them. The arrangement's lanes, for
+  instance, work out the envelopes showing and how each looks (`EnvelopeLook`, from the bridge) in
+  `updatePolish()`. The one exception is the arrangement's `WaveformCache`, which makes tiles as they are first
+  drawn, behind a mutex.
+- **Batching.** [SgPainter](../../ui/src/sg/SgPainter.h) records solid geometry (rects, lines, polygons, arcs,
+  waveform columns) into as few vertex-coloured triangle nodes as it can, and text and images as textured nodes
+  between them, in paint order. A frame whose vertices didn't change uploads nothing. Tens of thousands of rects a
+  frame are fine (`test_ui_sg.cpp` benchmarks an arrangement's worth).
+- **The 65532-vertex split.** The scene graph's renderer silently draws nothing of a node with more than 65535
+  vertices (an EQ's two dozen curves made one). `SgPainter` closes a solid batch at `kMaxSolidVertices` (65532, a
+  whole number of rects and triangles) and goes on in a new node.
+- **Text and images** are textures from the window's [SgTextureCache](../../ui/src/sg/SgTextureCache.h): a text is
+  rendered with `QPainter` once per (text, font, colour, layout, device pixel ratio), an image once per
+  `QImage::cacheKey()`; at most 4096 entries and 64 MB, least recently used first out. An entry stays alive while a
+  node still draws it, and the whole cache goes when the window's scene graph is invalidated. `drawText(rect,
+  flags, ...)` clips to the rect unless `Qt::TextDontClip`, as `QPainter` does.
+- **Clipping** is `SgPainter::setClipRect` (rectangles, intersected; done on the CPU, so it never splits a batch).
+  Don't set QML's `clip: true` on a canvas: it breaks batching.
+- **Differences from `QPainter`**: no pen or brush state (each call takes its colour, a pen's width and cap);
+  antialiasing is state (`setAntialiasing`, off by default) and feathers edges with a 1-pixel ramp; transforms are
+  translations only; `drawArc` takes degrees (0 at 3 o'clock, counter-clockwise). Without antialiasing, lines and
+  outlines land on whole pixels as `QPainter`'s aliased drawing puts them, so pixel-exact `QPainter` code looks the
+  same; `fillRect`, `fillColumns` and `fillToBaseline` are never antialiased.
+- **Per-frame things are items of their own.** Everything an item draws is drawn again when it repaints, so what
+  changes every frame sits in a separate item above (or below) the static part: the playhead
+  (`ArrangementPlayhead`, `RollPlayhead`), the takes being recorded (`LiveTakes`), meters. Following playback then
+  redraws a line, not the lanes.
 
-| Widget | File | Notes |
+`SgCanvas::lastStats()` says what the last frame drew (solid and texture nodes, vertices, paint and build time,
+nodes made): the tests read it.
+
+## Theme, style and icons
+
+[Theme](../../ui/src/theme/Theme.h) is the one source of every colour and font: `Theme::kLane` in C++,
+`Theme.lane` in QML (a `QML_SINGLETON`). Base colours (`kWindow`, `kPanel`, `kSurface`, `kBorder`, `kText`,
+`kTextDim`, `kAccent`, ...), the arrangement's (`kLane`, `kGridBar`, `kPlayhead`, `kInsertMarker`, `kSelection`,
+`kWaveform`, ...), the piano roll's (`kKeyWhite`, `kBlackKeyRow`, `kOutsideClip`, ...) and the controls'
+(`kActivatorOn`, `kSoloOn`, `kMeterLow`, `kScopeLine`, `kFrozen`, `kAutomationOn`, ...). Fonts: `uiFont(pt, bold)`
+(Segoe UI, 9 pt by default), `monoFont(pt)` (Consolas), and for QML `Theme.font`, `Theme.smallFont` (8 pt, the
+buttons with a role), `Theme.uiFont()`. Metrics: `radius` (3), `controlHeight` (28, the transport bar's boxes and
+buttons), `scrollBarWidth` (12), `iconSize` (14). `setUpApplication()` applies the font and a palette from these
+colours.
+
+Buttons are coloured by their **role**, as the old stylesheet's `QPushButton[role=...]` rules did:
+`Theme::buttonLook(role, hovered, pressed, checked, enabled)` (`Theme.buttonStyle(...)` in QML) works out the
+cascade for "" (plain), `activator`, `solo`, `play`, `record`, `arm`, `re-enable`, `tool`, `flat`, `small` and
+`device-header`: background, text colour, border, radius, padding, minimum size, point size and weight.
+
+The style ([ui/style](../../ui/style), module `SUBstation.Style`, selected by `setUpApplication()`) draws the
+standard controls (buttons, check boxes, combo boxes, menus, the menu bar, scroll bars, split views, tab bars, text
+fields, tool tips, dialogs, progress bars) as the old stylesheet did, from `Theme`; anything else falls back to the
+Basic style. A style `Button` is a `RoleButton` that takes the focus, as a dialog's buttons do.
+
+[Icons](../../ui/src/theme/Icons.h) are small vector drawings on a 64 × 64 grid, drawn with `QPainter` at the size
+asked for, so they stay sharp at any scale and pixel ratio: play, stop, record, metronome, loop, follow,
+re_enable_automation, lock_envelopes, headphones, folder, waveform, plugin, preset, plugin_window, sidechain,
+snowflake, save, link, infinity, expand, sliders, fold, search, app_icon. QML gets them from the image provider,
+`image://icons/<name>[?color=%23rrggbb][&state=on][&mode=disabled]` (`Icons.url()` builds it; `Icon { name; color;
+checked; size }` wraps it): `state=on` picks the On picture of `lock_envelopes` (closed) and `fold` (pointing right:
+folded), `mode=disabled` draws it in `kTextDisabled`. C++ items draw them with `Icons::image()` on the GUI thread
+and keep the image. Add an icon by adding its drawing to the table in [Icons.cpp](../../ui/src/theme/Icons.cpp).
+
+## Shared controls
+
+| Control | Where | Notes |
 |---|---|---|
-| `Knob` | [knob.py](../../src/substation/ui/widgets/knob.py) | Drag vertically (150 px for the whole range, 1000 px with Shift), wheel (1/50 of the range a notch, unless `wheel=False`), double-click resets to `default`. `log_scale` moves evenly in log(value) (if `minimum > 0`); `step` snaps to multiples from the minimum; `bipolar` draws the arc from the middle. With a `parser`, typing a digit opens a small line edit over it. `set_automation(None/"on"/"off")` draws the dot (red automated, grey overridden): `draw_automation_dot()` is shared with `ValueBox`. `relative` says whether the last user change was a drag or wheel (rather than typed or reset). |
-| `ValueBox` | [value_box.py](../../src/substation/ui/widgets/value_box.py) | Ableton-style number: drag vertically (`step` per pixel, a tenth with Shift), wheel, double-click to type (or, with `default`, to reset; then typing a digit edits). `choices` limits it to a list (the time signature's denominator). `_parse_float` strips `dB`, `bpm`, `%`, and reads `-inf` as -70. Also has `relative` and the automation dot. |
-| `MeterWidget` | [meter.py](../../src/substation/ui/widgets/meter.py) | Stereo peak meter from -60 to +6 dB, falling 3.5 % of the scale per update (updates come at about 30 Hz); a clip light at full scale, cleared by a click. |
-| `Oscilloscope` | [oscilloscope.py](../../src/substation/ui/widgets/oscilloscope.py) | See below. |
-| `ToggleButton` | [toggle_button.py](../../src/substation/ui/widgets/toggle_button.py) | Checkable `QPushButton` that never takes keyboard focus, so Space stays play/stop. `set_checked_silently()` changes it without emitting `toggled`, for showing state that came from the model or the engine. |
+| `Knob` | [Knob.qml](../../ui/qml/Knob.qml) over [KnobItem](../../ui/src/controls/KnobItem.h) | Drag vertically: 600 px for the whole range (`kDragPixels`), 6000 with Shift (`kFineDragPixels`); pressing or letting go of Shift mid-drag changes the rate from there on. The wheel moves 1/50 of the range a notch (`kWheelNotches`), unless `wheel` is false (the event goes on to a scrolling list). Double-click resets to `defaultValue` (if never set: the value it was made with). `logScale` moves evenly in log(value) (when `from` > 0); `step` takes multiples of it from `from`; `bipolar` draws the arc from the middle. With a `parser`, typing a digit (the knob has the focus after a click) opens a small text field over it. `automation` "on" or "off" draws the dot (red automated, grey overridden; `drawAutomationDot()`, shared with the value box). `moved(value, gestureKey)` comes for user changes only, never for `value` set from outside; `touched()` on every left press or double-click; `relative` says whether the last change was a drag or wheel (rather than typed or reset). |
+| `ValueBox` | [ValueBox.qml](../../ui/qml/ValueBox.qml) over [ValueBoxItem](../../ui/src/controls/ValueBoxItem.h) | Ableton-style number: drag vertically, 0.25 steps a pixel (`kDragRate`), 0.025 with Shift; the wheel moves ten steps a notch, notches less than 0.6 s apart being one gesture. `choices` limits it to a list (the time signature's denominator: one choice per 10 px, or a notch). `logScale` drags and wheels in log(value) as a knob does. Double-click: with a `defaultValue` it resets (and typing a digit edits); without one it opens the text field with the value selected. `parseNumber` strips "dB", "bpm" and "%" and reads "-inf" as -70. Values are rounded to `decimals` and kept between `from` and `to`. Same signals as the knob. |
+| `Meter` | [Meter](../../ui/src/controls/Meter.h) | Stereo peak meter from -60 to +6 dB, falling 3.5 % of the scale per update (`setLevels()` about 30 times a second, from the bridge's `metersUpdated`; the fall needs every update); a clip light at full scale, cleared by a click. |
+| `Oscilloscope` | [Oscilloscope.qml](../../ui/qml/Oscilloscope.qml) over [OscilloscopeItem](../../ui/src/controls/OscilloscopeItem.h) | [Below](#the-oscilloscope). |
+| `RoleButton` | [RoleButton.qml](../../ui/qml/RoleButton.qml) | A push button coloured by its `role`, with `iconName`, `iconColor`, `iconSize`, `tooltip` and `lit`. It never takes the keyboard focus, so Space stays play/stop. |
+| `ToggleButton` | [ToggleButton.qml](../../ui/qml/ToggleButton.qml) | A checkable `RoleButton`; `toggled()` and `clicked()` come from the user only, and `setCheckedSilently()` (or a binding) shows state from the model without them. Play and Record are `checkable: false` with `checked` bound to the bridge: their state follows the engine, never the click. |
+| `IconButton` | [IconButton.qml](../../ui/qml/IconButton.qml) | A `RoleButton` with an icon only, role `tool` unless set. |
+| `ChoiceBox` | [ChoiceBox.qml](../../ui/qml/dialogs/ChoiceBox.qml) | A combo box over the application layer's `[{label, value, enabled, toolTip}]` lists: shows `chosenIndex` (the model's), says what the user picked with `chosen(index)`, then shows the model's choice again. Never takes the focus. |
 
-### Oscilloscope
+While a knob or value box is dragged, [DragCursor](../../ui/src/controls/DragCursor.h) hides the mouse cursor (from
+the first move), jumps it back to the middle at the top or bottom of the screen so a drag never runs out of room,
+and puts it back where the drag started. A popup opening mid-drag (a right-click menu) ends the drag; an item also
+ends it when it loses the mouse grab.
 
-The scope beside the transport shows the master output, as FL Studio's does. Every
-33 ms its `QTimer` reads `engine.master_scope_written` (a counter); only when it moved
-does it fetch `engine.master_scope(2 * WINDOW)` (both never block). `_trigger()` finds
-the last rising zero crossing that still leaves a full `WINDOW` (1024 samples, about
-21 ms at 48 kHz) after it, so steady tones stand still; with none, it shows the
-newest window. `_trace()` turns the samples into one column per pixel (the column's
-highest then lowest sample) with numpy, building the `QPolygonF` only when the samples
-change, not on every paint. When no new audio comes, the trace shrinks by 0.64 each
-update and stops repainting once flat. It skips its work while hidden.
+### The oscilloscope
 
-`WINDOW` is a fixed number of samples because the engine's sample rate is behind its
-edit lock, which the scope shouldn't take 30 times a second. The glow is drawn without
-antialiasing (it is soft anyway); only the thin line has it.
+The scope in the transport bar shows the master output, as FL Studio's does. Its feed is any `QObject` with a
+`quint64 scopeWritten` property (samples written so far) and `Q_INVOKABLE QList<float> scopeSamples(int frames)`:
+the bridge. Every 16 ms (`kUpdateMs`) its timer reads `scopeWritten`; only when it moved does it fetch
+`scopeSamples(2 * kWindow)` (neither blocks). `trigger()` finds the last rising zero crossing that still leaves a
+full `kWindow` (1024 samples, about 21 ms at 48 kHz) after it, so steady tones stand still; with none it shows the
+newest window. `trace()` turns the samples into one column per pixel (the column's highest then lowest sample),
+built when the samples change, not on every paint. When no new audio comes the trace shrinks by
+`kFadePerUpdate` (0.8 per update, 0.64 per 33 ms) and stops repainting once flat. It skips its work while hidden.
+
+`kWindow` is a fixed number of samples because the engine's sample rate is behind its edit lock, which the scope
+shouldn't take 60 times a second. The glow is drawn without antialiasing (it is soft anyway); only the thin line has
+it.
 
 ## Transport bar
 
-[transport_bar.py](../../src/substation/ui/transport_bar.py), left to right:
+[TransportBar.qml](../../ui/qml/transport/TransportBar.qml), 40 px high, every box, button and the scope
+`Theme.controlHeight` (28 px) tall; nothing in it takes the keyboard focus. What needs working out is
+[TransportState](../../ui/src/mainwindow/TransportState.h)'s. Left to right:
 
-- **Tempo** (`ValueBox`, 20 to 999 BPM) → `editor.set_tempo(v, key)`; **time
-  signature** (two `ValueBox`es; the denominator from `VALID_DENOMINATORS`) →
-  `editor.set_time_signature`.
-- **Metronome** → `bridge.set_metronome`. **Project key** (a combo of "No Key" and
-  `ALL_KEYS`) → `editor.set_key`: audio added with a key in its name is transposed to
-  it (see [guide/audio-clips.md](../guide/audio-clips.md)).
-- **⌨** (`computer_keys`): toggles the `ComputerKeyboard`; the main window keeps it, the
-  menu action and the keyboard's state in step.
-- **Position** (bar. beat. sixteenth, from `split_position`), updated from
-  `bridge.position_changed` only when the text changes.
-- **Play**, **Stop**, **Record**: they emit `play_requested`, `stop_requested`,
-  `record_requested`; the main window acts. Play's and Record's checked state follows
-  the bridge (`transport_changed`, `recording_changed`), never the click itself.
-- **Count-in** (none, 1, 2 or 4 bars): kept in `QSettings` under
-  `transport/count_in_bars` (`count_in_bars()` reads it, falling back to none).
-  `count_in_beats()` converts bars to beats in the project's time signature.
-- **Re-Enable Automation**: enabled and lit while `bridge.has_overrides`
-  (`automation_state_changed`).
-- **Lock Envelopes** → `editor.set_automation_locked` (saved with the project).
-- **Oscilloscope**, **Loop** (→ `editor.set_loop_enabled`), **Follow** (sets
-  `ViewState.follow` on the arrangement's view).
-- **CPU**: `engine.cpu_load`, refreshed every 15th `meters_updated` (about twice a
-  second). **Device**: name and rate from `engine.device_status`; click it to open
-  Preferences.
-
-`refresh()` shows the project's settings on `settings_changed` and `reset`.
+- **Tempo** (`ValueBox`, 20 to 999 BPM, 0.25 a step) → `editor.setTempo(value, gestureKey)`. **Time signature**: two
+  value boxes, the numerator 1 to 32, the denominator from `TransportState.denominators` →
+  `editor.setTimeSignature(n, d)`.
+- **Metronome** → `bridge.metronome`. **Project key** (a `ChoiceBox` of "No Key" and every key,
+  `TransportState.keys`) → `editor.setKeyByName(name)`: audio added with a key in its name is transposed to it (see
+  [guide/audio-clips.md](../guide/audio-clips.md)).
+- **⌨** toggles the computer MIDI keyboard (`Session.computerKeyboard`; its tooltip says which note A plays).
+- **Position**: `TransportState.positionText` ("  1. 1. 1", bar right-aligned in three places), changed from the
+  bridge's `positionChanged` only when the text changes.
+- **Play**, **Stop**, **Record** → `Session.togglePlay()`, `stop()`, `toggleRecord()`; Play's and Record's lit state
+  is the bridge's `playing` and `recording`.
+- **Count-in** (`ChoiceBox` of `Session.countInChoices`: none, 1, 2 or 4 bars) → `Session.countInBars`, kept in
+  `QSettings` (`transport/count_in_bars`).
+- **Re-Enable Automation**: enabled and lit while `Session.automationOverridden` → `bridge.reEnableAutomation()`.
+- **Lock Envelopes** → `editor.setAutomationLocked` (saved with the project).
+- **Oscilloscope** (150 × 30, fed by `Session.bridge`). **Loop** → `editor.setLoopEnabled`. **Follow** → the
+  arrangement view's `follow`.
+- **CPU**: `TransportState.cpuText` ("CPU 12%"), from `bridge.cpuLoad` every 15th meter update (`kCpuEvery`, about
+  twice a second). **Device**: `deviceText` ("Speakers · 48 kHz", the name cut to 28 characters; "No audio device"),
+  with a tooltip; a click opens Preferences.
 
 ## Dialogs
 
-[dialogs.py](../../src/substation/ui/dialogs.py). What the preferences mean to the user:
+[ui/qml/dialogs](../../ui/qml/dialogs). Each is a QML `Dialog` (modal, centred on the window's overlay) over an
+application-layer object that holds the logic. What the preferences mean to the user:
 [guide/audio-setup.md](../guide/audio-setup.md).
 
-### PreferencesDialog
+- **Preferences** (`PreferencesDialog`: Options › Preferences…, Ctrl+, or a click on the device's name): a tab per
+  page and Close. Changes apply at once. Opening it calls `Session.audioPreferences.open()` and
+  `Session.midiPreferences.open()`; closing it `audioPreferences.close()`.
+  - **Audio** (`AudioPage` on [AudioPreferences](../../app/src/session/AudioPreferences.h)): a `ChoiceBox` per
+    setting, bound to the controller's choices and index (`driverChoices`/`driverIndex`, `deviceChoices`,
+    `outputChoices` (ASIO), `sampleRateChoices`, `bufferChoices`, `threadChoices`), and calling its `choose...(i)`;
+    Exclusive mode (WASAPI only, `exclusiveVisible`); Hardware Setup (ASIO), which disables the dialog while the
+    driver's panel runs (it may run a message loop of its own); the status (rich text: what runs, or why it didn't
+    open). A driver this build lacks (ASIO without the SDK) is greyed out with a tooltip saying so. Each choice
+    reopens the device, since what a device offers is only known while it is open; only settings that opened are
+    saved.
+  - **MIDI** (`MidiPage` on [MidiPreferences](../../app/src/session/MidiPreferences.h)): a check box per input
+    (`inputs`: name, enabled, error: an input that couldn't be opened shows in red, why in its tooltip) →
+    `setInputEnabled(name, on)`; Refresh → `refresh()`.
+  - **Plug-ins** (`PluginsPage` on `Session.plugins`, the `PluginIndex`): the standard VST3 folders (dimmed, always
+    searched) and the user's own (red if missing); Add Folder… and Remove (only new files are read; a removed
+    folder's plug-ins leave the browser); Rescan Plug-ins; the scan's status, its failures in the tooltip. See
+    [app/plugin-scanner.md](../app/plugin-scanner.md).
+- **Export Audio** (`ExportDialog`): the range (`Session.exportRangeChoices()`: the arrangement, or the loop region
+  while the loop is on and has a length) and the bit depth (`exportBitDepthChoices`: 16-bit, 24-bit, 32-bit float;
+  24 at first); OK emits `exportChosen(range, bitDepth)` and the window goes on ([above](#files-and-unsaved-changes)).
+- **Render progress** (`RenderDialog`): [above](#renders-in-the-background).
+- **About** (`AboutDialog`): a `MessageBox` with the application's icon, `Session.aboutTitle` and
+  `Session.aboutText`.
+- **Unsaved changes** (`UnsavedChangesDialog`): Save, Discard, Cancel ([above](#files-and-unsaved-changes)).
 
-Changes apply at once: what a device offers (rates, buffer sizes, channels, a control
-panel) is only known while it is open, so each change reopens the device
-(`bridge.open_device`) and the lists are filled from what it reports
-(`engine.device_capabilities`).
+`MessageBox` is the message box all of them share: a title, an icon ("information", "warning", "question",
+"about"), rich text, and the buttons as `choices` (`[{text, value}]`); `answered(value)` says which was pressed
+(Return: `defaultValue`, Esc: `escapeValue`).
 
-- `_current_settings()`: the saved `AudioSettings`, unless another kind of device runs
-  (the saved one didn't open), or the saved driver type isn't in this build.
-- `_refresh(error)`: fills every combo inside `_quiet(...)` (a context manager that
-  blocks the widgets' signals, so filling them applies nothing). With the device
-  running it lists the driver's own rates and buffer sizes; otherwise the defaults
-  (`SAMPLE_RATES`, `BUFFER_SIZES`). ASIO shows *Output Channels*
-  (`output_choices()`: each stereo pair, and an odd last output alone, in mono) and
-  *Hardware Setup*; WASAPI shows *Exclusive mode*. A driver offering one buffer size
-  greys the list out. The status line shows the running device and its latencies (input
-  and output for ASIO).
-- `_driver_chosen`, `_device_chosen`, `_setting_chosen` build new settings and call
-  `_open(settings, fall_back)`: with `fall_back`, a device that won't take them opens
-  with its own settings instead. Settings are saved only when the device opens.
-- ASIO is greyed out in the driver list when `ge.driver_types()` lacks it (a build
-  without the ASIO SDK), with a tooltip saying so.
-- *Hardware Setup* (`_show_control_panel`) disables the dialog while the driver's panel
-  runs, since it may run a message loop of its own.
-- *Audio Threads* lists 1 to the number of cores; the default
-  (`Engine.default_audio_threads()`) is saved as 0 (`set_audio_threads`), then
-  `bridge.apply_audio_threads()`.
-- `bridge.device_changed` refreshes the dialog (a driver that reset, a device that
-  went).
+## The computer MIDI keyboard
 
-### MidiPage
-
-A checkable list of `bridge.midi_inputs()`; unchecking one calls
-`bridge.set_midi_input_enabled` (the disabled ones are kept by
-`disabled_midi_inputs()`). Inputs that failed to open are red with the reason as their
-tooltip (`bridge.midi_errors`). *Refresh* calls `bridge.open_midi_inputs()` again.
-
-### PluginsPage
-
-The standard VST3 folders (dimmed, not removable) and the custom ones
-(`custom_folders()`, red if missing). Adding or removing a folder saves the list and
-calls `PluginIndex.scan()` (only new files are read; a removed folder's plug-ins
-leave). *Rescan Plug-ins* calls `scan(rescan=True)`. The status shows the count and the
-files that failed (their reasons in the tooltip, at most 30). See
-[python/plugin-scanner.md](../python/plugin-scanner.md).
-
-## Computer MIDI keyboard
-
-[computer_keyboard.py](../../src/substation/ui/computer_keyboard.py). Behaviour:
+[ComputerKeyboard](../../app/src/session/ComputerKeyboard.h) is the application layer's
+(`Session.computerKeyboard`): it needs no Qt Quick, only `QGuiApplication`'s key events. Behaviour:
 [guide/midi.md](../guide/midi.md).
 
-`ComputerKeyboard` installs itself as an event filter on the whole application, so it
-sees keys before any widget or shortcut does.
+It installs itself as an event filter on the whole application, so it sees keys wherever they go, before any item
+or shortcut does.
 
-- `NOTE_KEYS` maps A W S E D F T G Y H U J K O L P ; ' to semitones 0 to 17 above the
-  octave's C; `OCTAVE_KEYS` maps Z and X to -1 and +1. `DEFAULT_OCTAVE` 5 puts C3
-  (note 60) on A; `MAX_OCTAVE` is 9.
-- A note is `bridge.send_midi([0x90, note, 100], COMPUTER_KEYBOARD)`: it arrives as one
-  more MIDI input, "Computer Keyboard", which tracks on *All Ins* hear too. `_held` maps
-  each key to the note it started, so a note ends correctly even if the octave changed
-  while it was held.
-- While it is on, a `ShortcutOverride` for one of its keys is accepted, so Qt delivers
-  the key as a key press instead of firing the window's shortcut (S, A, Z). Keys with
-  modifiers (other than the keypad flag) and keys typed into text inputs
-  (`TEXT_INPUTS`: line edits, text edits, spin boxes, combos) are left alone.
-- A key event reaches an application event filter once per widget it is delivered to;
-  it is taken the first time (and auto-repeats are ignored). Key-ups always go through
-  for held keys, even if a modifier was pressed meanwhile.
-- Turning it off, or the application losing the keyboard
-  (`applicationStateChanged`), releases every held note.
-- `takes_key()` tells [plugin_keys](#shortcuts-from-plug-in-editors) which keys it
-  plays.
+- `noteOffset()` maps A W S E D F T G Y H U J K O L P ; ' to semitones 0 to 17 above the octave's C; `octaveStep()`
+  maps Z and X to -1 and +1. `kDefaultOctave` 5 puts C3 (note 60) on A; `kMaxOctave` is 9.
+- A note is `bridge.sendMidi({0x90, note, 100}, kComputerKeyboard)`: it arrives as one more MIDI input, "Computer
+  Keyboard", which tracks on *All Ins* hear too. `held_` maps each key to the note it started, so a note ends right
+  even if the octave changed while it was held.
+- While it is on, the `ShortcutOverride` of one of its keys is accepted, so Qt delivers the key as a key press
+  instead of firing the window's shortcut (S, A, Z). Keys with modifiers (other than the keypad flag) are left alone,
+  and so are keys typed into a text input: the object with the focus answers `Qt::ImEnabled` to an input method
+  query, as Qt Quick's text fields do (`focusTakesText()`).
+- A key event reaches an application event filter once for each object it is delivered to; it is taken the first
+  time, and auto-repeats are ignored. Key-ups always go through for held keys, even if a modifier was pressed
+  meanwhile.
+- Turning it off, or the application losing the keyboard (`applicationStateChanged`), releases every held note.
+- `takesKey()` tells [PluginEditorKeys](#shortcuts-from-plug-in-editors) which keys it plays.
 
 ## Shortcuts from plug-in editors
 
-[plugin_keys.py](../../src/substation/ui/plugin_keys.py). The rules as the user sees them:
-[guide/shortcuts.md](../guide/shortcuts.md).
+[PluginEditorKeys](../../ui/src/platform/PluginEditorKeys.h) (in Main.qml, `target: window`). The rules as the user
+sees them: [guide/shortcuts.md](../guide/shortcuts.md).
 
-Plug-in editors are plain Win32 windows (`EditorWindow.cpp`, window class
-`SUBstationPluginEditor`; see [engine/plugins.md](../engine/plugins.md)), so Qt never
-sees their keys as key events. Their messages still pass through Qt's event loop, so
-`PluginEditorShortcuts`, a `QAbstractNativeEventFilter` installed on the application
-(Windows only: `supported()`), sees each `WM_KEYDOWN` / `WM_SYSKEYDOWN`:
+Plug-in editors are plain Win32 windows (the engine's `EditorWindow.cpp`, window class `SUBstationPluginEditor`; see
+[engine/plugins.md](../engine/plugins.md)), so Qt never sees their keys as key events. Their messages still pass
+through Qt's event loop, so `PluginEditorKeys`, a `QAbstractNativeEventFilter` installed on the application on
+Windows only (`supported`), sees each `WM_KEYDOWN` / `WM_SYSKEYDOWN`:
 
-1. Is the window (or its root ancestor) a plug-in editor (`is_plugin_editor`)? If not,
-   Qt handles it as usual.
-2. `action_for(vk, modifiers, text_field)` maps the virtual-key code to a Qt key
-   (`qt_key`: letters, digits, F-keys and a few others), reads the modifiers with
-   `GetKeyState`, and decides:
-   - Without Ctrl or Alt, only `DAW_KEYS` (Space and S) are taken, and not with Shift,
-     not while the focus is in a Windows text field (an `Edit` or `RichEdit` class:
-     `is_text_field`), and not a key the computer keyboard plays while it is on.
-   - `KEEP_FOR_PLUGIN` (Ctrl+A/C/V/X/Z/Y, Ctrl+Shift+Z) always stay with the plug-in:
-     it may be typing into a field of its own.
-   - Otherwise the first enabled `QAction` among the window's children whose shortcuts
-     match exactly.
-3. If there is an action, the message is swallowed and the action triggered, except
-   for auto-repeats (lParam bit 30) of keys without Ctrl or Alt: Space held down acts
-   once.
+1. Is the window (or its root ancestor) a plug-in editor? If not, Qt handles it as usual.
+2. `actionFor(virtualKey, modifiers, textField)` maps the virtual-key code to a Qt key (`qtKey`: letters, digits,
+   F-keys and a few others), reads the modifiers with `GetKeyState`, and decides:
+   - Without Ctrl or Alt only Space and S are taken, and not with Shift, not while the focus is in a Windows text
+     field (an `Edit` or `RichEdit` class), and not a key the computer MIDI keyboard plays while it is on.
+   - Ctrl+A/C/V/X/Z/Y and Ctrl+Shift+Z always stay with the plug-in: it may be typing into a field of its own.
+   - Otherwise the window's first enabled `Action` or `Shortcut` whose key sequence matches exactly (read from what
+     QML holds: a string, a `StandardKey`, a `QKeySequence`, or a list of them).
+3. `keyPressed()`: if there is one, the message is swallowed and the action triggered (a `Shortcut`'s `activated`),
+   except for the repeats (lParam bit 30) of keys held without Ctrl or Alt: Space held down acts once. While a
+   render's dialog is up the window takes no keys, so the plug-in keeps them.
 
-`close_foremost_editor()` (the main window's Ctrl+W, *View › Close Plug-in Editor*)
-walks the top-level windows with `EnumWindows`, top down, and posts `WM_CLOSE` to the
-first visible editor of this process.
+Posting the key to the main window instead wouldn't do: Qt Quick's shortcuts only fire in the window that has the
+focus. `closeForemostEditor()` (Ctrl+W, *View › Close Plug-in Editor*, shown on Windows only) walks the top-level
+windows with `EnumWindows`, top down, and posts `WM_CLOSE` to the first visible editor of this process. The rules
+are plain code, so the tests run `actionFor()` and `keyPressed()` on any platform.
 
 ## Gotchas
 
-- **Never let a button take the focus.** Space is the window's play/stop shortcut; a
-  focused `QPushButton` would take it. Use `ToggleButton`, or `setFocusPolicy(NoFocus)`.
-- **Show model state silently.** Updating a control from the model with `setChecked` or
-  `setValue` must not emit the signal that edits the model: use
-  `set_checked_silently`, `blockSignals`, or `_quiet()`. Knobs and value boxes only
-  emit `valueChanged` for user changes, never from `setValue`.
-- **Hide before `deleteLater()`.** A widget waiting to be deleted is still painted
-  where it was; the views call `hide()` first.
-- **Parent before showing.** A widget shown before it has a parent becomes a window of
-  its own for a moment; add it to its layout first.
-- **Connect to methods, not lambdas, on widgets that can go before the signal's
-  sender.** A return track's header and lane are deleted while the bridge's signals
-  live on; they connect bound methods so Qt drops the connection with the object.
-- **Native event filters see raw messages.** Anything in `plugin_keys` must stay cheap:
-  it runs for every message of the process.
+- **`paint()` reads only.** It runs on the render thread while the GUI thread waits; changing anything there
+  (a property, a signal, a cache without a lock) is a data race. Work things out on the GUI thread and call
+  `update()` (or `polish()`, for `updatePolish()`).
+- **Never let a control take the focus** in the views: Space is the window's play/stop shortcut. `RoleButton`,
+  `ChoiceBox` and the scroll bars use `Qt.NoFocus`.
+- **Show model state without editing it.** A control showing the model binds to it; its user signal (`moved`,
+  `toggled`, `chosen`, an `Action`'s `triggered`) is what edits. After a user change, bind again (`checked =
+  Qt.binding(...)`), so it shows what the model made of it.
+- **Menus made in JavaScript need an owner.** Items created without a parent are taken by the garbage collector, a
+  submenu even while it shows: `ArrangementMenu` and `PanelMenu` keep what they made until the next `show()`, and
+  `ActionMenu` and Open Recent give theirs the menu's `contentItem` as parent.
+- **The second press of a double-click.** Qt Quick delivers it as a press as well as the double-click (widgets got
+  only the double-click). The arrangement's and the piano roll's items ignore a press flagged
+  `Qt::MouseEventCreatedDoubleClick` (the double-click stands for it); the device view's frames and editors work it
+  out from the presses' times and places (`secondPressOfDoubleClick()`). Where each click of a double-click
+  counts (automation lanes, fold buttons), the double-click starts the gesture again.
+- **Losing the mouse grab ends a gesture.** A popup opening mid-drag takes the mouse: items end their gesture in
+  `mouseUngrabEvent()`, where what it previewed goes.
+- **Native event filters see every message.** `PluginEditorKeys::nativeEventFilter` runs for every message of the
+  process: what it does for messages that aren't key presses in an editor stays cheap.
+- **Raw strings and moc.** moc (Qt 6.4) stops at a raw string literal, so the tests' inline QML goes after the test
+  class (see [building.md](../building.md#gotchas)).
 
 ## Tests
 
-The UI tests build the real `MainWindow` offscreen (`QT_QPA_PLATFORM=offscreen`, see
-[testing.md](../testing.md)) and drive it with `QTest`: mouse drags, drops, header
-controls, dialogs, the piano roll, devices' own editors and automation lanes.
+The UI tests are Qt Test programs, `tests/app/test_ui_*.cpp`, one executable each, linked with the UI. They load
+QML on a real `Session` (no audio device) with [UiTestSupport.h](../../tests/app/support/UiTestSupport.h) and drive
+it with mouse, wheel and key events as a user would. They run on a display (xvfb with the xcb platform here: the
+offscreen platform renders Qt Quick in software, without the items' geometry); with `SUBSTATION_UI_SCREENSHOTS` (or
+`SUBSTATION_SCREENS`) set they save screenshots there. See [testing.md](../testing.md).
 
 | Test file | Covers here |
 |---|---|
-| [test_ui_smoke.py](../../tests/test_ui_smoke.py) | the window mirrored into the engine, edit commands, transport and locate, zoom, scroll and follow, save/open, `test_header_controls_and_dialogs` (Preferences, Export), `test_audio_threads_preference`, `test_shortcuts_from_plugin_editor` (`plugin_keys.action_for`), `test_open_recent` |
-| [test_ui_rendering.py](../../tests/test_ui_rendering.py) | exporting and freezing in the background (the dialog, Cancel, closing the window meanwhile), a project's plug-ins loading after it opens (the selected track's first, moved or deleted meanwhile, renders waiting for them, saving meanwhile) |
-| [test_computer_keyboard.py](../../tests/test_computer_keyboard.py) | M, notes and octaves, text fields and modifiers keeping their keys, recording from it |
-| [test_ui_plugins.py](../../tests/test_ui_plugins.py) | Ctrl+W closing editors, edits in an editor becoming undo steps, editors following the selected track, the Plug-ins page of Preferences |
-| [test_ui_recording.py](../../tests/test_ui_recording.py) | the record button, count-in, the MIDI page of Preferences |
+| [test_ui_mainwindow.cpp](../../tests/app/test_ui_mainwindow.cpp) | The layout and its look, every menu action calling the session, the shortcuts, checkable actions kept in step with the model, Open Recent, files with the unsaved-changes question, closing (a render running, unsaved changes), the title, the status line, warnings, Export Audio, the clip view covering the arrangement, Rename, `PluginEditorKeys`, the window state kept |
+| [test_ui_transport.cpp](../../tests/app/test_ui_transport.cpp) | Each control of the transport bar and what it shows, whoever changed it; Play and Record following the bridge; nothing taking the keyboard |
+| [test_ui_dialogs.cpp](../../tests/app/test_ui_dialogs.cpp) | Preferences' pages on their controllers, Export Audio's choices, the render progress (modal, label, bar, Cancel) while exporting and freezing, the message boxes |
+| [test_ui_controls.cpp](../../tests/app/test_ui_controls.cpp) | Knobs and value boxes dragged (one gesture key per drag), wheeled, double-clicked and typed into; the meter's fall and clip light; the oscilloscope's trigger and fade from a fake feed; buttons that never take the focus |
+| [test_ui_sg.cpp](../../tests/app/test_ui_sg.cpp) | `SgCanvas` and `SgPainter` rendered for real and checked pixel by pixel; the big-recording split; a benchmark of an arrangement's worth of rects |
+| [test_ui_theme.cpp](../../tests/app/test_ui_theme.cpp) | Every colour with its value, the button roles' looks, every icon (its colour, states, the disabled variant) and the image provider |
+| [test_ui_gallery.cpp](../../tests/app/test_ui_gallery.cpp) | The look end to end: a gallery of the shared controls and a sample of what the views draw |
+| [test_session_keyboard.cpp](../../tests/app/test_session_keyboard.cpp) | The computer MIDI keyboard: notes and octaves, shortcuts and text inputs keeping their keys, modifiers, releasing held notes |
+| [test_session_renders.cpp](../../tests/app/test_session_renders.cpp), [test_session_files.cpp](../../tests/app/test_session_files.cpp) | The session's side: renders in the background and Cancel, closing while one runs, plug-ins loading after a project opens; files, recent projects, the preferences |
 
 ## The other UI pages
 
 | Page | Covers |
 |---|---|
-| [arrangement.md](arrangement.md) | `ui/arrangement/`: `ViewState`, `Selection` and `TrackLayout`, the grid, the ruler, the lanes canvas and its gestures, track/return/master headers, automation lanes and choosers, waveform tiles, folding |
-| [piano-roll.md](piano-roll.md) | `ui/piano_roll/`: the keys, ruler, note grid, velocity lane and note tools |
-| [device-view.md](device-view.md) | `device_panel/`, `rack_view.py`, `device_editors/`, and the clip view (`clip_view.py`) |
-| [../browser.md](../browser.md) | `ui/browser/` and its native backend |
+| [arrangement.md](arrangement.md) | `ui/src/arrangement`, `ui/qml/arrangement`: the `Arrangement` state, the layout, the ruler, the lanes and their gestures, track, return and master headers, automation lanes and choosers, waveforms |
+| [piano-roll.md](piano-roll.md) | `ui/src/pianoroll`, `ui/qml/pianoroll`, `ui/qml/clipview`: the piano roll's keys, ruler, note grid, velocity lane and note tools, and the clip view |
+| [device-view.md](device-view.md) | `ui/qml/devices`, `ui/src/devices`, the device selection: the device view, racks, the built-in devices' editors |
+| [../browser.md](../browser.md) | `ui/qml/browser`, the application layer's browser and its native backend |

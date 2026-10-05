@@ -5,9 +5,12 @@ audio thread without ever waiting for it, its parameters, state, latency, buses,
 is in [engine/src/plugins/](../../engine/src/plugins); the parts of the VST 3 SDK it uses are vendored in
 `engine/third_party/vst3sdk` (MIT-licensed since SDK 3.8), so nothing else needs installing.
 
-Scanning installed plug-ins happens in child processes driven from Python: see
-[python/plugin-scanner.md](../python/plugin-scanner.md). How the user finds and uses plug-ins is in
+Scanning installed plug-ins happens in child processes, `substation-scan` ([tools/scanner](../../tools/scanner/main.cpp),
+which links the engine and nothing of Qt), driven by the application layer's plug-in index: see
+[app/plugin-scanner.md](../app/plugin-scanner.md). How the user finds and uses plug-ins is in
 [guide/plugins.md](../guide/plugins.md). The `Processor` interface itself is described in [devices.md](devices.md).
+
+Plug-ins load and play on Linux too, but without their editor windows (see [`EditorWindow`](#editorwindow)).
 
 ## Files
 
@@ -18,9 +21,10 @@ Scanning installed plug-ins happens in child processes driven from Python: see
 | [Vst3Processor.h](../../engine/src/plugins/Vst3Processor.h) / [.cpp](../../engine/src/plugins/Vst3Processor.cpp) | a VST3 plug-in as a `Processor`: buses, events, parameters, automation, state, restarts, the component handler |
 | [Vst3Support.h](../../engine/src/plugins/Vst3Support.h) | allocation-free building blocks for the audio thread: `ProcessGuard`, `HostEventList`, `HostParamQueue`, `HostParamChanges`, `ParamChangeQueue`, `SpinLock` |
 | [EditorWindow.h](../../engine/src/plugins/EditorWindow.h) / [.cpp](../../engine/src/plugins/EditorWindow.cpp) | the Win32 window holding a plug-in's editor (`IPlugView`, `IPlugFrame`) |
+| [EditorWindowNone.cpp](../../engine/src/plugins/EditorWindowNone.cpp) | `EditorWindow` off Windows: it never opens |
 | [EngineChains.cpp](../../engine/src/EngineChains.cpp) | `addPluginProcessor()`, `retireProcessorLocked()`, the processor and editor calls (made without the engine lock) |
 | [Engine.cpp](../../engine/src/Engine.cpp) | `Engine::idle()`: plug-ins' main-thread work, destroying removed ones, realigning on latency changes |
-| [bindings.cpp](../../engine/src/bindings.cpp) | `scan_vst3`, `vst3_search_paths`, `PluginDescription`, `add_plugin_processor`, `ProcessorEvent`, editor calls |
+| [tools/scanner/main.cpp](../../tools/scanner/main.cpp) | `substation-scan`: reads plug-in files with `Vst3Format::scanFile()` for the application, in a process of its own |
 
 ## `PluginFormat`
 
@@ -48,14 +52,17 @@ A singleton (`Vst3Format::instance()`).
   instance from one file shares the module and the module unloads with the last instance. It sets the host context on
   the module's factory.
 - **COM.** Some plug-ins need COM on the thread that loads them: `ensureComInitialized()` calls `OleInitialize` once
-  per thread. Qt has set it up on the UI thread already; the scanner process has not.
-- **`defaultSearchPaths()`**: `FOLDERID_ProgramFilesCommon\VST3` and `FOLDERID_UserProgramFilesCommon\VST3`
-  (`C:\Program Files\Common Files\VST3` and `%LOCALAPPDATA%\Programs\Common\VST3`). Exposed as `vst3_search_paths()`;
-  the Python scanner keeps its own list (see [python/plugin-scanner.md](../python/plugin-scanner.md)).
+  per thread (Windows only). Qt has set it up on the UI thread already; the scanner process has not.
+- **`defaultSearchPaths()`**: on Windows `FOLDERID_ProgramFilesCommon\VST3` and `FOLDERID_UserProgramFilesCommon\VST3`
+  (`C:\Program Files\Common Files\VST3` and `%LOCALAPPDATA%\Programs\Common\VST3`); elsewhere `~/.vst3`,
+  `/usr/lib/vst3` and `/usr/local/lib/vst3`. The application layer's `standardPluginFolders()`
+  ([app/src/plugins/PluginPaths.h](../../app/src/plugins/PluginPaths.h)) keeps its own list on Windows and takes
+  these elsewhere, unless `SUBSTATION_VST3_PATH` says otherwise (see [app/plugin-scanner.md](../app/plugin-scanner.md)).
 - **`scanFile(path)`**: loads the module and lists its `kVstAudioEffectClass` classes (controllers and other helper
   classes are skipped). The vendor falls back to the factory's. `isInstrument` is true if the sub-categories include
-  `Instrument`. A module with several plug-ins (an instrument and its FX version) lists each. Exposed as
-  `scan_vst3(path)` (releases the GIL); the UI calls it only in a child process.
+  `Instrument`. A module with several plug-ins (an instrument and its FX version) lists each. The application calls
+  it only in its child process, `substation-scan`, so a plug-in that crashes or hangs while loading takes down only
+  that process.
 - **`instantiate(path, uid, sampleRate, maxBlockSize)`**: finds the class by id, makes a `Vst3Processor` and prepares
   it. Errors for the user: not a class id; "does not contain this plug-in any more".
 
@@ -90,14 +97,14 @@ Plug-ins are created, configured, asked about and destroyed on the main thread, 
 the background). Loading them on another thread isn't an option: JUCE plug-ins take the thread that creates their
 first instance for their message thread (their timers and async calls run there), and Komplete Kontrol hung when
 its module was loaded off the main thread. A project's plug-ins load after it opens, one at a time between the
-UI's events, instead (the bridge's [loading.py](../../src/substation/audio/engine_bridge/loading.py)).
+UI's events, instead (the engine bridge's [BridgeLoading.cpp](../../app/src/audio/BridgeLoading.cpp)).
 
 - Plug-ins may run a message loop inside a call (a licence dialog) that calls back into the engine or the UI. The
   engine's lock (`Engine::mutex_`) is recursive, and slow plug-in calls don't hold it: `addPluginProcessor()` loads
   the plug-in without the lock (then checks the chain still exists and the rate didn't change), and
   `setProcessorParam`, `processorParamText`, `processorState`, `setProcessorState`, the editor calls,
-  `takeProcessorEvents` and each processor's `idle()` are made without it. The UI ignores plug-in reports until the
-  call returns (the bridge's `_busy` counter).
+  `takeProcessorEvents` and each processor's `idle()` are made without it. The engine bridge doesn't act on plug-in
+  reports until the call returns (its `busy` counter).
 - A removed plug-in waits until no snapshot uses it and is destroyed in `Engine::idle()`, on the main thread
   (`retireProcessorLocked()` closes its editor and moves it to `graveyard_`; `idle()` destroys those only the
   graveyard holds, outside the lock, since plug-ins may take their time to go: 20 ms of them a call, the rest
@@ -182,7 +189,8 @@ time. Blocks are split where the loop wraps (the renderer's slices), so tempo-sy
 - `automatable` from `kCanAutomate`, `readOnly` from `kIsReadOnly`; `hidden` for `kIsHidden` and for the plug-in's
   bypass (`kIsBypass`): the device's on/off switch stands in for it. The device view leaves out read-only and hidden
   parameters.
-- `paramText()` asks the controller for its text (`-3.0 dB`, `Bell`); the bridge adds the unit if the text lacks it.
+- `paramText()` asks the controller for its text (`-3.0 dB`, `Bell`); the engine bridge adds the unit if the text lacks
+  it (`EngineBridge::pluginParamText()`).
 
 **Parameter queues.**
 
@@ -217,8 +225,9 @@ time. Blocks are split where the loop wraps (the renderer's slices), so tempo-sy
 **Edits in the plug-in's editor** come through the component handler: `beginEdit` starts a gesture (a serial and the
 value before it) and reports `ParamTouched` (its automation shows); `performEdit` sends the value to the processor and
 reports `ParamEdited` with the value, the value before the gesture and the gesture serial, so the UI records one undo
-step per knob drag; `endEdit` ends the gesture. The bridge treats `PARAM_EDITED` as an edit only while the plug-in's
-editor shows (some plug-ins report their own changes as edits while their state is restored).
+step per knob drag; `endEdit` ends the gesture. The engine bridge treats `ParamEdited` (and `ParamTouched`) as an
+edit only while the plug-in's editor is open (some plug-ins report their own changes as edits while their state is
+restored).
 
 **Automation** goes to the processor with the block's other parameter changes, at its sample offsets; the last
 automated value of each parameter is kept in `automated_` and sent to the controller in `idle()`
@@ -227,7 +236,8 @@ automated value of each parameter is kept in `automated_` and sent to the contro
 
 ### `idle()`: main-thread work
 
-The engine calls each processor's `idle()` from `Engine::idle()`, which the UI calls on a timer. For a plug-in it:
+The engine calls each processor's `idle()` from `Engine::idle()`, which the engine bridge calls on a timer. For a
+plug-in it:
 
 1. Drops a closed editor window and reports `EditorClosed`.
 2. Applies automated values and output parameters to the controller.
@@ -244,7 +254,7 @@ The engine calls each processor's `idle()` from `Engine::idle()`, which the UI c
 
 Other component-handler calls become events: `setDirty(true)` reports `StateDirty` (the plug-in changed in a way no
 parameter shows, such as a preset picked in its editor: the project is marked as changed); `requestOpenEditor`
-reports `EditorRequested`. The UI collects them with `take_processor_events()`.
+reports `EditorRequested`. The engine bridge collects them with `Engine::takeProcessorEvents()`.
 
 ### State
 
@@ -257,9 +267,9 @@ settings are not for <name>" if the preset is for another class.
 Projects save each plug-in's complete state (base64) and which plug-in it is; the same bytes are what *Load Preset…*
 and *Save Preset…* read and write as standard `.vstpreset` files. A device's plug-in lives as long as the device is in
 its chain: reordering or changing the chain around it never reloads it, and a plug-in moved to another track moves as
-it is (`Engine::moveProcessor`). When a plug-in device goes away (deleted, or its track) the bridge keeps its state,
-so undo brings it back as it was. See [python/engine-bridge.md](../python/engine-bridge.md) and
-[python/serialization.md](../python/serialization.md).
+it is (`Engine::moveProcessor`). When a plug-in device goes away (deleted, or its track) the engine bridge keeps its
+state, so undo brings it back as it was. See [app/engine-bridge.md](../app/engine-bridge.md) and
+[app/serialization.md](../app/serialization.md).
 
 ### Latency
 
@@ -276,6 +286,11 @@ and reactivate: clears tails a real-time reset can't, and forgets held notes) an
 blocks set `ProcessContext::offline`, but the plug-in is still processed in `kRealtime` mode.
 
 ## `EditorWindow`
+
+On platforms other than Windows there are no editor windows: [EditorWindowNone.cpp](../../engine/src/plugins/EditorWindowNone.cpp)
+stands in, the window never opens, and `openEditor()` returns false (`hasEditor()` still says whether the plug-in has
+one). The application then says the plug-in has no editor, and the device view's generic editor (a knob per
+parameter) is the way to edit it. The rest of this section is about Windows.
 
 A plain Win32 top-level window (class `SUBstationPluginEditor`) holding the plug-in's `IPlugView`, owned by the main
 window so it floats above it; Qt's event loop dispatches its messages like any other window's. Main thread only.
@@ -297,8 +312,8 @@ window so it floats above it; Qt's event loop dispatches its messages like any o
 - `setVisible(false)` hides it, keeping its place and the plug-in's view; shown again, it doesn't take the focus.
 - The processor remembers the last position (`editorPosition_`), and the next editor opens there.
 
-Keyboard shortcuts while an editor has the focus are routed by the UI ([guide/shortcuts.md](../guide/shortcuts.md),
-[ui/README.md](../ui/README.md)).
+Keyboard shortcuts while an editor has the focus are routed by the UI (`PluginEditorKeys`:
+[ui/README.md](../ui/README.md#shortcuts-from-plug-in-editors), [guide/shortcuts.md](../guide/shortcuts.md)).
 
 ## Real-time rules
 
@@ -319,8 +334,9 @@ CLAP would be a second `PluginFormat`: its plug-ins become `Processor`s, its mai
   `automation()` in `process()`, maps the sidechain to its aux port, and reports `ProcessorEvent`s;
 - `Engine::addPluginProcessor()` accepts only `"VST3"` today and calls `Vst3Format` directly; it would choose the
   format by name;
-- the child-process scanner ([scan_worker.py](../../src/substation/plugins/scan_worker.py)) would call a `scan_clap`
-  binding, and its cache entries carry a format.
+- the child-process scanner ([tools/scanner/main.cpp](../../tools/scanner/main.cpp)) would scan with it too, and
+  the application's scan cache entries ([app/src/plugins/PluginIndex.h](../../app/src/plugins/PluginIndex.h)) would
+  carry a format.
 
 Multi-output instruments and MIDI effect plug-ins are not supported either: plug-ins get their main buses and a
 sidechain only.
@@ -329,19 +345,23 @@ sidechain only.
 
 The tests use three VST3 plug-ins built with the engine ([tests/vst3_plugins/](../../tests/vst3_plugins)): *SUB Test
 Synth*, an instrument with a separate controller (it reports the transport it gets back as parameters); *SUB Test
-Effect*, a single-component effect with adjustable latency and a Win32 editor; and *SUB Test Mono*, a mono effect
-without a controller; plus *SUB Test Sidechain* ([test_sidechain.cpp](../../tests/vst3_plugins/test_sidechain.cpp)),
-whose output is its input plus its sidechain. The tests see only these, never the installed ones
-(`SUBSTATION_VST3_PATH` in [conftest.py](../../tests/conftest.py)).
+Effect*, a single-component effect with adjustable latency and, on Windows, a Win32 editor; and *SUB Test Mono*, a
+mono effect without a controller; plus *SUB Test Sidechain* ([test_sidechain.cpp](../../tests/vst3_plugins/test_sidechain.cpp)),
+whose output is its input plus its sidechain. The tests see only these, never the installed ones: the engine's tests
+load the bundle by its path (`SUBSTATION_TEST_PLUGINS_BUNDLE`, [harness/Fixtures.h](../../tests/engine/harness/Fixtures.h)),
+and the application's tests point `SUBSTATION_VST3_PATH` at folders of their own.
 
-- [tests/test_vst3_engine.py](../../tests/test_vst3_engine.py): scanning a module's classes, sample-exact notes,
-  pitch, velocity and chords, parameters as the plug-in describes them and changes reaching the processor, the
-  transport and loop splitting, repeatable offline renders, effects, automation reaching the plug-in and its
-  controller, mono plug-ins on a stereo track, latency compensation (also on the master), state, load errors, chain
-  order, moving to another track as it is, editor edits, resizing and closing, plug-ins without an editor.
-- [tests/test_sidechain_engine.py](../../tests/test_sidechain_engine.py): sidechains into plug-ins, and a missing
-  sidechain reaching the plug-in flagged as silence.
-- [tests/test_plugin_scanner.py](../../tests/test_plugin_scanner.py): scanning, including a plug-in that crashes or
-  hangs while loading.
-- [tests/test_ui_plugins.py](../../tests/test_ui_plugins.py): the device view, browser, undo, presets and projects in
-  the application. Editor tests briefly show real windows.
+- [tests/engine/test_vst3_engine.cpp](../../tests/engine/test_vst3_engine.cpp): scanning a module's classes,
+  sample-exact notes, pitch, velocity and chords, parameters as the plug-in describes them and changes reaching the
+  processor, the transport and loop splitting, repeatable offline renders, effects, automation reaching the plug-in
+  and its controller, mono plug-ins on a stereo track, latency compensation (also on the master), state, load errors,
+  chain order, moving to another track as it is, editor edits, resizing and closing (Windows only; skipped
+  elsewhere), plug-ins without an editor.
+- [tests/engine/test_sidechain_engine.cpp](../../tests/engine/test_sidechain_engine.cpp): sidechains into plug-ins, and
+  a missing sidechain reaching the plug-in flagged as silence.
+- [tests/app/test_plugin_index.cpp](../../tests/app/test_plugin_index.cpp): scanning with `substation-scan`, including
+  a plug-in that crashes or hangs while loading.
+- [tests/app/test_bridge_plugins.cpp](../../tests/app/test_bridge_plugins.cpp) and
+  [tests/app/test_ui_device_panel_plugins.cpp](../../tests/app/test_ui_device_panel_plugins.cpp): plug-ins in the
+  application: projects and their state, missing plug-ins, undo, what plug-ins report, loading after a project opens,
+  the device view's parameters, editor button and presets. Editor tests briefly show real windows on Windows.

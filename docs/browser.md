@@ -1,112 +1,144 @@
 # Browser
 
-The browser lists built-in devices, plug-ins and the audio files under the user's places, searches them as you type,
-and ranks what you use most first. Its file index and search are a native C++ backend in
-[browser/src](../browser/src) (module `substation._browser`); the panel, the paged list model and the use counts are
-Python in [src/substation/ui/browser](../src/substation/ui/browser). How it behaves for the user is in
+The browser lists built-in devices, plug-ins, presets and the audio files under the user's places, searches them as
+you type, and ranks what you use most first. It is three layers: the file index and search, a C++ backend with no Qt
+in [browser/src](../browser/src) (the static library `sub_browser`, namespace `sub::browser`); the browser's logic and
+models in the application layer, [app/src/browser](../app/src/browser) (`BrowserController`, `Session.browser`); and
+the panel, QML in [ui/qml/browser](../ui/qml/browser). How it behaves for the user is in
 [guide/browser.md](guide/browser.md).
 
 ## Overview
 
 The backend shares nothing with the audio engine: no locks, no threads, no code. It has two threads of its own:
 
-- the **indexer**, at Windows' background priority for CPU, disk and memory (it yields to playback and to decoding),
-  which keeps a tree of the folders under the places, each with its audio files, saves it, and keeps it up to date;
+- the **indexer**, at background priority for CPU, disk and memory (it yields to playback and to decoding), which
+  keeps a tree of the folders under the places, each with its audio files, saves it, and keeps it up to date;
 - one for **searches**, which filters and orders immutable snapshots of that tree.
 
-Neither thread ever calls into Python. When there are results, or the index changed, the backend sets a Win32 event;
-a `QWinEventNotifier` wakes the UI thread, which takes them. Every call from Python releases the GIL.
+Neither thread calls into the application, except for the **wake callback**: when there are results, or the index
+changed, the backend calls it (from one of its threads), and the application takes them on its own thread. The
+backend is portable: what it needs from the operating system is in one header, [Platform.h](../browser/src/Platform.h),
+with a Win32 implementation and a POSIX one (Linux watches with inotify).
 
-The backend replaced Python code that did the same on the UI thread (and a walking thread that held the GIL). That
-code is kept unchanged in [tests/browser_reference.py](../tests/browser_reference.py), and the native backend is held
-to it item for item: the same files from a folder tree, in the same order, and the same results for every query,
-sort, filter and use count. Searching 200 000 files takes about 10 ms and never holds up the window or the audio;
-see [benchmarks/README.md](../benchmarks/README.md) for the measurements and the profile that led to the design.
+The backend is held item for item to a plain, single-threaded reference kept with the tests
+([tests/app/support/BrowserReference.h](../tests/app/support/BrowserReference.h)): the same files from a folder tree,
+in the same order, and the same results for every query, sort, filter and use count. Searching 200 000 files takes
+about 10 ms and never holds up the window or the audio; see [benchmarks/README.md](../benchmarks/README.md) for the
+measurements and the profile that led to the design.
 
 ```
- UI thread (Python)                       substation._browser (C++)
- ------------------                       ------------------------------------------------
- BrowserPanel                             Browser
-   | set_places / rescan  -------------->   Indexer thread (background priority)
-   | set_items (devices, plug-ins) ----->     saved index  <-> browser-index.bin
-   | set_usage (library.json) ---------->     ReadDirectoryChangesW per place
-   | search(text, sort, ...) ----------->     publishes immutable Snapshots
-   |                                       |
+ application thread (Qt)                  sub::browser (C++, no Qt)
+ -----------------------                  ------------------------------------------------
+ BrowserController                        Browser
+   | setPlaces / rebuild   ---------->      Indexer thread (background priority)
+   | setItems (devices, plug-ins,  ---->      saved index  <-> browser-index.bin
+   |           presets)                       FolderWatcher per place (ReadDirectoryChangesW / inotify)
+   | setUsage (library.json) -------->        publishes immutable Snapshots
+   | search(text, sort, ...) -------->     |
    |                                       Search thread
    |                                         runSearch(latest query, latest snapshot)
    |                                         -> Result (hits into the snapshot)
    |                                       |
-   |  QWinEventNotifier <---- Win32 event set (results ready / index changed)
+   |  queued call  <------------------  wake callback (results ready / index changed)
    v
- FileIndex._take(): native.take() -> SearchResult -> ItemListModel (256 rows at a time)
+ FileIndex::take(): Browser::take() -> SearchResult -> ItemListModel (256 rows at a time)
 ```
 
 ## Files
 
-### Native backend (`browser/src`)
+### Backend (`browser/src`)
 
 | File | What it holds |
 |---|---|
-| [Model.h](../browser/src/Model.h) / [Model.cpp](../browser/src/Model.cpp) | What a search reads: `FolderFiles` (one folder's file names, packed), `SnapFolder`, `Snapshot`, `ExternalItem`/`ExternalGroup` (devices, plug-ins), `UsageRecord`/`Usage` (use counts and `rank()`), `Query`, `Hit`, `Result` (with `find()`). |
+| [Model.h](../browser/src/Model.h) / [Model.cpp](../browser/src/Model.cpp) | What a search reads: `FolderFiles` (one folder's file names, packed), `SnapFolder`, `Snapshot`, `ExternalItem`/`ExternalGroup` (devices, plug-ins, presets), `UsageRecord`/`Usage` (use counts and `rank()`), `Query`, `Hit`, `Result` (with `find()`), `placePrefix()`. |
 | [Indexer.h](../browser/src/Indexer.h) / [Indexer.cpp](../browser/src/Indexer.cpp) | The indexer thread: the folder tree, the walk, folder times, watching, publishing snapshots, the saved index (`save()`/`load()`). Also `Limits`, `PlaceSpec`, `IndexStatus`. |
 | [Search.h](../browser/src/Search.h) / [Search.cpp](../browser/src/Search.cpp) | Filtering and ordering: `runSearch()`, `matchQuality()`, `UsageCache`, `SearchInputs`. |
-| [Text.h](../browser/src/Text.h) / [Text.cpp](../browser/src/Text.cpp) | Python's `str.lower()`, `str.casefold()`, `str.split()` and the regex word starts (`pyLower`, `pyCasefold`, `pySplit`, `wordStarts`), WTF-8 conversion (`toUtf8`, `toWide`), and Windows' own lower case (`ntLower`). |
+| [Text.h](../browser/src/Text.h) / [Text.cpp](../browser/src/Text.cpp) | Python's `str.lower()`, `str.casefold()`, `str.split()` and the regex word starts (`pyLower`, `pyCasefold`, `pySplit`, `wordStarts`), WTF-8 and UTF-16 conversion (`toUtf8`, `toWide`), `unicodeVersion()`. |
 | [UnicodeTables.inc](../browser/src/UnicodeTables.inc) | Tables generated from Python itself: `kLower`, `kFold`, `kSpace`, `kWord`, `kCaseIgnorable`, `kCased`, `kUnicodeVersion`. Do not edit. |
-| [Browser.h](../browser/src/Browser.h) / [Browser.cpp](../browser/src/Browser.cpp) | `Browser`: owns the indexer and the search thread, the event that tells the UI there is something to take, and the hand-over of results. |
-| [Platform.h](../browser/src/Platform.h) / [Platform.cpp](../browser/src/Platform.cpp) | Win32: `listFolder`, `folderTime`, `enterBackgroundMode`, `Event` (auto-reset), `FolderWatcher` (`ReadDirectoryChangesW`). |
-| [bindings.cpp](../browser/src/bindings.cpp) | The nanobind module `substation._browser`. |
-| [browser/tools/gen_unicode_tables.py](../browser/tools/gen_unicode_tables.py) | Writes `UnicodeTables.inc` from the running Python. |
+| [Browser.h](../browser/src/Browser.h) / [Browser.cpp](../browser/src/Browser.cpp) | `Browser`: owns the indexer and the search thread, the wake callback, and the hand-over of results. |
+| [Platform.h](../browser/src/Platform.h) | What the index needs from the system: `NativeString`, `kSeparator`, `kCaseSensitivePaths`, `nameKey()`/`pathKey()`, `listFolder`, `folderTime`, `enterBackgroundMode`, `replaceFile`, `Event` (auto-reset), `FolderWatcher`, `Waiter`. |
+| [Platform.cpp](../browser/src/Platform.cpp) | Windows: the wide (`W`) file calls, `LCMapStringEx` for keys, `THREAD_MODE_BACKGROUND_BEGIN`, `MoveFileExW`, Win32 events, `ReadDirectoryChangesW`, `WaitForMultipleObjects`. |
+| [PlatformPosix.cpp](../browser/src/PlatformPosix.cpp) | Elsewhere: `opendir`/`readdir`, `stat`, per-thread nice value and idle I/O class (Linux), `rename`, a pipe as the event, inotify (Linux), `poll`. |
+| [browser/tools/gen_unicode_tables.py](../browser/tools/gen_unicode_tables.py) | Writes `UnicodeTables.inc` from the running Python (a generator; not part of the build). |
 
-The backend is built as the static library `sub_browser` and the module `_browser`; see
-[building.md](building.md#the-two-native-modules).
+The backend is built as the static library `sub_browser` ([browser/CMakeLists.txt](../browser/CMakeLists.txt)): the
+Win32 platform layer on Windows, the POSIX one elsewhere. See [building.md](building.md).
 
-### Python side (`src/substation/ui/browser`)
+### Application layer (`app/src/browser`)
 
 | File | What it holds |
 |---|---|
-| [browser_panel.py](../src/substation/ui/browser/browser_panel.py) | `BrowserPanel`: the sidebar (categories and places), search field, sort list, result list, the folder tree, preview, Enter/Down handling, use counting, the presets' menu (rename, delete, show in folder). |
-| [preset_index.py](../src/substation/ui/browser/preset_index.py) | `PresetIndex`: the presets in the user's library as items, listed again when they change (`QFileSystemWatcher`) or the app saves one (`rescan`). |
-| [file_index.py](../src/substation/ui/browser/file_index.py) | `FileIndex` (the native backend on the UI thread's side), `SearchResult` (a result read a page at a time), `PluginIndex` (the background VST3 scan), `index_path()`, `place_spec()`, `usage_records()`. |
-| [browser_models.py](../src/substation/ui/browser/browser_models.py) | `BrowserItem` (and its `key`), `ItemListModel` (paged, draggable), the drag MIME types and their readers (`plugin_refs`, `device_kinds`, `preset_paths`; `read_presets`). |
-| [library.py](../src/substation/ui/browser/library.py) | `Library`: use counts kept in `library.json`, and `rank()`. |
-| [search.py](../src/substation/ui/browser/search.py) | What to ask the search for: `SORTS`, the group numbers (`AUDIO`, `BUILTIN`, `PLUGINS`, `PRESETS`), `scope_query()`, `place_prefix()`, `plugin_tag()`. The sort orders are documented here. |
+| [BrowserController.h](../app/src/browser/BrowserController.h) | `BrowserController` (`Session.browser`): the sidebar's entries, search, the sort, the list shown, the folder tree of a place, preview requests, use counts, the context menus' actions, places and their settings. QML binds to it. |
+| [FileIndex.h](../app/src/browser/FileIndex.h) | `FileIndex` (the backend on the application thread's side), `SearchResult` (a result read a page at a time), `placeSpec()`, `usageRecords()`. |
+| [BrowserSearch.h](../app/src/browser/BrowserSearch.h) | What to ask the search for: the sorts (`sortOrders()`), the group numbers, `Scope`, `scopeQuery()`, `placePrefix()`, `pluginTag()`. The sort orders are documented here. |
+| [BrowserItem.h](../app/src/browser/BrowserItem.h) | `BrowserItem` (and its `key()`), `ItemKind`, `builtinItems()`, `pluginItem()`. |
+| [ItemListModel.h](../app/src/browser/ItemListModel.h) | The list shown: paged, draggable. |
+| [SidebarModel.h](../app/src/browser/SidebarModel.h) | The sidebar as a flat list. |
+| [BrowserMime.h](../app/src/browser/BrowserMime.h) | The drag formats and their readers (`pluginRefs`, `deviceKinds`, `presetPaths`, `movedDevices`). |
+| [Library.h](../app/src/browser/Library.h) | `Library`: use counts kept in `library.json`, and `rank()`. |
+| [PresetIndex.h](../app/src/browser/PresetIndex.h) | `PresetIndex`: the presets in the user's library as items, listed again when they change. |
+| [PathKeys.h](../app/src/browser/PathKeys.h) | Paths as the browser compares them: `normalPath`, `toBackendPath`/`fromBackendPath`, `pathKey`, `caseKey`, `audioKey`, `localDataDir()`. |
+
+The plug-ins the browser lists come from the plug-in index ([app/src/plugins](../app/src/plugins),
+[app/plugin-scanner.md](app/plugin-scanner.md)).
+
+### The panel (`ui/qml/browser`)
+
+| File | What it holds |
+|---|---|
+| [BrowserPanel.qml](../ui/qml/browser/BrowserPanel.qml) | The panel: the search field and the sort, the sidebar beside the results (or a place's folder tree), the footer (preview on or off, the status); drags out of it; the context menus; Add Folder…; stopping a preview on a press outside it |
+| [BrowserSidebar.qml](../ui/qml/browser/BrowserSidebar.qml) | The sidebar, over the controller's `SidebarModel` |
+| [BrowserResults.qml](../ui/qml/browser/BrowserResults.qml) | The results, over the controller's `ItemListModel` through `PagedRows`; renaming a preset in place |
+| [BrowserFolderTree.qml](../ui/qml/browser/BrowserFolderTree.qml) | A place's folder tree, over `FolderTreeModel` |
+| [SelectionList.qml](../ui/qml/browser/SelectionList.qml), [SelectionRowArea.qml](../ui/qml/browser/SelectionRowArea.qml) | The lists' selection as `QListView`'s extended selection had it |
+| [ActionMenu.qml](../ui/qml/browser/ActionMenu.qml) | A context menu from the controller's `[{action, label}]` lists |
+
+Its C++ helpers are in [ui/src/mainwindow](../ui/src/mainwindow): `PagedRows`, `FolderTreeModel`, `OutsidePresses`.
 
 ## Key types and concepts
 
 ### Items and keys
 
-A `BrowserItem` (frozen dataclass) has a `name`, a `path`, a `kind` (`"audio"`, `"plugin"`, `"device"` or `"preset"`;
-for a built-in device `path` is the device kind, for a preset its file), a `detail` (the parent folder, the plug-in's
-vendor, the device's category, or the device a preset is for), an optional `PluginRef` and a tooltip. Its `key` says who it is, for what the browser remembers about it:
+A `BrowserItem` has a `name`, a `path`, a `kind` (`ItemKind::Audio`, `Plugin`, `Device` or `Preset`; QML sees
+"audio", "plugin", "device", "preset"; for a built-in device `path` is the device kind, for a preset its file), a
+`detail` (the parent folder, the plug-in's vendor, the device's category, or the device a preset is for), an optional
+`PluginInfo` and a tooltip. Its `key()` says who it is, for what the browser remembers about it:
 
 | Kind | Key |
 |---|---|
-| audio | `audio:` + `os.path.normcase(os.path.normpath(path))` (`audio_key()`) |
+| audio | `audio:` + `pathKey(path)` (`audioKey()`) |
 | plugin | `plugin:<format>:<uid>` |
 | device | `device:<kind>` |
-| preset | `preset:<path>` |
+| preset | `preset:<path>` (in the system's form) |
 
-The native side makes the same keys for indexed files without Python: a folder's key is the place's
-`normcase(normpath(root))` joined with `ntLower()` of each folder name, and `ntLower` uses `LCMapStringEx` with the
-invariant locale, Windows' own lower case, as `os.path.normcase` does.
+`pathKey()` is Python's `os.path.normcase(os.path.normpath(path))` (as `library.json` was written): on Windows
+backslashes and Windows' own lower case (`LCMapStringEx` with the invariant locale), so names that differ only in case
+have one key; **elsewhere the normalised path as it is**, since names that
+differ in case are different files there ("Kick.wav" and "kick.wav" keep two keys and two use counts). The backend
+makes the same keys for indexed files: a folder's key is the place's key joined with each folder name's
+`platform::nameKey()`.
 
 ### Groups
 
-Every list is a search over one or more **groups**, in order. Group 0 (`_browser.AUDIO`, `kAudioGroup`) is the index's
-audio files; other numbers are external groups the UI hands over with `set_external`: `BUILTIN = 1` (built-in
-devices), `PLUGINS = 2` (plug-ins) and `PRESETS = 3` (presets; their native kind is `Kind::Preset`). `scope_query()` turns a sidebar entry into (groups, tag, place prefix):
+Every list is a search over one or more **groups**, in order. Group 0 (`kAudioGroup`) is the index's audio files;
+other numbers are external groups the controller hands over with `FileIndex::setItems(group, items)`:
+`kBuiltinGroup = 1` (built-in devices), `kPluginsGroup = 2` (plug-ins) and `kPresetsGroup = 3` (presets; their native
+kind is `Kind::Preset`). `scopeQuery()` turns a sidebar entry (a `Scope`: QML sees it as `[kind]` or `[kind, sub]`)
+into (groups, tag, place prefix):
 
 | Sidebar entry (scope) | Groups | Tag | Place prefix |
 |---|---|---|---|
-| All `("all",)` | BUILTIN, PLUGINS, PRESETS, AUDIO | | |
-| Samples `("samples",)` | AUDIO | | |
-| Built-in, or a category `("builtin", name)` | BUILTIN | the category | |
-| Plug-ins, or *Instruments* / *Audio Effects* | PLUGINS | the category (`plugin_tag()`) | |
-| Presets, or a device's `("presets", name)` | PRESETS | the device's name | |
-| A place `("place", path)` | AUDIO | | `place_prefix(path)` |
+| All `["all"]` | built-in, plug-ins, presets, audio | | |
+| Samples `["samples"]` | audio | | |
+| Built-in, or a category `["builtin", name]` | built-in | the category | |
+| Plug-ins, or *Instruments* / *Audio Effects* | plug-ins | the category (`pluginTag()`) | |
+| Presets, or a device's `["presets", name]` | presets | the device's name | |
+| A place `["place", path]` | audio | | `placePrefix(path)` |
 
-An external item's tag is what `tag` filters on: a built-in device's category, a plug-in's *Instruments* or
-*Audio Effects*, the device a preset is for. The place prefix is the place's lower-case path with one trailing `\`.
+An external item's tag is what `tag` filters on: a built-in device's category, a plug-in's *Instruments* or *Audio
+Effects*, the device a preset is for. The place prefix (`sub::browser::placePrefix()`) is the place's path with one
+trailing separator, in lower case where file names ignore case (Windows); elsewhere "Drums" and "drums" are different
+folders, and the filter keeps them apart.
 
 ### Snapshots
 
@@ -115,28 +147,30 @@ indexer:
 
 - `folders`: the folders that have files, in the order the walk first reached them. Each `SnapFolder` holds its
   `FolderFiles`, its path as shown (the place's root as given, then the folder names), its lower-case path (for the
-  place filter), its key (for use counts) and its detail (the folder's name; a place's root shows `basename(root)`).
-- `audio`: every file as (folder, file), in the list's own order: by lower-case name, then walk order (the Python index
-  sorted its walk by `name.lower()`, which keeps the walk order for equal names).
+  place filter where names ignore case), its key (for use counts) and its detail (the folder's name; a place's root
+  shows its basename).
+- `audio`: every file as (folder, file), in the list's own order: by lower-case name, then walk order (a stable sort of
+  the walk by `pyLower(name)`, which keeps the walk order for equal names).
 - `byFold`: positions in `audio` by casefolded name (ties in the list's own order), so ordering by name is a pass over
   it rather than a sort.
 - `folderByKey`, `folderByPath`: lookups for use counts and `Result::find`.
 
 `FolderFiles` packs a folder's names into one string with offsets: the name, its `pyLower`, its `pyCasefold` and its
-`ntLower`. For ASCII names the last three share one copy.
+key name. For ASCII names on Windows the last three share one copy.
 
 ### Results
 
 `Result` holds its `generation`, the snapshot and external groups it points into, the `hits` (group, index) in order
-and `searchMs`. It crosses into Python as `_browser.Result`; its rows are only made into Python objects when asked
+and `searchMs`. The application holds it as a `SearchResult`, whose rows are only made into `BrowserItem`s when asked
 for, a page at a time.
 
 ## How it works
 
 ### The indexer thread
 
-`Indexer::run()` first enters background mode (`THREAD_MODE_BACKGROUND_BEGIN`: CPU, I/O and memory priority), then
-loads the saved index, then loops:
+`Indexer::run()` first enters background mode (`platform::enterBackgroundMode()`: on Windows
+`THREAD_MODE_BACKGROUND_BEGIN`, CPU, I/O and memory priority; on Linux the lowest nice value and the idle I/O class,
+for this thread only), then loads the saved index, then loops:
 
 1. Take commands under the lock: new places (`setPlaces`), a rescan request, stop.
 2. Apply them. `applyPlaces()` keeps what is known of a place that stays (its node and its watcher), reuses a known
@@ -144,112 +178,142 @@ loads the saved index, then loops:
    each new place; places that went lose their watchers. A rescan marks every folder dirty.
 3. If something must be looked at, run `updatePass()`: publish what is known at once if the places changed (the saved
    index shows immediately), then walk.
-4. Otherwise wait in `WaitForMultipleObjects` for the wake event, a place's watcher, or a deadline (changes settling,
-   the next save).
+4. Otherwise wait with a `platform::Waiter` for the wake event, a place's watcher, or a deadline (changes settling,
+   the next save; at least every 60 s).
 
-**The walk** follows the Python walk it replaces exactly, so the lists are the same: from each place, depth first,
-the last folder first (a stack), at most 16 folders deep (`maxDepth`), and no further folders once 300 000 files
-(`maxFiles`) were found under a place; names starting with `.` or `$` are skipped; junctions are walked into,
-symbolic links to folders are not (`listFolder` reads `FILE_ATTRIBUTE_REPARSE_POINT` and `IO_REPARSE_TAG_SYMLINK`, as
-`DirEntry.is_dir(follow_symlinks=False)` does). Entries come in the order the file system lists them, as
-`os.scandir` gives them, and only names ending in one of the audio extensions (`AUDIO_EXTENSIONS` in
-`audio/engine_bridge/sources.py`: `.wav`, `.wave`, `.flac`, `.mp3`) are kept.
+**The walk** matches the reference's exactly, so the lists are the same: from each place, depth first, the
+last folder first (a stack), at most 16 folders deep (`Limits::maxDepth`), and no further folders once 300 000 files
+(`maxFiles`) were found under a place; names starting with `.` or `$` are skipped. On Windows junctions are walked
+into, symbolic links to folders are not (`listFolder` reads `FILE_ATTRIBUTE_REPARSE_POINT` and
+`IO_REPARSE_TAG_SYMLINK`, as `DirEntry.is_dir(follow_symlinks=False)` does); elsewhere only real directories are, not
+symbolic links to them (a link to a file is listed as a file). Entries come in the order the file system lists them,
+as `os.scandir` gave them, and only names ending in one of the audio extensions (`FileIndex::audioExtensions()`:
+`.wav`, `.wave`, `.flac`, `.mp3`) are kept.
 
 During a pass a folder is listed again if it was never listed, is marked dirty, or its last-write time
-(`folderTime`; for a junction, the time of the folder it leads to) differs from the one saved when it was listed.
-Each folder's time is compared once per check round (`round_`). After the pass, folders no longer reachable from any
-place are dropped (`removeUnreachable`), a snapshot is published if anything changed, and a save is scheduled for
-5 s later.
+(`folderTime`; through junctions and links) differs from the one saved when it was listed. Each folder's time is
+compared once per check round (`round_`). After the pass, folders no longer reachable from any place are dropped
+(`removeUnreachable`), a snapshot is published if anything changed, and a save is scheduled for 5 s later.
 
 The tree is shared between places: nodes are found by key (`byKey_`), so a folder under two overlapping places is one
 node, and a snapshot lists it once.
 
 **Commands interrupt passes.** `setPlaces()` and `rescan()` set an atomic `interrupt_` that the pass checks between
 folders; the pass returns, the loop takes the commands, and walks again. `IndexStatus::busy` is true while commands
-asked for are not finished (`done_ < requested_`).
+asked for are not finished.
 
-**Publishing while scanning.** During a long scan `publishWhileScanning()` publishes a snapshot 30 ms after the
-start if no files were shown yet, then every 150 ms or four times as long as building the last snapshot took,
-whichever is more, and only when new files were found. So results show while a first scan is still going.
+**Publishing while scanning.** During a long scan `publishWhileScanning()` publishes a snapshot 30 ms after the start
+if no files were shown yet, then every 150 ms or four times as long as building the last snapshot took, whichever is
+more, and only when new files were found. So results show while a first scan is still going.
 
-**Watching.** Each place has a `FolderWatcher`: `ReadDirectoryChangesW` on the place's root, recursive, for file and
-folder names (added, removed, renamed), into a 64 KB buffer, overlapped. When it fires, `markChanged()` marks the
-folder the change was in dirty, or the nearest folder above it that is known (new folders are found by listing that
-one); changes in hidden folders are ignored. Changes settle for 250 ms after the last one (at most 1 s after the
-first) before a pass. If the buffer overflowed (too much changed at once), every folder's time is compared again
-(`++round_`). If a watcher fails, it is dropped and `rewatch()` tries again after the next pass, once the place's
-root exists.
+**Watching.** Each place has a `FolderWatcher`:
+
+- On Windows, `ReadDirectoryChangesW` on the place's root, recursive, for file and folder names (added, removed,
+  renamed), into a 64 KB buffer, overlapped.
+- On Linux, an inotify watch on each folder in the tree (`IN_CREATE`, `IN_DELETE`, `IN_MOVED_FROM`, `IN_MOVED_TO`, and
+  the folder itself going), except hidden ones (never listed), kept up as folders come and go: a folder created or
+  moved in is watched with everything below it, one deleted or moved out is let go. Folders the system won't watch
+  any more of (`fs.inotify.max_user_watches`) are left out: their changes show on a rescan or the next start. Other
+  POSIX systems don't watch; changes show on a rescan or the next start.
+
+When a watcher fires, `markChanged()` marks the folder the change was in dirty, or the nearest folder above it that is
+known (new folders are found by listing that one); changes in hidden folders are ignored. Changes settle for 250 ms
+after the last one (at most 1 s after the first) before a pass. If the watcher overflowed (too much changed at once:
+`Changes::Overflow`), every folder's time is compared again (`++round_`). If a watcher fails (its root went), it is
+dropped and `rewatch()` tries again after the next pass, once the place's root exists.
+
+**Waiting.** `platform::Waiter` waits for any of the wake event's and the watchers' handles, or a timeout: on Windows
+`WaitForMultipleObjects` on events, which takes at most 64 handles (`kMaxHandles`); elsewhere `poll` on file
+descriptors (the event is a pipe, a watcher its inotify descriptor), up to 4096.
 
 ### The search thread
 
 `Browser::search()` takes the next generation (`latest_`, an atomic counter), replaces any waiting query with it,
-clears any finished result and wakes the search thread. A running search sees the counter move and stops: the
-filters and sorts look at it every 4096 items (`kCheckEvery`). The thread then runs the newest query over the newest
-snapshot (`indexer_.snapshot()`), the external groups and the use counts as they were when it started.
+clears any finished result and wakes the search thread. A running search sees the counter move and stops: the filters
+and sorts look at it every 4096 items (`kCheckEvery`). The thread then runs the newest query over the newest snapshot
+(`indexer_.snapshot()`), the external groups and the use counts as they were when it started.
 
-A finished result is kept only if it is still the latest; then the event is set. `take()` hands it out once, and only
-if its generation is still the latest, so the UI never shows the results of a search it has replaced.
+A finished result is kept only if it is still the latest; then the wake callback is called. `take()` hands it out
+once, and only if its generation is still the latest, so the application never shows the results of a search it has
+replaced.
+
+### The wake callback
+
+`Browser::setWakeCallback(std::function<void()>)` takes the place of a platform event object, so the backend needs
+nothing of the platform's event loop. The callback is called from the browser's threads when there is something
+to `take()` (the latest search's results, or a change of the index or its status), once until the next `take()` (as a
+set event stays set). It must only hand the work over, never call back into the browser: `FileIndex` posts a queued
+call to its own thread (`QMetaObject::invokeMethod(this, ..., Qt::QueuedConnection)`), which calls `take()`. Once
+`setWakeCallback()` returned the previous callback is no longer called; if something waits to be taken already, the
+new callback is called at once; after `close()` no calls come.
 
 ### Matching and ordering
 
-Matching and ordering are defined by the Python search (see [search.py](../src/substation/ui/browser/search.py) and
-`find()` in the reference):
+Matching and ordering are defined by the reference's `find()` (the rules are in
+[BrowserSearch.h](../app/src/browser/BrowserSearch.h)):
 
 - **Terms**: `pySplit(pyLower(text))`, as `query.lower().split()`.
 - **Match**: every term is in the item's lower-case name or its lower-case detail. For files the detail is the
   folder's, so whether a term is in it is worked out once per folder.
-- **Place filter**: the folder's lower-case path plus `\` starts with the prefix.
+- **Place filter**: the folder's path (in lower case where names ignore case) plus the separator starts with the
+  prefix.
 - **Tag filter**: external items with that tag only.
 - **Rank** (`sortByRank`): items with a use rank above 0 first, by rank, then match quality (stable); then the unused
-  ones by match quality, best first, keeping the list's own order (a counting sort over quality buckets); items with
-  a negative rank last. With no terms every quality is 0, so only the used items move.
+  ones by match quality, best first, keeping the list's own order (a counting sort over quality buckets); items with a
+  negative rank last. With no terms every quality is 0, so only the used items move.
 - **Name** (`sortByName`): by casefolded name, stable over the list's own order. Each group is ordered and the groups
   are merged, which is the same as a stable sort of the whole list. For files the snapshot's `byFold` is already in
   that order.
 
-The list's own order is the groups' order (built-in devices, plug-ins as the scan found them, then samples by name).
+The list's own order is the groups' order (built-in devices, plug-ins as the scan found them, presets by the device
+they are for and then by name, then samples by name).
 
 **Match quality** (`matchQuality`, as the reference's `match_quality`): 8 if the name's stem (an audio file's name
-without its extension) equals the terms joined by spaces; then for each term, 3 if the name starts with it, else 2
-if a word in the name starts with it, else 1 if it is anywhere in the name. Word starts are where
+without its extension) equals the terms joined by spaces; then for each term, 3 if the name starts with it, else 2 if
+a word in the name starts with it, else 1 if it is anywhere in the name. Word starts are where
 `re.finditer(r"(?:^|[\s_\-.()\[\]])(\w)", name)` finds its group (`wordStarts`).
 
-**Use rank** (`Usage::rank`, as `Library.rank`): `score * 0.5 ** (days since last use / 30)`, 0 when there is no
-score. For files, `resolveAudioUsage()` matches each `audio:` record to a file through its folder's key and the
-file's `ntLower` name (a record for a drive's root is looked up with its trailing `\`); the result is cached in
-`UsageCache` for as long as the snapshot and the use counts stay the same.
+**Use rank** (`Usage::rank`, as `Library::rank`): `score * 0.5 ** (days since last use / 30)`, 0 when there is no
+score. For files, `resolveAudioUsage()` matches each `audio:` record to a file through its folder's key and the file's
+key name (a record for a drive's root is looked up with its trailing `\`); the result is cached in `UsageCache` for as
+long as the snapshot and the use counts stay the same.
 
 ### Text: Python's rules, from Python's tables
 
-[Text.h](../browser/src/Text.h) implements `str.lower()`, `str.casefold()`, `str.split()` and the regex classes `\s` and
-`\w` from tables generated out of Python itself, so the backend agrees with Python for every character:
+[Text.h](../browser/src/Text.h) implements `str.lower()`, `str.casefold()`, `str.split()` and the regex classes `\s`
+and `\w` from tables generated out of Python itself, so the backend lowers, folds and splits every character as Python
+does:
 
-- `kLower` and `kFold`: each character's mapping where it changes (up to three code points). Capital sigma (U+03A3)
-  is lowered by its context (the Final_Sigma rule, `isFinalSigma`), which needs Python's "case-ignorable" and "cased"
-  properties; Python doesn't expose them, so the generator reads them back by lowering probe strings (`kCaseIgnorable`,
-  `kCased`).
+- `kLower` and `kFold`: each character's mapping where it changes (up to three code points). Capital sigma (U+03A3) is
+  lowered by its context (the Final_Sigma rule, `isFinalSigma`), which needs Python's "case-ignorable" and "cased"
+  properties; Python doesn't expose them, so the generator reads them back by lowering probe strings
+  (`kCaseIgnorable`, `kCased`).
 - `kSpace`: `str.isspace()`, what `split()` and `\s` split on. `kWord`: `str.isalnum()` or `_`.
 - ASCII is handled by a fast path and a 128-entry class table.
 
-Strings are **WTF-8**: UTF-8 that may also hold unpaired surrogates, which Windows file names (and so Python strings)
-can contain. The bindings convert with `surrogatepass` both ways, so such names survive the trip as they do through
-`os.scandir`. Byte order is code point order, so comparing bytes compares strings as Python does.
+Strings are **WTF-8**: UTF-8 that may also hold unpaired surrogates, which Windows file names can contain, so such
+names survive the trip to UTF-16 and back. Byte order is code point order, so comparing bytes compares strings as
+Python did. How file names compare in keys is the platform's (`nameKey()`), not these tables'.
 
-To follow a newer Unicode version, re-run the generator with that Python:
+[browser/tools/gen_unicode_tables.py](../browser/tools/gen_unicode_tables.py) writes the tables; it is the one piece
+of the browser still in Python, a generator run by hand, not part of the build. To follow a newer Unicode version,
+run it with that Python:
 
-```powershell
+```sh
 python browser/tools/gen_unicode_tables.py
 ```
 
 The header of `UnicodeTables.inc` records the Python and Unicode versions it was made with (currently Python 3.12.10,
-Unicode 15.0.0); `_browser.UNICODE_VERSION` exposes the latter.
+Unicode 15.0.0); `unicodeVersion()` returns the latter.
 
 ### The saved index
 
-The index is saved to `%LOCALAPPDATA%\SUBstation\browser-index.bin` (`index_path()`; the environment variable
-`SUBSTATION_BROWSER_INDEX` overrides it, as the tests do). An empty store path means nothing is saved. It is written
-5 s after a pass that changed something, and when the backend closes; it goes to `browser-index.bin.tmp` first and is
-moved over the old one (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`).
+The index is saved to `browser-index.bin` in `localDataDir()` (`%LOCALAPPDATA%\SUBstation` on Windows,
+`~/.local/share/SUBstation` elsewhere: `FileIndex::defaultIndexPath()`; the environment variable
+`SUBSTATION_BROWSER_INDEX` overrides it, as the tests do). An empty store path means nothing is saved. It is written 5 s
+after a pass that changed something, and when the backend closes; it goes to `browser-index.bin.tmp` first and is
+moved over the old one (`platform::replaceFile`: `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING |
+MOVEFILE_WRITE_THROUGH` on Windows, `rename` elsewhere).
 
 Format (little-endian, as written by `Writer` in `Indexer.cpp`):
 
@@ -272,152 +336,233 @@ str = u32 length + UTF-8 (WTF-8) bytes
 
 Anything unexpected (a different magic or format, another list of extensions, a bad checksum, a truncated file,
 indexes out of range) and the file is ignored: the folders are listed again. On load every folder's time is compared
-with the disk (`checked = 0`), so on the next start the saved index shows at once and only folders that changed are
-listed. A file added in a way that doesn't change the folder's time (on drives that don't report it) is only found
-by *Rescan*, which lists every folder again.
+with the disk, so on the next start the saved index shows at once and only folders that changed are listed. A file
+added in a way that doesn't change the folder's time (on drives that don't report it) is only found by *Rescan*,
+which lists every folder again.
 
-### The UI side
+## The application layer
 
-`FileIndex` (in `file_index.py`) makes the backend with `index_path()`, `AUDIO_EXTENSIONS`, `MAX_FILES = 300_000` and
-`MAX_DEPTH = 16`. The backend's `event_handle` goes into a `QWinEventNotifier` (as a `shiboken6.VoidPtr`), whose
-`activated` signal starts a zero-interval single-shot timer that calls `_take()`. `_take()` calls `native.take()`,
-emits `results` with a `SearchResult` when there is one, and `updated` when indexing started or stopped or the index
-version changed. (Off Windows, where there is no `QWinEventNotifier`, the timer polls every 15 ms.)
+### FileIndex
 
-`BrowserPanel` asks for every list as a search:
+[FileIndex](../app/src/browser/FileIndex.h) makes the backend with `defaultIndexPath()`, `audioExtensions()`,
+`kMaxFiles = 300000` and `kMaxDepth = 16`, and sets its wake callback to a queued `take()`. `take()` calls
+`Browser::take()`, emits `results(SearchResult)` when there is one, and `updated` when indexing started or stopped or
+the index version changed. It converts between the application's paths (Qt's form, `QString`) and the backend's
+(the system's form, UTF-8): `toBackendPath()`, `fromBackendPath()`. `placeSpec(root)` gives a place as the backend
+takes it (its root as given, its `pathKey()`, its basename); `usageRecords(library)` the use counts as `(key, score,
+last used or NaN)`. `close()` stops the backend's threads, saving the index.
 
-- The search field's `textChanged` starts a zero-interval timer, which only merges changes that come together; there
-  is no typing delay, since searching doesn't hold up the UI. `_refresh()` calls `FileIndex.search()` with the text,
-  the sort, `library.clock()` and the scope's groups, tag and prefix.
-- A place with no search text shows a `QFileSystemModel` tree of the folder instead (results that arrive after the
-  tree was shown are dropped).
-- When the index or the plug-ins change, the list is searched again with `keep=True`: the panel remembers the
-  current item and scroll position and restores them when the results come (`SearchResult.find()`), if the item is
-  within the first 5000 rows (`KEEP_WITHIN`).
-- Enter or Down in the search field selects the first result (once the results are there, if they are still on
-  their way); Enter on a result adds it, as a double-click does.
+### BrowserController
 
-**Paging.** Results cross into Python a page at a time: `ItemListModel` shows the first 256 rows (`PAGE`) at once and
-more through Qt's `canFetchMore`/`fetchMore` as the view scrolls near the end; `ensure_rows()` fetches up to a row
-when it has to (restoring a position). A view lays out every row it has, about 1 µs a row, so a list of every file
-would cost the UI thread about 200 ms each time it changed. `SearchResult.items()` turns rows
-`(kind, name, path, detail, key)` into `BrowserItem`s: files (empty key) are made fresh, other items are the
-panel's own objects by key.
+[BrowserController](../app/src/browser/BrowserController.h) is what the panel binds to (`Session.browser`). Every
+list is a search:
+
+- `searchText` set (as the user types) starts a zero-interval timer, which only merges changes that come together;
+  there is no typing delay, since searching doesn't hold up the UI. `refresh()` calls `FileIndex::search()` with the
+  text, the `sort`, the library's clock and the scope's groups, tag and prefix. `searching` is true while results are
+  on their way.
+- A place (`scope` `["place", path]`) with no search text shows its folder tree instead: `showingTree`, `treeRoot`,
+  and a `QFileSystemModel` (`folderModel`, made when first wanted) from `treeRootIndex`. Results that arrive after the
+  tree was shown are dropped.
+- When the index or the plug-ins change, the list is searched again keeping its place: the controller remembers the
+  current item and the top row (`setTopRow()`) and restores them when the results come (`SearchResult::find()`,
+  `positionRestored(currentRow, topRow)`), if the item is within the first 5000 rows (`kKeepWithin`).
+- `selectFirstResult()` (Enter or Down in the search field) selects the first result, once the results are there if
+  they are still on their way (`selectRowRequested`); `activate(row)` (Enter on a result, a double-click) adds it:
+  `fileActivated(path)`, `deviceActivated(kind)`, `pluginActivated(ref)` or `presetActivated(path)`, which the session
+  turns into adding it to the selected track ([app/session.md](app/session.md)).
+- `focusSearch()` (Ctrl+F) shows *All* and asks the panel to focus the search field (`searchFocusRequested`).
+- `statusText` is the footer: how many items the list has ("No presets yet…", "No VST3 plug-ins found"), whether
+  indexing or a plug-in scan runs, the scan's progress, how many plug-in files could not be read.
+
+**Paging.** Results cross into the model a page at a time: [ItemListModel](../app/src/browser/ItemListModel.h) shows
+the first 256 rows (`kPage`) at once and more through Qt's `canFetchMore`/`fetchMore` as the view scrolls near the end;
+`ensureRows()` fetches up to a row when it has to (restoring a position). A view lays out every row it has, so a list
+of every file would cost the UI thread that much each time it changed. QML views fetch every page as soon as they can,
+so the panel puts [PagedRows](../ui/src/mainwindow/PagedRows.h) (an identity proxy that only fetches when the view asks,
+near its end) between the list and the model. `SearchResult::items()` makes rows into `BrowserItem`s: files are made
+fresh, other items are the ones handed over with `setItems()`, by key.
+
+`ItemListModel` roles: `name`, `path`, `kind`, `detail`, `key`, `display` (the name, and for a plug-in or a preset its
+detail: "Name   (Vendor)"), `toolTip` (the item's tooltip or path, and how often it was used), `icon` ("waveform",
+"plugin" or "preset"), `uses`, `instrument`, `plugin` (a plug-in's `PluginRef` fields). `get(row)` returns every role
+of a row by name.
+
+[SidebarModel](../app/src/browser/SidebarModel.h) is the sidebar as a flat list: *CATEGORIES* (All, Samples, Built-in
+and its categories, Plug-ins with Instruments and Audio Effects, Presets with a sub-entry per device they are for) and
+*PLACES* (each place, Add Folder…). Roles: `title`, `scope`, `section` (a heading), `depth` (1 for a sub-entry), `icon`,
+`toolTip` (the Plug-ins entry's lists the files that could not be read), `dim` (headings, Add Folder…), `selectable`.
 
 **Use counts.** An item counts as used when it is added to the project from the browser: double-click, Enter, or a
-drag that is dropped somewhere (`_start_drag` emits `dropped` only when the drop was accepted). `Library.record_use()`
-adds 1 to `uses`, sets `score` to the current rank plus 1 and `last_used` to now, and saves; the panel then hands the
-records to the backend (`set_usage`, as `(key, score, last_used or NaN)`). The list is not re-sorted then, so the
-selection stays put. `library.json` (`%LOCALAPPDATA%\SUBstation\library.json`, or `SUBSTATION_LIBRARY`) is
-`{"version": 1, "items": {key: record}}`; records are plain dicts and fields this version doesn't know are kept. A file
-that can't be read or has another version counts as empty; a failed save is ignored. The tooltip of an item shows how
-often it was used.
+drag that is dropped somewhere (the panel calls `dropped(rows)`, or `droppedFiles(paths)` from the folder tree, only
+when the drop was accepted). [Library](../app/src/browser/Library.h)`::recordUse()` adds 1 to `uses`, sets `score` to
+the current rank plus 1 and `last_used` to now, and saves; the controller then hands the records to the backend
+(`FileIndex::setUsage`). The list is not re-sorted then, so the selection stays put. `library.json` (in
+`localDataDir()`, or `SUBSTATION_LIBRARY`) is `{"version": 1, "items": {key: record}}`; records are plain JSON objects
+and fields this version doesn't know are kept. A file that can't be read or has another version counts as empty; a
+failed save is ignored. An item's tooltip shows how often it was used.
 
-**Plug-ins.** `PluginIndex` runs `PluginScanner` on a `QThread` (`_PluginScanThread`), at start-up and on *Rescan
-Plug-ins*; a scan asked for while one runs is run after it. Its items go to the backend as group `PLUGINS`; see
-[python/plugin-scanner.md](python/plugin-scanner.md).
+**Drags.** `dragData(rows)` gives what a drag of these rows carries, as `{mime type: text}` for QML's `Drag.mimeData`
+([BrowserMime.h](../app/src/browser/BrowserMime.h)):
 
-**Presets.** `PresetIndex` lists the library (`model/presets.py`) on the UI thread (it is small): at start, when
-the device view saves a preset (`DevicePanel.preset_saved` → `presets_changed()`), after a rename or delete from the
-list's menu, and when the library's folders change (a `QFileSystemWatcher` on the library and its folders, merged
-by a 200 ms timer). Its items go to the backend as group `PRESETS`, tagged with their group; when the groups change
-the sidebar is made again (*Presets* has an entry per group). A preset double-clicked is `preset_activated(path)`
-(`MainWindow.add_preset_to_selected_track`); dragged, its path goes under `PRESET_MIME`. *Delete* moves the file to
-the recycle bin (`QFile.moveToTrash`).
+| Type | What | Reader |
+|---|---|---|
+| `text/uri-list` | audio files, as file URLs | `QMimeData::urls()` |
+| `application/x-substation-plugin` | a JSON list of plug-ins (`format`, `uid`, `name`, `vendor`, `path`, `instrument`) | `pluginRefs()` |
+| `application/x-substation-device` | a JSON list of built-in device kinds | `deviceKinds()` |
+| `application/x-substation-preset` | a JSON list of preset files | `presetPaths()` |
+| `application/x-substation-device-move` | not the browser's: devices dragged from a track's chain in the device view, as plain text: the track's id, then the devices' ids, a line each | `movedDevices()` (written by `movedDevicesData()`) |
 
-**Preview.** Selecting an audio file (in the list or the tree) previews it through the bridge
-(`EngineBridge.preview_file`) while the headphones button is on; a click anywhere outside the browser stops it (an
-application-wide event filter). See [python/engine-bridge.md](python/engine-bridge.md).
+The arrangement and the device view read them on a drop ([ui/arrangement.md](ui/arrangement.md#drag-and-drop),
+[ui/device-view.md](ui/device-view.md#dragging-and-dropping)).
+
+**Plug-ins.** The [PluginIndex](../app/src/plugins/PluginIndex.h) scans on a thread of its own, at start-up and on
+*Rescan Plug-ins*; a scan asked for while one runs is run after it. The controller lists its plug-ins in the
+plug-ins group as they are found, and its failures in the Plug-ins entry's tooltip. See
+[app/plugin-scanner.md](app/plugin-scanner.md).
+
+**Presets.** [PresetIndex](../app/src/browser/PresetIndex.h) lists the user's preset library
+([io/Presets.h](../app/src/io/Presets.h)) on the application thread (it is small): at start, when the device view
+saves a preset (`DeviceSelection::presetSaved` → `Session::presetSaved` → `rescan()`), after a rename or delete from
+the list's menu (`presetsChanged`), and when the library's folders change (a `QFileSystemWatcher` on the library and its
+folders, merged by a 200 ms timer, `kSettleMs`). The session hands its items to the controller
+(`setPresets(items, groups, root)`), which gives them to the backend as the presets group, tagged with the device they
+are for; when the groups change the sidebar is made again (*Presets* has an entry per device). Presets straight in the
+library folder are listed under "Other". A result's menu (`resultActions(row)`) offers Rename… (`renamePreset(path,
+name)`: the new path, or "" with a status message), Delete (`deletePreset(path)`: the file moves to the system's trash,
+`QFile::moveToTrash`) and Show in Folder.
+
+**Preview.** Setting `currentRow` to an audio file (in the list or the tree: `treeCurrentChanged(path)`) previews it
+(`previewRequested(path)`, which the session sends to `EngineBridge::previewFile`) while `previewEnabled` is on;
+`previewing` is true from then until it stops. The panel stops it on a press anywhere outside the browser
+(`stopPreview()`). See [app/engine-bridge.md](app/engine-bridge.md).
 
 **Places and settings.** The places and the sort are kept in `QSettings` (`browser/places`, `browser/sort`). The
-first start has the user's Music folder (or the home folder) as its place. *Add Folder…* indexes only the new place;
-*Remove from Places* drops it; *Rescan* calls `FileIndex.rebuild()`, which sets the places and asks for a rescan.
-`MainWindow` calls `BrowserPanel.shutdown()` on close, which stops the backend's threads (saving the index) and waits
-for a plug-in scan.
+first start has the user's Music folder (or the home folder) as its place. `addPlace(folder)` indexes only the new
+place; `removePlace(place)` drops it; `rescan()` calls `FileIndex::rebuild()`, which sets the places and asks for a
+rescan. A sidebar entry's menu (`sidebarActions(scope)`) offers Remove from Places (a place), Rescan Plug-ins
+(Plug-ins), Show in Folder (Presets), then Add Folder… and Rescan. The session calls `shutdown()` when the
+application ends, which stops the backend's threads (saving the index) and waits for a plug-in scan.
 
-## The `_browser` module
+## The panel
+
+[BrowserPanel.qml](../ui/qml/browser/BrowserPanel.qml) on `Session.browser`:
+
+- **The search field and the sort.** Typing sets `searchText`; Enter or Down selects the first result; a ✕ clears it.
+  The sort is a `ChoiceBox` of `sorts` (Rank, Name).
+- **The sidebar** ([BrowserSidebar.qml](../ui/qml/browser/BrowserSidebar.qml)) in a `SplitView` beside the results: a
+  click sets `scope`; Add Folder… asks for a folder (`FolderDialog`, `addPlaceRequested`); a right-click opens the
+  entry's `ActionMenu`.
+- **The results** ([BrowserResults.qml](../ui/qml/browser/BrowserResults.qml)) or, while `showingTree`, the folder tree
+  ([BrowserFolderTree.qml](../ui/qml/browser/BrowserFolderTree.qml) over a
+  [FolderTreeModel](../ui/src/mainwindow/FolderTreeModel.h): the `QFileSystemModel` under the place flattened into rows
+  with their depth, folders opened with their arrow, a double-click, or Right and Left, since Qt 6.4's `TreeView` has
+  no root index). Both are [SelectionList](../ui/qml/browser/SelectionList.qml)s: a click selects a row, Ctrl toggles
+  one, Shift a range from the last one clicked; a press on one of several selected rows keeps them all (a drag takes
+  them all) and selects only it on release; Up/Down (Shift extends), Page Up/Down and End move the current row;
+  Return/Enter and a double-click activate it; a right-click selects it and asks for its menu. Keys the list doesn't
+  take (Home, Delete, letters) are the window's shortcuts. The current row is the controller's (`currentRow`).
+- **Drags out**: dragging further than the platform's drag distance starts a drag of the selected rows with the
+  controller's `dragData()` (the tree's: its files' URLs) and the item's icon; when it ends with a drop, the panel
+  counts the items as used.
+- **Renaming a preset** in place (Ctrl+R with the list focused, or its menu's Rename…): a text field over its row;
+  Enter applies (`renamePreset`), Esc cancels. Deleting asks first ("Move the preset to the Recycle Bin?").
+- **The footer**: the headphones (`previewEnabled`) and the status.
+- **Stopping a preview**: an [OutsidePresses](../ui/src/mainwindow/OutsidePresses.h) on the panel, enabled while
+  `previewing`, sees a press anywhere outside the panel (in its window or another of the application's) and calls
+  `stopPreview()`; presses while the panel's own menus are open count as inside.
+
+What the panel is to the main window: `focusSearch()`, `startRename(path)`, `listFocused` (the results have the
+keyboard: Ctrl+R renames the preset there).
+
+## The backend's API
 
 | Name | What it is |
 |---|---|
-| `Browser(store, extensions, max_files=300000, max_depth=16)` | Starts the backend. `store`: where the index is saved (`''` for nowhere); `extensions`: lower case, with the dot. |
-| `event_handle` | The Win32 event, set when there is something to `take()`. |
-| `set_places(places)` | Places as `(root, normcase(normpath(root)), basename(root))` (`place_spec()`). |
+| `Browser(store, limits)` | Starts the backend. `store`: where the index is saved (UTF-8, `""` for nowhere); `Limits`: `maxFiles` (300 000 per place), `maxDepth` (16), `extensions` (lower case, with the dot). |
+| `setWakeCallback(fn)` | [Above](#the-wake-callback). |
+| `setPlaces(places)` | `PlaceSpec`s: `root` (as given), `key` (`pathKey(root)`), `detail` (its basename). |
 | `rescan()` | List every folder again. |
-| `set_external(group, items)` | A group of other items as `(kind, name, path, detail, key, tag)`. |
-| `set_usage(records, half_life_days)` | Use counts as `(key, score, last_used)`, `last_used` NaN when unknown. |
-| `search(text, sort, now, groups, tag="", place_prefix="")` | Starts a search, replacing any that runs; returns its generation. `sort` is `"rank"` or `"name"`. |
-| `take()` | `(indexing, index version, files, Result or None)`. |
-| `indexing`, `version`, `file_count`, `searching`, `stats` | Status; `stats` has files, folders, `load_ms`, `build_ms`, `pass_ms`, `listed`, `checked` (for benchmarks). |
-| `wait_idle(seconds)` | Waits until the index settled and no search runs; False on timeout (tests, benchmarks). |
-| `close()` | Stops the threads, saving the index. |
-| `Result.generation`, `.search_ms`, `.total` | |
-| `Result.rows(start, count)` | Rows `[start, start + count)` as `(kind, name, path, detail, key)`; key is `''` for indexed files. |
-| `Result.find(kind, identity)` | Row of an item (an indexed file by path, others by key), or -1. |
-| `AUDIO`, `UNICODE_VERSION` | Group 0; the Unicode version of the tables. |
-| `lower`, `casefold`, `split`, `nt_lower`, `word_starts`, `match_quality` | The text functions, exposed to test them against Python's own. |
+| `setExternal(group, items)` | A group of other items, `ExternalItem`s: kind, name, path, detail, key, tag. |
+| `setUsage(records, halfLifeDays)` | Use counts as `UsageRecord`s (key, score, last used; NaN when unknown). |
+| `search(query)` | Starts a search (a `Query`: text, sort (`Sort::Rank` or `Sort::Name`), now, groups, tag, place prefix), replacing any that runs; returns its generation. |
+| `take()` | An `Update`: the `IndexStatus` (busy, version, files, folders, and timings for benchmarks: `loadMs`, `buildMs`, `passMs`, `listed`, `checked`) and the latest search's `Result` if it finished since. |
+| `status()`, `searching()` | The index's status; whether a search is waiting or running. |
+| `waitIdle(seconds)` | Waits until the index settled and no search runs; false on timeout (tests, benchmarks). |
+| `close()` | Stops the threads, saving the index; no wake calls after it. |
+| `Result::find(kind, identity)` | Row of an item (an indexed file by path, others by key), or -1. |
 
-Item kinds are numbered as `KINDS = ("audio", "plugin", "device")` in `file_index.py` (`Kind` in `Model.h`).
-
-The bindings convert arguments while holding the GIL and release it for the call; `take()` releases it while it takes.
-Making rows into Python objects holds it, which is why results are read a page at a time.
+Item kinds are numbered alike in `sub::browser::Kind` and `sub::app::ItemKind` (audio 0, plugin 1, device 2, preset 3).
 
 ## Invariants
 
-- The backend's threads never call into Python or the engine, and never wait on the UI thread.
+- The backend's threads never call into the application (but the wake callback, which only posts) or the engine, and
+  never wait on the application's thread.
 - Searches read only immutable, shared data: snapshots, external groups and use counts are replaced, never changed.
   `setExternal` and `setUsage` build new objects and swap them in under the lock.
 - Only the latest search's results are handed out, and only once.
-- The index lists what the Python walk listed, in the same order, and the search orders as the Python `find()` did,
-  for every character. A change to either has to change the reference too, or be a deliberate break of that parity.
+- The index lists what the reference's walk lists, in the same order, and the search orders as the reference's `find()`
+  does, for every character. A change to either has to change the reference
+  ([BrowserReference.h](../tests/app/support/BrowserReference.h)) too, or be a deliberate break of that parity.
 
 ## Extending it
 
-- **A new sort order**: add it to `Sort` in `Model.h`, implement it in `Search::run()`, parse its name in
-  `bindings.cpp` (`search`), and add it to `SORTS` in `search.py`.
-- **A new kind of item to list** (as presets are): give it a group number in `search.py`, hand its items over with
-  `FileIndex.set_items(group, [(item, tag), ...])`, and add a scope to `scope_query()` and the sidebar. A new kind
-  name goes into `KINDS` and `Kind` together.
-- **New filters** (items hidden from search) and orders (similar sounds) belong in `search.py`'s `scope_query` and the
-  native `Query`; `library.py` keeps unknown fields so later versions can store what they need per item.
-- **Another audio extension**: add it to `AUDIO_EXTENSIONS`. The saved index records the extensions it was made with,
-  so the next start lists everything again.
+- **A new sort order**: add it to `Sort` in `Model.h`, implement it in `Search.cpp`, and add it to `sortOrders()` and
+  the name-to-`Sort` conversion in [BrowserSearch.h](../app/src/browser/BrowserSearch.h) /
+  [FileIndex.cpp](../app/src/browser/FileIndex.cpp).
+- **A new kind of item to list** (as presets are): give it a group number in `BrowserSearch.h`, hand its items over
+  with `FileIndex::setItems(group, {(item, tag), ...})`, and add a scope to `scopeQuery()` and the sidebar. A new kind
+  goes into `Kind` and `ItemKind` together.
+- **New filters** (items hidden from search) and orders (similar sounds) belong in `scopeQuery()` and the native
+  `Query`; `Library` keeps unknown fields so later versions can store what they need per item.
+- **Another audio extension**: add it to `FileIndex::audioExtensions()`. The saved index records the extensions it was
+  made with, so the next start lists everything again.
 - **Changing the saved format**: bump `kFormat` in `Indexer.cpp`; old files are then ignored.
-- **A newer Python** (another Unicode version): re-run `gen_unicode_tables.py` and rebuild.
+- **A newer Unicode version**: re-run `gen_unicode_tables.py` with a newer Python and rebuild.
+- **Another platform**: implement [Platform.h](../browser/src/Platform.h); nothing else in the backend is
+  platform-specific.
 
 ## Gotchas
 
-- `_browser` has no API version check, unlike `_engine` (see [building.md](building.md#api_version-and-engine_api)):
-  after changing `browser/src/bindings.cpp`, re-run the install command, or Python code may call a module built from
-  older code.
-- The indexer waits on its wake event and the places' watchers in one `WaitForMultipleObjects`, which takes at most
-  64 handles: only the first 63 places are watched for changes. The others are still checked by folder time on the
-  next pass.
+- On Windows the indexer waits on its wake event and the places' watchers in one `WaitForMultipleObjects`, which takes
+  at most 64 handles: only the first 63 places are watched for changes. The others are still checked by folder time on
+  the next pass.
+- On Linux each folder under a place takes an inotify watch; past the system's limit (`fs.inotify.max_user_watches`)
+  the rest aren't watched, and their changes show on a rescan or the next start.
 - Drives that don't report changes (some network drives) are only re-read by folder times or *Rescan*.
-- A saved index written a moment before is sometimes slow to read (0.5–1 s), apparently antivirus scanning the new
-  file; see the benchmarks' *Variance* note.
-- File system calls are the wide (`W`) ones and paths cross as WTF-8; never convert through the ANSI code page.
-- `Result.find()` for an indexed file compares paths as shown (the place's root as given), not keys.
+- A saved index written a moment before is sometimes slow to read on Windows (0.5–1 s), apparently antivirus scanning
+  the new file; see the benchmarks' *Variance* note.
+- On Windows file system calls are the wide (`W`) ones and paths cross as WTF-8; never convert through the ANSI code
+  page.
+- `Result::find()` for an indexed file compares paths as shown (the place's root as given), not keys.
+- The wake callback runs on the browser's threads: it must not touch Qt objects of the application's thread, only post
+  to them.
 
 ## Tests
 
-- [tests/test_browser_native.py](../tests/test_browser_native.py): the backend against
-  [tests/browser_reference.py](../tests/browser_reference.py). `str.lower` and `casefold` of every Unicode character,
-  the final sigma, `split` and word starts on random strings (skipped if the tables were made with another Unicode
-  version), keys as `os.path.normcase`, match quality; random queries, sorts, tags, places and use counts ordered as
-  Python orders them; the files of a folder tree (hidden names, depth and file limits, junctions and symbolic links,
-  overlapping and missing places); the saved index (checked by folder times and not listed again, files changed while
-  closed, rescan, damaged files ignored); changes seen while running; places changing incrementally; only the latest
-  search's results handed out; paging through `ItemListModel`; and that waiting releases the GIL.
-- [tests/test_browser_search.py](../tests/test_browser_search.py): keys, use counts decaying and persisting,
-  unknown fields kept, a bad `library.json` ignored, match quality preferring name starts, rank putting used items
-  first.
-- [tests/test_ui_smoke.py](../tests/test_ui_smoke.py): the panel in the real window: indexing and searching, Down
-  previewing the first result until a click elsewhere, Ctrl+F searching *All*, keeping its place when files change,
-  results dropped after the tree was shown, Enter selecting then adding, drops from the browser, built-in devices in
-  the browser, used items ranking first.
-- [tests/test_ui_plugins.py](../tests/test_ui_plugins.py): plug-ins in the browser.
-- [tests/test_ui_presets.py](../tests/test_ui_presets.py): presets in the browser: listed by device, searched in
-  *All*, dragged, double-clicked, renamed and deleted.
+- [tests/app/test_browser_native.cpp](../tests/app/test_browser_native.cpp): the backend against the reference.
+  `str.lower` and `casefold` of every Unicode character, the final sigma, `split` and word starts on every short
+  string from pools of awkward characters (checked against hashes Python 3.12 computed; skipped if the tables were made
+  with another Unicode version), keys as `os.path.normcase` (case-sensitive off Windows), match quality; random queries,
+  sorts, tags, places and use counts ordered as Python orders them; the files of a folder tree (hidden names, depth and
+  file limits, junctions and symbolic links on Windows, symbolic links elsewhere, overlapping and missing places); the
+  saved index (checked by folder times and not listed again, files changed while closed, rescan, damaged files
+  ignored); changes seen while running (Windows and Linux); places changing incrementally; only the latest search's
+  results handed out; paging; the application woken from the backend's threads.
+- [tests/app/test_browser_search.cpp](../tests/app/test_browser_search.cpp): keys, use counts decaying and persisting,
+  unknown fields kept, a bad `library.json` ignored, the records the backend gets, match quality preferring name starts,
+  rank putting used items first, the sidebar entries' queries.
+- [tests/app/test_browser_controller.cpp](../tests/app/test_browser_controller.cpp): the controller and its models:
+  places and their settings, searching as you type, the sort, the sidebar, the folder tree, activation and drops and
+  their use counts, preview requests, Enter selecting the first result, keeping the list's place when the index
+  changes, plug-ins and their failures, presets, what a drag carries.
+- [tests/app/test_ui_browser.cpp](../tests/app/test_ui_browser.cpp): the panel on a real session: the sidebar,
+  searching, Enter and Down from the search field, previews stopped by a press outside, activating results, the
+  selection and what a drag carries, keeping the list's place, paging, the sort, used items ranking first, a place's
+  folder tree, the context menus, adding places, renaming and deleting presets.
+- [tests/app/test_session_devices.cpp](../tests/app/test_session_devices.cpp): presets saved from the device view listed
+  in the browser, renamed there, and the preset index watching the library.
 
-The benchmarks ([benchmarks/README.md](../benchmarks/README.md)) compare the backend with the reference and the panel
-before and after; see [testing.md](testing.md#benchmarks).
+The benchmark [benchmarks/browser_backend_bench.cpp](../benchmarks/browser_backend_bench.cpp) measures the backend on a
+large synthetic library (indexing, starting from the saved index, searches) and checks every query against the
+reference; see [benchmarks/README.md](../benchmarks/README.md) and [testing.md](testing.md).

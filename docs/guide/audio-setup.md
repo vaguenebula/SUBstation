@@ -3,18 +3,20 @@
 *Options › Preferences* (**Ctrl+,**, or click the audio device's name at the right of
 the transport bar) chooses the audio device, the MIDI inputs and the plug-in folders.
 SUBstation plays through ASIO drivers, or WASAPI shared or exclusive, with the sample
-rate and buffer size you choose.
+rate and buffer size you choose. On Linux it plays through the *System* driver instead
+(see [below](#on-linux)).
 
 ## First start
 
-The first launch uses the system's default output device (WASAPI). Change it here.
+The first launch uses the system's default output device (WASAPI; *System* on Linux).
+Change it here.
 
 ## The Audio page
 
 | Setting | What it does |
 |---|---|
-| *Driver Type* | WASAPI or ASIO. ASIO is greyed out when SUBstation was built without the ASIO SDK (see [../building.md](../building.md)) |
-| *Audio Device* | The WASAPI device (*System Default* or one by name), or the ASIO driver, with its **Hardware Setup** button |
+| *Driver Type* | WASAPI or ASIO (on Linux: *System*). ASIO is greyed out when SUBstation was built without the ASIO SDK (see [../building.md](../building.md)), and always on Linux |
+| *Audio Device* | The WASAPI (or *System*) device (*System Default* or one by name), or the ASIO driver, with its **Hardware Setup** button |
 | *Output Channels* | ASIO only: which pair of the driver's outputs the master plays on |
 | *Sample Rate* | The rates the device offers |
 | *Buffer Size* | The buffer sizes the device offers, in samples |
@@ -50,7 +52,8 @@ itself only offers that one: change it in Hardware Setup.
 
 The program opens the same driver next time. If it can't run as saved (another clock,
 fewer outputs), it opens with the driver's own settings; if the driver is gone, with the
-system's default output (WASAPI).
+system's default output (WASAPI; *System* on Linux). If nothing opens, it runs without
+audio and says so in the status line.
 
 ### Formats and limits
 
@@ -64,8 +67,8 @@ system's default output (WASAPI).
 
 A track's input opens the driver's inputs it needs; every buffer of them reaches the
 engine, which meters, monitors and records them (see [recording.md](recording.md)).
-WASAPI devices open outputs only, so recording from a microphone or line input needs
-an ASIO driver; resampling works with either.
+WASAPI devices (and the *System* driver on Linux) open outputs only, so recording from a
+microphone or line input needs an ASIO driver; resampling works with either.
 
 ## MIDI
 
@@ -73,7 +76,8 @@ The *MIDI* page lists the MIDI inputs connected, each with a check box. Every in
 used unless turned off here; tracks hear the inputs that are on (all of them, or the
 one they choose). **Refresh** finds inputs plugged in (or taken out) since. An input
 that could not be opened shows in red, with the reason in its tooltip. See
-[midi.md](midi.md#midi-input).
+[midi.md](midi.md#midi-input). On Linux no MIDI inputs are listed: the computer MIDI
+keyboard is the only one.
 
 ## Plug-ins
 
@@ -86,8 +90,17 @@ progress and results. See [plugins.md](plugins.md#finding-them).
 Changing the audio device (or its sample rate, or a reset by the driver) ends a
 recording; what was recorded so far is kept.
 
+## On Linux
+
+- *Driver Type* has *System*: the system's default sound backend (PulseAudio, ALSA,
+  JACK...), its playback devices under *Audio Device*. It opens outputs only, with no
+  exclusive mode (the check box isn't shown) and no ASIO.
+- With no sound server and no sound device, nothing opens: SUBstation runs without audio
+  and says so.
+
 ---
 
 For developers: [../engine/audio-devices.md](../engine/audio-devices.md),
-[../python/engine-bridge.md](../python/engine-bridge.md) (audio/settings.py),
-[../ui/README.md](../ui/README.md) (dialogs.py).
+[../app/engine-bridge.md](../app/engine-bridge.md) (`AudioSettings`),
+[../app/session.md](../app/session.md) (`AudioPreferences`, `MidiPreferences`),
+[../ui/README.md](../ui/README.md#dialogs) (the Preferences dialog).

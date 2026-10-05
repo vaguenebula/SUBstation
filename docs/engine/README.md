@@ -1,19 +1,25 @@
 # The engine
 
-The real-time audio engine is C++ in [engine/src/](../../engine/src), built into the Python
-module `substation._engine` with nanobind. It holds everything on the audio thread and the
-plug-in hosting. This page is about the `Engine` class: the edit model behind its API, how
+The real-time audio engine is C++ in [engine/src/](../../engine/src), built as the static
+library `sub_engine` (namespace `sub`), with no Qt in it. It holds everything on the audio thread
+and the plug-in hosting. This page is about the `Engine` class: the edit model behind its API, how
 edits become an immutable `RenderSnapshot` the audio thread plays, how old snapshots are freed,
 and the small shared headers. The other engine docs go into each part (see [the map](#the-other-engine-docs)).
 
-For the layers above it (Python model, bridge, UI) and the threads of the whole program, see
-[architecture.md](../architecture.md); for how the module is built, [building.md](../building.md).
+For the layers above it (the application layer's model, the engine bridge, the UI) and the
+threads of the whole program, see [architecture.md](../architecture.md); for how the library is
+built, [building.md](../building.md). The application layer calls the engine only through
+`Engine.h` and the few headers it exposes (`BuiltinRegistry`, `ParamInfo` in `Processor.h`,
+`AudioSource`, `RenderJob`, `Vst3Format` for the default search paths): its engine bridge,
+[app/src/audio/EngineBridge](../../app/src/audio/EngineBridge.h)
+([app/engine-bridge.md](../app/engine-bridge.md)), mirrors the project into it. The UI never
+includes the engine's headers.
 
 ## Files
 
 | File | What it holds |
 |---|---|
-| [Engine.h](../../engine/src/Engine.h) | The public API (the class the bindings wrap), the API's plain structs (`ClipDesc`, `NoteDesc`, `RecordTarget`, `SendInfo`, `SidechainInfo`, `MeterReading`, `ProcessorInfo`, `DeviceStatus`, `TrackCost`, ...), and the private edit model (`TrackModel`, `ChainModel`, `ProcessorEntry`, `SendModel`, `SidechainModel`). Its header comment is the threading model. |
+| [Engine.h](../../engine/src/Engine.h) | The public API (what the engine bridge calls), the API's plain structs (`ClipDesc`, `NoteDesc`, `RecordTarget`, `SendInfo`, `SidechainInfo`, `MeterReading`, `ProcessorInfo`, `DeviceStatus`, `TrackCost`, ...), and the private edit model (`TrackModel`, `ChainModel`, `ProcessorEntry`, `SendModel`, `SidechainModel`). Its header comment is the threading model. |
 | [Engine.cpp](../../engine/src/Engine.cpp) | Lifetime, sources (`loadSource`, the source cache), transport calls, browser preview, audio threads (`setAudioThreads`, cost ordering), and housekeeping (`idle()`). |
 | [EngineDevice.cpp](../../engine/src/EngineDevice.cpp) | Opening and closing the audio device, device events, input meters, the master scope, and `audioCallback()`. See [audio-devices.md](audio-devices.md). |
 | [EngineTracks.cpp](../../engine/src/EngineTracks.cpp) | Tracks, their mixer, routing (outputs, sends, the list of edges, cycle checks), meters, `setTrackAutomation`. See [routing.md](routing.md). |
@@ -29,13 +35,12 @@ For the layers above it (Python model, bridge, UI) and the threads of the whole 
 | [Transport.h](../../engine/src/Transport.h) | `TransportCommand`, `PreviewNote` and `SharedState`: what the API threads and the audio thread share. |
 | [Metronome.h](../../engine/src/Metronome.h) / [.cpp](../../engine/src/Metronome.cpp) | The click generator. See [rendering.md](rendering.md#metronome-and-count-in). |
 | [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) | Real-time helpers: `ScopedNoDenormals`, `SmoothedValue`, `SpscQueue`, `DeferredReleasePool`, `atomicStoreMax`, `dbToGain`, `balanceGains`, `DisplayStream`. |
-| [PathUtils.h](../../engine/src/PathUtils.h) | `pathFromUtf8()` and `widen()`: Python hands the engine UTF-8, Windows file APIs want UTF-16. |
-| [bindings.cpp](../../engine/src/bindings.cpp) | The nanobind module `substation._engine`, and `API_VERSION`. |
+| [PathUtils.h](../../engine/src/PathUtils.h) | `pathFromUtf8()` and `widen()`: the engine takes paths as UTF-8, Windows file APIs want UTF-16. |
 
 The `Engine` class is declared once in `Engine.h` and implemented by area across the
 `Engine*.cpp` files (the comment at the top of `Engine.cpp` lists them). They all build into
-the one `_engine` target ([CMakeLists.txt](../../CMakeLists.txt)); a new `Engine*.cpp` has to be
-added to its source list there.
+the static library `sub_engine` ([engine/CMakeLists.txt](../../engine/CMakeLists.txt)); a new
+`Engine*.cpp` has to be added to its source list there.
 
 ## Threads
 
@@ -46,9 +51,10 @@ The header comment of [Engine.h](../../engine/src/Engine.h) is the rule book. In
   points at but doesn't own: `TrackBuffers`, the edges' `EdgeState`s and `DelayLine`s, and the
   meters and fader smoothing in `TrackParams` (allocated on the edit side; only the audio thread
   and its workers write them while a snapshot is live). It never locks, allocates, frees or
-  touches Python, so the GIL cannot cause dropouts.
+  calls into the application, so nothing there can cause dropouts.
   (That is the host's part; what a plug-in does in its `process()` is up to the plug-in.)
-- **API calls** may come from any Python thread. They serialise on `mutex_` (a
+- **API calls** may come from any thread (the application's main thread, and the engine
+  bridge's decoding threads for `loadSource()`). They serialise on `mutex_` (a
   `std::recursive_mutex`), change the edit model, then rebuild and publish a new snapshot.
 - **Plug-ins** are created, called and destroyed on the main (UI) thread, as plug-in formats
   require: the plug-in calls and `idle()` must come from the thread that created the engine.
@@ -69,9 +75,9 @@ The header comment of [Engine.h](../../engine/src/Engine.h) is the rule book. In
 
 ## The edit model
 
-The engine keeps its own model of the arrangement, separate from the Python model
-(`src/substation/model/`, see [model.md](../python/model.md)); the bridge
-([engine-bridge.md](../python/engine-bridge.md)) mirrors one into the other. The engine's
+The engine keeps its own model of the arrangement, separate from the application layer's model
+([app/src/model](../../app/src/model), see [app/model.md](../app/model.md)); the engine bridge
+([app/engine-bridge.md](../app/engine-bridge.md)) mirrors one into the other. The engine's
 model is in engine terms: ids, samples-to-be, edges. It never sees groups or returns as such,
 only tracks and the edges between them.
 
@@ -82,7 +88,7 @@ only tracks and the edges between them.
   its input (device channels, or `inputTrack`), MIDI input route, monitor mode and arm state.
   It also owns state the renderer keeps across snapshots: `buffers` (`TrackBuffers`),
   `outputState` and the sends' `EdgeState`s, and the edges' `DelayLine`s.
-- **Track id 0 is the master** (`Engine::kMaster`, `MASTER` in Python). It has devices, a
+- **Track id 0 is the master** (`Engine::kMaster`). It has devices, a
   mixer and automation like a track, but no clips or notes, and it never mutes or solos.
   `trackLocked()` finds the master too; `arrangementTrackLocked()` refuses it.
 - **`ChainModel`** (in `chains_`, by id): a chain of devices. Every strip has a main chain;
@@ -107,10 +113,10 @@ Calls that only change an atomic don't: track and chain gain, pan, mute and solo
 (`setTrackGain` etc. store into `TrackParams`), a send's level when only the level changes
 (`EdgeState::gain`), the metronome switch, a processor's parameter.
 
-Errors for the caller are exceptions: `std::invalid_argument` (unknown ids, a route that would
-close a cycle, racks nested too deep) becomes `ValueError` in Python, `std::runtime_error` (a
-message for the user: a plug-in that can't load, no device for recording) becomes
-`RuntimeError`.
+Errors for the caller are exceptions: `std::invalid_argument` for a call that can't be made
+(unknown ids, a route that would close a cycle, racks nested too deep), `std::runtime_error` for
+a message for the user (a plug-in that can't load, no device for recording). The engine bridge
+catches them where the user can cause them and turns them into what the application shows.
 
 ## Building and publishing the snapshot
 
@@ -163,7 +169,7 @@ The same pool retires the browser preview's source (`preview()` / `stopPreview()
 
 `collectGarbageLocked()` frees what is due. It runs in `idle()`, after every snapshot rebuild,
 and when the device closes, so retired snapshots are freed on whichever thread made the API
-call (the UI thread in practice, but `loadSource()` runs on the bridge's loader threads).
+call (the main thread in practice, but `loadSource()` runs on the bridge's decoding threads).
 Freeing a snapshot never destroys a plug-in: removed processors wait in `graveyard_`.
 
 When a device runs and the engine must be sure the audio thread is out of something (switching
@@ -172,13 +178,13 @@ most 500 ms), after setting `liveSuspended_` so later callbacks output silence.
 
 ## idle()
 
-`Engine::idle()` must be called regularly from the UI thread (the bridge does it from a timer,
-`poll_plugins()`). It:
+`Engine::idle()` must be called regularly from the main thread (the engine bridge does it on its
+meter timer, every 33 ms: `EngineBridge::pollPlugins()`). It:
 
 - closes the device if the backend lost it (the UI learns of it from `takeDeviceEvent()`);
 - frees retired snapshots and sources (`collectGarbageLocked()`);
 - applies transport commands itself while no device runs (`serviceTransportIfIdleLocked()`:
-  without a callback nobody else would, so `position_beats` and `is_playing` stay right);
+  without a callback nobody else would, so `positionBeats()` and `isPlaying()` stay right);
 - destroys removed processors that no snapshot holds any more (`use_count() == 1` in
   `graveyard_`), outside the lock, since plug-ins may take their time to go: for 20 ms at most
   a call (closing a project with many plug-ins doesn't hold up the UI), the rest go back to
@@ -276,33 +282,49 @@ snapshot without the lock (4096 frames at a time), so the UI's calls (meters, th
 
 See [rendering.md](rendering.md#offline-renders).
 
-## bindings.cpp and API_VERSION
+## The API and its callers
 
-[bindings.cpp](../../engine/src/bindings.cpp) is the nanobind module `substation._engine`. It
-wraps `Engine` method by method in snake_case (`add_track`, `set_track_output`,
-`render_offline`, ...), with properties for `tempo`, `position_beats`, `metronome`,
-`audio_threads`, `cost_ordering`, `is_playing` and so on, and the API's structs as read-only
-classes. Module-level functions: `probe_file`, `driver_types`, `builtin_devices`,
-`vst3_search_paths`, `host_time_ns`, `eq_response` (an EQ band's response, see
-[devices.md](devices.md)), and `task_graph_order` (for tests: the scheduler's queue
-order and ranks, see [scheduler.md](scheduler.md)). `MASTER` is track id 0.
+[Engine.h](../../engine/src/Engine.h) is the API: the `Engine` class's methods (`addTrack`,
+`setTrackOutput`, `renderOffline`, ...), its plain structs, and `Engine::kMaster` (track id 0).
+Its callers are the application layer's engine bridge (on the main thread, and its decoding threads
+for `loadSource()`), the scanner process `substation-scan` (`Vst3Format` only) and the engine's tests.
+What the application needs besides an `Engine` is plain functions and singletons:
 
-- Long-running calls release the GIL (`ReleaseGil`, or an explicit `nb::gil_scoped_release`
-  where arguments must be converted first): loading sources, opening devices (a driver may show
-  a dialog whose message loop calls Python), plug-in state, recording, offline renders,
-  `RenderJob.finish()`, `idle()`. The audio thread never calls into Python. A `RenderJob`'s
-  thread never touches Python either.
-- Byte strings (processor state) and arrays (`render_offline` returns a `(frames, 2)` float32
-  array, recorded notes an `(n, 5)` int64 array) are handed over with capsules that own the
-  buffer.
-- Leak warnings are turned off: Qt/PySide can keep engine objects alive until interpreter
-  teardown, which is harmless.
+| What | Where |
+|---|---|
+| A file's format and length, without decoding it | `AudioSource::probe(path)` ([AudioSource.h](../../engine/src/AudioSource.h)) |
+| The driver types this build has | `Engine::driverTypes()` |
+| The built-in devices, instruments first, then by name | `BuiltinRegistry::instance().devices()` ([devices.md](devices.md)) |
+| The default VST3 folders | `vst3::Vst3Format::instance().defaultSearchPaths()` ([plugins.md](plugins.md)) |
+| The clock MIDI input is stamped with | `hostTimeNs()` ([MidiInput.h](../../engine/src/MidiInput.h)) |
+| An EQ band's response | `eq::design()` and `eq::responseDb()` ([builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h); the application's `eqResponseDb()` wraps them, see [devices.md](devices.md)) |
 
-`API_VERSION` (currently 18) is set on the module. It is bumped whenever the Python code comes
-to depend on a change in the bindings; `ENGINE_API` in
-[src/substation/\_\_init\_\_.py](../../src/substation/__init__.py) must be bumped with it. The app
-and the tests refuse to start with an engine built from older (or newer) code, and say to
-rebuild. See [building.md](../building.md) and [engine-bridge.md](../python/engine-bridge.md).
+- Long-running calls (loading sources, opening devices, plug-in state, recording, offline renders,
+  `RenderJob::finish()`, `idle()`) block the thread that calls them; the bridge decodes on threads
+  of its own and renders in the background with a `RenderJob`. The audio thread and a
+  `RenderJob`'s thread never call into the application.
+- Processor state is a `std::vector<uint8_t>`; offline renders are interleaved stereo
+  `std::vector<float>`; recorded notes are `RecordedNote`s.
+- The engine and the application are built together, so there is no API version to check: what
+  the bridge calls is what the engine has. See [building.md](../building.md) and
+  [app/engine-bridge.md](../app/engine-bridge.md).
+
+## Platforms
+
+The engine builds on Windows (the product's platform) and on Linux; what differs is chosen in
+[engine/CMakeLists.txt](../../engine/CMakeLists.txt) by file, not by `#ifdef` scattered through it:
+
+| | Windows | Elsewhere (Linux) |
+|---|---|---|
+| Audio drivers | WASAPI (through miniaudio), and ASIO with the SDK ([audio-devices.md](audio-devices.md)) | "System": miniaudio's default backend (PulseAudio, ALSA, JACK...; never its null backend, which "plays" faster than real time), output only, no exclusive mode (`kDefaultDriver`) |
+| MIDI input devices | WinMM ([backends/MidiWinMM.cpp](../../engine/src/backends/MidiWinMM.cpp)) | none ([backends/MidiNone.cpp](../../engine/src/backends/MidiNone.cpp)): no device is ever connected, but messages sent with `Engine::sendMidiInput()` (the computer keyboard, tests) still arrive ([midi.md](midi.md)) |
+| Plug-in editor windows | Win32 windows ([plugins/EditorWindow.cpp](../../engine/src/plugins/EditorWindow.cpp)) | none ([plugins/EditorWindowNone.cpp](../../engine/src/plugins/EditorWindowNone.cpp)): `openEditor()` returns false ([plugins.md](plugins.md)) |
+| VST3 modules | the SDK's `module_win32.cpp` | the SDK's `module_linux.cpp`; default folders `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3` |
+
+The built-in devices register themselves from their own files, which nothing else refers to; a
+program linking the static library would lose them. So each defines an anchor function, and
+`BuiltinRegistry::instance()` calls them all (the build writes the list; see
+[devices.md](devices.md#builtinregistry)).
 
 ## Extending it
 
@@ -310,9 +332,9 @@ rebuild. See [building.md](../building.md) and [engine-bridge.md](../python/engi
 throws; implement it in the `Engine*.cpp` of its area, taking `std::lock_guard lock(mutex_)`;
 change the edit model, and call `rebuildSnapshotLocked()` if the renderer reads what changed
 (or store into an existing atomic if it is continuous). Never let the audio thread reach the
-edit model. If the call talks to a plug-in, don't hold the lock across the plug-in call. Bind it
-in `bindings.cpp` (release the GIL if it can take long), then bump `API_VERSION` and
-`ENGINE_API` together.
+edit model. If the call talks to a plug-in, don't hold the lock across the plug-in call. Then
+call it from the engine bridge ([app/engine-bridge.md](../app/engine-bridge.md)); if it can take
+long, from a thread of the bridge's own or as a `RenderJob`, not on the main thread.
 
 **New per-track render state** that must survive snapshots (a smoother, a buffer): allocate it
 on the edit side with the track (as `TrackBuffers` and `EdgeState` are), keep it in
@@ -332,10 +354,12 @@ on the edit side with the track (as `TrackBuffers` and `EdgeState` are), keep it
 
 ## Tests
 
-Engine behaviour is tested through the bindings: [test_engine_render.py](../../tests/test_engine_render.py)
+Engine behaviour is tested by the engine's own tests, [tests/engine](../../tests/engine) (no Qt;
+one executable, `engine_tests`): [test_engine_render.cpp](../../tests/engine/test_engine_render.cpp)
 (clips, gain/pan/mute/solo, loop, tempo changes, metronome, fades, sources, export, transport
-state without a device, chains and moves), and the area tests listed in each engine doc. The
-API version check is in `src/substation/__init__.py`. See [testing.md](../testing.md).
+state without a device, chains and moves), [test_render_jobs.cpp](../../tests/engine/test_render_jobs.cpp)
+(renders in the background), and the area tests listed in each engine doc. See
+[testing.md](../testing.md).
 
 ## The other engine docs
 

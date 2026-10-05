@@ -124,6 +124,6 @@ another track (or into and out of racks) keep their automation.
 
 ---
 
-For developers: [../ui/arrangement.md](../ui/arrangement.md) (automation_lanes.py,
-automation_header.py), [../engine/automation.md](../engine/automation.md),
-[../python/model.md](../python/model.md).
+For developers: [../ui/arrangement.md](../ui/arrangement.md#automation-lanes) (the
+automation lanes and choosers), [../engine/automation.md](../engine/automation.md),
+[../app/model.md](../app/model.md).

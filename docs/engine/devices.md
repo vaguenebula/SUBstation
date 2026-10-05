@@ -8,7 +8,7 @@ devices share a base class, `BuiltinProcessor`, and register themselves in `Buil
 
 How the user works with devices (the device view, racks, presets, folding, cut/copy/paste) is in
 [guide/devices.md](../guide/devices.md). Plug-in hosting is in [plugins.md](plugins.md); racks and chains in
-[routing.md](routing.md); the device view's widgets in [ui/device-view.md](../ui/device-view.md).
+[routing.md](routing.md); the device view (QML and its scene-graph items) in [ui/device-view.md](../ui/device-view.md).
 
 ## Files
 
@@ -24,13 +24,13 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Compressor.cpp](../../engine/src/builtin/devices/Compressor.cpp) | Compressor, with sidechain and displays |
 | [builtin/devices/Delay.cpp](../../engine/src/builtin/devices/Delay.cpp) | Delay: synced or free times per side, filter, modes, ping pong, freeze |
 | [builtin/devices/Eq.cpp](../../engine/src/builtin/devices/Eq.cpp) | EQ: 24 bands, placement, output gain, gain scale |
-| [builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h) | The EQ's filter design, shared with the bindings (`eq_response`) |
+| [builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h) | The EQ's filter design (`eq::design`, `eq::responseDb`), shared with the application layer's `eqResponseDb()` for the editor's curves |
 | [builtin/devices/Sidechain.cpp](../../engine/src/builtin/devices/Sidechain.cpp) | Sidechain: a curve from each hit in the key (or on the beat), lookahead, lows only |
 | [Rack.h](../../engine/src/Rack.h) | `RackProcessor`: a rack's place in a chain (its chains are run by the renderer) |
 | [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) | `SmoothedValue`, `SpscQueue`, `DisplayStream`, `dbToGain`, `balanceGains` |
-| [EngineChains.cpp](../../engine/src/EngineChains.cpp) | `addBuiltinProcessor()`, the processor API the bindings expose |
-| [bindings.cpp](../../engine/src/bindings.cpp) | `builtin_devices()`, `BuiltinDevice`, `ParamInfo`, `DisplayInfo`, `processor_displays`, `read_processor_display`, `processor_state` |
-| [ui/device_editors/](../../src/substation/ui/device_editors) | built-in devices' own editors (Python), registered by kind |
+| [EngineChains.cpp](../../engine/src/EngineChains.cpp) | `addBuiltinProcessor()`, and the processor calls the engine bridge makes (`setProcessorParam`, `processorState`, `setProcessorState`, `processorDisplays`, `readProcessorDisplay`, ...) |
+| [app/src/model/Devices.h](../../app/src/model/Devices.h) | The application layer's view of the registry: `BuiltinDevice`, `builtinDevices()`, `builtinCategories()`, `builtinParamInfo()` |
+| [ui/qml/devices/editors/](../../ui/qml/devices/editors) | Built-in devices' own editors (QML, drawing with items in [ui/src/devices](../../ui/src/devices)), registered by kind |
 
 ## The `Processor` interface
 
@@ -93,8 +93,10 @@ never waits and never fails (it overwrites the oldest values); each reader keeps
 behind skips to the latest 8192 values (`kDisplayCapacity`). A reader overtaken while it reads may get a newer value
 in an older one's place, which is harmless for drawing.
 
-The bindings: `Engine.processor_displays(id)` and `Engine.read_processor_display(id, index, position)` (a float32
-array and the next position).
+The engine's API has them by processor id: `Engine::processorDisplays(id)` and
+`Engine::readProcessorDisplay(id, index, position, out)` (appends to a `std::vector<float>` and returns the next
+position). The engine bridge wraps them by track and device id (`EngineBridge::processorDisplays()`,
+`readProcessorDisplay()`) for the editors.
 
 ## `BuiltinProcessor`
 
@@ -114,9 +116,9 @@ What every built-in device shares ([BuiltinProcessor.h](../../engine/src/builtin
   `stateValues()` / `setStateValues()`. `getState()` encodes them as lines `name=value` (UTF-8; a backslash escapes a
   backslash or a newline: `\\`, `\n`); empty means none, the defaults. `setStateValues()` is called on the main
   thread or on the thread the UI loads states on; it may take its time (loading files) and throws if it can't do it
-  all. The model keeps the state base64-encoded in `Device.state`, as it keeps a plug-in's
-  ([model/device_state.py](../../src/substation/model/device_state.py) has the same encoding), so it saves, loads and
-  undoes as a plug-in's does.
+  all. The model keeps the state base64-encoded in `Device::state`, as it keeps a plug-in's
+  ([app/src/model/DeviceState.h](../../app/src/model/DeviceState.h), namespace `deviceState`, has the same encoding),
+  so it saves, loads and undoes as a plug-in's does.
 - **Audio files** come through `loadSource(path)` (not real-time). The engine sets a `SourceLoader` on every built-in
   device it creates (`Engine::addBuiltinProcessor`), so files are shared with the engine's cache and decoded at the
   engine's rate; without one (a device made outside an engine) it decodes the file at its own rate. See
@@ -140,16 +142,19 @@ in no fixed order).
 - `create(id)` makes a new device of that id; `std::invalid_argument` for an unknown one.
 
 The engine creates devices by id (`Engine::addBuiltinProcessor(chainId, type, index)`: it sets the source loader,
-calls `prepare()` before the audio thread can see the processor, and inserts it). The UI's device list, names,
-categories and parameter defaults all come from the registry through `builtin_devices()` in the bindings: the model's
-`BUILTIN_DEVICES`, `BUILTIN_CATEGORIES` and `BUILTIN_INSTRUMENTS` ([model/devices.py](../../src/substation/model/devices.py))
-and the browser's *Built-in* category are built from it. A model `Device` of a built-in device has the registry id
-as its `kind`.
+calls `prepare()` before the audio thread can see the processor, and inserts it). The application's device list,
+names, categories and parameter defaults all come from the registry (`BuiltinRegistry::instance().devices()`): the
+application layer's `builtinDevices()`, `builtinCategories()` and `isInstrument()`
+([app/src/model/Devices.h](../../app/src/model/Devices.h)) and the browser's *Built-in* category are built from it. A
+model `Device` of a built-in device has the registry id as its `kind`.
 
-Because each device's translation unit only registers itself (nothing refers to it), the build compiles the device
-files straight into the `_engine` module: [CMakeLists.txt](../../CMakeLists.txt) collects them with
-`file(GLOB BUILTIN_DEVICE_SOURCES CONFIGURE_DEPENDS engine/src/builtin/devices/*.cpp)`. Put in a static library,
-unreferenced objects would be dropped and the device would never register.
+Each device's translation unit only registers itself: nothing refers to it. A linker takes from a static library
+only the objects something refers to, so a program linking `sub_engine` would leave the devices out and they would
+never register. So [engine/CMakeLists.txt](../../engine/CMakeLists.txt) collects the files with
+`file(GLOB BUILTIN_DEVICE_SOURCES CONFIGURE_DEPENDS src/builtin/devices/*.cpp)`, gives each one an empty anchor
+function named after it (`SUB_BUILTIN_ANCHOR`, such as `subBuiltinAnchor_Utility`, which `SUB_REGISTER_BUILTIN`
+defines), and writes `generated/BuiltinDevices.cpp`, whose `linkBuiltinDevices()` calls them all.
+`BuiltinRegistry::instance()` calls `linkBuiltinDevices()`, so every device file is linked in.
 
 ## The built-in devices
 
@@ -225,8 +230,10 @@ voices; plays from Start to End of the sample, or loops between them while a not
 - **Display**: `position`, one value per 256 samples: where the newest note plays in the sample (0..1 of its length),
   or -1 while none plays. The editor draws the playhead from it.
 
-The bridge restores a built-in device's state on a thread pool (`_StateTask`), since it may load files, and waits for
-all of them before rendering offline (`wait_for_device_states`). See [python/engine-bridge.md](../python/engine-bridge.md).
+The engine bridge restores a built-in device's state in the background (`EngineBridge::setBuiltinState()`, on a pool
+of one thread, so states are set in the order they came and the last one wins), since it may load files, and waits
+for all of them before rendering offline (`waitForDeviceStates()`; `devicesReady()` says whether any are pending).
+See [app/engine-bridge.md](../app/engine-bridge.md).
 
 ### Utility (`builtin:utility`, AudioEffect)
 
@@ -373,9 +380,11 @@ An equalizer after Pro-Q: 24 bands, then an output gain.
 - `tailSamples()`: 7 Q / (π f) for the narrowest band (at most 5 s).
 - **Displays**: `input` and `output`, one value per sample, each summed to mono: the
   editor's analyzer.
-- **Binding**: `eq_response(type, freq, gain, q, slope, sample_rate, freqs)` returns a
-  band's response in dB (float64) at `freqs`, from the same design, for the editor's
-  curves.
+- **Response**: `eq::responseDb(design, frequency, sampleRate)` gives a band's
+  response in dB at a frequency, from the same `eq::design()`. The application layer's
+  `eqResponseDb(type, freq, gain, q, slope, sampleRate, freqs)`
+  ([app/src/audio/EqResponse.h](../../app/src/audio/EqResponse.h)) wraps it for the
+  editor's curves, so the curve drawn is the sound.
 
 ### Sidechain (`builtin:sidechain`, AudioEffect, with a sidechain input)
 
@@ -422,7 +431,7 @@ Ducks its input along a curve from each hit: for a bass under a kick.
   lookahead, summed to mono) and `phase` (samples since the latest hit; -1 once its curve
   is over), one value per sample each, pushed together so they stay in step. The
   editor finds the hits (the phase's 0s) and fits the curve to the kick
-  ([analysis/sidechain_fit.py](../../src/substation/analysis/sidechain_fit.py)).
+  ([app/src/analysis/SidechainFit.h](../../app/src/analysis/SidechainFit.h)).
 
 ### Racks
 
@@ -430,35 +439,37 @@ A rack is a `RackProcessor` ([Rack.h](../../engine/src/Rack.h), `typeId()` `"rac
 on/off switch, its id and its latency (as the last snapshot worked it out, for the UI). It has no parameters, and its
 `process()` is never called: the renderer runs its chains (`Renderer::processRack`). See [routing.md](routing.md).
 
-## Built-in devices' own editors (Python)
+## Built-in devices' own editors
 
-A built-in device shows a knob per parameter (`device_panel.DeviceWidget`; a list for parameters with labels, log
-knobs for log parameters) unless a module in [ui/device_editors/](../../src/substation/ui/device_editors) gives it an
-editor of its own: a `DeviceWidget` subclass registered for the device's kind (its engine id):
+A built-in device shows a knob per parameter (the device view's knob pages: a list for parameters with labels, log
+knobs for log parameters) unless it has an editor of its own: a QML file in
+[ui/qml/devices/editors/](../../ui/qml/devices/editors), named for the device's kind (its engine id) in the
+`DeviceEditors` singleton's table ([DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml)):
 
-```python
-from ..device_panel import DeviceWidget
-from . import device_editor
-
-@device_editor("compressor")
-class CompressorWidget(DeviceWidget):
-    def refresh_displays(self) -> None:
-        self.graph.add(self.read_display("reduction"), self.read_display("input"), self.read_display("output"))
+```js
+readonly property var editors: ({
+    "compressor": "CompressorEditor.qml",
+    "delay": "DelayEditor.qml",
+    "eq": "EqEditor.qml",
+    "sampler": "SamplerEditor.qml",
+    "sidechain": "SidechainEditor.qml"
+})
 ```
 
-- `device_editor(kind)` registers the class; two editors for one kind raise `ValueError`.
-- `editor_for(kind)` imports every module of the package the first time an editor is looked up (not at import: the
-  editors import the device view, which imports the package), so a new module needs nothing else.
-- An editor sets parameters as the knobs do (`ProjectEditor.set_device_param`), so undo, automation and saving work
-  alike, and draws the device's displays in `refresh_displays()`, which the device view calls as the meters update.
-  `DeviceWidget.read_display(display_id)` returns the values published since the last call (it keeps the position).
-- Today there are two: [compressor.py](../../src/substation/ui/device_editors/compressor.py) (every knob at once, a
-  gain-reduction history of 240 values, about 1.3 s at 48 kHz, and In/Out meters with the threshold marked) and
-  [sampler.py](../../src/substation/ui/device_editors/sampler.py) (the waveform with Start/End markers and the playhead,
-  drop or double-click to load a sample; loading is an undoable state change through `set_device_state`, with paths
-  kept in `device_state`).
+- `DeviceEditors.editorFor(kind)` gives the editor's URL, or `""` for the knob pages.
+- An editor sets parameters as the knobs do (through the application layer's `ProjectEditor::setDeviceParams()`), so
+  undo, automation and saving work alike.
+- It draws with [DeviceCanvas](../../ui/src/devices/DeviceCanvas.h) items: `refreshDisplays()` is called as the meters
+  update (while the item is visible), and `readDisplay(id)` returns the values the device published since the last
+  call (through `EngineBridge::readProcessorDisplay()`; the item keeps the position per processor and display).
+- Today there are five. The Compressor draws its gain reduction over the last 240 display values (about 1.3 s at
+  48 kHz) and In/Out meters with the threshold marked; the Delay its filter over a spectrum of `input`; the EQ its
+  bands' curves (from `eq::responseDb`) over an analyzer of `input` and `output`; the Sidechain its curve, its
+  playhead from `phase` and its fit to the kick (`key`, against `input`); the Sampler the sample's waveform with Start/End markers and
+  the playhead from `position` (drop or double-click to load a sample; loading is an undoable state change through
+  `ProjectEditor::setDeviceState()`, the path kept in the device's state).
 
-See [ui/device-view.md](../ui/device-view.md) for `DeviceWidget` itself.
+See [ui/device-view.md](../ui/device-view.md#device-editors) for the editors and how to add one.
 
 ## Adding a built-in device, end to end
 
@@ -510,18 +521,20 @@ See [ui/device-view.md](../ui/device-view.md) for `DeviceWidget` itself.
    - Displays: pass `{{"id", samplesPerValue}, ...}` to the constructor and `publish()` from `render()`.
    - State besides parameters: override `stateValues()` / `setStateValues()`; load files with `loadSource()`; hand
      anything big to the rendering thread without locks (see the Sampler).
-2. **Build it**: re-run `python -m pip install --no-build-isolation -e .` ([building.md](../building.md)). The
-   `CONFIGURE_DEPENDS` glob in [CMakeLists.txt](../../CMakeLists.txt) picks up a new file in `builtin/devices/` on the
-   next configure; nothing needs listing. No `API_VERSION` bump is needed: the bindings don't change.
-3. **It appears**: the registry lists it, so `ge.builtin_devices()`, the model's `BUILTIN_DEVICES` and the browser's
-   *Built-in* category have it, with its parameters' defaults. Instruments go on MIDI tracks. The device view shows
-   its knobs; automation and saving work.
-4. **An editor of its own (optional)**: add `src/substation/ui/device_editors/mydevice.py` with a `DeviceWidget`
-   subclass decorated `@device_editor("mydevice")` (the id without `builtin:`). Draw displays in
-   `refresh_displays()`.
-5. **Tests**: render it offline (as `tests/test_engine_render.py` does for Utility and Over The Top, or its own file
-   like `tests/test_compressor_engine.py`), and if it has an editor, add to `tests/test_ui_device_editors.py`
-   (`test_registry` checks the registry). See [testing.md](../testing.md).
+2. **Build it**: `ninja -C build` ([building.md](../building.md)). The `CONFIGURE_DEPENDS` glob in
+   [engine/CMakeLists.txt](../../engine/CMakeLists.txt) picks up a new file in `builtin/devices/` (and writes its
+   anchor) on the next build; nothing needs listing.
+3. **It appears**: the registry lists it, so `BuiltinRegistry::instance().devices()`, the application layer's
+   `builtinDevices()` and the browser's *Built-in* category have it, with its parameters' defaults. Instruments go on
+   MIDI tracks. The device view shows its knobs; automation and saving work.
+4. **An editor of its own (optional)**: add `ui/qml/devices/editors/MyDeviceEditor.qml` and list it under
+   `"mydevice"` (the id without `builtin:`) in [DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml); draw
+   displays in a `DeviceCanvas` item's `refreshDisplays()`. See [ui/device-view.md](../ui/device-view.md#adding-an-editor).
+5. **Tests**: render it offline (as [tests/engine/test_engine_render.cpp](../../tests/engine/test_engine_render.cpp)
+   does for Utility and Over The Top, or a file of its own like
+   [tests/engine/test_compressor_engine.cpp](../../tests/engine/test_compressor_engine.cpp)), and if it has an editor,
+   add a case to [tests/app/test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) (`registry()`
+   checks the registry). See [testing.md](../testing.md).
 6. **Docs**: add it to this page and to [guide/devices.md](../guide/devices.md).
 
 ## Invariants and real-time rules
@@ -546,22 +559,27 @@ See [ui/device-view.md](../ui/device-view.md) for `DeviceWidget` itself.
 
 ## Tests
 
-- [tests/test_engine_render.py](../../tests/test_engine_render.py): the Utility device, Over The Top, chains per strip,
-  moving processors between chains.
-- [tests/test_compressor_engine.py](../../tests/test_compressor_engine.py): its curve (hard knee follows the ratio;
+The engine's tests are in [tests/engine](../../tests/engine) (one executable, `engine_tests`).
+
+- [test_engine_render.cpp](../../tests/engine/test_engine_render.cpp): the Utility device, Over The Top, chains per
+  strip, moving processors between chains.
+- [test_compressor_engine.cpp](../../tests/engine/test_compressor_engine.cpp): its curve (hard knee follows the ratio;
   nothing below the knee), attack holding on low notes, sidechain keying, and its displays.
-- [tests/test_delay_engine.py](../../tests/test_delay_engine.py): synced and free times, offset, link,
+- [test_delay_engine.cpp](../../tests/engine/test_delay_engine.cpp): synced and free times, offset, link,
   feedback, ping pong, freeze, the filter, the modes (with automation changing the time), and its display.
-- [tests/test_eq_engine.py](../../tests/test_eq_engine.py): each band type plays as `eq_response` draws it,
+- [test_eq_engine.cpp](../../tests/engine/test_eq_engine.cpp): each band type plays as `eq::responseDb` draws it,
   matching the analog filters, placement (left, mid, side), output gain and gain scale, extremes, the displays.
-- [tests/test_sidechain_device_engine.py](../../tests/test_sidechain_device_engine.py): hits to the sample, the
+- [test_sidechain_device_engine.cpp](../../tests/engine/test_sidechain_device_engine.cpp): hits to the sample, the
   curve sample by sample (straight and bent), depth and smoothing, the threshold and re-arming, lookahead (as
   latency), Lows Only keeping the highs, hits on the beat, the synced length, the displays, extremes.
-- [tests/test_sampler_engine.py](../../tests/test_sampler_engine.py): listing and parameters, pitch from key, root and
-  tuning at any file rate, start, end and loop, velocity, its state's text (escaping), a missing file, unknown
+- [test_sampler_engine.cpp](../../tests/engine/test_sampler_engine.cpp): listing and parameters, pitch from key, root
+  and tuning at any file rate, start, end and loop, velocity, its state's text (escaping), a missing file, unknown
   values, swapping samples while notes play, and the position display.
-- [tests/test_midi_engine.py](../../tests/test_midi_engine.py): the Synth plays the right pitch and level.
-- [tests/test_automation_engine.py](../../tests/test_automation_engine.py): built-in blocks split where automation
+- [test_midi_engine.cpp](../../tests/engine/test_midi_engine.cpp): the Synth plays the right pitch and level.
+- [test_automation_engine.cpp](../../tests/engine/test_automation_engine.cpp): built-in blocks split where automation
   changes values.
-- [tests/test_ui_device_editors.py](../../tests/test_ui_device_editors.py): the editor registry, the Compressor's graph,
-  the Sampler's loading, undo, playhead, markers, drop and saving.
+
+In the application's tests ([tests/app](../../tests/app)):
+[test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) checks the editor registry and drives each
+editor (the Compressor's graph, the Sampler's loading, undo, playhead, markers, drop and saving, the Delay, the EQ, the
+Sidechain), and [test_sidechain_fit.cpp](../../tests/app/test_sidechain_fit.cpp) the Sidechain's fit.
