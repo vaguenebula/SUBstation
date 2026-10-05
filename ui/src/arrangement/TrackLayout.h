@@ -26,8 +26,17 @@ class Project;
 namespace sub::ui::arrangement {
 
 inline constexpr int kAutomationLaneHeight = 44;  // a lane shown below a track (or a return, the master)
-inline constexpr int kFoldedHeight = 22;  // a folded track: its name row (its clips are bars, as in Ableton)
-inline constexpr int kFoldedGroupHeight = 24;  // a folded group: a little taller, so it stands out
+// Groups in the headers' column: a band in the group's colour down its header
+// and its tracks' (kGroupBand wide, a level kGroupIndent further right per
+// group a track is in), and a bar across the top of its header, above its name row.
+inline constexpr int kGroupIndent = 8;
+inline constexpr int kGroupBand = 7;
+inline constexpr int kGroupBar = 3;
+// A folded track: its name row, its buttons 4 px from the top and from the
+// line below (its clips are bars, as in Ableton).
+inline constexpr int kFoldedHeight = 26;
+// A folded group: the same below its bar, so a little taller: it stands out.
+inline constexpr int kFoldedGroupHeight = kFoldedHeight + kGroupBar;
 // A track's own lane while its automation shows: room in its header for the choosers.
 inline constexpr int kMinAutomationRow = 76;
 // The send knobs' row in a track's header, while there are return tracks

@@ -1,8 +1,9 @@
 #pragma once
 
 // A strip's header, a track's, a return's or the master's: what it paints
-// itself (its background, a band in the colour of each group it is in, its own
-// colour, the fold button, the frozen mark and its name), its mouse handling
+// itself (its background, its own colour, a group's bar across its top, the
+// fold button, the frozen mark and its name; the bands of the groups it is in
+// are GroupBands', over the headers), its mouse handling
 // (selecting, dragging to move tracks, resizing, folding, Alt+wheel), and what
 // its QML controls show and do (activator, solo, arm, volume, pan, input,
 // monitoring, sends, meter, automation choosers, menus). TrackHeader.qml,
@@ -115,6 +116,8 @@ class TrackHeaderItem : public SgCanvas {
     Q_PROPERTY(bool automationShown READ automationShown NOTIFY rowChanged)
     // Where the name starts (after the bands, the fold button and the frozen mark).
     Q_PROPERTY(qreal nameLeft READ nameLeft NOTIFY changed)
+    // The name row's top: below the bar across a group's header (0 for the others).
+    Q_PROPERTY(int nameTop READ nameTop NOTIFY changed)
     Q_PROPERTY(QRectF foldRect READ foldRect NOTIFY rowChanged)
     // Renaming in place: the name's text field shows (Ctrl+R, the menu's Rename).
     Q_PROPERTY(bool renaming READ renaming NOTIFY renamingChanged)
@@ -122,7 +125,8 @@ class TrackHeaderItem : public SgCanvas {
 public:
     static constexpr int kResizeGrab = 4;
     static constexpr int kNameRow = 22;
-    static constexpr int kIndent = 6;  // per group a track is in: the group's colour band
+    static constexpr int kIndent = arrangement::kGroupIndent;  // per group a track is in: the group's colour band
+    static constexpr int kStrip = 5;  // a track's own colour, at its left (a group's is its band)
     static constexpr int kFoldWidth = 14;
     static constexpr int kSnowflake = 12;  // the frozen mark before a frozen track's name
     static constexpr int kChooserRow = kNameRow + 30;  // the choosers, below volume and pan (and the sends)
@@ -172,6 +176,7 @@ public:
     bool folded() const { return folded_; }
     bool automationShown() const { return automationShown_; }
     qreal nameLeft() const;
+    int nameTop() const;
     QRectF foldRect() const;
     bool renaming() const { return renaming_; }
     // Whether volume, pan or a send follows its automation now.
@@ -259,6 +264,7 @@ protected:
 private:
     const app::Track* track() const;
     app::Project* project() const;
+    double stripWidth() const;  // its own colour's
     bool isMaster() const;
     bool isReturn() const;
     void connectAll();

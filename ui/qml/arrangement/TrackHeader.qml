@@ -7,8 +7,9 @@ import SUBstation
 // a group: it records nothing) on the name row; on the second row (from 48 px)
 // volume, pan, the input and the monitoring; then the send knobs (while there
 // are returns), then the automation choosers in its own lane and in each lane
-// below. What it paints, its mouse handling and what its controls do are
-// TrackHeaderItem's. Everything below the name row starts after the group
+// below. A group's name row and all below it start under the bar across its
+// top (nameTop). What it paints, its mouse handling and what its controls do
+// are TrackHeaderItem's. Everything below the name row starts after the group
 // bands and ends where the buttons above do.
 TrackHeaderItem {
     id: header
@@ -20,9 +21,9 @@ TrackHeaderItem {
     readonly property int armWidth: 20
     readonly property int innerRight: width - meterWidth - 10
     readonly property int innerLeft: 10 + indent
-    readonly property bool secondRow: mainHeight >= 48
+    readonly property bool secondRow: mainHeight >= nameTop + 48
     readonly property bool hasSends: sends.length > 0
-    readonly property int chooserRow: 52 + (hasSends ? 24 : 0)
+    readonly property int chooserRow: nameTop + 52 + (hasSends ? 24 : 0)
 
     nameRight: activator.x - 4
     meter: meterItem
@@ -31,16 +32,16 @@ TrackHeaderItem {
         id: meterItem
         objectName: "meter"
         x: header.width - header.meterWidth - 4
-        y: 4
+        y: header.nameTop + 4
         width: header.meterWidth
-        height: Math.max(8, header.mainHeight - 9)
+        height: Math.max(8, header.mainHeight - header.nameTop - 9)
     }
 
     ToggleButton {
         id: arm
         objectName: "arm"
         x: header.innerRight - 18
-        y: 4
+        y: header.nameTop + 4
         width: 18
         height: 17
         visible: header.records
@@ -54,7 +55,7 @@ TrackHeaderItem {
         id: solo
         objectName: "solo"
         x: header.innerRight - header.armWidth - 22
-        y: 4
+        y: header.nameTop + 4
         width: 22
         height: 17
         role: "solo"
@@ -67,7 +68,7 @@ TrackHeaderItem {
         id: activator
         objectName: "activator"
         x: header.innerRight - header.armWidth - 22 - 30
-        y: 4
+        y: header.nameTop + 4
         width: 28
         height: 17
         role: "activator"
@@ -81,7 +82,7 @@ TrackHeaderItem {
         id: volume
         objectName: "volume"
         x: header.innerLeft
-        y: header.nameRow + 4
+        y: header.nameTop + header.nameRow + 4
         width: 72
         height: 20
         visible: header.secondRow
@@ -109,7 +110,7 @@ TrackHeaderItem {
         id: pan
         objectName: "pan"
         x: header.innerLeft + 77
-        y: header.nameRow + 1
+        y: header.nameTop + header.nameRow + 1
         width: 26
         height: 26
         visible: header.secondRow
@@ -129,7 +130,7 @@ TrackHeaderItem {
         id: input
         objectName: "input"
         x: header.innerLeft + 108
-        y: header.nameRow + 4
+        y: header.nameTop + header.nameRow + 4
         width: Math.max(20, monitor.x - 4 - x)
         height: 20
         visible: header.secondRow && header.records
@@ -150,7 +151,7 @@ TrackHeaderItem {
         id: monitor
         objectName: "monitor"
         x: header.innerRight - width
-        y: header.nameRow + 4
+        y: header.nameTop + header.nameRow + 4
         width: Math.max(40, implicitWidth + 4)
         height: 20
         visible: header.secondRow && header.records
@@ -166,10 +167,10 @@ TrackHeaderItem {
         header: header
         menu: header.menu
         x: header.innerLeft
-        y: 52
+        y: header.nameTop + 52
         width: header.innerRight - header.innerLeft
         height: 22
-        visible: header.secondRow && header.hasSends && header.mainHeight >= 52 + 24 - 2
+        visible: header.secondRow && header.hasSends && header.mainHeight >= header.nameTop + 52 + 24 - 2
     }
 
     AutomationChoosers {
@@ -186,7 +187,7 @@ TrackHeaderItem {
         id: rename
         objectName: "rename"
         x: header.nameLeft - 2
-        y: 2
+        y: header.nameTop + 2
         width: activator.x - x - 4
         height: header.nameRow - 2
         visible: header.renaming

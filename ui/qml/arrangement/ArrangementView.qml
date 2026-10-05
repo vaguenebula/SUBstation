@@ -183,6 +183,14 @@ FocusScope {
             }
         }
 
+        // The groups' colours down their headers and tracks', unbroken from one header to the next.
+        GroupBands {
+            objectName: "groupBands"
+            anchors.fill: parent
+            session: Session
+            arrangement: arrangementState
+        }
+
         // Where dragged headers would put their tracks.
         Rectangle {
             objectName: "dropLine"
