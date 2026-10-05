@@ -110,7 +110,7 @@ Rectangle {
                 onTapped: sidebar.contextMenuRequested(entry.section ? [] : entry.scope)
             }
 
-            ToolTip.visible: hover.hovered && entry.toolTip !== ""
+            ToolTip.visible: Window.window !== null && hover.hovered && entry.toolTip !== ""
             ToolTip.text: entry.toolTip
             ToolTip.delay: 700
         }

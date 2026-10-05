@@ -155,7 +155,8 @@ SelectionList {
             }
         }
 
-        ToolTip.visible: area.containsMouse && !area.pressed && row.toolTip !== ""
+        // (a row being let go of when the list changes under the mouse has no window to show it in)
+        ToolTip.visible: Window.window !== null && area.containsMouse && !area.pressed && row.toolTip !== ""
         ToolTip.text: row.toolTip
         ToolTip.delay: 700
     }

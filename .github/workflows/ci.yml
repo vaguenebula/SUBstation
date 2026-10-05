@@ -1,6 +1,7 @@
 # Builds everything and runs the tests: on Linux with Qt 6.4 (Ubuntu's), and on
-# Windows (the product's platform) with MSVC and Qt 6.8. Without Steinberg's ASIO
-# SDK, which isn't redistributable: the ASIO tests skip.
+# Windows (the product's platform) with MSVC and with MinGW (Qt's own builds of
+# each). Without Steinberg's ASIO SDK, which isn't redistributable: the ASIO
+# tests skip.
 name: CI
 
 on:
@@ -44,6 +45,29 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Configure
         run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
+      - name: Build
+        run: ninja -C build -k 0
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j4
+
+  windows-mingw:
+    name: Windows (MinGW, Qt 6.8)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          arch: win64_mingw
+          tools: 'tools_mingw1310 tools_ninja'
+          cache: true
+      - name: Use Qt's MinGW and Ninja
+        shell: pwsh
+        run: |
+          "$env:IQTA_TOOLS\mingw1310_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$env:IQTA_TOOLS\Ninja" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Configure
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
       - name: Build
         run: ninja -C build -k 0
       - name: Test

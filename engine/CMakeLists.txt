@@ -210,6 +210,16 @@ if (MSVC)
     target_compile_options(sub_engine PRIVATE /arch:AVX2 /fp:fast)
 elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
     target_compile_options(sub_engine PRIVATE -mavx2 -mfma -ffast-math)
+    if (MINGW)
+        # GCC on 64-bit Windows can't align the stack to 32 bytes (GCC bug 54412),
+        # so an aligned AVX move to a stack slot may crash: the assembler makes
+        # them all unaligned ones (as fast on any AVX2 CPU). Needs binutils 2.38.
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag("-Wa,-muse-unaligned-vector-move" SUB_HAVE_UNALIGNED_VECTOR_MOVE)
+        if (SUB_HAVE_UNALIGNED_VECTOR_MOVE)
+            target_compile_options(sub_engine PRIVATE -Wa,-muse-unaligned-vector-move)
+        endif()
+    endif()
 else()
     target_compile_options(sub_engine PRIVATE -ffast-math)
 endif()
