@@ -125,7 +125,8 @@ whole edit model into a new `RenderSnapshot` every time, in which positions are 
 converted to samples at the current tempo and sample rate. In order:
 
 1. Transport values: sample rate, tempo, time signature, the loop in samples (only enabled if
-   at least 256 samples long), the clip fade length.
+   at least 256 samples long), the short clip fade's length (against clicks where clips cut into
+   their files).
 2. The routing graph: `routeEdgesLocked()` lists every edge, `topologicalOrder()` puts each
    track after everything that feeds it. That order is the snapshot's track order.
 3. Delay compensation for the whole graph (`alignGraph()`), from each strip's devices as
@@ -134,8 +135,8 @@ converted to samples at the current tempo and sample rate. In order:
    sidechains into each strip's devices, the taps after devices, and the `TaskGraph` the
    scheduler runs.
 5. The master strip and each track (`TrackRender`): its chain and racks (`buildChainLocked()`,
-   recursively), automation in samples (`buildAutomationLocked()`), notes and clips in samples,
-   its input, monitoring and MIDI route.
+   recursively), automation in samples (`buildAutomationLocked()`), notes and clips in samples
+   (with their fades), its input, monitoring and MIDI route.
 6. Stretch voices: enough for the clips that need stretching, at most 64 per configuration
    (`ensureWarpVoicesLocked()`); they only grow until the sample rate changes.
 

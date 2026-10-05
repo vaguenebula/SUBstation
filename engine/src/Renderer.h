@@ -320,8 +320,8 @@ private:
     // Adds the clips' audio over the segment to left/right (the chunk's buffers).
     // Stretched clips play through the voices the prologue gave them (from
     // `nextVoice` on, in the order the clips play).
-    void renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade, const TrackBuffers& buffers,
-                     int& nextVoice, WorkerScratch& scratch, float* left, float* right) noexcept;
+    void renderClips(const TrackRender& track, const Segment& segment, const TrackBuffers& buffers, int& nextVoice,
+                     WorkerScratch& scratch, float* left, float* right) noexcept;
     // Prologue: the stretchers the track's clips play through in this chunk.
     void assignVoices(const TrackRender& track, const WarpVoiceSet& voices, TrackBuffers& buffers) noexcept;
     WarpVoice* acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept;

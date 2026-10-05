@@ -30,6 +30,31 @@ folding, the master, the transport bar, and projects.
   audio, MIDI onto MIDI). **Ctrl-drag** copies them. While playing, you hear a clip
   where you drag it to straight away; the move itself is one undo step, when you let go.
 - **Trim** either edge by dragging it (heard as you drag, too).
+- **Stretch** a clip by holding **Alt** over either edge (the cursor shows a two-headed
+  arrow, the edge lights up orange) and dragging it: the other edge stays, and the clip plays
+  the same audio (or notes) faster or slower to fill the new length. An audio clip is
+  warped to do it (its *Seg. BPM* set), keeping its pitch unless its warp mode is
+  *Re-Pitch*; a MIDI clip's notes are stretched with it. It snaps to
+  the grid; hold **Shift** too for off the grid. An audio clip stretches as far as
+  Seg. BPMs go (20 to 999).
+- **Slide a clip's content** by holding **Ctrl+Shift** and dragging its waveform or its
+  notes (the body, below the title bar): the clip stays where it is, as long as it is, and
+  plays what is earlier or later in its file (or notes). It moves by grid steps; hold
+  **Alt** as well once you are dragging for off the grid. Audio stops at the ends of its
+  file.
+- **Fade** an audio clip in or out: hold **F** and its fade handles show, squares at the
+  top corners of its waveform (at the ends of its fades, once it has some). Drag one in to
+  lengthen the fade, back out to shorten it; its length shows as you drag. Each fade longer
+  than a few pixels has a dot on its curve: drag it up to bend the fade up (the level rises
+  sooner, or stays up longer before it falls), down to bend it down; **Shift** for finer
+  steps. Double-click the dot to straighten the curve, the square to take the fade away.
+  Fades show over the waveform, and are heard as you drag. A fade stays at its clip's end
+  when the clip is trimmed or stretched; splitting keeps the fade in on the left and the
+  fade out on the right. While the computer MIDI keyboard is on, F plays a note instead.
+- **Clicks at clip edges**: where a clip without a fade of its own starts or ends inside its
+  file, it fades in or out over 4 ms so the cut doesn't click; but not where it starts at
+  the file's start or plays to its end, so one-shots (drums and the like) keep their attack
+  as it is. A fade of your own replaces it.
 - **Split** at the insert marker with **Ctrl+E**, or right-click a clip › *Split Here*.
 - **Duplicate** with **Ctrl+D**, **delete** with **Delete** (or Backspace).
 - **Cut / copy / paste** with **Ctrl+X / Ctrl+C / Ctrl+V**; what was copied last is

@@ -117,6 +117,7 @@ Each entry of `returns` has `id`, `kind` (`"return"`), `name`, `color`, `volume_
 | `gain_db`, `pan` | clip gain and pan |
 | `warp`, `warp_mode`, `segment_bpm` | warping (`segment_bpm` 0: not set) |
 | `transpose`, `detune` | semitones (int), cents |
+| `fade_in_sec`, `fade_in_curve`, `fade_out_sec`, `fade_out_curve` | only where the clip has that fade: its length in source seconds, and its curve (-1..1, 0 a straight line). On load they are held to the clip (`Clip::fitFades`) |
 | `reversed_from`, `reversed_from_relative` | only for a reversed clip: the file `path` (its reversed copy) was made from, absolute and relative |
 
 On load, `path` is used if it exists; otherwise, if the project file's folder plus `relative_path` exists, that is
@@ -194,6 +195,7 @@ that makes an older file load as it was, and saving writes the current version.
 | 14 | frozen tracks (`frozen`) | none frozen |
 | 15 | reversed clips (`reversed_from`) | none reversed |
 | 16 | what of frozen audio plays (`frozen.segments`) | all of it (a freeze as rendered) |
+| 17 | clip fades (`fade_in_sec`, `fade_out_sec` and their curves) | no fades |
 
 `folded_devices` has no version of its own: files without it load with no device folded. The project key,
 `automation_locked` and the clip fields default the same way.

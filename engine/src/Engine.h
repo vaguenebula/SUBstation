@@ -82,6 +82,14 @@ struct ClipDesc {
     WarpMode warpMode = WarpMode::Standard;
     double transpose = 0.0;     // semitones (fractions for detune); ignored by Re-Pitch
     std::string id;             // stable clip identity, so edits don't interrupt a stretching clip
+    // Fades at its ends, in seconds of source audio (so they stretch with it),
+    // each bent by its curve (-1..1, automationShape()). Without one an edge
+    // gets the short click-free fade (setClipFadeMs), unless it is the file's
+    // own start or end.
+    double fadeInSec = 0.0;
+    double fadeOutSec = 0.0;
+    float fadeInCurve = 0.f;
+    float fadeOutCurve = 0.f;
 };
 
 // A note on a MIDI track, in timeline beats. The UI flattens MIDI clips into
@@ -428,6 +436,8 @@ public:
     void setLoop(bool enabled, double startBeat, double endBeat);
     void setMetronome(bool enabled);
     bool metronome() const { return shared_.metronome.load(std::memory_order_relaxed); }
+    // The short fade against clicks at a clip's edge that cuts into its file
+    // (4 ms by default, 0 to 100): where the clip has no fade of its own there.
     void setClipFadeMs(double ms);
 
     // --- Browser preview ------------------------------------------------------

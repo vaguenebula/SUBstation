@@ -19,6 +19,10 @@ sub::ClipDesc clipDesc(const Clip& clip) {
     desc.warpMode = mode >= 0 ? static_cast<sub::WarpMode>(mode) : sub::WarpMode::Standard;
     desc.transpose = clip.transpose + clip.detune / 100.0;
     desc.id = clip.id.toStdString();
+    desc.fadeInSec = clip.fadeInSec;
+    desc.fadeOutSec = clip.fadeOutSec;
+    desc.fadeInCurve = static_cast<float>(clip.fadeInCurve);
+    desc.fadeOutCurve = static_cast<float>(clip.fadeOutCurve);
     return desc;
 }
 

@@ -10,6 +10,9 @@ namespace sub::ui::arrangement {
 // Ableton-style bracket: '[' trims a clip's start, ']' its end. The bracket
 // opens toward the clip being trimmed; the hotspot is on its upright.
 QCursor trimCursor(bool left);
+// The same bracket crossed by a two-headed arrow: Alt-dragging the edge
+// stretches the clip.
+QCursor stretchCursor(bool left);
 // The arrow with a small plus beside it: a click adds a breakpoint.
 QCursor addCursor();
 

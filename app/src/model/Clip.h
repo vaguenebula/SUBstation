@@ -13,7 +13,12 @@
 // stretched to the project tempo, so its length in beats is fixed (as in
 // Ableton). A reversed clip plays a reversed copy of a file (`path`);
 // `reversedFrom` is the file it was made from, which reversing it again goes
-// back to.
+// back to. Its fades (`fadeInSec`, `fadeOutSec`) are measured in its audio
+// too, so they stretch with it; each bends by its curve (-1..1, 0 a straight
+// line, positive bulging up: as automation's, automation::shape()). They never
+// overlap (fitFades()). Without one, the engine fades an edge that cuts into
+// the file for a few milliseconds against clicks, but not one at the file's own
+// start or end (a one-shot's attack stays as it is).
 //
 // A MIDI clip: a window onto its notes, as an audio clip is onto its file.
 // Content beat `offsetBeats` plays at `startBeat`. Notes outside the window are
@@ -33,6 +38,9 @@ inline const QStringList kWarpModes{QStringLiteral("Transients"), QStringLiteral
                                     QStringLiteral("Smooth"), QStringLiteral("Formants"),
                                     QStringLiteral("Re-Pitch")};
 inline const QString kDefaultWarpMode = QStringLiteral("Standard");
+// The segment BPMs a clip can have (the clip view's box, and stretching).
+inline constexpr double kMinSegmentBpm = 20.0;
+inline constexpr double kMaxSegmentBpm = 999.0;
 // Names used by earlier versions, mapped to the mode that plays the same way.
 // (Unknown: the name itself.)
 QString legacyWarpMode(const QString& name);
@@ -80,6 +88,11 @@ struct Clip {
     int transpose = 0;  // semitones
     double detune = 0.0;  // cents
     double pan = 0.0;
+    // Fades, in seconds of source audio from each end; their curves -1..1.
+    double fadeInSec = 0.0;
+    double fadeOutSec = 0.0;
+    double fadeInCurve = 0.0;
+    double fadeOutCurve = 0.0;
 
     // A MIDI clip's.
     double durationBeats = 0.0;
@@ -106,6 +119,15 @@ struct Clip {
     double sourceToBeats(double seconds, double tempo) const;
     double lengthBeats(double tempo = 0.0) const;
     double endBeat(double tempo = 0.0) const;
+    // An audio clip's fades, in beats (0 for a MIDI clip).
+    double fadeInBeats(double tempo) const { return isAudio() ? sourceToBeats(fadeInSec, tempo) : 0.0; }
+    double fadeOutBeats(double tempo) const { return isAudio() ? sourceToBeats(fadeOutSec, tempo) : 0.0; }
+    // Its fades held to its length: where together they are longer than the
+    // clip, both shortened in proportion so they meet. A MIDI clip's are none.
+    void fitFades();
+    // The gain a fade of curve `curve` gives at `x` (0 where it is silent, 1 where
+    // it is done).
+    static double fadeGain(double x, double curve);
 
     // A MIDI clip's content beat at its end.
     double windowEnd() const;

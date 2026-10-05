@@ -138,6 +138,8 @@ When the snapshot is built (`rebuildSnapshotLocked`, see [rendering.md](renderin
     detune); `preserveFormants` is set for Formants. Re-Pitch ignores transpose.
 - `key` identifies the clip across snapshots: a hash of the clip's `id` (or its index if it has none) mixed with
   the track id. Edits that rebuild the snapshot don't interrupt a stretching clip because the key is stable.
+- `fadeIn` / `fadeOut`: its fades in timeline samples (its own, in source seconds, at its speed; or the short one
+  against clicks where an edge cuts into the file), and their curves: see [rendering.md](rendering.md).
 
 `ClipRender::sourceAt(t)` = `sourceOffset + (t - start) * rate`: the fractional source frame heard at timeline
 sample `t`.

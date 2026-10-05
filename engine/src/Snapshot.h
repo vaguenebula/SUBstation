@@ -85,6 +85,12 @@ struct ClipRender {
     float transpose = 0.f;      // semitones (Stretch only)
     bool preserveFormants = false;
     uint64_t key = 0;           // identifies the clip across snapshots (stretch voice continuity)
+    // Its fades, in timeline samples from each end (together at most `length`),
+    // and their curves (automationShape()).
+    int64_t fadeIn = 0;
+    int64_t fadeOut = 0;
+    float fadeInCurve = 0.f;
+    float fadeOutCurve = 0.f;
 
     // Source position (fractional frames) heard at timeline sample `t`.
     double sourceAt(int64_t t) const noexcept { return sourceOffset + static_cast<double>(t - start) * rate; }
@@ -381,7 +387,6 @@ struct RenderSnapshot {
     bool loopEnabled = false;
     int64_t loopStart = 0;
     int64_t loopEnd = 0;
-    int64_t clipFadeSamples = 0;
     int maxLatency = 0;  // the tracks reach the master this late (delay-compensated alike)
     std::vector<TrackRender> tracks;  // in routing order: every track after those that feed it
     std::vector<EdgeRender> edges;    // the routing graph's edges, by source in snapshot order

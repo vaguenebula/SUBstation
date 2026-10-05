@@ -48,6 +48,11 @@ the focus. Most are also in the menus, which show their keys.
 | Select everything from the first clip to the last | Ctrl+A |
 | Copy clips while dragging | hold Ctrl |
 | Bypass snapping while dragging | hold Alt |
+| Stretch a clip (the other edge stays) | Alt-drag an edge (Shift too: off the grid) |
+| Slide a clip's audio or notes inside it | Ctrl+Shift-drag its body (Alt while dragging: off the grid) |
+| Show an audio clip's fade handles | hold F (not while the computer MIDI keyboard is on) |
+| Fade in / out; bend a fade | with F held, drag a top corner's square; drag the dot on the fade's curve (Shift: finer) |
+| Straighten a fade's curve / remove a fade | with F held, double-click its dot / its square |
 | Show / hide the clip view | Shift+Tab |
 | Back to the arrangement from the clip view | Esc |
 

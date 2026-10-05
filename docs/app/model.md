@@ -41,13 +41,13 @@ session's ([session.md](session.md)).
 |---|---|
 | [Project.h](../../app/src/model/Project.h) | `Project` (QObject: queries, mutators, signals), `ProjectContents` (everything replaced at once), `ChainField`/`ChainValue` and `SettingsField`/`SettingsValue` (what `updateChain` and `updateSettings` change), `DeviceParam`, `LaneRef` |
 | [Track.h](../../app/src/model/Track.h) | `Track`, `Freeze`, `MidiInput`, `Send`, `SendMap`, `EnvelopeMap`; `TrackField`/`TrackValue` (what `updateTrack` changes) and `trackFieldName`; the kinds (`kAudioKind`, `kMidiKind`, `kGroupKind`, `kReturnKind`, `kMasterKind`), `kMonitorModes`, `kTrackColors`, track heights; `newMaster`, `returnLetter` |
-| [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `PlayedNote`; `kWarpModes`, `legacyWarpMode` |
+| [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `PlayedNote`; `kWarpModes`, `legacyWarpMode`, `kMinSegmentBpm`, `kMaxSegmentBpm` |
 | [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kMacroCount`, `macroParam`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
 | [Devices.h](../../app/src/model/Devices.h) | Kinds of devices: `builtinDevices()`, `builtinDevice()`, `builtinCategories()` (from the engine), `kDefaultInstrument`; `isInstrument`, `deviceIsInstrument`, `loadsInto`, `deviceName`, `kindName`; `newDevice`, `newRack`, `newChain`; `builtinParamInfo`, `deviceIdsOf`, `deviceIdsOfList` |
 | [Routing.h](../../app/src/model/Routing.h) | The group tree (`TreeEntry`, `TrackTree`, `treeProblem`, `repairTree`) and the routing graph (`routingGraph`, `feeds`, `wouldCycle`, `inputWouldCycle`, `sidechainWouldCycle`) |
 | [Automation.h](../../app/src/model/Automation.h) | `AutomationPoint`, `Envelope`, `AutomationView`, `kMaster`; in `sub::app::automation`: target keys, the mixer's normalized mappings, evaluation (`valueAt`, `leftValue`, `shape`), every envelope edit |
 | [ParamSpec.h](../../app/src/model/ParamSpec.h) | `ParamSpec`: any automatable parameter described alike, with the engine's normalized mapping; `mixerSpecs`, `sendSpec`, `chainSpecs`, `formatValue` |
-| [Edits.h](../../app/src/model/Edits.h) | `sub::app::edits`: pure clip maths for audio and MIDI clips alike: overlaps, cuts, trims, splits, ranges, tempo fitting, consolidating, reversing |
+| [Edits.h](../../app/src/model/Edits.h) | `sub::app::edits`: pure clip maths for audio and MIDI clips alike: overlaps, cuts, trims, splits, ranges, tempo fitting, consolidating, reversing, stretching, slipping, fades |
 | [Notes.h](../../app/src/model/Notes.h) | `sub::app::notes`: pure note maths for the piano roll: overlaps on a key, moves, resizes, velocity, legato, ×2/÷2, quantize, humanize; note names |
 | [Commands.h](../../app/src/model/Commands.h) | The `QUndoCommand` subclasses; merging of continuous gestures (`MergeableCommand`, `kMergeId`) |
 | [Timebase.h](../../app/src/model/Timebase.h) | `TimeSignature`, beats and seconds, bar.beat.sixteenth formatting and parsing, dB and pan text |
@@ -87,7 +87,13 @@ both kinds are edited alike.
   `sourceTempo()`, `beatsToSource()` and `sourceToBeats()` convert between the two. `segmentBpm` 0 means "not set"
   (shown as the project tempo). A reversed clip plays a reversed copy of a file (its `path`, written by the
   bridge); `reversedFrom` is the file it was made from (reversing again goes back to it), empty for a clip that
-  isn't reversed.
+  isn't reversed. Its fades, `fadeInSec` and `fadeOutSec`, are measured in its audio too (so they stretch with it;
+  `fadeInBeats()` / `fadeOutBeats()` on the timeline), each bent by `fadeInCurve` / `fadeOutCurve` (-1..1, 0 a
+  straight line, positive bulging up: `fadeGain()`, which is `automation::shape()`, as the engine's
+  `automationShape()`). `fitFades()` holds them to the clip: where together they are longer, both shorten in
+  proportion so they meet (a MIDI clip has none). Without a fade of its own, the engine fades an edge that cuts
+  into the file for a few milliseconds against clicks, but not one at the file's own start or end, so a one-shot's
+  attack plays as it is ([engine/rendering.md](../engine/rendering.md)).
 - **MIDI**: `startBeat`, `durationBeats`, `offsetBeats` (the content beat at the clip's start) and `notes`, sorted by
   start then pitch. Its length is in beats, so it doesn't change with the tempo. Notes outside the window are kept
   but not played, so trimming or splitting never deletes them. `playedNotes()` gives the notes that start inside the
@@ -506,6 +512,16 @@ refused because of frozen audio are said on `refused` too. The session shows `re
   limited by the source), `fitToTempo` (the same clips if nothing changes; `changed` says whether anything did),
   `consolidateMidi`, `reverseClip` (a clip playing a reversed copy of its file: the same stretch of audio, its offset
   mirrored), `selectionSpan`.
+- `stretchClip(clip, edgeBeat, left, tempo)` (Alt-dragging an edge): that edge moves, the other stays, and the
+  content plays faster or slower to fill it: an audio clip is warped to the segment BPM that makes it that long
+  (within `kMinSegmentBpm`..`kMaxSegmentBpm`, 20..999), a MIDI clip's notes and offset are scaled; never before
+  beat 0. `slipClip(clip, deltaBeats, tempo)` (Ctrl+Shift-dragging the body): the clip stays, its content moves by
+  the delta (audio within its file; a MIDI clip's notes anywhere, shifted as `trimStart` does when the offset would
+  go below 0). `fadeClip(clip, out, beats, tempo)` and `curveFade(clip, out, curve)` set a fade (held to what the
+  other leaves) and its curve.
+- Fades stay at a clip's ends: `piece()` (so `cutClip`, `removeRange`, `sliceRange`, `fitToTempo`) gives a piece
+  from inside a clip no fade at that side, `splitClip` gives the left half the fade in and the right the fade out,
+  and the trims keep both, held to the new length.
 - Minimum sizes: `kMinClipSec` (5 ms), `kMinMidiClipBeats` and `notes::kMinNoteBeats` (1/64).
 - `notes::place(notes, removed, added)` is how the piano roll commits: added notes win where they overlap others on
   their key (`resolveOverlaps`); notes changed together are made consistent by `untangle`. `normalize` sorts and
