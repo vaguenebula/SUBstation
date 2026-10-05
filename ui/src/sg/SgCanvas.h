@@ -15,9 +15,15 @@
 //
 // Performance: everything an item draws is redrawn when it repaints, so split
 // what changes often (a playhead, a meter) into an item of its own, above or
-// below the static part. Clip with SgPainter::setClipRect rather than QML's
-// `clip: true`, which breaks batching. Tens of thousands of rects a frame are
-// fine (see test_ui_sg.cpp's benchmark).
+// below the static part. Within an item, clip with SgPainter::setClipRect
+// rather than QML's `clip: true` on parts of it, which breaks batching. Tens of
+// thousands of rects a frame are fine (see test_ui_sg.cpp's benchmark).
+//
+// An item draws where its geometry says, unclipped: what it scrolls past its
+// edges (a selected range, notes, a playhead) would show over its neighbours,
+// the browser too. So an item whose content scrolls (the arrangement's lanes,
+// ruler and bus lanes, the piano roll's parts, the clip view's waveforms) has
+// `clip: true` itself in QML: a scissor for the item and its children, cheap.
 
 #include <QQuickItem>
 #include <QtQml/qqmlregistration.h>

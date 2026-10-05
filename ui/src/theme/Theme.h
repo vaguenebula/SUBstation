@@ -82,9 +82,13 @@ class Theme : public QObject {
     Q_PROPERTY(QColor automationOff READ automationOff CONSTANT)
 
     // Fonts: the UI font (9 pt), the small one buttons with a role use (8 pt),
-    // and the fixed-width family.
+    // the browser's lists' (10 pt: Qt Quick draws small text smaller than the
+    // widgets did at the same size) and their headings (8.5 pt, bold), and the
+    // fixed-width family.
     Q_PROPERTY(QFont font READ font CONSTANT)
     Q_PROPERTY(QFont smallFont READ smallFont CONSTANT)
+    Q_PROPERTY(QFont listFont READ listFont CONSTANT)
+    Q_PROPERTY(QFont listHeadingFont READ listHeadingFont CONSTANT)
     Q_PROPERTY(QString monoFontFamily READ monoFontFamily CONSTANT)
 
     // Metrics the stylesheet used everywhere.
@@ -213,6 +217,8 @@ public:
 
     QFont font() const;
     QFont smallFont() const;
+    QFont listFont() const;
+    QFont listHeadingFont() const;
     QString monoFontFamily() const;
     int radius() const { return kRadius; }
     int controlHeight() const { return kControlHeight; }

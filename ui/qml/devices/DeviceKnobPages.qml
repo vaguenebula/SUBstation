@@ -17,7 +17,7 @@ Item {
     readonly property alias params: params
 
     implicitWidth: 216 - 2
-    implicitHeight: 6 + grid.implicitHeight + 4
+    implicitHeight: 6 + grid.implicitHeight + 6
 
     DeviceParams {
         id: params

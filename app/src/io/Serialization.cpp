@@ -830,8 +830,9 @@ std::vector<Track> tracksFromJson(const QJsonObject& data, const QString& projec
         track.pan = floatOr(t, QStringLiteral("pan"), 0.0);
         track.mute = truthy(t.value(QStringLiteral("mute")));
         track.solo = truthy(t.value(QStringLiteral("solo")));
+        const int defaultHeight = kind == kGroupKind ? kDefaultGroupHeight : kDefaultTrackHeight;
         track.height =
-            t.contains(QStringLiteral("height")) ? toSmallInt(t.value(QStringLiteral("height"))) : kDefaultTrackHeight;
+            t.contains(QStringLiteral("height")) ? toSmallInt(t.value(QStringLiteral("height"))) : defaultHeight;
         track.devices = devicesFromJson(t);
         if (kind != kGroupKind) {
             for (const QJsonValue& c : listOr(t, QStringLiteral("clips"))) {

@@ -67,7 +67,7 @@ Rectangle {
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 2
                 text: entry.title
-                font: Theme.uiFont(7.5, true)
+                font: Theme.listHeadingFont
                 color: Theme.textDim
             }
 
@@ -91,7 +91,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: parent.width - x - 4
                     text: entry.title
-                    font: Theme.font
+                    font: Theme.listFont
                     elide: Text.ElideRight
                     color: entry.current ? Theme.accentText : (entry.dim ? Theme.textDim : Theme.text)
                 }

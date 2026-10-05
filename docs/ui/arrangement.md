@@ -28,6 +28,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 | [BusLane](../../ui/src/arrangement/BusLane.h) | The lane of a strip without clips: a return's or the master's |
 | [LiveTakes](../../ui/src/arrangement/LiveTakes.h), [ArrangementPlayhead](../../ui/src/arrangement/ArrangementPlayhead.h) | The takes being recorded and the playhead: items of their own over the lanes |
 | [TrackHeaderItem](../../ui/src/arrangement/TrackHeaderItem.h) | A strip's header (track, group, return or master): what it paints, its mouse handling, what its controls show and do, its menus |
+| [GroupBands](../../ui/src/arrangement/GroupBands.h) | The groups' colour bands down the headers' column, over the headers |
 | [TrackHeader.qml](../../ui/qml/arrangement/TrackHeader.qml), [ReturnHeader.qml](../../ui/qml/arrangement/ReturnHeader.qml), [MasterHeader.qml](../../ui/qml/arrangement/MasterHeader.qml) | The headers' controls laid out over a `TrackHeaderItem` |
 | [SendKnobs.qml](../../ui/qml/arrangement/SendKnobs.qml), [AutomationChoosers.qml](../../ui/qml/arrangement/AutomationChoosers.qml), [AutomationChooser.qml](../../ui/qml/arrangement/AutomationChooser.qml) | A header's send knobs and automation choosers |
 | [GridInfo.qml](../../ui/qml/arrangement/GridInfo.qml) | The corner showing the grid's size; a click toggles snapping |
@@ -43,7 +44,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 │ ArrangementRuler (40)        │ GridInfo        (spans 1-2)│
 ├──────────────────────────────┼───────────────────┬────────┤
 │ ArrangementLanes             │ track headers     │ vbar   │
-│  (+ LiveTakes, playhead)     │                   │ (rows  │
+│  (+ LiveTakes, playhead)     │  (+ GroupBands)   │ (rows  │
 ├──────────────────────────────┼───────────────────┤  1-3)  │
 │ a BusLane per return         │ ReturnHeaders     │        │
 ├──────────────────────────────┼───────────────────┤        │
@@ -58,8 +59,15 @@ The lanes and the header column scroll together: they share the `Arrangement`'s 
 `Repeater` over `arrangement.rows`) sits at `model.top - arrangement.scrollY`, hidden while its track is in a folded
 group. The returns and the master don't scroll vertically: they are columns of fixed-height rows whose heights follow
 their automation lanes (`arrangement.returns`, `masterHeight`). Below the headers, a click selects no track and the
-wheel scrolls them with the lanes. The clip view is not part of this view: the main window shows it over the
-arrangement ([README.md](README.md#the-main-window)).
+wheel scrolls them with the lanes.
+
+A scene-graph item draws where its geometry says, unclipped, so whatever scrolls past an item's edge would show over
+its neighbours (the browser, left of the arrangement in the main window, among them): the ruler, the lanes and the
+bus lanes have `clip: true` (a scissor each, for them and the playheads in them), and the header column clips its
+headers.
+
+The clip view is not part of this view: the main window shows it over the arrangement
+([README.md](README.md#the-main-window)).
 
 For the main window the view offers `zoom(factor)`, `zoomToArrangement()`, `narrowGrid()`, `widenGrid()`,
 `openClipView()`, `renameTrack(trackId)`, `focusLanes()`, the properties `snap`, `follow`, `gridStep` and
@@ -113,9 +121,9 @@ makes one `Row` per track:
 | `lanes` | `LaneRow`s: the automation lanes shown below it, `kAutomationLaneHeight` (44 px) each |
 | `automation` | its automation shows |
 | `hidden` | it is in a folded group: a row with no height |
-| `folded` | it is folded itself: `kFoldedHeight` (22), or `kFoldedGroupHeight` (24) for a group, and no automation |
+| `folded` | it is folded itself: `kFoldedHeight` (26: its name row, 4 px above and below its buttons), or `kFoldedGroupHeight` (29: the same below the group's 3 px bar) for a group, and no automation |
 | `bars` | folded, and not a group: its clips are drawn and grabbed as bars, and its lane is no grid (see [hit-testing](#hit-testing)) |
-| `depth` | how many groups it is in (for the header's indent) |
+| `depth` | how many groups it is in (the header's indent, `kGroupIndent` 8 px a level) |
 
 Rows stay one per track, in order, hidden or not, so a row's index is the track's index in `Project::tracks()`.
 `rowIndexAt(contentY)` bisects the rows' tops; a hidden row has the same top as the row after it, so the bisect lands
@@ -369,15 +377,24 @@ and offers its QML controls what they show (as properties) and do (as invokables
 
 ### What it paints
 
-Its background (`kLaneSelected` while selected, else `kPanelAlt`), a panel for each lane below it, a colour band for
-each group it is in (`kIndent` 6 px each, outermost first), its own colour, the fold button (a triangle in a circle
-for a track, pointing right while folded; three bars in a circle, filled while folded, for a group), the snowflake
-of a frozen track (dimmer in a frozen group, not frozen itself), and its name. A return paints a colour band and its
-name; the master "Master".
+Its background (`kLaneSelected` while selected, else `kPanelAlt`), a panel for each lane below it, its own colour
+at its indent (5 px for a track; a group's is its band, `kGroupBand` 7 px, and a bar across its top, `kGroupBar`
+3 px, above its name row: `nameTop`, which its controls follow), the fold button (a triangle in a circle for a
+track, pointing right while folded; three bars in a circle, filled while folded, for a group), the snowflake of a
+frozen track (dimmer in a frozen group, not frozen itself), and its name. A return paints a colour band and its
+name; the master "Master". A folded track's name row is centred in its 26 px (4 px above and below the buttons, the
+fold button and the meter), a folded group's below its bar.
+
+The groups' bands are [GroupBands](../../ui/src/arrangement/GroupBands.h)', one item over the whole column (from the
+layout's rows) rather than each header's, so they run on from one header to the next: for each group shown, a band
+in its colour at its depth's indent (`kGroupIndent` 8 px a level, `kGroupBand` 7 px wide), from the top of its header
+to the bottom of the last track in it, across the lines between its tracks and their automation lanes; it stops
+a line short, so the line under the group shows where it ends. Nested groups have a band each, side by side. A
+folded or empty group's band is its header's. A track in no group has no band, just its own colour.
 
 ### Layout
 
-TrackHeader.qml (252 px wide): the `Meter` on the right; on the name row (22 px) the activator (mute, labelled with
+TrackHeader.qml (252 px wide): the `Meter` on the right; on the name row (22 px, from `nameTop`) the activator (mute, labelled with
 the track's number), solo, and arm (not for a group: it records nothing); on the second row (only when the lane is
 at least 48 px) volume (a `ValueBox`, -70 to +6 dB, no wheel), pan (a `Knob`, no wheel), the input and the monitoring
 buttons; then the send knobs (`SendKnobs`, while there are returns); then the automation choosers

@@ -267,7 +267,11 @@ frame's nodes and buffers.
   node still draws it, and the whole cache goes when the window's scene graph is invalidated. `drawText(rect,
   flags, ...)` clips to the rect unless `Qt::TextDontClip`, as `QPainter` does.
 - **Clipping** is `SgPainter::setClipRect` (rectangles, intersected; done on the CPU, so it never splits a batch).
-  Don't set QML's `clip: true` on a canvas: it breaks batching.
+  Don't set QML's `clip: true` on parts of a canvas: it breaks batching. But a canvas draws where its geometry
+  says, unclipped: what it scrolls past its edges (a selected range, notes, the playhead) would show over its
+  neighbours, the browser among them. So a canvas whose content scrolls (the arrangement's ruler, lanes and bus
+  lanes, the piano roll's ruler, keys, notes and velocities, the clip view's waveforms) has `clip: true` itself, a
+  scissor for it and the items in it (its playhead).
 - **Differences from `QPainter`**: no pen or brush state (each call takes its colour, a pen's width and cap);
   antialiasing is state (`setAntialiasing`, off by default) and feathers edges with a 1-pixel ramp; transforms are
   translations only; `drawArc` takes degrees (0 at 3 o'clock, counter-clockwise). Without antialiasing, lines and
@@ -289,7 +293,8 @@ nodes made): the tests read it.
 `kWaveform`, ...), the piano roll's (`kKeyWhite`, `kBlackKeyRow`, `kOutsideClip`, ...) and the controls'
 (`kActivatorOn`, `kSoloOn`, `kMeterLow`, `kScopeLine`, `kFrozen`, `kAutomationOn`, ...). Fonts: `uiFont(pt, bold)`
 (Segoe UI, 9 pt by default), `monoFont(pt)` (Consolas), and for QML `Theme.font`, `Theme.smallFont` (8 pt, the
-buttons with a role), `Theme.uiFont()`. Metrics: `radius` (3), `controlHeight` (28, the transport bar's boxes and
+buttons with a role), `Theme.listFont` (10 pt: the browser's lists, as Qt Quick draws small text smaller than the
+widgets did at the same size) and `Theme.listHeadingFont` (8.5 pt bold, the sidebar's headings), `Theme.uiFont()`. Metrics: `radius` (3), `controlHeight` (28, the transport bar's boxes and
 buttons), `scrollBarWidth` (12), `iconSize` (14). `setUpApplication()` applies the font and a palette from these
 colours.
 

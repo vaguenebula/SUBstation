@@ -378,6 +378,7 @@ QString ProjectEditor::groupTracks(const QStringList& trackIds) {
     group.name = p.uniqueTrackName(QStringLiteral("%1 Group").arg(static_cast<int>(p.tracks().size()) + 1));
     group.color = p.nextColor();
     group.kind = kGroupKind;
+    group.height = kDefaultGroupHeight;
     group.parent = first.parent;
     const QString id = group.id;
     const QString text = QStringLiteral("Group Tracks");

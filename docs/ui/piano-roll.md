@@ -114,7 +114,9 @@ Warping and its modes in the engine: [engine/warp.md](../engine/warp.md).
 `RollPlayhead` sits over the ruler (`ruler: true`), the note grid and the velocity lane. `NoteTools` is a child of
 the note grid, floating over it. `focusNotes()` gives the note grid the keyboard; clicks on the keys, the ruler and
 the velocities give it to the notes too (`PianoRoll::focusGrid()`). The scroll bars follow the roll except while
-dragged (then the roll follows them: `scrollToX`, `scrollToY`).
+dragged (then the roll follows them: `scrollToX`, `scrollToY`). The ruler, the keys, the note grid and the velocity
+lane have `clip: true` (and the clip view's `ClipWaveform`): a scene-graph item isn't clipped to itself, and notes or
+the playhead scrolled out of the grid would show over the keys and the browser.
 
 ### Time and pitch
 

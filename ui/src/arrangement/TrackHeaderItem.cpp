@@ -222,12 +222,22 @@ qreal TrackHeaderItem::nameLeft() const {
     const app::Project* p = project();
     const bool frozen = p && !isMaster() && p->frozenBy(trackId_).has_value();
     if (isReturn() || isMaster()) return 10 + (frozen ? kSnowflake + 3 : 0);
-    return indent() + 10 + kFoldWidth + (p && p->isFrozen(trackId_) ? kSnowflake + 3 : 0);
+    return foldRect().right() + 3 + (p && p->isFrozen(trackId_) ? kSnowflake + 3 : 0);
+}
+
+int TrackHeaderItem::nameTop() const {
+    const app::Track* t = track();
+    return t && t->isGroup() ? arrangement::kGroupBar : 0;
+}
+
+double TrackHeaderItem::stripWidth() const {
+    const app::Track* t = track();
+    return t && t->isGroup() ? arrangement::kGroupBand : kStrip;
 }
 
 QRectF TrackHeaderItem::foldRect() const {
     if (isReturn() || isMaster()) return {};
-    return QRectF(indent() + 7, 3, kFoldWidth, kNameRow - 4);
+    return QRectF(indent() + stripWidth() + 2, nameTop() + 4, kFoldWidth, kNameRow - 5);  // (as the buttons)
 }
 
 bool TrackHeaderItem::mixerAutomated() const {
@@ -284,7 +294,7 @@ void TrackHeaderItem::connectAll() {
     connect(p, &app::Project::tracksArranged, this, [this] {
         refreshSends();
         Q_EMIT changed();
-        update();  // its group bands follow the groups
+        update();  // its indent follows the groups
     });
     connect(p, &app::Project::reset, this, &TrackHeaderItem::refresh);
     connect(p, &app::Project::freezeChanged, this, [this] {  // (and what is in it)
@@ -960,7 +970,7 @@ void TrackHeaderItem::paint(SgPainter& p) {
         if (!holder || snowflake_.isNull()) return false;
         p.save();
         p.setOpacity(*holder == trackId_ ? 1.0 : 0.5);
-        p.drawImage(QRectF(x, (kNameRow - kSnowflake) / 2 + 1, kSnowflake, kSnowflake), snowflake_);
+        p.drawImage(QRectF(x, nameTop() + (kNameRow - kSnowflake) / 2 + 1, kSnowflake, kSnowflake), snowflake_);
         p.restore();
         return true;
     };
@@ -985,13 +995,11 @@ void TrackHeaderItem::paint(SgPainter& p) {
         }
         return;
     }
-    // A band for each group it is in (outermost first), then its own colour.
-    const QStringList ancestors = project.ancestors(trackId_);
-    for (int depth = 0; depth < ancestors.size(); ++depth) {
-        const app::Track* group = project.findTrack(ancestors[ancestors.size() - 1 - depth]);
-        if (group) p.fillRect(QRectF(depth * kIndent, 0, kIndent - 1, h), QColor(group->color));
-    }
-    p.fillRect(QRectF(indent(), 0, 5, h - 1), QColor(t->color));
+    // Its own colour, after the bands of the groups it is in (GroupBands draws
+    // those, over the headers: a group's runs on down its tracks). A group's
+    // goes across its top too, above its name row.
+    p.fillRect(QRectF(indent(), 0, stripWidth(), h - 1), QColor(t->color));
+    if (t->isGroup()) p.fillRect(QRectF(indent(), 0, w - indent(), arrangement::kGroupBar), QColor(t->color));
     // The fold button, in a circle. A track's: a triangle, pointing right while
     // folded, down while open. A group's: three bars (its tracks), the circle
     // filled while folded (its tracks tucked away).
@@ -1026,7 +1034,7 @@ void TrackHeaderItem::paint(SgPainter& p) {
     if (!renaming_) {
         const QFont font = uiFont(9, isSelected || t->isGroup());
         const double left = nameLeft();
-        const QRectF nameRect(left, 3, nameRight_ - left, kNameRow - 4);
+        const QRectF nameRect(left, nameTop() + 4, nameRight_ - left, kNameRow - 5);
         p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, SgPainter::elidedText(t->name, font, nameRect.width()),
                    t->mute ? Theme::kTextDim : Theme::kText, font);
     }

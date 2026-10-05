@@ -468,6 +468,9 @@ application ends, which stops the backend's threads (saving the index) and waits
 - **Renaming a preset** in place (Ctrl+R with the list focused, or its menu's Rename…): a text field over its row;
   Enter applies (`renamePreset`), Esc cancels. Deleting asks first ("Move the preset to the Recycle Bin?").
 - **The footer**: the headphones (`previewEnabled`) and the status.
+- **Text**: the sidebar's entries, the results and the folder tree in `Theme.listFont` (10 pt, a point more than the
+  rest of the UI: Qt Quick draws small text smaller than the widgets did), the sidebar's headings in
+  `Theme.listHeadingFont` (8.5 pt bold); a row is its text's height and 4 px (at least 20 px, 22 in the sidebar).
 - **Stopping a preview**: an [OutsidePresses](../ui/src/mainwindow/OutsidePresses.h) on the panel, enabled while
   `previewing`, sees a press anywhere outside the panel (in its window or another of the application's) and calls
   `stopPreview()`; presses while the panel's own menus are open count as inside.

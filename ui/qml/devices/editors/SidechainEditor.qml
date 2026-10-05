@@ -23,7 +23,7 @@ Item {
 
     // The device's body: GRAPH_MIN_WIDTH + 2 * SPACING + FIT_WIDTH + CONTROLS_WIDTH + INSET, from edge to edge.
     implicitWidth: 380 + 2 * 8 + 150 + 168 + 6
-    implicitHeight: Math.max(100, 5 + controls.implicitHeight + 4)
+    implicitHeight: Math.max(100, 5 + controls.implicitHeight + 5)
 
     readonly property var params: {
         const all = {}
@@ -139,7 +139,7 @@ Item {
         Column {
             id: fit
             width: 150
-            height: parent.height - 5 - 4
+            height: parent.height - 5 - 5
             y: 5
             spacing: 4
 

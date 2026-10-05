@@ -71,6 +71,7 @@ Item {
         x: view.keysWidth
         width: noteGrid.width
         height: view.rulerHeight
+        clip: true
         session: Session
         roll: pianoRoll
 
@@ -87,6 +88,7 @@ Item {
         y: view.rulerHeight
         width: view.keysWidth
         height: noteGrid.height
+        clip: true
         session: Session
         roll: pianoRoll
     }
@@ -98,6 +100,7 @@ Item {
         y: view.rulerHeight
         width: Math.max(0, view.width - view.keysWidth - view.barWidth)
         height: Math.max(0, view.height - view.rulerHeight - view.velocityHeight - view.barWidth)
+        clip: true
         session: Session
         roll: pianoRoll
 
@@ -155,6 +158,7 @@ Item {
         y: noteGrid.y + noteGrid.height
         width: noteGrid.width
         height: view.velocityHeight
+        clip: true
         session: Session
         roll: pianoRoll
 

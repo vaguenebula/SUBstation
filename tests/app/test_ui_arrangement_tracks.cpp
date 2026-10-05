@@ -428,6 +428,93 @@ private Q_SLOTS:
         }
     }
 
+    // A folded track's and a folded group's name rows sit in the middle of what
+    // they have (a group's below the bar across its top): as much room above
+    // the buttons, the meter and the fold button as below them, selected or not.
+    void foldedHeadersPadTheirNameRowEvenly() {
+        const QStringList ids = makeTracks(2);
+        const QString group = editor().groupTracks({ids[1]});
+        h_->settle();
+        editor().setFolded(ids[0], true);
+        editor().setFolded(group, true);
+        h_->settle();
+        QCOMPARE(h_->rowOf(ids[0]).mainHeight, arr::kFoldedHeight);
+        QCOMPARE(h_->rowOf(group).mainHeight, arr::kFoldedGroupHeight);
+        QVERIFY(arr::kFoldedGroupHeight > arr::kFoldedHeight);
+        for (const QString& id : {ids[0], group}) {
+            TrackHeaderItem* h = header(id);
+            const double top = h->nameTop();  // (below a group's bar)
+            QCOMPARE(top, id == group ? double(arr::kGroupBar) : 0.0);
+            const double bottom = h->mainHeight() - 1;  // (the line under it)
+            for (const char* name : {"activator", "solo", "meter"}) {
+                const QRectF r = geometryOf(control(id, name));
+                QVERIFY2(r.top() - top == bottom - r.bottom(), name);
+            }
+            const QRectF fold = h->foldRect();
+            QCOMPARE(fold.center().y() - top, bottom - fold.center().y());
+            for (bool selected : {false, true}) {
+                selection().selectTrack(selected ? id : QString());
+                h_->settle();
+                test::screenshot(window(), QStringLiteral("arrangement_folded_header_%1%2")
+                                               .arg(id == group ? QStringLiteral("group") : QStringLiteral("track"),
+                                                    selected ? QStringLiteral("_selected") : QString()),
+                                 h->mapRectToScene(h->boundingRect()).toAlignedRect());
+            }
+        }
+    }
+
+    // The bands of the groups down the headers: a group's colour from the top
+    // of its header to the bottom of its last track, unbroken across the lines
+    // between its tracks and the automation lanes they show, and across the
+    // top of its header; a band per level for nested groups; a folded group's
+    // just its header's. A track in no group keeps its own colour at the left.
+    void groupBandsRunDownTheirGroups() {
+        const QStringList ids = makeTracks(5);
+        const QString a = ids[0], b = ids[1], c = ids[2], d = ids[3], e = ids[4];
+        const QString outer = editor().groupTracks({a, b, c});
+        const QString inner = editor().groupTracks({b, c});
+        const QString folded = editor().groupTracks({d});
+        editor().showAutomation(c);
+        editor().addAutomationLane(c);
+        editor().setFolded(folded, true);
+        h_->settle();
+        QCOMPARE(order(), (QStringList{outer, a, inner, b, c, folded, d, e}));
+        QCOMPARE(h_->rowOf(c).lanes.size(), size_t(1));
+        auto* column = h_->find<QQuickItem*>(QStringLiteral("headers"));
+        QVERIFY(column && h_->find<QQuickItem*>(QStringLiteral("groupBands")));
+        const QImage image = window()->grabWindow();
+        test::screenshot(window(), QStringLiteral("arrangement_group_bands"));
+        const qreal dpr = window()->effectiveDevicePixelRatio();
+        const int scroll = arrangement()->scrollY();
+        // The colour at a point of the header column (content y).
+        auto at = [&](double x, double y) {
+            const QPointF p = column->mapToScene(QPointF(x, y - scroll));
+            return image.pixelColor(int(p.x() * dpr), int(p.y() * dpr));
+        };
+        auto color = [&](const QString& id) { return QColor(project().track(id).color); };
+        auto band = [](int depth) { return depth * arr::kGroupIndent + arr::kGroupBand / 2.0; };  // a band's middle
+
+        // The outer group's band: from its header's top to C's lane's bottom, across every line in between.
+        const arr::Row first = h_->rowOf(outer), last = h_->rowOf(c);
+        for (double y = first.top; y < last.bottom() - 1; y += 1) QCOMPARE(at(band(0), y), color(outer));
+        QVERIFY(at(band(0), last.bottom() - 1) != color(outer));  // the line under the group shows
+        // Across the top of its header (the bar), and the inner group's.
+        QCOMPARE(at(150, first.top + 1), color(outer));
+        QCOMPARE(at(150, h_->rowOf(inner).top + 1), color(inner));
+        // The inner group's: from its header to C's bottom, beside the outer one's.
+        for (double y = h_->rowOf(inner).top; y < last.bottom() - 1; y += 1) QCOMPARE(at(band(1), y), color(inner));
+        QVERIFY(at(band(1), h_->rowOf(a).top + 10) != color(inner));
+        // The folded group: its band and its bar, on its header only.
+        const arr::Row foldedRow = h_->rowOf(folded);
+        QCOMPARE(at(band(0), foldedRow.top + foldedRow.mainHeight / 2), color(folded));
+        QCOMPARE(at(150, foldedRow.top + 1), color(folded));
+        QVERIFY(at(band(0), foldedRow.bottom() - 1) != color(folded));
+        // E, in no group: its own colour, as before.
+        QCOMPARE(at(3, h_->rowOf(e).top + 10), color(e));
+        QCOMPARE(header(e)->indent(), 0);
+        QCOMPARE(header(c)->indent(), 2 * arr::kGroupIndent);
+    }
+
     void foldingOneOfTheSelectedTracksFoldsThemAll() {
         const QStringList ids = makeTracks(3);
         const QString a = ids[0], b = ids[1], c = ids[2];

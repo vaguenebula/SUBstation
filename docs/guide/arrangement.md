@@ -128,7 +128,10 @@ first of them was.
   on to the master, or the group it is in (groups nest).
 - A group has no clips; its lane shows the clips of the tracks in it, and its
   automation works as a track's. It has no arm or input: it records nothing.
-- The tracks in a group are indented under it, with a band in the group's colour.
+- A group's header is a little taller than a track's, with a bar in its colour across
+  its top. The tracks in it are indented under it, and a band in the group's colour
+  runs down the left of the headers from the group's to its last track's (past their
+  automation lanes); a group in a group has a band of its own beside it.
 - **Ctrl+Shift+G** (*Ungroup Tracks*) takes a group away; what was in it stays, where it
   was.
 - Deleting a group deletes what is in it.

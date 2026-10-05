@@ -109,7 +109,8 @@ both kinds are edited alike.
 | `kReturnKind` `"return"` | `Project::returns()` | no | fed by sends; named by letter (`returnLetter`: A..Z, AA...) |
 | `kMasterKind` `"master"` | `Project::master()` | no | id `kMaster` (`"master"`), effects only |
 
-Fields: `name`, `color`, mixer (`volumeDb`, `pan`, `mute`, `solo`), `height`, `clips` (sorted by `startBeat`),
+Fields: `name`, `color`, mixer (`volumeDb`, `pan`, `mute`, `solo`), `height` (its lane's; a new track's is
+`kDefaultTrackHeight`, 96 px, a new group's `kDefaultGroupHeight`, 104), `clips` (sorted by `startBeat`),
 `devices`, `automation` (target key → envelope, never empty; an `EnvelopeMap`, which keeps the order targets were
 first automated in), `automationView`, audio input (`input`: none, `{c}` or `{l, r}` device channels, or
 `inputTrack`: another track's id or `kMaster` for resampling), `midiInput` (a `MidiInput`, or none for *No Input*;

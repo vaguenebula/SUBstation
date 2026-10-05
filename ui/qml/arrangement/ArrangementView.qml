@@ -97,6 +97,7 @@ FocusScope {
         objectName: "ruler"
         width: view.lanesWidth
         height: view.rulerHeight
+        clip: true
         session: Session
         arrangement: arrangementState
 
@@ -124,6 +125,7 @@ FocusScope {
         y: view.rulerHeight
         width: view.lanesWidth
         height: view.lanesHeight
+        clip: true
         session: Session
         arrangement: arrangementState
         focus: true
@@ -181,6 +183,14 @@ FocusScope {
             }
         }
 
+        // The groups' colours down their headers and tracks', unbroken from one header to the next.
+        GroupBands {
+            objectName: "groupBands"
+            anchors.fill: parent
+            session: Session
+            arrangement: arrangementState
+        }
+
         // Where dragged headers would put their tracks.
         Rectangle {
             objectName: "dropLine"
@@ -218,6 +228,7 @@ FocusScope {
                 owner: model.trackId
                 width: view.lanesWidth
                 height: model.rowHeight
+                clip: true
                 session: Session
                 arrangement: arrangementState
                 id: returnLane
@@ -261,6 +272,7 @@ FocusScope {
         y: view.rulerHeight + view.lanesHeight + arrangementState.returnsHeight
         width: view.lanesWidth
         height: arrangementState.masterHeight
+        clip: true
         owner: "master"
         session: Session
         arrangement: arrangementState

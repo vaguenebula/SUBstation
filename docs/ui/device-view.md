@@ -63,10 +63,12 @@ edited in place, after scrolling to the rack), `focusDevices()` (the device view
 ### Height
 
 The panel never scrolls vertically. Its height is worked out once from a measured, hidden `DeviceParamKnob` (the
-`probe`) and the title font: the tallest device is its border, a title bar and a page of knobs in two rows
-(`deviceHeight`); the panel adds `extraHeight` (12 px, room for editors' graphs), `panelMargin` (8 px) above and below,
-and a scroll bar's width. The main window fixes the device view's split to it. That way it fits whatever the fonts
-and the screen's scale. A plug-in's message is cut to four lines for the same reason (the whole text is in its
+`probe`) and the title font: the tallest device is its border, a title bar and a page of knobs in two rows with the
+body's margins, 6 px above and below (`deviceHeight`); the panel adds `panelMargin` (8 px) above and below. Every
+device is that tall, so the tallest page of knobs is as far from its title bar as from the frame's bottom, and an
+editor's graphs take the height there is, with the same margins. (The Python panel also added `EXTRA_HEIGHT` and a
+scroll bar's width, which left more room below a device's knobs than above them; the chain has no scroll bar.) The
+main window fixes the device view's split to it. That way it fits whatever the fonts and the screen's scale. A plug-in's message is cut to four lines for the same reason (the whole text is in its
 tooltip).
 
 ### Scrolling
@@ -158,7 +160,9 @@ and editor, its sidechain) reading the project again whenever that may have chan
   device with a sidechain input), the page arrows and "n/m" (only with more than one page), the save button.
 - **Body**: a `Loader` taking all the height there is: a rack's `RackDeviceBody`, a plug-in's `PluginDeviceBody`,
   the device's editor (`DeviceEditors.editorFor(kind)`), or `DeviceKnobPages`. A body may have `pages` and `page`
-  (the title bar pages through them; the page is restored from the area when the body is made again).
+  (the title bar pages through them; the page is restored from the area when the body is made again). Its content
+  starts 6 px below the title bar and what fills the height (a graph, a rack's chain list) ends 6 px above the
+  frame's bottom (the EQ's curve and the Sidechain's fill it all, 5 px for their side columns).
 - **Folded**, the frame is a 26 px strip instead: the fold button, the switch and the name reading upwards.
 - **Mouse** ([DeviceFrameInput](../../ui/src/devices/DeviceFrameInput.h), under the frame's controls, so it gets the
   clicks on the background, the title bar and labels): a press selects (`DeviceSelection::press`), the release
@@ -260,8 +264,8 @@ readonly property var editors: ({
 - `required property string trackId` and `deviceId`.
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
   `implicitWidth` is the body's width (Compressor 658, Delay 532, Sampler 566, Sidechain 720, EQ 580, or 756 with its
-  band controls); it may change. It gets the body's whole height and grows its graphs into it, while its knobs stay
-  at the top; `implicitHeight` is the least it needs.
+  band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px from the top
+  and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
 - Optional: `pages` (read) and `page` (read/write) for pages of knobs; `menuActions` (a list of `Action`s the
   device's menu starts with); the signal `sidechainMenuRequested()` (the frame shows the sidechain menu).
 - Clicks it doesn't take go on to the frame (selecting the device, its menu).

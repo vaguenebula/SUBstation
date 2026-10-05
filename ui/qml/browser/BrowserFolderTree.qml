@@ -115,7 +115,7 @@ SelectionList {
             anchors.rightMargin: 4
             anchors.verticalCenter: parent.verticalCenter
             text: entry.name
-            font: Theme.font
+            font: Theme.listFont
             elide: Text.ElideRight
             color: entry.selected ? Theme.accentText : Theme.text
         }

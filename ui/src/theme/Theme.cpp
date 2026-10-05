@@ -24,6 +24,8 @@ Theme::Theme(QObject* parent) : QObject(parent) {}
 QFont Theme::font() const { return sub::ui::uiFont(); }
 
 QFont Theme::smallFont() const { return sub::ui::uiFont(8.0); }
+QFont Theme::listFont() const { return sub::ui::uiFont(10.0); }
+QFont Theme::listHeadingFont() const { return sub::ui::uiFont(8.5, true); }
 
 QString Theme::monoFontFamily() const { return QString::fromLatin1(kMonoFontFamily); }
 
