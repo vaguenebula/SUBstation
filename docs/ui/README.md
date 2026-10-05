@@ -293,7 +293,8 @@ nodes made): the tests read it.
 `kWaveform`, ...), the piano roll's (`kKeyWhite`, `kBlackKeyRow`, `kOutsideClip`, ...) and the controls'
 (`kActivatorOn`, `kSoloOn`, `kMeterLow`, `kScopeLine`, `kFrozen`, `kAutomationOn`, ...). Fonts: `uiFont(pt, bold)`
 (Segoe UI, 9 pt by default), `monoFont(pt)` (Consolas), and for QML `Theme.font`, `Theme.smallFont` (8 pt, the
-buttons with a role), `Theme.uiFont()`. Metrics: `radius` (3), `controlHeight` (28, the transport bar's boxes and
+buttons with a role), `Theme.listFont` (10 pt: the browser's lists, as Qt Quick draws small text smaller than the
+widgets did at the same size) and `Theme.listHeadingFont` (8.5 pt bold, the sidebar's headings), `Theme.uiFont()`. Metrics: `radius` (3), `controlHeight` (28, the transport bar's boxes and
 buttons), `scrollBarWidth` (12), `iconSize` (14). `setUpApplication()` applies the font and a palette from these
 colours.
 

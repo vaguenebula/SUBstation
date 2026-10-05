@@ -121,7 +121,7 @@ SelectionList {
             anchors.verticalCenter: parent.verticalCenter
             visible: !row.renaming
             text: row.display
-            font: Theme.font
+            font: Theme.listFont
             elide: Text.ElideRight
             color: row.selected ? Theme.accentText : Theme.text
         }
@@ -144,6 +144,7 @@ SelectionList {
                 objectName: "renameField"
                 topPadding: 1
                 bottomPadding: 1
+                font: Theme.listFont
                 text: row.name
                 Component.onCompleted: {
                     forceActiveFocus()
