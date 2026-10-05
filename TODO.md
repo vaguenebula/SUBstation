@@ -10,9 +10,9 @@ once (`processStrip`) and reuse it everywhere.
 
 Keep routing open for later: the engine knows **edges** (a strip's output
 target), not hierarchy. Hierarchy (which track is in which group) lives in the
-Python model. Sends, return tracks, resampling and sidechains are more edges;
-Phase 6 lets a strip have several outgoing edges (until then each has one),
-and Phases 7 and 8 add edge kinds before racks build on the routing.
+application layer's model. Sends, return tracks, resampling and sidechains are
+more edges; Phase 6 lets a strip have several outgoing edges (until then each
+has one), and Phases 7 and 8 add edge kinds before racks build on the routing.
 
 ---
 
@@ -115,8 +115,9 @@ Tests
 - [x] `addBuiltinProcessor(chainId, …)`, `addPluginProcessor(chainId, …)`,
       `setChainOrder(chainId, ids)`, `moveProcessor(id, toChainId, index)`.
 - [x] `processors_`: id → (chain, processor); chains: id → (owning strip, parent rack).
-- [x] Update bindings and `engine_bridge.py`; dragging a device between tracks
-      becomes one `moveProcessor` (keeps plug-in state, no reload).
+- [x] Update the engine bridge (`app/src/audio/BridgeDevices.cpp`); dragging a
+      device between tracks becomes one `moveProcessor` (keeps plug-in state, no
+      reload).
 
 ---
 
@@ -215,7 +216,7 @@ Model / UI
 
 Tests
 - [x] Benchmark first: N tracks of the built-in synth / a heavy plug-in,
-      serial vs. parallel (`benchmarks/parallel_render_bench.py`).
+      serial vs. parallel (`benchmarks/parallel_render_bench.cpp`).
 - [x] Offline renders are bit-identical with and without workers: random
       graphs, nested groups, latent plug-ins, solo/mute.
 - [x] Stress: many tracks, many runs (no thread sanitizer on MSVC).
@@ -310,7 +311,8 @@ Tests
 - [x] Cycles refused across sends, outputs and returns.
 - [x] Solo/mute across sends.
 - [x] Random graphs with sends (fan-out, pre/post taps): bit-identical with and
-      without workers (`add_returns` beside `random_project` in tests/test_parallel_engine.py).
+      without workers (`addReturns` beside `randomProject` in
+      tests/engine/test_parallel_engine.cpp).
 - [x] Undo and serialization round-trips.
 
 ---
@@ -455,7 +457,7 @@ Model / UI
 - [x] Recursive device lookup (`device_path()`, `find_device()`, `project.device()`); serialization recurses (version 12).
 - [x] Device panel: rack with chain list, chain mixer (and meters), nested device view (the chain clicked, beside the rack).
 - [x] Group selected devices into a rack (Ctrl+G in the device panel), ungroup (Ctrl+Shift+G).
-- [x] Macros (Python first): rack parameters mapped to (device, param, range) targets.
+- [x] Macros (the application layer first): rack parameters mapped to (device, param, range) targets.
 - [x] Rack presets: the save button saves a rack (chains, nested devices,
       plug-in state, macros) as a `.gilpreset`; right-click beside the devices to load one.
   - [x] The browser's Presets section (see "Device presets" below) lists them too.
@@ -480,7 +482,7 @@ Model / UI
 - [x] Small save button in every device's title bar (plug-ins, built-ins,
       racks). Asks for a name and writes a preset file to the user library
       (`Documents\SUBstation\Presets\<device name>\<name>.gilpreset`;
-      `model/presets.py`), asking before replacing one.
+      `app/src/io/Presets.cpp`), asking before replacing one.
 - [x] Preset file = the `Device` subtree via the project serializer: device
       kind/plug-in id, parameter values and the plug-in's state chunk.
 - [x] Browser "Presets" section, grouped by device (plug-in name / built-in /
