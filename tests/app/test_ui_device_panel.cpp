@@ -514,7 +514,7 @@ private Q_SLOTS:
         QObject::connect(area(), &sub::ui::DeviceChainArea::dragStarting, this, [this, &dragRan] {
             QTimer::singleShot(150, this, [this, &dragRan] {
                 dragRan = area()->findChild<QDrag*>() != nullptr;
-                if (dragRan) QTest::keyClick(window(), Qt::Key_Escape);
+                QTest::keyClick(window(), Qt::Key_Escape);
             });
         });
         clickTitle(ids[0]);
@@ -528,7 +528,7 @@ private Q_SLOTS:
         QCOMPARE(starting[0][0].toString(), track);
         QCOMPARE(starting[0][1].toStringList(), (QStringList{ids[0], ids[1]}));  // the selected ones
         QTest::qWait(400);  // (the drag ran, and was called off)
-#ifndef Q_OS_WIN  // (there it's Windows' own drag loop, which follows the real mouse: no button is down, so it ends at once)
+#ifndef Q_OS_WIN  // (there Windows' own drag loop runs it, and its QDrag isn't the area's child)
         QVERIFY(dragRan);
 #endif
         QVERIFY(!area()->findChild<QDrag*>());
