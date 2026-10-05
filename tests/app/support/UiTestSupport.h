@@ -131,9 +131,11 @@ inline void wheel(QQuickWindow* window, QPoint pos, double notches, Qt::Keyboard
     QGuiApplication::sendEvent(window, &event);
 }
 
-// A screenshot of the window (or a part of it) into $SUBSTATION_SCREENS, if set.
+// A screenshot of the window (or a part of it) into $SUBSTATION_UI_SCREENSHOTS, if set
+// (as the other UI tests; $SUBSTATION_SCREENS is read too).
 inline void screenshot(QQuickWindow* window, const QString& name, const QRect& part = QRect()) {
-    const QString folder = qEnvironmentVariable("SUBSTATION_SCREENS");
+    QString folder = qEnvironmentVariable("SUBSTATION_UI_SCREENSHOTS");
+    if (folder.isEmpty()) folder = qEnvironmentVariable("SUBSTATION_SCREENS");
     if (folder.isEmpty()) return;
     QDir().mkpath(folder);
     QImage image = window->grabWindow();

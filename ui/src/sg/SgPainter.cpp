@@ -106,11 +106,20 @@ void SgPainter::closeSolid() {
 
 double SgPainter::snapAliased(double v) const { return std::floor(v * dpr_ + 0.5) / dpr_; }
 
+void SgPainter::room(int count) {
+    if (solidOpen_ &&
+        int(recording_.vertices.size()) - recording_.segments.back().first + count > kMaxSolidVertices) {
+        closeSolid();
+        beginSolid();
+    }
+}
+
 void SgPainter::triangle(const Vertex& a, const Vertex& b, const Vertex& c) {
     if (state_.clipped) {
         clippedTriangle(a, b, c);
         return;
     }
+    room(3);
     push(a);
     push(b);
     push(c);
@@ -129,6 +138,7 @@ void SgPainter::clippedTriangle(const Vertex& a, const Vertex& b, const Vertex& 
     if (maxX <= cx0 || minX >= cx1 || maxY <= cy0 || minY >= cy1)
         return;
     if (minX >= cx0 && maxX <= cx1 && minY >= cy0 && maxY <= cy1) {
+        room(3);
         push(a);
         push(b);
         push(c);
@@ -172,6 +182,7 @@ void SgPainter::clippedTriangle(const Vertex& a, const Vertex& b, const Vertex& 
         return v;
     };
     const Vertex first = to(polygon[0]);
+    room(3 * (count - 2));
     for (int i = 1; i + 1 < count; ++i) {
         push(first);
         push(to(polygon[i]));
@@ -189,6 +200,7 @@ void SgPainter::rectItem(double x0, double y0, double x1, double y1, const Rgba&
     if (x1 <= x0 || y1 <= y0)
         return;
     const Vertex a = vertex(x0, y0, c), b = vertex(x1, y0, c), d = vertex(x1, y1, c), e = vertex(x0, y1, c);
+    room(6);
     push(a);
     push(b);
     push(d);
@@ -845,6 +857,88 @@ void SgPainter::fillToBaseline(const QPointF* points, int count, qreal baseY, co
             triangle(vertex(bx, by, c), vertex(bx, base, c), vertex(x, base, c));
         } else {
             quad(vertex(ax, ay, c), vertex(bx, by, c), vertex(bx, base, c), vertex(ax, base, c));
+        }
+    }
+}
+
+void SgPainter::fillToBaseline(const QPointF* points, int count, qreal baseY, const QLinearGradient& gradient) {
+    const QGradientStops stops = gradient.stops();
+    if (stops.isEmpty() || count < 2)
+        return;
+    const QPointF s = gradient.start(), e = gradient.finalStop();
+    const double gx = e.x() - s.x(), gy = e.y() - s.y();
+    const double length2 = gx * gx + gy * gy;
+    if (stops.size() == 1 || length2 <= 0.0) {
+        fillToBaseline(points, count, baseY, stops.last().second);
+        return;
+    }
+    auto colorAt = [&](double x, double y) {
+        const double t = std::clamp(((x - s.x()) * gx + (y - s.y()) * gy) / length2, 0.0, 1.0);
+        if (t <= stops.first().first)
+            return premultiplied(stops.first().second);
+        for (int i = 1; i < stops.size(); ++i) {
+            if (t <= stops[i].first) {
+                const double t0 = stops[i - 1].first, t1 = stops[i].first;
+                const double f = t1 > t0 ? (t - t0) / (t1 - t0) : 1.0;
+                const Rgba a = premultiplied(stops[i - 1].second), b = premultiplied(stops[i].second);
+                auto mix = [f](std::uint8_t p, std::uint8_t q) { return std::uint8_t(std::lround(p + (q - p) * f)); };
+                return Rgba{mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a)};
+            }
+        }
+        return premultiplied(stops.last().second);
+    };
+    // Vertical: each piece is cut where the stops fall, so the colour is linear in y within each cut.
+    std::vector<double> cuts;
+    if (gx == 0.0) {
+        for (const QGradientStop& stop : stops)
+            cuts.push_back(s.y() + stop.first * gy);
+        std::sort(cuts.begin(), cuts.end());
+    }
+    beginSolid();
+    const double ox = state_.offset.x(), oy = state_.offset.y();
+    // A convex piece (in the current coordinates), cut into horizontal slabs, each a fan.
+    auto fill = [&](std::vector<P> polygon) {
+        std::vector<double> bounds{-1e30};
+        bounds.insert(bounds.end(), cuts.begin(), cuts.end());
+        bounds.push_back(1e30);
+        std::vector<P> slab, buffer;
+        for (size_t b = 0; b + 1 < bounds.size(); ++b) {
+            const double y0 = bounds[b], y1 = bounds[b + 1];
+            slab = polygon;
+            auto clipSide = [&](auto inside, double at) {
+                buffer.clear();
+                for (size_t i = 0; i < slab.size(); ++i) {
+                    const P& p = slab[i];
+                    const P& q = slab[(i + 1) % slab.size()];
+                    const bool pIn = inside(p), qIn = inside(q);
+                    if (pIn)
+                        buffer.push_back(p);
+                    if (pIn != qIn) {
+                        const double t = (at - p.y) / (q.y - p.y);
+                        buffer.push_back({p.x + (q.x - p.x) * t, at});
+                    }
+                }
+                slab.swap(buffer);
+            };
+            clipSide([&](const P& p) { return p.y >= y0; }, y0);
+            clipSide([&](const P& p) { return p.y <= y1; }, y1);
+            if (slab.size() < 3)
+                continue;
+            auto v = [&](const P& p) { return vertex(p.x + ox, p.y + oy, colorAt(p.x, p.y)); };
+            const Vertex first = v(slab[0]);
+            for (size_t i = 1; i + 1 < slab.size(); ++i)
+                triangle(first, v(slab[i]), v(slab[i + 1]));
+        }
+    };
+    for (int i = 0; i + 1 < count; ++i) {
+        const P a{points[i].x(), points[i].y()}, b{points[i + 1].x(), points[i + 1].y()};
+        const double da = a.y - baseY, db = b.y - baseY;
+        if (da * db < 0) {  // crosses the baseline: two triangles meeting there
+            const double x = a.x + (b.x - a.x) * da / (da - db);
+            fill({a, {x, baseY}, {a.x, baseY}});
+            fill({b, {b.x, baseY}, {x, baseY}});
+        } else {
+            fill({a, b, {b.x, baseY}, {a.x, baseY}});
         }
     }
 }

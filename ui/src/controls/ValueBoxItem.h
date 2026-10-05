@@ -16,6 +16,10 @@
 // text field showing the value (its first word) all selected. The default
 // parser (parseNumber) strips "dB", "bpm" and "%" and reads "-inf" as -70.
 //
+// `logScale` (only when `from` > 0) drags and wheels evenly in log(value), as
+// a knob does (KnobItem::kDragPixels for the whole range, a notch 1/50 of it):
+// frequencies (delay.py's LogValueBox).
+//
 // Signals and `relative` as KnobItem's: `moved(value, gestureKey)` for user
 // changes only, one key per drag or wheel run; `touched()` on a left press or
 // double-click.
@@ -45,6 +49,7 @@ class ValueBoxItem : public SgCanvas {
     Q_PROPERTY(qreal step READ step WRITE setStep NOTIFY rangeChanged)
     Q_PROPERTY(int decimals READ decimals WRITE setDecimals NOTIFY rangeChanged)
     Q_PROPERTY(QList<qreal> choices READ choices WRITE setChoices NOTIFY rangeChanged)
+    Q_PROPERTY(bool logScale READ logScale WRITE setLogScale NOTIFY rangeChanged)
     Q_PROPERTY(QVariant defaultValue READ defaultValue WRITE setDefaultValue NOTIFY defaultValueChanged)
     Q_PROPERTY(bool wheel READ wheel WRITE setWheel NOTIFY wheelChanged)
     Q_PROPERTY(QString automation READ automation WRITE setAutomation NOTIFY lookChanged)
@@ -78,6 +83,8 @@ public:
     void setDecimals(int decimals);
     QList<qreal> choices() const { return choices_; }
     void setChoices(const QList<qreal>& choices);
+    bool logScale() const { return logScale_; }
+    void setLogScale(bool logScale);
     // A number, or undefined for none.
     QVariant defaultValue() const { return default_ ? QVariant(*default_) : QVariant(); }
     void setDefaultValue(const QVariant& value);
@@ -151,6 +158,9 @@ private:
     };
 
     double constrain(double value) const;
+    bool effectiveLog() const { return logScale_ && from_ > 0 && to_ > 0; }
+    // `value` moved by `fraction` of the whole range, in log(value).
+    double movedInLog(double value, double fraction) const;
     int choiceIndex(double value) const;
     void setUser(double value, const QString& gesture, bool relative);
     void setFromUser(double value, const QString& gesture);
@@ -165,6 +175,7 @@ private:
     double step_ = 0.01;
     int decimals_ = 2;
     QList<qreal> choices_;
+    bool logScale_ = false;
     std::optional<double> default_;
     bool wheel_ = true;
     QString automation_;

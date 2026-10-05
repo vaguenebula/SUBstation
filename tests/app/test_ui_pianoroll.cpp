@@ -4,7 +4,7 @@
 // resize and copy; the notes' keys taking precedence over the window's
 // shortcuts; the rubber band, the keys and the velocity lane; Alt+wheel and
 // Ctrl+Alt drags; the note tools floating by notes selected by dragging. Runs
-// on a display (xvfb here). With $SUBSTATION_SCREENS set, it saves screenshots there.
+// on a display (xvfb here). With $SUBSTATION_UI_SCREENSHOTS set, it saves screenshots there.
 
 #include <QQuickItem>
 #include <QQuickWindow>

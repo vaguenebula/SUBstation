@@ -4,7 +4,7 @@
 // warping and transposing reaching the audio; the clip gain making the
 // waveform taller; which clips open with a MIDI clip among them; going back
 // (Esc, ×, the clips deleted, the project reset). Runs on a display (xvfb
-// here). With $SUBSTATION_SCREENS set, it saves screenshots there.
+// here). With $SUBSTATION_UI_SCREENSHOTS set, it saves screenshots there.
 
 #include <QQuickItem>
 #include <QQuickWindow>
