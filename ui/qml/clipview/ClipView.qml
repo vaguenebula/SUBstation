@@ -117,7 +117,7 @@ FocusScope {
             role: "flat"
             text: "×"
             font.pointSize: 14
-            tooltip: qsTr("Back to the devices (Esc)")
+            tooltip: qsTr("Back to the arrangement (Esc)")
             onClicked: view.closeRequested()
         }
 

@@ -768,7 +768,7 @@ private Q_SLOTS:
         // Devices dragged from a track's chain: onto another track's row, moved there.
         const QString from = trackId(2), deviceId = project().tracks()[2].devices[0].id;
         QMimeData moved;
-        moved.setData(QString::fromLatin1(arr::kDeviceMoveMime), (from + QStringLiteral("\n") + deviceId).toUtf8());
+        moved.setData(QString::fromLatin1(sub::app::kDeviceMoveMime), sub::app::movedDevicesData(from, {deviceId}));
         QVERIFY(!lanes()->dragOver(&moved, onThird));  // its own track
         QVERIFY(lanes()->dragOver(&moved, onFirst));
         QVERIFY(lanes()->drop(&moved, onFirst));

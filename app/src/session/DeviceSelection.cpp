@@ -1,6 +1,7 @@
 #include "session/DeviceSelection.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QSettings>
 #include <QUndoStack>
@@ -23,6 +24,7 @@ namespace sub::app {
 namespace {
 
 constexpr const char* kPresetFolderKey = "presets/dir";
+constexpr const char* kVst3PresetFolderKey = "plugins/preset_dir";
 const QString kNestedTooDeep = QStringLiteral("The preset can't go there: racks nest at most 8 deep.");
 
 bool has(int modifiers, Qt::KeyboardModifier modifier) { return (modifiers & modifier) != 0; }
@@ -566,6 +568,61 @@ void DeviceSelection::clearDefault(const QString& deviceId) {
 bool DeviceSelection::hasDefault(const QString& deviceId) const {
     const Device* device = trackId_.isEmpty() ? nullptr : project_->findDevice(trackId_, deviceId);
     return device != nullptr && sub::app::hasDefault(device->kind, device->plugin);
+}
+
+// --- A plug-in's own presets ------------------------------------------------------------------
+
+QString DeviceSelection::vst3PresetFolder(const QString& deviceId) const {
+    const QString stored = QSettings().value(QString::fromLatin1(kVst3PresetFolderKey)).toString();
+    if (!stored.isEmpty() && QFileInfo(stored).isDir()) return stored;
+    const QString documents = QDir::homePath() + QStringLiteral("/Documents");
+    const Device* device = trackId_.isEmpty() ? nullptr : project_->findDevice(trackId_, deviceId);
+    if (device == nullptr || !device->plugin) return documents;
+    const PluginRef& plugin = *device->plugin;
+    const QString folder = QStringLiteral("%1/VST3 Presets/%2/%3")
+                               .arg(documents, plugin.vendor.isEmpty() ? QStringLiteral("Unknown") : plugin.vendor,
+                                    plugin.name);
+    return QFileInfo(folder).isDir() ? folder : documents;
+}
+
+bool DeviceSelection::loadVst3Preset(const QString& deviceId, const QString& path) {
+    const Device* device = trackId_.isEmpty() ? nullptr : project_->findDevice(trackId_, deviceId);
+    if (path.isEmpty() || device == nullptr || !device->isPlugin()) return false;
+    QSettings().setValue(QString::fromLatin1(kVst3PresetFolderKey), QFileInfo(path).absolutePath());
+    const QString fileName = QFileInfo(path).fileName();
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        Q_EMIT statusMessage(QStringLiteral("Could not load %1: %2").arg(fileName, file.errorString()));
+        return false;
+    }
+    const QByteArray data = file.readAll();
+    const std::optional<QByteArray> old = bridge_->pluginState(trackId_, deviceId);
+    // (It fails for another plug-in's settings.)
+    const QString problem = bridge_->applyPluginState(trackId_, deviceId, data);
+    if (!problem.isEmpty()) {
+        Q_EMIT statusMessage(QStringLiteral("Could not load %1: %2").arg(fileName, problem));
+        return false;
+    }
+    auto encoded = [](const std::optional<QByteArray>& state) -> std::optional<QString> {
+        if (!state || state->isEmpty()) return std::nullopt;
+        return QString::fromLatin1(state->toBase64());
+    };
+    editor_->setDeviceState(trackId_, deviceId, encoded(old), encoded(data), QStringLiteral("Load Preset ") + fileStem(path));
+    return true;
+}
+
+bool DeviceSelection::saveVst3Preset(const QString& deviceId, const QString& path) {
+    const Device* device = trackId_.isEmpty() ? nullptr : project_->findDevice(trackId_, deviceId);
+    if (path.isEmpty() || device == nullptr || !device->isPlugin()) return false;
+    QSettings().setValue(QString::fromLatin1(kVst3PresetFolderKey), QFileInfo(path).absolutePath());
+    const std::optional<QByteArray> state = bridge_->pluginState(trackId_, deviceId);
+    if (!state) return false;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(*state) != state->size()) {
+        Q_EMIT statusMessage(QStringLiteral("Could not save the preset: ") + file.errorString());
+        return false;
+    }
+    return true;
 }
 
 // --- Drops ------------------------------------------------------------------------------------

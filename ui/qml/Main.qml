@@ -6,15 +6,15 @@ import SUBstation
 
 // The main window (main_window.py): the transport bar on top; below it a
 // horizontal split of the browser (left) and, on the right, a vertical split of
-// the arrangement over the device area (the device view, or the clip view while
-// clips are open in it); the status bar at the bottom, with a project's
+// the arrangement (or the clip view covering it while clips are open in it)
+// over the device view; the status bar at the bottom, with a project's
 // plug-ins loading at its right. Every menu action and shortcut calls the
 // session (the main window's logic: transport, files, the Edit and Create
 // commands on what is selected, renders, preferences); this file shows what it
 // says and asks the user what it needs (files, unsaved changes).
 //
 // The arrangement and the device view are reached only through their
-// interfaces, each call guarded (a placeholder has none):
+// interfaces, each call guarded:
 //   arrangement: zoom(factor), zoomToArrangement(), narrowGrid(), widenGrid(),
 //                openClipView(), renameTrack(trackId) -> bool, focusLanes();
 //                snap, follow (read/write), gridStep, gridLevel; statusMessage(text)
@@ -29,7 +29,7 @@ ApplicationWindow {
     readonly property alias arrangementView: arrangement
     readonly property alias devicePanelView: devicePanel
     readonly property alias clipView: clipView
-    readonly property alias deviceArea: deviceArea
+    readonly property alias arrangementArea: arrangementArea
     readonly property alias pluginKeys: pluginKeys
     // Set once the close was confirmed (no render running, nothing unsaved or the user said so).
     property bool closeConfirmed: false
@@ -188,10 +188,10 @@ ApplicationWindow {
         Session.browser.focusSearch()
     }
 
-    // Shift+Tab: the clip view goes back to the devices; or the selected clips open in it.
+    // Shift+Tab: the clip view goes back to the arrangement; or the selected clips open in it.
     function toggleClipView() {
-        if (deviceArea.clipViewShown)
-            deviceArea.showDevices()
+        if (arrangementArea.clipViewShown)
+            arrangementArea.closeClipView()
         else if (arrangement.openClipView)
             arrangement.openClipView()
     }
@@ -271,7 +271,7 @@ ApplicationWindow {
         target: Session.arrangement
 
         function onClipViewRequested(refs, leadTrackId, leadClipId) {
-            deviceArea.openClips(refs, leadTrackId, leadClipId)
+            arrangementArea.openClips(refs, leadTrackId, leadClipId)
         }
     }
 
@@ -535,58 +535,58 @@ ApplicationWindow {
             SplitView.fillWidth: true
             orientation: Qt.Vertical
 
-            ArrangementView {
-                id: arrangement
-                objectName: "arrangement"
+            // The arrangement, or the clip view covering it while clips are open
+            // in it (a double-click on a clip, Shift+Tab), as before.
+            Item {
+                id: arrangementArea
+                objectName: "arrangementArea"
                 SplitView.fillHeight: true
                 SplitView.minimumHeight: 120
-            }
-
-            // The device view, or the clip view while clips are open in it.
-            Item {
-                id: deviceArea
-                objectName: "deviceArea"
 
                 property bool clipViewShown: false
 
                 // Opens clips in the clip view (the arrangement's clipViewRequested).
                 function openClips(refs, leadTrackId, leadClipId) {
-                    deviceViewAction.checked = true
                     clipView.trackId = leadTrackId
                     clipView.leadClipId = leadClipId
                     clipView.clipIds = refs
                     clipViewShown = true
                 }
 
-                // Back to the devices (the clip view's Esc or ×, Shift+Tab); the lanes take the keyboard.
-                function showDevices() {
+                // Back to the arrangement (the clip view's Esc or ×, Shift+Tab); the lanes take the keyboard.
+                function closeClipView() {
                     if (!clipViewShown)
                         return
                     clipViewShown = false
                     window.focusLanes()
                 }
 
-                visible: deviceViewAction.checked
-                SplitView.preferredHeight: 280
-
-                Placeholder {
-                    id: devicePanel
-                    objectName: "devicePanel"
+                ArrangementView {
+                    id: arrangement
+                    objectName: "arrangement"
                     anchors.fill: parent
-                    visible: !deviceArea.clipViewShown
-                    label: qsTr("Device View")
-                    detail: qsTr("the selected track's devices")
+                    visible: !arrangementArea.clipViewShown
                 }
 
                 ClipView {
                     id: clipView
                     objectName: "clipView"
                     anchors.fill: parent
-                    visible: deviceArea.clipViewShown
-                    onCloseRequested: deviceArea.showDevices()
+                    visible: arrangementArea.clipViewShown
+                    onCloseRequested: arrangementArea.closeClipView()
                     onLocateRequested: beat => Session.locate(beat)
                     onStatusMessage: message => window.showMessage(message)
                 }
+            }
+
+            // The selected track's devices, as tall as its tallest device needs.
+            DevicePanel {
+                id: devicePanel
+                objectName: "devicePanel"
+                visible: deviceViewAction.checked
+                SplitView.preferredHeight: implicitHeight
+                SplitView.minimumHeight: implicitHeight
+                SplitView.maximumHeight: implicitHeight
             }
         }
     }

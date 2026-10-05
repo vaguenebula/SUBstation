@@ -4,7 +4,7 @@
 // actions kept in step with the model, Open Recent, the files' flows with the
 // unsaved-changes question, closing (a render running, unsaved changes), the
 // title, the status bar, the session's warnings, Export Audio, the clip view
-// in the device area, Edit › Rename, the window's place kept, and the rules
+// over the arrangement, Edit › Rename, the window's place kept, and the rules
 // of the shortcuts taken from plug-ins' editors. Runs on a display (xvfb
 // here). With $SUBSTATION_SCREENS set, it saves screenshots there.
 
@@ -180,7 +180,8 @@ private Q_SLOTS:
         QVERIFY(near(pixel(window_->width() - 5, window_->height() - 5), Theme::kPanel));  // the status bar
         QVERIFY(near(pixel(t.center().x(), t.bottom() - 1), Theme::kBorder));              // the transport's line
         QVERIFY(near(pixel((b.right() + a.left()) / 2, a.center().y()), Theme::kBorder));  // a split handle
-        QVERIFY(near(pixel(a.left() + 5, a.top() + 5), Theme::kEmptyArea));
+        // The real views are in: the arrangement's interface is there.
+        QVERIFY(item(QStringLiteral("arrangement"))->metaObject()->indexOfMethod("zoomToArrangement()") >= 0);
 
         // The menus, open (with the shortcuts on the right): File clicked, the
         // others as the mouse moves over them.
@@ -395,7 +396,7 @@ private Q_SLOTS:
     // View › Browser and Device View show and hide their panes; Find in Browser shows it, searching all.
     void viewActions() {
         auto* browser = item(QStringLiteral("browser"));
-        auto* area = item(QStringLiteral("deviceArea"));
+        auto* area = item(QStringLiteral("devicePanel"));
         QVERIFY(browser->isVisible() && area->isVisible());
         key(Qt::Key_B, Qt::ControlModifier | Qt::AltModifier);
         QVERIFY(!browser->isVisible());
@@ -628,21 +629,23 @@ private Q_SLOTS:
         QVERIFY(window_->isVisible());
     }
 
-    // Insert MIDI Clip opens the new clip in the clip view, in the device
-    // area; Shift+Tab (or its Esc) goes back to the devices.
-    void clipViewInTheDeviceArea() {
+    // Insert MIDI Clip opens the new clip in the clip view, which covers the
+    // arrangement (the device view stays); Shift+Tab (or its Esc) goes back to
+    // the arrangement.
+    void clipViewCoversTheArrangement() {
         trigger(QStringLiteral("insertMidiTrack"));
         auto* clipView = item(QStringLiteral("clipView"));
+        auto* lanes = item(QStringLiteral("arrangement"));
         auto* devices = item(QStringLiteral("devicePanel"));
-        QVERIFY(!clipView->isVisible() && devices->isVisible());
+        QVERIFY(!clipView->isVisible() && lanes->isVisible() && devices->isVisible());
         trigger(QStringLiteral("insertMidiClip"));
         QCOMPARE(project().tracks()[0].clips.size(), size_t(1));
         QTRY_VERIFY(clipView->isVisible());
-        QVERIFY(!devices->isVisible());
+        QVERIFY(!lanes->isVisible() && devices->isVisible());
         QCOMPARE(clipView->property("midi").toBool(), true);
         test::screenshot(window_, QStringLiteral("main-window-clip-view"));
         key(Qt::Key_Tab, Qt::ShiftModifier);
-        QVERIFY(!clipView->isVisible() && devices->isVisible());
+        QVERIFY(!clipView->isVisible() && lanes->isVisible());
 
         // Requested again (a double-click on the clip): it opens; Esc closes it.
         const QString track = project().tracks()[0].id;
@@ -652,18 +655,17 @@ private Q_SLOTS:
             track, project().tracks()[0].clips[0].id);
         QTRY_VERIFY(clipView->isVisible());
         QMetaObject::invokeMethod(clipView, "closeRequested");
-        QVERIFY(!clipView->isVisible() && devices->isVisible());
+        QVERIFY(!clipView->isVisible() && lanes->isVisible());
 
-        // Hidden device area: a clip opened shows it.
+        // With the device view hidden, a clip opens all the same (over the arrangement).
         key(Qt::Key_L, Qt::ControlModifier | Qt::AltModifier);
-        QVERIFY(!item(QStringLiteral("deviceArea"))->isVisible());
+        QVERIFY(!devices->isVisible());
         Q_EMIT session().arrangement()->clipViewRequested(
             QVariantList{QVariantMap{{QStringLiteral("trackId"), track},
                                      {QStringLiteral("clipId"), project().tracks()[0].clips[0].id}}},
             track, project().tracks()[0].clips[0].id);
         QTRY_VERIFY(clipView->isVisible());
-        QVERIFY(item(QStringLiteral("deviceArea"))->isVisible());
-        QVERIFY(prop(QStringLiteral("deviceView"), "checked").toBool());
+        QVERIFY(!devices->isVisible());
         // Its ruler clicked: the insert marker and the playhead go there.
         QMetaObject::invokeMethod(clipView, "locateRequested", Q_ARG(double, 3.0));
         QCOMPARE(selection().insertBeat(), 3.0);
@@ -713,15 +715,18 @@ private Q_SLOTS:
         QMetaObject::invokeMethod(clipView, "closeRequested");
     }
 
-    // Edit › Rename: the session picks what; the view renames it in place (the
-    // placeholders can't: the status line says so).
+    // Edit › Rename: the session picks what; the view renames it in place
+    // (nothing to rename: the status line says so).
     void rename() {
         key(Qt::Key_R, Qt::ControlModifier);
         QCOMPARE(status(), QStringLiteral("Select a track, a rack chain or a preset to rename."));
         Q_EMIT session().statusMessage(QString());
         trigger(QStringLiteral("insertAudioTrack"));
-        key(Qt::Key_R, Qt::ControlModifier);
-        QCOMPARE(status(), QStringLiteral("Select a track, a rack chain or a preset to rename."));
+        key(Qt::Key_R, Qt::ControlModifier);  // the new track's name, in place in its header
+        QCOMPARE(status(), QString());
+        auto* focused = qobject_cast<QQuickItem*>(window_->activeFocusItem());
+        QVERIFY(focused && focused->inherits("QQuickTextInput"));
+        key(Qt::Key_Escape);
     }
 
     // The keys of plug-ins' editors (test_shortcuts_from_plugin_editor): what

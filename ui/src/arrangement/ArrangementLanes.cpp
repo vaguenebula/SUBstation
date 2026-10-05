@@ -69,17 +69,6 @@ QStringList audioPaths(const QMimeData* mime) {
     return paths;
 }
 
-// Devices dragged from a track's chain (the device view): (track id, device ids).
-std::optional<std::pair<QString, QStringList>> movedDevices(const QMimeData* mime) {
-    const QString format = QString::fromLatin1(kDeviceMoveMime);
-    if (!mime || !mime->hasFormat(format)) return std::nullopt;
-    QStringList lines = QString::fromUtf8(mime->data(format)).split(u'\n');
-    if (lines.isEmpty()) return std::nullopt;
-    const QString trackId = lines.takeFirst();
-    lines.removeAll(QString());
-    return std::make_pair(trackId, lines);
-}
-
 // Devices dragged from the browser: built-in kinds, and plug-ins (PluginRef fields).
 struct DroppedDevices {
     QStringList kinds;
@@ -882,10 +871,10 @@ std::optional<app::ClipRef> ArrangementLanes::insertMidiClip(const QString& trac
 bool ArrangementLanes::dragOver(const QMimeData* mime, const QPointF& pos) {
     if (!ready()) return false;
     const auto& rows = arrangement()->layout().rows();
-    if (const auto moved = movedDevices(mime)) {
+    if (const auto moved = app::movedDevices(mime)) {
         // Devices from a track's chain move to another track's, the one under the mouse.
         const auto index = rowIndexAt(pos.y());
-        return index && rows[static_cast<size_t>(*index)].trackId != moved->first;
+        return index && rows[static_cast<size_t>(*index)].trackId != moved->trackId;
     }
     const QStringList paths = audioPaths(mime);
     if (paths.isEmpty()) {
@@ -936,8 +925,8 @@ bool ArrangementLanes::drop(const QMimeData* mime, const QPointF& pos) {
     const auto& rows = arrangement()->layout().rows();
     const auto index = rowIndexAt(pos.y());
     const QString trackId = index ? rows[static_cast<size_t>(*index)].trackId : QString();
-    if (const auto moved = movedDevices(mime)) {
-        return !trackId.isEmpty() && actions.dropMovedDevices(moved->first, moved->second, trackId);
+    if (const auto moved = app::movedDevices(mime)) {
+        return !trackId.isEmpty() && actions.dropMovedDevices(moved->trackId, moved->deviceIds, trackId);
     }
     const DroppedDevices devices = droppedDevices(mime);
     if (!devices.empty()) return actions.dropDevices(devices.kinds, devices.plugins, trackId);
@@ -965,7 +954,7 @@ bool ArrangementLanes::drop(const QMimeData* mime, const QPointF& pos) {
 void ArrangementLanes::dragEnterEvent(QDragEnterEvent* event) {
     const QMimeData* mime = event->mimeData();
     const bool wanted = !audioPaths(mime).isEmpty() || !droppedDevices(mime).empty() ||
-                        !app::presetPaths(mime).isEmpty() || movedDevices(mime).has_value() ||
+                        !app::presetPaths(mime).isEmpty() || app::movedDevices(mime).has_value() ||
                         (mime && mime->hasFormat(QString::fromLatin1(app::kPluginMime)));
     if (!wanted) {
         event->ignore();

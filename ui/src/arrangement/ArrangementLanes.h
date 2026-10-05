@@ -42,7 +42,7 @@
 //
 // Drops: audio files (from the browser or the file manager; dashed boxes show
 // where they would go), devices, plug-ins and presets from the browser, and
-// devices dragged from a track's chain (kDeviceMoveMime).
+// devices dragged from a track's chain (app::kDeviceMoveMime, browser/BrowserMime.h).
 
 #include "arrangement/ArrangementItem.h"
 #include "arrangement/Envelopes.h"
@@ -66,10 +66,6 @@ class QMimeData;
 namespace sub::ui {
 
 namespace arrangement {
-// Devices dragged from a track's chain (the device view): the source track's
-// id, then the device ids, a line each.
-inline constexpr const char* kDeviceMoveMime = "application/x-substation-device-move";
-
 inline constexpr double kEdgeGrab = 6;      // trim handles: this many pixels inside each end of a clip's title bar
 inline constexpr double kTitleHeight = 16;  // also the grab area for selecting/moving the clip
 inline constexpr double kMinTitleRow = 30;  // clips in shorter rows have a thin title bar instead

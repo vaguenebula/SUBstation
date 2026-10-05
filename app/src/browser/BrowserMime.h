@@ -7,6 +7,11 @@
 //                                    format, uid, name, vendor, path, instrument)
 //   application/x-substation-device  a list of built-in device kinds
 //   application/x-substation-preset  a list of preset file paths
+//
+// Devices dragged from a track's chain in the device view, to move them (along
+// its chain, into a rack's, or onto another track in the arrangement), go as
+// plain text under a type of their own:
+//   application/x-substation-device-move  the track's id, then the devices' ids, a line each
 
 #include <QByteArray>
 #include <QMimeData>
@@ -14,6 +19,7 @@
 #include <QVariantMap>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "browser/BrowserItem.h"
@@ -24,6 +30,7 @@ namespace sub::app {
 inline constexpr const char* kPluginMime = "application/x-substation-plugin";
 inline constexpr const char* kDeviceMime = "application/x-substation-device";
 inline constexpr const char* kPresetMime = "application/x-substation-preset";
+inline constexpr const char* kDeviceMoveMime = "application/x-substation-device-move";
 
 // The types a drag from the browser may carry.
 QStringList browserMimeTypes();
@@ -43,5 +50,18 @@ QStringList deviceKinds(const QByteArray& data);
 // Presets (their files) dragged from the browser, if any.
 QStringList presetPaths(const QMimeData* mime);
 QStringList presetPaths(const QByteArray& data);
+
+// Devices dragged from a track's chain: the track and the devices (in its order).
+struct MovedDevices {
+    QString trackId;
+    QStringList deviceIds;
+
+    friend bool operator==(const MovedDevices&, const MovedDevices&) = default;
+};
+// The drag's data for devices of a track moved.
+QByteArray movedDevicesData(const QString& trackId, const QStringList& deviceIds);
+// Devices dragged from a track's chain, if the drag is of those.
+std::optional<MovedDevices> movedDevices(const QMimeData* mime);
+std::optional<MovedDevices> movedDevices(const QByteArray& data);
 
 }  // namespace sub::app
