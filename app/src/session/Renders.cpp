@@ -69,7 +69,9 @@ void Render::follow(RenderTask* task, const QString& label, int index, int count
 }
 
 void Render::taskEnded() {
-    if (!followed_ || !ended_) return;  // (a task that had ended already, and said so too)
+    // (Said twice for a task that had ended before it was followed; or late, of
+    // one followed before: only the task followed now, once it has ended.)
+    if (!followed_ || !ended_ || !followed_->done()) return;
     disconnect(followed_, nullptr, this, nullptr);
     followed_ = nullptr;
     const auto ended = std::move(ended_);

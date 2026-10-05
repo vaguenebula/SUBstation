@@ -491,6 +491,37 @@ private Q_SLOTS:
         }
     }
 
+    void severalFilesReverseOneAfterAnother() {
+        TempDir dir;
+        const test::ScopedEnv recordings("SUBSTATION_RECORDINGS", dir.path(QStringLiteral("Recordings")));
+        SessionFixture f(true);
+        Session& s = f.s();
+        s.arrangement()->setReverseInPlaceSeconds(0.0);
+        // A long file and a short one: the short one's copy is done before it is followed.
+        std::vector<float> ramp(10 * kRate);
+        for (size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<float>(i) / static_cast<float>(ramp.size());
+        const QString longFile = test::writeWav(dir.path(QStringLiteral("long.wav")), stereo(ramp), 2);
+        const QString shortFile = test::writeWav(dir.path(QStringLiteral("short.wav")),
+                                                 stereo(std::vector<float>(kRate / 10, 0.25f)), 2);
+        const ClipRefs first = f.editor().addClips({}, 0.0, {{longFile, 10.0}});
+        const ClipRefs second = f.editor().addClips({}, 0.0, {{shortFile, 0.1}});
+        QVERIFY(f.waitForSource(longFile) && f.waitForSource(shortFile));
+        f.selection().selectClips(f.editor(), {first[0], second[0]});
+        QStringList labels;
+        connect(s.render(), &RenderProgress::changed, this, [&] {
+            if (s.render()->label().startsWith(QStringLiteral("Reversing")) && !labels.contains(s.render()->label())) {
+                labels.append(s.render()->label());
+            }
+        });
+        const int steps = f.stack().count();
+        s.reverseClips();
+        QVERIFY(f.waitForRender());
+        QCOMPARE(labels, (QStringList{QStringLiteral("Reversing long.wav…"), QStringLiteral("Reversing short.wav…")}));
+        QCOMPARE(f.stack().count(), steps + 1);  // one undo step
+        QCOMPARE(QFileInfo(f.project().track(first[0].trackId).clips[0].path).fileName(), QStringLiteral("long R.wav"));
+        QCOMPARE(QFileInfo(f.project().track(second[0].trackId).clips[0].path).fileName(), QStringLiteral("short R.wav"));
+    }
+
     void reverseInTheMenuFollowsTheSelectedArea() {
         SessionFixture f(true);
         TempDir dir;
