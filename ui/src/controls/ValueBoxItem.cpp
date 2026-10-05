@@ -114,6 +114,17 @@ void ValueBoxItem::setChoices(const QList<qreal>& choices) {
         setValue(value_);
 }
 
+void ValueBoxItem::setLogScale(bool logScale) {
+    if (logScale == logScale_)
+        return;
+    logScale_ = logScale;
+    Q_EMIT rangeChanged();
+}
+
+double ValueBoxItem::movedInLog(double value, double fraction) const {
+    return std::max(value, 1e-12) * std::pow(to_ / from_, fraction);
+}
+
 void ValueBoxItem::setDefaultValue(const QVariant& value) {
     std::optional<double> number;
     bool ok = false;
@@ -322,8 +333,14 @@ void ValueBoxItem::mouseMoveEvent(QMouseEvent* event) {
     }
     // From where the mouse was last, so pressing or letting go of Shift mid-drag
     // changes the rate from here on (not the whole drag).
-    const double rate = (event->modifiers() & Qt::ShiftModifier) ? kFineDragRate : kDragRate;
-    double value = drag_->lastValue + (drag_->lastY - y) * step_ * rate;
+    const bool fine = event->modifiers() & Qt::ShiftModifier;
+    double value = 0.0;
+    if (effectiveLog()) {
+        const double pixels = fine ? KnobItem::kFineDragPixels : KnobItem::kDragPixels;
+        value = movedInLog(drag_->lastValue, (drag_->lastY - y) / pixels);
+    } else {
+        value = drag_->lastValue + (drag_->lastY - y) * step_ * (fine ? kFineDragRate : kDragRate);
+    }
     value = std::clamp(value, std::min(from_, to_), std::max(from_, to_));
     drag_->lastY = cursor_.moved(this, event->position(), event->globalPosition());
     drag_->lastValue = value;
@@ -364,6 +381,11 @@ void ValueBoxItem::wheelEvent(QWheelEvent* event) {
     if (notches == 0.0)
         return;
     setRelative(true);
+    if (effectiveLog()) {  // (a notch is a gesture, as a knob's)
+        setFromUser(movedInLog(value_, notches / KnobItem::kWheelNotches), newGestureKey());
+        event->accept();
+        return;
+    }
     if (wheelGesture_.isEmpty() || !wheelClock_.isValid() || wheelClock_.elapsed() > kWheelGesture * 1000.0)
         wheelGesture_ = newGestureKey();
     wheelClock_.start();

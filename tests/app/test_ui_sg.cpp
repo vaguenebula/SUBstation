@@ -476,7 +476,8 @@ private Q_SLOTS:
               "(here the GPU is Mesa's llvmpipe, on the CPU too)",
               QTest::currentDataTag(), paintMs, buildMs, paintMs + buildMs, frameMs);
         if (kind == QLatin1String("rects")) {
-            QCOMPARE(scene.canvas->lastStats().solidNodes, 1);
+            // As few nodes as the renderer draws: at most 65535 vertices each (six a rect).
+            QVERIFY(scene.canvas->lastStats().solidNodes <= (count * 6 + 65531) / 65532);
             // The CPU side of 50k rects stays well inside a 60 Hz frame.
             if (count <= 50000)
                 QVERIFY2(paintMs + buildMs < 16.0, qPrintable(QString::number(paintMs + buildMs)));

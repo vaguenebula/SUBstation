@@ -4,8 +4,8 @@
 // code ports to the GPU almost line for line. An SgCanvas hands one to its
 // paint(); what is drawn becomes scene-graph nodes in paint order: solid
 // geometry (rects, lines, polygons, arcs, waveform columns) batched into as few
-// vertex-coloured triangle nodes as possible, text and images as textured
-// nodes between them.
+// vertex-coloured triangle nodes as possible (of at most 65535 vertices each: the
+// renderer draws no bigger one), text and images as textured nodes between them.
 //
 // Differences from QPainter worth knowing when porting:
 // - No pen or brush state: each call takes its colour (and a pen's width and
@@ -130,6 +130,10 @@ public:
     // The area between a curve whose x only increases and the line y = baseY
     // (an envelope's area): a strip of quads, cheaper than fillPolygon. No antialiasing.
     void fillToBaseline(const QPointF* points, int count, qreal baseY, const QColor& color);
+    // The same filled with a gradient (QPainter::fillPath with a QLinearGradient,
+    // in the current coordinates): exact for a vertical one, any number of stops;
+    // other directions interpolate between the vertices.
+    void fillToBaseline(const QPointF* points, int count, qreal baseY, const QLinearGradient& gradient);
     void fillEllipse(const QRectF& rect, const QColor& color);
     void fillEllipse(const QPointF& center, qreal rx, qreal ry, const QColor& color) {
         fillEllipse(QRectF(center.x() - rx, center.y() - ry, 2 * rx, 2 * ry), color);
@@ -181,6 +185,12 @@ private:
     void beginSolid();
     void closeSolid();
     void push(const Vertex& v) { recording_.vertices.push_back(v); }
+    // Makes room for `count` more vertices in the open solid segment: one holds at
+    // most kMaxSolidVertices (the scene graph's renderer doesn't draw a node of
+    // more than 65535 vertices: an EQ's two dozen curves made one), so a long
+    // recording goes on in a new segment, a node of its own.
+    void room(int count);
+    static constexpr int kMaxSolidVertices = 65532;  // (a whole number of rects, of triangles)
     void triangle(const Vertex& a, const Vertex& b, const Vertex& c);
     void quad(const Vertex& a, const Vertex& b, const Vertex& c, const Vertex& d);
     void clippedTriangle(const Vertex& a, const Vertex& b, const Vertex& c);
