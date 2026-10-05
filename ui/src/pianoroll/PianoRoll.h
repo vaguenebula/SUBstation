@@ -27,6 +27,7 @@
 
 #include <QColor>
 #include <QObject>
+#include <QPoint>
 #include <QPointF>
 #include <QPointer>
 #include <QRandomGenerator>

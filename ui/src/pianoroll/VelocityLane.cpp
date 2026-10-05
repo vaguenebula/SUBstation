@@ -7,6 +7,7 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
+#include <QHoverEvent>
 #include <QMouseEvent>
 #include <QUuid>
 

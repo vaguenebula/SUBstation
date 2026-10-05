@@ -17,6 +17,8 @@
 #include "model/Clip.h"
 #include "pianoroll/RollItem.h"
 
+#include <QColor>
+#include <QFont>
 #include <QPointF>
 #include <QRectF>
 #include <QtQml/qqmlregistration.h>
