@@ -10,9 +10,9 @@
 // that act on what is selected, renders in the background, preferences) are
 // the main window's logic without its widgets: the UI shows dialogs and asks
 // the session to act. What the main window showed in its status bar goes out
-// on statusMessage (for about 8 s); what were message boxes go out on warning
-// (QMessageBox.warning) and information (QMessageBox.information), for the UI
-// to show.
+// on statusMessage (shown for statusTimeout ms); what were message boxes go
+// out on warning (QMessageBox.warning) and information
+// (QMessageBox.information), for the UI to show.
 //
 // Its parts, for QML:
 // - arrangement: what acts on the arrangement's selection, with the clipboard
@@ -124,6 +124,8 @@ class Session : public QObject {
     Q_PROPERTY(QVariantList exportBitDepthChoices READ exportBitDepthChoices CONSTANT)
     Q_PROPERTY(int defaultExportBitDepth READ defaultExportBitDepth CONSTANT)
 
+    // How long the status line shows a message (ms), as the main window did.
+    Q_PROPERTY(int statusTimeout READ statusTimeout CONSTANT)
     // Help › About: its title and text (rich text).
     Q_PROPERTY(QString aboutTitle READ aboutTitle CONSTANT)
     Q_PROPERTY(QString aboutText READ aboutText CONSTANT)
@@ -136,6 +138,7 @@ public:
     };
 
     static constexpr int kMaxRecent = 10;
+    static constexpr int kStatusTimeoutMs = 8000;
     inline static const QString kRecentKey = QStringLiteral("files/recent");
     inline static const QString kLastFolderKey = QStringLiteral("files/last_dir");
     inline static const QString kCountInKey = QStringLiteral("transport/count_in_bars");
@@ -179,6 +182,7 @@ public:
     QString pluginsLoadingText() const;
     QVariantList exportBitDepthChoices() const;
     int defaultExportBitDepth() const { return 24; }
+    int statusTimeout() const { return kStatusTimeoutMs; }
     QString aboutTitle() const;
     QString aboutText() const;
 

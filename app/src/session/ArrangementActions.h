@@ -117,6 +117,10 @@ public:
     // `gridStep` beats: 0 when snapping is off). {trackId, clipId}; {} for none.
     Q_INVOKABLE QVariantMap insertMidiClip(const QString& trackId, double beat, double gridStep = 0.0);
 
+    // The lanes' menu's Insert Audio Track / Insert MIDI Track: after the track
+    // under the mouse (and what is in it), in its group ("": last). Its id.
+    Q_INVOKABLE QString insertTrackAfter(const QString& trackId, bool midi);
+
     // --- Drops onto the lanes ---
     // Audio files: their lengths (for the drop's preview): [{path, name, duration}] (unreadable ones left out).
     Q_INVOKABLE QVariantList dropSources(const QStringList& paths);

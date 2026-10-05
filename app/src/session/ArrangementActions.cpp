@@ -262,6 +262,14 @@ QVariantMap ArrangementActions::insertMidiClip(const QString& trackId, double be
     return clipRefMap(lead);
 }
 
+QString ArrangementActions::insertTrackAfter(const QString& trackId, bool midi) {
+    const InsertionPoint point = editor_->insertionPoint(project_->hasTrack(trackId) ? trackId : QString());
+    const TrackParent parent(point.parent);
+    const int index = point.index.value_or(-1);
+    return midi ? editor_->addMidiTrack(index, QString(), kDefaultInstrument, std::nullopt, parent)
+                : editor_->addAudioTrack(index, QString(), parent);
+}
+
 // --- Reversing --------------------------------------------------------------------------------
 
 void ArrangementActions::reverseSelection() {

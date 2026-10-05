@@ -347,6 +347,14 @@ private Q_SLOTS:
         const QString e = s.insertAudioTrack();
         QCOMPARE(trackIds(f.project()), (QStringList{group, a, d, c, e, b}));
         QVERIFY(!f.project().track(e).parent);
+        // The lanes' menu: after the track under the mouse, not selected; below the tracks: last.
+        const QString g = s.arrangement()->insertTrackAfter(a, true);
+        QCOMPARE(trackIds(f.project()), (QStringList{group, a, g, d, c, e, b}));
+        QVERIFY(f.project().track(g).isMidi() && f.project().track(g).parent == std::optional<QString>(group));
+        QCOMPARE(f.selection().trackId(), e);
+        const QString h = s.arrangement()->insertTrackAfter({}, false);
+        QCOMPARE(trackIds(f.project()).back(), h);
+        QCOMPARE(s.statusTimeout(), 8000);
     }
 
     // --- test_ui_clip_edits.py ---
