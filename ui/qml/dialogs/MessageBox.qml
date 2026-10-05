@@ -54,9 +54,17 @@ Dialog {
         implicitHeight: row.implicitHeight
         focus: true
 
-        Keys.onEscapePressed: box.answer(box.escapeValue)
-        Keys.onReturnPressed: box.answer(box.defaultValue)
-        Keys.onEnterPressed: box.answer(box.defaultValue)
+        // (Shortcuts, not keys: a button clicked before may have the focus.)
+        Shortcut {
+            sequences: [StandardKey.Cancel]
+            enabled: box.visible
+            onActivated: box.answer(box.escapeValue)
+        }
+        Shortcut {
+            sequences: ["Return", "Enter"]
+            enabled: box.visible
+            onActivated: box.answer(box.defaultValue)
+        }
 
         RowLayout {
             id: row

@@ -47,6 +47,8 @@ ApplicationWindow {
     function focusLanes() {
         if (arrangement.focusLanes)
             arrangement.focusLanes()
+        else
+            window.contentItem.forceActiveFocus()  // (not a view that has gone, at least)
     }
 
     // The grid a new MIDI clip snaps to (beats; 0: snapping is off).
