@@ -50,6 +50,11 @@ add_subdirectory(tools/scanner)
 if (SUBSTATION_BUILD_APP)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
     qt_standard_project_setup()
+    # The QML files in ui/qml's folders import SUBstation themselves: no qmldir
+    # in each folder (Qt 6.8+ asks; older Qts don't know the policy).
+    if (QT_KNOWN_POLICY_QTP0004)
+        qt_policy(SET QTP0004 OLD)
+    endif()
     add_subdirectory(app)
     add_subdirectory(ui)
 endif()
