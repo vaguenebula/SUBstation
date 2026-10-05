@@ -152,6 +152,12 @@ it is LGPL-3.0 (or commercial), linked dynamically.
 
 ## Gotchas
 
+- **"Could not find a configuration file for package Qt6 ... version: 6.x.y (64bit)".** The compiler CMake
+  found makes 32-bit programs (often an old MinGW, such as `C:\MinGW\bin`, first on `PATH`), and Qt is 64-bit.
+  `gcc -dumpmachine` must say `x86_64-w64-mingw32`. Put Qt's MinGW first on `PATH` (or give its `gcc.exe` and
+  `g++.exe` as `CMAKE_C_COMPILER` and `CMAKE_CXX_COMPILER`), and delete the build folder before configuring again:
+  CMake keeps the compiler it found. (The configure now stops earlier, saying so.)
+
 - **A new header isn't moc'd.** With Qt 6.4, a header added to a build folder configured before it existed is
   sometimes skipped by AUTOMOC (link errors: undefined `vtable` or `staticMetaObject`). Delete the target's
   `build/<dir>/<target>_autogen/timestamp` (or configure a fresh build folder) and build again.

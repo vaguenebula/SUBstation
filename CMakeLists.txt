@@ -11,6 +11,14 @@ project(SUBstation VERSION 0.2.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# 64-bit only (AVX2, the x86_64 VST3 bundles). A 32-bit compiler first on PATH
+# (an old MinGW) otherwise ends in Qt's "version 6.x (64bit)" not being accepted.
+if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+    message(FATAL_ERROR "The compiler CMake found (${CMAKE_CXX_COMPILER}) makes 32-bit programs; SUBstation is "
+                        "64-bit only. Use a 64-bit one: Qt's MinGW 64-bit (C:/Qt/Tools/mingw*_64/bin first on PATH, "
+                        "or give its gcc.exe and g++.exe as CMAKE_C_COMPILER and CMAKE_CXX_COMPILER) or MSVC's x64 "
+                        "tools. Then delete the build folder: CMake keeps the compiler it found there.")
+endif()
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
