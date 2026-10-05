@@ -514,7 +514,9 @@ void DeviceChainArea::startDrag(const QString& deviceId, QQuickItem* frame) {
 }
 
 void DeviceChainArea::runDrag(const QString& trackId, const QStringList& deviceIds, const QImage& picture) {
-    if (!session_ || session_->deviceSelection()->trackId() != trackId)
+    // (Not if the button went up meanwhile: the drag would wait for a release that came already.)
+    if (!session_ || session_->deviceSelection()->trackId() != trackId ||
+        !(QGuiApplication::mouseButtons() & Qt::LeftButton))
         return;
     auto* mime = new QMimeData;
     mime->setData(QString::fromLatin1(sub::app::kDeviceMoveMime), sub::app::movedDevicesData(trackId, deviceIds));

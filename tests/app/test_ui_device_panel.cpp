@@ -13,6 +13,7 @@
 // the project and the selection checked. With SUBSTATION_UI_SCREENSHOTS set,
 // screenshots go there.
 
+#include <QDrag>
 #include <QGuiApplication>
 #include <QPointer>
 #include <QQuickItem>
@@ -510,9 +511,13 @@ private Q_SLOTS:
         const QString synth = chain(track).front();
         ui_.polish();
         QSignalSpy starting(area(), &sub::ui::DeviceChainArea::dragStarting);
-        // (The drag runs once the press's handlers have returned; Escape ends it.)
-        QObject::connect(area(), &sub::ui::DeviceChainArea::dragStarting, this, [this] {
-            QTimer::singleShot(150, this, [this] { QTest::keyClick(window(), Qt::Key_Escape); });
+        // (The drag runs once the press's handlers have returned, while the button is held; Escape ends it.)
+        bool dragRan = false;
+        QObject::connect(area(), &sub::ui::DeviceChainArea::dragStarting, this, [this, &dragRan] {
+            QTimer::singleShot(150, this, [this, &dragRan] {
+                dragRan = area()->findChild<QDrag*>() != nullptr;
+                QTest::keyClick(window(), Qt::Key_Escape);
+            });
         });
         clickTitle(ids[0]);
         clickTitle(ids[1], Qt::ShiftModifier);
@@ -524,15 +529,25 @@ private Q_SLOTS:
         QCOMPARE(starting.count(), 1);
         QCOMPARE(starting[0][0].toString(), track);
         QCOMPARE(starting[0][1].toStringList(), (QStringList{ids[0], ids[1]}));  // the selected ones
-        test::release(window(), from + QPoint(30, 0));
         QTest::qWait(400);  // (the drag ran, and was called off)
+        QVERIFY(dragRan);
+        QVERIFY(!area()->findChild<QDrag*>());
+        test::release(window(), from + QPoint(30, 0));
         QCOMPARE(devices().selected(), (QStringList{ids[0], ids[1]}));
+        // Let go before the drag could start: none starts.
+        dragRan = false;
+        test::press(window(), from);
+        test::moveTo(window(), from + QPoint(30, 0));
+        test::release(window(), from + QPoint(30, 0));
+        QCOMPARE(starting.count(), 2);
+        QTest::qWait(300);
+        QVERIFY(!dragRan);
         // An instrument stays first: it isn't dragged.
         const QPoint synthTitle = centerOf(synth, "title");
         test::press(window(), synthTitle);
         test::moveTo(window(), synthTitle + QPoint(30, 0));
         test::release(window(), synthTitle + QPoint(30, 0));
-        QCOMPARE(starting.count(), 1);
+        QCOMPARE(starting.count(), 2);
         QObject::disconnect(area(), &sub::ui::DeviceChainArea::dragStarting, this, nullptr);
     }
 
