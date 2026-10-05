@@ -2,11 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A return track's header, in the returns' rows above the master
-// (bus_tracks.py's ReturnHeader): its letter (the activator) and name, solo,
-// volume, pan, its sends (to the other returns) and meter; and while its
-// automation shows, its automation choosers (and those of the lanes below
-// it). Click it to select it: the device view shows its effects.
+// A return track's header, in the returns' rows above the master: its letter
+// (the activator) and name, solo, volume, pan, its sends (to the other returns)
+// and meter; and while its automation shows, its automation choosers (and those
+// of the lanes below it). Click it to select it: the device view shows its
+// effects.
 TrackHeaderItem {
     id: header
 

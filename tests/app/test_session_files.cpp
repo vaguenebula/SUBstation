@@ -4,8 +4,6 @@
 // files dropped), Export Audio's choices, the count-in and record
 // quantization, recording with nothing armed, the about text, and the
 // preferences (audio threads, devices, MIDI inputs).
-// From tests/test_ui_smoke.py, test_ui_recording.py and test_ui_rendering.py
-// (their behaviour, without the widgets).
 
 #include "SessionFixture.h"
 #include "TestSupport.h"

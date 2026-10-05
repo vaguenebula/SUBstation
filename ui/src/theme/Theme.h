@@ -145,10 +145,10 @@ public:
     static constexpr QColor kScopeAxis{0xff, 0xff, 0xff, 22};        // SCOPE_AXIS
     static constexpr QColor kFrozen{0x8f, 0xd3, 0xff};               // FROZEN: a frozen track's snowflake
     static constexpr QColor kFrozenTint{0x8f, 0xd3, 0xff, 34};       // FROZEN_TINT: over a frozen track's lane
-    // Not constants in theme.py, but part of the look: from the stylesheet and the widgets.
+    // Not constants in the Python UI's theme, but part of its look: from its stylesheet and widgets.
     static constexpr QColor kScrollHandleHover{0x55, 0x55, 0x55};      // a scroll bar's handle under the mouse
     static constexpr QColor kDeviceHeaderHover{0xff, 0xff, 0xff, 28};  // a device header button under the mouse
-    static constexpr QColor kAutomationOn{0xff, 0x4a, 0x3d};   // the dot of an automated control (knob.py)
+    static constexpr QColor kAutomationOn{0xff, 0x4a, 0x3d};   // the dot of an automated control
     static constexpr QColor kAutomationOff{0x8c, 0x8c, 0x8c};  // the dot of a control whose automation is overridden
 
     static constexpr const char* kUiFontFamily = "Segoe UI";

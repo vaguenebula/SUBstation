@@ -1,9 +1,9 @@
 #pragma once
 
-// What every EQ editor shows alike (eq.py's VIEW; not saved): the curve's
-// range (± dB), the analyzer's mode, and whether the device view shows the
-// selected band's controls beside the curve. One for the application: QML's
-// `EqView` singleton and the EqGraph items share it.
+// What every EQ editor shows alike (not saved): the curve's range (± dB), the
+// analyzer's mode, and whether the device view shows the selected band's
+// controls beside the curve. One for the application: QML's `EqView` singleton
+// and the EqGraph items share it.
 
 #include <QList>
 #include <QObject>

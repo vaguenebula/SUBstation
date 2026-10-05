@@ -1,5 +1,5 @@
 // Keys and file names: tempo and key read from a sample's name, transposing
-// to the project's key, and what a dropped clip starts with (tests/test_keys.py).
+// to the project's key, and what a dropped clip starts with.
 
 #include "TestSupport.h"
 

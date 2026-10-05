@@ -2,11 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The body of a rack (device_widgets.py's RackWidget, rack_view.py): its eight
-// macros, four to a row, and its chains (a row each, with its mixer; a hint
-// while it has none; + Chain adds one). The chain clicked shows its devices
-// beside the rack (the device view, after the frame); the list scrolls when
-// there are more chains than room.
+// The body of a rack: its eight macros, four to a row, and its chains (a row
+// each, with its mixer; a hint while it has none; + Chain adds one). The chain
+// clicked shows its devices beside the rack (the device view, after the frame);
+// the list scrolls when there are more chains than room.
 Item {
     id: body
 

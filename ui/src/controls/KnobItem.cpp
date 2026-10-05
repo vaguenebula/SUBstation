@@ -44,7 +44,7 @@ void drawAutomationDot(SgPainter& p, const QString& state, const QPointF& at) {
 
 KnobItem::KnobItem(QQuickItem* parent) : SgCanvas(parent), color_(Theme::kAccent) {
     setAcceptedMouseButtons(Qt::LeftButton);
-    setImplicitSize(28, 28);  // knob.py's sizeHint (at least 22 x 22)
+    setImplicitSize(28, 28);  // at least 22 x 22, as the Python UI's knob
     updateText();
 }
 

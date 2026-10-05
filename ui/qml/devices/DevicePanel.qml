@@ -3,14 +3,14 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import SUBstation
 
-// The device view (device_panel/panel.py's DevicePanel), below the
-// arrangement: the selected track's (or a return's, or the master's) chain of
-// devices, left to right, built-in devices and plug-ins alike, racks with
-// their macros and chains, and after a rack the chain it shows, in a bracket
-// (DeviceChain, DeviceFrame); what may be dropped there, or that no track is
-// selected, or that it is frozen (Session.deviceSelection.hint). It scrolls
-// sideways without a scroll bar: Shift+wheel, or Ctrl+Alt-drag anywhere on it
-// (DeviceChainArea, which also takes the drops and starts the drags).
+// The device view, below the arrangement: the selected track's (or a return's,
+// or the master's) chain of devices, left to right, built-in devices and
+// plug-ins alike, racks with their macros and chains, and after a rack the
+// chain it shows, in a bracket (DeviceChain, DeviceFrame); what may be dropped
+// there, or that no track is selected, or that it is frozen
+// (Session.deviceSelection.hint). It scrolls sideways without a scroll bar:
+// Shift+wheel, or Ctrl+Alt-drag anywhere on it (DeviceChainArea, which also
+// takes the drops and starts the drags).
 //
 // What it is to the main window:
 // - startChainRename(rackId, chainId): Ctrl+R on a rack's chain
@@ -65,10 +65,10 @@ Rectangle {
 
     // --- Menus ---------------------------------------------------------------------------------
 
-    // A device's right-click menu (frame.py's contextMenuEvent): its own
-    // entries (a plug-in's editor and VST3 presets, a rack's Add Chain, an
-    // editor's), Fold, the clipboard's (for the selected devices), Move Left
-    // and Right, presets, Group and Ungroup, Delete.
+    // A device's right-click menu: its own entries (a plug-in's editor and VST3
+    // presets, a rack's Add Chain, an editor's), Fold, the clipboard's (for the
+    // selected devices), Move Left and Right, presets, Group and Ungroup,
+    // Delete.
     function showDeviceMenu(frame, at, x, y) {
         const id = frame.deviceId
         const trackId = frame.trackId

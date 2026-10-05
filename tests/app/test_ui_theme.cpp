@@ -1,6 +1,6 @@
-// The theme: every colour of theme.py with its value, the stylesheet's button
-// rules, the icons (each drawn, in its colour, its states, the disabled
-// variant) and the image provider that serves them to QML.
+// The theme: every colour of the Python UI's theme with its value, the
+// stylesheet's button rules, the icons (each drawn, in its colour, its states,
+// the disabled variant) and the image provider that serves them to QML.
 
 #include <QGuiApplication>
 #include <QImage>
@@ -64,7 +64,7 @@ class TestUiTheme : public QObject {
 
 private Q_SLOTS:
     void colorsAreTheme() {
-        // theme.py's constants, value for value.
+        // The Python UI's theme constants, value for value.
         const QList<std::pair<const char*, QColor>> expected = {
             {"window", QColor("#1c1c1c")},          {"panel", QColor("#252525")},
             {"panelAlt", QColor("#2c2c2c")},        {"surface", QColor("#363636")},
@@ -206,7 +206,7 @@ private Q_SLOTS:
     }
 
     void iconColors() {
-        // Their own colours by default (icons.py's defaults).
+        // Their own colours by default.
         QCOMPARE(strongest(Icons::image(QStringLiteral("play"), 32)).rgb(), Theme::kText.rgb());
         QCOMPARE(strongest(Icons::image(QStringLiteral("folder"), 32)).rgb(), Theme::kTextDim.rgb());
         QCOMPARE(strongest(Icons::image(QStringLiteral("record"), 32)).rgb(), QColor("#ff5a4d").rgb());

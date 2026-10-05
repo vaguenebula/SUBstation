@@ -1,8 +1,7 @@
 // Duplicating tracks (Ctrl+D on tracks: new clips and devices, automation and
 // routing following the copies, one undo step) and cutting, copying and
 // pasting automation (Ctrl+C/X/V on a lane range: onto the lanes selected, or
-// those it came from) (the editor parts of
-// tests/test_duplicate_tracks_copy_automation.py).
+// those it came from).
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

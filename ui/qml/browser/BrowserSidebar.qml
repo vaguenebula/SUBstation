@@ -2,12 +2,12 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The browser's sidebar (browser_panel.py's QTreeWidget): CATEGORIES (All,
-// Samples, Built-in and its categories, Plug-ins and its, Presets and a
-// sub-entry per device) and PLACES (each place, Add Folder…), from the
-// controller's SidebarModel. A click shows an entry (its scope); "Add
-// Folder…" asks for a folder instead (the controller's addPlaceRequested). A
-// right-click opens the entry's menu (contextMenuRequested).
+// The browser's sidebar: CATEGORIES (All, Samples, Built-in and its categories,
+// Plug-ins and its, Presets and a sub-entry per device) and PLACES (each place,
+// Add Folder…), from the controller's SidebarModel. A click shows an entry (its
+// scope); "Add Folder…" asks for a folder instead (the controller's
+// addPlaceRequested). A right-click opens the entry's menu
+// (contextMenuRequested).
 Rectangle {
     id: sidebar
 

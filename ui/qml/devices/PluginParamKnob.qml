@@ -2,15 +2,15 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A plug-in's parameter in its device's generic editor (device_widgets.py's
-// PluginDeviceWidget._param_widget): its name on top, then a knob with the
-// plug-in's own text for its value under it, or a list for one that chooses
-// between named values. The knob moves in whole steps for a stepped
-// parameter, and is drawn from the middle when its default is the middle of
-// its range; it shows the automation dot (the plug-in reports its values as
-// automation plays). Pressing it shows its automation in the arrangement;
-// right-click for its menu (ParamMenu: automation, and in a rack the macros).
-// Edits go through the editor with the value before, one undo step per drag.
+// A plug-in's parameter in its device's generic editor: its name on top, then a
+// knob with the plug-in's own text for its value under it, or a list for one
+// that chooses between named values. The knob moves in whole steps for a
+// stepped parameter, and is drawn from the middle when its default is the
+// middle of its range; it shows the automation dot (the plug-in reports its
+// values as automation plays). Pressing it shows its automation in the
+// arrangement; right-click for its menu (ParamMenu: automation, and in a rack
+// the macros). Edits go through the editor with the value before, one undo step
+// per drag.
 Item {
     id: cell
 

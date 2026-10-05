@@ -1,16 +1,15 @@
 #pragma once
 
-// A plug-in device's parameters, for the device view's generic editor
-// (device_widgets.py's PluginDeviceWidget). They live in the plug-in (the
-// engine), not in the model: PluginParams lists those a generic editor
-// offers (what can be automated and isn't the plug-in's own business: neither
-// hidden nor read-only; if that leaves none, every one that isn't hidden or
-// read-only), by their index among the processor's parameters; PluginParam is
-// one of them: what it is, its value as the plug-in has it now with the
-// plug-in's own text for it, its automation state, and setting it through the
-// editor with the value before (so undo can restore it, one step per gesture).
-// Both follow the plug-in: loaded (or made again), its parameters rebuilt, its
-// values changed by the plug-in itself, a preset loaded, an undo.
+// A plug-in device's parameters, for the device view's generic editor. They
+// live in the plug-in (the engine), not in the model: PluginParams lists those
+// a generic editor offers (what can be automated and isn't the plug-in's own
+// business: neither hidden nor read-only; if that leaves none, every one that
+// isn't hidden or read-only), by their index among the processor's parameters;
+// PluginParam is one of them: what it is, its value as the plug-in has it now
+// with the plug-in's own text for it, its automation state, and setting it
+// through the editor with the value before (so undo can restore it, one step
+// per gesture). Both follow the plug-in: loaded (or made again), its parameters
+// rebuilt, its values changed by the plug-in itself, a preset loaded, an undo.
 //
 //   PluginParams { id: params; session: Session; trackId: ...; deviceId: ... }
 //   PluginParam { session: Session; trackId: ...; deviceId: ...; index: params.indices[0] }

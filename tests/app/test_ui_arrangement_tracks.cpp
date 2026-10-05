@@ -1,16 +1,13 @@
 // The arrangement's tracks and their headers, driven as a user would with the
 // mouse on the headers, their controls and the lanes: groups (folding, the
 // group's header, dragging headers into and out of groups, folded tracks'
-// clips as bars, cut, copy and paste; tests/test_ui_groups.py), returns and
-// sends (test_ui_sends.py), following the playhead while scrolling by hand
-// (test_ui_follow_and_faders.py), the header's controls (volume, solo, the
-// activator, arming, renaming in place; test_ui_smoke.py's and
-// test_ui_recording.py's), the input and monitoring menus with resampling
-// (test_ui_resampling.py) and MIDI inputs, sidechains as routing (the send
-// knobs they grey out; test_ui_sidechain.py), the track menu's freezing and
-// flattening (test_ui_freeze.py), resizing a track by its bottom edge, and
-// screenshots of a whole project. Runs on a display (xvfb here). With
-// $SUBSTATION_SCREENS set, it saves screenshots there.
+// clips as bars, cut, copy and paste), returns and sends, following the
+// playhead while scrolling by hand, the header's controls (volume, solo, the
+// activator, arming, renaming in place), the input and monitoring menus with
+// resampling and MIDI inputs, sidechains as routing (the send knobs they grey
+// out), the track menu's freezing and flattening, resizing a track by its
+// bottom edge, and screenshots of a whole project. Runs on a display (xvfb
+// here). With $SUBSTATION_SCREENS set, it saves screenshots there.
 
 #include <QFileInfo>
 #include <QMouseEvent>
@@ -69,8 +66,8 @@ class TestUiArrangementTracks : public QObject {
     TrackHeaderItem* header(const QString& id) { return h_->header(id); }
     QQuickItem* control(const QString& id, const char* name) { return h_->control(header(id), QLatin1String(name)); }
 
-    // test_ui_groups.py's make_tracks: audio tracks A, B, C..., a 2 s clip each
-    // (c0, c1...: of a missing file) at beats 0, 4, 8...
+    // Audio tracks A, B, C..., a 2 s clip each (c0, c1...: of a missing file)
+    // at beats 0, 4, 8...
     QStringList makeTracks(int count) {
         QStringList ids;
         for (int i = 0; i < count; ++i) {
@@ -111,7 +108,7 @@ class TestUiArrangementTracks : public QObject {
         QVERIFY(h);
         click(test::at(h, h->foldRect().center()));
     }
-    // test_ui_groups.py's drag_header: a header dragged by its name to `endY` in the header column.
+    // A header dragged by its name to `endY` in the header column.
     void dragHeader(const QString& id, double endY) {
         TrackHeaderItem* h = header(id);
         QVERIFY(h);
@@ -133,7 +130,7 @@ class TestUiArrangementTracks : public QObject {
         return items;
     }
     std::vector<QQuickItem*> knobs(TrackHeaderItem* h) { return sendItems(h, "sendKnob"); }
-    // test_ui_sends.py's drag_knob: up by `pixels`.
+    // `knob` dragged up by `pixels`.
     void dragKnob(QQuickItem* knob, int pixels) {
         const QPoint start = test::centerOf(knob);
         test::press(window(), start);
@@ -206,7 +203,7 @@ private Q_SLOTS:
 
     void cleanup() { bridge().stop(); }
 
-    // --- Groups (test_ui_groups.py) ---------------------------------------------------------
+    // --- Groups -------------------------------------------------------------------------------
 
     void groupingTheSelectedTracksAndFoldingHidesThem() {
         const QStringList ids = makeTracks(3);
@@ -579,7 +576,7 @@ private Q_SLOTS:
         QCOMPARE(selection().trackId(), QString());
     }
 
-    // --- Returns and sends (test_ui_sends.py) -------------------------------------------------
+    // --- Returns and sends --------------------------------------------------------------------
 
     void aReturnGoesAboveTheMaster() {
         const QString track = editor().addAudioTrack();
@@ -746,7 +743,7 @@ private Q_SLOTS:
         QCOMPARE(header(track)->sends()[0].toMap().value(QStringLiteral("returnId")).toString(), ret);
     }
 
-    // --- Following the playhead (test_ui_follow_and_faders.py) ----------------------------------
+    // --- Following the playhead ---------------------------------------------------------------
 
     void scrollingByHandStopsFollowingThePlayheadUntilPlaybackRestarts() {
         QVERIFY(arrangement()->follow());
@@ -968,7 +965,7 @@ private Q_SLOTS:
         QVERIFY(old && old->checked);
     }
 
-    // --- Routing: inputs and sidechains grey out send knobs (test_ui_resampling.py, test_ui_sidechain.py) ---
+    // --- Routing: inputs and sidechains grey out send knobs -----------------------------------
 
     void sendKnobsFollowInputs() {
         const QString track = editor().addAudioTrack();
@@ -1008,7 +1005,7 @@ private Q_SLOTS:
         QVERIFY(usable(bass));
     }
 
-    // --- Freezing (test_ui_freeze.py) ------------------------------------------------------------
+    // --- Freezing -----------------------------------------------------------------------------
 
     void theTrackMenuFreezesAndFlattens() {
         test::ScopedEnv recordings("SUBSTATION_RECORDINGS", dir_->path(QStringLiteral("Recordings")));

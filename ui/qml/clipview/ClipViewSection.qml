@@ -2,8 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// One of the clip view's boxes of controls (clip_view.py's _section): a bold
-// title over its content, on PANEL_ALT with a BORDER line and 4 px corners.
+// One of the clip view's boxes of controls: a bold title over its content, on
+// PANEL_ALT with a BORDER line and 4 px corners.
 Rectangle {
     id: section
 

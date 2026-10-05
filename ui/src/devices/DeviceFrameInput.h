@@ -1,15 +1,14 @@
 #pragma once
 
-// What a device's frame does with the mouse (frame.py's _DeviceFrame mouse
-// handlers): it lies under the frame's controls, so the clicks that reach it
-// are on the frame's background, its title bar and labels. A press selects the
-// device (Shift: a range; Ctrl: one more or less; a plain press on one already
-// selected keeps the others, and its release selects just it if no drag
-// followed: DeviceSelection::press/release); dragged past the start distance it
-// drags the devices (not an instrument, which stays first); a double-click
-// folds or unfolds a folded device (or any with Ctrl), else opens a plug-in's
-// own editor; a right press selects it (unless it is selected) and asks for its
-// menu (menuRequested).
+// What a device's frame does with the mouse: it lies under the frame's
+// controls, so the clicks that reach it are on the frame's background, its
+// title bar and labels. A press selects the device (Shift: a range; Ctrl: one
+// more or less; a plain press on one already selected keeps the others, and its
+// release selects just it if no drag followed: DeviceSelection::press/release);
+// dragged past the start distance it drags the devices (not an instrument,
+// which stays first); a double-click folds or unfolds a folded device (or any
+// with Ctrl), else opens a plug-in's own editor; a right press selects it
+// (unless it is selected) and asks for its menu (menuRequested).
 
 #include <QPointF>
 #include <QPointer>

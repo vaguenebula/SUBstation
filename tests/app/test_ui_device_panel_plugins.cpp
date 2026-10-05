@@ -1,14 +1,14 @@
 // VST3 plug-ins in the device view (DevicePanel.qml's plug-in devices:
-// PluginDeviceBody, PluginParamKnob), as test_ui_plugins.py had the panel's
-// parts, with the test plug-ins (tests/vst3_plugins): a plug-in's parameters
-// in pages (lists and knobs, the plug-in's own texts), edited undoably and
-// following automation; devices fitting the view; the editor button,
-// double-click and Show Editor (the test plug-ins have no editor here: said
-// so); VST3 presets; plug-ins loading after a project opens, and missing ones;
-// dropping plug-ins; selecting, deleting and reordering devices; effects
-// dropped beside an instrument; scrolling to a plug-in added; the master's
-// effects. Driven in a window with a real session, with synthesized mouse, key
-// and drag events. With SUBSTATION_UI_SCREENSHOTS set, screenshots go there.
+// PluginDeviceBody, PluginParamKnob), with the test plug-ins
+// (tests/vst3_plugins): a plug-in's parameters in pages (lists and knobs, the
+// plug-in's own texts), edited undoably and following automation; devices
+// fitting the view; the editor button, double-click and Show Editor (the test
+// plug-ins have no editor here: said so); VST3 presets; plug-ins loading after
+// a project opens, and missing ones; dropping plug-ins; selecting, deleting and
+// reordering devices; effects dropped beside an instrument; scrolling to a
+// plug-in added; the master's effects. Driven in a window with a real session,
+// with synthesized mouse, key and drag events. With SUBSTATION_UI_SCREENSHOTS
+// set, screenshots go there.
 
 #include <QDir>
 #include <QFile>

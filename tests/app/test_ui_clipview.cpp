@@ -1,10 +1,9 @@
-// The clip view with audio clips (tests/test_ui_smoke.py's clip view tests
-// and test_ui_clip_edits.py's clip gain), driven the way a user would: one
-// clip opened, its settings and waveform; several clips edited in unison;
-// warping and transposing reaching the audio; the clip gain making the
-// waveform taller; which clips open with a MIDI clip among them; going back
-// (Esc, ×, the clips deleted, the project reset). Runs on a display (xvfb
-// here). With $SUBSTATION_UI_SCREENSHOTS set, it saves screenshots there.
+// The clip view with audio clips, driven the way a user would: one clip opened,
+// its settings and waveform; several clips edited in unison; warping and
+// transposing reaching the audio; the clip gain making the waveform taller;
+// which clips open with a MIDI clip among them; going back (Esc, ×, the clips
+// deleted, the project reset). Runs on a display (xvfb here). With
+// $SUBSTATION_UI_SCREENSHOTS set, it saves screenshots there.
 
 #include <QQuickItem>
 #include <QQuickWindow>

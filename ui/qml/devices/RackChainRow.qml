@@ -3,14 +3,13 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import SUBstation
 
-// A rack's chain in its chain list (rack_view.py's _ChainRow): its activator
-// (unmuted), name, solo, volume, pan and meter, as a track's header has them;
-// lit (with an accent bar) while the device view shows its devices beside the
-// rack. A click shows them (and makes it the chain Ctrl+R renames); right-click
-// for its menu (rename, duplicate, delete, add a chain, show its volume's or
-// pan's automation), after which it is shown too. Renamed in place
-// (startRename()): Enter, Escape or leaving the field keeps the name typed (an
-// empty one keeps the old name).
+// A rack's chain in its chain list: its activator (unmuted), name, solo,
+// volume, pan and meter, as a track's header has them; lit (with an accent bar)
+// while the device view shows its devices beside the rack. A click shows them
+// (and makes it the chain Ctrl+R renames); right-click for its menu (rename,
+// duplicate, delete, add a chain, show its volume's or pan's automation), after
+// which it is shown too. Renamed in place (startRename()): Enter, Escape or
+// leaving the field keeps the name typed (an empty one keeps the old name).
 Rectangle {
     id: row
 

@@ -4,8 +4,8 @@
 // move: a click leaves it be), then puts it back where the drag started.
 // Meanwhile, at the top or bottom of the screen it jumps to the middle, so a
 // drag never runs out of room. A popup opening mid-drag (a right-click menu)
-// ends the drag: the release goes to the popup. (knob.py's DragCursor; in Qt
-// Quick the item also calls release() when it loses the mouse grab.)
+// ends the drag: the release goes to the popup. (In Qt Quick the item also
+// calls release() when it loses the mouse grab.)
 
 #include <QObject>
 #include <QPoint>

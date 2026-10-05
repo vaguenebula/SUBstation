@@ -1,12 +1,12 @@
 #pragma once
 
-// A rack's chain, as its row in the rack's chain list shows it (rack_view.py's
-// _ChainRow): its name, its mixer (activator: not muted; solo among the rack's
-// chains; volume and pan, as they are heard: following their automation while
-// it plays, with the automation dots), its meter (meterUpdated, as the meters
-// update), and what its controls and menu do through the editor: the mixer's
-// edits (one undo step per gesture key for volume and pan), rename, duplicate,
-// delete, add a chain to its rack, show its volume's or pan's automation.
+// A rack's chain, as its row in the rack's chain list shows it: its name, its
+// mixer (activator: not muted; solo among the rack's chains; volume and pan, as
+// they are heard: following their automation while it plays, with the
+// automation dots), its meter (meterUpdated, as the meters update), and what
+// its controls and menu do through the editor: the mixer's edits (one undo step
+// per gesture key for volume and pan), rename, duplicate, delete, add a chain
+// to its rack, show its volume's or pan's automation.
 //
 //   RackChain { id: chain; session: Session; trackId: ...; rackId: ...; chainId: ... }
 //   ValueBox { value: chain.volume; automation: chain.volumeAutomation; onMoved: (v, key) => chain.setVolume(v, key) }

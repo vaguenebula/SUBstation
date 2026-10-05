@@ -1,12 +1,12 @@
-// The main window (Main.qml) on a real session (tests/test_ui_smoke.py's
-// window tests, without the views written elsewhere): the layout and its
-// look, every menu action calling the session, the shortcuts, the checkable
-// actions kept in step with the model, Open Recent, the files' flows with the
-// unsaved-changes question, closing (a render running, unsaved changes), the
-// title, the status bar, the session's warnings, Export Audio, the clip view
-// over the arrangement, Edit › Rename, the window's place kept, and the rules
-// of the shortcuts taken from plug-ins' editors. Runs on a display (xvfb
-// here). With $SUBSTATION_SCREENS set, it saves screenshots there.
+// The main window (Main.qml) on a real session (the views have tests of their
+// own): the layout and its look, every menu action calling the session, the
+// shortcuts, the checkable actions kept in step with the model, Open Recent,
+// the files' flows with the unsaved-changes question, closing (a render
+// running, unsaved changes), the title, the status bar, the session's warnings,
+// Export Audio, the clip view over the arrangement, Edit › Rename, the window's
+// place kept, and the rules of the shortcuts taken from plug-ins' editors. Runs
+// on a display (xvfb here). With $SUBSTATION_SCREENS set, it saves screenshots
+// there.
 
 #include <QDir>
 #include <QFileInfo>

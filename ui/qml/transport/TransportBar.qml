@@ -3,11 +3,11 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import SUBstation
 
-// The bar on top of the window (transport_bar.py), left to right: the tempo,
-// the time signature, the metronome, the project key and the computer MIDI
-// keyboard | the position (bar. beat. sixteenth), play, stop, record, the
-// count-in, Re-Enable Automation and Lock Envelopes, the oscilloscope | loop,
-// follow, the CPU load and the audio device (a click opens Preferences).
+// The bar on top of the window, left to right: the tempo, the time signature,
+// the metronome, the project key and the computer MIDI keyboard | the position
+// (bar. beat. sixteenth), play, stop, record, the count-in, Re-Enable
+// Automation and Lock Envelopes, the oscilloscope | loop, follow, the CPU load
+// and the audio device (a click opens Preferences).
 //
 // Its controls show the project, the bridge and the session, and call them:
 // Play's and Record's checked state follows the bridge, never the click; the

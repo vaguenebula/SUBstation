@@ -1,7 +1,7 @@
 #pragma once
 
-// The Ableton-style number box (value_box.py), drawn on the scene graph;
-// ValueBox.qml wraps it with the text field typing opens.
+// The Ableton-style number box, drawn on the scene graph; ValueBox.qml wraps it
+// with the text field typing opens.
 //
 // Drag vertically to change it (the cursor hides meanwhile): kDragRate steps
 // a pixel, kFineDragRate with Shift (pressing or letting go of Shift mid-drag
@@ -17,8 +17,8 @@
 // parser (parseNumber) strips "dB", "bpm" and "%" and reads "-inf" as -70.
 //
 // `logScale` (only when `from` > 0) drags and wheels evenly in log(value), as
-// a knob does (KnobItem::kDragPixels for the whole range, a notch 1/50 of it):
-// frequencies (delay.py's LogValueBox).
+// a knob does (KnobItem::kDragPixels for the whole range, a notch 1/50 of it),
+// for frequencies.
 //
 // Signals and `relative` as KnobItem's: `moved(value, gestureKey)` for user
 // changes only, one key per drag or wheel run; `touched()` on a left press or
@@ -111,7 +111,7 @@ public:
     void setParseFunction(std::function<std::optional<double>(const QString&)> parse);
 
     QString format(double value) const;
-    // value_box.py's _parse_float: "-12.5 dB" -> -12.5, "120bpm" -> 120, "50 %" -> 50, "-inf" -> -70.
+    // A number from what was typed: "-12.5 dB" -> -12.5, "120bpm" -> 120, "50 %" -> 50, "-inf" -> -70.
     static std::optional<double> parseFloat(const QString& text);
     // The same for QML: a number, or null.
     Q_INVOKABLE static QVariant parseNumber(const QString& text);

@@ -1,17 +1,15 @@
-// The device view (ui/qml/devices/DevicePanel.qml), as test_ui_device_view.py
-// had it: folding devices (saved, not undone; the fold button; double-clicks;
-// several selected fold together; a folded rack hiding its chain), cut, copy,
-// paste and duplicate (Ctrl+C/X/V/D while it has the focus; the focus taken by
-// clicking beside the devices), switching a device off beside racks without
-// making the frames again. And the panel as a whole (panel.py's parts that
-// test_ui_plugins.py covered with plug-ins, here with built-in devices):
-// building the chain and its hint, the device's menu and the one beside the
-// devices, Shift+wheel and Ctrl+Alt-drag, a drag held near an edge scrolling
-// the chain, dragging a device (its drag's payload), dropping devices moved
-// and devices from the browser, scrolling to a device added. Driven in a
-// window with a real session, with synthesized mouse, key and drag events;
-// the project and the selection checked. With SUBSTATION_UI_SCREENSHOTS set,
-// screenshots go there.
+// The device view (ui/qml/devices/DevicePanel.qml): folding devices (saved, not
+// undone; the fold button; double-clicks; several selected fold together; a
+// folded rack hiding its chain), cut, copy, paste and duplicate (Ctrl+C/X/V/D
+// while it has the focus; the focus taken by clicking beside the devices),
+// switching a device off beside racks without making the frames again. And the
+// panel as a whole (with built-in devices): building the chain and its hint,
+// the device's menu and the one beside the devices, Shift+wheel and
+// Ctrl+Alt-drag, a drag held near an edge scrolling the chain, dragging a
+// device (its drag's payload), dropping devices moved and devices from the
+// browser, scrolling to a device added. Driven in a window with a real session,
+// with synthesized mouse, key and drag events; the project and the selection
+// checked. With SUBSTATION_UI_SCREENSHOTS set, screenshots go there.
 
 #include <QDrag>
 #include <QGuiApplication>

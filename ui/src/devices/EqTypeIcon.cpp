@@ -11,7 +11,7 @@ namespace sub::ui {
 
 namespace {
 
-// A filter type's outline in `r` (eq.py's _type_shape).
+// A filter type's outline in `r`.
 std::vector<QPointF> typeShape(int kind, const QRectF& r) {
     const double left = r.left(), right = r.right(), top = r.top(), bottom = r.bottom();
     const double midX = r.center().x(), midY = r.center().y();

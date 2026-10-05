@@ -1,7 +1,6 @@
-// Device presets: the user's library (saving by name, listing by device,
-// renaming), default presets, presets as new devices, and rack names (the parts
-// of tests/test_presets.py and tests/test_racks_model.py that need neither the
-// editor nor the engine bridge).
+// Device presets without the editor or the engine bridge: the user's library
+// (saving by name, listing by device, renaming), default presets, presets as
+// new devices, and rack names.
 
 #include "TestSupport.h"
 

@@ -1,11 +1,10 @@
 #pragma once
 
-// One of a rack's eight macros, as its knob in the device view shows it
-// (rack_view.py's MacroPanel): its value (0..1, the rack's parameter
-// macroParam(index)), what it is mapped to ("Utility: Gain", the device's
-// name and the parameter's), the knob's tooltip listing them, and turning it
-// (the editor sets it and what it moves, one undo step per gesture) or
-// unmapping one of them (its right-click menu).
+// One of a rack's eight macros, as its knob in the device view shows it: its
+// value (0..1, the rack's parameter macroParam(index)), what it is mapped to
+// ("Utility: Gain", the device's name and the parameter's), the knob's tooltip
+// listing them, and turning it (the editor sets it and what it moves, one undo
+// step per gesture) or unmapping one of them (its right-click menu).
 //
 //   RackMacro { id: macro; session: Session; trackId: ...; rackId: ...; index: 0 }
 //   Knob { value: macro.value; onMoved: (v, key) => macro.set(v, key) }

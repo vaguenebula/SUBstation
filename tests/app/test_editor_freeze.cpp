@@ -1,6 +1,6 @@
 // Freezing through the editor: what can be frozen, freezing and unfreezing
 // (undoable), what a frozen track (and what is in a frozen group) refuses,
-// flattening, and saving (the editor parts of tests/test_freeze_model.py).
+// flattening, and saving.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

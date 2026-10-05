@@ -3,7 +3,7 @@
 // before its devices or after one of them; cycles refused, sidechains that
 // would close one dropped when tracks move into groups or devices to other
 // tracks, a source going takes the sidechains from it along (one undo step),
-// and saving (the editor parts of tests/test_sidechain_model.py).
+// and saving.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

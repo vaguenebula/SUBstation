@@ -1,6 +1,5 @@
-// The built-in devices' own editors (ui/qml/devices/editors, ui/src/devices),
-// as test_ui_device_editors.py (and the editor's part of test_ui_sidechain.py)
-// had them: each editor loaded as the device view will load it (DeviceEditors's
+// The built-in devices' own editors (ui/qml/devices/editors, ui/src/devices):
+// each editor loaded as the device view will load it (DeviceEditors's
 // component, given the track and the device), with a real session over an
 // engine; driven with the mouse and the keyboard; the project and (rendering
 // offline) the engine checked. Also the shared parameter cell (DeviceParamKnob)

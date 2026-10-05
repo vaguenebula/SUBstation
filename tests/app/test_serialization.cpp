@@ -1,8 +1,7 @@
-// Project files: saving and loading, paths that move with the project, files of
-// other versions, and what an edited file can't have (tests/test_serialization.py,
-// and the saving parts of the groups, sends, resampling, sidechain, racks and
-// freeze model tests). Files as the Python version writes them load and save
-// unchanged.
+// Project files: saving and loading (groups, sends, resampling, sidechains,
+// racks and frozen tracks too), paths that move with the project, files of
+// other versions, and what an edited file can't have. Files as the Python
+// version writes them load and save unchanged.
 
 #include "TestSupport.h"
 

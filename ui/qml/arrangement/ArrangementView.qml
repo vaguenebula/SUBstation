@@ -2,12 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The arrangement (the old arrangement_view.py's ArrangementView): the ruler
-// on top, the track lanes with their headers on the right (as in Ableton),
-// the return tracks and the master pinned at the bottom (the returns above
-// the master, a compact row each), and the scroll bars. What it draws and how
-// it is edited are the C++ items' (ui/src/arrangement); the state they share
-// is the Arrangement.
+// The arrangement: the ruler on top, the track lanes with their headers on the
+// right (as in Ableton), the return tracks and the master pinned at the bottom
+// (the returns above the master, a compact row each), and the scroll bars. What
+// it draws and how it is edited are the C++ items' (ui/src/arrangement); the
+// state they share is the Arrangement.
 //
 //    col 0 (stretches)               col 1 (252)          col 2
 //   ┌──────────────────────────────┬────────────────────────────┐

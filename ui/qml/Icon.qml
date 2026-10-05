@@ -1,10 +1,10 @@
 import QtQuick
 import SUBstation
 
-// One of the icons (theme/Icons.h, from icons.py) at `size`: drawn for its size
-// by the image provider, in its own colour unless `color` is set, its On
-// picture when `checked` (lock_envelopes: closed; fold: folded), and the
-// disabled variant while disabled.
+// One of the icons (theme/Icons.h) at `size`: drawn for its size by the image
+// provider, in its own colour unless `color` is set, its On picture when
+// `checked` (lock_envelopes: closed; fold: folded), and the disabled variant
+// while disabled.
 Image {
     id: icon
 

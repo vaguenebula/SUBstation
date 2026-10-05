@@ -1,12 +1,11 @@
-// The arrangement (tests/test_ui_smoke.py's arrangement parts, test_ui_midi.py's
-// arrangement parts, test_ui_clip_edits.py), driven as a user would, with
-// mouse, wheel and key events on its items in a window: clips dragged, copied,
-// trimmed, selected and heard where a drag takes them; time selections; the
-// ruler's loop brace and scrub area; zoom, scroll and follow; Alt+wheel
-// resizing and folding; Ctrl+Alt drags; files, devices and presets dropped;
-// clips opened in the clip view; the lanes' menus; MIDI clips; reversing; the
-// takes drawn while recording. Runs on a display (xvfb here). With
-// $SUBSTATION_SCREENS set, it saves screenshots there.
+// The arrangement, driven as a user would, with mouse, wheel and key events on
+// its items in a window: clips dragged, copied, trimmed, selected and heard
+// where a drag takes them; time selections; the ruler's loop brace and scrub
+// area; zoom, scroll and follow; Alt+wheel resizing and folding; Ctrl+Alt
+// drags; files, devices and presets dropped; clips opened in the clip view; the
+// lanes' menus; MIDI clips; reversing; the takes drawn while recording. Runs on
+// a display (xvfb here). With $SUBSTATION_SCREENS set, it saves screenshots
+// there.
 
 #include <QDragMoveEvent>
 #include <QFileInfo>

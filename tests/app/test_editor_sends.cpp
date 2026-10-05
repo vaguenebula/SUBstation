@@ -1,7 +1,6 @@
 // Return tracks and sends through the editor: making and deleting returns
 // (with the sends into them, as one undo step), sends' levels and taps,
-// cycles among returns, solo, and saving (the editor parts of
-// tests/test_sends_model.py).
+// cycles among returns, solo, and saving.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

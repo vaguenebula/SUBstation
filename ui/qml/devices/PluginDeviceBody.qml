@@ -2,14 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The body of a plug-in device (device_widgets.py's PluginDeviceWidget): its
-// parameters (those a generic editor offers: PluginParams), four to a page in
-// a 2×2 grid, the device's title bar paging through them (`pages`, `page`);
-// or what it says instead: that it is loading (a project just opened), why it
-// didn't load (missing, failed: it keeps its place), or that it has no
-// parameters to show (use its own editor). The message is cut to four lines
-// (MESSAGE_LINES), so a long one keeps the device as tall as the others; its
-// tooltip has it all.
+// The body of a plug-in device: its parameters (those a generic editor offers:
+// PluginParams), four to a page in a 2×2 grid, the device's title bar paging
+// through them (`pages`, `page`); or what it says instead: that it is loading
+// (a project just opened), why it didn't load (missing, failed: it keeps its
+// place), or that it has no parameters to show (use its own editor). The
+// message is cut to four lines (MESSAGE_LINES), so a long one keeps the device
+// as tall as the others; its tooltip has it all.
 Item {
     id: body
 

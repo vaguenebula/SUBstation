@@ -13,8 +13,9 @@
 //           taken on this one; and making the first page of rows from them
 // Indexing  native queries while a full rescan runs
 // With --audio the engine plays (silently) through the default output meanwhile,
-// as browser_ui_bench.py does: its CPU load, and how far its playhead fell behind
-// the wall clock at worst (a late audio callback leaves it behind for good).
+// as the Python UI's benchmark did: its CPU load, and how far its playhead fell
+// behind the wall clock at worst (a late audio callback leaves it behind for
+// good).
 //
 // The reference is C++ now, so its times are not the Python times the README
 // compares with: it is there to check the results.
@@ -150,7 +151,7 @@ std::pair<std::shared_ptr<const backend::Result>, double> nativeQuery(backend::B
 }
 
 // The engine playing silently: its playhead against the wall clock, sampled on a
-// thread of its own (see browser_ui_bench.py's Playback).
+// thread of its own (as the Python UI's benchmark did).
 class Playback {
 public:
     explicit Playback(const QString& folder) {

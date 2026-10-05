@@ -1,10 +1,10 @@
 #pragma once
 
-// The EQ's curve (eq.py's EqGraph, with EqEditor's model of the bands), after
-// FabFilter's Pro-Q: 10 Hz..22 kHz, ± EqView::range dB; each band's curve and
-// the total from the engine's own design (sub::app::eqResponseDb), the
-// selected and hovered bands filled in their colours, the total with a glow;
-// the analyzer (EqAnalyzer, the displays "input" and "output") behind it.
+// The EQ's curve (and the model of its bands), after FabFilter's Pro-Q:
+// 10 Hz..22 kHz, ± EqView::range dB; each band's curve and the total from the
+// engine's own design (sub::app::eqResponseDb), the selected and hovered bands
+// filled in their colours, the total with a glow; the analyzer (EqAnalyzer, the
+// displays "input" and "output") behind it.
 //
 // Hover the curve and a ghost band shows where a click adds one, of the type
 // for where it is (kZones: a low cut at the far left, then a low shelf, bells,
@@ -123,7 +123,7 @@ public:
     Q_INVOKABLE QColor colorOf(int index) const { return bandColor(index); }
     Q_INVOKABLE QString freqText(double freq) const { return formatFreq(freq); }
 
-    // Editing (eq.py's EqEditor): all through setParams.
+    // Editing: all through setParams.
     Q_INVOKABLE void setParamValue(const QString& paramId, double value, const QString& mergeKey = QString(),
                                    const QString& text = QStringLiteral("Change EQ"));
     Q_INVOKABLE void setBandParam(int index, const QString& name, double value, const QString& mergeKey = QString(),

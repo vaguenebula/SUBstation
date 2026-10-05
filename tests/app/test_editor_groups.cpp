@@ -1,8 +1,6 @@
 // Group tracks through the editor: grouping, ungrouping, moving tracks into and
 // out of groups (all undoable), inserting tracks in groups, deleting groups,
-// folding, arming, saving, and cutting, copying and pasting groups (the editor
-// parts of tests/test_groups_model.py, and of tests/test_ui_groups.py that are
-// the editor's rules).
+// folding, arming, saving, and cutting, copying and pasting groups.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"
@@ -207,7 +205,7 @@ private Q_SLOTS:
         QVERIFY(!treeProblem(loaded.tracks()));
     }
 
-    // --- Cut, copy and paste of tracks (tests/test_ui_groups.py) ---
+    // --- Cut, copy and paste of tracks ---
 
     void groupsCanBeCutCopiedAndPasted() {
         EditorFixture f;

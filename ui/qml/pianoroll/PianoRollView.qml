@@ -2,10 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The piano roll, laid out like Ableton's MIDI editor (piano_roll.py): the
-// ruler on top, the keys on the left, the notes in the middle with the note
-// tools floating over them, the velocities below, and scroll bars. The
-// headphones button turns hearing notes off. The clip it shows is the roll's
+// The piano roll, laid out like Ableton's MIDI editor: the ruler on top, the
+// keys on the left, the notes in the middle with the note tools floating over
+// them, the velocities below, and scroll bars. The headphones button turns
+// hearing notes off. The clip it shows is the roll's
 // (`roll.setClip(trackId, clipId)`; the clip view sets it).
 //
 //   ┌──────────┬────────────────────────────┬───┐

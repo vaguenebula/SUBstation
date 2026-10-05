@@ -2,8 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A built-in device's parameter, as the device view's cells showed it
-// (frame.py's _param_cell, device_widgets.py's DeviceWidget._param_widget): its
+// A built-in device's parameter, as a cell of the device view shows it: its
 // name on top (elided, the whole name in the tooltip), then a knob with its
 // value under it, or, for a parameter that chooses between named values, a
 // list. The knob turns logarithmically where the engine says so, is drawn from

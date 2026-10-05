@@ -1,6 +1,5 @@
-// Automation in the model: envelope maths, target keys, the parameter mappings
-// held against the engine's, and saving (the parts of
-// tests/test_automation_model.py that need neither the editor nor the bridge).
+// Automation in the model, without the editor or the bridge: envelope maths,
+// target keys, the parameter mappings held against the engine's, and saving.
 
 #include "TestSupport.h"
 

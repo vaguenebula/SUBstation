@@ -1,7 +1,7 @@
 // Racks through the editor: grouping devices (Ctrl+G) and ungrouping, chains
 // and their mixers, devices moving into and out of racks, nesting limits,
 // instrument racks, macros, sidechains into devices in racks, saving, and
-// presets loading as new devices (the editor parts of tests/test_racks_model.py).
+// presets loading as new devices.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

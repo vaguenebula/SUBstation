@@ -2,13 +2,12 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A track's header (a group's too), right of its lane (track_headers.py's
-// TrackHeader._layout): the meter on the right; the activator (mute, labelled
-// with the track's number), solo and arm (not for a group: it records
-// nothing) on the name row; on the second row (from 48 px) volume, pan, the
-// input and the monitoring; then the send knobs (while there are returns),
-// then the automation choosers in its own lane and in each lane below. What
-// it paints, its mouse handling and what its controls do are
+// A track's header (a group's too), right of its lane: the meter on the right;
+// the activator (mute, labelled with the track's number), solo and arm (not for
+// a group: it records nothing) on the name row; on the second row (from 48 px)
+// volume, pan, the input and the monitoring; then the send knobs (while there
+// are returns), then the automation choosers in its own lane and in each lane
+// below. What it paints, its mouse handling and what its controls do are
 // TrackHeaderItem's. Everything below the name row starts after the group
 // bands and ends where the buttons above do.
 TrackHeaderItem {

@@ -1,6 +1,6 @@
 // MIDI in the editor: MIDI tracks and their instrument, moving devices, MIDI
 // clips and note edits, clips moving only onto tracks of their kind, MIDI
-// inputs, and recorded MIDI takes (the editor parts of tests/test_midi_model.py).
+// inputs, and recorded MIDI takes.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

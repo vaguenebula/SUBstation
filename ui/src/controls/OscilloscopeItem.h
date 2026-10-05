@@ -1,7 +1,7 @@
 #pragma once
 
-// The oscilloscope of the master output, as in FL Studio's tool bar
-// (oscilloscope.py); Oscilloscope.qml wraps it with its tooltip.
+// The oscilloscope of the master output, as in FL Studio's tool bar;
+// Oscilloscope.qml wraps it with its tooltip.
 //
 // Every kUpdateMs its timer reads the feed's `scopeWritten` (a counter); only
 // when it moved does it fetch scopeSamples(2 * kWindow) (neither may block).

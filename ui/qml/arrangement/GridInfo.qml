@@ -2,8 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The corner above the headers (the old arrangement_view.py's GridInfo): the
-// grid's size; a click toggles snapping.
+// The corner above the headers: the grid's size; a click toggles snapping.
 Rectangle {
     id: info
 

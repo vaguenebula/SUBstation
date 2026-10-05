@@ -1,8 +1,7 @@
 // What is selected in the arrangement (Selection): tracks (Ctrl- and
 // Shift-click), clip ranges and lane ranges, breakpoints, what Delete acts on,
 // the insert marker, and what is left of a selection after the project
-// changes (Selection's rules, from tests/test_ui_clip_edits.py,
-// tests/test_ui_groups.py and tests/test_ui_smoke.py, without the window).
+// changes (Selection's rules, without the window).
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

@@ -1,15 +1,14 @@
 #pragma once
 
-// A mouse gesture on the arrangement's lanes (the old interactions.py's
-// ClipGesture): what a left press starts, kept by the item from press to
-// release. It gets move() and finish(), and the item asks it what to draw:
-// hiddenIds() (clips not drawn in place), kept() (what stays of moved clips),
-// ghosts() (where they go, translucent), timeRange() (where the selection is
-// drawn while it moves) and readout() (a breakpoint's value while dragged).
-// The clip gestures (ClipGestures.h) preview with pure clip maths and make one
-// editor call in finish(), so a drag is one undo step and the model isn't
-// touched while dragging; the automation gestures (Envelopes.h) edit the model
-// as they go, with a merge key per drag.
+// A mouse gesture on the arrangement's lanes: what a left press starts, kept by
+// the item from press to release. It gets move() and finish(), and the item
+// asks it what to draw: hiddenIds() (clips not drawn in place), kept() (what
+// stays of moved clips), ghosts() (where they go, translucent), timeRange()
+// (where the selection is drawn while it moves) and readout() (a breakpoint's
+// value while dragged). The clip gestures (ClipGestures.h) preview with pure
+// clip maths and make one editor call in finish(), so a drag is one undo step
+// and the model isn't touched while dragging; the automation gestures
+// (Envelopes.h) edit the model as they go, with a merge key per drag.
 //
 // paint() reads a gesture (the GUI thread is blocked meanwhile): what it
 // draws is worked out in move().

@@ -2,8 +2,6 @@
 // where the bridge puts its files (recordings, frozen audio, reversed copies) and
 // how it names them, the float WAV writer, the EQ's curve, and what the UI reads
 // of the engine through the bridge (device status, the scope, MIDI inputs).
-// From tests/test_asio.py, tests/test_ui_recording.py, tests/test_ui_smoke.py,
-// tests/test_midi_input.py and tests/test_ui_clip_edits.py (their bridge parts).
 
 #include "BridgeTestSupport.h"
 #include "TestSupport.h"

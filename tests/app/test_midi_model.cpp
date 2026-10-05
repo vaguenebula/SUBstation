@@ -1,6 +1,5 @@
-// MIDI in the model: clips as windows onto notes, the piano roll's note maths,
-// and MIDI tracks in files (the parts of tests/test_midi_model.py that need
-// neither the editor nor the engine bridge).
+// MIDI in the model, without the editor or the engine bridge: clips as windows
+// onto notes, the piano roll's note maths, and MIDI tracks in files.
 
 #include "TestSupport.h"
 

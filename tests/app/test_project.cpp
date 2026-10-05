@@ -1,7 +1,6 @@
 // The project model's queries: the group tree, the routing graph, freezing,
-// devices in racks (tests/test_groups_model.py's tree invariant, return letters
-// from tests/test_sends_model.py, the frozen clip from tests/test_freeze_model.py,
-// and the rules the editor relies on).
+// devices in racks (the group tree's invariant, return letters, the frozen
+// clip, and the rules the editor relies on).
 
 #include "TestSupport.h"
 

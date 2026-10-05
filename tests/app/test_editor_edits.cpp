@@ -1,7 +1,7 @@
 // The editor's clip edits and undo: adding, moving, duplicating, splitting
 // clips, tempo and warping trims, gesture merging, inputs and arming, recorded
-// takes, copy and paste with the automation under clips, time selections, and
-// reversing (the editor parts of tests/test_edits.py and tests/test_keys.py).
+// takes, copy and paste with the automation under clips, time selections,
+// reversing, and keys and file names.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"
@@ -585,7 +585,7 @@ private Q_SLOTS:
         QVERIFY(meta->indexOfSignal("parameterTouched(QString,QString)") >= 0);
     }
 
-    // --- Keys and file names (the editor parts of tests/test_keys.py) ---
+    // --- Keys and file names ---
 
     void addedClipsFollowNameAndProjectKey() {
         EditorFixture f;

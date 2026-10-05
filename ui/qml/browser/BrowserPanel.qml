@@ -4,9 +4,9 @@ import QtQuick.Dialogs
 import QtQuick.Layouts
 import SUBstation
 
-// The browser on the left (browser_panel.py), on Session.browser: the search
-// field and the sort, the sidebar (categories and places), the results or a
-// place's folder tree, and the footer (preview on or off, and the status).
+// The browser on the left, on Session.browser: the search field and the sort,
+// the sidebar (categories and places), the results or a place's folder tree,
+// and the footer (preview on or off, and the status).
 //
 // Ctrl+F searches everything (the controller's focusSearch(): "All", then the
 // field takes the keyboard). Enter or Down in the field selects the first

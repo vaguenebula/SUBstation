@@ -2,9 +2,8 @@
 // frozen), why it can't, the tracks' inputs, monitoring and arming in the
 // engine, and with a running device a take recorded, drawn live and handed on as
 // RecordedTakes when the recording ends (by stopping, or stopping the transport).
-// From tests/test_ui_recording.py and tests/test_midi_input.py (their bridge
-// parts). No audio device is needed: the parts that need one running skip
-// without (on Linux the default device usually doesn't open).
+// No audio device is needed: the parts that need one running skip without (on
+// Linux the default device usually doesn't open).
 
 #include "BridgeTestSupport.h"
 #include "TestSupport.h"

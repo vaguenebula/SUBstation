@@ -1,13 +1,10 @@
 // What the engine hears of the editor's edits, now that the session has both
-// (the tests the editor and the bridge ports left for it): groups as buses,
+// (what the editor's and the bridge's own tests leave to it): groups as buses,
 // returns and sends, inputs from tracks, sidechains, racks (their chains,
 // faders, automation and macros), presets rendering as the devices they were
 // saved from (plug-ins too; missing ones loading as missing devices; default
-// presets), frozen tracks playing their frozen audio, and the notes a MIDI
-// clip plays.
-// From tests/test_groups_model.py, test_sends_model.py,
-// test_resampling_model.py, test_sidechain_model.py, test_racks_model.py,
-// test_presets.py, test_freeze_model.py and test_midi_model.py.
+// presets), frozen tracks playing their frozen audio, and the notes a MIDI clip
+// plays.
 
 #include "BridgeTestSupport.h"
 #include "EditorFixture.h"
@@ -64,7 +61,8 @@ std::vector<float> plus(const std::vector<float>& a, const std::vector<float>& b
     return out;
 }
 
-// test_racks_model.py's bridged fixture's helpers, through a session.
+// A session (without clip fades) with helpers to make tracks, render what the
+// engine plays and find the engine's tracks and devices.
 struct Bridged : SessionFixture {
     Bridged() : SessionFixture(false) {}
 
@@ -129,7 +127,7 @@ private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
     void init() { QSettings().clear(); }
 
-    // --- test_groups_model.py ---
+    // --- Groups ---
 
     void theEngineHearsGroupsAsBuses() {
         Bridged f;
@@ -157,7 +155,7 @@ private Q_SLOTS:
         QCOMPARE(f.project().track(inner).parent, std::optional<QString>(group));
     }
 
-    // --- test_sends_model.py ---
+    // --- Returns and sends ---
 
     void theEngineHearsReturnsAndSends() {
         Bridged f;
@@ -200,7 +198,7 @@ private Q_SLOTS:
         QVERIFY(near(f.level(), 1.0));
     }
 
-    // --- test_resampling_model.py ---
+    // --- Inputs from tracks (resampling) ---
 
     void theEngineTakesInputs() {
         Bridged f;
@@ -236,7 +234,7 @@ private Q_SLOTS:
         QCOMPARE(engineInput(track), std::optional<uint32_t>(f.trackOf(later)));
     }
 
-    // --- test_sidechain_model.py ---
+    // --- Sidechains ---
 
     void theEngineTakesSidechains() {
         const auto ref = testPlugin(QStringLiteral("SUB Test Sidechain"));
@@ -307,7 +305,7 @@ private Q_SLOTS:
                  expect(keys, sub::SidechainTap::AfterDevice, f.deviceOf(keys, project.track(keys).devices[0].id)));
     }
 
-    // --- test_racks_model.py ---
+    // --- Racks ---
 
     void theEngineFollowsRacks() {
         Bridged f;
@@ -440,7 +438,7 @@ private Q_SLOTS:
         QVERIFY(near(p.device(track, gain).params.value(QStringLiteral("gain")), -60 + 0.6 * 84, 1e-9));
     }
 
-    // --- test_presets.py ---
+    // --- Presets ---
 
     void aPluginPresetRendersAsTheDeviceItWasSavedFrom() {
         const auto ref = testPlugin(QStringLiteral("SUB Test Effect"));
@@ -567,7 +565,7 @@ private Q_SLOTS:
         QVERIFY(near(f.engine.processorParam(f.deviceOf(track, fresh), 0), 0.3, 1e-6));
     }
 
-    // --- test_freeze_model.py ---
+    // --- Freezing ---
 
     void aFrozenTrackPlaysItsFrozenAudioWithoutItsDevices() {
         TempDir dir;
@@ -662,7 +660,7 @@ private Q_SLOTS:
 
     // (test_renders_no_track_plays_are_deleted: test_session_renders.cpp, through the session's freezing.)
 
-    // --- test_midi_model.py ---
+    // --- MIDI clips ---
 
     void aMidiClipPlaysTheNotesStartingInItsWindow() {
         constexpr int c = 60, e = 64, g = 67;

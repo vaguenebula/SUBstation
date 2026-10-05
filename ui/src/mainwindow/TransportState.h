@@ -1,7 +1,6 @@
 #pragma once
 
-// What the transport bar shows that needs working out (transport_bar.py's
-// refresh, _show_position, _show_cpu and refresh_device): the position as
+// What the transport bar shows that needs working out: the position as
 // "bar. beat. sixteenth", changed only when its text does; the time
 // signature's two numbers and the denominators it may have; the project key's
 // choices; the CPU load, every 15th meter update (about twice a second); and

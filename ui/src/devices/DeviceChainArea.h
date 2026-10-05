@@ -1,8 +1,7 @@
 #pragma once
 
-// The device view's chain area (device_panel/panel.py's scroll area, and
-// what DevicePanel did with it): the chain scrolled sideways, without a
-// scroll bar; drops; the drags its devices start; scrolling to a device added.
+// The device view's chain area: the chain scrolled sideways, without a scroll
+// bar; drops; the drags its devices start; scrolling to a device added.
 //
 // - Scrolling: `contentX` (QML moves `content` by it). Shift+wheel anywhere
 //   over the chain scrolls it (kWheelScroll px a notch), and the wheel never

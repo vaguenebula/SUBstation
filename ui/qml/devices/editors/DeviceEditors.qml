@@ -1,9 +1,8 @@
 pragma Singleton
 import QtQuick
 
-// The built-in devices' own editors (device_editors/__init__.py's registry):
-// a device of one of these kinds shows its editor instead of a knob per
-// parameter (DeviceParamKnob, in pages).
+// The built-in devices' own editors: a device of one of these kinds shows its
+// editor instead of a knob per parameter (DeviceParamKnob, in pages).
 //
 //   const url = DeviceEditors.editorFor(device.kind)   // "" for the generic knobs
 //   Loader { Component.onCompleted: setSource(url, { trackId: t, deviceId: d }) }

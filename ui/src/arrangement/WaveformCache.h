@@ -1,9 +1,9 @@
 #pragma once
 
-// The arrangement's waveforms (the old waveform_cache.py), drawn as columns
-// on the scene graph (SgPainter::fillColumns): a column per pixel from the
-// minimum to the maximum of what it covers, scaled by the clip's gain (louder
-// is taller, cut off at the lane's edges), as it scales its audio.
+// The arrangement's waveforms, drawn as columns on the scene graph
+// (SgPainter::fillColumns): a column per pixel from the minimum to the maximum
+// of what it covers, scaled by the clip's gain (louder is taller, cut off at
+// the lane's edges), as it scales its audio.
 //
 // Columns are worked out a tile (kTile pixels) at a time and kept in an LRU of
 // kMaxTiles. Tiles are anchored to the start of the source file (not the

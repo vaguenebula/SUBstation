@@ -1,11 +1,10 @@
 #pragma once
 
-// The velocity editor under the piano roll (piano_roll/velocity_lane.py): a
-// stem per note at its start, as tall as its velocity (1 to 127 over the
-// lane's height), white for selected notes. Drag a stem up or down; with
-// several notes selected, dragging one of theirs changes them all by the same
-// amount, committed live as one undo step. The selected notes' values show
-// while dragging.
+// The velocity editor under the piano roll: a stem per note at its start, as
+// tall as its velocity (1 to 127 over the lane's height), white for selected
+// notes. Drag a stem up or down; with several notes selected, dragging one of
+// theirs changes them all by the same amount, committed live as one undo step.
+// The selected notes' values show while dragging.
 
 #include "model/Clip.h"
 #include "pianoroll/RollItem.h"

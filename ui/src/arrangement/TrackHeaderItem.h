@@ -1,14 +1,12 @@
 #pragma once
 
-// A strip's header (the old track_headers.py's TrackHeader, bus_tracks.py's
-// ReturnHeader and MasterHeader, mixer_controls.py and automation_header.py,
-// without their widgets): what it paints itself (its background, a band in
-// the colour of each group it is in, its own colour, the fold button, the
-// frozen mark and its name), its mouse handling (selecting, dragging to move
-// tracks, resizing, folding, Alt+wheel), and what its QML controls show and do
-// (activator, solo, arm, volume, pan, input, monitoring, sends, meter,
-// automation choosers, menus). TrackHeader.qml, ReturnHeader.qml and
-// MasterHeader.qml lay the controls out over it:
+// A strip's header, a track's, a return's or the master's: what it paints
+// itself (its background, a band in the colour of each group it is in, its own
+// colour, the fold button, the frozen mark and its name), its mouse handling
+// (selecting, dragging to move tracks, resizing, folding, Alt+wheel), and what
+// its QML controls show and do (activator, solo, arm, volume, pan, input,
+// monitoring, sends, meter, automation choosers, menus). TrackHeader.qml,
+// ReturnHeader.qml and MasterHeader.qml lay the controls out over it:
 //
 //   TrackHeaderItem { session: Session; arrangement: arrangement; trackId: model.trackId; meter: meter
 //       Meter { id: meter } ... }

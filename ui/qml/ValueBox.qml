@@ -2,9 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The Ableton-style number box (ValueBoxItem, from value_box.py), with the text
-// field that double-clicking (without a default) or typing a digit (with one)
-// opens over it, applied on Return or when it loses the focus.
+// The Ableton-style number box (ValueBoxItem), with the text field that
+// double-clicking (without a default) or typing a digit (with one) opens over
+// it, applied on Return or when it loses the focus.
 //
 //   ValueBox {
 //       from: 20; to: 999; step: 0.25; decimals: 2; sampleText: "999.00"

@@ -1,5 +1,5 @@
 // Pure clip maths: overlaps, cuts, trims, splits, tempo fitting, warping and
-// reversing (the pure-function parts of tests/test_edits.py).
+// reversing.
 
 #include "TestSupport.h"
 

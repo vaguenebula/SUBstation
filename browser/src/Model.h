@@ -94,7 +94,8 @@ struct ExternalGroup {
     std::vector<ExternalItem> items;
 };
 
-// How often items were used (library.py keeps the records; these are copies).
+// How often items were used (the app layer's Library keeps the records; these
+// are copies).
 struct UsageRecord {
     std::string key;
     double score = 0.0;      // 0 when the record has none

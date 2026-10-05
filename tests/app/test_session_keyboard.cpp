@@ -4,8 +4,7 @@
 // text inputs (an object answering Qt::ImEnabled), and keys with modifiers are
 // left alone. Notes held are released when it is turned off, and when the
 // application loses the keyboard.
-// From tests/test_computer_keyboard.py (a QWindow and a QShortcut stand for the
-// window and its actions).
+// A QWindow and a QShortcut stand for the window and its actions.
 
 #include "SessionFixture.h"
 #include "TestSupport.h"

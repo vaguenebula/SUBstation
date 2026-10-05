@@ -2,16 +2,16 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The note tools (note_tools.py): Legato, timing ×2 and ÷2, Quantize and
-// Humanize, in a small rounded bar that glides in over the note grid next to a
-// group of notes selected by dragging a rubber band or with Ctrl+A (the roll's
-// toolsShown). Centred above the notes (below them when there is no room),
-// kept inside the grid; it fades in rising 8 px (180 ms, ease out) and fades
-// out sinking back (120 ms), a reversed animation going on from where the last
-// one left off. Each tool is one undo step, on the selected notes (all of them
-// when none are). Its buttons never take the focus, so the notes keep the
-// keyboard; it keeps its clicks to itself (the grid is underneath), while wheel
-// turns outside its boxes still scroll the grid.
+// The note tools: Legato, timing ×2 and ÷2, Quantize and Humanize, in a small
+// rounded bar that glides in over the note grid next to a group of notes
+// selected by dragging a rubber band or with Ctrl+A (the roll's toolsShown).
+// Centred above the notes (below them when there is no room), kept inside the
+// grid; it fades in rising 8 px (180 ms, ease out) and fades out sinking back
+// (120 ms), a reversed animation going on from where the last one left off.
+// Each tool is one undo step, on the selected notes (all of them when none
+// are). Its buttons never take the focus, so the notes keep the keyboard; it
+// keeps its clicks to itself (the grid is underneath), while wheel turns
+// outside its boxes still scroll the grid.
 //
 // A child of the NoteGrid: its coordinates are the grid's.
 Rectangle {

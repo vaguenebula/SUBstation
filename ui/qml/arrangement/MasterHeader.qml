@@ -2,10 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The master's header (bus_tracks.py's MasterHeader): its volume, pan and
-// meter on the right; and while its automation shows, its automation choosers
-// (and those of the lanes below it). Click it to select the master: the
-// device view shows its effects.
+// The master's header: its volume, pan and meter on the right; and while its
+// automation shows, its automation choosers (and those of the lanes below it).
+// Click it to select the master: the device view shows its effects.
 TrackHeaderItem {
     id: header
 

@@ -1,10 +1,10 @@
 #pragma once
 
-// The piano roll's keyboard (piano_roll.py's PianoKeys): black keys 60 % wide,
-// the key sounding lit, C's labelled. Pressing a key selects every note on that
-// pitch (Shift adds) and plays it; dragging over the keys plays each in turn;
-// letting go stops it. Its wheel is the note grid's (Alt+wheel over the keys
-// makes the rows taller or shorter).
+// The piano roll's keyboard: black keys 60 % wide, the key sounding lit, C's
+// labelled. Pressing a key selects every note on that pitch (Shift adds) and
+// plays it; dragging over the keys plays each in turn; letting go stops it. Its
+// wheel is the note grid's (Alt+wheel over the keys makes the rows taller or
+// shorter).
 
 #include "pianoroll/RollItem.h"
 

@@ -3,12 +3,12 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import SUBstation
 
-// The Sampler's editor (sampler.py's SamplerWidget): its knobs in pages of
-// six, three to a row (the sample's six, then the amplitude's), and beside
-// them its sample's waveform (SampleView): what plays of it, the loop, and
-// where the newest note is. Drop an audio file on the waveform, or
-// double-click it, to load one; drag its Start and End markers. The device's
-// menu starts with Load Sample… and Clear Sample (menuActions).
+// The Sampler's editor: its knobs in pages of six, three to a row (the sample's
+// six, then the amplitude's), and beside them its sample's waveform
+// (SampleView): what plays of it, the loop, and where the newest note is. Drop
+// an audio file on the waveform, or double-click it, to load one; drag its
+// Start and End markers. The device's menu starts with Load Sample… and Clear
+// Sample (menuActions).
 Item {
     id: editor
 

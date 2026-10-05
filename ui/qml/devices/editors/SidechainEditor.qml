@@ -2,13 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The Sidechain device's editor (sidechain.py's SidechainWidget): its curve,
-// big, to draw on (CurveGraph), from edge to edge; then what the kick and the
-// input clash at (ClashView) with Fit, Auto and the fit's character; then the
-// device's controls: the trigger and Sync, six small knobs (the length in ms,
-// or synced in notes), Lows Only over the crossover. The hint over the curve
-// (no sidechain chosen while triggered by one) asks the device's frame for its
-// sidechain menu (sidechainMenuRequested).
+// The Sidechain device's editor: its curve, big, to draw on (CurveGraph), from
+// edge to edge; then what the kick and the input clash at (ClashView) with Fit,
+// Auto and the fit's character; then the device's controls: the trigger and
+// Sync, six small knobs (the length in ms, or synced in notes), Lows Only over
+// the crossover. The hint over the curve (no sidechain chosen while triggered
+// by one) asks the device's frame for its sidechain menu
+// (sidechainMenuRequested).
 Item {
     id: editor
 

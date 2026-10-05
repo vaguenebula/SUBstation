@@ -35,7 +35,7 @@ QPainterPath path(std::initializer_list<QPointF> points, bool close) {
     return result;
 }
 
-// icons.py, one function each.
+// The icons, one function each.
 const std::map<QString, Icon>& icons() {
     static const std::map<QString, Icon> table = [] {
         std::map<QString, Icon> t;

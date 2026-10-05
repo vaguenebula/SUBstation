@@ -1,11 +1,11 @@
 #pragma once
 
-// The clip view's waveforms (clip_view.py's ClipWaveform): each open audio
-// clip's whole source file fitted to the width, in its track's colour and
-// scaled by its gain, the part the clip plays tinted and the rest dimmed,
-// with S and E flags at its start and end, as in Ableton's sample editor. One
-// clip gets a time ruler (steps at least 70 px apart); several are stacked in
-// bands of at least 40 px, labelled, with "+N more" when they don't fit.
+// The clip view's waveforms: each open audio clip's whole source file fitted to
+// the width, in its track's colour and scaled by its gain, the part the clip
+// plays tinted and the rest dimmed, with S and E flags at its start and end, as
+// in Ableton's sample editor. One clip gets a time ruler (steps at least 70 px
+// apart); several are stacked in bands of at least 40 px, labelled, with
+// "+N more" when they don't fit.
 
 #include "audio/Waveform.h"
 #include "model/Clip.h"

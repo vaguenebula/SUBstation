@@ -2,11 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A strip's send knobs (mixer_controls.py's SendControls), one per return,
-// side by side, each with the return's letter (in the accent colour while it
-// taps before the fader). A knob moves as a volume fader does; typing a dB
-// value works. Right-click: Pre-Fader, Remove Send, Show Automation (not on
-// a knob greyed out: the return feeds this strip). Those that don't fit don't show.
+// A strip's send knobs, one per return, side by side, each with the return's
+// letter (in the accent colour while it taps before the fader). A knob moves as
+// a volume fader does; typing a dB value works. Right-click: Pre-Fader, Remove
+// Send, Show Automation (not on a knob greyed out: the return feeds this
+// strip). Those that don't fit don't show.
 Item {
     id: sendKnobs
 

@@ -2,11 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A value box bound to a built-in device's parameter (delay.py's _box): 18 px
-// high in the 8 pt font; it shows the value as it is now and its automation
-// dot, sets it through the editor (one undo step per drag), touches it when
-// pressed, and right-click gives its menu. `logScale` drags it evenly in
-// log(value) (delay.py's LogValueBox, for frequencies).
+// A value box bound to a built-in device's parameter: 18 px high in the 8 pt
+// font; it shows the value as it is now and its automation dot, sets it through
+// the editor (one undo step per drag), touches it when pressed, and right-click
+// gives its menu. `logScale` drags it evenly in log(value) (for frequencies).
 Item {
     id: control
 

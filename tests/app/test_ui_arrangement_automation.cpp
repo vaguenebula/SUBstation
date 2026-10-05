@@ -1,10 +1,10 @@
-// Automation in the arrangement (tests/test_ui_automation.py), driven with the
-// mouse on the lanes, the master's lane and the headers' choosers: showing
-// lanes, editing envelopes (breakpoints, curves, segments, steps, ranges), the
-// lanes' menus, what the engine plays, overriding and re-enabling, controls
-// following their automation, lanes below a track, saving, automation moving
-// with a dragged clip, and drags reaching up into the clips. Runs on a display
-// (xvfb here). With $SUBSTATION_SCREENS set, it saves screenshots there.
+// Automation in the arrangement, driven with the mouse on the lanes, the
+// master's lane and the headers' choosers: showing lanes, editing envelopes
+// (breakpoints, curves, segments, steps, ranges), the lanes' menus, what the
+// engine plays, overriding and re-enabling, controls following their
+// automation, lanes below a track, saving, automation moving with a dragged
+// clip, and drags reaching up into the clips. Runs on a display (xvfb here).
+// With $SUBSTATION_SCREENS set, it saves screenshots there.
 
 #include <QMouseEvent>
 #include <QQuickItem>

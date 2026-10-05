@@ -1,10 +1,9 @@
 #pragma once
 
-// The lane of a strip without clips, the master's or a return track's (the
-// old bus_tracks.py's BusLane and MasterLane): grid and loop region, and its
-// automation, in it and in lanes below it, edited as a track's (Envelopes.h).
-// Its height follows its automation (Arrangement's masterRows / returnRows);
-// the playhead is an ArrangementPlayhead over it.
+// The lane of a strip without clips, the master's or a return track's: grid and
+// loop region, and its automation, in it and in lanes below it, edited as a
+// track's (Envelopes.h). Its height follows its automation (Arrangement's
+// masterRows / returnRows); the playhead is an ArrangementPlayhead over it.
 
 #include "arrangement/ArrangementItem.h"
 #include "arrangement/Envelopes.h"
