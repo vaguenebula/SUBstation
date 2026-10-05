@@ -13,10 +13,13 @@ Menu {
     id: menu
 
     property var target: null
+    // What fill() made: held here until the next show() (made without a parent,
+    // the garbage collector would take them otherwise, submenus while shown).
+    property var made: []
 
     function show(entries, target, parentItem, x, y) {
         menu.target = target
-        clear(menu)
+        release()
         fill(menu, entries)
         if (menu.count > 0)
             menu.popup(parentItem, x, y)
@@ -27,28 +30,41 @@ Menu {
             menu.target.triggerMenu(id)
     }
 
-    function clear(m) {
+    // Empties the menu (and its submenus), then destroys what fill() made.
+    function release() {
+        empty(menu)
+        for (let i = 0; i < made.length; ++i)
+            made[i].destroy()
+        made = []
+    }
+
+    function empty(m) {
         while (m.count > 0) {
-            const item = m.takeItem(0)
-            if (!item)
+            const item = m.itemAt(0)
+            if (item && item.subMenu)
+                empty(m.takeMenu(0))  // (the menu's own item for it goes)
+            else if (!m.takeItem(0))
                 break
-            if (item.subMenu)
-                item.subMenu.destroy()
-            item.destroy()
         }
+    }
+
+    function make(component, properties) {
+        const object = component.createObject(null, properties)
+        made.push(object)
+        return object
     }
 
     function fill(m, entries) {
         for (let i = 0; i < entries.length; ++i) {
             const entry = entries[i]
             if (entry.separator) {
-                m.addItem(separatorComponent.createObject(null))
+                m.addItem(make(separatorComponent, {}))
             } else if (entry.submenu) {
-                const sub = submenuComponent.createObject(null, { title: entry.text, enabled: entry.enabled })
+                const sub = make(submenuComponent, { title: entry.text, enabled: entry.enabled })
                 fill(sub, entry.children)
                 m.addMenu(sub)
             } else {
-                m.addItem(itemComponent.createObject(null, {
+                m.addItem(make(itemComponent, {
                     text: entry.text,
                     enabled: entry.enabled,
                     checkable: entry.checkable,
