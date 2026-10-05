@@ -646,6 +646,48 @@ private Q_SLOTS:
         QMetaObject::invokeMethod(clipView, "closeRequested");
     }
 
+    // The actions' other keys: Ctrl+Shift+Z redoes, Backspace deletes,
+    // Ctrl+Shift+M inserts a MIDI clip, Shift+Tab (as a keyboard sends it:
+    // Backtab) toggles the clip view; Ctrl+T, Ctrl+Shift+T, Ctrl+Alt+T, Ctrl+G.
+    void shortcuts() {
+        key(Qt::Key_T, Qt::ControlModifier);
+        key(Qt::Key_T, Qt::ControlModifier | Qt::ShiftModifier);
+        key(Qt::Key_T, Qt::ControlModifier | Qt::AltModifier);
+        QCOMPARE(project().tracks().size(), size_t(2));
+        QCOMPARE(project().returns().size(), size_t(1));
+        key(Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(project().returns().size(), size_t(0));
+        key(Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(project().returns().size(), size_t(1));
+        key(Qt::Key_Z, Qt::ControlModifier);
+        key(Qt::Key_Y, Qt::ControlModifier);
+        QCOMPARE(project().returns().size(), size_t(1));
+
+        // Backspace: the selected tracks go (the track header was clicked).
+        selection().selectTrack(project().tracks()[0].id, true);
+        key(Qt::Key_Backspace);
+        QCOMPARE(project().tracks().size(), size_t(1));
+        QVERIFY(project().tracks()[0].isMidi());
+
+        selection().selectTrack(project().tracks()[0].id, true);
+        key(Qt::Key_M, Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(project().tracks()[0].clips.size(), size_t(1));
+        auto* clipView = item(QStringLiteral("clipView"));
+        QTRY_VERIFY(clipView->isVisible());
+        window_->contentItem()->forceActiveFocus();
+        key(Qt::Key_Backtab, Qt::ShiftModifier);
+        QVERIFY(!clipView->isVisible());
+
+        key(Qt::Key_Equal);  // (Zoom In's other key: the arrangement's, none here)
+        selection().clear();  // (the new clip was selected: a time range, which it fills)
+        selection().selectTrack(project().tracks()[0].id, true);
+        selection().setInsert(8.0);
+        key(Qt::Key_D, Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(project().tracks()[0].clips.size(), size_t(2));
+        QTRY_VERIFY(clipView->isVisible());
+        QMetaObject::invokeMethod(clipView, "closeRequested");
+    }
+
     // Edit › Rename: the session picks what; the view renames it in place (the
     // placeholders can't: the status line says so).
     void rename() {
