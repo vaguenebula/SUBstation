@@ -353,7 +353,7 @@ private Q_SLOTS:
 
     void rReversesTheSelectedAudioClipsAndAgainPutsThemBack() {
         TempDir dir;
-        qputenv("SUBSTATION_RECORDINGS", dir.path(QStringLiteral("Recordings")).toUtf8());
+        const test::ScopedEnv recordings("SUBSTATION_RECORDINGS", dir.path(QStringLiteral("Recordings")));
         SessionFixture f(true);
         Session& s = f.s();
         std::vector<float> ramp(2 * kRate);  // rises from 0 to 1 over 2 s (4 beats)
@@ -406,12 +406,11 @@ private Q_SLOTS:
         QCOMPARE(clips[1].startBeat, 1.0);
         QCOMPARE(QDir(dir.path(QStringLiteral("Recordings/Reversed"))).entryList(QDir::Files).size(), 1);
         QVERIFY(std::abs(clips[1].offsetSec - 1.0) < 1e-9);  // it played seconds 0.5-1: 1-1.5 of the copy
-        qunsetenv("SUBSTATION_RECORDINGS");
     }
 
     void aReversedCopySavedWithTheProjectIsUsedAgain() {
         TempDir dir;
-        qputenv("SUBSTATION_RECORDINGS", dir.path(QStringLiteral("Recordings")).toUtf8());
+        const test::ScopedEnv recordings("SUBSTATION_RECORDINGS", dir.path(QStringLiteral("Recordings")));
         SessionFixture f(true);
         Session& s = f.s();
         std::vector<float> ramp(kRate);
@@ -432,12 +431,11 @@ private Q_SLOTS:
         s.reverseClips();
         QCOMPARE(f.project().track(other[0].trackId).clips[0].path, copy);
         QCOMPARE(QDir(QFileInfo(copy).path()).entryList(QDir::Files), QStringList{QStringLiteral("ramp R.wav")});
-        qunsetenv("SUBSTATION_RECORDINGS");
     }
 
     void longClipsReverseInTheBackground() {
         TempDir dir;
-        qputenv("SUBSTATION_RECORDINGS", dir.path(QStringLiteral("Recordings")).toUtf8());
+        const test::ScopedEnv recordings("SUBSTATION_RECORDINGS", dir.path(QStringLiteral("Recordings")));
         SessionFixture f(true);
         Session& s = f.s();
         s.arrangement()->setReverseInPlaceSeconds(0.0);  // (any clip is "long" here)
@@ -483,7 +481,6 @@ private Q_SLOTS:
         for (qint64 i = 0; i < source.frames(); i += 9973) {
             QCOMPARE(backwards.channelData(1)[i], source.channelData(1)[source.frames() - 1 - i]);
         }
-        qunsetenv("SUBSTATION_RECORDINGS");
     }
 
     void reverseInTheMenuFollowsTheSelectedArea() {

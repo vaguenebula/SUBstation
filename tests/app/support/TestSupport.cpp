@@ -54,6 +54,19 @@ void prepareApplication() {
     qputenv("SUBSTATION_RECORDINGS", (runFolder(QStringLiteral("sub-recordings")) + QStringLiteral("/Recordings")).toUtf8());
 }
 
+ScopedEnv::ScopedEnv(const char* name, const QString& value)
+    : name_(name), before_(qgetenv(name)), was_(qEnvironmentVariableIsSet(name)) {
+    qputenv(name, value.toUtf8());
+}
+
+ScopedEnv::~ScopedEnv() {
+    if (was_) {
+        qputenv(name_, before_);
+    } else {
+        qunsetenv(name_);
+    }
+}
+
 TempDir::TempDir() : dir_(QDir::tempPath() + QStringLiteral("/sub-test-XXXXXX")) {}
 
 QString TempDir::path(const QString& name) const { return dir_.filePath(name); }

@@ -72,16 +72,17 @@ class TestSessionRenders : public QObject {
 
 private:
     std::unique_ptr<TempDir> recordings_;
+    std::unique_ptr<test::ScopedEnv> recordingsEnv_;
 
 private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
     void init() {
         QSettings().clear();
         recordings_ = std::make_unique<TempDir>();
-        qputenv("SUBSTATION_RECORDINGS", recordings_->path().toUtf8());
+        recordingsEnv_ = std::make_unique<test::ScopedEnv>("SUBSTATION_RECORDINGS", recordings_->path());
     }
     void cleanup() {
-        qunsetenv("SUBSTATION_RECORDINGS");
+        recordingsEnv_.reset();
         recordings_.reset();
     }
 
