@@ -18,7 +18,7 @@ Item {
     readonly property alias addButton: addButton
 
     implicitWidth: 420 - 2  // RACK_WIDTH
-    implicitHeight: 6 + Math.max(macroGrid.implicitHeight, 60) + 4
+    implicitHeight: 6 + Math.max(macroGrid.implicitHeight, 60) + 6
 
     RackChains {
         id: rackChains
@@ -56,7 +56,7 @@ Item {
         x: macroGrid.x + macroGrid.width + 12
         y: 6
         width: body.width - x - 8
-        height: body.height - y - 4
+        height: body.height - y - 6
         color: Theme.panel
         border.color: Theme.border
 

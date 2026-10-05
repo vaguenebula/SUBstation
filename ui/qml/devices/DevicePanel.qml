@@ -20,8 +20,8 @@ import SUBstation
 //   and Ctrl+G act on its devices).
 // - statusMessage(text): what it has to say beyond what Session.statusMessage
 //   says (the device selection's messages go there).
-// - implicitHeight: the height it needs (the tallest device, a page of knobs
-//   with page arrows, and room for editors' graphs); it never scrolls
+// - implicitHeight: the height it needs (the tallest device: a page of knobs
+//   with page arrows; editors' graphs take that height); it never scrolls
 //   vertically.
 //
 // Clicking beside the devices deselects them but keeps the focus here (Ctrl+V
@@ -42,9 +42,11 @@ Rectangle {
     readonly property alias presetNameDialog: nameDialog
     readonly property alias presetReplaceDialog: replaceDialog
     readonly property int panelMargin: 8  // PANEL_MARGIN: above and below the chain
-    readonly property int extraHeight: 12  // EXTRA_HEIGHT: what the devices get beyond the tallest's need
-    // The tallest device: its border, a title bar, a page of knobs in two rows.
-    readonly property int deviceHeight: 2 + Math.max(16, titleMetrics.height) + 4 + 6 + 2 * probe.implicitHeight + 6 + 4
+    // The tallest device: its border, a title bar, a page of knobs in two rows
+    // with 6 px above and below them (a body's margins: its content is as far
+    // from the title bar as from the bottom edge). Every device is this tall;
+    // an editor's graphs take the height there is.
+    readonly property int deviceHeight: 2 + Math.max(16, titleMetrics.height) + 4 + 6 + 2 * probe.implicitHeight + 6 + 6
 
     // Ctrl+R on a rack's chain: its name edited in place (false: it isn't shown).
     function startChainRename(rackId, chainId) {
@@ -243,7 +245,7 @@ Rectangle {
         vst3SaveDialog.open()
     }
 
-    implicitHeight: 2 * panelMargin + deviceHeight + extraHeight + Theme.scrollBarWidth
+    implicitHeight: 2 * panelMargin + deviceHeight
     color: Theme.panel
 
     // A BORDER line above it.

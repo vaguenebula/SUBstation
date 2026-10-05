@@ -90,7 +90,7 @@ Item {
         x: graph.width + 8
         y: 5
         width: 162
-        height: editor.height - 5 - 4
+        height: editor.height - 5 - 5
     }
 
     EqGraphMenus {

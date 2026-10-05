@@ -62,10 +62,6 @@ using sub::app::test::kSampleRate;
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
-// The device's body in the device view: the tallest device's (two rows of knobs and their names),
-// and the room the view leaves editors' graphs (EXTRA_HEIGHT).
-constexpr int kBodyHeight = 156;
-
 // The host's QML (at the end of the file: moc skips what follows a raw string).
 extern const char* const kHost;
 
@@ -156,8 +152,14 @@ class TestUiDeviceEditors : public QObject {
         return device && device->params.contains(paramId) ? device->params.value(paramId) : otherwise;
     }
 
-    // Shows a device's editor (DeviceEditors's component for its kind), the body's size; the editor.
-    QQuickItem* show(const QString& kind, const QString& trackId, const QString& deviceId, int height = kBodyHeight) {
+    // The device's body in the device view: the tallest device's (two rows of knobs and their names,
+    // 6 px above and below them), as the host measures it.
+    int bodyHeight() const { return root_->property("deviceBodyHeight").toInt(); }
+
+    // Shows a device's editor (DeviceEditors's component for its kind), the body's size (the device
+    // view's by default); the editor.
+    QQuickItem* show(const QString& kind, const QString& trackId, const QString& deviceId, int height = 0) {
+        if (height <= 0) height = bodyHeight();
         QVariant url;
         QMetaObject::invokeMethod(root_.get(), "editorFor", Q_RETURN_ARG(QVariant, url), Q_ARG(QVariant, kind));
         if (url.toString().isEmpty())
@@ -384,7 +386,7 @@ private Q_SLOTS:
         // Every knob at once.
         const QList<QQuickItem*> cells = itemsNamed(view, QStringLiteral("param_"));
         QCOMPARE(cells.size(), 7);
-        QVERIFY(view->implicitHeight() <= kBodyHeight);  // fits the view
+        QVERIFY(view->implicitHeight() <= bodyHeight());  // fits the view
 
         // Its knobs edit the model as the generic ones do (undoably).
         auto* graph = find<ReductionGraph>(view, QStringLiteral("reductionGraph"));
@@ -430,7 +432,7 @@ private Q_SLOTS:
         QCOMPARE(lists, QStringList{"loop"});
         auto* root = find(view, QStringLiteral("param_root"));
         QCOMPARE(qvariant_cast<sub::ui::DeviceParam*>(root->property("param"))->text(), QStringLiteral("C3"));
-        QVERIFY(view->implicitHeight() <= kBodyHeight);  // fits the view
+        QVERIFY(view->implicitHeight() <= bodyHeight());  // fits the view
         QCOMPARE(samples->samplePath(), QString());
         save(grab(), QStringLiteral("sampler-empty.png"));  // the hint to drop a sample
 
@@ -525,7 +527,7 @@ private Q_SLOTS:
         const QString device = editor()->addDevice(track, QStringLiteral("delay"));
         QQuickItem* view = show(QStringLiteral("delay"), track, device);
         QVERIFY(view);
-        QVERIFY(view->implicitHeight() <= kBodyHeight);  // fits the view
+        QVERIFY(view->implicitHeight() <= bodyHeight());  // fits the view
         auto value = [&](const char* id) { return param(track, device, QString::fromLatin1(id)); };
         auto button = [&](const QString& name) {
             QQuickItem* item = find(view, name);
@@ -607,7 +609,7 @@ private Q_SLOTS:
         const QString device = editor()->addDevice(track, QStringLiteral("eq"));
         QQuickItem* view = show(QStringLiteral("eq"), track, device);
         QVERIFY(view);
-        QVERIFY(view->implicitHeight() <= kBodyHeight);  // fits the view
+        QVERIFY(view->implicitHeight() <= bodyHeight());  // fits the view
         auto* graph = find<EqGraph>(view, QStringLiteral("eqGraph"));
         auto* panel = qvariant_cast<QQuickItem*>(view->property("panel"));
         QVERIFY(graph && panel);
@@ -834,7 +836,7 @@ private Q_SLOTS:
     void sidechain() {
         auto [kickTrack, bassTrack, device, view] = kickAndBass();
         QVERIFY(view);
-        QVERIFY(view->implicitHeight() <= kBodyHeight);  // fits the view
+        QVERIFY(view->implicitHeight() <= bodyHeight());  // fits the view
         auto* graph = find<CurveGraph>(view, QStringLiteral("curveGraph"));
         QVERIFY(graph);
         auto value = [&](const QString& id) { return param(bassTrack, device, id); };
@@ -1286,8 +1288,16 @@ Window {
         }
     }
 
+    // The body of the device view's tallest device: two rows of knobs (a hidden one measured),
+    // 6 px apart, 6 px above and below them (DevicePanel's deviceHeight, less the frame and title bar).
+    readonly property int deviceBodyHeight: 6 + 2 * probe.implicitHeight + 6 + 6
+    DeviceParamKnob {
+        id: probe
+        visible: false
+    }
+
     // The body's size, which the window follows (as the X server resizes it: later).
-    property int bodyHeight: 156
+    property int bodyHeight: deviceBodyHeight
     readonly property int bodyWidth: loader.item ? loader.item.implicitWidth : 198
 
     width: bodyWidth + 2

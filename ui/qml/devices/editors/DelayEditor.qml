@@ -29,7 +29,7 @@ Item {
     // The device's body: 2 * SIDE_WIDTH + LINK_WIDTH + GRAPH_WIDTH + MODE_WIDTH + RIGHT_WIDTH + 4 * SPACING + 18,
     // less the frame's border.
     implicitWidth: 2 * sideWidth + linkWidth + graphWidth + modeWidth + rightWidth + 4 * spacing + 18 - 2
-    implicitHeight: 6 + Math.max(leftSide.implicitHeight, rightColumn.implicitHeight, 120) + 4
+    implicitHeight: 6 + Math.max(leftSide.implicitHeight, rightColumn.implicitHeight, 120) + 6
 
     // The parameters, by id.
     readonly property var params: {
@@ -155,7 +155,7 @@ Item {
         id: content
         x: 8
         y: 6
-        height: editor.height - 10
+        height: editor.height - 12
         spacing: editor.spacing
 
         Row {

@@ -7,7 +7,8 @@
 // the device's menu and the one beside the devices, Shift+wheel and
 // Ctrl+Alt-drag, a drag held near an edge scrolling the chain, dragging a
 // device (its drag's payload), dropping devices moved and devices from the
-// browser, scrolling to a device added. Driven in a window with a real session,
+// browser, scrolling to a device added; a device's content as far from its
+// title bar as from its bottom. Driven in a window with a real session,
 // with synthesized mouse, key and drag events; the project and the selection
 // checked. With SUBSTATION_UI_SCREENSHOTS set, screenshots go there.
 
@@ -21,7 +22,9 @@
 #include <QTimer>
 #include <QUndoStack>
 
+#include <functional>
 #include <memory>
+#include <utility>
 
 #include "DevicePanelTestSupport.h"
 #include "TestSupport.h"
@@ -141,9 +144,48 @@ private Q_SLOTS:
         ui_.polish();
         QVERIFY(hint->isVisible() && frame(effect));
         QVERIFY(hint->mapToScene(QPointF()).x() > frame(effect)->mapToScene(QPointF()).x() + 216);
-        // The panel is as tall as the tallest device wants, and room for editors' graphs.
-        QCOMPARE(int(ui_.panel()->implicitHeight()),
-                 2 * 8 + ui_.panel()->property("deviceHeight").toInt() + 12 + 12);
+        // The panel is as tall as the tallest device wants.
+        QCOMPARE(int(ui_.panel()->implicitHeight()), 2 * 8 + ui_.panel()->property("deviceHeight").toInt());
+    }
+
+    // A device's content is as far from its title bar as from its bottom edge:
+    // 6 px above and below the tallest device's page of knobs (two rows), an
+    // editor's graph, a rack's chain list.
+    void aDevicesContentIsAsFarFromItsTitleBarAsFromItsBottom() {
+        const QString track = editor().addAudioTrack();
+        session().selection()->selectTrack(track);
+        const QString utility = editor().addDevice(track, QStringLiteral("utility"));
+        const QString compressor = editor().addDevice(track, QStringLiteral("compressor"));
+        const QString grouped = editor().addDevice(track, QStringLiteral("utility"));
+        const QString rack = editor().groupDevices(track, {grouped});
+        ui_.polish();
+        // Above and below `rect` (in the frame's coordinates), inside its frame and under its title bar.
+        auto margins = [&](const QString& id, const QRectF& rect) {
+            QQuickItem* header = partOf(id, "header");
+            return std::make_pair(rect.top() - (header->y() + header->height()), frame(id)->height() - 1 - rect.bottom());
+        };
+        auto inFrame = [&](const QString& id, QQuickItem* item) {
+            return item->mapRectToItem(frame(id), item->boundingRect());
+        };
+        // The utility's knobs, two rows of them.
+        QRectF knobs;
+        std::function<void(QQuickItem*)> addKnobs = [&](QQuickItem* item) {
+            for (QQuickItem* child : item->childItems()) {
+                if (child->isVisible() && child->objectName().startsWith(QStringLiteral("param_")))
+                    knobs |= inFrame(utility, child);
+                addKnobs(child);
+            }
+        };
+        addKnobs(frame(utility));
+        QVERIFY(knobs.height() > 2 * 34);
+        QCOMPARE(margins(utility, knobs), std::make_pair(6.0, 6.0));
+        auto* graph = test::itemNamed(frame(compressor), QStringLiteral("reductionGraph"));
+        QVERIFY(graph);
+        QCOMPARE(margins(compressor, inFrame(compressor, graph)), std::make_pair(6.0, 6.0));
+        auto* list = test::itemNamed(frame(rack), QStringLiteral("chainList"));
+        QVERIFY(list);
+        QCOMPARE(margins(rack, inFrame(rack, list)), std::make_pair(6.0, 6.0));
+        ui_.screenshot(QStringLiteral("margins"));
     }
 
     void devicesWithEditorsOfTheirOwn() {

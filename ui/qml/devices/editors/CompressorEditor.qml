@@ -14,7 +14,7 @@ Item {
 
     // The device's body: DEVICE_WIDTH + 2 * (PARAM_WIDTH + 16) + 12 + GRAPH_WIDTH, less the frame's border.
     implicitWidth: 216 + 2 * (84 + 16) + 12 + 232 - 2
-    implicitHeight: 6 + Math.max(knobs.implicitHeight, graph.implicitHeight) + 4
+    implicitHeight: 6 + Math.max(knobs.implicitHeight, graph.implicitHeight) + 6
 
     DeviceParams {
         id: params
@@ -52,7 +52,7 @@ Item {
         x: editor.width - 8 - width
         y: 6
         width: 232
-        height: Math.max(implicitHeight, editor.height - 10)
+        height: Math.max(implicitHeight, editor.height - 12)
 
         HoverHandler {
             id: hover

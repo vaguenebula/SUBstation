@@ -23,7 +23,7 @@ Item {
     readonly property alias message: message
 
     implicitWidth: 216 - 2
-    implicitHeight: grid.y + grid.implicitHeight + 4
+    implicitHeight: grid.y + grid.implicitHeight + 6
 
     PluginParams {
         id: params
