@@ -59,6 +59,9 @@ sub_project_warnings(sub_ui)
 # The application.
 qt_add_executable(substation main.cpp)
 target_link_libraries(substation PRIVATE sub_ui sub_uiplugin)
+if (WIN32)
+    target_link_libraries(substation PRIVATE shell32)  # SetCurrentProcessExplicitAppUserModelID
+endif()
 add_dependencies(substation substation-scan)
 set_target_properties(substation PROPERTIES WIN32_EXECUTABLE ON)
 sub_project_warnings(substation)

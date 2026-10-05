@@ -535,14 +535,11 @@ ApplicationWindow {
             SplitView.fillWidth: true
             orientation: Qt.Vertical
 
-            Placeholder {
+            ArrangementView {
                 id: arrangement
                 objectName: "arrangement"
                 SplitView.fillHeight: true
                 SplitView.minimumHeight: 120
-                color: Theme.emptyArea
-                label: qsTr("Arrangement")
-                detail: qsTr("ruler, track lanes and headers, returns, master")
             }
 
             // The device view, or the clip view while clips are open in it.
