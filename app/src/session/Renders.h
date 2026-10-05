@@ -75,6 +75,7 @@ protected:
     EngineBridge* bridge_;
 
 private:
+    void showWaiting();
     void pollDevices();
     void taskEnded();
 

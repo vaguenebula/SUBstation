@@ -30,18 +30,23 @@ bool Render::cancelled() const { return progress_->cancelled(); }
 
 void Render::waitForDevices(std::function<void(bool)> then) {
     devicesReady_ = std::move(then);
+    showWaiting();
     progress_->setBusy(true);
     pollDevices();
     if (devicesReady_) devicesTimer_.start();
 }
 
+// What it waits for: plug-ins still loading, or built-in devices' states.
+void Render::showWaiting() {
+    if (cancelled()) return;
+    const int waiting = bridge_->pluginsPending();
+    progress_->setLabel(waiting > 0 ? QStringLiteral("Loading plug-ins (%1 to go)…").arg(waiting)
+                                    : QStringLiteral("Loading devices…"));
+}
+
 void Render::pollDevices() {
     if (!devicesReady_) return;
-    if (!cancelled()) {
-        const int waiting = bridge_->pluginsPending();
-        progress_->setLabel(waiting > 0 ? QStringLiteral("Loading plug-ins (%1 to go)…").arg(waiting)
-                                        : QStringLiteral("Loading devices…"));
-    }
+    showWaiting();
     if (!cancelled() && !bridge_->devicesReady()) return;
     devicesTimer_.stop();
     progress_->setBusy(false);
