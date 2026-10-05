@@ -1,34 +1,107 @@
-# Browser benchmarks
+# Benchmarks
 
-Not part of the test suite. They make a synthetic sample library (`library_gen.py`:
-packs, categories and sub-folders of 20-150 files, names like real sample names,
-mostly WAV with some FLAC/MP3, Ableton `.asd` files and artwork beside them; the
-files are empty, the browser only reads names) once per size, in
-`%TEMP%\sub-browser-bench`, and measure on it. Nothing touches your settings, use
-counts, index or plug-ins.
+Programs to run by hand, not part of the test suite (ctest doesn't run them).
+Nothing they do touches your settings, use counts, browser index or plug-ins.
 
-```powershell
-python -m benchmarks.browser_backend_bench --size 200000 [--audio] [--json out.json]
-python -m benchmarks.browser_ui_bench --size 200000 [--audio] [--json out.json] [--code DIR]
+| | |
+|---|---|
+| [parallel_render_bench.cpp](parallel_render_bench.cpp) | Tracks rendered on one thread and on several: offline (best of three, checked bit-identical on any number of threads) and live through the fake ASIO driver. The engine alone, no Qt. |
+| [browser_backend_bench.cpp](browser_backend_bench.cpp) | The browser's backend on a large synthetic library: indexing, starting from the saved index, searches. Checks every query against the reference the tests use, and fails if any differs. |
+| [LibraryGen.h](LibraryGen.h) | Makes the synthetic sample libraries. |
+| [PyRandom.h](PyRandom.h), [Json.h](Json.h) | Python's random numbers (so a library is the one the Python generator made), and the reports as JSON. |
+
+`browser_ui_bench.py` and `display_fps_bench.py` measured the Python UI (the
+`BrowserPanel`, the device editors' displays); they are kept with their results,
+and need the Python-era tree (`browser_ui_bench.py` also imported
+`library_gen.py`, now `LibraryGen.cpp`).
+
+## Building and running
+
+The benchmarks are built with `-DSUBSTATION_BUILD_BENCHMARKS=ON` (off by
+default), into the build's `bin` folder with everything else. Always in Release.
+`browser_backend_bench` needs the application layer (Qt Core, as the tests do);
+`parallel_render_bench` needs only the engine.
+
+Linux:
+
+```sh
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
+ninja -C build parallel_render_bench browser_backend_bench
+build/bin/parallel_render_bench --tracks 32 --threads 1,2,4,8 --json parallel.json
+build/bin/browser_backend_bench --size 200000 --json backend.json
 ```
 
-- `browser_backend_bench` compares the backend alone: the Python index and search
-  from before (kept as `tests/browser_reference.py`) against the native one. It also
-  checks that every query returns the same items in the same order, and fails if not.
-- `browser_ui_bench` measures the real `BrowserPanel`: time until results are laid
-  out and painted, and the longest time the UI thread couldn't run (a 1 ms timer's
-  gaps). It only uses what the panel had before and after the native backend, so
-  `--code DIR` runs it against another copy of the `substation` package, for example
-  the one before. Commit 63776d3 predates the rename to SUBstation, so its package is
-  `src/gilstudio`: extract it (`git archive 63776d3 src/gilstudio`), rename the folder
-  to `substation`, replace `gilstudio` with `substation` in its `.py` files, and copy
-  the built `_engine*.pyd` into it (the engine didn't change).
+Windows, in a *Developer PowerShell for VS 2022* (MSVC and Ninja on the path), with
+Qt's MSVC build and, for `--live`, the ASIO SDK (see [docs/building.md](../docs/building.md)):
+
+```powershell
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON `
+      -DCMAKE_PREFIX_PATH=C:\Qt\6.8.0\msvc2022_64 -DSUBSTATION_ASIO_SDK=C:\src\asiosdk_2.3.3_2019-06-14
+ninja -C build parallel_render_bench browser_backend_bench
+build\bin\parallel_render_bench.exe --tracks 32 --live 64,256 --json parallel.json
+$env:PATH = "C:\Qt\6.8.0\msvc2022_64\bin;$env:PATH"   # browser_backend_bench runs with Qt's DLLs
+build\bin\browser_backend_bench.exe --size 200000 --audio --json backend.json
+```
+
+`--help` lists each one's options. The results below were measured with the
+Python-era builds (Python 3.12 driving the engine and the browser backend through
+the nanobind bindings, `python -m benchmarks.<name>`), before the benchmarks were
+ported to C++; the C++ programs measure the same things the same way, and print
+and write reports in the same shape.
+
+# Browser benchmarks
+
+```
+browser_backend_bench [--size 200000] [--used 500] [--audio] [--json out.json]
+```
+
+It makes a synthetic sample library ([LibraryGen.cpp](LibraryGen.cpp): packs,
+categories and sub-folders of 20-150 files, names like real sample names, mostly
+WAV with some FLAC/MP3, Ableton `.asd` files and artwork beside them; the files are
+empty, the browser only reads names) once per size, in
+`%TEMP%\sub-browser-bench\lib-<size>-1` (`$TMPDIR` or `/tmp` elsewhere), and
+measures on it. The names come from Python's random numbers, so the library is the
+same, file for file, as the Python generator made it, and one made by either is
+reused by the other. `--used` items (picked as the Python benchmark picked them)
+get a use count, so ranked searches have something to rank.
+
+It compares the backend alone with the reference: the Python index and search from
+before (`tests/browser_reference.py`), ported to C++ for the tests
+([tests/app/support/BrowserReference.h](../tests/app/support/BrowserReference.h)).
+Every query's results must be the same items in the same order; it reports which
+differ and fails (exit code 1) if any does.
+
+- Index: building it (the reference's walk; the native scan with a new index
+  file, and when its first files showed), and starting again with the saved one.
+- Query: the reference's search on the calling thread; the native search on its
+  own thread, and from asking until the results can be taken on the caller's
+  thread (polled every 0.2 ms); and making the first page (256 rows) of them. For
+  the whole library and for a pack's folder (a place), ranked and by name, for
+  `""`, `kick`, `e`, `808 bass`, `kick deep` and `zzqx`.
+- Indexing: native searches while a full rescan runs.
 - `--audio` plays an arrangement (8 tracks, half of them time-stretched) through the
   default output the whole time, silently (master gain 0). It reports the engine's
   CPU load, and how far its playhead fell behind the wall clock at worst: a late
   audio callback is a dropout and leaves the playhead behind for good.
 
+The reference's times are those of the C++ port now, not of the Python code the
+results below compare with, so its column (`reference_ms`; the Python version's
+reports had `python_ms` and `python_first_ms`) is no longer the "before". The
+native columns and the index's are the same as before.
+
+`browser_ui_bench.py` measured the real (Python) `BrowserPanel`: time until results
+are laid out and painted, and the longest time the UI thread couldn't run (a 1 ms
+timer's gaps). It only used what the panel had before and after the native
+backend, so `--code DIR` ran it against another copy of the `substation` package,
+for example the one before. Commit 63776d3 predates the rename to SUBstation, so its
+package is `src/gilstudio`: extract it (`git archive 63776d3 src/gilstudio`), rename
+the folder to `substation`, replace `gilstudio` with `substation` in its `.py`
+files, and copy the built `_engine*.pyd` into it (the engine didn't change).
+
 ## Results
+
+Measured with the Python-era builds: the Python benchmarks, `browser_ui_bench.py`
+and the Python `browser_backend_bench.py`.
 
 200 000 audio files (plus ~60 000 other files) in 2 364 folders; Windows 11, Python
 3.12, Focusrite USB (WASAPI, 10 ms buffer). Warm file-system cache. Before is commit
@@ -103,20 +176,44 @@ time as it scrolls.
 
 # Parallel track processing
 
-```powershell
-python -m benchmarks.parallel_render_bench [--tracks 32] [--device synth|ott|plugin] [--live 64,256] [--json out.json]
+```
+parallel_render_bench [--tracks 32] [--device synth|ott|plugin] [--plugin PATH --name NAME]
+    [--heavy N [--heavy-otts 8]] [--compare-ordering] [--seconds 20] [--threads 1,2,4,N]
+    [--live 64,256] [--live-seconds 5] [--json out.json]
 ```
 
 Every track plays eight-voice chords on the built-in Synth (`--device ott`: through
 an OTT; `--device plugin --plugin PATH --name NAME`: a noise clip and the notes
-through a VST3 plug-in). It renders offline (1024-frame chunks, best of three) on
-1, 2, 4 and the default number of threads, and fails if any render differs from
-the one on one thread. `--live` plays the same through the fake ASIO driver
-(tests/asio_driver) in manual mode, buffers back to back on one thread: the time
-per buffer against its length is the audio thread's load.
+through a VST3 plug-in, for example
+`--plugin build/testplugins/SUBTestPlugins.vst3 --name "SUB Test Effect"`). It
+renders offline (1024-frame chunks, best of three) on 1, 2, 4 and the default number
+of threads (or `--threads`), and fails if any render differs from the one on one
+thread. `--live` plays the same through the fake ASIO driver (tests/asio_driver) in
+manual mode, buffers back to back on one thread: the time per buffer against its
+length is the audio thread's load. The driver is built with the tests where the
+engine has ASIO (Windows, with the ASIO SDK, and `SUBSTATION_BUILD_TESTS` and
+`SUBSTATION_TEST_PLUGINS` on, as by default); elsewhere `--live` says it was
+skipped. It is Qt-free, and uses the engine tests' helpers (`tests/engine/harness`:
+WAV files, seeded random numbers, the fake driver), so its chords' roots and its
+noise are not numpy's: the same amount of work, not the same notes.
+
+On 4 cores, Linux (8 tracks, 5 s, `--threads 1,2,4`):
+
+```
+8 tracks (synth), 4 logical cores; offline, 5 s:
+ threads    order      time  x realtime  speed-up
+       1     cost    0.174s       28.7x     1.00x
+       2     cost    0.096s       52.0x     1.81x
+       4     cost    0.056s       89.4x     3.12x
+
+Live: skipped (the engine was built without the ASIO SDK)
+
+(tracks rendered on workers: 4209)
+```
 
 ## Results
 
+Measured with the Python-era build (`python -m benchmarks.parallel_render_bench`).
 Intel Core Ultra 7 270K Plus (24 logical cores, so 23 threads by default), Windows 11,
 Python 3.12. Raw reports are in `results/parallel-*.json`.
 
