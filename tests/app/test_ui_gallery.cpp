@@ -1,14 +1,13 @@
-// The look, end to end: the main window's skeleton (Main.qml) loads without a
-// QML warning and is drawn in the theme's colours; a gallery of every shared
-// control and a sample of SgPainter drawing renders. With
-// SUBSTATION_UI_SCREENSHOTS set to a folder, both are saved there as PNGs to
-// look at.
+// The look, end to end: a gallery of every shared control and a sample of
+// SgPainter drawing renders (the main window, on a session, is
+// test_ui_mainwindow's). With SUBSTATION_UI_SCREENSHOTS set to a folder, it is
+// saved there as a PNG to look at.
 
 #include <QDir>
 #include <QImage>
 #include <QPointer>
-#include <QQmlApplicationEngine>
 #include <QQmlComponent>
+#include <QQmlEngine>
 #include <QQmlContext>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -197,86 +196,6 @@ private Q_SLOTS:
             QSKIP("needs a display: the offscreen platform renders Qt Quick in software, without this geometry");
         sub::ui::setUpApplication();
         qmlRegisterType<GalleryCanvas>("Gallery", 1, 0, "GalleryCanvas");
-    }
-
-    void mainWindowLoadsCleanly() {
-        QQmlApplicationEngine engine;
-        sub::ui::setUpEngine(engine);
-        QList<QQmlError> warnings;
-        connect(&engine, &QQmlEngine::warnings, this, [&](const QList<QQmlError>& list) { warnings += list; });
-        engine.load(QUrl(QStringLiteral("qrc:/qt/qml/SUBstation/qml/Main.qml")));
-        QCOMPARE(engine.rootObjects().size(), 1);
-        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
-        QVERIFY(window);
-        QVERIFY(QTest::qWaitForWindowExposed(window));
-        window->requestActivate();  // shortcuts (Escape closing a menu too) go to the active window
-        QVERIFY(QTest::qWaitForWindowActive(window));
-        QTest::qWait(100);
-        for (const QQmlError& warning : warnings)
-            qWarning() << warning.toString();
-        QVERIFY(warnings.isEmpty());
-
-        // The layout: the views' placeholders where MainWindow had them.
-        auto* browser = window->findChild<QQuickItem*>(QStringLiteral("browser"));
-        auto* arrangement = window->findChild<QQuickItem*>(QStringLiteral("arrangement"));
-        auto* devices = window->findChild<QQuickItem*>(QStringLiteral("devicePanel"));
-        auto* transport = window->findChild<QQuickItem*>(QStringLiteral("transportBar"));
-        QVERIFY(browser && arrangement && devices && transport);
-        const QRectF b = browser->mapRectToScene(browser->boundingRect());
-        const QRectF a = arrangement->mapRectToScene(arrangement->boundingRect());
-        const QRectF d = devices->mapRectToScene(devices->boundingRect());
-        const QRectF t = transport->mapRectToScene(transport->boundingRect());
-        QCOMPARE(t.height(), 40.0);
-        QVERIFY(t.bottom() <= b.top() + 1);
-        QVERIFY(b.right() < a.left());
-        QCOMPARE(b.width(), 300.0);
-        QVERIFY(a.bottom() < d.top());
-        QCOMPARE(a.left(), d.left());
-
-        const QImage image = window->grabWindow();
-        save(image, QStringLiteral("main-window.png"));
-        const qreal dpr = window->effectiveDevicePixelRatio();
-        auto pixel = [&](qreal x, qreal y) { return image.pixel(int(x * dpr), int(y * dpr)); };
-        QVERIFY(near(pixel(window->width() - 5, 5), Theme::kPanel));                         // the menu bar
-        QVERIFY(near(pixel(window->width() - 5, window->height() - 5), Theme::kPanel));      // the status bar
-        QVERIFY(near(pixel((b.right() + a.left()) / 2, a.center().y()), Theme::kBorder));     // a split handle
-        QVERIFY(near(pixel(a.left() + 5, a.top() + 5), Theme::kEmptyArea));
-
-        // The Edit menu, open.
-        auto* editItem = qvariant_cast<QQuickItem*>(window->property("menuBar"));
-        QVERIFY(editItem);
-        QQuickItem* edit = nullptr;
-        QMetaObject::invokeMethod(editItem, "itemAt", Q_RETURN_ARG(QQuickItem*, edit), Q_ARG(int, 1));
-        QVERIFY(edit);
-        const QPointF at = edit->mapToScene(QPointF(edit->width() / 2, edit->height() / 2));
-        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, at.toPoint());
-        QTest::qWait(300);
-        const QImage withMenu = window->grabWindow();
-        save(withMenu, QStringLiteral("main-window-edit-menu.png"));
-        // The menu's PANEL_ALT shows below the menu bar.
-        QVERIFY(near(withMenu.pixel(int((at.x() + 30) * dpr), int((at.y() + 60) * dpr)), Theme::kPanelAlt) ||
-                near(withMenu.pixel(int((at.x() + 30) * dpr), int((at.y() + 60) * dpr)), Theme::kAccent));
-        QTest::keyClick(window, Qt::Key_Escape);
-        QTRY_VERIFY(!near(window->grabWindow().pixel(int((at.x() + 30) * dpr), int((at.y() + 60) * dpr)),
-                          Theme::kPanelAlt));
-
-        // The menus' shortcuts work with the menus closed; the stubs say so in the status bar.
-        auto* status = window->findChild<QQuickItem*>(QStringLiteral("statusText"));
-        QVERIFY(status);
-        QCOMPARE(status->property("text").toString(), QStringLiteral("Ready"));
-        QTest::keyClick(window, Qt::Key_S, Qt::ControlModifier | Qt::ShiftModifier);
-        QCOMPARE(status->property("text").toString(), QStringLiteral("Save As…: not connected yet"));
-        QTest::keyClick(window, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);  // Redo's other shortcut
-        QCOMPARE(status->property("text").toString(), QStringLiteral("Redo: not connected yet"));
-        // View > Browser and Device View show and hide their panes.
-        QVERIFY(browser->isVisible());
-        QTest::keyClick(window, Qt::Key_B, Qt::ControlModifier | Qt::AltModifier);
-        QVERIFY(!browser->isVisible());
-        QTest::keyClick(window, Qt::Key_B, Qt::ControlModifier | Qt::AltModifier);
-        QVERIFY(browser->isVisible());
-        QTest::keyClick(window, Qt::Key_L, Qt::ControlModifier | Qt::AltModifier);
-        QVERIFY(!devices->isVisible());
-        QVERIFY(warnings.isEmpty());
     }
 
     void gallery() {
