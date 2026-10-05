@@ -1,5 +1,7 @@
 #include "devices/DeviceCanvas.h"
 
+#include "devices/DisplayClock.h"
+
 #include "audio/BridgeTypes.h"
 #include "audio/EngineBridge.h"
 #include "editor/ProjectEditor.h"
@@ -96,7 +98,7 @@ void DeviceCanvas::connectSession() {
         if (following_)
             doSync();
     });
-    connections_ << connect(bridge, &EngineBridge::metersUpdated, this, [this] {
+    connections_ << connect(DisplayClock::instance(), &DisplayClock::tick, this, [this] {
         if (alive_ && isVisible() && window())
             refreshDisplays();
     });

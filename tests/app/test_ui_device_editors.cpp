@@ -38,6 +38,7 @@
 #include "controls/ValueBoxItem.h"
 #include "devices/CurveGraph.h"
 #include "devices/DeviceParam.h"
+#include "devices/DisplayClock.h"
 #include "devices/EqGraph.h"
 #include "devices/EqView.h"
 #include "devices/FilterGraph.h"
@@ -214,8 +215,8 @@ class TestUiDeviceEditors : public QObject {
         return qvariant_cast<QQuickWindow*>(window);
     }
 
-    // The meters updated: what the editors read from the engine's displays as the view refreshes.
-    void refreshDisplays() { Q_EMIT bridge()->metersUpdated(); }
+    // The displays' clock ticked: what the editors read from the engine's displays as the view refreshes.
+    void refreshDisplays() { Q_EMIT sub::ui::DisplayClock::instance()->tick(); }
 
     // A MIDI track whose instrument is a Sampler, its editor shown: (track, device, editor, its waveform).
     std::tuple<QString, QString, QQuickItem*, SampleView*> sampler() {

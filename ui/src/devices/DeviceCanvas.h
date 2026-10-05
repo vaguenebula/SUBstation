@@ -16,8 +16,8 @@
 //   automation.
 // - readDisplay(): what the device's processor published for its editor since
 //   the last call (EngineBridge::readProcessorDisplay), a position kept per
-//   processor and display. refreshDisplays() is called as the meters update
-//   (EngineBridge::metersUpdated), only while the item is visible.
+//   processor and display. refreshDisplays() is called about 60 times a second
+//   (DisplayClock), only while the item is visible.
 
 #include "sg/SgCanvas.h"
 

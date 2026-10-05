@@ -676,6 +676,29 @@ private Q_SLOTS:
     // The actions' other keys: Ctrl+Shift+Z redoes, Backspace deletes,
     // Ctrl+Shift+M inserts a MIDI clip, Shift+Tab (as a keyboard sends it:
     // Backtab) toggles the clip view; Ctrl+T, Ctrl+Shift+T, Ctrl+Alt+T, Ctrl+G.
+    // The computer MIDI keyboard's keys play while it is on, even those that are
+    // the window's shortcuts (S: solo, A: automation).
+    void computerKeyboardKeysBeforeShortcuts() {
+        session().newProject();
+        trigger(QStringLiteral("insertAudioTrack"));
+        const QString track = project().tracks()[0].id;
+        selection().selectTrack(track, true);
+        QList<QList<int>> sent;
+        session().computerKeyboard()->setSender([&](const QList<int>& message) { sent << message; });
+        session().computerKeyboard()->setEnabled(true);
+        key(Qt::Key_S);
+        key(Qt::Key_A);
+        QVERIFY(!project().track(track).solo);
+        QVERIFY(!project().automationView(track).shown);
+        QCOMPARE(sent.size(), 4);  // D and C, each on and off
+        QCOMPARE(sent[0][0] & 0xF0, 0x90);
+        QCOMPARE(sent[1][0] & 0xF0, 0x80);
+        session().computerKeyboard()->setEnabled(false);
+        session().computerKeyboard()->setSender(nullptr);
+        key(Qt::Key_S);  // off: the shortcut
+        QVERIFY(project().track(track).solo);
+    }
+
     void shortcuts() {
         key(Qt::Key_T, Qt::ControlModifier);
         key(Qt::Key_T, Qt::ControlModifier | Qt::ShiftModifier);

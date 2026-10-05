@@ -148,8 +148,11 @@ bool ComputerKeyboard::handles(const QKeyEvent* event) const {
 bool ComputerKeyboard::eventFilter(QObject* watched, QEvent* event) {
     const QEvent::Type type = event->type();
     if (type == QEvent::ShortcutOverride) {
-        if (handles(static_cast<QKeyEvent*>(event))) event->accept();  // the key comes as a key press, not a shortcut
-        return false;
+        // The key comes as a key press, not as the window's shortcut (A, S...). Taken
+        // here: a Qt Quick item given the event would set it back to ignored.
+        if (!handles(static_cast<QKeyEvent*>(event))) return false;
+        event->accept();
+        return true;
     }
     if (type == QEvent::KeyPress || type == QEvent::KeyRelease) {
         const auto* key = static_cast<QKeyEvent*>(event);
