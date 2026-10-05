@@ -551,21 +551,26 @@ private Q_SLOTS:
         const QString synth = chain(track).front();
         ui_.polish();
         QSignalSpy starting(area(), &sub::ui::DeviceChainArea::dragStarting);
-        // (The drag runs once the press's handlers have returned, while the button is held; Escape ends it.)
+        // (The drag runs once the press's handlers have returned, while the button is held; Escape ends it.
+        // On Windows it would run in Windows' own drag loop, which only hears the real mouse and
+        // keyboard, so it could never end there: the button goes up as it starts, and none runs.)
         bool dragRan = false;
-        QObject::connect(area(), &sub::ui::DeviceChainArea::dragStarting, this, [this, &dragRan] {
-            QTimer::singleShot(150, this, [this, &dragRan] {
-                dragRan = area()->findChild<QDrag*>() != nullptr;
-#ifdef Q_OS_WIN
-                QDrag::cancel();  // (Windows' own drag loop hears the real keyboard, not the test's Escape)
-#else
-                QTest::keyClick(window(), Qt::Key_Escape);
-#endif
-            });
-        });
         clickTitle(ids[0]);
         clickTitle(ids[1], Qt::ShiftModifier);
         const QPoint from = centerOf(ids[0], "title");
+        bool letGo = false;  // (Windows: the first drag's button went up as it started)
+        QObject::connect(area(), &sub::ui::DeviceChainArea::dragStarting, this, [this, &dragRan, &letGo, from] {
+#ifdef Q_OS_WIN
+            Q_UNUSED(dragRan);
+            if (!std::exchange(letGo, true)) test::release(window(), from + QPoint(30, 0));
+#else
+            Q_UNUSED(letGo);
+            QTimer::singleShot(150, this, [this, &dragRan] {
+                dragRan = area()->findChild<QDrag*>() != nullptr;
+                QTest::keyClick(window(), Qt::Key_Escape);
+            });
+#endif
+        });
         test::press(window(), from);
         test::moveTo(window(), from + QPoint(3, 0));  // not yet: less than the start distance
         QCOMPARE(starting.count(), 0);
@@ -574,11 +579,13 @@ private Q_SLOTS:
         QCOMPARE(starting[0][0].toString(), track);
         QCOMPARE(starting[0][1].toStringList(), (QStringList{ids[0], ids[1]}));  // the selected ones
         QTest::qWait(400);  // (the drag ran, and was called off)
-#ifndef Q_OS_WIN  // (there Windows' own drag loop runs it, and its QDrag isn't the area's child)
+#ifndef Q_OS_WIN
         QVERIFY(dragRan);
 #endif
         QVERIFY(!area()->findChild<QDrag*>());
+#ifndef Q_OS_WIN
         test::release(window(), from + QPoint(30, 0));
+#endif
         QCOMPARE(devices().selected(), (QStringList{ids[0], ids[1]}));
         // Let go before the drag could start: none starts.
         dragRan = false;
