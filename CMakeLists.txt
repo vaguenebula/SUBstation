@@ -22,6 +22,7 @@ endif()
 
 option(SUBSTATION_BUILD_APP "Build the application and its UI (needs Qt 6.4 or newer)" ON)
 option(SUBSTATION_BUILD_TESTS "Build the tests" ON)
+option(SUBSTATION_BUILD_BENCHMARKS "Build the benchmarks (benchmarks/: run by hand, not by ctest)" OFF)
 option(SUBSTATION_TEST_PLUGINS "Build the VST3 plug-ins and the ASIO driver the tests use" ON)
 option(SUBSTATION_ASIO "Build ASIO support (needs Steinberg's ASIO SDK: see docs/building.md)" ON)
 
@@ -48,4 +49,9 @@ endif()
 if (SUBSTATION_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# After the tests: the benchmarks use the fake ASIO driver they build.
+if (SUBSTATION_BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
 endif()
