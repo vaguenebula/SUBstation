@@ -568,6 +568,13 @@ void Project::setDeviceState(const QString& trackId, const QString& deviceId, co
     Q_EMIT deviceStateChanged(trackId, deviceId);
 }
 
+void Project::storePluginState(const QString& trackId, const QString& deviceId, const QString& state,
+                               const QString& pluginPath) {
+    Device& device = deviceRef(trackId, deviceId);
+    device.state = state;
+    if (device.plugin && device.plugin->path != pluginPath) device.plugin->path = pluginPath;  // found elsewhere
+}
+
 void Project::setDevicesFolded(const QString& trackId, const QSet<QString>& deviceIds, bool folded) {
     const QSet<QString> before = foldedDevices_;
     if (folded) {

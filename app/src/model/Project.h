@@ -309,6 +309,12 @@ public:
     void setDeviceEnabled(const QString& trackId, const QString& deviceId, bool enabled);
     void setDeviceSidechain(const QString& trackId, const QString& deviceId, const std::optional<Sidechain>& sidechain);
     void setDeviceState(const QString& trackId, const QString& deviceId, const std::optional<QString>& state);
+    // A plug-in device's state as its plug-in has it now (base64), and where the
+    // plug-in was found, kept in the model without a signal or an undo step: it
+    // isn't an edit (the engine has that state already), only what saving or
+    // copying the device needs (EngineBridge::storePluginStates).
+    void storePluginState(const QString& trackId, const QString& deviceId, const QString& state,
+                          const QString& pluginPath);
     // Fold or unfold devices of a track (view state: not undone).
     void setDevicesFolded(const QString& trackId, const QSet<QString>& deviceIds, bool folded);
     // Devices shown folded from now on, without a signal: devices about to be
