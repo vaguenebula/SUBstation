@@ -600,4 +600,3 @@ private:
 
 }  // namespace sub::app
 
-Q_DECLARE_METATYPE(std::vector<sub::app::RecordedTake>)

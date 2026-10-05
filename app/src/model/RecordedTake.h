@@ -3,6 +3,7 @@
 // (EngineBridge::takesRecorded), and the editor makes them clips in one undo
 // step (ProjectEditor::addRecordings).
 
+#include <QMetaType>
 #include <QString>
 #include <QtGlobal>
 
@@ -34,3 +35,6 @@ struct RecordedTake {
 };
 
 }  // namespace sub::app
+
+// The bridge's takesRecorded signal carries them across queued connections.
+Q_DECLARE_METATYPE(std::vector<sub::app::RecordedTake>)
