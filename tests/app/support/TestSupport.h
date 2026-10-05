@@ -17,8 +17,9 @@ namespace sub::app::test {
 inline constexpr int kSampleRate = 48000;
 
 // Call first (initTestCase): the application is "SUBstation Tests", so tests
-// never touch the user's settings, and the folders the application keeps things
-// in (the preset library, the browser's index, plug-in caches, recordings) are
+// never touch the user's settings (each test executable keeps its own, in a
+// temporary folder), and the folders the application keeps things in (the
+// preset library, the browser's index, plug-in caches, recordings) are
 // temporary ones.
 void prepareApplication();
 
