@@ -63,6 +63,11 @@ protected:
 
     QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
+    // A press the item takes keeps the mouse till it is let go: a Flickable (or
+    // list) around it (the clip view's controls, a rack's chains) doesn't take a
+    // knob's or a graph's drag over as a scroll once it passes the drag
+    // distance, as no scroll area took a widget's drag.
+    bool event(QEvent* event) override;
 
 private:
     std::unique_ptr<SgRecording> recording_;

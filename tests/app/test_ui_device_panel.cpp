@@ -556,7 +556,11 @@ private Q_SLOTS:
         QObject::connect(area(), &sub::ui::DeviceChainArea::dragStarting, this, [this, &dragRan] {
             QTimer::singleShot(150, this, [this, &dragRan] {
                 dragRan = area()->findChild<QDrag*>() != nullptr;
+#ifdef Q_OS_WIN
+                QDrag::cancel();  // (Windows' own drag loop hears the real keyboard, not the test's Escape)
+#else
                 QTest::keyClick(window(), Qt::Key_Escape);
+#endif
             });
         });
         clickTitle(ids[0]);

@@ -145,6 +145,7 @@ FocusScope {
 
             Flickable {
                 id: controls
+                objectName: "audioControls"
                 width: 260
                 height: parent.height
                 contentWidth: width

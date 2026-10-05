@@ -145,6 +145,15 @@ QSGNode* SgCanvas::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
     return root;
 }
 
+bool SgCanvas::event(QEvent* event) {
+    const bool handled = QQuickItem::event(event);
+    if (event->type() == QEvent::MouseButtonPress && event->isAccepted())
+        setKeepMouseGrab(true);
+    else if (event->type() == QEvent::MouseButtonRelease)
+        setKeepMouseGrab(false);
+    return handled;
+}
+
 void SgCanvas::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {
     QQuickItem::geometryChange(newGeometry, oldGeometry);
     if (newGeometry.size() != oldGeometry.size())

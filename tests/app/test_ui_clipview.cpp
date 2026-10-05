@@ -8,8 +8,6 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
-#include <QCursor>
-#include <QScreen>
 #include <QTest>
 #include <QUndoStack>
 
@@ -120,17 +118,7 @@ class TestUiClipView : public QObject {
     }
 
     // Turns a knob by dragging it up `pixels` (600 for its whole range), in two moves.
-    // Before dragging a knob or a value box: on Windows the real cursor goes off the
-    // window. Hiding it for the drag, Windows sends the window under it a move with the
-    // real buttons (none), which Qt takes for a release.
-    void realCursorAway() {
-#ifdef Q_OS_WIN
-        QCursor::setPos(window_->screen()->geometry().topLeft());
-#endif
-    }
-
     void turn(const char* name, int pixels) {
-        realCursorAway();
         const QPoint center = test::centerOf(knob(name));
         test::press(window_, center);
         test::moveTo(window_, center - QPoint(0, pixels / 2));
@@ -259,7 +247,6 @@ private Q_SLOTS:
         QVERIFY(!item("warp")->property("checked").toBool());
         // A clip held at a limit keeps its offset to the others when the knob comes back.
         const QPoint center = test::centerOf(knob("transpose"));
-        realCursorAway();
         test::press(window_, center);
         test::moveTo(window_, center - QPoint(0, 275));  // +44 semitones: the second clip stops at +48
         QCOMPARE(clip(1).transpose, 48);
@@ -328,7 +315,6 @@ private Q_SLOTS:
         // Dragging the segment BPM box sets it (one undo step a drag).
         const int depth = undo().count();
         const QPoint box = test::centerOf(item("segmentBpm"));
-        realCursorAway();
         test::press(window_, box);
         test::moveTo(window_, box - QPoint(0, 20));
         test::moveTo(window_, box - QPoint(0, 40));
@@ -339,6 +325,23 @@ private Q_SLOTS:
         // ...kept within 20 to 999 BPM by :2 and ×2.
         for (int i = 0; i < 6; ++i) test::click(window_, test::centerOf(item("halveBpm")));
         QCOMPARE(clip(0).segmentBpm, 20.0);
+    }
+
+    // The controls scroll when the view is short; a knob's drag stays the knob's
+    // (it isn't taken over as a scroll once past the drag distance).
+    void aKnobsDragIsntTakenOverByTheScrollingControls() {
+        threeTracks();
+        open({clips_[0]});
+        const int height = window_->height();
+        window_->resize(window_->width(), 260);
+        auto* controls = item("audioPage")->findChild<QQuickItem*>(QStringLiteral("audioControls"));
+        QVERIFY(controls);
+        QTRY_VERIFY(controls->property("contentHeight").toDouble() > controls->height());  // it scrolls
+        turn("transpose", 75);  // 12 semitones
+        QCOMPARE(clip(0).transpose, 12);
+        QCOMPARE(controls->property("contentY").toDouble(), 0.0);
+        undo().undo();
+        window_->resize(window_->width(), height);
     }
 
     void clipGainIsCalledGainAndMakesTheWaveformTaller() {
