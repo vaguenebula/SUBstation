@@ -402,7 +402,9 @@ private Q_SLOTS:
         // the placeholder there is none, and nothing goes wrong.
         for (const char* name : {"zoomIn", "zoomOut", "zoomToArrangement", "narrowGrid", "widenGrid", "snapToGrid", "clipView"})
             trigger(QString::fromLatin1(name));
-        QVERIFY(!find(QStringLiteral("closePluginEditor"))->property("enabled").toBool());  // (Windows only)
+        // Close Plug-in Editor: plug-in editors are Win32 windows.
+        QCOMPARE(find(QStringLiteral("closePluginEditor"))->property("enabled").toBool(),
+                 sub::ui::PluginEditorKeys::supported());
     }
 
     // Help › About, Options › Preferences, File › Export Audio open their dialogs.
@@ -704,7 +706,11 @@ private Q_SLOTS:
     void pluginEditorKeys() {
         auto* keys = window_->findChild<sub::ui::PluginEditorKeys*>();
         QVERIFY(keys);
-        QCOMPARE(keys->supported(), false);  // (on Windows only does it watch messages)
+#ifdef Q_OS_WIN
+        QVERIFY(keys->supported());  // (only on Windows does it watch messages)
+#else
+        QVERIFY(!keys->supported());
+#endif
         const int ctrl = Qt::ControlModifier;
         session().browser()->setScope({QStringLiteral("samples")});
         QVERIFY(keys->keyPressed(vk('F'), ctrl));  // Ctrl+F in a plug-in's editor searches the browser

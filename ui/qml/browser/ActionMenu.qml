@@ -10,6 +10,7 @@ Menu {
 
     signal chosen(string action)
 
+    // (The items have a parent: the garbage collector leaves them be.)
     function popupWith(actions) {
         while (menu.count > 0) {
             const item = menu.takeItem(0)
@@ -18,9 +19,9 @@ Menu {
         }
         for (const entry of actions) {
             if (entry.action)
-                menu.addItem(entryItem.createObject(null, {text: entry.label, actionId: entry.action}))
+                menu.addItem(entryItem.createObject(menu.contentItem, {text: entry.label, actionId: entry.action}))
             else
-                menu.addItem(separator.createObject(null))
+                menu.addItem(separator.createObject(menu.contentItem))
         }
         if (menu.count > 0)
             menu.popup()

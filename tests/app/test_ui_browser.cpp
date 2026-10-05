@@ -14,6 +14,7 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTest>
+#include <QTimer>
 #include <QUndoStack>
 
 #include <algorithm>
@@ -295,6 +296,33 @@ private Q_SLOTS:
         QCOMPARE(browser().library().uses(key), before + 1);
     }
 
+    // A real drag (the platform's) out of the list onto a drop area: it
+    // carries the selected rows' data; dropped, they count as used.
+    void dragAndDrop() {
+        browser().setPreviewEnabled(false);
+        browser().setScope({QStringLiteral("builtin"), QStringLiteral("Audio Effects")});
+        QVERIFY(settle());
+        const int utility = int(names().indexOf(QStringLiteral("Utility")));
+        const QString key = results().get(utility).value(QStringLiteral("key")).toString();
+        const int before = browser().library().uses(key);
+        const QPoint from = rowPoint(list(), utility);
+        const QPoint to = test::centerOf(item("outside"));
+        // The drag runs an event loop of its own: the mouse moves and lets go meanwhile.
+        QTimer::singleShot(100, this, [&] {
+            test::moveTo(window_, from + QPoint(60, 0));
+            QTest::qWait(20);
+            test::moveTo(window_, to);
+            QTest::qWait(20);
+            test::release(window_, to);
+        });
+        test::press(window_, from);
+        test::moveTo(window_, from + QPoint(30, 0));  // past the drag distance: it starts
+        QObject* drop = object("dropArea");
+        QTRY_VERIFY_WITH_TIMEOUT(!drop->property("devices").toString().isEmpty(), 5000);
+        QCOMPARE(sub::app::deviceKinds(drop->property("devices").toString().toUtf8()), QStringList{QStringLiteral("utility")});
+        QTRY_COMPARE(browser().library().uses(key), before + 1);
+    }
+
     // Used items rank first; Name sorts by name (test_used_items_rank_first).
     void usedItemsRankFirst() {
         browser().setScope({QStringLiteral("all")});
@@ -516,6 +544,21 @@ Window {
         width: 500
         height: parent.height
         color: Theme.emptyArea
+
+        // Takes what is dropped from the browser (as the arrangement and the device view do).
+        DropArea {
+            objectName: "dropArea"
+            anchors.fill: parent
+            property var formats: []
+            property string uris
+            property string devices
+            onDropped: drop => {
+                formats = drop.formats
+                uris = drop.getDataAsString("text/uri-list")
+                devices = drop.getDataAsString("application/x-substation-device")
+                drop.acceptProposedAction()
+            }
+        }
     }
 }
 )";

@@ -219,7 +219,7 @@ private Q_SLOTS:
 
         QVERIFY(QMetaObject::invokeMethod(page, "addFolder", Q_ARG(QVariant, extra)));
         QVERIFY(QMetaObject::invokeMethod(page, "addFolder", Q_ARG(QVariant, extra + QStringLiteral("/"))));  // the same: nothing changes
-        QCOMPARE(index.customFolders(), QStringList{QDir::toNativeSeparators(extra)});
+        QCOMPARE(index.customFolders(), QStringList{QDir::cleanPath(extra)});
         QCOMPARE(folders->property("count").toInt(), 2);
         QCOMPARE(folders->property("currentIndex").toInt(), 1);
         QVERIFY(shown(QStringLiteral("removePluginFolder"))->isEnabled());

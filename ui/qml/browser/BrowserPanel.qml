@@ -55,6 +55,7 @@ Rectangle {
         dragSource.Drag.mimeData = dragPayload(rows, fromTree)
         dragSource.Drag.imageSource = fromTree ? Icons.url("waveform", undefined, false, false)
                                                : Icons.url(browser.results.get(rows[0]).icon, undefined, false, false)
+        dragSource.Drag.active = false  // (a drag that never said it ended)
         dragSource.Drag.active = true
     }
 

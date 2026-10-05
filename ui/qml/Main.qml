@@ -133,13 +133,13 @@ ApplicationWindow {
         }
         const items = Session.recentMenuItems()
         if (items.length === 0) {
-            recentMenu.addItem(recentEntry.createObject(null, {text: qsTr("No Recent Projects"), enabled: false}))
+            recentMenu.addItem(recentEntry.createObject(recentMenu.contentItem, {text: qsTr("No Recent Projects"), enabled: false}))
             return
         }
         for (const entry of items)
-            recentMenu.addItem(recentEntry.createObject(null, {text: entry.label, path: entry.path, tip: entry.toolTip}))
-        recentMenu.addItem(menuSeparator.createObject(null))
-        recentMenu.addItem(recentEntry.createObject(null, {text: qsTr("&Clear List"), clearList: true}))
+            recentMenu.addItem(recentEntry.createObject(recentMenu.contentItem, {text: entry.label, path: entry.path, tip: entry.toolTip}))
+        recentMenu.addItem(menuSeparator.createObject(recentMenu.contentItem))
+        recentMenu.addItem(recentEntry.createObject(recentMenu.contentItem, {text: qsTr("&Clear List"), clearList: true}))
     }
 
     // File › Export Audio…: the range and bit depth, then where (or why there is nothing to export).
