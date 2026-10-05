@@ -358,7 +358,8 @@ private Q_SLOTS:
     }
 
     // As in Ableton: a folded track shows its clips as bars with their names, a
-    // click selects one and a drag moves it; its lane isn't a grid to select time on.
+    // click selects one and a drag moves it; beside them its lane is a grid to
+    // select time on, as any track's.
     void aFoldedTracksClipsAreBarsToClickAndDrag() {
         const QStringList ids = makeTracks(2);
         const QString a = ids[0], b = ids[1];
@@ -386,19 +387,34 @@ private Q_SLOTS:
         QCOMPARE(undo().undoText(), QStringLiteral("Move Time Selection"));
         undo().undo();
 
-        // Beside its clips, a drag selects nothing: a click there only moves the insert marker.
+        // Beside its clips its lane is a grid like any other: a click moves the
+        // insert marker, a drag selects time there.
         selection().clear();
-        test::drag(window(), point(5.0, lowY), point(7.0, lowY));
-        h_->settle();
+        click(point(5.0, lowY));
         QVERIFY(!selection().timeRange());
-        QVERIFY(selection().clips().isEmpty());
         QCOMPARE(selection().insertBeat(), view.snapBeat(5.0));
         QCOMPARE(selection().trackId(), a);
-        QCOMPARE(lanes()->cursor().shape(), Qt::ArrowCursor);
+        QCOMPARE(lanes()->cursor().shape(), Qt::IBeamCursor);
+        test::drag(window(), point(7.0, lowY), point(3.0, lowY));  // (from beside the bar, over it)
+        h_->settle();
+        QCOMPARE(selection().timeRange(), (sub::app::TimeRange{3.0, 7.0, {a}}));
+        QVERIFY(selection().clipRange());
+        QCOMPARE(selection().clips(), (QSet<ClipRef>{{a, QStringLiteral("c0")}}));
+        QCOMPARE(selection().insertBeat(), 3.0);
+        // What is selected acts on its clips as on any track's: Delete cuts out the range.
+        session().deleteSelection();
+        QCOMPARE(project().track(a).clips.size(), size_t(1));
+        QCOMPARE(project().track(a).clips[0].endBeat(project().tempo()), 3.0);
+        undo().undo();
 
-        // A selection made on the grid of other tracks takes in the folded one, and its clips.
+        // Started on it, a drag takes in the tracks it crosses...
+        selection().clear();
         const arr::Row other = h_->rowOf(b);
         const double otherY = other.top - arrangement()->scrollY() + other.mainHeight / 2;
+        test::drag(window(), point(6.0, lowY), point(1.0, otherY));
+        h_->settle();
+        QCOMPARE(selection().timeRange(), (sub::app::TimeRange{1.0, 6.0, {a, b}}));
+        // ...and a selection made on the grid of other tracks takes in the folded one, and its clips.
         test::drag(window(), point(1.0, otherY), point(6.0, lowY));
         h_->settle();
         QCOMPARE(selection().rangeStart(), 1.0);
@@ -406,6 +422,11 @@ private Q_SLOTS:
         QCOMPARE(selection().rangeTrackIds(), (QStringList{a, b}));
         QCOMPARE(selection().clips(), (QSet<ClipRef>{{a, QStringLiteral("c0")}, {b, QStringLiteral("c1")}}));
         test::screenshot(window(), QStringLiteral("arrangement_folded_track_selection"));
+        // Ctrl+D duplicates it on both, the folded track's clip too.
+        session().duplicate();
+        QCOMPARE(selection().timeRange(), (sub::app::TimeRange{6.0, 11.0, {a, b}}));
+        QCOMPARE(project().track(a).clips.size(), size_t(2));
+        QCOMPARE(project().track(a).clips[1].startBeat, 6.0);
     }
 
     void foldingLeavesTheNameAndButtonsInPlace() {

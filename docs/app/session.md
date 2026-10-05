@@ -150,6 +150,10 @@ one or more adjacent tracks. Selecting is always on the grid: selecting a clip s
 - A time selection made in the clips' band (or by clicking clips) is a *clip range*: `clips()` holds the clips it
   touches (for the clip view), and Delete cuts out just that range. Made lower in the lanes it is a *lane range*;
   made in automation lanes, `lanes()` holds them (owner, key), and Delete clears their automation in the range.
+- A time selection acts on `rangeTrackIds()` (its `TimeRange::trackIds`): the tracks it covers and what is in the
+  groups among them. `rangeRows()` are the tracks whose rows it covers, top to bottom, where the arrangement shows it
+  (`setTimeRange(..., rows)`; by default all of its tracks): a selection made over a group's row acts on the group's
+  tracks too, but shows only over the rows it was made over.
 - Automation breakpoints can be selected too (`points()`: owner, key, indices); Delete deletes them.
 - Several tracks can be selected (`selectTrack(id, focusTrack, mode, order)`: `Mode::Toggle` for Ctrl-click,
   `Mode::Range` for Shift-click from the last one clicked); `trackIds()`. `trackId()` is the one the device view
@@ -168,6 +172,9 @@ menus, drops), and the session dispatches the Edit menu's commands to it.
   they were: their states are stored first). Ctrl+V pastes it (`paste()`, or `paste(atBeat, trackId)`;
   `pasteAutomationAt(owner, key)`). A cut that was refused (nothing taken out) leaves the clipboard as it was.
   `hasClipboard`, `clipboardKind`.
+- An area command the editor refuses (a stretch of only some of a frozen group, a paste into a frozen track of what
+  wasn't copied from it: see [model.md](model.md#freezing)) changes nothing, the selection included; the editor's
+  `refused` says why in the status line. What it selects afterwards keeps the rows the selection showed over.
 - `deleteArea()`, `duplicateArea()`, `copyArea()`, `cutArea()`, `copyAutomation()`, `cutAutomation()`,
   `copyTracks(ids)`, `cutTracks(ids)`, `duplicateTracks(ids)`, `consolidate()`, `splitAt(beat)`, `canConsolidate()`,
   `canReverse()`, `insertMidiClip(trackId, beat, gridStep)`, `insertTrackAfter(trackId, midi)`.

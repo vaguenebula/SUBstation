@@ -1,7 +1,8 @@
 #pragma once
 
 // Mouse gestures on the track lanes: move or copy a time selection (a selected
-// clip is one too), trim edges, select time, and scroll by hand.
+// clip is one too), trim edges, select time (and extend a selection with
+// Shift), and scroll by hand.
 //
 // Moving and trimming clips are heard as they go: the engine plays what the
 // drag would make of the clips (EngineBridge::previewClips) while the model
@@ -16,6 +17,7 @@
 #include <QStringList>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <vector>
@@ -56,6 +58,7 @@ private:
     double start_ = 0.0;
     double end_ = 0.0;
     QStringList trackIds_;
+    QStringList rows_;  // the rows the selection covers (Selection::rangeRows)
     double originBeat_ = 0.0;
     int originRow_ = 0;
     QSet<QString> touched_;
@@ -94,9 +97,11 @@ private:
 };
 
 // Click places the insert marker; drag selects a time range on the grid,
-// across the tracks it crosses: everything on them in that range (the clips it
-// touches, and the automation), and on every track in a group it crosses, as
-// in Ableton. Delete, Cut, Copy, Paste and Duplicate act on all of it.
+// across the tracks it crosses (folded and frozen ones too): everything on them
+// in that range (the clips it touches, and the automation), and on every track
+// in a group it crosses, as in Ableton: a clip range, wherever in the lanes it
+// goes. Delete, Cut, Copy, Paste and Duplicate act on all of it; it shows over
+// the rows it crosses.
 class TimeSelectGesture : public Gesture {
 public:
     TimeSelectGesture(LanesHost& host, const QPointF& press, bool bypassSnap);
@@ -104,8 +109,6 @@ public:
     void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
 
     double anchor() const { return anchor_; }
-    void setAnchorRow(int row) { anchorRow_ = row; }
-    int anchorRow() const { return anchorRow_; }
 
 private:
     LanesHost& host_;
@@ -113,6 +116,33 @@ private:
     double anchor_ = 0.0;
     int anchorRow_ = 0;
     bool active_ = false;
+};
+
+// Shift-click (and a drag on from it): the time selection extended to where the
+// mouse is, over the time between and everything in that direction, as the
+// drag that made it would have gone on: where it was made decides what it
+// selects. A clip range takes in every track from its rows to the one there
+// (folded, frozen, groups and what is in them); a lane range every automation
+// lane showing from its lanes to the one there (or the nearest), of every
+// track. With no time selection it extends from the insert marker on the
+// selected track (a clip range).
+class ExtendGesture : public Gesture {
+public:
+    // None if there is nothing to extend: no time selection whose rows or lanes
+    // show here, nor a selected track of the arrangement.
+    static std::unique_ptr<ExtendGesture> start(LanesHost& host, const QPointF& press, Qt::KeyboardModifiers modifiers);
+
+    void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
+
+private:
+    explicit ExtendGesture(LanesHost& host) : host_(host) {}
+
+    LanesHost& host_;
+    double start_ = 0.0;
+    double end_ = 0.0;
+    bool lanes_ = false;  // a lane range (else a clip range)
+    int first_ = 0;  // the rows (or lanes: indices in envelopeAreas) it covered at the press
+    int last_ = 0;
 };
 
 // Ctrl+Alt drag: scroll the arrangement in both directions (Ableton's hand).
@@ -131,5 +161,11 @@ private:
 
 // Ctrl+Alt: drag to scroll the arrangement, as in Ableton.
 bool isPanModifier(Qt::KeyboardModifiers modifiers);
+
+// Select the time from `start` to `end` on the rows from `firstRow` to
+// `lastRow` (indices into the layout's rows, either way round): a clip range
+// over their tracks and what is in the groups among them, shown over those
+// rows. The insert marker goes to its start.
+void selectRows(LanesHost& host, double start, double end, int firstRow, int lastRow);
 
 }  // namespace sub::ui::arrangement

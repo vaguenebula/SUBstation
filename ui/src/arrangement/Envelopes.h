@@ -21,12 +21,13 @@
 //   can't pass its neighbours; several override the breakpoints they land on.
 // - Alt-dragging between two breakpoints bends the segment: up bulges it upward.
 // - Dragging from off the breakpoints selects a time range on the lanes it
-//   crosses; Delete clears their automation there, Ctrl+D duplicates it. Up into
-//   the clips' title band, or above the track, it selects clips instead, as a
-//   drag in the clips does. Dragging inside the selected range (off its
-//   breakpoints and line) moves the automation in it, on all its lanes, up, down,
-//   left and right, over what is where it lands: breakpoints at the range's edges
-//   keep the envelope outside it as it was.
+//   crosses, up or down, of every track (into the clips too: where a selection
+//   starts decides what it selects); Delete clears their automation there,
+//   Ctrl+D duplicates it. Shift-click extends a selection (ExtendGesture).
+//   Dragging inside the selected range (off its breakpoints and line) moves the
+//   automation in it, on all its lanes, up, down, left and right, over what is
+//   where it lands: breakpoints at the range's edges keep the envelope outside
+//   it as it was.
 //
 // Envelopes are drawn red while they play, grey when overridden (the target was
 // changed by hand: Re-Enable Automation brings them back); a target without an
@@ -164,6 +165,9 @@ EnvelopeLook lookOf(app::Session& session, const QString& owner, const QString& 
 std::optional<EnvelopeArea> areaAt(const std::vector<EnvelopeArea>& areas, const QPointF& pos);
 // The index of the area closest to `y` vertically.
 std::optional<int> nearestArea(const std::vector<EnvelopeArea>& areas, double y);
+// Select the time from `start` to `end` on these lanes (a lane range over
+// their tracks), the insert marker at its start.
+void selectLaneRange(LanesHost& host, double start, double end, const std::vector<EnvelopeArea>& lanes);
 // The breakpoint under `pos` (the one on top where several are).
 std::optional<int> pointAt(const timeline::Timeline& view, const EnvelopeArea& area, const app::Envelope& points,
                            const QPointF& pos);

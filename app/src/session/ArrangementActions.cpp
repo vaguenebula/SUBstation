@@ -59,17 +59,19 @@ void ArrangementActions::requestClipView(const ClipRefs& refs, const ClipRef& le
 void ArrangementActions::deleteArea() {
     if (!selection_->clipRange()) return;
     const TimeRange range = *selection_->timeRange();
+    const QStringList rows = selection_->rangeRows();
     if (!editor_->deleteRange(range.start, range.end, range.trackIds)) return;  // (refused: the editor said why)
-    selection_->setTimeRange(range.start, range.end, range.trackIds, QSet<ClipRef>());
+    selection_->setTimeRange(range.start, range.end, range.trackIds, QSet<ClipRef>(), {}, rows);
 }
 
 void ArrangementActions::duplicateArea() {
     if (!selection_->clipRange()) return;
     const TimeRange range = *selection_->timeRange();
+    const QStringList rows = selection_->rangeRows();
     const double length = range.end - range.start;
     if (!editor_->duplicateRange(range.start, range.end, range.trackIds)) return;
     selection_->setTimeRange(range.end, range.end + length, range.trackIds,
-                             editor_->clipsInRange(range.end, range.end + length, range.trackIds));
+                             editor_->clipsInRange(range.end, range.end + length, range.trackIds), {}, rows);
     selection_->setInsert(range.end);
 }
 
@@ -87,6 +89,7 @@ void ArrangementActions::copyArea() {
 void ArrangementActions::cutArea() {
     if (!selection_->clipRange()) return;
     const TimeRange range = *selection_->timeRange();
+    const QStringList rows = selection_->rangeRows();
     if (!editor_->copyRange(range.start, range.end, range.trackIds)) {
         Q_EMIT statusMessage(QStringLiteral("There is nothing in the selection to cut."));
         return;
@@ -94,7 +97,7 @@ void ArrangementActions::cutArea() {
     auto content = editor_->cutRange(range.start, range.end, range.trackIds);
     if (!content) return;  // (refused: the editor said why)
     setClipboard(std::move(*content));
-    selection_->setTimeRange(range.start, range.end, range.trackIds, QSet<ClipRef>());
+    selection_->setTimeRange(range.start, range.end, range.trackIds, QSet<ClipRef>(), {}, rows);
 }
 
 void ArrangementActions::copyAutomation() {
@@ -359,8 +362,11 @@ void ArrangementActions::reverseSelection() {
 void ArrangementActions::reverseWith(double start, double end, const QStringList& trackIds,
                                      const QMap<QString, std::pair<QString, double>>& reversed) {
     if (reversed.isEmpty()) return;
+    const QStringList rows = selection_->timeRange() && selection_->timeRange()->trackIds == trackIds
+                                 ? selection_->rangeRows()
+                                 : QStringList();
     if (!editor_->reverseRange(start, end, trackIds, reversed).isEmpty()) {
-        selection_->setTimeRange(start, end, trackIds, editor_->clipsInRange(start, end, trackIds));
+        selection_->setTimeRange(start, end, trackIds, editor_->clipsInRange(start, end, trackIds), {}, rows);
     }
 }
 

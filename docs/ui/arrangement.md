@@ -23,7 +23,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 | [ArrangementItem](../../ui/src/arrangement/ArrangementItem.h) | The base of the drawn parts: `session` and `arrangement` properties, `repaint()` |
 | [ArrangementRuler](../../ui/src/arrangement/ArrangementRuler.h) | The loop brace and the scrub area |
 | [ArrangementLanes](../../ui/src/arrangement/ArrangementLanes.h) | The track lanes: painting clips, group summaries, the selection, markers; hit-testing; mouse, wheel, keys, context menus, drops |
-| [ClipGestures](../../ui/src/arrangement/ClipGestures.h), [Gesture.h](../../ui/src/arrangement/Gesture.h) | The clip gestures: `MoveRangeGesture`, `TrimGesture` (both heard as they drag), `TimeSelectGesture`, `PanGesture`; the `Gesture` base |
+| [ClipGestures](../../ui/src/arrangement/ClipGestures.h), [Gesture.h](../../ui/src/arrangement/Gesture.h) | The clip gestures: `MoveRangeGesture`, `TrimGesture` (both heard as they drag), `TimeSelectGesture`, `ExtendGesture` (Shift-click), `PanGesture`, `selectRows()`; the `Gesture` base |
 | [Envelopes](../../ui/src/arrangement/Envelopes.h) | Automation lanes drawn and edited: `EnvelopeArea`, `Hover`, `EnvelopeLook`, `LanesHost`, and in `envelopes::` hit-testing, `trace()`, `press()`, `hover()`, the menu, drawing; the automation gestures |
 | [BusLane](../../ui/src/arrangement/BusLane.h) | The lane of a strip without clips: a return's or the master's |
 | [LiveTakes](../../ui/src/arrangement/LiveTakes.h), [ArrangementPlayhead](../../ui/src/arrangement/ArrangementPlayhead.h) | The takes being recorded and the playhead: items of their own over the lanes |
@@ -114,7 +114,7 @@ makes one `Row` per track:
 | `automation` | its automation shows |
 | `hidden` | it is in a folded group: a row with no height |
 | `folded` | it is folded itself: `kFoldedHeight` (22), or `kFoldedGroupHeight` (24) for a group, and no automation |
-| `bars` | folded, and not a group: its clips are drawn and grabbed as bars, and its lane is no grid (see [hit-testing](#hit-testing)) |
+| `bars` | folded, and not a group: its clips are drawn and grabbed as bars, all title (see [hit-testing](#hit-testing)); between them its lane is a grid like any other |
 | `depth` | how many groups it is in (for the header's indent) |
 
 Rows stay one per track, in order, hidden or not, so a row's index is the track's index in `Project::tracks()`.
@@ -141,17 +141,30 @@ unfolds a folded track, then grows it. Qt may report Alt+wheel as horizontal scr
 
 The selection is the application layer's [Selection](../../app/src/session/Selection.h) (`Session.selection`),
 shared by the arrangement, the device view and the piano roll; it emits `changed` and `insertChanged`. Its fields
-(`trackId`, `trackIds`, `insertBeat`, `timeRange`, `clipRange`, `clips`, `lanes`, `points`, `focus`) are described in
-[app/session.md](../app/session.md). What matters here:
+(`trackId`, `trackIds`, `insertBeat`, `timeRange`, `rangeRows`, `clipRange`, `clips`, `lanes`, `points`, `focus`) are
+described in [app/session.md](../app/session.md). What matters here:
 
 - Selecting is always on the grid: selecting a clip selects the area it covers. `selectClips(editor, refs)` asks the
   editor for `clipsArea(refs)` (earliest start, latest end, the tracks from the first clip's to the last's) and sets
   a clip range with `clipsInRange()` over it. So a clip selection *is* a time selection; there is no separate
   per-clip selection to keep in step.
 - A time range over tracks is everything in it: every one made on the grid is a clip range, and the editor's range
-  operations act on the clips and the automation of every track in it ([app/model.md](../app/model.md)). A drag that
-  crosses a group's row takes in what is in the group (`Project::withContents`), folded away or not. Only ranges
-  made on automation lanes (`lanes`) are about automation alone.
+  operations act on the clips and the automation of every track in it ([app/model.md](../app/model.md)), frozen ones
+  too (their frozen audio goes along: [app/model.md](../app/model.md#freezing)). A drag that crosses a group's row
+  takes in what is in the group (`Project::withContents`), folded away or not. Only ranges made on automation lanes
+  (`lanes`) are about automation alone.
+- **Where a selection starts decides what it selects**, however far up or down it goes: started in a track's own lane
+  (its clips' band, a lane without automation showing, a folded track's row between its bars, below the tracks) it is
+  a clip range over every track whose row it crosses (folded, frozen, groups and what is in them); started on an
+  automation lane (a track's own lane's envelope, or a lane below it) it is a lane range over every automation lane
+  it crosses, of every track, into the clips too. Shift-click (and a Shift-drag) extends a selection the same way
+  (`ExtendGesture`): over the time to the click and everything between its rows (or lanes) and the click's; with no
+  time selection, from the insert marker on the selected track. (A Shift-click on a clip's title selects the area
+  holding it and the last clip clicked.) There are no Shift+arrow keys in the arrangement.
+- **Shown over the rows it covers.** A selection acts on `TimeRange::trackIds` (a group's tracks among them), but is
+  drawn over `Selection::rangeRows()`: the rows it was made over (`selectRows()` passes them, the move gesture and
+  the area commands carry them along). A drag along a group's row tints that row only, though Delete, Cut, Copy,
+  Ctrl+D and dragging it act on the group's tracks too; a press on a track's row it doesn't show over is outside it.
 - `selectTrack(trackId, focusTrack, mode, order)`: `Toggle` (Ctrl-click) adds or removes one; `Range` (Shift-click)
   takes the tracks between the last one clicked and it, in `order`.
 - The session prunes the selection when tracks, clips or automation change, so the views needn't.
@@ -194,14 +207,15 @@ draws a parameter's own value. A project reset clears the waveform cache.
 target's own value). `paint()` then draws only the rows that show, in this order:
 
 1. The empty area's colour, then each row's background (`kLaneSelected` if its track is selected). The time
-   selection's tinted areas are worked out (`selectedAreas()`: each track's stretch, its automation lanes too unless
-   automation is locked).
+   selection's tinted areas are worked out (`selectedAreas()`: the stretch of each row it covers, `rangeRows()` (a
+   gesture's `timeRange()` while one drags), its automation lanes too unless automation is locked).
 2. The grid, all the way down (below the tracks too, where selecting works as well), and the loop region.
 3. For each row: a folded track's tint (under its clips' bars, which stay as they are); a group's summary
    (`drawGroupSummary()`: the clips of every track in the group as translucent bars with a solid top edge, as in
    Ableton's group lanes); its clips, but those the gesture hides; a frozen track's tint (`kFrozenTint`); the lines
    between its automation lanes; its bottom border.
-4. The gesture's previews: `kept()` (what stays of moved clips) and `ghosts()` (where they go, translucent).
+4. The gesture's previews: `kept()` (what stays of moved clips) and `ghosts()` (where they go, translucent); on a
+   frozen track tinted as its clips are.
 5. The envelopes (`envelopes::drawArea()`), shaded over the clips in a track's own lane.
 6. A drop preview (files dragged in: dashed boxes with their names), or the empty arrangement's hint.
 7. The time selection: over the automation lanes it covers (`envelopes::drawRange()`), or as a tint (`kSelection`)
@@ -255,24 +269,26 @@ Ctrl+Alt held                        → PanGesture (hand scrolling)
 on an automation lane                → envelopes::press(...)
 on a clip's trim handle              → select that clip; TrimGesture
 inside the selected clip range       → MoveRangeGesture (a click without dragging
-  (in the clip band, no Shift)          selects as a click elsewhere would)
+  (in the clip band of a row it shows   selects as a click elsewhere would)
+  over, no Shift)
 on a clip's title                    → select its area (Shift: the area holding it
                                        and the last clip clicked); insert marker at
                                        the range's start; MoveRangeGesture
+Shift, anywhere else                 → ExtendGesture: the selection extended to here
+                                       (if there is one, or an insert marker, to extend)
 anywhere else (clip body, empty lane,→ clear the selection on that track; insert
-  below the tracks)                    marker at the snapped beat; TimeSelectGesture
-                                       (not on a folded track's lane: no grid there,
-                                       the click only sets the insert marker)
+  a folded track's row beside its      marker at the snapped beat; TimeSelectGesture
+  bars, below the tracks)
 ```
 
 A press while a gesture is still there (its release never came) ends what that gesture previewed
 (`bridge.endClipPreview()`) first. The press a double-click starts with is ignored (the double-click stands for it).
 
 `mouseMoveEvent` forwards to the gesture, or updates the cursor and the hover (`updateHover()`: Ableton's `[`/`]`
-bracket cursors from `trimCursor()`, a pointing hand over titles and inside the clip range, an I-beam elsewhere (an
-arrow on a folded track's lane, which isn't a grid), the open hand while Ctrl+Alt is held, and the automation
-cursors). Key presses and releases update the cursor too, so holding Ctrl+Alt shows the hand without moving the
-mouse. `mouseReleaseEvent` calls the gesture's `finish()`; losing the mouse grab (a popup) calls its `cancel()`.
+bracket cursors from `trimCursor()`, a pointing hand over titles and inside the clip range, an I-beam elsewhere (a
+folded track's lane too), the open hand while Ctrl+Alt is held, and the automation cursors). Key presses and releases
+update the cursor too, so holding Ctrl+Alt shows the hand without moving the mouse. `mouseReleaseEvent` calls the
+gesture's `finish()`; losing the mouse grab (a popup) calls its `cancel()`.
 
 Double-click on a clip selects it (unless it was among the selected clips) and asks the `Arrangement` to open the
 selected clips, it first (`openClips()` → `Session.arrangement.requestClipView()`). On an automation lane a
@@ -294,9 +310,10 @@ step and the model isn't touched while dragging.
 
 | Gesture | Does |
 |---|---|
-| `MoveRangeGesture` | Drag a clip range (a selected clip is one): moves it, Ctrl copies, Alt off the grid. Up to `kDragThreshold` (4 px) it is still a click (calls `onClick`). At the press it works out, per track, the clips inside the range cut at its edges (the pieces that move) and what stays. While dragging: the time delta snapped against the range's start, and the track delta clamped by the editor (clips only move onto tracks of their kind); whenever they change, `editor.movedRange` (what the move would make of the clips) goes to `bridge.previewClips`, so the clips are heard where they would land. `finish()` calls `editor.moveRange(...)`, `bridge.endClipPreview()`, and selects where it landed. |
+| `MoveRangeGesture` | Drag a clip range (a selected clip is one): moves it, Ctrl copies, Alt off the grid. Up to `kDragThreshold` (4 px) it is still a click (calls `onClick`). At the press it works out, per track, the clips inside the range cut at its edges (the pieces that move) and what stays. While dragging: the time delta snapped against the range's start, and the track delta clamped by the editor (clips only move onto tracks of their kind); whenever they change, `editor.movedRange` (what the move would make of the clips, and of frozen tracks' frozen audio) goes to `bridge.previewClips`, so the clips are heard where they would land. A frozen track's clips are all drawn by the gesture: the stretch replaces everything where it lands, as its audio does. The selection is drawn over the rows it covered, where they go. `finish()` calls `editor.moveRange(...)` (refused onto or off a frozen track: the status line says why, and it stays), `bridge.endClipPreview()`, and selects where it landed, over the same rows. |
 | `TrimGesture` | Drag a trim handle: the clip trimmed to the snapped beat, previewed in the engine as it changes; `finish()` calls `editor.replaceClip(trackId, result, "Trim Clip")`, ends the preview and reselects the clip so the selection follows its new edges. |
-| `TimeSelectGesture` | Click: the insert marker (set at the press). Drag: a range over the rows from where it started to where it is, and what is in the groups among them: always a clip range (the clips it touches), wherever in the lanes it goes. |
+| `TimeSelectGesture` | Click: the insert marker (set at the press). Drag: a range over the rows from where it started to where it is (folded and frozen ones too), and what is in the groups among them: always a clip range (the clips it touches), wherever in the lanes it goes, shown over the rows it crosses (`selectRows()`). |
+| `ExtendGesture` | Shift-press: the selection extended to the mouse, and on while it drags: a clip range over the rows from its own to the mouse's (`selectRows()`), a lane range over the automation lanes from its own to the one under the mouse (or the nearest: `envelopes::selectLaneRange()`), over the time between; with no time selection, a clip range from the insert marker on the selected track. None (a plain press follows) if there is nothing to extend. |
 | `PanGesture` | Ctrl+Alt drag: scrolls both ways. |
 
 The automation gestures (`PointGesture`, `CurveGesture`, `RangeGesture`, `LaneGesture`, in
@@ -484,7 +501,7 @@ breakpoints come from `Project::envelope(owner, key)`; how a parameter maps to 0
 | 4 | near the flat line out of the first or last breakpoint, not on the line | `End` | `PointGesture` on that breakpoint (added: a click deletes nothing) |
 | 5 | on the line (within `kLineGrab` 4 px), not a step | `Add`, the arrow-plus `addCursor()` | `addAndDrag()`: a breakpoint at the snapped beat on the line at once (`editor.addAutomationPoint`), then a `PointGesture` that places it; adding and dragging share a merge key, so they are one undo step |
 | 6 | near a segment (within `kSegmentGrab` 14 px), or anywhere along a step | `Segment` | `PointGesture` on the segment: drags both breakpoints; a click selects them |
-| 7 | elsewhere | none | `LaneGesture`: a click sets the insert marker; a drag selects a time range on the lanes it crosses (`nearestArea`), or clips if it goes up into the clips' title band or above its track (it hands the drag to a `TimeSelectGesture`) |
+| 7 | elsewhere | none | Shift (track lanes): `ExtendGesture`, the selection extended to here. Otherwise `LaneGesture`: a click sets the insert marker; a drag selects a time range on every automation lane it crosses (`nearestArea`), up or down, of every track, into the clips too: started on automation it stays automation (`selectLaneRange()`) |
 
 `PointGesture` moves breakpoints with `editor.moveAutomationPoints(owner, key, original, indices, deltaBeats,
 deltaValue, key)` from the envelope as it was at the press, so moving back and forth is exact. A purely vertical
@@ -557,6 +574,9 @@ from it. The clip view draws its waveforms without a cache ([piano-roll.md](pian
 
 - `TrackLayout` rows are one per track, hidden or not. Index rows by track index, and skip `row.hidden` when drawing
   or hit-testing.
+- A time selection's `trackIds` aren't the rows it shows over: a group's tracks below the rows it reaches are among
+  them. Draw and hit-test with `Selection::rangeRows()`; act with `trackIds`. Code that selects a range again after an
+  edit passes the rows along.
 - A row's `mainHeight` isn't the track's `height`: it is taller while automation shows and fixed while folded. Use
   the row.
 - `paint()` reads only: the bridge's state (envelope looks) is fetched in `updatePolish()`, a gesture's previews in
@@ -572,7 +592,8 @@ from it. The clip view draws its waveforms without a cache ([piano-roll.md](pian
 | Test file | Covers here |
 |---|---|
 | [test_ui_arrangement.cpp](../../tests/app/test_ui_arrangement.cpp) | Dragging and Ctrl-dragging clips and undo, trimming, selecting below the tracks, the clip body setting the insert marker, Shift-click ranges, drags ending in the clip band, clips heard where a drag (or trim) takes them, the ruler's loop brace and scrub zoom, zoom, scroll and follow, Alt+wheel resizing and folding, Ctrl+Alt drags, files, devices and presets dropped, double-click opening the clip view, the lanes' menus, MIDI clips, reversing, the live take reaching the playhead |
-| [test_ui_arrangement_automation.cpp](../../tests/app/test_ui_arrangement_automation.cpp) | A, parameters showing their lanes, clicking on the line, dragging and bending breakpoints, segments and steps, deleting, time ranges (clear, duplicate, move), the lanes' menus, overriding and re-enabling, controls following automation, the master's lane, lanes below tracks, saving, automation moving with a dragged clip, dragging up into the clips |
-| [test_ui_arrangement_tracks.cpp](../../tests/app/test_ui_arrangement_tracks.cpp) | Groups (folding, the group's header, dragging headers into and out of groups, folded tracks' clips as bars, cut, copy and paste), returns and sends, following the playhead while scrolling by hand, the header's controls (volume, solo, the activator, arming, renaming in place), the input and monitoring menus with resampling and MIDI inputs, sidechains greying out sends, the track menu's freezing and flattening, resizing a track by its bottom edge |
+| [test_ui_arrangement_automation.cpp](../../tests/app/test_ui_arrangement_automation.cpp) | A, parameters showing their lanes, clicking on the line, dragging and bending breakpoints, segments and steps, deleting, time ranges (clear, duplicate, move), the lanes' menus, overriding and re-enabling, controls following automation, the master's lane, lanes below tracks, saving, automation moving with a dragged clip, lane ranges dragged up and down over several tracks' lanes (into the clips too) and extended with Shift-click |
+| [test_ui_arrangement_selection.cpp](../../tests/app/test_ui_arrangement_selection.cpp) | A group's selection shown over the rows it covers and acting on what is in it, drags over every kind of track (folded, frozen, folded groups), Shift-clicks extending clip ranges, a frozen track's stretch dragged with its frozen audio and a move off it refused |
+| [test_ui_arrangement_tracks.cpp](../../tests/app/test_ui_arrangement_tracks.cpp) | Groups (folding, the group's header, dragging headers into and out of groups, folded tracks' clips as bars and their lanes as grids, cut, copy and paste), returns and sends, following the playhead while scrolling by hand, the header's controls (volume, solo, the activator, arming, renaming in place), the input and monitoring menus with resampling and MIDI inputs, sidechains greying out sends, the track menu's freezing and flattening, resizing a track by its bottom edge |
 | [test_session_edit.cpp](../../tests/app/test_session_edit.cpp) | The area commands and the clipboard as the session drives them: splitting, selecting all, duplicating and deleting the selected area, cutting, copying and pasting clips, automation and tracks, reversing (at once and in the background) |
 | [test_selection.cpp](../../tests/app/test_selection.cpp) | The selection's rules |

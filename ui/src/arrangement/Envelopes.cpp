@@ -301,22 +301,15 @@ private:
 };
 
 // A press on a lane off its breakpoints and its line: a click sets the
-// insert marker; a drag selects a time range on the lanes it crosses (on the
-// clips when it goes up into their title band or above the track).
+// insert marker; a drag selects a time range on the automation lanes it
+// crosses, up or down, of every track (into the clips too: it started on
+// automation, so it selects automation).
 class LaneGesture : public Gesture {
 public:
     LaneGesture(LanesHost& host, const EnvelopeArea& area, const QPointF& press, Qt::KeyboardModifiers modifiers)
         : host_(host), area_(area), press_(press) {
         const timeline::Timeline& view = viewOf(host);
-        const bool bypass = alt(modifiers);
-        anchor_ = std::max(0.0, view.snapBeat(view.xToBeat(press.x()), bypass));
-        // A track's lanes are in the lanes canvas, among the clips: a drag can reach them.
-        if (area.owner != app::kMaster && host.isTrackLanes()) {
-            if (const auto row = host.hostArrangement()->layout().indexOf(area.owner)) {
-                clips_ = std::make_unique<TimeSelectGesture>(host, press, bypass);
-                clips_->setAnchorRow(*row);
-            }
-        }
+        anchor_ = std::max(0.0, view.snapBeat(view.xToBeat(press.x()), alt(modifiers)));
         host.hostSession()->selection()->clear(area.owner == app::kMaster ? QString() : area.owner);
     }
 
@@ -325,11 +318,6 @@ public:
             if (!farEnough(pos, press_)) return;
             active_ = true;
         }
-        if (overClips(pos)) {
-            clips_->move(pos, modifiers);
-            return;
-        }
-        app::Session& session = *host_.hostSession();
         const timeline::Timeline& view = viewOf(host_);
         const double beat = std::max(0.0, view.snapBeat(view.xToBeat(pos.x()), alt(modifiers)));
         const double start = std::min(anchor_, beat), end = std::max(anchor_, beat);
@@ -347,15 +335,7 @@ public:
             covered = {area_};
         else
             covered.assign(areas.begin() + std::min(*first, *here), areas.begin() + std::max(*first, *here) + 1);
-        QList<app::LaneRef> lanes;
-        QStringList trackIds;
-        for (const EnvelopeArea& a : covered) {
-            const app::LaneRef lane{a.owner, a.key};
-            if (!lanes.contains(lane)) lanes.append(lane);
-            if (session.project()->hasTrack(a.owner) && !trackIds.contains(a.owner)) trackIds << a.owner;
-        }
-        session.selection()->setTimeRange(start, end, trackIds, std::nullopt, lanes);
-        session.selection()->setInsert(start);
+        selectLaneRange(host_, start, end, covered);
         host_.setHostCursor(QCursor(Qt::IBeamCursor));
     }
 
@@ -364,22 +344,11 @@ public:
     }
 
 private:
-    // Whether the drag went up into the clips' title band or above its track.
-    bool overClips(const QPointF& pos) const {
-        if (!clips_) return false;
-        const Arrangement& arrangement = *host_.hostArrangement();
-        const auto& rows = arrangement.layout().rows();
-        if (clips_->anchorRow() < 0 || clips_->anchorRow() >= static_cast<int>(rows.size())) return false;
-        const Row& row = rows[static_cast<size_t>(clips_->anchorRow())];
-        return host_.inClipBand(pos) || pos.y() + arrangement.scrollY() < row.top;
-    }
-
     LanesHost& host_;
     EnvelopeArea area_;
     QPointF press_;
     double anchor_ = 0.0;
     bool active_ = false;
-    std::unique_ptr<TimeSelectGesture> clips_;
 };
 
 // A press inside the selected time range on one of its lanes: a drag moves
@@ -483,6 +452,19 @@ std::optional<EnvelopeArea> areaAt(const std::vector<EnvelopeArea>& areas, const
         if (area.rect.contains(pos)) return area;
     }
     return std::nullopt;
+}
+
+void selectLaneRange(LanesHost& host, double start, double end, const std::vector<EnvelopeArea>& lanes) {
+    app::Session& session = *host.hostSession();
+    QList<app::LaneRef> refs;
+    QStringList trackIds;
+    for (const EnvelopeArea& a : lanes) {
+        const app::LaneRef lane{a.owner, a.key};
+        if (!refs.contains(lane)) refs.append(lane);
+        if (session.project()->hasTrack(a.owner) && !trackIds.contains(a.owner)) trackIds << a.owner;
+    }
+    session.selection()->setTimeRange(start, end, trackIds, std::nullopt, refs);
+    session.selection()->setInsert(start);
 }
 
 std::optional<int> nearestArea(const std::vector<EnvelopeArea>& areas, double y) {
@@ -593,6 +575,9 @@ std::unique_ptr<Gesture> press(LanesHost& host, const EnvelopeArea& area, const 
         return std::make_unique<PointGesture>(host, area, *end, pos, modifiers, true);
     if (grab && grab->add) return addAndDrag(host, area, pos, modifiers, grab->target);
     if (grab) return std::make_unique<PointGesture>(host, area, grab->segment, pos, modifiers, false, true);
+    if (modifiers & Qt::ShiftModifier) {  // Shift-click: the selection extended to here
+        if (auto extend = ExtendGesture::start(host, pos, modifiers)) return extend;
+    }
     return std::make_unique<LaneGesture>(host, area, pos, modifiers);
 }
 

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 namespace sub::ui::arrangement {
 
@@ -37,6 +38,7 @@ MoveRangeGesture::MoveRangeGesture(LanesHost& host, const QPointF& press, std::f
         start_ = range->start;
         end_ = range->end;
         trackIds_ = range->trackIds;
+        rows_ = session.selection()->rangeRows();
     }
     const double tempo = project.tempo();
     const timeline::Timeline& view = host.hostArrangement()->view();
@@ -131,10 +133,11 @@ std::vector<GestureClip> MoveRangeGesture::kept() const {
 }
 
 std::optional<app::TimeRange> MoveRangeGesture::timeRange() const {
+    // (Drawn over the rows the selection covers, where they go.)
     if (!active_) return std::nullopt;
     const app::Project& project = *host_.hostSession()->project();
     QStringList ids;
-    for (const QString& id : trackIds_) {
+    for (const QString& id : rows_) {
         if (!project.hasTrack(id)) continue;
         const int to = project.trackIndex(id) + trackDelta_;
         if (to >= 0 && to < static_cast<int>(project.tracks().size())) ids << project.tracks()[static_cast<size_t>(to)].id;
@@ -157,8 +160,20 @@ void MoveRangeGesture::finish() {
     session.bridge()->endClipPreview();  // (the model's clips: where they went, or back if refused)
     const auto& [start, ids] = landed;
     const double end = start + end_ - start_;
+    // The rows it covered, where they went (as far as its tracks went: none if refused).
+    const app::Project& project = *session.project();
+    const bool known = !ids.isEmpty() && !trackIds_.isEmpty() && project.hasTrack(ids.front()) &&
+                       project.hasTrack(trackIds_.front());
+    const int moved = known ? project.trackIndex(ids.front()) - project.trackIndex(trackIds_.front()) : 0;
+    const auto& tracks = project.tracks();
+    QStringList rows;
+    for (const QString& id : rows_) {
+        if (!project.hasTrack(id)) continue;
+        const int to = project.trackIndex(id) + moved;
+        if (to >= 0 && to < static_cast<int>(tracks.size())) rows << tracks[static_cast<size_t>(to)].id;
+    }
     app::Selection& selection = *session.selection();
-    selection.setTimeRange(start, end, ids, session.editor()->clipsInRange(start, end, ids));
+    selection.setTimeRange(start, end, ids, session.editor()->clipsInRange(start, end, ids), {}, rows);
     selection.setInsert(start);
 }
 
@@ -242,20 +257,97 @@ void TimeSelectGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers
         active_ = true;
     }
     Arrangement& arrangement = *host_.hostArrangement();
-    app::Session& session = *host_.hostSession();
     const timeline::Timeline& view = arrangement.view();
     const double beat = std::max(0.0, view.snapBeat(view.xToBeat(pos.x()), modifiers & Qt::AltModifier));
     const double start = std::min(anchor_, beat), end = std::max(anchor_, beat);
-    const auto& rows = arrangement.layout().rows();
-    if (rows.empty()) return;
+    if (arrangement.layout().rows().empty()) return;
     const int row = host_.rowAt(pos.y(), true).value_or(anchorRow_);
-    const int first = std::clamp(std::min(anchorRow_, row), 0, static_cast<int>(rows.size()) - 1);
-    const int last = std::clamp(std::max(anchorRow_, row), 0, static_cast<int>(rows.size()) - 1);
+    selectRows(host_, start, end, anchorRow_, row);
+    host_.setHostCursor(QCursor(Qt::IBeamCursor));
+}
+
+// --- ExtendGesture -------------------------------------------------------------------------------
+
+std::unique_ptr<ExtendGesture> ExtendGesture::start(LanesHost& host, const QPointF& press,
+                                                    Qt::KeyboardModifiers modifiers) {
+    if (!host.isTrackLanes()) return nullptr;
+    const app::Selection& selection = *host.hostSession()->selection();
+    const TrackLayout& layout = host.hostArrangement()->layout();
+    std::unique_ptr<ExtendGesture> gesture(new ExtendGesture(host));
+    const auto& range = selection.timeRange();
+    if (range && !selection.lanes().isEmpty()) {  // a lane range: its lanes that show here
+        const std::vector<EnvelopeArea> areas = host.envelopeAreas();
+        std::optional<int> first, last;
+        for (int i = 0; i < static_cast<int>(areas.size()); ++i) {
+            const auto& area = areas[static_cast<size_t>(i)];
+            if (!selection.lanes().contains(app::LaneRef{area.owner, area.key})) continue;
+            if (!first) first = i;
+            last = i;
+        }
+        if (!first) return nullptr;
+        gesture->lanes_ = true;
+        gesture->first_ = *first;
+        gesture->last_ = *last;
+        gesture->start_ = range->start;
+        gesture->end_ = range->end;
+    } else if (range) {  // a clip range: the rows it covers
+        std::optional<int> first, last;
+        for (const QString& id : selection.rangeRows()) {
+            const auto index = layout.indexOf(id);
+            if (!index) continue;
+            first = first ? std::min(*first, *index) : *index;
+            last = last ? std::max(*last, *index) : *index;
+        }
+        if (!first) return nullptr;
+        gesture->first_ = *first;
+        gesture->last_ = *last;
+        gesture->start_ = range->start;
+        gesture->end_ = range->end;
+    } else {  // from the insert marker on the selected track
+        const auto index = layout.indexOf(selection.trackId());
+        if (!index) return nullptr;
+        gesture->first_ = gesture->last_ = *index;
+        gesture->start_ = gesture->end_ = selection.insertBeat();
+    }
+    gesture->move(press, modifiers);
+    return gesture;
+}
+
+void ExtendGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
+    const timeline::Timeline& view = host_.hostArrangement()->view();
+    const double beat = std::max(0.0, view.snapBeat(view.xToBeat(pos.x()), modifiers & Qt::AltModifier));
+    const double start = std::min(start_, beat), end = std::max(end_, beat);
+    if (end <= start) return;  // (nothing to select yet)
+    if (lanes_) {
+        const std::vector<EnvelopeArea> areas = host_.envelopeAreas();
+        std::optional<int> here;
+        for (int i = 0; i < static_cast<int>(areas.size()); ++i) {
+            if (areas[static_cast<size_t>(i)].rect.contains(pos)) here = i;
+        }
+        if (!here) here = envelopes::nearestArea(areas, pos.y());
+        if (!here || first_ >= static_cast<int>(areas.size()) || last_ >= static_cast<int>(areas.size())) return;
+        const int first = std::min(first_, *here), last = std::max(last_, *here);
+        envelopes::selectLaneRange(host_, start, end,
+                                   std::vector<EnvelopeArea>(areas.begin() + first, areas.begin() + last + 1));
+    } else {
+        const auto row = host_.rowAt(pos.y(), true);
+        if (!row) return;
+        selectRows(host_, start, end, std::min(first_, *row), std::max(last_, *row));
+    }
+    host_.setHostCursor(QCursor(Qt::IBeamCursor));
+}
+
+void selectRows(LanesHost& host, double start, double end, int firstRow, int lastRow) {
+    app::Session& session = *host.hostSession();
+    const auto& rows = host.hostArrangement()->layout().rows();
+    if (rows.empty()) return;
+    const int first = std::clamp(std::min(firstRow, lastRow), 0, static_cast<int>(rows.size()) - 1);
+    const int last = std::clamp(std::max(firstRow, lastRow), 0, static_cast<int>(rows.size()) - 1);
     QStringList ids;
     for (int i = first; i <= last; ++i) ids << rows[static_cast<size_t>(i)].trackId;
     const QStringList trackIds = session.project()->withContents(ids);
-    session.selection()->setTimeRange(start, end, trackIds, session.editor()->clipsInRange(start, end, trackIds));
-    host_.setHostCursor(QCursor(Qt::IBeamCursor));
+    session.selection()->setTimeRange(start, end, trackIds, session.editor()->clipsInRange(start, end, trackIds), {},
+                                      ids);
     session.selection()->setInsert(start);
 }
 

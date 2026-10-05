@@ -12,6 +12,11 @@
 // automation lanes, `lanes` holds them (owner, target key), and Delete clears
 // their automation in the range.
 //
+// A time selection acts on its tracks (rangeTrackIds): those it covers, and
+// everything in a group it covers. It shows on the grid over the rows it
+// covers (rangeRows): a group's tracks below the rows it reaches are acted on
+// but not shown selected.
+//
 // Automation breakpoints can be selected too (`points`: owner, key, indices);
 // Delete deletes them.
 //
@@ -87,6 +92,10 @@ public:
     double rangeStart() const { return timeRange_ ? timeRange_->start : 0.0; }
     double rangeEnd() const { return timeRange_ ? timeRange_->end : 0.0; }
     QStringList rangeTrackIds() const { return timeRange_ ? timeRange_->trackIds : QStringList(); }
+    // The tracks whose rows the time selection covers on the grid, top to
+    // bottom (where it shows): those it was made over. rangeTrackIds() has
+    // these and what is in the groups among them.
+    QStringList rangeRows() const;
     // Whether the time selection selects clip content (not automation). Derived,
     // so clearing the time selection can never leave it stale.
     bool clipRange() const { return timeRange_.has_value() && rangeSelectsClips_; }
@@ -118,9 +127,12 @@ public:
     Q_INVOKABLE void focusDevices();
     // Select a beat range across tracks. With `clips` (the clips it touches,
     // possibly none) it is a clip range, otherwise a lane range: of automation
-    // `lanes` (owner, key), if given (the master's have no track).
+    // `lanes` (owner, key), if given (the master's have no track). `rows`: the
+    // tracks whose rows it covers (see rangeRows; those among `trackIds`), if
+    // not all of them.
     void setTimeRange(double start, double end, const QStringList& trackIds,
-                      const std::optional<QSet<ClipRef>>& clips = std::nullopt, const QList<LaneRef>& lanes = {});
+                      const std::optional<QSet<ClipRef>>& clips = std::nullopt, const QList<LaneRef>& lanes = {},
+                      const QStringList& rows = {});
     // A lane range over these tracks (no clips, no automation lanes).
     Q_INVOKABLE void setLaneRange(double start, double end, const QStringList& trackIds);
     Q_INVOKABLE void setInsert(double beat);
@@ -140,6 +152,7 @@ private:
     QString anchor_;  // where a Shift-click selects tracks from
     double insertBeat_ = 0.0;
     std::optional<TimeRange> timeRange_;
+    QStringList rows_;  // the rows the time range covers, if not all its tracks ("": all)
     bool rangeSelectsClips_ = false;
     QList<LaneRef> lanes_;
     std::optional<SelectedPoints> points_;

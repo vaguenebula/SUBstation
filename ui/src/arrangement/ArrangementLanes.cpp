@@ -256,9 +256,10 @@ bool ArrangementLanes::inSelection(const QPointF& pos) const {
     const app::Selection& selection = *session()->selection();
     const auto index = rowIndexAt(pos.y());
     if (!selection.clipRange() || !index) return false;
+    // (On the rows it shows over: a group's tracks it doesn't reach aren't shown selected.)
     const app::TimeRange& range = *selection.timeRange();
     const double beat = arrangement()->view().xToBeat(pos.x());
-    return range.trackIds.contains(arrangement()->layout().rows()[static_cast<size_t>(*index)].trackId) &&
+    return selection.rangeRows().contains(arrangement()->layout().rows()[static_cast<size_t>(*index)].trackId) &&
            range.start <= beat && beat <= range.end;
 }
 
@@ -274,8 +275,10 @@ void ArrangementLanes::updatePolish() {
 
 QHash<QString, QRectF> ArrangementLanes::selectedAreas(const app::TimeRange& range) const {
     // Where a time selection over tracks is tinted, by track: its stretch of
-    // each track's lane, and of the automation lanes below it (unless
-    // automation is locked: then the selection leaves it where it is).
+    // the lane of each track whose row it covers (`range.trackIds`: not a
+    // group's tracks below the rows it reaches, which it acts on all the same),
+    // and of the automation lanes below it (unless automation is locked: then
+    // the selection leaves it where it is).
     const timeline::Timeline& view = arrangement()->view();
     const double x0 = view.beatToX(range.start), x1 = view.beatToX(range.end);
     const bool locked = session()->project()->automationLocked();
@@ -313,7 +316,8 @@ void ArrangementLanes::paint(SgPainter& p) {
 
     const Gesture* gesture = gesture_.get();
     const std::optional<app::TimeRange> gestureRange = gesture ? gesture->timeRange() : std::nullopt;
-    const std::optional<app::TimeRange> timeRange = gestureRange ? gestureRange : selection.timeRange();
+    std::optional<app::TimeRange> timeRange = gestureRange ? gestureRange : selection.timeRange();
+    if (timeRange && !gestureRange) timeRange->trackIds = selection.rangeRows();  // (the rows it shows over)
     const bool onLanes = timeRange && !selection.lanes().isEmpty() && !gestureRange;
     QHash<QString, QRectF> tinted = !timeRange || onLanes ? QHash<QString, QRectF>() : selectedAreas(*timeRange);
     std::vector<Frame> frames;  // the clips drawn
@@ -607,6 +611,7 @@ void ArrangementLanes::click(const QPointF& pos, Qt::KeyboardModifiers mods, con
     if (hit && hit->zone != Zone::Body) {
         // Selecting a clip selects the area it covers on the grid; Shift-clicking
         // another selects the area that fully contains both (and the tracks between).
+        // (A folded track's clips are all title: its bars.)
         const app::ClipRef ref{hit->trackId, hit->clip.id};
         if ((mods & Qt::ShiftModifier) && clipAnchor_) {
             selection.selectClips(editor, {*clipAnchor_, ref}, hit->trackId);
@@ -621,14 +626,21 @@ void ArrangementLanes::click(const QPointF& pos, Qt::KeyboardModifiers mods, con
     }
     const auto& rows = arrangement()->layout().rows();
     if (rows.empty()) return;
-    // Clip body, empty lane or below the tracks: a click sets the insert marker,
-    // a drag selects time on the grid (from below the tracks, starting at the last one).
-    // A folded track's lane is no grid: a click there only sets the insert marker.
+    // Shift-click: the selection extended to here (and on, while dragging).
+    if (mods & Qt::ShiftModifier) {
+        if (auto extend = ExtendGesture::start(*this, pos, mods)) {
+            gesture_ = std::move(extend);
+            return;
+        }
+    }
+    // Clip body, empty lane (a folded track's too, between its bars) or below
+    // the tracks: a click sets the insert marker, a drag selects time on the
+    // grid (from below the tracks, starting at the last one).
     const auto index = rowIndexAt(pos.y());
     auto gesture = std::make_unique<TimeSelectGesture>(*this, pos, mods & Qt::AltModifier);
     selection.clear(index ? rows[static_cast<size_t>(*index)].trackId : QString());
     selection.setInsert(gesture->anchor());
-    if (!index || !rows[static_cast<size_t>(*index)].bars) gesture_ = std::move(gesture);
+    gesture_ = std::move(gesture);
 }
 
 void ArrangementLanes::mouseMoveEvent(QMouseEvent* event) {
@@ -723,9 +735,7 @@ void ArrangementLanes::updateHover(const QPointF& pos, Qt::KeyboardModifiers mod
             return;
         }
         const bool grab = zone == Zone::Title || inClipRange(pos);
-        const auto index = rowIndexAt(pos.y());
-        const bool grid = !index || !rows[static_cast<size_t>(*index)].bars;  // (a folded track's lane isn't)
-        shape = grab ? Qt::PointingHandCursor : grid ? Qt::IBeamCursor : Qt::ArrowCursor;
+        shape = grab ? Qt::PointingHandCursor : Qt::IBeamCursor;
     }
     setHoverEdge(std::nullopt);
     setCursor(shape);
