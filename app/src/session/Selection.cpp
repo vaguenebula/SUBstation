@@ -13,9 +13,15 @@ QStringList Selection::trackIds() const {
     return trackId_.isEmpty() ? QStringList() : QStringList{trackId_};
 }
 
+QStringList Selection::rangeRows() const {
+    if (!timeRange_) return {};
+    return rows_.isEmpty() ? timeRange_->trackIds : rows_;
+}
+
 void Selection::clear(const QString& trackId) {
     clips_.clear();
     timeRange_.reset();
+    rows_.clear();
     lanes_.clear();
     points_.reset();
     tracks_.clear();
@@ -27,6 +33,7 @@ void Selection::clear(const QString& trackId) {
 void Selection::selectPoints(const QString& owner, const QString& key, const QSet<int>& indices) {
     clips_.clear();
     timeRange_.reset();
+    rows_.clear();
     lanes_.clear();
     points_ = indices.isEmpty() ? std::nullopt : std::optional<SelectedPoints>(SelectedPoints{owner, key, indices});
     tracks_.clear();
@@ -94,6 +101,7 @@ void Selection::focusOnTracks() {
     focus_ = Focus::Track;
     clips_.clear();
     timeRange_.reset();
+    rows_.clear();
     lanes_.clear();
     points_.reset();
 }
@@ -106,12 +114,20 @@ void Selection::focusDevices() {
 }
 
 void Selection::setTimeRange(double start, double end, const QStringList& trackIds,
-                             const std::optional<QSet<ClipRef>>& clips, const QList<LaneRef>& lanes) {
+                             const std::optional<QSet<ClipRef>>& clips, const QList<LaneRef>& lanes,
+                             const QStringList& rows) {
     const QList<LaneRef> rangeLanes = clips ? QList<LaneRef>() : lanes;
     if (end > start && (!trackIds.isEmpty() || !rangeLanes.isEmpty())) {
         timeRange_ = TimeRange{start, end, trackIds};
     } else {
         timeRange_.reset();
+    }
+    rows_.clear();
+    if (timeRange_) {
+        for (const QString& id : rows) {
+            if (trackIds.contains(id) && !rows_.contains(id)) rows_.append(id);
+        }
+        if (rows_ == trackIds) rows_.clear();
     }
     rangeSelectsClips_ = clips.has_value();
     clips_ = timeRange_ && clips ? *clips : QSet<ClipRef>();
@@ -153,6 +169,7 @@ void Selection::prune(const Project& project) {
         if (project.hasOwner(lane.first)) lanes.append(lane);
     }
     std::optional<TimeRange> timeRange = timeRange_;
+    QStringList rows;
     if (timeRange) {
         QStringList kept;
         for (const QString& id : timeRange->trackIds) {
@@ -160,6 +177,10 @@ void Selection::prune(const Project& project) {
         }
         if (!kept.isEmpty() || !lanes.isEmpty()) {
             timeRange->trackIds = kept;
+            for (const QString& id : rows_) {
+                if (validTracks.contains(id)) rows.append(id);
+            }
+            if (rows == kept) rows.clear();
         } else {
             timeRange.reset();
         }
@@ -180,11 +201,12 @@ void Selection::prune(const Project& project) {
         }
     }
     if (clips != clips_ || trackId != trackId_ || timeRange != timeRange_ || lanes != lanes_ || points != points_ ||
-        tracks != tracks_) {
+        tracks != tracks_ || rows != rows_) {
         clips_ = clips;
         trackId_ = trackId;
         tracks_ = tracks;
         timeRange_ = timeRange;
+        rows_ = rows;
         lanes_ = timeRange ? lanes : QList<LaneRef>();
         points_ = points;
         if (!points_ && focus_ == Focus::Automation) focus_ = Focus::Clips;

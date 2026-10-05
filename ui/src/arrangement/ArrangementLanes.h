@@ -15,8 +15,10 @@
 // border; the gesture's previews (what stays of moved clips, and where they go,
 // translucent); the envelopes; a drop preview or the empty arrangement's hint;
 // the time selection (over the automation lanes it covers, or as a tint over
-// each track's stretch, with the title bars and outlines of the clips there
-// drawn again over it: selecting never lights up a title bar); the insert
+// the stretch of each row it covers, with the title bars and outlines of the
+// clips there drawn again over it: selecting never lights up a title bar; a
+// group's tracks below the rows it reaches aren't tinted, though it acts on
+// them too); the insert
 // marker on the selected track (when nothing is selected); a breakpoint's
 // value while dragged.
 //
@@ -26,13 +28,15 @@
 //   on a clip's trim handle           -> select that clip; TrimGesture
 //   inside the selected clip range    -> MoveRangeGesture (a click without
 //     (in the clip band, no Shift)       dragging selects as a click elsewhere would)
-//   on a clip's title                 -> select its area (Shift: the area holding
-//                                        it and the last clip clicked); the insert
+//   on a clip's title (a folded       -> select its area (Shift: the area holding
+//     track's bar)                       it and the last clip clicked); the insert
 //                                        marker at its start; MoveRangeGesture
+//   Shift, anywhere else              -> ExtendGesture: the selection extended
+//                                        to here (if there is one to extend)
 //   anywhere else                     -> clear the selection on that track; the
 //                                        insert marker at the snapped beat;
-//                                        TimeSelectGesture (not on a folded
-//                                        track's lane: no grid there)
+//                                        TimeSelectGesture (a folded track's lane
+//                                        too: it is a grid like any other)
 // Double-click a clip: the selected clips (or just it) open in the clip view.
 // On an automation lane each click of a double-click counts. Wheel: Alt
 // resizes (or folds) the track, Ctrl zooms around the mouse (1.2 a notch),

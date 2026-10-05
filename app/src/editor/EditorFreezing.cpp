@@ -1,6 +1,7 @@
 // Freezing: freezing, unfreezing and flattening tracks, and what frozen audio
 // holds, which can't change (the edits a frozen track, or a track in a frozen
-// group, refuses).
+// group, refuses) unless the frozen audio changes with it (time selections:
+// EditorClips.cpp).
 
 #include "editor/EditorSupport.h"
 #include "editor/ProjectEditor.h"
@@ -9,6 +10,7 @@
 #include "model/Ids.h"
 
 #include <QHash>
+#include <QSet>
 #include <QUndoStack>
 
 #include <algorithm>
@@ -85,9 +87,12 @@ QStringList ProjectEditor::flattenTracks(const QStringList& trackIds) {
         const Track track = p.track(id);
         Track after = track;
         after.kind = kAudioKind;
-        Clip clip = track.frozen->clip(id, track.name);
-        clip.id = newId();
-        after.clips = {clip};
+        after.clips.clear();
+        for (Clip clip : track.frozen->playing(id)) {  // (what of it plays: all of it, or its segments)
+            clip.id = newId();
+            clip.name = track.name;
+            after.clips.push_back(std::move(clip));
+        }
         after.devices.clear();
         after.frozen.reset();
         EnvelopeMap envelopes;
@@ -109,12 +114,16 @@ std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command)
     // Why a command can't be made: it changes the clips, devices or device
     // automation of a frozen track (or of a track in a frozen group); none: it
     // can. (Taking away a sidechain whose source goes is fine.)
+    // A clip change carrying the frozen audio of every frozen track holding the
+    // clips' tracks along (a time selection's edit) is fine.
     const Project& p = *project_;
     QStringList tracks;
     QString what = QStringLiteral("devices");
     if (const auto* clips = dynamic_cast<const SetClipsCommand*>(&command)) {
+        const QStringList carried = clips->frozenAfter().keys();
         for (auto it = clips->after().constBegin(); it != clips->after().constEnd(); ++it) {
-            if (!clips->before().contains(it.key()) || clips->before().value(it.key()) != it.value()) tracks.append(it.key());
+            const bool changed = !clips->before().contains(it.key()) || clips->before().value(it.key()) != it.value();
+            if (changed && !carriesFrozen(it.key(), carried)) tracks.append(it.key());
         }
         what = QStringLiteral("clips");
     } else if (const auto* chains = dynamic_cast<const SetChainsCommand*>(&command)) {
@@ -151,6 +160,65 @@ std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command)
         return QStringLiteral("%1 is frozen: unfreeze it to change its %2").arg(p.track(*p.frozenBy(id)).name, what);
     }
     return std::nullopt;
+}
+
+// --- Time selections over frozen tracks ---
+
+QStringList ProjectEditor::frozenRenders(const QStringList& trackIds) const {
+    // The frozen audio an edit of these tracks' clips changes: each frozen
+    // track among them, and each frozen group one of them is in, in the
+    // arrangement's order (then the returns').
+    const Project& p = *project_;
+    QSet<QString> found;
+    for (const QString& id : trackIds) {
+        if (id == kMaster || !p.hasOwner(id)) continue;
+        if (p.track(id).frozen) found.insert(id);
+        if (!p.hasTrack(id)) continue;
+        for (const QString& group : p.ancestors(id)) {
+            if (p.track(group).frozen) found.insert(group);
+        }
+    }
+    QStringList renders;
+    for (const Track* track : p.allTracks()) {
+        if (found.contains(track->id)) renders.append(track->id);
+    }
+    return renders;
+}
+
+bool ProjectEditor::carriesFrozen(const QString& trackId, const QStringList& renders) const {
+    // Whether an edit taking the frozen audio of `renders` along may change this
+    // track's clips (or the automation baked into it): it holds all the frozen
+    // audio its clips are in.
+    const QStringList holders = frozenRenders({trackId});
+    return std::all_of(holders.begin(), holders.end(), [&](const QString& h) { return renders.contains(h); });
+}
+
+bool ProjectEditor::coversFrozen(const QString& holder, const QStringList& trackIds) const {
+    // Whether a time selection over these tracks takes in all a frozen track
+    // holds (a frozen group: itself and all that is in it).
+    const QStringList held = project_->withContents({holder});
+    return std::all_of(held.begin(), held.end(), [&](const QString& id) { return trackIds.contains(id); });
+}
+
+std::optional<QString> ProjectEditor::frozenAreaProblem(const QStringList& trackIds) const {
+    // Why a time selection over these tracks can't be edited with the frozen
+    // audio under it (none: it can): it takes in some of what a frozen group
+    // holds, not all of it. The group's audio is one render of all of it, so
+    // its stretch of time goes for all of its tracks or none.
+    const Project& p = *project_;
+    for (const QString& holder : frozenRenders(trackIds)) {
+        if (!coversFrozen(holder, trackIds)) {
+            return QStringLiteral("%1 is frozen: select the whole group to edit what is in it")
+                .arg(p.track(holder).name);
+        }
+    }
+    return std::nullopt;
+}
+
+std::vector<Clip> ProjectEditor::frozenSegments(const QString& trackId) const {
+    // What of a frozen track's audio plays now.
+    const Track& track = project_->track(trackId);
+    return track.frozen ? track.frozen->playing(trackId) : std::vector<Clip>();
 }
 
 bool ProjectEditor::laneFrozen(const QString& owner, const QString& key) const {

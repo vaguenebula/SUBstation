@@ -42,6 +42,8 @@ inline constexpr int kMergeId = 0x6E1;
 
 // Track id -> its clips.
 using ClipLists = QMap<QString, std::vector<Clip>>;
+// Frozen track id -> what of its frozen audio plays (Freeze::segments; none: all of it).
+using FrozenSegments = QMap<QString, std::optional<std::vector<Clip>>>;
 // Track id -> its devices, in the order given.
 using DeviceLists = OrderedMap<QString, std::vector<Device>>;
 
@@ -82,12 +84,15 @@ protected:
     QString mergeKey_;
 };
 
-// Replaces the clip lists of one or more tracks (moves, trims, splits...).
-// With a merge key (a knob drag in the clip view) consecutive edits merge
-// (those of the same tracks).
+// Replaces the clip lists of one or more tracks (moves, trims, splits...),
+// and, for an edit of a time selection over frozen tracks, what of their
+// frozen audio plays (Freeze::segments), so both change (and are undone)
+// together. With a merge key (a knob drag in the clip view) consecutive edits
+// merge (those of the same tracks).
 class SetClipsCommand : public QUndoCommand {
 public:
-    SetClipsCommand(Project* project, const QString& text, ClipLists before, ClipLists after, QString mergeKey = {});
+    SetClipsCommand(Project* project, const QString& text, ClipLists before, ClipLists after, QString mergeKey = {},
+                    FrozenSegments frozenBefore = {}, FrozenSegments frozenAfter = {});
 
     int id() const override;
     bool mergeWith(const QUndoCommand* other) override;
@@ -96,6 +101,9 @@ public:
 
     const ClipLists& before() const { return before_; }
     const ClipLists& after() const { return after_; }
+    const FrozenSegments& frozenBefore() const { return frozenBefore_; }
+    // The frozen tracks whose audio the edit takes along (and what of it plays then).
+    const FrozenSegments& frozenAfter() const { return frozenAfter_; }
     const QString& mergeKey() const { return mergeKey_; }
 
 private:
@@ -103,6 +111,8 @@ private:
     ClipLists before_;
     ClipLists after_;
     QString mergeKey_;
+    FrozenSegments frozenBefore_;
+    FrozenSegments frozenAfter_;
 };
 
 class InsertTrackCommand : public QUndoCommand {

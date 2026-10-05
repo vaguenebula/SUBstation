@@ -52,11 +52,22 @@ std::optional<TrackField> trackFieldFromName(const QString& name) {
 }
 
 Clip Freeze::clip(const QString& trackId, const QString& name) const {
-    Clip played = Clip::audio(QStringLiteral("frozen-") + trackId, path, name, 0.0, durationSec, 0.0, durationSec);
+    Clip played = segment(QStringLiteral("frozen-") + trackId, 0.0, 0.0, durationSec);
+    played.name = name;
+    return played;
+}
+
+Clip Freeze::segment(const QString& id, double startBeat, double offsetSec, double length) const {
+    Clip played = Clip::audio(id, path, QString(), startBeat, length, offsetSec, durationSec);
     played.warp = true;
     played.warpMode = kDefaultWarpMode;
     played.segmentBpm = tempo;
     return played;
+}
+
+std::vector<Clip> Freeze::playing(const QString& trackId) const {
+    if (segments) return *segments;
+    return {clip(trackId, QString())};
 }
 
 bool Track::hasInput() const {

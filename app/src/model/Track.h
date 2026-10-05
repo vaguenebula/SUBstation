@@ -53,14 +53,27 @@ inline constexpr int kMaxTrackHeight = 400;
 // A frozen track's audio: its signal before its fader (after its devices),
 // from the timeline's start, in the WAV file `path`, `durationSec` long,
 // rendered at `tempo` (it plays warped to others, its length in beats fixed).
+//
+// What of it plays are its `segments`: audio clips into the render (warped from
+// `tempo`, as clip() is), none: all of it, from the timeline's start (as it was
+// rendered, and as projects saved before segments load). Editing a time
+// selection over the frozen track (moving, copying, pasting, cutting,
+// duplicating or deleting it) does to its segments what it does to its clips,
+// so what plays stays in step with the arrangement (ProjectEditor's time
+// selections); unfreezing forgets them, the clips staying as edited.
 struct Freeze {
     QString path;
     double durationSec = 0.0;
     double tempo = 120.0;
+    std::optional<std::vector<Clip>> segments = std::nullopt;
 
-    // The clip that plays it, from the timeline's start (warped from `tempo`: at
-    // that tempo it plays its samples as they are).
+    // The clip that plays all of it, from the timeline's start (warped from
+    // `tempo`: at that tempo it plays its samples as they are).
     Clip clip(const QString& trackId, const QString& name) const;
+    // A segment: `length` seconds of it from `offsetSec`, played from `startBeat`.
+    Clip segment(const QString& id, double startBeat, double offsetSec, double length) const;
+    // What of it plays: its segments, or (none) one playing all of it.
+    std::vector<Clip> playing(const QString& trackId) const;
 
     friend bool operator==(const Freeze&, const Freeze&) = default;
 };

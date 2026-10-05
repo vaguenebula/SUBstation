@@ -231,8 +231,8 @@ slots:        0              1   2 (B, rack 1, chain 0)  3 (C, rack 1, chain 1) 
 ## Freezing
 
 `setTrackFrozen(track, true)` freezes a track: it plays its clips (its frozen audio, which
-the bridge gives it as its only clip) through its fader and on along its edges, and nothing
-else. In `rebuildSnapshotLocked()`:
+the bridge gives it as clips into the render: all of it, or what time-selection edits left
+of it) through its fader and on along its edges, and nothing else. In `rebuildSnapshotLocked()`:
 
 - A frozen track has no devices in the snapshot (no inserts, device automation, sidechains
   into them or latency), no notes, and isn't monitored or armed (`TrackRender::frozen`).

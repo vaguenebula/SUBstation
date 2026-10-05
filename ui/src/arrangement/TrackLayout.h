@@ -65,7 +65,8 @@ struct LaneRow {
 // automation lanes shown below it. A folded track's row is kFoldedHeight high
 // (a folded group's kFoldedGroupHeight); neither shows automation. A folded
 // track (not a group) shows its clips as `bars`, as Ableton does: they are
-// clicked and dragged, but the row isn't a grid to select time on.
+// clicked and dragged whole (all title); between them the row is a grid like
+// any other, to select time on.
 struct Row {
     QString trackId;
     int top = 0;

@@ -1,5 +1,6 @@
 // What is selected in the arrangement (Selection): tracks (Ctrl- and
-// Shift-click), clip ranges and lane ranges, breakpoints, what Delete acts on,
+// Shift-click), clip ranges (and the rows they show over) and lane ranges,
+// breakpoints, what Delete acts on,
 // the insert marker, and what is left of a selection after the project
 // changes (Selection's rules, without the window).
 
@@ -266,6 +267,37 @@ private Q_SLOTS:
         std::vector<std::pair<double, double>> spans;
         for (const Clip& c : f.track(tracks[0]).clips) spans.emplace_back(c.startBeat, c.endBeat(f.project.tempo()));
         QVERIFY((spans == std::vector<std::pair<double, double>>{{0.0, 1.0}, {3.0, 4.0}}));
+    }
+
+    void aTimeSelectionShowsOverTheRowsItCovers() {
+        // Made over a group's row alone, it acts on what is in the group too
+        // (rangeTrackIds), but shows over the group's row only (rangeRows).
+        EditorFixture f;
+        const QStringList tracks = threeTracks(f);
+        const QString group = f.editor.groupTracks(tracks.mid(0, 2));
+        const QStringList over = f.project.withContents({group});
+        Selection selection;
+        selection.setTimeRange(1.0, 3.0, over, f.editor.clipsInRange(1.0, 3.0, over), {}, {group});
+        QCOMPARE(selection.rangeTrackIds(), (QStringList{group, tracks[0], tracks[1]}));
+        QCOMPARE(selection.rangeRows(), QStringList{group});
+        QCOMPARE(selection.clips().size(), 2);
+        // Without rows (or with none of its tracks): it shows over all its tracks.
+        selection.setTimeRange(1.0, 3.0, over, QSet<ClipRef>());
+        QCOMPARE(selection.rangeRows(), over);
+        selection.setTimeRange(1.0, 3.0, over, QSet<ClipRef>(), {}, {tracks[2]});
+        QCOMPARE(selection.rangeRows(), over);
+        // Rows go with the tracks they are of.
+        selection.setTimeRange(1.0, 3.0, over, QSet<ClipRef>(), {}, {group, tracks[0]});
+        f.editor.ungroup({group});  // (the group goes, what was in it stays)
+        selection.prune(f.project);
+        QCOMPARE(selection.rangeTrackIds(), (QStringList{tracks[0], tracks[1]}));
+        QCOMPARE(selection.rangeRows(), QStringList{tracks[0]});
+        selection.clear();
+        QVERIFY(selection.rangeRows().isEmpty());
+        // A selection of tracks has none.
+        selection.setTimeRange(1.0, 3.0, over, QSet<ClipRef>(), {}, {group});
+        selection.selectTrack(tracks[2], true);
+        QVERIFY(selection.rangeRows().isEmpty());
     }
 };
 

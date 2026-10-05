@@ -528,7 +528,9 @@ private Q_SLOTS:
         QCOMPARE(project.returns()[0].devices[0].plugin->uid, QStringLiteral("ABCDEF0123456789"));
         QVERIFY(project.isDeviceFolded("u2") && project.isDeviceFolded("d1"));
 
-        QCOMPARE(projectToJson(project, projectFile), data);
+        QJsonObject saved = data;  // (as the current version: it has nothing the file didn't)
+        saved["version"] = kProjectVersion;
+        QCOMPARE(projectToJson(project, projectFile), saved);
     }
 
     // --- What an edited file can't have ---
@@ -737,6 +739,49 @@ private Q_SLOTS:
         data = setIn(data, {"tracks", 0, "frozen", "tempo"}, QJsonValue::Null);
         loadInto(loaded, data, projectFile);
         QVERIFY(!loaded.track("a").frozen);
+    }
+
+    void whatOfFrozenAudioPlaysIsSaved() {
+        // Its segments, once a time selection over its track was edited: each
+        // one's id, start beat, offset and length (the rest is the freeze's).
+        test::TempDir dir;
+        const QString projectFile = dir.path("x.gilproj");
+        Freeze frozen{dir.path("Freeze/a.wav"), 8.0, 98.0};
+        frozen.segments = std::vector<Clip>{frozen.segment("s1", 0.0, 0.0, 1.0), frozen.segment("s2", 6.5, 2.0, 1.5)};
+        const Freeze whole{dir.path("Freeze/b.wav"), 4.0, 120.0};
+        Freeze silent = whole;  // (all of it cut away: nothing plays)
+        silent.segments = std::vector<Clip>();
+        ProjectContents contents;
+        contents.tracks = {test::makeTrack("a", "A"), test::makeTrack("b", "B"), test::makeTrack("c", "C")};
+        contents.tracks[0].frozen = frozen;
+        contents.tracks[1].frozen = whole;
+        contents.tracks[2].frozen = silent;
+        Project project;
+        project.replaceContents(contents);
+        QJsonObject data = projectToJson(project, projectFile);
+        const QJsonObject saved = data["tracks"].toArray()[0].toObject()["frozen"].toObject();
+        QCOMPARE(saved["segments"].toArray().size(), 2);
+        QCOMPARE(saved["segments"].toArray()[1].toObject(),
+                 (QJsonObject{{"id", "s2"}, {"start_beat", 6.5}, {"offset_sec", 2.0}, {"duration_sec", 1.5}}));
+        // (All of it plays: no segments.)
+        QVERIFY(!data["tracks"].toArray()[1].toObject()["frozen"].toObject().contains("segments"));
+        QCOMPARE(data["tracks"].toArray()[2].toObject()["frozen"].toObject()["segments"].toArray().size(), 0);
+        Project loaded;
+        loadInto(loaded, data, projectFile);
+        QVERIFY(loaded.track("a").frozen == frozen);
+        QVERIFY(loaded.track("b").frozen == whole && !loaded.track("b").frozen->segments);
+        QVERIFY(loaded.track("c").frozen == silent);
+        QCOMPARE(loaded.track("a").frozen->playing("a")[1].sourceDurationSec, 8.0);
+        QVERIFY(loaded.track("a").frozen->playing("a")[1].isWarped());
+        // A file from before segments (or without them) plays all of it.
+        QCOMPARE(loaded.track("b").frozen->playing("b"), std::vector<Clip>{whole.clip("b", QString())});
+        // A damaged segment is left out; the others load.
+        data = setIn(data, {"tracks", 0, "frozen", "segments", 0, "duration_sec"}, QStringLiteral("long"));
+        data = setIn(data, {"tracks", 0, "frozen", "segments", 1, "start_beat"}, -2.0);  // (held to the start)
+        loadInto(loaded, data, projectFile);
+        QCOMPARE(loaded.track("a").frozen->segments->size(), size_t(1));
+        QCOMPARE(loaded.track("a").frozen->segments->front().id, QStringLiteral("s2"));
+        QCOMPARE(loaded.track("a").frozen->segments->front().startBeat, 0.0);
     }
 
     void onlyFoldedDevicesThatExistAreSaved() {
