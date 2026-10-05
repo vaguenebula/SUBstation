@@ -72,6 +72,23 @@ T findIn(QQuickItem* root, const QString& name) {
     return nullptr;
 }
 
+// Every item under `root` with this objectName, in the item tree's order (a
+// Repeater's: by index).
+template <typename T>
+void findAllIn(QQuickItem* root, const QString& name, std::vector<T>& found) {
+    if (!root) return;
+    if (root->objectName() == name) {
+        if (auto* item = qobject_cast<T>(root)) found.push_back(item);
+    }
+    for (QQuickItem* child : root->childItems()) findAllIn<T>(child, name, found);
+}
+template <typename T>
+std::vector<T> findAllIn(QQuickItem* root, const QString& name) {
+    std::vector<T> found;
+    findAllIn<T>(root, name, found);
+    return found;
+}
+
 class ArrangementHarness {
 public:
     // An item of the window by its objectName.
