@@ -2,8 +2,9 @@
 #  * the audio engine (engine/src) and the browser backend (browser/src) never
 #    include Qt or anything of the application or the UI;
 #  * the application layer (app/src) never includes Qt Quick or QML, nor the UI;
-#  * the UI (ui/) never includes the engine's headers: it talks to the
-#    application layer only.
+#  * the UI (ui/src) never includes the engine's headers: it talks to the
+#    application layer only. (ui/main.cpp, which puts the layers together, makes
+#    the engine and hands it to the application layer.)
 # Run as: cmake -DROOT=<source dir> -P CheckBoundaries.cmake
 set(_failures "")
 
@@ -32,7 +33,7 @@ foreach (_header IN LISTS _engine_headers)
 endforeach()
 list(JOIN _engine_names "|" _engine_pattern)
 if (_engine_pattern)
-    _check(ui "(${_engine_pattern})[\">]|miniaudio|pluginterfaces|public\\.sdk" "the engine")
+    _check(ui/src "(${_engine_pattern})[\">]|miniaudio|pluginterfaces|public\\.sdk" "the engine")
 endif()
 
 if (_failures)
