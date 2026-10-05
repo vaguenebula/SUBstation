@@ -1,11 +1,10 @@
-venv/
-build/
+# Build folders (cmake -B build, or any build-* beside it)
+/build*/
+/out/
+/.cache/
+CMakeUserPresets.json
+# Python's cache, from browser/tools/gen_unicode_tables.py
 __pycache__/
-*.pyc
-*.pyd
-*.egg-info/
-.pytest_cache/
-.ruff_cache/
 # Steinberg's ASIO SDK, unzipped into the project folder (not ours to publish)
 /asiosdk*/
 /ASIOSDK*/
@@ -14,5 +13,3 @@ __pycache__/
 # Logs plug-ins write into the working folder (e.g. kiloHearts.log)
 *.log
 profile.svg
-uv.lock/build*/
-/.cache/

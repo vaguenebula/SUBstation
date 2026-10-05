@@ -10,10 +10,13 @@ Nothing they do touches your settings, use counts, browser index or plug-ins.
 | [LibraryGen.h](LibraryGen.h) | Makes the synthetic sample libraries. |
 | [PyRandom.h](PyRandom.h), [Json.h](Json.h) | Python's random numbers (so a library is the one the Python generator made), and the reports as JSON. |
 
-`browser_ui_bench.py` and `display_fps_bench.py` measured the Python UI (the
-`BrowserPanel`, the device editors' displays); they are kept with their results,
-and need the Python-era tree (`browser_ui_bench.py` also imported
-`library_gen.py`, now `LibraryGen.cpp`).
+Two more benchmarks measured the Python UI (`browser_ui_bench.py`: the
+`BrowserPanel`; `display_fps_bench.py`: the device editors' displays). They went
+with that UI; their recorded results stay below and in `results/`, and the
+scripts are in the history (before the Qt Quick UI: `git show
+bd845a9:benchmarks/browser_ui_bench.py`). The Qt Quick UI's own drawing is
+timed by its tests (`test_ui_sg`: the scene-graph painter with tens of
+thousands of shapes).
 
 ## Building and running
 
@@ -89,14 +92,9 @@ results below compare with, so its column (`reference_ms`; the Python version's
 reports had `python_ms` and `python_first_ms`) is no longer the "before". The
 native columns and the index's are the same as before.
 
-`browser_ui_bench.py` measured the real (Python) `BrowserPanel`: time until results
-are laid out and painted, and the longest time the UI thread couldn't run (a 1 ms
-timer's gaps). It only used what the panel had before and after the native
-backend, so `--code DIR` ran it against another copy of the `substation` package,
-for example the one before. Commit 63776d3 predates the rename to SUBstation, so its
-package is `src/gilstudio`: extract it (`git archive 63776d3 src/gilstudio`), rename
-the folder to `substation`, replace `gilstudio` with `substation` in its `.py`
-files, and copy the built `_engine*.pyd` into it (the engine didn't change).
+`browser_ui_bench.py` (removed with the Python UI) measured the real (Python)
+`BrowserPanel`: time until results were laid out and painted, and the longest time
+the UI thread couldn't run (a 1 ms timer's gaps).
 
 ## Results
 
