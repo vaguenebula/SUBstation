@@ -80,7 +80,7 @@ fixed order is what makes renders independent of the thread that finished first.
 ## Ordering and cycles
 
 The graph must be acyclic. An edge that would close a cycle is refused where it is made, with
-`std::invalid_argument` (`ValueError` in Python):
+`std::invalid_argument`:
 
 - `wouldCycle(count, edges, from, to)`: true if `to` is `from`, or already feeds it along some
   path (a depth-first walk over every edge kind). Edges into the master never close one.
@@ -91,7 +91,9 @@ The graph must be acyclic. An edge that would close a cycle is refused where it 
   moving rack (`checkRackSidechainsLocked()`), against the strip it goes to.
 
 What the user sees greyed out (a group's own tracks as its sidechain source, a return feeding the
-one sending to it) the Python model works out the same way; the engine's checks are the last word.
+one sending to it) the application layer's model works out the same way (`wouldCycle`, `inputWouldCycle`,
+`sidechainWouldCycle` in [app/src/model/Routing.h](../../app/src/model/Routing.h)); the engine's checks are the
+last word.
 
 `topologicalOrder()` then lists the tracks so that each comes after everything that feeds it,
 keeping the given order where it can (a stack seeded in reverse). That is the snapshot's track
@@ -102,8 +104,8 @@ sidechains.
 ## Groups and returns
 
 A group is a track whose input is the sum of the output edges going into it; a return is a
-track whose input is the sum of the sends going into it. Neither has clips (the Python model sees
-to that). Both are ordinary strips: devices, fader, their own output edge and sends (a return can
+track whose input is the sum of the sends going into it. Neither has clips (the application layer's
+model sees to that). Both are ordinary strips: devices, fader, their own output edge and sends (a return can
 send on into another return). Groups nest: a group's output goes into another group. Removing a
 track sends what went into it to the master and takes away the sends into it, the input edges
 and sidechains from it, and its chains with their devices.
@@ -229,8 +231,8 @@ slots:        0              1   2 (B, rack 1, chain 0)  3 (C, rack 1, chain 1) 
 ## Freezing
 
 `setTrackFrozen(track, true)` freezes a track: it plays its clips (its frozen audio, which
-the bridge gives it as its only clip) through its fader and on along its edges, and nothing
-else. In `rebuildSnapshotLocked()`:
+the bridge gives it as clips into the render: all of it, or what time-selection edits left
+of it) through its fader and on along its edges, and nothing else. In `rebuildSnapshotLocked()`:
 
 - A frozen track has no devices in the snapshot (no inserts, device automation, sidechains
   into them or latency), no notes, and isn't monitored or armed (`TrackRender::frozen`).
@@ -273,24 +275,31 @@ The frozen audio itself is a render of the track's signal before its fader:
 
 ## Tests
 
-- [test_groups_engine.py](../../tests/test_groups_engine.py): a group's effect on the sum of its
+In the engine's tests, [tests/engine](../../tests/engine):
+
+- [test_groups_engine.cpp](../../tests/engine/test_groups_engine.cpp): a group's effect on the sum of its
   tracks, cycles refused, removing a group, meters, solo and mute across levels, compensation in
   nested groups, group automation in time.
-- [test_sends_engine.py](../../tests/test_sends_engine.py): sends before and after the fader,
+- [test_sends_engine.cpp](../../tests/engine/test_sends_engine.cpp): sends before and after the fader,
   returns, muted tracks, cycles across sends and outputs, removing a return, solo and mute,
   compensation per edge (one track into two returns of different latency, a pre-fader tap after
   a latent device), send automation in time.
-- [test_sidechain_engine.py](../../tests/test_sidechain_engine.py): taps, alignment both ways,
+- [test_sidechain_engine.cpp](../../tests/engine/test_sidechain_engine.cpp): taps, alignment both ways,
   a tap before a device waiting for its own sidechain, groups and the master, automation after a
   waiting device, cycles, the source going, mute and solo, silence flagged, workers.
-- [test_racks_engine.py](../../tests/test_racks_engine.py): chains summing, faders, latency not
+- [test_racks_engine.cpp](../../tests/engine/test_racks_engine.cpp): chains summing, faders, latency not
   smearing, nested automation, instrument racks, sidechains in racks, moves, nesting limits,
   cycles through racks, workers.
-- [test_resampling_engine.py](../../tests/test_resampling_engine.py): input edges and their
+- [test_resampling_engine.cpp](../../tests/engine/test_resampling_engine.cpp): input edges and their
   cycles.
-- [test_freeze_engine.py](../../tests/test_freeze_engine.py): a track's signal before its fader
+- [test_freeze_engine.cpp](../../tests/engine/test_freeze_engine.cpp): a track's signal before its fader
   (lined up, solo ignored, a group's bus, its tail into a WAV file), frozen tracks playing
   their render through their faders, frozen groups not hearing their tracks, what goes only
   into frozen tracks, sends tapping frozen audio, no latency from frozen tracks.
-- The model side of the same rules: `test_groups_model.py`, `test_sends_model.py`,
-  `test_sidechain_model.py`, `test_racks_model.py`, `test_resampling_model.py`.
+
+The application layer's side of the same rules is in [tests/app](../../tests/app):
+[test_editor_groups.cpp](../../tests/app/test_editor_groups.cpp),
+[test_editor_sends.cpp](../../tests/app/test_editor_sends.cpp),
+[test_editor_sidechain.cpp](../../tests/app/test_editor_sidechain.cpp),
+[test_editor_racks.cpp](../../tests/app/test_editor_racks.cpp),
+[test_editor_resampling.cpp](../../tests/app/test_editor_resampling.cpp).

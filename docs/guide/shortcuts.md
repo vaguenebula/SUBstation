@@ -78,8 +78,8 @@ the focus. Most are also in the menus, which show their keys.
 | Fold / unfold a device | Ctrl+double-click it (or its ▾ button) |
 | Cut / copy / paste / duplicate devices (the device view has the focus) | Ctrl+X / Ctrl+C / Ctrl+V / Ctrl+D |
 | Group the selected devices into a rack / ungroup a rack | Ctrl+G / Ctrl+Shift+G |
-| Show a plug-in's editor | double-click its device in the device view |
-| Close the plug-in editor in front | Ctrl+W |
+| Show a plug-in's editor (Windows) | double-click its device in the device view |
+| Close the plug-in editor in front (Windows) | Ctrl+W |
 
 ## MIDI
 
@@ -95,8 +95,9 @@ a bar). See [midi.md](midi.md#the-piano-roll).
 
 ## Plug-in editors
 
-The Ctrl/Alt shortcuts also work while a plug-in's editor window has the focus, except
-Ctrl+A/C/V/X/Z/Y, which the plug-in keeps for its own text fields.
+Plug-in editor windows exist on Windows only. There, the Ctrl/Alt shortcuts also work
+while a plug-in's editor window has the focus, except Ctrl+A/C/V/X/Z/Y, which the plug-in
+keeps for its own text fields.
 
 So do **Space** (play / stop) and **S** (solo): the DAW comes first. They go to the
 plug-in only:
@@ -110,5 +111,6 @@ the plug-in.
 
 ---
 
-For developers: [../ui/README.md](../ui/README.md) (main_window.py, plugin_keys.py,
-computer_keyboard.py).
+For developers: [../ui/README.md](../ui/README.md#menus-and-actions): the menus and
+their shortcuts, [the keys from plug-in editors](../ui/README.md#shortcuts-from-plug-in-editors)
+and [the computer MIDI keyboard](../ui/README.md#the-computer-midi-keyboard).

@@ -1,13 +1,15 @@
 # Audio devices
 
 The engine plays through one audio device at a time, of either driver type: WASAPI (through
-miniaudio) or ASIO (Steinberg's driver model, compiled only when the ASIO SDK was found). This
+miniaudio) or ASIO (Steinberg's driver model, compiled only when the ASIO SDK was found). On
+platforms other than Windows the WASAPI backend opens miniaudio's default backend instead, as the
+"System" driver ([below](#the-system-driver-elsewhere)). This
 part lives in [AudioDevice.h](../../engine/src/AudioDevice.h) / [AudioDevice.cpp](../../engine/src/AudioDevice.cpp),
 the two backends in [engine/src/backends/](../../engine/src/backends/), and the engine's side of it
 (opening, resets, driver events, the audio callback) in [EngineDevice.cpp](../../engine/src/EngineDevice.cpp).
 
 For the preferences the user sees, see [guide/audio-setup.md](../guide/audio-setup.md); for how the
-Python side opens devices and polls their events, [python/engine-bridge.md](../python/engine-bridge.md);
+application opens devices and polls their events (the engine bridge), [app/engine-bridge.md](../app/engine-bridge.md);
 for building with or without the ASIO SDK, [building.md](../building.md).
 
 ## Overview
@@ -27,7 +29,7 @@ for building with or without the ASIO SDK, [building.md](../building.md).
   apartment for that. The audio thread calls nothing on the driver but `outputReady()`.
 
 ```
- UI thread (Python, via bindings)                      backend's real-time thread
+ main thread (the engine bridge)                       backend's real-time thread
  ------------------------------------                  --------------------------
  Engine::openDevice(DeviceConfig)                      WASAPI: miniaudio data callback
    -> AudioDevice::open -> backend.open                ASIO:   bufferSwitch(TimeInfo)
@@ -49,7 +51,7 @@ for building with or without the ASIO SDK, [building.md](../building.md).
 |---|---|
 | [AudioDevice.h](../../engine/src/AudioDevice.h) | `DeviceConfig`, `DeviceCaps`, `DeviceState`, `AudioIO`, `DeviceEvent`, the `AudioCallback` and `AudioBackend` interfaces, and `AudioDevice` |
 | [AudioDevice.cpp](../../engine/src/AudioDevice.cpp) | `AudioDevice`: makes the backends (ASIO first, for COM), picks one by driver name, remembers the last config for resets |
-| [backends/WasapiBackend.h](../../engine/src/backends/WasapiBackend.h), [.cpp](../../engine/src/backends/WasapiBackend.cpp) | WASAPI output through miniaudio, shared or exclusive |
+| [backends/WasapiBackend.h](../../engine/src/backends/WasapiBackend.h), [.cpp](../../engine/src/backends/WasapiBackend.cpp) | WASAPI output through miniaudio, shared or exclusive; elsewhere the "System" driver |
 | [backends/AsioBackend.h](../../engine/src/backends/AsioBackend.h), [.cpp](../../engine/src/backends/AsioBackend.cpp) | ASIO through `IASIO`: finding and loading drivers, channels, rate, buffer size, the callbacks, resets, control panel. Built only with `SUBSTATION_HAS_ASIO` |
 | [backends/AsioSupport.h](../../engine/src/backends/AsioSupport.h) | The parts of ASIO hosting that need no SDK: the sample formats and their conversion, the buffer sizes to offer and to ask for (namespace `sub::asio`) |
 | [miniaudio_impl.c](../../engine/src/miniaudio_impl.c) | The single translation unit that compiles miniaudio's implementation (`MINIAUDIO_IMPLEMENTATION`) |
@@ -81,8 +83,8 @@ size, and whether it has a control panel.
 
 **`DeviceState`**: the open device: driver type, name, rate, buffer size, input and output latency in
 frames (as the driver reports them), the open input and output channels *in the callback's order*,
-exclusive, and its `DeviceCaps`. `Engine::deviceStatus()` turns it into a `DeviceStatus` for Python
-(latencies in ms; `backend` is the driver type).
+exclusive, and its `DeviceCaps`. `Engine::deviceStatus()` turns it into a `DeviceStatus` for the
+application (latencies in ms; `backend` is the driver type).
 
 **`AudioIO`**: one callback's audio: `inputs`/`numInputs`, `outputs`/`numOutputs` (planar float
 buffers), `frames`, `sampleTime` (the device's sample clock at the first frame) and `hostTimeNs`
@@ -119,8 +121,9 @@ SUBstation has no ASIO support (the ASIO SDK was missing)".
   driver's own thread).
 - Device events may arrive on any thread; `Engine::deviceEvent()` only ORs them into the atomic
   `pendingDeviceEvents_`.
-- The Python bindings release the GIL around `open_device`, `reopen_device`, `close_device` and
-  `show_device_control_panel`: a driver may show a dialog whose message loop calls back into Python.
+- `openDevice`, `reopenDevice`, `closeDevice` and `showDeviceControlPanel` block the main thread, and
+  a driver may show a dialog whose message loop calls back into the application meanwhile (the
+  engine bridge doesn't poll the device from inside one).
 
 ### Opening a device (`Engine::openDeviceLocked`)
 
@@ -151,8 +154,8 @@ On the real-time thread, with denormals off:
 
 1. `shared_.clock.update(hostTimeNs, sampleTime)`: the anchor MIDI input is stamped against.
 2. Meters the open inputs (up to `SharedState::kMaxInputMeters`, 256): a peak per channel, kept as a
-   running maximum until `takeInputMeters()` exchanges it with 0 (Python: `take_input_meters()`, in
-   the order of `DeviceStatus.input_channels`).
+   running maximum until `takeInputMeters()` exchanges it with 0 (in the order of
+   `DeviceStatus::inputChannels`).
 3. Loads the snapshot and the live recording. With no snapshot, or while live output is suspended
    (offline renders, changing the number of audio threads), it writes silence. Otherwise
    `Renderer::processLive()` renders, and the CPU load (time taken over the buffer's duration) is
@@ -187,6 +190,16 @@ into the oscilloscope ring (`SharedState::pushScope`, read by `masterScope()`).
 
 A capture device (to record WASAPI inputs) would open miniaudio's duplex mode and fill
 `AudioIO::inputs`; it isn't done yet (resampling records without inputs, so it works on WASAPI).
+
+### The System driver (elsewhere)
+
+On platforms other than Windows the same backend is the driver type every build has
+(`kDefaultDriver`, "System"; `AudioDevice::driverTypes()` lists it, and ASIO never): its miniaudio
+context takes the system's backends in miniaudio's order (Core Audio, PulseAudio, ALSA, JACK, sndio,
+audio4, OSS, AAudio, OpenSL), but never miniaudio's null backend, which "plays" faster than real time,
+so the playhead would race with no sound. Everything else is as for WASAPI: playback devices by name,
+output only, the same callback. Exclusive mode is WASAPI's: the application doesn't offer it here. With
+no sound server and no device, nothing opens; the application then runs without audio and says so.
 
 ### ASIO (`AsioBackend`)
 
@@ -282,20 +295,21 @@ One string per call, in this order of priority:
 - `"rerouted"`.
 - `"latency"`, after calling `refreshLatencies()`, so `deviceStatus()` has the new values.
 
-`Engine::reopenDevice()` (Python `reopen_device()`) opens `AudioDevice::resetConfig()`: the last config
-(driver, name, inputs and outputs kept) with the driver's new buffer size and rate. It throws if no
-device has been opened. The bridge polls `take_device_event()` with the meters and answers `"reset"`
-with it ([python/engine-bridge.md](../python/engine-bridge.md)). At start-up, if the saved settings
-can't be opened (another clock, fewer outputs), the application tries the device's own settings
-(rate, buffer and channels 0/empty), then the system default output (WASAPI) (`MainWindow.start_audio`).
+`Engine::reopenDevice()` opens `AudioDevice::resetConfig()`: the last config (driver, name, inputs and
+outputs kept) with the driver's new buffer size and rate. It throws if no device has been opened. The
+engine bridge polls `takeDeviceEvent()` with the meters and answers `"reset"` with it
+([app/engine-bridge.md](../app/engine-bridge.md)). At start-up, if the saved settings can't be opened
+(another clock, fewer outputs), the application tries the device's own settings (rate, buffer and
+channels 0/empty), then the system default output (WASAPI; "System" elsewhere)
+(`EngineBridge::startAudio()`).
 
-The status line shows the input and output latency the driver reports (`DeviceStatus.latency_ms`,
-`input_latency_ms`).
+The status line shows the input and output latency the driver reports (`DeviceStatus::latencyMs`,
+`inputLatencyMs`).
 
 ### Inputs
 
 A track's input names device channels; the bridge reopens an ASIO device with the extra input channels
-it needs (`open_device(..., input_channels=[...])`) when a track chooses one the driver hasn't open
+it needs (`DeviceConfig::inputChannels`) when a track chooses one the driver hasn't open
 (not while recording, which a reopen would end). Every buffer of the open inputs reaches the audio
 callback (with its sample position and time), where the engine meters them, and the renderer monitors
 and records them ([recording.md](recording.md)). A track input on a channel that isn't open reads
@@ -303,7 +317,7 @@ silence.
 
 ## Invariants and real-time rules
 
-- `audioCallback` never locks, allocates, frees or touches Python. Backends convert into buffers
+- `audioCallback` never locks, allocates, frees or calls into the application. Backends convert into buffers
   allocated at open.
 - `deviceEvent` only sets atomic flags; all reaction happens on the UI thread.
 - Device open, close, reset and control panel calls come from the thread that created the engine (an
@@ -335,7 +349,7 @@ silence.
 - Only one ASIO device per process: a second engine (in tests) can't open ASIO while another has it.
 - `AudioDevice::resetConfig()` must run before closing: it asks the open driver.
 - A sample-rate change reloads every decoded source and remakes the stretch voices; the bridge also
-  refreshes its sources (`_change_device`).
+  refreshes its sources (`EngineBridge::refreshSources()`).
 - WASAPI's `sampleTime` restarts at 0 on every open; ASIO's comes from the driver when it is valid.
 - WASAPI may hand the engine several callbacks per device buffer with the same `hostTimeNs`;
   `AudioClock` keeps the first one's anchor ([midi.md](midi.md)).
@@ -343,19 +357,20 @@ silence.
 
 ## Tests
 
-- [tests/test_asio.py](../../tests/test_asio.py), with the fake driver
+- [tests/engine/test_asio.cpp](../../tests/engine/test_asio.cpp), with the fake driver
   [tests/asio_driver/](../../tests/asio_driver/): listing the driver, status and capabilities, output in
-  every sample format (decoded with numpy), full scale clipped, a single output mixing the master to
-  mono, open inputs metered, sample rates, buffer sizes (powers of two, steps, a fixed size), reset
-  requests, buffer-size change requests, the driver changing its clock, new latencies, the questions
-  drivers ask (`asioMessage`), the control panel, errors leaving no driver open, one ASIO device per
-  program, playing on the driver's own thread, and the preferences and start-up fallback in the
-  application. Skipped when the engine was built without the ASIO SDK.
+  every sample format (decoded from the bytes the driver got), full scale clipped, a single output
+  mixing the master to mono, open inputs metered, sample rates, buffer sizes (powers of two, steps, a
+  fixed size), reset requests, buffer-size change requests, the driver changing its clock, new
+  latencies, the questions drivers ask (`asioMessage`), the control panel, errors leaving no driver
+  open, one ASIO device per program, playing on the driver's own thread. Skipped when the engine was
+  built without the ASIO SDK. The preferences and the start-up fallback in the application are
+  [tests/app/test_bridge_settings.cpp](../../tests/app/test_bridge_settings.cpp)'s and
+  [tests/app/test_ui_dialogs.cpp](../../tests/app/test_ui_dialogs.cpp)'s.
 - The fake driver runs in manual mode unless a test says otherwise: each `driver.process(n)` is `n`
   buffer switches on the test's thread. Its exported hooks set the sample type, buffer sizes,
   latencies, input levels and loopback, make `init` fail, change settings from the control panel, send
   `asioMessage`s, change the sample rate, and read back the bytes written to its outputs.
-- [tests/test_recording.py](../../tests/test_recording.py) and
-  [tests/test_ui_recording.py](../../tests/test_ui_recording.py) check that a device change ends a
-  recording; [tests/test_midi_input.py](../../tests/test_midi_input.py) that MIDI input is dropped
-  without a running device.
+- [tests/engine/test_recording.cpp](../../tests/engine/test_recording.cpp) checks that a device change
+  ends a recording; [tests/engine/test_midi_input.cpp](../../tests/engine/test_midi_input.cpp) that
+  MIDI input is dropped without a running device.

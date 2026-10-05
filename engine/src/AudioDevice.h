@@ -20,6 +20,14 @@
 
 namespace sub {
 
+// The driver type every build has: WASAPI on Windows, miniaudio's default
+// backend ("System") elsewhere (backends/WasapiBackend.h).
+#ifdef _WIN32
+inline constexpr const char* kDefaultDriver = "WASAPI";
+#else
+inline constexpr const char* kDefaultDriver = "System";
+#endif
+
 struct AudioDeviceInfo {
     std::string name;
     bool isDefault = false;
@@ -27,7 +35,7 @@ struct AudioDeviceInfo {
 
 // A device to open.
 struct DeviceConfig {
-    std::string driver = "WASAPI";     // one of AudioDevice::driverTypes()
+    std::string driver = kDefaultDriver;  // one of AudioDevice::driverTypes()
     std::string name;                  // empty: the system default (WASAPI), the first driver (ASIO)
     uint32_t sampleRate = 0;           // 0: the rate the device runs at
     uint32_t bufferFrames = 0;         // 0: the device's preferred size
@@ -125,7 +133,8 @@ public:
     AudioDevice(const AudioDevice&) = delete;
     AudioDevice& operator=(const AudioDevice&) = delete;
 
-    // The driver types this engine was built with: "WASAPI", and "ASIO".
+    // The driver types this engine was built with: kDefaultDriver ("WASAPI" on
+    // Windows), and "ASIO".
     static std::vector<std::string> driverTypes();
     std::vector<AudioDeviceInfo> devices(const std::string& driver);
 

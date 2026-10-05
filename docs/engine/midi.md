@@ -1,7 +1,7 @@
 # MIDI in the engine
 
 How MIDI tracks play: the notes of their clips turned into note events for the track's devices, the
-notes the piano roll plays, and MIDI input from controllers (WinMM) played live and recorded. Playback
+notes the piano roll plays, and MIDI input from controllers (WinMM on Windows) played live and recorded. Playback
 is in the renderer ([Renderer.cpp](../../engine/src/Renderer.cpp): `buildNoteEvents`,
 `releaseNotes`, `syncTempo`); MIDI input devices and the audio clock are in
 [MidiInput.h](../../engine/src/MidiInput.h) / [MidiInput.cpp](../../engine/src/MidiInput.cpp); the
@@ -13,9 +13,14 @@ For what the user sees (MIDI clips, the piano roll, MIDI input, the computer MID
 and [plugins.md](plugins.md) (VST3); chunks, segments and the prologue in [rendering.md](rendering.md);
 audio takes and placement in [recording.md](recording.md).
 
+On platforms other than Windows the engine has no MIDI input devices
+([backends/MidiNone.cpp](../../engine/src/backends/MidiNone.cpp): none is ever listed or opened). Everything else on
+this page works the same there, including input sent with `Engine::sendMidiInput()` (the computer MIDI keyboard,
+the tests).
+
 ## Overview
 
-- The UI flattens a MIDI track's clips into the notes they play, in beats (`set_track_notes`), keeping
+- The engine bridge flattens a MIDI track's clips into the notes they play, in beats (`setTrackNotes`), keeping
   only what the clips play (notes cut at their clip's end). The snapshot converts them to samples at the
   current tempo.
 - Each block, the renderer turns notes starting in it into note-on events for the track's devices, and
@@ -45,7 +50,8 @@ audio takes and placement in [recording.md](recording.md).
 | [Transport.h](../../engine/src/Transport.h) | `PreviewNote`; in `SharedState`: `previewNotes` queue, `midiInput` queue and `midiInputMutex`, `midiInputDelay`, `midiSampleRate`, `clock` |
 | [Processor.h](../../engine/src/Processor.h) | `ProcessEvent` (`NoteOn`, `NoteOff`, `Midi`), `setEnabled`, `requestReset`, `takeResetRequest`, `reset`, `resetOffline` |
 | [Renderer.h](../../engine/src/Renderer.h), [Renderer.cpp](../../engine/src/Renderer.cpp) | Note events, active notes, preview notes, MIDI input gathering and routing, live notes, MIDI recording |
-| [MidiInput.h](../../engine/src/MidiInput.h), [MidiInput.cpp](../../engine/src/MidiInput.cpp) | `MidiInputEvent`, `AudioClock`, `hostTimeNs()`, `MidiInputDevices` (WinMM) |
+| [MidiInput.h](../../engine/src/MidiInput.h), [MidiInput.cpp](../../engine/src/MidiInput.cpp) | `MidiInputEvent`, `AudioClock`, `hostTimeNs()`, `MidiInputDevices` |
+| [backends/MidiWinMM.cpp](../../engine/src/backends/MidiWinMM.cpp), [backends/MidiNone.cpp](../../engine/src/backends/MidiNone.cpp) | `MidiInputDevices` on Windows (WinMM), and elsewhere (no devices) |
 | [EngineInput.cpp](../../engine/src/EngineInput.cpp) | MIDI ports, `Engine::midiInput` (stamping), `sendMidiInput`, `discardMidiInputLocked`, MIDI targets in `startRecording` |
 | [Recorder.h](../../engine/src/Recorder.h), [Recorder.cpp](../../engine/src/Recorder.cpp) | `RecordedNote`, `MidiRecordingTake`, `RecordingSession::midiNotes`, MIDI results in `finish()` |
 | [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | `resetProcessorsLocked` around offline renders and exports |
@@ -78,7 +84,7 @@ one's anchor.
 (`kAllPorts` or an engine port id), `channel` (`kAllChannels` or 0-15). `accepts(port, status)` checks
 both.
 
-**`MidiInputDevices`**: the system's MIDI inputs (WinMM). `available()` lists them by name (a second
+**`MidiInputDevices`**: the system's MIDI inputs (WinMM; none off Windows). `available()` lists them by name (a second
 device of the same name gets " #2"); `open(name, port)` (throws `std::runtime_error` for the user: not
 connected, or "another application may be using it"), `close`, `closeAll`, `openNames`. Its handler is
 called on the driver's thread for every short message (channel and system messages; System Exclusive is
@@ -89,7 +95,7 @@ edit side: `time` in timeline samples, channel, key, velocity, 0 for a note-off)
 `dropped` (events lost because nobody took them in time), and on the edit side the `notes` paired so far.
 
 **`RecordedNote`**: `start`, `end` (-1: still held), `key`, `velocity`, `channel`, in timeline samples.
-Python gets them as an `int64` array of rows (start, end, key, velocity, channel).
+The API hands them over as a `std::vector<RecordedNote>` (`recordingProgress()`, `RecordedTake`).
 
 ## How it works: playback
 
@@ -133,7 +139,7 @@ snapshot already has the notes themselves at the new tempo.
 
 ### Preview notes
 
-`Engine::previewNote(track, key, velocity)` (Python `preview_note`) pushes a `PreviewNote` onto
+`Engine::previewNote(track, key, velocity)` pushes a `PreviewNote` onto
 `SharedState::previewNotes` (256 slots, one producer: it is pushed under the engine's lock). At the
 start of each live callback `drainPreviewNotes()` moves them into the renderer's list (256), played in
 the callback's first chunk and then cleared. They are only heard while a device runs: without one,
@@ -160,11 +166,12 @@ Offline renders never play them.
 ### Devices and ports
 
 `Engine` owns a `MidiInputDevices` whose handler is `Engine::midiInput`. Inputs are opened, listed and
-closed on the main thread, like audio devices (`openMidiInput` releases the GIL in the bindings).
+closed on the main thread, like audio devices.
 Port ids are indices into `midiPorts_`, a list of names kept for the engine's life, so a track can name an
-input that isn't open (yet). The Python side opens every connected input but those turned off in the
-preferences, and adds the computer keyboard as one more input, `Computer Keyboard`, which plays through
-`send_midi_input` ([python/engine-bridge.md](../python/engine-bridge.md)).
+input that isn't open (yet). The engine bridge opens every connected input but those turned off in the
+preferences (`EngineBridge::openMidiInputs()`), and the application adds the computer keyboard as one more
+input, `Computer Keyboard` (`kComputerKeyboard`), which plays through `sendMidiInput`
+([app/engine-bridge.md](../app/engine-bridge.md)). Without MIDI devices (off Windows) it is the only input.
 
 `setTrackMidiInput(track, enabled, device, channel)`: none (`enabled` false), every input (`""`) or one
 by name, on every channel (0) or one (1-16; anything else is `std::invalid_argument`).
@@ -188,7 +195,7 @@ A callback renders a buffer ahead of what is heard, so a message that came in du
 at the same distance into the next, and the delay stays constant instead of jittering with the
 callbacks. Converting on arrival also makes the timing testable: a message stamped against a known clock
 reading lands on a known sample. `midiInputDelay` is the device's buffer size (set when the device opens;
-512 if it reports none); `audioClock()` (Python `audio_clock`) reports it with the clock.
+512 if it reports none); `audioClock()` reports it with the clock.
 
 The queue (`SpscQueue<MidiInputEvent, 4096>`) has one consumer, the audio thread; the producers (driver
 threads, `sendMidiInput()`) share a mutex on their side of it, so the audio thread never waits. The engine
@@ -260,7 +267,9 @@ starts before the take. The take itself spans the timeline where it recorded (it
 recording stops (or a note running past the end) ends with the take. Lost events become an error message
 ("... MIDI events were lost while recording"). Nothing is written to disk: the bridge turns the notes into
 a MIDI clip of what was recorded (replacing what was under it), in the same undo step as the audio takes,
-and the main window applies *Record Quantization* (`audio/settings.py`'s `record_quantize()`) to their starts when it adds the takes (`editor.add_recordings`).
+and the session applies *Record Quantization* (`recordQuantize()` in
+[app/src/audio/AudioSettings.h](../../app/src/audio/AudioSettings.h)) to their starts when it adds the takes
+(`ProjectEditor::addRecordings`).
 
 ## Invariants and real-time rules
 
@@ -276,9 +285,10 @@ and the main window applies *Record Quantization* (`audio/settings.py`'s `record
 
 ## Extending it
 
-- **Another MIDI backend** (Windows MIDI Services): `MidiInputDevices` is the only part that knows about
-  WinMM. Keep its interface: list by name, open with a port id, call the handler with the bytes and
-  `hostTimeNs()` taken on arrival.
+- **Another MIDI backend** (Windows MIDI Services, or ALSA sequencer input on Linux): `MidiInputDevices` is
+  the only part that knows about the system's MIDI; each platform has its own file in `backends/`, chosen in
+  [engine/CMakeLists.txt](../../engine/CMakeLists.txt). Keep its interface: list by name, open with a port id,
+  call the handler with the bytes and `hostTimeNs()` taken on arrival.
 - **Recording controllers** (sustain, pitch bend): `routeMidiInput()` would send them to the take as well,
   and `MidiRecordingTake::Event` / `RecordedNote` would need a form for them.
 - **MIDI effects** would sit between `buildNoteEvents()` and the instrument; today events go straight to
@@ -292,7 +302,7 @@ and the main window applies *Record Quantization* (`audio/settings.py`'s `record
   plays both.
 - `previewNote` without a running device does nothing audible, and the note is discarded, not deferred.
 - Messages sent with a host time far from the clock (over a second) are treated as stale; tests stamp
-  against `audio_clock` to place them exactly.
+  against `audioClock()` to place them exactly.
 - The live-note and active-note tables are shared by all tracks (512 each); a dense MIDI file on many
   tracks can fill them, and new notes are then not played rather than left hanging.
 - `MidiRecordingTake` notes are paired by key and channel, not by port: two inputs on one track playing
@@ -300,21 +310,23 @@ and the main window applies *Record Quantization* (`audio/settings.py`'s `record
 
 ## Tests
 
-- [tests/test_midi_engine.py](../../tests/test_midi_engine.py): notes start on their sample and follow
-  the tempo, velocity sets the level, chords and repeated keys, offline renders leave no hanging notes,
+- [tests/engine/test_midi_engine.cpp](../../tests/engine/test_midi_engine.cpp): notes start on their sample and
+  follow the tempo, velocity sets the level, chords and repeated keys, offline renders leave no hanging notes,
   loop wraps release and retrigger notes, the instrument's output through the chain, notes without an
   instrument silent, the Synth's pitch, cutoff and parameters, preview notes needing a running device, and
   quick preview notes all ending.
-- [tests/test_midi_input.py](../../tests/test_midi_input.py) (fake ASIO driver): live notes reaching a
-  test instrument at their offsets in a block, a note released as it is played still sounding, which
-  tracks hear which input and channel, monitoring, held keys released when the transport stops or a track
-  stops hearing them, input dropped without a running device, the device list, recorded notes landing on
-  the beats a player heard them on (with latent plug-ins on a track or the master), MIDI and audio
-  recorded together, and recording MIDI needing a MIDI input.
-- [tests/test_parallel_live.py](../../tests/test_parallel_live.py): the MIDI input tests again live with
-  workers (held, preview and recorded notes).
-- [tests/test_ui_recording.py](../../tests/test_ui_recording.py), [tests/test_ui_midi.py](../../tests/test_ui_midi.py),
-  [tests/test_computer_keyboard.py](../../tests/test_computer_keyboard.py),
-  [tests/test_midi_model.py](../../tests/test_midi_model.py): the MIDI header controls, a MIDI take with its
-  live notes and record quantization, the MIDI preferences, the piano roll's notes being heard, and the
-  computer keyboard playing and recording.
+- [tests/engine/test_midi_input.cpp](../../tests/engine/test_midi_input.cpp) (fake ASIO driver; skipped without
+  the ASIO SDK): live notes reaching a test instrument at their offsets in a block, a note released as it is
+  played still sounding, which tracks hear which input and channel, monitoring, held keys released when the
+  transport stops or a track stops hearing them, input dropped without a running device, the device list,
+  recorded notes landing on the beats a player heard them on (with latent plug-ins on a track or the master),
+  MIDI and audio recorded together, and recording MIDI needing a MIDI input.
+- [tests/engine/test_parallel_live.cpp](../../tests/engine/test_parallel_live.cpp): the MIDI input tests again live
+  with workers (held, preview and recorded notes).
+- In the application's tests: [test_ui_arrangement_tracks.cpp](../../tests/app/test_ui_arrangement_tracks.cpp)
+  (the MIDI header controls), [test_editor_midi.cpp](../../tests/app/test_editor_midi.cpp) (a recorded MIDI take
+  becoming a clip, record quantization), [test_ui_arrangement.cpp](../../tests/app/test_ui_arrangement.cpp) (a take
+  drawn as it records), [test_ui_dialogs.cpp](../../tests/app/test_ui_dialogs.cpp) (the MIDI preferences),
+  [test_ui_pianoroll.cpp](../../tests/app/test_ui_pianoroll.cpp) (the piano roll's notes being heard),
+  [test_session_keyboard.cpp](../../tests/app/test_session_keyboard.cpp) (the computer keyboard playing) and
+  [test_midi_model.cpp](../../tests/app/test_midi_model.cpp) (MIDI clips and notes in the model).

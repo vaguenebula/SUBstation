@@ -78,7 +78,9 @@ on the selected notes and hides while you drag them. Each tool is one undo step.
 
 ## MIDI input
 
-MIDI input comes from controllers and keyboards (WinMM), played live and recorded.
+MIDI input comes from controllers and keyboards (WinMM), played live and recorded. On
+Linux SUBstation has no MIDI devices: the [computer MIDI keyboard](#computer-midi-keyboard)
+is the only input.
 
 - Every MIDI input connected is used unless turned off in *Options › Preferences ›
   MIDI* (*Refresh* there finds inputs plugged in since); see
@@ -115,5 +117,5 @@ hear it too; it plays and records like any input).
 ---
 
 For developers: [../ui/piano-roll.md](../ui/piano-roll.md),
-[../engine/midi.md](../engine/midi.md), [../python/model.md](../python/model.md),
-[../ui/README.md](../ui/README.md) (computer_keyboard.py).
+[../engine/midi.md](../engine/midi.md), [../app/model.md](../app/model.md),
+[../ui/README.md](../ui/README.md#the-computer-midi-keyboard) (the computer MIDI keyboard).

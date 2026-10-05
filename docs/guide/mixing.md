@@ -150,11 +150,25 @@ plays that instead, so its plug-ins cost no CPU.
   it hear the frozen audio.
 - While it is frozen you can't change its clips, devices or their automation; the
   status bar says why when you try. Unfreeze it first. A frozen track isn't armed.
+- **Except time selections**: on a frozen track you can still move (or Ctrl-drag copy),
+  cut, copy, paste, duplicate and delete a selected stretch of time, and its frozen
+  audio goes with the clips (and its devices' automation with them), so what you see is
+  what plays. Each is one undo step. On a frozen track the stretch replaces everything
+  where it lands, empty parts too, as a piece of its audio does. What you can't do:
+  - drag clips off a frozen track onto another, or onto it from another;
+  - paste into a frozen track what wasn't copied from it (since it was frozen): its
+    frozen audio has to come along. Copied from a frozen track and pasted onto a track
+    that isn't frozen, the clips go as they are.
+  Unfreezing forgets the edited frozen audio and keeps the clips as you left them;
+  freezing again renders them anew. Flattening plays what of the frozen audio you
+  kept.
 - Freezing a **group** renders its bus: what is in it, through the group's devices.
   The tracks in it then aren't played (unless they also send to a return, or key a
   sidechain, outside the group), and nothing in it can change, move in or out, or be
   deleted until you unfreeze the group. A new track inserted after one of them goes
-  after the group.
+  after the group. Time selections over all of it (select on the group's row) move,
+  cut, copy, paste, duplicate and delete its frozen audio with the clips, as on a
+  frozen track; a selection of only some of its tracks is refused.
 - Freezing a **return** renders what the sends into it brought; changing those sends
   doesn't change it until you unfreeze it.
 - The render goes from the start of the arrangement to the end of its last clip, then on

@@ -42,7 +42,9 @@ Engine::~Engine() {
 
 std::string Engine::sourceKey(const std::string& path) {
     std::wstring wide = pathFromUtf8(path).lexically_normal().make_preferred().wstring();
+#ifdef _WIN32  // (names differing only in case are one file there; elsewhere they're two)
     std::transform(wide.begin(), wide.end(), wide.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+#endif
     const std::u8string utf8 = std::filesystem::path(wide).u8string();
     return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
 }

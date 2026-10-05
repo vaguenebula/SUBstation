@@ -18,7 +18,8 @@ namespace sub {
 
 struct ClipRender;
 
-// Warp modes; the order matches the UI list (model/project.py WARP_MODES).
+// Warp modes; the order matches the app layer's list (kWarpModes in
+// app/src/model/Clip.h).
 //  Transients: short stretch blocks, tight attacks (drums).
 //  Standard:   the stretcher's default blocks; good all-round.
 //  Smooth:     long blocks: smooth tones, pads and noise, softer attacks.

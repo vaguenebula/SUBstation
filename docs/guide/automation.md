@@ -54,7 +54,11 @@ All of it is undoable (one step per drag).
 
 ### Time ranges
 
-Drag across lanes (not on a breakpoint) to select a time range on them. Then:
+Drag across lanes (not on a breakpoint) to select a time range on them: on every
+automation lane you cross, down over the tracks below too. Up into the clips' title
+band (or above the track) the drag selects clips instead, as a drag in the clips does
+(see [arrangement.md](arrangement.md#selecting)).
+**Shift-click** another lane (or anywhere in the lanes) to extend it there. Then:
 
 - **Delete** clears their automation there (the envelope outside stays as it was);
 - **Ctrl+D** duplicates it after the range;
@@ -124,6 +128,6 @@ another track (or into and out of racks) keep their automation.
 
 ---
 
-For developers: [../ui/arrangement.md](../ui/arrangement.md) (automation_lanes.py,
-automation_header.py), [../engine/automation.md](../engine/automation.md),
-[../python/model.md](../python/model.md).
+For developers: [../ui/arrangement.md](../ui/arrangement.md#automation-lanes) (the
+automation lanes and choosers), [../engine/automation.md](../engine/automation.md),
+[../app/model.md](../app/model.md).

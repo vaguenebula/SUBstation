@@ -28,6 +28,9 @@ graph, in [routing.md](routing.md).
 - The live waveform's peaks come through their own queue, not from the file.
 - Anything that changes the device, offline renders, and the playhead jumping end a recording; the
   takes so far are kept.
+- Device inputs come only through ASIO today: WASAPI, and the *System* driver on other platforms, open
+  outputs only ([audio-devices.md](audio-devices.md)). So on Linux audio takes come from resampling, and MIDI
+  takes from the computer MIDI keyboard ([midi.md](midi.md)).
 
 ```
  audio thread, one chunk (Renderer::renderChunk)                 disk-writer thread
@@ -67,7 +70,8 @@ input has both the same), `Track` (`edge`: the snapshot edge of `Kind::Input` it
 track goes into it.
 
 **`MonitorMode`**: `Off` (never), `In` (always), `Auto` (while armed, unless it plays back without
-recording). Python: `MonitorMode.OFF/IN/AUTO`.
+recording). The application layer's model names them `"off"`, `"in"` and `"auto"` (`kMonitorModes` in
+[app/src/model/Track.h](../../app/src/model/Track.h)).
 
 **`SampleRing`**: single-producer / single-consumer ring of floats, its capacity rounded up to a power of
 two and allocated on the edit side. `write()` (real-time) writes all of `count` samples or none; `read()`
@@ -101,14 +105,15 @@ full?"), and for MIDI takes `midi` and `notes`.
 
 **`RecordingProgress`** (Engine.h): a take while it records, for the UI's live waveform: `started` (the
 playhead moved, after any count-in, and input arrived), `startSample` (placed), `frames`, and the new
-peaks since the last call (`(n, 2)` array in Python, each over `RECORD_PEAK_FRAMES` frames).
+peaks since the last call (`peaks`: (min, max) pairs, each over `RecordingTake::kPeakFrames` frames), and for a MIDI
+take its notes so far.
 
 ## How it works
 
 ### Track inputs (edit side)
 
 - `setTrackInput(track, channels)`: no channel, one (mono) or two (a stereo pair) of the device's
-  channels, 0-based as `DeviceStatus.input_channels` numbers them; anything else is
+  channels, 0-based as `DeviceStatus::inputChannels` numbers them; anything else is
   `std::invalid_argument`. It goes back from a track source to the device. Channels the device hasn't
   open are silent; the bridge reopens an ASIO device with the inputs a track needs
   ([audio-devices.md](audio-devices.md)).
@@ -216,9 +221,9 @@ written; a take that never started has 0 frames and its file is removed.
 
 What ends a recording:
 
-- `stopRecording()` (the Record button again, Stop, Space: the bridge calls it).
+- `stopRecording()` (the Record button again, Stop, Space: the engine bridge calls it).
 - The playhead jumping: `recordInput()` interrupts the session; `isRecording()` is false from then on,
-  and the bridge, which polls it, stops the recording.
+  and the engine bridge, which polls it, stops the recording.
 - Changing the audio device, its sample rate, or a reset by the driver: `closeDeviceLocked()` finishes it.
 - Offline renders and exports: `suspendLiveLocked()` finishes it (its input would have a hole).
 - Changing the number of audio threads does *not*: the recording goes on, and the playhead waits too.
@@ -226,9 +231,11 @@ What ends a recording:
 `isRecording()` is "recording and still taking input". `recordingProgress()` reports each take's state and
 drains its peaks, for the live waveform.
 
-The bridge turns the takes into clips in one undo step, replacing what was under them, and names the
-files in the project's `Recordings` folder (for a project not saved yet, `Music\SUBstation\Recordings`);
-see [python/engine-bridge.md](../python/engine-bridge.md).
+The engine bridge names the files in the project's `Recordings` folder (for a project not saved yet,
+`SUBSTATION_RECORDINGS` if set, else `SUBstation/Recordings` in the user's Music folder: `recordingsFolder()` in
+[app/src/audio/AudioFiles.h](../../app/src/audio/AudioFiles.h)) and hands the finished takes on
+(`EngineBridge::takesRecorded`); the session turns them into clips in one undo step, replacing what was under them
+(`ProjectEditor::addRecordings`). See [app/engine-bridge.md](../app/engine-bridge.md).
 
 ## Invariants and real-time rules
 
@@ -256,35 +263,38 @@ see [python/engine-bridge.md](../python/engine-bridge.md).
 
 - A device input that isn't open makes `startRecording()` throw, but a monitored track with one just
   hears silence.
-- The bridge can only open missing ASIO inputs before recording: opening the device again ends a
+- The engine bridge can only open missing ASIO inputs before recording: opening the device again ends a
   recording.
 - Placement is worked out once, at the start: a latency that changes while recording (a plug-in's) isn't
   followed.
 - Stopping the transport doesn't itself end the session in the engine: the next start is a jump, which
-  does. The bridge stops recording when the transport stops.
+  does. The engine bridge stops recording when the transport stops.
 - A resampled take of a track deleted while recording keeps going, in silence.
 - The ring holds 8 seconds: a disk stalled longer than that loses input (reported in `droppedFrames`, and
-  as a status message by the bridge).
+  as a status message by the engine bridge).
 
 ## Tests
 
-- [tests/test_recording.py](../../tests/test_recording.py) (fake ASIO driver in manual mode; the
-  loopback patches an output back into an input, delayed by the latencies the driver reports):
-  monitoring modes, monitoring through a latent plug-in not delayed by compensation, a loopback take
-  lining up with the timeline sample for sample (with and without latent plug-ins on a track or the
-  master), stereo takes and their live peaks, Auto monitoring while recording, a track being recorded
-  playing none of its clips (silent with monitoring Off), the count-in, what ends a
-  recording (a locate, a device change, stopping before anything came in), and needing an open input.
-- [tests/test_resampling_engine.py](../../tests/test_resampling_engine.py): a resampled take equal to its
-  source's offline render (latent plug-ins on the source, in the group and on the master, a slower track
-  the source is delayed to line up with), monitoring a track not delayed, the master impossible to
-  monitor, solo across a monitored input, cycles refused, the input going with its source, a source
-  removed while recording leaving silence, device and resampled takes together.
-- [tests/test_resampling_model.py](../../tests/test_resampling_model.py),
-  [tests/test_ui_resampling.py](../../tests/test_ui_resampling.py): the model and window side.
-- [tests/test_ui_recording.py](../../tests/test_ui_recording.py): header controls, a take recorded through
-  the cable, Space stopping recording and the count-in, a device change ending the recording, take names.
-- [tests/test_parallel_live.py](../../tests/test_parallel_live.py): the recording and resampling tests
+- [tests/engine/test_recording.cpp](../../tests/engine/test_recording.cpp) (fake ASIO driver in manual mode; the
+  loopback patches an output back into an input, delayed by the latencies the driver reports; skipped without the
+  ASIO SDK): monitoring modes, monitoring through a latent plug-in not delayed by compensation, a loopback take
+  lining up with the timeline sample for sample (with and without latent plug-ins on a track or the master), stereo
+  takes and their live peaks, Auto monitoring while recording, a track being recorded playing none of its clips
+  (silent with monitoring Off), the count-in, what ends a recording (a locate, a device change, stopping before
+  anything came in), and needing an open input.
+- [tests/engine/test_resampling_engine.cpp](../../tests/engine/test_resampling_engine.cpp): a resampled take equal to
+  its source's offline render (latent plug-ins on the source, in the group and on the master, a slower track the
+  source is delayed to line up with), monitoring a track not delayed, the master impossible to monitor, solo across
+  a monitored input, cycles refused, the input going with its source, a source removed while recording leaving
+  silence, device and resampled takes together.
+- [tests/engine/test_parallel_live.cpp](../../tests/engine/test_parallel_live.cpp): the recording and resampling tests
   run again live with workers (with silent tracks beside, so every buffer's tracks are shared out).
-  [tests/test_parallel_engine.py](../../tests/test_parallel_engine.py) puts tracks taking their input from
-  others into its random routing graphs.
+  [tests/engine/test_parallel_engine.cpp](../../tests/engine/test_parallel_engine.cpp) puts tracks taking their input
+  from others into its random routing graphs.
+- The application's side, in [tests/app](../../tests/app): [test_editor_resampling.cpp](../../tests/app/test_editor_resampling.cpp)
+  and [test_bridge_tracks.cpp](../../tests/app/test_bridge_tracks.cpp) (inputs from tracks in the model and the
+  engine), [test_bridge_recording.cpp](../../tests/app/test_bridge_recording.cpp) (what records, live takes, a take
+  recorded with a running device, the recordings folder), [test_editor_edits.cpp](../../tests/app/test_editor_edits.cpp)
+  (takes becoming clips, replacing what was under them), [test_bridge_settings.cpp](../../tests/app/test_bridge_settings.cpp)
+  (take names), [test_ui_arrangement_tracks.cpp](../../tests/app/test_ui_arrangement_tracks.cpp) (the header
+  controls) and [test_ui_arrangement.cpp](../../tests/app/test_ui_arrangement.cpp) (a take drawn as it records).

@@ -37,7 +37,8 @@ Lists sort by *Rank* or *Name*, chosen next to the search field:
   With nothing used yet, a search lists the names that start with what you typed first.
   An item counts as used when it is added to the project from the browser, by
   double-click, Enter or a drag that is dropped somewhere. The counts are kept in
-  `%LOCALAPPDATA%\SUBstation\library.json`.
+  `%LOCALAPPDATA%\SUBstation\library.json` (on Linux
+  `~/.local/share/SUBstation/library.json`).
 - *Name* is alphabetical.
 
 ## Preview
@@ -61,26 +62,31 @@ on or off. A preview stops when you click anywhere outside the browser.
   plug-in's name, a built-in device's, *Audio Effect Rack*, *Instrument Rack*).
 - They are the `.gilpreset` files in `Documents\SUBstation\Presets` (a folder per
   device; presets put straight in that folder are listed under *Other*; default presets,
-  in its `Defaults` folder, aren't listed). Changes made there in Explorer show up while
-  the program runs.
+  in its `Defaults` folder, aren't listed). Changes made there in Explorer (or any file
+  manager) show up while the program runs.
 - Drag a preset onto the device view or a track, or double-click it, to add it as a new
   device; drop it onto a device of its kind to load it into that device.
-- Right-click a preset › *Rename…*, *Delete* (to the Recycle Bin, after asking) or
-  *Show in Folder*. Right-click *Presets* › *Show in Folder* opens the library.
+- Right-click a preset › *Rename…*, *Delete* (to the Recycle Bin, or the trash on Linux,
+  after asking) or *Show in Folder*. Right-click *Presets* › *Show in Folder* opens the
+  library.
 
 ## The index
 
 - The files under the places are indexed in the background and the index is kept
-  (`%LOCALAPPDATA%\SUBstation\browser-index.bin`), so the next start shows it at once and
+  (`%LOCALAPPDATA%\SUBstation\browser-index.bin`; on Linux
+  `~/.local/share/SUBstation/browser-index.bin`), so the next start shows it at once and
   only looks again at folders that changed.
-- Files added, removed or renamed in a place show up while the program runs. Only the
-  first 63 places are watched like this; in places after those, changes show after a
-  *Rescan* (or the next start).
+- Files added, removed or renamed in a place show up while the program runs. On Windows
+  only the first 63 places are watched like this; on Linux every folder takes one of the
+  system's watches (`fs.inotify.max_user_watches`), and folders past that limit aren't
+  watched. Where they aren't, changes show after a *Rescan* (or the next start).
 - Results show while a first scan is still going.
 - Right-click › *Rescan* reads every folder again (for drives that don't report
   changes).
 - The index goes 16 folders deep and up to 300 000 files a place, and skips names
-  starting with `.` or `$`; it follows junctions but not symbolic links.
+  starting with `.` or `$`; it follows junctions but not symbolic links to folders. On
+  Linux names that differ only in case are different files, with use counts of their
+  own.
 
 ---
 

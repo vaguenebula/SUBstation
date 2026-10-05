@@ -61,8 +61,9 @@ workers rendered since the scheduler started (tests and benchmarks use it to see
 
 `Scheduler(threads)` starts `threads - 1` workers; `threads` counts the caller's.
 
-- Each worker joins MMCSS as "Pro Audio" (`AvSetMmThreadCharacteristicsW`, linked with `avrt`)
-  for its life, and flushes denormals while it renders (`ScopedNoDenormals`).
+- On Windows each worker joins MMCSS as "Pro Audio" (`AvSetMmThreadCharacteristicsW`, linked with `avrt`)
+  for its life; elsewhere workers keep the default priority. Every worker flushes denormals while it renders
+  (`ScopedNoDenormals`).
 - Between runs a worker spins (with `_mm_pause`) for about 50 microseconds: consecutive chunks of
   one callback come within microseconds. Then it sleeps on `state_` (`std::atomic::wait`) until
   the next run opens. The caller only calls `notify_all()` if some worker is sleeping
@@ -74,8 +75,8 @@ workers rendered since the scheduler started (tests and benchmarks use it to see
 - `kQuit` in `state_` ends the workers; the destructor sets it and joins them. If a thread can't
   start, those that did are ended and the exception propagates.
 
-**How many.** *Preferences › Audio › Audio Threads* (`Engine::setAudioThreads`, Python
-`audio_threads`) sets how many threads render: one per core but one by default
+**How many.** *Preferences › Audio › Audio Threads* (`Engine::setAudioThreads`) sets how many threads
+render: one per core but one by default
 (`defaultAudioThreads()`, at least 1, at most `kMaxAudioThreads` = 64); 1 means no workers.
 Offline renders and exports use the same threads. Changing it suspends live output (silence),
 waits for a callback to pass, swaps in a new `Scheduler` (the renderer reallocates its
@@ -96,7 +97,7 @@ Each track's render is timed (`renderTrack()`, from clearing its buffer to the e
 nothing in between waits) in nanoseconds per frame, smoothed over roughly the last ten chunks
 (`kCostSmoothing` 0.1), into `TrackBuffers::cost`. A synth costs more while it plays a chord, a
 plug-in's first blocks after loading more than later ones; the smoothing follows that.
-`trackCosts()` (Python `track_costs()`) reports them; 0 means not rendered yet.
+`trackCosts()` reports them; 0 means not rendered yet.
 
 Before a parallel run the renderer hands the graph each track's cost (`setCost()`) and calls
 `orderRoots()`:
@@ -112,7 +113,7 @@ So the tracks with the most work hanging off them (their own, and that of everyt
 into) start first, and a heavy track, or a light one feeding heavy groups, never starts last.
 Only roots are ordered; other nodes are queued as they become ready.
 
-`setCostOrdering(false)` (Python `cost_ordering`) gives every node cost 0, so the roots keep the
+`setCostOrdering(false)` gives every node cost 0, so the roots keep the
 graph's (routing) order; it is for benchmarks. The order only changes how soon a run is done,
 never what it computes.
 
@@ -124,7 +125,7 @@ never what it computes.
   t6 (4.0)  ------------------------------> master     queued: t1, t3, t2, t6, t0
 ```
 
-(This is the hand-made graph `test_the_longest_paths_start_first` checks.)
+(This is the hand-made graph the test "the longest paths start first" checks.)
 
 ## Determinism
 
@@ -167,22 +168,23 @@ Renders are bit-identical on any number of threads. That holds because:
 
 ## Tests and benchmarks
 
-- [test_parallel_engine.py](../../tests/test_parallel_engine.py): the number of audio threads;
+- [tests/engine/test_parallel_engine.cpp](../../tests/engine/test_parallel_engine.cpp): the number of audio threads;
   one track and a stateful plug-in on any thread; random routing graphs (nested groups, sends
   before and after the fader, inputs from other tracks, sidechains, latent plug-ins, solo, mute,
   automation, looping) bit-identical on 1..N threads; a stress test; few tracks rendering
-  serially; ranks and queue order on a hand-made graph (`task_graph_order`); measured costs; cost
+  serially; ranks and queue order on a hand-made graph (`taskGraphOrder()`, in
+  [harness/TaskGraphOrder.h](../../tests/engine/harness/TaskGraphOrder.h)); measured costs; cost
   ordering changing nothing but the order.
-- [test_parallel_live.py](../../tests/test_parallel_live.py): workers rendering live through the
-  fake ASIO driver in manual mode, with silent tracks beside the tested ones so every buffer's
+- [tests/engine/test_parallel_live.cpp](../../tests/engine/test_parallel_live.cpp): workers rendering live through
+  the fake ASIO driver in manual mode, with silent tracks beside the tested ones so every buffer's
   tracks are shared out: the MIDI input, recording and resampling tests again (live, held,
   recorded and preview notes, recorded audio), send ramps and sidechains live. Skipped without
   ASIO.
-- `test_ranks_follow_the_longest_path_through_sends` in
-  [test_sends_engine.py](../../tests/test_sends_engine.py), and the "with and without workers"
-  tests in the rack and sidechain tests; the MIDI input, recording and resampling tests run again
+- "ranks follow the longest path through sends" in
+  [tests/engine/test_sends_engine.cpp](../../tests/engine/test_sends_engine.cpp), and the "with and without
+  workers" tests in the rack and sidechain tests; the MIDI input, recording and resampling tests run again
   live with workers.
-- [benchmarks/parallel_render_bench.py](../../benchmarks/parallel_render_bench.py):
-  `python -m benchmarks.parallel_render_bench` compares render times on 1..N threads (offline,
-  or live through the fake ASIO driver with `--live`), and with `--heavy N --compare-ordering`
+- [benchmarks/parallel_render_bench.cpp](../../benchmarks/parallel_render_bench.cpp) (built with
+  `-DSUBSTATION_BUILD_BENCHMARKS=ON`): `build/bin/parallel_render_bench` compares render times on 1..N
+  threads (offline, or live through the fake ASIO driver with `--live`), and with `--heavy N --compare-ordering`
   the gain from starting heavy tracks first. Results are in [benchmarks/README.md](../../benchmarks/README.md).

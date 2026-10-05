@@ -344,7 +344,7 @@ void Engine::rebuildSnapshotLocked() {
         build.chainEnd = &aligned.chainEnd[node];
         build.chainCompensation = &aligned.chainCompensation[node];
         build.sidechainOf.assign(slotsOf[node].size(), -1);
-        for (const auto [device, edge] : sidechains[strip]) {
+        for (const auto& [device, edge] : sidechains[strip]) {
             if (device >= 0 && static_cast<size_t>(device) < build.sidechainOf.size()) {
                 build.sidechainOf[static_cast<size_t>(device)] = edge;
             }

@@ -1,10 +1,13 @@
 #include "plugins/Vst3Format.h"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <objbase.h>
 #include <shlobj.h>
+#endif
 
 #include <algorithm>
+#include <cstdlib>
 #include <cwctype>
 #include <filesystem>
 #include <stdexcept>
@@ -32,14 +35,16 @@ Steinberg::FUnknown* hostContext() {
     return host;
 }
 
-// Some plug-ins need COM on the thread that loads them. Qt has set it up on the
-// UI thread already; the scanner process has not.
+// Some plug-ins need COM on the thread that loads them (Windows). Qt has set it
+// up on the UI thread already; the scanner process has not.
 void ensureComInitialized() {
+#ifdef _WIN32
     thread_local bool initialized = false;
     if (!initialized) {
         OleInitialize(nullptr);
         initialized = true;
     }
+#endif
 }
 
 std::string utf8(const std::filesystem::path& path) {
@@ -47,12 +52,16 @@ std::string utf8(const std::filesystem::path& path) {
     return {reinterpret_cast<const char*>(text.data()), text.size()};
 }
 
+// One module per file: paths compare as the file system does (Windows ignores case).
 std::string moduleKey(const std::string& path) {
     std::wstring wide = pathFromUtf8(path).lexically_normal().make_preferred().wstring();
+#ifdef _WIN32
     std::transform(wide.begin(), wide.end(), wide.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+#endif
     return utf8(std::filesystem::path(wide));
 }
 
+#ifdef _WIN32
 std::string knownFolder(REFKNOWNFOLDERID id) {
     PWSTR folder = nullptr;
     std::string result;
@@ -60,6 +69,7 @@ std::string knownFolder(REFKNOWNFOLDERID id) {
     CoTaskMemFree(folder);
     return result;
 }
+#endif
 
 bool isInstrument(const VST3::Hosting::ClassInfo& info) {
     const auto& categories = info.subCategories();
@@ -75,9 +85,16 @@ Vst3Format& Vst3Format::instance() {
 
 std::vector<std::string> Vst3Format::defaultSearchPaths() const {
     std::vector<std::string> paths;
+#ifdef _WIN32
     for (const auto& folder : {knownFolder(FOLDERID_ProgramFilesCommon), knownFolder(FOLDERID_UserProgramFilesCommon)}) {
         if (!folder.empty()) paths.push_back(utf8(pathFromUtf8(folder) / "VST3"));
     }
+#else
+    // The VST 3 locations on Linux: the user's, then the system's.
+    if (const char* home = std::getenv("HOME"); home && *home) paths.push_back(utf8(pathFromUtf8(home) / ".vst3"));
+    paths.push_back("/usr/lib/vst3");
+    paths.push_back("/usr/local/lib/vst3");
+#endif
     return paths;
 }
 

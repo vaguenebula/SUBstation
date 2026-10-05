@@ -2,36 +2,46 @@
 // counts, and searches over all of it.
 //
 // Threads: the indexer's (background priority) and one for searches. Neither
-// ever calls into Python or touches the audio engine. A search asked for
-// replaces any that is waiting and stops the one running; only the latest
-// search's results are handed out. When there are results or the index
-// changed, `event()` is set, and the UI thread takes them with `take()`.
+// ever calls into the application or touches the audio engine, except for the
+// wake callback. A search asked for replaces any that is waiting and stops the
+// one running; only the latest search's results are handed out. When there are
+// results or the index changed, the wake callback is called (from one of those
+// threads), and the application takes them on its own thread with `take()`.
 
 #pragma once
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 
 #include "Indexer.h"
 #include "Model.h"
-#include "Platform.h"
 #include "Search.h"
 
 namespace sub::browser {
 
 class Browser {
 public:
-    Browser(std::wstring store, Limits limits);
+    // `store`: where the index is saved (UTF-8; '' for nowhere).
+    Browser(std::string store, Limits limits);
     ~Browser();
     Browser(const Browser&) = delete;
     Browser& operator=(const Browser&) = delete;
 
-    void* event() const { return event_.handle(); }
+    // Called from the browser's threads when there is something to take():
+    // results of the latest search, or a change of the index or its status.
+    // It is called once until the next take() (as a set event stays set), and
+    // must only hand the work over (post it to the application's thread), never
+    // call back into the browser. Once setWakeCallback() returned, the previous
+    // callback is no longer called. If something waits to be taken already, the
+    // new callback is called at once.
+    void setWakeCallback(std::function<void()> wake);
 
     void setPlaces(std::vector<PlaceSpec> places) { indexer_.setPlaces(std::move(places)); }
     void rescan() { indexer_.rescan(); }
@@ -50,12 +60,18 @@ public:
     bool searching() const;
 
     bool waitIdle(double seconds);  // the index settled and no search running (tests, benchmarks)
-    void close();
+    void close();                   // stops the threads (saving the index); no wake calls after it
 
 private:
     void searchLoop();
+    void wake();
 
-    platform::Event event_;
+    // The wake callback, and whether it was called since the last take().
+    // (Before the indexer: its thread may call wake() as soon as it starts.)
+    std::mutex wakeMutex_;
+    std::function<void()> wakeCallback_;
+    bool signalled_ = false;
+
     Indexer indexer_;
 
     mutable std::mutex mutex_;

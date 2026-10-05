@@ -7,6 +7,14 @@
 // and that's all: the engine creates it by id, and the UI's device list, names,
 // categories and parameter defaults all come from here (see builtin_devices() in
 // the bindings). A device's id is its typeId() without the "builtin:" prefix.
+//
+// The engine is a static library, and a linker takes only the files of one that
+// something refers to: nothing refers to a device's file but its own registrar,
+// so a program linking the engine would have no built-in devices. So the macro
+// also defines an empty function named after the file (SUB_BUILTIN_ANCHOR, which
+// engine/CMakeLists.txt sets for each file in builtin/devices/), and
+// BuiltinRegistry::instance() calls every one of them (BuiltinDevices.cpp, which
+// CMake writes from the same list).
 
 #include <functional>
 #include <memory>
@@ -63,7 +71,15 @@ struct BuiltinRegistrar {
 
 }  // namespace sub
 
+#ifdef SUB_BUILTIN_ANCHOR
+#define SUB_BUILTIN_ANCHOR_DEFINITION \
+    void SUB_BUILTIN_ANCHOR() {}
+#else
+#define SUB_BUILTIN_ANCHOR_DEFINITION
+#endif
+
 #define SUB_REGISTER_BUILTIN(Class, category)                                                  \
+    SUB_BUILTIN_ANCHOR_DEFINITION                                                               \
     static const ::sub::BuiltinRegistrar subBuiltin##Class {                                    \
         ::sub::BuiltinCategory::category, [] { return std::make_shared<Class>(); }              \
     }

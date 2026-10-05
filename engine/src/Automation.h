@@ -5,8 +5,8 @@
 // (0..1): a device's parameters (ParamInfo maps them to plain values, for
 // built-in devices and plug-ins of any format alike) and the mixer's controls
 // of a track or the master (volume, pan). Each breakpoint's `curve` bends the
-// segment that starts at it; see automationShape(). The UI's own copy of these
-// rules is model/automation.py: both must agree.
+// segment that starts at it; see automationShape(). The app layer's own copy of
+// these rules is in app/src/model/Automation.h: both must agree.
 
 #include <algorithm>
 #include <cmath>

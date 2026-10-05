@@ -2,6 +2,10 @@ Steinberg VST 3 SDK 3.8.1 (build 84, 2026-08-11), MIT license.
 
 Only the parts GIL Studio compiles are kept here: pluginterfaces, base,
 public.sdk/source/{common,main} and public.sdk/source/vst (without VSTGUI,
-the test suite, the wrappers and the non-Windows module loaders). The full SDK,
+the test suite, the wrappers and the macOS module loader). The Linux module
+loader (public.sdk/source/vst/hosting/module_linux.cpp), plug-in entry
+(public.sdk/source/main/linuxmain.cpp) and thread checker
+(public.sdk/source/common/threadchecker_linux.cpp) come unmodified from the same
+release (vst3_public_sdk tag v3.8.1_build_84). The full SDK,
 with documentation, samples and VSTGUI, is at
 https://github.com/steinbergmedia/vst3sdk

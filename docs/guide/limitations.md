@@ -40,6 +40,15 @@ What SUBstation doesn't do yet, by area.
 - DSD ASIO drivers.
 - More than one ASIO driver open at once.
 
+## On Linux
+
+- Audio inputs: the *System* driver opens outputs only (resampling works), and there is
+  no ASIO.
+- MIDI devices: only the computer MIDI keyboard plays.
+- Plug-ins' own editor windows: plug-ins are edited in the device view.
+
+See [README.md](README.md#on-linux).
+
 ---
 
 For developers: [../../TODO.md](../../TODO.md), [../architecture.md](../architecture.md).

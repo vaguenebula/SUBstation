@@ -1,11 +1,12 @@
 #pragma once
 // A top-level window holding a VST3 plug-in's editor (IPlugView). It is a plain
-// Win32 window owned by the main window, so it floats above it; Qt's event loop
-// dispatches its messages like any other window's. It sizes itself to the view,
+// Win32 window owned by the main window, so it floats above it; the
+// application's event loop dispatches its messages like any other window's. It sizes itself to the view,
 // follows the view's resize requests (IPlugFrame), lets the user resize it when
 // the view can resize, and tells the view about DPI changes.
 //
-// Main thread only.
+// Main thread only. Windows only (EditorWindow.cpp): on other platforms
+// (EditorWindowNone.cpp) it never opens, so plug-ins show no editor.
 
 #include <cstdint>
 #include <string>
@@ -14,8 +15,10 @@
 #include "pluginterfaces/gui/iplugview.h"
 #include "plugins/Vst3Support.h"
 
+#ifdef _WIN32
 struct HWND__;
 using HWND = HWND__*;
+#endif
 
 namespace sub::vst3 {
 
@@ -50,10 +53,13 @@ public:
     tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;
     SUB_HOST_OWNED_FUNKNOWN(Steinberg::IPlugFrame)
 
+#ifdef _WIN32
     // The window procedure's work (called by it, from the message loop).
     intptr_t handleMessage(HWND hwnd, unsigned message, uintptr_t wParam, intptr_t lParam);
+#endif
 
 private:
+#ifdef _WIN32
     void setClientSize(int width, int height);
     void placeOverOwner(HWND owner);
     void placeAt(Position position);
@@ -61,6 +67,7 @@ private:
     void updateContentScale();
     void detachView();
     void yieldActivation();
+#endif
 
     struct Size {
         int cx = 0;
@@ -68,7 +75,11 @@ private:
     };
 
     Steinberg::IPtr<Steinberg::IPlugView> view_;
+#ifdef _WIN32
     HWND hwnd_ = nullptr;
+#else
+    void* hwnd_ = nullptr;  // never set: no window opens
+#endif
     bool resizable_ = false;
     bool resizing_ = false;     // inside resizeView: our own WM_SIZE must not call onSize
     bool inDpiChange_ = false;  // between WM_GETDPISCALEDSIZE and WM_DPICHANGED

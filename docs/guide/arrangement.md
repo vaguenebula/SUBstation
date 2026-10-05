@@ -62,15 +62,25 @@ clips' title bars stay as they are.
 - **Shift-clicking** another selects the area that fully contains both (on the tracks
   between too).
 - Dragging anywhere in the lanes (or below the tracks) selects a time range on the
-  tracks it crosses. On a group's lane it takes in everything in the group, its tracks
-  too (folded away or not).
+  tracks it crosses, up or down: folded and frozen tracks too. On a group's lane it
+  takes in everything in the group, its tracks too (folded away or not), though it
+  shows only over the rows you dragged across.
+- Started on a track's lane (its clips), a selection selects clips on every track it
+  crosses; started on an automation lane it selects automation on every automation
+  lane it crosses, until it goes up into the clips: then it selects clips (see
+  [automation.md](automation.md#time-ranges)).
+- **Shift-clicking** an empty part of a lane (or a clip's body) extends the selection
+  to there: over the time between and every track (or automation lane) between, as if
+  the drag that made it had gone on; holding Shift you can drag it on. With nothing
+  selected, it selects from the insert marker.
 - **Ctrl+A** selects from the first clip to the last, on every track.
 - **Delete**, **Ctrl+X / Ctrl+C** and **Ctrl+D** act on all of it, clips and automation
   alike (unless *Options › Lock Envelopes* is on: then the automation stays where it
   is); **Ctrl+V** pastes what was copied, clips and automation, at the insert marker.
 - Dragging inside a time selection moves (or, with Ctrl, copies) just that stretch,
   splitting clips at its edges; the automation goes along.
-- A folded track's lane isn't a grid: see [Folding](#folding).
+- On a frozen track these work too, the frozen audio going with the clips: see
+  [mixing.md](mixing.md#freezing-and-flattening).
 
 ## Tracks
 
@@ -128,7 +138,10 @@ first of them was.
   on to the master, or the group it is in (groups nest).
 - A group has no clips; its lane shows the clips of the tracks in it, and its
   automation works as a track's. It has no arm or input: it records nothing.
-- The tracks in a group are indented under it, with a band in the group's colour.
+- A group's header is a little taller than a track's, with a bar in its colour across
+  its top. The tracks in it are indented under it, and a band in the group's colour
+  runs down the left of the headers from the group's to its last track's (past their
+  automation lanes); a group in a group has a band of its own beside it.
 - **Ctrl+Shift+G** (*Ungroup Tracks*) takes a group away; what was in it stays, where it
   was.
 - Deleting a group deletes what is in it.
@@ -142,9 +155,10 @@ in its right-click menu).
 
 - A track's is a triangle in a circle: folded, the track shrinks to its name row and
   shows its clips as bars with their names, as in Ableton. Click a bar to select its
-  clip, drag it to move it (Ctrl copies), drag its ends to trim it. The rest of the row
-  isn't a grid to select time on: a click there only moves the insert marker (a
-  selection made on other tracks still takes it in, if it spans it).
+  clip, drag it to move it (Ctrl copies), drag its ends to trim it. Beside its bars the
+  row is a grid as any other: a click moves the insert marker, a drag selects time
+  (on it, and on the tracks it goes on to), and what is selected there is cut, copied,
+  duplicated and moved as on any track.
 - A group's is three bars in a circle, filled while folded: folded, it shrinks to its
   name row too (a little taller than a track's) and hides its tracks.
 - Folded tracks and groups don't show their automation (lanes or choosers); unfolded,
@@ -199,5 +213,5 @@ stops; press it again to return to the start. **Home** goes to the start.
 ---
 
 For developers: [../ui/arrangement.md](../ui/arrangement.md),
-[../ui/README.md](../ui/README.md), [../python/model.md](../python/model.md),
-[../python/serialization.md](../python/serialization.md).
+[../ui/README.md](../ui/README.md), [../app/model.md](../app/model.md),
+[../app/serialization.md](../app/serialization.md).

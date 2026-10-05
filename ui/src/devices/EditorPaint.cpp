@@ -1,0 +1,66 @@
+#include "devices/EditorPaint.h"
+
+#include "sg/SgPainter.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace sub::ui {
+
+QColor withAlpha(const QColor& color, int alpha) {
+    QColor result(color);
+    result.setAlpha(std::clamp(alpha, 0, 255));
+    return result;
+}
+
+QString pythonFixed(double value, int decimals) { return QString::number(value, 'f', decimals); }
+
+QString pythonSigned(double value, int decimals) {
+    const QString text = QString::number(value, 'f', decimals);
+    return text.startsWith(QLatin1Char('-')) ? text : QLatin1Char('+') + text;
+}
+
+QString pythonGeneral(double value) { return QString::number(value, 'g', 6); }
+
+void drawDashedPolyline(SgPainter& p, const std::vector<QPointF>& points, const QColor& color, double width) {
+    const double dash = 4.0 * width, gap = 2.0 * width;
+    bool on = true;
+    double left = dash;  // of the current dash or gap
+    std::vector<QPointF> piece;
+    for (std::size_t i = 0; i + 1 < points.size(); ++i) {
+        QPointF a = points[i];
+        const QPointF b = points[i + 1];
+        double length = std::hypot(b.x() - a.x(), b.y() - a.y());
+        while (length > 0.0) {
+            const double step = std::min(left, length);
+            const QPointF c = a + (b - a) * (step / length);
+            if (on) {
+                if (piece.empty())
+                    piece.push_back(a);
+                piece.push_back(c);
+            }
+            left -= step;
+            length -= step;
+            a = c;
+            if (left <= 1e-9) {
+                if (on && piece.size() > 1)
+                    p.drawPolyline(piece.data(), int(piece.size()), color, width, Qt::FlatCap);
+                piece.clear();
+                on = !on;
+                left = on ? dash : gap;
+            }
+        }
+    }
+    if (on && piece.size() > 1)
+        p.drawPolyline(piece.data(), int(piece.size()), color, width, Qt::FlatCap);
+}
+
+void appendCubic(std::vector<QPointF>& out, const QPointF& from, const QPointF& c1, const QPointF& c2,
+                 const QPointF& to, int steps) {
+    for (int i = 1; i <= steps; ++i) {
+        const double t = double(i) / steps, u = 1.0 - t;
+        out.push_back(from * (u * u * u) + c1 * (3 * u * u * t) + c2 * (3 * u * t * t) + to * (t * t * t));
+    }
+}
+
+}  // namespace sub::ui

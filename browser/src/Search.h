@@ -1,5 +1,4 @@
-// Filtering and ordering, exactly as the browser's Python search did it
-// (see src/substation/ui/browser/search.py for the orders):
+// Filtering and ordering, exactly as the browser's Python search did it:
 //
 //   An item matches when every word of the query is in its lower-case name or
 //   detail (folder, vendor, category).

@@ -1,463 +1,399 @@
-# Device view and clip view
+# Device view
 
-The device view is the bottom panel: the selected track's (or a return's, or the
-master's) chain of devices, built-in and plug-ins alike, with racks showing their
-macros and chains. The clip view is the overlay that a double-clicked clip opens over
-the arrangement: clip controls and waveforms for audio, the piano roll for MIDI. The
-code is [device_panel/](../../src/substation/ui/device_panel),
-[rack_view.py](../../src/substation/ui/rack_view.py),
-[device_editors/](../../src/substation/ui/device_editors) and
-[clip_view.py](../../src/substation/ui/clip_view.py).
+The device view is the bottom panel: the selected track's (or a return's, or the master's) chain of devices, built-in
+and plug-ins alike, with racks showing their macros and chains, and the built-in devices' own editors. It is QML in
+[ui/qml/devices](../../ui/qml/devices) (the editors in [ui/qml/devices/editors](../../ui/qml/devices/editors)) over
+small C++ objects and scene-graph items in [ui/src/devices](../../ui/src/devices). What the view selects and does
+with its selection (the clipboard, grouping, presets, drops) is the application layer's
+[DeviceSelection](../../app/src/session/DeviceSelection.h) (`Session.deviceSelection`); the signal maths of the
+editors' analyzers is in [app/src/analysis](../../app/src/analysis) ([app/analysis.md](../app/analysis.md)). The clip
+view, which used to share this page, is in [piano-roll.md](piano-roll.md#the-clip-view).
 
-What the user does with them: [guide/devices.md](../guide/devices.md),
-[guide/plugins.md](../guide/plugins.md), [guide/mixing.md](../guide/mixing.md)
-(sidechains), [guide/audio-clips.md](../guide/audio-clips.md). This page is about the
-code.
+What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plugins.md](../guide/plugins.md),
+[guide/mixing.md](../guide/mixing.md) (sidechains). This page is about the code.
 
 ## Files
 
 | File | What it holds |
 |---|---|
-| [device_panel/panel.py](../../src/substation/ui/device_panel/panel.py) | `DevicePanel` (the chain: building it, selecting, the clipboard, drag and drop, scrolling); `_ChainView`; `preset_folder()` |
-| [device_panel/frame.py](../../src/substation/ui/device_panel/frame.py) | `_DeviceFrame` (what every device shares: frame, title bar, parameter pages, sidechain button, menu, presets, folding); `device_height()`; the sizes (`DEVICE_WIDTH`, `PARAM_WIDTH`, `FOLDED_WIDTH`...) |
-| [device_panel/device_widgets.py](../../src/substation/ui/device_panel/device_widgets.py) | `DeviceWidget` (built-in), `PluginDeviceWidget`, `RackWidget` |
-| [rack_view.py](../../src/substation/ui/rack_view.py) | `MacroPanel` (a rack's eight macros), `ChainList` and `_ChainRow` (its chains with their mixers) |
-| [device_editors/\_\_init\_\_.py](../../src/substation/ui/device_editors/__init__.py) | the editor registry: `@device_editor(kind)`, `editor_for(kind)` |
-| [device_editors/compressor.py](../../src/substation/ui/device_editors/compressor.py) | `CompressorWidget` and `ReductionGraph` |
-| [device_editors/delay.py](../../src/substation/ui/device_editors/delay.py) | `DelayWidget`, `FilterGraph`, `LogValueBox`, `filter_response()` |
-| [device_editors/eq.py](../../src/substation/ui/device_editors/eq.py) | `EqWidget`, `EqEditor`, `EqGraph`, `BandPanel`, `Analyzer`, `EqWindow` |
-| [device_editors/sidechain.py](../../src/substation/ui/device_editors/sidechain.py) | `SidechainWidget`, `CurveGraph`, `ClashView`, `Point`, `curve_value()`, `points_values()`, `SHAPES` |
-| [device_editors/sampler.py](../../src/substation/ui/device_editors/sampler.py) | `SamplerWidget`, `SampleView`, `waveform_columns()` |
-| [clip_view.py](../../src/substation/ui/clip_view.py) | `ClipView` (the overlay), `ClipWaveform`, `KnobControl` |
+| [DevicePanel.qml](../../ui/qml/devices/DevicePanel.qml) | The panel: the chain area, the hint, the drop markers, its height; the device, sidechain, chain, macro and "beside the devices" menus; the preset dialogs |
+| [DeviceChainArea](../../ui/src/devices/DeviceChainArea.h) | The chain scrolled sideways; drops and drop targets; drags of devices; scrolling to a device added; the pages each device shows |
+| [DeviceChain.qml](../../ui/qml/devices/DeviceChain.qml), [DeviceChainList](../../ui/src/devices/DeviceChainList.h) | One chain: a frame per device and, after a rack, the chain it shows; the device ids, changing only when the chain does |
+| [DeviceFrame.qml](../../ui/qml/devices/DeviceFrame.qml), [DeviceInfo](../../ui/src/devices/DeviceInfo.h), [DeviceFrameInput](../../ui/src/devices/DeviceFrameInput.h) | What every device shares: the frame, the title bar, folding, the body; what the frame shows of the device; the frame's mouse |
+| [DeviceKnobPages.qml](../../ui/qml/devices/DeviceKnobPages.qml), [DeviceParamKnob.qml](../../ui/qml/devices/DeviceParamKnob.qml), [DeviceParams](../../ui/src/devices/DeviceParams.h), [DeviceParam](../../ui/src/devices/DeviceParam.h), [ParamMenu.qml](../../ui/qml/devices/ParamMenu.qml) | A built-in device without an editor: a knob (or list) per parameter, four to a page; a parameter's cell, its state and its menu |
+| [PluginDeviceBody.qml](../../ui/qml/devices/PluginDeviceBody.qml), [PluginParamKnob.qml](../../ui/qml/devices/PluginParamKnob.qml), [PluginParams](../../ui/src/devices/PluginParams.h) | A plug-in's generic editor: its parameters (`PluginParams`, `PluginParam`), or why it shows none |
+| [RackDeviceBody.qml](../../ui/qml/devices/RackDeviceBody.qml), [RackMacroKnob.qml](../../ui/qml/devices/RackMacroKnob.qml), [RackChainRow.qml](../../ui/qml/devices/RackChainRow.qml), [RackChainView.qml](../../ui/qml/devices/RackChainView.qml), [RackMacro](../../ui/src/devices/RackMacro.h), [RackChain](../../ui/src/devices/RackChain.h), [RackChains](../../ui/src/devices/RackChains.h) | A rack: its macros and chain list, a chain's row, the chain shown beside the rack |
+| [DeviceCanvas](../../ui/src/devices/DeviceCanvas.h), [EditorPaint](../../ui/src/devices/EditorPaint.h) | The base of the editors' drawn items, and their drawing helpers |
+| [editors/DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml) | The editor registry (a singleton): `editorFor(kind)` |
+| Compressor: [CompressorEditor.qml](../../ui/qml/devices/editors/CompressorEditor.qml), [ReductionGraph](../../ui/src/devices/ReductionGraph.h) | |
+| Delay: [DelayEditor.qml](../../ui/qml/devices/editors/DelayEditor.qml), [FilterGraph](../../ui/src/devices/FilterGraph.h) | |
+| EQ: [EqEditor.qml](../../ui/qml/devices/editors/EqEditor.qml), [EqWindow.qml](../../ui/qml/devices/editors/EqWindow.qml), [EqWindows.qml](../../ui/qml/devices/editors/EqWindows.qml), [EqBandPanel.qml](../../ui/qml/devices/editors/EqBandPanel.qml), [EqCorner.qml](../../ui/qml/devices/editors/EqCorner.qml), [EqGraphMenus.qml](../../ui/qml/devices/editors/EqGraphMenus.qml), [EqGraph](../../ui/src/devices/EqGraph.h), [EqView](../../ui/src/devices/EqView.h), [EqTypeIcon](../../ui/src/devices/EqTypeIcon.h) | |
+| Sidechain: [SidechainEditor.qml](../../ui/qml/devices/editors/SidechainEditor.qml), [CurveGraph](../../ui/src/devices/CurveGraph.h), [ClashView](../../ui/src/devices/ClashView.h) | |
+| Sampler: [SamplerEditor.qml](../../ui/qml/devices/editors/SamplerEditor.qml), [SampleView](../../ui/src/devices/SampleView.h) | |
+| [PanelMenu.qml](../../ui/qml/devices/PanelMenu.qml), [DynamicMenu.qml](../../ui/qml/devices/DynamicMenu.qml), [ParamArea.qml](../../ui/qml/devices/ParamArea.qml), [ParamKnob.qml](../../ui/qml/devices/ParamKnob.qml), [ParamBox.qml](../../ui/qml/devices/ParamBox.qml), [ParamButton.qml](../../ui/qml/devices/ParamButton.qml), [DeviceHeaderButton.qml](../../ui/qml/devices/DeviceHeaderButton.qml) | Menus filled when they open; the editors' parameter-bound knobs, boxes and buttons; a title bar's buttons |
 
-## DevicePanel
+## The panel
 
-`DevicePanel(editor, selection, bridge)` shows the chain of `selection.track_id`:
-
-```
-QScrollArea (horizontal only)
-└─ chain_layout: [device][device][rack][_ChainView: [device][rack][_ChainView: ...]][device] hint stretch
-```
-
-### Building the chain
-
-`show_track(track_id)` throws every widget away and rebuilds: `_add_devices(layout,
-track_id, devices)` makes a widget per device, choosing its class:
+[DevicePanel.qml](../../ui/qml/devices/DevicePanel.qml) shows the chain of `Session.deviceSelection.trackId` (the
+selection's `trackId`: a track, a return or the master; none while nothing is selected):
 
 ```
-device.is_rack     → RackWidget
-device.is_plugin   → PluginDeviceWidget
-else               → editor_for(device.kind) or DeviceWidget
+DevicePanel (PANEL, a BORDER line above)
+└─ DeviceChainArea (clips; scrolls sideways by contentX)
+   └─ Row
+      ├─ DeviceChain ("": the track's own)
+      │    [DeviceFrame] [DeviceFrame] [DeviceFrame (rack)] [RackChainView: DeviceChain (its chain) ...] [DeviceFrame]
+      └─ the hint
 ```
 
-and connects its signals (`pressed`, `released`, `drag_started`, `menu_requested`,
-`page_changed`) and its callbacks (`remove_selected`, `toggle_fold`, `clipboard_menu`,
-`group_selected`), so a device's menu acts on all the selected devices. After an
-unfolded rack with chains it adds a `_ChainView` (an accent-bracketed frame) holding
-the devices of the chain the rack shows, recursively, so racks in it show theirs
-further along. Which chain a rack shows is view state in `_shown_chains` (rack id →
-chain id: the last clicked, else the first); `_pages` remembers each device's parameter
-page across rebuilds. `widgets` holds every device widget shown, racks' contents
-included; `_chain_ids()` is every device on the track depth first.
+`DeviceChain` is a `Row` over a `DeviceChainList` (`deviceIds` of one chain, changing only when the chain's devices
+do, so the `Repeater` makes its frames again only then, not as devices are selected, switched or edited: the frames
+follow those themselves). After a rack that isn't folded and has chains, a `RackChainView` (an accent-bracketed
+frame, "Drop devices here" while empty) holds a `DeviceChain` of the chain the rack shows, recursively, so racks in
+it show theirs further along. Which chain a rack shows is `DeviceSelection::shownChain(rackId)` (the one last
+clicked in its chain list, else its first). A frozen track (or one in a frozen group) shows no devices.
 
-A hint label says what can be dropped (an instrument on a MIDI track without one,
-otherwise effects) or "No track selected".
+The hint (`DeviceSelection::hint`) says what can be dropped (an instrument on a MIDI track without one, otherwise
+effects), that no track is selected, or that the track is frozen.
 
-`_on_devices_changed(track_id)` (from `project.devices_changed`) avoids the rebuild
-when the same device objects are in the same places (`widget.source is device`: a
-device switched on or off, a macro mapped) and only refreshes them. Otherwise it
-rebuilds, and scrolls to a device that was added, on the next event-loop turn (after
-the layout), unless the device was dropped on the chain, where it is already in view
-(`_dropping`). Other signals update widgets in place: `device_param_changed`,
-`device_state_changed`, `chain_changed`, `track_changed` (a sidechain's source
-renamed), `devices_folded` (rebuild), and from the bridge `plugin_params_changed`,
-`plugin_params_rebuilt` (rebuild), `plugin_editor_changed`, `devices_loaded` (rebuild:
-processors were recreated), `automation_state_changed`, `position_changed` (widgets
-that `follows_automation()` refresh), `meters_updated` (`refresh_displays()`).
+What the panel is to the main window: `startChainRename(rackId, chainId)` (Ctrl+R on a rack chain: its row's name
+edited in place, after scrolling to the rack), `focusDevices()` (the device view takes the focus), the
+`statusMessage(text)` signal, and its `implicitHeight`.
 
 ### Height
 
-The panel never scrolls vertically. `device_height(editor)` builds a probe,
-`_TallestDevice` (a page of knobs with page arrows: as tall as any device gets), asks
-its minimum size, and deletes it; the panel's fixed height is that plus `EXTRA_HEIGHT`
-(12 px, room for editors' graphs), its margins and the horizontal scroll bar. That way it fits whatever the fonts and the screen's scale.
-A plug-in's error message is cut to `MESSAGE_LINES` (4) lines for the same reason
-(the whole text is in its tooltip).
+The panel never scrolls vertically. Its height is worked out once from a measured, hidden `DeviceParamKnob` (the
+`probe`) and the title font: the tallest device is its border, a title bar and a page of knobs in two rows with the
+body's margins, 6 px above and below (`deviceHeight`); the panel adds `panelMargin` (8 px) above and below. Every
+device is that tall, so the tallest page of knobs is as far from its title bar as from the frame's bottom, and an
+editor's graphs take the height there is, with the same margins. (The Python panel also added `EXTRA_HEIGHT` and a
+scroll bar's width, which left more room below a device's knobs than above them; the chain has no scroll bar.) The
+main window fixes the device view's split to it. That way it fits whatever the fonts and the screen's scale. A plug-in's message is cut to four lines for the same reason (the whole text is in its
+tooltip).
 
-### Selecting
+### Scrolling
 
-`selected` is a list of device ids in chain order, all of one chain (the track's own or
-a rack's). `select_device(device_id, modifiers)`: Shift selects the range from
-`_anchor` in that chain, Ctrl toggles, a plain click selects just it. A plain press on
-a device already selected keeps the others (to drag them all) and the release selects
-just it if no drag followed. Any selection calls `selection.focus_devices()`, so
-Delete, Ctrl+C/X/V/D and Ctrl+G go to the device view (see
-[README.md](README.md#actions-and-the-focus)). A click beside the devices clears the
-device selection but keeps the focus here, so Ctrl+V pastes into this track. When the
-`Selection` moves on (another track, or the focus elsewhere), the device selection is
-dropped.
+[DeviceChainArea](../../ui/src/devices/DeviceChainArea.h) scrolls the chain sideways without a scroll bar
+(`contentX`, `maxContentX`): Shift+wheel anywhere over the chain scrolls it (`kWheelScroll` 80 px a notch), and the
+wheel never turns a knob or a value box here; Ctrl+Alt-drag anywhere on the chain scrolls it by hand, as in the
+arrangement. The press usually lands on a device or a knob, so the area watches its window's mouse and wheel events
+before they reach them (an event filter on the window). A device added (not by a drop on the chain, where it is
+already in view) is scrolled to once laid out (`scrollTo()`, as `QScrollArea::ensureWidgetVisible`).
 
-### Commands
+QML tells the area what its items are with a `panelRole` property: "device" (a frame: `deviceId`, and `chainId` the
+chain it is in), "chain" (a `RackChainView`: `chainId`), "chainRow" (a chain list's row: `chainId`, `rackId`). The
+area finds them by walking its content, so frames, chain views and rows need no registration.
+
+The page each device shows is view state kept by id in the area (`pageOf`, `setPage`), across the frames' rebuilds.
+
+## Selecting
+
+The selection is `DeviceSelection`'s ([app/session.md](../app/session.md)): `selected` is a list of device ids in
+chain order, all of one chain (the track's own or a rack's).
+
+- `selectDevice(id, modifiers)`: Shift selects the range from the anchor in that chain, Ctrl toggles, a plain click
+  selects just it.
+- `press(id, modifiers)` and `release(id, modifiers)`: a plain press on a device already selected keeps the others
+  (to drag them all), and the release selects just it if no drag followed.
+- Selecting devices calls `Selection::focusDevices()`, so Delete, Ctrl+C/X/V/D and Ctrl+G go to the device view
+  (see [README.md](README.md#what-an-action-acts-on)). A click beside the devices (`clickBeside()`) clears the device
+  selection but keeps the focus here, so Ctrl+V pastes into this track. When the `Selection` moves on (another track,
+  or the focus elsewhere), the device selection is dropped; devices no longer shown are no longer selected.
+- A frame shows it is selected by an accent border and a lighter title bar (`kDeviceHeaderSelected`).
+
+## Commands
+
+`DeviceSelection` acts on the selected devices through the editor:
 
 | Method | Editor call | Notes |
 |---|---|---|
-| `delete_selected()` | `remove_devices` | one undo step |
-| `group_selected()` | `group_devices` | the new rack is selected; refused past 8 levels of nesting |
-| `ungroup_selected()` | `ungroup_rack` per rack, in one undo macro | a rack holding several instruments can't be ungrouped |
-| `copy_selected()` | `copy_devices` | stores the plug-ins' states first (`bridge.store_plugin_states`), and remembers which copied devices were folded |
-| `cut_selected()` | copy, then delete | |
-| `paste(chain, index, after_selection)` | `paste_devices(track, clipboard, index, chain, folded)` | after the selected devices by default, else at the end; refused instruments and nesting limits are reported |
-| `duplicate_selected()` | copy and paste | the clipboard is left as it was |
-| `load_preset(chain, index)` | `insert_preset` of a file asked for | right-click beside the devices; folders remembered in `QSettings` `presets/dir` (else the preset library) |
-| `insert_preset(path, chain, index)` | `load_preset` from [serialization](../python/serialization.md), then `insert_device` | a new device; a plug-in's editor opens, a rack's plug-ins' don't |
-| `load_preset_into(device_id, path)` | `bridge.store_plugin_states({device})`, then `editor.load_preset_into` | only into a device of the preset's kind (`loads_into`) |
-| `toggle_fold(device_id)` | `set_devices_folded` | all the selected if it is one of them; view state, not undone |
+| `deleteSelected()` | `removeDevices` | one undo step |
+| `groupSelected()`, `groupDevice(id)` | `groupDevices` | the new rack is selected; refused past 8 levels of nesting |
+| `ungroupSelected()`, `ungroupRack(id)` | `ungroupRack` per rack | a rack holding several instruments can't be ungrouped |
+| `copySelected()` | `copyDevices` | stores the plug-ins' states first (`bridge.storePluginStates`), and remembers which copied devices were folded |
+| `cutSelected()` | copy, then delete | |
+| `paste()`, `pasteAt(chain, index)`, `pasteAfter(id)` | `pasteDevices(track, clipboard, index, chain, folded)` | after the selected devices by default, else at the end; refused instruments and nesting limits are reported |
+| `duplicateSelected()` | copy and paste | the clipboard is left as it was |
+| `toggleFold(id)` | `setDevicesFolded` | all the selected if it is one of them; view state, not undone |
+| `loadPresetFile(path, chain, index)` | `insertPreset` of a file asked for | right-click beside the devices, *Load Preset…*; the folder remembered in `QSettings` `presets/dir` (else the preset library) |
+| `insertPreset(path, chain, index)` | `loadPreset` ([app/serialization.md](../app/serialization.md)), then `insertDevice` | a new device; a plug-in's editor opens, a rack's plug-ins' don't |
+| `loadPresetInto(id, path)` | `bridge.storePluginStates({device})`, then `editor.loadPresetInto` | only into a device of the preset's kind (`presetLoadsInto`) |
+| `savePreset(id, name)` | `saveToLibrary` | stores the plug-in states of it and everything in it first; a rack is renamed after the preset (`editor.renameRack`), so its title is the preset's name; `presetSaved(path)` lets the browser list it |
+| `saveAsDefault(id)`, `clearDefault(id)` | the preset library's default presets | not racks |
+| `loadVst3Preset(id, path)`, `saveVst3Preset(id, path)` | `setDeviceState` with the states before and after (undoable) | a plug-in's own `.vstpreset`; the folder remembered (`plugins/preset_dir`), else `Documents/VST3 Presets/<vendor>/<name>` |
 
-### Dragging and dropping
+The device view's clipboard is its own: the arrangement's clips, automation and tracks have theirs.
 
-- **Starting a drag**: a frame emits `drag_started` once the mouse moves past the
-  start-drag distance (never for an instrument, which stays first). `_start_drag` puts
-  the track id and the selected device ids (instruments left out) in a `QMimeData`
-  under `DEVICE_MOVE_MIME` (defined in
-  [lanes_canvas.py](../../src/substation/ui/arrangement/lanes_canvas.py), which reads
-  it too, for moving devices to another track), with a picture of the device.
-- **Where it drops**: `drop_target(pos)` returns `(chain, index)`: a rack's chain row
-  under the mouse (last in that chain), else the innermost `_ChainView` the mouse is in
-  (`_ChainView.depth()`), else the track's own chain; the index counts the chain's
-  widgets whose centres are left of the mouse. `_show_drop_marker` draws a 2 px line
-  there (a frame over the chain, outside the layout).
-- **Auto-scroll**: within `AUTOSCROLL_EDGE` (40 px) of either side, a 16 ms timer
-  scrolls the chain, faster nearer the edge.
-- **Dropping**: devices of this track → `editor.move_devices(track, ids, index,
-  chain)`; built-in kinds and plug-in refs from the browser (`device_kinds`,
-  `plugin_refs`) → `editor.add_device(..., index, plugin, chain)` one after the other,
-  each after the last (an instrument goes first whatever the index, so the index is
-  adjusted by how many devices went in before it). Presets (`preset_paths`) go in the
-  same way (`insert_preset`), unless one preset is dropped onto a device of its kind:
-  then it loads into that device (`load_preset_into`).
-- **Onto a device**: `preset_target(pos, paths)` is the device under the mouse if a
-  single preset is dragged and `loads_into` it (not on a rack's chain list row, which
-  takes it as a new device in that chain). The presets are read once per drag
-  (`_drag_presets`, cleared when it ends). While there is one, `load_marker` (a frame
-  over the chain, transparent for the mouse) outlines it instead of the drop line.
-- **Ctrl+Alt-drag** scrolls the chain by hand, as in the arrangement. The press usually
-  lands on a knob or a device, so the panel installs itself as an application event
-  filter and takes such presses on any widget inside its scroll area before they do.
+## Dragging and dropping
 
-## _DeviceFrame
+- **Starting a drag**: a frame's `DeviceFrameInput` calls `DeviceChainArea::startDrag()` once the mouse moves past
+  the start-drag distance (never for an instrument, which stays first). It drags `DeviceSelection::dragDevices(id)`
+  (the selected devices if it is one of them, else it; instruments left out) under `kDeviceMoveMime`
+  (`application/x-substation-device-move`: the track's id, then the device ids, a line each;
+  [BrowserMime.h](../../app/src/browser/BrowserMime.h)), with a picture of the device (`kDragPictureHeight` 48 px).
+  The arrangement reads the same format, to move devices to another track.
+- **Where it drops**: `dropTarget(x, y)` returns `{chain, index}`: a rack's chain row under the mouse (last in that
+  chain), else the innermost rack chain shown there, else the track's own chain; the index counts the chain's frames
+  whose middles are left of the mouse. `dropMarker` is a 2 px line there.
+- **Auto-scroll**: within `kAutoscrollEdge` (40 px) of either side, a 16 ms timer scrolls the chain, faster nearer the
+  edge.
+- **Dropping**: devices of this track → `DeviceSelection::dropMoved(ids, chain, index)` (`editor.moveDevices`);
+  built-in kinds and plug-in refs from the browser → `dropDevices(kinds, plugins, chain, index)`, one after the other,
+  each after the last (an instrument goes first whatever the index). Presets → `dropPresets(paths, chain, index,
+  intoDeviceId)`: as new devices, unless one preset is dropped onto a device of its kind, which it then loads into.
+- **Onto a device**: `presetTarget(x, y, paths)` is the device under the mouse if a single preset is dragged and
+  loads into it (not on a rack's chain list row, which takes it as a new device in that chain). The presets are read
+  once per drag (`presetLoadsInto`, forgotten by `dragEnded()`). While there is one, `loadMarker` outlines it instead
+  of the drop line.
 
-The base of every device widget. Subclasses say how many parameters there are
-(`_set_param_count(count, page)`) and build one parameter's cell
-(`_param_widget(n)`); the frame does the rest:
+## DeviceFrame
 
-- **Title bar** (`header_bar`, lighter while selected: `DEVICE_HEADER_SELECTED`): the
-  fold button, the on/off switch (`editor.set_device_enabled`), the name
-  (`_TitleLabel`, elided), the sidechain button (if any), the page arrows and page
-  label (only with more than one page), the save button. Clicks on its background and
-  name reach the frame (select, drag).
-- **Save button** (and *Save Preset…* in the menu): `save_to_library(name=None)` stores
-  the plug-in states in it, asks for a name (`QInputDialog`, the device's name to start
-  with), asks before replacing a preset of that name (`QMessageBox`; not when `name` is
-  passed), saves with `presets.save_to_library` and emits `preset_saved(path)`, which the
-  panel passes on (`DevicePanel.preset_saved`) for the browser to list it. A rack is
-  renamed after the preset (`editor.rename_rack`), so its title is the preset's name.
-- **Default presets**: the menu's *Save as Default Preset* (`save_as_default`:
-  `presets.save_default` after storing the plug-in's state) and *Clear Default Preset*
-  (`clear_default`, enabled when there is one); not on racks.
-- **Pages**: `params_per_page` (4) in a grid of `param_columns` (2), each cell
-  `PARAM_WIDTH` (84 px). `set_page` rebuilds the page's widgets and emits
-  `page_changed`. Device editors set other numbers.
-- `_param_cell(name, param_id)`: a parameter's column with its name; right-click gives
-  `_automation_menu` (Show Automation, Delete Automation, Re-Enable Automation and,
-  inside a rack, *Map to Macro* / *Unmap from Macro N*: `editor.map_macro`,
-  `editor.unmap_macro`, `editor.macro_of`). `_watch_touch` installs a `_TouchFilter`
-  that calls `editor.touch_parameter` when the control is pressed, so the arrangement
-  shows its automation.
-- **Folding**: folded, the frame is `FOLDED_WIDTH` (26 px) and shows `folded_bar`
-  instead: the fold button, the switch and the name reading upwards (`_VerticalTitle`,
-  which paints the title label's text rotated). The fold and enable buttons are added
-  to whichever bar shows. Double-clicking a folded device, or Ctrl+double-clicking any,
-  calls `toggle_fold`; a plain double-click calls `open_editor()` (plug-ins show their
-  editor).
-- **Context menu**: device entries (`add_menu_actions`), Fold/Unfold, the clipboard
-  entries from the panel, Move Left/Right (an instrument doesn't move, and nothing goes
-  before it), Save Preset…, Save as Default Preset / Clear Default Preset (not racks),
-  Group (Ctrl+G), Ungroup (racks), Delete.
-- **Sidechain**: the button exists when `bridge.has_sidechain_input(track, device)`.
-  `update_sidechain()` lights it and names the source and tap in its tooltip.
-  `sidechain_menu()` lists *No Sidechain* and `project.sidechain_sources(track)`, those
-  that would close a cycle disabled (`project.sidechain_would_cycle`), then, with a
-  sidechain, where it is taken (`_tap_choices`: `PRE_FX`, *After* each of the source's
-  effects by device id, `PRE_FADER` (*Post FX*), `POST_FADER` (*Post Mixer*); devices
-  with the same name are numbered). `_tap_of()` shows a tap after a device that left
-  the source as Post FX, and after an instrument as Pre FX, as the engine treats them.
-  Choosing calls `editor.set_device_sidechain`; a `ValueError` (the source went
-  meanwhile) becomes a status message. Engine side: [engine/routing.md](../engine/routing.md).
-- Hooks the subclasses fill in: `refresh(device)`, `refresh_automation()`,
-  `follows_automation()`, `refresh_displays()`, `open_editor()`,
-  `add_menu_actions(menu)`.
+[DeviceFrame.qml](../../ui/qml/devices/DeviceFrame.qml) is what every device shares, with `DeviceInfo` (what the frame
+shows of the device: its name, tooltip, kind, on/off, folded, its chain, Move Left/Right, a plug-in's loading state
+and editor, its sidechain) reading the project again whenever that may have changed:
 
-### DeviceWidget (built-in devices)
+- **Frame**: `kPanelAlt` in a 1 px line (`kAccent` while selected), 4 px corners. Its width is `DEVICE_WIDTH` (216 px),
+  a rack's 420, an editor's own (`body.implicitWidth + 2`), or 26 px folded.
+- **Title bar** (`kDeviceHeader`, lighter while selected): the fold button, the on/off switch
+  (`DeviceInfo::setEnabled`), the name (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
+  and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the sidechain button (a
+  device with a sidechain input), the page arrows and "n/m" (only with more than one page), the save button.
+- **Body**: a `Loader` taking all the height there is: a rack's `RackDeviceBody`, a plug-in's `PluginDeviceBody`,
+  the device's editor (`DeviceEditors.editorFor(kind)`), or `DeviceKnobPages`. A body may have `pages` and `page`
+  (the title bar pages through them; the page is restored from the area when the body is made again). Its content
+  starts 6 px below the title bar and what fills the height (a graph, a rack's chain list) ends 6 px above the
+  frame's bottom (the EQ's curve and the Sidechain's fill it all, 5 px for their side columns).
+- **Folded**, the frame is a 26 px strip instead: the fold button, the switch and the name reading upwards.
+- **Mouse** ([DeviceFrameInput](../../ui/src/devices/DeviceFrameInput.h), under the frame's controls, so it gets the
+  clicks on the background, the title bar and labels): a press selects (`DeviceSelection::press`), the release
+  `release`; a drag past the start distance starts a drag of the devices; a double-click folds or unfolds a folded
+  device (or any, with Ctrl), else opens a plug-in's own editor; a right press selects it (unless it is) and asks
+  the panel for its menu.
+- **Context menu** (`DevicePanel.showDeviceMenu`): a plug-in's Show Editor, Load VST3 Preset…, Save VST3 Preset…; a
+  rack's Add Chain; the body's own `menuActions` (the Sampler's); Fold/Unfold; Cut, Copy, Paste (after it),
+  Duplicate; Move Left/Right (not an instrument: nothing goes before it); Save Preset…, Save as Default Preset /
+  Clear Default Preset (not racks); Group (Ctrl+G), Ungroup (racks); Delete.
+- **Save button** (and *Save Preset…*): the panel asks for a name (the device's to start with,
+  `presetName(id)`), checks it (`checkPresetName`: a name that can't be a file's is refused with a message; one that
+  exists asks before replacing it), then `savePreset(id, name)`.
+- **Sidechain**: the button exists when `bridge.hasSidechainInput(track, device)`; it is lit while there is one, and
+  its tooltip names the source and the tap. Its menu (`DeviceInfo::sidechainMenu()`) lists *No Sidechain* and the
+  tracks, groups and returns it can come from, those that would close a cycle disabled, then, with a sidechain, where
+  it is taken (`tapChoices()`: Pre FX, *After* each of the source's effects, Post FX, Post Mixer; devices with the same
+  name are numbered). `tapOf()` shows a tap after a device that left the source as Post FX, and after an instrument as
+  Pre FX, as the engine treats them. Choosing calls `editor.trySetDeviceSidechain`, which reports a refusal (the
+  source went meanwhile) as a status message. Engine side: [engine/routing.md](../engine/routing.md).
 
-Parameters come from the engine: `bridge.engine_device_id(track, device)` gives the
-processor id, `engine.processor_params(id)` its `ParamInfo`s (id, name, range,
-default, unit, `log_scale`, `value_labels`). A parameter with `value_labels` gets a
-`QComboBox`; the others a `Knob` (log-scaled where the engine says so, bipolar when the
-range spans 0 and the unit is none, st or ct) with a readout from
-`params.format_value`. Values are read from the model (`device.params`) and written with
-`editor.set_device_param(track, device, param, value, gesture)`.
+### Built-in devices
 
-`refresh_automation()` shows automated parameters at their envelope's current value
-(`bridge.current_value`) with the red dot, or the model's value and a grey dot while
-overridden. `read_display(display_id)` reads what the processor published since the
-last call (`engine.read_processor_display(id, index, position)`, a float32 array),
-keeping a read position per display. `refresh_state()` is called when the device's
-state besides its parameters (`Device.state`) changes.
+[DeviceKnobPages.qml](../../ui/qml/devices/DeviceKnobPages.qml): `DeviceParams` lists the processor's parameters
+(`bridge.deviceParams`), four to a page in a 2 × 2 grid, each a
+[DeviceParamKnob](../../ui/qml/devices/DeviceParamKnob.qml) (84 px wide, a 34 px knob) over a
+[DeviceParam](../../ui/src/devices/DeviceParam.h):
 
-### PluginDeviceWidget
+- A parameter with named values gets a list; the others a `Knob`, log-scaled where the engine says so, bipolar when
+  the range spans 0 and the unit is none, st or ct, in whole steps when stepped, with a readout from `format()`.
+- `value` is the parameter as it is now: its envelope's value while automation plays (with the red dot; the model's
+  value and a grey dot while overridden), refreshed as the playhead moves while it follows automation.
+- `set(value, mergeKey)` → `editor.setDeviceParam(track, device, param, value, key)`; pressing the cell or the knob
+  calls `touch()` (`editor.touchParameter`), so the arrangement shows its automation.
+- Right-click: [ParamMenu](../../ui/qml/devices/ParamMenu.qml): Show Automation, Delete Automation, Re-Enable
+  Automation and, inside a rack, *Map to Macro* (the rack's eight) / *Unmap from Macro N* (`editor.mapMacro`,
+  `editor.unmapMacro`, `editor.macroOf`).
 
-A plug-in's parameters live in the plug-in. The widget lists `engine.processor_params`
-and shows those that are automatable and neither hidden nor read-only (or, if that
-leaves none, every one that isn't hidden or read-only), a page of four at a time. Values
-are `engine.processor_param(id, index)`, with the plug-in's own text
-(`bridge.plugin_param_text`). Stepped parameters get `step=1`; a knob is bipolar when
-its default is the middle of its range. Edits call `editor.set_device_param(...,
-old=...)` with the value before, so undo can restore it.
+### Plug-ins
 
-- The **Edit** button (`plugin_window` icon) toggles `bridge.open_plugin_editor` /
-  `close_plugin_editor`; its state follows `bridge.is_plugin_editor_open` on
-  `plugin_editor_changed`.
-- **VST3 presets**: *Load VST3 Preset…* (`load_vst3_preset`) reads a `.vstpreset`,
-  applies it with `engine.set_processor_state` (which fails for another plug-in's),
-  then records `editor.set_device_state(track, device, old, new, text)` with both states
-  in base64, so it can be undone. *Save VST3 Preset…* (`save_vst3_preset`) writes
-  `bridge.plugin_state`. The folder is remembered (`plugins/preset_dir`), else
-  `Documents\VST3 Presets\<vendor>\<name>`. (The save button saves a SUBstation preset,
-  as every device's does.)
-- A plug-in that isn't loaded (missing, failed) shows `bridge.plugin_errors[device]` in
-  its body and keeps its place.
-- The title's tooltip has the name, vendor, path and the latency it reports.
-- `refresh_values()` rereads every value (after a preset, or values the plug-in changed
-  itself).
+A plug-in's parameters live in the plug-in. [PluginParams](../../ui/src/devices/PluginParams.h) lists those a
+generic editor offers (automatable and neither hidden nor read-only, or, if that leaves none, every one that isn't
+hidden or read-only), a page of four at a time ([PluginDeviceBody.qml](../../ui/qml/devices/PluginDeviceBody.qml));
+each `PluginParam` reads its value as the plug-in has it now, with the plug-in's own text. Stepped parameters move in
+whole steps; a knob is bipolar when its default is the middle of its range. Edits call `editor.setDeviceParam(...,
+old)` with the value before, so undo can restore it.
+
+- The editor button and Show Editor toggle the plug-in's own editor (`DeviceInfo::showEditor`, which brings an open
+  one to the front); its state follows `bridge.isPluginEditorOpen` on `pluginEditorChanged`.
+- A plug-in that isn't loaded shows why instead of its parameters (`DeviceInfo::pluginMessage`): loading (a project
+  just opened), missing or failed (it keeps its place).
+- Values are read again when the plug-in rebuilds its parameters, changes them itself, loads a preset, or an undo
+  sets them.
 
 How plug-ins are hosted: [engine/plugins.md](../engine/plugins.md).
 
-### RackWidget and rack_view
+### Racks
 
-`RackWidget` (`RACK_WIDTH` 420) has no parameter pages; its content is a `MacroPanel`
-and a `ChainList` from [rack_view.py](../../src/substation/ui/rack_view.py). Its save
-button saves the rack, with everything in it, as every device's does. `chain_clicked` →
-`DevicePanel._show_chain` rebuilds with that chain shown.
+[RackDeviceBody.qml](../../ui/qml/devices/RackDeviceBody.qml) (a rack is 420 px wide) has no parameter pages: eight
+macros, four to a row, and the chain list. Its save button saves the rack, with everything in it, as every device's
+does.
 
-- `MacroPanel`: eight knobs (`MACRO_COUNT`), four to a row, 0..1, reading
-  `rack.params[macro_param(i)]`; turning one calls `editor.set_macro(track, rack, i,
-  value, key)`, which moves what it is mapped to as one undo step. The name lights up
-  and the tooltip lists the mappings (`rack.macros`); right-click to unmap.
-- `ChainList`: a `_ChainRow` per chain, an empty-rack hint, and **+ Chain**
-  (`editor.add_rack_chain`). `refresh(rack)` rebuilds only when the chains changed.
-  `chain_at(pos)` is used by the panel's drop target; `refresh_meters()` reads
-  `bridge.chain_meters`.
-- `_ChainRow`: activator, name (double-click to rename in place), solo, volume
-  (`volume_box`) and pan (`pan_knob`) from
-  [mixer_controls.py](../../src/substation/ui/arrangement/mixer_controls.py), meter.
-  Edits go through `editor.set_chain_param(track, chain, attr, value, key)`. Chain
-  volume and pan are automatable (`automation.chain_key(rack, chain, CHAIN_VOLUME /
-  CHAIN_PAN)`) and follow their automation as rows do in headers. Right-click: rename,
-  duplicate, delete, add, show automation; after the menu the row emits `clicked`
-  (showing the chain rebuilds the panel, so it must come after the menu's action).
+- **Macros** ([RackMacroKnob.qml](../../ui/qml/devices/RackMacroKnob.qml) over
+  [RackMacro](../../ui/src/devices/RackMacro.h)): "Macro N" over a 0..1 knob reading the rack's `macroParam(i)`;
+  turning one calls `editor.setMacro(track, rack, i, value, key)`, which moves what it is mapped to as one undo
+  step. The name lights up while something is mapped, the tooltip lists the mappings; right-click to unmap one
+  (`unmapEntries()`).
+- **Chains** ([RackChains](../../ui/src/devices/RackChains.h), [RackChainRow.qml](../../ui/qml/devices/RackChainRow.qml)
+  over [RackChain](../../ui/src/devices/RackChain.h)): a 22 px row per chain (an empty-rack hint while there are none,
+  and **+ Chain**: `editor.tryAddRackChain`), lit with an accent bar while its chain shows beside the rack. A row
+  has an activator, its name (renamed in place: `startRename()`, kept on Enter, Escape or leaving the field; empty
+  keeps the old name), solo, volume, pan and meter (`meterUpdated`, from `bridge.chainMeters`). Edits go through
+  `editor.setChainParam(track, chain, field, value, key)`. Chain volume and pan are automatable and follow their
+  automation as the headers' do. A click shows the chain (`DeviceSelection::clickChain`, which also makes it the one
+  Ctrl+R renames). Right-click: Rename, Duplicate, Delete, Add Chain, Show Volume Automation, Show Pan Automation;
+  after the menu (unless Rename, or the chain went) the chain shows beside its rack.
 
 Racks in the engine: [engine/routing.md](../engine/routing.md).
 
 ## Device editors
 
-A built-in device can have an editor of its own instead of the plain knob pages:
-a `DeviceWidget` subclass in a module of
-[device_editors/](../../src/substation/ui/device_editors), registered for the device's
-kind (its engine id):
+A built-in device can have an editor of its own instead of the knob pages: a QML file in
+[ui/qml/devices/editors](../../ui/qml/devices/editors), named in the `DeviceEditors` singleton's table for the
+device's kind (its engine id):
 
-```python
-@device_editor("compressor")
-class CompressorWidget(DeviceWidget):
-    params_per_page = 8
-    param_columns = 4
-    device_width = DEVICE_WIDTH + 2 * (PARAM_WIDTH + 16) + 12 + GRAPH_WIDTH
+```js
+readonly property var editors: ({
+    "compressor": "CompressorEditor.qml",
+    "delay": "DelayEditor.qml",
+    "eq": "EqEditor.qml",
+    "sampler": "SamplerEditor.qml",
+    "sidechain": "SidechainEditor.qml"
+})
 ```
 
-`editor_for(kind)` imports every module in the package the first time it is called (not
-at import: the editors import the device panel, which imports the registry), so a new
-module needs nothing else. Registering two editors for one kind raises.
+`DeviceEditors.editorFor(kind)` gives its URL (or "" for the knob pages), and the frame loads it with
+`setSource(url, {trackId, deviceId})`. What an editor is, for the frame:
 
-An editor sets parameters as the knobs do (`editor.set_device_param`, or
-`set_device_params` for several in one step), so undo, automation and saving work
-alike. It can add widgets beside the parameters (`self.content.addWidget`); `content`
-takes all the device's height (the view's, and the scroll bar's while that is hidden),
-so an editor's graphs can grow into it, while the knobs stay at the top. It draws the
-device's displays in `refresh_displays()`, which the panel calls as the meters update (about 30 times a second), from
-`read_display()`. Displays are what the engine's built-in devices publish for their
-editors (see [engine/devices.md](../engine/devices.md)).
+- `required property string trackId` and `deviceId`.
+- It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
+  `implicitWidth` is the body's width (Compressor 658, Delay 532, Sampler 566, Sidechain 720, EQ 580, or 756 with its
+  band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px from the top
+  and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
+- Optional: `pages` (read) and `page` (read/write) for pages of knobs; `menuActions` (a list of `Action`s the
+  device's menu starts with); the signal `sidechainMenuRequested()` (the frame shows the sidechain menu).
+- Clicks it doesn't take go on to the frame (selecting the device, its menu).
 
-- **Compressor** ([compressor.py](../../src/substation/ui/device_editors/compressor.py)):
-  every knob on one page (8, in 4 columns) and a `ReductionGraph`: the gain reduction
-  over the last `HISTORY` (240) values, growing downward to 24 dB, filled with a
-  gradient; an *In* meter of what keys it with the threshold marked by an accent notch;
-  an *Out* meter (both -60 to 0 dBFS); the current reduction and the threshold in
-  figures. It reads the displays `reduction`, `input` and `output`.
-- **Delay** ([delay.py](../../src/substation/ui/device_editors/delay.py)): no pages
-  (`_set_param_count` only hides the arrows); its own layout, as Ableton's: per side a
-  Sync button, then (a `QStackedWidget`) a grid of sixteenths and an offset field, or a
-  time knob; the link button; a `FilterGraph` (the filter's response from
-  `filter_response()` on a 20 Hz..20 kHz log axis, its dot dragged across for the
-  frequency and up and down for the width, over a spectrum of the display `input`: a
-  4096-point Hann FFT of the latest samples, falling 1 dB per refresh), the Filter
-  button and the frequency (`LogValueBox`, dragging in log) and width fields; the Mode
-  buttons and Ping Pong; Feedback with Freeze beside it over Dry/Wet. Each control is
-  bound with `_bind(widget, param, update)`: `_sync()` shows every parameter as it is now
-  (`value()`: the envelope's value while automation plays), right-click gives its
-  automation menu, and pressing it touches the parameter.
-- **EQ** ([eq.py](../../src/substation/ui/device_editors/eq.py)): no pages. `EqEditor`
-  is the editor, for a host: the device's `EqWidget` (no body margins: the graph from the
-  title bar to the bottom edge, the `BandPanel` beside it while `VIEW["panel"]`: it starts
-  collapsed, the faders button beside the expand button shows it in every EQ, and
-  `EqWidget.panel_shown` sets the device's width, `device_width` or `collapsed_width`),
-  or an `EqWindow`
-  (`open_window()`, from the expand button over the graph's top right: the graph over
-  a bar with the panel; a top-level window per device in
-  `_WINDOWS`, with its own display timer, that closes when the device goes). A host has
-  `value(id)`, `set_params(values, gesture, text)`, `touch(id)`, `automation_state(id)`,
-  `automation_menu(id, at)`, `sample_rate` and `read_display(id)`. `sync()` reads the
-  bands into `Band`s; every change goes through `ProjectEditor.set_device_params`, so a
-  drag (adding a band and dragging it on, too: the same parameters every move) is one
-  undo step.
-  - `EqGraph`: 10 Hz..22 kHz, ± `VIEW["range"]` dB; each band's curve and the total
-    from `ge.eq_response` (cached per band), the selected and hovered bands filled in
-    their colours (`band_color`), the total with a glow. Scale and Output are knobs over its bottom left and right
-    corners (`_corner`, placed by `place_overlays()` as it resizes). The ghost shows within
-    `CURVE_HIT` px of the curve, its type from `ZONES` (`type_at`). Dots ease between
-    sizes on a 16 ms timer that stops when they settle. The wheel sets a band's Q, or
-    while a cut is dragged its slope. Delete takes the ShortcutOverride while a band is
-    selected. `VIEW` (range, analyzer mode) is shared by every editor and not saved.
-  - `Analyzer`: an 8192-point Hann FFT of the displays `input` and `output`, rising
-    0.55 and falling 0.09 of the way per refresh, mapped to columns (the loudest bin
-    between columns, `np.maximum.reduceat`), smoothed and tilted 4.5 dB/octave (the tilt fading in over `TILT_FADE` dB above the
-    floor, so a spectrum at or falling to the floor stays flat).
-- **Sidechain** ([sidechain.py](../../src/substation/ui/device_editors/sidechain.py)): no
-  pages; no margins (the graph from edge to edge). `CurveGraph` (the curve), then
-  `ClashView` with Fit, Auto and the character, then the controls (Trigger and Sync,
-  six small knobs; Lows Only over the crossover). The curve's points are always written
-  whole (`points_values`: every slot's four parameters), through
-  `ProjectEditor.set_device_params`, so a drag (adding a point and dragging it on, too)
-  is one undo step, and Auto's fits merge into one while nothing else is done.
-  - `refresh_displays()` reads the three displays itself (`_read`: with the absolute
-    index of the first value) into a `sidechain_fit.Capture`, so the key, the input and
-    the phase line up to the sample. The phase gives the playhead (`CurveGraph.tick`,
-    a trail of the latest positions) and the hits; each hit's kick, once it has come,
-    is analysed (`sidechain_fit.analyze`, over the latest `KEEP_KICKS`) into `fit`,
-    which the graph (the kick's envelope, the dashed target) and `ClashView` (the
-    spectra, the clash band) draw. Fit writes `fit_values(fit)`: the points, the
-    length (sync off) and the crossover (1.5 times the clash band's top).
-  - `CurveGraph`: points within `HIT_RADIUS`, else the curve within `CURVE_HIT` (a
-    segment, to bend: up bulges up); elsewhere a press adds a point. The first and
-    last points keep their x. The hint over the curve (no sidechain while triggered by
-    it) opens the sidechain menu. Delete takes the ShortcutOverride while a point is
-    selected.
-- **Sampler** ([sampler.py](../../src/substation/ui/device_editors/sampler.py)): two
-  pages (the sample's six parameters, then the amplitude's), three columns, and a
-  `SampleView`: the sample's waveform from its peaks (`waveform_columns()`, cached per
-  width), the part outside Start..End dimmed, the loop bracketed when it loops, and the
-  newest note's position (display `position`). Drag the Start or End marker (within 5
-  px) to set it (one gesture key, kept within the other marker); drop an audio file on
-  it, or double-click it to browse. The sample path lives in the device's state
-  (`device_state.from_model(device.state)["sample"]`); loading one is
-  `editor.set_device_state(..., "Load Sample")`, undoable. The waveform comes from
-  `bridge.source(path)` (requested with `bridge.request_source` if not decoded yet;
-  quick, as the engine decoded it for the sampler). `value(param)` reads a parameter as
-  it is now (its envelope's value while automation plays).
+An editor sets parameters as the knobs do, so undo, automation and saving work alike: its controls bind to
+`DeviceParam`s ([ParamKnob.qml](../../ui/qml/devices/ParamKnob.qml), [ParamBox.qml](../../ui/qml/devices/ParamBox.qml),
+[ParamButton.qml](../../ui/qml/devices/ParamButton.qml), [ParamArea.qml](../../ui/qml/devices/ParamArea.qml): the
+value as it is now, set undoably, touched when pressed, the parameter's menu on right-click). Its drawn parts are
+[DeviceCanvas](../../ui/src/devices/DeviceCanvas.h) items:
+
+- `value(paramId)` reads a parameter as it is now (its envelope's value while automation plays), `automationState()`
+  its dot; `sync()` is called on the GUI thread whenever they may have changed (the device's parameters, its
+  automation, the playhead while any of its parameters follows automation, the device coming or going): subclasses
+  read what they draw there; `paint()` only reads that.
+- `setParams(values, mergeKey, text)` / `setParam()` go through `editor.setDeviceParams` (one undo step per merge key,
+  the first parameter's lane shown); `touch()` shows a parameter's automation.
+- `readDisplay(id)` reads what the device's processor published for its editor since the last call
+  (`bridge.readProcessorDisplay`, a position kept per processor and display; `readDisplayAt()` with the absolute index
+  of the first value). `refreshDisplays()` is called as the meters update (`metersUpdated`, about 30 times a second),
+  only while the item is visible. Displays are what the engine's built-in devices publish for their editors (see
+  [engine/devices.md](../engine/devices.md)).
+- `secondPressOfDoubleClick()`: Qt Quick delivers a double-click's second press before the double-click; items whose
+  first click changes what a double-click does skip it.
+
+The editors:
+
+- **Compressor** ([CompressorEditor.qml](../../ui/qml/devices/editors/CompressorEditor.qml)): every knob on one page,
+  four to a row, and a [ReductionGraph](../../ui/src/devices/ReductionGraph.h) (232 px): the gain reduction over the
+  last `kHistory` (240) display values (about 1.3 s at 48 kHz), growing downward to 24 dB, filled with a gradient; an
+  *In* meter of what keys it with the threshold marked by an accent notch; an *Out* meter (both -60 to 0 dBFS); the
+  current reduction and the threshold in figures. It reads the displays `reduction`, `input` and `output`.
+- **Delay** ([DelayEditor.qml](../../ui/qml/devices/editors/DelayEditor.qml)): no pages; laid out as Ableton's: per side
+  a Sync button, then a grid of sixteenths and an offset field, or a time knob; the link button (the right side
+  greyed out while linked); a [FilterGraph](../../ui/src/devices/FilterGraph.h) (the filter's response on a
+  20 Hz..20 kHz log axis, its dot dragged across for the frequency and up and down for the width, over a spectrum of
+  the display `input`: a 4096-point Hann FFT of the latest samples, falling 1 dB per refresh:
+  `analysis::FallingSpectrum`), the Filter switch, the frequency (a log-scaled value box) and width; the Mode buttons
+  and Ping Pong; Feedback with Freeze beside it over Dry/Wet.
+- **EQ** ([EqEditor.qml](../../ui/qml/devices/editors/EqEditor.qml)): no pages, no body margins: the curve
+  ([EqGraph](../../ui/src/devices/EqGraph.h)) from the title bar to the bottom edge, Scale and Output knobs in its
+  bottom corners ([EqCorner.qml](../../ui/qml/devices/editors/EqCorner.qml)), and the selected band's controls
+  ([EqBandPanel.qml](../../ui/qml/devices/editors/EqBandPanel.qml), 162 px) beside it while `EqView.panel`: they
+  start collapsed, and the sliders button over the curve's top right shows them in every EQ (the editor is wider
+  then). The expand button opens the EQ bigger in a window of its own
+  ([EqWindow.qml](../../ui/qml/devices/editors/EqWindow.qml), via the `EqWindows` singleton: one per device, made or
+  brought to the front; titled after the track; reading its displays on a 16 ms timer of its own
+  (`displayInterval`); closed when the device goes).
+  - `EqGraph`: 10 Hz..22 kHz, ± `EqView.range` dB (3, 6, 12 or 30); 24 bands; each band's curve and the total from the
+    engine's own filter design (`sub::app::eqResponseDb`, the application layer's wrapper of the engine's
+    `sub::eq::responseDb`, so the curve is the sound), the selected and hovered bands filled in their colours
+    (`bandColor()`), the total with a glow. Hovering within `kCurveHit` (12 px) of the curve shows a ghost band of the
+    type for where it is (a low cut at the far left, then a low shelf, bells, a high shelf and a high cut); keep the
+    button down to drag it on. Drag a band across for its frequency and up and down for its gain (a cut, notch or band
+    pass: its Q; Ctrl: the Q), Shift finely; the wheel sets its Q (Alt, or while a cut is dragged: its slope).
+    Double-click a band to switch it off and on, Alt-click it (or select it and press Delete, which takes the
+    `ShortcutOverride` while a band is selected) to remove it; double-click elsewhere to add one. Dots ease between
+    sizes on a 16 ms timer that stops when they settle. Right-click a band or the background for the menus
+    ([EqGraphMenus.qml](../../ui/qml/devices/editors/EqGraphMenus.qml): a band's type, slope, placement, Enabled,
+    Delete Band; the analyzer's mode, the range, Delete All Bands). The labels at the top switch the analyzer's mode
+    and the range (`EqView`, shared by every EQ and not saved).
+  - Every change goes through `editor.setDeviceParams`, so a drag (adding a band and dragging it on, too: the same
+    parameters every move) is one undo step.
+  - The analyzer (`analysis::EqAnalyzer`): an 8192-point Hann FFT of the displays `input` and `output`, rising 0.55 and
+    falling 0.09 of the way per refresh, the loudest bin per column, tilted 4.5 dB/octave (the tilt fading in over
+    18 dB above the floor, so a spectrum at or falling to the floor stays flat).
+- **Sidechain** ([SidechainEditor.qml](../../ui/qml/devices/editors/SidechainEditor.qml)): no pages, no margins: the
+  curve ([CurveGraph](../../ui/src/devices/CurveGraph.h)), then [ClashView](../../ui/src/devices/ClashView.h) with Fit,
+  Auto and the character, then the controls (Trigger and Sync, six small knobs; Lows Only over the crossover).
+  - The curve: drag a point to move it (the first and last only up and down), drag between points to bend the curve
+    there, click anywhere else to add a point (and keep dragging it), double-click a point (or Alt-click it, or select
+    it and press Delete) to remove it, double-click a bend to straighten it; the wheel bends too, Shift makes any of
+    them fine. Right-click for the shapes to start from, the fit, flip and reset. The curve's points are always
+    written whole (every slot's four parameters) through `editor.setDeviceParams`, so a drag (adding a point and
+    dragging it on, too) is one undo step, and Auto's fits merge into one while nothing else is done.
+  - `refreshDisplays()` reads the displays `key`, `input` and `phase` together (`readDisplayAt`: by absolute index)
+    into a `sidechainFit::Capture` ([SidechainFit.h](../../app/src/analysis/SidechainFit.h)), so they line up to the
+    sample. The phase gives the playhead (a trail of the latest positions riding the curve) and the hits; each hit's
+    kick, once it has come, is analysed over the latest `kKeepKicks` (3) into the fit, which the graph (the kick's
+    envelope where it clashes, the dashed target) and `ClashView` (the spectra, the clash band) draw. Fit writes the
+    points, the length (sync off) and the crossover. The hint over the curve (no sidechain while triggered by one)
+    asks the frame for the sidechain menu.
+- **Sampler** ([SamplerEditor.qml](../../ui/qml/devices/editors/SamplerEditor.qml)): two pages of six knobs, three to
+  a row (the sample's, then the amplitude's), and a [SampleView](../../ui/src/devices/SampleView.h): the sample's
+  waveform from its peaks (`waveformColumns()`), the part outside Start..End dimmed, the loop bracketed when it loops,
+  and the newest note's position (display `position`). Drag the Start or End marker (within `kMarkerGrab` 5 px) to set
+  it (one undo step per drag, kept within the other marker); drop an audio file on it, or double-click it to browse.
+  The device's menu starts with Load Sample… and Clear Sample (`menuActions`). The sample's path lives in the device's
+  state ("sample"); loading one is `editor.setDeviceState(..., "Load Sample")`, undoable. The waveform is the
+  bridge's (`waveform(path)`, requested if not decoded yet; quick, as the engine decoded it for the sampler).
 
 ### Adding an editor
 
-1. Create `device_editors/<name>.py` with a `DeviceWidget` subclass decorated with
-   `@device_editor("<kind>")`.
-2. Set `params_per_page`, `param_columns` and `device_width` as the layout needs.
-3. Add widgets to `self.content`; read the model with `self.device()`, write with
-   `self.editor.set_device_param(...)`; call `self.editor.touch_parameter(...)` when a
-   control of yours is pressed.
-4. Override `refresh_displays()` to read `self.read_display("<id>")`, and
-   `refresh`/`refresh_automation`/`refresh_state` to repaint.
-5. Add a case to [test_ui_device_editors.py](../../tests/test_ui_device_editors.py)
-   (`test_registry` checks lookup).
-
-## Clip view
-
-[clip_view.py](../../src/substation/ui/clip_view.py). `ClipView` is a frame that
-`ArrangementView` makes as a child covering itself, hidden until clips are opened
-(double-click, Shift+Tab, or a new MIDI clip). Escape or × closes it (`close_view`,
-emitting `closed`, which gives the lanes the focus back).
-
-`open_clips(refs, lead)` orders the clips top track first, then by time. If the lead
-clip (or the first) is a MIDI clip, only it opens, in the piano roll
-([piano-roll.md](piano-roll.md)); otherwise every audio clip among `refs` opens
-together. A `QStackedWidget` switches between `audio_page` and `piano_roll`. Deleted
-clips or tracks are dropped (`_drop_missing`); with none left the view closes. A
-project reset closes it.
-
-### Audio clips
-
-The left column (`CONTROLS_WIDTH` 260, scrollable) has three sections:
-
-- **Warp**: the Warp switch, the warp mode (`WARP_MODES`, with a tooltip each; blank,
-  "Mixed", when the clips differ), *Seg. BPM* (`ValueBox`, 20 to 999), and :2 / ×2.
-- **Pitch**: Transpose (±48 semitones, whole numbers) and Detune (±50 cents). Disabled,
-  with a note, when every clip is warped in Re-Pitch.
-- **Mix**: clip gain (-70 to +24 dB; `ClipWaveform` draws each waveform scaled by it) and pan.
-
-Every control edits all open clips through `editor.update_clips(refs, change, text,
-merge_key)` with a function from clip to new clip:
-
-- Switches, the mode and the BPM set the same value on all (`_set_all`).
-- Turning Warp on sets a clip's `segment_bpm` to the project tempo if it was never set,
-  so nothing moves until the tempo changes (`_set_warp`).
-- :2 and ×2 scale each clip's own segment BPM (`_scale_bpm`).
-- Knobs (`KnobControl`) sit on the first clip's value and show the range when clips
-  differ. Turning one moves every clip by the lead's change (`_nudge_all`), measured
-  from where the gesture started (`_baseline` keeps each clip's value at the gesture's
-  first event), so a clip held at a limit keeps its offset to the others when the knob
-  comes back.
-
-The right side, `ClipWaveform`, draws each clip's whole source file fitted to the width
-(with its own `WaveformCache` of 200 tiles), the part the clip plays tinted, the rest
-dimmed, and S and E flags at its start and end. One clip gets a time ruler (steps from
-`TIME_STEPS`, at least 70 px apart); several are stacked in bands of at least 40 px,
-labelled, with "+N more" when they don't fit.
-
-Warping and its modes in the engine: [engine/warp.md](../engine/warp.md).
+1. Write `ui/qml/devices/editors/<Name>Editor.qml`: an `Item` with `required property string trackId, deviceId`, an
+   `implicitWidth` (the device's width less 2) and an `implicitHeight`.
+2. Add `"<kind>": "<Name>Editor.qml"` to the table in
+   [DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml).
+3. Bind its controls to `DeviceParam`s (`ParamKnob`, `ParamBox`, `ParamButton`) so they read the parameter as it is
+   now, set it undoably and touch it when pressed; or, for knob pages, use `DeviceParams` and `DeviceParamKnob` with
+   `pages` and `page`.
+4. Draw anything else in a `DeviceCanvas` subclass in `ui/src/devices` (`QML_ELEMENT`): read what you draw in
+   `sync()`, the device's displays in `refreshDisplays()` (`readDisplay("<id>")`), write with `setParams()`.
+5. Add a case to [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp).
 
 ## Gotchas
 
-- **Rebuilds are wholesale.** `show_track` deletes every device widget; never keep a
-  reference to one across a model change. Look widgets up in `DevicePanel.widgets` by
-  device id. Keep view state (pages, the chain shown) in the panel, keyed by id.
-- **Widgets go into a layout before they are shown**, or they flash up as windows of
-  their own; and `hide()` comes before `deleteLater()`, or the old widget is painted
-  where it was until deleted.
-- **The model's value or the engine's.** Built-in devices read `device.params`;
-  plug-ins read `engine.processor_param`, since a plug-in can change its own
-  parameters. Both write through the editor.
-- **A device's processor may be gone** before its widget is rebuilt: `read_display`
-  catches the engine's `ValueError`, and widgets check `engine_id is not None`.
-- **A chain row's menu rebuilds the panel**: anything after `menu.exec` must not use
-  the row if its chain was deleted.
-- **Saving stores plug-in states first.** `save_to_library` calls
-  `bridge.store_plugin_states` for the device and everything in it, since a preset is
-  the model's device: without it a plug-in would be saved as it was last stored.
+- **Frames are made again only when the chain changes.** `DeviceChainList` keeps its ids unless the chain's devices
+  change; everything else (selecting, switching, editing, a plug-in rebuilding its parameters) updates the frames in
+  place. Keep view state (pages, the chain shown) by id in the area or the selection, never in a frame.
+- **The model's value or the engine's.** Built-in devices read the model (`DeviceParam`, through the bridge while
+  automation plays); plug-ins read the plug-in (`PluginParam`), since a plug-in can change its own parameters. Both
+  write through the editor.
+- **A device's processor may be gone** before its frame is: `DeviceParam` and `PluginParam` are `valid` only while it
+  is there, and `DeviceCanvas::alive` goes false when the device does.
+- **A chain row's menu can delete its chain**: what runs after the menu checks `area.hasChain()` first.
+- **Saving stores plug-in states first.** A preset is the model's device: `savePreset` and `copySelected` call
+  `bridge.storePluginStates` for the device and everything in it, or a plug-in would be saved as it was last stored.
+- **Menus are filled when they open** (`PanelMenu`, `DynamicMenu`), so they show how things are then, and keep the
+  items they made (or the garbage collector takes them).
 
 ## Tests
 
 | Test file | Covers here |
 |---|---|
-| [test_ui_device_view.py](../../tests/test_ui_device_view.py) | folding devices (saved, not undone; the fold button; a folded rack hiding its chain), cut, copy, paste and duplicate, pasted instruments, switching a device off beside racks without a rebuild |
-| [test_ui_device_editors.py](../../tests/test_ui_device_editors.py) | the registry; the Compressor's graph; the Sampler's loading, undo, playhead, markers, drop and saving |
-| [test_ui_racks.py](../../tests/test_ui_racks.py) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain clicked shown beside the rack and dropped into, chain mixers, mapping to a macro, the view's height staying put |
-| [test_ui_plugins.py](../../tests/test_ui_plugins.py) | knobs editing plug-ins undoably, parameter pages, automating plug-in parameters, devices fitting the device view, double-click and Ctrl+W, presets, dropping plug-ins, dragging a device to another track, selecting, deleting and reordering, auto-scroll and Ctrl+Alt-drag, scrolling to a new plug-in, the master's effects |
-| [test_ui_presets.py](../../tests/test_ui_presets.py) | the save button on every kind of device (asking before replacing), presets listed in the browser, dropped between devices and onto a device of their kind (outlined; one undo step) or of another, double-clicked (an instrument making a MIDI track), dropped on a track, renamed and deleted |
-| [test_ui_sidechain.py](../../tests/test_ui_sidechain.py) | the sidechain button and its menu: sources, cycles greyed out, taps |
-| [test_ui_smoke.py](../../tests/test_ui_smoke.py) | devices and mixer reaching the engine, switching a device keeping the chain, the clip view editing several clips in unison, warping reaching the audio, double-click opening it |
+| [test_ui_device_panel.cpp](../../tests/app/test_ui_device_panel.cpp) | Folding devices (saved, not undone; the fold button; double-clicks; several selected folding together; a folded rack hiding its chain), cut, copy, paste and duplicate with the focus, switching a device off without making the frames again; building the chain and its hint, the device's menu and the one beside the devices |
+| [test_ui_device_panel_plugins.cpp](../../tests/app/test_ui_device_panel_plugins.cpp) | A plug-in's parameters in pages, edited undoably and following automation; devices fitting the view; the editor button, double-click and Show Editor; VST3 presets; plug-ins loading after a project opens, and missing ones; dropping plug-ins; selecting, deleting and reordering devices; dragging a device to another track |
+| [test_ui_device_panel_presets.cpp](../../tests/app/test_ui_device_panel_presets.cpp) | The save button on every kind of device (asking before replacing), a rack taking the preset's name, presets dropped between devices and onto a device of their kind (outlined; one undo step) or of another, default presets |
+| [test_ui_device_panel_racks.cpp](../../tests/app/test_ui_device_panel_racks.cpp) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain clicked shown beside the rack and dropped into, chain mixers, mapping to a macro and unmapping, Ctrl+R on a chain, a chain's menu, the view's height staying put |
+| [test_ui_device_panel_sidechain.cpp](../../tests/app/test_ui_device_panel_sidechain.cpp) | The sidechain button and its menu: sources, cycles greyed out, taps |
+| [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) | Each editor loaded as the view loads it, driven with the mouse and keys, the project and (rendering offline) the engine checked; the parameter cell and its menu |
+| [test_session_devices.cpp](../../tests/app/test_session_devices.cpp) | `DeviceSelection` through the session: selecting, the focus, the clipboard, folding, racks, drops, presets |
+| [test_sidechain_fit.cpp](../../tests/app/test_sidechain_fit.cpp) | The Sidechain's fit |

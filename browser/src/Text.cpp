@@ -3,10 +3,6 @@
 #include <algorithm>
 #include <array>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 namespace sub::browser {
 
 namespace {
@@ -250,19 +246,5 @@ void wordStarts(std::string_view s, std::vector<uint32_t>& out) {
 }
 
 const char* unicodeVersion() { return kUnicodeVersion; }
-
-#ifdef _WIN32
-std::string ntLower(std::wstring_view s) {
-    if (s.empty()) return {};
-    std::wstring lowered(s.size(), L'\0');
-    const int n = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, s.data(), static_cast<int>(s.size()),
-                                lowered.data(), static_cast<int>(lowered.size()), nullptr, nullptr, 0);
-    if (n <= 0) return toUtf8(s);
-    lowered.resize(static_cast<size_t>(n));
-    return toUtf8(lowered);
-}
-#else
-std::string ntLower(std::wstring_view s) { return pyLower(toUtf8(s)); }
-#endif
 
 }  // namespace sub::browser

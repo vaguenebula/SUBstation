@@ -972,7 +972,7 @@ void Renderer::processChain(const RenderSnapshot& snap, const StripRender& chain
 
 void Renderer::processRack(const RenderSnapshot& snap, const RackRender& rack, ProcessContext& context,
                            const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
-                           bool monitored, WorkerScratch& scratch) noexcept {
+                           [[maybe_unused]] bool monitored, WorkerScratch& scratch) noexcept {
     if (rack.chains.empty()) return;  // it passes its input on
     WorkerScratch::Rack& buffers = scratch.racks[static_cast<size_t>(std::clamp(rack.depth, 0, kMaxRackDepth - 1))];
     float* sumL = buffers.sumLeft.data();

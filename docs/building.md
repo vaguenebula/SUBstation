@@ -1,173 +1,126 @@
 # Building
 
-SUBstation is a Python package (`src/substation`) with two compiled modules, `substation._engine` (the audio engine,
-[engine/src](../engine/src)) and `substation._browser` (the browser's backend, [browser/src](../browser/src)). They
-are built by CMake through scikit-build-core when the package is installed; [CMakeLists.txt](../CMakeLists.txt) and
-[pyproject.toml](../pyproject.toml) hold the whole build.
+SUBstation is a C++20 program built with CMake: the real-time audio engine and the browser's backend are
+libraries with no Qt in them, the application layer is Qt Core and Qt Gui, and the UI is Qt Quick (QML).
+[CMakeLists.txt](../CMakeLists.txt) and the `CMakeLists.txt` of each layer hold the whole build; what the layers
+are is in [architecture.md](architecture.md).
 
 ## Requirements
 
-- Windows 10/11. CMake warns on other platforms: SUBstation targets Windows (WASAPI, ASIO) and nothing else is tested.
-- Python 3.12 (`find_package(Python 3.12 ...)`; `requires-python = ">=3.12"`).
-- Visual Studio 2022 or newer with the *Desktop development with C++* workload. The code is C++20.
-- CMake (3.26 or newer) and Ninja are installed into the venv from PyPI; nothing else needs installing system-wide.
-- Optional: Steinberg's ASIO SDK, for ASIO support (see [ASIO SDK](#asio-sdk)).
-- A CPU with AVX2 (Intel Haswell, AMD Zen or later) to run it: the engine is compiled with `/arch:AVX2 /fp:fast`. The
-  engine must not rely on NaN or infinity (`/fp:fast` may drop checks for them); test for NaN on the bits instead.
+- **Windows 10/11** is the target: WASAPI and ASIO audio, WinMM MIDI input, VST3 plug-ins with their editors. It
+  also builds and runs on **Linux** (the tests run there in CI-like containers): audio through the system's default
+  backend (PulseAudio, ALSA, JACK... via miniaudio, as the *System* driver), VST3 plug-ins without their editors, no
+  MIDI devices (the computer MIDI keyboard still plays).
+- A C++20 compiler: Visual Studio 2022 or newer (*Desktop development with C++*), MinGW-w64 GCC 13 or newer on
+  Windows (the one Qt's installer ships), or GCC 13 / Clang 16 or newer.
+- CMake 3.26 or newer, and Ninja (recommended; Visual Studio's generator works too).
+- Qt 6.4 or newer (6.5+ recommended on Windows): Core, Gui, Qml, Quick, QuickControls2, and Test for the tests.
+  - Windows: Qt's online installer, the *MSVC 2022 64-bit* build of a Qt 6 release (or MSVC 2019's, which works
+    with VS 2022), or its *MinGW 64-bit* build with the matching MinGW toolchain.
+  - Debian/Ubuntu: `qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-controls
+    qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtquick-templates
+    qml6-module-qtquick-dialogs qml6-module-qtqml-workerscript qml6-module-qt-labs-settings
+    qml6-module-qtquick-shapes libgl-dev libxkbcommon-dev` (and `xvfb` to run the UI's tests headless).
+- A CPU with AVX2 (Intel Haswell, AMD Zen or later) to run it: the engine is compiled with AVX2 (`/arch:AVX2`
+  with MSVC, `-mavx2 -mfma` with GCC and Clang; with MinGW also `-Wa,-muse-unaligned-vector-move`, as GCC can't
+  align the stack for AVX on 64-bit Windows). Not with fast math (`/fp:fast`, `-ffast-math`): the results mustn't
+  depend on the compiler reordering arithmetic or assuming there is no NaN or infinity. Denormals are flushed to
+  zero where audio renders (`ScopedNoDenormals`), not by a compiler flag.
+- Optional: Steinberg's ASIO SDK, for ASIO (see [ASIO SDK](#asio-sdk)).
 
-## Setting up
+Nothing else needs installing: the engine's third-party code is vendored (see [Third-party code](#third-party-code)).
 
-Always activate the venv before installing anything:
+## Building
 
-```powershell
-py -3.12 -m venv venv                         # once
-Set-ExecutionPolicy -Scope Process Bypass    # only if activation scripts are blocked
-.\venv\Scripts\Activate.ps1
-python -m pip install scikit-build-core nanobind cmake ninja pytest ruff PySide6 numpy
-python -m pip install --no-build-isolation -e .    # compiles substation._engine and substation._browser
+Linux:
+
+```sh
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+ninja -C build
+build/bin/substation                     # or: build/bin/substation path/to/song.gilproj
 ```
 
-Then run it:
+Windows, in a *Developer PowerShell for VS 2022* (so MSVC and Ninja are on the path):
 
 ```powershell
-python -m substation                  # or: python -m substation path\to\song.gilproj
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:\Qt\6.8.0\msvc2022_64
+ninja -C build
+C:\Qt\6.8.0\msvc2022_64\bin\windeployqt.exe --qmldir ui\qml build\bin\substation.exe   # once: Qt's DLLs and QML modules beside it
+build\bin\substation.exe
 ```
 
-`pyproject.toml` also declares a GUI script, `substation` (`substation.app:main`). Start-up is described in
-[python/engine-bridge.md](python/engine-bridge.md).
+Windows with Qt's MinGW build instead (the *MinGW 64-bit* Qt and the MinGW toolchain that Qt's installer ships
+with it, under *Developer and Designer Tools*), in the *Qt 6.x (MinGW 64-bit)* command prompt from the Start menu
+(it puts Qt's and MinGW's `bin` folders on `PATH`; CMake and Ninja can come from the same installer, in `C:\Qt\Tools\CMake_64\bin` and `C:\Qt\Tools\Ninja`):
 
-### Why `--no-build-isolation`
-
-Without it pip would build in a fresh, temporary environment, downloading scikit-build-core and nanobind each time
-and configuring from scratch. With it the build uses the venv's own scikit-build-core, nanobind and CMake (which is
-why they are installed first), and the build folder is reused, so rebuilds are incremental.
-
-### Rebuilding
-
-Re-run the last command after changing any C++ code (in `engine/src`, `browser/src`, or the test plug-ins and
-driver). The build is incremental, in `build/` (`build-dir = "build/{wheel_tag}"`, so for example
-`build\cp312-cp312-win_amd64`). Python changes need no reinstall: the editable install imports the Python files from
-`src/substation` directly.
-
-The compiled files are installed into the venv's `site-packages\substation\` and found through the editable
-install's import hook, not next to the sources: `_engine*.pyd`, `_browser*.pyd`, `_testplugins\` and
-`_testdrivers\`. The tests find the test plug-ins and driver through `Path(_engine.__file__).parent`.
-
-A new built-in device (a new `.cpp` in `engine/src/builtin/devices/`) is picked up on the next configure: the sources
-are globbed with `CONFIGURE_DEPENDS`, so re-running the install command is enough.
-
-## pyproject.toml
-
-| Section | What it says |
-|---|---|
-| `[build-system]` | `scikit-build-core>=0.10` and `nanobind>=2.0`; backend `scikit_build_core.build`. |
-| `[project]` | `substation` 0.1.0, Python >= 3.12; runtime dependencies `PySide6>=6.7`, `numpy>=2.0`. |
-| `[project.optional-dependencies]` | `dev = ["pytest>=8", "ruff"]`. |
-| `[project.gui-scripts]` | `substation = "substation.app:main"`. |
-| `[tool.scikit-build]` | `minimum-version = "build-system.requires"`, `cmake.version = ">=3.26"`, `cmake.build-type = "Release"`, `build-dir = "build/{wheel_tag}"`, `wheel.packages = ["src/substation"]`. |
-| `[tool.pytest.ini_options]` | `testpaths = ["tests"]`. |
-
-The build is always Release. CMake options are passed through pip with `-C cmake.define.NAME=VALUE`, for example:
-
-```powershell
-python -m pip install --no-build-isolation -e . -C cmake.define.SUBSTATION_TEST_PLUGINS=OFF
+```bat
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:\Qt\6.8.0\mingw_64 -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+cmake --build build
+C:\Qt\6.8.0\mingw_64\bin\windeployqt.exe --qmldir ui\qml build\bin\substation.exe
+build\bin\substation.exe
 ```
 
-## Choosing a Visual Studio generator
+`CMAKE_PREFIX_PATH` points CMake at Qt (the folder of a Qt 6 MSVC or MinGW build). `windeployqt` copies Qt's
+libraries and the QML modules the UI imports next to the executable (and, with MinGW, its runtime DLLs, which the
+plug-in scanner `substation-scan` needs too); without it, run from a prompt with Qt's `bin` folder (and MinGW's) on
+`PATH` instead. Use the compiler the Qt build was made with: MSVC for an `msvc*` Qt, Qt's own MinGW for a `mingw_64`
+one (another GCC may not match its C++ runtime). CI builds and tests both. The build is
+incremental: re-run `ninja -C build` after changing anything. Everything built lands in `build/bin`: `substation`,
+`substation-scan` (the plug-in scanner, which the application starts from its own folder), the test executables,
+and the test plug-ins under `build/testplugins`.
 
-On Windows scikit-build-core configures with a Visual Studio generator, the newest one installed, by default. If the
-newest Visual Studio causes trouble, pick another one before building:
+Sources are globbed per library (`file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`): a new `.cpp`, `.h` or `.qml` under
+`app/src`, `ui/src` or `ui/qml`, or a new built-in device in `engine/src/builtin/devices`, is picked up by the next
+`ninja`, which re-checks the globs.
 
-```powershell
-$env:CMAKE_GENERATOR="Visual Studio 17 2022"
-python -m pip install --no-build-isolation -e .
-```
+### Options
 
-CMake refuses to reconfigure a build folder with another generator than the one it was made with; delete the
-`build\<wheel tag>` folder after switching.
-
-## CMakeLists.txt
-
-### Options and cache variables
-
-| Name | Default | What it does |
+| Option | Default | What it does |
 |---|---|---|
-| `SUBSTATION_TEST_PLUGINS` | `ON` | Build the VST3 plug-ins and the ASIO driver the tests use, installed next to the engine. |
-| `SUBSTATION_ASIO` | `ON` | Build ASIO support (if the SDK is found). `OFF` skips looking for the SDK: WASAPI only. |
-| `SUBSTATION_ASIO_SDK` | `$ENV{SUBSTATION_ASIO_SDK}` | The ASIO SDK's folder (the one containing `common/iasiodrv.h`). Set as an environment variable before building, or with `-C cmake.define.SUBSTATION_ASIO_SDK=...`. |
+| `SUBSTATION_BUILD_APP` | `ON` | The application layer and the UI (needs Qt). `OFF` builds the engine, the browser backend, the scanner and the engine's tests only: no Qt needed. |
+| `SUBSTATION_BUILD_TESTS` | `ON` | The tests ([testing.md](testing.md)). |
+| `SUBSTATION_TEST_PLUGINS` | `ON` | The VST3 plug-ins (and, with the ASIO SDK, the fake ASIO driver) the tests use. |
+| `SUBSTATION_ASIO` | `ON` | ASIO support, if the SDK is found (Windows). `OFF` doesn't look for it. |
+| `SUBSTATION_ASIO_SDK` | `$ENV{SUBSTATION_ASIO_SDK}` | The ASIO SDK's folder (the one containing `common/iasiodrv.h`). |
+| `SUBSTATION_BUILD_BENCHMARKS` | `OFF` | The benchmarks ([benchmarks/README.md](../benchmarks/README.md)). |
 
-### Targets
+Pass them at configure time: `cmake -B build -DSUBSTATION_TEST_PLUGINS=OFF`.
 
-| Target | Kind | What it is |
-|---|---|---|
-| `miniaudio` | static library (C) | [miniaudio](../engine/third_party/miniaudio), compiled once as C in its own translation unit ([engine/src/miniaudio_impl.c](../engine/src/miniaudio_impl.c)), with `MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_GENERATION`; warnings off. |
-| `vst3_base` | static library | The VST 3 SDK's interfaces, base library and helpers both sides use (made by the `sub_vst3_sdk_library()` function: SDK include path, `UNICODE`, `NOMINMAX`, warnings off). |
-| `vst3_hosting` | static library | The host side of the SDK: loading modules, host context, component/controller connection. Links `ole32 shell32`. Compiled as **C++17** on purpose: as C++17 the module loader reads paths as UTF-8 (`u8path`); as C++20 it would use the ANSI code page, and plug-ins with non-ASCII paths would not load. |
-| `_engine` | nanobind module (`NB_STATIC`) | The engine: `engine/src/*.cpp` (the `Engine*.cpp` split files, `AudioDevice`, `WasapiBackend`, `AudioSource`, `Renderer`, `Scheduler`, `Recorder`, `Metronome`, `MidiInput`, `Warp`), the built-in devices (`builtin/` and every `builtin/devices/*.cpp`), the plug-in host (`plugins/EditorWindow`, `Vst3Format`, `Vst3Processor`) and `bindings.cpp`. Includes Signalsmith Stretch and Signalsmith Linear (header-only). Links `miniaudio vst3_hosting user32 ole32 uuid advapi32 winmm avrt`. With the ASIO SDK it adds `backends/AsioBackend.cpp`, the SDK's `common` folder and `SUBSTATION_HAS_ASIO=1`. |
-| `sub_browser` | static library | The browser backend (`browser/src`: Browser, Indexer, Model, Platform, Search, Text), with `UNICODE`. |
-| `_browser` | nanobind module (`NB_STATIC`) | `browser/src/bindings.cpp`, linking `sub_browser`. |
-| `vst3_plugin_sdk` | static library | The plug-in side of the SDK, for the test plug-ins (with `PROJECT_INCLUDES_VSTEDITCONTROLLER=1`: `vsteditcontroller.cpp` is compiled on its own, not inside `vstsinglecomponenteffect.cpp`). Only with `SUBSTATION_TEST_PLUGINS`. |
-| `sub_test_plugins` | module | [tests/vst3_plugins](../tests/vst3_plugins) and the SDK's `dllmain.cpp`, output as `SUBTestPlugins.vst3`, installed to `substation/_testplugins/SUBTestPlugins.vst3/Contents/x86_64-win`. Only with `SUBSTATION_TEST_PLUGINS`. |
-| `sub_test_asio` | module | [tests/asio_driver](../tests/asio_driver) (`test_asio_driver.cpp` and its `.def`), output as `SUBTestAsio.dll`, installed to `substation/_testdrivers`. Only with `SUBSTATION_TEST_PLUGINS` **and** the ASIO SDK. |
+## Targets
 
-`_engine` and `_browser` are installed to `substation`. With MSVC the project's own code builds with
-`/W4 /permissive- /utf-8 /Zc:__cplusplus` (the test plug-ins and driver with `/W3`); the engine also defines
-`NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES`.
-
-nanobind is found by asking the venv's Python (`python -m nanobind --cmake_dir`), so it has to be installed there.
-
-## The two native modules
-
-| Module | Sources | Docs |
-|---|---|---|
-| `substation._engine` | [engine/src](../engine/src), bound in [engine/src/bindings.cpp](../engine/src/bindings.cpp) | [engine/README.md](engine/README.md) |
-| `substation._browser` | [browser/src](../browser/src), bound in [browser/src/bindings.cpp](../browser/src/bindings.cpp) | [browser.md](browser.md) |
-
-They are independent: the browser shares no code, locks or threads with the engine, and is built from its own
-static library. One install command builds both.
-
-`browser/src/UnicodeTables.inc` is generated, and checked in. It only needs re-generating for a newer Python
-(another Unicode version): `python browser/tools/gen_unicode_tables.py`, then rebuild. See
-[browser.md](browser.md#text-pythons-rules-from-pythons-tables).
-
-## API_VERSION and ENGINE_API
-
-The app (and the tests) won't start with an engine built from older code than the Python side.
-`engine/src/bindings.cpp` sets `m.attr("API_VERSION")`, and `src/substation/__init__.py` has `ENGINE_API`, the
-version the Python code needs. `engine_mismatch()` compares them:
-
-- `app.main()` shows the message in a dialog (and on stderr) and exits.
-- `tests/conftest.py` calls `pytest.exit()` with it, since the tests would otherwise fail in confusing ways.
-
-The message says whether the engine is older or newer than the app, and to re-run
-`python -m pip install --no-build-isolation -e .`.
-
-**The rule:** when Python code comes to need a change in `engine/src/bindings.cpp`, bump `API_VERSION` there and
-`ENGINE_API` in `src/substation/__init__.py` together, and note what the new version brought in the comment above
-`ENGINE_API`. Both are 17 now.
-
-`_browser` has no such check; after changing its bindings, rebuild before running.
-
-## Third-party code
-
-Vendored in [engine/third_party](../engine/third_party), so nothing else needs installing:
-
-| Library | Version | Licence | What is used |
+| Target | Kind | Layer | What it is |
 |---|---|---|---|
-| [miniaudio](../engine/third_party/miniaudio) | 0.11.25 | public domain (Unlicense) or MIT No Attribution, as you choose | WASAPI devices; decoding |
-| [Signalsmith Stretch](../engine/third_party/signalsmith-stretch) | 1.3.2 | MIT | time stretching and pitch shifting (header-only) |
-| [Signalsmith Linear](../engine/third_party/signalsmith-linear) | 0.6.4 | MIT | its FFT (`stft.h`, `fft.h` only) |
-| [VST 3 SDK](../engine/third_party/vst3sdk) | 3.8.1 | MIT (since SDK 3.8) | `pluginterfaces`, `base`, `public.sdk/source/{common,main}` and `public.sdk/source/vst`, without VSTGUI, the SDK's tests, the wrappers and the non-Windows module loaders |
+| `miniaudio` | static library (C) | engine | [miniaudio](../engine/third_party/miniaudio), compiled once as C (`MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_GENERATION`). |
+| `vst3_base`, `vst3_hosting` | static libraries | engine | The VST 3 SDK's interfaces and base library, and its host side (module loading: `module_win32.cpp` or `module_linux.cpp`). `vst3_hosting` is C++17 on purpose: as C++17 the module loader reads paths as UTF-8 (`u8path`); as C++20 it would use the ANSI code page on Windows, and plug-ins with non-ASCII paths would not load. |
+| `sub_engine` | static library | engine | The real-time engine ([engine/](../engine/CMakeLists.txt)): no Qt. On Windows it adds the WinMM MIDI backend, the plug-in editor windows and, with the SDK, ASIO; elsewhere a MIDI backend without devices and no editor windows. |
+| `sub_browser` | static library | browser | The browser's file index and search ([browser/](../browser/CMakeLists.txt)): no Qt; Win32 or POSIX platform layer. |
+| `substation-scan` | executable | tools | The VST3 scanner's child process ([tools/scanner](../tools/scanner/main.cpp)): links `sub_engine`, no Qt. |
+| `sub_app` | static library | app | The application layer ([app/](../app/CMakeLists.txt)): Qt Core and Gui, `sub_engine`, `sub_browser`. Built with `QT_NO_KEYWORDS` (public): it and everything on it write `Q_SIGNALS`, `Q_SLOTS`, `Q_EMIT`. |
+| `sub_ui`, `sub_uiplugin` | static library + its QML plugin | ui | The QML module `SUBstation` ([ui/](../ui/CMakeLists.txt)): the QML files, the C++ Qt Quick items, the icons; and `SUBstation.Style`, the Qt Quick Controls style (`ui/style`). |
+| `substation` | executable | ui | [ui/main.cpp](../ui/main.cpp): makes the engine, the application's session on it, and the UI on that. |
+| `sub_test_plugins`, `sub_test_asio` | modules | tests | The test VST3 bundle and the fake ASIO driver ([testing.md](testing.md)). |
+| `engine_tests`, `test_*` | executables | tests | The tests. |
 
-Each folder has its licence and a `VERSION.txt` saying what was taken and that it is unmodified. The full VST 3 SDK
-is at <https://github.com/steinbergmedia/vst3sdk>.
+With MSVC the project's own code builds with `/W4 /permissive- /utf-8 /Zc:__cplusplus`, with GCC and Clang with
+`-Wall -Wextra` ([cmake/Warnings.cmake](../cmake/Warnings.cmake)); third-party code builds without warnings.
+
+## The layers' boundaries
+
+`ctest -R boundaries` runs [cmake/CheckBoundaries.cmake](../cmake/CheckBoundaries.cmake), which fails if:
+
+- the engine (`engine/src`) or the browser backend (`browser/src`) includes anything of Qt, the application layer or
+  the UI;
+- the application layer (`app/src`) includes Qt Quick or QML (or the UI);
+- the UI (`ui/src`) includes the engine's headers: it talks to the application layer only.
+
+`ui/main.cpp` is where the layers are put together, so it alone makes the engine.
 
 ## ASIO SDK
 
 ASIO needs Steinberg's ASIO SDK, which isn't in the repository: its licence doesn't allow passing it on. Download it
 from <https://www.steinberg.net/asiosdk> and unzip it into the project folder as it comes (for example
-`SUBstation\asiosdk_2.3.3_2019-06-14\common\...`, or `ASIO-SDK_2.3.4_...` for newer ones). `.gitignore` keeps
-`asiosdk*`, `ASIOSDK*`, `ASIO-SDK*` and `asio-sdk*` folders out of git. Only its headers are used.
+`SUBstation\asiosdk_2.3.3_2019-06-14\common\...`). `.gitignore` keeps `asiosdk*`, `ASIOSDK*`, `ASIO-SDK*` and
+`asio-sdk*` folders out of git. Only its headers are used.
 
 Where the build looks, in this order:
 
@@ -175,47 +128,47 @@ Where the build looks, in this order:
    has no `common/iasiodrv.h` the configure stops with an error.
 2. Otherwise any folder of the project folder, or one level deeper (some unzip tools add a level):
    `<project>/*/common/iasiodrv.h`, `<project>/*/*/common/iasiodrv.h`.
-3. An `asio*` folder beside the project (or one level inside it): `<project>/../asio*/common`,
-   `<project>/../asio*/*/common`.
+3. An `asio*` folder beside the project (or one level inside it).
 4. An `asio*` folder in the root of the system drive (`%SystemDrive%\asio*`, or one level inside it).
 
-If several are found, the one whose path sorts highest wins (meant to pick the newest of several versions, as
-`asiosdk_2.3.3_...` after `asiosdk2.3`). The
-build prints `ASIO SDK: <folder>` when it found it; without it, it warns and builds the engine with WASAPI only (the
-preferences then show ASIO greyed out, and the ASIO tests are skipped). Re-run the install command after adding the
-SDK. With `-C cmake.define.SUBSTATION_ASIO=OFF` it doesn't look at all.
+If several are found, the one whose path sorts highest wins (the newest of several versions). The configure prints
+`ASIO SDK: <folder>` when it found it; without it, it warns and builds the engine with WASAPI only (the preferences
+then show ASIO greyed out, and the ASIO tests are skipped). Re-run CMake after adding the SDK.
 
 What the engine does with ASIO is in [engine/audio-devices.md](engine/audio-devices.md).
 
-## Test plug-ins and the fake driver
+## Third-party code
 
-The build also makes the small VST3 plug-ins and the fake ASIO driver the tests use (`tests/vst3_plugins`,
-`tests/asio_driver`), installed next to the engine:
+Vendored in [engine/third_party](../engine/third_party), so nothing else needs installing:
 
-```
-site-packages\substation\
-  _engine.cp312-win_amd64.pyd
-  _browser.cp312-win_amd64.pyd
-  _testplugins\SUBTestPlugins.vst3\Contents\x86_64-win\SUBTestPlugins.vst3
-  _testdrivers\SUBTestAsio.dll          (only with the ASIO SDK)
-```
+| Library | Version | Licence | What is used |
+|---|---|---|---|
+| [miniaudio](../engine/third_party/miniaudio) | 0.11.25 | public domain (Unlicense) or MIT No Attribution | WASAPI and the other systems' audio; decoding |
+| [Signalsmith Stretch](../engine/third_party/signalsmith-stretch) | 1.3.2 | MIT | time stretching and pitch shifting (header-only) |
+| [Signalsmith Linear](../engine/third_party/signalsmith-linear) | 0.6.4 | MIT | its FFT (`stft.h`, `fft.h` only) |
+| [VST 3 SDK](../engine/third_party/vst3sdk) | 3.8.1 | MIT (since SDK 3.8) | `pluginterfaces`, `base`, `public.sdk/source/{common,main}` and `public.sdk/source/vst`, with the Windows and Linux module loaders; without VSTGUI, the SDK's tests and the wrappers |
 
-Turn that off with `-C cmake.define.SUBSTATION_TEST_PLUGINS=OFF`; the tests that need them are then skipped. What
-they are and how the tests use them is in [testing.md](testing.md).
-
-## Linting
-
-`ruff` is installed with the dev tools. The project has no ruff configuration, so its defaults apply:
-
-```powershell
-ruff check src tests benchmarks
-```
+Each folder has its licence and a `VERSION.txt` saying what was taken and that it is unmodified. Qt is not vendored:
+it is LGPL-3.0 (or commercial), linked dynamically.
 
 ## Gotchas
 
-- After pulling changes, re-run the install command if any C++ changed; the app and tests say so if the engine's
-  API version moved, but not for other C++ changes, or for `_browser`.
-- Switching Visual Studio versions needs a fresh build folder (see above).
-- A plain `pip install -e .` (with build isolation) works but rebuilds from scratch each time.
-- The modules are built for one Python (`cp312`); another Python version needs its own build (and gets its own
-  `build\<wheel tag>` folder).
+- **"Could not find a configuration file for package Qt6 ... version: 6.x.y (64bit)".** The compiler CMake
+  found makes 32-bit programs (often an old MinGW, such as `C:\MinGW\bin`, first on `PATH`), and Qt is 64-bit.
+  `gcc -dumpmachine` must say `x86_64-w64-mingw32`. Put Qt's MinGW first on `PATH` (or give its `gcc.exe` and
+  `g++.exe` as `CMAKE_C_COMPILER` and `CMAKE_CXX_COMPILER`), and delete the build folder before configuring again:
+  CMake keeps the compiler it found. (The configure now stops earlier, saying so.)
+
+- **A new header isn't moc'd.** With Qt 6.4, a header added to a build folder configured before it existed is
+  sometimes skipped by AUTOMOC (link errors: undefined `vtable` or `staticMetaObject`). Delete the target's
+  `build/<dir>/<target>_autogen/timestamp` (or configure a fresh build folder) and build again.
+- **Raw string literals and moc.** moc (Qt 6.4) stops reading a file at a C++ raw string literal (`R"(...)"`): keep
+  them out of files with `Q_OBJECT` classes (or after the class).
+- **Qt's keywords.** `signals`, `slots`, `emit` and `foreach` are not defined (`QT_NO_KEYWORDS`): the engine uses
+  `slots` as a name.
+- **The engine as a static library.** The built-in devices register themselves from their own files, which nothing
+  else refers to; each defines an anchor function that `BuiltinRegistry::instance()` calls (the build writes the
+  list, `generated/BuiltinDevices.cpp`), so a program linking the engine keeps them all.
+- **Linux without a sound server.** The *System* driver opens no device when there is none (miniaudio's null
+  backend is left out on purpose: it "plays" faster than real time); the application then runs without audio and
+  says so.

@@ -64,7 +64,7 @@ Both Signalsmith libraries are added as `SYSTEM` include directories in [CMakeLi
 4. It builds the peaks.
 
 It throws `std::runtime_error` if the file can't be opened or contains no audio. Paths are UTF-8 and opened with
-`ma_decoder_init_file_w`, so any Windows path works.
+`ma_decoder_init_file_w` (through `widen()`, [PathUtils.h](../../engine/src/PathUtils.h)), so any Windows path works.
 
 `AudioSource::probe(utf8Path)` reads only what is needed for length and format (`AudioFileInfo`: frames at the file's
 own rate, channels, rate, duration). For streams that report no length it counts the frames by decoding.
@@ -78,9 +78,11 @@ Six levels (`kNumPeakLevels`). Level *n* holds one (min, max) pair per channel f
 (`samplesPerPeak(level)`: 32, 128, 512, 2048, 8192, 32768). Level 0 is computed from the samples; each coarser level
 combines four peaks of the one below. The layout of `peaks(level)` is `[numPeaks][channels][2]`.
 
-The bindings expose them without copying: `AudioSource.peaks(level)` is a float32 array of shape
-`(n, channels, 2)` that keeps the source alive, and `samples(start, count)` a `(channels, count)` view. The
-arrangement's waveform tiles draw from these ([ui/arrangement.md](../ui/arrangement.md)).
+The application layer hands them to the UI without copying: a `Waveform`
+([app/src/audio/Waveform.h](../../app/src/audio/Waveform.h), from `EngineBridge::waveform(path)`) holds a
+`shared_ptr` to the source, which keeps it alive, and gives `peaks(level)` and `channelData(c)` as they are. The
+arrangement's waveforms and the Sampler's editor draw from these ([ui/arrangement.md](../ui/arrangement.md)); the UI
+never includes the engine's headers.
 
 ### The source cache
 
@@ -88,7 +90,7 @@ The engine keeps one source per file, keyed by `Engine::sourceKey()` (the path n
 lower-cased, so two spellings of a path share it).
 
 - `Engine::loadSource(path)` returns the cached source if it is at the engine rate. Otherwise it decodes *without the
-  engine lock* (call it from a worker thread; the binding releases the GIL), then stores it and rebuilds the
+  engine lock* (the engine bridge calls it from its decoding threads), then stores it and rebuilds the
   snapshot, so clips waiting for this file become audible. If the device's rate changed meanwhile it decodes again
   (up to four tries, then `std::runtime_error`).
 - `cachedSource(path)` returns what is cached, at whatever rate.
@@ -99,8 +101,8 @@ lower-cased, so two spellings of a path share it).
   ("still loading").
 
 Built-in devices that play files (the Sampler) get theirs through the same cache via a `SourceLoader`
-(see [devices.md](devices.md)). The bridge decodes sources in a small thread pool
-([python/engine-bridge.md](../python/engine-bridge.md)).
+(see [devices.md](devices.md)). The engine bridge decodes sources in a thread pool of its own
+([app/engine-bridge.md](../app/engine-bridge.md)).
 
 ## Warp modes and how a clip plays
 
@@ -108,8 +110,9 @@ Built-in devices that play files (the Sampler) get theirs through the same cache
 enum class WarpMode : uint8_t { Transients, Standard, Smooth, Formants, RePitch };
 ```
 
-The order matches the UI list (`model/project.py` `WARP_MODES`). Projects saved with the earlier Ableton-style
-names load into the equivalent mode (a model concern; see [python/serialization.md](../python/serialization.md)).
+The order matches the application's list (`kWarpModes` in [app/src/model/Clip.h](../../app/src/model/Clip.h)). Projects
+saved with the earlier Ableton-style names load into the equivalent mode (a model concern; see
+[app/serialization.md](../app/serialization.md)).
 
 | Mode | Playback | Stretch config | Block / interval |
 |---|---|---|---|
@@ -232,10 +235,10 @@ the same factor: the content is filtered out instead of aliasing. The rate used 
 
 ## Tests
 
-- [tests/test_warp.py](../../tests/test_warp.py): transpose shifts pitch but not length (and detune in fractions),
-  warped clips follow the tempo and keep their pitch in every mode, slow down, are bit-exact at their own tempo,
-  only warped clips rescale on a tempo change, are sample-aligned (also after a locate and when transposed),
-  offline renders are repeatable, Re-Pitch changes speed and pitch together and filters rather than aliases, stereo
-  and mono sources, clip pan, many warped clips in sequence, and exports include warped audio.
-- [tests/test_engine_render.py](../../tests/test_engine_render.py): source peaks and samples, resampling to the engine
-  rate, `probe`, clips waiting for their source.
+- [tests/engine/test_warp.cpp](../../tests/engine/test_warp.cpp): transpose shifts pitch but not length (and detune
+  in fractions), warped clips follow the tempo and keep their pitch in every mode, slow down, are bit-exact at their
+  own tempo, only warped clips rescale on a tempo change, are sample-aligned (also after a locate and when
+  transposed), offline renders are repeatable, Re-Pitch changes speed and pitch together and filters rather than
+  aliases, stereo and mono sources, clip pan, many warped clips in sequence, and exports include warped audio.
+- [tests/engine/test_engine_render.cpp](../../tests/engine/test_engine_render.cpp): source peaks and samples,
+  resampling to the engine rate, `probe`, clips waiting for their source.

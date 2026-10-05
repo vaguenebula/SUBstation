@@ -94,5 +94,5 @@ The browser lists WAV, FLAC and MP3 files. Files are decoded into memory when ad
 
 ---
 
-For developers: [../ui/device-view.md](../ui/device-view.md) (clip_view.py),
-[../engine/warp.md](../engine/warp.md), [../python/model.md](../python/model.md).
+For developers: [../ui/piano-roll.md](../ui/piano-roll.md) (the clip view),
+[../engine/warp.md](../engine/warp.md), [../app/model.md](../app/model.md).
