@@ -1,5 +1,6 @@
 #include "WindowState.h"
 
+#include <QByteArray>
 #include <QGuiApplication>
 #include <QQuickWindow>
 #include <QScreen>
@@ -65,10 +66,14 @@ bool WindowState::restore() {
 
 QVariant WindowState::splitterState() const {
     const QVariant state = QSettings().value(kSplitterKey);
-    return state.isValid() ? state : QVariant();
+    // (A widget version's QSplitter::saveState() bytes start with its magic number, 0xff as a big-endian qint32.)
+    if (state.toByteArray().startsWith(QByteArray("\x00\x00\x00\xff", 4))) return {};
+    return state;
 }
 
-void WindowState::save(const QVariant& splitterState) {
+QVariant WindowState::deviceSplitterState() const { return QSettings().value(kDeviceSplitterKey); }
+
+void WindowState::save(const QVariant& splitterState, const QVariant& deviceSplitterState) {
     QSettings settings;
     if (window_) {
         const QRect rect = normal_.isValid() ? normal_ : window_->geometry();
@@ -76,6 +81,7 @@ void WindowState::save(const QVariant& splitterState) {
                           QVariantMap{{kRect, rect}, {kMaximized, bool(window_->windowStates() & Qt::WindowMaximized)}});
     }
     if (splitterState.isValid()) settings.setValue(kSplitterKey, splitterState);
+    if (deviceSplitterState.isValid()) settings.setValue(kDeviceSplitterKey, deviceSplitterState);
 }
 
 }  // namespace sub::ui

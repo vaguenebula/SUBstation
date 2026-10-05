@@ -206,12 +206,15 @@ ApplicationWindow {
         const splitterState = windowState.splitterState()
         if (splitterState)
             splitter.restoreState(splitterState)
+        const deviceSplitterState = windowState.deviceSplitterState()
+        if (deviceSplitterState)
+            right.restoreState(deviceSplitterState)
         Qt.callLater(window.focusLanes)  // (the lanes take the keyboard once the window shows)
     }
 
     // Closing: a render running is cancelled instead (the window stays, as its
     // dialog's Cancel); else unsaved changes are asked about. The window's
-    // place and the splitter are kept for next time.
+    // place and the splitters are kept for next time.
     onClosing: close => {
         if (!closeConfirmed) {
             if (!Session.requestClose()) {
@@ -227,7 +230,7 @@ ApplicationWindow {
                 return
             }
         }
-        windowState.save(splitter.saveState())
+        windowState.save(splitter.saveState(), right.saveState())
     }
 
     WindowState {

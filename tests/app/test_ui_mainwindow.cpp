@@ -26,6 +26,7 @@
 #include "browser/BrowserController.h"
 #include "editor/ProjectEditor.h"
 #include "model/Project.h"
+#include "mainwindow/WindowState.h"
 #include "platform/PluginEditorKeys.h"
 #include "session/ArrangementActions.h"
 #include "session/ComputerKeyboard.h"
@@ -293,6 +294,28 @@ private Q_SLOTS:
 
         QVERIFY(!prop(QStringLiteral("reEnableAutomation"), "enabled").toBool());  // (nothing overridden)
         QVERIFY(window_->title().startsWith(QStringLiteral("Untitled*")));
+    }
+
+    // Ctrl+Shift+F freezes the selected track in the background (its dialog
+    // shows meanwhile), and unfreezes it (test_ctrl_shift_f_freezes_and_unfreezes...).
+    void freezeAndUnfreeze() {
+        const QString track = audioTrack(wav(QStringLiteral("freeze.wav"), 1.0), 1.0);
+        editor().addDevice(track, QStringLiteral("utility"));
+        selection().selectTrack(track, true);
+        key(Qt::Key_F, Qt::ControlModifier | Qt::ShiftModifier);
+        QTRY_VERIFY(shown(QStringLiteral("renderDialog")) || project().track(track).frozen.has_value());
+        QTRY_VERIFY_WITH_TIMEOUT(project().track(track).frozen.has_value(), 30000);
+        QTRY_VERIFY(!shown(QStringLiteral("renderDialog")));
+        QVERIFY(status().startsWith(QStringLiteral("Froze ")));
+        QCOMPARE(undo().undoText(), QStringLiteral("Freeze Track"));  // (one undo step)
+        key(Qt::Key_F, Qt::ControlModifier | Qt::ShiftModifier);
+        QVERIFY(!project().track(track).frozen.has_value());
+        QVERIFY(status().startsWith(QStringLiteral("Unfroze ")));
+        trigger(QStringLiteral("undo"));
+        QVERIFY(project().track(track).frozen.has_value());
+        trigger(QStringLiteral("flatten"));
+        QVERIFY(!project().track(track).frozen.has_value());
+        QVERIFY(status().startsWith(QStringLiteral("Flattened ")));
     }
 
     // Transport: Play / Stop, Go to Start, Record with nothing armed; their shortcuts.
@@ -770,11 +793,21 @@ private Q_SLOTS:
         const QVariantMap geometry = settings.value(QStringLiteral("window/geometry")).toMap();
         QCOMPARE(geometry.value(QStringLiteral("rect")).toRect().size(), QSize(1300, 800));
         QVERIFY(settings.value(QStringLiteral("window/splitter")).isValid());
+        QVERIFY(settings.value(QStringLiteral("window/device_splitter")).isValid());
 
         // A window made again is where this one was.
         warnings_.clear();
         window_ = ui_->show(kWindow);
         QVERIFY(window_);
+        QCOMPARE(window_->size(), QSize(1300, 800));
+
+        // What the widget version saved there (QWidget::saveGeometry, QSplitter::saveState) is ignored.
+        auto* state = window_->findChild<sub::ui::WindowState*>();
+        QVERIFY(state);
+        settings.setValue(QStringLiteral("window/splitter"), QByteArray("\x00\x00\x00\xff\x00\x00\x00\x01", 8));
+        QVERIFY(!state->splitterState().isValid());
+        settings.setValue(QStringLiteral("window/geometry"), QByteArray("\x01\xd9\xd0\xcb\x00\x03", 6));
+        QVERIFY(!state->restore());
         QCOMPARE(window_->size(), QSize(1300, 800));
     }
 };

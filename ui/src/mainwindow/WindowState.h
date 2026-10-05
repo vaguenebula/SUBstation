@@ -1,12 +1,14 @@
 #pragma once
 
-// The main window's place and size, and its splitter, kept in QSettings
-// between runs (window/geometry, window/splitter), as MainWindow's
-// _restore_window and closeEvent kept them. The geometry is the window's
+// The main window's place and size, and its splitters, kept in QSettings
+// between runs (window/geometry, window/splitter: the browser's, as
+// MainWindow's _restore_window and closeEvent kept them; and
+// window/device_splitter: the arrangement's over the device view). The geometry is the window's
 // normal one (not maximized) and whether it was maximized; a saved place no
 // screen shows any more is moved onto the primary screen. What a widget
 // version of the program saved there (QWidget::saveGeometry's bytes) is
-// ignored: the window then starts at its default size.
+// ignored (the window then starts at its default size), and so is its
+// QSplitter's state.
 
 #include <QObject>
 #include <QPointer>
@@ -26,6 +28,7 @@ class WindowState : public QObject {
 public:
     inline static const QString kGeometryKey = QStringLiteral("window/geometry");
     inline static const QString kSplitterKey = QStringLiteral("window/splitter");
+    inline static const QString kDeviceSplitterKey = QStringLiteral("window/device_splitter");
 
     explicit WindowState(QObject* parent = nullptr);
 
@@ -35,10 +38,11 @@ public:
     // Puts the window where it was saved (maximized, if it was): false if
     // nothing usable was saved (it keeps its size).
     Q_INVOKABLE bool restore();
-    // The splitter's state as saved (SplitView.saveState()), or null.
+    // The splitters' states as saved (SplitView.saveState()), or null.
     Q_INVOKABLE QVariant splitterState() const;
-    // Saves the window's geometry and the splitter's state.
-    Q_INVOKABLE void save(const QVariant& splitterState);
+    Q_INVOKABLE QVariant deviceSplitterState() const;
+    // Saves the window's geometry and the splitters' states.
+    Q_INVOKABLE void save(const QVariant& splitterState, const QVariant& deviceSplitterState = QVariant());
 
     // The window's normal geometry (as last seen while neither maximized nor full screen).
     QRect normalGeometry() const { return normal_; }
