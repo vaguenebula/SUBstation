@@ -3,10 +3,11 @@
 // shortcuts, the checkable actions kept in step with the model, Open Recent,
 // the files' flows with the unsaved-changes question, closing (a render
 // running, unsaved changes), the title, the status bar, the session's warnings,
-// Export Audio, the clip view over the arrangement, Edit › Rename, the window's
-// place kept, and the rules of the shortcuts taken from plug-ins' editors. Runs
-// on a display (xvfb here). With $SUBSTATION_SCREENS set, it saves screenshots
-// there.
+// Export Audio, the clip view over the arrangement, nothing scrolled out of
+// the arrangement or the piano roll drawn over the browser, Edit › Rename, the
+// window's place kept, and the rules of the shortcuts taken from plug-ins'
+// editors. Runs on a display (xvfb here). With $SUBSTATION_SCREENS set, it
+// saves screenshots there.
 
 #include <QDir>
 #include <QFileInfo>
@@ -22,11 +23,13 @@
 #include <vector>
 
 #include "UiTestSupport.h"
+#include "arrangement/Arrangement.h"
 #include "audio/EngineBridge.h"
 #include "browser/BrowserController.h"
 #include "editor/ProjectEditor.h"
 #include "model/Project.h"
 #include "mainwindow/WindowState.h"
+#include "pianoroll/PianoRoll.h"
 #include "platform/PluginEditorKeys.h"
 #include "session/ArrangementActions.h"
 #include "session/ComputerKeyboard.h"
@@ -670,6 +673,74 @@ private Q_SLOTS:
         QMetaObject::invokeMethod(clipView, "locateRequested", Q_ARG(double, 3.0));
         QCOMPARE(selection().insertBeat(), 3.0);
         QCOMPARE(bridge().position(), 3.0);
+        QMetaObject::invokeMethod(clipView, "closeRequested");
+    }
+
+    // What the arrangement and the piano roll scroll out of view (a selected
+    // time range, the playhead, notes) never shows beside them, over the
+    // browser: their items draw only inside themselves (Qt Quick doesn't clip
+    // an item to its bounds).
+    void scrolledOutOfViewIsntDrawnOverTheBrowser() {
+        auto* browser = item(QStringLiteral("browser"));
+        auto* lanes = item(QStringLiteral("lanes"));
+        auto* view = item(QStringLiteral("arrangement"));
+        auto* clipView = item(QStringLiteral("clipView"));
+        QVERIFY(browser && lanes && view && clipView);
+        auto* arrangement = view->property("arrangement").value<sub::ui::Arrangement*>();
+        QVERIFY(arrangement);
+        const QString track = editor().addMidiTrack(-1, QStringLiteral("Keys"));
+        const auto clip = editor().addMidiClip(track, 0.0, 16.0);
+        QVERIFY(clip);
+        editor().setClipNotes(*clip, {{60, 0.0, 16.0, 100}, {64, 0.0, 16.0, 90}, {67, 4.0, 12.0, 80}},
+                              QStringLiteral("setup"));
+        selection().setTimeRange(0.0, 16.0, {track});
+        bridge().play();
+        arrangement->onPosition(4.0);  // (the playhead shows while playing, if the engine plays here)
+        QTest::qWait(50);
+
+        // A part of the window (scene coordinates) as a grab has it; the browser's right part beside an item.
+        auto grab = [&](const QRectF& part) {
+            const qreal dpr = window_->effectiveDevicePixelRatio();
+            return window_->grabWindow().copy(QRectF(part.topLeft() * dpr, part.size() * dpr).toAlignedRect());
+        };
+        auto beside = [&](QQuickItem* next) {
+            const QRectF b = browser->mapRectToScene(browser->boundingRect());
+            const QRectF n = next->mapRectToScene(next->boundingRect());
+            return grab(QRectF(b.right() - 60, n.top(), 56, n.height()));
+        };
+        auto differing = [](const QImage& a, const QImage& b) {
+            int count = 0;
+            for (int y = 0; y < a.height(); ++y)
+                for (int x = 0; x < a.width(); ++x) count += a.pixel(x, y) != b.pixel(x, y);
+            return count;
+        };
+        const QImage before = beside(lanes);
+        arrangement->setScrollBeats(14.0);  // the range, the clip and the playhead are left of the lanes now
+        QTest::qWait(50);
+        test::screenshot(window_, QStringLiteral("main-window-scrolled-arrangement"));
+        QCOMPARE(differing(beside(lanes), before), 0);
+        bridge().stop();
+        arrangement->onPosition(0.0);
+
+        // The piano roll's notes, scrolled out to the left of the grid.
+        Q_EMIT session().arrangement()->clipViewRequested(
+            QVariantList{QVariantMap{{QStringLiteral("trackId"), track}, {QStringLiteral("clipId"), clip->clipId}}},
+            track, clip->clipId);
+        QTRY_VERIFY(clipView->isVisible());
+        auto* roll = clipView->property("pianoRollView").value<QQuickItem*>()->property("roll").value<sub::ui::PianoRoll*>();
+        QVERIFY(roll);
+        auto* grid = item(QStringLiteral("noteGrid"));
+        auto* keys = item(QStringLiteral("pianoKeys"));
+        QVERIFY(grid && keys);
+        QTest::qWait(50);
+        const QRectF keysPart = keys->mapRectToScene(keys->boundingRect());
+        const QImage browserBefore = beside(grid);
+        const QImage keysBefore = grab(keysPart);
+        roll->setScrollBeats(12.0);  // the notes run on left of the grid, over the keys and the browser
+        QTest::qWait(50);
+        test::screenshot(window_, QStringLiteral("main-window-scrolled-piano-roll"));
+        QCOMPARE(differing(beside(grid), browserBefore), 0);
+        QCOMPARE(differing(grab(keysPart), keysBefore), 0);  // (nor over the keys)
         QMetaObject::invokeMethod(clipView, "closeRequested");
     }
 

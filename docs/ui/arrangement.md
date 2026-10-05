@@ -58,8 +58,15 @@ The lanes and the header column scroll together: they share the `Arrangement`'s 
 `Repeater` over `arrangement.rows`) sits at `model.top - arrangement.scrollY`, hidden while its track is in a folded
 group. The returns and the master don't scroll vertically: they are columns of fixed-height rows whose heights follow
 their automation lanes (`arrangement.returns`, `masterHeight`). Below the headers, a click selects no track and the
-wheel scrolls them with the lanes. The clip view is not part of this view: the main window shows it over the
-arrangement ([README.md](README.md#the-main-window)).
+wheel scrolls them with the lanes.
+
+A scene-graph item draws where its geometry says, unclipped, so whatever scrolls past an item's edge would show over
+its neighbours (the browser, left of the arrangement in the main window, among them): the ruler, the lanes and the
+bus lanes have `clip: true` (a scissor each, for them and the playheads in them), and the header column clips its
+headers.
+
+The clip view is not part of this view: the main window shows it over the arrangement
+([README.md](README.md#the-main-window)).
 
 For the main window the view offers `zoom(factor)`, `zoomToArrangement()`, `narrowGrid()`, `widenGrid()`,
 `openClipView()`, `renameTrack(trackId)`, `focusLanes()`, the properties `snap`, `follow`, `gridStep` and

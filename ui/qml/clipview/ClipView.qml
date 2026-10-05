@@ -334,6 +334,7 @@ FocusScope {
                 x: controls.width
                 width: parent.width - controls.width
                 height: parent.height
+                clip: true
                 session: Session
                 controller: clipController
             }
