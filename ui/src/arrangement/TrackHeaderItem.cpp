@@ -810,7 +810,11 @@ MenuEntries TrackHeaderItem::inputMenu() {
     none.checkable = true;
     none.checked = !t->hasInput();
     const QStringList names = bridge->inputNames();
+#ifdef Q_OS_WIN
     if (names.isEmpty()) menu.add(QStringLiteral("The audio device has no inputs (choose an ASIO driver)")).enabled = false;
+#else  // (no ASIO here)
+    if (names.isEmpty()) menu.add(QStringLiteral("The audio device has no inputs")).enabled = false;
+#endif
     const std::optional<std::vector<int>> current = t->inputTrack ? std::nullopt : std::optional(t->input);
     for (const auto& [label, channels] : inputChoices(names)) {
         if (channels.size() == 2 && names.size() > 2 && channels == std::vector<int>{0, 1}) menu.addSeparator();

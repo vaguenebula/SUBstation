@@ -869,9 +869,13 @@ private Q_SLOTS:
         QCOMPARE(h->monitorText(), QStringLiteral("Auto"));
         arr::MenuEntries menu = h->inputMenu();
         const QString cycle = groupName + QStringLiteral(" (it takes this track's output)");
-        QCOMPARE(entryTexts(menu), (QStringList{QStringLiteral("No Input"),
-                                                QStringLiteral("The audio device has no inputs (choose an ASIO driver)"),
-                                                QStringLiteral("Resampling"), QStringLiteral("Drums"), cycle, retName}));
+#ifdef Q_OS_WIN
+        const QString noInputs = QStringLiteral("The audio device has no inputs (choose an ASIO driver)");
+#else
+        const QString noInputs = QStringLiteral("The audio device has no inputs");
+#endif
+        QCOMPARE(entryTexts(menu), (QStringList{QStringLiteral("No Input"), noInputs, QStringLiteral("Resampling"),
+                                                QStringLiteral("Drums"), cycle, retName}));
         QVERIFY(!menu.find(cycle)->enabled);  // its own group
         QVERIFY(menu.find(QStringLiteral("Drums"))->enabled && menu.find(QStringLiteral("No Input"))->checked);
 

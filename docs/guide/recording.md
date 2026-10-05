@@ -24,8 +24,9 @@ An audio track's **input** menu lists:
   [Resampling](#resampling)).
 
 Choosing an input the driver hasn't open opens it (and keeps it open next time). With
-WASAPI (and the *System* driver on Linux) there are no device inputs: the menu says to
-choose an ASIO driver (see [audio-setup.md](audio-setup.md)).
+WASAPI there are no device inputs: the menu says to choose an ASIO driver (see
+[audio-setup.md](audio-setup.md)). On Linux (the *System* driver) there are none either,
+and the menu just says so.
 
 A MIDI track's input is a MIDI input and a channel; see [midi.md](midi.md#midi-input).
 
