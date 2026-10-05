@@ -20,10 +20,9 @@ changed, the backend calls it (from one of its threads), and the application tak
 backend is portable: what it needs from the operating system is in one header, [Platform.h](../browser/src/Platform.h),
 with a Win32 implementation and a POSIX one (Linux watches with inotify).
 
-The backend replaced Python code that did the same on the UI thread (and a walking thread that held the GIL), and is
-held to it item for item: the same files from a folder tree, in the same order, and the same results for every query,
-sort, filter and use count. That code is kept, ported to C++, as the tests' reference
-([tests/app/support/BrowserReference.h](../tests/app/support/BrowserReference.h)). Searching 200 000 files takes
+The backend is held item for item to a plain, single-threaded reference kept with the tests
+([tests/app/support/BrowserReference.h](../tests/app/support/BrowserReference.h)): the same files from a folder tree,
+in the same order, and the same results for every query, sort, filter and use count. Searching 200 000 files takes
 about 10 ms and never holds up the window or the audio; see [benchmarks/README.md](../benchmarks/README.md) for the
 measurements and the profile that led to the design.
 
@@ -112,9 +111,9 @@ A `BrowserItem` has a `name`, a `path`, a `kind` (`ItemKind::Audio`, `Plugin`, `
 | device | `device:<kind>` |
 | preset | `preset:<path>` (in the system's form) |
 
-`pathKey()` is Python's `os.path.normcase(os.path.normpath(path))`, as the Python code made it (and as
-`library.json` was written): on Windows backslashes and Windows' own lower case (`LCMapStringEx` with the invariant
-locale), so names that differ only in case have one key; **elsewhere the normalised path as it is**, since names that
+`pathKey()` is Python's `os.path.normcase(os.path.normpath(path))` (as `library.json` was written): on Windows
+backslashes and Windows' own lower case (`LCMapStringEx` with the invariant locale), so names that differ only in case
+have one key; **elsewhere the normalised path as it is**, since names that
 differ in case are different files there ("Kick.wav" and "kick.wav" keep two keys and two use counts). The backend
 makes the same keys for indexed files: a folder's key is the place's key joined with each folder name's
 `platform::nameKey()`.
@@ -150,8 +149,8 @@ indexer:
   `FolderFiles`, its path as shown (the place's root as given, then the folder names), its lower-case path (for the
   place filter where names ignore case), its key (for use counts) and its detail (the folder's name; a place's root
   shows its basename).
-- `audio`: every file as (folder, file), in the list's own order: by lower-case name, then walk order (the Python index
-  sorted its walk by `name.lower()`, which keeps the walk order for equal names).
+- `audio`: every file as (folder, file), in the list's own order: by lower-case name, then walk order (a stable sort of
+  the walk by `pyLower(name)`, which keeps the walk order for equal names).
 - `byFold`: positions in `audio` by casefolded name (ties in the list's own order), so ordering by name is a pass over
   it rather than a sort.
 - `folderByKey`, `folderByPath`: lookups for use counts and `Result::find`.
@@ -182,7 +181,7 @@ for this thread only), then loads the saved index, then loops:
 4. Otherwise wait with a `platform::Waiter` for the wake event, a place's watcher, or a deadline (changes settling,
    the next save; at least every 60 s).
 
-**The walk** follows the Python walk it replaces exactly, so the lists are the same: from each place, depth first, the
+**The walk** matches the reference's exactly, so the lists are the same: from each place, depth first, the
 last folder first (a stack), at most 16 folders deep (`Limits::maxDepth`), and no further folders once 300 000 files
 (`maxFiles`) were found under a place; names starting with `.` or `$` are skipped. On Windows junctions are walked
 into, symbolic links to folders are not (`listFolder` reads `FILE_ATTRIBUTE_REPARSE_POINT` and
@@ -240,8 +239,8 @@ replaced.
 
 ### The wake callback
 
-`Browser::setWakeCallback(std::function<void()>)` replaces the Win32 event the Python side waited on, so the backend
-needs nothing of the platform's event loop. The callback is called from the browser's threads when there is something
+`Browser::setWakeCallback(std::function<void()>)` takes the place of a platform event object, so the backend needs
+nothing of the platform's event loop. The callback is called from the browser's threads when there is something
 to `take()` (the latest search's results, or a change of the index or its status), once until the next `take()` (as a
 set event stays set). It must only hand the work over, never call back into the browser: `FileIndex` posts a queued
 call to its own thread (`QMetaObject::invokeMethod(this, ..., Qt::QueuedConnection)`), which calls `take()`. Once
@@ -250,7 +249,7 @@ new callback is called at once; after `close()` no calls come.
 
 ### Matching and ordering
 
-Matching and ordering are defined by the Python search they replaced (the reference's `find()`; the rules are in
+Matching and ordering are defined by the reference's `find()` (the rules are in
 [BrowserSearch.h](../app/src/browser/BrowserSearch.h)):
 
 - **Terms**: `pySplit(pyLower(text))`, as `query.lower().split()`.
@@ -282,8 +281,8 @@ long as the snapshot and the use counts stay the same.
 ### Text: Python's rules, from Python's tables
 
 [Text.h](../browser/src/Text.h) implements `str.lower()`, `str.casefold()`, `str.split()` and the regex classes `\s`
-and `\w` from tables generated out of Python itself, so the backend agrees with the Python search it replaced for
-every character:
+and `\w` from tables generated out of Python itself, so the backend lowers, folds and splits every character as Python
+does:
 
 - `kLower` and `kFold`: each character's mapping where it changes (up to three code points). Capital sigma (U+03A3) is
   lowered by its context (the Final_Sigma rule, `isFinalSigma`), which needs Python's "case-ignorable" and "cased"
@@ -502,8 +501,8 @@ Item kinds are numbered alike in `sub::browser::Kind` and `sub::app::ItemKind` (
 - Searches read only immutable, shared data: snapshots, external groups and use counts are replaced, never changed.
   `setExternal` and `setUsage` build new objects and swap them in under the lock.
 - Only the latest search's results are handed out, and only once.
-- The index lists what the Python walk listed, in the same order, and the search orders as the Python `find()` did,
-  for every character. A change to either has to change the reference
+- The index lists what the reference's walk lists, in the same order, and the search orders as the reference's `find()`
+  does, for every character. A change to either has to change the reference
   ([BrowserReference.h](../tests/app/support/BrowserReference.h)) too, or be a deliberate break of that parity.
 
 ## Extending it
