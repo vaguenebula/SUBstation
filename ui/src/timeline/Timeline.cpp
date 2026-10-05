@@ -1,4 +1,4 @@
-#include "pianoroll/RollTimeline.h"
+#include "timeline/Timeline.h"
 
 #include "model/Numbers.h"
 #include "model/Project.h"
@@ -11,15 +11,22 @@
 #include <array>
 #include <cmath>
 
-namespace sub::ui::roll {
+namespace sub::ui::timeline {
 
 double gridMinPixels(int level) {
     static constexpr std::array<double, 5> kPixels{6.0, 11.0, 20.0, 40.0, 80.0};
-    return kPixels[static_cast<size_t>(std::clamp(level, -2, 2) + 2)];
+    return kPixels[static_cast<size_t>(std::clamp(level, kMinGridLevel, kMaxGridLevel) - kMinGridLevel)];
 }
 
 app::TimeSignature Timeline::timeSignature() const {
     return project_ ? project_->timeSignature() : app::TimeSignature();
+}
+
+double Timeline::tempo() const { return project_ ? project_->tempo() : 120.0; }
+
+double Timeline::framesPerPixel(double sampleRate, double sourceTempo) const {
+    const double tempo = sourceTempo > 0.0 ? sourceTempo : this->tempo();
+    return sampleRate * 60.0 / (tempo * pxPerBeat_);
 }
 
 bool Timeline::setScrollBeats(double beats) {
@@ -36,6 +43,13 @@ bool Timeline::setScrollY(double y) {
     return true;
 }
 
+bool Timeline::setPxPerBeat(double pxPerBeat) {
+    pxPerBeat = std::clamp(pxPerBeat, kMinPxPerBeat, kMaxPxPerBeat);
+    if (pxPerBeat == pxPerBeat_) return false;
+    pxPerBeat_ = pxPerBeat;
+    return true;
+}
+
 bool Timeline::zoomAt(double x, double factor) {
     const double anchor = xToBeat(x);
     const double ppb = std::clamp(pxPerBeat_ * factor, kMinPxPerBeat, kMaxPxPerBeat);
@@ -49,6 +63,19 @@ bool Timeline::zoomToFit(double start, double end, double width) {
     if (end <= start || width <= 0) return false;
     pxPerBeat_ = std::clamp(width / (end - start), kMinPxPerBeat, kMaxPxPerBeat);
     scrollBeats_ = std::max(0.0, start);
+    return true;
+}
+
+bool Timeline::setGridLevel(int level) {
+    level = std::clamp(level, kMinGridLevel, kMaxGridLevel);
+    if (level == gridLevel_) return false;
+    gridLevel_ = level;
+    return true;
+}
+
+bool Timeline::setSnap(bool snap) {
+    if (snap == snap_) return false;
+    snap_ = snap;
     return true;
 }
 
@@ -109,14 +136,30 @@ double labelStep(const Timeline& view, double step) {
     return candidates.back();
 }
 
-void drawGrid(SgPainter& painter, const Timeline& view, double x0, double x1, double top, double bottom) {
+void drawGrid(SgPainter& painter, const Timeline& view, double x0, double x1, double top, double bottom,
+              bool overClip) {
     if (bottom <= top) return;
+    // Over clips: faint dark lines, so the grid shows through whatever colour a clip has.
+    static constexpr QColor kOverClipBar{0, 0, 0, 70};
+    static constexpr QColor kOverClipBeat{0, 0, 0, 42};
+    static constexpr QColor kOverClipSub{0, 0, 0, 24};
     for (const GridLine& line : gridLines(view, x0 - 1, x1 + 1)) {
-        const QColor color = line.kind == LineKind::Bar    ? Theme::kGridBar
-                             : line.kind == LineKind::Beat ? Theme::kGridBeat
-                                                           : Theme::kGridSub;
+        QColor color;
+        switch (line.kind) {
+            case LineKind::Bar: color = overClip ? kOverClipBar : Theme::kGridBar; break;
+            case LineKind::Beat: color = overClip ? kOverClipBeat : Theme::kGridBeat; break;
+            case LineKind::Sub: color = overClip ? kOverClipSub : Theme::kGridSub; break;
+        }
         painter.fillRect(QRectF(app::roundHalfEven(line.x), top, 1, bottom - top), color);
     }
 }
 
-}  // namespace sub::ui::roll
+void drawLoopRegion(SgPainter& painter, const Timeline& view, double x0, double x1, double top, double bottom) {
+    const app::Project* project = view.project();
+    if (!project || !project->loopEnabled() || bottom <= top) return;
+    const double left = std::max(x0, view.beatToX(project->loopStart()));
+    const double right = std::min(x1, view.beatToX(project->loopEnd()));
+    if (right > left) painter.fillRect(QRectF(left, top, right - left, bottom - top), Theme::kLoopRegion);
+}
+
+}  // namespace sub::ui::timeline

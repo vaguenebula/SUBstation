@@ -61,7 +61,7 @@ public:
 
     void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override {
         if (!started(pos)) return;
-        const roll::Timeline& view = roll->view();
+        const timeline::Timeline& view = roll->view();
         const bool bypass = modifiers & Qt::AltModifier;
         const double raw = view.xToBeat(pos.x()) - originBeat_;
         const double deltaBeats = view.snapBeat(grabbed_.start + raw, bypass) - grabbed_.start;
@@ -95,7 +95,7 @@ public:
 
     void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override {
         if (!started(pos)) return;
-        const roll::Timeline& view = roll->view();
+        const timeline::Timeline& view = roll->view();
         const bool bypass = modifiers & Qt::AltModifier;
         const double edgeBeat = edge_ == notes::Edge::End ? grabbed_.end() : grabbed_.start;
         const double delta = view.snapBeat(edgeBeat + view.xToBeat(pos.x()) - originBeat_, bypass) - edgeBeat;
@@ -222,7 +222,7 @@ void NoteGrid::paint(SgPainter& p) {
     p.fillRect(visible, Theme::kLane);
     PianoRoll* roll = this->roll();
     if (!roll) return;
-    const roll::Timeline& view = roll->view();
+    const timeline::Timeline& view = roll->view();
     const int height = roll->rowHeight();
     for (int pitch = roll->pitchAt(visible.bottom()); pitch <= roll->pitchAt(visible.top()); ++pitch) {
         const double top = roll->pitchTop(pitch);
@@ -234,7 +234,7 @@ void NoteGrid::paint(SgPainter& p) {
         }
     }
     const double bottom = std::min(visible.bottom(), roll->pitchTop(0) + height);
-    roll::drawGrid(p, view, visible.left(), visible.right(), visible.top(), bottom);
+    timeline::drawGrid(p, view, visible.left(), visible.right(), visible.top(), bottom);
     if (bottom < visible.bottom())
         p.fillRect(QRectF(visible.left(), bottom, visible.width(), visible.bottom() - bottom), Theme::kEmptyArea);
 
@@ -374,7 +374,7 @@ void NoteGrid::mouseDoubleClickEvent(QMouseEvent* event) {
                      roll::without(roll->selected(), hit->note));
         return;
     }
-    const roll::Timeline& view = roll->view();
+    const timeline::Timeline& view = roll->view();
     const double step = view.gridStep();
     double beat = std::max(0.0, view.xToBeat(pos.x()));
     if (view.snap() && !(event->modifiers() & Qt::AltModifier))
