@@ -2,8 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A compact drop-down (automation_header.py's Chooser): its text and a "▾"; a
-// click asks for its menu.
+// A compact drop-down: its text and a "▾"; a click asks for its menu.
 Rectangle {
     id: chooser
 

@@ -1,12 +1,11 @@
 #pragma once
 
 // The piano roll: the clip view of a MIDI clip, laid out like Ableton's MIDI
-// editor (piano_roll/piano_roll.py's PianoRoll, without its widgets). It holds
-// the clip it shows, its own time axis (zoom, scroll) and row height, the
-// selected notes, the playhead, the key sounding, and the note tools' settings
-// and actions. The items that draw it (NoteGrid, PianoKeys, PianoRuler,
-// VelocityLane, RollPlayhead) share one; PianoRollView.qml lays them out, with
-// the note tools (NoteTools.qml) floating over the notes.
+// editor. It holds the clip it shows, its own time axis (zoom, scroll) and row
+// height, the selected notes, the playhead, the key sounding, and the note
+// tools' settings and actions. The items that draw it (NoteGrid, PianoKeys,
+// PianoRuler, VelocityLane, RollPlayhead) share one; PianoRollView.qml lays
+// them out, with the note tools (NoteTools.qml) floating over the notes.
 //
 // Times are content beats: beats of the clip's notes, the ruler's 1 being the
 // clip's first content beat, not the arrangement's. The part the clip plays

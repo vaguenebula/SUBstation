@@ -2,9 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The rotary knob (KnobItem, from knob.py): its value as its tooltip, and the
-// small text field typing a digit opens when it has a `parser`: centred on the
-// knob, at least 48 px wide, applied on Return or when it loses the focus.
+// The rotary knob (KnobItem): its value as its tooltip, and the small text
+// field typing a digit opens when it has a `parser`: centred on the knob, at
+// least 48 px wide, applied on Return or when it loses the focus.
 //
 //   Knob {
 //       from: -1; to: 1; defaultValue: 0; bipolar: true; wheel: false

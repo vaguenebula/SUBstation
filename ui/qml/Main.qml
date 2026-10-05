@@ -4,14 +4,14 @@ import QtQuick.Dialogs
 import QtQuick.Layouts
 import SUBstation
 
-// The main window (main_window.py): the transport bar on top; below it a
-// horizontal split of the browser (left) and, on the right, a vertical split of
-// the arrangement (or the clip view covering it while clips are open in it)
-// over the device view; the status bar at the bottom, with a project's
-// plug-ins loading at its right. Every menu action and shortcut calls the
-// session (the main window's logic: transport, files, the Edit and Create
-// commands on what is selected, renders, preferences); this file shows what it
-// says and asks the user what it needs (files, unsaved changes).
+// The main window: the transport bar on top; below it a horizontal split of the
+// browser (left) and, on the right, a vertical split of the arrangement (or the
+// clip view covering it while clips are open in it) over the device view; the
+// status bar at the bottom, with a project's plug-ins loading at its right.
+// Every menu action and shortcut calls the session (the main window's logic:
+// transport, files, the Edit and Create commands on what is selected, renders,
+// preferences); this file shows what it says and asks the user what it needs
+// (files, unsaved changes).
 //
 // The arrangement and the device view are reached only through their
 // interfaces, each call guarded:

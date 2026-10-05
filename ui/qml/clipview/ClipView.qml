@@ -3,10 +3,10 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import SUBstation
 
-// The clip view (clip_view.py): what a double-clicked clip opens. A MIDI clip
-// gets the piano roll and nothing else. Audio clips get their controls on the
-// left (Warp, Pitch, Mix) and large waveforms on the right; with several open,
-// the controls edit all of them at once (ClipViewController has the rules).
+// The clip view: what a double-clicked clip opens. A MIDI clip gets the piano
+// roll and nothing else. Audio clips get their controls on the left (Warp,
+// Pitch, Mix) and large waveforms on the right; with several open, the controls
+// edit all of them at once (ClipViewController has the rules).
 //
 // Give it the clips to show:
 //

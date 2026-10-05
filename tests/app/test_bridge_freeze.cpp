@@ -3,9 +3,7 @@
 // a frozen group, nothing to freeze, renders no track plays deleted; renders in
 // the background (a freeze, an export) followed through their signals and
 // cancelled; reversed copies of files, written on a thread of their own and
-// found again. From tests/test_freeze_model.py, tests/test_ui_freeze.py,
-// tests/test_ui_rendering.py and tests/test_ui_clip_edits.py (their bridge
-// parts), the changes made as the editor makes them.
+// found again. The changes are made as the editor makes them.
 
 #include "BridgeTestSupport.h"
 #include "TestSupport.h"

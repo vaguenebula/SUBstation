@@ -1,7 +1,6 @@
 #pragma once
 
-// The Sidechain device's curve (sidechain.py's CurveGraph, with what
-// SidechainWidget did with the device's displays and the fit).
+// The Sidechain device's curve, over the device's displays, and the fit.
 //
 // The curve: drag a point to move it (the first and last only up and down),
 // drag between points to bend the curve there (as automation bends), click

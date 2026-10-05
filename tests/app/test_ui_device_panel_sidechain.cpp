@@ -1,15 +1,14 @@
 // Sidechains in the device view (DeviceFrame.qml's sidechain button,
-// DeviceInfo's menu), as test_ui_sidechain.py had them: a device with a
-// sidechain input has a sidechain button in its title bar, lit while it has
-// one, its tooltip naming the source and where it is taken; its menu lists the
-// tracks, groups and returns it can come from (greyed out where that would
-// close a cycle) and where it is taken, along the source's signal as in
-// Ableton: Pre FX (before its devices; after a MIDI track's instrument), after
-// one of its devices, Post FX (before its fader) or Post Mixer (after it). The
-// master's devices take any track. Built-in devices with a sidechain input
-// (the Compressor, the Sidechain device, whose hint over its curve opens the
-// menu) have the button too. Driven in a window with a real session and the
-// test plug-ins, with synthesized mouse events.
+// DeviceInfo's menu): a device with a sidechain input has a sidechain button in
+// its title bar, lit while it has one, its tooltip naming the source and where
+// it is taken; its menu lists the tracks, groups and returns it can come from
+// (greyed out where that would close a cycle) and where it is taken, along the
+// source's signal as in Ableton: Pre FX (before its devices; after a MIDI
+// track's instrument), after one of its devices, Post FX (before its fader) or
+// Post Mixer (after it). The master's devices take any track. Built-in devices
+// with a sidechain input (the Compressor, the Sidechain device, whose hint over
+// its curve opens the menu) have the button too. Driven in a window with a real
+// session and the test plug-ins, with synthesized mouse events.
 
 #include <QQuickItem>
 #include <QQuickWindow>

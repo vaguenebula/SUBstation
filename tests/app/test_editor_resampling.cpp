@@ -1,8 +1,7 @@
 // Resampling through the editor: an audio track taking its input from another
 // track's output (a track, a group, a return) or the master's; cycles refused,
 // inputs that would close one dropped when tracks move into groups, a source
-// going takes the inputs from it along (one undo step), and saving (the editor
-// parts of tests/test_resampling_model.py).
+// going takes the inputs from it along (one undo step), and saving.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

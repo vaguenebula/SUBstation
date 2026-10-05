@@ -2,10 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The EQ curve's right-click menus (eq.py's EqGraph._band_menu and _view_menu),
-// made for how things are when they open: a band's (its type, slope and
-// placement, Enabled, Delete Band) and the background's (the analyzer's mode,
-// the curve's range, Delete All Bands).
+// The EQ curve's right-click menus, made for how things are when they open: a
+// band's (its type, slope and placement, Enabled, Delete Band) and the
+// background's (the analyzer's mode, the curve's range, Delete All Bands).
 Item {
     id: menus
 

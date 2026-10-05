@@ -1,7 +1,7 @@
 // The browser's backend (browser/src, sub_browser): that it indexes, matches
-// and orders exactly as the Python code before it did (tests/browser_reference.py,
-// ported as the reference in support/BrowserReference.h), keeps its index up to date incrementally,
-// and runs its searches off the caller's thread, latest first.
+// and orders exactly as the Python code before it did (the reference in
+// support/BrowserReference.h), keeps its index up to date incrementally, and
+// runs its searches off the caller's thread, latest first.
 //
 // Python's own text rules (str.lower, casefold, split, the regex's word starts,
 // the match quality) are checked against values Python 3.12 (Unicode 15.0.0,

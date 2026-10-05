@@ -2,12 +2,12 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The EQ's editor in the device view (eq.py's EqWidget with its EqEditor):
-// the curve (EqGraph) from the title bar to the bottom edge, Scale and Output
-// in its bottom corners, the expand button (the EQ, bigger, in a window of its
-// own: EqWindows) and the button showing the selected band's controls
-// (EqBandPanel) beside the curve. Those start collapsed, and showing them shows
-// them in every EQ (EqView.panel): the editor is wider then (implicitWidth).
+// The EQ's editor in the device view: the curve (EqGraph) from the title bar to
+// the bottom edge, Scale and Output in its bottom corners, the expand button
+// (the EQ, bigger, in a window of its own: EqWindows) and the button showing
+// the selected band's controls (EqBandPanel) beside the curve. Those start
+// collapsed, and showing them shows them in every EQ (EqView.panel): the editor
+// is wider then (implicitWidth).
 Item {
     id: editor
 

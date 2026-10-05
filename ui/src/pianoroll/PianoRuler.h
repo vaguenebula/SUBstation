@@ -1,11 +1,11 @@
 #pragma once
 
-// The piano roll's ruler (piano_roll.py's PianoRuler): bar numbers in the
-// clip's own time, a bar in the track's colour under the part the clip plays,
-// and the start marker (the playhead is a RollPlayhead above it). Click to play
-// from there (the snapped beat, converted to the timeline: the roll's
-// locateRequested); drag horizontally to scroll, vertically to zoom, as the
-// arrangement's ruler does (decided on its first 3 px).
+// The piano roll's ruler: bar numbers in the clip's own time, a bar in the
+// track's colour under the part the clip plays, and the start marker (the
+// playhead is a RollPlayhead above it). Click to play from there (the snapped
+// beat, converted to the timeline: the roll's locateRequested); drag
+// horizontally to scroll, vertically to zoom, as the arrangement's ruler does
+// (decided on its first 3 px).
 
 #include "pianoroll/RollItem.h"
 

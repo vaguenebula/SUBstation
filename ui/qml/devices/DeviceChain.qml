@@ -1,11 +1,11 @@
 import QtQuick
 import SUBstation
 
-// One chain of the track the device view shows, left to right (panel.py's
-// _add_devices): a frame per device and, after a rack that isn't folded and
-// has chains, the chain it shows (the one last clicked in its chain list,
-// else its first) in its bracket, with its devices, and so on inside. The
-// frames are made again only when the chain's devices change (DeviceChainList).
+// One chain of the track the device view shows, left to right: a frame per
+// device and, after a rack that isn't folded and has chains, the chain it shows
+// (the one last clicked in its chain list, else its first) in its bracket, with
+// its devices, and so on inside. The frames are made again only when the
+// chain's devices change (DeviceChainList).
 Row {
     id: chain
 

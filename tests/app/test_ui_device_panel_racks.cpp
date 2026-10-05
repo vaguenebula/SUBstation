@@ -1,13 +1,13 @@
 // Racks in the device view (DevicePanel.qml's racks: RackDeviceBody,
-// RackChainRow, RackMacroKnob, RackChainView), as test_ui_racks.py had them:
-// Ctrl+G groups the selected devices into a rack (Ctrl+Shift+G ungroups it),
-// which shows its macros and chains; the chain clicked shows its devices
-// beside the rack, where devices are dropped and selected as on the track's
-// own chain; chain mixers and macros edit the model; mapping a parameter to a
-// macro from its menu and unmapping it from the macro's; Ctrl+R renaming the
-// rack chain clicked in place; a chain's menu; the view's height staying put.
-// Driven in a window with a real session, with synthesized mouse, key and drag
-// events. With SUBSTATION_UI_SCREENSHOTS set, screenshots go there.
+// RackChainRow, RackMacroKnob, RackChainView): Ctrl+G groups the selected
+// devices into a rack (Ctrl+Shift+G ungroups it), which shows its macros and
+// chains; the chain clicked shows its devices beside the rack, where devices
+// are dropped and selected as on the track's own chain; chain mixers and macros
+// edit the model; mapping a parameter to a macro from its menu and unmapping it
+// from the macro's; Ctrl+R renaming the rack chain clicked in place; a chain's
+// menu; the view's height staying put. Driven in a window with a real session,
+// with synthesized mouse, key and drag events. With SUBSTATION_UI_SCREENSHOTS
+// set, screenshots go there.
 
 #include <QQuickItem>
 #include <QQuickWindow>

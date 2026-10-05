@@ -9,8 +9,8 @@
 //
 // A library is made once per (size, seed) and reused; LIBRARY.txt in its root
 // says what it holds. The names come from Python's random numbers (PyRandom.h),
-// so a library is the same, file for file, as library_gen.py made it before,
-// and either can reuse the other's.
+// so a library is the same, file for file, as the Python benchmarks' generator
+// made it before, and either can reuse the other's.
 
 #include <cstdint>
 #include <filesystem>

@@ -1,6 +1,6 @@
 #pragma once
 
-// The beat-time ruler with the loop brace (the old ruler.py's TimelineRuler).
+// The beat-time ruler with the loop brace.
 //
 // Top strip (kLoopStrip): drag the loop brace (its body moves it, its edges
 // resize it: an edge can't come within a quarter beat of the other; dragging

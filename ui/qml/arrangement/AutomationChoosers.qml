@@ -2,12 +2,12 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A strip's automation choosers (automation_header.py's AutomationControls),
-// as in Ableton: for its own lane a device chooser ("Mixer" or one of its
-// devices), a parameter chooser and "+" (another lane below); for each lane
-// below its choosers and "−" (remove it). Automated parameters are marked in
-// the menus. Fills its header; `mainRect` is where its own lane's go, and the
-// lanes' go across `laneLeft`..`laneRight`, centred in each lane.
+// A strip's automation choosers, as in Ableton: for its own lane a device
+// chooser ("Mixer" or one of its devices), a parameter chooser and "+" (another
+// lane below); for each lane below its choosers and "−" (remove it). Automated
+// parameters are marked in the menus. Fills its header; `mainRect` is where its
+// own lane's go, and the lanes' go across `laneLeft`..`laneRight`, centred in
+// each lane.
 Item {
     id: choosers
 

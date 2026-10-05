@@ -1,15 +1,14 @@
 #pragma once
 
-// The Sampler's waveform (sampler.py's SampleView): its sample's waveform from
-// its peaks, what plays of it (Start to End; the rest dimmed, the loop
-// bracketed when it loops) and where the newest note is (the display
-// "position"). Drag the Start or End marker (within kMarkerGrab px) to set it
-// (one undo step per drag, kept within the other marker); drop an audio file
-// on it to load it, or double-click it to browse (browseRequested: the editor
-// shows the file dialog). Loading a sample is an undoable state change
-// (ProjectEditor::setDeviceState); the path lives in the device's state
-// (DeviceState.h, "sample"). The waveform is the bridge's (decoded already for
-// the sampler, so it is quick; requested if it isn't).
+// The Sampler's waveform: its sample's waveform from its peaks, what plays of
+// it (Start to End; the rest dimmed, the loop bracketed when it loops) and
+// where the newest note is (the display "position"). Drag the Start or End
+// marker (within kMarkerGrab px) to set it (one undo step per drag, kept within
+// the other marker); drop an audio file on it to load it, or double-click it to
+// browse (browseRequested: the editor shows the file dialog). Loading a sample
+// is an undoable state change (ProjectEditor::setDeviceState); the path lives
+// in the device's state (DeviceState.h, "sample"). The waveform is the bridge's
+// (decoded already for the sampler, so it is quick; requested if it isn't).
 
 #include "devices/DeviceCanvas.h"
 
@@ -23,7 +22,7 @@
 namespace sub::ui {
 
 // The waveform's lowest and highest value under each of `width` columns (all
-// channels together), from the source's peaks (sampler.py's waveform_columns).
+// channels together), from the source's peaks.
 std::pair<std::vector<float>, std::vector<float>> waveformColumns(const sub::app::Waveform& waveform, int width);
 
 class SampleView : public DeviceCanvas {

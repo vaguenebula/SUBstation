@@ -1,14 +1,13 @@
 // Device presets in the device view (DevicePanel.qml's save button, its
-// dialogs, preset drops; Session.deviceSelection does the work), as
-// test_ui_presets.py had them: every device's save button saves it to the
-// library under a name asked for (its name to start with), asking before
-// replacing a preset of that name; a rack takes the name of the preset it is
-// saved as; dropped on the device view a preset goes in as a new device, or
-// loads into the device it is dropped onto if it is of its kind (outlined
-// while the drag is over it; one undo step); Save as Default Preset and Clear
-// Default Preset from a device's menu; Load Preset… beside the devices.
-// Driven in a window with a real session, with synthesized mouse, key and drag
-// events. With SUBSTATION_UI_SCREENSHOTS set, screenshots go there.
+// dialogs, preset drops; Session.deviceSelection does the work): every device's
+// save button saves it to the library under a name asked for (its name to start
+// with), asking before replacing a preset of that name; a rack takes the name
+// of the preset it is saved as; dropped on the device view a preset goes in as
+// a new device, or loads into the device it is dropped onto if it is of its
+// kind (outlined while the drag is over it; one undo step); Save as Default
+// Preset and Clear Default Preset from a device's menu; Load Preset… beside the
+// devices. Driven in a window with a real session, with synthesized mouse, key
+// and drag events. With SUBSTATION_UI_SCREENSHOTS set, screenshots go there.
 
 #include <QDir>
 #include <QFileInfo>

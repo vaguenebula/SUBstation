@@ -1,13 +1,12 @@
 #pragma once
 
-// The arrangement view's state, without its widgets (the old
-// arrangement_view.py's ArrangementView, and view_state.py's ViewState): the
-// time axis (zoom, scroll, the adaptive grid, snapping, following the
-// playhead), the tracks' vertical layout and the rows QML lays the headers,
-// the returns and the master out in, the scroll bars, the playhead, dragging
-// headers to move tracks, and Alt+wheel resizing. The items that draw the
-// arrangement (the ruler, the lanes, the returns' and the master's lanes, the
-// playhead, the headers) share one; ArrangementView.qml lays them out:
+// The arrangement view's state, without its widgets: the time axis (zoom,
+// scroll, the adaptive grid, snapping, following the playhead), the tracks'
+// vertical layout and the rows QML lays the headers, the returns and the master
+// out in, the scroll bars, the playhead, dragging headers to move tracks, and
+// Alt+wheel resizing. The items that draw the arrangement (the ruler, the
+// lanes, the returns' and the master's lanes, the playhead, the headers) share
+// one; ArrangementView.qml lays them out:
 //
 //   Arrangement { id: arrangement; session: Session }
 //   ArrangementLanes { session: Session; arrangement: arrangement }

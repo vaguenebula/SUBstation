@@ -1,8 +1,8 @@
 #pragma once
-// What the recording, MIDI input, resampling and live parallel tests share
-// (the Python test_recording.py's fixtures): the fake ASIO driver in manual
-// mode with float samples (the cable carries floats exactly), an engine
-// without clip fades, and reading back what the engine played and recorded.
+// What the recording, MIDI input, resampling and live parallel tests share: the
+// fake ASIO driver in manual mode with float samples (the cable carries floats
+// exactly), an engine without clip fades, and reading back what the engine
+// played and recorded.
 
 #include <cmath>
 

@@ -2,10 +2,7 @@
 // the engine has them, groups as buses, returns and sends (made silent when only
 // automated), inputs from other tracks' outputs (resampling), the master's
 // mixer, the project's settings, a drag's preview, and automation overridden by
-// hand. From tests/test_groups_model.py, tests/test_sends_model.py,
-// tests/test_resampling_model.py, tests/test_midi_model.py and
-// tests/test_ui_smoke.py (their engine parts), the changes made as the editor
-// makes them (the model's commands).
+// hand. The changes are made as the editor makes them (the model's commands).
 
 #include "BridgeTestSupport.h"
 #include "TestSupport.h"

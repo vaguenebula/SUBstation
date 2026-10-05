@@ -3,12 +3,12 @@ import QtQuick.Controls
 import QtQuick.Templates as T
 import SUBstation
 
-// The selected band's controls (eq.py's BandPanel): its number in its colour,
-// its on/off switch and delete button; its type (a button per type, its shape
-// drawn); Freq, Gain (bells, shelves and tilts only) and Q knobs in its colour;
-// its slope (cuts and shelves) and placement. Without a band selected, a hint.
-// Every change goes through the graph (one undo step per drag); the knobs touch
-// their parameter and show its automation, and right-click gives its menu.
+// The selected band's controls: its number in its colour, its on/off switch and
+// delete button; its type (a button per type, its shape drawn); Freq, Gain
+// (bells, shelves and tilts only) and Q knobs in its colour; its slope (cuts
+// and shelves) and placement. Without a band selected, a hint. Every change
+// goes through the graph (one undo step per drag); the knobs touch their
+// parameter and show its automation, and right-click gives its menu.
 Item {
     id: panel
 

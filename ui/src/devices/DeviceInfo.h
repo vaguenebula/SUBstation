@@ -1,17 +1,16 @@
 #pragma once
 
-// A device of the track the device view shows, as its frame shows it
-// (frame.py's _DeviceFrame and its subclasses' title bars): what it is called
-// (a rack by its own name, a plug-in by its plug-in's), the title's tooltip (a
-// plug-in's name, vendor, file and latency; a rack's name and latency), whether
-// it is on, folded, an instrument, where it is in its chain (Move Left / Move
-// Right), a plug-in's loading state (loaded, waiting to load, why it isn't),
-// its editor window (open or not), and its sidechain: the button lit while it
-// has one, the tooltip naming the source and where it is taken, and the menu
-// (No Sidechain, the tracks, groups and returns it can come from, those that
-// would close a cycle greyed out; then where it is taken along the source:
-// Pre FX, after each of its effects, Post FX, Post Mixer). It reads the
-// project again whenever what it shows may have changed.
+// A device of the track the device view shows, as its frame and title bar show
+// it: what it is called (a rack by its own name, a plug-in by its plug-in's),
+// the title's tooltip (a plug-in's name, vendor, file and latency; a rack's
+// name and latency), whether it is on, folded, an instrument, where it is in
+// its chain (Move Left / Move Right), a plug-in's loading state (loaded,
+// waiting to load, why it isn't), its editor window (open or not), and its
+// sidechain: the button lit while it has one, the tooltip naming the source and
+// where it is taken, and the menu (No Sidechain, the tracks, groups and returns
+// it can come from, those that would close a cycle greyed out; then where it is
+// taken along the source: Pre FX, after each of its effects, Post FX, Post
+// Mixer). It reads the project again whenever what it shows may have changed.
 //
 //   DeviceInfo { id: info; session: Session; trackId: ...; deviceId: ... }
 //   Text { text: info.name }

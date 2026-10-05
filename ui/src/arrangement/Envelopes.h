@@ -1,11 +1,10 @@
 #pragma once
 
-// Automation lanes in the arrangement (the old automation_lanes.py):
-// envelopes drawn over the timeline and edited with the mouse. Tracks show
-// theirs in their own lanes (over the clips, below the clips' title band) and
-// in lanes below them (ArrangementLanes); the returns and the master in their
-// lanes (BusLane). Both hosts hand their lanes to the functions here as
-// EnvelopeAreas.
+// Automation lanes in the arrangement: envelopes drawn over the timeline and
+// edited with the mouse. Tracks show theirs in their own lanes (over the clips,
+// below the clips' title band) and in lanes below them (ArrangementLanes); the
+// returns and the master in their lanes (BusLane). Both hosts hand their lanes
+// to the functions here as EnvelopeAreas.
 //
 // In a lane (as in Ableton):
 // - A press on the envelope's line adds a breakpoint on it (on the grid when

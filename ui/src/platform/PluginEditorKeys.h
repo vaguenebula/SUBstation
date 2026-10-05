@@ -1,7 +1,6 @@
 #pragma once
 
-// The main window's shortcuts while a plug-in's editor has the focus
-// (plugin_keys.py).
+// The main window's shortcuts while a plug-in's editor has the focus.
 //
 // Plug-in editors are plain Win32 windows (the engine's EditorWindow.cpp,
 // window class kEditorWindowClass), so Qt never sees their keys as key events,

@@ -1,7 +1,7 @@
 #pragma once
 
-// The rotary knob (knob.py), drawn on the scene graph; Knob.qml wraps it with
-// its tooltip and the small text field typing opens.
+// The rotary knob, drawn on the scene graph; Knob.qml wraps it with its tooltip
+// and the small text field typing opens.
 //
 // Drag vertically (the cursor hides meanwhile): kDragPixels for the whole
 // range, kFineDragPixels with Shift; pressing or letting go of Shift mid-drag

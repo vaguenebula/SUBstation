@@ -1,6 +1,6 @@
 #pragma once
 
-// Stereo peak meter with a falling display (meter.py): -60 to +6 dB, falling
+// Stereo peak meter with a falling display: -60 to +6 dB, falling
 // kFallPerUpdate of the scale per update (updates come at about 30 Hz), with a
 // clip light at full scale that a click clears. Levels (linear peaks) are
 // pushed with setLevels() once per meter update, e.g. from the app layer's

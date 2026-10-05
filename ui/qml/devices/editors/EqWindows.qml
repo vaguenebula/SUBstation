@@ -1,10 +1,10 @@
 pragma Singleton
 import QtQuick
 
-// The EQ windows (eq.py's _WINDOWS and open_window): one per device, made or
-// brought to the front; a window that closes is forgotten (and destroyed).
-// (EqWindow.qml is loaded when the first one opens: a singleton naming the
-// module's types would depend on the module it is part of.)
+// The EQ windows: one per device, made or brought to the front; a window that
+// closes is forgotten (and destroyed). (EqWindow.qml is loaded when the first
+// one opens: a singleton naming the module's types would depend on the module
+// it is part of.)
 QtObject {
     id: windows
 

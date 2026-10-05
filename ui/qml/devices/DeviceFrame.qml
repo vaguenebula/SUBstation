@@ -3,8 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import SUBstation
 
-// A device in the device view (frame.py's _DeviceFrame, with
-// device_widgets.py's kinds): its frame (PANEL_ALT, a BORDER line, ACCENT
+// A device in the device view: its frame (PANEL_ALT, a BORDER line, ACCENT
 // while selected), its title bar (lighter while selected: the fold triangle,
 // the on/off switch, the name with its tooltip, a plug-in's editor button,
 // the sidechain button of a device with a sidechain input, the page arrows

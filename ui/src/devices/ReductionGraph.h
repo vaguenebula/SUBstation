@@ -1,11 +1,11 @@
 #pragma once
 
-// The Compressor's graph (compressor.py's ReductionGraph): the gain reduction
-// over the last kHistory display values (about 1.3 s at 48 kHz), growing
-// downward to 24 dB and filled with a gradient; an In meter of what keys it,
-// the threshold marked by an accent notch; an Out meter (both -60 to 0 dBFS);
-// and the current reduction and the threshold in figures. It reads the
-// device's displays "reduction", "input" and "output" as the meters update.
+// The Compressor's graph: the gain reduction over the last kHistory display
+// values (about 1.3 s at 48 kHz), growing downward to 24 dB and filled with a
+// gradient; an In meter of what keys it, the threshold marked by an accent
+// notch; an Out meter (both -60 to 0 dBFS); and the current reduction and the
+// threshold in figures. It reads the device's displays "reduction", "input" and
+// "output" as the meters update.
 
 #include "devices/DeviceCanvas.h"
 

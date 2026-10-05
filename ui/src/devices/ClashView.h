@@ -1,9 +1,9 @@
 #pragma once
 
-// The kick's spectrum against the input's, and where they clash
-// (sidechain.py's ClashView): the kick in orange, the input in blue, in pink
-// where both are loud, the clash band marked. It draws its CurveGraph's fit; a
-// click fits the curve (CurveGraph::fitNow).
+// The kick's spectrum against the input's, and where they clash: the kick in
+// orange, the input in blue, in pink where both are loud, the clash band
+// marked. It draws its CurveGraph's fit; a click fits the curve
+// (CurveGraph::fitNow).
 
 #include "devices/CurveGraph.h"
 #include "sg/SgCanvas.h"

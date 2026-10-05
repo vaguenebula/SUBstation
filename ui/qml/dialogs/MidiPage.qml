@@ -56,7 +56,7 @@ ColumnLayout {
                     leftPadding: input.indicator.width + input.spacing
                     text: input.text
                     font: input.font
-                    // (dialogs.py's red for an input that failed to open)
+                    // (the Python UI's red for an input that failed to open)
                     color: input.modelData.error ? "#ff6b5e" : Theme.text
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight

@@ -4,8 +4,9 @@
 // implemented (Vst3Format); CLAP would be another implementation.
 //
 // Hosting notes:
-//  * Scanning loads plug-in code, so the UI runs it in a child process: a
-//    crashing plug-in cannot take the DAW down (substation/plugins/scanner.py).
+//  * Scanning loads plug-in code, so the app runs it in a child process
+//    (substation-scan, tools/scanner): a crashing plug-in cannot take the DAW
+//    down.
 //  * Plug-ins are created, configured and destroyed on the main thread.
 //  * Main-thread work plug-ins ask for (restarts, parameter updates, editor
 //    events) is done in Engine::idle(), which the UI calls on a timer.

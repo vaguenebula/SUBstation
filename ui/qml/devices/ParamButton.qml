@@ -1,11 +1,11 @@
 import QtQuick
 import SUBstation
 
-// A small button bound to a built-in device's parameter (delay.py's _toggle
-// and _choice): an on/off switch (`choice` -1: lit while the parameter is on, a
-// click switches it) or one of a list's values (lit while the parameter is
-// that one, a click chooses it). It touches the parameter when pressed, and
-// right-click gives its menu. Its lit state always follows the parameter.
+// A small button bound to a built-in device's parameter: an on/off switch
+// (`choice` -1: lit while the parameter is on, a click switches it) or one of a
+// list's values (lit while the parameter is that one, a click chooses it). It
+// touches the parameter when pressed, and right-click gives its menu. Its lit
+// state always follows the parameter.
 Item {
     id: control
 

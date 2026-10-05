@@ -82,7 +82,7 @@ private Q_SLOTS:
         QVERIFY(warnings.isEmpty());
     }
 
-    // As transport_bar.py laid it out: 40 px, every control 28 px, PANEL with a BORDER line below.
+    // As the Python UI laid it out: 40 px, every control 28 px, PANEL with a BORDER line below.
     void layout() {
         QCOMPARE(bar_->height(), 40.0);
         for (const char* name : {"tempo", "numerator", "denominator", "metronome", "key", "computerKeys", "position",

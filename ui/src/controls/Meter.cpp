@@ -13,7 +13,7 @@ namespace sub::ui {
 
 Meter::Meter(QQuickItem* parent) : SgCanvas(parent) {
     setAcceptedMouseButtons(Qt::AllButtons);
-    setImplicitSize(10, 40);  // meter.py's sizeHint (at least 8 wide)
+    setImplicitSize(10, 40);  // at least 8 wide, as the Python UI's meter
 }
 
 double Meter::fraction(double level) {

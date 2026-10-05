@@ -3,9 +3,8 @@
 // faders and nested devices automated, and overridden by hand; macros moving
 // plug-in parameters; sidechains; presets (a plug-in's renders as its device,
 // a built-in device's reaches the engine, a missing plug-in, a new plug-in's
-// default state). From tests/test_racks_model.py, tests/test_sidechain_model.py
-// and tests/test_presets.py (their engine parts), the changes made as the editor
-// makes them (the model's commands). Plug-in parts skip without the test plug-ins.
+// default state). The changes are made as the editor makes them (the model's
+// commands). Plug-in parts skip without the test plug-ins.
 
 #include "BridgeTestSupport.h"
 #include "TestSupport.h"

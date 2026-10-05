@@ -2,15 +2,15 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The Delay's editor (delay.py's DelayWidget), laid out as Ableton's: each
-// side's time (Sync on: a grid of sixteenths and an offset; off: a time knob)
-// and the link between them (the right side greyed out while linked); the
-// filter on the echoes (FilterGraph: a curve to drag across for its frequency,
-// up and down for its width, over a spectrum of the input) with its switch,
-// frequency and width; the mode the time changes in and ping pong; and on the
-// right the feedback with its freeze, over the dry/wet mix. Every control
-// shows its parameter as it is now (its automation's value while that plays),
-// sets it undoably, touches it when pressed, and right-click gives its menu.
+// The Delay's editor, laid out as Ableton's: each side's time (Sync on: a grid
+// of sixteenths and an offset; off: a time knob) and the link between them (the
+// right side greyed out while linked); the filter on the echoes (FilterGraph: a
+// curve to drag across for its frequency, up and down for its width, over a
+// spectrum of the input) with its switch, frequency and width; the mode the
+// time changes in and ping pong; and on the right the feedback with its freeze,
+// over the dry/wet mix. Every control shows its parameter as it is now (its
+// automation's value while that plays), sets it undoably, touches it when
+// pressed, and right-click gives its menu.
 Item {
     id: editor
 

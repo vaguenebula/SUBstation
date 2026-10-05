@@ -1,7 +1,7 @@
 #pragma once
 
-// The piano roll's note area (piano_roll/note_grid.py): a row per key, the
-// grid, the notes, and editing them.
+// The piano roll's note area: a row per key, the grid, the notes, and editing
+// them.
 //
 // Mouse: double-click to add a note (one grid step long) or to delete one;
 // drag a note to move it (Ctrl copies, Alt bypasses the grid), drag either end

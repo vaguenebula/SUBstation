@@ -4,9 +4,8 @@
 // moved plug-ins, devices keeping their processor (and state) as they move,
 // what plug-ins report (edits for undo only from a shown editor), editors as far
 // as they work without windows, automating plug-in parameters, and effects on
-// the master. From tests/test_ui_plugins.py and tests/test_ui_rendering.py
-// (their bridge parts), the changes made as the editor makes them. Skipped
-// without the test plug-ins.
+// the master. The changes are made as the editor makes them. Skipped without
+// the test plug-ins.
 
 #include "BridgeTestSupport.h"
 #include "TestSupport.h"

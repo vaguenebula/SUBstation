@@ -2,12 +2,12 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A built-in device parameter's right-click menu (frame.py's _automation_menu):
-// Show Automation (if it can be automated), Delete Automation (if it has an
-// envelope), Re-Enable Automation (while its automation is overridden) and,
-// on a device inside a rack, Map to Macro (the rack's eight, the one it is
-// mapped to checked) and Unmap from Macro N. Its entries are made for how
-// things are when it opens: show() fills it and pops it up at the mouse.
+// A built-in device parameter's right-click menu: Show Automation (if it can be
+// automated), Delete Automation (if it has an envelope), Re-Enable Automation
+// (while its automation is overridden) and, on a device inside a rack, Map to
+// Macro (the rack's eight, the one it is mapped to checked) and Unmap from
+// Macro N. Its entries are made for how things are when it opens: show() fills
+// it and pops it up at the mouse.
 DynamicMenu {
     id: menu
 

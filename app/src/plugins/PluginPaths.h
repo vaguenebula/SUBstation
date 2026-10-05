@@ -1,7 +1,6 @@
 #pragma once
 // Where VST3 plug-ins are looked for and the files found there, the scan
-// cache's place, and how a file's errors read for the user (the free functions
-// of the old scanner.py).
+// cache's place, and how a file's errors read for the user.
 
 #include <QString>
 #include <QStringList>

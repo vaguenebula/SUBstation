@@ -1,9 +1,8 @@
 #pragma once
 
-// The arrangement's vertical layout (the old arrangement/view_state.py's
-// TrackLayout, Row, LaneRow and automation_rows): a row per track of the
-// arrangement, in content coordinates (0 at the top of the first track, before
-// scrolling), and the rows of the returns and the master.
+// The arrangement's vertical layout: a row per track of the arrangement, in
+// content coordinates (0 at the top of the first track, before scrolling), and
+// the rows of the returns and the master.
 //
 // Rows stay one per track, in order, hidden or not, so a row's index is the
 // track's index in Project::tracks(). A track in a folded group has a row too,

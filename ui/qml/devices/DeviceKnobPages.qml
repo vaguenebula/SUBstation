@@ -1,10 +1,10 @@
 import QtQuick
 import SUBstation
 
-// The body of a built-in device without an editor of its own
-// (device_widgets.py's DeviceWidget in its frame): a knob per parameter (or a
-// list), four to a page in a 2×2 grid (PARAMS_PER_PAGE, PARAM_COLUMNS), the
-// device's title bar paging through them (`pages`, `page`, as an editor's).
+// The body of a built-in device without an editor of its own: a knob per
+// parameter (or a list), four to a page in a 2×2 grid (PARAMS_PER_PAGE,
+// PARAM_COLUMNS), the device's title bar paging through them (`pages`, `page`,
+// as an editor's).
 Item {
     id: body
 

@@ -2,11 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A captioned knob with a value readout (clip_view.py's KnobControl), for one
-// of the controller's knobs ("transpose", "detune", "gain", "pan"). With
-// several clips it sits on the first clip's value and the readout shows the
-// range of values; turning it moves every clip by the same amount. When not
-// `active` (Re-Pitch) it is greyed out, its tooltip saying why.
+// A captioned knob with a value readout, for one of the controller's knobs
+// ("transpose", "detune", "gain", "pan"). With several clips it sits on the
+// first clip's value and the readout shows the range of values; turning it
+// moves every clip by the same amount. When not `active` (Re-Pitch) it is
+// greyed out, its tooltip saying why.
 Item {
     id: control
 

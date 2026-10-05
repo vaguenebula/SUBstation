@@ -4,9 +4,6 @@
 // and pasting clips, automation and tracks (one clipboard), groups, return
 // tracks, duplicating tracks, inserting tracks after the selected one, reversing
 // clips (at once, and in the background), and what the engine plays.
-// From tests/test_ui_smoke.py, test_ui_clip_edits.py, test_ui_groups.py,
-// test_ui_sends.py and test_duplicate_tracks_copy_automation.py (their
-// behaviour, without the widgets).
 
 #include "EditorFixture.h"
 #include "SessionFixture.h"
@@ -103,7 +100,7 @@ double maxAbs(const std::vector<float>& out, int64_t fromFrame, int64_t toFrame)
 }
 
 // Three audio tracks A, B, C with a clip each ("c0" at 0, "c1" at 4, "c2" at
-// 8, of a file that isn't there): test_ui_groups.py's make_tracks.
+// 8, of a file that isn't there).
 QStringList makeTracks(SessionFixture& f, int count = 3) {
     QStringList ids;
     for (int i = 0; i < count; ++i) {
@@ -125,7 +122,7 @@ private Q_SLOTS:
     void initTestCase() { test::prepareApplication(); }
     void init() { QSettings().clear(); }
 
-    // --- test_ui_smoke.py ---
+    // --- Editing, the clipboard and the transport ---
 
     void theEngineMirrorsTheArrangement() {
         SessionFixture f(true);
@@ -357,7 +354,7 @@ private Q_SLOTS:
         QCOMPARE(s.statusTimeout(), 8000);
     }
 
-    // --- test_ui_clip_edits.py ---
+    // --- Reversing clips, time selections ---
 
     void rReversesTheSelectedAudioClipsAndAgainPutsThemBack() {
         TempDir dir;
@@ -586,7 +583,7 @@ private Q_SLOTS:
         QCOMPARE(*f.selection().timeRange(), (TimeRange{0.0, 4.0, {group, a, b, c}}));
     }
 
-    // --- test_ui_groups.py ---
+    // --- Groups ---
 
     void ctrlGGroupsTheSelectedTracksAndCtrlShiftGUngroups() {
         SessionFixture f;
@@ -726,7 +723,7 @@ private Q_SLOTS:
         QVERIFY(!f.selection().points());
     }
 
-    // --- test_ui_sends.py ---
+    // --- Return tracks and solo ---
 
     void ctrlAltTInsertsAReturn() {
         SessionFixture f;
@@ -780,7 +777,7 @@ private Q_SLOTS:
         QVERIFY(!f.project().track(a).solo && !f.project().track(b).solo && !f.project().track(ret).solo);
     }
 
-    // --- test_duplicate_tracks_copy_automation.py ---
+    // --- Duplicating tracks, copying automation ---
 
     void ctrlDDuplicatesTheSelectedTracks() {
         SessionFixture f;

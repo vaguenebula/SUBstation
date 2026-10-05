@@ -1,10 +1,7 @@
 // The dialogs (ui/qml/dialogs) on a real session: Preferences' pages driving
-// their controllers (tests/test_ui_smoke.py's test_header_controls_and_dialogs
-// and test_audio_threads_preference, test_ui_recording.py's MIDI page,
-// test_ui_plugins.py's test_plugin_folders_in_preferences), Export Audio's
-// choices, the render progress (tests/test_ui_rendering.py's and
-// test_ui_freeze.py's dialog parts: modal, its label and bar, Cancel taking no
-// focus, Esc cancelling, "Cancelling…"), and the message boxes' buttons and
+// their controllers (audio threads, MIDI inputs, plug-in folders), Export
+// Audio's choices, the render progress (modal, its label and bar, Cancel taking
+// no focus, Esc cancelling, "Cancelling…"), and the message boxes' buttons and
 // keys. Runs on a display (xvfb here). With $SUBSTATION_SCREENS set, it saves
 // screenshots there.
 

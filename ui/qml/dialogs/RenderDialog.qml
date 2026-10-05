@@ -4,10 +4,10 @@ import QtQuick.Layouts
 import SUBstation
 
 // A render in the background (exporting, freezing, reversing long clips): its
-// progress, with Cancel (rendering.py's RenderProgress). It shows while
-// Session.render is active, and it is modal: the window goes on meanwhile (it
-// repaints, its meters move) but takes no edits, its shortcuts included,
-// since the render is of the project as it was when it started.
+// progress, with Cancel. It shows while Session.render is active, and it is
+// modal: the window goes on meanwhile (it repaints, its meters move) but takes
+// no edits, its shortcuts included, since the render is of the project as it
+// was when it started.
 //
 // Cancel (the button, or Esc) only asks the render to stop: the label says
 // "Cancelling…" and Cancel is disabled until it has, then the dialog goes.

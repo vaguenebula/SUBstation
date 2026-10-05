@@ -2,8 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The master output's oscilloscope (OscilloscopeItem, from oscilloscope.py),
-// 150 x 30, with its tooltip. Give it a `feed` (scopeWritten, scopeSamples()).
+// The master output's oscilloscope (OscilloscopeItem), 150 x 30, with its
+// tooltip. Give it a `feed` (scopeWritten, scopeSamples()).
 OscilloscopeItem {
     HoverHandler {
         id: hover

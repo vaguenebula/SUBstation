@@ -1,10 +1,9 @@
 #pragma once
 
-// The Delay's filter (delay.py's FilterGraph): the band-pass's response on a
-// 20 Hz..20 kHz log axis, its dot dragged across for the frequency and up and
-// down for the width (one undo step per drag), over a spectrum of the device's
-// display "input" (a 4096-point Hann FFT of the latest samples, falling 1 dB a
-// refresh).
+// The Delay's filter: the band-pass's response on a 20 Hz..20 kHz log axis, its
+// dot dragged across for the frequency and up and down for the width (one undo
+// step per drag), over a spectrum of the device's display "input" (a 4096-point
+// Hann FFT of the latest samples, falling 1 dB a refresh).
 
 #include "devices/DeviceCanvas.h"
 

@@ -1,10 +1,10 @@
-// The piano roll (tests/test_ui_midi.py's piano roll parts), driven through
-// the clip view the way a user would: a MIDI track with the Synth and a
-// one-bar clip at beat 4 opened in it; notes drawn and heard, dragged to move,
-// resize and copy; the notes' keys taking precedence over the window's
-// shortcuts; the rubber band, the keys and the velocity lane; Alt+wheel and
-// Ctrl+Alt drags; the note tools floating by notes selected by dragging. Runs
-// on a display (xvfb here). With $SUBSTATION_UI_SCREENSHOTS set, it saves screenshots there.
+// The piano roll, driven through the clip view the way a user would: a MIDI
+// track with the Synth and a one-bar clip at beat 4 opened in it; notes drawn
+// and heard, dragged to move, resize and copy; the notes' keys taking
+// precedence over the window's shortcuts; the rubber band, the keys and the
+// velocity lane; Alt+wheel and Ctrl+Alt drags; the note tools floating by notes
+// selected by dragging. Runs on a display (xvfb here). With
+// $SUBSTATION_UI_SCREENSHOTS set, it saves screenshots there.
 
 #include <QQuickItem>
 #include <QQuickWindow>

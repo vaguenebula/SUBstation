@@ -2,10 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The Compressor's editor (compressor.py's CompressorWidget): every knob on
-// one page, four to a row, and beside them its graph (ReductionGraph): the gain
-// reduction over the last second, the In meter (the threshold marked) and the
-// Out meter, reading the device's displays as the meters update.
+// The Compressor's editor: every knob on one page, four to a row, and beside
+// them its graph (ReductionGraph): the gain reduction over the last second, the
+// In meter (the threshold marked) and the Out meter, reading the device's
+// displays as the meters update.
 Item {
     id: editor
 

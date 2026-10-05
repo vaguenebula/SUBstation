@@ -1,10 +1,10 @@
 import QtQuick
 import SUBstation
 
-// A rack's chain shown beside the rack (panel.py's _ChainView): its devices,
-// in an accent bracket, where they are selected, dragged and dropped onto as
-// on the track's own chain (racks in it show theirs further along); "Drop
-// devices here" while it has none.
+// A rack's chain shown beside the rack: its devices, in an accent bracket,
+// where they are selected, dragged and dropped onto as on the track's own chain
+// (racks in it show theirs further along); "Drop devices here" while it has
+// none.
 Item {
     id: view
 

@@ -1,9 +1,9 @@
 #pragma once
 
-// A rack's chains, as its chain list shows them (rack_view.py's ChainList):
-// their ids in order (the list makes its rows again only when they change),
-// and the one the device view shows beside the rack (the one last clicked,
-// else the first: DeviceSelection::shownChain).
+// A rack's chains, as its chain list shows them: their ids in order (the list
+// makes its rows again only when they change), and the one the device view
+// shows beside the rack (the one last clicked, else the first:
+// DeviceSelection::shownChain).
 //
 //   RackChains { id: chains; session: Session; trackId: ...; rackId: ... }
 //   Repeater { model: chains.chainIds; ... }

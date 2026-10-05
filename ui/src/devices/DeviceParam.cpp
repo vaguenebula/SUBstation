@@ -186,7 +186,7 @@ QString DeviceParam::format(double value) const {
 }
 
 QVariant DeviceParam::parse(const QString& text) const {
-    if (unit() == QLatin1String("Hz")) {  // delay.py's _parse_frequency: "1.5k", "1500 Hz", "2 kHz"
+    if (unit() == QLatin1String("Hz")) {  // a frequency: "1.5k", "1500 Hz", "2 kHz"
         QString cleaned = text.trimmed().toLower();
         if (cleaned.endsWith(QLatin1String("hz")))
             cleaned = cleaned.chopped(2).trimmed();

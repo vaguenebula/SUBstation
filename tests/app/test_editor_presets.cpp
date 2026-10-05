@@ -1,6 +1,6 @@
 // Presets through the editor: loading a preset into a device of its kind (one
 // undo step), new devices starting as their default preset, and racks named as
-// the preset they come from (the editor parts of tests/test_presets.py).
+// the preset they come from.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

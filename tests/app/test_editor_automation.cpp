@@ -1,7 +1,6 @@
 // Automation through the editor: undoable envelope edits, range edits across
 // lanes, deleted devices' automation, touched parameters, the lanes shown,
-// saving, and automation moving (or copied) with clips unless it is locked
-// (the editor parts of tests/test_automation_model.py).
+// saving, and automation moving (or copied) with clips unless it is locked.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"

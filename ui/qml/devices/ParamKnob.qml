@@ -2,10 +2,10 @@ import QtQuick
 import SUBstation
 
 // A knob bound to a built-in device's parameter (a DeviceParam), as the
-// device editors bind theirs (delay.py's _bind): it shows the value as it is
-// now and its automation dot, sets it through the editor (one undo step per
-// drag), touches it when pressed, and right-click gives its menu. `size` is
-// the knob's; the range, scale and default are the parameter's unless set.
+// device editors bind theirs: it shows the value as it is now and its
+// automation dot, sets it through the editor (one undo step per drag), touches
+// it when pressed, and right-click gives its menu. `size` is the knob's; the
+// range, scale and default are the parameter's unless set.
 Item {
     id: control
 

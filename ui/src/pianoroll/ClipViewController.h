@@ -1,14 +1,13 @@
 #pragma once
 
-// What the clip view shows and does (clip_view.py's ClipView without its
-// widgets; ClipView.qml lays it out). It is given clips (`trackId`,
-// `clipIds`, `leadClipId`) and shows them top track first, then by time. If
-// the lead clip (the one double-clicked; by default the first) is a MIDI clip,
-// it alone opens, in the piano roll; otherwise every audio clip among them
-// opens together: their settings on the left, their waveforms on the right.
-// Deleted clips (or tracks) are dropped; when none are left, or the project
-// is reset, it asks to be closed (closeRequested). It shows them only while
-// `active` (the view shown): becoming active opens them afresh (the piano
+// What the clip view shows and does (ClipView.qml lays it out). It is given
+// clips (`trackId`, `clipIds`, `leadClipId`) and shows them top track first,
+// then by time. If the lead clip (the one double-clicked; by default the first)
+// is a MIDI clip, it alone opens, in the piano roll; otherwise every audio clip
+// among them opens together: their settings on the left, their waveforms on the
+// right. Deleted clips (or tracks) are dropped; when none are left, or the
+// project is reset, it asks to be closed (closeRequested). It shows them only
+// while `active` (the view shown): becoming active opens them afresh (the piano
 // roll fitted to the clip again), and going inactive forgets them, as the old
 // view's open_clips and close_view did.
 //

@@ -1,11 +1,10 @@
 #pragma once
 
-// The time axis the arrangement and the piano roll share (the old
-// arrangement/view_state.py's ViewState and arrangement/grid.py): zoom,
-// horizontal scroll and the adaptive grid, in beats (the arrangement's, or a
-// clip's content beats in the piano roll), and the vertical scroll in pixels;
-// the grid lines the rulers, the lanes, the notes and the velocities draw, and
-// the loop region.
+// The time axis the arrangement and the piano roll share: zoom, horizontal
+// scroll and the adaptive grid, in beats (the arrangement's, or a clip's
+// content beats in the piano roll), and the vertical scroll in pixels; the grid
+// lines the rulers, the lanes, the notes and the velocities draw, and the loop
+// region.
 //
 // Time is in beats everywhere in the UI; seconds only come in through the
 // tempo. beatToX(beat) = (beat - scrollBeats) * pxPerBeat. Vertical positions

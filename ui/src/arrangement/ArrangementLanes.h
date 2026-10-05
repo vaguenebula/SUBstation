@@ -1,11 +1,11 @@
 #pragma once
 
-// The track lanes (the old lanes_canvas.py's LanesCanvas): clips, grid, loop
-// region, and all clip mouse editing; and the tracks' automation, over their
-// clips and in lanes below them (Envelopes.h). A group's lane shows a summary
-// of the clips of the tracks in it (folded or not); the tracks in a folded
-// group have no lane. The playhead and the takes being recorded are items of
-// their own above it (ArrangementPlayhead, LiveTakes): they change every frame.
+// The track lanes: clips, grid, loop region, and all clip mouse editing; and
+// the tracks' automation, over their clips and in lanes below them
+// (Envelopes.h). A group's lane shows a summary of the clips of the tracks in
+// it (folded or not); the tracks in a folded group have no lane. The playhead
+// and the takes being recorded are items of their own above it
+// (ArrangementPlayhead, LiveTakes): they change every frame.
 //
 // Painting, in order: each row's background (lighter if its track is
 // selected); the grid all the way down (below the tracks too, where selecting

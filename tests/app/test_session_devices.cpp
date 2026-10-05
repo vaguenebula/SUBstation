@@ -6,8 +6,6 @@
 // library (the browser lists them), loading them as new devices, into devices
 // of their kind, onto tracks, default presets, renaming them in the browser,
 // and the preset index watching the library.
-// From tests/test_ui_device_view.py, test_ui_racks.py and test_ui_presets.py
-// (their behaviour, without the widgets).
 
 #include "SessionFixture.h"
 #include "TestSupport.h"
@@ -45,7 +43,7 @@ QStringList kinds(const std::vector<Device>& devices) {
     return list;
 }
 
-// A new audio track (Ctrl+T), selected, with these devices: test_ui_device_view.py's shown_track.
+// A new audio track (Ctrl+T), selected, with these devices.
 std::pair<QString, QStringList> shownTrack(SessionFixture& f, const QStringList& deviceKinds) {
     const QString track = f.s().insertAudioTrack();
     f.selection().selectTrack(track);

@@ -5,8 +5,6 @@
 // the track menu's freeze actions, flattening; and a project's plug-ins
 // loading after it opens (the selected track's first; renders wait for them;
 // saved meanwhile, they keep their state).
-// From tests/test_ui_rendering.py and test_ui_freeze.py (their behaviour,
-// without the widgets).
 
 #include "BridgeTestSupport.h"
 #include "SessionFixture.h"
@@ -53,7 +51,7 @@ QString dcWav(const TempDir& dir, const QString& name = QStringLiteral("dc.wav")
     return test::writeWav(dir.path(name), std::vector<float>(2 * kRate, 0.5f), 2);
 }
 
-// An audio track playing `wav` from `startBeat`, with a utility: test_ui_freeze.py's audio_track.
+// An audio track playing `wav` from `startBeat`, with a utility.
 QString freezable(SessionFixture& f, const QString& wav, const QString& name = QStringLiteral("A"),
                   double startBeat = 0.0) {
     const QString track = f.clipTrack(wav, 1.0, name, startBeat);

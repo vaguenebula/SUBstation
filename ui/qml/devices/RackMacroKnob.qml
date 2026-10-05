@@ -2,10 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// One of a rack's macros (rack_view.py's MacroPanel cell): "Macro N" over its
-// knob (0..1), the name lit while something is mapped to it; the knob's
-// tooltip lists what it moves. Turning it sets them (one undo step per drag);
-// right-click to unmap one of them.
+// One of a rack's macros: "Macro N" over its knob (0..1), the name lit while
+// something is mapped to it; the knob's tooltip lists what it moves. Turning it
+// sets them (one undo step per drag); right-click to unmap one of them.
 Item {
     id: cell
 

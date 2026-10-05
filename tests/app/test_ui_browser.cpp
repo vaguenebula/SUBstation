@@ -1,11 +1,10 @@
-// The browser panel (BrowserPanel.qml) on a real session (the browser parts
-// of tests/test_ui_smoke.py, tests/test_ui_presets.py's and the panel's side
-// of tests/test_browser_*.py): the sidebar, searching, Enter and Down from the
-// search field, previews (stopped by a press outside the browser), activating
-// results, the selection and what a drag carries, keeping the list's place,
-// paging, the sort, used items ranking first, a place's folder tree, the
-// context menus, adding places, renaming and deleting presets. Runs on a
-// display (xvfb here). With $SUBSTATION_SCREENS set, it saves screenshots.
+// The browser panel (BrowserPanel.qml) on a real session: the sidebar,
+// searching, Enter and Down from the search field, previews (stopped by a press
+// outside the browser), activating results, the selection and what a drag
+// carries, keeping the list's place, paging, the sort, used items ranking
+// first, a place's folder tree, the context menus, adding places, renaming and
+// deleting presets. Runs on a display (xvfb here). With $SUBSTATION_SCREENS
+// set, it saves screenshots.
 
 #include <QDir>
 #include <QFileInfo>

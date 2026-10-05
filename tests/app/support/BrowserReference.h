@@ -1,9 +1,9 @@
 #pragma once
 // The browser's index and search as they were in Python, before the native
-// backend (browser/src) replaced them: tests/browser_reference.py, ported. It is
-// the reference the native backend has to agree with, item for item and in the
-// same order (test_browser_native.cpp), and what the browser benchmark checks
-// every query against (benchmarks/browser_backend_bench.cpp).
+// backend (browser/src) replaced them: the Python suite's reference, ported. It
+// is the reference the native backend has to agree with, item for item and in
+// the same order (test_browser_native.cpp), and what the browser benchmark
+// checks every query against (benchmarks/browser_backend_bench.cpp).
 //
 // Python's text rules come from the backend's own ports of them (pyLower,
 // pyCasefold, pySplit, wordStarts in browser/src/Text.h), which the tests

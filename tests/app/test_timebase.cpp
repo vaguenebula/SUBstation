@@ -1,4 +1,4 @@
-// Musical time: positions, bar labels, dB and pan text (tests/test_timebase.py).
+// Musical time: positions, bar labels, dB and pan text.
 
 #include "TestSupport.h"
 

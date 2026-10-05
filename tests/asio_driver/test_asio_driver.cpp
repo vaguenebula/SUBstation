@@ -1,4 +1,4 @@
-// SUB Test ASIO: a fake ASIO driver for the tests (tests/test_asio.py).
+// SUB Test ASIO: a fake ASIO driver for the tests.
 //
 // It is an in-process COM object like a real driver, loaded through
 // SUBSTATION_ASIO_DRIVERS rather than registered. Once started, a thread calls
@@ -6,12 +6,13 @@
 // test drives it instead, a buffer at a time (SubTestAsio_Process), so that
 // what the host plays can be checked sample by sample.
 //
-// Functions exported for ctypes (test_asio_driver.def) configure the next
-// driver instance, set what its inputs deliver, send the host driver messages,
-// and read back the bytes the host wrote to its outputs, or loop an output back
-// to an input as a cable would (SubTestAsio_SetLoopback). Its sample formats are
-// encoded here independently of the engine's conversions, which the tests
-// check against numpy's decoding.
+// Functions exported for the tests (test_asio_driver.def;
+// tests/engine/harness/AsioDriver.h) configure the next driver instance, set
+// what its inputs deliver, send the host driver messages, and read back the
+// bytes the host wrote to its outputs, or loop an output back to an input as a
+// cable would (SubTestAsio_SetLoopback). Its sample formats are encoded here
+// independently of the engine's conversions, which the tests check against
+// their own decoding.
 
 #include <windows.h>
 #include <objbase.h>

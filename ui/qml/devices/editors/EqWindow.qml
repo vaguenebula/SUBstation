@@ -2,11 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The EQ, bigger, in a window of its own (eq.py's EqWindow): the curve over a
-// bar with the selected band's controls, the analyzer reading the displays on
-// a timer of its own. It stays open as the device view changes, is titled
-// after the device's track, and closes when the device goes. EqWindows opens
-// one per device.
+// The EQ, bigger, in a window of its own: the curve over a bar with the
+// selected band's controls, the analyzer reading the displays on a timer of its
+// own. It stays open as the device view changes, is titled after the device's
+// track, and closes when the device goes. EqWindows opens one per device.
 Window {
     id: window
 

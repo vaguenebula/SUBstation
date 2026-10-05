@@ -1,8 +1,8 @@
 #pragma once
 // Python's random.Random, for what the benchmarks used of it: the same numbers
-// from the same seed, so a library made here is the one library_gen.py made
-// (file for file), and the files given use counts are the ones the Python
-// benchmark picked.
+// from the same seed, so a library made here is the one the Python benchmarks'
+// generator made (file for file), and the files given use counts are the ones
+// the Python benchmark picked.
 //
 // Mersenne Twister seeded as CPython seeds it from an integer (init_by_array
 // with the integer's 32-bit words), and Python 3's random.py on top of it:

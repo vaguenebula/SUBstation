@@ -1,7 +1,7 @@
 #pragma once
 
-// A filter type's button face (eq.py's TypeButton): its shape drawn small,
-// in the band's colour while checked.
+// A filter type's button face: its shape drawn small, in the band's colour
+// while checked.
 
 #include "sg/SgCanvas.h"
 

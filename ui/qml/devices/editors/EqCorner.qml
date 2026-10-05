@@ -1,9 +1,8 @@
 import QtQuick
 import SUBstation
 
-// A knob in a corner of the EQ's curve (eq.py's EqEditor._corner): Scale at
-// the bottom left, Output at the bottom right, its name and value beside it on
-// a dark rounded plate.
+// A knob in a corner of the EQ's curve: Scale at the bottom left, Output at the
+// bottom right, its name and value beside it on a dark rounded plate.
 Rectangle {
     id: corner
 

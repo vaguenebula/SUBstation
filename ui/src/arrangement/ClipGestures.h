@@ -1,8 +1,7 @@
 #pragma once
 
-// Mouse gestures on the track lanes (the old interactions.py): move or copy a
-// time selection (a selected clip is one too), trim edges, select time, and
-// scroll by hand.
+// Mouse gestures on the track lanes: move or copy a time selection (a selected
+// clip is one too), trim edges, select time, and scroll by hand.
 //
 // Moving and trimming clips are heard as they go: the engine plays what the
 // drag would make of the clips (EngineBridge::previewClips) while the model
