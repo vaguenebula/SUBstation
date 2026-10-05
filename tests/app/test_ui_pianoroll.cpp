@@ -613,6 +613,8 @@ private Q_SLOTS:
         bridge->play();
         if (!bridge->isPlaying()) QSKIP("the engine doesn't play without an audio device here");
         QCOMPARE(roll()->playhead(), std::optional<double>(1.0));
+        session().selection()->setInsert(4.5);
+        test::screenshot(window_, QStringLiteral("piano-roll-playhead"), QRect(0, 0, 400, 120));
         bridge->stop();
         QVERIFY(!roll()->playhead());  // stopped: only the start marker
         bridge->locate(9.0);  // past the clip

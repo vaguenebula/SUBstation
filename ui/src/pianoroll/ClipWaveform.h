@@ -7,14 +7,19 @@
 // clip gets a time ruler (steps at least 70 px apart); several are stacked in
 // bands of at least 40 px, labelled, with "+N more" when they don't fit.
 
+#include "audio/Waveform.h"
+#include "model/Clip.h"
 #include "pianoroll/ClipViewController.h"
 #include "sg/SgCanvas.h"
 #include "session/Session.h"
 
+#include <QColor>
 #include <QPointer>
 #include <QRectF>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
+
+#include <vector>
 
 namespace sub::ui {
 
@@ -47,13 +52,24 @@ protected:
     void paint(SgPainter& painter) override;
 
 private:
+    // A clip as it is drawn: its track's colour, its source (null while it
+    // loads) and why it couldn't be loaded. Worked out on the GUI thread.
+    struct Band {
+        app::Clip clip;
+        QColor color;
+        app::Waveform source;
+        QString loadError;
+    };
+
+    void refreshBands();
     // One clip's source in `area`; its length in seconds (0: not loaded).
-    double drawBand(SgPainter& painter, const app::Clip& clip, const QColor& color, const QRectF& area) const;
+    double drawBand(SgPainter& painter, const Band& band, const QRectF& area) const;
     void drawLabel(SgPainter& painter, const QRectF& band, const QString& name) const;
     void drawRuler(SgPainter& painter, double totalSec) const;
 
     QPointer<app::Session> session_;
     QPointer<ClipViewController> controller_;
+    std::vector<Band> bands_;
 };
 
 }  // namespace sub::ui

@@ -147,19 +147,29 @@ void ClipWaveform::setSession(app::Session* session) {
     if (session_) disconnect(session_->bridge(), nullptr, this, nullptr);
     session_ = session;
     if (session) {
-        connect(session->bridge(), &app::EngineBridge::sourceReady, this, &QQuickItem::update);
-        connect(session->bridge(), &app::EngineBridge::sourceFailed, this, &QQuickItem::update);
+        connect(session->bridge(), &app::EngineBridge::sourceReady, this, &ClipWaveform::refreshBands);
+        connect(session->bridge(), &app::EngineBridge::sourceFailed, this, &ClipWaveform::refreshBands);
     }
     Q_EMIT sessionChanged();
-    update();
+    refreshBands();
 }
 
 void ClipWaveform::setController(ClipViewController* controller) {
     if (controller == controller_) return;
     if (controller_) disconnect(controller_, nullptr, this, nullptr);
     controller_ = controller;
-    if (controller) connect(controller, &ClipViewController::changed, this, &QQuickItem::update);
+    if (controller) connect(controller, &ClipViewController::changed, this, &ClipWaveform::refreshBands);
     Q_EMIT controllerChanged();
+    refreshBands();
+}
+
+void ClipWaveform::refreshBands() {
+    bands_.clear();
+    if (controller_ && session_) {
+        const app::EngineBridge* bridge = session_->bridge();
+        for (const auto& [clip, color] : controller_->audioClips())
+            bands_.push_back({clip, color, bridge->waveform(clip.path), bridge->loadError(clip.path)});
+    }
     update();
 }
 
@@ -177,35 +187,34 @@ QString ClipWaveform::formatTime(double seconds, double step) {
 void ClipWaveform::paint(SgPainter& p) {
     const QRectF rect = p.rect();
     p.fillRect(rect, Theme::kLane);
-    if (!controller_ || !session_) return;
-    const auto& clips = controller_->audioClips();
-    if (clips.empty()) return;
-    if (clips.size() == 1) {
+    if (bands_.empty()) return;
+    if (bands_.size() == 1) {
         const QRectF area(0, kRulerHeight, width(), height() - kRulerHeight);
-        const double totalSec = drawBand(p, clips.front().first, clips.front().second, area);
+        const double totalSec = drawBand(p, bands_.front(), area);
         if (totalSec > 0) drawRuler(p, totalSec);
         return;
     }
-    const double bandHeight = std::max<double>(kMinBandHeight, height() / std::max<size_t>(1, clips.size()));
-    const size_t shown = std::min(clips.size(), static_cast<size_t>(std::max(1.0, std::floor(height() / bandHeight))));
+    const double bandHeight = std::max<double>(kMinBandHeight, height() / static_cast<double>(bands_.size()));
+    const size_t shown = std::min(bands_.size(), static_cast<size_t>(std::max(1.0, std::floor(height() / bandHeight))));
     for (size_t i = 0; i < shown; ++i) {
         const QRectF band(0, static_cast<double>(i) * bandHeight, width(), bandHeight - 1);
-        drawBand(p, clips[i].first, clips[i].second, band);
-        drawLabel(p, band, clips[i].first.name);
+        drawBand(p, bands_[i], band);
+        drawLabel(p, band, bands_[i].clip.name);
         p.fillRect(QRectF(0, band.bottom(), width(), 1), Theme::kBorder);
     }
-    if (shown < clips.size()) {
+    if (shown < bands_.size()) {
         p.drawText(rect.adjusted(0, 0, -8, -4), Qt::AlignRight | Qt::AlignBottom,
-                   QStringLiteral("+%1 more").arg(clips.size() - shown), Theme::kText, uiFont(8));
+                   QStringLiteral("+%1 more").arg(bands_.size() - shown), Theme::kText, uiFont(8));
     }
 }
 
-double ClipWaveform::drawBand(SgPainter& p, const app::Clip& clip, const QColor& color, const QRectF& area) const {
-    const app::EngineBridge* bridge = session_->bridge();
-    const app::Waveform source = bridge->waveform(clip.path);
+double ClipWaveform::drawBand(SgPainter& p, const Band& band, const QRectF& area) const {
+    const app::Clip& clip = band.clip;
+    const QColor& color = band.color;
+    const app::Waveform& source = band.source;
     if (source.isNull() || source.frames() <= 0) {
-        const bool missing = !bridge->loadError(clip.path).isEmpty();
-        p.drawText(area, Qt::AlignCenter, missing ? QStringLiteral("Missing file") : QStringLiteral("Loading…"),
+        p.drawText(area, Qt::AlignCenter,
+                   band.loadError.isEmpty() ? QStringLiteral("Loading…") : QStringLiteral("Missing file"),
                    Theme::kTextDim, uiFont());
         return 0.0;
     }
