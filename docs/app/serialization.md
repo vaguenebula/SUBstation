@@ -6,8 +6,8 @@
 its own files, and preferences are in QSettings (see [engine-bridge.md](engine-bridge.md#settings-storage) and
 [session.md](session.md#settings)).
 
-The format is the one the Python version wrote, unchanged: its keys and structure are the same, so either version
-reads the other's files.
+Files saved by earlier versions of SUBstation load unchanged: the keys and the structure are the same (see
+[versions and migrations](#versions-and-migrations) for what each format version added).
 
 ## Overview
 
@@ -48,8 +48,8 @@ load:  Session::openProject(path)
 
 ## The .gilproj format
 
-UTF-8 JSON, indented. (Qt writes each object's keys in alphabetical order, indented by 4; the Python version kept
-its own order and indented by 2. Neither matters to reading.) Beats are quarter notes; times in seconds are
+UTF-8 JSON, indented. (Qt writes each object's keys in alphabetical order, indented by 4; earlier versions kept their
+own order and indented by 2. Neither matters to reading.) Beats are quarter notes; times in seconds are
 source-audio seconds; volumes are dB; pan is -1..1; automation values are normalized 0..1.
 
 ### Top level
@@ -222,8 +222,8 @@ refusing the file:
 
 A field of the wrong type, or a required one missing, makes the file damaged: `loadProject` throws
 `ProjectFileError("<file name> is damaged: <what>")` (`loadInto`, given JSON rather than a file: "The project is
-damaged: ..."), and a file that isn't JSON "Could not read <file name>: ...". The details read as the Python
-version's did ("could not convert string to float: ...").
+damaged: ..."), and a file that isn't JSON "Could not read <file name>: ...". The details say what was
+wrong ("could not convert string to float: ...").
 
 ## What is saved and what isn't
 
@@ -327,8 +327,8 @@ engine reads and writes them (`EngineBridge::applyPluginState`, `pluginState`), 
 
 - [test_serialization.cpp](../../tests/app/test_serialization.cpp): round trips, the relative path fallback when a
   folder moves, foreign files refused, old warp mode names, older versions loading unchanged (and saving as the
-  current version), the master's devices, inputs, monitoring and arming, what an edited file can't have; files as the
-  Python version wrote them.
+  current version), the master's devices, inputs, monitoring and arming, what an edited file can't have; a file using
+  every feature, as earlier versions wrote it, loading and saving the same.
 - [test_presets.cpp](../../tests/app/test_presets.cpp): the library (saving by name, listing by device, renaming),
   default presets, presets as new devices, rack names.
 - [test_midi_model.cpp](../../tests/app/test_midi_model.cpp): MIDI tracks and inputs round trip.

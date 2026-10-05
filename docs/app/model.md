@@ -55,7 +55,7 @@ session's ([session.md](session.md)).
 | [DeviceState.h](../../app/src/model/DeviceState.h) | `sub::app::deviceState`: a built-in device's state besides its parameters (a sampler's sample), in the engine's text format, base64 in `Device::state` |
 | [RecordedTake.h](../../app/src/model/RecordedTake.h) | `RecordedTake`, `RecordedTakeNote`: what a recording hands the editor |
 | [Errors.h](../../app/src/model/Errors.h) | `EditError` (an edit the user can't make), `ProjectFileError` (a file that can't be read or written); both carry a `QString` message for the user |
-| [Ids.h](../../app/src/model/Ids.h), [OrderedMap.h](../../app/src/model/OrderedMap.h), [Numbers.h](../../app/src/model/Numbers.h) | `newId()`; a map that keeps its keys in insertion order; rounding half to even, Python's floor division, fixed-point text |
+| [Ids.h](../../app/src/model/Ids.h), [OrderedMap.h](../../app/src/model/OrderedMap.h), [Numbers.h](../../app/src/model/Numbers.h) | `newId()`; a map that keeps its keys in insertion order; rounding half to even, floor division that stays exact (`floorDiv`), fixed-point text |
 | [editor/](../../app/src/editor) | `ProjectEditor` ([ProjectEditor.h](../../app/src/editor/ProjectEditor.h)), one source file per area: `EditorTracks.cpp` (tracks, returns and sends, groups, inputs, recordings), `EditorSettings.cpp` (tempo, time signature, key, loop), `EditorClips.cpp` (clips and time selections), `EditorDeviceChains.cpp` (devices in chains), `EditorRacks.cpp` (racks, their chains and macros), `EditorDeviceSettings.cpp` (a device's parameters, state, presets, switch, sidechain), `EditorAutomation.cpp` (envelopes and the lanes shown), `EditorFreezing.cpp` (freezing, unfreezing, flattening, and what frozen tracks refuse). Its value types: `ClipRef`/`ClipRefs`, `TimeRange`, `MovedRange`, `ClipboardContent`/`CopiedTrack`, `CopiedTracks`, `CopiedAutomation`, `TrackParent`/`InsertionPoint` |
 | [io/Serialization.h](../../app/src/io/Serialization.h), [io/Presets.h](../../app/src/io/Presets.h) | Project and preset files, the preset library: see [serialization.md](serialization.md) |
 
@@ -523,7 +523,7 @@ refused because of frozen audio are said on `refused` too. The session shows `re
 - `Clip::segmentBpm` 0 means "not set": a clip with `warp` on but no BPM isn't warped.
 - MIDI clips accept a `tempo` they ignore, so both kinds of clip can be edited alike.
 - `Track::sends` must be replaced whole, never changed in place: the commands compare old and new maps.
-- `Track::automation` keeps the order targets were first automated in (an `OrderedMap`, as the Python dict did): the
+- `Track::automation` keeps the order targets were first automated in (an `OrderedMap`): the
   first one is what a lane shows by default.
 - `sub_app` is built with `QT_NO_KEYWORDS`: write `Q_SIGNALS`, `Q_SLOTS` and `Q_EMIT`.
 

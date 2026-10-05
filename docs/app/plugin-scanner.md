@@ -66,7 +66,7 @@ struct ScanResult {
 ```
 
 A module with several plug-ins (an instrument and its FX version) gives one `PluginInfo` each. The plug-ins are sorted
-by name, then vendor, ignoring case (as Python's `str.lower` sorted them). A plug-in with no name is named after its
+by name, then vendor, ignoring case (their full Unicode lower case, compared code point by code point). A plug-in with no name is named after its
 file.
 
 ## Where it looks
@@ -76,8 +76,8 @@ file.
   `/usr/lib/vst3`, `/usr/local/lib/vst3` on Linux). If `SUBSTATION_VST3_PATH` is set, those folders instead
   (separated by the system's list separator, `;` on Windows and `:` elsewhere; empty for none). The tests set it, so
   they never see the installed plug-ins.
-- `pluginSearchFolders(custom)`: the standard folders, then the user's own, each once (compared by `pathKey()`: as
-  Python's `normcase(normpath())`, which ignores case on Windows only).
+- `pluginSearchFolders(custom)`: the standard folders, then the user's own, each once (compared by `pathKey()`: the
+  path cleaned up (`QDir::cleanPath`), and on Windows with backslashes and in lower case; elsewhere case counts).
 - `pluginFolders()`: `pluginSearchFolders(customPluginFolders())`, what a scan looks in.
 - `findPluginFiles(roots)`: every `.vst3` bundle (a folder) or file under the roots. Nothing inside a bundle is listed.
   Linked folders (symbolic links, junctions) are followed, each real folder once (by its canonical path), so a link
@@ -105,8 +105,8 @@ file.
 
 ### The signature
 
-A file is read again when its *signature* changes: the modification time (nanoseconds since 1970, as Python's
-`st_mtime_ns`, so caches it wrote stay valid) and size of the file its code is in (`pluginSignature()`). For a bundle
+A file is read again when its *signature* changes: the modification time (nanoseconds since
+1970) and size of the file its code is in (`pluginSignature()`). For a bundle
 that is `Contents/x86_64-win/<name>.vst3` inside it on Windows, `Contents/x86_64-linux/<name>.so` on Linux
 (`aarch64-linux` on ARM) (`pluginBinary()`), else the path itself. A file whose signature can't be read gets none,
 which never matches.
@@ -133,9 +133,9 @@ flashing up).
 
 The parent (`PluginScanner::read`):
 
-- writes every path at once (as Python's `json.dumps` wrote them, non-ASCII escaped), then closes the child's input:
-  `QProcess` buffers what the child hasn't read yet, so a plug-in that hangs (and stops the child reading) can't stop
-  the parent;
+- writes every path at once (a JSON string a line, anything outside printable ASCII escaped as `\uXXXX`), then
+  closes the child's input: `QProcess` buffers what the child hasn't read yet, so a plug-in that hangs (and stops
+  the child reading) can't stop the parent;
 - reads the child's output as it comes, with `QProcess`'s waiting functions (a tenth of a second at a time, checking
   `cancelled` between): no event loop is needed, but a thread Qt knows;
 - waits for the child's first JSON object (it says it is ready); if the child ends or doesn't say it within the
@@ -154,7 +154,7 @@ but keep their cache entries.
 
 `pluginCachePath()`: `vst3-cache.json` in `localDataDir()` (`%LOCALAPPDATA%\SUBstation` on Windows, the system's place
 for application data elsewhere: `~/.local/share/SUBstation`), or `SUBSTATION_PLUGIN_CACHE` if set (the tests point it at
-a temporary file). The format is the Python version's, so a cache it wrote is read as it is.
+a temporary file). Caches written by earlier versions of SUBstation are read as they are.
 
 ```json
 {
@@ -171,8 +171,7 @@ a temporary file). The format is the Python version's, so a cache it wrote is re
 }
 ```
 
-- Keys are `caseKey(path)`: as Python's `os.path.normcase` (on Windows lower case with backslashes; elsewhere the path
-  as it is).
+- Keys are `caseKey(path)`: on Windows the path in lower case with backslashes; elsewhere the path as it is.
 - A file version other than `kPluginCacheVersion` (1), or a file that can't be read or parsed, counts as an empty cache.
 - It is written with `QSaveFile` (a temporary file renamed into place), so a crash never leaves half a cache. A cache
   that can't be written only costs time.

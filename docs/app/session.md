@@ -1,11 +1,10 @@
 # The session
 
 `Session` ([app/src/session](../../app/src/session)) is one open project and everything that works on it: the main
-window's logic, without its widgets. It owns the project, the undo stack, the editor, the selection, the engine
-bridge, the browser and the plug-in index, and wires them together (the hooks and signals the old main window
-connected). Its parts are what the old widgets did that wasn't drawing: the arrangement's clipboard and its Edit
-commands, the device view's selection and actions, renders in the background, the computer MIDI keyboard, the audio
-and MIDI preferences.
+window's logic, without its drawing. It owns the project, the undo stack, the editor, the selection, the engine
+bridge, the browser and the plug-in index, and wires them together. Its parts hold the logic behind the views that
+isn't drawing: the arrangement's clipboard and its Edit commands, the device view's selection and actions, renders in
+the background, the computer MIDI keyboard, the audio and MIDI preferences.
 
 The UI reaches all of it through the session: QML as the `Session` singleton (`import SUBstation`; registered by
 `sub::ui::registerSession` in [ui/src/app/AppTypes.cpp](../../ui/src/app/AppTypes.cpp)), the UI's C++ items through a
@@ -58,7 +57,7 @@ application is still whole).
 
 ## Wiring
 
-What the old main window connected, the session connects (`Session::wire()`):
+The session connects its parts to each other in `Session::wire()`:
 
 - **The editor's hooks**: `setParamInfo` ← `EngineBridge::deviceParamInfo`, made a `ParamSpec` (`ParamSpec::fromInfo`),
   for macros; `setOwnValue` ← `EngineBridge::ownValue`; `setDeviceDefaults` ← `defaultDevice` (the user's default
@@ -139,8 +138,8 @@ The session never asks the user anything; the UI does, and then calls it:
   the render dialog's Cancel would). Otherwise the UI asks about unsaved changes as above.
 - **Recent projects**: at most `kMaxRecent` (10), the latest first, each stored absolute with links resolved, in the
   system's form; one that differs only in case from another (casefolded) replaces it. `recentMenuItems()` gives the
-  Open Recent menu's entries (`"&1  song.gilproj"`, with `&` doubled in names). The settings are read as the Python
-  version wrote them (a list of one comes back from QSettings as a string).
+  Open Recent menu's entries (`"&1  song.gilproj"`, with `&` doubled in names). A list of one, which QSettings can hand back
+  as a single string, is read as a list too.
 
 ## The selection (Selection)
 
@@ -282,7 +281,7 @@ and removing folders, rescanning ([plugin-scanner.md](plugin-scanner.md#in-the-a
 ## Settings
 
 Besides the audio and MIDI preferences ([engine-bridge.md](engine-bridge.md#settings-storage)), the session and its
-parts keep these QSettings keys (the Python version's):
+parts keep these QSettings keys:
 
 | Key | Holds | Code |
 |---|---|---|

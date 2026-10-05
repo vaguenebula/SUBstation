@@ -59,7 +59,7 @@ indexes and searches the sample browser's files. This page is the map; each part
 
 - **The UI never changes the project itself.** QML calls the application layer's `Q_INVOKABLE` methods
   (`Session.editor.setTempo(...)`, `Session.arrangement.paste()`), and the scene-graph items call it in C++ from
-  their mouse, key and wheel handlers (that is where the old widgets' gestures live now). It repaints from the
+  their mouse, key and wheel handlers (that is where gestures are worked out). It repaints from the
   application layer's signals, properties and list models.
 - **QML reaches the application through the `Session` singleton**: `Session.project`, `Session.editor`,
   `Session.selection`, `Session.bridge`, `Session.browser`, `Session.plugins`, `Session.undoStack` and the
@@ -203,7 +203,6 @@ mappings (for macros) through a hook the session wires to the bridge. See
 ## One program
 
 The engine, the application layer and the UI are linked into one executable, built from one source tree, so they
-can't disagree about the engine's API: there is no API version to keep in step. (The Python version that came
-before loaded the engine as a separate module and checked its version at start; its project files, settings and
-caches are read as they were.) The only other program is `substation-scan`, which the plug-in index starts to
-read plug-in files; it speaks a line-based JSON protocol ([app/plugin-scanner.md](app/plugin-scanner.md)).
+can't disagree about the engine's API: there is no API version to keep in step. The only other program is
+`substation-scan`, which the plug-in index starts to read plug-in files; it speaks a line-based JSON protocol
+([app/plugin-scanner.md](app/plugin-scanner.md)).

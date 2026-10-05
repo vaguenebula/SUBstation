@@ -105,7 +105,7 @@ substation [song.gilproj]                                      ui/main.cpp
                                            the browser's threads stop, Engine::closeDevice(), EngineBridge::shutdown()
 ```
 
-The session connects the bridge to the rest (the hooks and signals the old main window connected): see
+The session connects the bridge to the rest (the editor's hooks, messages, plug-ins, recording, previews): see
 [session.md](session.md#wiring).
 
 `EngineBridge::startAudio()` (from `Session::start()`, once the window shows):
@@ -458,8 +458,8 @@ the computer keyboard plays. See [engine/midi.md](../engine/midi.md).
 
 Preferences are per user, in `QSettings` under the organisation and application name "SUBstation" (on Windows, Qt
 keeps them in the registry under `HKEY_CURRENT_USER\Software\SUBstation\SUBstation`; on Linux in
-`~/.config/SUBstation/SUBstation.conf`), the keys the Python version used. The tests use "SUBstation Tests" and a
-folder of their own, so they never touch the user's.
+`~/.config/SUBstation/SUBstation.conf`); earlier versions' settings are read as they are. The tests use
+"SUBstation Tests" and a folder of their own, so they never touch the user's.
 
 | Key | Holds | Code |
 |---|---|---|

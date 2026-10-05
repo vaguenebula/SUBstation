@@ -78,7 +78,7 @@ device editor, the windows they drive), to look at.
 | Not Windows | plug-in editors (`test_vst3_engine`'s editor test, `test_bridge_plugins`'s editor parts): plug-ins show no editor elsewhere. On Windows, where editors open, one `test_bridge_plugins` test skips its part about editors following the selected track |
 | No display (`offscreen` or `minimal` platform) | the UI's tests that draw |
 | Places can't be watched (not Windows or Linux) | the browser's tests of changes seen while running |
-| The browser backend's Unicode tables are not Unicode 15.0.0's | `test_browser_native`'s every-character text tests (their reference values were computed with Python 3.12) |
+| The browser backend's Unicode tables are not Unicode 15.0.0's | `test_browser_native`'s every-character text tests (their reference values are Unicode 15.0.0's) |
 | No trash for the temporary folder | `test_ui_browser`'s deleting a preset |
 | `SUBSTATION_UI_SCREENSHOTS` not set | `test_ui_device_editors`'s screenshots of every editor |
 
@@ -131,7 +131,7 @@ Quick.
 | [UiTestSupport.h](../tests/app/support/UiTestSupport.h) | `UiSession`: a session on a fresh engine, registered as the QML `Session` singleton, and a QML engine set up for the UI's module; `show()` loads a window of QML and waits until it is exposed and active. Mouse, wheel and key input as a user sends it (`press`, `moveTo`, `release`, `click`, `doubleClick`, `drag`, `wheel`), `haveDisplay()`, `screenshot()`. |
 | [ArrangementTestSupport.h](../tests/app/support/ArrangementTestSupport.h) | The arrangement view in a window on a `UiSession`; its items found by name, points in its lanes and headers, the menus its items work out, audio files to put in it. |
 | [DevicePanelTestSupport.h](../tests/app/support/DevicePanelTestSupport.h) | The device panel in a window as the main window places it; its parts found by object name or by device; its menus read and chosen from; drags from the browser (or along the chain) delivered as the platform delivers them. |
-| [BrowserReference.h](../tests/app/support/BrowserReference.h) | The browser's index and search as the Python version had them, ported: the reference the native backend must agree with, item for item and in the same order (`test_browser_native`), and what `browser_backend_bench` checks every query against. |
+| [BrowserReference.h](../tests/app/support/BrowserReference.h) | A plain, slower implementation of the browser's index and search, kept as the reference the native backend must agree with, item for item and in the same order (`test_browser_native`), and what `browser_backend_bench` checks every query against. |
 
 ## Environment variables
 
@@ -269,7 +269,7 @@ Rendered offline unless the file says otherwise; the live tests play through the
 | [test_midi_model.cpp](../tests/app/test_midi_model.cpp) | MIDI clips as windows onto notes, the piano roll's note maths, MIDI tracks in files. |
 | [test_automation_model.cpp](../tests/app/test_automation_model.cpp) | Envelope maths, target keys, the parameter mappings held against the engine's, saving. |
 | [test_timebase.cpp](../tests/app/test_timebase.cpp), [test_keys.cpp](../tests/app/test_keys.cpp) | Positions, bar labels, dB and pan text; tempo and key from file names, transposing to the project's key. |
-| [test_serialization.cpp](../tests/app/test_serialization.cpp) | Saving and loading, paths that move with the project, older files, what an edited file can't have; files as the Python version wrote them load unchanged. |
+| [test_serialization.cpp](../tests/app/test_serialization.cpp) | Saving and loading, paths that move with the project, older files, what an edited file can't have; a file using every feature, as earlier versions wrote it, loads and saves the same. |
 | [test_presets.cpp](../tests/app/test_presets.cpp) | The preset library, default presets, presets as new devices, rack names. |
 | [test_editor_edits.cpp](../tests/app/test_editor_edits.cpp) | The editor's clip edits and undo: adding, moving, duplicating, splitting, tempo and warping trims, gesture merging, inputs and arming, recorded takes, copy and paste with the automation under clips, time selections, reversing. |
 | [test_editor_midi.cpp](../tests/app/test_editor_midi.cpp) | MIDI tracks and their instrument, MIDI clips and note edits, clips moving only onto tracks of their kind, MIDI inputs, MIDI takes. |
@@ -310,7 +310,7 @@ Rendered offline unless the file says otherwise; the live tests play through the
 
 | File | What it covers |
 |---|---|
-| [test_browser_native.cpp](../tests/app/test_browser_native.cpp) | The browser backend against the reference (`BrowserReference`): the same files from a folder tree in the same order, the same results for random queries, sorts and use counts; Python's text rules for every Unicode character; the saved index, changes while running, the latest search's results only, paging. See [browser.md](browser.md). |
+| [test_browser_native.cpp](../tests/app/test_browser_native.cpp) | The browser backend against the reference (`BrowserReference`): the same files from a folder tree in the same order, the same results for random queries, sorts and use counts; the text rules (lower case, case folding, splitting into words) for every Unicode character; the saved index, changes while running, the latest search's results only, paging. See [browser.md](browser.md). |
 | [test_browser_search.cpp](../tests/app/test_browser_search.cpp) | Item keys, use counts (decay, `library.json`, unknown fields, bad files), match quality, rank. |
 | [test_browser_controller.cpp](../tests/app/test_browser_controller.cpp) | The browser's logic without its panel: places, searching, sorting, the sidebar, folder trees, activation and drops, previews, keeping the list's place, plug-ins and presets, drag payloads. |
 | [test_plugin_index.cpp](../tests/app/test_plugin_index.cpp) | Scanning in child processes (a crashing or hanging plug-in costs only itself), the cache, finding plug-in files, friendly messages, the index scanning in the background over the standard and the user's folders. |
