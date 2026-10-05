@@ -76,7 +76,7 @@ Each entry of `tracks`:
 |---|---|
 | `id`, `name`, `color` | required on load |
 | `kind` | `"audio"`, `"midi"` or `"group"` (default `"audio"`; anything else makes the file "damaged") |
-| `volume_db`, `pan`, `mute`, `solo`, `height` | mixer and row height |
+| `volume_db`, `pan`, `mute`, `solo`, `height` | mixer and row height (without one: `kDefaultTrackHeight`, 96, or a group's `kDefaultGroupHeight`, 104) |
 | `devices` | list of devices (below) |
 | `clips` | audio or MIDI clips (below), by the track's kind; a group's are ignored |
 | `automation` | `{target key: [[beat, value, curve], ...]}` |

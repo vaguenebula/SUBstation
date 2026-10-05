@@ -39,6 +39,7 @@
 #include "arrangement/MenuEntries.h"
 #include "arrangement/TrackLayout.h"
 #include "controls/Meter.h"
+#include "model/Track.h"
 #include "sg/SgCanvas.h"
 #include "session/Session.h"
 
@@ -285,7 +286,7 @@ private:
     QList<QPointer<QObject>> connected_;
     int number_ = 1;
     qreal nameRight_ = 0;
-    arrangement::AutomationRows row_{80, {}};  // (a new track's height)
+    arrangement::AutomationRows row_{app::kDefaultTrackHeight, {}};  // (a new track's height)
     int rowTop_ = 0;  // a track's row's top (content y), its lanes' tops are from
     int depth_ = 0;
     bool folded_ = false;

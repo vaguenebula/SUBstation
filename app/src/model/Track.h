@@ -42,7 +42,11 @@ inline const QString kReturnKind = QStringLiteral("return");  // a return track'
 inline const QStringList kMonitorModes{QStringLiteral("off"), QStringLiteral("in"), QStringLiteral("auto")};
 inline const QString kMasterColor = QStringLiteral("#a0a0a0");
 
-inline constexpr int kDefaultTrackHeight = 80;
+// A new track's height (its own lane, in the arrangement), and a new group's:
+// a little taller, so an open group stands out above its tracks. Projects keep
+// the heights they were saved with; a track saved without one gets these.
+inline constexpr int kDefaultTrackHeight = 96;
+inline constexpr int kDefaultGroupHeight = 104;
 inline constexpr int kMinTrackHeight = 24;
 inline constexpr int kMaxTrackHeight = 400;
 

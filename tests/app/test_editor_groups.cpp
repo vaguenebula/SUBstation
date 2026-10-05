@@ -1,6 +1,7 @@
 // Group tracks through the editor: grouping, ungrouping, moving tracks into and
 // out of groups (all undoable), inserting tracks in groups, deleting groups,
-// folding, arming, saving, and cutting, copying and pasting groups.
+// folding, arming, saving, their default height, and cutting, copying and
+// pasting groups.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"
@@ -203,6 +204,36 @@ private Q_SLOTS:
         loadInto(loaded, data);
         QVERIFY((names(loaded)[0] == std::pair<QString, QString>{"C", ""}));
         QVERIFY(!treeProblem(loaded.tracks()));
+    }
+
+    // A new group is a little taller than a new track; heights saved are kept,
+    // and a file without them gets the defaults (a group's for a group).
+    void groupsAreALittleTallerThanTracks() {
+        EditorFixture f;
+        Project& p = f.project;
+        const QStringList ab = tracks(f, {"A", "B"});
+        const QString group = f.editor.groupTracks({ab[0]});
+        QCOMPARE(f.track(ab[0]).height, kDefaultTrackHeight);
+        QCOMPARE(f.track(group).height, kDefaultGroupHeight);
+        QVERIFY(kDefaultGroupHeight > kDefaultTrackHeight);
+        f.editor.setTrackHeight(ab[1], 80);  // (as saved before the defaults grew)
+        QJsonObject data = QJsonDocument::fromJson(QJsonDocument(projectToJson(p)).toJson()).object();
+        Project loaded;
+        loadInto(loaded, data);
+        QCOMPARE(loaded.track(ab[0]).height, kDefaultTrackHeight);
+        QCOMPARE(loaded.track(ab[1]).height, 80);
+        QCOMPARE(loaded.track(group).height, kDefaultGroupHeight);
+        QJsonArray saved = data["tracks"].toArray();
+        for (qsizetype i = 0; i < saved.size(); ++i) {
+            QJsonObject t = saved[i].toObject();
+            t.remove("height");
+            saved[i] = t;
+        }
+        data["tracks"] = saved;
+        loadInto(loaded, data);
+        QCOMPARE(loaded.track(ab[0]).height, kDefaultTrackHeight);
+        QCOMPARE(loaded.track(ab[1]).height, kDefaultTrackHeight);
+        QCOMPARE(loaded.track(group).height, kDefaultGroupHeight);
     }
 
     // --- Cut, copy and paste of tracks ---
