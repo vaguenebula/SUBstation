@@ -173,6 +173,7 @@ std::vector<ParamSpec> EngineBridge::mixerSpecs(const QString& owner) const {
 std::vector<ParamGroup> EngineBridge::paramGroups(const QString& owner) {
     std::vector<ParamGroup> groups;
     groups.push_back({QStringLiteral("mixer"), QStringLiteral("Mixer"), mixerSpecs(owner)});
+    if (!project_->hasOwner(owner)) return groups;  // (one that went: its mixer, as any owner's)
     std::vector<Device> devices;
     for (const Device* device : iterDevices(project_->track(owner).devices)) devices.push_back(*device);
     for (const Device& device : devices) {
@@ -182,6 +183,7 @@ std::vector<ParamGroup> EngineBridge::paramGroups(const QString& owner) {
 }
 
 bool EngineBridge::canAutomate(const QString& owner, const QString& key) {
+    if (!project_->hasOwner(owner)) return false;
     for (const ParamGroup& group : paramGroups(owner)) {
         for (const ParamSpec& spec : group.specs) {
             if (spec.key == key) return true;

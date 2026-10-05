@@ -166,12 +166,14 @@ void EngineBridge::closePluginEditor(const QString& trackId, const QString& devi
 }
 
 void EngineBridge::requestPluginEditor(const QString& trackId, const QString& deviceId) {
-    loadPluginNow(deviceId);  // (if it waits to load)
-    if (d_->editorsTrack && trackId == *d_->editorsTrack) {
-        openPluginEditor(trackId, deviceId, false);  // having none is fine here
-    } else {
-        d_->editorsWanted.insert(deviceId);
-    }
+    guarded("plug-in editor", [&] {
+        loadPluginNow(deviceId);  // (if it waits to load)
+        if (d_->editorsTrack && trackId == *d_->editorsTrack) {
+            openPluginEditor(trackId, deviceId, false);  // having none is fine here
+        } else {
+            d_->editorsWanted.insert(deviceId);
+        }
+    });
 }
 
 void EngineBridge::showPluginEditors(const QString& trackId) {

@@ -56,8 +56,9 @@ Freeze EngineBridge::renderFreeze(const QString& trackId) {
 }
 
 std::unique_ptr<FreezeRender> EngineBridge::startFreeze(const QString& trackId) {
-    const Track& track = project_->track(trackId);
-    const QString name = track.name;
+    const Track* track = project_->findTrack(trackId);
+    if (track == nullptr) throw EditError(QStringLiteral("That track can't be frozen"));
+    const QString name = track->name;
     const auto engineId = engineTrackId(trackId);
     const double end = project_->endBeat();
     if (!engineId || trackId == kMaster) throw EditError(name + QStringLiteral(" can't be frozen"));
