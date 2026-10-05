@@ -285,7 +285,7 @@ private Q_SLOTS:
         const QVariantMap asio = prefs.driverChoices().back().toMap();
         QCOMPARE(asio.value(QStringLiteral("enabled")).toBool(), EngineBridge::driverTypes().contains(QStringLiteral("ASIO")));
         QCOMPARE(labels(prefs.driverChoices()).at(prefs.driverIndex()), prefs.settings().driver);
-        QVERIFY(!prefs.outputsVisible() && prefs.exclusiveVisible() && !prefs.controlPanelVisible());
+        QVERIFY(!prefs.outputsVisible() && prefs.exclusiveVisible() == (prefs.settings().driver == QStringLiteral("WASAPI")) && !prefs.controlPanelVisible());
         if (!f.bridge().deviceStatus().open) {
             QCOMPARE(prefs.status(), QStringLiteral("No audio device is open."));
             // Without a device, the choices are the preferences' own, the saved ones current.

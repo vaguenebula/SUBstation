@@ -91,7 +91,8 @@ public:
     bool bufferEnabled() const { return !bufferFixed_; }
     QString bufferToolTip() const;
     bool exclusive() const { return settings_.exclusive; }
-    bool exclusiveVisible() const { return !asio(); }
+    // WASAPI's exclusive mode: ASIO, and the System driver off Windows, have none.
+    bool exclusiveVisible() const { return settings_.driver == QLatin1String("WASAPI"); }
     QVariantList threadChoices() const { return list(threads_); }
     int threadIndex() const { return threadIndex_; }
     QString status() const { return status_; }
