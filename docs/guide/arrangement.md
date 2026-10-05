@@ -65,9 +65,9 @@ clips' title bars stay as they are.
   tracks it crosses, up or down: folded and frozen tracks too. On a group's lane it
   takes in everything in the group, its tracks too (folded away or not), though it
   shows only over the rows you dragged across.
-- Where a selection starts decides what it selects: started on a track's lane (its
-  clips) it selects clips on every track it crosses; started on an automation lane it
-  selects automation on every automation lane it crosses (see
+- Started on a track's lane (its clips), a selection selects clips on every track it
+  crosses; started on an automation lane it selects automation on every automation
+  lane it crosses, until it goes up into the clips: then it selects clips (see
   [automation.md](automation.md#time-ranges)).
 - **Shift-clicking** an empty part of a lane (or a clip's body) extends the selection
   to there: over the time between and every track (or automation lane) between, as if

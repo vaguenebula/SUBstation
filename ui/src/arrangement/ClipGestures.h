@@ -109,6 +109,8 @@ public:
     void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
 
     double anchor() const { return anchor_; }
+    void setAnchorRow(int row) { anchorRow_ = row; }
+    int anchorRow() const { return anchorRow_; }
 
 private:
     LanesHost& host_;
@@ -120,11 +122,12 @@ private:
 
 // Shift-click (and a drag on from it): the time selection extended to where the
 // mouse is, over the time between and everything in that direction, as the
-// drag that made it would have gone on: where it was made decides what it
-// selects. A clip range takes in every track from its rows to the one there
-// (folded, frozen, groups and what is in them); a lane range every automation
-// lane showing from its lanes to the one there (or the nearest), of every
-// track. With no time selection it extends from the insert marker on the
+// drag that made it would have gone on. A clip range takes in every track from
+// its rows to the one there (folded, frozen, groups and what is in them); a
+// lane range every automation lane showing from its lanes to the one there (or
+// the nearest), of every track, and becomes a clip range over the tracks from
+// its lanes' to there if it reaches into the clips' title band, as a drag from
+// a lane does. With no time selection it extends from the insert marker on the
 // selected track (a clip range).
 class ExtendGesture : public Gesture {
 public:
@@ -143,6 +146,7 @@ private:
     bool lanes_ = false;  // a lane range (else a clip range)
     int first_ = 0;  // the rows (or lanes: indices in envelopeAreas) it covered at the press
     int last_ = 0;
+    std::optional<int> laneRowsFirst_, laneRowsLast_;  // a lane range's: the rows of its lanes' tracks
 };
 
 // Ctrl+Alt drag: scroll the arrangement in both directions (Ableton's hand).

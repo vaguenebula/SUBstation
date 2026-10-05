@@ -55,9 +55,9 @@ All of it is undoable (one step per drag).
 ### Time ranges
 
 Drag across lanes (not on a breakpoint) to select a time range on them: on every
-automation lane you cross, up or down, of every track. Started on automation, a
-selection stays automation even when the drag goes up into the clips; one started on
-the clips selects clips (see [arrangement.md](arrangement.md#selecting)).
+automation lane you cross, down over the tracks below too. Up into the clips' title
+band (or above the track) the drag selects clips instead, as a drag in the clips does
+(see [arrangement.md](arrangement.md#selecting)).
 **Shift-click** another lane (or anywhere in the lanes) to extend it there. Then:
 
 - **Delete** clears their automation there (the envelope outside stays as it was);

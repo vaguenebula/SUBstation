@@ -21,9 +21,10 @@
 //   can't pass its neighbours; several override the breakpoints they land on.
 // - Alt-dragging between two breakpoints bends the segment: up bulges it upward.
 // - Dragging from off the breakpoints selects a time range on the lanes it
-//   crosses, up or down, of every track (into the clips too: where a selection
-//   starts decides what it selects); Delete clears their automation there,
-//   Ctrl+D duplicates it. Shift-click extends a selection (ExtendGesture).
+//   crosses (down over the tracks below too); Delete clears their automation
+//   there, Ctrl+D duplicates it. Up into the clips' title band, or above the
+//   track, it selects clips instead, as a drag in the clips does. Shift-click
+//   extends a selection (ExtendGesture).
 //   Dragging inside the selected range (off its breakpoints and line) moves the
 //   automation in it, on all its lanes, up, down, left and right, over what is
 //   where it lands: breakpoints at the range's edges keep the envelope outside

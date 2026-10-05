@@ -285,6 +285,12 @@ std::unique_ptr<ExtendGesture> ExtendGesture::start(LanesHost& host, const QPoin
             last = i;
         }
         if (!first) return nullptr;
+        for (const app::LaneRef& lane : selection.lanes()) {
+            const auto index = layout.indexOf(lane.first);
+            if (!index) continue;
+            gesture->laneRowsFirst_ = gesture->laneRowsFirst_ ? std::min(*gesture->laneRowsFirst_, *index) : *index;
+            gesture->laneRowsLast_ = gesture->laneRowsLast_ ? std::max(*gesture->laneRowsLast_, *index) : *index;
+        }
         gesture->lanes_ = true;
         gesture->first_ = *first;
         gesture->last_ = *last;
@@ -318,7 +324,12 @@ void ExtendGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
     const double beat = std::max(0.0, view.snapBeat(view.xToBeat(pos.x()), modifiers & Qt::AltModifier));
     const double start = std::min(start_, beat), end = std::max(end_, beat);
     if (end <= start) return;  // (nothing to select yet)
-    if (lanes_) {
+    if (lanes_ && host_.inClipBand(pos)) {  // into the clips: the clips of the tracks from its lanes' to there
+        const auto row = host_.rowAt(pos.y(), true);
+        if (!row) return;
+        selectRows(host_, start, end, std::min(laneRowsFirst_.value_or(*row), *row),
+                   std::max(laneRowsLast_.value_or(*row), *row));
+    } else if (lanes_) {
         const std::vector<EnvelopeArea> areas = host_.envelopeAreas();
         std::optional<int> here;
         for (int i = 0; i < static_cast<int>(areas.size()); ++i) {
