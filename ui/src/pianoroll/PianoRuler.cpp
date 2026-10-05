@@ -21,19 +21,19 @@ void PianoRuler::paint(SgPainter& p) {
     p.fillRect(rect, Theme::kPanel);
     PianoRoll* roll = this->roll();
     if (!roll) return;
-    const roll::Timeline& view = roll->view();
+    const timeline::Timeline& view = roll->view();
     if (const app::Clip* clip = roll->clip()) {
         const double x0 = view.beatToX(clip->offsetBeats), x1 = view.beatToX(clip->windowEnd());
         p.fillRect(QRectF(x0, h - 5, x1 - x0, 4), roll->trackColor());
     }
     const double step = view.gridStep();
-    const double every = roll::labelStep(view, step);
+    const double every = timeline::labelStep(view, step);
     const QFont font = uiFont(8);
     const app::TimeSignature ts = view.timeSignature();
-    for (const roll::GridLine& line : roll::gridLines(view, rect.left() - 60, rect.right() + 1, step)) {
-        const double tick = line.kind == roll::LineKind::Bar ? 10 : line.kind == roll::LineKind::Beat ? 6 : 3;
+    for (const timeline::GridLine& line : timeline::gridLines(view, rect.left() - 60, rect.right() + 1, step)) {
+        const double tick = line.kind == timeline::LineKind::Bar ? 10 : line.kind == timeline::LineKind::Beat ? 6 : 3;
         const double x = app::roundHalfEven(line.x);
-        p.fillRect(QRectF(x, h - tick, 1, tick), line.kind == roll::LineKind::Bar ? Theme::kTextDim : Theme::kGridBar);
+        p.fillRect(QRectF(x, h - tick, 1, tick), line.kind == timeline::LineKind::Bar ? Theme::kTextDim : Theme::kGridBar);
         if (std::abs(line.beat / every - std::round(line.beat / every)) < 1e-6)
             p.drawText(QPointF(x + 3, 12), app::formatBarLabel(line.beat, ts), Theme::kText, font);
     }

@@ -47,8 +47,8 @@ void VelocityLane::paint(SgPainter& p) {
     p.fillRect(visible, Theme::kLane);
     PianoRoll* roll = this->roll();
     if (!roll) return;
-    const roll::Timeline& view = roll->view();
-    roll::drawGrid(p, view, visible.left(), visible.right(), 1, h);
+    const timeline::Timeline& view = roll->view();
+    timeline::drawGrid(p, view, visible.left(), visible.right(), 1, h);
     if (const app::Clip* clip = roll->clip()) {
         const double x0 = view.beatToX(clip->offsetBeats), x1 = view.beatToX(clip->windowEnd());
         p.fillRect(QRectF(visible.left(), 0, std::max(0.0, x0 - visible.left()), h), Theme::kOutsideClip);

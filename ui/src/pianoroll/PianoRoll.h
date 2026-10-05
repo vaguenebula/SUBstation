@@ -22,7 +22,7 @@
 
 #include "model/Clip.h"
 #include "model/Notes.h"
-#include "pianoroll/RollTimeline.h"
+#include "timeline/Timeline.h"
 #include "session/Session.h"
 
 #include <QColor>
@@ -175,7 +175,7 @@ public:
     // --- Geometry -----------------------------------------------------------------
 
     // The time axis (in content beats) and the vertical scroll.
-    const roll::Timeline& view() const { return view_; }
+    const timeline::Timeline& view() const { return view_; }
     double pxPerBeat() const { return view_.pxPerBeat(); }
     double scrollBeats() const { return view_.scrollBeats(); }
     int scrollY() const { return view_.scrollY(); }
@@ -273,7 +273,7 @@ private:
     QPointer<app::Session> session_;
     QString trackId_;
     QString clipId_;
-    roll::Timeline view_;
+    timeline::Timeline view_;
     int rowHeight_ = kRowHeight;
     double rowHeightExact_ = kRowHeight;  // keeps a trackpad's small steps adding up
     std::vector<app::Note> selected_;
