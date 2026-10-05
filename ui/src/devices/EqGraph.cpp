@@ -92,7 +92,9 @@ QString EqGraph::param(int band, const QString& name) {
     return QLatin1Char('b') + QString::number(band + 1) + QLatin1Char('_') + name;
 }
 
-QColor EqGraph::bandColor(int band) { return QColor::fromHsvF(std::fmod(0.02 + band * 0.137, 1.0), 0.58, 1.0); }
+QColor EqGraph::bandColor(int band) {
+    return QColor::fromHsvF(static_cast<float>(std::fmod(0.02 + band * 0.137, 1.0)), 0.58f, 1.0f);
+}
 
 int EqGraph::typeAt(double fraction) {
     for (const auto& [limit, type] : kZones)

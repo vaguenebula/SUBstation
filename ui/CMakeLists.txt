@@ -55,6 +55,11 @@ target_link_libraries(sub_ui_style PUBLIC Qt6::Quick Qt6::QuickControls2)
 target_link_libraries(sub_ui PUBLIC sub_ui_styleplugin)
 target_link_libraries(sub_ui PUBLIC sub_app Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
 sub_project_warnings(sub_ui)
+if (MSVC)
+    # C4458: a local named like a base's member. Every Qt Quick item inherits
+    # QQmlParserStatus's private d-pointer `d`, which any local `d` "hides".
+    target_compile_options(sub_ui PRIVATE /wd4458)
+endif()
 
 # The application.
 qt_add_executable(substation main.cpp)

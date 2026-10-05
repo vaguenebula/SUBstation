@@ -22,6 +22,8 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <share.h>
+#include <sys/stat.h>
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -116,7 +118,8 @@ FILE* quiet() {
     // No "program stopped working" or "insert a disk" dialogs if a plug-in misbehaves.
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     const int answers = _dup(_fileno(stdout));
-    const int devnull = _open("NUL", _O_WRONLY);
+    int devnull = -1;
+    _sopen_s(&devnull, "NUL", _O_WRONLY, _SH_DENYNO, _S_IWRITE);
     _dup2(devnull, _fileno(stdout));
     _dup2(devnull, _fileno(stderr));
     _setmode(answers, _O_BINARY);

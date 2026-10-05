@@ -151,8 +151,8 @@ TEST_CASE("automation splits a built-in device's block where values change") {
     const uint32_t track = dcTrack(engine, longDcWav());
     const uint32_t pid = engine.addBuiltinProcessor(engine.trackChain(track), "utility", -1);
     const sub::ParamInfo info = engine.processorParams(pid).at(static_cast<size_t>(utilityGainIndex(engine, pid)));
-    const int64_t step = kBeat + 100;  // well inside a block (blocks are kMaxBlock long from 0)
-    CHECK(step % sub::Renderer::kMaxBlock > 200);
+    constexpr int64_t step = kBeat + 100;  // well inside a block (blocks are kMaxBlock long from 0)
+    static_assert(step % sub::Renderer::kMaxBlock > 200);
     const double stepBeat = static_cast<double>(step) / kSpb;
     engine.setTrackAutomation(track, {{pid, "gain", Points{{0.0, info.toNormalized(-60.f), 0.f},
                                                            {stepBeat, info.toNormalized(-60.f), 0.f},

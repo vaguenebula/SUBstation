@@ -532,7 +532,8 @@ private Q_SLOTS:
         }
     }
 
-#ifdef _WIN32
+// (Q_OS_WIN, not _WIN32: moc doesn't see the compiler's predefined macros.)
+#ifdef Q_OS_WIN
     void indexWalksJunctionsNotSymlinks() {
         const QString lib = tmp_->filePath(QStringLiteral("lib"));
         const QString target = tmp_->filePath(QStringLiteral("elsewhere"));
