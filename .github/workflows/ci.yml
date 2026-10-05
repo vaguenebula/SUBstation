@@ -9,10 +9,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   linux:
     name: Linux (GCC, Qt 6.4)
