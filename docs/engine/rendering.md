@@ -294,7 +294,7 @@ delay) and the master's (after its fader, before the metronome) over the same se
 started with. Differences from live:
 
 - `ChunkFlags::live` is false: no smoothing, no meters, no monitoring, no MIDI input, no preview.
-- Looping and the metronome are opt-in (`render_offline(..., loop=, metronome=)`); exports leave
+- Looping and the metronome are opt-in (`renderOffline(startBeat, frames, loop, metronome)`); exports leave
   them off.
 - `setWarpVoices()` and `setDelayLines()` give it fresh stretch voices and delay lines (one per
   snapshot edge, per sidechained device, per rack chain), sized from the snapshot.
@@ -346,17 +346,20 @@ from the UI).
 
 ## Tests
 
-- [test_engine_render.py](../../tests/test_engine_render.py): sample-exact clip placement, tempo,
+In the engine's tests, [tests/engine](../../tests/engine):
+
+- [test_engine_render.cpp](../../tests/engine/test_engine_render.cpp): sample-exact clip placement, tempo,
   offsets, gain and pan, mute and solo, loop wraps, tempo changes keeping the playhead on the
   beat, transport state without a device, metronome clicks, clip fades, export matching a render.
-- [test_groups_engine.py](../../tests/test_groups_engine.py),
-  [test_sends_engine.py](../../tests/test_sends_engine.py): solo and mute across levels and sends,
+- [test_render_jobs.cpp](../../tests/engine/test_render_jobs.cpp): renders in the background.
+- [test_groups_engine.cpp](../../tests/engine/test_groups_engine.cpp),
+  [test_sends_engine.cpp](../../tests/engine/test_sends_engine.cpp): solo and mute across levels and sends,
   meters of groups and returns.
-- [test_racks_engine.py](../../tests/test_racks_engine.py): chains summing, chain faders, mute and
+- [test_racks_engine.cpp](../../tests/engine/test_racks_engine.cpp): chains summing, chain faders, mute and
   solo, empty racks, chain meters.
-- [test_parallel_engine.py](../../tests/test_parallel_engine.py),
-  [test_parallel_live.py](../../tests/test_parallel_live.py): the same renders on any number of
+- [test_parallel_engine.cpp](../../tests/engine/test_parallel_engine.cpp),
+  [test_parallel_live.cpp](../../tests/engine/test_parallel_live.cpp): the same renders on any number of
   threads, live too.
-- [test_midi_engine.py](../../tests/test_midi_engine.py), [test_warp.py](../../tests/test_warp.py),
-  [test_recording.py](../../tests/test_recording.py): notes, warped clips, monitoring and the
+- [test_midi_engine.cpp](../../tests/engine/test_midi_engine.cpp), [test_warp.cpp](../../tests/engine/test_warp.cpp),
+  [test_recording.cpp](../../tests/engine/test_recording.cpp): notes, warped clips, monitoring and the
   count-in.
