@@ -13,6 +13,12 @@
 #include "plugins/PluginFolderModel.h"
 #include "plugins/PluginIndex.h"
 #include "plugins/PluginListModel.h"
+#include "session/ArrangementActions.h"
+#include "session/AudioPreferences.h"
+#include "session/ComputerKeyboard.h"
+#include "session/DeviceSelection.h"
+#include "session/MidiPreferences.h"
+#include "session/RenderProgress.h"
 #include "session/Selection.h"
 #include "session/Session.h"
 
@@ -43,6 +49,12 @@ void registerSession(sub::app::Session* session) {
     registerUncreatable<PluginIndex>("PluginIndex");
     registerUncreatable<PluginListModel>("PluginListModel");
     registerUncreatable<PluginFolderModel>("PluginFolderModel");
+    registerUncreatable<ArrangementActions>("ArrangementActions");
+    registerUncreatable<DeviceSelection>("DeviceSelection");
+    registerUncreatable<RenderProgress>("RenderProgress");
+    registerUncreatable<ComputerKeyboard>("ComputerKeyboard");
+    registerUncreatable<AudioPreferences>("AudioPreferences");
+    registerUncreatable<MidiPreferences>("MidiPreferences");
     qmlRegisterUncreatableType<QUndoStack>(kUri, 1, 0, "UndoStack", kMadeByTheSession);
     qmlRegisterSingletonInstance(kUri, 1, 0, "Session", session);
 }
