@@ -21,6 +21,8 @@
 #include <QUrl>
 #include <QtTest>
 
+#include "TestSupport.h"
+
 #include <memory>
 #include <vector>
 
@@ -73,8 +75,7 @@ class TestBrowserController : public QObject {
 
 private Q_SLOTS:
     void initTestCase() {
-        QCoreApplication::setOrganizationName(QStringLiteral("SUBstation Tests"));
-        QCoreApplication::setApplicationName(QStringLiteral("SUBstation Tests"));
+        test::prepareApplication();  // settings of its own: tests running side by side don't share them
     }
 
     void init() {

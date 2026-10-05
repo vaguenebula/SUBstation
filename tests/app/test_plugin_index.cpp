@@ -24,6 +24,8 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include "TestSupport.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -181,8 +183,7 @@ class TestPluginIndex : public QObject {
 
 private Q_SLOTS:
     void initTestCase() {
-        QCoreApplication::setOrganizationName(QStringLiteral("SUBstation Tests"));
-        QCoreApplication::setApplicationName(QStringLiteral("SUBstation Tests"));
+        test::prepareApplication();  // settings of its own: tests running side by side don't share them
         qputenv("SUB_FAKE_SCANNER", "1");  // the child processes started from here are fake scanners
     }
 

@@ -4,6 +4,7 @@
 #include "model/Device.h"
 #include "model/Track.h"
 
+#include <QByteArray>
 #include <QString>
 #include <QTemporaryDir>
 
@@ -16,10 +17,27 @@ namespace sub::app::test {
 inline constexpr int kSampleRate = 48000;
 
 // Call first (initTestCase): the application is "SUBstation Tests", so tests
-// never touch the user's settings, and the folders the application keeps things
-// in (the preset library, the browser's index, plug-in caches, recordings) are
+// never touch the user's settings (each test executable keeps its own, in a
+// temporary folder), and the folders the application keeps things in (the
+// preset library, the browser's index, plug-in caches, recordings) are
 // temporary ones.
 void prepareApplication();
+
+// An environment variable set for as long as it lives (then as it was): a
+// test's own folder for SUBSTATION_RECORDINGS or SUBSTATION_PRESETS, never the
+// user's after it.
+class ScopedEnv {
+public:
+    ScopedEnv(const char* name, const QString& value);
+    ~ScopedEnv();
+    ScopedEnv(const ScopedEnv&) = delete;
+    ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+    const char* name_;
+    QByteArray before_;
+    bool was_;
+};
 
 // A temporary folder, gone with it.
 class TempDir {

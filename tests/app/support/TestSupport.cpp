@@ -44,6 +44,10 @@ void appendLe32(QByteArray& bytes, quint32 value) {
 void prepareApplication() {
     QCoreApplication::setOrganizationName(QStringLiteral("SUBstation Tests"));  // keep tests out of the user's settings
     QCoreApplication::setApplicationName(QStringLiteral("SUBstation Tests"));
+    // Each test executable's settings in a folder of its own: tests running side
+    // by side (ctest -j) don't clear or change each other's.
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, runFolder(QStringLiteral("sub-settings")));
     QSettings().clear();
     qputenv("SUBSTATION_PRESETS", (runFolder(QStringLiteral("sub-presets")) + QStringLiteral("/Presets")).toUtf8());
     qputenv("SUBSTATION_LIBRARY", (runFolder(QStringLiteral("sub-library")) + QStringLiteral("/library.json")).toUtf8());
@@ -52,6 +56,19 @@ void prepareApplication() {
     qputenv("SUBSTATION_PLUGIN_CACHE",
             (runFolder(QStringLiteral("sub-plugin-cache")) + QStringLiteral("/vst3-cache.json")).toUtf8());
     qputenv("SUBSTATION_RECORDINGS", (runFolder(QStringLiteral("sub-recordings")) + QStringLiteral("/Recordings")).toUtf8());
+}
+
+ScopedEnv::ScopedEnv(const char* name, const QString& value)
+    : name_(name), before_(qgetenv(name)), was_(qEnvironmentVariableIsSet(name)) {
+    qputenv(name, value.toUtf8());
+}
+
+ScopedEnv::~ScopedEnv() {
+    if (was_) {
+        qputenv(name_, before_);
+    } else {
+        qunsetenv(name_);
+    }
 }
 
 TempDir::TempDir() : dir_(QDir::tempPath() + QStringLiteral("/sub-test-XXXXXX")) {}
