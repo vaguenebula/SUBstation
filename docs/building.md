@@ -21,10 +21,11 @@ are is in [architecture.md](architecture.md).
     qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtquick-templates
     qml6-module-qtquick-dialogs qml6-module-qtqml-workerscript qml6-module-qt-labs-settings
     qml6-module-qtquick-shapes libgl-dev libxkbcommon-dev` (and `xvfb` to run the UI's tests headless).
-- A CPU with AVX2 (Intel Haswell, AMD Zen or later) to run it: the engine is compiled with AVX2 and fast float
-  math (`/arch:AVX2 /fp:fast` with MSVC, `-mavx2 -mfma -ffast-math` with GCC and Clang; with MinGW also
-  `-Wa,-muse-unaligned-vector-move`, as GCC can't align the stack for AVX on 64-bit Windows). The engine must not rely on
-  NaN or infinity (fast math may drop checks for them); test for NaN on the bits instead.
+- A CPU with AVX2 (Intel Haswell, AMD Zen or later) to run it: the engine is compiled with AVX2 (`/arch:AVX2`
+  with MSVC, `-mavx2 -mfma` with GCC and Clang; with MinGW also `-Wa,-muse-unaligned-vector-move`, as GCC can't
+  align the stack for AVX on 64-bit Windows). Not with fast math (`/fp:fast`, `-ffast-math`): the results mustn't
+  depend on the compiler reordering arithmetic or assuming there is no NaN or infinity. Denormals are flushed to
+  zero where audio renders (`ScopedNoDenormals`), not by a compiler flag.
 - Optional: Steinberg's ASIO SDK, for ASIO (see [ASIO SDK](#asio-sdk)).
 
 Nothing else needs installing: the engine's third-party code is vendored (see [Third-party code](#third-party-code)).

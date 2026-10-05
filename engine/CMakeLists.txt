@@ -203,13 +203,18 @@ if (ASIO_SDK)
     target_compile_definitions(sub_engine PUBLIC SUBSTATION_HAS_ASIO=1)
 endif()
 sub_project_warnings(sub_engine)
-# The audio path is float loops: let the compiler vectorize them with AVX2 and
-# reorder float math. Needs a CPU with AVX2 (Intel Haswell / AMD Zen and later).
-# Fast math assumes no NaN or infinity, so the engine must not rely on them.
+# The audio path is float loops: let the compiler vectorize them with AVX2.
+# Needs a CPU with AVX2 (Intel Haswell / AMD Zen and later). No fast math
+# (/fp:fast, -ffast-math): a DAW's results must not depend on the compiler
+# reordering arithmetic or assuming there's no NaN or infinity (a broken
+# plug-in's output, a division by a parameter at 0). Denormals are flushed
+# where audio is rendered instead (ScopedNoDenormals, rt/RtUtils.h).
+# -fno-math-errno only lets GCC and Clang inline sqrt and friends: nothing
+# reads errno.
 if (MSVC)
-    target_compile_options(sub_engine PRIVATE /arch:AVX2 /fp:fast)
+    target_compile_options(sub_engine PRIVATE /arch:AVX2)
 elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
-    target_compile_options(sub_engine PRIVATE -mavx2 -mfma -ffast-math)
+    target_compile_options(sub_engine PRIVATE -mavx2 -mfma -fno-math-errno)
     if (MINGW)
         # GCC on 64-bit Windows can't align the stack to 32 bytes (GCC bug 54412),
         # so an aligned AVX move to a stack slot may crash: the assembler makes
@@ -221,5 +226,5 @@ elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
         endif()
     endif()
 else()
-    target_compile_options(sub_engine PRIVATE -ffast-math)
+    target_compile_options(sub_engine PRIVATE -fno-math-errno)
 endif()
