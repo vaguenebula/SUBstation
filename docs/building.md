@@ -11,17 +11,19 @@ are is in [architecture.md](architecture.md).
   also builds and runs on **Linux** (the tests run there in CI-like containers): audio through the system's default
   backend (PulseAudio, ALSA, JACK... via miniaudio, as the *System* driver), VST3 plug-ins without their editors, no
   MIDI devices (the computer MIDI keyboard still plays).
-- A C++20 compiler: Visual Studio 2022 or newer (*Desktop development with C++*), or GCC 13 / Clang 16 or newer.
+- A C++20 compiler: Visual Studio 2022 or newer (*Desktop development with C++*), MinGW-w64 GCC 13 or newer on
+  Windows (the one Qt's installer ships), or GCC 13 / Clang 16 or newer.
 - CMake 3.26 or newer, and Ninja (recommended; Visual Studio's generator works too).
 - Qt 6.4 or newer (6.5+ recommended on Windows): Core, Gui, Qml, Quick, QuickControls2, and Test for the tests.
   - Windows: Qt's online installer, the *MSVC 2022 64-bit* build of a Qt 6 release (or MSVC 2019's, which works
-    with VS 2022).
+    with VS 2022), or its *MinGW 64-bit* build with the matching MinGW toolchain.
   - Debian/Ubuntu: `qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-controls
     qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtquick-templates
     qml6-module-qtquick-dialogs qml6-module-qtqml-workerscript qml6-module-qt-labs-settings
     qml6-module-qtquick-shapes libgl-dev libxkbcommon-dev` (and `xvfb` to run the UI's tests headless).
 - A CPU with AVX2 (Intel Haswell, AMD Zen or later) to run it: the engine is compiled with AVX2 and fast float
-  math (`/arch:AVX2 /fp:fast` with MSVC, `-mavx2 -mfma -ffast-math` with GCC and Clang). The engine must not rely on
+  math (`/arch:AVX2 /fp:fast` with MSVC, `-mavx2 -mfma -ffast-math` with GCC and Clang; with MinGW also
+  `-Wa,-muse-unaligned-vector-move`, as GCC can't align the stack for AVX on 64-bit Windows). The engine must not rely on
   NaN or infinity (fast math may drop checks for them); test for NaN on the bits instead.
 - Optional: Steinberg's ASIO SDK, for ASIO (see [ASIO SDK](#asio-sdk)).
 
@@ -46,8 +48,22 @@ C:\Qt\6.8.0\msvc2022_64\bin\windeployqt.exe --qmldir ui\qml build\bin\substation
 build\bin\substation.exe
 ```
 
-`CMAKE_PREFIX_PATH` points CMake at Qt (any Qt 6 MSVC build folder). `windeployqt` copies Qt's libraries and the QML
-modules the UI imports next to the executable; without it, run with Qt's `bin` folder on `PATH` instead. The build is
+Windows with Qt's MinGW build instead (the *MinGW 64-bit* Qt and the MinGW toolchain that Qt's installer ships
+with it, under *Developer and Designer Tools*), in the *Qt 6.x (MinGW 64-bit)* command prompt from the Start menu
+(it puts Qt's and MinGW's `bin` folders on `PATH`; CMake and Ninja can come from the same installer, in `C:\Qt\Tools\CMake_64\bin` and `C:\Qt\Tools\Ninja`):
+
+```bat
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:\Qt\6.8.0\mingw_64 -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+cmake --build build
+C:\Qt\6.8.0\mingw_64\bin\windeployqt.exe --qmldir ui\qml build\bin\substation.exe
+build\bin\substation.exe
+```
+
+`CMAKE_PREFIX_PATH` points CMake at Qt (the folder of a Qt 6 MSVC or MinGW build). `windeployqt` copies Qt's
+libraries and the QML modules the UI imports next to the executable (and, with MinGW, its runtime DLLs, which the
+plug-in scanner `substation-scan` needs too); without it, run from a prompt with Qt's `bin` folder (and MinGW's) on
+`PATH` instead. Use the compiler the Qt build was made with: MSVC for an `msvc*` Qt, Qt's own MinGW for a `mingw_64`
+one (another GCC may not match its C++ runtime). CI builds and tests both. The build is
 incremental: re-run `ninja -C build` after changing anything. Everything built lands in `build/bin`: `substation`,
 `substation-scan` (the plug-in scanner, which the application starts from its own folder), the test executables,
 and the test plug-ins under `build/testplugins`.

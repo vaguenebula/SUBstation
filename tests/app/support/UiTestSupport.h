@@ -39,6 +39,9 @@ inline bool haveDisplay() {
 class UiSession {
 public:
     UiSession() : engine_(std::make_unique<sub::Engine>()) {
+        // Qt Quick's own file dialogs, as on Linux: a native one (Windows) is
+        // modal and out of the tests' reach.
+        QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         engine_->setClipFadeMs(0);
         Session::Options options;
 #ifdef SUBSTATION_SCANNER
