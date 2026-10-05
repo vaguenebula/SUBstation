@@ -878,6 +878,10 @@ private Q_SLOTS:
         const QString lib = tmp_->filePath(QStringLiteral("lib"));
         touch(lib + QStringLiteral("/Kick.wav"));
         Backend b({});
+        // What it signalled already (its first, empty index) is taken first: a
+        // wake due when the callback is set is called right away, on this thread.
+        QVERIFY(b.wait());
+        b.native.take();
         std::atomic<int> wakes{0};
         std::atomic<bool> elsewhere{true};
         const auto main = std::this_thread::get_id();
