@@ -42,13 +42,25 @@ SelectionList {
         results.forceActiveFocus()
     }
 
+    // The next page of results once the list is scrolled near its end.
+    function fetchNearEnd() {
+        if (pages.hasMore() && contentY + 2 * height >= contentHeight)
+            pages.fetchMore()
+    }
+
     objectName: "resultsList"
-    model: browser.results
+    model: PagedRows {
+        id: pages
+        model: results.browser.results
+    }
 
     onCurrentIndexChanged: if (browser.currentRow !== currentIndex) browser.currentRow = currentIndex
-    onContentYChanged: browser.setTopRow(Math.max(0, indexAt(1, contentY + 1)))
-    // (Views ask the model for more rows near its end too; this makes sure.)
-    onAtYEndChanged: if (atYEnd && count < browser.results.total) browser.results.ensureRows(count + 256)
+    onContentYChanged: {
+        browser.setTopRow(Math.max(0, indexAt(1, contentY + 1)))
+        fetchNearEnd()
+    }
+    onCountChanged: fetchNearEnd()
+    onHeightChanged: fetchNearEnd()
     onActivated: row => browser.activate(row)
 
     Connections {
@@ -81,7 +93,8 @@ SelectionList {
         required property string icon
 
         readonly property bool selected: results.selectedRows.indexOf(index) >= 0
-        readonly property bool renaming: results.renamingRow === index
+        // (A row going away has index -1: it isn't the one renamed.)
+        readonly property bool renaming: results.renamingRow >= 0 && results.renamingRow === index
 
         width: ListView.view.width
         implicitHeight: Math.max(16, label.implicitHeight) + 4
