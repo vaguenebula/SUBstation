@@ -179,11 +179,14 @@ private Q_SLOTS:
         const auto [track, synth] = synthTrack();
         auto* knob = qobject_cast<sub::ui::KnobItem*>(test::part(cell(synth, test::kSynthGain), "knob"));
         QVERIFY(knob);
+        const int height = window()->height();
+        window()->setHeight(height + 320);  // (room below for the drag)
         const QPoint center = test::centerOf(knob);
         test::press(window(), center);
         test::moveTo(window(), center + QPoint(0, 150));
         test::moveTo(window(), center + QPoint(0, 300));  // half the range down
         test::release(window(), center + QPoint(0, 300));
+        window()->setHeight(height);
         QVERIFY(std::abs(value(track, synth, test::kSynthGain) - 0.5) < 0.02);
         auto readout = [this, &synth] {
             return test::itemNamed(cell(synth, test::kSynthGain), QStringLiteral("readout"))->property("text").toString();
@@ -552,6 +555,14 @@ private Q_SLOTS:
         ui_.screenshot(QStringLiteral("chain"));
         area()->scrollTo(effect);
         ui_.screenshot(QStringLiteral("chain-plugins"));
+        // All of it, in a window wide enough.
+        const int width = window()->width();
+        window()->setWidth(1910);
+        QTRY_COMPARE(int(ui_.panel()->width()), 1910);
+        area()->setContentX(0);
+        ui_.screenshot(QStringLiteral("chain-wide"));
+        window()->setWidth(width);
+        QTRY_COMPARE(int(ui_.panel()->width()), width);
     }
 };
 

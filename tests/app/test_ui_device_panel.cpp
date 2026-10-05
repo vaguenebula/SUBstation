@@ -147,6 +147,42 @@ private Q_SLOTS:
                  2 * 8 + ui_.panel()->property("deviceHeight").toInt() + 12 + 12);
     }
 
+    void devicesWithEditorsOfTheirOwn() {
+        const QString track = editor().addMidiTrack(-1, QStringLiteral("Keys"));
+        session().selection()->selectTrack(track);
+        const QString synth = chain(track).front();
+        const QString sampler = editor().addDevice(track, QStringLiteral("sampler"));  // (it replaces the synth)
+        const QString compressor = editor().addDevice(track, QStringLiteral("compressor"));
+        Q_UNUSED(synth);
+        area()->setContentX(0);
+        QQuickItem* f = frame(sampler);
+        QVERIFY(f);
+        auto* body = f->property("body").value<QQuickItem*>();
+        QCOMPARE(QString::fromLatin1(body->metaObject()->className()).section(u'_', 0, 0), QStringLiteral("SamplerEditor"));
+        QCOMPARE(f->width(), body->implicitWidth() + 2);  // the editor's own width, in the frame's border
+        QCOMPARE(body->height(), f->height() - 2 - partOf(sampler, "header")->height());  // the body's whole height
+        // Its pages: the title bar's arrows.
+        QCOMPARE(f->property("pages").toInt(), 2);
+        QVERIFY(partOf(sampler, "nextButton")->isVisible());
+        QCOMPARE(partOf(sampler, "pageLabel")->property("text").toString(), QStringLiteral("1/2"));
+        test::click(window(), centerOf(sampler, "nextButton"));
+        QCOMPARE(body->property("page").toInt(), 1);
+        QCOMPARE(partOf(sampler, "pageLabel")->property("text").toString(), QStringLiteral("2/2"));
+        session().selection()->selectTrack(QString());
+        session().selection()->selectTrack(track);  // made again: on the same page
+        QCOMPARE(frame(sampler)->property("body").value<QQuickItem*>()->property("page").toInt(), 1);
+        // Its menu starts with its own entries.
+        ui_.rightClick(centerOf(sampler, "title"));
+        QVERIFY(ui_.menuOpened());
+        QCOMPARE(test::menuTexts(menu()).mid(0, 3), (QStringList{"Load Sample…", "Clear Sample", "Fold"}));
+        QVERIFY(!test::menuEnabled(menu(), QStringLiteral("Clear Sample")));
+        closeMenu();
+        // One page: no arrows.
+        QVERIFY(!partOf(compressor, "nextButton")->isVisible());
+        QVERIFY(partOf(compressor, "sidechainButton")->isVisible());
+        ui_.screenshot(QStringLiteral("editors"));
+    }
+
     // --- Folding ---------------------------------------------------------------------------
 
     void foldingDevicesInTheDeviceView() {
