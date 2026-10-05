@@ -135,7 +135,8 @@ bool Session::recentProjectAvailable(const QString& path) {
     if (QFileInfo(path).isFile()) return true;
     Q_EMIT warning(QStringLiteral("%1 can't be found. It was removed from the list.").arg(QFileInfo(path).fileName()));
     QStringList kept = recentProjects();
-    kept.removeAll(path);
+    const QString key = recentEntry(path).toCaseFolded();  // (as the list keeps it: in the system's form)
+    kept.removeIf([&](const QString& known) { return known.toCaseFolded() == key; });
     setRecent(kept);
     return false;
 }

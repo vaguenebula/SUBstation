@@ -37,7 +37,9 @@ You need a C++20 compiler, CMake 3.26 or newer with Ninja, and Qt 6.4 or newer
 
 - **Windows 10/11**: Visual Studio 2022 or newer with the *Desktop development
   with C++* workload, and Qt's *MSVC 2022 64-bit* build of a Qt 6 release (6.5 or
-  newer recommended), from Qt's online installer.
+  newer recommended), from Qt's online installer. Or Qt's *MinGW 64-bit* build
+  with the MinGW toolchain the installer ships with it (see
+  [docs/building.md](docs/building.md#building)).
 - **Linux** (Debian/Ubuntu): GCC 13 or Clang 16, `cmake ninja-build`, and Qt's
   packages (`qt6-base-dev qt6-declarative-dev` and the QML modules the UI imports:
   the list is in [docs/building.md](docs/building.md#requirements)), plus `xvfb`

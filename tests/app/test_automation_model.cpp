@@ -318,7 +318,7 @@ private Q_SLOTS:
         QJsonArray tracks = data[QStringLiteral("tracks")].toArray();
         QJsonObject track = tracks[0].toObject();
         QJsonObject automation = track[QStringLiteral("automation")].toObject();
-        automation[QStringLiteral("mixer:unknown")] = QJsonArray{QJsonArray{0, 1, 0}};  // from a later version: dropped
+        automation[QStringLiteral("mixer:unknown")] = QJsonArray{QJsonValue(QJsonArray{0, 1, 0})};  // from a later version: dropped
         track[QStringLiteral("automation")] = automation;
         tracks[0] = track;
         data[QStringLiteral("tracks")] = tracks;

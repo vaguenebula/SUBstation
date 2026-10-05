@@ -223,7 +223,7 @@ private Q_SLOTS:
         QJsonArray tracks = data["tracks"].toArray();
         QJsonObject saved = tracks[0].toObject();
         QJsonObject automation = saved["automation"].toObject();
-        automation["mixer:unknown"] = QJsonArray{QJsonArray{0, 1, 0}};  // from a later version: dropped
+        automation["mixer:unknown"] = QJsonArray{QJsonValue(QJsonArray{0, 1, 0})};  // from a later version: dropped
         saved["automation"] = automation;
         tracks[0] = saved;
         data["tracks"] = tracks;

@@ -1,5 +1,7 @@
 #pragma once
-// Public engine API used by the Python bindings.
+// The engine's public API: what the application layer's engine bridge
+// (app/src/audio/EngineBridge.h), the plug-in scanner and the engine's tests use.
+// No Qt here: the engine builds and runs on its own.
 //
 // Routing (Routing.h): every track's output goes to the master or into another
 // track (a bus: a group track), and its sends into other tracks (return
@@ -10,8 +12,8 @@
 //
 // Threading model:
 //  * The audio thread (device callback) only reads the published RenderSnapshot
-//    and atomics. It never locks, allocates, frees, or touches Python.
-//  * API calls may come from any Python thread. They serialise on `mutex_`,
+//    and atomics. It never locks, allocates or frees.
+//  * API calls may come from any thread. They serialise on `mutex_`,
 //    mutate the edit model, then rebuild and publish a new snapshot.
 //  * Plug-ins are created, called and destroyed on the main (UI) thread, as
 //    plug-in formats require: the plug-in calls below, and idle(), must come

@@ -4,6 +4,7 @@
 // saved there as a PNG to look at.
 
 #include <QDir>
+#include <QFile>
 #include <QImage>
 #include <QPointer>
 #include <QQmlComponent>
@@ -11,6 +12,7 @@
 #include <QQmlContext>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QtMath>
 #include <QtQml/qqml.h>
@@ -205,8 +207,16 @@ private Q_SLOTS:
         engine.rootContext()->setContextProperty(QStringLiteral("scopeFeed"), &feed);
         QList<QQmlError> warnings;
         connect(&engine, &QQmlEngine::warnings, this, [&](const QList<QQmlError>& list) { warnings += list; });
-        QQmlComponent component(&engine);
-        component.setData(kGallery, QUrl(QStringLiteral("qrc:/gallery/Gallery.qml")));
+        // From a file: Qt 6.8 can't find a document's inline components (Heading)
+        // when it was given as data, without a file of its own.
+        QTemporaryDir folder;
+        const QString file = folder.filePath(QStringLiteral("Gallery.qml"));
+        {
+            QFile out(file);
+            QVERIFY(out.open(QIODevice::WriteOnly));
+            out.write(kGallery);
+        }
+        QQmlComponent component(&engine, QUrl::fromLocalFile(file));
         std::unique_ptr<QObject> root(component.create());
         if (!root)
             qWarning() << component.errors();

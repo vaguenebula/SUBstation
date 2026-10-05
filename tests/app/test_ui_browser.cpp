@@ -298,6 +298,9 @@ private Q_SLOTS:
     // A real drag (the platform's) out of the list onto a drop area: it
     // carries the selected rows' data; dropped, they count as used.
     void dragAndDrop() {
+#ifdef Q_OS_WIN
+        QSKIP("a drag runs Windows' own drag loop, which follows the real mouse, not the test's events");
+#endif
         browser().setPreviewEnabled(false);
         browser().setScope({QStringLiteral("builtin"), QStringLiteral("Audio Effects")});
         QVERIFY(settle());

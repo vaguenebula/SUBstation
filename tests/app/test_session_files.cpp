@@ -142,6 +142,11 @@ private Q_SLOTS:
         QVERIFY(!s.recentProjectAvailable(gone));
         QCOMPARE(f.warnings.back(), QStringLiteral("second & more.gilproj can't be found. It was removed from the list."));
         QCOMPARE(s.recentProjects(), QStringList{recent(first)});
+        // However its path is written (here with Qt's separators, the list has the system's).
+        QVERIFY(s.saveProjectAs(second));
+        QVERIFY(QFile::remove(second));
+        QVERIFY(!s.recentProjectAvailable(second));
+        QCOMPARE(s.recentProjects(), QStringList{recent(first)});
 
         s.clearRecentProjects();  // Clear List
         QVERIFY(s.recentMenuItems().isEmpty());

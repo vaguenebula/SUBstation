@@ -302,7 +302,7 @@ private Q_SLOTS:
     void oldProjectFilesLoadUnchanged() {
         const QJsonObject masterData{{"volume_db", -4.5},
                                      {"pan", 0.25},
-                                     {"automation", QJsonObject{{"mixer:volume", QJsonArray{QJsonArray{1.0, 0.75, 0.0}}}}},
+                                     {"automation", QJsonObject{{"mixer:volume", QJsonArray{QJsonValue(QJsonArray{1.0, 0.75, 0.0})}}}},
                                      {"automation_view", view(true, "mixer:volume")}};
         const QJsonObject trackData{{"id", "t1"},       {"kind", "audio"},  {"name", "Drums"},     {"color", "#ff94a6"},
                                     {"volume_db", 0.0}, {"pan", 0.0},       {"mute", false},       {"solo", false},
@@ -454,8 +454,8 @@ private Q_SLOTS:
                         {"reversed_from_relative", "audio/kick.wav"}}};
         kickTrack["automation"] = QJsonObject{
             {"device:d1:gain", QJsonArray{QJsonArray{0.0, 0.5, 0.0}, QJsonArray{2.0, 0.25, 0.5}}},
-            {"send:r1", QJsonArray{QJsonArray{1.0, 0.3, 0.0}}},
-            {"device:rk:chain:ch1:volume", QJsonArray{QJsonArray{0.0, 0.8, -1.0}}}};
+            {"send:r1", QJsonArray{QJsonValue(QJsonArray{1.0, 0.3, 0.0})}},
+            {"device:rk:chain:ch1:volume", QJsonArray{QJsonValue(QJsonArray{0.0, 0.8, -1.0})}}};
         kickTrack["automation_view"] = view(true, "device:d1:gain", QJsonArray{"send:r1"});
         kickTrack["input"] = QJsonArray{0, 1};
         kickTrack["monitor"] = "in";
@@ -479,7 +479,7 @@ private Q_SLOTS:
         QJsonObject returnTrack{{"id", "r1"},         {"kind", "return"}, {"name", "A Return"}, {"color", "#5480e4"},
                                 {"volume_db", -1.0},  {"pan", 0.0},       {"mute", false},      {"solo", false},
                                 {"height", 80},       {"devices", QJsonArray{plugin}},
-                                {"automation", QJsonObject{{"mixer:pan", QJsonArray{QJsonArray{0.0, 0.25, 0.0}}}}},
+                                {"automation", QJsonObject{{"mixer:pan", QJsonArray{QJsonValue(QJsonArray{0.0, 0.25, 0.0})}}}},
                                 {"automation_view", view()}, {"sends", QJsonObject{}}};
         const QJsonObject data{
             {"format", "gilstudio-project"},

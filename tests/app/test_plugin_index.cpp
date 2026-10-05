@@ -455,8 +455,10 @@ private Q_SLOTS:
 #else
         QCOMPARE(pluginSearchFolders({c, root + QStringLiteral("/a/")}), QStringList({a, b, c, root + QStringLiteral("/a")}));
 #endif
+#ifndef _WIN32  // (on Windows a variable set to nothing is no variable)
         qputenv("SUBSTATION_VST3_PATH", "");
         QVERIFY(standardPluginFolders().isEmpty());
+#endif
         qunsetenv("SUBSTATION_VST3_PATH");
         QVERIFY(!standardPluginFolders().isEmpty());  // the system's
     }

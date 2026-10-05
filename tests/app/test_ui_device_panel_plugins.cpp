@@ -268,6 +268,20 @@ private Q_SLOTS:
         ui_.polish();
         QQuickItem* button = test::part(frame(effect), "editButton");
         QVERIFY(button->isVisible() && button->isEnabled());
+#ifdef Q_OS_WIN
+        // Here the test effect has an editor (a Win32 window). Adding it opened it (its
+        // track is selected); the button closes it and opens it again; so does a double-click.
+        QTRY_VERIFY(bridge().isPluginEditorOpen(track, effect));
+        QTRY_VERIFY(button->property("checked").toBool());
+        test::click(window(), test::centerOf(button));
+        QTRY_VERIFY(!bridge().isPluginEditorOpen(track, effect));
+        QTRY_VERIFY(!button->property("checked").toBool());
+        test::doubleClick(window(), test::centerOf(test::part(frame(effect), "title")));
+        QTRY_VERIFY(bridge().isPluginEditorOpen(track, effect));
+        QTRY_VERIFY(button->property("checked").toBool());
+        test::click(window(), test::centerOf(button));
+        QTRY_VERIFY(!bridge().isPluginEditorOpen(track, effect));
+#else
         QVERIFY(!button->property("checked").toBool());
         QTest::qWait(10);  // (adding it asked for its editor, quietly)
         QVERIFY(!ui_.lastMessage().contains(QStringLiteral("no editor")));
@@ -288,6 +302,7 @@ private Q_SLOTS:
         // Its state follows the bridge's word.
         Q_EMIT bridge().pluginEditorChanged(track, effect);
         QVERIFY(!button->property("checked").toBool());
+#endif
     }
 
     void vst3Presets() {
