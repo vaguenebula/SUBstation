@@ -186,14 +186,18 @@ public:
     // Moves a preset's file to the system's trash (the UI asks first): true if
     // it went (presetsChanged), else false and a statusMessage.
     Q_INVOKABLE bool deletePreset(const QString& path);
+    // Gives a preset another name (the UI asks for it, offering its current
+    // one): its new path (presetsChanged), or "" if it wasn't renamed (an empty
+    // or unchanged name; or it couldn't be: a statusMessage says why).
+    Q_INVOKABLE QString renamePreset(const QString& path, const QString& name);
 
     // --- Context menus ---
     // A sidebar entry's actions, in order, as {action, label} ({} for a
     // separator): "removePlace" for a place; "rescanPlugins" for Plug-ins;
     // "showPresetFolder" for Presets; then "addPlace" and "rescan" for all.
     Q_INVOKABLE QVariantList sidebarActions(const QStringList& scope) const;
-    // A result's actions (presets only): "renamePreset" (the preset index's to
-    // do), "deletePreset", {}, "showInFolder".
+    // A result's actions (presets only): "renamePreset" (the UI asks for the
+    // name, then renamePreset()), "deletePreset", {}, "showInFolder".
     Q_INVOKABLE QVariantList resultActions(int row) const;
 
     // These items were used (added to the project) just now.
@@ -224,7 +228,7 @@ Q_SIGNALS:
     void previewStopped();
     void statusMessage(const QString& message);    // for the window's status line
     void addPlaceRequested();                      // "Add Folder…": the UI asks which folder (then addPlace())
-    void presetsChanged();                         // a preset was deleted from here: the preset index lists them again
+    void presetsChanged();                         // a preset was deleted or renamed here: the preset index lists them again
     void searchFocusRequested();
     void selectRowRequested(int row);              // select and focus this row (of the list, or the tree's)
     void positionRestored(int currentRow, int topRow);  // a list searched again: scroll so `topRow` is at the top

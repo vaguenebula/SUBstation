@@ -15,6 +15,8 @@
 #include "Text.h"
 #include "browser/BrowserMime.h"
 #include "browser/PathKeys.h"
+#include "io/Presets.h"
+#include "model/Errors.h"
 
 namespace sub::app {
 
@@ -324,6 +326,20 @@ bool BrowserController::deletePreset(const QString& path) {
     }
     Q_EMIT presetsChanged();
     return true;
+}
+
+QString BrowserController::renamePreset(const QString& path, const QString& given) {
+    const QString name = given.trimmed();
+    if (name.isEmpty() || name == QFileInfo(path).completeBaseName()) return {};
+    QString renamed;
+    try {
+        renamed = sub::app::renamePreset(path, name);
+    } catch (const EditError& error) {
+        Q_EMIT statusMessage(QStringLiteral("Could not rename the preset: ") + error.message());
+        return {};
+    }
+    Q_EMIT presetsChanged();
+    return renamed;
 }
 
 // --- Context menus ------------------------------------------------------------------------
