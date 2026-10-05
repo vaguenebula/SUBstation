@@ -1,0 +1,54 @@
+# Builds everything and runs the tests: on Linux with Qt 6.4 (Ubuntu's), and on
+# Windows (the product's platform) with MSVC and Qt 6.8. Without Steinberg's ASIO
+# SDK, which isn't redistributable: the ASIO tests skip.
+name: CI
+
+on:
+  push:
+    branches: [master, stack-rewrite-biiig]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (GCC, Qt 6.4)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build qt6-base-dev qt6-declarative-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-window qml6-module-qtquick-templates qml6-module-qtquick-dialogs \
+            qml6-module-qtqml-workerscript qml6-module-qtquick-shapes qml6-module-qt-labs-settings \
+            qml6-module-qt-labs-folderlistmodel qml6-module-qtqml-models qml6-module-qt-labs-platform \
+            libgl-dev libxkbcommon-dev libgl1-mesa-dri xvfb xauth
+      - name: Configure
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
+      - name: Build
+        run: ninja -C build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j4
+
+  windows:
+    name: Windows (MSVC, Qt 6.8)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          arch: win64_msvc2022_64
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Configure
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
+      - name: Build
+        run: ninja -C build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j4
