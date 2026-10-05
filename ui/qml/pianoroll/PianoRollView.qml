@@ -113,7 +113,9 @@ Item {
         }
     }
 
+    // The scroll bars follow the roll, except while dragged: then the roll follows them.
     ScrollBar {
+        id: vbar
         objectName: "vbar"
         x: noteGrid.x + noteGrid.width
         y: noteGrid.y
@@ -123,9 +125,13 @@ Item {
         policy: ScrollBar.AlwaysOn
         focusPolicy: Qt.NoFocus
         size: pianoRoll.vScrollPage / Math.max(1, pianoRoll.vScrollTotal)
-        position: pianoRoll.vScrollValue / Math.max(1, pianoRoll.vScrollTotal)
         stepSize: pianoRoll.rowHeight / Math.max(1, pianoRoll.vScrollTotal)
         onPositionChanged: if (pressed) pianoRoll.scrollToY(position * pianoRoll.vScrollTotal)
+
+        Binding on position {
+            when: !vbar.pressed
+            value: pianoRoll.vScrollValue / Math.max(1, pianoRoll.vScrollTotal)
+        }
     }
 
     Rectangle {
@@ -159,6 +165,7 @@ Item {
     }
 
     ScrollBar {
+        id: hbar
         objectName: "hbar"
         x: view.keysWidth
         y: velocityLane.y + velocityLane.height
@@ -168,8 +175,12 @@ Item {
         policy: ScrollBar.AlwaysOn
         focusPolicy: Qt.NoFocus
         size: pianoRoll.hScrollPage / Math.max(1, pianoRoll.hScrollTotal)
-        position: pianoRoll.hScrollValue / Math.max(1, pianoRoll.hScrollTotal)
         stepSize: Math.max(1, Math.floor(noteGrid.width / 20)) / Math.max(1, pianoRoll.hScrollTotal)
         onPositionChanged: if (pressed) pianoRoll.scrollToX(position * pianoRoll.hScrollTotal)
+
+        Binding on position {
+            when: !hbar.pressed
+            value: pianoRoll.hScrollValue / Math.max(1, pianoRoll.hScrollTotal)
+        }
     }
 }

@@ -381,6 +381,12 @@ private Q_SLOTS:
         QVERIFY(!controller()->midi());
         QCOMPARE(controller()->refs(), ClipRefs{clips_[2]});
         QVERIFY(!grid->roll()->hasClip());
+        // Refs as QML writes them, on several tracks.
+        clipView_->setProperty("leadClipId", QString());
+        QMetaObject::invokeMethod(ui_->root(), "showRefs", Q_ARG(QVariant, clips_[1].trackId),
+                                  Q_ARG(QVariant, clips_[1].clipId), Q_ARG(QVariant, clips_[0].trackId),
+                                  Q_ARG(QVariant, clips_[0].clipId));
+        QCOMPARE(controller()->refs(), (ClipRefs{clips_[0], clips_[1]}));
         // Plain ids are clips on `trackId`; unknown ones are left out.
         clipView_->setProperty("leadClipId", QString());
         clipView_->setProperty("trackId", midiTrack);
@@ -456,7 +462,12 @@ Window {
     property int deletes: 0
     Shortcut { sequences: [StandardKey.Delete]; onActivated: deletes++ }
 
+    function showRefs(track1, clip1, track2, clip2) {
+        clipView.clipIds = [{trackId: track1, clipId: clip1}, {trackId: track2, clipId: clip2}]
+    }
+
     ClipView {
+        id: clipView
         objectName: "clipView"
         anchors.fill: parent
     }

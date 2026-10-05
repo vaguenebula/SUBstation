@@ -7,6 +7,8 @@
 #include "model/Timebase.h"
 #include "pianoroll/PianoRoll.h"
 
+#include <QJSValue>
+
 #include <algorithm>
 #include <stdexcept>
 
@@ -147,8 +149,9 @@ void ClipViewController::setActive(bool active) {
 void ClipViewController::reopen() {
     if (!active_) return;
     app::ClipRefs refs;
-    for (const QVariant& entry : clipIds_) {
-        if (entry.canConvert<QVariantMap>() && entry.typeId() != QMetaType::QString) {
+    for (QVariant entry : clipIds_) {
+        if (entry.metaType() == QMetaType::fromType<QJSValue>()) entry = entry.value<QJSValue>().toVariant();
+        if (entry.typeId() == QMetaType::QVariantMap) {
             const QVariantMap map = entry.toMap();
             refs.append({map.value(QStringLiteral("trackId")).toString(),
                          map.value(QStringLiteral("clipId")).toString()});

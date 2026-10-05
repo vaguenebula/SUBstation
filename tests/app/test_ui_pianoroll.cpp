@@ -398,6 +398,21 @@ private Q_SLOTS:
         test::drag(window_, test::at(ruler, QPointF(300, 5)), test::at(ruler, QPointF(301, 20)));
         QVERIFY(roll()->pxPerBeat() > zoom);
         QCOMPARE(session().bridge()->position(), position);  // neither drag played from there
+        // The scroll bars: dragging the vertical one's handle scrolls the rows, the
+        // horizontal one's time.
+        auto* vbar = clipView_->findChild<QQuickItem*>(QStringLiteral("vbar"));
+        roll()->setScrollY(0);
+        const QPoint handle = test::at(vbar, QPointF(vbar->width() / 2, 10));
+        test::drag(window_, handle, handle + QPoint(0, 40));
+        QVERIFY(roll()->scrollY() > 0);
+        const double perPixel = roll()->vScrollTotal() / vbar->height();
+        QVERIFY(std::abs(roll()->scrollY() - 40 * perPixel) <= perPixel + 1);
+        auto* hbar = clipView_->findChild<QQuickItem*>(QStringLiteral("hbar"));
+        roll()->setScrollBeats(0);
+        const QPoint thumb = test::at(hbar, QPointF(10, hbar->height() / 2));
+        test::drag(window_, thumb, thumb + QPoint(30, 0));
+        QVERIFY(roll()->scrollBeats() > 0);
+        QCOMPARE(roll()->hScrollValue(), std::trunc(roll()->scrollBeats() * roll()->pxPerBeat()));
     }
 
     void noteToolsFloatByNotesSelectedByDragging() {

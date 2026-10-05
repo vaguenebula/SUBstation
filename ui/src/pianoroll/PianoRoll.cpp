@@ -21,7 +21,10 @@ PianoRoll::PianoRoll(QObject* parent) : QObject(parent), rng_(QRandomGenerator::
     view_.setGridLevel(1);  // a little wider than the arrangement's: 1/16 notes across a bar
 }
 
-PianoRoll::~PianoRoll() = default;
+PianoRoll::~PianoRoll() {
+    // A key still sounding stops with the roll.
+    if (auditioned_ && session_ && !trackId_.isEmpty()) bridge()->previewNote(trackId_, *auditioned_, 0);
+}
 
 void PianoRoll::setSession(app::Session* session) {
     if (session == session_) return;
