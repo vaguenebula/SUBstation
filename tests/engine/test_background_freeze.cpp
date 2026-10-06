@@ -929,6 +929,33 @@ TEST_CASE("background rendering: past what it can't keep, it goes on") {
         1, rendering()));
 }
 
+TEST_CASE("background rendering: while it plays, an edit behind the playhead is rendered too") {
+    // Nothing is left to render ahead, so it goes back to the edit: it renders
+    // there until it is done, though the playhead is far past it.
+    const Wavs wavs;
+    checkSameButCold(both(
+        [&](Session& s) {
+            const Song song = settledSong(s, wavs);
+            renderAll(s);
+            s.engine.play();
+            s.run(4.0);
+            std::vector<sub::ClipDesc> clips = twoClips(wavs.drums, song.split);
+            clips[0].gain = 0.5f;  // (to 3 s: what plays here stays as it is)
+            s.engine.setTrackClips(song.drums, clips);
+            const int64_t rendered = s.freezing ? s.engine.renderInBackground(framesOf(30.0)) : 0;
+            s.settle();
+            s.mark();  // (what the delay still holds from before the jump goes on without the cache)
+            s.locate(0.0);
+            const uint64_t drums = s.fromCache(song.drums);
+            s.run(5.5);
+            if (!s.freezing) return;
+            CHECK(rendered < static_cast<int64_t>(framesOf(15.0)));
+            CHECK_EQ(s.fromCache(song.drums) - drums, framesOf(5.5));
+        },
+        1, rendering()),
+        1);
+}
+
 namespace {
 
 // The drums' second clip is cut short: a short one (2 to 2.5 s) of gain `gain` between.

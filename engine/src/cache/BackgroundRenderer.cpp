@@ -191,9 +191,10 @@ bool BackgroundRenderer::step() {
 
     const int64_t position = renderer_.position();
     bool replan = !positioned_ || position >= windowEnd_;
-    if (!replan && watch_.playing.load(std::memory_order_relaxed)) {
-        // The playhead caught up: what it would render next plays before it is done.
-        // (Counting from the gap it went for: the warm-up before it is never kept.)
+    if (!replan && ahead_ && watch_.playing.load(std::memory_order_relaxed)) {
+        // It went for a gap ahead of the playhead, and the playhead caught up:
+        // what it would render next plays before it is done. (Counting from the
+        // gap: the warm-up before it is never kept.)
         const int64_t lead = std::llround(kLeadSeconds * snap->sampleRate);
         replan = std::max(position, lastGap_) < watch_.playhead.load(std::memory_order_relaxed) + lead;
     }
@@ -301,10 +302,17 @@ bool BackgroundRenderer::plan() {
         while (window.from < window.to) {
             const int64_t gap = firstGap(window.from, window.to);
             if (gap >= window.to) break;
-            // The same gap again: what it rendered there wasn't kept. With no
-            // blocks to keep it in (the budget is spent), it waits; otherwise it
-            // looks past it for the strips without one there.
             const uint64_t lost = framesLost();
+            const bool playing = watch_.playing.load(std::memory_order_relaxed);
+            if (gap == lastGap_ && positioned_ && renderer_.position() <= gap) {
+                // (Still on its way there: it renders on.)
+                ahead_ = playing && gap >= playhead;
+                windowEnd_ = window.to;
+                return true;
+            }
+            // The same gap again, rendered past: what it rendered there wasn't
+            // kept. With no blocks to keep it in (the budget is spent), it waits;
+            // otherwise it looks past it for the strips without one there.
             if (gap == lastGap_) {
                 lastGap_ = -1;
                 if (lost != lostAtPlan_) {
@@ -318,6 +326,7 @@ bool BackgroundRenderer::plan() {
             }
             lastGap_ = gap;
             lostAtPlan_ = lost;
+            ahead_ = playing && gap >= playhead;
             // From a warm-up before it (the longest of the strips it is for):
             // before the song's start if need be, through the silence there.
             renderer_.preRollFrom(gap - prerollAt(gap) - kMargin);

@@ -1,8 +1,8 @@
-// Background freezing, phase 1 (docs/engine/background-freeze.md): what playing
-// strips from their cache saves, and what keeping it costs, on a song of real
-// VST3 plug-ins.
+// Background freezing (docs/engine/background-freeze.md): what playing strips
+// from their cache saves, and what keeping it costs, on a song of real VST3
+// plug-ins.
 //
-//     background_freeze_bench [--bars 32] [--threads 1] [--buffer 256] [--warm 8] [--idle 0]
+//     background_freeze_bench [--bars 32] [--threads 1] [--buffer 256] [--warm 8] [--idle 0] [--background 1]
 //
 // The song is the one the plug-in CPU experiments measured (perf-experiments
 // branch, benchmarks/plugin_cpu_bench.cpp): 16 tracks in sections of 8 bars,
@@ -17,7 +17,10 @@
 // --idle; a warm-up of --warm seconds): through once, again, again after a
 // note edit on one track in the third section, and again after a parameter of
 // a drum track's EQ changed. The cache store's work is done after each buffer,
-// as its thread would in real time, and timed apart. For each pass: the CPU
+// as its thread would in real time, and timed apart. With --background 1 (phase
+// 2), before each pass the background renderer renders all it would before the
+// pass plays (on this thread: its CPU time is the background's, apart; the
+// first time, it makes the shadow instances too). For each pass: the CPU
 // time of the buffers on this thread (with --threads 1, all the rendering),
 // their wall time, the store's CPU time, the share of strips' frames played
 // from the cache, and how far the output is from the same pass with the cache
@@ -343,10 +346,12 @@ struct Options {
     int buffer = 256;
     double warm = 8.0;
     double idle = 0.0;
+    bool background = true;
 };
 
 struct Pass {
     std::string name;
+    double backgroundCpu = 0.0;  // rendering in the background before it
     double renderCpu = 0.0, renderWall = 0.0, storeCpu = 0.0;
     double fromCache = 0.0;  // share of the strips' frames
     std::vector<float> out;
@@ -356,12 +361,19 @@ uint64_t sum(const sub::BackgroundFreezingStats& stats, bool cache) {
     return cache ? stats.framesFromCache : stats.framesLive + stats.framesFromCache;
 }
 
-Pass play(sub::Engine& engine, const std::string& name, int64_t frames, int buffer) {
+Pass play(sub::Engine& engine, const std::string& name, int64_t frames, int buffer, bool background) {
     Pass pass;
     pass.name = name;
     sub::ManualBackend* device = sub::ManualBackend::current();
     if (!device) throw Stop("The Manual driver isn't open");
     engine.setPositionBeats(0.0);
+    if (background) {
+        // All it would render before the pass plays (the song and its warm-ups: never more than four times it).
+        const double cpu = threadCpuSeconds();
+        engine.renderInBackground(4 * frames);
+        engine.serviceBackgroundFreezing();
+        pass.backgroundCpu = threadCpuSeconds() - cpu;
+    }
     const sub::BackgroundFreezingStats before = engine.backgroundFreezingStats();
     const auto buffers = (frames + buffer - 1) / buffer;
     for (int64_t b = 0; b < buffers; ++b) {
@@ -399,6 +411,8 @@ std::vector<Pass> run(const Options& options, const Sounds& sounds, bool freezin
     settings.enabled = freezing;
     settings.warmSeconds = options.warm;
     settings.idleSeconds = options.idle;
+    settings.render = options.background;
+    settings.renderThread = false;  // (play() renders in the background when it should, timed apart)
     engine.setBackgroundFreezing(settings);
     sub::DeviceConfig config;
     config.driver = sub::ManualBackend::kName;
@@ -410,22 +424,28 @@ std::vector<Pass> run(const Options& options, const Sounds& sounds, bool freezin
 
     std::vector<Pass> passes;
     engine.play();
-    passes.push_back(play(engine, "first", frames, options.buffer));
-    passes.push_back(play(engine, "second", frames, options.buffer));
+    const bool background = freezing && options.background;
+    passes.push_back(play(engine, "first", frames, options.buffer, background));
+    passes.push_back(play(engine, "second", frames, options.buffer, background));
     // One note of the lead moved in the third section (the chorus), if the song has one.
     std::vector<sub::NoteDesc> notes = song.leadNotes;
     if (!notes.empty()) notes.front().key += 2;
     engine.setTrackNotes(song.lead, notes);
-    passes.push_back(play(engine, "note edit", frames, options.buffer));
+    passes.push_back(play(engine, "note edit", frames, options.buffer, background));
     // A parameter of the kick's EQ: the kick, the drum group and the master change throughout.
     const int param = 2;
     engine.setProcessorParam(song.kickEq, param, engine.processorParam(song.kickEq, param) * 0.9f + 0.05f);
-    passes.push_back(play(engine, "param edit", frames, options.buffer));
+    passes.push_back(play(engine, "param edit", frames, options.buffer, background));
     engine.stop();
     if (freezing) {
         const sub::BackgroundFreezingStats stats = engine.backgroundFreezingStats();
-        std::printf("  cache: %zu blocks (%zu silent), %.1f MB\n", stats.blocks, stats.silentBlocks,
-                    static_cast<double>(stats.bytes) / (1024.0 * 1024.0));
+        std::printf("  cache: %zu blocks (%zu silent), %.1f MB; %zu shadows\n", stats.blocks, stats.silentBlocks,
+                    static_cast<double>(stats.bytes) / (1024.0 * 1024.0), stats.shadows);
+        std::printf("  background: %.1f s kept (strips' seconds), %.1f s of it rendered with devices running, "
+                    "%.1f s kept from what a change had rung out of\n",
+                    static_cast<double>(stats.framesRendered) / kRate,
+                    static_cast<double>(stats.framesRenderedLive) / kRate,
+                    static_cast<double>(stats.framesReplayed) / kRate);
     }
     engine.closeDevice();
     engine.idle(true);
@@ -438,12 +458,12 @@ int parseInt(const char* text) { return std::atoi(text); }
 
 int main(int argc, char** argv) {
     const char* const usage =
-        "background_freeze_bench [--bars 32] [--threads 1] [--buffer 256] [--warm 8] [--idle 0]\n";
+        "background_freeze_bench [--bars 32] [--threads 1] [--buffer 256] [--warm 8] [--idle 0] [--background 1]\n";
     Options options;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const bool valued = arg == "--bars" || arg == "--threads" || arg == "--buffer" || arg == "--warm" ||
-                            arg == "--idle";
+                            arg == "--idle" || arg == "--background";
         if (!valued) {
             std::printf("%s", usage);
             return arg == "--help" ? 0 : 2;
@@ -461,6 +481,8 @@ int main(int argc, char** argv) {
             options.buffer = std::max(16, parseInt(value));
         } else if (arg == "--warm") {
             options.warm = std::atof(value);
+        } else if (arg == "--background") {
+            options.background = parseInt(value) != 0;
         } else {
             options.idle = std::atof(value);
         }
@@ -469,20 +491,21 @@ int main(int argc, char** argv) {
         const TempFolder folder;
         const Sounds sounds = makeSounds(folder.path());
         const double seconds = options.bars * kBarBeats * kBeatSec;
-        std::printf("%d bars (%.0f s), %d thread(s), %d-frame buffers, warm-up %.1f s, idle %.1f s\n", options.bars,
-                    seconds, options.threads, options.buffer, options.warm, options.idle);
+        std::printf("%d bars (%.0f s), %d thread(s), %d-frame buffers, warm-up %.1f s, idle %.1f s, background %s\n",
+                    options.bars, seconds, options.threads, options.buffer, options.warm, options.idle,
+                    options.background ? "on" : "off");
         std::printf("off:\n");
         const std::vector<Pass> off = run(options, sounds, false);
         std::printf("on:\n");
         const std::vector<Pass> on = run(options, sounds, true);
-        std::printf("\n%-11s %12s %12s %10s %12s %12s %10s %14s\n", "pass", "off cpu s", "on cpu s", "saved",
-                    "on wall s", "store cpu s", "cached", "vs off, dB");
+        std::printf("\n%-11s %12s %12s %10s %12s %12s %10s %14s %12s\n", "pass", "off cpu s", "on cpu s", "saved",
+                    "on wall s", "store cpu s", "cached", "vs off, dB", "bg cpu s");
         for (size_t p = 0; p < on.size(); ++p) {
             const Pass& a = off[p];
             const Pass& b = on[p];
-            std::printf("%-11s %12.2f %12.2f %9.0f%% %12.2f %12.3f %9.0f%% %14.1f\n", b.name.c_str(), a.renderCpu,
-                        b.renderCpu, 100.0 * (1.0 - b.renderCpu / a.renderCpu), b.renderWall, b.storeCpu,
-                        100.0 * b.fromCache, differenceDb(b.out, a.out));
+            std::printf("%-11s %12.2f %12.2f %9.0f%% %12.2f %12.3f %9.0f%% %14.1f %12.2f\n", b.name.c_str(),
+                        a.renderCpu, b.renderCpu, 100.0 * (1.0 - b.renderCpu / a.renderCpu), b.renderWall, b.storeCpu,
+                        100.0 * b.fromCache, differenceDb(b.out, a.out), b.backgroundCpu);
         }
         std::printf("baseline: the second pass against the first, cache off: %.1f dB\n",
                     differenceDb(off[1].out, off[0].out));

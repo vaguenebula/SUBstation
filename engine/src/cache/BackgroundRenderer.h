@@ -129,6 +129,7 @@ private:
     int64_t nextCheck_ = 0;    // where it looks again whether there is more ahead to render
     int64_t lastGap_ = -1;     // where it last planned to render from, and what its lanes had lost then
     uint64_t lostAtPlan_ = 0;
+    bool ahead_ = false;       // ... ahead of the playhead, which played
     std::chrono::steady_clock::duration stuckWait_{};     // the budget is spent: it waits, longer each time
     std::chrono::steady_clock::time_point stuckUntil_{};  // it renders nothing until then
     std::atomic<uint64_t> framesRendered_{0};
