@@ -629,12 +629,21 @@ apart (the first time with making the shadows), on the song above.
 
 | Pass | `W` = 8 s: render CPU, cached | background CPU before it | `W` = 2 s: render CPU, cached | background CPU before it |
 |---|---|---|---|---|
-| First | **−96%**, 100% | 22.7 s (with making 48 shadows) | **−97%**, 100% | 19.4 s |
-| Second, unchanged | −93%, 99% | 6.9 s | −97%, 100% | 0 |
-| After one note of the lead moved | −84%, 95% | 4.4 s | −97%, 100% | 1.1 s |
-| After a parameter of the kick's EQ changed | −93%, 99% | 7.2 s | −62%, 95% | 1.1 s |
+| First | **−97%**, 100% | 21.7 s (with making 48 shadows) | **−97%**, 100% | 19.2 s |
+| Second, unchanged | −64% to −92%, 95–99% (below) | 0 to 7.2 s | −97%, 100% | 0 |
+| After one note of the lead moved | −93%, 99% | 9.0 s | −97%, 100% | 0.8 s |
+| After a parameter of the kick's EQ changed | −93%, 99% | 7.3 s | −95%, 100% | 4.3 s |
 
-(Provisional: measured before the last fixes; to be replaced.)
+The first pass, which phase 1 couldn't save anything on, plays wholly from the cache. The background
+renders about one and a half to two times the CPU of a pass to get there (the song, a warm-up before
+and after it, the shadows loaded), which it takes from idle cores. What stays live is the master's
+LSP Limiter: it reports its latency only once it has processed, which, everything else playing from
+the cache, happens at some point while the master plays; its version moves on and the master plays
+live until the background has rendered it again (here, where the background renders only between
+passes, for the rest of the pass, or not at all if it happened before). Convergence doesn't show in
+these passes: the note edit is the first change the lead's strips see, the one they learn their
+tails from, and a parameter changes a strip throughout. The store's thread took 0.3–0.6 s a pass, as
+in phase 1; the output differs from the cache off's as much as two passes without it differ.
 
 **Tests.** [test_background_freeze.cpp](../../tests/engine/test_background_freeze.cpp), "background
 rendering": with background rendering before playing (on the calling thread, or on its own thread
