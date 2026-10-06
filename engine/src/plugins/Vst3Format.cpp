@@ -30,10 +30,14 @@ public:
     }
 };
 
+}  // namespace
+
 Steinberg::FUnknown* hostContext() {
     static auto* host = new SubHostApplication;  // never freed: plug-ins may keep it until they unload
     return host;
 }
+
+namespace {
 
 // Some plug-ins need COM on the thread that loads them (Windows). Qt has set it
 // up on the UI thread already; the scanner process has not.

@@ -364,6 +364,12 @@ struct StripCacheRender {
     std::vector<int> sources;                // the snapshot tracks whose signal reaches its input or its devices
     // Worth caching and possible: a device switched on, and no edge taps it after a device.
     bool cacheable = false;
+    // In the background renderer's snapshot (BackgroundRenderer.h): the version
+    // of the strip its devices (shadow instances) are in the state of (0: the
+    // point's version, as in the live snapshot), and whether some of its devices
+    // have no shadow (it can't be rendered there: it plays its cache, or nothing).
+    uint64_t version = 0;
+    bool unavailable = false;
 };
 
 // A track in the routing graph (Routing.h). The snapshot lists tracks in an

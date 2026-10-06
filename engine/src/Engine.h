@@ -61,6 +61,7 @@
 #include "RenderJob.h"
 #include "Renderer.h"
 #include "Routing.h"
+#include "cache/BackgroundRenderer.h"
 #include "Scheduler.h"
 #include "Snapshot.h"
 #include "Transport.h"
@@ -156,12 +157,16 @@ struct TrackCost {
 };
 
 // Background freezing (docs/engine/background-freeze.md): what strips played
-// live, unchanged, is kept and played again instead of running their devices.
+// live, unchanged, is kept and played again instead of running their devices;
+// and what hasn't played yet is rendered into the cache in the background, by
+// second instances of the devices, with CPU no one else wants.
 struct BackgroundFreezingSettings {
     bool enabled = false;
     double idleSeconds = 10.0;  // a strip plays from its cache once nothing changed it for this long
     double warmSeconds = 8.0;   // how long devices must run before what they put out is kept
     double budgetMB = 1024.0;   // memory for the cache
+    bool render = true;         // render in the background too
+    bool renderThread = true;   // ... on a thread of its own (false: only renderInBackground() does: tests)
 };
 
 // What the cache holds, and what it saved (Engine::backgroundFreezingStats).
@@ -173,6 +178,8 @@ struct BackgroundFreezingStats {
     uint64_t framesFromCache = 0;  // strips' chunks played from the cache (frames, summed over strips)
     uint64_t framesLive = 0;       // ... with their devices running
     uint64_t framesCaptured = 0;   // ... kept
+    uint64_t framesRendered = 0;   // ... rendered in the background and kept
+    size_t shadows = 0;            // second instances of devices, for the background
 };
 
 struct MeterReading {
@@ -524,6 +531,10 @@ public:
     // One round of the cache's own thread, now (it does one every few
     // milliseconds; tests call it to be sure what was captured is published).
     void serviceBackgroundFreezing();
+    // Brings the background renderer up to date (its shadows, its snapshot) and
+    // renders up to `frames` frames of what it has to do now, on the calling
+    // thread (tests, benchmarks). Returns the frames rendered (0: nothing to do).
+    int64_t renderInBackground(int64_t frames);
 
     // --- Housekeeping ---------------------------------------------------------
     // Call regularly from the UI thread: frees retired snapshots and removed
@@ -742,6 +753,17 @@ private:
     // idle(): changes devices made themselves, editors open, and resetting the
     // plug-ins of strips that play from their cache.
     void cacheIdle(bool rendering);
+
+    // Background rendering (EngineBackground.cpp, cache/BackgroundRenderer.h).
+    struct Shadow {
+        std::shared_ptr<Processor> live;    // the device (kept while its shadow is)
+        std::shared_ptr<Processor> shadow;  // null: it can have none
+    };
+    // idle(): shadows made, brought up to date and dropped, the background
+    // renderer's snapshot rebuilt (`now`: without waiting for edits to settle).
+    void backgroundIdle(bool now);
+    // The live snapshot with its devices swapped for their shadows and render state of its own.
+    std::shared_ptr<const RenderSnapshot> buildShadowSnapshotLocked(const RenderSnapshot& live, int64_t& songEnd);
     // Where a sidechain leaves its source: after its fader, before it, or after
     // its first `n` devices (returns n; -1: after all of them). A tap after a
     // device that isn't in the source's main chain (any more; or is in a rack
@@ -767,6 +789,8 @@ private:
     std::atomic<bool> liveSuspended_{false};
     std::atomic<uint64_t> audioEpoch_{0};
     std::atomic<bool> deviceRunningFlag_{false};  // deviceRunning_, for the cache's thread
+    std::atomic<uint64_t> backgroundEpoch_{0};    // the background renderer's chunks (BackgroundRenderer::Watch)
+    std::atomic<bool> backgroundBusy_{false};
 
     std::atomic<const RenderSnapshot*> snapshot_{nullptr};
     std::shared_ptr<const RenderSnapshot> snapshotHold_;
@@ -819,6 +843,17 @@ private:
     std::vector<std::string> midiPorts_;
     // The cache's own thread (background freezing): after what it reads, so it ends first.
     std::unique_ptr<CacheStore> cacheStore_;
+    // Background rendering (main thread): the shadows, by the device they shadow;
+    // the version of each strip they are in the state of; the live snapshot the
+    // background renderer's was built from. The renderer is last: it ends first.
+    bool backgroundRender_ = true;
+    bool backgroundThread_ = true;
+    double backgroundRate_ = 0.0;
+    bool backgroundHasThread_ = false;
+    std::unordered_map<const Processor*, Shadow> shadows_;
+    std::unordered_map<uint32_t, uint64_t> shadowVersions_;
+    uint64_t shadowGeneration_ = 0;
+    std::unique_ptr<BackgroundRenderer> background_;
     MidiInputDevices midiDevices_;  // last: closed first, while the rest still stands
 };
 

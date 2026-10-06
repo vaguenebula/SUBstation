@@ -135,6 +135,19 @@ public:
     // are opt-in (exports leave them off).
     void renderOffline(const RenderSnapshot& snap, float* outStereo, int64_t frames,
                        bool loop = false, bool metronome = false) noexcept;
+    // One chunk (at most kMaxBlock frames) of the background renderer
+    // (BackgroundRenderer.h): rendered as live playback renders it (its
+    // smoothing, its cache logic), in the snapshot's own state; what it puts out
+    // goes nowhere.
+    void renderBackground(const RenderSnapshot& snap, int frames, bool loop) noexcept;
+    // Hands the blocks it was capturing into (in its cache lane) to the store as
+    // they are: it stops rendering (the background renderer has no next chunk
+    // that would).
+    void finishCaptures(const RenderSnapshot& snap) noexcept;
+    // Where the background renderer starts (a jump, wherever it was: every strip
+    // starts fresh). May be before the song's start: it warms up through the
+    // silence there (nothing before 0 is captured).
+    void preRollFrom(int64_t samples) noexcept;
 
     // Renders the timeline from the current position, like renderOffline(), but
     // puts out snapshot track `track`'s signal before its fader (after its
@@ -170,6 +183,10 @@ public:
     // Background freezing (cache/StripCache.h): the engine's settings (null:
     // off). Only live renders use the cache. Non-real-time.
     void setCacheSettings(const CacheSettings* settings) noexcept { cacheSettings_ = settings; }
+    // Which of each cache point's lanes it renders with (CachePoint::kLiveLane,
+    // or kBackgroundLane: the background renderer, over a snapshot of shadow
+    // instances: it never plays what it renders, and captures it all).
+    void setCacheLane(int lane) noexcept { cacheLane_ = lane; }
 
     void setDelayLines(const std::vector<std::shared_ptr<DelayLine>>* lines,
                        const std::vector<std::shared_ptr<DelayLine>>* deviceLines = nullptr,
@@ -330,8 +347,8 @@ private:
     // Frames good blocks cover from the next chunk on, as the playhead will go (wrapping where the loop does), up to `most`.
     int64_t cacheRunway(const RenderSnapshot& snap, const BlockSet* blocks, const DirtyLog* dirty, uint64_t version,
                         int64_t most) const noexcept;
-    void captureChunk(CachePoint& point, const CacheStep& step, const float* left, const float* right) noexcept;
-    static void finishBlock(CachePoint& point) noexcept;
+    void captureChunk(CachePoint::Lane& lane, const CacheStep& step, const float* left, const float* right) noexcept;
+    static void finishBlock(CachePoint::Lane& lane) noexcept;
     // The graph's job: track `node` of the chunk's snapshot, on thread `worker`.
     static void renderNode(void* self, int node, int worker) noexcept;
     // A track, from its TrackBuffers (prepared by the prologue) and its incoming
@@ -480,6 +497,7 @@ private:
 
     // Background freezing.
     const CacheSettings* cacheSettings_ = nullptr;
+    int cacheLane_ = CachePoint::kLiveLane;
     CacheChunk cacheChunk_;
     int64_t framesSinceWrap_ = std::numeric_limits<int64_t>::max() / 2;  // the playhead's, if it moved since
     CacheContext lastWrap_;

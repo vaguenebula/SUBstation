@@ -37,6 +37,15 @@ sub::BackgroundFreezingSettings freezing(bool enabled = true, double budgetMB = 
     settings.idleSeconds = 0.0;  // a strip plays from its cache as soon as it is good
     settings.warmSeconds = kWarm;
     settings.budgetMB = budgetMB;
+    settings.render = false;  // (phase 1: what plays live is kept; background rendering below)
+    return settings;
+}
+
+// With background rendering: renderInBackground() renders (`thread`: its own thread too).
+sub::BackgroundFreezingSettings rendering(bool thread = false, double budgetMB = 1024.0) {
+    sub::BackgroundFreezingSettings settings = freezing(true, budgetMB);
+    settings.render = true;
+    settings.renderThread = thread;
     return settings;
 }
 
@@ -358,8 +367,10 @@ TEST_CASE("background freezing: the store hands out blocks within its budget, co
     settings.budgetBytes = static_cast<int64_t>(4 * kBlock);
     std::atomic<uint64_t> epoch{1};
     std::atomic<bool> running{true};
+    std::atomic<uint64_t> backgroundEpoch{0};
+    std::atomic<bool> backgroundBusy{false};
     std::atomic<int64_t> playhead{0};
-    sub::CacheStore store(settings, epoch, running, playhead);
+    sub::CacheStore store(settings, epoch, running, backgroundEpoch, backgroundBusy, playhead);
     auto point = std::make_shared<sub::CachePoint>();
     store.setPoints({{point, nullptr}});
     store.service();
@@ -367,13 +378,13 @@ TEST_CASE("background freezing: the store hands out blocks within its budget, co
     // Three captured: kept, and empty ones handed out while the budget allows.
     for (int64_t cell = 0; cell < 3; ++cell) {
         sub::CacheBlock* block = nullptr;
-        REQUIRE(point->spares.pop(block));
+        REQUIRE(point->live().spares.pop(block));
         block->cell = cell;
         block->from = 0;
         block->to = static_cast<int>(sub::kCacheBlockFrames);
         block->version = point->version.load();
         std::fill_n(block->samples.get(), 2 * sub::kCacheBlockFrames, 0.25f);
-        REQUIRE(point->completed.push(block));
+        REQUIRE(point->live().completed.push(block));
         store.service();
     }
     CHECK_EQ(store.stats().blocks, size_t{3});
@@ -692,4 +703,228 @@ TEST_CASE("background freezing: what a latent device still holds after a jump is
             if (s.freezing) CHECK(s.fromCache(track) - cached > framesOf(2.0));
         },
         1, shortWarmUp()));
+}
+
+// --- Background rendering (phase 2) -------------------------------------------------
+
+namespace {
+
+// Renders in the background now, until there is nothing left to render (or `seconds`).
+void renderAll(Session& s, double seconds = 30.0) {
+    if (!s.freezing) return;
+    s.engine.renderInBackground(static_cast<int64_t>(seconds * kSampleRate));
+    s.settle();
+}
+
+// The song, with its devices settled on the values it gave them: the live ones
+// ramp to them the first time they run, shadows are prepared with them (and
+// the background renders from before the start: the start is cached too).
+Song settledSong(Session& s, const Wavs& wavs) {
+    const Song song = makeSong(s.engine, wavs);
+    s.run(0.1);  // (stopped: they run on silence)
+    return song;
+}
+
+}  // namespace
+
+TEST_CASE("background rendering: the first pass plays from the cache, sample for sample") {
+    // Rendered in the background before playing (from a warm-up before the
+    // start), every strip plays from the cache the first time it plays.
+    const Wavs wavs;
+    checkSame(both(
+        [&](Session& s) {
+            const Song song = settledSong(s, wavs);
+            renderAll(s);
+            s.engine.play();
+            const uint64_t drums = s.fromCache(song.drums), group = s.fromCache(song.group);
+            const uint64_t master = s.fromCache(sub::Engine::kMaster);
+            s.run(6.0);
+            if (!s.freezing) return;
+            const sub::BackgroundFreezingStats stats = s.engine.backgroundFreezingStats();
+            CHECK(stats.framesRendered > 0);
+            CHECK(stats.shadows >= 4);  // (drums' two devices, the bass's, the group's, the master's)
+            // (All of it: it warmed up before the start.)
+            CHECK(s.fromCache(song.drums) - drums >= framesOf(6.0) - 4 * kBuffer);
+            CHECK(s.fromCache(song.group) - group >= framesOf(6.0) - 4 * kBuffer);
+            CHECK(s.fromCache(sub::Engine::kMaster) - master >= framesOf(6.0) - 4 * kBuffer);
+        },
+        1, rendering()));
+}
+
+TEST_CASE("background rendering: an edit ahead is rendered again before it plays") {
+    const Wavs wavs;
+    checkSame(both(
+        [&](Session& s) {
+            const Song song = settledSong(s, wavs);
+            renderAll(s);
+            s.engine.play();
+            s.run(1.0);
+            // The second clips (from 3 s) change; the background renders them again.
+            s.engine.setTrackClips(song.drums, twoClips(wavs.drums, song.split, 0.5f));
+            s.engine.setTrackClips(song.bass, twoClips(wavs.bass, song.split, 0.5f));
+            renderAll(s);
+            const uint64_t drums = s.fromCache(song.drums), group = s.fromCache(song.group);
+            s.run(5.0);
+            if (!s.freezing) return;
+            CHECK_EQ(s.fromCache(song.drums) - drums, framesOf(5.0));  // through the edit: never live
+            CHECK_EQ(s.fromCache(song.group) - group, framesOf(5.0));
+        },
+        1, rendering()));
+}
+
+TEST_CASE("background rendering: a device's new parameter and state are rendered again") {
+    const Wavs wavs;
+    for (const std::string edit : {"parameter", "state"}) {
+        INFO("edit: " + edit);
+        checkSameButCold(both(
+            [&](Session& s) {
+                const Song song = settledSong(s, wavs);
+                setParam(s.engine, song.drumsGain, "gain", -12.f);
+                const std::vector<uint8_t> quieter = s.engine.processorState(song.drumsGain);
+                setParam(s.engine, song.drumsGain, "gain", -3.f);
+                renderAll(s);
+                s.engine.play();
+                s.run(2.0);
+                s.mark();
+                if (edit == "parameter") setParam(s.engine, song.drumsGain, "gain", -9.f);
+                if (edit == "state") s.engine.setProcessorState(song.drumsGain, quieter);
+                s.run(0.25);  // (live, cold, meanwhile)
+                renderAll(s);
+                const uint64_t drums = s.fromCache(song.drums);
+                s.run(3.0);
+                // From half a second on (what plays sooner, the live renderer keeps itself).
+                if (s.freezing) CHECK(s.fromCache(song.drums) - drums >= framesOf(2.5) - 4 * kBuffer);
+            },
+            1, rendering()), 1);
+    }
+}
+
+TEST_CASE("background rendering: plug-ins have shadows too") {
+    requireTestPlugins();
+    const Wavs wavs;
+    checkSame(both(
+        [&](Session& s) {
+            s.engine.loadSource(wavs.drums);
+            const uint32_t track = s.engine.addTrack();
+            s.engine.setTrackClips(track, twoClips(wavs.drums, 3.0));
+            const uint32_t effect = addTestPlugin(s.engine, s.engine.trackChain(track), "SUB Test Effect");
+            s.engine.setProcessorParam(effect, FX_GAIN, 0.3f);
+            renderAll(s);
+            s.engine.play();
+            const uint64_t cached = s.fromCache(track);
+            s.run(6.0);
+            if (!s.freezing) return;
+            CHECK(s.engine.backgroundFreezingStats().shadows >= 1);
+            CHECK(s.fromCache(track) - cached >= framesOf(6.0 - 2 * kWarm) - 4 * kBuffer);
+        },
+        1, rendering()));
+}
+
+TEST_CASE("background rendering: on its own thread, while it plays") {
+    // The background renderer's thread renders as the first pass plays (it may
+    // or may not have got far): what plays is the same either way.
+    const Wavs wavs;
+    checkSameButCold(both(
+        [&](Session& s) {
+            const Song song = settledSong(s, wavs);
+            if (s.freezing) {
+                // Until it has rendered some (it starts once edits have settled: a second).
+                const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                while (s.engine.backgroundFreezingStats().framesRendered == 0 &&
+                       std::chrono::steady_clock::now() < until) {
+                    s.engine.idle();
+                    s.settle();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+                CHECK(s.engine.backgroundFreezingStats().framesRendered > 0);
+            }
+            s.engine.play();
+            s.run(6.0);
+            s.mark();  // (a locate where devices stood idle: they start cold)
+            s.locate(0.0);
+            s.run(6.0);
+            if (s.freezing) CHECK(s.fromCache(song.drums) > 0);
+        },
+        1, rendering(true)), 1);
+}
+
+TEST_CASE("background rendering: switched off, the shadows go") {
+    const Wavs wavs;
+    Session s(true, rendering(), 1);
+    settledSong(s, wavs);
+    renderAll(s);
+    CHECK(s.engine.backgroundFreezingStats().shadows > 0);
+    s.engine.setBackgroundFreezing(freezing());  // (render: false)
+    s.engine.idle();
+    CHECK_EQ(s.engine.backgroundFreezingStats().shadows, size_t{0});
+    s.engine.setBackgroundFreezing(rendering());
+    renderAll(s);
+    CHECK(s.engine.backgroundFreezingStats().shadows > 0);
+    s.engine.setBackgroundFreezing(freezing(false));
+    s.engine.idle();
+    CHECK_EQ(s.engine.backgroundFreezingStats().shadows, size_t{0});
+}
+
+
+TEST_CASE("background rendering: it renders what isn't cached, then nothing") {
+    // From a warm-up per strip on the way to the master before the start
+    // (bass, group, master) to a warm-up past the song's end.
+    const Wavs wavs;
+    Session s(true, rendering(), 1);
+    settledSong(s, wavs);
+    const int64_t first = s.engine.renderInBackground(framesOf(30.0));
+    s.settle();
+    CHECK(first >= static_cast<int64_t>(framesOf(6.0)));
+    CHECK(first <= static_cast<int64_t>(framesOf(6.0 + 4 * kWarm)) + 4096);
+    CHECK_EQ(s.engine.renderInBackground(framesOf(30.0)), 0);
+}
+
+TEST_CASE("background rendering: with the budget spent, it stops") {
+    // Room for a few blocks (the song needs dozens): what it renders past them
+    // isn't kept, so it stops (and waits a while before it tries again).
+    const Wavs wavs;
+    Session s(true, rendering(false, 1.0), 1);
+    settledSong(s, wavs);
+    const int64_t rendered = s.engine.renderInBackground(framesOf(60.0));
+    CHECK(rendered > 0);
+    CHECK(rendered < static_cast<int64_t>(framesOf(15.0)));
+    s.settle();
+    const sub::BackgroundFreezingStats stats = s.engine.backgroundFreezingStats();
+    CHECK(stats.bytes + stats.unfreedBytes <= static_cast<size_t>(1024 * 1024));
+}
+
+TEST_CASE("background rendering: past what it can't keep, it goes on") {
+    // Two instruments; a short note of each changes, at 1 s and at 4.5 s. On
+    // the first, a long note (0 to 4 s) is held there: its devices, starting
+    // again while the cache plays, come clean only where it ends, so the
+    // background can't keep that (it plays live: the live renderer keeps it).
+    // It goes on to the second.
+    requireTestPlugins();
+    const auto heldNotes = [](int velocity) {
+        std::vector<sub::NoteDesc> n = {{0.0, 8.0, 48, 100}};  // (beats: 120 BPM)
+        for (int i = 0; i < 8; ++i) n.push_back({i * 1.0, 0.5, 60 + i, i == 2 ? velocity : 80});
+        return n;
+    };
+    const auto otherNotes = [](int velocity) {
+        return std::vector<sub::NoteDesc>{{0.0, 1.0, 60, 80}, {9.0, 1.0, 62, velocity}, {11.0, 1.0, 64, 80}};
+    };
+    checkSame(both(
+        [&](Session& s) {
+            const uint32_t held = synthTrack(s.engine, false, heldNotes(80));
+            const uint32_t other = synthTrack(s.engine, false, otherNotes(80));
+            s.run(0.1);  // (stopped: settled)
+            renderAll(s);
+            s.engine.setTrackNotes(held, heldNotes(40));
+            s.engine.setTrackNotes(other, otherNotes(40));
+            const int64_t rendered = s.freezing ? s.engine.renderInBackground(framesOf(60.0)) : 0;
+            s.settle();
+            s.engine.play();
+            const uint64_t heldCached = s.fromCache(held), otherCached = s.fromCache(other);
+            s.run(5.5);
+            if (!s.freezing) return;
+            CHECK(rendered < static_cast<int64_t>(framesOf(20.0)));
+            CHECK_EQ(s.fromCache(other) - otherCached, framesOf(5.5));          // through its edit
+            CHECK(s.fromCache(held) - heldCached <= framesOf(5.5 - 0.5));  // live around its edit
+        },
+        1, rendering()));
 }

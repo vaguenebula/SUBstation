@@ -160,6 +160,7 @@ add_library(sub_engine STATIC
     src/EngineOffline.cpp
     src/EngineSnapshot.cpp
     src/EngineTracks.cpp
+    src/EngineBackground.cpp
     src/EngineCache.cpp
     src/AudioDevice.cpp
     src/backends/ManualBackend.cpp
@@ -167,6 +168,7 @@ add_library(sub_engine STATIC
     src/AudioSource.cpp
     src/Renderer.cpp
     src/RendererCache.cpp
+    src/cache/BackgroundRenderer.cpp
     src/cache/CacheStore.cpp
     src/Scheduler.cpp
     src/Recorder.cpp

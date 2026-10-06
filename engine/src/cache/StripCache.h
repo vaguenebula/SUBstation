@@ -16,11 +16,13 @@
 //
 // Threads: the edit side (under the engine's mutex) writes `version`,
 // `lastChangeNs`, `observed`, `observedUntilNs` and `accountedChanges`; the
-// store's thread publishes `blocks` and owns everything in StoreState; the
-// rendering thread that renders the strip in a chunk (one at a time, chunks in
-// order) owns LiveState.
+// store's thread publishes `blocks` and owns everything in StoreState; each
+// renderer (the live one, the background one: a Lane each) owns its lane's
+// state, on the thread that renders the strip in a chunk (one at a time,
+// chunks in order).
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <limits>
@@ -42,6 +44,7 @@ struct CacheSettings {
     std::atomic<double> idleSeconds{10.0};  // a strip plays from its cache once nothing changed it for this long
     std::atomic<double> warmSeconds{8.0};   // how long devices must run before what they put out is kept
     std::atomic<int64_t> budgetBytes{int64_t{1} << 30};
+    std::atomic<bool> background{false};    // the background renderer renders what hasn't played yet (BackgroundRenderer.h)
 };
 
 // How the playhead came to a frame: in order, from far before (Linear), or
@@ -75,19 +78,56 @@ struct CacheBlock {
 };
 
 // A strip's published blocks, sorted by (cell, context, from). Immutable.
+// Blocks of a cell may overlap: one partly out of date, and one captured since
+// over the part that is.
 struct BlockSet {
     std::vector<const CacheBlock*> blocks;
 
-    // The block of `cell` in `context` whose frames include `offset` (null: none).
+    // A block of `cell` in `context` whose frames include `offset` (null: none).
     const CacheBlock* find(int64_t cell, const CacheContext& context, int offset) const noexcept {
-        auto it = std::lower_bound(blocks.begin(), blocks.end(), std::make_pair(cell, context),
-                                   [](const CacheBlock* b, const std::pair<int64_t, CacheContext>& key) {
-                                       return b->cell != key.first ? b->cell < key.first : b->context < key.second;
-                                   });
-        for (; it != blocks.end() && (*it)->cell == cell && (*it)->context == context; ++it) {
+        for (auto it = first(cell, context); it != blocks.end() && (*it)->cell == cell && (*it)->context == context;
+             ++it) {
             if ((*it)->from <= offset && offset < (*it)->to) return *it;
         }
         return nullptr;
+    }
+    // Of those, the one good furthest on, and where its good frames end in the
+    // cell (`goodTo(block)`); null and `offset` if none is good there.
+    template <typename GoodTo>
+    const CacheBlock* findGood(int64_t cell, const CacheContext& context, int offset, GoodTo&& goodTo,
+                               int& end) const noexcept {
+        const CacheBlock* best = nullptr;
+        end = offset;
+        for (auto it = first(cell, context); it != blocks.end() && (*it)->cell == cell && (*it)->context == context;
+             ++it) {
+            if ((*it)->from > offset || offset >= (*it)->to) continue;
+            const int good = goodTo(**it);
+            if (good > end) {
+                end = good;
+                best = *it;
+            }
+        }
+        return best;
+    }
+    // The first offset at or after `offset` in `cell` that some block in `context`
+    // is good at (`goodTo(block)`, as above); -1 if none.
+    template <typename GoodTo>
+    int nextGood(int64_t cell, const CacheContext& context, int offset, GoodTo&& goodTo) const noexcept {
+        int next = -1;
+        for (auto it = first(cell, context); it != blocks.end() && (*it)->cell == cell && (*it)->context == context;
+             ++it) {
+            const int from = std::max((*it)->from, offset);
+            if (goodTo(**it) > from && (next < 0 || from < next)) next = from;
+        }
+        return next;
+    }
+
+private:
+    std::vector<const CacheBlock*>::const_iterator first(int64_t cell, const CacheContext& context) const noexcept {
+        return std::lower_bound(blocks.begin(), blocks.end(), std::make_pair(cell, context),
+                                [](const CacheBlock* b, const std::pair<int64_t, CacheContext>& key) {
+                                    return b->cell != key.first ? b->cell < key.first : b->context < key.second;
+                                });
     }
 };
 
@@ -142,9 +182,7 @@ struct CachePoint {
     // --- The store publishes; the rendering thread reads ---
     std::atomic<const BlockSet*> blocks{nullptr};
 
-    // --- Between the rendering thread and the store ---
-    SpscQueue<CacheBlock*, 16> completed;  // captured, for the store to publish
-    SpscQueue<CacheBlock*, 4> spares;      // empty blocks the store hands out to capture into
+    // --- Between the live rendering thread and the store ---
     std::atomic<int64_t> idleSinceNs{0};   // its devices haven't been called since (0: they are)
     std::atomic<uint64_t> idleEpoch{0};    // counts the times they stopped being called
     // Who has its devices: the rendering thread while it runs them, the engine's
@@ -153,10 +191,8 @@ struct CachePoint {
     // them from kDevicesIdle only.
     static constexpr int kDevicesIdle = 0, kDevicesRunning = 1, kDevicesResetting = 2;
     std::atomic<int> devicesOwner{kDevicesIdle};
-    // Statistics (rendering thread adds; anyone reads).
-    std::atomic<uint64_t> framesFromCache{0}, framesLive{0}, framesCaptured{0};
 
-    // --- The rendering thread's ---
+    // --- A renderer's ---
     struct LiveState {
         enum class Mode : uint8_t { Live, Cache, PreRoll };
         Mode mode = Mode::Live;
@@ -182,22 +218,39 @@ struct CachePoint {
         // The block being captured into (from `spares`).
         CacheBlock* building = nullptr;
     };
-    LiveState live;
+    // What a renderer keeps of the strip: the live renderer's, and the
+    // background renderer's (rendering with shadow instances: BackgroundRenderer.h).
+    // Each renders the strip on one thread at a time, chunks in order, and
+    // hands what it captures to the store.
+    struct Lane {
+        LiveState state;
+        SpscQueue<CacheBlock*, 16> completed;  // captured, for the store to publish
+        SpscQueue<CacheBlock*, 4> spares;      // empty blocks the store hands out to capture into
+        // Statistics (the renderer adds; anyone reads).
+        std::atomic<uint64_t> framesFromCache{0}, framesLive{0}, framesCaptured{0};
+        std::atomic<uint64_t> framesLost{0};  // it would have kept, but had no block for (the budget is spent)
+        int storeSpares = 0;  // the store's (under its lock): handed out (in `spares` or being captured into)
+    };
+    static constexpr int kLiveLane = 0, kBackgroundLane = 1, kLanes = 2;
+    std::array<Lane, kLanes> lanes;
+    Lane& live() noexcept { return lanes[kLiveLane]; }
+    const Lane& live() const noexcept { return lanes[kLiveLane]; }
 
     // --- The store's thread's (under the store's lock) ---
     struct StoreState {
         std::vector<CacheBlock*> owned;  // published, sorted like a BlockSet
         std::vector<int64_t> invalidSinceNs;  // per owned block: since when it has been no good (0: it is)
-        int spares = 0;                  // handed out (in `spares` or being captured into)
     };
     StoreState store;
 };
 
 inline CachePoint::~CachePoint() {
-    CacheBlock* block = nullptr;
-    while (completed.pop(block)) delete block;
-    while (spares.pop(block)) delete block;
-    delete live.building;
+    for (Lane& lane : lanes) {
+        CacheBlock* block = nullptr;
+        while (lane.completed.pop(block)) delete block;
+        while (lane.spares.pop(block)) delete block;
+        delete lane.state.building;
+    }
     // The published blocks belong to the store, which frees them.
 }
 

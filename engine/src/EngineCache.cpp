@@ -573,6 +573,10 @@ void Engine::setBackgroundFreezing(const BackgroundFreezingSettings& settings) {
         touchCacheLocked(master_);
     }
     cacheSettings_.enabled.store(settings.enabled);
+    // (The background renderer follows in idle(): main-thread work.)
+    backgroundRender_ = settings.render;
+    backgroundThread_ = settings.renderThread;
+    if (!settings.enabled || !settings.render) cacheSettings_.background.store(false);
 }
 
 BackgroundFreezingSettings Engine::backgroundFreezing() {
@@ -581,14 +585,19 @@ BackgroundFreezingSettings Engine::backgroundFreezing() {
     settings.idleSeconds = cacheSettings_.idleSeconds.load();
     settings.warmSeconds = cacheSettings_.warmSeconds.load();
     settings.budgetMB = static_cast<double>(cacheSettings_.budgetBytes.load()) / (1024.0 * 1024.0);
+    std::lock_guard lock(mutex_);
+    settings.render = backgroundRender_;
+    settings.renderThread = backgroundThread_;
     return settings;
 }
 
 namespace {
 void addCounts(BackgroundFreezingStats& stats, const CachePoint& point) {
-    stats.framesFromCache += point.framesFromCache.load(std::memory_order_relaxed);
-    stats.framesLive += point.framesLive.load(std::memory_order_relaxed);
-    stats.framesCaptured += point.framesCaptured.load(std::memory_order_relaxed);
+    const CachePoint::Lane& live = point.live();
+    stats.framesFromCache += live.framesFromCache.load(std::memory_order_relaxed);
+    stats.framesLive += live.framesLive.load(std::memory_order_relaxed);
+    stats.framesCaptured += live.framesCaptured.load(std::memory_order_relaxed);
+    stats.framesRendered += point.lanes[CachePoint::kBackgroundLane].framesCaptured.load(std::memory_order_relaxed);
 }
 }  // namespace
 
@@ -604,6 +613,7 @@ BackgroundFreezingStats Engine::backgroundFreezingStats() {
     std::lock_guard lock(mutex_);
     for (const TrackModel& track : tracks_) addCounts(stats, *track.cache.point);
     addCounts(stats, *master_.cache.point);
+    for (const auto& [device, shadow] : shadows_) stats.shadows += shadow.shadow ? 1 : 0;
     return stats;
 }
 

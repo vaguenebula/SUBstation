@@ -23,7 +23,8 @@ Engine::Engine()
       }) {
     std::lock_guard lock(mutex_);
     master_.chainId = addChainLocked(kMaster, 0);
-    cacheStore_ = std::make_unique<CacheStore>(cacheSettings_, audioEpoch_, deviceRunningFlag_, shared_.positionSamples);
+    cacheStore_ = std::make_unique<CacheStore>(cacheSettings_, audioEpoch_, deviceRunningFlag_, backgroundEpoch_,
+                                               backgroundBusy_, shared_.positionSamples);
     renderer_.setCacheSettings(&cacheSettings_);
     scheduler_ = std::make_unique<Scheduler>(defaultAudioThreads());
     renderer_.setScheduler(scheduler_.get());
@@ -32,6 +33,8 @@ Engine::Engine()
 }
 
 Engine::~Engine() {
+    background_.reset();  // (its thread ends first; then its shadows go, here)
+    shadows_.clear();
     std::lock_guard lock(mutex_);
     if (RenderJob* job = std::exchange(job_, nullptr)) {  // its thread mustn't outlive the engine
         job->cancel();
@@ -314,6 +317,14 @@ void Engine::idle(bool releaseAll) {
         rendering = job_ != nullptr;
     }
     cacheIdle(rendering);
+    if (releaseAll) {  // (shutting down: the shadows go too, here on the main thread)
+        background_.reset();
+        shadows_.clear();
+        shadowVersions_.clear();
+        shadowGeneration_ = 0;
+    } else {
+        backgroundIdle(false);
+    }
 }
 
 }  // namespace sub

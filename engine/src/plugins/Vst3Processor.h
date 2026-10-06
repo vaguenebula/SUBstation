@@ -69,6 +69,8 @@ public:
 
     std::vector<uint8_t> getState() override;
     void setState(const std::vector<uint8_t>& state) override;
+    // Another instance of the same class, from the same module, in this one's state.
+    std::shared_ptr<Processor> createShadow(double sampleRate, int maxBlockSize) override;
 
     bool idle() override;
     void takeEvents(std::vector<ProcessorEvent>& out) override;

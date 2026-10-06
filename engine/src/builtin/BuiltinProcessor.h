@@ -35,6 +35,10 @@ public:
     float getParam(int index) const final;
     void setParam(int index, float value) final;
 
+    // A new one of its type, with its parameters, state and file loader.
+    std::shared_ptr<Processor> createShadow(double sampleRate, int maxBlockSize) final;
+    void syncShadow(Processor& shadow) final;
+
     // Real-time. Calls render() for each stretch of the block with no automation
     // change in it, applying the changes in between.
     void process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) final;

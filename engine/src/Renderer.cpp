@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 
 namespace sub {
 
@@ -185,6 +186,16 @@ void Renderer::renderOffline(const RenderSnapshot& snap, float* outStereo, int64
         }
         done += n;
     }
+}
+
+void Renderer::renderBackground(const RenderSnapshot& snap, int frames, bool loop) noexcept {
+    syncTempo(snap);
+    renderChunk(snap, std::min(frames, kMaxBlock), {true, loop && snap.loopEnabled, false});
+}
+
+void Renderer::preRollFrom(int64_t samples) noexcept {
+    position_ = samples;
+    expectedPosition_ = std::numeric_limits<int64_t>::min();  // (not where it would have gone on to)
 }
 
 void Renderer::renderTrackOffline(const RenderSnapshot& snap, int track, float* outStereo,

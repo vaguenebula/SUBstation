@@ -31,8 +31,14 @@ bool silentBlock(const CacheBlock& block) {
 }  // namespace
 
 CacheStore::CacheStore(const CacheSettings& settings, const std::atomic<uint64_t>& audioEpoch,
-                       const std::atomic<bool>& deviceRunning, const std::atomic<int64_t>& playhead)
-    : settings_(settings), audioEpoch_(audioEpoch), deviceRunning_(deviceRunning), playhead_(playhead) {
+                       const std::atomic<bool>& deviceRunning, const std::atomic<uint64_t>& backgroundEpoch,
+                       const std::atomic<bool>& backgroundBusy, const std::atomic<int64_t>& playhead)
+    : settings_(settings),
+      audioEpoch_(audioEpoch),
+      deviceRunning_(deviceRunning),
+      backgroundEpoch_(backgroundEpoch),
+      backgroundBusy_(backgroundBusy),
+      playhead_(playhead) {
     thread_ = std::thread([this] { run(); });
 }
 
@@ -59,24 +65,26 @@ void CacheStore::setPoints(std::vector<Entry> points) {
                                       [&](const Entry& entry) { return entry.point == old.point; });
         if (kept) continue;
         CachePoint& point = *old.point;
-        CacheBlock* block = nullptr;
-        while (point.completed.pop(block)) {
-            --point.store.spares;
-            retireLocked(block);
+        size_t spares = 0;
+        for (CachePoint::Lane& lane : point.lanes) {
+            CacheBlock* block = nullptr;
+            while (lane.completed.pop(block)) {
+                --lane.storeSpares;
+                retireLocked(block);
+            }
+            spares += static_cast<size_t>(lane.storeSpares) * kBlockBytes;
+            lane.storeSpares = 0;
         }
         dropAllLocked(point);
         // The empty blocks it still has go with it (CachePoint's destructor),
         // once the snapshots still showing it have gone.
-        const size_t spares = static_cast<size_t>(point.store.spares) * kBlockBytes;
         bytes_ -= spares;
-        point.store.spares = 0;
         dyingBytes_ += spares;
         dying_.push_back({old.point, spares});
     }
     points_ = std::move(points);
     if (!pendingRetire_.empty()) {
-        const uint64_t epoch = audioEpoch_.load(std::memory_order_seq_cst);
-        for (Retired& r : pendingRetire_) r.epoch = epoch;
+        stampLocked(pendingRetire_);
         retired_.insert(retired_.end(), pendingRetire_.begin(), pendingRetire_.end());
         pendingRetire_.clear();
     }
@@ -113,10 +121,15 @@ void CacheStore::run() {
 }
 
 bool CacheStore::goodLocked(const CachePoint& point, const CacheBlock& block, const DirtyLog* dirty) const {
-    if (block.version != point.version.load(std::memory_order_acquire)) return false;
-    if (!dirty) return true;
-    const int64_t start = block.start() + block.from;
-    return dirty->goodUntil(block.generation, start, block.start() + block.to, block.context) > start;
+    return goodToLocked(point, block, dirty) > block.from;
+}
+
+int CacheStore::goodToLocked(const CachePoint& point, const CacheBlock& block, const DirtyLog* dirty) const {
+    if (block.version != point.version.load(std::memory_order_acquire)) return block.from;
+    if (!dirty) return block.to;
+    const int64_t start = block.start();
+    return static_cast<int>(
+        dirty->goodUntil(block.generation, start + block.from, start + block.to, block.context) - start);
 }
 
 void CacheStore::retireLocked(CacheBlock* block) {
@@ -142,38 +155,38 @@ void CacheStore::dropAllLocked(CachePoint& point) {
     }
 }
 
-void CacheStore::respareLocked(CachePoint& point, CacheBlock* block) {
+void CacheStore::respareLocked(CachePoint::Lane& lane, CacheBlock* block) {
     block->from = block->to = 0;
-    if (point.spares.push(block)) {
-        ++point.store.spares;
+    if (lane.spares.push(block)) {
+        ++lane.storeSpares;
     } else {
         bytes_ -= block->bytes();
         delete block;
     }
 }
 
-void CacheStore::ingestLocked(CachePoint& point, CacheBlock* block, const DirtyLog* dirty) {
-    --point.store.spares;  // (it was never published: it can be handed out again at once)
+void CacheStore::ingestLocked(CachePoint& point, CachePoint::Lane& lane, CacheBlock* block, const DirtyLog* dirty) {
+    --lane.storeSpares;  // (it was never published: it can be handed out again at once)
     // Empty, or captured at a version or generation already gone (it would never play).
     if (block->to <= block->from || !goodLocked(point, *block, dirty)) {
-        respareLocked(point, block);
+        respareLocked(lane, block);
         return;
     }
-    // Where it overlaps the good blocks of its cell and context, they keep their
-    // frames (it is cut short at an end they cover); those it covers whole, and
-    // those no longer good, go.
+    // Where it overlaps what is good of the blocks of its cell and context, they
+    // keep their frames (it is cut short at an end they cover); those whose good
+    // frames it covers all go (those partly out of date stay beside it).
     auto& owned = point.store.owned;
     auto& since = point.store.invalidSinceNs;
     for (const CacheBlock* old : owned) {
         if (old->cell != block->cell || old->context != block->context) continue;
-        if (old->to <= block->from || block->to <= old->from) continue;
-        if (!goodLocked(point, *old, dirty)) continue;
-        if (old->from <= block->from) block->from = std::max(block->from, old->to);
-        if (old->to >= block->to) block->to = std::min(block->to, old->from);
+        const int good = goodToLocked(point, *old, dirty);  // its good frames: [from, good)
+        if (good <= old->from || good <= block->from || block->to <= old->from) continue;
+        if (old->from <= block->from) block->from = std::max(block->from, good);
+        if (good >= block->to) block->to = std::min(block->to, old->from);
         if (block->to <= block->from) break;
     }
     if (block->to <= block->from) {  // nothing new in it
-        respareLocked(point, block);
+        respareLocked(lane, block);
         return;
     }
     if (silentBlock(*block)) {
@@ -183,8 +196,9 @@ void CacheStore::ingestLocked(CachePoint& point, CacheBlock* block, const DirtyL
     }
     for (size_t i = 0; i < owned.size();) {
         CacheBlock* old = owned[i];
+        const int good = goodToLocked(point, *old, dirty);
         if (old->cell == block->cell && old->context == block->context && old->to > block->from &&
-            block->to > old->from) {
+            block->to > old->from && (good <= old->from || (block->from <= old->from && good <= block->to))) {
             retireLocked(old);
             owned.erase(owned.begin() + static_cast<std::ptrdiff_t>(i));
             since.erase(since.begin() + static_cast<std::ptrdiff_t>(i));
@@ -205,11 +219,25 @@ void CacheStore::publishLocked(CachePoint& point) {
     }
 }
 
+void CacheStore::stampLocked(std::vector<Retired>& retired) {
+    const uint64_t epoch = audioEpoch_.load(std::memory_order_seq_cst);
+    const uint64_t background = backgroundEpoch_.load(std::memory_order_seq_cst);
+    for (Retired& r : retired) {
+        r.epoch = epoch;
+        r.backgroundEpoch = background;
+    }
+}
+
 void CacheStore::freeRetiredLocked(bool all) {
+    // Each renderer either reads nothing now (whatever it reads next is
+    // published), or has finished a chunk (a callback) since it was unpublished.
     const uint64_t epoch = audioEpoch_.load(std::memory_order_seq_cst);
     const bool idle = all || !deviceRunning_.load(std::memory_order_seq_cst);
+    const uint64_t background = backgroundEpoch_.load(std::memory_order_seq_cst);
+    const bool backgroundIdle = all || !backgroundBusy_.load(std::memory_order_seq_cst);
     std::erase_if(retired_, [&](const Retired& r) {
         if (!idle && epoch <= r.epoch) return false;
+        if (!backgroundIdle && background <= r.backgroundEpoch) return false;
         if (r.block) retiredBytes_ -= r.block->bytes();
         delete r.set;
         delete r.block;
@@ -227,15 +255,17 @@ void CacheStore::serviceLocked() {
         CachePoint& point = *entry.point;
         const DirtyLog* dirty = entry.dirty.get();
         bool touched = false;
-        CacheBlock* block = nullptr;
-        while (point.completed.pop(block)) {
-            if (enabled) {
-                ingestLocked(point, block, dirty);
-            } else {
-                --point.store.spares;
-                retireLocked(block);
+        for (CachePoint::Lane& lane : point.lanes) {
+            CacheBlock* block = nullptr;
+            while (lane.completed.pop(block)) {
+                if (enabled) {
+                    ingestLocked(point, lane, block, dirty);
+                } else {
+                    --lane.storeSpares;
+                    retireLocked(block);
+                }
+                touched = true;
             }
-            touched = true;
         }
         if (!enabled) {
             if (!point.store.owned.empty()) dropAllLocked(point);
@@ -297,8 +327,7 @@ void CacheStore::serviceLocked() {
     for (CachePoint* point : changed) publishLocked(*point);
     // What this round unpublished waits for the callbacks that may still see it.
     if (!pendingRetire_.empty()) {
-        const uint64_t epoch = audioEpoch_.load(std::memory_order_seq_cst);
-        for (Retired& r : pendingRetire_) r.epoch = epoch;
+        stampLocked(pendingRetire_);
         retired_.insert(retired_.end(), pendingRetire_.begin(), pendingRetire_.end());
         pendingRetire_.clear();
     }
@@ -307,19 +336,23 @@ void CacheStore::serviceLocked() {
 
     // Empty blocks to capture into, while the budget allows (counting what
     // isn't freed yet).
+    // (The background renderer's lane only while it renders.)
     if (enabled) {
+        const int lanes = settings_.background.load(std::memory_order_relaxed) ? CachePoint::kLanes : 1;
         for (Entry& entry : points_) {
-            CachePoint& point = *entry.point;
-            while (point.store.spares < kSparesPerPoint &&
-                   bytes_ + retiredBytes_ + dyingBytes_ + kBlockBytes <= budget) {
-                auto* block = new CacheBlock;
-                block->samples = std::make_unique<float[]>(2 * kCacheBlockFrames);
-                if (!point.spares.push(block)) {
-                    delete block;
-                    break;
+            for (int l = 0; l < lanes; ++l) {
+                CachePoint::Lane& lane = entry.point->lanes[static_cast<size_t>(l)];
+                while (lane.storeSpares < kSparesPerPoint &&
+                       bytes_ + retiredBytes_ + dyingBytes_ + kBlockBytes <= budget) {
+                    auto* block = new CacheBlock;
+                    block->samples = std::make_unique<float[]>(2 * kCacheBlockFrames);
+                    if (!lane.spares.push(block)) {
+                        delete block;
+                        break;
+                    }
+                    bytes_ += kBlockBytes;
+                    ++lane.storeSpares;
                 }
-                bytes_ += kBlockBytes;
-                ++point.store.spares;
             }
         }
     }

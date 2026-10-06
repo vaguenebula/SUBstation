@@ -25,10 +25,12 @@ namespace sub {
 class CacheStore {
 public:
     // `audioEpoch` counts finished audio callbacks; `deviceRunning` says whether
-    // there are any; `playhead` (timeline samples) says what to keep when memory
-    // runs short. All outlive the store.
+    // there are any; `backgroundEpoch` and `backgroundBusy` the same of the
+    // background renderer's chunks (BackgroundRenderer.h); `playhead` (timeline
+    // samples) says what to keep when memory runs short. All outlive the store.
     CacheStore(const CacheSettings& settings, const std::atomic<uint64_t>& audioEpoch,
-               const std::atomic<bool>& deviceRunning, const std::atomic<int64_t>& playhead);
+               const std::atomic<bool>& deviceRunning, const std::atomic<uint64_t>& backgroundEpoch,
+               const std::atomic<bool>& backgroundBusy, const std::atomic<int64_t>& playhead);
     ~CacheStore();
     CacheStore(const CacheStore&) = delete;
     CacheStore& operator=(const CacheStore&) = delete;
@@ -53,22 +55,25 @@ public:
     Stats stats() const;
 
 private:
-    static constexpr int kSparesPerPoint = 2;
+    static constexpr int kSparesPerPoint = 2;  // (per lane)
     static constexpr int64_t kKeepInvalidNs = 300'000'000;
 
     struct Retired {
         const BlockSet* set = nullptr;
         CacheBlock* block = nullptr;
-        uint64_t epoch = 0;
+        uint64_t epoch = 0;            // the audio epoch when it was unpublished
+        uint64_t backgroundEpoch = 0;  // the background renderer's
     };
+    void stampLocked(std::vector<Retired>& retired);  // with the epochs now (after unpublishing)
 
     void run();
     void serviceLocked();
     // Publishes `point`'s blocks as they now are, retiring what was published.
     void publishLocked(CachePoint& point);
-    void ingestLocked(CachePoint& point, CacheBlock* block, const DirtyLog* dirty);
-    void respareLocked(CachePoint& point, CacheBlock* block);  // one never published, emptied and handed out again
+    void ingestLocked(CachePoint& point, CachePoint::Lane& lane, CacheBlock* block, const DirtyLog* dirty);
+    void respareLocked(CachePoint::Lane& lane, CacheBlock* block);  // one never published, emptied and handed out again
     bool goodLocked(const CachePoint& point, const CacheBlock& block, const DirtyLog* dirty) const;
+    int goodToLocked(const CachePoint& point, const CacheBlock& block, const DirtyLog* dirty) const;  // its good frames end
     void dropAllLocked(CachePoint& point);
     void retireLocked(CacheBlock* block);
     void freeRetiredLocked(bool all);
@@ -76,6 +81,8 @@ private:
     const CacheSettings& settings_;
     const std::atomic<uint64_t>& audioEpoch_;
     const std::atomic<bool>& deviceRunning_;
+    const std::atomic<uint64_t>& backgroundEpoch_;
+    const std::atomic<bool>& backgroundBusy_;
     const std::atomic<int64_t>& playhead_;
 
     mutable std::mutex mutex_;

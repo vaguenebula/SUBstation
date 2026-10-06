@@ -34,10 +34,11 @@ int64_t coveredFrom(const BlockSet* blocks, const DirtyLog* dirty, uint64_t vers
         const int64_t at = position + got;
         const int64_t cell = floorDiv(at, kCacheBlockFrames);
         const auto offset = static_cast<int>(at - cell * kCacheBlockFrames);
-        const CacheBlock* block = blocks->find(cell, context, offset);
-        if (!block) break;
-        const int to = goodTo(*block, version, dirty);
-        if (to <= offset) break;
+        int to = offset;
+        if (!blocks->findGood(cell, context, offset, [&](const CacheBlock& b) { return goodTo(b, version, dirty); },
+                              to)) {
+            break;
+        }
         got += std::min<int64_t>(length - got, to - offset);
     }
     return got;
@@ -68,7 +69,8 @@ int64_t heldAcross(const TrackRender& track, int64_t position) noexcept {
 
 void Renderer::prepareCacheChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept {
     CacheChunk& c = cacheChunk_;
-    c.on = flags.live && cacheSettings_ && cacheSettings_->enabled.load(std::memory_order_relaxed);
+    c.on = flags.live && cacheSettings_ && cacheSettings_->enabled.load(std::memory_order_relaxed) &&
+           (cacheLane_ == CachePoint::kLiveLane || cacheSettings_->background.load(std::memory_order_relaxed));
     c.usable = false;
     c.numPieces = 0;
     c.jumpAt = -1;
@@ -184,7 +186,8 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     CacheStep step;
     CachePoint* point = cache.point.get();
     if (!point) return step;
-    CachePoint::LiveState& s = point->live;
+    CachePoint::Lane& lane = point->lanes[static_cast<size_t>(cacheLane_)];
+    CachePoint::LiveState& s = lane.state;
     using Mode = CachePoint::LiveState::Mode;
     using Fade = CachePoint::LiveState::Fade;
     const CacheChunk& c = cacheChunk_;
@@ -201,8 +204,10 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
         s.seenVersion = 0;
         s.pendingOut = s.liveInputOut = false;
         s.cleanInOut = 0;
-        point->idleSinceNs.store(0, std::memory_order_relaxed);
-        claimDevices(*point);  // (a reset idle() began just before the cache went off: it is safe, if dry, for a chunk)
+        if (cacheLane_ == CachePoint::kLiveLane) {
+            point->idleSinceNs.store(0, std::memory_order_relaxed);
+            claimDevices(*point);  // (a reset idle() began just before the cache went off: it is safe, if dry, for a chunk)
+        }
         return step;
     }
     step.active = true;
@@ -213,20 +218,26 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     for (const int t : cache.sources) {
         const CachePoint* source = snap.tracks[static_cast<size_t>(t)].cache.point.get();
         if (!source) continue;
-        sourcePending = sourcePending || source->live.pendingOut;
-        sourceLive = sourceLive || source->live.liveInputOut;
-        sourceClean = std::max(sourceClean, source->live.cleanInOut);
+        const CachePoint::LiveState& from = source->lanes[static_cast<size_t>(cacheLane_)].state;
+        sourcePending = sourcePending || from.pendingOut;
+        sourceLive = sourceLive || from.liveInputOut;
+        sourceClean = std::max(sourceClean, from.cleanInOut);
     }
     // Its devices. (The edit side bumps the version, then says which changes it
-    // accounts for: seeing the second, the first is seen too.)
+    // accounts for: seeing the second, the first is seen too.) In the background,
+    // shadows in the state of the version they were brought to: if the strip has
+    // changed since, what they render is out of date (as is what it feeds).
+    const bool background = cacheLane_ == CachePoint::kBackgroundLane;
     uint64_t changes = 0, resets = 0;
     for (const auto& device : cache.devices) {
         changes += device->changeCount();
         resets += device->resetCount();
     }
     const uint64_t accounted = point->accountedChanges.load(std::memory_order_acquire);
-    const uint64_t version = point->version.load(std::memory_order_acquire);
-    const bool pending = sourcePending || changes != accounted;
+    const uint64_t current = point->version.load(std::memory_order_acquire);
+    const uint64_t version = background ? cache.version : current;
+    const bool pending = sourcePending || (background ? cache.unavailable || current != cache.version
+                                                      : changes != accounted);
     if (liveInput) s.liveHold = warmFrames + frames;  // (what it played carries on in its devices a while)
     const bool carriesLive = sourceLive || s.liveHold > 0;
     s.liveHold = std::max<int64_t>(0, s.liveHold - frames);
@@ -250,9 +261,11 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
 
     const bool allowed = c.usable && cache.cacheable && !pending && !carriesLive;
     const bool valid = allowed && cacheCovers(blocks, dirty, version);
-    const bool hot = c.nowNs - point->lastChangeNs.load(std::memory_order_relaxed) < c.idleNs;
-    const bool observed = point->observed.load(std::memory_order_relaxed) ||
-                          c.nowNs < point->observedUntilNs.load(std::memory_order_relaxed);
+    // (What the background renders is never heard: it plays from its cache
+    // wherever that is good, whoever may be editing or watching.)
+    const bool hot = !background && c.nowNs - point->lastChangeNs.load(std::memory_order_relaxed) < c.idleNs;
+    const bool observed = !background && (point->observed.load(std::memory_order_relaxed) ||
+                                          c.nowNs < point->observedUntilNs.load(std::memory_order_relaxed));
     // A planned seam: the blocks it will need run out within a warm-up, so its
     // devices start now, while the cache still plays, to be warm by then.
     bool exitAhead = false;
@@ -279,8 +292,9 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     }
     // Its devices start again, unless idle() is resetting them (a few
     // milliseconds): then the cache plays on, good or not, until it is done.
+    // (In the background, a strip without shadows never runs.)
     bool held = false;
-    if (mode != Mode::Cache && s.idleInstance && !claimDevices(*point)) {
+    if (mode != Mode::Cache && (background ? cache.unavailable : s.idleInstance && !claimDevices(*point))) {
         mode = Mode::Cache;
         held = true;
     }
@@ -327,11 +341,11 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
         s.cleanIn = std::max<int64_t>(0, s.cleanIn - frames);
         s.warmIn = std::max<int64_t>(0, s.warmIn - frames);
         s.idleInstance = false;
-        point->idleSinceNs.store(0, std::memory_order_relaxed);
+        if (!background) point->idleSinceNs.store(0, std::memory_order_relaxed);
         step.capture = cache.cacheable && c.usable && !pending && !carriesLive && cleanAtStart < frames;
         step.captureFrom = static_cast<int>(cleanAtStart);
     } else {
-        if (!s.idleInstance) {
+        if (!s.idleInstance && !background) {
             point->idleSinceNs.store(c.nowNs, std::memory_order_relaxed);
             point->idleEpoch.fetch_add(1, std::memory_order_relaxed);
             point->devicesOwner.store(CachePoint::kDevicesIdle, std::memory_order_release);
@@ -375,14 +389,14 @@ void Renderer::resumeDevices(const StripCacheRender& cache, const TrackRender* t
 void Renderer::endCacheStep(const RenderSnapshot&, const StripCacheRender& cache, const CacheStep& step, float* left,
                             float* right, int frames, WorkerScratch& scratch) noexcept {
     if (!step.active) return;
-    CachePoint& point = *cache.point;
-    CachePoint::LiveState& s = point.live;
+    CachePoint::Lane& lane = cache.point->lanes[static_cast<size_t>(cacheLane_)];
+    CachePoint::LiveState& s = lane.state;
     using Fade = CachePoint::LiveState::Fade;
     // What the devices put out is kept before anything mixes into it.
     if (step.capture) {
-        captureChunk(point, step, left, right);
+        captureChunk(lane, step, left, right);
     } else if (s.building && s.building->to > s.building->from) {
-        finishBlock(point);  // the stretch it was capturing ended
+        finishBlock(lane);  // the stretch it was capturing ended
     }
     if (step.readCache) {
         float* cacheLeft = scratch.cacheLeft.data();
@@ -409,9 +423,9 @@ void Renderer::endCacheStep(const RenderSnapshot&, const StripCacheRender& cache
     }
     const auto counted = static_cast<uint64_t>(frames);
     if (step.cacheOut && !step.renderLive) {
-        point.framesFromCache.fetch_add(counted, std::memory_order_relaxed);
+        lane.framesFromCache.fetch_add(counted, std::memory_order_relaxed);
     } else {
-        point.framesLive.fetch_add(counted, std::memory_order_relaxed);
+        lane.framesLive.fetch_add(counted, std::memory_order_relaxed);
     }
 }
 
@@ -430,14 +444,15 @@ bool Renderer::readCache(const BlockSet* blocks, const DirtyLog* dirty, uint64_t
             const auto offset = static_cast<int>(at - cell * kCacheBlockFrames);
             const int out = piece.offset + done;
             int n = static_cast<int>(std::min<int64_t>(piece.length - done, kCacheBlockFrames - offset));
-            const CacheBlock* block = blocks ? blocks->find(cell, piece.context, offset) : nullptr;
-            if (block) {
-                const int to = anyBlocks ? block->to : goodTo(*block, version, dirty);
-                if (to > offset) {
-                    n = std::min(n, to - offset);
-                } else {
-                    block = nullptr;
-                }
+            const CacheBlock* block = nullptr;
+            if (blocks && anyBlocks) {
+                block = blocks->find(cell, piece.context, offset);
+                if (block) n = std::min(n, block->to - offset);
+            } else if (blocks) {
+                int to = offset;
+                block = blocks->findGood(cell, piece.context, offset,
+                                         [&](const CacheBlock& b) { return goodTo(b, version, dirty); }, to);
+                if (block) n = std::min(n, to - offset);
             }
             if (!block) {
                 // Missing: up to where a block of the cell starts again, the fallback.
@@ -472,25 +487,39 @@ bool Renderer::readCache(const BlockSet* blocks, const DirtyLog* dirty, uint64_t
     return complete;
 }
 
-void Renderer::finishBlock(CachePoint& point) noexcept {
-    CacheBlock* block = point.live.building;
+void Renderer::finishCaptures(const RenderSnapshot& snap) noexcept {
+    const auto finish = [this](const StripCacheRender& cache) {
+        if (!cache.point) return;
+        CachePoint::Lane& lane = cache.point->lanes[static_cast<size_t>(cacheLane_)];
+        if (lane.state.building && lane.state.building->to > lane.state.building->from) finishBlock(lane);
+    };
+    for (const TrackRender& track : snap.tracks) finish(track.cache);
+    finish(snap.masterCache);
+}
+
+void Renderer::finishBlock(CachePoint::Lane& lane) noexcept {
+    CacheBlock* block = lane.state.building;
     if (!block) return;
-    if (block->to > block->from && point.completed.push(block)) {
-        point.framesCaptured.fetch_add(static_cast<uint64_t>(block->to - block->from), std::memory_order_relaxed);
-        point.live.building = nullptr;
+    if (block->to > block->from && lane.completed.push(block)) {
+        lane.framesCaptured.fetch_add(static_cast<uint64_t>(block->to - block->from), std::memory_order_relaxed);
+        lane.state.building = nullptr;
     } else {
+        lane.framesLost.fetch_add(static_cast<uint64_t>(block->to - block->from), std::memory_order_relaxed);
         block->from = block->to = 0;  // (the store is behind: what it holds is lost)
     }
 }
 
-void Renderer::captureChunk(CachePoint& point, const CacheStep& step, const float* left, const float* right) noexcept {
+void Renderer::captureChunk(CachePoint::Lane& lane, const CacheStep& step, const float* left,
+                            const float* right) noexcept {
     const CacheChunk& c = cacheChunk_;
-    CachePoint::LiveState& s = point.live;
+    CachePoint::LiveState& s = lane.state;
     const uint64_t generation = c.generation;
     for (int p = 0; p < c.numPieces; ++p) {
         const CachePiece& piece = c.pieces[static_cast<size_t>(p)];
         const int skip = std::clamp(step.captureFrom - piece.offset, 0, piece.length);
-        int done = skip;
+        // (Nothing plays before the song's start: the background renderer only warms up there.)
+        const auto before = static_cast<int>(std::clamp<int64_t>(-piece.position, 0, piece.length));
+        int done = std::max(skip, before);
         while (done < piece.length) {
             const int64_t at = piece.position + done;
             const int64_t cell = floorDiv(at, kCacheBlockFrames);
@@ -500,10 +529,13 @@ void Renderer::captureChunk(CachePoint& point, const CacheStep& step, const floa
             if (block && block->to > block->from &&
                 (block->cell != cell || block->context != piece.context || block->to != offset ||
                  block->version != step.version || block->generation != generation)) {
-                finishBlock(point);
+                finishBlock(lane);
                 block = s.building;
             }
-            if (!block && !point.spares.pop(block)) return;  // none to capture into (the budget is spent)
+            if (!block && !lane.spares.pop(block)) {  // none to capture into (the budget is spent)
+                lane.framesLost.fetch_add(static_cast<uint64_t>(piece.length - done), std::memory_order_relaxed);
+                return;
+            }
             s.building = block;
             if (block->to <= block->from) {
                 block->cell = cell;
@@ -517,7 +549,7 @@ void Renderer::captureChunk(CachePoint& point, const CacheStep& step, const floa
             std::copy_n(left + src, n, block->samples.get() + offset);
             std::copy_n(right + src, n, block->samples.get() + kCacheBlockFrames + offset);
             block->to = offset + n;
-            if (block->to == kCacheBlockFrames) finishBlock(point);
+            if (block->to == kCacheBlockFrames) finishBlock(lane);
             done += n;
         }
     }

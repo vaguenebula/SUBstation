@@ -193,6 +193,15 @@ public:
     virtual std::vector<uint8_t> getState() { return {}; }
     virtual void setState(const std::vector<uint8_t>& /*state*/) {}
 
+    // Background rendering (docs/engine/background-freeze.md): a second instance
+    // of this device (a shadow) for the background renderer to run while this
+    // one plays, prepared at `sampleRate`, in this one's state (syncShadow());
+    // null if it can't have one. Main thread.
+    virtual std::shared_ptr<Processor> createShadow(double /*sampleRate*/, int /*maxBlockSize*/) { return nullptr; }
+    // Brings a shadow made by createShadow() to this device's state. Main
+    // thread, the shadow not being processed.
+    virtual void syncShadow(Processor& shadow) { shadow.setState(getState()); }
+
     // Main-thread housekeeping, called regularly. Returns true if the processor's
     // latency changed, so the engine must realign the tracks.
     virtual bool idle() { return false; }

@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "plugins/EditorWindow.h"
+#include "plugins/Vst3Format.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstunits.h"
@@ -829,6 +830,17 @@ bool Vst3Processor::applyAutomatedValues() {
 // ---------------------------------------------------------------------------
 // State: a .vstpreset in memory (component state, plus the controller's own
 // state for plug-ins with a separate controller).
+
+std::shared_ptr<Processor> Vst3Processor::createShadow(double sampleRate, int maxBlockSize) {
+    for (const auto& info : module_->getFactory().classInfos()) {
+        if (info.ID() != classId_ || info.category() != kVstAudioEffectClass) continue;
+        auto shadow = std::make_shared<Vst3Processor>(module_, info, hostContext());
+        shadow->prepare(sampleRate, maxBlockSize);
+        syncShadow(*shadow);
+        return shadow;
+    }
+    return nullptr;
+}
 
 std::vector<uint8_t> Vst3Processor::getState() {
     flushParameters();  // the processor's state must include the latest changes

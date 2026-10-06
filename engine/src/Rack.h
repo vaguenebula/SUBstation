@@ -23,6 +23,14 @@ public:
     // As the last snapshot worked it out: its slowest chain (for the UI).
     int latencySamples() const override { return latency_.load(std::memory_order_relaxed); }
     void setLatency(int samples) noexcept { latency_.store(samples, std::memory_order_relaxed); }
+    std::shared_ptr<Processor> createShadow(double /*sampleRate*/, int /*maxBlockSize*/) override {
+        auto shadow = std::make_shared<RackProcessor>();
+        syncShadow(*shadow);
+        return shadow;
+    }
+    void syncShadow(Processor& shadow) override {
+        static_cast<RackProcessor&>(shadow).setLatency(latencySamples());
+    }
 
     const std::vector<ParamInfo>& params() const override {
         static const std::vector<ParamInfo> none;

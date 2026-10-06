@@ -14,6 +14,9 @@
 
 namespace sub::vst3 {
 
+// What plug-ins see of the host (IHostApplication): one for all of them.
+Steinberg::FUnknown* hostContext();
+
 class Vst3Format final : public PluginFormat {
 public:
     static Vst3Format& instance();

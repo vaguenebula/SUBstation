@@ -1,5 +1,7 @@
 #include "builtin/BuiltinProcessor.h"
 
+#include "builtin/BuiltinRegistry.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -65,6 +67,24 @@ BuiltinProcessor::StateValues BuiltinProcessor::decodeState(const std::vector<ui
 std::shared_ptr<const AudioSource> BuiltinProcessor::loadSource(const std::string& path) const {
     if (loader_) return loader_(path);
     return AudioSource::load(path, AudioSource::probe(path).sampleRate);
+}
+
+std::shared_ptr<Processor> BuiltinProcessor::createShadow(double sampleRate, int maxBlockSize) {
+    static const std::string kPrefix = "builtin:";
+    const std::string type = typeId();
+    if (type.rfind(kPrefix, 0) != 0) return nullptr;
+    std::shared_ptr<Processor> shadow = BuiltinRegistry::instance().create(type.substr(kPrefix.size()));
+    auto* builtin = dynamic_cast<BuiltinProcessor*>(shadow.get());
+    if (!builtin) return nullptr;
+    builtin->setSourceLoader(loader_);
+    syncShadow(*shadow);
+    shadow->prepare(sampleRate, maxBlockSize);  // (its smoothing starts at its values)
+    return shadow;
+}
+
+void BuiltinProcessor::syncShadow(Processor& shadow) {
+    for (int i = 0; i < static_cast<int>(infos_.size()); ++i) shadow.setParam(i, getParam(i));
+    shadow.setState(getState());
 }
 
 float BuiltinProcessor::getParam(int index) const {
