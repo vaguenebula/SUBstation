@@ -574,11 +574,13 @@ does, and where it departs from the design above:
   good block for. It looks first from half a second to 30 s ahead of the playhead (while playing),
   then on to the song's end (its last clip or note, a warm-up and the output latency on), then from
   the start. The warm-up before a gap is the longest of its strips': their own (`W` and their
-  latencies), and that of the strips feeding them that don't play from their cache there, and two
-  chunks more (a seam switches at a chunk's start). It renders on while there is more to render close
+  latencies), and that of the strips feeding them that don't play from their cache all the while
+  (over as long as the whole chain could take), and two chunks more (a seam switches at a chunk's
+  start). It renders on while there is more to render close
   ahead, and jumps over what is cached. A gap that comes back after it rendered there (notes held
   where a strip's devices started again while its cache played: they come clean only where the
-  notes end) is left to the live renderer for the strips that couldn't keep it, until the next edit;
+  notes end) is left to the live renderer for the strips that couldn't keep it (that stretch only),
+  until the next edit;
   a spent budget makes it wait (2 s, twice as long each time, up to 64 s). Not done: the order by
   value (what devices cost × how soon they play), the loop range first, the battery rule.
 - **The governor** reads the live callbacks' load (`Engine::cpuLoad()`, smoothed): above **60%** it
@@ -638,7 +640,8 @@ apart (the first time with making the shadows), on the song above.
 rendering": with background rendering before playing (on the calling thread, or on its own thread
 while playing), the first pass plays from the cache from its first frame, sample for sample against
 the cache off; edits ahead (clips, a device's parameter and state) are rendered again before they
-play, and one behind the playhead while it plays; plug-ins have shadows; switching it off lets them go; the planner renders what isn't cached
+play, and one behind the playhead while it plays; inside an edit's ringing, the strips feeding
+one start early enough; plug-ins have shadows; switching it off lets them go; the planner renders what isn't cached
 and then nothing, stops when the budget is spent, and goes past a gap it can't keep; a change that
 rang out is kept, not rendered again (after the first), and one that rings on unheard for a while
 (a 1 s delay) isn't taken to have rung out. Each was checked by breaking it.
