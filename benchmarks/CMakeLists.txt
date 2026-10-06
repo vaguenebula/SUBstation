@@ -34,3 +34,10 @@ if (SUBSTATION_BUILD_APP)
 else()
     message(STATUS "browser_backend_bench needs the application layer (SUBSTATION_BUILD_APP): not built")
 endif()
+
+# (perf-experiments) Real VST3 plug-ins (Ubuntu's LSP, Dragonfly, ZamAudio, DISTRHO packages)
+# with the engine's experiments on and off.
+add_executable(plugin_cpu_bench plugin_cpu_bench.cpp)
+target_include_directories(plugin_cpu_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                           ${PROJECT_SOURCE_DIR}/tests/engine/harness)
+target_link_libraries(plugin_cpu_bench PRIVATE sub_engine)

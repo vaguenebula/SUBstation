@@ -161,6 +161,7 @@ add_library(sub_engine STATIC
     src/EngineSnapshot.cpp
     src/EngineTracks.cpp
     src/AudioDevice.cpp
+    src/backends/BenchBackend.cpp
     src/backends/WasapiBackend.cpp
     src/AudioSource.cpp
     src/Renderer.cpp

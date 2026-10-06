@@ -97,7 +97,9 @@ public:
     // Real-time. Runs `job` for every node of the graph, each after the nodes
     // that go into it, and returns once all are done. `parallel` false (or no
     // workers): all on the calling thread, in the graph's order. One run at a time.
-    void run(TaskGraph& graph, Job job, void* context, bool parallel) noexcept;
+    // `first` (if any) runs on the calling thread before it takes nodes, while the
+    // workers start on them (perf experiments: the pipelined master).
+    void run(TaskGraph& graph, Job job, void* context, bool parallel, void (*first)(void*) noexcept = nullptr) noexcept;
 
     // Nodes the pool's workers have rendered, since the scheduler started (for tests).
     uint64_t nodesOnWorkers() const noexcept { return nodesOnWorkers_.load(std::memory_order_relaxed); }
@@ -119,6 +121,9 @@ private:
     alignas(64) std::atomic<int> sleepers_{0};  // workers waiting on state_
     std::atomic<uint64_t> nodesOnWorkers_{0};
     uint64_t runs_ = 0;
+    // (perf experiments: preWakeUs) When the last parallel run opened, and the time between runs, smoothed.
+    std::atomic<int64_t> lastOpenNs_{0};
+    std::atomic<int64_t> periodNs_{0};
 };
 
 #ifdef _MSC_VER

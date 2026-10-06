@@ -362,6 +362,21 @@ private:
     std::vector<float> silence_, recordScratch_;
 
     std::vector<float> masterLeft_, masterRight_;
+    // (perf experiments: pipelineMaster) The last chunk's master input, its
+    // devices and fader processed while this chunk's tracks render.
+    struct PendingMaster {
+        std::vector<float> left, right;
+        Slices slices;
+        ProcessContext context;
+        int frames = 0;
+        bool valid = false;
+        const RenderSnapshot* snap = nullptr;
+    };
+    PendingMaster pendingMaster_;
+    std::vector<float> pipeLeft_, pipeRight_;
+    static void processPendingMaster(void* self) noexcept;
+    // The slices a strip's devices are called in over this chunk (events moved to their slices).
+    void buildSlices(ProcessEvent* events, int numEvents, int frames, Slices& slices) const noexcept;
     // renderTrackOffline(): the track whose signal is taken before its fader, into these (-1: none).
     int captureTrack_ = -1;
     std::vector<float> captureLeft_, captureRight_;

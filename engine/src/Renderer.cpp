@@ -4,9 +4,95 @@
 #include <chrono>
 #include <cmath>
 
+#include "rt/Experiments.h"
+
 namespace sub {
 
 namespace {
+
+void tapInto(const RenderSnapshot& snap, int e, const float* left, const float* right, int frames) noexcept;
+
+// The highest absolute sample in two channels.
+float peakOf(const float* a, const float* b, int n) noexcept {
+    float m = 0.f;
+    for (int i = 0; i < n; ++i) {
+        const float x = std::fabs(a[i]);
+        const float y = std::fabs(b[i]);
+        m = m > x ? m : x;
+        m = m > y ? m : y;
+    }
+    return m;
+}
+
+// Calls a processor over one slice, the experiments' way: timed (experiments::
+// profile), and skipped while it sleeps (experiments::suspend). A processor
+// sleeps once its input (with its sidechain, and without events) has been quiet
+// for its tail and latency plus the hold time, its output for the hold time,
+// with no note held; asleep, its output is silence. It wakes as soon as its
+// input isn't quiet, it gets an event, or it asks to (Processor::wantsProcessing).
+void runInsert(Processor& insert, const ProcessContext& context, float* const* channels, int frames,
+               const float* keyL, const float* keyR) noexcept {
+    namespace ex = experiments;
+    const bool profiling = ex::profile.load(std::memory_order_relaxed);
+    const bool suspending = ex::suspend.load(std::memory_order_relaxed);
+    if (!profiling && !suspending) {
+        insert.process(context, channels, 2, frames);
+        return;
+    }
+    const float threshold = ex::quietThreshold.load(std::memory_order_relaxed);
+    Processor::Sleep& sleep = insert.sleepState();
+    Processor::Profile& profile = insert.profile();
+    const EventList& events = context.inEvents;
+    for (size_t e = 0; e < events.count; ++e) {
+        const ProcessEvent& event = events.events[e];
+        if (event.type == ProcessEvent::Type::NoteOn && event.velocity() > 0) {
+            ++sleep.notesHeld;
+        } else if (event.type != ProcessEvent::Type::Midi) {
+            sleep.notesHeld = std::max(0, sleep.notesHeld - 1);
+        }
+    }
+    float inPeak = peakOf(channels[0], channels[1], frames);
+    if (keyL) inPeak = std::max(inPeak, peakOf(keyL, keyR ? keyR : keyL, frames));
+    const bool quietIn = inPeak < threshold && events.count == 0;
+    if (suspending && sleep.asleep) {
+        if (quietIn && !insert.wantsProcessing()) {
+            std::fill_n(channels[0], frames, 0.f);
+            std::fill_n(channels[1], frames, 0.f);
+            sleep.quietIn += frames;
+            sleep.quietOut += frames;
+            profile.skippedCalls.fetch_add(1, std::memory_order_relaxed);
+            profile.skippedFrames.fetch_add(static_cast<uint64_t>(frames), std::memory_order_relaxed);
+            return;
+        }
+        sleep.asleep = false;
+    }
+    const auto started = profiling ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    insert.process(context, channels, 2, frames);
+    const uint64_t ns = profiling ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                              std::chrono::steady_clock::now() - started)
+                                                              .count())
+                                  : 0;
+    const bool quietOut = peakOf(channels[0], channels[1], frames) < threshold;
+    sleep.quietIn = quietIn ? sleep.quietIn + frames : 0;
+    sleep.quietOut = quietOut ? sleep.quietOut + frames : 0;
+    if (profiling) {
+        profile.ns.fetch_add(ns, std::memory_order_relaxed);
+        profile.calls.fetch_add(1, std::memory_order_relaxed);
+        profile.frames.fetch_add(static_cast<uint64_t>(frames), std::memory_order_relaxed);
+        if (quietIn) profile.quietInCalls.fetch_add(1, std::memory_order_relaxed);
+        if (quietIn && quietOut) {
+            profile.quietCalls.fetch_add(1, std::memory_order_relaxed);
+            profile.quietNs.fetch_add(ns, std::memory_order_relaxed);
+        }
+    }
+    if (suspending && sleep.allowed && sleep.notesHeld == 0) {
+        const auto hold = static_cast<int64_t>(ex::holdMs.load(std::memory_order_relaxed) * context.sampleRate / 1000.0);
+        if (sleep.quietIn >= insert.tailSamples() + insert.latencySamples() + hold && sleep.quietOut >= hold &&
+            !insert.wantsProcessing()) {
+            sleep.asleep = true;
+        }
+    }
+}
 
 // Calls f(clip, from, to) for each clip that plays in [segStart, segEnd), in
 // order, with the part of the segment it covers.
@@ -27,6 +113,8 @@ void forEachClip(const TrackRender& track, int64_t segStart, int64_t segEnd, F&&
 
 void Renderer::prepare(double sampleRate) {
     sampleRate_ = sampleRate;
+    for (auto* buffer : {&pendingMaster_.left, &pendingMaster_.right, &pipeLeft_, &pipeRight_}) buffer->assign(kMaxBlock, 0.f);
+    pendingMaster_.valid = false;
     for (auto* buffer : {&masterLeft_, &masterRight_, &silence_, &captureLeft_, &captureRight_}) {
         buffer->assign(kMaxBlock, 0.f);
     }
@@ -174,8 +262,9 @@ void Renderer::renderOffline(const RenderSnapshot& snap, float* outStereo, int64
                              bool loop, bool metronome) noexcept {
     syncTempo(snap);
     int64_t done = 0;
+    const int block = std::clamp(experiments::offlineBlock.load(std::memory_order_relaxed), 1, kMaxBlock);
     while (done < frames) {
-        const int n = static_cast<int>(std::min<int64_t>(kMaxBlock, frames - done));
+        const int n = static_cast<int>(std::min<int64_t>(block, frames - done));
         renderChunk(snap, n, {false, loop && snap.loopEnabled, metronome});
         float* dst = outStereo + done * 2;
         for (int i = 0; i < n; ++i) {
@@ -291,6 +380,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     chunkSnap_ = &snap;
     chunkFrames_ = frames;
     chunkFlags_ = flags;
+    const bool pipeline = experiments::pipelineMaster.load(std::memory_order_relaxed) && snap.master.params != nullptr;
     if (snap.graph && scheduler_) {
         const bool parallel = static_cast<int64_t>(snap.parallelWork) * frames >= kMinParallelWork &&
                               snap.parallelWork >= 2;
@@ -304,8 +394,9 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
             }
             graph.orderRoots();
         }
-        scheduler_->run(*snap.graph, &Renderer::renderNode, this, parallel);
+        scheduler_->run(*snap.graph, &Renderer::renderNode, this, parallel, pipeline ? &Renderer::processPendingMaster : nullptr);
     } else {
+        if (pipeline) processPendingMaster(this);
         for (int t = 0; t < static_cast<int>(snap.tracks.size()); ++t) renderTrack(snap, t, scratch_[0]);
     }
 
@@ -316,7 +407,27 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     std::fill_n(masterL, frames, 0.f);
     std::fill_n(masterR, frames, 0.f);
     for (const int e : snap.masterInputs) sumEdge(snap, snap.edges[static_cast<size_t>(e)], masterL, masterR, frames, scratch_[0]);
-    if (snap.master.params) {
+    if (pipeline) {
+        // What goes out is the last chunk's master, processed beside this chunk's
+        // tracks; this chunk's waits for the next.
+        PendingMaster& p = pendingMaster_;
+        std::fill_n(pipeLeft_.data(), frames, 0.f);
+        std::fill_n(pipeRight_.data(), frames, 0.f);
+        if (p.valid) {
+            std::copy_n(p.left.data(), std::min(frames, p.frames), pipeLeft_.data());
+            std::copy_n(p.right.data(), std::min(frames, p.frames), pipeRight_.data());
+        }
+        std::copy_n(masterL, frames, p.left.data());
+        std::copy_n(masterR, frames, p.right.data());
+        buildSlices(nullptr, 0, frames, p.slices);
+        p.context = context;
+        p.frames = frames;
+        p.snap = &snap;
+        p.valid = true;
+        std::copy_n(pipeLeft_.data(), frames, masterL);
+        std::copy_n(pipeRight_.data(), frames, masterR);
+    } else if (snap.master.params) {
+        pendingMaster_.valid = false;
         processStrip(snap, snap.master, context, nullptr, 0, masterL, masterR, frames, true, flags, scratch_[0]);
     }
     // What the tracks being recorded take from other tracks' outputs, or the
@@ -371,8 +482,30 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
         }
     }
     ProcessContext context = chunkContext_;  // its own: the inserts move it along the chunk's stretches
-    processInserts(snap, track, context, buffers.events.data(), buffers.numEvents, left, right, frames,
-                   buffers.monitored, scratch);
+    // Experiment: a track nobody hears (its fader's mute ramp done) and that keys
+    // no sidechain doesn't call its devices; they reset when it is heard again.
+    bool skip = false;
+    if (experiments::skipUnheard.load(std::memory_order_relaxed) && !buffers.audible && t != captureTrack_) {
+        const SmoothedValue& ramp = track.params->audible;
+        skip = !chunkFlags_.live || (ramp.current() == 0.f && !ramp.isSmoothing());
+        for (const int e : track.outgoing) {
+            const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+            if (edge.kind == EdgeRender::Kind::Sidechain && edge.state->live) skip = false;
+        }
+    }
+    if (skip) {
+        std::fill_n(left, frames, 0.f);
+        std::fill_n(right, frames, 0.f);
+        for (const int e : track.deviceTaps) tapInto(snap, e, left, right, frames);
+        buffers.skipped = true;
+    } else {
+        if (buffers.skipped) {
+            for (const auto& insert : track.inserts) insert->requestReset();
+            buffers.skipped = false;
+        }
+        processInserts(snap, track, context, buffers.events.data(), buffers.numEvents, left, right, frames,
+                       buffers.monitored, scratch);
+    }
     if (t == captureTrack_) {  // what freezing it keeps
         std::copy_n(left, frames, captureLeft_.data());
         std::copy_n(right, frames, captureRight_.data());
@@ -418,6 +551,7 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
     // plays a chord, a plug-in's first blocks after loading more than later ones.
     if (frames > 0) {
         const auto elapsed = std::chrono::duration<float, std::nano>(std::chrono::steady_clock::now() - started);
+        buffers.totalNs.fetch_add(static_cast<uint64_t>(elapsed.count()), std::memory_order_relaxed);
         const float perFrame = elapsed.count() / static_cast<float>(frames);
         const float last = buffers.cost.load(std::memory_order_relaxed);
         buffers.cost.store(last > 0.f ? last + kCostSmoothing * (perFrame - last) : perFrame,
@@ -875,6 +1009,7 @@ bool Renderer::takeResets(const StripRender& chain) noexcept {
         any = true;
         if (!insert.takeResetRequest()) continue;
         insert.reset();
+        insert.sleepState().notesHeld = 0;
         // A rack's devices reset as they run next (and so, in turn, do those of racks in it).
         if (const RackRender* rack = i < chain.racks.size() ? chain.racks[i].get() : nullptr) {
             for (const ChainRender& inner : rack->chains) {
@@ -885,17 +1020,10 @@ bool Renderer::takeResets(const StripRender& chain) noexcept {
     return any;
 }
 
-void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
-                              ProcessEvent* events, int numEvents, float* left, float* right, int frames,
-                              bool monitored, WorkerScratch& scratch) noexcept {
-    if (!takeResets(strip)) {  // nothing changes the signal along the chain
-        for (const int e : strip.deviceTaps) tapInto(snap, e, left, right, frames);
-        return;
-    }
-
+void Renderer::buildSlices(ProcessEvent* events, int numEvents, int frames, Slices& slices) const noexcept {
     // One call per continuous stretch of the timeline, with the events that fall in it.
     static_assert(kMaxSegments + 1 <= std::tuple_size_v<decltype(Slices::slice)>);
-    Slices slices;
+    slices = {};
     const bool split = playing_ && numSegments_ > 0;
     // A count-in that ends in this chunk: the playhead stood still until the first segment.
     const int lead = split && segments_[0].offset > 0 ? 1 : 0;
@@ -915,6 +1043,31 @@ void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& str
         }
         slices.slice[static_cast<size_t>(s)] = {offset, length, position, moving, first, next};
     }
+}
+
+void Renderer::processPendingMaster(void* self) noexcept {
+    auto& r = *static_cast<Renderer*>(self);
+    PendingMaster& p = r.pendingMaster_;
+    if (!p.valid) return;
+    const RenderSnapshot& snap = *p.snap;
+    if (r.takeResets(snap.master)) {
+        r.processChain(snap, snap.master, p.context, p.slices, nullptr, p.left.data(), p.right.data(), p.frames, false,
+                       r.scratch_[0]);
+    }
+    r.applyFader(snap, *snap.master.params, snap.master.volume, snap.master.pan, true, p.left.data(), p.right.data(),
+                 p.frames, r.chunkFlags_.live, r.scratch_[0], nullptr);
+}
+
+void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
+                              ProcessEvent* events, int numEvents, float* left, float* right, int frames,
+                              bool monitored, WorkerScratch& scratch) noexcept {
+    if (!takeResets(strip)) {  // nothing changes the signal along the chain
+        for (const int e : strip.deviceTaps) tapInto(snap, e, left, right, frames);
+        return;
+    }
+
+    Slices slices;
+    buildSlices(events, numEvents, frames, slices);
     processChain(snap, strip, context, slices, events, left, right, frames, monitored, scratch);
 }
 
@@ -957,7 +1110,8 @@ void Renderer::processChain(const RenderSnapshot& snap, const StripRender& chain
                 for (const AutomationRender& lane : chain.automation) {
                     if (lane.insert == static_cast<int>(i)) automateInsert(lane, slice.position, slice.length, slice.moving);
                 }
-                insert.process(context, channels, 2, slice.length);
+                runInsert(insert, context, channels, slice.length, keyL ? keyL + slice.offset : nullptr,
+                          keyR ? keyR + slice.offset : nullptr);
                 insert.clearAutomation();
                 insert.setSidechain(nullptr, nullptr);
             }

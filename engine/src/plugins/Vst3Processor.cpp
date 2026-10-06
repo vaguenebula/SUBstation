@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "plugins/EditorWindow.h"
+#include "rt/Experiments.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstunits.h"
@@ -359,6 +360,8 @@ void Vst3Processor::reset() { releaseAll_.store(true, std::memory_order_relaxed)
 void Vst3Processor::process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) {
     if (numFrames <= 0 || numFrames > maxBlock_ || numChannels < 1) return;
     if (!guard_.tryEnter()) return;  // the main thread has the plug-in: the audio passes through
+    const bool profiling = experiments::profile.load(std::memory_order_relaxed);
+    const auto t0 = profiling ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     buildEvents(ctx);
     ParamChange change;
@@ -411,7 +414,9 @@ void Vst3Processor::process(const ProcessContext& ctx, float* const* channels, i
     for (auto& output : outputs_) output.silenceFlags = 0;
 
     data_.numSamples = numFrames;
+    const auto t1 = profiling ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const bool processed = processor_->process(data_) == kResultOk;
+    const auto t2 = profiling ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     if (processed && mainOutput_ >= 0 && !outputBuses_[mainOutput_].channels.empty()) {
         const Bus& bus = outputBuses_[mainOutput_];
@@ -424,6 +429,15 @@ void Vst3Processor::process(const ProcessContext& ctx, float* const* channels, i
     events_.clear();
     outputEvents_.clear();
     continuousSamples_ += numFrames;
+    if (profiling) {
+        const auto t3 = std::chrono::steady_clock::now();
+        using std::chrono::nanoseconds;
+        experiments::vst3PluginNs.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<nanoseconds>(t2 - t1).count()),
+                                            std::memory_order_relaxed);
+        experiments::vst3WrapperNs.fetch_add(
+            static_cast<uint64_t>(std::chrono::duration_cast<nanoseconds>((t1 - t0) + (t3 - t2)).count()),
+            std::memory_order_relaxed);
+    }
     guard_.leave();
 }
 
@@ -432,7 +446,11 @@ void Vst3Processor::process(const ProcessContext& ctx, float* const* channels, i
 void Vst3Processor::forwardOutputParameters() {
     for (int32 i = 0; i < outputChanges_.getParameterCount(); ++i) {
         HostParamQueue& queue = outputChanges_.queue(i);
-        if (queue.getPointCount() > 0) fromAudio_.push({queue.getParameterId(), queue.lastValue()});
+        if (queue.getPointCount() > 0) {
+            const bool pushed = fromAudio_.push({queue.getParameterId(), queue.lastValue()});
+            experiments::vst3OutParams.fetch_add(1, std::memory_order_relaxed);
+            if (!pushed) experiments::vst3OutParamsDropped.fetch_add(1, std::memory_order_relaxed);
+        }
     }
     outputChanges_.clear();
 }

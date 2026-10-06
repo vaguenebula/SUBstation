@@ -264,6 +264,38 @@ public:
         return position;
     }
 
+    // --- Experiments (perf-experiments branch) ---------------------------------
+    // What the renderer measured of this processor (experiments::profile), and
+    // its silence-suspension state (experiments::suspend). Rendering thread
+    // writes; anyone reads.
+    struct Profile {
+        std::atomic<uint64_t> ns{0};            // time inside process()
+        std::atomic<uint64_t> calls{0};
+        std::atomic<uint64_t> frames{0};
+        std::atomic<uint64_t> quietCalls{0};    // input and output quiet, no events
+        std::atomic<uint64_t> quietNs{0};       // time those took
+        std::atomic<uint64_t> quietInCalls{0};  // input quiet, no events (output may not be)
+        std::atomic<uint64_t> skippedCalls{0};  // asleep: not called
+        std::atomic<uint64_t> skippedFrames{0};
+        void reset() noexcept {
+            for (auto* v : {&ns, &calls, &frames, &quietCalls, &quietNs, &quietInCalls, &skippedCalls, &skippedFrames})
+                v->store(0, std::memory_order_relaxed);
+        }
+    };
+    Profile& profile() noexcept { return profile_; }
+    const Profile& profile() const noexcept { return profile_; }
+    struct Sleep {
+        int64_t quietIn = 0;   // frames the input has been quiet (and no events) for
+        int64_t quietOut = 0;  // frames the output has been quiet for
+        int notesHeld = 0;     // note-ons without a note-off, as the renderer sent them
+        bool asleep = false;
+        bool allowed = true;   // it may sleep (a per-device switch)
+    };
+    Sleep& sleepState() noexcept { return sleep_; }
+    // Rendering thread: it has something to take in (queued parameter changes,
+    // a release of its notes) and mustn't stay asleep.
+    virtual bool wantsProcessing() const noexcept { return false; }
+
 protected:
     // In process(): the automation for this call (processors may sort it).
     ParamAutomation* automation() noexcept { return automation_.data(); }
@@ -279,6 +311,8 @@ private:
     std::atomic<bool> resetRequested_{false};
     std::vector<ParamAutomation> automation_ = std::vector<ParamAutomation>(kMaxAutomation);
     size_t numAutomation_ = 0;
+    Profile profile_;
+    Sleep sleep_;
 };
 
 }  // namespace sub

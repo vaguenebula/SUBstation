@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+#include "backends/BenchBackend.h"
 #include "backends/WasapiBackend.h"
 #if SUBSTATION_HAS_ASIO
 #include "backends/AsioBackend.h"
@@ -19,6 +20,7 @@ AudioDevice::AudioDevice() {
 #if SUBSTATION_HAS_ASIO
     backends_.push_back(std::move(asio));
 #endif
+    backends_.push_back(std::make_unique<BenchBackend>());  // (perf experiments)
 }
 
 AudioDevice::~AudioDevice() { close(); }

@@ -336,6 +336,8 @@ struct TrackBuffers {
     // What rendering it takes, in nanoseconds per frame, smoothed over the last
     // chunks (the thread that renders it measures; the scheduler orders by it).
     std::atomic<float> cost{0.f};
+    std::atomic<uint64_t> totalNs{0};  // (perf experiments) the time every render of it took
+    bool skipped = false;  // experiments::skipUnheard: its devices weren't called last chunk
 
     explicit TrackBuffers(int frames)
         : left(static_cast<size_t>(frames), 0.f), right(static_cast<size_t>(frames), 0.f), events(kMaxEvents) {}

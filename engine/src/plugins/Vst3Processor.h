@@ -61,6 +61,9 @@ public:
     int latencySamples() const override { return latency_.load(std::memory_order_relaxed); }
     bool hasSidechain() const override { return auxInput_ >= 0; }
     int tailSamples() const override { return tail_; }
+    bool wantsProcessing() const noexcept override {
+        return !toAudio_.empty() || releaseAll_.load(std::memory_order_relaxed);
+    }
 
     const std::vector<ParamInfo>& params() const override { return params_; }
     float getParam(int index) const override;

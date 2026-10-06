@@ -143,6 +143,7 @@ struct SendInfo {
 struct TrackCost {
     uint32_t trackId = 0;
     float nsPerFrame = 0.f;  // 0: not rendered yet
+    uint64_t totalNs = 0;    // (perf experiments) every render of it so far, from clearing its buffer to its edges
 };
 
 struct MeterReading {
@@ -477,6 +478,19 @@ public:
     void setCostOrdering(bool on);
     bool costOrdering() const { return renderer_.costOrdering(); }
     std::vector<TrackCost> trackCosts();
+
+    // --- Experiments (perf-experiments branch) ---------------------------------
+    // What the renderer measured of each processor (rt/Experiments.h).
+    struct ProcessorProfileDesc {
+        uint32_t processorId = 0;
+        std::string name;
+        uint64_t ns = 0, calls = 0, frames = 0, quietCalls = 0, quietNs = 0, quietInCalls = 0, skippedCalls = 0,
+                 skippedFrames = 0;
+        int latency = 0, tail = 0;
+    };
+    std::vector<ProcessorProfileDesc> processorProfiles();
+    void resetProcessorProfiles();
+    void setProcessorSleepAllowed(uint32_t processorId, bool allowed);
 
     // --- Housekeeping ---------------------------------------------------------
     // Call regularly from the UI thread: frees retired snapshots and removed

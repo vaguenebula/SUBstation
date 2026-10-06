@@ -249,9 +249,52 @@ std::vector<TrackCost> Engine::trackCosts() {
     std::vector<TrackCost> costs;
     costs.reserve(tracks_.size());
     for (const TrackModel& track : tracks_) {
-        costs.push_back({track.id, track.buffers->cost.load(std::memory_order_relaxed)});
+        costs.push_back({track.id, track.buffers->cost.load(std::memory_order_relaxed),
+                         track.buffers->totalNs.load(std::memory_order_relaxed)});
     }
     return costs;
+}
+
+std::vector<Engine::ProcessorProfileDesc> Engine::processorProfiles() {
+    std::lock_guard lock(mutex_);
+    std::vector<ProcessorProfileDesc> out;
+    for (const auto& [id, entry] : processors_) {
+        if (entry.rack) continue;
+        const Processor::Profile& p = entry.processor->profile();
+        ProcessorProfileDesc d;
+        d.processorId = id;
+        d.name = entry.processor->name();
+        d.ns = p.ns.load();
+        d.calls = p.calls.load();
+        d.frames = p.frames.load();
+        d.quietCalls = p.quietCalls.load();
+        d.quietNs = p.quietNs.load();
+        d.quietInCalls = p.quietInCalls.load();
+        d.skippedCalls = p.skippedCalls.load();
+        d.skippedFrames = p.skippedFrames.load();
+        d.latency = entry.processor->latencySamples();
+        d.tail = entry.processor->tailSamples();
+        out.push_back(d);
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.processorId < b.processorId; });
+    return out;
+}
+
+void Engine::resetProcessorProfiles() {
+    std::lock_guard lock(mutex_);
+    for (const TrackModel& track : tracks_) track.buffers->totalNs.store(0);
+    for (auto& [id, entry] : processors_) {
+        entry.processor->profile().reset();
+        const bool allowed = entry.processor->sleepState().allowed;
+        entry.processor->sleepState() = {};
+        entry.processor->sleepState().allowed = allowed;
+    }
+}
+
+void Engine::setProcessorSleepAllowed(uint32_t processorId, bool allowed) {
+    std::lock_guard lock(mutex_);
+    const auto it = processors_.find(processorId);
+    if (it != processors_.end()) it->second.processor->sleepState().allowed = allowed;
 }
 
 // ---------------------------------------------------------------------------

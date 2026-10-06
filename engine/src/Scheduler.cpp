@@ -7,16 +7,25 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <avrt.h>
+#else
+#include <pthread.h>
+#include <sched.h>
 #endif
 
+#include "rt/Experiments.h"
 #include "rt/RtUtils.h"
 
 namespace sub {
 namespace {
 
+int64_t nowNs() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 // How long an idle worker waits for the next run before it sleeps: consecutive
-// chunks of one callback come within microseconds, the next callback a buffer later.
-constexpr auto kSpinBeforeSleep = std::chrono::microseconds(50);
+// chunks of one callback come within microseconds, the next callback a buffer
+// later. (experiments::spinUs; 50 microseconds by default.)
 // Inside a run, waiting for a node to become ready: pause, then give way.
 constexpr int kPausesBeforeYield = 2000;
 
@@ -114,9 +123,10 @@ Scheduler::~Scheduler() {
     for (auto& worker : workers_) worker.join();
 }
 
-void Scheduler::run(TaskGraph& graph, Job job, void* context, bool parallel) noexcept {
+void Scheduler::run(TaskGraph& graph, Job job, void* context, bool parallel, void (*first)(void*) noexcept) noexcept {
     const int size = graph.size();
     if (!parallel || workers_.empty() || size < 2) {
+        if (first) first(context);
         for (int node = 0; node < size; ++node) job(context, node, 0);  // the graph's order: inputs first
         return;
     }
@@ -126,10 +136,21 @@ void Scheduler::run(TaskGraph& graph, Job job, void* context, bool parallel) noe
     context_ = context;
     // Open the run (publishing the above), and wake the workers that sleep. A
     // worker either sees the new state before it sleeps, or is counted here.
+    if (experiments::preWakeUs.load(std::memory_order_relaxed) > 0) {
+        const int64_t now = nowNs();
+        const int64_t last = lastOpenNs_.load(std::memory_order_relaxed);
+        const int64_t interval = now - last;
+        if (last > 0 && interval < 100'000'000) {
+            const int64_t period = periodNs_.load(std::memory_order_relaxed);
+            periodNs_.store(period > 0 ? period + (interval - period) / 8 : interval, std::memory_order_relaxed);
+        }
+        lastOpenNs_.store(now, std::memory_order_relaxed);
+    }
     const uint64_t open = (++runs_ << 1) | 1;
     state_.store(open, std::memory_order_seq_cst);
     if (sleepers_.load(std::memory_order_seq_cst) > 0) state_.notify_all();
 
+    if (first) first(context);
     work(0);
     while (graph.done_.load(std::memory_order_acquire) < size) _mm_pause();  // the last nodes on the workers
     // Close it, and wait for the workers still inside to leave: a worker that
@@ -172,11 +193,18 @@ void Scheduler::workerMain(int worker) noexcept {
 #ifdef _WIN32
     DWORD task = 0;
     HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task);
+#else
+    if (experiments::workerRealtime.load()) {
+        sched_param param{};
+        param.sched_priority = 79;  // just under the Bench driver's thread
+        pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+    }
 #endif
     uint64_t joined = 0;  // the last run it took part in
     for (;;) {
         uint64_t state = state_.load(std::memory_order_seq_cst);
-        const auto deadline = std::chrono::steady_clock::now() + kSpinBeforeSleep;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::microseconds(experiments::spinUs.load(std::memory_order_relaxed));
         for (int spins = 1; state != kQuit && (!(state & 1) || state == joined); ++spins) {
             if (spins % 64 == 0 && std::chrono::steady_clock::now() > deadline) break;
             _mm_pause();
@@ -192,6 +220,23 @@ void Scheduler::workerMain(int worker) noexcept {
             active_.fetch_sub(1, std::memory_order_seq_cst);
             joined = state;
             continue;
+        }
+        // Experiment: sleep until just before the next run is due, then spin for it.
+        if (const int64_t early = experiments::preWakeUs.load(std::memory_order_relaxed) * 1000LL; early > 0) {
+            const int64_t period = periodNs_.load(std::memory_order_relaxed);
+            const int64_t target = lastOpenNs_.load(std::memory_order_relaxed) + period - early;
+            const int64_t now = nowNs();
+            if (period > 0 && target > now && target - now < period) {
+                std::this_thread::sleep_for(std::chrono::nanoseconds(target - now));
+                const int64_t until = target + 3 * early;
+                state = state_.load(std::memory_order_seq_cst);
+                for (int spins = 1; state != kQuit && (!(state & 1) || state == joined); ++spins) {
+                    if (spins % 64 == 0 && nowNs() > until) break;
+                    _mm_pause();
+                    state = state_.load(std::memory_order_seq_cst);
+                }
+                if (state == kQuit || ((state & 1) && state != joined)) continue;
+            }
         }
         sleepers_.fetch_add(1, std::memory_order_seq_cst);
         state_.wait(state, std::memory_order_seq_cst);  // returns at once if a run opened meanwhile
