@@ -147,6 +147,12 @@ struct CachePoint {
     SpscQueue<CacheBlock*, 4> spares;      // empty blocks the store hands out to capture into
     std::atomic<int64_t> idleSinceNs{0};   // its devices haven't been called since (0: they are)
     std::atomic<uint64_t> idleEpoch{0};    // counts the times they stopped being called
+    // Who has its devices: the rendering thread while it runs them, the engine's
+    // idle() while it resets them offline (they are suspended then: a plug-in
+    // would let its input through), neither while they stand idle. Each takes
+    // them from kDevicesIdle only.
+    static constexpr int kDevicesIdle = 0, kDevicesRunning = 1, kDevicesResetting = 2;
+    std::atomic<int> devicesOwner{kDevicesIdle};
     // Statistics (rendering thread adds; anyone reads).
     std::atomic<uint64_t> framesFromCache{0}, framesLive{0}, framesCaptured{0};
 

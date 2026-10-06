@@ -169,6 +169,7 @@ struct BackgroundFreezingStats {
     size_t blocks = 0;
     size_t silentBlocks = 0;
     size_t bytes = 0;
+    size_t unfreedBytes = 0;       // let go of but not freed yet (bytes and these stay within the budget)
     uint64_t framesFromCache = 0;  // strips' chunks played from the cache (frames, summed over strips)
     uint64_t framesLive = 0;       // ... with their devices running
     uint64_t framesCaptured = 0;   // ... kept

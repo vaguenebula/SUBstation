@@ -248,6 +248,7 @@ private:
         int64_t startPosition = 0;  // where the chunk's playing starts
         int64_t endPosition = 0;  // the last frame the chunk plays + 1 (the playhead when stopped)
         int64_t nowNs = 0, idleNs = 0, warmFrames = 0;
+        int64_t contextFrames = 0;  // how long after a wrap what plays still carries the loop's end (warm-up and latencies)
         int plannedFade = 0, unplannedFade = 0;
         uint64_t generation = 0;
         uint64_t playedAfter = 0;  // frames played (moving) once this chunk is done

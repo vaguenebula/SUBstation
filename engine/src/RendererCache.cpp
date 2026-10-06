@@ -43,6 +43,15 @@ int64_t coveredFrom(const BlockSet* blocks, const DirtyLog* dirty, uint64_t vers
     return got;
 }
 
+// The rendering thread takes a strip's devices to run them (false: idle() is
+// resetting them).
+bool claimDevices(CachePoint& point) noexcept {
+    int owner = point.devicesOwner.load(std::memory_order_acquire);
+    if (owner == CachePoint::kDevicesRunning) return true;
+    return owner == CachePoint::kDevicesIdle &&
+           point.devicesOwner.compare_exchange_strong(owner, CachePoint::kDevicesRunning, std::memory_order_acq_rel);
+}
+
 // How long the notes sounding at `position` (begun before it) still sound.
 // Playing that starts there (a jump, devices starting again) leaves them out
 // or starts them late, which is not what the arrangement plays, until they end.
@@ -70,6 +79,7 @@ void Renderer::prepareCacheChunk(const RenderSnapshot& snap, int frames, ChunkFl
     c.looping = flags.loop && !recording_ && snap.loopEnabled;
     const double warmSeconds = cacheSettings_ ? cacheSettings_->warmSeconds.load(std::memory_order_relaxed) : 0.0;
     c.warmFrames = std::max<int64_t>(0, std::llround(warmSeconds * snap.sampleRate));
+    c.contextFrames = c.warmFrames + snap.outputLatency();
     if (c.on) {
         c.nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
@@ -112,9 +122,9 @@ void Renderer::prepareCacheChunk(const RenderSnapshot& snap, int frames, ChunkFl
                 break;
             }
             CachePiece piece{segment.offset + done, segment.length - done, segment.position + done, {}};
-            if (framesSinceWrap_ < c.warmFrames) {
+            if (framesSinceWrap_ < c.contextFrames) {
                 piece.context = lastWrap_;
-                piece.length = static_cast<int>(std::min<int64_t>(piece.length, c.warmFrames - framesSinceWrap_));
+                piece.length = static_cast<int>(std::min<int64_t>(piece.length, c.contextFrames - framesSinceWrap_));
             }
             c.pieces[static_cast<size_t>(c.numPieces++)] = piece;
             framesSinceWrap_ = std::min(kLongAgo, framesSinceWrap_ + piece.length);
@@ -122,7 +132,7 @@ void Renderer::prepareCacheChunk(const RenderSnapshot& snap, int frames, ChunkFl
         }
         c.endPosition = segment.position + segment.length;
     }
-    c.wrappedLately = framesSinceWrap_ < c.warmFrames + frames;
+    c.wrappedLately = framesSinceWrap_ < c.contextFrames + frames;
     playedFrames_ += static_cast<uint64_t>(frames - segments_[0].offset);
     c.playedAfter = playedFrames_;
     c.jumps = jumps_;
@@ -151,9 +161,9 @@ int64_t Renderer::cacheRunway(const RenderSnapshot& snap, const BlockSet* blocks
         int64_t length = most - covered;
         if (c.looping && position < snap.loopEnd) length = std::min(length, snap.loopEnd - position);
         CacheContext context;
-        if (sinceWrap < c.warmFrames) {
+        if (sinceWrap < c.contextFrames) {
             context = wrap;
-            length = std::min(length, c.warmFrames - sinceWrap);
+            length = std::min(length, c.contextFrames - sinceWrap);
         }
         const int64_t got = coveredFrom(blocks, dirty, version, position, context, length);
         covered += got;
@@ -178,6 +188,11 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     using Mode = CachePoint::LiveState::Mode;
     using Fade = CachePoint::LiveState::Fade;
     const CacheChunk& c = cacheChunk_;
+    // Its devices hear the timeline as late as its input's and their own
+    // latency make them: they are warm a warm-up after that.
+    const int64_t latency = track ? int64_t{track->inputLatency} + track->latency
+                                  : int64_t{snap.maxLatency} + snap.master.latency;
+    const int64_t warmFrames = c.warmFrames + latency;
     if (!c.on) {  // its devices run as ever; when the cache comes on, they start out fresh (seen nothing)
         if (s.building) s.building->from = s.building->to = 0;
         s.mode = Mode::Live;
@@ -187,6 +202,7 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
         s.pendingOut = s.liveInputOut = false;
         s.cleanInOut = 0;
         point->idleSinceNs.store(0, std::memory_order_relaxed);
+        claimDevices(*point);  // (a reset idle() began just before the cache went off: it is safe, if dry, for a chunk)
         return step;
     }
     step.active = true;
@@ -211,7 +227,7 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     const uint64_t accounted = point->accountedChanges.load(std::memory_order_acquire);
     const uint64_t version = point->version.load(std::memory_order_acquire);
     const bool pending = sourcePending || changes != accounted;
-    if (liveInput) s.liveHold = c.warmFrames + frames;  // (what it played carries on in its devices a while)
+    if (liveInput) s.liveHold = warmFrames + frames;  // (what it played carries on in its devices a while)
     const bool carriesLive = sourceLive || s.liveHold > 0;
     s.liveHold = std::max<int64_t>(0, s.liveHold - frames);
     const BlockSet* blocks = point->blocks.load(std::memory_order_acquire);
@@ -227,7 +243,7 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     // (What its devices still carry: about a warm-up's worth before this chunk,
     // and the loop's end if it wrapped within that.)
     if (c.generation != s.seenGeneration && dirty &&
-        dirty->changedSince(s.seenGeneration, c.endPosition - frames - c.warmFrames, c.endPosition,
+        dirty->changedSince(s.seenGeneration, c.endPosition - frames - warmFrames, c.endPosition,
                             c.wrappedLately ? lastWrap_ : CacheContext{})) {
         fresh = true;
     }
@@ -241,7 +257,7 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     // devices start now, while the cache still plays, to be warm by then.
     bool exitAhead = false;
     if (valid && !hot && !observed) {
-        const int64_t need = c.warmFrames + frames;
+        const int64_t need = warmFrames + frames;
         int64_t remaining = static_cast<int64_t>(s.runwayUntil - c.playedAfter);
         if (s.runwayVersion != version || s.runwayGeneration != c.generation || s.runwayBlocks != blocks ||
             s.runwayJumps != c.jumps || remaining < need) {
@@ -261,6 +277,13 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     } else if (valid) {
         mode = Mode::Cache;
     }
+    // Its devices start again, unless idle() is resetting them (a few
+    // milliseconds): then the cache plays on, good or not, until it is done.
+    bool held = false;
+    if (mode != Mode::Cache && s.idleInstance && !claimDevices(*point)) {
+        mode = Mode::Cache;
+        held = true;
+    }
 
     // Seams: where what goes out changes from the cache to the devices, or back.
     const bool wasCacheOut = s.mode != Mode::Live;
@@ -279,7 +302,7 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     step.cacheOut = cacheOut;
     step.renderLive = mode != Mode::Cache || s.fade == Fade::ToCache;
     step.readCache = cacheOut || s.fade == Fade::ToLive;
-    step.anyBlocks = !valid && !warm;
+    step.anyBlocks = held || (!valid && !warm);
 
     // What its devices put out matches the arrangement from frame `cleanIn` on
     // (after a warm-up, longer by what feeds it, and by the notes sounding where
@@ -291,15 +314,15 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
         if (fresh) {
             const int at = std::max(0, c.jumpAt);
             const int64_t held = track ? heldAcross(*track, c.jumpAt >= 0 ? c.jumpTo : c.startPosition) : 0;
-            s.warmIn = at + c.warmFrames;
-            s.cleanIn = at + held + c.warmFrames;
+            s.warmIn = at + warmFrames;
+            s.cleanIn = at + held + warmFrames;
         }
         if (track && c.wrapAt >= 0) {
             if (const int64_t held = heldAcross(*track, lastWrap_.wrapTo); held > 0) {
-                s.cleanIn = std::max(s.cleanIn, c.wrapAt + held + c.warmFrames);
+                s.cleanIn = std::max(s.cleanIn, c.wrapAt + held + warmFrames);
             }
         }
-        if (sourceClean > 0) s.cleanIn = std::max(s.cleanIn, sourceClean + c.warmFrames);
+        if (sourceClean > 0) s.cleanIn = std::max(s.cleanIn, sourceClean + warmFrames);
         cleanAtStart = s.cleanIn;
         s.cleanIn = std::max<int64_t>(0, s.cleanIn - frames);
         s.warmIn = std::max<int64_t>(0, s.warmIn - frames);
@@ -311,6 +334,7 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
         if (!s.idleInstance) {
             point->idleSinceNs.store(c.nowNs, std::memory_order_relaxed);
             point->idleEpoch.fetch_add(1, std::memory_order_relaxed);
+            point->devicesOwner.store(CachePoint::kDevicesIdle, std::memory_order_release);
         }
         s.idleInstance = true;
     }

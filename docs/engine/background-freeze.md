@@ -434,7 +434,8 @@ preferences yet). What it does, and where it departs from the design above:
   with no device switched on, strips with a device a sidechain taps.
 - **Blocks** as designed (16384 frames on the grid, stereo float, a silent one as a flag), in RAM
   only, within a budget (1 GB by default; over it, blocks no longer good go first, then those
-  farthest from the playhead). Contexts: `Linear`, or `AfterWrap{loopEnd, loopStart}` for a warm-up
+  farthest from the playhead). Blocks let go of count against it until they are freed (once no
+  callback can still read them, or the last snapshot showing a strip that went lets go). Contexts: `Linear`, or `AfterWrap{loopEnd, loopStart}` for a warm-up
   after the loop wrapped. A latency change invalidates (no realignment).
 - **Versions instead of stamps.** Each point has a counter, bumped after every time-global change
   that reaches it: a new signature of what the snapshot makes it of (its devices, their switches
@@ -451,13 +452,15 @@ preferences yet). What it does, and where it departs from the design above:
   There is no convergence check (it needs background rendering). Instead a change is taken to ring
   on in a strip's devices for at most the **warm-up** `W` (`warmSeconds`, 8 s by default: longer
   than every plug-in measured needs, but ZamVerb and those that never converge): a strip's range is
-  what changed at its input, widened by `W`, and its destinations' are widened by `W` again. So an
+  what changed at its input, widened by `W` and by the latencies on the way (its input's and its
+  devices', an edge's delay to the next strip: a change comes out that much later), and its
+  destinations' are widened again. So an
   edit ahead of the playhead, or behind it, leaves what plays here alone. A range that rings on at
   the loop's end (`from < loopEnd ≤ to`) also takes the `AfterWrap` blocks of that wrap. The log
   keeps 64 ranges a point; blocks older than the oldest forgotten are no good.
 - **Capture** as designed, on the rendering thread, into empty blocks the store hands out (two a
   point, topped up every 5 ms); it never allocates. What a strip's devices put out is kept from `W`
-  after they last started from a state that isn't the arrangement's (playing starting, a jump,
+  (plus the strip's latencies: a device's delay holds what it heard before) after they last started from a state that isn't the arrangement's (playing starting, a jump,
   starting again after standing idle, a reset, a change of theirs or of what they had heard, live
   input), longer by what the strips feeding it still need (so each hop down adds `W`), and not
   until the notes sounding where they started have ended (a note started late, or left out, isn't
@@ -474,7 +477,10 @@ preferences yet). What it does, and where it departs from the design above:
   to devices started cold, with a 20 ms crossfade out of the old cache; a jump switches without one.
   Devices starting again after standing idle are reset first (`Processor::reset()`: what they held
   is from long ago), and the notes held there are sent again; after 2 s idle, `idle()` also resets
-  them offline (`resetOffline()`), so a switch that comes without warning starts clean.
+  them offline (`resetOffline()`), so a switch that comes without warning starts clean. The two
+  threads take a strip's devices in turn (`CachePoint::devicesOwner`): `idle()` doesn't reset
+  devices that run, and while it resets them (a few milliseconds) the cache plays on, good or not,
+  rather than a plug-in that would let its input through.
 - **Not done** (later phases): shadows and background rendering (what hasn't played since an edit
   is live until it has, and plays from the cache the time after), checkpoints, variants,
   realignment, the disk store, learned warm-ups and tails, exclusions and verification mode, the

@@ -48,6 +48,7 @@ CacheStore::~CacheStore() {
     retired_.insert(retired_.end(), pendingRetire_.begin(), pendingRetire_.end());
     pendingRetire_.clear();
     freeRetiredLocked(true);  // the audio thread has stopped by now (the engine closed its device first)
+    freeDyingLocked(true);
 }
 
 void CacheStore::setPoints(std::vector<Entry> points) {
@@ -64,9 +65,13 @@ void CacheStore::setPoints(std::vector<Entry> points) {
             retireLocked(block);
         }
         dropAllLocked(point);
-        // The empty blocks it still has go with it (CachePoint's destructor).
-        bytes_ -= static_cast<size_t>(point.store.spares) * kBlockBytes;
+        // The empty blocks it still has go with it (CachePoint's destructor),
+        // once the snapshots still showing it have gone.
+        const size_t spares = static_cast<size_t>(point.store.spares) * kBlockBytes;
+        bytes_ -= spares;
         point.store.spares = 0;
+        dyingBytes_ += spares;
+        dying_.push_back({old.point, spares});
     }
     points_ = std::move(points);
     if (!pendingRetire_.empty()) {
@@ -92,6 +97,7 @@ CacheStore::Stats CacheStore::stats() const {
         }
     }
     stats.bytes = bytes_;
+    stats.unfreedBytes = retiredBytes_ + dyingBytes_;
     return stats;
 }
 
@@ -115,7 +121,16 @@ bool CacheStore::goodLocked(const CachePoint& point, const CacheBlock& block, co
 
 void CacheStore::retireLocked(CacheBlock* block) {
     bytes_ -= block->bytes();
+    retiredBytes_ += block->bytes();
     pendingRetire_.push_back({nullptr, block, 0});
+}
+
+void CacheStore::freeDyingLocked(bool all) {
+    std::erase_if(dying_, [&](Dying& d) {
+        if (!all && d.point.use_count() > 1) return false;  // (a snapshot still shows it)
+        dyingBytes_ -= d.bytes;
+        return true;  // (its destructor frees its blocks, here or where the last holder lets go)
+    });
 }
 
 void CacheStore::dropAllLocked(CachePoint& point) {
@@ -195,6 +210,7 @@ void CacheStore::freeRetiredLocked(bool all) {
     const bool idle = all || !deviceRunning_.load(std::memory_order_seq_cst);
     std::erase_if(retired_, [&](const Retired& r) {
         if (!idle && epoch <= r.epoch) return false;
+        if (r.block) retiredBytes_ -= r.block->bytes();
         delete r.set;
         delete r.block;
         return true;
@@ -287,12 +303,15 @@ void CacheStore::serviceLocked() {
         pendingRetire_.clear();
     }
     freeRetiredLocked(false);
+    freeDyingLocked(false);
 
-    // Empty blocks to capture into, while the budget allows.
+    // Empty blocks to capture into, while the budget allows (counting what
+    // isn't freed yet).
     if (enabled) {
         for (Entry& entry : points_) {
             CachePoint& point = *entry.point;
-            while (point.store.spares < kSparesPerPoint && bytes_ + kBlockBytes <= budget) {
+            while (point.store.spares < kSparesPerPoint &&
+                   bytes_ + retiredBytes_ + dyingBytes_ + kBlockBytes <= budget) {
                 auto* block = new CacheBlock;
                 block->samples = std::make_unique<float[]>(2 * kCacheBlockFrames);
                 if (!point.spares.push(block)) {

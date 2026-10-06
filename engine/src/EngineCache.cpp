@@ -278,6 +278,10 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
     // In snapshot order: what feeds a strip comes before it. A change of what a
     // strip hears changes what its devices put out a warm-up longer (they
     // remember: the same assumption the capture makes), and so on downstream.
+    // Ranges are where the playhead is when the change comes out at a strip's
+    // cache point: as late as its input's latency and its devices' (clips and
+    // notes play on time, then go through them; envelopes are delayed with the
+    // audio), and an edge's delay on the way to the next.
     const int64_t warm = std::max<int64_t>(0, std::llround(cacheSettings_.warmSeconds.load() * snap.sampleRate));
     // Off, nothing is cached (the store dropped it all), so what changed where
     // needn't be worked out: what is captured once it is on is of this snapshot
@@ -297,10 +301,11 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
             h = mix(h, edge.compensation);
             h = mix(h, static_cast<int>(snap.tracks[source].id));
             h = mix(h, signatures[source]);
-            in.add(changedOut[source]);
-            in.add(changedFader[source]);
+            Span through = changedOut[source];
+            through.add(changedFader[source]);
             const auto old = on ? edgesBefore.find(edge.state.get()) : edgesBefore.end();
-            if (old != edgesBefore.end()) in.add(envelopeDiffers(old->second->level.nodes, edge.level.nodes));
+            if (old != edgesBefore.end()) through.add(envelopeDiffers(old->second->level.nodes, edge.level.nodes));
+            in.add(through.widened(int64_t{edge.compensation} + edge.deviceDelay));
         }
     };
     const auto sourcesOf = [&](const std::vector<int>& edges) {
@@ -364,7 +369,9 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
             changedFader[t].add(envelopeDiffers(was.volume.nodes, render.volume.nodes));
             changedFader[t].add(envelopeDiffers(was.pan.nodes, render.pan.nodes));
         }
-        changedOut[t] = in.widened(warm);
+        const int64_t latency = int64_t{render.inputLatency} + render.latency;
+        changedFader[t] = changedFader[t].widened(latency);
+        changedOut[t] = in.widened(warm + latency);
         StripCacheRender& cache = render.cache;
         cache.sources = sourcesOf(render.incoming);
         cache.cacheable = !render.frozen && render.deviceTaps.empty() && anyEnabled(render);
@@ -390,7 +397,7 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         StripCacheRender& cache = snap.masterCache;
         cache.sources = sourcesOf(into);
         cache.cacheable = snap.master.deviceTaps.empty() && anyEnabled(snap.master);
-        settle(master_, cache, h, in.widened(warm));
+        settle(master_, cache, h, in.widened(warm + int64_t{snap.maxLatency} + snap.master.latency));
         entries.push_back({cache.point, cache.dirty});
     }
     if (cacheStore_) cacheStore_->setPoints(std::move(entries));
@@ -478,6 +485,7 @@ void Engine::cacheIdle(bool rendering) {
     struct Reset {
         uint32_t stripId;
         uint64_t epoch;
+        std::shared_ptr<CachePoint> point;
         std::vector<std::shared_ptr<Processor>> devices;
     };
     std::vector<Reset> resets;
@@ -512,7 +520,7 @@ void Engine::cacheIdle(bool rendering) {
             const uint64_t epoch = point.idleEpoch.load(std::memory_order_relaxed);
             if (!rendering && !devices.empty() && idleSince != 0 && now - idleSince > kIdleBeforeResetNs &&
                 epoch != strip.cache.resetEpoch) {
-                resets.push_back({strip.id, epoch, devices});
+                resets.push_back({strip.id, epoch, strip.cache.point, devices});
             }
         };
         for (TrackModel& track : tracks_) visit(track);
@@ -525,10 +533,19 @@ void Engine::cacheIdle(bool rendering) {
     const auto started = std::chrono::steady_clock::now();
     for (Reset& reset : resets) {
         if (std::chrono::steady_clock::now() - started > kResetBudget) break;
+        // Its devices are this thread's while it resets them: the rendering
+        // thread doesn't start them meanwhile (it plays the cache on). If it
+        // has started them again, they aren't idle any more.
+        int owner = CachePoint::kDevicesIdle;
+        if (!reset.point->devicesOwner.compare_exchange_strong(owner, CachePoint::kDevicesResetting,
+                                                               std::memory_order_acq_rel)) {
+            continue;
+        }
         for (const auto& device : reset.devices) {
             device->resetOffline();
             device->requestReset();
         }
+        reset.point->devicesOwner.store(CachePoint::kDevicesIdle, std::memory_order_release);
         std::lock_guard lock(mutex_);
         if (reset.stripId == kMaster) {
             master_.cache.resetEpoch = reset.epoch;
@@ -582,6 +599,7 @@ BackgroundFreezingStats Engine::backgroundFreezingStats() {
         stats.blocks = store.blocks;
         stats.silentBlocks = store.silentBlocks;
         stats.bytes = store.bytes;
+        stats.unfreedBytes = store.unfreedBytes;
     }
     std::lock_guard lock(mutex_);
     for (const TrackModel& track : tracks_) addCounts(stats, *track.cache.point);

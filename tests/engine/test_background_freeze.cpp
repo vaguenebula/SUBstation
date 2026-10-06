@@ -10,14 +10,17 @@
 // two are the same again once the delay has forgotten.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "Engine.h"
 #include "backends/ManualBackend.h"
+#include "cache/CacheStore.h"
 #include "harness/Fixtures.h"
 
 using namespace subtest;
@@ -311,6 +314,98 @@ TEST_CASE("background freezing: without memory for it, everything plays live") {
         1, freezing(true, 0.0)));
 }
 
+TEST_CASE("background freezing: what it holds stays within its budget, not yet freed too") {
+    // 3 MB: a couple of dozen blocks for four strips, while edits make what was
+    // kept no good (it goes, freed once no callback can still see it), and a
+    // strip goes (its empty blocks are freed with the last snapshot showing it).
+    const Wavs wavs;
+    const auto budget = static_cast<size_t>(3.0 * 1024 * 1024);
+    checkSameButCold(both(
+        [&](Session& s) {
+            const Song song = twoPasses(s, wavs);
+            const auto check = [&] {
+                if (!s.freezing) return;
+                const sub::BackgroundFreezingStats stats = s.engine.backgroundFreezingStats();
+                CHECK(stats.bytes + stats.unfreedBytes <= budget);
+            };
+            for (int i = 0; i < 20; ++i) {
+                s.run(0.25);
+                check();
+            }
+            s.mark();
+            setParam(s.engine, song.drumsGain, "gain", -9.f);
+            s.engine.removeTrack(song.bass);
+            for (int i = 0; i < 16; ++i) {  // (before idle() lets go of the snapshot still showing the bass)
+                s.run(static_cast<double>(kBuffer) / kSampleRate);
+                check();
+            }
+            for (int i = 0; i < 20; ++i) {
+                s.run(0.25);
+                check();
+            }
+            if (s.freezing) CHECK(s.fromCache(song.group) > 0);
+        },
+        1, freezing(true, 3.0)), 1);
+}
+
+TEST_CASE("background freezing: the store hands out blocks within its budget, counting what isn't freed") {
+    // The store alone, with no audio callbacks finishing (the epoch stands
+    // still): what it lets go of can't be freed yet, and still counts.
+    constexpr size_t kBlock = sizeof(float) * 2 * sub::kCacheBlockFrames;
+    sub::CacheSettings settings;
+    settings.enabled = true;
+    settings.idleSeconds = 0.0;
+    settings.budgetBytes = static_cast<int64_t>(4 * kBlock);
+    std::atomic<uint64_t> epoch{1};
+    std::atomic<bool> running{true};
+    std::atomic<int64_t> playhead{0};
+    sub::CacheStore store(settings, epoch, running, playhead);
+    auto point = std::make_shared<sub::CachePoint>();
+    store.setPoints({{point, nullptr}});
+    store.service();
+    CHECK_EQ(store.stats().bytes, 2 * kBlock);  // two empty blocks to capture into
+    // Three captured: kept, and empty ones handed out while the budget allows.
+    for (int64_t cell = 0; cell < 3; ++cell) {
+        sub::CacheBlock* block = nullptr;
+        REQUIRE(point->spares.pop(block));
+        block->cell = cell;
+        block->from = 0;
+        block->to = static_cast<int>(sub::kCacheBlockFrames);
+        block->version = point->version.load();
+        std::fill_n(block->samples.get(), 2 * sub::kCacheBlockFrames, 0.25f);
+        REQUIRE(point->completed.push(block));
+        store.service();
+    }
+    CHECK_EQ(store.stats().blocks, size_t{3});
+    CHECK_EQ(store.stats().bytes, 4 * kBlock);  // three kept, one to capture into
+    // No longer good: they go once a seam can't fade out of them any more, but
+    // aren't freed while a callback may still read them. Nothing new meanwhile.
+    point->version.fetch_add(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    store.service();
+    sub::CacheStore::Stats stats = store.stats();
+    CHECK_EQ(stats.blocks, size_t{0});
+    CHECK_EQ(stats.unfreedBytes, 3 * kBlock);
+    CHECK(stats.bytes + stats.unfreedBytes <= 4 * kBlock);
+    // A callback finished: they are freed, and empty blocks handed out again.
+    epoch.fetch_add(1);
+    store.service();
+    stats = store.stats();
+    CHECK_EQ(stats.unfreedBytes, size_t{0});
+    CHECK_EQ(stats.bytes, 2 * kBlock);
+    // A strip gone: its empty blocks count until the last snapshot showing it lets go.
+    std::shared_ptr<sub::CachePoint> snapshot = point;
+    point.reset();
+    store.setPoints({});
+    store.service();
+    stats = store.stats();
+    CHECK_EQ(stats.bytes, size_t{0});
+    CHECK_EQ(stats.unfreedBytes, 2 * kBlock);
+    snapshot.reset();
+    store.service();
+    CHECK_EQ(store.stats().unfreedBytes, size_t{0});
+}
+
 TEST_CASE("background freezing: switched off it drops the cache, on again it keeps anew") {
     const Wavs wavs;
     checkSame(both([&](Session& s) {
@@ -453,6 +548,22 @@ TEST_CASE("background freezing: a change where it plays plays at once") {
     }
 }
 
+TEST_CASE("background freezing: devices reset while idle start again where an edit lands") {
+    // Idle over two seconds, the drums' devices are reset offline (idle()); an
+    // edit where it plays then starts them again at once.
+    const Wavs wavs;
+    checkSameButCold(both([&](Session& s) {
+        const Song song = twoPasses(s, wavs);
+        s.run(2.0);  // from the cache
+        std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+        s.engine.idle();
+        s.mark();
+        setParam(s.engine, song.drumsGain, "gain", -9.f);
+        s.run(2.0);
+        if (s.freezing) CHECK(s.engine.backgroundFreezingStats(song.drums).framesLive > 0);
+    }), 1);
+}
+
 // --- Instruments ---------------------------------------------------------------------
 
 namespace {
@@ -510,4 +621,75 @@ TEST_CASE("background freezing: a note held where playing starts is kept only on
         s.run(6.0);
         if (s.freezing) CHECK(s.fromCache(track) - cached > framesOf(1.0));  // (from 4.25 s)
     }));
+}
+
+// --- Latency ------------------------------------------------------------------------
+
+namespace {
+
+enum { FX_GAIN, FX_LATENCY };    // SUB Test Effect's parameters
+constexpr int kFxLatency = 4096;  // samples (85 ms): the most it takes, far longer than the warm-up below
+
+// A track playing the two clips of noise through SUB Test Effect, kFxLatency late.
+uint32_t latentTrack(sub::Engine& engine, const Wavs& wavs) {
+    engine.loadSource(wavs.drums);
+    const uint32_t track = engine.addTrack();
+    engine.setTrackClips(track, twoClips(wavs.drums, 3.0));
+    const uint32_t effect = addTestPlugin(engine, engine.trackChain(track), "SUB Test Effect");
+    engine.setProcessorParam(effect, FX_LATENCY, static_cast<float>(kFxLatency));
+    engine.idle();  // the plug-in asked for a restart to change its latency
+    REQUIRE(engine.processorInfo(effect).latency == kFxLatency);
+    return track;
+}
+
+// A warm-up shorter than the latency (the effect remembers nothing else).
+sub::BackgroundFreezingSettings shortWarmUp() {
+    sub::BackgroundFreezingSettings settings = freezing();
+    settings.warmSeconds = 0.01;
+    return settings;
+}
+
+}  // namespace
+
+TEST_CASE("background freezing: an edit reaches as far as a device's latency carries it") {
+    // The first clip (to 3 s) changes: what comes out of the effect changes
+    // until 3 s and its latency, longer than the warm-up.
+    requireTestPlugins();
+    const Wavs wavs;
+    checkSameButCold(both(
+        [&](Session& s) {
+            const uint32_t track = latentTrack(s.engine, wavs);
+            s.engine.play();
+            s.run(6.0);
+            s.settle();
+            s.locate(0.0);
+            s.run(4.0);  // from the cache
+            std::vector<sub::ClipDesc> clips = twoClips(wavs.drums, 3.0);
+            clips[0].gain = 0.5f;
+            s.engine.setTrackClips(track, clips);
+            s.mark();
+            s.locate(0.0);
+            s.run(5.0);
+        },
+        1, shortWarmUp()), 1);
+}
+
+TEST_CASE("background freezing: what a latent device still holds after a jump isn't kept") {
+    // Playing starts at 2 s: the effect puts out its empty latency first, as it
+    // doesn't playing through from the start. None of that is kept.
+    requireTestPlugins();
+    const Wavs wavs;
+    checkSame(both(
+        [&](Session& s) {
+            const uint32_t track = latentTrack(s.engine, wavs);
+            s.locate(2.0);
+            s.engine.play();
+            s.run(3.0);
+            s.settle();
+            s.locate(0.0);
+            const uint64_t cached = s.fromCache(track);
+            s.run(6.0);
+            if (s.freezing) CHECK(s.fromCache(track) - cached > framesOf(2.0));
+        },
+        1, shortWarmUp()));
 }

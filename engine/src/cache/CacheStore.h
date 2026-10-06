@@ -48,6 +48,7 @@ public:
         size_t blocks = 0;        // published
         size_t silentBlocks = 0;
         size_t bytes = 0;         // published and handed out
+        size_t unfreedBytes = 0;  // no longer, but not freed yet (bytes + unfreedBytes stay within the budget)
     };
     Stats stats() const;
 
@@ -82,6 +83,18 @@ private:
     std::vector<Retired> retired_;
     std::vector<Retired> pendingRetire_;  // this round's, stamped with the epoch after publishing
     size_t bytes_ = 0;                    // owned blocks' samples (published and handed out)
+    // Samples no longer owned but not freed yet: blocks retired (until no
+    // callback can see them), and the empty blocks of strips gone (until the
+    // last snapshot showing them goes). New blocks are allocated only while
+    // these and bytes_ together are within the budget.
+    size_t retiredBytes_ = 0;
+    struct Dying {
+        std::shared_ptr<CachePoint> point;
+        size_t bytes = 0;
+    };
+    std::vector<Dying> dying_;
+    size_t dyingBytes_ = 0;
+    void freeDyingLocked(bool all);
 
     std::mutex wakeMutex_;
     std::condition_variable wake_;

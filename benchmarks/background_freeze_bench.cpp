@@ -25,11 +25,16 @@
 // plug-ins that never render the same twice, so two passes without the cache
 // differ too, shown as the baseline).
 
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <time.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -69,10 +74,21 @@ struct Stop : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+// CPU time of the calling thread (on Windows in the scheduler's quanta: right
+// over many buffers, not one).
 double threadCpuSeconds() {
+#ifdef _WIN32
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0.0;
+    const auto ticks = [](const FILETIME& t) {
+        return (static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+    };
+    return static_cast<double>(ticks(kernel) + ticks(user)) * 1e-7;  // (100 ns ticks)
+#else
     timespec t{};
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
     return static_cast<double>(t.tv_sec) + static_cast<double>(t.tv_nsec) * 1e-9;
+#endif
 }
 
 class TempFolder {
@@ -421,26 +437,32 @@ int parseInt(const char* text) { return std::atoi(text); }
 }  // namespace
 
 int main(int argc, char** argv) {
+    const char* const usage =
+        "background_freeze_bench [--bars 32] [--threads 1] [--buffer 256] [--warm 8] [--idle 0]\n";
     Options options;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        const auto next = [&]() -> const char* {
-            if (i + 1 >= argc) throw Stop("Missing a value after " + arg);
-            return argv[++i];
-        };
-        if (arg == "--bars") {
-            options.bars = std::max(8, parseInt(next()));
-        } else if (arg == "--threads") {
-            options.threads = std::max(1, parseInt(next()));
-        } else if (arg == "--buffer") {
-            options.buffer = std::max(16, parseInt(next()));
-        } else if (arg == "--warm") {
-            options.warm = std::atof(next());
-        } else if (arg == "--idle") {
-            options.idle = std::atof(next());
-        } else {
-            std::printf("background_freeze_bench [--bars 32] [--threads 1] [--buffer 256] [--warm 8] [--idle 0]\n");
+        const bool valued = arg == "--bars" || arg == "--threads" || arg == "--buffer" || arg == "--warm" ||
+                            arg == "--idle";
+        if (!valued) {
+            std::printf("%s", usage);
             return arg == "--help" ? 0 : 2;
+        }
+        if (i + 1 >= argc) {
+            std::fprintf(stderr, "Missing a value after %s\n%s", arg.c_str(), usage);
+            return 2;
+        }
+        const char* value = argv[++i];
+        if (arg == "--bars") {
+            options.bars = std::max(8, parseInt(value));
+        } else if (arg == "--threads") {
+            options.threads = std::max(1, parseInt(value));
+        } else if (arg == "--buffer") {
+            options.buffer = std::max(16, parseInt(value));
+        } else if (arg == "--warm") {
+            options.warm = std::atof(value);
+        } else {
+            options.idle = std::atof(value);
         }
     }
     try {
