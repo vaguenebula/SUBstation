@@ -7,7 +7,7 @@
 // so every note-on gets its note-off even if the arrangement changes while the
 // note sounds; stopping, locating and loop wraps release all sounding notes.
 //
-// Tracks and the master are strips (processStrip): devices, then fader and
+// Tracks and the master are strips: devices, then fader and
 // meter. A track's signal leaves on its edges (Routing.h): its output, into a
 // bus (another track's input: a group) or the master, and its sends, into
 // returns, tapped after its fader or before it. The snapshot lists the tracks so
@@ -93,6 +93,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "AudioDevice.h"
@@ -166,6 +167,10 @@ public:
     // Likewise delay-compensation lines, one per snapshot edge (null: none needed),
     // those delaying sidechains' destinations before their devices (deviceDelay),
     // and those of rack chains (by ChainRender::delayIndex).
+    // Background freezing (cache/StripCache.h): the engine's settings (null:
+    // off). Only live renders use the cache. Non-real-time.
+    void setCacheSettings(const CacheSettings* settings) noexcept { cacheSettings_ = settings; }
+
     void setDelayLines(const std::vector<std::shared_ptr<DelayLine>>* lines,
                        const std::vector<std::shared_ptr<DelayLine>>* deviceLines = nullptr,
                        const std::vector<std::shared_ptr<DelayLine>>* chainLines = nullptr) noexcept {
@@ -184,6 +189,7 @@ private:
         std::vector<float> autoGain, autoPanLeft, autoPanRight;  // automated fader, per sample
         std::vector<float> audible;   // the fader's mute (and solo) ramp, for pre-fader taps
         std::vector<float> edgeGain;  // an automated send level, per sample
+        std::vector<float> cacheLeft, cacheRight;  // a strip's signal read from its cache
         struct Rack {
             std::vector<float> sumLeft, sumRight;      // its chains' sum
             std::vector<float> chainLeft, chainRight;  // the chain it runs
@@ -218,6 +224,50 @@ private:
         int offset;
         bool jump;  // the playhead jumped here (locate, loop wrap): sounding notes stop
         bool chase;  // playback starts here: notes already underway sound
+        bool wrap;   // the jump is the loop wrapping (from its end to its start)
+    };
+    // Background freezing: a stretch of the chunk as the cache sees it (the
+    // segments, split where what the playhead carries from a loop wrap runs out).
+    static constexpr int kMaxCachePieces = 2 * (16 + 1);  // two per segment (kMaxSegments) and a count-in's end
+    struct CachePiece {
+        int offset;
+        int length;
+        int64_t position;
+        CacheContext context;
+    };
+    // What every strip's cache step needs to know about the chunk (the prologue
+    // works it out; the graph only reads it).
+    struct CacheChunk {
+        bool on = false;      // background freezing is on and the render is live
+        bool usable = false;  // ... and the chunk plays the timeline in pieces the cache can serve
+        int numPieces = 0;
+        std::array<CachePiece, kMaxCachePieces> pieces{};
+        int jumpAt = -1;       // where the playhead jumped (not a loop wrap) in the chunk; -1: it didn't
+        int64_t jumpTo = 0;    // ... to where
+        int wrapAt = -1;       // where the loop wrapped in the chunk; -1: it didn't
+        int64_t startPosition = 0;  // where the chunk's playing starts
+        int64_t endPosition = 0;  // the last frame the chunk plays + 1 (the playhead when stopped)
+        int64_t nowNs = 0, idleNs = 0, warmFrames = 0;
+        int64_t contextFrames = 0;  // how long after a wrap what plays still carries the loop's end (warm-up and latencies)
+        int plannedFade = 0, unplannedFade = 0;
+        uint64_t generation = 0;
+        uint64_t playedAfter = 0;  // frames played (moving) once this chunk is done
+        uint64_t jumps = 0;        // jumps so far (not loop wraps)
+        bool looping = false;
+        bool wrappedLately = false;  // the loop wrapped within a warm-up of the chunk's end (at lastWrap_)
+    };
+    // One strip's part in a chunk, as the cache decides it.
+    struct CacheStep {
+        bool active = false;      // the cache takes part (else: devices as ever, nothing more)
+        bool renderLive = true;   // run its input, clips and devices
+        bool readCache = false;   // read its blocks
+        bool anyBlocks = false;   // ... good or not (a seam fading out of an old cache)
+        bool cacheOut = false;    // what goes out is the cache's (unless a seam mixes the two)
+        bool resume = false;      // its devices run again after standing idle (resumeDevices())
+        bool capture = false;     // keep what its devices put out, from frame `captureFrom` on
+        int captureFrom = 0;
+        const BlockSet* blocks = nullptr;
+        uint64_t version = 0;
     };
     struct Tick {
         int offset;
@@ -246,6 +296,7 @@ private:
         uint8_t key;
     };
     static constexpr int kMaxSegments = 16;
+    static_assert(kMaxCachePieces >= 2 * (kMaxSegments + 1));
     static constexpr int kMaxTicks = 64;
     static constexpr int kMaxPendingTicks = 256;
     static constexpr int kMaxActiveNotes = 512;  // across all tracks
@@ -255,6 +306,32 @@ private:
     static constexpr int kMaxLiveNotes = 512;      // across all tracks
 
     void renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept;
+    // Background freezing (RendererCache.cpp). The prologue's part: the chunk's
+    // pieces and the playhead's history (loop wraps, jumps).
+    void prepareCacheChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept;
+    // A strip's part, before its devices would run: whether they do, whether its
+    // cache plays, and what it hands on to the strips it feeds. `liveInput`: it
+    // hears something not in the arrangement this chunk (monitoring, MIDI input,
+    // preview notes, a recording).
+    CacheStep beginCacheStep(const RenderSnapshot& snap, const StripCacheRender& cache, const TrackRender* track,
+                             bool liveInput, int frames) noexcept;
+    // Its devices run again after standing idle (step.resume): reset, and the
+    // notes held where they start again (a track's) added to its events.
+    void resumeDevices(const StripCacheRender& cache, const TrackRender* track, TrackBuffers* buffers) noexcept;
+    // After its devices (if they ran, their output is in left/right): capture it,
+    // and put out the cache's instead, or a seam between the two.
+    void endCacheStep(const RenderSnapshot& snap, const StripCacheRender& cache, const CacheStep& step,
+                      float* left, float* right, int frames, WorkerScratch& scratch) noexcept;
+    // Reads the chunk's pieces from the blocks into out (where a block is missing
+    // or no good, `fallback` is copied instead). False if any frame was missing.
+    bool readCache(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version, bool anyBlocks,
+                   const float* fallbackLeft, const float* fallbackRight, float* outLeft, float* outRight) const noexcept;
+    bool cacheCovers(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version) const noexcept;
+    // Frames good blocks cover from the next chunk on, as the playhead will go (wrapping where the loop does), up to `most`.
+    int64_t cacheRunway(const RenderSnapshot& snap, const BlockSet* blocks, const DirtyLog* dirty, uint64_t version,
+                        int64_t most) const noexcept;
+    void captureChunk(CachePoint& point, const CacheStep& step, const float* left, const float* right) noexcept;
+    static void finishBlock(CachePoint& point) noexcept;
     // The graph's job: track `node` of the chunk's snapshot, on thread `worker`.
     static void renderNode(void* self, int node, int worker) noexcept;
     // A track, from its TrackBuffers (prepared by the prologue) and its incoming
@@ -272,12 +349,6 @@ private:
     // delaying a sidechain's destination before its device; null: none.
     DelayLine* edgeDelayLine(const EdgeRender& edge, int e) const noexcept;
     DelayLine* deviceDelayLine(const EdgeRender& edge, int e) const noexcept;
-    // A strip's body, in place: inserts (with its note events) -> fader and
-    // meter. Its input is in left/right already. `audibleOut` (if any) gets the
-    // fader's mute ramp, per sample.
-    void processStrip(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
-                      ProcessEvent* events, int numEvents, float* left, float* right, int frames, bool audible,
-                      ChunkFlags flags, WorkerScratch& scratch, float* audibleOut = nullptr) noexcept;
     // How much an edge leaving a track is delayed to line up with the latest one
     // going into the same place.
     static int compensationFor(const EdgeRender& edge, bool monitored) noexcept;
@@ -406,6 +477,14 @@ private:
     bool wasPlaying_ = false;
 
     Metronome metronome_;
+
+    // Background freezing.
+    const CacheSettings* cacheSettings_ = nullptr;
+    CacheChunk cacheChunk_;
+    int64_t framesSinceWrap_ = std::numeric_limits<int64_t>::max() / 2;  // the playhead's, if it moved since
+    CacheContext lastWrap_;
+    uint64_t playedFrames_ = 0;
+    uint64_t jumps_ = 0;
 
     uint32_t previewSerial_ = 0;
     const AudioSource* previewSource_ = nullptr;

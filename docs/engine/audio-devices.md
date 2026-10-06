@@ -54,6 +54,7 @@ for building with or without the ASIO SDK, [building.md](../building.md).
 | [backends/WasapiBackend.h](../../engine/src/backends/WasapiBackend.h), [.cpp](../../engine/src/backends/WasapiBackend.cpp) | WASAPI output through miniaudio, shared or exclusive; elsewhere the "System" driver |
 | [backends/AsioBackend.h](../../engine/src/backends/AsioBackend.h), [.cpp](../../engine/src/backends/AsioBackend.cpp) | ASIO through `IASIO`: finding and loading drivers, channels, rate, buffer size, the callbacks, resets, control panel. Built only with `SUBSTATION_HAS_ASIO` |
 | [backends/AsioSupport.h](../../engine/src/backends/AsioSupport.h) | The parts of ASIO hosting that need no SDK: the sample formats and their conversion, the buffer sizes to offer and to ask for (namespace `sub::asio`) |
+| [backends/ManualBackend.h](../../engine/src/backends/ManualBackend.h), [.cpp](../../engine/src/backends/ManualBackend.cpp) | "Manual", for tests and benchmarks on any platform (not among `driverTypes()`): no sound card, no thread; the caller plays the engine a buffer at a time (`ManualBackend::current()->process()`) and reads what came out |
 | [miniaudio_impl.c](../../engine/src/miniaudio_impl.c) | The single translation unit that compiles miniaudio's implementation (`MINIAUDIO_IMPLEMENTATION`) |
 | [EngineDevice.cpp](../../engine/src/EngineDevice.cpp) | `Engine`'s device API (`openDevice`, `reopenDevice`, `closeDevice`, `deviceStatus`, `deviceCapabilities`, `showDeviceControlPanel`, `takeDeviceEvent`, `takeInputMeters`, `masterScope`) and `Engine::audioCallback` |
 

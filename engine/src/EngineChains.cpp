@@ -2,6 +2,7 @@
 #include "Engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 #include "Rack.h"
@@ -228,24 +229,31 @@ std::vector<uint32_t> Engine::chainProcessors(uint32_t chainId) {
     return order;
 }
 
+// A rack chain's fader is inside its strip: the strip's cache goes, and what it feeds.
 void Engine::setChainGain(uint32_t chainId, float gain) {
     std::lock_guard lock(mutex_);
-    rackChainLocked(chainId).params->gain.store(std::max(0.f, gain));
+    ChainModel& chain = rackChainLocked(chainId);
+    gain = std::max(0.f, gain);
+    if (chain.params->gain.exchange(gain) != gain) touchCacheLocked(chain.stripId, true);
 }
 
 void Engine::setChainPan(uint32_t chainId, float pan) {
     std::lock_guard lock(mutex_);
-    rackChainLocked(chainId).params->pan.store(std::clamp(pan, -1.f, 1.f));
+    ChainModel& chain = rackChainLocked(chainId);
+    pan = std::clamp(pan, -1.f, 1.f);
+    if (chain.params->pan.exchange(pan) != pan) touchCacheLocked(chain.stripId, true);
 }
 
 void Engine::setChainMute(uint32_t chainId, bool mute) {
     std::lock_guard lock(mutex_);
-    rackChainLocked(chainId).params->mute.store(mute);
+    ChainModel& chain = rackChainLocked(chainId);
+    if (chain.params->mute.exchange(mute) != mute) touchCacheLocked(chain.stripId, true);
 }
 
 void Engine::setChainSolo(uint32_t chainId, bool solo) {
     std::lock_guard lock(mutex_);
-    rackChainLocked(chainId).params->solo.store(solo);
+    ChainModel& chain = rackChainLocked(chainId);
+    if (chain.params->solo.exchange(solo) != solo) touchCacheLocked(chain.stripId, true);
 }
 
 void Engine::retireProcessorLocked(std::shared_ptr<Processor> processor) {
@@ -433,7 +441,11 @@ float Engine::processorParam(uint32_t processorId, int index) { return processor
 
 // Plug-in calls from here on are made without holding the lock (see Engine.h).
 void Engine::setProcessorParam(uint32_t processorId, int index, float value) {
-    processor(processorId)->setParam(index, value);
+    const std::shared_ptr<Processor> p = processor(processorId);
+    p->setParam(index, value);
+    p->noteChange();  // (a plug-in counts its own as well; built-in devices don't)
+    std::lock_guard lock(mutex_);
+    processorChangedLocked(processorId);
 }
 
 std::string Engine::processorParamText(uint32_t processorId, int index, float value) {
@@ -445,7 +457,19 @@ std::vector<DisplayInfo> Engine::processorDisplays(uint32_t processorId) {
 }
 
 uint64_t Engine::readProcessorDisplay(uint32_t processorId, int index, uint64_t position, std::vector<float>& out) {
-    return processor(processorId)->readDisplay(index, position, out);
+    std::shared_ptr<Processor> p;
+    {
+        // Someone watches it: its strip's devices keep running (background freezing).
+        std::lock_guard lock(mutex_);
+        p = processorLocked(processorId);
+        if (TrackModel* strip = stripOfProcessorLocked(processorId)) {
+            const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch())
+                                 .count();
+            strip->cache.point->observedUntilNs.store(now + 1'500'000'000, std::memory_order_relaxed);
+        }
+    }
+    return p->readDisplay(index, position, out);
 }
 
 void Engine::setProcessorEnabled(uint32_t processorId, bool enabled) {
@@ -457,7 +481,11 @@ void Engine::setProcessorEnabled(uint32_t processorId, bool enabled) {
 std::vector<uint8_t> Engine::processorState(uint32_t processorId) { return processor(processorId)->getState(); }
 
 void Engine::setProcessorState(uint32_t processorId, const std::vector<uint8_t>& state) {
-    processor(processorId)->setState(state);
+    const std::shared_ptr<Processor> p = processor(processorId);
+    p->setState(state);
+    p->noteChange();
+    std::lock_guard lock(mutex_);
+    processorChangedLocked(processorId);
 }
 
 bool Engine::openEditor(uint32_t processorId, uintptr_t ownerWindow, const std::string& title) {

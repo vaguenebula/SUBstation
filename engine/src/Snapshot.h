@@ -13,6 +13,7 @@
 
 #include "AudioSource.h"
 #include "Automation.h"
+#include "cache/StripCache.h"
 #include "Processor.h"
 #include "Scheduler.h"
 #include "Warp.h"
@@ -339,6 +340,7 @@ struct TrackBuffers {
     bool soloed = false;
     bool soloDown = false;
     bool soloUp = false;
+    bool liveEvents = false;  // it hears MIDI input or got preview notes this chunk (not the arrangement's)
     // What rendering it takes, in nanoseconds per frame, smoothed over the last
     // chunks (the thread that renders it measures; the scheduler orders by it).
     std::atomic<float> cost{0.f};
@@ -350,6 +352,18 @@ struct TrackBuffers {
         events[static_cast<size_t>(numEvents++)] = event;
         return true;
     }
+};
+
+// A strip's cache (background freezing, cache/StripCache.h) as a snapshot sees it.
+struct StripCacheRender {
+    std::shared_ptr<CachePoint> point;       // every strip of an engine's snapshot has one (null: none)
+    std::shared_ptr<const DirtyLog> dirty;   // what changed time-locally, not yet caught up with (null: nothing)
+    // All its devices, racks' too, even those not rendered (a frozen track's):
+    // their change and reset counts.
+    std::vector<std::shared_ptr<Processor>> devices;
+    std::vector<int> sources;                // the snapshot tracks whose signal reaches its input or its devices
+    // Worth caching and possible: a device switched on, and no edge taps it after a device.
+    bool cacheable = false;
 };
 
 // A track in the routing graph (Routing.h). The snapshot lists tracks in an
@@ -377,6 +391,7 @@ struct TrackRender : StripRender {
     std::vector<ClipRender> clips;  // sorted by start
     int64_t maxClipLength = 0;      // bounds the binary search window
     std::vector<NoteRender> notes;  // sorted by start
+    StripCacheRender cache;
 };
 
 struct RenderSnapshot {
@@ -395,6 +410,8 @@ struct RenderSnapshot {
     std::shared_ptr<TaskGraph> graph;
     int parallelWork = 0;  // tracks worth a thread of their own (devices, stretched clips)
     StripRender master;  // its params are null in a snapshot made without an engine
+    StripCacheRender masterCache;
+    uint64_t generation = 0;  // counts the engine's snapshots (the dirty logs' clock)
     WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
     // Every rack chain's compensation, by its delayIndex (offline renders make lines that long).
     std::vector<int> chainDelays;

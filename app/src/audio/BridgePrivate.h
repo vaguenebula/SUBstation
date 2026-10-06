@@ -62,6 +62,7 @@ struct EngineBridge::Private {
 
     // Model track id -> engine track id (kMaster -> sub::Engine::kMaster).
     QMap<QString, quint32> trackIds;
+    QString observed;  // the track whose devices the device view shows (setObservedTrack())
     // Chain key (a track's id for its own chain, a rack chain's id) -> its engine
     // chain. (Ids are unique in the project.) Each device's processor is in the
     // chain the bridge last put it in (`where`).

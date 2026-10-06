@@ -160,10 +160,14 @@ add_library(sub_engine STATIC
     src/EngineOffline.cpp
     src/EngineSnapshot.cpp
     src/EngineTracks.cpp
+    src/EngineCache.cpp
     src/AudioDevice.cpp
+    src/backends/ManualBackend.cpp
     src/backends/WasapiBackend.cpp
     src/AudioSource.cpp
     src/Renderer.cpp
+    src/RendererCache.cpp
+    src/cache/CacheStore.cpp
     src/Scheduler.cpp
     src/Recorder.cpp
     src/Metronome.cpp

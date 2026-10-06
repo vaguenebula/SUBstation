@@ -110,7 +110,8 @@ The session connects the bridge to the rest (the editor's hooks, messages, plug-
 
 `EngineBridge::startAudio()` (from `Session::start()`, once the window shows):
 
-1. `applyAudioThreads()`: the engine's render threads from the preferences.
+1. `applyAudioThreads()`: the engine's render threads from the preferences; `applyBackgroundFreezing()`: background
+   freezing ([engine/background-freeze.md](../engine/background-freeze.md)) on or off as `backgroundFreezing()` says.
 2. `openMidiInputs()`: every MIDI input connected but those turned off.
 3. Opens the saved `AudioSettings`. If the device can't run as saved (an ASIO driver on another clock, fewer outputs),
    it opens with the device's own settings (rate, buffer, channels at their defaults: "Using the device's own
@@ -360,7 +361,11 @@ render of the engine's) live output is silent, and the project as it was when th
 `locate(beat)`, `position`, `isPlaying`, `isCountingIn`, `setMetronome`. Previews: `previewFile` (decodes first; a
 later preview or stop cancels a preview still loading), `stopPreview`, `previewNote(track, pitch, velocity)` (velocity
 0 releases). Audio threads: `applyAudioThreads`, `chooseAudioThreads(n)` (saved; 0 when it is the engine's default),
-`audioThreads`, `defaultAudioThreads` (one per core but one).
+`audioThreads`, `defaultAudioThreads` (one per core but one). Background freezing: `applyBackgroundFreezing`,
+`chooseBackgroundFreezing(on)` (the preferences' checkbox: saved and applied). The device view tells the bridge which track it shows
+(`setObservedTrack(trackId)`, from `DeviceSelection`), and the bridge tells the engine (`setTrackObserved`), again
+for a track whose engine track is made later: background freezing keeps that track live, so its devices' meters
+and displays move.
 
 QML reads the transport and the device through properties: `position`, `playing`, `countingIn`, `recording`,
 `metronome` (read and write), `cpuLoad`, `sampleRate`, `deviceStatus`, `deviceCapabilities`, `scopeWritten` (with
@@ -475,6 +480,7 @@ keeps them in the registry under `HKEY_CURRENT_USER\Software\SUBstation\SUBstati
 | `audio/output_channels` | `"2,3"`: the pair the master plays on; empty: the first two | |
 | `audio/input_channels` | ASIO inputs to open; none until something records | |
 | `audio/threads` | render threads; 0: the engine's default (one per core but one) | `audioThreads()` |
+| `audio/background_freezing` | `"true"`: background freezing on (*Preferences > Audio*); the environment variable `SUBSTATION_BACKGROUND_FREEZE` (`1` or `0`) wins | `backgroundFreezing()`, `backgroundFreezingSetting()` (the setting alone) |
 | `midi/disabled_inputs` | MIDI inputs turned off (every other input is used, so a new one just plays) | `disabledMidiInputs()` |
 | `record/quantize` | record quantization grid in beats; 0: as played (`recordQuantizeChoices()` lists the choices) | `recordQuantize()` |
 

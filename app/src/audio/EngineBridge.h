@@ -249,9 +249,18 @@ public:
     void endClipPreview();
     // Renders on as many threads as the preferences say (the engine's default unless chosen).
     void applyAudioThreads();
+    // Background freezing (docs/engine/background-freeze.md) as the preferences
+    // say: off unless audio/background_freezing is set, or the environment
+    // variable SUBSTATION_BACKGROUND_FREEZE is 1.
+    void applyBackgroundFreezing();
+    // The track whose devices the device view shows ("": none): it plays live,
+    // so that its devices' meters and displays move.
+    void setObservedTrack(const QString& trackId);
     // The threads chosen in the preferences: saved (0, not pinned, when it is
     // the engine's default) and applied.
     Q_INVOKABLE void chooseAudioThreads(int threads);
+    // Background freezing chosen in the preferences: saved and applied.
+    Q_INVOKABLE void chooseBackgroundFreezing(bool enabled);
     int audioThreads() const;  // the engine's now
     static int defaultAudioThreads();  // one per core but one
 
