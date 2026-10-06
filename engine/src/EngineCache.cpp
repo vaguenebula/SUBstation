@@ -291,7 +291,9 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
     std::vector<uint64_t> signatures(count, 0);
     std::vector<Span> changedOut(count);  // what changed of its signal after its devices
     std::vector<Span> changedFader(count);  // its fader's envelopes: what it feeds hears a change
-    const auto incoming = [&](const std::vector<int>& edges, uint64_t& h, Span& in) {
+    // `own`: what changed of what reaches it past the strips feeding it (their
+    // faders' envelopes, its sends' levels), not rung on in their devices.
+    const auto incoming = [&](const std::vector<int>& edges, uint64_t& h, Span& in, Span& own) {
         for (const int e : edges) {
             const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
             const auto source = static_cast<size_t>(edge.from);
@@ -301,11 +303,14 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
             h = mix(h, edge.compensation);
             h = mix(h, static_cast<int>(snap.tracks[source].id));
             h = mix(h, signatures[source]);
-            Span through = changedOut[source];
-            through.add(changedFader[source]);
+            Span past = changedFader[source];
             const auto old = on ? edgesBefore.find(edge.state.get()) : edgesBefore.end();
-            if (old != edgesBefore.end()) through.add(envelopeDiffers(old->second->level.nodes, edge.level.nodes));
-            in.add(through.widened(int64_t{edge.compensation} + edge.deviceDelay));
+            if (old != edgesBefore.end()) past.add(envelopeDiffers(old->second->level.nodes, edge.level.nodes));
+            Span through = changedOut[source];
+            through.add(past);
+            const int64_t delay = int64_t{edge.compensation} + edge.deviceDelay;
+            in.add(through.widened(delay));
+            own.add(past.widened(delay));
         }
     };
     const auto sourcesOf = [&](const std::vector<int>& edges) {
@@ -316,8 +321,10 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         }
         return sources;
     };
-    // Into its dirty log, at this generation, and forgetting the oldest.
-    const auto settle = [&](TrackModel& model, StripCacheRender& cache, uint64_t signature, const Span& changed) {
+    // Into its dirty log, at this generation, and forgetting the oldest. `core`:
+    // where its own part of the change ends (DirtyLog::Entry).
+    const auto settle = [&](TrackModel& model, StripCacheRender& cache, uint64_t signature, const Span& changed,
+                            const Span& core) {
         TrackModel::Cache& c = model.cache;
         CachePoint& point = *c.point;
         bool touched = false;
@@ -332,7 +339,7 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
             touched = true;
         }
         if (!changed.empty()) {
-            c.dirty.push_back({generation, changed.from, changed.to});
+            c.dirty.push_back({generation, changed.from, changed.to, core.empty() ? changed.from : core.to});
             while (c.dirty.size() > kMaxDirtyEntries) {
                 c.horizon = c.dirty.front().generation + 1;
                 c.dirty.pop_front();
@@ -358,14 +365,15 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         h = mix(h, render.inputLatency);
         h = mix(h, render.frozen);
         h = chainSignature(chainSignature, h, render);
-        Span in;
-        incoming(render.incoming, h, in);
+        Span in, own;
+        incoming(render.incoming, h, in, own);
         signatures[t] = h;
         if (const auto old = on ? before.find(render.id) : before.end(); old != before.end()) {
             const TrackRender& was = *old->second;
-            in.add(clipsDiffer(was.clips, render.clips));
-            in.add(notesDiffer(was.notes, render.notes));
-            in.add(lanesDiffer(was, render));
+            own.add(clipsDiffer(was.clips, render.clips));
+            own.add(notesDiffer(was.notes, render.notes));
+            own.add(lanesDiffer(was, render));
+            in.add(own);
             changedFader[t].add(envelopeDiffers(was.volume.nodes, render.volume.nodes));
             changedFader[t].add(envelopeDiffers(was.pan.nodes, render.pan.nodes));
         }
@@ -374,8 +382,9 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         changedOut[t] = in.widened(warm + latency);
         StripCacheRender& cache = render.cache;
         cache.sources = sourcesOf(render.incoming);
-        cache.cacheable = !render.frozen && render.deviceTaps.empty() && anyEnabled(render);
-        settle(model, cache, h, changedOut[t]);
+        cache.devicesOn = !render.frozen && anyEnabled(render);
+        cache.cacheable = cache.devicesOn && render.deviceTaps.empty();
+        settle(model, cache, h, changedOut[t], own.widened(latency));
         entries.push_back({cache.point, cache.dirty});
     }
 
@@ -391,13 +400,16 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         h = mix(h, snap.master.latency);
         h = mix(h, snap.maxLatency);
         h = chainSignature(chainSignature, h, snap.master);
-        Span in;
-        incoming(into, h, in);
-        if (previous && on) in.add(lanesDiffer(previous->master, snap.master));
+        Span in, own;
+        incoming(into, h, in, own);
+        if (previous && on) own.add(lanesDiffer(previous->master, snap.master));
+        in.add(own);
         StripCacheRender& cache = snap.masterCache;
         cache.sources = sourcesOf(into);
-        cache.cacheable = snap.master.deviceTaps.empty() && anyEnabled(snap.master);
-        settle(master_, cache, h, in.widened(warm + int64_t{snap.maxLatency} + snap.master.latency));
+        cache.devicesOn = anyEnabled(snap.master);
+        cache.cacheable = cache.devicesOn && snap.master.deviceTaps.empty();
+        const int64_t latency = int64_t{snap.maxLatency} + snap.master.latency;
+        settle(master_, cache, h, in.widened(warm + latency), own.widened(latency));
         entries.push_back({cache.point, cache.dirty});
     }
     if (cacheStore_) cacheStore_->setPoints(std::move(entries));
@@ -597,7 +609,10 @@ void addCounts(BackgroundFreezingStats& stats, const CachePoint& point) {
     stats.framesFromCache += live.framesFromCache.load(std::memory_order_relaxed);
     stats.framesLive += live.framesLive.load(std::memory_order_relaxed);
     stats.framesCaptured += live.framesCaptured.load(std::memory_order_relaxed);
-    stats.framesRendered += point.lanes[CachePoint::kBackgroundLane].framesCaptured.load(std::memory_order_relaxed);
+    const CachePoint::Lane& background = point.lanes[CachePoint::kBackgroundLane];
+    stats.framesRendered += background.framesCaptured.load(std::memory_order_relaxed);
+    stats.framesRenderedLive += background.framesLive.load(std::memory_order_relaxed);
+    stats.framesReplayed += background.framesReplayed.load(std::memory_order_relaxed);
 }
 }  // namespace
 

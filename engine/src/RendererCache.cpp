@@ -17,26 +17,29 @@ int64_t floorDiv(int64_t a, int64_t b) noexcept { return a >= 0 ? a / b : -((-a 
 
 // Where `block`'s good frames end (within its cell): its version must be the
 // strip's, and a later time-local change ends it where that begins.
-int goodTo(const CacheBlock& block, uint64_t version, const DirtyLog* dirty) noexcept {
+int goodTo(const CacheBlock& block, uint64_t version, const DirtyLog* dirty,
+           const DirtyAmendment* amend = nullptr) noexcept {
     if (block.version != version) return block.from;
     if (!dirty) return block.to;
     const int64_t start = block.start();
     return static_cast<int>(
-        dirty->goodUntil(block.generation, start + block.from, start + block.to, block.context) - start);
+        dirty->goodUntil(block.generation, start + block.from, start + block.to, block.context, amend) - start);
 }
 
 // Frames good blocks cover from `position` on in `context`, up to `length`.
+// (Before the song's start, silence covers them: nothing plays there. Only the
+// background renderer goes there, to warm up.)
 int64_t coveredFrom(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version, int64_t position,
-                    const CacheContext& context, int64_t length) noexcept {
-    if (!blocks) return 0;
-    int64_t got = 0;
+                    const CacheContext& context, int64_t length, const DirtyAmendment* amend = nullptr) noexcept {
+    int64_t got = std::clamp<int64_t>(-position, 0, length);
+    if (!blocks) return got;
     while (got < length) {
         const int64_t at = position + got;
         const int64_t cell = floorDiv(at, kCacheBlockFrames);
         const auto offset = static_cast<int>(at - cell * kCacheBlockFrames);
         int to = offset;
-        if (!blocks->findGood(cell, context, offset, [&](const CacheBlock& b) { return goodTo(b, version, dirty); },
-                              to)) {
+        if (!blocks->findGood(cell, context, offset,
+                              [&](const CacheBlock& b) { return goodTo(b, version, dirty, amend); }, to)) {
             break;
         }
         got += std::min<int64_t>(length - got, to - offset);
@@ -63,6 +66,51 @@ int64_t heldAcross(const TrackRender& track, int64_t position) noexcept {
         if (note.end > position) held = std::max(held, note.end - position);
     }
     return held;
+}
+
+// Whether the changes since `generation` over [from, to) of a strip whose
+// devices run there have passed (each began, and its own part ended, before
+// `from`), and there is one (else nothing changed there). `until`: as far as
+// they can ring on.
+bool changesPassed(const DirtyLog& dirty, uint64_t generation, int64_t from, int64_t to, int64_t& until) noexcept {
+    if (generation < dirty.horizon) return false;
+    bool any = false;
+    until = from;
+    for (const DirtyLog::Entry& e : dirty.entries) {
+        if (e.generation <= generation || e.from >= to || e.to <= from) continue;
+        if (e.core > from) return false;
+        any = true;
+        until = std::max(until, e.to);
+    }
+    return any;
+}
+
+// Whether what `cache`'s strip puts out over [from, to) may differ from what it
+// put out at generation `generation`: a change since still rings on in it (as
+// far as its background lane found out), or, for one without devices to ring
+// on, it changed itself or what feeds it did.
+bool outChangedSince(const RenderSnapshot& snap, const StripCacheRender& cache, uint64_t generation, int64_t from,
+                     int64_t to, int depth) noexcept {
+    const DirtyLog* dirty = cache.dirty.get();
+    if (cache.devicesOn) {
+        const CachePoint::LiveState* s =
+            cache.cacheable && cache.point ? &cache.point->lanes[CachePoint::kBackgroundLane].state : nullptr;
+        const DirtyAmendment* amend = s && s->amended && s->amendVersion == cache.version ? &s->amend : nullptr;
+        return dirty && dirty->goodUntil(generation, from, to, {}, amend) < to;
+    }
+    if (dirty) {
+        if (generation < dirty->horizon) return true;
+        for (const DirtyLog::Entry& e : dirty->entries) {
+            if (e.generation > generation && e.from < to && e.core > from) return true;
+        }
+    }
+    if (depth >= 16) return true;
+    for (const int t : cache.sources) {
+        if (outChangedSince(snap, snap.tracks[static_cast<size_t>(t)].cache, generation, from, to, depth + 1)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace
@@ -141,11 +189,12 @@ void Renderer::prepareCacheChunk(const RenderSnapshot& snap, int frames, ChunkFl
     c.usable = usable && c.numPieces > 0;
 }
 
-bool Renderer::cacheCovers(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version) const noexcept {
+bool Renderer::cacheCovers(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version,
+                           const DirtyAmendment* amend) const noexcept {
     const CacheChunk& c = cacheChunk_;
     for (int p = 0; p < c.numPieces; ++p) {
         const CachePiece& piece = c.pieces[static_cast<size_t>(p)];
-        if (coveredFrom(blocks, dirty, version, piece.position, piece.context, piece.length) < piece.length) {
+        if (coveredFrom(blocks, dirty, version, piece.position, piece.context, piece.length, amend) < piece.length) {
             return false;
         }
     }
@@ -153,7 +202,7 @@ bool Renderer::cacheCovers(const BlockSet* blocks, const DirtyLog* dirty, uint64
 }
 
 int64_t Renderer::cacheRunway(const RenderSnapshot& snap, const BlockSet* blocks, const DirtyLog* dirty,
-                              uint64_t version, int64_t most) const noexcept {
+                              uint64_t version, int64_t most, const DirtyAmendment* amend) const noexcept {
     const CacheChunk& c = cacheChunk_;
     int64_t position = position_;
     int64_t sinceWrap = framesSinceWrap_;
@@ -167,8 +216,9 @@ int64_t Renderer::cacheRunway(const RenderSnapshot& snap, const BlockSet* blocks
             context = wrap;
             length = std::min(length, c.contextFrames - sinceWrap);
         }
-        const int64_t got = coveredFrom(blocks, dirty, version, position, context, length);
+        const int64_t got = coveredFrom(blocks, dirty, version, position, context, length, amend);
         covered += got;
+        if (renderEnd_ > 0 && !c.looping && position + got >= renderEnd_) return most;  // (nothing to warm up for after)
         if (got < length) break;
         position += length;
         sinceWrap += length;
@@ -259,8 +309,19 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
         fresh = true;
     }
 
+    // (In the background: as good as what its lane found out about the changes
+    // since its blocks were captured, while its version stays.)
+    const DirtyAmendment* amend = nullptr;
+    if (background && s.amended) {
+        if (s.amendVersion == version) {
+            amend = &s.amend;
+        } else {
+            s.amended = false;
+        }
+    }
+    step.amend = amend;
     const bool allowed = c.usable && cache.cacheable && !pending && !carriesLive;
-    const bool valid = allowed && cacheCovers(blocks, dirty, version);
+    const bool valid = allowed && cacheCovers(blocks, dirty, version, amend);
     // (What the background renders is never heard: it plays from its cache
     // wherever that is good, whoever may be editing or watching.)
     const bool hot = !background && c.nowNs - point->lastChangeNs.load(std::memory_order_relaxed) < c.idleNs;
@@ -270,11 +331,11 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     // devices start now, while the cache still plays, to be warm by then.
     bool exitAhead = false;
     if (valid && !hot && !observed) {
-        const int64_t need = warmFrames + frames;
+        const int64_t need = warmFrames + 2 * int64_t{frames};  // (the switch can come a chunk before they run out)
         int64_t remaining = static_cast<int64_t>(s.runwayUntil - c.playedAfter);
         if (s.runwayVersion != version || s.runwayGeneration != c.generation || s.runwayBlocks != blocks ||
             s.runwayJumps != c.jumps || remaining < need) {
-            remaining = cacheRunway(snap, blocks, dirty, version, need + kMaxBlock);
+            remaining = cacheRunway(snap, blocks, dirty, version, need + kMaxBlock, amend);
             s.runwayUntil = c.playedAfter + static_cast<uint64_t>(remaining);
             s.runwayVersion = version;
             s.runwayGeneration = c.generation;
@@ -352,6 +413,19 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
         }
         s.idleInstance = true;
     }
+    // Convergence (the background's). What it plays where its blocks are good
+    // only as far as its lane found out is kept anew (for the live renderer
+    // too); what its devices put out alone is compared with what it had.
+    if (background) {
+        step.recapture = amend && cacheOut && s.fade == Fade::None && !held && allowed &&
+                         !cacheCovers(blocks, dirty, version);
+        if (step.recapture) {
+            step.capture = false;
+            step.captureFrom = 0;
+        }
+        step.compare = dirty && allowed && mode == Mode::Live && s.fade == Fade::None;
+        if (!step.compare) s.observeFrom = s.matchFrom = -1;
+    }
     // What the strips it feeds hear of it.
     s.pendingOut = pending;
     s.liveInputOut = carriesLive;
@@ -361,6 +435,92 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     s.seenResets = resets;
     s.seenGeneration = c.generation;
     return step;
+}
+
+void Renderer::checkConvergence(const RenderSnapshot& snap, const StripCacheRender& cache, CachePoint::LiveState& s,
+                                const CacheStep& step, const float* left, const float* right) noexcept {
+    constexpr int64_t kMatchFrames = 8192;  // a match at least this long, and twice its tail (and the latencies on the way)
+    constexpr float kQuiet = 1e-4f;         // with something louder than this (-80 dBFS) in it
+    const CacheChunk& c = cacheChunk_;
+    const DirtyLog& dirty = *cache.dirty;
+    // (What feeds it reaches it this much later at most: a change there may still be on its way.)
+    const int64_t margin = snap.outputLatency();
+    if (s.tailVersion != step.version) s.tail = -1;
+    for (int p = 0; p < c.numPieces; ++p) {
+        const CachePiece& piece = c.pieces[static_cast<size_t>(p)];
+        int done = 0;
+        while (done < piece.length) {
+            const int64_t at = piece.position + done;
+            const int64_t cell = floorDiv(at, kCacheBlockFrames);
+            const auto offset = static_cast<int>(at - cell * kCacheBlockFrames);
+            int n = static_cast<int>(std::min<int64_t>(piece.length - done, kCacheBlockFrames - offset));
+            const CacheBlock* block = step.blocks && piece.context.linear() && at >= 0
+                                          ? step.blocks->findLatest(cell, {}, offset, step.version)
+                                          : nullptr;
+            bool comparable = false, same = false;
+            float peak = 0.f;
+            int64_t until = 0;
+            if (block) {
+                n = std::min(n, block->to - offset);
+                comparable = changesPassed(dirty, block->generation, at, at + n, until);
+                for (size_t i = 0; comparable && i < cache.sources.size(); ++i) {
+                    const StripCacheRender& source = snap.tracks[static_cast<size_t>(cache.sources[i])].cache;
+                    comparable = !outChangedSince(snap, source, block->generation, at - margin, at + n, 0);
+                }
+                same = comparable;
+                const float* outLeft = left + piece.offset + done;
+                const float* outRight = right + piece.offset + done;
+                for (int i = 0; same && i < n; ++i) {
+                    const float l = block->silent ? 0.f : block->left()[offset + i];
+                    const float r = block->silent ? 0.f : block->right()[offset + i];
+                    same = outLeft[i] == l && outRight[i] == r;
+                    peak = std::max({peak, std::fabs(l), std::fabs(r)});
+                }
+            }
+            if (!comparable) {
+                s.observeFrom = s.matchFrom = -1;
+            } else {
+                // Watched from where the change passed to where it can ring on
+                // no longer: the last difference tells how long it rang on.
+                if (s.observeFrom < 0 || s.observeGen != block->generation || s.observeTo != at) {
+                    s.observeFrom = s.lastDifference = at;
+                    s.observeGen = block->generation;
+                    s.observeUntil = until;
+                    s.matchFrom = -1;
+                }
+                s.observeTo = at + n;
+                s.observeUntil = std::max(s.observeUntil, until);
+                if (!same) {
+                    s.lastDifference = at + n;
+                    s.matchFrom = -1;
+                } else if (s.matchFrom < 0) {
+                    s.matchFrom = at;
+                    s.matchFrames = n;
+                    s.matchLoud = peak > kQuiet;
+                } else {
+                    s.matchFrames += n;
+                    s.matchLoud = s.matchLoud || peak > kQuiet;
+                }
+                if (s.observeTo >= s.observeUntil) {
+                    // (Seen through: what it learnt holds for this version of its devices.)
+                    s.tail = std::max(s.tail, s.lastDifference - s.observeFrom);
+                    s.tailVersion = step.version;
+                    s.observeFrom = -1;
+                }
+            }
+            done += n;
+        }
+    }
+    if (s.tail >= 0 && s.matchFrom >= 0 && s.matchLoud &&
+        s.matchFrames >= std::max(kMatchFrames, 2 * s.tail) + margin) {
+        // The changes since have rung out where the match began: from there,
+        // what its blocks hold is what its devices would put out.
+        s.amend = {s.observeGen, c.generation, s.matchFrom};
+        s.amended = true;
+        s.amendVersion = step.version;
+        s.runwayVersion = 0;  // (what is good changed: the runway is worked out again)
+        s.observeFrom = s.matchFrom = -1;
+    }
 }
 
 void Renderer::resumeDevices(const StripCacheRender& cache, const TrackRender* track,
@@ -386,22 +546,24 @@ void Renderer::resumeDevices(const StripCacheRender& cache, const TrackRender* t
     }
 }
 
-void Renderer::endCacheStep(const RenderSnapshot&, const StripCacheRender& cache, const CacheStep& step, float* left,
-                            float* right, int frames, WorkerScratch& scratch) noexcept {
+void Renderer::endCacheStep(const RenderSnapshot& snap, const StripCacheRender& cache, const CacheStep& step,
+                            float* left, float* right, int frames, WorkerScratch& scratch) noexcept {
     if (!step.active) return;
     CachePoint::Lane& lane = cache.point->lanes[static_cast<size_t>(cacheLane_)];
     CachePoint::LiveState& s = lane.state;
     using Fade = CachePoint::LiveState::Fade;
+    if (step.compare) checkConvergence(snap, cache, s, step, left, right);
     // What the devices put out is kept before anything mixes into it.
     if (step.capture) {
         captureChunk(lane, step, left, right);
-    } else if (s.building && s.building->to > s.building->from) {
+    } else if (!step.recapture && s.building && s.building->to > s.building->from) {
         finishBlock(lane);  // the stretch it was capturing ended
     }
     if (step.readCache) {
         float* cacheLeft = scratch.cacheLeft.data();
         float* cacheRight = scratch.cacheRight.data();
-        readCache(step.blocks, cache.dirty.get(), step.version, step.anyBlocks, left, right, cacheLeft, cacheRight);
+        readCache(step.blocks, cache.dirty.get(), step.version, step.anyBlocks, left, right, cacheLeft, cacheRight,
+                  step.amend);
         if (s.fade == Fade::None) {
             std::copy_n(cacheLeft, frames, left);
             std::copy_n(cacheRight, frames, right);
@@ -421,6 +583,10 @@ void Renderer::endCacheStep(const RenderSnapshot&, const StripCacheRender& cache
     } else if (s.fade == Fade::ToLive) {
         s.fade = Fade::None;  // (nothing to fade out of)
     }
+    if (step.recapture) {
+        captureChunk(lane, step, left, right);
+        lane.framesReplayed.fetch_add(static_cast<uint64_t>(frames), std::memory_order_relaxed);
+    }
     const auto counted = static_cast<uint64_t>(frames);
     if (step.cacheOut && !step.renderLive) {
         lane.framesFromCache.fetch_add(counted, std::memory_order_relaxed);
@@ -430,8 +596,8 @@ void Renderer::endCacheStep(const RenderSnapshot&, const StripCacheRender& cache
 }
 
 bool Renderer::readCache(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version, bool anyBlocks,
-                         const float* fallbackLeft, const float* fallbackRight, float* outLeft,
-                         float* outRight) const noexcept {
+                         const float* fallbackLeft, const float* fallbackRight, float* outLeft, float* outRight,
+                         const DirtyAmendment* amend) const noexcept {
     const CacheChunk& c = cacheChunk_;
     bool complete = c.numPieces > 0;
     int covered = 0;  // frames of the chunk the pieces cover (from the start)
@@ -445,13 +611,20 @@ bool Renderer::readCache(const BlockSet* blocks, const DirtyLog* dirty, uint64_t
             const int out = piece.offset + done;
             int n = static_cast<int>(std::min<int64_t>(piece.length - done, kCacheBlockFrames - offset));
             const CacheBlock* block = nullptr;
+            if (at < 0) {  // (silence before the song's start: coveredFrom())
+                n = static_cast<int>(std::min<int64_t>(n, -at));
+                std::fill_n(outLeft + out, n, 0.f);
+                std::fill_n(outRight + out, n, 0.f);
+                done += n;
+                continue;
+            }
             if (blocks && anyBlocks) {
                 block = blocks->find(cell, piece.context, offset);
                 if (block) n = std::min(n, block->to - offset);
             } else if (blocks) {
                 int to = offset;
                 block = blocks->findGood(cell, piece.context, offset,
-                                         [&](const CacheBlock& b) { return goodTo(b, version, dirty); }, to);
+                                         [&](const CacheBlock& b) { return goodTo(b, version, dirty, amend); }, to);
                 if (block) n = std::min(n, to - offset);
             }
             if (!block) {

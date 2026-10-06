@@ -92,6 +92,7 @@ private:
     struct Chain {
         bool keep = false;
         int64_t lead = 0;
+        int64_t own = 0;  // its own part: a warm-up and its latency
     };
     // Per strip: where the planner looks for its gaps from (until the snapshot
     // changes). Past a gap it rendered but couldn't keep (its devices started
@@ -105,10 +106,15 @@ private:
     bool plan();
     void computeChains();
     // The first frame in [from, to) some strip it can keep has no good block for
-    // (in order of play, Linear); `to` if none. `lead`: the longest lead of the
-    // strips without one there.
-    int64_t firstGap(int64_t from, int64_t to, int64_t* lead = nullptr) const;
+    // (in order of play, Linear); `to` if none.
+    int64_t firstGap(int64_t from, int64_t to) const;
+    // How long before `gap` it starts: the longest lead of the strips without a
+    // good block there.
+    int64_t prerollAt(int64_t gap) const;
     int64_t longestLead() const;
+    // How long before `gap` strip `strip` must start: its own part, and the lead
+    // of what feeds it unless that plays from its cache meanwhile.
+    int64_t leadAt(size_t strip, int64_t gap, int depth = 0) const;
     void skipGap(int64_t gap);  // the strips without a good block at `gap`: looked at past it
     uint64_t framesLost() const;  // what its lanes had no block for, so far
 

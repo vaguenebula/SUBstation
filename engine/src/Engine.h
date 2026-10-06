@@ -179,6 +179,8 @@ struct BackgroundFreezingStats {
     uint64_t framesLive = 0;       // ... with their devices running
     uint64_t framesCaptured = 0;   // ... kept
     uint64_t framesRendered = 0;   // ... rendered in the background and kept
+    uint64_t framesRenderedLive = 0;  // ... rendered in the background with their devices running
+    uint64_t framesReplayed = 0;   // ... kept in the background from blocks a change had rung out of
     size_t shadows = 0;            // second instances of devices, for the background
 };
 

@@ -22,6 +22,9 @@ constexpr auto kIdleWait = std::chrono::milliseconds(50);      // nothing to ren
 constexpr auto kStuckWait = std::chrono::seconds(2);           // the budget is spent: it waits,
 constexpr auto kMaxStuckWait = std::chrono::seconds(64);       // longer each time
 constexpr auto kOverloadPause = std::chrono::seconds(5);
+// Before a warm-up, as a strip's devices start before their blocks run out
+// (RendererCache.cpp): they switch at a chunk's start, up to a chunk early.
+constexpr int64_t kMargin = 2 * int64_t{Renderer::kMaxBlock};
 
 // The lowest priority there is: it runs on what no one else wants.
 void lowerPriority() {
@@ -45,8 +48,9 @@ int goodTo(const CacheBlock& block, uint64_t version, const DirtyLog* dirty) noe
 }
 
 // The first frame in [from, to) good Linear blocks don't cover; `to` if none.
+// (Before the song's start, silence covers them, as the renderer has it.)
 int64_t uncovered(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version, int64_t from, int64_t to) noexcept {
-    int64_t at = from;
+    int64_t at = std::max<int64_t>(from, std::min<int64_t>(0, to));
     while (at < to) {
         if (!blocks) return at;
         const int64_t cell = floorDiv(at, kCacheBlockFrames);
@@ -107,6 +111,7 @@ void BackgroundRenderer::adopt(std::shared_ptr<const RenderSnapshot> snapshot, i
     if (snapshot_) renderer_.finishCaptures(*snapshot_);
     snapshot_ = std::move(snapshot);
     songEnd_ = songEnd;
+    renderer_.setRenderEnd(songEnd);
     positioned_ = false;
     lastGap_ = -1;
     stuckUntil_ = {};
@@ -232,7 +237,8 @@ void BackgroundRenderer::computeChains() {
             lead = std::max(lead, from.lead);
         }
         c.keep = keep;
-        c.lead = lead + warm + track.inputLatency + track.latency;
+        c.own = warm + track.inputLatency + track.latency;
+        c.lead = lead + c.own;
         state[t] = 2;
         return c;
     };
@@ -244,7 +250,26 @@ void BackgroundRenderer::computeChains() {
         master.keep = master.keep && chains_[static_cast<size_t>(source)].keep;
         master.lead = std::max(master.lead, chains_[static_cast<size_t>(source)].lead);
     }
-    master.lead += warm + snap.maxLatency + snap.master.latency;
+    master.own = warm + snap.maxLatency + snap.master.latency;
+    master.lead += master.own;
+}
+
+int64_t BackgroundRenderer::leadAt(size_t strip, int64_t gap, int depth) const {
+    const RenderSnapshot& snap = *snapshot_;
+    const Chain& chain = chains_[strip];
+    if (depth >= 64) return chain.lead;
+    const StripCacheRender& cache = strip < snap.tracks.size() ? snap.tracks[strip].cache : snap.masterCache;
+    int64_t longest = 0;
+    for (const int source : cache.sources) {
+        if (source < 0 || static_cast<size_t>(source) >= snap.tracks.size()) continue;
+        const StripCacheRender& from = snap.tracks[static_cast<size_t>(source)].cache;
+        const int64_t start = gap - chain.own - kMargin;
+        const bool cached = from.cacheable && from.point &&
+                            uncovered(from.point->blocks.load(std::memory_order_acquire), from.dirty.get(),
+                                      from.version, start, gap) >= gap;
+        if (!cached) longest = std::max(longest, leadAt(static_cast<size_t>(source), gap, depth + 1));
+    }
+    return chain.own + longest;
 }
 
 int64_t BackgroundRenderer::longestLead() const {
@@ -274,8 +299,7 @@ bool BackgroundRenderer::plan() {
     if (watch_.playing.load(std::memory_order_relaxed)) windows[0] = {next, std::min(end, playhead + ahead)};
     for (const Window& window : windows) {
         while (window.from < window.to) {
-            int64_t preroll = 0;
-            const int64_t gap = firstGap(window.from, window.to, &preroll);
+            const int64_t gap = firstGap(window.from, window.to);
             if (gap >= window.to) break;
             // The same gap again: what it rendered there wasn't kept. With no
             // blocks to keep it in (the budget is spent), it waits; otherwise it
@@ -296,7 +320,7 @@ bool BackgroundRenderer::plan() {
             lostAtPlan_ = lost;
             // From a warm-up before it (the longest of the strips it is for):
             // before the song's start if need be, through the silence there.
-            renderer_.preRollFrom(gap - preroll - Renderer::kMaxBlock);
+            renderer_.preRollFrom(gap - prerollAt(gap) - kMargin);
             windowEnd_ = window.to;
             nextCheck_ = gap + kCacheBlockFrames;
             positioned_ = true;
@@ -331,28 +355,34 @@ uint64_t BackgroundRenderer::framesLost() const {
     return frames;
 }
 
-int64_t BackgroundRenderer::firstGap(int64_t from, int64_t to, int64_t* lead) const {
+int64_t BackgroundRenderer::firstGap(int64_t from, int64_t to) const {
     const RenderSnapshot& snap = *snapshot_;
     int64_t first = to;
-    int64_t longest = 0;
     const auto look = [&](const StripCacheRender& cache, size_t strip) {
         // (Not one it can keep: not worth caching, or without shadows up to date, it or what feeds it.)
         if (!cache.cacheable || strip >= chains_.size() || !chains_[strip].keep) return;
         const int64_t start = std::max(from, lookFrom_[strip]);
-        if (start > first) return;
+        if (start >= first) return;
         const BlockSet* blocks = cache.point->blocks.load(std::memory_order_acquire);
-        const int64_t gap = uncovered(blocks, cache.dirty.get(), cache.version, start, std::min(first + 1, to));
-        if (gap < first) {
-            first = gap;
-            longest = chains_[strip].lead;
-        } else if (gap == first && gap < to) {
-            longest = std::max(longest, chains_[strip].lead);
-        }
+        first = std::min(first, uncovered(blocks, cache.dirty.get(), cache.version, start, first));
     };
     for (size_t t = 0; t < snap.tracks.size(); ++t) look(snap.tracks[t].cache, t);
     look(snap.masterCache, snap.tracks.size());
-    if (lead) *lead = longest;
     return first;
+}
+
+int64_t BackgroundRenderer::prerollAt(int64_t gap) const {
+    const RenderSnapshot& snap = *snapshot_;
+    int64_t longest = 0;
+    const auto look = [&](const StripCacheRender& cache, size_t strip) {
+        if (!cache.cacheable || strip >= chains_.size() || !chains_[strip].keep || lookFrom_[strip] > gap) return;
+        const BlockSet* blocks = cache.point->blocks.load(std::memory_order_acquire);
+        if (uncovered(blocks, cache.dirty.get(), cache.version, gap, gap + 1) != gap) return;
+        longest = std::max(longest, leadAt(strip, gap));
+    };
+    for (size_t t = 0; t < snap.tracks.size(); ++t) look(snap.tracks[t].cache, t);
+    look(snap.masterCache, snap.tracks.size());
+    return longest;
 }
 
 }  // namespace sub

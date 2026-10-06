@@ -364,6 +364,7 @@ struct StripCacheRender {
     std::vector<int> sources;                // the snapshot tracks whose signal reaches its input or its devices
     // Worth caching and possible: a device switched on, and no edge taps it after a device.
     bool cacheable = false;
+    bool devicesOn = false;  // a device is switched on (it isn't frozen): what it hears rings on in it
     // In the background renderer's snapshot (BackgroundRenderer.h): the version
     // of the strip its devices (shadow instances) are in the state of (0: the
     // point's version, as in the live snapshot), and whether some of its devices

@@ -148,6 +148,9 @@ public:
     // starts fresh). May be before the song's start: it warms up through the
     // silence there (nothing before 0 is captured).
     void preRollFrom(int64_t samples) noexcept;
+    // The background renderer's: it renders nothing from `samples` on (0: no
+    // end), so its strips' devices needn't warm up for what plays after.
+    void setRenderEnd(int64_t samples) noexcept { renderEnd_ = samples; }
 
     // Renders the timeline from the current position, like renderOffline(), but
     // puts out snapshot track `track`'s signal before its fader (after its
@@ -283,6 +286,12 @@ private:
         bool resume = false;      // its devices run again after standing idle (resumeDevices())
         bool capture = false;     // keep what its devices put out, from frame `captureFrom` on
         int captureFrom = 0;
+        // The background's (convergence): compare what its devices put out with
+        // the blocks it had before a change; keep what it reads (good only as far
+        // as its lane found out: `amend`).
+        bool compare = false;
+        bool recapture = false;
+        const DirtyAmendment* amend = nullptr;
         const BlockSet* blocks = nullptr;
         uint64_t version = 0;
     };
@@ -342,11 +351,19 @@ private:
     // Reads the chunk's pieces from the blocks into out (where a block is missing
     // or no good, `fallback` is copied instead). False if any frame was missing.
     bool readCache(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version, bool anyBlocks,
-                   const float* fallbackLeft, const float* fallbackRight, float* outLeft, float* outRight) const noexcept;
-    bool cacheCovers(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version) const noexcept;
+                   const float* fallbackLeft, const float* fallbackRight, float* outLeft, float* outRight,
+                   const DirtyAmendment* amend = nullptr) const noexcept;
+    bool cacheCovers(const BlockSet* blocks, const DirtyLog* dirty, uint64_t version,
+                     const DirtyAmendment* amend = nullptr) const noexcept;
     // Frames good blocks cover from the next chunk on, as the playhead will go (wrapping where the loop does), up to `most`.
     int64_t cacheRunway(const RenderSnapshot& snap, const BlockSet* blocks, const DirtyLog* dirty, uint64_t version,
-                        int64_t most) const noexcept;
+                        int64_t most, const DirtyAmendment* amend = nullptr) const noexcept;
+    // The background's (step.compare): whether what its devices put out in
+    // left/right matches what it had before a change, now that the change has
+    // passed and nothing feeding it still changes; long enough, and it takes
+    // the change to have rung out there (its lane's amendment).
+    void checkConvergence(const RenderSnapshot& snap, const StripCacheRender& cache, CachePoint::LiveState& s,
+                          const CacheStep& step, const float* left, const float* right) noexcept;
     void captureChunk(CachePoint::Lane& lane, const CacheStep& step, const float* left, const float* right) noexcept;
     static void finishBlock(CachePoint::Lane& lane) noexcept;
     // The graph's job: track `node` of the chunk's snapshot, on thread `worker`.
@@ -435,6 +452,7 @@ private:
     double sampleRate_ = 48000.0;
     double samplesPerBeat_ = 0.0;
     int64_t position_ = 0;
+    int64_t renderEnd_ = 0;  // setRenderEnd()
     int64_t expectedPosition_ = -1;  // where playback continues if the playhead doesn't jump
     bool playing_ = false;
     bool chasePending_ = false;  // playback just started: its first segment chases notes

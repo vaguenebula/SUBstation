@@ -928,3 +928,80 @@ TEST_CASE("background rendering: past what it can't keep, it goes on") {
         },
         1, rendering()));
 }
+
+namespace {
+
+// The drums' second clip is cut short: a short one (2 to 2.5 s) of gain `gain` between.
+std::vector<sub::ClipDesc> shortClipBetween(const Wavs& wavs, float gain) {
+    return {clip(wavs.drums, 0.0, 2.0), clip(wavs.drums, 4.0, 0.5, 2.0, gain), clip(wavs.drums, 5.0, 3.5, 2.5)};
+}
+
+}  // namespace
+
+TEST_CASE("background rendering: once a change has rung out, what it had is kept, not rendered again") {
+    // The short clip of the drums (2 to 2.5 s) changes. Through the 50 ms delay
+    // it rings on a little; then what the drums put out matches what they put
+    // out before. The first time, the background renders on for the whole
+    // warm-up (2 s here), and learns how long a change rings on in the drums
+    // (and in the master). The second time, from where the drums match again
+    // for long enough, it keeps the blocks it had (in the drums, and then in
+    // the master) instead of rendering on.
+    const Wavs wavs;
+    sub::BackgroundFreezingSettings settings = rendering();
+    settings.warmSeconds = 2.0;
+    checkSame(both(
+        [&](Session& s) {
+            const Song song = settledSong(s, wavs);
+            s.engine.setTrackClips(song.drums, shortClipBetween(wavs, 1.f));
+            renderAll(s);
+            const sub::BackgroundFreezingStats first = s.engine.backgroundFreezingStats();
+            s.engine.setTrackClips(song.drums, shortClipBetween(wavs, 0.5f));
+            renderAll(s);
+            const sub::BackgroundFreezingStats second = s.engine.backgroundFreezingStats();
+            s.engine.setTrackClips(song.drums, shortClipBetween(wavs, 0.25f));
+            renderAll(s);
+            const sub::BackgroundFreezingStats third = s.engine.backgroundFreezingStats();
+            s.engine.play();
+            const uint64_t drums = s.fromCache(song.drums), master = s.fromCache(sub::Engine::kMaster);
+            s.run(5.5);  // (then they start again a warm-up before what was kept ends)
+            if (!s.freezing) return;
+            CHECK(second.framesReplayed - first.framesReplayed < framesOf(1.0));  // (only once it had learnt)
+            CHECK(third.framesReplayed - second.framesReplayed > framesOf(4.0));
+            // The drums ran from a warm-up before the clip to just after it, the master as long again
+            // (it waits for the drums); the rest of their warm-ups (2 s and 4 s) was kept from what they had.
+            CHECK(second.framesRenderedLive - first.framesRenderedLive > framesOf(2 * (2.0 + 0.5 + 2.0)));
+            CHECK(third.framesRenderedLive - second.framesRenderedLive < framesOf(2 * (2.0 + 0.5 + 0.5)));
+            CHECK_EQ(s.fromCache(song.drums) - drums, framesOf(5.5));
+            CHECK_EQ(s.fromCache(sub::Engine::kMaster) - master, framesOf(5.5));
+        },
+        1, settings));
+}
+
+TEST_CASE("background rendering: a change that rings on unheard a while isn't taken to have rung out") {
+    // The delay is 1 s: what the short clip changes comes back a second later,
+    // after half a second that matches. The second change shows it (the first
+    // is before anything was kept); after the third, the drums must match for
+    // 2 s, which the warm-up (3 s here) leaves no room for: what plays is right.
+    const Wavs wavs;
+    sub::BackgroundFreezingSettings settings = rendering();
+    settings.warmSeconds = 3.0;
+    checkSame(both(
+        [&](Session& s) {
+            const Song song = settledSong(s, wavs);
+            setParam(s.engine, song.delay, "l_time", 1000.f);
+            setParam(s.engine, song.delay, "r_time", 1000.f);
+            s.engine.setTrackClips(song.drums, shortClipBetween(wavs, 1.f));
+            s.run(0.1);
+            renderAll(s);
+            s.engine.setTrackClips(song.drums, shortClipBetween(wavs, 0.5f));
+            renderAll(s);
+            const uint64_t replayed = s.engine.backgroundFreezingStats(song.drums).framesReplayed;
+            s.engine.setTrackClips(song.drums, shortClipBetween(wavs, 0.25f));
+            renderAll(s);
+            s.engine.play();
+            s.run(6.0);
+            // (From 3.5 s, where the drums last differed, they would have to match up to 5.5 s.)
+            if (s.freezing) CHECK(s.engine.backgroundFreezingStats(song.drums).framesReplayed - replayed < framesOf(0.5));
+        },
+        1, settings));
+}

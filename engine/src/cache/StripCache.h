@@ -109,6 +109,21 @@ struct BlockSet {
         }
         return best;
     }
+    // Of the blocks of `cell` in `context` whose frames include `offset` and whose
+    // version is `version`, the one captured last (null: none).
+    const CacheBlock* findLatest(int64_t cell, const CacheContext& context, int offset,
+                                 uint64_t version) const noexcept {
+        const CacheBlock* latest = nullptr;
+        for (auto it = first(cell, context); it != blocks.end() && (*it)->cell == cell && (*it)->context == context;
+             ++it) {
+            const CacheBlock& b = **it;
+            if (b.version == version && b.from <= offset && offset < b.to &&
+                (!latest || b.generation > latest->generation)) {
+                latest = &b;
+            }
+        }
+        return latest;
+    }
     // The first offset at or after `offset` in `cell` that some block in `context`
     // is good at (`goodTo(block)`, as above); -1 if none.
     template <typename GoodTo>
@@ -131,6 +146,17 @@ private:
     }
 };
 
+// What the background renderer found out about a strip (its lane's own, not
+// shared): the changes after generation `afterGen`, up to `upToGen`, that began
+// and ended before `at` (their `core`) had stopped ringing on by `at`: from
+// there, what its devices put out matched what blocks of `afterGen` hold,
+// sample for sample. So blocks no newer than `afterGen` are good after `at`, as
+// far as those changes go (convergence).
+struct DirtyAmendment {
+    uint64_t afterGen = 0, upToGen = 0;
+    int64_t at = 0;
+};
+
 // The time-local changes a strip's cache must honour: each changed its signal
 // over [from, to) (timeline samples; how long a change rings on in devices is in
 // `to` already) at generation `generation`. A block captured at an older
@@ -142,21 +168,31 @@ struct DirtyLog {
     struct Entry {
         uint64_t generation;
         int64_t from, to;
+        // Where the change itself ends: what changed on the strip and in what
+        // reaches it past the strips feeding it (their faders' envelopes, the
+        // levels of its sends), through the latencies on the way, but not
+        // ringing on; `from` if it all came from what feeds it.
+        int64_t core;
     };
     uint64_t horizon = 0;
     std::vector<Entry> entries;  // by generation, ascending
 
     // Within [start, end) in `context`, where what was captured at `generation`
     // stops being good: `end` if all of it is, `start` if none.
-    int64_t goodUntil(uint64_t generation, int64_t start, int64_t end,
-                      const CacheContext& context = {}) const noexcept {
+    int64_t goodUntil(uint64_t generation, int64_t start, int64_t end, const CacheContext& context = {},
+                      const DirtyAmendment* amend = nullptr) const noexcept {
         if (generation < horizon) return start;
         auto it = std::upper_bound(entries.begin(), entries.end(), generation,
                                    [](uint64_t g, const Entry& e) { return g < e.generation; });
         int64_t until = end;
         for (; it != entries.end(); ++it) {
-            if (!context.linear() && it->from < context.wrapFrom && it->to >= context.wrapFrom) return start;
-            if (it->from < until && it->to > start) until = std::max(start, it->from);
+            int64_t to = it->to;
+            if (amend && generation <= amend->afterGen && it->generation > amend->afterGen &&
+                it->generation <= amend->upToGen && it->core <= amend->at) {
+                to = std::min(to, amend->at);
+            }
+            if (!context.linear() && it->from < context.wrapFrom && to >= context.wrapFrom) return start;
+            if (it->from < until && to > start) until = std::max(start, it->from);
         }
         return until;
     }
@@ -217,6 +253,26 @@ struct CachePoint {
         int64_t cleanInOut = 0;     // frames until what it puts out matches the arrangement
         // The block being captured into (from `spares`).
         CacheBlock* building = nullptr;
+        // Convergence (the background lane's). Where its devices run alone after
+        // a change, what they put out is compared with blocks of generation
+        // `observeGen`, from `observeFrom` (-1: not now) to `observeTo`, up to
+        // where the change can ring on (`observeUntil`); `lastDifference` is
+        // where they last differed. Seen through to the end, that gives its
+        // `tail` (-1: none yet) while its version is `tailVersion`: how long a
+        // change rings on in it.
+        int64_t observeFrom = -1, observeTo = 0, observeUntil = 0, lastDifference = 0;
+        uint64_t observeGen = 0;
+        int64_t tail = -1;
+        uint64_t tailVersion = 0;
+        // With a tail: they matched, from `matchFrom` (-1: not now) for
+        // `matchFrames`, not all of it near silence if `matchLoud`. Long
+        // enough, and the change rang out there (`amend`, while its version is
+        // `amendVersion`).
+        int64_t matchFrom = -1, matchFrames = 0;
+        bool matchLoud = false;
+        bool amended = false;
+        uint64_t amendVersion = 0;
+        DirtyAmendment amend;
     };
     // What a renderer keeps of the strip: the live renderer's, and the
     // background renderer's (rendering with shadow instances: BackgroundRenderer.h).
@@ -229,6 +285,7 @@ struct CachePoint {
         // Statistics (the renderer adds; anyone reads).
         std::atomic<uint64_t> framesFromCache{0}, framesLive{0}, framesCaptured{0};
         std::atomic<uint64_t> framesLost{0};  // it would have kept, but had no block for (the budget is spent)
+        std::atomic<uint64_t> framesReplayed{0};  // kept from blocks a change had rung out of (not rendered)
         int storeSpares = 0;  // the store's (under its lock): handed out (in `spares` or being captured into)
     };
     static constexpr int kLiveLane = 0, kBackgroundLane = 1, kLanes = 2;
