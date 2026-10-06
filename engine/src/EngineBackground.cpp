@@ -96,15 +96,15 @@ std::shared_ptr<const RenderSnapshot> Engine::buildShadowSnapshotLocked(const Re
         }
     }
 
-    // A device's shadow, if it has one in step (its latency the same); else
-    // what stands for it, and its strip can't be rendered if it is on.
+    // A device's shadow, if it has one; else what stands for it, and its strip
+    // can't be rendered if it is on. (Not whether it reports the same latency:
+    // a plug-in may report its own only once it has processed, and the live
+    // one may never have. What it renders is for the strip's version, which a
+    // latency the live one reports later moves on.)
     const auto device = [&](const std::shared_ptr<Processor>& processor, bool& unavailable) -> std::shared_ptr<Processor> {
         if (!processor) return processor;
         const auto found = shadows_.find(processor.get());
-        if (found != shadows_.end() && found->second.shadow &&
-            found->second.shadow->latencySamples() == processor->latencySamples()) {
-            return found->second.shadow;
-        }
+        if (found != shadows_.end() && found->second.shadow) return found->second.shadow;
         if (processor->isEnabled()) unavailable = true;
         return absent;
     };
