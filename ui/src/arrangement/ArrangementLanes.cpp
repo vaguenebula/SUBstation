@@ -7,28 +7,36 @@
 #include "browser/BrowserMime.h"
 #include "editor/ProjectEditor.h"
 #include "model/Devices.h"
+#include "model/Edits.h"
+#include "model/Errors.h"
 #include "model/Numbers.h"
 #include "model/Project.h"
 #include "model/Timebase.h"
 #include "session/ArrangementActions.h"
+#include "session/ComputerKeyboard.h"
 #include "session/Selection.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 #include "timeline/Timeline.h"
 
+#include <QCoreApplication>
 #include <QCursor>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QHoverEvent>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QQuickWindow>
 #include <QUrl>
 #include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace sub::ui {
 
@@ -39,9 +47,41 @@ double arrangement::clipTitleHeight(double clipHeight, bool folded) {
     return clipHeight >= kMinTitleRow ? kTitleHeight : kShortTitleHeight;
 }
 
+FadeHandles arrangement::fadeHandles(const app::Clip& clip, const QRectF& rect, const QRectF& body, double pxPerBeat,
+                                     double tempo) {
+    const double top = body.top() + 1, bottom = body.bottom() - 1;
+    const double inWidth = clip.fadeInBeats(tempo) * pxPerBeat, outWidth = clip.fadeOutBeats(tempo) * pxPerBeat;
+    // The squares stay inside the clip (at its corners while it has no fades).
+    const double lo = rect.left() + kFadeHandle / 2, hi = std::max(lo, rect.right() - kFadeHandle / 2);
+    const auto square = [&](double x) {
+        return QRectF(std::clamp(x, lo, hi) - kFadeHandle / 2, top, kFadeHandle, kFadeHandle);
+    };
+    const auto dot = [&](double x, double curve) {
+        return QPointF(x, bottom - app::Clip::fadeGain(0.5, curve) * (bottom - top));
+    };
+    FadeHandles handles{square(rect.left() + inWidth), square(rect.right() - outWidth), std::nullopt, std::nullopt};
+    if (inWidth >= kMinCurveFade) handles.inCurve = dot(rect.left() + inWidth / 2, clip.fadeInCurve);
+    if (outWidth >= kMinCurveFade) handles.outCurve = dot(rect.right() - outWidth / 2, clip.fadeOutCurve);
+    return handles;
+}
+
 namespace {
 
 constexpr QColor kDropFill{255, 166, 43, 70};
+constexpr QColor kFadeVeil{0, 0, 0, 80};          // over what a fade takes away
+constexpr QColor kFadeLine{255, 255, 255, 190};   // its curve
+constexpr QColor kFadeHandleFill{235, 235, 235};
+constexpr QColor kFadeHandleEdge{20, 20, 20, 200};
+
+// Ctrl+Shift (without Alt): drag a clip's body to slide its content.
+bool isSlipModifier(Qt::KeyboardModifiers modifiers) {
+    return (modifiers & Qt::ControlModifier) && (modifiers & Qt::ShiftModifier) && !(modifiers & Qt::AltModifier);
+}
+
+// Alt (without Ctrl): drag a clip's edge to stretch it.
+bool isStretchModifier(Qt::KeyboardModifiers modifiers) {
+    return (modifiers & Qt::AltModifier) && !(modifiers & Qt::ControlModifier);
+}
 
 // The modifiers held once a key event is through: a modifier key's own press
 // or release isn't in its event's modifiers on every platform.
@@ -119,9 +159,12 @@ ArrangementLanes::ArrangementLanes(QQuickItem* parent) : ArrangementItem(parent)
     setFlag(ItemAcceptsDrops, true);
     setFlag(ItemIsFocusScope, false);
     setActiveFocusOnTab(true);
+    if (QCoreApplication* app = QCoreApplication::instance()) app->installEventFilter(this);
 }
 
-ArrangementLanes::~ArrangementLanes() = default;
+ArrangementLanes::~ArrangementLanes() {
+    if (QCoreApplication* app = QCoreApplication::instance()) app->removeEventFilter(this);
+}
 
 void ArrangementLanes::connectSession(app::Session* session) {
     const auto repaint = [this] { this->repaint(); };
@@ -246,6 +289,44 @@ std::optional<ArrangementLanes::Hit> ArrangementLanes::hitClip(const QPointF& po
                 zone = Zone::Right;
             return Hit{row.trackId, *it, zone};
         }
+    }
+    return std::nullopt;
+}
+
+std::optional<ArrangementLanes::FadeHit> ArrangementLanes::hitFade(const QPointF& pos) const {
+    if (!ready()) return std::nullopt;
+    const auto index = rowIndexAt(pos.y());
+    if (!index) return std::nullopt;
+    const Row& row = arrangement()->layout().rows()[static_cast<size_t>(*index)];
+    const double top = row.top - arrangement()->scrollY();
+    if (row.bars || pos.y() >= top + row.mainHeight) return std::nullopt;  // (a folded track's bars have no body)
+    const app::Track* track = session()->project()->findTrack(row.trackId);
+    if (!track) return std::nullopt;
+    const double tempo = session()->project()->tempo(), px = arrangement()->pxPerBeat();
+    for (auto it = track->clips.rbegin(); it != track->clips.rend(); ++it) {
+        if (!it->isAudio()) continue;
+        const QRectF rect = clipRect(*it, top, row.mainHeight);
+        if (pos.x() < rect.left() - kFadeGrab || pos.x() > rect.right() + kFadeGrab) continue;
+        const QRectF body = rect.adjusted(0, clipTitleHeight(rect.height()), 0, 0);
+        if (body.height() < kMinFadeBody) continue;
+        const FadeHandles handles = fadeHandles(*it, rect, body, px, tempo);
+        // The dots first (inside the fades, they are clear of the squares); of two squares, the nearer.
+        for (const bool out : {false, true}) {
+            const auto& dot = out ? handles.outCurve : handles.inCurve;
+            if (dot && QLineF(*dot, pos).length() <= kFadeDot + kFadeGrab) return FadeHit{row.trackId, *it, out, true};
+        }
+        std::optional<FadeHit> nearest;
+        double distance = std::numeric_limits<double>::infinity();
+        for (const bool out : {false, true}) {
+            const QRectF square = out ? handles.out : handles.in;
+            if (!square.adjusted(-kFadeGrab, -kFadeGrab, kFadeGrab, kFadeGrab).contains(pos)) continue;
+            const double d = QLineF(square.center(), pos).length();
+            if (d < distance) {
+                distance = d;
+                nearest = FadeHit{row.trackId, *it, out, false};
+            }
+        }
+        if (nearest) return nearest;
     }
     return std::nullopt;
 }
@@ -429,8 +510,56 @@ void ArrangementLanes::drawClip(SgPainter& p, const QColor& trackColor, const ap
         timeline::drawGrid(p, arrangement()->view(), std::max(rect.left() + 1, visible.left()),
                            std::min(rect.right() - 1, visible.right()), body.top(), body.bottom(), true);
         drawContent(p, clip, rect, body, visible);
+        drawFades(p, clip, rect, body, visible, showsFadeHandles());
     }
     drawClipFrame(p, trackColor, clip, rect, selected, ghost, folded);
+    p.restore();
+}
+
+void ArrangementLanes::drawFades(SgPainter& p, const app::Clip& clip, const QRectF& rect, const QRectF& body,
+                                 const QRectF& visible, bool handles) const {
+    // An audio clip's fades: each a curve from silence (the body's bottom) to
+    // full level (its top), every few pixels, with a veil over what it takes
+    // away; with F held, the handles that drag them.
+    if (!clip.isAudio() || body.height() < 4) return;
+    const double tempo = session()->project()->tempo(), px = arrangement()->pxPerBeat();
+    const double top = body.top() + 1, bottom = body.bottom() - 1;
+    p.save();
+    p.setAntialiasing(true);
+    for (const bool out : {false, true}) {
+        const double width = (out ? clip.fadeOutBeats(tempo) : clip.fadeInBeats(tempo)) * px;
+        if (width < 1) continue;
+        const double x0 = out ? rect.right() - width : rect.left();
+        const double from = std::max(x0, visible.left() - 2), to = std::min(x0 + width, visible.right() + 2);
+        if (to <= from) continue;
+        const double curve = out ? clip.fadeOutCurve : clip.fadeInCurve;
+        const int steps = std::max(2, static_cast<int>(std::ceil((to - from) / kSamplePixels)));
+        QPolygonF line;
+        for (int i = 0; i <= steps; ++i) {
+            const double x = from + (to - from) * i / steps;
+            const double along = (x - x0) / width;  // from the fade's start; a fade out's gain counts from the end
+            const double gain = app::Clip::fadeGain(out ? 1.0 - along : along, curve);
+            line << QPointF(x, bottom - gain * (bottom - top));
+        }
+        p.fillToBaseline(line.constData(), static_cast<int>(line.size()), body.top(), kFadeVeil);
+        p.drawPolyline(line, kFadeLine, 1.0);
+    }
+    if (handles && body.height() >= kMinFadeBody) {
+        const FadeHandles at = fadeHandles(clip, rect, body, px, tempo);
+        const auto lit = [&](bool out, bool curve) {
+            return hoverFade_ && std::get<0>(*hoverFade_) == clip.id && std::get<1>(*hoverFade_) == out &&
+                   std::get<2>(*hoverFade_) == curve;
+        };
+        for (const bool out : {false, true}) {
+            if (const auto& dot = out ? at.outCurve : at.inCurve) {
+                p.fillEllipse(*dot, kFadeDot + 1, kFadeDot + 1, kFadeHandleEdge);
+                p.fillEllipse(*dot, kFadeDot, kFadeDot, lit(out, true) ? Theme::kAccent : kFadeHandleFill);
+            }
+            const QRectF square = out ? at.out : at.in;
+            p.fillRect(square, lit(out, false) ? Theme::kAccent : kFadeHandleFill);
+            p.drawRect(square.adjusted(0.5, 0.5, -0.5, -0.5), kFadeHandleEdge, 1);
+        }
+    }
     p.restore();
 }
 
@@ -476,9 +605,9 @@ void ArrangementLanes::drawClipFrame(SgPainter& p, const QColor& trackColor, con
     }
     const QColor outline = selected ? Theme::kSelectionOutline : trackColor.darker(170);
     p.drawRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), outline, 1);
-    if (hoverEdge_ && hoverEdge_->first == clip.id && !ghost) {
+    if (hoverEdge_ && hoverEdge_->first == clip.id && !ghost) {  // (Alt: a stretch, in the accent colour)
         const double x = hoverEdge_->second ? rect.left() : rect.right() - 2;
-        p.fillRect(QRectF(x, rect.top(), 2, rect.height()), Theme::kSelectionOutline);
+        p.fillRect(QRectF(x, rect.top(), 2, rect.height()), hoverStretch_ ? Theme::kAccent : Theme::kSelectionOutline);
     }
 }
 
@@ -583,17 +712,42 @@ void ArrangementLanes::mousePressEvent(QMouseEvent* event) {
         setCursor(Qt::ClosedHandCursor);
         return;
     }
+    app::Selection& selection = *session()->selection();
+    // A clip edited by itself (a fade, an edge, its content): selected first, as a click on its body would.
+    const auto selectClip = [&](const QString& trackId, const QString& clipId) {
+        selection.selectClips(*session()->editor(), {{trackId, clipId}});
+        if (selection.timeRange()) selection.setInsert(selection.timeRange()->start);
+    };
+    if (fadeKey_) {
+        if (const auto fade = hitFade(pos)) {
+            selectClip(fade->trackId, fade->clip.id);
+            if (fade->curve)
+                gesture_ = std::make_unique<FadeCurveGesture>(*this, fade->trackId, fade->clip, fade->out, pos);
+            else
+                gesture_ = std::make_unique<FadeGesture>(*this, fade->trackId, fade->clip, fade->out, pos);
+            repaint();
+            return;
+        }
+    }
     if (const auto area = envelopeAreaAt(pos)) {
         gesture_ = envelopes::press(*this, *area, pos, mods);
         repaint();
         return;
     }
     const auto hit = hitClip(pos);
-    app::Selection& selection = *session()->selection();
     if (hit && (hit->zone == Zone::Left || hit->zone == Zone::Right)) {
-        selection.selectClips(*session()->editor(), {{hit->trackId, hit->clip.id}});
-        if (selection.timeRange()) selection.setInsert(selection.timeRange()->start);  // (as a click on its body does)
-        gesture_ = std::make_unique<TrimGesture>(*this, hit->trackId, hit->clip, hit->zone == Zone::Left);
+        selectClip(hit->trackId, hit->clip.id);
+        const bool left = hit->zone == Zone::Left;
+        if (isStretchModifier(mods))
+            gesture_ = std::make_unique<StretchGesture>(*this, hit->trackId, hit->clip, left);
+        else
+            gesture_ = std::make_unique<TrimGesture>(*this, hit->trackId, hit->clip, left);
+        return;
+    }
+    if (hit && hit->zone == Zone::Body && isSlipModifier(mods)) {
+        selectClip(hit->trackId, hit->clip.id);
+        gesture_ = std::make_unique<SlipGesture>(*this, hit->trackId, hit->clip, pos);
+        setCursor(Qt::SizeHorCursor);
         return;
     }
     if (inClipRange(pos) && !(mods & Qt::ShiftModifier)) {
@@ -673,6 +827,25 @@ void ArrangementLanes::mouseUngrabEvent() {
 void ArrangementLanes::mouseDoubleClickEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton || !ready()) return;
     const QPointF pos = event->position();
+    if (fadeKey_ && !isPanModifier(event->modifiers())) {
+        // On a fade's dot: a straight line again; on its square: no fade.
+        if (const auto fade = hitFade(pos)) {
+            const double tempo = session()->project()->tempo();
+            const app::Clip changed = fade->curve ? app::edits::curveFade(fade->clip, fade->out, 0.0)
+                                                  : app::edits::fadeClip(fade->clip, fade->out, 0.0, tempo);
+            if (changed != fade->clip) {
+                const QString text = fade->curve ? QStringLiteral("Fade Curve")
+                                     : fade->out ? QStringLiteral("Fade Out")
+                                                 : QStringLiteral("Fade In");
+                try {
+                    session()->editor()->replaceClip(fade->trackId, changed, text);
+                } catch (const app::EditError& error) {
+                    Q_EMIT arrangement()->statusMessage(error.message());
+                }
+            }
+            return;
+        }
+    }
     const auto area = envelopeAreaAt(pos);
     if (area && !isPanModifier(event->modifiers())) {
         gesture_ = envelopes::press(*this, *area, pos, event->modifiers());
@@ -702,6 +875,10 @@ void ArrangementLanes::hoverLeaveEvent(QHoverEvent*) {
     hoverPos_.reset();
     if (gesture_) return;
     setHoverEdge(std::nullopt);
+    if (hoverFade_) {
+        hoverFade_.reset();
+        repaint();
+    }
     if (hoverPoint_) {
         hoverPoint_.reset();
         repaint();
@@ -711,11 +888,23 @@ void ArrangementLanes::hoverLeaveEvent(QHoverEvent*) {
 void ArrangementLanes::updateHover(const QPointF& pos, Qt::KeyboardModifiers mods) {
     if (!ready()) return;
     const bool pan = isPanModifier(mods);
-    const std::optional<EnvelopeArea> area = pan ? std::nullopt : envelopeAreaAt(pos);
+    const std::optional<FadeHit> fade = pan || !fadeKey_ ? std::nullopt : hitFade(pos);
+    std::optional<std::tuple<QString, bool, bool>> fadeHover;
+    if (fade) fadeHover = std::make_tuple(fade->clip.id, fade->out, fade->curve);
+    if (fadeHover != hoverFade_) {
+        hoverFade_ = fadeHover;
+        repaint();
+    }
+    const std::optional<EnvelopeArea> area = pan || fade ? std::nullopt : envelopeAreaAt(pos);
     auto [point, cursor] = envelopes::hover(*this, area, pos, mods);
     if (point != hoverPoint_) {
         hoverPoint_ = point;
         repaint();
+    }
+    if (fade) {
+        setHoverEdge(std::nullopt);
+        setCursor(fade->curve ? Qt::SizeVerCursor : Qt::SizeHorCursor);
+        return;
     }
     if (area) {
         setHoverEdge(std::nullopt);
@@ -730,20 +919,24 @@ void ArrangementLanes::updateHover(const QPointF& pos, Qt::KeyboardModifiers mod
         const auto hit = hitClip(pos);
         const Zone zone = hit ? hit->zone : Zone::Body;
         if (zone == Zone::Left || zone == Zone::Right) {
-            setHoverEdge(std::make_pair(hit->clip.id, zone == Zone::Left));
-            setCursor(trimCursor(zone == Zone::Left));
+            const bool left = zone == Zone::Left, stretch = isStretchModifier(mods);
+            setHoverEdge(std::make_pair(hit->clip.id, left), stretch);
+            setCursor(stretch ? stretchCursor(left) : trimCursor(left));
             return;
         }
         const bool grab = zone == Zone::Title || inClipRange(pos);
         shape = grab ? Qt::PointingHandCursor : Qt::IBeamCursor;
+        if (hit && zone == Zone::Body && isSlipModifier(mods)) shape = Qt::SizeHorCursor;
     }
     setHoverEdge(std::nullopt);
     setCursor(shape);
 }
 
-void ArrangementLanes::setHoverEdge(const std::optional<std::pair<QString, bool>>& edge) {
-    if (edge == hoverEdge_) return;
+void ArrangementLanes::setHoverEdge(const std::optional<std::pair<QString, bool>>& edge, bool stretch) {
+    stretch = stretch && edge.has_value();
+    if (edge == hoverEdge_ && stretch == hoverStretch_) return;
     hoverEdge_ = edge;
+    hoverStretch_ = stretch;
     repaint();
 }
 
@@ -779,8 +972,55 @@ void ArrangementLanes::keyReleaseEvent(QKeyEvent* event) {
 }
 
 void ArrangementLanes::onModifiers(Qt::KeyboardModifiers mods) {
-    // Show the hand cursor as soon as Ctrl+Alt is held, without moving the mouse.
+    // Show the hand cursor as soon as Ctrl+Alt is held (Alt on an edge: the
+    // stretch cursor), without moving the mouse.
     if (!gesture_ && hoverPos_) updateHover(*hoverPos_, mods);
+}
+
+bool ArrangementLanes::eventFilter(QObject* watched, QEvent* event) {
+    // (A key event reaches the filter for each object it is delivered to: taken
+    // where the window gets it, before the item with the focus.)
+    if (watched == nullptr || watched != window()) return false;
+    switch (event->type()) {
+        case QEvent::KeyPress:
+        case QEvent::KeyRelease: {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_F && !key->isAutoRepeat()) {
+                bool held = false;
+                if (event->type() == QEvent::KeyPress) {
+                    // Not while typing, nor with shortcut modifiers, nor while the computer keyboard plays F.
+                    const Qt::KeyboardModifiers mods = key->modifiers();
+                    const app::ComputerKeyboard* keyboard = ready() ? session()->computerKeyboard() : nullptr;
+                    const bool plays = keyboard && keyboard->takesKey(Qt::Key_F) && !(mods & Qt::ShiftModifier);
+                    held = !(mods & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) && !plays &&
+                           !app::ComputerKeyboard::focusTakesText();
+                }
+                setFadeKey(held);
+            }
+            onModifiers(heldModifiers(key));
+            break;
+        }
+        case QEvent::FocusOut:
+        case QEvent::WindowDeactivate:
+            setFadeKey(false);  // (its release goes elsewhere)
+            break;
+        default:
+            break;
+    }
+    return false;
+}
+
+void ArrangementLanes::setFadeKey(bool held) {
+    if (held == fadeKey_) return;
+    fadeKey_ = held;
+    if (!gesture_ && hoverPos_) updateHover(*hoverPos_, QGuiApplication::keyboardModifiers());
+    if (!held && hoverFade_) hoverFade_.reset();
+    repaint();
+}
+
+bool ArrangementLanes::showsFadeHandles() const {
+    const Gesture* gesture = gesture_.get();
+    return fadeKey_ || dynamic_cast<const FadeGesture*>(gesture) || dynamic_cast<const FadeCurveGesture*>(gesture);
 }
 
 // --- Menus -------------------------------------------------------------------------------------------

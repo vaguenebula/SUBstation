@@ -203,6 +203,51 @@ private Q_SLOTS:
         QVERIFY(data["tracks"].toArray()[0].toObject()["clips"].toArray()[0].toObject()["reversed_from_relative"].isNull());
     }
 
+    void clipFadesAreSavedWhereThereAreSome() {
+        test::TempDir dir;
+        const QString audio = dir.path("kick.wav");
+        touch(audio);
+        Track drums = test::makeTrack("t1", "Drums");
+        Clip faded = Clip::audio("c1", audio, "kick", 0.0, 2.0, 0.0, 2.0);
+        faded.fadeInSec = 0.25;
+        faded.fadeInCurve = -0.5;
+        faded.fadeOutSec = 0.5;
+        faded.fadeOutCurve = 0.75;
+        Clip plain = Clip::audio("c2", audio, "kick", 8.0, 1.0);
+        drums.clips = {faded, plain};
+        Project project;
+        ProjectContents contents;
+        contents.tracks = {drums};
+        project.replaceContents(contents);
+        saveProject(project, dir.path("song.gilproj"));
+        const QJsonArray clips = readJson(dir.path("song.gilproj"))["tracks"].toArray()[0].toObject()["clips"].toArray();
+        QCOMPARE(clips[0].toObject()["fade_in_sec"].toDouble(), 0.25);
+        QCOMPARE(clips[0].toObject()["fade_out_curve"].toDouble(), 0.75);
+        QVERIFY(!clips[1].toObject().contains("fade_in_sec"));  // (none: nothing saved)
+        QVERIFY(!clips[1].toObject().contains("fade_out_sec"));
+        Project loaded;
+        loadProject(loaded, dir.path("song.gilproj"));
+        QCOMPARE(loaded.tracks()[0].clips[0], faded);
+        QCOMPARE(loaded.tracks()[0].clips[1], plain);
+
+        // Fades longer than their clip load shortened to fit it.
+        QJsonObject data = readJson(dir.path("song.gilproj"));
+        QJsonArray tracks = data["tracks"].toArray();
+        QJsonObject track = tracks[0].toObject();
+        QJsonArray edited = track["clips"].toArray();
+        QJsonObject clip = edited[0].toObject();
+        clip["fade_in_sec"] = 3.0;
+        clip["fade_out_sec"] = 1.0;
+        edited[0] = clip;
+        track["clips"] = edited;
+        tracks[0] = track;
+        data["tracks"] = tracks;
+        writeJson(dir.path("long.gilproj"), data);
+        loadProject(loaded, dir.path("long.gilproj"));
+        QCOMPARE(loaded.tracks()[0].clips[0].fadeInSec, 1.5);
+        QCOMPARE(loaded.tracks()[0].clips[0].fadeOutSec, 0.5);
+    }
+
     void rejectsForeignFiles() {
         test::TempDir dir;
         const QString bad = dir.path("x.gilproj");

@@ -6,6 +6,7 @@
 #include "model/Edits.h"
 #include "model/Errors.h"
 #include "model/Project.h"
+#include "model/Timebase.h"
 #include "session/Selection.h"
 #include "session/Session.h"
 
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 namespace sub::ui::arrangement {
 
@@ -181,52 +183,49 @@ void MoveRangeGesture::cancel() {
     if (previewed_) host_.hostSession()->bridge()->endClipPreview();
 }
 
-// --- TrimGesture ----------------------------------------------------------------------------------
+// --- ClipEditGesture ------------------------------------------------------------------------------
 
-TrimGesture::TrimGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool left)
-    : host_(host), trackId_(trackId), clip_(clip), left_(left) {
+ClipEditGesture::ClipEditGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, QString text)
+    : host_(host), trackId_(trackId), clip_(clip), text_(std::move(text)) {
     const app::Project& project = *host.hostSession()->project();
     row_ = project.trackIndex(trackId);
     color_ = QColor(project.track(trackId).color);
 }
 
-void TrimGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
-    app::Session& session = *host_.hostSession();
-    const app::Project& project = *session.project();
-    const app::Track* track = project.findTrack(trackId_);
+const app::Track* ClipEditGesture::track() const { return host_.hostSession()->project()->findTrack(trackId_); }
+
+double ClipEditGesture::tempo() const { return host_.hostSession()->project()->tempo(); }
+
+void ClipEditGesture::update(const app::Clip& result) {
+    const app::Track* track = this->track();
     if (!track) return;
-    const timeline::Timeline& view = host_.hostArrangement()->view();
-    const double tempo = project.tempo();
-    const double beat = view.snapBeat(view.xToBeat(pos.x()), modifiers & Qt::AltModifier);
     const std::optional<app::Clip> previous = result_;
-    result_ = left_ ? app::edits::trimStart(clip_, beat, tempo) : app::edits::trimEnd(clip_, beat, tempo);
-    if (result_ != previous) {
-        std::vector<app::Clip> clips;
-        for (const app::Clip& c : track->clips) clips.push_back(c.id == clip_.id ? *result_ : c);
-        QMap<QString, std::vector<app::Clip>> preview;
-        preview.insert(trackId_, app::edits::resolveOverlaps(clips, {clip_.id}, tempo));
-        session.bridge()->previewClips(preview);
-    }
+    result_ = result;
+    if (result_ == previous) return;
+    std::vector<app::Clip> clips;
+    for (const app::Clip& c : track->clips) clips.push_back(c.id == clip_.id ? *result_ : c);
+    QMap<QString, std::vector<app::Clip>> preview;
+    preview.insert(trackId_, app::edits::resolveOverlaps(clips, {clip_.id}, tempo()));
+    host_.hostSession()->bridge()->previewClips(preview);
 }
 
-QSet<QString> TrimGesture::hiddenIds() const { return result_ ? QSet<QString>{clip_.id} : QSet<QString>(); }
+QSet<QString> ClipEditGesture::hiddenIds() const { return result_ ? QSet<QString>{clip_.id} : QSet<QString>(); }
 
-std::vector<GestureClip> TrimGesture::ghosts() const {
+std::vector<GestureClip> ClipEditGesture::ghosts() const {
     if (!result_) return {};
     return {{row_, color_, *result_}};
 }
 
-std::optional<app::TimeRange> TrimGesture::timeRange() const {
+std::optional<app::TimeRange> ClipEditGesture::timeRange() const {
     if (!result_) return std::nullopt;
-    const double tempo = host_.hostSession()->project()->tempo();
-    return app::TimeRange{result_->startBeat, result_->endBeat(tempo), {trackId_}};
+    return app::TimeRange{result_->startBeat, result_->endBeat(tempo()), {trackId_}};
 }
 
-void TrimGesture::finish() {
+void ClipEditGesture::finish() {
     app::Session& session = *host_.hostSession();
     if (result_ && *result_ != clip_ && session.project()->findClip(trackId_, clip_.id)) {
         try {
-            session.editor()->replaceClip(trackId_, *result_, QStringLiteral("Trim Clip"));
+            session.editor()->replaceClip(trackId_, *result_, text_);
             // The selection (and where playback starts) follows the clip's new edges.
             app::Selection& selection = *session.selection();
             selection.selectClips(*session.editor(), {{trackId_, clip_.id}});
@@ -235,11 +234,93 @@ void TrimGesture::finish() {
             Q_EMIT host_.hostArrangement()->statusMessage(error.message());
         }
     }
-    session.bridge()->endClipPreview();  // (the model's clips: trimmed, or as they were)
+    session.bridge()->endClipPreview();  // (the model's clips: edited, or as they were)
 }
 
-void TrimGesture::cancel() {
+void ClipEditGesture::cancel() {
     if (result_) host_.hostSession()->bridge()->endClipPreview();
+}
+
+// --- TrimGesture ----------------------------------------------------------------------------------
+
+TrimGesture::TrimGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool left)
+    : ClipEditGesture(host, trackId, clip, QStringLiteral("Trim Clip")), left_(left) {}
+
+void TrimGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
+    const timeline::Timeline& view = host_.hostArrangement()->view();
+    const double beat = view.snapBeat(view.xToBeat(pos.x()), modifiers & Qt::AltModifier);
+    update(left_ ? app::edits::trimStart(clip_, beat, tempo()) : app::edits::trimEnd(clip_, beat, tempo()));
+}
+
+// --- StretchGesture -------------------------------------------------------------------------------
+
+StretchGesture::StretchGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool left)
+    : ClipEditGesture(host, trackId, clip, QStringLiteral("Stretch Clip")), left_(left) {}
+
+void StretchGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
+    // (Alt started it: Shift takes it off the grid instead.)
+    const timeline::Timeline& view = host_.hostArrangement()->view();
+    const double beat = view.snapBeat(view.xToBeat(pos.x()), modifiers & Qt::ShiftModifier);
+    update(app::edits::stretchClip(clip_, beat, left_, tempo()));
+}
+
+// --- SlipGesture ----------------------------------------------------------------------------------
+
+SlipGesture::SlipGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, const QPointF& press)
+    : ClipEditGesture(host, trackId, clip, QStringLiteral("Move Clip Content")), press_(press) {}
+
+void SlipGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
+    if (!active_) {
+        if (!farEnough(pos, press_)) return;
+        active_ = true;
+    }
+    const timeline::Timeline& view = host_.hostArrangement()->view();
+    double delta = view.xToBeat(pos.x()) - view.xToBeat(press_.x());
+    // By whole grid steps, so content on the grid stays on it (Alt: freely).
+    if (view.snap() && !(modifiers & Qt::AltModifier)) {
+        const double step = view.gridStep();
+        if (step > 0) delta = std::round(delta / step) * step;
+    }
+    update(app::edits::slipClip(clip_, delta, tempo()));
+}
+
+// --- FadeGesture ----------------------------------------------------------------------------------
+
+QString fadeText(double seconds) {
+    if (seconds < 1.0) {
+        const double ms = seconds * 1000.0;
+        return ms < 10.0 ? QStringLiteral("%1 ms").arg(ms, 0, 'f', 1) : QStringLiteral("%1 ms").arg(std::round(ms));
+    }
+    return QStringLiteral("%1 s").arg(seconds, 0, 'f', 2);
+}
+
+FadeGesture::FadeGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool out,
+                         const QPointF& press)
+    : ClipEditGesture(host, trackId, clip, out ? QStringLiteral("Fade Out") : QStringLiteral("Fade In")), out_(out),
+      press_(press) {}
+
+void FadeGesture::move(const QPointF& pos, Qt::KeyboardModifiers) {
+    const timeline::Timeline& view = host_.hostArrangement()->view();
+    const double moved = view.xToBeat(pos.x()) - view.xToBeat(press_.x());
+    const double tempo = this->tempo();
+    const double from = out_ ? clip_.fadeOutBeats(tempo) : clip_.fadeInBeats(tempo);
+    const app::Clip faded = app::edits::fadeClip(clip_, out_, from + (out_ ? -moved : moved), tempo);
+    update(faded);
+    const double beats = out_ ? faded.fadeOutBeats(tempo) : faded.fadeInBeats(tempo);
+    readout_ = Readout{pos, (out_ ? QStringLiteral("Fade Out ") : QStringLiteral("Fade In ")) +
+                                fadeText(app::beatsToSeconds(beats, tempo))};
+}
+
+// --- FadeCurveGesture -----------------------------------------------------------------------------
+
+FadeCurveGesture::FadeCurveGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool out,
+                                   const QPointF& press)
+    : ClipEditGesture(host, trackId, clip, QStringLiteral("Fade Curve")), out_(out), press_(press) {}
+
+void FadeCurveGesture::move(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
+    const double fine = modifiers & Qt::ShiftModifier ? 0.1 : 1.0;
+    const double from = out_ ? clip_.fadeOutCurve : clip_.fadeInCurve;
+    update(app::edits::curveFade(clip_, out_, from + (press_.y() - pos.y()) / kCurvePixels * fine));
 }
 
 // --- TimeSelectGesture ---------------------------------------------------------------------------

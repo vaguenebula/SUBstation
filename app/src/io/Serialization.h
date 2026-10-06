@@ -69,8 +69,8 @@ inline const QString kProjectFormat = QStringLiteral("gilstudio-project");
 // 2: MIDI tracks, 3: plug-ins, 4: automation and master pan, 5: master devices,
 // 6: inputs, 7: MIDI inputs, 8: group tracks, 9: return tracks and sends, 10:
 // inputs from tracks (resampling), 11: sidechains, 12: racks, 13: rack names, 14:
-// frozen tracks, 15: reversed clips
-inline constexpr int kProjectVersion = 16;
+// frozen tracks, 15: reversed clips, 16: frozen audio's segments, 17: clip fades
+inline constexpr int kProjectVersion = 17;
 inline const QString kPresetFormat = QStringLiteral("gilstudio-preset");
 inline constexpr int kPresetVersion = 1;
 inline const QString kPresetExtension = QStringLiteral(".gilpreset");

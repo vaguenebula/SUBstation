@@ -186,17 +186,85 @@ TEST_CASE("the metronome clicks on beats") {
     CHECK(maxAbs(slice(level, 0, 2000)) > maxAbs(slice(level, kBeat, kBeat + 2000)));
 }
 
-TEST_CASE("clip fades") {
+TEST_CASE("clip fades: a short one where a clip cuts into its file") {
     sub::Engine engine;  // default 4 ms fades
-    addClipTrack(engine, dcWav());
+    addClipTrack(engine, dcWav(), 0.0, 0.5, 0.25);  // 0.25 s to 0.75 s of a 1 s file: both edges cut into it
     const Samples out = engine.renderOffline(0.0, kSampleRate);
     const auto fade = static_cast<int64_t>(std::round(0.004 * kSampleRate));
     CHECK_EQ(at(out, 0, 0), 0.f);
     CHECK(0.f < at(out, fade / 2, 0));
     CHECK(at(out, fade / 2, 0) < 0.5f);
     CHECK_APPROX(at(out, fade, 0), 0.5);
-    CHECK(0.f < at(out, kSampleRate - 1, 0));
+    CHECK(0.f < at(out, kSampleRate / 2 - 1, 0));
+    CHECK(at(out, kSampleRate / 2 - 1, 0) < 0.01f);
+}
+
+TEST_CASE("clip fades: none at the file's own start and end (a one-shot keeps its attack)") {
+    sub::Engine engine;  // default 4 ms fades
+    const std::string wav = dcWav();  // 1 s
+    addClipTrack(engine, wav, 0.0, 1.0);  // all of it
+    Samples out = engine.renderOffline(0.0, kSampleRate);
+    CHECK_APPROX(at(out, 0, 0), 0.5);
+    CHECK_APPROX(at(out, kSampleRate - 1, 0), 0.5);
+    // From the file's start to a cut: faded at the cut only.
+    sub::Engine cut;
+    addClipTrack(cut, wav, 0.0, 0.5);
+    out = cut.renderOffline(0.0, kSampleRate);
+    CHECK_APPROX(at(out, 0, 0), 0.5);
+    CHECK(at(out, kSampleRate / 2 - 1, 0) < 0.01f);
+    // From a cut to the file's end: faded at the cut only.
+    sub::Engine tail;
+    addClipTrack(tail, wav, 0.0, 0.5, 0.5);
+    out = tail.renderOffline(0.0, kSampleRate);
+    CHECK_EQ(at(out, 0, 0), 0.f);
+    CHECK_APPROX(at(out, kSampleRate / 2 - 1, 0), 0.5);
+}
+
+TEST_CASE("clip fades: a clip's own, curved, instead of the short ones") {
+    sub::Engine engine;  // default 4 ms fades
+    const std::string wav = dcWav();
+    engine.loadSource(wav);
+    const uint32_t track = engine.addTrack();
+    sub::ClipDesc c = clip(wav, 0.0, 1.0);  // all of the file: its own fades all the same
+    c.fadeInSec = 0.1;  // a straight line
+    c.fadeOutSec = 0.2;
+    c.fadeOutCurve = 1.f;  // bulging up: loud until late
+    engine.setTrackClips(track, {c});
+    const Samples out = engine.renderOffline(0.0, kSampleRate);
+    CHECK_EQ(at(out, 0, 0), 0.f);
+    CHECK_APPROX_REL(at(out, kSampleRate / 20, 0), 0.25, 1e-4);  // halfway in
+    CHECK_APPROX(at(out, kSampleRate / 10, 0), 0.5);
+    CHECK_APPROX(at(out, kSampleRate * 8 / 10 - 1, 0), 0.5);  // the fade out starts at 0.8 s
+    const double bulge = std::expm1(-6.0 * 0.5) / std::expm1(-6.0);  // automationShape(0.5, 1)
+    CHECK_APPROX_REL(at(out, kSampleRate * 9 / 10, 0), 0.5 * bulge, 1e-4);
     CHECK(at(out, kSampleRate - 1, 0) < 0.01f);
+
+    // Longer together than the clip, they meet, shortened in proportion.
+    c = clip(wav, 0.0, 1.0);
+    c.fadeInSec = 1.5;
+    c.fadeOutSec = 0.5;
+    engine.setTrackClips(track, {c});
+    const Samples met = engine.renderOffline(0.0, kSampleRate);
+    CHECK_EQ(at(met, 0, 0), 0.f);
+    CHECK_APPROX_REL(at(met, kSampleRate * 3 / 8, 0), 0.25, 1e-4);  // in for 0.75 s, then out for 0.25 s
+    CHECK_APPROX_REL(at(met, kSampleRate * 7 / 8, 0), 0.25, 1e-4);
+}
+
+TEST_CASE("clip fades: a warped clip's are in its audio's time, stretched with it") {
+    sub::Engine engine;
+    engine.setClipFadeMs(0);
+    const std::string wav = dcWav();
+    engine.loadSource(wav);
+    const uint32_t track = engine.addTrack();
+    sub::ClipDesc c = clip(wav, 0.0, 1.0);
+    c.warp = true;
+    c.segmentBpm = 60.0;  // at 120 BPM: twice as fast
+    c.warpMode = sub::WarpMode::RePitch;
+    c.fadeInSec = 0.2;  // 0.1 s on the timeline
+    engine.setTrackClips(track, {c});
+    const Samples out = engine.renderOffline(0.0, kSampleRate / 2);
+    CHECK_APPROX_REL(at(out, kSampleRate / 20, 0), 0.25, 1e-3);
+    CHECK_APPROX_REL(at(out, kSampleRate / 10, 0), 0.5, 1e-3);
 }
 
 TEST_CASE("a clip waits for its source") {

@@ -33,6 +33,10 @@ std::optional<Clip> piece(const Clip& clip, double start, double end, double tem
     if (duration < kMinClipSec) return std::nullopt;
     part.durationSec = duration;
     part.offsetSec = clip.offsetSec + clip.beatsToSource(start - clip.startBeat, tempo);
+    // Its fades stay at the clip's ends: a piece from inside it has none there.
+    if (start > clip.startBeat + kEps) part.fadeInSec = 0.0;
+    if (end < clip.endBeat(tempo) - kEps) part.fadeOutSec = 0.0;
+    part.fitFades();
     return part;
 }
 
@@ -160,11 +164,15 @@ std::optional<std::pair<Clip, Clip>> splitClip(const Clip& clip, double atBeat, 
     if (leftSec < kMinClipSec || clip.durationSec - leftSec < kMinClipSec) return std::nullopt;
     Clip left = clip;
     left.durationSec = leftSec;
+    left.fadeOutSec = 0.0;  // (the fade out goes with the right half, the fade in stays)
+    left.fitFades();
     Clip right = clip;
     right.id = newId();
     right.startBeat = atBeat;
     right.offsetSec = clip.offsetSec + leftSec;
     right.durationSec = clip.durationSec - leftSec;
+    right.fadeInSec = 0.0;
+    right.fitFades();
     return std::make_pair(std::move(left), std::move(right));
 }
 
@@ -192,6 +200,7 @@ Clip trimStart(const Clip& clip, double newStartBeat, double tempo) {
     trimmed.startBeat = clip.startBeat + clip.sourceToBeats(delta, tempo);
     trimmed.offsetSec = clip.offsetSec + delta;
     trimmed.durationSec = clip.durationSec - delta;
+    trimmed.fitFades();
     return trimmed;
 }
 
@@ -205,7 +214,71 @@ Clip trimEnd(const Clip& clip, double newEndBeat, double tempo) {
     const double available = clip.sourceDurationSec > 0 ? clip.sourceDurationSec - clip.offsetSec
                                                         : std::numeric_limits<double>::infinity();
     trimmed.durationSec = std::max(kMinClipSec, std::min(duration, available));
+    trimmed.fitFades();
     return trimmed;
+}
+
+Clip stretchClip(const Clip& clip, double edgeBeat, bool left, double tempo) {
+    const double start = clip.startBeat, end = clip.endBeat(tempo);
+    double length = left ? std::min(end - edgeBeat, end) : edgeBeat - start;  // (not before beat 0)
+    Clip stretched = clip;
+    if (clip.isMidi()) {
+        if (clip.durationBeats <= 0) return clip;
+        length = std::max(length, kMinMidiClipBeats);
+        // The notes scale about the content's start, so the window stays on the same notes.
+        const double factor = length / clip.durationBeats;
+        for (Note& n : stretched.notes) {
+            n.start *= factor;
+            n.length *= factor;
+        }
+        stretched.offsetBeats = clip.offsetBeats * factor;
+        stretched.durationBeats = length;
+    } else {
+        if (clip.durationSec <= 0) return clip;
+        double bpm = std::clamp(length * 60.0 / clip.durationSec, kMinSegmentBpm, kMaxSegmentBpm);
+        if (left) bpm = std::min(bpm, end * 60.0 / clip.durationSec);
+        if (bpm < kMinSegmentBpm) return clip;  // (too close to beat 0 to grow from its start)
+        length = clip.durationSec * bpm / 60.0;
+        stretched.warp = true;
+        stretched.segmentBpm = bpm;
+    }
+    stretched.startBeat = left ? end - length : start;
+    return stretched;
+}
+
+Clip slipClip(const Clip& clip, double deltaBeats, double tempo) {
+    Clip slipped = clip;
+    if (clip.isMidi()) {
+        double offset = clip.offsetBeats - deltaBeats;
+        if (offset < 0) {  // (as trimStart: the content grows at its start)
+            for (Note& n : slipped.notes) n.start -= offset;
+            offset = 0.0;
+        }
+        slipped.offsetBeats = offset;
+        return slipped;
+    }
+    const double latest = clip.sourceDurationSec > 0 ? std::max(0.0, clip.sourceDurationSec - clip.durationSec)
+                                                     : std::numeric_limits<double>::infinity();
+    slipped.offsetSec = std::clamp(clip.offsetSec - clip.beatsToSource(deltaBeats, tempo), 0.0,
+                                   std::max(latest, 0.0));
+    return slipped;
+}
+
+Clip fadeClip(const Clip& clip, bool out, double beats, double tempo) {
+    if (!clip.isAudio()) return clip;
+    Clip faded = clip;
+    const double room = std::max(0.0, clip.durationSec - (out ? clip.fadeInSec : clip.fadeOutSec));
+    (out ? faded.fadeOutSec : faded.fadeInSec) = std::clamp(clip.beatsToSource(beats, tempo), 0.0, room);
+    faded.fitFades();
+    return faded;
+}
+
+Clip curveFade(const Clip& clip, bool out, double curve) {
+    if (!clip.isAudio()) return clip;
+    Clip curved = clip;
+    (out ? curved.fadeOutCurve : curved.fadeInCurve) = curve;
+    curved.fitFades();
+    return curved;
 }
 
 Clip reverseClip(const Clip& clip, const QString& path, double totalSec) {

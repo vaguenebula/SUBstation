@@ -367,7 +367,7 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
     } else if (!buffers.recorded) {  // (being recorded, unmonitored: silence; the take replaces its clips)
         int nextVoice = 0;
         for (int s = 0; s < numSegments_; ++s) {
-            renderClips(track, segments_[s], snap.clipFadeSamples, buffers, nextVoice, scratch, left, right);
+            renderClips(track, segments_[s], buffers, nextVoice, scratch, left, right);
         }
     }
     ProcessContext context = chunkContext_;  // its own: the inserts move it along the chunk's stretches
@@ -1187,9 +1187,8 @@ void Renderer::assignVoices(const TrackRender& track, const WarpVoiceSet& voices
     }
 }
 
-void Renderer::renderClips(const TrackRender& track, const Segment& segment, int64_t clipFade,
-                           const TrackBuffers& buffers, int& nextVoice, WorkerScratch& scratch, float* left,
-                           float* right) noexcept {
+void Renderer::renderClips(const TrackRender& track, const Segment& segment, const TrackBuffers& buffers,
+                           int& nextVoice, WorkerScratch& scratch, float* left, float* right) noexcept {
     const int64_t segStart = segment.position;
     const int64_t segEnd = segStart + segment.length;
     float* outL = left + segment.offset;
@@ -1222,14 +1221,17 @@ void Renderer::renderClips(const TrackRender& track, const Segment& segment, int
             srcBase = from;
         }
 
-        const int64_t fade = std::min(clipFade, clip.length / 2);
         for (int64_t t = from; t < to; ++t) {
             const int64_t inClip = t - clip.start;
             float g = clip.gain;
-            if (fade > 0) {
-                if (inClip < fade) g *= static_cast<float>(inClip) / fade;
-                const int64_t toEnd = clip.length - inClip;
-                if (toEnd < fade) g *= static_cast<float>(toEnd) / fade;
+            if (inClip < clip.fadeIn) {
+                const auto x = static_cast<float>(static_cast<double>(inClip) / static_cast<double>(clip.fadeIn));
+                g *= automationShape(x, clip.fadeInCurve);
+            }
+            const int64_t toEnd = clip.length - inClip;
+            if (toEnd < clip.fadeOut) {
+                const auto x = static_cast<float>(static_cast<double>(toEnd) / static_cast<double>(clip.fadeOut));
+                g *= automationShape(x, clip.fadeOutCurve);
             }
             const int64_t src = t - srcBase;
             const int64_t dst = t - segStart;

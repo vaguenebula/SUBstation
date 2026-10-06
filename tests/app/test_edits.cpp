@@ -1,5 +1,5 @@
-// Pure clip maths: overlaps, cuts, trims, splits, tempo fitting, warping and
-// reversing.
+// Pure clip maths: overlaps, cuts, trims, splits, tempo fitting, warping,
+// reversing, stretching and slipping clips, and their fades.
 
 #include "TestSupport.h"
 
@@ -193,6 +193,123 @@ private Q_SLOTS:
         QCOMPARE(back.path, QStringLiteral("a.wav"));
         QCOMPARE(back.offsetSec, 0.5);
         QCOMPARE(back.reversedFrom, QString());
+    }
+
+    void stretchingAnAudioClipWarpsIt() {
+        // Two beats of unwarped audio (1 s at 120 BPM), its end dragged to beat 4: it plays at half speed.
+        const Clip c = clip(0, 2, 0.5, 10.0);
+        Clip s = edits::stretchClip(c, 4.0, false, kTempo);
+        QVERIFY(s.isWarped());
+        QVERIFY(near(s.segmentBpm, 240.0));
+        QCOMPARE(s.startBeat, 0.0);
+        QVERIFY(near(s.endBeat(kTempo), 4.0));
+        QCOMPARE(s.durationSec, c.durationSec);  // the same audio
+        QCOMPARE(s.offsetSec, c.offsetSec);
+        // By its start: the end stays.
+        s = edits::stretchClip(clip(4, 2), 5.0, true, kTempo);
+        QVERIFY(near(s.startBeat, 5.0));
+        QVERIFY(near(s.endBeat(kTempo), 6.0));
+        QVERIFY(near(s.segmentBpm, 60.0));
+        // Warped clips stretch from their segment BPM.
+        s = edits::stretchClip(warped(0, 4, 60.0), 2.0, false, kTempo);
+        QVERIFY(near(s.segmentBpm, 30.0));
+        QVERIFY(near(s.endBeat(kTempo), 2.0));
+        // As far as segment BPMs go, and never before beat 0.
+        s = edits::stretchClip(c, 1000.0, false, kTempo);
+        QVERIFY(near(s.segmentBpm, kMaxSegmentBpm));
+        s = edits::stretchClip(c, 0.0001, false, kTempo);
+        QVERIFY(near(s.segmentBpm, kMinSegmentBpm));
+        s = edits::stretchClip(clip(1, 2), -10.0, true, kTempo);
+        QVERIFY(near(s.startBeat, 0.0));
+        QVERIFY(near(s.endBeat(kTempo), 3.0));
+        // Its fades are in its audio: they stretch with it.
+        Clip faded = c;
+        faded.fadeInSec = 0.25;  // half a beat
+        s = edits::stretchClip(faded, 4.0, false, kTempo);
+        QVERIFY(near(s.fadeInBeats(kTempo), 1.0));
+    }
+
+    void stretchingAMidiClipScalesItsNotes() {
+        const Clip c = Clip::midi(QStringLiteral("m"), QStringLiteral("m"), 4.0, 2.0, 1.0,
+                                  {Note{60, 1.0, 0.5, 100}, Note{62, 2.5, 0.5, 90}});
+        Clip s = edits::stretchClip(c, 8.0, false, kTempo);  // twice as long
+        QCOMPARE(s.startBeat, 4.0);
+        QCOMPARE(s.durationBeats, 4.0);
+        QCOMPARE(s.offsetBeats, 2.0);
+        QCOMPARE(s.playedNotes().size(), size_t{2});
+        QCOMPARE(s.playedNotes()[0].start, 4.0);  // the first note still at the clip's start
+        QCOMPARE(s.playedNotes()[0].end, 5.0);
+        QCOMPARE(s.playedNotes()[1].start, 7.0);
+        // By its start, half as long: the notes keep to the clip's end.
+        s = edits::stretchClip(c, 5.0, true, kTempo);
+        QCOMPARE(s.startBeat, 5.0);
+        QCOMPARE(s.durationBeats, 1.0);
+        QCOMPARE(s.playedNotes()[0].start, 5.0);
+        QCOMPARE(s.playedNotes()[1].start, 5.75);
+        QCOMPARE(s.playedNotes()[1].end, 6.0);
+    }
+
+    void slippingMovesTheContentInsideTheClip() {
+        // An audio clip at beats 4-6 playing 1-2 s of a 3 s file.
+        const Clip c = clip(4, 2, 1.0, 3.0);
+        Clip s = edits::slipClip(c, 1.0, kTempo);  // the audio half a second later on the timeline
+        QCOMPARE(s.startBeat, c.startBeat);
+        QCOMPARE(s.durationSec, c.durationSec);
+        QVERIFY(near(s.offsetSec, 0.5));
+        s = edits::slipClip(c, -1.0, kTempo);
+        QVERIFY(near(s.offsetSec, 1.5));
+        // Not past either end of the file.
+        QCOMPARE(edits::slipClip(c, 10.0, kTempo).offsetSec, 0.0);
+        QVERIFY(near(edits::slipClip(c, -10.0, kTempo).offsetSec, 2.0));
+        // A warped clip measures its audio at its segment BPM.
+        QVERIFY(near(edits::slipClip(warped(0, 2, 60.0, {}, 10.0), -1.0, kTempo).offsetSec, 1.0));
+
+        // A MIDI clip's notes move under it, anywhere.
+        const Clip m = Clip::midi(QStringLiteral("m"), QStringLiteral("m"), 4.0, 4.0, 0.0, {Note{60, 1.0, 1.0, 100}});
+        s = edits::slipClip(m, 1.0, kTempo);
+        QCOMPARE(s.startBeat, 4.0);
+        QCOMPARE(s.durationBeats, 4.0);
+        QCOMPARE(s.playedNotes().front().start, 6.0);
+        s = edits::slipClip(m, -0.5, kTempo);
+        QCOMPARE(s.playedNotes().front().start, 4.5);
+        s = edits::slipClip(m, -2.0, kTempo);  // out of the window: kept, not played
+        QVERIFY(s.playedNotes().empty());
+        QCOMPARE(s.notes.size(), size_t{1});
+    }
+
+    void fadesStayAtTheClipsEnds() {
+        Clip c = clip(0, 8, 0.0, 100.0);  // 4 s
+        c = edits::fadeClip(c, false, 1.0, kTempo);  // half a second in
+        c = edits::fadeClip(c, true, 2.0, kTempo);   // a second out
+        c = edits::curveFade(c, true, 0.5);
+        QVERIFY(near(c.fadeInSec, 0.5));
+        QVERIFY(near(c.fadeOutSec, 1.0));
+        QCOMPARE(c.fadeOutCurve, 0.5);
+        // Held to what the other leaves, never below nothing.
+        QVERIFY(near(edits::fadeClip(c, false, 100.0, kTempo).fadeInSec, 3.0));
+        QCOMPARE(edits::fadeClip(c, false, -1.0, kTempo).fadeInSec, 0.0);
+        QCOMPARE(edits::curveFade(c, false, 5.0).fadeInCurve, 1.0);
+        // Split: the left half keeps the fade in, the right half the fade out.
+        const auto parts = edits::splitClip(c, 4.0, kTempo);
+        QVERIFY(parts);
+        QVERIFY(near(parts->first.fadeInSec, 0.5));
+        QCOMPARE(parts->first.fadeOutSec, 0.0);
+        QCOMPARE(parts->second.fadeInSec, 0.0);
+        QVERIFY(near(parts->second.fadeOutSec, 1.0));
+        QCOMPARE(parts->second.fadeOutCurve, 0.5);
+        // A stretch cut from the middle has none; trimmed, they stay (held to the clip).
+        const auto middle = edits::sliceRange({c}, 2.0, 4.0, kTempo);
+        QCOMPARE(middle.size(), size_t{1});
+        QCOMPARE(middle[0].fadeInSec, 0.0);
+        QCOMPARE(middle[0].fadeOutSec, 0.0);
+        Clip t = edits::trimEnd(c, 6.0, kTempo);
+        QVERIFY(near(t.fadeOutSec, 1.0));
+        t = edits::trimEnd(c, 1.0, kTempo);  // half a second left: the fades share it as they were (1:2)
+        QVERIFY(near(t.fadeInSec + t.fadeOutSec, 0.5));
+        QVERIFY(near(t.fadeOutSec, 2 * t.fadeInSec));
+        // MIDI clips have none.
+        Clip m = Clip::midi(QStringLiteral("m"), QStringLiteral("m"), 0.0, 4.0);
+        QCOMPARE(edits::fadeClip(m, false, 1.0, kTempo), m);
     }
 
     void subtractIntervals() {

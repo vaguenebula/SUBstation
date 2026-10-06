@@ -27,7 +27,6 @@ graph is spread over threads in [scheduler.md](scheduler.md).
 - `sampleRate`, `tempo`, `timeSigNum`/`timeSigDen`, `samplesPerBeat()`.
 - The loop (`loopEnabled`, `loopStart`, `loopEnd`): enabled only if the loop is at least 256
   samples long.
-- `clipFadeSamples`: the fade at each clip edge (`setClipFadeMs`, 4 ms by default, 0 to 100 ms).
 - `tracks`: `TrackRender`s in routing order, every track after those that feed it.
 - `edges`: the routing graph's edges (`EdgeRender`), by source in snapshot order;
   `masterInputs`: the edges the master sums, in order.
@@ -158,8 +157,17 @@ source's buffer by its destination (`edgeSignal()`).
   `acquireVoice()`): the voice that played the clip last if it is still free, else the one idle
   longest. More stretched clips at once than voices: the extra ones stay silent.
 
-Then gain, a linear fade at both ends (`clipFadeSamples`, at most half the clip), and the clip's
-pan as balance gains. Details of warping and the voices are in [warp.md](warp.md).
+Then gain, the clip's fades (`ClipRender::fadeIn` / `fadeOut`, samples from each end, each
+shaped by its curve with `automationShape()`), and the clip's pan as balance gains. Details of
+warping and the voices are in [warp.md](warp.md).
+
+The snapshot works out each clip's fades: its own (`ClipDesc::fadeInSec` / `fadeOutSec`, in source
+seconds, so on the timeline they follow the clip's speed; shortened in proportion where together
+they would be longer than it), or, at an edge without one, a short linear fade against clicks
+(`setClipFadeMs`, 4 ms by default, 0 to 100 ms, at most half the clip, giving way to the other
+edge's own fade), but only where the edge cuts into the file: none where the clip starts at the
+file's first frame or plays to its last (to a frame or two), so a one-shot's attack is heard as it
+is.
 
 ### Notes
 

@@ -264,6 +264,15 @@ QJsonObject clipToJson(const Clip& clip, const QString& base) {
     data[QStringLiteral("transpose")] = clip.transpose;
     data[QStringLiteral("detune")] = clip.detune;
     data[QStringLiteral("pan")] = clip.pan;
+    // Fades only where there are some (projects without them read the same).
+    if (clip.fadeInSec > 0) {
+        data[QStringLiteral("fade_in_sec")] = clip.fadeInSec;
+        data[QStringLiteral("fade_in_curve")] = clip.fadeInCurve;
+    }
+    if (clip.fadeOutSec > 0) {
+        data[QStringLiteral("fade_out_sec")] = clip.fadeOutSec;
+        data[QStringLiteral("fade_out_curve")] = clip.fadeOutCurve;
+    }
     if (!clip.reversedFrom.isEmpty()) {
         data[QStringLiteral("reversed_from")] = clip.reversedFrom;
         data[QStringLiteral("reversed_from_relative")] = relative(clip.reversedFrom, base);
@@ -538,6 +547,11 @@ Clip audioClipFromJson(const QJsonValue& value, const QString& base) {
     clip.transpose = c.contains(QStringLiteral("transpose")) ? toSmallInt(c.value(QStringLiteral("transpose"))) : 0;
     clip.detune = floatOr(c, QStringLiteral("detune"), 0.0);
     clip.pan = floatOr(c, QStringLiteral("pan"), 0.0);
+    clip.fadeInSec = floatOr(c, QStringLiteral("fade_in_sec"), 0.0);
+    clip.fadeInCurve = floatOr(c, QStringLiteral("fade_in_curve"), 0.0);
+    clip.fadeOutSec = floatOr(c, QStringLiteral("fade_out_sec"), 0.0);
+    clip.fadeOutCurve = floatOr(c, QStringLiteral("fade_out_curve"), 0.0);
+    clip.fitFades();
     if (truthy(c.value(QStringLiteral("reversed_from")))) {
         clip.reversedFrom =
             resolveClipPath(c, base, QStringLiteral("reversed_from"), QStringLiteral("reversed_from_relative"));

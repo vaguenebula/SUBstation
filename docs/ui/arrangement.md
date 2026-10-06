@@ -23,7 +23,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 | [ArrangementItem](../../ui/src/arrangement/ArrangementItem.h) | The base of the drawn parts: `session` and `arrangement` properties, `repaint()` |
 | [ArrangementRuler](../../ui/src/arrangement/ArrangementRuler.h) | The loop brace and the scrub area |
 | [ArrangementLanes](../../ui/src/arrangement/ArrangementLanes.h) | The track lanes: painting clips, group summaries, the selection, markers; hit-testing; mouse, wheel, keys, context menus, drops |
-| [ClipGestures](../../ui/src/arrangement/ClipGestures.h), [Gesture.h](../../ui/src/arrangement/Gesture.h) | The clip gestures: `MoveRangeGesture`, `TrimGesture` (both heard as they drag), `TimeSelectGesture`, `ExtendGesture` (Shift-click), `PanGesture`, `selectRows()`; the `Gesture` base |
+| [ClipGestures](../../ui/src/arrangement/ClipGestures.h), [Gesture.h](../../ui/src/arrangement/Gesture.h) | The clip gestures: `MoveRangeGesture`, and the one-clip edits on `ClipEditGesture`: `TrimGesture`, `StretchGesture` (Alt on an edge), `SlipGesture` (Ctrl+Shift on a body), `FadeGesture` and `FadeCurveGesture` (F held) (all heard as they drag); `TimeSelectGesture`, `ExtendGesture` (Shift-click), `PanGesture`, `selectRows()`; the `Gesture` base |
 | [Envelopes](../../ui/src/arrangement/Envelopes.h) | Automation lanes drawn and edited: `EnvelopeArea`, `Hover`, `EnvelopeLook`, `LanesHost`, and in `envelopes::` hit-testing, `trace()`, `press()`, `hover()`, the menu, drawing; the automation gestures |
 | [BusLane](../../ui/src/arrangement/BusLane.h) | The lane of a strip without clips: a return's or the master's |
 | [LiveTakes](../../ui/src/arrangement/LiveTakes.h), [ArrangementPlayhead](../../ui/src/arrangement/ArrangementPlayhead.h) | The takes being recorded and the playhead: items of their own over the lanes |
@@ -34,7 +34,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 | [GridInfo.qml](../../ui/qml/arrangement/GridInfo.qml) | The corner showing the grid's size; a click toggles snapping |
 | [MenuEntries](../../ui/src/arrangement/MenuEntries.h), [ArrangementMenu.qml](../../ui/qml/arrangement/ArrangementMenu.qml), [ArrangementMenuItem.qml](../../ui/qml/arrangement/ArrangementMenuItem.qml) | Menus worked out in C++ and shown by QML |
 | [WaveformCache](../../ui/src/arrangement/WaveformCache.h) | Waveform tiles: columns per pixel, an LRU of them |
-| [Cursors](../../ui/src/arrangement/Cursors.h) | The bracket cursors for trimming and the add-a-breakpoint cursor |
+| [Cursors](../../ui/src/arrangement/Cursors.h) | The bracket cursors for trimming (and, crossed by a two-headed arrow, for stretching) and the add-a-breakpoint cursor |
 
 ## Layout
 
@@ -245,6 +245,14 @@ decoded source it says "Loading…", or "Missing file" over a red tint (`bridge.
 clip: the selected area's tint does it (under a folded track's bars, which show they are selected by a white
 outline).
 
+An audio clip's fades (`drawFades()`, over its waveform) are each a curve from the body's bottom (silence) to its top
+(full level), 1 px inside it, every `kSamplePixels` along (`Clip::fadeGain`, so it bends as the engine plays it),
+with a veil (`kFadeVeil`) between the curve and the body's top over what the fade takes away. While F is held
+(`fadeKeyHeld()`), or a fade gesture drags, the bodies at least `kMinFadeBody` (12 px) high show their handles
+(`fadeHandles()`): a `kFadeHandle` (7 px) square at the end of each fade, kept inside the clip (at its top corners
+while it has none), and on each fade at least `kMinCurveFade` (12 px) wide a dot (`kFadeDot`) where its curve is
+halfway; the one under the mouse in the accent colour.
+
 The playhead and the takes being recorded change every frame, so they are items of their own over the lanes:
 
 - [ArrangementPlayhead](../../ui/src/arrangement/ArrangementPlayhead.h): a line while playing (stopped, only the
@@ -267,6 +275,9 @@ The playhead and the takes being recorded change every frame, so they are items 
   aren't trimming this one. Automation lanes below a track never hit clips.
 - `inClipBand(pos)`: the top band of a lane (the title bar's height), or all of a short lane. Whether a drag selects
   clips or a lane range depends on this.
+- `hitFade(pos)` → `FadeHit{trackId, clip, out, curve}`: an audio clip's fade handle under `pos`, `kFadeGrab` (4 px)
+  around it counting too: the dots first (inside the fades, clear of the squares), then the nearer square. Not on
+  folded tracks' bars, MIDI clips, or bodies lower than `kMinFadeBody`. The lanes only ask while F is held.
 - `envelopeAreas()` / `envelopeAreaAt(pos)`: the automation lanes showing, as `EnvelopeArea`s (see
   [automation lanes](#automation-lanes)).
 
@@ -276,8 +287,12 @@ The playhead and the takes being recorded change every frame, so they are items 
 
 ```
 Ctrl+Alt held                        → PanGesture (hand scrolling)
+F held, on a fade handle             → select that clip; FadeGesture (a square) or
+                                       FadeCurveGesture (a dot)
 on an automation lane                → envelopes::press(...)
-on a clip's trim handle              → select that clip; TrimGesture
+on a clip's trim handle              → select that clip; StretchGesture with Alt
+                                       (not Ctrl), else TrimGesture
+Ctrl+Shift (not Alt) on a clip's body→ select that clip; SlipGesture
 inside the selected clip range       → MoveRangeGesture (a click without dragging
   (in the clip band of a row it shows   selects as a click elsewhere would)
   over, no Shift)
@@ -295,14 +310,22 @@ A press while a gesture is still there (its release never came) ends what that g
 (`bridge.endClipPreview()`) first. The press a double-click starts with is ignored (the double-click stands for it).
 
 `mouseMoveEvent` forwards to the gesture, or updates the cursor and the hover (`updateHover()`: Ableton's `[`/`]`
-bracket cursors from `trimCursor()`, a pointing hand over titles and inside the clip range, an I-beam elsewhere (a
-folded track's lane too), the open hand while Ctrl+Alt is held, and the automation cursors). Key presses and releases
-update the cursor too, so holding Ctrl+Alt shows the hand without moving the mouse. `mouseReleaseEvent` calls the
-gesture's `finish()`; losing the mouse grab (a popup) calls its `cancel()`.
+bracket cursors from `trimCursor()` (with Alt, `stretchCursor()`: the bracket crossed by a two-headed arrow, and
+the edge lit in the accent colour: `hoverStretch()`), a pointing hand over titles and inside the clip range, an
+I-beam elsewhere (a folded track's lane too), the open hand while Ctrl+Alt is held, a horizontal resize cursor over
+a clip's body with Ctrl+Shift and over a fade's square with F, a vertical one over a fade's dot, and the automation
+cursors). The lanes watch the window's keys wherever its focus is (`eventFilter()`, an application event filter
+taking each key event where the window gets it): modifiers update the cursor, so holding Ctrl+Alt shows the hand
+(and Alt on an edge the stretch) without moving the mouse, and F sets `fadeKeyHeld()`. F counts without Ctrl, Alt
+or Meta, not while something that takes text has the focus (`ComputerKeyboard::focusTakesText()`), and not while
+the computer MIDI keyboard plays it; its release, or the window losing the focus, lets go. `mouseReleaseEvent` calls
+the gesture's `finish()`; losing the mouse grab (a popup) calls its `cancel()`.
 
 Double-click on a clip selects it (unless it was among the selected clips) and asks the `Arrangement` to open the
-selected clips, it first (`openClips()` → `Session.arrangement.requestClipView()`). On an automation lane a
-double-click starts another `envelopes::press()`: each click of it counts.
+selected clips, it first (`openClips()` → `Session.arrangement.requestClipView()`). With F held, a double-click on
+a fade's dot straightens it (`edits::curveFade(..., 0)`) and on its square removes the fade (`edits::fadeClip(...,
+0)`), each one undo step. On an automation lane a double-click starts another `envelopes::press()`: each click of it
+counts.
 
 Wheel: Alt resizes (or folds) the track; Ctrl zooms around the mouse (1.2 a notch); Shift, or a horizontal wheel,
 scrolls sideways (80 px a notch); otherwise it scrolls vertically (48 px a notch). The header column scrolls
@@ -321,7 +344,12 @@ step and the model isn't touched while dragging.
 | Gesture | Does |
 |---|---|
 | `MoveRangeGesture` | Drag a clip range (a selected clip is one): moves it, Ctrl copies, Alt off the grid. Up to `kDragThreshold` (4 px) it is still a click (calls `onClick`). At the press it works out, per track, the clips inside the range cut at its edges (the pieces that move) and what stays. While dragging: the time delta snapped against the range's start, and the track delta clamped by the editor (clips only move onto tracks of their kind); whenever they change, `editor.movedRange` (what the move would make of the clips, and of frozen tracks' frozen audio) goes to `bridge.previewClips`, so the clips are heard where they would land. A frozen track's clips are all drawn by the gesture: the stretch replaces everything where it lands, as its audio does. The selection is drawn over the rows it covered, where they go. `finish()` calls `editor.moveRange(...)` (refused onto or off a frozen track: the status line says why, and it stays), `bridge.endClipPreview()`, and selects where it landed, over the same rows. |
-| `TrimGesture` | Drag a trim handle: the clip trimmed to the snapped beat, previewed in the engine as it changes; `finish()` calls `editor.replaceClip(trackId, result, "Trim Clip")`, ends the preview and reselects the clip so the selection follows its new edges. |
+| `ClipEditGesture` | The base of the gestures that edit one clip: a subclass works out the clip as the drag leaves it and hands it to `update()`, which previews the track in the engine when it changes (the clip winning overlaps: `resolveOverlaps`) and draws it as a ghost in place of the clip; `finish()` calls `editor.replaceClip(trackId, result, text)` (refused on a frozen track: the status line says why), ends the preview and reselects the clip so the selection follows its new edges. |
+| `TrimGesture` | Drag a trim handle: the clip trimmed to the snapped beat (`edits::trimStart` / `trimEnd`); "Trim Clip". |
+| `StretchGesture` | Alt-drag a trim handle: the clip stretched by that edge to the snapped beat (Shift: off the grid, as Alt started it), the other edge staying (`edits::stretchClip`: an audio clip is warped to a new segment BPM, a MIDI clip's notes scaled); "Stretch Clip". |
+| `SlipGesture` | Ctrl+Shift-drag a clip's body: its content slides by the mouse's movement in whole grid steps (Alt while dragging: freely; `edits::slipClip`), after `kDragThreshold`; "Move Clip Content". |
+| `FadeGesture` | F held, drag a fade's square: the fade gets as much longer or shorter as the mouse moves, off the grid (`edits::fadeClip`), its length in a readout (`fadeText()`); "Fade In" / "Fade Out". |
+| `FadeCurveGesture` | F held, drag a fade's dot up or down: its curve bends by the movement over `kCurvePixels` (Shift: a tenth; `edits::curveFade`); "Fade Curve". |
 | `TimeSelectGesture` | Click: the insert marker (set at the press). Drag: a range over the rows from where it started to where it is (folded and frozen ones too), and what is in the groups among them: always a clip range (the clips it touches), wherever in the lanes it goes, shown over the rows it crosses (`selectRows()`). |
 | `ExtendGesture` | Shift-press: the selection extended to the mouse, and on while it drags: a clip range over the rows from its own to the mouse's (`selectRows()`), a lane range over the automation lanes from its own to the one under the mouse (or the nearest: `envelopes::selectLaneRange()`), over the time between; with no time selection, a clip range from the insert marker on the selected track. None (a plain press follows) if there is nothing to extend. |
 | `PanGesture` | Ctrl+Alt drag: scrolls both ways. |
@@ -612,6 +640,7 @@ from it. The clip view draws its waveforms without a cache ([piano-roll.md](pian
 |---|---|
 | [test_ui_arrangement.cpp](../../tests/app/test_ui_arrangement.cpp) | Dragging and Ctrl-dragging clips and undo, trimming, selecting below the tracks, the clip body setting the insert marker, Shift-click ranges, drags ending in the clip band, clips heard where a drag (or trim) takes them, the ruler's loop brace and scrub zoom, zoom, scroll and follow, Alt+wheel resizing and folding, Ctrl+Alt drags, files, devices and presets dropped, double-click opening the clip view, the lanes' menus, MIDI clips, reversing, the live take reaching the playhead |
 | [test_ui_arrangement_automation.cpp](../../tests/app/test_ui_arrangement_automation.cpp) | A, parameters showing their lanes, clicking on the line, dragging and bending breakpoints, segments and steps, deleting, time ranges (clear, duplicate, move), the lanes' menus, overriding and re-enabling, controls following automation, the master's lane, lanes below tracks, saving, automation moving with a dragged clip, lane ranges dragged down over several tracks' lanes and extended with Shift-click, drags reaching up into the clips |
+| [test_ui_arrangement_clips.cpp](../../tests/app/test_ui_arrangement_clips.cpp) | Alt on a clip's edge stretching it (the cursor as Alt is pressed, heard while dragging, Shift off the grid, a MIDI clip's notes), Ctrl+Shift on its body sliding its audio or notes (by grid steps, to the file's ends, Alt freely), F showing the fade handles and dragging fades and their curves (heard as they go), double-clicks straightening and removing them, F playing a note instead while the computer MIDI keyboard is on, MIDI clips without fades |
 | [test_ui_arrangement_selection.cpp](../../tests/app/test_ui_arrangement_selection.cpp) | A group's selection shown over the rows it covers and acting on what is in it, drags over every kind of track (folded, frozen, folded groups), Shift-clicks extending clip ranges, a frozen track's stretch dragged with its frozen audio and a move off it refused |
 | [test_ui_arrangement_tracks.cpp](../../tests/app/test_ui_arrangement_tracks.cpp) | Groups (folding, the group's header, dragging headers into and out of groups, folded tracks' clips as bars and their lanes as grids, cut, copy and paste), returns and sends, following the playhead while scrolling by hand, the header's controls (volume, solo, the activator, arming, renaming in place), the input and monitoring menus with resampling and MIDI inputs, sidechains greying out sends, the track menu's freezing and flattening, resizing a track by its bottom edge |
 | [test_session_edit.cpp](../../tests/app/test_session_edit.cpp) | The area commands and the clipboard as the session drives them: splitting, selecting all, duplicating and deleting the selected area, cutting, copying and pasting clips, automation and tracks, reversing (at once and in the background) |

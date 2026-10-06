@@ -3,7 +3,9 @@
 //
 // They edit audio and MIDI clips alike: each is a window onto its content (the
 // audio file, the notes), and editing moves the window's edges while the
-// content stays where it is on the timeline.
+// content stays where it is on the timeline (but stretchClip and slipClip,
+// which move the content). An audio clip's fades stay at its ends: a piece cut
+// from inside it has none there, and they are held to its length (fitFades).
 
 #include "model/Clip.h"
 
@@ -50,6 +52,24 @@ std::optional<std::pair<Clip, Clip>> splitClip(const Clip& clip, double atBeat, 
 Clip trimStart(const Clip& clip, double newStartBeat, double tempo);
 // Move the right edge, limited by the end of the source file (MIDI clips can grow freely).
 Clip trimEnd(const Clip& clip, double newEndBeat, double tempo);
+// Stretch the clip by an edge (Alt-dragging it): that edge (`left`: the start)
+// goes to `edgeBeat`, the other stays, and the clip plays the same audio (or
+// notes) faster or slower to fill the new length. An audio clip is warped to
+// do it, its segment BPM set (kMinSegmentBpm..kMaxSegmentBpm limit how far it
+// stretches); a MIDI clip's notes are scaled with it. It never starts before
+// beat 0.
+Clip stretchClip(const Clip& clip, double edgeBeat, bool left, double tempo);
+// Slide the clip's content by `deltaBeats` (Ctrl+Shift-dragging it): the clip
+// stays where it is, as long as it is, and plays what is `deltaBeats` earlier
+// (or, negative, later) in its audio or notes. Audio stops at the ends of its
+// file; notes can go anywhere (revealing time before the first content beat
+// moves them along, as trimStart does).
+Clip slipClip(const Clip& clip, double deltaBeats, double tempo);
+// An audio clip with its fade in (`out`: its fade out) `beats` long, held to
+// what its other fade leaves of it; a MIDI clip as it is.
+Clip fadeClip(const Clip& clip, bool out, double beats, double tempo);
+// ... and that fade's curve (-1..1; none while the fade is).
+Clip curveFade(const Clip& clip, bool out, double curve);
 // `clip` playing `path` (its file reversed, `totalSec` long) instead: the same
 // stretch of audio, backwards, in the same place on the timeline. Going back to
 // the file it was reversed from forgets it; otherwise it remembers its file, to
