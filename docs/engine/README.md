@@ -30,9 +30,11 @@ includes the engine's headers.
 | [RenderJob.h](../../engine/src/RenderJob.h) | A render on a thread of its own: its progress, `cancel()`, `finish()`. |
 | [Snapshot.h](../../engine/src/Snapshot.h) | The snapshot's types. See [rendering.md](rendering.md). |
 | [Renderer.h](../../engine/src/Renderer.h) / [.cpp](../../engine/src/Renderer.cpp) | Turns a snapshot into audio. See [rendering.md](rendering.md). |
-| [RendererCache.cpp](../../engine/src/RendererCache.cpp) | Background freezing's part of each chunk: whether a strip plays from its cache, capture, seams. See [background-freeze.md](background-freeze.md#phase-1-as-built). |
+| [RendererCache.cpp](../../engine/src/RendererCache.cpp) | Background freezing's part of each chunk: whether a strip plays from its cache, capture, seams; in the background, convergence. See [background-freeze.md](background-freeze.md#phase-1-as-built). |
+| [EngineBackground.cpp](../../engine/src/EngineBackground.cpp) | Background rendering's main-thread side: shadow instances of devices, the background renderer's snapshot, `renderInBackground()`. See [background-freeze.md](background-freeze.md#phase-2-as-built). |
 | [EngineCache.cpp](../../engine/src/EngineCache.cpp) | Background freezing's edit side: what changed each strip's cache (versions, dirty ranges), devices' own changes, idle resets, its API. |
-| [cache/StripCache.h](../../engine/src/cache/StripCache.h), [cache/CacheStore.h](../../engine/src/cache/CacheStore.h) / [.cpp](../../engine/src/cache/CacheStore.cpp) | A strip's cache point, its blocks and dirty log; the store's thread that publishes, trims and drops blocks within a memory budget. |
+| [cache/StripCache.h](../../engine/src/cache/StripCache.h), [cache/CacheStore.h](../../engine/src/cache/CacheStore.h) / [.cpp](../../engine/src/cache/CacheStore.cpp) | A strip's cache point (a lane for each renderer), its blocks and dirty log; the store's thread that publishes, trims and drops blocks within a memory budget. |
+| [cache/BackgroundRenderer.h](../../engine/src/cache/BackgroundRenderer.h) / [.cpp](../../engine/src/cache/BackgroundRenderer.cpp) | The background renderer: a second `Renderer` on a thread at the lowest priority, rendering shadows into the cache where the planner says, as the governor allows. |
 | [Routing.h](../../engine/src/Routing.h), [Rack.h](../../engine/src/Rack.h) | The routing graph, delay compensation, racks. See [routing.md](routing.md). |
 | [Scheduler.h](../../engine/src/Scheduler.h) / [.cpp](../../engine/src/Scheduler.cpp) | The task graph and worker threads. See [scheduler.md](scheduler.md). |
 | [Transport.h](../../engine/src/Transport.h) | `TransportCommand`, `PreviewNote` and `SharedState`: what the API threads and the audio thread share. |
@@ -379,4 +381,4 @@ state without a device, chains and moves), [test_render_jobs.cpp](../../tests/en
 | [warp.md](warp.md) | `Warp.cpp`, stretch voices, the Re-Pitch resampler, `AudioSource` decoding and peaks |
 | [devices.md](devices.md) | `Processor.h`, `BuiltinProcessor`, `BuiltinRegistry`, the built-in devices; adding a device |
 | [plugins.md](plugins.md) | VST3 hosting, the threading handshake, state, latency, the CLAP plan |
-| [background-freeze.md](background-freeze.md) | Caching unchanged strips' output and playing it instead of their devices: phase 1 (live capture and playback: `EngineCache.cpp`, `RendererCache.cpp`, `cache/`) implemented, off by default; background rendering and the rest a design |
+| [background-freeze.md](background-freeze.md) | Caching unchanged strips' output and playing it instead of their devices: phases 1 (live capture and playback: `EngineCache.cpp`, `RendererCache.cpp`, `cache/`) and 2 (background rendering with shadow instances: `EngineBackground.cpp`, `cache/BackgroundRenderer.*`) implemented, off by default; the rest a design |

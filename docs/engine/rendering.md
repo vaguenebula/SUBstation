@@ -350,7 +350,10 @@ from the UI).
   the master's epilogue skip a strip's inputs, clips and devices while its cache plays
   (`beginCacheStep()` / `endCacheStep()` in [RendererCache.cpp](../../engine/src/RendererCache.cpp)
   around steps 1 to 3). Everything after the devices (taps before the fader, the fader, the
-  edges) runs as ever, on what the cache put out.
+  edges) runs as ever, on what the cache put out. A second `Renderer`, the background renderer
+  ([cache/BackgroundRenderer.h](../../engine/src/cache/BackgroundRenderer.h)), renders a snapshot of
+  shadow instances with the same code (`renderBackground()`, in each cache point's background
+  lane: `setCacheLane()`); its position can be before 0 (`preRollFrom()`), where it renders silence.
 - `takeResets()` returning false means "no device switched on": the chain is skipped entirely,
   but its device taps are still filled.
 - The loop needs at least 256 samples, and at most 15 wraps fit in a chunk.

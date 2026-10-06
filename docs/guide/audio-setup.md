@@ -36,14 +36,18 @@ same threads.
 
 ### Background freezing
 
-With *Background freezing* on, what a track plays is kept in memory as it plays, and the
-next time that part plays unchanged the track plays it from there instead of running its
-plug-ins: a section heard again costs far less CPU. Nothing to do: an edit plays at once,
-and only the part of the song it changes plays live again (and is kept anew). The track
-shown in the device view ([devices.md](devices.md)) always plays live, so its meters and
-displays move. It uses up to 1 GB of memory. One difference you may hear: stopping while a
-track plays from its cache cuts its reverb or delay tail. The environment variable
-`SUBSTATION_BACKGROUND_FREEZE` (`1` or `0`) overrides the checkbox.
+With *Background freezing* on, what a track plays is kept in memory, and when that part
+plays again unchanged the track plays it from there instead of running its plug-ins. It is
+kept as it plays, and also worked out ahead of time, in the background, with CPU nothing
+else is using (the parts of the song that haven't played since they changed, the next few
+seconds after the playhead first), so even the first time through, most of the song plays
+from memory. To do that it loads a second copy of each plug-in, a second after your last
+edit, one at a time: plug-ins take twice the memory. Nothing to do: an edit plays at once,
+and only the part of the song it changes plays live again until the background has caught
+up. The track shown in the device view ([devices.md](devices.md)) always plays live, so its
+meters and displays move. It uses up to 1 GB of memory for what it keeps. One difference
+you may hear: stopping while a track plays from its cache cuts its reverb or delay tail. The
+environment variable `SUBSTATION_BACKGROUND_FREEZE` (`1` or `0`) overrides the checkbox.
 
 ## ASIO
 

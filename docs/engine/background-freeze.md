@@ -1,8 +1,8 @@
 # Background freezing (design)
 
-**Status: phase 1 (live capture and playback) is implemented, off by default:
-[Phase 1, as built](#phase-1-as-built) says what it does and where it departs from the design. The
-rest is a design.** The measurements it cites were taken with
+**Status: phases 1 (live capture and playback) and 2 (background rendering) are implemented, off by
+default: [Phase 1, as built](#phase-1-as-built) and [Phase 2, as built](#phase-2-as-built) say what
+they do and where they depart from the design. The rest is a design.** The measurements it cites were taken with
 `benchmarks/plugin_cpu_bench.cpp` on the `perf-experiments` branch (real VST3 plug-ins: LSP, Dragonfly,
 ZamAudio, DISTRHO; a 4-core Linux VM), and its instrumentation (per-device timing, silence detection) is
 there too.
@@ -483,9 +483,9 @@ from the design above:
   devices that run, and while it resets them (a few milliseconds) the cache plays on, good or not,
   rather than a plug-in that would let its input through.
 - **Not done** (later phases): shadows and background rendering (what hasn't played since an edit
-  is live until it has, and plays from the cache the time after), checkpoints, variants,
-  realignment, the disk store, learned warm-ups and tails, exclusions and verification mode, the
-  user-activity signal.
+  is live until it has, and plays from the cache the time after: [phase 2](#phase-2-as-built)),
+  checkpoints, variants, realignment, the disk store, learned warm-ups and tails, exclusions and
+  verification mode, the user-activity signal.
 
 Limits worth knowing:
 
@@ -538,6 +538,120 @@ above was checked by breaking it: a test fails.
 | `app/src/audio`, `app/src/session/DeviceSelection.cpp` | The setting; the device view's track marked as shown |
 | `benchmarks/background_freeze_bench.cpp` | What it saves on the experiments' song of real plug-ins (below) |
 
+## Phase 2, as built
+
+Background rendering, on whenever background freezing is (`BackgroundFreezingSettings::render`, true
+by default, so the application's checkbox turns on both): what hasn't played since it changed is
+rendered into the cache with CPU nobody else wants, so it plays from the cache the first time. What it
+does, and where it departs from the design above:
+
+- **Shadows.** Every device switched on gets a second instance (`Processor::createShadow()`,
+  `syncShadow()`): built-in devices with their parameters and state, and VST3 plug-ins as a second
+  instance of the same class from the same module, given the live one's state. They are made in
+  `Engine::idle()`, built-in ones at once, plug-ins one per call and only once nothing has been edited
+  for 1 s, and brought to their device's state when the strip's version moves on, once edits have
+  settled for 1 s. Until then the strip's shadows are behind: the background doesn't render it (it
+  plays its cache there, and what it feeds waits). A device without a shadow (one that couldn't be
+  made) leaves its strip to the live renderer, as in phase 1. Not done: the main thread's 4 ms budget
+  (a plug-in takes as long as it takes to load), the memory and load-time limits per class, the
+  user-activity signal (the 1 s is since the last edit).
+- **The shadow snapshot** is made on the main thread from the live one whenever either it or the
+  shadows change: each device swapped for its shadow (a device without one for a stand-in that is
+  switched off, its strip marked unavailable), with render state of its own (track parameters,
+  buffers, edges' state, delay lines, racks' chains, stretch voices), monitoring off and no input. It
+  is the whole graph, not a subset: a strip with good blocks plays them, which costs reading them.
+- **The background renderer** (`cache/BackgroundRenderer.*`) is a second `Renderer` on a thread of its
+  own at the lowest priority there is (`SCHED_IDLE`, `THREAD_PRIORITY_IDLE`; no EcoQoS), in
+  1024-frame chunks, one thread. It runs the same cache logic as the live renderer in each cache
+  point's *background lane* (`CachePoint::lanes`: each renderer has its own state, its own queues of
+  blocks to and from the store, its own statistics): a strip whose blocks are good plays them and its
+  shadows stand idle, its shadows start a warm-up before the blocks run out, and what they put out is
+  kept once it is clean. Before the song's start it renders silence (nothing is kept there); it
+  doesn't warm up for after the song's end. Linear only: no loop wraps, so no `AfterWrap` blocks. It
+  stops while a render job (an export) runs. The main thread changes shadows and the snapshot only
+  with it *parked* between chunks.
+- **The planner** renders from a warm-up before the first frame that some strip it can render has no
+  good block for. It looks first from half a second to 30 s ahead of the playhead (while playing),
+  then on to the song's end (its last clip or note, a warm-up and the output latency on), then from
+  the start. The warm-up before a gap is the longest of its strips': their own (`W` and their
+  latencies), and that of the strips feeding them that don't play from their cache there, and two
+  chunks more (a seam switches at a chunk's start). It renders on while there is more to render close
+  ahead, and jumps over what is cached. A gap that comes back after it rendered there (notes held
+  where a strip's devices started again while its cache played: they come clean only where the
+  notes end) is left to the live renderer for the strips that couldn't keep it, until the next edit;
+  a spent budget makes it wait (2 s, twice as long each time, up to 64 s). Not done: the order by
+  value (what devices cost × how soon they play), the loop range first, the battery rule.
+- **The governor** reads the live callbacks' load (`Engine::cpuLoad()`, smoothed): above **60%** it
+  waits as long again as each chunk took, above **80%** it pauses for 5 s. No dropout signal, no
+  slowest-callback measure.
+- **Convergence and learned tails** (in the background only). Each dirty entry also says where the
+  change itself ends (`DirtyLog::Entry::core`: the strip's clips, notes and envelopes, its sources'
+  fader envelopes and its sends' levels, through the latencies on the way; not ringing on). Where a
+  strip's devices run alone in the background past that, and nothing feeding it still changes, what
+  they put out is compared with the blocks it had before, sample for sample. Watched through to where
+  the change could ring on no longer, the last difference gives the strip's **tail** (per strip, while
+  its version stays). With a tail, a match at least twice as long (and at least 8192 frames, plus the
+  latencies on the way), not all of it below −80 dBFS, ends the change there for that strip: its
+  lane's `DirtyAmendment` makes the old blocks good from where the match began, and it plays them
+  and keeps them anew (good for the live renderer too) instead of running its devices for the rest
+  of `W`. The strips it feeds then hear an unchanged signal, and do the same. So a strip's first
+  change after a version change is rendered in full (that is how it learns), and later ones only as
+  long as they ring on. Not done: learned warm-ups (the pre-roll before a gap is always `W`), the
+  edit side's ranges (still widened by `W`: what plays live after an edit, before the background
+  got there, plays live for `W`), learning per plug-in class or kept across sessions.
+- **The API**: `BackgroundFreezingSettings::render` and `renderThread` (false: only
+  `Engine::renderInBackground(frames)` renders, on the calling thread: tests and benchmarks); the
+  statistics `framesRendered`, `framesRenderedLive`, `framesReplayed` and `shadows`.
+- **Phase 1 changed with it**: a seam's warm-up starts a chunk earlier (the switch comes at a
+  chunk's start, up to a chunk before the blocks run out), and the store keeps a new block that
+  overlaps an old one good only in part (readers take the block good furthest on).
+
+Limits worth knowing:
+
+- **Shadows cost what the plug-ins cost**: twice the memory, and loading each plug-in again (on the
+  main thread, a second after the last edit, one per `idle()`).
+- **Convergence trusts bit-exact matches.** A device whose memory stays unheard for longer than
+  twice what its first change showed (a long delay whose echo fell on silence the first time) could
+  be taken to have rung out early. Devices that never render the same twice never match, and render
+  for `W` as before. Plug-ins that depend on the block size never match either (the background
+  renders 1024-frame chunks).
+- **What isn't rendered yet plays as in phase 1**: right after an edit near the playhead, or while
+  shadows are behind, a strip plays live and is kept as it plays.
+- **Plug-ins that report their latency only once they have processed** (LSP's Limiter: 0, then 240
+  samples) change their strip's version the first time the live instance runs, even if that is long
+  after the background rendered it: the strip is rendered again once.
+
+**What it saves.** [background_freeze_bench](../../benchmarks/background_freeze_bench.cpp) with
+`--background 1` (the default) renders in the background before each pass, on the same thread, timed
+apart (the first time with making the shadows), on the song above.
+
+| Pass | `W` = 8 s: render CPU, cached | background CPU before it | `W` = 2 s: render CPU, cached | background CPU before it |
+|---|---|---|---|---|
+| First | **−96%**, 100% | 22.7 s (with making 48 shadows) | **−97%**, 100% | 19.4 s |
+| Second, unchanged | −93%, 99% | 6.9 s | −97%, 100% | 0 |
+| After one note of the lead moved | −84%, 95% | 4.4 s | −97%, 100% | 1.1 s |
+| After a parameter of the kick's EQ changed | −93%, 99% | 7.2 s | −62%, 95% | 1.1 s |
+
+(Provisional: measured before the last fixes; to be replaced.)
+
+**Tests.** [test_background_freeze.cpp](../../tests/engine/test_background_freeze.cpp), "background
+rendering": with background rendering before playing (on the calling thread, or on its own thread
+while playing), the first pass plays from the cache from its first frame, sample for sample against
+the cache off; edits ahead (clips, a device's parameter and state) are rendered again before they
+play, and one behind the playhead while it plays; plug-ins have shadows; switching it off lets them go; the planner renders what isn't cached
+and then nothing, stops when the budget is spent, and goes past a gap it can't keep; a change that
+rang out is kept, not rendered again (after the first), and one that rings on unheard for a while
+(a 1 s delay) isn't taken to have rung out. Each was checked by breaking it.
+
+| Where | What |
+|---|---|
+| `engine/src/cache/BackgroundRenderer.h/.cpp` | The background renderer: its thread, parking, the planner, the governor |
+| `engine/src/EngineBackground.cpp` | Shadows (made, brought up to date, let go), the shadow snapshot, `renderInBackground()` |
+| `engine/src/RendererCache.cpp` | Lanes; convergence (the comparison, tails, replaying); silence before the start |
+| `engine/src/EngineCache.cpp` | Each dirty entry's core; the settings and statistics |
+| `engine/src/cache/StripCache.h`, `cache/CacheStore.*` | Lanes, amendments, overlapping blocks, freeing what the background may still read |
+| `Processor.h`, `builtin/BuiltinProcessor.*`, `Rack.h`, `plugins/Vst3Processor.*` | `createShadow()`, `syncShadow()` |
+
 ## Changes by file (the whole design)
 
 | Where | What |
@@ -579,7 +693,8 @@ above was checked by breaking it: a test fails.
    mixing. **Done** ([as built](#phase-1-as-built): versions instead of stamps, no grace).
 2. **Background rendering**: shadow instances, the planner and the governor, warm-up and convergence,
    learned tails. Gain: playback of anything unchanged costs no device time at all (85% of the render in
-   the song above).
+   the song above). **Done** ([as built](#phase-2-as-built): the whole graph in one background renderer,
+   tails learnt per strip, no learned warm-ups, no value ordering).
 3. **Reuse inside and across strips**: checkpoints, buses and variants, realignment on latency changes,
    the disk store, instance swaps for unplanned seams.
 4. **Polish**: a persistent cache, exports from the cache, collapsing cached groups, undo
