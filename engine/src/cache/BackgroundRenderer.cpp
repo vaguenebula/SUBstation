@@ -117,7 +117,7 @@ void BackgroundRenderer::adopt(std::shared_ptr<const RenderSnapshot> snapshot, i
     stuckUntil_ = {};
     stuckWait_ = {};
     chains_.clear();
-    lookFrom_.assign(snapshot_ ? snapshot_->tracks.size() + 1 : 0, 0);
+    skipped_.assign(snapshot_ ? snapshot_->tracks.size() + 1 : 0, {});
     if (snapshot_) renderer_.syncTempo(*snapshot_);
 }
 
@@ -264,7 +264,9 @@ int64_t BackgroundRenderer::leadAt(size_t strip, int64_t gap, int depth) const {
     for (const int source : cache.sources) {
         if (source < 0 || static_cast<size_t>(source) >= snap.tracks.size()) continue;
         const StripCacheRender& from = snap.tracks[static_cast<size_t>(source)].cache;
-        const int64_t start = gap - chain.own - kMargin;
+        // (Over as long as all of its chain could take: what feeds what feeds
+        // it is live from the start of it, if that isn't cached.)
+        const int64_t start = gap - chain.lead - kMargin;
         const bool cached = from.cacheable && from.point &&
                             uncovered(from.point->blocks.load(std::memory_order_acquire), from.dirty.get(),
                                       from.version, start, gap) >= gap;
@@ -348,7 +350,7 @@ void BackgroundRenderer::skipGap(int64_t gap) {
         if (!cache.cacheable || strip >= chains_.size() || !chains_[strip].keep) return;
         const BlockSet* blocks = cache.point->blocks.load(std::memory_order_acquire);
         if (uncovered(blocks, cache.dirty.get(), cache.version, gap, gap + 1) != gap) return;
-        lookFrom_[strip] = std::max(lookFrom_[strip], covered(blocks, cache.dirty.get(), cache.version, gap, songEnd_));
+        skipped_[strip].push_back({gap, covered(blocks, cache.dirty.get(), cache.version, gap, songEnd_)});
     };
     for (size_t t = 0; t < snap.tracks.size(); ++t) skip(snap.tracks[t].cache, t);
     skip(snap.masterCache, snap.tracks.size());
@@ -370,23 +372,36 @@ int64_t BackgroundRenderer::firstGap(int64_t from, int64_t to) const {
     const auto look = [&](const StripCacheRender& cache, size_t strip) {
         // (Not one it can keep: not worth caching, or without shadows up to date, it or what feeds it.)
         if (!cache.cacheable || strip >= chains_.size() || !chains_[strip].keep) return;
-        const int64_t start = std::max(from, lookFrom_[strip]);
-        if (start >= first) return;
-        const BlockSet* blocks = cache.point->blocks.load(std::memory_order_acquire);
-        first = std::min(first, uncovered(blocks, cache.dirty.get(), cache.version, start, first));
+        first = stripGap(cache, strip, from, first);
     };
     for (size_t t = 0; t < snap.tracks.size(); ++t) look(snap.tracks[t].cache, t);
     look(snap.masterCache, snap.tracks.size());
     return first;
 }
 
+int64_t BackgroundRenderer::stripGap(const StripCacheRender& cache, size_t strip, int64_t from, int64_t to) const {
+    const BlockSet* blocks = cache.point->blocks.load(std::memory_order_acquire);
+    int64_t at = from;
+    while (at < to) {
+        at = uncovered(blocks, cache.dirty.get(), cache.version, at, to);
+        bool skip = false;
+        for (const Skipped& s : skipped_[strip]) {
+            if (s.from <= at && at < s.to) {
+                at = s.to;
+                skip = true;
+            }
+        }
+        if (!skip) return at;
+    }
+    return to;
+}
+
 int64_t BackgroundRenderer::prerollAt(int64_t gap) const {
     const RenderSnapshot& snap = *snapshot_;
     int64_t longest = 0;
     const auto look = [&](const StripCacheRender& cache, size_t strip) {
-        if (!cache.cacheable || strip >= chains_.size() || !chains_[strip].keep || lookFrom_[strip] > gap) return;
-        const BlockSet* blocks = cache.point->blocks.load(std::memory_order_acquire);
-        if (uncovered(blocks, cache.dirty.get(), cache.version, gap, gap + 1) != gap) return;
+        if (!cache.cacheable || strip >= chains_.size() || !chains_[strip].keep) return;
+        if (stripGap(cache, strip, gap, gap + 1) != gap) return;
         longest = std::max(longest, leadAt(strip, gap));
     };
     for (size_t t = 0; t < snap.tracks.size(); ++t) look(snap.tracks[t].cache, t);

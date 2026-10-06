@@ -956,6 +956,43 @@ TEST_CASE("background rendering: while it plays, an edit behind the playhead is 
         1);
 }
 
+TEST_CASE("background rendering: inside an edit's ringing, it starts early enough") {
+    // The bass changes from 1 to 1.25 s (a warm-up is 1 s here): the bass to
+    // 2.25 s, the group to 3.25 s, the master to 4.25 s. Stopped at 3.5 s, the
+    // first gap from the playhead on is the master's alone; for it to be kept
+    // there, the group and the bass must start before the bass's own change,
+    // though neither has a gap near 3.5 s.
+    const Wavs wavs;
+    sub::BackgroundFreezingSettings settings = rendering();
+    settings.warmSeconds = 1.0;
+    const auto clips = [&](float gain) {
+        return std::vector<sub::ClipDesc>{clip(wavs.bass, 0.0, 1.0), clip(wavs.bass, 2.0, 0.25, 1.0, gain),
+                                          clip(wavs.bass, 2.5, 4.75, 1.25)};
+    };
+    checkSameButCold(both(
+                         [&](Session& s) {
+                             const Song song = settledSong(s, wavs);
+                             s.engine.setTrackClips(song.bass, clips(1.f));
+                             renderAll(s);
+                             s.engine.play();
+                             s.run(3.5);
+                             s.mark();  // (stopping cuts what was playing from the cache short)
+                             s.engine.stop();
+                             s.run(0.1);
+                             s.engine.setTrackClips(song.bass, clips(0.5f));
+                             if (s.freezing) s.engine.renderInBackground(framesOf(30.0));
+                             s.settle();
+                             s.mark();  // (what the delay still holds from before goes on without the cache)
+                             s.locate(0.0);
+                             s.engine.play();
+                             const uint64_t master = s.fromCache(sub::Engine::kMaster);
+                             s.run(5.5);
+                             if (s.freezing) CHECK_EQ(s.fromCache(sub::Engine::kMaster) - master, framesOf(5.5));
+                         },
+                         1, settings),
+                     2);
+}
+
 namespace {
 
 // The drums' second clip is cut short: a short one (2 to 2.5 s) of gain `gain` between.

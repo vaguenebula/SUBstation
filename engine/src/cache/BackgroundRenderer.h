@@ -94,10 +94,13 @@ private:
         int64_t lead = 0;
         int64_t own = 0;  // its own part: a warm-up and its latency
     };
-    // Per strip: where the planner looks for its gaps from (until the snapshot
-    // changes). Past a gap it rendered but couldn't keep (its devices started
+    // Per strip: stretches the planner doesn't look at for its gaps (until the
+    // snapshot changes): gaps it rendered but couldn't keep (its devices started
     // where notes were held, while the cache played: they only come clean
-    // where the notes end): the live renderer fills that one.
+    // where the notes end). The live renderer fills those.
+    struct Skipped {
+        int64_t from, to;
+    };
 
     void run();
     // One chunk where the planner says (holding renderMutex_); false: nothing to render.
@@ -115,7 +118,10 @@ private:
     // How long before `gap` strip `strip` must start: its own part, and the lead
     // of what feeds it unless that plays from its cache meanwhile.
     int64_t leadAt(size_t strip, int64_t gap, int depth = 0) const;
-    void skipGap(int64_t gap);  // the strips without a good block at `gap`: looked at past it
+    void skipGap(int64_t gap);  // the strips without a good block at `gap`: not looked at there
+    // The first frame in [from, to) strip `strip` has no good block for, but
+    // where it was skipped; `to` if none.
+    int64_t stripGap(const StripCacheRender& cache, size_t strip, int64_t from, int64_t to) const;
     uint64_t framesLost() const;  // what its lanes had no block for, so far
 
     Watch watch_;
@@ -123,7 +129,7 @@ private:
     std::shared_ptr<const RenderSnapshot> snapshot_;
     int64_t songEnd_ = 0;
     std::vector<Chain> chains_;
-    std::vector<int64_t> lookFrom_;
+    std::vector<std::vector<Skipped>> skipped_;
     bool positioned_ = false;
     int64_t windowEnd_ = 0;    // it renders on up to here, then plans again
     int64_t nextCheck_ = 0;    // where it looks again whether there is more ahead to render
