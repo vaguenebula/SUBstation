@@ -1,6 +1,8 @@
 # Background freezing (design)
 
-**Status: a design, not implemented.** The measurements it cites were taken with
+**Status: phase 1 (live capture and playback) is implemented, off by default:
+[Phase 1, as built](#phase-1-as-built) says what it does and where it departs from the design. The
+rest is a design.** The measurements it cites were taken with
 `benchmarks/plugin_cpu_bench.cpp` on the `perf-experiments` branch (real VST3 plug-ins: LSP, Dragonfly,
 ZamAudio, DISTRHO; a 4-core Linux VM), and its instrumentation (per-device timing, silence detection) is
 there too.
@@ -420,7 +422,116 @@ block after the stop point fades out under it.
   processors, but a render job wants the CPU).
 - **Sample rate change** clears everything.
 
-## Changes by file
+## Phase 1, as built
+
+Live capture and playback: no shadow instances, no background rendering. Off by default
+(`Engine::setBackgroundFreezing()`); in the application, the setting `audio/background_freezing`
+("true") or the environment variable `SUBSTATION_BACKGROUND_FREEZE=1` turn it on (it isn't in the
+preferences yet). What it does, and where it departs from the design above:
+
+- **Cache points**: each strip's output only (after its devices, before its fader), for tracks,
+  groups, returns and the master. No checkpoints, no variants. Not cached: frozen tracks, strips
+  with no device switched on, strips with a device a sidechain taps.
+- **Blocks** as designed (16384 frames on the grid, stereo float, a silent one as a flag), in RAM
+  only, within a budget (1 GB by default; over it, blocks no longer good go first, then those
+  farthest from the playhead). Contexts: `Linear`, or `AfterWrap{loopEnd, loopStart}` for a warm-up
+  after the loop wrapped. A latency change invalidates (no realignment).
+- **Versions instead of stamps.** Each point has a counter, bumped after every time-global change
+  that reaches it: a new signature of what the snapshot makes it of (its devices, their switches
+  and latency, its racks and sidechains, what feeds it and how, tempo, time signature, sample
+  rate), a device's parameter or state, a fader, pan, mute, solo or send level upstream. Putting a
+  value back doesn't bring the old blocks back (that needs the design's value-addressed stamps). A
+  device counts its own changes (`Processor::changeCount()`: parameters, state, the restarts a
+  plug-in asks for, edits in its editor); the edit side, `idle()` and the audio thread each notice a
+  count the version doesn't account for, so a plug-in that changes itself makes its strip and
+  everything downstream live from the next chunk.
+- **The dirty log** holds ranges `[from, to)`, each with the generation of the snapshot that changed
+  it: clips, notes and envelopes, per strip, against the previous snapshot (an envelope from the
+  breakpoint before its first difference to the first of the breakpoints both end with alike).
+  There is no convergence check (it needs background rendering). Instead a change is taken to ring
+  on in a strip's devices for at most the **warm-up** `W` (`warmSeconds`, 8 s by default: longer
+  than every plug-in measured needs, but ZamVerb and those that never converge): a strip's range is
+  what changed at its input, widened by `W`, and its destinations' are widened by `W` again. So an
+  edit ahead of the playhead, or behind it, leaves what plays here alone. A range that rings on at
+  the loop's end (`from < loopEnd ≤ to`) also takes the `AfterWrap` blocks of that wrap. The log
+  keeps 64 ranges a point; blocks older than the oldest forgotten are no good.
+- **Capture** as designed, on the rendering thread, into empty blocks the store hands out (two a
+  point, topped up every 5 ms); it never allocates. What a strip's devices put out is kept from `W`
+  after they last started from a state that isn't the arrangement's (playing starting, a jump,
+  starting again after standing idle, a reset, a change of theirs or of what they had heard, live
+  input), longer by what the strips feeding it still need (so each hop down adds `W`), and not
+  until the notes sounding where they started have ended (a note started late, or left out, isn't
+  the arrangement's). The store trims a new block where a good one already covers it, and drops one
+  that is already out of date.
+- **Playing**: a strip plays from its cache when its blocks are good for the whole chunk, nothing
+  changed it for `idleSeconds` (10 s by default), it isn't shown (the device view's track, a display
+  read, an open editor), and nothing upstream is live or has changed unaccounted. Otherwise it plays
+  live, and keeps what it plays.
+- **Seams.** When the cache will run out within `W` (an edit ahead, the end of what was kept,
+  following the loop round), the devices start again while the cache still plays (pre-roll), to be
+  warm by then: the switch is exact where the two agree (a 5 ms crossfade that leaves equal samples
+  alone, the good blocks playing to their last good frame). An edit where it plays switches at once
+  to devices started cold, with a 20 ms crossfade out of the old cache; a jump switches without one.
+  Devices starting again after standing idle are reset first (`Processor::reset()`: what they held
+  is from long ago), and the notes held there are sent again; after 2 s idle, `idle()` also resets
+  them offline (`resetOffline()`), so a switch that comes without warning starts clean.
+- **Not done** (later phases): shadows and background rendering (what hasn't played since an edit
+  is live until it has, and plays from the cache the time after), checkpoints, variants,
+  realignment, the disk store, learned warm-ups and tails, exclusions and verification mode, the
+  user-activity signal.
+
+Limits worth knowing:
+
+- **Stopping cuts a cached strip's tail.** A strip playing from its cache when the transport stops
+  has no device state to ring out from: where a live reverb would ring on, its devices start from
+  silence. Phase 2's shadows can render tails.
+- **`W` is an assumption.** A device that remembers longer than `W` (a long reverb, a delay with high
+  feedback, a free-running LFO) makes what was kept differ from a straight play, and its seams
+  audible. Nondeterministic plug-ins' cache is another take, as designed.
+- **Cold switches** (an edit where it plays, a locate where devices stood idle) are audible for
+  devices with memory, as measured above.
+- **Plug-ins that change without telling** (no parameter, state or restart reported) aren't seen,
+  as in the design.
+
+**What it saves.** [background_freeze_bench](../../benchmarks/background_freeze_bench.cpp) on the song
+above (48 bars, 96 s; one render thread, 256-frame buffers, a 4-core Linux VM), played through four
+times, the cache off and on (no wait after an edit): the CPU time of the render, and the share of
+strips' frames played from the cache.
+
+| Pass | `W` = 8 s (default) | `W` = 2 s |
+|---|---|---|
+| First (capturing) | ±3% (noise), 0% cached | ±3%, 0% cached |
+| Second, unchanged | **−72%**, 81% cached | **−92%**, 95% cached |
+| After one note of the lead moved (in the chorus, at 48 s) | −54%, 75% cached | −87%, 94% cached |
+| After a parameter of the kick's EQ changed | −43%, 69% cached | −53%, 81% cached |
+
+The store's thread took about 1% of a core; the cache held 410–440 MB (about 4.5 MB a second of this
+song, 40% of its blocks silent), so the default 1 GB budget holds about four minutes of it. The output
+with the cache differed from the one without by as much as two passes without it differ from each
+other (−15 dB: the song's Dragonfly Hall and LSP Chorus never render the same twice). Most of what an
+edit costs is the warm-up: each strip downstream of it (the group, the returns, the master with its
+multiband compressor) plays live for `W` more, which is why learning each plug-in's real warm-up
+(phase 2) matters more than anything else left.
+
+**Tests.** [test_background_freeze.cpp](../../tests/engine/test_background_freeze.cpp) plays scripts
+twice through the "Manual" driver, with the cache and without, and compares what came out, sample for
+sample, through edits ahead of, behind and at the playhead (clips, notes, envelopes, parameters,
+state, devices switched off, removed and added, routing, faders upstream, tempo), loops, jumps,
+instruments with held notes, workers, the budget, and switching it off and on. Each of the rules
+above was checked by breaking it: a test fails.
+
+| Where | What |
+|---|---|
+| `engine/src/cache/StripCache.h` | Cache points (their versions, blocks, queues, the rendering thread's state), blocks, block sets, the dirty log, settings |
+| `engine/src/cache/CacheStore.h/.cpp` | The store's thread: publishing, trimming, dropping what is no longer good, the budget, empty blocks |
+| `engine/src/EngineCache.cpp` | The edit side: signatures, dirty ranges, versions, devices' own changes, idle resets, the API |
+| `engine/src/RendererCache.cpp` | Each chunk: pieces and contexts, the decision per strip, capture, reading, seams, devices starting again |
+| `engine/src/backends/ManualBackend.h/.cpp` | The "Manual" driver for tests and benchmarks |
+| `Snapshot.h`, `Renderer.*`, `Processor.h`, `Vst3Processor.cpp`, `Engine*.cpp` | `StripCacheRender` per strip and the snapshot's generation; change counts; calling the edit side |
+| `app/src/audio`, `app/src/session/DeviceSelection.cpp` | The setting; the device view's track marked as shown |
+| `benchmarks/background_freeze_bench.cpp` | What it saves on the experiments' song of real plug-ins (below) |
+
+## Changes by file (the whole design)
 
 | Where | What |
 |---|---|
@@ -458,7 +569,7 @@ block after the stop point fades out under it.
 1. **Live capture and playback** (no shadows, no background rendering): stamps, the dirty log, the RAM
    store, capture, playing from the cache, idle instances reset, planned seams warmed, unplanned ones
    with the cold switch or the grace. Gain: a section heard twice costs devices once, which is most of
-   mixing.
+   mixing. **Done** ([as built](#phase-1-as-built): versions instead of stamps, no grace).
 2. **Background rendering**: shadow instances, the planner and the governor, warm-up and convergence,
    learned tails. Gain: playback of anything unchanged costs no device time at all (85% of the render in
    the song above).

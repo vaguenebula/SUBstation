@@ -161,6 +161,25 @@ private Q_SLOTS:
         QCOMPARE(view.hint(), kEffectsHint);
     }
 
+    void theTrackShownPlaysLive() {
+        // Background freezing keeps the track the device view shows live (its
+        // devices' meters and displays move): the engine is told which it is.
+        SessionFixture f;
+        const QString audio = f.s().insertAudioTrack();
+        const QString other = f.s().insertAudioTrack();
+        f.selection().selectTrack(audio);
+        const quint32 a = *f.bridge().engineTrackId(audio);
+        const quint32 b = *f.bridge().engineTrackId(other);
+        QVERIFY(f.engine.trackObserved(a));
+        QVERIFY(!f.engine.trackObserved(b));
+        f.selection().selectTrack(other);
+        QVERIFY(!f.engine.trackObserved(a));
+        QVERIFY(f.engine.trackObserved(b));
+        f.selection().selectTrack(kMaster);
+        QVERIFY(f.engine.trackObserved(sub::Engine::kMaster));
+        QVERIFY(!f.engine.trackObserved(b));
+    }
+
     // --- Its clipboard ---
 
     void cutCopyPasteAndDuplicateDevices() {

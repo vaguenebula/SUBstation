@@ -130,6 +130,7 @@ void EngineBridge::closeDevice() {
 
 bool EngineBridge::startAudio() {
     guarded("audio threads", [&] { applyAudioThreads(); });
+    guarded("background freezing", [&] { applyBackgroundFreezing(); });
     openMidiInputs();
     const AudioSettings settings = AudioSettings::load();
     const QString error = openDevice(settings);

@@ -99,6 +99,7 @@ struct Item {
 };
 
 Span itemsDiffer(std::vector<Item> a, std::vector<Item> b) {
+    if (a == b) return {};  // (the common case, in the order the snapshot lists them: nothing to sort)
     std::sort(a.begin(), a.end());
     std::sort(b.begin(), b.end());
     Span span;
@@ -278,6 +279,10 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
     // strip hears changes what its devices put out a warm-up longer (they
     // remember: the same assumption the capture makes), and so on downstream.
     const int64_t warm = std::max<int64_t>(0, std::llround(cacheSettings_.warmSeconds.load() * snap.sampleRate));
+    // Off, nothing is cached (the store dropped it all), so what changed where
+    // needn't be worked out: what is captured once it is on is of this snapshot
+    // or later, and the next one compares with this.
+    const bool on = cacheSettings_.enabled.load();
     const size_t count = snap.tracks.size();
     std::vector<uint64_t> signatures(count, 0);
     std::vector<Span> changedOut(count);  // what changed of its signal after its devices
@@ -294,7 +299,7 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
             h = mix(h, signatures[source]);
             in.add(changedOut[source]);
             in.add(changedFader[source]);
-            const auto old = edgesBefore.find(edge.state.get());
+            const auto old = on ? edgesBefore.find(edge.state.get()) : edgesBefore.end();
             if (old != edgesBefore.end()) in.add(envelopeDiffers(old->second->level.nodes, edge.level.nodes));
         }
     };
@@ -351,7 +356,7 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         Span in;
         incoming(render.incoming, h, in);
         signatures[t] = h;
-        if (const auto old = before.find(render.id); old != before.end()) {
+        if (const auto old = on ? before.find(render.id) : before.end(); old != before.end()) {
             const TrackRender& was = *old->second;
             in.add(clipsDiffer(was.clips, render.clips));
             in.add(notesDiffer(was.notes, render.notes));
@@ -381,7 +386,7 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         h = chainSignature(chainSignature, h, snap.master);
         Span in;
         incoming(into, h, in);
-        if (previous) in.add(lanesDiffer(previous->master, snap.master));
+        if (previous && on) in.add(lanesDiffer(previous->master, snap.master));
         StripCacheRender& cache = snap.masterCache;
         cache.sources = sourcesOf(into);
         cache.cacheable = snap.master.deviceTaps.empty() && anyEnabled(snap.master);
@@ -540,12 +545,16 @@ void Engine::setBackgroundFreezing(const BackgroundFreezingSettings& settings) {
     std::lock_guard lock(mutex_);
     cacheSettings_.idleSeconds.store(std::max(0.0, settings.idleSeconds));
     const double warm = std::max(0.0, settings.warmSeconds);
-    if (warm != cacheSettings_.warmSeconds.exchange(warm)) {
-        // What was kept, and the dirty logs, assumed the old warm-up.
+    const bool newWarm = warm != cacheSettings_.warmSeconds.exchange(warm);
+    cacheSettings_.budgetBytes.store(static_cast<int64_t>(std::max(0.0, settings.budgetMB) * 1024.0 * 1024.0));
+    const bool switchedOn = settings.enabled && !cacheSettings_.enabled.load();
+    // Nothing kept before is good: it assumed another warm-up, or edits were
+    // made while it was off that no dirty log has (the store may not have
+    // dropped it all yet).
+    if (newWarm || switchedOn) {
         for (TrackModel& track : tracks_) touchCacheLocked(track);
         touchCacheLocked(master_);
     }
-    cacheSettings_.budgetBytes.store(static_cast<int64_t>(std::max(0.0, settings.budgetMB) * 1024.0 * 1024.0));
     cacheSettings_.enabled.store(settings.enabled);
 }
 
@@ -590,6 +599,11 @@ BackgroundFreezingStats Engine::backgroundFreezingStats(uint32_t trackId) {
 void Engine::setTrackObserved(uint32_t trackId, bool observed) {
     std::lock_guard lock(mutex_);
     trackLocked(trackId).cache.point->observed.store(observed, std::memory_order_relaxed);
+}
+
+bool Engine::trackObserved(uint32_t trackId) {
+    std::lock_guard lock(mutex_);
+    return trackLocked(trackId).cache.point->observed.load(std::memory_order_relaxed);
 }
 
 void Engine::serviceBackgroundFreezing() {

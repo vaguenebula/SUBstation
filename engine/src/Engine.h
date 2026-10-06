@@ -519,6 +519,7 @@ public:
     // A strip whose devices the UI shows keeps them running (their displays and
     // meters move), and plays live.
     void setTrackObserved(uint32_t trackId, bool observed);
+    bool trackObserved(uint32_t trackId);
     // One round of the cache's own thread, now (it does one every few
     // milliseconds; tests call it to be sure what was captured is published).
     void serviceBackgroundFreezing();

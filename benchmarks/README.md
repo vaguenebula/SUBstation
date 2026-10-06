@@ -6,6 +6,7 @@ Nothing they do touches your settings, use counts, browser index or plug-ins.
 | | |
 |---|---|
 | [parallel_render_bench.cpp](parallel_render_bench.cpp) | Tracks rendered on one thread and on several: offline (best of three, checked bit-identical on any number of threads) and live through the fake ASIO driver. The engine alone, no Qt. |
+| [background_freeze_bench.cpp](background_freeze_bench.cpp) | Background freezing ([docs/engine/background-freeze.md](../docs/engine/background-freeze.md)): what it saves and costs on a song of real VST3 plug-ins (Linux, the open-source plug-ins in `/usr/lib/vst3`), played through the "Manual" driver with the cache off and on. The engine alone, no Qt. Results are in the design doc. |
 | [browser_backend_bench.cpp](browser_backend_bench.cpp) | The browser's backend on a large synthetic library: indexing, starting from the saved index, searches. Checks every query against the reference the tests use, and fails if any differs. |
 | [LibraryGen.h](LibraryGen.h) | Makes the synthetic sample libraries. |
 | [PyRandom.h](PyRandom.h), [Json.h](Json.h) | Python's random numbers (so a library is the one the Python generator made), and the reports as JSON. |
@@ -29,9 +30,10 @@ Linux:
 
 ```sh
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
-ninja -C build parallel_render_bench browser_backend_bench
+ninja -C build parallel_render_bench browser_backend_bench background_freeze_bench
 build/bin/parallel_render_bench --tracks 32 --threads 1,2,4,8 --json parallel.json
 build/bin/browser_backend_bench --size 200000 --json backend.json
+build/bin/background_freeze_bench --bars 48            # needs the plug-ins in /usr/lib/vst3
 ```
 
 Windows, in a *Developer PowerShell for VS 2022* (MSVC and Ninja on the path), with
