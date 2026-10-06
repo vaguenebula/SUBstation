@@ -14,8 +14,8 @@
 //   audio/input_channels   ASIO inputs to open; none until something records
 //   audio/threads          render threads; 0: the engine's default   audioThreads()
 //   audio/background_freezing  "true": strips unchanged a while play from
-//                          a cache instead of their devices (not in the
-//                          preferences yet)                          backgroundFreezing()
+//                          a cache instead of their devices
+//                                                                    backgroundFreezing()
 //   midi/disabled_inputs   MIDI inputs turned off                     disabledMidiInputs()
 //   record/quantize        record quantization grid in beats; 0: as played
 
@@ -68,6 +68,9 @@ void setAudioThreads(int threads);
 // setting says "true", or the environment variable SUBSTATION_BACKGROUND_FREEZE
 // is "1" (it wins either way: "0" turns it off).
 bool backgroundFreezing();
+// The saved setting alone (what the preferences show and change).
+bool backgroundFreezingSetting();
+void setBackgroundFreezingSetting(bool enabled);
 
 // MIDI inputs the user turned off. Every other input is used, so a device
 // plugged in for the first time just plays.

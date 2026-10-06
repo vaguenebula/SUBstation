@@ -398,6 +398,11 @@ void EngineBridge::chooseAudioThreads(int threads) {
     guarded("audio threads", [&] { applyAudioThreads(); });
 }
 
+void EngineBridge::chooseBackgroundFreezing(bool enabled) {
+    sub::app::setBackgroundFreezingSetting(enabled);
+    guarded("background freezing", [&] { applyBackgroundFreezing(); });
+}
+
 int EngineBridge::audioThreads() const { return engine_.audioThreads(); }
 
 int EngineBridge::defaultAudioThreads() { return sub::Engine::defaultAudioThreads(); }

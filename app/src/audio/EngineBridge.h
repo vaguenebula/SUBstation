@@ -259,6 +259,8 @@ public:
     // The threads chosen in the preferences: saved (0, not pinned, when it is
     // the engine's default) and applied.
     Q_INVOKABLE void chooseAudioThreads(int threads);
+    // Background freezing chosen in the preferences: saved and applied.
+    Q_INVOKABLE void chooseBackgroundFreezing(bool enabled);
     int audioThreads() const;  // the engine's now
     static int defaultAudioThreads();  // one per core but one
 
