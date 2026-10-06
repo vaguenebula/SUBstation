@@ -60,11 +60,13 @@ void Engine::openDeviceLocked(const DeviceConfig& config) {
         rebuildSnapshotLocked();
         serviceTransportIfIdleLocked();
         pendingDeviceEvents_.store(0);  // about the device just closed
+        deviceRunningFlag_.store(true, std::memory_order_seq_cst);  // (before its callbacks: the cache's thread waits for them)
         device_.start();
         deviceRunning_ = true;
     } catch (...) {
         device_.close();
         deviceRunning_ = false;
+        deviceRunningFlag_.store(false, std::memory_order_seq_cst);
         openInputs_ = 0;
         openInputChannels_.clear();
         throw;
@@ -81,6 +83,7 @@ void Engine::closeDeviceLocked() {
     if (device_.isOpen()) device_.close();  // waits for the audio thread to exit
     shared_.clock.stop();  // MIDI input is dropped from here on
     deviceRunning_ = false;
+    deviceRunningFlag_.store(false, std::memory_order_seq_cst);
     openInputs_ = 0;
     openInputChannels_.clear();
     finishRecordingLocked();  // a device change (or a new sample rate) ends a recording

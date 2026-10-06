@@ -218,8 +218,20 @@ public:
 
     // Thread-safe: asks whichever renderer processes this next to reset() it
     // first (the engine does this around offline renders).
-    void requestReset() noexcept { resetRequested_.store(true, std::memory_order_release); }
+    void requestReset() noexcept {
+        resets_.fetch_add(1, std::memory_order_acq_rel);
+        resetRequested_.store(true, std::memory_order_release);
+    }
     bool takeResetRequest() noexcept { return resetRequested_.exchange(false, std::memory_order_acquire); }
+
+    // Any thread. Counts the changes to what it puts out for a given input (its
+    // parameters, its state), however they came: the host, its editor, the
+    // plug-in itself. What was cached of its strip before one isn't good any
+    // more (background freezing). Its own meters and displays aren't changes.
+    uint64_t changeCount() const noexcept { return changes_.load(std::memory_order_acquire); }
+    void noteChange() noexcept { changes_.fetch_add(1, std::memory_order_acq_rel); }
+    // Counts the resets asked for: its state started again.
+    uint64_t resetCount() const noexcept { return resets_.load(std::memory_order_acquire); }
 
     // --- Automation (rendering thread) -------------------------------------
     // Before each process() call the renderer hands the processor what its
@@ -277,6 +289,8 @@ private:
     bool sidechainConnected_ = false;
     std::atomic<bool> enabled_{true};
     std::atomic<bool> resetRequested_{false};
+    std::atomic<uint64_t> changes_{0};
+    std::atomic<uint64_t> resets_{0};
     std::vector<ParamAutomation> automation_ = std::vector<ParamAutomation>(kMaxAutomation);
     size_t numAutomation_ = 0;
 };

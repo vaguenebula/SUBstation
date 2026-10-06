@@ -74,11 +74,16 @@ public:
     // they wait for the next idle().
     tresult PLUGIN_API restartComponent(int32 flags) override {
         owner_.pendingRestart_.fetch_or(flags);
+        // Values or the plug-in itself changed: what it puts out may have too.
+        if (flags & (kReloadComponent | kParamValuesChanged | kParamTitlesChanged | kIoChanged)) owner_.noteChange();
         return kResultOk;
     }
 
     tresult PLUGIN_API setDirty(TBool state) override {
-        if (state) owner_.pushEvent({ProcessorEvent::Type::StateDirty});
+        if (state) {
+            owner_.noteChange();
+            owner_.pushEvent({ProcessorEvent::Type::StateDirty});
+        }
         return kResultOk;
     }
     tresult PLUGIN_API requestOpenEditor(FIDString) override {
@@ -674,6 +679,7 @@ void Vst3Processor::setParam(int index, float value) {
     const ParamValue normalized = toNormalized(value, meta.steps);
     controller_->setParamNormalized(meta.id, normalized);
     toAudio_.push(meta.id, normalized);
+    noteChange();
 }
 
 std::string Vst3Processor::paramText(int index, float value) const {
@@ -704,6 +710,7 @@ void Vst3Processor::beginEdit(ParamID id) {
 void Vst3Processor::performEdit(ParamID id, ParamValue value) {
     if (syncingAutomation_.load()) return;  // an echo of the automated value we just gave it
     toAudio_.push(id, value);
+    noteChange();
     std::lock_guard lock(mutex_);
     const int index = indexOf(id);
     if (index < 0) return;
@@ -860,6 +867,7 @@ void Vst3Processor::setState(const std::vector<uint8_t>& state) {
                                         singleComponent_ ? nullptr : controller_.get());
     }
     if (!loaded) throw std::runtime_error("These settings are not for " + name_ + ".");
+    noteChange();
     if (controller_) refreshValues();
     pushEvent({ProcessorEvent::Type::ParamsChanged});
 }
