@@ -639,6 +639,48 @@ double errorDb(const std::vector<float>& out, const std::vector<float>& ref) {
     return e > 0 ? 10 * std::log10(e / std::max(r, 1e-30)) : -999.0;
 }
 
+// How much audio each plug-in must hear before a point (fresh from a reset) for
+// its output from there on to match a render that ran from the start: what a
+// cache-to-live switch must pre-roll. Program material: vocal-like phrases with
+// noise (3 s on, 1 s off); the point inside a phrase; compared over the 2 s after it.
+void warmup(const Options&) {
+    TempFolder folder;
+    const Sounds sounds = makeSounds(folder.path());
+    const double point = 13.5;  // seconds: inside a phrase (they run 12-15 s)
+    const double compare = 2.0;
+    const std::vector<double> windows{0.0, 0.01, 0.05, 0.2, 0.5, 1.0, 2.0, 4.0, 8.0};
+    std::printf("Error (dB, difference energy / signal energy) over the 2 s after the switch, by pre-roll\n");
+    std::printf("%-34s %8s", "plug-in", "control");
+    for (const double w : windows) std::printf(" %7gs", w);
+    std::printf("\n");
+    std::vector<PluginRef> plugins = surveyPlugins();
+    plugins.erase(std::remove_if(plugins.begin(), plugins.end(), [](const PluginRef& p) { return p.name == "ZamEQ2"; }),
+                  plugins.end());
+    for (const PluginRef& plugin : plugins) {
+        sub::Engine engine;
+        engine.loadSource(sounds.vocal);
+        const uint32_t track = engine.addTrack();
+        engine.setTrackClips(track, {subtest::clip(sounds.vocal, 0, kSectionSec)});
+        addPlugin(engine, engine.trackChain(track), plugin);
+        engine.idle();
+        const auto total = std::llround((point + compare) * kRate);
+        const auto ref = engine.renderOffline(0.0, total);
+        const auto tailOf = [&](const std::vector<float>& v) {
+            return std::vector<float>(v.end() - std::llround(compare * kRate) * 2, v.end());
+        };
+        const auto refTail = tailOf(ref);
+        std::printf("%-34s %8.1f", plugin.name.c_str(), errorDb(tailOf(engine.renderOffline(0.0, total)), refTail));
+        for (const double w : windows) {
+            const double startSec = point - w;
+            const auto frames = std::llround((w + compare) * kRate);
+            const auto out = engine.renderOffline(startSec / kBeatSec, frames);
+            std::printf(" %8.1f", errorDb(tailOf(out), refTail));
+        }
+        std::printf("\n");
+        std::fflush(stdout);
+    }
+}
+
 // The pipelined master against the plain one, with plug-ins that render the
 // same every time: the output must be the same, a chunk later.
 void pipecheck(const Options&) {
@@ -1000,6 +1042,7 @@ int main(int argc, char** argv) {
         else if (options.mode == "sleeptest") sleeptest(options);
         else if (options.mode == "sched") sched(options);
         else if (options.mode == "pipecheck") pipecheck(options);
+        else if (options.mode == "warmup") warmup(options);
         else if (options.mode == "profile") profile(options);
         else if (options.mode == "offline") offline(options);
         else if (options.mode == "blocks") blocks(options);
