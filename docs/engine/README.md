@@ -375,3 +375,4 @@ state without a device, chains and moves), [test_render_jobs.cpp](../../tests/en
 | [warp.md](warp.md) | `Warp.cpp`, stretch voices, the Re-Pitch resampler, `AudioSource` decoding and peaks |
 | [devices.md](devices.md) | `Processor.h`, `BuiltinProcessor`, `BuiltinRegistry`, the built-in devices; adding a device |
 | [plugins.md](plugins.md) | VST3 hosting, the threading handshake, state, latency, the CLAP plan |
+| [background-freeze.md](background-freeze.md) | A design (not implemented): caching unchanged strips' output in the background and playing it instead of their devices |

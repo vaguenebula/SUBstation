@@ -50,6 +50,7 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | [Warping and sources](engine/warp.md) | time stretching, Re-Pitch, decoding, peaks |
 | [Devices](engine/devices.md) | the `Processor` interface and the built-in devices; adding one |
 | [Plug-in hosting](engine/plugins.md) | VST3 hosting, editors, threading |
+| [Background freezing](engine/background-freeze.md) | a design, not implemented: caching unchanged strips in the background |
 
 ### Application layer
 
