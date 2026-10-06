@@ -90,8 +90,8 @@ class ClipViewController : public QObject {
 public:
     static constexpr int kControlsWidth = 260;
     static constexpr int kHeaderHeight = 30;
-    static constexpr double kMinBpm = 20.0;
-    static constexpr double kMaxBpm = 999.0;
+    static constexpr double kMinBpm = app::kMinSegmentBpm;
+    static constexpr double kMaxBpm = app::kMaxSegmentBpm;
 
     explicit ClipViewController(QObject* parent = nullptr);
     ~ClipViewController() override;

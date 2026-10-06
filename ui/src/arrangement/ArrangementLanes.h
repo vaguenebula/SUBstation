@@ -22,10 +22,21 @@
 // marker on the selected track (when nothing is selected); a breakpoint's
 // value while dragged.
 //
+// Fades: an audio clip's fades are drawn over its body, a curve from silence
+// to full level with a veil over what it takes away. While F is held (the
+// window has the keys, nothing that takes text has the focus, and the computer
+// MIDI keyboard doesn't play F), the clips show their fade handles: a square
+// at the end of each fade (at the top corners of a clip without fades) and,
+// on a fade long enough, a dot on its curve (fadeHandles()).
+//
 // Mouse: a left press starts, in this order of precedence,
 //   Ctrl+Alt held                     -> PanGesture (hand scrolling)
+//   F held, on a fade handle          -> select that clip; FadeGesture (a square)
+//                                        or FadeCurveGesture (a dot)
 //   on an automation lane             -> envelopes::press
-//   on a clip's trim handle           -> select that clip; TrimGesture
+//   on a clip's trim handle           -> select that clip; StretchGesture with
+//                                        Alt held (not Ctrl), else TrimGesture
+//   Ctrl+Shift on a clip's body       -> select that clip; SlipGesture
 //   inside the selected clip range    -> MoveRangeGesture (a click without
 //     (in the clip band, no Shift)       dragging selects as a click elsewhere would)
 //   on a clip's title (a folded       -> select its area (Shift: the area holding
@@ -37,7 +48,8 @@
 //                                        insert marker at the snapped beat;
 //                                        TimeSelectGesture (a folded track's lane
 //                                        too: it is a grid like any other)
-// Double-click a clip: the selected clips (or just it) open in the clip view.
+// Double-click a clip: the selected clips (or just it) open in the clip view;
+// with F held, a fade's dot straightens its curve and its square removes it.
 // On an automation lane each click of a double-click counts. Wheel: Alt
 // resizes (or folds) the track, Ctrl zooms around the mouse (1.2 a notch),
 // Shift or a horizontal wheel scrolls sideways (80 px a notch), otherwise up
@@ -63,6 +75,7 @@
 
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 class QMimeData;
@@ -74,11 +87,27 @@ inline constexpr double kEdgeGrab = 6;      // trim handles: this many pixels in
 inline constexpr double kTitleHeight = 16;  // also the grab area for selecting/moving the clip
 inline constexpr double kMinTitleRow = 30;  // clips in shorter rows have a thin title bar instead
 inline constexpr double kShortTitleHeight = 9;  // that thin bar: grab it to move the clip; below it, select time
+inline constexpr double kFadeHandle = 7;     // a fade handle's square
+inline constexpr double kFadeGrab = 4;       // pixels around a fade handle (square or dot) that grab it too
+inline constexpr double kFadeDot = 3;        // the radius of the dot on a fade's curve
+inline constexpr double kMinCurveFade = 12;  // the narrowest fade (pixels) whose curve has a dot
+inline constexpr double kMinFadeBody = 12;   // the lowest clip body (pixels) with fade handles
 
 // The title bar of a clip this high: where it is grabbed (the rest selects
 // time). A folded track's clips are all title bar, as in Ableton: a bar with
 // the clip's name, grabbed anywhere.
 double clipTitleHeight(double clipHeight, bool folded = false);
+
+// An audio clip's fade handles, drawn at `rect` (its body below the title bar:
+// `body`): the squares at the ends of its fade in and out (at its top corners
+// while it has none) and the dots on their curves (none on a fade narrower
+// than kMinCurveFade). Its fades' curves go from the body's bottom (silence) to
+// its top (full level), 1 px inside it.
+struct FadeHandles {
+    QRectF in, out;
+    std::optional<QPointF> inCurve, outCurve;
+};
+FadeHandles fadeHandles(const app::Clip& clip, const QRectF& rect, const QRectF& body, double pxPerBeat, double tempo);
 }  // namespace arrangement
 
 class ArrangementLanes : public ArrangementItem, public arrangement::LanesHost {
@@ -104,6 +133,15 @@ public:
     // first, below the last gives the last shown.
     std::optional<int> rowIndexAt(double y, bool clamp = false) const;
     std::optional<Hit> hitClip(const QPointF& pos) const;
+    // A fade handle under `pos` (whether or not F is held): its clip's, which
+    // fade (`out`), and whether it is the dot on the curve.
+    struct FadeHit {
+        QString trackId;
+        app::Clip clip;
+        bool out = false;
+        bool curve = false;
+    };
+    std::optional<FadeHit> hitFade(const QPointF& pos) const;
     // Whether `pos` is in the top band of a lane, where clips (not automation)
     // are selected. Short lanes have no title bar, so all of them is the band.
     bool inClipBand(const QPointF& pos) const override;
@@ -119,6 +157,10 @@ public:
     const std::optional<arrangement::Hover>& hoverPoint() const { return hoverPoint_; }
     // The trim handle under the mouse: (clip id, left).
     std::optional<std::pair<QString, bool>> hoverEdge() const { return hoverEdge_; }
+    // Whether Alt turns that edge's drag into a stretch (the cursor shows it).
+    bool hoverStretch() const { return hoverStretch_; }
+    // F is held: the clips show their fade handles.
+    bool fadeKeyHeld() const { return fadeKey_; }
     bool gestureActive() const { return gesture_ != nullptr; }
 
     // --- Menus ------------------------------------------------------------------------------
@@ -187,6 +229,8 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
+    // Watches the window's keys, wherever its focus is: F held, and the modifiers (the cursor).
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     // A clip as the last paint drew it, to draw its frame again over the selection's tint.
@@ -205,8 +249,10 @@ private:
     bool inSelection(const QPointF& pos) const;
     void click(const QPointF& pos, Qt::KeyboardModifiers modifiers, const std::optional<Hit>& hit);
     void endGesture();
-    void setHoverEdge(const std::optional<std::pair<QString, bool>>& edge);
+    void setHoverEdge(const std::optional<std::pair<QString, bool>>& edge, bool stretch = false);
     void onModifiers(Qt::KeyboardModifiers modifiers);
+    void setFadeKey(bool held);
+    bool showsFadeHandles() const;
     void showMenu(const QPointF& pos);
     void updateIfShown(const QString& trackId);
 
@@ -220,6 +266,8 @@ private:
     void drawGroupSummary(SgPainter& p, const QString& groupId, double rowTop, int rowHeight,
                           const QRectF& visible) const;
     void drawNotes(SgPainter& p, const app::Clip& clip, const QRectF& area, const QRectF& visible) const;
+    void drawFades(SgPainter& p, const app::Clip& clip, const QRectF& rect, const QRectF& body, const QRectF& visible,
+                   bool handles) const;
     void drawDropPreview(SgPainter& p) const;
 
     std::unique_ptr<arrangement::Gesture> gesture_;
@@ -227,6 +275,9 @@ private:
     std::optional<DropPreview> dropPreview_;
     QStringList dropPaths_;  // the files the preview was worked out for
     std::optional<std::pair<QString, bool>> hoverEdge_;
+    bool hoverStretch_ = false;
+    bool fadeKey_ = false;
+    std::optional<std::tuple<QString, bool, bool>> hoverFade_;  // (clip id, out, curve)
     std::optional<arrangement::Hover> hoverPoint_;
     std::optional<QPointF> hoverPos_;
     arrangement::MenuEntries menu_;

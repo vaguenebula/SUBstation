@@ -39,6 +39,37 @@ QCursor makeTrimCursor(bool left) {
     return QCursor(pixmap, static_cast<int>(x), 11);
 }
 
+QCursor makeStretchCursor(bool left) {
+    constexpr int kSize = 24;
+    QPixmap pixmap(kSize, kSize);
+    pixmap.fill(Qt::transparent);
+    const double x = left ? 9 : 14;  // the upright
+    const double serif = left ? 5 : -5;
+    QPainterPath path;
+    path.moveTo(x + serif, 3);
+    path.lineTo(x, 3);
+    path.lineTo(x, 20);
+    path.lineTo(x + serif, 20);
+    // A two-headed arrow across the upright: the edge goes either way, the clip with it.
+    const double from = x - 7, to = x + 7;
+    path.moveTo(from, 11.5);
+    path.lineTo(to, 11.5);
+    path.moveTo(from + 3, 8.5);
+    path.lineTo(from, 11.5);
+    path.lineTo(from + 3, 14.5);
+    path.moveTo(to - 3, 8.5);
+    path.lineTo(to, 11.5);
+    path.lineTo(to - 3, 14.5);
+    QPainter p(&pixmap);
+    p.setRenderHint(QPainter::Antialiasing);
+    for (const auto& [color, width] : {std::pair{QColor(0, 0, 0), 4.0}, std::pair{QColor(255, 255, 255), 2.0}}) {
+        p.setPen(QPen(color, width, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
+        p.drawPath(path);
+    }
+    p.end();
+    return QCursor(pixmap, static_cast<int>(x), 11);
+}
+
 QCursor makeAddCursor() {
     QPixmap pixmap(24, 24);
     pixmap.fill(Qt::transparent);
@@ -71,6 +102,12 @@ QCursor makeAddCursor() {
 // Made once and kept (never destroyed: a pixmap can't outlive the application).
 QCursor trimCursor(bool left) {
     static const QCursor* const cursors[2] = {new QCursor(makeTrimCursor(true)), new QCursor(makeTrimCursor(false))};
+    return *cursors[left ? 0 : 1];
+}
+
+QCursor stretchCursor(bool left) {
+    static const QCursor* const cursors[2] = {new QCursor(makeStretchCursor(true)),
+                                              new QCursor(makeStretchCursor(false))};
     return *cursors[left ? 0 : 1];
 }
 

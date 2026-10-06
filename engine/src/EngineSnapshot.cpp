@@ -148,7 +148,6 @@ void Engine::rebuildSnapshotLocked() {
     snap->loopStart = std::llround(loopStartBeat_ * spb);
     snap->loopEnd = std::llround(loopEndBeat_ * spb);
     snap->loopEnabled = loopEnabled_ && snap->loopEnd - snap->loopStart >= 256;
-    snap->clipFadeSamples = std::llround(clipFadeMs_ * 0.001 * sampleRate_);
 
     // Routing: the tracks in an order in which each comes after what feeds it
     // (through outputs, sends, inputs and sidechains alike).
@@ -364,6 +363,7 @@ void Engine::rebuildSnapshotLocked() {
     }
 
     const auto rate = static_cast<uint32_t>(sampleRate_);
+    const int64_t clipFade = std::llround(clipFadeMs_ * 0.001 * sampleRate_);  // against clicks where clips cut
     std::array<size_t, kNumStretchConfigs> voicesNeeded{};
     snap->tracks.reserve(tracks_.size());
     for (const int t : order) {
@@ -427,6 +427,29 @@ void Engine::rebuildSnapshotLocked() {
             const auto available = static_cast<double>(source->frames() - cr.sourceOffset);
             cr.length = std::min<int64_t>(cr.length, static_cast<int64_t>(std::floor(available / cr.rate)));
             if (cr.length <= 0) continue;
+
+            // Its fades: its own, else a short one against clicks where it cuts
+            // into the file, but none at the file's own start or end (a one-shot's
+            // attack stays as it is). Its own are shortened in proportion where
+            // together they would be longer than it; the short ones give way to them.
+            const auto fadeLength = [&](double sec) {
+                const double samples = warped ? sec * clip.segmentBpm / 60.0 * spb : sec * sampleRate_;
+                return std::llround(std::clamp(samples, 0.0, 1e15));
+            };
+            int64_t ownIn = clip.fadeInSec > 0.0 ? fadeLength(clip.fadeInSec) : 0;
+            int64_t ownOut = clip.fadeOutSec > 0.0 ? fadeLength(clip.fadeOutSec) : 0;
+            if (ownIn + ownOut > cr.length) {
+                const double share = static_cast<double>(ownIn) / static_cast<double>(ownIn + ownOut);
+                ownIn = std::llround(share * static_cast<double>(cr.length));
+                ownOut = cr.length - ownIn;
+            }
+            const bool atFileStart = cr.sourceOffset == 0;
+            const bool atFileEnd = static_cast<double>(cr.length + 2) * cr.rate >= available;  // (to a sample or two)
+            const int64_t declick = std::min(clipFade, cr.length / 2);
+            cr.fadeIn = clip.fadeInSec > 0.0 ? ownIn : atFileStart ? 0 : std::min(declick, cr.length - ownOut);
+            cr.fadeOut = clip.fadeOutSec > 0.0 ? ownOut : atFileEnd ? 0 : std::min(declick, cr.length - cr.fadeIn);
+            cr.fadeInCurve = std::clamp(clip.fadeInSec > 0.0 ? clip.fadeInCurve : 0.f, -1.f, 1.f);
+            cr.fadeOutCurve = std::clamp(clip.fadeOutSec > 0.0 ? clip.fadeOutCurve : 0.f, -1.f, 1.f);
 
             cr.gain = clip.gain;
             balanceGains(clip.pan, cr.panLeft, cr.panRight);

@@ -1,12 +1,12 @@
 #pragma once
 
 // Mouse gestures on the track lanes: move or copy a time selection (a selected
-// clip is one too), trim edges, select time (and extend a selection with
-// Shift), and scroll by hand.
+// clip is one too), trim and stretch edges, slide a clip's content, drag its
+// fades, select time (and extend a selection with Shift), and scroll by hand.
 //
-// Moving and trimming clips are heard as they go: the engine plays what the
-// drag would make of the clips (EngineBridge::previewClips) while the model
-// waits for the drag to end, which makes one undo step.
+// Clip edits are heard as they go: the engine plays what the drag would make
+// of the clips (EngineBridge::previewClips) while the model waits for the drag
+// to end, which makes one undo step.
 
 #include "arrangement/Envelopes.h"
 #include "arrangement/Gesture.h"
@@ -21,6 +21,10 @@
 #include <optional>
 #include <tuple>
 #include <vector>
+
+namespace sub::app {
+struct Track;
+}
 
 namespace sub::ui::arrangement {
 
@@ -74,27 +78,104 @@ private:
     std::optional<std::tuple<double, int, bool>> previewed_;  // (delta, track delta, copy) the engine plays
 };
 
-// Drag a clip's edge: trim it. While it drags, the clip plays trimmed.
-class TrimGesture : public Gesture {
+// A drag editing one clip: the clip as the drag would leave it (update())
+// plays so (the engine previews its track), shows in its place (translucent),
+// and is one undo step (`text`) when the drag ends, the selection following
+// the clip's new edges.
+class ClipEditGesture : public Gesture {
 public:
-    TrimGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool left);
-
-    void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
     void finish() override;
     void cancel() override;
     QSet<QString> hiddenIds() const override;
     std::vector<GestureClip> ghosts() const override;
     std::optional<app::TimeRange> timeRange() const override;
+    std::optional<Readout> readout() const override { return readout_; }
 
-private:
+protected:
+    ClipEditGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, QString text);
+    // The clip as the drag leaves it now (heard and drawn so).
+    void update(const app::Clip& result);
+    // The track the clip is on (none: gone meanwhile).
+    const app::Track* track() const;
+    double tempo() const;
+
     LanesHost& host_;
     QString trackId_;
     app::Clip clip_;
-    bool left_;
+    std::optional<Readout> readout_;
+
+private:
+    QString text_;
     int row_ = 0;
     QColor color_;
     std::optional<app::Clip> result_;
 };
+
+// Drag a clip's edge: trim it. While it drags, the clip plays trimmed.
+class TrimGesture : public ClipEditGesture {
+public:
+    TrimGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool left);
+
+    void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
+
+private:
+    bool left_;
+};
+
+// Alt-drag a clip's edge: stretch it (edits::stretchClip), the other edge
+// staying put; an audio clip is warped to do it. On the grid (Shift: off it).
+class StretchGesture : public ClipEditGesture {
+public:
+    StretchGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool left);
+
+    void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
+
+private:
+    bool left_;
+};
+
+// Ctrl+Shift-drag a clip's body: slide its audio or notes inside it
+// (edits::slipClip), by grid steps (Alt: freely).
+class SlipGesture : public ClipEditGesture {
+public:
+    SlipGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, const QPointF& press);
+
+    void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
+
+private:
+    QPointF press_;
+    bool active_ = false;
+};
+
+// With F held, drag an audio clip's fade handle: its fade in (or out) gets
+// longer or shorter by as much as the mouse moves, off the grid; the length
+// shows beside it.
+class FadeGesture : public ClipEditGesture {
+public:
+    FadeGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool out, const QPointF& press);
+
+    void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
+
+private:
+    bool out_;
+    QPointF press_;
+};
+
+// With F held, drag the dot on a fade's curve up or down: bend it (up bulges
+// it upward, kCurvePixels for all the way; Shift: finer).
+class FadeCurveGesture : public ClipEditGesture {
+public:
+    FadeCurveGesture(LanesHost& host, const QString& trackId, const app::Clip& clip, bool out, const QPointF& press);
+
+    void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override;
+
+private:
+    bool out_;
+    QPointF press_;
+};
+
+// A fade's length as its readout shows it ("120 ms", "1.50 s").
+QString fadeText(double seconds);
 
 // Click places the insert marker; drag selects a time range on the grid,
 // across the tracks it crosses (folded and frozen ones too): everything on them

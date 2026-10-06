@@ -1,5 +1,6 @@
 #include "model/Clip.h"
 
+#include "model/Automation.h"
 #include "model/Timebase.h"
 
 #include <algorithm>
@@ -55,6 +56,27 @@ double Clip::lengthBeats(double tempo) const {
 }
 
 double Clip::endBeat(double tempo) const { return startBeat + lengthBeats(tempo); }
+
+void Clip::fitFades() {
+    if (!isAudio()) {
+        fadeInSec = fadeOutSec = fadeInCurve = fadeOutCurve = 0.0;
+        return;
+    }
+    const double length = std::max(0.0, durationSec);
+    fadeInSec = std::max(0.0, fadeInSec);
+    fadeOutSec = std::max(0.0, fadeOutSec);
+    const double both = fadeInSec + fadeOutSec;
+    if (both > length && both > 0) {
+        fadeInSec *= length / both;
+        fadeOutSec = length - fadeInSec;
+    }
+    fadeInCurve = std::clamp(fadeInCurve, -1.0, 1.0);
+    fadeOutCurve = std::clamp(fadeOutCurve, -1.0, 1.0);
+    if (fadeInSec == 0) fadeInCurve = 0.0;
+    if (fadeOutSec == 0) fadeOutCurve = 0.0;
+}
+
+double Clip::fadeGain(double x, double curve) { return automation::shape(std::clamp(x, 0.0, 1.0), curve); }
 
 double Clip::windowEnd() const { return offsetBeats + durationBeats; }
 

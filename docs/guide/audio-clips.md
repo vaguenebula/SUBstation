@@ -34,7 +34,17 @@ plays at project tempo ÷ segment BPM speed. Turning Warp on sets Seg. BPM to th
 current tempo, so nothing moves until the tempo changes.
 
 The **:2** and **×2** buttons halve or double each clip's segment BPM (so warped clips
-play twice as fast, or half as fast).
+play twice as fast, or half as fast). **Alt**-dragging a clip's edge in the arrangement
+stretches it to any length, warping it if it isn't (see
+[arrangement.md](arrangement.md#clips)).
+
+## Fades
+
+Hold **F** in the arrangement to drag an audio clip's fades by the squares at its top
+corners, and bend them by the dots on their curves; see [arrangement.md](arrangement.md#clips).
+A fade is measured in the clip's audio, so it stretches with the clip. Edges without a
+fade of their own get a 4 ms fade against clicks only where they cut into the file, never
+at its own start or end: a drum hit plays with its full attack.
 
 ### Warp modes
 
