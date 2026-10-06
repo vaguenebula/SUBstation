@@ -425,18 +425,19 @@ block after the stop point fades out under it.
 ## Phase 1, as built
 
 Live capture and playback: no shadow instances, no background rendering. Off by default
-(`Engine::setBackgroundFreezing()`); in the application, the setting `audio/background_freezing`
-("true") or the environment variable `SUBSTATION_BACKGROUND_FREEZE=1` turn it on (it isn't in the
-preferences yet). What it does, and where it departs from the design above:
+(`Engine::setBackgroundFreezing()`); in the application, the *Background freezing* checkbox in
+*Preferences > Audio* (the setting `audio/background_freezing`) turns it on, and the environment
+variable `SUBSTATION_BACKGROUND_FREEZE` (`1` or `0`) overrides it. What it does, and where it departs
+from the design above:
 
 - **Cache points**: each strip's output only (after its devices, before its fader), for tracks,
   groups, returns and the master. No checkpoints, no variants. Not cached: frozen tracks, strips
   with no device switched on, strips with a device a sidechain taps.
 - **Blocks** as designed (16384 frames on the grid, stereo float, a silent one as a flag), in RAM
   only, within a budget (1 GB by default; over it, blocks no longer good go first, then those
-  farthest from the playhead). Blocks let go of count against it until they are freed (once no
-  callback can still read them, or the last snapshot showing a strip that went lets go). Contexts: `Linear`, or `AfterWrap{loopEnd, loopStart}` for a warm-up
-  after the loop wrapped. A latency change invalidates (no realignment).
+  farthest from the playhead). Released blocks still count against it until they are freed: once
+  no callback can read them, or once the last snapshot showing a removed strip lets go. Contexts:
+  `Linear`, or `AfterWrap{loopEnd, loopStart}` for a warm-up after the loop wrapped. A latency change invalidates (no realignment).
 - **Versions instead of stamps.** Each point has a counter, bumped after every time-global change
   that reaches it: a new signature of what the snapshot makes it of (its devices, their switches
   and latency, its racks and sidechains, what feeds it and how, tempo, time signature, sample
