@@ -18,11 +18,20 @@ namespace sub::intelligence::platform {
 
 #ifdef _WIN32
 inline constexpr char kSeparator = '\\';
-// WTF-8 to UTF-16 (unpaired surrogates survive the trip).
+inline constexpr bool kCaseSensitivePaths = false;
+// WTF-8 to UTF-16 and back (unpaired surrogates survive the trip).
 std::wstring toWide(std::string_view path);
+std::string toUtf8(std::wstring_view path);
 #else
 inline constexpr char kSeparator = '/';
+inline constexpr bool kCaseSensitivePaths = true;
 #endif
+
+// What identifies a file, as the browser's keys do: on Windows its path with
+// backslashes, in Windows' own lower case (LCMapStringEx, invariant locale), so
+// "C:/Drums/Kick.wav" and "c:\drums\KICK.wav" are one file; elsewhere the path
+// as it is, since names that differ in case are different files there.
+std::string pathKey(std::string_view path);
 
 // What tells a file's contents changed: its size and last-write time (in the
 // system's units).

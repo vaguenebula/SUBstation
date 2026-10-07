@@ -193,15 +193,20 @@ void SoundIndex::close() {
 
 // --- Entries -----------------------------------------------------------------------------
 
-uint32_t SoundIndex::addEntry(std::string path) {
+uint32_t SoundIndex::addEntry(std::string path, std::string key) {
     const auto index = static_cast<uint32_t>(entries_.size());
     Entry entry;
     entry.hash = SimilarityResult::pathHash(path);
     entry.path = std::move(path);
-    byPath_.emplace(entry.path, index);
+    byKey_.emplace(std::move(key), index);
     entries_.push_back(std::move(entry));
     fingerprints_.resize(entries_.size() * kDims, 0.f);
     return index;
+}
+
+int64_t SoundIndex::now() const {
+    if (options_.clock) return options_.clock();
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 void SoundIndex::setState(Entry& entry, State state) {
@@ -223,14 +228,21 @@ void SoundIndex::changed() {
     }
 }
 
-void SoundIndex::applyLibrary(const Library& files) {
+void SoundIndex::applyLibrary(const Library& files, const std::vector<std::string>& keys) {
     const bool analyse = analysers_ > 0;  // (else the files wait: nothing analyses them)
+    const int64_t time = now();
     for (Entry& entry : entries_) entry.inLibrary = false;
-    for (const std::string& path : files) {
-        const auto found = byPath_.find(std::string_view(path));
-        const uint32_t index = found == byPath_.end() ? addEntry(path) : found->second;
+    for (size_t i = 0; i < files.size(); ++i) {
+        const std::string& path = files[i];
+        const auto found = byKey_.find(std::string_view(keys[i]));
+        const uint32_t index = found == byKey_.end() ? addEntry(path, keys[i]) : found->second;
         Entry& entry = entries_[index];
+        if (entry.path != path) {  // spelt as the library spells it (results are looked up so)
+            entry.path = path;
+            entry.hash = SimilarityResult::pathHash(path);
+        }
         entry.inLibrary = true;
+        entry.seen = time;
         if (!analyse) continue;
         if (entry.state == State::Pending) {
             if (!entry.queued) {
@@ -258,18 +270,23 @@ void SoundIndex::load() {
     const auto start = Clock::now();
     std::optional<std::vector<StoredSound>> stored;
     if (!options_.store.empty()) stored = readStore(options_.store);
+    std::vector<std::string> keys;
+    if (stored)
+        for (const StoredSound& s : *stored) keys.push_back(platform::pathKey(s.path));
     std::lock_guard lock(mutex_);
     if (stored) {
         entries_.reserve(stored->size());
         fingerprints_.reserve(stored->size() * kDims);
-        for (StoredSound& s : *stored) {
-            if (byPath_.count(std::string_view(s.path))) continue;
-            const uint32_t index = addEntry(std::move(s.path));
+        for (size_t i = 0; i < stored->size(); ++i) {
+            StoredSound& s = (*stored)[i];
+            if (byKey_.count(std::string_view(keys[i]))) continue;
+            const uint32_t index = addEntry(std::move(s.path), std::move(keys[i]));
             Entry& entry = entries_[index];
             entry.stamp = s.stamp;
             entry.state = s.analysed ? State::Analysed : State::Failed;
             entry.reference = s.reference;
             entry.used = s.used;
+            entry.seen = s.seen;
             used_ = std::max(used_, s.used);
             if (s.analysed) std::copy(s.fingerprint.begin(), s.fingerprint.end(), fingerprints_.begin() + index * kDims);
         }
@@ -283,12 +300,15 @@ void SoundIndex::load() {
 void SoundIndex::save(std::unique_lock<std::mutex>& lock) {
     saveDue_ = false;
     if (options_.store.empty()) return;
-    // What is kept: the library's files, and the references searched from most recently.
+    // What is kept: the library's files; files that left it lately (a place on
+    // a drive unplugged for now, a place removed for a while), to be found
+    // again when they come back; and the references searched from most recently.
+    const int64_t oldest = now() - static_cast<int64_t>(options_.keepDays * 86400.0);
     std::vector<uint32_t> keep, references;
     for (uint32_t i = 0; i < entries_.size(); ++i) {
         const Entry& e = entries_[i];
         if (e.state == State::Pending) continue;
-        if (e.inLibrary) keep.push_back(i);
+        if (e.inLibrary || (e.seen > 0 && e.seen >= oldest)) keep.push_back(i);
         else if (e.reference) references.push_back(i);
     }
     if (references.size() > options_.maxReferences) {
@@ -306,6 +326,7 @@ void SoundIndex::save(std::unique_lock<std::mutex>& lock) {
         sound.analysed = e.state == State::Analysed;
         sound.reference = e.reference;
         sound.used = e.used;
+        sound.seen = e.seen;
         if (sound.analysed)
             std::copy(fingerprints_.begin() + i * kDims, fingerprints_.begin() + (i + 1) * kDims, sound.fingerprint.begin());
         writer.add(sound);
@@ -335,9 +356,14 @@ void SoundIndex::keeperLoop() {
                 std::lock_guard source(sourceMutex_);
                 if (source_) files = source_();
             }
+            std::vector<std::string> keys;  // (made without the lock: searches and analysers go on)
+            if (files) {
+                keys.reserve(files->size());
+                for (const std::string& path : *files) keys.push_back(platform::pathKey(path));
+            }
             lock.lock();
             if (files) {
-                applyLibrary(*files);
+                applyLibrary(*files, keys);
                 haveLibrary_ = true;
             }
             refreshing_ = false;
@@ -487,11 +513,12 @@ std::shared_ptr<SimilarityResult> SoundIndex::runSearch(uint64_t generation, con
     // fingerprint is up to date, else made now.
     std::optional<Fingerprint> reference;
     std::optional<platform::FileStamp> stamp;
+    const std::string key = platform::pathKey(query.path);
     if (query.wholeFile()) {
         stamp = platform::stamp(query.path);
         std::lock_guard lock(mutex_);
-        const auto found = byPath_.find(std::string_view(query.path));
-        if (found != byPath_.end()) {
+        const auto found = byKey_.find(std::string_view(key));
+        if (found != byKey_.end()) {
             Entry& e = entries_[found->second];
             if (e.state == State::Analysed && stamp && *stamp == e.stamp) {
                 Fingerprint fp;
@@ -514,8 +541,8 @@ std::shared_ptr<SimilarityResult> SoundIndex::runSearch(uint64_t generation, con
         if (reference && query.wholeFile() && stamp) {
             // Kept, so the next search from it (or the analysers) needn't analyse it again.
             std::lock_guard lock(mutex_);
-            const auto found = byPath_.find(std::string_view(query.path));
-            const uint32_t index = found == byPath_.end() ? addEntry(query.path) : found->second;
+            const auto found = byKey_.find(std::string_view(key));
+            const uint32_t index = found == byKey_.end() ? addEntry(query.path, key) : found->second;
             Entry& e = entries_[index];
             std::copy(reference->begin(), reference->end(), fingerprints_.begin() + index * kDims);
             e.stamp = *stamp;
@@ -544,6 +571,9 @@ std::shared_ptr<SimilarityResult> SoundIndex::runSearch(uint64_t generation, con
         for (uint32_t i = 0; i < entries_.size(); ++i)
             if (entries_[i].inLibrary && entries_[i].state == State::Analysed) rows.push_back(i);
         result->libraryFiles = counts_.library;
+        // The sound itself, if it is a library file (by key: however its path is spelt).
+        const auto self = byKey_.find(std::string_view(key));
+        const uint32_t selfIndex = self == byKey_.end() ? std::numeric_limits<uint32_t>::max() : self->second;
         const Comparison comparison = Comparison::fit(fingerprints_.data(), entries_.size(), &rows, options_.weights);
         scores.reserve(rows.size());
         ranked.reserve(rows.size());
@@ -551,7 +581,7 @@ std::shared_ptr<SimilarityResult> SoundIndex::runSearch(uint64_t generation, con
             const float similarity =
                 Comparison::similarity(comparison.distance(reference->data(), fingerprints_.data() + i * kDims));
             scores.push_back({entries_[i].hash, similarity});
-            if (entries_[i].path != query.path) ranked.push_back({similarity, i});
+            if (i != selfIndex) ranked.push_back({similarity, i});
         }
         const size_t best = std::min(ranked.size(), SimilarityResult::kBest);
         std::partial_sort(ranked.begin(), ranked.begin() + static_cast<ptrdiff_t>(best), ranked.end(),

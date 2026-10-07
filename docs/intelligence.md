@@ -152,6 +152,12 @@ browser finds is analysed soon after, what goes is dropped from searches. `setLi
 old source to end: once it returns, the old one is never called again (the browser lets go of it before its index
 closes).
 
+Files are told apart by `platform::pathKey()`, as the browser's keys are: on Windows the path with backslashes in
+Windows' own lower case, so a clip's `c:/drums/KICK.wav` is the library's `C:\Drums\Kick.wav` (its saved fingerprint is
+used, and it isn't among its own best matches); elsewhere the path as it is. A file keeps the library's spelling,
+which is what results are looked up by. The keys are made on the keeper's thread before it takes the lock, so a large
+library's refresh holds up searches and analysers only for the lookups.
+
 ### Searches
 
 `find(SoundQuery{path, start, length})` replaces a waiting search. The result (`SimilarityResult`) holds every
@@ -167,7 +173,10 @@ the time of the search, worked out with it (one pass more over the fingerprints)
 
 `sound-index.bin` in `localDataDir()` (`%LOCALAPPDATA%\SUBstation` on Windows, `~/.local/share/SUBstation`
 elsewhere), or `SUBSTATION_SOUND_INDEX` (the tests set it). Written through `.tmp` and moved over the old one. It
-keeps the library's files (analysed, or not analysable) and the 1 000 sounds outside it searched from most recently.
+keeps the library's files (analysed, or not analysable); the files that left it in the last 90 days (`keepDays`: each
+file records when it was last in the library), so a place on a drive that is unplugged for a while, or removed and
+added again, isn't analysed again when it comes back; and the 1 000 sounds outside it searched from most recently.
+Files gone for longer are dropped at the next save.
 The format is in [SoundStore.h](../intelligence/src/similarity/SoundStore.h); a file of another format, feature version
 or size, or with a bad checksum, is ignored and everything is analysed again. Bump `kFeatureVersion` whenever what
 `SoundAnalyzer` computes changes.

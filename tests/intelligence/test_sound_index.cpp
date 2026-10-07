@@ -2,6 +2,7 @@
 // and checking fingerprints, searches, and its threads' manners.
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -12,6 +13,7 @@
 
 #include "Sounds.h"
 #include "similarity/SoundIndex.h"
+#include "similarity/SoundStore.h"
 
 using namespace subtest;
 using namespace sub::intelligence;
@@ -181,6 +183,98 @@ TEST_CASE("a sound outside the library, or part of a file, is analysed for its s
     CHECK(!result->error.empty());
     CHECK_EQ(result->scored, 0u);
     CHECK(result->best.empty());
+}
+
+TEST_CASE("a place gone for a while keeps its fingerprints; one gone long enough loses them") {
+    const Library library;
+    const std::string store = utf8(tempDir() / "sound-index.bin");
+    const std::string elsewhere = wav("project/elsewhere.wav", kick(160, 48, 0.3, 0.6, 99));
+    int64_t time = 1760000000;  // (the index's clock: seconds since 1970)
+    auto at = [&](int64_t when) {
+        SoundIndexOptions o = options(store);
+        o.clock = [when] { return when; };
+        return o;
+    };
+    {
+        SoundIndex index(at(time));
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+    }
+    // The drive is unplugged: the library is empty. A search from another
+    // file changes the store, which is saved.
+    time += 3 * 86400;
+    {
+        SoundIndex index(at(time));
+        index.setLibrary({});
+        REQUIRE(index.waitIdle(30.0));
+        CHECK_EQ(index.status().library, 0u);
+        CHECK(search(index, elsewhere)->error.empty());
+    }
+    const auto saved = readStore(store);  // (rewritten, with the absent files still in it)
+    REQUIRE(saved.has_value());
+    CHECK_EQ(saved->size(), library.paths.size() + 1);
+    // It is back: nothing is analysed again.
+    time += 86400;
+    {
+        SoundIndex index(at(time));
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+        CHECK_EQ(index.status().analysed, library.paths.size());
+        CHECK_EQ(index.status().analysedThisRun, 0u);
+    }
+    // Gone for longer than keepDays (90): dropped from the store when it is next saved.
+    time += 91 * 86400;
+    {
+        SoundIndex index(at(time));
+        index.setLibrary({});
+        REQUIRE(index.waitIdle(30.0));
+        CHECK(search(index, wav("project/another.wav", snare()))->error.empty());  // (a change: saved)
+    }
+    const auto pruned = readStore(store);
+    REQUIRE(pruned.has_value());
+    CHECK_EQ(pruned->size(), 2u);  // the two sounds searched from
+    {
+        SoundIndex index(at(time));
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+        CHECK_EQ(index.status().analysedThisRun, library.paths.size());
+    }
+}
+
+TEST_CASE("a path spelt in another case is the library's file, where names ignore case") {
+    if (sub::intelligence::platform::kCaseSensitivePaths) SKIP("file names are case-sensitive here");
+    Library library;
+    const std::string kickPath = library.first("kick");
+    std::string upper = kickPath;
+    for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    std::string slashed = upper;
+    for (char& c : slashed)
+        if (c == '\\') c = '/';
+    SoundIndex index(options());
+    index.setLibrary(library.paths);
+    REQUIRE(index.waitIdle(30.0));
+    const uint64_t analysed = index.status().analysedThisRun;
+    // The saved fingerprint is used, and the sound itself isn't among the best.
+    auto result = search(index, slashed);
+    CHECK(result->error.empty());
+    CHECK_EQ(index.status().analysedThisRun, analysed);
+    CHECK_NEAR(result->similarity(kickPath), 1.0, 1e-6);
+    for (const auto& m : result->best) CHECK(m.path != kickPath);
+    CHECK_EQ(result->best.size(), library.paths.size() - 1);
+
+    // A file searched from before the library listed it, spelt otherwise: the
+    // library's spelling is what results are looked up by.
+    const std::string late = wav("library/late/Late Kick.wav", kick(140, 50, 0.25));
+    std::string lateUpper = late;
+    for (char& c : lateUpper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    CHECK(search(index, lateUpper)->error.empty());
+    library.paths.push_back(late);
+    index.setLibrary(library.paths);
+    REQUIRE(index.waitIdle(30.0));
+    CHECK_EQ(index.status().library, library.paths.size());
+    result = search(index, kickPath);
+    CHECK(!std::isnan(result->similarity(late)));
+    CHECK_EQ(result->scored, library.paths.size());
 }
 
 TEST_CASE("files that can't be analysed are counted, and not tried again until they change") {

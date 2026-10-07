@@ -4,13 +4,15 @@
 // Format (little-endian):
 //
 //   "SUBSNDX1"                   8 bytes magic
-//   u32 format                   1 (kStoreFormat)
+//   u32 format                   2 (kStoreFormat)
 //   u32 feature version          kFeatureVersion: another and the file is ignored
 //   u32 dims                     kDims
 //   u32 count
 //   count x {
 //     str path                   UTF-8 (WTF-8), the system's form
 //     u64 size, u64 modified     the file's stamp when analysed
+//     i64 seen                   when it was last in the library (seconds since
+//                                1970; 0: never, a reference only)
 //     u8  flags                  1: analysed (else it couldn't be: not tried
 //                                again until it changes), 2: a reference
 //     u64 used                   (references only) when last searched from
@@ -35,7 +37,7 @@
 
 namespace sub::intelligence {
 
-inline constexpr uint32_t kStoreFormat = 1;
+inline constexpr uint32_t kStoreFormat = 2;
 
 struct StoredSound {
     std::string path;
@@ -43,6 +45,7 @@ struct StoredSound {
     bool analysed = false;
     bool reference = false;  // searched from, outside the library
     uint64_t used = 0;       // a reference's: when (a counter) it was last searched from
+    int64_t seen = 0;        // when it was last in the library (seconds since 1970; 0: never)
     Fingerprint fingerprint{};
 };
 

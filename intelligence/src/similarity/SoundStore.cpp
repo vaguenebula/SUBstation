@@ -96,6 +96,7 @@ void StoreWriter::add(const StoredSound& sound) {
     bytes_ += sound.path;
     u64(sound.stamp.size);
     u64(sound.stamp.modified);
+    u64(static_cast<uint64_t>(sound.seen));
     const uint8_t flags = (sound.analysed ? kAnalysed : 0) | (sound.reference ? kReference : 0);
     bytes_.push_back(static_cast<char>(flags));
     if (sound.reference) u64(sound.used);
@@ -151,7 +152,10 @@ std::optional<std::vector<StoredSound>> readStore(const std::string& file) {
     for (uint32_t i = 0; i < count; ++i) {
         StoredSound s;
         uint8_t flags = 0;
-        if (!in.str(s.path) || !in.u64(s.stamp.size) || !in.u64(s.stamp.modified) || !in.u8(flags)) return std::nullopt;
+        uint64_t seen = 0;
+        if (!in.str(s.path) || !in.u64(s.stamp.size) || !in.u64(s.stamp.modified) || !in.u64(seen) || !in.u8(flags))
+            return std::nullopt;
+        s.seen = static_cast<int64_t>(seen);
         s.analysed = flags & kAnalysed;
         s.reference = flags & kReference;
         if (s.reference && !in.u64(s.used)) return std::nullopt;

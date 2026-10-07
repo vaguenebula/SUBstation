@@ -27,7 +27,13 @@
 // The library is a list of paths (UTF-8, the system's form) from a source the
 // application sets, called on the keeper's thread: the browser's index, whose
 // files it lists. A search's result gives each library file's similarity by
-// the same path, so the browser can order its own lists by it.
+// the same path, so the browser can order its own lists by it. Files are told
+// apart by platform::pathKey(), so on Windows a path spelt in another case (a
+// clip's) is the same file as the library's.
+//
+// Fingerprints of files that leave the library are kept (not searched) for
+// keepDays after they were last in it: a place on a drive that is unplugged
+// for a while, or removed and added again, isn't analysed again.
 
 #pragma once
 
@@ -117,6 +123,8 @@ struct SoundIndexOptions {
     double saveDelaySeconds = 10.0;
     double refreshSeconds = 1.0;  // the least time between takings of the library
     size_t maxReferences = 1000;  // sounds outside the library whose fingerprints are kept
+    double keepDays = 90.0;       // how long the fingerprints of files that left the library are kept
+    std::function<int64_t()> clock;  // now, in seconds since 1970 (tests); empty: the system's
 };
 
 class SoundIndex {
@@ -173,6 +181,7 @@ private:
         bool checking = false;  // waiting to be checked
         bool reference = false;
         uint64_t used = 0;
+        int64_t seen = 0;  // when it was last in the library (seconds since 1970; 0: never)
     };
     struct Hash {
         using is_transparent = void;
@@ -183,10 +192,12 @@ private:
     void workerLoop();
     void searchLoop();
     void load();
-    void applyLibrary(const Library& files);
+    // `keys`: the files' pathKey()s, made before the lock is taken.
+    void applyLibrary(const Library& files, const std::vector<std::string>& keys);
     void save(std::unique_lock<std::mutex>& lock);
     std::shared_ptr<SimilarityResult> runSearch(uint64_t generation, const SoundQuery& query);
-    uint32_t addEntry(std::string path);
+    uint32_t addEntry(std::string path, std::string key);
+    int64_t now() const;
     void setState(Entry& entry, State state);
     void changed();  // fingerprints changed: save soon, tell the application
     bool busyLocked() const;
@@ -217,7 +228,7 @@ private:
     std::chrono::steady_clock::time_point saveAt_{}, nextRefresh_{};
     std::vector<Entry> entries_;
     std::vector<float> fingerprints_;  // kDims per entry
-    std::unordered_map<std::string, uint32_t, Hash, std::equal_to<>> byPath_;
+    std::unordered_map<std::string, uint32_t, Hash, std::equal_to<>> byKey_;  // by platform::pathKey()
     std::deque<uint32_t> analyseQueue_, checkQueue_;
     unsigned running_ = 0;  // analysers working on a file
     uint64_t used_ = 0;     // the reference counter

@@ -246,6 +246,7 @@ TEST_CASE("the store: saved and read back; anything unexpected is ignored") {
     std::vector<StoredSound> sounds(3);
     sounds[0].path = "C:\\Samples\\Kick 01.wav";
     sounds[0].stamp = {12345, 678};
+    sounds[0].seen = 1760000000;
     sounds[0].analysed = true;
     for (size_t d = 0; d < kDims; ++d) sounds[0].fingerprint[d] = static_cast<float>(d) * 0.5f - 3.f;
     sounds[1].path = "/samples/broken.wav";
@@ -268,6 +269,7 @@ TEST_CASE("the store: saved and read back; anything unexpected is ignored") {
         CHECK_EQ((*read)[i].analysed, sounds[i].analysed);
         CHECK_EQ((*read)[i].reference, sounds[i].reference);
         CHECK_EQ((*read)[i].used, sounds[i].used);
+        CHECK_EQ((*read)[i].seen, sounds[i].seen);
         if (sounds[i].analysed) CHECK((*read)[i].fingerprint == sounds[i].fingerprint);
     }
     // A changed byte, a truncated file, another feature version: ignored.

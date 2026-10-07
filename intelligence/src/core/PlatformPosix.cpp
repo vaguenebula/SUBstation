@@ -14,6 +14,8 @@
 
 namespace sub::intelligence::platform {
 
+std::string pathKey(std::string_view path) { return std::string(path); }
+
 std::optional<FileStamp> stamp(const std::string& path) {
     struct stat st {};
     if (::stat(path.c_str(), &st) != 0 || S_ISDIR(st.st_mode)) return std::nullopt;
