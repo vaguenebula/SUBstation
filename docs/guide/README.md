@@ -2,8 +2,9 @@
 
 How SUBstation behaves as you use it. SUBstation is a basic DAW for Windows with an
 Ableton-style arrangement view: tracks run down the screen with their headers on the
-right, the browser is on the left, and the device view (the selected track's devices)
-and the clip view open below the arrangement. It also runs on Linux, with fewer audio,
+right, the browser is on the left, the device view (the selected track's devices) runs
+along the bottom beside the info view (what the control under the mouse is), and the
+clip view opens over the arrangement. It also runs on Linux, with fewer audio,
 MIDI and plug-in features (see [On Linux](#on-linux)).
 
 For building and running the program see [../building.md](../building.md); for how the
@@ -13,7 +14,7 @@ code is put together, [../README.md](../README.md).
 
 | Page | What it covers |
 |---|---|
-| [arrangement.md](arrangement.md) | The timeline, clips and selecting, tracks and their headers, group tracks, folding, the master, the transport bar, projects, undo and export |
+| [arrangement.md](arrangement.md) | The timeline, clips and selecting, tracks and their headers, group tracks, folding, the master, the title bar and the transport bar, projects, undo and export |
 | [mixing.md](mixing.md) | Solo and mute, groups in the mix, return tracks and sends, sidechains, delay compensation, freezing and flattening |
 | [devices.md](devices.md) | The device view, the built-in devices (Synth, Sampler, Utility, Over The Top, Compressor, Delay, EQ, Sidechain), racks, macros and presets, folding, cut/copy/paste |
 | [plugins.md](plugins.md) | VST3 plug-ins: finding them, using them, their editors and presets, projects, latency |

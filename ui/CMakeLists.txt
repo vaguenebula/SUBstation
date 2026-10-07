@@ -54,6 +54,9 @@ qt_add_qml_module(sub_ui_style
 target_link_libraries(sub_ui_style PUBLIC Qt6::Quick Qt6::QuickControls2)
 target_link_libraries(sub_ui PUBLIC sub_ui_styleplugin)
 target_link_libraries(sub_ui PUBLIC sub_app Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+if (WIN32)
+    target_link_libraries(sub_ui PRIVATE shell32)  # WindowFrame: SHAppBarMessage
+endif()
 sub_project_warnings(sub_ui)
 if (MSVC)
     # C4458: a local named like a base's member. Every Qt Quick item inherits

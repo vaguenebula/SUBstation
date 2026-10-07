@@ -61,7 +61,7 @@ Item {
         y: message.visible ? message.y + message.height + 4 : 6
         columns: body.columns
         columnSpacing: 16
-        rowSpacing: 6
+        rowSpacing: 14  // (DeviceKnobPages's)
 
         Repeater {
             model: params.loaded ? params.indices.slice(body.page * body.perPage, (body.page + 1) * body.perPage) : []

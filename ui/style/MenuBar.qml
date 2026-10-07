@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Templates as T
 import SUBstation
 
-// QMenuBar: PANEL with a BORDER line below.
+// The menus, in the window's title bar (TitleBar.qml), on its colour.
 T.MenuBar {
     id: control
 
@@ -10,7 +10,6 @@ T.MenuBar {
                             contentWidth + leftPadding + rightPadding)
     implicitHeight: Math.max(implicitBackgroundHeight + topInset + bottomInset,
                              contentHeight + topPadding + bottomPadding)
-    bottomPadding: 1
 
     delegate: MenuBarItem {}
 
@@ -21,16 +20,7 @@ T.MenuBar {
         }
     }
 
-    background: Rectangle {
+    background: Item {
         implicitHeight: 24
-        color: Theme.panel
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: Theme.border
-        }
     }
 }

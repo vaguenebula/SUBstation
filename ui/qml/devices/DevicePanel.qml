@@ -3,12 +3,13 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import SUBstation
 
-// The device view, below the arrangement: the selected track's (or a return's,
-// or the master's) chain of devices, left to right, built-in devices and
-// plug-ins alike, racks with their macros and chains, and after a rack the
-// chain it shows, in a bracket (DeviceChain, DeviceFrame); what may be dropped
-// there, or that no track is selected, or that it is frozen
-// (Session.deviceSelection.hint). It scrolls sideways without a scroll bar:
+// The device view, along the bottom of the window (beside the info view, as
+// Ableton's): the selected track's (or a return's, or the master's) chain of
+// devices, left to right on the window's colour with a grip between them,
+// built-in devices and plug-ins alike, racks with their macros and chains, and
+// after a rack the chain it shows, in a bracket (DeviceChain, DeviceFrame);
+// what may be dropped there, or that no track is selected, or that it is
+// frozen (Session.deviceSelection.hint). It scrolls sideways without a scroll bar:
 // Shift+wheel, or Ctrl+Alt-drag anywhere on it (DeviceChainArea, which also
 // takes the drops and starts the drags).
 //
@@ -43,12 +44,12 @@ Rectangle {
     readonly property alias presetNameDialog: nameDialog
     readonly property alias presetReplaceDialog: replaceDialog
     readonly property alias macroMappings: macroMappings
-    readonly property int panelMargin: 8  // PANEL_MARGIN: above and below the chain
+    readonly property int panelMargin: 8  // PANEL_MARGIN: above and below the chain, and left and right of it
     // The tallest device: its border, a title bar, a page of knobs in two rows
-    // with 6 px above and below them (a body's margins: its content is as far
-    // from the title bar as from the bottom edge). Every device is this tall;
-    // an editor's graphs take the height there is.
-    readonly property int deviceHeight: 2 + Math.max(16, titleMetrics.height) + 4 + 6 + 2 * probe.implicitHeight + 6 + 6
+    // (DeviceKnobPages: 14 px apart) with 6 px above and below them (a body's
+    // margins: its content is as far from the title bar as from the bottom
+    // edge). Every device is this tall; an editor's graphs take the height there is.
+    readonly property int deviceHeight: 2 + Math.max(16, titleMetrics.height) + 4 + 6 + 2 * probe.implicitHeight + 14 + 6
 
     // Ctrl+R on a rack's chain: its name edited in place, its rack's chain list
     // shown first if it is hidden (false: the rack isn't shown, or is folded).
@@ -287,15 +288,7 @@ Rectangle {
     }
 
     implicitHeight: 2 * panelMargin + deviceHeight
-    color: Theme.panel
-
-    // A BORDER line above it.
-    Rectangle {
-        width: parent.width
-        height: 1
-        color: Theme.border
-        z: 1
-    }
+    color: Theme.window
 
     // A click beside the devices.
     MouseArea {
@@ -314,9 +307,9 @@ Rectangle {
     DeviceChainArea {
         id: area
         objectName: "chainArea"
-        x: 10
+        x: panel.panelMargin
         y: panel.panelMargin
-        width: panel.width - 20
+        width: panel.width - 2 * panel.panelMargin
         height: panel.height - 2 * panel.panelMargin
         session: Session
         content: chainContent
@@ -327,7 +320,7 @@ Rectangle {
             objectName: "chainContent"
             x: -area.contentX
             height: area.height
-            spacing: 6
+            spacing: 8  // (the chain's, DeviceChainArea.kSpacing)
 
             DeviceChain {
                 id: topChain

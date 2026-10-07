@@ -65,7 +65,7 @@ class DeviceChainArea : public QQuickItem {
     Q_PROPERTY(bool panning READ panning NOTIFY panningChanged)  // Ctrl+Alt-dragging the chain
 
 public:
-    static constexpr int kSpacing = 6;            // between the chain's devices
+    static constexpr int kSpacing = 8;            // between the chain's devices (a grip in the middle)
     static constexpr int kWheelScroll = 80;       // px Shift+wheel scrolls the chain by a notch
     static constexpr int kAutoscrollEdge = 40;    // px from the chain's edge where a drag scrolls it
     static constexpr int kAutoscrollInterval = 16;  // ms

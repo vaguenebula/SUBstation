@@ -3,12 +3,12 @@
 // The main window's place and size, and its splitters, kept in QSettings
 // between runs (window/geometry, window/splitter: the browser's, as
 // MainWindow's _restore_window and closeEvent kept them; and
-// window/device_splitter: the arrangement's over the device view). The geometry is the window's
-// normal one (not maximized) and whether it was maximized; a saved place no
-// screen shows any more is moved onto the primary screen. What a widget
-// version of the program saved there (QWidget::saveGeometry's bytes) is
-// ignored (the window then starts at its default size), and so is its
-// QSplitter's state.
+// window/device_splitter: the browser and the arrangement's over the bottom
+// row). The geometry is the window's normal one (not maximized) and whether it
+// was maximized; a saved place no screen shows any more is moved onto the
+// primary screen. What a widget version of the program saved there
+// (QWidget::saveGeometry's bytes) is ignored (the window then starts at its
+// default size), and so is its QSplitter's state.
 
 #include <QObject>
 #include <QPointer>

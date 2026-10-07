@@ -3,9 +3,10 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import SUBstation
 
-// A device in the device view: its frame (PANEL_ALT, a BORDER line, ACCENT
-// while selected), its title bar (lighter while selected: the fold triangle,
-// the on/off switch, the name with its tooltip, a plug-in's editor button,
+// A device in the device view, as Ableton draws one: its frame (PANEL_ALT in
+// a line of its title bar's colour, 3 px corners), its title bar (DEVICE_HEADER,
+// the selection's teal while selected: the fold triangle, the round on/off
+// switch, the name with its tooltip, a plug-in's editor button,
 // the sidechain button of a device with a sidechain input, the page arrows
 // while there is more than one page, the save button) and its body: a page of
 // knobs (a built-in device without an editor of its own), its editor
@@ -13,7 +14,7 @@ import SUBstation
 // macros and (while shown) its chain list. Folded, it is a narrow strip: the
 // triangle, the switch and the name reading upwards. Clicks on its background,
 // title bar and labels select it, drag it, open its menu (DeviceFrameInput);
-// the menus and dialogs are the panel's.
+// the menus and dialogs are the panel's. A grip stands in the gap after it.
 Item {
     id: frame
 
@@ -51,6 +52,7 @@ Item {
     readonly property alias saveButton: saveButton
     readonly property alias foldedBar: foldedBar
     readonly property alias header: header
+    readonly property color headerColor: selected ? Theme.deviceHeaderSelected : Theme.deviceHeader
 
     width: deviceInfo.folded ? 26 : unfoldedWidth
 
@@ -105,13 +107,33 @@ Item {
         font: Theme.uiFont(9, true)
     }
 
-    // The frame: PANEL_ALT in a 1 px line, 4 px corners.
+    // The frame: PANEL_ALT in a 1 px line of the title bar's colour, 3 px corners.
     Rectangle {
         anchors.fill: parent
         color: Theme.panelAlt
-        radius: 4
+        radius: 3
         border.width: 1
-        border.color: frame.selected ? Theme.accent : Theme.border
+        border.color: frame.headerColor
+    }
+
+    // The grip in the gap after it (DeviceChainArea.kSpacing wide).
+    DeviceGrip {
+        x: frame.width + 2
+        height: frame.height
+    }
+
+    // The on/off switch: a round one.
+    component Activator: ToggleButton {
+        id: activator
+        role: "activator"
+        checkable: false
+        tooltip: qsTr("Device On/Off")
+        background: Rectangle {
+            radius: width / 2
+            color: activator.look.background
+            border.width: 1
+            border.color: Theme.border
+        }
     }
 
     // Clicks that reach the frame are on its background or labels: the controls take their own.
@@ -136,17 +158,17 @@ Item {
         width: frame.width - 2
         height: frame.headerHeight
 
-        // DEVICE_HEADER (lighter while selected), its top corners rounded.
+        // DEVICE_HEADER (teal while selected), its top corners rounded.
         Rectangle {
             anchors.fill: parent
-            radius: 3
-            color: frame.selected ? Theme.deviceHeaderSelected : Theme.deviceHeader
+            radius: 2
+            color: frame.headerColor
         }
         Rectangle {
             y: parent.height / 2
             width: parent.width
             height: parent.height - y
-            color: frame.selected ? Theme.deviceHeaderSelected : Theme.deviceHeader
+            color: frame.headerColor
         }
 
         RowLayout {
@@ -167,15 +189,12 @@ Item {
                 Layout.preferredHeight: 16
                 onClicked: Session.deviceSelection.toggleFold(frame.deviceId)
             }
-            ToggleButton {
+            Activator {
                 id: enableButton
                 objectName: "enableButton"
-                role: "activator"
-                checkable: false
                 checked: deviceInfo.enabled
-                tooltip: qsTr("Device On/Off")
-                Layout.preferredWidth: 14
-                Layout.preferredHeight: 14
+                Layout.preferredWidth: 13
+                Layout.preferredHeight: 13
                 onClicked: deviceInfo.setEnabled(!deviceInfo.enabled)
             }
             Text {
@@ -276,14 +295,8 @@ Item {
 
         Rectangle {
             anchors.fill: parent
-            radius: 3
-            color: frame.selected ? Theme.deviceHeaderSelected : Theme.deviceHeader
-        }
-        Rectangle {
-            y: 3
-            width: parent.width
-            height: parent.height - y
-            color: frame.selected ? Theme.deviceHeaderSelected : Theme.deviceHeader
+            radius: 2
+            color: frame.headerColor
         }
 
         DeviceHeaderButton {
@@ -297,16 +310,13 @@ Item {
             tooltip: qsTr("Unfold")
             onClicked: Session.deviceSelection.toggleFold(frame.deviceId)
         }
-        ToggleButton {
+        Activator {
             objectName: "foldedEnableButton"
             x: (parent.width - width) / 2
             y: 4 + 16 + 4
-            width: 14
-            height: 14
-            role: "activator"
-            checkable: false
+            width: 13
+            height: 13
             checked: deviceInfo.enabled
-            tooltip: qsTr("Device On/Off")
             onClicked: deviceInfo.setEnabled(!deviceInfo.enabled)
         }
         // The name, reading upwards from near the top.
@@ -314,7 +324,7 @@ Item {
             id: verticalTitle
             objectName: "verticalTitle"
             x: 2
-            y: 4 + 16 + 4 + 14 + 4
+            y: 4 + 16 + 4 + 13 + 4
             width: parent.width - 4
             height: Math.max(16, parent.height - y - 4)
             clip: true

@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Templates as T
 import SUBstation
 
-// QMenuBar::item: padding 4 10, SURFACE while open or under the mouse.
+// QMenuBar::item: padding 4 10, SURFACE (rounded) while open or under the mouse.
 T.MenuBarItem {
     id: control
 
@@ -25,6 +25,7 @@ T.MenuBarItem {
     }
 
     background: Rectangle {
+        radius: Theme.radius
         color: control.down || control.highlighted ? Theme.surface : "transparent"
     }
 }

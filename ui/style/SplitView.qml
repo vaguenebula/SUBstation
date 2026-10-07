@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Templates as T
 import SUBstation
 
-// QSplitter: 6 px handles of BORDER between the panes.
+// The splitters between the window's sections: 4 px handles of BORDER.
 T.SplitView {
     id: control
 
@@ -12,8 +12,8 @@ T.SplitView {
                              implicitContentHeight + topPadding + bottomPadding)
 
     handle: Rectangle {
-        implicitWidth: control.orientation === Qt.Horizontal ? 6 : control.width
-        implicitHeight: control.orientation === Qt.Horizontal ? control.height : 6
+        implicitWidth: control.orientation === Qt.Horizontal ? 4 : control.width
+        implicitHeight: control.orientation === Qt.Horizontal ? control.height : 4
         color: Theme.border
     }
 }

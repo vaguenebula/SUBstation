@@ -38,13 +38,17 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 selection's `trackId`: a track, a return or the master; none while nothing is selected):
 
 ```
-DevicePanel (PANEL, a BORDER line above)
-└─ DeviceChainArea (clips; scrolls sideways by contentX)
+DevicePanel (WINDOW, the info view at its left in the main window)
+└─ DeviceChainArea (panelMargin, 8 px, all round; clips; scrolls sideways by contentX)
    └─ Row
       ├─ DeviceChain ("": the track's own)
       │    [DeviceFrame] [DeviceFrame] [DeviceFrame (rack)] [RackChainView: DeviceChain (its chain) ...] [DeviceFrame]
       └─ the hint
 ```
+
+As in Ableton, the devices stand on the window's colour, 8 px apart (`DeviceChainArea::kSpacing`), with a grip in
+each gap (`DeviceGrip`: two short dark lines upright in the middle, drawn by the frame before it); the info view at
+the panel's left (main window) has one after it too.
 
 `DeviceChain` is a `Row` over a `DeviceChainList` (`deviceIds` of one chain, changing only when the chain's devices
 do, so the `Repeater` makes its frames again only then, not as devices are selected, switched or edited: the frames
@@ -64,8 +68,9 @@ focus), the `statusMessage(text)` signal, and its `implicitHeight`.
 ### Height
 
 The panel never scrolls vertically. Its height is worked out once from a measured, hidden `DeviceParamKnob` (the
-`probe`) and the title font: the tallest device is its border, a title bar and a page of knobs in two rows with the
-body's margins, 6 px above and below (`deviceHeight`); the panel adds `panelMargin` (8 px) above and below. Every
+`probe`) and the title font: the tallest device is its border, a title bar and a page of knobs in two rows 14 px
+apart with the body's margins, 6 px above and below (`deviceHeight`); the panel adds `panelMargin` (8 px) above and
+below. Every
 device is that tall, so the tallest page of knobs is as far from its title bar as from the frame's bottom, and an
 editor's graphs take the height there is, with the same margins. (The Python panel also added `EXTRA_HEIGHT` and a
 scroll bar's width, which left more room below a device's knobs than above them; the chain has no scroll bar.) The
@@ -100,7 +105,8 @@ chain order, all of one chain (the track's own or a rack's).
   (see [README.md](README.md#what-an-action-acts-on)). A click beside the devices (`clickBeside()`) clears the device
   selection but keeps the focus here, so Ctrl+V pastes into this track. When the `Selection` moves on (another track,
   or the focus elsewhere), the device selection is dropped; devices no longer shown are no longer selected.
-- A frame shows it is selected by an accent border and a lighter title bar (`kDeviceHeaderSelected`).
+- A frame shows it is selected by its title bar and edge in the selection's teal (`kDeviceHeaderSelected`), as in
+  Ableton.
 
 ## Commands
 
@@ -153,11 +159,11 @@ The device view's clipboard is its own: the arrangement's clips, automation and 
 shows of the device: its name, tooltip, kind, on/off, folded, its chain, Move Left/Right, a plug-in's loading state
 and editor, its sidechain) reading the project again whenever that may have changed:
 
-- **Frame**: `kPanelAlt` in a 1 px line (`kAccent` while selected), 4 px corners. Its width is `DEVICE_WIDTH` (216 px),
+- **Frame**: `kPanelAlt` in a 1 px line of its title bar's colour, 3 px corners. Its width is `DEVICE_WIDTH` (216 px),
   a rack's or an editor's own (`body.implicitWidth + 2`: a rack's grows with its macros and its chain list), or 26 px
   folded.
-- **Title bar** (`kDeviceHeader`, lighter while selected): the fold button, the on/off switch
-  (`DeviceInfo::setEnabled`), the name (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
+- **Title bar** (`kDeviceHeader`, teal while selected): the fold button, the on/off switch (round, as Ableton's:
+  `DeviceInfo::setEnabled`), the name (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
   and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the sidechain button (a
   device with a sidechain input), the page arrows and "n/m" (only with more than one page), the save button.
 - **Body**: a `Loader` taking all the height there is: a rack's `RackDeviceBody`, a plug-in's `PluginDeviceBody`,

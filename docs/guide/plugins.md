@@ -81,7 +81,7 @@ its place and settings in the project, shows what's wrong in the device view, an
 when it's back (after a rescan).
 
 Opening a project shows it at once, and its plug-ins load after it, one at a time, while
-you work (the right end of the status bar counts them: *Loading plug-ins: 3 of 12*).
+you work (the title bar counts them, on its right: *Loading plug-ins: 3 of 12*).
 Meanwhile:
 
 - a plug-in still waiting says so in the device view (*… is loading*), and its track plays

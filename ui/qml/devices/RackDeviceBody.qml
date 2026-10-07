@@ -91,12 +91,12 @@ Item {
         }
     }
 
-    // Two rows of macros (one while there is one), left to right.
+    // Two rows of macros (one while there is one), left to right, in the middle of the height.
     Grid {
         id: macroGrid
         objectName: "macroGrid"
         x: body.macrosLeft + (body.macrosRight - body.macrosLeft - width) / 2
-        y: 6
+        y: Math.max(6, Math.round((body.height - height) / 2))
         columns: Math.max(1, Math.ceil(rackMacros.count / 2))
         columnSpacing: 4
         rowSpacing: 4
