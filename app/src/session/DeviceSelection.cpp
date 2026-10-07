@@ -35,9 +35,11 @@ DeviceSelection::DeviceSelection(ProjectEditor* editor, Selection* selection, En
     : QObject(parent), editor_(editor), project_(editor->project()), selection_(selection), bridge_(bridge) {
     connect(selection_, &Selection::changed, this, &DeviceSelection::onSelectionChanged);
     connect(project_, &Project::devicesChanged, this, &DeviceSelection::onDevicesChanged);
-    connect(project_, &Project::devicesFolded, this, [this](const QString& trackId) {
-        if (trackId == trackId_) rebuild();
-    });
+    for (auto viewChanged : {&Project::devicesFolded, &Project::rackViewChanged}) {
+        connect(project_, viewChanged, this, [this](const QString& trackId) {
+            if (trackId == trackId_) rebuild();
+        });
+    }
     // (It, or its group.)
     connect(project_, &Project::freezeChanged, this, [this](const QString&) { rebuild(); });
     connect(project_, &Project::reset, this, [this] { showTrack({}); });
@@ -101,7 +103,7 @@ QString DeviceSelection::shownChain(const QString& rackId) const {
 
 bool DeviceSelection::frozen() const { return !trackId_.isEmpty() && project_->frozenBy(trackId_).has_value(); }
 
-// The devices shown: each, then (a rack not folded) those in the chain it shows.
+// The devices shown: each, then (a rack not folded, showing its devices) those in the chain it shows.
 QStringList DeviceSelection::computeShown() const {
     QStringList shown;
     const auto* list = devices();
@@ -109,7 +111,10 @@ QStringList DeviceSelection::computeShown() const {
     std::function<void(const std::vector<Device>&)> add = [&](const std::vector<Device>& chain) {
         for (const Device& device : chain) {
             shown.append(device.id);
-            if (!device.isRack() || device.chains.empty() || project_->isDeviceFolded(device.id)) continue;
+            if (!device.isRack() || device.chains.empty() || project_->isDeviceFolded(device.id) ||
+                !project_->areRackDevicesShown(device.id)) {
+                continue;
+            }
             const QString chainId = shownChain(device.id);
             for (const Chain& rackChain : device.chains) {
                 if (rackChain.id == chainId) add(rackChain.devices);
@@ -248,6 +253,7 @@ void DeviceSelection::clickBeside() {
 }
 
 void DeviceSelection::clickChain(const QString& rackId, const QString& chainId) {
+    if (!trackId_.isEmpty()) editor_->setRackDevicesShown(trackId_, rackId, true);  // (its devices, as asked for)
     const bool showing = shown_.contains(rackId) && !project_->isDeviceFolded(rackId) && shownChain(rackId) == chainId;
     if (shownChains_.value(rackId) != chainId || !showing) {
         shownChains_.insert(rackId, chainId);
@@ -350,6 +356,14 @@ void DeviceSelection::toggleFold(const QString& deviceId) {
     if (trackId_.isEmpty() || !project_->hasDevice(trackId_, deviceId)) return;
     const QStringList devices = selected_.contains(deviceId) ? selected_ : QStringList{deviceId};
     editor_->setDevicesFolded(trackId_, devices, !project_->isDeviceFolded(deviceId));
+}
+
+void DeviceSelection::toggleChainList(const QString& rackId) {
+    if (!trackId_.isEmpty()) editor_->setChainListShown(trackId_, rackId, !project_->isChainListShown(rackId));
+}
+
+void DeviceSelection::toggleRackDevices(const QString& rackId) {
+    if (!trackId_.isEmpty()) editor_->setRackDevicesShown(trackId_, rackId, !project_->areRackDevicesShown(rackId));
 }
 
 bool DeviceSelection::copySelected() {

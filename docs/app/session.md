@@ -192,8 +192,11 @@ menus, drops), and the session dispatches the Edit menu's commands to it.
 
 `DeviceSelection` (`Session.deviceSelection`, [DeviceSelection.h](../../app/src/session/DeviceSelection.h)) is the
 device view without its widgets. It shows the selected track's chain (`trackId`: a track, a return or the master), and
-after each rack, unless it is folded, the chain it shows (the one last clicked in its chain list: `shownChain()`, else
-its first), and so on inside: `shownDevices`. A frozen track (or one in a frozen group) shows none (`hint`).
+after each rack, unless it is folded or hides its devices, the chain it shows (the one last clicked in its chain list:
+`shownChain()`, else its first), and so on inside: `shownDevices`. A frozen track (or one in a frozen group) shows none
+(`hint`). `toggleChainList(rack)` and `toggleRackDevices(rack)` show or hide a rack's chain list (hidden by default)
+and its chain's devices (shown by default): view state (`ProjectEditor::setChainListShown`, `setRackDevicesShown`).
+Clicking a chain (`clickChain`) shows its rack's devices again.
 
 - **Selecting**: a click selects a device, Ctrl adds or removes it, Shift selects the range from the last one clicked
   (`anchor`); a selection is of one chain's devices. A press on a device already selected keeps the others (to drag

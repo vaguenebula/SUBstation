@@ -27,7 +27,8 @@
 // line up with it (the same alignInputs). A sidechain into a device in a chain
 // lines up with the signal at that device (the devices before the rack, then
 // those before it in its chain), and a delay before the device makes its chain
-// later, and so maybe the rack.
+// later, and so maybe the rack. A tap after a device in a chain leaves as that
+// device's signal does: before the chain's fader and the delay lining it up.
 
 #include <algorithm>
 #include <cstddef>
@@ -41,10 +42,11 @@ struct RouteEdge {
     int from = 0;
     int to = -1;
     bool sums = true;  // `to` sums it into its input (false: an input edge or a sidechain)
-    // Where it leaves `from`: after the first `tap` of the devices in its own
-    // chain (0: before them all; a rack counts as one), as it leaves the last of
-    // them (before any delay lining up the next one); -1: after all of them (an
-    // output, a send, a pre-fader tap).
+    // Where it leaves `from`: after the device in slot `tap - 1` of its devices
+    // (ChainSlot: depth first, so devices in its racks' chains too), as it leaves
+    // it (before any delay lining up the next one, and in a rack's chain before
+    // the chain's fader); 0: before them all; -1: after all of them (an output, a
+    // send, a pre-fader tap).
     int tap = -1;
     // A sidechain: the device of `to` it goes into (its slot: ChainSlot), where
     // it is aligned; -1: none (or one not aligned: a device switched off).
@@ -184,18 +186,17 @@ inline GraphLatencies alignGraph(const std::vector<int>& order, const std::vecto
     const auto slotsOf = [&](size_t node) -> const std::vector<ChainSlot>& {
         return node < chains.size() ? chains[node] : kNoDevices;
     };
-    std::vector<std::vector<int>> tops(count + 1);  // per node, the slots of its own chain
     const auto arrival = [&](int e) {
         const RouteEdge& edge = edges[static_cast<size_t>(e)];
         const size_t from = static_cast<size_t>(edge.from);
-        const auto& top = tops[from];
-        // After device tap - 1 of its own chain: as it leaves it (not as late as
-        // the next one hears it: a delay before that comes later).
+        const auto& out = result.deviceOut[from];
+        // After the device in slot tap - 1: as it leaves it (not as late as the
+        // next one hears it: a delay before that comes later).
         int latency = result.deviceLatency[from].back();  // after all of them
         if (edge.tap == 0) {
             latency = 0;
-        } else if (edge.tap > 0 && static_cast<size_t>(edge.tap) < top.size()) {
-            latency = result.deviceOut[from][static_cast<size_t>(top[static_cast<size_t>(edge.tap) - 1])];
+        } else if (edge.tap > 0 && static_cast<size_t>(edge.tap) <= out.size()) {
+            latency = out[static_cast<size_t>(edge.tap) - 1];
         }
         return result.inputLatency[from] + latency;
     };
@@ -223,10 +224,9 @@ inline GraphLatencies alignGraph(const std::vector<int>& order, const std::vecto
             const int device = edges[static_cast<size_t>(e)].device;
             if (static_cast<size_t>(device) < slots.size()) into[static_cast<size_t>(device)].push_back(e);
         }
-        // Each rack's chains, as lists of their slots.
+        // The strip's own chain, and each rack's chains, as lists of their slots.
         std::vector<std::vector<std::vector<int>>> kids(slots.size());
-        auto& top = tops[node];
-        top.clear();
+        std::vector<int> top;
         for (size_t s = 0; s < slots.size(); ++s) {
             if (slots[s].isRack()) kids[s].resize(static_cast<size_t>(slots[s].chains));
             const int rack = slots[s].rack;

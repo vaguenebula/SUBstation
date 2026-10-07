@@ -10,10 +10,10 @@ import SUBstation
 // while there is more than one page, the save button) and its body: a page of
 // knobs (a built-in device without an editor of its own), its editor
 // (DeviceEditors), a plug-in's parameters (or why it shows none), or a rack's
-// macros and chains. Folded, it is a narrow strip: the triangle, the switch
-// and the name reading upwards. Clicks on its background, title bar and
-// labels select it, drag it, open its menu (DeviceFrameInput); the menus and
-// dialogs are the panel's.
+// macros and (while shown) its chain list. Folded, it is a narrow strip: the
+// triangle, the switch and the name reading upwards. Clicks on its background,
+// title bar and labels select it, drag it, open its menu (DeviceFrameInput);
+// the menus and dialogs are the panel's.
 Item {
     id: frame
 
@@ -30,14 +30,15 @@ Item {
     readonly property Item body: bodyLoader.item
     readonly property int pages: body && body.pages !== undefined ? body.pages : 1
     readonly property int page: body && body.page !== undefined ? body.page : 0
-    // A rack's chain shown beside it (not while folded).
-    readonly property bool showsChain: deviceInfo.isRack && !deviceInfo.folded && rackChains.count > 0
-                                       && rackChains.shownChain !== ""
+    // A rack's chain shown beside it (not while folded, nor while it hides its devices).
+    readonly property bool showsChain: deviceInfo.isRack && !deviceInfo.folded && deviceInfo.rackDevicesShown
+                                       && rackChains.count > 0 && rackChains.shownChain !== ""
     readonly property string shownChain: rackChains.shownChain
     readonly property real headerHeight: Math.max(16, titleMetrics.height) + 4
-    // DEVICE_WIDTH; a rack's RACK_WIDTH; an editor's own; FOLDED_WIDTH folded.
-    readonly property real unfoldedWidth: deviceInfo.isRack ? 420
-                                         : (editorUrl !== "" && body ? body.implicitWidth + 2 : 216)
+    // DEVICE_WIDTH; a rack's or an editor's own (a rack's with its macros, and its chain list while shown);
+    // FOLDED_WIDTH folded.
+    readonly property real unfoldedWidth: (deviceInfo.isRack || editorUrl !== "") && body ? body.implicitWidth + 2
+                                         : deviceInfo.isRack ? 200 : 216
     readonly property alias input: input
     readonly property alias foldButton: foldButton
     readonly property alias enableButton: enableButton
@@ -73,6 +74,7 @@ Item {
         const props = { trackId: frame.trackId, deviceId: frame.deviceId }
         if (deviceInfo.isRack) {
             props.panel = frame.panel
+            props.info = deviceInfo
             bodyLoader.setSource(Qt.resolvedUrl("RackDeviceBody.qml"), props)
         } else if (deviceInfo.isPlugin) {
             props.info = deviceInfo

@@ -256,6 +256,15 @@ QString DeviceParam::rackId() const {
     }
 }
 
+QStringList DeviceParam::macroNames() const {
+    QStringList names;
+    const QString rack = rackId();
+    const sub::app::Device* device = rack.isEmpty() ? nullptr : session_->project()->findDevice(trackId_, rack);
+    for (int i = 0; device != nullptr && i < sub::app::macroCount(*device); ++i)
+        names << sub::app::macroName(*device, i);
+    return names;
+}
+
 int DeviceParam::macro() const {
     if (!session_)
         return -1;

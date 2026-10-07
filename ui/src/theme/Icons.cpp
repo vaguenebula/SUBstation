@@ -209,6 +209,24 @@ const std::map<QString, Icon>& icons() {
                                             for (const auto& fader : faders)
                                                 p.drawRoundedRect(QRectF(fader[0] - 8, fader[1] - 5, 16, 10), 3, 3);
                                         }};
+        // Rows, each with its switch: a rack's chain list.
+        t[QStringLiteral("chain_list")] = {text, [](QPainter& p, const QColor& c, bool) {
+                                               for (const qreal y : {12.0, 28.0, 44.0}) {
+                                                   p.fillRect(QRectF(8, y, 9, 9), c);
+                                                   p.fillRect(QRectF(23, y + 2, 33, 5), c);
+                                               }
+                                           }};
+        // Devices side by side in a bracket: the devices of a rack's chain, beside it.
+        t[QStringLiteral("rack_devices")] = {text, [](QPainter& p, const QColor& c, bool) {
+                                                 p.setPen(pen(c, 5, Qt::RoundCap, Qt::RoundJoin));
+                                                 p.setBrush(Qt::NoBrush);
+                                                 p.drawPath(path({{14, 10}, {6, 10}, {6, 54}, {14, 54}}, false));
+                                                 p.drawPath(path({{50, 10}, {58, 10}, {58, 54}, {50, 54}}, false));
+                                                 p.setPen(Qt::NoPen);
+                                                 p.setBrush(c);
+                                                 p.drawRoundedRect(QRectF(15, 18, 15, 28), 3, 3);
+                                                 p.drawRoundedRect(QRectF(34, 18, 15, 28), 3, 3);
+                                             }};
         // A device's fold button: a triangle pointing down while it is open, right while folded.
         t[QStringLiteral("fold")] = {text, [](QPainter& p, const QColor& c, bool folded) {
                                          p.fillPath(folded ? path({{22, 14}, {46, 32}, {22, 50}}, true)

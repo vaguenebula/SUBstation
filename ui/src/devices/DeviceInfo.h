@@ -3,14 +3,16 @@
 // A device of the track the device view shows, as its frame and title bar show
 // it: what it is called (a rack by its own name, a plug-in by its plug-in's),
 // the title's tooltip (a plug-in's name, vendor, file and latency; a rack's
-// name and latency), whether it is on, folded, an instrument, where it is in
+// name and latency), whether it is on, folded (a rack: whether its chain list
+// shows, and its chain's devices), an instrument, where it is in
 // its chain (Move Left / Move Right), a plug-in's loading state (loaded,
 // waiting to load, why it isn't), its editor window (open or not), and its
 // sidechain: the button lit while it has one, the tooltip naming the source and
 // where it is taken, and the menu (No Sidechain, the tracks, groups and returns
 // it can come from, those that would close a cycle greyed out; then where it is
-// taken along the source: Pre FX, after each of its effects, Post FX, Post
-// Mixer). It reads the project again whenever what it shows may have changed.
+// taken along the source: Pre FX, after each of its effects (those in its racks
+// too), Post FX, Post Mixer). It reads the project again whenever what it shows
+// may have changed.
 //
 //   DeviceInfo { id: info; session: Session; trackId: ...; deviceId: ... }
 //   Text { text: info.name }
@@ -48,6 +50,9 @@ class DeviceInfo : public QObject {
     Q_PROPERTY(bool instrument READ instrument NOTIFY changed)
     Q_PROPERTY(bool enabled READ enabled NOTIFY changed)
     Q_PROPERTY(bool folded READ folded NOTIFY changed)
+    // A rack's chain list shows (hidden by default); its chain's devices show beside it (shown by default).
+    Q_PROPERTY(bool chainListShown READ chainListShown NOTIFY changed)
+    Q_PROPERTY(bool rackDevicesShown READ rackDevicesShown NOTIFY changed)
     Q_PROPERTY(QString chainId READ chainId NOTIFY changed)  // the chain it is in ("": the track's own)
     Q_PROPERTY(bool canMoveLeft READ canMoveLeft NOTIFY changed)
     Q_PROPERTY(bool canMoveRight READ canMoveRight NOTIFY changed)
@@ -82,6 +87,8 @@ public:
     bool instrument() const { return state_.instrument; }
     bool enabled() const { return state_.enabled; }
     bool folded() const { return state_.folded; }
+    bool chainListShown() const { return state_.chainListShown; }
+    bool rackDevicesShown() const { return state_.rackDevicesShown; }
     QString chainId() const { return state_.chainId; }
     bool canMoveLeft() const { return state_.canMoveLeft; }
     bool canMoveRight() const { return state_.canMoveRight; }
@@ -110,9 +117,10 @@ public:
     Q_INVOKABLE void setSidechain(const QString& sourceTrackId, const QString& tap);
 
     // Where a sidechain from a track can be taken, along its signal, as in
-    // Ableton: before its devices, after each, after them all, after its fader
+    // Ableton: before its devices, after each (in its racks' chains too, before
+    // the rack: "After Rack › Chain › EQ"), after them all, after its fader
     // (label, tap). On a MIDI track, Pre FX is after the instrument; devices of
-    // the same name are numbered.
+    // the same name in a chain are numbered.
     std::vector<std::pair<QString, QString>> tapChoices(const QString& sourceTrackId) const;
     // Where a sidechain is taken now: after a device that has left its source,
     // before the fader; after its instrument, before its effects.
@@ -136,6 +144,8 @@ private:
         bool instrument = false;
         bool enabled = true;
         bool folded = false;
+        bool chainListShown = false;
+        bool rackDevicesShown = true;
         QString chainId;
         bool canMoveLeft = false;
         bool canMoveRight = false;

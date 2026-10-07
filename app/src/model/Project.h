@@ -25,7 +25,10 @@
 // automation hidden; a folded group keeps its row but hides its tracks (and its
 // automation). So can any device (foldedDevices(), by id: view state too, so
 // undoing a change to the devices doesn't unfold them): the device view shows it
-// as a narrow strip with its name, and a folded rack hides its chains.
+// as a narrow strip with its name, and a folded rack hides its chains. A rack's
+// chain list shows only when asked for (shownChainLists()), and the devices of
+// the chain it shows, beside it, unless hidden (hiddenRackDevices()): view state
+// as well.
 //
 // Return tracks (kind "return") are fed by sends: any track, group or return can
 // send its signal to a return, at a level, after its fader or before it
@@ -139,6 +142,8 @@ struct ProjectContents {
     std::vector<Track> tracks;
     std::vector<Track> returns;
     QSet<QString> foldedDevices;
+    QSet<QString> shownChainLists;
+    QSet<QString> hiddenRackDevices;
     QString path;  // the file it was opened from ("": none)
 };
 
@@ -275,6 +280,12 @@ public:
     // Ids of the devices shown folded (view state).
     const QSet<QString>& foldedDevices() const { return foldedDevices_; }
     bool isDeviceFolded(const QString& deviceId) const { return foldedDevices_.contains(deviceId); }
+    // Ids of the racks whose chain list shows (view state: hidden by default).
+    const QSet<QString>& shownChainLists() const { return shownChainLists_; }
+    bool isChainListShown(const QString& rackId) const { return shownChainLists_.contains(rackId); }
+    // Ids of the racks that don't show their chain's devices beside them (view state: shown by default).
+    const QSet<QString>& hiddenRackDevices() const { return hiddenRackDevices_; }
+    bool areRackDevicesShown(const QString& rackId) const { return !hiddenRackDevices_.contains(rackId); }
 
     // --- Mutations (call through undo commands) ---
     void insertTrack(Track track, int index);
@@ -324,6 +335,9 @@ public:
     // Devices shown folded from now on, without a signal: devices about to be
     // added (pasted copies of folded ones), whose devicesChanged follows.
     void addFoldedDevices(const QSet<QString>& deviceIds);
+    // Show or hide a rack's chain list, or its chain's devices beside it (view state: not undone).
+    void setChainListShown(const QString& trackId, const QString& rackId, bool shown);
+    void setRackDevicesShown(const QString& trackId, const QString& rackId, bool shown);
     void updateSettings(const SettingsValues& values);
     // Replace an envelope; an empty one removes the target's automation.
     void setEnvelope(const QString& owner, const QString& key, const Envelope& points);
@@ -354,6 +368,8 @@ Q_SIGNALS:
     void deviceStateChanged(const QString& trackId, const QString& deviceId);
     // Devices on it were folded or unfolded.
     void devicesFolded(const QString& trackId);
+    // A rack on it showed or hid its chain list, or its chain's devices.
+    void rackViewChanged(const QString& trackId);
     // It was frozen or unfrozen.
     void freezeChanged(const QString& trackId);
     // Tempo, time signature, key, loop, automation lock.
@@ -383,6 +399,8 @@ private:
     std::vector<Track> tracks_;
     std::vector<Track> returns_;
     QSet<QString> foldedDevices_;
+    QSet<QString> shownChainLists_;
+    QSet<QString> hiddenRackDevices_;
     QString path_;
 };
 

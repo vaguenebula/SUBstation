@@ -34,6 +34,7 @@ void EngineBridge::onReset() {
     d.paramInfos.clear();
     d.paramSpecs.clear();
     d.automating.clear();
+    d.macroMoved.clear();
     d.overridden.clear();
     d.mixer.clear();
     d.inputs.clear();
@@ -129,6 +130,7 @@ void EngineBridge::onTrackRemoved(const QString& trackId) {
     if (engineId) engine_.removeTrack(*engineId);  // also removes its devices
     d.meters.remove(trackId);
     d.automating.remove(trackId);
+    d.macroMoved.remove(trackId);
     d.mixer.remove(trackId);
     d.inputs.remove(trackId);
     d.outputs.remove(trackId);

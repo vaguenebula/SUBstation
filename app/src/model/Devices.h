@@ -57,7 +57,7 @@ QString kindName(const Device& device);
 // without one), or an empty rack. Throws EditError for a kind there is no such
 // device of.
 Device newDevice(const QString& kind, const std::optional<PluginRef>& plugin = std::nullopt);
-// A rack with these chains, its macros at 0.
+// A rack with these chains and kDefaultMacroCount macros, at 0.
 Device newRack(std::vector<Chain> chains);
 Chain newChain(const QString& name, std::vector<Device> devices = {});
 

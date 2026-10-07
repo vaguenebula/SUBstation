@@ -1,6 +1,7 @@
 #include "model/ParamSpec.h"
 
 #include "model/Automation.h"
+#include "model/Device.h"
 #include "model/Notes.h"
 #include "model/Numbers.h"
 #include "model/Timebase.h"
@@ -131,6 +132,19 @@ ParamSpec sendSpec(const QString& returnId, const QString& letter) {
     spec.scale = ParamSpec::Scale::Fader;
     spec.text = formatDb;
     return spec;
+}
+
+std::vector<ParamSpec> macroSpecs(const QString& rackId, const QStringList& names, const QString& group) {
+    std::vector<ParamSpec> specs;
+    for (qsizetype i = 0; i < names.size(); ++i) {
+        ParamSpec macro;
+        macro.key = automation::deviceKey(rackId, macroParam(static_cast<int>(i)));
+        macro.name = names[i];
+        macro.group = group;
+        macro.text = [](double value) { return QStringLiteral("%1 %").arg(std::lround(value * 100.0)); };
+        specs.push_back(macro);
+    }
+    return specs;
 }
 
 std::vector<ParamSpec> chainSpecs(const QString& rackId, const std::vector<std::pair<QString, QString>>& chains,

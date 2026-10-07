@@ -109,7 +109,8 @@ Device newRack(std::vector<Chain> chains) {
     Device rack;
     rack.id = newId();
     rack.kind = kRackKind;
-    for (int i = 0; i < kMacroCount; ++i) rack.params.insert(macroParam(i), 0.0);
+    for (int i = 0; i < kDefaultMacroCount; ++i) rack.params.insert(macroParam(i), 0.0);
+    rack.macroNames.resize(kDefaultMacroCount);
     rack.chains = std::move(chains);
     return rack;
 }

@@ -42,7 +42,7 @@ session's ([session.md](session.md)).
 | [Project.h](../../app/src/model/Project.h) | `Project` (QObject: queries, mutators, signals), `ProjectContents` (everything replaced at once), `ChainField`/`ChainValue` and `SettingsField`/`SettingsValue` (what `updateChain` and `updateSettings` change), `DeviceParam`, `LaneRef` |
 | [Track.h](../../app/src/model/Track.h) | `Track`, `Freeze`, `MidiInput`, `Send`, `SendMap`, `EnvelopeMap`; `TrackField`/`TrackValue` (what `updateTrack` changes) and `trackFieldName`; the kinds (`kAudioKind`, `kMidiKind`, `kGroupKind`, `kReturnKind`, `kMasterKind`), `kMonitorModes`, `kTrackColors`, track heights; `newMaster`, `returnLetter` |
 | [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `PlayedNote`; `kWarpModes`, `legacyWarpMode`, `kMinSegmentBpm`, `kMaxSegmentBpm` |
-| [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kMacroCount`, `macroParam`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
+| [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kDefaultMacroCount`, `kMaxMacroCount`, `macroParam`, `macroIndex`, `macroCount`, `macroName`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
 | [Devices.h](../../app/src/model/Devices.h) | Kinds of devices: `builtinDevices()`, `builtinDevice()`, `builtinCategories()` (from the engine), `kDefaultInstrument`; `isInstrument`, `deviceIsInstrument`, `loadsInto`, `deviceName`, `kindName`; `newDevice`, `newRack`, `newChain`; `builtinParamInfo`, `deviceIdsOf`, `deviceIdsOfList` |
 | [Routing.h](../../app/src/model/Routing.h) | The group tree (`TreeEntry`, `TrackTree`, `treeProblem`, `repairTree`) and the routing graph (`routingGraph`, `feeds`, `wouldCycle`, `inputWouldCycle`, `sidechainWouldCycle`) |
 | [Automation.h](../../app/src/model/Automation.h) | `AutomationPoint`, `Envelope`, `AutomationView`, `kMaster`; in `sub::app::automation`: target keys, the mixer's normalized mappings, evaluation (`valueAt`, `leftValue`, `shape`), every envelope edit |
@@ -142,10 +142,12 @@ tracks, the returns, then the master; `owners()` the same ids; `senders()` the t
   (base64 `.vstpreset`) as last stored, for saving and copying. Its `params` only record values changed from the
   host, for undo.
 - **Rack** (`kind` `kRackKind`, `"rack"`): `chains` is a list of `Chain` (`id`, `name`, `devices`, and a mixer:
-  `volumeDb`, `pan`, `mute`, `solo`; while any chain of a rack is soloed, only those are heard). Its `params` are its
-  macros' values, `"macro1"`..`"macro8"` (`macroParam(i)`, `kMacroCount` = 8), normalized 0..1. `macros` is a list
-  of `MacroMapping{macro, deviceId, paramId, low, high}`: the macro's 0..1 maps to the parameter's normalized
-  `low`..`high` (`low > high` turns it the other way; `target()`). Racks nest at most `kMaxRackDepth` = 8 deep (the
+  `volumeDb`, `pan`, `mute`, `solo`; while any chain of a rack is soloed, only those are heard). It has 1 to
+  `kMaxMacroCount` (16) macros, a new one `kDefaultMacroCount` (4): `macroNames` holds one name per macro (`""`: named
+  by its number, "Macro N"; `macroName()`), so its size is how many it has (`macroCount()`). Its `params` are its
+  macros' values, `"macro1"`.. (`macroParam(i)`; `macroIndex()` the other way), normalized 0..1, one per macro.
+  `macros` is a list of `MacroMapping{macro, deviceId, paramId, low, high}`: the macro's 0..1 maps to the parameter's
+  normalized `low`..`high` (`low > high` turns it the other way, 0.5..1 is its upper half; `target()`). Racks nest at most `kMaxRackDepth` = 8 deep (the
   engine's limit). A rack with an instrument in it is an *Instrument Rack* (`deviceIsInstrument`), otherwise an
   *Audio Effect Rack*. `name` is the preset it was saved as or loaded from (none: named by its kind; `deviceName`).
 
@@ -310,8 +312,9 @@ file path (see [ui/device-view.md](../ui/device-view.md)).
 ## The Project object and its signals
 
 `Project` ([Project.h](../../app/src/model/Project.h)) holds `tempo`, `timeSignature`, `key`, the loop
-(`loopEnabled`, `loopStart`, `loopEnd`, beats), `automationLocked`, `master`, `tracks`, `returns`, `foldedDevices`
-(ids, view state) and `path`. QML reads the settings as properties (`tempo`, `loopEnabled`, `loopStart`, `loopEnd`,
+(`loopEnabled`, `loopStart`, `loopEnd`, beats), `automationLocked`, `master`, `tracks`, `returns`, `foldedDevices`,
+`shownChainLists` (the racks whose chain list shows: hidden by default) and `hiddenRackDevices` (the racks whose
+chain's devices don't show beside them: shown by default) (ids, view state), and `path`. QML reads the settings as properties (`tempo`, `loopEnabled`, `loopStart`, `loopEnd`,
 `automationLocked`, `timeSignatureText`, `keyName`, `path`).
 
 | Signal | When |
@@ -326,6 +329,7 @@ file path (see [ui/device-view.md](../ui/device-view.md)).
 | `deviceParamChanged(track id, device id, param id)` | one parameter |
 | `deviceStateChanged(track id, device id)` | a device's state was set (a preset, a sample) |
 | `devicesFolded(track id)` | devices on it folded or unfolded |
+| `rackViewChanged(track id)` | a rack on it showed or hid its chain list, or its chain's devices |
 | `freezeChanged(track id)` | it was frozen or unfrozen |
 | `settingsChanged()` | tempo, time signature, key, loop, automation lock |
 | `automationChanged(owner, key)` | an envelope was set or removed |
@@ -340,7 +344,7 @@ Mutators, called only from commands (or directly for view state): `insertTrack`,
 `setDevices`, `setChains` (several tracks' devices at once, all changed before any signal: a device moving between
 tracks), `updateChain`, `setDeviceMacros`,
 `setDeviceName`, `setDeviceParam(s)`, `setDeviceEnabled`, `setDeviceSidechain`, `setDeviceState`,
-`setDevicesFolded`, `addFoldedDevices`, `updateSettings`, `setEnvelope` (an empty envelope removes the target's
+`setDevicesFolded`, `addFoldedDevices`, `setChainListShown`, `setRackDevicesShown`, `updateSettings`, `setEnvelope` (an empty envelope removes the target's
 automation), `setAutomationView`, `replaceContents` (loading; emits `reset`), `clear`, `setPath`.
 `storePluginState()` keeps a plug-in's current state (and where it was found) in the model without a signal or an
 undo step: it isn't an edit, only what saving or copying the device needs (the bridge's `storePluginStates()`).
@@ -378,7 +382,7 @@ The session owns one `QUndoStack` and one `ProjectEditor(project, undoStack)`. T
 | `SetDevicesCommand` | a track's whole device tree |
 | `SetChainsCommand` | several tracks' devices at once (a device moving between tracks stays the same device) |
 | `SetDeviceParamCommand`, `SetDeviceParamsCommand` | one parameter; several at once (a macro and what it moves) |
-| `UpdateChainCommand`, `SetMacrosCommand`, `SetDeviceNameCommand` | a rack chain's name or mixer; a rack's macro mappings; a rack's name |
+| `UpdateChainCommand`, `SetMacrosCommand`, `SetDeviceNameCommand` | a rack chain's name or mixer; a rack's macro mappings, with the values of the parameters a range change moves (merging per gesture); a rack's name |
 | `SetDeviceStateCommand` | a device's state (a plug-in preset, a sampler's sample) |
 | `SetDeviceEnabledCommand`, `SetDeviceSidechainCommand` | on/off; sidechain |
 | `SetEnvelopeCommand`, `SetEnvelopesCommand` | one envelope; several (a range moved on several lanes) |
@@ -463,8 +467,10 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
   effects never before it), `copyDevices`, `pasteDevices` (sidechains kept unless the source is gone or would close a
   cycle; folded copies stay folded), `moveDevice(s)` [Q], `moveDevicesToTrack` [Q] (the same devices, so plug-ins
   keep their state; their automation moves with them in the same step), `removeDevice(s)` [Q], `setDevicesFolded`
-  [Q], `setDeviceDefaults` (where new devices come from: default presets). Changing a track's devices deletes the
-  automation of devices (and rack chains) that left the track, and macro mappings to them, in the same step.
+  [Q], `setChainListShown` [Q], `setRackDevicesShown` [Q] (view state), `setDeviceDefaults` (where new devices come
+  from: default presets). Changing a track's devices deletes the automation of devices (and rack chains) that left
+  the track, and macro mappings to them, in the same step; and the mappings and automation of macros a rack no longer
+  has.
 - **A device's settings**: `setDeviceParam` [Q] (a C++ form takes `old` for plug-ins, whose values the model doesn't
   hold), `setDeviceParams` [Q] (several of a built-in device's at once: one step, merging per gesture while the same
   parameters change), `touchParameter` [Q], `setDeviceState`, `loadPresetInto` (a preset into a device of its kind:
@@ -472,7 +478,10 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
 - **Racks**: `groupDevices` [Q] (Ctrl+G: devices of one chain into a new rack), `ungroupRack` [Q] (refused if several
   instruments would come out), `addRackChain`, `removeRackChains` [Q], `duplicateRackChain` [Q], `moveRackChain` [Q],
   `renameChain` [Q], `setChainParam` [Q], `mapMacro`, `unmapMacro` [Q], `macroOf`, `macroTargets`, `setMacro` [Q]
-  (the macro and every mapped parameter in one `SetDeviceParamsCommand`).
+  (the macro and every mapped parameter in one `SetDeviceParamsCommand`), `setMacroCount` [Q] (1..16: new macros
+  last, at 0; those taken away with their values, mappings and automation, one step), `renameMacro` [Q] (`""` or
+  "Macro N": by its number), `setMacroRange` [Q] (a mapping's `low`..`high`, held to 0..1; the parameter goes where
+  its macro puts it in the new range, in the same `SetMacrosCommand`, merging per gesture).
 - **Envelopes**: `setEnvelope`, `addAutomationPoint` [Q], `moveAutomationPoints`, `deleteAutomationPoints` [Q],
   `setAutomationCurve`, `clearEnvelope` [Q], `deleteAutomationRange`, `moveAutomationRange`,
   `duplicateAutomationRange`, `copyAutomationRange`, `cutAutomationRange`, `pasteAutomation`,
@@ -542,7 +551,8 @@ refused because of frozen audio are said on `refused` too. The session shows `re
 - On a MIDI track an instrument (or instrument rack) is first in its chain, and there is at most one; audio tracks,
   groups, returns and the master take no instrument.
 - Racks never nest deeper than `kMaxRackDepth`.
-- Macro mappings only name devices inside their rack.
+- Macro mappings only name devices inside their rack, and macros the rack has.
+- A rack has 1 to 16 macros, and a value for each.
 
 ## Extending it
 

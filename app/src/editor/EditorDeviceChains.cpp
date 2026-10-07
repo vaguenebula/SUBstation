@@ -19,8 +19,9 @@ using editing::optionalId;
 
 namespace {
 
-// Drop the macro mappings whose device isn't (any longer) inside its rack: a
-// macro moves parameters of devices in its rack.
+// Drop the macro mappings whose device isn't (any longer) inside its rack (a
+// macro moves parameters of devices in its rack), or whose macro the rack no
+// longer has.
 void pruneMacros(std::vector<Device>& devices) {
     for (Device* rack : iterDevices(devices)) {
         if (rack->macros.empty()) continue;
@@ -28,10 +29,19 @@ void pruneMacros(std::vector<Device>& devices) {
         inside.remove(rack->id);
         std::vector<MacroMapping> kept;
         for (const MacroMapping& m : rack->macros) {
-            if (inside.contains(m.deviceId)) kept.push_back(m);
+            if (inside.contains(m.deviceId) && m.macro < macroCount(*rack)) kept.push_back(m);
         }
         if (kept != rack->macros) rack->macros = kept;
     }
+}
+
+// The racks' macros there are ((rack id, its parameter)).
+QSet<DeviceParam> macrosOf(const std::vector<Device>& devices) {
+    QSet<DeviceParam> macros;
+    for (const Device* rack : iterDevices(devices)) {
+        for (int i = 0; i < macroCount(*rack); ++i) macros.insert({rack->id, macroParam(i)});
+    }
+    return macros;
 }
 
 // The ids of the devices of these ids (not instruments), in their order on the
@@ -196,6 +206,16 @@ void ProjectEditor::setDevicesFolded(const QString& trackId, const QStringList& 
     if (project_->hasOwner(trackId)) project_->setDevicesFolded(trackId, QSet<QString>(deviceIds.begin(), deviceIds.end()), folded);
 }
 
+void ProjectEditor::setChainListShown(const QString& trackId, const QString& rackId, bool shown) {
+    const Device* rack = project_->findDevice(trackId, rackId);
+    if (rack != nullptr && rack->isRack()) project_->setChainListShown(trackId, rackId, shown);
+}
+
+void ProjectEditor::setRackDevicesShown(const QString& trackId, const QString& rackId, bool shown) {
+    const Device* rack = project_->findDevice(trackId, rackId);
+    if (rack != nullptr && rack->isRack()) project_->setRackDevicesShown(trackId, rackId, shown);
+}
+
 void ProjectEditor::moveDevice(const QString& trackId, const QString& deviceId, int index) {
     if (!project_->hasDevice(trackId, deviceId)) return;
     const auto& devices = project_->track(trackId).devices;
@@ -327,7 +347,8 @@ bool ProjectEditor::setDevices(const QString& trackId, const std::vector<Device>
                                const QString& text) {
     // Change a track's devices; the automation of devices that leave it goes
     // with them (their parameters', and a rack's chains' faders'), and so do
-    // the mappings of macros to them (in the same undo step).
+    // the mappings of macros to them (in the same undo step). So do the
+    // mappings and automation of macros a rack no longer has.
     if (const auto problem = frozenProblem(SetDevicesCommand(project_, trackId, before, after, text))) {
         Q_EMIT refused(*problem);
         return false;
@@ -336,12 +357,17 @@ bool ProjectEditor::setDevices(const QString& trackId, const std::vector<Device>
     QSet<QString> chainsGone;
     for (const ConstRackChain& rc : iterChains(before)) chainsGone.insert(rc.chain->id);
     for (const ConstRackChain& rc : iterChains(std::as_const(after))) chainsGone.remove(rc.chain->id);
+    const QSet<DeviceParam> macrosGone = macrosOf(before) - macrosOf(after);
     pruneMacros(after);
     QStringList orphans;
     for (const auto& [key, points] : project_->track(trackId).automation) {
         const auto device = automation::keyDevice(key);
         const auto chain = automation::keyChain(key);
-        if ((device && gone.contains(*device)) || (chain && chainsGone.contains(*chain))) orphans.append(key);
+        const auto target = automation::parseKey(key);
+        const bool macroGone = device && target && macrosGone.contains({*device, target->param});
+        if ((device && gone.contains(*device)) || (chain && chainsGone.contains(*chain)) || macroGone) {
+            orphans.append(key);
+        }
     }
     if (orphans.isEmpty()) return push(std::make_unique<SetDevicesCommand>(project_, trackId, before, after, text));
     Macro macro(undoStack_, text);

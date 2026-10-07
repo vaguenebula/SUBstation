@@ -599,6 +599,26 @@ void Project::setDevicesFolded(const QString& trackId, const QSet<QString>& devi
 
 void Project::addFoldedDevices(const QSet<QString>& deviceIds) { foldedDevices_.unite(deviceIds); }
 
+void Project::setChainListShown(const QString& trackId, const QString& rackId, bool shown) {
+    if (shown == shownChainLists_.contains(rackId)) return;
+    if (shown) {
+        shownChainLists_.insert(rackId);
+    } else {
+        shownChainLists_.remove(rackId);
+    }
+    Q_EMIT rackViewChanged(trackId);
+}
+
+void Project::setRackDevicesShown(const QString& trackId, const QString& rackId, bool shown) {
+    if (shown != hiddenRackDevices_.contains(rackId)) return;
+    if (shown) {
+        hiddenRackDevices_.remove(rackId);
+    } else {
+        hiddenRackDevices_.insert(rackId);
+    }
+    Q_EMIT rackViewChanged(trackId);
+}
+
 void Project::updateSettings(const SettingsValues& values) {
     for (auto it = values.constBegin(); it != values.constEnd(); ++it) {
         const SettingsValue& value = it.value();
@@ -642,6 +662,8 @@ void Project::replaceContents(ProjectContents contents) {
     tracks_ = std::move(contents.tracks);
     returns_ = std::move(contents.returns);
     foldedDevices_ = std::move(contents.foldedDevices);
+    shownChainLists_ = std::move(contents.shownChainLists);
+    hiddenRackDevices_ = std::move(contents.hiddenRackDevices);
     const bool pathChange = path_ != contents.path;
     path_ = contents.path;
     Q_EMIT reset();

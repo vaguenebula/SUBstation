@@ -325,7 +325,7 @@ private Q_SLOTS:
         const Device effectRack = rackOf({utility("u")});
         QVERIFY(deviceIsInstrument(instrumentRack) && !deviceIsInstrument(effectRack));
         QCOMPARE(kindName(instrumentRack), QStringLiteral("Instrument Rack"));
-        QCOMPARE(newRack({}).params.size(), kMacroCount);
+        QCOMPARE(newRack({}).params.size(), kDefaultMacroCount);
         QCOMPARE(newRack({}).params.value("macro8"), 0.0);
         QVERIFY(loadsInto(effectRack, effectRack) && !loadsInto(instrumentRack, effectRack));
         QVERIFY(!loadsInto(utility("u"), newDevice("compressor")));

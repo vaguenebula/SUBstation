@@ -722,6 +722,8 @@ QJsonObject deviceToJson(const Device& device) {
                                       {QStringLiteral("high"), m.high}});
         }
         data[QStringLiteral("macros")] = macros;
+        data[QStringLiteral("macro_names")] = QJsonArray::fromStringList(
+            QStringList(device.macroNames.begin(), device.macroNames.end()));
         if (device.name && !device.name->isEmpty()) data[QStringLiteral("name")] = *device.name;
     }
     return data;
@@ -755,6 +757,7 @@ Device deviceFromJson(const QJsonValue& value) {
             for (const Device* inner : iterDevices(c.devices)) inside.insert(inner->id);
         }
         inside.remove(device.id);
+        std::vector<MacroMapping> mappings;
         for (const QJsonValue& m : listOr(d, QStringLiteral("macros"))) {
             const QJsonObject mapping = asObject(m);
             const QString target = toStr(mapping.contains(QStringLiteral("device")) ? mapping.value(QStringLiteral("device"))
@@ -762,7 +765,36 @@ Device deviceFromJson(const QJsonValue& value) {
             if (!inside.contains(target)) continue;
             const long long macro =
                 mapping.contains(QStringLiteral("macro")) ? toInt(mapping.value(QStringLiteral("macro"))) : -1;
-            if (macro >= 0 && macro < kMacroCount) device.macros.push_back(macroFromJson(mapping));
+            if (macro >= 0 && macro < kMaxMacroCount) mappings.push_back(macroFromJson(mapping));
+        }
+        // Its macros, named; before version 18 a rack had eight: as many as it
+        // uses (mapped, or turned), and at least the default.
+        if (d.contains(QStringLiteral("macro_names"))) {
+            for (const QJsonValue& name : listOr(d, QStringLiteral("macro_names"))) {
+                device.macroNames.push_back(name.isString() ? name.toString().trimmed() : QString());
+            }
+        } else {
+            int used = kDefaultMacroCount;
+            for (const MacroMapping& mapping : mappings) used = std::max(used, mapping.macro + 1);
+            for (auto it = device.params.constBegin(); it != device.params.constEnd(); ++it) {
+                const auto macro = macroIndex(it.key());
+                if (macro && it.value() != 0.0) used = std::max(used, *macro + 1);
+            }
+            device.macroNames.resize(static_cast<size_t>(used));
+        }
+        if (device.macroNames.empty()) device.macroNames.resize(kDefaultMacroCount);
+        if (device.macroNames.size() > static_cast<size_t>(kMaxMacroCount)) device.macroNames.resize(kMaxMacroCount);
+        const int count = macroCount(device);
+        for (const MacroMapping& mapping : mappings) {
+            if (mapping.macro < count) device.macros.push_back(mapping);
+        }
+        // A value for each macro (0: as a new one), none for those it hasn't.
+        for (const QString& param : device.params.keys()) {
+            const auto macro = macroIndex(param);
+            if (macro && *macro >= count) device.params.remove(param);
+        }
+        for (int i = 0; i < count; ++i) {
+            if (!device.params.contains(macroParam(i))) device.params.insert(macroParam(i), 0.0);
         }
         const QJsonValue name = d.value(QStringLiteral("name"));
         if (name.isString() && !name.toString().trimmed().isEmpty()) device.name = name.toString();  // (none before version 13)
@@ -838,11 +870,15 @@ QJsonObject projectToJson(const Project& project, const QString& projectFile) {
     for (const Track* t : project.allTracks()) {
         for (const Device* d : iterDevices(t->devices)) deviceIds.insert(d->id);
     }
-    QStringList folded;
-    for (const QString& id : project.foldedDevices()) {
-        if (deviceIds.contains(id)) folded.append(id);
-    }
-    folded.sort();
+    // View state of the devices there are, sorted.
+    const auto present = [&](const QSet<QString>& ids) {
+        QStringList kept;
+        for (const QString& id : ids) {
+            if (deviceIds.contains(id)) kept.append(id);
+        }
+        kept.sort();
+        return QJsonArray::fromStringList(kept);
+    };
     QJsonArray tracks;
     for (const Track& t : project.tracks()) tracks.append(trackToJson(t, base));
     QJsonArray returns;
@@ -859,7 +895,9 @@ QJsonObject projectToJson(const Project& project, const QString& projectFile) {
                                                  {QStringLiteral("end"), project.loopEnd()}}},
             {QStringLiteral("automation_locked"), project.automationLocked()},
             {QStringLiteral("master"), masterToJson(project.master())},
-            {QStringLiteral("folded_devices"), QJsonArray::fromStringList(folded)},
+            {QStringLiteral("folded_devices"), present(project.foldedDevices())},
+            {QStringLiteral("chain_lists_shown"), present(project.shownChainLists())},
+            {QStringLiteral("rack_devices_hidden"), present(project.hiddenRackDevices())},
             {QStringLiteral("tracks"), tracks},
             {QStringLiteral("returns"), returns}};
 }
@@ -950,6 +988,10 @@ ProjectContents contentsFromJson(const QJsonObject& data, const QString& project
     const QJsonValue key = data.value(QStringLiteral("key"));
     contents.key = key.isString() ? keyFromName(key.toString()) : std::nullopt;
     for (const QJsonValue& id : listOr(data, QStringLiteral("folded_devices"))) contents.foldedDevices.insert(toStr(id));
+    for (const QJsonValue& id : listOr(data, QStringLiteral("chain_lists_shown"))) contents.shownChainLists.insert(toStr(id));
+    for (const QJsonValue& id : listOr(data, QStringLiteral("rack_devices_hidden"))) {
+        contents.hiddenRackDevices.insert(toStr(id));
+    }
     contents.path = projectFile;
     return contents;
 }

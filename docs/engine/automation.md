@@ -253,10 +253,15 @@ send smoothing carry on from the last automated value.
   with the latency before them. The model describes them as `ParamSpec`s with `chainSpecs()` (*Chain Volume*,
   *Chain Pan* under the rack in a lane's device chooser).
 - **Macros are not engine parameters.** The engine's `RackProcessor` ([Rack.h](../../engine/src/Rack.h)) has no
-  parameters. A rack's eight macros (`macro1`..`macro8`) live in the model (`Device::params` of the rack and its
-  `MacroMapping`s); turning one sets the mapped parameters through the editor, as one undo step. The bridge offers
-  only a rack's chain faders for automation (`EngineBridge::deviceParamSpecs()`), so macros themselves can't be
-  automated today.
+  parameters. A rack's macros (`macro1`.., 1 to 16) live in the model (`Device::params` of the rack and its
+  `MacroMapping`s); turning one sets the mapped parameters through the editor, as one undo step. They are automation
+  targets of the rack all the same (`EngineBridge::deviceParamSpecs()`: its macros, by name, then its chains'
+  faders), played by the bridge: for each mapping of a macro whose envelope plays (not overridden), the mapped
+  parameter gets the macro's envelope mapped over its range (`EngineBridge::macroEnvelopes()`: each point's value
+  `low + value * (high - low)`, its curve negated when the range runs the other way, so the bends follow the
+  macro's) instead of its own. To the engine that is an ordinary lane of that parameter, so it plays sample for
+  sample, in time with the latency before the parameter's device, whichever chain it is in. A macro overridden by
+  hand stops moving them; a nearer rack's macro wins over an outer one's for the same parameter.
 
 ## The mixer's control names
 

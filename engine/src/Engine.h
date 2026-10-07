@@ -386,9 +386,10 @@ public:
     // A device's sidechain: what its aux input hears (hasSidechain in its
     // ProcessorInfo), from a track (a track, a group or a return; not the master,
     // which renders after everything), tapped after the track's fader, before it,
-    // after one of its devices (`tapProcessorId`, in the track's main chain;
-    // should that device leave it, the tap is before the fader), or before all of
-    // them (PreFx). It is lined up
+    // after one of its devices (`tapProcessorId`, in the track's main chain or in
+    // a chain of a rack there, before that chain's fader; in a rack switched off,
+    // after that rack; should that device leave the track, the tap is before the
+    // fader), or before all of them (PreFx). It is lined up
     // with the signal at the device: delayed, or that signal is (just before the
     // device). Throws std::invalid_argument for an unknown device or track, a
     // device without a sidechain input, the master, or a sidechain that would
@@ -650,6 +651,8 @@ private:
         const std::vector<std::vector<int>>* chainCompensation = nullptr;
         std::vector<int> sidechainOf;  // per slot: the snapshot edge into its sidechain input (-1: none)
         double samplesPerBeat = 0.0;
+        // Rack chain -> the snapshot edges taken after its devices (StripRender::deviceTaps).
+        const std::unordered_map<uint32_t, std::vector<int>>* chainTaps = nullptr;
     };
     // A strip's mixer envelopes in the snapshot, in samples, as late as
     // `faderLatency` (delay compensation comes after the fader, on the strip's
@@ -678,11 +681,14 @@ private:
         int device = -1;         // and that device's place in its chain
     };
     std::vector<RouteEdge> routeEdgesLocked(std::vector<EdgeOrigin>* origins = nullptr) const;
-    // Where a sidechain leaves its source: after its fader, before it, or after
-    // its first `n` devices (returns n; -1: after all of them). A tap after a
-    // device that isn't in the source's main chain (any more; or is in a rack
-    // there) is before the fader.
-    int sidechainTapLocked(const SidechainModel& sidechain, EdgeRender::Tap& tap) const;
+    // Where a sidechain leaves its source, whose devices are `slots`: after its
+    // fader, before it, or after one of its devices (`tap` AfterDevice): returns
+    // that device's slot (-1: before them all). A device in a rack's chain counts,
+    // but one in a rack switched off (or in a rack inside one) is tapped after
+    // the outermost of those racks, which passes its input on. A tap after a
+    // device that isn't on the source (any more) is before the fader.
+    int sidechainTapLocked(const SidechainModel& sidechain, const std::vector<StripSlot>& slots,
+                           EdgeRender::Tap& tap) const;
     // Throws std::invalid_argument if a sidechain from `source` into a device on `strip` would close a cycle.
     void checkSidechainLocked(uint32_t source, uint32_t strip) const;
     // The same for every sidechained device in a rack's chains (it moves to `strip`).

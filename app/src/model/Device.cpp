@@ -32,6 +32,21 @@ void collectChains(Devices& devices, Out& out) {
 
 QString macroParam(int index) { return QStringLiteral("macro%1").arg(index + 1); }
 
+std::optional<int> macroIndex(const QString& paramId) {
+    if (!paramId.startsWith(QLatin1String("macro"))) return std::nullopt;
+    bool ok = false;
+    const int number = paramId.mid(5).toInt(&ok);
+    if (!ok || number < 1 || number > kMaxMacroCount || macroParam(number - 1) != paramId) return std::nullopt;
+    return number - 1;
+}
+
+int macroCount(const Device& rack) { return rack.isRack() ? static_cast<int>(rack.macroNames.size()) : 0; }
+
+QString macroName(const Device& rack, int index) {
+    const QString given = index >= 0 && index < macroCount(rack) ? rack.macroNames[static_cast<size_t>(index)] : QString();
+    return given.isEmpty() ? QStringLiteral("Macro %1").arg(index + 1) : given;
+}
+
 std::optional<QString> Sidechain::tapDevice() const {
     if (tap == kPostFader || tap == kPreFader || tap == kPreFx) return std::nullopt;
     return tap;
@@ -42,7 +57,7 @@ double MacroMapping::target(double value) const { return low + std::max(0.0, std
 bool Device::operator==(const Device& other) const {
     return id == other.id && kind == other.kind && enabled == other.enabled && params == other.params &&
            plugin == other.plugin && state == other.state && sidechain == other.sidechain && chains == other.chains &&
-           macros == other.macros && name == other.name;
+           macros == other.macros && macroNames == other.macroNames && name == other.name;
 }
 
 bool Chain::operator==(const Chain& other) const {

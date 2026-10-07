@@ -2,9 +2,9 @@
 // faders, mute and solo; delay compensation inside a rack (a latent device in one
 // chain doesn't smear the others) and around it; automation of nested devices
 // and of chain faders in time; instrument racks layering synths; sidechains into
-// devices in racks; moving and removing racks; nesting limits; chain meters; and
-// renders bit-identical with and without workers. Offline, unless a test needs
-// the fake ASIO driver.
+// devices in racks, and taken after them; moving and removing racks; nesting
+// limits; chain meters; and renders bit-identical with and without workers.
+// Offline, unless a test needs the fake ASIO driver.
 
 #include <cmath>
 #include <functional>
@@ -274,6 +274,89 @@ TEST_CASE("a sidechain into a device in a rack lines up") {
         engine.setProcessorSidechain(keyed, source, sub::SidechainTap::PreFader);
         CHECK_CLICKS(clicks(render(engine)), {{kBeat, 2 * kClick}});
         CHECK_THROWS_AS(engine.setProcessorSidechain(keyed, track), std::invalid_argument);  // its own track: a cycle
+    }
+}
+
+TEST_CASE("a sidechain taken after a device in a rack") {
+    // The key is the chain's signal after that device: before the chain's fader,
+    // and without the other chains.
+    requireTestPlugins();
+    RackEngine e;
+    auto& engine = e.engine;
+    const uint32_t source = rackClipTrack(engine, clickWav());
+    const auto [rid, chains] = rack(engine, engine.trackChain(source));
+    const uint32_t a = chains[0], b = chains[1];
+    const uint32_t half = effect(engine, a, 0, 0.5);
+    effect(engine, a, 0, 0.5);
+    const uint32_t quarter = effect(engine, b, 0, 0.25);
+    engine.setChainGain(a, 0.5f);
+    engine.setTrackGain(source, 0.f);  // heard only through the sidechain
+    const uint32_t keyed = addTestPlugin(engine, engine.trackChain(engine.addTrack()), "SUB Test Sidechain");
+    const std::vector<std::tuple<uint32_t, double>> taps{
+        {half, kClick * 0.5},
+        {quarter, kClick * 0.25},
+        {rid, kClick * (0.25 * 0.5 + 0.25)},  // after the rack: its chains summed after their faders
+    };
+    for (const auto& [after, key] : taps) {
+        INFO("after " + std::to_string(after));
+        engine.setProcessorSidechain(keyed, source, sub::SidechainTap::AfterDevice, after);
+        CHECK_CLICKS(clicks(render(engine)), {{kBeat, key}});
+    }
+    engine.setProcessorSidechain(keyed, source, sub::SidechainTap::AfterDevice, half);
+    engine.setProcessorEnabled(half, false);  // switched off, it passes its input on
+    CHECK_CLICKS(clicks(render(engine)), {{kBeat, kClick}});
+    engine.setProcessorEnabled(half, true);
+    engine.setProcessorEnabled(rid, false);  // a rack switched off passes its input on: after it
+    CHECK_CLICKS(clicks(render(engine)), {{kBeat, kClick}});
+    engine.setProcessorEnabled(rid, true);
+    const auto [inner, innerChains] = rack(engine, b, 1);
+    const uint32_t deep = effect(engine, innerChains[0], 0, 0.5);
+    engine.setProcessorSidechain(keyed, source, sub::SidechainTap::AfterDevice, deep);
+    CHECK_CLICKS(clicks(render(engine)), {{kBeat, kClick * 0.25 * 0.5}});  // after the chain's first device, then this one
+    engine.setProcessorEnabled(inner, false);
+    CHECK_CLICKS(clicks(render(engine)), {{kBeat, kClick * 0.25}});
+    engine.setProcessorEnabled(inner, true);
+    engine.moveProcessor(deep, engine.trackChain(engine.addTrack()), -1);  // it left the source: before the fader
+    CHECK_CLICKS(clicks(render(engine)), {{kBeat, kClick * (0.25 * 0.5 + 0.25)}});
+    CHECK_THROWS_AS(engine.setProcessorSidechain(keyed, source, sub::SidechainTap::AfterDevice, deep),
+                    std::invalid_argument);  // not on the source
+}
+
+TEST_CASE("a sidechain taken after a device in a rack lines up") {
+    // The source and the keyed device's track click on the same beat: at the
+    // device both clicks fall on one sample, whatever the latency before the
+    // rack, before and after the tap in its chain, in the other chain, and
+    // before the device.
+    requireTestPlugins();
+    const std::vector<std::tuple<int, int, int, int, int>> cases{
+        {0, 0, 0, 0, 0},
+        {200, 0, 0, 0, 0},
+        {0, 300, 0, 0, 0},
+        {0, 0, 250, 0, 0},  // after the tap: doesn't count
+        {0, 0, 0, 400, 0},  // the other chain: lines its chain up after the tap, doesn't count
+        {0, 0, 0, 0, 350},  // the sidechain comes early: it waits
+        {100, 50, 70, 400, 120},
+    };
+    for (const auto& [beforeRack, beforeTap, afterTap, otherChain, beforeDevice] : cases) {
+        INFO("before the rack " + std::to_string(beforeRack) + ", before the tap " + std::to_string(beforeTap) +
+             ", after it " + std::to_string(afterTap) + ", in the other chain " + std::to_string(otherChain) +
+             ", before the device " + std::to_string(beforeDevice));
+        RackEngine e;
+        auto& engine = e.engine;
+        const std::string wav = clickWav();
+        const uint32_t source = rackClipTrack(engine, wav);
+        if (beforeRack) effect(engine, engine.trackChain(source), beforeRack);
+        const auto [rid, chains] = rack(engine, engine.trackChain(source));
+        if (beforeTap) effect(engine, chains[0], beforeTap);
+        const uint32_t tapped = effect(engine, chains[0]);
+        if (afterTap) effect(engine, chains[0], afterTap);
+        if (otherChain) effect(engine, chains[1], otherChain);
+        engine.setTrackGain(source, 0.f);  // heard only through the sidechain
+        const uint32_t track = rackClipTrack(engine, wav);
+        if (beforeDevice) effect(engine, engine.trackChain(track), beforeDevice);
+        const uint32_t keyed = addTestPlugin(engine, engine.trackChain(track), "SUB Test Sidechain");
+        engine.setProcessorSidechain(keyed, source, sub::SidechainTap::AfterDevice, tapped);
+        CHECK_CLICKS(clicks(render(engine)), {{kBeat, 2 * kClick}});
     }
 }
 

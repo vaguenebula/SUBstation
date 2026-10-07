@@ -83,6 +83,8 @@ struct EngineBridge::Private {
     QHash<quint32, std::vector<sub::ParamInfo>> paramInfos;  // processor -> its ParamInfos (cache)
     QHash<quint32, std::vector<ParamSpec>> paramSpecs;  // processor -> its automatable parameters (cache)
     QMap<QString, QSet<QString>> automating;  // owner -> the targets whose envelopes the engine plays
+    // Owner -> {target key: the envelope its macro's automation plays it along}, as pushed.
+    QMap<QString, QMap<QString, Envelope>> macroMoved;
     std::set<std::pair<QString, QString>> overridden;  // (owner, key) changed by hand while automated
     QMap<QString, std::pair<double, double>> mixer;  // owner -> (volume dB, pan) the engine has
     QMap<QString, InputState> inputs;  // track id -> its input as the engine has it

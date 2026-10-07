@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_map>
 
 #include "Routing.h"
 
@@ -154,6 +155,7 @@ std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<EdgeOrigin>* origins
         return edges;
     }
     const ProcessorIds ids = processorIdsLocked();
+    std::unordered_map<int, std::vector<StripSlot>> sourceSlots;  // the sources' devices, as needed
     const auto addSidechains = [&](const TrackModel& strip, int to) {
         const std::vector<StripSlot> slots = stripSlotsLocked(strip, ids);
         for (size_t d = 0; d < slots.size(); ++d) {
@@ -162,8 +164,13 @@ std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<EdgeOrigin>* origins
             const SidechainModel& sidechain = *found->second.sidechain;
             RouteEdge edge{trackIndexLocked(sidechain.source), to, false};
             if (edge.from < 0) continue;  // (its source went: removeTrack() takes it away)
+            auto source = sourceSlots.find(edge.from);
+            if (source == sourceSlots.end()) {
+                source = sourceSlots.emplace(edge.from, stripSlotsLocked(tracks_[static_cast<size_t>(edge.from)], ids)).first;
+            }
             EdgeRender::Tap tap;
-            edge.tap = sidechainTapLocked(sidechain, tap);
+            const int slot = sidechainTapLocked(sidechain, source->second, tap);
+            edge.tap = tap == EdgeRender::Tap::AfterDevice ? slot + 1 : -1;
             edge.device = slots[d].enabled ? static_cast<int>(d) : -1;  // one switched off isn't lined up
             edges.push_back(edge);
             if (origins) origins->push_back({to, kSidechainEdge, found->first, static_cast<int>(d)});
@@ -174,21 +181,24 @@ std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<EdgeOrigin>* origins
     return edges;
 }
 
-int Engine::sidechainTapLocked(const SidechainModel& sidechain, EdgeRender::Tap& tap) const {
+int Engine::sidechainTapLocked(const SidechainModel& sidechain, const std::vector<StripSlot>& slots,
+                               EdgeRender::Tap& tap) const {
     if (sidechain.tap == SidechainTap::PreFx) {  // before its first device
         tap = EdgeRender::Tap::AfterDevice;
-        return 0;
+        return -1;
     }
     tap = sidechain.tap == SidechainTap::PostFader ? EdgeRender::Tap::PostFader : EdgeRender::Tap::PreFader;
     if (sidechain.tap != SidechainTap::AfterDevice) return -1;
-    const int source = trackIndexLocked(sidechain.source);
-    const auto entry = processors_.find(sidechain.tapProcessor);
-    if (source < 0 || entry == processors_.end()) return -1;  // before the fader
-    const auto& inserts = insertsLocked(tracks_[static_cast<size_t>(source)]);
-    const auto place = std::find(inserts.begin(), inserts.end(), entry->second.processor);
-    if (place == inserts.end()) return -1;  // the device left the source: before the fader
+    const auto place = std::find_if(slots.begin(), slots.end(),
+                                    [&](const StripSlot& slot) { return slot.processorId == sidechain.tapProcessor; });
+    if (sidechain.tapProcessor == 0 || place == slots.end()) return -1;  // it left the source: before the fader
+    int slot = static_cast<int>(place - slots.begin());
+    // A rack switched off passes its input on, without running its chains: after the outermost such rack.
+    for (int rack = slots[static_cast<size_t>(slot)].rack; rack >= 0; rack = slots[static_cast<size_t>(rack)].rack) {
+        if (!slots[static_cast<size_t>(rack)].processor->isEnabled()) slot = rack;
+    }
     tap = EdgeRender::Tap::AfterDevice;
-    return static_cast<int>(place - inserts.begin()) + 1;
+    return slot;
 }
 
 void Engine::checkSidechainLocked(uint32_t source, uint32_t strip) const {

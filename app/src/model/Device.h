@@ -11,7 +11,9 @@
 // are unique in the project, so Project::device() finds them wherever they sit,
 // and their automation is the track's (by device id). A rack's macros are its
 // parameters ("macro1"..): each can be mapped to parameters of devices in it
-// (MacroMapping), which follow it across their range.
+// (MacroMapping), which follow it across their range (all of it, part of it, or
+// the other way round). A rack has 1 to kMaxMacroCount of them (a new one
+// kDefaultMacroCount), each with a name of its own if given one (macroNames).
 //
 // The helpers hand out pointers into the vectors they walk: they stay valid
 // until a vector they point into changes.
@@ -41,10 +43,13 @@ struct PluginRef {
 inline const QString kPluginKind = QStringLiteral("plugin");
 inline const QString kRackKind = QStringLiteral("rack");  // a device group: chains side by side
 inline constexpr int kMaxRackDepth = 8;  // racks nest at most this deep (the engine's MAX_RACK_DEPTH)
-inline constexpr int kMacroCount = 8;  // a rack's macros: its parameters macroParam(0..7)
+inline constexpr int kDefaultMacroCount = 4;  // a new rack's macros
+inline constexpr int kMaxMacroCount = 16;     // a rack has 1 to this many: its parameters macroParam(0..15)
 
 // A rack's macro's parameter id: "macro1" for the first.
 QString macroParam(int index);
+// Which macro a rack's parameter is ("macro3": 2); none: no macro's.
+std::optional<int> macroIndex(const QString& paramId);
 
 // Where a sidechain takes its source's signal (Sidechain::tap), unless after
 // one of its devices: as Ableton's Post Mixer, Post FX and Pre FX.
@@ -56,9 +61,9 @@ inline const QString kPreFx = QStringLiteral("pre-fx");
 // return's: `trackId`), after its fader and pan (kPostFader), before it
 // (kPreFader, after all its devices), before all its devices (kPreFx: what they
 // hear; on a MIDI track, after its instrument), or after one of its devices
-// (`tap`: that device's id; before the fader while that device isn't on the
-// track). It isn't heard on its own, so the source's mute and solo silence it
-// only after the fader.
+// (`tap`: that device's id; one in a rack's chain too, before that chain's
+// fader; before the fader while that device isn't on the track). It isn't heard
+// on its own, so the source's mute and solo silence it only after the fader.
 struct Sidechain {
     QString trackId;
     QString tap = kPostFader;
@@ -71,7 +76,7 @@ struct Sidechain {
 
 // A rack's macro (0-based) moving a parameter of a device in the rack: the
 // macro's 0..1 is the parameter's `low`..`high` (normalized, as automation is;
-// `low` > `high` turns it the other way).
+// `low` > `high` turns it the other way; 0.5..1 moves it over its upper half).
 struct MacroMapping {
     int macro = 0;
     QString deviceId;
@@ -89,7 +94,7 @@ struct Chain;
 
 // An insert device on a track: a built-in one ("synth", "utility"), a plug-in
 // (kind "plugin", with `plugin` saying which), or a rack (kind "rack": its
-// `chains`, and its macros' `macros` mappings).
+// `chains`, its macros' `macros` mappings, and `macroNames`, one per macro).
 //
 // A built-in device's state is its `params`, and `state` for what isn't a
 // parameter (a sampler's sample: see DeviceState.h), base64; the engine follows
@@ -107,6 +112,8 @@ struct Device {
     std::optional<Sidechain> sidechain;
     std::vector<Chain> chains;  // a rack's
     std::vector<MacroMapping> macros;  // a rack's
+    // A rack's macros, one each: its name as the user gave it ("": "Macro N"; macroName()).
+    std::vector<QString> macroNames;
     // A rack's own name (the preset it was saved as or loaded from); none: by its kind.
     std::optional<QString> name;
 
@@ -131,6 +138,11 @@ struct Chain {
     bool operator==(const Chain& other) const;
     bool operator!=(const Chain& other) const { return !(*this == other); }
 };
+
+// How many macros a rack has (0: not a rack).
+int macroCount(const Device& rack);
+// A rack's macro's name: the one it was given, else "Macro N".
+QString macroName(const Device& rack, int index);
 
 // A rack and one of its chains.
 template <typename DeviceT, typename ChainT>

@@ -196,17 +196,20 @@ void SetDeviceNameCommand::redo() { project_->setDeviceName(trackId_, deviceId_,
 void SetDeviceNameCommand::undo() { project_->setDeviceName(trackId_, deviceId_, old_); }
 
 SetMacrosCommand::SetMacrosCommand(Project* project, const QString& trackId, const QString& rackId,
-                                   std::vector<MacroMapping> old, std::vector<MacroMapping> nw, const QString& text)
-    : QUndoCommand(text),
-      project_(project),
-      trackId_(trackId),
-      rackId_(rackId),
-      old_(std::move(old)),
-      new_(std::move(nw)) {}
+                                   std::vector<MacroMapping> old, std::vector<MacroMapping> nw, const QString& text,
+                                   QString mergeKey, QMap<DeviceParam, double> oldValues,
+                                   QMap<DeviceParam, double> newValues)
+    : MergeableCommand(project, text, {trackId, rackId}, {std::move(old), std::move(oldValues)},
+                       {std::move(nw), std::move(newValues)}, std::move(mergeKey)) {}
 
-void SetMacrosCommand::redo() { project_->setDeviceMacros(trackId_, rackId_, new_); }
+void SetMacrosCommand::apply(const MacroMappings& state) {
+    project_->setDeviceMacros(trackId(), rackId(), state.mappings);
+    if (!state.values.isEmpty()) project_->setDeviceParams(trackId(), state.values);
+}
 
-void SetMacrosCommand::undo() { project_->setDeviceMacros(trackId_, rackId_, old_); }
+void SetMacrosCommand::redo() { apply(new_); }
+
+void SetMacrosCommand::undo() { apply(old_); }
 
 SetDeviceStateCommand::SetDeviceStateCommand(Project* project, const QString& trackId, const QString& deviceId,
                                              std::optional<QString> old, std::optional<QString> nw,

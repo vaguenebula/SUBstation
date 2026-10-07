@@ -22,7 +22,7 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 | [DeviceFrame.qml](../../ui/qml/devices/DeviceFrame.qml), [DeviceInfo](../../ui/src/devices/DeviceInfo.h), [DeviceFrameInput](../../ui/src/devices/DeviceFrameInput.h) | What every device shares: the frame, the title bar, folding, the body; what the frame shows of the device; the frame's mouse |
 | [DeviceKnobPages.qml](../../ui/qml/devices/DeviceKnobPages.qml), [DeviceParamKnob.qml](../../ui/qml/devices/DeviceParamKnob.qml), [DeviceParams](../../ui/src/devices/DeviceParams.h), [DeviceParam](../../ui/src/devices/DeviceParam.h), [ParamMenu.qml](../../ui/qml/devices/ParamMenu.qml) | A built-in device without an editor: a knob (or list) per parameter, four to a page; a parameter's cell, its state and its menu |
 | [PluginDeviceBody.qml](../../ui/qml/devices/PluginDeviceBody.qml), [PluginParamKnob.qml](../../ui/qml/devices/PluginParamKnob.qml), [PluginParams](../../ui/src/devices/PluginParams.h) | A plug-in's generic editor: its parameters (`PluginParams`, `PluginParam`), or why it shows none |
-| [RackDeviceBody.qml](../../ui/qml/devices/RackDeviceBody.qml), [RackMacroKnob.qml](../../ui/qml/devices/RackMacroKnob.qml), [RackChainRow.qml](../../ui/qml/devices/RackChainRow.qml), [RackChainView.qml](../../ui/qml/devices/RackChainView.qml), [RackMacro](../../ui/src/devices/RackMacro.h), [RackChain](../../ui/src/devices/RackChain.h), [RackChains](../../ui/src/devices/RackChains.h) | A rack: its macros and chain list, a chain's row, the chain shown beside the rack |
+| [RackDeviceBody.qml](../../ui/qml/devices/RackDeviceBody.qml), [RackMacroKnob.qml](../../ui/qml/devices/RackMacroKnob.qml), [RackMacroMappings.qml](../../ui/qml/devices/RackMacroMappings.qml), [RackChainRow.qml](../../ui/qml/devices/RackChainRow.qml), [RackChainView.qml](../../ui/qml/devices/RackChainView.qml), [RackMacro](../../ui/src/devices/RackMacro.h) (`RackMacro`, `RackMacros`), [RackChain](../../ui/src/devices/RackChain.h), [RackChains](../../ui/src/devices/RackChains.h) | A rack: its buttons, macros and chain list, a macro's mappings and their ranges, a chain's row, the chain shown beside the rack |
 | [DeviceCanvas](../../ui/src/devices/DeviceCanvas.h), [EditorPaint](../../ui/src/devices/EditorPaint.h) | The base of the editors' drawn items, and their drawing helpers |
 | [editors/DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml) | The editor registry (a singleton): `editorFor(kind)` |
 | Compressor: [CompressorEditor.qml](../../ui/qml/devices/editors/CompressorEditor.qml), [ReductionGraph](../../ui/src/devices/ReductionGraph.h) | |
@@ -48,17 +48,18 @@ DevicePanel (PANEL, a BORDER line above)
 
 `DeviceChain` is a `Row` over a `DeviceChainList` (`deviceIds` of one chain, changing only when the chain's devices
 do, so the `Repeater` makes its frames again only then, not as devices are selected, switched or edited: the frames
-follow those themselves). After a rack that isn't folded and has chains, a `RackChainView` (an accent-bracketed
-frame, "Drop devices here" while empty) holds a `DeviceChain` of the chain the rack shows, recursively, so racks in
-it show theirs further along. Which chain a rack shows is `DeviceSelection::shownChain(rackId)` (the one last
+follow those themselves). After a rack that isn't folded, has chains and shows its devices (`DeviceInfo::rackDevicesShown`),
+a `RackChainView` (an accent-bracketed frame, "Drop devices here" while empty) holds a `DeviceChain` of the chain the
+rack shows, recursively, so racks in it show theirs further along. Which chain a rack shows is `DeviceSelection::shownChain(rackId)` (the one last
 clicked in its chain list, else its first). A frozen track (or one in a frozen group) shows no devices.
 
 The hint (`DeviceSelection::hint`) says what can be dropped (an instrument on a MIDI track without one, otherwise
 effects), that no track is selected, or that the track is frozen.
 
 What the panel is to the main window: `startChainRename(rackId, chainId)` (Ctrl+R on a rack chain: its row's name
-edited in place, after scrolling to the rack), `focusDevices()` (the device view takes the focus), the
-`statusMessage(text)` signal, and its `implicitHeight`.
+edited in place, after scrolling to the rack; the rack's chain list is shown first if it is hidden, and the rename
+starts once its rows are made; false for a rack not shown or folded), `focusDevices()` (the device view takes the
+focus), the `statusMessage(text)` signal, and its `implicitHeight`.
 
 ### Height
 
@@ -153,7 +154,8 @@ shows of the device: its name, tooltip, kind, on/off, folded, its chain, Move Le
 and editor, its sidechain) reading the project again whenever that may have changed:
 
 - **Frame**: `kPanelAlt` in a 1 px line (`kAccent` while selected), 4 px corners. Its width is `DEVICE_WIDTH` (216 px),
-  a rack's 420, an editor's own (`body.implicitWidth + 2`), or 26 px folded.
+  a rack's or an editor's own (`body.implicitWidth + 2`: a rack's grows with its macros and its chain list), or 26 px
+  folded.
 - **Title bar** (`kDeviceHeader`, lighter while selected): the fold button, the on/off switch
   (`DeviceInfo::setEnabled`), the name (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
   and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the sidechain button (a
@@ -170,7 +172,8 @@ and editor, its sidechain) reading the project again whenever that may have chan
   device (or any, with Ctrl), else opens a plug-in's own editor; a right press selects it (unless it is) and asks
   the panel for its menu.
 - **Context menu** (`DevicePanel.showDeviceMenu`): a plug-in's Show Editor, Load VST3 Preset…, Save VST3 Preset…; a
-  rack's Add Chain; the body's own `menuActions` (the Sampler's); Fold/Unfold; Cut, Copy, Paste (after it),
+  rack's Add Chain (which shows its chain list), Show/Hide Chain List, Show/Hide Devices; the body's own `menuActions`
+  (the Sampler's); Fold/Unfold; Cut, Copy, Paste (after it),
   Duplicate; Move Left/Right (not an instrument: nothing goes before it); Save Preset…, Save as Default Preset /
   Clear Default Preset (not racks); Group (Ctrl+G), Ungroup (racks); Delete.
 - **Save button** (and *Save Preset…*): the panel asks for a name (the device's to start with,
@@ -179,9 +182,10 @@ and editor, its sidechain) reading the project again whenever that may have chan
 - **Sidechain**: the button exists when `bridge.hasSidechainInput(track, device)`; it is lit while there is one, and
   its tooltip names the source and the tap. Its menu (`DeviceInfo::sidechainMenu()`) lists *No Sidechain* and the
   tracks, groups and returns it can come from, those that would close a cycle disabled, then, with a sidechain, where
-  it is taken (`tapChoices()`: Pre FX, *After* each of the source's effects, Post FX, Post Mixer; devices with the same
-  name are numbered). `tapOf()` shows a tap after a device that left the source as Post FX, and after an instrument as
-  Pre FX, as the engine treats them. Choosing calls `editor.trySetDeviceSidechain`, which reports a refusal (the
+  it is taken (`tapChoices()`: Pre FX, *After* each of the source's effects along its signal, those in a rack's chains
+  before the rack and named by it, "After Rack › Chain › Device" (the chain only if the rack has several), Post FX,
+  Post Mixer; devices with the same name in a chain are numbered). `tapOf()` shows a tap after a device that left the
+  source as Post FX, and after its instrument as Pre FX, as the engine treats them. Choosing calls `editor.trySetDeviceSidechain`, which reports a refusal (the
   source went meanwhile) as a status message. Engine side: [engine/routing.md](../engine/routing.md).
 
 ### Built-in devices
@@ -198,8 +202,10 @@ and editor, its sidechain) reading the project again whenever that may have chan
 - `set(value, mergeKey)` → `editor.setDeviceParam(track, device, param, value, key)`; pressing the cell or the knob
   calls `touch()` (`editor.touchParameter`), so the arrangement shows its automation.
 - Right-click: [ParamMenu](../../ui/qml/devices/ParamMenu.qml): Show Automation, Delete Automation, Re-Enable
-  Automation and, inside a rack, *Map to Macro* (the rack's eight) / *Unmap from Macro N* (`editor.mapMacro`,
-  `editor.unmapMacro`, `editor.macroOf`).
+  Automation and, inside a rack, *Map to Macro* (the rack's macros by name: `DeviceParam::macroNames()`) / *Unmap
+  from <macro>* (`editor.mapMacro`, `editor.unmapMacro`, `editor.macroOf`).
+- A parameter mapped to an automated macro is automated as far as the cell knows (`bridge.isAutomated`: the red dot)
+  and follows the macro's envelope over its range (`bridge.currentValue`).
 
 ### Plug-ins
 
@@ -221,17 +227,39 @@ How plug-ins are hosted: [engine/plugins.md](../engine/plugins.md).
 
 ### Racks
 
-[RackDeviceBody.qml](../../ui/qml/devices/RackDeviceBody.qml) (a rack is 420 px wide) has no parameter pages: eight
-macros, four to a row, and the chain list. Its save button saves the rack, with everything in it, as every device's
-does.
+[RackDeviceBody.qml](../../ui/qml/devices/RackDeviceBody.qml) has no parameter pages: a strip of buttons, its macros,
+and its chain list while shown. Its width is its own (`implicitWidth`, at least 200 px with its frame, about 430 with
+the chain list). Its save button saves the rack, with everything in it, as every device's does. The frame hands it
+its `DeviceInfo` (`info`: `chainListShown`, `rackDevicesShown`, read from the project's view state, following
+`Project::rackViewChanged`).
 
+- **The strip** (`DeviceHeaderButton`s, a column at the left): `chainListButton` (icon `chain_list`, lit while the
+  list shows: `deviceSelection.toggleChainList`), `devicesButton` (icon `rack_devices`, lit while the chain's devices
+  show: `toggleRackDevices`), `addMacroButton` (+) and `removeMacroButton` (−) (`RackMacros::add()`, `remove()`:
+  `editor.setMacroCount`), disabled at 16 and at 1.
 - **Macros** ([RackMacroKnob.qml](../../ui/qml/devices/RackMacroKnob.qml) over
-  [RackMacro](../../ui/src/devices/RackMacro.h)): "Macro N" over a 0..1 knob reading the rack's `macroParam(i)`;
-  turning one calls `editor.setMacro(track, rack, i, value, key)`, which moves what it is mapped to as one undo
-  step. The name lights up while something is mapped, the tooltip lists the mappings; right-click to unmap one
-  (`unmapEntries()`).
+  [RackMacro](../../ui/src/devices/RackMacro.h)): a `Grid` of `RackMacros::count` cells in two rows (`columns` =
+  half the count, rounded up), each 60 px wide: its name (`macroName`, elided) over a 30 px 0..1 knob reading the
+  rack's `macroParam(i)` as it is now (its envelope's value while its automation plays: `bridge.currentValue`, read
+  again as the playhead moves), with the automation dot (`automation`). Turning one calls `editor.setMacro(track,
+  rack, i, value, key)`, which moves what it is mapped to as one undo step; pressing it calls `touch()`
+  (`editor.touchParameter`: its lane shows). The name lights up while something is mapped, the tooltip lists the
+  mappings. Double-clicking the name (a `TapHandler`, so the press still reaches the frame) opens a `TextField` over
+  it (`startRename()`; Enter, Escape or leaving it keeps the text: `RackMacro::rename` → `editor.renameMacro`).
+- **A macro's menu** (`DevicePanel.showMacroMenu(cell, at, x, y)`): Show Automation, Delete Automation, Re-Enable
+  Automation (while overridden); Rename (the cell's `startRename()` once the menu closes); Edit Mappings… (while
+  something is mapped); an *Unmap …* entry per mapping (`unmapEntries()`), or a disabled "Nothing mapped" one; Add
+  Macro, Remove Last Macro (`RackMacro::addMacro()`, `removeLastMacro()`).
+- **Its mappings** ([RackMacroMappings.qml](../../ui/qml/devices/RackMacroMappings.qml), the panel's `macroMappings`
+  popup, opened under the macro by `show(macro, at)`): a row per mapping (`mappingKeys`, which changes only when the
+  mappings do, so a row isn't made again while its range is dragged; each row reads its `mappingList` entry): its
+  name, `low` and `high` `ValueBox`es in percent (`RackMacro::setRange(device, param, low, high, key)` →
+  `editor.setMacroRange`, one undo step per drag), the parameter's values there in its units (`lowText`,
+  `highText`: `formatTarget`), Invert (swaps them) and Unmap. Escape or a click outside closes it; it closes when its
+  macro goes.
 - **Chains** ([RackChains](../../ui/src/devices/RackChains.h), [RackChainRow.qml](../../ui/qml/devices/RackChainRow.qml)
-  over [RackChain](../../ui/src/devices/RackChain.h)): a 22 px row per chain (an empty-rack hint while there are none,
+  over [RackChain](../../ui/src/devices/RackChain.h)), while the chain list shows (no rows are made while it is
+  hidden, so `DeviceChainArea` finds none to drop on): a 22 px row per chain (an empty-rack hint while there are none,
   and **+ Chain**: `editor.tryAddRackChain`), lit with an accent bar while its chain shows beside the rack. A row
   has an activator, its name (renamed in place: `startRename()`, kept on Enter, Escape or leaving the field; empty
   keeps the old name), solo, volume, pan and meter (`meterUpdated`, from `bridge.chainMeters`). Edits go through
@@ -392,8 +420,8 @@ The editors:
 | [test_ui_device_panel.cpp](../../tests/app/test_ui_device_panel.cpp) | Folding devices (saved, not undone; the fold button; double-clicks; several selected folding together; a folded rack hiding its chain), cut, copy, paste and duplicate with the focus, switching a device off without making the frames again; building the chain and its hint, the device's menu and the one beside the devices |
 | [test_ui_device_panel_plugins.cpp](../../tests/app/test_ui_device_panel_plugins.cpp) | A plug-in's parameters in pages, edited undoably and following automation; devices fitting the view; the editor button, double-click and Show Editor; VST3 presets; plug-ins loading after a project opens, and missing ones; dropping plug-ins; selecting, deleting and reordering devices; dragging a device to another track |
 | [test_ui_device_panel_presets.cpp](../../tests/app/test_ui_device_panel_presets.cpp) | The save button on every kind of device (asking before replacing), a rack taking the preset's name, presets dropped between devices and onto a device of their kind (outlined; one undo step) or of another, default presets |
-| [test_ui_device_panel_racks.cpp](../../tests/app/test_ui_device_panel_racks.cpp) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain clicked shown beside the rack and dropped into, chain mixers, mapping to a macro and unmapping, Ctrl+R on a chain, a chain's menu, the view's height staying put |
-| [test_ui_device_panel_sidechain.cpp](../../tests/app/test_ui_device_panel_sidechain.cpp) | The sidechain button and its menu: sources, cycles greyed out, taps |
+| [test_ui_device_panel_racks.cpp](../../tests/app/test_ui_device_panel_racks.cpp) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain list and the chain's devices shown when asked for, the chain clicked shown beside the rack and dropped into, chain mixers, macros added and taken away, renamed in place, automated, mapping to a macro, its ranges and unmapping, Ctrl+R on a chain (its list hidden too), a chain's menu, the view's height staying put |
+| [test_ui_device_panel_sidechain.cpp](../../tests/app/test_ui_device_panel_sidechain.cpp) | The sidechain button and its menu: sources, cycles greyed out, taps (after devices in racks too) |
 | [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) | Each editor loaded as the view loads it, driven with the mouse and keys, the project and (rendering offline) the engine checked; the parameter cell and its menu |
 | [test_session_devices.cpp](../../tests/app/test_session_devices.cpp) | `DeviceSelection` through the session: selecting, the focus, the clipboard, folding, racks, drops, presets |
 | [test_sidechain_fit.cpp](../../tests/app/test_sidechain_fit.cpp) | The Sidechain's fit |

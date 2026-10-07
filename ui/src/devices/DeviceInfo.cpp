@@ -23,6 +23,38 @@ namespace {
 
 QString latencyLine(int latency) { return QStringLiteral("Latency: %1 samples (compensated)").arg(latency); }
 
+// Devices' names in a chain, those of the same name numbered ("EQ (2)").
+QStringList numberedNames(const std::vector<Device>& devices) {
+    QStringList names;
+    for (const Device& device : devices)
+        names << sub::app::deviceName(device);
+    QStringList numbered;
+    for (int i = 0; i < int(names.size()); ++i) {
+        numbered << (names.count(names[i]) > 1
+                         ? QStringLiteral("%1 (%2)").arg(names[i]).arg(names.mid(0, i + 1).count(names[i]))
+                         : names[i]);
+    }
+    return numbered;
+}
+
+// "After <device>" for each device of a chain along the signal: a rack's
+// chains' devices ("Rack › Device", "Rack › Chain › Device" with several
+// chains) before the rack itself. Not the track's instrument: after it is Pre FX.
+void addTaps(const std::vector<Device>& devices, const QString& path, bool own,
+             std::vector<std::pair<QString, QString>>& choices) {
+    const QStringList names = numberedNames(devices);
+    for (int i = 0; i < int(devices.size()); ++i) {
+        const Device& device = devices[size_t(i)];
+        for (const sub::app::Chain& chain : device.chains) {
+            const QString inner = path + names[i] + QStringLiteral(" › ") +
+                                  (device.chains.size() > 1 ? chain.name + QStringLiteral(" › ") : QString());
+            addTaps(chain.devices, inner, false, choices);
+        }
+        if (!(own && i == 0 && sub::app::deviceIsInstrument(device)))
+            choices.emplace_back(QStringLiteral("After ") + path + names[i], device.id);
+    }
+}
+
 }  // namespace
 
 DeviceInfo::DeviceInfo(QObject* parent) : QObject(parent) {}
@@ -78,6 +110,7 @@ void DeviceInfo::connectSession() {
             refresh();
     });
     connections_ << connect(project, &Project::devicesFolded, this, ofTrack);
+    connections_ << connect(project, &Project::rackViewChanged, this, ofTrack);
     connections_ << connect(project, &Project::reset, this, refreshAll);
     for (auto removed : {&Project::trackRemoved, &Project::returnRemoved}) {
         connections_ << connect(project, removed, this, [this](const QString&, int) { refresh(); });
@@ -102,19 +135,8 @@ std::optional<Sidechain> DeviceInfo::currentSidechain() const {
 std::vector<std::pair<QString, QString>> DeviceInfo::tapChoices(const QString& sourceTrackId) const {
     std::vector<std::pair<QString, QString>> choices{{QStringLiteral("Pre FX"), sub::app::kPreFx}};
     const Track* source = session_ ? session_->project()->findTrack(sourceTrackId) : nullptr;
-    if (source != nullptr) {
-        QStringList names;
-        for (const Device& device : source->devices)
-            names << sub::app::deviceName(device);
-        for (int i = 0; i < int(source->devices.size()); ++i) {
-            const Device& device = source->devices[size_t(i)];
-            QString name = names[i];
-            if (names.count(name) > 1)
-                name = QStringLiteral("%1 (%2)").arg(name).arg(names.mid(0, i + 1).count(names[i]));
-            if (!sub::app::deviceIsInstrument(device))
-                choices.emplace_back(QStringLiteral("After ") + name, device.id);
-        }
-    }
+    if (source != nullptr)
+        addTaps(source->devices, QString(), true, choices);
     choices.emplace_back(QStringLiteral("Post FX"), sub::app::kPreFader);
     choices.emplace_back(QStringLiteral("Post Mixer"), sub::app::kPostFader);
     return choices;
@@ -123,11 +145,10 @@ std::vector<std::pair<QString, QString>> DeviceInfo::tapChoices(const QString& s
 QString DeviceInfo::tapOf(const Sidechain& sidechain) const {
     const Track* source = session_ ? session_->project()->findTrack(sidechain.trackId) : nullptr;
     if (sidechain.tapDevice() && source != nullptr) {
-        const auto found = std::find_if(source->devices.begin(), source->devices.end(),
-                                        [&](const Device& d) { return d.id == sidechain.tap; });
-        if (found == source->devices.end())
+        if (sub::app::findDevice(source->devices, sidechain.tap) == nullptr)
             return sub::app::kPreFader;
-        if (sub::app::deviceIsInstrument(*found))
+        const std::vector<Device>& own = source->devices;
+        if (own.front().id == sidechain.tap && sub::app::deviceIsInstrument(own.front()))
             return sub::app::kPreFx;
     }
     return sidechain.tap;
@@ -148,6 +169,8 @@ void DeviceInfo::refresh() {
         s.instrument = sub::app::deviceIsInstrument(*device);
         s.enabled = device->enabled;
         s.folded = project->isDeviceFolded(deviceId_);
+        s.chainListShown = s.isRack && project->isChainListShown(deviceId_);
+        s.rackDevicesShown = project->areRackDevicesShown(deviceId_);
         const std::optional<QString> chain = sub::app::containerOf(track->devices, deviceId_);
         s.chainId = chain.value_or(QString());
         if (const auto* siblings = sub::app::chainDevices(track->devices, chain); siblings && !s.instrument) {

@@ -7,6 +7,7 @@
 
 #include "io/Serialization.h"
 #include "model/Automation.h"
+#include "model/Devices.h"
 #include "model/Errors.h"
 #include "model/Project.h"
 
@@ -573,8 +574,19 @@ private Q_SLOTS:
         QCOMPARE(project.returns()[0].devices[0].plugin->uid, QStringLiteral("ABCDEF0123456789"));
         QVERIFY(project.isDeviceFolded("u2") && project.isDeviceFolded("d1"));
 
-        QJsonObject saved = data;  // (as the current version: it has nothing the file didn't)
-        saved["version"] = kProjectVersion;
+        QCOMPARE(loadedRack.macroNames, std::vector<QString>(4));  // (it had eight: it uses the first)
+        QCOMPARE(loadedRack.params.size(), 4);
+
+        QJsonObject saved = data;  // (as the current version: what the file had, and since version 18 how
+        saved["version"] = kProjectVersion;  // many macros a rack has and their names, and racks' view state)
+        QJsonObject savedRack = rack;
+        QJsonObject fourMacros;
+        for (int i = 1; i <= 4; ++i) fourMacros[QStringLiteral("macro%1").arg(i)] = i == 1 ? 0.25 : 0.0;
+        savedRack["params"] = fourMacros;
+        savedRack["macro_names"] = QJsonArray{"", "", "", ""};
+        saved = setIn(saved, {"tracks", 1, "devices", 1}, savedRack);
+        saved["chain_lists_shown"] = QJsonArray{};
+        saved["rack_devices_hidden"] = QJsonArray{};
         QCOMPARE(projectToJson(project, projectFile), saved);
     }
 
@@ -730,7 +742,8 @@ private Q_SLOTS:
         Device rack;
         rack.id = "rack";
         rack.kind = kRackKind;
-        for (int i = 0; i < kMacroCount; ++i) rack.params.insert(macroParam(i), 0.0);
+        for (int i = 0; i < 5; ++i) rack.params.insert(macroParam(i), 0.0);
+        rack.macroNames = {"", "", "Width", "", "Last"};
         rack.chains = {Chain{"c1", "Chain 1", {a}, 0.0, 0.0, false, false},
                        Chain{"wet", "Wet", {b}, -3.0, 0.0, false, true}};
         rack.macros = {MacroMapping{2, "b", "pan", 0.25, 0.75}};
@@ -748,6 +761,9 @@ private Q_SLOTS:
         const Device& again = loaded.device("t", "rack");
         QVERIFY(again.chains[1].volumeDb == -3.0 && again.chains[1].solo && again.chains[1].name == "Wet");
         QVERIFY((again.macros == std::vector<MacroMapping>{{2, "b", "pan", 0.25, 0.75}}));
+        QCOMPARE(macroCount(again), 5);
+        QCOMPARE(macroName(again, 2), QStringLiteral("Width"));
+        QCOMPARE(macroName(again, 3), QStringLiteral("Macro 4"));
         QVERIFY((loaded.device("t", "a").sidechain == Sidechain{"source"}));
         QVERIFY(!again.name);  // (none before version 13)
         // A mapping to a device not in its rack (an edited file) goes; so does a sidechain closing a cycle.
@@ -827,6 +843,60 @@ private Q_SLOTS:
         QCOMPARE(loaded.track("a").frozen->segments->size(), size_t(1));
         QCOMPARE(loaded.track("a").frozen->segments->front().id, QStringLiteral("s2"));
         QCOMPARE(loaded.track("a").frozen->segments->front().startBeat, 0.0);
+    }
+
+    void racksFromBeforeVersion18KeepTheMacrosTheyUse() {
+        // They had eight: they keep those mapped or turned, and at least four.
+        const auto loadRack = [](const QJsonObject& params, const QJsonArray& mappings,
+                                 const std::optional<QJsonArray>& names = std::nullopt) {
+            QJsonObject rack{{"id", "rk"},     {"kind", "rack"},    {"params", params},
+                             {"chains", QJsonArray{QJsonObject{{"id", "c"}, {"name", "C"}, {"devices", QJsonArray{
+                                 QJsonObject{{"id", "u"}, {"kind", "utility"}, {"params", QJsonObject{}}}}}}}},
+                             {"macros", mappings}};
+            if (names) rack["macro_names"] = *names;
+            return deviceFromJson(rack);
+        };
+        QJsonObject eight;
+        for (int i = 1; i <= 8; ++i) eight[QStringLiteral("macro%1").arg(i)] = 0.0;
+        Device rack = loadRack(eight, {});
+        QCOMPARE(macroCount(rack), kDefaultMacroCount);
+        QCOMPARE(rack.params.size(), kDefaultMacroCount);  // (those it hasn't are no parameters of it)
+        eight["macro6"] = 0.5;
+        rack = loadRack(eight, QJsonArray{QJsonObject{{"macro", 2}, {"device", "u"}, {"param", "gain"}}});
+        QCOMPARE(macroCount(rack), 6);
+        QCOMPARE(rack.params.value(macroParam(5)), 0.5);
+        rack = loadRack(eight, QJsonArray{QJsonObject{{"macro", 7}, {"device", "u"}, {"param", "gain"}}});
+        QCOMPARE(macroCount(rack), 8);
+        QCOMPARE(rack.macros.size(), size_t(1));
+        // Since version 18, as many as it names; a mapping to one it hasn't goes.
+        rack = loadRack(eight, QJsonArray{QJsonObject{{"macro", 7}, {"device", "u"}, {"param", "gain"}}},
+                        QJsonArray{"Drive", ""});
+        QCOMPARE(rack.macroNames, (std::vector<QString>{"Drive", ""}));
+        QVERIFY(rack.macros.empty());
+        QCOMPARE(rack.params.keys(), (QStringList{"macro1", "macro2"}));
+        QJsonArray many;
+        for (int i = 0; i < 20; ++i) many.append(QString());
+        QCOMPARE(macroCount(loadRack({}, {}, many)), kMaxMacroCount);
+        QCOMPARE(macroCount(loadRack({}, {}, QJsonArray{})), kDefaultMacroCount);
+    }
+
+    void racksChainListsAndDevicesShownAreSaved() {
+        ProjectContents contents;
+        contents.tracks = {test::makeTrack("t", "T")};
+        Device rack = newRack({newChain("C")});
+        rack.id = "rk";
+        contents.tracks[0].devices = {rack};
+        contents.shownChainLists = {"rk", "gone"};
+        contents.hiddenRackDevices = {"rk", "gone too"};
+        Project project;
+        project.replaceContents(contents);
+        const QJsonObject data = projectToJson(project);
+        QCOMPARE(data["chain_lists_shown"].toArray(), QJsonArray{"rk"});
+        QCOMPARE(data["rack_devices_hidden"].toArray(), QJsonArray{"rk"});
+        Project loaded;
+        loadInto(loaded, data);
+        QVERIFY(loaded.isChainListShown("rk") && !loaded.areRackDevicesShown("rk"));
+        QVERIFY(!loaded.isChainListShown("other") && loaded.areRackDevicesShown("other"));  // (by default)
     }
 
     void onlyFoldedDevicesThatExistAreSaved() {
