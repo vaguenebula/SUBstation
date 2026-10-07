@@ -325,8 +325,10 @@ private Q_SLOTS:
         const Device effectRack = rackOf({utility("u")});
         QVERIFY(deviceIsInstrument(instrumentRack) && !deviceIsInstrument(effectRack));
         QCOMPARE(kindName(instrumentRack), QStringLiteral("Instrument Rack"));
-        QCOMPARE(newRack({}).params.size(), kDefaultMacroCount);
-        QCOMPARE(newRack({}).params.value("macro8"), 0.0);
+        QCOMPARE(newRack({}).params.size(), kDefaultMacroCount);  // macro1..macro4, at 0
+        QCOMPARE(newRack({}).params.value("macro4", -1.0), 0.0);
+        QVERIFY(!newRack({}).params.contains("macro5"));
+        QCOMPARE(macroCount(newRack({})), kDefaultMacroCount);
         QVERIFY(loadsInto(effectRack, effectRack) && !loadsInto(instrumentRack, effectRack));
         QVERIFY(!loadsInto(utility("u"), newDevice("compressor")));
         const PluginRef synthRef{"VST3", "A", "Synth A", "", "", true};
