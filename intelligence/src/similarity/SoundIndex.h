@@ -11,8 +11,9 @@
 // - analysers (a quarter of the cores, one to four), at background priority:
 //   fingerprint the library's new files, then check the saved ones against
 //   their files (size and last-write time) and analyse again those that
-//   changed. Files that can't be decoded are remembered as such until they
-//   change;
+//   changed (again whenever the library is taken, for files last checked
+//   more than recheckSeconds before). Files that can't be decoded are
+//   remembered as such until they change;
 // - one for searches, at normal priority (the user waits for it): analyses the
 //   sound searched from if it has no fingerprint yet (a file outside the
 //   library, a part of a file, a library file not reached yet), then compares it
@@ -122,6 +123,7 @@ struct SoundIndexOptions {
     AspectWeights weights;      // how much each aspect counts in searches
     double saveDelaySeconds = 10.0;
     double refreshSeconds = 1.0;  // the least time between takings of the library
+    double recheckSeconds = 60.0; // a file checked longer ago than this is checked again when the library is taken
     size_t maxReferences = 1000;  // sounds outside the library whose fingerprints are kept
     double keepDays = 90.0;       // how long the fingerprints of files that left the library are kept
     std::function<int64_t()> clock;  // now, in seconds since 1970 (tests); empty: the system's
@@ -176,7 +178,9 @@ private:
         platform::FileStamp stamp;
         State state = State::Pending;
         bool inLibrary = false;
-        bool verified = false;  // its stamp was compared with its file's this run (or it was analysed this run)
+        // When its stamp was last compared with its file's (or it was analysed);
+        // never, this run, if it is the clock's epoch.
+        std::chrono::steady_clock::time_point checked{};
         bool queued = false;    // waiting to be analysed
         bool checking = false;  // waiting to be checked
         bool reference = false;

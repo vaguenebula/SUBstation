@@ -134,7 +134,7 @@ The browser's side of Find Similar is in [BrowserController](../app/src/browser/
 | Thread | Priority | Does |
 |---|---|---|
 | keeper | background | reads sound-index.bin at start; takes the library from its source after `libraryChanged()` (at most once a second, `refreshSeconds`); saves 10 s after fingerprints change, and on `close()` |
-| analysers (a quarter of the cores, 1–4; `threads`) | background | new files first: stamp, decode, fingerprint; then the saved ones: their stamp (size, last-write time) compared, analysed again if it changed |
+| analysers (a quarter of the cores, 1–4; `threads`) | background | new files first: stamp, decode, fingerprint; then the saved ones: their stamp (size, last-write time) compared, analysed again if it changed. Files are checked again whenever the library is taken again, if their last check is more than a minute old (`recheckSeconds`): a sample exported again over itself is analysed again |
 | search | normal (the user waits) | the sound's fingerprint (its saved one if a whole library file and up to date; else analysed now, and kept), then every analysed library file compared with it |
 
 Background priority is the browser indexer's: `THREAD_MODE_BACKGROUND_BEGIN` on Windows (CPU, I/O and memory

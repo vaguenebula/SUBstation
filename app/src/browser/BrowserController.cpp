@@ -463,7 +463,7 @@ void BrowserController::similarFound(const SimilarSounds& result) {
 }
 
 void BrowserController::similarProgress() {
-    if (!similar_) return;
+    if (!similar_ || !similarity_) return;
     // More of the library analysed: the list is searched again (now and then).
     if (similarity_->analysedFiles() != refinedAt_ && !similar_->result.isNull() && !refineTimer_.isActive())
         refineTimer_.start();
@@ -589,8 +589,9 @@ void BrowserController::updateStatus() {
             setStatusText(QStringLiteral("Could not analyse %1").arg(similarName()));
         } else {
             QString text = plural(count, QStringLiteral("sound")) + QStringLiteral(" like ") + similarName();
-            const int done = similarity_->analysedFiles() + similarity_->failedFiles();
-            if (similarity_->analysing() && done < similarity_->libraryFiles())  // (not while only checking files)
+            // (The sound similarity may be gone already when the session goes.)
+            const int done = similarity_ ? similarity_->analysedFiles() + similarity_->failedFiles() : 0;
+            if (similarity_ && similarity_->analysing() && done < similarity_->libraryFiles())  // (not while only checking files)
                 text += QStringLiteral(" (analysing %1 of %2…)").arg(done).arg(similarity_->libraryFiles());
             setStatusText(text);
         }

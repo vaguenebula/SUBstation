@@ -140,6 +140,38 @@ TEST_CASE("fingerprints are saved, and only new or changed files are analysed ag
     }
 }
 
+TEST_CASE("a file changed in place is analysed again when the library is next taken") {
+    const Library library;
+    auto exportAgain = [](const std::string& path) {  // (a kick exported again as a hat, at the same path)
+        writeWav(pathOf(path), hat(0.03, 0.7));
+        std::filesystem::last_write_time(pathOf(path), std::filesystem::last_write_time(pathOf(path)) + std::chrono::seconds(5));
+    };
+    {
+        SoundIndexOptions o = options();
+        o.recheckSeconds = 0.0;
+        SoundIndex index(o);
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+        const uint64_t before = index.status().analysedThisRun;
+        const std::string changed = library.paths[0];
+        exportAgain(changed);
+        index.libraryChanged();
+        REQUIRE(index.waitIdle(30.0));
+        CHECK_EQ(index.status().analysedThisRun, before + 1);
+        const auto result = search(index, library.first("hat"));
+        CHECK(result->similarity(changed) > result->similarity(library.paths[4]));  // (a kick still)
+    }
+    // Files checked less than recheckSeconds (a minute) before aren't checked again.
+    SoundIndex index(options());
+    index.setLibrary(library.paths);
+    REQUIRE(index.waitIdle(30.0));
+    const uint64_t before = index.status().analysedThisRun;
+    exportAgain(library.paths[4]);
+    index.libraryChanged();
+    REQUIRE(index.waitIdle(30.0));
+    CHECK_EQ(index.status().analysedThisRun, before);
+}
+
 TEST_CASE("files that leave the library leave its searches") {
     const Library library;
     SoundIndex index(options());

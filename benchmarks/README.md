@@ -24,15 +24,17 @@ thousands of shapes).
 The benchmarks are built with `-DSUBSTATION_BUILD_BENCHMARKS=ON` (off by
 default), into the build's `bin` folder with everything else. Always in Release.
 `browser_backend_bench` needs the application layer (Qt Core, as the tests do);
-`parallel_render_bench` needs only the engine.
+`parallel_render_bench` needs only the engine, and `sound_similarity_bench` only the
+intelligence module (no Qt either; it wants a sample library of your own).
 
 Linux:
 
 ```sh
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
-ninja -C build parallel_render_bench browser_backend_bench
+ninja -C build parallel_render_bench browser_backend_bench sound_similarity_bench
 build/bin/parallel_render_bench --tracks 32 --threads 1,2,4,8 --json parallel.json
 build/bin/browser_backend_bench --size 200000 --json backend.json
+build/bin/sound_similarity_bench --folder ~/Samples --cache /tmp/fingerprints.bin --json similarity.json
 ```
 
 Windows, in a *Developer PowerShell for VS 2022* (MSVC and Ninja on the path), with
@@ -41,10 +43,11 @@ Qt's MSVC build and, for `--live`, the ASIO SDK (see [docs/building.md](../docs/
 ```powershell
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON `
       -DCMAKE_PREFIX_PATH=C:\Qt\6.8.0\msvc2022_64 -DSUBSTATION_ASIO_SDK=C:\src\asiosdk_2.3.3_2019-06-14
-ninja -C build parallel_render_bench browser_backend_bench
+ninja -C build parallel_render_bench browser_backend_bench sound_similarity_bench
 build\bin\parallel_render_bench.exe --tracks 32 --live 64,256 --json parallel.json
 $env:PATH = "C:\Qt\6.8.0\msvc2022_64\bin;$env:PATH"   # browser_backend_bench runs with Qt's DLLs
 build\bin\browser_backend_bench.exe --size 200000 --audio --json backend.json
+build\bin\sound_similarity_bench.exe --folder D:\Samples --cache $env:TEMP\fingerprints.bin --json similarity.json
 ```
 
 `--help` lists each one's options. The results below were measured with the

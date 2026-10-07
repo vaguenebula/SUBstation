@@ -231,6 +231,11 @@ void SoundIndex::changed() {
 void SoundIndex::applyLibrary(const Library& files, const std::vector<std::string>& keys) {
     const bool analyse = analysers_ > 0;  // (else the files wait: nothing analyses them)
     const int64_t time = now();
+    // Files checked longer ago than this are checked again: one changed in
+    // place (a sample exported again) is analysed again when the library is
+    // next taken, while a library taken every second (the browser's first
+    // scan) doesn't have every file checked every second.
+    const auto recheck = Clock::now() - seconds(options_.recheckSeconds);
     for (Entry& entry : entries_) entry.inLibrary = false;
     for (size_t i = 0; i < files.size(); ++i) {
         const std::string& path = files[i];
@@ -249,7 +254,7 @@ void SoundIndex::applyLibrary(const Library& files, const std::vector<std::strin
                 entry.queued = true;
                 analyseQueue_.push_back(index);
             }
-        } else if (!entry.verified && !entry.checking) {
+        } else if (!entry.checking && (entry.checked == Clock::time_point{} || entry.checked <= recheck)) {
             entry.checking = true;
             checkQueue_.push_back(index);
         }
@@ -413,7 +418,7 @@ void SoundIndex::workerLoop() {
             checkQueue_.pop_front();
             Entry& e = entries_[index];
             e.checking = false;
-            wanted = e.inLibrary && !e.verified && e.state != State::Pending;
+            wanted = e.inLibrary && e.state != State::Pending;
             check = true;
         }
         if (!wanted) {
@@ -447,7 +452,7 @@ void SoundIndex::workerLoop() {
         lock.lock();
         --running_;
         Entry& e = entries_[index];
-        e.verified = true;
+        e.checked = Clock::now();
         if (analysed) {
             e.stamp = stamp.value_or(platform::FileStamp{});
             if (fingerprint)
@@ -546,7 +551,7 @@ std::shared_ptr<SimilarityResult> SoundIndex::runSearch(uint64_t generation, con
             Entry& e = entries_[index];
             std::copy(reference->begin(), reference->end(), fingerprints_.begin() + index * kDims);
             e.stamp = *stamp;
-            e.verified = true;
+            e.checked = Clock::now();
             if (!e.inLibrary) {
                 e.reference = true;
                 e.used = ++used_;
