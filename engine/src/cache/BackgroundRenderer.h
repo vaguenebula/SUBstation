@@ -118,10 +118,21 @@ private:
     // How long before `gap` strip `strip` must start: its own part, and the lead
     // of what feeds it unless that plays from its cache meanwhile.
     int64_t leadAt(size_t strip, int64_t gap, int depth = 0) const;
+    // Where to start for `gap`: a warm-up before it (prerollAt), earlier if
+    // the instruments whose devices run up to it hold notes there; and those
+    // strips (indices; the master's is the tracks' count), in `running`.
+    int64_t startAt(int64_t gap, std::vector<size_t>* running = nullptr) const;
+    // Their background lanes run their devices from `from` to `gap`
+    // (LiveState::runFrom); every other strip's as its blocks say.
+    void runDevices(int64_t from, int64_t gap, const std::vector<size_t>& strips);
     void skipGap(int64_t gap);  // the strips without a good block at `gap`: not looked at there
     // The first frame in [from, to) strip `strip` has no good block for, but
     // where it was skipped; `to` if none.
     int64_t stripGap(const StripCacheRender& cache, size_t strip, int64_t from, int64_t to) const;
+    // How long chunks take lately (the governor's waits too), and how many times
+    // faster than it plays that renders (1 until known).
+    void timeChunk(std::chrono::steady_clock::duration took);
+    double speed(double sampleRate) const;
     uint64_t framesLost() const;  // what its lanes had no block for, so far
 
     Watch watch_;
@@ -138,6 +149,7 @@ private:
     bool ahead_ = false;       // ... ahead of the playhead, which played
     std::chrono::steady_clock::duration stuckWait_{};     // the budget is spent: it waits, longer each time
     std::chrono::steady_clock::time_point stuckUntil_{};  // it renders nothing until then
+    double secondsPerChunk_ = 0.0;  // smoothed (0: not known yet)
     std::atomic<uint64_t> framesRendered_{0};
 
     std::mutex renderMutex_;   // held while rendering a chunk, and while parked

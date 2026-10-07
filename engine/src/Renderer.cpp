@@ -288,7 +288,10 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
         buffers.monitored = isMonitored(track, flags);
         buffers.recorded = flags.live && isRecorded(track.id);
         const bool hearsMidi = hearsMidiInput(track, flags);
-        buffers.liveEvents = hearsMidi;
+        // (What it plays is the arrangement's while it hears input but none
+        // comes: armed, with Auto monitoring, its clips' notes play. Not while
+        // monitoring In: they don't.)
+        buffers.liveEvents = hearsMidi && (track.monitor == MonitorMode::In || playsMidiInput(track));
         for (int i = 0; i < numPreviewNotes_ && !buffers.liveEvents; ++i) {
             buffers.liveEvents = previewNotes_[static_cast<size_t>(i)].trackId == track.id;
         }
@@ -769,6 +772,16 @@ bool Renderer::hearsMidiInput(const TrackRender& track, ChunkFlags flags) const 
         case MonitorMode::In: return true;
         case MonitorMode::Auto: return track.armed;  // clips' notes go on playing alongside
         case MonitorMode::Off: break;
+    }
+    return false;
+}
+
+bool Renderer::playsMidiInput(const TrackRender& track) const noexcept {
+    for (int i = 0; i < numLiveNotes_; ++i) {
+        if (liveNotes_[i].trackId == track.id) return true;
+    }
+    for (int e = 0; e < numInputEvents_; ++e) {
+        if (track.midiInput.accepts(inputEvents_[e].port, inputEvents_[e].status)) return true;
     }
     return false;
 }

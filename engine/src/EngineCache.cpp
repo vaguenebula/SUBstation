@@ -205,6 +205,22 @@ Span lanesDiffer(const StripRender& a, const StripRender& b) {
     return span;
 }
 
+// A strip's devices' changes: all they counted (what the audio thread compares
+// with CachePoint::accountedChanges), the real ones among them, and whether one
+// is still to be found out (Processor::noteMaybeChange). (Read in this order:
+// a change counted is seen as real or unsettled.)
+struct DeviceChanges {
+    uint64_t all = 0, real = 0;
+    bool unsettled = false;
+};
+DeviceChanges changesOf(const std::vector<std::shared_ptr<Processor>>& devices) {
+    DeviceChanges c;
+    for (const auto& device : devices) c.all += device->changeCount();
+    for (const auto& device : devices) c.real += device->realChangeCount();
+    for (const auto& device : devices) c.unsettled = c.unsettled || device->changesUnsettled();
+    return c;
+}
+
 bool anyEnabled(const StripRender& strip) {
     for (size_t i = 0; i < strip.inserts.size(); ++i) {
         if (!strip.inserts[i]->isEnabled()) continue;
@@ -329,14 +345,16 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         CachePoint& point = *c.point;
         bool touched = false;
         if (const auto found = devicesOf.find(model.id); found != devicesOf.end()) cache.devices = found->second;
-        uint64_t changes = 0;
-        for (const auto& device : cache.devices) changes += device->changeCount();
-        const bool accounted = changes == point.accountedChanges.load(std::memory_order_relaxed);
-        if (signature != c.signature || !accounted) {
+        // (Changes not yet found out are accounted for by idle(): until then the strip plays live.)
+        const DeviceChanges changes = changesOf(cache.devices);
+        if (signature != c.signature || (!changes.unsettled && changes.real != c.accountedReal)) {
             c.signature = signature;
             point.version.fetch_add(1, std::memory_order_release);
-            point.accountedChanges.store(changes, std::memory_order_release);  // (after the version)
             touched = true;
+        }
+        if (!changes.unsettled) {
+            c.accountedReal = changes.real;
+            point.accountedChanges.store(changes.all, std::memory_order_release);  // (after the version)
         }
         if (!changed.empty()) {
             c.dirty.push_back({generation, changed.from, changed.to, core.empty() ? changed.from : core.to});
@@ -378,11 +396,11 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
             changedFader[t].add(envelopeDiffers(was.pan.nodes, render.pan.nodes));
         }
         const int64_t latency = int64_t{render.inputLatency} + render.latency;
-        changedFader[t] = changedFader[t].widened(latency);
-        changedOut[t] = in.widened(warm + latency);
         StripCacheRender& cache = render.cache;
         cache.sources = sourcesOf(render.incoming);
         cache.devicesOn = !render.frozen && anyEnabled(render);
+        changedFader[t] = changedFader[t].widened(latency);
+        changedOut[t] = in.widened((cache.devicesOn ? warm : 0) + latency);  // (nothing rings on without devices)
         cache.cacheable = cache.devicesOn && render.deviceTaps.empty();
         settle(model, cache, h, changedOut[t], own.widened(latency));
         entries.push_back({cache.point, cache.dirty});
@@ -409,7 +427,7 @@ void Engine::updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previ
         cache.devicesOn = anyEnabled(snap.master);
         cache.cacheable = cache.devicesOn && snap.master.deviceTaps.empty();
         const int64_t latency = int64_t{snap.maxLatency} + snap.master.latency;
-        settle(master_, cache, h, in.widened(warm + latency), own.widened(latency));
+        settle(master_, cache, h, in.widened((cache.devicesOn ? warm : 0) + latency), own.widened(latency));
         entries.push_back({cache.point, cache.dirty});
     }
     if (cacheStore_) cacheStore_->setPoints(std::move(entries));
@@ -480,13 +498,16 @@ void Engine::processorChangedLocked(uint32_t processorId) {
     if (!strip) return;
     touchCacheLocked(strip->id, true);
     // The changes its devices count now are accounted for (after the version:
-    // the audio thread reads them the other way round).
-    uint64_t changes = 0;
+    // the audio thread reads them the other way round). (One not yet found
+    // out is real or not; if real, idle() moves the version on again.)
+    std::vector<std::shared_ptr<Processor>> devices;
     for (const auto& [id, entry] : processors_) {
         const auto chain = chains_.find(entry.chainId);
-        if (chain != chains_.end() && chain->second.stripId == strip->id) changes += entry.processor->changeCount();
+        if (chain != chains_.end() && chain->second.stripId == strip->id) devices.push_back(entry.processor);
     }
-    strip->cache.point->accountedChanges.store(changes, std::memory_order_release);
+    const DeviceChanges changes = changesOf(devices);
+    strip->cache.accountedReal = changes.real;
+    strip->cache.point->accountedChanges.store(changes.all, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------
@@ -514,13 +535,16 @@ void Engine::cacheIdle(bool rendering) {
         const auto visit = [&](TrackModel& strip) {
             const auto found = devicesOf.find(strip.id);
             const auto& devices = found != devicesOf.end() ? found->second : kNone;
-            uint64_t changes = 0;
-            for (const auto& device : devices) changes += device->changeCount();
+            const DeviceChanges changes = changesOf(devices);
             CachePoint& point = *strip.cache.point;
-            if (changes != point.accountedChanges.load(std::memory_order_relaxed)) {
-                // A device changed itself (its editor, the plug-in): its strip and what that feeds.
-                touchCacheLocked(strip.id, true);
-                point.accountedChanges.store(changes, std::memory_order_release);
+            if (!changes.unsettled && (changes.all != point.accountedChanges.load(std::memory_order_relaxed) ||
+                                       changes.real != strip.cache.accountedReal)) {
+                // A device changed itself (its editor, the plug-in): its strip and
+                // what that feeds. (Not if it only said it might have, and hadn't:
+                // what was cached stays good.)
+                if (changes.real != strip.cache.accountedReal) touchCacheLocked(strip.id, true);
+                strip.cache.accountedReal = changes.real;
+                point.accountedChanges.store(changes.all, std::memory_order_release);
             }
             for (const auto& device : devices) {
                 if (device->hasEditor()) editors.emplace_back(device, strip.cache.point);

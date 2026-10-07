@@ -125,11 +125,22 @@ int64_t BackgroundRenderer::renderNow(int64_t frames) {
     std::lock_guard lock(renderMutex_);
     stuckUntil_ = {};
     int64_t done = 0;
-    while (done < frames && step()) {
+    for (auto started = Clock::now(); done < frames && step(); started = Clock::now()) {
         done += kChunk;
         if (watch_.afterChunk) watch_.afterChunk();
+        timeChunk(Clock::now() - started);
     }
     return done;
+}
+
+void BackgroundRenderer::timeChunk(Clock::duration took) {
+    const double seconds = std::chrono::duration<double>(took).count();
+    secondsPerChunk_ = secondsPerChunk_ > 0.0 ? 0.9 * secondsPerChunk_ + 0.1 * seconds : seconds;
+}
+
+double BackgroundRenderer::speed(double sampleRate) const {
+    if (secondsPerChunk_ <= 0.0) return 1.0;  // (not known yet: as fast as it plays)
+    return std::clamp(kChunk / sampleRate / secondsPerChunk_, 0.05, 1000.0);
 }
 
 void BackgroundRenderer::run() {
@@ -173,6 +184,7 @@ void BackgroundRenderer::run() {
                 if (!wait(Clock::now() - started)) return;  // half its share
             }
         }
+        timeChunk(Clock::now() - started);  // (waits too: how fast it gets on)
     }
 }
 
@@ -238,7 +250,7 @@ void BackgroundRenderer::computeChains() {
             lead = std::max(lead, from.lead);
         }
         c.keep = keep;
-        c.own = warm + track.inputLatency + track.latency;
+        c.own = (track.cache.devicesOn ? warm : 0) + track.inputLatency + track.latency;  // (without devices: no warm-up)
         c.lead = lead + c.own;
         state[t] = 2;
         return c;
@@ -251,7 +263,7 @@ void BackgroundRenderer::computeChains() {
         master.keep = master.keep && chains_[static_cast<size_t>(source)].keep;
         master.lead = std::max(master.lead, chains_[static_cast<size_t>(source)].lead);
     }
-    master.own = warm + snap.maxLatency + snap.master.latency;
+    master.own = (snap.masterCache.devicesOn ? warm : 0) + snap.maxLatency + snap.master.latency;
     master.lead += master.own;
 }
 
@@ -273,6 +285,76 @@ int64_t BackgroundRenderer::leadAt(size_t strip, int64_t gap, int depth) const {
         if (!cached) longest = std::max(longest, leadAt(static_cast<size_t>(source), gap, depth + 1));
     }
     return chain.own + longest;
+}
+
+int64_t BackgroundRenderer::startAt(int64_t gap, std::vector<size_t>* running) const {
+    const RenderSnapshot& snap = *snapshot_;
+    const size_t tracks = snap.tracks.size();
+    // The strips whose devices run up to the gap: those it is for (prerollAt),
+    // and what feeds them that doesn't play from its cache meanwhile (leadAt).
+    std::vector<char> runs(tracks + 1, 0);
+    const auto mark = [&](auto& self, size_t strip, int depth) -> void {
+        if (runs[strip] || depth >= 64) return;
+        runs[strip] = 1;
+        const StripCacheRender& cache = strip < tracks ? snap.tracks[strip].cache : snap.masterCache;
+        for (const int source : cache.sources) {
+            if (source < 0 || static_cast<size_t>(source) >= tracks) continue;
+            const StripCacheRender& from = snap.tracks[static_cast<size_t>(source)].cache;
+            const int64_t start = gap - chains_[strip].lead - kMargin;
+            const bool cached = from.cacheable && from.point &&
+                                uncovered(from.point->blocks.load(std::memory_order_acquire), from.dirty.get(),
+                                          from.version, start, gap) >= gap;
+            if (!cached) self(self, static_cast<size_t>(source), depth + 1);
+        }
+    };
+    for (size_t t = 0; t <= tracks; ++t) {
+        const StripCacheRender& cache = t < tracks ? snap.tracks[t].cache : snap.masterCache;
+        if (!cache.cacheable || t >= chains_.size() || !chains_[t].keep) continue;
+        if (stripGap(cache, t, gap, gap + 1) == gap) mark(mark, t, 0);
+    }
+    // From a warm-up before it, and before any note those instruments hold
+    // there: devices that start while one sounds aren't clean until it ends
+    // (it starts late). (The song's start holds none.)
+    int64_t start = gap - prerollAt(gap) - kMargin;
+    for (bool moved = true; moved && start > 0;) {
+        moved = false;
+        for (size_t t = 0; t < tracks; ++t) {
+            const TrackRender& track = snap.tracks[t];
+            if (!runs[t] || !track.cache.devicesOn) continue;
+            for (const NoteRender& note : track.notes) {  // (by start)
+                if (note.start >= start) break;
+                if (note.end > start) {
+                    start = note.start;
+                    moved = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (running) {
+        running->clear();
+        for (size_t t = 0; t <= tracks; ++t) {
+            if (runs[t]) running->push_back(t);
+        }
+    }
+    return start;
+}
+
+void BackgroundRenderer::runDevices(int64_t from, int64_t gap, const std::vector<size_t>& strips) {
+    const RenderSnapshot& snap = *snapshot_;
+    const auto lane = [&](size_t strip) -> CachePoint::LiveState* {
+        const StripCacheRender& cache = strip < snap.tracks.size() ? snap.tracks[strip].cache : snap.masterCache;
+        return cache.point ? &cache.point->lanes[CachePoint::kBackgroundLane].state : nullptr;
+    };
+    for (size_t t = 0; t <= snap.tracks.size(); ++t) {
+        if (CachePoint::LiveState* s = lane(t)) s->runFrom = s->runTo = 0;
+    }
+    for (const size_t t : strips) {
+        if (CachePoint::LiveState* s = lane(t)) {
+            s->runFrom = from;
+            s->runTo = gap;
+        }
+    }
 }
 
 int64_t BackgroundRenderer::longestLead() const {
@@ -301,11 +383,24 @@ bool BackgroundRenderer::plan() {
     Window windows[3] = {{0, 0}, {next, end}, {0, playhead}};
     if (watch_.playing.load(std::memory_order_relaxed)) windows[0] = {next, std::min(end, playhead + ahead)};
     for (const Window& window : windows) {
-        while (window.from < window.to) {
-            const int64_t gap = firstGap(window.from, window.to);
+        int64_t from = window.from;
+        while (from < window.to) {
+            const int64_t gap = firstGap(from, window.to);
             if (gap >= window.to) break;
             const uint64_t lost = framesLost();
             const bool playing = watch_.playing.load(std::memory_order_relaxed);
+            // A gap ahead it can't warm up for before the playhead gets there (at
+            // half the speed it renders at lately) is the live renderer's: it
+            // plays it, and keeps it. Going for it anyway, it would start again
+            // each time the playhead moved on, and never keep anything. Further on.
+            if (playing && gap >= playhead) {
+                const auto warmUp = static_cast<double>(gap - startAt(gap));
+                const int64_t reach = playhead + lead + std::llround(2.0 * warmUp / speed(snap.sampleRate));
+                if (gap < reach) {
+                    from = reach;
+                    continue;
+                }
+            }
             if (gap == lastGap_ && positioned_ && renderer_.position() <= gap) {
                 // (Still on its way there: it renders on.)
                 ahead_ = playing && gap >= playhead;
@@ -329,9 +424,14 @@ bool BackgroundRenderer::plan() {
             lastGap_ = gap;
             lostAtPlan_ = lost;
             ahead_ = playing && gap >= playhead;
-            // From a warm-up before it (the longest of the strips it is for):
-            // before the song's start if need be, through the silence there.
-            renderer_.preRollFrom(gap - prerollAt(gap) - kMargin);
+            // From a warm-up before it (the longest of the strips it is for), and
+            // where their notes allow (startAt): before the song's start if need
+            // be, through the silence there. Their devices run from there on,
+            // even where their blocks are good, so that they are clean by the gap.
+            std::vector<size_t> running;
+            const int64_t start = startAt(gap, &running);
+            runDevices(start, gap, running);
+            renderer_.preRollFrom(start);
             windowEnd_ = window.to;
             nextCheck_ = gap + kCacheBlockFrames;
             positioned_ = true;

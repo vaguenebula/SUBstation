@@ -238,7 +238,22 @@ public:
     // plug-in itself. What was cached of its strip before one isn't good any
     // more (background freezing). Its own meters and displays aren't changes.
     uint64_t changeCount() const noexcept { return changes_.load(std::memory_order_acquire); }
-    void noteChange() noexcept { changes_.fetch_add(1, std::memory_order_acq_rel); }
+    void noteChange() noexcept {
+        realChanges_.fetch_add(1, std::memory_order_acq_rel);
+        changes_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    // A change that may not be one (a plug-in saying its state is dirty): it
+    // counts in changeCount() at once (the strip plays live meanwhile), and the
+    // processor finds out in idle() whether it was one.
+    // Until then changesUnsettled(); once settled, realChangeCount() counts it
+    // only if it was (confirmChange()). The engine's cache accounts for changes
+    // only once settled, and keeps what was cached of the strip if none was real.
+    void noteMaybeChange() noexcept {
+        unsettled_.store(true, std::memory_order_seq_cst);  // (before the count: whoever sees it sees this)
+        changes_.fetch_add(1, std::memory_order_seq_cst);
+    }
+    uint64_t realChangeCount() const noexcept { return realChanges_.load(std::memory_order_acquire); }
+    bool changesUnsettled() const noexcept { return unsettled_.load(std::memory_order_seq_cst); }
     // Counts the resets asked for: its state started again.
     uint64_t resetCount() const noexcept { return resets_.load(std::memory_order_acquire); }
 
@@ -292,6 +307,11 @@ protected:
     // In process(): the sidechain's channel (0 or 1) for this call; null: silence.
     const float* sidechain(int channel) const noexcept { return sidechain_[channel & 1]; }
     bool sidechainConnected() const noexcept { return sidechainConnected_; }
+    // Main thread (idle()): settles the changes noteMaybeChange() counted. Take
+    // them first (false: none waits; one coming after waits for the next time),
+    // then find out, and confirm them if they were real.
+    bool takeUnsettledChanges() noexcept { return unsettled_.exchange(false, std::memory_order_seq_cst); }
+    void confirmChange() noexcept { realChanges_.fetch_add(1, std::memory_order_acq_rel); }
 
 private:
     const float* sidechain_[2] = {nullptr, nullptr};
@@ -299,6 +319,8 @@ private:
     std::atomic<bool> enabled_{true};
     std::atomic<bool> resetRequested_{false};
     std::atomic<uint64_t> changes_{0};
+    std::atomic<uint64_t> realChanges_{0};
+    std::atomic<bool> unsettled_{false};
     std::atomic<uint64_t> resets_{0};
     std::vector<ParamAutomation> automation_ = std::vector<ParamAutomation>(kMaxAutomation);
     size_t numAutomation_ = 0;

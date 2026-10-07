@@ -41,6 +41,12 @@ std::string utf8(const TChar* text) { return StringConvert::convert(text); }
 
 int channelCount(SpeakerArrangement arrangement) { return SpeakerArr::getChannelCount(arrangement); }
 
+uint64_t hashOf(const std::vector<uint8_t>& bytes) {
+    uint64_t h = 0xcbf29ce484222325ull;  // FNV-1a
+    for (const uint8_t b : bytes) h = (h ^ b) * 0x100000001b3ull;
+    return h;
+}
+
 bool isSilent(const float* samples, int count) {
     for (int i = 0; i < count; ++i) {
         if (samples[i] != 0.f) return false;
@@ -75,14 +81,19 @@ public:
     // they wait for the next idle().
     tresult PLUGIN_API restartComponent(int32 flags) override {
         owner_.pendingRestart_.fetch_or(flags);
-        // Values or the plug-in itself changed: what it puts out may have too.
-        if (flags & (kReloadComponent | kParamValuesChanged | kParamTitlesChanged | kIoChanged)) owner_.noteChange();
+        // The plug-in itself changed: what it puts out may have too. Its values
+        // changing may be no change (idle() compares its state).
+        if (flags & (kReloadComponent | kParamTitlesChanged | kIoChanged)) {
+            owner_.noteChange();
+        } else if (flags & kParamValuesChanged) {
+            owner_.noteMaybeChange();
+        }
         return kResultOk;
     }
 
     tresult PLUGIN_API setDirty(TBool state) override {
         if (state) {
-            owner_.noteChange();
+            owner_.noteMaybeChange();  // (idle() compares its state)
             owner_.pushEvent({ProcessorEvent::Type::StateDirty});
         }
         return kResultOk;
@@ -800,6 +811,21 @@ bool Vst3Processor::idle() {
         buildMidiMap();
     }
     if (changed) pushEvent({ProcessorEvent::Type::ParamsChanged});
+
+    // What it said may have changed (it is dirty, its values changed): a change
+    // if its state isn't what it was when last looked at. (If that was before a
+    // change counted since, or never, it may be: it is taken to be one.)
+    if (takeUnsettledChanges()) {
+        std::optional<uint64_t> hash;
+        try {
+            hash = hashOf(getState());
+        } catch (const std::exception&) {
+        }
+        const uint64_t real = realChangeCount();
+        if (!hash || !stateHash_ || *hash != *stateHash_ || real != stateHashChanges_) confirmChange();
+        stateHash_ = hash;
+        stateHashChanges_ = realChangeCount();
+    }
     return latencyChanged;
 }
 
