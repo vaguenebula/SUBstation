@@ -292,19 +292,20 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     chunkFrames_ = frames;
     chunkFlags_ = flags;
     if (snap.graph && scheduler_) {
-        const bool parallel = static_cast<int64_t>(snap.parallelWork) * frames >= kMinParallelWork &&
-                              snap.parallelWork >= 2;
-        if (parallel) {  // the heaviest paths first (by what the tracks took lately)
+        int threads = 1;
+        if (static_cast<int64_t>(snap.parallelWork) * frames >= kMinParallelWork && snap.parallelWork >= 2) {
+            // The heaviest paths first (by what the tracks took lately), on as
+            // many threads as that work keeps busy: no more than there are
+            // tracks worth one, nor than the costs say.
             TaskGraph& graph = *snap.graph;
-            const bool byCost = costOrdering();
             for (int t = 0; t < graph.size(); ++t) {
-                graph.setCost(t, byCost ? snap.tracks[static_cast<size_t>(t)].buffers->cost.load(
-                                              std::memory_order_relaxed)
-                                        : 0.f);
+                graph.setCost(t, snap.tracks[static_cast<size_t>(t)].buffers->cost.load(std::memory_order_relaxed));
             }
-            graph.orderRoots();
+            graph.orderRoots(costOrdering());
+            threads = std::min(scheduler_->threads(), snap.parallelWork);
+            if (graph.parallelism() > 0) threads = std::min(threads, graph.parallelism());
         }
-        scheduler_->run(*snap.graph, &Renderer::renderNode, this, parallel);
+        scheduler_->run(*snap.graph, &Renderer::renderNode, this, threads);
     } else {
         for (int t = 0; t < static_cast<int>(snap.tracks.size()); ++t) renderTrack(snap, t, scratch_[0]);
     }

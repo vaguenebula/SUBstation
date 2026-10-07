@@ -6,6 +6,9 @@
 // is needed (test_parallel_live.cpp plays live, with the fake ASIO driver).
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <stdexcept>
@@ -495,3 +498,98 @@ TEST_CASE("cost ordering changes nothing but the order") {
     CHECK(!engine.costOrdering());
     CHECK_ARRAY_EQUAL(render(engine, kThreads, 4 * kBeat), byCost);
 }
+
+TEST_CASE("the costs say how many threads keep busy") {
+    // Their total over the longest path's, rounded up, plus one; 0 while unknown.
+    const auto parallelism = [](const std::vector<std::pair<int, int>>& edges, const std::vector<float>& costs,
+                                bool byRank = true) {
+        sub::TaskGraph graph(static_cast<int>(costs.size()), edges);
+        for (int i = 0; i < graph.size(); ++i) graph.setCost(i, costs[static_cast<size_t>(i)]);
+        graph.orderRoots(byRank);
+        return std::pair{graph.parallelism(), graph.roots()};
+    };
+    CHECK_EQ(parallelism({}, {1.f, 1.f, 1.f, 1.f}).first, 5);  // four alike: one each
+    // Two heavy tracks and eight light ones into a bus: the heavy ones take as long as the rest together.
+    std::vector<std::pair<int, int>> edges;
+    for (int i = 0; i < 10; ++i) edges.emplace_back(i, 10);
+    CHECK_EQ(parallelism(edges, {1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 8.f, 8.f, 1.f}).first, 4);
+    CHECK_EQ(parallelism(edges, std::vector<float>(11, 0.f)).first, 0);
+    // Not by rank: the roots in the graph's order, and the same count.
+    const auto [count, roots] = parallelism(edges, {1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 8.f, 8.f, 1.f}, false);
+    CHECK_EQ(count, 4);
+    CHECK(roots == (std::vector<int>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}));
+}
+
+// --- The scheduler ---------------------------------------------------------------------
+
+namespace {
+
+// What a run did: each node's turn (in the order they finished) and the thread that ran it.
+struct RunLog {
+    static constexpr int kNodes = 18;
+    std::atomic<int> finished{0};
+    std::array<std::atomic<int>, kNodes> turn{};
+    std::array<std::atomic<int>, kNodes> worker{};
+    std::array<std::atomic<int>, kThreads> nodesBy{};  // by worker
+    std::chrono::microseconds work{0};
+
+    static void job(void* self, int node, int worker) noexcept {
+        auto& log = *static_cast<RunLog*>(self);
+        const auto until = std::chrono::steady_clock::now() + log.work;
+        while (std::chrono::steady_clock::now() < until) {
+        }
+        log.worker[static_cast<size_t>(node)].store(worker);
+        log.nodesBy[static_cast<size_t>(worker)].fetch_add(1);
+        log.turn[static_cast<size_t>(node)].store(log.finished.fetch_add(1));
+    }
+};
+
+// 16 tracks into a group (16), which goes into another (17).
+std::vector<std::pair<int, int>> sixteenIntoGroups() {
+    std::vector<std::pair<int, int>> edges;
+    for (int i = 0; i < 16; ++i) edges.emplace_back(i, 16);
+    edges.emplace_back(16, 17);
+    return edges;
+}
+
+}  // namespace
+
+TEST_CASE("a run takes the threads it is given, no more") {
+    sub::Scheduler scheduler(kThreads);
+    sub::TaskGraph graph(RunLog::kNodes, sixteenIntoGroups());
+    for (const int threads : {1, 2, 3, kThreads, kThreads + 4}) {
+        INFO("threads " + std::to_string(threads));
+        for (int run = 0; run < 20; ++run) {
+            RunLog log;
+            log.work = std::chrono::microseconds(20);
+            scheduler.run(graph, &RunLog::job, &log, threads);
+            REQUIRE(log.finished.load() == RunLog::kNodes);  // each once
+            for (int i = 0; i < 16; ++i) CHECK(log.turn[static_cast<size_t>(i)].load() < log.turn[16].load());
+            CHECK(log.turn[16].load() < log.turn[17].load());
+            for (int i = 0; i < RunLog::kNodes; ++i) {
+                CHECK(log.worker[static_cast<size_t>(i)].load() < std::min(threads, kThreads));
+            }
+        }
+    }
+}
+
+TEST_CASE("sleeping workers are woken, one by another") {
+    // Between runs the workers fall asleep; the run wakes the first, which wakes
+    // the others. Each renders some of the tracks.
+    sub::Scheduler scheduler(kThreads);
+    sub::TaskGraph graph(RunLog::kNodes, sixteenIntoGroups());
+    RunLog log;
+    log.work = std::chrono::microseconds(400);
+    for (int run = 0; run < 20; ++run) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));  // (they spin for 50 us)
+        log.finished.store(0);
+        scheduler.run(graph, &RunLog::job, &log, kThreads);
+        REQUIRE(log.finished.load() == RunLog::kNodes);
+    }
+    for (int w = 1; w < kThreads; ++w) {
+        INFO("worker " + std::to_string(w));
+        CHECK(log.nodesBy[static_cast<size_t>(w)].load() > 0);
+    }
+    CHECK_EQ(scheduler.nodesOnWorkers(), static_cast<uint64_t>(20 * RunLog::kNodes - log.nodesBy[0].load()));
+}
+

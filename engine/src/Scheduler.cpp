@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <xmmintrin.h>
 
 #ifdef _WIN32
@@ -51,19 +52,24 @@ TaskGraph::TaskGraph(int nodes, const std::vector<std::pair<int, int>>& edges)
     }
 }
 
-void TaskGraph::orderRoots() noexcept {
+void TaskGraph::orderRoots(bool byRank) noexcept {
     // A node's destinations come after it in the graph's order: backwards, their
     // ranks are known before its own.
+    float total = 0.f, longest = 0.f;
     for (int i = size() - 1; i >= 0; --i) {
         float after = 0.f;
         const int* dests = destinations(i);
         for (int d = 0, n = destinationCount(i); d < n; ++d) after = std::max(after, ranks_[static_cast<size_t>(dests[d])]);
-        ranks_[static_cast<size_t>(i)] = costs_[static_cast<size_t>(i)] + after;
+        const float cost = costs_[static_cast<size_t>(i)];
+        ranks_[static_cast<size_t>(i)] = cost + after;
+        total += cost;
+        longest = std::max(longest, cost + after);
     }
+    parallelism_ = longest > 0.f ? static_cast<int>(std::min(std::ceil(total / longest), 1e6f)) + 1 : 0;
     // Insertion sort: costs change slowly, so the last run's order is nearly right.
-    const auto before = [this](int a, int b) {
-        const float ra = ranks_[static_cast<size_t>(a)];
-        const float rb = ranks_[static_cast<size_t>(b)];
+    const auto before = [this, byRank](int a, int b) {
+        const float ra = byRank ? ranks_[static_cast<size_t>(a)] : 0.f;
+        const float rb = byRank ? ranks_[static_cast<size_t>(b)] : 0.f;
         return ra != rb ? ra > rb : a < b;
     };
     for (size_t i = 1; i < roots_.size(); ++i) {
@@ -96,27 +102,29 @@ void TaskGraph::push(int node) noexcept {
 // Scheduler
 
 Scheduler::Scheduler(int threads) {
-    const int workers = std::max(0, threads - 1);
+    const int workers = std::clamp(threads - 1, 0, kMaxWorkers);
+    slots_ = std::make_unique<Slot[]>(static_cast<size_t>(workers));
     workers_.reserve(static_cast<size_t>(workers));
     try {
         for (int w = 1; w <= workers; ++w) workers_.emplace_back([this, w] { workerMain(w); });
     } catch (...) {  // a thread couldn't start: those that did end (the destructor won't run)
-        state_.store(kQuit, std::memory_order_seq_cst);
-        state_.notify_all();
-        for (auto& worker : workers_) worker.join();
+        quit();
         throw;
     }
 }
 
-Scheduler::~Scheduler() {
+Scheduler::~Scheduler() { quit(); }
+
+void Scheduler::quit() {
     state_.store(kQuit, std::memory_order_seq_cst);
-    state_.notify_all();
+    for (int w = 1; w <= static_cast<int>(workers_.size()); ++w) wake(w);
     for (auto& worker : workers_) worker.join();
 }
 
-void Scheduler::run(TaskGraph& graph, Job job, void* context, bool parallel) noexcept {
+void Scheduler::run(TaskGraph& graph, Job job, void* context, int threads) noexcept {
     const int size = graph.size();
-    if (!parallel || workers_.empty() || size < 2) {
+    const int helpers = std::clamp(threads - 1, 0, static_cast<int>(workers_.size()));
+    if (helpers == 0 || size < 2) {
         for (int node = 0; node < size; ++node) job(context, node, 0);  // the graph's order: inputs first
         return;
     }
@@ -124,11 +132,11 @@ void Scheduler::run(TaskGraph& graph, Job job, void* context, bool parallel) noe
     graph_ = &graph;
     job_ = job;
     context_ = context;
-    // Open the run (publishing the above), and wake the workers that sleep. A
-    // worker either sees the new state before it sleeps, or is counted here.
-    const uint64_t open = (++runs_ << 1) | 1;
+    // Open the run for the first `helpers` workers (publishing the above), and
+    // wake the first of them: it wakes the next (wakeAfter()), and they theirs.
+    const uint64_t open = (++runs_ << kRunShift) | (static_cast<uint64_t>(helpers) << 1) | 1;
     state_.store(open, std::memory_order_seq_cst);
-    if (sleepers_.load(std::memory_order_seq_cst) > 0) state_.notify_all();
+    wake(1);
 
     work(0);
     while (graph.done_.load(std::memory_order_acquire) < size) _mm_pause();  // the last nodes on the workers
@@ -147,6 +155,9 @@ void Scheduler::work(int worker) noexcept {
         if (head >= size) return;  // every node is taken: none will become ready any more
         const int node = graph.queue_[head].load(std::memory_order_acquire);
         if (node < 0) {  // none ready: the nodes running will queue the next
+            // One node left (the last bus, say): the thread finishing what it
+            // waits for takes it, so a worker has nothing more to wait for here.
+            if (worker != 0 && size - head <= 1) return;
             if (++idle < kPausesBeforeYield) {
                 _mm_pause();
             } else {
@@ -168,22 +179,42 @@ void Scheduler::work(int worker) noexcept {
     }
 }
 
+void Scheduler::wake(int worker) noexcept {
+    Slot& slot = slots_[static_cast<size_t>(worker) - 1];
+    slot.wake.fetch_add(1, std::memory_order_seq_cst);
+    if (slot.sleeping.load(std::memory_order_seq_cst)) slot.wake.notify_one();  // (spinning: it sees the state)
+}
+
+void Scheduler::wakeAfter(int worker, uint64_t state) noexcept {
+    const int last = std::min(kWakeFanOut * worker + 1, workersOf(state));
+    for (int next = kWakeFanOut * (worker - 1) + 2; next <= last; ++next) {
+        if (state_.load(std::memory_order_relaxed) != state) return;  // the run is over: let them sleep
+        wake(next);
+    }
+}
+
 void Scheduler::workerMain(int worker) noexcept {
 #ifdef _WIN32
     DWORD task = 0;
     HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task);
 #endif
+    Slot& slot = slots_[static_cast<size_t>(worker) - 1];
     uint64_t joined = 0;  // the last run it took part in
+    // An open run it hasn't taken part in yet, using at least this many workers.
+    const auto mayJoin = [&joined, worker](uint64_t state) {
+        return state != kQuit && (state & 1) && state != joined && workersOf(state) >= worker;
+    };
     for (;;) {
         uint64_t state = state_.load(std::memory_order_seq_cst);
         const auto deadline = std::chrono::steady_clock::now() + kSpinBeforeSleep;
-        for (int spins = 1; state != kQuit && (!(state & 1) || state == joined); ++spins) {
+        for (int spins = 1; state != kQuit && !mayJoin(state); ++spins) {
             if (spins % 64 == 0 && std::chrono::steady_clock::now() > deadline) break;
             _mm_pause();
             state = state_.load(std::memory_order_seq_cst);
         }
         if (state == kQuit) break;
-        if ((state & 1) && state != joined) {
+        if (mayJoin(state)) {
+            wakeAfter(worker, state);  // first, and outside the run: the caller doesn't wait for it
             active_.fetch_add(1, std::memory_order_seq_cst);
             if (state_.load(std::memory_order_seq_cst) == state) {  // still open: the run's data is valid
                 ScopedNoDenormals noDenormals;
@@ -193,9 +224,14 @@ void Scheduler::workerMain(int worker) noexcept {
             joined = state;
             continue;
         }
-        sleepers_.fetch_add(1, std::memory_order_seq_cst);
-        state_.wait(state, std::memory_order_seq_cst);  // returns at once if a run opened meanwhile
-        sleepers_.fetch_sub(1, std::memory_order_seq_cst);
+        // Sleep until woken. A wake() that finds it not sleeping yet came before
+        // it looks at the state again, which then shows the run; one after it
+        // has changed `wake` from the token, so wait() returns at once.
+        const uint32_t token = slot.wake.load(std::memory_order_seq_cst);
+        slot.sleeping.store(true, std::memory_order_seq_cst);
+        state = state_.load(std::memory_order_seq_cst);
+        if (state != kQuit && !mayJoin(state)) slot.wake.wait(token, std::memory_order_seq_cst);
+        slot.sleeping.store(false, std::memory_order_seq_cst);
     }
 #ifdef _WIN32
     if (mmcss) AvRevertMmThreadCharacteristics(mmcss);

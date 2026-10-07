@@ -10,8 +10,8 @@ and the graph it runs is built with each snapshot ([routing.md](routing.md)).
 
 | File | What it holds |
 |---|---|
-| [Scheduler.h](../../engine/src/Scheduler.h) / [.cpp](../../engine/src/Scheduler.cpp) | `TaskGraph` (the dependency graph, its counters, ready queue and ranks) and `Scheduler` (the workers and `run()`). |
-| [Renderer.cpp](../../engine/src/Renderer.cpp) | `renderChunk()` decides whether to run in parallel and sets the costs; `renderNode()` is the job; `renderTrack()` measures each track's cost. |
+| [Scheduler.h](../../engine/src/Scheduler.h) / [.cpp](../../engine/src/Scheduler.cpp) | `TaskGraph` (the dependency graph, its counters, ready queue, ranks and `parallelism()`) and `Scheduler` (the workers, their wake-ups and `run()`). |
+| [Renderer.cpp](../../engine/src/Renderer.cpp) | `renderChunk()` decides whether to run in parallel and on how many threads, and sets the costs; `renderNode()` is the job; `renderTrack()` measures each track's cost. |
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | Builds the snapshot's `TaskGraph` and counts `parallelWork`. |
 | [Engine.cpp](../../engine/src/Engine.cpp) | `setAudioThreads()`, `defaultAudioThreads()`, `setCostOrdering()`, `trackCosts()`, `nodesOnWorkers()`. |
 
@@ -29,18 +29,20 @@ and ranks, and the roots (nodes without inputs), kept in their last order from r
 
 ## A run
 
-`Scheduler::run(graph, job, context, parallel)` runs `job` once for every node, each after the
-nodes that go into it, and returns when all are done:
+`Scheduler::run(graph, job, context, threads)` runs `job` once for every node, each after the
+nodes that go into it, on up to `threads` threads (the caller's included), and returns when all
+are done:
 
 ```
 reset: pending[i] = inputCount[i]; queue empty; push every root (in rank order)
-open the run: state_ = (run number << 1) | 1; wake sleeping workers
-every thread (caller as worker 0, pool as 1..):
+open the run: state_ = (run number << 16) | ((threads - 1) << 1) | 1; wake worker 1
+every thread (caller as worker 0, workers 1 .. threads - 1):
+    (a worker first wakes its share of the others: see Workers)
     take the node at head (CAS head -> head + 1); none ready yet -> pause, then yield
     job(context, node, worker)
     for each destination: if --pending == 0, push it      (acq_rel)
     ++done
-    stop when head has passed every node
+    stop when head has passed every node (a worker: when at most one node is left)
 caller: wait until done == size; close the run; wait until no worker is inside
 ```
 
@@ -48,8 +50,11 @@ caller: wait until done == size; close the run; wait until no worker is inside
   exactly once per run, so the queue's slots never run out.
 - The last input to finish queues a destination; its `fetch_sub` is `acq_rel`, so whoever runs the
   destination sees everything every input wrote (their buffers and edge buffers).
-- `parallel` false, no workers, or fewer than two nodes: every node on the calling thread, in the
-  graph's order (inputs first).
+- `threads` 1 (or less), no workers, or fewer than two nodes: every node on the calling thread, in
+  the graph's order (inputs first). `threads` more than the scheduler has: all of them.
+- A worker leaves the run once at most one node is not taken yet and none is ready: the thread
+  that finishes that node's last input takes it, so there is nothing more for the worker to do
+  (it would only spin on the queue while the last bus waits). The caller never leaves early.
 - One run at a time. The live and offline renderers share one scheduler, never at once: offline
   renders suspend live output first.
 
@@ -65,15 +70,31 @@ workers rendered since the scheduler started (tests and benchmarks use it to see
   for its life; elsewhere workers keep the default priority. Every worker flushes denormals while it renders
   (`ScopedNoDenormals`).
 - Between runs a worker spins (with `_mm_pause`) for about 50 microseconds: consecutive chunks of
-  one callback come within microseconds. Then it sleeps on `state_` (`std::atomic::wait`) until
-  the next run opens. The caller only calls `notify_all()` if some worker is sleeping
-  (`sleepers_`).
+  one callback come within microseconds. Then it sleeps on its own word (`Slot::wake`,
+  `std::atomic::wait`) until woken. At small buffers that is every callback: a 64-frame buffer
+  at 48 kHz comes every 1.3 ms.
+- **Only the workers a run uses take part.** `state_` carries how many may (`threads - 1`), and
+  they are always the first ones: workers 1 .. n join, the others don't, and stay asleep once
+  their spin is over. Keeping to the first ones keeps the same threads warm from run to run.
+- **Wake-ups cascade.** Waking a thread is a system call whose cost grows with every thread woken,
+  and the old `notify_all()` put that on the audio thread for every worker asleep. Now the caller
+  wakes worker 1 only; each worker joining a run first wakes the next `kWakeFanOut` (4): worker
+  `w` wakes `4w - 2 .. 4w + 1` (1 wakes 2-5, 2 wakes 6-9...), those the run uses. So the caller
+  pays for one wake-up at most, however many workers sleep. A wake-up takes some five times longer
+  to arrive than it costs the waker, so the last of 22 (four wake-ups one after another) is up
+  about as soon as when the caller woke them all at once; with 2 each it would take five. A worker wakes the others before it joins the run (outside
+  `active_`), so the caller never waits for its system calls, and stops if the run closes.
+- `wake(w)` bumps the worker's `wake` word and calls `notify_one()` only if it is `sleeping`.
+  Going to sleep, a worker reads `wake` (its token), sets `sleeping`, looks at `state_` once more,
+  then waits for `wake` to differ from the token. A wake-up that found it not sleeping yet came
+  before that last look, which then sees the run; one after it changed `wake`, so `wait()`
+  returns at once (all `seq_cst`). Nothing is lost either way.
 - Inside a run, a worker waiting for a node to become ready pauses 2000 times, then yields.
 - A worker joining a run counts itself into `active_` first, then checks the run is still open;
   the caller closes the run and waits for `active_` to reach zero before returning, so no worker
   can touch the graph or the renderer after `run()` returns.
-- `kQuit` in `state_` ends the workers; the destructor sets it and joins them. If a thread can't
-  start, those that did are ended and the exception propagates.
+- `kQuit` in `state_` ends the workers; the destructor sets it, wakes every worker and joins them.
+  If a thread can't start, those that did are ended and the exception propagates.
 
 **How many.** *Preferences › Audio › Audio Threads* (`Engine::setAudioThreads`) sets how many threads
 render: one per core but one by default
@@ -90,6 +111,15 @@ worth a thread of their own (`parallelWork`: tracks with an enabled device, or c
 or resample) and `parallelWork * frames >= kMinParallelWork` (256). Small chunks with little work
 render serially: waking workers would cost more than they save. Without a graph or a scheduler,
 tracks render in snapshot order on the calling thread.
+
+**On how many threads.** As many as the work keeps busy, and no more: the scheduler's threads,
+but at most `parallelWork` (a thread per track worth one), and at most what the measured costs
+say, `TaskGraph::parallelism()`: the tracks' total cost over the longest path's (no run is done
+sooner than its longest path, however many threads), rounded up, plus one for what sharing the
+tracks out unevenly leaves over; 0 (no limit) while the costs are unknown. Eight heavy tracks on
+a 24-core computer (23 threads) wake 7 workers, not 22; two tracks costing 8 and eight costing 1 into a bus
+(costing 1) use 4 threads, about as long as the heavy ones take anyway. The workers not used
+stay asleep: no wake-ups, no spinning on the queue, no power taken from the cores that render.
 
 ## Ordering by the heaviest path
 
@@ -113,9 +143,9 @@ So the tracks with the most work hanging off them (their own, and that of everyt
 into) start first, and a heavy track, or a light one feeding heavy groups, never starts last.
 Only roots are ordered; other nodes are queued as they become ready.
 
-`setCostOrdering(false)` gives every node cost 0, so the roots keep the
-graph's (routing) order; it is for benchmarks. The order only changes how soon a run is done,
-never what it computes.
+`setCostOrdering(false)` queues the roots in the graph's (routing) order whatever their ranks
+(`orderRoots(false)`); the costs still choose how many threads. It is for benchmarks. The order
+only changes how soon a run is done, never what it computes.
 
 ```
   t0 (1.0)  ------------------------------> master     ranks: t0 1.0
@@ -161,6 +191,9 @@ Renders are bit-identical on any number of threads. That holds because:
 
 - `nodesOnWorkers()` starts again from 0 whenever the number of threads is set (a new
   `Scheduler`).
+- A run with `threads` 2 on a 24-thread scheduler uses worker 1 only, whatever the others are
+  doing: a worker's index is also its place in the wake-up tree, so the ones used are always
+  the first.
 - A chunk with a single track worth a thread (`parallelWork` 1) renders serially however many
   threads there are.
 - `TaskGraph` is part of a `const` snapshot but is written during runs (counters, costs, ranks);
@@ -174,7 +207,9 @@ Renders are bit-identical on any number of threads. That holds because:
   automation, looping) bit-identical on 1..N threads; a stress test; few tracks rendering
   serially; ranks and queue order on a hand-made graph (`taskGraphOrder()`, in
   [harness/TaskGraphOrder.h](../../tests/engine/harness/TaskGraphOrder.h)); measured costs; cost
-  ordering changing nothing but the order.
+  ordering changing nothing but the order; `parallelism()` from hand-made costs; the scheduler on
+  its own: a run takes no more threads than it is given (each node once, after its inputs), and
+  workers asleep between runs are woken by one another, each rendering some tracks.
 - [tests/engine/test_parallel_live.cpp](../../tests/engine/test_parallel_live.cpp): workers rendering live through
   the fake ASIO driver in manual mode, with silent tracks beside the tested ones so every buffer's
   tracks are shared out: the MIDI input, recording and resampling tests again (live, held,

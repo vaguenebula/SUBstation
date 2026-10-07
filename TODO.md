@@ -210,6 +210,16 @@ Engine — scheduler
         shows it matters).
   - [ ] Per-track CPU meters in the UI (`track_costs()` has the numbers).
   - [ ] Serial fallback from measured cost instead of counting busy tracks.
+- [x] Wake-ups off the audio thread: each worker sleeps on a word of its own;
+      a run wakes worker 1 only, and each worker joining wakes the next four
+      (a tree), so the caller pays for one wake-up however many sleep (it paid
+      for every one with `notify_all`: ~50 µs a run for 3 workers in a VM).
+- [x] As many workers as the work keeps busy: a run takes `threads`, at most
+      `parallelWork` and the costs' total over the longest path's, plus one
+      (`TaskGraph::parallelism()`); the others stay asleep. A worker leaves a
+      run once only one node is left (the last bus).
+  - [ ] Measure the wake-up tree's fan-out (4) on a many-core machine: a
+        `--live` run at 64 frames with 23 threads, 2 and 4 each.
 
 Model / UI
 - [x] Preferences: number of audio worker threads (default: cores − 1; 1 = off).

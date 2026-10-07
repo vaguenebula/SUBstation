@@ -89,7 +89,8 @@
 // order, then its strip and the metronome. Nothing a track computes depends on the thread it runs on, so
 // renders are bit-identical with and without workers. Each track's render is
 // timed; the graph starts the tracks with the most work hanging off them first
-// (TaskGraph::orderRoots()), so a heavy track doesn't start last.
+// (TaskGraph::orderRoots()), so a heavy track doesn't start last, on as many
+// threads as that work can keep busy (TaskGraph::parallelism()).
 
 #include <array>
 #include <cstdint>
@@ -118,7 +119,7 @@ public:
     // serially: waking workers would cost more than they save.
     static constexpr int kMinParallelWork = 256;
     // Whether the graph starts the tracks that cost the most first (else in
-    // snapshot order). Any thread; on by default.
+    // snapshot order; their costs still choose how many threads). Any thread; on by default.
     void setCostOrdering(bool on) noexcept { costOrdering_.store(on, std::memory_order_relaxed); }
     bool costOrdering() const noexcept { return costOrdering_.load(std::memory_order_relaxed); }
 
