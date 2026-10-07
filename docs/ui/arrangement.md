@@ -220,9 +220,9 @@ target's own value). `paint()` then draws only the rows that show, in this order
    selection's tinted areas are worked out (`selectedAreas()`: the stretch of each row it covers, `rangeRows()` (a
    gesture's `timeRange()` while one drags), its automation lanes too unless automation is locked).
 2. The grid, all the way down (below the tracks too, where selecting works as well), and the loop region.
-3. For each row: a folded track's tint (under its clips' bars, which stay as they are); a folded group's
-   summary (`drawGroupSummary()`: the clips of every track in the group as translucent bars with a solid top edge,
-   as in Ableton's group lanes; an open group's lane is a grid, its tracks showing below it); its clips, but those the gesture hides; a frozen track's tint (`kFrozenTint`); the lines
+3. For each row: a folded track's tint (under its clips' bars, which stay as they are); a group's summary
+   (`drawGroupSummary()`: the clips of every track in the group as translucent bars with a solid top edge, as in
+   Ableton's group lanes); its clips, but those the gesture hides; a frozen track's tint (`kFrozenTint`); the lines
    between its automation lanes; its bottom border.
 4. The gesture's previews: `kept()` (what stays of moved clips) and `ghosts()` (where they go, translucent); on a
    frozen track tinted as its clips are.

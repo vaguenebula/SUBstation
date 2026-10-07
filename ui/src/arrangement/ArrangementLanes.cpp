@@ -414,8 +414,7 @@ void ArrangementLanes::paint(SgPainter& p) {
         const bool bars = row.bars;
         if (bars && tinted.contains(track->id))  // under its clips' bars, which stay as they are
             p.fillRect(tinted.take(track->id), Theme::kSelection);
-        // (Open, its tracks show below it: its lane is a grid.)
-        if (track->isGroup() && row.folded) drawGroupSummary(p, track->id, y, row.mainHeight, visible);
+        if (track->isGroup()) drawGroupSummary(p, track->id, y, row.mainHeight, visible);
         const QColor trackColor(track->color);
         for (const app::Clip& clip : track->clips) {
             if (hidden.contains(clip.id)) continue;
