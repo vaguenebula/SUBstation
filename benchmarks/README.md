@@ -7,6 +7,7 @@ Nothing they do touches your settings, use counts, browser index or plug-ins.
 |---|---|
 | [parallel_render_bench.cpp](parallel_render_bench.cpp) | Tracks rendered on one thread and on several: offline (best of three, checked bit-identical on any number of threads) and live through the fake ASIO driver. The engine alone, no Qt. |
 | [browser_backend_bench.cpp](browser_backend_bench.cpp) | The browser's backend on a large synthetic library: indexing, starting from the saved index, searches. Checks every query against the reference the tests use, and fails if any differs. |
+| [sound_similarity_bench.cpp](sound_similarity_bench.cpp) | Sound similarity's fingerprints on a real sample library: how fast they are made and searched, and how often a one-shot's nearest sounds are of its kind; `--tune` searches the aspects' weights. The intelligence module alone, no Qt. |
 | [LibraryGen.h](LibraryGen.h) | Makes the synthetic sample libraries. |
 | [PyRandom.h](PyRandom.h), [Json.h](Json.h) | Python's random numbers (so a library is the one the Python generator made), and the reports as JSON. |
 
@@ -23,15 +24,17 @@ thousands of shapes).
 The benchmarks are built with `-DSUBSTATION_BUILD_BENCHMARKS=ON` (off by
 default), into the build's `bin` folder with everything else. Always in Release.
 `browser_backend_bench` needs the application layer (Qt Core, as the tests do);
-`parallel_render_bench` needs only the engine.
+`parallel_render_bench` needs only the engine, and `sound_similarity_bench` only the
+intelligence module (no Qt either; it wants a sample library of your own).
 
 Linux:
 
 ```sh
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
-ninja -C build parallel_render_bench browser_backend_bench
+ninja -C build parallel_render_bench browser_backend_bench sound_similarity_bench
 build/bin/parallel_render_bench --tracks 32 --threads 1,2,4,8 --json parallel.json
 build/bin/browser_backend_bench --size 200000 --json backend.json
+build/bin/sound_similarity_bench --folder ~/Samples --cache /tmp/fingerprints.bin --json similarity.json
 ```
 
 Windows, in a *Developer PowerShell for VS 2022* (MSVC and Ninja on the path), with
@@ -40,10 +43,11 @@ Qt's MSVC build and, for `--live`, the ASIO SDK (see [docs/building.md](../docs/
 ```powershell
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON `
       -DCMAKE_PREFIX_PATH=C:\Qt\6.8.0\msvc2022_64 -DSUBSTATION_ASIO_SDK=C:\src\asiosdk_2.3.3_2019-06-14
-ninja -C build parallel_render_bench browser_backend_bench
+ninja -C build parallel_render_bench browser_backend_bench sound_similarity_bench
 build\bin\parallel_render_bench.exe --tracks 32 --live 64,256 --json parallel.json
 $env:PATH = "C:\Qt\6.8.0\msvc2022_64\bin;$env:PATH"   # browser_backend_bench runs with Qt's DLLs
 build\bin\browser_backend_bench.exe --size 200000 --audio --json backend.json
+build\bin\sound_similarity_bench.exe --folder D:\Samples --cache $env:TEMP\fingerprints.bin --json similarity.json
 ```
 
 `--help` lists each one's options. The results below were measured with the
@@ -248,3 +252,53 @@ With 4 threads or more the render is down to about as long as the heaviest track
 takes alone. With 2 threads the order hardly matters: every track starts within
 the first few slots anyway. With 32 equal tracks both orders are the same within
 noise, and timing every track costs nothing measurable on one thread.
+
+# Sound similarity
+
+```
+sound_similarity_bench --folder <sample library> [--threads N] [--limit N] [--cache file]
+                       [--weights t,m,s,e,p,r] [--tune] [--show N] [--json out.json]
+```
+
+Fingerprints every audio file under the folder (on `--threads` threads, normal
+priority; `--cache` keeps them between runs, made again when the feature version
+changes), then measures one search over all of them, and how well the nearest
+sounds match what a sound is. A file's kind comes from its name and its folder's
+(kick, snare, clap, closed and open hi-hat, tom, cymbal, rim, shaker, snap, 808;
+a name with "loop", "fill", "bpm"... is a loop): each labelled one-shot is a
+query over the whole library, and precision@k is the share of its k nearest
+sounds (itself left out) that are one-shots of its kind. It prints that per kind,
+each aspect alone, and with `--tune` searches the aspects' weights (Timbre,
+TimbreMotion, Spectrum, Envelope, Pitch, Rhythm) for the best mean precision@10
+over kinds. `--show N` prints the N nearest of one query per kind. How the
+fingerprint works is in [docs/intelligence.md](../docs/intelligence.md).
+
+## Results
+
+A Splice sample library of 5 091 files (WAV files from 1 403 packs: drums, loops,
+vocals, instruments, FX), on an Intel Core Ultra 7 270K Plus (24 threads),
+Windows 11, MinGW GCC 13 `-O2`:
+
+| | |
+|---|---|
+| analysing 5 091 files, 12 threads | 4.1 s (1 250 files/s); a file: median 9.5 ms, 95% 19.3 ms (a thread) |
+| one search over 5 084 fingerprints | 0.1 ms (the comparison only) |
+| queries | 1 102 labelled one-shots |
+
+Precision@10, all queries (and per kind):
+
+| | all | kick | snare | 808 | closed hat | open hat | clap | tom |
+|---|---|---|---|---|---|---|---|---|
+| MFCCs alone (`--weights 1,0,0,0,0,0`) | 0.352 | 0.52 | 0.37 | 0.39 | 0.21 | 0.11 | 0.31 | |
+| the default weights (0.5, 1.5, 2.5, 2, 0.5, 0.5) | **0.694** | 0.84 | 0.79 | 0.73 | 0.53 | 0.59 | 0.56 | 0.38 |
+
+Each aspect alone (mean precision@10 over kinds): timbre 0.20, timbre motion 0.24,
+spectrum 0.24, envelope 0.20, pitch 0.09, rhythm 0.12; all together 0.45. `--tune`
+finds 0.449 (0.25, 2, 3, 3, 0.5, 0.5); the defaults are rounded from it, a little
+less fitted to this one library.
+
+The index itself (`SoundIndex`, at background priority, its default 4 analysers),
+on the same library: everything analysed in 11.5 s the first time; the next start
+reads the 1.7 MB store in 10 ms and has checked every file's stamp 20 ms later; a
+search (on its thread, the comparison and the table of results) takes 0.5 ms, one
+from a part of a file (analysed then) 1.6 ms.

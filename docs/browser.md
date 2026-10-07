@@ -1,7 +1,8 @@
 # Browser
 
 The browser lists built-in devices, plug-ins, presets and the audio files under the user's places, searches them as
-you type, and ranks what you use most first. It is three layers: the file index and search, a C++ backend with no Qt
+you type, ranks what you use most first, and lists the sounds most like one (Find Similar Sounds, with the
+intelligence module: [intelligence.md](intelligence.md)). It is three layers: the file index and search, a C++ backend with no Qt
 in [browser/src](../browser/src) (the static library `sub_browser`, namespace `sub::browser`); the browser's logic and
 models in the application layer, [app/src/browser](../app/src/browser) (`BrowserController`, `Session.browser`); and
 the panel, QML in [ui/qml/browser](../ui/qml/browser). How it behaves for the user is in
@@ -50,7 +51,7 @@ measurements and the profile that led to the design.
 
 | File | What it holds |
 |---|---|
-| [Model.h](../browser/src/Model.h) / [Model.cpp](../browser/src/Model.cpp) | What a search reads: `FolderFiles` (one folder's file names, packed), `SnapFolder`, `Snapshot`, `ExternalItem`/`ExternalGroup` (devices, plug-ins, presets), `UsageRecord`/`Usage` (use counts and `rank()`), `Query`, `Hit`, `Result` (with `find()`), `placePrefix()`. |
+| [Model.h](../browser/src/Model.h) / [Model.cpp](../browser/src/Model.cpp) | What a search reads: `FolderFiles` (one folder's file names, packed), `SnapFolder`, `Snapshot`, `ExternalItem`/`ExternalGroup` (devices, plug-ins, presets), `UsageRecord`/`Usage` (use counts and `rank()`), `Sort`, `Query` (with `score` for `Sort::Score`), `Hit`, `Result` (with `find()`), `placePrefix()`. |
 | [Indexer.h](../browser/src/Indexer.h) / [Indexer.cpp](../browser/src/Indexer.cpp) | The indexer thread: the folder tree, the walk, folder times, watching, publishing snapshots, the saved index (`save()`/`load()`). Also `Limits`, `PlaceSpec`, `IndexStatus`. |
 | [Search.h](../browser/src/Search.h) / [Search.cpp](../browser/src/Search.cpp) | Filtering and ordering: `runSearch()`, `matchQuality()`, `UsageCache`, `SearchInputs`. |
 | [Text.h](../browser/src/Text.h) / [Text.cpp](../browser/src/Text.cpp) | Python's `str.lower()`, `str.casefold()`, `str.split()` and the regex word starts (`pyLower`, `pyCasefold`, `pySplit`, `wordStarts`), WTF-8 and UTF-16 conversion (`toUtf8`, `toWide`), `unicodeVersion()`. |
@@ -68,7 +69,7 @@ Win32 platform layer on Windows, the POSIX one elsewhere. See [building.md](buil
 
 | File | What it holds |
 |---|---|
-| [BrowserController.h](../app/src/browser/BrowserController.h) | `BrowserController` (`Session.browser`): the sidebar's entries, search, the sort, the list shown, the folder tree of a place, preview requests, use counts, the context menus' actions, places and their settings. QML binds to it. |
+| [BrowserController.h](../app/src/browser/BrowserController.h) | `BrowserController` (`Session.browser`): the sidebar's entries, search, the sort, the list shown, the folder tree of a place, preview requests, use counts, the context menus' actions, places and their settings, Find Similar. QML binds to it. |
 | [FileIndex.h](../app/src/browser/FileIndex.h) | `FileIndex` (the backend on the application thread's side), `SearchResult` (a result read a page at a time), `placeSpec()`, `usageRecords()`. |
 | [BrowserSearch.h](../app/src/browser/BrowserSearch.h) | What to ask the search for: the sorts (`sortOrders()`), the group numbers, `Scope`, `scopeQuery()`, `placePrefix()`, `pluginTag()`. The sort orders are documented here. |
 | [BrowserItem.h](../app/src/browser/BrowserItem.h) | `BrowserItem` (and its `key()`), `ItemKind`, `builtinItems()`, `pluginItem()`. |
@@ -261,6 +262,11 @@ Matching and ordering are defined by the reference's `find()` (the rules are in
 - **Rank** (`sortByRank`): items with a use rank above 0 first, by rank, then match quality (stable); then the unused
   ones by match quality, best first, keeping the list's own order (a counting sort over quality buckets); items with a
   negative rank last. With no terms every quality is 0, so only the used items move.
+- **Score** (`sortByScore`, the "similar" sort): indexed files by `Query::score(path)` (the path as shown,
+  `Snapshot::join` of the folder's and the name), the highest first, stable over the list's own order; files it gives
+  NaN, and items other than indexed files, are left out. The score function is the application's (a finished
+  similarity result's, which it keeps alive), called on the search thread. Filtering by terms and places comes first,
+  as for the other sorts.
 - **Name** (`sortByName`): by casefolded name, stable over the list's own order. Each group is ordered and the groups
   are merged, which is the same as a stable sort of the whole list. For files the snapshot's `byFold` is already in
   that order.
@@ -432,6 +438,21 @@ library folder are listed under "Other". A result's menu (`resultActions(row)`) 
 name)`: the new path, or "" with a status message), Delete (`deletePreset(path)`: the file moves to the system's trash,
 `QFile::moveToTrash`) and Show in Folder.
 
+**Find Similar.** With a sound similarity (`Options::similarity`, the session's `SoundSimilarity`), the controller
+points it at its index (`setLibrary`: the sounds analysed are the index's files) and offers *Find Similar Sounds* in an
+audio file's menu (`resultActions`; an audio clip's in the arrangement calls the same). `findSimilar(path, start,
+length)` asks the sound similarity for the sounds most like the file, or its part; the list goes to Samples unless a
+place is shown, the search text is cleared, and `sort` becomes "similar" (`sorts` lists *Similarity* first while it
+lasts; the sort chosen before is what is saved, and comes back). `similarTo` and `similarName` say like what, for the
+panel's bar. While the result is on its way the list is `searching`; when it comes (`SoundSimilarity::found`, the
+latest search's only), the list is searched with its `scorer()` (`FileIndex::search(..., "similar", ..., score)`).
+Text and places filter it as any list; a place shows its files, not its tree. While the library is still being
+analysed, the sound is searched again every 2 s (`kRefineMs`) as more sounds are analysed, keeping the list's place,
+and the status says how far the analysis got ("12 sounds like Kick.wav (analysing 1200 of 5091…)"). Choosing *Rank* or
+*Name*, a sidebar entry that isn't files, Ctrl+F, or `clearSimilar()` ends it. A sound that can't be analysed says why
+in the status line (`statusMessage`). When the controller shuts down it lets go of the sound similarity before its
+index closes.
+
 **Preview.** Setting `currentRow` to an audio file (in the list or the tree: `treeCurrentChanged(path)`) previews it
 (`previewRequested(path)`, which the session sends to `EngineBridge::previewFile`) while `previewEnabled` is on;
 `previewing` is true from then until it stops. The panel stops it on a press anywhere outside the browser
@@ -449,7 +470,10 @@ application ends, which stops the backend's threads (saving the index) and waits
 [BrowserPanel.qml](../ui/qml/browser/BrowserPanel.qml) on `Session.browser`:
 
 - **The search field and the sort.** Typing sets `searchText`; Enter or Down selects the first result; a ✕ clears it.
-  The sort is a `ChoiceBox` of `sorts` (Rank, Name).
+  The sort is a `ChoiceBox` of `sorts` (Rank, Name; Similarity while the list shows similar sounds).
+- **The similar bar** (`similarBar`), under them while `similarTo` is set: "Similar to *name*" (the path as its
+  tooltip) and a ✕ (`clearSimilar()`). The main window shows the browser when Find Similar starts (from a clip's menu
+  with the browser hidden).
 - **The sidebar** ([BrowserSidebar.qml](../ui/qml/browser/BrowserSidebar.qml)) in a `SplitView` beside the results: a
   click sets `scope`; Add Folder… asks for a folder (`FolderDialog`, `addPlaceRequested`); a right-click opens the
   entry's `ActionMenu`.
@@ -488,7 +512,8 @@ keyboard: Ctrl+R renames the preset there).
 | `rescan()` | List every folder again. |
 | `setExternal(group, items)` | A group of other items, `ExternalItem`s: kind, name, path, detail, key, tag. |
 | `setUsage(records, halfLifeDays)` | Use counts as `UsageRecord`s (key, score, last used; NaN when unknown). |
-| `search(query)` | Starts a search (a `Query`: text, sort (`Sort::Rank` or `Sort::Name`), now, groups, tag, place prefix), replacing any that runs; returns its generation. |
+| `search(query)` | Starts a search (a `Query`: text, sort (`Sort::Rank`, `Sort::Name` or `Sort::Score` with its `score` function), now, groups, tag, place prefix), replacing any that runs; returns its generation. |
+| `snapshot()` | The index as it is now (the latest snapshot; null before the first), from any thread: what the sound similarity's library is made from. |
 | `take()` | An `Update`: the `IndexStatus` (busy, version, files, folders, and timings for benchmarks: `loadMs`, `buildMs`, `passMs`, `listed`, `checked`) and the latest search's `Result` if it finished since. |
 | `status()`, `searching()` | The index's status; whether a search is waiting or running. |
 | `waitIdle(seconds)` | Waits until the index settled and no search runs; false on timeout (tests, benchmarks). |
@@ -516,8 +541,10 @@ Item kinds are numbered alike in `sub::browser::Kind` and `sub::app::ItemKind` (
 - **A new kind of item to list** (as presets are): give it a group number in `BrowserSearch.h`, hand its items over
   with `FileIndex::setItems(group, {(item, tag), ...})`, and add a scope to `scopeQuery()` and the sidebar. A new kind
   goes into `Kind` and `ItemKind` together.
-- **New filters** (items hidden from search) and orders (similar sounds) belong in `scopeQuery()` and the native
-  `Query`; `Library` keeps unknown fields so later versions can store what they need per item.
+- **New filters** (items hidden from search) belong in `scopeQuery()` and the native `Query`; `Library` keeps
+  unknown fields so later versions can store what they need per item.
+- **Another order by something worked out elsewhere** (similar sounds are one: tempo or key could be others): a
+  `Query::score` function and `Sort::Score`, as the "similar" sort does; the backend needs nothing new.
 - **Another audio extension**: add it to `FileIndex::audioExtensions()`. The saved index records the extensions it was
   made with, so the next start lists everything again.
 - **Changing the saved format**: bump `kFormat` in `Indexer.cpp`; old files are then ignored.
@@ -555,6 +582,10 @@ Item kinds are numbered alike in `sub::browser::Kind` and `sub::app::ItemKind` (
 - [tests/app/test_browser_search.cpp](../tests/app/test_browser_search.cpp): keys, use counts decaying and persisting,
   unknown fields kept, a bad `library.json` ignored, the records the backend gets, match quality preferring name starts,
   rank putting used items first, the sidebar entries' queries.
+- [tests/app/test_browser_native.cpp](../tests/app/test_browser_native.cpp) also holds `Sort::Score` to the
+  reference's `findScored()`: random scores (with ties and files without one), search text and places.
+- [tests/app/test_sound_similarity.cpp](../tests/app/test_sound_similarity.cpp): Find Similar in the controller, with
+  a real sound similarity ([intelligence.md](intelligence.md#tests)).
 - [tests/app/test_browser_controller.cpp](../tests/app/test_browser_controller.cpp): the controller and its models:
   places and their settings, searching as you type, the sort, the sidebar, the folder tree, activation and drops and
   their use counts, preview requests, Enter selecting the first result, keeping the list's place when the index

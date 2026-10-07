@@ -53,6 +53,7 @@ void prepareApplication() {
     qputenv("SUBSTATION_LIBRARY", (runFolder(QStringLiteral("sub-library")) + QStringLiteral("/library.json")).toUtf8());
     qputenv("SUBSTATION_BROWSER_INDEX",
             (runFolder(QStringLiteral("sub-index")) + QStringLiteral("/browser-index.bin")).toUtf8());
+    qputenv("SUBSTATION_SOUND_INDEX", (runFolder(QStringLiteral("sub-sound-index")) + QStringLiteral("/sound-index.bin")).toUtf8());
     qputenv("SUBSTATION_PLUGIN_CACHE",
             (runFolder(QStringLiteral("sub-plugin-cache")) + QStringLiteral("/vst3-cache.json")).toUtf8());
     qputenv("SUBSTATION_RECORDINGS", (runFolder(QStringLiteral("sub-recordings")) + QStringLiteral("/Recordings")).toUtf8());

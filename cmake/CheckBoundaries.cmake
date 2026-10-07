@@ -1,6 +1,10 @@
 # The layers' boundaries, checked as a test (ctest -R boundaries):
-#  * the audio engine (engine/src) and the browser backend (browser/src) never
-#    include Qt or anything of the application or the UI;
+#  * the audio engine (engine/src), the browser backend (browser/src) and the
+#    intelligence module (intelligence/src) never include Qt or anything of the
+#    application or the UI;
+#  * the intelligence module includes neither the engine's headers nor the
+#    browser's: it stands on its own (miniaudio, which it decodes with, is a
+#    library of its own);
 #  * the application layer (app/src) never includes Qt Quick or QML, nor the UI;
 #  * the UI (ui/src) never includes the engine's headers: it talks to the
 #    application layer only. (ui/main.cpp, which puts the layers together, makes
@@ -22,6 +26,7 @@ endfunction()
 
 _check(engine/src "Q[A-Za-z]+|qt|app/|ui/" "Qt or the application")
 _check(browser/src "Q[A-Za-z]+|qt|app/|ui/" "Qt or the application")
+_check(intelligence/src "Q[A-Za-z]+|qt|app/|ui/" "Qt or the application")
 _check(app/src "QtQuick|QtQml|QQuick|QQml|QJSValue|QJSEngine|ui/" "Qt Quick, QML or the UI")
 
 # The engine's headers, by name (as the engine includes them: "Engine.h", "plugins/Vst3Format.h"...).
@@ -34,6 +39,19 @@ endforeach()
 list(JOIN _engine_names "|" _engine_pattern)
 if (_engine_pattern)
     _check(ui/src "(${_engine_pattern})[\">]|miniaudio|pluginterfaces|public\\.sdk" "the engine")
+    _check(intelligence/src "(${_engine_pattern})[\">]|pluginterfaces|public\\.sdk" "the engine")
+endif()
+
+# The browser backend's headers, by name ("Browser.h", "Model.h"...).
+file(GLOB _browser_headers RELATIVE "${ROOT}/browser/src" "${ROOT}/browser/src/*.h")
+set(_browser_names "")
+foreach (_header IN LISTS _browser_headers)
+    string(REGEX REPLACE "([.+])" "\\\\\\1" _escaped "${_header}")
+    list(APPEND _browser_names "${_escaped}")
+endforeach()
+list(JOIN _browser_names "|" _browser_pattern)
+if (_browser_pattern)
+    _check(intelligence/src "(${_browser_pattern})[\">]" "the browser backend")
 endif()
 
 if (_failures)

@@ -16,6 +16,10 @@ import SUBstation
 // Items dragged out carry the controller's drag data (dragData()), and count
 // as used when the drop took them. Presets are renamed in place (Ctrl+R with
 // the list focused, or their menu's Rename…), and deleted after asking.
+//
+// Find Similar Sounds (an audio file's menu here, or an audio clip's in the
+// arrangement) lists the sounds most like it, most similar first: a bar over
+// the list says like what, and its ✕ goes back to the list as it was.
 Rectangle {
     id: panel
 
@@ -101,6 +105,9 @@ Rectangle {
             break
         case "showInFolder":
             browser.showInFolder(item.path)
+            break
+        case "findSimilar":
+            browser.findSimilar(item.path)
             break
         }
     }
@@ -216,8 +223,57 @@ Rectangle {
                             return i
                     return 0
                 }
-                tooltip: qsTr("Sort the list: Rank puts what you use most first")
+                tooltip: panel.browser.similarTo !== "" ? qsTr("Similarity: the most similar sounds first")
+                                                        : qsTr("Sort the list: Rank puts what you use most first")
                 onChosen: index => panel.browser.sort = panel.browser.sorts[index].value
+            }
+        }
+
+        // Find Similar: the sound the list shows the sounds like.
+        Rectangle {
+            id: similarBar
+            objectName: "similarBar"
+            Layout.fillWidth: true
+            Layout.leftMargin: 6
+            Layout.rightMargin: 6
+            visible: panel.browser.similarTo !== ""
+            implicitHeight: similarRow.implicitHeight + 4
+            radius: 3
+            color: Theme.surface
+            border.color: Theme.accent
+
+            RowLayout {
+                id: similarRow
+                anchors.fill: parent
+                anchors.leftMargin: 6
+                anchors.rightMargin: 2
+                spacing: 5
+
+                Icon {
+                    name: "waveform"
+                    color: Theme.accent
+                }
+                Label {
+                    objectName: "similarLabel"
+                    Layout.fillWidth: true
+                    text: qsTr("Similar to %1").arg(panel.browser.similarName)
+                    color: Theme.text
+                    elide: Text.ElideMiddle
+
+                    HoverHandler {
+                        id: similarHover
+                    }
+                    ToolTip.visible: similarHover.hovered
+                    ToolTip.text: panel.browser.similarTo
+                    ToolTip.delay: 700
+                }
+                RoleButton {
+                    objectName: "clearSimilar"
+                    role: "flat"
+                    text: "✕"
+                    tooltip: qsTr("Back to the list")
+                    onClicked: panel.browser.clearSimilar()
+                }
             }
         }
 

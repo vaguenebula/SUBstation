@@ -30,8 +30,9 @@ accessors. The UI shows dialogs and asks the session to act; the session itself 
 ## What it owns
 
 `Session(engine, options)` makes, in order: the `Project`, the `QUndoStack`, the `ProjectEditor`, the `Selection`, the
-`EngineBridge` (on the engine it is given, which outlives it), the `PluginIndex`, the `BrowserController` (which starts
-the plug-in scan), the `PresetIndex`, the `RenderProgress`, and the parts `ArrangementActions`, `DeviceSelection`,
+`EngineBridge` (on the engine it is given, which outlives it), the `PluginIndex`, the `SoundSimilarity` (which
+analyses the browser's files: [intelligence.md](../intelligence.md)), the `BrowserController` (which starts the plug-in
+scan, and points the sound similarity at its index), the `PresetIndex`, the `RenderProgress`, and the parts `ArrangementActions`, `DeviceSelection`,
 `ComputerKeyboard`, `AudioPreferences`, `MidiPreferences`. They are its children, and QML reads them as constant
 properties:
 
@@ -39,6 +40,7 @@ properties:
 |---|---|---|
 | `project`, `undoStack`, `editor`, `selection`, `bridge` | `Project`, `QUndoStack`, `ProjectEditor`, `Selection`, `EngineBridge` | [model.md](model.md), [engine-bridge.md](engine-bridge.md) |
 | `browser`, `plugins` | `BrowserController`, `PluginIndex` | the browser ([browser.md](../browser.md)); the plug-ins, also Preferences › Plug-ins ([plugin-scanner.md](plugin-scanner.md)) |
+| `similarity` | `SoundSimilarity` | finding similar sounds ([intelligence.md](../intelligence.md)); the browser's Find Similar uses it |
 | `arrangement` | `ArrangementActions` | [below](#the-arrangements-actions-arrangementactions) |
 | `deviceSelection` | `DeviceSelection` | [below](#the-device-view-deviceselection) |
 | `render` | `RenderProgress` | [below](#renders-in-the-background) |
@@ -46,13 +48,14 @@ properties:
 | `audioPreferences`, `midiPreferences` | `AudioPreferences`, `MidiPreferences` | [below](#preferences) |
 
 `Session::Options` is for the tests: `scanner` (the plug-in scanner's program; empty: `substation-scan` beside the
-application), `scanPlugins` (scan at once) and `browserIndex` (keep the browser's index on disk).
+application), `scanPlugins` (scan at once), `browserIndex` (keep the browser's index and the sounds' fingerprints on
+disk) and `analyseSounds` (fingerprint the browser's files in the background).
 
 `setOwnerWindow(handle)` (from `ui/main.cpp`) gives the bridge the main window's native handle, which plug-in editors
 and ASIO drivers' dialogs belong to. `start()` (queued by `ui/main.cpp` once the window shows) starts audio
 (`EngineBridge::startAudio`: the render threads, the MIDI inputs, the saved device). `shutdown()` (after the event
 loop, or when the session goes) aborts a render that runs, stops the transport and the preview, closes the plug-in
-editors, stops the browser's threads, closes the device and shuts the bridge down (the plug-ins unload while the
+editors, stops the browser's threads, then the sound similarity's (saving the fingerprints), closes the device and shuts the bridge down (the plug-ins unload while the
 application is still whole).
 
 ## Wiring

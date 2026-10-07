@@ -2,10 +2,11 @@ cmake_minimum_required(VERSION 3.26)
 project(SUBstation VERSION 0.2.0 LANGUAGES C CXX)
 
 # Three layers, each a library of its own (see docs/architecture.md):
-#   engine/   the real-time audio engine (no Qt)            -> sub_engine
-#   browser/  the browser's file index and search (no Qt)  -> sub_browser
-#   app/      the application layer (Qt Core/Gui, no QML)   -> sub_app
-#   ui/       the Qt Quick UI: QML and scene-graph items     -> sub_ui, the substation executable
+#   engine/        the real-time audio engine (no Qt)                -> sub_engine
+#   browser/       the browser's file index and search (no Qt)      -> sub_browser
+#   intelligence/  sound similarity, and later more (no Qt)          -> sub_intelligence
+#   app/           the application layer (Qt Core/Gui, no QML)       -> sub_app
+#   ui/            the Qt Quick UI: QML and scene-graph items         -> sub_ui, the substation executable
 # plus tools/scanner (the VST3 scanner's child process, no Qt) and tests/.
 
 set(CMAKE_CXX_STANDARD 20)
@@ -45,6 +46,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 add_subdirectory(engine)
 add_subdirectory(browser)
+add_subdirectory(intelligence)  # (after the engine: it decodes with its miniaudio target)
 add_subdirectory(tools/scanner)
 
 if (SUBSTATION_BUILD_APP)

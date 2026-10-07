@@ -1,8 +1,9 @@
 # Architecture
 
-SUBstation is one C++ program in four layers: a Qt Quick UI that draws everything, an application layer that owns
-the project and everything that works on it, a real-time audio engine that plays it, and a small library that
-indexes and searches the sample browser's files. This page is the map; each part has its own pages (see the
+SUBstation is one C++ program in five layers: a Qt Quick UI that draws everything, an application layer that owns
+the project and everything that works on it, a real-time audio engine that plays it, a small library that indexes
+and searches the sample browser's files, and the intelligence module, which works things out about sounds (how
+similar they are) in the background. This page is the map; each part has its own pages (see the
 [index](README.md)).
 
 ## Layers
@@ -38,14 +39,20 @@ indexes and searches the sample browser's files. This page is the map; each part
   browser       │ sub_browser: indexer thread + search thread; their wake callback    │
   backend       │ ─► FileIndex (app/src/browser) takes the results on the GUI thread  │
                 └─────────────────────────────────────────────────────────────────────┘
+                ┌─────────────────────────────────────────────────────────────────────┐
+  intelligence  │ sub_intelligence: sound similarity's keeper, analysers and search   │
+                │ threads; their wake callback ─► SoundSimilarity (app/src/           │
+                │ intelligence) on the GUI thread. Its library: the browser's files   │
+                └─────────────────────────────────────────────────────────────────────┘
 ```
 
 | Layer | Where | Built as | Depends on | Docs |
 |---|---|---|---|---|
 | UI | [ui/qml](../ui/qml) (QML module `SUBstation`), [ui/src](../ui/src) (C++ Qt Quick items), [ui/style](../ui/style) (the controls' style), [ui/main.cpp](../ui/main.cpp) | `sub_ui` + the `substation` executable | the application layer, Qt Quick, QML, Quick Controls | [ui/](ui/README.md) |
-| Application layer | [app/src](../app/src): `model/`, `editor/`, `io/`, `audio/`, `session/`, `browser/`, `plugins/`, `analysis/` | `sub_app` | Qt Core and Gui, `sub_engine`, `sub_browser` | [app/](README.md#application-layer) |
+| Application layer | [app/src](../app/src): `model/`, `editor/`, `io/`, `audio/`, `session/`, `browser/`, `intelligence/`, `plugins/`, `analysis/` | `sub_app` | Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence` | [app/](README.md#application-layer) |
 | Audio engine | [engine/src](../engine/src) | `sub_engine` (namespace `sub`) | the C++ standard library, miniaudio, the VST 3 SDK | [engine/](engine/README.md) |
 | Browser backend | [browser/src](../browser/src) | `sub_browser` (namespace `sub::browser`) | the C++ standard library | [browser.md](browser.md) |
+| Intelligence | [intelligence/src](../intelligence/src): `core/`, `similarity/` | `sub_intelligence` (namespace `sub::intelligence`) | the C++ standard library, miniaudio (its decoders), Signalsmith Linear (its FFTs) | [intelligence.md](intelligence.md) |
 | Plug-in scanner | [tools/scanner](../tools/scanner/main.cpp) | `substation-scan`, a program of its own | `sub_engine` | [app/plugin-scanner.md](app/plugin-scanner.md) |
 
 [ui/main.cpp](../ui/main.cpp) puts the layers together: it makes the `QGuiApplication`, the engine, the
@@ -75,6 +82,11 @@ indexes and searches the sample browser's files. This page is the map; each part
   (`Waveform`, `MeterLevel`, `ProcessorParam`...: see [app/engine-bridge.md](app/engine-bridge.md)).
 - **The browser backend** knows nothing of the rest: `FileIndex` ([app/src/browser](../app/src/browser)) hands it
   places and queries and takes back results when its wake callback says there are some.
+- **The intelligence module** knows nothing of the rest either, not even the browser: `SoundSimilarity`
+  ([app/src/intelligence](../app/src/intelligence)) gives it a source for its library (the browser's latest snapshot,
+  read on the module's thread) and its searches, and takes back results when its wake callback says there are some.
+  The browser orders a list by a result through a score function (`Sort::Score`), knowing nothing of where it came
+  from.
 
 ### The boundaries, checked
 
@@ -83,13 +95,14 @@ source file's `#include` lines and fails if:
 
 | Folder | Must not include |
 |---|---|
-| `engine/src`, `browser/src` | anything of Qt (`Q...`, `qt...`), `app/` or `ui/` |
+| `engine/src`, `browser/src`, `intelligence/src` | anything of Qt (`Q...`, `qt...`), `app/` or `ui/` |
+| `intelligence/src` | the engine's headers, the browser backend's headers (it decodes through the `miniaudio` library and transforms with `signalsmith_linear`, third-party targets of their own) |
 | `app/src` | Qt Quick or QML (`QtQuick`, `QtQml`, `QQuick*`, `QQml*`, `QJSValue`, `QJSEngine`) or `ui/` |
 | `ui/src` | the engine's headers (any header under `engine/src` by its name, miniaudio, the VST 3 SDK) |
 
 `ui/main.cpp` is outside `ui/src`: it alone makes the engine. The check looks at each file's own includes, not at
-what the headers it includes include in turn. The build enforces the rest: `sub_engine` and `sub_browser` don't
-link Qt, and `sub_app` links only Qt Core and Gui (`QUndoStack` is in Qt Gui). See
+what the headers it includes include in turn. The build enforces the rest: `sub_engine`, `sub_browser` and
+`sub_intelligence` don't link Qt, and `sub_app` links only Qt Core and Gui (`QUndoStack` is in Qt Gui). See
 [building.md](building.md#the-layers-boundaries).
 
 ## The life of an edit
@@ -139,6 +152,8 @@ Envelopes) changes the project directly: it is saved, but isn't an undo step. Se
 | Reverse jobs (`ReverseJob`) | a reversed copy of a decoded file written as a WAV file, then decoded | touch the model |
 | MIDI driver threads | stamp incoming messages against the audio clock and queue them for the audio thread | take the engine's mutex |
 | Browser indexer and search threads (`sub_browser`) | keep the file index, run searches; then call the wake callback, which posts a queued call to `FileIndex` on the GUI thread | call into the application (but for the wake callback) |
+| Sound similarity's keeper and analysers (`sub_intelligence`, background priority; a quarter of the cores, one to four analysers) | read and save the fingerprints, take the library from the browser's snapshots, fingerprint new and changed files | call into the application (but for the wake callback); the library source reads only immutable snapshots |
+| Sound similarity's search thread (`sub_intelligence`) | fingerprints the sound searched from if it must (a clip's part, a file outside the library), compares it with every file; then the wake callback | the same |
 | Plug-in index's scan thread (`QThread`) | `PluginScanner::scan()`: the cache, and the child processes it starts and reads | touch the index's objects (it hands its result over when it finishes) |
 | `substation-scan` child processes | load VST3 modules to read their classes | — (a crash or a hang costs only that file) |
 

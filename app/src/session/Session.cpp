@@ -11,6 +11,7 @@
 #include "browser/BrowserController.h"
 #include "browser/PresetIndex.h"
 #include "editor/ProjectEditor.h"
+#include "intelligence/SoundSimilarity.h"
 #include "io/Presets.h"
 #include "model/Automation.h"
 #include "model/ParamSpec.h"
@@ -38,8 +39,13 @@ Session::Session(sub::Engine& engine, Options options, QObject* parent)
     selection_ = new Selection(this);
     bridge_ = new EngineBridge(engine_, project_, this);
     plugins_ = new PluginIndex(this, options_.scanner);
+    SoundSimilarity::Options similarityOptions;
+    if (!options_.browserIndex) similarityOptions.storePath = QString();
+    similarityOptions.analyse = options_.analyseSounds;
+    similarity_ = new SoundSimilarity(similarityOptions, this);
     BrowserController::Options browserOptions;
     browserOptions.scanPlugins = options_.scanPlugins;
+    browserOptions.similarity = similarity_;  // (it analyses the browser's files)
     if (!options_.browserIndex) browserOptions.indexPath = QString();
     browser_ = new BrowserController(plugins_, browserOptions, this);
     presets_ = new PresetIndex(this);
@@ -183,6 +189,7 @@ void Session::shutdown() {
     bridge_->stopPreview();
     bridge_->closeAllEditors();
     browser_->shutdown();
+    similarity_->close();  // (after the browser, which lets go of it first; saves the fingerprints)
     engine_.closeDevice();
     bridge_->shutdown();  // unloads the plug-ins, while the application is still whole
 }

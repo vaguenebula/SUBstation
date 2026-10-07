@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,11 @@ int matchQuality(const BrowserItem& item, const std::vector<std::string>& terms)
 // The items that match the query, in the order `sort` ("rank" or "name") puts them.
 std::vector<BrowserItem> find(std::vector<BrowserItem> items, const QString& query, const Library& library,
                               const QString& sort = QStringLiteral("rank"));
+
+// The items that match the query and have a score (not NaN), the highest
+// first, ties in the list's own order: the "score" sort (similar sounds).
+std::vector<BrowserItem> findScored(std::vector<BrowserItem> items, const QString& query,
+                                    const std::function<double(const BrowserItem&)>& score);
 
 // The Places filter of the panel (in lower case where file names ignore case).
 std::vector<BrowserItem> placeItems(const std::vector<BrowserItem>& items, const QString& place);

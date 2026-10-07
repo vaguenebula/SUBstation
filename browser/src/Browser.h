@@ -57,6 +57,9 @@ public:
     };
     Update take();
     IndexStatus status() const { return indexer_.status(); }
+    // The index as it is now (the latest snapshot published; null before the
+    // first). Safe to call from any thread.
+    std::shared_ptr<const Snapshot> snapshot() const { return indexer_.snapshot(); }
     bool searching() const;
 
     bool waitIdle(double seconds);  // the index settled and no search running (tests, benchmarks)

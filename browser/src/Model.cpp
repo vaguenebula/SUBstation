@@ -54,6 +54,12 @@ bool FolderFiles::sameNames(const std::vector<Name>& names) const {
 
 std::string Snapshot::join(std::string_view folder, std::string_view name) {
     std::string path;
+    join(path, folder, name);
+    return path;
+}
+
+void Snapshot::join(std::string& path, std::string_view folder, std::string_view name) {
+    path.clear();
     path.reserve(folder.size() + 1 + name.size());
     path.append(folder);
     const char last = folder.empty() ? '\0' : folder.back();
@@ -64,7 +70,6 @@ std::string Snapshot::join(std::string_view folder, std::string_view name) {
 #endif
     if (!separated) path.push_back(platform::kSeparator);
     path.append(name);
-    return path;
 }
 
 std::string placePrefix(std::string_view root) {

@@ -544,3 +544,28 @@ Tests
   - [ ] Maybe: re-render frozen tracks after a tempo change, instead of warping.
 - [ ] Macro automation in the engine (a lane fanning out to its targets).
 - [ ] Key/velocity zones on rack chains.
+
+---
+
+## Intelligence (`intelligence/`, docs/intelligence.md)
+
+Sound similarity
+- [x] Fingerprints (timbre, its attack/body/tail, spectrum, envelope, pitch,
+      rhythm), compared aspect by aspect; weights tuned on a real library
+      (`sound_similarity_bench`).
+- [x] The browser's files analysed in the background, saved to
+      sound-index.bin; only new or changed files analysed again.
+- [x] Find Similar Sounds: an audio file's menu in the browser, an audio
+      clip's (its part of the file) in the arrangement; the Similarity sort.
+- [ ] Swap in similar samples in the sampler (step through
+      `SimilarSounds::best()`).
+- [ ] The same in the drum rack (once there is one), per pad.
+- [ ] A file manager view: swap a project's audio files (by track) for similar ones.
+- [ ] Maybe: the user weighs the aspects (as Sononym does).
+- [ ] Maybe: a small learned embedding as another aspect (better across kinds).
+
+Later
+- [ ] MIDI generation.
+- [ ] MIDI humanisation (an XGBoost model, its C++ library).
+- [ ] Chord recognition over a whole project.
+- [ ] An MCP server for agents.

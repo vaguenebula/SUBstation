@@ -20,9 +20,11 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -92,9 +94,12 @@ public:
     void setUsage(const Library& library);
 
     // Starts a search (stopping any that runs); its results come as `results`.
-    // `sort` is "rank" or "name"; `now` is the library's time (for how recent uses are).
+    // `sort` is "rank", "name" or "similar" (by `score`: an indexed file's by its
+    // path in the backend's form, the highest first; files without one left
+    // out); `now` is the library's time (for how recent uses are).
     uint64_t search(const QString& text, const QString& sort, double now, const std::vector<int>& groups,
-                    const QString& tag = {}, const std::string& placePrefix = {});
+                    const QString& tag = {}, const std::string& placePrefix = {},
+                    std::function<double(std::string_view)> score = {});
 
     // Blocks until the index settled and no search runs (tests, benchmarks).
     bool waitIdle(double seconds = 10.0);

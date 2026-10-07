@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -78,8 +79,9 @@ struct Snapshot {
     std::unordered_map<std::string_view, uint32_t> folderByPath;
 
     // `folder.path` joined with a file name, as os.scandir joins them (with the
-    // platform's separator).
+    // platform's separator); the second form into `out`, reusing its memory.
     static std::string join(std::string_view folder, std::string_view name);
+    static void join(std::string& out, std::string_view folder, std::string_view name);
 };
 
 // An item the UI lists besides the files (a built-in device, a plug-in, a preset).
@@ -115,7 +117,9 @@ struct Usage {
     double rank(const UsageRecord& record, double now) const;
 };
 
-enum class Sort : uint8_t { Rank, Name };
+// Rank: most used first, then the best matches. Name: by casefolded name.
+// Score: indexed files by Query::score, the highest first (similar sounds).
+enum class Sort : uint8_t { Rank, Name, Score };
 
 // Groups: 0 is the index's audio files, others are external groups.
 inline constexpr int kAudioGroup = 0;
@@ -133,6 +137,12 @@ struct Query {
     std::vector<int> groups;      // what to list, in this order
     std::string tag;              // external items with this tag only ('' for all)
     std::string placePrefix;      // files under this folder only ('' for all): placePrefix(root)
+    // Sort::Score: an indexed file's score by its path (as shown: Snapshot::join
+    // of its folder's and its name), the highest first, ties in the list's own
+    // order. Files it gives NaN, and items other than indexed files, are left
+    // out. Called on the search thread, so it must only read what doesn't
+    // change (a finished result of the application's).
+    std::function<double(std::string_view path)> score;
 };
 
 struct Hit {

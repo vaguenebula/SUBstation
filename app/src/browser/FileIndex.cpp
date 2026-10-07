@@ -169,10 +169,14 @@ void FileIndex::setItems(int group, const std::vector<std::pair<BrowserItem, QSt
 void FileIndex::setUsage(const Library& library) { backend_->setUsage(usageRecords(library), Library::kHalfLifeDays); }
 
 uint64_t FileIndex::search(const QString& text, const QString& sort, double now, const std::vector<int>& groups,
-                           const QString& tag, const std::string& placePrefix) {
+                           const QString& tag, const std::string& placePrefix,
+                           std::function<double(std::string_view)> score) {
     browser::Query query;
     query.text = text.toStdString();
-    query.sort = sort == QStringLiteral("name") ? browser::Sort::Name : browser::Sort::Rank;
+    query.sort = sort == QStringLiteral("name") ? browser::Sort::Name
+                 : sort == kSimilarSort         ? browser::Sort::Score
+                                                : browser::Sort::Rank;
+    query.score = std::move(score);
     query.now = now;
     query.groups = groups;
     query.tag = tag.toStdString();

@@ -9,6 +9,11 @@ target_include_directories(miniaudio SYSTEM PUBLIC third_party/miniaudio)
 target_compile_definitions(miniaudio PUBLIC
     MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_GENERATION)
 set_target_properties(miniaudio PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Signalsmith Linear's FFTs (header-only, MIT): Signalsmith Stretch's, and the
+# intelligence module's (intelligence/).
+add_library(signalsmith_linear INTERFACE)
+target_include_directories(signalsmith_linear SYSTEM INTERFACE third_party/signalsmith-linear)
 if (MSVC)
     target_compile_options(miniaudio PRIVATE /W0)
 else()
@@ -185,9 +190,8 @@ add_library(sub::engine ALIAS sub_engine)
 target_include_directories(sub_engine PUBLIC src)
 # Signalsmith Stretch (time stretching / pitch shifting) and its FFT library:
 # MIT-licensed, header-only, no further dependencies.
-target_include_directories(sub_engine SYSTEM PRIVATE
-    third_party/signalsmith-stretch
-    third_party/signalsmith-linear)
+target_include_directories(sub_engine SYSTEM PRIVATE third_party/signalsmith-stretch)
+target_link_libraries(sub_engine PRIVATE signalsmith_linear)
 target_link_libraries(sub_engine PUBLIC miniaudio vst3_hosting)
 if (WIN32)
     target_link_libraries(sub_engine PUBLIC user32 ole32 uuid advapi32 winmm avrt)

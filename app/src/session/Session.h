@@ -1,7 +1,8 @@
 #pragma once
 // The session: one open project and everything that works on it, as the main
 // window had it. It owns the project, the undo stack, the editor, the
-// selection, the engine bridge, the browser and the plug-in index, and wires
+// selection, the engine bridge, the browser, the plug-in index and the sound
+// similarity (which analyses the browser's files), and wires
 // them together (the hooks and signals the main window used to connect). The
 // UI reaches all of it through the session: QML as the `Session` singleton
 // (registered by the UI), the UI's C++ items through these accessors.
@@ -73,6 +74,7 @@ class ProjectEditor;
 class Render;
 class RenderProgress;
 class Selection;
+class SoundSimilarity;
 
 class Session : public QObject {
     Q_OBJECT
@@ -83,6 +85,7 @@ class Session : public QObject {
     Q_PROPERTY(sub::app::EngineBridge* bridge READ bridge CONSTANT)
     Q_PROPERTY(sub::app::BrowserController* browser READ browser CONSTANT)
     Q_PROPERTY(sub::app::PluginIndex* plugins READ plugins CONSTANT)
+    Q_PROPERTY(sub::app::SoundSimilarity* similarity READ similarity CONSTANT)
     Q_PROPERTY(sub::app::ArrangementActions* arrangement READ arrangement CONSTANT)
     Q_PROPERTY(sub::app::DeviceSelection* deviceSelection READ deviceSelection CONSTANT)
     Q_PROPERTY(sub::app::RenderProgress* render READ render CONSTANT)
@@ -134,7 +137,8 @@ public:
     struct Options {
         QString scanner;            // the plug-in scanner's executable; empty: next to the application
         bool scanPlugins = true;    // scan the plug-ins at once (tests turn it off)
-        bool browserIndex = true;   // keep the browser's index on disk (tests turn it off)
+        bool browserIndex = true;   // keep the browser's index and the sounds' fingerprints on disk (tests turn it off)
+        bool analyseSounds = true;  // fingerprint the browser's files in the background, for Find Similar (tests turn it off)
     };
 
     static constexpr int kMaxRecent = 10;
@@ -155,6 +159,7 @@ public:
     EngineBridge* bridge() const { return bridge_; }
     BrowserController* browser() const { return browser_; }
     PluginIndex* plugins() const { return plugins_; }
+    SoundSimilarity* similarity() const { return similarity_; }
     ArrangementActions* arrangement() const { return arrangement_; }
     DeviceSelection* deviceSelection() const { return devices_; }
     RenderProgress* render() const { return render_; }
@@ -389,6 +394,7 @@ private:
     Selection* selection_ = nullptr;
     EngineBridge* bridge_ = nullptr;
     PluginIndex* plugins_ = nullptr;
+    SoundSimilarity* similarity_ = nullptr;
     BrowserController* browser_ = nullptr;
     PresetIndex* presets_ = nullptr;
     RenderProgress* render_ = nullptr;

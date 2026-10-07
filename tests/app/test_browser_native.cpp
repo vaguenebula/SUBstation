@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -280,10 +281,14 @@ public:
     // The latest search's result (null if it didn't come, or wasn't this one).
     std::shared_ptr<const backend::Result> search(const QString& text = {}, const QString& sort = QStringLiteral("rank"),
                                                   double now = 0.0, std::vector<int> groups = {kAudioGroup},
-                                                  const QString& tag = {}, const std::string& prefix = {}) {
+                                                  const QString& tag = {}, const std::string& prefix = {},
+                                                  std::function<double(std::string_view)> score = {}) {
         backend::Query query;
         query.text = text.toStdString();
-        query.sort = sort == QStringLiteral("name") ? backend::Sort::Name : backend::Sort::Rank;
+        query.sort = sort == QStringLiteral("name")    ? backend::Sort::Name
+                     : sort == QStringLiteral("score") ? backend::Sort::Score
+                                                       : backend::Sort::Rank;
+        query.score = std::move(score);
         query.now = now;
         query.groups = std::move(groups);
         query.tag = tag.toStdString();
@@ -295,8 +300,8 @@ public:
     }
 
     std::vector<BrowserItem> items(const QString& text = {}, const QString& sort = QStringLiteral("rank"), double now = 0.0,
-                                   const std::string& prefix = {}) {
-        const SearchResult result(search(text, sort, now, {kAudioGroup}, {}, prefix), {});
+                                   const std::string& prefix = {}, std::function<double(std::string_view)> score = {}) {
+        const SearchResult result(search(text, sort, now, {kAudioGroup}, {}, prefix, std::move(score)), {});
         return result.items(0, result.total());
     }
 
@@ -663,6 +668,52 @@ private Q_SLOTS:
         QSet<QString> first;
         for (size_t i = 0; i < 10 && i < ranked.size(); ++i) first.insert(ranked[i].key());
         QCOMPARE(first, QSet<QString>(used.begin(), used.end()));
+    }
+
+    // The "score" sort (similar sounds): files by a score the application
+    // gives by their paths, the highest first; ties in the list's own order;
+    // files without one, and other items, left out. With search text and places.
+    void scoreOrdersFilesByTheirScores() {
+        Random rng(15);
+        const QString lib = tmp_->filePath(QStringLiteral("lib"));
+        buildTree(lib, rng);
+        Backend b({lib});
+        QVERIFY(b.wait());
+        const auto items = reference::indexPlaces({lib});
+        QSet<QString> folderSet;
+        for (const BrowserItem& item : items) folderSet.insert(QFileInfo(item.path).path());
+        std::vector<QString> folders(folderSet.begin(), folderSet.end());
+        std::sort(folders.begin(), folders.end());
+        for (int round = 0; round < 20; ++round) {
+            // A score by path: a few levels (ties), and none for some files.
+            const uint64_t salt = static_cast<uint64_t>(rng.between(1, 1000000));
+            auto score = [salt](std::string_view path) {
+                uint64_t h = salt * 1469598103934665603ull;
+                for (const char c : path) h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+                return h % 5 == 0 ? std::nan("") : static_cast<double>(h % 7) / 7.0;
+            };
+            auto itemScore = [&](const BrowserItem& item) { return score(toBackendPath(item.path)); };
+            const QString query = rng.real() < 0.5 ? QString() : randomQuery(rng);
+            QCOMPARE(describe(b.items(query, QStringLiteral("score"), 0.0, {}, score)),
+                     describe(reference::findScored(items, query, itemScore)));
+            const QString place = rng.choice(folders);
+            QCOMPARE(describe(b.items(query, QStringLiteral("score"), 0.0, placePrefix(place), score)),
+                     describe(reference::findScored(reference::placeItems(items, place), query, itemScore)));
+        }
+        // Other items have no score: left out; with no score at all, nothing is listed.
+        std::vector<backend::ExternalItem> external(1);
+        external[0].kind = backend::Kind::Device;
+        external[0].name = "Kick Device";
+        external[0].key = "device:kick";
+        b.native.setExternal(kBuiltinGroup, std::move(external));
+        const auto mixed = b.search({}, QStringLiteral("score"), 0.0, {kBuiltinGroup, kAudioGroup}, {}, {},
+                                    [](std::string_view) { return 1.0; });
+        QVERIFY(mixed);
+        QCOMPARE(mixed->hits.size(), items.size());
+        for (const backend::Hit& hit : mixed->hits) QCOMPARE(hit.group, uint32_t(kAudioGroup));
+        const auto none = b.search({}, QStringLiteral("score"));
+        QVERIFY(none);
+        QVERIFY(none->hits.empty());
     }
 
     // --- Keeping up to date ---
