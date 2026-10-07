@@ -96,29 +96,6 @@ private Q_SLOTS:
         QCOMPARE(audioThreads(), 0);  // back to the default: not pinned
     }
 
-    void theBackgroundFreezingPreference() {
-        // Off unless audio/background_freezing says "true" (not in the preferences
-        // yet); the environment variable SUBSTATION_BACKGROUND_FREEZE wins.
-        QVERIFY(!backgroundFreezing());
-        Studio studio;
-        EngineBridge& bridge = *studio.bridge;
-        bridge.applyBackgroundFreezing();
-        QVERIFY(!studio.engine.backgroundFreezing().enabled);
-        QSettings().setValue(kBackgroundFreezingKey, true);
-        QVERIFY(backgroundFreezing());
-        bridge.applyBackgroundFreezing();
-        QVERIFY(studio.engine.backgroundFreezing().enabled);
-        qputenv("SUBSTATION_BACKGROUND_FREEZE", "0");
-        QVERIFY(!backgroundFreezing());
-        bridge.applyBackgroundFreezing();
-        QVERIFY(!studio.engine.backgroundFreezing().enabled);
-        QSettings().setValue(kBackgroundFreezingKey, false);
-        qputenv("SUBSTATION_BACKGROUND_FREEZE", "1");
-        QVERIFY(backgroundFreezing());
-        qunsetenv("SUBSTATION_BACKGROUND_FREEZE");
-        QVERIFY(!backgroundFreezing());
-    }
-
     void midiInputsTurnedOff() {
         QVERIFY(disabledMidiInputs().isEmpty());  // every input plays, a new one too
         setMidiInputDisabled(QStringLiteral("Keys"), true);

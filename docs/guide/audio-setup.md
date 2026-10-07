@@ -22,7 +22,6 @@ Change it here.
 | *Buffer Size* | The buffer sizes the device offers, in samples |
 | *Exclusive mode* | WASAPI only: lower latency; other apps are silenced |
 | *Audio Threads* | How many threads render tracks at once |
-| *Background freezing* | Unchanged tracks play from a cache instead of their plug-ins (off by default) |
 
 Changes there apply at once, because what a driver offers is only known while it runs.
 The line below the settings shows the device running, its sample rate, buffer size and
@@ -33,17 +32,6 @@ latency, or the error if it didn't open.
 *Audio Threads* sets how many threads render (one per core but one by default; 1 = no
 workers: every track renders on the audio thread). Offline renders and exports use the
 same threads.
-
-### Background freezing
-
-With *Background freezing* on, what a track plays is kept in memory as it plays, and the
-next time that part plays unchanged the track plays it from there instead of running its
-plug-ins: a section heard again costs far less CPU. Nothing to do: an edit plays at once,
-and only the part of the song it changes plays live again (and is kept anew). The track
-shown in the device view ([devices.md](devices.md)) always plays live, so its meters and
-displays move. It uses up to 1 GB of memory. One difference you may hear: stopping while a
-track plays from its cache cuts its reverb or delay tail. The environment variable
-`SUBSTATION_BACKGROUND_FREEZE` (`1` or `0`) overrides the checkbox.
 
 ## ASIO
 

@@ -127,25 +127,6 @@ ColumnLayout {
             chosenIndex: page.prefs.threadIndex
             onChosen: index => page.prefs.chooseThreads(index)
         }
-
-        Item {
-            implicitWidth: 1
-            implicitHeight: 1
-        }
-        CheckBox {
-            id: backgroundFreezing
-            objectName: "backgroundFreezing"
-            focusPolicy: Qt.NoFocus
-            text: qsTr("Background freezing (unchanged tracks play from a cache)")
-            ToolTip.visible: hovered
-            ToolTip.text: qsTr("Tracks that haven't changed for a while play from a RAM cache instead of "
-                               + "running their plug-ins, saving CPU on repeated passes.")
-            checked: page.prefs.backgroundFreezing
-            onToggled: {
-                page.prefs.setBackgroundFreezing(checked)
-                checked = Qt.binding(() => page.prefs.backgroundFreezing)
-            }
-        }
     }
 
     Label {

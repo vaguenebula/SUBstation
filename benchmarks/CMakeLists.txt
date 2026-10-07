@@ -3,9 +3,6 @@
 #
 #   parallel_render_bench   tracks rendered on one thread and on several: the
 #                           engine alone, no Qt (with the engine tests' helpers)
-#   background_freeze_bench background freezing's savings and costs on a song of
-#                           real VST3 plug-ins (Linux, /usr/lib/vst3): the engine
-#                           alone, through the "Manual" driver
 #   browser_backend_bench   the browser's backend on a large synthetic library,
 #                           checked against the reference the tests use (it
 #                           needs the application layer: SUBSTATION_BUILD_APP)
@@ -20,11 +17,6 @@ if (TARGET sub_test_asio)
     add_dependencies(parallel_render_bench sub_test_asio)
     target_compile_definitions(parallel_render_bench PRIVATE SUBSTATION_TEST_ASIO_DRIVER="$<TARGET_FILE:sub_test_asio>")
 endif()
-
-add_executable(background_freeze_bench background_freeze_bench.cpp)
-target_include_directories(background_freeze_bench PRIVATE ${PROJECT_SOURCE_DIR}/tests/engine/harness)
-target_link_libraries(background_freeze_bench PRIVATE sub_engine)
-sub_project_warnings(background_freeze_bench)
 
 if (SUBSTATION_BUILD_APP)
     add_executable(browser_backend_bench

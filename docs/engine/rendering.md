@@ -344,13 +344,8 @@ from the UI).
 
 ## Gotchas
 
-- The master (in the epilogue) calls `processInserts()` with `monitored` false and no events;
+- `processStrip()` (the master) calls `processInserts()` with `monitored` false and no events;
   tracks go through `renderTrack()` instead.
-- With background freezing on ([background-freeze.md](background-freeze.md)), `renderTrack()` and
-  the master's epilogue skip a strip's inputs, clips and devices while its cache plays
-  (`beginCacheStep()` / `endCacheStep()` in [RendererCache.cpp](../../engine/src/RendererCache.cpp)
-  around steps 1 to 3). Everything after the devices (taps before the fader, the fader, the
-  edges) runs as ever, on what the cache put out.
 - `takeResets()` returning false means "no device switched on": the chain is skipped entirely,
   but its device taps are still filled.
 - The loop needs at least 256 samples, and at most 15 wraps fit in a chunk.

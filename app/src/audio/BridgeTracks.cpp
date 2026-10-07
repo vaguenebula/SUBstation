@@ -101,7 +101,6 @@ void EngineBridge::addEngineTrack(const QString& trackId) {
     if (!master) {  // the engine always has the master
         const quint32 engineId = engine_.addTrack();
         d_->trackIds.insert(trackId, engineId);
-        if (trackId == d_->observed) engine_.setTrackObserved(engineId, true);
         d_->chains.insert(trackId, engine_.trackChain(engineId));
         d_->chainOwner.insert(trackId, trackId);
     }
@@ -378,29 +377,9 @@ void EngineBridge::applyAudioThreads() {
     engine_.setAudioThreads(chosen > 0 ? chosen : sub::Engine::defaultAudioThreads());
 }
 
-void EngineBridge::applyBackgroundFreezing() {
-    sub::BackgroundFreezingSettings settings = engine_.backgroundFreezing();
-    settings.enabled = sub::app::backgroundFreezing();
-    engine_.setBackgroundFreezing(settings);
-}
-
-void EngineBridge::setObservedTrack(const QString& trackId) {
-    if (trackId == d_->observed) return;
-    guarded("observed track", [&] {
-        if (const auto old = engineTrackId(d_->observed)) engine_.setTrackObserved(*old, false);
-        d_->observed = trackId;
-        if (const auto now = engineTrackId(trackId)) engine_.setTrackObserved(*now, true);
-    });
-}
-
 void EngineBridge::chooseAudioThreads(int threads) {
     sub::app::setAudioThreads(threads == sub::Engine::defaultAudioThreads() ? 0 : threads);
     guarded("audio threads", [&] { applyAudioThreads(); });
-}
-
-void EngineBridge::chooseBackgroundFreezing(bool enabled) {
-    sub::app::setBackgroundFreezingSetting(enabled);
-    guarded("background freezing", [&] { applyBackgroundFreezing(); });
 }
 
 int EngineBridge::audioThreads() const { return engine_.audioThreads(); }

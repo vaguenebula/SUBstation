@@ -315,12 +315,6 @@ void AudioPreferences::chooseThreads(int index) {
     Q_EMIT changed();
 }
 
-void AudioPreferences::setBackgroundFreezing(bool enabled) {
-    if (enabled == backgroundFreezingSetting()) return;
-    bridge_->chooseBackgroundFreezing(enabled);
-    Q_EMIT changed();
-}
-
 void AudioPreferences::showControlPanel() {
     if (!bridge_->showDeviceControlPanel()) refresh(QStringLiteral("The driver has no settings dialog of its own."));
 }

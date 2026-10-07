@@ -77,20 +77,6 @@ int audioThreads() {
 
 void setAudioThreads(int threads) { QSettings().setValue(kAudioThreadsKey, std::max(0, threads)); }
 
-bool backgroundFreezing() {
-    const QByteArray environment = qgetenv("SUBSTATION_BACKGROUND_FREEZE");
-    if (!environment.isEmpty()) return environment == "1";
-    return backgroundFreezingSetting();
-}
-
-bool backgroundFreezingSetting() {
-    return QSettings().value(kBackgroundFreezingKey, QStringLiteral("false")).toString().toLower() == u"true";
-}
-
-void setBackgroundFreezingSetting(bool enabled) {
-    QSettings().setValue(kBackgroundFreezingKey, enabled ? QStringLiteral("true") : QStringLiteral("false"));
-}
-
 QSet<QString> disabledMidiInputs() {
     const QVariant value = QSettings().value(kMidiDisabledKey);
     QSet<QString> names;

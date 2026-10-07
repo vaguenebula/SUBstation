@@ -23,8 +23,6 @@ Engine::Engine()
       }) {
     std::lock_guard lock(mutex_);
     master_.chainId = addChainLocked(kMaster, 0);
-    cacheStore_ = std::make_unique<CacheStore>(cacheSettings_, audioEpoch_, deviceRunningFlag_, shared_.positionSamples);
-    renderer_.setCacheSettings(&cacheSettings_);
     scheduler_ = std::make_unique<Scheduler>(defaultAudioThreads());
     renderer_.setScheduler(scheduler_.get());
     renderer_.prepare(sampleRate_);
@@ -308,12 +306,6 @@ void Engine::idle(bool releaseAll) {
         std::lock_guard lock(mutex_);
         rebuildSnapshotLocked();  // a latency changed: new delay compensation
     }
-    bool rendering = false;
-    {
-        std::lock_guard lock(mutex_);
-        rendering = job_ != nullptr;
-    }
-    cacheIdle(rendering);
 }
 
 }  // namespace sub

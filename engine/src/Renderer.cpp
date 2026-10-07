@@ -59,8 +59,7 @@ void Renderer::setScheduler(Scheduler* scheduler) {
     scratch_.resize(static_cast<size_t>(scheduler ? scheduler->threads() : 1));
     for (WorkerScratch& scratch : scratch_) {
         for (auto* buffer : {&scratch.warpLeft, &scratch.warpRight, &scratch.autoGain, &scratch.autoPanLeft,
-                             &scratch.autoPanRight, &scratch.audible, &scratch.edgeGain, &scratch.cacheLeft,
-                             &scratch.cacheRight}) {
+                             &scratch.autoPanRight, &scratch.audible, &scratch.edgeGain}) {
             buffer->assign(kMaxBlock, 0.f);
         }
         for (WorkerScratch::Rack& rack : scratch.racks) {
@@ -236,8 +235,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
             if (looping && position_ < snap.loopEnd && position_ + length > snap.loopEnd) {
                 length = static_cast<int>(snap.loopEnd - position_);
             }
-            const bool wrap = flags.loop && !recording_ && position_ == snap.loopStart && expectedPosition_ == snap.loopEnd;
-            segments_[numSegments_++] = {position_, length, done, position_ != expectedPosition_, chase, wrap};
+            segments_[numSegments_++] = {position_, length, done, position_ != expectedPosition_, chase};
             chase = false;
             if (flags.metronome) scheduleTicks(snap, position_, length, done);
             position_ += length;
@@ -262,8 +260,6 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     context.loopEndBeat = snap.loopEnd / spb;
     context.offline = !flags.live;
 
-    prepareCacheChunk(snap, frames, flags);
-
     recordSegments_ = 0;
     if (recording_ && numSegments_ > 0) recordInput();
     if (wasPlaying_ && !playing_) releaseLiveNotes_ = true;
@@ -277,10 +273,6 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
         buffers.monitored = isMonitored(track, flags);
         buffers.recorded = flags.live && isRecorded(track.id);
         const bool hearsMidi = hearsMidiInput(track, flags);
-        buffers.liveEvents = hearsMidi;
-        for (int i = 0; i < numPreviewNotes_ && !buffers.liveEvents; ++i) {
-            buffers.liveEvents = previewNotes_[static_cast<size_t>(i)].trackId == track.id;
-        }
         MidiRecordingTake* take = recording_ ? midiTake(track.id) : nullptr;
         buffers.numEvents = 0;
         if (!track.notes.empty() || numActiveNotes_ > 0 || numPreviewNotes_ > 0 || numInputEvents_ > 0 ||
@@ -319,23 +311,13 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
 
     // 4. The master strip: what goes into it, summed in order (it never mutes,
     // and nothing is later than it: it has no edges of its own).
-    // (Its devices' part may come from its cache, as a track's.)
     float* masterL = masterLeft_.data();
     float* masterR = masterRight_.data();
     std::fill_n(masterL, frames, 0.f);
     std::fill_n(masterR, frames, 0.f);
-    const CacheStep masterStep = snap.master.params ? beginCacheStep(snap, snap.masterCache, nullptr, false, frames) : CacheStep{};
-    if (masterStep.resume) resumeDevices(snap.masterCache, nullptr, nullptr);
-    if (masterStep.renderLive) {
-        for (const int e : snap.masterInputs) sumEdge(snap, snap.edges[static_cast<size_t>(e)], masterL, masterR, frames, scratch_[0]);
-        if (snap.master.params) {
-            processInserts(snap, snap.master, context, nullptr, 0, masterL, masterR, frames, false, scratch_[0]);
-        }
-    }
+    for (const int e : snap.masterInputs) sumEdge(snap, snap.edges[static_cast<size_t>(e)], masterL, masterR, frames, scratch_[0]);
     if (snap.master.params) {
-        endCacheStep(snap, snap.masterCache, masterStep, masterL, masterR, frames, scratch_[0]);
-        applyFader(snap, *snap.master.params, snap.master.volume, snap.master.pan, true, masterL, masterR, frames,
-                   flags.live, scratch_[0], nullptr);
+        processStrip(snap, snap.master, context, nullptr, 0, masterL, masterR, frames, true, flags, scratch_[0]);
     }
     // What the tracks being recorded take from other tracks' outputs, or the
     // master's (resampling), now that they are rendered.
@@ -368,36 +350,29 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
     float* right = buffers.right.data();
     std::fill_n(left, frames, 0.f);
     std::fill_n(right, frames, 0.f);
-    // Its signal after its devices may come from its cache instead (background freezing).
-    const CacheStep cacheStep =
-        beginCacheStep(snap, track.cache, &track, buffers.monitored || buffers.recorded || buffers.liveEvents, frames);
-    if (cacheStep.resume) resumeDevices(track.cache, &track, &buffers);
-    if (cacheStep.renderLive) {
-        // A bus (a group, a return): what goes into it, in a fixed order (it is done:
-        // the scheduler runs it after its sources), so the sum is the same whichever
-        // finished first.
-        // (Frozen, it plays its frozen audio instead: what went into it is in that.)
-        for (const int e : track.incoming) {
-            const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
-            if (edge.sums() && !track.frozen) sumEdge(snap, edge, left, right, frames, scratch);
-        }
-        if (buffers.monitored) {  // its input: the device's, or another track's output (rendered: it fed this one)
-            if (track.input.source == InputEdge::Source::Track) {
-                sumEdge(snap, snap.edges[static_cast<size_t>(track.input.edge)], left, right, frames, scratch);
-            } else {
-                readInput(track.input, left, right, frames);
-            }
-        } else if (!buffers.recorded) {  // (being recorded, unmonitored: silence; the take replaces its clips)
-            int nextVoice = 0;
-            for (int s = 0; s < numSegments_; ++s) {
-                renderClips(track, segments_[s], buffers, nextVoice, scratch, left, right);
-            }
-        }
-        ProcessContext context = chunkContext_;  // its own: the inserts move it along the chunk's stretches
-        processInserts(snap, track, context, buffers.events.data(), buffers.numEvents, left, right, frames,
-                       buffers.monitored, scratch);
+    // A bus (a group, a return): what goes into it, in a fixed order (it is done:
+    // the scheduler runs it after its sources), so the sum is the same whichever
+    // finished first.
+    // (Frozen, it plays its frozen audio instead: what went into it is in that.)
+    for (const int e : track.incoming) {
+        const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+        if (edge.sums() && !track.frozen) sumEdge(snap, edge, left, right, frames, scratch);
     }
-    endCacheStep(snap, track.cache, cacheStep, left, right, frames, scratch);
+    if (buffers.monitored) {  // its input: the device's, or another track's output (rendered: it fed this one)
+        if (track.input.source == InputEdge::Source::Track) {
+            sumEdge(snap, snap.edges[static_cast<size_t>(track.input.edge)], left, right, frames, scratch);
+        } else {
+            readInput(track.input, left, right, frames);
+        }
+    } else if (!buffers.recorded) {  // (being recorded, unmonitored: silence; the take replaces its clips)
+        int nextVoice = 0;
+        for (int s = 0; s < numSegments_; ++s) {
+            renderClips(track, segments_[s], buffers, nextVoice, scratch, left, right);
+        }
+    }
+    ProcessContext context = chunkContext_;  // its own: the inserts move it along the chunk's stretches
+    processInserts(snap, track, context, buffers.events.data(), buffers.numEvents, left, right, frames,
+                   buffers.monitored, scratch);
     if (t == captureTrack_) {  // what freezing it keeps
         std::copy_n(left, frames, captureLeft_.data());
         std::copy_n(right, frames, captureRight_.data());
@@ -448,6 +423,14 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
         buffers.cost.store(last > 0.f ? last + kCostSmoothing * (perFrame - last) : perFrame,
                            std::memory_order_relaxed);
     }
+}
+
+void Renderer::processStrip(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
+                            ProcessEvent* events, int numEvents, float* left, float* right, int frames, bool audible,
+                            ChunkFlags flags, WorkerScratch& scratch, float* audibleOut) noexcept {
+    processInserts(snap, strip, context, events, numEvents, left, right, frames, false, scratch);
+    applyFader(snap, *strip.params, strip.volume, strip.pan, audible, left, right, frames, flags.live, scratch,
+               audibleOut);
 }
 
 int Renderer::compensationFor(const EdgeRender& edge, bool monitored) noexcept {

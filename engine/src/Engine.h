@@ -43,7 +43,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -64,7 +63,6 @@
 #include "Scheduler.h"
 #include "Snapshot.h"
 #include "Transport.h"
-#include "cache/CacheStore.h"
 #include "rt/RtUtils.h"
 
 namespace sub {
@@ -153,26 +151,6 @@ struct SendInfo {
 struct TrackCost {
     uint32_t trackId = 0;
     float nsPerFrame = 0.f;  // 0: not rendered yet
-};
-
-// Background freezing (docs/engine/background-freeze.md): what strips played
-// live, unchanged, is kept and played again instead of running their devices.
-struct BackgroundFreezingSettings {
-    bool enabled = false;
-    double idleSeconds = 10.0;  // a strip plays from its cache once nothing changed it for this long
-    double warmSeconds = 8.0;   // how long devices must run before what they put out is kept
-    double budgetMB = 1024.0;   // memory for the cache
-};
-
-// What the cache holds, and what it saved (Engine::backgroundFreezingStats).
-struct BackgroundFreezingStats {
-    size_t blocks = 0;
-    size_t silentBlocks = 0;
-    size_t bytes = 0;
-    size_t unfreedBytes = 0;       // let go of but not freed yet (bytes and these stay within the budget)
-    uint64_t framesFromCache = 0;  // strips' chunks played from the cache (frames, summed over strips)
-    uint64_t framesLive = 0;       // ... with their devices running
-    uint64_t framesCaptured = 0;   // ... kept
 };
 
 struct MeterReading {
@@ -510,21 +488,6 @@ public:
     bool costOrdering() const { return renderer_.costOrdering(); }
     std::vector<TrackCost> trackCosts();
 
-    // --- Background freezing --------------------------------------------------
-    // Off by default. Turning it off drops what was cached.
-    void setBackgroundFreezing(const BackgroundFreezingSettings& settings);
-    BackgroundFreezingSettings backgroundFreezing();
-    // Everything, or one strip's (a track, or kMaster) counts.
-    BackgroundFreezingStats backgroundFreezingStats();
-    BackgroundFreezingStats backgroundFreezingStats(uint32_t trackId);
-    // A strip whose devices the UI shows keeps them running (their displays and
-    // meters move), and plays live.
-    void setTrackObserved(uint32_t trackId, bool observed);
-    bool trackObserved(uint32_t trackId);
-    // One round of the cache's own thread, now (it does one every few
-    // milliseconds; tests call it to be sure what was captured is published).
-    void serviceBackgroundFreezing();
-
     // --- Housekeeping ---------------------------------------------------------
     // Call regularly from the UI thread: frees retired snapshots and removed
     // processors, handles device loss, and does the main-thread work plug-ins
@@ -564,17 +527,6 @@ private:
         bool armed = false;
         bool frozen = false;  // plays its clips through its fader, nothing else (setTrackFrozen)
         bool silenced = false;  // its devices were left out of the last snapshot (frozen, or not rendered)
-        // Background freezing: its cache point and what the edit side keeps of its
-        // dependencies (EngineCache.cpp).
-        struct Cache {
-            std::shared_ptr<CachePoint> point = std::make_shared<CachePoint>();
-            uint64_t signature = 0;  // of what it is made of (its devices, what feeds it, the tempo...)
-            std::deque<DirtyLog::Entry> dirty;  // oldest first
-            uint64_t horizon = 0;
-            std::shared_ptr<const DirtyLog> log;
-            uint64_t resetEpoch = 0;  // the idle stretch its plug-ins were last reset in
-        };
-        Cache cache;
     };
 
     void audioCallback(const AudioIO& io) noexcept override;
@@ -726,22 +678,6 @@ private:
         int device = -1;         // and that device's place in its chain
     };
     std::vector<RouteEdge> routeEdgesLocked(std::vector<EdgeOrigin>* origins = nullptr) const;
-
-    // Background freezing (EngineCache.cpp). While a snapshot is built: each
-    // strip's cache as the snapshot shows it, its version bumped if what it is
-    // made of changed, and what changed time-locally (against the last snapshot)
-    // in its dirty log, downstream too.
-    void updateCacheLocked(RenderSnapshot& snap, const RenderSnapshot* previous);
-    // A change no snapshot shows (a fader, a device's parameter): the versions of
-    // the strips it changes, from `stripId` itself (or only what it feeds) on.
-    void touchCacheLocked(uint32_t stripId, bool itself);
-    void touchCacheLocked(TrackModel& strip);
-    // A device changed (its parameters, its state): its strip, and what that feeds.
-    void processorChangedLocked(uint32_t processorId);
-    TrackModel* stripOfProcessorLocked(uint32_t processorId);
-    // idle(): changes devices made themselves, editors open, and resetting the
-    // plug-ins of strips that play from their cache.
-    void cacheIdle(bool rendering);
     // Where a sidechain leaves its source: after its fader, before it, or after
     // its first `n` devices (returns n; -1: after all of them). A tap after a
     // device that isn't in the source's main chain (any more; or is in a rack
@@ -766,7 +702,6 @@ private:
     std::atomic<uint32_t> pendingDeviceEvents_{0};  // DeviceEvent flags
     std::atomic<bool> liveSuspended_{false};
     std::atomic<uint64_t> audioEpoch_{0};
-    std::atomic<bool> deviceRunningFlag_{false};  // deviceRunning_, for the cache's thread
 
     std::atomic<const RenderSnapshot*> snapshot_{nullptr};
     std::shared_ptr<const RenderSnapshot> snapshotHold_;
@@ -785,10 +720,6 @@ private:
     double loopStartBeat_ = 0.0;
     double loopEndBeat_ = 16.0;
     double clipFadeMs_ = 4.0;
-
-    // Background freezing.
-    CacheSettings cacheSettings_;
-    uint64_t generation_ = 0;  // snapshots built
 
     std::vector<TrackModel> tracks_;
     uint32_t nextTrackId_ = 1;
@@ -817,8 +748,6 @@ private:
     // MIDI inputs: port ids are indices into midiPorts_ (names), kept for the
     // engine's life, so that tracks can name inputs that aren't open (yet).
     std::vector<std::string> midiPorts_;
-    // The cache's own thread (background freezing): after what it reads, so it ends first.
-    std::unique_ptr<CacheStore> cacheStore_;
     MidiInputDevices midiDevices_;  // last: closed first, while the rest still stands
 };
 

@@ -87,38 +87,24 @@ void Engine::previewNote(uint32_t trackId, int key, int velocity) {
     serviceTransportIfIdleLocked();
 }
 
-// The mixer changes what a strip's destinations hear, not the strip itself
-// (its cache is before its fader): theirs go (background freezing). After the
-// value: whoever sees the new version sees it.
 void Engine::setTrackGain(uint32_t trackId, float gain) {
     std::lock_guard lock(mutex_);
-    std::atomic<float>& value = trackLocked(trackId).params->gain;
-    gain = std::max(0.f, gain);
-    if (value.exchange(gain) != gain) touchCacheLocked(trackId, false);
+    trackLocked(trackId).params->gain.store(std::max(0.f, gain));
 }
 
 void Engine::setTrackPan(uint32_t trackId, float pan) {
     std::lock_guard lock(mutex_);
-    std::atomic<float>& value = trackLocked(trackId).params->pan;
-    pan = std::clamp(pan, -1.f, 1.f);
-    if (value.exchange(pan) != pan) touchCacheLocked(trackId, false);
+    trackLocked(trackId).params->pan.store(std::clamp(pan, -1.f, 1.f));
 }
 
 void Engine::setTrackMute(uint32_t trackId, bool mute) {
     std::lock_guard lock(mutex_);
-    if (trackLocked(trackId).params->mute.exchange(mute) != mute) touchCacheLocked(trackId, false);
+    trackLocked(trackId).params->mute.store(mute);
 }
 
 void Engine::setTrackSolo(uint32_t trackId, bool solo) {
     std::lock_guard lock(mutex_);
-    if (trackLocked(trackId).params->solo.exchange(solo) == solo) return;
-    // Solo works on edges all over the graph: every strip something goes into.
-    if (const RenderSnapshot* snap = snapshotHold_.get()) {
-        for (const TrackRender& track : snap->tracks) {
-            if (!track.incoming.empty()) touchCacheLocked(arrangementTrackLocked(track.id));
-        }
-    }
-    touchCacheLocked(master_);
+    trackLocked(trackId).params->solo.store(solo);
 }
 
 void Engine::setTrackFrozen(uint32_t trackId, bool frozen) {
@@ -247,7 +233,7 @@ void Engine::setTrackSend(uint32_t trackId, uint32_t toTrackId, float gain, bool
     const auto it = std::find_if(track.sends.begin(), track.sends.end(),
                                  [toTrackId](const SendModel& send) { return send.to == toTrackId; });
     if (it != track.sends.end()) {
-        if (it->state->gain.exchange(gain) != gain) touchCacheLocked(toTrackId, true);  // (after the level)
+        it->state->gain.store(gain);
         if (it->preFader != preFader) {
             it->preFader = preFader;
             rebuildSnapshotLocked();

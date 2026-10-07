@@ -68,8 +68,6 @@ class AudioPreferences : public QObject {
     // [{label ("1 (off)", "8 (default)"), value: threads}]
     Q_PROPERTY(QVariantList threadChoices READ threadChoices NOTIFY changed)
     Q_PROPERTY(int threadIndex READ threadIndex NOTIFY changed)
-    // "Background freezing": unchanged strips play from a RAM cache (the saved setting).
-    Q_PROPERTY(bool backgroundFreezing READ backgroundFreezing NOTIFY changed)
     // What runs (rich text: lines joined with <br>, an error first in red).
     Q_PROPERTY(QString status READ status NOTIFY changed)
 
@@ -97,7 +95,6 @@ public:
     bool exclusiveVisible() const { return settings_.driver == QLatin1String("WASAPI"); }
     QVariantList threadChoices() const { return list(threads_); }
     int threadIndex() const { return threadIndex_; }
-    bool backgroundFreezing() const { return backgroundFreezingSetting(); }
     QString status() const { return status_; }
 
     // The settings shown (as last opened, or asked for).
@@ -115,7 +112,6 @@ public:
     Q_INVOKABLE void chooseBufferSize(int index);
     Q_INVOKABLE void setExclusive(bool exclusive);
     Q_INVOKABLE void chooseThreads(int index);
-    Q_INVOKABLE void setBackgroundFreezing(bool enabled);
     // Hardware Setup (it may run a message loop: the UI disables the dialog meanwhile).
     Q_INVOKABLE void showControlPanel();
 

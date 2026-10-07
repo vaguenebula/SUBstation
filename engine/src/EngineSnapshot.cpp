@@ -487,10 +487,6 @@ void Engine::rebuildSnapshotLocked() {
     ensureWarpVoicesLocked(voicesNeeded);
     snap->warpVoices = warpVoices_;
 
-    // Background freezing: each strip's cache, its version and dirty log, against the last snapshot.
-    snap->generation = ++generation_;
-    updateCacheLocked(*snap, snapshotHold_.get());
-
     std::shared_ptr<const RenderSnapshot> old = std::move(snapshotHold_);
     snapshotHold_ = snap;
     // Publish, then read the epoch (both seq_cst; see DeferredReleasePool).

@@ -148,7 +148,6 @@ void DeviceSelection::showTrack(const QString& given) {
         clickedChain_.clear();
     }
     trackId_ = trackId;
-    if (bridge_) bridge_->setObservedTrack(trackId_);
     shown_ = computeShown();
     if (trackId_.isEmpty() || frozen()) {
         selected_.clear();
