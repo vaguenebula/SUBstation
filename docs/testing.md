@@ -269,8 +269,8 @@ Rendered offline unless the file says otherwise; the live tests play through the
 ### The intelligence module ([tests/intelligence](../tests/intelligence), `intelligence_tests`)
 
 Qt-free, with the engine tests' harness (included as `harness/Test.h`: the harness folder itself is never an include
-folder, since its `Signal.h` would be found for `<signal.h>` where file names ignore case). The FFT against a direct
-DFT; decoding; what each aspect of a fingerprint tells apart, on drum hits and tones made from formulas; comparing; the
+folder, since its `Signal.h` would be found for `<signal.h>` where file names ignore case). The spectrum as the fingerprint
+reads Signalsmith Linear's FFT; decoding; what each aspect of a fingerprint tells apart, on drum hits and tones made from formulas; comparing; the
 store; the index's threads, saving and checking stamps, searches. See [intelligence.md](intelligence.md#tests).
 
 ### The model and the editor ([tests/app](../tests/app))

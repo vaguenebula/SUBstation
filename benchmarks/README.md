@@ -278,7 +278,7 @@ Windows 11, MinGW GCC 13 `-O2`:
 
 | | |
 |---|---|
-| analysing 5 091 files, 12 threads | 4.9 s (1 040 files/s); a file: median 11.7 ms, 95% 23.6 ms (a thread) |
+| analysing 5 091 files, 12 threads | 4.1 s (1 250 files/s); a file: median 9.5 ms, 95% 19.3 ms (a thread) |
 | one search over 5 084 fingerprints | 0.1 ms (the comparison only) |
 | queries | 1 102 labelled one-shots |
 

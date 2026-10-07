@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "core/AudioReader.h"
-#include "core/Fft.h"
+#include "signalsmith-linear/fft.h"  // (vendored with the engine: engine/third_party)
 
 namespace sub::intelligence {
 
@@ -49,6 +49,12 @@ constexpr double kOnsetRangeDb = 40.0;
 constexpr double kOnsetFloorDb = 60.0;
 constexpr double kOnsetLevelRiseDb = 3.0;
 constexpr size_t kOnsetLookBack = 4;  // frames
+
+size_t nextPowerOfTwo(size_t n) {
+    size_t p = 2;
+    while (p < n) p <<= 1;
+    return p;
+}
 
 double hzToMel(double hz) { return 2595.0 * std::log10(1.0 + hz / 700.0); }
 double melToHz(double mel) { return 700.0 * (std::pow(10.0, mel / 2595.0) - 1.0); }
@@ -126,7 +132,13 @@ struct YinResult {
 }  // namespace
 
 struct SoundAnalyzer::State {
-    std::vector<std::unique_ptr<Fft>> ffts;  // by size, made when first wanted
+    // Signalsmith Linear's FFTs, resized when the frame or window size changes.
+    // The real one gives bins 0..n/2 - 1, with the Nyquist bin's (real) value
+    // in bin 0's imaginary part; neither is scaled, forwards or back.
+    signalsmith::linear::RealFFT<float> realFft;
+    size_t realSize = 0;
+    signalsmith::linear::FFT<float> complexFft;
+    size_t complexSize = 0;
     MelBank mel;
     std::vector<float> window;  // Hann, frame size
     std::vector<float> buffer;
@@ -136,7 +148,7 @@ struct SoundAnalyzer::State {
     std::vector<float> signal;
     std::vector<double> blocks;
     std::vector<float> pitchSignal;
-    std::vector<std::complex<float>> yinA, yinB;
+    std::vector<std::complex<float>> yinIn, yinSpectrum, yinProduct, yinOut;
     std::vector<double> yinD;
     std::array<std::array<float, kMelBands>, kMfccs> dct{};
 
@@ -147,11 +159,17 @@ struct SoundAnalyzer::State {
                                                std::sqrt(2.0 / kMelBands));
     }
 
-    Fft& fft(size_t size) {
-        for (auto& f : ffts)
-            if (f->size() == size) return *f;
-        ffts.push_back(std::make_unique<Fft>(size));
-        return *ffts.back();
+    void realFftOf(size_t size) {
+        if (realSize != size) {
+            realFft.resize(size);
+            realSize = size;
+        }
+    }
+    void complexFftOf(size_t size) {
+        if (complexSize != size) {
+            complexFft.resize(size);
+            complexSize = size;
+        }
     }
 
     YinResult yin(const float* x, size_t w, double rate) {
@@ -160,18 +178,20 @@ struct SoundAnalyzer::State {
         // packed as real and imaginary parts, one inverse).
         const size_t half = w / 2;
         const size_t m = 2 * w;
-        Fft& f = fft(m);
-        yinA.assign(m, {});
-        for (size_t j = 0; j < w; ++j) yinA[j] = {j < half ? x[j] : 0.f, x[j]};
-        f.complex(yinA.data());
-        yinB.resize(m);
+        complexFftOf(m);
+        yinIn.assign(m, {});
+        for (size_t j = 0; j < w; ++j) yinIn[j] = {j < half ? x[j] : 0.f, x[j]};
+        yinSpectrum.resize(m);
+        complexFft.fft(yinIn.data(), yinSpectrum.data());
+        yinProduct.resize(m);
         for (size_t k = 0; k < m; ++k) {
-            const std::complex<float> z = yinA[k], zc = std::conj(yinA[(m - k) % m]);
+            const std::complex<float> z = yinSpectrum[k], zc = std::conj(yinSpectrum[(m - k) % m]);
             const std::complex<float> a = 0.5f * (z + zc);                               // the first half's
             const std::complex<float> b = std::complex<float>(0.f, -0.5f) * (z - zc);   // the window's
-            yinB[k] = std::conj(a) * b;
+            yinProduct[k] = std::conj(a) * b;
         }
-        f.complex(yinB.data(), true);
+        yinOut.resize(m);
+        complexFft.ifft(yinProduct.data(), yinOut.data());
         // Energies of x[tau .. tau + half).
         std::vector<double>& d = yinD;
         d.assign(half, 0.0);
@@ -181,7 +201,7 @@ struct SoundAnalyzer::State {
         const double scale = 1.0 / static_cast<double>(m);
         for (size_t tau = 1; tau < half; ++tau) {
             et += static_cast<double>(x[tau + half - 1]) * x[tau + half - 1] - static_cast<double>(x[tau - 1]) * x[tau - 1];
-            d[tau] = std::max(0.0, e0 + et - 2.0 * yinB[tau].real() * scale);
+            d[tau] = std::max(0.0, e0 + et - 2.0 * yinOut[tau].real() * scale);
         }
         // The cumulative mean normalised difference.
         double running = 0.0;
@@ -329,12 +349,12 @@ std::optional<Fingerprint> SoundAnalyzer::analyze(const float* samples, size_t c
         for (size_t i = 0; i < n; ++i)
             s.window[i] = static_cast<float>(0.5 - 0.5 * std::cos(2.0 * std::numbers::pi * i / static_cast<double>(n)));
     }
-    Fft& fft = s.fft(n);
+    s.realFftOf(n);
     const double binHz = rate / static_cast<double>(n);
     const size_t frameCount = length <= n ? 1 : 1 + (length - n + hop - 1) / hop;
     s.frames.resize(frameCount);
     s.buffer.resize(n);
-    s.spectrum.resize(n / 2 + 1);
+    s.spectrum.resize(n / 2);
     s.power.resize(n / 2 + 1);
     const size_t lo = s.mel.lo, hi = s.mel.hi;
     double loudest = -1e9;
@@ -345,10 +365,11 @@ std::optional<Fingerprint> SoundAnalyzer::analyze(const float* samples, size_t c
             const size_t at = fr.start + i;
             s.buffer[i] = at < length ? x[at] * s.window[i] : 0.f;
         }
-        fft.real(s.buffer.data(), s.spectrum.data());
+        s.realFft.fft(s.buffer.data(), s.spectrum.data());
         double total = 0.0, moment = 0.0, logSum = 0.0, sub = 0.0, air = 0.0;
         for (size_t k = lo; k <= hi; ++k) {
-            const double p = std::norm(s.spectrum[k]);
+            // (Bin n/2, the Nyquist frequency's, comes in bin 0's imaginary part.)
+            const double p = k < n / 2 ? std::norm(s.spectrum[k]) : static_cast<double>(s.spectrum[0].imag()) * s.spectrum[0].imag();
             s.power[k] = static_cast<float>(p);
             const double f = static_cast<double>(k) * binHz;
             total += p;
@@ -489,7 +510,7 @@ std::optional<Fingerprint> SoundAnalyzer::analyze(const float* samples, size_t c
             for (size_t j = 0; j < factor; ++j) sum += x[i * factor + j];
             s.pitchSignal[i] = sum / static_cast<float>(factor);
         }
-        const size_t w = Fft::nextPowerOfTwo(static_cast<size_t>(kPitchWindowSeconds * pitchRate));
+        const size_t w = nextPowerOfTwo(static_cast<size_t>(kPitchWindowSeconds * pitchRate));
         const size_t step = w / 2;
         const size_t from = peakBlock * blockLen / factor;
         struct Estimate {

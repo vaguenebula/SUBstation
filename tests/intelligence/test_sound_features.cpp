@@ -10,7 +10,6 @@
 
 #include "Sounds.h"
 #include "core/AudioReader.h"
-#include "core/Fft.h"
 #include "similarity/Similarity.h"
 #include "similarity/SoundFeatures.h"
 #include "similarity/SoundStore.h"
@@ -35,37 +34,23 @@ float distance(const Fingerprint& a, const Fingerprint& b) {
 
 }  // namespace
 
-TEST_CASE("the FFT matches a direct DFT, complex and real") {
-    for (size_t n : {2u, 4u, 8u, 64u, 1024u}) {
-        INFO("size " + std::to_string(n));
-        Random random(n);
-        std::vector<std::complex<float>> data(n), expected(n);
-        std::vector<float> real(n);
-        for (size_t i = 0; i < n; ++i) {
-            data[i] = {random.noise(), random.noise()};
-            real[i] = random.noise();
-        }
-        for (size_t k = 0; k < n; ++k) {
-            std::complex<double> sum = 0.0;
-            for (size_t t = 0; t < n; ++t)
-                sum += std::complex<double>(data[t]) * std::polar(1.0, -2.0 * std::numbers::pi * k * t / n);
-            expected[k] = std::complex<float>(sum);
-        }
-        Fft fft(n);
-        std::vector<std::complex<float>> transformed = data;
-        fft.complex(transformed.data());
-        for (size_t k = 0; k < n; ++k) CHECK_NEAR(std::abs(transformed[k] - expected[k]), 0.0, 1e-3 * std::sqrt(n));
-        fft.complex(transformed.data(), true);
-        for (size_t k = 0; k < n; ++k) CHECK_NEAR(std::abs(transformed[k] / static_cast<float>(n) - data[k]), 0.0, 1e-5);
-
-        std::vector<std::complex<float>> half(n / 2 + 1);
-        fft.real(real.data(), half.data());
-        for (size_t k = 0; k <= n / 2; ++k) {
-            std::complex<double> sum = 0.0;
-            for (size_t t = 0; t < n; ++t) sum += static_cast<double>(real[t]) * std::polar(1.0, -2.0 * std::numbers::pi * k * t / n);
-            CHECK_NEAR(std::abs(std::complex<double>(half[k]) - sum), 0.0, 1e-3 * std::sqrt(n));
+TEST_CASE("the spectrum (Signalsmith Linear's FFT): a sine's brightness is its frequency, at any rate") {
+    for (const int rate : {16000, 22050, 44100, 48000}) {
+        for (const double hz : {250.0, 1000.0, 4000.0}) {
+            INFO(std::to_string(hz) + " Hz at " + std::to_string(rate));
+            Samples s(static_cast<size_t>(rate));
+            for (size_t i = 0; i < s.size(); ++i)
+                s[i] = static_cast<float>(0.5 * std::sin(2.0 * std::numbers::pi * hz * static_cast<double>(i) / rate));
+            const Fingerprint fp = fingerprint(s, rate);
+            CHECK_NEAR(fp[feature::Centroid], std::log2(hz / 1000.0), 0.03);  // octaves
+            CHECK(fp[feature::Flatness] < -20.f);
         }
     }
+    // The Nyquist frequency's bin (which the real FFT hands over in bin 0's
+    // imaginary part) counts: all the energy is at 8 kHz, so is the roll-off.
+    Samples nyquist(16000);
+    for (size_t i = 0; i < nyquist.size(); ++i) nyquist[i] = i % 2 ? -0.5f : 0.5f;
+    CHECK(fingerprint(nyquist, 16000)[feature::Rolloff] > 2.997f);  // log2(8 kHz / 1 kHz) = 3; 2.994 without it
 }
 
 TEST_CASE("audio files are read as mono, from where asked, at no more than 48 kHz") {

@@ -54,7 +54,10 @@ always the same, so where frames fall doesn't depend on the silence before), its
 | Pitch | how periodic (YIN on 93 ms windows from the peak, down to 21.5 Hz), and that confidence times the pitch in octaves | tuned 808s and tonal one-shots near their pitch; noise near noise |
 | Rhythm | onsets per second after the first (spectral flux that also raises the level 3 dB), the file's length | loops apart from one-shots, a 4-bar loop apart from a 1-bar one |
 
-Frames are about 23 ms (1024 at 44.1/48 kHz), a quarter hop; the amplitude envelope is in 2 ms blocks. A part of a
+Frames are about 23 ms (1024 at 44.1/48 kHz), a quarter hop; the amplitude envelope is in 2 ms blocks. The FFTs are
+[Signalsmith Linear](../engine/third_party/signalsmith-linear)'s (vendored, header-only, the one Signalsmith Stretch uses
+in the engine): its real FFT for the frames (which hands the Nyquist bin over in bin 0's imaginary part), its complex
+one for YIN's autocorrelation. A part of a
 file (an audio clip's) is analysed from its start for its length. Files above 48 kHz are read at 48 kHz.
 
 ### Comparing ([Similarity.h](../intelligence/src/similarity/Similarity.h))
@@ -109,7 +112,6 @@ what tells one kick from another.
 | File | What it holds |
 |---|---|
 | [core/AudioReader.h](../intelligence/src/core/AudioReader.h) | `readMono()`: decodes a file (or a part) with miniaudio, mixed down, at most 48 kHz; `MonoAudio`, `AudioError` |
-| [core/Fft.h](../intelligence/src/core/Fft.h) | `Fft`: radix-2, complex in place and real through a half-size complex one; one per thread |
 | [core/Platform.h](../intelligence/src/core/Platform.h) | `FileStamp`/`stamp()`, `enterBackgroundMode()`, `replaceFile()`, `openFile()`, WTF-8 to UTF-16; [Platform.cpp](../intelligence/src/core/Platform.cpp) (Windows), [PlatformPosix.cpp](../intelligence/src/core/PlatformPosix.cpp) |
 | [similarity/SoundFeatures.h](../intelligence/src/similarity/SoundFeatures.h) | `SoundAnalyzer` (one per thread), the fingerprint's layout (`feature::`), `Aspect`, `featureInfo()`, `kFeatureVersion` |
 | [similarity/Similarity.h](../intelligence/src/similarity/Similarity.h) | `AspectWeights`, `Comparison` (`fit`, `distance`, `similarity`) |
@@ -219,8 +221,9 @@ and the drum rack will step through to swap in similar sounds, and `similarity(p
 
 ## Tests
 
-- [tests/intelligence](../tests/intelligence) (`intelligence_tests`, Qt-free, the engine tests' harness): the FFT
-  against a direct DFT; reading (mono mix, parts, 96 kHz to 48 kHz, broken files); the fingerprint (level and leading
+- [tests/intelligence](../tests/intelligence) (`intelligence_tests`, Qt-free, the engine tests' harness): the
+  spectrum as the fingerprint reads Signalsmith Linear's FFT (a sine's centroid at its frequency at four rates, the
+  Nyquist bin); reading (mono mix, parts, 96 kHz to 48 kHz, broken files); the fingerprint (level and leading
   silence don't change it, silence has none, pitch of tones and noise, envelopes, spectra, onsets of loops and
   one-shots); synthetic kicks, snares, hats and claps finding their own kind; comparing (clipping, weights); the store
   (round trip, damage, another version); the index (analysing a library, saving and checking stamps, new and changed
