@@ -175,6 +175,12 @@ private:
     ParamChangeQueue toAudio_;                      // parameter values for the plug-in's processor
     SpscQueue<ParamChange, 4096> fromAudio_;        // its output parameters, for its controller
     std::atomic<int32_t> pendingRestart_{0};        // IComponentHandler::restartComponent flags
+    // A hash of its state when idle() last looked (main thread): what a setDirty
+    // is checked against. Plug-ins say they are dirty when nothing that is saved
+    // changed (a transport jump, their editor's view), and that must not throw
+    // away what was cached of their strip (background freezing).
+    std::optional<uint64_t> stateHash_;
+    uint64_t stateHashChanges_ = 0;  // realChangeCount() then
 
     // Automation. The rendering thread's copy of the parameter ids (by index) and
     // the last automated value of each (normalized, 0-1; kNotAutomated: none since

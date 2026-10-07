@@ -593,6 +593,26 @@ uint32_t synthTrack(sub::Engine& engine, bool sine, const std::vector<sub::NoteD
 
 }  // namespace
 
+TEST_CASE("background freezing: an armed instrument plays from the cache while no MIDI comes in") {
+    // Armed with Auto monitoring, it hears its MIDI input; while none comes,
+    // its clips' notes are all it plays: the arrangement's.
+    requireTestPlugins();
+    checkSame(both([&](Session& s) {
+        std::vector<sub::NoteDesc> notes;
+        for (int i = 0; i < 12; ++i) notes.push_back({i * 1.0, 0.5, 60 + i, 80});
+        const uint32_t track = synthTrack(s.engine, false, notes);
+        s.engine.setTrackMidiInput(track, true, "", 0);
+        s.engine.setTrackArmed(track, true);
+        s.engine.play();
+        s.run(6.0);
+        s.settle();
+        s.locate(0.0);
+        const uint64_t cached = s.fromCache(track);
+        s.run(5.0);
+        if (s.freezing) CHECK(s.fromCache(track) - cached >= framesOf(5.0 - kWarm) - 4 * kBuffer);
+    }));
+}
+
 TEST_CASE("background freezing: notes held where the instrument plays again sound on") {
     // A long note (0 to 4 s) and short ones; ahead, one short note changes, so
     // the instrument starts again while the long note is held.
@@ -893,12 +913,12 @@ TEST_CASE("background rendering: with the budget spent, it stops") {
     CHECK(stats.bytes + stats.unfreedBytes <= static_cast<size_t>(1024 * 1024));
 }
 
-TEST_CASE("background rendering: past what it can't keep, it goes on") {
+TEST_CASE("background rendering: where a note is held, it starts before it") {
     // Two instruments; a short note of each changes, at 1 s and at 4.5 s. On
     // the first, a long note (0 to 4 s) is held there: its devices, starting
-    // again while the cache plays, come clean only where it ends, so the
-    // background can't keep that (it plays live: the live renderer keeps it).
-    // It goes on to the second.
+    // again while the cache plays, would come clean only where it ends, so the
+    // background starts them before it (at the song's start here) and keeps
+    // that too. It goes on to the second.
     requireTestPlugins();
     const auto heldNotes = [](int velocity) {
         std::vector<sub::NoteDesc> n = {{0.0, 8.0, 48, 100}};  // (beats: 120 BPM)
@@ -923,8 +943,8 @@ TEST_CASE("background rendering: past what it can't keep, it goes on") {
             s.run(5.5);
             if (!s.freezing) return;
             CHECK(rendered < static_cast<int64_t>(framesOf(20.0)));
-            CHECK_EQ(s.fromCache(other) - otherCached, framesOf(5.5));          // through its edit
-            CHECK(s.fromCache(held) - heldCached <= framesOf(5.5 - 0.5));  // live around its edit
+            CHECK_EQ(s.fromCache(other) - otherCached, framesOf(5.5));  // through its edit
+            CHECK_EQ(s.fromCache(held) - heldCached, framesOf(5.5));    // ... and this one through its own
         },
         1, rendering()));
 }

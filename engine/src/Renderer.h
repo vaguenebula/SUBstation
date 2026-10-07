@@ -441,6 +441,8 @@ private:
     void drainMidiInput(SharedState& shared) noexcept;
     void gatherMidiInput(int frames) noexcept;
     bool hearsMidiInput(const TrackRender& track, ChunkFlags flags) const noexcept;
+    // Whether MIDI input it accepts came this chunk, or notes its input started still sound.
+    bool playsMidiInput(const TrackRender& track) const noexcept;
     // Whether a take of the track records now: it plays none of its clips then.
     bool isRecorded(uint32_t trackId) const noexcept;
     MidiRecordingTake* midiTake(uint32_t trackId) const noexcept;

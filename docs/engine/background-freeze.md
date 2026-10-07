@@ -446,7 +446,14 @@ from the design above:
   device counts its own changes (`Processor::changeCount()`: parameters, state, the restarts a
   plug-in asks for, edits in its editor); the edit side, `idle()` and the audio thread each notice a
   count the version doesn't account for, so a plug-in that changes itself makes its strip and
-  everything downstream live from the next chunk.
+  everything downstream live from the next chunk. A plug-in saying it is dirty (`setDirty`) or
+  that its values changed (`kParamValuesChanged`) is only *maybe* a change
+  (`Processor::noteMaybeChange()`): the strip plays live (and keeps nothing) until the plug-in's
+  next `idle()` has compared its state with the one it saw last, and the version moves on only if
+  it differs (`realChangeCount()`; never seen, or after a change counted since: it is taken to).
+  Plug-ins say they are dirty when nothing that is saved changed: Nuro Audio's Xrider and Xvox on
+  every transport jump, which used to throw away their strips' cache, and everything downstream's,
+  on every pass.
 - **The dirty log** holds ranges `[from, to)`, each with the generation of the snapshot that changed
   it: clips, notes and envelopes, per strip, against the previous snapshot (an envelope from the
   breakpoint before its first difference to the first of the breakpoints both end with alike).
@@ -455,7 +462,8 @@ from the design above:
   than every plug-in measured needs, but ZamVerb and those that never converge): a strip's range is
   what changed at its input, widened by `W` and by the latencies on the way (its input's and its
   devices', an edge's delay to the next strip: a change comes out that much later), and its
-  destinations' are widened again. So an
+  destinations' are widened again (but not by `W` where a strip has no device switched on: nothing
+  in it remembers; the same goes for its warm-ups below). So an
   edit ahead of the playhead, or behind it, leaves what plays here alone. A range that rings on at
   the loop's end (`from < loopEnd ≤ to`) also takes the `AfterWrap` blocks of that wrap. The log
   keeps 64 ranges a point; blocks older than the oldest forgotten are no good.
@@ -470,7 +478,9 @@ from the design above:
 - **Playing**: a strip plays from its cache when its blocks are good for the whole chunk, nothing
   changed it for `idleSeconds` (10 s by default), it isn't shown (the device view's track, a display
   read, an open editor), and nothing upstream is live or has changed unaccounted. Otherwise it plays
-  live, and keeps what it plays.
+  live, and keeps what it plays. (An armed instrument with Auto monitoring, which hears its MIDI
+  input, is live only while input reaches it or notes it started sound, and `W` after: otherwise
+  its clips' notes are all it plays. Monitoring In, they don't play: it is live.)
 - **Seams.** When the cache will run out within `W` (an edit ahead, the end of what was kept,
   following the loop round), the devices start again while the cache still plays (pre-roll), to be
   warm by then: the switch is exact where the two agree (a 5 ms crossfade that leaves equal samples
@@ -576,13 +586,19 @@ does, and where it departs from the design above:
   the start. The warm-up before a gap is the longest of its strips': their own (`W` and their
   latencies), and that of the strips feeding them that don't play from their cache all the while
   (over as long as the whole chain could take), and two chunks more (a seam switches at a chunk's
-  start). It renders on while there is more to render close
-  ahead, and jumps over what is cached. A gap that comes back after it rendered there (notes held
-  where a strip's devices started again while its cache played: they come clean only where the
-  notes end) is left to the live renderer for the strips that couldn't keep it (that stretch only),
-  until the next edit;
-  a spent budget makes it wait (2 s, twice as long each time, up to 64 s). Not done: the order by
-  value (what devices cost × how soon they play), the loop range first, the battery rule.
+  start). Those strips' instruments must not start where
+  one of their notes sounds (it would start late: not clean until it ends), so it starts earlier,
+  where none does (`startAt()`; the song's start holds none), and their devices run from there to
+  the gap even where their blocks are good (`LiveState::runFrom`, `runTo`). While playing, a gap it
+  can't warm up for before the playhead gets there, at half the speed it has lately rendered at
+  (`speed()`: chunks timed, the governor's waits too), is the live renderer's, which plays and keeps
+  it: it looks further on. (Going for it anyway, it started again each time the playhead moved, and
+  kept nothing: on a real 55-track song it rendered 30 times faster than real time and kept none of
+  it.) It renders on while there is more to render close ahead, and jumps over what is cached. A
+  gap that comes back after it rendered there is left to the live renderer for the strips that
+  couldn't keep it (that stretch only), until the next edit; a spent budget makes it wait (2 s,
+  twice as long each time, up to 64 s). Not done: the order by value (what devices cost × how soon
+  they play), the loop range first, the battery rule.
 - **The governor** reads the live callbacks' load (`Engine::cpuLoad()`, smoothed): above **60%** it
   waits as long again as each chunk took, above **80%** it pauses for 5 s. No dropout signal, no
   slowest-callback measure.
@@ -651,7 +667,8 @@ while playing), the first pass plays from the cache from its first frame, sample
 the cache off; edits ahead (clips, a device's parameter and state) are rendered again before they
 play, and one behind the playhead while it plays; inside an edit's ringing, the strips feeding
 one start early enough; plug-ins have shadows; switching it off lets them go; the planner renders what isn't cached
-and then nothing, stops when the budget is spent, and goes past a gap it can't keep; a change that
+and then nothing, stops when the budget is spent, and starts before a note held where it would
+start, keeping what is there; an armed instrument no MIDI reaches plays from the cache; a change that
 rang out is kept, not rendered again (after the first), and one that rings on unheard for a while
 (a 1 s delay) isn't taken to have rung out. Each was checked by breaking it.
 

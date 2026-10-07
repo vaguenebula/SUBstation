@@ -242,10 +242,11 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     using Fade = CachePoint::LiveState::Fade;
     const CacheChunk& c = cacheChunk_;
     // Its devices hear the timeline as late as its input's and their own
-    // latency make them: they are warm a warm-up after that.
+    // latency make them: they are warm a warm-up after that. (Without devices
+    // switched on, nothing remembers: what feeds it being clean is enough.)
     const int64_t latency = track ? int64_t{track->inputLatency} + track->latency
                                   : int64_t{snap.maxLatency} + snap.master.latency;
-    const int64_t warmFrames = c.warmFrames + latency;
+    const int64_t warmFrames = (cache.devicesOn ? c.warmFrames : 0) + latency;
     if (!c.on) {  // its devices run as ever; when the cache comes on, they start out fresh (seen nothing)
         if (s.building) s.building->from = s.building->to = 0;
         s.mode = Mode::Live;
@@ -288,7 +289,8 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
     const uint64_t version = background ? cache.version : current;
     const bool pending = sourcePending || (background ? cache.unavailable || current != cache.version
                                                       : changes != accounted);
-    if (liveInput) s.liveHold = warmFrames + frames;  // (what it played carries on in its devices a while)
+    // (What it played carries on a while in its devices, or in those of what it feeds.)
+    if (liveInput) s.liveHold = c.warmFrames + latency + frames;
     const bool carriesLive = sourceLive || s.liveHold > 0;
     s.liveHold = std::max<int64_t>(0, s.liveHold - frames);
     const BlockSet* blocks = point->blocks.load(std::memory_order_acquire);
@@ -344,6 +346,8 @@ Renderer::CacheStep Renderer::beginCacheStep(const RenderSnapshot& snap, const S
         }
         exitAhead = remaining < need;
     }
+    // (In the background: where the planner runs its devices, they run.)
+    if (background && valid && c.startPosition < s.runTo && c.endPosition > s.runFrom) exitAhead = true;
     const bool warm = !fresh && !s.idleInstance && s.warmIn == 0;
     Mode mode = Mode::Live;
     if (valid && (hot || observed || exitAhead)) {

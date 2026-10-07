@@ -273,6 +273,10 @@ struct CachePoint {
         bool amended = false;
         uint64_t amendVersion = 0;
         DirtyAmendment amend;
+        // (The background lane's.) Where the planner runs its devices even where
+        // its blocks are good: from where they start clean (no note of theirs
+        // sounding) to a gap of its own, or of what it feeds.
+        int64_t runFrom = 0, runTo = 0;
     };
     // What a renderer keeps of the strip: the live renderer's, and the
     // background renderer's (rendering with shadow instances: BackgroundRenderer.h).

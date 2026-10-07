@@ -586,6 +586,9 @@ private:
             uint64_t horizon = 0;
             std::shared_ptr<const DirtyLog> log;
             uint64_t resetEpoch = 0;  // the idle stretch its plug-ins were last reset in
+            // Its devices' real changes (Processor::realChangeCount) the version
+            // accounts for; CachePoint::accountedChanges has all they counted.
+            uint64_t accountedReal = 0;
         };
         Cache cache;
     };
