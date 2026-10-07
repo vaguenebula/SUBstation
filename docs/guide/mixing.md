@@ -80,7 +80,7 @@ Sidechain*), and where that is taken, as in Ableton:
 | Tap | What the device hears |
 |---|---|
 | *Pre FX* | The source's own audio, before its devices; a MIDI track's instrument's, before its effects |
-| *After* one of its devices | The signal after that device |
+| *After* one of its devices | The signal after that device; one in a rack is listed by the rack (and its chain, if it has several): *After Glue › Compressor* is the signal there in that chain, before the chain's fader and the other chains |
 | *Post FX* | After all its devices, before the fader |
 | *Post Mixer* | After its fader and pan, as it is heard |
 

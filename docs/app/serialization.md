@@ -57,7 +57,7 @@ source-audio seconds; volumes are dB; pan is -1..1; automation values are normal
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | `"gilstudio-project"` | must match, or the file is refused ("Not a SUBstation project") |
-| `version` | int | `kProjectVersion`, now 15; a larger one is refused ("This project was saved by a newer version of SUBstation") |
+| `version` | int | `kProjectVersion`, now 18; a larger one is refused ("This project was saved by a newer version of SUBstation") |
 | `tempo` | float | BPM (default 120) |
 | `key` | string or null | the project key as `Key::name()` (`"Am"`, `"F#"`, `"Bb"`); null: *No Key* |
 | `time_signature` | `[numerator, denominator]` | default `[4, 4]` |
@@ -65,6 +65,8 @@ source-audio seconds; volumes are dB; pan is -1..1; automation values are normal
 | `automation_locked` | bool | Lock Envelopes |
 | `master` | object | the master track (below) |
 | `folded_devices` | list of device ids | devices shown folded; only ids of devices that exist are saved |
+| `chain_lists_shown` | list of rack ids | racks whose chain list shows (hidden by default); only ids of devices that exist are saved |
+| `rack_devices_hidden` | list of rack ids | racks whose chain's devices don't show beside them (shown by default); only ids of devices that exist are saved |
 | `tracks` | list | the arrangement's tracks, in order, flat (below) |
 | `returns` | list | the return tracks, in order (below) |
 
@@ -138,13 +140,14 @@ de-duplicated (`notes::normalize`).
 | `id` | unique in the project; automation keys and macro mappings refer to it |
 | `kind` | a built-in device id (`"synth"`, `"sampler"`, ...), `"plugin"` or `"rack"` |
 | `enabled` | on/off (default on) |
-| `params` | `{param id: plain value}`; a rack's are its macros (`"macro1"`..`"macro8"`, normalized) |
+| `params` | `{param id: plain value}`; a rack's are its macros (`"macro1"`.., one per macro, normalized) |
 | `plugin` | plug-ins only: `{"format": "VST3", "uid", "name", "vendor", "path", "instrument"}` |
 | `state` | base64: a plug-in's whole state (a `.vstpreset`), or a built-in device's non-parameter values; omitted when a built-in device has none |
 | `sidechain` | only when set: `{"track": source id, "tap": "post" / "pre" / "pre-fx" / a device id}` |
 | `name` | racks only, when set: the preset it was saved as or loaded from |
 | `chains` | racks only: `[{"id", "name", "volume_db", "pan", "mute", "solo", "devices": [...]}]` |
-| `macros` | racks only: `[{"macro": 0..7, "device", "param", "low", "high"}]` |
+| `macros` | racks only: `[{"macro": 0..15, "device", "param", "low", "high"}]` (`low` > `high`: the other way round) |
+| `macro_names` | racks only: one name per macro (`""`: named by its number), so how many it has (1..16) |
 
 ### Automation
 
@@ -196,9 +199,11 @@ that makes an older file load as it was, and saving writes the current version.
 | 15 | reversed clips (`reversed_from`) | none reversed |
 | 16 | what of frozen audio plays (`frozen.segments`) | all of it (a freeze as rendered) |
 | 17 | clip fades (`fade_in_sec`, `fade_out_sec` and their curves) | no fades |
+| 18 | racks' macros: how many and their names (`macro_names`) | the macros a rack uses (mapped, or turned from 0), and at least 4, named by number (racks had eight) |
 
-`folded_devices` has no version of its own: files without it load with no device folded. The project key,
-`automation_locked` and the clip fields default the same way.
+`folded_devices` has no version of its own: files without it load with no device folded. Nor have
+`chain_lists_shown` and `rack_devices_hidden`: files without them show no chain list, and every rack's devices. The
+project key, `automation_locked` and the clip fields default the same way.
 
 **Legacy warp mode names.** Projects saved with the earlier Ableton-style names load into the mode that plays the same
 way (`legacyWarpMode`): Beats → Transients, Tones → Standard, Complex → Standard, Texture → Smooth, Complex Pro →
@@ -218,7 +223,8 @@ refusing the file:
     close a cycle; then its device channels are cleared;
   - sidechains are put back one by one on every owner's devices (racks too), dropped if the source isn't a track or
     return of the project or would close a cycle.
-- Rack macro mappings to a device not in the rack, or with a macro outside 0..7, are dropped.
+- Rack macro mappings to a device not in the rack, or to a macro the rack doesn't have, are dropped. A rack has 1 to
+  16 macros (`macro_names` longer than 16 is cut there; an empty one gives the default 4), and a value for each.
 - Sends' and chains' levels are clamped to the faders' range (-70..+6 dB), pans to -1..1; a MIDI channel outside
   0..16 loads as 0 (every channel); an input of more than two channels loads as none; `monitor` must be a known mode.
 - `armed` is ignored on a group.

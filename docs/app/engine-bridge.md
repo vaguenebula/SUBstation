@@ -385,7 +385,11 @@ QML reads the transport and the device through properties: `position`, `playing`
   `deviceParamSpecs`, `mixerSpecs`, `paramSpec`, `canAutomate`. Plug-in parameters that aren't automatable, are
   hidden or read-only are left out. `ownValue(owner, key)` is a target's value set by hand (a plug-in's read from the
   plug-in), `currentValue(owner, key, beat)` what it is at a beat while automated. `deviceParamInfo` describes a
-  device's parameter as the engine does (the editor's macros map through it).
+  device's parameter as the engine does (the editor's macros map through it). A rack's macros are targets too, and
+  their automation plays as the parameters mapped to them (`macroEnvelopes()`: each one plays the macro's envelope
+  over its range, instead of its own; `currentValue` follows it): see [engine/automation.md](../engine/automation.md#racks-and-macros).
+  `pushAutomation` keeps what it pushed of them (`macroMoved`), and devices changing push automation again when that
+  changes (a mapping or a range).
 
 See [engine/automation.md](../engine/automation.md).
 
@@ -539,7 +543,8 @@ same driver next time. Other parts keep their own keys: the session's (recent fi
 - [test_bridge_tracks.cpp](../../tests/app/test_bridge_tracks.cpp): clips and notes as the engine has them, groups as
   buses, returns and sends, inputs from tracks, the master's mixer, the settings, a drag's preview, overrides.
 - [test_bridge_devices.cpp](../../tests/app/test_bridge_devices.cpp): racks keeping each device's processor as they
-  are made, undone, moved and deleted; chain automation and overrides; macros moving plug-in parameters; sidechains;
+  are made, undone, moved and deleted; chain automation and overrides; macros moving plug-in parameters, and their
+  automation moving what is mapped to them (over its range, overridden, re-enabled); sidechains;
   presets.
 - [test_bridge_plugins.cpp](../../tests/app/test_bridge_plugins.cpp): plug-in loading (after a project opens too),
   missing and moved plug-ins, editors, edits for undo, automating plug-in parameters.

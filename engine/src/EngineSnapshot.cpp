@@ -5,6 +5,8 @@
 #include <cassert>
 #include <cmath>
 #include <functional>
+#include <optional>
+#include <unordered_map>
 
 #include "Rack.h"
 #include "Routing.h"
@@ -102,6 +104,10 @@ void Engine::buildChainLocked(uint32_t chainId, const StripBuild& build, int dep
                 target->latency = faderLatency;
             }
             buildChainLocked(model.id, build, depth + 1, snap, render);
+            if (build.chainTaps) {  // the sidechains taken after its devices
+                const auto taps = build.chainTaps->find(model.id);
+                if (taps != build.chainTaps->end()) render.deviceTaps = taps->second;
+            }
             rack->chains.push_back(std::move(render));
         }
         racks[i] = std::move(rack);
@@ -261,6 +267,7 @@ void Engine::rebuildSnapshotLocked() {
     for (size_t e = 0; e < edges.size(); ++e) edgesOf[static_cast<size_t>(edges[e].from)].push_back(static_cast<int>(e));
     std::vector<std::vector<int>> incoming(tracks_.size()), outgoing(tracks_.size());  // by snapshot index
     std::vector<std::vector<int>> deviceTaps(tracks_.size());                             // by snapshot index
+    std::unordered_map<uint32_t, std::vector<int>> chainTaps;  // rack chain -> the taps after its devices
     std::vector<std::vector<std::pair<int, int>>> sidechains(tracks_.size() + 1);       // (device, edge), the master last
     std::vector<int> inputEdge(tracks_.size(), -1);  // by snapshot index: the input edge it takes, if any
     std::vector<std::pair<int, int>> graphEdges;
@@ -284,8 +291,22 @@ void Engine::rebuildSnapshotLocked() {
                 SidechainModel& sidechain = *processors_.at(origin.processor).sidechain;
                 edge.kind = EdgeRender::Kind::Sidechain;
                 edge.state = sidechain.state;
-                sidechainTapLocked(sidechain, edge.tap);
-                edge.tapDevice = edge.tap == EdgeRender::Tap::AfterDevice ? route.tap - 1 : -1;
+                // After a device (in the source's own chain, or in a rack's chain
+                // there: that chain writes it), or before them all (also while the
+                // source plays without its devices); else before or after the fader.
+                std::optional<uint32_t> tapChain;
+                if (route.tap >= 0) {
+                    edge.tap = EdgeRender::Tap::AfterDevice;
+                    const auto& sourceSlots = slotsOf[static_cast<size_t>(t)];
+                    if (route.tap > 0 && static_cast<size_t>(route.tap) <= sourceSlots.size()) {
+                        const StripSlot& slot = sourceSlots[static_cast<size_t>(route.tap) - 1];
+                        edge.tapDevice = slot.index;
+                        if (slot.rack >= 0) tapChain = slot.chainId;
+                    }
+                } else {
+                    edge.tap = sidechain.tap == SidechainTap::PostFader ? EdgeRender::Tap::PostFader
+                                                                         : EdgeRender::Tap::PreFader;
+                }
                 edge.device = origin.device;
                 edge.deviceDelay = aligned.deviceDelay[static_cast<size_t>(e)];
                 ensureDelay(sidechain.delay, edge.compensation);
@@ -293,7 +314,11 @@ void Engine::rebuildSnapshotLocked() {
                 edge.delay = sidechain.delay;
                 edge.deviceDelayLine = sidechain.deviceDelay;
                 sidechains[edge.to >= 0 ? static_cast<size_t>(edge.to) : tracks_.size()].emplace_back(edge.device, index);
-                if (edge.tap == EdgeRender::Tap::AfterDevice) deviceTaps[static_cast<size_t>(edge.from)].push_back(index);
+                if (tapChain) {
+                    chainTaps[*tapChain].push_back(index);
+                } else if (edge.tap == EdgeRender::Tap::AfterDevice) {
+                    deviceTaps[static_cast<size_t>(edge.from)].push_back(index);
+                }
             } else {
                 std::shared_ptr<DelayLine>& delay =
                     send == kOutputEdge ? track.delay : track.sends[static_cast<size_t>(send)].delay;
@@ -326,11 +351,13 @@ void Engine::rebuildSnapshotLocked() {
         }
     }
     snap->graph = std::make_shared<TaskGraph>(count, graphEdges);
-    for (auto& taps : deviceTaps) {
+    const auto byTapDevice = [&](std::vector<int>& taps) {
         std::stable_sort(taps.begin(), taps.end(), [&](int a, int b) {
             return snap->edges[static_cast<size_t>(a)].tapDevice < snap->edges[static_cast<size_t>(b)].tapDevice;
         });
-    }
+    };
+    for (auto& taps : deviceTaps) byTapDevice(taps);
+    for (auto& [chain, taps] : chainTaps) byTapDevice(taps);
     // What building each strip's devices needs: `node` is its place in slotsOf
     // (and GraphLatencies), `strip` its snapshot index (tracks_.size(): the master).
     const auto stripBuild = [&](const TrackModel& track, size_t node, size_t strip, int inputLatency) {
@@ -349,6 +376,7 @@ void Engine::rebuildSnapshotLocked() {
             }
         }
         build.samplesPerBeat = spb;
+        build.chainTaps = &chainTaps;
         return build;
     };
 

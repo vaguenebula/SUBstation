@@ -22,7 +22,10 @@
 //
 // Racks: a rack is an engine rack, its chains engine chains of it (with their
 // faders), and the devices in them processors there, as on a track's own chain.
-// A rack's macros are the model's business (they set parameters there). When a
+// A rack's macros are the model's business (they set parameters there); the
+// engine has none. A macro's automation plays as the parameters mapped to it:
+// each of them plays the macro's envelope over its range, instead of its own
+// (unless overridden: changed by hand, as any automated target). When a
 // plug-in device goes away (deleted, or its track), its state is kept here, so
 // undo brings it back as it was. Edits made in a plug-in's own editor come back
 // from the engine as pluginParamEdited, for the undo stack; only while that
@@ -372,7 +375,8 @@ public:
     void overrideAutomation(const QString& owner, const QString& key);
     // Automation plays again where it was overridden (everywhere, or for one owner).
     Q_INVOKABLE void reEnableAutomation(const QString& owner = QString());
-    // The parameters of a device that can be automated (none if it isn't loaded); a rack's: its chains' faders.
+    // The parameters of a device that can be automated (none if it isn't
+    // loaded); a rack's: its macros, then its chains' faders.
     std::vector<ParamSpec> deviceParamSpecs(const QString& trackId, const Device& device);
     // An owner's mixer controls: volume, pan, and its sends (to the returns it can send to).
     std::vector<ParamSpec> mixerSpecs(const QString& owner) const;
@@ -583,6 +587,9 @@ private:
     // Parameters (BridgeParameters.cpp).
     void onAutomationChanged(const QString& owner, const QString& key);
     void pushAutomation(const QString& owner);
+    // What the automation of an owner's macros plays (those not overridden): for
+    // each parameter mapped to one, by its key, the macro's envelope over its range.
+    QMap<QString, Envelope> macroEnvelopes(const QString& owner) const;
     std::optional<sub::AutomationLaneDesc> engineLane(const QString& owner, const QString& key,
                                                       const Envelope& points);
     void pushOwnValue(const QString& owner, const QString& key);

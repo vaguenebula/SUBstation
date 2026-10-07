@@ -1,6 +1,7 @@
 // Editing racks: grouping devices into one and ungrouping it, its chains
 // (adding, removing, duplicating, moving, renaming, their mixers), and its
-// macros (turning them, mapping them to parameters).
+// macros (turning them, how many there are, their names, mapping them to
+// parameters and over which range).
 
 #include "editor/EditorSupport.h"
 #include "editor/ProjectEditor.h"
@@ -257,33 +258,65 @@ QMap<DeviceParam, double> ProjectEditor::macroTargets(const QString& trackId, co
     return values;
 }
 
+double ProjectEditor::ownParamValue(const QString& trackId, const QString& deviceId, const QString& paramId,
+                                    double fallback) const {
+    const auto& params = project_->device(trackId, deviceId).params;
+    if (params.contains(paramId)) return params.value(paramId);
+    if (readOwn_) {  // set in a plug-in's own editor
+        if (const auto own = readOwn_(trackId, automation::deviceKey(deviceId, paramId))) return *own;
+    }
+    const auto info = paramInfo(trackId, deviceId, paramId);  // a default value: as it was
+    return info ? info->defaultValue : fallback;
+}
+
 void ProjectEditor::setMacro(const QString& trackId, const QString& rackId, int index, double value,
                              const QString& mergeKey) {
     const Device* rack = project_->findDevice(trackId, rackId);
-    if (rack == nullptr || !rack->isRack() || index < 0 || index >= kMacroCount) return;
+    if (rack == nullptr || !rack->isRack() || index < 0 || index >= macroCount(*rack)) return;
     const QMap<DeviceParam, double> nw = macroTargets(trackId, rackId, index, value);
     QMap<DeviceParam, double> old;
     for (auto it = nw.constBegin(); it != nw.constEnd(); ++it) {
-        const auto& [deviceId, paramId] = it.key();
-        const auto& params = project_->device(trackId, deviceId).params;
-        std::optional<double> own;
-        if (params.contains(paramId)) own = params.value(paramId);
-        if (!own && readOwn_) own = readOwn_(trackId, automation::deviceKey(deviceId, paramId));  // set in a plug-in's own editor
-        if (!own) {  // a default value: as it was
-            const auto info = paramInfo(trackId, deviceId, paramId);
-            own = info ? info->defaultValue : it.value();
-        }
-        old.insert(it.key(), *own);
+        old.insert(it.key(), ownParamValue(trackId, it.key().first, it.key().second, it.value()));
     }
     if (old != nw) {
         push(std::make_unique<SetDeviceParamsCommand>(project_, trackId, old, nw, QStringLiteral("Change Macro"), mergeKey));
     }
 }
 
+void ProjectEditor::setMacroCount(const QString& trackId, const QString& rackId, int count) {
+    const Track* track = project_->findTrack(trackId);
+    const Device* rack = track != nullptr ? findDevice(track->devices, rackId) : nullptr;
+    if (rack == nullptr || !rack->isRack()) return;
+    count = std::clamp(count, 1, kMaxMacroCount);
+    const int had = macroCount(*rack);
+    if (count == had) return;
+    const std::vector<Device> before = track->devices;
+    std::vector<Device> after = before;
+    Device& changed = *findDevice(after, rackId);
+    changed.macroNames.resize(static_cast<size_t>(count));
+    for (int i = count; i < had; ++i) changed.params.remove(macroParam(i));  // (its mappings and automation: setDevices)
+    for (int i = had; i < count; ++i) changed.params.insert(macroParam(i), 0.0);
+    setDevices(trackId, before, std::move(after),
+               count > had ? QStringLiteral("Add Macro") : QStringLiteral("Remove Macro"));
+}
+
+void ProjectEditor::renameMacro(const QString& trackId, const QString& rackId, int index, const QString& name) {
+    const Track* track = project_->findTrack(trackId);
+    const Device* rack = track != nullptr ? findDevice(track->devices, rackId) : nullptr;
+    if (rack == nullptr || index < 0 || index >= macroCount(*rack)) return;
+    QString given = name.trimmed();
+    if (given == QStringLiteral("Macro %1").arg(index + 1)) given.clear();  // named by its number
+    if (given == rack->macroNames[static_cast<size_t>(index)]) return;
+    const std::vector<Device> before = track->devices;
+    std::vector<Device> after = before;
+    findDevice(after, rackId)->macroNames[static_cast<size_t>(index)] = given;
+    push(std::make_unique<SetDevicesCommand>(project_, trackId, before, after, QStringLiteral("Rename Macro")));
+}
+
 void ProjectEditor::mapMacro(const QString& trackId, const QString& rackId, int index, const QString& deviceId,
                              const QString& paramId, double low, double high) {
     const Device& rack = project_->device(trackId, rackId);
-    if (!rack.isRack() || index < 0 || index >= kMacroCount || deviceId == rackId ||
+    if (!rack.isRack() || index < 0 || index >= macroCount(rack) || deviceId == rackId ||
         !deviceIdsOf(rack).contains(deviceId)) {
         throw EditError(QStringLiteral("A macro moves parameters of devices in its rack"));
     }
@@ -293,6 +326,31 @@ void ProjectEditor::mapMacro(const QString& trackId, const QString& rackId, int 
     }
     nw.push_back(MacroMapping{index, deviceId, paramId, low, high});
     push(std::make_unique<SetMacrosCommand>(project_, trackId, rackId, rack.macros, nw, QStringLiteral("Map Macro")));
+}
+
+void ProjectEditor::setMacroRange(const QString& trackId, const QString& rackId, const QString& deviceId,
+                                  const QString& paramId, double low, double high, const QString& mergeKey) {
+    const Device* rack = project_->findDevice(trackId, rackId);
+    if (rack == nullptr || !rack->isRack()) return;
+    std::vector<MacroMapping> nw = rack->macros;
+    const auto mapping = std::find_if(nw.begin(), nw.end(), [&](const MacroMapping& m) {
+        return m.deviceId == deviceId && m.paramId == paramId;
+    });
+    if (mapping == nw.end()) return;
+    mapping->low = std::clamp(low, 0.0, 1.0);
+    mapping->high = std::clamp(high, 0.0, 1.0);
+    if (nw == rack->macros) return;
+    // The parameter goes where its macro puts it in the new range.
+    QMap<DeviceParam, double> oldValues, newValues;
+    if (project_->hasDevice(trackId, deviceId)) {
+        if (const auto info = paramInfo(trackId, deviceId, paramId)) {
+            const double value = info->fromNormalized(mapping->target(rack->params.value(macroParam(mapping->macro))));
+            newValues.insert({deviceId, paramId}, value);
+            oldValues.insert({deviceId, paramId}, ownParamValue(trackId, deviceId, paramId, value));
+        }
+    }
+    push(std::make_unique<SetMacrosCommand>(project_, trackId, rackId, rack->macros, nw,
+                                            QStringLiteral("Change Macro Range"), mergeKey, oldValues, newValues));
 }
 
 void ProjectEditor::unmapMacro(const QString& trackId, const QString& rackId, const QString& deviceId,

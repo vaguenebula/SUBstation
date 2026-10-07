@@ -37,6 +37,8 @@ Each device has a title bar, as in Ableton (lighter while the device is selected
 - Clicking a parameter shows its automation in the arrangement. Right-click one to
   *Show Automation*, *Delete Automation* or *Re-Enable Automation*, and, in a rack,
   *Map to Macro* (see [automation.md](automation.md) and [Macros](#macros)).
+- A parameter mapped to a macro whose automation plays follows that automation (with
+  the red dot), as if it were its own.
 - Automated parameters are marked with a red dot (grey while overridden) and follow
   their automation as it plays.
 
@@ -236,13 +238,30 @@ Racks (device groups) work like Ableton's Audio Effect and Instrument Racks.
   empty rack passes its input on).
 - Racks nest, up to 8 deep.
 
+### What a rack shows
+
+A rack shows its macros. A strip of buttons at its left shows and hides the rest, as
+Ableton's do, and adds and takes away macros:
+
+- **Chain list** (the rows button): the rack's chains, beside its macros. It is hidden
+  until you show it, and the rack is narrower without it.
+- **Devices** (the bracket button): the devices of the chain the rack shows, beside
+  it in a bracket. They show until you hide them; clicking a chain in the chain list
+  shows them again.
+- **+** and **−**: a macro more, or the last one taken away (see [Macros](#macros)).
+
+The rack's right-click menu has *Show Chain List* / *Hide Chain List* and *Show
+Devices* / *Hide Devices* too. What each rack shows is saved with the project, not an
+undo step.
+
 ### Chains
 
-- A rack shows its chains, a row each with its activator, name, solo (only the soloed
-  chains of a rack are heard), volume, pan and meter.
-- **+ Chain** (or *Add Chain* in the rack's right-click menu) adds one. A row's
-  right-click menu renames, duplicates or deletes it, and shows its volume or pan
-  automation; double-click its name to rename it.
+- The chain list shows a rack's chains, a row each with its activator, name, solo
+  (only the soloed chains of a rack are heard), volume, pan and meter.
+- **+ Chain** (or *Add Chain* in the rack's right-click menu, which also shows the
+  chain list) adds one. A row's right-click menu renames, duplicates or deletes it,
+  and shows its volume or pan automation; double-click its name to rename it, or
+  press **Ctrl+R** after clicking it (the chain list shows if it was hidden).
 - Click a chain to show its devices beside the rack, in a bracket: drop devices there
   (or onto a chain's row), drag them in and out, select and delete them as on the
   track's own chain.
@@ -261,17 +280,44 @@ there.
 
 ### Macros
 
-A rack has eight macro knobs. Right-click a parameter of a device in the rack and
-choose *Map to Macro* to have one of them move it across its range (*Unmap from
-Macro* undoes that). A macro can move several parameters; right-click a macro to see
-or unmap them. Turning a macro sets what it moves, as one undo step.
+A new rack has four macro knobs, in two rows. The **+** button at the rack's left (or
+*Add Macro* in a macro's right-click menu) adds one, up to 16; **−** (or *Remove Last
+Macro*) takes the last one away, with what it is mapped to and its automation. Each is
+one undo step.
+
+- **Mapping**: right-click a parameter of a device in the rack and choose *Map to
+  Macro*, then the macro (by its name), to have it move that parameter across its
+  range (*Unmap from* the macro undoes that). A macro can move several parameters; a
+  parameter follows one macro of a rack. Turning a macro sets what it moves, as one
+  undo step.
+- **Ranges**: right-click a macro › *Edit Mappings…* lists what it moves, each with a
+  **Min** and a **Max**, in percent of the parameter's range (its value in its own
+  units beside them). The parameter goes from Min to Max as the macro turns from 0 to
+  100 %: *0 to 100 %* is its whole range, *50 to 100 %* its upper half, and *100 to
+  0 %* turns it the other way round (**Invert** swaps Min and Max). Drag a box up or
+  down, or click it and type a number (double-click puts it back to 0 or 100 %); a
+  drag is one undo step. A range changed puts the parameter where the macro is in it
+  at once. **Unmap** takes a parameter off the macro.
+- **Names**: double-click a macro's name (or right-click it › *Rename*) to name it in
+  place; Enter, Escape or clicking elsewhere keeps the name typed, and an empty name
+  names it by its number again. The name shows in the parameters' *Map to Macro*
+  menus and in the automation lanes. It is saved with the rack (and in its presets).
+- **Automation**: a macro is automated like any parameter. Click it to show its
+  automation in the arrangement (it is a lane of the rack: *Macro 1*… in a lane's
+  device chooser), or right-click it › *Show Automation*, *Delete Automation*,
+  *Re-Enable Automation*. While its automation plays, its knob follows it (with the
+  red dot), and so does every parameter mapped to it, over its range and in time with
+  the latency before it (instead of the parameter's own automation). Turning the
+  macro by hand overrides its automation, as with any parameter, until it is
+  re-enabled.
+- The macro's tooltip lists what it moves; its name is lit while it moves something.
 
 ## Presets
 
 - Every device's **save** button (or *Save Preset…* in its right-click menu) saves it
   as a **preset**, under a name you give it: a built-in device's settings, a plug-in's
   whole state, or a rack with everything in it (its chains, the devices in them with
-  plug-ins' states, its macros). Saving under a name that is taken asks before
+  plug-ins' states, its macros with their names and ranges). Saving under a name that is taken asks before
   replacing that preset.
 - Presets go into your preset library, `Documents\SUBstation\Presets`, in a folder per
   device (named as the device: a plug-in's name, *Utility*, *Audio Effect Rack*…). The

@@ -1,13 +1,15 @@
 // Racks in the device view (DevicePanel.qml's racks: RackDeviceBody,
-// RackChainRow, RackMacroKnob, RackChainView): Ctrl+G groups the selected
-// devices into a rack (Ctrl+Shift+G ungroups it), which shows its macros and
-// chains; the chain clicked shows its devices beside the rack, where devices
-// are dropped and selected as on the track's own chain; chain mixers and macros
-// edit the model; mapping a parameter to a macro from its menu and unmapping it
-// from the macro's; Ctrl+R renaming the rack chain clicked in place; a chain's
-// menu; the view's height staying put. Driven in a window with a real session,
-// with synthesized mouse, key and drag events. With SUBSTATION_UI_SCREENSHOTS
-// set, screenshots go there.
+// RackChainRow, RackMacroKnob, RackMacroMappings, RackChainView): Ctrl+G groups
+// the selected devices into a rack (Ctrl+Shift+G ungroups it), which shows its
+// macros, and its chain list when asked for; the chain clicked shows its
+// devices beside the rack (unless they are hidden), where devices are dropped
+// and selected as on the track's own chain; chain mixers and macros edit the
+// model; macros added and taken away, renamed in place, automated and
+// following their automation; mapping a parameter to a macro from its menu,
+// the ranges of what a macro moves, and unmapping it; Ctrl+R renaming the rack
+// chain clicked in place; a chain's menu; the view's height staying put.
+// Driven in a window with a real session, with synthesized mouse, key and drag
+// events. With SUBSTATION_UI_SCREENSHOTS set, screenshots go there.
 
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -28,6 +30,8 @@
 #include "model/Project.h"
 #include "session/DeviceSelection.h"
 #include "session/Selection.h"
+
+#include <cmath>
 
 namespace test = sub::app::test;
 using sub::app::Selection;
@@ -91,6 +95,16 @@ class TestUiDevicePanelRacks : public QObject {
     void clickRow(const QString& rackId, const QString& chainId) {
         test::click(window(), test::centerOf(test::part(row(rackId, chainId), "nameLabel")));
     }
+    // A rack's chain list shown (it is hidden by default).
+    void showChainList(const QString& trackId, const QString& rackId) {
+        editor().setChainListShown(trackId, rackId, true);
+        ui_.polish();
+    }
+    QQuickItem* macroCell(const QString& rackId, int index) {
+        ui_.polish();
+        return test::itemNamed(frame(rackId), QStringLiteral("macro%1").arg(index));
+    }
+    QQuickItem* rackBody(const QString& rackId) { return frame(rackId)->property("body").value<QQuickItem*>(); }
 
 private Q_SLOTS:
     void initTestCase() {
@@ -129,13 +143,15 @@ private Q_SLOTS:
         QVERIFY(frame(rack));
         QCOMPARE(devices().selected(), QStringList{rack});
         QCOMPARE(test::part(frame(rack), "title")->property("text").toString(), QStringLiteral("Audio Effect Rack"));
-        QCOMPARE(frame(rack)->width(), 420.0);  // RACK_WIDTH
-        QVERIFY(row(rack, chain));
+        QCOMPARE(frame(rack)->width(), 200.0);  // its four macros: the chain list is hidden
+        QVERIFY(!row(rack, chain));
+        QCOMPARE(test::itemsNamed(frame(rack), QStringLiteral("macro3")).size(), 1);
+        QVERIFY(test::itemsNamed(frame(rack), QStringLiteral("macro4")).isEmpty());
         // Its chain shows beside it, with its devices, which select as any.
         QCOMPARE(devices().shownDevices(), (QStringList{rack, a, b}));
         QVERIFY(frame(a) && frame(b));
         QCOMPARE(chainViews().keys(), QStringList{chain});
-        QVERIFY(frame(a)->mapToScene(QPointF()).x() > frame(rack)->mapToScene(QPointF(420, 0)).x());
+        QVERIFY(frame(a)->mapToScene(QPointF()).x() > frame(rack)->mapToScene(QPointF(frame(rack)->width(), 0)).x());
         test::click(window(), titleOf(b));
         QCOMPARE(devices().selected(), QStringList{b});
         test::click(window(), titleOf(rack), Qt::ControlModifier);  // another chain's: a selection of its own
@@ -148,12 +164,63 @@ private Q_SLOTS:
         QVERIFY(chainViews().isEmpty());
     }
 
+    void theChainListAndTheChainsDevicesShowWhenAskedFor() {
+        QStringList added;
+        const QString track = shownTrack(added);
+        const QString a = added[0];
+        const QString rack = editor().groupDevices(track, {a});
+        const QString chain = chainIds(track, rack).front();
+        ui_.polish();
+        QQuickItem* listButton = test::itemNamed(frame(rack), QStringLiteral("chainListButton"));
+        QQuickItem* devicesButton = test::itemNamed(frame(rack), QStringLiteral("devicesButton"));
+        QVERIFY(listButton && devicesButton);
+        QVERIFY(!listButton->property("checked").toBool() && devicesButton->property("checked").toBool());
+        QVERIFY(!test::itemNamed(frame(rack), QStringLiteral("chainList")));  // (not shown)
+        const int steps = undo().count();
+        test::click(window(), test::centerOf(listButton));  // shows the chain list: the rack widens
+        QVERIFY(project().isChainListShown(rack));
+        QVERIFY(row(rack, chain));
+        QVERIFY(test::itemNamed(frame(rack), QStringLiteral("chainList")));
+        QVERIFY(frame(rack)->width() > 400.0);
+        QVERIFY(test::itemNamed(frame(rack), QStringLiteral("chainListButton"))->property("checked").toBool());
+        QCOMPARE(undo().count(), steps);  // (view state)
+        ui_.screenshot(QStringLiteral("rack-chain-list"));
+        // The chain's devices hidden: no bracket beside the rack.
+        test::click(window(), test::centerOf(test::itemNamed(frame(rack), QStringLiteral("devicesButton"))));
+        QVERIFY(!project().areRackDevicesShown(rack));
+        QVERIFY(chainViews().isEmpty());
+        QVERIFY(!frame(a));
+        QCOMPARE(devices().shownDevices(), (QStringList{rack, added[1]}));
+        clickRow(rack, chain);  // a chain clicked shows its devices again
+        QVERIFY(project().areRackDevicesShown(rack));
+        QCOMPARE(chainViews().keys(), QStringList{chain});
+        // The rack's own menu shows and hides them too.
+        ui_.rightClick(titleOf(rack));
+        QVERIFY(ui_.menuOpened());
+        QVERIFY(test::menuTexts(ui_.menu()).contains(QStringLiteral("Hide Devices")));
+        QVERIFY(ui_.choose(QStringLiteral("Hide Chain List")));
+        QVERIFY(!project().isChainListShown(rack));
+        QCOMPARE(frame(rack)->width(), 200.0);
+        ui_.rightClick(titleOf(rack));
+        QVERIFY(ui_.choose(QStringLiteral("Hide Devices")));
+        QVERIFY(chainViews().isEmpty());
+        ui_.rightClick(titleOf(rack));
+        QVERIFY(ui_.choose(QStringLiteral("Show Devices")));
+        QCOMPARE(chainViews().keys(), QStringList{chain});
+        // Its menu's Add Chain shows the list, where the chain is.
+        ui_.rightClick(titleOf(rack));
+        QVERIFY(ui_.choose(QStringLiteral("Add Chain")));
+        QCOMPARE(chainIds(track, rack).size(), 2);
+        QVERIFY(project().isChainListShown(rack));
+        QVERIFY(row(rack, chainIds(track, rack)[1]));
+    }
+
     void chainsInTheDeviceView() {
         QStringList added;
         const QString track = shownTrack(added);
         const QString a = added[0], b = added[1];
         const QString rack = editor().groupDevices(track, {a});
-        ui_.polish();
+        showChainList(track, rack);
         QQuickItem* add = test::itemNamed(frame(rack), QStringLiteral("addChain"));
         QVERIFY(add);
         test::click(window(), test::centerOf(add));  // + Chain
@@ -241,12 +308,17 @@ private Q_SLOTS:
         QVERIFY(test::menuTexts(paramMenu).contains(QStringLiteral("Unmap from Macro 1")));
         undo().undo();
         QCOMPARE(project().device(track, a).params.value(QStringLiteral("gain")), 0.0);
-        // A macro's menu: what it moves, to unmap.
+        // A macro's menu: its automation, renaming it, its mappings, what it moves (to unmap), macros.
         ui_.rightClick(test::centerOf(test::itemNamed(frame(rack), QStringLiteral("macro1"))));
         QVERIFY(ui_.menuOpened());
+        const QString nothing = QStringLiteral("Nothing mapped (right-click a parameter in the rack to map it)");
         QCOMPARE(test::menuTexts(ui_.menu()),
-                 QStringList{QStringLiteral("Nothing mapped (right-click a parameter in the rack to map it)")});
-        QVERIFY(!test::menuEnabled(ui_.menu(), test::menuTexts(ui_.menu()).front()));
+                 (QStringList{"Show Automation", "Delete Automation", "", "Rename", "Edit Mappings…", "", nothing, "",
+                              "Add Macro", "Remove Last Macro"}));
+        QVERIFY(!test::menuEnabled(ui_.menu(), nothing));
+        QVERIFY(!test::menuEnabled(ui_.menu(), QStringLiteral("Edit Mappings…")));
+        QVERIFY(test::menuEnabled(ui_.menu(), QStringLiteral("Show Automation")));
+        QVERIFY(!test::menuEnabled(ui_.menu(), QStringLiteral("Delete Automation")));
         QVERIFY(ui_.closeMenu());
         ui_.rightClick(test::centerOf(cell));
         QVERIFY(ui_.choose(QStringLiteral("Unmap Utility: Gain")));
@@ -263,9 +335,12 @@ private Q_SLOTS:
         for (const sub::app::ParamGroup& group : session().bridge()->paramGroups(track)) {
             for (const sub::app::ParamSpec& spec : group.specs) groups[group.id] << spec.key;
         }
-        QCOMPARE(groups.value(rack),
-                 (QStringList{sub::app::automation::chainKey(rack, chain, sub::app::automation::kChainVolume),
-                              sub::app::automation::chainKey(rack, chain, sub::app::automation::kChainPan)}));
+        QStringList keys;  // its macros, then its chains' faders
+        for (int i = 0; i < sub::app::kDefaultMacroCount; ++i)
+            keys << sub::app::automation::deviceKey(rack, sub::app::macroParam(i));
+        keys << sub::app::automation::chainKey(rack, chain, sub::app::automation::kChainVolume)
+             << sub::app::automation::chainKey(rack, chain, sub::app::automation::kChainPan);
+        QCOMPARE(groups.value(rack), keys);
         QVERIFY(groups.value(added[0]).contains(sub::app::automation::deviceKey(added[0], QStringLiteral("gain"))));
     }
 
@@ -274,7 +349,7 @@ private Q_SLOTS:
         const QString track = shownTrack(added);
         const QString trackName = project().track(track).name;
         const QString rack = editor().groupDevices(track, {added[0]});
-        ui_.polish();
+        showChainList(track, rack);
         test::click(window(), test::centerOf(test::itemNamed(frame(rack), QStringLiteral("addChain"))));
         const QString second = chainIds(track, rack)[1];
         test::doubleClick(window(), test::centerOf(test::part(row(rack, second), "nameLabel")));
@@ -309,6 +384,13 @@ private Q_SLOTS:
         // A device clicked since: Ctrl+R renames the track again.
         test::click(window(), titleOf(rack));
         QCOMPARE(session().renameTarget().value("kind").toString(), QStringLiteral("track"));
+        // Its chain list hidden: it shows, and the chain is renamed there.
+        editor().setChainListShown(track, rack, false);
+        QVERIFY(!row(rack, second));
+        QVERIFY(startChainRename(rack, second));
+        QVERIFY(project().isChainListShown(rack));
+        QTRY_VERIFY(row(rack, second) && row(rack, second)->property("renaming").toBool());
+        QTest::keyClick(window(), Qt::Key_Escape);
         // A folded rack's chains aren't shown: nothing to rename there.
         editor().setDevicesFolded(track, {rack}, true);
         QVERIFY(!startChainRename(rack, second));
@@ -319,7 +401,7 @@ private Q_SLOTS:
         const QString track = shownTrack(added);
         const QString rack = editor().groupDevices(track, {added[0]});
         const QString first = chainIds(track, rack).front();
-        ui_.polish();
+        showChainList(track, rack);
         ui_.rightClick(test::centerOf(test::part(row(rack, first), "nameLabel")));
         QVERIFY(ui_.menuOpened());
         QCOMPARE(test::menuTexts(ui_.menu()),
@@ -372,7 +454,7 @@ private Q_SLOTS:
         editor().setChainParam(track, bass, QStringLiteral("volume_db"), -4.5);
         editor().setChainParam(track, bass, QStringLiteral("pan"), -0.4);
         devices().clickChain(rack, drums);
-        ui_.polish();
+        showChainList(track, rack);
         QCOMPARE(chainViews().keys(), QStringList{drums});
         QVERIFY(frame(added[0]) && frame(added[1]) && frame(added[2]));
         ui_.screenshot(QStringLiteral("rack-chains-macros"));
@@ -385,6 +467,169 @@ private Q_SLOTS:
         QQuickItem* list = test::itemNamed(frame(rack), QStringLiteral("chainList"));
         QTRY_VERIFY(lastRow->mapToItem(list, QPointF(0, lastRow->height())).y() <= list->height());
         ui_.screenshot(QStringLiteral("rack-many-chains"));
+    }
+
+    void addingAndTakingAwayMacros() {
+        QStringList added;
+        const QString track = shownTrack(added, 1);
+        const QString rack = editor().groupDevices(track, {added[0]});
+        ui_.polish();
+        QQuickItem* add = test::itemNamed(frame(rack), QStringLiteral("addMacroButton"));
+        QQuickItem* remove = test::itemNamed(frame(rack), QStringLiteral("removeMacroButton"));
+        QVERIFY(add && remove);
+        const qreal narrow = frame(rack)->width();
+        for (int i = 0; i < 4; ++i) test::click(window(), test::centerOf(add));
+        QCOMPARE(sub::app::macroCount(project().device(track, rack)), 8);
+        QCOMPARE(undo().undoText(), QStringLiteral("Add Macro"));
+        QVERIFY(macroCell(rack, 7) && !macroCell(rack, 8));
+        // Two rows: the eighth under the fourth.
+        QCOMPARE(macroCell(rack, 4)->mapToScene(QPointF()).x(), macroCell(rack, 0)->mapToScene(QPointF()).x());
+        QVERIFY(macroCell(rack, 4)->mapToScene(QPointF()).y() > macroCell(rack, 3)->mapToScene(QPointF()).y());
+        QVERIFY(frame(rack)->width() > narrow);
+        ui_.screenshot(QStringLiteral("rack-eight-macros"));
+        test::click(window(), test::centerOf(remove));
+        QCOMPARE(sub::app::macroCount(project().device(track, rack)), 7);
+        QVERIFY(!macroCell(rack, 7));
+        editor().setMacroCount(track, rack, 1);
+        ui_.polish();
+        QVERIFY(!test::itemNamed(frame(rack), QStringLiteral("removeMacroButton"))->isEnabled());
+        editor().setMacroCount(track, rack, sub::app::kMaxMacroCount);
+        ui_.polish();
+        QVERIFY(!test::itemNamed(frame(rack), QStringLiteral("addMacroButton"))->isEnabled());
+        QVERIFY(macroCell(rack, 15));
+        QCOMPARE(ui_.panel()->height(), ui_.panel()->implicitHeight());  // sixteen fit the view's height
+        QVERIFY(macroCell(rack, 15)->mapToItem(frame(rack), QPointF(0, macroCell(rack, 15)->height())).y() <=
+                frame(rack)->height());
+        ui_.screenshot(QStringLiteral("rack-sixteen-macros"));
+        // The menu's Remove Last Macro, and Add Macro.
+        ui_.rightClick(test::centerOf(macroCell(rack, 0)));
+        QVERIFY(ui_.choose(QStringLiteral("Remove Last Macro")));
+        QCOMPARE(sub::app::macroCount(project().device(track, rack)), 15);
+        ui_.rightClick(test::centerOf(macroCell(rack, 0)));
+        QVERIFY(ui_.choose(QStringLiteral("Add Macro")));
+        QCOMPARE(sub::app::macroCount(project().device(track, rack)), 16);
+    }
+
+    void renamingAMacroInPlace() {
+        QStringList added;
+        const QString track = shownTrack(added, 1);
+        const QString rack = editor().groupDevices(track, {added[0]});
+        editor().mapMacro(track, rack, 1, added[0], QStringLiteral("gain"));
+        QQuickItem* cell = macroCell(rack, 1);
+        test::doubleClick(window(), test::centerOf(test::part(cell, "nameLabel")));
+        QQuickItem* field = test::part(cell, "renameField");
+        QTRY_VERIFY(field->isVisible() && field->hasActiveFocus());
+        QCOMPARE(field->property("selectedText").toString(), QStringLiteral("Macro 2"));
+        for (const char key : {'D', 'r', 'i', 'v', 'e'}) QTest::keyClick(window(), key);
+        QTest::keyClick(window(), Qt::Key_Return);
+        QCOMPARE(sub::app::macroName(project().device(track, rack), 1), QStringLiteral("Drive"));
+        QCOMPARE(undo().undoText(), QStringLiteral("Rename Macro"));
+        QCOMPARE(test::part(macroCell(rack, 1), "nameLabel")->property("text").toString(), QStringLiteral("Drive"));
+        // The parameter's menu names it so.
+        QQuickItem* gain = test::itemNamed(frame(added[0]), QStringLiteral("param_gain"));
+        QObject* paramMenu = gain->property("menu").value<QObject*>();
+        QMetaObject::invokeMethod(paramMenu, "build");
+        QVERIFY(test::menuTexts(paramMenu).contains(QStringLiteral("Unmap from Drive")));
+        // From its menu; an empty name names it by its number again.
+        ui_.rightClick(test::centerOf(macroCell(rack, 1)));
+        QVERIFY(ui_.choose(QStringLiteral("Rename")));
+        QTRY_VERIFY(test::part(macroCell(rack, 1), "renameField")->hasActiveFocus());
+        QTest::keyClick(window(), Qt::Key_Backspace);
+        QTest::keyClick(window(), Qt::Key_Return);
+        QCOMPARE(sub::app::macroName(project().device(track, rack), 1), QStringLiteral("Macro 2"));
+        // Its automation lane is called by its name.
+        editor().renameMacro(track, rack, 0, QStringLiteral("Cutoff"));
+        QCOMPARE(session().bridge()->paramSpec(track, sub::app::automation::deviceKey(rack, sub::app::macroParam(0)))
+                     ->name,
+                 QStringLiteral("Cutoff"));
+    }
+
+    void aMacrosAutomation() {
+        QStringList added;
+        const QString track = shownTrack(added, 1);
+        const QString a = added[0];
+        const QString rack = editor().groupDevices(track, {a});
+        editor().mapMacro(track, rack, 0, a, QStringLiteral("gain"));
+        const QString key = sub::app::automation::deviceKey(rack, sub::app::macroParam(0));
+        QQuickItem* cell = macroCell(rack, 0);
+        auto* knob = qobject_cast<sub::ui::KnobItem*>(test::part(cell, "knob"));
+        QVERIFY(knob);
+        // Pressing it shows its automation in the arrangement.
+        test::click(window(), test::centerOf(knob));
+        QCOMPARE(project().automationView(track).key, std::optional<QString>(key));
+        // Automated: the dot, and it follows its envelope (as does what it moves).
+        editor().setEnvelope(track, key, {{0.0, 0.25, 0.0}});
+        QTRY_COMPARE(knob->automation(), QStringLiteral("on"));
+        QCOMPARE(knob->value(), 0.25);
+        QObject* gain = test::itemNamed(frame(a), QStringLiteral("param_gain"))->property("param").value<QObject*>();
+        QCOMPARE(gain->property("automation").toString(), QStringLiteral("on"));
+        QCOMPARE(gain->property("value").toDouble(), -60.0 + 0.25 * 84.0);
+        // Turned by hand: overridden.
+        QMetaObject::invokeMethod(cell->property("macro").value<QObject*>(), "set", Q_ARG(double, 1.0),
+                                  Q_ARG(QString, QString()));
+        QTRY_COMPARE(knob->automation(), QStringLiteral("off"));
+        QCOMPARE(knob->value(), 1.0);
+        ui_.rightClick(test::centerOf(cell));
+        QVERIFY(ui_.menuOpened());
+        QVERIFY(test::menuTexts(ui_.menu()).contains(QStringLiteral("Re-Enable Automation")));
+        QVERIFY(ui_.choose(QStringLiteral("Re-Enable Automation")));
+        QTRY_COMPARE(knob->automation(), QStringLiteral("on"));
+        QCOMPARE(knob->value(), 0.25);
+        ui_.rightClick(test::centerOf(cell));
+        QVERIFY(ui_.choose(QStringLiteral("Delete Automation")));
+        QVERIFY(project().envelope(track, key).empty());
+        QTRY_COMPARE(knob->automation(), QString());
+        QCOMPARE(gain->property("automation").toString(), QString());
+    }
+
+    void aMacrosMappingsAndTheirRanges() {
+        QStringList added;
+        const QString track = shownTrack(added, 2);
+        const QString a = added[0], b = added[1];
+        const QString rack = editor().groupDevices(track, {a, b});
+        editor().mapMacro(track, rack, 0, a, QStringLiteral("gain"));
+        editor().mapMacro(track, rack, 0, b, QStringLiteral("width"));
+        editor().setMacro(track, rack, 0, 1.0);
+        QQuickItem* cell = macroCell(rack, 0);
+        ui_.rightClick(test::centerOf(cell));
+        QVERIFY(ui_.choose(QStringLiteral("Edit Mappings…")));
+        auto* popup = ui_.panel()->property("macroMappings").value<QObject*>();
+        QTRY_VERIFY(popup->property("opened").toBool());
+        QObject* rows = popup->property("rows").value<QObject*>();
+        QCOMPARE(rows->property("count").toInt(), 2);
+        QQuickItem* gainRow = nullptr;
+        QMetaObject::invokeMethod(rows, "itemAt", Q_RETURN_ARG(QQuickItem*, gainRow), Q_ARG(int, 0));
+        QVERIFY(gainRow);
+        auto* low = qobject_cast<sub::ui::ValueBoxItem*>(test::part(gainRow, "low"));
+        auto* high = qobject_cast<sub::ui::ValueBoxItem*>(test::part(gainRow, "high"));
+        QVERIFY(low && high);
+        QCOMPARE(low->value(), 0.0);
+        QCOMPARE(high->value(), 100.0);
+        ui_.screenshot(QStringLiteral("macro-mappings"), true);
+        // Max to 50 %: the gain goes where the macro (at 100 %) puts it now, -18 dB; one step a drag.
+        const int steps = undo().count();
+        Q_EMIT high->moved(75.0, QStringLiteral("drag"));
+        Q_EMIT high->moved(50.0, QStringLiteral("drag"));
+        QCOMPARE(undo().count(), steps + 1);
+        QCOMPARE(undo().undoText(), QStringLiteral("Change Macro Range"));
+        QVERIFY(std::abs(project().device(track, a).params.value(QStringLiteral("gain")) - (-18.0)) < 1e-9);
+        QCOMPARE(high->value(), 50.0);
+        QCOMPARE(rows->property("count").toInt(), 2);
+        QMetaObject::invokeMethod(rows, "itemAt", Q_RETURN_ARG(QQuickItem*, gainRow), Q_ARG(int, 0));
+        QCOMPARE(qobject_cast<sub::ui::ValueBoxItem*>(test::part(gainRow, "high")), high);  // (the same row: not made again)
+        // Invert: 50 to 0 %.
+        test::click(window(), test::centerOf(test::part(gainRow, "invertButton")));
+        const auto& mappings = project().device(track, rack).macros;
+        QVERIFY(mappings[0].low == 0.5 && mappings[0].high == 0.0);
+        QVERIFY(std::abs(project().device(track, a).params.value(QStringLiteral("gain")) - (-60.0)) < 1e-9);
+        // Unmapped from the list: its row goes.
+        QQuickItem* widthRow = nullptr;
+        QMetaObject::invokeMethod(rows, "itemAt", Q_RETURN_ARG(QQuickItem*, widthRow), Q_ARG(int, 1));
+        test::click(window(), test::centerOf(test::part(widthRow, "unmapButton")));
+        QCOMPARE(project().device(track, rack).macros.size(), size_t(1));
+        QTRY_COMPARE(rows->property("count").toInt(), 1);
+        QMetaObject::invokeMethod(popup, "close");
+        QTRY_VERIFY(!popup->property("visible").toBool());
     }
 };
 

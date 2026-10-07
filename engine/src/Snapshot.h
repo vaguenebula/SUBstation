@@ -188,7 +188,8 @@ struct StripRender {
     // none); empty if none has one.
     std::vector<int> sidechains;
     // The edges leaving it after one of its devices (EdgeRender::Tap::AfterDevice), by
-    // device: those before its first device (tapDevice -1) first. (Not a rack's chains'.)
+    // device: those before its first device (tapDevice -1) first. A rack's chain
+    // has those taken after its own devices (its strip's source's sidechains).
     std::vector<int> deviceTaps;
     // Per insert, its chains if it is a rack (null: a device); empty if none is.
     std::vector<std::shared_ptr<const RackRender>> racks;
@@ -249,7 +250,9 @@ struct EdgeRender {
     int to = -1;    // the snapshot track it goes into; -1: the master
     Kind kind = Kind::Output;
     Tap tap = Tap::PostFader;
-    int tapDevice = -1;  // AfterDevice: the source's insert it is taken after (-1: before the first)
+    // AfterDevice: the insert it is taken after (-1: before the first), in the
+    // source's own chain or in the rack chain whose deviceTaps list it.
+    int tapDevice = -1;
     int compensation = 0;              // samples it is delayed to line up with the latest edge into `to`
     std::shared_ptr<DelayLine> delay;  // for the live renderer (offline renders bring their own)
     std::shared_ptr<EdgeState> state;  // never null in an engine's snapshot

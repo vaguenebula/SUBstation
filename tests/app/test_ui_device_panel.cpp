@@ -182,6 +182,8 @@ private Q_SLOTS:
         auto* graph = test::itemNamed(frame(compressor), QStringLiteral("reductionGraph"));
         QVERIFY(graph);
         QCOMPARE(margins(compressor, inFrame(compressor, graph)), std::make_pair(6.0, 6.0));
+        editor().setChainListShown(track, rack, true);  // (hidden by default)
+        ui_.polish();
         auto* list = test::itemNamed(frame(rack), QStringLiteral("chainList"));
         QVERIFY(list);
         QCOMPARE(margins(rack, inFrame(rack, list)), std::make_pair(6.0, 6.0));
@@ -427,7 +429,8 @@ private Q_SLOTS:
         QVERIFY(project().device(track, rack).isRack());
         rightClick(centerOf(rack, "title"));
         QVERIFY(ui_.menuOpened());
-        QCOMPARE(test::menuTexts(menu()).mid(0, 3), (QStringList{"Add Chain", "", "Fold"}));
+        QCOMPARE(test::menuTexts(menu()).mid(0, 5),
+                 (QStringList{"Add Chain", "Show Chain List", "Hide Devices", "", "Fold"}));
         QVERIFY(!test::menuTexts(menu()).contains(QStringLiteral("Save as Default Preset")));  // racks have none
         QVERIFY(test::menuTexts(menu()).contains(QStringLiteral("Ungroup")));
         choose(QStringLiteral("Ungroup"));

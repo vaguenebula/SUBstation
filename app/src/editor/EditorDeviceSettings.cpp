@@ -82,6 +82,7 @@ bool ProjectEditor::loadPresetInto(const QString& trackId, const QString& device
         Device* rack = findDevice(after, deviceId);
         rack->chains = preset.chains;
         rack->macros = preset.macros;
+        rack->macroNames = preset.macroNames;
         rack->params = preset.params;
         rack->name = preset.name;
         setDevices(trackId, before, std::move(after), text);
@@ -142,9 +143,8 @@ void ProjectEditor::setDeviceSidechain(const QString& trackId, const QString& de
         if (!(p.hasTrack(source) || p.hasReturn(source)) || p.sidechainWouldCycle(trackId, source)) {
             throw EditError(QStringLiteral("%1 can't take its sidechain from that track").arg(deviceName(device)));
         }
-        if (const auto tapped = sidechain->tapDevice()) {
-            const auto& devices = p.track(source).devices;
-            if (std::none_of(devices.begin(), devices.end(), [&](const Device& d) { return d.id == *tapped; })) {
+        if (const auto tapped = sidechain->tapDevice()) {  // in its own chain, or in a rack's there
+            if (findDevice(p.track(source).devices, *tapped) == nullptr) {
                 throw EditError(QStringLiteral("A sidechain can only be taken after one of its source's devices"));
             }
         }

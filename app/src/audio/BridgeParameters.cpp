@@ -18,13 +18,19 @@ void EngineBridge::onAutomationChanged(const QString& owner, const QString& key)
     pushAutomation(owner);
 }
 
-// The owner's envelopes to the engine, but those overridden. Targets whose
-// envelope no longer plays go back to their own value.
+// The owner's envelopes to the engine, but those overridden. A parameter mapped
+// to an automated macro plays the macro's envelope instead of its own. Targets
+// whose envelope no longer plays go back to their own value.
 void EngineBridge::pushAutomation(const QString& owner) {
     const auto engineId = engineTrackId(owner);
     if (!engineId) return;
     std::vector<std::pair<QString, Envelope>> envelopes;
     for (const auto& [key, points] : project_->automation(owner)) envelopes.emplace_back(key, points);
+    const QMap<QString, Envelope> moved = macroEnvelopes(owner);
+    for (auto it = moved.constBegin(); it != moved.constEnd(); ++it) {
+        std::erase_if(envelopes, [&](const auto& envelope) { return envelope.first == it.key(); });
+        envelopes.emplace_back(it.key(), it.value());
+    }
     std::vector<sub::AutomationLaneDesc> lanes;
     QSet<QString> playing;
     for (const auto& [key, points] : envelopes) {
@@ -34,11 +40,32 @@ void EngineBridge::pushAutomation(const QString& owner) {
             playing.insert(key);
         }
     }
+    d_->macroMoved.insert(owner, moved);
     engine_.setTrackAutomation(*engineId, lanes);
     const QSet<QString> stopped = d_->automating.value(owner) - playing;
     d_->automating.insert(owner, playing);
     for (const QString& key : stopped) pushOwnValue(owner, key);
     Q_EMIT automationStateChanged(owner);
+}
+
+QMap<QString, Envelope> EngineBridge::macroEnvelopes(const QString& owner) const {
+    QMap<QString, Envelope> moved;
+    if (!project_->hasOwner(owner)) return moved;
+    // Outer racks first: should a nearer rack's macro move the same parameter, it wins (as macroOf says).
+    for (const Device* rack : iterDevices(project_->track(owner).devices)) {
+        for (const MacroMapping& mapping : rack->macros) {
+            const QString macroKey = automation::deviceKey(rack->id, macroParam(mapping.macro));
+            if (d_->overridden.count({owner, macroKey}) > 0) continue;
+            Envelope points = project_->envelope(owner, macroKey);
+            if (points.empty()) continue;
+            for (AutomationPoint& point : points) {
+                point.value = mapping.target(point.value);
+                if (mapping.high < mapping.low) point.curve = -point.curve;  // (bends follow the macro's)
+            }
+            moved.insert(automation::deviceKey(mapping.deviceId, mapping.paramId), std::move(points));
+        }
+    }
+    return moved;
 }
 
 std::optional<sub::AutomationLaneDesc> EngineBridge::engineLane(const QString& owner, const QString& key,
@@ -125,9 +152,13 @@ QString EngineBridge::pluginParamText(quint32 processorId, int index, double val
 
 std::vector<ParamSpec> EngineBridge::deviceParamSpecs(const QString& trackId, const Device& device) {
     if (device.isRack()) {
+        QStringList macros;
+        for (int i = 0; i < macroCount(device); ++i) macros.append(macroName(device, i));
+        std::vector<ParamSpec> specs = macroSpecs(device.id, macros, deviceName(device));
         std::vector<std::pair<QString, QString>> chains;
         for (const Chain& chain : device.chains) chains.emplace_back(chain.id, chain.name);
-        return chainSpecs(device.id, chains, deviceName(device));
+        for (ParamSpec& spec : chainSpecs(device.id, chains, deviceName(device))) specs.push_back(std::move(spec));
+        return specs;
     }
     const auto processorId = engineDeviceId(trackId, device.id);
     if (!processorId) return {};
@@ -257,7 +288,10 @@ std::optional<double> EngineBridge::ownValue(const QString& owner, const QString
 std::optional<double> EngineBridge::currentValue(const QString& owner, const QString& key, std::optional<double> beat) {
     const auto spec = paramSpec(owner, key);
     if (spec && isAutomated(owner, key)) {
-        const auto value = automation::valueAt(project_->envelope(owner, key), beat ? *beat : position());
+        const auto moved = d_->macroMoved.value(owner).constFind(key);  // (it follows its macro's automation)
+        const Envelope envelope =
+            moved != d_->macroMoved.value(owner).constEnd() ? *moved : project_->envelope(owner, key);
+        const auto value = automation::valueAt(envelope, beat ? *beat : position());
         if (value) return spec->fromNormalized(spec->quantize(*value));
     }
     return ownValue(owner, key);

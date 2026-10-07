@@ -2,23 +2,37 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The body of a rack: its eight macros, four to a row, and its chains (a row
+// The body of a rack: a strip of buttons (show the chain list, show the chain's
+// devices beside the rack, add a macro, take the last away), its macros (4 by
+// default, up to 16: two rows of them), and, while shown, its chains (a row
 // each, with its mixer; a hint while it has none; + Chain adds one). The chain
-// clicked shows its devices beside the rack (the device view, after the frame);
-// the list scrolls when there are more chains than room.
+// list is hidden until asked for; the chain clicked in it shows its devices
+// beside the rack (the device view, after the frame), unless they are hidden.
+// The list scrolls when there are more chains than room.
 Item {
     id: body
 
     required property string trackId
     required property string deviceId
     required property var panel
+    required property DeviceInfo info
     readonly property RackChains chains: rackChains
+    readonly property RackMacros macroCount: rackMacros
     readonly property alias macros: macroRepeater
     readonly property alias rows: rowRepeater
     readonly property alias addButton: addButton
+    readonly property alias chainList: list
+    readonly property alias chainListButton: chainListButton
+    readonly property alias devicesButton: devicesButton
+    readonly property alias addMacroButton: addMacroButton
+    readonly property alias removeMacroButton: removeMacroButton
+    readonly property bool chainListShown: info.chainListShown
 
-    implicitWidth: 420 - 2  // RACK_WIDTH
-    implicitHeight: 6 + Math.max(macroGrid.implicitHeight, 60) + 6
+    // The strip, the macros (centred in at least as much width as a title needs), and the chain list while shown.
+    readonly property real macrosLeft: strip.x + strip.width + 6
+    readonly property real macrosRight: Math.max(macrosLeft + macroGrid.width, 190)
+    implicitWidth: (chainListShown ? macrosRight + 12 + 214 : macrosRight) + 8
+    implicitHeight: 6 + Math.max(macroGrid.implicitHeight, strip.implicitHeight, 60) + 6
 
     RackChains {
         id: rackChains
@@ -26,18 +40,70 @@ Item {
         trackId: body.trackId
         rackId: body.deviceId
     }
+    RackMacros {
+        id: rackMacros
+        session: Session
+        trackId: body.trackId
+        rackId: body.deviceId
+    }
 
+    Column {
+        id: strip
+        x: 6
+        y: 6
+        spacing: 2
+
+        DeviceHeaderButton {
+            id: chainListButton
+            objectName: "chainListButton"
+            iconName: "chain_list"
+            checkable: false
+            checked: body.chainListShown
+            tooltip: body.chainListShown ? qsTr("Hide the chain list") : qsTr("Show the chain list")
+            onClicked: Session.deviceSelection.toggleChainList(body.deviceId)
+        }
+        DeviceHeaderButton {
+            id: devicesButton
+            objectName: "devicesButton"
+            iconName: "rack_devices"
+            checkable: false
+            checked: body.info.rackDevicesShown
+            tooltip: body.info.rackDevicesShown ? qsTr("Hide the chain's devices") : qsTr("Show the chain's devices")
+            onClicked: Session.deviceSelection.toggleRackDevices(body.deviceId)
+        }
+        DeviceHeaderButton {
+            id: addMacroButton
+            objectName: "addMacroButton"
+            checkable: false
+            text: "+"
+            enabled: rackMacros.count < rackMacros.maximum
+            tooltip: qsTr("Add a macro")
+            onClicked: rackMacros.add()
+        }
+        DeviceHeaderButton {
+            id: removeMacroButton
+            objectName: "removeMacroButton"
+            checkable: false
+            text: "−"
+            enabled: rackMacros.count > 1
+            tooltip: qsTr("Take the last macro away (with its mappings and automation)")
+            onClicked: rackMacros.remove()
+        }
+    }
+
+    // Two rows of macros (one while there is one), left to right.
     Grid {
         id: macroGrid
-        x: 8
+        objectName: "macroGrid"
+        x: body.macrosLeft + (body.macrosRight - body.macrosLeft - width) / 2
         y: 6
-        columns: 4
+        columns: Math.max(1, Math.ceil(rackMacros.count / 2))
         columnSpacing: 4
-        rowSpacing: 2
+        rowSpacing: 4
 
         Repeater {
             id: macroRepeater
-            model: 8  // MACRO_COUNT
+            model: rackMacros.count
             RackMacroKnob {
                 required property int index
                 objectName: "macro" + index
@@ -53,7 +119,8 @@ Item {
     Rectangle {
         id: list
         objectName: "chainList"
-        x: macroGrid.x + macroGrid.width + 12
+        visible: body.chainListShown
+        x: body.macrosRight + 12
         y: 6
         width: body.width - x - 8
         height: body.height - y - 6
@@ -113,7 +180,7 @@ Item {
 
                 Repeater {
                     id: rowRepeater
-                    model: rackChains.chainIds
+                    model: body.chainListShown ? rackChains.chainIds : []
                     RackChainRow {
                         required property string modelData
                         objectName: "chainRow_" + modelData

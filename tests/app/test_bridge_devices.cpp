@@ -1,9 +1,9 @@
 // The engine taking the project's devices through the bridge: racks keeping
 // each device's processor as they are made, undone, moved and deleted; chain
 // faders and nested devices automated, and overridden by hand; macros moving
-// plug-in parameters; sidechains; presets (a plug-in's renders as its device,
-// a built-in device's reaches the engine, a missing plug-in, a new plug-in's
-// default state). The changes are made as the editor makes them (the model's
+// plug-in parameters, and their automation moving what is mapped to them;
+// sidechains; presets (a plug-in's renders as its device, a built-in device's
+// reaches the engine, a missing plug-in, a new plug-in's default state). The changes are made as the editor makes them (the model's
 // commands). Plug-in parts skip without the test plug-ins.
 
 #include "BridgeTestSupport.h"
@@ -365,6 +365,54 @@ private Q_SLOTS:
         QVERIFY(std::abs(studio.engine.processorParam(processor, 0) - gain.fromNormalized(0.25f)) < 1e-6f);
         studio.stack.undo();
         QVERIFY(std::abs(studio.engine.processorParam(processor, 0) - 0.5f) < 1e-6f);  // as it was (its default)
+    }
+
+    void macroAutomationMovesWhatIsMappedToIt() {
+        // The engine has no macros: a parameter mapped to an automated macro plays
+        // the macro's envelope over its range, in time, instead of its own.
+        test::TempDir dir;
+        Studio studio;
+        EngineBridge& bridge = *studio.bridge;
+        const QString track = studio.clipTrack(noiseWav(dir));
+        const QString a = studio.edit.addDevice(track, QStringLiteral("utility"));
+        const QString rack = studio.edit.groupDevices(track, {a});
+        const QString macro = automation::deviceKey(rack, macroParam(0));
+        const QString gain = automation::deviceKey(a, QStringLiteral("gain"));
+        // Macros are the rack's parameters, named, before its chains' faders.
+        QVERIFY(bridge.canAutomate(track, macro));
+        const std::vector<ParamSpec> specs = bridge.paramGroups(track)[1].specs;  // (the mixer, the rack, ...)
+        QCOMPARE(specs.size(), size_t(kDefaultMacroCount + 2));
+        QCOMPARE(specs[0].key, macro);
+        QCOMPARE(specs[0].name, QStringLiteral("Macro 1"));
+        QCOMPARE(specs[0].format(0.5), QStringLiteral("50 %"));
+        QVERIFY(!bridge.canAutomate(track, automation::deviceKey(rack, macroParam(kDefaultMacroCount))));
+        mapMacro(studio, track, rack, 0, a, QStringLiteral("gain"));
+        studio.edit.setEnvelope(track, macro, {{0.0, 0.0, 0.0}});  // the gain at its lowest: -60 dB
+        QVERIFY(bridge.isAutomated(track, macro) && bridge.isAutomated(track, gain));
+        QCOMPARE(*bridge.currentValue(track, gain, 0.0), -60.0);
+        QCOMPARE(*bridge.currentValue(track, macro, 0.0), 0.0);
+        QVERIFY(test::peak(settled(studio), 2 * test::kSampleRate / 20) < 0.01f);
+        // Over another range: the other way round.
+        studio.edit.setMacros(track, rack, {{0, a, QStringLiteral("gain"), 1.0, 0.0}});
+        QCOMPARE(*bridge.currentValue(track, gain, 0.0), 24.0);
+        QVERIFY(test::peak(settled(studio), 2 * test::kSampleRate / 20) > 1.0f);
+        // Its own envelope doesn't play meanwhile.
+        studio.edit.setEnvelope(track, gain, {{0.0, 0.5, 0.0}});
+        QCOMPARE(*bridge.currentValue(track, gain, 0.0), 24.0);
+        // The macro turned by hand: its automation stops, and what it moves takes its own value.
+        setMacro(studio, track, rack, 0, 1.0);
+        QVERIFY(bridge.isOverridden(track, macro));
+        QVERIFY(!bridge.isAutomated(track, macro));
+        QCOMPARE(*bridge.currentValue(track, gain, 0.0), -60.0);  // (the macro's 1.0 over 1..0)
+        bridge.reEnableAutomation(track);
+        QCOMPARE(*bridge.currentValue(track, gain, 0.0), 24.0);
+        // Unmapped: the parameter's own envelope plays again.
+        studio.edit.setMacros(track, rack, {});
+        QVERIFY(bridge.isAutomated(track, gain));
+        QVERIFY(std::abs(*bridge.currentValue(track, gain, 0.0) - bridge.paramSpec(track, gain)->fromNormalized(0.5)) <
+                1e-9);
+        studio.edit.setEnvelope(track, gain, {});
+        QVERIFY(!bridge.isAutomated(track, gain));
     }
 
     void aSavedRackLoadsAndRendersTheSame() {

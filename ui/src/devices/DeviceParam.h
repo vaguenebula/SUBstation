@@ -100,6 +100,8 @@ public:
     Q_INVOKABLE void reEnableAutomation();
     // The rack the device is in ("": on the track's own chain), whose macros can move it.
     Q_INVOKABLE QString rackId() const;
+    // That rack's macros' names, in order (Map to Macro).
+    Q_INVOKABLE QStringList macroNames() const;
     // The macro it is mapped to (-1: none), and that macro's rack (the nearest one mapping it).
     Q_INVOKABLE int macro() const;
     Q_INVOKABLE QString macroRack() const;

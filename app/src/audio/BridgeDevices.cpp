@@ -131,6 +131,8 @@ void EngineBridge::syncDevices(const QString& trackId) {
         pushAutomation(trackId);  // its devices' envelopes go to the new processors
         updateEditorTitles(trackId);
         Q_EMIT devicesLoaded(trackId);
+    } else if (project_->hasOwner(trackId) && macroEnvelopes(trackId) != d.macroMoved.value(trackId)) {
+        pushAutomation(trackId);  // macros mapped otherwise, or over other ranges
     }
     if (project_->hasOwner(trackId)) pushEnabled(trackId);
     pushChainMixers(trackId);

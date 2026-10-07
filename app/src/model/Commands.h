@@ -363,24 +363,29 @@ private:
     std::optional<QString> new_;
 };
 
-// A rack's macro mappings.
-class SetMacrosCommand : public QUndoCommand {
+// A rack's macro mappings, and the values of parameters they move ({(device
+// id, param id): value}: a range changed puts its parameter where the macro is
+// in its new range). Target: (track id, rack id); a drag of a range merges.
+struct MacroMappings {
+    std::vector<MacroMapping> mappings;
+    QMap<DeviceParam, double> values;
+
+    friend bool operator==(const MacroMappings&, const MacroMappings&) = default;
+};
+class SetMacrosCommand : public MergeableCommand<SetMacrosCommand, std::pair<QString, QString>, MacroMappings> {
 public:
     SetMacrosCommand(Project* project, const QString& trackId, const QString& rackId, std::vector<MacroMapping> old,
-                     std::vector<MacroMapping> nw, const QString& text);
+                     std::vector<MacroMapping> nw, const QString& text, QString mergeKey = {},
+                     QMap<DeviceParam, double> oldValues = {}, QMap<DeviceParam, double> newValues = {});
 
     void redo() override;
     void undo() override;
 
-    const QString& trackId() const { return trackId_; }
-    const QString& rackId() const { return rackId_; }
+    const QString& trackId() const { return target_.first; }
+    const QString& rackId() const { return target_.second; }
 
 private:
-    Project* project_;
-    QString trackId_;
-    QString rackId_;
-    std::vector<MacroMapping> old_;
-    std::vector<MacroMapping> new_;
+    void apply(const MacroMappings& state);
 };
 
 // Replaces a device's state: a plug-in's whole state (loading a preset), a

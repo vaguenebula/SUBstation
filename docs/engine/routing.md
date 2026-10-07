@@ -164,11 +164,22 @@ master (it renders after everything). The tap (`SidechainTap`):
 |---|---|---|
 | `PostFader` | Post Mixer | after the fader and pan |
 | `PreFader` | Post FX | after all its devices, before the fader |
-| `AfterDevice` | After a device | after `tapProcessorId`, a device in the source's main chain |
+| `AfterDevice` | After a device | after `tapProcessorId`, a device on the source: in its main chain, or in a rack's chain there |
 | `PreFx` | Pre FX | before all its devices (`AfterDevice` with tap 0) |
 
-`sidechainTapLocked()` turns that into the edge's tap. A tap after a device that has left the
-source's main chain (or is in a rack there) is before the fader until the device comes back.
+`sidechainTapLocked()` turns that into the edge's tap: the device's slot among the source's
+devices (`RouteEdge::tap` counts slots, depth first, so devices in its racks' chains too). A tap
+after a device that has left the source is before the fader until the device comes back. One
+after a device in a rack switched off (or in a rack inside one) is taken after the outermost such
+rack, which passes its input on.
+
+**Taps in racks.** A tap after a device in a rack's chain takes that chain's signal as it leaves
+the device: before the chain's fader, without the other chains, and before the delay that lines
+the chain up with the rack's slowest (so it leaves as late as the devices before it, in that
+chain and before the rack). The snapshot lists it in that chain's `ChainRender::deviceTaps`
+(`EdgeRender::tapDevice` is its place in that chain), and the chain writes it as
+`processChain()` passes the device, as a strip does; a chain whose devices are all switched
+off writes its taps all the same.
 
 **Alignment.** A sidechain lines up where it ends, with the strip's signal at its device: as late
 as the strip's input plus the devices before it (in a rack: the devices before the rack, then
@@ -267,8 +278,9 @@ The frozen audio itself is a render of the track's signal before its fader:
 
 - `RouteEdge` indices are `tracks_` indices; `EdgeRender` indices are snapshot (topological)
   indices. `EngineSnapshot.cpp` maps between them with `position`.
-- A sidechain's `tap` in `RouteEdge` counts devices of the source's own chain only (a rack counts
-  as one); a tap after a device inside a rack is before the fader.
+- A sidechain's `tap` in `RouteEdge` counts the source's slots (depth first, racks' devices
+  included), not the devices of one chain; `EdgeRender::tapDevice` is the place in the chain that
+  writes it (the strip's own, or a rack chain's).
 - Changing a send from pre- to post-fader rebuilds the snapshot; changing only its level doesn't.
 - Delay lines for an edge are reused only while long enough; a larger delay starts the line
   again from silence (a short gap in that edge's audio).
@@ -288,8 +300,9 @@ In the engine's tests, [tests/engine](../../tests/engine):
   a tap before a device waiting for its own sidechain, groups and the master, automation after a
   waiting device, cycles, the source going, mute and solo, silence flagged, workers.
 - [test_racks_engine.cpp](../../tests/engine/test_racks_engine.cpp): chains summing, faders, latency not
-  smearing, nested automation, instrument racks, sidechains in racks, moves, nesting limits,
-  cycles through racks, workers.
+  smearing, nested automation, instrument racks, sidechains in racks and taken after devices in
+  them (levels, alignment, racks switched off), moves, nesting limits, cycles through racks,
+  workers.
 - [test_resampling_engine.cpp](../../tests/engine/test_resampling_engine.cpp): input edges and their
   cycles.
 - [test_freeze_engine.cpp](../../tests/engine/test_freeze_engine.cpp): a track's signal before its fader

@@ -394,6 +394,10 @@ public:
                              const QString& chain = {}, const QSet<QString>& folded = {}, const QString& text = {});
     // Fold or unfold devices in the device view. View state: saved, not undone.
     Q_INVOKABLE void setDevicesFolded(const QString& trackId, const QStringList& deviceIds, bool folded);
+    // Show or hide a rack's chain list, or its chain's devices beside it, in
+    // the device view. View state: saved, not undone.
+    Q_INVOKABLE void setChainListShown(const QString& trackId, const QString& rackId, bool shown);
+    Q_INVOKABLE void setRackDevicesShown(const QString& trackId, const QString& rackId, bool shown);
     // Move a device to position `index` in its chain (an instrument stays first).
     Q_INVOKABLE void moveDevice(const QString& trackId, const QString& deviceId, int index);
     // Move devices together (in their order on the track) to before the device
@@ -464,11 +468,21 @@ public:
     // (one per gesture, with a merge key).
     Q_INVOKABLE void setMacro(const QString& trackId, const QString& rackId, int index, double value,
                               const QString& mergeKey = {});
+    // How many macros a rack has (1..kMaxMacroCount): new ones come last, at 0;
+    // those taken away (the last) go with their mappings and automation. One undo step.
+    Q_INVOKABLE void setMacroCount(const QString& trackId, const QString& rackId, int count);
+    // Name a rack's macro ("", or "Macro N": named by its number). One undo step.
+    Q_INVOKABLE void renameMacro(const QString& trackId, const QString& rackId, int index, const QString& name);
     // Map a rack's macro to a parameter of a device in it, over the parameter's
     // normalized `low`..`high` (a parameter is mapped to one macro of the rack
     // at a time). EditError for a device not in the rack (or no such macro).
     void mapMacro(const QString& trackId, const QString& rackId, int index, const QString& deviceId,
                   const QString& paramId, double low = 0.0, double high = 1.0);
+    // The range a mapped parameter moves over (normalized; `low` > `high`: the
+    // other way round): it goes where its macro puts it in that range. One undo
+    // step per gesture (merge key).
+    Q_INVOKABLE void setMacroRange(const QString& trackId, const QString& rackId, const QString& deviceId,
+                                   const QString& paramId, double low, double high, const QString& mergeKey = {});
     Q_INVOKABLE void unmapMacro(const QString& trackId, const QString& rackId, const QString& deviceId,
                                 const QString& paramId);
     // The rack and macro a parameter is mapped to (the nearest rack's), if any.
@@ -515,10 +529,10 @@ public:
                                 const QString& text = QStringLiteral("Rename Rack"));
     Q_INVOKABLE void setDeviceEnabled(const QString& trackId, const QString& deviceId, bool enabled);
     // What a device's sidechain (aux) input hears: a track's (a group's, a
-    // return's) signal, after its fader, before it, or after one of its devices;
-    // none: nothing. EditError for a source it can't take (the master, its own
-    // track, or one its track feeds: a cycle) or a tap after a device that
-    // isn't on the source.
+    // return's) signal, after its fader, before it, or after one of its devices
+    // (in a rack there too); none: nothing. EditError for a source it can't
+    // take (the master, its own track, or one its track feeds: a cycle) or a
+    // tap after a device that isn't on the source.
     void setDeviceSidechain(const QString& trackId, const QString& deviceId, const std::optional<Sidechain>& sidechain);
 
     // --- Automation (EditorAutomation.cpp) ---
@@ -678,6 +692,10 @@ private:
     // Devices.
     bool setDevices(const QString& trackId, const std::vector<Device>& before, std::vector<Device> after,
                     const QString& text);
+    // A device's parameter as it is now, for an undo to go back to: the model's
+    // value, else a plug-in's (set in its own editor), else its default (else `fallback`).
+    double ownParamValue(const QString& trackId, const QString& deviceId, const QString& paramId,
+                         double fallback) const;
 
     // Automation.
     void eachLane(const QString& text, const QList<LaneRef>& lanes, const std::function<Envelope(const Envelope&)>& change);

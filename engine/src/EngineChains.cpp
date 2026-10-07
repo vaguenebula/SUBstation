@@ -376,12 +376,10 @@ void Engine::setProcessorSidechain(uint32_t processorId, uint32_t sourceTrackId,
     if (sourceTrackId == kMaster) {
         throw std::invalid_argument("The master can't be a sidechain: it renders after every track");
     }
-    const TrackModel& source = arrangementTrackLocked(sourceTrackId);
-    if (tap == SidechainTap::AfterDevice) {
+    arrangementTrackLocked(sourceTrackId);
+    if (tap == SidechainTap::AfterDevice) {  // one of its devices: in its own chain, or in a rack's there
         const auto found = processors_.find(tapProcessorId);
-        const auto& inserts = insertsLocked(source);
-        if (found == processors_.end() ||
-            std::find(inserts.begin(), inserts.end(), found->second.processor) == inserts.end()) {
+        if (found == processors_.end() || chainLocked(found->second.chainId).stripId != sourceTrackId) {
             throw std::invalid_argument("Device " + std::to_string(tapProcessorId) + " is not on track " +
                                         std::to_string(sourceTrackId));
         }

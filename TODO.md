@@ -449,19 +449,28 @@ Engine
 - [x] Chain meters (`MeterReading.chainId`).
 - [x] Sidechains (Phase 8) into a device inside a rack: its latency before the
       device includes the rack's chain up to it (and a delay before it makes its chain, and so the rack, later).
-  - [ ] Maybe: taps after a device inside a rack (taps are after devices of the source's own chain; a rack counts as one).
+  - [x] Taps after a device inside a rack: `RouteEdge::tap` counts the source's slots
+        (depth first), and the chain the device is in writes the tap
+        (`ChainRender::deviceTaps`), before its fader; in a rack switched off, after
+        that rack. The sidechain menu lists them ("After Rack › Chain › Device").
   - [ ] Maybe: a rack's chains on several workers (only if a benchmark shows it matters).
 
 Model / UI
 - [x] `Device(kind="rack", chains=[Chain(id, name, devices, volume_db, pan, mute, solo)], macros=(MacroMapping...))`.
 - [x] Recursive device lookup (`device_path()`, `find_device()`, `project.device()`); serialization recurses (version 12).
 - [x] Device panel: rack with chain list, chain mixer (and meters), nested device view (the chain clicked, beside the rack).
+  - [x] The chain list hidden until shown, the chain's devices hidden when asked
+        (buttons at the rack's left, as Ableton's; view state, saved).
 - [x] Group selected devices into a rack (Ctrl+G in the device panel), ungroup (Ctrl+Shift+G).
 - [x] Macros (the application layer first): rack parameters mapped to (device, param, range) targets.
+  - [x] 4 by default, 1 to 16 (+ and − at the rack's left), named by the user
+        (project version 18: `macro_names`).
+  - [x] Automated: lanes of the rack; the bridge plays each mapped parameter along
+        its macro's envelope over its range (the engine has no macros).
 - [x] Rack presets: the save button saves a rack (chains, nested devices,
       plug-in state, macros) as a `.gilpreset`; right-click beside the devices to load one.
   - [x] The browser's Presets section (see "Device presets" below) lists them too.
-  - [ ] Maybe: macros' ranges edited in the UI (the menu maps the full range).
+  - [x] Macros' ranges edited in the UI (a macro's Edit Mappings…: Min, Max, Invert, Unmap).
 
 Tests
 - [x] Parallel chains sum correctly; chain mute/solo.

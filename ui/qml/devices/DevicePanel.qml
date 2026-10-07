@@ -27,7 +27,8 @@ import SUBstation
 // Clicking beside the devices deselects them but keeps the focus here (Ctrl+V
 // pastes into this track); right-click there to paste or load a preset file
 // at that place. The device, sidechain, chain and macro menus and the dialogs
-// (Save Preset, replacing one, the preset files) are the panel's own.
+// (Save Preset, replacing one, the preset files, a macro's mappings) are the
+// panel's own.
 Rectangle {
     id: panel
 
@@ -41,6 +42,7 @@ Rectangle {
     readonly property alias loadMarker: loadMarker
     readonly property alias presetNameDialog: nameDialog
     readonly property alias presetReplaceDialog: replaceDialog
+    readonly property alias macroMappings: macroMappings
     readonly property int panelMargin: 8  // PANEL_MARGIN: above and below the chain
     // The tallest device: its border, a title bar, a page of knobs in two rows
     // with 6 px above and below them (a body's margins: its content is as far
@@ -48,13 +50,26 @@ Rectangle {
     // an editor's graphs take the height there is.
     readonly property int deviceHeight: 2 + Math.max(16, titleMetrics.height) + 4 + 6 + 2 * probe.implicitHeight + 6 + 6
 
-    // Ctrl+R on a rack's chain: its name edited in place (false: it isn't shown).
+    // Ctrl+R on a rack's chain: its name edited in place, its rack's chain list
+    // shown first if it is hidden (false: the rack isn't shown, or is folded).
     function startChainRename(rackId, chainId) {
         const row = area.chainRowOf(rackId, chainId)
-        if (!row)
+        if (row) {
+            area.scrollTo(rackId)
+            row.startRename()
+            return true
+        }
+        const rack = area.frameOf(rackId)
+        if (!rack || rack.info.folded || rack.info.chainListShown)
             return false
-        area.scrollTo(rackId)
-        row.startRename()
+        Session.deviceSelection.toggleChainList(rackId)  // (its rows are made: rename once they are)
+        Qt.callLater(() => {
+            const shown = area.chainRowOf(rackId, chainId)
+            if (shown) {
+                area.scrollTo(rackId)
+                shown.startRename()
+            }
+        })
         return true
     }
 
@@ -68,9 +83,9 @@ Rectangle {
     // --- Menus ---------------------------------------------------------------------------------
 
     // A device's right-click menu: its own entries (a plug-in's editor and VST3
-    // presets, a rack's Add Chain, an editor's), Fold, the clipboard's (for the
-    // selected devices), Move Left and Right, presets, Group and Ungroup,
-    // Delete.
+    // presets, a rack's Add Chain and what it shows, an editor's), Fold, the
+    // clipboard's (for the selected devices), Move Left and Right, presets,
+    // Group and Ungroup, Delete.
     function showDeviceMenu(frame, at, x, y) {
         const id = frame.deviceId
         const trackId = frame.trackId
@@ -84,7 +99,14 @@ Rectangle {
             menu.separator()
         }
         if (info.isRack) {
-            menu.entry(qsTr("Add Chain"), () => Session.editor.tryAddRackChain(trackId, id))
+            menu.entry(qsTr("Add Chain"), () => {
+                if (Session.editor.tryAddRackChain(trackId, id) !== "")
+                    Session.editor.setChainListShown(trackId, id, true)  // (where it shows)
+            })
+            menu.entry(info.chainListShown ? qsTr("Hide Chain List") : qsTr("Show Chain List"),
+                       () => devices.toggleChainList(id))
+            menu.entry(info.rackDevicesShown ? qsTr("Hide Devices") : qsTr("Show Devices"),
+                       () => devices.toggleRackDevices(id))
             menu.separator()
         }
         const body = frame.body
@@ -166,17 +188,36 @@ Rectangle {
         menu.popup(row, x, y)
     }
 
-    // A macro's menu: what it moves, to unmap.
-    function showMacroMenu(macro, at, x, y) {
+    // A macro's menu (`cell`: its RackMacroKnob): its automation, Rename, Edit
+    // Mappings… (the ranges), what it moves (to unmap), and adding a macro or
+    // taking the last away.
+    function showMacroMenu(cell, at, x, y) {
+        const macro = cell.macro
         const trackId = macro.trackId
         const rackId = macro.rackId
+        let renaming = false
         menu.reset()
+        menu.entry(qsTr("Show Automation"), () => macro.showAutomation(), undefined, macro.canAutomate())
+        menu.entry(qsTr("Delete Automation"), () => macro.deleteAutomation(), undefined, macro.hasEnvelope())
+        if (macro.isOverridden())
+            menu.entry(qsTr("Re-Enable Automation"), () => macro.reEnableAutomation())
+        menu.separator()
+        menu.entry(qsTr("Rename"), () => renaming = true)
+        menu.entry(qsTr("Edit Mappings…"), () => macroMappings.show(macro, cell), undefined, macro.mapped)
+        menu.separator()
         const entries = macro.unmapEntries()
         if (entries.length === 0)
             menu.entry(qsTr("Nothing mapped (right-click a parameter in the rack to map it)"), () => {}, undefined, false)
         for (let i = 0; i < entries.length; ++i) {
             const entry = entries[i]
             menu.entry(entry.text, () => Session.editor.unmapMacro(trackId, rackId, entry.deviceId, entry.paramId))
+        }
+        menu.separator()
+        menu.entry(qsTr("Add Macro"), () => macro.addMacro(), undefined, macro.canAddMacro())
+        menu.entry(qsTr("Remove Last Macro"), () => macro.removeLastMacro(), undefined, macro.canRemoveMacro())
+        menu.afterClose = () => {
+            if (renaming)
+                cell.startRename()
         }
         menu.popup(at, x, y)
     }
@@ -351,6 +392,10 @@ Rectangle {
     PanelMenu {
         id: menu
         objectName: "panelMenu"
+    }
+
+    RackMacroMappings {
+        id: macroMappings
     }
 
     Dialog {

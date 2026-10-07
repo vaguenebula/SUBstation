@@ -1,7 +1,8 @@
 // Racks through the editor: grouping devices (Ctrl+G) and ungrouping, chains
 // and their mixers, devices moving into and out of racks, nesting limits,
-// instrument racks, macros, sidechains into devices in racks, saving, and
-// presets loading as new devices.
+// instrument racks, macros (how many, their names, their ranges), sidechains
+// into devices in racks and taken after them, saving, presets loading as new
+// devices, and showing a rack's chain list and its devices.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"
@@ -71,9 +72,11 @@ private Q_SLOTS:
         QCOMPARE(ids(rack.chains[0].devices), (QStringList{b, c}));
         QCOMPARE(rack.chains[0].name, QStringLiteral("Utility"));
         QCOMPARE(deviceName(rack), QStringLiteral("Audio Effect Rack"));
-        QMap<QString, double> macros;
-        for (int i = 0; i < 8; ++i) macros.insert(macroParam(i), 0.0);
+        QMap<QString, double> macros;  // four, at 0
+        for (int i = 0; i < kDefaultMacroCount; ++i) macros.insert(macroParam(i), 0.0);
         QCOMPARE(rack.params, macros);
+        QCOMPARE(macroCount(rack), 4);
+        QCOMPARE(macroName(rack, 0), QStringLiteral("Macro 1"));
         // Nested devices are the track's: found wherever they are, their automation still theirs.
         QCOMPARE(&p.device(track, c), &rack.chains[0].devices[1]);
         QCOMPARE(devicePath(devices, c), std::optional<std::vector<int>>(std::vector<int>{1, 0, 1}));
@@ -259,6 +262,112 @@ private Q_SLOTS:
         QCOMPARE(p.device(track, rack).macros.size(), size_t(2));
     }
 
+    void addingAndTakingAwayMacros() {
+        EditorFixture f;
+        Project& p = f.project;
+        const QString track = f.editor.addAudioTrack();
+        const QStringList ab = utilities(f, track, 2);
+        const QString a = ab[0], b = ab[1];
+        const QString rack = f.editor.groupDevices(track, {a, b});
+        f.editor.setMacroCount(track, rack, 6);
+        QCOMPARE(f.stack.undoText(), QStringLiteral("Add Macro"));
+        QCOMPARE(macroCount(p.device(track, rack)), 6);
+        QCOMPARE(p.device(track, rack).params.value(macroParam(5), -1.0), 0.0);
+        f.editor.mapMacro(track, rack, 5, a, "gain");
+        f.editor.mapMacro(track, rack, 1, b, "gain");
+        f.editor.setMacro(track, rack, 5, 0.5);
+        f.editor.setEnvelope(track, autom::deviceKey(rack, macroParam(5)), env({{0.0, 0.25}}));
+        f.editor.setEnvelope(track, autom::deviceKey(rack, macroParam(1)), env({{0.0, 0.75}}));
+        const int steps = f.stack.count();
+        // The last ones go, with their values, mappings and automation: one step.
+        f.editor.setMacroCount(track, rack, 3);
+        QCOMPARE(f.stack.count(), steps + 1);
+        QCOMPARE(f.stack.undoText(), QStringLiteral("Remove Macro"));
+        const Device& fewer = p.device(track, rack);
+        QCOMPARE(macroCount(fewer), 3);
+        QVERIFY(!fewer.params.contains(macroParam(5)) && !fewer.params.contains(macroParam(3)));
+        QVERIFY((fewer.macros == std::vector<MacroMapping>{{1, b, "gain", 0.0, 1.0}}));
+        QVERIFY(p.envelope(track, autom::deviceKey(rack, macroParam(5))).empty());
+        QVERIFY(!p.envelope(track, autom::deviceKey(rack, macroParam(1))).empty());
+        QVERIFY(!f.editor.tryMapMacro(track, rack, 4, a, "gain"));  // (no such macro now)
+        f.stack.undo();
+        QCOMPARE(macroCount(p.device(track, rack)), 6);
+        QCOMPARE(p.device(track, rack).params.value(macroParam(5)), 0.5);
+        QCOMPARE(p.device(track, rack).macros.size(), size_t(2));
+        QVERIFY(!p.envelope(track, autom::deviceKey(rack, macroParam(5))).empty());
+        // One to sixteen.
+        f.editor.setMacroCount(track, rack, 0);
+        QCOMPARE(macroCount(p.device(track, rack)), 1);
+        f.editor.setMacroCount(track, rack, 40);
+        QCOMPARE(macroCount(p.device(track, rack)), kMaxMacroCount);
+        f.editor.setMacroCount(track, a, 2);  // (not a rack: nothing)
+        QCOMPARE(macroCount(p.device(track, a)), 0);
+    }
+
+    void renamingMacros() {
+        EditorFixture f;
+        Project& p = f.project;
+        const QString track = f.editor.addAudioTrack();
+        const QString rack = f.editor.groupDevices(track, utilities(f, track, 1));
+        f.editor.renameMacro(track, rack, 1, "  Drive ");
+        QCOMPARE(f.stack.undoText(), QStringLiteral("Rename Macro"));
+        QCOMPARE(macroName(p.device(track, rack), 1), QStringLiteral("Drive"));
+        QCOMPARE(macroName(p.device(track, rack), 0), QStringLiteral("Macro 1"));
+        const int steps = f.stack.count();
+        f.editor.renameMacro(track, rack, 1, "Drive");  // (the same: no step)
+        f.editor.renameMacro(track, rack, 7, "Nothing");  // (no such macro)
+        QCOMPARE(f.stack.count(), steps);
+        f.editor.renameMacro(track, rack, 1, "Macro 2");  // by its number again
+        QCOMPARE(p.device(track, rack).macroNames[1], QString());
+        f.stack.undo();
+        QCOMPARE(macroName(p.device(track, rack), 1), QStringLiteral("Drive"));
+        f.editor.renameMacro(track, rack, 1, "");
+        QCOMPARE(macroName(p.device(track, rack), 1), QStringLiteral("Macro 2"));
+        // Its name goes with the rack: in a preset (and a copy).
+        f.editor.renameMacro(track, rack, 2, "Space");
+        const std::vector<Device> copied = f.editor.copyDevices(track, {rack});
+        QCOMPARE(macroName(copied.front(), 2), QStringLiteral("Space"));
+    }
+
+    void macroRanges() {
+        // A mapped parameter moves over part of its range, or the other way round,
+        // and goes where its macro puts it in the new one.
+        EditorFixture f;
+        Project& p = f.project;
+        const QString track = f.editor.addAudioTrack();
+        const QStringList ab = utilities(f, track, 2);
+        const QString a = ab[0], b = ab[1];
+        const QString rack = f.editor.groupDevices(track, {a, b});
+        f.editor.mapMacro(track, rack, 0, a, "width");  // 0..200 %
+        f.editor.setMacro(track, rack, 0, 1.0);
+        QVERIFY(near(p.device(track, a).params.value("width"), 200.0));
+        const int steps = f.stack.count();
+        f.editor.setMacroRange(track, rack, a, "width", 0.0, 0.75, "drag");
+        f.editor.setMacroRange(track, rack, a, "width", 0.0, 0.5, "drag");  // one gesture: one step
+        QCOMPARE(f.stack.count(), steps + 1);
+        QCOMPARE(f.stack.undoText(), QStringLiteral("Change Macro Range"));
+        QVERIFY((p.device(track, rack).macros == std::vector<MacroMapping>{{0, a, "width", 0.0, 0.5}}));
+        QVERIFY(near(p.device(track, a).params.value("width"), 100.0));  // where the macro puts it now
+        f.editor.setMacroRange(track, rack, a, "width", 1.0, 0.0);  // 100 to 0: the other way round
+        QVERIFY(near(p.device(track, a).params.value("width"), 0.0));
+        f.editor.setMacro(track, rack, 0, 0.25);
+        QVERIFY(near(p.device(track, a).params.value("width"), 150.0));
+        f.editor.setMacroRange(track, rack, a, "width", 0.5, 1.0);  // 50 to 100
+        QVERIFY(near(p.device(track, a).params.value("width"), 125.0));
+        f.editor.setMacroRange(track, rack, a, "width", -1.0, 3.0);  // (held to the parameter's range)
+        QVERIFY((p.device(track, rack).macros == std::vector<MacroMapping>{{0, a, "width", 0.0, 1.0}}));
+        f.stack.undo();
+        f.stack.undo();
+        f.stack.undo();
+        f.stack.undo();
+        f.stack.undo();
+        QVERIFY((p.device(track, rack).macros == std::vector<MacroMapping>{{0, a, "width", 0.0, 1.0}}));
+        QVERIFY(near(p.device(track, a).params.value("width"), 200.0));
+        const int before = f.stack.count();
+        f.editor.setMacroRange(track, rack, b, "width", 0.0, 0.5);  // (not mapped: nothing)
+        QCOMPARE(f.stack.count(), before);
+    }
+
     void macrosOfPlugInsAskTheHooks() {
         // A plug-in's parameters: their mapping and their values come from the
         // engine bridge (setParamInfo, setOwnValue).
@@ -314,6 +423,42 @@ private Q_SLOTS:
         QVERIFY(p.device(bass, comp).sidechain == Sidechain{group});
         f.editor.deleteTracks({group});  // the source going takes it along
         QVERIFY(!p.device(bass, comp).sidechain && p.hasDevice(bass, rack));
+    }
+
+    void sidechainsTakenAfterADeviceInARack() {
+        EditorFixture f;
+        Project& p = f.project;
+        const QString kick = f.editor.addAudioTrack();
+        const QString bass = f.editor.addAudioTrack();
+        const QStringList ab = utilities(f, kick, 2);
+        const QString rack = f.editor.groupDevices(kick, {ab[0], ab[1]});
+        const QString comp = f.editor.addDevice(bass, "utility");
+        f.editor.setDeviceSidechain(bass, comp, Sidechain{kick, ab[1]});  // after a device in the kick's rack
+        QCOMPARE(p.device(bass, comp).sidechain->tapDevice(), std::optional<QString>(ab[1]));
+        QVERIFY_THROWS_EXCEPTION(EditError, f.editor.setDeviceSidechain(bass, comp, Sidechain{kick, comp}));
+        f.editor.setDeviceSidechain(bass, comp, Sidechain{kick, rack});  // after the rack
+        QCOMPARE(p.device(bass, comp).sidechain->tap, rack);
+    }
+
+    void showingAChainListAndARacksDevices() {
+        // View state: saved, not undone.
+        EditorFixture f;
+        Project& p = f.project;
+        const QString track = f.editor.addAudioTrack();
+        const QString rack = f.editor.groupDevices(track, utilities(f, track, 1));
+        QVERIFY(!p.isChainListShown(rack) && p.areRackDevicesShown(rack));  // by default
+        QSignalSpy viewChanged(&p, &Project::rackViewChanged);
+        const int steps = f.stack.count();
+        f.editor.setChainListShown(track, rack, true);
+        f.editor.setRackDevicesShown(track, rack, false);
+        QVERIFY(p.isChainListShown(rack) && !p.areRackDevicesShown(rack));
+        QCOMPARE(viewChanged.count(), 2);
+        QCOMPARE(viewChanged.first().first().toString(), track);
+        QCOMPARE(f.stack.count(), steps);
+        f.editor.setChainListShown(track, rack, true);  // (as it is: no signal)
+        QCOMPARE(viewChanged.count(), 2);
+        f.editor.setChainListShown(track, utilities(f, track, 1)[0], true);  // (not a rack)
+        QCOMPARE(viewChanged.count(), 2);
     }
 
     void racksAreSavedAndLoaded() {

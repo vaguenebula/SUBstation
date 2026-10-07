@@ -3,8 +3,8 @@
 // built-in device, or a plug-in of any format.
 //
 // A ParamSpec describes one: its name, range, units and how its values read.
-// (A rack's chains' faders are its parameters, as far as automation goes:
-// chainSpecs.) It maps plain values (in the parameter's own units) to and from
+// (A rack's macros and its chains' faders are its parameters, as far as
+// automation goes: macroSpecs, chainSpecs.) It maps plain values (in the parameter's own units) to and from
 // normalized ones (0..1), which is how automation stores them. Device
 // parameters come from the engine's ParamInfo (ParamSpec::fromInfo) and map as
 // it does; the mixer's controls (volume, pan and sends) are described here
@@ -68,6 +68,8 @@ struct ParamSpec {
 std::vector<ParamSpec> mixerSpecs(bool master = false, const std::vector<std::pair<QString, QString>>& sends = {});
 // A send's level to a return (lettered as it shows), automated as a volume is.
 ParamSpec sendSpec(const QString& returnId, const QString& letter);
+// A rack's macros (their names, in order): 0..1, shown in percent.
+std::vector<ParamSpec> macroSpecs(const QString& rackId, const QStringList& names, const QString& group);
 // A rack's chains' faders ((chain id, name) each): volume and pan, automated as a track's are.
 std::vector<ParamSpec> chainSpecs(const QString& rackId, const std::vector<std::pair<QString, QString>>& chains,
                                   const QString& group);

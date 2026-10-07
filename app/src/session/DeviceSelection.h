@@ -8,8 +8,10 @@
 //
 // The device view shows the selected track's chain (Selection::trackId(): a
 // track, a return or the master; trackId() here, "" for none), and after each
-// rack, unless it is folded, the chain it shows (the one last clicked in its
-// chain list: shownChain(), else its first), and so on inside: shownDevices().
+// rack, unless it is folded or hides its devices, the chain it shows (the one
+// last clicked in its chain list: shownChain(), else its first), and so on
+// inside: shownDevices(). A rack's chain list shows only when asked for
+// (toggleChainList()), its devices unless hidden (toggleRackDevices()).
 // A frozen track (or one in a frozen group) shows none (hint()).
 //
 // Selecting (selectDevice): a click selects a device, Ctrl adds or removes it,
@@ -109,8 +111,9 @@ public:
     // A click beside the devices: none selected, and the device view has the
     // focus (Ctrl+V pastes there).
     Q_INVOKABLE void clickBeside();
-    // A rack's chain clicked in its chain list: shown beside it, and the one
-    // Ctrl+R renames; the device view has the focus.
+    // A rack's chain clicked in its chain list: shown beside it (its devices
+    // showing again if hidden), and the one Ctrl+R renames; the device view has
+    // the focus.
     Q_INVOKABLE void clickChain(const QString& rackId, const QString& chainId);
     // The devices a drag starting on this device moves: the selected ones (if
     // it is one of them), else it; not instruments (they stay first).
@@ -131,6 +134,9 @@ public:
     Q_INVOKABLE void ungroupRack(const QString& rackId);
     // Fold or unfold a device; when it is one of several selected, they all take its new state.
     Q_INVOKABLE void toggleFold(const QString& deviceId);
+    // Show or hide a rack's chain list; its chain's devices beside it (view state).
+    Q_INVOKABLE void toggleChainList(const QString& rackId);
+    Q_INVOKABLE void toggleRackDevices(const QString& rackId);
     // Ctrl+C: the selected devices (plug-ins as they are now). False if none were selected.
     Q_INVOKABLE bool copySelected();
     // Ctrl+X: copied, then deleted. False if none were selected.

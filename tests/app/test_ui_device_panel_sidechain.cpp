@@ -4,8 +4,8 @@
 // it is taken; its menu lists the tracks, groups and returns it can come from
 // (greyed out where that would close a cycle) and where it is taken, along the
 // source's signal as in Ableton: Pre FX (before its devices; after a MIDI
-// track's instrument), after one of its devices, Post FX (before its fader) or
-// Post Mixer (after it). The master's devices take any track. Built-in devices
+// track's instrument), after one of its devices (in its racks too), Post FX
+// (before its fader) or Post Mixer (after it). The master's devices take any track. Built-in devices
 // with a sidechain input (the Compressor, the Sidechain device, whose hint over
 // its curve opens the menu) have the button too. Driven in a window with a real
 // session and the test plug-ins, with synthesized mouse events.
@@ -161,6 +161,40 @@ private Q_SLOTS:
         QVERIFY(ui_.closeMenu());
         QCOMPARE(tip(keyed), QStringLiteral("Sidechain: Keys, Pre FX"));
         ui_.screenshot(QStringLiteral("sidechain-lit"));
+    }
+
+    void tapsAfterDevicesInRacks() {
+        // Along the source's signal: a rack's chains' devices (named by the rack,
+        // and the chain if it has several), then the rack itself.
+        const QString kick = editor().addAudioTrack(-1, QStringLiteral("Kick"));
+        const QString first = editor().addDevice(kick, QStringLiteral("utility"));
+        const QString second = editor().addDevice(kick, QStringLiteral("compressor"));
+        const QString rack = editor().groupDevices(kick, {first, second});
+        editor().renameRack(kick, rack, QStringLiteral("Glue"));
+        editor().addDevice(kick, QStringLiteral("utility"));  // after the rack
+        const QString bass = editor().addAudioTrack(-1, QStringLiteral("Bass"));
+        session().selection()->selectTrack(bass);
+        const QString keyed = editor().addDevice(bass, QStringLiteral("compressor"));
+        editor().setDeviceSidechain(bass, keyed, Sidechain{kick});
+        QStringList entries = openMenu(keyed);
+        QCOMPARE(entries.mid(entries.indexOf(QStringLiteral("Pre FX"))),
+                 (QStringList{"Pre FX", "After Glue › Utility", "After Glue › Compressor", "After Glue",
+                              "After Utility", "Post FX", "Post Mixer"}));
+        QVERIFY(ui_.choose(QStringLiteral("After Glue › Compressor")));
+        QCOMPARE(project().device(bass, keyed).sidechain, (Sidechain{kick, second}));
+        QCOMPARE(tip(keyed), QStringLiteral("Sidechain: Kick, After Glue › Compressor"));
+        // With several chains, the chain's name too.
+        const QString wet = editor().addRackChain(kick, rack, -1, QStringLiteral("Wet"));
+        editor().addDevice(kick, QStringLiteral("utility"), -1, wet);
+        entries = openMenu(keyed);
+        const QString dry = project().device(kick, rack).chains.front().name;
+        QVERIFY(entries.contains(QStringLiteral("After Glue › %1 › Compressor").arg(dry)));
+        QVERIFY(entries.contains(QStringLiteral("After Glue › Wet › Utility")));
+        QVERIFY(checked(QStringLiteral("After Glue › %1 › Compressor").arg(dry)));
+        QVERIFY(ui_.closeMenu());
+        // The device out of the source: before its fader.
+        editor().removeDevice(kick, second);
+        QCOMPARE(tip(keyed), QStringLiteral("Sidechain: Kick, Post FX"));
     }
 
     void theMastersDevicesTakeAnyTrack() {

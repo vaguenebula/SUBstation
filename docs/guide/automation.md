@@ -2,8 +2,10 @@
 
 Automation works as in Ableton's arrangement, for every device parameter (built-in
 devices and plug-ins alike), for each track's and the master's volume and pan, for send
-levels, and for rack chains' volume and pan. This page covers showing lanes, editing
-envelopes, Lock Envelopes, and overriding automation by hand.
+levels, for rack chains' volume and pan, and for racks' macros (which move what is
+mapped to them along their automation: see [devices.md](devices.md#macros)). This page
+covers showing lanes, editing envelopes, Lock Envelopes, and overriding automation by
+hand.
 
 ## Showing automation
 
@@ -20,7 +22,7 @@ envelopes, Lock Envelopes, and overriding automation by hand.
 - Clicking a parameter (a knob, list or name in the device view, or a control in a
   plug-in's own editor) or changing one by hand (also a track's volume or pan, or the
   master's) shows its track's automation with that parameter.
-- Right-click a send knob, or a rack chain, to show its automation.
+- Right-click a send knob, a rack chain or a macro to show its automation.
 - Folded tracks don't show their automation (see
   [arrangement.md](arrangement.md#folding)).
 
