@@ -96,6 +96,7 @@ private:
 
 struct SoundIndexStatus {
     bool busy = false;          // reading the saved fingerprints, taking the library, analysing or checking files
+    bool analysing = false;     // files wait to be analysed or checked, or are (the library taken)
     uint64_t library = 0;       // the library's files
     uint64_t analysed = 0;      // of them, with a fingerprint
     uint64_t failed = 0;        // of them, that couldn't be analysed (not decodable, silent)
@@ -110,6 +111,7 @@ struct SoundIndexStatus {
 struct SoundIndexOptions {
     std::string store;          // where fingerprints are saved (UTF-8; "" for nowhere)
     unsigned threads = 0;       // analysers; 0: a quarter of the cores, one to four
+    bool analyse = true;        // analyse the library (off: only the sounds searched from; tests)
     bool background = true;     // analysers and keeper at background priority (tests turn it off)
     AspectWeights weights;      // how much each aspect counts in searches
     double saveDelaySeconds = 10.0;
@@ -193,6 +195,7 @@ private:
     void wakeForProgress();
 
     SoundIndexOptions options_;
+    unsigned analysers_ = 0;
 
     std::mutex wakeMutex_;
     std::function<void()> wakeCallback_;

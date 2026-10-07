@@ -26,6 +26,7 @@
 #include "browser/BrowserController.h"
 #include "browser/BrowserMime.h"
 #include "browser/ItemListModel.h"
+#include "intelligence/SoundSimilarity.h"
 #include "editor/ProjectEditor.h"
 #include "mainwindow/FolderTreeModel.h"
 #include "model/Project.h"
@@ -120,7 +121,7 @@ private Q_SLOTS:
         notes.close();
         QSettings().setValue(QStringLiteral("browser/places"), QStringList{place()});
         sub::ui::setUpApplication();
-        ui_ = std::make_unique<test::UiSession>();
+        ui_ = std::make_unique<test::UiSession>(true);  // (its sounds analysed: the place is the test's own)
         connect(&ui_->qml(), &QQmlEngine::warnings, this, [this](const QList<QQmlError>& list) { warnings_ += list; });
         window_ = ui_->show(kWindow);
         QVERIFY(window_);
@@ -442,6 +443,34 @@ private Q_SLOTS:
 
     // The menus: the sidebar's (a place: Remove from Places; Add Folder… asks
     // which); a preset's (Rename… in place, Delete after asking).
+    // Find Similar Sounds (an audio file's menu): the sounds most like it, most
+    // similar first, under a bar saying like what; its ✕ goes back to the list.
+    void findSimilarSounds() {
+        auto* similarity = session().similarity();
+        QTRY_VERIFY_WITH_TIMEOUT(!similarity->analysing() && similarity->analysedFiles() == 3, 20000);
+        QVERIFY(!item("similarBar")->isVisible());
+        const int row = static_cast<int>(names().indexOf(QStringLiteral("Kick Deep.wav")));
+        QVERIFY(row >= 0);
+        QCOMPARE(browser().resultActions(row).first().toMap().value(QStringLiteral("label")).toString(),
+                 QStringLiteral("Find Similar Sounds"));
+        QVERIFY(QMetaObject::invokeMethod(panel_, "runResultAction", Q_ARG(QVariant, QStringLiteral("findSimilar")),
+                                          Q_ARG(QVariant, row)));
+        QVERIFY(settle());
+        QTRY_VERIFY(item("similarBar")->isVisible());
+        QCOMPARE(item("similarLabel")->property("text").toString(), QStringLiteral("Similar to Kick Deep.wav"));
+        QCOMPARE(results().total(), 3);
+        QCOMPARE(names().first(), QStringLiteral("Kick Deep.wav"));
+        QCOMPARE(browser().sort(), QStringLiteral("similar"));
+        QCOMPARE(item("sort")->property("chosenIndex").toInt(), 0);  // Similarity, first while it shows
+        QCOMPARE(item("browserStatus")->property("text").toString(), QStringLiteral("3 sounds like Kick Deep.wav"));
+        test::screenshot(window_, QStringLiteral("browser-similar"), QRect(0, 0, 400, window_->height()));
+        test::click(window_, test::centerOf(item("clearSimilar")));
+        QTRY_VERIFY(!item("similarBar")->isVisible());
+        QCOMPARE(browser().sort(), QStringLiteral("rank"));
+        QVERIFY(settle());
+        QCOMPARE(results().total(), 3);
+    }
+
     void menusPlacesAndPresets() {
         QVariantList actions = browser().sidebarActions({QStringLiteral("place"), place()});
         QCOMPARE(actions.first().toMap().value(QStringLiteral("action")).toString(), QStringLiteral("removePlace"));

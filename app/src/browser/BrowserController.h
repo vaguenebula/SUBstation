@@ -30,11 +30,21 @@
 // place with no search text shows its folder tree instead (folderModel), and
 // results that arrive after the tree was shown are dropped.
 //
+// Find Similar (findSimilar(), from a result's menu or an audio clip's): the
+// list shows the library's sounds most like a file, or a clip's part of one,
+// by their similarity ("similar", the Similarity sort, shown only then; see
+// intelligence/SoundSimilarity.h). Search text and places filter it as they
+// do any list. While the library is still being analysed the list is searched
+// again every few seconds, keeping its place, as more sounds are analysed.
+// Choosing another sort, a sidebar entry that isn't samples, or clearSimilar()
+// ends it.
+//
 // Settings (QSettings): the places (browser/places; the first start has the
 // user's Music folder, or the home folder) and the sort (browser/sort).
 
 #include <QAbstractItemModel>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
@@ -51,6 +61,7 @@
 #include "browser/ItemListModel.h"
 #include "browser/Library.h"
 #include "browser/SidebarModel.h"
+#include "intelligence/SoundSimilarity.h"
 #include "plugins/PluginIndex.h"
 
 class QFileSystemModel;
@@ -60,8 +71,13 @@ namespace sub::app {
 class BrowserController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
-    Q_PROPERTY(QString sort READ sort WRITE setSort NOTIFY sortChanged)  // "rank" or "name"
-    Q_PROPERTY(QVariantList sorts READ sorts CONSTANT)                   // [{value, label}]
+    Q_PROPERTY(QString sort READ sort WRITE setSort NOTIFY sortChanged)  // "rank" or "name"; "similar" (Find Similar)
+    Q_PROPERTY(QVariantList sorts READ sorts NOTIFY sortsChanged)        // [{value, label}]
+    // Find Similar: the sound the list shows the sounds most like ("" when it
+    // doesn't), and its name.
+    Q_PROPERTY(QString similarTo READ similarTo NOTIFY similarChanged)
+    Q_PROPERTY(QString similarName READ similarName NOTIFY similarChanged)
+    Q_PROPERTY(bool canFindSimilar READ canFindSimilar CONSTANT)
     // The sidebar entry shown, as [kind] or [kind, sub] (see Scope). Setting
     // ["add"] asks the UI for a folder to add (addPlaceRequested) instead.
     Q_PROPERTY(QStringList scope READ scope WRITE setScope NOTIFY scopeChanged)
@@ -95,7 +111,12 @@ public:
         uint32_t maxFiles = FileIndex::kMaxFiles;
         uint32_t maxDepth = FileIndex::kMaxDepth;
         bool scanPlugins = true;  // scan the plug-ins when made (only new or changed files are read)
+        // What finds similar sounds (the session's; it analyses the files this
+        // index lists). Null: Find Similar isn't offered.
+        SoundSimilarity* similarity = nullptr;
     };
+
+    static constexpr int kRefineMs = 2000;  // while the library is analysed, how often a similar list is searched again
 
     // `plugins`: the plug-in index to list (shared with the preferences); null:
     // one of its own.
@@ -109,7 +130,7 @@ public:
     void setSearchText(const QString& text);
     QString sort() const { return sort_; }
     void setSort(const QString& sort);
-    QVariantList sorts() const { return sortOrders(); }
+    QVariantList sorts() const;
     QStringList scope() const { return scope_.toList(); }
     void setScope(const QStringList& scope);
     const Scope& currentScope() const { return scope_; }
@@ -132,6 +153,10 @@ public:
     int currentRow() const { return currentRow_; }
     // The list's current item changed: an audio file is previewed.
     void setCurrentRow(int row);
+    QString similarTo() const;
+    QString similarName() const;
+    bool canFindSimilar() const { return similarity_ != nullptr; }
+    SoundSimilarity* similarity() const { return similarity_; }
 
     Library& library() { return *library_; }
     FileIndex& index() { return *index_; }
@@ -175,6 +200,14 @@ public:
     // Ctrl+F: search everything ("All"); the UI focuses the field on searchFocusRequested.
     Q_INVOKABLE void focusSearch();
 
+    // --- Find Similar ---
+    // Shows the sounds most like the file at `path`, or its part from `start`
+    // seconds in, `length` seconds long (< 0: to its end): the Similarity sort,
+    // over the samples (or the place shown), the search text cleared.
+    Q_INVOKABLE void findSimilar(const QString& path, double start = 0.0, double length = -1.0);
+    // Back to the sort before.
+    Q_INVOKABLE void clearSimilar();
+
     // --- Presets ---
     // The presets to list (from the preset index), the devices they are for in
     // the order the sidebar lists them, and the library's folder.
@@ -196,8 +229,9 @@ public:
     // separator): "removePlace" for a place; "rescanPlugins" for Plug-ins;
     // "showPresetFolder" for Presets; then "addPlace" and "rescan" for all.
     Q_INVOKABLE QVariantList sidebarActions(const QStringList& scope) const;
-    // A result's actions (presets only): "renamePreset" (the UI asks for the
-    // name, then renamePreset()), "deletePreset", {}, "showInFolder".
+    // A result's actions: for a preset "renamePreset" (the UI asks for the
+    // name, then renamePreset()), "deletePreset", {}, "showInFolder"; for an
+    // audio file "findSimilar" (if offered), {}, "showInFolder".
     Q_INVOKABLE QVariantList resultActions(int row) const;
 
     // These items were used (added to the project) just now.
@@ -209,6 +243,8 @@ public:
 Q_SIGNALS:
     void searchTextChanged();
     void sortChanged();
+    void sortsChanged();
+    void similarChanged();
     void scopeChanged();
     void placesChanged();
     void showingTreeChanged();
@@ -260,6 +296,10 @@ private:
     QString presetsToolTip() const;
     void maybePreview(const QString& path);
     void savePlaces() const;
+    void similarFound(const SimilarSounds& result);
+    void similarProgress();
+    void leaveSimilar();
+    bool showsAudioOnly() const;
 
     QStringList places_;
     std::unique_ptr<Library> library_;
@@ -287,6 +327,19 @@ private:
     QString statusText_;
     QString scanText_;  // the plug-in scan's progress
     QString pluginsToolTip_;
+    // Find Similar: the sound, the latest search for it, and what it found.
+    struct Similar {
+        QString path;
+        double start = 0.0;
+        double length = -1.0;
+        uint64_t generation = 0;
+        SimilarSounds result;
+    };
+    QPointer<SoundSimilarity> similarity_;  // (the session's: it may go first when the session does)
+    std::optional<Similar> similar_;
+    QString sortBeforeSimilar_;
+    QTimer refineTimer_;
+    int refinedAt_ = -1;  // the analysed files when it was searched last
     std::vector<BrowserItem> presetItems_;
     QStringList presetGroups_;
     QString presetRoot_;

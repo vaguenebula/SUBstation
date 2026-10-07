@@ -4,6 +4,7 @@
 #include "arrangement/Cursors.h"
 #include "audio/AudioFiles.h"
 #include "audio/EngineBridge.h"
+#include "browser/BrowserController.h"
 #include "browser/BrowserMime.h"
 #include "editor/ProjectEditor.h"
 #include "model/Devices.h"
@@ -1081,6 +1082,20 @@ MenuEntries ArrangementLanes::contextMenu(const QPointF& pos) {
         MenuEntry& reverse = menu.add(QStringLiteral("Reverse"), [actions] { actions->reverseSelection(); });
         reverse.shortcut = QStringLiteral("R");
         reverse.enabled = actions->canReverse();
+        if (hit && hit->clip.isAudio()) {
+            // The browser lists the sounds most like the part of its file the clip plays.
+            app::BrowserController* browser = s->browser();
+            const app::Clip& clip = hit->clip;
+            const bool whole = clip.offsetSec <= 1e-6 &&
+                               (clip.sourceDurationSec <= 0.0 || clip.durationSec >= clip.sourceDurationSec - 1e-3);
+            const QString path = clip.path;
+            const double start = whole ? 0.0 : clip.offsetSec;
+            const double length = whole ? -1.0 : clip.durationSec;
+            menu.addSeparator();
+            MenuEntry& similar = menu.add(QStringLiteral("Find Similar Sounds"),
+                                          [browser, path, start, length] { browser->findSimilar(path, start, length); });
+            similar.enabled = browser->canFindSimilar() && !path.isEmpty();
+        }
         menu.addSeparator();
         menu.add(QStringLiteral("Delete"), [actions] { actions->deleteArea(); }).shortcut = QStringLiteral("Del");
         return menu;

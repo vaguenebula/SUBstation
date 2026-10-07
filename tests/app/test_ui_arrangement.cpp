@@ -23,6 +23,7 @@
 #include <memory>
 
 #include "ArrangementTestSupport.h"
+#include "browser/BrowserController.h"
 #include "browser/BrowserMime.h"
 #include "theme/Theme.h"
 #include "audio/EngineBridge.h"
@@ -1058,9 +1059,16 @@ private Q_SLOTS:
         QCOMPARE(menu.texts(),
                  (QStringList{QStringLiteral("Cut"), QStringLiteral("Copy"), QStringLiteral("Paste"), QString(),
                               QStringLiteral("Split Here"), QStringLiteral("Duplicate"), QStringLiteral("Consolidate"),
-                              QStringLiteral("Reverse"), QString(), QStringLiteral("Delete")}));
+                              QStringLiteral("Reverse"), QString(), QStringLiteral("Find Similar Sounds"), QString(),
+                              QStringLiteral("Delete")}));
         QCOMPARE(selection().clips(), refs({{trackId(0), clipOf(0).id}}));
         QCOMPARE(menu.find(QStringLiteral("Duplicate"))->shortcut, QStringLiteral("Ctrl+D"));
+        // Find Similar Sounds: the browser lists the sounds most like the clip's.
+        QVERIFY(menu.find(QStringLiteral("Find Similar Sounds"))->enabled);
+        QVERIFY(menu.triggerText(QStringLiteral("Find Similar Sounds")));
+        QCOMPARE(session().browser()->similarTo(), clipOf(0).path);
+        session().browser()->clearSimilar();
+        QCOMPARE(session().browser()->similarTo(), QString());
         QVERIFY(menu.triggerText(QStringLiteral("Split Here")));
         QCOMPARE(spans(trackId(0)), (std::vector<Span>{{0, 1}, {1, 4}}));
         // Copy (the area still selected: both pieces), then paste where the empty lane was right-clicked.

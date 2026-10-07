@@ -12,6 +12,8 @@
 //           matches, then the list's own order. With nothing used yet, a search
 //           lists the names that start with what you typed first.
 //   "name"  alphabetical.
+//   "similar"  the sounds most like one, the most similar first (only while
+//           the list shows them: BrowserController::findSimilar; files only).
 //
 // The list's own order: built-in devices, plug-ins (as the scan found them),
 // presets (by the device they are for, then by name), then samples by name.
@@ -35,7 +37,9 @@ inline constexpr int kPresetsGroup = 3;
 
 // The sort orders as (value, label): "rank" (Rank), "name" (Name).
 QVariantList sortOrders();
+// Whether a user can choose it: "rank" or "name" ("similar" comes with Find Similar).
 bool isSortOrder(const QString& sort);
+inline const QString kSimilarSort = QStringLiteral("similar");
 
 // A sidebar entry: what a list shows.
 //   ("all")                     everything: built-in devices, plug-ins, presets, samples

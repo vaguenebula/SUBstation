@@ -26,7 +26,7 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | [MIDI](guide/midi.md) | MIDI clips, the piano roll, MIDI input, the computer MIDI keyboard |
 | [Recording](guide/recording.md) | arming, inputs, monitoring, count-in, takes, resampling |
 | [Automation](guide/automation.md) | lanes, editing envelopes, locking, overrides |
-| [Browser](guide/browser.md) | places, search, preview, ranking |
+| [Browser](guide/browser.md) | places, search, preview, ranking, finding similar sounds |
 | [Audio setup](guide/audio-setup.md) | ASIO and WASAPI, sample rate, buffers, audio threads, MIDI inputs |
 | [Keyboard shortcuts](guide/shortcuts.md) | every shortcut |
 | [Limitations](guide/limitations.md) | what isn't implemented yet |
@@ -82,3 +82,11 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | Page | Covers |
 |---|---|
 | [Browser](browser.md) | the backend (`browser/src`) and its application side (`app/src/browser`), the panel |
+
+### Intelligence
+
+[intelligence/src](../intelligence/src), no Qt, and its application side in [app/src/intelligence](../app/src/intelligence).
+
+| Page | Covers |
+|---|---|
+| [Intelligence](intelligence.md) | sound similarity: the method and why, the fingerprint, comparing, the background index and its store, measurements; later MIDI generation, humanisation, chord recognition, an MCP server |

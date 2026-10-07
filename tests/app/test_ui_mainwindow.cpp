@@ -417,6 +417,13 @@ private Q_SLOTS:
         QVERIFY(!project().tracks()[0].solo);
         QMetaObject::invokeMethod(search, "clear");
         session().browser()->setSearchText(QString());
+        // Find Similar (from an audio clip's menu) shows it too.
+        key(Qt::Key_B, Qt::ControlModifier | Qt::AltModifier);
+        QVERIFY(!browser->isVisible());
+        session().browser()->findSimilar(QStringLiteral("C:/nowhere/kick.wav"));
+        QVERIFY(browser->isVisible());
+        session().browser()->clearSimilar();
+        session().browser()->setScope({QStringLiteral("all")});
         item(QStringLiteral("browser"))->setFocus(false);
         window_->contentItem()->forceActiveFocus();
 

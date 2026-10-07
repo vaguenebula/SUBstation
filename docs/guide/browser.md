@@ -31,7 +31,8 @@ The files listed are WAV, FLAC and MP3 files.
 
 ## Sorting
 
-Lists sort by *Rank* or *Name*, chosen next to the search field:
+Lists sort by *Rank* or *Name*, chosen next to the search field (and by *Similarity*
+while the list shows similar sounds: [below](#find-similar-sounds)):
 
 - *Rank* puts what you add most, and most recently, first, then the best name matches.
   With nothing used yet, a search lists the names that start with what you typed first.
@@ -40,6 +41,30 @@ Lists sort by *Rank* or *Name*, chosen next to the search field:
   `%LOCALAPPDATA%\SUBstation\library.json` (on Linux
   `~/.local/share/SUBstation/library.json`).
 - *Name* is alphabetical.
+
+## Find Similar Sounds
+
+- Right-click an audio file in the browser › *Find Similar Sounds*, or an audio clip in
+  the arrangement › *Find Similar Sounds*: the browser lists the sounds of your places
+  most like it, the most similar first (the *Similarity* sort). For a clip, it is the
+  part of the file the clip plays that counts: a kick cut out of a drum loop finds kicks.
+- A bar over the list says like what (its full path under the mouse); its ✕, choosing
+  *Rank* or *Name*, or a list that isn't samples (*All*, *Built-in*, *Plug-ins*,
+  *Presets*) goes back to the list as it was.
+- Typing filters the similar sounds and keeps their order: "808" for the 808s most like
+  your kick. Clicking a place lists only its similar sounds (not its folder tree).
+- The sound itself comes first when it is in your places. A sound from anywhere else (a
+  recording, a file in the project's folder) works too.
+- It compares how they sound: timbre, and how it moves from the attack to the tail;
+  brightness and noisiness; sub-bass and air; how fast it starts and how long it rings;
+  pitch, for tonal sounds; and whether it is a one-shot or a loop. Level doesn't matter.
+- Nothing needs indexing by hand: every file the browser finds is analysed in the
+  background (at low priority: playback is never held up), and only once; new and
+  changed files are analysed when they show up. A 5 000-file library takes about ten
+  seconds the first time. While the first analysis runs, Find Similar works with what is
+  analysed so far, the footer says how far it got, and the list fills in as it goes.
+- The analysis is kept in `%LOCALAPPDATA%\SUBstation\sound-index.bin` (on Linux
+  `~/.local/share/SUBstation/sound-index.bin`).
 
 ## Preview
 
@@ -67,7 +92,8 @@ on or off. A preview stops when you click anywhere outside the browser.
 - Drag a preset onto the device view or a track, or double-click it, to add it as a new
   device; drop it onto a device of its kind to load it into that device.
 - Right-click a preset › *Rename…*, *Delete* (to the Recycle Bin, or the trash on Linux,
-  after asking) or *Show in Folder*. Right-click *Presets* › *Show in Folder* opens the
+  after asking) or *Show in Folder*; an audio file › *Find Similar Sounds* or *Show in
+  Folder*. Right-click *Presets* › *Show in Folder* opens the
   library.
 
 ## The index

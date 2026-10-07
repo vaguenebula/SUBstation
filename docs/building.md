@@ -1,7 +1,7 @@
 # Building
 
-SUBstation is a C++20 program built with CMake: the real-time audio engine and the browser's backend are
-libraries with no Qt in them, the application layer is Qt Core and Qt Gui, and the UI is Qt Quick (QML).
+SUBstation is a C++20 program built with CMake: the real-time audio engine, the browser's backend and the
+intelligence module are libraries with no Qt in them, the application layer is Qt Core and Qt Gui, and the UI is Qt Quick (QML).
 [CMakeLists.txt](../CMakeLists.txt) and the `CMakeLists.txt` of each layer hold the whole build; what the layers
 are is in [architecture.md](architecture.md).
 
@@ -94,12 +94,13 @@ Pass them at configure time: `cmake -B build -DSUBSTATION_TEST_PLUGINS=OFF`.
 | `vst3_base`, `vst3_hosting` | static libraries | engine | The VST 3 SDK's interfaces and base library, and its host side (module loading: `module_win32.cpp` or `module_linux.cpp`). `vst3_hosting` is C++17 on purpose: as C++17 the module loader reads paths as UTF-8 (`u8path`); as C++20 it would use the ANSI code page on Windows, and plug-ins with non-ASCII paths would not load. |
 | `sub_engine` | static library | engine | The real-time engine ([engine/](../engine/CMakeLists.txt)): no Qt. On Windows it adds the WinMM MIDI backend, the plug-in editor windows and, with the SDK, ASIO; elsewhere a MIDI backend without devices and no editor windows. |
 | `sub_browser` | static library | browser | The browser's file index and search ([browser/](../browser/CMakeLists.txt)): no Qt; Win32 or POSIX platform layer. |
+| `sub_intelligence` | static library | intelligence | Sound similarity, and later more ([intelligence/](../intelligence/CMakeLists.txt)): no Qt, nothing of the engine or the browser; decodes through `miniaudio`; Win32 or POSIX platform layer. |
 | `substation-scan` | executable | tools | The VST3 scanner's child process ([tools/scanner](../tools/scanner/main.cpp)): links `sub_engine`, no Qt. |
-| `sub_app` | static library | app | The application layer ([app/](../app/CMakeLists.txt)): Qt Core and Gui, `sub_engine`, `sub_browser`. Built with `QT_NO_KEYWORDS` (public): it and everything on it write `Q_SIGNALS`, `Q_SLOTS`, `Q_EMIT`. |
+| `sub_app` | static library | app | The application layer ([app/](../app/CMakeLists.txt)): Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence`. Built with `QT_NO_KEYWORDS` (public): it and everything on it write `Q_SIGNALS`, `Q_SLOTS`, `Q_EMIT`. |
 | `sub_ui`, `sub_uiplugin` | static library + its QML plugin | ui | The QML module `SUBstation` ([ui/](../ui/CMakeLists.txt)): the QML files, the C++ Qt Quick items, the icons; and `SUBstation.Style`, the Qt Quick Controls style (`ui/style`). |
 | `substation` | executable | ui | [ui/main.cpp](../ui/main.cpp): makes the engine, the application's session on it, and the UI on that. |
 | `sub_test_plugins`, `sub_test_asio` | modules | tests | The test VST3 bundle and the fake ASIO driver ([testing.md](testing.md)). |
-| `engine_tests`, `test_*` | executables | tests | The tests. |
+| `engine_tests`, `intelligence_tests`, `test_*` | executables | tests | The tests. |
 
 With MSVC the project's own code builds with `/W4 /permissive- /utf-8 /Zc:__cplusplus`, with GCC and Clang with
 `-Wall -Wextra` ([cmake/Warnings.cmake](../cmake/Warnings.cmake)); third-party code builds without warnings.
@@ -108,8 +109,9 @@ With MSVC the project's own code builds with `/W4 /permissive- /utf-8 /Zc:__cplu
 
 `ctest -R boundaries` runs [cmake/CheckBoundaries.cmake](../cmake/CheckBoundaries.cmake), which fails if:
 
-- the engine (`engine/src`) or the browser backend (`browser/src`) includes anything of Qt, the application layer or
-  the UI;
+- the engine (`engine/src`), the browser backend (`browser/src`) or the intelligence module (`intelligence/src`)
+  includes anything of Qt, the application layer or the UI;
+- the intelligence module includes the engine's headers or the browser backend's;
 - the application layer (`app/src`) includes Qt Quick or QML (or the UI);
 - the UI (`ui/src`) includes the engine's headers: it talks to the application layer only.
 
@@ -143,7 +145,7 @@ Vendored in [engine/third_party](../engine/third_party), so nothing else needs i
 
 | Library | Version | Licence | What is used |
 |---|---|---|---|
-| [miniaudio](../engine/third_party/miniaudio) | 0.11.25 | public domain (Unlicense) or MIT No Attribution | WASAPI and the other systems' audio; decoding |
+| [miniaudio](../engine/third_party/miniaudio) | 0.11.25 | public domain (Unlicense) or MIT No Attribution | WASAPI and the other systems' audio; decoding (the engine's and the intelligence module's) |
 | [Signalsmith Stretch](../engine/third_party/signalsmith-stretch) | 1.3.2 | MIT | time stretching and pitch shifting (header-only) |
 | [Signalsmith Linear](../engine/third_party/signalsmith-linear) | 0.6.4 | MIT | its FFT (`stft.h`, `fft.h` only) |
 | [VST 3 SDK](../engine/third_party/vst3sdk) | 3.8.1 | MIT (since SDK 3.8) | `pluginterfaces`, `base`, `public.sdk/source/{common,main}` and `public.sdk/source/vst`, with the Windows and Linux module loaders; without VSTGUI, the SDK's tests and the wrappers |

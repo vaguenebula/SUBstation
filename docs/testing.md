@@ -1,8 +1,9 @@
 # Testing
 
-The tests are run by CTest. There are three kinds: the engine's tests, one Qt-free executable
-([tests/engine](../tests/engine)); the application layer's and the UI's tests, Qt Test, one executable per file
-([tests/app](../tests/app)); and the check of the layers' boundaries. They need no sound card and no installed
+The tests are run by CTest. There are four kinds: the engine's tests, one Qt-free executable
+([tests/engine](../tests/engine)); the intelligence module's, another ([tests/intelligence](../tests/intelligence));
+the application layer's and the UI's tests, Qt Test, one executable per file ([tests/app](../tests/app)); and the check
+of the layers' boundaries. They need no sound card and no installed
 plug-ins: the engine renders offline, small VST3 plug-ins (and, with the ASIO SDK, a fake ASIO driver) are built
 with the tests, and the UI tests drive the real QML views. Benchmarks live apart, in [benchmarks/](../benchmarks),
 and are not run by CTest.
@@ -19,7 +20,8 @@ ctest --test-dir build -R boundaries           # the layers' boundaries only
 ctest --test-dir build -N                      # list them without running
 ```
 
-CTest knows each test program as one test: `boundaries`, `engine` (all of `engine_tests`), and one per
+CTest knows each test program as one test: `boundaries`, `engine` (all of `engine_tests`), `intelligence` (all of
+`intelligence_tests`, which runs and filters as `engine_tests` does, with the same harness), and one per
 `tests/app/test_*.cpp`, by its name (`test_editor_racks`, `test_ui_arrangement`...). Each Qt Test program keeps its
 settings in a folder of its own (see [tests/app/support](#testsappsupport)), so `-j` is safe.
 
@@ -86,11 +88,14 @@ device editor, the windows they drive), to look at.
 
 ```
 tests/
-  CMakeLists.txt        the boundary check, engine_tests, and a program per tests/app/test_*.cpp
+  CMakeLists.txt        the boundary check, engine_tests, intelligence_tests, and a program per tests/app/test_*.cpp
   TestPlugins.cmake     the test VST3 bundle and, with the ASIO SDK, the fake ASIO driver
   engine/
     harness/            the engine tests' harness (no Qt)
     test_*.cpp          the engine's tests: engine_tests
+  intelligence/
+    Sounds.h            drum hits, tones and loops made from formulas, written as WAV files
+    test_*.cpp          the intelligence module's tests: intelligence_tests (the engine tests' harness)
   app/
     support/            what the application layer's and the UI's tests share (sub_app_test_support)
     test_*.cpp          a Qt Test program each; test_ui_* link the UI too
@@ -98,8 +103,9 @@ tests/
   asio_driver/          the fake ASIO driver (C++; Windows, with the ASIO SDK)
 ```
 
-Sources are globbed: a new `tests/engine/test_*.cpp` joins `engine_tests`, and a new `tests/app/test_*.cpp` is a new
-program, on the next configure (`ninja` checks the globs).
+Sources are globbed: a new `tests/engine/test_*.cpp` joins `engine_tests`, a new `tests/intelligence/test_*.cpp`
+joins `intelligence_tests`, and a new `tests/app/test_*.cpp` is a new program, on the next configure (`ninja` checks
+the globs).
 
 ### tests/engine/harness
 
@@ -124,11 +130,11 @@ Quick.
 
 | File | What it holds |
 |---|---|
-| [TestSupport.h](../tests/app/support/TestSupport.h) | `prepareApplication()`, called first (in `initTestCase`): the organization and application names are "SUBstation Tests", so tests never touch the user's settings; each program keeps its settings (INI) in a temporary folder of its own, cleared at start, so programs running side by side don't clear or change each other's; and the folders the application keeps things in are temporary ones for the run (`SUBSTATION_PRESETS`, `SUBSTATION_LIBRARY`, `SUBSTATION_BROWSER_INDEX`, `SUBSTATION_PLUGIN_CACHE`, `SUBSTATION_RECORDINGS`). `ScopedEnv` (an environment variable for as long as it lives), `TempDir`, `writeWav` (16-bit PCM, rounded half to even), `makeTrack`, `makeDevice`, `kSampleRate`. |
+| [TestSupport.h](../tests/app/support/TestSupport.h) | `prepareApplication()`, called first (in `initTestCase`): the organization and application names are "SUBstation Tests", so tests never touch the user's settings; each program keeps its settings (INI) in a temporary folder of its own, cleared at start, so programs running side by side don't clear or change each other's; and the folders the application keeps things in are temporary ones for the run (`SUBSTATION_PRESETS`, `SUBSTATION_LIBRARY`, `SUBSTATION_BROWSER_INDEX`, `SUBSTATION_SOUND_INDEX`, `SUBSTATION_PLUGIN_CACHE`, `SUBSTATION_RECORDINGS`). `ScopedEnv` (an environment variable for as long as it lives), `TempDir`, `writeWav` (16-bit PCM, rounded half to even), `makeTrack`, `makeDevice`, `kSampleRate`. |
 | [EditorFixture.h](../tests/app/support/EditorFixture.h) | `EditorFixture`: a project, its undo stack and a `ProjectEditor` on them, with what the editor refused collected (`messages`); `env()` (an envelope from points), `audioClip()`. |
 | [BridgeTestSupport.h](../tests/app/support/BridgeTestSupport.h) | `Studio`: a project, its undo stack, an engine without a device and the bridge between them, shut down when it goes; `Edits`: the editor's edits made as the editor makes them (the model's commands, in the same order); the test plug-ins as `PluginRef`s and `PluginInfo`s; `BridgeTestAccess`, the bridge's friend: plug-in reports injected as if the plug-ins had sent them, the plug-in loading timer stopped and stepped by hand, the meters polled, the bridge made busy. |
-| [SessionFixture.h](../tests/app/support/SessionFixture.h) | `SessionFixture`: an engine without a device (clips without fades, unless asked for) and a `Session` on it that scans no plug-ins and keeps no browser index; what it says (`messages`, `warnings`, `informations`) collected; `waitForRender`, `waitForSource`, `render` (offline), `level`, `clipTrack`. |
-| [UiTestSupport.h](../tests/app/support/UiTestSupport.h) | `UiSession`: a session on a fresh engine, registered as the QML `Session` singleton, and a QML engine set up for the UI's module; `show()` loads a window of QML and waits until it is exposed and active. Mouse, wheel and key input as a user sends it (`press`, `moveTo`, `release`, `click`, `doubleClick`, `drag`, `wheel`), `haveDisplay()`, `screenshot()`. |
+| [SessionFixture.h](../tests/app/support/SessionFixture.h) | `SessionFixture`: an engine without a device (clips without fades, unless asked for) and a `Session` on it that scans no plug-ins, keeps no browser index and analyses no sounds in the background (its browser lists the user's Music folder); what it says (`messages`, `warnings`, `informations`) collected; `waitForRender`, `waitForSource`, `render` (offline), `level`, `clipTrack`. |
+| [UiTestSupport.h](../tests/app/support/UiTestSupport.h) | `UiSession`: a session on a fresh engine, registered as the QML `Session` singleton, and a QML engine set up for the UI's module (analysing the browser's sounds only if asked: `UiSession(true)`, for a test with places of its own); `show()` loads a window of QML and waits until it is exposed and active. Mouse, wheel and key input as a user sends it (`press`, `moveTo`, `release`, `click`, `doubleClick`, `drag`, `wheel`), `haveDisplay()`, `screenshot()`. |
 | [ArrangementTestSupport.h](../tests/app/support/ArrangementTestSupport.h) | The arrangement view in a window on a `UiSession`; its items found by name, points in its lanes and headers, the menus its items work out, audio files to put in it. |
 | [DevicePanelTestSupport.h](../tests/app/support/DevicePanelTestSupport.h) | The device panel in a window as the main window places it; its parts found by object name or by device; its menus read and chosen from; drags from the browser (or along the chain) delivered as the platform delivers them. |
 | [BrowserReference.h](../tests/app/support/BrowserReference.h) | A plain, slower implementation of the browser's index and search, kept as the reference the native backend must agree with, item for item and in the same order (`test_browser_native`), and what `browser_backend_bench` checks every query against. |
@@ -140,6 +146,7 @@ Quick.
 | `SUBSTATION_PRESETS` | The preset library's folder instead of `Documents/SUBstation/Presets` (`libraryDir()`, [io/Presets.h](../app/src/io/Presets.h)) | a temporary folder (`prepareApplication`) |
 | `SUBSTATION_LIBRARY` | The browser's use counts (`library.json`) instead of the one in the local data folder ([browser/Library.h](../app/src/browser/Library.h)) | a temporary file |
 | `SUBSTATION_BROWSER_INDEX` | The browser's saved index (`browser-index.bin`) ([browser/FileIndex.h](../app/src/browser/FileIndex.h)) | a temporary file |
+| `SUBSTATION_SOUND_INDEX` | The sounds' saved fingerprints (`sound-index.bin`) ([intelligence/SoundSimilarity.h](../app/src/intelligence/SoundSimilarity.h)) | a temporary file |
 | `SUBSTATION_PLUGIN_CACHE` | The plug-in scan's cache (`vst3-cache.json`) (`pluginCachePath()`, [plugins/PluginPaths.h](../app/src/plugins/PluginPaths.h)) | a temporary file |
 | `SUBSTATION_VST3_PATH` | The folders searched for plug-ins instead of the standard VST3 folders, separated by the system's list separator (`;` on Windows, `:` elsewhere); empty: none | the scanner's, the browser's and the preferences' tests point it at folders of their own, so no test sees the installed plug-ins |
 | `SUBSTATION_RECORDINGS` | Where takes go for a project never saved, instead of `Music/SUBstation/Recordings` (`recordingsFolder()`, [audio/AudioFiles.h](../app/src/audio/AudioFiles.h)); frozen and reversed audio go into folders in it too | a temporary folder |
@@ -259,6 +266,13 @@ Rendered offline unless the file says otherwise; the live tests play through the
 | [test_resampling_engine.cpp](../tests/engine/test_resampling_engine.cpp) | Takes of a track's, group's, return's or the master's output equal to its render; monitoring a source isn't delayed; cycles. |
 | [test_parallel_live.cpp](../tests/engine/test_parallel_live.cpp) | The live recording, MIDI input and resampling tests again, with the tracks shared out among workers. |
 
+### The intelligence module ([tests/intelligence](../tests/intelligence), `intelligence_tests`)
+
+Qt-free, with the engine tests' harness (included as `harness/Test.h`: the harness folder itself is never an include
+folder, since its `Signal.h` would be found for `<signal.h>` where file names ignore case). The FFT against a direct
+DFT; decoding; what each aspect of a fingerprint tells apart, on drum hits and tones made from formulas; comparing; the
+store; the index's threads, saving and checking stamps, searches. See [intelligence.md](intelligence.md#tests).
+
 ### The model and the editor ([tests/app](../tests/app))
 
 | File | What it covers |
@@ -314,6 +328,7 @@ Rendered offline unless the file says otherwise; the live tests play through the
 | [test_browser_native.cpp](../tests/app/test_browser_native.cpp) | The browser backend against the reference (`BrowserReference`): the same files from a folder tree in the same order, the same results for random queries, sorts and use counts; the text rules (lower case, case folding, splitting into words) for every Unicode character; the saved index, changes while running, the latest search's results only, paging. See [browser.md](browser.md). |
 | [test_browser_search.cpp](../tests/app/test_browser_search.cpp) | Item keys, use counts (decay, `library.json`, unknown fields, bad files), match quality, rank. |
 | [test_browser_controller.cpp](../tests/app/test_browser_controller.cpp) | The browser's logic without its panel: places, searching, sorting, the sidebar, folder trees, activation and drops, previews, keeping the list's place, plug-ins and presets, drag payloads. |
+| [test_sound_similarity.cpp](../tests/app/test_sound_similarity.cpp) | Find Similar: the browser's files analysed in the background; the list of the sounds most like one, its sort and status, filtering it, ending it; a clip's part of a loop; a sound outside the library; files found later; a sound that can't be analysed. See [intelligence.md](intelligence.md). |
 | [test_plugin_index.cpp](../tests/app/test_plugin_index.cpp) | Scanning in child processes (a crashing or hanging plug-in costs only itself), the cache, finding plug-in files, friendly messages, the index scanning in the background over the standard and the user's folders. |
 | [test_sidechain_fit.cpp](../tests/app/test_sidechain_fit.cpp) | Fitting the Sidechain's curve to a kick: the clash, the envelope, the reduction, the points, capturing hits. |
 
@@ -369,7 +384,8 @@ Steinberg's ASIO SDK, which isn't redistributable, so the ASIO tests skip there.
 
 [benchmarks/](../benchmarks) holds the renderer's and the browser backend's benchmarks and their results:
 `parallel_render_bench` (render times on 1..N threads, offline and live through the fake ASIO driver, checked
-bit-identical; `--heavy N --compare-ordering` measures starting heavy tracks first) and `browser_backend_bench` (the
-backend on a large synthetic library, every query checked against `BrowserReference`). They are built with
+bit-identical; `--heavy N --compare-ordering` measures starting heavy tracks first), `browser_backend_bench` (the
+backend on a large synthetic library, every query checked against `BrowserReference`) and `sound_similarity_bench`
+(sound similarity on a real sample library: speed, and how often a one-shot's nearest sounds are of its kind). They are built with
 `-DSUBSTATION_BUILD_BENCHMARKS=ON`, into `build/bin`, and run by hand; CTest doesn't run them. How to run them, what
 they measure and the results are in [benchmarks/README.md](../benchmarks/README.md).

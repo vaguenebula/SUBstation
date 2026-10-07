@@ -38,7 +38,9 @@ inline bool haveDisplay() {
 // the UI's module. One per test program (the Session singleton is registered once).
 class UiSession {
 public:
-    UiSession() : engine_(std::make_unique<sub::Engine>()) {
+    // `analyseSounds`: fingerprint the browser's files for Find Similar (off
+    // unless a test sets places of its own: by default it lists the user's Music).
+    explicit UiSession(bool analyseSounds = false) : engine_(std::make_unique<sub::Engine>()) {
         // Qt Quick's own file dialogs, as on Linux: a native one (Windows) is
         // modal and out of the tests' reach.
         QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
@@ -49,6 +51,7 @@ public:
 #endif
         options.scanPlugins = false;
         options.browserIndex = false;
+        options.analyseSounds = analyseSounds;
         session_ = std::make_unique<Session>(*engine_, options);
         sub::ui::registerSession(session_.get());
         qml_ = std::make_unique<QQmlEngine>();

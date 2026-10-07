@@ -181,6 +181,16 @@ ApplicationWindow {
             showMessage(qsTr("Select a track, a rack chain or a preset to rename."))
     }
 
+    // Find Similar (from an audio clip's menu too): the browser shows the sounds.
+    Connections {
+        target: Session.browser
+
+        function onSimilarChanged() {
+            if (Session.browser.similarTo !== "")
+                browserAction.checked = true
+        }
+    }
+
     // Ctrl+F (from a plug-in's editor too): the browser shows, searching everything.
     function findInBrowser() {
         window.requestActivate()

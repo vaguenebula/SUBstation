@@ -76,6 +76,21 @@ BrowserController::BrowserController(PluginIndex* plugins, Options options, QObj
     searchTimer_.setInterval(0);
     connect(&searchTimer_, &QTimer::timeout, this, [this] { refresh(false); });
 
+    // Find Similar: the sounds analysed are this index's files.
+    similarity_ = options.similarity;
+    refineTimer_.setSingleShot(true);
+    refineTimer_.setInterval(kRefineMs);
+    if (similarity_) {
+        similarity_->setLibrary(index_);
+        connect(similarity_, &SoundSimilarity::found, this, &BrowserController::similarFound);
+        connect(similarity_, &SoundSimilarity::progressChanged, this, &BrowserController::similarProgress);
+        connect(&refineTimer_, &QTimer::timeout, this, [this] {
+            if (!similar_ || !similarity_) return;
+            refinedAt_ = similarity_->analysedFiles();
+            similar_->generation = similarity_->find(similar_->path, similar_->start, similar_->length);
+        });
+    }
+
     updatePluginsToolTip();
     index_->setPlaces(places_);
     buildSidebar();
@@ -100,11 +115,24 @@ void BrowserController::setSearchText(const QString& text) {
 }
 
 void BrowserController::setSort(const QString& sort) {
-    if (!isSortOrder(sort) || sort == sort_) return;
-    sort_ = sort;
-    QSettings().setValue(QString::fromLatin1(kSortKey), sort_);
-    Q_EMIT sortChanged();
+    if (!isSortOrder(sort)) return;  // ("similar" only comes with findSimilar())
+    const bool leaving = similar_.has_value();
+    if (leaving) leaveSimilar();
+    if (sort != sort_) {
+        sort_ = sort;
+        QSettings().setValue(QString::fromLatin1(kSortKey), sort_);
+        Q_EMIT sortChanged();
+    } else if (!leaving) {
+        return;
+    }
     refresh(false);
+}
+
+QVariantList BrowserController::sorts() const {
+    QVariantList list = sortOrders();
+    if (similar_)
+        list.prepend(QVariantMap{{QStringLiteral("value"), kSimilarSort}, {QStringLiteral("label"), QStringLiteral("Similarity")}});
+    return list;
 }
 
 void BrowserController::setScope(const QStringList& list) {
@@ -115,7 +143,12 @@ void BrowserController::setScope(const QStringList& list) {
     }
     if (scope == scope_ || sidebar_->find(scope) < 0) return;
     setScopeValue(scope);
+    if (similar_ && !showsAudioOnly()) leaveSimilar();  // (similar sounds are files: Samples or a place)
     refresh(false);
+}
+
+bool BrowserController::showsAudioOnly() const {
+    return scope_.kind == QStringLiteral("samples") || scope_.kind == QStringLiteral("place");
 }
 
 void BrowserController::setScopeValue(const Scope& scope) {
@@ -189,6 +222,7 @@ void BrowserController::buildSidebar(std::optional<Scope> select) {
     Scope target{QStringLiteral("samples"), {}};
     if (select && sidebar_->find(*select) >= 0) target = *select;
     setScopeValue(target);
+    if (similar_ && !showsAudioOnly()) leaveSimilar();
     refresh(false);
 }
 
@@ -359,17 +393,88 @@ QVariantList BrowserController::sidebarActions(const QStringList& list) const {
 
 QVariantList BrowserController::resultActions(int row) const {
     const BrowserItem* item = results_->item(row);
-    if (!item || item->kind != ItemKind::Preset) return {};
     auto action = [](const char* id, const QString& label) {
         return QVariantMap{{QStringLiteral("action"), QString::fromLatin1(id)}, {QStringLiteral("label"), label}};
     };
+    if (item && item->kind == ItemKind::Audio) {
+        QVariantList actions;
+        if (similarity_) actions << action("findSimilar", QStringLiteral("Find Similar Sounds")) << QVariantMap();
+        actions << action("showInFolder", QStringLiteral("Show in Folder"));
+        return actions;
+    }
+    if (!item || item->kind != ItemKind::Preset) return {};
     return {action("renamePreset", QStringLiteral("Rename…")), action("deletePreset", QStringLiteral("Delete")), QVariantMap(),
             action("showInFolder", QStringLiteral("Show in Folder"))};
 }
 
+// --- Find Similar -------------------------------------------------------------------------
+
+QString BrowserController::similarTo() const { return similar_ ? similar_->path : QString(); }
+
+QString BrowserController::similarName() const { return similar_ ? QFileInfo(similar_->path).fileName() : QString(); }
+
+void BrowserController::findSimilar(const QString& path, double start, double length) {
+    if (!similarity_ || path.isEmpty()) return;
+    if (!similar_) sortBeforeSimilar_ = sort_;
+    similar_ = Similar{normalPath(path), std::max(0.0, start), length, 0, {}};
+    refinedAt_ = similarity_->analysedFiles();
+    similar_->generation = similarity_->find(similar_->path, similar_->start, similar_->length);
+    refineTimer_.stop();
+    if (!showsAudioOnly()) setScopeValue({QStringLiteral("samples"), {}});
+    searchTimer_.stop();
+    if (!searchText_.isEmpty()) {
+        searchText_.clear();
+        Q_EMIT searchTextChanged();
+    }
+    if (sort_ != kSimilarSort) {
+        sort_ = kSimilarSort;
+        Q_EMIT sortChanged();
+    }
+    Q_EMIT sortsChanged();
+    Q_EMIT similarChanged();
+    keep_.reset();
+    selectFirst_ = false;
+    setSearching(true);  // (the list is searched when the sounds are found)
+    setStatusText(QStringLiteral("Finding sounds like %1…").arg(similarName()));
+}
+
+void BrowserController::clearSimilar() {
+    if (!similar_) return;
+    leaveSimilar();
+    refresh(false);
+}
+
+void BrowserController::leaveSimilar() {
+    similar_.reset();
+    refineTimer_.stop();
+    sort_ = isSortOrder(sortBeforeSimilar_) ? sortBeforeSimilar_ : QStringLiteral("rank");
+    Q_EMIT sortChanged();
+    Q_EMIT sortsChanged();
+    Q_EMIT similarChanged();
+}
+
+void BrowserController::similarFound(const SimilarSounds& result) {
+    if (!similar_ || result.generation() != similar_->generation) return;
+    const bool again = !similar_->result.isNull();  // searched again as more was analysed: keep the list's place
+    similar_->result = result;
+    if (!result.error().isEmpty() && !again)
+        Q_EMIT statusMessage(QStringLiteral("Could not analyse %1: %2").arg(similarName(), result.error()));
+    refresh(again);
+}
+
+void BrowserController::similarProgress() {
+    if (!similar_) return;
+    // More of the library analysed: the list is searched again (now and then).
+    if (similarity_->analysedFiles() != refinedAt_ && !similar_->result.isNull() && !refineTimer_.isActive())
+        refineTimer_.start();
+    if (!searching()) updateStatus();
+}
+
 // --- The list -----------------------------------------------------------------------------
 
-bool BrowserController::treeWanted() const { return scope_.kind == QStringLiteral("place") && !hasWords(searchText_); }
+bool BrowserController::treeWanted() const {
+    return scope_.kind == QStringLiteral("place") && !hasWords(searchText_) && !similar_;
+}
 
 void BrowserController::refresh(bool keep) {
     searchTimer_.stop();
@@ -384,13 +489,18 @@ void BrowserController::refresh(bool keep) {
         setStatusText(QDir::toNativeSeparators(treeRoot_));
         return;
     }
+    if (similar_ && similar_->result.isNull()) {  // the similar sounds are still being found
+        setSearching(true);
+        return;
+    }
     const ScopeQuery query = scopeQuery(scope_);
     if (keep && !showingTree_) {
         if (!keep_) keep_ = listPosition();  // (a search replacing one that was to keep it keeps that)
     } else {
         keep_.reset();
     }
-    index_->search(searchText_, sort_, library_->now(), query.groups, query.tag, query.placePrefix);
+    index_->search(searchText_, sort_, library_->now(), query.groups, query.tag, query.placePrefix,
+                   similar_ ? similar_->result.scorer() : nullptr);
     setSearching(true);
 }
 
@@ -474,7 +584,17 @@ void BrowserController::updateStatus() {
     const QString kind = scope_.kind;
     const int count = results_->total();
     const QString items = plural(count, QStringLiteral("item"));
-    if (kind == QStringLiteral("presets") && presetItems_.empty()) {
+    if (similar_) {
+        if (!similar_->result.error().isEmpty()) {
+            setStatusText(QStringLiteral("Could not analyse %1").arg(similarName()));
+        } else {
+            QString text = plural(count, QStringLiteral("sound")) + QStringLiteral(" like ") + similarName();
+            const int done = similarity_->analysedFiles() + similarity_->failedFiles();
+            if (similarity_->analysing() && done < similarity_->libraryFiles())  // (not while only checking files)
+                text += QStringLiteral(" (analysing %1 of %2…)").arg(done).arg(similarity_->libraryFiles());
+            setStatusText(text);
+        }
+    } else if (kind == QStringLiteral("presets") && presetItems_.empty()) {
         setStatusText(QStringLiteral("No presets yet: save one with a device's save button"));
     } else if (kind == QStringLiteral("presets")) {
         setStatusText(plural(count, QStringLiteral("preset")));
@@ -578,6 +698,8 @@ void BrowserController::shutdown() {
     if (shutDown_) return;
     shutDown_ = true;
     searchTimer_.stop();
+    refineTimer_.stop();
+    if (similarity_) similarity_->setLibrary(nullptr);  // (before the index closes: it reads the index's files)
     index_->close();
     if (ownPlugins_) plugins_->wait();
 }

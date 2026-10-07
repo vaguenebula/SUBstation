@@ -11,7 +11,7 @@ file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 qt_add_library(sub_app STATIC ${APP_SOURCES})
 add_library(sub::app ALIAS sub_app)
 target_include_directories(sub_app PUBLIC src)
-target_link_libraries(sub_app PUBLIC Qt6::Core Qt6::Gui sub_engine sub_browser)
+target_link_libraries(sub_app PUBLIC Qt6::Core Qt6::Gui sub_engine sub_browser sub_intelligence)
 # Qt's keywords (signals, slots, emit, foreach) are macros that break other
 # code's identifiers (the engine has `slots`): the app layer, and everything
 # built on it, writes Q_SIGNALS, Q_SLOTS and Q_EMIT.

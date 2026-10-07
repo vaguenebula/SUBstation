@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 
 #include "Platform.h"
@@ -60,7 +61,10 @@ public:
         result_->generation = generation_;
         result_->snapshot = inputs_.snapshot;
         if (!filter()) return nullptr;
-        if (!(query_.sort == Sort::Name ? sortByName() : sortByRank())) return nullptr;
+        const bool sorted = query_.sort == Sort::Name    ? sortByName()
+                            : query_.sort == Sort::Score ? sortByScore()
+                                                         : sortByRank();
+        if (!sorted) return nullptr;
         result_->searchMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         return std::move(result_);
     }
@@ -180,6 +184,30 @@ private:
         }
         hits.swap(merged);
         return true;
+    }
+
+    // Indexed files by their score, the highest first (stable); those without one, and other items, left out.
+    bool sortByScore() {
+        auto& hits = result_->hits;
+        std::vector<std::pair<double, Hit>> scored;
+        const Snapshot* snap = inputs_.snapshot.get();
+        if (snap && query_.score) {
+            std::string path;
+            for (size_t i = 0; i < hits.size(); ++i) {
+                if (i % kCheckEvery == 0 && cancelled()) return false;
+                const Hit hit = hits[i];
+                if (hit.group != kAudioGroup) continue;
+                const AudioRef ref = snap->audio[hit.index];
+                const SnapFolder& folder = snap->folders[ref.folder];
+                Snapshot::join(path, folder.path, folder.files->name(ref.file));
+                const double score = query_.score(path);
+                if (!std::isnan(score)) scored.push_back({score, hit});
+            }
+        }
+        std::stable_sort(scored.begin(), scored.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        hits.clear();
+        for (const auto& [score, hit] : scored) hits.push_back(hit);
+        return !cancelled();
     }
 
     void resolveAudioUsage() {

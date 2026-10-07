@@ -5,6 +5,8 @@
 //   "rank": most used (and most recently) first, then the best name matches, then
 //           the list's own order.
 //   "name": by casefolded name, then the list's own order.
+//   "score": indexed files by a score the application gives (how similar each
+//           sounds to another), the highest first; files without one left out.
 //
 // Searches read immutable snapshots and stop early when a newer one is asked for.
 

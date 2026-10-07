@@ -6,6 +6,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <cmath>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -166,6 +167,21 @@ std::vector<BrowserItem> find(std::vector<BrowserItem> items, const QString& que
     std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     items.clear();
     for (auto& [_, item] : keyed) items.push_back(std::move(item));
+    return items;
+}
+
+std::vector<BrowserItem> findScored(std::vector<BrowserItem> items, const QString& query,
+                                    const std::function<double(const BrowserItem&)>& score) {
+    const std::vector<std::string> terms = termsOf(query);
+    std::vector<std::pair<double, BrowserItem>> scored;
+    for (BrowserItem& item : items) {
+        if (!terms.empty() && !matches(item, terms)) continue;
+        const double s = score(item);
+        if (!std::isnan(s)) scored.push_back({s, std::move(item)});
+    }
+    std::stable_sort(scored.begin(), scored.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    items.clear();
+    for (auto& [_, item] : scored) items.push_back(std::move(item));
     return items;
 }
 

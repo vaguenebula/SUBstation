@@ -62,10 +62,10 @@ float SimilarityResult::similarity(std::string_view path) const {
 // --- SoundIndex ------------------------------------------------------------------------
 
 SoundIndex::SoundIndex(SoundIndexOptions options) : options_(std::move(options)) {
-    unsigned threads = options_.threads;
-    if (threads == 0) threads = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+    analysers_ = options_.threads ? options_.threads : std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+    if (!options_.analyse) analysers_ = 0;
+    for (unsigned i = 0; i < analysers_; ++i) workers_.emplace_back([this] { workerLoop(); });
     keeper_ = std::thread([this] { keeperLoop(); });
-    for (unsigned i = 0; i < threads; ++i) workers_.emplace_back([this] { workerLoop(); });
     search_ = std::thread([this] { searchLoop(); });
 }
 
@@ -151,6 +151,7 @@ SoundIndexStatus SoundIndex::status() const {
 SoundIndexStatus SoundIndex::statusLocked() const {
     SoundIndexStatus s = counts_;
     s.busy = busyLocked();
+    s.analysing = !loaded_ || running_ > 0 || !analyseQueue_.empty() || !checkQueue_.empty();
     return s;
 }
 
@@ -223,12 +224,14 @@ void SoundIndex::changed() {
 }
 
 void SoundIndex::applyLibrary(const Library& files) {
+    const bool analyse = analysers_ > 0;  // (else the files wait: nothing analyses them)
     for (Entry& entry : entries_) entry.inLibrary = false;
     for (const std::string& path : files) {
         const auto found = byPath_.find(std::string_view(path));
         const uint32_t index = found == byPath_.end() ? addEntry(path) : found->second;
         Entry& entry = entries_[index];
         entry.inLibrary = true;
+        if (!analyse) continue;
         if (entry.state == State::Pending) {
             if (!entry.queued) {
                 entry.queued = true;

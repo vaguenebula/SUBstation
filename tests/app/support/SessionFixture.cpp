@@ -14,6 +14,7 @@ SessionFixture::SessionFixture(bool clipFades) {
     Session::Options options;
     options.scanPlugins = false;
     options.browserIndex = false;
+    options.analyseSounds = false;  // (the browser lists the user's Music folder)
     session = std::make_unique<Session>(engine, options);
     QObject::connect(session.get(), &Session::statusMessage, [this](const QString& m) { messages.append(m); });
     QObject::connect(session.get(), &Session::warning, [this](const QString& m) { warnings.append(m); });
