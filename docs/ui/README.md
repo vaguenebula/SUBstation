@@ -246,8 +246,10 @@ window takes the keyboard again.
 
 ### Status line
 
-The footer: a 22 px `PANEL` strip with a `BORDER` line above, the message in `TEXT_DIM` ("Ready" at first, cleared
-after `statusTimeout`), and at its right the plug-ins loading, shown while `Session.pluginsTotal` > 0.
+In the title bar, right of the title (there is no status bar): `showMessage()` sets the title bar's `message`, shown
+in `TEXT_DIM`, right-aligned against the window's buttons and elided (nothing at first; `messageTimer` clears it
+after `statusTimeout`). After it, the plug-ins loading, shown while `Session.pluginsTotal` > 0. Its text, like the
+title, drags the window.
 
 ### Window state
 
