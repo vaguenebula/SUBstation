@@ -536,6 +536,31 @@ private Q_SLOTS:
         QCOMPARE(header(c)->indent(), 2 * arr::kGroupIndent);
     }
 
+    // A group's lane shows its tracks' clips (as bars in their colours, as in
+    // Ableton) only while it is folded: open, its tracks show them below it and
+    // its lane is a grid like any other.
+    void aGroupsLaneShowsItsClipsOnlyWhileFolded() {
+        const QStringList ids = makeTracks(2);
+        const QString group = editor().groupTracks({ids[0], ids[1]});
+        editor().setTrackColor(ids[0], QStringLiteral("#ff2020"));
+        h_->settle();
+        const auto& view = arrangement()->view();
+        // The colour at a beat in the group's lane, near its top (where a bar's solid edge is).
+        auto colorAt = [&](double beat) {
+            const double y = h_->rowOf(group).top - arrangement()->scrollY() + 4;
+            const QPoint p = h_->at(QPointF(std::round(view.beatToX(beat)) + 0.5, y));
+            const qreal dpr = window()->effectiveDevicePixelRatio();
+            return window()->grabWindow().pixelColor(int(p.x() * dpr), int(p.y() * dpr));
+        };
+        auto red = [](const QColor& c) { return c.red() > 150 && c.green() < 100 && c.blue() < 100; };
+        QVERIFY(!red(colorAt(1.5)));  // open: A's clip (beats 0-4) isn't in the group's lane
+        editor().setFolded(group, true);
+        h_->settle();
+        test::screenshot(window(), QStringLiteral("arrangement_folded_group"));
+        QVERIFY(red(colorAt(1.5)));  // folded: it is
+        QVERIFY(!red(colorAt(10.0)));  // (where no clip is)
+    }
+
     void foldingOneOfTheSelectedTracksFoldsThemAll() {
         const QStringList ids = makeTracks(3);
         const QString a = ids[0], b = ids[1], c = ids[2];

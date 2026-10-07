@@ -86,7 +86,7 @@ private Q_SLOTS:
             {"recordOn", QColor("#ff5a4d")},        {"meterLow", QColor("#3fcf55")},
             {"meterMid", QColor("#f2d024")},        {"meterHigh", QColor("#ff4a3d")},
             {"meterBg", QColor("#141414")},         {"deviceHeader", QColor("#3e3e3e")},
-            {"deviceHeaderSelected", QColor("#575757")}, {"scopeLine", QColor("#ffb84d")},
+            {"deviceHeaderSelected", QColor("#577077")}, {"scopeLine", QColor("#ffb84d")},
             {"scopeGlow", QColor(255, 166, 43, 60)}, {"scopeAxis", QColor(255, 255, 255, 22)},
             {"frozen", QColor("#8fd3ff")},          {"frozenTint", QColor(143, 211, 255, 34)},
         };

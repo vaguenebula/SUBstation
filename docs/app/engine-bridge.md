@@ -290,7 +290,7 @@ sidechain as a device added does (and `devicesLoaded` rebuilds the device view).
 plug-in's call runs a message loop (then `kPluginRetryMs` later) or a chain is being synced. A device that went
 meanwhile is skipped; one that came back (undo) has loaded already, as any device added.
 
-- `pluginsLoading(loaded, total)` reports the progress (the session's `pluginsLoadingText`, in the status bar), and
+- `pluginsLoading(loaded, total)` reports the progress (the session's `pluginsLoadingText`, in the title bar), and
   `(0, 0)` once all are loaded.
 - `prioritizePlugins(track)` puts a track's first (the session calls it with the selected track);
   `requestPluginEditor` loads its device's plug-in now (`loadPluginNow`); `loadPendingPlugins()` loads every one now.

@@ -22,12 +22,12 @@ For what the user sees and does, read the [user guide](../guide/README.md); this
 | [ui/src/controls/](../../ui/src/controls) | `KnobItem`, `ValueBoxItem`, `Meter`, `OscilloscopeItem`, `DragCursor`. |
 | [ui/src/timeline/](../../ui/src/timeline) | `timeline::Timeline` (zoom, scroll, the adaptive grid), `gridLines()`, `labelStep()`, `drawGrid()`, `drawLoopRegion()`: the arrangement's and the piano roll's time axis. |
 | [ui/src/mainwindow/](../../ui/src/mainwindow) | `TransportState` (what the transport bar works out), `WindowState` (the window's place and splitters), `FileUrls` (paths and the file dialogs' URLs), `OutsidePresses`, `PagedRows`, `FolderTreeModel` (the browser panel's helpers). |
-| [ui/src/platform/](../../ui/src/platform) | `PluginEditorKeys`: the window's shortcuts while a plug-in's editor has the focus (Windows). |
+| [ui/src/platform/](../../ui/src/platform) | `PluginEditorKeys`: the window's shortcuts while a plug-in's editor has the focus (Windows). `WindowFrame`: the main window's title bar instead of the system's caption (Windows). |
 | [ui/src/arrangement/](../../ui/src/arrangement), [ui/qml/arrangement/](../../ui/qml/arrangement) | The arrangement view: [arrangement.md](arrangement.md). |
 | [ui/src/pianoroll/](../../ui/src/pianoroll), [ui/qml/pianoroll/](../../ui/qml/pianoroll), [ui/qml/clipview/](../../ui/qml/clipview) | The piano roll and the clip view: [piano-roll.md](piano-roll.md). |
 | [ui/src/devices/](../../ui/src/devices), [ui/qml/devices/](../../ui/qml/devices) | The device view and the built-in devices' editors: [device-view.md](device-view.md). |
 | [ui/qml/browser/](../../ui/qml/browser) | The browser panel: [browser.md](../browser.md). |
-| [ui/qml/Main.qml](../../ui/qml/Main.qml) | The main window ([below](#the-main-window)). |
+| [ui/qml/Main.qml](../../ui/qml/Main.qml), [ui/qml/TitleBar.qml](../../ui/qml/TitleBar.qml), [ui/qml/InfoView.qml](../../ui/qml/InfoView.qml), [ui/qml/Hints.qml](../../ui/qml/Hints.qml) | The main window, its title bar and its info view, which says the tooltips ([below](#the-main-window)). |
 | [ui/qml/transport/](../../ui/qml/transport) | `TransportBar.qml`. |
 | [ui/qml/dialogs/](../../ui/qml/dialogs) | Preferences (`PreferencesDialog`, `AudioPage`, `MidiPage`, `PluginsPage`), `ExportDialog`, `RenderDialog`, `AboutDialog`, `UnsavedChangesDialog`, and what they share: `MessageBox`, `ChoiceBox`. |
 | [ui/qml/](../../ui/qml) (top level) | The shared controls: `Knob`, `ValueBox`, `Oscilloscope`, `RoleButton`, `ToggleButton`, `IconButton`, `Icon`, `ButtonBackground`, `ButtonContent`; `Placeholder`. |
@@ -107,24 +107,47 @@ globbed ([ui/CMakeLists.txt](../../ui/CMakeLists.txt)): a new one is picked up b
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│ menu bar                                                          │
+│ ▮ File Edit … Help      song* - SUBstation      status   ─  □  ✕  │  TitleBar (menuBar)
 │ TransportBar (header)                                             │
 ├────────────┬──────────────────────────────────────────────────────┤
 │ Browser-   │ ArrangementView   (or the ClipView covering it)      │
 │ Panel      │                                                      │
-│ (300 px,   ├──────────────────────────────────────────────────────┤
-│  min 120)  │ DevicePanel (as tall as its tallest device needs)    │
-├────────────┴──────────────────────────────────────────────────────┤
-│ status line                        Loading plug-ins: 3 of 12 ▓▓░  │
-└───────────────────────────────────────────────────────────────────┘
+│ (300 px,   │                                                      │
+│  min 120)  │                                                      │
+├──────────┬─┴──────────────────────────────────────────────────────┤
+│ InfoView │ DevicePanel (as tall as its tallest device needs)      │  bottomRow
+└──────────┴────────────────────────────────────────────────────────┘
 ```
 
-The body is a horizontal `SplitView` (`splitter`) of the browser and, on the right, a vertical `SplitView` (`right`)
-of the arrangement area over the device view. The arrangement area holds the `ArrangementView` and the `ClipView`
-on top of each other: clips open in the clip view (a double-click, Shift+Tab, a new MIDI clip:
-`Session.arrangement.clipViewRequested`) cover the arrangement until Esc, × or Shift+Tab go back
-(`arrangementArea.closeClipView()`, which gives the lanes the keyboard again). The device view's height is fixed
-to its `implicitHeight`. View › Browser (Ctrl+Alt+B) and View › Device View (Ctrl+Alt+L) show and hide them.
+The title bar ([TitleBar.qml](../../ui/qml/TitleBar.qml), the window's `menuBar`, 32 px) holds the application's
+icon and the menus on the left, the title (`Session.title`) in the middle of the window (moved aside and elided
+when the window is too narrow for it), the status line (`showMessage()`) and a project's plug-ins loading
+(*Loading plug-ins: 3 of 12* with a bar) on the right, then minimize, maximize and close. On Windows it is the
+window's only title bar: [WindowFrame](../../ui/src/platform/WindowFrame.h), a native event filter, takes the
+system's caption away (`WM_NCCALCSIZE`) and keeps the native frame (the shadow, the resizing edges, Aero Snap, the
+system menu): `WM_NCHITTEST` makes what has no mouse handling of its own in the title bar (its background, the
+title, the status line) the caption, which drags the window, and the maximize button the system's
+(`HTMAXBUTTON`, so the snap layouts show over it; `maximizeHovered`/`maximizePressed` draw it). While a popup
+shows (a menu open: the overlay is visible) all of it is the window's, so a press there closes the popup. The
+frame changes when the native window is made, its client area staying put, so the window's geometry (Qt's is the
+client area's) is what it was. Elsewhere `frame.active` is false: the system's title bar stays, with the window's
+buttons and the title, and the title bar is a menu bar with the title and the status line.
+
+The body is a vertical `SplitView` (`rows`, 4 px handles) of a horizontal one (`splitter`: the browser and the
+arrangement area) over the bottom row (`bottomRow`), which spans the window as in Ableton: the info view at its left
+(230 px) and the device view along the rest, its height fixed to the device view's `implicitHeight`. The
+arrangement area holds the `ArrangementView` and the `ClipView` on top of each other: clips open in the clip view (a
+double-click, Shift+Tab, a new MIDI clip: `Session.arrangement.clipViewRequested`) cover the arrangement until Esc,
+× or Shift+Tab go back (`arrangementArea.closeClipView()`, which gives the lanes the keyboard again). View › Browser
+(Ctrl+Alt+B), View › Device View (Ctrl+Alt+L: the whole bottom row) and View › Info View show and hide them.
+
+The info view ([InfoView.qml](../../ui/qml/InfoView.qml)) says the tooltips. The style's `ToolTip` (one shared tip
+behind every `ToolTip.visible`/`ToolTip.text` and every `RoleButton`'s `tooltip`) asks the `Hints` singleton
+([Hints.qml](../../ui/qml/Hints.qml)) whether its item's tip goes there (`routes()`: the info view shows, in the
+item's window, and the item isn't in a popup; a dialog's tips pop up as before): then it opens without its delay,
+draws nothing and takes no room, and its text is `Hints.text` while it is open. The info view shows the first line as
+its title and the rest under it (a single line too long for the title all under it), as a device does (a title bar,
+a body), and "Info" while nothing is said. With the info view hidden (or the device view), the tips pop up again.
 
 The window reaches the views only through their interfaces, each call guarded (a `Placeholder` standing in for a
 view has none): the arrangement's `zoom(factor)`, `zoomToArrangement()`, `narrowGrid()`, `widenGrid()`,
@@ -141,7 +164,7 @@ Every menu entry is an `Action` with an `objectName` (for the tests and `PluginE
 | File | New Project (Ctrl+N), Open… (Ctrl+O), Open Recent, Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export Audio… (Ctrl+Shift+R), Quit (Ctrl+Q) |
 | Edit | Undo (Ctrl+Z) and Redo (Ctrl+Y, Ctrl+Shift+Z) on `Session.undoStack`, their text following `undoText`/`redoText`; Cut, Copy, Paste, Duplicate (Ctrl+D), Rename (Ctrl+R), Split (Ctrl+E), Consolidate (Ctrl+J), Reverse Clips (R); Freeze / Unfreeze Track (Ctrl+Shift+F), Flatten Track, Delete (Del, Backspace), Select All (Ctrl+A); Re-Enable Automation (enabled while `Session.automationOverridden`), Solo Selected Tracks (S); Play / Stop (Space), Record (F9), Record Quantization (a checkable entry per `Session.recordQuantizeChoices`), Go to Start (Home), Loop (Ctrl+L), Find in Browser (Ctrl+F) |
 | Create | Insert Audio Track (Ctrl+T), Insert MIDI Track (Ctrl+Shift+T), Insert Return Track (Ctrl+Alt+T), Insert MIDI Clip (Ctrl+Shift+D, Ctrl+Shift+M: on the arrangement's grid when snapping), Group Tracks (Ctrl+G), Ungroup Tracks (Ctrl+Shift+G), Delete Selected Tracks |
-| View | Browser, Device View, Clip View (Shift+Tab), Automation (A: `editor.toggleAllAutomation()`), Close Plug-in Editor (Ctrl+W, Windows only), Zoom In (+, =), Zoom Out (-), Zoom to Arrangement (Z), Narrow Grid (Ctrl+1), Widen Grid (Ctrl+2), Snap to Grid (Ctrl+4) |
+| View | Browser, Device View, Info View, Clip View (Shift+Tab), Automation (A: `editor.toggleAllAutomation()`), Close Plug-in Editor (Ctrl+W, Windows only), Zoom In (+, =), Zoom Out (-), Zoom to Arrangement (Z), Narrow Grid (Ctrl+1), Widen Grid (Ctrl+2), Snap to Grid (Ctrl+4) |
 | Options | Preferences… (Ctrl+,), Rescan Plug-ins, Computer MIDI Keyboard (M), Lock Envelopes |
 | Help | About SUBstation |
 
@@ -234,7 +257,7 @@ after `statusTimeout`), and at its right the plug-ins loading, shown while `Sess
 |---|---|
 | `window/geometry` | The window's normal geometry (as last seen neither maximized nor full screen) and whether it was maximized. A saved place no screen shows any more is moved onto the primary screen. |
 | `window/splitter` | The browser's split (`SplitView.saveState()`). |
-| `window/device_splitter` | The arrangement's over the device view. |
+| `window/device_splitter` | The browser and arrangement's over the bottom row (the info view and the device view). |
 
 They are restored when the window is made and saved when it closes. What a widget version of the program saved
 under those keys (`QWidget::saveGeometry`'s bytes, a `QSplitter`'s state) is ignored: the window starts at its

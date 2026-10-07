@@ -133,7 +133,7 @@ private Q_SLOTS:
         }
         QCOMPARE(frame(ids[0])->width(), 216.0);  // DEVICE_WIDTH
         QCOMPARE(frame(ids[1])->mapToScene(QPointF()).x() - frame(ids[0])->mapToScene(QPointF(216, 0)).x(),
-                 6.0);  // the chain's spacing
+                 8.0);  // the chain's spacing (a grip in it)
         QCOMPARE(partOf(ids[0], "title")->property("text").toString(), QStringLiteral("Utility"));
         // A MIDI track without an instrument asks for one, after its effects.
         const QString midi = editor().addMidiTrack(-1, QStringLiteral("Keys"));

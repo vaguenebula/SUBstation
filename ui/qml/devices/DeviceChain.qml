@@ -14,7 +14,7 @@ Row {
     readonly property alias list: list
     readonly property int count: list.count
 
-    spacing: 6
+    spacing: 8  // DeviceChainArea.kSpacing: a device's grip in the middle
 
     DeviceChainList {
         id: list
@@ -32,7 +32,7 @@ Row {
             required property string modelData
 
             height: chain.height
-            spacing: 6
+            spacing: 8
 
             DeviceFrame {
                 id: frame

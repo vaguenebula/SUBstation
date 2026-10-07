@@ -143,7 +143,7 @@ public:
     static constexpr QColor kMeterHigh{0xff, 0x4a, 0x3d};            // METER_HIGH
     static constexpr QColor kMeterBg{0x14, 0x14, 0x14};              // METER_BG
     static constexpr QColor kDeviceHeader{0x3e, 0x3e, 0x3e};         // DEVICE_HEADER: a device's title bar
-    static constexpr QColor kDeviceHeaderSelected{0x57, 0x57, 0x57};  // DEVICE_HEADER_SELECTED
+    static constexpr QColor kDeviceHeaderSelected{0x57, 0x70, 0x77};  // a selected device's title bar: teal (Ableton's)
     static constexpr QColor kScopeLine{0xff, 0xb8, 0x4d};            // SCOPE_LINE
     static constexpr QColor kScopeGlow{0xff, 0xa6, 0x2b, 60};        // SCOPE_GLOW
     static constexpr QColor kScopeAxis{0xff, 0xff, 0xff, 22};        // SCOPE_AXIS

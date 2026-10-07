@@ -3,7 +3,7 @@
 The arrangement is the main view: a timeline with any number of audio and MIDI tracks,
 their headers on the right (as in Ableton), and the return tracks and the master pinned
 at the bottom. This page covers the timeline, clips, selecting, tracks, group tracks,
-folding, the master, the transport bar, and projects.
+folding, the master, the title bar and the transport bar, and projects.
 
 ## The timeline
 
@@ -161,7 +161,7 @@ first of them was.
 
 - What is in a group goes into it, through its devices (audio effects) and mixer, and
   on to the master, or the group it is in (groups nest).
-- A group has no clips; its lane shows the clips of the tracks in it, and its
+- A group has no clips; folded, its lane shows the clips of the tracks in it, and its
   automation works as a track's. It has no arm or input: it records nothing.
 - A group's header is a little taller than a track's, with a bar in its colour across
   its top. The tracks in it are indented under it, and a band in the group's colour
@@ -203,9 +203,18 @@ Return tracks show apart, in compact rows above the master; see
 The **master track** has volume, pan and audio effects: click its header to show its
 chain in the device view. Its automation shows in its own lane, like a track's.
 
+## The title bar
+
+The window's title bar holds the menus on the left, the project's name in the middle
+(with * while it has unsaved changes), and on the right the status line, where
+SUBstation says what it did or why it couldn't, and the window's buttons. Drag the
+window by any empty part of it, the name or the status line; double-click there to
+maximize it or bring it back, right-click for the window's menu. Hovering over the
+maximize button shows Windows' snap layouts.
+
 ## The transport bar
 
-The bar across the top holds, from left to right:
+The bar under the title bar holds, from left to right:
 
 - **Tempo** (drag it, Shift for fine steps, double-click to type) and the **time
   signature**;

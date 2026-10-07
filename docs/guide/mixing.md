@@ -149,7 +149,7 @@ plays that instead, so its plug-ins cost no CPU.
   where its output goes. Sends and sidechains taking its signal after its fader or before
   it hear the frozen audio.
 - While it is frozen you can't change its clips, devices or their automation; the
-  status bar says why when you try. Unfreeze it first. A frozen track isn't armed.
+  status line says why when you try. Unfreeze it first. A frozen track isn't armed.
 - **Except time selections**: on a frozen track you can still move (or Ctrl-drag copy),
   cut, copy, paste, duplicate and delete a selected stretch of time, and its frozen
   audio goes with the clips (and its devices' automation with them), so what you see is
