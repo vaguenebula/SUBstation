@@ -1,4 +1,4 @@
-# The layers' boundaries: the engine and the browser include nothing of Qt; the
+# The layers' boundaries: the engine, the browser and the intelligence module include nothing of Qt; the
 # application layer nothing of Qt Quick or QML (cmake/CheckBoundaries.cmake).
 add_test(NAME boundaries
          COMMAND ${CMAKE_COMMAND} -DROOT=${PROJECT_SOURCE_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/CheckBoundaries.cmake)
@@ -28,6 +28,14 @@ add_test(NAME engine COMMAND engine_tests)
 if (WIN32)
     set_tests_properties(engine PROPERTIES RESOURCE_LOCK desktop)  # (it opens plug-in editors: see app/)
 endif()
+
+# --- Intelligence tests: Qt-free, with the engine tests' harness (Test.h, Main.cpp) --------
+file(GLOB INTELLIGENCE_TEST_SOURCES CONFIGURE_DEPENDS intelligence/*.cpp)
+add_executable(intelligence_tests engine/harness/Main.cpp ${INTELLIGENCE_TEST_SOURCES} intelligence/Sounds.h)
+target_include_directories(intelligence_tests PRIVATE engine intelligence)  # (harness/Test.h: never the harness folder itself, whose Signal.h is <signal.h> where names ignore case)
+target_link_libraries(intelligence_tests PRIVATE sub_intelligence)
+sub_project_warnings(intelligence_tests)
+add_test(NAME intelligence COMMAND intelligence_tests)
 
 # --- Application-layer and UI tests: Qt Test, one executable per file ---------------------
 if (SUBSTATION_BUILD_APP)
