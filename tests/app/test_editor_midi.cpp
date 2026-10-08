@@ -59,7 +59,7 @@ private Q_SLOTS:
         EditorFixture f;
         const QString track = f.editor.addMidiTrack();
         QCOMPARE(f.track(track).kind, QStringLiteral("midi"));
-        QCOMPARE(f.track(track).name, QStringLiteral("1 MIDI"));
+        QCOMPARE(f.track(track).name, QStringLiteral("1 Synth"));  // (named by its instrument)
         QCOMPARE(kinds(f.track(track).devices), QStringList{"synth"});
         const QString utility = f.editor.addDevice(track, "utility");
         QCOMPARE(f.project.device(track, utility).kind, QStringLiteral("utility"));

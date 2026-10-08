@@ -110,7 +110,7 @@ using EnvelopeMap = OrderedMap<QString, Envelope>;
 // The settings of a track that Project::updateTrack changes (its id, kind,
 // clips, devices, automation, view, group and frozen audio change otherwise).
 enum class TrackField {
-    Name,        // QString
+    Name,        // QString: its nameTemplate ("# Kick"; Project numbers its name)
     Color,       // QString
     VolumeDb,    // double
     Pan,         // double
@@ -136,7 +136,11 @@ std::optional<TrackField> trackFieldFromName(const QString& name);
 
 struct Track {
     QString id;
+    // As shown: its nameTemplate with each # its number (Project keeps it so; TrackNames.h).
     QString name;
+    // What its name is made from ("# Kick"; empty: `name` as it is). The
+    // project file's name, and what renaming it changes (TrackField::Name).
+    QString nameTemplate;
     QString color;
     double volumeDb = 0.0;
     double pan = 0.0;
@@ -166,6 +170,8 @@ struct Track {
     SendMap sends;  // return id -> its send (replaced whole, never changed)
     std::optional<Freeze> frozen;  // its frozen audio (none: not frozen); see Freeze
 
+    // What its name is made from: its nameTemplate, or its name if it has none.
+    const QString& nameSource() const { return nameTemplate.isEmpty() ? name : nameTemplate; }
     bool isMidi() const { return kind == kMidiKind; }
     bool isAudio() const { return kind == kAudioKind; }
     bool isGroup() const { return kind == kGroupKind; }

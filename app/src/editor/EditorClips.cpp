@@ -178,7 +178,7 @@ ClipRefs ProjectEditor::addClips(const QString& trackId, double startBeat,
     ClipRefs refs;
     Macro macro(undoStack_, sources.size() == 1 ? QStringLiteral("Add Clip") : QStringLiteral("Add Clips"));
     if (target.isEmpty() || !p.track(target).isAudio()) {
-        target = addAudioTrack(trackIndex, QFileInfo(sources.front().first).completeBaseName());
+        target = addAudioTrack(trackIndex);  // (named by the clips: "3 Kick")
         if (target.isEmpty()) return {};
     }
     const double tempo = p.tempo();

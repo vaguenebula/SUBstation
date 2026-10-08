@@ -6,6 +6,7 @@
 #include "audio/BridgePrivate.h"
 
 #include "model/Project.h"
+#include "model/TrackNames.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -53,7 +54,7 @@ QString EngineBridge::startRecording(double countInBeats) {
             targets.push_back({engineId, {}});  // its notes, no file
             continue;
         }
-        QString path = takePath(folder, track.name, now);
+        QString path = takePath(folder, takeName(track), now);
         while (paths.contains(path)) {  // two tracks of the same name
             const QFileInfo info(path);
             path = info.dir().filePath(info.completeBaseName() + QStringLiteral("_.wav"));

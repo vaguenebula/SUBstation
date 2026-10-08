@@ -77,7 +77,7 @@ bool Track::hasInput() const {
 
 TrackValue Track::value(TrackField field) const {
     switch (field) {
-    case TrackField::Name: return name;
+    case TrackField::Name: return nameSource();
     case TrackField::Color: return color;
     case TrackField::VolumeDb: return volumeDb;
     case TrackField::Pan: return pan;
@@ -97,7 +97,7 @@ TrackValue Track::value(TrackField field) const {
 
 void Track::setValue(TrackField field, const TrackValue& value) {
     switch (field) {
-    case TrackField::Name: name = std::get<QString>(value); break;
+    case TrackField::Name: name = nameTemplate = std::get<QString>(value); break;  // (numbered by Project)
     case TrackField::Color: color = std::get<QString>(value); break;
     case TrackField::VolumeDb: volumeDb = asDouble(value); break;
     case TrackField::Pan: pan = asDouble(value); break;

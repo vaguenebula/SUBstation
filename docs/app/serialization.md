@@ -76,7 +76,7 @@ Each entry of `tracks`:
 
 | Field | Meaning |
 |---|---|
-| `id`, `name`, `color` | required on load |
+| `id`, `name`, `color` | required on load; `name` is the name template (`"# Kick"`: the `#` is the track's number, its place). A name as new tracks had before (`"3 Audio"`, `"2 MIDI"`, `"1 Group"` on a track of that kind) loads as `# Audio` named by what it holds, `# Group` |
 | `kind` | `"audio"`, `"midi"` or `"group"` (default `"audio"`; anything else makes the file "damaged") |
 | `volume_db`, `pan`, `mute`, `solo`, `height` | mixer and row height (without one: `kDefaultTrackHeight`, 96, or a group's `kDefaultGroupHeight`, 104) |
 | `devices` | list of devices (below) |

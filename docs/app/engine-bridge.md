@@ -446,7 +446,8 @@ what there is. See [engine/audio-devices.md](../engine/audio-devices.md).
 - `recordTargets()`: armed tracks with an input (`Track::hasInput`), not frozen. `startRecording(countInBeats)` returns
   why it can't ("Arm a MIDI track, or an audio track that has an input, to record."; no device open; the folder can't
   be made) or `""`. It opens missing ASIO inputs, makes the recordings folder, names each audio take
-  `takePath(folder, track name, now)`: the track's name (characters Windows forbids replaced) and the local time,
+  `takePath(folder, takeName(track), now)`: the track's name (characters Windows forbids replaced; a track named by
+  what it holds: that, without its number, so its takes keep it so) and the local time,
   numbered if taken; MIDI takes have no file.
 - `recordingsFolder(project)`: the project's `Recordings` folder once it is saved; else `SUBSTATION_RECORDINGS` if set
   (the tests use it), else `SUBstation/Recordings` in the user's Music folder.

@@ -307,7 +307,12 @@ public:
     // start). Emits clipsChanged: what the track plays changed, not whether it
     // is frozen. Nothing for a track that isn't frozen.
     void setFrozenSegments(const QString& trackId, std::optional<std::vector<Clip>> segments);
-    // A track's clips (sorted here by start).
+    // A track's name is its nameTemplate numbered by its place (TrackNames.h):
+    // a track coming, going or moving renumbers the tracks after it before
+    // anyone hears of it (trackInserted, trackRemoved, tracksArranged), then
+    // trackChanged for each one renamed. A track's clips (sorted here by start).
+    // These, setDevices, setChains and setDeviceName rename a track named by
+    // what it holds after it: trackChanged, after clipsChanged or devicesChanged.
     void setClips(const QString& trackId, std::vector<Clip> clips);
     void setDevices(const QString& trackId, std::vector<Device> devices);
     // Change several tracks' devices at once (a device moving between them): all
@@ -385,6 +390,12 @@ Q_SIGNALS:
 
 private:
     Track& trackRef(const QString& trackId);
+    // After a change of what a track holds: renamed after it if it was named so before.
+    void followContents(const QString& trackId, bool followed);
+    // Names the tracks from `from` on (and the returns, with `returns`) from
+    // their templates, quietly; the ids of the tracks renamed.
+    QStringList renumber(int from, bool returns = false);
+    void announceRenamed(const QStringList& trackIds);
     Device& deviceRef(const QString& trackId, const QString& deviceId);
     Chain& chainRef(const QString& trackId, const QString& chainId);
 

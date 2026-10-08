@@ -159,6 +159,7 @@ QString TrackHeaderItem::kind() const {
 bool TrackHeaderItem::midi() const { return track() && track()->isMidi(); }
 bool TrackHeaderItem::records() const { return track() && track()->hasClips(); }  // groups record nothing
 QString TrackHeaderItem::name() const { return track() ? track()->name : QString(); }
+QString TrackHeaderItem::nameTemplate() const { return track() ? track()->nameSource() : QString(); }
 QColor TrackHeaderItem::color() const { return track() ? QColor(track()->color) : QColor(); }
 bool TrackHeaderItem::mute() const { return track() && mute_; }
 bool TrackHeaderItem::solo() const { return track() && track()->solo; }
