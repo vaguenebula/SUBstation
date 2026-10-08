@@ -31,7 +31,7 @@ accessors. The UI shows dialogs and asks the session to act; the session itself 
 
 `Session(engine, options)` makes, in order: the `Project`, the `QUndoStack`, the `ProjectEditor`, the `Selection`, the
 `EngineBridge` (on the engine it is given, which outlives it), the `PluginIndex`, the `SoundSimilarity` (which
-analyses the browser's files: [intelligence.md](../intelligence.md)), the `BrowserController` (which starts the plug-in
+analyses the browser's files: [intelligence.md](../intelligence.md)), the `Harmony` (the song's chords and key), the `BrowserController` (which starts the plug-in
 scan, and points the sound similarity at its index), the `PresetIndex`, the `RenderProgress`, and the parts `ArrangementActions`, `DeviceSelection`,
 `ComputerKeyboard`, `AudioPreferences`, `MidiPreferences`. They are its children, and QML reads them as constant
 properties:
@@ -41,6 +41,7 @@ properties:
 | `project`, `undoStack`, `editor`, `selection`, `bridge` | `Project`, `QUndoStack`, `ProjectEditor`, `Selection`, `EngineBridge` | [model.md](model.md), [engine-bridge.md](engine-bridge.md) |
 | `browser`, `plugins` | `BrowserController`, `PluginIndex` | the browser ([browser.md](../browser.md)); the plug-ins, also Preferences › Plug-ins ([plugin-scanner.md](plugin-scanner.md)) |
 | `similarity` | `SoundSimilarity` | finding similar sounds ([intelligence.md](../intelligence.md)); the browser's Find Similar uses it |
+| `harmony` | `Harmony` | the song's chords and key, from its MIDI ([intelligence.md](../intelligence.md#harmony-the-application-side)); the piano roll shows them and Generate writes from them |
 | `arrangement` | `ArrangementActions` | [below](#the-arrangements-actions-arrangementactions) |
 | `deviceSelection` | `DeviceSelection` | [below](#the-device-view-deviceselection) |
 | `render` | `RenderProgress` | [below](#renders-in-the-background) |

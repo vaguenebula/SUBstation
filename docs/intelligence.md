@@ -1,12 +1,16 @@
 # Intelligence
 
-The intelligence module is what SUBstation works out about music and sound, on threads of its own: for now **sound
-similarity** (Find Similar Sounds in the browser); later MIDI generation, MIDI humanisation (an XGBoost model through
-its C++ library), chord recognition, and an MCP server for agents. It is a layer of its own, as the browser's backend
-is: the static library `sub_intelligence` ([intelligence/src](../intelligence/src), namespace `sub::intelligence`),
-with no Qt, and knowing nothing of the engine or the browser; its application side is
-[app/src/intelligence](../app/src/intelligence) (`SoundSimilarity`, `Session.similarity`). How Find Similar behaves
-for the user is in [guide/browser.md](guide/browser.md#find-similar-sounds).
+The intelligence module is what SUBstation works out about music and sound: for now **sound similarity** (Find
+Similar Sounds in the browser, on threads of its own) and **harmony** (a song's chords and key, inferred from its MIDI:
+the piano roll's chord lane, its notes out of the key in red, and Generate's block chords and bass lines); later MIDI
+generation by machine learning (melodies, accompaniment), MIDI humanisation (an XGBoost model through its C++ library),
+chords from audio, and an MCP server for agents, which will take the harmony as context. It is a layer of its own, as
+the browser's backend is: the static library `sub_intelligence` ([intelligence/src](../intelligence/src), namespace
+`sub::intelligence`), with no Qt, and knowing nothing of the engine or the browser; its application side is
+[app/src/intelligence](../app/src/intelligence) (`SoundSimilarity`, `Session.similarity`; `Harmony`,
+`Session.harmony`). How Find Similar behaves for the user is in
+[guide/browser.md](guide/browser.md#find-similar-sounds), the chords, the key and Generate in
+[guide/midi.md](guide/midi.md#chords-and-key).
 
 ```
  application thread (Qt)                         sub::intelligence (C++, no Qt)
@@ -105,6 +109,82 @@ The module is where such models go anyway (humanisation's XGBoost). An embedding
 background (an EfficientAT or a distilled OpenL3, a few MB) would mostly help *across* kinds; the descriptors stay
 what tells one kick from another.
 
+## Harmony: chords and keys from MIDI
+
+[harmony/](../intelligence/src/harmony) (namespace `sub::intelligence::harmony`) infers a song's chords and key from
+its notes, and writes parts from chords. It is pure functions: no threads, no state, nothing saved. The application
+asks again whenever the song has changed and somebody wants to know (see [the application side](#harmony-the-application-side)).
+
+### What was weighed
+
+| Approach | Quality | Cost | Verdict |
+|---|---|---|---|
+| Learned models (an HMM trained on annotated songs, a transformer over MIDI) | the best at ambiguous passages and at style | a model to train, ship and run; annotated data | not now: the rules below get the clear cases right, and the module is where a model would go |
+| Chord templates against pitch-class profiles, smoothed (Pardo and Birmingham; Fujishima's chroma templates; Sheh and Ellis's HMM smoothing, its transitions written by hand) | right wherever chords or a bass are played; a melody alone is a guess | a song's thousands of notes in a few milliseconds | **chosen** |
+| Note counting per bar | breaks on passing notes and on chords that change mid-bar | the cheapest | no |
+
+### The chords ([ChordInference.h](../intelligence/src/harmony/ChordInference.h))
+
+The song is cut into steps of an eighth note (longer for a song past 65 536 steps). Each step has two profiles of the
+twelve pitch classes: how long each sounds (louder notes counting up to twice as much as the softest), and how long
+each is the lowest note, counting fully up to E2, a quarter from G3 up (a melody's lowest note is no bass).
+
+Each of 132 chords (12 roots × major, minor, diminished, augmented, sus2, sus4, 7, maj7, m7, m7b5, dim7; a sixth
+chord is its relative minor seventh with another bass: C6 is Am7/C) is scored against each step:
+
+| Term | Value |
+|---|---|
+| explained | the share of the step's profile on the chord's notes, less half the share off them |
+| missing notes | for each chord note below 30 % of the step's loudest pitch class, up to 0.25 for the root or a seventh, 0.15 for the third (a sus chord's second or fourth, a diminished or augmented fifth), 0.05 for a perfect fifth |
+| bass | + 0.25 × how much the root is the bass, + 0.08 for its other notes, − 0.1 for notes outside it |
+| quality | 0 for major and minor; − 0.02 to − 0.04 for sevenths, − 0.06 to − 0.1 for the rest |
+| key | + 0.05 when every note is in the key |
+| thin steps | with fewer than three pitch classes sounding (a melody, a bass line), up to + 0.3 for the key's primary triads (I, IV, V; i, iv), less for the others, − 0.2 outside the key, − 0.3 for sus, augmented and diminished sevenths: a melody alone implies plain triads |
+
+A step counts by how much sounds in it (two notes all through it count fully), so a lone melody note weighs less than
+a chord. Then a Viterbi search finds the sequence of chords (or "no chord", which scores 0.1 a beat where nothing
+sounds) with the best total, where changing chord costs 0.25 on a bar line, 0.45 on half a bar, 0.7 on a beat and 1.0
+between beats. So a passing note doesn't make a chord, a chord played clearly changes where it is played (an eighth
+before the bar, too), a rest of a beat keeps the chord and one of more than a bar and a half has none. With "stay or
+change to the best", the search is linear in the chords: steps × 133.
+
+A chord's bass is the pitch class lowest under it the longest; if that is another of its notes, and is the bass under
+at least half of it at full strength, it is an inversion ("C/E").
+
+### The key
+
+Krumhansl and Kessler's major and minor key profiles, correlated with how long each pitch class sounds, counting again
+how long it is the bass (by the same register weighting): the bass tells C → G (C major) from the same notes in E
+minor. Fewer than 2 beats of notes or three pitch classes, or a best correlation under 0.4, is no key. A minor key's
+scale is its natural minor (as in Ableton's scales); the classic confusion of a key with its relative changes no note
+in or out of it.
+
+### Parts from chords ([Accompaniment.h](../intelligence/src/harmony/Accompaniment.h))
+
+- **Chords**: a close voicing for each, between C2 and G4, the first in root position near D3, each next one the
+  inversion and octave that moves the voices least (each note to the nearest of the other chord's, both ways, plus a
+  quarter of how far it strays from D3): C, G, Am, F come out as C3 E3 G3, B2 D3 G3, C3 E3 A3, C3 F3 A3. Velocity 90.
+- **Bass**: each chord's bass note (an inversion's, else its root) in the octave from C1. Velocity 100.
+- Both are struck again at every bar line.
+- **A progression to start from**, where a song has no chords: a chord a bar, I V vi IV in a major key, i VI III VII in
+  a minor one.
+
+Rules, not a model: a melody, or an accompaniment with a rhythm of its own, needs machine learning, which comes later.
+
+### How well it works
+
+The tests ([tests/intelligence/test_harmony.cpp](../tests/intelligence/test_harmony.cpp)) hold it to triads and
+sevenths in root position, inversions, a progression with its bass on another track, a melody running over chords
+(heard as the chords), arpeggios (as the chords they spell), rests short and long, and a melody alone (Twinkle,
+Twinkle: C | F G | F C | Dm C). Speed: a 400-bar song of 4 400 notes, chords and a melody, in about 5 ms (a release
+build, one core of a 4-core cloud machine); a typical song is under a millisecond.
+
+### What would make it better
+
+Chords from audio: the same scoring over the chroma of audio clips (the similarity's FFTs and frames). Time signature
+changes, and tempo changes, if the project gets them. A model trained on annotated MIDI as one more term of the score
+(or in place of the hand-set transitions), for the ambiguous passages.
+
 ## Files
 
 ### The module (`intelligence/src`)
@@ -117,12 +197,16 @@ what tells one kick from another.
 | [similarity/Similarity.h](../intelligence/src/similarity/Similarity.h) | `AspectWeights`, `Comparison` (`fit`, `distance`, `similarity`) |
 | [similarity/SoundStore.h](../intelligence/src/similarity/SoundStore.h) | sound-index.bin: `StoreWriter`, `writeStore()`, `readStore()` |
 | [similarity/SoundIndex.h](../intelligence/src/similarity/SoundIndex.h) | `SoundIndex` (its threads), `SoundQuery`, `SimilarityResult`, `SoundIndexStatus`, `SoundIndexOptions` |
+| [harmony/Chords.h](../intelligence/src/harmony/Chords.h) | `Quality`, `Chord` (its notes, its name: "Am7", "C/E"), `Key` (its scale, its triads), `pitchClass()`, `noteName()` |
+| [harmony/ChordInference.h](../intelligence/src/harmony/ChordInference.h) | `Note`, `ChordSpan`, `InferenceOptions`, `Harmony`; `estimateKey()`, `inferHarmony()` |
+| [harmony/Accompaniment.h](../intelligence/src/harmony/Accompaniment.h) | `GeneratedNote`; `chordPart()`, `bassPart()`, `starterProgression()` |
 
 ### The application side (`app/src/intelligence`)
 
 | File | What it holds |
 |---|---|
 | [SoundSimilarity.h](../app/src/intelligence/SoundSimilarity.h) | `SoundSimilarity` (`Session.similarity`): the index on the application's thread; `setLibrary(FileIndex*)`, `find()`, `found(SimilarSounds)`, `progressChanged`; `SimilarSounds` (a result: `similarity(path)`, `best(n)`, `scorer()`) |
+| [Harmony.h](../app/src/intelligence/Harmony.h) | `Harmony` (`Session.harmony`): the song's notes (`songNotes()`), its chords and key inferred from them when asked after a change, the key (the project's, else inferred), `shown` (the setting C toggles) |
 
 The browser's side of Find Similar is in [BrowserController](../app/src/browser/BrowserController.h)
 (`findSimilar()`, `clearSimilar()`, `similarTo`) and the backend's `Sort::Score` ([browser.md](browser.md)).
@@ -197,6 +281,23 @@ searched from.
 A `SimilarSounds` keeps its result alive; `scorer()` is what the browser's search sorts by, `best(n)` what the sampler
 and the drum rack will step through to swap in similar sounds, and `similarity(path)` takes Qt's paths.
 
+### Harmony: the application side
+
+`Harmony` ([Harmony.h](../app/src/intelligence/Harmony.h)) lives on the application's thread. Its notes are those the
+song's MIDI tracks play (`songNotes()`): of every MIDI track heard (not muted, nor in a muted group) whose name doesn't
+say it plays drums ("Drums", "Kick", "Snare", "Hats", "Perc", "Claps"...: `isDrumTrack()`), what its clips play, where
+they play it on the timeline. Audio tracks are for later. The bars are the project's time signature's; the key its
+key, if it has one.
+
+A change to what it hears (the clips of a track it hears; which tracks those are, as tracks come, go, are muted,
+renamed or grouped; the time signature, the key; a new project) marks the result stale and, 40 ms later, emits
+`changed` once for every change in that time (a drag's edits). A fader, the loop, the tempo or an audio track change
+nothing: what they change is compared first (`heardTracks()`, the time signature and the key). The
+chords and key are inferred again only when asked for after that, on the application's thread: nothing runs in the
+background, and with no piano roll showing nobody asks. The piano roll asks when it hears `changed` (and when it opens
+a clip or shows), maps the chords over the part its clip plays into the clip's own beats, and draws them; Generate asks
+too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`), on at first.
+
 ## Invariants
 
 - The module includes nothing of Qt, the application, the UI, the engine or the browser (`ctest -R boundaries`); it
@@ -206,6 +307,8 @@ and the drum rack will step through to swap in similar sounds, and `similarity(p
 - Only the latest search's result is handed out, once.
 - A fingerprint depends only on the sound: not on its level, the silence before it, or the library (the library only
   sets the scale searches measure in).
+- Harmony is pure functions of the notes and options: the same song always gives the same chords, key and parts.
+  It keeps nothing and starts no thread; the application infers it on its own thread, only when asked after a change.
 
 ## Extending it
 
@@ -216,8 +319,13 @@ and the drum rack will step through to swap in similar sounds, and `similarity(p
   take its own.
 - **Swapping similar samples** (the sampler, the drum rack, a file manager): `SoundSimilarity::find()` with the
   sample's file, then step through `SimilarSounds::best()`.
-- **Another part of the module** (MIDI generation, chord recognition...): a folder of its own under
-  `intelligence/src` beside `similarity/`, sharing `core/`; its Qt side under `app/src/intelligence`.
+- **Another part of the module** (MIDI generation, an MCP server...): a folder of its own under `intelligence/src`
+  beside `similarity/` and `harmony/`, sharing `core/`; its Qt side under `app/src/intelligence`. What it needs to know
+  of a song's harmony: `Session.harmony` (`chords()`, `key()`), or `inferHarmony()` on notes of its own.
+- **A chord quality**: its intervals and suffix in `Quality` and `qualityInfo()` (Chords.cpp), its prior in `kPrior`
+  (ChordInference.cpp), and how thin steps take it in `thinPrior()`.
+- **Another part to generate**: a function from `ChordSpan`s to `GeneratedNote`s in Accompaniment.h, a
+  `Q_INVOKABLE` on `PianoRoll` like `generateBass()`, and an entry in the clip view's Generate menu.
 
 ## Tests
 
@@ -229,6 +337,17 @@ and the drum rack will step through to swap in similar sounds, and `similarity(p
   (round trip, damage, another version); the index (analysing a library, saving and checking stamps, new and changed
   files, files leaving the library, sounds outside it and parts of files, undecodable files, a library file searched
   from before it was analysed, only the latest result, its threads and its source).
+- [tests/intelligence/test_harmony.cpp](../tests/intelligence/test_harmony.cpp) (`intelligence_tests`): naming chords
+  and keys, scales and their triads; the key (cadences in major and minor, the bass telling C → G from E minor, too
+  little to tell); chords: triads and sevenths, inversions, a progression with its bass on another track, a melody's
+  passing notes, arpeggios, a melody alone, a chord pushed off the beat, rests, the key given, a long song's speed;
+  the chord part's voicings and voice leading, striking again at bar lines, the bass, the starter progression.
+- [tests/app/test_harmony.cpp](../tests/app/test_harmony.cpp): the song's notes (MIDI tracks heard, not drums, what
+  clips play where), following the project once edits settle, the key (the project's or inferred), the bars of the
+  time signature, the `shown` setting.
+- [tests/app/test_ui_pianoroll.cpp](../tests/app/test_ui_pianoroll.cpp): the chord lane over the clip (hidden with
+  the key, clicks going through it), notes out of the key in red, Generate › Chords and › Bass;
+  [test_ui_mainwindow.cpp](../tests/app/test_ui_mainwindow.cpp): C.
 - [tests/app/test_sound_similarity.cpp](../tests/app/test_sound_similarity.cpp): the browser's files analysed; Find
   Similar's list, sort, status, filtering by text and places; ending it (another sort, another list, clearing, Ctrl+F);
   a clip's part of a loop; a sound outside the library and `SimilarSounds`; files found later; a sound that can't be
@@ -250,3 +369,10 @@ and the drum rack will step through to swap in similar sounds, and `similarity(p
   than MFCCs or temporal descriptors alone.
 - Ableton Live 12's *Similarity Search* and *Similar Sample Swapping*; Sononym's aspects (overall, spectrum, timbre,
   pitch, amplitude); Freesound's similarity (Essentia descriptors, PCA, nearest neighbours).
+- Krumhansl and Kessler, "Tracing the dynamic changes in perceived tonal organization in a spatial representation of
+  musical keys" (1982): the key profiles; Krumhansl, *Cognitive Foundations of Musical Pitch* (1990).
+- Pardo and Birmingham, "Algorithms for chordal analysis" (Computer Music Journal, 2002): chord templates scored
+  against segments of notes, and segmenting by the best total.
+- Fujishima, "Realtime chord recognition of musical sound" (ICMC 1999): pitch-class profiles against chord templates.
+- Sheh and Ellis, "Chord segmentation and recognition using EM-trained hidden Markov models" (ISMIR 2003): smoothing
+  chord sequences with a Viterbi search.

@@ -16,15 +16,16 @@ This page is about the code.
 
 | File | What it holds |
 |---|---|
-| [ClipView.qml](../../ui/qml/clipview/ClipView.qml) | The clip view: its header (the track's colour, the name, a line about the clips, ×), the audio clips' controls and waveforms, or the piano roll |
+| [ClipView.qml](../../ui/qml/clipview/ClipView.qml) | The clip view: its header (the track's colour, the name, a line about the clips; for a MIDI clip the key and Generate; ×), the audio clips' controls and waveforms, or the piano roll |
 | [ClipViewController](../../ui/src/pianoroll/ClipViewController.h) | What the clip view shows and does (the old `ClipView` without its widgets): which clips open, MIDI or audio, editing every open audio clip at once |
 | [ClipWaveform](../../ui/src/pianoroll/ClipWaveform.h) | The audio clips' waveforms, each whole source file fitted to the width |
 | [ClipViewKnob.qml](../../ui/qml/clipview/ClipViewKnob.qml), [ClipViewSection.qml](../../ui/qml/clipview/ClipViewSection.qml) | A captioned knob with its readout; a titled box of controls |
-| [PianoRollView.qml](../../ui/qml/pianoroll/PianoRollView.qml) | The piano roll's layout: the headphones button, the ruler, the keys, the note grid with the note tools over it, the velocity lane, the scroll bars |
-| [PianoRoll](../../ui/src/pianoroll/PianoRoll.h) | The piano roll's state (the old `PianoRoll` without its widgets): the clip, its own time axis and row height, the selected notes, the playhead, the key sounding, the note tools' settings and actions |
+| [PianoRollView.qml](../../ui/qml/pianoroll/PianoRollView.qml) | The piano roll's layout: the headphones button, the ruler, the keys, the note grid with the chord lane and the note tools over it, the velocity lane, the scroll bars |
+| [PianoRoll](../../ui/src/pianoroll/PianoRoll.h) | The piano roll's state (the old `PianoRoll` without its widgets): the clip, its own time axis and row height, the selected notes, the playhead, the key sounding, the note tools' settings and actions, the song's chords and key over the clip, Generate |
 | [RollItem](../../ui/src/pianoroll/RollItem.h) | The base of the piano roll's items: `session` and `roll` properties |
 | [NoteGrid](../../ui/src/pianoroll/NoteGrid.h) | The notes: painting, hit-testing, mouse, wheel, keys, and its gestures (`MoveNotesGesture`, `ResizeNotesGesture`, `SelectNotesGesture`, `PanGesture`) |
 | [PianoKeys](../../ui/src/pianoroll/PianoKeys.h), [PianoRuler](../../ui/src/pianoroll/PianoRuler.h), [VelocityLane](../../ui/src/pianoroll/VelocityLane.h), [RollPlayhead](../../ui/src/pianoroll/RollPlayhead.h) | The keyboard, the ruler, the velocities, and the playhead over each |
+| [ChordLane](../../ui/src/pianoroll/ChordLane.h) | The song's chords along the top of the notes |
 | [NoteTools.qml](../../ui/qml/pianoroll/NoteTools.qml) | The floating bar with Legato, ×2, ÷2, Quantize and Humanize |
 | [NoteSet.h](../../ui/src/pianoroll/NoteSet.h) | Sets of notes as sorted vectors (`noteSet`, `contains`, `united`, `without`, `byTime`) |
 
@@ -100,9 +101,10 @@ Warping and its modes in the engine: [engine/warp.md](../engine/warp.md).
 ┌──────────┬────────────────────────────┬───┐
 │ preview  │ PianoRuler (24 px)         │   │
 ├──────────┼────────────────────────────┼───┤
-│ PianoKeys│ NoteGrid    ┌───────────┐  │ v │
-│ (64 px)  │             │ NoteTools │  │ b │
-│          │             └───────────┘  │ a │
+│ PianoKeys│ NoteGrid, ChordLane on top │ v │
+│ (64 px)  │             ┌───────────┐  │ b │
+│          │             │ NoteTools │  │ a │
+│          │             └───────────┘  │ r │
 ├──────────┼────────────────────────────┼───┤
 │ Velocity │ VelocityLane (72 px)       │   │
 ├──────────┼────────────────────────────┤   │
@@ -111,8 +113,9 @@ Warping and its modes in the engine: [engine/warp.md](../engine/warp.md).
 ```
 
 `PianoRollView` makes the `PianoRoll` (`session: Session`) and gives it to every item (`roll: pianoRoll`); a
-`RollPlayhead` sits over the ruler (`ruler: true`), the note grid and the velocity lane. `NoteTools` is a child of
-the note grid, floating over it. `focusNotes()` gives the note grid the keyboard; clicks on the keys, the ruler and
+`RollPlayhead` sits over the ruler (`ruler: true`), the note grid and the velocity lane. `ChordLane` (18 px, shown
+with `Session.harmony.shown`) and `NoteTools` are children of the note grid, over it: the lane along its top, under
+the playhead, taking no clicks. `focusNotes()` gives the note grid the keyboard; clicks on the keys, the ruler and
 the velocities give it to the notes too (`PianoRoll::focusGrid()`). The scroll bars follow the roll except while
 dragged (then the roll follows them: `scrollToX`, `scrollToY`). The ruler, the keys, the note grid and the velocity
 lane have `clip: true` (and the clip view's `ClipWaveform`): a scene-graph item isn't clipped to itself, and notes or
@@ -170,8 +173,9 @@ A `Note` is a value: a moved note is a new note, which is why gestures pass the 
 [NoteGrid](../../ui/src/pianoroll/NoteGrid.h).
 
 **Painting.** Rows (black keys `kBlackKeyRow`, lines at B|C and E|F), the grid, the dimmed outside of the clip's
-window, then the notes: in the track's colour, more opaque for louder notes (alpha from velocity) and lighter when
-selected (white outline), with the note's name when it is at least 30 by 10 px. Then the rubber band and the start
+window, then the notes: in the track's colour (halfway to red, `Theme::kOutOfKey`, for a note out of the song's key:
+`PianoRoll::outOfKey()`), more opaque for louder notes (alpha from velocity) and lighter when selected (white
+outline), with the note's name when it is at least 30 by 10 px. Then the rubber band and the start
 marker; the playhead is the `RollPlayhead` over it.
 
 **Hit-testing.** `PianoRoll::noteRect(note)` (at least 3 px wide) and `noteAt(pos)` → `Hit{note, zone}` for the
@@ -269,6 +273,30 @@ roll's own `QRandomGenerator` (`seedRandom()` for tests). The parameters are the
 `quantizeAmount`, `humanizeAmount` (at 100 %, notes move by up to `humanizeBeats`, a 32nd note, and velocities change
 by up to `humanizeVelocity`, 24).
 
+### Chords, the key and Generate
+
+The song's harmony is the session's (`Session.harmony`, [intelligence.md](../intelligence.md#harmony-the-application-side)):
+its chords on the timeline and its key (the project's, else inferred from its MIDI). While it is shown (`shown`, View ›
+Chords and Key, C), `refreshHarmony()` maps the chords over the part the clip plays (`startBeat` to `endBeat()` on the
+timeline) into content beats, as `RollChord`s (`chords()`: start, end, name, root, minor), and keeps the key
+(`scaleKey()`), on the GUI thread, for the items to draw: when the harmony says it changed (40 ms after an edit
+anywhere in the song), when it is shown or hidden, when a clip opens and when the grid shows. Hidden, there are no
+chords and no key, and nothing is inferred.
+
+[ChordLane](../../ui/src/pianoroll/ChordLane.h) draws a see-through band for each chord along the grid's top, coloured
+by its root around the circle of fifths from blue at C (`chordColor`; darker for minor and diminished chords), with a
+line at its start and its name, kept at the lane's left while its start is scrolled away. It accepts no mouse
+buttons: clicks reach the notes under it. `NoteGrid` tints notes out of the key (`outOfKey(pitch)`: not in the major,
+or natural minor, scale).
+
+The clip view's header shows the key (`keyLabel`: "Key: A Minor", "(inferred)" when the project has none) and
+*Generate ▾*, a menu of *Chords* and *Bass*: `generateChords()` and `generateBass()`. Each takes the song's chords over
+the part the clip plays (a progression in the key, C major without one, where there are none:
+`starterProgression`), writes the part (`chordPart`, `bassPart`; bars on the timeline's) in content beats, and commits
+the clip's notes with them as one undo step ("Generate Chords", "Generate Bass"), the written notes selected. The
+clip's own notes win: a written note overlapping one on its key is shortened or left out (`notes::resolveOverlaps`
+with the clip's notes as winners), and nothing is committed if nothing would change (Generate again).
+
 ### Hearing notes
 
 `audition(pitch, velocity)` sounds a key on the track's instrument through `bridge.previewNote(trackId, pitch,
@@ -307,6 +335,6 @@ playing inside the clip and emits `playheadChanged`; only the `RollPlayhead` ite
 
 | Test file | Covers here |
 |---|---|
-| [test_ui_pianoroll.cpp](../../tests/app/test_ui_pianoroll.cpp) | Through the clip view: a MIDI track with the Synth and a clip opened in the piano roll; notes drawn and heard, dragged to move, resize and copy; the notes' keys taking precedence over the window's shortcuts; the rubber band, the keys and the velocity lane; Alt+wheel and Ctrl+Alt drags; the note tools floating by notes selected by dragging |
+| [test_ui_pianoroll.cpp](../../tests/app/test_ui_pianoroll.cpp) | Through the clip view: a MIDI track with the Synth and a clip opened in the piano roll; notes drawn and heard, dragged to move, resize and copy; the notes' keys taking precedence over the window's shortcuts; the rubber band, the keys and the velocity lane; Alt+wheel and Ctrl+Alt drags; the note tools floating by notes selected by dragging; the song's chords along the top (over the part the clip plays, hidden with the key, clicks going through them), notes out of the key in red, Generate › Chords and › Bass |
 | [test_ui_clipview.cpp](../../tests/app/test_ui_clipview.cpp) | Audio clips: one clip opened, its settings and waveform; several edited in unison; warping and transposing reaching the audio; the clip gain making the waveform taller; which clips open with a MIDI clip among them; going back (Esc, ×, the clips deleted, the project reset) |
 | [test_midi_model.cpp](../../tests/app/test_midi_model.cpp) | The note maths |

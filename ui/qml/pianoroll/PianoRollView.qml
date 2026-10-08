@@ -3,17 +3,19 @@ import QtQuick.Controls
 import SUBstation
 
 // The piano roll, laid out like Ableton's MIDI editor: the ruler on top, the
-// keys on the left, the notes in the middle with the note tools floating over
-// them, the velocities below, and scroll bars. The headphones button turns
-// hearing notes off. The clip it shows is the roll's
-// (`roll.setClip(trackId, clipId)`; the clip view sets it).
+// keys on the left, the notes in the middle with the song's chords along their
+// top (while the harmony shows: C) and the note tools floating over them, the
+// velocities below, and scroll bars. The headphones button turns hearing notes
+// off. The clip it shows is the roll's (`roll.setClip(trackId, clipId)`; the
+// clip view sets it).
 //
 //   ┌──────────┬────────────────────────────┬───┐
 //   │ preview  │ PianoRuler (24 px)         │   │
 //   ├──────────┼────────────────────────────┼───┤
-//   │ PianoKeys│ NoteGrid    ┌───────────┐  │ v │
-//   │ (64 px)  │             │ NoteTools │  │ b │
-//   │          │             └───────────┘  │ a │
+//   │ PianoKeys│ NoteGrid, ChordLane on top │ v │
+//   │ (64 px)  │             ┌───────────┐  │ b │
+//   │          │             │ NoteTools │  │ a │
+//   │          │             └───────────┘  │ r │
 //   ├──────────┼────────────────────────────┼───┤
 //   │ Velocity │ VelocityLane (72 px)       │   │
 //   ├──────────┼────────────────────────────┤   │
@@ -28,6 +30,7 @@ Item {
     readonly property alias ruler: pianoRuler
     readonly property alias velocity: velocityLane
     readonly property alias tools: noteTools
+    readonly property alias chords: chordLane
     readonly property alias preview: previewButton
 
     readonly property int keysWidth: 64
@@ -103,6 +106,15 @@ Item {
         clip: true
         session: Session
         roll: pianoRoll
+
+        ChordLane {
+            id: chordLane
+            objectName: "chordLane"
+            width: parent.width
+            height: 18
+            visible: Session.harmony.shown
+            roll: pianoRoll
+        }
 
         RollPlayhead {
             anchors.fill: parent

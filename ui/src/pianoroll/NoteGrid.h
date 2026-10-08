@@ -82,7 +82,7 @@ protected:
 
 private:
     void drawNote(SgPainter& painter, const app::Note& note, const QRectF& rect, const QColor& color,
-                  const QFont& font, bool selected, bool playing) const;
+                  const QFont& font, bool selected, bool playing, bool outOfKey) const;
     void updateCursor(const QPointF& pos, Qt::KeyboardModifiers modifiers);
     // Show the hand as soon as Ctrl+Alt is held, without moving the mouse.
     void onModifiers(Qt::KeyboardModifiers modifiers);

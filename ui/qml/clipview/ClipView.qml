@@ -4,9 +4,11 @@ import QtQuick.Layouts
 import SUBstation
 
 // The clip view: what a double-clicked clip opens. A MIDI clip gets the piano
-// roll and nothing else. Audio clips get their controls on the left (Warp,
-// Pitch, Mix) and large waveforms on the right; with several open, the controls
-// edit all of them at once (ClipViewController has the rules).
+// roll, and in the header the key its notes are judged by (out of it, red) and
+// Generate (chords or a bass line from the song's chords). Audio clips get
+// their controls on the left (Warp, Pitch, Mix) and large waveforms on the
+// right; with several open, the controls edit all of them at once
+// (ClipViewController has the rules).
 //
 // Give it the clips to show:
 //
@@ -107,7 +109,63 @@ FocusScope {
             }
         }
 
+        Row {
+            anchors.right: closeButton.left
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 12
+            visible: clipController.midi
+
+            Label {
+                id: keyLabel
+                objectName: "keyLabel"
+                // Read only while it shows: asking for the key infers the harmony.
+                readonly property bool active: view.visible && clipController.midi && Session.harmony.shown
+                readonly property string key: active ? Session.harmony.keyLabel : ""
+                readonly property bool inferred: active && Session.harmony.keyInferred
+                anchors.verticalCenter: parent.verticalCenter
+                visible: key !== ""
+                text: inferred ? qsTr("Key: %1 (inferred)").arg(key) : qsTr("Key: %1").arg(key)
+                color: Theme.textDim
+
+                HoverHandler {
+                    id: keyHover
+                }
+                ToolTip.visible: keyHover.hovered
+                ToolTip.delay: 700
+                ToolTip.text: keyLabel.inferred
+                    ? qsTr("The key the song's MIDI is most likely in (the project has none):\nnotes out of it show red. C shows or hides the chords and the key")
+                    : qsTr("The project's key: notes out of it show red.\nC shows or hides the chords and the key")
+            }
+            RoleButton {
+                id: generateButton
+                objectName: "generate"
+                anchors.verticalCenter: parent.verticalCenter
+                role: "small"
+                text: qsTr("Generate ▾")
+                tooltip: qsTr("Write block chords or a bass line into the clip, from the song's chords\n(or from a progression in its key, where it has none)")
+                onClicked: generateMenu.popup(generateButton, 0, generateButton.height)
+
+                Menu {
+                    id: generateMenu
+                    objectName: "generateMenu"
+
+                    MenuItem {
+                        objectName: "generateChords"
+                        text: qsTr("Chords")
+                        onTriggered: rollView.roll.generateChords()
+                    }
+                    MenuItem {
+                        objectName: "generateBass"
+                        text: qsTr("Bass")
+                        onTriggered: rollView.roll.generateBass()
+                    }
+                }
+            }
+        }
+
         RoleButton {
+            id: closeButton
             objectName: "closeButton"
             anchors.right: parent.right
             anchors.rightMargin: 6

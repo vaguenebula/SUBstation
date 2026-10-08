@@ -117,14 +117,16 @@ Rectangle {
             checked: Session.bridge.metronome
             onClicked: Session.bridge.metronome = !Session.bridge.metronome
         }
-        // The project's key: audio added with a key in its file name is transposed to it.
+        // The project's key: audio added with a key in its file name is transposed to it;
+        // the piano roll tints notes out of it.
         ChoiceBox {
             objectName: "key"
             Layout.preferredHeight: Theme.controlHeight
             choices: transport.keys
             chosenIndex: transport.keyIndex
             tooltip: qsTr("Project key. Audio files with a key in their name (\"Loop_128_Am\")\n"
-                          + "are transposed to it when added; a tempo in the name warps them to it.")
+                          + "are transposed to it when added; a tempo in the name warps them to it.\n"
+                          + "In the piano roll, notes out of it show red (none: the key the MIDI is in).")
             onChosen: index => Session.editor.setKeyByName(transport.keys[index].name)
         }
         ToggleButton {

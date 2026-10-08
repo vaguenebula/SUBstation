@@ -61,6 +61,7 @@ the focus. Most are also in the menus, which show their keys.
 | Action | Keys |
 |---|---|
 | Show / hide automation (every track and the master) | A |
+| Show / hide the piano roll's chords and the key (notes out of it in red) | C |
 | Add an automation breakpoint / delete one | click on the envelope's line / click the breakpoint |
 | Bend an automation segment | Alt-drag between two breakpoints |
 
@@ -96,7 +97,8 @@ the focus. Most are also in the menus, which show their keys.
 
 In the piano roll, Delete, Ctrl+A and Ctrl+D act on notes, Ctrl+U quantizes them, and
 arrow keys move them (Up/Down a semitone, Shift an octave; Left/Right a grid step, Shift
-a bar). See [midi.md](midi.md#the-piano-roll).
+a bar). C shows or hides the song's chords and key over the notes. See
+[midi.md](midi.md#the-piano-roll).
 
 ## Plug-in editors
 

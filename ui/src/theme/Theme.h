@@ -133,6 +133,7 @@ public:
     static constexpr QColor kKeyLabel{0x4a, 0x4a, 0x4a};       // KEY_LABEL
     static constexpr QColor kBlackKeyRow{0x25, 0x25, 0x25};    // BLACK_KEY_ROW
     static constexpr QColor kOutsideClip{0x00, 0x00, 0x00, 110};  // OUTSIDE_CLIP: content a clip has but doesn't play
+    static constexpr QColor kOutOfKey{0xff, 0x4a, 0x3d};  // notes out of the song's key are tinted halfway to it
     // Controls
     static constexpr QColor kActivatorOn{0xff, 0xc2, 0x33};          // ACTIVATOR_ON
     static constexpr QColor kSoloOn{0x4f, 0xa3, 0xff};               // SOLO_ON

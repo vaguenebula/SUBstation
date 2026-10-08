@@ -11,6 +11,7 @@
 #include "browser/BrowserController.h"
 #include "browser/PresetIndex.h"
 #include "editor/ProjectEditor.h"
+#include "intelligence/Harmony.h"
 #include "intelligence/SoundSimilarity.h"
 #include "io/Presets.h"
 #include "model/Automation.h"
@@ -43,6 +44,7 @@ Session::Session(sub::Engine& engine, Options options, QObject* parent)
     if (!options_.browserIndex) similarityOptions.storePath = QString();
     similarityOptions.analyse = options_.analyseSounds;
     similarity_ = new SoundSimilarity(similarityOptions, this);
+    harmony_ = new Harmony(project_, this);
     BrowserController::Options browserOptions;
     browserOptions.scanPlugins = options_.scanPlugins;
     browserOptions.similarity = similarity_;  // (it analyses the browser's files)

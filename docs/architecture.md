@@ -2,8 +2,8 @@
 
 SUBstation is one C++ program in five layers: a Qt Quick UI that draws everything, an application layer that owns
 the project and everything that works on it, a real-time audio engine that plays it, a small library that indexes
-and searches the sample browser's files, and the intelligence module, which works things out about sounds (how
-similar they are) in the background. This page is the map; each part has its own pages (see the
+and searches the sample browser's files, and the intelligence module, which works things out about music and sound
+(how similar sounds are, in the background; a song's chords and key, from its MIDI). This page is the map; each part has its own pages (see the
 [index](README.md)).
 
 ## Layers
@@ -43,6 +43,8 @@ similar they are) in the background. This page is the map; each part has its own
   intelligence  │ sub_intelligence: sound similarity's keeper, analysers and search   │
                 │ threads; their wake callback ─► SoundSimilarity (app/src/           │
                 │ intelligence) on the GUI thread. Its library: the browser's files   │
+                │ Harmony: pure functions; Harmony (app/src/intelligence) calls them  │
+                │ on the GUI thread with the song's MIDI notes when asked             │
                 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -52,7 +54,7 @@ similar they are) in the background. This page is the map; each part has its own
 | Application layer | [app/src](../app/src): `model/`, `editor/`, `io/`, `audio/`, `session/`, `browser/`, `intelligence/`, `plugins/`, `analysis/` | `sub_app` | Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence` | [app/](README.md#application-layer) |
 | Audio engine | [engine/src](../engine/src) | `sub_engine` (namespace `sub`) | the C++ standard library, miniaudio, the VST 3 SDK | [engine/](engine/README.md) |
 | Browser backend | [browser/src](../browser/src) | `sub_browser` (namespace `sub::browser`) | the C++ standard library | [browser.md](browser.md) |
-| Intelligence | [intelligence/src](../intelligence/src): `core/`, `similarity/` | `sub_intelligence` (namespace `sub::intelligence`) | the C++ standard library, miniaudio (its decoders), Signalsmith Linear (its FFTs) | [intelligence.md](intelligence.md) |
+| Intelligence | [intelligence/src](../intelligence/src): `core/`, `similarity/`, `harmony/` | `sub_intelligence` (namespace `sub::intelligence`) | the C++ standard library, miniaudio (its decoders), Signalsmith Linear (its FFTs) | [intelligence.md](intelligence.md) |
 | Plug-in scanner | [tools/scanner](../tools/scanner/main.cpp) | `substation-scan`, a program of its own | `sub_engine` | [app/plugin-scanner.md](app/plugin-scanner.md) |
 
 [ui/main.cpp](../ui/main.cpp) puts the layers together: it makes the `QGuiApplication`, the engine, the
@@ -86,7 +88,8 @@ similar they are) in the background. This page is the map; each part has its own
   ([app/src/intelligence](../app/src/intelligence)) gives it a source for its library (the browser's latest snapshot,
   read on the module's thread) and its searches, and takes back results when its wake callback says there are some.
   The browser orders a list by a result through a score function (`Sort::Score`), knowing nothing of where it came
-  from.
+  from. `Harmony` hands the module's harmony functions the notes the song's MIDI tracks play (plain values) and takes
+  back its chords and key; the piano roll draws them and writes parts from them.
 
 ### The boundaries, checked
 
