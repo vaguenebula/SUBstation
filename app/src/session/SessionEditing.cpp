@@ -337,7 +337,7 @@ QVariantMap Session::renameTarget(bool browserListFocused) {
     if (!trackId.isEmpty() && renamable) {
         return {{QStringLiteral("kind"), QStringLiteral("track")},
                 {QStringLiteral("trackId"), trackId},
-                {QStringLiteral("name"), project_->track(trackId).name}};
+                {QStringLiteral("name"), project_->track(trackId).nameSource()}};  // ("# Kick")
     }
     Q_EMIT statusMessage(QStringLiteral("Select a track, a rack chain or a preset to rename."));
     return {};

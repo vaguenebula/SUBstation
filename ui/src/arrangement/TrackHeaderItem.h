@@ -84,6 +84,8 @@ class TrackHeaderItem : public SgCanvas {
     Q_PROPERTY(bool midi READ midi NOTIFY changed)
     Q_PROPERTY(bool records READ records NOTIFY changed)  // audio and MIDI tracks: arm, input, monitoring
     Q_PROPERTY(QString name READ name NOTIFY changed)
+    // What renaming it starts from: its name template ("# Kick", the # its number).
+    Q_PROPERTY(QString nameTemplate READ nameTemplate NOTIFY changed)
     Q_PROPERTY(QColor color READ color NOTIFY changed)
     // Muted as heard: its activator off (following its automation while it plays).
     Q_PROPERTY(bool mute READ mute NOTIFY mixerChanged)
@@ -160,6 +162,7 @@ public:
     bool midi() const;
     bool records() const;
     QString name() const;
+    QString nameTemplate() const;
     QColor color() const;
     bool mute() const;
     bool solo() const;

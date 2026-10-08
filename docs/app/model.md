@@ -41,6 +41,7 @@ session's ([session.md](session.md)).
 |---|---|
 | [Project.h](../../app/src/model/Project.h) | `Project` (QObject: queries, mutators, signals), `ProjectContents` (everything replaced at once), `ChainField`/`ChainValue` and `SettingsField`/`SettingsValue` (what `updateChain` and `updateSettings` change), `DeviceParam`, `LaneRef` |
 | [Track.h](../../app/src/model/Track.h) | `Track`, `Freeze`, `MidiInput`, `Send`, `SendMap`, `EnvelopeMap`; `TrackField`/`TrackValue` (what `updateTrack` changes) and `trackFieldName`; the kinds (`kAudioKind`, `kMidiKind`, `kGroupKind`, `kReturnKind`, `kMasterKind`), `kMonitorModes`, `kTrackColors`, track heights; `newMaster`, `returnLetter` |
+| [TrackNames.h](../../app/src/model/TrackNames.h) | Track names: `#` for its number (`numberedName`), audio and MIDI tracks named by what they hold (`contentsLabel`, `contentsName`, `namedByContents`), names older projects had (`hasPlainName`, `plainNameTemplate`), `takeName` |
 | [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `PlayedNote`; `kWarpModes`, `legacyWarpMode`, `kMinSegmentBpm`, `kMaxSegmentBpm` |
 | [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kDefaultMacroCount`, `kMaxMacroCount`, `macroParam`, `macroIndex`, `macroCount`, `macroName`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
 | [Devices.h](../../app/src/model/Devices.h) | Kinds of devices: `builtinDevices()`, `builtinDevice()`, `builtinCategories()` (from the engine), `kDefaultInstrument`; `isInstrument`, `deviceIsInstrument`, `loadsInto`, `deviceName`, `kindName`; `newDevice`, `newRack`, `newChain`; `builtinParamInfo`, `deviceIdsOf`, `deviceIdsOfList` |
@@ -115,7 +116,9 @@ both kinds are edited alike.
 | `kReturnKind` `"return"` | `Project::returns()` | no | fed by sends; named by letter (`returnLetter`: A..Z, AA...) |
 | `kMasterKind` `"master"` | `Project::master()` | no | id `kMaster` (`"master"`), effects only |
 
-Fields: `name`, `color`, mixer (`volumeDb`, `pan`, `mute`, `solo`), `height` (its lane's; a new track's is
+Fields: `name` (as shown: its `nameTemplate` with each `#` its number, its place in `Project::tracks()` from 1;
+`Project` keeps it so, see [TrackNames.h](../../app/src/model/TrackNames.h)), `nameTemplate` (what renaming changes
+and the project file saves: `"# Kick"`; `TrackField::Name`; empty: `name` as it is; `nameSource()`), `color`, mixer (`volumeDb`, `pan`, `mute`, `solo`), `height` (its lane's; a new track's is
 `kDefaultTrackHeight`, 96 px, a new group's `kDefaultGroupHeight`, 104), `clips` (sorted by `startBeat`),
 `devices`, `automation` (target key → envelope, never empty; an `EnvelopeMap`, which keeps the order targets were
 first automated in), `automationView`, audio input (`input`: none, `{c}` or `{l, r}` device channels, or
@@ -325,7 +328,7 @@ chain's devices don't show beside them: shown by default) (ids, view state), and
 |---|---|
 | `trackInserted(id, index)`, `trackRemoved(id, index)` | an arrangement track came or went |
 | `returnInserted(id, index)`, `returnRemoved(id, index)` | a return came or went |
-| `trackChanged(id)` | name, colour, mixer, sends, input, monitoring, arming, height, folding (`kMaster`: the master's mixer) |
+| `trackChanged(id)` | name (renamed; renumbered by a track coming, going or moving above it, after that track's signal; renamed by what it holds, after `clipsChanged` or `devicesChanged`), colour, mixer, sends, input, monitoring, arming, height, folding (`kMaster`: the master's mixer) |
 | `tracksArranged()` | the order or groups changed (not which tracks there are) |
 | `clipsChanged(track id)` | a track's clips were replaced, or what of its frozen audio plays |
 | `devicesChanged(track id)` | devices added, removed, moved, toggled (in racks too), a sidechain, macros or a rack's name changed |
@@ -441,7 +444,8 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
   preset, one step), `insertionPoint`, `deleteTracks` [Q] (a group with what is in it, a return with the sends into
   it and their automation; inputs and sidechains from them go: one step), `duplicateTracks` [Q] (new ids for tracks,
   clips, devices and rack chains; automation keys, automation view, sidechains and inputs among the copied tracks
-  renamed to the copies; not armed), `copyTracks`, `cutTracks`, `pasteTracks` (`CopiedTracks`), `renameTrack` [Q],
+  renamed to the copies; not armed), `copyTracks`, `cutTracks`, `pasteTracks` (`CopiedTracks`; a copy's name without a `#` is made unique),
+  `renameTrack` [Q] (its name template: `"# Lead"`),
   `setTrackColor` [Q], `setTrackParam` / `setTracksParam` (mixer; the master only volume and pan), `soloTracks` [Q],
   `armTracks` [Q], `setTrackHeight` [Q], `setFolded` [Q].
 - **Inputs**: `setTrackInput` (device channels), `setTrackInputTrack` (`EditError` for a cycle or a non-audio track),

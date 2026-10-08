@@ -99,7 +99,8 @@ public:
     // --- Tracks (EditorTracks.cpp) ---
 
     // A new audio track at `index` (< 0: last), in the group at that place;
-    // named `name` (""; "<n> Audio"). Its id.
+    // named `name` (a name template, TrackNames.h; "": "# Audio", named by its
+    // clips; a MIDI track: by its instrument, "# Synth"). Its id.
     Q_INVOKABLE QString addAudioTrack(int index = -1, const QString& name = {});
     QString addAudioTrack(int index, const QString& name, const TrackParent& parent);
     // A MIDI track with the default instrument (as its default preset has it).
@@ -121,6 +122,7 @@ public:
     // sidechains they were the source of go too. One undo step. Refused if one
     // is in a frozen group (that isn't going too).
     Q_INVOKABLE void deleteTracks(const QStringList& trackIds);
+    // Its name template ("# Lead": "4 Lead", the # its number; TrackField::Name).
     Q_INVOKABLE void renameTrack(const QString& trackId, const QString& name);
     Q_INVOKABLE void setTrackColor(const QString& trackId, const QString& color);
     // Mixer settings: VolumeDb, Pan, Mute, Solo (the master: volume and pan;

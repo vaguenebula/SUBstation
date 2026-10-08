@@ -6,6 +6,7 @@
 #include "model/Notes.h"
 #include "model/Project.h"
 #include "model/Routing.h"
+#include "model/TrackNames.h"
 
 #include <QDir>
 #include <QFile>
@@ -347,7 +348,7 @@ QJsonObject trackToJson(const Track& t, const QString& base) {
     QJsonObject data;
     data[QStringLiteral("id")] = t.id;
     data[QStringLiteral("kind")] = t.kind;
-    data[QStringLiteral("name")] = t.name;
+    data[QStringLiteral("name")] = t.nameSource();  // its template: "# Kick"
     data[QStringLiteral("color")] = t.color;
     data[QStringLiteral("volume_db")] = t.volumeDb;
     data[QStringLiteral("pan")] = t.pan;
@@ -380,7 +381,7 @@ QJsonObject trackToJson(const Track& t, const QString& base) {
 QJsonObject returnToJson(const Track& t, const QString& base) {
     QJsonObject data{{QStringLiteral("id"), t.id},
                      {QStringLiteral("kind"), t.kind},
-                     {QStringLiteral("name"), t.name},
+                     {QStringLiteral("name"), t.nameSource()},
                      {QStringLiteral("color"), t.color},
                      {QStringLiteral("volume_db"), t.volumeDb},
                      {QStringLiteral("pan"), t.pan},
@@ -904,6 +905,8 @@ QJsonObject projectToJson(const Project& project, const QString& projectFile) {
 
 std::vector<Track> tracksFromJson(const QJsonObject& data, const QString& projectFile) {
     const QString base = baseOf(projectFile);
+    const QJsonValue version = data.value(QStringLiteral("version"));
+    const bool plainNames = (version.isUndefined() ? 0 : toInt(version)) < kNameTemplatesVersion;
     std::vector<Track> tracks;
     for (const QJsonValue& value : listOr(data, QStringLiteral("tracks"))) {
         const QJsonObject t = asObject(value);
@@ -943,6 +946,9 @@ std::vector<Track> tracksFromJson(const QJsonObject& data, const QString& projec
         track.folded = truthy(t.value(QStringLiteral("folded")));
         track.sends = sendsFromJson(t.value(QStringLiteral("sends")));
         track.frozen = freezeFromJson(t.value(QStringLiteral("frozen")), base);
+        // Saved before tracks were numbered by their place, as new ones were named ("3 Audio"): so now.
+        // (Since then, such a name is one typed: it stays.)
+        if (plainNames && hasPlainName(track)) track.nameTemplate = plainNameTemplate(track);
         tracks.push_back(std::move(track));
     }
     repairTree(tracks);
