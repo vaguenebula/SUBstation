@@ -1,5 +1,6 @@
 // MIDI in the model, without the editor or the engine bridge: clips as windows
-// onto notes, the piano roll's note maths, and MIDI tracks in files.
+// onto notes (consolidating what plays), the piano roll's note maths, and MIDI
+// tracks in files.
 
 #include "TestSupport.h"
 
@@ -27,7 +28,7 @@ constexpr int C = 60, E = 64, G = 67;
 
 Clip midiClip(double start = 0.0, double beats = 4.0, double offset = 0.0, const std::vector<Note>& clipNotes = {},
               const QString& id = QStringLiteral("m")) {
-    return Clip::midi(id, QStringLiteral("m"), start, beats, offset, notes::normalize(clipNotes));
+    return Clip::midi(id, QString(), start, beats, offset, notes::normalize(clipNotes));  // (MIDI clips have no name)
 }
 
 double round6(double value) { return std::round(value * 1e6) / 1e6; }
@@ -164,6 +165,44 @@ private Q_SLOTS:
         QCOMPARE(joinedClip.offsetBeats, 0.0);
         QVERIFY(joinedClip.isMidi());
         QVERIFY((joinedClip.notes == std::vector<Note>{note(60, 0.0, 0.5), note(62, 1.5, 0.5), note(67, 4.0, 0.5)}));
+        QVERIFY(!joinedClip.muted);
+
+        // What was silent stays silent: a deactivated clip's notes come deactivated...
+        Clip off = b;
+        off.muted = true;
+        const Clip heard = edits::consolidateMidi({off, a});
+        Note silentNote = note(67, 4.0, 0.5);
+        silentNote.muted = true;
+        QVERIFY((heard.notes == std::vector<Note>{note(60, 0.0, 0.5), note(62, 1.5, 0.5), silentNote}));
+        QVERIFY(!heard.muted);
+        QCOMPARE(heard.heardNotes().size(), size_t{2});
+        // ...unless they all are deactivated: the joined clip is too, with all of their notes as they were.
+        Clip offToo = a;
+        offToo.muted = true;
+        const Clip silent = edits::consolidateMidi({off, offToo});
+        QVERIFY(silent.muted);
+        QCOMPARE(silent.notes, joinedClip.notes);
+    }
+
+    void deactivatedNotesArentHeard() {
+        const std::vector<Note> notes{note(60, 0.0, 1.0), note(62, 1.0, 1.0), note(64, 2.0, 1.0)};
+        // 0 on some of them: they are deactivated where they are, the others as they were.
+        const std::vector<Note> off = notes::withActive(notes, {notes[0], notes[2]}, false);
+        QCOMPARE(off.size(), size_t{3});
+        QVERIFY(off[0].muted && !off[1].muted && off[2].muted);
+        QCOMPARE(off[0].start, 0.0);
+        QCOMPARE(notes::withActive(off, {off[0]}, true)[0].muted, false);
+        // A clip plays (and the engine hears) only the active ones; its preview shows them all.
+        const Clip clip = Clip::midi(QStringLiteral("m"), QString(), 0.0, 4.0, 0.0, off);
+        QCOMPARE(clip.playedNotes().size(), size_t{3});
+        const std::vector<PlayedNote> heard = clip.heardNotes();
+        QCOMPARE(heard.size(), size_t{1});
+        QCOMPARE(heard[0].note.pitch, 62);
+        // A note and the same note deactivated are two notes (a set of notes tells them apart).
+        Note silent = notes[0];
+        silent.muted = true;
+        QCOMPARE(notes::normalize({notes[0], silent}).size(), size_t{2});
+        QCOMPARE(notes::place({notes[0], silent}, {silent}, {}), std::vector<Note>{notes[0]});
     }
 
     void noteNamesFollowAbleton() {
@@ -315,7 +354,9 @@ private Q_SLOTS:
 
     void midiTracksRoundTrip() {
         test::TempDir dir;
-        const Clip clip = midiClip(2.0, 4.0, 1.0, {note(C, 1.0, 0.5, 90), note(G, 2.25, 1.0)});
+        Note silent = note(E, 3.0, 0.5);
+        silent.muted = true;
+        const Clip clip = midiClip(2.0, 4.0, 1.0, {note(C, 1.0, 0.5, 90), note(G, 2.25, 1.0), silent});
         Track keys = test::makeTrack(QStringLiteral("t1"), QStringLiteral("Keys"), kMidiKind);
         keys.clips = {clip};
         std::unique_ptr<Project> project(projectWith({keys}));
@@ -326,7 +367,9 @@ private Q_SLOTS:
         QJsonObject track = data[QStringLiteral("tracks")].toArray()[0].toObject();
         QCOMPARE(track[QStringLiteral("kind")].toString(), QStringLiteral("midi"));
         const QJsonArray notesData = track[QStringLiteral("clips")].toArray()[0].toObject()[QStringLiteral("notes")].toArray();
-        QCOMPARE(notesData, (QJsonArray{QJsonArray{C, 1.0, 0.5, 90}, QJsonArray{G, 2.25, 1.0, 100}}));
+        // (A deactivated note has a fifth value.)
+        QCOMPARE(notesData, (QJsonArray{QJsonArray{C, 1.0, 0.5, 90}, QJsonArray{G, 2.25, 1.0, 100},
+                                        QJsonArray{E, 3.0, 0.5, 100, true}}));
         Project loaded;
         loadProject(loaded, target);
         QVERIFY(loaded.tracks()[0].clips == std::vector<Clip>{clip});
@@ -370,12 +413,14 @@ private Q_SLOTS:
                                                       {QStringLiteral("duration_beats"), 4},
                                                       {QStringLiteral("notes"),
                                                        QJsonArray{QJsonArray{200, -1, 1, 0}, QJsonArray{60, 0, 0, 100},
-                                                                  QJsonArray{200, -1, 1, 0}, QJsonArray{-3, 1.5, 0.5, 300}}}}}}}}}};
+                                                                  QJsonArray{200, -1, 1, 0}, QJsonArray{-3, 1.5, 0.5, 300},
+                                                                  QJsonArray{62, 2, 1, 100, false}}}}}}}}}};
         Project project;
         loadInto(project, data);
         const Clip& clip = project.tracks()[0].clips[0];
-        QCOMPARE(clip.name, QStringLiteral("MIDI"));
-        QVERIFY((clip.notes == std::vector<Note>{note(127, 0.0, 1.0, 1), note(0, 1.5, 0.5, 127)}));
+        QCOMPARE(clip.name, QString());  // (MIDI clips have no name)
+        QVERIFY((clip.notes ==
+                 std::vector<Note>{note(127, 0.0, 1.0, 1), note(0, 1.5, 0.5, 127), note(62, 2.0, 1.0)}));
     }
 };
 

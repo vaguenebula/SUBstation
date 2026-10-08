@@ -948,6 +948,17 @@ private Q_SLOTS:
         key(Qt::Key_C);
         QVERIFY(session().harmony()->shown());
         QVERIFY(prop(QStringLiteral("showHarmony"), "checked").toBool());
+
+        // 0: the selected clips deactivated; again, activated (Edit › Deactivate / Activate Clips).
+        const QString track = project().tracks()[0].id;
+        const QString second = project().tracks()[0].clips[1].id;
+        selection().selectClips(editor(), {sub::app::ClipRef{track, second}}, track);
+        window_->contentItem()->forceActiveFocus();
+        key(Qt::Key_0);
+        QVERIFY(project().clip(track, second).muted);
+        QVERIFY(!project().tracks()[0].clips[0].muted);
+        key(Qt::Key_0);
+        QVERIFY(!project().clip(track, second).muted);
     }
 
     // Edit › Rename: the session picks what; the view renames it in place

@@ -249,6 +249,36 @@ private Q_SLOTS:
         QCOMPARE(loaded.tracks()[0].clips[0].fadeOutSec, 0.5);
     }
 
+    void deactivatedClipsAreSaved() {
+        test::TempDir dir;
+        const QString audio = dir.path("kick.wav");
+        touch(audio);
+        Track drums = test::makeTrack("t1", "Drums");
+        Clip off = Clip::audio("c1", audio, "kick", 0.0, 1.0);
+        off.muted = true;
+        const Clip on = Clip::audio("c2", audio, "kick", 4.0, 1.0);
+        drums.clips = {off, on};
+        Track keys = test::makeTrack("t2", "Keys", kMidiKind);
+        Clip notes = Clip::midi("m1", QString(), 0.0, 4.0, 0.0, {Note{60, 0.0, 1.0}});
+        notes.muted = true;
+        keys.clips = {notes};
+        Project project;
+        ProjectContents contents;
+        contents.tracks = {drums, keys};
+        project.replaceContents(contents);
+        saveProject(project, dir.path("song.gilproj"));
+        const QJsonArray tracks = readJson(dir.path("song.gilproj"))["tracks"].toArray();
+        const QJsonArray clips = tracks[0].toObject()["clips"].toArray();
+        QCOMPARE(clips[0].toObject()["muted"].toBool(), true);
+        QVERIFY(!clips[1].toObject().contains("muted"));  // (playing: nothing saved)
+        QCOMPARE(tracks[1].toObject()["clips"].toArray()[0].toObject()["muted"].toBool(), true);
+        Project loaded;
+        loadProject(loaded, dir.path("song.gilproj"));
+        QCOMPARE(loaded.tracks()[0].clips[0], off);
+        QCOMPARE(loaded.tracks()[0].clips[1], on);
+        QCOMPARE(loaded.tracks()[1].clips[0], notes);
+    }
+
     void rejectsForeignFiles() {
         test::TempDir dir;
         const QString bad = dir.path("x.gilproj");
@@ -587,6 +617,7 @@ private Q_SLOTS:
         saved = setIn(saved, {"tracks", 1, "devices", 1}, savedRack);
         saved["chain_lists_shown"] = QJsonArray{};
         saved["rack_devices_hidden"] = QJsonArray{};
+        saved = setIn(saved, {"tracks", 2, "clips", 0, "name"}, "");  // (MIDI clips have no name: dropped on load)
         QCOMPARE(projectToJson(project, projectFile), saved);
     }
 

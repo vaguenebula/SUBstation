@@ -79,7 +79,9 @@ Clip reverseClip(const Clip& clip, const QString& path, double totalSec);
 std::pair<double, double> selectionSpan(const std::vector<Clip>& clips, double tempo);
 // Ableton's Consolidate (Ctrl+J): one MIDI clip from the first clip's start to
 // the last one's end, holding just the notes the clips play, where they play
-// them (cut at their clip's end). It keeps the first clip's id and name.
+// them (cut at their clip's end). A deactivated clip's notes come deactivated,
+// unless every clip is (the joined clip is deactivated then, its notes as they
+// were). It keeps the first clip's id and name.
 Clip consolidateMidi(const std::vector<Clip>& clips);
 
 }  // namespace sub::app::edits

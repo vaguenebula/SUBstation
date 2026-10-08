@@ -1,7 +1,7 @@
 #pragma once
 // What acts on the arrangement's selection, without its widgets: the clipboard
 // for clips, automation and tracks, and cutting, copying, pasting, duplicating,
-// deleting, reversing and consolidating what is selected, inserting MIDI clips,
+// deleting, reversing, deactivating and consolidating what is selected, inserting MIDI clips,
 // and drops onto the lanes. The arrangement view calls it (a paste at a clicked
 // beat on a clicked track, its context menus), and the session dispatches the
 // Edit menu's commands to it.
@@ -103,13 +103,26 @@ public:
     // inside it plays its file backwards); reversing them again goes back to
     // their files.
     Q_INVOKABLE void reverseSelection();
+    // 0 (Ableton's): the clips in the selected area, audio and MIDI, deactivated
+    // (just the stretch of each inside it: they no longer play); if they all
+    // are already, activated again. Those of frozen tracks (and of tracks in
+    // frozen groups) stay as they are: their frozen audio holds them. The area
+    // stays selected, with its clips.
+    Q_INVOKABLE void toggleActivation();
     // Ctrl+J: the selected MIDI clips on each track joined into one; selected.
     Q_INVOKABLE void consolidate();
     // A clip's menu's Split Here: the selected clips at `beat`.
     Q_INVOKABLE void splitAt(double beat);
-    // Whether the menu's Consolidate and Reverse can act on the selection.
+    // Whether the menu's Consolidate, Reverse and Deactivate can act on the selection.
     Q_INVOKABLE bool canConsolidate() const;
     Q_INVOKABLE bool canReverse() const;
+    Q_INVOKABLE bool canToggleActivation() const;
+    // Whether the clips in the selected area that 0 can change (not frozen)
+    // are all deactivated (0 activates them: the menu says Activate); false with none.
+    Q_INVOKABLE bool areaDeactivated() const;
+    // Both at once: what 0 would do to the selected area: activate its clips
+    // (true), deactivate them (false), or nothing (none: no clips it can change).
+    std::optional<bool> activates() const;
 
     // A new MIDI clip on a MIDI track, selected and opened (clipViewRequested):
     // over the time selection (on each of its MIDI tracks) if `beat` is inside
@@ -154,6 +167,9 @@ private:
     void pasteAutomation(const CopiedAutomation& content, double atBeat, std::optional<QList<LaneRef>> lanes = {});
     void reverseWith(double start, double end, const QStringList& trackIds,
                      const QMap<QString, std::pair<QString, double>>& reversed);
+    // The clips in the selected clip range (none without one); `live`: only
+    // those frozen audio doesn't hold.
+    std::vector<const Clip*> areaClips(bool live = false) const;
 
     ProjectEditor* editor_;
     Project* project_;

@@ -1,8 +1,8 @@
 # Piano roll and clip view
 
 The clip view is what a double-clicked clip opens: it covers the arrangement until Esc, × or Shift+Tab go back
-([README.md](README.md#the-main-window)). Audio clips get their settings and large waveforms; a MIDI clip gets the
-piano roll, laid out like Ableton's MIDI editor: a ruler on top, keys on the left, the notes in the middle and
+([README.md](README.md#the-main-window)). Audio clips get their settings and large waveforms; MIDI clips get the
+piano roll (one clip, or several edited together), laid out like Ableton's MIDI editor: a ruler on top, keys on the left, the notes in the middle and
 velocities below. The clip view is [ui/qml/clipview](../../ui/qml/clipview) with its controller in
 [ui/src/pianoroll](../../ui/src/pianoroll); the piano roll is
 [PianoRollView.qml](../../ui/qml/pianoroll/PianoRollView.qml) and
@@ -21,13 +21,13 @@ This page is about the code.
 | [ClipWaveform](../../ui/src/pianoroll/ClipWaveform.h) | The audio clips' waveforms, each whole source file fitted to the width |
 | [ClipViewKnob.qml](../../ui/qml/clipview/ClipViewKnob.qml), [ClipViewSection.qml](../../ui/qml/clipview/ClipViewSection.qml) | A captioned knob with its readout; a titled box of controls |
 | [PianoRollView.qml](../../ui/qml/pianoroll/PianoRollView.qml) | The piano roll's layout: the headphones button, the ruler, the keys, the note grid with the chord lane and the note tools over it, the velocity lane, the scroll bars |
-| [PianoRoll](../../ui/src/pianoroll/PianoRoll.h) | The piano roll's state (the old `PianoRoll` without its widgets): the clip, its own time axis and row height, the selected notes, the playhead, the key sounding, the note tools' settings and actions, the song's chords and key over the clip, Generate |
+| [PianoRoll](../../ui/src/pianoroll/PianoRoll.h) | The piano roll's state (the old `PianoRoll` without its widgets): the clips it shows, its own time axis and row height, the selected notes (and the stretch a rubber band selected), the paste marker, the notes copied, the playhead, the keys sounding, the note tools' settings and actions, the song's chords and key over the clips, Generate |
 | [RollItem](../../ui/src/pianoroll/RollItem.h) | The base of the piano roll's items: `session` and `roll` properties |
 | [NoteGrid](../../ui/src/pianoroll/NoteGrid.h) | The notes: painting, hit-testing, mouse, wheel, keys, and its gestures (`MoveNotesGesture`, `ResizeNotesGesture`, `SelectNotesGesture`, `PanGesture`) |
 | [PianoKeys](../../ui/src/pianoroll/PianoKeys.h), [PianoRuler](../../ui/src/pianoroll/PianoRuler.h), [VelocityLane](../../ui/src/pianoroll/VelocityLane.h), [RollPlayhead](../../ui/src/pianoroll/RollPlayhead.h) | The keyboard, the ruler, the velocities, and the playhead over each |
 | [ChordLane](../../ui/src/pianoroll/ChordLane.h) | The song's chords along the top of the notes |
 | [NoteTools.qml](../../ui/qml/pianoroll/NoteTools.qml) | The floating bar with Legato, ×2, ÷2, Quantize and Humanize |
-| [NoteSet.h](../../ui/src/pianoroll/NoteSet.h) | Sets of notes as sorted vectors (`noteSet`, `contains`, `united`, `without`, `byTime`) |
+| [NoteSet.h](../../ui/src/pianoroll/NoteSet.h) | `ClipNote` (a note of one of the clips shown); sets of notes and of ClipNotes as sorted vectors (`noteSet`, `clipNoteSet`, `contains`, `united`, `without`, `byTime`, `notesOf`, `tagged`, `clipsOf`) |
 
 The note maths is in the application layer's [model/Notes.h](../../app/src/model/Notes.h) (pure functions on
 `Note`s, tested without Qt): `place`, `shifted`, `resized`, `clampMove`, `withVelocity`, `legato`, `timeScaled`,
@@ -42,7 +42,7 @@ The note maths is in the application layer's [model/Notes.h](../../app/src/model
 ClipView {
     trackId: t                      // the track plain ids in clipIds are on
     clipIds: [c]                    // or [{trackId: t, clipId: c}, ...] across tracks
-    leadClipId: c                   // optional: the clip double-clicked (a MIDI lead opens alone)
+    leadClipId: c                   // optional: the clip double-clicked (a MIDI lead opens the MIDI clips)
     onCloseRequested: ...           // Esc, ×, its clips all gone, the project reset
     onLocateRequested: beat => ...  // the piano roll's ruler was clicked: Session.locate(beat)
     onStatusMessage: message => ...
@@ -50,15 +50,19 @@ ClipView {
 ```
 
 [ClipViewController](../../ui/src/pianoroll/ClipViewController.h) orders the clips top track first, then by time.
-If the lead clip (the one double-clicked; by default the first) is a MIDI clip, it alone opens, in the piano roll
-(`pianoRoll.setClip()`); otherwise every audio clip among them opens together. It shows them only while `active`
+If the lead clip (the one double-clicked; by default the first) is a MIDI clip, every MIDI clip among them opens in
+the piano roll, edited together, the lead first (`pianoRoll.setClips()`; `refs()` in that order); otherwise every
+audio clip among them opens together. It shows them only while `active`
 (bound to the view's `visible`): becoming active opens them afresh (the piano roll fitted to the clip again), going
 inactive forgets them (a key sounding stops). Deleted clips or tracks are dropped; with none left, or on a project
-reset, it emits `closeRequested`. When clips open (`opened`) the notes (MIDI) or the view (audio, for Esc) take the
+reset, it emits `closeRequested` (the piano roll skips a clip that is gone, and is given the rest when its lead
+goes). When clips open (`opened`) the notes (MIDI) or the view (audio, for Esc) take the
 keyboard.
 
-The header shows the lead track's colour, `name` and `info` ("4.00 beats · 12 notes"; "2.50 s · 5.00 beats"; "on 2
-tracks · changes apply to every selected clip"), and a × button.
+The header shows the lead track's colour, `name` (an audio clip's; for a MIDI clip, which has none, its track's) and
+`info` ("4.00 beats · 12 notes"; several MIDI clips: "3 MIDI Clips", "on 2 tracks · 12 notes · edited together";
+"2.50 s · 5.00 beats"; "on 2 tracks · changes apply to every selected clip"; with
+"· deactivated (0 activates)" when every clip shown is), and a × button.
 
 ### Audio clips
 
@@ -123,18 +127,25 @@ the playhead scrolled out of the grid would show over the keys and the browser.
 
 ### Time and pitch
 
-- **Time is content beats**: beats of the clip's notes, the ruler's 1 being the clip's first content beat, not the
-  arrangement's. The roll has its own `timeline::Timeline` (see
+- **Time is roll beats**: one clip shows in its content beats (the beats of its notes, the ruler's 1 being its first
+  content beat, not the arrangement's); several show in the arrangement's beats, each clip where it is in the song.
+  `origin()` is the arrangement beat at roll beat 0 (one clip: `startBeat - offsetBeats`; several: 0), `shift(clip)`
+  the roll beat of a clip's content beat 0, `rollStart(note)` where a note is. Notes stay in their clip's content
+  beats in the model and in the roll (`ClipNote`). The roll has its own `timeline::Timeline` (see
   [arrangement.md](arrangement.md#arrangement-and-coordinates)), so `beatToX`, zoom, the adaptive grid, snapping and
   `gridLines`/`drawGrid` work as in the arrangement. Its grid level starts at 1, a little wider than the
   arrangement's (1/16 notes across a bar).
-- **The part the clip plays** is from `clip.offsetBeats` to `clip.windowEnd()`: lit, with the rest dimmed
-  (`kOutsideClip`), and notes outside it drawn at half strength (a note plays if it starts in the window). Notes
-  outside it are kept: trimming a clip hides notes, never deletes them.
-- **Converting**: the playhead is `beat - clip.startBeat + clip.offsetBeats` while the arrangement plays inside the
-  clip; the ruler's click goes back with `clip.toTimeline(beat)` (`requestLocate()` → `locateRequested`).
-  `startBeat()` puts the arrangement's insert marker into content beats when it is inside the clip, for the start
-  marker.
+- **The part each clip plays** is from its `offsetBeats` to its `windowEnd()` (`windows()`, in roll beats): lit, with
+  the rest dimmed (`kOutsideClip`), and notes outside their clip's drawn at half strength (a note plays if it starts
+  in the window). Notes outside it are kept: trimming a clip hides notes, never deletes them.
+- **Converting**: the playhead is `beat - origin()` while the arrangement plays inside a clip shown; the ruler's
+  click goes back with `+ origin()` (`requestLocate()` → `locateRequested`). `startBeat()` (the start marker) is the
+  arrangement's insert marker in roll beats when it is inside a clip shown. `pasteBeat()` (the paste marker) is the
+  roll's own: where the grid was last clicked (`setPasteBeat()`), none for new clips; it never moves the start marker
+  or the playhead.
+- `origin()` and `shift()` are worked out in `relayout()` on every `refresh()` (any change of the clips shown), not
+  looked up for each call: drawing and hit-testing ask for a note's place note by note, and `Project::findClip` is a
+  linear search.
 - **Pitch** runs 127 at the top to 0 at the bottom, a row of `rowHeight` pixels each (`kRowHeight` 12 by default,
   `kMinRowHeight` 5 to `kMaxRowHeight` 36): `pitchTop(pitch) = (127 - pitch) * rowHeight - scrollY`, and
   `pitchAt(y)` the inverse, clamped to 0..127. `scrollY` is in pixels.
@@ -142,41 +153,53 @@ the playhead scrolled out of the grid would show over the keys and the browser.
   (1.5 px) a notch, keeping the pitch under the mouse in place. It keeps an exact height (`rowHeightExact_`) so a
   trackpad's small steps add up, and rounds it to draw.
 
-### The clip and its edits
+### The clips and their edits
 
-`setClip(trackId, clipId)` shows a MIDI clip (or nothing). `clip()` looks it up in the project each time, so the
-roll never holds a stale clip (the project replaces it on every edit, and holds tracks by value). On a new clip the
-selection and the tools reset and a fit is pending: `fitIfReady()` zooms to the part the clip plays (96 % of the
-grid's width) and centres its notes vertically (C3, `kDefaultPitch`, for an empty clip), but only once the grid has
-its size and shows (the clip view may not be laid out yet).
+`setClips(refs)` shows MIDI clips, the first leading (`setClip(trackId, clipId)`: one, or nothing). `clipAt(i)`
+(`clip()`: the lead) looks a clip up in the project each time, so the roll never holds a stale clip (the project
+replaces it on every edit, and holds tracks by value); a clip that is gone is skipped. On new clips the selection,
+the marker and the tools reset and a fit is pending: `fitIfReady()` zooms to the parts the clips play (96 % of the
+grid's width) and centres their notes vertically (C3, `kDefaultPitch`, without notes), but only once the grid has its
+size and shows (the clip view may not be laid out yet).
+
+A note is a `ClipNote`: its clip (an index into the roll's clips, 0 the lead) and the note in that clip's content
+beats. `allNotes()` is every clip's, the lead's last (drawn on top). A note stays in its clip whatever is done to it;
+a new one goes into the clip playing where it is drawn (`clipFor(beat)`: the lead if it plays there, else the first
+that does, else the lead).
 
 Every edit goes through one method:
 
 ```cpp
-roll.commit(clipNotes, text, mergeKey, selected);
+roll.commitNotes({{clip, notes}, ...}, text, mergeKey, selected);  // commit(notes, ...): the lead's
 ```
 
-It sets `selected`, then calls `editor.setClipNotes({trackId, clipId}, clipNotes, text, mergeKey)`: the clip's whole
+It sets `selected`, then calls `editor.setClipsNotes({{ref, notes}, ...}, text, mergeKey)`: each changed clip's whole
 new list of notes, one undo command, merged with the previous one when they share the merge key. Gestures pass their
 own key (a `QUuid` made at the press), so a drag is one undo step, while the model (and what plays) changes live as
-the mouse moves. Every edit is heard at once, because the bridge sends the track's notes to the engine on
-`clipsChanged`.
+the mouse moves. Every edit is heard at once, because the bridge sends the tracks' notes to the engine on
+`clipsChanged`. Edits of notes in several clips work out each clip's notes on its own (`notes::place` per clip);
+moves are limited so no note of any clip leaves its range.
 
-`clipsChanged` for the roll's track calls `refresh()`, which drops selected notes that no longer exist (undo, redo)
-and repaints (`contentChanged`).
+`clipsChanged` for a track the roll shows calls `refresh()`, which drops selected notes that no longer exist (undo,
+redo) and repaints (`contentChanged`).
 
-The selection is `roll.selected()`, a set of `Note`s (a sorted vector, [NoteSet.h](../../ui/src/pianoroll/NoteSet.h)).
-A `Note` is a value: a moved note is a new note, which is why gestures pass the moved notes as the new selection.
+The selection is `roll.selectedNotes()`, a set of `ClipNote`s (a sorted vector, [NoteSet.h](../../ui/src/pianoroll/NoteSet.h);
+`selected()`: their notes, `setSelection(notes)`: the lead's). A `Note` is a value: a moved note is a new note, which
+is why gestures pass the moved notes as the new selection. A rubber band also selects the stretch of time it covered
+(`selectedSpan()`, snapped out to the grid lines around it), drawn tinted under the notes; any other new selection
+forgets it.
 
 ### Note grid
 
 [NoteGrid](../../ui/src/pianoroll/NoteGrid.h).
 
-**Painting.** Rows (black keys `kBlackKeyRow`, lines at B|C and E|F), the grid, the dimmed outside of the clip's
-window, then the notes: in the track's colour (halfway to red, `Theme::kOutOfKey`, for a note out of the song's key:
-`PianoRoll::outOfKey()`), more opaque for louder notes (alpha from velocity) and lighter when selected (white
-outline), with the note's name when it is at least 30 by 10 px. Then the rubber band and the start
-marker; the playhead is the `RollPlayhead` over it.
+**Painting.** Rows (black keys `kBlackKeyRow`, lines at B|C and E|F), the grid, the dimmed outside of the clips'
+windows (with several, a line in the clip's track colour at each window's ends), the selected stretch's tint, then
+the notes: each in its clip's track colour (halfway to red, `Theme::kOutOfKey`, for a note out of the song's key:
+`PianoRoll::outOfKey()`; grey, `Theme::kDeactivatedClip`, for a deactivated one, as its velocity stem is), more opaque for louder notes (alpha from velocity) and lighter when selected (white
+outline), with the note's name when it is at least 30 by 10 px. Then the rubber band, the start marker
+(`startBeat()`, a line in `kInsertMarker`) and the paste marker (`pasteBeat()`, dashed in `kPasteMarker`); the
+playhead is the `RollPlayhead` over it.
 
 **Hit-testing.** `PianoRoll::noteRect(note)` (at least 3 px wide) and `noteAt(pos)` → `Hit{note, zone}` for the
 topmost note: `End` or `Start` within `kEdgeGrab` (5 px, or a quarter of a short note) of an end, else `Body`.
@@ -186,7 +209,7 @@ topmost note: `End` or `Start` within `kEdgeGrab` (5 px, or a quarter of a short
 | Press | Gesture |
 |---|---|
 | Ctrl+Alt | `PanGesture`: scrolls both ways, as in the arrangement |
-| empty space | `SelectNotesGesture`: a rubber band; Ctrl or Shift adds to the selection |
+| empty space | `SelectNotesGesture`: a rubber band; Ctrl or Shift adds to the selection. A click (no drag) places the paste marker at the snapped beat (`setPasteBeat()`) |
 | a note's body | `MoveNotesGesture` on the selected notes (the note is selected first if it wasn't) |
 | a note's end | `ResizeNotesGesture` on the selected notes |
 
@@ -202,11 +225,13 @@ Gestures start after `kDragThreshold` (3 px):
   note at its new pitch.
 - `ResizeNotesGesture`: moves the grabbed edge, snapped; the shortest length is a grid step while snapping, else
   `kMinNoteBeats`; `notes::resized` applies it to all.
-- `SelectNotesGesture`: selects the notes the band touches. On release, a band that was dragged selects them with
-  the tools (`setSelection(notes, true)`).
+- `SelectNotesGesture`: selects the notes the band touches (of every clip); each note sounds as the band catches it
+  (`previewNotes()` with the notes it touches now and didn't before). On release, a band that was dragged selects
+  them with the tools (`selectNotes(notes, true)`) and selects the stretch it covered (`setSelectedSpan()`, floored
+  and ceiled to the grid).
 
 Double-click: on a note, deletes it; elsewhere, adds a note one grid step long in the grid cell clicked (Alt: where
-clicked), at the row's pitch, and auditions it. Adding or deleting a note this way never brings up the tools.
+clicked), at the row's pitch, into the clip playing there (`clipFor()`), and auditions it. Adding or deleting a note this way never brings up the tools.
 
 Wheel (`PianoRoll::wheel()`): Alt makes the rows taller or shorter (either axis, as Qt may report Alt+wheel as
 horizontal); Ctrl zooms time around the mouse (1.2 a notch); Shift or a horizontal wheel scrolls sideways (80 px a
@@ -214,17 +239,21 @@ notch); otherwise it scrolls three rows a notch. The keys forward their wheel ev
 
 ### Keys
 
-The grid takes `Delete`/`Backspace`, `Ctrl+A`, `Ctrl+D`, `Ctrl+U`, and the arrow keys (`handles()`). The main window
-has shortcuts for Delete, Ctrl+A and Ctrl+D too (for clips); the grid accepts their `ShortcutOverride` event in
+The grid takes `Delete`/`Backspace`, `Ctrl+A`, `Ctrl+D`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+U`, the arrow keys and
+`0` (`handles()`). The main window has shortcuts for most of them too (for clips); the grid accepts their
+`ShortcutOverride` event in
 `event()`, so Qt delivers them to the grid as key presses instead of firing the window's actions, while it has the
 focus. A hidden grid gives the focus up, so the window's shortcuts work again once the clip view goes.
 
 | Key | Does |
 |---|---|
-| Ctrl+A | selects every note, with the tools |
+| Ctrl+A | selects every note (of every clip), with the tools |
 | Ctrl+U | `quantize()`: the selected notes, or every note when none are |
 | Delete, Backspace | deletes the selected notes |
-| Ctrl+D | copies the selected notes right after them (`notes::span`), selected |
+| Ctrl+D | `duplicateSelected()`: copies of the selected notes by the selected stretch's length (right after it; a rubber band's stretch reaches from where the drag started), else right after the last of them; selected, and the stretch after it selected (Ctrl+D again goes on) |
+| Ctrl+C / Ctrl+X | `copySelected()` / `cutSelected()`: the selected notes copied (their track, their times from the stretch's start); cut takes them out |
+| Ctrl+V | `paste()`: the copied notes at the paste marker (else right after where they were copied), each into the clip of its track that plays there (else the one there, else the lead); selected, the marker moving to their end |
+| 0 | deactivates the selected notes (`notes::withActive`), or activates them if they all are; they stay selected |
 | Up / Down | a semitone (Shift: an octave) |
 | Left / Right | a grid step (Shift: a bar) |
 
@@ -234,16 +263,18 @@ Moves go through `notes::clampMove` and do nothing at the edge.
 
 [PianoKeys](../../ui/src/pianoroll/PianoKeys.h) draws the keyboard (black keys 60 % wide, the key sounding lit, C's
 labelled with `noteName`). Pressing a key selects every note on that pitch (Shift adds) and auditions it; dragging
-over the keys plays each in turn; releasing stops it.
+over the keys selects every note on the keys from the one pressed to the one under the mouse (`selectKeys()`) and
+plays each key in turn; releasing stops it.
 
-[PianoRuler](../../ui/src/pianoroll/PianoRuler.h) draws bar numbers in content time, a bar in the track's colour under
-the part the clip plays, and the start marker. A click plays from the snapped beat (`requestLocate()`, converted to
+[PianoRuler](../../ui/src/pianoroll/PianoRuler.h) draws bar numbers in roll time, a bar in each clip's track colour
+under the part it plays, the start marker (a triangle at the top) and the paste marker (a tab at the bottom, in
+`Theme::kPasteMarker`, over the grid's dashed line). A click plays from the snapped beat (`requestLocate()`, converted to
 the timeline); a drag pans or zooms as the arrangement's ruler does (decided on its first 3 px).
 
 ### Velocity lane
 
-[VelocityLane](../../ui/src/pianoroll/VelocityLane.h) draws a stem per note at its start, as tall as its velocity (1 to
-127 over the lane's height), white for selected notes. `stemAt(x)` finds the stem nearest the mouse within
+[VelocityLane](../../ui/src/pianoroll/VelocityLane.h) draws a stem per note at its start (every clip's, in its track's
+colour), as tall as its velocity (1 to 127 over the lane's height), white for selected notes. `stemAt(x)` finds the stem nearest the mouse within
 `kStemGrab` (6 px), preferring selected notes. Dragging a stem selects its note (if it wasn't) and changes every
 selected note's velocity by the same amount (`notes::withVelocity`), committed live with one key; the selected
 notes' values show while dragging.
@@ -267,8 +298,11 @@ The bar sits centred above the notes (below them when there is no room), kept in
 off, taking the rest of its time.
 
 The actions are the roll's: `legato()`, `scaleTime(2.0)` / `scaleTime(0.5)`, `quantize()`, `humanize()`. Each takes
-`toolTargets()` (the selected notes, or all when none are, by time), computes the changed notes with the matching
-`notes::` function, and commits `notes::place(clip.notes, targets, changed)` as one undo step. `humanize` uses the
+`toolTargets()` (the selected notes, or all when none are, by time on the roll), computes the changed notes with the
+matching `notes::` function, and commits `notes::place(clip.notes, targets, changed)` for each clip as one undo step
+(`applyTool()`). Legato works in each clip on its own (up to its own notes and its end); Quantize, Humanize and ×2 /
+÷2 work on the notes' times on the roll (`applyOnRoll()`: with several clips, the arrangement's grid), each note
+then back in its clip. `humanize` uses the
 roll's own `QRandomGenerator` (`seedRandom()` for tests). The parameters are the roll's properties: `quantizeGrid`,
 `quantizeAmount`, `humanizeAmount` (at 100 %, notes move by up to `humanizeBeats`, a 32nd note, and velocities change
 by up to `humanizeVelocity`, 24).
@@ -277,8 +311,8 @@ by up to `humanizeVelocity`, 24).
 
 The song's harmony is the session's (`Session.harmony`, [intelligence.md](../intelligence.md#harmony-the-application-side)):
 its chords on the timeline and its key (the project's, else inferred from its MIDI). While it is shown (`shown`, View ›
-Chords and Key, C), `refreshHarmony()` maps the chords over the part the clip plays (`startBeat` to `endBeat()` on the
-timeline) into content beats, as `RollChord`s (`chords()`: start, end, name, root, minor), and keeps the key
+Chords and Key, C), `refreshHarmony()` maps the chords over the part the clips play (the first one's `startBeat` to
+the last one's `endBeat()` on the timeline) into roll beats, as `RollChord`s (`chords()`: start, end, name, root, minor), and keeps the key
 (`scaleKey()`), on the GUI thread, for the items to draw: when the harmony says it changed (40 ms after an edit
 anywhere in the song), when it is shown or hidden, when a clip opens and when the grid shows. Hidden, there are no
 chords and no key, and nothing is inferred.
@@ -290,8 +324,8 @@ buttons: clicks reach the notes under it. `NoteGrid` tints notes out of the key 
 or natural minor, scale).
 
 The clip view's header shows the key (`keyLabel`: "Key: A Minor", "(inferred)" when the project has none) and
-*Generate ▾*, a menu of *Chords* and *Bass*: `generateChords()` and `generateBass()`. Each takes the song's chords over
-the part the clip plays (a progression in the key, C major without one, where there are none:
+*Generate ▾*, a menu of *Chords* and *Bass*: `generateChords()` and `generateBass()`. Each writes into the lead clip:
+it takes the song's chords over the part it plays (a progression in the key, C major without one, where there are none:
 `starterProgression`), writes the part (`chordPart`, `bassPart`; bars on the timeline's) in content beats, and commits
 the clip's notes with them as one undo step ("Generate Chords", "Generate Bass"), the written notes selected. The
 clip's own notes win: a written note overlapping one on its key is shortened or left out (`notes::resolveOverlaps`
@@ -299,15 +333,19 @@ with the clip's notes as winners), and nothing is committed if nothing would cha
 
 ### Hearing notes
 
-`audition(pitch, velocity)` sounds a key on the track's instrument through `bridge.previewNote(trackId, pitch,
-velocity)` until `releaseAudition()` (a `previewNote` with velocity 0); one key sounds at a time. The headphones
-button (`preview`) turns it off. Hiding the grid or changing the clip releases it. Preview notes go through a
+`audition(pitch, velocity, clip)` sounds a key on the instrument of the clip's track through
+`bridge.previewNote(trackId, pitch, velocity)` until `releaseAudition()` (a `previewNote` with velocity 0); one key
+sounds at a time. `previewNotes(notes)` sounds notes for a moment (a rubber band's, as it catches them), each key
+once on its track, as loud as its loudest note, deactivated notes left out, with those sounding already (a key
+sounding isn't struck again); all of them stop `kChordPreviewMs` (400 ms) after the last were caught
+(`previewing()`: the keys sounding). A key auditioned stops them. The headphones button (`preview`) turns both off. Hiding the grid or changing
+the clips releases them. Preview notes go through a
 lock-free queue to the next audio block, straight to the track's instrument (see [engine/midi.md](../engine/midi.md)).
 
 ### Playhead
 
-`onPosition` (from the bridge's `positionChanged` and `transportChanged`) works out the content-beat playhead while
-playing inside the clip and emits `playheadChanged`; only the `RollPlayhead` items repaint, not the notes.
+`onPosition` (from the bridge's `positionChanged` and `transportChanged`) works out the roll-beat playhead while
+playing inside a clip shown and emits `playheadChanged`; only the `RollPlayhead` items repaint, not the notes.
 
 ## Extending it
 
@@ -323,13 +361,13 @@ playing inside the clip and emits `playheadChanged`; only the `RollPlayhead` ite
 
 ## Gotchas
 
-- Always go through `roll.clip()`; the clip is replaced on every edit.
+- Always go through `roll.clipAt()`; a clip is replaced on every edit.
+- Notes are in their clip's content beats; draw and hit-test them with `noteRect(ClipNote)` / `rollStart()`, never
+  with a bare `note.start`.
 - Gestures commit from the notes as they were at the press (`base_`), not from the current clip, or a drag would
   compound.
 - Notes are compared by value: two identical notes on the same key and time are one in a set. `notes::place` decides
   how overlaps resolve.
-- The piano roll shows one clip. Several MIDI clips at once aren't supported (see
-  [guide/limitations.md](../guide/limitations.md)).
 
 ## Tests
 

@@ -3,7 +3,8 @@
 // selecting all, duplicating and deleting the selected area, cutting, copying
 // and pasting clips, automation and tracks (one clipboard), groups, return
 // tracks, duplicating tracks, inserting tracks after the selected one, reversing
-// clips (at once, and in the background), and what the engine plays.
+// clips (at once, and in the background), deactivating clips (0), and what the
+// engine plays.
 
 #include "EditorFixture.h"
 #include "SessionFixture.h"
@@ -542,6 +543,79 @@ private Q_SLOTS:
         f.s().reverseClips();
         QCOMPARE(f.messages, QStringList{QStringLiteral("There are no audio clips in the selection to reverse.")});
         QCOMPARE(f.stack().undoText(), QStringLiteral("Insert MIDI Clip"));
+    }
+
+    void zeroDeactivatesTheSelectedClipsAndAgainActivatesThem() {
+        SessionFixture f(true);
+        TempDir dir;
+        threeTracks(f, dir);  // clips at beats 0-4, 2-8 and 4-12 (beat 2 is 1 s in)
+        const QStringList ids = trackIds(f.project());
+        Session& s = f.s();
+        ArrangementActions& actions = *s.arrangement();
+        QVERIFY(maxAbs(f.render(kRate), 0, kRate) > 0.1);  // the first clip, alone in the first second
+
+        // A clip selected: 0 deactivates it, and it no longer plays.
+        const ClipRef first{ids[0], f.project().track(ids[0]).clips[0].id};
+        f.selection().selectClips(f.editor(), {first});
+        QVERIFY(actions.canToggleActivation() && !actions.areaDeactivated());
+        s.toggleClipActivation();
+        QVERIFY(f.project().clip(first.trackId, first.clipId).muted);
+        QCOMPARE(f.stack().undoText(), QStringLiteral("Deactivate Clip"));
+        QVERIFY(actions.areaDeactivated());  // (the menu says Activate)
+        QCOMPARE(maxAbs(f.render(kRate), 0, kRate), 0.0);
+        // Again: it plays again.
+        s.toggleClipActivation();
+        QVERIFY(!f.project().clip(first.trackId, first.clipId).muted);
+        QCOMPARE(f.stack().undoText(), QStringLiteral("Activate Clip"));
+        QVERIFY(maxAbs(f.render(kRate), 0, kRate) > 0.1);
+
+        // Over parts of clips: just the stretch inside is deactivated (and stays selected, with its clips).
+        f.selection().setTimeRange(3.0, 6.0, {ids[0], ids[1]}, QSet<ClipRef>());
+        s.toggleClipActivation();
+        QCOMPARE(spans(f.project(), ids[0]), (QList<QPair<double, double>>{{0, 3}, {3, 4}}));
+        QCOMPARE(spans(f.project(), ids[1]), (QList<QPair<double, double>>{{2, 3}, {3, 6}, {6, 8}}));
+        QVERIFY(f.project().track(ids[0]).clips[1].muted && !f.project().track(ids[0]).clips[0].muted);
+        QVERIFY(f.project().track(ids[1]).clips[1].muted && !f.project().track(ids[1]).clips[2].muted);
+        QCOMPARE(f.selection().clips().size(), 2);
+        QVERIFY(actions.areaDeactivated());
+        // Some of the selection still active: 0 deactivates the rest (a mixed selection goes off, as in Ableton).
+        f.selection().setTimeRange(0.0, 6.0, {ids[0], ids[1]}, QSet<ClipRef>());
+        s.toggleClipActivation();
+        for (const QString& id : {ids[0], ids[1]}) {
+            for (const Clip& clip : f.project().track(id).clips) QCOMPARE(clip.muted, clip.startBeat < 6.0);
+        }
+
+        // Nothing selected, or no clips in the selection: it says so.
+        f.selection().setTimeRange(20.0, 24.0, {ids[0]}, QSet<ClipRef>());
+        QVERIFY(!actions.canToggleActivation());
+        s.toggleClipActivation();
+        QCOMPARE(f.lastMessage(), QStringLiteral("There are no clips in the selection to deactivate."));
+        f.selection().clear();
+        s.toggleClipActivation();
+        QCOMPARE(f.lastMessage(), QStringLiteral("Select clips (or a time range over them) to deactivate them."));
+    }
+
+    void zeroLeavesFrozenTracksClipsAsTheyAre() {
+        SessionFixture f;
+        const QStringList ids = makeTracks(f, 2);  // c0 at 0-2 on A, c1 at 4-6 on B
+        f.editor().freezeTracks({{ids[0], Freeze{QStringLiteral("frozen.wav"), 8.0, 120.0}}});
+        ArrangementActions& actions = *f.s().arrangement();
+        // Over both: B's clip is deactivated; A's, held by its frozen audio, stays as it is.
+        f.selection().setTimeRange(0.0, 8.0, ids, QSet<ClipRef>());
+        QVERIFY(actions.canToggleActivation() && !actions.areaDeactivated());
+        f.s().toggleClipActivation();
+        QVERIFY(f.project().track(ids[1]).clips[0].muted);
+        QVERIFY(!f.project().track(ids[0]).clips[0].muted);
+        QVERIFY(actions.areaDeactivated());  // (of what 0 can change)
+        // Over the frozen track alone: nothing to change, and it says why; the selection stays as it was.
+        f.selection().setTimeRange(0.0, 8.0, {ids[0]}, QSet<ClipRef>());
+        QVERIFY(!actions.canToggleActivation());
+        f.s().toggleClipActivation();
+        QCOMPARE(f.lastMessage(), QStringLiteral("The selected clips are frozen: unfreeze their tracks to deactivate them."));
+        QVERIFY(f.selection().clips().isEmpty());
+        // (Refused by the editor too, its clips unchanged and none reported.)
+        QVERIFY(f.editor().setRangeActive(0.0, 8.0, {ids[0]}, false).isEmpty());
+        QVERIFY(!f.project().track(ids[0]).clips[0].muted);
     }
 
     void aTimeSelectionOverAGroupTakesInItsTracks() {

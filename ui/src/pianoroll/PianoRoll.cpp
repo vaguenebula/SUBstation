@@ -8,7 +8,6 @@
 #include "model/Numbers.h"
 #include "model/Project.h"
 #include "pianoroll/NoteGrid.h"
-#include "pianoroll/NoteSet.h"
 #include "session/Selection.h"
 #include "theme/Theme.h"
 
@@ -18,19 +17,27 @@
 namespace sub::ui {
 
 using app::Note;
+namespace notes = app::notes;
 
 PianoRoll::PianoRoll(QObject* parent) : QObject(parent), rng_(QRandomGenerator::global()->generate()) {
     view_.setGridLevel(1);  // a little wider than the arrangement's: 1/16 notes across a bar
+    previewTimer_.setSingleShot(true);
+    previewTimer_.setInterval(kChordPreviewMs);
+    connect(&previewTimer_, &QTimer::timeout, this, &PianoRoll::stopPreview);
 }
 
 PianoRoll::~PianoRoll() {
-    // A key still sounding stops with the roll.
-    if (auditioned_ && session_ && !trackId_.isEmpty()) bridge()->previewNote(trackId_, *auditioned_, 0);
+    // Keys still sounding stop with the roll.
+    if (session_) {
+        if (auditioned_ && !auditionTrack_.isEmpty()) bridge()->previewNote(auditionTrack_, *auditioned_, 0);
+        for (const auto& [track, pitch] : previewing_) bridge()->previewNote(track, pitch, 0);
+    }
 }
 
 void PianoRoll::setSession(app::Session* session) {
     if (session == session_) return;
     releaseAudition();
+    stopPreview();
     if (session_) {
         disconnect(session_->project(), nullptr, this, nullptr);
         disconnect(session_->selection(), nullptr, this, nullptr);
@@ -48,11 +55,11 @@ void PianoRoll::connectSession() {
     if (!session_) return;
     app::Project* p = session_->project();
     connect(p, &app::Project::clipsChanged, this, [this](const QString& trackId) {
-        if (trackId == trackId_) refresh();
+        if (showsTrack(trackId)) refresh();
     });
     connect(p, &app::Project::settingsChanged, this, &PianoRoll::repaintAll);
     connect(p, &app::Project::trackChanged, this, [this](const QString& trackId) {
-        if (trackId == trackId_) repaintAll();
+        if (showsTrack(trackId)) repaintAll();
     });
     // The start marker follows the arrangement's insert marker.
     connect(session_->selection(), &app::Selection::insertChanged, this, &PianoRoll::repaintAll);
@@ -69,16 +76,18 @@ app::EngineBridge* PianoRoll::bridge() const { return session_ ? session_->bridg
 app::Selection* PianoRoll::selection() const { return session_ ? session_->selection() : nullptr; }
 app::Harmony* PianoRoll::harmony() const { return session_ ? session_->harmony() : nullptr; }
 
-// --- The clip ------------------------------------------------------------------------
+// --- The clips -----------------------------------------------------------------------
 
-void PianoRoll::setClip(const QString& trackId, const QString& clipId) {
+void PianoRoll::setClips(const app::ClipRefs& refs) {
     releaseAudition();
-    if (trackId != trackId_ || clipId != clipId_) {
-        trackId_ = trackId;
-        clipId_ = clipId;
+    stopPreview();
+    if (refs != clips_) {
+        clips_ = refs;
         selected_.clear();
+        span_.reset();
+        pasteBeat_.reset();
         toolsWanted_ = false;
-        fitPending_ = !clipId.isEmpty();
+        fitPending_ = !refs.isEmpty();
         Q_EMIT clipChanged();
         Q_EMIT selectionChanged();
     }
@@ -86,58 +95,242 @@ void PianoRoll::setClip(const QString& trackId, const QString& clipId) {
     refresh();
 }
 
-const app::Clip* PianoRoll::clip() const {
+void PianoRoll::setClip(const QString& trackId, const QString& clipId) {
+    setClips(trackId.isEmpty() || clipId.isEmpty() ? app::ClipRefs() : app::ClipRefs{{trackId, clipId}});
+}
+
+const app::Clip* PianoRoll::clipAt(int index) const {
     const app::Project* p = project();
-    if (!p || trackId_.isEmpty()) return nullptr;
-    const app::Clip* found = p->findClip(trackId_, clipId_);
+    if (!p || index < 0 || index >= clipCount()) return nullptr;
+    const app::ClipRef& ref = clips_[index];
+    const app::Clip* found = p->findClip(ref.trackId, ref.clipId);
     return found && found->isMidi() ? found : nullptr;
 }
 
-QColor PianoRoll::trackColor() const {
-    return clip() ? QColor(project()->track(trackId_).color) : Theme::kAccent;
+QColor PianoRoll::colorOf(int index) const {
+    return clipAt(index) ? QColor(project()->track(clips_[index].trackId).color) : Theme::kAccent;
+}
+
+bool PianoRoll::showsTrack(const QString& trackId) const {
+    return std::any_of(clips_.begin(), clips_.end(), [&](const app::ClipRef& ref) { return ref.trackId == trackId; });
+}
+
+void PianoRoll::relayout() {
+    // One clip: its content beats; several: the arrangement's beats.
+    const app::Clip* lead = clip();
+    origin_ = clips_.size() == 1 && lead ? lead->startBeat - lead->offsetBeats : 0.0;
+    shifts_.assign(clips_.size(), 0.0);
+    for (int i = 0; i < clipCount(); ++i) {
+        if (const app::Clip* c = clipAt(i)) shifts_[static_cast<size_t>(i)] = c->startBeat - c->offsetBeats - origin_;
+    }
+}
+
+std::vector<PianoRoll::Span> PianoRoll::windows() const {
+    std::vector<Span> spans;
+    for (int i = 0; i < clipCount(); ++i) {
+        if (const app::Clip* c = clipAt(i)) spans.emplace_back(c->offsetBeats + shift(i), c->windowEnd() + shift(i));
+    }
+    return spans;
+}
+
+std::vector<ClipNote> PianoRoll::allNotes() const {
+    std::vector<ClipNote> all;
+    forEachNote([&](int clip, const Note& note) { all.push_back({clip, note}); });
+    return all;
+}
+
+std::optional<int> PianoRoll::clipFor(double beat, const QString& trackId) const {
+    for (int i = 0; i < clipCount(); ++i) {
+        if (!trackId.isEmpty() && clips_[i].trackId != trackId) continue;
+        const app::Clip* c = clipAt(i);
+        if (c && c->offsetBeats + shift(i) <= beat + 1e-9 && beat < c->windowEnd() + shift(i) - 1e-9) return i;
+    }
+    if (!trackId.isEmpty() || !clip()) return std::nullopt;
+    return 0;
 }
 
 void PianoRoll::refresh() {
-    const app::Clip* c = clip();
+    relayout();
     const size_t count = selected_.size();
-    if (c) {
-        const std::vector<Note> notes = roll::noteSet(c->notes);
-        std::vector<Note> kept;
-        for (const Note& note : selected_) {
-            if (roll::contains(notes, note)) kept.push_back(note);
+    std::map<int, std::vector<Note>> present;  // each clip's notes, as a set (looked up once a clip)
+    std::vector<ClipNote> kept;
+    for (const ClipNote& note : selected_) {
+        auto found = present.find(note.clip);
+        if (found == present.end()) {
+            const app::Clip* c = clipAt(note.clip);
+            found = present.emplace(note.clip, c ? roll::noteSet(c->notes) : std::vector<Note>()).first;
         }
-        selected_ = std::move(kept);
-    } else {
-        selected_.clear();
+        if (roll::contains(found->second, note.note)) kept.push_back(note);
     }
-    if (selected_.size() != count) Q_EMIT selectionChanged();
+    selected_ = std::move(kept);
+    if (selected_.size() != count) {
+        span_.reset();
+        Q_EMIT selectionChanged();
+    }
     fitIfReady();
     updateBars();
     if (app::EngineBridge* b = bridge()) onPosition(b->position());
     repaintAll();
 }
 
-void PianoRoll::commit(const std::vector<Note>& clipNotes, const QString& text, const QString& mergeKey,
-                       const std::optional<std::vector<Note>>& selected) {
-    if (!clip()) return;
+void PianoRoll::commitNotes(const std::map<int, std::vector<Note>>& notes, const QString& text,
+                            const QString& mergeKey, const std::optional<std::vector<ClipNote>>& selected) {
+    std::vector<std::pair<app::ClipRef, std::vector<Note>>> changes;
+    for (const auto& [index, list] : notes) {
+        if (clipAt(index)) changes.emplace_back(clips_[index], list);
+    }
+    if (changes.empty()) return;
     if (selected) {
-        selected_ = roll::noteSet(*selected);
+        selected_ = roll::clipNoteSet(*selected);
+        span_.reset();
         Q_EMIT selectionChanged();
     }
-    editor()->setClipNotes({trackId_, clipId_}, clipNotes, text, mergeKey);
+    editor()->setClipsNotes(changes, text, mergeKey);
     repaintAll();
+}
+
+void PianoRoll::commit(const std::vector<Note>& clipNotes, const QString& text, const QString& mergeKey,
+                       const std::optional<std::vector<Note>>& selected) {
+    std::optional<std::vector<ClipNote>> chosen;
+    if (selected) chosen = roll::tagged(*selected, 0);
+    commitNotes({{0, clipNotes}}, text, mergeKey, chosen);
 }
 
 // --- Selected notes ------------------------------------------------------------------
 
-void PianoRoll::setSelection(const std::vector<Note>& notes, bool tools) {
-    selected_ = roll::noteSet(notes);
+void PianoRoll::selectNotes(const std::vector<ClipNote>& notes, bool tools) {
+    selected_ = roll::clipNoteSet(notes);
+    span_.reset();
     toolsWanted_ = tools && !selected_.empty();
     Q_EMIT selectionChanged();
     repaintAll();
 }
 
-bool PianoRoll::isSelected(const Note& note) const { return roll::contains(selected_, note); }
+void PianoRoll::setSelection(const std::vector<Note>& notes, bool tools) { selectNotes(roll::tagged(notes, 0), tools); }
+
+std::vector<Note> PianoRoll::selected() const {
+    std::vector<Note> result;
+    result.reserve(selected_.size());
+    for (const ClipNote& note : selected_) result.push_back(note.note);
+    return result;
+}
+
+bool PianoRoll::isSelected(const ClipNote& note) const { return roll::contains(selected_, note); }
+
+void PianoRoll::setSelectedSpan(const std::optional<Span>& span) {
+    if (span == span_) return;
+    span_ = span;
+    repaintAll();
+}
+
+// --- Editing the selection -------------------------------------------------------------
+
+std::optional<PianoRoll::Span> PianoRoll::selectionStretch() const {
+    if (selected_.empty()) return std::nullopt;
+    double start = rollStart(selected_.front()), end = start;
+    for (const ClipNote& note : selected_) {
+        start = std::min(start, rollStart(note));
+        end = std::max(end, rollStart(note) + note.note.length);
+    }
+    if (span_) {
+        start = std::min(start, span_->first);
+        end = std::max(end, span_->second);
+    }
+    return Span{start, end};
+}
+
+void PianoRoll::duplicateSelected() {
+    const auto stretch = selectionStretch();
+    if (!stretch) return;
+    const double length = stretch->second - stretch->first;
+    const bool spanned = span_.has_value();
+    std::map<int, std::vector<Note>> changes;
+    std::vector<ClipNote> copies;
+    for (const int index : roll::clipsOf(selected_)) {
+        const app::Clip* c = clipAt(index);
+        if (!c) continue;
+        const std::vector<Note> moved = notes::shifted(roll::notesOf(selected_, index), length, 0);
+        changes[index] = notes::place(c->notes, {}, moved);
+        for (const Note& note : moved) copies.push_back({index, note});
+    }
+    commitNotes(changes, QStringLiteral("Duplicate Notes"), {}, copies);
+    // The stretch after it is selected now: Ctrl+D again goes on.
+    if (spanned) setSelectedSpan(Span{stretch->first + length, stretch->second + length});
+}
+
+void PianoRoll::copySelected() {
+    const auto stretch = selectionStretch();
+    if (!stretch) return;
+    Copied copied;
+    copied.start = stretch->first;
+    copied.length = stretch->second - stretch->first;
+    for (const ClipNote& note : selected_) {
+        Note relative = note.note;
+        relative.start = rollStart(note) - stretch->first;
+        copied.notes.emplace_back(clips_[note.clip].trackId, relative);
+    }
+    copied_ = std::move(copied);
+    Q_EMIT copiedChanged();
+}
+
+void PianoRoll::cutSelected() {
+    if (selected_.empty()) return;
+    copySelected();
+    std::map<int, std::vector<Note>> changes;
+    for (const int index : roll::clipsOf(selected_)) {
+        if (const app::Clip* c = clipAt(index)) changes[index] = notes::place(c->notes, roll::notesOf(selected_, index), {});
+    }
+    commitNotes(changes, selected_.size() == 1 ? QStringLiteral("Cut Note") : QStringLiteral("Cut Notes"), {},
+                std::vector<ClipNote>());
+}
+
+void PianoRoll::paste() {
+    if (copied_.notes.empty() || !clip()) return;
+    const double at = std::max(0.0, pasteBeat_ ? *pasteBeat_ : copied_.start + copied_.length);
+    std::map<int, std::vector<Note>> added;
+    for (const auto& [trackId, note] : copied_.notes) {
+        const double beat = at + note.start;
+        std::optional<int> target = clipFor(beat, trackId);  // on its own track, where one plays there
+        if (!target) target = clipFor(beat);
+        if (!target) continue;
+        Note placed = note;
+        placed.start = std::max(0.0, beat - shift(*target));
+        added[*target].push_back(placed);
+    }
+    std::map<int, std::vector<Note>> changes;
+    std::vector<ClipNote> pasted;
+    for (const auto& [index, list] : added) {
+        changes[index] = notes::place(clipAt(index)->notes, {}, list);
+        for (const Note& note : list) pasted.push_back({index, note});
+    }
+    if (changes.empty()) return;
+    commitNotes(changes, pasted.size() == 1 ? QStringLiteral("Paste Note") : QStringLiteral("Paste Notes"), {},
+                pasted);
+    setSelectedSpan(Span{at, at + copied_.length});
+    setPasteBeat(at + copied_.length);  // pasting again appends
+}
+
+void PianoRoll::toggleSelectedActive() {
+    if (selected_.empty()) return;
+    const bool activate =
+        std::all_of(selected_.begin(), selected_.end(), [](const ClipNote& note) { return note.note.muted; });
+    std::map<int, std::vector<Note>> changes;
+    std::vector<ClipNote> toggled;
+    for (const int index : roll::clipsOf(selected_)) {
+        const app::Clip* c = clipAt(index);
+        if (!c) continue;
+        const std::vector<Note> targets = roll::notesOf(selected_, index);
+        changes[index] = notes::withActive(c->notes, targets, activate);
+        for (Note note : targets) {
+            note.muted = !activate;
+            toggled.push_back({index, note});
+        }
+    }
+    const std::optional<Span> span = span_;
+    const QString what = selected_.size() == 1 ? QStringLiteral(" Note") : QStringLiteral(" Notes");
+    commitNotes(changes, (activate ? QStringLiteral("Activate") : QStringLiteral("Deactivate")) + what, {}, toggled);
+    setSelectedSpan(span);  // (the same stretch stays selected)
+}
 
 // --- Note tools ------------------------------------------------------------------------
 
@@ -145,7 +338,7 @@ void PianoRoll::placeTools() {
     const bool shown = toolsWanted_ && !(grid_ && grid_->dragging()) && !selected_.empty();
     if (shown) {
         QRectF area;
-        for (const Note& note : selected_) area = area.isNull() ? noteRect(note) : area.united(noteRect(note));
+        for (const ClipNote& note : selected_) area = area.isNull() ? noteRect(note) : area.united(noteRect(note));
         const int count = static_cast<int>(selected_.size());
         if (toolsShown_ && area == toolsArea_ && count == toolsCount_) return;
         toolsShown_ = true;
@@ -158,45 +351,92 @@ void PianoRoll::placeTools() {
     }
 }
 
-std::vector<Note> PianoRoll::toolTargets() const {
-    const app::Clip* c = clip();
-    if (!c) return {};
-    return roll::byTime(selected_.empty() ? c->notes : selected_);
+std::vector<ClipNote> PianoRoll::toolTargets() const {
+    std::vector<ClipNote> targets = selected_.empty() ? allNotes() : selected_;
+    // By time on the roll (Humanize draws its numbers in this order).
+    std::stable_sort(targets.begin(), targets.end(), [this](const ClipNote& a, const ClipNote& b) {
+        const double sa = rollStart(a), sb = rollStart(b);
+        if (sa != sb) return sa < sb;
+        return a.note.pitch < b.note.pitch;
+    });
+    return targets;
 }
 
-void PianoRoll::applyTool(const std::vector<Note>& targets, const std::vector<Note>& changed, const QString& text) {
-    const app::Clip* c = clip();
-    if (!c || targets.empty()) return;
-    commit(app::notes::place(c->notes, targets, changed), text, {},
-           selected_.empty() ? std::vector<Note>() : changed);
+void PianoRoll::applyTool(const std::vector<ClipNote>& targets, const std::vector<ClipNote>& changed,
+                          const QString& text) {
+    if (targets.empty() || changed.size() != targets.size()) return;
+    std::map<int, std::vector<Note>> changes;
+    for (const int index : roll::clipsOf(targets)) {
+        const app::Clip* c = clipAt(index);
+        if (!c) continue;
+        std::vector<Note> removed, added;
+        for (size_t i = 0; i < targets.size(); ++i) {
+            if (targets[i].clip != index) continue;
+            removed.push_back(targets[i].note);
+            added.push_back(changed[i].note);
+        }
+        changes[index] = notes::place(c->notes, removed, added);
+    }
+    commitNotes(changes, text, {}, selected_.empty() ? std::vector<ClipNote>() : changed);
+}
+
+void PianoRoll::applyOnRoll(const std::vector<ClipNote>& targets,
+                            const std::function<std::vector<Note>(const std::vector<Note>&)>& tool,
+                            const QString& text) {
+    std::vector<Note> onRoll;
+    onRoll.reserve(targets.size());
+    for (const ClipNote& note : targets) {
+        Note moved = note.note;
+        moved.start = rollStart(note);
+        onRoll.push_back(moved);
+    }
+    const std::vector<Note> changed = tool(onRoll);  // (note for note, in order)
+    std::vector<ClipNote> back;
+    for (size_t i = 0; i < targets.size() && i < changed.size(); ++i) {
+        Note note = changed[i];
+        note.start = std::max(0.0, note.start - shift(targets[i].clip));
+        back.push_back({targets[i].clip, note});
+    }
+    applyTool(targets, back, text);
 }
 
 void PianoRoll::legato() {
-    const app::Clip* c = clip();
-    const std::vector<Note> targets = toolTargets();
-    if (c) applyTool(targets, app::notes::legato(targets, c->notes, c->windowEnd()), QStringLiteral("Legato"));
+    // In each clip, up to its own next notes (or its end).
+    const std::vector<ClipNote> targets = toolTargets();
+    std::vector<ClipNote> from, to;
+    for (const int index : roll::clipsOf(targets)) {
+        const app::Clip* c = clipAt(index);
+        if (!c) continue;
+        const std::vector<Note> mine = roll::notesOf(targets, index);
+        const std::vector<Note> changed = notes::legato(mine, c->notes, c->windowEnd());
+        for (size_t i = 0; i < mine.size() && i < changed.size(); ++i) {
+            from.push_back({index, mine[i]});
+            to.push_back({index, changed[i]});
+        }
+    }
+    applyTool(from, to, QStringLiteral("Legato"));
 }
 
 void PianoRoll::scaleTime(double factor) {
-    const std::vector<Note> targets = toolTargets();
-    applyTool(targets, app::notes::timeScaled(targets, factor),
-              factor > 1 ? QStringLiteral("Timing ×2") : QStringLiteral("Timing ÷2"));
+    applyOnRoll(toolTargets(), [factor](const std::vector<Note>& notes) { return notes::timeScaled(notes, factor); },
+                factor > 1 ? QStringLiteral("Timing ×2") : QStringLiteral("Timing ÷2"));
 }
 
 void PianoRoll::quantize() {
-    const std::vector<Note> targets = toolTargets();
-    applyTool(targets, app::notes::quantized(targets, quantizeStep(), quantizeAmount_ / 100.0),
-              QStringLiteral("Quantize"));
+    const double step = quantizeStep(), amount = quantizeAmount_ / 100.0;
+    applyOnRoll(toolTargets(), [step, amount](const std::vector<Note>& notes) { return notes::quantized(notes, step, amount); },
+                QStringLiteral("Quantize"));
 }
 
 void PianoRoll::humanize() {
-    const std::vector<Note> targets = toolTargets();
-    applyTool(targets, app::notes::humanized(targets, rng_, humanizeAmount_ / 100.0), QStringLiteral("Humanize"));
+    const double amount = humanizeAmount_ / 100.0;
+    applyOnRoll(toolTargets(), [this, amount](const std::vector<Note>& notes) { return notes::humanized(notes, rng_, amount); },
+                QStringLiteral("Humanize"));
 }
 
 QStringList PianoRoll::quantizeGrids() {
     QStringList names;
-    for (const auto& grid : app::notes::kQuantizeGrids) names.append(QString::fromLatin1(grid.name));
+    for (const auto& grid : notes::kQuantizeGrids) names.append(QString::fromLatin1(grid.name));
     return names;
 }
 
@@ -221,7 +461,7 @@ void PianoRoll::setHumanizeAmount(double percent) {
 }
 
 double PianoRoll::quantizeStep() const {
-    for (const auto& grid : app::notes::kQuantizeGrids) {
+    for (const auto& grid : notes::kQuantizeGrids) {
         if (quantizeGrid_ == QLatin1String(grid.name)) return grid.beats;
     }
     return 0.25;
@@ -235,11 +475,16 @@ void PianoRoll::refreshHarmony() {
     std::vector<RollChord> chords;
     std::optional<app::Key> key;
     const app::Harmony* h = harmony();
-    const app::Clip* c = clip();
-    if (h && c && h->shown() && gridShowing()) {
+    if (h && clip() && h->shown() && gridShowing()) {
         key = h->key();
-        const double from = c->startBeat, to = c->endBeat();
-        const double shift = c->offsetBeats - c->startBeat;  // timeline beats to content beats
+        double from = clip()->startBeat, to = clip()->endBeat();  // what the clips play, on the timeline
+        for (int i = 1; i < clipCount(); ++i) {
+            if (const app::Clip* c = clipAt(i)) {
+                from = std::min(from, c->startBeat);
+                to = std::max(to, c->endBeat());
+            }
+        }
+        const double shift = -origin();  // timeline beats to roll beats
         for (const app::Harmony::ChordSpan& span : h->chords()) {
             if (span.end <= from || span.start >= to) continue;
             const auto quality = span.chord.quality;
@@ -285,7 +530,7 @@ void PianoRoll::generate(bool bass) {
     // The clip's own notes win where a written one would overlap them on their key.
     std::vector<Note> all = c->notes;
     all.insert(all.end(), added.begin(), added.end());
-    const std::vector<Note> notes = app::notes::normalize(app::notes::resolveOverlaps(all, c->notes));
+    const std::vector<Note> notes = notes::normalize(notes::resolveOverlaps(all, c->notes));
     if (notes == c->notes) return;
     const std::vector<Note> before = roll::noteSet(c->notes);
     std::vector<Note> written;
@@ -303,9 +548,10 @@ int PianoRoll::pitchAt(double y) const {
     return std::clamp(127 - static_cast<int>(std::floor((y + view_.scrollY()) / rowHeight_)), 0, 127);
 }
 
-QRectF PianoRoll::noteRect(const Note& note) const {
-    const double x0 = view_.beatToX(note.start), x1 = view_.beatToX(note.end());
-    return QRectF(x0, pitchTop(note.pitch), std::max(3.0, x1 - x0), rowHeight_);
+QRectF PianoRoll::noteRect(const ClipNote& note) const {
+    const double start = rollStart(note);
+    const double x0 = view_.beatToX(start), x1 = view_.beatToX(start + note.note.length);
+    return QRectF(x0, pitchTop(note.note.pitch), std::max(3.0, x1 - x0), rowHeight_);
 }
 
 void PianoRoll::setScrollBeats(double beats) {
@@ -360,16 +606,22 @@ void PianoRoll::scrollToY(double pixels) { setScrollY(pixels); }
 
 void PianoRoll::fitIfReady() {
     // Waits until the note grid has its size (the clip view may not be laid out yet).
-    const app::Clip* c = clip();
-    if (!fitPending_ || !c || gridWidth() <= 1 || !gridShowing()) return;
+    if (!fitPending_ || !clip() || gridWidth() <= 1 || !gridShowing()) return;
     fitPending_ = false;
-    view_.zoomToFit(c->offsetBeats, c->windowEnd(), gridWidth() * 0.96);
+    const std::vector<Span> lit = windows();
+    double from = lit.front().first, to = lit.front().second;
+    for (const Span& span : lit) {
+        from = std::min(from, span.first);
+        to = std::max(to, span.second);
+    }
+    view_.zoomToFit(from, to, gridWidth() * 0.96);
+    const std::vector<ClipNote> all = allNotes();
     int low = kDefaultPitch, high = kDefaultPitch;
-    if (!c->notes.empty()) {
-        low = high = c->notes.front().pitch;
-        for (const Note& note : c->notes) {
-            low = std::min(low, note.pitch);
-            high = std::max(high, note.pitch);
+    if (!all.empty()) {
+        low = high = all.front().note.pitch;
+        for (const ClipNote& note : all) {
+            low = std::min(low, note.note.pitch);
+            high = std::max(high, note.note.pitch);
         }
     }
     updateBars();
@@ -382,11 +634,8 @@ void PianoRoll::fitIfReady() {
 void PianoRoll::updateBars() {
     const double width = std::max(1.0, gridWidth()), height = std::max(1.0, gridHeight());
     double end = view_.xToBeat(width);
-    if (const app::Clip* c = clip()) {
-        double notesEnd = 0.0;
-        for (const Note& note : c->notes) notesEnd = std::max(notesEnd, note.end());
-        end = std::max({end, c->windowEnd(), notesEnd});
-    }
+    for (const Span& span : windows()) end = std::max(end, span.second);
+    forEachNote([&](int clip, const Note& note) { end = std::max(end, note.end() + shift(clip)); });
     const double contentEnd = end + 4 * view_.timeSignature().beatsPerBar();
     const double hMax = std::max(0.0, std::trunc(contentEnd * view_.pxPerBeat() - width));
     hTotal_ = hMax + width;
@@ -435,6 +684,7 @@ void PianoRoll::gridVisibilityChanged(bool visible) {
         refreshHarmony();
     } else {
         releaseAudition();
+        stopPreview();
     }
 }
 
@@ -446,29 +696,41 @@ bool PianoRoll::gridShowing() const { return grid_ && grid_->isVisible(); }
 double PianoRoll::gridWidth() const { return grid_ ? grid_->width() : 0.0; }
 double PianoRoll::gridHeight() const { return grid_ ? grid_->height() : 0.0; }
 
-// --- Playhead ----------------------------------------------------------------------------
+// --- Playhead and the insert marker ------------------------------------------------------
 
 void PianoRoll::onPosition(double beat) {
-    const app::Clip* c = clip();
     std::optional<double> playhead;
-    if (c && bridge()->isPlaying() && c->startBeat <= beat && beat < c->endBeat())
-        playhead = beat - c->startBeat + c->offsetBeats;
+    if (bridge() && bridge()->isPlaying()) {
+        for (int i = 0; i < clipCount(); ++i) {
+            const app::Clip* c = clipAt(i);
+            if (c && c->startBeat <= beat && beat < c->endBeat()) {
+                playhead = beat - origin();
+                break;
+            }
+        }
+    }
     if (playhead == playhead_) return;
     playhead_ = playhead;
     Q_EMIT playheadChanged();
 }
 
 std::optional<double> PianoRoll::startBeat() const {
-    const app::Clip* c = clip();
-    const app::Selection* s = selection();
-    if (!c || !s) return std::nullopt;
-    const double beat = s->insertBeat();
-    if (!(c->startBeat <= beat && beat <= c->endBeat())) return std::nullopt;
-    return beat - c->startBeat + c->offsetBeats;
+    if (!clip() || !selection()) return std::nullopt;
+    const double beat = selection()->insertBeat() - origin();
+    for (const Span& span : windows()) {
+        if (span.first - 1e-9 <= beat && beat <= span.second + 1e-9) return beat;
+    }
+    return std::nullopt;
 }
 
-void PianoRoll::requestLocate(double contentBeat) {
-    if (const app::Clip* c = clip()) Q_EMIT locateRequested(std::max(0.0, c->toTimeline(contentBeat)));
+void PianoRoll::setPasteBeat(double beat) {
+    if (!clip()) return;
+    pasteBeat_ = std::max(0.0, beat);
+    repaintAll();
+}
+
+void PianoRoll::requestLocate(double rollBeat) {
+    if (clip()) Q_EMIT locateRequested(std::max(0.0, rollBeat + origin()));
 }
 
 // --- Hearing notes ---------------------------------------------------------------------------
@@ -476,24 +738,56 @@ void PianoRoll::requestLocate(double contentBeat) {
 void PianoRoll::setPreview(bool enabled) {
     if (enabled == preview_) return;
     preview_ = enabled;
-    if (!enabled) releaseAudition();
+    if (!enabled) {
+        releaseAudition();
+        stopPreview();
+    }
     Q_EMIT previewChanged();
 }
 
-void PianoRoll::audition(int pitch, int velocity) {
-    if (auditioned_ == pitch) return;
+void PianoRoll::audition(int pitch, int velocity, int clip) {
+    const QString track = clipAt(clip) ? clips_[clip].trackId : QString();
+    if (auditioned_ == pitch && auditionTrack_ == track) return;
     releaseAudition();
-    if (!preview_ || !clip()) return;
-    bridge()->previewNote(trackId_, pitch, velocity);
+    stopPreview();
+    if (!preview_ || track.isEmpty()) return;
+    bridge()->previewNote(track, pitch, velocity);
     auditioned_ = pitch;
+    auditionTrack_ = track;
     Q_EMIT auditionChanged();
 }
 
 void PianoRoll::releaseAudition() {
-    if (auditioned_ && !trackId_.isEmpty() && bridge()) bridge()->previewNote(trackId_, *auditioned_, 0);
+    if (auditioned_ && !auditionTrack_.isEmpty() && bridge()) bridge()->previewNote(auditionTrack_, *auditioned_, 0);
     if (!auditioned_) return;
     auditioned_.reset();
+    auditionTrack_.clear();
     Q_EMIT auditionChanged();
+}
+
+void PianoRoll::previewNotes(const std::vector<ClipNote>& notes) {
+    if (!preview_ || !bridge()) return;
+    std::map<std::pair<QString, int>, int> loudest;  // (track, pitch) -> velocity
+    for (const ClipNote& note : notes) {
+        if (!clipAt(note.clip) || note.note.muted) continue;  // (a deactivated note stays silent)
+        const std::pair<QString, int> key{clips_[note.clip].trackId, note.note.pitch};
+        if (std::find(previewing_.begin(), previewing_.end(), key) != previewing_.end()) continue;  // (sounding)
+        int& velocity = loudest[key];
+        velocity = std::max(velocity, note.note.velocity);
+    }
+    for (const auto& [key, velocity] : loudest) {
+        bridge()->previewNote(key.first, key.second, velocity);
+        previewing_.push_back(key);
+    }
+    if (!loudest.empty()) previewTimer_.start();  // (again: from the last caught)
+}
+
+void PianoRoll::stopPreview() {
+    previewTimer_.stop();
+    if (app::EngineBridge* b = bridge()) {
+        for (const auto& [track, pitch] : previewing_) b->previewNote(track, pitch, 0);
+    }
+    previewing_.clear();
 }
 
 }  // namespace sub::ui

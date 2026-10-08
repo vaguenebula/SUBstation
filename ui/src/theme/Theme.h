@@ -153,6 +153,14 @@ public:
     // A group's lane while it is open: the faint outline of its tracks' clips,
     // a row each (ArrangementLanes::drawGroupSummary; folded, they are in their colours).
     static constexpr QColor kGroupOutline{0x00, 0x00, 0x00, 16};
+    // A deactivated clip (0): grey whatever its track's colour (its title bar this,
+    // its body the darker grey drawn from it, as a clip's is from its colour), its
+    // waveform or notes faded.
+    static constexpr QColor kDeactivatedClip{0x8a, 0x8a, 0x8a};
+    static constexpr QColor kDeactivatedContent{0x16, 0x16, 0x16, 110};
+    // PASTE_MARKER: where the piano roll pastes notes (dashed), apart from the
+    // start marker (kInsertMarker) and the playhead.
+    static constexpr QColor kPasteMarker{0x5c, 0xd6, 0xff};
     // Not constants in the Python UI's theme, but part of its look: from its stylesheet and widgets.
     static constexpr QColor kScrollHandleHover{0x55, 0x55, 0x55};      // a scroll bar's handle under the mouse
     static constexpr QColor kDeviceHeaderHover{0xff, 0xff, 0xff, 28};  // a device header button under the mouse

@@ -15,12 +15,13 @@ namespace {
 
 const char* const kNoteNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
-// A total order on notes: by start, pitch, length, velocity.
+// A total order on notes: by start, pitch, length, velocity, deactivated last.
 bool lessFull(const Note& a, const Note& b) {
     if (a.start != b.start) return a.start < b.start;
     if (a.pitch != b.pitch) return a.pitch < b.pitch;
     if (a.length != b.length) return a.length < b.length;
-    return a.velocity < b.velocity;
+    if (a.velocity != b.velocity) return a.velocity < b.velocity;
+    return a.muted < b.muted;
 }
 
 // A set of notes to ask "is this one of them?".
@@ -120,6 +121,15 @@ std::vector<Note> resolveOverlaps(const std::vector<Note>& notes, const std::vec
         if (!gone && note.length >= kMinNoteBeats - kEps) result.push_back(note);
     }
     return result;
+}
+
+std::vector<Note> withActive(const std::vector<Note>& notes, const std::vector<Note>& targets, bool active) {
+    const NoteSet isTarget(targets);
+    std::vector<Note> result = notes;
+    for (Note& n : result) {
+        if (isTarget.contains(n)) n.muted = !active;
+    }
+    return normalize(result);
 }
 
 std::vector<Note> place(const std::vector<Note>& notes, const std::vector<Note>& removed,

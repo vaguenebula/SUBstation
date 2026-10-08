@@ -37,7 +37,9 @@
 // kDefaultMacroCount). The racks whose chain list shows ("chain_lists_shown")
 // and those whose chain's devices don't ("rack_devices_hidden") are stored by
 // id, as folded devices are (files without them show no chain list, and every
-// rack's devices).
+// rack's devices). Deactivated clips (audio and MIDI) store "muted", and
+// deactivated notes a fifth value, true (version 20; older files have none:
+// every clip and note plays).
 //
 // There is no per-version migration code: each addition has a default that
 // makes an older file load as it was, and saving writes the current version.
@@ -77,8 +79,8 @@ inline const QString kProjectFormat = QStringLiteral("gilstudio-project");
 // inputs from tracks (resampling), 11: sidechains, 12: racks, 13: rack names, 14:
 // frozen tracks, 15: reversed clips, 16: frozen audio's segments, 17: clip fades,
 // 18: racks' macros (how many, their names), 19: track names as templates (# the
-// track's number; kNameTemplatesVersion)
-inline constexpr int kProjectVersion = 19;
+// track's number; kNameTemplatesVersion), 20: deactivated clips and notes
+inline constexpr int kProjectVersion = 20;
 inline constexpr int kNameTemplatesVersion = 19;
 inline const QString kPresetFormat = QStringLiteral("gilstudio-preset");
 inline constexpr int kPresetVersion = 1;

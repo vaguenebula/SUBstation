@@ -12,7 +12,8 @@
 // `decimals` and kept between `from` and `to`.
 //
 // Double-click: with a `defaultValue`, resets to it (and typing a digit, the box
-// having the focus after a click, opens the text field); without one, opens the
+// having the focus after a click, opens the text field: the digit, "-", "+" or
+// "." doesn't go to the window's shortcuts, such as 0 or -); without one, opens the
 // text field showing the value (its first word) all selected. The default
 // parser (parseNumber) strips "dB", "bpm" and "%" and reads "-inf" as -70.
 //
@@ -146,8 +147,11 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void hoverEnterEvent(QHoverEvent* event) override;
     void hoverLeaveEvent(QHoverEvent* event) override;
+    bool event(QEvent* event) override;
 
 private:
+    // Whether a key typed opens the text field with it (a digit...: see above).
+    bool typesInto(const QKeyEvent* event) const;
     struct Drag {
         qreal originY;
         double originValue;

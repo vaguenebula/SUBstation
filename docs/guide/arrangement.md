@@ -7,7 +7,8 @@ folding, the master, the title bar and the transport bar, and projects.
 
 ## The timeline
 
-- Audio clips show their waveforms, MIDI clips a preview of their notes.
+- Audio clips show their waveforms, MIDI clips a preview of their notes. An audio
+  clip's title bar has its name; a MIDI clip's is blank (its track's header names it).
 - The grid adapts to the zoom. **Ctrl+1** narrows it, **Ctrl+2** widens it and **Ctrl+4**
   turns snapping on or off (also in the *View* menu, and by clicking the grid label in
   the arrangement). Hold **Alt** while dragging to bypass snapping.
@@ -65,13 +66,24 @@ folding, the master, the title bar and the transport bar, and projects.
 - **Reverse** (**R**, or the clip's right-click menu) plays the selected audio clips
   backwards (just the selected part, if the selection covers part of a clip); see
   [audio-clips.md](audio-clips.md#reversing).
-- **Double-click** a clip to open it in the clip view (the piano roll for a MIDI clip);
+- **Deactivate** (**0**, or *Deactivate* in the clip's right-click menu) silences the
+  selected clips, audio and MIDI, as in Ableton: they turn grey and don't play (nor count
+  towards the piano roll's chords), but stay where they are, and you can still edit,
+  move, copy and save them. If the selection covers part of a clip, it is split there
+  and just that part is deactivated. **0** again (or *Activate*) turns them back on
+  when every clip in the selection is deactivated; otherwise it deactivates the rest.
+  Frozen tracks' clips stay as they are (unfreeze a track to change them). In the
+  piano roll, 0 deactivates the selected notes instead (see
+  [midi.md](midi.md#keys)). Consolidating MIDI clips keeps a deactivated clip's notes,
+  deactivated.
+- **Double-click** a clip to open it in the clip view (the piano roll for a MIDI clip;
+  double-clicking one of several selected MIDI clips opens them all, edited together);
   see [audio-clips.md](audio-clips.md) and [midi.md](midi.md). **Shift+Tab** shows or
   hides the clip view, and **Esc** goes back to the arrangement.
 - Overlaps follow Ableton's rule: the clip you place wins.
 
 A clip's right-click menu has *Cut*, *Copy*, *Paste*, *Split Here*, *Duplicate*,
-*Consolidate*, *Reverse* and *Delete*; right-clicking anywhere in a time selection
+*Consolidate*, *Reverse*, *Deactivate* (or *Activate*) and *Delete*; right-clicking anywhere in a time selection
 offers the same (but *Split Here*), for what is selected. Right-clicking an empty part
 of a lane offers *Paste* (at that point), *Insert MIDI Clip* (on a MIDI track), *Insert
 Audio Track*, *Insert MIDI Track* and *Delete Track*.
@@ -202,7 +214,7 @@ Every track header has a fold button next to its name (or *Fold Track* / *Fold G
 in its right-click menu).
 
 - A track's is a triangle in a circle: folded, the track shrinks to its name row and
-  shows its clips as bars with their names, as in Ableton: the same title bars its clips
+  shows its clips as bars (audio clips' with their names), as in Ableton: the same title bars its clips
   have unfolded, as high. Click a bar to select its
   clip, drag it to move it (Ctrl copies), drag its ends to trim it. Beside its bars the
   row is a grid as any other: a click moves the insert marker, a drag selects time

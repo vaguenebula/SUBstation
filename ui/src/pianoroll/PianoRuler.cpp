@@ -22,9 +22,12 @@ void PianoRuler::paint(SgPainter& p) {
     PianoRoll* roll = this->roll();
     if (!roll) return;
     const timeline::Timeline& view = roll->view();
-    if (const app::Clip* clip = roll->clip()) {
-        const double x0 = view.beatToX(clip->offsetBeats), x1 = view.beatToX(clip->windowEnd());
-        p.fillRect(QRectF(x0, h - 5, x1 - x0, 4), roll->trackColor());
+    for (int i = 0; i < roll->clipCount(); ++i) {  // the part each clip plays, in its track's colour
+        if (const app::Clip* clip = roll->clipAt(i)) {
+            const double x0 = view.beatToX(clip->offsetBeats + roll->shift(i));
+            const double x1 = view.beatToX(clip->windowEnd() + roll->shift(i));
+            p.fillRect(QRectF(x0, h - 5, x1 - x0, 4), roll->colorOf(i));
+        }
     }
     const double step = view.gridStep();
     const double every = timeline::labelStep(view, step);
@@ -41,6 +44,11 @@ void PianoRuler::paint(SgPainter& p) {
     if (const auto start = roll->startBeat()) {
         const double sx = view.beatToX(*start);
         p.fillPolygon(QPolygonF({QPointF(sx - 5, 1), QPointF(sx + 5, 1), QPointF(sx, 8)}), Theme::kInsertMarker);
+    }
+    // The paste marker: a tab at the bottom, over the notes' dashed line.
+    if (const auto paste = roll->pasteBeat()) {
+        const double px = app::roundHalfEven(view.beatToX(*paste));
+        p.fillRect(QRectF(px - 3, h - 7, 7, 6), Theme::kPasteMarker);
     }
 }
 

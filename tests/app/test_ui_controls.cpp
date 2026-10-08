@@ -1,7 +1,8 @@
 // The shared controls driven like a user would: knobs and value boxes dragged
 // (one gesture key per drag), wheeled, double-clicked and typed into; the meter's
 // fall and clip light; the oscilloscope's trigger and fade from a fake feed;
-// toggle buttons that never take the focus. Run on a display (xvfb here).
+// toggle buttons that never take the focus; typing into a focused control
+// before the window's one-key shortcuts. Run on a display (xvfb here).
 
 #include <QCursor>
 #include <QGuiApplication>
@@ -399,6 +400,37 @@ private Q_SLOTS:
         QTRY_COMPARE(volume->value(), -70.0);
     }
 
+    void typingComesBeforeTheWindowsShortcuts() {
+        // A focused knob or value box takes a digit (or -) to open its field, before the window's shortcuts.
+        // (Shortcuts fire in the active window only.)
+        window_->requestActivate();
+        QVERIFY(QTest::qWaitForWindowActive(window_));
+        root_->setProperty("shortcutsFired", 0);
+        auto* knob = item<KnobItem>("typedKnob");
+        knob->setValue(10);
+        QSignalSpy knobTyped(knob, &KnobItem::editRequested);
+        QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, center(knob));
+        QTest::keyClick(window_, Qt::Key_0);
+        QCOMPARE(knobTyped.count(), 1);
+        QTest::keyClick(window_, Qt::Key_Return);
+        QTRY_COMPARE(knob->value(), 0.0);
+        auto* volume = item<ValueBoxItem>("volume");
+        volume->setValue(-12);
+        QSignalSpy boxTyped(volume, &ValueBoxItem::editRequested);
+        QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, center(volume));
+        QTest::keyClick(window_, Qt::Key_0);
+        QCOMPARE(boxTyped.count(), 1);
+        QCOMPARE(boxTyped.first().at(0).toString(), QStringLiteral("0"));
+        QTest::keyClick(window_, Qt::Key_Return);
+        QTRY_COMPARE(volume->value(), 0.0);
+        QCOMPARE(root_->property("shortcutsFired").toInt(), 0);
+        // Anywhere else, they are the shortcuts.
+        item<QQuickItem>("elsewhere")->forceActiveFocus();
+        QTest::keyClick(window_, Qt::Key_0);
+        QTest::keyClick(window_, Qt::Key_Minus);
+        QCOMPARE(root_->property("shortcutsFired").toInt(), 2);
+    }
+
     void valueBoxRounds() {
         auto* volume = item<ValueBoxItem>("volume");
         volume->setValue(-3.04);
@@ -533,9 +565,16 @@ import QtQuick.Controls
 import SUBstation
 
 Window {
+    id: root
+
+    // The main window's one-key shortcuts that also start a number (0: deactivate clips, -: zoom out).
+    property int shortcutsFired: 0
+
     width: 520
     height: 300
     visible: true
+
+    Shortcut { sequences: ["0", "-"]; onActivated: root.shortcutsFired++ }
 
     Knob { objectName: "knob"; x: 20; y: 100; width: 40; height: 40; value: 0.5 }
     Knob { objectName: "defaultKnob"; x: 70; y: 100; width: 40; height: 40; from: -1; to: 1; value: 0.25; defaultValue: 0 }
@@ -553,6 +592,7 @@ Window {
     Oscilloscope { objectName: "scope"; x: 270; y: 180 }
     ToggleButton { objectName: "toggle"; x: 20; y: 240; text: "S"; role: "solo" }
     TextField { objectName: "field"; x: 100; y: 240; width: 100 }
+    Item { objectName: "elsewhere"; x: 500; y: 280; width: 4; height: 4 }  // (takes the focus, and no keys)
 }
 )QML";
 }  // namespace

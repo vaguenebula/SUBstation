@@ -1,6 +1,7 @@
 // Editing clips: adding, moving, trimming, splitting and consolidating them,
 // and time selections (delete, duplicate, copy, cut, paste and move a range,
-// with the automation under it, and over frozen tracks with their frozen audio).
+// with the automation under it, and over frozen tracks with their frozen audio;
+// reverse or deactivate what is in it).
 
 #include "editor/EditorSupport.h"
 #include "editor/ProjectEditor.h"
@@ -54,11 +55,11 @@ OrderedMap<QString, QSet<QString>> idsByTrack(const ClipRefs& refs) {
 
 }  // namespace
 
-void ProjectEditor::commitClips(const QString& text, const QMap<QString, std::vector<Clip>>& after,
+bool ProjectEditor::commitClips(const QString& text, const QMap<QString, std::vector<Clip>>& after,
                                 const QString& mergeKey) {
     ClipLists before;
     for (auto it = after.constBegin(); it != after.constEnd(); ++it) before.insert(it.key(), project_->track(it.key()).clips);
-    if (before != after) push(std::make_unique<SetClipsCommand>(project_, text, before, after, mergeKey));
+    return before == after || push(std::make_unique<SetClipsCommand>(project_, text, before, after, mergeKey));
 }
 
 bool ProjectEditor::commitMoved(const QString& text, const QMap<QString, std::vector<Clip>>& after,
@@ -201,7 +202,7 @@ ClipRefs ProjectEditor::addClips(const QString& trackId, double startBeat,
 std::optional<ClipRef> ProjectEditor::addMidiClip(const QString& trackId, double startBeat, double lengthBeats) {
     const Track* track = project_->findTrack(trackId);
     if (track == nullptr || !track->isMidi() || lengthBeats < edits::kMinMidiClipBeats) return std::nullopt;
-    const Clip clip = Clip::midi(newId(), track->name, std::max(0.0, startBeat), lengthBeats);
+    const Clip clip = Clip::midi(newId(), QString(), std::max(0.0, startBeat), lengthBeats);
     std::vector<Clip> clips = track->clips;
     clips.push_back(clip);
     commitClips(QStringLiteral("Insert MIDI Clip"),
@@ -236,12 +237,22 @@ std::pair<double, double> ProjectEditor::midiClipSpan(const QString& trackId, do
 
 void ProjectEditor::setClipNotes(const ClipRef& ref, const std::vector<Note>& clipNotes, const QString& text,
                                  const QString& mergeKey) {
-    const std::vector<Note> normalized = notes::normalize(clipNotes);
+    setClipsNotes({{ref, clipNotes}}, text, mergeKey);
+}
+
+void ProjectEditor::setClipsNotes(const std::vector<std::pair<ClipRef, std::vector<Note>>>& clipNotes,
+                                  const QString& text, const QString& mergeKey) {
+    ClipRefs refs;
+    QHash<QString, std::vector<Note>> normalized;  // clip id -> its notes (ids are unique in the project)
+    for (const auto& [ref, list] : clipNotes) {
+        refs.append(ref);
+        normalized.insert(ref.clipId, notes::normalize(list));
+    }
     updateClips(
-        {ref},
+        refs,
         [&](const Clip& clip) {
             Clip changed = clip;
-            changed.notes = normalized;
+            changed.notes = normalized.value(clip.id, clip.notes);
             return changed;
         },
         text, mergeKey);
@@ -812,18 +823,19 @@ std::pair<double, QStringList> ProjectEditor::moveRange(double start, double end
     return {start + moved.deltaBeats, dests};
 }
 
-ClipRefs ProjectEditor::reverseRange(double start, double end, const QStringList& trackIds,
-                                     const QMap<QString, std::pair<QString, double>>& reversedFiles) {
+QMap<QString, std::vector<Clip>> ProjectEditor::changedInRange(double start, double end, const QStringList& trackIds,
+                                                               const std::function<bool(const Clip&)>& chosen,
+                                                               const std::function<Clip(const Clip&)>& change,
+                                                               ClipRefs& changed) const {
     const double tempo = project_->tempo();
     QMap<QString, std::vector<Clip>> after;
-    ClipRefs result;
     for (const QString& id : trackIds) {
         if (!project_->hasTrack(id)) continue;
         const auto& clips = project_->track(id).clips;
         std::vector<Clip> inside;
         QSet<QString> ids;
         for (const Clip& c : clips) {
-            if (c.isAudio() && reversedFiles.contains(c.path) && c.startBeat < end && c.endBeat(tempo) > start) {
+            if (chosen(c) && c.startBeat < end && c.endBeat(tempo) > start) {
                 inside.push_back(c);
                 ids.insert(c.id);
             }
@@ -835,15 +847,43 @@ ClipRefs ProjectEditor::reverseRange(double start, double end, const QStringList
         }
         for (const Clip& c : edits::removeRange(inside, start, end, tempo)) kept.push_back(c);
         for (const Clip& c : edits::sliceRange(inside, start, end, tempo, true)) {
-            const auto& [path, totalSec] = reversedFiles.value(c.path);
-            const Clip flipped = edits::reverseClip(c, path, totalSec);
-            result.append({id, flipped.id});
-            kept.push_back(flipped);
+            const Clip piece = change(c);
+            changed.append({id, piece.id});
+            kept.push_back(piece);
         }
         std::stable_sort(kept.begin(), kept.end(), [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
         after.insert(id, kept);
     }
-    commitClips(result.size() == 1 ? QStringLiteral("Reverse Clip") : QStringLiteral("Reverse Clips"), after);
+    return after;
+}
+
+ClipRefs ProjectEditor::reverseRange(double start, double end, const QStringList& trackIds,
+                                     const QMap<QString, std::pair<QString, double>>& reversedFiles) {
+    ClipRefs result;
+    const auto after = changedInRange(
+        start, end, trackIds, [&](const Clip& c) { return c.isAudio() && reversedFiles.contains(c.path); },
+        [&](const Clip& c) {
+            const auto& [path, totalSec] = reversedFiles.value(c.path);
+            return edits::reverseClip(c, path, totalSec);
+        },
+        result);
+    if (!commitClips(result.size() == 1 ? QStringLiteral("Reverse Clip") : QStringLiteral("Reverse Clips"), after))
+        return {};
+    return result;
+}
+
+ClipRefs ProjectEditor::setRangeActive(double start, double end, const QStringList& trackIds, bool active) {
+    ClipRefs result;
+    const auto after = changedInRange(
+        start, end, trackIds, [&](const Clip& c) { return c.muted == active; },
+        [&](const Clip& c) {
+            Clip piece = c;
+            piece.muted = !active;
+            return piece;
+        },
+        result);
+    const QString what = result.size() == 1 ? QStringLiteral("Clip") : QStringLiteral("Clips");
+    if (!commitClips((active ? QStringLiteral("Activate ") : QStringLiteral("Deactivate ")) + what, after)) return {};
     return result;
 }
 

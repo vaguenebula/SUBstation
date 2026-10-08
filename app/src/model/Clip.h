@@ -25,6 +25,14 @@
 // kept but not played, so trimming or splitting a clip never loses notes. MIDI
 // is measured in beats, so a clip's length doesn't follow the tempo (`tempo`
 // arguments are accepted and ignored, so both kinds of clip can be edited alike).
+// MIDI clips have no name of their own: the arrangement shows their title bars
+// empty (a name in a project saved earlier is dropped on load).
+//
+// A clip of either kind can be deactivated (`muted`, Ableton's clip activator
+// switched off): it stays where it is, is edited, copied and saved like any
+// other, but doesn't play (nor count towards the song's chords): plays(),
+// heardNotes(). Its pieces (split, trimmed, copied) are deactivated too. So
+// can single notes of a MIDI clip (Note::muted).
 
 #include <QString>
 #include <QStringList>
@@ -45,12 +53,15 @@ inline constexpr double kMaxSegmentBpm = 999.0;
 // (Unknown: the name itself.)
 QString legacyWarpMode(const QString& name);
 
-// A MIDI note. Times are in beats from the start of its clip's content.
+// A MIDI note. Times are in beats from the start of its clip's content. A
+// deactivated note (`muted`, 0 in the piano roll, as in Ableton) is kept and
+// edited like any other but isn't heard (Clip::heardNotes).
 struct Note {
     int pitch = 60;  // MIDI note number, 60 = C3
     double start = 0.0;
     double length = 0.0;
     int velocity = 100;  // 1..127
+    bool muted = false;  // deactivated: silent
 
     double end() const { return start + length; }
 
@@ -71,8 +82,9 @@ struct Clip {
 
     Kind kind = Kind::Audio;
     QString id;
-    QString name;
+    QString name;  // an audio clip's (its file's name, as it was placed); none for a MIDI clip
     double startBeat = 0.0;
+    bool muted = false;  // deactivated: silent (both kinds)
 
     // An audio clip's.
     QString path;
@@ -108,6 +120,8 @@ struct Clip {
 
     bool isMidi() const { return kind == Kind::Midi; }
     bool isAudio() const { return kind == Kind::Audio; }
+    // Whether it is heard: not deactivated (what the engine plays, and the song's chords count).
+    bool plays() const { return !muted; }
 
     // Warped: warp on and a segment BPM set (MIDI clips never are).
     bool isWarped() const;
@@ -136,6 +150,9 @@ struct Clip {
     // starting inside its window, cut at the clip's end (as in Ableton).
     // Nothing for an audio clip.
     std::vector<PlayedNote> playedNotes() const;
+    // The notes it is heard playing: playedNotes() but deactivated ones, none
+    // while the clip is deactivated.
+    std::vector<PlayedNote> heardNotes() const;
 
     friend bool operator==(const Clip&, const Clip&) = default;
 };

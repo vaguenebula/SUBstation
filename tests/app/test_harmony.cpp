@@ -75,6 +75,8 @@ private Q_SLOTS:
         const QString inGroup = midiTrack(f, QStringLiteral("Lead"), 0, 4, chord({66, 70}, 0, 4));
         const QString group = f.editor.groupTracks({inGroup});
         f.editor.setTrackParam(group, TrackField::Mute, 1);
+        const QString deactivated = midiTrack(f, QStringLiteral("Arp"), 0, 4, chord({61, 64}, 0, 4));
+        f.editor.setRangeActive(0, 4, {deactivated}, false);  // (its clip deactivated: silent)
         f.editor.addAudioTrack();  // audio: for later
 
         const auto notes = Harmony::songNotes(f.project);

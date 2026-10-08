@@ -315,6 +315,8 @@ void Session::consolidate() { arrangement_->consolidate(); }
 
 void Session::reverseClips() { arrangement_->reverseSelection(); }
 
+void Session::toggleClipActivation() { arrangement_->toggleActivation(); }
+
 QVariantMap Session::renameTarget(bool browserListFocused) {
     if (browserListFocused) {
         const BrowserItem* item = browser_->results()->item(browser_->currentRow());

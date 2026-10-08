@@ -93,7 +93,7 @@ std::vector<intelligence::harmony::Note> Harmony::songNotes(const Project& proje
     std::vector<intelligence::harmony::Note> notes;
     for (const QString& id : heardTracks(project)) {
         for (const Clip& clip : project.track(id).clips) {
-            for (const PlayedNote& played : clip.playedNotes())
+            for (const PlayedNote& played : clip.heardNotes())
                 notes.push_back({played.note.pitch, played.start, played.end, played.note.velocity});
         }
     }

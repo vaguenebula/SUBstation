@@ -57,7 +57,7 @@ source-audio seconds; volumes are dB; pan is -1..1; automation values are normal
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | `"gilstudio-project"` | must match, or the file is refused ("Not a SUBstation project") |
-| `version` | int | `kProjectVersion`, now 18; a larger one is refused ("This project was saved by a newer version of SUBstation") |
+| `version` | int | `kProjectVersion`, now 20; a larger one is refused ("This project was saved by a newer version of SUBstation") |
 | `tempo` | float | BPM (default 120) |
 | `key` | string or null | the project key as `Key::name()` (`"Am"`, `"F#"`, `"Bb"`); null: *No Key* |
 | `time_signature` | `[numerator, denominator]` | default `[4, 4]` |
@@ -121,6 +121,7 @@ Each entry of `returns` has `id`, `kind` (`"return"`), `name`, `color`, `volume_
 | `transpose`, `detune` | semitones (int), cents |
 | `fade_in_sec`, `fade_in_curve`, `fade_out_sec`, `fade_out_curve` | only where the clip has that fade: its length in source seconds, and its curve (-1..1, 0 a straight line). On load they are held to the clip (`Clip::fitFades`) |
 | `reversed_from`, `reversed_from_relative` | only for a reversed clip: the file `path` (its reversed copy) was made from, absolute and relative |
+| `muted` | only for a deactivated clip: `true` (it doesn't play) |
 
 On load, `path` is used if it exists; otherwise, if the project file's folder plus `relative_path` exists, that is
 used (and the same for `reversed_from`). So a project folder (with its samples and its `Recordings`, `Freeze` and
@@ -128,8 +129,10 @@ used (and the same for `reversed_from`). So a project folder (with its samples a
 
 ### MIDI clips
 
-`id`, `name` (default `"MIDI"`), `start_beat`, `duration_beats`, `offset_beats`, and `notes` inline as
-`[pitch, start, length, velocity]` (beats from the clip's content start). On load, notes with a length of 0 or less
+`id`, `name` (MIDI clips have none: saved `""`; one in an earlier file is dropped on load), `start_beat`,
+`duration_beats`, `offset_beats`, `muted` (only for a deactivated clip: `true`), and `notes` inline as
+`[pitch, start, length, velocity]` (beats from the clip's content start), with a fifth value, `true`, for a
+deactivated note. On load, notes with a length of 0 or less
 are dropped, pitch is clamped to 0..127, velocity to 1..127, start to 0 and up, and the notes are sorted and
 de-duplicated (`notes::normalize`).
 
@@ -202,6 +205,7 @@ that makes an older file load as it was, and saving writes the current version.
 | 17 | clip fades (`fade_in_sec`, `fade_out_sec` and their curves) | no fades |
 | 18 | racks' macros: how many and their names (`macro_names`) | the macros a rack uses (mapped, or turned from 0), and at least 4, named by number (racks had eight) |
 | 19 | track names as templates (`#`: the track's number, its place) | a track named as new ones were (`3 Audio`, `2 MIDI`, `1 Group`): `# Audio` named by what it holds, `# Group`; other names as they are |
+| 20 | deactivated clips (`muted` on an audio or MIDI clip) and notes (a fifth value, `true`) | every clip and note playing |
 
 `folded_devices` has no version of its own: files without it load with no device folded. Nor have
 `chain_lists_shown` and `rack_devices_hidden`: files without them show no chain list, and every rack's devices. The

@@ -14,7 +14,6 @@ What SUBstation doesn't do yet, by area.
 
 - Looping MIDI clips.
 - MIDI effects.
-- Editing several MIDI clips in the piano roll at once.
 - Chords and the key are worked out from MIDI only, not from audio clips, and the
   project has one time signature for them to follow. Generate writes block chords and
   bass lines; melodies and accompaniment with rhythms of their own are to come.

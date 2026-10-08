@@ -1,5 +1,5 @@
 // The engine taking the project's tracks through the bridge: clips and notes as
-// the engine has them, groups as buses, returns and sends (made silent when only
+// the engine has them (none of deactivated clips), groups as buses, returns and sends (made silent when only
 // automated), inputs from other tracks' outputs (resampling), the master's
 // mixer, the project's settings, a drag's preview, and automation overridden by
 // hand. The changes are made as the editor makes them (the model's commands).
@@ -89,6 +89,35 @@ private Q_SLOTS:
         QCOMPARE(notes[1].lengthBeats, 0.5);
         QCOMPARE(clipNoteDescs({clip}).size(), size_t{2});
         QVERIFY(clipNoteDescs({test::makeTrack("a", "a").clips}).empty());
+    }
+
+    void deactivatedClipsDontPlay() {
+        const Clip on = Clip::audio(QStringLiteral("a"), QStringLiteral("a.wav"), QStringLiteral("a"), 0.0, 1.0);
+        Clip off = Clip::audio(QStringLiteral("b"), QStringLiteral("a.wav"), QStringLiteral("a"), 4.0, 1.0);
+        off.muted = true;
+        const std::vector<sub::ClipDesc> descs = clipDescs({on, off});
+        QCOMPARE(descs.size(), size_t{1});
+        QCOMPARE(descs[0].id, std::string("a"));
+        // (A deactivated note of a playing clip isn't played either.)
+        const Clip notes = Clip::midi(QStringLiteral("m"), QString(), 0.0, 2.0, 0.0,
+                                      {Note{60, 0.0, 1.0}, Note{67, 1.0, 0.5, 100, true}});
+        Clip silent = Clip::midi(QStringLiteral("n"), QString(), 4.0, 2.0, 0.0, {Note{64, 0.0, 1.0}});
+        silent.muted = true;
+        const std::vector<sub::NoteDesc> played = clipNoteDescs({notes, silent});
+        QCOMPARE(played.size(), size_t{1});
+        QCOMPARE(played[0].key, 60);
+
+        // Deactivated in the arrangement, a clip goes quiet; activated again, it is heard again.
+        test::TempDir dir;
+        Studio studio;
+        const QString track = studio.clipTrack(dcWav(dir));
+        QVERIFY(near(studio.level(), 0.5));
+        Clip clip = studio.project.track(track).clips[0];
+        clip.muted = true;
+        studio.edit.setClips(track, {clip});
+        QVERIFY(near(studio.level(), 0.0));
+        studio.stack.undo();
+        QVERIFY(near(studio.level(), 0.5));
     }
 
     void theEngineHearsGroupsAsBuses() {

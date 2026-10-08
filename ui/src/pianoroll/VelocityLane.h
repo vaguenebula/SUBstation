@@ -1,17 +1,19 @@
 #pragma once
 
-// The velocity editor under the piano roll: a stem per note at its start, as
-// tall as its velocity (1 to 127 over the lane's height), white for selected
-// notes. Drag a stem up or down; with several notes selected, dragging one of
+// The velocity editor under the piano roll: a stem per note at its start (of
+// every clip shown, in its track's colour), as tall as its velocity (1 to 127
+// over the lane's height), white for selected notes. Drag a stem up or down; with several notes selected, dragging one of
 // theirs changes them all by the same amount, committed live as one undo step.
 // The selected notes' values show while dragging.
 
 #include "model/Clip.h"
+#include "pianoroll/NoteSet.h"
 #include "pianoroll/RollItem.h"
 
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -33,7 +35,7 @@ public:
     double span() const { return height() - kMarginTop - kMarginBottom; }
     double velocityY(int velocity) const { return height() - kMarginBottom - span() * velocity / 127; }
     // The note whose stem is nearest `x` (selected notes first), if within reach.
-    std::optional<app::Note> stemAt(double x) const;
+    std::optional<ClipNote> stemAt(double x) const;
 
 protected:
     void paint(SgPainter& painter) override;
@@ -41,14 +43,15 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseUngrabEvent() override;
+    void hoverEnterEvent(QHoverEvent* event) override;
     void hoverMoveEvent(QHoverEvent* event) override;
 
 private:
     struct Drag {
         double y;
-        std::vector<app::Note> base;     // the clip's notes at the press
-        QString key;                     // the gesture's undo merge key
-        std::vector<app::Note> targets;  // the selected notes, by time
+        std::map<int, std::vector<app::Note>> base;  // the notes at the press of the clips changing
+        QString key;                                 // the gesture's undo merge key
+        std::vector<ClipNote> targets;               // the selected notes
     };
     std::optional<Drag> drag_;
 };

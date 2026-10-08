@@ -307,14 +307,21 @@ Clip consolidateMidi(const std::vector<Clip>& clips) {
     std::vector<Clip> ordered = clips;
     sortByStart(ordered);
     const auto [start, end] = selectionSpan(ordered, 0.0);
+    const bool allMuted = std::none_of(ordered.begin(), ordered.end(), [](const Clip& c) { return c.plays(); });
     std::vector<Note> played;
     for (const Clip& c : ordered) {
         for (const PlayedNote& p : c.playedNotes()) {
-            played.push_back(Note{p.note.pitch, p.start - start, p.end - p.start, p.note.velocity});
+            Note note = p.note;
+            note.start = p.start - start;
+            note.length = p.end - p.start;
+            note.muted = note.muted || (!c.plays() && !allMuted);  // (what was silent stays silent)
+            played.push_back(note);
         }
     }
-    return Clip::midi(ordered.front().id, ordered.front().name, start, end - start, 0.0,
-                      notes::normalize(notes::untangle(played)));
+    Clip joined = Clip::midi(ordered.front().id, ordered.front().name, start, end - start, 0.0,
+                             notes::normalize(notes::untangle(played)));
+    joined.muted = allMuted;
+    return joined;
 }
 
 }  // namespace sub::app::edits

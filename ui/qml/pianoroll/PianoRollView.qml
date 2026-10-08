@@ -6,8 +6,8 @@ import SUBstation
 // keys on the left, the notes in the middle with the song's chords along their
 // top (while the harmony shows: C) and the note tools floating over them, the
 // velocities below, and scroll bars. The headphones button turns hearing notes
-// off. The clip it shows is the roll's (`roll.setClip(trackId, clipId)`; the
-// clip view sets it).
+// off. The clips it shows are the roll's (`roll.setClips(refs)`, or
+// `roll.setClip(trackId, clipId)`; the clip view sets them).
 //
 //   ┌──────────┬────────────────────────────┬───┐
 //   │ preview  │ PianoRuler (24 px)         │   │

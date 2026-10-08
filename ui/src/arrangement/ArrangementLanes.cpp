@@ -74,6 +74,14 @@ constexpr QColor kFadeLine{255, 255, 255, 190};   // its curve
 constexpr QColor kFadeHandleFill{235, 235, 235};
 constexpr QColor kFadeHandleEdge{20, 20, 20, 200};
 
+// The colour a clip is drawn in: its track's, or grey while it is deactivated.
+QColor clipColor(const QColor& trackColor, const app::Clip& clip) {
+    return clip.muted ? Theme::kDeactivatedClip : trackColor;
+}
+
+// What a clip's waveform or notes are drawn in (faded while it is deactivated).
+QColor contentColor(const app::Clip& clip) { return clip.muted ? Theme::kDeactivatedContent : Theme::kWaveform; }
+
 // Ctrl+Shift (without Alt): drag a clip's body to slide its content.
 bool isSlipModifier(Qt::KeyboardModifiers modifiers) {
     return (modifiers & Qt::ControlModifier) && (modifiers & Qt::ShiftModifier) && !(modifiers & Qt::AltModifier);
@@ -495,15 +503,16 @@ void ArrangementLanes::paint(SgPainter& p) {
 void ArrangementLanes::drawClip(SgPainter& p, const QColor& trackColor, const app::Clip& clip, const QRectF& rect,
                                 const QRectF& visible, bool selected, bool ghost, bool folded) {
     // A clip: its body (the waveform or notes), then its title bar and outline
-    // (drawClipFrame). A folded track's clip is all title bar.
+    // (drawClipFrame). A folded track's clip is all title bar. A deactivated
+    // one is grey.
     const double titleHeight = clipTitleHeight(rect.height(), folded);
     const QRectF body = rect.adjusted(0, titleHeight, 0, 0);
     p.save();
     p.setClipRect(rect.intersected(visible).adjusted(-1, -1, 1, 1));
     if (body.height() > 0) {
-        QColor bodyColor = trackColor;
-        bodyColor.setHsvF(trackColor.hsvHueF(), trackColor.hsvSaturationF() * 0.6f,
-                          std::min(1.0f, trackColor.valueF() * 0.78f));
+        const QColor color = clipColor(trackColor, clip);
+        QColor bodyColor = color;
+        bodyColor.setHsvF(color.hsvHueF(), color.hsvSaturationF() * 0.6f, std::min(1.0f, color.valueF() * 0.78f));
         if (ghost) bodyColor.setAlphaF(0.75f);
         p.fillRect(body, bodyColor);
         // The grid shows through the body, faintly (under the notes and the waveform);
@@ -580,7 +589,7 @@ void ArrangementLanes::drawContent(SgPainter& p, const app::Clip& clip, const QR
         const double tempo = session()->project()->tempo();
         waveforms_.draw(p, source, wave, rect.left(), clip.offsetSec,
                         arrangement()->view().framesPerPixel(source.sampleRate(), clip.sourceTempo(tempo)),
-                        Theme::kWaveform, wave.height() >= 44, visible, app::dbToGain(clip.gainDb));
+                        contentColor(clip), wave.height() >= 44, visible, app::dbToGain(clip.gainDb));
         p.restore();
     } else if (body.height() > 10 && rect.width() > 40) {
         const QString error = bridge.loadError(clip.path);
@@ -593,18 +602,20 @@ void ArrangementLanes::drawContent(SgPainter& p, const app::Clip& clip, const QR
 
 void ArrangementLanes::drawClipFrame(SgPainter& p, const QColor& trackColor, const app::Clip& clip, const QRectF& rect,
                                      bool selected, bool ghost, bool folded) const {
-    // A clip's title bar (its name, if there is room) and its outline: white
-    // if `selected`, and the trim handle under the mouse.
+    // A clip's title bar (its name, if there is room: an audio clip's; MIDI
+    // clips have none) and its outline: white if `selected`, and the trim
+    // handle under the mouse. Grey while it is deactivated.
+    const QColor color = clipColor(trackColor, clip);
     const double titleHeight = clipTitleHeight(rect.height(), folded);
     const QRectF title(rect.left(), rect.top(), rect.width(), titleHeight);
-    if (titleHeight > 0) p.fillRect(title, trackColor);
+    if (titleHeight > 0) p.fillRect(title, color);
     if ((titleHeight >= kTitleHeight || folded) && rect.width() > 16) {  // (no name in a thin bar)
         const QFont font = uiFont(7.5);
         const QRectF textRect = title.adjusted(4, 0, -3, 0);
         p.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft,
                    SgPainter::elidedText(clip.name, font, std::floor(textRect.width())), Theme::kAccentText, font);
     }
-    const QColor outline = selected ? Theme::kSelectionOutline : trackColor.darker(170);
+    const QColor outline = selected ? Theme::kSelectionOutline : color.darker(170);
     p.drawRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), outline, 1);
     if (hoverEdge_ && hoverEdge_->first == clip.id && !ghost) {  // (Alt: a stretch, in the accent colour)
         const double x = hoverEdge_->second ? rect.left() : rect.right() - 2;
@@ -617,7 +628,8 @@ void ArrangementLanes::drawGroupSummary(SgPainter& p, const QString& groupId, do
     // What is in a group, as Ableton's group lanes show it: a thin row per track
     // in it (those in groups in it too), in order, with that track's clips as
     // bars, so the group's structure shows: in each track's colour while folded
-    // (its tracks are hidden), barely there while open (its tracks show below it).
+    // (its tracks are hidden; deactivated clips grey), barely there while open
+    // (its tracks show below it).
     const QRectF area(visible.left(), rowTop + 2, visible.width(), rowHeight - 5);
     if (area.height() < 1) return;
     const app::Project& project = *session()->project();
@@ -637,19 +649,21 @@ void ArrangementLanes::drawGroupSummary(SgPainter& p, const QString& groupId, do
         const double top = area.top() + std::floor(static_cast<double>(i) * share);
         const double bottom = area.top() + std::floor(static_cast<double>(i + 1) * share) - gap;
         if (bottom <= top) continue;
-        const QColor color = folded ? QColor(tracks[i]->color) : Theme::kGroupOutline;
+        const QColor trackColor(tracks[i]->color);
         for (const app::Clip& clip : tracks[i]->clips) {
             const double x0 = view.beatToX(clip.startBeat), x1 = view.beatToX(clip.endBeat(tempo));
             if (x1 < visible.left()) continue;
             if (x0 > visible.right()) break;
-            p.fillRect(QRectF(x0, top, std::max(1.0, x1 - x0), bottom - top), color);
+            p.fillRect(QRectF(x0, top, std::max(1.0, x1 - x0), bottom - top),
+                       folded ? clipColor(trackColor, clip) : Theme::kGroupOutline);
         }
     }
     p.restore();
 }
 
 void ArrangementLanes::drawNotes(SgPainter& p, const app::Clip& clip, const QRectF& area, const QRectF& visible) const {
-    // The notes a MIDI clip plays, fitted to the clip's height (as in Ableton).
+    // The notes a MIDI clip plays, fitted to the clip's height (as in Ableton);
+    // deactivated ones faded.
     const std::vector<app::PlayedNote> played = clip.playedNotes();
     if (played.empty() || area.height() < 3) return;
     int low = played.front().note.pitch, high = low;
@@ -665,7 +679,7 @@ void ArrangementLanes::drawNotes(SgPainter& p, const app::Clip& clip, const QRec
         const double x0 = view.beatToX(n.start), x1 = view.beatToX(n.end);
         if (x1 >= visible.left() && x0 <= visible.right()) {
             p.fillRect(QRectF(x0, top + (high - n.note.pitch) * row, std::max(1.0, x1 - x0 - gap), std::max(1.0, row - gap)),
-                       Theme::kWaveform);
+                       n.note.muted ? Theme::kDeactivatedContent : contentColor(clip));
         }
     }
 }
@@ -1090,6 +1104,12 @@ MenuEntries ArrangementLanes::contextMenu(const QPointF& pos) {
         MenuEntry& reverse = menu.add(QStringLiteral("Reverse"), [actions] { actions->reverseSelection(); });
         reverse.shortcut = QStringLiteral("R");
         reverse.enabled = actions->canReverse();
+        // (What 0 does: deactivates the clips in the selected area, or activates them if they all are.)
+        const std::optional<bool> activates = actions->activates();
+        MenuEntry& activation = menu.add(activates.value_or(false) ? QStringLiteral("Activate") : QStringLiteral("Deactivate"),
+                                         [actions] { actions->toggleActivation(); });
+        activation.shortcut = QStringLiteral("0");
+        activation.enabled = activates.has_value();
         if (hit && hit->clip.isAudio()) {
             // The browser lists the sounds most like the part of its file the clip plays.
             app::BrowserController* browser = s->browser();

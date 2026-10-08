@@ -892,6 +892,25 @@ private Q_SLOTS:
         QCOMPARE(undo().undoText(), QStringLiteral("Insert MIDI Clip"));
     }
 
+    void theMenuDeactivatesClipsAndActivatesThem() {
+        threeTracks();
+        // The clip's menu deactivates it (as 0 does); then it offers Activate.
+        arr::MenuEntries menu = lanes()->contextMenu(h_->lanePoint(0, 1.2, true));
+        QCOMPARE(menu.find(QStringLiteral("Deactivate"))->shortcut, QStringLiteral("0"));
+        QVERIFY(menu.find(QStringLiteral("Deactivate"))->enabled);
+        QVERIFY(menu.triggerText(QStringLiteral("Deactivate")));
+        QVERIFY(clipOf(0).muted);
+        QCOMPARE(undo().undoText(), QStringLiteral("Deactivate Clip"));
+        menu = lanes()->contextMenu(h_->lanePoint(0, 1.2, true));
+        QVERIFY(!menu.find(QStringLiteral("Deactivate")));
+        QVERIFY(menu.triggerText(QStringLiteral("Activate")));
+        QVERIFY(!clipOf(0).muted);
+        // A time selection with no clips in it: nothing to deactivate.
+        selection().setTimeRange(40.0, 44.0, {trackId(0)}, QSet<ClipRef>());
+        menu = lanes()->contextMenu(QPointF(h_->x(42.0), h_->row(0).top + h_->row(0).mainHeight - 4));
+        QVERIFY(menu.find(QStringLiteral("Deactivate")) && !menu.find(QStringLiteral("Deactivate"))->enabled);
+    }
+
     void clipGainMakesTheWaveformTaller() {
         std::vector<float> square(size_t(test::kSampleRate) * 2);
         for (size_t i = 0; i < square.size() / 2; ++i) square[2 * i] = square[2 * i + 1] = (i % 2) ? 0.25f : -0.25f;
@@ -1059,8 +1078,8 @@ private Q_SLOTS:
         QCOMPARE(menu.texts(),
                  (QStringList{QStringLiteral("Cut"), QStringLiteral("Copy"), QStringLiteral("Paste"), QString(),
                               QStringLiteral("Split Here"), QStringLiteral("Duplicate"), QStringLiteral("Consolidate"),
-                              QStringLiteral("Reverse"), QString(), QStringLiteral("Find Similar Sounds"), QString(),
-                              QStringLiteral("Delete")}));
+                              QStringLiteral("Reverse"), QStringLiteral("Deactivate"), QString(),
+                              QStringLiteral("Find Similar Sounds"), QString(), QStringLiteral("Delete")}));
         QCOMPARE(selection().clips(), refs({{trackId(0), clipOf(0).id}}));
         QCOMPARE(menu.find(QStringLiteral("Duplicate"))->shortcut, QStringLiteral("Ctrl+D"));
         // Find Similar Sounds: the browser lists the sounds most like the clip's.

@@ -99,8 +99,15 @@ both kinds are edited alike.
   start then pitch. Its length is in beats, so it doesn't change with the tempo. Notes outside the window are kept
   but not played, so trimming or splitting never deletes them. `playedNotes()` gives the notes that start inside the
   window, cut at its end, in timeline beats (`PlayedNote`), as in Ableton.
+- Both: `id`, `startBeat`, `name` (an audio clip's: its file's name as it was placed; a MIDI clip has none: one
+  in an earlier file is dropped on load), and `muted`: deactivated (Ableton's clip activator off, 0), the clip is
+  kept, edited, copied and saved as any other but isn't heard (`plays()`; `heardNotes()`: none of its notes, and
+  never a deactivated note), so the
+  bridge leaves it out and the song's chords don't count it; what is split, trimmed or copied from it is deactivated
+  too.
 - `Note`: `pitch` (60 = C3, Ableton's octave numbering), `start` and `length` in beats from the clip's content start,
-  `velocity` 1..127.
+  `velocity` 1..127, and `muted`: deactivated (0 in the piano roll), kept and edited as any other but not heard.
+  `notes::withActive()` deactivates (or activates) some of a clip's notes where they are.
 - `kWarpModes` is in the engine's `WarpMode` order: Transients, Standard, Smooth, Formants, Re-Pitch.
   `legacyWarpMode()` maps the earlier Ableton-style names (Beats, Tones, Complex, Texture, Complex Pro) to the mode
   that plays the same way; loading applies it.
@@ -457,13 +464,15 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
 - **Settings**: `setTempo` [Q] (20..999, rounded to 0.01), `setTimeSignature` [Q], `setKey`, `setKeyByName` [Q],
   `setLoop` [Q], `setLoopEnabled` [Q], `setAutomationLocked` [Q].
 - **Clips**: `commitClips`, `addClips` (audio files one after another, set up by `clipSettings`; a new audio track if
-  needed), `addMidiClip`, `addMidiClipsOver`, `midiClipSpan`, `setClipNotes`, `moveClips` (with `clampTrackDelta`:
+  needed), `addMidiClip`, `addMidiClipsOver`, `midiClipSpan`, `setClipNotes` (and `setClipsNotes`: several clips' notes in one
+  undo step, for the piano roll editing them together), `moveClips` (with `clampTrackDelta`:
   only onto tracks of the same kind), `replaceClip`, `updateClips`, `deleteClips`, `splitClips`, `duplicateClips`,
   `consolidateClips` (Ctrl+J), time selections (`deleteRange` [Q], `duplicateRange`, `copyRange`, `cutRange`,
   `paste`, `pasteTargets`, `moveRange`, `movedRange` (what `moveRange` would make of the clips, and of frozen
   tracks' segments, without making it: a drag's preview), `reverseRange` (the audio clips in a range play reversed
   copies of their files, given by the
-  caller; split at the range's edges), `clipsArea`, `clipsInRange`, `clipsAt`), and `addRecordings` (takes become
+  caller; split at the range's edges), `setRangeActive` (0: the clips in a range deactivated, or activated again;
+  split at the range's edges), `clipsArea`, `clipsInRange`, `clipsAt`), and `addRecordings` (takes become
   clips in one step; MIDI takes quantized to the record grid).
 - **A time selection is everything in it**: unless `automationLocked`, deleting, moving, copying, duplicating,
   cutting and pasting a range acts on the automation of every track in it as on its clips, whether the track has
@@ -527,7 +536,7 @@ refused because of frozen audio are said on `refused` too. The session shows `re
 - `removeRange`, `sliceRange` (new clips holding just a range; `keepIds` for clips wholly inside), `splitClip`,
   `trimStart` (a MIDI clip revealing time before its content shifts its notes so they stay put), `trimEnd` (audio
   limited by the source), `fitToTempo` (the same clips if nothing changes; `changed` says whether anything did),
-  `consolidateMidi`, `reverseClip` (a clip playing a reversed copy of its file: the same stretch of audio, its offset
+  `consolidateMidi` (what the clips play: a deactivated clip's notes come deactivated, unless every clip is), `reverseClip` (a clip playing a reversed copy of its file: the same stretch of audio, its offset
   mirrored), `selectionSpan`.
 - `stretchClip(clip, edgeBeat, left, tempo)` (Alt-dragging an edge): that edge moves, the other stays, and the
   content plays faster or slower to fill it: an audio clip is warped to the segment BPM that makes it that long
