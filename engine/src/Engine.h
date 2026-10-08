@@ -562,6 +562,9 @@ private:
         std::optional<SidechainModel> sidechain;
         bool rack = false;             // a RackProcessor:
         std::vector<uint32_t> chains;  // its chains, in order
+        // While its automation switches it off: the line its input is passed on
+        // through (SwitchRender), kept across snapshots.
+        std::shared_ptr<DelayLine> switchDelay;
     };
     // A strip's devices depth first (Routing.h's slots): each device of its main
     // chain, and after a rack the devices of its chains, chain by chain.
@@ -613,7 +616,7 @@ private:
     // Delay lines an offline render brings, so that it neither disturbs live playback nor depends on it.
     struct OfflineLines {
         WarpVoiceSet voices;
-        std::vector<std::shared_ptr<DelayLine>> delays, deviceDelays, chainDelays;
+        std::vector<std::shared_ptr<DelayLine>> delays, deviceDelays, chainDelays, switchDelays;
     };
     void prepareOfflineLocked(const RenderSnapshot& snap, Renderer& offline, OfflineLines& lines, double startBeat);
     // A render in the background: its own renderer and delay lines, and the snapshot it renders.

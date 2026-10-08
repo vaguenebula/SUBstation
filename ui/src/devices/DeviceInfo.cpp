@@ -10,6 +10,7 @@
 #include <QVariantMap>
 
 #include <algorithm>
+#include <tuple>
 
 namespace sub::ui {
 
@@ -123,6 +124,40 @@ void DeviceInfo::connectSession() {
     connections_ << connect(bridge, &EngineBridge::pluginEditorChanged, this, ofDevice);
     connections_ << connect(bridge, &EngineBridge::pluginsPendingChanged, this, refreshAll);
     connections_ << connect(bridge, &EngineBridge::deviceChanged, this, refreshAll);  // (new latencies)
+    // Its switch's automation: playing, overridden, or gone; and the switch following it.
+    connections_ << connect(bridge, &EngineBridge::automationStateChanged, this, [this](const QString& owner) {
+        if (owner == trackId_ || owner.isEmpty())
+            refreshSwitch();
+    });
+    connections_ << connect(bridge, &EngineBridge::positionChanged, this, [this] {
+        if (state_.enabledAutomation == QLatin1String("on"))
+            refreshSwitch();
+    });
+}
+
+QString DeviceInfo::switchKey() const { return sub::app::automation::deviceOnKey(deviceId_); }
+
+std::pair<bool, QString> DeviceInfo::switchState(bool own) const {
+    const EngineBridge& bridge = *session_->bridge();
+    const QString key = switchKey();
+    if (bridge.isOverridden(trackId_, key))
+        return {own, QStringLiteral("off")};
+    if (!bridge.isAutomated(trackId_, key))
+        return {own, QString()};
+    const std::optional<double> value = session_->bridge()->currentValue(trackId_, key);
+    return {value ? *value >= 0.5 : own, QStringLiteral("on")};
+}
+
+void DeviceInfo::refreshSwitch() {
+    const Device* device = session_ ? session_->project()->findDevice(trackId_, deviceId_) : nullptr;
+    if (device == nullptr)
+        return;
+    const auto [enabled, automation] = switchState(device->enabled);
+    if (enabled == state_.enabled && automation == state_.enabledAutomation)
+        return;
+    state_.enabled = enabled;
+    state_.enabledAutomation = automation;
+    Q_EMIT changed();
 }
 
 std::optional<Sidechain> DeviceInfo::currentSidechain() const {
@@ -167,7 +202,7 @@ void DeviceInfo::refresh() {
         s.isPlugin = device->isPlugin();
         s.name = s.isPlugin && device->plugin ? device->plugin->name : sub::app::deviceName(*device);
         s.instrument = sub::app::deviceIsInstrument(*device);
-        s.enabled = device->enabled;
+        std::tie(s.enabled, s.enabledAutomation) = switchState(device->enabled);
         s.folded = project->isDeviceFolded(deviceId_);
         s.chainListShown = s.isRack && project->isChainListShown(deviceId_);
         s.rackDevicesShown = project->areRackDevicesShown(deviceId_);
@@ -228,8 +263,30 @@ void DeviceInfo::refresh() {
 }
 
 void DeviceInfo::setEnabled(bool enabled) {
+    if (!session_ || !session_->project()->hasDevice(trackId_, deviceId_))
+        return;
+    session_->editor()->setDeviceEnabled(trackId_, deviceId_, enabled);  // (overriding its automation)
+    refreshSwitch();
+}
+
+void DeviceInfo::showSwitchAutomation() {
     if (session_ && session_->project()->hasDevice(trackId_, deviceId_))
-        session_->editor()->setDeviceEnabled(trackId_, deviceId_, enabled);
+        session_->editor()->showAutomation(trackId_, switchKey());
+}
+
+void DeviceInfo::deleteSwitchAutomation() {
+    if (session_ && session_->project()->hasOwner(trackId_))
+        session_->editor()->clearEnvelope(trackId_, switchKey());
+}
+
+void DeviceInfo::reEnableAutomation() {
+    if (session_)
+        session_->bridge()->reEnableAutomation(trackId_);
+}
+
+bool DeviceInfo::hasSwitchEnvelope() const {
+    return session_ && session_->project()->hasOwner(trackId_) &&
+           !session_->project()->envelope(trackId_, switchKey()).empty();
 }
 
 void DeviceInfo::moveLeft() {

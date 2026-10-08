@@ -137,10 +137,13 @@ private Q_SLOTS:
         const QString key = autom::deviceKey(utility, "gain");
         f.editor.setEnvelope(track, key, env({{0.0, 0.5}}));
         f.editor.setEnvelope(track, autom::deviceKey(synth, "cutoff"), env({{0.0, 0.5}}));
+        f.editor.setEnvelope(track, autom::deviceOnKey(utility), env({{0.0, 0.0}}));  // its switch's too
         f.editor.removeDevice(track, utility);
         QCOMPARE(f.track(track).automation.keys(), QList<QString>{autom::deviceKey(synth, "cutoff")});
         f.stack.undo();  // the device and its automation come back together
         QVERIFY(f.track(track).automation.contains(key));
+        QVERIFY(f.track(track).automation.contains(autom::deviceOnKey(utility)));
+        f.editor.setEnvelope(track, autom::deviceOnKey(utility), {});
         QCOMPARE(f.track(track).devices.size(), size_t(2));
         QCOMPARE(f.track(track).devices[0].id, synth);
         QCOMPARE(f.track(track).devices[1].id, utility);
@@ -158,15 +161,23 @@ private Q_SLOTS:
         f.editor.setDeviceParam(track, synth, "cutoff", 1000.0);
         f.editor.setTrackParam(kMaster, TrackField::Pan, 0.5);
         f.editor.touchParameter(track, autom::kMixerPan);  // clicked, not changed
+        f.editor.setTrackParam(track, TrackField::Mute, true);  // its activator, switched
+        f.editor.setDeviceEnabled(track, synth, false);  // its on/off
+        f.editor.setDeviceEnabled(track, synth, false);  // (switched to what it is: as its automation played)
         const QList<QStringList> expected{{track, autom::kMixerVolume},
                                           {track, autom::deviceKey(synth, "cutoff")},
                                           {kMaster, autom::kMixerPan},
-                                          {track, autom::kMixerPan}};
+                                          {track, autom::kMixerPan},
+                                          {track, autom::kMixerOn},
+                                          {track, autom::deviceOnKey(synth)},
+                                          {track, autom::deviceOnKey(synth)}};
         QCOMPARE(touched.size(), expected.size());
         for (qsizetype i = 0; i < expected.size(); ++i) {
             QCOMPARE((QStringList{touched[i][0].toString(), touched[i][1].toString()}), expected[i]);
         }
         QCOMPARE(f.project.master().pan, 0.5);
+        f.stack.undo();  // (the synth switched on, the track unmuted)
+        f.stack.undo();
         QCOMPARE(f.stack.undoText(), QStringLiteral("Change Master Pan"));
         f.stack.undo();
         QCOMPARE(f.project.master().pan, 0.0);

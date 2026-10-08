@@ -46,6 +46,9 @@ struct TrackParams {
     SmoothedValue panLeft;
     SmoothedValue panRight;
     double smoothingSampleRate = 0.0;
+    // A live render's: the automated switch's gain at the end of the last chunk
+    // (1: none, or on), which the mute's ramp takes over from when it stops.
+    float switchGain = 1.f;
 };
 
 // An automation envelope as the renderer plays it: a processor's parameter, or
@@ -157,6 +160,18 @@ private:
     int delay_ = 0;
 };
 
+// A device its automation switches on and off (its lane kDeviceOnLane). While
+// it is off the renderer doesn't process it and passes its input on, delayed
+// by the device's own latency (so what comes after it stays in time); it
+// starts again from silence as it comes back on. Switching fades over
+// Renderer::kSwitchFade.
+struct SwitchRender {
+    AutomationRender lane;  // its envelope (lane.insert: the device's place in its chain)
+    int latency = 0;        // the device's: how late its input is passed on while it is off
+    int delayIndex = -1;    // its place in RenderSnapshot::switchDelays (offline renders bring lines of their own)
+    std::shared_ptr<DelayLine> delay;  // for the live renderer
+};
+
 // A note of a MIDI clip, already cut to its clip: the renderer sends a note-on
 // at `start` and a note-off at `end`.
 struct NoteRender {
@@ -183,7 +198,11 @@ struct StripRender {
     // (to line them up with their sidechain: EdgeRender::deviceDelay).
     int latency = 0;
     std::vector<AutomationRender> automation;  // of its devices' parameters, in chain order
+    std::vector<SwitchRender> switches;        // its devices switched on and off by automation, in chain order
     AutomationRender volume, pan;              // of its mixer
+    // A track's switch (its activator, kTrackOnLane): while it has one it is
+    // heard where it is on, whatever its mute (the master has none).
+    AutomationRender on;
     // Per insert, the edge going into its sidechain (aux) input, if any (-1:
     // none); empty if none has one.
     std::vector<int> sidechains;
@@ -401,6 +420,8 @@ struct RenderSnapshot {
     WarpVoiceSet warpVoices;  // stretchers for the live renderer (offline renders bring their own)
     // Every rack chain's compensation, by its delayIndex (offline renders make lines that long).
     std::vector<int> chainDelays;
+    // Every switched device's latency, by its SwitchRender::delayIndex (likewise).
+    std::vector<int> switchDelays;
 
     // The output lags the timeline by this much: the tracks' latency, then the
     // master's devices. The metronome is delayed as much.

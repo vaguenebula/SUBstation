@@ -11,6 +11,7 @@
 
 #include "io/Presets.h"
 #include "io/Serialization.h"
+#include "model/Commands.h"
 #include "model/Devices.h"
 
 #include <QJsonArray>
@@ -378,13 +379,14 @@ private Q_SLOTS:
         const QString rack = studio.edit.groupDevices(track, {a});
         const QString macro = automation::deviceKey(rack, macroParam(0));
         const QString gain = automation::deviceKey(a, QStringLiteral("gain"));
-        // Macros are the rack's parameters, named, before its chains' faders.
+        // Macros are the rack's parameters, named, after its switch and before its chains' faders.
         QVERIFY(bridge.canAutomate(track, macro));
         const std::vector<ParamSpec> specs = bridge.paramGroups(track)[1].specs;  // (the mixer, the rack, ...)
-        QCOMPARE(specs.size(), size_t(kDefaultMacroCount + 2));
-        QCOMPARE(specs[0].key, macro);
-        QCOMPARE(specs[0].name, QStringLiteral("Macro 1"));
-        QCOMPARE(specs[0].format(0.5), QStringLiteral("50 %"));
+        QCOMPARE(specs.size(), size_t(kDefaultMacroCount + 3));
+        QCOMPARE(specs[0].key, automation::deviceOnKey(rack));
+        QCOMPARE(specs[1].key, macro);
+        QCOMPARE(specs[1].name, QStringLiteral("Macro 1"));
+        QCOMPARE(specs[1].format(0.5), QStringLiteral("50 %"));
         QVERIFY(!bridge.canAutomate(track, automation::deviceKey(rack, macroParam(kDefaultMacroCount))));
         mapMacro(studio, track, rack, 0, a, QStringLiteral("gain"));
         studio.edit.setEnvelope(track, macro, {{0.0, 0.0, 0.0}});  // the gain at its lowest: -60 dB
@@ -589,6 +591,52 @@ private Q_SLOTS:
         QVERIFY(std::abs(studio.engine.processorParam(*bridge.engineDeviceId(track, fresh->id), 0) - 0.3f) < 1e-6f);
     }
 
+    void aDevicesSwitchIsAutomated() {
+        // Device On, its first parameter: its envelope switches it as it plays (on
+        // in the engine then, though off in the model); switched by hand while
+        // that plays, it stays so (overridden) until re-enabled.
+        test::TempDir dir;
+        Studio studio;
+        EngineBridge& bridge = *studio.bridge;
+        const QString track = studio.clipTrack(
+            test::writeWav(dir.path(QStringLiteral("dc.wav")), std::vector<float>(2 * test::kSampleRate, 0.5f), 2));
+        const QString utility = studio.edit.addDevice(track, QStringLiteral("utility"));
+        studio.edit.setDeviceParam(track, utility, QStringLiteral("gain"), -6.0206);
+        const auto level = [&] { return static_cast<double>(studio.level()); };
+        QVERIFY(std::abs(level() - 0.25) < 1e-3);
+        const QString key = automation::deviceOnKey(utility);
+        QVERIFY(bridge.canAutomate(track, key));
+        QCOMPARE(bridge.paramSpec(track, key)->name, QStringLiteral("Device On"));
+        QCOMPARE(bridge.deviceParamSpecs(track, studio.project.device(track, utility)).front().key, key);
+        const auto switchByHand = [&](bool enabled) {
+            studio.stack.push(new SetDeviceEnabledCommand(&studio.project, track, utility, enabled));
+        };
+        studio.edit.setEnvelope(track, key, {{0.0, 0.0, 0.0}});  // off: it passes its input on
+        QVERIFY(bridge.isAutomated(track, key));
+        QVERIFY(std::abs(level() - 0.5) < 1e-3);
+        QCOMPARE(*bridge.currentValue(track, key, 0.0), 0.0);
+        QCOMPARE(*bridge.ownValue(track, key), 1.0);
+        switchByHand(false);  // its automation stops; off, as switched
+        QVERIFY(bridge.isOverridden(track, key) && !bridge.isAutomated(track, key));
+        QVERIFY(std::abs(level() - 0.5) < 1e-3);
+        bridge.reEnableAutomation(track);
+        QVERIFY(bridge.isAutomated(track, key));
+        // Off in the model, its envelope on: the engine has it on, and it plays.
+        studio.edit.setEnvelope(track, key, {{0.0, 1.0, 0.0}});
+        QVERIFY(!studio.project.device(track, utility).enabled);
+        QVERIFY(std::abs(level() - 0.25) < 1e-3);
+        // Without its envelope: off again, as the model has it.
+        studio.edit.setEnvelope(track, key, {});
+        QVERIFY(!bridge.isAutomated(track, key));
+        QVERIFY(std::abs(level() - 0.5) < 1e-3);
+        // A rack is switched as any device is.
+        switchByHand(true);
+        const QString rack = studio.edit.groupDevices(track, {utility});
+        QCOMPARE(bridge.paramGroups(track)[1].specs.front().key, automation::deviceOnKey(rack));
+        studio.edit.setEnvelope(track, automation::deviceOnKey(rack), {{0.0, 0.0, 0.0}});
+        QVERIFY(std::abs(level() - 0.5) < 1e-3);
+    }
+
     void deviceParametersForTheEditors() {
         const auto ref = plugin(QStringLiteral("SUB Test Effect"));
         test::TempDir dir;
@@ -623,8 +671,8 @@ private Q_SLOTS:
         const QString fx = studio.edit.addDevice(track, kPluginKind, ref);
         QVERIFY(!bridge.deviceParamText(track, fx, 0, 0.5).isEmpty());
         const std::vector<ParamSpec> specs = bridge.deviceParamSpecs(track, studio.project.device(track, fx));
-        QVERIFY(!specs.empty() && specs.front().text);
-        QCOMPARE(specs.front().format(0.5), bridge.deviceParamText(track, fx, 0, 0.5));
+        QVERIFY(specs.size() > 1 && specs[1].text);  // (after its switch, Device On)
+        QCOMPARE(specs[1].format(0.5), bridge.deviceParamText(track, fx, 0, 0.5));
     }
 };
 

@@ -43,8 +43,13 @@ void EngineBridge::pushAutomation(const QString& owner) {
     d_->macroMoved.insert(owner, moved);
     engine_.setTrackAutomation(*engineId, lanes);
     const QSet<QString> stopped = d_->automating.value(owner) - playing;
+    const QSet<QString> started = playing - d_->automating.value(owner);
     d_->automating.insert(owner, playing);
-    for (const QString& key : stopped) pushOwnValue(owner, key);
+    for (const QString& key : stopped) pushOwnValue(owner, key);  // (a device's switch: pushEnabled)
+    // Devices whose switches start playing are switched on in the engine (their lanes switch them).
+    if (project_->hasOwner(owner) && std::any_of(started.begin(), started.end(), automation::isSwitchKey)) {
+        pushEnabled(owner);
+    }
     Q_EMIT automationStateChanged(owner);
 }
 
@@ -100,6 +105,10 @@ void EngineBridge::pushOwnValue(const QString& owner, const QString& key) {
         return;
     }
     if (automation::keySend(key) || automation::keyChain(key)) return;  // the engine kept the send's (the fader's) own level
+    if (automation::isSwitchKey(key)) {  // a device's on/off: as it is in the model again
+        if (project_->hasOwner(owner)) pushEnabled(owner);
+        return;
+    }
     const auto deviceId = automation::keyDevice(key);
     const auto target = automation::parseKey(key);
     if (deviceId && target && project_->hasDevice(owner, *deviceId)) pushDeviceParam(owner, *deviceId, target->param);
@@ -151,10 +160,12 @@ QString EngineBridge::pluginParamText(quint32 processorId, int index, double val
 }
 
 std::vector<ParamSpec> EngineBridge::deviceParamSpecs(const QString& trackId, const Device& device) {
+    // Every device (a rack too) can be switched on and off: Device On, first.
     if (device.isRack()) {
         QStringList macros;
         for (int i = 0; i < macroCount(device); ++i) macros.append(macroName(device, i));
-        std::vector<ParamSpec> specs = macroSpecs(device.id, macros, deviceName(device));
+        std::vector<ParamSpec> specs{deviceOnSpec(device.id, deviceName(device))};
+        for (ParamSpec& spec : macroSpecs(device.id, macros, deviceName(device))) specs.push_back(std::move(spec));
         std::vector<std::pair<QString, QString>> chains;
         for (const Chain& chain : device.chains) chains.emplace_back(chain.id, chain.name);
         for (ParamSpec& spec : chainSpecs(device.id, chains, deviceName(device))) specs.push_back(std::move(spec));
@@ -167,7 +178,7 @@ std::vector<ParamSpec> EngineBridge::deviceParamSpecs(const QString& trackId, co
     if (cached != d_->paramSpecs.constEnd()) return *cached;
     const QString name = deviceName(device);
     const bool isPlugin = d_->pluginIds.contains(id);
-    std::vector<ParamSpec> specs;
+    std::vector<ParamSpec> specs{deviceOnSpec(device.id, name)};
     const std::vector<sub::ParamInfo> infos = paramInfos(id);
     for (size_t index = 0; index < infos.size(); ++index) {
         const sub::ParamInfo& info = infos[index];
@@ -224,8 +235,11 @@ bool EngineBridge::canAutomate(const QString& owner, const QString& key) {
 }
 
 std::optional<ParamSpec> EngineBridge::paramSpec(const QString& owner, const QString& key) {
-    if (automation::kMixerKeys.contains(key)) {  // every owner has these: no need to work out its sends
-        return sub::app::mixerSpecs(owner == kMaster)[static_cast<size_t>(automation::kMixerKeys.indexOf(key))];
+    if (automation::kMixerKeys.contains(key)) {  // no need to work out its sends (the master has no activator: none)
+        for (const ParamSpec& spec : sub::app::mixerSpecs(owner == kMaster)) {
+            if (spec.key == key) return spec;
+        }
+        return std::nullopt;
     }
     if (automation::isMixerKey(key)) {  // (a return that is gone: none)
         for (const ParamSpec& spec : mixerSpecs(owner)) {
@@ -243,6 +257,9 @@ std::optional<ParamSpec> EngineBridge::paramSpec(const QString& owner, const QSt
         if (spec.key == key) return spec;
     }
     // Not loaded: its values are still worth showing.
+    if (const auto target = automation::parseKey(key); target && target->param == automation::kDeviceOn) {
+        return deviceOnSpec(device.id, deviceName(device));
+    }
     ParamSpec spec;
     spec.key = key;
     const auto target = automation::parseKey(key);
@@ -257,6 +274,7 @@ std::optional<double> EngineBridge::ownValue(const QString& owner, const QString
     const Track& track = project_->track(owner);
     if (key == automation::kMixerVolume) return track.volumeDb;
     if (key == automation::kMixerPan) return track.pan;
+    if (key == automation::kMixerOn) return track.mute ? 0.0 : 1.0;
     if (const auto returnId = automation::keySend(key)) return track.sends.value(*returnId, Send{}).levelDb;
     if (const auto control = automation::keyChainControl(key)) {
         for (const ConstRackChain& rc : iterChains(track.devices)) {
@@ -270,6 +288,7 @@ std::optional<double> EngineBridge::ownValue(const QString& owner, const QString
     if (!target) return std::nullopt;
     const Device* device = findDevice(track.devices, target->id);
     if (device == nullptr) return std::nullopt;
+    if (target->param == automation::kDeviceOn) return device->enabled ? 1.0 : 0.0;
     const std::optional<double> own =
         device->params.contains(target->param) ? std::optional(device->params.value(target->param)) : std::nullopt;
     const auto processorId = engineDeviceId(owner, device->id);

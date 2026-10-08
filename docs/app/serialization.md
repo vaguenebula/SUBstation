@@ -153,8 +153,9 @@ de-duplicated (`notes::normalize`).
 
 Per owner (each track, return and the master), `automation` maps a target key to an envelope saved as
 `[beat, value, curve]` points (a point without `curve` loads with 0). Keys are those of
-[Automation.h](../../app/src/model/Automation.h): `mixer:volume`, `mixer:pan`, `send:<return id>`,
-`device:<device id>:<param id>`, and `device:<rack id>:chain:<chain id>:volume|pan`. Empty envelopes aren't saved.
+[Automation.h](../../app/src/model/Automation.h): `mixer:volume`, `mixer:pan`, `mixer:on`, `send:<return id>`,
+`device:<device id>:<param id>`, `device:<device id>:device:on`, and `device:<rack id>:chain:<chain id>:volume|pan`.
+Empty envelopes aren't saved.
 On load, keys this version doesn't know are dropped, and points are sorted and clamped (`automation::normalize`).
 `automation_view` keeps what the arrangement shows of it; keys in it that aren't valid are dropped.
 

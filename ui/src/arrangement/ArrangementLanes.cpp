@@ -44,7 +44,7 @@ namespace sub::ui {
 using namespace arrangement;
 
 double arrangement::clipTitleHeight(double clipHeight, bool folded) {
-    if (folded) return clipHeight;
+    if (folded) return std::min(clipHeight, kTitleHeight);  // (the bar a folded track's row is)
     return clipHeight >= kMinTitleRow ? kTitleHeight : kShortTitleHeight;
 }
 
@@ -414,7 +414,7 @@ void ArrangementLanes::paint(SgPainter& p) {
         const bool bars = row.bars;
         if (bars && tinted.contains(track->id))  // under its clips' bars, which stay as they are
             p.fillRect(tinted.take(track->id), Theme::kSelection);
-        if (track->isGroup()) drawGroupSummary(p, track->id, y, row.mainHeight, visible);
+        if (track->isGroup()) drawGroupSummary(p, track->id, y, row.mainHeight, track->folded, visible);
         const QColor trackColor(track->color);
         for (const app::Clip& clip : track->clips) {
             if (hidden.contains(clip.id)) continue;
@@ -613,28 +613,36 @@ void ArrangementLanes::drawClipFrame(SgPainter& p, const QColor& trackColor, con
 }
 
 void ArrangementLanes::drawGroupSummary(SgPainter& p, const QString& groupId, double rowTop, int rowHeight,
-                                        const QRectF& visible) const {
-    // What is in a group, at a glance: the clips of its tracks as bars in their
-    // colours, overlapping, as in Ableton's group lanes.
+                                        bool folded, const QRectF& visible) const {
+    // What is in a group, as Ableton's group lanes show it: a thin row per track
+    // in it (those in groups in it too), in order, with that track's clips as
+    // bars, so the group's structure shows: in each track's colour while folded
+    // (its tracks are hidden), barely there while open (its tracks show below it).
     const QRectF area(visible.left(), rowTop + 2, visible.width(), rowHeight - 5);
-    if (area.height() < 3) return;
+    if (area.height() < 1) return;
     const app::Project& project = *session()->project();
+    std::vector<const app::Track*> tracks;
+    for (const app::Track* track : project.descendants(groupId)) {
+        if (track->hasClips()) tracks.push_back(track);
+    }
+    if (tracks.empty()) return;
     const timeline::Timeline& view = arrangement()->view();
     const double tempo = project.tempo();
+    const double share = area.height() / static_cast<double>(tracks.size());
+    const double gap = share >= 3.0 ? 1.0 : 0.0;  // a line between the rows, while they have room for one
     p.save();
     p.setClipRect(area);
-    for (const app::Track* track : project.descendants(groupId)) {
-        QColor color(track->color);
-        color.setAlphaF(0.85f);
-        QColor fill(track->color);
-        fill.setAlphaF(0.15f);  // light enough that the grid (and overlapping clips) show through
-        for (const app::Clip& clip : track->clips) {
+    for (size_t i = 0; i < tracks.size(); ++i) {
+        // Whole pixels, so the rows (and the lines between them) are even.
+        const double top = area.top() + std::floor(static_cast<double>(i) * share);
+        const double bottom = area.top() + std::floor(static_cast<double>(i + 1) * share) - gap;
+        if (bottom <= top) continue;
+        const QColor color = folded ? QColor(tracks[i]->color) : Theme::kGroupOutline;
+        for (const app::Clip& clip : tracks[i]->clips) {
             const double x0 = view.beatToX(clip.startBeat), x1 = view.beatToX(clip.endBeat(tempo));
             if (x1 < visible.left()) continue;
             if (x0 > visible.right()) break;
-            const QRectF rect(x0, area.top(), std::max(1.0, x1 - x0), area.height());
-            p.fillRect(rect, fill);
-            p.fillRect(QRectF(x0, area.top(), rect.width(), std::min(4.0, area.height())), color);
+            p.fillRect(QRectF(x0, top, std::max(1.0, x1 - x0), bottom - top), color);
         }
     }
     p.restore();

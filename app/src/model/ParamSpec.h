@@ -64,8 +64,13 @@ struct ParamSpec {
 };
 
 // The mixer controls of a track (or the master) that can be automated: its
-// volume and pan, and its sends to `sends` ((return id, letter) each).
+// volume and pan, its activator (not the master's), and its sends to `sends`
+// ((return id, letter) each).
 std::vector<ParamSpec> mixerSpecs(bool master = false, const std::vector<std::pair<QString, QString>>& sends = {});
+// A switch: Off (0) or On (1), on by default (a track's activator, a device's on/off).
+ParamSpec switchSpec(const QString& key, const QString& name, const QString& group);
+// A device's on/off ("Device On"), of the device named `group`.
+ParamSpec deviceOnSpec(const QString& deviceId, const QString& group);
 // A send's level to a return (lettered as it shows), automated as a volume is.
 ParamSpec sendSpec(const QString& returnId, const QString& letter);
 // A rack's macros (their names, in order): 0..1, shown in percent.

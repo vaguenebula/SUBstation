@@ -2,8 +2,9 @@
 
 // The track lanes: clips, grid, loop region, and all clip mouse editing; and
 // the tracks' automation, over their clips and in lanes below them
-// (Envelopes.h). A group's lane shows a summary of the clips of the tracks in
-// it (folded or not); the tracks in a folded group have no lane. The playhead
+// (Envelopes.h). A group's lane shows a summary of the tracks in it, a thin row
+// each with its clips: in the tracks' colours while it is folded (they have no
+// lanes then), barely there while it is open. The playhead
 // and the takes being recorded are items of their own above it
 // (ArrangementPlayhead, LiveTakes): they change every frame.
 //
@@ -63,6 +64,7 @@
 #include "arrangement/ArrangementItem.h"
 #include "arrangement/Envelopes.h"
 #include "arrangement/MenuEntries.h"
+#include "arrangement/TrackLayout.h"
 #include "arrangement/WaveformCache.h"
 #include "editor/ClipRef.h"
 #include "model/Clip.h"
@@ -84,8 +86,12 @@ namespace sub::ui {
 
 namespace arrangement {
 inline constexpr double kEdgeGrab = 6;      // trim handles: this many pixels inside each end of a clip's title bar
-inline constexpr double kTitleHeight = 16;  // also the grab area for selecting/moving the clip
-inline constexpr double kMinTitleRow = 30;  // clips in shorter rows have a thin title bar instead
+// A clip's title bar, also the grab area for selecting/moving the clip: as high
+// whether its track is folded or not (as in Ableton), the height of a folded
+// track's bar (its row but the 1 px above and 2 px below), in line with the
+// name row of the track's header.
+inline constexpr double kTitleHeight = kFoldedHeight - 3;
+inline constexpr double kMinTitleRow = kTitleHeight + 14;  // clips in shorter rows have a thin title bar instead
 inline constexpr double kShortTitleHeight = 9;  // that thin bar: grab it to move the clip; below it, select time
 inline constexpr double kFadeHandle = 7;     // a fade handle's square
 inline constexpr double kFadeGrab = 4;       // pixels around a fade handle (square or dot) that grab it too
@@ -95,7 +101,7 @@ inline constexpr double kMinFadeBody = 12;   // the lowest clip body (pixels) wi
 
 // The title bar of a clip this high: where it is grabbed (the rest selects
 // time). A folded track's clips are all title bar, as in Ableton: a bar with
-// the clip's name, grabbed anywhere.
+// the clip's name, grabbed anywhere, as high as an open track's clips' bars.
 double clipTitleHeight(double clipHeight, bool folded = false);
 
 // An audio clip's fade handles, drawn at `rect` (its body below the title bar:
@@ -263,7 +269,7 @@ private:
                      const QRectF& visible);
     void drawClipFrame(SgPainter& p, const QColor& trackColor, const app::Clip& clip, const QRectF& rect,
                        bool selected, bool ghost, bool folded) const;
-    void drawGroupSummary(SgPainter& p, const QString& groupId, double rowTop, int rowHeight,
+    void drawGroupSummary(SgPainter& p, const QString& groupId, double rowTop, int rowHeight, bool folded,
                           const QRectF& visible) const;
     void drawNotes(SgPainter& p, const app::Clip& clip, const QRectF& area, const QRectF& visible) const;
     void drawFades(SgPainter& p, const app::Clip& clip, const QRectF& rect, const QRectF& body, const QRectF& visible,

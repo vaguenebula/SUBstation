@@ -32,9 +32,10 @@ inline constexpr int kAutomationLaneHeight = 44;  // a lane shown below a track 
 inline constexpr int kGroupIndent = 8;
 inline constexpr int kGroupBand = 7;
 inline constexpr int kGroupBar = 3;
-// A folded track: its name row, its buttons 4 px from the top and from the
-// line below (its clips are bars, as in Ableton).
-inline constexpr int kFoldedHeight = 26;
+// A folded track: its name row, its buttons (16 px) 2 px from the top and from
+// the line below (its clips are bars, as in Ableton, as high as an open track's
+// clips' title bars: ArrangementLanes' kTitleHeight).
+inline constexpr int kFoldedHeight = 21;
 // A folded group: the same below its bar, so a little taller: it stands out.
 inline constexpr int kFoldedGroupHeight = kFoldedHeight + kGroupBar;
 // A track's own lane while its automation shows: room in its header for the choosers.

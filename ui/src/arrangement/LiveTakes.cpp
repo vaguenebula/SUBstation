@@ -57,12 +57,12 @@ void LiveTakes::paint(SgPainter& p) {
         const auto take = live.constFind(row.trackId);
         const app::Track* track = project.findTrack(row.trackId);
         if (take == live.constEnd() || !take->started || !track) continue;
-        drawTake(p, QColor(track->color), *take, row.top - scroll, row.mainHeight, visible);
+        drawTake(p, QColor(track->color), *take, row.top - scroll, row.mainHeight, row.bars, visible);
     }
 }
 
 void LiveTakes::drawTake(SgPainter& p, const QColor& trackColor, const app::LiveTake& take, double rowTop,
-                         int rowHeight, const QRectF& visible) const {
+                         int rowHeight, bool folded, const QRectF& visible) const {
     const double rate = std::max(1.0, session()->bridge()->sampleRate());
     const double tempo = session()->project()->tempo();
     const timeline::Timeline& view = arrangement()->view();
@@ -74,7 +74,7 @@ void LiveTakes::drawTake(SgPainter& p, const QColor& trackColor, const app::Live
     if (rect.right() < visible.left() || rect.left() > visible.right()) return;
     p.save();
     p.setClipRect(rect.intersected(visible).adjusted(-1, -1, 1, 1));
-    const double titleHeight = rect.height() >= kMinTitleRow ? kTitleHeight : 0;
+    const double titleHeight = clipTitleHeight(rect.height(), folded);  // (as a clip's)
     p.fillRect(rect, trackColor.darker(160));
     if (titleHeight > 0) p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), titleHeight), Theme::kRecordOn);
     const QRectF body = rect.adjusted(0, titleHeight + 1, 0, -1);

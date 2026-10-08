@@ -20,7 +20,8 @@ Each device has a title bar, as in Ableton (lighter while the device is selected
 
 - the **fold** triangle (see [Folding](#folding));
 - its **on/off switch** and **name** (the name's tooltip shows the device's latency, if
-  it has any);
+  it has any). The switch can be automated (*Device On*: right-click it; see
+  [automation.md](automation.md#switching-off-and-on));
 - a plug-in's **editor window** button (see [plugins.md](plugins.md));
 - the **sidechain** button, on devices with a sidechain input (see
   [mixing.md](mixing.md#sidechains));

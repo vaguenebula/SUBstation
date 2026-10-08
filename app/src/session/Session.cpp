@@ -115,6 +115,9 @@ void Session::wire() {
     }
     connect(project_, &Project::clipsChanged, this, [this](const QString&) { pruneSelection(); });
     connect(project_, &Project::automationChanged, this, [this](const QString&, const QString&) { pruneSelection(); });
+    // A switch switched by hand: its automation stops playing (it may have had
+    // it the other way than the model, which then needn't change).
+    connect(editor_, &ProjectEditor::switchedByHand, bridge_, &EngineBridge::overrideAutomation);
     // A parameter changed by hand: its automation shows (as the lane's parameter).
     connect(editor_, &ProjectEditor::parameterTouched, this, [this](const QString& owner, const QString& key) {
         if (!project_->hasOwner(owner)) return;

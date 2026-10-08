@@ -116,8 +116,26 @@ std::vector<ParamSpec> mixerSpecs(bool master, const std::vector<std::pair<QStri
     pan.defaultValue = 0.0;
     pan.text = formatPan;
     std::vector<ParamSpec> specs{volume, pan};
+    if (!master) specs.push_back(switchSpec(automation::kMixerOn, QStringLiteral("Track Activator"), volume.group));
     for (const auto& [returnId, letter] : sends) specs.push_back(sendSpec(returnId, letter));
     return specs;
+}
+
+ParamSpec switchSpec(const QString& key, const QString& name, const QString& group) {
+    ParamSpec spec;
+    spec.key = key;
+    spec.name = name;
+    spec.group = group;
+    spec.minimum = 0.0;
+    spec.maximum = 1.0;
+    spec.defaultValue = 1.0;
+    spec.steps = 1;
+    spec.labels = {QStringLiteral("Off"), QStringLiteral("On")};
+    return spec;
+}
+
+ParamSpec deviceOnSpec(const QString& deviceId, const QString& group) {
+    return switchSpec(automation::deviceOnKey(deviceId), QStringLiteral("Device On"), group);
 }
 
 ParamSpec sendSpec(const QString& returnId, const QString& letter) {

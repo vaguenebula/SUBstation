@@ -77,6 +77,7 @@ struct EngineBridge::Private {
     QMap<QString, ChainMixer> chainMixer;  // rack chain id -> its fader as the engine has it
     QSet<QString> syncing;  // tracks whose devices are being synced (not again from inside)
     QHash<quint32, bool> enabled;  // processor -> what the engine was told
+    QMap<QString, bool> ownEnabled;  // device id -> whether the model had it on, as last pushed
     QHash<quint32, QString> pluginIds;  // processor of each plug-in -> the path it came from
     QMap<QString, QByteArray> pluginStates;  // device id -> its plug-in's state when it went away
     QHash<quint32, QStringList> paramIds;  // processor -> parameter ids by index (cache)
@@ -87,6 +88,7 @@ struct EngineBridge::Private {
     QMap<QString, QMap<QString, Envelope>> macroMoved;
     std::set<std::pair<QString, QString>> overridden;  // (owner, key) changed by hand while automated
     QMap<QString, std::pair<double, double>> mixer;  // owner -> (volume dB, pan) the engine has
+    QMap<QString, bool> mutes;  // track id -> its mute as the engine has it
     QMap<QString, InputState> inputs;  // track id -> its input as the engine has it
     QMap<QString, quint32> outputs;  // track id -> the engine track its output goes into
     QMap<QString, std::map<quint32, std::pair<double, bool>>> sends;  // track id -> {engine return: (gain, pre-fader)}

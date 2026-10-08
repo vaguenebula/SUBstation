@@ -129,9 +129,10 @@ void ProjectEditor::renameRack(const QString& trackId, const QString& deviceId, 
 
 void ProjectEditor::setDeviceEnabled(const QString& trackId, const QString& deviceId, bool enabled) {
     const Device* device = project_->findDevice(trackId, deviceId);
-    if (device != nullptr && device->enabled != enabled) {
-        push(std::make_unique<SetDeviceEnabledCommand>(project_, trackId, deviceId, enabled));
-    }
+    if (device == nullptr) return;
+    Q_EMIT switchedByHand(trackId, automation::deviceOnKey(deviceId));
+    if (device->enabled != enabled) push(std::make_unique<SetDeviceEnabledCommand>(project_, trackId, deviceId, enabled));
+    Q_EMIT parameterTouched(trackId, automation::deviceOnKey(deviceId));
 }
 
 void ProjectEditor::setDeviceSidechain(const QString& trackId, const QString& deviceId,

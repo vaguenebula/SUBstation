@@ -186,6 +186,41 @@ private Q_SLOTS:
         QVERIFY(near(studio.level(), 0.5, 1e-3));
     }
 
+    void aTracksActivatorIsAutomated() {
+        // Its envelope switches it as it plays, whatever its mute; muted or
+        // unmuted by hand while that plays, it stays so (overridden) until re-enabled.
+        test::TempDir dir;
+        Studio studio;
+        EngineBridge& bridge = *studio.bridge;
+        const QString track = studio.clipTrack(dcWav(dir));
+        const QString key = automation::kMixerOn;
+        QVERIFY(bridge.canAutomate(track, key) && !bridge.canAutomate(kMaster, key));
+        QCOMPARE(bridge.paramSpec(track, key)->name, QStringLiteral("Track Activator"));
+        QVERIFY(!bridge.paramSpec(kMaster, key));
+        studio.edit.setEnvelope(track, key, {{0.0, 0.0, 0.0}});  // off
+        QVERIFY(bridge.isAutomated(track, key));
+        QVERIFY(near(studio.level(), 0.0));
+        QCOMPARE(*bridge.currentValue(track, key, 0.0), 0.0);
+        QCOMPARE(*bridge.ownValue(track, key), 1.0);  // (its own: not muted)
+        studio.edit.setTrack(track, TrackField::Mute, true);  // by hand: its automation stops
+        QVERIFY(bridge.isOverridden(track, key) && !bridge.isAutomated(track, key));
+        QVERIFY(near(studio.level(), 0.0));
+        studio.edit.setTrack(track, TrackField::Mute, false);
+        QVERIFY(near(studio.level(), 0.5, 1e-3));
+        bridge.reEnableAutomation(track);
+        QVERIFY(bridge.isAutomated(track, key));
+        QVERIFY(near(studio.level(), 0.0));
+        // Muted, its envelope on: heard while that plays; without it, muted again.
+        studio.edit.setEnvelope(track, key, {});
+        studio.edit.setTrack(track, TrackField::Mute, true);
+        QVERIFY(near(studio.level(), 0.0));
+        studio.edit.setEnvelope(track, key, {{0.0, 1.0, 0.0}});
+        QVERIFY(near(studio.level(), 0.5, 1e-3));
+        studio.edit.setEnvelope(track, key, {});
+        QVERIFY(!bridge.isAutomated(track, key));
+        QVERIFY(near(studio.level(), 0.0));
+    }
+
     void theEngineTakesInputsFromTracks() {
         Studio studio;
         EngineBridge& bridge = *studio.bridge;

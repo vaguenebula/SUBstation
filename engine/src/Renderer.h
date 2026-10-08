@@ -165,14 +165,23 @@ public:
     void setWarpVoices(const WarpVoiceSet* voices) noexcept { voiceOverride_ = voices; }
     // Likewise delay-compensation lines, one per snapshot edge (null: none needed),
     // those delaying sidechains' destinations before their devices (deviceDelay),
-    // and those of rack chains (by ChainRender::delayIndex).
+    // those of rack chains (by ChainRender::delayIndex) and those passing on the
+    // input of devices switched off (by SwitchRender::delayIndex).
     void setDelayLines(const std::vector<std::shared_ptr<DelayLine>>* lines,
                        const std::vector<std::shared_ptr<DelayLine>>* deviceLines = nullptr,
-                       const std::vector<std::shared_ptr<DelayLine>>* chainLines = nullptr) noexcept {
+                       const std::vector<std::shared_ptr<DelayLine>>* chainLines = nullptr,
+                       const std::vector<std::shared_ptr<DelayLine>>* switchLines = nullptr) noexcept {
         delayOverride_ = lines;
         deviceDelayOverride_ = deviceLines;
         chainDelayOverride_ = chainLines;
+        switchDelayOverride_ = switchLines;
     }
+
+    // How long a switch (a track's activator, a device's on/off) fades when its
+    // automation switches it: about 5 ms, at most kMaxSwitchFade samples.
+    static constexpr double kSwitchFade = 0.005;
+    static constexpr int kMaxSwitchFade = 1024;
+    static int switchFade(double sampleRate) noexcept;
 
 private:
     static constexpr int kAutomationStep = 64;  // samples between a slope's values for processors
@@ -184,6 +193,14 @@ private:
         std::vector<float> autoGain, autoPanLeft, autoPanRight;  // automated fader, per sample
         std::vector<float> audible;   // the fader's mute (and solo) ramp, for pre-fader taps
         std::vector<float> edgeGain;  // an automated send level, per sample
+        std::vector<float> activator;  // a track's automated switch, per sample (fillSwitch)
+        std::vector<float> switchStates;  // fillSwitch's: the switch's states, from a fade before the chunk
+        // A device switched by its automation, in a chain this deep (a strip's
+        // own: 0): its gain per sample (fillSwitch) and its input, passed on.
+        struct Switch {
+            std::vector<float> gain, dryLeft, dryRight;
+        };
+        std::array<Switch, kMaxRackDepth + 1> switches;
         struct Rack {
             std::vector<float> sumLeft, sumRight;      // its chains' sum
             std::vector<float> chainLeft, chainRight;  // the chain it runs
@@ -296,11 +313,24 @@ private:
     void processInserts(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
                         ProcessEvent* events, int numEvents, float* left, float* right, int frames,
                         bool monitored, WorkerScratch& scratch) noexcept;
-    // A chain's devices (a strip's own, or a rack's chain's), in place, one after
-    // the other over the chunk's slices (events already relative to their slice).
+    // A chain's devices (a strip's own, or a rack's chain's, `depth` racks deep),
+    // in place, one after the other over the chunk's slices (events already
+    // relative to their slice). A device its automation switches
+    // (StripRender::switches) is processed where it is on; where it is off its
+    // input is passed on, as late as it would make it, faded between.
     void processChain(const RenderSnapshot& snap, const StripRender& chain, ProcessContext& context,
                       const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
-                      bool monitored, WorkerScratch& scratch) noexcept;
+                      bool monitored, int depth, WorkerScratch& scratch) noexcept;
+    // One device (not a rack) of a chain over the slices, with its automation and sidechain.
+    void processDevice(const RenderSnapshot& snap, const StripRender& chain, size_t i, ProcessContext& context,
+                       const Slices& slices, ProcessEvent* events, float* left, float* right) noexcept;
+    DelayLine* switchDelayLine(const SwitchRender& device) const noexcept;
+    // A switch's lane as a gain per sample over the chunk: 1 where it is on, 0
+    // where it is off, fading over switchFade() samples after each switch (the
+    // share of the timeline's last ones it was on: it depends on the timeline
+    // alone, so live and offline renders agree). Stopped, as at the playhead.
+    void fillSwitch(const RenderSnapshot& snap, const AutomationRender& lane, int frames, float* out,
+                    WorkerScratch& scratch) const noexcept;
     // A rack, in place: its chains (each from its input) summed.
     void processRack(const RenderSnapshot& snap, const RackRender& rack, ProcessContext& context,
                      const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
@@ -308,13 +338,21 @@ private:
     // Takes the reset requests of a chain's devices (those switched on); a rack
     // asked to reset passes it on to everything in it.
     static bool takeResets(const StripRender& chain) noexcept;
+    // Resets a device now; a rack asks everything in it to reset as it runs next.
+    static void resetInsert(Processor& insert, const RackRender* rack) noexcept;
+    // A rack its switch passes by: the taps after the devices in it (in its
+    // chains, and in racks in them) take what it passes on.
+    static void tapSkippedRack(const RenderSnapshot& snap, const RackRender& rack, const float* left,
+                               const float* right, int frames) noexcept;
     DelayLine* chainDelayLine(const ChainRender& chain) const noexcept;
     void automateInsert(const AutomationRender& lane, int64_t position, int length, bool moving) noexcept;
     // Volume and pan (automated or not), in place; live renders also smooth and
-    // meter. `audibleOut` (if any) gets the mute ramp, per sample.
+    // meter. `audibleOut` (if any) gets the mute ramp, per sample. A track's
+    // automated switch (`activator`, if any and not empty) silences it where it is off
+    // (`audible` then leaves its mute out).
     void applyFader(const RenderSnapshot& snap, TrackParams& params, const AutomationRender& volume,
-                    const AutomationRender& pan, bool audible, float* left, float* right, int frames, bool live,
-                    WorkerScratch& scratch, float* audibleOut) noexcept;
+                    const AutomationRender& pan, const AutomationRender* activator, bool audible, float* left, float* right,
+                    int frames, bool live, WorkerScratch& scratch, float* audibleOut) noexcept;
     void fillLane(const AutomationRender& lane, int frames, float* out) const noexcept;
     static int64_t automationTime(int64_t t, int latency) noexcept { return t > latency ? t - latency : 0; }
     // Adds the clips' audio over the segment to left/right (the chunk's buffers).
@@ -348,6 +386,7 @@ private:
     double samplesPerBeat_ = 0.0;
     int64_t position_ = 0;
     int64_t expectedPosition_ = -1;  // where playback continues if the playhead doesn't jump
+    int64_t chunkFrom_ = -1;  // where the last chunk ended (-1: it didn't play): what a jump at this one's start left
     bool playing_ = false;
     bool chasePending_ = false;  // playback just started: its first segment chases notes
     int64_t countIn_ = 0;        // samples of count-in still to come before the playhead moves
@@ -378,6 +417,7 @@ private:
     const std::vector<std::shared_ptr<DelayLine>>* delayOverride_ = nullptr;
     const std::vector<std::shared_ptr<DelayLine>>* deviceDelayOverride_ = nullptr;
     const std::vector<std::shared_ptr<DelayLine>>* chainDelayOverride_ = nullptr;
+    const std::vector<std::shared_ptr<DelayLine>>* switchDelayOverride_ = nullptr;
     uint64_t blockCounter_ = 1;  // stamps voice use; 0 means "never used"
     std::array<Segment, kMaxSegments> segments_{};
     int numSegments_ = 0;

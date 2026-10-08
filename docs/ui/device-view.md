@@ -157,7 +157,9 @@ and editor, its sidechain) reading the project again whenever that may have chan
   a rack's or an editor's own (`body.implicitWidth + 2`: a rack's grows with its macros and its chain list), or 26 px
   folded.
 - **Title bar** (`kDeviceHeader`, lighter while selected): the fold button, the on/off switch
-  (`DeviceInfo::setEnabled`), the name (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
+  (`DeviceInfo::setEnabled`, overriding the switch's automation while it plays; following that automation, with the
+  automation dot: `enabled`, `enabledAutomation`; right-click: Show, Delete and Re-Enable Automation), the name
+  (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
   and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the sidechain button (a
   device with a sidechain input), the page arrows and "n/m" (only with more than one page), the save button.
 - **Body**: a `Loader` taking all the height there is: a rack's `RackDeviceBody`, a plug-in's `PluginDeviceBody`,

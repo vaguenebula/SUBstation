@@ -102,6 +102,8 @@ QString chainKey(const QString& rackId, const QString& chainId, const QString& c
     return deviceKey(rackId, kChainPrefix + chainId + u':' + control);
 }
 
+QString deviceOnKey(const QString& deviceId) { return deviceKey(deviceId, kDeviceOn); }
+
 std::optional<Target> parseKey(const QString& key) {
     const qsizetype colon = key.indexOf(u':');
     const QString kind = colon < 0 ? key : key.left(colon);
@@ -146,6 +148,12 @@ std::optional<ChainControl> keyChainControl(const QString& key) {
 }
 
 bool isMixerKey(const QString& key) { return kMixerKeys.contains(key) || keySend(key).has_value(); }
+
+bool isSwitchKey(const QString& key) {
+    if (key == kMixerOn) return true;
+    const auto parts = parseKey(key);
+    return parts && parts->kind == u"device" && parts->param == kDeviceOn;
+}
 
 // --- Mixer mappings ---
 

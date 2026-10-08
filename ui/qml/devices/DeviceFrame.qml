@@ -104,6 +104,21 @@ Item {
         id: titleMetrics
         font: Theme.uiFont(9, true)
     }
+    // The on/off switch's right-click menu: its automation.
+    DynamicMenu {
+        id: switchMenu
+        objectName: "switchMenu"
+
+        function show() {
+            clear()
+            entry(qsTr("Show Automation"), () => deviceInfo.showSwitchAutomation())
+            entry(qsTr("Delete Automation"), () => deviceInfo.deleteSwitchAutomation(), undefined,
+                  deviceInfo.hasSwitchEnvelope())
+            if (deviceInfo.enabledAutomation === "off")
+                entry(qsTr("Re-Enable Automation"), () => deviceInfo.reEnableAutomation())
+            popup()
+        }
+    }
 
     // The frame: PANEL_ALT in a 1 px line, 4 px corners.
     Rectangle {
@@ -173,10 +188,17 @@ Item {
                 role: "activator"
                 checkable: false
                 checked: deviceInfo.enabled
+                automation: deviceInfo.enabledAutomation
                 tooltip: qsTr("Device On/Off")
                 Layout.preferredWidth: 14
                 Layout.preferredHeight: 14
                 onClicked: deviceInfo.setEnabled(!deviceInfo.enabled)
+
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.RightButton
+                    onPressed: switchMenu.show()
+                }
             }
             Text {
                 id: title
@@ -306,8 +328,15 @@ Item {
             role: "activator"
             checkable: false
             checked: deviceInfo.enabled
+            automation: deviceInfo.enabledAutomation
             tooltip: qsTr("Device On/Off")
             onClicked: deviceInfo.setEnabled(!deviceInfo.enabled)
+
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.RightButton
+                onPressed: switchMenu.show()
+            }
         }
         // The name, reading upwards from near the top.
         Item {

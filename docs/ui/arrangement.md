@@ -121,7 +121,7 @@ makes one `Row` per track:
 | `lanes` | `LaneRow`s: the automation lanes shown below it, `kAutomationLaneHeight` (44 px) each |
 | `automation` | its automation shows |
 | `hidden` | it is in a folded group: a row with no height |
-| `folded` | it is folded itself: `kFoldedHeight` (26: its name row, 4 px above and below its buttons), or `kFoldedGroupHeight` (29: the same below the group's 3 px bar) for a group, and no automation |
+| `folded` | it is folded itself: `kFoldedHeight` (21: its name row, 2 px above and below its 16 px buttons; its clips' title bars, as high as unfolded ones), or `kFoldedGroupHeight` (24: the same below the group's 3 px bar) for a group, and no automation |
 | `bars` | folded, and not a group: its clips are drawn and grabbed as bars, all title (see [hit-testing](#hit-testing)); between them its lane is a grid like any other |
 | `depth` | how many groups it is in (the header's indent, `kGroupIndent` 8 px a level) |
 
@@ -221,8 +221,10 @@ target's own value). `paint()` then draws only the rows that show, in this order
    gesture's `timeRange()` while one drags), its automation lanes too unless automation is locked).
 2. The grid, all the way down (below the tracks too, where selecting works as well), and the loop region.
 3. For each row: a folded track's tint (under its clips' bars, which stay as they are); a group's summary
-   (`drawGroupSummary()`: the clips of every track in the group as translucent bars with a solid top edge, as in
-   Ableton's group lanes); its clips, but those the gesture hides; a frozen track's tint (`kFrozenTint`); the lines
+   (`drawGroupSummary()`, as Ableton's group lanes: a thin row per audio or MIDI track in the group, nested ones
+   too, in order, its clips as bars in whole pixels with a 1 px line between the rows while they have room;
+   each in its track's colour while the group is folded, the faint `kGroupOutline` while it is open, its tracks
+   showing below it); its clips, but those the gesture hides; a frozen track's tint (`kFrozenTint`); the lines
    between its automation lanes; its bottom border.
 4. The gesture's previews: `kept()` (what stays of moved clips) and `ghosts()` (where they go, translucent); on a
    frozen track tinted as its clips are.
@@ -238,9 +240,11 @@ target's own value). `paint()` then draws only the rows that show, in this order
 clip's `playedNotes()` fitted to the clip's height (`drawNotes()`) or an audio clip's waveform from the
 `WaveformCache` (`drawContent()`), at the clip's own tempo (`sourceTempo`) and scaled by its gain (`dbToGain(gainDb)`:
 louder is taller, cut off at the body's edges); then its frame (`drawClipFrame()`): its title bar (`kTitleHeight`
-16 px; a `kShortTitleHeight` 9 px bar with no name in rows under `kMinTitleRow` 30 px) and its outline (white when
-selected, else the track colour darker). A folded track's clip (`clipTitleHeight(h, true)`) is all title bar: a bar
-with its name, as in Ableton's folded tracks. Channels are drawn apart when the body is at least 44 px. Without a
+18 px, `kFoldedHeight` - 3: the same folded or not, in line with the header's name row; a `kShortTitleHeight` 9 px
+bar with no name in rows under `kMinTitleRow` 32 px, which only rows saved lower than `app::kMinTrackHeight` 40 px
+are) and its outline (white when selected, else the track colour darker). A folded track's clip
+(`clipTitleHeight(h, true)`) is all title bar: a bar with its name, as high as an unfolded clip's, as in Ableton's
+folded tracks. A take being recorded (`LiveTakes`) has the same bar. Channels are drawn apart when the body is at least 44 px. Without a
 decoded source it says "Loading…", or "Missing file" over a red tint (`bridge.loadError`). Selection isn't drawn per
 clip: the selected area's tint does it (under a folded track's bars, which show they are selected by a white
 outline).
@@ -429,8 +433,9 @@ at its indent (5 px for a track; a group's is its band, `kGroupBand` 7 px, and a
 3 px, above its name row: `nameTop`, which its controls follow), the fold button (a triangle in a circle for a
 track, pointing right while folded; three bars in a circle, filled while folded, for a group), the snowflake of a
 frozen track (dimmer in a frozen group, not frozen itself), and its name. A return paints a colour band and its
-name; the master "Master". A folded track's name row is centred in its 26 px (4 px above and below the buttons, the
-fold button and the meter), a folded group's below its bar.
+name; the master "Master". The name row's buttons, the fold button and the name are `kNameButton` (16 px) high,
+`kNamePad` (2 px) below its top, so a folded track's name row is centred in its 21 px (2 px above and below them,
+4 px around the meter), a folded group's below its bar; its clips' title bars are on the same line.
 
 The groups' bands are [GroupBands](../../ui/src/arrangement/GroupBands.h)', one item over the whole column (from the
 layout's rows) rather than each header's, so they run on from one header to the next: for each group shown, a band
@@ -441,7 +446,9 @@ folded or empty group's band is its header's. A track in no group has no band, j
 
 ### Layout
 
-TrackHeader.qml (252 px wide): the `Meter` on the right; on the name row (22 px, from `nameTop`) the activator (mute, labelled with
+TrackHeader.qml (252 px wide): the `Meter` on the right; on the name row (22 px, from `nameTop`; its buttons 16 px
+high, 2 px down: `buttonTop`, `buttonHeight`) the activator (mute,
+following its automation while it plays, with the automation dot: `mute`, `activatorAutomation`; labelled with
 the track's number), solo, and arm (not for a group: it records nothing); on the second row (only when the lane is
 at least 48 px) volume (a `ValueBox`, -70 to +6 dB, no wheel), pan (a `Knob`, no wheel), the input and the monitoring
 buttons; then the send knobs (`SendKnobs`, while there are returns); then the automation choosers
@@ -461,7 +468,7 @@ MasterHeader.qml: volume, pan, meter and the choosers.
 | Alt+wheel (over the header or any control in it) | `Arrangement::wheelResize()`; the wheel alone scrolls the headers |
 | Solo | `soloClicked()`: exclusive unless Ctrl is held; unsoloing exclusively unsoloes every track (`Project::senders()`); a selected track's button acts on all selected → `editor.soloTracks(tracks, on, exclusive)` |
 | Arm | `armClicked()`: exclusive unless Ctrl is held, a selected track's acting on all selected → `editor.armTracks`; says so if the track has no input |
-| Activator | `activatorToggled()` → the track's mute |
+| Activator | `activatorToggled()` → the track's mute (overriding its automation first while that plays: its own mute may already be what it is switched to); right-click: `activatorMenu()` (Show, Delete and Re-Enable Automation) |
 | Volume / pan | `setVolume()` / `setPan()`: on one of several selected tracks, every selected track follows, by the same amount when dragged or wheeled (the control's `relative`), to the same value when typed or reset → `editor.setTracksParam`. Pressing one (`touchVolume()`, `touchPan()`) calls `editor.touchParameter`: the session shows its automation, as in Ableton. |
 | Input | `inputMenu()`: No Input, each device input then each pair, then *Resampling* (the master) and every other track, group and return, those that would close a cycle disabled; a MIDI track's: No Input, All Ins, each connected input, a disconnected one still chosen, and a Channel submenu → `editor.trySetTrackInput`, `trySetTrackInputTrack`, `trySetTrackMidiInput` |
 | Monitoring | `monitorMenu()`: In, Auto, Off → `editor.trySetTrackMonitor` |

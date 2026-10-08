@@ -261,12 +261,16 @@ See [Automation.h](../../app/src/model/Automation.h) and, for the engine side,
 
 - Every target is automated in **normalized** values (0..1). An envelope is a vector of
   `AutomationPoint{beat, value, curve}`; it belongs to an owner (a track id or `kMaster`) and is keyed by target:
-  - `mixer:volume`, `mixer:pan` (`automation::kMixerVolume`, `kMixerPan`)
+  - `mixer:volume`, `mixer:pan`, `mixer:on` (`automation::kMixerVolume`, `kMixerPan`, `kMixerOn`: a track's
+    activator; the master has none)
   - `send:<return id>` (`sendKey`): the level of the owner's send to a return
   - `device:<device id>:<param id>` (`deviceKey`)
+  - `device:<device id>:device:on` (`deviceOnKey`, `kDeviceOn`): a device's (or a rack's) on/off
   - `device:<rack id>:chain:<chain id>:volume` / `:pan` (`chainKey`): a rack chain's fader, a target of its rack
-- `parseKey` splits a key (a `Target`); `keyDevice`, `keySend`, `keyChain`, `keyChainControl`, `isMixerKey`, `isKey`
-  classify it.
+- `parseKey` splits a key (a `Target`); `keyDevice`, `keySend`, `keyChain`, `keyChainControl`, `isMixerKey`,
+  `isSwitchKey` (an activator or an on/off), `isKey` classify it.
+- Switches are 0 (off) or 1 (on): `switchSpec` describes them (*Track Activator* in `mixerSpecs`, *Device On*:
+  `deviceOnSpec`, every device's first parameter).
 - Before the first breakpoint an envelope holds the first one's value, after the last the last one's; two points at
   one beat make a step (from that beat on, the later one counts: `valueAt` vs `leftValue`).
 - `curve` (-1..1) bends the segment starting at that point; segments are exponential with `kCurvature` = 6 (the

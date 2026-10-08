@@ -57,7 +57,8 @@ QString frozenHolderText(const QString& name) {
 
 // --- Adding tracks ---
 
-QString ProjectEditor::insertTrack(Track track, int index, const TrackParent& parent, const QString& text) {
+QString ProjectEditor::insertTrack(Track track, int index, const TrackParent& parent, const QString& text,
+                                   bool groupColor) {
     const Project& p = *project_;
     const auto& tracks = p.tracks();
     index = clampIndex(index, static_cast<int>(tracks.size()));
@@ -72,6 +73,7 @@ QString ProjectEditor::insertTrack(Track track, int index, const TrackParent& pa
     if (index == static_cast<int>(tracks.size())) trial.push_back(skeleton(track));
     if (treeProblem(trial)) track.parent = p.parentAt(index);
     std::tie(index, track.parent) = outsideFrozen(index, track.parent);
+    if (groupColor && track.parent && p.hasTrack(*track.parent)) track.color = p.track(*track.parent).color;
     const QString id = track.id;
     push(std::make_unique<InsertTrackCommand>(project_, std::move(track), index, text));
     return p.hasTrack(id) ? id : QString();
@@ -91,7 +93,7 @@ QString ProjectEditor::addAudioTrack(int index, const QString& name, const Track
     track.id = newId();
     track.name = name.isEmpty() ? p.uniqueTrackName(QStringLiteral("%1 Audio").arg(static_cast<int>(p.tracks().size()) + 1)) : name;
     track.color = p.nextColor();
-    return insertTrack(std::move(track), index, parent, QStringLiteral("Insert Audio Track"));
+    return insertTrack(std::move(track), index, parent, QStringLiteral("Insert Audio Track"), true);
 }
 
 QString ProjectEditor::addMidiTrack(int index, const QString& name) {
@@ -112,7 +114,7 @@ QString ProjectEditor::addMidiTrack(int index, const QString& name, const QStrin
         track.devices.push_back(newDeviceOf(instrument));
     }
     const QString pluginDevice = plugin ? track.devices.front().id : QString();
-    const QString id = insertTrack(std::move(track), index, parent, QStringLiteral("Insert MIDI Track"));
+    const QString id = insertTrack(std::move(track), index, parent, QStringLiteral("Insert MIDI Track"), true);
     if (plugin && !id.isEmpty()) Q_EMIT pluginAdded(id, pluginDevice);
     return id;
 }
@@ -622,9 +624,11 @@ void ProjectEditor::setTrackParam(const QString& trackId, TrackField field, doub
     const Track& track = project_->track(trackId);
     if (field == TrackField::Mute) {
         const bool mute = value != 0.0;
+        Q_EMIT switchedByHand(trackId, automation::kMixerOn);
         if (mute != track.mute) {
             push(std::make_unique<UpdateTrackCommand>(project_, trackId, field, track.mute, mute, label, mergeKey));
         }
+        Q_EMIT parameterTouched(trackId, automation::kMixerOn);  // (its activator)
         return;
     }
     const double old = field == TrackField::VolumeDb ? track.volumeDb : track.pan;
