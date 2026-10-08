@@ -2,8 +2,9 @@
 // The session: one open project and everything that works on it, as the main
 // window had it. It owns the project, the undo stack, the editor, the
 // selection, the engine bridge, the browser, the plug-in index, the sound
-// similarity (which analyses the browser's files) and the song's harmony (its
-// chords and key, from its MIDI), and wires
+// similarity (which analyses the browser's files), the song's harmony (its
+// chords and key, from its MIDI) and the humanizer (velocities by machine
+// learning), and wires
 // them together (the hooks and signals the main window used to connect). The
 // UI reaches all of it through the session: QML as the `Session` singleton
 // (registered by the UI), the UI's C++ items through these accessors.
@@ -68,6 +69,7 @@ class DeviceSelection;
 class EngineBridge;
 class FreezeRender;
 class Harmony;
+class Humanizer;
 class MidiPreferences;
 class PluginIndex;
 class PresetIndex;
@@ -89,6 +91,7 @@ class Session : public QObject {
     Q_PROPERTY(sub::app::PluginIndex* plugins READ plugins CONSTANT)
     Q_PROPERTY(sub::app::SoundSimilarity* similarity READ similarity CONSTANT)
     Q_PROPERTY(sub::app::Harmony* harmony READ harmony CONSTANT)
+    Q_PROPERTY(sub::app::Humanizer* humanizer READ humanizer CONSTANT)
     Q_PROPERTY(sub::app::ArrangementActions* arrangement READ arrangement CONSTANT)
     Q_PROPERTY(sub::app::DeviceSelection* deviceSelection READ deviceSelection CONSTANT)
     Q_PROPERTY(sub::app::RenderProgress* render READ render CONSTANT)
@@ -164,6 +167,7 @@ public:
     PluginIndex* plugins() const { return plugins_; }
     SoundSimilarity* similarity() const { return similarity_; }
     Harmony* harmony() const { return harmony_; }
+    Humanizer* humanizer() const { return humanizer_; }
     ArrangementActions* arrangement() const { return arrangement_; }
     DeviceSelection* deviceSelection() const { return devices_; }
     RenderProgress* render() const { return render_; }
@@ -401,6 +405,7 @@ private:
     PluginIndex* plugins_ = nullptr;
     SoundSimilarity* similarity_ = nullptr;
     Harmony* harmony_ = nullptr;
+    Humanizer* humanizer_ = nullptr;
     BrowserController* browser_ = nullptr;
     PresetIndex* presets_ = nullptr;
     RenderProgress* render_ = nullptr;

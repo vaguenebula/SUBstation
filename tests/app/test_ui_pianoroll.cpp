@@ -787,22 +787,49 @@ private Q_SLOTS:
         undo().undo();
         undo().undo();
 
-        // Humanize moves starts and velocities a little, lengths stay.
+        // Humanize is a menu: Timing moves starts a little, lengths and velocities stay.
         roll()->setSelection(clipNotes());
         roll()->seedRandom(3);
-        roll()->setHumanizeAmount(100.0);
-        QCOMPARE(bar->findChild<QObject*>(QStringLiteral("humanizeAmount"))->property("value").toDouble(), 100.0);
-        const std::vector<Note> before = sortedBy(clipNotes(), true);
         QMetaObject::invokeMethod(toolButton("humanize"), "clicked");
+        QObject* menu = bar->findChild<QObject*>(QStringLiteral("humanizeMenu"));
+        QVERIFY(menu && menu->property("opened").toBool());
+        QObject* timing = menu->findChild<QObject*>(QStringLiteral("humanizeTiming"));
+        QObject* velocity = menu->findChild<QObject*>(QStringLiteral("humanizeVelocity"));
+        QVERIFY(timing && velocity);
+        QVERIFY(velocity->property("enabled").toBool());  // (the build puts the model next to the tests)
+        // Each has its own amount.
+        QCOMPARE(roll()->humanizeVelocityAmount(), PianoRoll::kDefaultHumanizeVelocity);
+        QCOMPARE(roll()->humanizeTimingAmount(), PianoRoll::kDefaultHumanizeTiming);
+        roll()->setHumanizeTimingAmount(100.0);
+        QCOMPARE(timing->findChild<QObject*>(QStringLiteral("humanizeTimingAmount"))->property("value").toDouble(), 100.0);
+        QCOMPARE(velocity->findChild<QObject*>(QStringLiteral("humanizeVelocityAmount"))->property("value").toDouble(),
+                 PianoRoll::kDefaultHumanizeVelocity);
+        const std::vector<Note> before = sortedBy(clipNotes(), true);
+        QMetaObject::invokeMethod(timing, "triggered");
         const std::vector<Note> after = sortedBy(clipNotes(), true);
         QVERIFY(after != before);
         for (size_t i = 0; i < before.size(); ++i) {
             QVERIFY(std::abs(after[i].start - before[i].start) <= 0.125 + 1e-9);
-            QVERIFY(std::abs(after[i].velocity - before[i].velocity) <= 24);
+            QCOMPARE(after[i].velocity, before[i].velocity);
             QCOMPARE(after[i].length, before[i].length);
         }
-        QCOMPARE(undo().undoText(), QStringLiteral("Humanize"));
+        QCOMPARE(undo().undoText(), QStringLiteral("Humanize Timing"));
+        QTRY_VERIFY(!menu->property("visible").toBool());
+        QVERIFY(grid()->hasActiveFocus());  // (the notes take the keyboard back from the menu)
+        undo().undo();
+        // Velocity gives the model's velocities, at the notes' own level; timing stays.
+        QMetaObject::invokeMethod(toolButton("humanize"), "clicked");
+        QMetaObject::invokeMethod(velocity, "triggered");
+        QCOMPARE(undo().undoText(), QStringLiteral("Humanize Velocity"));
+        const std::vector<Note> shaped = sortedBy(clipNotes(), true);
+        QCOMPARE(shaped.size(), before.size());
+        for (size_t i = 0; i < before.size(); ++i) {
+            QCOMPARE(shaped[i].start, before[i].start);
+            QCOMPARE(shaped[i].length, before[i].length);
+            QVERIFY(shaped[i].velocity >= 1 && shaped[i].velocity <= 127);
+        }
         QVERIFY(!window_->grabWindow().isNull());
+        roll()->setHumanizeTimingAmount(PianoRoll::kDefaultHumanizeTiming);
     }
 
     void toolsClickNeverReachesTheNotes() {
@@ -941,7 +968,8 @@ private Q_SLOTS:
         QCOMPARE(roll()->rowHeight(), PianoRoll::kRowHeight);
         roll()->setQuantizeGrid(QStringLiteral("1/16"));
         roll()->setQuantizeAmount(100);
-        roll()->setHumanizeAmount(PianoRoll::kDefaultHumanize);
+        roll()->setHumanizeVelocityAmount(PianoRoll::kDefaultHumanizeVelocity);
+        roll()->setHumanizeTimingAmount(PianoRoll::kDefaultHumanizeTiming);
         roll()->setScrollY(roll()->pitchTop(79) + roll()->scrollY());
         // A group selected by dragging: the tools float by it.
         test::drag(window_, cell(0.0, 68) - QPoint(2, 0), cell(1.8, 56));

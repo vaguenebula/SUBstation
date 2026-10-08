@@ -26,13 +26,14 @@ This page is about the code.
 | [NoteGrid](../../ui/src/pianoroll/NoteGrid.h) | The notes: painting, hit-testing, mouse, wheel, keys, and its gestures (`MoveNotesGesture`, `ResizeNotesGesture`, `SelectNotesGesture`, `PanGesture`) |
 | [PianoKeys](../../ui/src/pianoroll/PianoKeys.h), [PianoRuler](../../ui/src/pianoroll/PianoRuler.h), [VelocityLane](../../ui/src/pianoroll/VelocityLane.h), [RollPlayhead](../../ui/src/pianoroll/RollPlayhead.h) | The keyboard, the ruler, the velocities, and the playhead over each |
 | [ChordLane](../../ui/src/pianoroll/ChordLane.h) | The song's chords along the top of the notes |
-| [NoteTools.qml](../../ui/qml/pianoroll/NoteTools.qml) | The floating bar with Legato, ×2, ÷2, Quantize and Humanize |
+| [NoteTools.qml](../../ui/qml/pianoroll/NoteTools.qml) | The floating bar with Legato, ×2, ÷2, Quantize and Humanize (Velocity, Timing) |
 | [NoteSet.h](../../ui/src/pianoroll/NoteSet.h) | `ClipNote` (a note of one of the clips shown); sets of notes and of ClipNotes as sorted vectors (`noteSet`, `clipNoteSet`, `contains`, `united`, `without`, `byTime`, `notesOf`, `tagged`, `clipsOf`) |
 
 The note maths is in the application layer's [model/Notes.h](../../app/src/model/Notes.h) (pure functions on
 `Note`s, tested without Qt): `place`, `shifted`, `resized`, `clampMove`, `withVelocity`, `legato`, `timeScaled`,
-`quantized`, `humanized`, `span`, `byTime`, `kMinNoteBeats`, `kQuantizeGrids`, `kHumanizeBeats`,
-`kHumanizeVelocity`. See [app/model.md](../app/model.md).
+`quantized`, `humanizedTiming`, `span`, `byTime`, `kMinNoteBeats`, `kQuantizeGrids`, `kHumanizeBeats`. See
+[app/model.md](../app/model.md). Humanize › Velocity's velocities are the session's humanizer's (`Session.humanizer`,
+[intelligence.md](../intelligence.md#humanizing-velocities-by-machine-learning)).
 
 ## The clip view
 
@@ -282,8 +283,12 @@ notes' values show while dragging.
 ### Note tools
 
 [NoteTools.qml](../../ui/qml/pianoroll/NoteTools.qml) is a small rounded bar: a note count, Legato, ×2, ÷2, Quantize
-with its grid (`quantizeGrids`: 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32; 1/16 at first) and amount (100 %), Humanize with
-its amount (25 %). Its buttons and boxes never take the focus, so the notes keep the keyboard; it keeps its clicks to
+with its grid (`quantizeGrids`: 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32; 1/16 at first) and amount (100 %), and Humanize ▾,
+a menu (`humanizeMenu`) of Velocity (`humanizeVelocity`) and Timing (`humanizeTiming`), each with its own amount in a
+number box at its right (`humanizeVelocityAmount`, 100 % at first; `humanizeTimingAmount`, 25 %): clicking an entry's
+name humanizes, the box keeps its clicks. Velocity is greyed out ("Velocity (no model)") when the model isn't next to
+the application (`velocityModelAvailable`). Its buttons and boxes never take the focus, so the notes keep the
+keyboard (the menu has it while open, and gives it back to the grid when an entry is chosen); it keeps its clicks to
 itself (the grid is underneath), while wheel turns outside its boxes still scroll the grid.
 
 When it shows is the roll's: `toolsWanted` is set by `setSelection(notes, true)` (a rubber band that was dragged, or
@@ -297,15 +302,17 @@ The bar sits centred above the notes (below them when there is no room), kept in
 8 px (180 ms, ease out) and fades out sinking (120 ms); a reversed animation goes on from where the last one left
 off, taking the rest of its time.
 
-The actions are the roll's: `legato()`, `scaleTime(2.0)` / `scaleTime(0.5)`, `quantize()`, `humanize()`. Each takes
-`toolTargets()` (the selected notes, or all when none are, by time on the roll), computes the changed notes with the
-matching `notes::` function, and commits `notes::place(clip.notes, targets, changed)` for each clip as one undo step
-(`applyTool()`). Legato works in each clip on its own (up to its own notes and its end); Quantize, Humanize and ×2 /
-÷2 work on the notes' times on the roll (`applyOnRoll()`: with several clips, the arrangement's grid), each note
-then back in its clip. `humanize` uses the
-roll's own `QRandomGenerator` (`seedRandom()` for tests). The parameters are the roll's properties: `quantizeGrid`,
-`quantizeAmount`, `humanizeAmount` (at 100 %, notes move by up to `humanizeBeats`, a 32nd note, and velocities change
-by up to `humanizeVelocity`, 24).
+The actions are the roll's: `legato()`, `scaleTime(2.0)` / `scaleTime(0.5)`, `quantize()`, `humanizeVelocity()`,
+`humanizeTiming()`. Each takes `toolTargets()` (the selected notes, or all when none are, by time on the roll),
+computes the changed notes, and commits `notes::place(clip.notes, targets, changed)` for each clip as one undo step
+(`applyTool()`: "Humanize Velocity", "Humanize Timing"). Legato works in each clip on its own (up to its own notes and
+its end); Quantize, Humanize › Timing and ×2 / ÷2 work on the notes' times on the roll (`applyOnRoll()`: with several
+clips, the arrangement's grid), each note then back in its clip. `humanizeTiming` uses the roll's own
+`QRandomGenerator` (`seedRandom()` for tests); `humanizeVelocity` hands the targets (each with its track and clip) to
+`Session.humanizer`, which judges each track's notes with the notes it plays around them and levels the model's
+velocities to their own (nothing changes if the model can't be loaded: the status line says why). The parameters are
+the roll's properties: `quantizeGrid`, `quantizeAmount`, `humanizeVelocityAmount` (how far velocities move toward the
+model's), `humanizeTimingAmount` (at 100 %, notes move by up to `humanizeBeats`, a 32nd note).
 
 ### Chords, the key and Generate
 
@@ -373,6 +380,6 @@ playing inside a clip shown and emits `playheadChanged`; only the `RollPlayhead`
 
 | Test file | Covers here |
 |---|---|
-| [test_ui_pianoroll.cpp](../../tests/app/test_ui_pianoroll.cpp) | Through the clip view: a MIDI track with the Synth and a clip opened in the piano roll; notes drawn and heard, dragged to move, resize and copy; the notes' keys taking precedence over the window's shortcuts; the rubber band, the keys and the velocity lane; Alt+wheel and Ctrl+Alt drags; the note tools floating by notes selected by dragging; the song's chords along the top (over the part the clip plays, hidden with the key, clicks going through them), notes out of the key in red, Generate › Chords and › Bass |
+| [test_ui_pianoroll.cpp](../../tests/app/test_ui_pianoroll.cpp) | Through the clip view: a MIDI track with the Synth and a clip opened in the piano roll; notes drawn and heard, dragged to move, resize and copy; the notes' keys taking precedence over the window's shortcuts; the rubber band, the keys and the velocity lane; Alt+wheel and Ctrl+Alt drags; the note tools floating by notes selected by dragging (Humanize's menu: Velocity and Timing, each with its amount); the song's chords along the top (over the part the clip plays, hidden with the key, clicks going through them), notes out of the key in red, Generate › Chords and › Bass |
 | [test_ui_clipview.cpp](../../tests/app/test_ui_clipview.cpp) | Audio clips: one clip opened, its settings and waveform; several edited in unison; warping and transposing reaching the audio; the clip gain making the waveform taller; which clips open with a MIDI clip among them; going back (Esc, ×, the clips deleted, the project reset) |
 | [test_midi_model.cpp](../../tests/app/test_midi_model.cpp) | The note maths |

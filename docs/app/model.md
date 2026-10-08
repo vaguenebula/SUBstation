@@ -49,7 +49,7 @@ session's ([session.md](session.md)).
 | [Automation.h](../../app/src/model/Automation.h) | `AutomationPoint`, `Envelope`, `AutomationView`, `kMaster`; in `sub::app::automation`: target keys, the mixer's normalized mappings, evaluation (`valueAt`, `leftValue`, `shape`), every envelope edit |
 | [ParamSpec.h](../../app/src/model/ParamSpec.h) | `ParamSpec`: any automatable parameter described alike, with the engine's normalized mapping; `mixerSpecs`, `sendSpec`, `chainSpecs`, `formatValue` |
 | [Edits.h](../../app/src/model/Edits.h) | `sub::app::edits`: pure clip maths for audio and MIDI clips alike: overlaps, cuts, trims, splits, ranges, tempo fitting, consolidating, reversing, stretching, slipping, fades |
-| [Notes.h](../../app/src/model/Notes.h) | `sub::app::notes`: pure note maths for the piano roll: overlaps on a key, moves, resizes, velocity, legato, ×2/÷2, quantize, humanize; note names |
+| [Notes.h](../../app/src/model/Notes.h) | `sub::app::notes`: pure note maths for the piano roll: overlaps on a key, moves, resizes, velocity, legato, ×2/÷2, quantize, humanize timing; note names |
 | [Commands.h](../../app/src/model/Commands.h) | The `QUndoCommand` subclasses; merging of continuous gestures (`MergeableCommand`, `kMergeId`) |
 | [Timebase.h](../../app/src/model/Timebase.h) | `TimeSignature`, beats and seconds, bar.beat.sixteenth formatting and parsing, dB and pan text |
 | [Keys.h](../../app/src/model/Keys.h) | Musical keys (`Key`), tempo and key from file names (`parseFilename`), what a dropped clip starts with (`clipSettings`) |
@@ -551,9 +551,10 @@ refused because of frozen audio are said on `refused` too. The session shows `re
 - Minimum sizes: `kMinClipSec` (5 ms), `kMinMidiClipBeats` and `notes::kMinNoteBeats` (1/64).
 - `notes::place(notes, removed, added)` is how the piano roll commits: added notes win where they overlap others on
   their key (`resolveOverlaps`); notes changed together are made consistent by `untangle`. `normalize` sorts and
-  removes exact duplicates. `legato`, `timeScaled`, `quantized` (`kQuantizeGrids`), `humanized`
-  (`kHumanizeBeats` = a 32nd, `kHumanizeVelocity` = 24 at 100 %; a triangular random, more often a little than a lot,
-  from the `QRandomGenerator` given).
+  removes exact duplicates. `legato`, `timeScaled`, `quantized` (`kQuantizeGrids`), `humanizedTiming`
+  (starts only, by up to `kHumanizeBeats` = a 32nd at 100 %; a triangular random, more often a little than a lot,
+  from the `QRandomGenerator` given). Humanized velocities are the velocity model's
+  ([intelligence.md](../intelligence.md#humanizing-velocities-by-machine-learning)).
 
 ## Invariants
 

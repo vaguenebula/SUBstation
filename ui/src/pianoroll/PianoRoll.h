@@ -114,14 +114,19 @@ class PianoRoll : public QObject {
     Q_PROPERTY(double vScrollPage READ vScrollPage NOTIFY scrollBarsChanged)
     Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
     // The note tools: the grids Quantize offers (QUANTIZE_GRIDS), the one
-    // chosen, Quantize's and Humanize's amounts in percent.
+    // chosen, Quantize's amount and Humanize's two (Velocity's, Timing's) in
+    // percent.
     Q_PROPERTY(QStringList quantizeGrids READ quantizeGrids CONSTANT)
     Q_PROPERTY(QString quantizeGrid READ quantizeGrid WRITE setQuantizeGrid NOTIFY toolSettingsChanged)
     Q_PROPERTY(double quantizeAmount READ quantizeAmount WRITE setQuantizeAmount NOTIFY toolSettingsChanged)
-    Q_PROPERTY(double humanizeAmount READ humanizeAmount WRITE setHumanizeAmount NOTIFY toolSettingsChanged)
-    // At 100 %, how far Humanize moves a note (beats) and changes its velocity.
+    Q_PROPERTY(double humanizeVelocityAmount READ humanizeVelocityAmount WRITE setHumanizeVelocityAmount
+                   NOTIFY toolSettingsChanged)
+    Q_PROPERTY(double humanizeTimingAmount READ humanizeTimingAmount WRITE setHumanizeTimingAmount
+                   NOTIFY toolSettingsChanged)
+    // At 100 %, how far Humanize › Timing moves a note (beats).
     Q_PROPERTY(double humanizeBeats READ humanizeBeats CONSTANT)
-    Q_PROPERTY(int humanizeVelocity READ humanizeVelocity CONSTANT)
+    // Whether the velocity model is there (Humanize › Velocity is offered).
+    Q_PROPERTY(bool velocityModelAvailable READ velocityModelAvailable NOTIFY sessionChanged)
     // Where the note tools are heading (shown or gone), and while shown, the
     // selected notes' bounding rectangle (in the note grid's coordinates) and
     // how many there are: the bar floats by them.
@@ -141,7 +146,8 @@ public:
     static constexpr int kPreviewVelocity = 100;
     static constexpr int kChordPreviewMs = 400;  // how long notes selected with a rubber band sound
     static constexpr const char* kDefaultGrid = "1/16";
-    static constexpr double kDefaultHumanize = 25.0;  // %
+    static constexpr double kDefaultHumanizeVelocity = 100.0;  // %: the model's velocities
+    static constexpr double kDefaultHumanizeTiming = 25.0;     // %
 
     // A stretch of roll beats.
     using Span = std::pair<double, double>;
@@ -266,8 +272,14 @@ public:
     // ×2 (2.0) and ÷2 (0.5).
     Q_INVOKABLE void scaleTime(double factor);
     Q_INVOKABLE void quantize();
-    Q_INVOKABLE void humanize();
-    // Humanize's random numbers start over from `seed` (for tests).
+    // Humanize › Velocity: the velocity model's velocities (Session.humanizer),
+    // each track's notes judged with the notes it plays around them, moved
+    // humanizeVelocityAmount of the way there. Nothing if the model can't be
+    // loaded (the status line says why).
+    Q_INVOKABLE void humanizeVelocity();
+    // Humanize › Timing: starts nudged at random (notes::humanizedTiming).
+    Q_INVOKABLE void humanizeTiming();
+    // Humanize › Timing's random numbers start over from `seed` (for tests).
     Q_INVOKABLE void seedRandom(quint32 seed) { rng_.seed(seed); }
 
     static QStringList quantizeGrids();
@@ -275,12 +287,14 @@ public:
     void setQuantizeGrid(const QString& grid);
     double quantizeAmount() const { return quantizeAmount_; }
     void setQuantizeAmount(double percent);
-    double humanizeAmount() const { return humanizeAmount_; }
-    void setHumanizeAmount(double percent);
+    double humanizeVelocityAmount() const { return humanizeVelocityAmount_; }
+    void setHumanizeVelocityAmount(double percent);
+    double humanizeTimingAmount() const { return humanizeTimingAmount_; }
+    void setHumanizeTimingAmount(double percent);
     // Quantize's grid in beats.
     double quantizeStep() const;
     static double humanizeBeats() { return app::notes::kHumanizeBeats; }
-    static int humanizeVelocity() { return app::notes::kHumanizeVelocity; }
+    bool velocityModelAvailable() const;
 
     // --- Harmony -------------------------------------------------------------------
 
@@ -431,7 +445,7 @@ private:
     bool showsTrack(const QString& trackId) const;
     // A tool's result: `changed` (as `targets`, note for note) in place of `targets`.
     void applyTool(const std::vector<ClipNote>& targets, const std::vector<ClipNote>& changed, const QString& text);
-    // A tool that works on times (Quantize, Humanize, ×2), applied on the roll
+    // A tool that works on times (Quantize, Humanize › Timing, ×2), applied on the roll
     // (across clips: the arrangement's grid), each note back in its clip.
     void applyOnRoll(const std::vector<ClipNote>& targets,
                      const std::function<std::vector<app::Note>(const std::vector<app::Note>&)>& tool,
@@ -461,10 +475,11 @@ private:
     bool fitPending_ = false;
     bool toolsWanted_ = false;
     bool preview_ = true;
-    QRandomGenerator rng_;  // for Humanize
+    QRandomGenerator rng_;  // for Humanize › Timing
     QString quantizeGrid_ = QString::fromLatin1(kDefaultGrid);
     double quantizeAmount_ = 100.0;
-    double humanizeAmount_ = kDefaultHumanize;
+    double humanizeVelocityAmount_ = kDefaultHumanizeVelocity;
+    double humanizeTimingAmount_ = kDefaultHumanizeTiming;
     bool toolsShown_ = false;
     QRectF toolsArea_;
     int toolsCount_ = 0;

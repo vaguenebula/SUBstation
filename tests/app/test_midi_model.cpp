@@ -282,31 +282,27 @@ private Q_SLOTS:
         QCOMPARE(notes::kQuantizeGrids.size(), size_t(6));
     }
 
-    void humanizeNudgesTimingAndVelocityWithinBounds() {
+    void humanizeTimingNudgesStartsWithinBounds() {
         std::vector<Note> playedNotes;
         for (int i = 0; i < 40; ++i) playedNotes.push_back(note(C + i, i, 0.5, 100));
         QRandomGenerator rng(7);
-        const auto result = notes::humanized(playedNotes, rng, 0.5);
+        const auto result = notes::humanizedTiming(playedNotes, rng, 0.5);
         QRandomGenerator again(7);
-        QVERIFY(result == notes::humanized(playedNotes, again, 0.5));  // repeatable with the same seed
+        QVERIFY(result == notes::humanizedTiming(playedNotes, again, 0.5));  // repeatable with the same seed
         QMap<int, Note> byPitch;
         for (const Note& n : result) byPitch.insert(n.pitch, n);
         std::set<double> shifts;
-        std::set<int> changes;
         double largestShift = 0.0;
-        int largestChange = 0;
         for (const Note& n : playedNotes) {
             const Note& moved = byPitch.value(n.pitch);
             shifts.insert(moved.start - n.start);
-            changes.insert(moved.velocity - n.velocity);
             largestShift = std::max(largestShift, std::abs(moved.start - n.start));
-            largestChange = std::max(largestChange, std::abs(moved.velocity - n.velocity));
             QCOMPARE(moved.length, n.length);
+            QCOMPARE(moved.velocity, n.velocity);  // (velocities are the velocity model's)
         }
         QVERIFY(largestShift <= 0.5 * notes::kHumanizeBeats && shifts.size() > 10);
-        QVERIFY(largestChange <= 0.5 * notes::kHumanizeVelocity + 0.5 && changes.size() > 3);
         QRandomGenerator still(7);
-        QVERIFY(notes::humanized(playedNotes, still, 0.0) == playedNotes);
+        QVERIFY(notes::humanizedTiming(playedNotes, still, 0.0) == playedNotes);
     }
 
     void normalizeSortsAndDropsExactDuplicates() {

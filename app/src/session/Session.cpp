@@ -12,6 +12,7 @@
 #include "browser/PresetIndex.h"
 #include "editor/ProjectEditor.h"
 #include "intelligence/Harmony.h"
+#include "intelligence/Humanizer.h"
 #include "intelligence/SoundSimilarity.h"
 #include "io/Presets.h"
 #include "model/Automation.h"
@@ -45,6 +46,7 @@ Session::Session(sub::Engine& engine, Options options, QObject* parent)
     similarityOptions.analyse = options_.analyseSounds;
     similarity_ = new SoundSimilarity(similarityOptions, this);
     harmony_ = new Harmony(project_, this);
+    humanizer_ = new Humanizer(project_, this);
     BrowserController::Options browserOptions;
     browserOptions.scanPlugins = options_.scanPlugins;
     browserOptions.similarity = similarity_;  // (it analyses the browser's files)
@@ -81,7 +83,8 @@ void Session::wire() {
 
     for (QObject* source : {static_cast<QObject*>(bridge_), static_cast<QObject*>(browser_),
                             static_cast<QObject*>(plugins_), static_cast<QObject*>(arrangement_),
-                            static_cast<QObject*>(devices_), static_cast<QObject*>(keyboard_)}) {
+                            static_cast<QObject*>(devices_), static_cast<QObject*>(keyboard_),
+                            static_cast<QObject*>(humanizer_)}) {
         connect(source, SIGNAL(statusMessage(QString)), this, SIGNAL(statusMessage(QString)));
     }
     connect(editor_, &ProjectEditor::refused, this, &Session::statusMessage);  // an edit a frozen track can't take

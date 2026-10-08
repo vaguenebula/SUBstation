@@ -4,6 +4,7 @@
 #include "editor/ProjectEditor.h"
 #include "harmony/Accompaniment.h"
 #include "intelligence/Harmony.h"
+#include "intelligence/Humanizer.h"
 #include "model/Notes.h"
 #include "model/Numbers.h"
 #include "model/Project.h"
@@ -353,7 +354,7 @@ void PianoRoll::placeTools() {
 
 std::vector<ClipNote> PianoRoll::toolTargets() const {
     std::vector<ClipNote> targets = selected_.empty() ? allNotes() : selected_;
-    // By time on the roll (Humanize draws its numbers in this order).
+    // By time on the roll (Humanize › Timing draws its numbers in this order).
     std::stable_sort(targets.begin(), targets.end(), [this](const ClipNote& a, const ClipNote& b) {
         const double sa = rollStart(a), sb = rollStart(b);
         if (sa != sb) return sa < sb;
@@ -428,10 +429,25 @@ void PianoRoll::quantize() {
                 QStringLiteral("Quantize"));
 }
 
-void PianoRoll::humanize() {
-    const double amount = humanizeAmount_ / 100.0;
-    applyOnRoll(toolTargets(), [this, amount](const std::vector<Note>& notes) { return notes::humanized(notes, rng_, amount); },
-                QStringLiteral("Humanize"));
+void PianoRoll::humanizeVelocity() {
+    app::Humanizer* humanizer = session_ ? session_->humanizer() : nullptr;
+    const std::vector<ClipNote> targets = toolTargets();
+    if (!humanizer || targets.empty()) return;
+    std::vector<app::Humanizer::Target> wanted;
+    wanted.reserve(targets.size());
+    for (const ClipNote& note : targets) wanted.push_back({clips_[note.clip].trackId, clips_[note.clip].clipId, note.note});
+    const auto velocities = humanizer->velocities(wanted, humanizeVelocityAmount_ / 100.0);
+    if (!velocities) return;
+    std::vector<ClipNote> changed = targets;
+    for (size_t i = 0; i < changed.size(); ++i) changed[i].note.velocity = (*velocities)[i];
+    applyTool(targets, changed, QStringLiteral("Humanize Velocity"));
+}
+
+void PianoRoll::humanizeTiming() {
+    const double amount = humanizeTimingAmount_ / 100.0;
+    applyOnRoll(toolTargets(),
+                [this, amount](const std::vector<Note>& notes) { return notes::humanizedTiming(notes, rng_, amount); },
+                QStringLiteral("Humanize Timing"));
 }
 
 QStringList PianoRoll::quantizeGrids() {
@@ -453,12 +469,21 @@ void PianoRoll::setQuantizeAmount(double percent) {
     Q_EMIT toolSettingsChanged();
 }
 
-void PianoRoll::setHumanizeAmount(double percent) {
+void PianoRoll::setHumanizeVelocityAmount(double percent) {
     percent = std::clamp(percent, 0.0, 100.0);
-    if (percent == humanizeAmount_) return;
-    humanizeAmount_ = percent;
+    if (percent == humanizeVelocityAmount_) return;
+    humanizeVelocityAmount_ = percent;
     Q_EMIT toolSettingsChanged();
 }
+
+void PianoRoll::setHumanizeTimingAmount(double percent) {
+    percent = std::clamp(percent, 0.0, 100.0);
+    if (percent == humanizeTimingAmount_) return;
+    humanizeTimingAmount_ = percent;
+    Q_EMIT toolSettingsChanged();
+}
+
+bool PianoRoll::velocityModelAvailable() const { return session_ && session_->humanizer()->velocityAvailable(); }
 
 double PianoRoll::quantizeStep() const {
     for (const auto& grid : notes::kQuantizeGrids) {

@@ -38,7 +38,7 @@ code is put together, [../README.md](../README.md).
 - Built-in Synth and Sampler instruments; Utility, Over The Top, Compressor, Delay, EQ
   and Sidechain effects; VST3 instruments and effects; racks with chains and macros.
 - Warping and transposing audio, set up from the file name.
-- A piano roll with legato, timing, quantize and humanize tools.
+- A piano roll with legato, timing, quantize and humanize tools (velocities by machine learning).
 - Audio and MIDI recording, resampling, MIDI input and a computer MIDI keyboard.
 - Automation of every device parameter and of volume, pan and sends.
 - Undo and redo for all edits, `.gilproj` projects, WAV export.

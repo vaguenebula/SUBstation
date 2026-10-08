@@ -1,0 +1,10 @@
+HUMANBRO C++ runtime (MIDI velocity humanization), the project's own: copied on
+2026-10-08 from HUMANBRO/cpp (include/ and src/; not the CLI, tools/humanbro_cli.cpp).
+README.md is its cpp/README.md, unchanged. The model SUBstation ships is in
+../../models (velocity.hbm, exported by HUMANBRO's export_cpp_model.py).
+
+Local changes:
+- humanbro.hpp, humanizer.cpp: Humanizer(std::vector<char>) loads a model from the
+  .hbm file's contents, so the caller can read it through a wide-path API (std::ifstream
+  with a std::string goes through the ANSI code page on Windows with MinGW).
+- model.hpp, model.cpp: TreeModel::parse(), what load() does after reading the file.
