@@ -3,7 +3,9 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QGuiApplication>
+#include <QMetaObject>
 #include <QPlatformSurfaceEvent>
+#include <QString>
 
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -28,6 +30,19 @@ bool popupShown(const QQuickItem* overlay) {
     for (const QQuickItem* item : overlay->childItems())
         if (item->isVisible() && item->width() > 0 && item->height() > 0) return true;
     return false;
+}
+
+// Whether an item takes a press at `at` (in its coordinates). A Text accepts
+// the left button for its links only (Qt Quick's Text accepts it always, and
+// lets a press elsewhere go by): the title and the status line drag the window.
+bool takesMouse(QQuickItem* item, const QPointF& at) {
+    if (item->inherits("QQuickText")) {
+        QString link;
+        QMetaObject::invokeMethod(item, "linkAt", Q_RETURN_ARG(QString, link), Q_ARG(qreal, at.x()),
+                                  Q_ARG(qreal, at.y()));
+        return !link.isEmpty();
+    }
+    return item->acceptedMouseButtons() != Qt::NoButton || item->acceptHoverEvents();
 }
 
 #ifdef Q_OS_WIN
@@ -117,7 +132,7 @@ WindowFrame::Hit WindowFrame::hitTest(const QPointF& point) const {
         const QPointF at = item->mapFromScene(point);
         QQuickItem* child = item->childAt(at.x(), at.y());
         if (!child) return Caption;
-        if (child->acceptedMouseButtons() != Qt::NoButton || child->acceptHoverEvents()) return Client;
+        if (takesMouse(child, child->mapFromScene(point))) return Client;
         item = child;
     }
 }
