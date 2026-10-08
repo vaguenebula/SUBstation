@@ -12,6 +12,7 @@
 #include "model/Notes.h"
 #include "model/Numbers.h"
 #include "model/Routing.h"
+#include "model/TrackNames.h"
 
 #include <QFileInfo>
 #include <QHash>
@@ -91,7 +92,7 @@ QString ProjectEditor::addAudioTrack(int index, const QString& name, const Track
     const Project& p = *project_;
     Track track;
     track.id = newId();
-    track.name = name.isEmpty() ? p.uniqueTrackName(QStringLiteral("%1 Audio").arg(static_cast<int>(p.tracks().size()) + 1)) : name;
+    track.nameTemplate = name.isEmpty() ? contentsName(track) : name;  // ("# Audio": its clips name it)
     track.color = p.nextColor();
     return insertTrack(std::move(track), index, parent, QStringLiteral("Insert Audio Track"), true);
 }
@@ -105,7 +106,6 @@ QString ProjectEditor::addMidiTrack(int index, const QString& name, const QStrin
     const Project& p = *project_;
     Track track;
     track.id = newId();
-    track.name = name.isEmpty() ? p.uniqueTrackName(QStringLiteral("%1 MIDI").arg(static_cast<int>(p.tracks().size()) + 1)) : name;
     track.color = p.nextColor();
     track.kind = kMidiKind;
     if (plugin) {
@@ -113,6 +113,7 @@ QString ProjectEditor::addMidiTrack(int index, const QString& name, const QStrin
     } else if (!instrument.isEmpty()) {
         track.devices.push_back(newDeviceOf(instrument));
     }
+    track.nameTemplate = name.isEmpty() ? contentsName(track) : name;  // ("# Synth": its instrument names it)
     const QString pluginDevice = plugin ? track.devices.front().id : QString();
     const QString id = insertTrack(std::move(track), index, parent, QStringLiteral("Insert MIDI Track"), true);
     if (plugin && !id.isEmpty()) Q_EMIT pluginAdded(id, pluginDevice);
@@ -377,7 +378,7 @@ QString ProjectEditor::groupTracks(const QStringList& trackIds) {
     const int index = p.trackIndex(first.id);
     Track group;
     group.id = newId();
-    group.name = p.uniqueTrackName(QStringLiteral("%1 Group").arg(static_cast<int>(p.tracks().size()) + 1));
+    group.nameTemplate = QStringLiteral("# Group");
     group.color = p.nextColor();
     group.kind = kGroupKind;
     group.height = kDefaultGroupHeight;
@@ -518,7 +519,9 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
     for (const Track& original : copied.tracks) {
         Track track = original;
         track.id = renamed.value(original.id);
-        track.name = p.uniqueTrackName(original.name);
+        // Numbered by its place ("# Kick"), or a name of its own ("Vox 2").
+        if (!original.nameSource().contains(QChar(kNumberMark)))
+            track.nameTemplate = p.uniqueTrackName(original.nameSource());
         track.armed = false;
         if (copied.roots.contains(original.id)) {
             track.parent = parent;
@@ -586,8 +589,8 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
 
 void ProjectEditor::renameTrack(const QString& trackId, const QString& name) {
     const Track* track = project_->findTrack(trackId);
-    if (track != nullptr && !name.isEmpty() && name != track->name) {
-        push(std::make_unique<UpdateTrackCommand>(project_, trackId, TrackField::Name, track->name, name,
+    if (track != nullptr && !name.isEmpty() && name != track->nameSource()) {  // (its template: "# Lead")
+        push(std::make_unique<UpdateTrackCommand>(project_, trackId, TrackField::Name, track->nameSource(), name,
                                                   QStringLiteral("Rename Track")));
     }
 }

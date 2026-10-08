@@ -229,6 +229,9 @@ private Q_SLOTS:
                      names[menu]);
             test::screenshot(window_, QStringLiteral("main-window-%1-menu").arg(QLatin1String(names[menu])));
         }
+        // Closed with the mouse away from the menus: closed with it over one,
+        // the menu bar stays in popup mode (moving over a menu opens it).
+        QTest::mouseMove(window_, test::centerOf(windowTitle));
         key(Qt::Key_Escape);
         QTest::qWait(150);
     }

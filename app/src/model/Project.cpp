@@ -1,6 +1,7 @@
 #include "model/Project.h"
 
 #include "model/Errors.h"
+#include "model/TrackNames.h"
 
 #include <QHash>
 
@@ -414,20 +415,26 @@ void Project::insertTrack(Track track, int index) {
     index = std::max(0, std::min(index, static_cast<int>(tracks_.size())));
     const QString id = track.id;
     tracks_.insert(tracks_.begin() + index, std::move(track));
+    QStringList renamed = renumber(index);
+    renamed.removeAll(id);
     Q_EMIT trackInserted(id, index);
+    announceRenamed(renamed);
 }
 
 std::pair<Track, int> Project::removeTrack(const QString& trackId) {
     const int index = trackIndex(trackId);
     Track removed = std::move(tracks_[index]);
     tracks_.erase(tracks_.begin() + index);
+    const QStringList renamed = renumber(index);
     Q_EMIT trackRemoved(trackId, index);
+    announceRenamed(renamed);
     return {std::move(removed), index};
 }
 
 void Project::insertReturn(Track track, int index) {
     index = std::max(0, std::min(index, static_cast<int>(returns_.size())));
     const QString id = track.id;
+    track.name = track.nameSource();
     returns_.insert(returns_.begin() + index, std::move(track));
     Q_EMIT returnInserted(id, index);
 }
@@ -469,17 +476,24 @@ void Project::arrangeTracks(const TrackTree& tree) {
         throw EditError(*problem);
     }
     tracks_ = std::move(arranged);
+    const QStringList renamed = renumber(0);
     Q_EMIT tracksArranged();
+    announceRenamed(renamed);
 }
 
 void Project::updateTrack(const QString& trackId, TrackField field, const TrackValue& value) {
-    trackRef(trackId).setValue(field, value);
-    Q_EMIT trackChanged(trackId);
+    updateTrack(trackId, TrackValues{{field, value}});
 }
 
 void Project::updateTrack(const QString& trackId, const TrackValues& values) {
     Track& changed = trackRef(trackId);
     for (auto it = values.constBegin(); it != values.constEnd(); ++it) changed.setValue(it.key(), it.value());
+    if (values.contains(TrackField::Name)) {  // (numbered: its template is what changed)
+        if (trackId == kMaster || hasReturn(trackId))
+            renumber(static_cast<int>(tracks_.size()), true);
+        else
+            renumber(trackIndex(trackId));
+    }
     Q_EMIT trackChanged(trackId);
 }
 
@@ -490,6 +504,7 @@ Track Project::replaceTrack(Track track) {
     tracks_.erase(tracks_.begin() + index);
     Q_EMIT trackRemoved(id, index);
     tracks_.insert(tracks_.begin() + index, std::move(track));
+    renumber(index);
     Q_EMIT trackInserted(id, index);
     return old;
 }
@@ -513,18 +528,61 @@ void Project::setFrozenSegments(const QString& trackId, std::optional<std::vecto
 
 void Project::setClips(const QString& trackId, std::vector<Clip> clips) {
     std::stable_sort(clips.begin(), clips.end(), [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
-    trackRef(trackId).clips = std::move(clips);
+    Track& track = trackRef(trackId);
+    const bool followed = namedByContents(track);
+    track.clips = std::move(clips);
     Q_EMIT clipsChanged(trackId);
+    followContents(trackId, followed);
 }
 
 void Project::setDevices(const QString& trackId, std::vector<Device> devices) {
-    trackRef(trackId).devices = std::move(devices);
+    Track& track = trackRef(trackId);
+    const bool followed = namedByContents(track);
+    track.devices = std::move(devices);
     Q_EMIT devicesChanged(trackId);
+    followContents(trackId, followed);
 }
 
 void Project::setChains(const OrderedMap<QString, std::vector<Device>>& chains) {
-    for (const auto& [trackId, devices] : chains) trackRef(trackId).devices = devices;
+    QSet<QString> followed;
+    for (const auto& [trackId, devices] : chains) {
+        Track& track = trackRef(trackId);
+        if (namedByContents(track)) followed.insert(trackId);
+        track.devices = devices;
+    }
     for (const auto& entry : chains) Q_EMIT devicesChanged(entry.first);
+    for (const auto& entry : chains) followContents(entry.first, followed.contains(entry.first));
+}
+
+void Project::followContents(const QString& trackId, bool followed) {
+    if (!followed) return;
+    Track& track = trackRef(trackId);
+    const QString nameTemplate = contentsName(track);
+    if (nameTemplate == track.nameSource()) return;
+    track.nameTemplate = nameTemplate;
+    renumber(trackIndex(trackId));
+    Q_EMIT trackChanged(trackId);
+}
+
+QStringList Project::renumber(int from, bool returns) {
+    QStringList renamed;
+    for (int i = std::max(0, from); i < static_cast<int>(tracks_.size()); ++i) {
+        Track& t = tracks_[static_cast<size_t>(i)];
+        if (t.nameTemplate.isEmpty()) t.nameTemplate = t.name;
+        const QString name = numberedName(t.nameTemplate, i + 1);
+        if (name == t.name) continue;
+        t.name = name;
+        renamed.append(t.id);
+    }
+    if (returns) {  // (not numbered: named as their templates are)
+        for (Track& t : returns_) t.name = t.nameSource();
+        master_.name = master_.nameSource();
+    }
+    return renamed;
+}
+
+void Project::announceRenamed(const QStringList& trackIds) {
+    for (const QString& id : trackIds) Q_EMIT trackChanged(id);
 }
 
 void Project::updateChain(const QString& trackId, const QString& chainId, ChainField field, const ChainValue& value) {
@@ -546,8 +604,10 @@ void Project::setDeviceMacros(const QString& trackId, const QString& deviceId,
 }
 
 void Project::setDeviceName(const QString& trackId, const QString& deviceId, const std::optional<QString>& name) {
+    const bool followed = namedByContents(trackRef(trackId));
     deviceRef(trackId, deviceId).name = name;
     Q_EMIT devicesChanged(trackId);
+    followContents(trackId, followed);
 }
 
 void Project::setDeviceParam(const QString& trackId, const QString& deviceId, const QString& paramId, double value) {
@@ -661,6 +721,7 @@ void Project::replaceContents(ProjectContents contents) {
     automationLocked_ = contents.automationLocked;
     tracks_ = std::move(contents.tracks);
     returns_ = std::move(contents.returns);
+    renumber(0, true);
     foldedDevices_ = std::move(contents.foldedDevices);
     shownChainLists_ = std::move(contents.shownChainLists);
     hiddenRackDevices_ = std::move(contents.hiddenRackDevices);

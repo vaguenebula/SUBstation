@@ -81,7 +81,7 @@ private Q_SLOTS:
         EditorFixture f;
         const ClipRefs refs = f.editor.addClips({}, 2.0, {{"C:/x/kick.wav", 1.0}, {"C:/x/snare.wav", 0.5}});
         QCOMPARE(f.project.tracks().size(), size_t(1));
-        QCOMPARE(f.project.tracks()[0].name, QStringLiteral("kick"));
+        QCOMPARE(f.project.tracks()[0].name, QStringLiteral("1 kick"));  // (one clip of each: the first played names it)
         QVERIFY((spans(f.project.tracks()[0].clips) == Spans{{2, 4}, {4, 5}}));
         QCOMPARE(refs.size(), 2);
         f.stack.undo();

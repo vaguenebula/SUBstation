@@ -938,12 +938,24 @@ private Q_SLOTS:
         QVERIFY(!control(track, "activator")->property("checked").toBool());
         QCOMPARE(control(track, "activator")->property("text").toString(), QStringLiteral("1"));
 
-        // Renaming in place (Ctrl+R): the name's field, Enter takes it.
+        // Renaming in place (Ctrl+R): the name's field, with its template (#:
+        // its number) all selected; Enter takes it.
         QQuickItem* field = control(track, "rename");
         QVERIFY(field && !field->isVisible());
         QVERIFY(arrangement()->renameTrack(track));
         h_->settle();
         QVERIFY(field->isVisible() && field->hasActiveFocus());
+        QCOMPARE(field->property("text").toString(), project().track(track).nameTemplate);
+        QVERIFY(field->property("text").toString().startsWith(QStringLiteral("# ")));
+        QCOMPARE(field->property("selectedText").toString(), field->property("text").toString());
+        typeText(QStringLiteral("# Lead"));
+        QTest::keyClick(window(), Qt::Key_Return);
+        h_->settle();
+        QCOMPARE(project().track(track).name, QStringLiteral("1 Lead"));
+        QCOMPARE(header(track)->property("name").toString(), QStringLiteral("1 Lead"));
+        QVERIFY(arrangement()->renameTrack(track));
+        h_->settle();
+        QCOMPARE(field->property("text").toString(), QStringLiteral("# Lead"));
         typeText(QStringLiteral("Drums"));
         QTest::keyClick(window(), Qt::Key_Return);
         h_->settle();

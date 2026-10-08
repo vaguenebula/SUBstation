@@ -142,6 +142,25 @@ Each track's header (on the right, like Ableton) has:
 **Ctrl+R** (or *Rename* in its right-click menu) renames the selected track in place;
 *Color* in the menu sets its colour. Drag the bottom edge of a track to resize it.
 
+### Track names
+
+As in Ableton, a **#** in a track's name stands for its number: its place from the top of the
+arrangement, counting every track (groups, and the tracks in them, too). A new track is named
+`# Audio`, `# MIDI` or `# Group` and shows `3 Audio`; insert, delete or move a track and the
+tracks below it are renumbered. Renaming shows the name with its **#**, all of it selected: keep
+the **#** and the track keeps its number (`# Lead` shows `4 Lead`); leave it out and it has none.
+
+New audio and MIDI tracks are named after what they hold, and follow it:
+
+- an **audio track** after the file most of its clips play (a tie: the one played first), so
+  dropping `Kick.wav` makes `3 Kick`; with no clips it is `# Audio` again;
+- a **MIDI track** after its instrument (`2 Synth`, a plug-in's name, an instrument rack's
+  name), `# MIDI` without one.
+
+Once you rename a track to anything else, its name stays what you typed. Projects saved by an
+older SUBstation have their `3 Audio`, `2 MIDI` and `1 Group` tracks named and numbered this way
+when opened (an older SUBstation can't open projects saved now).
+
 Changing the volume or pan of one of several selected tracks changes them all: by the
 same amount when dragged, to the same value when typed or reset.
 

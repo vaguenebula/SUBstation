@@ -69,6 +69,18 @@ std::shared_ptr<const SimilarityResult> search(SoundIndex& index, const std::str
     return search(index, SoundQuery{path});
 }
 
+// Whether `done` comes true within `seconds` (the index's threads call the
+// wake callback just after waitIdle() returns, not before).
+template <typename F>
+bool eventually(F done, double seconds = 10.0) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > until) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
 }  // namespace
 
 TEST_CASE("a library is analysed in the background, and a search ranks it by similarity") {
@@ -362,10 +374,14 @@ TEST_CASE("the wake callback comes from the index's threads; the source from the
     std::atomic<int> wakes{0};
     std::atomic<bool> onMain{false};
     const auto main = std::this_thread::get_id();
+    // The keeper may have signalled already (the store read): then the
+    // callback is called at once, on this thread, while it is set. Never after.
+    std::atomic<bool> set{false};
     index.setWakeCallback([&] {
-        if (std::this_thread::get_id() == main) onMain = true;
+        if (set && std::this_thread::get_id() == main) onMain = true;
         ++wakes;
     });
+    set = true;
     std::atomic<int> calls{0};
     auto files = std::make_shared<const SoundIndex::Library>(library.paths);
     index.setLibrarySource([&, files] {
@@ -375,12 +391,22 @@ TEST_CASE("the wake callback comes from the index's threads; the source from the
     });
     REQUIRE(index.waitIdle(30.0));
     CHECK(calls.load() >= 1);
-    CHECK(wakes.load() >= 1);
+    CHECK(eventually([&] { return wakes.load() >= 1; }));
+    // As the application: it takes only when woken, and the search's result
+    // comes to it so. (A wake still on its way from the library's analysis
+    // stands for the search's until it is taken: one wake until the next take().)
+    int seen = wakes.load();
     index.take();
-    const int before = wakes.load();
-    index.find(SoundQuery{library.paths[0]});
-    REQUIRE(index.waitIdle(30.0));
-    CHECK(wakes.load() > before);
+    const uint64_t generation = index.find(SoundQuery{library.paths[0]});
+    std::shared_ptr<const SimilarityResult> result;
+    CHECK(eventually([&] {
+        if (wakes.load() == seen) return false;
+        seen = wakes.load();
+        if (auto update = index.take(); update.result) result = update.result;
+        return result != nullptr;
+    }));
+    REQUIRE(result != nullptr);
+    CHECK_EQ(result->generation, generation);
     CHECK(!onMain.load());
     // Once replaced, the old source is never called again.
     index.setLibrarySource(nullptr);

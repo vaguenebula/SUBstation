@@ -328,8 +328,8 @@ private Q_SLOTS:
         QCOMPARE(object(QStringLiteral("renderDialog"))->property("title").toString(), QStringLiteral("Freeze Tracks"));
         QTRY_VERIFY_WITH_TIMEOUT(!render().active(), 30000);
         disconnect(&render(), nullptr, this, nullptr);
-        QVERIFY(labels.contains(QStringLiteral("Freezing A (1 of 2)…")));
-        QVERIFY(labels.contains(QStringLiteral("Freezing B (2 of 2)…")));
+        QVERIFY(labels.contains(QStringLiteral("Freezing %1 (1 of 2)…").arg(project().track(a).name)));  // ("3 A")
+        QVERIFY(labels.contains(QStringLiteral("Freezing %1 (2 of 2)…").arg(project().track(b).name)));
         QVERIFY(project().track(a).frozen.has_value() && project().track(b).frozen.has_value());
         QTRY_VERIFY(!visible(QStringLiteral("renderDialog")));
     }

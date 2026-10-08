@@ -142,7 +142,7 @@ TrackHeaderItem {
         font: Theme.uiFont(9, true)
         onVisibleChanged: {
             if (visible) {
-                text = header.name
+                text = header.nameTemplate  // ("# Kick": the # stays its number)
                 selectAll()
                 forceActiveFocus()
             }

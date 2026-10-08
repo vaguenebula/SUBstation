@@ -134,7 +134,7 @@ private Q_SLOTS:
     void arrangementRendersAndMirrorsTheEngine() {
         threeTracks();
         QCOMPARE(project().tracks().size(), size_t(3));
-        QCOMPARE(project().tracks()[0].name, QStringLiteral("tone0"));
+        QCOMPARE(project().tracks()[0].name, QStringLiteral("1 tone0"));  // (named by its clips, numbered by its place)
         for (int i = 0; i < 3; ++i) QVERIFY(h_->header(trackId(i)));
         QVERIFY(!window()->grabWindow().isNull());
         test::screenshot(window(), QStringLiteral("arrangement_three_tracks"));
@@ -702,7 +702,7 @@ private Q_SLOTS:
         QVERIFY(lanes()->drop(&mime, pos));
         QVERIFY(!lanes()->dropPreview());
         QCOMPARE(project().tracks().size(), size_t(1));
-        QCOMPARE(project().tracks()[0].name, QStringLiteral("dropped"));
+        QCOMPARE(project().tracks()[0].name, QStringLiteral("1 dropped"));
         QCOMPARE(clipOf(0).startBeat, 4.0);
         QVERIFY(std::abs(clipOf(0).durationSec - 1.0) < 1e-9);
         QVERIFY(waitForSource(path));

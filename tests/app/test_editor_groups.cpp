@@ -9,6 +9,7 @@
 #include "io/Serialization.h"
 #include "model/Devices.h"
 #include "model/Routing.h"
+#include "model/TrackNames.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -87,7 +88,9 @@ private Q_SLOTS:
 
         // Ungrouping: what was in the group takes its place, in its group.
         f.editor.ungroup({group});
-        QVERIFY((names(p) == Names{{"A", ""}, {i, ""}, {"C", i}, {"B", ""}}));
+        const QString moved = f.track(inner).name;  // (renumbered: a row up)
+        QCOMPARE(moved, numberedName(QStringLiteral("# Group"), 2));
+        QVERIFY((names(p) == Names{{"A", ""}, {moved, ""}, {"C", moved}, {"B", ""}}));
         QCOMPARE(f.stack.undoText(), QStringLiteral("Ungroup Tracks"));
         f.stack.undo();
         QVERIFY((names(p)[0] == std::pair<QString, QString>{g, ""}));

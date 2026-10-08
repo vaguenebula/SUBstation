@@ -130,8 +130,8 @@ private Q_SLOTS:
         TempDir dir;
         threeTracks(f, dir);
         QCOMPARE(f.project().tracks().size(), size_t{3});
-        QCOMPARE(f.project().tracks()[0].name, QStringLiteral("tone0"));
-        QCOMPARE(f.project().tracks()[2].name, QStringLiteral("tone2"));
+        QCOMPARE(f.project().tracks()[0].name, QStringLiteral("1 tone0"));
+        QCOMPARE(f.project().tracks()[2].name, QStringLiteral("3 tone2"));
         // The engine plays what the model says: clip 2 starts at beat 4 (2 s at 120 BPM).
         const auto out = f.render(3 * kRate);
         QVERIFY(maxAbs(out, 0, kRate / 2) > 0.1);  // clip 0 at beat 0

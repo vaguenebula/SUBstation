@@ -467,7 +467,7 @@ MasterHeader.qml: volume, pan, meter and the choosers.
 | Drag (past the start-drag distance) | moves `draggedTracks()` (the selected tracks if it is one of them): `Arrangement::dragTracks()` while moving, `dropTracks()` on release |
 | Bottom 4 px of the own lane (`kResizeGrab`) | resize (`editor.setTrackHeight`); not while folded |
 | Fold button (each click of a double-click counts) | `toggleFold()`: every one of `draggedTracks()` takes the clicked one's new state |
-| Ctrl+R, the menu's Rename | rename in place: `startRename()` shows a `TextField`; `finishRename(text)` → `editor.renameTrack` (blank: no change) |
+| Ctrl+R, the menu's Rename | rename in place: `startRename()` shows a `TextField` with the name template (`nameTemplate`: `"# Kick"`, all selected); `finishRename(text)` → `editor.renameTrack` (blank: no change) |
 | Alt+wheel (over the header or any control in it) | `Arrangement::wheelResize()`; the wheel alone scrolls the headers |
 | Solo | `soloClicked()`: exclusive unless Ctrl is held; unsoloing exclusively unsoloes every track (`Project::senders()`); a selected track's button acts on all selected → `editor.soloTracks(tracks, on, exclusive)` |
 | Arm | `armClicked()`: exclusive unless Ctrl is held, a selected track's acting on all selected → `editor.armTracks`; says so if the track has no input |
