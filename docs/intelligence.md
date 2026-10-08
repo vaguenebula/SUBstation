@@ -286,7 +286,7 @@ and the drum rack will step through to swap in similar sounds, and `similarity(p
 `Harmony` ([Harmony.h](../app/src/intelligence/Harmony.h)) lives on the application's thread. Its notes are those the
 song's MIDI tracks play (`songNotes()`): of every MIDI track heard (not muted, nor in a muted group) whose name doesn't
 say it plays drums ("Drums", "Kick", "Snare", "Hats", "Perc", "Claps"...: `isDrumTrack()`), what its clips play, where
-they play it on the timeline. Audio tracks are for later. The bars are the project's time signature's; the key its
+they play it on the timeline (nothing of a deactivated clip, nor deactivated notes: `Clip::heardNotes()`). Audio tracks are for later. The bars are the project's time signature's; the key its
 key, if it has one.
 
 A change to what it hears (the clips of a track it hears; which tracks those are, as tracks come, go, are muted,

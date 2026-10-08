@@ -98,7 +98,7 @@ private Q_SLOTS:
         const QString track = f.editor.addMidiTrack();
         const auto ref = f.editor.addMidiClip(track, 4.0, 4.0);
         QVERIFY(ref);
-        QCOMPARE(f.project.clip(ref->trackId, ref->clipId).name, f.track(track).name);
+        QCOMPARE(f.project.clip(ref->trackId, ref->clipId).name, QString());  // (MIDI clips have no name)
         for (double length : {1.0, 2.0, 3.0}) {  // one gesture: one undo step
             f.editor.setClipNotes(*ref, {Note{E, 0.0, length}, Note{C, 0.0, length}}, "Resize Notes", "gesture");
         }
@@ -163,7 +163,7 @@ private Q_SLOTS:
         QCOMPARE(f.stack.index(), steps + 1);
         QCOMPARE(f.stack.undoText(), QStringLiteral("Record"));
         const Clip clip = f.project.clip(refs[0].trackId, refs[0].clipId);
-        QCOMPARE(clip.name, f.track(track).name);
+        QCOMPARE(clip.name, QString());
         QCOMPARE(clip.startBeat, 4.0);
         QCOMPARE(clip.durationBeats, 4.0);
         struct Got {

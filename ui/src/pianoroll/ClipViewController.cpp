@@ -111,7 +111,7 @@ void ClipViewController::setPianoRoll(PianoRoll* roll) {
     if (roll == pianoRoll_) return;
     if (pianoRoll_) pianoRoll_->setClip({}, {});
     pianoRoll_ = roll;
-    if (roll && midi_ && !refs_.isEmpty()) roll->setClip(refs_.front().trackId, refs_.front().clipId);
+    if (roll && midi_ && !refs_.isEmpty()) roll->setClips(refs_);
     Q_EMIT pianoRollChanged();
 }
 
@@ -202,7 +202,10 @@ void ClipViewController::open(const app::ClipRefs& refs, const std::optional<app
     midi_ = first.clip->isMidi();
     refs_.clear();
     if (midi_) {
-        refs_.append({first.trackId, first.clip->id});
+        refs_.append({first.trackId, first.clip->id});  // the lead first, then the others in order
+        for (const Shown& shown : clips) {
+            if (shown.clip->isMidi() && shown.clip != first.clip) refs_.append({shown.trackId, shown.clip->id});
+        }
     } else {
         for (const Shown& shown : clips) {
             if (!shown.clip->isMidi()) refs_.append({shown.trackId, shown.clip->id});
@@ -210,7 +213,7 @@ void ClipViewController::open(const app::ClipRefs& refs, const std::optional<app
     }
     if (pianoRoll_) {
         if (midi_)
-            pianoRoll_->setClip(refs_.front().trackId, refs_.front().clipId);
+            pianoRoll_->setClips(refs_);
         else
             pianoRoll_->setClip({}, {});
     }
@@ -240,6 +243,8 @@ void ClipViewController::dropMissing() {
         close();
         return;
     }
+    // (The piano roll skips clips that are gone; it is given the rest when its lead goes.)
+    if (midi_ && pianoRoll_ && !(kept.front() == refs_.front())) pianoRoll_->setClips(kept);
     refs_ = kept;
     refresh();
 }
@@ -286,9 +291,22 @@ void ClipViewController::refresh() {
         const app::Project* p = project();
         const app::Clip& lead = *clips.front();
         color_ = QColor(p->track(items.front().trackId).color);
-        if (midi_) {
+        if (midi_ && clips.size() > 1) {
+            QStringList tracks;
+            size_t count = 0;
+            for (const Shown& shown : items) {
+                if (!tracks.contains(shown.trackId)) tracks.append(shown.trackId);
+                count += shown.clip->playedNotes().size();
+            }
+            name_ = QStringLiteral("%1 MIDI Clips").arg(clips.size());
+            info_ = QStringLiteral("on %1 track%2  ·  %3 note%4  ·  edited together")
+                        .arg(tracks.size())
+                        .arg(tracks.size() > 1 ? QStringLiteral("s") : QString())
+                        .arg(count)
+                        .arg(count == 1 ? QString() : QStringLiteral("s"));
+        } else if (midi_) {
             const auto count = lead.playedNotes().size();
-            name_ = lead.name;
+            name_ = p->track(items.front().trackId).name;  // (MIDI clips have no name of their own)
             info_ = QStringLiteral("%1 beats  ·  %2 note%3")
                         .arg(app::formatFixed(lead.durationBeats, 2))
                         .arg(count)
@@ -309,6 +327,8 @@ void ClipViewController::refresh() {
                         .arg(tracks.size())
                         .arg(tracks.size() > 1 ? QStringLiteral("s") : QString());
         }
+        if (std::all_of(clips.begin(), clips.end(), [](const app::Clip* c) { return c->muted; }))
+            info_ += QStringLiteral("  ·  deactivated (0 activates)");
         warp_ = std::all_of(clips.begin(), clips.end(), [](const app::Clip* c) { return c->warp; });
         const bool sameMode = std::all_of(clips.begin(), clips.end(),
                                           [&](const app::Clip* c) { return c->warpMode == lead.warpMode; });

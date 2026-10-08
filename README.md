@@ -11,8 +11,8 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
 
 - **Arrangement**: audio and MIDI tracks, group tracks (nesting, folding), return
   tracks and sends, a master with its own effects; clip editing with snapping
-  (trimming, stretching, sliding a clip's content), clip fades with curves, time
-  selections, undo/redo for every edit.
+  (trimming, stretching, sliding a clip's content), clip fades with curves,
+  deactivating clips (0, as in Ableton), time selections, undo/redo for every edit.
 - **Audio clips**: real-time warping (Signalsmith Stretch) with several warp modes,
   transpose and detune; tempo and key read from sample file names.
 - **MIDI**: a piano roll with legato, quantize and humanize tools; the song's chords

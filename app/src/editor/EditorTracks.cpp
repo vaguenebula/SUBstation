@@ -793,7 +793,7 @@ ClipRefs ProjectEditor::addRecordings(const std::vector<RecordedTake>& takes, do
         const Track& track = p.track(take.trackId);
         if (track.isMidi() != take.midi) continue;
         if (take.midi) {
-            byTrack[take.trackId].push_back(recordedMidiClip(track, take, quantize));
+            byTrack[take.trackId].push_back(recordedMidiClip(take, quantize));
             continue;
         }
         double startBeat = secondsToBeats(take.startSec, tempo);
@@ -823,7 +823,7 @@ ClipRefs ProjectEditor::addRecordings(const std::vector<RecordedTake>& takes, do
     return refs;
 }
 
-Clip ProjectEditor::recordedMidiClip(const Track& track, const RecordedTake& take, double quantize) const {
+Clip ProjectEditor::recordedMidiClip(const RecordedTake& take, double quantize) const {
     const double tempo = project_->tempo();
     const double start = std::max(0.0, secondsToBeats(take.startSec, tempo));
     const double end = secondsToBeats(take.startSec + take.durationSec, tempo);
@@ -838,7 +838,7 @@ Clip ProjectEditor::recordedMidiClip(const Track& track, const RecordedTake& tak
         if (begin < 0 || begin >= end - start || length <= 0) continue;
         clipNotes.push_back(Note{std::clamp(played.pitch, 0, 127), begin, length, std::clamp(played.velocity, 1, 127)});
     }
-    return Clip::midi(newId(), track.name, start, end - start, 0.0, notes::normalize(clipNotes));
+    return Clip::midi(newId(), QString(), start, end - start, 0.0, notes::normalize(clipNotes));
 }
 
 }  // namespace sub::app

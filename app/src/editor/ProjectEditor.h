@@ -229,7 +229,8 @@ public:
 
     // Replace tracks' clips (track id -> its clips; sorted by the project), as
     // one undo step: a clip edit the pure functions (model/Edits.h) worked out.
-    void commitClips(const QString& text, const QMap<QString, std::vector<Clip>>& after,
+    // False if it was refused (frozen: `refused` says why).
+    bool commitClips(const QString& text, const QMap<QString, std::vector<Clip>>& after,
                      const QString& mergeKey = {});
     // Place audio files one after another; `sources` is (path, duration in
     // seconds) each. With no track ("", or a MIDI or group track) a new audio
@@ -238,7 +239,7 @@ public:
     // and audio is transposed to the project's key. The clips made.
     ClipRefs addClips(const QString& trackId, double startBeat, const std::vector<std::pair<QString, double>>& sources,
                       int trackIndex = -1);
-    // An empty MIDI clip on a MIDI track, named after the track. It wins against
+    // An empty MIDI clip on a MIDI track (with no name). It wins against
     // clips it overlaps, like a placed clip. None: not a MIDI track, too short,
     // or refused (frozen).
     std::optional<ClipRef> addMidiClip(const QString& trackId, double startBeat, double lengthBeats);
@@ -252,6 +253,10 @@ public:
     // gesture's edits are one undo step.
     void setClipNotes(const ClipRef& ref, const std::vector<Note>& notes, const QString& text,
                       const QString& mergeKey = {});
+    // The same for several MIDI clips at once (the piano roll showing them
+    // together), as one undo step: each clip's new notes.
+    void setClipsNotes(const std::vector<std::pair<ClipRef, std::vector<Note>>>& notes, const QString& text,
+                       const QString& mergeKey = {});
     // How far these clips can move across tracks: within the track list, and
     // only onto tracks of their own kind (audio or MIDI). A move that would put
     // any clip on the other kind of track keeps them on their tracks.
@@ -349,9 +354,15 @@ public:
     // file is in `reversedFiles` (file -> (its reversed copy, its length in
     // seconds)) is split at the range's edges, and the part inside plays the
     // reversed copy, backwards (see edits::reverseClip). One undo step. The
-    // reversed clips.
+    // reversed clips (none if refused).
     ClipRefs reverseRange(double start, double end, const QStringList& trackIds,
                           const QMap<QString, std::pair<QString, double>>& reversedFiles);
+    // Ableton's 0 on a time selection: deactivate (or, `active`, activate
+    // again) the clips between two beats on these tracks, audio and MIDI. Each
+    // clip not already so is split at the range's edges, and the part inside
+    // deactivated (a deactivated clip doesn't play; see Clip::muted). One undo
+    // step. The clips changed (none if refused: on a frozen track).
+    ClipRefs setRangeActive(double start, double end, const QStringList& trackIds, bool active);
 
     // --- Devices in chains (EditorDeviceChains.cpp) ---
 
@@ -680,7 +691,7 @@ private:
     void setInput(const QString& trackId, const std::vector<int>& channels, const std::optional<QString>& sourceId);
     void dropInputs(const QSet<QString>& sourceIds, const QString& text);
     void dropSidechains(const QSet<QString>& sourceIds, const QString& text);
-    Clip recordedMidiClip(const Track& track, const RecordedTake& take, double quantize) const;
+    Clip recordedMidiClip(const RecordedTake& take, double quantize) const;
 
     // Settings.
     void setSettings(const QString& text, const SettingsValues& values, const QString& mergeKey = {});
@@ -696,6 +707,15 @@ private:
     };
     QMap<LaneRef, Envelope> carriedAutomation(const std::vector<Span>& spans, double deltaBeats, bool copyClips) const;
     QMap<LaneRef, Envelope> clearedAutomation(double start, double end, const QStringList& trackIds) const;
+    // The clips of these tracks with the stretch between two beats of each
+    // `chosen` clip split off (at the range's edges) and changed by `change`
+    // (a clip wholly inside keeps its id), for reverseRange and setRangeActive:
+    // track id -> its clips, for the tracks that change; the changed pieces
+    // appended to `changed`.
+    QMap<QString, std::vector<Clip>> changedInRange(double start, double end, const QStringList& trackIds,
+                                                    const std::function<bool(const Clip&)>& chosen,
+                                                    const std::function<Clip(const Clip&)>& change,
+                                                    ClipRefs& changed) const;
 
     // Devices.
     bool setDevices(const QString& trackId, const std::vector<Device>& before, std::vector<Device> after,

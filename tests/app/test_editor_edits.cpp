@@ -1,7 +1,7 @@
 // The editor's clip edits and undo: adding, moving, duplicating, splitting
 // clips, tempo and warping trims, gesture merging, inputs and arming, recorded
 // takes, copy and paste with the automation under clips, time selections,
-// reversing, and keys and file names.
+// reversing, deactivating, and keys and file names.
 
 #include "EditorFixture.h"
 #include "TestSupport.h"
@@ -552,6 +552,57 @@ private Q_SLOTS:
         QVERIFY((spans(f.track(t).clips) == Spans{{0, 8}}));
         // Clips whose files have no reversed copy stay as they are.
         QVERIFY(f.editor.reverseRange(0.0, 8.0, {t}, {}).isEmpty());
+    }
+
+    void deactivatingSplitsOffTheStretchInTheRange() {
+        EditorFixture f;
+        const QString a = f.editor.addAudioTrack();
+        const QString m = f.editor.addMidiTrack();
+        f.editor.addClips(a, 0.0, {{"a.wav", 4.0}});  // beats 0-8
+        const auto notes = f.editor.addMidiClip(m, 0.0, 8.0);
+        f.editor.setClipNotes(*notes, {Note{60, 0.0, 1.0}, Note{62, 3.0, 1.0}}, "Add Note");
+        const QString wholeId = f.track(a).clips[0].id;
+
+        // Deactivated over part of both clips: each is split at the range's edges, the middle deactivated.
+        ClipRefs refs = f.editor.setRangeActive(2.0, 4.0, {a, m}, false);
+        QCOMPARE(f.stack.undoText(), QStringLiteral("Deactivate Clips"));
+        for (const QString& t : {a, m}) {
+            const auto& clips = f.track(t).clips;
+            QVERIFY((spans(clips) == Spans{{0, 2}, {2, 4}, {4, 8}}));
+            QVERIFY(!clips[0].muted && clips[1].muted && !clips[2].muted);
+            QVERIFY(refs.contains(ClipRef{t, clips[1].id}));
+        }
+        QCOMPARE(refs.size(), 2);
+        QCOMPARE(f.track(a).clips[0].id, wholeId);  // (the first piece keeps the clip's id)
+        QCOMPARE(f.track(m).clips[1].playedNotes().size(), size_t{1});  // the notes stay with their piece
+
+        // Over clips already deactivated, nothing changes (nothing is split).
+        const int steps = f.stack.index();
+        QVERIFY(f.editor.setRangeActive(2.5, 3.5, {a, m}, false).isEmpty());
+        QCOMPARE(f.stack.index(), steps);
+        // Activated again: the pieces play again, still pieces.
+        refs = f.editor.setRangeActive(0.0, 8.0, {a}, true);
+        QCOMPARE(refs.size(), 1);
+        QCOMPARE(f.stack.undoText(), QStringLiteral("Activate Clip"));
+        QVERIFY((spans(f.track(a).clips) == Spans{{0, 2}, {2, 4}, {4, 8}}));
+        for (const Clip& clip : f.track(a).clips) QVERIFY(!clip.muted);
+        // A clip wholly inside keeps its id; pieces cut from a deactivated clip are deactivated.
+        refs = f.editor.setRangeActive(0.0, 8.0, {m}, true);
+        f.editor.setRangeActive(4.0, 8.0, {m}, false);
+        const QString last = f.track(m).clips[2].id;
+        f.editor.splitClips({{m, last}}, 6.0);
+        QCOMPARE(f.track(m).clips.size(), size_t{4});
+        QVERIFY(f.track(m).clips[2].muted && f.track(m).clips[3].muted);
+        QCOMPARE(f.track(m).clips[2].id, last);
+
+        f.stack.undo();
+        f.stack.undo();
+        f.stack.undo();
+        f.stack.undo();
+        f.stack.undo();
+        QVERIFY((spans(f.track(a).clips) == Spans{{0, 8}}));
+        QVERIFY(!f.track(a).clips[0].muted);
+        QCOMPARE(f.track(a).clips[0].id, wholeId);
     }
 
     // --- From QML ---

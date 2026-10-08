@@ -233,16 +233,32 @@ bool ArrangementActions::canConsolidate() const {
     return !editor_->consolidatable(refs).isEmpty();
 }
 
-// (What R reverses: the audio clips in the selected area, whichever are selected as clips.)
-bool ArrangementActions::canReverse() const {
-    if (!selection_->clipRange()) return false;
+std::vector<const Clip*> ArrangementActions::areaClips(bool live) const {
+    std::vector<const Clip*> clips;
+    if (!selection_->clipRange()) return clips;
     const TimeRange range = *selection_->timeRange();
     for (const ClipRef& ref : editor_->clipsInRange(range.start, range.end, range.trackIds)) {
-        const Clip* clip = project_->findClip(ref.trackId, ref.clipId);
-        if (clip != nullptr && clip->isAudio()) return true;
+        if (live && project_->frozenBy(ref.trackId)) continue;
+        if (const Clip* clip = project_->findClip(ref.trackId, ref.clipId)) clips.push_back(clip);
     }
-    return false;
+    return clips;
 }
+
+// (What R reverses: the audio clips in the selected area, whichever are selected as clips.)
+bool ArrangementActions::canReverse() const {
+    const std::vector<const Clip*> clips = areaClips();
+    return std::any_of(clips.begin(), clips.end(), [](const Clip* clip) { return clip->isAudio(); });
+}
+
+std::optional<bool> ArrangementActions::activates() const {
+    const std::vector<const Clip*> clips = areaClips(true);
+    if (clips.empty()) return std::nullopt;
+    return std::none_of(clips.begin(), clips.end(), [](const Clip* clip) { return clip->plays(); });
+}
+
+bool ArrangementActions::canToggleActivation() const { return activates().has_value(); }
+
+bool ArrangementActions::areaDeactivated() const { return activates().value_or(false); }
 
 QVariantMap ArrangementActions::insertMidiClip(const QString& trackId, double beat, double gridStep) {
     const Track* track = project_->findTrack(trackId);
@@ -273,6 +289,32 @@ QString ArrangementActions::insertTrackAfter(const QString& trackId, bool midi) 
     const int index = point.index.value_or(-1);
     return midi ? editor_->addMidiTrack(index, QString(), kDefaultInstrument, std::nullopt, parent)
                 : editor_->addAudioTrack(index, QString(), parent);
+}
+
+// --- Deactivating -----------------------------------------------------------------------------
+
+void ArrangementActions::toggleActivation() {
+    if (!selection_->clipRange()) {
+        Q_EMIT statusMessage(QStringLiteral("Select clips (or a time range over them) to deactivate them."));
+        return;
+    }
+    const std::optional<bool> activate = activates();
+    if (!activate) {
+        Q_EMIT statusMessage(areaClips().empty()
+                                 ? QStringLiteral("There are no clips in the selection to deactivate.")
+                                 : QStringLiteral("The selected clips are frozen: unfreeze their tracks to deactivate them."));
+        return;
+    }
+    const TimeRange range = *selection_->timeRange();
+    QStringList live;  // (a frozen track's clips stay as they are: its frozen audio holds them)
+    for (const QString& id : range.trackIds) {
+        if (project_->hasTrack(id) && !project_->frozenBy(id)) live.append(id);
+    }
+    const QStringList rows = selection_->rangeRows();
+    if (!editor_->setRangeActive(range.start, range.end, live, *activate).isEmpty()) {
+        selection_->setTimeRange(range.start, range.end, range.trackIds,
+                                 editor_->clipsInRange(range.start, range.end, range.trackIds), {}, rows);
+    }
 }
 
 // --- Reversing --------------------------------------------------------------------------------

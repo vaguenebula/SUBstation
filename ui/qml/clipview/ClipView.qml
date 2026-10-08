@@ -3,9 +3,10 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import SUBstation
 
-// The clip view: what a double-clicked clip opens. A MIDI clip gets the piano
-// roll, and in the header the key its notes are judged by (out of it, red) and
-// Generate (chords or a bass line from the song's chords). Audio clips get
+// The clip view: what a double-clicked clip opens. MIDI clips get the piano
+// roll (several edited together), and in the header the key their notes are
+// judged by (out of it, red) and Generate (chords or a bass line from the
+// song's chords, into the lead clip). Audio clips get
 // their controls on the left (Warp, Pitch, Mix) and large waveforms on the
 // right; with several open, the controls edit all of them at once
 // (ClipViewController has the rules).
@@ -15,7 +16,7 @@ import SUBstation
 //   ClipView {
 //       trackId: track            // the track of the ids in clipIds
 //       clipIds: [clip]           // or [{trackId: t, clipId: c}, ...] for clips on several tracks
-//       leadClipId: clip          // optional: the clip double-clicked (a MIDI one opens alone)
+//       leadClipId: clip          // optional: the clip double-clicked (a MIDI one opens the MIDI clips)
 //       onCloseRequested: ...     // Esc, ×, or its clips are gone: back to the devices
 //       onLocateRequested: beat => ...  // the piano roll's ruler was clicked: play from this
 //                                         // arrangement beat (MainWindow.locate: the insert marker

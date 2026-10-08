@@ -174,9 +174,10 @@ too, and loaded) and `engineChainId(chain)` (a rack chain's engine chain) give t
 - Audio tracks: `setTrackClips(engine id, clip descriptions)`. A description keeps positions in beats and seconds (the
   engine converts them to samples at the current tempo and rate): path, start beat, duration, offset, gain, pan, warp
   (`Clip::isWarped`), segment BPM, warp mode (`sub::WarpMode`, in `kWarpModes` order) and `transpose + detune / 100`
-  semitones. Every clip's file is requested for decoding first.
-- MIDI tracks: the track's clips are flattened into the notes they play (`Clip::playedNotes()` in timeline beats) and
-  set with `setTrackNotes`. See [engine/midi.md](../engine/midi.md).
+  semitones. Every clip's file is requested for decoding first. A deactivated clip (`Clip::muted`) isn't among them
+  (`clipDescs()`), but its file is decoded all the same (its waveform shows).
+- MIDI tracks: the track's clips are flattened into the notes they play (`Clip::heardNotes()` in timeline beats: none
+  of a deactivated clip, nor deactivated notes) and set with `setTrackNotes`. See [engine/midi.md](../engine/midi.md).
 - A frozen track plays its frozen audio instead, as clips into the render: its segments (`Freeze::playing()`: all of
   it from beat 0 until a time selection over it is edited, then what the edits left, where they put it; see
   [model.md](model.md#freezing)); a MIDI track's notes go. Segments changing come as `clipsChanged` of the frozen

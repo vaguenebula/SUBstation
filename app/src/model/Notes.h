@@ -46,6 +46,9 @@ std::pair<double, double> span(const std::vector<Note>& notes);
 // overlaps one is shortened to end where the winner starts, starts where the
 // winner ends, or goes if it is covered (like clips on a track).
 std::vector<Note> resolveOverlaps(const std::vector<Note>& notes, const std::vector<Note>& winners);
+// A clip's notes with those of `targets` deactivated (or, `active`, activated
+// again), staying where they are.
+std::vector<Note> withActive(const std::vector<Note>& notes, const std::vector<Note>& targets, bool active);
 // A clip's notes with `removed` taken out and `added` put in; the added notes
 // win where they overlap others.
 std::vector<Note> place(const std::vector<Note>& notes, const std::vector<Note>& removed,

@@ -284,9 +284,10 @@ public:
     Q_INVOKABLE void split();
     // Ctrl+A: the grid from the first clip's start to the last one's end, on every track.
     Q_INVOKABLE void selectAll();
-    // Ctrl+J, R: the arrangement's consolidate() and reverseSelection().
+    // Ctrl+J, R, 0: the arrangement's consolidate(), reverseSelection() and toggleActivation().
     Q_INVOKABLE void consolidate();
     Q_INVOKABLE void reverseClips();
+    Q_INVOKABLE void toggleClipActivation();
     // Ctrl+R: what to rename, for the UI to edit in place: the preset current
     // in the browser's list (if the list has the focus), the rack chain last
     // clicked (device view), or the track (return) last clicked:

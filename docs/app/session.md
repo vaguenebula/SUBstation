@@ -99,7 +99,7 @@ The full list, with what each does, is in [Session.h](../../app/src/session/Sess
 | Transport | `togglePlay()` (Space: plays from the insert marker; again, stops and goes back to where playback started), `toggleRecord()` (F9: records the armed tracks from the insert marker after the count-in, or from the playhead while playing; again, stops recording while playing goes on), `stop()` (the stop button; stopped, it goes to the start), `locate(beat)`, `countInBars` (0, 1, 2 or 4) with `countInChoices`, `recordQuantize` with `recordQuantizeChoices`, `automationOverridden` |
 | Create | `insertAudioTrack()`, `insertMidiTrack()` (after the selected track, in its group; selected), `insertReturnTrack()`, `insertMidiClip(gridStep)`, `groupSelected()`, `ungroupSelected()` (tracks, or devices while the device view has the focus), `deleteSelectedTracks()` |
 | Adding | `addDeviceToSelectedTrack(kind)`, `addPluginToSelectedTrack({format, uid, name, vendor, path, instrument})`, `addPresetToSelectedTrack(path)` (an instrument with no MIDI track selected: on a new MIDI track), `addFileAtInsert(path)`, `presetSaved(path)` |
-| Edit | `cut()`, `copy()`, `paste()`, `duplicate()`, `whatIsCopied(verb)`, `deleteSelection()`, `split()`, `selectAll()`, `consolidate()`, `reverseClips()`, `soloSelectedTracks()`, `renameTarget(browserListFocused)` |
+| Edit | `cut()`, `copy()`, `paste()`, `duplicate()`, `whatIsCopied(verb)`, `deleteSelection()`, `split()`, `selectAll()`, `consolidate()`, `reverseClips()`, `toggleClipActivation()`, `soloSelectedTracks()`, `renameTarget(browserListFocused)` |
 | Freezing | `toggleFreeze()` (Ctrl+Shift+F), `flattenSelectedTracks()`, `freezeActions(ids)` (a track menu's texts and states), `freezeTracks(ids)`, `unfreezeTracks(ids)`, `flattenTracks(ids)` |
 | Files | `newProject()`, `openProject(path)`, `saveProject()`, `saveProjectAs(path)`, `suggestedSavePath()`, `recentProjects`, `recentProjectAvailable(path)`, `recentMenuItems()`, `clearRecentProjects()`, `lastFolder`, `projectFilter`, `projectExtension`, `confirmDiscardText` |
 | Export | `exportRangeChoices()`, `exportProblem(range)`, `suggestedExportPath()`, `exportBitDepthChoices`, `defaultExportBitDepth` (24), `exportAudio(path, range, bitDepth)` |
@@ -182,6 +182,10 @@ menus, drops), and the session dispatches the Edit menu's commands to it.
 - `deleteArea()`, `duplicateArea()`, `copyArea()`, `cutArea()`, `copyAutomation()`, `cutAutomation()`,
   `copyTracks(ids)`, `cutTracks(ids)`, `duplicateTracks(ids)`, `consolidate()`, `splitAt(beat)`, `canConsolidate()`,
   `canReverse()`, `insertMidiClip(trackId, beat, gridStep)`, `insertTrackAfter(trackId, midi)`.
+- **Deactivating** (0, `toggleActivation()`): the clips in the selected area, audio and MIDI, deactivated
+  (`ProjectEditor::setRangeActive`: just the stretch of each inside it, one undo step), or activated again if they
+  all are; frozen tracks' clips stay as they are (their frozen audio holds them). `activates()` says which (none:
+  nothing to change), for the menu; `canToggleActivation()` and `areaDeactivated()` are its QML forms.
 - **Reversing** (R, `reverseSelection()`) writes a reversed copy of each file once (as Ableton does): less than
   `kReverseInPlaceSeconds` (30 s) of audio in all is written at once; more in the background (`ReverseClipsRender`),
   followed in the session's render progress: Cancel makes none, and nothing is reversed. Then

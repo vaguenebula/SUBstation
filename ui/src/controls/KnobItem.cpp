@@ -319,13 +319,27 @@ void KnobItem::wheelEvent(QWheelEvent* event) {
     event->accept();
 }
 
+bool KnobItem::typesInto(const QKeyEvent* event) const {
+    return typeable() && !event->text().isEmpty() && kTypingKeys.contains(event->text()) &&
+           !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+}
+
 void KnobItem::keyPressEvent(QKeyEvent* event) {
-    if (typeable() && !event->text().isEmpty() && kTypingKeys.contains(event->text())) {
+    if (typesInto(event)) {
         Q_EMIT editRequested(event->text());
         event->accept();
         return;
     }
     event->ignore();
+}
+
+bool KnobItem::event(QEvent* event) {
+    // What it types into its text field comes to it as a key press, not to the window's shortcuts.
+    if (event->type() == QEvent::ShortcutOverride && typesInto(static_cast<QKeyEvent*>(event))) {
+        event->accept();
+        return true;
+    }
+    return SgCanvas::event(event);
 }
 
 }  // namespace sub::ui

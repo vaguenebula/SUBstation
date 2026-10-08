@@ -361,6 +361,7 @@ ApplicationWindow {
                 Action { objectName: "split"; text: qsTr("&Split"); shortcut: "Ctrl+E"; onTriggered: Session.split() }
                 Action { objectName: "consolidate"; text: qsTr("C&onsolidate"); shortcut: "Ctrl+J"; onTriggered: Session.consolidate() }
                 Action { objectName: "reverseClips"; text: qsTr("Re&verse Clips"); shortcut: "R"; onTriggered: Session.reverseClips() }
+                Action { objectName: "toggleClipActivation"; text: qsTr("Deact&ivate / Activate Clips"); shortcut: "0"; onTriggered: Session.toggleClipActivation() }
                 MenuSeparator {}
                 Action { objectName: "freeze"; text: qsTr("&Freeze / Unfreeze Track"); shortcut: "Ctrl+Shift+F"; onTriggered: Session.toggleFreeze() }
                 Action { objectName: "flatten"; text: qsTr("Flatten Track"); onTriggered: Session.flattenSelectedTracks() }

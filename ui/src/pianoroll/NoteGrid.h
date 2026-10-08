@@ -3,18 +3,28 @@
 // The piano roll's note area: a row per key, the grid, the notes, and editing
 // them.
 //
-// Mouse: double-click to add a note (one grid step long) or to delete one;
-// drag a note to move it (Ctrl copies, Alt bypasses the grid), drag either end
-// to resize it, drag in empty space to select. Selected notes move and resize
-// together. Ctrl+Alt drag scrolls the view. Wheel: scroll (Shift: sideways),
-// Ctrl: zoom time, Alt: make the keys' rows taller or shorter.
-// Keys: Delete, Ctrl+A, Ctrl+D (duplicate), Ctrl+U (quantize), Up/Down
+// The notes of every clip the roll shows, each in its track's colour (with
+// several, a line at each clip's ends), and the stretch a rubber band selected.
+//
+// Mouse: double-click to add a note (one grid step long; into the clip that
+// plays there) or to delete one; drag a note to move it (Ctrl copies, Alt
+// bypasses the grid), drag either end to resize it, drag in empty space to
+// select (each note it touches sounds for a moment as it is caught); click
+// empty space to place the paste marker (where Ctrl+V pastes; dashed, apart
+// from the start marker: playback doesn't start there). Selected notes
+// move and resize together, each staying in its clip. Ctrl+Alt drag scrolls
+// the view. Wheel: scroll (Shift: sideways), Ctrl: zoom time, Alt: make the
+// keys' rows taller or shorter.
+// Keys: Delete, Ctrl+A, Ctrl+D (duplicate), Ctrl+C / Ctrl+X / Ctrl+V (copy,
+// cut, paste), Ctrl+U (quantize), 0 (deactivate the selected notes, or
+// activate them if they all are: they show grey and aren't heard), Up/Down
 // (Shift: an octave), Left/Right (a grid step; Shift: a bar). The main window
-// has shortcuts for Delete, Ctrl+A and Ctrl+D too (for clips): the grid
-// accepts their ShortcutOverride, so they come to it as key presses instead
-// of firing the window's actions while it has the focus.
+// has shortcuts for most of them too (for clips): the grid accepts their
+// ShortcutOverride, so they come to it as key presses instead of firing the
+// window's actions while it has the focus.
 
 #include "model/Clip.h"
+#include "pianoroll/NoteSet.h"
 #include "pianoroll/RollItem.h"
 
 #include <QColor>
@@ -38,11 +48,12 @@ class NoteGrid : public RollItem {
 public:
     static constexpr double kEdgeGrab = 5.0;  // pixels inside each end of a note that resize it
     static constexpr double kDragThreshold = 3.0;
+    static constexpr double kPasteDash = 4.0;  // the paste marker's dashes (and gaps), in pixels
 
     // Where a note was hit: its ends resize it, its body moves it.
     enum class Zone { Start, End, Body };
     struct Hit {
-        app::Note note;
+        ClipNote note;
         Zone zone;
     };
 
@@ -89,7 +100,7 @@ private:
 
     std::unique_ptr<Gesture> gesture_;
     // What a click selects when the mouse comes up without dragging.
-    std::optional<std::vector<app::Note>> selectOnClick_;
+    std::optional<std::vector<ClipNote>> selectOnClick_;
     std::optional<QPointF> hover_;  // where the mouse is over the grid
 };
 

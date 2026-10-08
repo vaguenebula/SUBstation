@@ -1,34 +1,62 @@
 #pragma once
 
-// The piano roll: the clip view of a MIDI clip, laid out like Ableton's MIDI
-// editor. It holds the clip it shows, its own time axis (zoom, scroll) and row
-// height, the selected notes, the playhead, the key sounding, and the note
-// tools' settings and actions. The items that draw it (NoteGrid, PianoKeys,
-// PianoRuler, VelocityLane, RollPlayhead) share one; PianoRollView.qml lays
-// them out, with the note tools (NoteTools.qml) floating over the notes.
+// The piano roll: the clip view of MIDI clips, laid out like Ableton's MIDI
+// editor. It holds the clips it shows, its own time axis (zoom, scroll) and
+// row height, the selected notes, the playhead, the key sounding, the notes
+// copied, and the note tools' settings and actions. The items that draw it
+// (NoteGrid, PianoKeys, PianoRuler, VelocityLane, RollPlayhead) share one;
+// PianoRollView.qml lays them out, with the note tools (NoteTools.qml)
+// floating over the notes.
 //
-// Times are content beats: beats of the clip's notes, the ruler's 1 being the
-// clip's first content beat, not the arrangement's. The part the clip plays
-// (offsetBeats to windowEnd) is lit, the rest dimmed; notes outside it are kept:
+// It shows one clip, or several at once (MIDI clips selected together, on one
+// track or several): every one's notes, in its track's colour, edited
+// together. The first is the lead: Generate writes into it, and new notes go
+// into it unless another clip plays where they are drawn. A note stays in its
+// own clip whatever is done to it. Notes are ClipNotes (NoteSet.h): the clip
+// (its index in clips()) and the note in that clip's content beats.
+//
+// Times on the roll ("roll beats"): one clip shows in its content beats, the
+// ruler's 1 being the clip's first content beat, not the arrangement's;
+// several show in arrangement beats (each clip where it is in the song).
+// shift(clip) converts a clip's content beats to roll beats, origin() roll
+// beats to the arrangement's. The parts the clips play (each one's offsetBeats
+// to windowEnd) are lit, the rest dimmed; notes outside them are kept:
 // trimming a clip hides notes, never deletes them. Pitch runs 127 at the top
 // to 0 at the bottom, a row of rowHeight pixels each.
 //
 // The song's harmony (Session.harmony) shows over the notes while it is shown
-// (C): the chords the song plays over the part the clip plays (the ChordLane
+// (C): the chords the song plays over the part the clips play (the ChordLane
 // along the grid's top), and notes out of the key tinted red. Both are worked
 // out on the GUI thread when the harmony changes (chords(), scaleKey()), for
 // the items to draw. Generate writes block chords or a bass line from those
-// chords into the clip (from a progression in the key where the song has none).
+// chords into the lead clip (from a progression in the key where the song has
+// none).
 //
-// Every edit goes through commit(): the clip's whole new list of notes, one
-// undo command, merged with the previous one when they share a merge key.
-// Gestures pass their own key, so a drag is one undo step, while the model
-// (and what plays) changes live as the mouse moves. clip() looks the clip up
-// in the project each time: the project replaces it on every edit.
+// Every edit goes through commitNotes() (commit(): the lead clip's): the new
+// list of notes of each clip it changes, one undo command, merged with the
+// previous one when they share a merge key. Gestures pass their own key, so a
+// drag is one undo step, while the model (and what plays) changes live as the
+// mouse moves. clipAt() looks a clip up in the project each time: the project
+// replaces it on every edit.
+//
+// A rubber band drawn over the notes selects a stretch of time too (snapped to
+// the grid, at least as long as the notes in it): Ctrl+D copies the selected
+// notes by its length (right after it, as Ableton duplicates a time
+// selection), and so do Ctrl+C / Ctrl+V. Clicking an empty part of the grid
+// places the paste marker there (pasteBeat(): a dashed line of its own, apart
+// from the start marker and the playhead, which it doesn't move); Ctrl+V
+// pastes there, the first copied note (or the stretch they were copied with)
+// at the marker, each into the clip of its track that plays there.
+//
+// Where each clip's content beats are on the roll (origin(), shift()) is
+// worked out on refresh() (every change of the clips shown), not looked up for
+// each note: drawing and hit-testing ask for it note by note.
 
+#include "editor/ClipRef.h"
 #include "model/Clip.h"
 #include "model/Keys.h"
 #include "model/Notes.h"
+#include "pianoroll/NoteSet.h"
 #include "timeline/Timeline.h"
 #include "session/Session.h"
 
@@ -41,9 +69,13 @@
 #include <QRectF>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 #include <QtQml/qqmlregistration.h>
 
+#include <functional>
+#include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace sub::app {
@@ -64,8 +96,9 @@ class PianoRoll : public QObject {
     Q_PROPERTY(sub::app::Session* session READ session WRITE setSession NOTIFY sessionChanged)
     Q_PROPERTY(QString trackId READ trackId NOTIFY clipChanged)
     Q_PROPERTY(QString clipId READ clipId NOTIFY clipChanged)
+    Q_PROPERTY(int clipCount READ clipCount NOTIFY clipChanged)
     Q_PROPERTY(bool hasClip READ hasClip NOTIFY contentChanged)
-    // The headphones button: notes clicked, added and moved are heard.
+    // The headphones button: notes clicked, added, moved and selected are heard.
     Q_PROPERTY(bool preview READ preview WRITE setPreview NOTIFY previewChanged)
     Q_PROPERTY(double pxPerBeat READ pxPerBeat NOTIFY viewChanged)
     Q_PROPERTY(double scrollBeats READ scrollBeats NOTIFY viewChanged)
@@ -95,6 +128,7 @@ class PianoRoll : public QObject {
     Q_PROPERTY(bool toolsShown READ toolsShown NOTIFY toolsChanged)
     Q_PROPERTY(QRectF toolsArea READ toolsArea NOTIFY toolsChanged)
     Q_PROPERTY(int toolsCount READ toolsCount NOTIFY toolsChanged)
+    Q_PROPERTY(bool hasCopiedNotes READ hasCopiedNotes NOTIFY copiedChanged)
 
 public:
     static constexpr int kKeysWidth = 64;
@@ -105,8 +139,12 @@ public:
     static constexpr double kRowHeightStep = 1.5;  // pixels per wheel notch (Alt+wheel)
     static constexpr int kDefaultPitch = 60;       // C3: centred for a clip without notes
     static constexpr int kPreviewVelocity = 100;
+    static constexpr int kChordPreviewMs = 400;  // how long notes selected with a rubber band sound
     static constexpr const char* kDefaultGrid = "1/16";
     static constexpr double kDefaultHumanize = 25.0;  // %
+
+    // A stretch of roll beats.
+    using Span = std::pair<double, double>;
 
     explicit PianoRoll(QObject* parent = nullptr);
     ~PianoRoll() override;
@@ -119,35 +157,98 @@ public:
     app::Selection* selection() const;
     app::Harmony* harmony() const;
 
-    // --- The clip ---------------------------------------------------------------
+    // --- The clips ---------------------------------------------------------------
 
-    // Show a MIDI clip (fitted to the view the first time), or nothing ("").
+    // Show MIDI clips, the first leading (fitted to the view the first time), or nothing.
+    void setClips(const app::ClipRefs& refs);
+    // Show one MIDI clip, or nothing ("").
     Q_INVOKABLE void setClip(const QString& trackId, const QString& clipId);
-    QString trackId() const { return trackId_; }
-    QString clipId() const { return clipId_; }
-    // The clip, looked up now (null: none, or gone).
-    const app::Clip* clip() const;
+    const app::ClipRefs& clipRefs() const { return clips_; }
+    int clipCount() const { return static_cast<int>(clips_.size()); }
+    // The lead clip's.
+    QString trackId() const { return clips_.isEmpty() ? QString() : clips_.front().trackId; }
+    QString clipId() const { return clips_.isEmpty() ? QString() : clips_.front().clipId; }
+    // A clip shown, looked up now (null: none, or gone); clip(): the lead.
+    const app::Clip* clipAt(int index) const;
+    const app::Clip* clip() const { return clipAt(0); }
     bool hasClip() const { return clip() != nullptr; }
-    // The clip's track's colour (the accent without a clip).
-    QColor trackColor() const;
-    // After the clip changed (edits, undo): forget selected notes that are gone, repaint.
+    // A clip's track's colour (the accent without a clip); trackColor(): the lead's.
+    QColor colorOf(int index) const;
+    QColor trackColor() const { return colorOf(0); }
+    // The arrangement beat at roll beat 0, and the roll beat of a clip's content beat 0.
+    double origin() const { return origin_; }
+    double shift(int index) const {
+        return index >= 0 && index < static_cast<int>(shifts_.size()) ? shifts_[static_cast<size_t>(index)] : 0.0;
+    }
+    // Where a note is on the roll.
+    double rollStart(const ClipNote& note) const { return note.note.start + shift(note.clip); }
+    // The parts the clips play, in roll beats (each clip's; they may overlap).
+    std::vector<Span> windows() const;
+    // Every shown clip's notes, the lead's last (drawn on top).
+    std::vector<ClipNote> allNotes() const;
+    // Calls `visit(clip, note)` for each of them, in that order, without copying them
+    // (painting, hit-testing and drags go through every note).
+    template <typename Visit>
+    void forEachNote(Visit&& visit) const {
+        for (int i = 1; i <= clipCount(); ++i) {
+            const int index = i % clipCount();  // the lead (0) last
+            if (const app::Clip* c = clipAt(index)) {
+                for (const app::Note& note : c->notes) visit(index, note);
+            }
+        }
+    }
+    // The clip a note drawn at roll beat `beat` goes into: the lead if it plays
+    // there, else the first that does, else the lead. On `trackId` (if given):
+    // the first clip of that track playing there, else none.
+    std::optional<int> clipFor(double beat, const QString& trackId = {}) const;
+    // After the clips changed (edits, undo): forget selected notes that are gone, repaint.
     void refresh();
-    // Make `clipNotes` the clip's notes (one undo step per `mergeKey`) and select `selected`.
+    // Make these the clips' notes (clip index -> its notes; one undo step per
+    // `mergeKey`) and select `selected`.
+    void commitNotes(const std::map<int, std::vector<app::Note>>& notes, const QString& text,
+                     const QString& mergeKey = {}, const std::optional<std::vector<ClipNote>>& selected = std::nullopt);
+    // The same for the lead clip alone.
     void commit(const std::vector<app::Note>& clipNotes, const QString& text, const QString& mergeKey = {},
                 const std::optional<std::vector<app::Note>>& selected = std::nullopt);
 
     // --- Selected notes -----------------------------------------------------------
 
-    // Select `notes`; `tools` brings up the note tools by them.
+    // Select `notes`; `tools` brings up the note tools by them. Forgets the
+    // selected stretch of time (setSelectedSpan).
+    void selectNotes(const std::vector<ClipNote>& notes, bool tools = false);
+    // The same with notes of the lead clip.
     void setSelection(const std::vector<app::Note>& notes, bool tools = false);
     // The selected notes, sorted (a set: no two alike).
-    const std::vector<app::Note>& selected() const { return selected_; }
-    bool isSelected(const app::Note& note) const;
+    const std::vector<ClipNote>& selectedNotes() const { return selected_; }
+    // ... as notes (with one clip shown: the lead's).
+    std::vector<app::Note> selected() const;
+    bool isSelected(const ClipNote& note) const;
+    bool isSelected(const app::Note& note) const { return isSelected(ClipNote{0, note}); }
     int selectedCount() const { return static_cast<int>(selected_.size()); }
+    // The stretch of time a rubber band selected with the notes, if one did.
+    const std::optional<Span>& selectedSpan() const { return span_; }
+    void setSelectedSpan(const std::optional<Span>& span);
     // The note tools show for a group chosen by a rubber band or Ctrl+A, not for
     // notes clicked or drawn; they stay while that group is edited.
     bool toolsWanted() const { return toolsWanted_; }
     void setToolsWanted(bool wanted) { toolsWanted_ = wanted; }
+
+    // --- Editing the selection -----------------------------------------------------
+
+    // Ctrl+D: copies of the selected notes, by the selected stretch's length
+    // (right after it), or, without one, right after the last of them. Selected.
+    void duplicateSelected();
+    // Ctrl+C / Ctrl+X: the selected notes copied (cut: and taken out).
+    void copySelected();
+    void cutSelected();
+    // Ctrl+V: the notes copied, at the paste marker (else right after where
+    // they were copied from), each into the clip of its track that plays there
+    // (else the one there, else the lead); selected, and the paste marker goes
+    // to their end (pasting again appends).
+    void paste();
+    bool hasCopiedNotes() const { return !copied_.notes.empty(); }
+    // 0: the selected notes deactivated, or activated again if they all are.
+    void toggleSelectedActive();
 
     // --- Note tools ---------------------------------------------------------------
 
@@ -159,8 +260,8 @@ public:
     QRectF toolsArea() const { return toolsArea_; }
     int toolsCount() const { return toolsCount_; }
     // What the tools act on: the selected notes, or all of them if none are
-    // (Ctrl+U with nothing selected), by time.
-    std::vector<app::Note> toolTargets() const;
+    // (Ctrl+U with nothing selected).
+    std::vector<ClipNote> toolTargets() const;
     Q_INVOKABLE void legato();
     // ×2 (2.0) and ÷2 (0.5).
     Q_INVOKABLE void scaleTime(double factor);
@@ -183,7 +284,7 @@ public:
 
     // --- Harmony -------------------------------------------------------------------
 
-    // A chord of the song over the part the clip plays, in content beats.
+    // A chord of the song over the part the clips play, in roll beats.
     struct RollChord {
         double start = 0.0;
         double end = 0.0;
@@ -193,23 +294,23 @@ public:
 
         friend bool operator==(const RollChord&, const RollChord&) = default;
     };
-    // The song's chords over the part the clip plays, and the key notes out of
+    // The song's chords over the part the clips play, and the key notes out of
     // it are tinted red by (none: none known), while the harmony is shown.
     const std::vector<RollChord>& chords() const { return chords_; }
     const std::optional<app::Key>& scaleKey() const { return scaleKey_; }
     // Whether a pitch is out of scaleKey() (and so drawn tinted red).
     bool outOfKey(int pitch) const;
-    // Write block chords (or a bass line) into the clip from the song's chords
-    // over the part it plays, or from a progression in the key (C major if
-    // none) where it has none; selected. The clip's own notes stay as they are:
-    // a written note that would overlap one on its key is shortened or left
-    // out. One undo step (none if nothing would be added).
+    // Write block chords (or a bass line) into the lead clip from the song's
+    // chords over the part it plays, or from a progression in the key (C major
+    // if none) where it has none; selected. The clip's own notes stay as they
+    // are: a written note that would overlap one on its key is shortened or
+    // left out. One undo step (none if nothing would be added).
     Q_INVOKABLE void generateChords();
     Q_INVOKABLE void generateBass();
 
     // --- Geometry -----------------------------------------------------------------
 
-    // The time axis (in content beats) and the vertical scroll.
+    // The time axis (in roll beats) and the vertical scroll.
     const timeline::Timeline& view() const { return view_; }
     double pxPerBeat() const { return view_.pxPerBeat(); }
     double scrollBeats() const { return view_.scrollBeats(); }
@@ -218,8 +319,9 @@ public:
     // Top of a key's row, in the note grid's (and the keys') coordinates.
     double pitchTop(int pitch) const;
     int pitchAt(double y) const;
-    // A note's rectangle in the note grid (at least 3 px wide).
-    QRectF noteRect(const app::Note& note) const;
+    // A note's rectangle in the note grid (at least 3 px wide); of a lead clip's note.
+    QRectF noteRect(const ClipNote& note) const;
+    QRectF noteRect(const app::Note& note) const { return noteRect(ClipNote{0, note}); }
 
     Q_INVOKABLE void setScrollBeats(double beats);
     Q_INVOKABLE void setScrollY(double y);
@@ -253,25 +355,36 @@ public:
     // The notes take the keyboard (clicks on the keys, ruler and velocities give it them).
     void focusGrid();
 
-    // --- Playhead and the start marker -------------------------------------------------
+    // --- Playhead, the start marker and the paste marker ---------------------------------
 
-    // The playhead in content beats, while playing inside the clip.
+    // The playhead in roll beats, while playing inside a clip shown.
     std::optional<double> playhead() const { return playhead_; }
-    // Where playback starts next (the arrangement's insert marker), as a content
-    // beat; none outside the clip.
+    // Where playback starts next (the arrangement's insert marker), as a roll
+    // beat; none outside the clips shown.
     std::optional<double> startBeat() const;
-    // The ruler was clicked: play from this content beat (snapped by the ruler).
-    void requestLocate(double contentBeat);
+    // Where Ctrl+V pastes (roll beats): where the grid was last clicked (none
+    // until it is, and for new clips). Playback doesn't start from it.
+    std::optional<double> pasteBeat() const { return pasteBeat_; }
+    void setPasteBeat(double beat);
+    // The ruler was clicked: play from this roll beat (snapped by the ruler).
+    void requestLocate(double rollBeat);
 
     // --- Hearing notes ------------------------------------------------------------------
 
     bool preview() const { return preview_; }
     void setPreview(bool enabled);
-    // Sound a key on the track's instrument until releaseAudition(); one key
-    // sounds at a time.
-    void audition(int pitch, int velocity = kPreviewVelocity);
+    // Sound a key on the instrument of a clip's track (the lead's) until
+    // releaseAudition(); one key sounds at a time.
+    void audition(int pitch, int velocity = kPreviewVelocity, int clip = 0);
     Q_INVOKABLE void releaseAudition();
     std::optional<int> auditioned() const { return auditioned_; }
+    // Sound notes for a moment (a rubber band's, as it catches them), each key
+    // once (as loud as its loudest), on its clip's track; with those sounding
+    // already (a key sounding isn't struck again), all of them stopping
+    // kChordPreviewMs after the last were caught.
+    void previewNotes(const std::vector<ClipNote>& notes);
+    // The keys sounding that way now ((track, pitch)).
+    const std::vector<std::pair<QString, int>>& previewing() const { return previewing_; }
 
 Q_SIGNALS:
     void sessionChanged();
@@ -289,10 +402,20 @@ Q_SIGNALS:
     void previewChanged();
     void toolSettingsChanged();
     void toolsChanged();
+    void copiedChanged();
     // Play from this arrangement beat (the ruler was clicked).
     void locateRequested(double beat);
 
 private:
+    // The notes copied: each one's track and note, its start counted from
+    // `start` (roll beats, where they were copied), `length` the stretch they
+    // were copied with (or their own).
+    struct Copied {
+        std::vector<std::pair<QString, app::Note>> notes;
+        double start = 0.0;
+        double length = 0.0;
+    };
+
     void refreshHarmony();
     void generate(bool bass);
     void connectSession();
@@ -302,20 +425,39 @@ private:
     void fitIfReady();
     void updateBars();
     void onPosition(double beat);
-    void applyTool(const std::vector<app::Note>& targets, const std::vector<app::Note>& changed, const QString& text);
+    // origin() and shift() worked out again, from the clips as they are now.
+    void relayout();
+    void stopPreview();
+    bool showsTrack(const QString& trackId) const;
+    // A tool's result: `changed` (as `targets`, note for note) in place of `targets`.
+    void applyTool(const std::vector<ClipNote>& targets, const std::vector<ClipNote>& changed, const QString& text);
+    // A tool that works on times (Quantize, Humanize, ×2), applied on the roll
+    // (across clips: the arrangement's grid), each note back in its clip.
+    void applyOnRoll(const std::vector<ClipNote>& targets,
+                     const std::function<std::vector<app::Note>(const std::vector<app::Note>&)>& tool,
+                     const QString& text);
+    // The selected notes' stretch: the rubber band's, or their own.
+    std::optional<Span> selectionStretch() const;
     bool gridShowing() const;
     double gridWidth() const;
     double gridHeight() const;
 
     QPointer<app::Session> session_;
-    QString trackId_;
-    QString clipId_;
+    app::ClipRefs clips_;
+    double origin_ = 0.0;
+    std::vector<double> shifts_;  // each clip's shift()
     timeline::Timeline view_;
     int rowHeight_ = kRowHeight;
     double rowHeightExact_ = kRowHeight;  // keeps a trackpad's small steps adding up
-    std::vector<app::Note> selected_;
+    std::vector<ClipNote> selected_;
+    std::optional<Span> span_;
     std::optional<double> playhead_;
     std::optional<int> auditioned_;
+    QString auditionTrack_;
+    std::vector<std::pair<QString, int>> previewing_;
+    QTimer previewTimer_;
+    std::optional<double> pasteBeat_;
+    Copied copied_;
     bool fitPending_ = false;
     bool toolsWanted_ = false;
     bool preview_ = true;

@@ -8,6 +8,8 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 
+#include <algorithm>
+
 namespace sub::ui {
 
 using app::Note;
@@ -51,19 +53,32 @@ void PianoKeys::mousePressEvent(QMouseEvent* event) {
     if (!roll) return;
     roll->focusGrid();
     const int pitch = roll->pitchAt(event->position().y());
-    if (const app::Clip* clip = roll->clip()) {
-        std::vector<Note> chosen = event->modifiers() & Qt::ShiftModifier ? roll->selected() : std::vector<Note>();
-        for (const Note& note : clip->notes) {
-            if (note.pitch == pitch) chosen.push_back(note);
-        }
-        roll->setSelection(chosen);
-    }
+    base_ = event->modifiers() & Qt::ShiftModifier ? roll->selectedNotes() : std::vector<ClipNote>();
+    pressPitch_ = pitch;
     pressed_ = true;
+    selectKeys(pitch);
     roll->audition(pitch);
 }
 
 void PianoKeys::mouseMoveEvent(QMouseEvent* event) {
-    if (pressed_ && roll()) roll()->audition(roll()->pitchAt(event->position().y()));
+    PianoRoll* roll = this->roll();
+    if (!pressed_ || !roll) return;
+    const int pitch = roll->pitchAt(event->position().y());
+    selectKeys(pitch);
+    roll->audition(pitch);
+}
+
+void PianoKeys::selectKeys(int pitch) {
+    // Every note on the keys from the one pressed to this one (and what was
+    // selected before, with Shift).
+    PianoRoll* roll = this->roll();
+    if (!roll || !roll->hasClip()) return;
+    const int low = std::min(pressPitch_, pitch), high = std::max(pressPitch_, pitch);
+    std::vector<ClipNote> chosen = base_;
+    roll->forEachNote([&](int clip, const app::Note& note) {
+        if (low <= note.pitch && note.pitch <= high) chosen.push_back({clip, note});
+    });
+    roll->selectNotes(chosen);
 }
 
 void PianoKeys::mouseReleaseEvent(QMouseEvent*) {

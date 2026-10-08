@@ -94,4 +94,13 @@ std::vector<PlayedNote> Clip::playedNotes() const {
     return played;
 }
 
+std::vector<PlayedNote> Clip::heardNotes() const {
+    std::vector<PlayedNote> heard;
+    if (!plays()) return heard;
+    for (const PlayedNote& played : playedNotes()) {
+        if (!played.note.muted) heard.push_back(played);
+    }
+    return heard;
+}
+
 }  // namespace sub::app

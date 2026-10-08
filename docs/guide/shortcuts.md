@@ -45,6 +45,7 @@ the focus. Most are also in the menus, which show their keys.
 | Cut / copy / paste what is selected (clips and the automation with them, or automation in a lane's time selection; the last copied is what pastes) | Ctrl+X / Ctrl+C / Ctrl+V |
 | Consolidate the selected MIDI clips on each track into one (also in the clip's right-click menu) | Ctrl+J |
 | Reverse the selected audio clips (again: forwards) | R |
+| Deactivate the selected clips, audio and MIDI (if they all are: activate them) | 0 |
 | Select everything from the first clip to the last | Ctrl+A |
 | Copy clips while dragging | hold Ctrl |
 | Bypass snapping while dragging | hold Alt |
@@ -95,9 +96,11 @@ the focus. Most are also in the menus, which show their keys.
 | Play notes (while it is on) | A S D F G H J K L ; ' (white keys), W E T Y U O P (black keys) |
 | Octave down / up (while it is on) | Z / X |
 
-In the piano roll, Delete, Ctrl+A and Ctrl+D act on notes, Ctrl+U quantizes them, and
+In the piano roll, Delete, Ctrl+A, Ctrl+D and Ctrl+C / Ctrl+X / Ctrl+V act on notes (Ctrl+V
+pastes at the paste marker: click the grid to place it), Ctrl+U quantizes them, and
 arrow keys move them (Up/Down a semitone, Shift an octave; Left/Right a grid step, Shift
-a bar). C shows or hides the song's chords and key over the notes. See
+a bar). 0 deactivates the selected notes (or activates them, if they all are), not the
+clip. C shows or hides the song's chords and key over the notes. See
 [midi.md](midi.md#the-piano-roll).
 
 ## Plug-in editors

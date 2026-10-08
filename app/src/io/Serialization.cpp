@@ -244,11 +244,16 @@ QJsonObject clipToJson(const Clip& clip, const QString& base) {
     data[QStringLiteral("id")] = clip.id;
     data[QStringLiteral("name")] = clip.name;
     data[QStringLiteral("start_beat")] = clip.startBeat;
+    if (clip.muted) data[QStringLiteral("muted")] = true;  // (only when deactivated: older projects read the same)
     if (clip.isMidi()) {
         data[QStringLiteral("duration_beats")] = clip.durationBeats;
         data[QStringLiteral("offset_beats")] = clip.offsetBeats;
         QJsonArray notes;
-        for (const Note& n : clip.notes) notes.append(QJsonArray{n.pitch, n.start, n.length, n.velocity});
+        for (const Note& n : clip.notes) {
+            QJsonArray note{n.pitch, n.start, n.length, n.velocity};
+            if (n.muted) note.append(true);  // (deactivated)
+            notes.append(note);
+        }
         data[QStringLiteral("notes")] = notes;
         return data;
     }
@@ -537,6 +542,7 @@ Clip audioClipFromJson(const QJsonValue& value, const QString& base) {
     clip.name = c.contains(QStringLiteral("name")) ? toStr(c.value(QStringLiteral("name")))
                                                    : stemOf(toStr(need(c, QStringLiteral("path"))));
     clip.startBeat = toFloat(need(c, QStringLiteral("start_beat")));
+    clip.muted = truthy(c.value(QStringLiteral("muted")));
     clip.durationSec = toFloat(need(c, QStringLiteral("duration_sec")));
     clip.offsetSec = floatOr(c, QStringLiteral("offset_sec"), 0.0);
     clip.sourceDurationSec = floatOr(c, QStringLiteral("source_duration_sec"), 0.0);
@@ -563,22 +569,23 @@ Clip midiClipFromJson(const QJsonValue& value) {
     const QJsonObject c = asObject(value);
     std::vector<Note> notes;
     for (const QJsonValue& entry : listOr(c, QStringLiteral("notes"))) {
-        if (!entry.isArray() || entry.toArray().size() != 4) {
-            damaged(QStringLiteral("a note isn't [pitch, start, length, velocity]"));
+        if (!entry.isArray() || entry.toArray().size() < 4 || entry.toArray().size() > 5) {
+            damaged(QStringLiteral("a note isn't [pitch, start, length, velocity] (and deactivated)"));
         }
         const QJsonArray n = entry.toArray();
         const double length = toFloat(n.at(2));
         if (length > 0) {
             notes.push_back(Note{static_cast<int>(std::clamp<long long>(toInt(n.at(0)), 0, 127)),
                                  std::max(0.0, toFloat(n.at(1))), length,
-                                 static_cast<int>(std::clamp<long long>(toInt(n.at(3)), 1, 127))});
+                                 static_cast<int>(std::clamp<long long>(toInt(n.at(3)), 1, 127)),
+                                 n.size() > 4 && truthy(n.at(4))});
         }
     }
     Clip clip;
     clip.kind = Clip::Kind::Midi;
     clip.id = toStr(need(c, QStringLiteral("id")));
-    clip.name = c.contains(QStringLiteral("name")) ? toStr(c.value(QStringLiteral("name"))) : QStringLiteral("MIDI");
-    clip.startBeat = toFloat(need(c, QStringLiteral("start_beat")));
+    clip.startBeat = toFloat(need(c, QStringLiteral("start_beat")));  // (no name: one saved earlier is dropped)
+    clip.muted = truthy(c.value(QStringLiteral("muted")));
     clip.durationBeats = toFloat(need(c, QStringLiteral("duration_beats")));
     clip.offsetBeats = floatOr(c, QStringLiteral("offset_beats"), 0.0);
     clip.notes = notes::normalize(notes);

@@ -4,7 +4,9 @@
 // precedence over the window's shortcuts; the rubber band, the keys and the
 // velocity lane; Alt+wheel and Ctrl+Alt drags; the note tools floating by notes
 // selected by dragging; the song's chords along the top, notes out of its key
-// in red, and Generate writing chords and a bass line. Runs on a display (xvfb here). With
+// in red, and Generate writing chords and a bass line; keys dragged over, a
+// rubber band's notes heard, Ctrl+D by the stretch dragged over, copy and paste
+// at the clicked beat, and several clips edited together. Runs on a display (xvfb here). With
 // $SUBSTATION_UI_SCREENSHOTS set, it saves screenshots there.
 
 #include <QQuickItem>
@@ -331,11 +333,22 @@ private Q_SLOTS:
         QCOMPARE(clipNotes().size(), size_t(2));
         QCOMPARE(project().track(trackId_).clips.size(), size_t(1));
         QTest::keyClick(window_, Qt::Key_U, Qt::ControlModifier);  // quantizes every note
+        // 0: the selected notes deactivated (not the clip); again, activated.
+        QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+        QTest::keyClick(window_, Qt::Key_0);
+        for (const Note& n : clipNotes()) QVERIFY(n.muted);
+        QCOMPARE(roll()->selected().size(), size_t(2));  // (still selected, as they are now)
+        QCOMPARE(undo().undoText(), QStringLiteral("Deactivate Notes"));
+        QVERIFY(!project().track(trackId_).clips[0].muted);
+        QTest::keyClick(window_, Qt::Key_0);
+        for (const Note& n : clipNotes()) QVERIFY(!n.muted);
+        QCOMPARE(undo().undoText(), QStringLiteral("Activate Notes"));
         // None of the window's shortcuts fired.
         QCOMPARE(shortcut("deletes"), 0);
         QCOMPARE(shortcut("selectAlls"), 0);
         QCOMPARE(shortcut("duplicates"), 0);
         QCOMPARE(shortcut("quantizes"), 0);
+        QCOMPARE(shortcut("deactivates"), 0);
         // (They do away from the notes.)
         auto* elsewhere = window_->findChild<QQuickItem*>(QStringLiteral("elsewhere"));
         elsewhere->forceActiveFocus();
@@ -393,6 +406,191 @@ private Q_SLOTS:
         QCOMPARE(together[0].velocity, 100 + delta);
         QCOMPARE(together[2].velocity, after[2].velocity + delta);
         QCOMPARE(undo().count(), depth + 1);
+    }
+
+    void draggingOverTheKeysSelectsTheirNotes() {
+        openMidiClip();
+        roll()->commit({note(60, 0, 1), note(62, 1, 1), note(64, 2, 1), note(67, 3, 1)}, QStringLiteral("Notes"));
+        auto* keys = clipView_->findChild<QQuickItem*>(QStringLiteral("pianoKeys"));
+        const auto key = [&](int pitch) { return test::at(keys, QPointF(10, int(roll()->pitchTop(pitch) + 4))); };
+        // From C3 down... up to E3: the notes on every key between, each key heard in turn.
+        test::press(window_, key(60));
+        test::moveTo(window_, key(62));
+        test::moveTo(window_, key(64));
+        QCOMPARE(roll()->auditioned(), std::optional<int>(64));
+        test::release(window_, key(64));
+        QCOMPARE(roll()->selected(), (std::vector<Note>{note(60, 0, 1), note(62, 1, 1), note(64, 2, 1)}));
+        // The other way, from G3 down to E3, with Shift: added to them.
+        test::press(window_, key(67), Qt::ShiftModifier);
+        test::moveTo(window_, key(64), Qt::ShiftModifier);
+        test::release(window_, key(64), Qt::ShiftModifier);
+        QCOMPARE(roll()->selectedCount(), 4);
+        // A press alone: that key's notes.
+        test::click(window_, key(62));
+        QCOMPARE(roll()->selected(), std::vector<Note>{note(62, 1, 1)});
+    }
+
+    void aRubberBandPlaysTheNotesItSelects() {
+        openMidiClip();
+        roll()->commit(chord({60, 64, 67}, 0, 1) + std::vector<Note>{note(72, 2, 1)}, QStringLiteral("Notes"));
+        const auto sounding = [this] {
+            std::vector<int> pitches;
+            for (const auto& [track, pitch] : roll()->previewing()) {
+                if (track == trackId_) pitches.push_back(pitch);
+            }
+            std::sort(pitches.begin(), pitches.end());
+            return pitches;
+        };
+        // The band reaches the chord: its three keys sound together at once, before it is let go.
+        test::press(window_, cell(0.0, 74) - QPoint(2, 0));
+        test::moveTo(window_, cell(0.75, 59));
+        QCOMPARE(roll()->selectedCount(), 3);
+        QCOMPARE(sounding(), (std::vector<int>{60, 64, 67}));
+        // On to the next note: it sounds too, and the chord's keys aren't struck again.
+        test::moveTo(window_, cell(2.5, 59));
+        QCOMPARE(roll()->selectedCount(), 4);
+        const std::vector<int> now = sounding();
+        QVERIFY(std::count(now.begin(), now.end(), 72) == 1);
+        QVERIFY(std::adjacent_find(now.begin(), now.end()) == now.end());
+        test::release(window_, cell(2.5, 59));
+        QTRY_VERIFY_WITH_TIMEOUT(roll()->previewing().empty(), PianoRoll::kChordPreviewMs + 1000);
+        // Clicking a note plays just it, while held; a rubber band over nothing plays nothing.
+        test::press(window_, cell(2.0, 72));
+        QVERIFY(roll()->previewing().empty());
+        QCOMPARE(roll()->auditioned(), std::optional<int>(72));
+        test::release(window_, cell(2.0, 72));
+        test::drag(window_, cell(3.0, 63), cell(3.5, 61));
+        QVERIFY(roll()->previewing().empty());
+        // Deactivated notes stay silent.
+        roll()->setSelection(chord({60, 64, 67}, 0, 1));
+        QTest::keyClick(window_, Qt::Key_0);
+        test::drag(window_, cell(0.0, 69) - QPoint(2, 0), cell(0.75, 59));
+        QCOMPARE(roll()->selectedCount(), 3);
+        QVERIFY(roll()->previewing().empty());
+    }
+
+    void ctrlDDuplicatesTheStretchARubberBandSelected() {
+        openMidiClip();
+        QVERIFY(roll()->view().snap());
+        // A rest, then two notes: dragged over from the bar's start, they repeat with the rest.
+        roll()->commit({note(60, 0.5, 0.5), note(62, 1.5, 0.5)}, QStringLiteral("Notes"));
+        const double y = roll()->pitchTop(64);
+        test::drag(window_, test::at(grid(), QPointF(roll()->view().beatToX(0.0) + 2, y)),
+                   test::at(grid(), QPointF(roll()->view().beatToX(2.0) - 2, roll()->pitchTop(58))));
+        QCOMPARE(roll()->selectedCount(), 2);
+        QCOMPARE(roll()->selectedSpan(), std::optional<PianoRoll::Span>(PianoRoll::Span{0.0, 2.0}));
+        QTest::keyClick(window_, Qt::Key_D, Qt::ControlModifier);
+        std::vector<double> starts;
+        for (const Note& n : sortedBy(clipNotes())) starts.push_back(n.start);
+        QCOMPARE(starts, (std::vector<double>{0.5, 1.5, 2.5, 3.5}));
+        QCOMPARE(roll()->selected(), (std::vector<Note>{note(60, 2.5, 0.5), note(62, 3.5, 0.5)}));
+        // Again: on after the stretch duplicated.
+        QCOMPARE(roll()->selectedSpan(), std::optional<PianoRoll::Span>(PianoRoll::Span{2.0, 4.0}));
+        QTest::keyClick(window_, Qt::Key_D, Qt::ControlModifier);
+        QCOMPARE(sortedBy(clipNotes()).back().start, 5.5);
+        QCOMPARE(shortcut("duplicates"), 0);
+        // Notes chosen without a rubber band: right after the last of them, as before.
+        undo().undo();
+        undo().undo();
+        QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+        QVERIFY(!roll()->selectedSpan());
+        QTest::keyClick(window_, Qt::Key_D, Qt::ControlModifier);
+        starts.clear();
+        for (const Note& n : sortedBy(clipNotes())) starts.push_back(n.start);
+        QCOMPARE(starts, (std::vector<double>{0.5, 1.5, 2.0, 3.0}));
+    }
+
+    void copiedNotesPasteWhereTheGridWasClicked() {
+        openMidiClip();
+        roll()->commit(chord({60, 64}, 0, 1) + std::vector<Note>{note(67, 1, 0.5)}, QStringLiteral("Notes"));
+        QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+        QTest::keyClick(window_, Qt::Key_C, Qt::ControlModifier);
+        QVERIFY(roll()->hasCopiedNotes());
+        // A click on an empty part of the grid places the paste marker; playback still starts where it did.
+        locate(5.0);  // (the start marker one beat into the clip)
+        test::click(window_, cell(2.0, 55));
+        QCOMPARE(roll()->pasteBeat(), std::optional<double>(2.0));
+        QCOMPARE(session().selection()->insertBeat(), 5.0);
+        QCOMPARE(session().bridge()->position(), 5.0);
+        QCOMPARE(roll()->startBeat(), std::optional<double>(1.0));
+        test::screenshot(window_, QStringLiteral("piano-roll-paste-marker"));
+        QVERIFY(roll()->selected().empty());
+        QTest::keyClick(window_, Qt::Key_V, Qt::ControlModifier);
+        QCOMPARE(undo().undoText(), QStringLiteral("Paste Notes"));
+        const std::vector<Note> pasted{note(60, 2, 1), note(64, 2, 1), note(67, 3, 0.5)};
+        QCOMPARE(roll()->selected(), pasted);
+        QCOMPARE(clipNotes().size(), size_t(6));
+        // The paste marker went to their end: pasting again appends.
+        QCOMPARE(roll()->pasteBeat(), std::optional<double>(3.5));
+        QTest::keyClick(window_, Qt::Key_V, Qt::ControlModifier);
+        QCOMPARE(sortedBy(clipNotes()).back().start, 4.5);
+        // Cut: copied, and taken out; pasted back where clicked.
+        roll()->setSelection({note(67, 1, 0.5)});
+        QTest::keyClick(window_, Qt::Key_X, Qt::ControlModifier);
+        QCOMPARE(undo().undoText(), QStringLiteral("Cut Note"));
+        QCOMPARE(clipNotes().size(), size_t(8));
+        test::click(window_, cell(0.5, 55));
+        QTest::keyClick(window_, Qt::Key_V, Qt::ControlModifier);
+        QCOMPARE(roll()->selected(), std::vector<Note>{note(67, 0.5, 0.5)});
+        // The window's Copy, Cut and Paste never fired.
+        QCOMPARE(shortcut("copies"), 0);
+        QCOMPARE(shortcut("cuts"), 0);
+        QCOMPARE(shortcut("pastes"), 0);
+    }
+
+    void severalMidiClipsAreEditedTogether() {
+        openMidiClip();  // A: beats 4-8
+        sub::app::ProjectEditor& editor = *session().editor();
+        const auto later = editor.addMidiClip(trackId_, 12.0, 4.0);  // A again: 12-16
+        const QString other = editor.addMidiTrack();
+        const auto between = editor.addMidiClip(other, 8.0, 4.0);  // B: 8-12
+        QVERIFY(later && between);
+        editor.setClipNotes({trackId_, clipId_}, {note(60, 0, 1)}, QStringLiteral("Notes"));
+        editor.setClipNotes(*between, {note(64, 0, 1)}, QStringLiteral("Notes"));
+        const auto entry = [](const sub::app::ClipRef& ref) {
+            return QVariantMap{{QStringLiteral("trackId"), ref.trackId}, {QStringLiteral("clipId"), ref.clipId}};
+        };
+        clipView_->setProperty("clipIds", QVariantList{entry(*between), entry(*later), entry({trackId_, clipId_})});
+        clipView_->setProperty("leadClipId", clipId_);
+        QTRY_COMPARE(roll()->clipCount(), 3);
+        QVERIFY(controller()->midi());
+        QCOMPARE(controller()->refs().front(), (sub::app::ClipRef{trackId_, clipId_}));  // the lead first
+        QCOMPARE(controller()->name(), QStringLiteral("3 MIDI Clips"));
+        // In the song's beats: each clip where it is.
+        QCOMPARE(roll()->origin(), 0.0);
+        QCOMPARE(roll()->shift(0), 4.0);
+        const auto local = [&](double beat, int pitch) {
+            return QPointF(roll()->view().beatToX(beat) + 3, roll()->pitchTop(pitch) + 4);
+        };
+        QVERIFY(grid()->noteAt(local(4.0, 60)) && grid()->noteAt(local(8.0, 64)));
+        QCOMPARE(grid()->noteAt(local(8.0, 64))->note.clip, 2);  // (B's clip: the lead, then the others in order)
+        // A rubber band over both clips' notes, moved up a semitone: each in its own clip, one undo step.
+        test::drag(window_, cell(4.0, 66), cell(8.5, 58));
+        QCOMPARE(roll()->selectedCount(), 2);
+        const int depth = undo().count();
+        QTest::keyClick(window_, Qt::Key_Up);
+        QCOMPARE(project().clip(trackId_, clipId_).notes, std::vector<Note>{note(61, 0, 1)});
+        QCOMPARE(project().clip(other, between->clipId).notes, std::vector<Note>{note(65, 0, 1)});
+        QCOMPARE(undo().count(), depth + 1);
+        // A new note goes into the clip playing where it is drawn.
+        test::doubleClick(window_, cell(13.0, 70));
+        QCOMPARE(project().clip(trackId_, later->clipId).notes.size(), size_t(1));
+        QCOMPARE(project().clip(trackId_, later->clipId).notes.front().start, 1.0);
+        test::doubleClick(window_, cell(9.0, 70));
+        QCOMPARE(project().clip(other, between->clipId).notes.size(), size_t(2));
+        // Copied notes paste into the clip of their track that plays there.
+        roll()->selectNotes({{0, note(61, 0, 1)}});
+        QTest::keyClick(window_, Qt::Key_C, Qt::ControlModifier);
+        test::click(window_, cell(14.0, 56));
+        QTest::keyClick(window_, Qt::Key_V, Qt::ControlModifier);
+        QCOMPARE(project().clip(trackId_, later->clipId).notes.size(), size_t(2));
+        undo().undo();
+        undo().undo();
+        undo().undo();
+        undo().undo();
+        QCOMPARE(project().clip(trackId_, clipId_).notes, std::vector<Note>{note(60, 0, 1)});
+        QCOMPARE(project().clip(other, between->clipId).notes, std::vector<Note>{note(64, 0, 1)});
+        test::screenshot(window_, QStringLiteral("piano-roll-several-clips"));
     }
 
     void altWheelResizesTheKeysAndCtrlAltDragScrolls() {
@@ -885,11 +1083,19 @@ Window {
     property int selectAlls: 0
     property int duplicates: 0
     property int quantizes: 0
+    property int deactivates: 0
+    property int copies: 0
+    property int cuts: 0
+    property int pastes: 0
 
     Shortcut { sequences: [StandardKey.Delete]; onActivated: deletes++ }
     Shortcut { sequences: [StandardKey.SelectAll]; onActivated: selectAlls++ }
     Shortcut { sequence: "Ctrl+D"; onActivated: duplicates++ }
     Shortcut { sequence: "Ctrl+U"; onActivated: quantizes++ }
+    Shortcut { sequence: "0"; onActivated: deactivates++ }
+    Shortcut { sequences: [StandardKey.Copy]; onActivated: copies++ }
+    Shortcut { sequences: [StandardKey.Cut]; onActivated: cuts++ }
+    Shortcut { sequences: [StandardKey.Paste]; onActivated: pastes++ }
 
     Item {
         objectName: "elsewhere"

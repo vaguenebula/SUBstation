@@ -11,7 +11,9 @@
 #include <QMouseEvent>
 #include <QUuid>
 
+#include <algorithm>
 #include <cmath>
+#include <map>
 #include <tuple>
 
 namespace sub::ui {
@@ -24,19 +26,19 @@ VelocityLane::VelocityLane(QQuickItem* parent) : RollItem(parent) {
     setAcceptHoverEvents(true);
 }
 
-std::optional<Note> VelocityLane::stemAt(double x) const {
+std::optional<ClipNote> VelocityLane::stemAt(double x) const {
     PianoRoll* roll = this->roll();
-    const app::Clip* clip = roll ? roll->clip() : nullptr;
-    if (!clip) return std::nullopt;
+    if (!roll || !roll->hasClip()) return std::nullopt;
     // The nearest (distance, unselected first), as min() over the tuples did.
-    std::optional<std::tuple<double, bool, Note>> best;
-    for (const Note& note : clip->notes) {
-        const double distance = std::abs(roll->view().beatToX(note.start) - x);
-        if (distance > kStemGrab) continue;
+    std::optional<std::tuple<double, bool, ClipNote>> best;
+    roll->forEachNote([&](int clip, const Note& n) {
+        const ClipNote note{clip, n};
+        const double distance = std::abs(roll->view().beatToX(roll->rollStart(note)) - x);
+        if (distance > kStemGrab) return;
         const bool unselected = !roll->isSelected(note);
         if (!best || std::tie(distance, unselected) < std::tie(std::get<0>(*best), std::get<1>(*best)))
             best = std::make_tuple(distance, unselected, note);
-    }
+    });
     if (!best) return std::nullopt;
     return std::get<2>(*best);
 }
@@ -49,25 +51,36 @@ void VelocityLane::paint(SgPainter& p) {
     if (!roll) return;
     const timeline::Timeline& view = roll->view();
     timeline::drawGrid(p, view, visible.left(), visible.right(), 1, h);
-    if (const app::Clip* clip = roll->clip()) {
-        const double x0 = view.beatToX(clip->offsetBeats), x1 = view.beatToX(clip->windowEnd());
-        p.fillRect(QRectF(visible.left(), 0, std::max(0.0, x0 - visible.left()), h), Theme::kOutsideClip);
-        p.fillRect(QRectF(x1, 0, std::max(0.0, visible.right() - x1 + 1), h), Theme::kOutsideClip);
-        const QColor color = roll->trackColor();
+    if (roll->hasClip()) {
+        // Dimmed outside the parts the clips play.
+        std::vector<PianoRoll::Span> lit = roll->windows();
+        std::sort(lit.begin(), lit.end());
+        double from = visible.left();
+        for (const auto& [start, end] : lit) {
+            const double x0 = view.beatToX(start), x1 = view.beatToX(end);
+            if (x0 > from) p.fillRect(QRectF(from, 0, x0 - from, h), Theme::kOutsideClip);
+            from = std::max(from, x1);
+        }
+        if (from < visible.right() + 1) p.fillRect(QRectF(from, 0, visible.right() + 1 - from, h), Theme::kOutsideClip);
+        std::vector<QColor> colors;
+        for (int i = 0; i < roll->clipCount(); ++i) colors.push_back(roll->colorOf(i));
         const double bottom = h - kMarginBottom;
         const QFont font = uiFont(7);
-        for (const Note& note : clip->notes) {
-            const double x = app::roundHalfEven(view.beatToX(note.start));
-            if (x < visible.left() - 3 || x > visible.right() + 3) continue;
-            const bool selected = roll->isSelected(note);
-            const QColor stem = selected ? Theme::kSelectionOutline : color;
+        roll->forEachNote([&](int clip, const Note& note) {
+            const ClipNote clipNote{clip, note};
+            const double x = app::roundHalfEven(view.beatToX(roll->rollStart(clipNote)));
+            if (x < visible.left() - 3 || x > visible.right() + 3) return;
+            const bool selected = roll->isSelected(clipNote);
+            const QColor stem = selected     ? Theme::kSelectionOutline
+                                : note.muted ? Theme::kDeactivatedClip
+                                             : colors[static_cast<size_t>(clipNote.clip)];
             const double y = velocityY(note.velocity);
             p.fillRect(QRectF(x, y, 1, bottom - y), stem);
             p.fillRect(QRectF(x - 2, y - 2, 5, 5), stem);
             if (selected && drag_)
                 p.drawText(QRectF(x + 5, y - 7, 30, 12), Qt::AlignLeft, QString::number(note.velocity), Theme::kText,
                            font);
-        }
+        });
     }
     p.fillRect(QRectF(visible.left(), 0, visible.width(), 1), Theme::kBorder);
     if (const auto start = roll->startBeat())
@@ -78,12 +91,14 @@ void VelocityLane::mousePressEvent(QMouseEvent* event) {
     PianoRoll* roll = this->roll();
     if (!roll) return;
     roll->focusGrid();
-    const app::Clip* clip = roll->clip();
     const auto note = stemAt(event->position().x());
-    if (!clip || !note) return;
-    if (!roll->isSelected(*note)) roll->setSelection({*note});
-    drag_ = Drag{event->position().y(), roll->clip()->notes, QUuid::createUuid().toString(),
-                 roll::byTime(roll->selected())};
+    if (!note) return;
+    if (!roll->isSelected(*note)) roll->selectNotes({*note});
+    std::map<int, std::vector<Note>> base;
+    for (const int index : roll::clipsOf(roll->selectedNotes())) {
+        if (const app::Clip* clip = roll->clipAt(index)) base[index] = clip->notes;
+    }
+    drag_ = Drag{event->position().y(), std::move(base), QUuid::createUuid().toString(), roll->selectedNotes()};
     update();
 }
 
@@ -91,9 +106,15 @@ void VelocityLane::mouseMoveEvent(QMouseEvent* event) {
     PianoRoll* roll = this->roll();
     if (!drag_ || !roll) return;
     const double delta = (drag_->y - event->position().y()) / span() * 127;
-    const std::vector<Note> changed = notes::withVelocity(drag_->targets, delta);
-    roll->commit(notes::place(drag_->base, drag_->targets, changed), QStringLiteral("Change Velocity"), drag_->key,
-                 changed);
+    std::map<int, std::vector<Note>> changes;
+    std::vector<ClipNote> changed;
+    for (const auto& [index, base] : drag_->base) {
+        const std::vector<Note> mine = roll::notesOf(drag_->targets, index);
+        const std::vector<Note> louder = notes::withVelocity(mine, delta);
+        changes[index] = notes::place(base, mine, louder);
+        for (const Note& note : louder) changed.push_back({index, note});
+    }
+    roll->commitNotes(changes, QStringLiteral("Change Velocity"), drag_->key, changed);
 }
 
 void VelocityLane::mouseReleaseEvent(QMouseEvent*) {
@@ -105,6 +126,8 @@ void VelocityLane::mouseUngrabEvent() {
     drag_.reset();
     update();
 }
+
+void VelocityLane::hoverEnterEvent(QHoverEvent* event) { hoverMoveEvent(event); }  // (entering right by a stem)
 
 void VelocityLane::hoverMoveEvent(QHoverEvent* event) {
     if (drag_) return;

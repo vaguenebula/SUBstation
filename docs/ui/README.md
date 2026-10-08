@@ -162,7 +162,7 @@ Every menu entry is an `Action` with an `objectName` (for the tests and `PluginE
 | Menu | Entries (shortcut → what it calls) |
 |---|---|
 | File | New Project (Ctrl+N), Open… (Ctrl+O), Open Recent, Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export Audio… (Ctrl+Shift+R), Quit (Ctrl+Q) |
-| Edit | Undo (Ctrl+Z) and Redo (Ctrl+Y, Ctrl+Shift+Z) on `Session.undoStack`, their text following `undoText`/`redoText`; Cut, Copy, Paste, Duplicate (Ctrl+D), Rename (Ctrl+R), Split (Ctrl+E), Consolidate (Ctrl+J), Reverse Clips (R); Freeze / Unfreeze Track (Ctrl+Shift+F), Flatten Track, Delete (Del, Backspace), Select All (Ctrl+A); Re-Enable Automation (enabled while `Session.automationOverridden`), Solo Selected Tracks (S); Play / Stop (Space), Record (F9), Record Quantization (a checkable entry per `Session.recordQuantizeChoices`), Go to Start (Home), Loop (Ctrl+L), Find in Browser (Ctrl+F) |
+| Edit | Undo (Ctrl+Z) and Redo (Ctrl+Y, Ctrl+Shift+Z) on `Session.undoStack`, their text following `undoText`/`redoText`; Cut, Copy, Paste, Duplicate (Ctrl+D), Rename (Ctrl+R), Split (Ctrl+E), Consolidate (Ctrl+J), Reverse Clips (R), Deactivate / Activate Clips (0); Freeze / Unfreeze Track (Ctrl+Shift+F), Flatten Track, Delete (Del, Backspace), Select All (Ctrl+A); Re-Enable Automation (enabled while `Session.automationOverridden`), Solo Selected Tracks (S); Play / Stop (Space), Record (F9), Record Quantization (a checkable entry per `Session.recordQuantizeChoices`), Go to Start (Home), Loop (Ctrl+L), Find in Browser (Ctrl+F) |
 | Create | Insert Audio Track (Ctrl+T), Insert MIDI Track (Ctrl+Shift+T), Insert Return Track (Ctrl+Alt+T), Insert MIDI Clip (Ctrl+Shift+D, Ctrl+Shift+M: on the arrangement's grid when snapping), Group Tracks (Ctrl+G), Ungroup Tracks (Ctrl+Shift+G), Delete Selected Tracks |
 | View | Browser, Device View, Info View, Clip View (Shift+Tab), Automation (A: `editor.toggleAllAutomation()`), Chords and Key (C: `harmony.shown`, checkable), Close Plug-in Editor (Ctrl+W, Windows only), Zoom In (+, =), Zoom Out (-), Zoom to Arrangement (Z), Narrow Grid (Ctrl+1), Widen Grid (Ctrl+2), Snap to Grid (Ctrl+4) |
 | Options | Preferences… (Ctrl+,), Rescan Plug-ins, Computer MIDI Keyboard (M), Lock Envelopes |
@@ -190,11 +190,12 @@ decides (`Session.cut()`, `copy()`, `paste()`, `duplicate()`, `deleteSelection()
 | Ctrl+D | `deviceSelection.duplicateSelected()` | `editor.duplicateAutomationRange`, the copy selected | | `arrangement.duplicateArea()` | `arrangement.duplicateTracks()` |
 | Ctrl+G / Ctrl+Shift+G | `deviceSelection.groupSelected()` / `ungroupSelected()` | | | | `editor.groupTracks` / `editor.ungroup` |
 | R | | | | `arrangement.reverseSelection()` (its audio clips) | |
+| 0 | | | | `arrangement.toggleActivation()` (its clips, audio and MIDI) | |
 
 Ctrl+R asks `Session.renameTarget(browser.listFocused)` what to rename (the preset current in the browser's list
 while it has the focus, the rack chain last clicked in the device view, or the track last clicked) and starts the
-rename where it shows. The piano roll's note grid takes Delete, Backspace, Ctrl+A, Ctrl+D, Ctrl+U and the arrows
-before these actions fire while it has the focus (see [piano-roll.md](piano-roll.md#keys)), and the computer MIDI
+rename where it shows. The piano roll's note grid takes Delete, Backspace, Ctrl+A, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+U, the
+arrows and 0 (its notes deactivated) before these actions fire while it has the focus (see [piano-roll.md](piano-roll.md#keys)), and the computer MIDI
 keyboard takes its letters while it is on ([below](#the-computer-midi-keyboard)).
 
 ### Transport

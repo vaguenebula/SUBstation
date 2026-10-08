@@ -137,8 +137,13 @@ protected:
     void mouseUngrabEvent() override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    bool event(QEvent* event) override;
 
 private:
+    // Whether a key typed opens the text field with it (a digit, "-", "+" or
+    // "."; it doesn't go to the window's shortcuts then, such as 0 or -).
+    bool typesInto(const QKeyEvent* event) const;
+
     struct Drag {
         qreal lastY;
         double fraction;  // where the drag has the knob, unrounded

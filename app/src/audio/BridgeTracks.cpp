@@ -312,23 +312,16 @@ void EngineBridge::pushClips(const QString& trackId) {
         const bool midi = track.isMidi();
         requestSource(track.frozen->path);
         if (midi) engine_.setTrackNotes(*engineId, {});
-        std::vector<sub::ClipDesc> clips;
-        for (const Clip& segment : segments) clips.push_back(clipDesc(segment));
-        engine_.setTrackClips(*engineId, clips);
+        engine_.setTrackClips(*engineId, clipDescs(segments));
         return;
     }
     if (track.isMidi()) {
         engine_.setTrackNotes(*engineId, noteDescs(track));
         return;
     }
-    std::vector<sub::ClipDesc> clips;
-    QStringList paths;
-    for (const Clip& clip : track.clips) {
-        paths.append(clip.path);
-        clips.push_back(clipDesc(clip));
-    }
-    for (const QString& path : paths) requestSource(path);
-    engine_.setTrackClips(*engineId, clips);
+    // (Deactivated clips' files load too: their waveforms show.)
+    for (const Clip& clip : track.clips) requestSource(clip.path);
+    engine_.setTrackClips(*engineId, clipDescs(track.clips));
 }
 
 void EngineBridge::previewClips(const QMap<QString, std::vector<Clip>>& clipsByTrack,
@@ -341,9 +334,7 @@ void EngineBridge::previewClips(const QMap<QString, std::vector<Clip>>& clipsByT
         if (project_->track(trackId).isMidi()) {
             engine_.setTrackNotes(*engineId, clipNoteDescs(it.value()));
         } else {
-            std::vector<sub::ClipDesc> clips;
-            for (const Clip& clip : it.value()) clips.push_back(clipDesc(clip));
-            engine_.setTrackClips(*engineId, clips);
+            engine_.setTrackClips(*engineId, clipDescs(it.value()));
         }
     }
     // Frozen tracks play these segments of their frozen audio.
@@ -353,9 +344,7 @@ void EngineBridge::previewClips(const QMap<QString, std::vector<Clip>>& clipsByT
         const Track* track = project_->hasTrack(trackId) ? project_->findTrack(trackId) : nullptr;
         if (!engineId || track == nullptr || !track->frozen) continue;
         d_->previewing.insert(trackId);
-        std::vector<sub::ClipDesc> clips;
-        for (const Clip& clip : it.value()) clips.push_back(clipDesc(clip));
-        engine_.setTrackClips(*engineId, clips);
+        engine_.setTrackClips(*engineId, clipDescs(it.value()));
     }
     // Tracks previewed before but not now play their own clips again.
     const QSet<QString> previewing = d_->previewing;

@@ -3,7 +3,8 @@
 // What the clip view shows and does (ClipView.qml lays it out). It is given
 // clips (`trackId`, `clipIds`, `leadClipId`) and shows them top track first,
 // then by time. If the lead clip (the one double-clicked; by default the first)
-// is a MIDI clip, it alone opens, in the piano roll; otherwise every audio clip
+// is a MIDI clip, every MIDI clip among them opens in the piano roll, edited
+// together (the lead first: it leads the roll); otherwise every audio clip
 // among them opens together: their settings on the left, their waveforms on the
 // right. Deleted clips (or tracks) are dropped; when none are left, or the
 // project is reset, it asks to be closed (closeRequested). It shows them only
@@ -69,7 +70,8 @@ class ClipViewController : public QObject {
     Q_PROPERTY(int count READ count NOTIFY changed)
     Q_PROPERTY(QStringList shownTrackIds READ shownTrackIds NOTIFY changed)
     Q_PROPERTY(QStringList shownClipIds READ shownClipIds NOTIFY changed)
-    // The header: a name, a line about the clips, the first one's track colour.
+    // The header: a name (a MIDI clip's track's: it has none), a line about the
+    // clips (saying so when they are deactivated), the first one's track colour.
     Q_PROPERTY(QString name READ name NOTIFY changed)
     Q_PROPERTY(QString info READ info NOTIFY changed)
     Q_PROPERTY(QColor color READ color NOTIFY changed)

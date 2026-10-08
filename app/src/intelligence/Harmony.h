@@ -5,7 +5,8 @@
 // The song's chords and key, inferred from the notes its MIDI tracks play:
 // every MIDI track that is heard (not muted, nor in a muted group) and whose
 // name doesn't say it plays drums ("Drums", "Kick", "Hats"...), its clips'
-// notes as they play them (the part each clip plays, on the timeline). Audio
+// notes as they play them (the part each clip plays, on the timeline; none of
+// a deactivated clip). Audio
 // is for later. The piano roll shows them over its notes (the chord lane, notes
 // out of the key tinted red) and writes parts from them (Generate); MIDI
 // generation and the MCP server will take them as context.

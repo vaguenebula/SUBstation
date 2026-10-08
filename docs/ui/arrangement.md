@@ -240,9 +240,12 @@ clip's `playedNotes()` fitted to the clip's height (`drawNotes()`) or an audio c
 louder is taller, cut off at the body's edges); then its frame (`drawClipFrame()`): its title bar (`kTitleHeight`
 18 px, `kFoldedHeight` - 3: the same folded or not, in line with the header's name row; a `kShortTitleHeight` 9 px
 bar with no name in rows under `kMinTitleRow` 32 px, which only rows saved lower than `app::kMinTrackHeight` 40 px
-are) and its outline (white when selected, else the track colour darker). A folded track's clip
-(`clipTitleHeight(h, true)`) is all title bar: a bar with its name, as high as an unfolded clip's, as in Ableton's
-folded tracks. A take being recorded (`LiveTakes`) has the same bar. Channels are drawn apart when the body is at least 44 px. Without a
+are) and its outline (white when selected, else the track colour darker). Only an audio clip's title bar has its
+name: a MIDI clip's is blank (the track header names the track). A deactivated clip (`Clip::muted`) is drawn in
+`kDeactivatedClip` grey instead of its track's colour (title bar, body and outline alike), its waveform or notes in
+the fainter `kDeactivatedContent`; a folded group's bars show it grey too. A folded track's clip
+(`clipTitleHeight(h, true)`) is all title bar: a bar with its name (an audio clip's), as high as an unfolded clip's,
+as in Ableton's folded tracks. A take being recorded (`LiveTakes`) has the same bar. Channels are drawn apart when the body is at least 44 px. Without a
 decoded source it says "Loading…", or "Missing file" over a red tint (`bridge.loadError`). Selection isn't drawn per
 clip: the selected area's tint does it (under a folded track's bars, which show they are selected by a white
 outline).
@@ -375,6 +378,7 @@ whichever was copied last. The lanes' menus and the session's Edit commands call
 | `paste()`, `paste(atBeat, trackId)` | `paste` (clips), `pasteAutomation`, or `pasteTracks` | what is pasted is selected; the insert marker goes to its end, so pasting again appends |
 | `consolidate()` | `consolidateClips` (Ctrl+J) | the joined clips are selected |
 | `reverseSelection()` | a reversed copy of each audio file in the range (written at once, or, for more than `kReverseInPlaceSeconds` (30 s) of audio, in the background in the render dialog, whose Cancel changes nothing; a reversed clip whose file is there goes back to it), then `reverseRange` (R) | the range stays selected |
+| `toggleActivation()` | `setRangeActive` (0): the clips in the range deactivated, or activated if they all are (`activates()`); not those of frozen tracks | the range stays selected, with its clips |
 | `insertMidiClip(trackId, beat, gridStep)` | `addMidiClipsOver` (inside the time selection) or `midiClipSpan` + `addMidiClip` | selected, opened in the piano roll |
 
 Automation paste goes onto the selected lanes if there is a lane range (or the lane of the selected breakpoints),
@@ -394,7 +398,8 @@ The lanes' menu (`ArrangementLanes::contextMenu(pos)`): on an automation lane, C
 selected range), Paste (copied automation) and the lane's own entries ([below](#hit-testing-and-the-press)). On a clip
 (it is selected first unless it already was), or anywhere in the selected time range: Cut, Copy, Paste, Split Here
 (on a clip: at the snapped beat under the mouse), Duplicate, Consolidate (`canConsolidate()`), Reverse
-(`canReverse()`: an audio clip in it), Delete. Elsewhere: Paste at the snapped beat on that track, Insert MIDI Clip
+(`canReverse()`: an audio clip in it), Deactivate (Activate when every clip in it is deactivated; enabled with a
+clip in it not frozen: `activates()`), Delete. Elsewhere: Paste at the snapped beat on that track, Insert MIDI Clip
 (MIDI tracks), Insert Audio/MIDI Track (after it, in its group: `insertTrackAfter()`), Delete Track.
 
 ### Drag and drop

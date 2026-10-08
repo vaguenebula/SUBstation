@@ -25,8 +25,16 @@ Double-click a MIDI clip to open it in the piano roll, laid out like Ableton's M
 editor: keys on the left, a ruler on top, notes in the middle and a velocity lane
 below.
 
+Select several MIDI clips (on one track or several) and double-click one of them (or
+press Shift+Tab) to edit them all at once: every clip's notes show, each in its
+track's colour, at their places in the song (the ruler shows the song's bars, with a
+bar in each clip's colour under the part it plays). Notes you edit stay in their own
+clips; a note you add goes into the clip playing where you draw it (the one you
+double-clicked, if it plays there). Generate writes into the clip you double-clicked.
+
 - **Keys**: click a key to hear it and select its notes (Shift adds them to the
-  selection); drag along the keys to hear them.
+  selection); drag along the keys to hear them and select every note on the keys you
+  drag over.
 - **Ruler**: in the clip's own time (its 1 is the clip's first beat). Click to play
   from there; drag sideways to scroll, up and down to zoom.
 - The part of the clip that plays is lit; the rest is dimmed.
@@ -38,8 +46,12 @@ below.
 - **Double-click** to add a note (one grid step long) or delete one.
 - **Drag** notes to move them (**Ctrl** copies, **Alt** ignores the grid), drag their
   ends to resize them. Selected notes move and resize together.
-- **Drag in empty space** to select. Ctrl- or Shift-click adds notes to the selection;
-  Ctrl-clicking a selected note takes it out.
+- **Drag in empty space** to select: each note sounds for a moment as the rubber band
+  reaches it (a chord sounds as a chord). Ctrl- or Shift-click adds notes to the
+  selection; Ctrl-clicking a selected note takes it out.
+- **Click in empty space** to place the paste marker there, a dashed blue line (with a
+  tab in the ruler): Ctrl+V pastes there. It doesn't move the playhead or where
+  playback starts.
 - **Ctrl+Alt drag** scrolls. The wheel scrolls (Shift: sideways), **Ctrl+wheel** zooms
   in time and **Alt+wheel** makes the keys' rows taller or shorter.
 
@@ -49,8 +61,10 @@ below.
 |---|---|
 | Delete | Delete the selected notes |
 | Ctrl+A | Select all notes |
-| Ctrl+D | Duplicate the selected notes |
+| Ctrl+D | Duplicate the selected notes: by the stretch you dragged over to select them (from where the drag started), else right after the last of them |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut the selected notes; paste them at the paste marker (click the grid to place it), selected; pasting again goes on after them |
 | Ctrl+U | Quantize (every note, with nothing selected) |
+| 0 | Deactivate the selected notes: they show grey and aren't heard (if they all are deactivated: activate them) |
 | Up / Down | Move a semitone (Shift: an octave) |
 | Left / Right | Move a grid step (Shift: a bar) |
 
@@ -89,7 +103,7 @@ piano roll. **C** (*View › Chords and Key*) hides or shows them; they show at 
   it has none, the key the song's MIDI is most likely in ("Key: A Minor (inferred)").
   A minor key's notes are its natural minor scale.
 - The chords come from every MIDI track you hear: a muted track, or one in a muted
-  group, doesn't count, nor do drum tracks (named "Drums", "Kick", "Snare", "Hats",
+  group, doesn't count, nor do deactivated clips and notes, nor drum tracks (named "Drums", "Kick", "Snare", "Hats",
   "Perc", "Claps" and the like). The lowest notes are taken as the bass: a chord over
   another of its notes is an inversion ("C/E"). They follow your edits as you make
   them.
