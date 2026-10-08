@@ -145,8 +145,9 @@ New audio and MIDI tracks are named after what they hold, and follow it:
 - a **MIDI track** after its instrument (`2 Synth`, a plug-in's name, an instrument rack's
   name), `# MIDI` without one.
 
-Once you rename a track to anything else, its name stays what you typed. Projects saved before
-this have their `3 Audio`, `2 MIDI` and `1 Group` tracks named and numbered this way when opened.
+Once you rename a track to anything else, its name stays what you typed. Projects saved by an
+older SUBstation have their `3 Audio`, `2 MIDI` and `1 Group` tracks named and numbered this way
+when opened (an older SUBstation can't open projects saved now).
 
 Changing the volume or pan of one of several selected tracks changes them all: by the
 same amount when dragged, to the same value when typed or reset.

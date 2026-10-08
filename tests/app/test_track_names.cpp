@@ -203,7 +203,8 @@ private Q_SLOTS:
         loadInto(loaded, data);
         QCOMPARE(names(loaded), names(f.project));
 
-        // As an older SUBstation saved it.
+        // As an older SUBstation saved it (before version 19).
+        data.insert(QStringLiteral("version"), kNameTemplatesVersion - 1);
         const QStringList old{"7 Audio", "8 Audio", "9 MIDI"};
         for (int i = 0; i < 3; ++i) {
             QJsonObject t = tracks.at(i).toObject();
@@ -223,6 +224,13 @@ private Q_SLOTS:
         Project other;
         loadInto(other, data);
         QCOMPARE(other.tracks()[0].name, QStringLiteral("3 Audio take"));
+
+        // Saved now, such a name is one typed: it stays.
+        f.editor.renameTrack(kick, QStringLiteral("3 Audio"));
+        Project now;
+        loadInto(now, projectToJson(f.project));
+        QCOMPARE(now.tracks()[1].name, QStringLiteral("3 Audio"));
+        QCOMPARE(now.tracks()[1].nameTemplate, QStringLiteral("3 Audio"));
     }
 };
 

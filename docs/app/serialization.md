@@ -76,7 +76,7 @@ Each entry of `tracks`:
 
 | Field | Meaning |
 |---|---|
-| `id`, `name`, `color` | required on load; `name` is the name template (`"# Kick"`: the `#` is the track's number, its place). A name as new tracks had before (`"3 Audio"`, `"2 MIDI"`, `"1 Group"` on a track of that kind) loads as `# Audio` named by what it holds, `# Group` |
+| `id`, `name`, `color` | required on load; `name` is the name template (`"# Kick"`: the `#` is the track's number, its place). In a file before version 19, a name as new tracks had then (`"3 Audio"`, `"2 MIDI"`, `"1 Group"` on a track of that kind) loads as `# Audio` named by what it holds, `# Group` |
 | `kind` | `"audio"`, `"midi"` or `"group"` (default `"audio"`; anything else makes the file "damaged") |
 | `volume_db`, `pan`, `mute`, `solo`, `height` | mixer and row height (without one: `kDefaultTrackHeight`, 96, or a group's `kDefaultGroupHeight`, 104) |
 | `devices` | list of devices (below) |
@@ -201,6 +201,7 @@ that makes an older file load as it was, and saving writes the current version.
 | 16 | what of frozen audio plays (`frozen.segments`) | all of it (a freeze as rendered) |
 | 17 | clip fades (`fade_in_sec`, `fade_out_sec` and their curves) | no fades |
 | 18 | racks' macros: how many and their names (`macro_names`) | the macros a rack uses (mapped, or turned from 0), and at least 4, named by number (racks had eight) |
+| 19 | track names as templates (`#`: the track's number, its place) | a track named as new ones were (`3 Audio`, `2 MIDI`, `1 Group`): `# Audio` named by what it holds, `# Group`; other names as they are |
 
 `folded_devices` has no version of its own: files without it load with no device folded. Nor have
 `chain_lists_shown` and `rack_devices_hidden`: files without them show no chain list, and every rack's devices. The

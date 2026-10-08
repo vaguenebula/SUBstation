@@ -905,6 +905,8 @@ QJsonObject projectToJson(const Project& project, const QString& projectFile) {
 
 std::vector<Track> tracksFromJson(const QJsonObject& data, const QString& projectFile) {
     const QString base = baseOf(projectFile);
+    const QJsonValue version = data.value(QStringLiteral("version"));
+    const bool plainNames = (version.isUndefined() ? 0 : toInt(version)) < kNameTemplatesVersion;
     std::vector<Track> tracks;
     for (const QJsonValue& value : listOr(data, QStringLiteral("tracks"))) {
         const QJsonObject t = asObject(value);
@@ -945,7 +947,8 @@ std::vector<Track> tracksFromJson(const QJsonObject& data, const QString& projec
         track.sends = sendsFromJson(t.value(QStringLiteral("sends")));
         track.frozen = freezeFromJson(t.value(QStringLiteral("frozen")), base);
         // Saved before tracks were numbered by their place, as new ones were named ("3 Audio"): so now.
-        if (hasPlainName(track)) track.nameTemplate = plainNameTemplate(track);
+        // (Since then, such a name is one typed: it stays.)
+        if (plainNames && hasPlainName(track)) track.nameTemplate = plainNameTemplate(track);
         tracks.push_back(std::move(track));
     }
     repairTree(tracks);
