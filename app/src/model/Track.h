@@ -47,7 +47,10 @@ inline const QString kMasterColor = QStringLiteral("#a0a0a0");
 // the heights they were saved with; a track saved without one gets these.
 inline constexpr int kDefaultTrackHeight = 96;
 inline constexpr int kDefaultGroupHeight = 104;
-inline constexpr int kMinTrackHeight = 24;
+// The lowest an open track can be: room for its clips' title bars and some of
+// their bodies (the arrangement's kMinTitleRow). Projects saved with lower
+// tracks keep them (their clips get a thin title bar).
+inline constexpr int kMinTrackHeight = 40;
 inline constexpr int kMaxTrackHeight = 400;
 
 // A frozen track's audio: its signal before its fader (after its devices),

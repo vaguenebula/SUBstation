@@ -149,6 +149,9 @@ public:
     static constexpr QColor kScopeAxis{0xff, 0xff, 0xff, 22};        // SCOPE_AXIS
     static constexpr QColor kFrozen{0x8f, 0xd3, 0xff};               // FROZEN: a frozen track's snowflake
     static constexpr QColor kFrozenTint{0x8f, 0xd3, 0xff, 34};       // FROZEN_TINT: over a frozen track's lane
+    // A group's lane while it is open: the faint outline of its tracks' clips,
+    // a row each (ArrangementLanes::drawGroupSummary; folded, they are in their colours).
+    static constexpr QColor kGroupOutline{0x00, 0x00, 0x00, 16};
     // Not constants in the Python UI's theme, but part of its look: from its stylesheet and widgets.
     static constexpr QColor kScrollHandleHover{0x55, 0x55, 0x55};      // a scroll bar's handle under the mouse
     static constexpr QColor kDeviceHeaderHover{0xff, 0xff, 0xff, 28};  // a device header button under the mouse

@@ -649,6 +649,10 @@ Q_SIGNALS:
     // be automated, or takes hold of one (not on undo or redo): its automation
     // lane shows it.
     void parameterTouched(const QString& owner, const QString& key);
+    // (automation owner, target key) when the user switches a switch (a track's
+    // activator, a device's on/off), whether that changes the model or not
+    // (its automation may have it the other way): its automation is overridden.
+    void switchedByHand(const QString& owner, const QString& key);
     // Why an edit wasn't made: it would change what a frozen track's audio
     // holds, or (the try* operations) it can't be made.
     void refused(const QString& message);
@@ -661,7 +665,11 @@ private:
     bool reportRefusal(const std::function<void()>& edit);
 
     // Tracks.
-    QString insertTrack(Track track, int index, const TrackParent& parent, const QString& text);
+    // A track into the arrangement at `index`, in `parent`'s group (or the one
+    // the tree lets it be in). A new one (`groupColor`) takes the colour of the
+    // group it lands in, if any.
+    QString insertTrack(Track track, int index, const TrackParent& parent, const QString& text,
+                        bool groupColor = false);
     Device newDeviceOf(const QString& kind, const std::optional<PluginRef>& plugin = std::nullopt) const;
     QStringList roots(const QStringList& trackIds) const;
     TrackTree arranged(const QStringList& roots, int at, const std::optional<QString>& parent) const;

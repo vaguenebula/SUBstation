@@ -161,8 +161,12 @@ first of them was.
 
 - What is in a group goes into it, through its devices (audio effects) and mixer, and
   on to the master, or the group it is in (groups nest).
-- A group has no clips; folded, its lane shows the clips of the tracks in it, and its
-  automation works as a track's. It has no arm or input: it records nothing.
+- A group has no clips. Its lane shows what is in it as Ableton's do: a thin row for
+  each track in it (in groups in it too), with that track's clips, so the group's
+  structure shows at a glance. Folded, the rows are in the tracks' colours; open (its
+  tracks show below it), just a faint outline. Its automation works as a track's. It
+  has no arm or input: it records nothing.
+- A new audio or MIDI track made in a group takes the group's colour.
 - A group's header is a little taller than a track's, with a bar in its colour across
   its top. The tracks in it are indented under it, and a band in the group's colour
   runs down the left of the headers from the group's to its last track's (past their
@@ -179,7 +183,8 @@ Every track header has a fold button next to its name (or *Fold Track* / *Fold G
 in its right-click menu).
 
 - A track's is a triangle in a circle: folded, the track shrinks to its name row and
-  shows its clips as bars with their names, as in Ableton. Click a bar to select its
+  shows its clips as bars with their names, as in Ableton: the same title bars its clips
+  have unfolded, as high. Click a bar to select its
   clip, drag it to move it (Ctrl copies), drag its ends to trim it. Beside its bars the
   row is a grid as any other: a click moves the insert marker, a drag selects time
   (on it, and on the tracks it goes on to), and what is selected there is cut, copied,

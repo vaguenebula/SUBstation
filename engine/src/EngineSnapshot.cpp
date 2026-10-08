@@ -50,9 +50,13 @@ std::string chainLaneParam(uint32_t chainId, const char* control) {
 }  // namespace
 
 void Engine::buildAutomationLocked(const StripBuild& build, int faderLatency, StripRender& strip) {
+    const bool master = build.track == &master_;  // (it is always heard: it has no switch)
     for (const AutomationLaneDesc& desc : build.track->automation) {
         if (desc.points.empty() || desc.processorId != 0) continue;
-        AutomationRender* target = desc.param == "volume" ? &strip.volume : desc.param == "pan" ? &strip.pan : nullptr;
+        AutomationRender* target = desc.param == "volume"                ? &strip.volume
+                                   : desc.param == "pan"                 ? &strip.pan
+                                   : desc.param == kTrackOnLane && !master ? &strip.on
+                                                                         : nullptr;
         if (!target) continue;  // (a send's: its edge's)
         target->nodes = automationNodes(desc, build.samplesPerBeat);
         target->latency = faderLatency;
@@ -115,8 +119,8 @@ void Engine::buildChainLocked(uint32_t chainId, const StripBuild& build, int dep
     if (anySidechain) out.sidechains = std::move(sidechains);
     if (anyRack) out.racks = std::move(racks);
 
-    // The envelopes of the chain's devices' parameters, each as late as the strip's
-    // input plus the latency before its device.
+    // The envelopes of the chain's devices' parameters (and switches), each as
+    // late as the strip's input plus the latency before its device.
     for (const AutomationLaneDesc& desc : build.track->automation) {
         if (desc.points.empty() || desc.processorId == 0) continue;
         const auto found = processors_.find(desc.processorId);
@@ -124,6 +128,25 @@ void Engine::buildChainLocked(uint32_t chainId, const StripBuild& build, int dep
         const std::shared_ptr<Processor>& processor = found->second.processor;
         const auto place = std::find(chain.inserts.begin(), chain.inserts.end(), processor);
         if (place == chain.inserts.end()) continue;
+        const auto slot = build.slotOf.find(processor.get());
+        const int before =
+            build.inputLatency + (slot != build.slotOf.end() ? (*build.deviceLatency)[static_cast<size_t>(slot->second)] : 0);
+        if (desc.param == kDeviceOnLane) {
+            SwitchRender device;
+            device.lane.processor = processor;
+            device.lane.steps = 1;
+            device.lane.insert = static_cast<int>(place - chain.inserts.begin());
+            device.lane.latency = before;
+            device.lane.nodes = automationNodes(desc, build.samplesPerBeat);
+            // (A rack's latency is what its chains add: set as this snapshot was aligned.)
+            device.latency = insertLatency(*processor);
+            ensureDelay(found->second.switchDelay, device.latency);
+            device.delay = found->second.switchDelay;
+            device.delayIndex = static_cast<int>(snap.switchDelays.size());
+            snap.switchDelays.push_back(device.latency);
+            out.switches.push_back(std::move(device));
+            continue;
+        }
         const auto& infos = processor->params();
         const auto info = std::find_if(infos.begin(), infos.end(), [&](const ParamInfo& p) { return p.id == desc.param; });
         if (info == infos.end() || info->readOnly) continue;
@@ -132,13 +155,14 @@ void Engine::buildChainLocked(uint32_t chainId, const StripBuild& build, int dep
         lane.param = static_cast<int>(info - infos.begin());
         lane.steps = info->stepCount();
         lane.insert = static_cast<int>(place - chain.inserts.begin());
-        const auto slot = build.slotOf.find(processor.get());
-        lane.latency = build.inputLatency + (slot != build.slotOf.end() ? (*build.deviceLatency)[static_cast<size_t>(slot->second)] : 0);
+        lane.latency = before;
         lane.nodes = automationNodes(desc, build.samplesPerBeat);
         out.automation.push_back(std::move(lane));
     }
     std::stable_sort(out.automation.begin(), out.automation.end(),
                      [](const AutomationRender& a, const AutomationRender& b) { return a.insert < b.insert; });
+    std::stable_sort(out.switches.begin(), out.switches.end(),
+                     [](const SwitchRender& a, const SwitchRender& b) { return a.lane.insert < b.lane.insert; });
 }
 
 // ---------------------------------------------------------------------------

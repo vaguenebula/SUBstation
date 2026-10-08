@@ -38,7 +38,7 @@ protected:
 private:
     const QMap<QString, app::LiveTake>& takes() const;
     void drawTake(SgPainter& p, const QColor& trackColor, const app::LiveTake& take, double rowTop, int rowHeight,
-                  const QRectF& visible) const;
+                  bool folded, const QRectF& visible) const;
     void drawNotes(SgPainter& p, const app::LiveTake& take, double takeEnd, const QRectF& area,
                    const QRectF& visible) const;
 

@@ -3,7 +3,8 @@
 // A device of the track the device view shows, as its frame and title bar show
 // it: what it is called (a rack by its own name, a plug-in by its plug-in's),
 // the title's tooltip (a plug-in's name, vendor, file and latency; a rack's
-// name and latency), whether it is on, folded (a rack: whether its chain list
+// name and latency), whether it is on (following its automation while that
+// plays, as the switch's automation dot shows), folded (a rack: whether its chain list
 // shows, and its chain's devices), an instrument, where it is in
 // its chain (Move Left / Move Right), a plug-in's loading state (loaded,
 // waiting to load, why it isn't), its editor window (open or not), and its
@@ -48,7 +49,9 @@ class DeviceInfo : public QObject {
     Q_PROPERTY(bool isRack READ isRack NOTIFY changed)
     Q_PROPERTY(bool isPlugin READ isPlugin NOTIFY changed)
     Q_PROPERTY(bool instrument READ instrument NOTIFY changed)
-    Q_PROPERTY(bool enabled READ enabled NOTIFY changed)
+    Q_PROPERTY(bool enabled READ enabled NOTIFY changed)  // as heard: following its automation while it plays
+    // How its on/off switch shows its automation: "on" while it plays, "off" when overridden, "".
+    Q_PROPERTY(QString enabledAutomation READ enabledAutomation NOTIFY changed)
     Q_PROPERTY(bool folded READ folded NOTIFY changed)
     // A rack's chain list shows (hidden by default); its chain's devices show beside it (shown by default).
     Q_PROPERTY(bool chainListShown READ chainListShown NOTIFY changed)
@@ -86,6 +89,7 @@ public:
     bool isPlugin() const { return state_.isPlugin; }
     bool instrument() const { return state_.instrument; }
     bool enabled() const { return state_.enabled; }
+    QString enabledAutomation() const { return state_.enabledAutomation; }
     bool folded() const { return state_.folded; }
     bool chainListShown() const { return state_.chainListShown; }
     bool rackDevicesShown() const { return state_.rackDevicesShown; }
@@ -100,8 +104,14 @@ public:
     bool sidechainOn() const { return state_.sidechainOn; }
     QString sidechainToolTip() const { return state_.sidechainToolTip; }
 
-    // The on/off switch.
+    // The on/off switch. Switched while its automation plays, that stops (it is overridden).
     Q_INVOKABLE void setEnabled(bool enabled);
+    // The switch's right-click menu: its automation shown, deleted, re-enabled
+    // (while overridden). Whether it has an envelope.
+    Q_INVOKABLE void showSwitchAutomation();
+    Q_INVOKABLE void deleteSwitchAutomation();
+    Q_INVOKABLE void reEnableAutomation();
+    Q_INVOKABLE bool hasSwitchEnvelope() const;
     // Move Left / Move Right in its chain (an instrument stays first).
     Q_INVOKABLE void moveLeft();
     Q_INVOKABLE void moveRight();
@@ -143,6 +153,7 @@ private:
         bool isPlugin = false;
         bool instrument = false;
         bool enabled = true;
+        QString enabledAutomation;
         bool folded = false;
         bool chainListShown = false;
         bool rackDevicesShown = true;
@@ -161,6 +172,11 @@ private:
     };
 
     void connectSession();
+    QString switchKey() const;
+    // Whether it is on as heard (`own`: as the model has it), and how its switch shows its automation.
+    std::pair<bool, QString> switchState(bool own) const;
+    // Only the switch again, as its automation plays.
+    void refreshSwitch();
     // The device's sidechain, unless its source is going (or gone).
     std::optional<sub::app::Sidechain> currentSidechain() const;
 

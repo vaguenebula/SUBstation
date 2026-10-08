@@ -13,6 +13,9 @@ TrackHeaderItem {
     property ArrangementMenu menu: null
 
     readonly property int nameRow: 22
+    // The name row's buttons, as a track's (TrackHeaderItem::kNamePad, kNameButton).
+    readonly property int buttonTop: 2
+    readonly property int buttonHeight: 16
     readonly property int returnHeight: 52
     readonly property int meterWidth: 8
     readonly property int innerRight: width - meterWidth - 10
@@ -33,9 +36,9 @@ TrackHeaderItem {
         id: solo
         objectName: "solo"
         x: header.innerRight - 22
-        y: 4
+        y: header.buttonTop
         width: 22
-        height: 17
+        height: header.buttonHeight
         role: "solo"
         text: "S"
         tooltip: header.soloToolTip
@@ -46,14 +49,21 @@ TrackHeaderItem {
         id: activator
         objectName: "activator"
         x: header.innerRight - 22 - 30
-        y: 4
+        y: header.buttonTop
         width: 28
-        height: 17
+        height: header.buttonHeight
         role: "activator"
         text: header.letter
         tooltip: qsTr("Track Activator (unmute)")
         checked: !header.mute
+        automation: header.activatorAutomation
         onToggled: header.activatorToggled(checked)
+
+        MouseArea {  // its automation's menu
+            anchors.fill: parent
+            acceptedButtons: Qt.RightButton
+            onPressed: mouse => header.menu.show(header.activatorMenuEntries(), header, activator, mouse.x, mouse.y)
+        }
     }
     ValueBox {
         id: volume
@@ -124,9 +134,9 @@ TrackHeaderItem {
         id: rename
         objectName: "rename"
         x: 8
-        y: 2
+        y: header.buttonTop - 1
         width: activator.x - 12
-        height: header.nameRow - 2
+        height: header.buttonHeight + 2
         visible: header.renaming
         padding: 2
         font: Theme.uiFont(9, true)

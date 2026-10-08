@@ -85,7 +85,10 @@ class TrackHeaderItem : public SgCanvas {
     Q_PROPERTY(bool records READ records NOTIFY changed)  // audio and MIDI tracks: arm, input, monitoring
     Q_PROPERTY(QString name READ name NOTIFY changed)
     Q_PROPERTY(QColor color READ color NOTIFY changed)
-    Q_PROPERTY(bool mute READ mute NOTIFY changed)
+    // Muted as heard: its activator off (following its automation while it plays).
+    Q_PROPERTY(bool mute READ mute NOTIFY mixerChanged)
+    // How the activator shows its automation ("on", "off" when overridden, "").
+    Q_PROPERTY(QString activatorAutomation READ activatorAutomation NOTIFY mixerChanged)
     Q_PROPERTY(bool solo READ solo NOTIFY changed)
     Q_PROPERTY(bool armed READ armed NOTIFY changed)
     Q_PROPERTY(bool selected READ selected NOTIFY selectedChanged)
@@ -125,6 +128,11 @@ class TrackHeaderItem : public SgCanvas {
 public:
     static constexpr int kResizeGrab = 4;
     static constexpr int kNameRow = 22;
+    // The name row's buttons (fold, activator, solo, arm) and name: kNameButton
+    // high, kNamePad below its top, so a folded track fits them evenly.
+    static constexpr int kNamePad = 2;
+    static constexpr int kNameButton = 16;
+    static_assert(arrangement::kFoldedHeight == kNamePad + kNameButton + kNamePad + 1);  // (and the line below)
     static constexpr int kIndent = arrangement::kGroupIndent;  // per group a track is in: the group's colour band
     static constexpr int kStrip = 5;  // a track's own colour, at its left (a group's is its band)
     static constexpr int kFoldWidth = 14;
@@ -167,6 +175,7 @@ public:
     QString volumeAutomation() const { return volumeAutomation_; }
     double pan() const { return pan_; }
     QString panAutomation() const { return panAutomation_; }
+    QString activatorAutomation() const { return activatorAutomation_; }
     QVariantList sends() const { return sends_; }
     QVariantList choosers() const { return choosers_; }
     int mainHeight() const { return row_.mainHeight; }
@@ -220,11 +229,13 @@ public:
     arrangement::MenuEntries inputMenu();
     arrangement::MenuEntries monitorMenu();
     arrangement::MenuEntries sendMenu(const QString& returnId);
+    arrangement::MenuEntries activatorMenu();
     arrangement::MenuEntries deviceMenu(int lane);
     arrangement::MenuEntries paramMenu(int lane);
     Q_INVOKABLE QVariantList inputMenuEntries() { return show(inputMenu()); }
     Q_INVOKABLE QVariantList monitorMenuEntries() { return show(monitorMenu()); }
     Q_INVOKABLE QVariantList sendMenuEntries(const QString& returnId) { return show(sendMenu(returnId)); }
+    Q_INVOKABLE QVariantList activatorMenuEntries() { return show(activatorMenu()); }
     Q_INVOKABLE QVariantList deviceMenuEntries(int lane) { return show(deviceMenu(lane)); }
     Q_INVOKABLE QVariantList paramMenuEntries(int lane) { return show(paramMenu(lane)); }
     Q_INVOKABLE void triggerMenu(int id);
@@ -301,6 +312,8 @@ private:
     double pan_ = 0.0;
     QString volumeAutomation_;
     QString panAutomation_;
+    QString activatorAutomation_;
+    bool mute_ = false;  // as heard (mute())
     QVariantList sends_;
     QVariantList choosers_;
     bool sendsAutomated_ = false;

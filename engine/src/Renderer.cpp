@@ -59,8 +59,12 @@ void Renderer::setScheduler(Scheduler* scheduler) {
     scratch_.resize(static_cast<size_t>(scheduler ? scheduler->threads() : 1));
     for (WorkerScratch& scratch : scratch_) {
         for (auto* buffer : {&scratch.warpLeft, &scratch.warpRight, &scratch.autoGain, &scratch.autoPanLeft,
-                             &scratch.autoPanRight, &scratch.audible, &scratch.edgeGain}) {
+                             &scratch.autoPanRight, &scratch.audible, &scratch.edgeGain, &scratch.activator}) {
             buffer->assign(kMaxBlock, 0.f);
+        }
+        scratch.switchStates.assign(kMaxBlock + kMaxSwitchFade, 0.f);
+        for (WorkerScratch::Switch& device : scratch.switches) {
+            for (auto* buffer : {&device.gain, &device.dryLeft, &device.dryRight}) buffer->assign(kMaxBlock, 0.f);
         }
         for (WorkerScratch::Rack& rack : scratch.racks) {
             for (auto* buffer : {&rack.sumLeft, &rack.sumRight, &rack.chainLeft, &rack.chainRight}) {
@@ -218,6 +222,7 @@ void Renderer::renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags fl
     // 1. Split the chunk into contiguous timeline segments (loop wrap-around).
     numSegments_ = 0;
     numTicks_ = 0;
+    chunkFrom_ = wasPlaying_ ? expectedPosition_ : -1;
     if (playing_) {
         int done = 0;
         if (countIn_ > 0) {  // clicks only: the playhead waits
@@ -388,8 +393,8 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
         preFaderSend = preFaderSend || edge.kind != EdgeRender::Kind::Sidechain;
     }
     float* audible = preFaderSend ? scratch.audible.data() : nullptr;
-    applyFader(snap, *track.params, track.volume, track.pan, buffers.audible, left, right, frames, chunkFlags_.live,
-               scratch, audible);
+    applyFader(snap, *track.params, track.volume, track.pan, &track.on, buffers.audible, left, right, frames,
+               chunkFlags_.live, scratch, audible);
     // The edges that need a signal of their own: a pre-fader send is muted with
     // the track (a sidechain isn't: it isn't heard); a post-fader edge delayed
     // for its destination alone is a copy. Then each is delayed to line up where it goes.
@@ -429,7 +434,7 @@ void Renderer::processStrip(const RenderSnapshot& snap, const StripRender& strip
                             ProcessEvent* events, int numEvents, float* left, float* right, int frames, bool audible,
                             ChunkFlags flags, WorkerScratch& scratch, float* audibleOut) noexcept {
     processInserts(snap, strip, context, events, numEvents, left, right, frames, false, scratch);
-    applyFader(snap, *strip.params, strip.volume, strip.pan, audible, left, right, frames, flags.live, scratch,
+    applyFader(snap, *strip.params, strip.volume, strip.pan, &strip.on, audible, left, right, frames, flags.live, scratch,
                audibleOut);
 }
 
@@ -529,7 +534,9 @@ void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
             const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
             return edge.state->live && carries(edge);
         });
-        track.buffers->audible = !track.params->mute.load(std::memory_order_relaxed) && heard;
+        // (An automated switch stands in for its mute: applyFader.)
+        const bool muted = track.on.empty() && track.params->mute.load(std::memory_order_relaxed);
+        track.buffers->audible = !muted && heard;
     }
 }
 
@@ -874,15 +881,28 @@ bool Renderer::takeResets(const StripRender& chain) noexcept {
         if (!insert.isEnabled()) continue;
         any = true;
         if (!insert.takeResetRequest()) continue;
-        insert.reset();
-        // A rack's devices reset as they run next (and so, in turn, do those of racks in it).
-        if (const RackRender* rack = i < chain.racks.size() ? chain.racks[i].get() : nullptr) {
-            for (const ChainRender& inner : rack->chains) {
-                for (const auto& device : inner.inserts) device->requestReset();
-            }
-        }
+        resetInsert(insert, i < chain.racks.size() ? chain.racks[i].get() : nullptr);
     }
     return any;
+}
+
+void Renderer::resetInsert(Processor& insert, const RackRender* rack) noexcept {
+    insert.reset();
+    // A rack's devices reset as they run next (and so, in turn, do those of racks in it).
+    if (!rack) return;
+    for (const ChainRender& inner : rack->chains) {
+        for (const auto& device : inner.inserts) device->requestReset();
+    }
+}
+
+void Renderer::tapSkippedRack(const RenderSnapshot& snap, const RackRender& rack, const float* left,
+                              const float* right, int frames) noexcept {
+    for (const ChainRender& chain : rack.chains) {
+        for (const int e : chain.deviceTaps) tapInto(snap, e, left, right, frames);
+        for (const auto& inner : chain.racks) {
+            if (inner) tapSkippedRack(snap, *inner, left, right, frames);
+        }
+    }
 }
 
 void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& strip, ProcessContext& context,
@@ -915,57 +935,184 @@ void Renderer::processInserts(const RenderSnapshot& snap, const StripRender& str
         }
         slices.slice[static_cast<size_t>(s)] = {offset, length, position, moving, first, next};
     }
-    processChain(snap, strip, context, slices, events, left, right, frames, monitored, scratch);
+    processChain(snap, strip, context, slices, events, left, right, frames, monitored, 0, scratch);
 }
 
 void Renderer::processChain(const RenderSnapshot& snap, const StripRender& chain, ProcessContext& context,
                             const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
-                            bool monitored, WorkerScratch& scratch) noexcept {
+                            bool monitored, int depth, WorkerScratch& scratch) noexcept {
     // Each device over the whole chunk, then the next: a device sees the same
     // calls as if they went stretch by stretch through the chain, and a rack can
     // run its chains over the chunk.
-    const double samplesPerBeat = snap.samplesPerBeat();
     size_t tap = 0;  // chain.deviceTaps, by device
     for (; tap < chain.deviceTaps.size(); ++tap) {  // those before the first device
         const int e = chain.deviceTaps[tap];
         if (snap.edges[static_cast<size_t>(e)].tapDevice >= 0) break;
         tapInto(snap, e, left, right, frames);
     }
+    size_t nextSwitch = 0;  // chain.switches, by device
     for (size_t i = 0; i < chain.inserts.size(); ++i) {
         Processor& insert = *chain.inserts[i];
         const RackRender* rack = i < chain.racks.size() ? chain.racks[i].get() : nullptr;
-        if (insert.isEnabled() && rack) {
-            processRack(snap, *rack, context, slices, events, left, right, frames, monitored, scratch);
-        } else if (insert.isEnabled()) {
-            const int e = i < chain.sidechains.size() ? chain.sidechains[i] : -1;
-            insert.setSidechainConnected(e >= 0);
-            const EdgeRender* edge = e >= 0 ? &snap.edges[static_cast<size_t>(e)] : nullptr;
-            DelayLine* wait = edge ? deviceDelayLine(*edge, e) : nullptr;
-            const float* keyL = nullptr;
-            const float* keyR = nullptr;
-            if (edge && edge->state->live) edgeSignal(snap, *edge, keyL, keyR);  // (solo may leave it out)
-            for (int s = 0; s < slices.count; ++s) {
-                const Slice& slice = slices.slice[static_cast<size_t>(s)];
-                float* channels[2] = {left + slice.offset, right + slice.offset};
-                // The strip's signal waits for a sidechain that comes later than it (but
-                // not while monitored: a player hears only the devices' own latency).
-                if (wait) wait->process(channels[0], channels[1], slice.length, monitored ? 0 : edge->deviceDelay);
-                if (keyL) insert.setSidechain(keyL + slice.offset, keyR + slice.offset);
-                context.samplePos = slice.position;
-                context.beatPos = slice.position / samplesPerBeat;
-                context.inEvents = {events + slice.firstEvent, static_cast<size_t>(slice.endEvent - slice.firstEvent)};
-                for (const AutomationRender& lane : chain.automation) {
-                    if (lane.insert == static_cast<int>(i)) automateInsert(lane, slice.position, slice.length, slice.moving);
+        while (nextSwitch < chain.switches.size() && chain.switches[nextSwitch].lane.insert < static_cast<int>(i)) {
+            ++nextSwitch;
+        }
+        const SwitchRender* switched =
+            nextSwitch < chain.switches.size() && chain.switches[nextSwitch].lane.insert == static_cast<int>(i)
+                ? &chain.switches[nextSwitch]
+                : nullptr;
+        if (insert.isEnabled()) {
+            // The strip's signal waits for a sidechain that comes later than it (but
+            // not while monitored: a player hears only the devices' own latency).
+            const int e = !rack && i < chain.sidechains.size() ? chain.sidechains[i] : -1;
+            if (e >= 0) {
+                const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+                if (DelayLine* wait = deviceDelayLine(edge, e)) {
+                    wait->process(left, right, frames, monitored ? 0 : edge.deviceDelay);
                 }
-                insert.process(context, channels, 2, slice.length);
-                insert.clearAutomation();
-                insert.setSidechain(nullptr, nullptr);
+            }
+            // Switched by its automation: its gain over the chunk, and its input
+            // as late as it would come out of it.
+            WorkerScratch::Switch& own = scratch.switches[static_cast<size_t>(std::clamp(depth, 0, kMaxRackDepth))];
+            float* gain = own.gain.data();
+            float* dryL = own.dryLeft.data();
+            float* dryR = own.dryRight.data();
+            bool on = true, full = true;
+            if (switched) {
+                fillSwitch(snap, switched->lane, frames, gain, scratch);
+                std::copy_n(left, frames, dryL);
+                std::copy_n(right, frames, dryR);
+                if (DelayLine* line = switchDelayLine(*switched)) line->process(dryL, dryR, frames, switched->latency);
+                on = std::any_of(gain, gain + frames, [](float g) { return g > 0.f; });
+                full = std::all_of(gain, gain + frames, [](float g) { return g >= 1.f; });
+                insert.setSwitchFadeIn(0);
+            } else if (insert.switchedOff() || insert.switchFadeIn() > 0) {
+                // Its lane gone while it was off (overridden, deleted): it fades in
+                // from its input over a switch's fade, as its lane would have.
+                const int fade = switchFade(snap.sampleRate);
+                if (insert.switchedOff()) insert.setSwitchFadeIn(fade);
+                const int done = fade - insert.switchFadeIn();
+                for (int s = 0; s < frames; ++s) {
+                    gain[s] = std::min(1.f, static_cast<float>(done + s + 1) / static_cast<float>(fade));
+                }
+                std::copy_n(left, frames, dryL);
+                std::copy_n(right, frames, dryR);
+                full = false;
+                insert.setSwitchFadeIn(std::max(0, insert.switchFadeIn() - frames));
+            }
+            // Back on (by its lane, or its lane gone): from silence, as if just switched on.
+            if (on && insert.switchedOff()) resetInsert(insert, rack);
+            insert.setSwitchedOff(!on);
+            if (on && rack) {
+                processRack(snap, *rack, context, slices, events, left, right, frames, monitored, scratch);
+            } else if (on) {
+                processDevice(snap, chain, i, context, slices, events, left, right);
+            }
+            if (!on) {
+                std::copy_n(dryL, frames, left);
+                std::copy_n(dryR, frames, right);
+                // The taps after the devices in it take what it passes on.
+                if (rack) tapSkippedRack(snap, *rack, left, right, frames);
+            } else if (!full) {
+                for (int s = 0; s < frames; ++s) {
+                    left[s] = dryL[s] + gain[s] * (left[s] - dryL[s]);
+                    right[s] = dryR[s] + gain[s] * (right[s] - dryR[s]);
+                }
             }
         }
         for (; tap < chain.deviceTaps.size(); ++tap) {
             const int e = chain.deviceTaps[tap];
             if (snap.edges[static_cast<size_t>(e)].tapDevice > static_cast<int>(i)) break;
             tapInto(snap, e, left, right, frames);
+        }
+    }
+}
+
+void Renderer::processDevice(const RenderSnapshot& snap, const StripRender& chain, size_t i, ProcessContext& context,
+                             const Slices& slices, ProcessEvent* events, float* left, float* right) noexcept {
+    Processor& insert = *chain.inserts[i];
+    const double samplesPerBeat = snap.samplesPerBeat();
+    const int e = i < chain.sidechains.size() ? chain.sidechains[i] : -1;
+    insert.setSidechainConnected(e >= 0);
+    const float* keyL = nullptr;
+    const float* keyR = nullptr;
+    if (e >= 0) {
+        const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+        if (edge.state->live) edgeSignal(snap, edge, keyL, keyR);  // (solo may leave it out)
+    }
+    for (int s = 0; s < slices.count; ++s) {
+        const Slice& slice = slices.slice[static_cast<size_t>(s)];
+        float* channels[2] = {left + slice.offset, right + slice.offset};
+        if (keyL) insert.setSidechain(keyL + slice.offset, keyR + slice.offset);
+        context.samplePos = slice.position;
+        context.beatPos = slice.position / samplesPerBeat;
+        context.inEvents = {events + slice.firstEvent, static_cast<size_t>(slice.endEvent - slice.firstEvent)};
+        for (const AutomationRender& lane : chain.automation) {
+            if (lane.insert == static_cast<int>(i)) automateInsert(lane, slice.position, slice.length, slice.moving);
+        }
+        insert.process(context, channels, 2, slice.length);
+        insert.clearAutomation();
+        insert.setSidechain(nullptr, nullptr);
+    }
+}
+
+DelayLine* Renderer::switchDelayLine(const SwitchRender& device) const noexcept {
+    if (!delayOverride_) return device.delay.get();
+    if (!switchDelayOverride_ || device.delayIndex < 0 ||
+        static_cast<size_t>(device.delayIndex) >= switchDelayOverride_->size()) {
+        return nullptr;
+    }
+    return (*switchDelayOverride_)[static_cast<size_t>(device.delayIndex)].get();
+}
+
+int Renderer::switchFade(double sampleRate) noexcept {
+    return std::clamp(static_cast<int>(std::lround(sampleRate * kSwitchFade)), 1, kMaxSwitchFade);
+}
+
+void Renderer::fillSwitch(const RenderSnapshot& snap, const AutomationRender& lane, int frames, float* out,
+                          WorkerScratch& scratch) const noexcept {
+    // The switch (0 or 1) at each of the n samples of the timeline from t, as
+    // late as the lane is (before the timeline's start: as at its start).
+    const auto states = [&lane](int64_t t, int n, float* to) {
+        t -= lane.latency;
+        const int before = t < 0 ? static_cast<int>(std::min<int64_t>(n, -t)) : 0;
+        if (before > 0) std::fill_n(to, before, automationValue(lane.nodes, 0));
+        if (n > before) fillAutomation(lane.nodes, std::max<int64_t>(t, 0), n - before, to + before);
+        for (int i = 0; i < n; ++i) to[i] = automationSwitchOn(to[i]) ? 1.f : 0.f;
+    };
+    if (!playing_ || numSegments_ == 0) {  // stopped: as at the playhead
+        float state = 0.f;
+        states(position_, 1, &state);
+        std::fill_n(out, frames, state);
+        return;
+    }
+    if (segments_[0].offset > 0) {  // the end of a count-in: still at the first segment's start
+        float state = 0.f;
+        states(segments_[0].position, 1, &state);
+        std::fill_n(out, segments_[0].offset, state);
+    }
+    // Over each stretch of the timeline, each sample's gain is the share of the
+    // fade's samples played up to it that the switch was on (a window sliding
+    // along). After a jump (a loop's wrap, a locate) those come from where the
+    // playhead was, so a switch across it fades too.
+    const int fade = switchFade(snap.sampleRate);
+    float* on = scratch.switchStates.data();
+    for (int s = 0; s < numSegments_; ++s) {
+        const Segment& segment = segments_[s];
+        int64_t before = segment.position;  // the timeline played just before it, up to here
+        if (segment.jump) {
+            const int64_t previous = s > 0 ? segments_[s - 1].position + segments_[s - 1].length : chunkFrom_;
+            if (previous >= 0) before = previous;
+        }
+        states(before - (fade - 1), fade - 1, on);
+        states(segment.position, segment.length, on + fade - 1);
+        int count = 0;
+        for (int i = 0; i < fade - 1; ++i) count += on[i] > 0.f ? 1 : 0;
+        float* to = out + segment.offset;
+        for (int i = 0; i < segment.length; ++i) {
+            count += on[i + fade - 1] > 0.f ? 1 : 0;
+            to[i] = static_cast<float>(count) / static_cast<float>(fade);
+            count -= on[i] > 0.f ? 1 : 0;
         }
     }
 }
@@ -990,13 +1137,14 @@ void Renderer::processRack(const RenderSnapshot& snap, const RackRender& rack, P
         // (Never as monitored: a chain skipping its sidechain waits would play early
         // against the chains lined up to it by chain.compensation.)
         if (takeResets(chain)) {
-            processChain(snap, chain, context, slices, events, chainL, chainR, frames, false, scratch);
+            processChain(snap, chain, context, slices, events, chainL, chainR, frames, false, rack.depth + 1, scratch);
         } else {  // nothing changes the signal along it
             for (const int e : chain.deviceTaps) tapInto(snap, e, chainL, chainR, frames);
         }
         const bool audible = !chain.params->mute.load(std::memory_order_relaxed) &&
                              (!anySolo || chain.params->solo.load(std::memory_order_relaxed));
-        applyFader(snap, *chain.params, chain.volume, chain.pan, audible, chainL, chainR, frames, chunkFlags_.live,
+        applyFader(snap, *chain.params, chain.volume, chain.pan, nullptr, audible, chainL, chainR, frames,
+                   chunkFlags_.live,
                    scratch, nullptr);
         // Lined up with the slowest chain (not skipped while monitored: chains
         // out of line with each other would comb-filter).
@@ -1050,11 +1198,17 @@ void Renderer::fillLane(const AutomationRender& lane, int frames, float* out) co
 }
 
 void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const AutomationRender& volume,
-                          const AutomationRender& pan, bool audible, float* left, float* right, int frames,
-                          bool live, WorkerScratch& scratch, float* audibleOut) noexcept {
+                          const AutomationRender& pan, const AutomationRender* activator, bool audible, float* left,
+                          float* right, int frames, bool live, WorkerScratch& scratch, float* audibleOut) noexcept {
     const float* autoGain = nullptr;
     const float* autoLeft = nullptr;
     const float* autoRight = nullptr;
+    const float* autoOn = nullptr;  // the switch's gain (it is heard where it is on)
+    if (activator && !activator->empty()) {
+        float* gains = scratch.activator.data();
+        fillSwitch(snap, *activator, frames, gains, scratch);
+        autoOn = gains;
+    }
     if (!volume.empty()) {
         float* gains = scratch.autoGain.data();
         fillLane(volume, frames, gains);
@@ -1077,9 +1231,11 @@ void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const
     if (!live) {
         // Offline renders hold the engine lock, so parameters cannot change
         // mid-render; apply them directly and leave the live ramps alone.
-        if (audibleOut) std::fill_n(audibleOut, frames, on);
+        if (audibleOut) {
+            for (int i = 0; i < frames; ++i) audibleOut[i] = on * (autoOn ? autoOn[i] : 1.f);
+        }
         for (int i = 0; i < frames; ++i) {
-            const float g = on * (autoGain ? autoGain[i] : gain);
+            const float g = on * (autoOn ? autoOn[i] : 1.f) * (autoGain ? autoGain[i] : gain);
             left[i] *= g * (autoLeft ? autoLeft[i] : panLeft);
             right[i] *= g * (autoRight ? autoRight[i] : panRight);
         }
@@ -1087,6 +1243,7 @@ void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const
     }
     // Smoothing state lives with the track so it survives snapshot swaps.
     if (params.smoothingSampleRate != snap.sampleRate) {
+        params.switchGain = 1.f;
         for (SmoothedValue* smoothed : {&params.audible, &params.volume, &params.panLeft, &params.panRight}) {
             smoothed->reset(snap.sampleRate, 0.02);
         }
@@ -1096,6 +1253,12 @@ void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const
         params.panRight.snapTo(panRight);
         params.smoothingSampleRate = snap.sampleRate;
     }
+    // Its switch's automation gone (overridden, deleted): its own mute takes over
+    // from where the switch left it.
+    if (!autoOn && params.switchGain != 1.f) {
+        params.audible.snapTo(params.audible.current() * params.switchGain);
+        params.switchGain = 1.f;
+    }
     params.audible.setTarget(on);
     params.volume.setTarget(gain);
     params.panLeft.setTarget(panLeft);
@@ -1103,7 +1266,7 @@ void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const
     float peakL = 0.f, peakR = 0.f;
     const bool ramping = params.audible.isSmoothing() || params.volume.isSmoothing() ||
                          params.panLeft.isSmoothing() || params.panRight.isSmoothing();
-    if (!ramping && !autoGain && !autoLeft) {
+    if (!ramping && !autoGain && !autoLeft && !autoOn) {
         // Settled and unautomated (most strips, most of the time): the gains are
         // constant for the whole chunk, so the ramps' next() would change nothing.
         const float a = params.audible.current();
@@ -1127,7 +1290,8 @@ void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const
         return;
     }
     for (int i = 0; i < frames; ++i) {
-        const float a = params.audible.next();
+        float a = params.audible.next();
+        if (autoOn) a *= autoOn[i];
         if (audibleOut) audibleOut[i] = a;
         float g = params.volume.next();
         float l = params.panLeft.next();
@@ -1144,6 +1308,7 @@ void Renderer::applyFader(const RenderSnapshot& snap, TrackParams& params, const
     }
     // Where automation stops (or is overridden), the manual value takes over from its last value.
     if (autoGain && frames > 0) params.volume.snapTo(autoGain[frames - 1]);
+    if (autoOn && frames > 0) params.switchGain = autoOn[frames - 1];
     if (autoLeft && frames > 0) {
         params.panLeft.snapTo(autoLeft[frames - 1]);
         params.panRight.snapTo(autoRight[frames - 1]);

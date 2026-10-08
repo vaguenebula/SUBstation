@@ -531,7 +531,7 @@ private:
     void onTrackRemoved(const QString& trackId);
     void onTrackChanged(const QString& trackId);
     void overrideChangedSends(const QString& trackId);
-    void overrideChangedMixer(const QString& owner, double volumeDb, double pan);
+    void overrideChangedMixer(const QString& owner, double volumeDb, double pan, bool mute);
     void pushMixer(const QString& trackId);
     void pushOutputs();
     std::vector<std::pair<quint32, std::pair<double, bool>>> wantedSends(const Track& track) const;

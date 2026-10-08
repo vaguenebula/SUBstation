@@ -143,11 +143,12 @@ void Engine::prepareOfflineLocked(const RenderSnapshot& snap, Renderer& offline,
         lines.deviceDelays.push_back(line(edge.deviceDelay));
     }
     for (const int samples : snap.chainDelays) lines.chainDelays.push_back(line(samples));
+    for (const int samples : snap.switchDelays) lines.switchDelays.push_back(line(samples));
     offline.setScheduler(scheduler_.get());
     offline.setCostOrdering(renderer_.costOrdering());
     offline.prepare(sampleRate_);
     offline.setWarpVoices(&lines.voices);
-    offline.setDelayLines(&lines.delays, &lines.deviceDelays, &lines.chainDelays);
+    offline.setDelayLines(&lines.delays, &lines.deviceDelays, &lines.chainDelays, &lines.switchDelays);
     offline.syncTempo(snap);
     offline.setPosition(std::llround(std::max(0.0, startBeat) * snap.samplesPerBeat()));
     offline.setPlaying(true);

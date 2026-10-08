@@ -7,7 +7,8 @@ sidechains, delay compensation, and freezing tracks to save CPU. The controls ar
 
 ## Solo and mute
 
-- A track's **activator** (its number) mutes it when switched off.
+- A track's **activator** (its number) mutes it when switched off. It can be automated
+  (*Track Activator*: see [automation.md](automation.md#switching-off-and-on)).
 - Soloing a track unsoloes the others, and unsoloing one unsoloes every track.
 - **Ctrl-click** a solo button to solo (or unsolo) just that track, leaving the others
   as they are.

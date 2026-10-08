@@ -819,9 +819,11 @@ private Q_SLOTS:
             }
             return out;
         };
-        QCOMPARE(names(track), (QStringList{QStringLiteral("Track Volume"), QStringLiteral("Track Pan"), QStringLiteral("Send A")}));
+        QCOMPARE(names(track), (QStringList{QStringLiteral("Track Volume"), QStringLiteral("Track Pan"),
+                                            QStringLiteral("Track Activator"), QStringLiteral("Send A")}));
         QCOMPARE(bridge().paramSpec(track, key)->name, QStringLiteral("Send A"));
-        QCOMPARE(names(ret), (QStringList{QStringLiteral("Track Volume"), QStringLiteral("Track Pan")}));  // not to itself
+        QCOMPARE(names(ret), (QStringList{QStringLiteral("Track Volume"), QStringLiteral("Track Pan"),
+                                          QStringLiteral("Track Activator")}));  // not to itself
         editor().showAutomation(track, key);
         editor().addAutomationPoint(track, key, 0.0, 0.5);
         h_->settle();

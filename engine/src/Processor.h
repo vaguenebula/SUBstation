@@ -221,6 +221,15 @@ public:
     void requestReset() noexcept { resetRequested_.store(true, std::memory_order_release); }
     bool takeResetRequest() noexcept { return resetRequested_.exchange(false, std::memory_order_acquire); }
 
+    // Rendering thread: its automation switched it off for a whole chunk, so
+    // the renderer didn't process it (it resets it as it comes back on).
+    bool switchedOff() const noexcept { return switchedOff_; }
+    void setSwitchedOff(bool off) noexcept { switchedOff_ = off; }
+    // Rendering thread: samples left of its fade back in from its input, after
+    // its switch's lane went while it was off (0: none).
+    int switchFadeIn() const noexcept { return switchFadeIn_; }
+    void setSwitchFadeIn(int samples) noexcept { switchFadeIn_ = samples; }
+
     // --- Automation (rendering thread) -------------------------------------
     // Before each process() call the renderer hands the processor what its
     // automation does during that call: parameter `index` goes to the normalized
@@ -277,6 +286,8 @@ private:
     bool sidechainConnected_ = false;
     std::atomic<bool> enabled_{true};
     std::atomic<bool> resetRequested_{false};
+    bool switchedOff_ = false;
+    int switchFadeIn_ = 0;
     std::vector<ParamAutomation> automation_ = std::vector<ParamAutomation>(kMaxAutomation);
     size_t numAutomation_ = 0;
 };

@@ -28,6 +28,7 @@ void EngineBridge::onReset() {
     d.chainMixer.clear();
     d.chainMeters.clear();
     d.enabled.clear();
+    d.ownEnabled.clear();
     d.pluginIds.clear();
     d.pluginStates.clear();
     d.paramIds.clear();
@@ -37,6 +38,7 @@ void EngineBridge::onReset() {
     d.macroMoved.clear();
     d.overridden.clear();
     d.mixer.clear();
+    d.mutes.clear();
     d.inputs.clear();
     d.outputs.clear();
     d.sends.clear();
@@ -132,6 +134,7 @@ void EngineBridge::onTrackRemoved(const QString& trackId) {
     d.automating.remove(trackId);
     d.macroMoved.remove(trackId);
     d.mixer.remove(trackId);
+    d.mutes.remove(trackId);
     d.inputs.remove(trackId);
     d.outputs.remove(trackId);
     d.sends.remove(trackId);
@@ -161,7 +164,7 @@ void EngineBridge::onTrackChanged(const QString& trackId) {
     const Track& track = project_->track(trackId);
     const double volumeDb = track.volumeDb;
     const double pan = track.pan;
-    overrideChangedMixer(trackId, volumeDb, pan);
+    overrideChangedMixer(trackId, volumeDb, pan, track.mute);
     overrideChangedSends(trackId);
     pushMixer(trackId);
     pushInput(trackId);
@@ -187,12 +190,13 @@ void EngineBridge::overrideChangedSends(const QString& trackId) {
 }
 
 // A mixer control changed by hand while automated: its automation stops.
-void EngineBridge::overrideChangedMixer(const QString& owner, double volumeDb, double pan) {
+void EngineBridge::overrideChangedMixer(const QString& owner, double volumeDb, double pan, bool mute) {
     const auto it = d_->mixer.constFind(owner);
     if (it == d_->mixer.constEnd()) return;
     const std::pair<double, double> old = *it;
     if (volumeDb != old.first) overrideAutomation(owner, automation::kMixerVolume);
     if (pan != old.second) overrideAutomation(owner, automation::kMixerPan);
+    if (mute != d_->mutes.value(owner, mute)) overrideAutomation(owner, automation::kMixerOn);
 }
 
 void EngineBridge::pushMixer(const QString& trackId) {
@@ -206,6 +210,7 @@ void EngineBridge::pushMixer(const QString& trackId) {
         engine_.setTrackSolo(*engineId, track.solo);
     }
     d_->mixer.insert(trackId, {track.volumeDb, track.pan});
+    d_->mutes.insert(trackId, track.mute);
 }
 
 // Every track's output into its group's engine track (or the master). Changed

@@ -2,10 +2,11 @@
 
 Automation works as in Ableton's arrangement, for every device parameter (built-in
 devices and plug-ins alike), for each track's and the master's volume and pan, for send
-levels, for rack chains' volume and pan, and for racks' macros (which move what is
-mapped to them along their automation: see [devices.md](devices.md#macros)). This page
-covers showing lanes, editing envelopes, Lock Envelopes, and overriding automation by
-hand.
+levels, for rack chains' volume and pan, for racks' macros (which move what is
+mapped to them along their automation: see [devices.md](devices.md#macros)), and for
+switching tracks, groups, returns, devices and racks off and on (see
+[Switching off and on](#switching-off-and-on)). This page covers showing lanes, editing
+envelopes, Lock Envelopes, and overriding automation by hand.
 
 ## Showing automation
 
@@ -21,8 +22,11 @@ hand.
   *Hide Automation* or *Show Automation in New Lane*.
 - Clicking a parameter (a knob, list or name in the device view, or a control in a
   plug-in's own editor) or changing one by hand (also a track's volume or pan, or the
-  master's) shows its track's automation with that parameter.
-- Right-click a send knob, a rack chain or a macro to show its automation.
+  master's, and switching a track's activator or a device's on/off switch) shows its
+  track's automation with that parameter.
+- Right-click a send knob, a rack chain or a macro to show its automation; right-click
+  a track's activator or a device's on/off switch for its (*Show Automation*, *Delete
+  Automation*, *Re-Enable Automation*).
 - Folded tracks don't show their automation (see
   [arrangement.md](arrangement.md#folding)).
 
@@ -97,11 +101,31 @@ Selected Breakpoints*), *Delete Envelope*, *Re-Enable Automation* (while overrid
   pan as *Chain Volume* and *Chain Pan* under the rack in the device chooser (see
   [devices.md](devices.md#automation-in-racks)).
 
+## Switching off and on
+
+Turning a track off (muting it) or a device off can be automated, as Ableton's *Track
+Activator* and *Device On*:
+
+- **Track Activator**, under *Mixer* in a lane's chooser, switches a track, a group or
+  a return off and on (the master has none). Off, it is silent, as if muted: its sends
+  too, before its fader as well. While its automation plays, the activator follows it
+  and the track's own mute doesn't count.
+- **Device On**, the first parameter of every device in a lane's chooser (built-in
+  devices, plug-ins and racks alike), switches the device off and on. Off, it is
+  passed by: what goes into it comes out as it is, as late as the device would have
+  made it, so what comes after it stays in time. A rack switched off passes its input on
+  without its chains. Coming back on, a device starts again from silence (no old
+  reverb tail or held note).
+- Their lanes move in steps: up is on, down is off. The switch fades over about 5 ms so
+  it doesn't click.
+- While its automation plays the button follows it (a red dot in its corner); clicking
+  it overrides the automation (a grey dot), as changing any automated parameter does.
+
 ## Overriding and re-enabling
 
-Changing an automated parameter by hand **overrides** its automation, as in Ableton:
-its envelope turns grey and the parameter stays where you put it until **Re-Enable
-Automation**:
+Changing an automated parameter by hand (or switching an automated track activator or
+device on/off switch) **overrides** its automation, as in Ableton: its envelope turns
+grey and the parameter stays where you put it until **Re-Enable Automation**:
 
 - the lit button next to Record in the transport bar;
 - *Edit › Re-Enable Automation*;
@@ -119,8 +143,8 @@ with the project):
   selection) moves the automation under it, replacing what was where it lands; copying
   clips (Ctrl-drag, Ctrl+D) copies it. Only envelopes with breakpoints under the clips
   move.
-- Moved to another track, a clip takes its track's volume and pan automation along; a
-  device's automation stays on its own track.
+- Moved to another track, a clip takes its track's volume, pan and activator automation
+  along; a device's automation stays on its own track.
 - Locked, automation stays where it is.
 
 ## Deleting devices

@@ -17,6 +17,10 @@ TrackHeaderItem {
     property ArrangementMenu menu: null
 
     readonly property int nameRow: 22
+    // The name row's buttons: as high as a folded track lets them be, 2 px from
+    // its top and its bottom line (TrackHeaderItem::kNamePad, kNameButton).
+    readonly property int buttonTop: nameTop + 2
+    readonly property int buttonHeight: 16
     readonly property int meterWidth: 8
     readonly property int armWidth: 20
     readonly property int innerRight: width - meterWidth - 10
@@ -41,9 +45,9 @@ TrackHeaderItem {
         id: arm
         objectName: "arm"
         x: header.innerRight - 18
-        y: header.nameTop + 4
+        y: header.buttonTop
         width: 18
-        height: 17
+        height: header.buttonHeight
         visible: header.records
         role: "arm"
         text: "●"
@@ -55,9 +59,9 @@ TrackHeaderItem {
         id: solo
         objectName: "solo"
         x: header.innerRight - header.armWidth - 22
-        y: header.nameTop + 4
+        y: header.buttonTop
         width: 22
-        height: 17
+        height: header.buttonHeight
         role: "solo"
         text: "S"
         tooltip: header.soloToolTip
@@ -68,14 +72,21 @@ TrackHeaderItem {
         id: activator
         objectName: "activator"
         x: header.innerRight - header.armWidth - 22 - 30
-        y: header.nameTop + 4
+        y: header.buttonTop
         width: 28
-        height: 17
+        height: header.buttonHeight
         role: "activator"
         text: String(header.number)
         tooltip: qsTr("Track Activator (unmute)")
         checked: !header.mute
+        automation: header.activatorAutomation
         onToggled: header.activatorToggled(checked)
+
+        MouseArea {  // its automation's menu
+            anchors.fill: parent
+            acceptedButtons: Qt.RightButton
+            onPressed: mouse => header.menu.show(header.activatorMenuEntries(), header, activator, mouse.x, mouse.y)
+        }
     }
 
     ValueBox {
@@ -187,9 +198,9 @@ TrackHeaderItem {
         id: rename
         objectName: "rename"
         x: header.nameLeft - 2
-        y: header.nameTop + 2
+        y: header.buttonTop - 1
         width: activator.x - x - 4
-        height: header.nameRow - 2
+        height: header.buttonHeight + 2
         visible: header.renaming
         padding: 2
         font: Theme.uiFont(9)

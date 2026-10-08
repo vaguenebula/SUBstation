@@ -374,10 +374,14 @@ QML reads the transport and the device through properties: `position`, `playing`
   processor and `chain:<engine chain id>:volume|pan` for a chain fader (`engineLane`). Targets whose device isn't
   loaded are left out. It emits `automationStateChanged(owner)`.
 - A target whose envelope stops playing (deleted, or overridden) goes back to the value the model holds for it
-  (`pushOwnValue`: the mixer is pushed again, a device parameter is set; sends and chain faders keep their own level
-  in the engine).
-- **Overrides**, as in Ableton: changing an automated target by hand (a track's volume or pan, a send level, a chain's
-  fader, a device parameter: the bridge sees the model's value change) calls `overrideAutomation(owner, key)`, which
+  (`pushOwnValue`: the mixer is pushed again, a device parameter is set, a device's on/off pushed again; sends and
+  chain faders keep their own level in the engine).
+- Switches: a track's activator plays as the lane `on` of its mixer (the engine then leaves its mute out); a device's
+  on/off as the lane `device:on` of its processor, and `pushEnabled` switches on in the engine every device whose
+  switch's automation plays (the lane switches it), whatever the model says (`pushAutomation` calls it).
+- **Overrides**, as in Ableton: changing an automated target by hand (a track's volume, pan or mute, a send level, a
+  chain's fader, a device parameter or its on/off: the bridge sees the model's value change, `mutes` and
+  `ownEnabled` keeping what it was) calls `overrideAutomation(owner, key)`, which
   stops sending that envelope. `reEnableAutomation(owner)` (no owner: everywhere) plays them again. `isAutomated`,
   `isOverridden` and `hasOverrides` drive the red dots, grey envelopes and the Re-Enable button (the session's
   `automationOverridden`). Overrides are bridge state: not saved, not undone, cleared on `reset`.

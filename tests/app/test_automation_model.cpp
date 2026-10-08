@@ -210,6 +210,17 @@ private Q_SLOTS:
         QVERIFY((autom::keyChainControl(fader) == autom::ChainControl{QStringLiteral("c1"), autom::kChainPan}));
         QCOMPARE(autom::keyDevice(fader), std::optional<QString>(QStringLiteral("rack")));
         QVERIFY(!autom::keyChain(QStringLiteral("device:rack:chain:c1:width")) && !autom::keyChain(key));
+        // Switches: a track's activator (a mixer key) and a device's on/off (a target of the device).
+        QVERIFY((autom::parseKey(autom::kMixerOn) == autom::Target{QStringLiteral("mixer"), QStringLiteral("on"), {}}));
+        QVERIFY(autom::isMixerKey(autom::kMixerOn) && autom::isSwitchKey(autom::kMixerOn));
+        const QString on = autom::deviceOnKey(QStringLiteral("rack"));
+        QCOMPARE(on, QStringLiteral("device:rack:device:on"));
+        QCOMPARE(autom::keyDevice(on), std::optional<QString>(QStringLiteral("rack")));
+        QVERIFY(autom::isSwitchKey(on) && !autom::isMixerKey(on) && !autom::keyChain(on));
+        QVERIFY(!autom::isSwitchKey(key) && !autom::isSwitchKey(autom::kMixerVolume) && !autom::isSwitchKey(fader));
+        // The engine plays them under the same names.
+        QCOMPARE(autom::kDeviceOn, QString::fromLatin1(sub::kDeviceOnLane));
+        QCOMPARE(autom::parseKey(autom::kMixerOn)->id, QString::fromLatin1(sub::kTrackOnLane));
     }
 
     // --- Parameters ---
@@ -231,11 +242,25 @@ private Q_SLOTS:
         QCOMPARE(pan.toNormalized(-1.0), 0.0);
         QCOMPARE(pan.fromNormalized(0.75), 0.5);
         QCOMPARE(pan.format(0.5), QStringLiteral("25R"));
+        // A track's activator, after its pan (the master has none): Off or On, on by default.
+        const ParamSpec& activator = specs[2];
+        QCOMPARE(activator.key, autom::kMixerOn);
+        QCOMPARE(activator.name, QStringLiteral("Track Activator"));
+        QVERIFY(activator.discrete() && activator.steps == 1 && activator.defaultValue == 1.0);
+        QCOMPARE(activator.formatNormalized(0.49), QStringLiteral("Off"));
+        QCOMPARE(activator.formatNormalized(0.5), QStringLiteral("On"));  // (where the engine switches it on)
+        QCOMPARE(activator.toNormalized(1.0), 1.0);
+        QCOMPARE(mixerSpecs(true).size(), size_t(2));
         const auto withSends = mixerSpecs(false, {{QStringLiteral("r1"), QStringLiteral("A")}});
-        QCOMPARE(withSends.size(), size_t(3));
-        QCOMPARE(withSends[2].key, autom::sendKey(QStringLiteral("r1")));
-        QCOMPARE(withSends[2].name, QStringLiteral("Send A"));
-        QCOMPARE(withSends[2].defaultValue, autom::kMinVolumeDb);
+        QCOMPARE(withSends.size(), size_t(4));
+        QCOMPARE(withSends[3].key, autom::sendKey(QStringLiteral("r1")));
+        QCOMPARE(withSends[3].name, QStringLiteral("Send A"));
+        QCOMPARE(withSends[3].defaultValue, autom::kMinVolumeDb);
+        const ParamSpec on = deviceOnSpec(QStringLiteral("d1"), QStringLiteral("EQ"));
+        QCOMPARE(on.key, autom::deviceOnKey(QStringLiteral("d1")));
+        QCOMPARE(on.name, QStringLiteral("Device On"));
+        QCOMPARE(on.group, QStringLiteral("EQ"));
+        QCOMPARE(on.labels, (QStringList{QStringLiteral("Off"), QStringLiteral("On")}));
         const auto faders = chainSpecs(QStringLiteral("rack"), {{QStringLiteral("c1"), QStringLiteral("Wet")}},
                                        QStringLiteral("Audio Effect Rack"));
         QCOMPARE(faders.size(), size_t(2));

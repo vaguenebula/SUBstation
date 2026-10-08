@@ -340,19 +340,29 @@ void EngineBridge::dropSidechain(quint32 processorId) {
     if (d_->sidechains.erase(processorId) > 0) engine_.clearProcessorSidechain(processorId);
 }
 
+// The devices switched on or off as the model has them; those whose switch's
+// automation plays are on (their lanes switch them). One switched by hand while
+// its switch is automated overrides that automation.
 void EngineBridge::pushEnabled(const QString& trackId) {
     std::vector<std::pair<QString, bool>> devices;
     for (const Device* device : iterDevices(project_->track(trackId).devices)) {
         devices.emplace_back(device->id, device->enabled);
     }
-    for (const auto& [deviceId, enabled] : devices) {
+    QStringList switched;  // by hand, while automated
+    for (const auto& [deviceId, own] : devices) {
+        const QString key = automation::deviceOnKey(deviceId);
+        const auto before = d_->ownEnabled.constFind(deviceId);
+        if (before != d_->ownEnabled.constEnd() && *before != own && isAutomated(trackId, key)) switched.append(key);
+        d_->ownEnabled.insert(deviceId, own);
         const auto processorId = engineDeviceId(trackId, deviceId);
         if (!processorId) continue;
+        const bool enabled = own || isAutomated(trackId, key);
         const auto told = d_->enabled.constFind(*processorId);
         if (told != d_->enabled.constEnd() && *told == enabled) continue;
         engine_.setProcessorEnabled(*processorId, enabled);
         d_->enabled.insert(*processorId, enabled);
     }
+    for (const QString& key : switched) overrideAutomation(trackId, key);
 }
 
 void EngineBridge::onChainChanged(const QString& trackId, const QString& chainId) {
@@ -488,6 +498,7 @@ void EngineBridge::forgetProcessor(const QString& deviceId, std::optional<quint3
     d.where.remove(deviceId);
     d.pluginErrors.remove(deviceId);
     d.editorsWanted.remove(deviceId);
+    d.ownEnabled.remove(deviceId);
     if (!processorId) return;
     const quint32 id = *processorId;
     d.hiddenEditors.erase(std::remove(d.hiddenEditors.begin(), d.hiddenEditors.end(), id), d.hiddenEditors.end());

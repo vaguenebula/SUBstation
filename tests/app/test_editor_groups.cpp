@@ -131,13 +131,16 @@ private Q_SLOTS:
         const QString added = f.editor.addMidiTrack(*point.index, "M", kDefaultInstrument, std::nullopt, point.parent);
         QCOMPARE(f.track(added).parent, std::optional<QString>(group));
         QCOMPARE(p.trackIndex(added), p.trackIndex(a) + 1);
+        QCOMPARE(f.track(added).color, f.track(group).color);  // a new track takes its group's colour
         point = f.editor.insertionPoint(group);
         const QString afterGroup = f.editor.addAudioTrack(*point.index, "After", point.parent);
         QVERIFY(!f.track(afterGroup).parent);
+        QVERIFY(f.track(afterGroup).color != f.track(group).color);  // (in none: a colour of its own)
         QCOMPARE(p.trackIndex(afterGroup), static_cast<int>(p.tracks().size()) - 1);
         // Between a group's tracks, a track can only be in that group.
         const QString amid = f.editor.addAudioTrack(p.trackIndex(b), "Amid", std::nullopt);
         QCOMPARE(f.track(amid).parent, std::optional<QString>(group));
+        QCOMPARE(f.track(amid).color, f.track(group).color);  // (the group it was let into)
         // Clips dropped on a group go on a new audio track.
         const ClipRefs refs = f.editor.addClips(group, 0.0, {{"x.wav", 1.0}}, static_cast<int>(p.tracks().size()));
         QVERIFY(!f.track(refs[0].trackId).isGroup());

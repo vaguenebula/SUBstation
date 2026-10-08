@@ -160,7 +160,7 @@ bool TrackHeaderItem::midi() const { return track() && track()->isMidi(); }
 bool TrackHeaderItem::records() const { return track() && track()->hasClips(); }  // groups record nothing
 QString TrackHeaderItem::name() const { return track() ? track()->name : QString(); }
 QColor TrackHeaderItem::color() const { return track() ? QColor(track()->color) : QColor(); }
-bool TrackHeaderItem::mute() const { return track() && track()->mute; }
+bool TrackHeaderItem::mute() const { return track() && mute_; }
 bool TrackHeaderItem::solo() const { return track() && track()->solo; }
 bool TrackHeaderItem::armed() const { return track() && track()->armed; }
 
@@ -237,11 +237,11 @@ double TrackHeaderItem::stripWidth() const {
 
 QRectF TrackHeaderItem::foldRect() const {
     if (isReturn() || isMaster()) return {};
-    return QRectF(indent() + stripWidth() + 2, nameTop() + 4, kFoldWidth, kNameRow - 5);  // (as the buttons)
+    return QRectF(indent() + stripWidth() + 2, nameTop() + kNamePad, kFoldWidth, kNameButton);  // (as the buttons)
 }
 
 bool TrackHeaderItem::mixerAutomated() const {
-    return volumeAutomation_ == u"on" || panAutomation_ == u"on" || sendsAutomated_;
+    return volumeAutomation_ == u"on" || panAutomation_ == u"on" || activatorAutomation_ == u"on" || sendsAutomated_;
 }
 
 bool TrackHeaderItem::inResizeZone(double y) const {
@@ -386,16 +386,23 @@ QString TrackHeaderItem::automationState(const QString& key) const {
 }
 
 void TrackHeaderItem::refreshMixer() {
-    // Volume and pan as they are heard: following their automation while it plays.
+    // Volume, pan and the activator as they are heard: following their automation while it plays.
     const app::Track* t = track();
     if (!t) return;
     app::EngineBridge& bridge = *session_->bridge();
     volumeAutomation_ = automationState(automation::kMixerVolume);
     panAutomation_ = automationState(automation::kMixerPan);
+    activatorAutomation_ = isMaster() ? QString() : automationState(automation::kMixerOn);
     volume_ = t->volumeDb;
     pan_ = t->pan;
+    const bool wasMuted = mute_;
+    mute_ = t->mute;
     if (volumeAutomation_ == u"on") volume_ = bridge.currentValue(trackId_, automation::kMixerVolume).value_or(volume_);
     if (panAutomation_ == u"on") pan_ = bridge.currentValue(trackId_, automation::kMixerPan).value_or(pan_);
+    if (activatorAutomation_ == u"on") {
+        mute_ = bridge.currentValue(trackId_, automation::kMixerOn).value_or(mute_ ? 0.0 : 1.0) < 0.5;
+    }
+    if (mute_ != wasMuted) update();  // (its name is dimmed while muted)
     Q_EMIT mixerChanged();
 }
 
@@ -527,7 +534,9 @@ void TrackHeaderItem::touchPan() {
 }
 
 void TrackHeaderItem::activatorToggled(bool on) {
-    if (track()) session_->editor()->trySetTrackParam(trackId_, QStringLiteral("mute"), on ? 0.0 : 1.0);
+    if (!track()) return;
+    session_->editor()->trySetTrackParam(trackId_, QStringLiteral("mute"), on ? 0.0 : 1.0);  // (overriding its automation)
+    refreshMixer();
 }
 
 QStringList TrackHeaderItem::clickedTracks() const {
@@ -887,6 +896,23 @@ MenuEntries TrackHeaderItem::sendMenu(const QString& returnId) {
     return menu;
 }
 
+MenuEntries TrackHeaderItem::activatorMenu() {
+    // Its automation: show it, delete it, re-enable it while overridden.
+    MenuEntries menu;
+    if (!track() || isMaster()) return menu;
+    app::ProjectEditor* editor = session_->editor();
+    app::EngineBridge* bridge = session_->bridge();
+    const QString id = trackId_;
+    const QString key = automation::kMixerOn;
+    menu.add(QStringLiteral("Show Automation"), [editor, id, key] { editor->showAutomation(id, key); });
+    menu.add(QStringLiteral("Delete Automation"), [editor, id, key] { editor->clearEnvelope(id, key); }).enabled =
+        !project()->envelope(id, key).empty();
+    if (bridge->isOverridden(id, key)) {
+        menu.add(QStringLiteral("Re-Enable Automation"), [bridge, id] { bridge->reEnableAutomation(id); });
+    }
+    return menu;
+}
+
 void TrackHeaderItem::chooseLane(int lane, const QString& key) {
     if (track()) session_->editor()->setAutomationLane(trackId_, lane, key);
 }
@@ -970,7 +996,7 @@ void TrackHeaderItem::paint(SgPainter& p) {
         if (!holder || snowflake_.isNull()) return false;
         p.save();
         p.setOpacity(*holder == trackId_ ? 1.0 : 0.5);
-        p.drawImage(QRectF(x, nameTop() + (kNameRow - kSnowflake) / 2 + 1, kSnowflake, kSnowflake), snowflake_);
+        p.drawImage(QRectF(x, nameTop() + kNamePad + (kNameButton - kSnowflake) / 2, kSnowflake, kSnowflake), snowflake_);
         p.restore();
         return true;
     };
@@ -989,9 +1015,9 @@ void TrackHeaderItem::paint(SgPainter& p) {
         const double left = 10 + (drawFrozen(10) ? kSnowflake + 3 : 0);
         if (!renaming_) {
             const QFont font = uiFont(9, true);
-            const QRectF nameRect(left, 3, nameRight_ - left, kNameRow - 4);
+            const QRectF nameRect(left, kNamePad, nameRight_ - left, kNameButton);  // (as a track's)
             p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, SgPainter::elidedText(t->name, font, nameRect.width()),
-                       t->mute ? Theme::kTextDim : Theme::kText, font);
+                       mute() ? Theme::kTextDim : Theme::kText, font);
         }
         return;
     }
@@ -1034,9 +1060,9 @@ void TrackHeaderItem::paint(SgPainter& p) {
     if (!renaming_) {
         const QFont font = uiFont(9, isSelected || t->isGroup());
         const double left = nameLeft();
-        const QRectF nameRect(left, nameTop() + 4, nameRight_ - left, kNameRow - 5);
+        const QRectF nameRect(left, nameTop() + kNamePad, nameRight_ - left, kNameButton);
         p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, SgPainter::elidedText(t->name, font, nameRect.width()),
-                   t->mute ? Theme::kTextDim : Theme::kText, font);
+                   mute() ? Theme::kTextDim : Theme::kText, font);
     }
     p.fillRect(QRectF(0, h - 1, w, 1), Theme::kBorder);
     p.fillRect(QRectF(0, 0, 1, h), Theme::kBorder);

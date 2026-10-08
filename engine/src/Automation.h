@@ -26,9 +26,19 @@ struct AutomationPoint {
 // An envelope for one target on a track (or the master).
 struct AutomationLaneDesc {
     uint32_t processorId = 0;  // 0: the mixer of the track (or master)
-    std::string param;         // the processor's parameter id, or a mixer control: "volume", "pan"
+    // The processor's parameter id (or kDeviceOnLane), or a mixer control:
+    // "volume", "pan", kTrackOnLane, "send:<track id>".
+    std::string param;
     std::vector<AutomationPoint> points;
 };
+
+// Switches: a track's activator (a mixer lane: heard while on, as if muted
+// while off) and a device's on/off (a lane of its processor: processed while
+// on, passing its input on while off). A switch is on where its value is at
+// least 0.5 (as automationQuantize(value, 1) makes it 1).
+inline constexpr const char* kTrackOnLane = "on";
+inline constexpr const char* kDeviceOnLane = "device:on";
+inline bool automationSwitchOn(float value) noexcept { return value >= 0.5f; }
 
 // A breakpoint on the rendering side, in timeline samples.
 struct AutomationNode {

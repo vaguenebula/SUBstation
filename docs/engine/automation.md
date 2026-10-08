@@ -20,7 +20,8 @@ is in [app/model.md](../app/model.md); overrides are the engine bridge's ([below
   ([app/src/model/ParamSpec.h](../../app/src/model/ParamSpec.h)) with the same mapping, and the tests hold the two to
   each other. Its copy of the envelope rules (curves, values between points) is namespace `automation` in
   [app/src/model/Automation.h](../../app/src/model/Automation.h): both must agree.
-- Envelopes belong to a track or the master. The model keys them by target: `mixer:volume`, `mixer:pan`,
+- Switches (a track's activator, a device's on/off) are automated as lanes too: see [Switches](#switches).
+- Envelopes belong to a track or the master. The model keys them by target: `mixer:volume`, `mixer:pan`, `mixer:on`,
   `send:<return id>`, or `device:<device id>:<parameter id>` (and a rack chain's fader). Device ids are unique in a
   project, so a key finds its device wherever it sits. Deleting a device deletes its automation (in the same undo
   step; a model rule).
@@ -77,8 +78,9 @@ VST3's own.
 - `AutomationPoint {beat, value, curve}`: what the UI sends. `value` is normalized; `curve` (-1..1) bends the segment
   that starts at this point (0 is a straight line).
 - `AutomationLaneDesc {processorId, param, points}`: one envelope. `processorId` 0 is the mixer of the track (or
-  master), with `param` `"volume"`, `"pan"` or `"send:<engine track id>"`. Otherwise `param` is the processor's
-  parameter id; for a rack, `"chain:<chain id>:volume"` or `":pan"` (the chain's fader).
+  master), with `param` `"volume"`, `"pan"`, `kTrackOnLane` (`"on"`, its activator) or `"send:<engine track id>"`.
+  Otherwise `param` is the processor's parameter id, or `kDeviceOnLane` (`"device:on"`, its on/off); for a rack,
+  `"chain:<chain id>:volume"` or `":pan"` (the chain's fader).
 - `AutomationNode {time, value, curve}`: the same in timeline samples. `Engine::automationNodes()` converts at the
   current tempo (`llround(beat * samplesPerBeat)`, beats below 0 clamped), clamps value and curve, and
   stable-sorts by time, so two points at one time (a step) keep their order.
@@ -242,6 +244,36 @@ The engine has no notion of an override. The application layer's engine bridge
 The playing side needs nothing for this: a target without a lane falls back to its atomic value, and the fader and
 send smoothing carry on from the last automated value.
 
+## Switches
+
+A track's activator and a device's on/off switch are lanes like any other, played as on where the value is at least
+0.5 (`automationSwitchOn`) and off below it. Both fade over `Renderer::switchFade()` samples (about 5 ms,
+`kSwitchFade`, at most `kMaxSwitchFade`) as they switch: `Renderer::fillSwitch()` gives each sample the share of the
+timeline's last `switchFade()` samples that the switch was on (a window sliding along, from before the chunk), so
+the gain depends on the timeline alone and live and offline renders agree. Stopped, it is the switch at the playhead.
+
+- **A track's activator** (`StripRender::on`, built by `buildAutomationLocked`; the master's is ignored): while it has
+  one its mute doesn't count (`workOutSolo` leaves it out of `TrackBuffers::audible`), and `applyFader()` multiplies
+  the audible gain (solo, and its live ramp) by the switch, sample by sample. Pre-fader sends take that gain too, as
+  they take mute. Its latency is the fader's.
+- **A device's on/off** (`StripRender::switches`, a `SwitchRender` per device, built by `buildChainLocked`): its lane
+  (with the latency before the device, as its parameters'), the device's own latency (`insertLatency`: a rack's is
+  what its chains add, as this snapshot aligned them) and a `DelayLine` kept with the processor
+  (`ProcessorEntry::switchDelay`; offline renders bring their own: `RenderSnapshot::switchDelays`,
+  `Renderer::setDelayLines`). `Renderer::processChain()` copies the device's input (after any wait for its
+  sidechain) through that line, so it comes out as late as the device makes its signal; where the switch is off for
+  the whole chunk it doesn't process the device and passes that on; partly on, it processes it and fades between the
+  two. A device skipped so (`Processor::switchedOff()`) is reset as it comes back on (a rack's devices too), as
+  switching one on by hand does. The engine counts the device's latency whatever its switch does, so nothing
+  realigns as it switches.
+- After a jump (a loop's wrap, a locate while playing) the fade's window holds what was played before it, so a
+  switch across the jump fades too. A switch's lane gone while it was off fades back as well: a track's mute ramp
+  takes over from the switch's last gain (`TrackParams::switchGain`), a device fades in from its input
+  (`Processor::switchFadeIn()`). While a rack is passed by, the sidechain taps after the devices in it take what it
+  passes on (`tapSkippedRack`).
+- A device switched off by hand (`setProcessorEnabled(false)`) is off whatever its lane says: the application layer
+  switches a device on while its switch's automation plays (its lane then switches it).
+
 ## Racks and macros
 
 - Devices in racks are automated like any of the track's devices; their lanes stay keyed by device id, so they
@@ -304,6 +336,9 @@ names: a branch in `buildAutomationLocked()` and a target in `StripRender`, plus
 
 ## Tests
 
+- [tests/engine/test_switches_engine.cpp](../../tests/engine/test_switches_engine.cpp): a track's activator and a
+  device's (and a rack's) on/off automated: silence (pre-fader sends too) and the fade, standing in for mute, a
+  latent device passed by in time, an instrument starting again from silence.
 - [tests/engine/test_automation_engine.cpp](../../tests/engine/test_automation_engine.cpp): volume and pan (tracks
   and master) sample by sample, a volume lane replacing the fader until removed, mute over automation, curves, device
   parameters split exactly where they change, discrete parameters in whole steps, envelopes of missing devices or

@@ -245,6 +245,7 @@ Rendered offline unless the file says otherwise; the live tests play through the
 |---|---|
 | [test_engine_render.cpp](../tests/engine/test_engine_render.cpp) | Clip placement to the sample, tempo, offsets, gain, pan, mute and solo, looping, the metronome, clip fades (the short ones only where a clip cuts into its file, a clip's own with their curves, in a warped clip's time), Utility and Over The Top, sources and peaks, resampling to the engine's rate, export, transport state without a device, chains, moving processors, the master's devices. |
 | [test_automation_engine.cpp](../tests/engine/test_automation_engine.cpp) | Envelopes of mixer controls (tracks and master) and of device parameters, sample by sample. |
+| [test_switches_engine.cpp](../tests/engine/test_switches_engine.cpp) | A track's activator and a device's (or a rack's) on/off, automated: silence and the fade, standing in for mute, a latent device passed by in time. |
 | [test_warp.cpp](../tests/engine/test_warp.cpp) | Warped clips on their beats at any tempo, pitch shifting, Re-Pitch filtering rather than aliasing. |
 | [test_midi_engine.cpp](../tests/engine/test_midi_engine.cpp) | Note scheduling and the built-in Synth: notes on their sample, following the tempo, pitch and level, no hanging notes at loop wraps and after renders. |
 | [test_compressor_engine.cpp](../tests/engine/test_compressor_engine.cpp) | The Compressor: its gain curve, its displays, keying from a sidechain. |

@@ -10,12 +10,16 @@
 //   (engine/src/Automation.h); the shape of curved segments and the mixer's
 //   mappings here must match it.
 // - An envelope belongs to an owner, a track id or kMaster, and is keyed by its
-//   target: kMixerVolume, kMixerPan, sendKey(return id) (the level of the
-//   owner's send to a return track), deviceKey(device id, parameter id), or
-//   chainKey(rack id, chain id, kChainVolume or kChainPan) (a rack chain's
-//   fader: a target of its rack). Device ids are unique in the project, so a key
-//   keeps pointing at its device wherever the device sits (inside a rack too). A
-//   send's level, and a chain's volume, map as a volume does.
+//   target: kMixerVolume, kMixerPan, kMixerOn (a track's activator; the master
+//   has none), sendKey(return id) (the level of the owner's send to a return
+//   track), deviceKey(device id, parameter id), deviceOnKey(device id) (a
+//   device's on/off, a rack's too), or chainKey(rack id, chain id, kChainVolume
+//   or kChainPan) (a rack chain's fader: a target of its rack). Device ids are
+//   unique in the project, so a key keeps pointing at its device wherever the
+//   device sits (inside a rack too). A send's level, and a chain's volume, map
+//   as a volume does.
+// - Switches (isSwitchKey: a track's activator, a device's on/off) are on (1)
+//   or off (0); the engine plays them as on from 0.5 up, fading as they switch.
 // - Before its first breakpoint an envelope holds the first one's value, after the
 //   last the last one's. Breakpoints may share a beat (a step): from that beat on,
 //   the later one's value counts.
@@ -66,7 +70,9 @@ namespace automation {
 inline constexpr double kCurvature = 6.0;  // engine: kAutomationCurvature
 inline const QString kMixerVolume = QStringLiteral("mixer:volume");
 inline const QString kMixerPan = QStringLiteral("mixer:pan");
-inline const QStringList kMixerKeys{kMixerVolume, kMixerPan};
+// A track's activator: on, it is heard; off, as if muted (engine: kTrackOnLane).
+inline const QString kMixerOn = QStringLiteral("mixer:on");
+inline const QStringList kMixerKeys{kMixerVolume, kMixerPan, kMixerOn};
 inline const QString kSendPrefix = QStringLiteral("send:");
 
 // The faders' range. On a volume lane the gain is the cube of the value, so the
@@ -78,6 +84,8 @@ inline constexpr double kMinVolumeDb = -70.0;  // the faders' floor: at or below
 inline const QString kChainVolume = QStringLiteral("volume");
 inline const QString kChainPan = QStringLiteral("pan");
 inline const QString kChainPrefix = QStringLiteral("chain:");
+// A device's on/off is a target of the device, as a parameter "device:on" (engine: kDeviceOnLane).
+inline const QString kDeviceOn = QStringLiteral("device:on");
 
 // --- Keys ---
 
@@ -102,6 +110,8 @@ struct ChainControl {
 QString deviceKey(const QString& deviceId, const QString& paramId);
 QString sendKey(const QString& returnId);
 QString chainKey(const QString& rackId, const QString& chainId, const QString& control);
+// A device's on/off (a rack's too).
+QString deviceOnKey(const QString& deviceId);
 // The parts of a key; none if it isn't an automation target.
 std::optional<Target> parseKey(const QString& key);
 bool isKey(const QString& key);
@@ -113,8 +123,10 @@ std::optional<QString> keySend(const QString& key);
 std::optional<QString> keyChain(const QString& key);
 // (chain id, kChainVolume or kChainPan) of a key targeting a rack chain's fader.
 std::optional<ChainControl> keyChainControl(const QString& key);
-// Whether a key targets the owner's mixer: its volume, pan or a send (not a device).
+// Whether a key targets the owner's mixer: its volume, pan, activator or a send (not a device).
 bool isMixerKey(const QString& key);
+// Whether a key targets a switch: a track's activator or a device's on/off.
+bool isSwitchKey(const QString& key);
 
 // --- Mixer mappings ---
 

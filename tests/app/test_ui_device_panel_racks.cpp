@@ -335,7 +335,7 @@ private Q_SLOTS:
         for (const sub::app::ParamGroup& group : session().bridge()->paramGroups(track)) {
             for (const sub::app::ParamSpec& spec : group.specs) groups[group.id] << spec.key;
         }
-        QStringList keys;  // its macros, then its chains' faders
+        QStringList keys{sub::app::automation::deviceOnKey(rack)};  // its switch, its macros, then its chains' faders
         for (int i = 0; i < sub::app::kDefaultMacroCount; ++i)
             keys << sub::app::automation::deviceKey(rack, sub::app::macroParam(i));
         keys << sub::app::automation::chainKey(rack, chain, sub::app::automation::kChainVolume)
