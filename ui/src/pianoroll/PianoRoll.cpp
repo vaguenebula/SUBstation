@@ -2,6 +2,8 @@
 
 #include "audio/EngineBridge.h"
 #include "editor/ProjectEditor.h"
+#include "harmony/Accompaniment.h"
+#include "intelligence/Harmony.h"
 #include "model/Notes.h"
 #include "model/Numbers.h"
 #include "model/Project.h"
@@ -33,6 +35,7 @@ void PianoRoll::setSession(app::Session* session) {
         disconnect(session_->project(), nullptr, this, nullptr);
         disconnect(session_->selection(), nullptr, this, nullptr);
         disconnect(session_->bridge(), nullptr, this, nullptr);
+        disconnect(session_->harmony(), nullptr, this, nullptr);
     }
     session_ = session;
     view_.setProject(session ? session->project() : nullptr);
@@ -56,12 +59,15 @@ void PianoRoll::connectSession() {
     app::EngineBridge* b = session_->bridge();
     connect(b, &app::EngineBridge::positionChanged, this, &PianoRoll::onPosition);
     connect(b, &app::EngineBridge::transportChanged, this, [this](bool) { onPosition(bridge()->position()); });
+    connect(session_->harmony(), &app::Harmony::changed, this, &PianoRoll::refreshHarmony);
+    connect(session_->harmony(), &app::Harmony::shownChanged, this, &PianoRoll::refreshHarmony);
 }
 
 app::Project* PianoRoll::project() const { return session_ ? session_->project() : nullptr; }
 app::ProjectEditor* PianoRoll::editor() const { return session_ ? session_->editor() : nullptr; }
 app::EngineBridge* PianoRoll::bridge() const { return session_ ? session_->bridge() : nullptr; }
 app::Selection* PianoRoll::selection() const { return session_ ? session_->selection() : nullptr; }
+app::Harmony* PianoRoll::harmony() const { return session_ ? session_->harmony() : nullptr; }
 
 // --- The clip ------------------------------------------------------------------------
 
@@ -76,6 +82,7 @@ void PianoRoll::setClip(const QString& trackId, const QString& clipId) {
         Q_EMIT clipChanged();
         Q_EMIT selectionChanged();
     }
+    refreshHarmony();
     refresh();
 }
 
@@ -220,6 +227,74 @@ double PianoRoll::quantizeStep() const {
     return 0.25;
 }
 
+// --- Harmony -------------------------------------------------------------------------------
+
+void PianoRoll::refreshHarmony() {
+    // Only while it shows: nobody else asks, and the harmony isn't inferred
+    // until somebody does.
+    std::vector<RollChord> chords;
+    std::optional<app::Key> key;
+    const app::Harmony* h = harmony();
+    const app::Clip* c = clip();
+    if (h && c && h->shown() && gridShowing()) {
+        key = h->key();
+        const double from = c->startBeat, to = c->endBeat();
+        const double shift = c->offsetBeats - c->startBeat;  // timeline beats to content beats
+        for (const app::Harmony::ChordSpan& span : h->chords()) {
+            if (span.end <= from || span.start >= to) continue;
+            const auto quality = span.chord.quality;
+            using Q = intelligence::harmony::Quality;
+            chords.push_back({std::max(span.start, from) + shift, std::min(span.end, to) + shift,
+                              QString::fromStdString(span.chord.name()), span.chord.root,
+                              quality == Q::Minor || quality == Q::Minor7 || quality == Q::Diminished ||
+                                  quality == Q::HalfDiminished7 || quality == Q::Diminished7});
+        }
+    }
+    if (chords == chords_ && key == scaleKey_) return;
+    chords_ = std::move(chords);
+    scaleKey_ = key;
+    repaintAll();
+}
+
+bool PianoRoll::outOfKey(int pitch) const {
+    return scaleKey_ && !app::Harmony::toHarmony(*scaleKey_).contains(intelligence::harmony::pitchClass(pitch));
+}
+
+void PianoRoll::generateChords() { generate(false); }
+void PianoRoll::generateBass() { generate(true); }
+
+void PianoRoll::generate(bool bass) {
+    namespace harmony = intelligence::harmony;
+    const app::Clip* c = clip();
+    const app::Harmony* h = this->harmony();
+    if (!c || !h) return;
+    const double from = c->startBeat, to = c->endBeat();
+    const double barBeats = project()->timeSignature().beatsPerBar();
+    std::vector<harmony::ChordSpan> spans;
+    for (const harmony::ChordSpan& span : h->chords()) {
+        if (span.end > from && span.start < to)
+            spans.push_back({std::max(span.start, from), std::min(span.end, to), span.chord});
+    }
+    if (spans.empty()) {
+        const auto key = h->key();
+        spans = harmony::starterProgression(key ? app::Harmony::toHarmony(*key) : harmony::Key{}, from, to, barBeats);
+    }
+    std::vector<Note> added;
+    for (const harmony::GeneratedNote& n : bass ? harmony::bassPart(spans, barBeats) : harmony::chordPart(spans, barBeats))
+        added.push_back({n.pitch, n.start - c->startBeat + c->offsetBeats, n.length, n.velocity});
+    // The clip's own notes win where a written one would overlap them on their key.
+    std::vector<Note> all = c->notes;
+    all.insert(all.end(), added.begin(), added.end());
+    const std::vector<Note> notes = app::notes::normalize(app::notes::resolveOverlaps(all, c->notes));
+    if (notes == c->notes) return;
+    const std::vector<Note> before = roll::noteSet(c->notes);
+    std::vector<Note> written;
+    for (const Note& note : notes) {
+        if (!roll::contains(before, note)) written.push_back(note);
+    }
+    commit(notes, bass ? QStringLiteral("Generate Bass") : QStringLiteral("Generate Chords"), {}, written);
+}
+
 // --- Geometry ------------------------------------------------------------------------------
 
 double PianoRoll::pitchTop(int pitch) const { return (127 - pitch) * rowHeight_ - view_.scrollY(); }
@@ -357,6 +432,7 @@ void PianoRoll::gridVisibilityChanged(bool visible) {
     if (visible) {
         fitIfReady();
         updateBars();
+        refreshHarmony();
     } else {
         releaseAudition();
     }

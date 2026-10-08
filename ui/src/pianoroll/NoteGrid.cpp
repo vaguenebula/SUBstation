@@ -251,7 +251,7 @@ void NoteGrid::paint(SgPainter& p) {
             const QRectF rect = roll->noteRect(note);
             if (rect.intersects(visible)) {
                 const bool playing = clip->offsetBeats <= note.start && note.start < clip->windowEnd();
-                drawNote(p, note, rect, color, font, roll->isSelected(note), playing);
+                drawNote(p, note, rect, color, font, roll->isSelected(note), playing, roll->outOfKey(note.pitch));
             }
         }
     }
@@ -264,8 +264,13 @@ void NoteGrid::paint(SgPainter& p) {
         p.fillRect(QRectF(app::roundHalfEven(view.beatToX(*start)), 0, 1, this->height()), Theme::kInsertMarker);
 }
 
-void NoteGrid::drawNote(SgPainter& p, const Note& note, const QRectF& rect, const QColor& color, const QFont& font,
-                        bool selected, bool playing) const {
+void NoteGrid::drawNote(SgPainter& p, const Note& note, const QRectF& rect, const QColor& trackColor,
+                        const QFont& font, bool selected, bool playing, bool outOfKey) const {
+    // Out of the song's key: halfway to red.
+    const QColor color = outOfKey ? QColor((trackColor.red() + Theme::kOutOfKey.red()) / 2,
+                                           (trackColor.green() + Theme::kOutOfKey.green()) / 2,
+                                           (trackColor.blue() + Theme::kOutOfKey.blue()) / 2)
+                                  : trackColor;
     // Brighter for louder notes, as in Ableton; faint outside the part the clip plays.
     QColor fill = selected ? color.lighter(135) : color;
     fill.setAlphaF(static_cast<float>((0.35 + 0.65 * note.velocity / 127) * (playing ? 1.0 : 0.5)));

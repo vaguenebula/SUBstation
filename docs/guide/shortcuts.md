@@ -74,6 +74,7 @@ the focus. Most are also in the menus, which show their keys.
 | Scroll in any direction | Ctrl+Alt drag |
 | Narrow / widen grid, toggle snap | Ctrl+1 / Ctrl+2 / Ctrl+4 |
 | Toggle browser / device view | Ctrl+Alt+B / Ctrl+Alt+L |
+| Show / hide the piano roll's chords and the key (notes out of it in red) | C |
 | Search everything in the browser ("All"); Enter selects the first result, Enter again adds it | Ctrl+F |
 
 ## Devices
@@ -96,7 +97,8 @@ the focus. Most are also in the menus, which show their keys.
 
 In the piano roll, Delete, Ctrl+A and Ctrl+D act on notes, Ctrl+U quantizes them, and
 arrow keys move them (Up/Down a semitone, Shift an octave; Left/Right a grid step, Shift
-a bar). See [midi.md](midi.md#the-piano-roll).
+a bar). C shows or hides the song's chords and key over the notes. See
+[midi.md](midi.md#the-piano-roll).
 
 ## Plug-in editors
 

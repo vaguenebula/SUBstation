@@ -76,6 +76,46 @@ on the selected notes and hides while you drag them. Each tool is one undo step.
 - **Humanize** nudges starts and velocities at random. At 100 % a note moves by up to a
   32nd note and its velocity by up to 24; the default is 25 %.
 
+### Chords and key
+
+SUBstation works out the song's chords and key from its MIDI and shows them in the
+piano roll. **C** (*View › Chords and Key*) hides or shows them; they show at first.
+
+- Along the top of the notes, each chord the song plays over the clip is a see-through
+  band of colour, named at its start ("Am", "G7", "C/E" when its bass is E).
+  Related chords have related colours. Clicks go through the bands to the notes.
+- The clip view's header shows the key, and notes out of it are tinted red. The key
+  is the **project key** (chosen next to the metronome in the transport bar), or, if
+  it has none, the key the song's MIDI is most likely in ("Key: A Minor (inferred)").
+  A minor key's notes are its natural minor scale.
+- The chords come from every MIDI track you hear: a muted track, or one in a muted
+  group, doesn't count, nor do drum tracks (named "Drums", "Kick", "Snare", "Hats",
+  "Perc", "Claps" and the like). The lowest notes are taken as the bass: a chord over
+  another of its notes is an inversion ("C/E"). They follow your edits as you make
+  them.
+- Chords are heard where the song plays them clearly; a melody's passing notes don't
+  make chords of their own, and a melody alone is heard as the key's plain chords
+  (C, F, G in C major). Chord changes on bar lines are favoured over changes between
+  beats. Audio clips aren't listened to yet.
+
+### Generate
+
+*Generate ▾* in the clip view's header writes a part into the clip, from the song's
+chords over the part the clip plays:
+
+- **Chords**: block chords between C2 and G4, each voiced to move as little as it can
+  from the one before (C, G, Am, F come out as C E G, B D G, C E A, C F A), struck
+  again at every bar.
+- **Bass**: each chord's bass note (its root, or an inversion's bass) in the octave from
+  C1, struck with each chord and again at every bar.
+
+Where the song has no chords yet (an empty song), it writes from a progression in the
+key (C major if there is none): I V vi IV, or i VI III VII in a minor key, a chord a
+bar. The notes already in the clip stay as they are: a written note that would overlap
+one on the same key is shortened or left out. The written notes are selected; each
+Generate is one undo step. Write the chords into one clip and the bass into another, on tracks
+of their own, to hear them on different instruments.
+
 ## MIDI input
 
 MIDI input comes from controllers and keyboards (WinMM), played live and recorded. On

@@ -456,6 +456,18 @@ ApplicationWindow {
                 Action { id: infoViewAction; objectName: "infoView"; text: qsTr("&Info View"); checkable: true; checked: true }
                 Action { objectName: "clipView"; text: qsTr("&Clip View"); shortcut: "Shift+Tab"; onTriggered: window.toggleClipView() }
                 Action { objectName: "automation"; text: qsTr("&Automation"); shortcut: "A"; onTriggered: Session.editor.toggleAllAutomation() }
+                // The piano roll's chord lane and its notes out of the key in red.
+                Action {
+                    objectName: "showHarmony"
+                    text: qsTr("C&hords and Key")
+                    shortcut: "C"
+                    checkable: true
+                    checked: Session.harmony.shown
+                    onTriggered: {
+                        Session.harmony.shown = checked
+                        checked = Qt.binding(() => Session.harmony.shown)
+                    }
+                }
                 // Plug-in editors are Win32 windows: closing the foremost is for Windows only.
                 MenuItem {
                     visible: pluginKeys.supported

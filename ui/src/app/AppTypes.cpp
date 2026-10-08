@@ -9,6 +9,7 @@
 #include "browser/ItemListModel.h"
 #include "browser/SidebarModel.h"
 #include "editor/ProjectEditor.h"
+#include "intelligence/Harmony.h"
 #include "intelligence/SoundSimilarity.h"
 #include "model/Project.h"
 #include "plugins/PluginFolderModel.h"
@@ -49,6 +50,7 @@ void registerSession(sub::app::Session* session) {
     registerUncreatable<SidebarModel>("SidebarModel");
     registerUncreatable<PluginIndex>("PluginIndex");
     registerUncreatable<SoundSimilarity>("SoundSimilarity");
+    registerUncreatable<Harmony>("Harmony");
     registerUncreatable<PluginListModel>("PluginListModel");
     registerUncreatable<PluginFolderModel>("PluginFolderModel");
     registerUncreatable<ArrangementActions>("ArrangementActions");

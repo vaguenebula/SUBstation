@@ -89,4 +89,4 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 
 | Page | Covers |
 |---|---|
-| [Intelligence](intelligence.md) | sound similarity: the method and why, the fingerprint, comparing, the background index and its store, measurements; later MIDI generation, humanisation, chord recognition, an MCP server |
+| [Intelligence](intelligence.md) | sound similarity: the method and why, the fingerprint, comparing, the background index and its store, measurements; harmony: a song's chords and key from its MIDI, block chords and bass lines from them; later MIDI generation by machine learning, humanisation, chords from audio, an MCP server |

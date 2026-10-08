@@ -3,7 +3,8 @@
 // and heard, dragged to move, resize and copy; the notes' keys taking
 // precedence over the window's shortcuts; the rubber band, the keys and the
 // velocity lane; Alt+wheel and Ctrl+Alt drags; the note tools floating by notes
-// selected by dragging. Runs on a display (xvfb here). With
+// selected by dragging; the song's chords along the top, notes out of its key
+// in red, and Generate writing chords and a bass line. Runs on a display (xvfb here). With
 // $SUBSTATION_UI_SCREENSHOTS set, it saves screenshots there.
 
 #include <QQuickItem>
@@ -19,8 +20,10 @@
 #include "UiTestSupport.h"
 #include "audio/EngineBridge.h"
 #include "editor/ProjectEditor.h"
+#include "intelligence/Harmony.h"
 #include "model/Clip.h"
 #include "model/Project.h"
+#include "pianoroll/ChordLane.h"
 #include "pianoroll/ClipViewController.h"
 #include "pianoroll/NoteGrid.h"
 #include "pianoroll/PianoKeys.h"
@@ -50,6 +53,21 @@ Note note(int pitch, double start, double length, int velocity = 100) {
     n.velocity = velocity;
     return n;
 }
+
+// Notes sounding together.
+std::vector<Note> chord(std::initializer_list<int> pitches, double start, double length) {
+    std::vector<Note> notes;
+    for (const int p : pitches) notes.push_back(note(p, start, length));
+    return notes;
+}
+
+std::vector<Note> operator+(std::vector<Note> a, const std::vector<Note>& b) {
+    a.insert(a.end(), b.begin(), b.end());
+    return a;
+}
+
+// How red a colour is.
+int redness(const QColor& c) { return c.red() - (c.green() + c.blue()) / 2; }
 
 std::vector<Note> sortedBy(std::vector<Note> notes, bool byPitch = false) {
     std::sort(notes.begin(), notes.end(), [byPitch](const Note& a, const Note& b) {
@@ -104,6 +122,38 @@ class TestUiPianoRoll : public QObject {
 
     void clickButton(const char* name) { test::click(window_, test::centerOf(toolButton(name))); }
 
+    QQuickItem* chordLane() { return clipView_->findChild<QQuickItem*>(QStringLiteral("chordLane")); }
+    // "C 0-2, G 2-4": the chords the roll shows, in content beats.
+    QString chordNames() {
+        QStringList names;
+        for (const PianoRoll::RollChord& c : roll()->chords())
+            names.append(QStringLiteral("%1 %2-%3").arg(c.name).arg(c.start).arg(c.end));
+        return names.join(QStringLiteral(", "));
+    }
+    // A MIDI track "Keys" playing `notes` from the start of the song.
+    void keysTrack(const std::vector<Note>& notes) {
+        const QString keys = session().editor()->addMidiTrack(-1, QStringLiteral("Keys"));
+        const auto ref = session().editor()->addMidiClip(keys, 0.0, 8.0);
+        QVERIFY(ref);
+        session().editor()->setClipNotes(*ref, notes, QStringLiteral("Notes"));
+    }
+    // A pixel of the note grid, in the window's image.
+    QColor gridPixel(const QImage& image, double beat, int pitch, double dy = 3) {
+        return image.pixelColor(test::at(grid(), QPointF(roll()->view().beatToX(beat), roll()->pitchTop(pitch) + dy)));
+    }
+    // Generate › Chords or › Bass, through the clip view's header.
+    void generate(const char* entry) {
+        auto* button = clipView_->findChild<QQuickItem*>(QStringLiteral("generate"));
+        QVERIFY(button && button->isVisible());
+        test::click(window_, test::centerOf(button));
+        QObject* menu = clipView_->findChild<QObject*>(QStringLiteral("generateMenu"));
+        QTRY_VERIFY(menu->property("opened").toBool());
+        auto* item = clipView_->findChild<QQuickItem*>(QString::fromLatin1(entry));
+        QVERIFY(item);
+        test::click(window_, test::centerOf(item));
+        QTRY_VERIFY(!menu->property("visible").toBool());
+    }
+
 private Q_SLOTS:
     void initTestCase() {
         test::prepareApplication();
@@ -125,6 +175,7 @@ private Q_SLOTS:
         project().clear();
         undo().clear();
         session().bridge()->stop();
+        session().harmony()->setShown(true);
         test::moveTo(window_, QPoint(5, 5), {}, Qt::NoButton);
         QTRY_COMPARE(tools()->property("progress").toDouble(), 0.0);  // (the last test's note tools faded out)
     }
@@ -707,6 +758,115 @@ private Q_SLOTS:
                          QRect(test::at(bar, QPointF(-20, -20)),
                                QSize(int(bar->width()) + 40, int(bar->height()) + 40)));
         QVERIFY(!window_->grabWindow().isNull());
+    }
+
+    // The song's chords along the top of the notes, over the part the clip
+    // plays, in its own beats; hidden (C) with the key; clicks going through
+    // them to the notes.
+    void theSongsChordsShowAlongTheTop() {
+        openMidiClip();  // beats 4 to 8
+        keysTrack(chord({48, 52, 55}, 0, 6) + chord({43, 47, 50}, 6, 2));
+        QTRY_COMPARE(chordNames(), QStringLiteral("C 0-2, G 2-4"));
+        QQuickItem* lane = chordLane();
+        QVERIFY(lane->isVisible());
+        QCOMPARE(lane->height(), double(sub::ui::ChordLane::kHeight));
+        QCOMPARE(lane->width(), grid()->width());
+        QCOMPARE(clipView_->findChild<QObject*>(QStringLiteral("keyLabel"))->property("text").toString(),
+                 QStringLiteral("Key: C Major (inferred)"));
+        const QPoint inC = test::at(lane, QPointF(roll()->view().beatToX(1.5), lane->height() - 3));
+        const QColor shown = window_->grabWindow().pixelColor(inC);
+        // (With a melody, an F# out of the key among it, to look at.)
+        roll()->commit({note(72, 0, 1), note(74, 1, 0.5), note(76, 1.5, 0.5), note(78, 2, 1), note(79, 3, 1)},
+                       QStringLiteral("Notes"));
+        QTRY_VERIFY(roll()->outOfKey(78));
+        const int scrolled = roll()->scrollY();
+        roll()->setScrollY(roll()->pitchTop(84) + roll()->scrollY());
+        test::screenshot(window_, QStringLiteral("piano-roll-chords"));
+        roll()->setScrollY(scrolled);
+        roll()->commit({}, QStringLiteral("Notes"));
+
+        session().harmony()->setShown(false);
+        QVERIFY(!lane->isVisible());
+        QVERIFY(roll()->chords().empty());
+        QVERIFY(!roll()->scaleKey());
+        QVERIFY(!clipView_->findChild<QQuickItem*>(QStringLiteral("keyLabel"))->isVisible());
+        QTRY_VERIFY(window_->grabWindow().pixelColor(inC) != shown);  // the grid, untinted
+        session().harmony()->setShown(true);
+        QCOMPARE(chordNames(), QStringLiteral("C 0-2, G 2-4"));
+
+        // A double-click in the lane adds a note under it: the lane takes no clicks.
+        test::doubleClick(window_, test::at(lane, QPointF(roll()->view().beatToX(3.0) + 3, 9)));
+        QCOMPARE(clipNotes().size(), size_t(1));
+        QCOMPARE(clipNotes().front().pitch, roll()->pitchAt(9));
+    }
+
+    // Notes out of the key are tinted red: the project's key, or the one the
+    // song is in; none while the harmony is hidden.
+    void notesOutOfTheKeyShowRed() {
+        openMidiClip();
+        session().editor()->setKeyByName(QStringLiteral("C"));
+        roll()->commit({note(60, 0, 1), note(66, 1, 1)}, QStringLiteral("Notes"));
+        QTRY_VERIFY(roll()->scaleKey().has_value());
+        QVERIFY(!roll()->outOfKey(60));
+        QVERIFY(roll()->outOfKey(66));
+        QVERIFY(roll()->outOfKey(66 + 12));
+        const QImage image = window_->grabWindow();
+        const QColor c = gridPixel(image, 0.9, 60), fSharp = gridPixel(image, 1.9, 66);
+        QVERIFY2(redness(fSharp) > redness(c) + 20,
+                 qPrintable(QStringLiteral("%1 vs %2").arg(fSharp.name(), c.name())));
+
+        // No key set: the one the song's notes are in.
+        session().editor()->setKeyByName(QString());
+        roll()->commit(chord({60, 64, 67}, 0, 4) + std::vector<Note>{note(65, 0, 1), note(62, 1, 1), note(66, 2, 0.5)},
+                       QStringLiteral("Notes"));
+        QTRY_COMPARE(session().harmony()->keyLabel(), QStringLiteral("C Major"));
+        QTRY_VERIFY(roll()->outOfKey(66));
+        QVERIFY(!roll()->outOfKey(65));
+
+        session().harmony()->setShown(false);
+        QVERIFY(!roll()->outOfKey(66));
+    }
+
+    // Generate › Chords and › Bass: from a progression in the key where the
+    // song has no chords, else from the song's; one undo step each, selected.
+    void generateWritesChordsAndABass() {
+        openMidiClip();  // an empty song: I V vi IV in C major, from the clip's bar
+        generate("generateChords");
+        std::vector<Note> notes = sortedBy(clipNotes(), true);
+        QCOMPARE(notes.size(), size_t(3));
+        QCOMPARE(notes[0].pitch, 60);
+        QCOMPARE(notes[1].pitch, 64);
+        QCOMPARE(notes[2].pitch, 67);
+        for (const Note& n : notes) {
+            QCOMPARE(n.start, 0.0);
+            QCOMPARE(n.length, 4.0);
+        }
+        QCOMPARE(roll()->selectedCount(), 3);
+        QCOMPARE(undo().undoText(), QStringLiteral("Generate Chords"));
+
+        generate("generateBass");  // under the chords it just wrote (the song's now)
+        notes = sortedBy(clipNotes(), true);
+        QCOMPARE(notes.size(), size_t(4));
+        QCOMPARE(notes[0].pitch, 36);  // C1
+        QCOMPARE(roll()->selectedCount(), 1);
+        QCOMPARE(undo().undoText(), QStringLiteral("Generate Bass"));
+        generate("generateBass");  // again: nothing more to write
+        QCOMPARE(clipNotes().size(), size_t(4));
+        QCOMPARE(undo().undoText(), QStringLiteral("Generate Bass"));
+        undo().undo();
+        undo().undo();
+        QVERIFY(clipNotes().empty());
+
+        // Another track plays A minor over the clip, then F: the bass follows it.
+        keysTrack(chord({45, 57, 60, 64}, 4, 2) + chord({41, 57, 60, 65}, 6, 2));
+        QTRY_COMPARE(chordNames(), QStringLiteral("Am 0-2, F 2-4"));
+        generate("generateBass");
+        notes = sortedBy(clipNotes());
+        QCOMPARE(notes.size(), size_t(2));
+        QCOMPARE(notes[0].pitch, 45);  // A1
+        QCOMPARE(notes[0].length, 2.0);
+        QCOMPARE(notes[1].pitch, 41);  // F1
+        QCOMPARE(notes[1].start, 2.0);
     }
 };
 

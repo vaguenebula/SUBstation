@@ -13,6 +13,13 @@
 // trimming a clip hides notes, never deletes them. Pitch runs 127 at the top
 // to 0 at the bottom, a row of rowHeight pixels each.
 //
+// The song's harmony (Session.harmony) shows over the notes while it is shown
+// (C): the chords the song plays over the part the clip plays (the ChordLane
+// along the grid's top), and notes out of the key tinted red. Both are worked
+// out on the GUI thread when the harmony changes (chords(), scaleKey()), for
+// the items to draw. Generate writes block chords or a bass line from those
+// chords into the clip (from a progression in the key where the song has none).
+//
 // Every edit goes through commit(): the clip's whole new list of notes, one
 // undo command, merged with the previous one when they share a merge key.
 // Gestures pass their own key, so a drag is one undo step, while the model
@@ -20,6 +27,7 @@
 // in the project each time: the project replaces it on every edit.
 
 #include "model/Clip.h"
+#include "model/Keys.h"
 #include "model/Notes.h"
 #include "timeline/Timeline.h"
 #include "session/Session.h"
@@ -40,6 +48,7 @@
 
 namespace sub::app {
 class EngineBridge;
+class Harmony;
 class Project;
 class ProjectEditor;
 class Selection;
@@ -108,6 +117,7 @@ public:
     app::ProjectEditor* editor() const;
     app::EngineBridge* bridge() const;
     app::Selection* selection() const;
+    app::Harmony* harmony() const;
 
     // --- The clip ---------------------------------------------------------------
 
@@ -170,6 +180,32 @@ public:
     double quantizeStep() const;
     static double humanizeBeats() { return app::notes::kHumanizeBeats; }
     static int humanizeVelocity() { return app::notes::kHumanizeVelocity; }
+
+    // --- Harmony -------------------------------------------------------------------
+
+    // A chord of the song over the part the clip plays, in content beats.
+    struct RollChord {
+        double start = 0.0;
+        double end = 0.0;
+        QString name;  // "Am7", "C/E"
+        int root = 0;  // pitch class
+        bool minor = false;  // minor, diminished, half-diminished: drawn darker
+
+        friend bool operator==(const RollChord&, const RollChord&) = default;
+    };
+    // The song's chords over the part the clip plays, and the key notes out of
+    // it are tinted red by (none: none known), while the harmony is shown.
+    const std::vector<RollChord>& chords() const { return chords_; }
+    const std::optional<app::Key>& scaleKey() const { return scaleKey_; }
+    // Whether a pitch is out of scaleKey() (and so drawn tinted red).
+    bool outOfKey(int pitch) const;
+    // Write block chords (or a bass line) into the clip from the song's chords
+    // over the part it plays, or from a progression in the key (C major if
+    // none) where it has none; selected. The clip's own notes stay as they are:
+    // a written note that would overlap one on its key is shortened or left
+    // out. One undo step (none if nothing would be added).
+    Q_INVOKABLE void generateChords();
+    Q_INVOKABLE void generateBass();
 
     // --- Geometry -----------------------------------------------------------------
 
@@ -257,6 +293,8 @@ Q_SIGNALS:
     void locateRequested(double beat);
 
 private:
+    void refreshHarmony();
+    void generate(bool bass);
     void connectSession();
     void repaintAll();
     void viewMoved();     // ViewState.changed: zoom or horizontal scroll
@@ -291,6 +329,8 @@ private:
     double hTotal_ = 0.0;
     double hValue_ = 0.0;
     QPointer<NoteGrid> grid_;
+    std::vector<RollChord> chords_;
+    std::optional<app::Key> scaleKey_;
 };
 
 }  // namespace sub::ui

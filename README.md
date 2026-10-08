@@ -15,7 +15,9 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
   selections, undo/redo for every edit.
 - **Audio clips**: real-time warping (Signalsmith Stretch) with several warp modes,
   transpose and detune; tempo and key read from sample file names.
-- **MIDI**: a piano roll with legato, quantize and humanize tools; MIDI input from
+- **MIDI**: a piano roll with legato, quantize and humanize tools; the song's chords
+  and key worked out from its MIDI and shown over the notes (notes out of the key in
+  red), and block chords or a bass line written from them; MIDI input from
   controllers and the computer keyboard.
 - **Devices**: a built-in Synth, Sampler, Compressor (with sidechain), Over The Top
   multiband compressor and Utility; racks with parallel chains, macros and presets.

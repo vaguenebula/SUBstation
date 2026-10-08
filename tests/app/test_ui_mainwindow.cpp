@@ -31,6 +31,7 @@
 #include "audio/EngineBridge.h"
 #include "browser/BrowserController.h"
 #include "editor/ProjectEditor.h"
+#include "intelligence/Harmony.h"
 #include "model/Project.h"
 #include "mainwindow/WindowState.h"
 #include "pianoroll/PianoRoll.h"
@@ -934,6 +935,16 @@ private Q_SLOTS:
         QCOMPARE(project().tracks()[0].clips.size(), size_t(2));
         QTRY_VERIFY(clipView->isVisible());
         QMetaObject::invokeMethod(clipView, "closeRequested");
+
+        // C: the piano roll's chords and key, shown or hidden (a setting).
+        session().harmony()->setShown(true);
+        window_->contentItem()->forceActiveFocus();
+        key(Qt::Key_C);
+        QVERIFY(!session().harmony()->shown());
+        QVERIFY(!prop(QStringLiteral("showHarmony"), "checked").toBool());
+        key(Qt::Key_C);
+        QVERIFY(session().harmony()->shown());
+        QVERIFY(prop(QStringLiteral("showHarmony"), "checked").toBool());
     }
 
     // Edit › Rename: the session picks what; the view renames it in place
