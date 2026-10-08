@@ -392,13 +392,21 @@ TEST_CASE("the wake callback comes from the index's threads; the source from the
     REQUIRE(index.waitIdle(30.0));
     CHECK(calls.load() >= 1);
     CHECK(eventually([&] { return wakes.load() >= 1; }));
-    // Counted before the take(): a wake after it (one still on its way) is
-    // the only one until the next take(), and the search's would be no other.
-    const int before = wakes.load();
+    // As the application: it takes only when woken, and the search's result
+    // comes to it so. (A wake still on its way from the library's analysis
+    // stands for the search's until it is taken: one wake until the next take().)
+    int seen = wakes.load();
     index.take();
-    index.find(SoundQuery{library.paths[0]});
-    REQUIRE(index.waitIdle(30.0));
-    CHECK(eventually([&] { return wakes.load() > before; }));
+    const uint64_t generation = index.find(SoundQuery{library.paths[0]});
+    std::shared_ptr<const SimilarityResult> result;
+    CHECK(eventually([&] {
+        if (wakes.load() == seen) return false;
+        seen = wakes.load();
+        if (auto update = index.take(); update.result) result = update.result;
+        return result != nullptr;
+    }));
+    REQUIRE(result != nullptr);
+    CHECK_EQ(result->generation, generation);
     CHECK(!onMain.load());
     // Once replaced, the old source is never called again.
     index.setLibrarySource(nullptr);
