@@ -172,7 +172,8 @@ std::vector<ParamSpec> EngineBridge::deviceParamSpecs(const QString& trackId, co
         return specs;
     }
     const auto processorId = engineDeviceId(trackId, device.id);
-    if (!processorId) return {};
+    // A plug-in missing or still loading: its switch only (its lane plays once it loads).
+    if (!processorId) return {deviceOnSpec(device.id, deviceName(device))};
     const quint32 id = *processorId;
     auto cached = d_->paramSpecs.constFind(id);
     if (cached != d_->paramSpecs.constEnd()) return *cached;

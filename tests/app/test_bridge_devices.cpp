@@ -278,6 +278,17 @@ private Q_SLOTS:
         QCOMPARE(*bridge.currentValue(track, gain, 0.0), -6.0);
         // A device that isn't loaded: its values still show.
         QVERIFY(!bridge.paramSpec(track, automation::deviceKey(QStringLiteral("gone"), QStringLiteral("gain"))));
+        // A plug-in that can't load still has its switch to automate.
+        PluginRef missing;
+        missing.path = QStringLiteral("C:/nowhere/Missing.vst3");
+        missing.uid = QStringLiteral("0123456789ABCDEF0123456789ABCDEF");
+        missing.name = QStringLiteral("Missing");
+        const QString lost = studio.edit.addDevice(track, kPluginKind, missing);
+        QVERIFY(!bridge.engineDeviceId(track, lost));
+        const std::vector<ParamSpec> lostSpecs = bridge.deviceParamSpecs(track, studio.project.device(track, lost));
+        QCOMPARE(lostSpecs.size(), size_t{1});
+        QCOMPARE(lostSpecs[0].key, automation::deviceOnKey(lost));
+        QVERIFY(bridge.canAutomate(track, automation::deviceOnKey(lost)));
     }
 
     void theEngineTakesSidechains() {
