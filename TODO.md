@@ -566,6 +566,8 @@ Sound similarity
 
 Later
 - [ ] MIDI generation.
-- [ ] MIDI humanisation (an XGBoost model, its C++ library).
+- [x] MIDI humanisation of velocities (HUMANBRO's XGBoost model, its C++ library
+      vendored): the piano roll's Humanize › Velocity.
+- [ ] A timing model for Humanize › Timing (now random nudges).
 - [ ] Chord recognition over a whole project.
 - [ ] An MCP server for agents.

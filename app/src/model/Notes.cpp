@@ -268,12 +268,10 @@ std::vector<Note> quantized(const std::vector<Note>& notes, double step, double 
     return untangle(moved);
 }
 
-std::vector<Note> humanized(const std::vector<Note>& notes, QRandomGenerator& rng, double amount) {
+std::vector<Note> humanizedTiming(const std::vector<Note>& notes, QRandomGenerator& rng, double amount) {
     std::vector<Note> result;
     for (Note n : notes) {
         n.start = std::max(0.0, n.start + triangular(rng, -1.0, 1.0, 0.0) * amount * kHumanizeBeats);
-        const double velocity = roundHalfEven(n.velocity + triangular(rng, -1.0, 1.0, 0.0) * amount * kHumanizeVelocity);
-        n.velocity = static_cast<int>(std::max(1.0, std::min(127.0, velocity)));
         result.push_back(n);
     }
     return untangle(result);

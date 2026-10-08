@@ -1,15 +1,16 @@
 # Intelligence
 
 The intelligence module is what SUBstation works out about music and sound: for now **sound similarity** (Find
-Similar Sounds in the browser, on threads of its own) and **harmony** (a song's chords and key, inferred from its MIDI:
-the piano roll's chord lane, its notes out of the key in red, and Generate's block chords and bass lines); later MIDI
-generation by machine learning (melodies, accompaniment), MIDI humanisation (an XGBoost model through its C++ library),
+Similar Sounds in the browser, on threads of its own), **harmony** (a song's chords and key, inferred from its MIDI:
+the piano roll's chord lane, its notes out of the key in red, and Generate's block chords and bass lines) and
+**humanizing** (the piano roll's Humanize › Velocity: velocities from HUMANBRO's XGBoost model, through its C++ library,
+vendored); later MIDI generation by machine learning (melodies, accompaniment), a timing model for Humanize › Timing,
 chords from audio, and an MCP server for agents, which will take the harmony as context. It is a layer of its own, as
 the browser's backend is: the static library `sub_intelligence` ([intelligence/src](../intelligence/src), namespace
 `sub::intelligence`), with no Qt, and knowing nothing of the engine or the browser; its application side is
 [app/src/intelligence](../app/src/intelligence) (`SoundSimilarity`, `Session.similarity`; `Harmony`,
-`Session.harmony`). How Find Similar behaves for the user is in
-[guide/browser.md](guide/browser.md#find-similar-sounds), the chords, the key and Generate in
+`Session.harmony`; `Humanizer`, `Session.humanizer`). How Find Similar behaves for the user is in
+[guide/browser.md](guide/browser.md#find-similar-sounds), the chords, the key, Generate and Humanize in
 [guide/midi.md](guide/midi.md#chords-and-key).
 
 ```
@@ -105,7 +106,7 @@ Speed (the index itself, at background priority, its default 4 analysers on a 24
 
 A learned embedding added as another aspect: the `Fingerprint` grows by the model's output (or a projection of
 it), `kFeatureVersion` goes up so saved fingerprints are made again, and the comparison weighs it like the rest.
-The module is where such models go anyway (humanisation's XGBoost). An embedding small enough to run in the
+The module is where such models go anyway (humanizing's XGBoost is one). An embedding small enough to run in the
 background (an EfficientAT or a distilled OpenL3, a few MB) would mostly help *across* kinds; the descriptors stay
 what tells one kick from another.
 
@@ -185,6 +186,76 @@ Chords from audio: the same scoring over the chroma of audio clips (the similari
 changes, and tempo changes, if the project gets them. A model trained on annotated MIDI as one more term of the score
 (or in place of the hand-set transitions), for the ambiguous passages.
 
+## Humanizing: velocities by machine learning
+
+[humanize/](../intelligence/src/humanize) (namespace `sub::intelligence::humanize`) gives a part's notes the
+velocities a pianist would play them with. Velocity and timing are separate models: velocity is this one; timing is
+to come (Humanize › Timing nudges starts at random until then: `notes::humanizedTiming`).
+
+### The model
+
+HUMANBRO, the project's own model: an XGBoost regressor (1 986 trees of depth 8) trained on the MAESTRO v3
+performances (1 276 recorded piano performances, 7 million notes), which predicts each note's velocity from 127
+features of its musical context, every one of them something a score shows: its pitch and register, where it falls in
+the bar (downbeat, beat, offbeat), its length, the intervals to the notes before and after it and the melody's contour,
+the texture around it (how many notes in the last and next seconds and beats, their range), its place in its chord
+(top, bottom, inner voice), the phrase (rests, how far into it), and the piece as a whole. It sees no velocity: the
+same notes always get the same prediction, and a part's own velocities don't leak into it. How it was trained,
+evaluated and checked for leakage is in HUMANBRO's README; its C++ runtime is vendored in
+[intelligence/third_party/humanbro](../intelligence/third_party/humanbro) (its own README and VERSION.txt: what was
+copied, and the one local change, loading a model from memory so the file is opened through the module's wide-path
+`platform::openFile`). It is built as its own static library, `humanbro`, with its strict floating-point flags
+(`/fp:precise`; `-ffp-contract=off -fno-fast-math`): its features match its Python pipeline bit for bit.
+
+The model shipped is [intelligence/models/velocity.hbm](../intelligence/models/velocity.hbm) (15.7 MB, in the
+repository), HUMANBRO's *quantized* model: trained on the performances with every note snapped to the beat grid, and
+snapping the notes it is given to the grid itself. A DAW's notes are drawn, quantized or played in against a tempo
+map, which is what it suits; HUMANBRO's other model, trained on the performances' own timing, does much worse on
+quantized notes (it leans on the timing pianists play with). The build copies it to `bin/models/velocity.hbm`, next
+to the executables, where the application looks for it.
+
+| On MAESTRO's test split (177 performances, 741 410 notes) | MAE | Pearson r | within a performance r |
+|---|---|---|---|
+| the quantized model, on quantized notes | 11.3 | 0.62 | 0.59 |
+| every note at the training set's mean velocity | 15.3 | – | – |
+| each pitch at its mean velocity in the training set | 14.3 | 0.32 | 0.36 |
+
+### A part ([VelocityModel.h](../intelligence/src/humanize/VelocityModel.h))
+
+A note's features look at the notes before and after it, so a part is humanized as a whole: `humanize(part, meter,
+amount)` takes every note of it, those to humanize marked `target`, the others context, and returns the part's
+velocities with only the targets' changed.
+
+- **Where it is**: notes are in quarter-note beats on the song's timeline, bar lines every bar from beat 0; the part
+  is handed to the model from the bar its first note is in (at 960 ticks a quarter note, with the song's tempo and
+  time signature), as a score would start: the features count beats and bars from the start, so a part whole bars
+  later in the song gets the same velocities.
+- **Its level**: how loud a part is overall a score doesn't say (MAESTRO's recordings differ by session and piano), so
+  the model's velocities are levelled to the targets' own mean velocity: the targets keep their loudness and take the
+  model's shape. Then each target moves `amount` (0..1) of the way to its levelled velocity, rounded, held to 1..127.
+- **What it hears**: on a melody over chords it plays the melody about 25 louder than the accompaniment, a chord's
+  top note a little louder than the rest, a phrase's first note softer. Its dynamics are compressed, as a
+  squared-error model's are (HUMANBRO measured its unquantized model's spread at a standard deviation of 13 where the
+  pianists' is 19); amounts are how far toward it, never past.
+
+Speed (a release build on an Intel Core Ultra 7 270K Plus): loading the model, 18 ms and 16 MB; 200 notes, 29 ms;
+500, 71 ms (on one core: the runtime spreads rows over cores from 512 notes on); 2 500, 81 ms; 10 000, 108 ms.
+
+### Humanizing: the application side
+
+`Humanizer` ([Humanizer.h](../app/src/intelligence/Humanizer.h), `Session.humanizer`) lives on the application's
+thread. It loads the model the first time velocities are asked for (from `velocityModelPath()`,
+`<the application's folder>/models/velocity.hbm`) and keeps it; if it can't (missing, damaged, locked), it says so
+on `statusMessage`, gives no velocities, and tries again the next time. `velocityAvailable` (the file is there) is what greys out the menu entry.
+
+`velocities(targets, amount)` takes notes of clips (each with its track and clip) and judges each track as one part:
+every note its clips are heard playing (`Clip::heardNotes()`: none of a deactivated clip, nor deactivated notes, each
+where it plays on the timeline) is context, and the targets are put where their clips play them (deactivated or
+hidden by a trim, they are still humanized). Drum tracks (`Harmony::isDrumTrack()`) are left as they are, and the
+status line says so: the model knows pianos. Each track's targets keep their own mean, so humanizing a quiet pad and a
+loud lead together leaves each as loud as it was. Nothing runs in the background: a click on Humanize › Velocity
+waits for it, a tenth of a second for the longest parts.
+
 ## Files
 
 ### The module (`intelligence/src`)
@@ -200,6 +271,9 @@ changes, and tempo changes, if the project gets them. A model trained on annotat
 | [harmony/Chords.h](../intelligence/src/harmony/Chords.h) | `Quality`, `Chord` (its notes, its name: "Am7", "C/E"), `Key` (its scale, its triads), `pitchClass()`, `noteName()` |
 | [harmony/ChordInference.h](../intelligence/src/harmony/ChordInference.h) | `Note`, `ChordSpan`, `InferenceOptions`, `Harmony`; `estimateKey()`, `inferHarmony()` |
 | [harmony/Accompaniment.h](../intelligence/src/harmony/Accompaniment.h) | `GeneratedNote`; `chordPart()`, `bassPart()`, `starterProgression()` |
+| [humanize/VelocityModel.h](../intelligence/src/humanize/VelocityModel.h) | `VelocityModel` (`humanize()`, `predict()`), `Note` (a part's, `target` or context), `Meter`, `ModelError` |
+| [third_party/humanbro](../intelligence/third_party/humanbro) | HUMANBRO's C++ runtime (the `humanbro` library): `humanbro::Humanizer`, its features and tree walker |
+| [models/velocity.hbm](../intelligence/models) | The velocity model (HUMANBRO's quantized one); [models/README.md](../intelligence/models/README.md) says where it came from and how to replace it |
 
 ### The application side (`app/src/intelligence`)
 
@@ -207,6 +281,7 @@ changes, and tempo changes, if the project gets them. A model trained on annotat
 |---|---|
 | [SoundSimilarity.h](../app/src/intelligence/SoundSimilarity.h) | `SoundSimilarity` (`Session.similarity`): the index on the application's thread; `setLibrary(FileIndex*)`, `find()`, `found(SimilarSounds)`, `progressChanged`; `SimilarSounds` (a result: `similarity(path)`, `best(n)`, `scorer()`) |
 | [Harmony.h](../app/src/intelligence/Harmony.h) | `Harmony` (`Session.harmony`): the song's notes (`songNotes()`), its chords and key inferred from them when asked after a change, the key (the project's, else inferred), `shown` (the setting C toggles) |
+| [Humanizer.h](../app/src/intelligence/Humanizer.h) | `Humanizer` (`Session.humanizer`): the velocity model loaded on first use (`velocityModelPath()`, `velocityAvailable`), `velocities(targets, amount)` with each track's notes as context, `statusMessage` |
 
 The browser's side of Find Similar is in [BrowserController](../app/src/browser/BrowserController.h)
 (`findSimilar()`, `clearSimilar()`, `similarTo`) and the backend's `Sort::Score` ([browser.md](browser.md)).
@@ -309,6 +384,10 @@ too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`
   sets the scale searches measure in).
 - Harmony is pure functions of the notes and options: the same song always gives the same chords, key and parts.
   It keeps nothing and starts no thread; the application infers it on its own thread, only when asked after a change.
+- Humanized velocities are a pure function of the part's notes, the meter and the amount: the model never sees a
+  velocity (only the targets' mean, which levels it), and the same part always comes out the same. Only targets
+  change. The vendored runtime (`intelligence/third_party/humanbro`, outside the boundary check's folders) includes
+  nothing of Qt either.
 
 ## Extending it
 
@@ -326,6 +405,14 @@ too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`
   (ChordInference.cpp), and how thin steps take it in `thinPrior()`.
 - **Another part to generate**: a function from `ChordSpan`s to `GeneratedNote`s in Accompaniment.h, a
   `Q_INVOKABLE` on `PianoRoll` like `generateBass()`, and an entry in the clip view's Generate menu.
+- **The timing model**: a `TimingModel` beside `VelocityModel` in humanize/ (a part of notes in, each target's start
+  offset out), its file as `models/timing.hbm` (copied by intelligence/CMakeLists.txt as velocity.hbm is), a
+  `timings()` on `Humanizer` beside `velocities()`, and `PianoRoll::humanizeTiming()` asking it in place of
+  `notes::humanizedTiming` (the menu and its amount are there already).
+- **Another velocity model** (retrained, or HUMANBRO's unquantized one for played-in parts): export it with HUMANBRO's
+  `export_cpp_model.py`, replace `models/velocity.hbm` (the build copies it again), and run `intelligence_tests`
+  ("humaniz", "velocity", "melody"...) and `test_humanizer`. A model of another target mode (HUMANBRO's residual
+  ones) is refused on loading; a newer runtime goes into third_party/humanbro with its local change kept.
 
 ## Tests
 
@@ -345,8 +432,17 @@ too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`
 - [tests/app/test_harmony.cpp](../tests/app/test_harmony.cpp): the song's notes (MIDI tracks heard, not drums, what
   clips play where), following the project once edits settle, the key (the project's or inferred), the bars of the
   time signature, the `shown` setting.
+- [tests/intelligence/test_humanize.cpp](../tests/intelligence/test_humanize.cpp) (`intelligence_tests`, with the
+  model in the repository): loading it, and refusing a missing, junk or truncated file; predictions independent of
+  the notes' velocities and of whole bars before the part, but not of where in the bar notes fall or of the time
+  signature; the targets' level kept and the context untouched; the amount (none, half); a melody over chords louder
+  than the inner voices; a note alone, a chord alone, notes of no length, no notes; a long part's speed.
+- [tests/app/test_humanizer.cpp](../tests/app/test_humanizer.cpp): the model next to the tests (`bin/models`); a
+  clip's velocities where it plays on the timeline, at the notes' own level; a track's other clips as context, its
+  deactivated notes and clips not; each track keeping its own level; targets whose clip is gone.
 - [tests/app/test_ui_pianoroll.cpp](../tests/app/test_ui_pianoroll.cpp): the chord lane over the clip (hidden with
-  the key, clicks going through it), notes out of the key in red, Generate › Chords and › Bass;
+  the key, clicks going through it), notes out of the key in red, Generate › Chords and › Bass; Humanize's menu
+  (Velocity and Timing, each with its own amount, the notes getting the keyboard back);
   [test_ui_mainwindow.cpp](../tests/app/test_ui_mainwindow.cpp): C.
 - [tests/app/test_sound_similarity.cpp](../tests/app/test_sound_similarity.cpp): the browser's files analysed; Find
   Similar's list, sort, status, filtering by text and places; ending it (another sort, another list, clearing, Ctrl+F);

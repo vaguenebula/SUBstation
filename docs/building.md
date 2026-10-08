@@ -95,7 +95,8 @@ Pass them at configure time: `cmake -B build -DSUBSTATION_TEST_PLUGINS=OFF`.
 | `vst3_base`, `vst3_hosting` | static libraries | engine | The VST 3 SDK's interfaces and base library, and its host side (module loading: `module_win32.cpp` or `module_linux.cpp`). `vst3_hosting` is C++17 on purpose: as C++17 the module loader reads paths as UTF-8 (`u8path`); as C++20 it would use the ANSI code page on Windows, and plug-ins with non-ASCII paths would not load. |
 | `sub_engine` | static library | engine | The real-time engine ([engine/](../engine/CMakeLists.txt)): no Qt. On Windows it adds the WinMM MIDI backend, the plug-in editor windows and, with the SDK, ASIO; elsewhere a MIDI backend without devices and no editor windows. |
 | `sub_browser` | static library | browser | The browser's file index and search ([browser/](../browser/CMakeLists.txt)): no Qt; Win32 or POSIX platform layer. |
-| `sub_intelligence` | static library | intelligence | Sound similarity, and later more ([intelligence/](../intelligence/CMakeLists.txt)): no Qt, nothing of the engine or the browser; decodes through `miniaudio`, transforms with `signalsmith_linear`; Win32 or POSIX platform layer. |
+| `humanbro` | static library | intelligence | [HUMANBRO](../intelligence/third_party/humanbro)'s C++ runtime: MIDI features and the tree ensemble that predicts velocities. Built with its own strict floating-point flags (`/fp:precise`; `-ffp-contract=off -fno-fast-math`). |
+| `sub_intelligence` | static library | intelligence | Sound similarity, harmony, humanizing, and later more ([intelligence/](../intelligence/CMakeLists.txt)): no Qt, nothing of the engine or the browser; decodes through `miniaudio`, transforms with `signalsmith_linear`, predicts velocities with `humanbro`; Win32 or POSIX platform layer. Configuring copies its models ([intelligence/models](../intelligence/models)) into `bin/models`, beside the executables. |
 | `substation-scan` | executable | tools | The VST3 scanner's child process ([tools/scanner](../tools/scanner/main.cpp)): links `sub_engine`, no Qt. |
 | `sub_app` | static library | app | The application layer ([app/](../app/CMakeLists.txt)): Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence`. Built with `QT_NO_KEYWORDS` (public): it and everything on it write `Q_SIGNALS`, `Q_SLOTS`, `Q_EMIT`. |
 | `sub_ui`, `sub_uiplugin` | static library + its QML plugin | ui | The QML module `SUBstation` ([ui/](../ui/CMakeLists.txt)): the QML files, the C++ Qt Quick items, the icons; and `SUBstation.Style`, the Qt Quick Controls style (`ui/style`). |
@@ -153,6 +154,12 @@ Vendored in [engine/third_party](../engine/third_party), so nothing else needs i
 
 Each folder has its licence and a `VERSION.txt` saying what was taken and that it is unmodified. Qt is not vendored:
 it is LGPL-3.0 (or commercial), linked dynamically.
+
+And in [intelligence/third_party](../intelligence/third_party), the project's own:
+
+| Library | Version | Licence | What is used |
+|---|---|---|---|
+| [HUMANBRO](../intelligence/third_party/humanbro) | copied 2026-10-08 | the project's own | its C++ runtime (`include/`, `src/`; not its CLI), with one local change its `VERSION.txt` describes (loading a model from memory); the model it runs is [intelligence/models/velocity.hbm](../intelligence/models/README.md) |
 
 ## Gotchas
 

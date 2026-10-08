@@ -34,6 +34,7 @@ file(GLOB INTELLIGENCE_TEST_SOURCES CONFIGURE_DEPENDS intelligence/*.cpp)
 add_executable(intelligence_tests engine/harness/Main.cpp ${INTELLIGENCE_TEST_SOURCES} intelligence/Sounds.h)
 target_include_directories(intelligence_tests PRIVATE engine intelligence)  # (harness/Test.h: never the harness folder itself, whose Signal.h is <signal.h> where names ignore case)
 target_link_libraries(intelligence_tests PRIVATE sub_intelligence)
+target_compile_definitions(intelligence_tests PRIVATE SUBSTATION_VELOCITY_MODEL="${PROJECT_SOURCE_DIR}/intelligence/models/velocity.hbm")
 sub_project_warnings(intelligence_tests)
 add_test(NAME intelligence COMMAND intelligence_tests)
 

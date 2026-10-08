@@ -87,8 +87,17 @@ on the selected notes and hides while you drag them. Each tool is one undo step.
 - **Quantize** (Ctrl+U) moves note starts onto a grid (1/4 to 1/32, or triplets; 1/16
   by default), by an amount from 0 to 100 %. Lengths stay. With nothing selected,
   Ctrl+U quantizes every note.
-- **Humanize** nudges starts and velocities at random. At 100 % a note moves by up to a
-  32nd note and its velocity by up to 24; the default is 25 %.
+- **Humanize ▾** opens a menu of two, each with its own amount at its right (drag it, or
+  double-click to type one); click a name to apply it:
+  - **Velocity** gives the notes the velocities a model trained on pianists'
+    performances hears in them: a melody louder than its accompaniment, a chord's top
+    note, accents on strong beats, the shape of a phrase. It listens to the whole track
+    (the notes around the selected ones too), and the notes keep their overall
+    loudness: it shapes them, it doesn't make them louder or softer. The amount is how
+    far velocities move toward the model's (100 % at first: all the way). The same notes
+    always get the same velocities.
+  - **Timing** nudges starts at random, as a player would. At 100 % a note moves by up
+    to a 32nd note; the default is 25 %. Lengths and velocities stay.
 
 ### Chords and key
 

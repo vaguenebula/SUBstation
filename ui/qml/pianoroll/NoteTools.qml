@@ -2,8 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// The note tools: Legato, timing ×2 and ÷2, Quantize and Humanize, in a small
-// rounded bar that glides in over the note grid next to a group of notes
+// The note tools: Legato, timing ×2 and ÷2, Quantize, and Humanize (a menu:
+// Velocity, from the velocity model, and Timing, each with its own amount), in
+// a small rounded bar that glides in over the note grid next to a group of notes
 // selected by dragging a rubber band or with Ctrl+A (the roll's toolsShown).
 // Centred above the notes (below them when there is no room), kept inside the
 // grid; it fades in rising 8 px (180 ms, ease out) and fades out sinking back
@@ -93,6 +94,48 @@ Rectangle {
         anchors.verticalCenter: parent ? parent.verticalCenter : undefined
     }
 
+    // A Humanize menu entry: clicking its name humanizes; its amount (a
+    // number box at its right, which keeps its clicks) is its own.
+    component HumanizeItem: MenuItem {
+        id: item
+
+        property real amount
+        property string amountName
+        property string tip
+        property string amountTip
+        signal amountMoved(real value)
+
+        rightPadding: amountBox.width + 16
+        ToolTip.visible: hovered && !amountBox.hovered && tip !== ""
+        ToolTip.text: tip
+        ToolTip.delay: 700
+
+        ValueBox {
+            id: amountBox
+            objectName: item.amountName
+            anchors.right: parent.right
+            anchors.rightMargin: 4
+            anchors.verticalCenter: parent.verticalCenter
+            from: 0
+            to: 100
+            step: 1
+            decimals: 0
+            sampleText: "100 %"
+            formatter: v => v.toFixed(0) + " %"
+            value: item.amount
+            onMoved: value => item.amountMoved(value)
+            ToolTip.visible: hovered && !dragging
+            ToolTip.text: item.amountTip
+            ToolTip.delay: 700
+        }
+    }
+
+    // The notes take the keyboard back (after a menu had it).
+    function focusNotes() {
+        if (parent)
+            parent.forceActiveFocus()
+    }
+
     Row {
         id: row
         x: 8
@@ -162,25 +205,54 @@ Rectangle {
         }
         Separator {}
         ToolsButton {
+            id: humanizeButton
             objectName: "humanize"
-            text: qsTr("Humanize")
-            tooltip: qsTr("Nudge the selected notes' timing and velocity at random,\nas a player would")
-            onClicked: tools.roll.humanize()
-        }
-        ValueBox {
-            objectName: "humanizeAmount"
-            anchors.verticalCenter: parent.verticalCenter
-            from: 0
-            to: 100
-            step: 1
-            decimals: 0
-            sampleText: "100 %"
-            formatter: v => v.toFixed(0) + " %"
-            value: tools.roll.humanizeAmount
-            onMoved: value => tools.roll.humanizeAmount = value
-            ToolTip.visible: hovered && !dragging
-            ToolTip.text: qsTr("Humanize amount. At 100 % notes move by up to a 32nd note (%1 beats)\neither way and velocities change by up to %2.").arg(tools.roll.humanizeBeats).arg(tools.roll.humanizeVelocity)
-            ToolTip.delay: 700
+            text: qsTr("Humanize ▾")
+            tooltip: qsTr("Humanize the selected notes' velocities (from a model of how pianists play)\nor their timing, each by its own amount")
+            onClicked: humanizeMenu.popup(humanizeButton, 0, humanizeButton.height)
+
+            Menu {
+                id: humanizeMenu
+                objectName: "humanizeMenu"
+
+                // An entry was chosen: the notes take the keyboard back once the
+                // menu has closed (after the popup's own focus handling).
+                property bool chosen: false
+                onClosed: {
+                    if (chosen)
+                        tools.focusNotes()
+                    chosen = false
+                }
+
+                HumanizeItem {
+                    objectName: "humanizeVelocity"
+                    // (Without models/velocity.hbm next to SUBstation: greyed out.)
+                    text: enabled ? qsTr("Velocity") : qsTr("Velocity (no model)")
+                    enabled: tools.roll.velocityModelAvailable
+                    amount: tools.roll.humanizeVelocityAmount
+                    amountName: "humanizeVelocityAmount"
+                    tip: qsTr("Give the notes the velocities a model trained on pianists' performances\nhears in them: a melody over its chords, a chord's top note, accents,\nphrases. The part keeps its loudness")
+                    amountTip: qsTr("How far velocities move toward the model's (100 %: all the way)")
+                    onAmountMoved: value => tools.roll.humanizeVelocityAmount = value
+                    onTriggered: {
+                        humanizeMenu.chosen = true
+                        tools.roll.humanizeVelocity()
+                    }
+                }
+                HumanizeItem {
+                    objectName: "humanizeTiming"
+                    text: qsTr("Timing")
+                    amount: tools.roll.humanizeTimingAmount
+                    amountName: "humanizeTimingAmount"
+                    tip: qsTr("Nudge the notes' starts at random, as a player would")
+                    amountTip: qsTr("Timing amount: at 100 % notes move by up to a 32nd note\n(%1 beats) either way").arg(tools.roll.humanizeBeats)
+                    onAmountMoved: value => tools.roll.humanizeTimingAmount = value
+                    onTriggered: {
+                        humanizeMenu.chosen = true
+                        tools.roll.humanizeTiming()
+                    }
+                }
+            }
         }
     }
 }

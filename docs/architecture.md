@@ -54,7 +54,7 @@ and searches the sample browser's files, and the intelligence module, which work
 | Application layer | [app/src](../app/src): `model/`, `editor/`, `io/`, `audio/`, `session/`, `browser/`, `intelligence/`, `plugins/`, `analysis/` | `sub_app` | Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence` | [app/](README.md#application-layer) |
 | Audio engine | [engine/src](../engine/src) | `sub_engine` (namespace `sub`) | the C++ standard library, miniaudio, the VST 3 SDK | [engine/](engine/README.md) |
 | Browser backend | [browser/src](../browser/src) | `sub_browser` (namespace `sub::browser`) | the C++ standard library | [browser.md](browser.md) |
-| Intelligence | [intelligence/src](../intelligence/src): `core/`, `similarity/`, `harmony/` | `sub_intelligence` (namespace `sub::intelligence`) | the C++ standard library, miniaudio (its decoders), Signalsmith Linear (its FFTs) | [intelligence.md](intelligence.md) |
+| Intelligence | [intelligence/src](../intelligence/src): `core/`, `similarity/`, `harmony/`, `humanize/` | `sub_intelligence` (namespace `sub::intelligence`) | the C++ standard library, miniaudio (its decoders), Signalsmith Linear (its FFTs), HUMANBRO's runtime (`humanbro`, vendored; its model in intelligence/models) | [intelligence.md](intelligence.md) |
 | Plug-in scanner | [tools/scanner](../tools/scanner/main.cpp) | `substation-scan`, a program of its own | `sub_engine` | [app/plugin-scanner.md](app/plugin-scanner.md) |
 
 [ui/main.cpp](../ui/main.cpp) puts the layers together: it makes the `QGuiApplication`, the engine, the

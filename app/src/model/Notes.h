@@ -27,9 +27,8 @@ inline constexpr std::array<QuantizeGrid, 6> kQuantizeGrids{{{"1/4", 1.0},
                                                              {"1/16", 0.25},
                                                              {"1/16T", 1.0 / 6},
                                                              {"1/32", 0.125}}};
-// At 100 % humanize, how far a note may move (a 32nd note) and its velocity change.
+// At 100 % Humanize › Timing, how far a note may move (a 32nd note).
 inline constexpr double kHumanizeBeats = 0.125;
-inline constexpr int kHumanizeVelocity = 24;
 
 // Ableton's octave numbering: note 60 (middle C) is C3.
 QString noteName(int pitch);
@@ -79,9 +78,9 @@ std::vector<Note> timeScaled(const std::vector<Note>& notes, double factor);
 // Move each note's start toward the nearest multiple of `step` beats, all the
 // way at `amount` 1, keeping its length.
 std::vector<Note> quantized(const std::vector<Note>& notes, double step, double amount = 1.0);
-// Nudge each note's start and velocity at random, as a player would: at
-// `amount` 1 by up to kHumanizeBeats and kHumanizeVelocity either way, more
-// often a little than a lot. Lengths stay.
-std::vector<Note> humanized(const std::vector<Note>& notes, QRandomGenerator& rng, double amount);
+// Nudge each note's start at random, as a player would: at `amount` 1 by up
+// to kHumanizeBeats either way, more often a little than a lot. Lengths and
+// velocities stay (velocities are the velocity model's: app::Humanizer).
+std::vector<Note> humanizedTiming(const std::vector<Note>& notes, QRandomGenerator& rng, double amount);
 
 }  // namespace sub::app::notes
