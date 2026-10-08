@@ -15,7 +15,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 
 | File | What it holds |
 |---|---|
-| [ArrangementView.qml](../../ui/qml/arrangement/ArrangementView.qml) | The layout: the ruler, the grid's corner, the lanes and the headers' column, the returns' rows, the master's, the scroll bars; its interface to the main window |
+| [ArrangementView.qml](../../ui/qml/arrangement/ArrangementView.qml) | The layout: the ruler, the grid's corner, the lanes and the headers' column, the returns' rows, the master's, the vertical scroll bar; its interface to the main window |
 | [Arrangement](../../ui/src/arrangement/Arrangement.h) | The view's state (the old `ArrangementView` and `ViewState`): the time axis (a `timeline::Timeline`: zoom, scroll, the adaptive grid, snapping), following the playhead, the `TrackLayout` and the row models QML lays out, the scroll bars, the playhead, dragging headers to move tracks, Alt+wheel resizing, Ctrl+R |
 | [TrackLayout](../../ui/src/arrangement/TrackLayout.h) | `TrackLayout`, `Row`, `LaneRow`, `AutomationRows`, `automationRows()`, `returnRows()`, `masterRows()`; the layout constants |
 | [RowModels](../../ui/src/arrangement/RowModels.h) | `TrackRowModel` (a header per track, where it sits) and `ReturnRowModel` (a lane and a header per return) |
@@ -49,9 +49,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 │ a BusLane per return         │ ReturnHeaders     │        │
 ├──────────────────────────────┼───────────────────┤        │
 │ BusLane (the master's)       │ MasterHeader      │        │
-├──────────────────────────────┼───────────────────┴────────┘
-│ hbar                         │
-└──────────────────────────────┘
+└──────────────────────────────┴───────────────────┴────────┘
 ```
 
 Every drawn part is given `session: Session` and `arrangement: arrangementState` (the view's one `Arrangement`).
@@ -74,11 +72,11 @@ For the main window the view offers `zoom(factor)`, `zoomToArrangement()`, `narr
 `gridLevel`, and the signal `statusMessage(text)`. Clips double-clicked open through
 `Session.arrangement.clipViewRequested`; a click on the ruler plays from there through `Session.locate(beat)`.
 
-The scroll bars are views of the `Arrangement`, not the other way round: `updateHBar()` sets the horizontal range
-from the content's end (the last clip, the loop's end, or the visible width, plus 16 bars) and `updateVBar()` the
-vertical one from `TrackLayout::totalHeight()` plus `kDropZone` (120 px of empty space below the tracks for dropping
-files). A bar's `position` is bound to the state except while the user drags it; then it calls `scrollToX()` /
-`scrollToY()`.
+The scroll bar (vertical: there is no horizontal one, the wheel, the ruler and Ctrl+Alt drags scroll in time) is a
+view of the `Arrangement`, not the other way round: `updateVBar()` sets its range from `TrackLayout::totalHeight()`
+plus `kDropZone` (120 px of empty space below the tracks for dropping files), and `updateHBar()` the horizontal range
+(`hScrollTotal`: the content's end, the last clip, the loop's end or the visible width, plus 16 bars). The bar's
+`position` is bound to the state except while the user drags it; then it calls `scrollToY()`.
 
 ## Arrangement and coordinates
 
@@ -100,7 +98,7 @@ It emits `viewChanged` (zoom or horizontal scroll), `vscrollChanged`, `gridChang
   the corner shows ("Grid 1/16", "Grid 2 Bars", " (off)" while not snapping).
 - `snapBeat(beat, bypass)` rounds to the grid unless snapping is off or `bypass` (Alt held) is true.
 - **Following**: while playing with `follow` on, `onPosition()` scrolls so the playhead stays between 4 % and 96 % of
-  the lanes' width (`kFollowMargin`). Scrolling by hand (the scroll bar, the wheel, the ruler, a Ctrl+Alt drag:
+  the lanes' width (`kFollowMargin`). Scrolling by hand (the wheel, the ruler, a Ctrl+Alt drag:
   `scrollByHand()`) sets `followPaused` until playback stops or starts again.
 
 The piano roll has a `Timeline` of its own over content beats (see [piano-roll.md](piano-roll.md)), so the grid code

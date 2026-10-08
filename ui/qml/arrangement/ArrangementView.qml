@@ -4,9 +4,10 @@ import SUBstation
 
 // The arrangement: the ruler on top, the track lanes with their headers on the
 // right (as in Ableton), the return tracks and the master pinned at the bottom
-// (the returns above the master, a compact row each), and the scroll bars. What
-// it draws and how it is edited are the C++ items' (ui/src/arrangement); the
-// state they share is the Arrangement.
+// (the returns above the master, a compact row each), and the vertical scroll
+// bar (no horizontal one: the wheel, the ruler and Ctrl+Alt drags scroll in
+// time). What it draws and how it is edited are the C++ items'
+// (ui/src/arrangement); the state they share is the Arrangement.
 //
 //    col 0 (stretches)               col 1 (252)          col 2
 //   ┌──────────────────────────────┬────────────────────────────┐
@@ -17,9 +18,7 @@ import SUBstation
 //   │ a BusLane per return         │ ReturnHeaders     │  1-3)  │
 //   ├──────────────────────────────┼───────────────────┤        │
 //   │ BusLane (the master's)       │ MasterHeader      │        │
-//   ├──────────────────────────────┼───────────────────┴────────┘
-//   │ hbar                         │
-//   └──────────────────────────────┘
+//   └──────────────────────────────┴───────────────────┴────────┘
 //
 // For the main window:
 //   functions zoom(factor), zoomToArrangement(), narrowGrid(), widenGrid(),
@@ -45,7 +44,7 @@ FocusScope {
     readonly property int rulerHeight: 40
     readonly property real lanesWidth: Math.max(0, width - headerWidth - barWidth)
     readonly property real lanesHeight: Math.max(0, height - rulerHeight - arrangementState.returnsHeight
-                                                     - arrangementState.masterHeight - barWidth)
+                                                     - arrangementState.masterHeight)
 
     signal statusMessage(string message)
 
@@ -296,7 +295,7 @@ FocusScope {
         menu: arrangementMenu
     }
 
-    // --- The scroll bars: they follow the view, except while dragged (then the view follows them) ---
+    // --- The scroll bar: it follows the view, except while dragged (then the view follows it) ---
 
     ScrollBar {
         id: vbar
@@ -315,25 +314,6 @@ FocusScope {
         Binding on position {
             when: !vbar.pressed
             value: arrangementState.vScrollValue / Math.max(1, arrangementState.vScrollTotal)
-        }
-    }
-
-    ScrollBar {
-        id: hbar
-        objectName: "hbar"
-        y: view.height - view.barWidth
-        width: view.lanesWidth
-        height: view.barWidth
-        orientation: Qt.Horizontal
-        policy: ScrollBar.AlwaysOn
-        focusPolicy: Qt.NoFocus
-        size: arrangementState.hScrollPage / Math.max(1, arrangementState.hScrollTotal)
-        stepSize: Math.max(1, Math.floor(view.lanesWidth / 20)) / Math.max(1, arrangementState.hScrollTotal)
-        onPositionChanged: if (pressed) arrangementState.scrollToX(position * arrangementState.hScrollTotal)
-
-        Binding on position {
-            when: !hbar.pressed
-            value: arrangementState.hScrollValue / Math.max(1, arrangementState.hScrollTotal)
         }
     }
 }

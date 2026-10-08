@@ -118,3 +118,6 @@ docs/                documentation
 - [Building](docs/building.md) and [testing](docs/testing.md)
 - [User guide](docs/guide/README.md) and [keyboard shortcuts](docs/guide/shortcuts.md)
 - [Code reference](docs/README.md): the engine, the application layer, the UI, the browser
+
+Note:
+This project kinda started out as a meme, but I'm starting to think it's actually much better for my specific workflow than Ableton is. You may or may not find it a good replacement, but I know for certain a lot of issues that bothered me the most with Ableton (crashing on switching audio devices, slow project save and load times) are solved with this DAW. The end goal, however, is to re-invent the way I make music with a DAW. Right now, features are very limited to my specific workflow, but I will continue adding stuff that make it more versatile and suited for everyone's music production needs. 

@@ -2,7 +2,9 @@
 // own): the layout and its look, every menu action calling the session, the
 // shortcuts, the checkable actions kept in step with the model, Open Recent,
 // the files' flows with the unsaved-changes question, closing (a render
-// running, unsaved changes), the title, the status bar, the session's warnings,
+// running, unsaved changes), the title bar (the title, the status line, what
+// drags the window, its buttons, the frame), the info view saying the
+// tooltips, the session's warnings,
 // Export Audio, the clip view over the arrangement, nothing scrolled out of
 // the arrangement or the piano roll drawn over the browser, Edit › Rename, the
 // window's place kept, and the rules of the shortcuts taken from plug-ins'
@@ -13,11 +15,13 @@
 #include <QFileInfo>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoStack>
 
+#include <cmath>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -31,6 +35,7 @@
 #include "mainwindow/WindowState.h"
 #include "pianoroll/PianoRoll.h"
 #include "platform/PluginEditorKeys.h"
+#include "platform/WindowFrame.h"
 #include "session/ArrangementActions.h"
 #include "session/ComputerKeyboard.h"
 #include "session/RenderProgress.h"
@@ -155,40 +160,56 @@ private Q_SLOTS:
         QVERIFY(warnings.isEmpty());
     }
 
-    // The layout as MainWindow had it, in the theme's colours; "Ready" in the status bar.
+    // The layout, in the theme's colours: the title bar on top, the transport
+    // under it, the browser beside the arrangement, and along the window's
+    // bottom (no status bar), as in Ableton, the info view at the left and the
+    // device view across the rest; nothing said in the status line yet.
     void layoutAndLook() {
+        auto* titleBar = item(QStringLiteral("titleBar"));
         auto* browser = item(QStringLiteral("browser"));
         auto* arrangement = item(QStringLiteral("arrangement"));
         auto* devices = item(QStringLiteral("devicePanel"));
+        auto* info = item(QStringLiteral("infoView"));
         auto* transport = item(QStringLiteral("transportBar"));
-        QVERIFY(browser && arrangement && devices && transport);
+        QVERIFY(titleBar && browser && arrangement && devices && info && transport);
+        const QRectF tb = titleBar->mapRectToScene(titleBar->boundingRect());
         const QRectF b = browser->mapRectToScene(browser->boundingRect());
         const QRectF a = arrangement->mapRectToScene(arrangement->boundingRect());
         const QRectF d = devices->mapRectToScene(devices->boundingRect());
+        const QRectF i = info->mapRectToScene(info->boundingRect());
         const QRectF t = transport->mapRectToScene(transport->boundingRect());
+        QCOMPARE(tb, QRectF(0, 0, window_->width(), 32));
+        QCOMPARE(t.top(), tb.bottom());
         QCOMPARE(t.height(), 40.0);
         QVERIFY(t.bottom() <= b.top() + 1);
         QVERIFY(b.right() < a.left());
         QCOMPARE(b.width(), 300.0);
-        QVERIFY(a.bottom() < d.top());
-        QCOMPARE(a.left(), d.left());
-        QCOMPARE(status(), QStringLiteral("Ready"));
+        QCOMPARE(a.bottom(), b.bottom());
+        QVERIFY(b.bottom() < i.top() && a.bottom() < d.top());
+        QCOMPARE(i.left(), 8.0);  // (the device view's margin)
+        QCOMPARE(i.top(), d.top() + 8);
+        QCOMPARE(d.left(), i.right());
+        QCOMPARE(d.right(), qreal(window_->width()));
+        QCOMPARE(d.bottom(), qreal(window_->height()));
+        QCOMPARE(status(), QString());
         QCOMPARE(window_->title(), QStringLiteral("Untitled - SUBstation"));
 
         const QImage image = window_->grabWindow();
         test::screenshot(window_, QStringLiteral("main-window"));
         const qreal dpr = window_->effectiveDevicePixelRatio();
         auto pixel = [&](qreal x, qreal y) { return image.pixel(int(x * dpr), int(y * dpr)); };
-        QVERIFY(near(pixel(window_->width() - 5, 5), Theme::kPanel));                     // the menu bar
-        QVERIFY(near(pixel(window_->width() - 5, window_->height() - 5), Theme::kPanel));  // the status bar
-        QVERIFY(near(pixel(t.center().x(), t.bottom() - 1), Theme::kBorder));              // the transport's line
+        auto* windowTitle = item(QStringLiteral("windowTitle"));
+        const QRectF title = windowTitle->mapRectToScene(windowTitle->boundingRect());
+        QVERIFY(near(pixel(title.left() - 8, 5), Theme::kPanel));                 // the title bar
+        QVERIFY(near(pixel(tb.center().x(), tb.bottom() - 1), Theme::kBorder));   // its line
+        QVERIFY(near(pixel(t.center().x(), t.bottom() - 1), Theme::kBorder));     // the transport's line
         QVERIFY(near(pixel((b.right() + a.left()) / 2, a.center().y()), Theme::kBorder));  // a split handle
         // The real views are in: the arrangement's interface is there.
         QVERIFY(item(QStringLiteral("arrangement"))->metaObject()->indexOfMethod("zoomToArrangement()") >= 0);
 
         // The menus, open (with the shortcuts on the right): File clicked, the
         // others as the mouse moves over them.
-        auto* bar = qvariant_cast<QQuickItem*>(window_->property("menuBar"));
+        auto* bar = item(QStringLiteral("menuBar"));
         QVERIFY(bar);
         static const char* names[] = {"file", "edit", "create", "view", "options"};
         for (int menu = 0; menu < 5; ++menu) {
@@ -222,6 +243,106 @@ private Q_SLOTS:
         QCOMPARE(window_->title(), QStringLiteral("song* - SUBstation"));
         trigger(QStringLiteral("undo"));
         QCOMPARE(window_->title(), QStringLiteral("song - SUBstation"));
+        QCOMPARE(prop(QStringLiteral("windowTitle"), "text").toString(), window_->title());  // the title bar's
+    }
+
+    // The title bar: the title in the middle of the window; its empty parts, the
+    // title and the status line drag the window, the menus and the buttons are
+    // the window's. On Windows it is the window's only title bar: the system's
+    // caption is gone (the window's top is its client area's), the window's
+    // buttons are there, and maximized it starts at the screen's top.
+    void titleBar() {
+        auto* frame = window_->findChild<sub::ui::WindowFrame*>();
+        QVERIFY(frame);
+        auto* bar = item(QStringLiteral("titleBar"));
+        auto* title = item(QStringLiteral("windowTitle"));
+        auto* menus = item(QStringLiteral("menuBar"));
+        QVERIFY(bar && title && menus);
+        const QRectF t = title->mapRectToScene(title->boundingRect());
+        QVERIFY(std::abs(t.center().x() - window_->width() / 2.0) <= 1);
+        QVERIFY(t.left() > menus->mapRectToScene(menus->boundingRect()).right());
+
+        using Hit = sub::ui::WindowFrame::Hit;
+        Q_EMIT session().statusMessage(QStringLiteral("Hello"));
+        auto* status = item(QStringLiteral("statusText"));
+        const QRectF said = status->mapRectToScene(status->boundingRect());
+        QCOMPARE(frame->hitTest(t.center()), Hit::Caption);
+        QCOMPARE(frame->hitTest(QPointF(t.left() - 10, 16)), Hit::Caption);             // empty
+        QCOMPARE(frame->hitTest(QPointF(said.right() - 5, said.center().y())), Hit::Caption);  // "Hello"
+        QQuickItem* file = nullptr;
+        QMetaObject::invokeMethod(menus, "itemAt", Q_RETURN_ARG(QQuickItem*, file), Q_ARG(int, 0));
+        QVERIFY(file);
+        QCOMPARE(frame->hitTest(file->mapToScene(QPointF(file->width() / 2, file->height() / 2))), Hit::Client);
+        QCOMPARE(frame->hitTest(QPointF(t.center().x(), 50)), Hit::Client);  // the transport bar
+        // While a menu is open, a press there is the window's: it closes the menu.
+        QVERIFY(frame->overlay());
+        test::click(window_, test::centerOf(file));
+        QTRY_VERIFY(frame->overlay()->isVisible());
+        QCOMPARE(frame->hitTest(t.center()), Hit::Client);
+        key(Qt::Key_Escape);
+        QTRY_VERIFY(!frame->overlay()->isVisible());
+        QCOMPARE(frame->hitTest(t.center()), Hit::Caption);
+
+        auto* buttons = item(QStringLiteral("captionButtons"));
+        QVERIFY(buttons);
+        if (!frame->active()) {  // (not Windows: the system's title bar has them)
+            QVERIFY(!buttons->isVisible());
+            return;
+        }
+        QVERIFY(buttons->isVisible());
+        QCOMPARE(window_->frameGeometry().top(), window_->geometry().top());  // no caption above it
+        auto* maximize = item(QStringLiteral("maximizeButton"));
+        auto* close = item(QStringLiteral("closeButton"));
+        QCOMPARE(frame->hitTest(maximize->mapToScene(QPointF(maximize->width() / 2, 16))), Hit::MaximizeButton);
+        QCOMPARE(frame->hitTest(close->mapToScene(QPointF(close->width() / 2, 16))), Hit::Client);
+        QCOMPARE(frame->hitTest(QPointF(window_->width() - 2, 16)), Hit::Client);
+
+        // Maximized: the title bar is on the screen; then back where it was.
+        const QRect normal = window_->geometry();
+        frame->toggleMaximized();
+        QTRY_VERIFY(window_->windowStates() & Qt::WindowMaximized);
+        QTRY_COMPARE(window_->geometry().top(), window_->screen()->availableGeometry().top());
+        test::screenshot(window_, QStringLiteral("main-window-title-bar-maximized"), QRect(0, 0, window_->width(), 32));
+        frame->toggleMaximized();
+        QTRY_VERIFY(!(window_->windowStates() & Qt::WindowMaximized));
+        QTRY_COMPARE(window_->geometry(), normal);
+    }
+
+    // The tooltips are said in the info view (at the bottom left, as in
+    // Ableton), at once, and don't pop up; with the info view hidden (View ›
+    // Info View), they pop up again.
+    void tooltipsInTheInfoView() {
+        auto* frame = window_->findChild<sub::ui::WindowFrame*>();
+        auto* title = item(QStringLiteral("infoTitle"));
+        auto* text = item(QStringLiteral("infoText"));
+        auto* metronome = item(QStringLiteral("metronome"));
+        QVERIFY(frame && frame->overlay() && title && text && metronome);
+        // Whether a tip pops up (a popup that takes room).
+        auto popped = [&] {
+            for (QQuickItem* popup : frame->overlay()->childItems())
+                if (popup->isVisible() && popup->width() > 0 && popup->height() > 0) return true;
+            return false;
+        };
+        const QPoint nowhere(window_->width() / 2, window_->height() / 3);  // (the arrangement's lanes)
+        QTest::mouseMove(window_, nowhere);
+        QTRY_COMPARE(title->property("text").toString(), QStringLiteral("Info"));
+        QTest::mouseMove(window_, test::centerOf(metronome));
+        QTRY_COMPARE(title->property("text").toString(), QStringLiteral("Metronome"));
+        QCOMPARE(text->property("text").toString(), QString());
+        QTest::qWait(900);  // (longer than a tip's delay)
+        QVERIFY(!popped());
+        test::screenshot(window_, QStringLiteral("main-window-info-view"));
+        QTest::mouseMove(window_, nowhere);
+        QTRY_COMPARE(title->property("text").toString(), QStringLiteral("Info"));
+
+        trigger(QStringLiteral("infoView"));
+        QVERIFY(!item(QStringLiteral("infoView"))->isVisible());
+        QTest::mouseMove(window_, test::centerOf(metronome));
+        QTRY_VERIFY(popped());
+        QTest::mouseMove(window_, nowhere);
+        QTRY_VERIFY(!popped());
+        trigger(QStringLiteral("infoView"));
+        QVERIFY(item(QStringLiteral("infoView"))->isVisible());
     }
 
     // Create's actions, Undo and Redo (their texts and enabled states).
@@ -461,8 +582,8 @@ private Q_SLOTS:
         QTRY_VERIFY(!shown(QStringLiteral("exportDialog")));
     }
 
-    // The status bar: the session's messages (for 8 s); a project's plug-ins loading at its right.
-    void statusBar() {
+    // The title bar's status line: the session's messages (for 8 s); a project's plug-ins loading after it.
+    void statusLine() {
         Q_EMIT session().statusMessage(QStringLiteral("Hello"));
         QCOMPARE(status(), QStringLiteral("Hello"));
         QCOMPARE(prop(QStringLiteral("messageTimer"), "interval").toInt(), session().statusTimeout());
@@ -473,8 +594,7 @@ private Q_SLOTS:
         QCOMPARE(prop(QStringLiteral("pluginsLabel"), "text").toString(), QStringLiteral("Loading plug-ins: 1 of 3"));
         QCOMPARE(prop(QStringLiteral("pluginsBar"), "value").toDouble(), 1.0);
         QCOMPARE(prop(QStringLiteral("pluginsBar"), "to").toDouble(), 3.0);
-        test::screenshot(window_, QStringLiteral("main-window-status-bar"),
-                         QRect(0, window_->height() - 30, window_->width(), 30));
+        test::screenshot(window_, QStringLiteral("main-window-status-line"), QRect(0, 0, window_->width(), 32));
         Q_EMIT bridge().pluginsLoading(0, 0);
         QVERIFY(!loading->isVisible());
     }

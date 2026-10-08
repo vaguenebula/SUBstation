@@ -1,6 +1,7 @@
 # Devices
 
-The device view, below the arrangement, shows the selected track's (or the master's)
+The device view, along the bottom of the window (as in Ableton: under the browser and
+the arrangement, beside the info view), shows the selected track's (or the master's)
 device chain. This page covers working with devices, the built-in devices, racks with
 their chains, macros and presets, folding, and cut, copy and paste. VST3 plug-ins have
 their own page: [plugins.md](plugins.md).
@@ -10,13 +11,16 @@ their own page: [plugins.md](plugins.md).
 - It shows the built-in Synth and Sampler instruments, the Utility device, Over The Top,
   Compressor, Delay, EQ and Sidechain, and plug-ins, all through the same interface: they show alike.
 - On a MIDI track the instrument comes first; the master takes audio effects only.
-- **Ctrl+Alt+L** (*View › Device View*) shows or hides it.
+- **Ctrl+Alt+L** (*View › Device View*) shows or hides it, with the info view.
+- The **info view**, at the bottom left, says what the control under the mouse is: its
+  tooltip shows there at once instead of popping up. *View › Info View* hides it; the
+  tooltips then pop up again (as they always do in dialogs).
 - Add a device by dragging it from the browser onto the chain or onto a track, or by
   double-clicking it in the browser (see [browser.md](browser.md)).
 
 ### Title bar
 
-Each device has a title bar, as in Ableton (lighter while the device is selected), with:
+Each device has a title bar, as in Ableton (teal while the device is selected), with:
 
 - the **fold** triangle (see [Folding](#folding));
 - its **on/off switch** and **name** (the name's tooltip shows the device's latency, if
