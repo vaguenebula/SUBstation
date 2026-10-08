@@ -34,7 +34,7 @@ std::vector<char> readFile(const std::string& path) {
 VelocityModel::VelocityModel(const std::string& path) {
     try {
         model_ = std::make_unique<humanbro::Humanizer>(readFile(path));
-    } catch (const humanbro::Error& error) {
+    } catch (const std::exception& error) {  // (humanbro::Error, or whatever else a damaged file makes it throw)
         throw ModelError(path + ": " + error.what());
     }
     if (model_->target_mode() != "absolute")

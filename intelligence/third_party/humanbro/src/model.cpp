@@ -4,6 +4,7 @@
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 
 #include "humanbro/humanbro.hpp"
 
@@ -25,8 +26,8 @@ public:
 
     template <typename T>
     std::vector<T> array(std::size_t n) {
+        if (n > remaining() / sizeof(T)) throw Error("model file is truncated");  // (before allocating)
         std::vector<T> v(n);
-        need(n * sizeof(T));
         if (n) std::memcpy(v.data(), data_.data() + pos_, n * sizeof(T));
         pos_ += n * sizeof(T);
         return v;
@@ -39,9 +40,11 @@ public:
         return s;
     }
 
+    std::size_t remaining() const { return data_.size() - pos_; }
+
 private:
     void need(std::size_t n) const {
-        if (pos_ + n > data_.size()) throw Error("model file is truncated");
+        if (n > remaining()) throw Error("model file is truncated");
     }
     std::vector<char> data_;
     std::size_t pos_ = 0;
@@ -95,6 +98,7 @@ TreeModel TreeModel::parse(std::vector<char> data, const std::string& name) {
 
     TreeModel m;
     PipelineConfig& c = m.config;
+    try {  // (std::stod / std::stoi throw std::invalid_argument or std::out_of_range on a damaged header)
     c.target_mode = get("target_mode");
     c.experiment = get("experiment");
     c.context = get("context");
@@ -113,6 +117,9 @@ TreeModel TreeModel::parse(std::vector<char> data, const std::string& name) {
     c.residual_stat = get("residual_stat");
     m.base_score = static_cast<float>(std::stod(get("base_score")));
     m.features = split_ws(get("features"));
+    } catch (const std::logic_error&) {
+        throw Error("model header has a value that is not a number: " + name);
+    }
 
     if (c.context != "bidirectional") throw Error("only bidirectional-context models are supported");
     if (c.experiment == "performance_conditioned")
@@ -120,6 +127,9 @@ TreeModel TreeModel::parse(std::vector<char> data, const std::string& name) {
     if (c.quantize && c.quantize_subdivisions.empty()) throw Error("quantize_subdivisions is empty");
 
     const auto n_trees = r.scalar<uint32_t>();
+    // Each tree takes at least its node count and one node (4 + 17 bytes): a damaged
+    // count is refused before allocating for it.
+    if (n_trees > r.remaining() / 21) throw Error("model file is truncated");
     m.trees.resize(n_trees);
     const auto n_features = static_cast<int32_t>(m.features.size());
     for (Tree& t : m.trees) {

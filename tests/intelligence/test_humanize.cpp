@@ -7,9 +7,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <numeric>
 #include <random>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -66,6 +69,31 @@ TEST_CASE("the velocity model loads, and a file that isn't one is refused") {
         std::ofstream(truncated, std::ios::binary).write(head.data(), static_cast<std::streamsize>(head.size()));
     }
     CHECK_THROWS_MATCHING(VelocityModel(truncated.string()), ModelError, "truncated");
+}
+
+TEST_CASE("a damaged model file is refused, never thrown out as something else or allocated for") {
+    // The real file's magic, version and header, then what follows changed.
+    std::ifstream in(SUBSTATION_VELOCITY_MODEL, std::ios::binary);
+    std::vector<char> start(12);
+    in.read(start.data(), 12);
+    uint32_t headerSize = 0;
+    std::memcpy(&headerSize, start.data() + 8, 4);
+    std::string header(headerSize, '\0');
+    in.read(header.data(), headerSize);
+    const auto write = [&](const char* name, const std::string& text, const std::vector<uint32_t>& after) {
+        const auto path = subtest::tempDir() / name;
+        std::ofstream out(path, std::ios::binary);
+        const auto size = static_cast<uint32_t>(text.size());
+        out.write(start.data(), 8).write(reinterpret_cast<const char*>(&size), 4).write(text.data(), size);
+        for (const uint32_t word : after) out.write(reinterpret_cast<const char*>(&word), 4);
+        out.write(std::string(32, '\0').data(), 32);  // (room for a tree's count and a node: the node count is what's read)
+        return path.string();
+    };
+    const std::string notANumber = std::regex_replace(header, std::regex("chord_tolerance_s=[^\\n]*"), "chord_tolerance_s=abc");
+    REQUIRE(notANumber != header);
+    CHECK_THROWS_MATCHING(VelocityModel(write("number.hbm", notANumber, {1, 1})), ModelError, "not a number");
+    CHECK_THROWS_MATCHING(VelocityModel(write("trees.hbm", header, {0xFFFFFFFFu})), ModelError, "truncated");
+    CHECK_THROWS_MATCHING(VelocityModel(write("nodes.hbm", header, {1, 0xFFFFFFFFu})), ModelError, "truncated");
 }
 
 TEST_CASE("what the model predicts depends on the notes, not on their velocities") {

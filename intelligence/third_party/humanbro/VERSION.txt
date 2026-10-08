@@ -8,3 +8,6 @@ Local changes:
   .hbm file's contents, so the caller can read it through a wide-path API (std::ifstream
   with a std::string goes through the ANSI code page on Windows with MinGW).
 - model.hpp, model.cpp: TreeModel::parse(), what load() does after reading the file.
+- model.cpp: a damaged file throws humanbro::Error only: a header value that isn't a
+  number, and node and tree counts larger than the file can hold, are refused before
+  anything is allocated for them (they threw std::invalid_argument, std::bad_alloc).
