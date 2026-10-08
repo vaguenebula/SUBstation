@@ -619,10 +619,10 @@ private Q_SLOTS:
         QVERIFY(marker->isVisible());
         QCOMPARE(marker->width(), 2.0);
         QCOMPARE(marker->height(), frame(ids[0])->height());
-        QCOMPARE(int(marker->mapToItem(frame(ids[0]), QPointF()).x()), -4);  // in the gap before it
+        QCOMPARE(int(marker->mapToItem(frame(ids[0]), QPointF()).x()), -5);  // in the middle of the gap before it
         const QPoint beforeSecond = ui_.at(frame(ids[1]), 30, 60);  // (left of its middle: before it)
         test::dragMove(window(), beforeSecond, moving.get());
-        QCOMPARE(int(marker->mapToItem(frame(ids[1]), QPointF()).x()), -4);
+        QCOMPARE(int(marker->mapToItem(frame(ids[1]), QPointF()).x()), -5);
         ui_.screenshot(QStringLiteral("drop-marker"));
         test::dragMove(window(), before, moving.get());
         test::dropAt(window(), before, moving.get());

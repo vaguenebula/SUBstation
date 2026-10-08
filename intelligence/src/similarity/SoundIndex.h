@@ -140,7 +140,9 @@ public:
     SoundIndex& operator=(const SoundIndex&) = delete;
 
     // As the browser's: called from the index's threads, once until the next
-    // take(); must only post the work to the application's thread.
+    // take(); must only post the work to the application's thread. If a wake
+    // is due already (the index signalled before a callback was set), the new
+    // callback is called at once, on this thread.
     void setWakeCallback(std::function<void()> wake);
 
     // Where the library comes from: called on the keeper's thread after
