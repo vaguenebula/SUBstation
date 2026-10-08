@@ -245,13 +245,14 @@ Speed (a release build on an Intel Core Ultra 7 270K Plus): loading the model, 1
 
 `Humanizer` ([Humanizer.h](../app/src/intelligence/Humanizer.h), `Session.humanizer`) lives on the application's
 thread. It loads the model the first time velocities are asked for (from `velocityModelPath()`,
-`<the application's folder>/models/velocity.hbm`) and keeps it; if it can't (missing, damaged), it says so once on
-`statusMessage` and gives no velocities. `velocityAvailable` (the file is there) is what greys out the menu entry.
+`<the application's folder>/models/velocity.hbm`) and keeps it; if it can't (missing, damaged, locked), it says so
+on `statusMessage`, gives no velocities, and tries again the next time. `velocityAvailable` (the file is there) is what greys out the menu entry.
 
 `velocities(targets, amount)` takes notes of clips (each with its track and clip) and judges each track as one part:
 every note its clips are heard playing (`Clip::heardNotes()`: none of a deactivated clip, nor deactivated notes, each
 where it plays on the timeline) is context, and the targets are put where their clips play them (deactivated or
-hidden by a trim, they are still humanized). Each track's targets keep their own mean, so humanizing a quiet pad and a
+hidden by a trim, they are still humanized). Drum tracks (`Harmony::isDrumTrack()`) are left as they are, and the
+status line says so: the model knows pianos. Each track's targets keep their own mean, so humanizing a quiet pad and a
 loud lead together leaves each as loud as it was. Nothing runs in the background: a click on Humanize › Velocity
 waits for it, a tenth of a second for the longest parts.
 

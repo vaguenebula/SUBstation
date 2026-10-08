@@ -58,5 +58,12 @@ else()
 endif()
 
 # The models (models/), next to the executables in bin/models, where the
-# application looks for them (copied again when one changes).
-configure_file(models/velocity.hbm ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/models/velocity.hbm COPYONLY)
+# application looks for them (copied again when one changes). Multi-config
+# generators (Visual Studio) put the executables in bin/<config>: a copy in each.
+if (CMAKE_CONFIGURATION_TYPES)
+    foreach (_config IN LISTS CMAKE_CONFIGURATION_TYPES)
+        configure_file(models/velocity.hbm ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${_config}/models/velocity.hbm COPYONLY)
+    endforeach()
+else()
+    configure_file(models/velocity.hbm ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/models/velocity.hbm COPYONLY)
+endif()

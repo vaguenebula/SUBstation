@@ -20,6 +20,7 @@ std::vector<char> readFile(const std::string& path) {
     std::FILE* file = platform::openFile(path, false);
     if (!file) throw ModelError("can't open the model file " + path);
     std::vector<char> data;
+    if (const auto stamp = platform::stamp(path)) data.reserve(static_cast<size_t>(stamp->size));
     char buffer[1 << 16];
     for (size_t read; (read = std::fread(buffer, 1, sizeof buffer, file)) > 0;) data.insert(data.end(), buffer, buffer + read);
     const bool failed = std::ferror(file) != 0;

@@ -6,13 +6,24 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <tuple>
 
 #include "humanize/VelocityModel.h"
+#include "intelligence/Harmony.h"
 #include "model/Project.h"
 
 namespace sub::app {
 
 namespace humanize = intelligence::humanize;
+
+namespace {
+
+// A total order on notes, for looking them up by binary search.
+bool noteLess(const Note& a, const Note& b) {
+    return std::tie(a.start, a.pitch, a.length, a.velocity, a.muted) < std::tie(b.start, b.pitch, b.length, b.velocity, b.muted);
+}
+
+}  // namespace
 
 Humanizer::Humanizer(Project* project, QObject* parent) : QObject(parent), project_(project) {}
 
@@ -25,8 +36,7 @@ QString Humanizer::velocityModelPath() {
 bool Humanizer::velocityAvailable() const { return QFileInfo(velocityModelPath()).isFile(); }
 
 const humanize::VelocityModel* Humanizer::velocityModel() {
-    if (!velocityTried_) {
-        velocityTried_ = true;
+    if (!velocity_) {  // (tried again each time until it loads: the file may have come or been unlocked)
         try {
             velocity_ = std::make_unique<humanize::VelocityModel>(velocityModelPath().toStdString());
         } catch (const humanize::ModelError& error) {
@@ -51,8 +61,14 @@ std::optional<std::vector<int>> Humanizer::velocities(const std::vector<Target>&
     // Each track's targets (indices into `targets`), in the order the tracks first come.
     QStringList tracks;
     QHash<QString, std::vector<size_t>> byTrack;
+    bool drums = false;
     for (size_t i = 0; i < targets.size(); ++i) {
         if (!project.findClip(targets[i].trackId, targets[i].clipId)) continue;
+        // A piano model has nothing to say about drums: their notes keep their velocities.
+        if (Harmony::isDrumTrack(project.track(targets[i].trackId).name)) {
+            drums = true;
+            continue;
+        }
         if (!byTrack.contains(targets[i].trackId)) tracks.append(targets[i].trackId);
         byTrack[targets[i].trackId].push_back(i);
     }
@@ -61,11 +77,12 @@ std::optional<std::vector<int>> Humanizer::velocities(const std::vector<Target>&
         // The track's part: what it plays around the targets, then the targets.
         QHash<QString, std::vector<Note>> targetNotes;  // by clip
         for (const size_t i : mine) targetNotes[targets[i].clipId].push_back(targets[i].note);
+        for (auto& notes : targetNotes) std::sort(notes.begin(), notes.end(), noteLess);
         std::vector<humanize::Note> part;
         for (const Clip& clip : project.track(trackId).clips) {
             const auto found = targetNotes.constFind(clip.id);
             for (const PlayedNote& played : clip.heardNotes()) {
-                if (found != targetNotes.cend() && std::find(found->begin(), found->end(), played.note) != found->end())
+                if (found != targetNotes.cend() && std::binary_search(found->begin(), found->end(), played.note, noteLess))
                     continue;
                 part.push_back({played.note.pitch, played.start, played.end - played.start, played.note.velocity, false});
             }
@@ -85,6 +102,7 @@ std::optional<std::vector<int>> Humanizer::velocities(const std::vector<Target>&
             return std::nullopt;
         }
     }
+    if (drums) Q_EMIT statusMessage(QStringLiteral("Humanize › Velocity leaves drum tracks' notes as they are."));
     return result;
 }
 

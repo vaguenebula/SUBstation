@@ -215,6 +215,15 @@ Rectangle {
                 id: humanizeMenu
                 objectName: "humanizeMenu"
 
+                // An entry was chosen: the notes take the keyboard back once the
+                // menu has closed (after the popup's own focus handling).
+                property bool chosen: false
+                onClosed: {
+                    if (chosen)
+                        tools.focusNotes()
+                    chosen = false
+                }
+
                 HumanizeItem {
                     objectName: "humanizeVelocity"
                     // (Without models/velocity.hbm next to SUBstation: greyed out.)
@@ -226,8 +235,8 @@ Rectangle {
                     amountTip: qsTr("How far velocities move toward the model's (100 %: all the way)")
                     onAmountMoved: value => tools.roll.humanizeVelocityAmount = value
                     onTriggered: {
+                        humanizeMenu.chosen = true
                         tools.roll.humanizeVelocity()
-                        tools.focusNotes()
                     }
                 }
                 HumanizeItem {
@@ -239,8 +248,8 @@ Rectangle {
                     amountTip: qsTr("Timing amount: at 100 % notes move by up to a 32nd note\n(%1 beats) either way").arg(tools.roll.humanizeBeats)
                     onAmountMoved: value => tools.roll.humanizeTimingAmount = value
                     onTriggered: {
+                        humanizeMenu.chosen = true
                         tools.roll.humanizeTiming()
-                        tools.focusNotes()
                     }
                 }
             }

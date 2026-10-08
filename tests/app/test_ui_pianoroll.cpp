@@ -792,7 +792,8 @@ private Q_SLOTS:
         roll()->seedRandom(3);
         QMetaObject::invokeMethod(toolButton("humanize"), "clicked");
         QObject* menu = bar->findChild<QObject*>(QStringLiteral("humanizeMenu"));
-        QVERIFY(menu && menu->property("opened").toBool());
+        QVERIFY(menu);
+        QTRY_VERIFY(menu->property("opened").toBool());
         QObject* timing = menu->findChild<QObject*>(QStringLiteral("humanizeTiming"));
         QObject* velocity = menu->findChild<QObject*>(QStringLiteral("humanizeVelocity"));
         QVERIFY(timing && velocity);
@@ -815,7 +816,7 @@ private Q_SLOTS:
         }
         QCOMPARE(undo().undoText(), QStringLiteral("Humanize Timing"));
         QTRY_VERIFY(!menu->property("visible").toBool());
-        QVERIFY(grid()->hasActiveFocus());  // (the notes take the keyboard back from the menu)
+        QTRY_VERIFY(grid()->hasActiveFocus());  // (the notes take the keyboard back from the menu)
         undo().undo();
         // Velocity gives the model's velocities, at the notes' own level; timing stays.
         QMetaObject::invokeMethod(toolButton("humanize"), "clicked");

@@ -145,6 +145,12 @@ private Q_SLOTS:
         for (const auto& t : softTargets) softNotes.push_back(t.note);
         QCOMPARE(b, expected({}, softNotes));  // (each track alone)
 
+        // Drum tracks are left as they are (and the status line says so).
+        const ClipRef drums = midiClip(f, f.editor.addMidiTrack(-1, QStringLiteral("Drums")), 0, 8, piece(2, 70));
+        QSignalSpy said(&humanizer, &Humanizer::statusMessage);
+        QCOMPARE(*humanizer.velocities(targetsOf(f, drums), 1.0), std::vector<int>(40, 70));
+        QCOMPARE(said.count(), 1);
+
         // A target whose clip is gone keeps its velocity.
         const std::vector<Humanizer::Target> gone{{loud.trackId, QStringLiteral("no such clip"), Note{60, 0, 1, 77}}};
         QCOMPARE(*humanizer.velocities(gone, 1.0), std::vector<int>{77});
