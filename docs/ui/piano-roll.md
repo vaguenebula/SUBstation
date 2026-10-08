@@ -368,8 +368,6 @@ playing inside a clip shown and emits `playheadChanged`; only the `RollPlayhead`
   compound.
 - Notes are compared by value: two identical notes on the same key and time are one in a set. `notes::place` decides
   how overlaps resolve.
-- The piano roll shows one clip. Several MIDI clips at once aren't supported (see
-  [guide/limitations.md](../guide/limitations.md)).
 
 ## Tests
 
