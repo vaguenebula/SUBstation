@@ -20,6 +20,7 @@ the licences, not legal advice: for a commercial release, have it checked.
 | [miniaudio](../engine/third_party/miniaudio) | engine/third_party | Unlicense or MIT-0 | audio I/O, decoding | yes |
 | [Signalsmith Stretch, Linear](../engine/third_party) | engine/third_party | MIT | time stretching, FFTs | yes |
 | [VST 3 SDK](../engine/third_party/vst3sdk) 3.8.1 | engine/third_party | MIT | plug-in hosting | yes |
+| [puff](../app/third_party/puff) 2.3 (zlib 1.3.1's contrib) | app/third_party/puff | zlib | inflate: reading Ableton Live Sets | yes |
 | [LAME](../engine/third_party/lame) 3.100 (its encoding library only) | engine/third_party/lame | LGPL-2.0-or-later | statically linked: MP3 export | yes (the LGPL's relinking condition is met by shipping the whole program's source, as the AGPL asks anyway; ship its [COPYING](../engine/third_party/lame/COPYING)). MP3's patents have expired. |
 | Qt 6 | not vendored; linked dynamically | LGPL-3.0 (or GPL, or commercial) | the application and its UI | yes (LGPLv3 is compatible; keep Qt dynamically linked and replaceable, and ship its licence) |
 | [HUMANBRO](../intelligence/third_party/humanbro) runtime | intelligence/third_party/humanbro | the project's own (no licence file of its own) | Humanize › Velocity | yes, if it is under the MIT licence too: see [below](#to-decide) |

@@ -37,6 +37,9 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
   Essentia's audio descriptors, the library analysed in the background.
 - **Multi-threaded rendering**, bit-identical on any number of threads; WAV and MP3 export of the
   arrangement, the loop or a time selection.
+- **Projects**: `.gilproj` files, a template every new project starts as, and **importing Ableton
+  Live Sets** (tracks, groups, clips, VST3 plug-ins with their settings, Live's EQ Eight,
+  Compressor, Delay, Utility and Simpler, Drum Racks as a track a pad, automation).
 
 See the [user guide](docs/guide/README.md) for how each of these behaves, and
 [what isn't implemented yet](docs/guide/limitations.md).

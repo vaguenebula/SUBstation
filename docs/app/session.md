@@ -107,7 +107,7 @@ The full list, with what each does, is in [Session.h](../../app/src/session/Sess
 | Adding | `addDeviceToSelectedTrack(kind)`, `addPluginToSelectedTrack({format, uid, name, vendor, path, instrument})`, `addPresetToSelectedTrack(path)` (an instrument with no MIDI track selected: on a new MIDI track), `addFileAtInsert(path)`, `presetSaved(path)` |
 | Edit | `cut()`, `copy()`, `paste()`, `duplicate()`, `whatIsCopied(verb)`, `deleteSelection()`, `split()`, `selectAll()`, `consolidate()`, `reverseClips()`, `toggleClipActivation()`, `soloSelectedTracks()`, `renameTarget(browserListFocused)` |
 | Freezing | `toggleFreeze()` (Ctrl+Shift+F), `flattenSelectedTracks()`, `freezeActions(ids)` (a track menu's texts and states), `freezeTracks(ids)`, `unfreezeTracks(ids)`, `flattenTracks(ids)` |
-| Files | `newProject()`, `openProject(path)`, `saveProject()`, `saveProjectAs(path)`, `suggestedSavePath()`, `recentProjects`, `recentProjectAvailable(path)`, `recentMenuItems()`, `clearRecentProjects()`, `lastFolder`, `projectFilter`, `projectExtension`, `confirmDiscardText`; `saveAsTemplate()`, `clearTemplate()`, `hasTemplate`, `templatePath()` |
+| Files | `newProject()`, `openProject(path)`, `saveProject()`, `saveProjectAs(path)`, `suggestedSavePath()`, `recentProjects`, `recentProjectAvailable(path)`, `recentMenuItems()`, `clearRecentProjects()`, `lastFolder`, `projectFilter`, `projectExtension`, `confirmDiscardText`; `saveAsTemplate()`, `clearTemplate()`, `hasTemplate`, `templatePath()`; `importLiveSet(path)`, `liveSetFilter` |
 | Export | `exportRangeChoices()` ("arrangement", "loop" while the loop is on, "selection" while there is a time selection), `exportProblem(range)`, `suggestedExportPath(fileType)`, `exportBitDepthChoices`, `defaultExportBitDepth` (24), `exportFileTypeChoices` (WAV, MP3), `exportBitrateChoices`, `defaultExportBitrate` (320), `exportAudio(path, range, bitDepth, fileType, bitrate)` |
 | Plug-ins loading | `pluginsLoaded`, `pluginsTotal`, `pluginsLoadingText` ("Loading plug-ins: 1 of 3") |
 
@@ -149,6 +149,12 @@ The session never asks the user anything; the UI does, and then calls it:
   clears the undo stack and the selection. A project from the template is everything the template holds, untitled (no
   file: Save asks where); a template that can't be read is a `warning`, and the project starts empty. The
   application opens a new project this way as it starts, unless it was given a project to open.
+- **Import Ableton Live Set**: `importLiveSet(path)` reads and translates the set
+  ([live-import.md](live-import.md)), with the plug-in index's plug-ins, and loads it as `loadInto` loads a
+  project file (a set that can't be read: a `warning`, and the project stays). It then clears the undo stack and
+  the selection, names the untitled project after the set (`title()`, `suggestedSavePath()`), emits
+  `projectOpened()`, says "Imported song.als: 12 tracks, 80 clips" and, if anything didn't come across as it was,
+  lists it in an `information`.
 - **Templates**: `saveAsTemplate()` stores the plug-ins' states, then writes the project to `templatePath()`
   (`Template.gilproj` in the local data folder, or `SUBSTATION_TEMPLATE`) without making it the project's file: the
   project keeps its file and its unsaved changes. Its files are kept by their absolute paths

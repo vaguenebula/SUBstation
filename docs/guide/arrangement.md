@@ -287,6 +287,8 @@ stops; press it again to return to the start. **Home** goes to the start.
 - **Undo / redo** (**Ctrl+Z** / **Ctrl+Y** or **Ctrl+Shift+Z**) cover all edits.
 - Projects are `.gilproj` files (JSON): *File › New Project*, *Open…*, *Open Recent*,
   *Save* and *Save As…* (**Ctrl+Shift+S**).
+- *File › Import Ableton Live Set…* opens a Live Set as a new project: see
+  [ableton-import.md](ableton-import.md).
 - *File › Save as Template* makes the project as it is now the one every new project
   starts as: *New Project*, and SUBstation's start without a project to open, open
   exactly that (its tracks, clips, devices and plug-ins' settings, automation, routing,

@@ -93,6 +93,7 @@ Pass them at configure time: `cmake -B build -DSUBSTATION_TEST_PLUGINS=OFF`.
 | `miniaudio` | static library (C) | engine | [miniaudio](../engine/third_party/miniaudio), compiled once as C (`MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_GENERATION`). The engine's and the intelligence module's decoders. |
 | `signalsmith_linear` | interface library | engine | [Signalsmith Linear](../engine/third_party/signalsmith-linear)'s headers: the FFTs of Signalsmith Stretch. |
 | `vst3_base`, `vst3_hosting` | static libraries | engine | The VST 3 SDK's interfaces and base library, and its host side (module loading: `module_win32.cpp` or `module_linux.cpp`). `vst3_hosting` is C++17 on purpose: as C++17 the module loader reads paths as UTF-8 (`u8path`); as C++20 it would use the ANSI code page on Windows, and plug-ins with non-ASCII paths would not load. |
+| `mp3lame` | static library (C) | engine | [LAME](../engine/third_party/lame)'s encoding library (`libmp3lame`, its SSE quantizer on x86-64), with a `config.h` of ours; MP3 export (`Mp3Writer.cpp`). |
 | `sub_engine` | static library | engine | The real-time engine ([engine/](../engine/CMakeLists.txt)): no Qt. On Windows it adds the WinMM MIDI backend, the plug-in editor windows and, with the SDK, ASIO; elsewhere a MIDI backend without devices and no editor windows. |
 | `sub_browser` | static library | browser | The browser's file index and search ([browser/](../browser/CMakeLists.txt)): no Qt; Win32 or POSIX platform layer. |
 | `essentia` | static library | intelligence | [Essentia](../intelligence/third_party/essentia) 2.1-beta5's core and the 29 algorithms the sound similarity uses, with KISS FFT: no other dependency. Built as C++17, its warnings not shown, with `ESSENTIA_STATIC` and `DEBUGGING_ENABLED=0` (public: they shape its headers). AGPLv3: [licensing.md](licensing.md). |
@@ -152,6 +153,10 @@ Vendored in [engine/third_party](../engine/third_party), so nothing else needs i
 | [Signalsmith Stretch](../engine/third_party/signalsmith-stretch) | 1.3.2 | MIT | time stretching and pitch shifting (header-only) |
 | [Signalsmith Linear](../engine/third_party/signalsmith-linear) | 0.6.4 | MIT | its FFT (`stft.h`, `fft.h` only): Signalsmith Stretch's |
 | [VST 3 SDK](../engine/third_party/vst3sdk) | 3.8.1 | MIT (since SDK 3.8) | `pluginterfaces`, `base`, `public.sdk/source/{common,main}` and `public.sdk/source/vst`, with the Windows and Linux module loaders; without VSTGUI, the SDK's tests and the wrappers |
+| [LAME](../engine/third_party/lame) | 3.100 | LGPL-2.0-or-later | its encoding library (`include/lame.h`, `libmp3lame/` without the decoder's glue): MP3 export |
+
+In [app/third_party](../app/third_party): [puff](../app/third_party/puff) 2.3 (zlib licence), from zlib 1.3.1's
+`contrib/puff`: inflate, for reading Ableton Live Sets (target `puff`, linked into `sub_app`).
 
 Each folder has its licence and a `VERSION.txt` saying what was taken and that it is unmodified. Qt is not vendored:
 it is LGPL-3.0 (or commercial), linked dynamically. SUBstation itself is MIT ([LICENSE](../LICENSE)); what the

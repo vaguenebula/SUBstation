@@ -12,6 +12,7 @@
 // saves screenshots there.
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -738,6 +739,45 @@ private Q_SLOTS:
         QMetaObject::invokeMethod(find(QStringLiteral("saveDialog")), "close");
         QVERIFY(session().clean());
         QCOMPARE(window_->title(), QStringLiteral("ctrl s - SUBstation"));
+    }
+
+    // Save as Template and Clear Template; Import Ableton Live Set… asks about
+    // unsaved changes, then which set, and says what didn't come across.
+    void templatesAndImportingALiveSet() {
+        QVERIFY(!prop(QStringLiteral("clearTemplate"), "enabled").toBool());
+        trigger(QStringLiteral("insertMidiTrack"));
+        trigger(QStringLiteral("saveAsTemplate"));
+        QCOMPARE(status(), QStringLiteral("Saved as the template: new projects start as this one is now"));
+        QVERIFY(prop(QStringLiteral("clearTemplate"), "enabled").toBool());
+        session().undoStack()->setClean();
+        trigger(QStringLiteral("newProject"));
+        QCOMPARE(project().tracks().size(), size_t(1));  // (the template's)
+        trigger(QStringLiteral("clearTemplate"));
+        QVERIFY(!prop(QStringLiteral("clearTemplate"), "enabled").toBool());
+
+        const QString set = dir_->path(QStringLiteral("Live Song.als"));
+        QFile file(set);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Ableton MajorVersion=\"5\"><LiveSet><Tracks>"
+                   "<MidiTrack Id=\"1\"><Name><EffectiveName Value=\"1-Keys\" /></Name><DeviceChain><DeviceChain><Devices>"
+                   "<Saturator /></Devices></DeviceChain></DeviceChain></MidiTrack></Tracks>"
+                   "<MainTrack><DeviceChain><Mixer><Tempo><Manual Value=\"95\" /></Tempo></Mixer></DeviceChain></MainTrack>"
+                   "</LiveSet></Ableton>");
+        file.close();
+        trigger(QStringLiteral("insertAudioTrack"));
+        trigger(QStringLiteral("importLiveSet"));
+        answer(QStringLiteral("unsavedChangesDialog"), QStringLiteral("discard"));
+        QTRY_VERIFY(shown(QStringLiteral("liveSetDialog")));
+        QCOMPARE(prop(QStringLiteral("liveSetDialog"), "nameFilters").toStringList(), QStringList{QStringLiteral("Ableton Live Set (*.als)")});
+        QMetaObject::invokeMethod(find(QStringLiteral("liveSetDialog")), "close");
+        call("importChosen", set);  // (the dialog's accepted)
+        QCOMPARE(project().tempo(), 95.0);
+        QCOMPARE(project().tracks().size(), size_t(1));
+        QCOMPARE(window_->title(), QStringLiteral("Live Song - SUBstation"));
+        QTRY_VERIFY(shown(QStringLiteral("messageBox")));
+        QVERIFY(prop(QStringLiteral("messageBox"), "text").toString().contains(QStringLiteral("Saturator")));
+        test::screenshot(window_, QStringLiteral("live-set-imported"));
+        answer(QStringLiteral("messageBox"), QStringLiteral("ok"));
     }
 
     // Export Audio: nothing to export says so; else it asks where (a WAV or an

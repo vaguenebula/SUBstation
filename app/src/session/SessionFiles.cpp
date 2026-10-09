@@ -12,10 +12,13 @@
 #include "audio/EngineBridge.h"
 #include "browser/PathKeys.h"
 #include "files/FileManager.h"
+#include "io/LiveImport.h"
+#include "io/LiveSet.h"
 #include "io/Serialization.h"
 #include "model/Errors.h"
 #include "model/Project.h"
 #include "model/Timebase.h"
+#include "plugins/PluginIndex.h"
 #include "session/DeviceSelection.h"
 #include "session/Renders.h"
 #include "session/Selection.h"
@@ -38,6 +41,7 @@ QString recentEntry(const QString& path) {
 // --- New, open, save --------------------------------------------------------------------------
 
 void Session::resetSession() {
+    untitledName_.clear();
     bridge_->stop();
     undoStack_->clear();
     undoStack_->setClean();
@@ -86,6 +90,38 @@ bool Session::openProject(const QString& path) {
     return true;
 }
 
+bool Session::importLiveSet(const QString& path) {
+    const QString name = QFileInfo(path).fileName();
+    live::ImportResult imported;
+    try {
+        const std::unique_ptr<live::Element> set = live::readLiveSet(path);
+        live::ImportOptions options;
+        options.plugins = plugins_->plugins();
+        imported = live::importLiveSet(*set, path, options);
+        sub::app::loadInto(*project_, imported.project);
+    } catch (const ProjectFileError& error) {
+        Q_EMIT warning(error.message());
+        return false;
+    }
+    resetSession();
+    untitledName_ = fileStem(path);
+    Q_EMIT titleChanged();
+    setLastFolder(QFileInfo(path).absolutePath());
+    files_->update();
+    Q_EMIT projectOpened();
+    const auto count = [](int n, const QString& one, const QString& many) {
+        return QStringLiteral("%1 %2").arg(n).arg(n == 1 ? one : many);
+    };
+    Q_EMIT statusMessage(QStringLiteral("Imported %1: %2, %3")
+                             .arg(name, count(imported.tracks, QStringLiteral("track"), QStringLiteral("tracks")),
+                                  count(imported.clips, QStringLiteral("clip"), QStringLiteral("clips"))));
+    if (!imported.notes.isEmpty()) {
+        Q_EMIT information(QStringLiteral("%1 was imported. What didn't come across as it was:\n\n• %2")
+                               .arg(name, imported.notes.join(QStringLiteral("\n• "))));
+    }
+    return true;
+}
+
 bool Session::saveProject() {
     if (project_->path().isEmpty()) {
         Q_EMIT saveAsRequested();
@@ -116,10 +152,13 @@ bool Session::saveTo(const QString& path) {
 }
 
 QString Session::suggestedSavePath() const {
-    return QDir(lastFolder()).filePath(QStringLiteral("Untitled") + kProjectExtension);
+    const QString name = untitledName_.isEmpty() ? QStringLiteral("Untitled") : untitledName_;
+    return QDir(lastFolder()).filePath(name + kProjectExtension);
 }
 
 QString Session::projectFilter() const { return QStringLiteral("SUBstation Project (*%1)").arg(kProjectExtension); }
+
+QString Session::liveSetFilter() const { return QStringLiteral("Ableton Live Set (*.als)"); }
 
 QString Session::projectExtension() const { return kProjectExtension; }
 

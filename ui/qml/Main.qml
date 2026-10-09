@@ -120,6 +120,19 @@ ApplicationWindow {
         })
     }
 
+    // Import Ableton Live Set…: asks about unsaved changes, then which set.
+    function importLiveSet() {
+        confirmDiscard(() => {
+            liveSetDialog.currentFolder = FileUrls.fileUrl(Session.lastFolder)
+            liveSetDialog.open()
+        })
+    }
+
+    function importChosen(path) {
+        if (path !== "")
+            Session.importLiveSet(path)
+    }
+
     function openChosen(path) {
         if (path !== "")
             Session.openProject(path)
@@ -356,6 +369,7 @@ ApplicationWindow {
                     onAboutToShow: window.fillRecentMenu()
                     MenuItem { text: qsTr("No Recent Projects"); enabled: false }
                 }
+                Action { objectName: "importLiveSet"; text: qsTr("&Import Ableton Live Set…"); onTriggered: window.importLiveSet() }
                 MenuSeparator {}
                 Action { objectName: "save"; text: qsTr("&Save"); shortcut: StandardKey.Save; onTriggered: window.save() }
                 Action { objectName: "saveAs"; text: qsTr("Save &As…"); shortcut: "Ctrl+Shift+S"; onTriggered: window.saveAs() }
@@ -784,6 +798,15 @@ ApplicationWindow {
         fileMode: FileDialog.OpenFile
         nameFilters: [Session.projectFilter]
         onAccepted: window.openChosen(FileUrls.localPath(selectedFile))
+    }
+
+    FileDialog {
+        id: liveSetDialog
+        objectName: "liveSetDialog"
+        title: qsTr("Import Ableton Live Set")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [Session.liveSetFilter]
+        onAccepted: window.importChosen(FileUrls.localPath(selectedFile))
     }
 
     FileDialog {

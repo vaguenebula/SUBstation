@@ -220,6 +220,7 @@ add_library(sub_engine STATIC
     ${BUILTIN_DEVICE_SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinDevices.cpp
     src/plugins/Vst3Format.cpp
+    src/plugins/Vst3Ids.cpp
     src/plugins/Vst3Processor.cpp
 )
 if (WIN32)

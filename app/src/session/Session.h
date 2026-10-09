@@ -120,6 +120,8 @@ class Session : public QObject {
     Q_PROPERTY(bool hasTemplate READ hasTemplate NOTIFY templateChanged)
     // The file dialogs' filter: "SUBstation Project (*.gilproj)".
     Q_PROPERTY(QString projectFilter READ projectFilter CONSTANT)
+    // Import Ableton Live Set's: "Ableton Live Set (*.als)".
+    Q_PROPERTY(QString liveSetFilter READ liveSetFilter CONSTANT)
     Q_PROPERTY(QString projectExtension READ projectExtension CONSTANT)
 
     // The count-in before recording, in bars (0, 1, 2 or 4; saved with the preferences).
@@ -200,6 +202,7 @@ public:
     QString lastFolder() const;
     bool hasTemplate() const;
     QString projectFilter() const;
+    QString liveSetFilter() const;
     QString projectExtension() const;
     int countInBars() const;
     void setCountInBars(int bars);
@@ -352,12 +355,19 @@ public:
     // it plays that are missing are said in the status line (the UI shows the
     // File Manager).
     Q_INVOKABLE bool openProject(const QString& path);
+    // Import Ableton Live Set…: a Live Set (.als) as a new project, untitled
+    // but named after the set (its title, where Save As starts); what comes
+    // across: io/LiveImport.h. Its plug-ins are found by the plug-in index (the
+    // UI asked about unsaved changes first). What didn't come across as it was
+    // is said by information() (the status line says how much did); a file that
+    // can't be read: warning, and the open project stays. Whether it imported.
+    Q_INVOKABLE bool importLiveSet(const QString& path);
     // Ctrl+S: to the project's file; one never saved: saveAsRequested (the UI
     // asks where, then saveProjectAs), false meanwhile. Whether it was saved.
     Q_INVOKABLE bool saveProject();
     // Save As: to `path`.
     Q_INVOKABLE bool saveProjectAs(const QString& path);
-    // Where Save As starts: "<last folder>/Untitled.gilproj".
+    // Where Save As starts: "<last folder>/Untitled.gilproj" (an imported set's: its name).
     Q_INVOKABLE QString suggestedSavePath() const;
     // A recent project chosen: false if its file is gone (warning, and it
     // leaves the list); true: the UI goes on to openProject (asking first).
@@ -461,6 +471,7 @@ private:
     QPointer<Render> rendering_;
     std::function<std::optional<Freeze>(FreezeRender&)> finishFreeze_;
     double playStart_ = 0.0;
+    QString untitledName_;  // an imported set's name, while its project has no file
     bool automationOverridden_ = false;
     int pluginsLoaded_ = 0;
     int pluginsTotal_ = 0;

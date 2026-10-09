@@ -100,15 +100,31 @@ Dialog {
                     }
                 }
             }
-            Label {
-                id: message
-                objectName: "messageText"
+            // (A long text scrolls: at most most of the window high.)
+            Flickable {
+                id: scroller
+                objectName: "messageScroller"
                 Layout.fillWidth: true
                 Layout.maximumWidth: 480
-                text: box.text
-                textFormat: Text.AutoText
-                wrapMode: Text.Wrap
-                onLinkActivated: link => Qt.openUrlExternally(link)
+                implicitWidth: message.implicitWidth
+                implicitHeight: Math.min(message.implicitHeight, box.parent ? box.parent.height * 0.6 : 400)
+                contentWidth: width
+                contentHeight: message.height
+                clip: contentHeight > height
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar {
+                    policy: scroller.contentHeight > scroller.height ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                }
+
+                Label {
+                    id: message
+                    objectName: "messageText"
+                    width: scroller.width
+                    text: box.text
+                    textFormat: Text.AutoText
+                    wrapMode: Text.Wrap
+                    onLinkActivated: link => Qt.openUrlExternally(link)
+                }
             }
         }
     }
