@@ -47,12 +47,6 @@ Item {
         }
     }
 
-    component Caption: Text {
-        horizontalAlignment: Text.AlignHCenter
-        color: Theme.textDim
-        font: Theme.uiFont(7)
-    }
-
     // A small knob with its name over it (or, over the crossover, Lows Only) and its value under it.
     component SmallKnob: Column {
         id: cell
@@ -74,9 +68,10 @@ Item {
 
             Component {
                 id: caption
-                Caption {
+                EditorCaption {
                     width: cell.width
                     text: cell.title
+                    font: Theme.uiFont(7)
                 }
             }
             Component {

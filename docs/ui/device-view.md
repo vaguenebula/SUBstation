@@ -20,11 +20,12 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 | [DeviceChainArea](../../ui/src/devices/DeviceChainArea.h) | The chain scrolled sideways; drops and drop targets; drags of devices; scrolling to a device added; the pages each device shows |
 | [DeviceChain.qml](../../ui/qml/devices/DeviceChain.qml), [DeviceChainList](../../ui/src/devices/DeviceChainList.h) | One chain: a frame per device and, after a rack, the chain it shows; the device ids, changing only when the chain does |
 | [DeviceFrame.qml](../../ui/qml/devices/DeviceFrame.qml), [DeviceInfo](../../ui/src/devices/DeviceInfo.h), [DeviceFrameInput](../../ui/src/devices/DeviceFrameInput.h) | What every device shares: the frame, the title bar, folding, the body; what the frame shows of the device; the frame's mouse |
-| [DeviceKnobPages.qml](../../ui/qml/devices/DeviceKnobPages.qml), [DeviceParamKnob.qml](../../ui/qml/devices/DeviceParamKnob.qml), [DeviceParams](../../ui/src/devices/DeviceParams.h), [DeviceParam](../../ui/src/devices/DeviceParam.h), [ParamMenu.qml](../../ui/qml/devices/ParamMenu.qml) | A built-in device without an editor: a knob (or list) per parameter, four to a page; a parameter's cell, its state and its menu |
+| [DeviceKnobPages.qml](../../ui/qml/devices/DeviceKnobPages.qml), [DeviceParamKnob.qml](../../ui/qml/devices/DeviceParamKnob.qml), [ParamCell.qml](../../ui/qml/devices/ParamCell.qml), [DeviceParams](../../ui/src/devices/DeviceParams.h), [DeviceParam](../../ui/src/devices/DeviceParam.h), [ParamMenu.qml](../../ui/qml/devices/ParamMenu.qml) | A built-in device without an editor: a knob (or list) per parameter, four to a page; a parameter's cell (`ParamCell`, which `PluginParamKnob` shows a plug-in's parameter in too), its state and its menu |
 | [PluginDeviceBody.qml](../../ui/qml/devices/PluginDeviceBody.qml), [PluginParamKnob.qml](../../ui/qml/devices/PluginParamKnob.qml), [PluginParams](../../ui/src/devices/PluginParams.h) | A plug-in's generic editor: its parameters (`PluginParams`, `PluginParam`), or why it shows none |
 | [RackDeviceBody.qml](../../ui/qml/devices/RackDeviceBody.qml), [RackMacroKnob.qml](../../ui/qml/devices/RackMacroKnob.qml), [RackMacroMappings.qml](../../ui/qml/devices/RackMacroMappings.qml), [RackChainRow.qml](../../ui/qml/devices/RackChainRow.qml), [RackChainView.qml](../../ui/qml/devices/RackChainView.qml), [RackMacro](../../ui/src/devices/RackMacro.h) (`RackMacro`, `RackMacros`), [RackChain](../../ui/src/devices/RackChain.h), [RackChains](../../ui/src/devices/RackChains.h) | A rack: its buttons, macros and chain list, a macro's mappings and their ranges, a chain's row, the chain shown beside the rack |
 | [DeviceCanvas](../../ui/src/devices/DeviceCanvas.h), [EditorPaint](../../ui/src/devices/EditorPaint.h) | The base of the editors' drawn items, and their drawing helpers (among them `LogAxis`, the graphs' logarithmic frequency and time axes, and `drawDecadeGrid()`) |
 | [editors/DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml) | The editor registry (a singleton): `editorFor(kind)` |
+| [editors/EditorCaption.qml](../../ui/qml/devices/editors/EditorCaption.qml), [editors/EditorReadout.qml](../../ui/qml/devices/editors/EditorReadout.qml) | The editors' captions (a control's name over it) and readouts (its value under it) |
 | Compressor: [CompressorEditor.qml](../../ui/qml/devices/editors/CompressorEditor.qml), [ReductionGraph](../../ui/src/devices/ReductionGraph.h) | |
 | Delay: [DelayEditor.qml](../../ui/qml/devices/editors/DelayEditor.qml), [FilterGraph](../../ui/src/devices/FilterGraph.h) | |
 | Disperser: [DisperserEditor.qml](../../ui/qml/devices/editors/DisperserEditor.qml), [DispersionGraph](../../ui/src/devices/DispersionGraph.h) | |
@@ -204,7 +205,9 @@ and editor, its sidechain) reading the project again whenever that may have chan
 [DeviceKnobPages.qml](../../ui/qml/devices/DeviceKnobPages.qml): `DeviceParams` lists the processor's parameters
 (`bridge.deviceParams`), four to a page in a 2 × 2 grid, each a
 [DeviceParamKnob](../../ui/qml/devices/DeviceParamKnob.qml) (84 px wide, a 34 px knob) over a
-[DeviceParam](../../ui/src/devices/DeviceParam.h):
+[DeviceParam](../../ui/src/devices/DeviceParam.h). The cell itself is [ParamCell](../../ui/qml/devices/ParamCell.qml),
+which shows what it is given and says what the user does; `PluginParamKnob` wraps it around a `PluginParam` the same
+way:
 
 - A parameter with named values gets a list; the others a `Knob`, log-scaled where the engine says so, bipolar when
   the range spans 0 and the unit is none, st or ct, in whole steps when stepped, with a readout from `format()`.

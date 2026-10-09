@@ -111,17 +111,11 @@ Item {
         }
     }
 
-    component Caption: Text {
-        horizontalAlignment: Text.AlignHCenter
-        color: Theme.textDim
-        font: Theme.uiFont(8)
+    component Caption: EditorCaption {
         elide: Text.ElideRight
     }
 
-    component Readout: Text {
-        horizontalAlignment: Text.AlignHCenter
-        color: enabled ? Theme.text : Theme.textDisabled
-        font: Theme.uiFont(8)
+    component Readout: EditorReadout {
         elide: Text.ElideRight
     }
 
