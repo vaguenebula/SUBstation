@@ -32,7 +32,8 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
 - **Recording** from ASIO inputs, with count-in and latency-corrected takes, and
   resampling of any track or the master.
 - **Browser** with instant search over hundreds of thousands of samples, preview,
-  and ranking by use.
+  and ranking by use; *Find Similar Sounds* by timbre, envelope and pitch, from
+  Essentia's audio descriptors, the library analysed in the background.
 - **Multi-threaded rendering**, bit-identical on any number of threads; WAV export.
 
 See the [user guide](docs/guide/README.md) for how each of these behaves, and
@@ -107,6 +108,7 @@ QML views (on Linux under `xvfb-run`). See [docs/testing.md](docs/testing.md).
 ```
 engine/src/          the real-time audio engine and plug-in hosting (sub_engine; no Qt)
 engine/third_party/  miniaudio (public domain / MIT-0), Signalsmith Stretch and Linear, the VST 3 SDK subset (MIT)
+intelligence/third_party/  Essentia 2.1-beta5's core and the algorithms used (AGPLv3), HUMANBRO's runtime
 browser/src/         the browser's file index and search (sub_browser; no Qt)
 app/src/             the application layer (sub_app; Qt Core and Gui): model/, editor/, io/, audio/,
                      session/, browser/, plugins/, analysis/
@@ -122,9 +124,18 @@ docs/                documentation
 ## Documentation
 
 - [Architecture](docs/architecture.md): layers, threads, real-time rules
+- [Licensing](docs/licensing.md): MIT, and what Essentia's AGPLv3 asks of a build you distribute
 - [Building](docs/building.md) and [testing](docs/testing.md)
 - [User guide](docs/guide/README.md) and [keyboard shortcuts](docs/guide/shortcuts.md)
 - [Code reference](docs/README.md): the engine, the application layer, the UI, the browser
 
 Note:
 This project kinda started out as a meme, but I'm starting to think it's actually much better for my specific workflow than Ableton is. You may or may not find it a good replacement, but I know for certain a lot of issues that bothered me the most with Ableton (crashing on switching audio devices, slow project save and load times) are solved with this DAW. The end goal, however, is to re-invent the way I make music with a DAW. Right now, features are very limited to my specific workflow, but I will continue adding stuff that make it more versatile and suited for everyone's music production needs. 
+
+## Licence
+
+SUBstation's own code is under the [MIT licence](LICENSE). Builds include
+[Essentia](intelligence/third_party/essentia) (AGPLv3), so a build you distribute is,
+as a whole, under the AGPLv3's terms: ship it with its source. See
+[docs/licensing.md](docs/licensing.md), which also covers the ASIO SDK and the velocity
+model.

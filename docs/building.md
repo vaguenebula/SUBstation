@@ -91,12 +91,13 @@ Pass them at configure time: `cmake -B build -DSUBSTATION_TEST_PLUGINS=OFF`.
 | Target | Kind | Layer | What it is |
 |---|---|---|---|
 | `miniaudio` | static library (C) | engine | [miniaudio](../engine/third_party/miniaudio), compiled once as C (`MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_GENERATION`). The engine's and the intelligence module's decoders. |
-| `signalsmith_linear` | interface library | engine | [Signalsmith Linear](../engine/third_party/signalsmith-linear)'s headers: the FFTs of Signalsmith Stretch (the engine) and of the intelligence module. |
+| `signalsmith_linear` | interface library | engine | [Signalsmith Linear](../engine/third_party/signalsmith-linear)'s headers: the FFTs of Signalsmith Stretch. |
 | `vst3_base`, `vst3_hosting` | static libraries | engine | The VST 3 SDK's interfaces and base library, and its host side (module loading: `module_win32.cpp` or `module_linux.cpp`). `vst3_hosting` is C++17 on purpose: as C++17 the module loader reads paths as UTF-8 (`u8path`); as C++20 it would use the ANSI code page on Windows, and plug-ins with non-ASCII paths would not load. |
 | `sub_engine` | static library | engine | The real-time engine ([engine/](../engine/CMakeLists.txt)): no Qt. On Windows it adds the WinMM MIDI backend, the plug-in editor windows and, with the SDK, ASIO; elsewhere a MIDI backend without devices and no editor windows. |
 | `sub_browser` | static library | browser | The browser's file index and search ([browser/](../browser/CMakeLists.txt)): no Qt; Win32 or POSIX platform layer. |
+| `essentia` | static library | intelligence | [Essentia](../intelligence/third_party/essentia) 2.1-beta5's core and the 31 algorithms the sound similarity uses, with KISS FFT: no other dependency. Built as C++17, its warnings not shown, with `ESSENTIA_STATIC` and `DEBUGGING_ENABLED=0` (public: they shape its headers). AGPLv3: [licensing.md](licensing.md). |
 | `humanbro` | static library | intelligence | [HUMANBRO](../intelligence/third_party/humanbro)'s C++ runtime: MIDI features and the tree ensemble that predicts velocities. Built with its own strict floating-point flags (`/fp:precise`; `-ffp-contract=off -fno-fast-math`). |
-| `sub_intelligence` | static library | intelligence | Sound similarity, harmony, humanizing, and later more ([intelligence/](../intelligence/CMakeLists.txt)): no Qt, nothing of the engine or the browser; decodes through `miniaudio`, transforms with `signalsmith_linear`, predicts velocities with `humanbro`; Win32 or POSIX platform layer. Configuring copies its models ([intelligence/models](../intelligence/models)) into `bin/models`, beside the executables. |
+| `sub_intelligence` | static library | intelligence | Sound similarity, harmony, humanizing, and later more ([intelligence/](../intelligence/CMakeLists.txt)): no Qt, nothing of the engine or the browser; decodes through `miniaudio`, describes sounds with `essentia`, predicts velocities with `humanbro`; Win32 or POSIX platform layer. Configuring copies its models ([intelligence/models](../intelligence/models)) into `bin/models`, beside the executables. |
 | `substation-scan` | executable | tools | The VST3 scanner's child process ([tools/scanner](../tools/scanner/main.cpp)): links `sub_engine`, no Qt. |
 | `sub_app` | static library | app | The application layer ([app/](../app/CMakeLists.txt)): Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence`. Built with `QT_NO_KEYWORDS` (public): it and everything on it write `Q_SIGNALS`, `Q_SLOTS`, `Q_EMIT`. |
 | `sub_ui`, `sub_uiplugin` | static library + its QML plugin | ui | The QML module `SUBstation` ([ui/](../ui/CMakeLists.txt)): the QML files, the C++ Qt Quick items, the icons; and `SUBstation.Style`, the Qt Quick Controls style (`ui/style`). |
@@ -149,16 +150,18 @@ Vendored in [engine/third_party](../engine/third_party), so nothing else needs i
 |---|---|---|---|
 | [miniaudio](../engine/third_party/miniaudio) | 0.11.25 | public domain (Unlicense) or MIT No Attribution | WASAPI and the other systems' audio; decoding (the engine's and the intelligence module's) |
 | [Signalsmith Stretch](../engine/third_party/signalsmith-stretch) | 1.3.2 | MIT | time stretching and pitch shifting (header-only) |
-| [Signalsmith Linear](../engine/third_party/signalsmith-linear) | 0.6.4 | MIT | its FFT (`stft.h`, `fft.h` only): Signalsmith Stretch's, and the intelligence module's fingerprints' |
+| [Signalsmith Linear](../engine/third_party/signalsmith-linear) | 0.6.4 | MIT | its FFT (`stft.h`, `fft.h` only): Signalsmith Stretch's |
 | [VST 3 SDK](../engine/third_party/vst3sdk) | 3.8.1 | MIT (since SDK 3.8) | `pluginterfaces`, `base`, `public.sdk/source/{common,main}` and `public.sdk/source/vst`, with the Windows and Linux module loaders; without VSTGUI, the SDK's tests and the wrappers |
 
 Each folder has its licence and a `VERSION.txt` saying what was taken and that it is unmodified. Qt is not vendored:
-it is LGPL-3.0 (or commercial), linked dynamically.
+it is LGPL-3.0 (or commercial), linked dynamically. SUBstation itself is MIT ([LICENSE](../LICENSE)); what the
+licences together mean for distributing it is in [licensing.md](licensing.md).
 
-And in [intelligence/third_party](../intelligence/third_party), the project's own:
+And in [intelligence/third_party](../intelligence/third_party):
 
 | Library | Version | Licence | What is used |
 |---|---|---|---|
+| [Essentia](../intelligence/third_party/essentia) | 2.1-beta5 (tag v2.1_beta5) | **AGPL-3.0-or-later**; its KISS FFT BSD-3-Clause | its core library and 31 algorithms (spectrum, MFCC, spectral shape, contrast, peaks, envelope, YIN): the sound similarity's descriptors. Copied by [vendor.sh](../intelligence/third_party/essentia/vendor.sh) from the tag, with three small portability changes ([local-changes.patch](../intelligence/third_party/essentia/local-changes.patch), [VERSION.txt](../intelligence/third_party/essentia/VERSION.txt)). Every build includes it: a build you distribute is under the AGPLv3's terms as a whole ([licensing.md](licensing.md)) |
 | [HUMANBRO](../intelligence/third_party/humanbro) | copied 2026-10-08 | the project's own | its C++ runtime (`include/`, `src/`; not its CLI), with one local change its `VERSION.txt` describes (loading a model from memory); the model it runs is [intelligence/models/velocity.hbm](../intelligence/models/README.md) |
 
 ## Gotchas

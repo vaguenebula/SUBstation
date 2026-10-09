@@ -1,7 +1,8 @@
 # Intelligence
 
 The intelligence module is what SUBstation works out about music and sound: for now **sound similarity** (Find
-Similar Sounds in the browser, on threads of its own), **harmony** (a song's chords and key, inferred from its MIDI:
+Similar Sounds in the browser, on threads of its own; its descriptors made with
+[Essentia](../intelligence/third_party/essentia), vendored), **harmony** (a song's chords and key, inferred from its MIDI:
 the piano roll's chord lane, its notes out of the key in red, and Generate's block chords and bass lines) and
 **humanizing** (the piano roll's Humanize › Velocity: velocities from HUMANBRO's XGBoost model, through its C++ library,
 vendored); later MIDI generation by machine learning (melodies, accompaniment), a timing model for Humanize › Timing,
@@ -21,7 +22,7 @@ the browser's backend is: the static library `sub_intelligence` ([intelligence/s
    │  FileIndex::updated ──► libraryChanged ────────────────────────────►    sound-index.bin <-> fingerprints
    │                         source: the browser's snapshot ◄── called ──   takes the library from its source
    │                                                                       analysers ×N (background priority)
-   │                                                                         decode (miniaudio) -> SoundAnalyzer
+   │                                                                         decode (miniaudio), 44.1 kHz -> EssentiaExtractor
    │                                                                       search thread (normal priority)
    │                                                                         the sound's fingerprint, then every file's
    │  queued call ◄──────────────────────────────────────────────────── wake callback (result / progress)
@@ -36,8 +37,8 @@ the browser's backend is: the static library `sub_intelligence` ([intelligence/s
 
 | Approach | Quality | Cost | Verdict |
 |---|---|---|---|
-| Learned embeddings (CLAP, PANNs, OpenL3, VGGish; what Ableton Live 12's similarity search and Sononym's use, by their own accounts) | best at *what* a sound is (kick vs snare vs vocal), which is what they are trained on | a runtime (ONNX Runtime, ~20 MB) and a model (CLAP: 89–158 M parameters, hundreds of MB), ~50 ms a file on a fast CPU: 300 000 files are 4 hours | not now: too heavy to start in the background of a DAW, and to ship. The design keeps the door open (below). |
-| Hand-made descriptors (MFCCs, spectral shape, envelope; Freesound's Essentia/Gaia, research on timbre spaces) | good at *how* a sound sounds, which is what picking the next kick needs | ~10 ms a file, no dependencies | **chosen**, several kinds together |
+| Learned embeddings (CLAP, PANNs, OpenL3, VGGish; what Ableton Live 12's similarity search and Sononym's use, by their own accounts) | best at *what* a sound is (kick vs snare vs vocal), which is what they are trained on | a runtime (ONNX Runtime, ~20 MB) and a model (CLAP: 89–158 M parameters, hundreds of MB), ~50 ms a file on a fast CPU: 300 000 files are 4 hours | not now: too heavy to start in the background of a DAW, and to ship. The extractor is replaceable for when one is small enough ([below](#what-would-make-it-better)). |
+| Hand-made descriptors (MFCCs, spectral shape, envelope; Freesound's Essentia/Gaia, research on timbre spaces) | good at *how* a sound sounds, which is what picking the next kick needs | ~10 ms a file | **chosen**, several kinds together, made with **Essentia** |
 | MFCCs alone | the classic, but blind to the attack and the envelope | cheapest | not enough on their own (below) |
 
 Research on percussive timbre agrees on what listeners hear first: the **log attack time** and the **spectral
@@ -45,70 +46,131 @@ centroid** (Lakatos 2000; McAdams), then the spectral envelope (MFCCs) and how t
 browser built on similarity, lets its users weigh *spectrum*, *timbre*, *pitch* and *amplitude* separately. The
 fingerprint follows both: several aspects, each a group of features, compared each as a whole.
 
-### The fingerprint ([SoundFeatures.h](../intelligence/src/similarity/SoundFeatures.h))
+The descriptors are [Essentia](https://essentia.upf.edu)'s (the Music Technology Group's audio analysis library,
+Freesound's descriptors), vendored at its latest release, 2.1-beta5: only its core and the 31 algorithms used, with
+KISS FFT, nothing else (no FFTW, FFmpeg, libsamplerate, YAML, Gaia or TensorFlow;
+[VERSION.txt](../intelligence/third_party/essentia/VERSION.txt)). SUBstation decodes and resamples, and hands it PCM.
+It is AGPLv3: [licensing.md](licensing.md). It replaced the module's own descriptors (the same first six aspects,
+hand-written; in git's history), on which it adds four aspects of descriptors Essentia has and they hadn't, and which
+measurably find more sounds of a query's kind ([How well it works](#how-well-it-works)).
 
-47 numbers in six aspects, from the start of the sound (leading silence skipped, the next 6 s; a 2 ms pre-roll
-always the same, so where frames fall doesn't depend on the silence before), its level made relative to its peak:
+### The fingerprint ([EssentiaExtractor.h](../intelligence/src/similarity/EssentiaExtractor.h))
 
-| Aspect | Features | Why |
+82 numbers in ten aspects. Every sound is analysed at 44.1 kHz (decoded, or resampled, to it: a 22, 48 or 96 kHz copy
+of a sound is measured as the 44.1 kHz one is), from where it starts (leading silence skipped, the next 6 s; a 2 ms
+pre-roll always the same, so where frames fall doesn't depend on the silence before), its level made relative to its
+peak (MFCC 0, a frame's level, is left out): neither the level nor the rate changes a fingerprint.
+
+| Aspect | Features (Essentia's algorithms) | Why |
 |---|---|---|
-| Timbre | MFCCs 1–12 of 40 mel bands (20 Hz–16 kHz), the mean over the sound, louder frames counting more (those 50 dB down not at all) | the spectral envelope, independent of level |
-| TimbreMotion | MFCCs 1–4 of the attack (first 30 ms), the body (to 250 ms) and the tail | a snare's crack and its ring, a clap's bursts: the best single aspect on real drums |
-| Spectrum | centroid and its spread over time, bandwidth, 85% roll-off (octaves), flatness (dB), the share below 120 Hz and above 8 kHz (dB), the attack's centroid | brightness, noisiness, sub-bass (808s), air (hats) |
-| Envelope | log attack time (20%→90% of the peak amplitude), effective duration (within 30 dB of the peak), temporal centroid, the level in eight octave-wide windows after the peak (20 ms … 2.6 s) | closed vs open hats, tight vs boomy kicks, one-shots vs pads |
-| Pitch | how periodic (YIN on 93 ms windows from the peak, down to 21.5 Hz), and that confidence times the pitch in octaves | tuned 808s and tonal one-shots near their pitch; noise near noise |
-| Rhythm | onsets per second after the first (spectral flux that also raises the level 3 dB), the file's length | loops apart from one-shots, a 4-bar loop apart from a 1-bar one |
+| Timbre | MFCCs 1–12 (`MFCC`: 40 HTK mel bands, 20 Hz–16 kHz, power in dB, DCT-II), the mean over the sound, louder frames counting more (those 50 dB down not at all) | the spectral envelope, independent of level |
+| TimbreMotion | MFCCs 1–4 of the attack (first 30 ms), the body (to 250 ms) and the tail | a snare's crack and its ring, a clap's bursts: an attack's character kept apart, not averaged away |
+| TimbreSpread | each MFCC's spread over the sound | a loop's timbre moves from hit to hit, a pad's hardly; the best single gain on loops |
+| Spectrum | centroid (`Centroid`) and its spread over time, bandwidth (`CentralMoments`, `DistributionShape`), 85% roll-off (`RollOff`), flatness (`Flatness`, dB), the share below 120 Hz and above 8 kHz (`EnergyBand`, dB), the attack's centroid and flatness | brightness, noisiness, sub-bass (808s), air (hats); a click against a thump |
+| Contrast | peaks against valleys in six bands, and the valleys (`SpectralContrast`) | tonal against noisy, band by band: the best single aspect |
+| SpectralShape | skewness and kurtosis (`DistributionShape`), `Crest`, high-frequency content (`HFC`), `ZeroCrossingRate`, change from frame to frame (`Flux`), slope (`Decrease`) | the shape beyond its centre and spread |
+| Tonality | peaks within 60 dB of the loudest (`SpectralPeaks`, `SpectralComplexity`), how they beat (`Dissonance`), how strongly the spectrum repeats 200 Hz–5 kHz apart (`PitchSalience`, every fourth frame) | metal (cymbals, cowbells), detuned stabs, harmonic against inharmonic |
+| Envelope | log attack time (`LogAttackTime`, 20%→90% of the peak amplitude), effective duration (`EffectiveDuration`, within 30 dB of the peak), temporal centroid (`Centroid` over time), the level in eight octave-wide windows after the peak (20 ms … 2.6 s) | closed vs open hats, tight vs boomy kicks, one-shots vs pads |
+| Pitch | how periodic (`PitchYin`, YIN, on 93 ms windows from the peak, down to 21.5 Hz), and that confidence times the pitch in octaves | tuned 808s and tonal one-shots near their pitch; noise near noise |
+| Rhythm | onsets per second after the first (spectral flux of the mel bands that also raises the level 3 dB), the file's length | loops apart from one-shots, a 4-bar loop apart from a 1-bar one |
 
-Frames are about 23 ms (1024 at 44.1/48 kHz), a quarter hop; the amplitude envelope is in 2 ms blocks. The FFTs are
-[Signalsmith Linear](../engine/third_party/signalsmith-linear)'s (vendored, header-only, the one Signalsmith Stretch uses
-in the engine): its real FFT for the frames (which hands the Nyquist bin over in bin 0's imaginary part), its complex
-one for YIN's autocorrelation. A part of a
-file (an audio clip's) is analysed from its start for its length. Files above 48 kHz are read at 48 kHz.
+Frames are 23 ms (1024 samples), a quarter hop; the amplitude envelope is in 2 ms blocks. Essentia computes each
+frame's descriptors and the envelope's; the module frames, sums up (weighted means; the attack, body and tail apart)
+and adds what Essentia has no algorithm for, or one that doesn't suit one-shots: the level after the peak, onsets
+after the first, the pitch's summary ([Descriptors.h](../intelligence/src/similarity/Descriptors.h)). So a fingerprint
+is the same size for a 5 ms click and a 6 s loop, and a short one-shot's attack isn't lost in an average.
+
+What was learnt making it:
+
+- **`PitchYinFFT` can't hear an 808.** Its loudness weighting leaves nothing of a 40 Hz fundamental (no pitch at all
+  at 41 Hz); `PitchYin` on the sound brought down to 11 kHz finds it to 5 cents.
+- **`SpectralContrast` wants magnitudes below 1.** It raises each band's peak/valley to 1/ln(the band's mean) and blows
+  up (to 10³³) where a mean nears 1, which unnormalised FFT magnitudes do. It is handed the spectrum scaled to a full
+  scale of 1.
+- **miniaudio's resampler is linear**, which takes a few dB off the top octave: a 48 kHz copy of a sound analysed
+  darker than the 44.1 kHz one. Resampling is band-limited (a Kaiser-windowed sinc, `resampleMono`).
+- **Essentia's logger isn't thread-safe** (a global indent counter): it is compiled out (`DEBUGGING_ENABLED=0`).
+- Descriptors that didn't help, and so aren't in: GFCCs (ERB-band cepstra), inharmonicity and the odd-to-even harmonic
+  ratio, and the envelope's `DerivativeSFX` and `FlatnessSFX` (each lowered the held-out precision).
 
 ### Comparing ([Similarity.h](../intelligence/src/similarity/Similarity.h))
 
-Each feature is measured in standard deviations *of the library searched* (z-scores; never dividing by less than a
-small spread of the feature's own), its squared difference clipped at 9 (3 standard deviations: one wild feature, a
-pitch an octave off, can't outweigh the rest); an aspect is the mean of its features', and the distance the aspects'
-weighted mean, so an aspect counts by its weight however many features it has. Similarity is `exp(-distance / 2)`:
-1 for the same sound, about 0.37 for two unrelated ones.
+Each feature is measured in spreads *of the library searched* (z-scores; never dividing by less than a small spread
+of the feature's own, set at 5–10% of its typical spread), its squared difference clipped at 9 (3 spreads: one wild
+feature, a pitch an octave off, can't outweigh the rest); an aspect is the mean of its features', and the distance the
+aspects' weighted mean, so an aspect counts by its weight however many features it has. Similarity is
+`exp(-distance / 2)`: 1 for the same sound, about 0.37 for two unrelated ones. Neither level nor length can dominate:
+the level isn't a feature, and the length and the effective duration are one feature each of aspects of several.
 
-The weights (Timbre 0.5, TimbreMotion 1.5, Spectrum 2.5, Envelope 2, Pitch 0.5, Rhythm 0.5) were tuned on a real
-library, rounded rather than taken at the optimum so as not to fit it too closely.
+The library's statistics (each feature's centre and spread) are measured robustly, its extreme 1% at either end held at
+the 1st and 99th percentiles (winsorized), so a few broken or freakish files don't flatten the scale for everything
+else. The index keeps them, saves them with the fingerprints, and measures them again when it saves after a change.
+
+The weights: Timbre 0.5, TimbreMotion 1.5, Spectrum 2.5, Envelope 2, Pitch 0.5, Rhythm 0.5 (tuned on a 5 000-file
+Splice library for the module's own descriptors, rounded rather than taken at the optimum), and TimbreSpread,
+Contrast, SpectralShape, Tonality 1 each: untuned, round, and each measured to help on its own (below). They are the
+extractor's (`FeatureSchema::weights`); a search could take others (`SoundIndexOptions::weights`).
 
 ### How well it works
 
-[benchmarks/sound_similarity_bench.cpp](../benchmarks/sound_similarity_bench.cpp) on a 5 091-file sample library
-(Splice packs; labels from file and folder names: kick, snare, clap, closed and open hat, tom, cymbal, rim, 808...).
-Each of 1 100 labelled one-shots is a query over the whole library (loops, vocals, FX and all); precision@10 is the
-share of its 10 nearest that are one-shots of its kind:
+[benchmarks/sound_similarity_bench.cpp](../benchmarks/sound_similarity_bench.cpp) on
+[Dirt-Samples](https://github.com/tidalcycles/Dirt-Samples) (TidalCycles' sample set, not in the repository: 2 068 WAV
+files, 221 folders, at 44.1, 22.05, 48, 16 kHz and odd rates), with 30 drum loops added (made from its kicks, snares and
+hats at 90–174 BPM). Labels come from folder and file names (kick, snare, clap, closed and open hat, tom, cymbal, rim,
+808, synth stab, pluck, synth bass, sub bass, arp; loops). Each of 583 labelled one-shots is a query over the whole
+library; precision@10 is the share of its 10 nearest that are one-shots of its kind (unlabelled files count as misses,
+so these are lower bounds). Each of the 40 loops is a query too, its hits other loops. Both extractors on the same
+files, labels and queries:
 
-| | P@10, all queries | kicks | snares | 808s | closed hats | open hats | claps |
-|---|---|---|---|---|---|---|---|
-| MFCCs alone (the classic) | 0.352 | 0.52 | 0.37 | 0.39 | 0.21 | 0.11 | 0.31 |
-| the first fingerprint, untuned | 0.669 | 0.82 | 0.76 | 0.69 | 0.49 | 0.54 | 0.54 |
-| the fingerprint as it is: + attack/body/tail timbre, 23 ms frames, tuned weights | **0.694** | **0.84** | **0.79** | **0.73** | **0.53** | **0.59** | **0.56** |
+| P@10 | the module's own descriptors (before) | **Essentia's** |
+|---|---|---|
+| one-shots, mean over kinds | 0.467 | **0.491** |
+| one-shots, all queries | 0.580 | **0.602** |
+| P@1, mean over kinds | 0.671 | **0.687** |
+| loops | 0.462 | **0.543** |
+| kicks (113 queries) | 0.455 | **0.499** |
+| snares (129) | 0.692 | **0.699** |
+| toms (75) | 0.895 | **0.901** |
+| cymbals (62) | 0.673 | **0.690** |
+| closed hats (56) | **0.352** | 0.346 |
+| open hats (20) | 0.370 | **0.385** |
+| claps (11) | **0.455** | 0.436 |
+| synth stabs (23) | 0.804 | **0.865** |
+| plucks (17) | 0.794 | **0.824** |
+| synth bass (28) | 0.414 | **0.507** |
+| 808s (11) | 0.227 | **0.273** |
+| sub bass (20) | **0.150** | 0.140 |
 
-No aspect alone gets past 0.25 (mean over kinds); together they reach 0.45, so the combination is what works: it
-doubles what MFCCs alone find. What is left are mostly neighbours a listener would call close (claps and snares, open
-hats and crashes, toms and tonal one-shots), which a score by labels counts as misses.
+Whether each added aspect helps was decided on half the queries held out: the queries' folders split in two by a hash
+(`--split`), each aspect added alone to the six, and kept only if one-shot precision (over kinds and over all
+queries) rose on both halves. Held out (320 queries):
+the six aspects 0.469 (mean over kinds) / 0.588 (all queries) / 0.491 (loops); all ten 0.511 / 0.629 / 0.609. Weights
+tuned on one half did *worse* on the other (0.506 → 0.480): the halves hold different kinds, so the round weights
+stay. Alone, Contrast (0.390) beats every one of the module's own aspects (the best, TimbreMotion, 0.368). What is left
+are mostly neighbours a listener would call close (claps and snares, open hats and crashes, sub basses and long 808
+kicks) or files whose names don't say what they are.
 
-Speed (the index itself, at background priority, its default 4 analysers on a 24-thread Intel Core Ultra 7):
+The module's own descriptors had 0.694 on the 5 091-file Splice library they were tuned on (kicks 0.84, snares 0.79,
+closed hats 0.53): that library's labels are cleaner than Dirt-Samples' file names, so the two sets' numbers don't
+compare with each other, only the extractors on one set.
+
+Speed (a release build on a 4-core cloud machine, the index's own analysers at background priority):
 
 | | |
 |---|---|
-| analysing 5 091 files, first time | 11.5 s (about 10 ms a file a thread) |
-| next start: reading the saved fingerprints | 10 ms (1.7 MB), all files checked against their stamps in 20 ms |
-| a search over 5 084 fingerprints | 0.5 ms (300 000 files: about 30 ms) |
-| a search from a clip's part (analysed then) | 1.6 ms |
+| analysing a file | median 10 ms (95%: 60 ms; a 6 s loop up to 150 ms; 17 ms on average): the module's own descriptors took 1.4 ms. About half of it is the four aspects added (their gain was judged worth it); most of the rest the spectrum, PitchYin and MFCCs |
+| analysing 2 068 files, first time, 4 analysers | 9.3 s (223 files a second; one analyser, 59): 300 000 files are about 20 minutes, once |
+| next start: reading the saved fingerprints | 3 ms (0.8 MB), all files checked against their stamps in 9 ms |
+| a search over 2 068 fingerprints | 0.7 ms, asked to taken (300 000 files: about 100 ms) |
 
 ### What would make it better
 
-A learned embedding added as another aspect: the `Fingerprint` grows by the model's output (or a projection of
-it), `kFeatureVersion` goes up so saved fingerprints are made again, and the comparison weighs it like the rest.
-The module is where such models go anyway (humanizing's XGBoost is one). An embedding small enough to run in the
-background (an EfficientAT or a distilled OpenL3, a few MB) would mostly help *across* kinds; the descriptors stay
-what tells one kick from another.
+A learned embedding as an aspect of its own: an extractor ([FeatureExtractor.h](../intelligence/src/similarity/FeatureExtractor.h))
+whose schema has Essentia's descriptors and an `Embedding` aspect (a small model's output, or a projection of it), its
+weight set by the benchmark. Nothing else changes: the index, the store and the comparison follow the schema, and the
+fingerprints saved by the previous extractor are made again. An embedding small enough to run in the background (an
+EfficientAT or a distilled OpenL3, a few MB) would mostly help *across* kinds; the descriptors stay what tells one kick
+from another. Essentia's TensorFlow models would bring their runtime; ONNX Runtime with an exported model is lighter.
 
 ## Harmony: chords and keys from MIDI
 
@@ -262,12 +324,16 @@ waits for it, a tenth of a second for the longest parts.
 
 | File | What it holds |
 |---|---|
-| [core/AudioReader.h](../intelligence/src/core/AudioReader.h) | `readMono()`: decodes a file (or a part) with miniaudio, mixed down, at most 48 kHz; `MonoAudio`, `AudioError` |
+| [core/AudioReader.h](../intelligence/src/core/AudioReader.h) | `readMono()`: decodes a file (or a part) with miniaudio, mixed down, at most 48 kHz; `readMonoAt()`, at a given rate; `resampleMono()` (band-limited, Kaiser-windowed sinc); `MonoAudio`, `AudioError` |
 | [core/Platform.h](../intelligence/src/core/Platform.h) | `FileStamp`/`stamp()`, `enterBackgroundMode()`, `replaceFile()`, `openFile()`, WTF-8 to UTF-16; [Platform.cpp](../intelligence/src/core/Platform.cpp) (Windows), [PlatformPosix.cpp](../intelligence/src/core/PlatformPosix.cpp) |
-| [similarity/SoundFeatures.h](../intelligence/src/similarity/SoundFeatures.h) | `SoundAnalyzer` (one per thread), the fingerprint's layout (`feature::`), `Aspect`, `featureInfo()`, `kFeatureVersion` |
-| [similarity/Similarity.h](../intelligence/src/similarity/Similarity.h) | `AspectWeights`, `Comparison` (`fit`, `distance`, `similarity`) |
-| [similarity/SoundStore.h](../intelligence/src/similarity/SoundStore.h) | sound-index.bin: `StoreWriter`, `writeStore()`, `readStore()` |
-| [similarity/SoundIndex.h](../intelligence/src/similarity/SoundIndex.h) | `SoundIndex` (its threads), `SoundQuery`, `SimilarityResult`, `SoundIndexStatus`, `SoundIndexOptions` |
+| [similarity/FeatureSchema.h](../intelligence/src/similarity/FeatureSchema.h) | `Aspect`, `AspectWeights`, `FeatureInfo`, `FeatureSchema` (an extractor's features, weights, and what saved fingerprints must match: `key()`) |
+| [similarity/FeatureExtractor.h](../intelligence/src/similarity/FeatureExtractor.h) | `FeatureExtractor` (`extract()` from PCM, `extractFile()`; cancellable), `SoundBuffer`, `Extraction`, `ExtractorFactory`, `defaultExtractorFactory()` |
+| [similarity/EssentiaExtractor.h](../intelligence/src/similarity/EssentiaExtractor.h) | `EssentiaExtractor` (one per thread), the fingerprint's layout (`feature::`), `featureInfo()`, `essentiaSchema()`, `kFeatureVersion`, `kAnalysisRate` |
+| [similarity/Descriptors.h](../intelligence/src/similarity/Descriptors.h) | (internal) preparing a sound, its 2 ms envelope, the level after the peak, onsets, the pitch's summary |
+| [similarity/Similarity.h](../intelligence/src/similarity/Similarity.h) | `FeatureStatistics` (`measure()`: winsorized), `Comparison` (`fit`, `distance`, `similarity`) |
+| [similarity/SoundStore.h](../intelligence/src/similarity/SoundStore.h) | sound-index.bin: `StoreWriter`, `writeStore()`, `readStore()`, `StoreContents` |
+| [similarity/SoundIndex.h](../intelligence/src/similarity/SoundIndex.h) | `SoundIndex` (its threads; `find()`, `cancelSearch()`, `schema()`), `SoundQuery`, `SimilarityResult`, `SoundIndexStatus`, `SoundIndexOptions` |
+| [third_party/essentia](../intelligence/third_party/essentia) | Essentia 2.1-beta5's core and 31 algorithms (the `essentia` library), [VERSION.txt](../intelligence/third_party/essentia/VERSION.txt), [vendor.sh](../intelligence/third_party/essentia/vendor.sh), [local-changes.patch](../intelligence/third_party/essentia/local-changes.patch) |
 | [harmony/Chords.h](../intelligence/src/harmony/Chords.h) | `Quality`, `Chord` (its notes, its name: "Am7", "C/E"), `Key` (its scale, its triads), `pitchClass()`, `noteName()` |
 | [harmony/ChordInference.h](../intelligence/src/harmony/ChordInference.h) | `Note`, `ChordSpan`, `InferenceOptions`, `Harmony`; `estimateKey()`, `inferHarmony()` |
 | [harmony/Accompaniment.h](../intelligence/src/harmony/Accompaniment.h) | `GeneratedNote`; `chordPart()`, `bassPart()`, `starterProgression()` |
@@ -279,12 +345,13 @@ waits for it, a tenth of a second for the longest parts.
 
 | File | What it holds |
 |---|---|
-| [SoundSimilarity.h](../app/src/intelligence/SoundSimilarity.h) | `SoundSimilarity` (`Session.similarity`): the index on the application's thread; `setLibrary(FileIndex*)`, `find()`, `found(SimilarSounds)`, `progressChanged`; `SimilarSounds` (a result: `similarity(path)`, `best(n)`, `scorer()`) |
+| [SoundSimilarity.h](../app/src/intelligence/SoundSimilarity.h) | `SoundSimilarity` (`Session.similarity`): the index on the application's thread; `setLibrary(FileIndex*)`, `find()`, `cancel()`, `found(SimilarSounds)`, `progressChanged`; `SimilarSounds` (a result: `similarity(path)`, `best(n)`, `scorer()`) |
 | [Harmony.h](../app/src/intelligence/Harmony.h) | `Harmony` (`Session.harmony`): the song's notes (`songNotes()`), its chords and key inferred from them when asked after a change, the key (the project's, else inferred), `shown` (the setting C toggles) |
 | [Humanizer.h](../app/src/intelligence/Humanizer.h) | `Humanizer` (`Session.humanizer`): the velocity model loaded on first use (`velocityModelPath()`, `velocityAvailable`), `velocities(targets, amount)` with each track's notes as context, `statusMessage` |
 
 The browser's side of Find Similar is in [BrowserController](../app/src/browser/BrowserController.h)
-(`findSimilar()`, `clearSimilar()`, `similarTo`) and the backend's `Sort::Score` ([browser.md](browser.md)).
+(`findSimilar()`, `clearSimilar()`, `similarTo`; leaving the similar list cancels its search) and the backend's
+`Sort::Score` ([browser.md](browser.md)).
 
 ## The index
 
@@ -293,8 +360,12 @@ The browser's side of Find Similar is in [BrowserController](../app/src/browser/
 | Thread | Priority | Does |
 |---|---|---|
 | keeper | background | reads sound-index.bin at start; takes the library from its source after `libraryChanged()` (at most once a second, `refreshSeconds`); saves 10 s after fingerprints change, and on `close()` |
-| analysers (a quarter of the cores, 1–4; `threads`) | background | new files first: stamp, decode, fingerprint; then the saved ones: their stamp (size, last-write time) compared, analysed again if it changed. Files are checked again whenever the library is taken again, if their last check is more than a minute old (`recheckSeconds`): a sample exported again over itself is analysed again |
+| analysers (a quarter of the cores, 1–4; `threads`), each with its own extractor | background | new files first: stamp, decode (at 44.1 kHz), fingerprint; then the saved ones: their stamp (size, last-write time) compared, analysed again if it changed. Files are checked again whenever the library is taken again, if their last check is more than a minute old (`recheckSeconds`): a sample exported again over itself is analysed again |
 | search | normal (the user waits) | the sound's fingerprint (its saved one if a whole library file and up to date; else analysed now, and kept), then every analysed library file compared with it |
+
+Closing stops the analysers in the middle of a file (extractors look at a flag between frames): the file stays to
+analyse next time, neither analysed nor failed. Searches are stopped the same way when a newer one replaces them or
+`cancelSearch()` drops them (`SoundSimilarity::cancel()`, when the browser leaves its similar list).
 
 Background priority is the browser indexer's: `THREAD_MODE_BACKGROUND_BEGIN` on Windows (CPU, I/O and memory
 priority), the lowest nice value and the idle I/O class on Linux. Playback and the UI never wait on it.
@@ -321,14 +392,17 @@ library's refresh holds up searches and analysers only for the lookups.
 
 ### Searches
 
-`find(SoundQuery{path, start, length})` replaces a waiting search. The result (`SimilarityResult`) holds every
+`find(SoundQuery{path, start, length})` replaces a waiting search and stops a running one. The result (`SimilarityResult`) holds every
 analysed library file's similarity, looked up by path (an open-addressing table of the paths' 64-bit FNV-1a hashes:
 no path is copied), the 256 best (not the sound itself), how many were scored, and why the sound couldn't be analysed
 if it couldn't. A search right after start waits for the saved fingerprints, and for the first library if it is on
 its way (at most 3 s).
 
-The statistics the features are measured by (each one's mean and spread) are those of the library's analysed files at
-the time of the search, worked out with it (one pass more over the fingerprints).
+The statistics the features are measured by (each one's centre and spread, winsorized) are the library's, as last
+measured: when the index saves after fingerprints changed (so at most 10 s old), or read with the fingerprints at start.
+A search measures them itself only when they describe less than half of what is analysed now (the first run's early
+searches) or more than twice it (places removed). So searches measure in the same scale from one run to the next, and don't pay for measuring (2 ms for 2 000
+files; about 300 ms for 300 000).
 
 ### The store
 
@@ -338,12 +412,16 @@ keeps the library's files (analysed, or not analysable); the files that left it 
 file records when it was last in the library), so a place on a drive that is unplugged for a while, or removed and
 added again, isn't analysed again when it comes back; and the 1 000 sounds outside it searched from most recently.
 Files gone for longer are dropped at the next save.
-The format is in [SoundStore.h](../intelligence/src/similarity/SoundStore.h); a file of another format, feature version
-or size, or with a bad checksum, is ignored and everything is analysed again. Bump `kFeatureVersion` whenever what
-`SoundAnalyzer` computes changes.
+The format is in [SoundStore.h](../intelligence/src/similarity/SoundStore.h). Its header names what made the
+fingerprints: the extractor, its version, its settings (Essentia's version among them: the analysis rate, frame and hop,
+bands...) and its features (`FeatureSchema::key()`). A store of another extractor, version or settings, of another
+format, or with a bad checksum, is ignored and everything is analysed again: bump `kFeatureVersion` whenever what
+`EssentiaExtractor` computes changes. A file is told by its path and its stamp (size, last-write time): a changed stamp
+and it is analysed again; files of the library not in the store are analysed, and only they (incremental indexing). The
+library's statistics are saved after the files.
 
-Memory and disk: about 300 bytes a file (the fingerprint, the path, the stamp): 1.7 MB for 5 000 files, about
-100 MB for 300 000.
+Memory and disk: about 400 bytes a file (82 features, the path, the stamp): 0.8 MB for 2 000 files, 2 MB for 5 000,
+about 120 MB for 300 000.
 
 ## The application side
 
@@ -380,8 +458,12 @@ too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`
 - Its threads never call into the application but the wake callback, which only posts; the library source is called
   on the keeper's thread and must only read immutable data.
 - Only the latest search's result is handed out, once.
-- A fingerprint depends only on the sound: not on its level, the silence before it, or the library (the library only
-  sets the scale searches measure in).
+- A fingerprint depends only on the sound: not on its level, its sample rate, the silence before it, or the library
+  (the library only sets the scale searches measure in).
+- Saved fingerprints are used only by the extractor that made them, as it was (its name, version, settings and
+  features); nothing else is ever compared.
+- Essentia runs only on the index's threads (one set of its algorithms per thread; its factories filled once,
+  `essentia::init()` under `std::call_once`), never on the audio thread; its logger is compiled out.
 - Harmony is pure functions of the notes and options: the same song always gives the same chords, key and parts.
   It keeps nothing and starts no thread; the application infers it on its own thread, only when asked after a change.
 - Humanized velocities are a pure function of the part's notes, the meter and the amount: the model never sees a
@@ -391,9 +473,14 @@ too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`
 
 ## Extending it
 
-- **A new feature**: add it to `feature::` and `featureInfo()` (its name, aspect and minimum spread), compute it in
-  `SoundAnalyzer::analyze()`, bump `kFeatureVersion`, and run `sound_similarity_bench --tune` on a labelled library
-  to see that it helps.
+- **A new feature**: add it to `feature::` and `featureInfo()` (its name, aspect and minimum spread: 5–10% of its
+  spread over a library), compute it in `EssentiaExtractor` (an Essentia algorithm not vendored yet: add it to
+  `vendor.sh`'s list and run it), bump `kFeatureVersion`, and run `sound_similarity_bench --split` on a labelled
+  library to see that it helps on both halves.
+- **Another extractor** (a learned embedding): a `FeatureExtractor` with a schema of its own, handed to the index as
+  `SoundIndexOptions::extractor` (a factory: one per thread) and made the default in `defaultExtractorFactory()`. Its
+  aspects' weights in its schema; `Aspect::Embedding` is there for it. Saved fingerprints of the previous one are made
+  again on their own. It must poll the cancel flag on long work, and be safe to run several of at once.
 - **Weights the user picks** (as Sononym's aspects): `SoundIndexOptions::weights` (`AspectWeights`); a search could
   take its own.
 - **Swapping similar samples** (the sampler, the drum rack, a file manager): `SoundSimilarity::find()` with the
@@ -416,14 +503,19 @@ too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`
 
 ## Tests
 
-- [tests/intelligence](../tests/intelligence) (`intelligence_tests`, Qt-free, the engine tests' harness): the
-  spectrum as the fingerprint reads Signalsmith Linear's FFT (a sine's centroid at its frequency at four rates, the
-  Nyquist bin); reading (mono mix, parts, 96 kHz to 48 kHz, broken files); the fingerprint (level and leading
-  silence don't change it, silence has none, pitch of tones and noise, envelopes, spectra, onsets of loops and
-  one-shots); synthetic kicks, snares, hats and claps finding their own kind; comparing (clipping, weights); the store
-  (round trip, damage, another version); the index (analysing a library, saving and checking stamps, new and changed
-  files, files leaving the library, sounds outside it and parts of files, undecodable files, a library file searched
-  from before it was analysed, only the latest result, its threads and its source).
+- [tests/intelligence](../tests/intelligence) (`intelligence_tests`, Qt-free, the engine tests' harness): reading
+  (mono mix, parts, 96 kHz to 48 kHz, at a given rate, broken files) and resampling (pitch, length, no delay, flat to
+  the top); Essentia's spectrum (a sine's centroid and roll-off at its frequency at five rates); the fingerprint (level,
+  leading silence and the sample rate don't change it; silence has none; clicks of one to three samples, 8–192 kHz,
+  NaN and infinity, truncated and junk files handled; pitch of tones down to 41 Hz and of an 808, noise has none;
+  envelopes, spectra, peaks, contrast, shape and change of tones, noise, drums and a loop; onsets of loops and
+  one-shots); kicks, snares, hats, claps, synth stabs, plucks and drum loops finding their own kind; level and length
+  not outweighing timbre; cancelling; comparing (clipping, weights); the library's statistics (robust to wild files);
+  the schema and its key; the store (round trip, statistics, damage, another extractor, version or setting); the index
+  (analysing a library, saving and checking stamps, new and changed files, files leaving the library, sounds outside
+  it and parts of files, undecodable files, a library file searched from before it was analysed, only the latest
+  result, its threads and its source, the statistics saved and searched with, another extractor's fingerprints made
+  again, closing in the middle of a file, a search replaced or cancelled).
 - [tests/intelligence/test_harmony.cpp](../tests/intelligence/test_harmony.cpp) (`intelligence_tests`): naming chords
   and keys, scales and their triads; the key (cadences in major and minor, the bass telling C → G from E minor, too
   little to tell); chords: triads and sevenths, inversions, a progression with its bass on another track, a melody's

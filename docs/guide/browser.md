@@ -55,13 +55,16 @@ while the list shows similar sounds: [below](#find-similar-sounds)):
   your kick. Clicking a place lists only its similar sounds (not its folder tree).
 - The sound itself comes first when it is in your places. A sound from anywhere else (a
   recording, a file in the project's folder) works too.
-- It compares how they sound: timbre, and how it moves from the attack to the tail;
-  brightness and noisiness; sub-bass and air; how fast it starts and how long it rings;
-  pitch, for tonal sounds; and whether it is a one-shot or a loop. Level doesn't matter.
+- It compares how they sound (with the audio descriptors of Essentia, a library made
+  for this): timbre, how it moves from the attack to the tail and how much; brightness
+  and noisiness, band by band; sub-bass and air; how metallic or harmonic it is; how fast
+  it starts and how long it rings; pitch, for tonal sounds, down to an 808's; and whether
+  it is a one-shot or a loop. Neither the level nor the sample rate matters.
 - Nothing needs indexing by hand: every file the browser finds is analysed in the
   background (at low priority: playback is never held up), and only once; new and
-  changed files are analysed when they show up. A 5 000-file library takes about ten
-  seconds the first time. While the first analysis runs, Find Similar works with what is
+  changed files are analysed when they show up. A 5 000-file library takes about half a
+  minute the first time (and once again after updating to a version that analyses
+  differently). While the first analysis runs, Find Similar works with what is
   analysed so far, the footer says how far it got, and the list fills in as it goes.
 - The analysis is kept in `%LOCALAPPDATA%\SUBstation\sound-index.bin` (on Linux
   `~/.local/share/SUBstation/sound-index.bin`).

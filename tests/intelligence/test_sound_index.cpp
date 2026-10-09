@@ -1,5 +1,6 @@
 // The sound similarity index: analysing a library in the background, saving
-// and checking fingerprints, searches, and its threads' manners.
+// and checking fingerprints and the library's statistics, searches, stopping
+// work under way, and its threads' manners.
 
 #include <atomic>
 #include <cctype>
@@ -12,6 +13,7 @@
 #include <thread>
 
 #include "Sounds.h"
+#include "similarity/EssentiaExtractor.h"
 #include "similarity/SoundIndex.h"
 #include "similarity/SoundStore.h"
 
@@ -43,6 +45,53 @@ struct Library {
         for (const auto& p : paths)
             if (kindOf.at(p) == kind) return p;
         return {};
+    }
+};
+
+// An extractor of two features (a sound's level and its length) that takes
+// `delay` seconds over each sound, looking at its cancel flag all the while.
+class SlowExtractor final : public FeatureExtractor {
+public:
+    explicit SlowExtractor(std::shared_ptr<std::atomic<double>> delay, std::shared_ptr<std::atomic<int>> started)
+        : delay_(std::move(delay)), started_(std::move(started)) {}
+
+    static const FeatureSchema& slowSchema() {
+        static const FeatureSchema s = [] {
+            FeatureSchema schema;
+            schema.extractor = "slow";
+            schema.settings = "test";
+            schema.features = {{"level", Aspect::Timbre, 1.f}, {"length", Aspect::Rhythm, 0.05f}};
+            return schema;
+        }();
+        return s;
+    }
+    const FeatureSchema& schema() const override { return slowSchema(); }
+
+    Extraction extract(const SoundBuffer& sound, float* out, const CancelFlag* cancel) override {
+        ++*started_;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(delay_->load());
+        while (std::chrono::steady_clock::now() < until) {
+            if (cancel && cancel->load()) return Extraction::Cancelled;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        double energy = 0.0;
+        for (size_t i = 0; i < sound.count; ++i) energy += static_cast<double>(sound.samples[i]) * sound.samples[i];
+        if (energy <= 0.0) return Extraction::Silent;
+        out[0] = static_cast<float>(10.0 * std::log10(energy / static_cast<double>(sound.count)));
+        out[1] = static_cast<float>(std::log10(static_cast<double>(sound.count) / sound.sampleRate));
+        return Extraction::Done;
+    }
+
+private:
+    std::shared_ptr<std::atomic<double>> delay_;
+    std::shared_ptr<std::atomic<int>> started_;
+};
+
+struct Slow {
+    std::shared_ptr<std::atomic<double>> delay = std::make_shared<std::atomic<double>>(0.0);
+    std::shared_ptr<std::atomic<int>> started = std::make_shared<std::atomic<int>>(0);
+    ExtractorFactory factory() const {
+        return [delay = delay, started = started] { return std::make_unique<SlowExtractor>(delay, started); };
     }
 };
 
@@ -254,9 +303,9 @@ TEST_CASE("a place gone for a while keeps its fingerprints; one gone long enough
         CHECK_EQ(index.status().library, 0u);
         CHECK(search(index, elsewhere)->error.empty());
     }
-    const auto saved = readStore(store);  // (rewritten, with the absent files still in it)
+    const auto saved = readStore(store, essentiaSchema());  // (rewritten, with the absent files still in it)
     REQUIRE(saved.has_value());
-    CHECK_EQ(saved->size(), library.paths.size() + 1);
+    CHECK_EQ(saved->sounds.size(), library.paths.size() + 1);
     // It is back: nothing is analysed again.
     time += 86400;
     {
@@ -274,9 +323,9 @@ TEST_CASE("a place gone for a while keeps its fingerprints; one gone long enough
         REQUIRE(index.waitIdle(30.0));
         CHECK(search(index, wav("project/another.wav", snare()))->error.empty());  // (a change: saved)
     }
-    const auto pruned = readStore(store);
+    const auto pruned = readStore(store, essentiaSchema());
     REQUIRE(pruned.has_value());
-    CHECK_EQ(pruned->size(), 2u);  // the two sounds searched from
+    CHECK_EQ(pruned->sounds.size(), 2u);  // the two sounds searched from
     {
         SoundIndex index(at(time));
         index.setLibrary(library.paths);
@@ -416,4 +465,144 @@ TEST_CASE("the wake callback comes from the index's threads; the source from the
     CHECK_EQ(calls.load(), callsBefore);
     index.close();
     index.close();  // (idempotent)
+}
+
+TEST_CASE("the library's statistics are saved with its fingerprints, and searches measure with them") {
+    const Library library;
+    const std::string store = utf8(tempDir() / "sound-index.bin");
+    {
+        SoundIndex index(options(store));
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+    }  // (closing saves, the statistics measured again)
+    const auto saved = readStore(store, essentiaSchema());
+    REQUIRE(saved.has_value());
+    REQUIRE(saved->statistics.has_value());
+    CHECK_EQ(saved->statistics->count, library.paths.size());
+    for (const float s : saved->statistics->spread) CHECK(s > 0.f);
+    auto similarities = [&] {
+        SoundIndex index(options(store));
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+        CHECK_EQ(index.status().analysedThisRun, 0u);
+        const auto result = search(index, library.first("kick"));
+        std::vector<float> out;
+        for (const auto& path : library.paths) out.push_back(result->similarity(path));
+        return out;
+    };
+    // Every run measures in the saved scale: the same similarities...
+    const std::vector<float> first = similarities();
+    const std::vector<float> second = similarities();
+    for (size_t i = 0; i < first.size(); ++i) CHECK_EQ(first[i], second[i]);
+    // ...and saved statistics twice as spread make every sound nearer.
+    StoreWriter writer(essentiaSchema(), static_cast<uint32_t>(saved->sounds.size()));
+    for (const StoredSound& s : saved->sounds) writer.add(s);
+    FeatureStatistics wider = *saved->statistics;
+    for (float& s : wider.spread) s *= 2.f;
+    REQUIRE(writeStore(store, writer.finish(&wider)));
+    const std::vector<float> nearer = similarities();
+    for (size_t i = 0; i < first.size(); ++i) {
+        if (library.paths[i] == library.first("kick")) continue;
+        CHECK(nearer[i] > first[i]);
+    }
+}
+
+TEST_CASE("fingerprints made by another extractor, or as it was, are made again") {
+    const Library library;
+    const std::string store = utf8(tempDir() / "sound-index.bin");
+    const Slow slow;
+    {
+        SoundIndexOptions o = options(store);
+        o.extractor = slow.factory();
+        SoundIndex index(o);
+        CHECK_EQ(index.schema().extractor, std::string("slow"));
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+        CHECK_EQ(index.status().analysedThisRun, library.paths.size());
+    }
+    REQUIRE(readStore(store, SlowExtractor::slowSchema()).has_value());
+    {
+        SoundIndex index(options(store));  // (Essentia's)
+        CHECK_EQ(index.schema().extractor, std::string("essentia"));
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+        CHECK_EQ(index.status().analysedThisRun, library.paths.size());
+        CHECK_EQ(index.status().analysed, library.paths.size());
+    }
+    // Back to the other: its fingerprints were replaced, so made again.
+    SoundIndexOptions o = options(store);
+    o.extractor = slow.factory();
+    SoundIndex index(o);
+    index.setLibrary(library.paths);
+    REQUIRE(index.waitIdle(30.0));
+    CHECK_EQ(index.status().analysedThisRun, library.paths.size());
+}
+
+TEST_CASE("closing stops the analysers in the middle of a file, which is analysed next time") {
+    const Library library;
+    const std::string store = utf8(tempDir() / "sound-index.bin");
+    const Slow slow;
+    slow.delay->store(30.0);  // (a file takes half a minute)
+    {
+        SoundIndexOptions o = options(store);
+        o.extractor = slow.factory();
+        SoundIndex index(o);
+        index.setLibrary(library.paths);
+        REQUIRE(eventually([&] { return slow.started->load() >= 2; }));
+        const auto start = std::chrono::steady_clock::now();
+        index.close();
+        CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
+        const SoundIndexStatus status = index.status();
+        CHECK_EQ(status.analysedThisRun, 0u);
+        CHECK_EQ(status.failed, 0u);  // (given up, not failed)
+        CHECK_EQ(status.pending(), library.paths.size());
+    }
+    slow.delay->store(0.0);
+    SoundIndexOptions o = options(store);
+    o.extractor = slow.factory();
+    SoundIndex index(o);
+    index.setLibrary(library.paths);
+    REQUIRE(index.waitIdle(30.0));
+    CHECK_EQ(index.status().analysed, library.paths.size());
+    CHECK_EQ(index.status().failed, 0u);
+}
+
+TEST_CASE("a search replaced stops at once; a search cancelled hands nothing out") {
+    const Library library;
+    const Slow slow;
+    SoundIndexOptions o = options();
+    o.extractor = slow.factory();
+    o.analyse = false;  // (only the sounds searched from are analysed)
+    SoundIndex index(o);
+    index.setLibrary(library.paths);
+    REQUIRE(index.waitIdle(30.0));
+
+    // Cancelled while it analyses the sound: it stops, and no result comes.
+    slow.delay->store(30.0);
+    index.find(SoundQuery{library.paths[0]});
+    REQUIRE(eventually([&] { return slow.started->load() >= 1; }));
+    auto start = std::chrono::steady_clock::now();
+    index.cancelSearch();
+    REQUIRE(index.waitIdle(5.0));
+    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
+    CHECK(index.take().result == nullptr);
+    CHECK(!index.searching());
+
+    // Replaced: the first stops, the second's result comes.
+    index.find(SoundQuery{library.paths[1]});
+    REQUIRE(eventually([&] { return slow.started->load() >= 2; }));
+    slow.delay->store(0.0);
+    start = std::chrono::steady_clock::now();
+    const uint64_t latest = index.find(SoundQuery{library.paths[2]});
+    REQUIRE(index.waitIdle(5.0));
+    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
+    const auto update = index.take();
+    REQUIRE(update.result != nullptr);
+    CHECK_EQ(update.result->generation, latest);
+    CHECK_EQ(update.result->query.path, library.paths[2]);
+    CHECK(update.result->error.empty());
+
+    // Cancelling with nothing under way is harmless.
+    index.cancelSearch();
+    CHECK(index.take().result == nullptr);
 }
