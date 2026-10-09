@@ -94,6 +94,49 @@ private Q_SLOTS:
         QCOMPARE(QFileInfo(s.suggestedSavePath()).fileName(), QStringLiteral("Untitled.gilproj"));
     }
 
+    void aDisperserIsSavedAndOpenedWithItsAutomation() {
+        SessionFixture f;
+        Session& s = f.s();
+        TempDir dir;
+        const QString track = f.editor().addAudioTrack();
+        const QString device = f.editor().addDevice(track, QStringLiteral("disperser"));
+        QVERIFY(!device.isEmpty());
+        const QMap<QString, double> values{{QStringLiteral("amount"), 40.0},
+                                           {QStringLiteral("freq"), 250.0},
+                                           {QStringLiteral("pinch"), 3.5},
+                                           {QStringLiteral("bypass"), 1.0}};
+        for (auto it = values.begin(); it != values.end(); ++it) f.editor().setDeviceParam(track, device, it.key(), it.value());
+        const QString key = automation::deviceKey(device, QStringLiteral("freq"));
+        const Envelope envelope{{0.0, 0.2, 0.0}, {4.0, 0.8, 0.5}};
+        f.editor().setEnvelope(track, key, envelope);
+        const QString path = dir.path(QStringLiteral("dispersed.gilproj"));
+        QVERIFY(s.saveProjectAs(path));
+
+        s.newProject();
+        QVERIFY(f.project().tracks().empty());
+        QVERIFY(s.openProject(path));
+        const Device* opened = f.project().findDevice(track, device);
+        QVERIFY(opened);
+        QCOMPARE(opened->kind, QStringLiteral("disperser"));
+        for (auto it = values.begin(); it != values.end(); ++it) QCOMPARE(opened->params.value(it.key()), it.value());
+        const Envelope back = f.project().envelope(track, key);
+        QCOMPARE(back.size(), envelope.size());
+        for (size_t i = 0; i < back.size(); ++i) {
+            QCOMPARE(back[i].beat, envelope[i].beat);
+            QCOMPARE(back[i].value, envelope[i].value);
+            QCOMPARE(back[i].curve, envelope[i].curve);
+        }
+        // The engine has it as it was saved.
+        const auto id = f.bridge().engineDeviceId(track, device);
+        QVERIFY(id);
+        const std::vector<sub::ParamInfo> params = f.engine.processorParams(*id);
+        for (size_t i = 0; i < params.size(); ++i) {
+            const QString paramId = QString::fromStdString(params[i].id);
+            QVERIFY2(values.contains(paramId), qPrintable(paramId));
+            QCOMPARE(double(f.engine.processorParam(*id, int(i))), values.value(paramId));
+        }
+    }
+
     void aFileThatCantBeOpenedIsAWarning() {
         SessionFixture f;
         Session& s = f.s();

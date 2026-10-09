@@ -23,6 +23,8 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Ott.cpp](../../engine/src/builtin/devices/Ott.cpp) | Over The Top: multiband upward/downward compression |
 | [builtin/devices/Compressor.cpp](../../engine/src/builtin/devices/Compressor.cpp) | Compressor, with sidechain and displays |
 | [builtin/devices/Delay.cpp](../../engine/src/builtin/devices/Delay.cpp) | Delay: synced or free times per side, filter, modes, ping pong, freeze |
+| [builtin/devices/Disperser.cpp](../../engine/src/builtin/devices/Disperser.cpp) | Disperser: up to 64 all-pass stages, glides and fades, bypass |
+| [builtin/DisperserDesign.h](../../engine/src/builtin/DisperserDesign.h) | The Disperser's stages (`disperser::design`, `process`, `groupDelayMs`), shared with the application layer's `disperserGroupDelayMs()` for the editor's graph |
 | [builtin/devices/Eq.cpp](../../engine/src/builtin/devices/Eq.cpp) | EQ: 24 bands, placement, output gain, gain scale |
 | [builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h) | The EQ's filter design (`eq::design`, `eq::responseDb`), shared with the application layer's `eqResponseDb()` for the editor's curves |
 | [builtin/devices/Sidechain.cpp](../../engine/src/builtin/devices/Sidechain.cpp) | Sidechain: a curve from each hit in the key (or on the beat), lookahead, lows only |
@@ -341,6 +343,61 @@ A stereo delay after Ableton's.
 - **Display**: `input`, one value per sample: the input summed to mono. The editor
   draws its spectrum behind the filter curve.
 
+### Disperser (`builtin:disperser`, AudioEffect)
+
+Phase dispersion after Kilohearts' Disperser: identical second-order all-passes in a row
+([DisperserDesign.h](../../engine/src/builtin/DisperserDesign.h)). Every frequency keeps its
+level; what is around the stages' frequency comes out later (a transient becomes a chirp).
+
+| id | Name | Unit | Range | Default |
+|---|---|---|---|---|
+| `amount` | Amount | stages | 0..64, 64 steps | 16 |
+| `freq` | Frequency | Hz | 20..20000, log | 1000 |
+| `pinch` | Pinch | Q | 0.1..10, log | 1 |
+| `bypass` | Bypass | | Off, On | Off |
+
+- **A stage** is the bilinear transform of the analog all-pass (s² - s/Q + 1) / (s² + s/Q + 1),
+  prewarped to the frequency (as the RBJ cookbook's): (A2 + A1 z⁻¹ + z⁻²) / (1 + A1 z⁻¹ + A2
+  z⁻²), magnitude exactly 1. The frequency is kept below 0.45 of the sample rate
+  (`stageFrequency`). Every stage and channel share the coefficients; each channel has its
+  own states (in double).
+- **It runs as a normalized lattice** (Gray and Markel): two rotations, by k1 = -cos w0 and
+  k2 = (1 - a) / (1 + a) (a = sin w0 / 2Q), each with its c = sqrt(1 - k²). Rotations keep
+  energy, so a stage's output and states hold exactly what went in however its coefficients
+  move: modulating Frequency or Pinch never puts out more energy than the device was given.
+  (A state-variable filter's band-pass state holds Q times the signal, and dropping Q while it
+  rings throws that out: tried while choosing, one put out up to 40 times the energy it had been
+  given, where the lattice put out none more.) The
+  output is one multiply-add from the input, so the cascade's path through 64 stages is short.
+- **Frequency and Pinch glide** in log, through two one-poles of 20 ms in a row (a jump eases
+  in and out), and the coefficients follow sample by sample while they move. Swept fast through
+  many narrow stages the glide is heard as the sweep itself (what the stages held catches up as
+  the delay shrinks), never louder than what went in.
+- **Amount** fades over 20 ms (an S-curve) to the output after the new number of stages: fewer,
+  from the longer cascade's output to the tap after the stages kept; more, the stages added start
+  from silence and their *input* fades in while the old output fades out (fading their output
+  instead would let them smear the signal's abrupt start into a chirp longer than the fade). Stages
+  no longer heard are cleared. A change during a fade starts when it is done. At 0 stages (and
+  none coming) the input passes untouched, bit for bit.
+- **Bypass** glides between the input and the stages' output (two one-poles of 5 ms: it can turn
+  back halfway without a kink) and, once there, passes the input bit for bit. The stages keep
+  running while bypassed, so it comes back without a seam; switching the device off saves them.
+- **Denormals**: states below 1e-20 are flushed to 0 after each stretch, so silence rings out to
+  exact zeros. `reset()` clears every stage and snaps the glides and fades to the parameters;
+  `prepare()` (a new sample rate) works out the glides and fades again and resets.
+- `latencySamples()` is 0: the dispersion is the effect, and the engine doesn't delay the other
+  tracks against it. `tailSamples()`: until what is left of the impulse response is 60 dB down,
+  1.25 times the largest group delay (`maxGroupDelaySamples`, which looks at the poles' angle too:
+  high up the peak is narrower than any grid) plus 7 time constants of the slowest pole
+  (`decayPerSample`), a bound measured over the parameters' range at 44.1 and 192 kHz; at most 60 s.
+- **Group delay**: `disperser::groupDelayMs(stages, freq, pinch, sampleRate, frequency)` works it
+  out from the stage's biquad coefficients (each polynomial's Re(Σ n cₙ z⁻ⁿ / Σ cₙ z⁻ⁿ)). The
+  application layer's `disperserGroupDelayMs()`
+  ([app/src/audio/DisperserResponse.h](../../app/src/audio/DisperserResponse.h)) wraps it for the
+  editor's graph, so the curve drawn is the delay that plays. Its peak is about 2Q / (pi f) seconds
+  per stage.
+- 64 stages on two channels took about 1.5 % of one core at 48 kHz on the machine it was written on.
+
 ### EQ (`builtin:eq`, AudioEffect)
 
 An equalizer after Pro-Q: 24 bands, then an output gain.
@@ -450,6 +507,7 @@ knobs for log parameters) unless it has an editor of its own: a QML file in
 readonly property var editors: ({
     "compressor": "CompressorEditor.qml",
     "delay": "DelayEditor.qml",
+    "disperser": "DisperserEditor.qml",
     "eq": "EqEditor.qml",
     "sampler": "SamplerEditor.qml",
     "sidechain": "SidechainEditor.qml"
@@ -462,8 +520,9 @@ readonly property var editors: ({
 - It draws with [DeviceCanvas](../../ui/src/devices/DeviceCanvas.h) items: `refreshDisplays()` is called as the meters
   update (while the item is visible), and `readDisplay(id)` returns the values the device published since the last
   call (through `EngineBridge::readProcessorDisplay()`; the item keeps the position per processor and display).
-- Today there are five. The Compressor draws its gain reduction over the last 240 display values (about 1.3 s at
-  48 kHz) and In/Out meters with the threshold marked; the Delay its filter over a spectrum of `input`; the EQ its
+- Today there are six. The Compressor draws its gain reduction over the last 240 display values (about 1.3 s at
+  48 kHz) and In/Out meters with the threshold marked; the Delay its filter over a spectrum of `input`; the
+  Disperser its group delay in ms (from `disperser::groupDelayMs`, the engine's own stages); the EQ its
   bands' curves (from `eq::responseDb`) over an analyzer of `input` and `output`; the Sidechain its curve, its
   playhead from `phase` and its fit to the kick (`key`, against `input`); the Sampler the sample's waveform with Start/End markers and
   the playhead from `position` (drop or double-click to load a sample; loading is an undoable state change through
@@ -567,6 +626,14 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   nothing below the knee), attack holding on low notes, sidechain keying, and its displays.
 - [test_delay_engine.cpp](../../tests/engine/test_delay_engine.cpp): synced and free times, offset, link,
   feedback, ping pong, freeze, the filter, the modes (with automation changing the time), and its display.
+- [test_disperser_engine.cpp](../../tests/engine/test_disperser_engine.cpp): its listing; passing through
+  untouched (no stages, bypassed); a flat magnitude (every bin within 0.01 dB, all its energy) and the
+  design's group delay, at the extremes (20 s at 20 Hz), at 8 to 192 kHz and kept below Nyquist;
+  stability; never more energy out than in, however Frequency and Pinch jump; each channel its own;
+  Amount landing exactly on the new number of stages; every control changing without a click (a
+  6th-difference measure, against an unfaded switch); automation through the engine, to the sample;
+  reset and a new rate; silence ringing out to exact zeros; the tail; no latency (the other tracks not
+  delayed, the dispersion where it should be).
 - [test_eq_engine.cpp](../../tests/engine/test_eq_engine.cpp): each band type plays as `eq::responseDb` draws it,
   matching the analog filters, placement (left, mid, side), output gain and gain scale, extremes, the displays.
 - [test_sidechain_device_engine.cpp](../../tests/engine/test_sidechain_device_engine.cpp): hits to the sample, the
@@ -581,5 +648,5 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
 
 In the application's tests ([tests/app](../../tests/app)):
 [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) checks the editor registry and drives each
-editor (the Compressor's graph, the Sampler's loading, undo, playhead, markers, drop and saving, the Delay, the EQ, the
-Sidechain), and [test_sidechain_fit.cpp](../../tests/app/test_sidechain_fit.cpp) the Sidechain's fit.
+editor (the Compressor's graph, the Sampler's loading, undo, playhead, markers, drop and saving, the Delay, the
+Disperser, the EQ, the Sidechain), and [test_sidechain_fit.cpp](../../tests/app/test_sidechain_fit.cpp) the Sidechain's fit.

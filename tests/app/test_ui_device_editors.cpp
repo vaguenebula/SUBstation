@@ -32,12 +32,14 @@
 #include "TestSupport.h"
 #include "Ui.h"
 #include "analysis/SidechainFit.h"
+#include "audio/DisperserResponse.h"
 #include "app/AppTypes.h"
 #include "audio/EngineBridge.h"
 #include "controls/KnobItem.h"
 #include "controls/ValueBoxItem.h"
 #include "devices/CurveGraph.h"
 #include "devices/DeviceParam.h"
+#include "devices/DispersionGraph.h"
 #include "devices/DisplayClock.h"
 #include "devices/EqGraph.h"
 #include "devices/EqView.h"
@@ -50,6 +52,7 @@
 #include "model/Clip.h"
 #include "model/DeviceState.h"
 #include "model/Project.h"
+#include "model/ParamSpec.h"
 #include "model/Timebase.h"
 #include "session/Session.h"
 #include "sg/SgCanvas.h"
@@ -361,7 +364,7 @@ private Q_SLOTS:
     // --- The registry -----------------------------------------------------------------------
 
     void registry() {
-        for (const char* kind : {"compressor", "delay", "eq", "sampler", "sidechain"}) {
+        for (const char* kind : {"compressor", "delay", "disperser", "eq", "sampler", "sidechain"}) {
             QVariant url;
             QMetaObject::invokeMethod(root_.get(), "editorFor", Q_RETURN_ARG(QVariant, url),
                                       Q_ARG(QVariant, QString::fromLatin1(kind)));
@@ -600,6 +603,104 @@ private Q_SLOTS:
         QVERIFY(std::abs(*std::max_element(columns.begin(), columns.end()) - (*loudest - 1.0)) < 0.01);
         QTest::qWait(50);
         save(grab(), QStringLiteral("delay-linked.png"));
+    }
+
+    // --- The Disperser -------------------------------------------------------------------------
+
+    void disperser() {
+        const QString track = audioTrackWith(tone(220.0, kSampleRate), QStringLiteral("tone"), 1.0);
+        QVERIFY(!track.isEmpty());
+        const QString device = editor()->addDevice(track, QStringLiteral("disperser"));
+        QQuickItem* view = show(QStringLiteral("disperser"), track, device);
+        QVERIFY(view);
+        QVERIFY(view->implicitHeight() <= bodyHeight());  // fits the view
+        auto value = [&](const char* id) { return param(track, device, QString::fromLatin1(id)); };
+        auto knob = [&](const char* id) {
+            QQuickItem* cell = find(view, QString::fromLatin1(id));
+            return cell ? qvariant_cast<KnobItem*>(cell->property("knob")) : nullptr;
+        };
+
+        // Three knobs, reading their parameters: whole stages; frequency and pinch in log.
+        KnobItem* amount = knob("amount");
+        KnobItem* freq = knob("freq");
+        KnobItem* pinch = knob("pinch");
+        QVERIFY(amount && freq && pinch);
+        QCOMPARE(amount->value(), 16.0);
+        QCOMPARE(amount->step(), 1.0);
+        QVERIFY(freq->logScale() && pinch->logScale());
+        QCOMPARE(freq->value(), 1000.0);
+        QCOMPARE(formatValue(16.0, QStringLiteral("stages")), QStringLiteral("16 stages"));
+        QCOMPARE(formatValue(1.0, QStringLiteral("stages")), QStringLiteral("1 stage"));
+
+        // The graph is the engine's group delay, in ms, at the engine's rate; it peaks around where it is tuned
+        auto* graph = find<DispersionGraph>(view, QStringLiteral("dispersionGraph"));
+        QVERIFY(graph);
+        const std::vector<double>& frequencies = graph->frequencies();
+        const std::vector<double>& delays = graph->delays();
+        QVERIFY(frequencies.size() > 200);
+        const double rate = bridge()->sampleRate();
+        for (size_t i = 0; i < frequencies.size(); i += 17)
+            QCOMPARE(delays[i], disperserGroupDelayMs(16, 1000.0, 1.0, rate, {frequencies[i]})[0]);
+        const size_t top = size_t(std::max_element(delays.begin(), delays.end()) - delays.begin());
+        // (its poles' frequency: at Q 1, a little below where it is tuned)
+        const double peak = disperserPeakFrequency(1000.0, 1.0, rate);
+        QVERIFY(peak > 800.0 && peak < 1000.0);
+        QVERIFY2(std::abs(frequencies[top] / peak - 1.0) < 0.03, qPrintable(QString::number(frequencies[top])));
+        QVERIFY(graph->rangeMs() >= graph->peakMs() && graph->rangeMs() < 2.5 * graph->peakMs());
+        QCOMPARE(DispersionGraph::niceRange(3.2), 5.0);
+        QCOMPARE(DispersionGraph::niceRange(10.0), 10.0);
+        QCOMPARE(DispersionGraph::niceRange(10.5), 20.0);
+        QCOMPARE(DispersionGraph::niceRange(1500.0), 2000.0);
+        QCOMPARE(DispersionGraph::niceRange(0.0), 0.1);
+        QVERIFY(std::abs(graph->dot().x() - graph->xOf(1000.0)) < 1e-9);
+
+        // An edit, undoable; the graph follows: twice the stages, twice the delay.
+        const double before = graph->peakMs();
+        editor()->setDeviceParam(track, device, QStringLiteral("amount"), 32.0);
+        QCOMPARE(amount->value(), 32.0);
+        QVERIFY(std::abs(graph->peakMs() / before - 2.0) < 1e-9);
+        undo()->undo();
+        QCOMPARE(amount->value(), 16.0);
+        QCOMPARE(graph->peakMs(), before);
+
+        // Bypass: a switch, undoable.
+        QQuickItem* bypass = find(view, QStringLiteral("bypass"));
+        QVERIFY(bypass);
+        auto* bypassButton = qvariant_cast<QQuickItem*>(bypass->property("button"));
+        QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, centerOf(bypassButton));
+        QCOMPARE(value("bypass"), 1.0);
+        QVERIFY(bypass->property("lit").toBool());
+        undo()->undo();
+        QCOMPARE(value("bypass"), 0.0);
+
+        // The graph's dot: across for the frequency, up for the pinch (twice it for kPinchPixels), one undo step.
+        const int steps = undo()->index();
+        const QPoint at = scenePoint(graph, QPointF(graph->xOf(250.0), graph->height() / 2));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+        for (int dy = 20; dy <= 60; dy += 20)
+            dragTo(window_, at - QPoint(0, dy));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at - QPoint(0, 60));
+        QVERIFY2(std::abs(value("freq") / 250.0 - 1.0) < 0.02, qPrintable(QString::number(value("freq"))));
+        QVERIFY2(std::abs(value("pinch") - 2.0) < 0.01, qPrintable(QString::number(value("pinch"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(undo()->count(), undo()->index());
+        QVERIFY(std::abs(graph->dot().x() - graph->xOf(value("freq"))) < 1e-6);
+
+        // The engine has what the editor set, and plays it: its output differs from the input but not in level.
+        const auto id = bridge()->engineDeviceId(track, device);
+        QVERIFY(id);
+        QCOMPARE(engine_->processorParam(*id, engine_->processorParamIndex(*id, "freq")), float(value("freq")));
+        QCOMPARE(engine_->processorParam(*id, engine_->processorParamIndex(*id, "pinch")), float(value("pinch")));
+        const std::vector<float> out = engine_->renderOffline(0.0, kSampleRate / 2);
+        double outEnergy = 0.0, inEnergy = 0.0;
+        const std::vector<float> in = tone(220.0, kSampleRate / 2);
+        for (size_t i = kSampleRate / 4; i < in.size(); ++i) {
+            outEnergy += double(out[2 * i]) * out[2 * i];
+            inEnergy += double(in[i]) * in[i];
+        }
+        QVERIFY2(std::abs(outEnergy / inEnergy - 1.0) < 0.01, qPrintable(QString::number(outEnergy / inEnergy)));
+        QTest::qWait(50);
+        save(grab(), QStringLiteral("disperser.png"));
     }
 
     // --- The EQ --------------------------------------------------------------------------------

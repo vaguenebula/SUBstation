@@ -299,6 +299,7 @@ What the application needs besides an `Engine` is plain functions and singletons
 | The default VST3 folders | `vst3::Vst3Format::instance().defaultSearchPaths()` ([plugins.md](plugins.md)) |
 | The clock MIDI input is stamped with | `hostTimeNs()` ([MidiInput.h](../../engine/src/MidiInput.h)) |
 | An EQ band's response | `eq::design()` and `eq::responseDb()` ([builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h); the application's `eqResponseDb()` wraps them, see [devices.md](devices.md)) |
+| The Disperser's group delay | `disperser::groupDelayMs()` ([builtin/DisperserDesign.h](../../engine/src/builtin/DisperserDesign.h); the application's `disperserGroupDelayMs()` wraps it, see [devices.md](devices.md)) |
 
 - Long-running calls (loading sources, opening devices, plug-in state, recording, offline renders,
   `RenderJob::finish()`, `idle()`) block the thread that calls them; the bridge decodes on threads
