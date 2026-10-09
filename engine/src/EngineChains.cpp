@@ -438,6 +438,8 @@ std::string Engine::processorParamText(uint32_t processorId, int index, float va
     return processor(processorId)->paramText(index, value);
 }
 
+std::string Engine::processorPresetName(uint32_t processorId) { return processor(processorId)->presetName(); }
+
 std::vector<DisplayInfo> Engine::processorDisplays(uint32_t processorId) {
     return processor(processorId)->displays();
 }

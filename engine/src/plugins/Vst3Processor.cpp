@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "plugins/EditorWindow.h"
+#include "plugins/PresetName.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstunits.h"
@@ -78,7 +79,10 @@ public:
     }
 
     tresult PLUGIN_API setDirty(TBool state) override {
-        if (state) owner_.pushEvent({ProcessorEvent::Type::StateDirty});
+        if (state) {
+            owner_.presetStateChanged_.store(true);  // (a preset loaded in its editor, maybe)
+            owner_.pushEvent({ProcessorEvent::Type::StateDirty});
+        }
         return kResultOk;
     }
     tresult PLUGIN_API requestOpenEditor(FIDString) override {
@@ -568,6 +572,7 @@ void Vst3Processor::buildParams() {
     std::vector<ParamInfo> params;
     std::vector<ParamMeta> meta;
     std::unordered_map<ParamID, int> indices;
+    std::vector<ProgramParam> programs;
     const int32 count = controller_ ? controller_->getParameterCount() : 0;
     for (int32 i = 0; i < count; ++i) {
         Vst::ParameterInfo info{};
@@ -608,7 +613,11 @@ void Vst3Processor::buildParams() {
         indices[info.id] = static_cast<int>(params.size());
         meta.push_back({info.id, steps, param.readOnly});
         params.push_back(std::move(param));
+        if ((info.flags & Vst::ParameterInfo::kIsProgramChange) && steps > 0) {
+            programs.push_back({info.id, steps, info.unitId});
+        }
     }
+    programParams_ = std::move(programs);  // (main thread only: no lock)
 
     auto values = std::make_unique<std::atomic<float>[]>(params.size());
     for (size_t i = 0; i < params.size(); ++i) {
@@ -792,6 +801,22 @@ bool Vst3Processor::idle() {
         buildMidiMap();
     }
     if (changed) pushEvent({ProcessorEvent::Type::ParamsChanged});
+
+    // The preset: looked at again when the state may have changed (not at every
+    // setDirty of a knob turned: at most every kPresetCheckInterval), and while the
+    // editor is open, where presets are picked and not every plug-in says so.
+    constexpr auto kPresetCheckInterval = std::chrono::milliseconds(250);
+    constexpr auto kPresetPollInterval = std::chrono::seconds(2);
+    if (flags & (kParamValuesChanged | kReloadComponent)) presetStateChanged_.store(true);
+    const auto now = std::chrono::steady_clock::now();
+    const auto since = now - lastPresetCheck_;
+    if (since >= kPresetCheckInterval && presetStateChanged_.exchange(false)) {
+        lastPresetCheck_ = now;
+        refreshPresetName(true);
+    } else if (since >= kPresetPollInterval && isEditorOpen()) {
+        lastPresetCheck_ = now;
+        refreshPresetName(false);
+    }
     return latencyChanged;
 }
 
@@ -861,7 +886,65 @@ void Vst3Processor::setState(const std::vector<uint8_t>& state) {
     }
     if (!loaded) throw std::runtime_error("These settings are not for " + name_ + ".");
     if (controller_) refreshValues();
+    // Its preset: looked at in the next idle(), at once (not read again here: a project's
+    // plug-ins are restored one after another, and some finish loading a state later).
+    presetStateChanged_.store(true);
+    lastPresetCheck_ = {};
     pushEvent({ProcessorEvent::Type::ParamsChanged});
+}
+
+// ---------------------------------------------------------------------------
+// Preset name
+
+std::string Vst3Processor::presetName() const {
+    std::lock_guard lock(mutex_);
+    return presetName_;
+}
+
+// The name from the plug-in's program list: the program-change parameter's value
+// picks an entry of its list. Plug-ins that give slot numbers there say nothing.
+std::string Vst3Processor::programName() const {
+    if (programParams_.empty()) return {};
+    FUnknownPtr<IUnitInfo> units(controller_);
+    if (!units) return {};
+    for (const ProgramParam& param : programParams_) {
+        ProgramListID list = kNoProgramListId;
+        for (int32 u = 0; u < units->getUnitCount(); ++u) {
+            UnitInfo unit{};
+            if (units->getUnitInfo(u, unit) == kResultOk && unit.id == param.unit) list = unit.programListId;
+        }
+        if (list == kNoProgramListId) continue;
+        const auto index = static_cast<int32>(
+            std::lround(std::clamp(controller_->getParamNormalized(param.id), 0.0, 1.0) * param.steps));
+        String128 text{};
+        if (units->getProgramName(list, index, text) != kResultOk) continue;
+        std::string name = utf8(text);
+        if (!isPlaceholderPresetName(name)) return name;
+    }
+    return {};
+}
+
+void Vst3Processor::refreshPresetName(bool stateChanged) {
+    if (!component_) return;
+    if (stateChanged) stateHasName_ = true;  // another state: it may hold a name now (an instrument loaded)
+    std::string name = controller_ ? programName() : std::string();
+    if (name.empty() && stateHasName_) {
+        auto scan = [&](auto* object) {
+            auto stream = owned(new MemoryStream);
+            if (object->getState(stream) != kResultOk) return std::string();
+            return presetNameFromState(reinterpret_cast<const uint8_t*>(stream->getData()),
+                                       static_cast<size_t>(stream->getSize()));
+        };
+        name = scan(component_.get());
+        if (name.empty() && controller_ && !singleComponent_) name = scan(controller_.get());
+        if (name.empty()) stateHasName_ = false;  // not one that keeps it there: stop reading its state
+    }
+    {
+        std::lock_guard lock(mutex_);
+        if (name == presetName_) return;
+        presetName_ = std::move(name);
+    }
+    pushEvent({ProcessorEvent::Type::PresetChanged});
 }
 
 // ---------------------------------------------------------------------------

@@ -161,6 +161,35 @@ Once you rename a track to anything else, its name stays what you typed. Project
 older SUBstation have their `3 Audio`, `2 MIDI` and `1 Group` tracks named and numbered this way
 when opened (an older SUBstation can't open projects saved now).
 
+### What a track is
+
+Hover over a track's name to see what the track *is*, in a few words: `Washed Out Serum Pluck`,
+`Orchestral Trumpet`, `Sad Piano Line`, `Echoing Bell Stab`, `Drum Group`. The label is worked out
+from everything about the track:
+
+- what you named it, if you did;
+- the preset its instrument has loaded (Serum's `PL - Electric Flow` is a pluck; a BBC Symphony
+  Orchestra's `Core - Trumpet` a trumpet), its racks' names, the instrument itself, a sampler's
+  sample;
+- its audio files' names (`OS_LDNB_174_Amaj_Sad_Piano_Line.wav` is a sad piano line: pack codes,
+  tempos and keys are left out);
+- its notes: low and one at a time is a bass, notes struck together are chords, fast ones over a
+  wide range an arp;
+- its effects and how much they do: a reverb half wet washes it out, a delay echoes, OTT squashes,
+  a sidechain pumps, a narrow EQ sounds like a telephone; its sends to returns;
+- its fader and pan (a very quiet track says so).
+
+Below the label, the tooltip lists what it was made from: the instrument and preset, the notes,
+the files, each effect and its amount, the sends and the mixer. With the info view showing (at
+the bottom left), the label is its title. A group is named by what it holds (`Drum Group`,
+`Synth & Bass Group`), a return by its effect (`Reverb Return`).
+
+Tracks that would get the same label are told apart: by something only one of them has, by their
+register (`High Serum Chords`, `Low Serum Chords`), by their presets' or files' own names
+(`Serum Pluck (Dynasty)`), else numbered. A trait every track shares (the same reverb on all of
+them) says little, so it shows only where it stands out. The label follows the track as you change
+it, a moment after you stop. Your track's own name never changes.
+
 Changing the volume or pan of one of several selected tracks changes them all: by the
 same amount when dragged, to the same value when typed or reset.
 

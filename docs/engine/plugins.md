@@ -18,7 +18,8 @@ Plug-ins load and play on Linux too, but without their editor windows (see [`Edi
 |---|---|
 | [PluginFormat.h](../../engine/src/plugins/PluginFormat.h) | `PluginDescription` and the `PluginFormat` interface: `name()`, `defaultSearchPaths()`, `scanFile()`, `instantiate()` |
 | [Vst3Format.h](../../engine/src/plugins/Vst3Format.h) / [.cpp](../../engine/src/plugins/Vst3Format.cpp) | the host context plug-ins see ("SUBstation"), loaded modules (shared by instances, unloaded with the last), scanning, instantiation |
-| [Vst3Processor.h](../../engine/src/plugins/Vst3Processor.h) / [.cpp](../../engine/src/plugins/Vst3Processor.cpp) | a VST3 plug-in as a `Processor`: buses, events, parameters, automation, state, restarts, the component handler |
+| [Vst3Processor.h](../../engine/src/plugins/Vst3Processor.h) / [.cpp](../../engine/src/plugins/Vst3Processor.cpp) | a VST3 plug-in as a `Processor`: buses, events, parameters, automation, state, restarts, the component handler, its preset's name |
+| [PresetName.h](../../engine/src/plugins/PresetName.h) / [.cpp](../../engine/src/plugins/PresetName.cpp) | which preset a plug-in has loaded, from its saved state: `presetNameFromState()`, `presetNameFromPreset()` (a `.vstpreset`), `isPlaceholderPresetName()` |
 | [Vst3Support.h](../../engine/src/plugins/Vst3Support.h) | allocation-free building blocks for the audio thread: `ProcessGuard`, `HostEventList`, `HostParamQueue`, `HostParamChanges`, `ParamChangeQueue`, `SpinLock` |
 | [EditorWindow.h](../../engine/src/plugins/EditorWindow.h) / [.cpp](../../engine/src/plugins/EditorWindow.cpp) | the Win32 window holding a plug-in's editor (`IPlugView`, `IPlugFrame`) |
 | [EditorWindowNone.cpp](../../engine/src/plugins/EditorWindowNone.cpp) | `EditorWindow` off Windows: it never opens |
@@ -251,6 +252,8 @@ plug-in it:
    - `kParamValuesChanged`: re-read every value.
    - `kMidiCCAssignmentChanged`: rebuild the MIDI map.
 4. Reports `ParamsChanged` if any value changed.
+5. Looks at the preset's name again when it may have changed (see [Preset names](#preset-names)), and reports
+   `PresetChanged` if it did.
 
 Other component-handler calls become events: `setDirty(true)` reports `StateDirty` (the plug-in changed in a way no
 parameter shows, such as a preset picked in its editor: the project is marked as changed); `requestOpenEditor`
@@ -261,8 +264,8 @@ reports `EditorRequested`. The engine bridge collects them with `Engine::takePro
 `getState()` returns a `.vstpreset` in memory: the component's state plus, for plug-ins with a separate controller,
 the controller's own state (`PresetFile::savePreset`, with the class id). It flushes queued parameter changes first.
 `setState()` suspends the plug-in, drops parameter changes queued from before (they must not undo the state), loads
-the preset into the component (and controller), then re-reads the values and reports `ParamsChanged`. It throws "These
-settings are not for <name>" if the preset is for another class.
+the preset into the component (and controller), then re-reads the values, asks for its preset's name to be looked at in
+the next `idle()`, and reports `ParamsChanged`. It throws "These settings are not for <name>" if the preset is for another class.
 
 Projects save each plug-in's complete state (base64) and which plug-in it is; the same bytes are what *Load Preset…*
 and *Save Preset…* read and write as standard `.vstpreset` files. A device's plug-in lives as long as the device is in
@@ -270,6 +273,50 @@ its chain: reordering or changing the chain around it never reloads it, and a pl
 it is (`Engine::moveProcessor`). When a plug-in device goes away (deleted, or its track) the engine bridge keeps its
 state, so undo brings it back as it was. See [app/engine-bridge.md](../app/engine-bridge.md) and
 [app/serialization.md](../app/serialization.md).
+
+### Preset names
+
+`presetName()` says which preset (patch, instrument) the plug-in has loaded, as far as it tells: "" if it doesn't.
+The track labels read it ([intelligence.md](../intelligence.md#track-labels)): Serum's "PL - Electric Flow" is a pluck,
+Spitfire's "Core - Trumpet" a trumpet. VST3 has no call for it, so it comes from the first of these that knows:
+
+1. **The program list** (`IUnitInfo`, standard): a parameter flagged `kIsProgramChange` picks an entry of its unit's
+   program list, whose name the plug-in gives (`getProgramName`). Many fill it with placeholders, which say nothing
+   and are skipped (`isPlaceholderPresetName()`: empty, or a word like "Prog", "Program", "Preset", "Patch", "Slot"
+   with at most a number: "Prog 12"). `buildParams()` notes the program-change parameters.
+2. **A name in its saved state**: the component's state, then the controller's (Serum 2 keeps its name in the
+   controller's), only their first 64 KB, where plug-ins keep a readable header. `presetNameFromState()` knows these
+   forms; each vendor's own, not VST3's, so it says "" whenever it finds none rather than guessing:
+
+   | Plug-in | Where | Example |
+   |---|---|---|
+   | Serum 2 | JSON after `XferJson`, in the controller's state | `"presetName":"PLUCK - Dynasty"` |
+   | Valhalla (JUCE) | an XML attribute | `presetName="Default"` |
+   | Spitfire (BBC Symphony Orchestra, Originals), Splice INSTRUMENT | `<META>`'s `name` (once an instrument is loaded: an empty BBC SO keeps `<empty/>`) | `<META family="Brass" name="Core - Trumpet">` |
+   | Nuro Audio (Xrider, Xvox) | `<PRESET>`'s `name` | `<PRESET group="Factory Presets" name="Default"/>` |
+   | others | the keys `presetName`, `preset_name`, `programName`, `patchName` | |
+
+   Values are trimmed, at most 200 characters, and printable: binary is never taken for a name. Serum (1) and Kontakt
+   keep none anywhere (an opaque state; a program list of "prog N"); FabFilter's states hold their name without a key.
+3. **Nothing**: "".
+
+When it looks (main thread, in `idle()`), as reading a state is what saving does but isn't free (a loaded BBC SO's is
+about 130 KB):
+
+- when a state is restored (`setState()`: a project opened, a preset loaded, undo), at the next `idle()` (not in
+  `setState()` itself: a project's plug-ins are restored one after another, and some finish loading a state later and
+  say so with `setDirty`, which is never lost);
+- when the plug-in says its state changed (`setDirty`, or a restart with `kParamValuesChanged` or `kReloadComponent`),
+  at most every 250 ms (not at every knob it turns);
+- every 2 s while its editor is open, where presets are picked and not every plug-in says so. This poll reads the
+  state only if the last read found a name there: a plug-in that keeps none isn't read again and again, until its
+  state changes (an empty BBC SO, then an instrument loaded into it).
+
+Never at every parameter change or automation tick. `presetName()` itself is a copy under the lock (thread-safe);
+`Engine::processorPresetName()` asks it; the bridge reports `PresetChanged` as `pluginPresetChanged`. For a plug-in
+that isn't loaded (missing, frozen), the application reads its saved state in the project with
+`presetNameFromPreset()`, which takes a whole `.vstpreset` (component, then controller; bytes that aren't one are
+read as they are).
 
 ### Latency
 
@@ -357,6 +404,11 @@ and the application's tests point `SUBSTATION_VST3_PATH` at folders of their own
   and its controller, mono plug-ins on a stereo track, latency compensation (also on the master), state, load errors,
   chain order, moving to another track as it is, editor edits, resizing and closing (Windows only; skipped
   elsewhere), plug-ins without an editor.
+- [tests/engine/test_preset_names.cpp](../../tests/engine/test_preset_names.cpp): preset names in states as real
+  plug-ins keep them (Serum 2, Valhalla, Spitfire, Nuro Audio), what isn't one (binary, other keys, past the first
+  64 KB), in a `.vstpreset` (the controller's, the component's first, damaged ones), placeholder program names; and a
+  plug-in's name followed live: restored with a state (*SUB Test Effect* keeps a name in its state when it has one),
+  and picked in its editor (Windows only), reported once.
 - [tests/engine/test_sidechain_engine.cpp](../../tests/engine/test_sidechain_engine.cpp): sidechains into plug-ins, and
   a missing sidechain reaching the plug-in flagged as silence.
 - [tests/app/test_plugin_index.cpp](../../tests/app/test_plugin_index.cpp): scanning with `substation-scan`, including

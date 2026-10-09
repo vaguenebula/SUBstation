@@ -100,6 +100,9 @@ class TrackHeaderItem : public SgCanvas {
     Q_PROPERTY(QString inputToolTip READ inputToolTip NOTIFY changed)
     Q_PROPERTY(QString monitorText READ monitorText NOTIFY changed)
     Q_PROPERTY(QString monitorToolTip READ monitorToolTip NOTIFY changed)
+    // What hovering over its name shows: what it is, in words (Session.trackLabels:
+    // its label, then what that was made from, a line each).
+    Q_PROPERTY(QString nameToolTip READ nameToolTip NOTIFY nameToolTipChanged)
     // Volume (dB) and pan as heard: following their automation while it plays;
     // and how they show it ("on", "off" when overridden, "").
     Q_PROPERTY(double volume READ volume NOTIFY mixerChanged)
@@ -174,6 +177,7 @@ public:
     QString inputToolTip() const;
     QString monitorText() const;
     QString monitorToolTip() const;
+    QString nameToolTip() const;
     double volume() const { return volume_; }
     QString volumeAutomation() const { return volumeAutomation_; }
     double pan() const { return pan_; }
@@ -260,6 +264,7 @@ Q_SIGNALS:
     void choosersChanged();
     void rowChanged();
     void renamingChanged();
+    void nameToolTipChanged();
     // Show this menu (its right-click menu) at `pos` (item coordinates).
     void menuRequested(const QVariantList& entries, const QPointF& pos);
 

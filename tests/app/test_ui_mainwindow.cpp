@@ -7,8 +7,8 @@
 // tooltips, the session's warnings,
 // Export Audio, the clip view over the arrangement, nothing scrolled out of
 // the arrangement or the piano roll drawn over the browser, Edit › Rename, the
-// window's place kept, and the rules of the shortcuts taken from plug-ins'
-// editors. Runs on a display (xvfb here). With $SUBSTATION_SCREENS set, it
+// window's place kept, the rules of the shortcuts taken from plug-ins'
+// editors, and what a track's name says hovered (its label, in the info view). Runs on a display (xvfb here). With $SUBSTATION_SCREENS set, it
 // saves screenshots there.
 
 #include <QDir>
@@ -28,6 +28,7 @@
 
 #include "UiTestSupport.h"
 #include "arrangement/Arrangement.h"
+#include "arrangement/TrackHeaderItem.h"
 #include "audio/EngineBridge.h"
 #include "browser/BrowserController.h"
 #include "editor/ProjectEditor.h"
@@ -347,6 +348,44 @@ private Q_SLOTS:
         QTRY_VERIFY(!popped());
         trigger(QStringLiteral("infoView"));
         QVERIFY(item(QStringLiteral("infoView"))->isVisible());
+    }
+
+    // Hovered, a track's name says what the track is: its label as the info
+    // view's title, what that was made from below it (Session.trackLabels).
+    void aTracksNameSaysWhatItIs() {
+        const auto clips = editor().addClips({}, 0.0, {{QStringLiteral("C:/x/C_BellStab1.wav"), 1.0}});
+        QCOMPARE(clips.size(), 1);
+        const QString track = clips.front().trackId;
+        const QString delay = editor().addDevice(track, QStringLiteral("delay"));
+        editor().setDeviceParam(track, delay, QStringLiteral("mix"), 40.0);
+        // (A Repeater's items have no QObject parent: found among the items.)
+        const auto findHeader = [&](auto&& self, QQuickItem* in) -> sub::ui::TrackHeaderItem* {
+            for (QQuickItem* child : in->childItems()) {
+                if (child->objectName() == QStringLiteral("header:") + track) return qobject_cast<sub::ui::TrackHeaderItem*>(child);
+                if (auto* found = self(self, child)) return found;
+            }
+            return nullptr;
+        };
+        sub::ui::TrackHeaderItem* header = nullptr;
+        QTRY_VERIFY((header = findHeader(findHeader, window_->contentItem())) != nullptr);
+        QTRY_COMPARE(header->nameToolTip().section(u'\n', 0, 0), QStringLiteral("Echoing Bell Stab"));
+        auto* title = item(QStringLiteral("infoTitle"));
+        auto* text = item(QStringLiteral("infoText"));
+        const QPoint nowhere(window_->width() / 2, window_->height() / 3);
+        QTest::mouseMove(window_, nowhere);
+        QTest::mouseMove(window_, header->mapToScene(QPointF(header->nameLeft() + 12, header->nameTop() + 10)).toPoint());
+        QTRY_COMPARE(title->property("text").toString(), QStringLiteral("Echoing Bell Stab"));
+        // (What it says follows the edits once they settle: the mix just set.)
+        QTRY_VERIFY(text->property("text").toString().contains(QStringLiteral("Effect: Delay, 40% wet")));
+        const QString body = text->property("text").toString();
+        QVERIFY2(body.contains(QStringLiteral("Audio: \u201CC_BellStab1\u201D")), qPrintable(body));
+        test::screenshot(window_, QStringLiteral("main-window-track-label"));
+        // Renamed by the user: the label stays what the track is; it follows what it holds.
+        editor().renameTrack(track, QStringLiteral("glass"));
+        editor().removeDevices(track, {delay});
+        QTRY_COMPARE(title->property("text").toString(), QStringLiteral("Bell Stab"));
+        QTest::mouseMove(window_, nowhere);
+        editor().deleteTracks({track});
     }
 
     // Create's actions, Undo and Redo (their texts and enabled states).

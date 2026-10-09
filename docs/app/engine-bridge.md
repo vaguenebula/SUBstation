@@ -225,6 +225,8 @@ concerned (see [Freezing](#freezing)).
   (`Project::storePluginState`), for saving, copying devices, duplicating tracks and saving presets; it also records a
   moved plug-in's new path. `pluginState(track, device)` reads one directly; `applyPluginState` gives one a
   `.vstpreset` read from a file (the caller records the undo step).
+- **Presets**: `pluginPresetName(track, device)` is the preset a loaded plug-in says it has ("" if none, or not
+  loaded: [engine/plugins.md](../engine/plugins.md#preset-names)); `pluginPresetChanged` says when it is another.
 - **Parameters**: a model parameter change goes to the plug-in (`setProcessorParam`) unless the plug-in already has
   that value (an edit made in its own editor). Parameter ids, `ParamInfo`s and `ParamSpec`s are cached per processor
   and dropped when the plug-in reports that its parameter list changed.
@@ -246,6 +248,7 @@ concerned (see [Freezing](#freezing)).
   | `EditorClosed` | `pluginEditorChanged` |
   | `EditorRequested` | shown with its track, like any editor |
   | `StateDirty` | `pluginStateDirty`: the project has changes no edit shows |
+  | `PresetChanged` | `pluginPresetChanged`: `pluginPresetName()` says another preset (the track labels follow it) |
 
 - **Re-entrancy**: a plug-in (or a driver) may run a message loop inside a call (a licence dialog, a control panel)
   that calls back into the UI. Around such calls the bridge counts `busy`, and while it is above 0 it doesn't dispatch
@@ -505,7 +508,7 @@ same driver next time. Other parts keep their own keys: the session's (recent fi
 | `metersUpdated()` | `meters()` and `chainMeters()` were refreshed |
 | `deviceChanged()` | the audio device opened, closed, changed or reported new latencies |
 | `statusMessage(text)` | for the status line |
-| `pluginParamEdited`, `pluginParamTouched`, `pluginParamsChanged`, `pluginParamsRebuilt`, `pluginEditorChanged`, `pluginStateDirty` | plug-in reports (above) |
+| `pluginParamEdited`, `pluginParamTouched`, `pluginParamsChanged`, `pluginParamsRebuilt`, `pluginEditorChanged`, `pluginStateDirty`, `pluginPresetChanged` | plug-in reports (above) |
 | `devicesLoaded(track id)` | a track's processors were (re)created |
 | `pluginsLoading(loaded, total)`, `pluginsPendingChanged()` | a project's plug-ins loading |
 | `automationStateChanged(owner)` | which envelopes play or are overridden changed |

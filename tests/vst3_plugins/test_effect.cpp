@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "base/source/fstreamer.h"
@@ -36,6 +37,7 @@ constexpr int32 kMaxLatency = 4096;
 constexpr uint32 kEditGainMessage = WM_USER + 1;  // the editor edits Gain like a user dragging a knob
 constexpr uint32 kResizeMessage = WM_USER + 2;    // the editor asks the host for a new size
 constexpr uint32 kDirtyMessage = WM_USER + 3;     // the controller says its state changed
+constexpr uint32 kPresetMessage = WM_USER + 4;    // a preset ("Hall") is picked in the editor, as a user would
 
 class EffectView;
 #endif
@@ -123,6 +125,18 @@ public:
         setParamNormalized(kFxGain, gain);
         setParamNormalized(kFxLatency, latency);
         setParamNormalized(kFxBypass, bypass);
+        // Its preset's name, if it has one: a text after its values, as many
+        // plug-ins keep theirs (<preset presetName="Hall"/>).
+        presetName_.clear();
+        char text[256] = {};
+        int32 read = 0;
+        state->read(text, sizeof text - 1, &read);
+        const std::string tail(text, static_cast<size_t>(std::max<int32>(read, 0)));
+        const size_t at = tail.find("presetName=\"");
+        if (at != std::string::npos) {
+            const size_t start = at + 12, end = tail.find('"', start);
+            if (end != std::string::npos) presetName_ = tail.substr(start, end - start);
+        }
         return kResultOk;
     }
 
@@ -132,6 +146,11 @@ public:
         s.writeDouble(getParamNormalized(kFxGain));
         s.writeDouble(getParamNormalized(kFxLatency));
         s.writeDouble(getParamNormalized(kFxBypass));
+        if (!presetName_.empty()) {  // (none: the state as it always was)
+            const std::string text = "<preset presetName=\"" + presetName_ + "\"/>";
+            int32 written = 0;
+            state->write(const_cast<char*>(text.data()), static_cast<int32>(text.size()), &written);
+        }
         return kResultOk;
     }
 
@@ -147,9 +166,15 @@ public:
         endEdit(kFxGain);
     }
     void markDirty() { setDirty(true); }
+    // A preset picked in the editor: its name is in the state from now on, and the host is told the state changed.
+    void pickPreset(const char* name) {
+        presetName_ = name;
+        setDirty(true);
+    }
 
 private:
     std::atomic<int32> latency_{0};
+    std::string presetName_;
     double gain_ = 1.0;
     bool bypass_ = false;
     std::vector<float> delay_[2];
@@ -213,6 +238,10 @@ private:
             }
             if (message == kDirtyMessage) {
                 view->effect_->markDirty();
+                return 1;
+            }
+            if (message == kPresetMessage) {
+                view->effect_->pickPreset("Hall");
                 return 1;
             }
         }

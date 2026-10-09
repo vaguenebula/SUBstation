@@ -178,6 +178,7 @@ add_library(sub_engine STATIC
     src/builtin/BuiltinRegistry.cpp
     ${BUILTIN_DEVICE_SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinDevices.cpp
+    src/plugins/PresetName.cpp
     src/plugins/Vst3Format.cpp
     src/plugins/Vst3Processor.cpp
 )

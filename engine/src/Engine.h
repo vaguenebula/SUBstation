@@ -407,6 +407,7 @@ public:
     float processorParam(uint32_t processorId, int index);
     void setProcessorParam(uint32_t processorId, int index, float value);
     std::string processorParamText(uint32_t processorId, int index, float value);
+    std::string processorPresetName(uint32_t processorId);  // Processor::presetName()
     // What a device's own editor draws besides its parameters (Processor::displays()),
     // and display `index`'s values since `position` (0 at first), appended to
     // `out`; returns where to read from next.

@@ -194,6 +194,24 @@ TrackHeaderItem {
         laneRight: header.innerRight
     }
 
+    // Over the name: what the track is, in words (its label, then what that was
+    // made from). Hovering only: presses go through to the header.
+    Item {
+        objectName: "nameHover"
+        x: header.nameLeft
+        y: header.buttonTop
+        width: Math.max(0, header.nameRight - header.nameLeft)
+        height: header.buttonHeight
+        visible: !header.renaming
+
+        HoverHandler {
+            id: nameHover
+        }
+        ToolTip.visible: nameHover.hovered && header.nameToolTip !== ""
+        ToolTip.text: header.nameToolTip
+        ToolTip.delay: 700
+    }
+
     TextField {
         id: rename
         objectName: "rename"
