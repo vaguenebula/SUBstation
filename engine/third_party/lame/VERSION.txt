@@ -1,5 +1,6 @@
 LAME 3.100 (LGPL v2, see COPYING), https://lame.sourceforge.io
 lame-3.100.tar.gz, SHA-256 ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e.
 Only the encoding library: include/lame.h, libmp3lame/ (without mpglib_interface.c,
-the decoder's glue) and libmp3lame/vector/ (SSE), unmodified. config.h is ours.
+the decoder's glue) and libmp3lame/vector/ (SSE), unmodified. config.h is ours, and
+asmstuff.h (empty: VbrTag.c includes it where _DEBUG is defined, and LAME has none).
 SUBstation uses it to export MP3 (engine/src/Mp3Writer.cpp).

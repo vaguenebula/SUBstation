@@ -64,8 +64,8 @@ public:
             const int n = static_cast<int>(std::min(kMost, frames - done));
             // LAME's worst case: 1.25 times the frames, and 7200 bytes.
             encoded_.resize(static_cast<size_t>(n) * 5 / 4 + 7200);
-            const int bytes = lame_encode_buffer_interleaved_ieee_float(
-                lame_, samples + done * 2, n, encoded_.data(), static_cast<int>(encoded_.size()));
+            const int bytes = lame_encode_buffer_interleaved_ieee_float(lame_, samples + done * 2, n, encoded_.data(),
+                                                                        static_cast<int>(encoded_.size()));
             if (bytes < 0) throw std::runtime_error("The MP3 encoder failed (" + std::to_string(bytes) + ")");
             put(bytes);
             done += n;
