@@ -8,8 +8,9 @@
 #
 #   core/        what its parts share: decoding audio (miniaudio), the platform
 #                (Platform.cpp on Windows, PlatformPosix.cpp elsewhere)
-#   similarity/  sound similarity: fingerprints, comparing them, and the index
-#                of a sample library kept up to date in the background
+#   similarity/  sound similarity: fingerprints (made with Essentia), comparing
+#                them, and the index of a sample library kept up to date in the
+#                background
 #   harmony/     chords and keys: inferring them from notes, block chords and
 #                bass lines from them
 #   humanize/    a part's velocities from HUMANBRO's model (models/velocity.hbm)
@@ -19,8 +20,10 @@ add_library(sub_intelligence STATIC
     src/harmony/ChordInference.cpp
     src/harmony/Chords.cpp
     src/humanize/VelocityModel.cpp
+    src/similarity/EssentiaExtractor.cpp
+    src/similarity/FeatureExtractor.cpp
+    src/similarity/FeatureSchema.cpp
     src/similarity/Similarity.cpp
-    src/similarity/SoundFeatures.cpp
     src/similarity/SoundIndex.cpp
     src/similarity/SoundStore.cpp)
 if (WIN32)
@@ -31,12 +34,47 @@ else()
 endif()
 add_library(sub::intelligence ALIAS sub_intelligence)
 target_include_directories(sub_intelligence PUBLIC src)
-# Decoding and FFTs: third-party targets the engine's folder holds
-# (engine/CMakeLists.txt), miniaudio and Signalsmith Linear; nothing of the
-# engine itself. HUMANBRO's runtime, below.
-target_link_libraries(sub_intelligence PUBLIC Threads::Threads PRIVATE miniaudio signalsmith_linear humanbro)
+# Decoding: miniaudio, a third-party target the engine's folder holds
+# (engine/CMakeLists.txt); nothing of the engine itself. Essentia and
+# HUMANBRO's runtime, below.
+target_link_libraries(sub_intelligence PUBLIC Threads::Threads PRIVATE miniaudio essentia humanbro)
 set_target_properties(sub_intelligence PROPERTIES POSITION_INDEPENDENT_CODE ON)
 sub_project_warnings(sub_intelligence)
+
+# Essentia (third_party/essentia, 2.1-beta5, AGPLv3: see its VERSION.txt and
+# docs/licensing.md): the algorithms the sound similarity's fingerprints are
+# made with (similarity/EssentiaExtractor.cpp). Only its core library and the
+# algorithms the extractor runs, with KISS FFT: no FFTW, FFmpeg, libsamplerate,
+# YAML, TagLib, Gaia or TensorFlow (the module decodes and resamples itself and
+# hands Essentia PCM). Built as upstream builds it: the C++ of its time, its
+# warnings not shown. ESSENTIA_STATIC: a static library, exporting nothing.
+# DEBUGGING_ENABLED=0 compiles its logger out, whose global state isn't
+# thread-safe (several analysers run its algorithms at once).
+set(_essentia ${CMAKE_CURRENT_SOURCE_DIR}/third_party/essentia/src)
+file(GLOB _essentia_sources CONFIGURE_DEPENDS
+     ${_essentia}/essentia/*.cpp ${_essentia}/essentia/scheduler/*.cpp ${_essentia}/essentia/streaming/*.cpp
+     ${_essentia}/essentia/streaming/algorithms/*.cpp ${_essentia}/essentia/utils/*.cpp ${_essentia}/algorithms/*.cpp
+     ${_essentia}/algorithms/*/*.cpp)
+add_library(essentia STATIC ${_essentia_sources}
+    ${_essentia}/3rdparty/kiss_fft130/kiss_fft.c
+    ${_essentia}/3rdparty/kiss_fft130/tools/kiss_fftr.c)
+# Its sources include each other by bare name, from these folders (as its
+# wscript sets them); the module includes <essentia/...> from src only.
+target_include_directories(essentia SYSTEM PUBLIC ${_essentia})
+target_include_directories(essentia PRIVATE ${_essentia}/essentia ${_essentia}/essentia/scheduler
+    ${_essentia}/essentia/streaming ${_essentia}/essentia/streaming/algorithms ${_essentia}/essentia/utils
+    ${_essentia}/3rdparty ${_essentia}/3rdparty/kiss_fft130)
+target_compile_definitions(essentia PUBLIC ESSENTIA_STATIC DEBUGGING_ENABLED=0)
+if (WIN32)
+    target_compile_definitions(essentia PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES)
+endif()
+set_target_properties(essentia PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS OFF POSITION_INDEPENDENT_CODE ON)
+if (MSVC)
+    target_compile_options(essentia PRIVATE /w /utf-8 /EHsc)
+else()
+    target_compile_options(essentia PRIVATE -w)
+endif()
+target_link_libraries(essentia PUBLIC Threads::Threads)
 
 # HUMANBRO's C++ runtime (third_party/humanbro, see its VERSION.txt): MIDI
 # features and the tree ensemble that predicts velocities from them. Its

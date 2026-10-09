@@ -450,6 +450,7 @@ void BrowserController::clearSimilar() {
 }
 
 void BrowserController::leaveSimilar() {
+    if (similarity_) similarity_->cancel();  // (a sound still being analysed for it needn't be)
     similar_.reset();
     refineTimer_.stop();
     sort_ = isSortOrder(sortBeforeSimilar_) ? sortBeforeSimilar_ : QStringLiteral("rank");

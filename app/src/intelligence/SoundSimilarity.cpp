@@ -109,6 +109,10 @@ uint64_t SoundSimilarity::find(const QString& path, double start, double length)
     return index_->find(std::move(query));
 }
 
+void SoundSimilarity::cancel() {
+    if (!closed_) index_->cancelSearch();
+}
+
 void SoundSimilarity::take() {
     if (closed_) return;
     const intelligence::SoundIndex::Update update = index_->take();

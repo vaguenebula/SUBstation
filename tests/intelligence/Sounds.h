@@ -42,14 +42,14 @@ inline size_t frames(double seconds, int rate = kRate) { return static_cast<size
 
 // A kick: a sine falling from `startHz` to `endHz`, dying away over `decay` seconds, and a click.
 inline Samples kick(double startHz = 150.0, double endHz = 50.0, double decay = 0.25, double seconds = 0.6,
-                    uint64_t seed = 1) {
+                    uint64_t seed = 1, int rate = kRate) {
     Random random(seed);
-    Samples s(frames(seconds));
+    Samples s(frames(seconds, rate));
     double phase = 0.0;
     for (size_t i = 0; i < s.size(); ++i) {
-        const double t = static_cast<double>(i) / kRate;
+        const double t = static_cast<double>(i) / rate;
         const double f = endHz + (startHz - endHz) * std::exp(-t / 0.03);
-        phase += 2.0 * std::numbers::pi * f / kRate;
+        phase += 2.0 * std::numbers::pi * f / rate;
         const double click = t < 0.004 ? 0.3 * random.noise() * (1.0 - t / 0.004) : 0.0;
         s[i] = static_cast<float>(0.9 * std::sin(phase) * std::exp(-t / decay) + click);
     }
@@ -58,12 +58,12 @@ inline Samples kick(double startHz = 150.0, double endHz = 50.0, double decay = 
 
 // A snare: a tone at `toneHz` and noise (brightened by differencing), the noise dying over `decay`.
 inline Samples snare(double toneHz = 190.0, double decay = 0.12, double noiseShare = 0.7, double seconds = 0.5,
-                     uint64_t seed = 2) {
+                     uint64_t seed = 2, int rate = kRate) {
     Random random(seed);
-    Samples s(frames(seconds));
+    Samples s(frames(seconds, rate));
     float previous = 0.f;
     for (size_t i = 0; i < s.size(); ++i) {
-        const double t = static_cast<double>(i) / kRate;
+        const double t = static_cast<double>(i) / rate;
         const float n = random.noise();
         const double bright = n - 0.6 * previous;
         previous = n;
@@ -112,13 +112,59 @@ inline Samples clap(double spacing = 0.011, double tail = 0.08, double seconds =
 }
 
 // A tone at `hz` (a few harmonics), dying over `decay`.
-inline Samples tone(double hz, double seconds = 1.0, double decay = 0.5, double amplitude = 0.5) {
-    Samples s(frames(seconds));
+inline Samples tone(double hz, double seconds = 1.0, double decay = 0.5, double amplitude = 0.5, int rate = kRate) {
+    Samples s(frames(seconds, rate));
     for (size_t i = 0; i < s.size(); ++i) {
-        const double t = static_cast<double>(i) / kRate;
+        const double t = static_cast<double>(i) / rate;
         const double w = 2.0 * std::numbers::pi * hz * t;
         s[i] = static_cast<float>(amplitude * (std::sin(w) + 0.3 * std::sin(2 * w) + 0.1 * std::sin(3 * w)) / 1.4 *
                                   std::exp(-t / decay));
+    }
+    return s;
+}
+
+// A synth stab: a detuned sawtooth chord (root, fifth, octave) through a
+// low-pass filter whose cutoff falls from `cutoffHz` over `filterDecay`, the
+// level dying over `decay`.
+inline Samples stab(double hz = 220.0, double cutoffHz = 6000.0, double filterDecay = 0.12, double decay = 0.35,
+                    double seconds = 0.8) {
+    Samples s(frames(seconds));
+    const double ratios[] = {1.0, 1.003, 1.5, 2.0};
+    double phases[4] = {0.0, 0.25, 0.5, 0.75};
+    double low = 0.0, low2 = 0.0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const double t = static_cast<double>(i) / kRate;
+        double saw = 0.0;
+        for (int v = 0; v < 4; ++v) {
+            phases[v] += hz * ratios[v] / kRate;
+            phases[v] -= std::floor(phases[v]);
+            saw += 2.0 * phases[v] - 1.0;
+        }
+        const double cutoff = 150.0 + cutoffHz * std::exp(-t / filterDecay);
+        const double a = 1.0 - std::exp(-2.0 * std::numbers::pi * cutoff / kRate);
+        low += a * (saw - low);  // two one-pole low-passes
+        low2 += a * (low - low2);
+        const double attack = std::min(1.0, t / 0.003);
+        s[i] = static_cast<float>(0.15 * low2 * attack * std::exp(-t / decay));
+    }
+    return s;
+}
+
+// A plucked string (Karplus-Strong) at `hz`: a burst of noise in a delay line
+// that averages it away, `damping` (0..1) how fast the brightness goes.
+inline Samples pluck(double hz = 330.0, double damping = 0.5, double seconds = 1.0, uint64_t seed = 6) {
+    Random random(seed);
+    Samples s(frames(seconds));
+    std::vector<double> line(static_cast<size_t>(kRate / hz), 0.0);
+    for (double& x : line) x = random.noise();
+    size_t at = 0;
+    const double keep = 0.996;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const size_t next = (at + 1) % line.size();
+        const double out = line[at];
+        line[at] = keep * ((1.0 - damping * 0.5) * line[at] + damping * 0.5 * line[next]);
+        at = next;
+        s[i] = static_cast<float>(0.5 * out);
     }
     return s;
 }

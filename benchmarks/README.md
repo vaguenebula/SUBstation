@@ -7,7 +7,7 @@ Nothing they do touches your settings, use counts, browser index or plug-ins.
 |---|---|
 | [parallel_render_bench.cpp](parallel_render_bench.cpp) | Tracks rendered on one thread and on several: offline (best of three, checked bit-identical on any number of threads) and live through the fake ASIO driver. The engine alone, no Qt. |
 | [browser_backend_bench.cpp](browser_backend_bench.cpp) | The browser's backend on a large synthetic library: indexing, starting from the saved index, searches. Checks every query against the reference the tests use, and fails if any differs. |
-| [sound_similarity_bench.cpp](sound_similarity_bench.cpp) | Sound similarity's fingerprints on a real sample library: how fast they are made and searched, and how often a one-shot's nearest sounds are of its kind; `--tune` searches the aspects' weights. The intelligence module alone, no Qt. |
+| [sound_similarity_bench.cpp](sound_similarity_bench.cpp) | Sound similarity's fingerprints (Essentia's descriptors) on a real sample library: how fast they are made and searched, how fast the index analyses a library, and how often a sound's nearest sounds are of its kind; `--split` holds half the queries out, `--tune` searches the aspects' weights. The intelligence module alone, no Qt. |
 | [LibraryGen.h](LibraryGen.h) | Makes the synthetic sample libraries. |
 | [PyRandom.h](PyRandom.h), [Json.h](Json.h) | Python's random numbers (so a library is the one the Python generator made), and the reports as JSON. |
 
@@ -257,48 +257,67 @@ noise, and timing every track costs nothing measurable on one thread.
 
 ```
 sound_similarity_bench --folder <sample library> [--threads N] [--limit N] [--cache file]
-                       [--weights t,m,s,e,p,r] [--tune] [--show N] [--json out.json]
+                       [--weights t,m,s,e,p,r,ts,c,ss,to,x] [--tune] [--split] [--show N]
+                       [--index] [--json out.json]
 ```
 
-Fingerprints every audio file under the folder (on `--threads` threads, normal
-priority; `--cache` keeps them between runs, made again when the feature version
-changes), then measures one search over all of them, and how well the nearest
-sounds match what a sound is. A file's kind comes from its name and its folder's
-(kick, snare, clap, closed and open hi-hat, tom, cymbal, rim, shaker, snap, 808;
-a name with "loop", "fill", "bpm"... is a loop): each labelled one-shot is a
-query over the whole library, and precision@k is the share of its k nearest
-sounds (itself left out) that are one-shots of its kind. It prints that per kind,
-each aspect alone, and with `--tune` searches the aspects' weights (Timbre,
-TimbreMotion, Spectrum, Envelope, Pitch, Rhythm) for the best mean precision@10
-over kinds. `--show N` prints the N nearest of one query per kind. How the
-fingerprint works is in [docs/intelligence.md](../docs/intelligence.md).
+Fingerprints every audio file under the folder with the index's extractor
+(`EssentiaExtractor`; on `--threads` threads, normal priority; `--cache` keeps
+them between runs, made again when the extractor's schema changes), then measures
+one search over all of them, measuring the library's statistics, and how well the
+nearest sounds match what a sound is. A file's kind comes from its name and its
+folder's: kick, snare, clap, closed and open hi-hat, tom, cymbal, rim, shaker,
+snap, 808, and drum machines' abbreviations (BD, SD, CP, CH, OH...); TidalCycles'
+Dirt-Samples folders (bd, sn, cp, hh, oh, lt/mt/ht, cr, rm, stab, pluck, bass,
+jungbass, arpy...) as kick, snare... synth stab, pluck, synth bass, sub bass, arp;
+a name with "loop", "fill", "bpm", "breaks"... is a loop. Each labelled one-shot
+is a query over the whole library, and precision@k is the share of its k nearest
+sounds (itself left out) that are one-shots of its kind; each loop is a query too,
+its hits other loops. It prints that per kind and each aspect alone. `--weights`
+gives the aspects' weights in `Aspect`'s order (Timbre, TimbreMotion, Spectrum,
+Envelope, Pitch, Rhythm, TimbreSpread, Contrast, SpectralShape, Tonality,
+Embedding); those left off the end keep the extractor's. `--split` halves the queries by their folder and reports each half;
+`--tune` searches the weights for the best mean precision@10 over the kinds of
+the first half (so the second shows what the tuning is worth on sounds it didn't
+see). `--index` also runs the `SoundIndex` itself over the library at background
+priority: from nothing, then from its saved fingerprints. `--show N` prints the N
+nearest of one query per kind. How the fingerprint works is in
+[docs/intelligence.md](../docs/intelligence.md).
 
 ## Results
 
-A Splice sample library of 5 091 files (WAV files from 1 403 packs: drums, loops,
-vocals, instruments, FX), on an Intel Core Ultra 7 270K Plus (24 threads),
-Windows 11, MinGW GCC 13 `-O2`:
+[Dirt-Samples](https://github.com/tidalcycles/Dirt-Samples) (not in the
+repository: `git clone --depth 1 https://github.com/tidalcycles/Dirt-Samples`):
+2 068 WAV files in 221 folders, at 44.1, 22.05, 48 and 16 kHz and a few odd rates,
+plus 30 drum loops made from its kicks, snares and hats (90–174 BPM, 4 s). A
+release build on a 4-core cloud machine (Linux, GCC 13):
 
 | | |
 |---|---|
-| analysing 5 091 files, 12 threads | 4.1 s (1 250 files/s); a file: median 9.5 ms, 95% 19.3 ms (a thread) |
-| one search over 5 084 fingerprints | 0.1 ms (the comparison only) |
-| queries | 1 102 labelled one-shots |
+| analysing 2 068 files, 4 threads | 8.6 s (240 files/s); a file: median 10 ms, 95% 58 ms (a thread); one thread 59 files/s |
+| the index, 4 analysers at background priority | 8.2 s; the next start reads the 0.8 MB store in 3 ms and has checked every file's stamp 8 ms later; a search 0.7 ms |
+| one search over 2 068 fingerprints | 0.2 ms (the comparison only); measuring the library's statistics 2 ms |
+| queries | 583 labelled one-shots, 40 loops |
 
-Precision@10, all queries (and per kind):
+Precision@10, Essentia's descriptors against the module's own (the extractor it
+replaced, built from the commit before; the same files, labels and queries):
 
-| | all | kick | snare | 808 | closed hat | open hat | clap | tom |
+| | one-shots, mean over kinds | one-shots, all | P@1, mean | loops | kick | snare | synth stab | synth bass |
 |---|---|---|---|---|---|---|---|---|
-| MFCCs alone (`--weights 1,0,0,0,0,0`) | 0.352 | 0.52 | 0.37 | 0.39 | 0.21 | 0.11 | 0.31 | |
-| the default weights (0.5, 1.5, 2.5, 2, 0.5, 0.5) | **0.694** | 0.84 | 0.79 | 0.73 | 0.53 | 0.59 | 0.56 | 0.38 |
+| the module's own descriptors | 0.467 | 0.580 | 0.671 | 0.462 | 0.455 | 0.692 | 0.804 | 0.414 |
+| Essentia's (default weights) | **0.492** | **0.602** | **0.683** | **0.528** | **0.504** | **0.692** | **0.870** | **0.504** |
 
-Each aspect alone (mean precision@10 over kinds): timbre 0.20, timbre motion 0.24,
-spectrum 0.24, envelope 0.20, pitch 0.09, rhythm 0.12; all together 0.45. `--tune`
-finds 0.449 (0.25, 2, 3, 3, 0.5, 0.5); the defaults are rounded from it, a little
-less fitted to this one library.
+Each aspect alone (mean precision@10 over kinds): timbre 0.34, timbre motion 0.37,
+spectrum 0.34, envelope 0.18, pitch 0.13, rhythm 0.11, timbre spread 0.22,
+contrast 0.39, spectral shape 0.32, tonality 0.22. With `--split`, the six aspects
+the module had: 0.389 / 0.469 (the two halves); with the four added: 0.407 /
+0.514. Weights `--tune`d on the first half did worse on the second (0.498), so the
+defaults stay round. The full table per kind is in
+[docs/intelligence.md](../docs/intelligence.md#how-well-it-works).
 
-The index itself (`SoundIndex`, at background priority, its default 4 analysers),
-on the same library: everything analysed in 11.5 s the first time; the next start
-reads the 1.7 MB store in 10 ms and has checked every file's stamp 20 ms later; a
-search (on its thread, the comparison and the table of results) takes 0.5 ms, one
-from a part of a file (analysed then) 1.6 ms.
+The module's own descriptors, on a Splice library of 5 091 files (1 403 packs) on
+an Intel Core Ultra 7 270K Plus (24 threads), Windows 11, MinGW GCC 13: precision@10
+0.694 over all queries (kick 0.84, snare 0.79, 808 0.73, closed hat 0.53, open hat
+0.59, clap 0.56); 1 250 files/s on 12 threads, 1.4–9.5 ms a file. That library's
+labels are cleaner than Dirt-Samples' file names: compare extractors on one set,
+not the sets with each other.

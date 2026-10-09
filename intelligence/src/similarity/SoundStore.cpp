@@ -1,10 +1,14 @@
 #include "similarity/SoundStore.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <utility>
+
+#include "core/Hash.h"
 
 namespace sub::intelligence {
 
@@ -12,15 +16,6 @@ namespace {
 
 constexpr char kMagic[8] = {'S', 'U', 'B', 'S', 'N', 'D', 'X', '1'};
 constexpr uint8_t kAnalysed = 1, kReference = 2;
-
-uint64_t fnv1a(const char* data, size_t size) {
-    uint64_t h = 1469598103934665603ull;
-    for (size_t i = 0; i < size; ++i) {
-        h ^= static_cast<unsigned char>(data[i]);
-        h *= 1099511628211ull;
-    }
-    return h;
-}
 
 struct FileCloser {
     void operator()(std::FILE* f) const {
@@ -65,6 +60,8 @@ public:
         return true;
     }
 
+    bool atEnd() const { return p_ == end_; }
+
 private:
     const char* p_;
     const char* end_;
@@ -72,11 +69,11 @@ private:
 
 }  // namespace
 
-StoreWriter::StoreWriter(uint32_t count) {
+StoreWriter::StoreWriter(const FeatureSchema& schema, uint32_t count) : dims_(schema.dims()) {
     bytes_.append(kMagic, sizeof(kMagic));
     u32(kStoreFormat);
-    u32(kFeatureVersion);
-    u32(static_cast<uint32_t>(kDims));
+    u64(schema.key());
+    u32(static_cast<uint32_t>(dims_));
     u32(count);
 }
 
@@ -91,25 +88,44 @@ void StoreWriter::u64(uint64_t v) {
     u32(static_cast<uint32_t>(v >> 32));
 }
 
+void StoreWriter::f32(float v) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &v, 4);
+    u32(bits);
+}
+
+void StoreWriter::str(const std::string& s) {
+    u32(static_cast<uint32_t>(s.size()));
+    bytes_ += s;
+}
+
 void StoreWriter::add(const StoredSound& sound) {
-    u32(static_cast<uint32_t>(sound.path.size()));
-    bytes_ += sound.path;
+    if (sound.analysed && sound.fingerprint.size() != dims_)
+        throw std::invalid_argument("a fingerprint of " + std::to_string(sound.fingerprint.size()) +
+                                    " features where the schema has " + std::to_string(dims_));
+    add(sound, sound.fingerprint.data());
+}
+
+void StoreWriter::add(const StoredSound& sound, const float* fingerprint) {
+    if (sound.analysed && !fingerprint && dims_ > 0) throw std::invalid_argument("an analysed sound without a fingerprint");
+    str(sound.path);
     u64(sound.stamp.size);
     u64(sound.stamp.modified);
     u64(static_cast<uint64_t>(sound.seen));
     const uint8_t flags = (sound.analysed ? kAnalysed : 0) | (sound.reference ? kReference : 0);
     bytes_.push_back(static_cast<char>(flags));
     if (sound.reference) u64(sound.used);
-    if (sound.analysed) {
-        for (const float v : sound.fingerprint) {
-            uint32_t bits = 0;
-            std::memcpy(&bits, &v, 4);
-            u32(bits);
-        }
-    }
+    if (sound.analysed)
+        for (size_t d = 0; d < dims_; ++d) f32(fingerprint[d]);
 }
 
-std::string StoreWriter::finish() {
+std::string StoreWriter::finish(const FeatureStatistics* statistics) {
+    const bool withStatistics = statistics && statistics->spread.size() == dims_;
+    bytes_.push_back(static_cast<char>(withStatistics ? 1 : 0));
+    if (withStatistics) {
+        u64(statistics->count);
+        for (const float v : statistics->spread) f32(v);
+    }
     u64(fnv1a(bytes_.data(), bytes_.size()));
     return std::move(bytes_);
 }
@@ -125,7 +141,7 @@ bool writeStore(const std::string& file, const std::string& bytes) {
     return platform::replaceFile(temporary, file);
 }
 
-std::optional<std::vector<StoredSound>> readStore(const std::string& file) {
+std::optional<StoreContents> readStore(const std::string& file, const FeatureSchema& schema) {
     std::string data;
     {
         File f(platform::openFile(file, false));
@@ -142,13 +158,14 @@ std::optional<std::vector<StoredSound>> readStore(const std::string& file) {
 
     Reader in(data.data(), data.size() - 8);
     char magic[sizeof(kMagic)];
-    uint32_t format = 0, version = 0, dims = 0, count = 0;
+    uint32_t format = 0, dims = 0, count = 0;
+    uint64_t key = 0;
     if (!in.bytes(magic, sizeof(magic)) || std::memcmp(magic, kMagic, sizeof(kMagic)) != 0) return std::nullopt;
-    if (!in.u32(format) || format != kStoreFormat || !in.u32(version) || version != kFeatureVersion || !in.u32(dims) ||
-        dims != kDims || !in.u32(count))
+    if (!in.u32(format) || format != kStoreFormat || !in.u64(key) || key != schema.key() || !in.u32(dims) ||
+        dims != schema.dims() || !in.u32(count))
         return std::nullopt;
-    std::vector<StoredSound> sounds;
-    sounds.reserve(std::min<size_t>(count, data.size() / 32));
+    StoreContents contents;
+    contents.sounds.reserve(std::min<size_t>(count, data.size() / 32));
     for (uint32_t i = 0; i < count; ++i) {
         StoredSound s;
         uint8_t flags = 0;
@@ -159,12 +176,25 @@ std::optional<std::vector<StoredSound>> readStore(const std::string& file) {
         s.analysed = flags & kAnalysed;
         s.reference = flags & kReference;
         if (s.reference && !in.u64(s.used)) return std::nullopt;
-        if (s.analysed)
+        if (s.analysed) {
+            s.fingerprint.resize(dims);
             for (float& v : s.fingerprint)
                 if (!in.f32(v)) return std::nullopt;
-        sounds.push_back(std::move(s));
+        }
+        contents.sounds.push_back(std::move(s));
     }
-    return sounds;
+    uint8_t withStatistics = 0;
+    if (!in.u8(withStatistics)) return std::nullopt;
+    if (withStatistics) {
+        FeatureStatistics st;
+        st.spread.resize(dims);
+        if (!in.u64(st.count)) return std::nullopt;
+        for (float& v : st.spread)
+            if (!in.f32(v) || !(v > 0.f) || !std::isfinite(v)) return std::nullopt;
+        contents.statistics = std::move(st);
+    }
+    if (!in.atEnd()) return std::nullopt;
+    return contents;
 }
 
 }  // namespace sub::intelligence

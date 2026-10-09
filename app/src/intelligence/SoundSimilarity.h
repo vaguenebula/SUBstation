@@ -96,6 +96,9 @@ public:
     // or its part from `start` seconds in, `length` seconds long (< 0: to its
     // end). The result comes as `found`; returns its generation.
     uint64_t find(const QString& path, double start = 0.0, double length = -1.0);
+    // Drops the search under way (its analysis stops; no `found` comes of it):
+    // nobody wants its result any more.
+    void cancel();
 
     bool analysing() const { return status_.analysing; }
     int libraryFiles() const { return static_cast<int>(status_.library); }
