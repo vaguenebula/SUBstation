@@ -8,6 +8,7 @@
 
 #include "Engine.h"
 
+#include <QByteArray>
 #include <QHash>
 #include <QMap>
 #include <QSet>
@@ -22,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -153,5 +155,32 @@ struct EngineBridge::Private {
 // What a slot reacting to the project does, or (should something throw) says
 // so: Qt must never see an exception, and the model goes on.
 void guarded(const char* what, const std::function<void()>& body);
+
+// Private::busy counted up while it lives: around a plug-in's or a driver's
+// call that may run a message loop calling the bridge back. It counts down
+// however the call ends, whatever it throws.
+class BusyScope {
+public:
+    explicit BusyScope(int& busy) : busy_(busy) { ++busy_; }
+    ~BusyScope() { --busy_; }
+    BusyScope(const BusyScope&) = delete;
+    BusyScope& operator=(const BusyScope&) = delete;
+
+private:
+    int& busy_;
+};
+
+// A processor's state as the engine has it (bytes), and as the application keeps it.
+inline std::vector<uint8_t> stateBytes(const QByteArray& state) { return {state.begin(), state.end()}; }
+inline QByteArray stateData(const std::vector<uint8_t>& bytes) {
+    return QByteArray(reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size()));
+}
+
+// Names as the engine lists them (drivers, channels, MIDI inputs).
+inline QStringList stringList(const std::vector<std::string>& names) {
+    QStringList list;
+    for (const std::string& name : names) list.append(QString::fromStdString(name));
+    return list;
+}
 
 }  // namespace sub::app

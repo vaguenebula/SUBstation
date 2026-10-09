@@ -91,6 +91,11 @@ QString reversedPath(const QString& folder, const QString& source) {
     return path;
 }
 
+std::optional<QString> makeFolder(const QString& folder, const QString& what) {
+    if (QDir().mkpath(folder)) return std::nullopt;
+    return QStringLiteral("Could not create %1 %2").arg(what, QDir::toNativeSeparators(folder));
+}
+
 QByteArray floatWavHeader(int channels, qint64 frames, int sampleRate) {
     const auto block = static_cast<quint32>(4 * channels);
     const auto size = static_cast<quint32>(frames * block);

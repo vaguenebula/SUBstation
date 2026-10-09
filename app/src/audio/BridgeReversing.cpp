@@ -10,7 +10,6 @@
 #include "model/Paths.h"
 #include "model/Project.h"
 
-#include <QDir>
 #include <QFileInfo>
 
 namespace sub::app {
@@ -44,9 +43,7 @@ std::unique_ptr<ReverseJob> EngineBridge::startReversed(const QString& path) {
         throw EditError(QFileInfo(path).fileName() + u' ' + reason + QStringLiteral(": it can't be reversed"));
     }
     const QString folder = reversedFolder(*project_);
-    if (!QDir().mkpath(folder)) {
-        throw EditError(QStringLiteral("Could not create the folder %1").arg(QDir::toNativeSeparators(folder)));
-    }
+    if (const auto problem = makeFolder(folder, QStringLiteral("the folder"))) throw EditError(*problem);
     return std::make_unique<ReverseJob>(engine_, decoded, reversedPath(folder, path));
 }
 

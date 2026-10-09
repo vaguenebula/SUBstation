@@ -11,7 +11,6 @@
 #include "model/Project.h"
 
 #include <QDateTime>
-#include <QDir>
 #include <QFile>
 
 namespace sub::app {
@@ -63,9 +62,7 @@ std::unique_ptr<FreezeRender> EngineBridge::startFreeze(const QString& trackId) 
     if (!engineId || trackId == kMaster) throw EditError(name + QStringLiteral(" can't be frozen"));
     if (end <= 0) throw EditError(QStringLiteral("There is nothing to freeze yet: the arrangement is empty"));
     const QString folder = freezeFolder(*project_);
-    if (!QDir().mkpath(folder)) {
-        throw EditError(QStringLiteral("Could not create the freeze folder %1").arg(QDir::toNativeSeparators(folder)));
-    }
+    if (const auto problem = makeFolder(folder, QStringLiteral("the freeze folder"))) throw EditError(*problem);
     const QString path = takePath(folder, name + QStringLiteral(" Freeze"), QDateTime::currentDateTime());
     if (isPlaying()) stop();
     try {

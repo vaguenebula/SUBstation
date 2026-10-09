@@ -15,6 +15,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <optional>
 #include <vector>
 
 namespace sub::app {
@@ -33,6 +34,9 @@ QString freezeFolder(const Project& project);
 QString reversedFolder(const Project& project);
 // A new file for the reversed copy of `source`: its name and " R" (numbered if taken).
 QString reversedPath(const QString& folder, const QString& source);
+// Makes a folder to write into (and the folders it is in); none if it is
+// there, else why not: "Could not create <what> <folder>" (`what`: "the freeze folder").
+std::optional<QString> makeFolder(const QString& folder, const QString& what);
 
 // The header of a 32-bit float WAV file of `frames` frames.
 QByteArray floatWavHeader(int channels, qint64 frames, int sampleRate);
