@@ -56,6 +56,7 @@ session's ([session.md](session.md)).
 | [DeviceState.h](../../app/src/model/DeviceState.h) | `sub::app::deviceState`: a built-in device's state besides its parameters (a sampler's sample), in the engine's text format, base64 in `Device::state` |
 | [RecordedTake.h](../../app/src/model/RecordedTake.h) | `RecordedTake`, `RecordedTakeNote`: what a recording hands the editor |
 | [Errors.h](../../app/src/model/Errors.h) | `EditError` (an edit the user can't make), `ProjectFileError` (a file that can't be read or written); both carry a `QString` message for the user |
+| [Paths.h](../../app/src/model/Paths.h) | Paths as the application compares them: `absoluteCleanPath`, `pathIdentity` (absolute and clean, case folded where the system ignores case: `sub::platform::kCaseSensitivePaths`), `samePath`. Decoded sources, the File Manager's files and the recent projects are keyed by it |
 | [Ids.h](../../app/src/model/Ids.h), [OrderedMap.h](../../app/src/model/OrderedMap.h), [Numbers.h](../../app/src/model/Numbers.h) | `newId()`; a map that keeps its keys in insertion order; rounding half to even, floor division that stays exact (`floorDiv`), fixed-point text |
 | [editor/](../../app/src/editor) | `ProjectEditor` ([ProjectEditor.h](../../app/src/editor/ProjectEditor.h)), one source file per area: `EditorTracks.cpp` (tracks, returns and sends, groups, inputs, recordings), `EditorSettings.cpp` (tempo, time signature, key, loop), `EditorClips.cpp` (clips and time selections), `EditorDeviceChains.cpp` (devices in chains), `EditorRacks.cpp` (racks, their chains and macros), `EditorDeviceSettings.cpp` (a device's parameters, state, presets, switch, sidechain), `EditorAutomation.cpp` (envelopes and the lanes shown), `EditorFreezing.cpp` (freezing, unfreezing, flattening, and what frozen tracks refuse), `EditorFiles.cpp` (the files clips and devices play: one put in another's place, files found somewhere else). Its value types: `ClipRef`/`ClipRefs`, `TimeRange`, `MovedRange`, `ClipboardContent`/`CopiedTrack`/`CopiedFreeze`, `CopiedTracks`, `CopiedAutomation`, `TrackParent`/`InsertionPoint` |
 | [io/Serialization.h](../../app/src/io/Serialization.h), [io/Presets.h](../../app/src/io/Presets.h) | Project and preset files, the preset library: see [serialization.md](serialization.md) |
@@ -569,8 +570,8 @@ refused because of frozen audio are said on `refused` too. The session shows `re
 - `replaceFile(clip, path, totalSec)` (another file in its place: where it is, with its settings; a clip playing all
   of its file, `playsWholeFile`, plays all of the new one, one playing a stretch plays the same stretch as far as the
   new file goes; named after the file, forwards, its fades held to its length), `relinkFile(clip, from, to)` (a file
-  found somewhere else, also what it was reversed from; nothing else changes), `samePath` (paths as the system
-  compares them).
+  found somewhere else, also what it was reversed from; nothing else changes; paths compared by `samePath`,
+  [Paths.h](../../app/src/model/Paths.h)).
 - `stretchClip(clip, edgeBeat, left, tempo)` (Alt-dragging an edge): that edge moves, the other stays, and the
   content plays faster or slower to fill it: an audio clip is warped to the segment BPM that makes it that long
   (within `kMinSegmentBpm`..`kMaxSegmentBpm`, 20..999), a MIDI clip's notes and offset are scaled; never before

@@ -11,6 +11,7 @@
 #include "audio/DisperserResponse.h"
 #include "audio/EqResponse.h"
 #include "audio/EngineBridge.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 
 #include "builtin/DisperserDesign.h"
@@ -170,7 +171,7 @@ private Q_SLOTS:
         QVERIFY(isAudioFile(QStringLiteral("c.mp3")) && isAudioFile(QStringLiteral("d.wave")));
         QVERIFY(!isAudioFile(QStringLiteral("e.gilproj")));
         QCOMPARE(audioExtensions().size(), 4);
-        QCOMPARE(sourceKey(QStringLiteral("/a/b/../c.wav")), sourceKey(QStringLiteral("/a/c.wav")));
+        QCOMPARE(pathIdentity(QStringLiteral("/a/b/../c.wav")), pathIdentity(QStringLiteral("/a/c.wav")));
     }
 
     void floatWavFilesDecodeAsWritten() {

@@ -39,15 +39,6 @@ QStringList audioExtensions() { return FileIndex::audioExtensions(); }
 
 bool isAudioFile(const QString& path) { return FileIndex::isAudioFile(path); }
 
-QString sourceKey(const QString& path) {
-    const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-#ifdef Q_OS_WIN
-    return absolute.toLower();
-#else
-    return absolute;
-#endif
-}
-
 QString recordingsFolder(const Project& project) {
     const QString beside = besideProject(project, QStringLiteral("Recordings"));
     if (!beside.isEmpty()) return beside;

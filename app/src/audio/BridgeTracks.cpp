@@ -3,11 +3,11 @@
 // sends, their clips and notes (and a drag's preview of them), and the
 // project's tempo, time signature and loop.
 
-#include "audio/AudioFiles.h"
 #include "audio/AudioSettings.h"
 #include "audio/BridgePrivate.h"
 #include "audio/EngineDescs.h"
 
+#include "model/Paths.h"
 #include "model/Project.h"
 #include "model/Timebase.h"
 
@@ -72,10 +72,10 @@ void EngineBridge::onReset() {
     QSet<QString> used;
     for (const Track& track : project_->tracks()) {
         if (track.isMidi()) continue;
-        for (const Clip& clip : track.clips) used.insert(sourceKey(clip.path));
+        for (const Clip& clip : track.clips) used.insert(pathIdentity(clip.path));
     }
     for (const Track* track : project_->allTracks()) {
-        if (track->frozen) used.insert(sourceKey(track->frozen->path));
+        if (track->frozen) used.insert(pathIdentity(track->frozen->path));
     }
     for (auto it = d.sources.begin(); it != d.sources.end();) {
         it = used.contains(it.key()) ? std::next(it) : d.sources.erase(it);

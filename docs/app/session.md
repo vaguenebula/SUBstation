@@ -164,7 +164,8 @@ The session never asks the user anything; the UI does, and then calls it:
 - **Close**: `requestClose()` is false while a render runs: it cancels the render instead, and the window stays (as
   the render dialog's Cancel would). Otherwise the UI asks about unsaved changes as above.
 - **Recent projects**: at most `kMaxRecent` (10), the latest first, each stored absolute with links resolved, in the
-  system's form; one that differs only in case from another (casefolded) replaces it. `recentMenuItems()` gives the
+  system's form; the same file written another way (`pathIdentity`: in another case too, where the system ignores
+  case) replaces it. `recentMenuItems()` gives the
   Open Recent menu's entries (`"&1  song.gilproj"`, with `&` doubled in names). A list of one, which QSettings can hand back
   as a single string, is read as a list too.
 
@@ -253,7 +254,7 @@ The files a project plays are worked out from the project each time, never store
 [ProjectFiles.h](../../app/src/files/ProjectFiles.h)'s `projectFiles(project)` walks the tracks, the returns and the
 master, each one's audio clips (the file a clip plays: a reversed clip's reversed copy) and then its devices, in racks
 too: a built-in device's state names a file under `"sample"` (`deviceFile`, `withDeviceFile`; the Sampler's). It
-groups them as the system compares paths (`sourceKey`) and keeps each file's uses (`FileUses`: `ClipRef`s and
+groups them as the system compares paths (`pathIdentity`) and keeps each file's uses (`FileUses`: `ClipRef`s and
 `DeviceRef`s). Frozen tracks' own audio isn't among them. `changeableUses` leaves out what is on frozen tracks (or in
 frozen groups), which a replacement may not change.
 

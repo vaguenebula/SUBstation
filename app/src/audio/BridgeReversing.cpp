@@ -7,6 +7,7 @@
 #include "audio/AudioFiles.h"
 #include "audio/BridgePrivate.h"
 
+#include "model/Paths.h"
 #include "model/Project.h"
 
 #include <QDir>
@@ -15,13 +16,13 @@
 namespace sub::app {
 
 std::optional<QString> EngineBridge::reversedCopy(const QString& path) {
-    const QString key = sourceKey(path);
+    const QString key = pathIdentity(path);
     QString copy = d_->reversed.value(key);
     if (copy.isEmpty() || !QFileInfo(copy).isFile()) {
         copy.clear();
         for (const Track& track : project_->tracks()) {
             for (const Clip& clip : track.clips) {
-                if (clip.isAudio() && !clip.reversedFrom.isEmpty() && sourceKey(clip.reversedFrom) == key &&
+                if (clip.isAudio() && !clip.reversedFrom.isEmpty() && pathIdentity(clip.reversedFrom) == key &&
                     QFileInfo(clip.path).isFile()) {
                     copy = clip.path;
                     break;
@@ -52,8 +53,8 @@ std::unique_ptr<ReverseJob> EngineBridge::startReversed(const QString& path) {
 std::optional<std::pair<QString, double>> EngineBridge::finishReversed(const QString& path, ReverseJob& job) {
     std::shared_ptr<sub::AudioSource> loaded = job.finish();
     if (!loaded) return std::nullopt;
-    d_->sources.insert(sourceKey(job.path()), std::move(loaded));
-    d_->reversed.insert(sourceKey(path), job.path());
+    d_->sources.insert(pathIdentity(job.path()), std::move(loaded));
+    d_->reversed.insert(pathIdentity(path), job.path());
     Q_EMIT sourceReady(job.path());
     return std::pair{job.path(), job.seconds()};
 }

@@ -6,6 +6,7 @@
 #include "audio/AudioFiles.h"
 #include "audio/BridgePrivate.h"
 
+#include "model/Paths.h"
 #include "model/Project.h"
 
 #include <QDateTime>
@@ -84,7 +85,7 @@ std::optional<Freeze> EngineBridge::finishFreeze(FreezeRender& render) {
     const QString path = render.path();
     // Decoded now, so that it plays as soon as the track is frozen (no gap while it loads).
     try {
-        d_->sources.insert(sourceKey(path), engine_.loadSource(path.toStdString()));
+        d_->sources.insert(pathIdentity(path), engine_.loadSource(path.toStdString()));
     } catch (const std::exception& error) {
         throw EditError(QString::fromStdString(error.what()));
     }
@@ -97,7 +98,7 @@ std::optional<Freeze> EngineBridge::finishFreeze(FreezeRender& render) {
 }
 
 void EngineBridge::discardFreeze(const Freeze& freeze) {
-    d_->sources.remove(sourceKey(freeze.path));
+    d_->sources.remove(pathIdentity(freeze.path));
     engine_.releaseUnusedSources();
     // (which also lets go of others no track plays: those are decoded again when asked for)
     for (auto it = d_->sources.begin(); it != d_->sources.end();) {

@@ -1,7 +1,7 @@
 // The session's files and settings: saving and opening (the title, the last
-// folder), the recent projects (as the old settings had them: casefold
-// de-duplication, a one-item list read back as a string, at most ten, missing
-// files dropped), Export Audio's choices, the count-in and record
+// folder), the recent projects (as the old settings had them: one file listed
+// once, in any case where the system ignores case, a one-item list read back
+// as a string, at most ten, missing files dropped), Export Audio's choices, the count-in and record
 // quantization, recording with nothing armed, the about text, and the
 // preferences (audio threads, devices, MIDI inputs).
 
@@ -10,6 +10,7 @@
 
 #include "AppInfo.h"
 #include "audio/AudioSettings.h"
+#include "platform/Paths.h"
 #include "session/AudioPreferences.h"
 #include "session/MidiPreferences.h"
 
@@ -303,13 +304,20 @@ private Q_SLOTS:
             saved.prepend(recent(path));
         }
         QCOMPARE(s.recentProjects(), saved.mid(0, Session::kMaxRecent));
+        // The same file in another case: the same file where the system ignores
+        // case (Windows), which it replaces; another file elsewhere.
         QStringList upper = s.recentProjects();
         upper[0] = upper[0].toUpper();
         QSettings().setValue(Session::kRecentKey, upper);
         QVERIFY(s.saveProjectAs(dir.path(QStringLiteral("song 11.gilproj"))));
         QCOMPARE(s.recentProjects().size(), Session::kMaxRecent);
         QCOMPARE(s.recentProjects().front(), saved.front());
-        QCOMPARE(labels(s.recentMenuItems()).back(), QStringLiteral("10  song 2.gilproj"));  // (no mnemonic past 9)
+        if (sub::platform::kCaseSensitivePaths) {
+            QCOMPARE(s.recentProjects()[1], upper[0]);
+            QCOMPARE(labels(s.recentMenuItems()).back(), QStringLiteral("10  song 3.gilproj"));  // (no mnemonic past 9)
+        } else {
+            QCOMPARE(labels(s.recentMenuItems()).back(), QStringLiteral("10  song 2.gilproj"));
+        }
     }
 
     void exportChoices() {

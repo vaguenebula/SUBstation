@@ -3,6 +3,7 @@
 #include "io/Serialization.h"
 #include "model/Devices.h"
 #include "model/Errors.h"
+#include "model/Paths.h"
 
 #include <QDir>
 #include <QFile>
@@ -114,12 +115,7 @@ QString renamePreset(const QString& path, const QString& name) {
     const QFileInfo info(path);
     const QString target = info.path() + u'/' + presetFileName(name) + kPresetExtension;
     if (QDir::cleanPath(target) == QDir::cleanPath(path)) return path;
-#ifdef Q_OS_WIN
-    const bool sameFile = QDir::cleanPath(target).compare(QDir::cleanPath(path), Qt::CaseInsensitive) == 0;
-#else
-    const bool sameFile = false;
-#endif
-    if (QFileInfo::exists(target) && !sameFile) {  // (a change of case is no clash)
+    if (QFileInfo::exists(target) && !samePath(target, path)) {  // (a change of case on Windows is no clash)
         throw EditError(QStringLiteral("There is a preset called %1 already").arg(stemOf(QFileInfo(target).fileName())));
     }
     if (!QFile::rename(path, target)) {

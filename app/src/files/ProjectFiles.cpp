@@ -6,9 +6,9 @@
 
 #include <functional>
 
-#include "audio/AudioFiles.h"
 #include "model/DeviceState.h"
 #include "model/Devices.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 
 namespace sub::app {
@@ -66,7 +66,7 @@ std::vector<ProjectFile> projectFiles(const Project& project) {
     std::vector<ProjectFile> files;
     QHash<QString, size_t> byKey;
     eachUse(project, [&](const QString& path, const ClipRef* clip, const DeviceRef* device) {
-        const QString key = sourceKey(path);
+        const QString key = pathIdentity(path);
         auto found = byKey.constFind(key);
         if (found == byKey.constEnd()) {
             found = byKey.insert(key, files.size());
@@ -82,9 +82,9 @@ std::vector<ProjectFile> projectFiles(const Project& project) {
 FileUses fileUses(const Project& project, const QString& path) {
     FileUses uses;
     if (path.isEmpty()) return uses;
-    const QString key = sourceKey(path);
+    const QString key = pathIdentity(path);
     eachUse(project, [&](const QString& used, const ClipRef* clip, const DeviceRef* device) {
-        if (sourceKey(used) != key) return;
+        if (pathIdentity(used) != key) return;
         if (clip) uses.clips.append(*clip);
         if (device) uses.devices.append(*device);
     });

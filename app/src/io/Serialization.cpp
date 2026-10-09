@@ -4,6 +4,7 @@
 #include "model/Errors.h"
 #include "model/Keys.h"
 #include "model/Notes.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 #include "model/Routing.h"
 #include "model/TrackNames.h"
@@ -210,8 +211,7 @@ QString baseOf(const QString& projectFile) { return projectFile.isEmpty() ? QStr
 
 QJsonValue relative(const QString& path, const QString& base) {
     if (base.isEmpty() || path.isEmpty()) return QJsonValue::Null;
-    const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-    const QString rel = QDir(QFileInfo(base).absoluteFilePath()).relativeFilePath(absolute);
+    const QString rel = QDir(QFileInfo(base).absoluteFilePath()).relativeFilePath(absoluteCleanPath(path));
     if (QDir::isAbsolutePath(rel)) return QJsonValue::Null;  // another drive
     return rel;
 }

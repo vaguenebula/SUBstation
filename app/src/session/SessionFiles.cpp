@@ -18,6 +18,7 @@
 #include "io/LiveSet.h"
 #include "io/Serialization.h"
 #include "model/Errors.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 #include "model/Timebase.h"
 #include "plugins/PluginIndex.h"
@@ -227,10 +228,10 @@ void Session::setRecent(const QStringList& paths) {
 
 void Session::addRecent(const QString& path) {
     const QString entry = recentEntry(path);
-    const QString key = entry.toCaseFolded();
+    const QString key = pathIdentity(entry);
     QStringList paths{entry};
     for (const QString& known : recentProjects()) {
-        if (known.toCaseFolded() != key) paths.append(known);
+        if (pathIdentity(known) != key) paths.append(known);
     }
     setRecent(paths);
 }
@@ -241,8 +242,8 @@ bool Session::recentProjectAvailable(const QString& path) {
     if (QFileInfo(path).isFile()) return true;
     Q_EMIT warning(QStringLiteral("%1 can't be found. It was removed from the list.").arg(QFileInfo(path).fileName()));
     QStringList kept = recentProjects();
-    const QString key = recentEntry(path).toCaseFolded();  // (as the list keeps it: in the system's form)
-    kept.removeIf([&](const QString& known) { return known.toCaseFolded() == key; });
+    const QString key = pathIdentity(recentEntry(path));
+    kept.removeIf([&](const QString& known) { return pathIdentity(known) == key; });
     setRecent(kept);
     return false;
 }

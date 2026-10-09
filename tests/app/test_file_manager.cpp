@@ -1,5 +1,6 @@
 // The File Manager and hot swaps: the files a project plays (its audio clips
-// and samplers, in racks too), one file put in place of another (whole files
+// and samplers, in racks too; one file however its path is written, in another
+// case too on Windows), one file put in place of another (whole files
 // and stretches of them, a clip running into the next one trimmed, frozen
 // tracks refused, a hot swap's tries one undo step that goes when it is back
 // where it began), missing files found again (by name and folders, moving
@@ -23,6 +24,8 @@
 #include "model/DeviceState.h"
 #include "model/Devices.h"
 #include "model/Edits.h"
+#include "model/Paths.h"
+#include "platform/Paths.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -132,6 +135,19 @@ private Q_SLOTS:
         const Clip relinked = edits::relinkFile(reversed, kKick, QStringLiteral("E:/Samples/Drums/Kick.wav"));
         QCOMPARE(relinked.path, reversed.path);
         QCOMPARE(relinked.reversedFrom, QStringLiteral("E:/Samples/Drums/Kick.wav"));
+    }
+
+    void aFileIsTheSameFileHoweverItsPathIsWritten() {
+        QVERIFY(samePath(QStringLiteral("/a/b/../c.wav"), QStringLiteral("/a/./c.wav")));
+        QVERIFY(samePath(QStringLiteral("/a//c.wav"), QStringLiteral("/a/c.wav")));
+        QVERIFY(!samePath(QStringLiteral("/a/c.wav"), QStringLiteral("/b/c.wav")));
+        // A relative path is where it is from the current folder.
+        QCOMPARE(absoluteCleanPath(QStringLiteral("x/../c.wav")), QDir::current().absoluteFilePath(QStringLiteral("c.wav")));
+        QVERIFY(samePath(QStringLiteral("c.wav"), QDir::current().absoluteFilePath(QStringLiteral("c.wav"))));
+        // Names in another case: the same file where the system ignores case (Windows), another elsewhere.
+        QCOMPARE(samePath(QStringLiteral("/a/Kick.wav"), QStringLiteral("/A/KICK.wav")), !sub::platform::kCaseSensitivePaths);
+        QCOMPARE(pathIdentity(QStringLiteral("/a/Kick.wav")) == pathIdentity(QStringLiteral("/a/kick.wav")),
+                 !sub::platform::kCaseSensitivePaths);
     }
 
     // --- Finding missing files ---------------------------------------------------------------
@@ -366,8 +382,8 @@ private Q_SLOTS:
         QVERIFY(files.waitForSearch());
         QCOMPARE(files.missingCount(), 0);
         const QString kickNow = dir.path(QStringLiteral("Project/Library/Samples/Drums/Kick.wav"));
-        QVERIFY(edits::samePath(clipPath(f.project(), a, QStringLiteral("Ac")), kickNow));
-        QVERIFY(edits::samePath(clipPath(f.project(), b, QStringLiteral("Bc")),
+        QVERIFY(samePath(clipPath(f.project(), a, QStringLiteral("Ac")), kickNow));
+        QVERIFY(samePath(clipPath(f.project(), b, QStringLiteral("Bc")),
                                 dir.path(QStringLiteral("Project/Library/Samples/Drums/Snare.wav"))));
         QCOMPARE(f.lastMessage(), QStringLiteral("Found all 2 missing files"));
         QCOMPARE(f.stack().undoText(), QStringLiteral("Locate Missing Files"));
@@ -404,7 +420,7 @@ private Q_SLOTS:
         QCOMPARE(files.missingCount(), 1);
         files.search();  // (an unsaved project: no folder of its own)
         QVERIFY(files.waitForSearch());
-        QVERIFY(edits::samePath(clipPath(f.project(), a, QStringLiteral("Ac")), there));
+        QVERIFY(samePath(clipPath(f.project(), a, QStringLiteral("Ac")), there));
         QCOMPARE(f.lastMessage(), QStringLiteral("Found the missing file"));
     }
 
@@ -421,8 +437,8 @@ private Q_SLOTS:
         QCOMPARE(files.missingFiles().size(), 2);
         QVERIFY(files.locate(kick, dir.path(QStringLiteral("New/Kick.wav"))));
         QCOMPARE(files.missingCount(), 0);
-        QVERIFY(edits::samePath(clipPath(f.project(), a, QStringLiteral("Ac")), dir.path(QStringLiteral("New/Kick.wav"))));
-        QVERIFY(edits::samePath(clipPath(f.project(), b, QStringLiteral("Bc")), dir.path(QStringLiteral("New/Snare.wav"))));
+        QVERIFY(samePath(clipPath(f.project(), a, QStringLiteral("Ac")), dir.path(QStringLiteral("New/Kick.wav"))));
+        QVERIFY(samePath(clipPath(f.project(), b, QStringLiteral("Bc")), dir.path(QStringLiteral("New/Snare.wav"))));
         QCOMPARE(f.lastMessage(), QStringLiteral("Located Kick.wav, and 1 file more where it went"));
         QCOMPARE(f.stack().undoText(), QStringLiteral("Locate Missing Files"));
         // Not an audio file: refused.
@@ -506,7 +522,7 @@ private Q_SLOTS:
         QCOMPARE(hot.usesText(), QStringLiteral("2 clips"));
         QCOMPARE(hot.originPath(), kick);
         QVERIFY(!similar.isEmpty());
-        QVERIFY(edits::samePath(browser.similarTo(), kick));
+        QVERIFY(samePath(browser.similarTo(), kick));
         // What the user chooses in the browser plays in its place, at once, everywhere.
         browser.chooseFile(first);
         QCOMPARE(clipPath(f.project(), a, QStringLiteral("Ac")), first);

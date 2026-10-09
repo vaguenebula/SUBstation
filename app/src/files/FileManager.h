@@ -193,7 +193,7 @@ private:
     QPointer<HotSwap> hotSwap_;
     FileListModel* model_;
     std::vector<ProjectFile> files_;
-    mutable QHash<QString, bool> exists_;  // by sourceKey
+    mutable QHash<QString, bool> exists_;  // by pathIdentity
     QString filter_;
     QTimer updateTimer_;
     std::unique_ptr<missing::MissingFileSearch> search_;

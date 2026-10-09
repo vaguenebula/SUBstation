@@ -24,9 +24,6 @@ class Project;
 // The audio files the application decodes: .wav, .wave, .flac, .mp3.
 QStringList audioExtensions();
 bool isAudioFile(const QString& path);
-// A file's path as the decoded sources are keyed by: absolute and clean (and on
-// Windows lower case), so two spellings of one file share one source.
-QString sourceKey(const QString& path);
 
 QString recordingsFolder(const Project& project);
 // A new file for a take in `folder`: the track's name (characters Windows
