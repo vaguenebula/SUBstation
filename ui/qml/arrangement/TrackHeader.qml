@@ -32,11 +32,14 @@ TrackHeaderItem {
     readonly property int mixerWidth: 112
     readonly property int ioWidth: 84
     readonly property int mixerX: width - meterArea - mixerWidth
-    // The mixer column's two columns, as Ableton's: the activator over volume;
-    // solo and arm over pan.
-    readonly property int mixerLeftX: mixerX + 8
-    readonly property int mixerRightX: mixerX + 60
-    readonly property int wideBox: 44
+    // The mixer column's two columns, as Ableton's, filling it (4 px in from its
+    // edges, 4 px apart): the activator over volume; solo and arm over pan.
+    readonly property int mixerGap: 4
+    readonly property int mixerLeftX: mixerX + mixerGap
+    readonly property int mixerLeftWidth: 48
+    readonly property int mixerRightX: mixerLeftX + mixerLeftWidth + mixerGap
+    readonly property int mixerRightWidth: mixerX + mixerWidth - mixerGap - mixerRightX
+    readonly property int mixerButton: Math.floor((mixerRightWidth - mixerGap) / 2)  // solo, arm
     readonly property int ioX: ioShown ? mixerX - ioWidth : 0
     readonly property int nameColumnRight: (ioShown ? ioX : mixerX) - 1
     readonly property bool isGroup: kind === "group"
@@ -150,7 +153,7 @@ TrackHeaderItem {
         objectName: "activator"
         x: header.mixerLeftX
         y: header.rowY(0)
-        width: header.wideBox
+        width: header.mixerLeftWidth
         height: header.box
         role: "activator"
         text: header.isReturn ? header.letter : String(header.number)
@@ -170,7 +173,7 @@ TrackHeaderItem {
         objectName: "solo"
         x: header.mixerRightX
         y: header.rowY(0)
-        width: 20
+        width: header.mixerButton
         height: header.box
         role: "solo"
         text: "S"
@@ -181,9 +184,9 @@ TrackHeaderItem {
     ToggleButton {
         id: arm
         objectName: "arm"
-        x: header.mixerRightX + 26
+        x: header.mixerX + header.mixerWidth - header.mixerGap - width
         y: header.rowY(0)
-        width: 18
+        width: header.mixerButton
         height: header.box
         visible: header.records
         role: "arm"
@@ -198,7 +201,7 @@ TrackHeaderItem {
         objectName: "volume"
         x: header.mixerLeftX
         y: header.rowY(1)
-        width: header.wideBox
+        width: header.mixerLeftWidth
         height: header.box
         visible: header.fits(1)
         flat: true
@@ -231,7 +234,7 @@ TrackHeaderItem {
         objectName: "pan"
         x: header.mixerRightX
         y: header.rowY(1)
-        width: header.wideBox
+        width: header.mixerRightWidth
         height: header.box
         visible: header.fits(1)
         flat: true

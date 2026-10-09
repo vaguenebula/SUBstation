@@ -58,9 +58,9 @@ TrackHeaderItem {
     ValueBox {
         id: volume
         objectName: "volume"
-        x: header.mixerX + 8
+        x: header.mixerX + 4
         y: header.rowY(0)
-        width: 44
+        width: 48
         height: header.box
         flat: true
         fill: header.volumeFraction(header.volume)
@@ -89,9 +89,9 @@ TrackHeaderItem {
     ValueBox {
         id: pan
         objectName: "pan"
-        x: header.mixerX + 60
+        x: header.mixerX + 56
         y: header.rowY(1)
-        width: 44
+        width: 52
         height: header.box
         flat: true
         fill: (header.pan + 1) / 2

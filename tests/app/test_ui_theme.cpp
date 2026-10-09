@@ -155,7 +155,7 @@ private Q_SLOTS:
         QCOMPARE(look("record", false, false, false, true).minHeight, 22);
         const L arm = look("arm", false, false, true, true);
         QCOMPARE(arm.background, Theme::kRecordOn);
-        QCOMPARE(arm.radius, 8);
+        QCOMPARE(arm.radius, 2);  // (a box, as solo's)
         QCOMPARE(look("re-enable", false, false, true, true).background, Theme::kAccent);
         QCOMPARE(look("tool", false, false, false, true).paddingH, 2);
         // Flat: never a background; dim, but TEXT under the mouse.

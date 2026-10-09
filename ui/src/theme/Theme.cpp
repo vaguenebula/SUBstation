@@ -113,10 +113,10 @@ Theme::ButtonLook Theme::buttonLook(const QString& role, bool hovered, bool pres
         look.paddingH = look.paddingV = 2;
         look.minWidth = 26;
         look.minHeight = 22;
-    } else if (role == QLatin1String("arm")) {
+    } else if (role == QLatin1String("arm")) {  // (a box as solo's, as Ableton's, its dot the text)
         look.paddingH = look.paddingV = 0;
         look.pointSize = 8.0;
-        look.radius = 8;
+        look.radius = 2;
     } else if (role == QLatin1String("activator") || role == QLatin1String("solo")) {
         look.paddingH = look.paddingV = 0;
         look.pointSize = 8.0;
