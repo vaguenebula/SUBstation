@@ -222,7 +222,7 @@ Item {
 
         onTextChanged: search.filter()
         onAccepted: {
-            const index = search.current >= 0 ? search.current : (text !== "" ? search.step(-1, 1) : -1)
+            const index = search.current >= 0 ? search.current : (text.trim() !== "" ? search.step(-1, 1) : -1)
             if (index >= 0)
                 search.choose(index)
         }

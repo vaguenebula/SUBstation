@@ -342,6 +342,11 @@ private Q_SLOTS:
         QVERIFY(!test::menuEnabled(ui_.menu(), QStringLiteral("Snare Bottom (this track feeds it)")));
         QTest::keyClick(window(), Qt::Key_Return);
         QVERIFY(ui_.menu()->property("visible").toBool());
+        typeText(QStringLiteral("  "));  // (only spaces: nothing typed either)
+        QTest::keyClick(window(), Qt::Key_Return);
+        QVERIFY(ui_.menu()->property("visible").toBool());
+        QTest::keyClick(window(), Qt::Key_Backspace);
+        QTest::keyClick(window(), Qt::Key_Backspace);
         typeText(QStringLiteral("bottom"));
         QCOMPARE(shown().mid(0, 2), (QStringList{"No Sidechain", "Snare Bottom (this track feeds it)"}));
         QCOMPARE(row(), -1);
