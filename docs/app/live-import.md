@@ -26,7 +26,10 @@ Session::importLiveSet(path)                      (session/SessionFiles.cpp)
 A set is gzip-compressed XML (plain XML is read too). `gunzip` reads gzip's header, inflates
 with `puff` into a buffer as long as the trailer says, and checks the trailer's length and CRC-32:
 anything else is "damaged". The trailer's length is taken only as far as deflate can go (1032 bytes
-from one): a cut file's last bytes would otherwise ask for gigabytes. `parseLiveSet` builds the element tree with `QXmlStreamReader`:
+from one): a cut file's last bytes would otherwise ask for gigabytes. `ReadLimits` bounds what a
+set may take: 512 MB of XML (the file's length and gzip's are checked before anything is read or
+inflated) and 5 million elements kept; past them a set is "too large to read", before it takes all
+the memory there is. `parseLiveSet` builds the element tree with `QXmlStreamReader`:
 
 - Element and attribute names are interned (a set has about a million elements of some 1500
   names), looked up by the reader's `QStringView` so no string is made for a name seen before.
@@ -35,7 +38,8 @@ from one): a cut file's last bytes would otherwise ask for gigabytes. `parseLive
   groove pool, presets' and browsers' records...): about a third of a set.
 - Text is kept only where there is some: plug-in states, in hex.
 
-A 55 MB set (a 3 MB file) reads in about 2 s: 0.35 s inflating, the rest parsing.
+A 55 MB set (a 3 MB file, some 750,000 elements kept) reads in about 2 s, 0.35 s of it inflating,
+and takes about 330 MB.
 
 ## Translating
 

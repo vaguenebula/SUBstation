@@ -418,6 +418,31 @@ private Q_SLOTS:
         }
         QVERIFY_THROWS_EXCEPTION(ProjectFileError, live::readLiveSet(dir.path(QStringLiteral("none.als"))));
 
+        // Past its limits (its XML's length, the elements kept), a set is too large to read: gzip's
+        // length is taken before anything is inflated, a file's before it is read.
+        const auto tooLarge = [](const auto& read, const QString& message) {
+            try {
+                read();
+                QFAIL("a set past its limits was read");
+            } catch (const ProjectFileError& error) {
+                QCOMPARE(error.message(), message);
+            }
+        };
+        const qint64 length = xml.size();
+        tooLarge([&] { live::parseLiveSet(gzip(xml), QStringLiteral("big.als"), {.bytes = length - 1}); },
+                 QStringLiteral("big.als is too large to read"));
+        tooLarge([&] { live::parseLiveSet(xml, QStringLiteral("big.als"), {.bytes = length - 1}); },
+                 QStringLiteral("big.als is too large to read"));
+        const QString plain = writeSet(dir, QStringLiteral("plain.als"), xml, false);
+        tooLarge([&] { live::readLiveSet(plain, {.bytes = length - 1}); },
+                 QStringLiteral("plain.als is too large to read"));
+        QVERIFY(live::parseLiveSet(gzip(xml), QStringLiteral("big.als"), {.bytes = length}));
+        const QByteArray many =
+            QByteArrayLiteral("<Ableton><LiveSet><A /><B /><Scenes><C /><D /><E /></Scenes></LiveSet></Ableton>");
+        QVERIFY(live::parseLiveSet(many, QStringLiteral("many.als"), {.elements = 4}));  // (Scenes is skipped)
+        tooLarge([&] { live::parseLiveSet(many, QStringLiteral("many.als"), {.elements = 3}); },
+                 QStringLiteral("many.als is too large to read"));
+
         // Values that aren't numbers, or are past what they're read as, are the fallback.
         const auto values = live::parseLiveSet(
             QByteArrayLiteral("<Ableton><LiveSet><A Value=\"nan\" /><B Value=\"-inf\" /><C Value=\"1e20\" />"

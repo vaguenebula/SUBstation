@@ -79,6 +79,10 @@ uint32_t crc32(const QByteArray& bytes) {
     throw ProjectFileError(QStringLiteral("%1 is damaged: %2").arg(name, why));
 }
 
+[[noreturn]] void tooLarge(const QString& name) {
+    throw ProjectFileError(QStringLiteral("%1 is too large to read").arg(name));
+}
+
 }  // namespace
 
 // --- Element ----------------------------------------------------------------------------------
@@ -184,7 +188,7 @@ bool isGzip(const QByteArray& bytes) {
            static_cast<unsigned char>(bytes[1]) == 0x8B;
 }
 
-QByteArray gunzip(const QByteArray& gzip, const QString& name) {
+QByteArray gunzip(const QByteArray& gzip, const QString& name, const ReadLimits& limits) {
     // The header (RFC 1952): magic, method (8: deflate), flags, time, extra flags, system.
     if (!isGzip(gzip) || gzip.size() < 18 || static_cast<unsigned char>(gzip[2]) != 8) {
         damaged(name, QStringLiteral("it isn't compressed as a Live Set is"));
@@ -210,11 +214,12 @@ QByteArray gunzip(const QByteArray& gzip, const QString& name) {
     if (static_cast<quint64>(size) > static_cast<quint64>(gzip.size() - at) * 1032 + 1024) {
         damaged(name, QStringLiteral("its compressed data is broken"));
     }
+    if (static_cast<qint64>(size) > limits.bytes) tooLarge(name);
     QByteArray out;
     try {
         out = QByteArray(static_cast<qsizetype>(size), Qt::Uninitialized);
     } catch (const std::bad_alloc&) {
-        throw ProjectFileError(QStringLiteral("%1 is too large to read (%2 MB)").arg(name).arg(size >> 20));
+        tooLarge(name);
     }
     unsigned long outLength = size;
     unsigned long inLength = static_cast<unsigned long>(gzip.size() - at);
@@ -228,8 +233,9 @@ QByteArray gunzip(const QByteArray& gzip, const QString& name) {
     return out;
 }
 
-std::unique_ptr<Element> parseLiveSet(const QByteArray& bytes, const QString& name) {
-    const QByteArray xml = isGzip(bytes) ? gunzip(bytes, name) : bytes;
+std::unique_ptr<Element> parseLiveSet(const QByteArray& bytes, const QString& name, const ReadLimits& limits) {
+    const QByteArray xml = isGzip(bytes) ? gunzip(bytes, name, limits) : bytes;
+    if (xml.size() > limits.bytes) tooLarge(name);
     QXmlStreamReader reader(xml);
     // Element and attribute names, shared: looked up by the reader's view of
     // them, each kept once (its key a view of the kept string).
@@ -246,6 +252,7 @@ std::unique_ptr<Element> parseLiveSet(const QByteArray& bytes, const QString& na
     std::unique_ptr<Element> root;
     std::vector<Element*> open;
     int skipping = 0;  // depth inside an element left out
+    qsizetype kept = 0;
     while (!reader.atEnd()) {
         switch (reader.readNext()) {
         case QXmlStreamReader::StartElement: {
@@ -258,6 +265,7 @@ std::unique_ptr<Element> parseLiveSet(const QByteArray& bytes, const QString& na
                 skipping = 1;
                 break;
             }
+            if (++kept > limits.elements) tooLarge(name);
             auto element = std::make_unique<Element>();
             element->tag = tag;
             const QXmlStreamAttributes attributes = reader.attributes();
@@ -299,13 +307,14 @@ std::unique_ptr<Element> parseLiveSet(const QByteArray& bytes, const QString& na
     return root;
 }
 
-std::unique_ptr<Element> readLiveSet(const QString& path) {
+std::unique_ptr<Element> readLiveSet(const QString& path, const ReadLimits& limits) {
     QFile file(path);
     const QString name = QFileInfo(path).fileName();
     if (!file.open(QIODevice::ReadOnly)) {
         throw ProjectFileError(QStringLiteral("Could not read %1: %2").arg(name, file.errorString()));
     }
-    return parseLiveSet(file.readAll(), name);
+    if (file.size() > limits.bytes) tooLarge(name);  // (compressed or not: past what it may be inflated)
+    return parseLiveSet(file.readAll(), name, limits);
 }
 
 }  // namespace sub::app::live

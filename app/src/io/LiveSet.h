@@ -9,7 +9,7 @@
 // some (a plug-in's state, in hex).
 //
 // Reading throws ProjectFileError (model/Errors.h) with a message for the user:
-// unreadable, not gzip or XML, damaged, or not a Live Set.
+// unreadable, not gzip or XML, damaged, too large, or not a Live Set.
 
 #include <QByteArray>
 #include <QString>
@@ -56,13 +56,22 @@ private:
     void collect(QStringView name, std::vector<const Element*>& found) const;
 };
 
+// How much a set may take: past these it is "too large to read", before it
+// takes all the memory there is. (A big set, 55 MB of XML, has some 750,000
+// elements kept and takes about 330 MB to read.)
+struct ReadLimits {
+    qint64 bytes = qint64{512} << 20;  // its XML (inflated)
+    qsizetype elements = 5'000'000;    // elements kept (not those skipped)
+};
+
 // The root element (<Ableton ...>) of a Live Set file; `path` names it in errors.
-std::unique_ptr<Element> readLiveSet(const QString& path);
+std::unique_ptr<Element> readLiveSet(const QString& path, const ReadLimits& limits = {});
 // The same from the file's bytes (gzip or XML).
-std::unique_ptr<Element> parseLiveSet(const QByteArray& bytes, const QString& name);
+std::unique_ptr<Element> parseLiveSet(const QByteArray& bytes, const QString& name, const ReadLimits& limits = {});
 // A gzip file's contents (its first member). Throws ProjectFileError("... is
-// damaged") if it isn't gzip or doesn't check out (its length, its CRC).
-QByteArray gunzip(const QByteArray& gzip, const QString& name);
+// damaged") if it isn't gzip or doesn't check out (its length, its CRC), and
+// ("... is too large to read") if it says it is longer than `limits.bytes`.
+QByteArray gunzip(const QByteArray& gzip, const QString& name, const ReadLimits& limits = {});
 // Whether bytes start as a gzip file does.
 bool isGzip(const QByteArray& bytes);
 
