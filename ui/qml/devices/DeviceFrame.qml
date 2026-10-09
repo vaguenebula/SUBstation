@@ -8,7 +8,8 @@ import SUBstation
 // the selection's teal while selected: the fold triangle, the round on/off
 // switch, the name with its tooltip, a plug-in's editor button,
 // the sidechain button of a device with a sidechain input, the page arrows
-// while there is more than one page, the save button) and its body: a page of
+// while there is more than one page, or the pages' names as tabs for an editor
+// that names them, the save button) and its body: a page of
 // knobs (a built-in device without an editor of its own), its editor
 // (DeviceEditors), a plug-in's parameters (or why it shows none), or a rack's
 // macros and (while shown) its chain list. Folded, it is a narrow strip: the
@@ -31,6 +32,9 @@ Item {
     readonly property Item body: bodyLoader.item
     readonly property int pages: body && body.pages !== undefined ? body.pages : 1
     readonly property int page: body && body.page !== undefined ? body.page : 0
+    // An editor's pages by name (the Sampler's "Sample" and "Controls"): tabs instead of the arrows.
+    readonly property var pageNames: body && body.pageNames !== undefined ? body.pageNames : []
+    readonly property bool pageArrows: pages > 1 && pageNames.length === 0
     // A rack's chain shown beside it (not while folded, nor while it hides its devices).
     readonly property bool showsChain: deviceInfo.isRack && !deviceInfo.folded && deviceInfo.rackDevicesShown
                                        && rackChains.count > 0 && rackChains.shownChain !== ""
@@ -263,10 +267,28 @@ Item {
                 Layout.preferredHeight: 16
                 onClicked: frame.panel.showSidechainMenu(frame, sidechainButton, 0, sidechainButton.height)
             }
+            Repeater {
+                model: frame.pageNames
+                RoleButton {
+                    required property string modelData
+                    required property int index
+                    objectName: "pageTab_" + modelData
+                    role: "device-header"
+                    text: modelData
+                    font.pointSize: 8
+                    checkable: false
+                    checked: frame.page === index
+                    leftPadding: 5
+                    rightPadding: 5
+                    tooltip: qsTr("Show the %1 page").arg(modelData)
+                    Layout.preferredHeight: 16
+                    onClicked: frame.setPage(index)
+                }
+            }
             DeviceHeaderButton {
                 id: previousButton
                 objectName: "previousPage"
-                visible: frame.pages > 1
+                visible: frame.pageArrows
                 enabled: frame.page > 0
                 text: "‹"
                 tooltip: qsTr("Previous parameters")
@@ -277,7 +299,7 @@ Item {
             Text {
                 id: pageLabel
                 objectName: "pageLabel"
-                visible: frame.pages > 1
+                visible: frame.pageArrows
                 text: (frame.page + 1) + "/" + frame.pages
                 color: Theme.textDim
                 font: Theme.uiFont(8)
@@ -285,7 +307,7 @@ Item {
             DeviceHeaderButton {
                 id: nextButton
                 objectName: "nextPage"
-                visible: frame.pages > 1
+                visible: frame.pageArrows
                 enabled: frame.page < frame.pages - 1
                 text: "›"
                 tooltip: qsTr("Next parameters")

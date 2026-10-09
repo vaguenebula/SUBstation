@@ -318,6 +318,11 @@ private Q_SLOTS:
         QCOMPARE(formatValue(2.5, QStringLiteral("ms")), QStringLiteral("2.5 ms"));
         QCOMPARE(formatValue(120.0, QStringLiteral("ms")), QStringLiteral("120 ms"));
         QCOMPARE(formatValue(1.5, QStringLiteral("x")), QStringLiteral("1.50 x"));
+        QCOMPARE(formatValue(32.0, QStringLiteral("#")), QStringLiteral("32"));  // a count (the Sampler's voices)
+        QCOMPARE(formatValue(1.0, QStringLiteral("beats")), QStringLiteral("1 Beat"));
+        QCOMPARE(formatValue(6.0, QStringLiteral("beats")), QStringLiteral("6 Beats"));
+        QCOMPARE(formatValue(4.0, QStringLiteral("beats")), QStringLiteral("1 Bar"));
+        QCOMPARE(formatValue(16.0, QStringLiteral("beats")), QStringLiteral("4 Bars"));
     }
 
     // --- Saving (test_save_and_load, with the changes made through commands) ---

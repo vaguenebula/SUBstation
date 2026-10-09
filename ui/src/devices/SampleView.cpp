@@ -6,6 +6,7 @@
 #include "editor/ProjectEditor.h"
 #include "model/Device.h"
 #include "model/DeviceState.h"
+#include "model/Project.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 
@@ -19,6 +20,30 @@
 #include <cmath>
 
 namespace sub::ui {
+
+namespace {
+
+// The sampler's modes (its "mode" list).
+constexpr int kClassic = 0;
+constexpr int kOneShot = 1;
+constexpr int kSlice = 2;
+
+// A marker's flag: a small triangle at the top of its line, pointing into what plays.
+QPolygonF flag(double x, double top, bool pointsRight) {
+    const double w = pointsRight ? 6.0 : -6.0;
+    return QPolygonF({QPointF(x, top), QPointF(x + w, top), QPointF(x, top + 7.0)});
+}
+
+// "m:ss:mmm", as Simpler's ruler counts.
+QString timeText(double seconds) {
+    const auto ms = static_cast<qint64>(std::llround(seconds * 1000.0));
+    return QStringLiteral("%1:%2:%3")
+        .arg(ms / 60000)
+        .arg((ms / 1000) % 60, 2, 10, QLatin1Char('0'))
+        .arg(ms % 1000, 3, 10, QLatin1Char('0'));
+}
+
+}  // namespace
 
 std::pair<std::vector<float>, std::vector<float>> waveformColumns(const sub::app::Waveform& waveform, int width) {
     width = std::max(1, width);
@@ -79,6 +104,26 @@ QUrl SampleView::sampleFolder() const {
     return path_.isEmpty() ? QUrl() : QUrl::fromLocalFile(QFileInfo(path_).absolutePath());
 }
 
+QList<qreal> SampleView::slices() const {
+    QList<qreal> result;
+    const qint64 frames = waveform_.isNull() ? 0 : waveform_.frames();
+    if (mode_ != kSlice || frames <= 0)
+        return result;
+    for (const qint64 start : slices_)
+        result.append(double(start) / double(frames));
+    return result;
+}
+
+int SampleView::playingSlice() const {
+    if (mode_ != kSlice || playhead_ < 0 || waveform_.isNull())
+        return -1;
+    const double frame = playhead_ * double(waveform_.frames());
+    if (frame < double(startFrame_) || frame >= double(endFrame_))
+        return -1;
+    const auto after = std::upper_bound(slices_.begin(), slices_.end(), qint64(frame));
+    return after == slices_.begin() ? -1 : int(after - slices_.begin()) - 1;
+}
+
 void SampleView::setPlayhead(double where) {
     if (where == playhead_)
         return;
@@ -87,20 +132,42 @@ void SampleView::setPlayhead(double where) {
     Q_EMIT playheadChanged();
 }
 
-QRectF SampleView::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 14, -1, -1); }
+QRectF SampleView::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 1, -1, -1 - kRulerHeight); }
 
 double SampleView::xOf(double percent) const {
     const QRectF r = plot();
     return r.left() + percent / 100.0 * r.width();
 }
 
+double SampleView::xOfFrame(double frame) const {
+    const qint64 frames = waveform_.isNull() ? 0 : waveform_.frames();
+    const QRectF r = plot();
+    return frames > 0 ? r.left() + frame / double(frames) * r.width() : r.left();
+}
+
+qint64 SampleView::frameOf(double percent) const {
+    const qint64 frames = waveform_.frames();
+    const auto frame = static_cast<qint64>(percent / 100.0 * double(frames));
+    return snap_ ? sub::app::sampleSlices::nearestZeroCrossing(waveform_, reverse_, frame) : frame;
+}
+
 QString SampleView::markerAt(double x) const {
     if (waveform_.isNull())
         return {};
-    const double start = std::abs(xOf(start_) - x), end = std::abs(xOf(end_) - x);
-    const bool isStart = start <= end;  // (the first on a tie)
-    return (isStart ? start : end) <= kMarkerGrab ? (isStart ? QStringLiteral("start") : QStringLiteral("end"))
-                                                  : QString();
+    QString nearest;
+    double distance = kMarkerGrab;
+    const auto consider = [&](const QString& marker, double at) {
+        const double d = std::abs(at - x);
+        if (d <= distance && (nearest.isEmpty() || d < distance)) {  // (the first on a tie)
+            nearest = marker;
+            distance = d;
+        }
+    };
+    consider(QStringLiteral("start"), xOfFrame(double(startFrame_)));
+    consider(QStringLiteral("end"), xOfFrame(double(endFrame_)));
+    if (mode_ == kClassic && looping_)
+        consider(QStringLiteral("loop"), xOfFrame(double(loopFrame_)));
+    return nearest;
 }
 
 // --- The sample ------------------------------------------------------------------------
@@ -127,10 +194,13 @@ void SampleView::readSample() {
         }
     }
     const bool changed = path != path_ || !(waveform == waveform_) || error != error_;
+    if (!(waveform == waveform_))
+        transientsFound_ = {};
     path_ = path;
     waveform_ = waveform;
     error_ = error;
     updateColumns();
+    updateLayout();
     update();
     if (changed)
         Q_EMIT sampleChanged();
@@ -154,9 +224,25 @@ void SampleView::loadSample(const QString& path) {
 }
 
 void SampleView::sync() {
+    mode_ = std::clamp(int(std::lround(value(QStringLiteral("mode")))), kClassic, kSlice);
     start_ = value(QStringLiteral("start"));
     end_ = value(QStringLiteral("end"));
     looping_ = value(QStringLiteral("loop")) >= 0.5;
+    loopStart_ = value(QStringLiteral("loop_start"));
+    loopFade_ = value(QStringLiteral("loop_fade"));
+    reverse_ = value(QStringLiteral("reverse")) >= 0.5;
+    snap_ = value(QStringLiteral("snap")) >= 0.5;
+    fadeIn_ = value(QStringLiteral("fade_in"));
+    fadeOut_ = value(QStringLiteral("fade_out"));
+    sliceSettings_.by = static_cast<sub::app::sampleSlices::SliceBy>(
+        std::clamp(int(std::lround(value(QStringLiteral("slice_by")))), 0, 2));
+    sliceSettings_.sensitivity = value(QStringLiteral("sensitivity")) / 100.0;
+    sliceSettings_.divisionBeats =
+        sub::app::sampleSlices::divisionBeats(int(std::lround(value(QStringLiteral("slice_beat")))));
+    sliceSettings_.regions = int(std::lround(value(QStringLiteral("regions"))));
+    const double beats = std::max(1.0, std::round(value(QStringLiteral("warp_beats"))));
+    sliceSettings_.regionBeats = beats;  // (of the whole sample: updateLayout() takes Start..End's share)
+    warp_ = value(QStringLiteral("warp")) >= 0.5;
     if (session() && !connectedSources_) {
         connectedSources_ = true;
         auto changed = [this](const QString& path) {
@@ -178,10 +264,53 @@ void SampleView::refreshDisplays() {
         setPlayhead(positions.back());
 }
 
+// Where Start, End, the loop and the slices are, as the sampler places them.
+void SampleView::updateLayout() {
+    const QList<qreal> before = slices();
+    slices_.clear();
+    startFrame_ = endFrame_ = loopFrame_ = fadeFrames_ = 0;
+    const qint64 frames = waveform_.isNull() ? 0 : waveform_.frames();
+    // Warped, the whole sample lasts its beats at the song's tempo.
+    rate_ = 1.0;
+    if (warp_ && frames > 0 && session()) {
+        const double tempo = std::max(1.0, session()->project()->tempo());
+        rate_ = waveform_.duration() / (sliceSettings_.regionBeats * 60.0 / tempo);
+    }
+    if (frames > 0) {
+        startFrame_ = std::clamp<qint64>(frameOf(start_), 0, frames - 1);
+        endFrame_ = std::clamp<qint64>(frameOf(end_), 0, frames);
+        if (endFrame_ > startFrame_) {
+            const qint64 loopAt = static_cast<qint64>(loopStart_ / 100.0 * double(frames));
+            loopFrame_ = std::clamp<qint64>(frameOf(100.0 * double(std::max(loopAt, startFrame_)) / double(frames)),
+                                            startFrame_, endFrame_ - 1);
+            fadeFrames_ = std::min<qint64>(std::llround(loopFade_ / 100.0 * double(endFrame_ - loopFrame_)), loopFrame_);
+        }
+        if (mode_ == kSlice && endFrame_ > startFrame_) {
+            const int way = reverse_ ? 1 : 0;
+            if (sliceSettings_.by == sub::app::sampleSlices::SliceBy::Transient && !transientsFound_[way]) {
+                transients_[way] = sub::app::sampleSlices::transients(waveform_, reverse_);
+                transientsFound_[way] = true;
+            }
+            sub::app::sampleSlices::Settings settings = sliceSettings_;
+            settings.regionBeats = sliceSettings_.regionBeats * double(endFrame_ - startFrame_) / double(frames);
+            slices_ = sub::app::sampleSlices::sliceStarts(settings, transients_[way], startFrame_, endFrame_,
+                                                          waveform_.sampleRate());
+            if (snap_) {
+                for (std::size_t i = 1; i < slices_.size(); ++i)
+                    slices_[i] = sub::app::sampleSlices::nearestZeroCrossing(waveform_, reverse_, slices_[i]);
+            }
+        }
+    }
+    Q_EMIT layoutChanged();
+    if (slices() != before)
+        Q_EMIT playheadChanged();  // (the slice playing may be another)
+}
+
 void SampleView::updateColumns() {
     const int columns = std::max(1, int(plot().width()));
     const QString key = path_ + QLatin1Char('|') + QString::number(waveform_.frames()) + QLatin1Char('|') +
-                        QString::number(columns) + QLatin1Char('|') + QString::number(plot().height());
+                        QString::number(columns) + QLatin1Char('|') + QString::number(plot().height()) +
+                        QLatin1Char('|') + QString::number(reverse_);
     if (waveform_.isNull()) {
         top_.clear();
         bottom_.clear();
@@ -191,7 +320,11 @@ void SampleView::updateColumns() {
     if (key == columnsKey_)
         return;
     columnsKey_ = key;
-    const auto [lo, hi] = waveformColumns(waveform_, columns);
+    auto [lo, hi] = waveformColumns(waveform_, columns);
+    if (reverse_) {  // drawn as it plays
+        std::reverse(lo.begin(), lo.end());
+        std::reverse(hi.begin(), hi.end());
+    }
     const QRectF r = plot();
     const double middle = r.center().y(), half = r.height() / 2;
     top_.resize(lo.size());
@@ -227,7 +360,7 @@ void SampleView::mousePressEvent(QMouseEvent* event) {
     }
     gesture_ = newGestureKey();
     setDrag(marker);
-    touch(marker);
+    touch(marker == QLatin1String("loop") ? QStringLiteral("loop_start") : marker);
 }
 
 void SampleView::mouseMoveEvent(QMouseEvent* event) {
@@ -235,11 +368,14 @@ void SampleView::mouseMoveEvent(QMouseEvent* event) {
         return;
     const QRectF r = plot();
     double percent = std::clamp((event->position().x() - r.left()) / r.width() * 100.0, 0.0, 100.0);
-    if (drag_ == QLatin1String("start"))
-        percent = std::min(percent, value(QStringLiteral("end")));
-    else
-        percent = std::max(percent, value(QStringLiteral("start")));
-    setParam(drag_, percent, gesture_);
+    const double start = value(QStringLiteral("start")), end = value(QStringLiteral("end"));
+    if (drag_ == QLatin1String("start")) {
+        setParam(drag_, std::min(percent, end), gesture_);
+    } else if (drag_ == QLatin1String("end")) {
+        setParam(drag_, std::max(percent, start), gesture_);
+    } else {
+        setParam(QStringLiteral("loop_start"), std::clamp(percent, start, end), gesture_);
+    }
 }
 
 void SampleView::mouseReleaseEvent(QMouseEvent*) { setDrag(QString()); }
@@ -296,6 +432,32 @@ void SampleView::dropEvent(QDropEvent* event) {
 
 // --- Drawing -------------------------------------------------------------------------------
 
+void SampleView::paintRuler(SgPainter& p, const QRectF& area) const {
+    const double seconds = waveform_.duration();
+    if (!(seconds > 0.0) || area.width() < 2)
+        return;
+    const QFont font = uiFont(7);
+    // The finest step whose labels don't run into each other.
+    const double perSecond = area.width() / seconds;
+    const double labelWidth = SgPainter::textWidth(QStringLiteral("0:00:000"), font) + 12;
+    double step = 600.0;
+    for (const double candidate : {0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0,
+                                   60.0, 120.0, 300.0}) {
+        if (candidate * perSecond >= labelWidth) {
+            step = candidate;
+            break;
+        }
+    }
+    const QColor tick(Theme::kTextDim.red(), Theme::kTextDim.green(), Theme::kTextDim.blue(), 140);
+    for (int i = 1; i * step < seconds; ++i) {
+        const double x = area.left() + i * step * perSecond;
+        p.drawLine(QPointF(x, area.top()), QPointF(x, area.top() + 3), tick, 1);
+        if (x + labelWidth - 10 < area.right())
+            p.drawText(QRectF(x + 2, area.top(), labelWidth, area.height()), Qt::AlignVCenter | Qt::AlignLeft,
+                       timeText(i * step), Theme::kTextDim, font);
+    }
+}
+
 void SampleView::paint(SgPainter& p) {
     const QRectF all(0, 0, width(), height());
     p.fillRect(all, Theme::kMeterBg);
@@ -306,32 +468,84 @@ void SampleView::paint(SgPainter& p) {
                    Theme::kTextDim, font);
         return;
     }
-    const QString name = QFileInfo(path_).fileName();
-    const QRectF title(4, 0, width() - 8, r.top());
-    p.drawText(title, Qt::AlignVCenter | Qt::AlignLeft,
-               SgPainter::elidedText(error_.isEmpty() ? name : QStringLiteral("Missing: ") + name, font,
-                                     title.width(), Qt::ElideMiddle),
-               error_.isEmpty() ? Theme::kTextDim : Theme::kRecordOn, font);
     if (waveform_.isNull()) {
+        paintName(p, r, font);
         if (error_.isEmpty())
             p.drawText(r, Qt::AlignCenter, QStringLiteral("Loading…"), Theme::kTextDim, font);
         return;
     }
+    const double middle = r.center().y();
+    p.drawLine(QPointF(r.left(), middle), QPointF(r.right(), middle), Theme::kGridBar, 1);
     if (!top_.empty())
         p.fillColumns(r.left(), 1.0, top_.data(), bottom_.data(), int(top_.size()), Theme::kAccent, 1.0);
+    paintRuler(p, QRectF(r.left(), r.bottom() + 1, r.width(), kRulerHeight));
 
-    const double start = xOf(start_), end = xOf(end_);
+    const double start = xOfFrame(double(startFrame_)), end = xOfFrame(double(endFrame_));
+    const QColor dimLine(Theme::kText.red(), Theme::kText.green(), Theme::kText.blue(), 110);
+    p.save();
+    p.setClipRect(r);
+    p.setAntialiasing(true);
+    if (mode_ == kSlice) {
+        // The slice playing lit, a line where each begins, numbered while there is room.
+        const int playing = playingSlice();
+        const QFont small = uiFont(7);
+        for (std::size_t i = 0; i < slices_.size(); ++i) {
+            const double from = xOfFrame(double(slices_[i]));
+            const double to = i + 1 < slices_.size() ? xOfFrame(double(slices_[i + 1])) : end;
+            if (int(i) == playing)
+                p.fillRect(QRectF(from, r.top(), to - from, r.height()), QColor(255, 255, 255, 34));
+            if (i > 0)
+                p.drawLine(QPointF(from, r.top()), QPointF(from, r.bottom()), dimLine, 1);
+            if (to - from >= 14)
+                p.drawText(QRectF(from + 2, r.bottom() - 11, to - from - 2, 10), Qt::AlignLeft | Qt::AlignBottom,
+                           QString::number(i + 1), Theme::kText, small);
+        }
+    } else if (mode_ == kClassic && looping_ && endFrame_ > loopFrame_) {
+        // The loop: bracketed over the top, its crossfade shaded (its end, and what it fades from).
+        const double loop = xOfFrame(double(loopFrame_));
+        if (fadeFrames_ > 0) {
+            const double fade = xOfFrame(double(endFrame_ - fadeFrames_)), from = xOfFrame(double(loopFrame_ - fadeFrames_));
+            const QColor shade(255, 255, 255, 40);
+            p.fillPolygon(QPolygonF({QPointF(fade, r.bottom()), QPointF(end, r.top()), QPointF(end, r.bottom())}), shade);
+            p.fillPolygon(QPolygonF({QPointF(from, r.top()), QPointF(loop, r.bottom()), QPointF(from, r.bottom())}),
+                          shade);
+        }
+        p.fillRect(QRectF(loop, r.top(), end - loop, 3), Theme::kLoopOn);
+        p.drawLine(QPointF(loop, r.top()), QPointF(loop, r.bottom()), Theme::kLoopOn, 1.5);
+    } else if (mode_ == kOneShot) {
+        // Its fades: in from Start, out before End.
+        const double perMs = waveform_.sampleRate() / 1000.0 * rate_;
+        const double in = std::min(end, xOfFrame(double(startFrame_) + fadeIn_ * perMs));
+        const double out = std::max(in, xOfFrame(double(endFrame_) - fadeOut_ * perMs));
+        const QPolygonF shape({QPointF(start, r.bottom()), QPointF(in, r.top() + 1), QPointF(out, r.top() + 1),
+                               QPointF(end, r.bottom())});
+        p.drawPolyline(shape, dimLine, 1);
+    }
+    // Start and End: lines flagged at the top, pointing into what plays.
+    p.drawLine(QPointF(start, r.top()), QPointF(start, r.bottom()), Theme::kAccent, 1.5);
+    p.drawLine(QPointF(end, r.top()), QPointF(end, r.bottom()), Theme::kAccent, 1.5);
+    p.fillPolygon(flag(start, r.top(), true), Theme::kAccent);
+    p.fillPolygon(flag(end, r.top(), false), Theme::kAccent);
+    p.setAntialiasing(false);
+    p.restore();
+    // What doesn't play, dimmed.
     p.fillRect(QRectF(r.left(), r.top(), start - r.left(), r.height()), Theme::kOutsideClip);
     p.fillRect(QRectF(end, r.top(), r.right() - end, r.height()), Theme::kOutsideClip);
-    const QColor marker = looping_ ? Theme::kText : Theme::kAccent;
-    for (double x : {start, end})
-        p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()), marker, 1.5);
-    if (looping_)  // a bracket over what loops
-        p.drawLine(QPointF(start, r.top() + 1), QPointF(end, r.top() + 1), marker, 1.5);
     if (playhead_ >= 0) {
         const double x = r.left() + playhead_ * r.width();
         p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()), Theme::kPlayhead, 1);
     }
+    paintName(p, r, font);
+}
+
+// The sample's name over the waveform's top left corner (in red, missing).
+void SampleView::paintName(SgPainter& p, const QRectF& r, const QFont& font) const {
+    const QString name = QFileInfo(path_).fileName();
+    const QString text = SgPainter::elidedText(error_.isEmpty() ? name : QStringLiteral("Missing: ") + name, font,
+                                               r.width() * 0.6, Qt::ElideMiddle);
+    const QRectF box(r.left() + 9, r.top() + 1, SgPainter::textWidth(text, font) + 6, 13);
+    p.fillRect(box, QColor(Theme::kMeterBg.red(), Theme::kMeterBg.green(), Theme::kMeterBg.blue(), 190));
+    p.drawText(box, Qt::AlignCenter, text, error_.isEmpty() ? Theme::kTextDim : Theme::kRecordOn, font);
 }
 
 }  // namespace sub::ui

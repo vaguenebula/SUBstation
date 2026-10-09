@@ -23,7 +23,8 @@ struct ParamInfo;
 
 namespace sub::app {
 
-// A built-in device's value, in its units.
+// A built-in device's value, in its units ("dB", "%", "Hz", "ms", "st", "ct", "note",
+// ":1", "#": a count, "beats": a length, "1 Beat", "3 Beats", "2 Bars").
 QString formatValue(double value, const QString& unit);
 
 struct ParamSpec {

@@ -193,7 +193,13 @@ private Q_SLOTS:
             QStringLiteral("snowflake"), QStringLiteral("save"),       QStringLiteral("link"),
             QStringLiteral("infinity"),  QStringLiteral("expand"),     QStringLiteral("sliders"),
             QStringLiteral("fold"),      QStringLiteral("search"),     QStringLiteral("app_icon")};
-        const QStringList added = {QStringLiteral("chain_list"), QStringLiteral("rack_devices")};
+        const QStringList added = {
+            QStringLiteral("chain_list"),      QStringLiteral("rack_devices"),    QStringLiteral("sampler_classic"),
+            QStringLiteral("sampler_oneshot"), QStringLiteral("sampler_slice"),   QStringLiteral("filter_lowpass"),
+            QStringLiteral("filter_highpass"), QStringLiteral("filter_bandpass"), QStringLiteral("filter_notch"),
+            QStringLiteral("wave_sine"),       QStringLiteral("wave_triangle"),   QStringLiteral("wave_saw_up"),
+            QStringLiteral("wave_saw_down"),   QStringLiteral("wave_square"),     QStringLiteral("wave_random"),
+            QStringLiteral("note")};
         QCOMPARE(names.size(), fromPython.size() + added.size());
         for (const QString& name : fromPython + added) {
             QVERIFY2(names.contains(name), qPrintable(name));

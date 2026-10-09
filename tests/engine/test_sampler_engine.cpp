@@ -339,12 +339,12 @@ double dB(double ratio) { return 20.0 * std::log10(std::max(ratio, 1e-12)); }
 }  // namespace
 
 TEST_CASE("slicing: transients where hits start, stronger ones first to count") {
-    const std::vector<double> at{0.1, 0.35, 0.6, 0.85};
-    const Samples sample = hits(at, {0.9, 0.3, 0.9, 0.1}, {200, 300, 400, 500}, 1.0);
+    const std::vector<double> times{0.1, 0.35, 0.6, 0.85};
+    const Samples sample = hits(times, {0.9, 0.3, 0.9, 0.1}, {200, 300, 400, 500}, 1.0);
     const float* channels[] = {sample.data()};
     const auto frames = static_cast<int64_t>(sample.size());
     const std::vector<sub::slicing::Onset> onsets = sub::slicing::detectOnsets(channels, 1, frames, kSampleRate, false);
-    for (const double seconds : at) {
+    for (const double seconds : times) {
         const auto hit = static_cast<int64_t>(seconds * kSampleRate);
         const bool found = std::any_of(onsets.begin(), onsets.end(), [&](const sub::slicing::Onset& onset) {
             return onset.frame <= hit + 48 && onset.frame >= hit - 96;  // at the hit (just before at most 2 ms)

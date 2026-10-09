@@ -78,32 +78,98 @@ filter and volume. Velocity sets the level. New MIDI tracks come with it.
 
 ### Sampler
 
-An instrument that plays one audio file across the keyboard (32 voices), pitched from
-its root key, with transpose and detune, the part of the sample that plays (start and
-end, looping between them while a note holds), an ADSR envelope, velocity sensitivity
-and volume.
+An instrument that plays one audio file, as Ableton's Simpler does, in one of three
+modes (the tabs at its left):
 
-- Drop an audio file on its waveform (from the browser or the desktop) or double-click
-  the waveform to load one; the right-click menu has *Load Sample…* and *Clear Sample*.
-- Drag the start and end markers on the waveform. The part that plays is lit, the rest
-  dimmed, the loop marked when it loops, and the newest note's position shows as it
-  plays.
-- Loading a sample can be undone, and the sample is saved with the project.
-- Files load in the background, and the engine swaps them in without stopping the
-  audio.
+- **Classic**: played across the keyboard, pitched from its root key (up to 32 notes at
+  once, *Voices*), with an ADSR envelope; it plays from Start to End, or with **Loop**
+  on loops from Loop Start to End while a note holds and as it releases. The loop's
+  **Fade** crossfades its end into what leads to its start, so a loop that doesn't
+  meet itself cleanly doesn't click. With one voice and a **Glide** time, notes played
+  legato glide from one to the next (letting go of the top note glides back to the one
+  still held).
+- **1-Shot**: one note at a time (a new one cuts the last), pitched; **Trigger** plays
+  the whole of Start to End however short the note, **Gate** fades out when the note
+  ends. **Fade In** and **Fade Out** shape each note (it also fades out before End).
+- **Slice**: the sample cut into slices, a slice per key from C1 up (C1 the first,
+  C#1 the next...), each at the sample's pitch: at its **transients** (more
+  **Sensitivity** finds quieter ones), at **beats** (every 1/16 to 4 bars of the length
+  Warp gives it), or into equal **regions**. **Mono**: a slice cuts the one before;
+  **Poly**: they overlap; **Thru**: a slice plays on to End. Trigger, Gate and the fades
+  as 1-Shot's.
+
+Its display shows the sample, the part that plays lit (Start and End flagged at the
+top), and by mode the loop (bracketed, its crossfade shaded), the fades, or the slices
+(numbered, the one playing lit); the newest note's position as it plays; the time along
+the bottom.
+
+- Drop an audio file on the display (from the browser or the desktop) or double-click it
+  to load one; the right-click menu has *Load Sample…*, *Clear Sample* and *Reverse*.
+- Drag Start, End and (Classic, looping) Loop Start on the display.
+- Under the display: **Gain**; the mode's own settings; **Snap** (Start, End, Loop
+  Start and slices move to the nearest zero crossing, so notes don't click as they
+  start); **Warp** *as* a length: the whole sample lasts that many beats at the song's
+  tempo and follows it. Its warp modes are the clips': Transients, Standard, Smooth and
+  Formants stretch it (the keys transpose it, not its length), Re-Pitch speeds it up or
+  slows it down like a record (the pitch goes with it). **:2** and **\*2** halve and
+  double the length.
+- Under that: the **Filter** (low-pass, high-pass, band-pass or notch, 12 or 24 dB an
+  octave, frequency, resonance), the **LFO** (sine, triangle, saw up and down, square or
+  random; its rate in Hz or synced to the song, from 1/32 to 8 bars), the envelope
+  (Classic's Attack, Decay, Sustain, Release; the others' Fade In and Fade Out),
+  **Transp**, **Vol < Vel** (how much velocity sets the level) and **Volume**.
+- The **Controls** page (its tab in the title bar) has the rest: the root key, detune,
+  voices and glide; Start, End, Loop Start and Loop Fade as knobs, **Reverse** (the
+  sample plays backwards, and is drawn so: the markers and slices are places in it as it
+  plays); where the LFO goes (**Volume**, **Pitch**, **Filter**, **Pan**) and
+  **Retrig** (each note starts the LFO from the start of its cycle; synced without it,
+  the LFO follows the song's beats); **Pan** and Gain.
+- Loading a sample can be undone, and the sample is saved with the project. Files load
+  in the background, and the engine swaps them in without stopping the audio.
+- Warped notes that stretch (not Re-Pitch) cost more: each one runs a stretcher (up to
+  8 at once), and starting a note computes the stretcher's first block ahead.
 
 | Parameter | Range |
 |---|---|
+| Mode | Classic, 1-Shot, Slice |
 | Root Key | MIDI note 0 to 127 (C3 = 60 by default) |
 | Transpose | −48 to +48 semitones |
 | Detune | −100 to +100 cents |
 | Start, End | 0 to 100 % of the sample |
-| Loop | Off, On |
+| Gain | −24 to +24 dB |
+| Reverse, Snap | Off, On |
+| Warp | Off, On |
+| Warp Length | 1 beat to 64 bars (the whole sample) |
+| Warp Mode | Transients, Standard, Smooth, Formants, Re-Pitch |
+| Loop | Off, On (Classic) |
+| Loop Start | 0 to 100 % of the sample (from Start at the earliest) |
+| Loop Fade | 0 to 100 % of the loop |
 | Attack | 0.1 to 5000 ms |
 | Decay | 1 to 10 000 ms |
 | Sustain | 0 to 100 % |
 | Release | 1 to 10 000 ms |
-| Velocity | 0 to 100 % (how much velocity sets the level) |
+| Voices | 1 to 32 (Classic; Slice's Poly) |
+| Glide | 0 to 2000 ms (one voice) |
+| Trigger Mode | Trigger, Gate (1-Shot, Slice) |
+| Fade In, Fade Out | 0.1 to 2000 ms (1-Shot, Slice) |
+| Slice By | Transient, Beat, Region |
+| Sensitivity | 0 to 100 % |
+| Slice Division | 1/16, 1/8, 1/4, 1/2, 1 Bar, 2 Bars, 4 Bars |
+| Regions | 2 to 64 |
+| Playback | Mono, Poly, Thru |
+| Filter | Off, On |
+| Filter Type | Low-pass, High-pass, Band-pass, Notch |
+| Filter Slope | 12 dB, 24 dB |
+| Filter Freq | 20 Hz to 22 kHz |
+| Resonance | 0 to 100 % |
+| LFO, LFO Sync, LFO Retrigger | Off, On |
+| LFO Wave | Sine, Triangle, Saw Up, Saw Down, Square, Random |
+| LFO Rate | 0.01 to 30 Hz |
+| LFO Synced Rate | 1/32 to 8 Bars |
+| LFO > Volume, Filter, Pan | 0 to 100 % (Filter: 4 octaves either way at 100 %) |
+| LFO > Pitch | 0 to 1200 cents either way |
+| Pan | Left to right |
+| Vol < Vel | 0 to 100 % (how much velocity sets the level) |
 | Volume | −60 to +6 dB |
 
 ### Utility

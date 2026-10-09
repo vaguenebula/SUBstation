@@ -19,6 +19,7 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/BuiltinRegistry.h](../../engine/src/builtin/BuiltinRegistry.h) / [.cpp](../../engine/src/builtin/BuiltinRegistry.cpp) | `BuiltinRegistry`, `BuiltinInfo`, `BuiltinCategory`, `SUB_REGISTER_BUILTIN` |
 | [builtin/devices/Synth.cpp](../../engine/src/builtin/devices/Synth.cpp) | the Synth instrument |
 | [builtin/devices/Sampler.cpp](../../engine/src/builtin/devices/Sampler.cpp) | the Sampler instrument |
+| [builtin/SampleSlicing.h](../../engine/src/builtin/SampleSlicing.h) / [.cpp](../../engine/src/builtin/SampleSlicing.cpp) | The Sampler's slicing (`detectOnsets`, `sliceStarts`) and Snap (`nearestZeroCrossing`), shared with the application layer's `sampleSlices` ([app/src/audio/SampleSlices.h](../../app/src/audio/SampleSlices.h)) for the editor |
 | [builtin/devices/Utility.cpp](../../engine/src/builtin/devices/Utility.cpp) | Utility: gain, pan, width |
 | [builtin/devices/Ott.cpp](../../engine/src/builtin/devices/Ott.cpp) | Over The Top: multiband upward/downward compression |
 | [builtin/devices/Compressor.cpp](../../engine/src/builtin/devices/Compressor.cpp) | Compressor, with sidechain and displays |
@@ -192,43 +193,155 @@ resonant low-pass filter. Mono, on both channels. Velocity sets the level.
 
 ### Sampler (`builtin:sampler`, Instrument)
 
-Plays one audio file across the keyboard, pitched from its root key (as Ableton's Simpler does in Classic mode). 32
-voices; plays from Start to End of the sample, or loops between them while a note holds (and as it releases).
+Plays one audio file as Ableton's Simpler does, in one of three modes. Up to 32 voices
+sound at once (`kMaxVoices`), plus 8 slots for voices cut short (`kVoiceSlots`): a voice
+stolen, or a mono note replaced, fades out over 4 ms (`kKillSeconds`) instead of
+clicking.
 
 | id | Name | Unit | Range | Default |
 |---|---|---|---|---|
+| `mode` | Mode | | Classic, 1-Shot, Slice | Classic |
 | `root` | Root Key | note | 0..127, 127 steps | 60 |
 | `tune` | Transpose | st | -48..48, 96 steps | 0 |
 | `fine` | Detune | ct | -100..100 | 0 |
 | `start` | Start | % | 0..100 | 0 |
 | `end` | End | % | 0..100 | 100 |
-| `loop` | Loop | | Off, On (a list) | Off |
+| `gain` | Gain | dB | -24..24 | 0 |
+| `reverse` | Reverse | | Off, On | Off |
+| `snap` | Snap | | Off, On | Off |
+| `warp` | Warp | | Off, On | Off |
+| `warp_beats` | Warp Length | beats | 1..256, whole beats | 4 |
+| `warp_mode` | Warp Mode | | Transients, Standard, Smooth, Formants, Re-Pitch | Standard |
+| `loop` | Loop | | Off, On | Off |
+| `loop_start` | Loop Start | % | 0..100 | 0 |
+| `loop_fade` | Loop Fade | % | 0..100 (of the loop) | 0 |
 | `attack` | Attack | ms | 0.1..5000, log | 1 |
 | `decay` | Decay | ms | 1..10000, log | 1000 |
 | `sustain` | Sustain | % | 0..100 | 100 |
 | `release` | Release | ms | 1..10000, log | 50 |
-| `velocity` | Velocity | % | 0..100 | 50 |
+| `voices` | Voices | # | 1..32, whole | 32 |
+| `glide` | Glide | ms | 0..2000 | 0 |
+| `trigger` | Trigger Mode | | Trigger, Gate | Trigger |
+| `fade_in` | Fade In | ms | 0.1..2000, log | 0.1 |
+| `fade_out` | Fade Out | ms | 0.1..2000, log | 0.1 |
+| `slice_by` | Slice By | | Transient, Beat, Region | Transient |
+| `sensitivity` | Sensitivity | % | 0..100 | 50 |
+| `slice_beat` | Slice Division | | 1/16, 1/8, 1/4, 1/2, 1 Bar, 2 Bars, 4 Bars | 1/8 |
+| `regions` | Regions | # | 2..64, whole | 8 |
+| `playback` | Playback | | Mono, Poly, Thru | Mono |
+| `filter` | Filter | | Off, On | Off |
+| `filter_type` | Filter Type | | Low-pass, High-pass, Band-pass, Notch | Low-pass |
+| `filter_slope` | Filter Slope | | 12 dB, 24 dB | 24 dB |
+| `filter_freq` | Filter Freq | Hz | 20..22000, log | 22000 |
+| `filter_res` | Resonance | % | 0..100 | 0 |
+| `lfo` | LFO | | Off, On | Off |
+| `lfo_wave` | LFO Wave | | Sine, Triangle, Saw Up, Saw Down, Square, Random | Sine |
+| `lfo_sync` | LFO Sync | | Off, On | Off |
+| `lfo_rate` | LFO Rate | Hz | 0.01..30, log | 1 |
+| `lfo_beats` | LFO Synced Rate | | 1/32, 1/16, 1/8, 1/4, 1/2, 1 Bar, 2 Bars, 4 Bars, 8 Bars | 1/4 |
+| `lfo_retrig` | LFO Retrigger | | Off, On | Off |
+| `lfo_volume` | LFO > Volume | % | 0..100 | 0 |
+| `lfo_pitch` | LFO > Pitch | ct | 0..1200 | 0 |
+| `lfo_filter` | LFO > Filter | % | 0..100 | 0 |
+| `lfo_pan` | LFO > Pan | % | 0..100 | 0 |
+| `pan` | Pan | | -1..1 | 0 |
+| `velocity` | Vol < Vel | % | 0..100 | 50 |
 | `volume` | Volume | dB | -60..6 | 0 |
 
-- **Pitch**: each voice steps through the sample at `(source rate / engine rate) * 2^((key - root + transpose) / 12)`,
-  with `transpose = round(tune) + fine / 100`. So a file at any rate plays at its pitch. Samples are read with
-  4-point, 3rd-order Hermite interpolation.
-- **Velocity sensitivity**: gain = `1 - sensitivity * (1 - velocity / 127)`.
-- **Envelope and voice stealing** as the Synth's. A voice ends at End unless looping (or if the loop is shorter than a
-  frame). A note-on with End not after Start plays nothing.
-- **Output**: voices mix into the output (both sides into one channel if that's all there is, at half gain); the
-  volume applies after. It writes, not adds.
-- **State**: `"sample"`: the file's path. `setStateValues()` stores the path, loads the file through `loadSource()`
-  *without holding its mutex* (it may take a while), and publishes it, unless another state came meanwhile. If the
-  file can't be loaded it publishes nothing (silent until it can be loaded) and rethrows, but keeps the path in its
-  state, so the project keeps it. Unknown state values are ignored.
-- **Handing the sample to the audio thread without a lock**: the main side puts a new `Sample` into `pending_` (an
-  atomic pointer; a sample still pending and never taken is freed there). At the start of each `render()` the
-  rendering thread takes it, pushes the one it replaces into `retired_` (an `SpscQueue` of 8), and silences its voices
-  (they played the old one). If `retired_` is full it waits for the next block. The main side frees retired samples
-  in `idle()` and whenever it publishes. Loading the same file again changes nothing, so notes go on.
-- **Display**: `position`, one value per 256 samples: where the newest note plays in the sample (0..1 of its length),
-  or -1 while none plays. The editor draws the playhead from it.
+The defaults are the Sampler before it had modes (Classic, everything else off), so a
+project saved then plays as it did: a parameter it doesn't have takes its default.
+
+- **The sample as it plays** (`Reader`, built per block): frames are counted in the
+  order the sample plays, so Reverse reads it backwards (`frames - 1 - i`) and every
+  marker (Start, End, Loop Start, slices) is a place in it as it plays. Outside the file
+  it is silent. Start and End are `percent / 100 * frames` (truncated); with Snap each
+  moves to the nearest zero crossing of the channels summed within 10 ms
+  (`slicing::nearestZeroCrossing`, the earlier of two as near; never off either end).
+- **Modes**:
+  - *Classic*: a voice plays from Start, pitched by `key - root`; with Loop (and End
+    after Start) it wraps from End to `max(Loop Start, Start)` (snapped), else it ends
+    at End. Loop Fade crossfades the loop's last `fade` frames (`loop_fade` % of the
+    loop, at most as many as come before Loop Start) into the frames before Loop Start,
+    equal power, so the frame after End is the one at Loop Start. ADSR as the Synth's.
+    Voices limits the notes: the quietest releasing one, else the oldest, is cut short
+    to make room. One voice: a new note cuts the last; with Glide too, notes overlapping
+    are legato: the voice goes on, its pitch moving linearly (in semitones) to the new
+    key over the glide time, and back to the newest key still held when the top one is
+    let go (the keys held are kept in order).
+  - *1-Shot*: one voice at a time, pitched; the envelope is Fade In (linear from 0),
+    then held. Trigger ignores the note-off; Gate fades out over Fade Out (linear) from
+    it. Either way it fades out linearly over the Fade Out before End, in played time.
+  - *Slice*: at a note-on the slices of Start..End are worked out
+    (`slicing::sliceStarts`): every Onset with a strength of at least `1 - sensitivity`
+    and at least 10 ms from the slice before and from End (Transient); the region's
+    beats (`warp_beats * (End - Start) / frames`) divided by the division (Beat); or
+    `regions` equal parts (Region); always Start first, at most 128. Key 36 (C1) plays
+    the first, each key up the next; keys below or past the last play nothing. A slice
+    plays from its start to the next's (Thru: to End), at the root's pitch plus
+    Transpose and Detune. Mono and Thru cut the slice before; Poly limits notes as
+    Classic does. Fades, Trigger and Gate as 1-Shot's; with Snap, slices snap too.
+- **Transients** (`slicing::detectOnsets`, at load, both ways): the sample summed to
+  mono; per hop of 128 samples at 48 kHz (`sampleRate / 375`), the energy over two hops,
+  of the whole band and of the first difference (the highs), in dB floored 60 dB below
+  the loudest; a hop's rise is how far either band climbs above the loudest of the
+  three hops before. Rises of 3 dB or more that are the biggest within 30 ms either side
+  are transients; each starts at the first sample around it reaching a quarter of its
+  peak, moved back to the zero crossing before it (within 2 ms). Strength: its rise
+  over the biggest rise.
+- **Pitch and speed**: unwarped, a voice steps through the sample at `(file rate / engine
+  rate) * 2^(semitones / 12)` (4-point Hermite interpolation; the loop's wrap and its
+  crossfade read through `Reader::at`, so the interpolation is continuous across it),
+  `semitones` being its pitch plus `round(tune) + fine / 100` plus the LFO's. Warped,
+  the whole sample lasts `warp_beats` beats at the block's tempo: `rate = frames /
+  (beats * 60 / tempo * sampleRate)`. Re-Pitch resamples at `rate * 2^(semitones / 12)`;
+  the other modes stretch: each voice gets a Signalsmith stretcher of its own, configured
+  with the clips' block sizes for that mode ([warp.md](warp.md); Formants keeps the
+  formants), fed `rate` frames a frame from where it plays (wrapping its loop; silent
+  past its end), transposed by `semitones`. A note-on seeks it (`outputSeek`, its
+  latency computed ahead), so its first frame is the slice's or Start's at once.
+- **Stretchers** are made on the main side (`updatePool()`: `idle()`, `prepare()`,
+  `resetOffline()`), only while Warp is on with a stretching mode: one for a mono mode,
+  else as many as Voices allows up to 8 (`kMaxStretched`, which then limits the notes
+  too), plus 2 for notes fading out; each is about 0.9 MB. They are handed to the
+  rendering thread as samples are (`pendingPool_`, `retiredPools_`); voices of the pool
+  it replaces stop. `resetOffline()` makes fresh ones (with the fixed seed), so offline
+  renders come out the same every time. Until they come (or with none free) a warped note
+  is resampled as Re-Pitch would.
+- **Filter**, on the voices' mix: TPT state-variable sections (Zavalishin/Simper);
+  12 dB one, 24 dB two (low- and high-pass a Butterworth pair, Q 0.54 and 1.31; band-pass
+  and notch two of Q 0.71). Resonance raises the last section's Q towards 10
+  geometrically. The band-pass is normalized to unity at its centre. The cutoff glides to
+  its target (5 ms, in log) a chunk of 32 samples at a time, limited to 0.45 of the
+  sample rate; switched on, it starts at its cutoff from silence.
+- **LFO**, one for the device, evaluated at each chunk's ends: the gains glide between
+  them, the pitch and cutoff take the middle. Sine, triangle, saw up and down, square,
+  and random (a new value each cycle, from a hash of the cycle's number). Synced while
+  the song plays and Retrigger is off, its cycles are the song's (`beatPos` over the
+  rate in beats), so a note starting off the beat finds it where the song is; otherwise
+  it runs at its rate (synced: from the tempo), and with Retrigger each new note starts
+  it at the beginning of a cycle. Volume: `1 - amount * (1 - lfo) / 2`; Pitch: `amount
+  * lfo` cents; Filter: the cutoff times `2^(4 * amount * lfo)`; Pan: added to the pan.
+- **Output**: voices mix into the output (both sides into one channel if that's all
+  there is, at half gain); then the filter; then Gain, the LFO's tremolo, the pan
+  (balance, as Utility's) and Volume, all ramped over 20 ms. It writes, not adds.
+  Velocity: gain = `1 - sensitivity * (1 - velocity / 127)`. `tailSamples()` is the
+  longer of Release and Fade Out.
+- **State**: `"sample"`: the file's path. `setStateValues()` stores the path, loads the
+  file through `loadSource()` and finds its transients both ways, *without holding its
+  mutex* (it may take a while), and publishes it, unless another state came meanwhile or
+  it is the file already playing (notes go on). If the file can't be loaded it publishes
+  nothing (silent until it can be loaded) and rethrows, but keeps the path in its state,
+  so the project keeps it. Unknown state values are ignored.
+- **Handing the sample to the audio thread without a lock**: the main side puts a new
+  `Sample` (the source and its transients) into `pending_` (an atomic pointer; a sample
+  still pending and never taken is freed there). At the start of each `render()` the
+  rendering thread takes it, pushes the one it replaces into `retired_` (an `SpscQueue` of
+  8), and silences its voices (they played the old one). If `retired_` is full it waits
+  for the next block. The main side frees retired samples (and stretchers) in `idle()`
+  and whenever it publishes.
+- **Display**: `position`, one value per 256 samples: where the newest note plays in the
+  sample (0..1 of its length, as it plays), or -1 while none plays. The editor draws the
+  playhead from it, and lights the slice it is in.
 
 The engine bridge restores a built-in device's state in the background (`EngineBridge::setBuiltinState()`, on a pool
 of one thread, so states are set in the order they came and the last one wins), since it may load files, and waits
@@ -465,7 +578,8 @@ readonly property var editors: ({
 - Today there are five. The Compressor draws its gain reduction over the last 240 display values (about 1.3 s at
   48 kHz) and In/Out meters with the threshold marked; the Delay its filter over a spectrum of `input`; the EQ its
   bands' curves (from `eq::responseDb`) over an analyzer of `input` and `output`; the Sidechain its curve, its
-  playhead from `phase` and its fit to the kick (`key`, against `input`); the Sampler the sample's waveform with Start/End markers and
+  playhead from `phase` and its fit to the kick (`key`, against `input`); the Sampler the sample's waveform as it plays
+  with its markers, its loop, fades or slices (the engine's own, through the application layer's `sampleSlices`) and
   the playhead from `position` (drop or double-click to load a sample; loading is an undoable state change through
   `ProjectEditor::setDeviceState()`, the path kept in the device's state).
 
@@ -572,9 +686,14 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
 - [test_sidechain_device_engine.cpp](../../tests/engine/test_sidechain_device_engine.cpp): hits to the sample, the
   curve sample by sample (straight and bent), depth and smoothing, the threshold and re-arming, lookahead (as
   latency), Lows Only keeping the highs, hits on the beat, the synced length, the displays, extremes.
-- [test_sampler_engine.cpp](../../tests/engine/test_sampler_engine.cpp): listing and parameters, pitch from key, root
-  and tuning at any file rate, start, end and loop, velocity, its state's text (escaping), a missing file, unknown
-  values, swapping samples while notes play, and the position display.
+- [test_sampler_engine.cpp](../../tests/engine/test_sampler_engine.cpp): listing and parameters (old projects' defaults),
+  pitch from key, root and tuning at any file rate, start, end and loop, velocity, its state's text (escaping), a
+  missing file, unknown values, swapping samples while notes play, and the position display; then transients found
+  where hits start and slices at each sensitivity, beats and regions, snapping; Slice (by region, beat and transient,
+  Mono, Poly, Thru), 1-Shot (Trigger, Gate, fades, one note at a time), Classic's Loop Start and Loop Fade, reverse,
+  snap, gain and pan, the filter's four types and slopes and resonance, the LFO (tremolo, vibrato, synced, restarted,
+  pan, filter), voices and legato glide, warping (Re-Pitch, every stretching mode, keys, tempo, repeatable renders),
+  and the display of a reversed note.
 - [test_midi_engine.cpp](../../tests/engine/test_midi_engine.cpp): the Synth plays the right pitch and level.
 - [test_automation_engine.cpp](../../tests/engine/test_automation_engine.cpp): built-in blocks split where automation
   changes values.

@@ -420,18 +420,32 @@ private Q_SLOTS:
         QVERIFY(view && samples);
         QCOMPARE(project()->track(track).devices.size(), size_t(1));
         QCOMPARE(project()->track(track).devices.front().kind, QStringLiteral("sampler"));
+        // Two pages, named (the device's title bar shows them as tabs): Sample, then Controls.
         QCOMPARE(view->property("pages").toInt(), 2);
-        // The sample's page: its five knobs and its loop's list.
-        QStringList knobs, lists;
-        for (QQuickItem* cell : itemsNamed(view, QStringLiteral("param_"))) {
-            auto* p = qvariant_cast<sub::ui::DeviceParam*>(cell->property("param"));
-            QVERIFY(p);
-            (p->isList() ? lists : knobs) << p->paramId();
-        }
-        QCOMPARE(knobs, (QStringList{"root", "tune", "fine", "start", "end"}));
-        QCOMPARE(lists, QStringList{"loop"});
-        auto* root = find(view, QStringLiteral("param_root"));
-        QCOMPARE(qvariant_cast<sub::ui::DeviceParam*>(root->property("param"))->text(), QStringLiteral("C3"));
+        QCOMPARE(view->property("pageNames").toStringList(), (QStringList{"Sample", "Controls"}));
+        QQuickItem* samplePage = find(view, QStringLiteral("samplePage"));
+        QQuickItem* controlsPage = find(view, QStringLiteral("controlsPage"));
+        QVERIFY(samplePage->isVisible() && !controlsPage->isVisible());
+        // Classic: its envelope under the display, with the filter's knobs, Transpose, Vol < Vel, Volume.
+        const auto cell = [&](QQuickItem* page, const char* id) {
+            return find(page, QStringLiteral("cell_") + QLatin1String(id));
+        };
+        for (const char* id : {"filter_freq", "filter_res", "attack", "decay", "sustain", "release", "tune", "velocity",
+                               "volume"})
+            QVERIFY2(cell(samplePage, id)->isVisible(), id);
+        for (const char* id : {"fade_in", "fade_out"})
+            QVERIFY2(!cell(samplePage, id)->isVisible(), id);
+        QCOMPARE(qvariant_cast<sub::ui::DeviceParam*>(cell(samplePage, "velocity")->property("param"))->text(),
+                 QStringLiteral("50 %"));
+        // Controls: the root key and the rest.
+        view->setProperty("page", 1);
+        QVERIFY(!samplePage->isVisible() && controlsPage->isVisible());
+        QCOMPARE(qvariant_cast<sub::ui::DeviceParam*>(cell(controlsPage, "root")->property("param"))->text(),
+                 QStringLiteral("C3"));
+        for (const char* id : {"root", "fine", "voices", "glide", "start", "end", "loop_start", "loop_fade", "lfo_volume",
+                               "lfo_pitch", "lfo_filter", "lfo_pan", "pan", "gain"})
+            QVERIFY2(cell(controlsPage, id)->isVisible(), id);
+        view->setProperty("page", 0);
         QVERIFY(view->implicitHeight() <= bodyHeight());  // fits the view
         QCOMPARE(samples->samplePath(), QString());
         save(grab(), QStringLiteral("sampler-empty.png"));  // the hint to drop a sample
@@ -492,8 +506,9 @@ private Q_SLOTS:
         QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at(plot.left() + plot.width() / 2));
         const double start = param(track, device, QStringLiteral("start"));
         QVERIFY2(std::abs(start - 50.0) <= 1.0, qPrintable(QString::number(start)));
-        auto* startCell = find(view, QStringLiteral("param_start"));
-        QCOMPARE(qvariant_cast<KnobItem*>(startCell->property("knob"))->value(), start);
+        auto* startKnob = find(view, QStringLiteral("knob_start"));  // (the Controls page's)
+        QVERIFY(startKnob);
+        QCOMPARE(qvariant_cast<KnobItem*>(startKnob->property("knob"))->value(), start);
         editor()->setDeviceParam(track, device, QStringLiteral("end"), 30.0);
         // Grabs End (Start is under it).
         QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at(samples->xOf(30.0)));
@@ -518,6 +533,115 @@ private Q_SLOTS:
                  (sub::app::deviceState::Values{{QStringLiteral("sample"), path}}));
         QCOMPARE(engineState(track, devices.front().id),
                  (sub::app::deviceState::Values{{QStringLiteral("sample"), path}}));
+    }
+
+    void samplerModesSlicesAndWarp() {
+        // Four tones, a quarter of a second each.
+        std::vector<float> wave;
+        for (const double freq : {220.0, 330.0, 440.0, 550.0}) {
+            const std::vector<float> part = tone(freq, kSampleRate / 4);
+            wave.insert(wave.end(), part.begin(), part.end());
+        }
+        const QString path = sub::app::test::writeWav(dir_.path(QStringLiteral("tones.wav")), wave);
+        auto [track, device, view, samples] = sampler();
+        QVERIFY(view && samples);
+        samples->loadSample(path);
+        QTRY_VERIFY(samples->decoded());
+        QQuickItem* samplePage = find(view, QStringLiteral("samplePage"));
+        auto value = [&](const char* id) { return param(track, device, QString::fromLatin1(id)); };
+        auto click = [&](QQuickItem* item) {
+            QVERIFY(item && item->isVisible());
+            QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, centerOf(item));
+        };
+        auto button = [&](const QString& name) {
+            QQuickItem* item = find(view, name);
+            return item ? qvariant_cast<QQuickItem*>(item->property("button")) : nullptr;
+        };
+        auto lit = [&](const QString& name) { return find(view, name)->property("lit").toBool(); };
+
+        // The mode tabs: a click, an undo step.
+        QCOMPARE(samples->mode(), 0);
+        QVERIFY(find(view, QStringLiteral("mode0"))->property("checked").toBool());
+        const int steps = undo()->count();
+        click(find(view, QStringLiteral("mode1")));
+        QCOMPARE(value("mode"), 1.0);
+        QCOMPARE(undo()->count(), steps + 1);
+        QCOMPARE(samples->mode(), 1);
+        QVERIFY(find(view, QStringLiteral("mode1"))->property("checked").toBool());
+        // 1-Shot: its fades under the display; Trigger or Gate on it, no loop.
+        QVERIFY(find(samplePage, QStringLiteral("cell_fade_in"))->isVisible());
+        QVERIFY(!find(samplePage, QStringLiteral("cell_attack"))->isVisible());
+        QVERIFY(!find(view, QStringLiteral("loop"))->isVisible());
+        QVERIFY(lit(QStringLiteral("trigger")) && !lit(QStringLiteral("gate")));
+        click(button(QStringLiteral("gate")));
+        QCOMPARE(value("trigger"), 1.0);
+        QVERIFY(lit(QStringLiteral("gate")) && !lit(QStringLiteral("trigger")));
+
+        // Slice: cut into four regions, the slice a note plays lit.
+        click(find(view, QStringLiteral("mode2")));
+        QCOMPARE(samples->mode(), 2);
+        auto* sliceBy = find(view, QStringLiteral("sliceBy"));
+        QVERIFY(sliceBy->isVisible() && find(view, QStringLiteral("sensitivity"))->isVisible());
+        QVERIFY(QMetaObject::invokeMethod(sliceBy, "choose", Q_ARG(QVariant, 2)));  // as the list does
+        QCOMPARE(value("slice_by"), 2.0);
+        QVERIFY(find(view, QStringLiteral("regions"))->isVisible() && !find(view, QStringLiteral("sensitivity"))->isVisible());
+        editor()->setDeviceParam(track, device, QStringLiteral("regions"), 4.0);
+        QCOMPARE(samples->slices(), (QList<qreal>{0.0, 0.25, 0.5, 0.75}));
+        const auto clip = editor()->addMidiClip(track, 0.0, 4.0);
+        QVERIFY(clip);
+        editor()->setClipNotes(*clip, {Note{38, 0.0, 0.25, 127}}, QStringLiteral("Add Note"));  // D1: the third
+        engine_->renderOffline(0.0, kSampleRate / 16);
+        refreshDisplays();
+        QCOMPARE(samples->playingSlice(), 2);
+        // By beats: the sample's four beats in eighths.
+        QVERIFY(QMetaObject::invokeMethod(sliceBy, "choose", Q_ARG(QVariant, 1)));
+        QVERIFY(find(view, QStringLiteral("sliceBeat"))->isVisible());
+        QCOMPARE(samples->slices().size(), 8);
+        // Snap moves them to the zero crossings nearby: as many.
+        editor()->setDeviceParam(track, device, QStringLiteral("snap"), 1.0);
+        QCOMPARE(samples->slices().size(), 8);
+
+        // Classic with its loop: Loop on the display, its fade beside it; drag Loop Start's marker.
+        click(find(view, QStringLiteral("mode0")));
+        QVERIFY(!find(view, QStringLiteral("loopFade"))->isVisible());
+        click(button(QStringLiteral("loop")));
+        QCOMPARE(value("loop"), 1.0);
+        QVERIFY(find(view, QStringLiteral("loopFade"))->isVisible());
+        editor()->setDeviceParam(track, device, QStringLiteral("snap"), 0.0);
+        editor()->setDeviceParam(track, device, QStringLiteral("loop_start"), 50.0);
+        const QRectF plot = samples->plot();
+        auto at = [&](double x) { return scenePoint(samples, QPointF(x, plot.center().y())); };
+        QCOMPARE(samples->markerAt(samples->xOf(50.0)), QStringLiteral("loop"));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at(samples->xOf(50.0)));
+        QCOMPARE(samples->marker(), QStringLiteral("loop"));
+        dragTo(window_, at(samples->xOf(60.0)));
+        dragTo(window_, at(samples->xOf(75.0)));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at(samples->xOf(75.0)));
+        QVERIFY2(std::abs(value("loop_start") - 75.0) <= 1.0, qPrintable(QString::number(value("loop_start"))));
+        undo()->undo();
+        QCOMPARE(value("loop_start"), 50.0);
+
+        // Warp: halved and doubled.
+        QCOMPARE(find(view, QStringLiteral("warpBeats"))->property("box").value<QQuickItem*>()->property("text").toString(),
+                 QStringLiteral("1 Bar"));
+        click(find(view, QStringLiteral("double")));
+        QCOMPARE(value("warp_beats"), 8.0);
+        click(find(view, QStringLiteral("halve")));
+        click(find(view, QStringLiteral("halve")));
+        QCOMPARE(value("warp_beats"), 2.0);
+        click(button(QStringLiteral("warp")));
+        QCOMPARE(value("warp"), 1.0);
+
+        // Reverse, from the device's menu: the waveform drawn as it plays.
+        auto* reverse = view->findChild<QObject*>(QStringLiteral("reverseSample"));
+        QVERIFY(reverse);
+        QVERIFY(!reverse->property("checked").toBool());
+        QVERIFY(QMetaObject::invokeMethod(reverse, "trigger"));
+        QCOMPARE(value("reverse"), 1.0);
+        QVERIFY(reverse->property("checked").toBool());
+        QVERIFY(QMetaObject::invokeMethod(reverse, "trigger"));
+        QCOMPARE(value("reverse"), 0.0);
+        QVERIFY(!reverse->property("checked").toBool());
     }
 
     // --- The Delay ----------------------------------------------------------------------------
@@ -1240,6 +1364,66 @@ private Q_SLOTS:
         samples->setPlayhead(0.31);
         QTest::qWait(50);
         save(grab(), QStringLiteral("sampler.png"));
+
+        // A 1-Shot: a kick, its pitch falling, faded out; filtered, the LFO on.
+        const QString kicks = editor()->addMidiTrack();
+        const QString oneShot = editor()->addDevice(kicks, QStringLiteral("sampler"));
+        std::vector<float> kick(static_cast<size_t>(kSampleRate / 2));
+        double phase = 0.0;
+        for (size_t i = 0; i < kick.size(); ++i) {
+            const double t = double(i) / kSampleRate;
+            phase += 2 * kPi * (48 + 110 * std::exp(-t / 0.03)) / kSampleRate;
+            kick[i] = float(0.95 * std::exp(-t / 0.12) * std::sin(phase));
+        }
+        const QString kickPath = sub::app::test::writeWav(dir_.path(QStringLiteral("kick_one_shot.wav")), kick);
+        QQuickItem* oneShotView = show(QStringLiteral("sampler"), kicks, oneShot);
+        auto* kickSamples = find<SampleView>(oneShotView, QStringLiteral("sampleView"));
+        kickSamples->loadSample(kickPath);
+        for (const auto& [id, value] : std::initializer_list<std::pair<const char*, double>>{
+                 {"mode", 1.0}, {"fade_out", 120.0}, {"end", 92.0}, {"filter", 1.0}, {"filter_freq", 6500.0},
+                 {"filter_res", 20.0}, {"lfo", 1.0}, {"velocity", 35.0}, {"volume", -12.0}})
+            editor()->setDeviceParam(kicks, oneShot, QString::fromLatin1(id), value);
+        QTRY_VERIFY(kickSamples->decoded());
+        QTest::qWait(50);
+        save(grab(), QStringLiteral("sampler-oneshot.png"));
+
+        // Sliced: a beat, cut at its transients, a slice playing.
+        const QString beats = editor()->addMidiTrack();
+        const QString slicer = editor()->addDevice(beats, QStringLiteral("sampler"));
+        std::vector<float> loop(static_cast<size_t>(kSampleRate * 2), 0.f);
+        quint32 noise = 777;
+        const auto hit = [&](double at, double amplitude, double freq, double decay, double grit) {
+            const auto from = static_cast<size_t>(at * kSampleRate);
+            for (size_t i = from; i < loop.size(); ++i) {
+                const double t = double(i - from) / kSampleRate;
+                noise = noise * 1664525u + 1013904223u;
+                const double n = double(noise >> 8) / double(1 << 24) - 0.5;
+                loop[i] += float(amplitude * std::exp(-t / decay) * ((1 - grit) * std::sin(2 * kPi * freq * t) + grit * n));
+            }
+        };
+        for (int i = 0; i < 4; ++i) {
+            hit(0.5 * i, 0.8, 55, 0.15, 0.05);           // kicks
+            hit(0.5 * i + 0.25, 0.55, 190, 0.08, 0.7);  // snares
+            hit(0.5 * i + 0.125, 0.25, 5000, 0.02, 1.0);  // hats
+            hit(0.5 * i + 0.375, 0.2, 5000, 0.02, 1.0);
+        }
+        const QString loopPath = sub::app::test::writeWav(dir_.path(QStringLiteral("beat_120bpm.wav")), loop);
+        QQuickItem* sliceView = show(QStringLiteral("sampler"), beats, slicer);
+        auto* loopSamples = find<SampleView>(sliceView, QStringLiteral("sampleView"));
+        loopSamples->loadSample(loopPath);
+        editor()->setDeviceParam(beats, slicer, QStringLiteral("mode"), 2.0);
+        editor()->setDeviceParam(beats, slicer, QStringLiteral("sensitivity"), 80.0);
+        editor()->setDeviceParam(beats, slicer, QStringLiteral("warp_beats"), 4.0);
+        editor()->setDeviceParam(beats, slicer, QStringLiteral("warp"), 1.0);
+        QTRY_VERIFY(loopSamples->decoded());
+        loopSamples->setPlayhead(0.3);
+        QTest::qWait(50);
+        save(grab(), QStringLiteral("sampler-slice.png"));
+
+        // Its Controls page.
+        sliceView->setProperty("page", 1);
+        QTest::qWait(50);
+        save(grab(), QStringLiteral("sampler-controls.png"));
     }
 };
 

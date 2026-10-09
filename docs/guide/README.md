@@ -35,7 +35,8 @@ code is put together, [../README.md](../README.md).
   selection, as in Ableton.
 - Group tracks, return tracks and sends, sidechains, and delay compensation everywhere.
 - Freezing tracks, groups and returns (Ctrl+Shift+F), and flattening frozen tracks.
-- Built-in Synth and Sampler instruments; Utility, Over The Top, Compressor, Delay, EQ
+- Built-in Synth and Sampler instruments (the Sampler with Simpler's Classic, 1-Shot and
+  Slice modes, warping, a filter and an LFO); Utility, Over The Top, Compressor, Delay, EQ
   and Sidechain effects; VST3 instruments and effects; racks with chains and macros.
 - Warping and transposing audio, set up from the file name.
 - A piano roll with legato, timing, quantize and humanize tools (velocities by machine learning).

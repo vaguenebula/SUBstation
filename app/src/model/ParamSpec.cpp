@@ -32,6 +32,13 @@ QString formatValue(double value, const QString& unit) {
         if (value >= 1000) return formatFixed(value / 1000, 2) + QStringLiteral(" s");
         return value < 10 ? formatFixed(value, 1) + QStringLiteral(" ms") : formatFixed(value, 0) + QStringLiteral(" ms");
     }
+    if (unit == u"#") return QString::number(static_cast<long long>(roundHalfEven(value)));  // a count
+    if (unit == u"beats") {  // a length: in bars of 4 where it is whole bars
+        const auto beats = static_cast<long long>(roundHalfEven(value));
+        if (beats > 0 && beats % 4 == 0)
+            return QString::number(beats / 4) + (beats == 4 ? QStringLiteral(" Bar") : QStringLiteral(" Bars"));
+        return QString::number(beats) + (beats == 1 ? QStringLiteral(" Beat") : QStringLiteral(" Beats"));
+    }
     return formatFixed(value, 2) + u' ' + unit;
 }
 
