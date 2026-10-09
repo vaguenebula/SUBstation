@@ -921,9 +921,10 @@ void TrackHeaderItem::addConfigure(MenuEntries& menu, bool midi) {
 MenuEntries TrackHeaderItem::inputMenu() {
     // As Ableton's Audio From: Ext. In (the audio device's inputs), Configure...,
     // Resampling (the master's output), the other tracks', groups' and returns'
-    // outputs (those it feeds greyed out: taking theirs would close a cycle),
-    // No Input. MIDI From: All Ins, the computer keyboard and each MIDI input
-    // (those connected, and the one chosen if it isn't), Configure..., No Input.
+    // outputs under a search field (those it feeds greyed out: taking theirs
+    // would close a cycle), No Input. MIDI From: All Ins, the computer keyboard
+    // and each MIDI input (those connected, and the one chosen if it isn't),
+    // Configure..., No Input.
     MenuEntries menu;
     const app::Track* t = track();
     if (!t || !t->hasClips()) return menu;
@@ -971,20 +972,22 @@ MenuEntries TrackHeaderItem::inputMenu() {
     ext.toolTip = QStringLiteral("The audio device's inputs: the channel, or pair, below");
     addConfigure(menu);
     menu.addSeparator();
-    std::vector<QString> sources{app::kMaster};
-    for (const app::Track* source : p.inputSources(id)) sources.push_back(source->id);
-    for (const QString& sourceId : sources) {
+    // (The menu, or the search field's list.)
+    const auto addSource = [&](auto& list, const QString& sourceId) -> MenuEntry& {
         const bool usable = !p.inputWouldCycle(id, sourceId);
         const QString label = p.inputName(sourceId);
-        MenuEntry& entry = menu.add(usable ? label : QStringLiteral("%1 (it takes this track's output)").arg(label),
+        MenuEntry& entry = list.add(usable ? label : QStringLiteral("%1 (it takes this track's output)").arg(label),
                                     [editor, id, sourceId] { editor->trySetTrackInputTrack(id, sourceId); });
         entry.checkable = true;
         entry.checked = t->inputTrack == sourceId;
         entry.enabled = usable;
-        if (sourceId == app::kMaster) {
-            entry.toolTip = QStringLiteral("The master's output: recorded, not heard (it would feed back)");
-            menu.addSeparator();
-        }
+        return entry;
+    };
+    addSource(menu, app::kMaster).toolTip = QStringLiteral("The master's output: recorded, not heard (it would feed back)");
+    const std::vector<const app::Track*> sources = p.inputSources(id);
+    if (!sources.empty()) {
+        MenuList tracks(menu.addSearch().children);  // (filled before the menu grows)
+        for (const app::Track* source : sources) addSource(tracks, source->id);
     }
     menu.addSeparator();
     MenuEntry& none = menu.add(kNoInput, [editor, id] { editor->trySetTrackInput(id, {}); });
@@ -1074,16 +1077,17 @@ std::vector<TrackHeaderItem::OutputTarget> TrackHeaderItem::outputTargets() cons
 
 MenuEntries TrackHeaderItem::outputMenu() {
     // As Ableton's Audio To: Ext. Out (not here yet), Configure..., Main (the
-    // master), its group, the tracks it can go into (their input, or a device's
-    // sidechain there; those it feeds greyed out: going into them would close a
-    // cycle), Sends Only.
+    // master), its group, the tracks it can go into under a search field (their
+    // input, or a device's sidechain there; those it feeds greyed out: going
+    // into them would close a cycle), Sends Only.
     MenuEntries menu;
     const app::Track* t = track();
     if (!t || isMaster()) return menu;
     app::ProjectEditor* editor = session_->editor();
     const app::Project& p = *project();
     const QString id = trackId_;
-    const auto add = [&](const QString& label, const app::Output& output, bool checked) -> MenuEntry& {
+    // (To the menu, or to the search field's list.)
+    const auto add = [&](auto& list, const QString& label, const app::Output& output, bool checked) -> MenuEntry& {
         const QString to = output.to == app::Output::To::Track       ? QStringLiteral("track")
                            : output.to == app::Output::To::Sidechain ? QStringLiteral("sidechain")
                            : output.to == app::Output::To::Master    ? QStringLiteral("master")
@@ -1091,7 +1095,7 @@ MenuEntries TrackHeaderItem::outputMenu() {
                                                                      : QStringLiteral("group");
         const QString target = output.id;
         app::Session* session = session_;
-        MenuEntry& entry = menu.add(label, [editor, session, id, to, target] {
+        MenuEntry& entry = list.add(label, [editor, session, id, to, target] {
             if (editor->trySetTrackOutput(id, to, target) && to == u"track") hintTrackIn(session, target);
         });
         entry.checkable = true;
@@ -1104,26 +1108,28 @@ MenuEntries TrackHeaderItem::outputMenu() {
     addConfigure(menu);
     menu.addSeparator();
     const bool toMain = t->output.to == app::Output::To::Master || (t->output.isDefault() && !t->parent);
-    add(kMain, app::Output::master(), toMain);
-    if (t->parent) add(p.track(*t->parent).name, app::Output::group(), t->output.isDefault());
+    add(menu, kMain, app::Output::master(), toMain);
+    if (t->parent) add(menu, p.track(*t->parent).name, app::Output::group(), t->output.isDefault());
     const std::vector<OutputTarget> targets = outputTargets();
-    if (!targets.empty()) menu.addSeparator();
-    const std::optional<QString> now = outputTrack();
-    for (const OutputTarget& target : targets) {
-        // Into its input, or (a track without one) the first device taking a
-        // sidechain; the one it goes into now if it goes there (which one is
-        // outputChannelMenu()'s).
-        const bool going = now == target.track->id && !t->output.isDefault();
-        const app::Output output = going           ? t->output
-                                   : target.trackIn ? app::Output::track(target.track->id)
-                                                    : app::Output::sidechain(target.devices.front());
-        const bool usable = !p.outputWouldCycle(id, output);
-        MenuEntry& entry = add(usable ? target.track->name : QStringLiteral("%1 (it feeds this track)").arg(target.track->name),
-                               output, going);
-        entry.enabled = usable || going;
+    if (!targets.empty()) {
+        MenuList tracks(menu.addSearch().children);  // (filled before the menu grows)
+        const std::optional<QString> now = outputTrack();
+        for (const OutputTarget& target : targets) {
+            // Into its input, or (a track without one) the first device taking a
+            // sidechain; the one it goes into now if it goes there (which one is
+            // outputChannelMenu()'s).
+            const bool going = now == target.track->id && !t->output.isDefault();
+            const app::Output output = going           ? t->output
+                                       : target.trackIn ? app::Output::track(target.track->id)
+                                                        : app::Output::sidechain(target.devices.front());
+            const bool usable = !p.outputWouldCycle(id, output);
+            const QString name = target.track->name;
+            MenuEntry& entry = add(tracks, usable ? name : QStringLiteral("%1 (it feeds this track)").arg(name), output, going);
+            entry.enabled = usable || going;
+        }
     }
     menu.addSeparator();
-    add(kSendsOnly, app::Output::none(), t->output.to == app::Output::To::None).toolTip =
+    add(menu, kSendsOnly, app::Output::none(), t->output.to == app::Output::To::None).toolTip =
         QStringLiteral("Only its sends are heard");
     return menu;
 }

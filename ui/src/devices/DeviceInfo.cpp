@@ -331,14 +331,20 @@ QVariantList DeviceInfo::sidechainMenu() const {
                            {QStringLiteral("source"), source},      {QStringLiteral("tap"), tap}};
     };
     const QVariantMap separator{{QStringLiteral("separator"), true}};
-    entries << entry(QStringLiteral("No Sidechain"), !current, true, QString(), QString()) << separator;
+    entries << entry(QStringLiteral("No Sidechain"), !current, true, QString(), QString());
+    // The tracks: a search field's list (MenuSearch.qml), which has the keyboard as the menu opens.
+    QVariantList tracks;
     for (const Track* source : project->sidechainSources(trackId_)) {
         const bool usable = !project->sidechainWouldCycle(trackId_, source->id);
         // A new source: taken where the old one was (after its fader if after a device of it).
         const QString tap = !current || current->tapDevice() ? sub::app::kPostFader : current->tap;
-        entries << entry(usable ? source->name : source->name + QStringLiteral(" (this track feeds it)"),
-                         current && current->trackId == source->id, usable, source->id, tap);
+        tracks << entry(usable ? source->name : source->name + QStringLiteral(" (this track feeds it)"),
+                        current && current->trackId == source->id, usable, source->id, tap);
     }
+    if (tracks.isEmpty())
+        entries << separator;
+    else
+        entries << QVariantMap{{QStringLiteral("search"), true}, {QStringLiteral("children"), tracks}};
     if (current) {
         entries << separator;
         const QString tap = tapOf(*current);

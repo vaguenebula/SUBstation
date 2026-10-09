@@ -4,7 +4,9 @@ import SUBstation
 
 // QMenu::item: padding 4 22 4 18, the highlighted one in ACCENT, disabled ones
 // dim; the action's shortcut on the right (as widget menus show them), a tick
-// for checked items, an arrow for submenus.
+// for checked items, an arrow for submenus. In a menu with a search field (its
+// `searchField`: SUBstation's MenuSearch), what is typed while it is
+// highlighted goes there.
 T.MenuItem {
     id: control
 
@@ -69,5 +71,17 @@ T.MenuItem {
         implicitWidth: 100
         implicitHeight: 20
         color: control.highlighted && control.enabled ? Theme.accent : "transparent"
+    }
+
+    // Typed while it is highlighted: into its menu's search field, if it has one (MenuSearch).
+    Keys.onShortcutOverride: event => {
+        const search = control.menu ? control.menu.searchField : null
+        if (search && search.typed(event))
+            event.accepted = true
+    }
+    Keys.onPressed: event => {
+        const search = control.menu ? control.menu.searchField : null
+        if (search)
+            search.keyPressed(control, event)
     }
 }

@@ -32,8 +32,11 @@ struct MenuEntry {
     QColor swatch;
     QColor dot;
     bool separator = false;
+    // A search field over a list of entries (MenuSearch.qml), its children:
+    // they show in the menu (scrolled, filtered by what is typed) as its own.
+    bool search = false;
     bool submenu = false;
-    std::vector<MenuEntry> children;  // a submenu's entries
+    std::vector<MenuEntry> children;  // a submenu's entries, or a search field's
 };
 
 // Adds entries to a list of them (a menu's, or a submenu's).
@@ -44,6 +47,8 @@ public:
     // An entry, last; set more on what it returns (valid until the next add).
     MenuEntry& add(const QString& text, std::function<void()> action = {});
     void addSeparator();
+    // A search field, last, over a list of entries (tracks): MenuList(entry.children) adds them.
+    MenuEntry& addSearch();
     // A submenu, last: MenuList(entry.children) adds to it.
     MenuEntry& addSubmenu(const QString& text);
 
@@ -57,22 +62,25 @@ public:
         return MenuList(entries_).add(text, std::move(action));
     }
     void addSeparator() { MenuList(entries_).addSeparator(); }
+    MenuEntry& addSearch() { return MenuList(entries_).addSearch(); }
     MenuEntry& addSubmenu(const QString& text) { return MenuList(entries_).addSubmenu(text); }
 
     bool isEmpty() const { return entries_.empty(); }
     const std::vector<MenuEntry>& entries() const { return entries_; }
 
     // For QML: [{id, text, enabled, checkable, checked, shortcut, toolTip,
-    // swatch, dot, separator, submenu, children: [...]}]; ids count every
-    // entry, depth first.
+    // swatch, dot, separator, search, submenu, children: [...]}]; ids count
+    // every entry, depth first.
     QVariantList toVariant() const;
     // Runs the entry with this id (from toVariant); false if there is none, or it is disabled.
     bool trigger(int id) const;
-    // The entry with this text (a submenu's entries as "Submenu/Entry"), for tests.
+    // The entry with this text (a submenu's entries as "Submenu/Entry", a
+    // search field's as the menu's own), for tests.
     const MenuEntry* find(const QString& path) const;
     // Runs the entry with this text (as find() has it); false if there is none, or it is disabled.
     bool triggerText(const QString& path) const;
-    // The texts of the top-level entries (separators as ""), for tests.
+    // The texts of the top-level entries (separators and search fields as "",
+    // a search field's entries after it), for tests.
     QStringList texts() const;
 
 private:

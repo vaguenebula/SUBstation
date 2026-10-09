@@ -924,7 +924,7 @@ private Q_SLOTS:
         // too loud for the lane, cut off at its edges.
         const auto drawnRows = [&](double gain) {
             const auto tile = arr::WaveformCache::renderTile(source, 100.0, 0, 64, false, gain);
-            return tile ? tile->bottoms[0][16] - tile->tops[0][16] : 0.0f;
+            return tile ? tile->bottoms[0][17] - tile->tops[0][17] : 0.0f;  // (column 16's centre)
         };
         QVERIFY(std::abs(drawnRows(1.0) - 16) <= 2);
         QVERIFY(std::abs(drawnRows(2.0) - 32) <= 2);
@@ -943,6 +943,41 @@ private Q_SLOTS:
         h_->settle();
         QVERIFY(!window()->grabWindow().isNull());
         QVERIFY(lanes()->waveforms().size() > 0);
+    }
+
+    void aWaveformIsOutlinedAsAbletonDrawsIt() {
+        // A click in silence: the outline through the columns' centres, each
+        // the minimum and maximum of two columns' worth of frames about it (the
+        // click's column and the one before it reach it, at its full height:
+        // never averaged down), and the line through silence 1.5 pixels thick
+        // about the middle of a pixel.
+        std::vector<float> click(size_t(test::kSampleRate) * 2);
+        const size_t at = 10000;  // frame 10000: column 100 at 100 frames a pixel
+        click[2 * at] = click[2 * at + 1] = 0.9f;
+        const QString path = test::writeWav(dir_->path(QStringLiteral("click.wav")), click, 2);
+        editor().addClips(QString(), 0.0, {{path, 1.0}});
+        QVERIFY(waitForSource(path));
+        const sub::app::Waveform source = bridge().waveform(path);
+        const auto tile = arr::WaveformCache::renderTile(source, 100.0, 0, 64, false);
+        QVERIFY(tile);
+        QCOMPARE(tile->count, arr::WaveformCache::kTile + 2);
+        // (point x + 1 is column x's centre)
+        const auto top = [&](int x) { return tile->tops[0][size_t(x + 1)]; };
+        const auto bottom = [&](int x) { return tile->bottoms[0][size_t(x + 1)]; };
+        const float peak = 32.5f - 0.9f * 31.0f;
+        QVERIFY2(std::abs(top(100) - peak) < 0.5f, qPrintable(QString::number(top(100))));
+        QCOMPARE(top(99), top(100));
+        for (int x : {97, 98, 101, 102}) {
+            QCOMPARE(top(x), 31.75f);
+            QCOMPARE(bottom(x), 33.25f);
+        }
+        // The last point is the centre of the last column with its centre in the source.
+        const int columns = int(std::ceil(double(source.frames()) / 100.0 - 0.5));
+        const int lastTile = (columns - 1) / arr::WaveformCache::kTile;
+        const auto last = arr::WaveformCache::renderTile(source, 100.0, lastTile, 64, false);
+        QVERIFY(last);
+        QCOMPARE(last->count, columns - lastTile * arr::WaveformCache::kTile + 1);
+        QVERIFY(!arr::WaveformCache::renderTile(source, 100.0, lastTile + 1, 64, false));
     }
 
     void aDraggedClipIsHeardWhereItGoesBeforeItIsDropped() {

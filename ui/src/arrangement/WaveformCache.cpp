@@ -13,18 +13,17 @@ double quantizedGain(double gain) {
     return std::pow(10.0, app::roundHalfEven(20.0 * std::log10(gain) * 10.0) / 10.0 / 20.0);
 }
 
-std::shared_ptr<const WaveformCache::Tile> WaveformCache::renderTile(const app::Waveform& source,
-                                                                     double framesPerPixel, int index, int height,
-                                                                     bool splitChannels, double gain) {
+WaveformOutline waveformOutline(const app::Waveform& source, double framesPerPixel, qint64 first, int count,
+                                int height, bool splitChannels, double gain) {
+    WaveformOutline outline;
     const qint64 frames = source.frames();
     const int channels = std::max(1, source.channels());
     const double fpp = framesPerPixel;
-    // Column edges in source frames, with one padding column each side, so the
-    // smoothing is seamless across tile borders: kTile + 3 edges, kTile + 2 columns.
-    const auto edge = [&](int j) { return std::max(0.0, (static_cast<double>(index) * kTile - 1 + j) * fpp); };
-    if (source.isNull() || frames <= 0 || fpp <= 0 || (static_cast<double>(index) * kTile) * fpp >= frames ||
-        height < 2)
-        return nullptr;
+    if (source.isNull() || frames <= 0 || fpp <= 0 || count <= 0 || height < 2) return outline;
+    // Points up to the last whose column's centre is in the source.
+    const double centre = (static_cast<double>(first) + 0.5) * fpp;
+    count = static_cast<int>(std::clamp(std::ceil((static_cast<double>(frames) - centre) / fpp), 0.0, double(count)));
+    if (count <= 0) return outline;
 
     int level = -1;
     for (int candidate = source.peakLevels() - 1; candidate >= 0; --candidate) {
@@ -36,45 +35,37 @@ std::shared_ptr<const WaveformCache::Tile> WaveformCache::renderTile(const app::
     const qint64 n = level >= 0 ? source.peakCount(level) : frames;
     const double perIndex = level >= 0 ? app::Waveform::samplesPerPeak(level) : 1.0;
     const float* peaks = level >= 0 ? source.peaks(level) : nullptr;
-    if (n <= 0) return nullptr;
+    if (n <= 0) return outline;
 
-    constexpr int kPadded = kTile + 2;
-    std::vector<float> lo(static_cast<size_t>(kPadded * channels)), hi(lo.size());
-    std::vector<bool> valid(kPadded);
-    for (int j = 0; j < kPadded; ++j) {
-        const auto i0 = static_cast<qint64>(std::floor(edge(j) / perIndex));
-        const auto i1 = static_cast<qint64>(std::floor(edge(j + 1) / perIndex));
-        valid[static_cast<size_t>(j)] = i0 < n;
-        const qint64 start = std::clamp<qint64>(i0, 0, n - 1);
-        const qint64 end = std::max(std::clamp<qint64>(i1, 0, n), start + 1);
+    // Each point's minimum and maximum, per channel: of the frames from half a
+    // column before its column to half a column after it.
+    std::vector<float> lo(static_cast<size_t>(count * channels)), hi(lo.size());
+    for (int j = 0; j < count; ++j) {
+        const double column = static_cast<double>(first + j);
+        const auto i0 = static_cast<qint64>(std::floor((column - 0.5) * fpp / perIndex));
+        const auto i1 = static_cast<qint64>(std::floor((column + 1.5) * fpp / perIndex));
+        const qint64 from = std::clamp<qint64>(i0, 0, n - 1);
+        const qint64 to = std::max(std::clamp<qint64>(i1, 0, n), from + 1);
         for (int c = 0; c < channels; ++c) {
-            float low = 0.0f, high = 0.0f;
-            if (valid[static_cast<size_t>(j)]) {
-                low = 1e9f;
-                high = -1e9f;
-                if (peaks) {
-                    for (qint64 k = start; k < end; ++k) {
-                        low = std::min(low, peaks[(k * channels + c) * 2]);
-                        high = std::max(high, peaks[(k * channels + c) * 2 + 1]);
-                    }
-                } else {
-                    const float* samples = source.channelData(c);
-                    for (qint64 k = start; k < end; ++k) {
-                        low = std::min(low, samples[k]);
-                        high = std::max(high, samples[k]);
-                    }
+            float low = 1e9f, high = -1e9f;
+            if (peaks) {
+                for (qint64 k = from; k < to; ++k) {
+                    low = std::min(low, peaks[(k * channels + c) * 2]);
+                    high = std::max(high, peaks[(k * channels + c) * 2 + 1]);
                 }
-                low *= static_cast<float>(gain);
-                high *= static_cast<float>(gain);
+            } else {
+                const float* samples = source.channelData(c);
+                for (qint64 k = from; k < to; ++k) {
+                    low = std::min(low, samples[k]);
+                    high = std::max(high, samples[k]);
+                }
             }
-            lo[static_cast<size_t>(j * channels + c)] = low;
-            hi[static_cast<size_t>(j * channels + c)] = high;
+            lo[static_cast<size_t>(j * channels + c)] = low * static_cast<float>(gain);
+            hi[static_cast<size_t>(j * channels + c)] = high * static_cast<float>(gain);
         }
     }
-    // Envelopes (not raw samples) read smoother with a light blur.
-    const auto column = [&](const std::vector<float>& values, int x, int c) {
-        const auto at = [&](int j) { return values[static_cast<size_t>(j * channels + c)]; };
-        return peaks ? (at(x) + 2.0f * at(x + 1) + at(x + 2)) * 0.25f : at(x + 1);
+    const auto at = [&](const std::vector<float>& values, int j, int c) {
+        return values[static_cast<size_t>(j * channels + c)];
     };
 
     struct Lane {
@@ -89,36 +80,57 @@ std::shared_ptr<const WaveformCache::Tile> WaveformCache::renderTile(const app::
     } else {
         lanes = {{-1, 0, height}};
     }
-    auto tile = std::make_shared<Tile>();
+    outline.count = count;
     for (const Lane& lane : lanes) {
-        std::vector<float> tops(kTile), bottoms(kTile);
-        const double center = lane.top + lane.height / 2.0;
+        std::vector<float> tops(static_cast<size_t>(count)), bottoms(tops.size());
+        const double middle = std::floor(lane.top + lane.height / 2.0) + 0.5;  // (a pixel's centre)
         const double half = std::max(1.0, lane.height / 2.0 - 1.0);
         const double laneTop = lane.top, laneBottom = lane.top + lane.height;
-        for (int x = 0; x < kTile; ++x) {
+        const double thickness = std::min<double>(WaveformOutline::kMinThickness, lane.height);
+        for (int j = 0; j < count; ++j) {
             float low = 0.0f, high = 0.0f;
             if (lane.channel >= 0) {
-                low = column(lo, x, lane.channel);
-                high = column(hi, x, lane.channel);
+                low = at(lo, j, lane.channel);
+                high = at(hi, j, lane.channel);
             } else {
-                low = column(lo, x, 0);
-                high = column(hi, x, 0);
+                low = at(lo, j, 0);
+                high = at(hi, j, 0);
                 for (int c = 1; c < channels; ++c) {
-                    low = std::min(low, column(lo, x, c));
-                    high = std::max(high, column(hi, x, c));
+                    low = std::min(low, at(lo, j, c));
+                    high = std::max(high, at(hi, j, c));
                 }
             }
-            double top = std::clamp(center - std::clamp<double>(high, -1, 1) * half, laneTop, laneBottom);
-            double bottom = std::clamp(center - std::clamp<double>(low, -1, 1) * half, laneTop, laneBottom);
-            bottom = std::min(std::max(bottom, top + 1.0), laneBottom);  // at least a pixel thick
-            top = std::min(top, bottom - 1.0);
-            if (!valid[static_cast<size_t>(x + 1)]) top = bottom;  // past the end: nothing
-            tops[static_cast<size_t>(x)] = static_cast<float>(top);
-            bottoms[static_cast<size_t>(x)] = static_cast<float>(bottom);
+            double top = middle - std::clamp<double>(high, -1, 1) * half;
+            double bottom = middle - std::clamp<double>(low, -1, 1) * half;
+            if (bottom - top < thickness) {  // as thick as the line through silence, about its middle
+                const double centre = (top + bottom) / 2;
+                top = centre - thickness / 2;
+                bottom = centre + thickness / 2;
+            }
+            tops[static_cast<size_t>(j)] = static_cast<float>(std::clamp(top, laneTop, laneBottom));
+            bottoms[static_cast<size_t>(j)] = static_cast<float>(std::clamp(bottom, laneTop, laneBottom));
         }
-        tile->tops.push_back(std::move(tops));
-        tile->bottoms.push_back(std::move(bottoms));
+        outline.tops.push_back(std::move(tops));
+        outline.bottoms.push_back(std::move(bottoms));
     }
+    return outline;
+}
+
+void WaveformOutline::draw(SgPainter& p, double x0, double top, const QColor& color) const {
+    for (size_t lane = 0; lane < tops.size(); ++lane) {
+        p.save();
+        p.translate(0.0, top);
+        p.fillBand(x0, 1.0, tops[lane].data(), bottoms[lane].data(), count, color);
+        p.restore();
+    }
+}
+
+std::shared_ptr<const WaveformCache::Tile> WaveformCache::renderTile(const app::Waveform& source,
+                                                                     double framesPerPixel, int index, int height,
+                                                                     bool splitChannels, double gain) {
+    auto tile = std::make_shared<Tile>(waveformOutline(source, framesPerPixel, qint64(index) * kTile - 1, kTile + 2,
+                                                       height, splitChannels, gain));
+    if (tile->count < 2) return nullptr;  // (past the source's end)
     return tile;
 }
 
@@ -168,9 +180,8 @@ void WaveformCache::draw(SgPainter& p, const app::Waveform& source, const QRectF
         if (!made) break;
         const double x = app::roundHalfEven(clipX + index * kTile - offset);
         p.save();
-        p.translate(x, body.top());
-        for (size_t lane = 0; lane < made->tops.size(); ++lane)
-            p.fillColumns(0.0, 1.0, made->tops[lane].data(), made->bottoms[lane].data(), kTile, color);
+        p.setClipRect(QRectF(x, body.top(), kTile, body.height()));  // (its outer points are its neighbours')
+        made->draw(p, x - 1.0, body.top(), color);
         p.restore();
     }
 }

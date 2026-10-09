@@ -121,7 +121,8 @@ public:
     Q_INVOKABLE void openEditor();
 
     // The sidechain menu's entries, in order: {text, checkable, checked,
-    // enabled, source, tap}, or {separator: true}. Choosing one is
+    // enabled, source, tap}, {separator: true}, or {search: true, children}
+    // (a search field over the tracks, entries as the others). Choosing one is
     // setSidechain(source, tap) (source "": no sidechain).
     Q_INVOKABLE QVariantList sidechainMenu() const;
     Q_INVOKABLE void setSidechain(const QString& sourceTrackId, const QString& tap);

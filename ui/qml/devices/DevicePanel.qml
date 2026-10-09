@@ -145,7 +145,8 @@ Rectangle {
     }
 
     // A device's sidechain menu: No Sidechain, the tracks it can come from
-    // (those that would close a cycle greyed out), then where it is taken.
+    // (those that would close a cycle greyed out) under a search field that
+    // has the keyboard as it opens, then where it is taken.
     function showSidechainMenu(frame, at, x, y) {
         const trackId = frame.trackId
         const id = frame.deviceId
@@ -155,6 +156,11 @@ Rectangle {
             const entry = entries[i]
             if (entry.separator) {
                 menu.separator()
+                continue
+            }
+            if (entry.search) {
+                menu.search(entry.children,
+                            source => Session.editor.trySetDeviceSidechain(trackId, id, source.source, source.tap))
                 continue
             }
             menu.entry(entry.text, () => Session.editor.trySetDeviceSidechain(trackId, id, entry.source, entry.tap),

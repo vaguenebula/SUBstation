@@ -7,13 +7,15 @@
 // track's instrument), after one of its devices (in its racks too), Post FX
 // (before its fader) or Post Mixer (after it). The master's devices take any track. Built-in devices
 // with a sidechain input (the Compressor, the Sidechain device, whose hint over
-// its curve opens the menu) have the button too. Driven in a window with a real
+// its curve opens the menu) have the button too. The tracks are under a search
+// field that has the keyboard as the menu opens. Driven in a window with a real
 // session and the test plug-ins, with synthesized mouse events.
 
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QTest>
 #include <QUndoStack>
+#include <QWheelEvent>
 
 #include "BridgeTestSupport.h"
 #include "DevicePanelTestSupport.h"
@@ -64,6 +66,53 @@ class TestUiDevicePanelSidechain : public QObject {
         QVERIFY2(ui_.choose(entry), qPrintable(entry));
     }
     bool checked(const QString& entry) { return test::menuChecked(ui_.menu(), entry); }
+    // The open menu's search field (MenuSearch), and its list.
+    QQuickItem* search() {
+        QObject* menu = ui_.menu();
+        for (int i = 0; i < menu->property("count").toInt(); ++i) {
+            QQuickItem* item = nullptr;
+            QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, i));
+            if (test::isSearch(item)) return item;
+        }
+        return nullptr;
+    }
+    QQuickItem* list() { return test::part(search(), "list"); }
+    // The open menu's entries shown: its own (separators aside), and the search field's rows shown.
+    QStringList shown() {
+        QStringList texts;
+        QObject* menu = ui_.menu();
+        for (int i = 0; i < menu->property("count").toInt(); ++i) {
+            QQuickItem* item = nullptr;
+            QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, i));
+            const QString text = item ? item->property("text").toString() : QString();
+            if (test::isSearch(item)) {
+                texts += test::searchTexts(item, true);
+            } else if (item && item->isVisible() && !text.isEmpty()) {
+                texts << text;
+            }
+        }
+        return texts;
+    }
+    // The row highlighted in the search field's list (of those shown; -1: none), and the menu's own entry.
+    int row() { return search()->property("current").toInt(); }
+    int highlighted() { return ui_.menu()->property("currentIndex").toInt(); }
+    int indexOf(const QString& entry) {
+        QObject* menu = ui_.menu();
+        for (int i = 0; i < menu->property("count").toInt(); ++i) {
+            QQuickItem* item = nullptr;
+            QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, i));
+            if (item && item->property("text").toString() == entry) return i;
+        }
+        return -1;
+    }
+    // Typed into the window (what has the focus), a key at a time.
+    void typeText(const QString& text) {
+        for (const QChar ch : text) QTest::keyClick(window(), ch.toLatin1());
+    }
+    QString focused() {
+        QQuickItem* item = window()->activeFocusItem();
+        return item ? item->objectName() : QString();
+    }
 
 private Q_SLOTS:
     void initTestCase() {
@@ -230,6 +279,163 @@ private Q_SLOTS:
         QCOMPARE(test::menuTexts(ui_.menu()).mid(0, 3), (QStringList{"No Sidechain", "", "Kick"}));
         QVERIFY(ui_.choose(QStringLiteral("Kick")));
         QCOMPARE(sidechain(bass, ducker), (Sidechain{kick, sub::app::kPostFader}));
+    }
+
+    void theMenuSearchesTheTracks() {
+        // The tracks are a list under a search field (where the separator after
+        // No Sidechain was) that has the keyboard as the menu opens: what is
+        // typed shows the tracks with every word of it, in any case, the first
+        // highlighted; Enter takes the one highlighted.
+        const QString kick = editor().addAudioTrack(-1, QStringLiteral("Kick"));
+        const QString top = editor().addAudioTrack(-1, QStringLiteral("Snare Top"));
+        const QString bottom = editor().addAudioTrack(-1, QStringLiteral("Snare Bottom"));
+        const QString bass = editor().addAudioTrack(-1, QStringLiteral("Bass"));
+        session().selection()->selectTrack(bass);
+        const QString keyed = editor().addDevice(bass, QStringLiteral("compressor"));
+        ui_.polish();
+        QCOMPARE(openMenu(keyed), (QStringList{"No Sidechain", "", "Kick", "Snare Top", "Snare Bottom"}));
+        QCOMPARE(focused(), QStringLiteral("menuSearch"));
+        QCOMPARE(row(), -1);  // (nothing typed: nothing highlighted)
+        typeText(QStringLiteral("sNARE"));
+        QCOMPARE(shown(), (QStringList{"No Sidechain", "Snare Top", "Snare Bottom"}));
+        QCOMPARE(row(), 0);
+        typeText(QStringLiteral(" bot"));
+        QCOMPARE(shown(), (QStringList{"No Sidechain", "Snare Bottom"}));
+        ui_.screenshot(QStringLiteral("sidechain-menu-search"), true);
+        for (int i = 0; i < 4; ++i) QTest::keyClick(window(), Qt::Key_Backspace);
+        QCOMPARE(shown(), (QStringList{"No Sidechain", "Snare Top", "Snare Bottom"}));
+        // The arrows move along the rows, and on to the menu's entries; typing
+        // there types into the field, and Down comes back into the list.
+        QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(row(), 1);
+        QTest::keyClick(window(), Qt::Key_Up);
+        QCOMPARE(row(), 0);
+        QTest::keyClick(window(), Qt::Key_Up);
+        QCOMPARE(highlighted(), indexOf(QStringLiteral("No Sidechain")));
+        QCOMPARE(row(), -1);
+        QTest::keyClick(window(), Qt::Key_X);
+        QCOMPARE(focused(), QStringLiteral("menuSearch"));
+        QCOMPARE(highlighted(), -1);
+        QCOMPARE(shown(), QStringList{"No Sidechain"});
+        QTest::keyClick(window(), Qt::Key_Backspace);  // (the x: typed at the end)
+        QCOMPARE(shown(), (QStringList{"No Sidechain", "Snare Top", "Snare Bottom"}));
+        QTest::keyClick(window(), Qt::Key_Up);
+        QTest::keyClick(window(), Qt::Key_Space);  // (back to the field: "snare ")
+        QCOMPARE(focused(), QStringLiteral("menuSearch"));
+        QTest::keyClick(window(), Qt::Key_B);
+        QCOMPARE(shown(), (QStringList{"No Sidechain", "Snare Bottom"}));
+        QTest::keyClick(window(), Qt::Key_Backspace);
+        QTest::keyClick(window(), Qt::Key_Up);
+        QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(focused(), QStringLiteral("menuSearch"));
+        QCOMPARE(row(), 0);
+        QTest::keyClick(window(), Qt::Key_Return);
+        QTRY_VERIFY(!ui_.menu()->property("visible").toBool());
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{top, sub::app::kPostFader}));
+
+        // Open again: all of them, nothing typed; a track that would close a
+        // cycle shown but passed by; Down past the last row goes on to the
+        // taps, and Up from there back to it.
+        editor().setTrackOutput(bass, sub::app::Output::track(bottom));
+        QStringList entries = openMenu(keyed);
+        QCOMPARE(entries.mid(0, 5), (QStringList{"No Sidechain", "", "Kick", "Snare Top", "Snare Bottom (this track feeds it)"}));
+        QVERIFY(!test::menuEnabled(ui_.menu(), QStringLiteral("Snare Bottom (this track feeds it)")));
+        QTest::keyClick(window(), Qt::Key_Return);
+        QVERIFY(ui_.menu()->property("visible").toBool());
+        typeText(QStringLiteral("  "));  // (only spaces: nothing typed either)
+        QTest::keyClick(window(), Qt::Key_Return);
+        QVERIFY(ui_.menu()->property("visible").toBool());
+        QTest::keyClick(window(), Qt::Key_Backspace);
+        QTest::keyClick(window(), Qt::Key_Backspace);
+        typeText(QStringLiteral("bottom"));
+        QCOMPARE(shown().mid(0, 2), (QStringList{"No Sidechain", "Snare Bottom (this track feeds it)"}));
+        QCOMPARE(row(), -1);
+        QTest::keyClick(window(), Qt::Key_Return);
+        QVERIFY(ui_.menu()->property("visible").toBool());
+        for (int i = 0; i < 6; ++i) QTest::keyClick(window(), Qt::Key_Backspace);
+        QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(row(), 0);
+        QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(row(), 1);
+        QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(highlighted(), indexOf(QStringLiteral("Pre FX")));
+        QTest::keyClick(window(), Qt::Key_Up);
+        QCOMPARE(focused(), QStringLiteral("menuSearch"));
+        QCOMPARE(row(), 1);
+        // Enter on one of the menu's entries highlighted (a tap) takes it.
+        QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(highlighted(), indexOf(QStringLiteral("Pre FX")));
+        QTest::keyClick(window(), Qt::Key_Return);
+        QTRY_VERIFY(!ui_.menu()->property("visible").toBool());
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{top, sub::app::kPreFx}));
+        // Esc closes it, nothing chosen; Enter on a row highlighted with the
+        // arrows takes it (where the old one was taken).
+        openMenu(keyed);
+        QTest::keyClick(window(), Qt::Key_Escape);
+        QTRY_VERIFY(!ui_.menu()->property("visible").toBool());
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{top, sub::app::kPreFx}));
+        openMenu(keyed);
+        QTest::keyClick(window(), Qt::Key_Down);
+        QTest::keyClick(window(), Qt::Key_Return);
+        QTRY_VERIFY(!ui_.menu()->property("visible").toBool());
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{kick, sub::app::kPreFx}));
+    }
+
+    void manyTracksScroll() {
+        // However many tracks there are, the list shows 8 rows at a time and
+        // scrolls: with the wheel, and to keep the row the arrows reach in view.
+        QStringList names;
+        QStringList ids;
+        for (int i = 1; i <= 30; ++i) {
+            names << QStringLiteral("Track %1").arg(i);
+            ids << editor().addAudioTrack(-1, names.back());
+        }
+        const QString bass = editor().addAudioTrack(-1, QStringLiteral("Bass"));
+        session().selection()->selectTrack(bass);
+        const QString keyed = editor().addDevice(bass, QStringLiteral("compressor"));
+        ui_.polish();
+        QCOMPARE(openMenu(keyed).mid(2), names);
+        QQuickItem* rows = list();
+        QVERIFY(rows);
+        const qreal rowHeight = search()->property("rowHeight").toReal();
+        QVERIFY(rowHeight > 0);
+        QCOMPARE(rows->height(), 8 * rowHeight);
+        QVERIFY(ui_.menu()->property("height").toReal() < 12 * rowHeight);
+        QCOMPARE(rows->property("contentY").toReal(), 0.0);
+        ui_.screenshot(QStringLiteral("sidechain-menu-many"), true);
+
+        // The arrows: down to the 12th, in view. (First: on some platforms the
+        // wheel's event below hovers a row, which highlights it.)
+        for (int i = 0; i < 12; ++i) QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(row(), 11);
+        const qreal y = 11 * rowHeight - rows->property("contentY").toReal();
+        QVERIFY2(y > 0 && y + rowHeight <= rows->height(), qPrintable(QString::number(y)));
+        // The wheel scrolls it on.
+        const qreal before = rows->property("contentY").toReal();
+        const QPoint over = test::centerOf(rows);
+        QWheelEvent wheel(QPointF(over), QPointF(window()->mapToGlobal(over)), QPoint(), QPoint(0, -120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QGuiApplication::sendEvent(window(), &wheel);
+        QTRY_VERIFY(rows->property("contentY").toReal() > before);
+        QVERIFY(ui_.menu()->property("visible").toBool());
+        // Typing: back to the top, the rows that match.
+        typeText(QStringLiteral("track 2"));
+        QCOMPARE(rows->property("contentY").toReal(), 0.0);
+        QCOMPARE(row(), 0);
+        QCOMPARE(test::searchTexts(search(), true).mid(0, 3), (QStringList{"Track 2", "Track 12", "Track 20"}));
+        QCOMPARE(rows->height(), 8 * rowHeight);  // (as tall while filtering)
+        QTest::keyClick(window(), Qt::Key_Return);
+        QTRY_VERIFY(!ui_.menu()->property("visible").toBool());
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{ids[1], sub::app::kPostFader}));
+        // A row far down: found (scrolled into view), ticked, clicked.
+        openMenu(keyed);
+        QVERIFY(checked(QStringLiteral("Track 2")));
+        QVERIFY(!checked(QStringLiteral("Track 25")));
+        QVERIFY(ui_.choose(QStringLiteral("Track 25")));
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{ids[24], sub::app::kPostFader}));
+        openMenu(keyed);
+        QVERIFY(checked(QStringLiteral("Track 25")) && !checked(QStringLiteral("Track 2")));
+        QVERIFY(ui_.closeMenu());
     }
 };
 

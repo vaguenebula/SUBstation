@@ -10,6 +10,7 @@
 // here). With $SUBSTATION_SCREENS set, it saves screenshots there.
 
 #include <QFileInfo>
+#include <QJSValue>
 #include <QMouseEvent>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -158,6 +159,25 @@ class TestUiArrangementTracks : public QObject {
         for (const QChar ch : text) QTest::keyClick(window(), ch.toLatin1());
     }
     QObject* popup() { return h_->view()->findChild<QObject*>(QStringLiteral("arrangementMenu")); }
+    // The open menu's entries shown: its own (separators aside), and its search field's rows shown (MenuSearch).
+    QStringList shownEntries() {
+        QStringList texts;
+        QObject* menu = popup();
+        for (int i = 0; i < menu->property("count").toInt(); ++i) {
+            QQuickItem* item = nullptr;
+            QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, i));
+            const QString text = item ? item->property("text").toString() : QString();
+            if (item && item->property("list").isValid()) {
+                QVariant rows;
+                QMetaObject::invokeMethod(item, "texts", Q_RETURN_ARG(QVariant, rows), Q_ARG(QVariant, true));
+                if (rows.metaType() == QMetaType::fromType<QJSValue>()) rows = rows.value<QJSValue>().toVariant();
+                texts += rows.toStringList();
+            } else if (item && item->isVisible() && !text.isEmpty()) {
+                texts << text;
+            }
+        }
+        return texts;
+    }
     void closePopup() {
         QObject* menu = popup();
         QMetaObject::invokeMethod(menu, "close");
@@ -1100,6 +1120,10 @@ private Q_SLOTS:
                                                 QStringLiteral("Resampling"), QStringLiteral("Drums"), cycle, retName,
                                                 QStringLiteral("No Input")}));
         QVERIFY(!menu.find(cycle)->enabled);  // its own group
+        // The tracks are a search field's list, after Resampling.
+        const arr::MenuEntry& tracks = menu.entries()[menu.texts().indexOf(QStringLiteral("Resampling")) + 1];
+        QVERIFY(tracks.search);
+        QCOMPARE(tracks.children.size(), size_t(3));
         QVERIFY(menu.find(QStringLiteral("Drums"))->enabled && menu.find(QStringLiteral("No Input"))->checked);
         // Configure... asks for the preferences' Audio page.
         QSignalSpy preferences(arrangement(), &sub::ui::Arrangement::preferencesRequested);
@@ -1115,12 +1139,22 @@ private Q_SLOTS:
         undo().undo();
         h_->settle();
 
-        // The input button shows the menu.
+        // The input button shows the menu, its search field taking what is
+        // typed: the tracks with it shown, the first highlighted; Enter takes it.
         clickControl(b, "input");
         QTRY_VERIFY(popup()->property("visible").toBool());
         QCOMPARE(popup()->property("count").toInt(), int(menu.entries().size()));
+        typeText(QStringLiteral("dRu"));
+        QCOMPARE(shownEntries(), (QStringList{QStringLiteral("Ext. In"), QStringLiteral("Configure…"),
+                                              QStringLiteral("Resampling"), QStringLiteral("Drums"),
+                                              QStringLiteral("No Input")}));
         test::screenshot(window(), QStringLiteral("arrangement_input_menu"));
-        closePopup();
+        QTest::keyClick(window(), Qt::Key_Return);
+        QTRY_VERIFY(!popup()->property("visible").toBool());
+        h_->settle();
+        QCOMPARE(project().track(b).inputTrack, std::optional<QString>(a));
+        undo().undo();
+        h_->settle();
 
         QVERIFY(menu.triggerText(QStringLiteral("Drums")));
         h_->settle();
@@ -1160,9 +1194,8 @@ private Q_SLOTS:
         // A return the track sends to can't be its source.
         editor().setSend(b, ret, 0.0);
         h_->settle();
-        for (const arr::MenuEntry& entry : header(b)->inputMenu().entries()) {
-            if (entry.text.startsWith(retName)) QVERIFY(!entry.enabled);
-        }
+        const arr::MenuEntry* sent = header(b)->inputMenu().find(retName + QStringLiteral(" (it takes this track's output)"));
+        QVERIFY(sent && !sent->enabled);
     }
 
     // In, Auto and Off side by side, as Ableton's: the one chosen lit.
@@ -1214,6 +1247,7 @@ private Q_SLOTS:
                                                 QStringLiteral("Inner"), QStringLiteral("Sends Only")}));
         QVERIFY(!menu.find(QStringLiteral("Ext. Out"))->enabled);
         QVERIFY(menu.find(QStringLiteral("Main"))->checked);
+        QVERIFY(menu.entries()[menu.texts().indexOf(QStringLiteral("Main")) + 1].search);  // over the tracks
         QVERIFY(menu.triggerText(QStringLiteral("Bus")));
         h_->settle();
         QCOMPARE(project().track(a).output, sub::app::Output::track(bus));

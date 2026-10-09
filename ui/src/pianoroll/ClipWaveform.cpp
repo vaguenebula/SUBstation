@@ -1,5 +1,6 @@
 #include "pianoroll/ClipWaveform.h"
 
+#include "arrangement/WaveformCache.h"
 #include "audio/EngineBridge.h"
 #include "audio/Waveform.h"
 #include "model/Numbers.h"
@@ -21,121 +22,17 @@ namespace {
 constexpr std::array<double, 19> kTimeSteps{0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1,
                                             2,     5,     10,    15,   30,   60,   120, 300,  600};
 
-// A gain (linear) to 0.1 dB: steps that look the same, and a quiet clip's
-// waveform stays as small as it is (never flat, as rounding the linear gain
-// would make it). (waveform_cache.quantized_gain)
-double quantizedGain(double gain) {
-    if (gain <= 0.0) return 0.0;
-    return std::pow(10.0, app::roundHalfEven(20.0 * std::log10(gain) * 10.0) / 10.0 / 20.0);
-}
-
-// A source's waveform over `area`, its whole length fitted to the width, a
-// column per pixel: each column's minimum and maximum (from the source's
-// peaks, or its samples when zoomed in that far), scaled by `gain`, lightly
-// blurred when from peaks; both channels apart when `split` (and stereo). As
-// waveform_cache.render_tile drew it, without its per-row antialiasing.
+// A source's waveform over `area`, its whole length fitted to the width, as
+// the arrangement draws it (arrangement::waveformOutline), scaled by `gain`;
+// both channels apart when `split` (and stereo).
 void drawWaveform(SgPainter& p, const app::Waveform& source, const QRectF& area, const QColor& color, bool split,
                   double gain) {
-    const qint64 frames = source.frames();
     const int columns = static_cast<int>(std::ceil(area.width()));
-    const int height = static_cast<int>(area.height());
-    const int channels = std::max(1, source.channels());
-    if (frames <= 0 || columns <= 0 || height < 2) return;
-    const double fpp = static_cast<double>(frames) / std::max(1.0, area.width());
-
-    int level = -1;
-    for (int candidate = source.peakLevels() - 1; candidate >= 0; --candidate) {
-        if (app::Waveform::samplesPerPeak(candidate) <= fpp) {
-            level = candidate;
-            break;
-        }
-    }
-    const qint64 n = level >= 0 ? source.peakCount(level) : frames;
-    const double perIndex = level >= 0 ? app::Waveform::samplesPerPeak(level) : 1.0;
-    const float* peaks = level >= 0 ? source.peaks(level) : nullptr;
-    if (n <= 0) return;
-
-    // Columns -1 .. columns: one padding column each side for the blur.
-    const int padded = columns + 2;
-    std::vector<float> lo(static_cast<size_t>(padded * channels)), hi(lo.size());
-    std::vector<bool> valid(static_cast<size_t>(padded));
-    for (int j = 0; j < padded; ++j) {
-        const double e0 = std::max(0.0, (j - 1) * fpp), e1 = std::max(0.0, j * fpp);
-        const auto i0 = static_cast<qint64>(std::floor(e0 / perIndex));
-        const auto i1 = static_cast<qint64>(std::floor(e1 / perIndex));
-        valid[static_cast<size_t>(j)] = i0 < n;
-        const qint64 start = std::clamp<qint64>(i0, 0, n - 1);
-        const qint64 end = std::max(std::clamp<qint64>(i1, 0, n), start + 1);
-        for (int c = 0; c < channels; ++c) {
-            float low = 0.0f, high = 0.0f;
-            if (valid[static_cast<size_t>(j)]) {
-                low = 1e9f;
-                high = -1e9f;
-                if (peaks) {
-                    for (qint64 k = start; k < end; ++k) {
-                        low = std::min(low, peaks[(k * channels + c) * 2]);
-                        high = std::max(high, peaks[(k * channels + c) * 2 + 1]);
-                    }
-                } else {
-                    const float* samples = source.channelData(c);
-                    for (qint64 k = start; k < end; ++k) {
-                        low = std::min(low, samples[k]);
-                        high = std::max(high, samples[k]);
-                    }
-                }
-                low *= static_cast<float>(gain);
-                high *= static_cast<float>(gain);
-            }
-            lo[static_cast<size_t>(j * channels + c)] = low;
-            hi[static_cast<size_t>(j * channels + c)] = high;
-        }
-    }
-    // Envelopes (not raw samples) read smoother with a light blur.
-    auto column = [&](const std::vector<float>& values, int x, int c) {
-        const auto at = [&](int j) { return values[static_cast<size_t>(j * channels + c)]; };
-        return peaks ? (at(x) + 2.0f * at(x + 1) + at(x + 2)) * 0.25f : at(x + 1);
-    };
-
-    struct Lane {
-        int channel;  // -1: all channels together
-        int top;
-        int height;
-    };
-    std::vector<Lane> lanes;
-    if (split && channels == 2) {
-        const int half = height / 2;
-        lanes = {{0, 0, half}, {1, half, height - half}};
-    } else {
-        lanes = {{-1, 0, height}};
-    }
-    std::vector<float> yTop(static_cast<size_t>(columns)), yBottom(yTop.size());
-    for (const Lane& lane : lanes) {
-        const double center = lane.top + lane.height / 2.0;
-        const double half = std::max(1.0, lane.height / 2.0 - 1.0);
-        const double laneTop = lane.top, laneBottom = lane.top + lane.height;
-        for (int x = 0; x < columns; ++x) {
-            float low = 0.0f, high = 0.0f;
-            if (lane.channel >= 0) {
-                low = column(lo, x, lane.channel);
-                high = column(hi, x, lane.channel);
-            } else {
-                low = column(lo, x, 0);
-                high = column(hi, x, 0);
-                for (int c = 1; c < channels; ++c) {
-                    low = std::min(low, column(lo, x, c));
-                    high = std::max(high, column(hi, x, c));
-                }
-            }
-            double top = std::clamp(center - std::clamp<double>(high, -1, 1) * half, laneTop, laneBottom);
-            double bottom = std::clamp(center - std::clamp<double>(low, -1, 1) * half, laneTop, laneBottom);
-            bottom = std::min(std::max(bottom, top + 1.0), laneBottom);  // at least a pixel thick
-            top = std::min(top, bottom - 1.0);
-            if (!valid[static_cast<size_t>(x + 1)]) top = bottom;  // past the end: nothing
-            yTop[static_cast<size_t>(x)] = static_cast<float>(area.top() + top);
-            yBottom[static_cast<size_t>(x)] = static_cast<float>(area.top() + bottom);
-        }
-        p.fillColumns(area.left(), 1.0, yTop.data(), yBottom.data(), columns, color);
-    }
+    if (source.frames() <= 0 || columns <= 0) return;
+    const double fpp = static_cast<double>(source.frames()) / std::max(1.0, area.width());
+    const arrangement::WaveformOutline outline =
+        arrangement::waveformOutline(source, fpp, -1, columns + 2, static_cast<int>(area.height()), split, gain);
+    outline.draw(p, area.left() - 1.0, area.top(), color);
 }
 
 }  // namespace
@@ -237,7 +134,7 @@ double ClipWaveform::drawBand(SgPainter& p, const Band& band, const QRectF& area
     p.setClipRect(area);
     QColor opaque = color;
     opaque.setAlpha(255);
-    drawWaveform(p, source, area, opaque, split, quantizedGain(app::dbToGain(clip.gainDb)));
+    drawWaveform(p, source, area, opaque, split, arrangement::quantizedGain(app::dbToGain(clip.gainDb)));
     p.restore();
     const QColor dim(0, 0, 0, 120);
     p.fillRect(QRectF(area.left(), area.top(), x0 - area.left(), area.height()), dim);

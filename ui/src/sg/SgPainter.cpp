@@ -965,6 +965,45 @@ void SgPainter::fillColumns(qreal x0, qreal dx, const float* y0, const float* y1
     }
 }
 
+void SgPainter::fillBand(qreal x0, qreal dx, const float* tops, const float* bottoms, int count,
+                         const QColor& color) {
+    const Rgba c = premultiplied(color);
+    if (c.a == 0 || count <= 0)
+        return;
+    beginSolid();
+    const double ox = state_.offset.x() + x0, oy = state_.offset.y(), h = px() / 2;
+    // Where an outline runs within column i: from halfway to the column before,
+    // through its centre, to halfway to the one after.
+    const auto span = [&](const float* ys, int i) {
+        const double here = ys[i];
+        const double before = (ys[std::max(i - 1, 0)] + here) / 2, after = (ys[std::min(i + 1, count - 1)] + here) / 2;
+        return std::pair{std::min({before, here, after}) + oy, std::max({before, here, after}) + oy};
+    };
+    const Rgba clear{};
+    for (int i = 0; i < count; ++i) {
+        double left = ox + i * dx, right = left + dx;
+        if (right < left)
+            std::swap(left, right);
+        const auto shade = [&](double y0, const Rgba& from, double y1, const Rgba& to) {
+            quad(vertex(left, y0, from), vertex(right, y0, from), vertex(right, y1, to), vertex(left, y1, to));
+        };
+        const auto [t0, t1] = span(tops, i);
+        const auto [b0, b1] = span(bottoms, i);
+        // The top edge: clear at t0 - h, solid from t1 + h; the bottom one: solid to b0 - h, clear at b1 + h.
+        const double a0 = t0 - h, a1 = t1 + h, z0 = b0 - h, z1 = b1 + h;
+        if (a1 <= z0) {
+            shade(a0, clear, a1, c);
+            shade(a1, c, z0, c);
+            shade(z0, c, z1, clear);
+        } else {  // (a thin band's edges: they meet where they are as solid as each other)
+            const double meet = (a0 * (z1 - z0) + z1 * (a1 - a0)) / ((z1 - z0) + (a1 - a0));
+            const Rgba peak = c.scaled(float(std::clamp((meet - a0) / (a1 - a0), 0.0, 1.0)));
+            shade(a0, clear, meet, peak);
+            shade(meet, peak, z1, clear);
+        }
+    }
+}
+
 // --- Text and images ------------------------------------------------------------------
 
 void SgPainter::drawTexture(const std::shared_ptr<SgTexture>& texture, const QRectF& target, const QRectF& source,

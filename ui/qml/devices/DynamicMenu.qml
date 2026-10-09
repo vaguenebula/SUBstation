@@ -1,17 +1,21 @@
 import QtQuick
 import QtQuick.Controls
+import SUBstation
 
 // A menu filled anew each time it opens, for how things are then (the old
 // widgets built their QMenus on every right-click): clear() it, add entries
-// (Actions), separators and submenus, then popup(). What it made goes with the
-// next clear().
+// (Actions), separators, submenus and a search field, then popup(). What it
+// made goes with the next clear().
 Menu {
     id: menu
 
     // What the entries were made from (actions, separators, submenus), destroyed by clear().
     property var made: []
+    // Its search field (search()), which its entries type into while highlighted (PanelMenuItem).
+    property MenuSearch searchField: null
 
     function clear() {
+        searchField = null
         while (count > 0)
             removeItem(itemAt(0))
         for (const object of made)
@@ -39,6 +43,23 @@ Menu {
         into.addItem(separatorComponent.createObject(into.contentItem))
     }
 
+    // A search field over a scrolled list of `rows` ({text, enabled, checkable,
+    // checked}: MenuSearch), run(row) when one is chosen; it takes the keyboard
+    // as the menu opens.
+    function search(rows, run, target) {
+        const into = target || menu
+        const field = searchComponent.createObject(into.contentItem, {
+            menu: into,
+            rows: rows,
+            run: run,
+            rowComponent: searchRowComponent
+        })
+        into.addItem(field)
+        if (into === menu)
+            searchField = field
+        return field
+    }
+
     function submenu(title, target) {
         const into = target || menu
         const made_ = submenuComponent.createObject(menu, { title: title })
@@ -54,6 +75,22 @@ Menu {
     Component {
         id: separatorComponent
         MenuSeparator {}
+    }
+    Component {
+        id: searchComponent
+        MenuSearch {}
+    }
+    // A row of a search field's list: a menu item showing its entry.
+    Component {
+        id: searchRowComponent
+        MenuItem {
+            property var entry: null
+
+            text: entry ? entry.text : ""
+            enabled: !entry || entry.enabled
+            checkable: entry ? entry.checkable === true : false
+            checked: entry ? entry.checked === true : false
+        }
     }
     Component {
         id: submenuComponent
