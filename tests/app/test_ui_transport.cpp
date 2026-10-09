@@ -214,6 +214,24 @@ private Q_SLOTS:
         QVERIFY(!checked("reEnable"));
     }
 
+    // A project opened shows its own settings at once: its tempo, Lock Envelopes
+    // and the loop, not what the bar showed before (it kept 120 until moved).
+    void openingAProjectShowsItsSettings() {
+        test::TempDir dir;
+        editor().setTempo(160.0);
+        editor().setAutomationLocked(true);
+        editor().setLoopEnabled(true);
+        const QString path = dir.path(QStringLiteral("fast.gilproj"));
+        QVERIFY(session().saveProjectAs(path));
+        session().newProject();
+        QCOMPARE(item("tempo")->property("value").toDouble(), 120.0);
+        QVERIFY(!checked("lockEnvelopes") && !checked("loop"));
+
+        QVERIFY(session().openProject(path));
+        QCOMPARE(item("tempo")->property("value").toDouble(), 160.0);
+        QVERIFY(checked("lockEnvelopes") && checked("loop"));
+    }
+
     // Follow: the arrangement's.
     void follow() {
         auto* arrangement = window_->findChild<QObject*>(QStringLiteral("arrangement"));

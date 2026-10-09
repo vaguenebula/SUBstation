@@ -73,9 +73,13 @@ private Q_SLOTS:
         QVERIFY(f.stack().count() == 0 && s.clean());
 
         QSignalSpy opened(&s, &Session::projectOpened);
+        // What shows the tempo through the property hears of it (it showed 120 until moved).
+        QSignalSpy settings(&f.project(), &Project::settingsChanged);
         f.selection().setInsert(5.0);
         QVERIFY(s.openProject(path));
         QCOMPARE(opened.count(), 1);
+        QVERIFY(!settings.isEmpty());
+        QCOMPARE(f.project().property("tempo").toDouble(), 98.0);
         QCOMPARE(f.project().tracks().size(), size_t{2});
         QCOMPARE(f.project().tempo(), 98.0);
         QCOMPARE(f.engine.tempo(), 98.0);
