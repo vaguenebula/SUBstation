@@ -5,6 +5,7 @@
 
 #include "audio/AudioSettings.h"
 #include "audio/EngineBridge.h"
+#include "model/Numbers.h"
 
 namespace sub::app {
 
@@ -35,7 +36,7 @@ void MidiPreferences::show() {
     } else if (!errors.isEmpty()) {
         status_ = QStringLiteral("%1 could not be opened (see their tooltips).").arg(errors.size());
     } else {
-        status_ = QStringLiteral("%1 MIDI input%2").arg(count).arg(count != 1 ? QStringLiteral("s") : QString());
+        status_ = countText(count, QStringLiteral("MIDI input"), QStringLiteral("MIDI inputs"));
     }
     Q_EMIT changed();
 }

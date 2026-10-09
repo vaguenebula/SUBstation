@@ -21,7 +21,7 @@ QString formatValue(double value, const QString& unit) {
     if (unit == u"note") return notes::noteName(static_cast<int>(roundHalfEven(value)));  // a MIDI key
     if (unit == u"stages") {  // a count (the Disperser's)
         const auto whole = static_cast<long long>(roundHalfEven(value));
-        return QString::number(whole) + (whole == 1 ? QStringLiteral(" stage") : QStringLiteral(" stages"));
+        return countText(whole, QStringLiteral("stage"), QStringLiteral("stages"));
     }
     if (unit == u"st" || unit == u"ct") {  // semitones, cents
         const auto whole = static_cast<long long>(roundHalfEven(value));
@@ -39,9 +39,8 @@ QString formatValue(double value, const QString& unit) {
     if (unit == u"#") return QString::number(static_cast<long long>(roundHalfEven(value)));  // a count
     if (unit == u"beats") {  // a length: in bars of 4 where it is whole bars
         const auto beats = static_cast<long long>(roundHalfEven(value));
-        if (beats > 0 && beats % 4 == 0)
-            return QString::number(beats / 4) + (beats == 4 ? QStringLiteral(" Bar") : QStringLiteral(" Bars"));
-        return QString::number(beats) + (beats == 1 ? QStringLiteral(" Beat") : QStringLiteral(" Beats"));
+        if (beats > 0 && beats % 4 == 0) return countText(beats / 4, QStringLiteral("Bar"), QStringLiteral("Bars"));
+        return countText(beats, QStringLiteral("Beat"), QStringLiteral("Beats"));
     }
     return formatFixed(value, 2) + u' ' + unit;
 }

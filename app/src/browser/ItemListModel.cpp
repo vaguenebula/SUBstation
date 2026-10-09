@@ -8,6 +8,7 @@
 #include "ListModels.h"
 #include "browser/BrowserMime.h"
 #include "browser/Library.h"
+#include "model/Numbers.h"
 
 namespace sub::app {
 
@@ -90,7 +91,7 @@ QVariant ItemListModel::data(const QModelIndex& index, int role) const {
         case ToolTipRole: {
             const int uses = library_ ? library_->uses(it->key()) : 0;
             QString tip = it->toolTip.isEmpty() ? it->path : it->toolTip;
-            if (uses) tip += QStringLiteral("\nUsed %1 time%2").arg(uses).arg(uses != 1 ? QStringLiteral("s") : QString());
+            if (uses) tip += QStringLiteral("\nUsed ") + countText(uses, QStringLiteral("time"), QStringLiteral("times"));
             return tip;
         }
         case IconRole:

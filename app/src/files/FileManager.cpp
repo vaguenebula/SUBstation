@@ -16,6 +16,7 @@
 #include "editor/ProjectEditor.h"
 #include "files/HotSwap.h"
 #include "files/MissingFiles.h"
+#include "model/Numbers.h"
 #include "model/Paths.h"
 #include "model/Project.h"
 #include "session/Selection.h"
@@ -27,10 +28,6 @@ namespace {
 
 QVariantMap action(const QString& id, const QString& label) {
     return {{QStringLiteral("action"), id}, {QStringLiteral("label"), label}};
-}
-
-QString fileCountText(int count) {
-    return count == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(count);
 }
 
 }  // namespace
@@ -194,7 +191,7 @@ bool FileManager::isMissing(const QString& path) const { return !exists(path); }
 QString FileManager::summary() const {
     if (files_.empty()) return QStringLiteral("No files");
     const int missing = missingCount();
-    const QString all = fileCountText(fileCount());
+    const QString all = countText(fileCount(), QStringLiteral("file"), QStringLiteral("files"));
     return missing == 0 ? all : QStringLiteral("%1, %2 missing").arg(all).arg(missing);
 }
 
@@ -362,7 +359,7 @@ bool FileManager::locate(const QString& path, const QString& found) {
     if (more == 0)
         Q_EMIT statusMessage(QStringLiteral("Located %1").arg(name));
     else
-        Q_EMIT statusMessage(QStringLiteral("Located %1, and %2 more where it went").arg(name, fileCountText(more)));
+        Q_EMIT statusMessage(QStringLiteral("Located %1, and %2 more where it went").arg(name, countText(more, QStringLiteral("file"), QStringLiteral("files"))));
     return true;
 }
 

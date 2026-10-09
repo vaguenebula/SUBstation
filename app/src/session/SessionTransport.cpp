@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "audio/EngineBridge.h"
+#include "model/Numbers.h"
 #include "model/Project.h"
 #include "session/Selection.h"
 
@@ -74,7 +75,8 @@ QVariantList Session::countInChoices() const {
     QVariantList choices;
     for (int bars : kCountInBars) {
         const QString label = bars == 0 ? QStringLiteral("No Count-In")
-                                        : QStringLiteral("Count-In %1 Bar%2").arg(bars).arg(bars > 1 ? QStringLiteral("s") : QString());
+                                        : QStringLiteral("Count-In ") +
+                                              countText(bars, QStringLiteral("Bar"), QStringLiteral("Bars"));
         choices.append(QVariantMap{{QStringLiteral("label"), label}, {QStringLiteral("value"), bars}});
     }
     return choices;

@@ -8,6 +8,7 @@
 
 #include "model/DeviceState.h"
 #include "model/Devices.h"
+#include "model/Numbers.h"
 #include "model/Paths.h"
 #include "model/Project.h"
 
@@ -117,7 +118,7 @@ QString usesText(const Project& project, const FileUses& uses) {
     QStringList parts;
     if (!uses.clips.isEmpty()) {
         const int clips = static_cast<int>(uses.clips.size());
-        parts << (clips == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(clips));
+        parts << countText(clips, QStringLiteral("clip"), QStringLiteral("clips"));
     }
     // Devices by what they are called ("Sampler", "2 × Sampler").
     QMap<QString, int> devices;

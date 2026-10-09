@@ -8,19 +8,12 @@
 #include <utility>
 
 #include "browser/PathKeys.h"
+#include "model/Numbers.h"
 #include "plugins/PluginPaths.h"
 #include "plugins/PluginScanner.h"
 #include "plugins/PluginSettings.h"
 
 namespace sub::app {
-
-namespace {
-
-QString plural(qsizetype n, const QString& one, const QString& many) {
-    return QStringLiteral("%1 %2").arg(n).arg(n == 1 ? one : many);
-}
-
-}  // namespace
 
 PluginIndex::PluginIndex(QObject* parent, QString scanner)
     : QObject(parent),
@@ -32,9 +25,9 @@ PluginIndex::~PluginIndex() { wait(); }
 
 QString PluginIndex::statusText() const {
     if (scanning()) return progressText_.isEmpty() ? QStringLiteral("Scanning plug-ins…") : progressText_;
-    QString text = plural(pluginCount(), QStringLiteral("plug-in"), QStringLiteral("plug-ins")) + QStringLiteral(" found");
+    QString text = countText(pluginCount(), QStringLiteral("plug-in"), QStringLiteral("plug-ins")) + QStringLiteral(" found");
     if (failureCount())
-        text += QStringLiteral(" · ") + plural(failureCount(), QStringLiteral("file"), QStringLiteral("files")) +
+        text += QStringLiteral(" · ") + countText(failureCount(), QStringLiteral("file"), QStringLiteral("files")) +
                 QStringLiteral(" could not be read");
     return text;
 }

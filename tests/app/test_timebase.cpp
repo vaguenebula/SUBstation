@@ -1,5 +1,5 @@
 // Musical time: positions, bar labels, dB and pan text; and the number
-// helpers they stand on (Numbers.h).
+// helpers they stand on (Numbers.h), counts in texts too.
 
 #include "TestSupport.h"
 
@@ -92,6 +92,13 @@ private Q_SLOTS:
         QCOMPARE(floorMod(25, 12), 1);
         QCOMPARE(floorMod(-1, 12), 11);  // as Python's %: never below 0
         QCOMPARE(floorMod(-12, 12), 0);
+    }
+
+    void counts() {
+        QCOMPARE(countText(1, QStringLiteral("file"), QStringLiteral("files")), QStringLiteral("1 file"));
+        QCOMPARE(countText(0, QStringLiteral("file"), QStringLiteral("files")), QStringLiteral("0 files"));
+        QCOMPARE(countText(12, QStringLiteral("MIDI input"), QStringLiteral("MIDI inputs")),
+                 QStringLiteral("12 MIDI inputs"));
     }
 
     void gains() {

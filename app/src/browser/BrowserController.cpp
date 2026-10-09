@@ -17,6 +17,7 @@
 #include "browser/PathKeys.h"
 #include "io/Presets.h"
 #include "model/Errors.h"
+#include "model/Numbers.h"
 
 namespace sub::app {
 
@@ -25,10 +26,6 @@ namespace {
 constexpr const char* kPlacesKey = "browser/places";
 constexpr const char* kSortKey = "browser/sort";
 const QStringList kPluginCategories{QStringLiteral("Instruments"), QStringLiteral("Audio Effects")};
-
-QString plural(qsizetype n, const QString& word) {
-    return QStringLiteral("%1 %2%3").arg(n).arg(word, n != 1 ? QStringLiteral("s") : QString());
-}
 
 // Whether text has words (Python's text.split()).
 bool hasWords(const QString& text) { return !browser::pySplit(text.toStdString()).empty(); }
@@ -277,7 +274,7 @@ void BrowserController::pluginsUpdated() {
         scanText_.clear();
         const int failures = plugins_->failureCount();
         if (failures)
-            Q_EMIT statusMessage(plural(failures, QStringLiteral("plug-in file")) +
+            Q_EMIT statusMessage(countText(failures, QStringLiteral("plug-in file"), QStringLiteral("plug-in files")) +
                                QStringLiteral(" could not be read (hover over Plug-ins in the browser for details)."));
     }
     setPluginItems();
@@ -587,12 +584,13 @@ void BrowserController::selectFirstRow() {
 void BrowserController::updateStatus() {
     const QString kind = scope_.kind;
     const int count = results_->total();
-    const QString items = plural(count, QStringLiteral("item"));
+    const QString items = countText(count, QStringLiteral("item"), QStringLiteral("items"));
     if (similar_) {
         if (!similar_->result.error().isEmpty()) {
             setStatusText(QStringLiteral("Could not analyse %1").arg(similarName()));
         } else {
-            QString text = plural(count, QStringLiteral("sound")) + QStringLiteral(" like ") + similarName();
+            QString text = countText(count, QStringLiteral("sound"), QStringLiteral("sounds")) + QStringLiteral(" like ") +
+                           similarName();
             // (The sound similarity may be gone already when the session goes.)
             const int done = similarity_ ? similarity_->analysedFiles() + similarity_->failedFiles() : 0;
             if (similarity_ && similarity_->analysing() && done < similarity_->libraryFiles())  // (not while only checking files)
@@ -602,7 +600,7 @@ void BrowserController::updateStatus() {
     } else if (kind == QStringLiteral("presets") && presetItems_.empty()) {
         setStatusText(QStringLiteral("No presets yet: save one with a device's save button"));
     } else if (kind == QStringLiteral("presets")) {
-        setStatusText(plural(count, QStringLiteral("preset")));
+        setStatusText(countText(count, QStringLiteral("preset"), QStringLiteral("presets")));
     } else if (kind == QStringLiteral("plugins")) {
         const int failures = plugins_->failureCount();
         if (plugins_->scanning()) {
@@ -613,7 +611,7 @@ void BrowserController::updateStatus() {
             const QString note = failures && !hasWords(searchText_)
                                      ? QStringLiteral(", %1 could not be read").arg(failures)
                                      : QString();
-            setStatusText(plural(count, QStringLiteral("plug-in")) + note);
+            setStatusText(countText(count, QStringLiteral("plug-in"), QStringLiteral("plug-ins")) + note);
         }
     } else if (kind == QStringLiteral("all") && (index_->indexing() || plugins_->scanning())) {
         const QString busy = index_->indexing() ? QStringLiteral("Indexing") : QStringLiteral("Scanning plug-ins");

@@ -18,6 +18,7 @@
 #include "io/LiveSet.h"
 #include "io/Serialization.h"
 #include "model/Errors.h"
+#include "model/Numbers.h"
 #include "model/Paths.h"
 #include "model/Project.h"
 #include "model/Timebase.h"
@@ -125,12 +126,9 @@ bool Session::importLiveSet(const QString& path) {
     loadedFrom(path, fileStem(path));
     // It has no file yet: unsaved until it is saved (New, Open and Quit ask first).
     undoStack_->resetClean();
-    const auto count = [](int n, const QString& one, const QString& many) {
-        return QStringLiteral("%1 %2").arg(n).arg(n == 1 ? one : many);
-    };
     Q_EMIT statusMessage(QStringLiteral("Imported %1: %2, %3")
-                             .arg(name, count(imported.tracks, QStringLiteral("track"), QStringLiteral("tracks")),
-                                  count(imported.clips, QStringLiteral("clip"), QStringLiteral("clips"))));
+                             .arg(name, countText(imported.tracks, QStringLiteral("track"), QStringLiteral("tracks")),
+                                  countText(imported.clips, QStringLiteral("clip"), QStringLiteral("clips"))));
     if (!imported.notes.isEmpty()) {
         Q_EMIT information(QStringLiteral("%1 was imported. What didn't come across as it was:\n\n• %2")
                                .arg(name, imported.notes.join(QStringLiteral("\n• "))));
