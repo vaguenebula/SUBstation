@@ -64,6 +64,7 @@ Item {
                                               this, 0, height)
             }
             RoleButton {
+                id: laneButton
                 objectName: controls.lane < 0 ? "addLane" : "removeLane"
                 x: controls.width - choosers.buttonSize
                 y: controls.lane < 0 ? 2 * choosers.pitch : choosers.pitch
@@ -75,13 +76,36 @@ Item {
                 topPadding: 0
                 bottomPadding: 0
                 text: controls.lane < 0 ? "+" : "−"
-                font.pointSize: 9
-                font.weight: 700
                 tooltip: controls.lane < 0 ? qsTr("Show automation in a new lane") : qsTr("Remove this lane")
                 background: Rectangle {
                     radius: controls.lane < 0 ? width / 2 : 2
                     color: parent.hovered ? Theme.surfaceHover : Theme.surface
                     border.color: Theme.border
+                }
+                // Drawn: a font's "+" sits below the middle (and its metrics don't say
+                // where its ink is). Centred on the circle at any scale, as thin and soft
+                // as the text's strokes.
+                contentItem: Item {
+                    readonly property real arm: 6
+                    readonly property real stroke: 0.8
+
+                    Rectangle {  // its bar
+                        x: (laneButton.width - width) / 2
+                        y: (laneButton.height - height) / 2
+                        width: parent.arm
+                        height: parent.stroke
+                        antialiasing: true
+                        color: Theme.text
+                    }
+                    Rectangle {  // the "+"'s upright
+                        visible: controls.lane < 0
+                        x: (laneButton.width - width) / 2
+                        y: (laneButton.height - height) / 2
+                        width: parent.stroke
+                        height: parent.arm
+                        antialiasing: true
+                        color: Theme.text
+                    }
                 }
                 onClicked: controls.lane < 0 ? choosers.header.addLane() : choosers.header.removeLane(controls.lane)
             }

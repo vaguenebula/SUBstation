@@ -28,6 +28,7 @@ TrackHeaderItem {
     readonly property int row: 18
     readonly property int pad: 2
     readonly property int box: 16
+    readonly property int chooserGap: 4  // a track's (a group's) choosers below its name bar (its colour)
     readonly property int meterArea: 14
     readonly property int mixerWidth: 112
     readonly property int ioWidth: 84
@@ -288,7 +289,7 @@ TrackHeaderItem {
         menu: header.menu
         columnLeft: (header.isReturn ? 1 : header.indent + (header.isGroup ? 6 : 0)) + 3  // (after a group's band)
         columnRight: header.nameColumnRight - 3
-        mainTop: header.rowY(header.isGroup ? 2 : 1)
+        mainTop: header.rowY(header.isGroup ? 2 : 1) + (header.isReturn ? 0 : header.chooserGap)  // (clear of the name bar)
     }
 
     TextField {
