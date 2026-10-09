@@ -131,11 +131,46 @@ int Engine::trackIndexLocked(uint32_t trackId) const {
 std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<EdgeOrigin>* origins) const {
     std::vector<RouteEdge> edges;
     if (origins) origins->clear();
+    // Strips' devices, as needed (by index into tracks_; -1: the master's).
+    std::optional<ProcessorIds> ids;
+    std::unordered_map<int, std::vector<StripSlot>> slotsOf;
+    const auto idsOf = [&]() -> const ProcessorIds& {
+        if (!ids) ids = processorIdsLocked();
+        return *ids;
+    };
+    const auto stripSlots = [&](int strip) -> const std::vector<StripSlot>& {
+        auto found = slotsOf.find(strip);
+        if (found == slotsOf.end()) {
+            const TrackModel& model = strip < 0 ? master_ : tracks_[static_cast<size_t>(strip)];
+            found = slotsOf.emplace(strip, stripSlotsLocked(model, idsOf())).first;
+        }
+        return found->second;
+    };
+    // Where a tap leaves its source's devices (RouteEdge::tap).
+    const auto tapOf = [&](int source, SidechainTap where, uint32_t tapProcessor) {
+        if (where == SidechainTap::PostFader || where == SidechainTap::PreFader) return -1;
+        EdgeRender::Tap tap;
+        const int slot = sidechainTapLocked(where, tapProcessor, stripSlots(source), tap);
+        return tap == EdgeRender::Tap::AfterDevice ? slot + 1 : -1;
+    };
     for (size_t t = 0; t < tracks_.size(); ++t) {
         const TrackModel& track = tracks_[t];
         const int from = static_cast<int>(t);
-        edges.push_back({from, track.output == kMaster ? -1 : trackIndexLocked(track.output)});
-        if (origins) origins->push_back({from, kOutputEdge});
+        if (track.outputProcessor != 0) {  // into a device's sidechain, after its fader
+            if (const auto at = deviceSlotLocked(track.outputProcessor, idsOf())) {
+                const auto& [strip, slot] = *at;
+                RouteEdge edge{from, strip, false};
+                edge.device = stripSlots(strip)[static_cast<size_t>(slot)].enabled ? slot : -1;
+                edges.push_back(edge);
+                if (origins) origins->push_back({from, kOutputSidechainEdge, track.outputProcessor, slot});
+            }
+        } else if (track.output != kNoOutput) {
+            const int to = track.output == kMaster ? -1 : trackIndexLocked(track.output);
+            // Into a track taking it as its input (Track In): not summed, nor lined up.
+            const bool sums = to < 0 || !tracks_[static_cast<size_t>(to)].inMonitored;
+            edges.push_back({from, to, sums});
+            if (origins) origins->push_back({from, kOutputEdge});
+        }
         for (size_t s = 0; s < track.sends.size(); ++s) {
             edges.push_back({from, trackIndexLocked(track.sends[s].to)});
             if (origins) origins->push_back({from, static_cast<int>(s)});
@@ -146,7 +181,9 @@ std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<EdgeOrigin>* origins
     for (size_t t = 0; t < tracks_.size(); ++t) {
         const TrackModel& track = tracks_[t];
         if (!track.inputTrack || *track.inputTrack == kMaster) continue;
-        edges.push_back({trackIndexLocked(*track.inputTrack), static_cast<int>(t), false});
+        RouteEdge edge{trackIndexLocked(*track.inputTrack), static_cast<int>(t), false};
+        edge.tap = tapOf(edge.from, track.inputTap, track.inputTapProcessor);
+        edges.push_back(edge);
         if (origins) origins->push_back({static_cast<int>(t), kInputEdge});
     }
     // Then the sidechains, by destination (the tracks, then the master's devices)
@@ -154,44 +191,60 @@ std::vector<RouteEdge> Engine::routeEdgesLocked(std::vector<EdgeOrigin>* origins
     if (std::none_of(processors_.begin(), processors_.end(), [](const auto& p) { return p.second.sidechain.has_value(); })) {
         return edges;
     }
-    const ProcessorIds ids = processorIdsLocked();
-    std::unordered_map<int, std::vector<StripSlot>> sourceSlots;  // the sources' devices, as needed
-    const auto addSidechains = [&](const TrackModel& strip, int to) {
-        const std::vector<StripSlot> slots = stripSlotsLocked(strip, ids);
+    const auto addSidechains = [&](int to) {
+        const std::vector<StripSlot>& slots = stripSlots(to);
         for (size_t d = 0; d < slots.size(); ++d) {
             const auto found = processors_.find(slots[d].processorId);
             if (found == processors_.end() || !found->second.sidechain) continue;
             const SidechainModel& sidechain = *found->second.sidechain;
             RouteEdge edge{trackIndexLocked(sidechain.source), to, false};
             if (edge.from < 0) continue;  // (its source went: removeTrack() takes it away)
-            auto source = sourceSlots.find(edge.from);
-            if (source == sourceSlots.end()) {
-                source = sourceSlots.emplace(edge.from, stripSlotsLocked(tracks_[static_cast<size_t>(edge.from)], ids)).first;
-            }
-            EdgeRender::Tap tap;
-            const int slot = sidechainTapLocked(sidechain, source->second, tap);
-            edge.tap = tap == EdgeRender::Tap::AfterDevice ? slot + 1 : -1;
+            edge.tap = tapOf(edge.from, sidechain.tap, sidechain.tapProcessor);
             edge.device = slots[d].enabled ? static_cast<int>(d) : -1;  // one switched off isn't lined up
             edges.push_back(edge);
             if (origins) origins->push_back({to, kSidechainEdge, found->first, static_cast<int>(d)});
         }
     };
-    for (size_t t = 0; t < tracks_.size(); ++t) addSidechains(tracks_[t], static_cast<int>(t));
-    addSidechains(master_, -1);
+    for (size_t t = 0; t < tracks_.size(); ++t) addSidechains(static_cast<int>(t));
+    addSidechains(-1);
     return edges;
 }
 
-int Engine::sidechainTapLocked(const SidechainModel& sidechain, const std::vector<StripSlot>& slots,
+std::optional<std::pair<int, int>> Engine::deviceSlotLocked(uint32_t processorId, const ProcessorIds& ids) const {
+    const auto found = processors_.find(processorId);
+    if (found == processors_.end()) return std::nullopt;
+    const auto chain = chains_.find(found->second.chainId);
+    if (chain == chains_.end()) return std::nullopt;
+    const uint32_t stripId = chain->second.stripId;
+    const int strip = stripId == kMaster ? -1 : trackIndexLocked(stripId);
+    if (stripId != kMaster && strip < 0) return std::nullopt;
+    const std::vector<StripSlot> slots = stripSlotsLocked(strip < 0 ? master_ : tracks_[static_cast<size_t>(strip)], ids);
+    for (size_t s = 0; s < slots.size(); ++s) {
+        if (slots[s].processorId == processorId) return std::make_pair(strip, static_cast<int>(s));
+    }
+    return std::nullopt;
+}
+
+void Engine::dropGoneOutputSidechainsLocked() {
+    for (TrackModel& track : tracks_) {
+        if (track.outputProcessor != 0 && !processors_.contains(track.outputProcessor)) {
+            track.outputProcessor = 0;
+            track.output = kMaster;
+        }
+    }
+}
+
+int Engine::sidechainTapLocked(SidechainTap where, uint32_t tapProcessor, const std::vector<StripSlot>& slots,
                                EdgeRender::Tap& tap) const {
-    if (sidechain.tap == SidechainTap::PreFx) {  // before its first device
+    if (where == SidechainTap::PreFx) {  // before its first device
         tap = EdgeRender::Tap::AfterDevice;
         return -1;
     }
-    tap = sidechain.tap == SidechainTap::PostFader ? EdgeRender::Tap::PostFader : EdgeRender::Tap::PreFader;
-    if (sidechain.tap != SidechainTap::AfterDevice) return -1;
+    tap = where == SidechainTap::PostFader ? EdgeRender::Tap::PostFader : EdgeRender::Tap::PreFader;
+    if (where != SidechainTap::AfterDevice) return -1;
     const auto place = std::find_if(slots.begin(), slots.end(),
-                                    [&](const StripSlot& slot) { return slot.processorId == sidechain.tapProcessor; });
-    if (sidechain.tapProcessor == 0 || place == slots.end()) return -1;  // it left the source: before the fader
+                                    [&](const StripSlot& slot) { return slot.processorId == tapProcessor; });
+    if (tapProcessor == 0 || place == slots.end()) return -1;  // it left the source: before the fader
     int slot = static_cast<int>(place - slots.begin());
     // A rack switched off passes its input on, without running its chains: after the outermost such rack.
     for (int rack = slots[static_cast<size_t>(slot)].rack; rack >= 0; rack = slots[static_cast<size_t>(rack)].rack) {
@@ -221,18 +274,46 @@ void Engine::checkRouteLocked(uint32_t from, uint32_t to, const char* what) cons
 void Engine::setTrackOutput(uint32_t trackId, uint32_t outputTrackId) {
     std::lock_guard lock(mutex_);
     TrackModel& track = arrangementTrackLocked(trackId);
-    if (outputTrackId != kMaster) {
+    if (outputTrackId != kMaster && outputTrackId != kNoOutput) {
         arrangementTrackLocked(outputTrackId);
         checkRouteLocked(trackId, outputTrackId, "go into");
     }
-    if (track.output == outputTrackId) return;
+    if (track.output == outputTrackId && track.outputProcessor == 0) return;
     track.output = outputTrackId;
+    track.outputProcessor = 0;
     rebuildSnapshotLocked();
 }
 
 uint32_t Engine::trackOutput(uint32_t trackId) {
     std::lock_guard lock(mutex_);
     return arrangementTrackLocked(trackId).output;
+}
+
+void Engine::setTrackOutputSidechain(uint32_t trackId, uint32_t processorId) {
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    const auto processor = processorLocked(processorId);
+    if (!processor->hasSidechain()) {
+        throw std::invalid_argument("Device " + std::to_string(processorId) + " has no sidechain input");
+    }
+    if (track.outputProcessor == processorId) return;
+    checkSidechainLocked(trackId, chainLocked(processors_.at(processorId).chainId).stripId);
+    track.outputProcessor = processorId;
+    track.output = kNoOutput;  // (no bus hears it)
+    rebuildSnapshotLocked();
+}
+
+uint32_t Engine::trackOutputSidechain(uint32_t trackId) {
+    std::lock_guard lock(mutex_);
+    return arrangementTrackLocked(trackId).outputProcessor;
+}
+
+void Engine::setTrackInMonitored(uint32_t trackId, bool monitored) {
+    std::lock_guard lock(mutex_);
+    TrackModel& track = arrangementTrackLocked(trackId);
+    if (track.inMonitored == monitored) return;
+    track.inMonitored = monitored;
+    rebuildSnapshotLocked();
 }
 
 void Engine::setTrackSend(uint32_t trackId, uint32_t toTrackId, float gain, bool preFader) {

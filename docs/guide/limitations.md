@@ -10,6 +10,14 @@ What SUBstation doesn't do yet, by area.
 - Recording WASAPI devices' inputs: WASAPI opens outputs only (resampling works).
 - Punching in and out at the loop, and stacking takes while looping.
 
+## Routing
+
+- *Ext. Out*: tracks can't play on the audio device's outputs directly; they go through
+  the master (whose outputs are chosen as its *Main Out*). There is no cue output.
+- What goes into a track's Track In (other tracks' Audio To) is heard while it monitors
+  but not recorded with it: record another track's output through Audio From instead.
+- MIDI routing between tracks (MIDI From another MIDI track, MIDI To).
+
 ## MIDI editing
 
 - Looping MIDI clips.

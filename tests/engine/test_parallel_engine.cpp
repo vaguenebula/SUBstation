@@ -348,6 +348,59 @@ TEST_CASE("random graphs with sidechains render the same on any threads") {
     }
 }
 
+TEST_CASE("random graphs with Ableton's outputs and inputs render the same on any threads") {
+    // Tracks routed as Ableton routes them: some sending only, some into
+    // tracks that take what comes in as their input (Track In, monitoring In:
+    // heard offline), some into keyed devices' sidechains (summed there with the
+    // devices' own), some taking another track's output tapped before its
+    // devices, before its fader or after it. Routes that would close a cycle
+    // are refused.
+    requireTestPlugins();
+    for (int seed = 1; seed <= 8; ++seed) {
+        INFO("seed " + std::to_string(500 + seed));
+        sub::Engine engine;
+        Rng rng(static_cast<uint64_t>(500 + seed));
+        const int trackCount = static_cast<int>(rng.integers(5, 16));
+        const Project project = randomProject(engine, rng, true, trackCount);
+        const auto all = joined(project.groups, project.leaves);
+        addSidechains(engine, rng, all);
+        std::vector<uint32_t> keyedDevices;
+        for (const uint32_t track : all) {
+            for (const uint32_t pid : engine.chainProcessors(engine.trackChain(track))) {
+                if (engine.processorInfo(pid).hasSidechain) keyedDevices.push_back(pid);
+            }
+        }
+        for (const uint32_t track : project.leaves) {
+            if (rng.random() < 0.4) {
+                engine.setTrackInMonitored(track, true);
+                engine.setTrackMonitor(track, sub::MonitorMode::In);
+            }
+        }
+        int routed = 0;
+        for (const uint32_t track : all) {
+            const double what = rng.random();
+            try {
+                if (what < 0.15) {
+                    engine.setTrackOutput(track, sub::Engine::kNoOutput);
+                } else if (what < 0.4 && !keyedDevices.empty()) {
+                    engine.setTrackOutputSidechain(track, rng.choice(keyedDevices));
+                } else if (what < 0.6) {
+                    engine.setTrackOutput(track, rng.choice(project.leaves));
+                } else if (what < 0.8) {
+                    const std::vector<sub::SidechainTap> taps{sub::SidechainTap::PostFader, sub::SidechainTap::PreFader,
+                                                              sub::SidechainTap::PreFx};
+                    engine.setTrackInputTrack(track, rng.choice(all), taps[static_cast<size_t>(rng.integers(0, 3))]);
+                }
+                ++routed;
+            } catch (const std::invalid_argument&) {
+                // itself, or a track it feeds
+            }
+        }
+        CHECK(routed > 0);
+        checkRandomGraph(engine, true);
+    }
+}
+
 TEST_CASE("nested groups on any threads") {
     // Groups three deep, with tracks at every level: each bus sums what goes into it in a fixed order.
     sub::Engine engine;

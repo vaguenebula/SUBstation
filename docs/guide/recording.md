@@ -16,23 +16,30 @@ resampling, and MIDI from the computer MIDI keyboard.
 
 ## Inputs
 
-An audio track's **input** menu lists:
+A track's input is chosen in its header's In/Out column, as in Ableton: **Audio From**
+(a MIDI track's **MIDI From**) and, under it, the channel (or where the source is taken).
+An audio track's Audio From lists:
 
-- *No Input*;
-- each of the driver's inputs on its own (mono), then each pair of them (stereo);
+- *Ext. In*: the audio device's inputs, and under it the channel or pair (*1*, *2*, ...,
+  then *1/2*, *3/4*, ...; their names show as tooltips). Choosing Ext. In takes the
+  first pair;
+- *Configure…*: the audio preferences, where the driver and its inputs are chosen;
 - *Resampling* (the master's output) and every other track, group and return (see
-  [Resampling](#resampling)).
+  [Resampling](#resampling));
+- *No Input*.
 
 Choosing an input the driver hasn't open opens it (and keeps it open next time). With
-WASAPI there are no device inputs: the menu says to choose an ASIO driver (see
+WASAPI there are no device inputs: the channel menu says to choose an ASIO driver (see
 [audio-setup.md](audio-setup.md)). On Linux (the *System* driver) there are none either,
 and the menu just says so.
 
-A MIDI track's input is a MIDI input and a channel; see [midi.md](midi.md#midi-input).
+A MIDI track's MIDI From is *All Ins*, the *Computer Keyboard* or one MIDI input, or *No
+Input*, and under it the channel (*All Channels*, *Ch. 1* to *Ch. 16*); see
+[midi.md](midi.md#midi-input).
 
 ## Monitoring
 
-Each track's **monitoring** button chooses:
+Each track's **In**, **Auto** and **Off** buttons (under its input, the one chosen lit) choose:
 
 | Mode | Audio track | MIDI track |
 |---|---|---|
@@ -84,9 +91,11 @@ its take replaces them. With monitoring *Off* it is silent until recording stops
 
 ## Resampling
 
-An audio track's input menu also lists *Resampling* (the master's output) and every
-other track, group and return: the track then takes that one's output, after its fader
-(and pan), as its input.
+An audio track's Audio From also lists *Resampling* (the master's output) and every
+other track, group and return: the track then takes that one's output as its input.
+Under it, where it is taken, as in Ableton: *Post Mixer* (after its fader and pan, the
+default), *Post FX* (after its devices, before its fader) or *Pre FX* (before its
+devices; a MIDI track's after its instrument). The master's is taken as it is heard.
 
 - Recording records it (in stereo) and the take lands exactly where it was heard, so it
   lines up with what it was recorded from; latent plug-ins on the source (or the

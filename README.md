@@ -10,7 +10,10 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
 ## Features
 
 - **Arrangement**: audio and MIDI tracks, group tracks (nesting, folding), return
-  tracks and sends, a master with its own effects; clip editing with snapping
+  tracks and sends, a master with its own effects; track headers laid out as Ableton's,
+  with an In/Out column routing each track as Ableton does (Audio From with Pre FX, Post
+  FX or Post Mixer; Audio To its group, Main, another track's input or a device's
+  sidechain, or Sends Only); clip editing with snapping
   (trimming, stretching, sliding a clip's content), clip fades with curves,
   deactivating clips (0, as in Ableton), time selections, undo/redo for every edit.
 - **Audio clips**: real-time warping (Signalsmith Stretch) with several warp modes,

@@ -2,6 +2,8 @@
 
 #include <QSet>
 
+#include <algorithm>
+
 namespace sub::app {
 
 std::optional<QString> treeProblem(const std::vector<Track>& tracks) {
@@ -35,14 +37,58 @@ void repairTree(std::vector<Track>& tracks) {
     }
 }
 
+std::optional<QString> deviceTrack(const std::vector<Track>& tracks, const std::vector<Track>& returns,
+                                   const QString& deviceId) {
+    for (const auto* list : {&tracks, &returns}) {
+        for (const Track& track : *list) {
+            for (const Device* device : iterDevices(track.devices)) {
+                if (device->id == deviceId) return track.id;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<QString> outputTarget(const Track& track, const std::vector<Track>& tracks,
+                                    const std::vector<Track>& returns) {
+    switch (track.output.to) {
+    case Output::To::Group: return track.parent;
+    case Output::To::Track: return track.output.id;
+    case Output::To::Sidechain: return deviceTrack(tracks, returns, track.output.id);
+    case Output::To::Master:
+    case Output::To::None: break;
+    }
+    return std::nullopt;
+}
+
 RoutingGraph routingGraph(const std::vector<Track>& tracks, const std::vector<Track>& returns) {
     RoutingGraph graph;
     for (const auto* list : {&tracks, &returns}) {
         for (const Track& t : *list) graph.insert(t.id, {});
     }
+    // The devices' tracks, once, if an output goes into a device.
+    QHash<QString, QString> deviceTracks;
+    const auto anyIntoDevice = [](const std::vector<Track>& list) {
+        return std::any_of(list.begin(), list.end(), [](const Track& t) { return t.output.to == Output::To::Sidechain; });
+    };
+    if (anyIntoDevice(tracks) || anyIntoDevice(returns)) {
+        for (const auto* list : {&tracks, &returns}) {
+            for (const Track& track : *list) {
+                for (const Device* device : iterDevices(track.devices)) deviceTracks.insert(device->id, track.id);
+            }
+        }
+    }
     for (const auto* list : {&tracks, &returns}) {
         for (const Track& track : *list) {
-            if (track.parent && graph.contains(*track.parent)) graph[track.id].append(*track.parent);
+            std::optional<QString> output;
+            if (track.output.to == Output::To::Group) {
+                output = track.parent;
+            } else if (track.output.to == Output::To::Track) {
+                output = track.output.id;
+            } else if (track.output.to == Output::To::Sidechain && deviceTracks.contains(track.output.id)) {
+                output = deviceTracks.value(track.output.id);
+            }
+            if (output && graph.contains(*output)) graph[track.id].append(*output);
             for (auto it = track.sends.constBegin(); it != track.sends.constEnd(); ++it) {
                 if (graph.contains(it.key())) graph[track.id].append(it.key());
             }
@@ -74,6 +120,19 @@ bool feeds(const RoutingGraph& graph, const QString& source, const QString& targ
 bool wouldCycle(const std::vector<Track>& tracks, const std::vector<Track>& returns, const QString& trackId,
                 const QString& returnId) {
     return feeds(routingGraph(tracks, returns), returnId, trackId);
+}
+
+bool outputWouldCycle(const std::vector<Track>& tracks, const std::vector<Track>& returns, const QString& trackId,
+                      const Output& output) {
+    std::optional<QString> target;
+    if (output.to == Output::To::Track) target = output.id;
+    if (output.to == Output::To::Sidechain) target = deviceTrack(tracks, returns, output.id);
+    if (output.to == Output::To::Group) {
+        for (const Track& t : tracks) {
+            if (t.id == trackId) target = t.parent;
+        }
+    }
+    return target && feeds(routingGraph(tracks, returns), *target, trackId);
 }
 
 bool inputWouldCycle(const std::vector<Track>& tracks, const std::vector<Track>& returns, const QString& trackId,

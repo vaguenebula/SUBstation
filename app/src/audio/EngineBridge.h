@@ -159,6 +159,7 @@
 namespace sub {
 class AudioSource;
 class Engine;
+enum class SidechainTap : std::uint8_t;
 struct AutomationLaneDesc;
 struct ParamInfo;
 struct ProcessorEventRecord;
@@ -533,7 +534,12 @@ private:
     void overrideChangedSends(const QString& trackId);
     void overrideChangedMixer(const QString& owner, double volumeDb, double pan, bool mute);
     void pushMixer(const QString& trackId);
+    struct OutputState;
+    OutputState wantedOutput(const Track& track);
     void pushOutputs();
+    // Every route to the engine, in the order that lets each go in: outputs,
+    // inputs from tracks, then devices' sidechains.
+    void pushRoutes();
     std::vector<std::pair<quint32, std::pair<double, bool>>> wantedSends(const Track& track) const;
     void pushSends(const QString& trackId);
     void pushAllSends();
@@ -555,6 +561,10 @@ private:
                  std::optional<quint32> processorId);
     QStringList chainsOf(const QString& rackId) const;
     void dropChain(const QString& key);
+    // Where the engine taps a source's signal for a tap as the model has it
+    // (kPostFader, kPreFader, kPreFx: a MIDI track's after its instrument; or a
+    // device's id, after it: before the fader while it isn't on the source).
+    std::pair<sub::SidechainTap, quint32> engineTap(const QString& sourceId, const QString& tap);
     std::optional<SidechainState> wantedSidechain(const Device& device, quint32 processorId);
     void pushSidechains();
     void dropSidechain(quint32 processorId);

@@ -20,6 +20,7 @@ constexpr FieldName kFieldNames[] = {
     {TrackField::InputTrack, "input_track"}, {TrackField::MidiInput, "midi_input"},
     {TrackField::Monitor, "monitor"},    {TrackField::Armed, "armed"},
     {TrackField::Folded, "folded"},      {TrackField::Sends, "sends"},
+    {TrackField::InputTap, "input_tap"}, {TrackField::Output, "output"},
 };
 
 double asDouble(const TrackValue& value) {
@@ -86,11 +87,13 @@ TrackValue Track::value(TrackField field) const {
     case TrackField::Height: return height;
     case TrackField::Input: return input;
     case TrackField::InputTrack: return inputTrack;
+    case TrackField::InputTap: return inputTap;
     case TrackField::MidiInput: return midiInput;
     case TrackField::Monitor: return monitor;
     case TrackField::Armed: return armed;
     case TrackField::Folded: return folded;
     case TrackField::Sends: return sends;
+    case TrackField::Output: return output;
     }
     return {};
 }
@@ -106,11 +109,13 @@ void Track::setValue(TrackField field, const TrackValue& value) {
     case TrackField::Height: height = asInt(value); break;
     case TrackField::Input: input = std::get<std::vector<int>>(value); break;
     case TrackField::InputTrack: inputTrack = std::get<std::optional<QString>>(value); break;
+    case TrackField::InputTap: inputTap = std::get<QString>(value); break;
     case TrackField::MidiInput: midiInput = std::get<std::optional<MidiInput>>(value); break;
     case TrackField::Monitor: monitor = std::get<QString>(value); break;
     case TrackField::Armed: armed = std::get<bool>(value); break;
     case TrackField::Folded: folded = std::get<bool>(value); break;
     case TrackField::Sends: sends = std::get<SendMap>(value); break;
+    case TrackField::Output: output = std::get<Output>(value); break;
     }
 }
 

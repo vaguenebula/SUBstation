@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cmath>
 
 namespace sub::ui {
 
@@ -277,7 +278,54 @@ bool ValueBoxItem::applyTyped(const QString& text) {
 
 // --- Painting ------------------------------------------------------------------------
 
+void ValueBoxItem::setFlat(bool flat) {
+    if (flat == flat_) return;
+    flat_ = flat;
+    update();
+    Q_EMIT lookChanged();
+}
+
+void ValueBoxItem::setFill(qreal fill) {
+    if (fill == fill_) return;
+    fill_ = fill;
+    update();
+    Q_EMIT lookChanged();
+}
+
+void ValueBoxItem::setFillFrom(qreal from) {
+    if (from == fillFrom_) return;
+    fillFrom_ = from;
+    update();
+    Q_EMIT lookChanged();
+}
+
+void ValueBoxItem::setFillColor(const QColor& color) {
+    if (color == fillColor_) return;
+    fillColor_ = color;
+    update();
+    Q_EMIT lookChanged();
+}
+
 void ValueBoxItem::paint(SgPainter& p) {
+    if (flat_) {
+        // A track header's box: tighter corners, the slider's fill under the value.
+        p.setAntialiasing(true);
+        const QRectF rect = QRectF(0, 0, width(), height()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const bool active = hovered_ || dragging();
+        p.fillRoundedRect(rect, 2, 2, active ? Theme::kSurfaceHover : Theme::kSurface);
+        if (fill_ >= 0 && fillColor_.isValid()) {
+            const QRectF inside = rect.adjusted(1, 1, -1, -1);
+            const double a = inside.left() + std::clamp(fillFrom_, 0.0, 1.0) * inside.width();
+            const double b = inside.left() + std::clamp(fill_, 0.0, 1.0) * inside.width();
+            if (std::abs(b - a) >= 0.5) {
+                p.fillRect(QRectF(std::min(a, b), inside.top(), std::abs(b - a), inside.height()), fillColor_);
+            }
+        }
+        p.drawRoundedRect(rect, 2, 2, Theme::kBorder);
+        p.drawText(rect, Qt::AlignCenter, text_, dragging() ? Theme::kAccent : Theme::kText, font_);
+        drawAutomationDot(p, automation_, QPointF(4.0, rect.center().y()));
+        return;
+    }
     p.setAntialiasing(true);
     const QRectF rect = QRectF(0, 0, width(), height()).adjusted(0.5, 0.5, -0.5, -0.5);
     const bool active = hovered_ || dragging();

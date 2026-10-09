@@ -6,7 +6,7 @@ import SUBstation
 // A push button coloured by its `role`, as the old stylesheet's
 // QPushButton[role=...] rules (Theme.buttonStyle): "" (plain), "activator",
 // "solo", "play", "record", "arm", "re-enable", "tool", "flat", "small" or
-// "device-header". It never takes the keyboard focus, so Space stays
+// "device-header"; or "monitor" (a track header's In, Auto and Off). It never takes the keyboard focus, so Space stays
 // play/stop. `iconName` shows one of the icons (image://icons, 14 px) before
 // the text; `tooltip` shows under the mouse. `automation` marks a switch that
 // can be automated with a dot in its top right corner, as knobs have: "on"

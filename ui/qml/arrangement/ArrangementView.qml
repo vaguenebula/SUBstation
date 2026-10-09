@@ -9,7 +9,7 @@ import SUBstation
 // time). What it draws and how it is edited are the C++ items'
 // (ui/src/arrangement); the state they share is the Arrangement.
 //
-//    col 0 (stretches)               col 1 (252)          col 2
+//    col 0 (stretches)               col 1 (308)          col 2
 //   ┌──────────────────────────────┬────────────────────────────┐
 //   │ ArrangementRuler (40)        │ GridInfo        (spans 1-2)│
 //   ├──────────────────────────────┼───────────────────┬────────┤
@@ -24,9 +24,10 @@ import SUBstation
 //   functions zoom(factor), zoomToArrangement(), narrowGrid(), widenGrid(),
 //   openClipView() (the selected clips, through Session.arrangement's
 //   clipViewRequested), renameTrack(trackId) (in place; false if it can't be),
-//   focusLanes(); properties snap, follow (read and write), gridStep (beats,
-//   the grid's step whether snapping or not), gridLevel; signal
-//   statusMessage(text). Clips double-clicked open through
+//   focusLanes(); properties snap, follow, ioShown (the headers' In/Out column,
+//   View › In/Out) (read and write), gridStep (beats, the grid's step whether
+//   snapping or not), gridLevel; signals statusMessage(text) and
+//   preferencesRequested(page) (a header's Configure...: 0 Audio, 1 MIDI). Clips double-clicked open through
 //   Session.arrangement's clipViewRequested; a click on the ruler plays from
 //   there through Session.locate(beat).
 FocusScope {
@@ -39,7 +40,9 @@ FocusScope {
     readonly property Arrangement arrangement: arrangementState
     readonly property ArrangementLanes lanes: lanesItem
 
-    readonly property int headerWidth: 252
+    // The headers: their name column, In/Out column (while shown) and mixer column, as Ableton's.
+    property bool ioShown: true
+    readonly property int headerWidth: ioShown ? 328 : 244
     readonly property int barWidth: Theme.scrollBarWidth
     readonly property int rulerHeight: 40
     readonly property real lanesWidth: Math.max(0, width - headerWidth - barWidth)
@@ -47,6 +50,7 @@ FocusScope {
                                                      - arrangementState.masterHeight)
 
     signal statusMessage(string message)
+    signal preferencesRequested(int page)
 
     function zoom(factor) {
         arrangementState.zoom(factor)
@@ -77,6 +81,7 @@ FocusScope {
         id: arrangementState
         session: Session
         onStatusMessage: message => view.statusMessage(message)
+        onPreferencesRequested: page => view.preferencesRequested(page)
     }
 
     ArrangementMenu {
@@ -179,6 +184,7 @@ FocusScope {
                 session: Session
                 arrangement: arrangementState
                 menu: arrangementMenu
+                ioShown: view.ioShown
             }
         }
 
@@ -259,6 +265,7 @@ FocusScope {
                 session: Session
                 arrangement: arrangementState
                 menu: arrangementMenu
+                ioShown: view.ioShown
             }
         }
     }
@@ -293,6 +300,7 @@ FocusScope {
         session: Session
         arrangement: arrangementState
         menu: arrangementMenu
+        ioShown: view.ioShown
     }
 
     // --- The scroll bar: it follows the view, except while dragged (then the view follows it) ---

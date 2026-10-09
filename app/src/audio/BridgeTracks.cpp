@@ -41,6 +41,7 @@ void EngineBridge::onReset() {
     d.mutes.clear();
     d.inputs.clear();
     d.outputs.clear();
+    d.trackIn.clear();
     d.sends.clear();
     d.sendLevels.clear();
     d.frozen.clear();
@@ -137,14 +138,15 @@ void EngineBridge::onTrackRemoved(const QString& trackId) {
     d.mutes.remove(trackId);
     d.inputs.remove(trackId);
     d.outputs.remove(trackId);
+    d.trackIn.remove(trackId);
     d.sends.remove(trackId);
     d.sendLevels.remove(trackId);
     d.frozen.remove(trackId);
     // What went into it goes to the engine's master now, and the sends into it
     // and the inputs from it are gone (the model has its say next).
     if (engineId) {
-        for (quint32& output : d.outputs) {
-            if (output == *engineId) output = sub::Engine::kMaster;
+        for (OutputState& output : d.outputs) {
+            if (output.track == *engineId) output = {};
         }
         for (auto& sends : d.sends) sends.erase(*engineId);
         for (Private::InputState& input : d.inputs) {
@@ -167,9 +169,8 @@ void EngineBridge::onTrackChanged(const QString& trackId) {
     overrideChangedMixer(trackId, volumeDb, pan, track.mute);
     overrideChangedSends(trackId);
     pushMixer(trackId);
-    pushInput(trackId);
     pushSends(trackId);
-    pushSidechains();  // (a route that stood in a sidechain's way may have gone)
+    pushRoutes();  // its output and input, and a route that stood in a sidechain's way may have gone
 }
 
 // A send level changed by hand while automated: its automation stops.
@@ -213,29 +214,74 @@ void EngineBridge::pushMixer(const QString& trackId) {
     d_->mutes.insert(trackId, track.mute);
 }
 
-// Every track's output into its group's engine track (or the master). Changed
+// Where the engine should send a track's (or a return's) output: into its
+// group's engine track, the master, another track, a device's sidechain, or
+// nowhere. Into one the engine hasn't (yet): the master; into a device whose
+// plug-in isn't there (yet), or that has no sidechain input: nowhere.
+EngineBridge::OutputState EngineBridge::wantedOutput(const Track& track) {
+    const quint32 master = sub::Engine::kMaster;
+    switch (track.output.to) {
+    case Output::To::Group: return {track.parent ? d_->trackIds.value(*track.parent, master) : master, 0};
+    case Output::To::Master: break;
+    case Output::To::None: return {sub::Engine::kNoOutput, 0};
+    case Output::To::Track: return {d_->trackIds.value(track.output.id, master), 0};
+    case Output::To::Sidechain: {
+        const auto owner = project_->deviceOwner(track.output.id);
+        const auto processorId = owner ? engineDeviceId(*owner, track.output.id) : std::nullopt;
+        if (!processorId || !engine_.processorInfo(*processorId).hasSidechain) return {sub::Engine::kNoOutput, 0};
+        return {sub::Engine::kNoOutput, *processorId};
+    }
+    }
+    return {master, 0};
+}
+
+// Every track's (and return's) output to the engine (Track::output), and
+// whether what goes into it is its input (an audio track's Track In). Changed
 // routes go to the master first, so that no step closes a cycle (a group moving
 // into what was in it).
 void EngineBridge::pushOutputs() {
     Private& d = *d_;
-    const quint32 master = sub::Engine::kMaster;
-    std::vector<std::pair<QString, quint32>> changed;  // in track order
-    for (const Track& track : project_->tracks()) {
-        if (!d.trackIds.contains(track.id)) continue;
-        const quint32 wanted = track.parent ? d.trackIds.value(*track.parent, master) : master;
-        if (d.outputs.value(track.id, master) != wanted) changed.emplace_back(track.id, wanted);
+    std::vector<std::pair<QString, OutputState>> changed;  // in track order
+    for (const Track* track : project_->senders()) {
+        if (!d.trackIds.contains(track->id)) continue;
+        const quint32 engineId = d.trackIds.value(track->id);
+        const bool trackIn = track->isAudio();
+        if (d.trackIn.value(track->id, false) != trackIn) {
+            engine_.setTrackInMonitored(engineId, trackIn);
+            d.trackIn.insert(track->id, trackIn);
+        }
+        const OutputState wanted = wantedOutput(*track);
+        if (d.outputs.value(track->id) != wanted) changed.emplace_back(track->id, wanted);
     }
     for (const auto& [trackId, output] : changed) {
-        if (d.outputs.value(trackId, master) != master) {
-            engine_.setTrackOutput(d.trackIds.value(trackId), master);
-            d.outputs.insert(trackId, master);
+        if (d.outputs.value(trackId) != OutputState{}) {
+            engine_.setTrackOutput(d.trackIds.value(trackId), sub::Engine::kMaster);
+            d.outputs.insert(trackId, {});
         }
     }
+    bool any = false;
     for (const auto& [trackId, output] : changed) {
-        if (output != master) engine_.setTrackOutput(d.trackIds.value(trackId), output);
+        if (output == OutputState{}) continue;
+        const quint32 engineId = d.trackIds.value(trackId);
+        try {
+            if (output.processor != 0) {
+                engine_.setTrackOutputSidechain(engineId, output.processor);
+            } else {
+                engine_.setTrackOutput(engineId, output.track);
+            }
+        } catch (const std::invalid_argument&) {
+            continue;  // a cycle with a route another change hasn't undone yet: it comes with that change
+        }
         d.outputs.insert(trackId, output);
+        any = true;
     }
-    if (!changed.empty()) pushSidechains();
+    if (any) pushSidechains();
+}
+
+void EngineBridge::pushRoutes() {
+    pushOutputs();
+    pushAllInputs();
+    pushSidechains();
 }
 
 // The engine sends a track should have: its sends, and silent ones for those

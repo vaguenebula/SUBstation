@@ -302,14 +302,25 @@ bool ProjectEditor::moveDevicesToTrack(const QString& trackId, const QStringList
         const auto device = automation::keyDevice(key);
         if (device && movedIds.contains(*device)) envelopes.emplace_back(key, points);
     }
+    // The outputs going into them that would close a cycle where they go (that
+    // track, or one it feeds, takes what they put out) go into their groups.
+    QSet<QString> cycling;
+    for (const Track* t : p.senders()) {
+        if (t->output.to == Output::To::Sidechain && movedIds.contains(t->output.id) &&
+            p.outputWouldCycle(t->id, Output::track(toTrackId))) {
+            cycling.insert(t->output.id);
+        }
+    }
     auto command = std::make_unique<SetChainsCommand>(project_, before, after, text);
-    if (envelopes.empty()) return push(std::move(command));
+    if (envelopes.empty() && cycling.isEmpty()) return push(std::move(command));
     if (const auto problem = frozenProblem(*command)) {
         Q_EMIT refused(*problem);
         return false;
     }
     Macro macro(undoStack_, text);
+    dropOutputs({}, cycling, text);
     push(std::move(command));
+    if (envelopes.empty()) return true;
     QMap<LaneRef, Envelope> old;
     QMap<LaneRef, Envelope> nw;
     for (const auto& [key, points] : envelopes) {
@@ -369,8 +380,15 @@ bool ProjectEditor::setDevices(const QString& trackId, const std::vector<Device>
             orphans.append(key);
         }
     }
-    if (orphans.isEmpty()) return push(std::make_unique<SetDevicesCommand>(project_, trackId, before, after, text));
+    const std::vector<const Track*> senders = project_->senders();
+    const bool into = std::any_of(senders.begin(), senders.end(), [&](const Track* t) {
+        return t->output.to == Output::To::Sidechain && gone.contains(t->output.id);
+    });
+    if (orphans.isEmpty() && !into) {
+        return push(std::make_unique<SetDevicesCommand>(project_, trackId, before, after, text));
+    }
     Macro macro(undoStack_, text);
+    dropOutputs({}, gone, text);  // (the outputs into them go into their groups)
     push(std::make_unique<SetDevicesCommand>(project_, trackId, before, after, text));
     for (const QString& key : orphans) {
         push(std::make_unique<SetEnvelopeCommand>(project_, trackId, key, project_->envelope(trackId, key), Envelope{},

@@ -148,10 +148,11 @@ is the only input.
 - Every MIDI input connected is used unless turned off in *Options › Preferences ›
   MIDI* (*Refresh* there finds inputs plugged in since); see
   [audio-setup.md](audio-setup.md#midi).
-- A MIDI track's header has an arm button, its **MIDI input** (*All Ins*, one input, or
-  *No Input*; and every channel or one of the 16, under *Channel*) and monitoring:
-  *In* (it plays its input, not its clips), *Auto* (it plays its input while armed, its
-  clips as well) or *Off*.
+- A MIDI track's header has an arm button, its **MIDI From** (*All Ins*, the *Computer
+  Keyboard*, one input, or *No Input*; *Configure…* opens the MIDI preferences), under
+  it the channel (*All Channels* or one of the 16) and monitoring: *In* (it plays its
+  input, not its clips), *Auto* (it plays its input while armed, its clips as well) or
+  *Off*.
 - Notes played reach the track's instrument one audio buffer after they arrive, at the
   same place in the buffer, so timing doesn't jitter.
 - Keys held when the transport stops, or when a track stops hearing its input
