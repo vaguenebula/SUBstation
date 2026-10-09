@@ -5,8 +5,8 @@
 // session's RenderProgress, says what came of it on its signals, and deletes
 // itself when it has finished. The application's own, not the UI's.
 //
-// - ExportAudioRender: the arrangement (or the loop) into a WAV file, once the
-//   devices are ready.
+// - ExportAudioRender: the arrangement (the loop, a time selection) into a WAV
+//   or MP3 file, once the devices are ready.
 // - FreezeTracksRender: several tracks, one after another, then frozen in one
 //   undo step: all or nothing (cancelled, or one failing, none is frozen, and
 //   the renders made so far are deleted).
@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "audio/BridgeTypes.h"
 #include "model/OrderedMap.h"
 #include "model/Track.h"
 
@@ -92,7 +93,7 @@ class ExportAudioRender : public Render {
 
 public:
     ExportAudioRender(RenderProgress* progress, EngineBridge* bridge, const QString& path, double startBeat,
-                      double endBeat, int bitDepth, QObject* parent = nullptr);
+                      double endBeat, const AudioExportFormat& format, QObject* parent = nullptr);
     ~ExportAudioRender() override;
 
     void start() override;
@@ -104,7 +105,7 @@ private:
     QString path_;
     double startBeat_;
     double endBeat_;
-    int bitDepth_;
+    AudioExportFormat format_;
     std::unique_ptr<EngineRender> render_;
 };
 

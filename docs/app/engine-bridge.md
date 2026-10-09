@@ -330,9 +330,10 @@ engine track is frozen (`setTrackFrozen`), its clips become the frozen audio's s
 deleted, their plug-ins' states kept, and come back on unfreezing. The tracks in a frozen group keep their processors;
 the engine just doesn't render them. Frozen tracks don't record.
 
-`startExport(path, start, end, bitDepth)` is the other render in the background: the arrangement (or the loop) into a
-WAV file of 16, 24 or 32-bit float, through `Engine::startExport`; `finishExport` gives the frames written (none if
-cancelled).
+`startExport(path, start, end, bitDepth)` is the other render in the background: the arrangement (the loop, a time
+selection) into a WAV file of 16, 24 or 32-bit float, through `Engine::startExport`; `startExport(path, start, end,
+format)` takes an `AudioExportFormat` ([BridgeTypes.h](../../app/src/audio/BridgeTypes.h)): a WAV file of `bitDepth`, or
+an MP3 file at `bitrate` kbps. `finishExport` gives the frames written (none if cancelled).
 
 ### Reversing
 

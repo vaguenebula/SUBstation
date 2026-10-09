@@ -116,8 +116,12 @@ class Session : public QObject {
     Q_PROPERTY(QStringList recentProjects READ recentProjects NOTIFY recentProjectsChanged)
     // Where the file dialogs start: the folder last opened from or saved to (else ~/Music).
     Q_PROPERTY(QString lastFolder READ lastFolder NOTIFY lastFolderChanged)
+    // A template was saved: New Project (and the application's start) opens it.
+    Q_PROPERTY(bool hasTemplate READ hasTemplate NOTIFY templateChanged)
     // The file dialogs' filter: "SUBstation Project (*.gilproj)".
     Q_PROPERTY(QString projectFilter READ projectFilter CONSTANT)
+    // Import Ableton Live Set's: "Ableton Live Set (*.als)".
+    Q_PROPERTY(QString liveSetFilter READ liveSetFilter CONSTANT)
     Q_PROPERTY(QString projectExtension READ projectExtension CONSTANT)
 
     // The count-in before recording, in bars (0, 1, 2 or 4; saved with the preferences).
@@ -140,6 +144,11 @@ class Session : public QObject {
     // Export Audio's choices: [{label, value: 16, 24 or 32}] and the default (24).
     Q_PROPERTY(QVariantList exportBitDepthChoices READ exportBitDepthChoices CONSTANT)
     Q_PROPERTY(int defaultExportBitDepth READ defaultExportBitDepth CONSTANT)
+    // Export Audio's file types ([{label: "WAV", value: "wav"}, {label: "MP3", value: "mp3"}]),
+    // and an MP3's bitrates ([{label: "320 kbps", value: 320}, ...]; 320 at first).
+    Q_PROPERTY(QVariantList exportFileTypeChoices READ exportFileTypeChoices CONSTANT)
+    Q_PROPERTY(QVariantList exportBitrateChoices READ exportBitrateChoices CONSTANT)
+    Q_PROPERTY(int defaultExportBitrate READ defaultExportBitrate CONSTANT)
 
     // How long the status line shows a message (ms), as the main window did.
     Q_PROPERTY(int statusTimeout READ statusTimeout CONSTANT)
@@ -191,7 +200,9 @@ public:
     QString confirmDiscardText() const { return QStringLiteral("Save changes to the current project?"); }
     QStringList recentProjects() const;
     QString lastFolder() const;
+    bool hasTemplate() const;
     QString projectFilter() const;
+    QString liveSetFilter() const;
     QString projectExtension() const;
     int countInBars() const;
     void setCountInBars(int bars);
@@ -205,6 +216,9 @@ public:
     QString pluginsLoadingText() const;
     QVariantList exportBitDepthChoices() const;
     int defaultExportBitDepth() const { return 24; }
+    QVariantList exportFileTypeChoices() const;
+    QVariantList exportBitrateChoices() const;
+    int defaultExportBitrate() const { return 320; }
     int statusTimeout() const { return kStatusTimeoutMs; }
     QString aboutTitle() const;
     QString aboutText() const;
@@ -332,19 +346,28 @@ public:
     Q_INVOKABLE QStringList flattenTracks(const QStringList& trackIds);
 
     // --- Files ---------------------------------------------------------------------------
-    // New Project (the UI asked about unsaved changes first).
+    // New Project (the UI asked about unsaved changes first): the template, if
+    // one was saved (untitled, everything in it as it was saved), else an
+    // empty project. A template that can't be read: warning, and an empty one.
     Q_INVOKABLE void newProject();
     // Opens a project file (the UI asked about unsaved changes first; a file
     // that can't be read: warning). Whether it opened (projectOpened). Files
     // it plays that are missing are said in the status line (the UI shows the
     // File Manager).
     Q_INVOKABLE bool openProject(const QString& path);
+    // Import Ableton Live Set…: a Live Set (.als) as a new project, untitled
+    // but named after the set (its title, where Save As starts); what comes
+    // across: io/LiveImport.h. Its plug-ins are found by the plug-in index (the
+    // UI asked about unsaved changes first). What didn't come across as it was
+    // is said by information() (the status line says how much did); a file that
+    // can't be read: warning, and the open project stays. Whether it imported.
+    Q_INVOKABLE bool importLiveSet(const QString& path);
     // Ctrl+S: to the project's file; one never saved: saveAsRequested (the UI
     // asks where, then saveProjectAs), false meanwhile. Whether it was saved.
     Q_INVOKABLE bool saveProject();
     // Save As: to `path`.
     Q_INVOKABLE bool saveProjectAs(const QString& path);
-    // Where Save As starts: "<last folder>/Untitled.gilproj".
+    // Where Save As starts: "<last folder>/Untitled.gilproj" (an imported set's: its name).
     Q_INVOKABLE QString suggestedSavePath() const;
     // A recent project chosen: false if its file is gone (warning, and it
     // leaves the list); true: the UI goes on to openProject (asking first).
@@ -354,18 +377,34 @@ public:
     Q_INVOKABLE QVariantList recentMenuItems() const;
     Q_INVOKABLE void clearRecentProjects();
 
+    // --- Templates -----------------------------------------------------------------------
+    // Save as Template: the project as it is now (its tracks, clips, devices and
+    // plug-ins' states, automation, routing, tempo and settings, what its views
+    // show) is what every new project starts as from now on. The project stays
+    // as it was (its file, its unsaved changes). Whether it was saved.
+    Q_INVOKABLE bool saveAsTemplate();
+    // Clear Template: new projects start empty again.
+    Q_INVOKABLE void clearTemplate();
+    // Where the template is kept: Template.gilproj in the application's local
+    // data folder, or SUBSTATION_TEMPLATE if set (the tests).
+    static QString templatePath();
+
     // --- Export Audio -------------------------------------------------------------------
-    // The ranges it can render: [{label, value: "arrangement" | "loop"}] (the
-    // loop region only while the loop is on and has a length).
+    // The ranges it can render: [{label, value: "arrangement" | "loop" |
+    // "selection"}] (the loop region only while the loop is on and has a
+    // length; the time selection, "Time Selection (5.1.1 to 9.1.1)", only while
+    // there is one: the whole mix over its time, whichever tracks it is on).
     Q_INVOKABLE QVariantList exportRangeChoices() const;
     // Why a range can't be exported ("There is nothing to export yet."), or "".
     Q_INVOKABLE QString exportProblem(const QString& range) const;
-    // Where its file dialog starts: "<last folder>/<project name>.wav".
-    Q_INVOKABLE QString suggestedExportPath() const;
-    // Renders the range into `path` (WAV, `bitDepth`) in the background (its
-    // progress in `render`), playback stopped first. False if it didn't start
+    // Where its file dialog starts: "<last folder>/<project name>.wav" (".mp3" for "mp3").
+    Q_INVOKABLE QString suggestedExportPath(const QString& fileType = QStringLiteral("wav")) const;
+    // Renders the range into `path` in the background (its progress in
+    // `render`), playback stopped first: a WAV file of `bitDepth`, or for
+    // `fileType` "mp3" an MP3 file at `bitrate` kbps. False if it didn't start
     // (nothing to export: information; or a render runs).
-    Q_INVOKABLE bool exportAudio(const QString& path, const QString& range, int bitDepth);
+    Q_INVOKABLE bool exportAudio(const QString& path, const QString& range, int bitDepth,
+                                 const QString& fileType = QStringLiteral("wav"), int bitrate = 320);
 
     // --- For the tests -------------------------------------------------------------------
     // How a track's render becomes its frozen audio (default EngineBridge::finishFreeze).
@@ -386,6 +425,7 @@ Q_SIGNALS:
     void cleanChanged();
     void recentProjectsChanged();
     void lastFolderChanged();
+    void templateChanged();
     void countInBarsChanged();
     void recordQuantizeChanged();
     void automationOverriddenChanged();
@@ -393,7 +433,16 @@ Q_SIGNALS:
 
 private:
     void wire();
-    void resetSession();
+    // A session of its own for the project now in it (new, opened, imported): no
+    // undo history (clean), nothing selected, at the start. `untitledName`: what it
+    // is called while it has no file (an imported set's name; none: "Untitled").
+    void resetSession(const QString& untitledName = {});
+    // After a project was read from a file (opened, imported): resetSession, the
+    // file's folder remembered, the project's files looked at, projectOpened.
+    void loadedFrom(const QString& path, const QString& untitledName = {});
+    // What the status line adds about the files the project plays that are
+    // missing (": 2 files are missing (the File Manager finds them)"), or "".
+    QString missingFilesText() const;
     bool saveTo(const QString& path);
     void addRecent(const QString& path);
     void setRecent(const QStringList& paths);
@@ -431,6 +480,7 @@ private:
     QPointer<Render> rendering_;
     std::function<std::optional<Freeze>(FreezeRender&)> finishFreeze_;
     double playStart_ = 0.0;
+    QString untitledName_;  // an imported set's name, while its project has no file
     bool automationOverridden_ = false;
     int pluginsLoaded_ = 0;
     int pluginsTotal_ = 0;

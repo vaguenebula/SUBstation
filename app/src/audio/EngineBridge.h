@@ -428,9 +428,12 @@ public:
     // forgotten and its file deleted.
     void discardFreeze(const Freeze& freeze);
     // Exports the arrangement from startBeat to endBeat as a WAV file of
-    // `bitDepth` (16, 24 or 32 float) in the background; finish it with
-    // finishExport (the frames written; none if cancelled). Throws EditError.
+    // `bitDepth` (16, 24 or 32 float), or in `format` (WAV or MP3), in the
+    // background; finish it with finishExport (the frames written; none if
+    // cancelled). Throws EditError.
     std::unique_ptr<EngineRender> startExport(const QString& path, double startBeat, double endBeat, int bitDepth);
+    std::unique_ptr<EngineRender> startExport(const QString& path, double startBeat, double endBeat,
+                                              const AudioExportFormat& format);
     std::optional<qint64> finishExport(EngineRender& render);
     // The reversed copy of `path` there is already, if any: one made this
     // session, or one a clip of the project plays (saved with it). Not decoded

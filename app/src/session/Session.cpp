@@ -248,7 +248,9 @@ void Session::setFreezeFinisher(std::function<std::optional<Freeze>(FreezeRender
 
 QString Session::title() const {
     const QString path = project_->path();
-    const QString name = path.isEmpty() ? QStringLiteral("Untitled") : fileStem(path);
+    const QString name = !path.isEmpty()            ? fileStem(path)
+                         : !untitledName_.isEmpty() ? untitledName_
+                                                    : QStringLiteral("Untitled");
     return QStringLiteral("%1%2 - %3").arg(name, clean() ? QString() : QStringLiteral("*"), QString::fromLatin1(kAppName));
 }
 

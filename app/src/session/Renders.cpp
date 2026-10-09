@@ -95,8 +95,9 @@ void Render::done() {
 // --- Export ---------------------------------------------------------------------------------------
 
 ExportAudioRender::ExportAudioRender(RenderProgress* progress, EngineBridge* bridge, const QString& path,
-                                     double startBeat, double endBeat, int bitDepth, QObject* parent)
-    : Render(progress, bridge, parent), path_(path), startBeat_(startBeat), endBeat_(endBeat), bitDepth_(bitDepth) {}
+                                     double startBeat, double endBeat, const AudioExportFormat& format,
+                                     QObject* parent)
+    : Render(progress, bridge, parent), path_(path), startBeat_(startBeat), endBeat_(endBeat), format_(format) {}
 
 ExportAudioRender::~ExportAudioRender() = default;
 
@@ -109,7 +110,7 @@ void ExportAudioRender::start() {
             return;
         }
         try {
-            render_ = bridge_->startExport(path_, startBeat_, endBeat_, bitDepth_);
+            render_ = bridge_->startExport(path_, startBeat_, endBeat_, format_);
         } catch (const EditError& error) {
             Q_EMIT warning(QStringLiteral("Export failed: ") + error.message());
             done();

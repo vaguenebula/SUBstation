@@ -356,7 +356,7 @@ public:
     // Replace an envelope; an empty one removes the target's automation.
     void setEnvelope(const QString& owner, const QString& key, const Envelope& points);
     void setAutomationView(const QString& owner, const AutomationView& view);
-    // Everything replaced (new, open): emits reset.
+    // Everything replaced (new, open): emits reset, then settingsChanged.
     void replaceContents(ProjectContents contents);
     void clear();
     // The file it was saved to (saving sets it).
@@ -386,7 +386,7 @@ Q_SIGNALS:
     void rackViewChanged(const QString& trackId);
     // It was frozen or unfrozen.
     void freezeChanged(const QString& trackId);
-    // Tempo, time signature, key, loop, automation lock.
+    // Tempo, time signature, key, loop, automation lock (after reset too).
     void settingsChanged();
     // An envelope was set or removed (owner: a track id or kMaster).
     void automationChanged(const QString& owner, const QString& key);

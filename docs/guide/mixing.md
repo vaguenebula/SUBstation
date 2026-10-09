@@ -180,7 +180,7 @@ plays that instead, so its plug-ins cost no CPU.
 - The render runs in the background, its progress in a dialog (*Freezing Bass (2 of
   3)…*); the window goes on meanwhile but takes no edits, and nothing plays. **Cancel**
   (or Esc) stops it: nothing is frozen, and no render is left behind.
-- A frozen track shows a snowflake before its name, and its lane is tinted blue. The
+- A frozen track's lane is tinted blue (its name stays as it is). The
   device view shows no devices: they are unloaded, and their settings (a plug-in's whole
   state too) come back when you unfreeze it.
 - What is frozen: the track's clips or notes and its devices, with their automation.

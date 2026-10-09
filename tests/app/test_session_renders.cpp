@@ -106,6 +106,44 @@ private Q_SLOTS:
         QVERIFY(std::abs(source->channelData(1)[1000] - 0.5f) < 1e-4f);
     }
 
+    // A time selection, as an MP3: the whole mix over its time (whichever tracks
+    // it is on), at the bitrate asked for, LAME's info tag first.
+    void exportingATimeSelectionAsMp3() {
+        SessionFixture f(true);
+        Session& s = f.s();
+        TempDir dir;
+        f.clipTrack(dcWav(dir));  // a second: two beats at 120 BPM
+        f.editor().addMidiTrack();
+        QCOMPARE(s.exportProblem(QStringLiteral("selection")),
+                 QStringLiteral("There is no time selection to export: select a time range in the arrangement first."));
+        f.selection().setTimeRange(0.5, 1.5, {f.project().tracks().back().id});  // (on the other track: it is time)
+        QCOMPARE(s.exportProblem(QStringLiteral("selection")), QString());
+        QCOMPARE(QFileInfo(s.suggestedExportPath(QStringLiteral("mp3"))).fileName(), QStringLiteral("Untitled.mp3"));
+        const QString target = dir.path(QStringLiteral("part.mp3"));
+        QVERIFY(s.exportAudio(target, QStringLiteral("selection"), 24, QStringLiteral("mp3"), 192));
+        QVERIFY(f.waitForRender());
+        QCOMPARE(f.lastMessage(), QStringLiteral("Exported part.mp3"));
+
+        QFile file(target);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray bytes = file.readAll();
+        QVERIFY(bytes.size() > 1000);
+        QCOMPARE(quint8(bytes[0]), quint8(0xFF));  // an MPEG audio frame's sync,
+        QCOMPARE(quint8(bytes[1]) & 0xFE, 0xFA);   // MPEG-1 Layer III,
+        QCOMPARE((quint8(bytes[2]) >> 4) & 0xF, 0xB);  // 192 kbps
+        QVERIFY(bytes.left(200).contains("Info") && bytes.left(400).contains("LAME"));  // (CBR: "Info")
+
+        // Half a second of the mix (a beat at 120 BPM), as an MP3 holds it: up to
+        // a frame or two more for the encoder's delay and padding.
+        const auto source = f.engine.loadSource(target.toStdString());
+        QVERIFY2(source->frames() >= kRate / 2 && source->frames() <= kRate / 2 + 3 * 1152,
+                 qPrintable(QString::number(source->frames())));
+        double sum = 0.0;
+        const int64_t middle = source->frames() / 2;
+        for (int64_t i = middle - 1000; i < middle + 1000; ++i) sum += source->channelData(0)[i];
+        QVERIFY2(std::abs(sum / 2000.0 - 0.5) < 0.05, qPrintable(QString::number(sum / 2000.0)));
+    }
+
     void playingStopsBeforeExporting() {
         SessionFixture f(true);
         Session& s = f.s();

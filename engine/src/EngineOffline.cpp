@@ -1,5 +1,5 @@
-// Engine: offline rendering, WAV export, and rendering one track (freezing it),
-// in the caller's thread or in the background (RenderJob.h).
+// Engine: offline rendering, exporting (WAV, MP3), and rendering one track
+// (freezing it), in the caller's thread or in the background (RenderJob.h).
 #include "Engine.h"
 
 #include <algorithm>
@@ -10,6 +10,7 @@
 #include <system_error>
 #include <utility>
 
+#include "AudioFileWriter.h"
 #include "PathUtils.h"
 #include "miniaudio.h"
 
@@ -34,7 +35,7 @@ constexpr int64_t kJobChunk = 4096;
 
 // A stereo WAV file being written. Unless kept, it is deleted when this goes:
 // a render cancelled, or failed, leaves nothing behind.
-class WavWriter {
+class WavWriter final : public AudioFileWriter {
 public:
     WavWriter(std::string path, ma_format format, double sampleRate) : path_(std::move(path)), format_(format) {
         ma_encoder_config config =
@@ -43,7 +44,7 @@ public:
             throw std::runtime_error("Could not create " + path_);
         }
     }
-    ~WavWriter() {
+    ~WavWriter() override {
         close();
         if (!kept_) {
             std::error_code ignored;
@@ -55,7 +56,7 @@ public:
 
     // Interleaved float frames, in the file's format (dithered to 16 bits). A
     // short write (a full disk) throws: the file would be shorter than the render.
-    void write(const float* samples, int64_t frames) {
+    void write(const float* samples, int64_t frames) override {
         const void* data = samples;
         if (format_ != ma_format_f32) {
             converted_.resize(static_cast<size_t>(frames) * 2 * ma_get_bytes_per_sample(format_));
@@ -69,7 +70,7 @@ public:
             throw std::runtime_error("Could not write " + path_);
         }
     }
-    void keep() {  // done: the file stays
+    void keep() override {  // done: the file stays
         close();
         kept_ = true;
     }
@@ -183,6 +184,10 @@ void Engine::exportWav(const std::string& path, double startBeat, double endBeat
     startExport(path, startBeat, endBeat, bitDepth)->finish();
 }
 
+void Engine::exportFile(const std::string& path, double startBeat, double endBeat, const ExportFormat& format) {
+    startExport(path, startBeat, endBeat, format)->finish();
+}
+
 // ---------------------------------------------------------------------------
 // One track (freezing)
 
@@ -283,11 +288,25 @@ void Engine::endJob(RenderJob& job) {
 
 std::shared_ptr<RenderJob> Engine::startExport(const std::string& path, double startBeat, double endBeat,
                                                int bitDepth) {
+    return startExport(path, startBeat, endBeat, ExportFormat{ExportFormat::Kind::Wav, bitDepth});
+}
+
+std::shared_ptr<RenderJob> Engine::startExport(const std::string& path, double startBeat, double endBeat,
+                                               const ExportFormat& format) {
     if (endBeat <= startBeat) throw std::invalid_argument("Export range is empty");
-    const ma_format format = exportFormat(bitDepth);
+    const bool mp3 = format.kind == ExportFormat::Kind::Mp3;
+    const ma_format wavFormat = mp3 ? ma_format_unknown : exportFormat(format.bitDepth);
+    if (mp3 && (format.bitrate < 32 || format.bitrate > 320)) {
+        throw std::invalid_argument("MP3 bitrate must be 32 to 320 kbps");
+    }
     std::lock_guard lock(mutex_);
     checkNotRenderingLocked();
-    auto writer = std::make_shared<WavWriter>(path, format, sampleRate_);
+    std::shared_ptr<AudioFileWriter> writer;
+    if (mp3) {
+        writer = makeMp3Writer(path, sampleRate_, format.bitrate);
+    } else {
+        writer = std::make_shared<WavWriter>(path, wavFormat, sampleRate_);
+    }
     auto render = beginOfflineLocked(startBeat);
     const int64_t total = std::llround((endBeat - startBeat) * render->snapshot->samplesPerBeat());
     return startJobLocked(path, total, [render, writer, total](RenderJob& job) -> std::optional<int64_t> {

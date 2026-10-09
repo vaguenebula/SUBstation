@@ -73,9 +73,13 @@ private Q_SLOTS:
         QVERIFY(f.stack().count() == 0 && s.clean());
 
         QSignalSpy opened(&s, &Session::projectOpened);
+        // What shows the tempo through the property hears of it (it showed 120 until moved).
+        QSignalSpy settings(&f.project(), &Project::settingsChanged);
         f.selection().setInsert(5.0);
         QVERIFY(s.openProject(path));
         QCOMPARE(opened.count(), 1);
+        QVERIFY(!settings.isEmpty());
+        QCOMPARE(f.project().property("tempo").toDouble(), 98.0);
         QCOMPARE(f.project().tracks().size(), size_t{2});
         QCOMPARE(f.project().tempo(), 98.0);
         QCOMPARE(f.engine.tempo(), 98.0);
@@ -159,6 +163,93 @@ private Q_SLOTS:
         QVERIFY(!s.clean());
     }
 
+    // Save as Template: every new project starts as the project was then (untitled);
+    // the project saved from stays as it was; Clear Template: new projects start empty.
+    void aTemplateIsWhatNewProjectsStartAs() {
+        SessionFixture f;
+        Session& s = f.s();
+        TempDir dir;
+        QVERIFY(!s.hasTemplate());
+        const QString drums = f.editor().addAudioTrack(-1, QStringLiteral("Drums"));
+        const QString keys = f.editor().addMidiTrack(-1, QStringLiteral("Keys"));
+        const auto clip = f.editor().addMidiClip(keys, 4.0, 4.0);
+        QVERIFY(clip);
+        f.editor().setClipNotes(*clip, {{60, 0.0, 1.0, 100}, {64, 1.0, 1.0, 90}}, QStringLiteral("setup"));
+        const QString device = f.editor().addDevice(drums, QStringLiteral("utility"));
+        QVERIFY(!device.isEmpty());
+        f.editor().setDeviceParam(drums, device, QStringLiteral("gain"), 3.0);
+        const QString ret = f.editor().addReturnTrack(-1, QStringLiteral("Verb"));
+        f.editor().setTempo(160.0);
+        f.editor().setTimeSignature(6, 8);
+        f.editor().setKeyByName(QStringLiteral("Am"));
+        f.editor().setLoop(true, 8.0, 24.0);
+        f.editor().setAutomationLocked(true);
+        const QString path = dir.path(QStringLiteral("song.gilproj"));
+        QVERIFY(s.saveProjectAs(path));
+        f.editor().renameTrack(drums, QStringLiteral("Beats"));  // an unsaved change
+
+        QSignalSpy changed(&s, &Session::templateChanged);
+        QVERIFY(s.saveAsTemplate());
+        QCOMPARE(changed.count(), 1);
+        QVERIFY(s.hasTemplate() && QFileInfo::exists(Session::templatePath()));
+        QCOMPARE(f.lastMessage(), QStringLiteral("Saved as the template: new projects start as this one is now"));
+        QCOMPARE(f.project().path(), path);  // still its file, with its unsaved change
+        QVERIFY(!s.clean());
+
+        for (int round = 0; round < 2; ++round) {  // (the template stays as saved, whatever the new project becomes)
+            s.newProject();
+            const Project& p = f.project();
+            QCOMPARE(p.path(), QString());
+            QCOMPARE(s.title(), QStringLiteral("Untitled - SUBstation"));
+            QVERIFY(s.clean() && f.stack().count() == 0);
+            QCOMPARE(p.tracks().size(), size_t{2});
+            QCOMPARE(p.track(drums).name, QStringLiteral("Beats"));
+            QCOMPARE(p.track(keys).clips.size(), size_t{1});
+            QCOMPARE(p.track(keys).clips[0].startBeat, 4.0);
+            QCOMPARE(p.track(keys).clips[0].notes.size(), size_t{2});
+            QCOMPARE(p.findDevice(drums, device)->params.value(QStringLiteral("gain")), 3.0);
+            QCOMPARE(p.returns().size(), size_t{1});
+            QCOMPARE(p.returns()[0].id, ret);
+            QCOMPARE(p.tempo(), 160.0);
+            QCOMPARE(f.engine.tempo(), 160.0);
+            QCOMPARE(p.timeSignature().numerator, 6);
+            QCOMPARE(p.keyName(), QStringLiteral("Am"));
+            QVERIFY(p.loopEnabled() && p.loopStart() == 8.0 && p.loopEnd() == 24.0);
+            QVERIFY(p.automationLocked());
+            f.editor().addAudioTrack();
+            f.editor().setTempo(90.0);
+        }
+        // Saving a project from it asks where (it has no file of its own).
+        QSignalSpy asked(&s, &Session::saveAsRequested);
+        QVERIFY(!s.saveProject());
+        QCOMPARE(asked.count(), 1);
+
+        s.clearTemplate();
+        QVERIFY(!s.hasTemplate() && !QFileInfo::exists(Session::templatePath()));
+        QCOMPARE(changed.count(), 2);
+        QCOMPARE(f.lastMessage(), QStringLiteral("Template cleared: new projects start empty"));
+        s.newProject();
+        QVERIFY(f.project().tracks().empty() && f.project().returns().empty());
+        QCOMPARE(f.project().tempo(), 120.0);
+    }
+
+    // A template that can't be read: a warning, and the new project starts empty.
+    void aDamagedTemplateIsAWarning() {
+        SessionFixture f;
+        Session& s = f.s();
+        f.editor().addAudioTrack();
+        QVERIFY(s.saveAsTemplate());
+        QFile file(Session::templatePath());
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write("{\"format\": \"gilstudio-project\", \"tracks\": 5}");
+        file.close();
+        s.newProject();
+        QCOMPARE(f.warnings.size(), 1);
+        QVERIFY2(f.warnings.back().startsWith(QStringLiteral("The template is damaged")), qPrintable(f.warnings.back()));
+        QVERIFY(f.project().tracks().empty());
+        s.clearTemplate();
+    }
+
     void openRecent() {
         SessionFixture f;
         Session& s = f.s();
@@ -227,6 +318,15 @@ private Q_SLOTS:
         QCOMPARE(labels(s.exportRangeChoices()), QStringList{QStringLiteral("Arrangement (start to end of last clip)")});
         f.editor().setLoop(true, 4.0, 8.0);
         QCOMPARE(values(s.exportRangeChoices()), (QVariantList{QStringLiteral("arrangement"), QStringLiteral("loop")}));
+        f.selection().setTimeRange(6.0, 14.5, {f.editor().addAudioTrack()});  // a time selection: its range too, by bars
+        QCOMPARE(values(s.exportRangeChoices()),
+                 (QVariantList{QStringLiteral("arrangement"), QStringLiteral("loop"), QStringLiteral("selection")}));
+        QCOMPARE(labels(s.exportRangeChoices()).back(), QStringLiteral("Time Selection (2.3.1 to 4.3.3)"));
+        f.selection().clear();
+        QCOMPARE(s.exportRangeChoices().size(), 2);
+        QCOMPARE(values(s.exportFileTypeChoices()), (QVariantList{QStringLiteral("wav"), QStringLiteral("mp3")}));
+        QCOMPARE(values(s.exportBitrateChoices()).front().toInt(), 320);
+        QCOMPARE(s.defaultExportBitrate(), 320);
         QCOMPARE(labels(s.exportBitDepthChoices()),
                  (QStringList{QStringLiteral("16-bit"), QStringLiteral("24-bit"), QStringLiteral("32-bit float")}));
         QCOMPARE(s.defaultExportBitDepth(), 24);

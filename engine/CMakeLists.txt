@@ -21,6 +21,45 @@ else()
     target_link_libraries(miniaudio PUBLIC ${CMAKE_DL_LIBS} Threads::Threads m)
 endif()
 
+# --- LAME (LGPL v2): its MP3 encoding library, for exporting MP3 (Mp3Writer.cpp) ---
+# Vendored unmodified in third_party/lame (see its VERSION.txt), compiled as C
+# with a config.h of ours (what LAME's configure would find).
+set(_lame ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lame)
+add_library(mp3lame STATIC
+    ${_lame}/libmp3lame/bitstream.c
+    ${_lame}/libmp3lame/encoder.c
+    ${_lame}/libmp3lame/fft.c
+    ${_lame}/libmp3lame/gain_analysis.c
+    ${_lame}/libmp3lame/id3tag.c
+    ${_lame}/libmp3lame/lame.c
+    ${_lame}/libmp3lame/newmdct.c
+    ${_lame}/libmp3lame/presets.c
+    ${_lame}/libmp3lame/psymodel.c
+    ${_lame}/libmp3lame/quantize.c
+    ${_lame}/libmp3lame/quantize_pvt.c
+    ${_lame}/libmp3lame/reservoir.c
+    ${_lame}/libmp3lame/set_get.c
+    ${_lame}/libmp3lame/tables.c
+    ${_lame}/libmp3lame/takehiro.c
+    ${_lame}/libmp3lame/util.c
+    ${_lame}/libmp3lame/vbrquantize.c
+    ${_lame}/libmp3lame/VbrTag.c
+    ${_lame}/libmp3lame/version.c)
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+    target_sources(mp3lame PRIVATE ${_lame}/libmp3lame/vector/xmm_quantize_sub.c)  # (config.h: HAVE_XMMINTRIN_H)
+endif()
+target_include_directories(mp3lame SYSTEM PUBLIC ${_lame}/include)
+target_include_directories(mp3lame PRIVATE ${_lame} ${_lame}/libmp3lame)
+target_compile_definitions(mp3lame PRIVATE HAVE_CONFIG_H)
+set_target_properties(mp3lame PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if (MSVC)
+    target_compile_options(mp3lame PRIVATE /W0)
+    target_compile_definitions(mp3lame PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(mp3lame PRIVATE -w)
+    target_link_libraries(mp3lame PRIVATE m)
+endif()
+
 # --- VST3 SDK (MIT; the parts we use are vendored in third_party/vst3sdk) --------
 set(VST3_SDK ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vst3sdk CACHE INTERNAL "The vendored VST 3 SDK")
 
@@ -163,6 +202,7 @@ add_library(sub_engine STATIC
     src/EngineDevice.cpp
     src/EngineInput.cpp
     src/EngineOffline.cpp
+    src/Mp3Writer.cpp
     src/EngineSnapshot.cpp
     src/EngineTracks.cpp
     src/AudioDevice.cpp
@@ -180,6 +220,7 @@ add_library(sub_engine STATIC
     ${BUILTIN_DEVICE_SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinDevices.cpp
     src/plugins/Vst3Format.cpp
+    src/plugins/Vst3Ids.cpp
     src/plugins/Vst3Processor.cpp
 )
 if (WIN32)
@@ -192,7 +233,7 @@ target_include_directories(sub_engine PUBLIC src)
 # Signalsmith Stretch (time stretching / pitch shifting) and its FFT library:
 # MIT-licensed, header-only, no further dependencies.
 target_include_directories(sub_engine SYSTEM PRIVATE third_party/signalsmith-stretch)
-target_link_libraries(sub_engine PRIVATE signalsmith_linear)
+target_link_libraries(sub_engine PRIVATE signalsmith_linear mp3lame)
 target_link_libraries(sub_engine PUBLIC miniaudio vst3_hosting)
 if (WIN32)
     target_link_libraries(sub_engine PUBLIC user32 ole32 uuid advapi32 winmm avrt)

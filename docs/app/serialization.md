@@ -33,6 +33,9 @@ load:  Session::openProject(path)
   dropped, and routing a project can't have is repaired. A file that isn't a project, is from a newer version, or is
   broken throws `ProjectFileError` ([model/Errors.h](../../app/src/model/Errors.h)) with a message for the user; the
   session emits it as a `warning`, which the UI shows in a message box. A file that can't be written throws it too.
+- A template ([session.md](session.md#files-and-unsaved-changes)) is a project file too: `saveTemplate` writes it
+  without paths relative to it (it moves nowhere: its files are found by their absolute paths) and without setting
+  the project's path; `loadTemplate` reads it as `loadProject` does, but the project it makes is untitled (no path).
 - After loading, `Project::reset` makes the [engine bridge](engine-bridge.md) remove every engine track and build the
   project again; plug-ins load from their saved state, after the project shows
   ([engine-bridge.md](engine-bridge.md#opening-a-project)).
@@ -41,7 +44,7 @@ load:  Session::openProject(path)
 
 | File | What it holds |
 |---|---|
-| [io/Serialization.h](../../app/src/io/Serialization.h) / [.cpp](../../app/src/io/Serialization.cpp) | `saveProject`, `loadProject`, `projectToJson`, `loadInto`, `tracksFromJson`, `returnsFromJson`, `repairRouting`; `deviceToJson`, `deviceFromJson`; presets: `deviceToPreset`, `presetDevice`, `savePreset`, `loadPreset`; constants `kProjectFormat`, `kProjectVersion`, `kProjectExtension`, `kPresetFormat`, `kPresetVersion`, `kPresetExtension`. Its header comment lists every version's additions. |
+| [io/Serialization.h](../../app/src/io/Serialization.h) / [.cpp](../../app/src/io/Serialization.cpp) | `saveProject`, `loadProject`, `saveTemplate`, `loadTemplate`, `projectToJson`, `loadInto`, `tracksFromJson`, `returnsFromJson`, `repairRouting`; `deviceToJson`, `deviceFromJson`; presets: `deviceToPreset`, `presetDevice`, `savePreset`, `loadPreset`; constants `kProjectFormat`, `kProjectVersion`, `kProjectExtension`, `kPresetFormat`, `kPresetVersion`, `kPresetExtension`. Its header comment lists every version's additions. |
 | [io/Presets.h](../../app/src/io/Presets.h) / [.cpp](../../app/src/io/Presets.cpp) | The preset library: `libraryDir`, `presetFileName`, `groupOf`, `presetPath`, `saveToLibrary`, `listPresets`, `renamePreset`; default presets: `defaultPath`, `saveDefault`, `hasDefault`, `clearDefault`, `defaultDevice`; `kDefaultsFolder` |
 | [model/](../../app/src/model) | The types saved; `repairTree` ([Routing.h](../../app/src/model/Routing.h)), `legacyWarpMode` ([Clip.h](../../app/src/model/Clip.h)), `refreshIds` ([Device.h](../../app/src/model/Device.h)), `ProjectFileError` ([Errors.h](../../app/src/model/Errors.h)) |
 | [model/DeviceState.h](../../app/src/model/DeviceState.h) | the text format inside a built-in device's `state` |

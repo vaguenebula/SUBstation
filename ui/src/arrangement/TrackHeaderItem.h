@@ -1,9 +1,9 @@
 #pragma once
 
 // A strip's header, a track's, a return's or the master's, laid out as
-// Ableton's: the name column (its name bar in its colour, the fold button, the
-// frozen mark and its name; below, the automation choosers on a darker shade
-// of its colour), the In/Out column (Audio From or MIDI From and its channel,
+// Ableton's: the name column (its name bar in its colour, the fold button and
+// its name; below, the automation choosers on a darker shade of its colour),
+// the In/Out column (Audio From or MIDI From and its channel,
 // monitoring, Audio To and where in that track it goes; a group's Audio To
 // only) and the mixer column (activator, solo, arm; volume, pan; sends), and
 // the meter. What it paints itself (the columns' backgrounds, the name column;
@@ -60,7 +60,6 @@
 #include "session/Session.h"
 
 #include <QColor>
-#include <QImage>
 #include <QPointF>
 #include <QPointer>
 #include <QRectF>
@@ -144,7 +143,7 @@ class TrackHeaderItem : public SgCanvas {
     Q_PROPERTY(int indent READ indent NOTIFY rowChanged)
     Q_PROPERTY(bool folded READ folded NOTIFY rowChanged)
     Q_PROPERTY(bool automationShown READ automationShown NOTIFY rowChanged)
-    // Where the name starts (after the bands, the fold button and the frozen mark).
+    // Where the name starts (after the bands and the fold button).
     Q_PROPERTY(qreal nameLeft READ nameLeft NOTIFY changed)
     Q_PROPERTY(QRectF foldRect READ foldRect NOTIFY rowChanged)
     // Renaming in place: the name's text field shows (Ctrl+R, the menu's Rename).
@@ -160,7 +159,6 @@ public:
     static_assert(arrangement::kFoldedHeight == kNamePad + kNameButton + kNamePad + 1);  // (and the line below)
     static constexpr int kIndent = arrangement::kGroupIndent;  // per group a track is in: the group's colour band
     static constexpr int kFoldWidth = 14;
-    static constexpr int kSnowflake = 12;  // the frozen mark before a frozen track's name
     static constexpr int kSendSlot = 36;  // a send knob and its letter, at most
     // The columns' rows: kRow apart from kNamePad, each control kNameButton high.
     static constexpr int kRow = 18;
@@ -325,7 +323,6 @@ protected:
     void hoverEnterEvent(QHoverEvent* event) override { hoverMoveEvent(event); }
     void hoverMoveEvent(QHoverEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
-    void itemChange(ItemChange change, const ItemChangeData& value) override;
 
 private:
     const app::Track* track() const;
@@ -386,7 +383,6 @@ private:
     QVariantList choosers_;
     bool sendsAutomated_ = false;
     bool renaming_ = false;
-    QImage snowflake_;  // the frozen mark, drawn for the window's pixel ratio (on the GUI thread)
     arrangement::MenuEntries menu_;
     // A press that may start dragging the track, a drag of it, or a resize: (y in the window, height).
     std::optional<QPointF> press_;

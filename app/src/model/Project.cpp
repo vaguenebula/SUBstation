@@ -738,6 +738,9 @@ void Project::replaceContents(ProjectContents contents) {
     const bool pathChange = path_ != contents.path;
     path_ = contents.path;
     Q_EMIT reset();
+    // The settings are new too: what shows them through their properties (the
+    // tempo box, Lock Envelopes, the loop button) is notified by this signal only.
+    Q_EMIT settingsChanged();
     if (pathChange) Q_EMIT pathChanged();
 }
 

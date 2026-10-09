@@ -57,6 +57,8 @@ void prepareApplication() {
     qputenv("SUBSTATION_PLUGIN_CACHE",
             (runFolder(QStringLiteral("sub-plugin-cache")) + QStringLiteral("/vst3-cache.json")).toUtf8());
     qputenv("SUBSTATION_RECORDINGS", (runFolder(QStringLiteral("sub-recordings")) + QStringLiteral("/Recordings")).toUtf8());
+    // Not the user's template: new projects start empty until a test saves one.
+    qputenv("SUBSTATION_TEMPLATE", (runFolder(QStringLiteral("sub-template")) + QStringLiteral("/Template.gilproj")).toUtf8());
 }
 
 ScopedEnv::ScopedEnv(const char* name, const QString& value)

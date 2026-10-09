@@ -1493,7 +1493,7 @@ private Q_SLOTS:
         QVERIFY(QTest::qWaitFor([&] { return project().track(track).frozen.has_value() && !session().render()->active(); },
                                 30000));
         h_->settle();
-        QVERIFY(header(track)->nameLeft() > nameLeft);  // the frozen mark before its name
+        QCOMPARE(header(track)->nameLeft(), nameLeft);  // no mark before its name: it stays where it was
         test::screenshot(window(), QStringLiteral("arrangement_frozen_track"));
         menu = header(track)->contextMenu();
         QVERIFY(menu.find(QStringLiteral("Unfreeze Track")));

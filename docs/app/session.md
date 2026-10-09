@@ -16,7 +16,7 @@ accessors. The UI shows dialogs and asks the session to act; the session itself 
 | File | What it holds |
 |---|---|
 | [Session.h](../../app/src/session/Session.h) | `Session`: its parts, properties, invokables and signals; its header comment is the overview. `Session.cpp`: making the parts and wiring them, the title, start-up and shut-down |
-| [SessionFiles.cpp](../../app/src/session/SessionFiles.cpp) | New, open, save, the recent projects, the last folder, Export Audio |
+| [SessionFiles.cpp](../../app/src/session/SessionFiles.cpp) | New, open, save, the template, the recent projects, the last folder, Export Audio |
 | [SessionEditing.cpp](../../app/src/session/SessionEditing.cpp) | The Create and Edit commands on what is selected (dispatched to the arrangement's actions, or the device view's while it has the focus), adding to the selected track, freezing |
 | [SessionTransport.cpp](../../app/src/session/SessionTransport.cpp) | Play, record (with the count-in), stop, locate |
 | [Selection.h](../../app/src/session/Selection.h) | `Selection`: what is selected in the arrangement |
@@ -107,8 +107,8 @@ The full list, with what each does, is in [Session.h](../../app/src/session/Sess
 | Adding | `addDeviceToSelectedTrack(kind)`, `addPluginToSelectedTrack({format, uid, name, vendor, path, instrument})`, `addPresetToSelectedTrack(path)` (an instrument with no MIDI track selected: on a new MIDI track), `addFileAtInsert(path)`, `presetSaved(path)` |
 | Edit | `cut()`, `copy()`, `paste()`, `duplicate()`, `whatIsCopied(verb)`, `deleteSelection()`, `split()`, `selectAll()`, `consolidate()`, `reverseClips()`, `toggleClipActivation()`, `soloSelectedTracks()`, `renameTarget(browserListFocused)` |
 | Freezing | `toggleFreeze()` (Ctrl+Shift+F), `flattenSelectedTracks()`, `freezeActions(ids)` (a track menu's texts and states), `freezeTracks(ids)`, `unfreezeTracks(ids)`, `flattenTracks(ids)` |
-| Files | `newProject()`, `openProject(path)`, `saveProject()`, `saveProjectAs(path)`, `suggestedSavePath()`, `recentProjects`, `recentProjectAvailable(path)`, `recentMenuItems()`, `clearRecentProjects()`, `lastFolder`, `projectFilter`, `projectExtension`, `confirmDiscardText` |
-| Export | `exportRangeChoices()`, `exportProblem(range)`, `suggestedExportPath()`, `exportBitDepthChoices`, `defaultExportBitDepth` (24), `exportAudio(path, range, bitDepth)` |
+| Files | `newProject()`, `openProject(path)`, `saveProject()`, `saveProjectAs(path)`, `suggestedSavePath()`, `recentProjects`, `recentProjectAvailable(path)`, `recentMenuItems()`, `clearRecentProjects()`, `lastFolder`, `projectFilter`, `projectExtension`, `confirmDiscardText`; `saveAsTemplate()`, `clearTemplate()`, `hasTemplate`, `templatePath()`; `importLiveSet(path)`, `liveSetFilter` |
+| Export | `exportRangeChoices()` ("arrangement", "loop" while the loop is on, "selection" while there is a time selection), `exportProblem(range)`, `suggestedExportPath(fileType)`, `exportBitDepthChoices`, `defaultExportBitDepth` (24), `exportFileTypeChoices` (WAV, MP3), `exportBitrateChoices`, `defaultExportBitrate` (320), `exportAudio(path, range, bitDepth, fileType, bitrate)` |
 | Plug-ins loading | `pluginsLoaded`, `pluginsTotal`, `pluginsLoadingText` ("Loading plug-ins: 1 of 3") |
 
 Signals: `statusMessage(text)` (the status line), `warning(text)` and `information(text)` (what were message boxes:
@@ -145,7 +145,22 @@ The session never asks the user anything; the UI does, and then calls it:
   `projectOpened()` and says "Opened <file>", and how many of the files it plays are missing ("Opened song.gilproj: 2
   files are missing (the File Manager finds them)"; the UI shows the File Manager then). Its plug-ins load after it
   shows ([engine-bridge.md](engine-bridge.md#opening-a-project)).
-- **New**: `newProject()` empties the project, the undo stack and the selection.
+- **New**: `newProject()` opens the template if one was saved (`hasTemplate`), else empties the project; then it
+  clears the undo stack and the selection. A project from the template is everything the template holds, untitled (no
+  file: Save asks where); a template that can't be read is a `warning`, and the project starts empty. The
+  application opens a new project this way as it starts, unless it was given a project to open.
+- **Import Ableton Live Set**: `importLiveSet(path)` reads and translates the set
+  ([live-import.md](live-import.md)), with the plug-in index's plug-ins, and loads it as `loadInto` loads a
+  project file (a set that can't be read: a `warning`, and the project stays). It then goes on as opening does
+  (`loadedFrom`: a session of its own, the folder remembered, the files looked at, `projectOpened()`), names the
+  untitled project after the set (`title()`, `suggestedSavePath()`) and leaves it unsaved (`QUndoStack::resetClean`:
+  not `clean` until saved, so New, Open and Quit ask), says "Imported song.als: 12 tracks, 80 clips" and, if anything
+  didn't come across as it was, lists it in an `information`. Running out of memory reading it is a `warning` too.
+- **Templates**: `saveAsTemplate()` stores the plug-ins' states, then writes the project to `templatePath()`
+  (`Template.gilproj` in the local data folder, or `SUBSTATION_TEMPLATE`) without making it the project's file: the
+  project keeps its file and its unsaved changes. Its files are kept by their absolute paths
+  ([serialization.md](serialization.md)). `clearTemplate()` deletes it: new projects start empty again. Both say so in
+  the status line and emit `templateChanged()`.
 - **Close**: `requestClose()` is false while a render runs: it cancels the render instead, and the window stays (as
   the render dialog's Cancel would). Otherwise the UI asks about unsaved changes as above.
 - **Recent projects**: at most `kMaxRecent` (10), the latest first, each stored absolute with links resolved, in the
@@ -304,7 +319,7 @@ re-enter the session meanwhile. Each render:
 
 | Render | What it does |
 |---|---|
-| `ExportAudioRender` | the arrangement (or the loop) into a WAV file, once the devices are ready (`Session::exportAudio`; playback stops first) |
+| `ExportAudioRender` | the arrangement (the loop, the time selection) into a WAV or MP3 file, once the devices are ready (`Session::exportAudio`; playback stops first) |
 | `FreezeTracksRender` | several tracks, one after another, then frozen in one undo step: all or nothing (cancelled, or one failing, none is frozen, and the renders made so far are deleted) |
 | `ReverseClipsRender` | reversed copies of long files, written side by side and followed one after another; cancelled, none is used |
 

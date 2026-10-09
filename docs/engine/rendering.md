@@ -18,7 +18,7 @@ graph is spread over threads in [scheduler.md](scheduler.md).
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | `Engine::rebuildSnapshotLocked()`, `buildChainLocked()`, `buildAutomationLocked()`. |
 | [Renderer.h](../../engine/src/Renderer.h) / [.cpp](../../engine/src/Renderer.cpp) | `Renderer`: transport, chunks, tracks, strips, racks, faders, solo, notes, clips, metronome, preview, MIDI input, recording hand-off. |
 | [Metronome.h](../../engine/src/Metronome.h) / [.cpp](../../engine/src/Metronome.cpp) | The click generator. |
-| [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | Offline renders and WAV export. |
+| [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | Offline renders and exports (WAV; MP3 through [Mp3Writer.cpp](../../engine/src/Mp3Writer.cpp)). |
 
 ## The snapshot
 
