@@ -975,6 +975,26 @@ private Q_SLOTS:
 
     // --- The header's controls ----------------------------------------------------------------
 
+    // The mixer column's controls fill it in two columns as wide as each other,
+    // as Ableton's: the activator over volume; solo and arm over pan.
+    void theMixerControlsFillTheirColumn() {
+        const QString track = editor().addAudioTrack();
+        h_->settle();
+        const QRectF activator = geometryOf(control(track, "activator")), volume = geometryOf(control(track, "volume"));
+        const QRectF solo = geometryOf(control(track, "solo")), arm = geometryOf(control(track, "arm"));
+        const QRectF pan = geometryOf(control(track, "pan"));
+        QCOMPARE(volume.width(), pan.width());
+        QCOMPARE(activator.width(), volume.width());
+        QCOMPARE(activator.left(), volume.left());
+        QCOMPARE(solo.left(), pan.left());
+        QCOMPARE(arm.right(), pan.right());
+        QCOMPARE(solo.width(), arm.width());
+        // From the column's left edge to the meter's, as far in from each.
+        TrackHeaderItem* h = header(track);
+        const double meter = geometryOf(control(track, "meter")).left() - 3;  // (the meter's area)
+        QCOMPARE(volume.left() - h->mixerLeft(), meter - pan.right());
+    }
+
     void headerControls() {
         const QString track = editor().addAudioTrack();
         h_->settle();

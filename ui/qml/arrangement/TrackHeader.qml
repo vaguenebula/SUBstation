@@ -32,13 +32,14 @@ TrackHeaderItem {
     readonly property int mixerWidth: 112
     readonly property int ioWidth: 84
     readonly property int mixerX: width - meterArea - mixerWidth
-    // The mixer column's two columns, as Ableton's, filling it (4 px in from its
-    // edges, 4 px apart): the activator over volume; solo and arm over pan.
+    // The mixer column's two columns, as Ableton's, as wide as each other and
+    // filling it (4 px in from its edges, 4 px apart): the activator over
+    // volume; solo and arm over pan.
     readonly property int mixerGap: 4
     readonly property int mixerLeftX: mixerX + mixerGap
-    readonly property int mixerLeftWidth: 48
+    readonly property int mixerLeftWidth: Math.floor((mixerWidth - 3 * mixerGap) / 2)
     readonly property int mixerRightX: mixerLeftX + mixerLeftWidth + mixerGap
-    readonly property int mixerRightWidth: mixerX + mixerWidth - mixerGap - mixerRightX
+    readonly property int mixerRightWidth: mixerLeftWidth
     readonly property int mixerButton: Math.floor((mixerRightWidth - mixerGap) / 2)  // solo, arm
     readonly property int ioX: ioShown ? mixerX - ioWidth : 0
     readonly property int nameColumnRight: (ioShown ? ioX : mixerX) - 1
