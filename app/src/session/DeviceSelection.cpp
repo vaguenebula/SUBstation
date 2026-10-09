@@ -531,10 +531,7 @@ QString DeviceSelection::savePreset(const QString& deviceId, const QString& give
     }
     try {
         saveToLibrary(device, name);
-    } catch (const ProjectFileError& error) {
-        Q_EMIT statusMessage(QStringLiteral("Could not save the preset: ") + error.message());
-        return {};
-    } catch (const EditError& error) {
+    } catch (const UserError& error) {  // (the file, or the name for it)
         Q_EMIT statusMessage(QStringLiteral("Could not save the preset: ") + error.message());
         return {};
     }
@@ -552,10 +549,7 @@ QString DeviceSelection::saveAsDefault(const QString& deviceId) {
     QString path;
     try {
         path = saveDefault(device);
-    } catch (const ProjectFileError& error) {
-        Q_EMIT statusMessage(QStringLiteral("Could not save the default preset: ") + error.message());
-        return {};
-    } catch (const EditError& error) {
+    } catch (const UserError& error) {  // (the file, or a rack: none)
         Q_EMIT statusMessage(QStringLiteral("Could not save the default preset: ") + error.message());
         return {};
     }

@@ -94,6 +94,9 @@ private Q_SLOTS:
         for (const char* bad : {"", "   ", "...", "CON", "nul.txt", "com1"}) {
             QVERIFY_THROWS_EXCEPTION(EditError, presetFileName(QString::fromLatin1(bad)));
         }
+        // An edit refused and a file that can't be read are both errors the user sees.
+        QVERIFY_THROWS_EXCEPTION(UserError, presetFileName(QStringLiteral("CON")));
+        QVERIFY_THROWS_EXCEPTION(UserError, loadPreset(dir.path(QStringLiteral("none.gilpreset"))));
         QCOMPARE(presetPath(test::makeDevice("d", "utility"), "a/b", dir.path()),
                  dir.path() + "/Utility/a_b" + kPresetExtension);
         // A device called as the defaults' folder groups apart from it.
