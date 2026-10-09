@@ -27,6 +27,7 @@ For what the user sees and does, read the [user guide](../guide/README.md); this
 | [ui/src/pianoroll/](../../ui/src/pianoroll), [ui/qml/pianoroll/](../../ui/qml/pianoroll), [ui/qml/clipview/](../../ui/qml/clipview) | The piano roll and the clip view: [piano-roll.md](piano-roll.md). |
 | [ui/src/devices/](../../ui/src/devices), [ui/qml/devices/](../../ui/qml/devices) | The device view and the built-in devices' editors: [device-view.md](device-view.md). |
 | [ui/qml/browser/](../../ui/qml/browser) | The browser panel: [browser.md](../browser.md). |
+| [ui/qml/files/](../../ui/qml/files) | The File Manager panel (`FileManagerPanel.qml`): [app/session.md](../app/session.md#the-file-manager-and-hot-swaps-filemanager-hotswap). |
 | [ui/qml/Main.qml](../../ui/qml/Main.qml), [ui/qml/TitleBar.qml](../../ui/qml/TitleBar.qml), [ui/qml/InfoView.qml](../../ui/qml/InfoView.qml), [ui/qml/Hints.qml](../../ui/qml/Hints.qml) | The main window, its title bar and its info view, which says the tooltips ([below](#the-main-window)). |
 | [ui/qml/transport/](../../ui/qml/transport) | `TransportBar.qml`. |
 | [ui/qml/dialogs/](../../ui/qml/dialogs) | Preferences (`PreferencesDialog`, `AudioPage`, `MidiPage`, `PluginsPage`), `ExportDialog`, `RenderDialog`, `AboutDialog`, `UnsavedChangesDialog`, and what they share: `MessageBox`, `ChoiceBox`. |
@@ -109,12 +110,12 @@ globbed ([ui/CMakeLists.txt](../../ui/CMakeLists.txt)): a new one is picked up b
 ┌───────────────────────────────────────────────────────────────────┐
 │ ▮ File Edit … Help      song* - SUBstation      status   ─  □  ✕  │  TitleBar (menuBar)
 │ TransportBar (header)                                             │
-├────────────┬──────────────────────────────────────────────────────┤
-│ Browser-   │ ArrangementView   (or the ClipView covering it)      │
-│ Panel      │                                                      │
-│ (300 px,   │                                                      │
-│  min 120)  │                                                      │
-├──────────┬─┴──────────────────────────────────────────────────────┤
+├────────────┬──────────────────────────────────────┬───────────────┤
+│ Browser-   │ ArrangementView (or the ClipView     │ FileManager-  │
+│ Panel      │ covering it)                         │ Panel (while  │
+│ (300 px,   │                                      │ View › File   │
+│  min 120)  │                                      │ Manager is on)│
+├──────────┬─┴──────────────────────────────────────┴───────────────┤
 │ InfoView │ DevicePanel (as tall as its tallest device needs)      │  bottomRow
 └──────────┴────────────────────────────────────────────────────────┘
 ```
@@ -133,13 +134,17 @@ frame changes when the native window is made, its client area staying put, so th
 client area's) is what it was. Elsewhere `frame.active` is false: the system's title bar stays, with the window's
 buttons and the title, and the title bar is a menu bar with the title and the status line.
 
-The body is a vertical `SplitView` (`rows`, 4 px handles) of a horizontal one (`splitter`: the browser and the
-arrangement area) over the bottom row (`bottomRow`), which spans the window as in Ableton: the info view at its left
+The body is a vertical `SplitView` (`rows`, 4 px handles) of a horizontal one (`splitter`: the browser, the
+arrangement area and the File Manager) over the bottom row (`bottomRow`), which spans the window as in Ableton: the info view at its left
 (230 px) and the device view along the rest, its height fixed to the device view's `implicitHeight`. The
 arrangement area holds the `ArrangementView` and the `ClipView` on top of each other: clips open in the clip view (a
 double-click, Shift+Tab, a new MIDI clip: `Session.arrangement.clipViewRequested`) cover the arrangement until Esc,
 × or Shift+Tab go back (`arrangementArea.closeClipView()`, which gives the lanes the keyboard again). View › Browser
-(Ctrl+Alt+B), View › Device View (Ctrl+Alt+L: the whole bottom row) and View › Info View show and hide them.
+(Ctrl+Alt+B), View › File Manager (Ctrl+Alt+F; hidden at first), View › Device View (Ctrl+Alt+L: the whole bottom
+row) and View › Info View show and hide them. The File Manager ([FileManagerPanel.qml](../../ui/qml/files/FileManagerPanel.qml),
+on `Session.files`: [app/session.md](../app/session.md#the-file-manager-and-hot-swaps-filemanager-hotswap)) also shows
+when a project opens with missing files and on Show in File Manager (`Session.files.revealRequested`); the browser
+shows when a hot swap starts (`Session.hotSwap`) or Find Similar does.
 
 The info view ([InfoView.qml](../../ui/qml/InfoView.qml)) says the tooltips. The style's `ToolTip` (one shared tip
 behind every `ToolTip.visible`/`ToolTip.text` and every `RoleButton`'s `tooltip`) asks the `Hints` singleton

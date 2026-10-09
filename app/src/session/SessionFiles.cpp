@@ -9,6 +9,7 @@
 #include <QVariant>
 
 #include "audio/EngineBridge.h"
+#include "files/FileManager.h"
 #include "io/Serialization.h"
 #include "model/Errors.h"
 #include "model/Project.h"
@@ -61,8 +62,15 @@ bool Session::openProject(const QString& path) {
     resetSession();
     setLastFolder(QFileInfo(path).absolutePath());
     addRecent(path);
+    files_->update();
     Q_EMIT projectOpened();
-    Q_EMIT statusMessage(QStringLiteral("Opened ") + QFileInfo(path).fileName());
+    const int missing = files_->missingCount();
+    QString message = QStringLiteral("Opened ") + QFileInfo(path).fileName();
+    if (missing > 0) {
+        message += missing == 1 ? QStringLiteral(": 1 file is missing (the File Manager finds it)")
+                                : QStringLiteral(": %1 files are missing (the File Manager finds them)").arg(missing);
+    }
+    Q_EMIT statusMessage(message);
     return true;
 }
 

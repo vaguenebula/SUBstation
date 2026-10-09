@@ -84,7 +84,10 @@ folding, the master, the title bar and the transport bar, and projects.
 
 A clip's right-click menu has *Cut*, *Copy*, *Paste*, *Split Here*, *Duplicate*,
 *Consolidate*, *Reverse*, *Deactivate* (or *Activate*) and *Delete*; right-clicking anywhere in a time selection
-offers the same (but *Split Here*), for what is selected. Right-clicking an empty part
+offers the same (but *Split Here*), for what is selected. An audio clip's also has *Find
+Similar Sounds* (see [browser.md](browser.md#find-similar-sounds)), *Hot-Swap Sample*
+(try samples from the browser in place of its file, everywhere it plays) and *Show in
+File Manager* (see [file-manager.md](file-manager.md)). Right-clicking an empty part
 of a lane offers *Paste* (at that point), *Insert MIDI Clip* (on a MIDI track), *Insert
 Audio Track*, *Insert MIDI Track* and *Delete Track*.
 

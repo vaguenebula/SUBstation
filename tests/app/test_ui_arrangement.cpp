@@ -28,6 +28,8 @@
 #include "theme/Theme.h"
 #include "audio/EngineBridge.h"
 #include "editor/ProjectEditor.h"
+#include "files/FileManager.h"
+#include "files/HotSwap.h"
 #include "model/Clip.h"
 #include "model/Project.h"
 #include "session/ArrangementActions.h"
@@ -1079,7 +1081,8 @@ private Q_SLOTS:
                  (QStringList{QStringLiteral("Cut"), QStringLiteral("Copy"), QStringLiteral("Paste"), QString(),
                               QStringLiteral("Split Here"), QStringLiteral("Duplicate"), QStringLiteral("Consolidate"),
                               QStringLiteral("Reverse"), QStringLiteral("Deactivate"), QString(),
-                              QStringLiteral("Find Similar Sounds"), QString(), QStringLiteral("Delete")}));
+                              QStringLiteral("Find Similar Sounds"), QStringLiteral("Hot-Swap Sample"),
+                              QStringLiteral("Show in File Manager"), QString(), QStringLiteral("Delete")}));
         QCOMPARE(selection().clips(), refs({{trackId(0), clipOf(0).id}}));
         QCOMPARE(menu.find(QStringLiteral("Duplicate"))->shortcut, QStringLiteral("Ctrl+D"));
         // Find Similar Sounds: the browser lists the sounds most like the clip's.
@@ -1088,6 +1091,18 @@ private Q_SLOTS:
         QCOMPARE(session().browser()->similarTo(), clipOf(0).path);
         session().browser()->clearSimilar();
         QCOMPARE(session().browser()->similarTo(), QString());
+        // Hot-Swap Sample: every clip playing its file, the browser listing the sounds most like it.
+        QVERIFY(menu.triggerText(QStringLiteral("Hot-Swap Sample")));
+        sub::app::HotSwap& hotSwap = *session().hotSwap();
+        QVERIFY(hotSwap.active());
+        QCOMPARE(hotSwap.uses().clips, (sub::app::ClipRefs{{trackId(0), clipOf(0).id}}));
+        QCOMPARE(session().browser()->similarTo(), clipOf(0).path);
+        hotSwap.stop();
+        session().browser()->clearSimilar();
+        // Show in File Manager: the panel is asked to show its row.
+        QSignalSpy revealed(session().files(), &sub::app::FileManager::revealRequested);
+        QVERIFY(menu.triggerText(QStringLiteral("Show in File Manager")));
+        QCOMPARE(revealed.count(), 1);
         QVERIFY(menu.triggerText(QStringLiteral("Split Here")));
         QCOMPARE(spans(trackId(0)), (std::vector<Span>{{0, 1}, {1, 4}}));
         // Copy (the area still selected: both pieces), then paste where the empty lane was right-clicked.

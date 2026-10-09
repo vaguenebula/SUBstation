@@ -26,6 +26,10 @@ SelectionList {
     }
 
     onCurrentIndexChanged: if (currentIndex >= 0) browser.treeCurrentChanged(folderModel.path(currentIndex))
+    onChosen: row => {
+        if (!folderModel.isDir(row))
+            browser.chooseFile(folderModel.path(row))
+    }
     onActivated: (row, byKey) => {
         if (!folderModel.isDir(row))
             browser.activateFile(folderModel.path(row))

@@ -560,7 +560,10 @@ Sound similarity
 - [ ] Swap in similar samples in the sampler (step through
       `SimilarSounds::best()`).
 - [ ] The same in the drum rack (once there is one), per pad.
-- [ ] A file manager view: swap a project's audio files (by track) for similar ones.
+- [x] A file manager view (View › File Manager): the project's files, missing
+      ones found again (by name, in the background), one replaced everywhere it
+      plays; hot swap (a clip's menu, a file's button) lists similar sounds and
+      swaps in what the browser selects.
 - [ ] Maybe: the user weighs the aspects (as Sononym does).
 - [ ] Maybe: a small learned embedding as another aspect (better across kinds).
 

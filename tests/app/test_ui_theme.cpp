@@ -205,7 +205,8 @@ private Q_SLOTS:
             QStringLiteral("snowflake"), QStringLiteral("save"),       QStringLiteral("link"),
             QStringLiteral("infinity"),  QStringLiteral("expand"),     QStringLiteral("sliders"),
             QStringLiteral("fold"),      QStringLiteral("search"),     QStringLiteral("app_icon")};
-        const QStringList added = {QStringLiteral("chain_list"), QStringLiteral("rack_devices")};
+        const QStringList added = {QStringLiteral("chain_list"), QStringLiteral("rack_devices"),
+                                   QStringLiteral("hotswap"), QStringLiteral("missing")};
         QCOMPARE(names.size(), fromPython.size() + added.size());
         for (const QString& name : fromPython + added) {
             QVERIFY2(names.contains(name), qPrintable(name));

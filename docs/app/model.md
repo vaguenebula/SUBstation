@@ -57,7 +57,7 @@ session's ([session.md](session.md)).
 | [RecordedTake.h](../../app/src/model/RecordedTake.h) | `RecordedTake`, `RecordedTakeNote`: what a recording hands the editor |
 | [Errors.h](../../app/src/model/Errors.h) | `EditError` (an edit the user can't make), `ProjectFileError` (a file that can't be read or written); both carry a `QString` message for the user |
 | [Ids.h](../../app/src/model/Ids.h), [OrderedMap.h](../../app/src/model/OrderedMap.h), [Numbers.h](../../app/src/model/Numbers.h) | `newId()`; a map that keeps its keys in insertion order; rounding half to even, floor division that stays exact (`floorDiv`), fixed-point text |
-| [editor/](../../app/src/editor) | `ProjectEditor` ([ProjectEditor.h](../../app/src/editor/ProjectEditor.h)), one source file per area: `EditorTracks.cpp` (tracks, returns and sends, groups, inputs, recordings), `EditorSettings.cpp` (tempo, time signature, key, loop), `EditorClips.cpp` (clips and time selections), `EditorDeviceChains.cpp` (devices in chains), `EditorRacks.cpp` (racks, their chains and macros), `EditorDeviceSettings.cpp` (a device's parameters, state, presets, switch, sidechain), `EditorAutomation.cpp` (envelopes and the lanes shown), `EditorFreezing.cpp` (freezing, unfreezing, flattening, and what frozen tracks refuse). Its value types: `ClipRef`/`ClipRefs`, `TimeRange`, `MovedRange`, `ClipboardContent`/`CopiedTrack`/`CopiedFreeze`, `CopiedTracks`, `CopiedAutomation`, `TrackParent`/`InsertionPoint` |
+| [editor/](../../app/src/editor) | `ProjectEditor` ([ProjectEditor.h](../../app/src/editor/ProjectEditor.h)), one source file per area: `EditorTracks.cpp` (tracks, returns and sends, groups, inputs, recordings), `EditorSettings.cpp` (tempo, time signature, key, loop), `EditorClips.cpp` (clips and time selections), `EditorDeviceChains.cpp` (devices in chains), `EditorRacks.cpp` (racks, their chains and macros), `EditorDeviceSettings.cpp` (a device's parameters, state, presets, switch, sidechain), `EditorAutomation.cpp` (envelopes and the lanes shown), `EditorFreezing.cpp` (freezing, unfreezing, flattening, and what frozen tracks refuse), `EditorFiles.cpp` (the files clips and devices play: one put in another's place, files found somewhere else). Its value types: `ClipRef`/`ClipRefs`, `TimeRange`, `MovedRange`, `ClipboardContent`/`CopiedTrack`/`CopiedFreeze`, `CopiedTracks`, `CopiedAutomation`, `TrackParent`/`InsertionPoint` |
 | [io/Serialization.h](../../app/src/io/Serialization.h), [io/Presets.h](../../app/src/io/Presets.h) | Project and preset files, the preset library: see [serialization.md](serialization.md) |
 
 ## Key types
@@ -417,6 +417,7 @@ The session owns one `QUndoStack` and one `ProjectEditor(project, undoStack)`. T
 | `SetDeviceParamCommand`, `SetDeviceParamsCommand` | one parameter; several at once (a macro and what it moves) |
 | `UpdateChainCommand`, `SetMacrosCommand`, `SetDeviceNameCommand` | a rack chain's name or mixer; a rack's macro mappings, with the values of the parameters a range change moves (merging per gesture); a rack's name |
 | `SetDeviceStateCommand` | a device's state (a plug-in preset, a sampler's sample) |
+| `ReplaceFilesCommand` | other files in some files' place: the clip lists of the tracks playing them and the states of the built-in devices naming them (`DeviceStates`), together; merging per hot swap (the same tracks and devices); `relink` for files only found somewhere else (frozen tracks take those) |
 | `SetDeviceEnabledCommand`, `SetDeviceSidechainCommand` | on/off; sidechain |
 | `SetEnvelopeCommand`, `SetEnvelopesCommand` | one envelope; several (a range moved on several lanes) |
 
@@ -433,13 +434,15 @@ How it fits together:
 - **Gestures merge.** A merge key is a `QString`; empty never merges. A command given one returns id `kMergeId`
   (0x6E1), and `mergeWith` accepts the next command of the same class with the same merge key and the same target,
   keeping the first's old value and the latest's new one (`MergeableCommand`). `SetClipsCommand` needs the same set
-  of tracks. The UI makes one key per gesture (`QUuid::createUuid().toString()`; the shared `Knob` and `ValueBox`
+  of tracks; `ReplaceFilesCommand` the same tracks and devices, and turns obsolete (leaving the stack) when it is back
+  where it began. The UI makes one key per gesture (`QUuid::createUuid().toString()`; the shared `Knob` and `ValueBox`
   controls hand one out with each `moved(value, gestureKey)`), so a fader drag, a knob drag or a breakpoint drag is
   one undo step. A plug-in editor's knob drag is one too: the session merges its edits by
   `"plugin edit|<device id>|<param id>|<gesture>"`.
-- **Baselines for drags that trim.** `setTempo` and `updateClips` (segment BPM, warp) trim clips that would run into
-  the next one (`edits::fitToTempo`). While a drag merges, they fit from the clips as they were when the drag began
-  (the previous merged command's old value), so dragging up and back down doesn't leave clips trimmed.
+- **Baselines for drags that trim.** `setTempo`, `updateClips` (segment BPM, warp) and `replaceFile` (a hot swap)
+  trim clips that would run into the next one (`edits::fitToTempo`). While a drag (a hot swap) merges, they fit from
+  the clips as they were when it began (the previous merged command's old value), so dragging up and back down (or
+  trying a long sample, then a short one) doesn't leave clips trimmed.
 - **Not undone** (changed directly on the project; saved with it): track `height`, `folded`, folded devices, `armed`,
   track and chain `solo` (`soloTracks`, `setChainParam(..., Solo, ...)`), the automation view, and
   `automationLocked`. These push nothing, so they don't mark the project as changed either.
@@ -526,6 +529,12 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
   `addAutomationLane` [Q], `setAutomationLane` [Q], `removeAutomationLane` [Q], `resetAutomationView` [Q],
   `defaultAutomationKey` [Q].
 - **Freezing**: `freezeTracks`, `unfreezeTracks` [Q], `flattenTracks` [Q], `laneFrozen` [Q].
+- **Files**: `replaceFile(uses, path, seconds, text, mergeKey)` (a file in the place of whatever these clips and
+  devices play, one `ReplaceFilesCommand`: each clip as `edits::replaceFile` has it, trimmed at the next one; refused
+  on frozen tracks; with a merge key, from the clips as they were before the hot swap began), `relinkFiles({old:
+  new})` (files found somewhere else: every clip playing one or reversed from it, every device naming it, frozen
+  tracks too; "Locate Missing Files"). What plays a file (`FileUses`) is
+  [files/ProjectFiles.h](../../app/src/files/ProjectFiles.h)'s ([session.md](session.md#the-file-manager-and-hot-swaps-filemanager-hotswap)).
 
 Three hooks connect it to the rest without it knowing the bridge or the preset library; the session sets them
 ([session.md](session.md#wiring)): `setParamInfo` (how `paramInfo()` learns a plug-in's or a rack's parameter
@@ -557,6 +566,11 @@ refused because of frozen audio are said on `refused` too. The session shows `re
   limited by the source), `fitToTempo` (the same clips if nothing changes; `changed` says whether anything did),
   `consolidateMidi` (what the clips play: a deactivated clip's notes come deactivated, unless every clip is), `reverseClip` (a clip playing a reversed copy of its file: the same stretch of audio, its offset
   mirrored), `selectionSpan`.
+- `replaceFile(clip, path, totalSec)` (another file in its place: where it is, with its settings; a clip playing all
+  of its file, `playsWholeFile`, plays all of the new one, one playing a stretch plays the same stretch as far as the
+  new file goes; named after the file, forwards, its fades held to its length), `relinkFile(clip, from, to)` (a file
+  found somewhere else, also what it was reversed from; nothing else changes), `samePath` (paths as the system
+  compares them).
 - `stretchClip(clip, edgeBeat, left, tempo)` (Alt-dragging an edge): that edge moves, the other stays, and the
   content plays faster or slower to fill it: an audio clip is warped to the segment BPM that makes it that long
   (within `kMinSegmentBpm`..`kMaxSegmentBpm`, 20..999), a MIDI clip's notes and offset are scaled; never before
@@ -650,6 +664,8 @@ refused because of frozen audio are said on `refused` too. The session shows `re
 - [test_editor_frozen_areas.cpp](../../tests/app/test_editor_frozen_areas.cpp): time selections over frozen tracks
   and groups (delete, move, copy, duplicate, cut, paste) with their frozen audio, in one undo step; what is refused;
   unfreezing and flattening afterwards.
+- [test_file_manager.cpp](../../tests/app/test_file_manager.cpp): files replaced and relinked (the pure functions,
+  the editor's one step, a hot swap's merging and its baseline, frozen tracks), the File Manager and hot swaps.
 - [test_session_engine.cpp](../../tests/app/test_session_engine.cpp) and the `test_bridge_*` tests: the engine
   hearing the editor's edits.
 

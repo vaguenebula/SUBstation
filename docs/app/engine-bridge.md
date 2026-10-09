@@ -413,7 +413,9 @@ Audio files (`audioExtensions()`: `.wav`, `.wave`, `.flac`, `.mp3`) are decoded 
 `sourceKey(path)`: absolute and clean, lower case on Windows, so two spellings of one file share one source), queues
 `then` callbacks while it loads, and emits `sourceReady(path)` or `sourceFailed(path, message)` on the GUI thread.
 `waveform(path)` gives the decoded file as a `Waveform` (null while it isn't decoded); `isLoading`, `loadError`,
-`fileInfo` (the header only, cached, `sub::AudioSource::probe`). After a sample-rate change every source is decoded
+`fileInfo` (the header only, cached, `sub::AudioSource::probe`). A file that couldn't be decoded is said in the status
+line, but one that isn't there at all: the File Manager lists missing files ([session.md](session.md#the-file-manager-and-hot-swaps-filemanager-hotswap)),
+and a project opening with some says how many once. After a sample-rate change every source is decoded
 again (`refreshSources`). On `reset` the bridge forgets sources the new project doesn't use and calls
 `Engine::releaseUnusedSources()`. See [engine/warp.md](../engine/warp.md).
 

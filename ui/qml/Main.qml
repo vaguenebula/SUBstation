@@ -8,7 +8,8 @@ import SUBstation
 // with a project's plug-ins loading, and on Windows the window's buttons: the
 // system's caption is gone), the transport bar under it; below them the
 // browser (left) beside the arrangement (or the clip view covering it while
-// clips are open in it), and along the window's bottom, as in Ableton, the
+// clips are open in it), and the File Manager at the right while it shows
+// (View › File Manager); along the window's bottom, as in Ableton, the
 // info view (what the control under the mouse is: the tooltips are said there)
 // and the device view across the rest of the width.
 // Every menu action and shortcut calls the session (the main window's logic:
@@ -30,6 +31,7 @@ ApplicationWindow {
     // The views (for the tests, and whoever needs them).
     readonly property alias transportBar: transportBar
     readonly property alias browserPanel: browser
+    readonly property alias fileManagerPanel: fileManager
     readonly property alias arrangementView: arrangement
     readonly property alias devicePanelView: devicePanel
     readonly property alias infoView: infoView
@@ -197,6 +199,26 @@ ApplicationWindow {
         }
     }
 
+    // A hot swap (an audio clip's menu, the File Manager) works in the browser: it shows.
+    Connections {
+        target: Session.hotSwap
+
+        function onChanged() {
+            if (Session.hotSwap.active)
+                browserAction.checked = true
+        }
+    }
+
+    // Show in File Manager (an audio clip's menu): it shows, the file's row selected.
+    Connections {
+        target: Session.files
+
+        function onRevealRequested(path) {
+            fileManagerAction.checked = true
+            Qt.callLater(() => fileManager.reveal(path))
+        }
+    }
+
     // Ctrl+F (from a plug-in's editor too): the browser shows, searching everything.
     function findInBrowser() {
         window.requestActivate()
@@ -280,6 +302,8 @@ ApplicationWindow {
         function onProjectOpened() {
             if (arrangement.zoomToArrangement)
                 arrangement.zoomToArrangement()
+            if (Session.files.missingCount > 0)  // (it finds them)
+                fileManagerAction.checked = true
         }
     }
 
@@ -453,6 +477,8 @@ ApplicationWindow {
             Menu {
                 title: qsTr("&View")
                 Action { id: browserAction; objectName: "browser"; text: qsTr("&Browser"); shortcut: "Ctrl+Alt+B"; checkable: true; checked: true }
+                // The files the project plays, on the right (as Ableton's): missing ones found, any replaced, hot-swapped.
+                Action { id: fileManagerAction; objectName: "fileManager"; text: qsTr("&File Manager"); shortcut: "Ctrl+Alt+F"; checkable: true; checked: false }
                 Action { id: deviceViewAction; objectName: "deviceView"; text: qsTr("&Device View"); shortcut: "Ctrl+Alt+L"; checkable: true; checked: true }
                 // (Hidden, or with the device view hidden, the tooltips pop up again.)
                 Action { id: infoViewAction; objectName: "infoView"; text: qsTr("&Info View"); checkable: true; checked: true }
@@ -584,6 +610,7 @@ ApplicationWindow {
             BrowserPanel {
                 id: browser
                 visible: browserAction.checked
+                hotSwapKeepers: [fileManager, transportBar]  // (a hot swap goes on while the song is played from there)
                 SplitView.preferredWidth: 300
                 SplitView.minimumWidth: 120
             }
@@ -633,6 +660,15 @@ ApplicationWindow {
                     onLocateRequested: beat => Session.locate(beat)
                     onStatusMessage: message => window.showMessage(message)
                 }
+            }
+
+            // The File Manager, at the right (View › File Manager).
+            FileManagerPanel {
+                id: fileManager
+                visible: fileManagerAction.checked
+                SplitView.preferredWidth: 300
+                SplitView.minimumWidth: 160
+                onCloseRequested: fileManagerAction.checked = false
             }
         }
 

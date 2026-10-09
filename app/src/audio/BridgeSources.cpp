@@ -3,6 +3,8 @@
 // two spellings of a file share one source); what waits for it runs on the main
 // thread when it is ready.
 
+#include <QFileInfo>
+
 #include "audio/AudioFiles.h"
 #include "audio/BridgePrivate.h"
 
@@ -62,7 +64,8 @@ void EngineBridge::onFailed(const QString& path, const QString& message) {
     d_->loading.remove(key);
     d_->failed.insert(key, message);
     Q_EMIT sourceFailed(path, message);
-    Q_EMIT statusMessage(message);
+    // (A file that isn't there is the File Manager's to say: it lists it as missing.)
+    if (QFileInfo::exists(path)) Q_EMIT statusMessage(message);
 }
 
 std::optional<AudioFileInfo> EngineBridge::fileInfo(const QString& path) {

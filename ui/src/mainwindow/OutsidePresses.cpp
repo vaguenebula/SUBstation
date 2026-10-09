@@ -34,6 +34,12 @@ void OutsidePresses::setIgnore(bool ignore) {
     Q_EMIT ignoreChanged();
 }
 
+void OutsidePresses::setAlsoInside(const QVariantList& items) {
+    if (items == alsoInside_) return;
+    alsoInside_ = items;
+    Q_EMIT alsoInsideChanged();
+}
+
 void OutsidePresses::watch() {
     QCoreApplication* app = QCoreApplication::instance();
     if (!app || enabled_ == watching_) return;
@@ -48,10 +54,13 @@ bool OutsidePresses::eventFilter(QObject* watched, QEvent* event) {
     // A press reaches a window first (then its items): only the window's is looked at.
     if (event->type() != QEvent::MouseButtonPress || !watched->isWindowType() || ignore_ || !item_) return false;
     auto* window = static_cast<QWindow*>(watched);
-    bool inside = false;
-    if (window == item_->window() && item_->isVisible()) {
-        const QPointF at = item_->mapFromScene(static_cast<QMouseEvent*>(event)->scenePosition());
-        inside = item_->contains(at);
+    const QPointF scenePos = static_cast<QMouseEvent*>(event)->scenePosition();
+    auto within = [&](const QQuickItem* item) {
+        return item && window == item->window() && item->isVisible() && item->contains(item->mapFromScene(scenePos));
+    };
+    bool inside = within(item_);
+    for (const QVariant& other : alsoInside_) {
+        inside = inside || within(qobject_cast<QQuickItem*>(other.value<QObject*>()));
     }
     if (!inside) Q_EMIT pressed();
     return false;
