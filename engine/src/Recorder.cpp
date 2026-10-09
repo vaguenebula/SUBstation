@@ -1,6 +1,7 @@
 #include "Recorder.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
@@ -14,8 +15,7 @@ namespace sub {
 // SampleRing
 
 SampleRing::SampleRing(size_t minCapacity) {
-    size_t capacity = 1;
-    while (capacity < minCapacity) capacity <<= 1;
+    const size_t capacity = std::bit_ceil(minCapacity);
     data_.assign(capacity, 0.f);
     mask_ = capacity - 1;
 }
@@ -23,10 +23,7 @@ SampleRing::SampleRing(size_t minCapacity) {
 bool SampleRing::write(const float* samples, size_t count) noexcept {
     const size_t head = head_.load(std::memory_order_relaxed);
     if (data_.size() - (head - tail_.load(std::memory_order_acquire)) < count) return false;
-    const size_t start = head & mask_;
-    const size_t first = std::min(count, data_.size() - start);
-    std::copy_n(samples, first, data_.data() + start);
-    std::copy_n(samples + first, count - first, data_.data());
+    copyIntoRing(data_.data(), data_.size(), head & mask_, samples, count);
     head_.store(head + count, std::memory_order_release);
     return true;
 }
@@ -34,10 +31,7 @@ bool SampleRing::write(const float* samples, size_t count) noexcept {
 size_t SampleRing::read(float* out, size_t count) noexcept {
     const size_t tail = tail_.load(std::memory_order_relaxed);
     count = std::min(count, head_.load(std::memory_order_acquire) - tail);
-    const size_t start = tail & mask_;
-    const size_t first = std::min(count, data_.size() - start);
-    std::copy_n(data_.data() + start, first, out);
-    std::copy_n(data_.data(), count - first, out + first);
+    copyOutOfRing(data_.data(), data_.size(), tail & mask_, out, count);
     tail_.store(tail + count, std::memory_order_release);
     return count;
 }

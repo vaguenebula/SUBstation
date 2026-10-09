@@ -42,6 +42,7 @@
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
 #include "builtin/DisperserDesign.h"
+#include "builtin/Dsp.h"
 
 namespace sub {
 namespace {
@@ -49,7 +50,6 @@ namespace {
 constexpr double kGlideSeconds = 0.02;  // Frequency and Pinch: each of the two one-poles
 constexpr double kFadeSeconds = 0.02;   // Amount
 constexpr double kMixSeconds = 0.005;   // Dry/Wet and Bypass: each of the two one-poles
-constexpr double kFlush = 1e-20;
 constexpr int kChannels = 2;
 constexpr int kMaxStages = disperser::kMaxStages;
 
@@ -87,7 +87,7 @@ public:
     // bound measured over the parameters' range at 44.1 and 192 kHz); at most 60 s.
     int tailSamples() const override {
         const int stages = targetStages();
-        if (stages == 0 || param(Bypass) >= 0.5f || param(Mix) <= 0.f) return 0;
+        if (stages == 0 || isOn(Bypass) || param(Mix) <= 0.f) return 0;
         const disperser::Stage stage = disperser::design(param(Frequency), param(Pinch), sampleRate_);
         const double samples =
             1.25 * stages * disperser::maxGroupDelaySamples(stage) + 7.0 / disperser::decayPerSample(stage);
@@ -96,8 +96,8 @@ public:
 
     void prepare(double sampleRate, int) override {
         sampleRate_ = sampleRate;
-        glide_ = 1.0 - std::exp(-1.0 / (kGlideSeconds * sampleRate));
-        mixGlide_ = 1.0 - std::exp(-1.0 / (kMixSeconds * sampleRate));
+        glide_ = 1.0 - onePoleCoefficient(kGlideSeconds, sampleRate);
+        mixGlide_ = 1.0 - onePoleCoefficient(kMixSeconds, sampleRate);
         fadeLength_ = std::max(1, static_cast<int>(std::lround(kFadeSeconds * sampleRate)));
         reset();
     }
@@ -207,8 +207,8 @@ private:
         for (auto& channel : states_) {
             for (int s = 0; s < used; ++s) {
                 State& state = channel[s];
-                if (std::abs(state.d1) < kFlush) state.d1 = 0.0;
-                if (std::abs(state.d2) < kFlush) state.d2 = 0.0;
+                state.d1 = dsp::flushTiny(state.d1);
+                state.d2 = dsp::flushTiny(state.d2);
             }
         }
     }
@@ -225,7 +225,7 @@ private:
     }
 
     int targetStages() const noexcept {
-        return std::clamp(static_cast<int>(std::lround(param(Amount))), 0, kMaxStages);
+        return std::clamp(choiceIndex(Amount), 0, kMaxStages);
     }
     // The glides' targets: the frequency as the stages are tuned to it (below Nyquist), in log.
     double targetLogFreq() const noexcept {
@@ -235,7 +235,7 @@ private:
         return std::log(std::clamp<double>(param(Pinch), disperser::kMinPinch, disperser::kMaxPinch));
     }
     double targetWet() const noexcept { return std::clamp(param(Mix), 0.f, 100.f) / 100.0; }
-    double targetBypass() const noexcept { return param(Bypass) >= 0.5f ? 0.0 : 1.0; }
+    double targetBypass() const noexcept { return isOn(Bypass) ? 0.0 : 1.0; }
     disperser::Stage designNow() const noexcept {
         return disperser::design(std::exp(freq_.value), std::exp(pinch_.value), sampleRate_);
     }
@@ -248,7 +248,7 @@ private:
             {"pinch", "Pinch", "Q", static_cast<float>(disperser::kMinPinch), static_cast<float>(disperser::kMaxPinch),
              1.f, true},
             {"mix", "Dry/Wet", "%", 0.f, 100.f, 100.f},
-            {"bypass", "Bypass", "", 0.f, 1.f, 0.f, false, {"Off", "On"}},
+            {"bypass", "Bypass", "", 0.f, 1.f, 0.f, false, offOnLabels()},
         };
         return kInfos;
     }

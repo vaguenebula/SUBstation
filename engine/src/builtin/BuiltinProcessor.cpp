@@ -13,6 +13,11 @@ BuiltinProcessor::BuiltinProcessor(const std::vector<ParamInfo>& infos, std::vec
     }
 }
 
+const std::vector<std::string>& BuiltinProcessor::offOnLabels() {
+    static const std::vector<std::string> kOffOn = {"Off", "On"};
+    return kOffOn;
+}
+
 uint64_t BuiltinProcessor::readDisplay(int index, uint64_t position, std::vector<float>& out) const {
     if (index < 0 || index >= static_cast<int>(displayStreams_.size())) return position;
     return displayStreams_[static_cast<size_t>(index)]->read(position, out);
@@ -96,7 +101,7 @@ void BuiltinProcessor::process(const ProcessContext& ctx, float* const* channels
 
     const int numOut = std::clamp(numChannels, 0, kMaxChannels);
     float* part[kMaxChannels] = {};
-    const double samplesPerBeat = ctx.tempo > 0.0 ? ctx.sampleRate * 60.0 / ctx.tempo : 0.0;
+    const double samplesPerBeat = ctx.samplesPerBeat();
     size_t next = 0;
     size_t event = 0;
     int position = 0;

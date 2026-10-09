@@ -47,13 +47,16 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Warp.h"
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
+#include "builtin/Dsp.h"
 #include "builtin/SampleSlicing.h"
 #include "rt/RtUtils.h"
 
@@ -76,13 +79,11 @@ constexpr int kMaxVoices = 32;                 // notes at once (the most Voices
 constexpr int kVoiceSlots = kMaxVoices + 8;    // and voices cut short, fading out
 constexpr int kMaxStretched = 8;               // stretched (warped) notes at once
 constexpr double kMaxStretchRate = 4.0;        // faster than this, warped notes are resampled (a stretcher's work grows with it)
-constexpr float kSilent = 1e-4f;               // -80 dB: a releasing voice ends here
-constexpr double kFadeTo = 1e-3;               // decay and release times are to -60 dB
 constexpr double kKillSeconds = 0.004;         // a voice cut short fades out over this
 constexpr double kCutoffGlideSeconds = 0.005;  // the cutoff follows its knob (and the LFO) this fast
 constexpr double kLfoFilterOctaves = 4.0;      // how far the LFO moves the cutoff either way at 100 %
 constexpr double kMaxResonanceQ = 10.0;
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPi = std::numbers::pi;
 
 enum class Mode : uint8_t { Classic, OneShot, Slice };
 enum class Playback : uint8_t { Mono, Poly, Thru };
@@ -91,14 +92,6 @@ enum class LfoWave : uint8_t { Sine, Triangle, SawUp, SawDown, Square, Random };
 
 // The LFO's synced rates, in beats, as its list names them.
 constexpr double kLfoBeats[] = {0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0};
-
-// 4-point, 3rd-order Hermite interpolation between x0 and x1, `t` of the way.
-inline float hermite(float xm1, float x0, float x1, float x2, float t) noexcept {
-    const float c1 = 0.5f * (x1 - xm1);
-    const float c2 = xm1 - 2.5f * x0 + 2.f * x1 - 0.5f * x2;
-    const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
-    return ((c3 * t + c2) * t + c1) * t + x0;
-}
 
 // A number in [-1, 1] from a counter: the Random LFO's value for a cycle.
 inline float randomOf(uint64_t n) noexcept {
@@ -109,29 +102,9 @@ inline float randomOf(uint64_t n) noexcept {
     return static_cast<float>(static_cast<double>(n >> 11) / static_cast<double>(1ull << 53) * 2.0 - 1.0);
 }
 
-// A TPT state-variable filter section (Zavalishin/Simper), all its outputs.
-struct Svf {
-    float ic1 = 0.f, ic2 = 0.f;
-    void reset() noexcept { ic1 = ic2 = 0.f; }
-};
-
-// A section's coefficients: g = tan(pi f / sr), k = 1/Q.
-struct SvfCoefficients {
-    float k = 1.f, a1 = 1.f, a2 = 0.f, a3 = 0.f;
-    SvfCoefficients() = default;
-    SvfCoefficients(float g, float damping) noexcept : k(damping) {
-        a1 = 1.f / (1.f + g * (g + k));
-        a2 = g * a1;
-        a3 = g * a2;
-    }
-};
-
-inline float filterSample(Svf& s, const SvfCoefficients& c, FilterType type, float x) noexcept {
-    const float v3 = x - s.ic2;
-    const float v1 = c.a1 * s.ic1 + c.a2 * v3;
-    const float v2 = s.ic2 + c.a2 * s.ic1 + c.a3 * v3;
-    s.ic1 = 2.f * v1 - s.ic1;
-    s.ic2 = 2.f * v2 - s.ic2;
+// A sample through a filter section, as the filter's type takes it.
+inline float filterSample(dsp::Svf& s, const dsp::SvfCoefficients& c, FilterType type, float x) noexcept {
+    const auto [v1, v2] = s.tick(c, x);
     switch (type) {
         case FilterType::LowPass: return v2;
         case FilterType::HighPass: return x - c.k * v1 - v2;
@@ -173,12 +146,12 @@ struct Reader {
         if (i >= 1 && i + 2 < fastEnd) {
             if (!reverse) {
                 const float* d = data[c] + i;
-                return hermite(d[-1], d[0], d[1], d[2], t);
+                return dsp::hermite(d[-1], d[0], d[1], d[2], t);
             }
             const float* d = data[c] + (frames - 1 - i);
-            return hermite(d[1], d[0], d[-1], d[-2], t);
+            return dsp::hermite(d[1], d[0], d[-1], d[-2], t);
         }
-        return hermite(at(c, i - 1), at(c, i), at(c, i + 1), at(c, i + 2), t);
+        return dsp::hermite(at(c, i - 1), at(c, i), at(c, i + 1), at(c, i + 2), t);
     }
     // A frame past the loop's end, wrapped into it (any other is as it is).
     double wrapped(double position) const noexcept {
@@ -323,7 +296,9 @@ private:
     void makeRoom(int limit);
     void killAll();
     void kill(Voice& voice) noexcept;
+    // The newest note still sounding (the one Mono plays on, and the playhead's).
     Voice* monoVoice() noexcept;
+    const Voice* monoVoice() const noexcept;
     void glideTo(Voice& voice, double pitch) noexcept;
     int freeStretcher() noexcept;
 
@@ -368,7 +343,7 @@ private:
     double lfoPhase_ = 0.0;
     uint64_t lfoCycle_ = 0;
     // The filter: a section per stage and channel, its cutoff (gliding), whether it was on.
-    std::array<Svf, 4> filters_{};
+    std::array<dsp::Svf, 4> filters_{};
     double cutoff_ = 22000.0;
     bool filtering_ = false;
 };
@@ -376,7 +351,7 @@ private:
 const std::vector<ParamInfo>& infos() {
     static const std::vector<ParamInfo> kInfos = [] {
         using P = SamplerProcessor;
-        const std::vector<std::string> offOn = {"Off", "On"};
+        const std::vector<std::string>& offOn = BuiltinProcessor::offOnLabels();
         std::vector<ParamInfo> list = {
             {"mode", "Mode", "", 0.f, 2.f, 0.f},
             {"root", "Root Key", "note", 0.f, 127.f, 60.f},
@@ -449,11 +424,6 @@ const std::vector<ParamInfo>& infos() {
     return kInfos;
 }
 
-template <typename E>
-E choice(float value) noexcept {
-    return static_cast<E>(static_cast<int>(std::lround(value)));
-}
-
 }  // namespace
 
 SamplerProcessor::SamplerProcessor() : BuiltinProcessor(infos(), {{"position", kMeterSamples}}) {}
@@ -462,12 +432,9 @@ SamplerProcessor::~SamplerProcessor() {
     // Nothing renders it any more.
     delete active_;
     delete pending_.load();
-    Sample* old = nullptr;
-    while (retired_.pop(old)) delete old;
     delete pool_;
     delete pendingPool_.load();
-    StretchPool* oldPool = nullptr;
-    while (retiredPools_.pop(oldPool)) delete oldPool;
+    collectRetired();
 }
 
 void SamplerProcessor::prepare(double sampleRate, int /*maxBlockSize*/) {
@@ -486,7 +453,7 @@ void SamplerProcessor::reset() {
     pan_.snapTo(param(Pan));
     lfoPhase_ = 0.0;
     lfoCycle_ = 0;
-    for (Svf& filter : filters_) filter.reset();
+    for (dsp::Svf& filter : filters_) filter.reset();
     filtering_ = false;
 }
 
@@ -536,7 +503,7 @@ void SamplerProcessor::setStateValues(const StateValues& values) {
     sample->source = std::move(source);
     if (sample->source) {
         const AudioSource& file = *sample->source;
-        const float* channels[2] = {file.channelData(0), file.channelData(file.channels() > 1 ? 1u : 0u)};
+        const float* channels[2] = {file.stereoChannel(0), file.stereoChannel(1)};
         const int count = std::min<int>(2, static_cast<int>(file.channels()));
         for (const bool reversed : {false, true}) {
             sample->onsets[reversed ? 1 : 0] =
@@ -574,13 +541,13 @@ void SamplerProcessor::takeSample() noexcept {
 
 void SamplerProcessor::updatePool(bool fresh) {
     // How many stretched notes may sound at once, and the fading ones they cut short.
-    const auto mode = choice<Mode>(param(ModeParam));
-    const auto voices = static_cast<size_t>(std::clamp<long>(std::lround(param(Voices)), 1, kMaxStretched));
+    const auto mode = choice<Mode>(ModeParam);
+    const auto voices = static_cast<size_t>(std::clamp(choiceIndex(Voices), 1, kMaxStretched));
     const bool monophonic = mode == Mode::OneShot ||
-                            (mode == Mode::Slice && choice<Playback>(param(PlaybackParam)) != Playback::Poly) ||
+                            (mode == Mode::Slice && choice<Playback>(PlaybackParam) != Playback::Poly) ||
                             (mode == Mode::Classic && voices == 1);
-    const auto warpMode = choice<WarpMode>(param(WarpModeParam));
-    const bool stretching = param(Warp) >= 0.5f && warpMode != WarpMode::RePitch;
+    const auto warpMode = choice<WarpMode>(WarpModeParam);
+    const bool stretching = isOn(Warp) && warpMode != WarpMode::RePitch;
     const size_t wanted = stretching ? (monophonic ? 1 : voices) + 2 : 0;
     const StretchConfig config = stretchConfigFor(warpMode);
 
@@ -595,13 +562,10 @@ void SamplerProcessor::updatePool(bool fresh) {
     pool->config = config;
     pool->sampleRate = sampleRate_;
     if (wanted > 0) {
-        const StretchTiming timing = stretchTiming(config);
         const size_t count = std::max(wanted, fresh && poolConfig_ == config ? poolSize_ : 0);
         for (size_t i = 0; i < count; ++i) {
             auto stretcher = std::make_unique<Stretcher>(kStretchSeed);
-            // Split computation spreads each block's work over the interval after it, as the clips' do.
-            stretcher->configure(2, static_cast<int>(sampleRate_ * timing.blockSeconds),
-                                 static_cast<int>(sampleRate_ * timing.intervalSeconds), true);
+            configureStretcher(*stretcher, config, sampleRate_);
             pool->stretchers.push_back(std::move(stretcher));
         }
     }
@@ -645,9 +609,9 @@ int SamplerProcessor::freeStretcher() noexcept {
 // --- The block's settings --------------------------------------------------------
 
 int64_t SamplerProcessor::snap(int64_t frame) const noexcept {
-    if (param(Snap) < 0.5f) return frame;
+    if (!isOn(Snap)) return frame;
     const AudioSource& source = *active_->source;
-    const float* channels[2] = {source.channelData(0), source.channelData(source.channels() > 1 ? 1u : 0u)};
+    const float* channels[2] = {source.stereoChannel(0), source.stereoChannel(1)};
     const auto reach = static_cast<int64_t>(slicing::kSnapSeconds * source.sampleRate());
     return slicing::nearestZeroCrossing(channels, std::min<int>(2, static_cast<int>(source.channels())),
                                         source.frames(), reader_.reverse, frame, reach);
@@ -658,16 +622,16 @@ void SamplerProcessor::readBlock(const ProcessContext& ctx) {
     const int64_t frames = source.frames();
     Block& b = block_;
     Reader& r = reader_;
-    b.mode = choice<Mode>(param(ModeParam));
+    b.mode = choice<Mode>(ModeParam);
     r.data[0] = source.channelData(0);
-    r.data[1] = source.channelData(source.channels() > 1 ? 1u : 0u);
+    r.data[1] = source.stereoChannel(1);
     r.frames = frames;
-    r.reverse = param(Reverse) >= 0.5f;
+    r.reverse = isOn(Reverse);
     const auto at = [&](int p) { return static_cast<int64_t>(param(p) / 100.0 * static_cast<double>(frames)); };
     b.start = std::clamp(snap(at(Start)), int64_t{0}, frames - 1);
     b.end = std::clamp(snap(at(End)), int64_t{0}, frames);
     r.loop = false;
-    if (b.mode == Mode::Classic && param(Loop) >= 0.5f && b.end > b.start) {
+    if (b.mode == Mode::Classic && isOn(Loop) && b.end > b.start) {
         r.loopStart = std::clamp(snap(std::max(at(LoopStart), b.start)), b.start, b.end - 1);
         r.loopEnd = b.end;
         const int64_t length = r.loopEnd - r.loopStart;
@@ -681,31 +645,28 @@ void SamplerProcessor::readBlock(const ProcessContext& ctx) {
     // Speed: the file's rate to the engine's; warped, the whole sample in Warp Length beats.
     b.rate = static_cast<double>(source.sampleRate()) / sampleRate_;
     b.stretch = false;
-    if (param(Warp) >= 0.5f) {
+    if (isOn(Warp)) {
         const double tempo = ctx.tempo > 0.0 ? ctx.tempo : 120.0;
         const double beats = std::max(1.0, std::round(static_cast<double>(param(WarpBeats))));
         b.rate = static_cast<double>(frames) / (beats * 60.0 / tempo * sampleRate_);
-        const auto mode = choice<WarpMode>(param(WarpModeParam));
+        const auto mode = choice<WarpMode>(WarpModeParam);
         b.stretch = mode != WarpMode::RePitch && b.rate <= kMaxStretchRate && pool_ && !pool_->stretchers.empty();
         b.formants = mode == WarpMode::Formants;
     }
-    b.root = static_cast<int>(std::lround(param(Root)));
+    b.root = choiceIndex(Root);
     b.transpose = std::round(param(Tune)) + param(Fine) / 100.0;
 
     const double samplesPerMs = sampleRate_ * 0.001;
-    const auto fade = [&](float ms) {
-        return static_cast<float>(std::exp(std::log(kFadeTo) / std::max(1.0, ms * samplesPerMs)));
-    };
-    b.attackStep = static_cast<float>(1.0 / std::max(1.0, param(Attack) * samplesPerMs));
-    b.decayCoef = fade(param(Decay));
+    b.attackStep = dsp::riseStep(param(Attack), samplesPerMs);
+    b.decayCoef = dsp::fallCoefficient(param(Decay), samplesPerMs);
     b.sustain = std::clamp(param(Sustain) / 100.f, 0.f, 1.f);
-    b.releaseCoef = fade(param(Release));
-    b.fadeInStep = static_cast<float>(1.0 / std::max(1.0, param(FadeIn) * samplesPerMs));
+    b.releaseCoef = dsp::fallCoefficient(param(Release), samplesPerMs);
+    b.fadeInStep = dsp::riseStep(param(FadeIn), samplesPerMs);
     b.fadeOutSamples = std::max(1.0, param(FadeOut) * samplesPerMs);
     b.fadeOutStep = static_cast<float>(1.0 / b.fadeOutSamples);
-    b.gate = param(TriggerMode) >= 0.5f;
-    b.playback = choice<Playback>(param(PlaybackParam));
-    b.voices = std::clamp(static_cast<int>(std::lround(param(Voices))), 1, kMaxVoices);
+    b.gate = isOn(TriggerMode);
+    b.playback = choice<Playback>(PlaybackParam);
+    b.voices = std::clamp(choiceIndex(Voices), 1, kMaxVoices);
     if (b.stretch) b.voices = std::min(b.voices, kMaxStretched);
     b.glideSamples = param(Glide) * samplesPerMs;
     b.killStep = static_cast<float>(1.0 / std::max(1.0, kKillSeconds * sampleRate_));
@@ -738,12 +699,16 @@ void SamplerProcessor::makeRoom(int limit) {
     }
 }
 
-SamplerProcessor::Voice* SamplerProcessor::monoVoice() noexcept {
-    Voice* newest = nullptr;
-    for (Voice& voice : voices_) {
+const SamplerProcessor::Voice* SamplerProcessor::monoVoice() const noexcept {
+    const Voice* newest = nullptr;
+    for (const Voice& voice : voices_) {
         if (voice.active && !voice.killing && (!newest || voice.started > newest->started)) newest = &voice;
     }
     return newest;
+}
+
+SamplerProcessor::Voice* SamplerProcessor::monoVoice() noexcept {
+    return const_cast<Voice*>(std::as_const(*this).monoVoice());
 }
 
 void SamplerProcessor::glideTo(Voice& voice, double pitch) noexcept {
@@ -798,7 +763,7 @@ SamplerProcessor::Voice* SamplerProcessor::startVoice(uint8_t key, uint8_t veloc
         stretcher.outputSeek(input, seekLength);
         voice.input = loops ? reader_.wrapped(from + seekLength) : from + seekLength;
     }
-    if (param(LfoOn) >= 0.5f && param(LfoRetrig) >= 0.5f) {
+    if (isOn(LfoOn) && isOn(LfoRetrig)) {
         lfoPhase_ = 0.0;
         lfoCycle_ = noteCounter_ << 32;  // a new random value too
     }
@@ -851,14 +816,14 @@ void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
             if (index < 0) return;
             const std::vector<slicing::Onset>& onsets = active_->onsets[reader_.reverse ? 1 : 0];
             slicing::SliceSettings settings;
-            settings.by = choice<slicing::SliceBy>(param(SliceBy));
+            settings.by = choice<slicing::SliceBy>(SliceBy);
             settings.sensitivity = param(Sensitivity) / 100.f;
             const double frames = static_cast<double>(reader_.frames);
             settings.regionBeats =
                 std::max(1.0, std::round(static_cast<double>(param(WarpBeats)))) * static_cast<double>(b.end - b.start) / frames;
-            const auto division = std::clamp(static_cast<int>(std::lround(param(SliceBeat))), 0, 6);
+            const auto division = std::clamp(choiceIndex(SliceBeat), 0, 6);
             settings.divisionBeats = slicing::kSliceDivisionBeats[division];
-            settings.regions = static_cast<int>(std::lround(param(Regions)));
+            settings.regions = choiceIndex(Regions);
             std::array<int64_t, slicing::kMaxSlices> starts{};
             const int count = slicing::sliceStarts(settings, onsets.data(), onsets.size(), b.start, b.end,
                                                    active_->source->sampleRate(), starts.data());
@@ -929,8 +894,9 @@ float SamplerProcessor::envelope(Voice& voice) const noexcept {
 bool SamplerProcessor::finished(const Voice& voice) const noexcept {
     if (voice.killing && voice.kill <= 0.f) return true;
     if (!voice.classic) return voice.stage == Stage::Release && voice.level <= 0.f;
-    const bool faded = voice.stage == Stage::Release || (voice.stage == Stage::Decay && block_.sustain < kSilent);
-    return faded && voice.level < kSilent;
+    const bool faded =
+        voice.stage == Stage::Release || (voice.stage == Stage::Decay && block_.sustain < dsp::kSilent);
+    return faded && voice.level < dsp::kSilent;
 }
 
 void SamplerProcessor::renderVoice(Voice& voice, int from, int to, double semitones, float* left, float* right) {
@@ -1004,7 +970,7 @@ void SamplerProcessor::renderVoice(Voice& voice, int from, int to, double semito
 
 float SamplerProcessor::lfoValue(double phase, uint64_t cycle) const noexcept {
     const auto p = static_cast<float>(phase);
-    switch (choice<LfoWave>(param(LfoWaveParam))) {
+    switch (choice<LfoWave>(LfoWaveParam)) {
         case LfoWave::Sine: return static_cast<float>(std::sin(2.0 * kPi * phase));
         case LfoWave::Triangle: return p < 0.25f ? 4.f * p : p < 0.75f ? 2.f - 4.f * p : 4.f * p - 4.f;
         case LfoWave::SawUp: return 2.f * p - 1.f;
@@ -1016,8 +982,8 @@ float SamplerProcessor::lfoValue(double phase, uint64_t cycle) const noexcept {
 }
 
 void SamplerProcessor::filterChunk(int from, int to, float* left, float* right, float lfo) {
-    const auto type = choice<FilterType>(param(FilterTypeParam));
-    const bool steep = param(FilterSlope) >= 0.5f;
+    const auto type = choice<FilterType>(FilterTypeParam);
+    const bool steep = isOn(FilterSlope);
     const double nyquistish = 0.45 * sampleRate_;
     const double target = std::clamp(
         static_cast<double>(param(FilterFreq)) * std::exp2(param(LfoFilter) / 100.0 * kLfoFilterOctaves * lfo),
@@ -1025,9 +991,9 @@ void SamplerProcessor::filterChunk(int from, int to, float* left, float* right, 
     if (!filtering_) {  // switched on: from its cutoff, silent
         filtering_ = true;
         cutoff_ = target;
-        for (Svf& filter : filters_) filter.reset();
+        for (dsp::Svf& filter : filters_) filter.reset();
     } else {
-        const double glide = 1.0 - std::exp(-(to - from) / (kCutoffGlideSeconds * sampleRate_));
+        const double glide = 1.0 - onePoleCoefficient(kCutoffGlideSeconds, sampleRate_, to - from);
         cutoff_ *= std::pow(target / cutoff_, glide);
     }
     const auto g = static_cast<float>(std::tan(kPi * std::min(cutoff_, nyquistish) / sampleRate_));
@@ -1036,12 +1002,12 @@ void SamplerProcessor::filterChunk(int from, int to, float* left, float* right, 
     const auto damping = [&](double q) { return static_cast<float>(1.0 / (q * std::pow(kMaxResonanceQ / q, resonance))); };
     const bool butterworth = type == FilterType::LowPass || type == FilterType::HighPass;
     // 24 dB: two sections, a Butterworth pair for low- and high-pass.
-    const SvfCoefficients first(g, steep && butterworth ? static_cast<float>(1.0 / 0.5412) : damping(0.7071));
-    const SvfCoefficients second(g, butterworth ? damping(1.3066) : damping(0.7071));
+    const dsp::SvfCoefficients first(g, steep && butterworth ? static_cast<float>(1.0 / 0.5412) : damping(0.7071));
+    const dsp::SvfCoefficients second(g, butterworth ? damping(1.3066) : damping(0.7071));
     float* sides[2] = {left, right};
     for (int c = 0; c < (right ? 2 : 1); ++c) {
-        Svf& a = filters_[static_cast<size_t>(c) * 2];
-        Svf& b = filters_[static_cast<size_t>(c) * 2 + 1];
+        dsp::Svf& a = filters_[static_cast<size_t>(c) * 2];
+        dsp::Svf& b = filters_[static_cast<size_t>(c) * 2 + 1];
         float* x = sides[c];
         for (int i = from; i < to; ++i) {
             float y = filterSample(a, first, type, x[i]);
@@ -1054,8 +1020,8 @@ void SamplerProcessor::filterChunk(int from, int to, float* left, float* right, 
 // The filter still rings after the last voice (a resonant one for tens of milliseconds).
 bool SamplerProcessor::filterRinging() const noexcept {
     if (!filtering_) return false;
-    return std::any_of(filters_.begin(), filters_.end(), [](const Svf& filter) {
-        return std::abs(filter.ic1) > kSilent * 0.1f || std::abs(filter.ic2) > kSilent * 0.1f;
+    return std::any_of(filters_.begin(), filters_.end(), [](const dsp::Svf& filter) {
+        return std::abs(filter.ic1) > dsp::kSilent * 0.1f || std::abs(filter.ic2) > dsp::kSilent * 0.1f;
     });
 }
 
@@ -1063,13 +1029,13 @@ void SamplerProcessor::renderChunk(const ProcessContext& ctx, int from, int to, 
     const int frames = to - from;
     // The LFO at the chunk's start and end (the gains glide between them).
     float lfoFrom = 0.f, lfoTo = 0.f;
-    const bool lfoOn = param(LfoOn) >= 0.5f;
+    const bool lfoOn = isOn(LfoOn);
     if (lfoOn) {
-        const bool synced = param(LfoSync) >= 0.5f;
+        const bool synced = isOn(LfoSync);
         const double tempo = ctx.tempo > 0.0 ? ctx.tempo : 120.0;
-        const double beats = kLfoBeats[std::clamp(static_cast<int>(std::lround(param(LfoBeats))), 0, 8)];
+        const double beats = kLfoBeats[std::clamp(choiceIndex(LfoBeats), 0, 8)];
         const double hz = synced ? tempo / 60.0 / beats : static_cast<double>(param(LfoRate));
-        if (synced && ctx.playing && param(LfoRetrig) < 0.5f) {
+        if (synced && ctx.playing && !isOn(LfoRetrig)) {
             // Locked to the song: its cycles start on the beat.
             const double cycles = (ctx.beatPos + from * tempo / 60.0 / sampleRate_) / beats;
             const double whole = std::floor(cycles);
@@ -1100,7 +1066,7 @@ void SamplerProcessor::renderChunk(const ProcessContext& ctx, int from, int to, 
         renderVoice(voice, from, to, voice.pitch + block_.transpose + vibrato, left, mixRight);
     }
 
-    if (param(FilterOn) >= 0.5f) filterChunk(from, to, left, right, lfoOn ? lfoMiddle : 0.f);
+    if (isOn(FilterOn)) filterChunk(from, to, left, right, lfoOn ? lfoMiddle : 0.f);
     else filtering_ = false;
 
     // Gain, the LFO's tremolo and pan, pan, volume.
@@ -1137,9 +1103,8 @@ void SamplerProcessor::render(const ProcessContext& ctx, float* const* channels,
     if (frames <= 0 || silent) {  // nothing to play: skip the work, and start the next note at the current settings
         for (size_t e = 0; e < ctx.inEvents.count; ++e) {  // (the keys held still count, for legato)
             const ProcessEvent& event = ctx.inEvents.events[e];
-            if (event.type == ProcessEvent::Type::NoteOn && event.velocity() > 0) holdKey(event.key());
-            else if (event.type == ProcessEvent::Type::NoteOn || event.type == ProcessEvent::Type::NoteOff)
-                releaseKey(event.key());
+            if (event.startsNote()) holdKey(event.key());
+            else if (event.endsNote()) releaseKey(event.key());
         }
         volume_.snapTo(dbToGain(param(Volume)));
         gain_.snapTo(dbToGain(param(Gain)));
@@ -1149,19 +1114,9 @@ void SamplerProcessor::render(const ProcessContext& ctx, float* const* channels,
         return;
     }
     readBlock(ctx);
-    int position = 0;
-    for (size_t e = 0; e < ctx.inEvents.count; ++e) {
-        const ProcessEvent& event = ctx.inEvents.events[e];
-        const int at = std::clamp(static_cast<int>(event.sampleOffset), position, numFrames);
-        advance(ctx, position, at, left, right);
-        position = at;
-        if (event.type == ProcessEvent::Type::NoteOn && event.velocity() > 0) {
-            noteOn(event.key(), event.velocity());
-        } else if (event.type == ProcessEvent::Type::NoteOn || event.type == ProcessEvent::Type::NoteOff) {
-            noteOff(event.key());
-        }
-    }
-    advance(ctx, position, numFrames, left, right);
+    dsp::renderBetweenNotes(
+        ctx.inEvents, numFrames, [&](int from, int to) { advance(ctx, from, to, left, right); },
+        [&](uint8_t key, uint8_t velocity) { noteOn(key, velocity); }, [&](uint8_t key) { noteOff(key); });
 }
 
 void SamplerProcessor::advance(const ProcessContext& ctx, int from, int to, float* left, float* right) {
@@ -1179,10 +1134,7 @@ void SamplerProcessor::advance(const ProcessContext& ctx, int from, int to, floa
 
 float SamplerProcessor::playhead() const noexcept {
     const int64_t frames = active_ && active_->source ? active_->source->frames() : 0;
-    const Voice* newest = nullptr;
-    for (const Voice& voice : voices_) {
-        if (voice.active && !voice.killing && (!newest || voice.started > newest->started)) newest = &voice;
-    }
+    const Voice* newest = monoVoice();
     if (!newest || frames <= 0) return -1.f;
     return static_cast<float>(std::min(1.0, newest->position / static_cast<double>(frames)));
 }

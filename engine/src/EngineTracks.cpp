@@ -90,12 +90,12 @@ void Engine::previewNote(uint32_t trackId, int key, int velocity) {
 
 void Engine::setTrackGain(uint32_t trackId, float gain) {
     std::lock_guard lock(mutex_);
-    trackLocked(trackId).params->gain.store(std::max(0.f, gain));
+    trackLocked(trackId).params->setGain(gain);
 }
 
 void Engine::setTrackPan(uint32_t trackId, float pan) {
     std::lock_guard lock(mutex_);
-    trackLocked(trackId).params->pan.store(std::clamp(pan, -1.f, 1.f));
+    trackLocked(trackId).params->setPan(pan);
 }
 
 void Engine::setTrackMute(uint32_t trackId, bool mute) {
@@ -262,6 +262,16 @@ void Engine::checkSidechainLocked(uint32_t source, uint32_t strip) const {
                                     " can't take its sidechain from track " + std::to_string(source) + ": " +
                                     (source == strip ? "that is its own track" : "its track feeds that one"));
     }
+}
+
+uint32_t Engine::tapProcessorLocked(SidechainTap tap, uint32_t tapProcessorId, uint32_t source) {
+    if (tap != SidechainTap::AfterDevice) return 0;
+    const auto found = processors_.find(tapProcessorId);
+    if (found == processors_.end() || chainLocked(found->second.chainId).stripId != source) {
+        throw std::invalid_argument("Device " + std::to_string(tapProcessorId) + " is not on track " +
+                                    std::to_string(source));
+    }
+    return tapProcessorId;
 }
 
 void Engine::checkRouteLocked(uint32_t from, uint32_t to, const char* what) const {

@@ -33,6 +33,9 @@ struct TrackParams {
     std::atomic<float> pan{0.f};
     std::atomic<bool> mute{false};
     std::atomic<bool> solo{false};
+    // The API's writes, kept in range: gain from 0, pan from -1 (left) to 1 (right).
+    void setGain(float value) noexcept { gain.store(std::max(0.f, value)); }
+    void setPan(float value) noexcept { pan.store(std::clamp(value, -1.f, 1.f)); }
 
     // Written by the audio thread, read and reset by the API.
     std::atomic<float> peakLeft{0.f};
@@ -124,10 +127,11 @@ public:
             // The whole chunk goes in before anything comes out: what it reads from
             // before this chunk (delay samples back) is out of the way of its writes.
             const int read = write_ - delay < 0 ? write_ - delay + size : write_ - delay;
-            toRing(left_, write_, left, frames);
-            toRing(right_, write_, right, frames);
-            fromRing(left_, read, left, frames);
-            fromRing(right_, read, right, frames);
+            const auto at = static_cast<size_t>(write_), from = static_cast<size_t>(read), n = static_cast<size_t>(frames);
+            copyIntoRing(left_.data(), left_.size(), at, left, n);
+            copyIntoRing(right_.data(), right_.size(), at, right, n);
+            copyOutOfRing(left_.data(), left_.size(), from, left, n);
+            copyOutOfRing(right_.data(), right_.size(), from, right, n);
             write_ = (write_ + frames) % size;
             return;
         }
@@ -143,18 +147,6 @@ public:
     }
 
 private:
-    // Copies n samples into / out of the ring from position `at`, wrapping once.
-    static void toRing(std::vector<float>& ring, int at, const float* from, int n) noexcept {
-        const int first = std::min(n, static_cast<int>(ring.size()) - at);
-        std::copy_n(from, first, ring.data() + at);
-        std::copy_n(from + first, n - first, ring.data());
-    }
-    static void fromRing(const std::vector<float>& ring, int at, float* to, int n) noexcept {
-        const int first = std::min(n, static_cast<int>(ring.size()) - at);
-        std::copy_n(ring.data() + at, first, to);
-        std::copy_n(ring.data(), n - first, to + first);
-    }
-
     std::vector<float> left_, right_;
     int write_ = 0;
     int delay_ = 0;
@@ -435,6 +427,13 @@ struct RenderSnapshot {
     // master's devices. The metronome is delayed as much.
     int outputLatency() const { return maxLatency + master.latency; }
     double samplesPerBeat() const { return sampleRate * 60.0 / tempo; }
+
+    // The track with this id; null if the snapshot has none.
+    const TrackRender* findTrack(uint32_t id) const noexcept {
+        for (const TrackRender& track : tracks)
+            if (track.id == id) return &track;
+        return nullptr;
+    }
 };
 
 }  // namespace sub

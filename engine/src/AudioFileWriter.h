@@ -5,8 +5,13 @@
 // writer goes: a render cancelled, or failed, leaves nothing behind.
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
+#include <utility>
+
+#include "platform/Paths.h"
 
 namespace sub {
 
@@ -18,7 +23,24 @@ public:
     virtual void write(const float* samples, int64_t frames) = 0;
     // Done: the file is finished and stays. Throws if it can't be finished.
     virtual void keep() = 0;
+
+protected:
+    explicit AudioFileWriter(std::string path) : path_(std::move(path)) {}
+
+    // From a writer's destructor, once its file is closed: the file goes,
+    // unless keep() finished it (and set kept_).
+    void deleteUnlessKept() noexcept {
+        if (kept_) return;
+        std::error_code ignored;
+        std::filesystem::remove(platform::toPath(path_), ignored);
+    }
+
+    const std::string path_;
+    bool kept_ = false;
 };
+
+// Throws std::invalid_argument unless `kbps` is an MP3 bitrate (32 to 320).
+void checkMp3Bitrate(int kbps);
 
 // A new MP3 file at `path` (created now: throws std::runtime_error if it can't
 // be), at a constant `kbps` (32 to 320), joint stereo, LAME's quality 2 (its

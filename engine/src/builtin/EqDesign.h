@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <numbers>
 
 namespace sub::eq {
 
@@ -22,7 +23,7 @@ enum Type { Bell = 0, LowShelf, LowCut, HighShelf, HighCut, Notch, BandPass, Til
 constexpr int kSlopes[] = {6, 12, 18, 24, 30, 36, 48, 72, 96};  // dB/octave: orders 1..16
 constexpr int kNumSlopes = 9;
 constexpr int kMaxSections = 8;  // 96 dB/octave: order 16
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPi = std::numbers::pi;
 constexpr double kButterworthQ = 0.70710678118654752;
 
 inline bool usesGain(int type) noexcept {
@@ -35,6 +36,14 @@ inline bool usesSlope(int type) noexcept {
 // b0 + b1 z^-1 + b2 z^-2 over 1 + a1 z^-1 + a2 z^-2.
 struct Biquad {
     double b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0;
+
+    // One sample through the section, transposed direct form II (z1, z2: its state).
+    double tick(double in, double& z1, double& z2) const noexcept {
+        const double out = b0 * in + z1;
+        z1 = b1 * in - a1 * out + z2;
+        z2 = b2 * in - a2 * out;
+        return out;
+    }
 
     // |H| squared at w (radians per sample).
     double magnitudeSquared(double w) const noexcept {

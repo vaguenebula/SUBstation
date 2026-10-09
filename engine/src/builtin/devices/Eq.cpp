@@ -18,6 +18,7 @@
 
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
+#include "builtin/Dsp.h"
 #include "builtin/EqDesign.h"
 #include "rt/RtUtils.h"
 
@@ -54,7 +55,7 @@ public:
 
     void prepare(double sampleRate, int) override {
         sampleRate_ = sampleRate;
-        glide_ = 1.0 - std::exp(-kChunk / (0.015 * sampleRate));
+        glide_ = 1.0 - onePoleCoefficient(0.015, sampleRate, kChunk);
         output_.reset(sampleRate, 0.02);
         reset();
     }
@@ -84,7 +85,7 @@ protected:
                     continue;
                 }
                 update(b, scale);
-                const auto place = static_cast<Placement>(std::lround(param(bandParam(b, Place))));
+                const auto place = choice<Placement>(bandParam(b, Place));
                 if (!right) {  // one channel: everything but the side
                     if (place != Side) filter(band, 0, left, length);
                     continue;
@@ -133,17 +134,15 @@ private:
     };
 
     static int bandParam(int band, int which) noexcept { return band * kBandParams + which; }
-    static float dbToGain(float db) noexcept { return std::pow(10.f, db / 20.f); }
-
     bool active(int b) const noexcept {
-        return param(bandParam(b, Used)) >= 0.5f && param(bandParam(b, On)) >= 0.5f;
+        return isOn(bandParam(b, Used)) && isOn(bandParam(b, On));
     }
 
     // Glides the band towards its parameters, and designs it again if it moved.
     void update(int b, double scale) noexcept {
         Band& band = bands_[b];
-        const int type = static_cast<int>(std::lround(param(bandParam(b, Type))));
-        const int slope = static_cast<int>(std::lround(param(bandParam(b, Slope))));
+        const int type = choiceIndex(bandParam(b, Type));
+        const int slope = choiceIndex(bandParam(b, Slope));
         const double freq = std::log2(std::max(1.f, param(bandParam(b, Freq))));
         const double gain = param(bandParam(b, Gain)) * scale;
         const double q = std::log2(std::max(0.01f, param(bandParam(b, Q))));
@@ -181,22 +180,16 @@ private:
         for (int s = 0; s < band.design.count; ++s) {
             const eq::Biquad& q = band.design.sections[s];
             double z1 = band.state[s][c][0], z2 = band.state[s][c][1];
-            for (int i = 0; i < length; ++i) {
-                const double in = x[i];
-                const double out = q.b0 * in + z1;
-                z1 = q.b1 * in - q.a1 * out + z2;
-                z2 = q.b2 * in - q.a2 * out;
-                x[i] = static_cast<float>(out);
-            }
+            for (int i = 0; i < length; ++i) x[i] = static_cast<float>(q.tick(x[i], z1, z2));
             // (flushed: no denormals ringing out for ever)
-            band.state[s][c][0] = std::abs(z1) < 1e-20 ? 0.0 : z1;
-            band.state[s][c][1] = std::abs(z2) < 1e-20 ? 0.0 : z2;
+            band.state[s][c][0] = dsp::flushTiny(z1);
+            band.state[s][c][1] = dsp::flushTiny(z2);
         }
     }
 
     static const std::vector<ParamInfo>& infos() {
         static const std::vector<ParamInfo> kInfos = [] {
-            static const std::vector<std::string> kOnOff = {"Off", "On"};
+            const std::vector<std::string>& kOnOff = offOnLabels();
             static const std::vector<std::string> kTypes = {"Bell", "Low Shelf", "Low Cut", "High Shelf",
                                                             "High Cut", "Notch", "Band Pass", "Tilt Shelf"};
             std::vector<std::string> slopes;

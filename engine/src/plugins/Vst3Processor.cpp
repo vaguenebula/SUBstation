@@ -551,7 +551,7 @@ void Vst3Processor::fillContext(const ProcessContext& ctx) {
     c.continousTimeSamples = continuousSamples_;
     c.systemTime = hostTimeNs();
     c.projectTimeMusic = ctx.beatPos;
-    const double beatsPerBar = ctx.timeSigNum * 4.0 / ctx.timeSigDen;
+    const double beatsPerBar = ctx.beatsPerBar();
     c.barPositionMusic = std::floor(ctx.beatPos / beatsPerBar + 1e-9) * beatsPerBar;
     c.tempo = ctx.tempo;
     c.timeSigNumerator = ctx.timeSigNum;
@@ -850,9 +850,7 @@ void Vst3Processor::setState(const std::vector<uint8_t>& state) {
     bool loaded = false;
     {
         ScopedSuspend suspend(guard_);
-        ParamChange stale;
-        while (toAudio_.pop(stale)) {
-        }  // changes from before must not undo the state
+        toAudio_.clear();  // changes from before must not undo the state
         loaded = PresetFile::loadPreset(stream, FUID::fromTUID(classId_.data()), component_,
                                         singleComponent_ ? nullptr : controller_.get());
     }

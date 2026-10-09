@@ -34,7 +34,7 @@ includes the engine's headers.
 | [Scheduler.h](../../engine/src/Scheduler.h) / [.cpp](../../engine/src/Scheduler.cpp) | The task graph and worker threads. See [scheduler.md](scheduler.md). |
 | [Transport.h](../../engine/src/Transport.h) | `TransportCommand`, `PreviewNote` and `SharedState`: what the API threads and the audio thread share. |
 | [Metronome.h](../../engine/src/Metronome.h) / [.cpp](../../engine/src/Metronome.cpp) | The click generator. See [rendering.md](rendering.md#metronome-and-count-in). |
-| [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) | Real-time helpers: `ScopedNoDenormals`, `cpuRelax`, `hostTimeNs`, `SmoothedValue`, `SpscQueue`, `DeferredReleasePool`, `atomicStoreMax`, `dbToGain`, `balanceGains`, `DisplayStream`. |
+| [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) | Real-time helpers: `ScopedNoDenormals`, `cpuRelax`, `hostTimeNs`, `SmoothedValue`, `copyIntoRing`/`copyOutOfRing`, `SpscQueue`, `DeferredReleasePool`, `atomicStoreMax`, `dbToGain`, `gainToDb`, `expDbToGain`, `onePoleCoefficient`, `addStereo`, `interleave`, `balanceGains`, `DisplayStream`. |
 | [MiniaudioFiles.h](../../engine/src/MiniaudioFiles.h) | `initDecoderFile()`, `initEncoderFile()`: miniaudio's files by UTF-8 path (its wide calls on Windows, its narrow ones elsewhere). The engine takes paths as UTF-8; the platform layer ([platform.md](../platform.md)) turns them into what the system and `std::filesystem` take (`platform::toPath()`). |
 
 The `Engine` class is declared once in `Engine.h` and implemented by area across the
@@ -241,12 +241,18 @@ the real-time side.
   callbacks and MIDI input are stamped with.
 - `SmoothedValue`: a linear ramp to a target. Faders and send levels ramp over 20 ms.
 - `SpscQueue<T, Capacity>`: single-producer single-consumer ring; head and tail on separate
-  cache lines. A full queue drops the push (the caller sees `false`).
+  cache lines. A full queue drops the push (the caller sees `false`); `clear()` (the consumer)
+  drops what is queued. `copyIntoRing()` / `copyOutOfRing()` copy a run into or out of a plain
+  ring buffer, wrapping once (the recorder's rings, delay lines).
 - `DeferredReleasePool`: see [Epochs](#epochs-and-retiring-snapshots).
 - `atomicStoreMax()`: meters are written with "store max" by the audio thread and reset with
   `exchange(0)` by the UI (`takeMeters()`, `takeInputMeters()`).
 - `balanceGains()`: balance-style pan with a sine taper, unity at the centre; used for track,
-  chain and clip pan. `dbToGain()`.
+  chain and clip pan. `dbToGain()` (with a floor: -120 dB is silence), `gainToDb()`,
+  `expDbToGain()` (through `exp`, without the floor: what gain computers run per sample) and
+  `onePoleCoefficient()` (a smoother's or a glide's coefficient for a time constant).
+- `addStereo()` (a stereo signal into another, as it is or times a gain) and `interleave()`
+  (planar stereo into interleaved frames): the renderer's sums and offline output.
 - `DisplayStream`: values one thread publishes for others to draw (a device's meters and
   curves; see [devices.md](devices.md)). The writer overwrites the oldest; each reader keeps its
   own position.
@@ -278,7 +284,8 @@ snapshot without the lock (4096 frames at a time), so the UI's calls (meters, th
 - `progress()` is the frames rendered over the frames to render; `done()` says the thread has
   ended.
 - `cancel()` stops it before its next chunk. The file is deleted when the render's state goes
-  (on its thread) unless it was kept at the end: a cancelled or failed render leaves nothing.
+  (on its thread) unless it was kept at the end: a cancelled or failed render leaves nothing
+  (`AudioFileWriter::deleteUnlessKept()`, which every writer calls as it goes).
 - `finish()`, on the main thread, joins the thread, resets the processors again and gives live
   output back (`endJob()`), then returns the frames written, `nullopt` if cancelled, or throws
   what the render threw (a short write: "Could not write").

@@ -17,6 +17,7 @@
 // model's Device.state). Audio files it uses come through loadSource().
 
 #include <atomic>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <memory>
@@ -24,6 +25,7 @@
 #include <vector>
 
 #include "AudioSource.h"
+#include "Automation.h"
 #include "Processor.h"
 #include "rt/RtUtils.h"
 
@@ -40,6 +42,9 @@ public:
     void process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) final;
 
     std::vector<DisplayInfo> displays() const final { return displayInfos_; }
+
+    // A switch parameter's value labels, for devices' ParamInfo lists.
+    static const std::vector<std::string>& offOnLabels();
     uint64_t readDisplay(int index, uint64_t position, std::vector<float>& out) const final;
 
     // State besides the parameters, as lines "name=value" (UTF-8; a backslash
@@ -75,6 +80,14 @@ protected:
 
     // A parameter's plain value; thread-safe.
     float param(int index) const noexcept { return values_[index].load(std::memory_order_relaxed); }
+    // A switch's state: on from 0.5, as automation plays it.
+    bool isOn(int index) const noexcept { return automationSwitchOn(param(index)); }
+    // A choice's index (or a stepped parameter's value), rounded.
+    int choiceIndex(int index) const noexcept { return static_cast<int>(std::lround(param(index))); }
+    template <typename E>
+    E choice(int index) const noexcept {
+        return static_cast<E>(choiceIndex(index));
+    }
 
     // In render(): publishes a value of display `index` (one per its samplesPerValue).
     void publish(int index, float value) noexcept { displayStreams_[static_cast<size_t>(index)]->push(value); }

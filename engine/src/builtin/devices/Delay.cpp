@@ -16,37 +16,22 @@
 // display "input" is the input summed to mono, one value per sample.
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <numbers>
 #include <vector>
 
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
+#include "builtin/Dsp.h"
 #include "rt/RtUtils.h"
 
 namespace sub {
 namespace {
 
-constexpr float kPi = 3.14159265358979f;
+constexpr float kPi = std::numbers::pi_v<float>;
 constexpr double kMaxDelaySeconds = 10.0;  // the longest time either side can be set to
 constexpr float kDivisions[] = {1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 8.f, 16.f};  // in sixteenths
-
-// A TPT state-variable filter section (Zavalishin/Simper), low- or high-pass.
-struct Svf {
-    float ic1 = 0.f, ic2 = 0.f;
-    void reset() noexcept { ic1 = ic2 = 0.f; }
-    // g = tan(pi f / sr), k = 1/Q.
-    float process(float x, float g, float k, bool highPass) noexcept {
-        const float a1 = 1.f / (1.f + g * (g + k));
-        const float a2 = g * a1;
-        const float a3 = g * a2;
-        const float v3 = x - ic2;
-        const float v1 = a1 * ic1 + a2 * v3;
-        const float v2 = ic2 + a2 * ic1 + a3 * v3;
-        ic1 = 2.f * v1 - ic1;
-        ic2 = 2.f * v2 - ic2;
-        return highPass ? x - k * v1 - v2 : v2;
-    }
-};
 
 class DelayProcessor final : public BuiltinProcessor {
 public:
@@ -77,14 +62,12 @@ public:
 
     void prepare(double sampleRate, int) override {
         sampleRate_ = sampleRate;
-        size_t size = 1;
-        const auto needed = static_cast<size_t>(kMaxDelaySeconds * sampleRate) + 8;
-        while (size < needed) size <<= 1;
+        const size_t size = std::bit_ceil(static_cast<size_t>(kMaxDelaySeconds * sampleRate) + 8);
         for (auto& line : lines_) line.assign(size, 0.f);
         mask_ = size - 1;
         mix_.reset(sampleRate, 0.02);
         feedback_.reset(sampleRate, 0.02);
-        glide_ = static_cast<float>(std::exp(-1.0 / (0.12 * sampleRate)));
+        glide_ = static_cast<float>(onePoleCoefficient(0.12, sampleRate));
         fadeLength_ = std::max(1, static_cast<int>(0.06 * sampleRate));
         reset();
     }
@@ -102,18 +85,18 @@ protected:
     void render(const ProcessContext& ctx, float* const* ch, int numChannels, int numFrames) override {
         const int n = std::min(numChannels, 2);
         if (n <= 0 || lines_[0].empty()) return;
-        const auto mode = static_cast<TimeMode>(std::lround(param(Mode)));
-        const bool freeze = param(Freeze) >= 0.5f;
-        const bool pingPong = param(PingPong) >= 0.5f;
-        const bool filterOn = param(FilterOn) >= 0.5f;
+        const auto mode = choice<TimeMode>(Mode);
+        const bool freeze = isOn(Freeze);
+        const bool pingPong = isOn(PingPong);
+        const bool filterOn = isOn(FilterOn);
         if (filterOn) {  // a high-pass and a low-pass, `width` octaves apart around the frequency
             const float cutoff = param(FilterFreq);
             const float halfWidth = 0.5f * param(FilterWidth);
             const float nyquist = static_cast<float>(0.49 * sampleRate_);
             const float low = std::min(cutoff * std::exp2(-halfWidth), nyquist);
             const float high = std::min(cutoff * std::exp2(halfWidth), nyquist);
-            gHigh_ = std::tan(kPi * low / static_cast<float>(sampleRate_));  // the high-pass's corner
-            gLow_ = std::tan(kPi * high / static_cast<float>(sampleRate_));  // the low-pass's
+            highPass_ = dsp::SvfCoefficients(std::tan(kPi * low / static_cast<float>(sampleRate_)), kButterworthK);
+            lowPass_ = dsp::SvfCoefficients(std::tan(kPi * high / static_cast<float>(sampleRate_)), kButterworthK);
         }
         mix_.setTarget(param(Mix) / 100.f);
         feedback_.setTarget(param(Feedback) / 100.f);
@@ -134,8 +117,9 @@ protected:
                 echo[s] = readSide(s, target[s], mode);
                 float y = echo[s];
                 if (filterOn) {
-                    y = filters_[2 * s].process(y, gHigh_, kButterworthK, true);
-                    y = filters_[2 * s + 1].process(y, gLow_, kButterworthK, false);
+                    const dsp::Svf::Outputs high = filters_[2 * s].tick(highPass_, y);
+                    y = y - kButterworthK * high.band - high.low;
+                    y = filters_[2 * s + 1].tick(lowPass_, y).low;
                 }
                 wet[s] = y;
             }
@@ -173,10 +157,10 @@ private:
 
     // Side s's time in seconds (the right one's is the left's while linked).
     double timeSeconds(int s, double tempo) const noexcept {
-        if (s == 1 && param(Link) >= 0.5f) s = 0;
+        if (s == 1 && isOn(Link)) s = 0;
         const int base = s == 0 ? LeftSync : RightSync;
-        if (param(base) < 0.5f) return param(base + 2) * 0.001;
-        const auto index = std::clamp(static_cast<int>(std::lround(param(base + 1))), 0, 7);
+        if (!isOn(base)) return param(base + 2) * 0.001;
+        const auto index = std::clamp(choiceIndex(base + 1), 0, 7);
         const double sixteenth = 15.0 / std::max(1.0, tempo);
         return kDivisions[index] * sixteenth * (1.0 + param(base + 3) / 100.0);
     }
@@ -217,16 +201,11 @@ private:
         const float frac = static_cast<float>(position - floor);
         const auto i = static_cast<size_t>(static_cast<int64_t>(floor) + static_cast<int64_t>(mask_ + 1));
         const std::vector<float>& line = lines_[s];
-        const float xm1 = line[(i - 1) & mask_], x0 = line[i & mask_];
-        const float x1 = line[(i + 1) & mask_], x2 = line[(i + 2) & mask_];
-        const float c1 = 0.5f * (x1 - xm1);
-        const float c2 = xm1 - 2.5f * x0 + 2.f * x1 - 0.5f * x2;
-        const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
-        return ((c3 * frac + c2) * frac + c1) * frac + x0;
+        return dsp::hermite(line[(i - 1) & mask_], line[i & mask_], line[(i + 1) & mask_], line[(i + 2) & mask_], frac);
     }
 
     static const std::vector<ParamInfo>& infos() {
-        static const std::vector<std::string> kOnOff = {"Off", "On"};
+        const std::vector<std::string>& kOnOff = offOnLabels();
         static const std::vector<std::string> kSixteenths = {"1", "2", "3", "4", "5", "6", "8", "16"};
         static const std::vector<ParamInfo> kInfos = {
             {"l_sync", "L Sync", "", 0.f, 1.f, 1.f, false, kOnOff},
@@ -255,8 +234,8 @@ private:
     size_t mask_ = 0;
     size_t writePos_ = 0;
     Side sides_[2];
-    Svf filters_[4];  // per side: high-pass, low-pass
-    float gLow_ = 0.f, gHigh_ = 0.f;
+    dsp::Svf filters_[4];  // per side: high-pass, low-pass
+    dsp::SvfCoefficients highPass_, lowPass_;
     float glide_ = 0.f;
     int fadeLength_ = 1;
     SmoothedValue mix_, feedback_;

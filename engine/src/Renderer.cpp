@@ -120,11 +120,7 @@ void Renderer::drainPreviewNotes(SharedState& shared) noexcept {
     }
 }
 
-void Renderer::discardPreviewNotes(SharedState& shared) noexcept {
-    PreviewNote note;
-    while (shared.previewNotes.pop(note)) {
-    }
-}
+void Renderer::discardPreviewNotes(SharedState& shared) noexcept { shared.previewNotes.clear(); }
 
 void Renderer::publishTransport(SharedState& shared) const noexcept {
     shared.positionSamples.store(position_, std::memory_order_relaxed);
@@ -182,11 +178,7 @@ void Renderer::renderOffline(const RenderSnapshot& snap, float* outStereo, int64
     while (done < frames) {
         const int n = static_cast<int>(std::min<int64_t>(kMaxBlock, frames - done));
         renderChunk(snap, n, {false, loop && snap.loopEnabled, metronome});
-        float* dst = outStereo + done * 2;
-        for (int i = 0; i < n; ++i) {
-            dst[2 * i] = masterLeft_[i];
-            dst[2 * i + 1] = masterRight_[i];
-        }
+        interleave(masterLeft_.data(), masterRight_.data(), n, outStereo + done * 2);
         done += n;
     }
 }
@@ -202,11 +194,7 @@ void Renderer::renderTrackOffline(const RenderSnapshot& snap, int track, float* 
         std::fill_n(captureLeft_.data(), n, 0.f);  // (a track not in the snapshot: silence)
         std::fill_n(captureRight_.data(), n, 0.f);
         renderChunk(snap, n, {false, false, false});
-        float* dst = outStereo + done * 2;
-        for (int i = 0; i < n; ++i) {
-            dst[2 * i] = captureLeft_[i];
-            dst[2 * i + 1] = captureRight_[i];
-        }
+        interleave(captureLeft_.data(), captureRight_.data(), n, outStereo + done * 2);
         done += n;
     }
     captureTrack_ = -1;
@@ -455,24 +443,26 @@ int Renderer::compensationFor(const EdgeRender& edge, bool monitored) noexcept {
     return monitored ? 0 : edge.compensation;
 }
 
+namespace {
+
+// An offline render's own delay line at `index` of `lines` (null if there is none).
+DelayLine* lineAt(const std::vector<std::shared_ptr<DelayLine>>* lines, int index) noexcept {
+    if (!lines || index < 0 || static_cast<size_t>(index) >= lines->size()) return nullptr;
+    return (*lines)[static_cast<size_t>(index)].get();
+}
+
+}  // namespace
+
 DelayLine* Renderer::edgeDelayLine(const EdgeRender& edge, int e) const noexcept {
-    if (!delayOverride_) return edge.delay.get();
-    return static_cast<size_t>(e) < delayOverride_->size() ? (*delayOverride_)[static_cast<size_t>(e)].get() : nullptr;
+    return delayOverride_ ? lineAt(delayOverride_, e) : edge.delay.get();
 }
 
 DelayLine* Renderer::deviceDelayLine(const EdgeRender& edge, int e) const noexcept {
-    if (!delayOverride_) return edge.deviceDelayLine.get();
-    if (!deviceDelayOverride_ || static_cast<size_t>(e) >= deviceDelayOverride_->size()) return nullptr;
-    return (*deviceDelayOverride_)[static_cast<size_t>(e)].get();
+    return delayOverride_ ? lineAt(deviceDelayOverride_, e) : edge.deviceDelayLine.get();
 }
 
 DelayLine* Renderer::chainDelayLine(const ChainRender& chain) const noexcept {
-    if (!delayOverride_) return chain.delay.get();
-    if (!chainDelayOverride_ || chain.delayIndex < 0 ||
-        static_cast<size_t>(chain.delayIndex) >= chainDelayOverride_->size()) {
-        return nullptr;
-    }
-    return (*chainDelayOverride_)[static_cast<size_t>(chain.delayIndex)].get();
+    return delayOverride_ ? lineAt(chainDelayOverride_, chain.delayIndex) : chain.delay.get();
 }
 
 void Renderer::edgeSignal(const RenderSnapshot& snap, const EdgeRender& edge, const float*& left,
@@ -566,15 +556,9 @@ void Renderer::sumEdge(const RenderSnapshot& snap, const EdgeRender& edge, float
     }
     const auto add = [&](float g) {
         if (g == 1.f) {  // (an output, heard: just the sum)
-            for (int i = 0; i < frames; ++i) {
-                left[i] += srcL[i];
-                right[i] += srcR[i];
-            }
+            addStereo(left, right, srcL, srcR, frames);
         } else if (g != 0.f) {
-            for (int i = 0; i < frames; ++i) {
-                left[i] += srcL[i] * g;
-                right[i] += srcR[i] * g;
-            }
+            addStereo(left, right, srcL, srcR, frames, g);
         }
     };
     if (!chunkFlags_.live) {  // as applyFader: offline renders hold the engine lock, nothing changes meanwhile
@@ -637,12 +621,7 @@ const float* Renderer::inputChannel(int index, int offset) const noexcept {
 }
 
 void Renderer::readInput(const InputEdge& input, float* left, float* right, int frames) const noexcept {
-    const float* inL = inputChannel(input.left, 0);
-    const float* inR = inputChannel(input.right, 0);
-    for (int i = 0; i < frames; ++i) {
-        left[i] += inL[i];
-        right[i] += inR[i];
-    }
+    addStereo(left, right, inputChannel(input.left, 0), inputChannel(input.right, 0), frames);
 }
 
 void Renderer::recordInput() noexcept {
@@ -688,13 +667,11 @@ void Renderer::recordRendered(const RenderSnapshot& snap) noexcept {
         } else {
             // Its source's signal where its input edge taps it: after its fader
             // (its buffer, before any edge's delay), before it, or after a device.
-            for (const TrackRender& track : snap.tracks) {
-                if (track.id != take->trackId) continue;
-                const int e = track.input.source == InputEdge::Source::Track ? track.input.edge : -1;
+            if (const TrackRender* track = snap.findTrack(take->trackId)) {
+                const int e = track->input.source == InputEdge::Source::Track ? track->input.edge : -1;
                 if (e >= 0 && snap.tracks[static_cast<size_t>(snap.edges[static_cast<size_t>(e)].from)].id == take->sourceTrackId) {
                     edgeSignal(snap, snap.edges[static_cast<size_t>(e)], left, right);
                 }
-                break;
             }
         }
         for (int s = 0; s < recordSegments_; ++s) {
@@ -868,17 +845,7 @@ void Renderer::routeMidiInput(const TrackRender& track, bool hears, MidiRecordin
 void Renderer::scheduleCountIn(const RenderSnapshot& snap, int length) noexcept {
     // A tick every beat (of the time signature) from the count-in's start, the
     // first of each bar accented; it ends where the playhead starts.
-    const double tickLength = snap.samplesPerBeat() * 4.0 / snap.timeSigDen;
-    if (tickLength <= 0.0) return;
-    const int64_t from = countInTotal_ - countIn_;
-    for (int64_t k = static_cast<int64_t>(std::ceil(from / tickLength - 1e-9));; ++k) {
-        const int64_t t = std::llround(k * tickLength);
-        if (t < from) continue;
-        if (t >= from + length || t >= countInTotal_) break;
-        if (numPendingTicks_ == kMaxPendingTicks) break;
-        const int64_t time = outputTime_ + (t - from) + snap.outputLatency();  // as late as the tracks' audio
-        pendingTicks_[(pendingTickStart_ + numPendingTicks_++) % kMaxPendingTicks] = {time, k % snap.timeSigNum == 0};
-    }
+    scheduleTicks(snap, countInTotal_ - countIn_, length, 0, countInTotal_);
 }
 
 namespace {
@@ -1079,10 +1046,7 @@ void Renderer::processDevice(const RenderSnapshot& snap, const StripRender& chai
             keyR = sumR;
             summing = true;
         }
-        for (int s = 0; s < frames; ++s) {
-            sumL[s] += l[s];
-            sumR[s] += r[s];
-        }
+        addStereo(sumL, sumR, l, r, frames);
     }
     for (int s = 0; s < slices.count; ++s) {
         const Slice& slice = slices.slice[static_cast<size_t>(s)];
@@ -1101,12 +1065,7 @@ void Renderer::processDevice(const RenderSnapshot& snap, const StripRender& chai
 }
 
 DelayLine* Renderer::switchDelayLine(const SwitchRender& device) const noexcept {
-    if (!delayOverride_) return device.delay.get();
-    if (!switchDelayOverride_ || device.delayIndex < 0 ||
-        static_cast<size_t>(device.delayIndex) >= switchDelayOverride_->size()) {
-        return nullptr;
-    }
-    return (*switchDelayOverride_)[static_cast<size_t>(device.delayIndex)].get();
+    return delayOverride_ ? lineAt(switchDelayOverride_, device.delayIndex) : device.delay.get();
 }
 
 int Renderer::switchFade(double sampleRate) noexcept {
@@ -1193,10 +1152,7 @@ void Renderer::processRack(const RenderSnapshot& snap, const RackRender& rack, P
         // Lined up with the slowest chain (not skipped while monitored: chains
         // out of line with each other would comb-filter).
         if (DelayLine* delay = chainDelayLine(chain)) delay->process(chainL, chainR, frames, chain.compensation);
-        for (int i = 0; i < frames; ++i) {
-            sumL[i] += chainL[i];
-            sumR[i] += chainR[i];
-        }
+        addStereo(sumL, sumR, chainL, chainR, frames);
     }
     std::copy_n(sumL, frames, left);
     std::copy_n(sumR, frames, right);
@@ -1414,8 +1370,8 @@ void Renderer::renderClips(const TrackRender& track, const Segment& segment, con
         int64_t srcBase;  // index into srcL/srcR of timeline sample t is t - srcBase
         if (clip.playback == ClipRender::Playback::Direct) {
             const AudioSource& source = *clip.source;
-            srcL = source.channelData(0);
-            srcR = source.channels() > 1 ? source.channelData(1) : srcL;
+            srcL = source.stereoChannel(0);
+            srcR = source.stereoChannel(1);
             srcBase = clip.start - clip.sourceOffset;
         } else {
             const int n = static_cast<int>(to - from);
@@ -1554,13 +1510,14 @@ void Renderer::forgetNotesOfRemovedTracks(const RenderSnapshot& snap) noexcept {
     }
 }
 
-void Renderer::scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset) noexcept {
+void Renderer::scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset,
+                             int64_t end) noexcept {
     const double tickLength = snap.samplesPerBeat() * 4.0 / snap.timeSigDen;
     if (tickLength <= 0.0) return;
     for (int64_t k = static_cast<int64_t>(std::ceil(position / tickLength - 1e-9));; ++k) {
         const int64_t t = std::llround(k * tickLength);
         if (t < position) continue;
-        if (t >= position + length) break;
+        if (t >= position + length || t >= end) break;
         if (numPendingTicks_ == kMaxPendingTicks) break;
         // Heard when the tracks' audio for this position is: after the compensation delay
         // and the master's devices.
@@ -1592,13 +1549,11 @@ void Renderer::mixPreview(SharedState& shared, int frames) noexcept {
 
     const AudioSource& source = *previewSource_;
     const float gain = shared.previewGain.load(std::memory_order_relaxed);
-    const float* srcL = source.channelData(0);
-    const float* srcR = source.channels() > 1 ? source.channelData(1) : srcL;
+    const float* srcL = source.stereoChannel(0);
+    const float* srcR = source.stereoChannel(1);
     const int64_t n = std::min<int64_t>(frames, source.frames() - previewPosition_);
-    for (int64_t i = 0; i < n; ++i) {
-        masterLeft_[i] += srcL[previewPosition_ + i] * gain;
-        masterRight_[i] += srcR[previewPosition_ + i] * gain;
-    }
+    addStereo(masterLeft_.data(), masterRight_.data(), srcL + previewPosition_, srcR + previewPosition_,
+              static_cast<int>(n), gain);
     previewPosition_ += n;
     if (previewPosition_ >= source.frames()) {
         previewSource_ = nullptr;

@@ -48,6 +48,9 @@ struct ProcessEvent {
     uint8_t key() const noexcept { return data[0]; }
     uint8_t velocity() const noexcept { return data[1]; }
     uint8_t channel() const noexcept { return data[2]; }
+    // A note starts; a note ends (a note-on at velocity 0 ends one, as in MIDI).
+    bool startsNote() const noexcept { return type == Type::NoteOn && velocity() > 0; }
+    bool endsNote() const noexcept { return type == Type::NoteOff || (type == Type::NoteOn && velocity() == 0); }
 };
 
 struct EventList {
@@ -70,6 +73,11 @@ struct ProcessContext {
     double loopEndBeat = 0.0;
     bool offline = false;    // rendering an export (or a test), not live
     EventList inEvents;
+
+    // Samples a beat lasts at the block's tempo (0 without one).
+    double samplesPerBeat() const noexcept { return tempo > 0.0 ? sampleRate * 60.0 / tempo : 0.0; }
+    // Beats (quarter notes) in a bar of the time signature.
+    double beatsPerBar() const noexcept { return std::max(1, timeSigNum) * 4.0 / std::max(1, timeSigDen); }
 };
 
 // A parameter, whatever kind of processor it belongs to. Its values are plain

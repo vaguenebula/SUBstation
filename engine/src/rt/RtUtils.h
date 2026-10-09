@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -112,6 +113,21 @@ private:
     int remaining_ = 0, rampLength_ = 1;
 };
 
+// Copies `count` values into a ring buffer of `size` from position `at`, or out
+// of it, wrapping round its end once.
+template <typename T>
+void copyIntoRing(T* ring, size_t size, size_t at, const T* from, size_t count) noexcept {
+    const size_t first = std::min(count, size - at);
+    std::copy_n(from, first, ring + at);
+    std::copy_n(from + first, count - first, ring);
+}
+template <typename T>
+void copyOutOfRing(const T* ring, size_t size, size_t at, T* to, size_t count) noexcept {
+    const size_t first = std::min(count, size - at);
+    std::copy_n(ring + at, first, to);
+    std::copy_n(ring, count - first, to + first);
+}
+
 // Wait-free single-producer / single-consumer ring buffer. Head and tail sit on
 // separate cache lines (MSVC warns about the resulting padding).
 #ifdef _MSC_VER
@@ -138,6 +154,12 @@ public:
         return true;
     }
     bool empty() const noexcept { return tail_.load(std::memory_order_acquire) == head_.load(std::memory_order_acquire); }
+    // Consumer: drops whatever is queued.
+    void clear() noexcept {
+        T item;
+        while (pop(item)) {
+        }
+    }
 
 private:
     std::array<T, Capacity> items_{};
@@ -183,6 +205,44 @@ inline void atomicStoreMax(std::atomic<float>& target, float value) noexcept {
 
 inline float dbToGain(float db) noexcept { return db <= -120.f ? 0.f : std::pow(10.f, db / 20.f); }
 
+// A level in dB, the gain nudged off zero so silence reads about -180 dB, not -inf.
+inline float gainToDb(float gain) noexcept { return 20.f * std::log10(gain + 1e-9f); }
+
+// dB to gain through exp() (ln 10 / 20 nepers a dB), without dbToGain()'s
+// floor: what gain computers work out every sample, where pow() costs more.
+inline constexpr float kNepersPerDb = 0.11512925f;
+inline float expDbToGain(float db) noexcept { return std::exp(db * kNepersPerDb); }
+
+// A one-pole smoother's coefficient for a time constant of `seconds`: what is
+// left of a step after `samples` samples (one by default). A smoother that
+// follows x does y = x + c (y - x); a glide moves 1 - c of the way.
+inline double onePoleCoefficient(double seconds, double sampleRate, double samples = 1.0) noexcept {
+    return std::exp(-samples / (seconds * sampleRate));
+}
+
+// Adds a stereo signal into another over `frames` samples, as it is or times `gain`.
+inline void addStereo(float* left, float* right, const float* fromLeft, const float* fromRight, int frames) noexcept {
+    for (int i = 0; i < frames; ++i) {
+        left[i] += fromLeft[i];
+        right[i] += fromRight[i];
+    }
+}
+inline void addStereo(float* left, float* right, const float* fromLeft, const float* fromRight, int frames,
+                      float gain) noexcept {
+    for (int i = 0; i < frames; ++i) {
+        left[i] += fromLeft[i] * gain;
+        right[i] += fromRight[i] * gain;
+    }
+}
+
+// Planar stereo into interleaved frames.
+inline void interleave(const float* left, const float* right, int frames, float* out) noexcept {
+    for (int i = 0; i < frames; ++i) {
+        out[2 * i] = left[i];
+        out[2 * i + 1] = right[i];
+    }
+}
+
 // Balance-style stereo pan with a sine taper: unity at centre, the opposite
 // side fades out as the pan moves away from it.
 inline void balanceGains(float pan, float& left, float& right) noexcept {
@@ -202,8 +262,7 @@ class DisplayStream {
 public:
     // `capacity` is rounded up to a power of two.
     explicit DisplayStream(size_t capacity) {
-        size_t size = 1;
-        while (size < capacity) size <<= 1;
+        const size_t size = std::bit_ceil(capacity);
         slots_ = std::vector<std::atomic<float>>(size);
         mask_ = size - 1;
     }

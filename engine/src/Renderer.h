@@ -93,6 +93,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "AudioDevice.h"
@@ -365,7 +366,11 @@ private:
     // Prologue: the stretchers the track's clips play through in this chunk.
     void assignVoices(const TrackRender& track, const WarpVoiceSet& voices, TrackBuffers& buffers) noexcept;
     WarpVoice* acquireVoice(const WarpVoiceSet& voices, const ClipRender& clip, bool& continuing) noexcept;
-    void scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset) noexcept;
+    // The metronome's ticks on the time signature's beats in [position, position + length), before `end`,
+    // the first of each bar accented, heard when the tracks' audio of their position is: `offset` into
+    // this callback, then the compensation delay and the master's devices.
+    void scheduleTicks(const RenderSnapshot& snap, int64_t position, int length, int offset,
+                       int64_t end = std::numeric_limits<int64_t>::max()) noexcept;
     void renderTicks(int frames) noexcept;
     void mixPreview(SharedState& shared, int frames) noexcept;
     // A track's note events for this chunk, into `out`: preview notes, its MIDI

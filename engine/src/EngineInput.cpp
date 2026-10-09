@@ -37,15 +37,7 @@ void Engine::setTrackInputTrack(uint32_t trackId, uint32_t sourceTrackId, Sidech
         }
     }
     if (sourceTrackId == kMaster) tap = SidechainTap::PostFader;  // (resampling: the mix as it is heard)
-    if (tap == SidechainTap::AfterDevice) {  // one of its devices: in its own chain, or in a rack's there
-        const auto found = processors_.find(tapProcessorId);
-        if (found == processors_.end() || chainLocked(found->second.chainId).stripId != sourceTrackId) {
-            throw std::invalid_argument("Device " + std::to_string(tapProcessorId) + " is not on track " +
-                                        std::to_string(sourceTrackId));
-        }
-    } else {
-        tapProcessorId = 0;
-    }
+    tapProcessorId = tapProcessorLocked(tap, tapProcessorId, sourceTrackId);
     if (track.inputTrack == sourceTrackId && track.inputTap == tap && track.inputTapProcessor == tapProcessorId) return;
     track.inputTrack = sourceTrackId;
     track.inputTap = tap;
@@ -107,10 +99,8 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
     const int64_t devicePlacement = lag + state.inputLatency + state.outputLatency;
     const int64_t midiPlacement = lag + state.outputLatency + shared_.midiInputDelay.load();
     const auto arrival = [this](uint32_t trackId) -> int64_t {  // (the track recording: where its input edge leaves its source)
-        for (const TrackRender& render : snapshotHold_->tracks) {
-            if (render.id == trackId) return render.input.arrival;
-        }
-        return 0;
+        const TrackRender* render = snapshotHold_->findTrack(trackId);
+        return render ? render->input.arrival : 0;
     };
     std::vector<std::unique_ptr<RecordingTake>> takes;
     std::vector<std::unique_ptr<MidiRecordingTake>> midiTakes;
@@ -278,10 +268,7 @@ void Engine::midiInput(uint16_t port, const uint8_t* message, int size, int64_t 
 }
 
 void Engine::discardMidiInputLocked() {
-    // Only while no callback runs (it is the queue's consumer otherwise).
-    MidiInputEvent event;
-    while (shared_.midiInput.pop(event)) {
-    }
+    shared_.midiInput.clear();  // only while no callback runs (it is the queue's consumer otherwise)
 }
 
 AudioClockStatus Engine::audioClock() const {

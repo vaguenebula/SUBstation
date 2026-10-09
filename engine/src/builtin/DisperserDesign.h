@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <numbers>
 
 namespace sub::disperser {
 
@@ -37,7 +38,7 @@ constexpr double kMaxFrequency = 20000.0;
 constexpr double kNyquistLimit = 0.45;  // of the sample rate: the highest a stage is tuned to
 constexpr double kMinPinch = 0.1;       // the stages' Q
 constexpr double kMaxPinch = 10.0;
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPi = std::numbers::pi;
 
 // The frequency the stages are tuned to: `freq`, kept below Nyquist (at 44.1 kHz,
 // 20 kHz plays as 19.8 kHz).

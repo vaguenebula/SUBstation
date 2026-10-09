@@ -230,12 +230,12 @@ std::vector<uint32_t> Engine::chainProcessors(uint32_t chainId) {
 
 void Engine::setChainGain(uint32_t chainId, float gain) {
     std::lock_guard lock(mutex_);
-    rackChainLocked(chainId).params->gain.store(std::max(0.f, gain));
+    rackChainLocked(chainId).params->setGain(gain);
 }
 
 void Engine::setChainPan(uint32_t chainId, float pan) {
     std::lock_guard lock(mutex_);
-    rackChainLocked(chainId).params->pan.store(std::clamp(pan, -1.f, 1.f));
+    rackChainLocked(chainId).params->setPan(pan);
 }
 
 void Engine::setChainMute(uint32_t chainId, bool mute) {
@@ -385,15 +385,7 @@ void Engine::setProcessorSidechain(uint32_t processorId, uint32_t sourceTrackId,
         throw std::invalid_argument("The master can't be a sidechain: it renders after every track");
     }
     arrangementTrackLocked(sourceTrackId);
-    if (tap == SidechainTap::AfterDevice) {  // one of its devices: in its own chain, or in a rack's there
-        const auto found = processors_.find(tapProcessorId);
-        if (found == processors_.end() || chainLocked(found->second.chainId).stripId != sourceTrackId) {
-            throw std::invalid_argument("Device " + std::to_string(tapProcessorId) + " is not on track " +
-                                        std::to_string(sourceTrackId));
-        }
-    } else {
-        tapProcessorId = 0;
-    }
+    tapProcessorId = tapProcessorLocked(tap, tapProcessorId, sourceTrackId);
     if (!entry.sidechain || entry.sidechain->source != sourceTrackId) {
         checkSidechainLocked(sourceTrackId, chainLocked(entry.chainId).stripId);
     }

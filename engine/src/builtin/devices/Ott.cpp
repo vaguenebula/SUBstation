@@ -12,6 +12,7 @@
 
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
+#include "builtin/Dsp.h"
 #include "rt/RtUtils.h"
 
 namespace sub {
@@ -28,8 +29,8 @@ public:
 
     void prepare(double sampleRate, int) override {
         sampleRate_ = sampleRate;
-        lowCross_.setup(kLowCrossover, sampleRate);
-        highCross_.setup(kHighCrossover, sampleRate);
+        lowCross_ = crossover(kLowCrossover, sampleRate);
+        highCross_ = crossover(kHighCrossover, sampleRate);
         for (auto& ch : channels_) {
             ch.lowSplit.coeffs = ch.lowLp.coeffs = ch.lowHp.coeffs = lowCross_;
             ch.highSplit.coeffs = ch.highLp.coeffs = ch.highHp.coeffs = ch.lowAllpass.coeffs = highCross_;
@@ -109,51 +110,29 @@ private:
         {-35.5f, -40.8f, 10.3f, 13.5f, 132.f},  // high
     }};
 
-    // Butterworth (k = sqrt 2) state-variable filter, topology-preserving
-    // transform. Two in a row make a Linkwitz-Riley crossover half.
-    struct SvfCoeffs {
-        float k = 1.41421356f, a1 = 0.f, a2 = 0.f, a3 = 0.f;
-        void setup(float cutoff, double sampleRate) {
-            const float g = static_cast<float>(std::tan(3.14159265358979 * std::min<double>(cutoff, 0.49 * sampleRate) / sampleRate));
-            a1 = 1.f / (1.f + g * (g + k));
-            a2 = g * a1;
-            a3 = g * a2;
-        }
-    };
+    // A Butterworth (k = sqrt 2) state-variable filter section at a crossover.
+    // Two in a row make a Linkwitz-Riley crossover half.
+    static dsp::SvfCoefficients crossover(float cutoff, double sampleRate) {
+        const float g = static_cast<float>(std::tan(3.14159265358979 * std::min<double>(cutoff, 0.49 * sampleRate) / sampleRate));
+        return {g, 1.41421356f};
+    }
     struct Svf {
-        SvfCoeffs coeffs;
-        float ic1 = 0.f, ic2 = 0.f;
-        void tick(float v0, float& v1, float& v2) noexcept {
-            const float v3 = v0 - ic2;
-            v1 = coeffs.a1 * ic1 + coeffs.a2 * v3;
-            v2 = ic2 + coeffs.a2 * ic1 + coeffs.a3 * v3;
-            ic1 = 2.f * v1 - ic1;
-            ic2 = 2.f * v2 - ic2;
-        }
+        dsp::SvfCoefficients coeffs;
+        dsp::Svf state;
         void split(float x, float& lp, float& hp) noexcept {
-            float v1, v2;
-            tick(x, v1, v2);
-            lp = v2;
-            hp = x - coeffs.k * v1 - v2;
+            const dsp::Svf::Outputs o = state.tick(coeffs, x);
+            lp = o.low;
+            hp = x - coeffs.k * o.band - o.low;
         }
-        float lowpass(float x) noexcept {
-            float lp, hp;
-            split(x, lp, hp);
-            return lp;
-        }
+        float lowpass(float x) noexcept { return state.tick(coeffs, x).low; }
         float highpass(float x) noexcept {
-            float lp, hp;
-            split(x, lp, hp);
-            return hp;
+            const dsp::Svf::Outputs o = state.tick(coeffs, x);
+            return x - coeffs.k * o.band - o.low;
         }
         // What an LR4 low + high pass at this frequency sum to, so the low band
         // gets the same phase shift from the upper crossover as the others.
-        float allpass(float x) noexcept {
-            float v1, v2;
-            tick(x, v1, v2);
-            return x - 2.f * coeffs.k * v1;
-        }
-        void clear() noexcept { ic1 = ic2 = 0.f; }
+        float allpass(float x) noexcept { return x - 2.f * coeffs.k * state.tick(coeffs, x).band; }
+        void clear() noexcept { state.reset(); }
     };
     struct Channel {
         Svf lowSplit, lowLp, lowHp, highSplit, highLp, highHp, lowAllpass;
@@ -163,14 +142,14 @@ private:
     };
 
     static float onePole(float ms, double sampleRate) {
-        return static_cast<float>(std::exp(-1.0 / (ms * 0.001 * sampleRate)));
+        return static_cast<float>(onePoleCoefficient(ms * 0.001, sampleRate));
     }
 
     // The band's linear gain for its envelope: down above one threshold, up
     // below the other, then the make-up.
     static float bandGain(int band, float envelope) noexcept {
         const BandSettings& s = kBands_[band];
-        const float level = 20.f * std::log10(envelope + 1e-9f);
+        const float level = gainToDb(envelope);
         float db = 0.f;
         if (level > s.downThresholdDb) {
             db = (s.downThresholdDb - level) * (1.f - 1.f / kDownRatio);
@@ -178,7 +157,7 @@ private:
             db = std::min((s.upThresholdDb - level) * (1.f - 1.f / kUpRatio), kMaxUpwardDb);
             db *= std::clamp((level - kFloorDb) / 20.f, 0.f, 1.f);  // fade out towards silence
         }
-        return std::exp((db + s.makeupDb + kMakeupDb) * 0.11512925f);  // dB -> gain
+        return expDbToGain(db + s.makeupDb + kMakeupDb);
     }
 
     static const std::vector<ParamInfo>& infos() {
@@ -190,7 +169,7 @@ private:
     }
 
     double sampleRate_ = 48000.0;
-    SvfCoeffs lowCross_, highCross_;
+    dsp::SvfCoefficients lowCross_, highCross_;
     std::array<Channel, 2> channels_{};
     std::array<float, kBands> env_{}, attack_{}, release_{};
     SmoothedValue depth_, output_;

@@ -30,12 +30,15 @@
 #include <array>
 #include <cmath>
 #include <iterator>
+#include <numbers>
 #include <string>
 #include <vector>
 
 #include "Automation.h"
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
+#include "builtin/Dsp.h"
+#include "builtin/EqDesign.h"
 #include "rt/RtUtils.h"
 
 namespace sub {
@@ -122,14 +125,14 @@ protected:
         const float depth = std::clamp(param(Depth) / 100.f, 0.f, 1.f);
         const float threshold = std::pow(10.f, param(Threshold) / 20.f);
         const float smoothMs = param(Smooth);
-        const float smoothing = smoothMs <= 0.01f ? 0.f : static_cast<float>(std::exp(-1.0 / (smoothMs * 0.001 * sampleRate_)));
-        const float keyRelease = static_cast<float>(std::exp(-1.0 / (0.01 * sampleRate_)));
+        const float smoothing = smoothMs <= 0.01f ? 0.f : static_cast<float>(onePoleCoefficient(smoothMs * 0.001, sampleRate_));
+        const float keyRelease = static_cast<float>(onePoleCoefficient(0.01, sampleRate_));
         const int minGap = static_cast<int>(kMinGapMs * 0.001 * sampleRate_);
         const int lookahead = std::min(lookaheadSamples(), static_cast<int>(delay_[0].size()) - 1);
-        const bool lows = std::lround(param(Range)) == 1;
+        const bool lows = choiceIndex(Range) == 1;
         updateCrossover();
 
-        const int trigger = std::clamp(static_cast<int>(std::lround(param(Trigger))), 0,
+        const int trigger = std::clamp(choiceIndex(Trigger), 0,
                                        static_cast<int>(std::size(kTriggerBeats)) - 1);
         const bool keyed = trigger == 0 && sidechainConnected();
         const float* keyL = keyed ? sidechain(0) : nullptr;
@@ -137,7 +140,7 @@ protected:
         // On the beat: the first beat hit in this stretch, then every `every` samples after.
         double nextBeatHit = -1.0, everySamples = 0.0;
         if (trigger > 0 && ctx.playing && ctx.tempo > 0.0) {
-            const double every = kTriggerBeats[trigger] < 0.0 ? barBeats(ctx) : kTriggerBeats[trigger];
+            const double every = kTriggerBeats[trigger] < 0.0 ? ctx.beatsPerBar() : kTriggerBeats[trigger];
             const double samplesPerBeat = sampleRate_ * 60.0 / ctx.tempo;
             const double first = std::ceil(ctx.beatPos / every - 1e-9) * every;
             nextBeatHit = std::max(0.0, (first - ctx.beatPos) * samplesPerBeat);
@@ -154,7 +157,7 @@ protected:
             } else {
                 publish(KeyDisplay, 0.f);
             }
-            keyEnvelope_ = key >= keyEnvelope_ ? key : key + keyRelease * (keyEnvelope_ - key);
+            keyEnvelope_ = dsp::followPeak(keyEnvelope_, key, keyRelease);
             if (sinceKeyHit_ < (1 << 30)) ++sinceKeyHit_;
             if (sinceBeatHit_ < (int64_t{1} << 40)) ++sinceBeatHit_;
             bool hit = false;
@@ -218,16 +221,12 @@ private:
                                             0.001 * sampleRate_));
     }
 
-    static double barBeats(const ProcessContext& ctx) noexcept {
-        return std::max(1, ctx.timeSigNum) * 4.0 / std::max(1, ctx.timeSigDen);
-    }
-
     // The curve's length in ms: its own, or its rate at the tempo.
     double curveLength(const ProcessContext& ctx) const noexcept {
-        if (param(Sync) < 0.5f || ctx.tempo <= 0.0) return param(Length);
-        const int rate = std::clamp(static_cast<int>(std::lround(param(Rate))), 0,
+        if (!isOn(Sync) || ctx.tempo <= 0.0) return param(Length);
+        const int rate = std::clamp(choiceIndex(Rate), 0,
                                     static_cast<int>(std::size(kRateBeats)) - 1);
-        const double beats = kRateBeats[rate] < 0.0 ? barBeats(ctx) : kRateBeats[rate];
+        const double beats = kRateBeats[rate] < 0.0 ? ctx.beatsPerBar() : kRateBeats[rate];
         return beats * 60000.0 / ctx.tempo;
     }
 
@@ -235,7 +234,7 @@ private:
     void loadCurve() noexcept {
         numPoints_ = 0;
         for (int p = 0; p < kPoints; ++p) {
-            if (param(pointParam(p, Used)) < 0.5f) continue;
+            if (!isOn(pointParam(p, Used))) continue;
             points_[static_cast<size_t>(numPoints_++)] = {std::clamp(param(pointParam(p, X)), 0.f, 1.f),
                                                           std::clamp(param(pointParam(p, Y)), 0.f, 1.f),
                                                           std::clamp(param(pointParam(p, Curve)), -1.f, 1.f)};
@@ -268,7 +267,7 @@ private:
         const float freq = param(Crossover);
         if (freq == crossover_) return;
         crossover_ = freq;
-        const double w = 2.0 * 3.14159265358979323846 * std::min(static_cast<double>(freq), 0.45 * sampleRate_) / sampleRate_;
+        const double w = 2.0 * std::numbers::pi * std::min(static_cast<double>(freq), 0.45 * sampleRate_) / sampleRate_;
         const double cosw = std::cos(w), alpha = std::sin(w) / (2.0 * 0.70710678118654752);
         const double a0 = 1.0 + alpha;
         split_[0] = {(1.0 - cosw) / 2.0 / a0, (1.0 - cosw) / a0, (1.0 - cosw) / 2.0 / a0, -2.0 * cosw / a0,
@@ -277,16 +276,11 @@ private:
                      (1.0 - alpha) / a0};
     }
 
-    // Channel c's sample through band `band`'s two sections (transposed direct form II).
+    // Channel c's sample through band `band`'s two sections.
     float split(int c, int band, float x) noexcept {
-        const std::array<double, 5>& q = split_[band];
+        const eq::Biquad& q = split_[band];
         double value = x;
-        for (auto& state : splitState_[c][band]) {
-            const double out = q[0] * value + state[0];
-            state[0] = q[1] * value - q[3] * out + state[1];
-            state[1] = q[2] * value - q[4] * out;
-            value = out;
-        }
+        for (auto& state : splitState_[c][band]) value = q.tick(value, state[0], state[1]);
         return static_cast<float>(value);
     }
 
@@ -294,7 +288,7 @@ private:
         for (auto& channel : splitState_) {
             for (auto& band : channel) {
                 for (auto& section : band) {
-                    for (double& z : section) z = std::abs(z) < 1e-20 ? 0.0 : z;
+                    for (double& z : section) z = dsp::flushTiny(z);
                 }
             }
         }
@@ -302,7 +296,7 @@ private:
 
     static const std::vector<ParamInfo>& infos() {
         static const std::vector<ParamInfo> kInfos = [] {
-            static const std::vector<std::string> kOnOff = {"Off", "On"};
+            const std::vector<std::string>& kOnOff = offOnLabels();
             static const std::vector<std::string> kRanges = {"Full", "Lows"};
             static const std::vector<std::string> kCharacters = {"Tight", "Natural", "Loose"};
             std::vector<ParamInfo> list = {
@@ -352,7 +346,7 @@ private:
     int numPoints_ = 0;
     std::vector<float> delay_[2];
     int writeAt_ = 0;
-    std::array<double, 5> split_[2]{};        // the low and high pass: b0, b1, b2, a1, a2
+    eq::Biquad split_[2];                     // the low and high pass (Butterworth)
     double splitState_[2][2][2][2] = {};      // per channel, band and section: the TDF-II's two
     float crossover_ = -1.f;
     int64_t sinceHit_ = -1;                   // samples since the latest hit; -1: its curve is over
