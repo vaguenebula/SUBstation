@@ -6,6 +6,7 @@
 //                          [--cache file] [--weights t,m,s,e,p,r] [--tune]
 //                          [--show N] [--json file]
 //                          [--triplets N file] [--seed N] [--ratings file]
+//                          [--misses file] [--robustness N]
 //
 // The files' kinds come from their names and their folder's (a library sorted
 // into Kicks, Snares... folders, or named so): kick, snare, clap, closed and
@@ -19,7 +20,10 @@
 // Weights from listening (README.md, Weights from listening): --triplets writes N triplets of sounds
 // (A, B, C) to rate by ear with tools/similarity_rater (which of B and C is
 // more like A?), picked where the aspects disagree about the answer; --ratings
-// fits the weights to the answers and runs the rest with them.
+// fits the weights to the answers and runs the rest with them; --misses lists
+// the answers the default weights get wrong, to hear again. --robustness N
+// checks that N one-shots, made quieter, padded with silence or resampled,
+// are still nearest to themselves.
 
 #include <algorithm>
 #include <atomic>
@@ -353,7 +357,8 @@ void writeTriplets(const std::vector<Sound>& sounds, const std::vector<uint32_t>
 struct Answer {
     AspectDistances further{};
     bool pickedB = false;
-    std::string anchor;
+    std::string anchor, b, c;
+    long ms = -1;  // how long the question took, if the rater says
 };
 
 // The chance B is picked: sigmoid(sum of u[a] * further[a]), u >= 0; u is the
@@ -528,11 +533,135 @@ double choosePull(const std::vector<Answer>& answers, const std::vector<size_t>&
     return pulls[best];
 }
 
+// The answers the default weights get wrong: the closer by them is the one not
+// picked. Printed (the 30 they were surest of, each aspect's say: + for the one
+// picked) and written as triplets, the picked one as B, to hear again with
+// `rate.py --names`: what they share that the fingerprint misses.
+void writeMisses(const std::vector<Answer>& answers, const std::string& file) {
+    const AspectWeights w;
+    double total = 0.0;
+    for (const float x : w.weight) total += x;
+    struct Miss {
+        double sureness;  // how much closer, by the defaults, the one not picked is
+        const Answer* answer;
+    };
+    std::vector<Miss> misses;
+    for (const Answer& answer : answers) {
+        double z = 0.0;
+        for (size_t a = 0; a < kAspects; ++a) z += w.weight[a] / total * answer.further[a];
+        if (z != 0.0 && (z > 0.0) != answer.pickedB) misses.push_back({std::abs(z), &answer});
+    }
+    std::sort(misses.begin(), misses.end(), [](const Miss& x, const Miss& y) { return x.sureness > y.sureness; });
+    auto name = [](const std::string& path) { return utf8(pathOf(path).filename()); };
+    std::printf("\n%zu of %zu answers the default weights get wrong; the surest of them (each aspect: how much it\n"
+                "pulled towards the one picked, + right, - wrong):\n",
+                misses.size(), answers.size());
+    std::printf("  %6s %6s  ", "wrong", "ms");
+    for (const char* a : {"timbre", "motion", "spectr", "envel", "pitch", "rhythm"}) std::printf("%6s ", a);
+    std::printf(" A / picked / not picked\n");
+    for (size_t i = 0; i < misses.size() && i < 30; ++i) {
+        const Answer& m = *misses[i].answer;
+        std::printf("  %6.2f %6ld  ", misses[i].sureness, m.ms);
+        for (size_t a = 0; a < kAspects; ++a) std::printf("%+6.2f ", m.pickedB ? m.further[a] : -m.further[a]);
+        std::printf(" %s / %s / %s\n", name(m.anchor).c_str(), name(m.pickedB ? m.b : m.c).c_str(),
+                    name(m.pickedB ? m.c : m.b).c_str());
+    }
+    std::ofstream out(pathOf(file), std::ios::binary);
+    out << "# sound_similarity_bench misses: B is the one picked, C the one the default weights call closer\n"
+        << "# id\trepeat of\tA\tB\tC\n";
+    for (size_t i = 0; i < misses.size(); ++i) {
+        const Answer& m = *misses[i].answer;
+        out << i << "\t\t" << m.anchor << '\t' << (m.pickedB ? m.b : m.c) << '\t' << (m.pickedB ? m.c : m.b) << '\n';
+    }
+    std::printf("  all %zu written to %s, surest first (B the one picked)\n", misses.size(), file.c_str());
+}
+
+// Whether a sound's fingerprint survives what shouldn't change how it sounds:
+// for `count` one-shots, each change's copy is analysed and placed among the
+// library by its distance from the original. The copy should be the nearest
+// (rank 1), or nearly. Changes: 12 dB quieter, 0.5 s of silence before, 1 s
+// after, and resampled (miniaudio, as files above 48 kHz are) to 32 and 22.05 kHz.
+void robustness(const std::vector<Sound>& sounds, const std::vector<uint32_t>& rows, const std::vector<float>& matrix,
+                const AspectWeights& weights, size_t count, uint32_t seed) {
+    const Comparison comparison = Comparison::fit(matrix.data(), rows.size(), nullptr, weights);
+    const AspectComparisons aspects(matrix, rows.size());
+    auto fp = [&](uint32_t r) { return matrix.data() + static_cast<size_t>(r) * kDims; };
+    std::vector<uint32_t> shots;
+    for (uint32_t r = 0; r < rows.size(); ++r)
+        if (!sounds[rows[r]].loop && fp(r)[feature::Length] <= std::log10(4.f)) shots.push_back(r);
+    std::mt19937 random(seed);
+    std::shuffle(shots.begin(), shots.end(), random);
+    if (shots.size() > count) shots.resize(count);
+    const char* const names[] = {"12 dB quieter", "0.5 s silence before", "1 s silence after", "at 32 kHz",
+                                 "at 22.05 kHz"};
+    constexpr size_t kChanges = std::size(names);
+    struct Tally {
+        std::vector<double> distance;
+        std::vector<size_t> rank;
+        AspectDistances aspectSum{};
+    };
+    std::array<Tally, kChanges> tally;
+    SoundAnalyzer analyzer;
+    const double decode = kAnalysisSeconds + kLeadInSeconds + 1.0;
+    for (const uint32_t r : shots) {
+        const std::string& path = sounds[rows[r]].path;
+        for (size_t c = 0; c < kChanges; ++c) {
+            std::optional<Fingerprint> copy;
+            try {
+                MonoAudio audio = readMono(path, 0.0, decode, c == 3 ? 32000 : c == 4 ? 22050 : 48000);
+                auto& x = audio.samples;
+                const auto rate = audio.sampleRate;
+                double seconds = audio.fileSeconds;
+                if (c == 0)
+                    for (float& v : x) v *= 0.25f;
+                if (c == 1) {
+                    x.insert(x.begin(), static_cast<size_t>(0.5 * rate), 0.f);
+                    seconds += 0.5;
+                }
+                if (c == 2 && !audio.truncated) {
+                    x.insert(x.end(), static_cast<size_t>(1.0 * rate), 0.f);
+                    seconds += 1.0;
+                }
+                copy = analyzer.analyze(x.data(), x.size(), rate, seconds, audio.truncated);
+            } catch (const std::exception&) {
+            }
+            if (!copy) continue;
+            const float d = comparison.distance(fp(r), copy->data());
+            size_t closer = 0;
+            for (uint32_t o = 0; o < rows.size(); ++o)
+                if (o != r && comparison.distance(fp(r), fp(o)) < d) ++closer;
+            tally[c].distance.push_back(d);
+            tally[c].rank.push_back(closer + 1);
+            const AspectDistances ad = aspects(fp(r), copy->data());
+            for (size_t a = 0; a < kAspects; ++a) tally[c].aspectSum[a] += ad[a];
+        }
+    }
+    std::printf("\nrobustness: %zu one-shots, each changed and placed among the library by its distance from the "
+                "original\n", shots.size());
+    std::printf("  %-22s %6s %8s %8s %8s %9s   mean distance by aspect (", "change", "copies", "rank 1", "top 10",
+                "median d", "worst rank");
+    for (size_t a = 0; a < kAspects; ++a) std::printf("%s%s", a ? " " : "", aspectName(static_cast<Aspect>(a)));
+    std::printf(")\n");
+    for (size_t c = 0; c < kChanges; ++c) {
+        auto& t = tally[c];
+        if (t.rank.empty()) continue;
+        const double n = static_cast<double>(t.rank.size());
+        const double first = static_cast<double>(std::count(t.rank.begin(), t.rank.end(), size_t{1}));
+        const double top = static_cast<double>(std::count_if(t.rank.begin(), t.rank.end(), [](size_t k) { return k <= 10; }));
+        std::sort(t.distance.begin(), t.distance.end());
+        std::printf("  %-22s %6zu %7.1f%% %7.1f%% %8.3f %9zu  ", names[c], t.rank.size(), 100 * first / n, 100 * top / n,
+                    t.distance[t.distance.size() / 2], *std::max_element(t.rank.begin(), t.rank.end()));
+        for (size_t a = 0; a < kAspects; ++a) std::printf(" %.3f", t.aspectSum[a] / n);
+        std::printf("\n");
+    }
+}
+
 // Fits the weights to the rater's answers (tools/similarity_rater) and says how
 // far to trust them. The aspects' distances come from this library's spreads:
 // rate and fit on the same library.
 std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const std::vector<uint32_t>& rows,
-                                        const std::vector<float>& matrix, const std::string& file, uint32_t seed) {
+                                        const std::vector<float>& matrix, const std::string& file, uint32_t seed,
+                                        const std::string& missesFile) {
     const AspectComparisons aspects(matrix, rows.size());
     // By whole path, however the library's folder was written.
     auto whole = [](const std::string& path) {
@@ -565,6 +694,9 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
         for (size_t i = 0; i < kAspects; ++i) answer.further[i] = ac[i] - ab[i];
         answer.pickedB = choice == "b";
         answer.anchor = line[2];
+        answer.b = line[3];
+        answer.c = line[4];
+        if (line.size() > 5) answer.ms = std::strtol(line[5].c_str(), nullptr, 10);
         answers.push_back(answer);
         const bool ordered = line[3] < line[4];
         asked[line[2] + '\t' + (ordered ? line[3] + '\t' + line[4] : line[4] + '\t' + line[3])].push_back(
@@ -572,6 +704,7 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
     }
     std::printf("\n%zu answers from %s (%zu can't tell, %zu with a sound not in this library)\n", answers.size(),
                 file.c_str(), skipped, missing);
+    if (!missesFile.empty()) writeMisses(answers, missesFile);
     if (answers.size() < 20) {
         std::printf("  too few to fit\n");
         return std::nullopt;
@@ -644,8 +777,8 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string folder, cacheFile, jsonFile, tripletsFile, ratingsFile;
-    size_t tripletCount = 0;
+    std::string folder, cacheFile, jsonFile, tripletsFile, ratingsFile, missesFile;
+    size_t tripletCount = 0, robustCount = 0;
     uint32_t seed = 1;
     unsigned threads = std::max(1u, std::thread::hardware_concurrency() / 2);
     size_t limit = 0;
@@ -667,6 +800,8 @@ int main(int argc, char** argv) {
             tripletsFile = next();
         } else if (arg == "--seed") seed = static_cast<uint32_t>(std::stoul(next()));
         else if (arg == "--ratings") ratingsFile = next();
+        else if (arg == "--misses") missesFile = next();
+        else if (arg == "--robustness") robustCount = std::stoul(next());
         else if (arg == "--weights") {
             std::stringstream list(next());
             std::string item;
@@ -679,7 +814,7 @@ int main(int argc, char** argv) {
     if (folder.empty()) {
         std::cerr << "usage: sound_similarity_bench --folder <sample library> [--threads N] [--limit N] [--cache file] "
                      "[--weights t,m,s,e,p,r] [--tune] [--show N] [--json file] [--triplets N file] [--seed N] "
-                     "[--ratings file]\n";
+                     "[--ratings file [--misses file]] [--robustness N]\n";
         return 2;
     }
 
@@ -769,13 +904,14 @@ int main(int argc, char** argv) {
 
     // --- Weights from listening ---
     if (!ratingsFile.empty()) {
-        if (const auto fitted = fitRatings(sounds, rows, matrix, ratingsFile, seed)) {
+        if (const auto fitted = fitRatings(sounds, rows, matrix, ratingsFile, seed, missesFile)) {
             if (!queries.empty())
                 std::printf("\nweights %s: mean P@10 %.3f (over kinds)\n", weightsText(weights).c_str(),
                             evaluate(sounds, matrix, rows, queries, weights).macro10);
             weights = *fitted;
         }
     }
+    if (robustCount > 0) robustness(sounds, rows, matrix, weights, robustCount, seed);
     if (tripletCount > 0) writeTriplets(sounds, rows, matrix, weights, tripletCount, seed, tripletsFile);
 
     // --- Retrieval ---

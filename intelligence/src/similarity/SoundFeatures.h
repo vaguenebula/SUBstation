@@ -18,7 +18,8 @@
 //                  (20 ms to 2.6 s)
 //   Pitch          how pitched it is (YIN), and the pitch where it is
 //   Rhythm         onsets per second after the first (one-shots have none, loops
-//                  many), and the file's length
+//                  many), and the sound's length (its file's, less silence before
+//                  and after)
 //
 // Log attack time and the spectral centroid are what listeners' timbre spaces
 // of percussive sounds are organised by (Lakatos 2000; McAdams), and MFCCs are
@@ -26,7 +27,7 @@
 // sound's own peak, so a quieter copy of a sound has the same fingerprint.
 //
 // Only the start of a sound is analysed: from where it starts (its leading
-// silence skipped) for kAnalysisSeconds. The length feature is the whole file's.
+// silence skipped) for kAnalysisSeconds. The length feature is the whole sound's.
 
 #pragma once
 
@@ -75,7 +76,7 @@ inline constexpr int kContourPoints = 8;
 
 // Bump when what SoundAnalyzer computes changes: fingerprints saved by an
 // earlier version are then made again.
-inline constexpr uint32_t kFeatureVersion = 1;
+inline constexpr uint32_t kFeatureVersion = 2;  // 2: the mel bands' floor; the length less silence
 
 // How much of a sound is analysed, from where it starts.
 inline constexpr double kAnalysisSeconds = 6.0;

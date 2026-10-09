@@ -94,15 +94,31 @@ TEST_CASE("audio files are read as mono, from where asked, at no more than 48 kH
     CHECK(threw);
 }
 
-TEST_CASE("a fingerprint ignores the level and leading silence") {
+TEST_CASE("a fingerprint ignores the level, and silence before and after") {
     const Fingerprint loud = fingerprint(kick());
     CHECK(distance(loud, fingerprint(scaled(kick(), 0.2f))) < 0.01f);
-    // Leading silence is skipped; only the file's length differs.
-    const Fingerprint late = fingerprint(delayed(kick(), 0.3));
-    Fingerprint a = loud, b = late;
-    a[feature::Length] = b[feature::Length] = 0.f;
-    CHECK(distance(a, b) < 0.02f);
-    CHECK(late[feature::Length] > loud[feature::Length]);
+    // Leading silence is skipped, trailing silence left out of the length and the onsets' rate.
+    CHECK(distance(loud, fingerprint(delayed(kick(), 0.3))) < 0.02f);
+    Samples padded = kick();
+    padded.resize(padded.size() + frames(1.0), 0.f);
+    CHECK(distance(loud, fingerprint(padded)) < 0.02f);
+    Samples loop = sequence({kick(), snare()}, 0.25, 2.0);
+    const Fingerprint plain = fingerprint(loop);
+    loop.resize(loop.size() + frames(1.5), 0.f);
+    CHECK(distance(plain, fingerprint(loop)) < 0.02f);
+}
+
+TEST_CASE("a sound with little above 11 kHz is much the same at 22.05 kHz") {
+    // A 22.05 kHz file has nothing above 11 kHz: the mel bands it can't hold
+    // read as quiet (80 dB down from the frame's loudest), not as silence 100 dB
+    // down, so a kick's timbre stays its own (it was 2.4 apart). Bright sounds
+    // do lose what is above 11 kHz, and differ.
+    const Samples s = kick();
+    const MonoAudio half = readMono(wav("rate.wav", s), 0.0, 10.0, 22050);
+    REQUIRE(half.sampleRate == 22050u);
+    const Fingerprint full = fingerprint(s), low = fingerprint(half.samples, 22050);
+    CHECK(distance(full, low) < 1.0f);
+    CHECK(distance(full, low) < distance(full, fingerprint(kick(100.0, 40.0, 0.6))));
 }
 
 TEST_CASE("silence has no fingerprint, and a file that isn't audio can't be analysed") {

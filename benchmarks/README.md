@@ -258,7 +258,8 @@ noise, and timing every track costs nothing measurable on one thread.
 ```
 sound_similarity_bench --folder <sample library> [--threads N] [--limit N] [--cache file]
                        [--weights t,m,s,e,p,r] [--tune] [--show N] [--json out.json]
-                       [--triplets N file] [--seed N] [--ratings file]
+                       [--triplets N file] [--seed N] [--ratings file [--misses file]]
+                       [--robustness N]
 ```
 
 Fingerprints every audio file under the folder (on `--threads` threads, normal
@@ -316,6 +317,31 @@ defaults is hard to tell from them even at 1 000: the answers are close calls,
 and the aspects go together. With a ridge of 0.5 the fit was biased (weights
 pulled together, an aspect weighted 0 given 0.7), so it is 0.01. At about 5 s a
 question, 1 000 is under an hour and a half.
+
+`--misses file` (with `--ratings`) lists the answers the default weights get
+wrong, the ones they were surest of first, with each aspect's pull towards the
+sound picked, and writes them as triplets (B the one picked) to hear again with
+`rate.py misses.tsv --ratings misses-ratings.tsv --names`, the names shown: what
+did the one picked share with A that the fingerprint doesn't measure?
+
+## Robustness
+
+`--robustness N` changes N one-shots in ways that shouldn't change how they
+sound (12 dB quieter; 0.5 s of silence before; 1 s after; resampled to 32 and
+22.05 kHz), analyses each copy, and ranks it among the library by its distance
+from the original: rank 1 is the copy nearest of all. On the synthetic library
+(200 one-shots), before and after feature version 2:
+
+| change | rank 1, version 1 | rank 1, version 2 | what moved it |
+|---|---|---|---|
+| 12 dB quieter | 100% | 100% | |
+| 0.5 s silence before | 0.5% | 100% | the file's length |
+| 1 s silence after | 0% | 100% | the length, the onsets' rate, the tail's last frames |
+| 22.05 kHz | 0% (timbre 5.8 apart) | 0% (4.7) | what is above 11 kHz, gone |
+
+The synthetic sounds are noise-bright, most of their energy above 11 kHz, so a
+22.05 kHz copy of them really does sound different; a kick with little up there
+went from 2.4 apart to 0.8.
 
 ## Results
 

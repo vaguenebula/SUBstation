@@ -29,6 +29,13 @@ constexpr double kBodySeconds = 0.25;
 constexpr double kDurationDb = -30.0;
 constexpr double kContourFloorDb = -60.0;
 constexpr double kContourFirstSeconds = 0.02;
+// A frame's mel bands are floored this far below its loudest: no quieter detail
+// counts, and bands a file's rate can't hold (above its Nyquist frequency: a
+// 22.05 kHz file's above 11 kHz) read as quiet, not as -100 dB of silence.
+constexpr double kMelRangeDb = 80.0;
+// A sound ends where it last comes this near its peak (for its length, and the
+// rate of its onsets: silence padding a file changes neither).
+constexpr double kEndDb = -60.0;
 // Pitch: YIN on the sound brought down to about 11 kHz, 93 ms windows (down to
 // 21.5 Hz), at most kPitchFrames of them from the peak on.
 constexpr double kPitchRate = 11025.0;
@@ -267,8 +274,17 @@ std::optional<Fingerprint> SoundAnalyzer::analyze(const float* samples, size_t c
     s.signal.insert(s.signal.end(), samples + from, samples + from + (length - lead));
     for (float& x : s.signal) x *= gain;
     const float* x = s.signal.data();
-    const double seconds = static_cast<double>(length) / rate;
     if (fileSeconds <= 0.0) fileSeconds = static_cast<double>(count) / rate;
+    // How long the sound is: from its start to where it last comes within
+    // kEndDb of its peak; if the file goes on past what is here, to the file's end.
+    const float endThreshold = static_cast<float>(std::pow(10.0, kEndDb / 20.0));
+    size_t last = count;
+    while (last > first && std::fabs(samples[last - 1]) * gain < endThreshold) --last;
+    const double soundSeconds = truncated ? std::max(fileSeconds - static_cast<double>(first) / rate, 0.0)
+                                          : static_cast<double>(last - first) / rate;
+    // How much of the analysed part is the sound (not silence after it).
+    const double seconds =
+        std::max(std::min(static_cast<double>(length) / rate, soundSeconds + kPreRollSeconds), kBlockSeconds);
 
     Fingerprint fp{};
 
@@ -351,7 +367,9 @@ std::optional<Fingerprint> SoundAnalyzer::analyze(const float* samples, size_t c
     }
     s.realFftOf(n);
     const double binHz = rate / static_cast<double>(n);
-    const size_t frameCount = length <= n ? 1 : 1 + (length - n + hop - 1) / hop;
+    // Frames up to the end: past it is silence (unless the sound goes on, cut
+    // off: then only whole frames), so silence after a sound changes nothing.
+    const size_t frameCount = length <= n ? 1 : cut ? 1 + (length - n + hop - 1) / hop : 1 + (length - 1) / hop;
     s.frames.resize(frameCount);
     s.buffer.resize(n);
     s.spectrum.resize(n / 2);
@@ -401,11 +419,14 @@ std::optional<Fingerprint> SoundAnalyzer::analyze(const float* samples, size_t c
         fr.flatness = std::clamp(10.0 * (logSum / bins - std::log(total / bins + 1e-12)) / std::log(10.0), -60.0, 0.0);
         fr.sub = total > 0.0 ? sub / total : 0.0;
         fr.air = total > 0.0 ? air / total : 0.0;
+        float loudestBand = -1e9f;
         for (int b = 0; b < kMelBands; ++b) {
             double e = 0.0;
             for (const auto& [k, w] : s.mel.bands[b]) e += w * s.power[k];
             fr.mel[b] = static_cast<float>(dB(e, 1e-10));
+            loudestBand = std::max(loudestBand, fr.mel[b]);
         }
+        for (float& m : fr.mel) m = std::max(m, loudestBand - static_cast<float>(kMelRangeDb));
     }
 
     // Louder frames count more; those more than kFrameRangeDb down, not at all.
@@ -497,7 +518,7 @@ std::optional<Fingerprint> SoundAnalyzer::analyze(const float* samples, size_t c
             any = true;
         }
         fp[feature::OnsetRate] = static_cast<float>(std::log2(1.0 + static_cast<double>(onsets) / std::max(seconds, 0.05)));
-        fp[feature::Length] = static_cast<float>(std::log10(std::clamp(fileSeconds, 0.01, 60.0)));
+        fp[feature::Length] = static_cast<float>(std::log10(std::clamp(soundSeconds, 0.01, 60.0)));
     }
 
     // --- Pitch (YIN), from the peak on ---------------------------------------------------

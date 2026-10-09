@@ -52,17 +52,18 @@ always the same, so where frames fall doesn't depend on the silence before), its
 
 | Aspect | Features | Why |
 |---|---|---|
-| Timbre | MFCCs 1–12 of 40 mel bands (20 Hz–16 kHz), the mean over the sound, louder frames counting more (those 50 dB down not at all) | the spectral envelope, independent of level |
+| Timbre | MFCCs 1–12 of 40 mel bands (20 Hz–16 kHz; each floored 80 dB below the frame's loudest, so a band above a 22.05 kHz file's Nyquist frequency reads as quiet, not as silence 100 dB down), the mean over the sound, louder frames counting more (those 50 dB down not at all) | the spectral envelope, independent of level |
 | TimbreMotion | MFCCs 1–4 of the attack (first 30 ms), the body (to 250 ms) and the tail | a snare's crack and its ring, a clap's bursts: the best single aspect on real drums |
 | Spectrum | centroid and its spread over time, bandwidth, 85% roll-off (octaves), flatness (dB), the share below 120 Hz and above 8 kHz (dB), the attack's centroid | brightness, noisiness, sub-bass (808s), air (hats) |
 | Envelope | log attack time (20%→90% of the peak amplitude), effective duration (within 30 dB of the peak), temporal centroid, the level in eight octave-wide windows after the peak (20 ms … 2.6 s) | closed vs open hats, tight vs boomy kicks, one-shots vs pads |
 | Pitch | how periodic (YIN on 93 ms windows from the peak, down to 21.5 Hz), and that confidence times the pitch in octaves | tuned 808s and tonal one-shots near their pitch; noise near noise |
-| Rhythm | onsets per second after the first (spectral flux that also raises the level 3 dB), the file's length | loops apart from one-shots, a 4-bar loop apart from a 1-bar one |
+| Rhythm | onsets per second of the sound after the first (spectral flux that also raises the level 3 dB), the sound's length (the file's less silence before and after: within 60 dB of the peak) | loops apart from one-shots, a 4-bar loop apart from a 1-bar one |
 
 Frames are about 23 ms (1024 at 44.1/48 kHz), a quarter hop; the amplitude envelope is in 2 ms blocks. The FFTs are
 [Signalsmith Linear](../engine/third_party/signalsmith-linear)'s (vendored, header-only, the one Signalsmith Stretch uses
 in the engine): its real FFT for the frames (which hands the Nyquist bin over in bin 0's imaginary part), its complex
-one for YIN's autocorrelation. A part of a
+one for YIN's autocorrelation. Frames go on to the end of a sound that ends where its file does (past it is silence), so silence
+after a sound changes nothing. A part of a
 file (an audio clip's) is analysed from its start for its length. Files above 48 kHz are read at 48 kHz.
 
 ### Comparing ([Similarity.h](../intelligence/src/similarity/Similarity.h))

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """similarity_rater: rate sound triplets by ear, for the sound similarity's weights.
 
-    python rate.py triplets.tsv [--ratings ratings.tsv] [--port 8765] [--seconds 2.5]
+    python rate.py triplets.tsv [--ratings ratings.tsv] [--port 8765] [--seconds 2.5] [--names]
 
 Serves a page on http://127.0.0.1:<port>/ that plays each triplet (A, B, C) of
 triplets.tsv (written by sound_similarity_bench --triplets) and asks which of B
@@ -9,6 +9,9 @@ and C is more like A. Each answer is appended to ratings.tsv at once (next to
 the triplets by default), so stopping and starting again carries on where it
 was; sound_similarity_bench --ratings fits the weights to them
 (benchmarks/README.md, Weights from listening).
+
+--names shows the files' names (to listen to the misses sound_similarity_bench
+--misses writes, say; not while rating, where a name could sway the answer).
 
 Python 3.8 or newer, nothing else. The page only plays files named in the
 triplets, and only listens on this computer.
@@ -52,6 +55,7 @@ button:hover { border-color: var(--accent); }
 .keys { margin-top: 28px; color: var(--muted); font-size: 13px; }
 kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, monospace; }
 .done { padding: 40px 0; text-align: center; }
+.name { display: block; margin-top: 6px; font-size: 11px; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -60,9 +64,9 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 1
   <p class="sub">The one you'd rather swap in for A in a track. Go with your first impression.</p>
   <div id="rate">
     <div class="row">
-      <button class="sound" id="pa">A<small>1</small></button>
-      <button class="sound" id="pb">B<small>2</small></button>
-      <button class="sound" id="pc">C<small>3</small></button>
+      <button class="sound" id="pa">A<small>1</small><span class="name" id="na"></span></button>
+      <button class="sound" id="pb">B<small>2</small><span class="name" id="nb"></span></button>
+      <button class="sound" id="pc">C<small>3</small><span class="name" id="nc"></span></button>
     </div>
     <div class="row answers">
       <button id="ab">B is closer <small>&larr; / F</small></button>
@@ -135,6 +139,7 @@ async function next() {
   if (!r.triplet) { $("rate").hidden = true; $("done").hidden = false; current = null; return; }
   $("rate").hidden = false; $("done").hidden = true;
   current = r.triplet;
+  for (const slot of ["a", "b", "c"]) $("n" + slot).textContent = (current.names || {})[slot] || "";
   try { buffers = await load(current); }
   catch (e) { buffers = {}; $("progress").textContent += ` (couldn't play: ${e.message}; S skips it)`; return; }
   if (ctx && ctx.state === "running") playAll();
@@ -238,7 +243,7 @@ class Rater:
             f.writelines(lines)
 
 
-def handler(rater, seconds):
+def handler(rater, seconds, names):
     page = PAGE.replace("__SECONDS__", repr(float(seconds))).encode("utf-8")
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -260,7 +265,12 @@ def handler(rater, seconds):
             if self.path == "/":
                 self.send(200, page, "text/html; charset=utf-8")
             elif self.path == "/next":
-                self.json({"triplet": rater.next(), "done": len(rater.done), "total": len(rater.order)})
+                t = rater.next()
+                if t is not None:
+                    t = dict(t, names={k: os.path.basename(t[k]) for k in "abc"} if names else None)
+                    for k in "abc":
+                        del t[k]  # the page plays them by slot; it needn't know where they are
+                self.json({"triplet": t, "done": len(rater.done), "total": len(rater.order)})
             elif self.path.startswith("/audio/"):
                 parts = self.path.split("/")
                 t = rater.triplets.get(parts[2]) if len(parts) == 4 else None
@@ -297,10 +307,11 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--seconds", type=float, default=2.5, help="the most of each sound played")
     parser.add_argument("--no-browser", action="store_true", help="don't open the page")
+    parser.add_argument("--names", action="store_true", help="show the files' names (not while rating)")
     args = parser.parse_args()
     ratings = args.ratings or os.path.join(os.path.dirname(os.path.abspath(args.triplets)), "ratings.tsv")
     rater = Rater(args.triplets, ratings)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler(rater, args.seconds))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler(rater, args.seconds, args.names))
     url = f"http://127.0.0.1:{args.port}/"
     print(f"{len(rater.done)} of {len(rater.order)} rated; answers go to {ratings}")
     print(f"rating on {url} (Ctrl+C to stop; starting again carries on)")
