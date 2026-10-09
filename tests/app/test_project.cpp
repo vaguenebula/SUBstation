@@ -229,6 +229,12 @@ private Q_SLOTS:
         QVERIFY(findDevice(devices, "inner") != nullptr && findDevice(devices, "nowhere") == nullptr);
         QCOMPARE(containerOf(devices, "inner"), std::optional<QString>("deepChain"));
         QVERIFY(!containerOf(devices, "first") && !containerOf(devices, "nowhere"));
+        const ConstRackChain found = findChain(std::as_const(devices), "deepChain");
+        QVERIFY(found.rack == &devices[1].chains[0].devices[1] && found.chain == &found.rack->chains[0]);
+        QCOMPARE(findChain(devices, "c2").chain, &devices[1].chains[1]);  // (one to change in place)
+        QVERIFY(findChain(devices, "nowhere").rack == nullptr && findChain(devices, "nowhere").chain == nullptr);
+        QCOMPARE(chainIndex(rack, "c2"), 1);
+        QCOMPARE(chainIndex(rack, "deepChain"), -1);  // (a chain of a rack in it, not its own)
         QCOMPARE(chainDevices(devices, std::nullopt), &devices);
         QCOMPARE(chainDevices(devices, QString("c2"))->size(), size_t(0));
         QVERIFY(chainDevices(devices, QString("nowhere")) == nullptr);

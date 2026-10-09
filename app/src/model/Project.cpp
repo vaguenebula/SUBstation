@@ -402,10 +402,9 @@ std::optional<QString> Project::deviceOwner(const QString& deviceId) const {
 }
 
 const Chain& Project::chain(const QString& trackId, const QString& chainId) const {
-    for (const ConstRackChain& rc : iterChains(track(trackId).devices)) {
-        if (rc.chain->id == chainId) return *rc.chain;
-    }
-    missing("chain", chainId);
+    const Chain* found = findChain(track(trackId).devices, chainId).chain;
+    if (found == nullptr) missing("chain", chainId);
+    return *found;
 }
 
 Chain& Project::chainRef(const QString& trackId, const QString& chainId) {
@@ -413,10 +412,9 @@ Chain& Project::chainRef(const QString& trackId, const QString& chainId) {
 }
 
 const Device& Project::chainRack(const QString& trackId, const QString& chainId) const {
-    for (const ConstRackChain& rc : iterChains(track(trackId).devices)) {
-        if (rc.chain->id == chainId) return *rc.rack;
-    }
-    missing("chain", chainId);
+    const Device* rack = findChain(track(trackId).devices, chainId).rack;
+    if (rack == nullptr) missing("chain", chainId);
+    return *rack;
 }
 
 // --- Mutations ---

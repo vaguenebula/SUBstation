@@ -43,7 +43,7 @@ session's ([session.md](session.md)).
 | [Track.h](../../app/src/model/Track.h) | `Track`, `Freeze`, `MidiInput`, `Send`, `SendMap`, `EnvelopeMap`; `TrackField`/`TrackValue` (what `updateTrack` changes) and `trackFieldName`; the kinds (`kAudioKind`, `kMidiKind`, `kGroupKind`, `kReturnKind`, `kMasterKind`), `kMonitorModes`, `kTrackColors`, track heights; `newMaster`, `returnLetter` |
 | [TrackNames.h](../../app/src/model/TrackNames.h) | Track names: `#` for its number (`numberedName`), audio and MIDI tracks named by what they hold (`contentsLabel`, `contentsName`, `namedByContents`), names older projects had (`hasPlainName`, `plainNameTemplate`), `takeName` |
 | [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `PlayedNote`; `kWarpModes`, `legacyWarpMode`, `kMinSegmentBpm`, `kMaxSegmentBpm` |
-| [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kDefaultMacroCount`, `kMaxMacroCount`, `macroParam`, `macroIndex`, `macroCount`, `macroName`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
+| [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `findChain`, `chainIndex`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kDefaultMacroCount`, `kMaxMacroCount`, `macroParam`, `macroIndex`, `macroCount`, `macroName`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
 | [Devices.h](../../app/src/model/Devices.h) | Kinds of devices: `builtinDevices()`, `builtinDevice()`, `builtinCategories()` (from the engine), `kDefaultInstrument`; `isInstrument`, `deviceIsInstrument`, `loadsInto`, `deviceName`, `kindName`; `newDevice`, `newRack`, `newChain`; `builtinParamInfo`, `deviceIdsOf`, `deviceIdsOfList` |
 | [Routing.h](../../app/src/model/Routing.h) | The group tree (`TreeEntry`, `TrackTree`, `treeProblem`, `repairTree`) and the routing graph (`routingGraph`, `feeds`, `wouldCycle`, `inputWouldCycle`, `sidechainWouldCycle`) |
 | [Automation.h](../../app/src/model/Automation.h) | `AutomationPoint`, `Envelope`, `AutomationView`, `kMaster`; in `sub::app::automation`: target keys, the mixer's normalized mappings, evaluation (`valueAt`, `leftValue`, `shape`), every envelope edit |
@@ -169,6 +169,8 @@ Device ids are unique in the whole project, so a device is found wherever it sit
 - `iterDevices(devices)`: every device depth first (each, then what is in its chains).
 - `iterChains(devices)`: every (rack, chain) depth first.
 - `devicePath` / `deviceAt`: a device's place as (index, chain, index, chain, ...).
+- `findChain(devices, chain)`: a rack chain anywhere in a chain, and its rack (`Project::chain` and `chainRack` are
+  it on a track's devices); `chainIndex(rack, chain)`: where one of a rack's own chains is.
 - `chainDevices(devices, chain)`: the vector of a chain (none = the track's own), which edits change in place on a
   copy of the track's devices.
 - `containerOf`: the chain a device is in (none = the track's own).
