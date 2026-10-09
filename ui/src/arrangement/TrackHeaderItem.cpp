@@ -384,7 +384,7 @@ void TrackHeaderItem::connectAll() {
         }
         const app::Track* t = track();
         // What takes its output, goes into it or is in it shows its name.
-        if (t && (t->inputTrack == id || t->parent == id || outputTrack() == id || t->output.to == app::Output::To::Track))
+        if (t && (t->inputTrack == id || t->parent == id || outputTrack() == id))
             Q_EMIT changed();
         refreshSends();  // its sends or its input: which sends would close a cycle
     });
@@ -1363,21 +1363,19 @@ void TrackHeaderItem::paint(SgPainter& p) {
     };
     if (!strip) {
         // The fold button, in a circle. A track's: a triangle, pointing right
-        // while folded, down while open. A group's: three bars (its tracks), the
-        // circle filled while folded (its tracks tucked away).
+        // while folded, down while open. A group's: three bars (its tracks),
+        // folded or not, as Ableton's (folded, its height and its lane show it).
         const QRectF rect = foldRect();
         const QPointF c = rect.center();
         const double radius = 5.5;
         p.save();
         p.setAntialiasing(true);
-        if (t->isGroup() && t->folded) p.fillEllipse(c, radius + 0.6, radius + 0.6, ink);
         p.drawEllipse(QRectF(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius), ink, 1.2);
         if (t->isGroup()) {
-            const QColor bars = t->folded ? color : ink;
             for (const double dy : {-2.5, 0.0, 2.5}) {
                 const double half = dy == 0.0 ? 2.8 : 2.2;
                 const QRectF line(c.x() - half, c.y() + dy - 0.6, 2 * half, 1.2);
-                p.fillPolygon(QPolygonF({line.topLeft(), line.topRight(), line.bottomRight(), line.bottomLeft()}), bars);
+                p.fillPolygon(QPolygonF({line.topLeft(), line.topRight(), line.bottomRight(), line.bottomLeft()}), ink);
             }
         } else if (t->folded) {
             p.fillPolygon(QPolygonF({QPointF(c.x() - 1.5, c.y() - 3.0), QPointF(c.x() + 2.5, c.y()),
@@ -1392,7 +1390,7 @@ void TrackHeaderItem::paint(SgPainter& p) {
     }
     drawFrozen(strip ? 6 : foldRect().right() + 3);
     if (!renaming_) {
-        const QFont font = uiFont(9, isSelected || t->isGroup() || strip);
+        const QFont font = uiFont(9, isSelected || strip);
         const double nameX = nameLeft();
         const QRectF nameRect(nameX, kNamePad, nameRight_ - nameX, kNameButton);
         const QString name = isMaster() ? kMain : t->name;

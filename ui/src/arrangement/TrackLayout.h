@@ -35,10 +35,17 @@ inline constexpr int kAutomationLaneHeight = 44;  // a lane shown below a track 
 inline constexpr int kGroupIndent = 6;
 inline constexpr int kGroupBand = 6;
 inline constexpr int kGroupBlock = 38;
-// A folded track (or group): its name row, its buttons (16 px) 2 px from the
-// top and from the line below (its clips are bars, as in Ableton, as high as an
-// open track's clips' title bars: ArrangementLanes' kTitleHeight).
+// A folded track: its name row, its buttons (16 px) 2 px from the top and from
+// the line below (its clips are bars, as in Ableton, as high as an open track's
+// clips' title bars: ArrangementLanes' kTitleHeight).
 inline constexpr int kFoldedHeight = 21;
+// A folded group, as Ableton's: as tall as its colour's two rows while it is
+// open (kGroupBlock, and the line below): its name row, under it its volume and
+// pan; in its lane, its tracks' clips (kGroupSummaryRows rows at least).
+inline constexpr int kFoldedGroupHeight = kGroupBlock + 1;
+// A group's lane has a row per track in it, and at least this many (empty ones
+// below its tracks'), as Ableton's.
+inline constexpr int kGroupSummaryRows = 5;
 // A track's own lane while its automation shows: room in its header's name
 // column for the choosers (two rows and "+" under its name row; a group's
 // under the two rows of its colour).
@@ -63,8 +70,8 @@ struct LaneRow {
 };
 
 // A track: its own lane (clips; its automation too while that shows), then the
-// automation lanes shown below it. A folded track's (or group's) row is
-// kFoldedHeight high, and shows no automation. A folded
+// automation lanes shown below it. A folded track's row is kFoldedHeight high
+// (a folded group's kFoldedGroupHeight), and shows no automation. A folded
 // track (not a group) shows its clips as `bars`, as Ableton does: they are
 // clicked and dragged whole (all title); between them the row is a grid like
 // any other, to select time on.

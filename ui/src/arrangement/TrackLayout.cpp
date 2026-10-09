@@ -61,8 +61,8 @@ void TrackLayout::rebuild(const app::Project& project) {
         row.depth = depth;
         if (hidden) {
             row.hidden = true;
-        } else if (track.folded) {  // just its name row, no automation
-            row.mainHeight = kFoldedHeight;
+        } else if (track.folded) {  // just its name row (a group's two rows), no automation
+            row.mainHeight = track.isGroup() ? kFoldedGroupHeight : kFoldedHeight;
             row.folded = true;
             row.bars = !track.isGroup();
         } else {

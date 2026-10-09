@@ -119,7 +119,7 @@ makes one `Row` per track:
 | `lanes` | `LaneRow`s: the automation lanes shown below it, `kAutomationLaneHeight` (44 px) each |
 | `automation` | its automation shows |
 | `hidden` | it is in a folded group: a row with no height |
-| `folded` | it is folded itself: `kFoldedHeight` (21: its name row, 2 px above and below its 16 px buttons; its clips' title bars, as high as unfolded ones), a group's too, and no automation |
+| `folded` | it is folded itself, with no automation: a track `kFoldedHeight` (21: its name row, 2 px above and below its 16 px buttons; its clips' title bars, as high as unfolded ones), a group `kFoldedGroupHeight` (39, as Ableton's: as tall as its colour's two rows while it is open, `kGroupBlock`, and the line under it; its volume and pan in the second) |
 | `bars` | folded, and not a group: its clips are drawn and grabbed as bars, all title (see [hit-testing](#hit-testing)); between them its lane is a grid like any other |
 | `depth` | how many groups it is in (the header's indent, `kGroupIndent` 6 px a level) |
 
@@ -220,7 +220,8 @@ target's own value). `paint()` then draws only the rows that show, in this order
 2. The grid, all the way down (below the tracks too, where selecting works as well), and the loop region.
 3. For each row: a folded track's tint (under its clips' bars, which stay as they are); a group's summary
    (`drawGroupSummary()`, as Ableton's group lanes: a thin row per audio or MIDI track in the group, nested ones
-   too, in order, its clips as bars in whole pixels with a 1 px line between the rows while they have room;
+   too, in order, and `kGroupSummaryRows` (5) at least, empty ones below theirs (a group of one track has its clips
+   in the top fifth); its clips as bars in whole pixels with a 1 px line between the rows while they have room;
    each in its track's colour while the group is folded, the faint `kGroupOutline` while it is open, its tracks
    showing below it); its clips, but those the gesture hides; a frozen track's tint (`kFrozenTint`); the lines
    between its automation lanes; its bottom border.
@@ -438,11 +439,13 @@ column, from its indent, its **name bar** in its colour (`barColor()`), the name
 name row, a group's down to its choosers (`kGroupBlock`, 38 px: two rows) or, without them, all its name column;
 below, a shade of its colour (the header's ground tinted with it), the choosers' ground, as for each lane below it.
 On the name bar: the fold button (a triangle in a circle for a track, pointing right while folded; three bars in a
-circle, filled while folded, for a group), the snowflake of a frozen track (dimmer in a frozen group, not frozen
-itself), and its name. A return's name bar has no fold button; the master's is named "Main", as in Ableton 12.
+circle for a group, the same folded or open, as Ableton's), the snowflake of a frozen track (dimmer in a frozen group, not frozen
+itself), and its name (bold while it is selected, a return's and the master's always; a group's as a track's). A
+return's name bar has no fold button; the master's is named "Main", as in Ableton 12.
 The name bar, the fold button and every control are `kNameButton` (16 px) high, `kRow` (18 px) apart from
-`kNamePad` (2 px) below the top, so a folded track's (or group's) name row is centred in its 21 px (2 px above and
-below them, 4 px around the meter); its clips' title bars are on the same line.
+`kNamePad` (2 px) below the top, so a folded track's name row is centred in its 21 px (2 px above and below them,
+4 px around the meter), its clips' title bars on the same line, and a folded group's two rows (its name, Audio To,
+activator and solo; under them its In/Out column's second chooser, volume and pan) in its 39 px.
 
 The groups' bands are [GroupBands](../../ui/src/arrangement/GroupBands.h)', one item over the whole column (from the
 layout's rows) rather than each header's, so they run on from one header to the next: for each group shown, a band

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <vector>
 
 #include "ArrangementTestSupport.h"
 #include "model/Automation.h"
@@ -337,12 +338,15 @@ private Q_SLOTS:
             for (const arr::EnvelopeArea& area : lanes()->envelopeAreas()) QVERIFY(area.owner != a);
         }
 
-        // A folded group is its name row too (as high as a track's, as in Ableton), and hides its tracks.
+        // A folded group is two rows, taller than a folded track (as in Ableton:
+        // its name row, its volume and pan under it), and hides its tracks.
         fold(group);
         {
             const arr::Row row = h_->rowOf(group);
-            QVERIFY(h_->rowOf(a).mainHeight == row.mainHeight && row.mainHeight < height);
+            QCOMPARE(row.mainHeight, arr::kFoldedGroupHeight);
+            QVERIFY(h_->rowOf(a).mainHeight < row.mainHeight && row.mainHeight < height);
             QVERIFY(row.lanes.empty() && !row.automation);
+            QVERIFY(control(group, "volume")->isVisible() && control(group, "pan")->isVisible());
             QQuickItem* chooser = control(group, "deviceChooser");
             QVERIFY(!chooser || !chooser->isVisible());
             QVERIFY(h_->rowOf(b).hidden);
@@ -449,11 +453,12 @@ private Q_SLOTS:
         }
     }
 
-    // A folded track's and a folded group's name rows (as high, as in Ableton)
-    // sit in the middle of what they have: as much room above the buttons, the
-    // meter, the first In/Out chooser and the fold button as below them,
-    // selected or not.
-    void foldedHeadersPadTheirNameRowEvenly() {
+    // A folded track's name row sits in the middle of what it has: as much room
+    // above the buttons, the meter, the first In/Out chooser and the fold button
+    // as below them, selected or not. A folded group has two rows (as in
+    // Ableton: as tall as its colour while it is open), volume, pan and the In/Out
+    // column's second chooser in the second, as evenly.
+    void foldedHeadersPadTheirRowsEvenly() {
         const QStringList ids = makeTracks(2);
         const QString group = editor().groupTracks({ids[1]});
         h_->settle();
@@ -461,19 +466,29 @@ private Q_SLOTS:
         editor().setFolded(group, true);
         h_->settle();
         QCOMPARE(h_->rowOf(ids[0]).mainHeight, arr::kFoldedHeight);
-        QCOMPARE(h_->rowOf(group).mainHeight, arr::kFoldedHeight);
+        QCOMPARE(h_->rowOf(group).mainHeight, arr::kFoldedGroupHeight);
         for (const QString& id : {ids[0], group}) {
+            const bool isGroup = id == group;
             TrackHeaderItem* h = header(id);
             const double top = 0.0;
             const double bottom = h->mainHeight() - 1;  // (the line under it)
-            QVERIFY(control(id, id == group ? "output" : "input")->isVisible());  // (the In/Out column's first row)
-            QVERIFY(!control(id, id == group ? "outputChannel" : "inputChannel")->isVisible());
-            for (const char* name : {"activator", "solo", "meter", id == group ? "output" : "input"}) {
-                const QRectF r = geometryOf(control(id, name));
-                QVERIFY2(r.top() - top == bottom - r.bottom(), name);
-            }
-            const QRectF fold = h->foldRect();
-            QCOMPARE(fold.center().y() - top, bottom - fold.center().y());
+            const char* first = isGroup ? "output" : "input";  // (the In/Out column's first row)
+            const char* second = isGroup ? "outputChannel" : "inputChannel";
+            QVERIFY(control(id, first)->isVisible());
+            QCOMPARE(control(id, second)->isVisible(), isGroup);
+            QCOMPARE(control(id, "volume")->isVisible(), isGroup);
+            QCOMPARE(control(id, "pan")->isVisible(), isGroup);
+            // The first row as far from the top as the last from the line under it.
+            const double pad = geometryOf(control(id, "activator")).top() - top;
+            for (const char* name : {"activator", "solo", first})
+                QVERIFY2(geometryOf(control(id, name)).top() - top == pad, name);
+            const auto lastRow = isGroup ? std::vector<const char*>{"volume", "pan", second}
+                                         : std::vector<const char*>{"activator", "solo", first};
+            for (const char* name : lastRow) QVERIFY2(bottom - geometryOf(control(id, name)).bottom() == pad, name);
+            const QRectF meter = geometryOf(control(id, "meter"));
+            QCOMPARE(meter.top() - top, bottom - meter.bottom());
+            // The fold button is on the name row.
+            QCOMPARE(h->foldRect().center().y(), geometryOf(control(id, "activator")).center().y());
             for (bool selected : {false, true}) {
                 selection().selectTrack(selected ? id : QString());
                 h_->settle();
@@ -563,6 +578,45 @@ private Q_SLOTS:
         test::screenshot(window(), QStringLiteral("arrangement_folded_group"));
         QVERIFY(red(colorAt(1.5)));  // folded: it is
         QVERIFY(!red(colorAt(10.0)));  // (where no clip is)
+    }
+
+    // As in Ableton, a group's lane has a row per track in it, and five at
+    // least: a group of one track shows its clips in the top fifth of the lane,
+    // empty rows below them. Its fold button is the same folded as open (three
+    // bars in a circle, not filled in).
+    void aGroupsLaneHasFiveRowsAtLeast() {
+        const QStringList ids = makeTracks(1);
+        const QString group = editor().groupTracks({ids[0]});
+        editor().setTrackColor(ids[0], QStringLiteral("#ff2020"));
+        h_->settle();
+        auto pixel = [&](const QPoint& p) {
+            const qreal dpr = window()->effectiveDevicePixelRatio();
+            return window()->grabWindow().pixelColor(int(p.x() * dpr), int(p.y() * dpr));
+        };
+        // The fold button, drawn the same folded as open.
+        auto foldButton = [&] {
+            TrackHeaderItem* h = header(group);
+            const qreal dpr = window()->effectiveDevicePixelRatio();
+            const QRectF r = h->mapRectToScene(h->foldRect());
+            return window()->grabWindow().copy(QRectF(r.topLeft() * dpr, r.size() * dpr).toAlignedRect());
+        };
+        const QImage open = foldButton();
+        editor().setFolded(group, true);
+        h_->settle();
+        QCOMPARE(foldButton(), open);
+
+        const arr::Row row = h_->rowOf(group);
+        QCOMPARE(row.mainHeight, arr::kFoldedGroupHeight);
+        const double x = std::round(arrangement()->view().beatToX(1.5)) + 0.5;
+        auto red = [&](double offset) {
+            const QColor c = pixel(h_->at(QPointF(x, row.top - arrangement()->scrollY() + offset)));
+            return c.red() > 150 && c.green() < 100 && c.blue() < 100;
+        };
+        // The lane's rows: a fifth each of what is from 2 px under its top to 3 px over its bottom.
+        const double share = (arr::kFoldedGroupHeight - 5) / double(arr::kGroupSummaryRows);
+        QVERIFY(red(2 + share / 2));  // its track's clip, in the first
+        for (int i = 1; i < arr::kGroupSummaryRows; ++i) QVERIFY(!red(2 + (i + 0.5) * share));  // the rest empty
+        test::screenshot(window(), QStringLiteral("arrangement_folded_group_rows"));
     }
 
     void foldingOneOfTheSelectedTracksFoldsThemAll() {
