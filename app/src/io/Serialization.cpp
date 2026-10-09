@@ -349,6 +349,24 @@ QJsonObject masterToJson(const Track& master) {
             {QStringLiteral("automation_view"), viewToJson(master.automationView)}};
 }
 
+// Where a track's output goes, unless into its group (the default: none).
+std::optional<QJsonObject> outputToJson(const Output& output) {
+    switch (output.to) {
+    case Output::To::Group: return std::nullopt;
+    case Output::To::Master: return QJsonObject{{QStringLiteral("to"), QStringLiteral("master")}};
+    case Output::To::None: return QJsonObject{{QStringLiteral("to"), QStringLiteral("none")}};
+    case Output::To::Track:
+        return QJsonObject{{QStringLiteral("to"), QStringLiteral("track")}, {QStringLiteral("track"), output.id}};
+    case Output::To::Sidechain:
+        return QJsonObject{{QStringLiteral("to"), QStringLiteral("sidechain")}, {QStringLiteral("device"), output.id}};
+    }
+    return std::nullopt;
+}
+
+void addOutput(QJsonObject& data, const Output& output) {
+    if (const auto json = outputToJson(output)) data[QStringLiteral("output")] = *json;
+}
+
 QJsonObject trackToJson(const Track& t, const QString& base) {
     QJsonObject data;
     data[QStringLiteral("id")] = t.id;
@@ -370,6 +388,7 @@ QJsonObject trackToJson(const Track& t, const QString& base) {
     for (int channel : t.input) input.append(channel);
     data[QStringLiteral("input")] = input;
     if (t.inputTrack) data[QStringLiteral("input_track")] = *t.inputTrack;
+    if (t.inputTap != kPostFader) data[QStringLiteral("input_tap")] = t.inputTap;
     if (t.isMidi()) {
         data[QStringLiteral("midi_input")] =
             t.midiInput ? QJsonValue(midiInputToJson(*t.midiInput)) : QJsonValue(QJsonValue::Null);
@@ -379,6 +398,7 @@ QJsonObject trackToJson(const Track& t, const QString& base) {
     data[QStringLiteral("parent")] = optionalString(t.parent);
     data[QStringLiteral("folded")] = t.folded;
     data[QStringLiteral("sends")] = sendsToJson(t.sends);
+    addOutput(data, t.output);
     addFreeze(data, t.frozen, base);
     return data;
 }
@@ -397,11 +417,30 @@ QJsonObject returnToJson(const Track& t, const QString& base) {
                      {QStringLiteral("automation"), automationToJson(t.automation)},
                      {QStringLiteral("automation_view"), viewToJson(t.automationView)},
                      {QStringLiteral("sends"), sendsToJson(t.sends)}};
+    addOutput(data, t.output);
     addFreeze(data, t.frozen, base);
     return data;
 }
 
 // --- Reading ---
+
+// Where a track's output goes (into its group: none there, or one this version doesn't know).
+Output outputFromJson(const QJsonValue& value) {
+    if (!value.isObject()) return {};
+    const QJsonObject data = value.toObject();
+    const QString to = data.value(QStringLiteral("to")).toString();
+    if (to == u"master") return Output::master();
+    if (to == u"none") return Output::none();
+    const QJsonValue track = data.value(QStringLiteral("track")), device = data.value(QStringLiteral("device"));
+    if (to == u"track" && track.isString()) return Output::track(track.toString());
+    if (to == u"sidechain" && device.isString()) return Output::sidechain(device.toString());
+    return {};
+}
+
+QString inputTapFromJson(const QJsonValue& value) {
+    const QString tap = value.toString();
+    return tap == kPreFader || tap == kPreFx ? tap : kPostFader;
+}
 
 std::optional<Sidechain> sidechainFromJson(const QJsonValue& value) {
     if (!value.isObject()) return std::nullopt;
@@ -647,6 +686,7 @@ Track returnFromJson(const QJsonValue& value, const QString& base) {
     track.automation = automationFromJson(t.value(QStringLiteral("automation")));
     track.automationView = viewFromJson(t.value(QStringLiteral("automation_view")));
     track.sends = sendsFromJson(t.value(QStringLiteral("sends")));
+    track.output = outputFromJson(t.value(QStringLiteral("output")));
     track.frozen = freezeFromJson(t.value(QStringLiteral("frozen")), base);
     return track;
 }
@@ -837,6 +877,42 @@ void repairRouting(std::vector<Track>& tracks, std::vector<Track>& returns, Trac
             }
         }
     }
+    // Outputs into the master, or nowhere, are kept; into a track or a device's
+    // sidechain if it is there (the track an audio track, not the one's own
+    // group), one by one unless they close a cycle with those before them.
+    std::vector<Output> outputs;
+    for (auto* list : {&tracks, &returns}) {
+        for (Track& t : *list) {
+            outputs.push_back(t.output);
+            t.output = {};
+        }
+    }
+    QSet<QString> audioTracks, deviceIds;
+    for (const Track& t : tracks) {
+        if (t.isAudio()) audioTracks.insert(t.id);
+    }
+    for (const auto* list : {&tracks, &returns}) {
+        for (const Track& t : *list) {
+            for (const Device* d : iterDevices(t.devices)) deviceIds.insert(d->id);
+        }
+    }
+    if (master != nullptr) {
+        for (const Device* d : iterDevices(master->devices)) deviceIds.insert(d->id);
+    }
+    {
+        size_t i = 0;
+        for (auto* list : {&tracks, &returns}) {
+            for (Track& t : *list) {
+                Output output = outputs[i++];
+                if (output.to == Output::To::Master && !t.parent) output = {};  // (the same)
+                if (output.to == Output::To::Track && t.parent == output.id) output = {};
+                const bool there = output.to == Output::To::Track       ? audioTracks.contains(output.id) && output.id != t.id
+                                   : output.to == Output::To::Sidechain ? deviceIds.contains(output.id)
+                                                                        : true;
+                if (there && !outputWouldCycle(tracks, returns, t.id, output)) t.output = output;
+            }
+        }
+    }
     QSet<QString> sources = ids;
     for (const Track& t : tracks) sources.insert(t.id);
     sources.insert(kMaster);
@@ -943,6 +1019,7 @@ std::vector<Track> tracksFromJson(const QJsonObject& data, const QString& projec
         track.automationView = viewFromJson(t.value(QStringLiteral("automation_view")));
         track.input = inputFromJson(t.value(QStringLiteral("input")));
         track.inputTrack = stringOrNone(t.value(QStringLiteral("input_track")));
+        track.inputTap = inputTapFromJson(t.value(QStringLiteral("input_tap")));
         // MIDI tracks saved before there was MIDI input hear every input.
         track.midiInput = kind == kMidiKind ? midiInputFromJson(t.value(QStringLiteral("midi_input"))) : MidiInput{};
         const QJsonValue monitor = t.value(QStringLiteral("monitor"));
@@ -952,6 +1029,7 @@ std::vector<Track> tracksFromJson(const QJsonObject& data, const QString& projec
         track.parent = stringOrNone(t.value(QStringLiteral("parent")));
         track.folded = truthy(t.value(QStringLiteral("folded")));
         track.sends = sendsFromJson(t.value(QStringLiteral("sends")));
+        track.output = outputFromJson(t.value(QStringLiteral("output")));
         track.frozen = freezeFromJson(t.value(QStringLiteral("frozen")), base);
         // Saved before tracks were numbered by their place, as new ones were named ("3 Audio"): so now.
         // (Since then, such a name is one typed: it stays.)

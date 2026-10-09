@@ -45,7 +45,7 @@ EngineBridge::EngineBridge(sub::Engine& engine, Project* project, QObject* paren
             [this](const QString& trackId, int) { guarded("returnRemoved", [&] { onTrackRemoved(trackId); }); });
     connect(project, &Project::trackChanged, this,
             [this](const QString& trackId) { guarded("trackChanged", [&] { onTrackChanged(trackId); }); });
-    connect(project, &Project::tracksArranged, this, [this] { guarded("tracksArranged", [&] { pushOutputs(); }); });
+    connect(project, &Project::tracksArranged, this, [this] { guarded("tracksArranged", [&] { pushRoutes(); }); });
     connect(project, &Project::clipsChanged, this,
             [this](const QString& trackId) { guarded("clipsChanged", [&] { pushClips(trackId); }); });
     connect(project, &Project::devicesChanged, this,

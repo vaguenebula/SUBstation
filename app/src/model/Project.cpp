@@ -226,6 +226,16 @@ std::vector<const Track*> Project::sendTargets(const QString& trackId) const {
     return targets;
 }
 
+// --- Outputs ---
+
+bool Project::outputWouldCycle(const QString& trackId, const Output& output) const {
+    return sub::app::outputWouldCycle(tracks_, returns_, trackId, output);
+}
+
+std::optional<QString> Project::outputTarget(const QString& trackId) const {
+    return sub::app::outputTarget(track(trackId), tracks_, returns_);
+}
+
 // --- Groups ---
 
 int Project::subtreeEnd(int index) const {

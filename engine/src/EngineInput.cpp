@@ -24,20 +24,34 @@ void Engine::setTrackInput(uint32_t trackId, const std::vector<int>& channels) {
     rebuildSnapshotLocked();
 }
 
-void Engine::setTrackInputTrack(uint32_t trackId, uint32_t sourceTrackId) {
+void Engine::setTrackInputTrack(uint32_t trackId, uint32_t sourceTrackId, SidechainTap tap, uint32_t tapProcessorId) {
     std::lock_guard lock(mutex_);
     TrackModel& track = arrangementTrackLocked(trackId);
     if (sourceTrackId != kMaster) {
         arrangementTrackLocked(sourceTrackId);
-        if (wouldCycle(static_cast<int>(tracks_.size()), routeEdgesLocked(), trackIndexLocked(sourceTrackId),
+        if (track.inputTrack != sourceTrackId &&
+            wouldCycle(static_cast<int>(tracks_.size()), routeEdgesLocked(), trackIndexLocked(sourceTrackId),
                        trackIndexLocked(trackId))) {
             throw std::invalid_argument("Track " + std::to_string(trackId) + " can't take its input from track " +
                                         std::to_string(sourceTrackId) + ": it feeds that track");
         }
     }
-    if (track.inputTrack == sourceTrackId) return;
+    if (sourceTrackId == kMaster) tap = SidechainTap::PostFader;  // (resampling: the mix as it is heard)
+    if (tap == SidechainTap::AfterDevice) {  // one of its devices: in its own chain, or in a rack's there
+        const auto found = processors_.find(tapProcessorId);
+        if (found == processors_.end() || chainLocked(found->second.chainId).stripId != sourceTrackId) {
+            throw std::invalid_argument("Device " + std::to_string(tapProcessorId) + " is not on track " +
+                                        std::to_string(sourceTrackId));
+        }
+    } else {
+        tapProcessorId = 0;
+    }
+    if (track.inputTrack == sourceTrackId && track.inputTap == tap && track.inputTapProcessor == tapProcessorId) return;
     track.inputTrack = sourceTrackId;
-    if (!track.inputState) track.inputState = std::make_shared<EdgeState>(0);  // (it never needs a signal of its own)
+    track.inputTap = tap;
+    track.inputTapProcessor = tapProcessorId;
+    // A signal of its own only when tapped before the source's fader (the snapshot sees to it).
+    if (!track.inputState) track.inputState = std::make_shared<EdgeState>(0);
     rebuildSnapshotLocked();
 }
 
@@ -92,9 +106,9 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
     const auto lag = static_cast<int64_t>(snapshotHold_->outputLatency());
     const int64_t devicePlacement = lag + state.inputLatency + state.outputLatency;
     const int64_t midiPlacement = lag + state.outputLatency + shared_.midiInputDelay.load();
-    const auto arrival = [this](uint32_t trackId) -> int64_t {
+    const auto arrival = [this](uint32_t trackId) -> int64_t {  // (the track recording: where its input edge leaves its source)
         for (const TrackRender& render : snapshotHold_->tracks) {
-            if (render.id == trackId) return render.inputLatency + render.latency;
+            if (render.id == trackId) return render.input.arrival;
         }
         return 0;
     };
@@ -127,7 +141,7 @@ void Engine::startRecording(const std::vector<RecordTarget>& targets, double cou
             case InputEdge::Source::Track:
                 takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path,
                                                                 RecordingTake::Source::Track, *track.inputTrack,
-                                                                ringFrames, arrival(*track.inputTrack)));
+                                                                ringFrames, arrival(target.trackId)));
                 break;
             case InputEdge::Source::Master:
                 takes.push_back(std::make_unique<RecordingTake>(target.trackId, target.path,

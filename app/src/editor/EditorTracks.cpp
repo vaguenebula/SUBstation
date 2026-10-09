@@ -160,6 +160,7 @@ void ProjectEditor::deleteTracks(const QStringList& trackIds) {
     const QSet<QString> going = doomed | returns;
     dropInputs(going, text);  // (first: undo brings them back after their sources)
     dropSidechains(going, text);
+    dropOutputs(going, {}, text);
     // The last first: undo brings back each group before what is in it.
     QStringList removed;
     for (auto it = p.tracks().rbegin(); it != p.tracks().rend(); ++it) {
@@ -291,12 +292,15 @@ void ProjectEditor::arrange(const TrackTree& tree, const QString& text, const QS
         Q_EMIT refused(*problem);
         return;
     }
-    // A track taking its input from a group it comes into (or from what that
-    // group feeds) loses that input first: it would close a cycle; and so does
-    // a device taking its sidechain from one. Copies, without their inputs and
-    // sidechains, which come back one by one unless they close a cycle with
-    // those before them. (Their devices only as far as sidechains go: those
-    // kept, one by one, flat.)
+    // A track going into another group goes into it (its output, as in
+    // Ableton, whatever it was); one whose output would close a cycle goes into
+    // its group too. A track taking its input from a group it comes into (or
+    // from what that group feeds) loses that input first: it would close a
+    // cycle; and so does a device taking its sidechain from one. Copies, with
+    // their outputs into their groups and without their inputs and sidechains,
+    // which come back one by one unless they close a cycle with those before
+    // them. (Their devices only as far as sidechains go: those kept, one by one,
+    // flat. An output into a device stands for one into its track.)
     QHash<QString, std::optional<QString>> parents;
     for (const TreeEntry& entry : tree) parents.insert(entry.id, entry.parent);
     std::vector<Track> tracks;
@@ -304,10 +308,37 @@ void ProjectEditor::arrange(const TrackTree& tree, const QString& text, const QS
         Track copy = skeleton(t);
         copy.parent = parents.value(t.id);
         copy.inputTrack.reset();
+        copy.output = {};
         tracks.push_back(std::move(copy));
     }
     std::vector<Track> returns;
-    for (const Track& r : p.returns()) returns.push_back(skeleton(r));
+    for (const Track& r : p.returns()) {
+        Track copy = skeleton(r);
+        copy.output = {};
+        returns.push_back(std::move(copy));
+    }
+    QStringList regrouped;  // whose outputs go into their groups
+    const auto restoreOutput = [&](Track& copy, const Track& original) {
+        Output output = original.output;
+        if (output.isDefault()) return;
+        const bool intoAnother = copy.parent && copy.parent != original.parent;
+        if (intoAnother || (output.to == Output::To::Master && !copy.parent) ||
+            (output.to == Output::To::Track && copy.parent == output.id)) {
+            regrouped.append(copy.id);
+            return;
+        }
+        if (output.to == Output::To::Sidechain) {
+            const auto owner = p.deviceOwner(output.id);
+            output = owner && *owner != kMaster ? Output::track(*owner) : Output::none();
+        }
+        if (outputWouldCycle(tracks, returns, copy.id, output)) {
+            regrouped.append(copy.id);
+        } else {
+            copy.output = output;
+        }
+    };
+    for (std::size_t i = 0; i < tracks.size(); ++i) restoreOutput(tracks[i], p.tracks()[i]);
+    for (std::size_t i = 0; i < returns.size(); ++i) restoreOutput(returns[i], p.returns()[i]);
     QStringList cycling;
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         const auto& source = p.tracks()[i].inputTrack;
@@ -337,11 +368,14 @@ void ProjectEditor::arrange(const TrackTree& tree, const QString& text, const QS
     };
     for (std::size_t i = 0; i < tracks.size(); ++i) check(tracks[i], p.tracks()[i]);
     for (std::size_t i = 0; i < returns.size(); ++i) check(returns[i], p.returns()[i]);
-    if (cycling.isEmpty() && cyclingSidechains.empty()) {
+    if (cycling.isEmpty() && cyclingSidechains.empty() && regrouped.isEmpty()) {
         push(std::make_unique<ArrangeTracksCommand>(project_, p.tree(), tree, text));
         return;
     }
     Macro macro(undoStack_, text);
+    for (const QString& id : regrouped) {
+        push(std::make_unique<UpdateTrackCommand>(project_, id, TrackField::Output, p.track(id).output, Output{}, text));
+    }
     for (const QString& id : cycling) {
         push(std::make_unique<UpdateTrackCommand>(project_, id, TrackField::InputTrack, p.track(id).inputTrack,
                                                   std::optional<QString>(), text));
@@ -412,6 +446,7 @@ void ProjectEditor::ungroup(const QStringList& groupIds) {
     const QSet<QString> going(groups.begin(), groups.end());
     dropInputs(going, text);
     dropSidechains(going, text);
+    dropOutputs(going, {}, text);
     TrackTree tree = p.tree();
     for (const QString& groupId : groups) {
         std::optional<QString> parent;
@@ -516,6 +551,7 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
     std::tie(index, parent) = outsideFrozen(index, parent);
     std::vector<Track> copies;
     QSet<QString> folded;
+    QHash<QString, QString> deviceCopies;  // the copied devices' (and rack chains') ids: the copies'
     for (const Track& original : copied.tracks) {
         Track track = original;
         track.id = renamed.value(original.id);
@@ -547,6 +583,7 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
         }
         for (auto it = ids.constBegin(); it != ids.constEnd(); ++it) {
             if (copied.folded.contains(it.key())) folded.insert(it.value());
+            deviceCopies.insert(it.key(), it.value());
         }
         if (track.inputTrack) track.inputTrack = source(*track.inputTrack);
         SendMap sends;
@@ -564,6 +601,31 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
         if (view.key && !view.key->isEmpty()) view.key = renamedKey(*view.key, ids);
         for (QString& lane : view.lanes) lane = renamedKey(lane, ids);
         copies.push_back(std::move(track));
+    }
+    // Outputs: into the copy of a copied track (or device), or into the one
+    // they went into if it is still there; a copy going into another group than
+    // its original's goes into that group, as a track moved there does.
+    for (Track& track : copies) {
+        Output& output = track.output;
+        const Track& original = copied.tracks[static_cast<std::size_t>(&track - copies.data())];
+        if (output.to == Output::To::Track) {
+            if (renamed.contains(output.id)) {
+                output.id = renamed.value(output.id);
+            } else if (!p.hasTrack(output.id)) {
+                output = {};
+            }
+        } else if (output.to == Output::To::Sidechain) {
+            if (deviceCopies.contains(output.id)) {
+                output.id = deviceCopies.value(output.id);
+            } else if (!p.deviceOwner(output.id)) {
+                output = {};
+            }
+        }
+        const bool intoAnother = copied.roots.contains(original.id) && track.parent && track.parent != original.parent;
+        if (intoAnother || (output.to == Output::To::Master && !track.parent) ||
+            (output.to == Output::To::Track && track.parent == output.id)) {
+            output = {};
+        }
     }
     p.addFoldedDevices(folded);
     QStringList made;
@@ -762,6 +824,65 @@ void ProjectEditor::dropSidechains(const QSet<QString>& sourceIds, const QString
     for (const Keyed& keyed : dropped) {
         push(std::make_unique<SetDeviceSidechainCommand>(project_, keyed.trackId, keyed.deviceId, keyed.sidechain,
                                                          std::nullopt, text));
+    }
+}
+
+void ProjectEditor::setTrackInputTap(const QString& trackId, const QString& tap) {
+    if (tap != kPostFader && tap != kPreFader && tap != kPreFx) {
+        throw EditError(QStringLiteral("An input is taken before a track's devices, before its fader or after it"));
+    }
+    const QString old = project_->track(trackId).inputTap;
+    if (tap != old) {
+        push(std::make_unique<UpdateTrackCommand>(project_, trackId, TrackField::InputTap, old, tap,
+                                                  QStringLiteral("Change Track Input")));
+    }
+}
+
+void ProjectEditor::setTrackOutput(const QString& trackId, const Output& wanted) {
+    const Project& p = *project_;
+    const Track& track = p.track(trackId);
+    if (track.isMaster()) throw EditError(QStringLiteral("The master plays on the audio device's outputs"));
+    Output output = wanted;
+    // Into its own group, or into the master from outside one: into its group.
+    if ((output.to == Output::To::Master && !track.parent) || (output.to == Output::To::Track && track.parent == output.id)) {
+        output = {};
+    }
+    if (output.to == Output::To::Track) {
+        const Track* target = p.hasTrack(output.id) ? &p.track(output.id) : nullptr;
+        if (target == nullptr || !target->isAudio() || output.id == trackId) {
+            throw EditError(QStringLiteral("%1 can only go into an audio track (or its group)").arg(track.name));
+        }
+    }
+    if (output.to == Output::To::Sidechain && !p.deviceOwner(output.id)) {
+        throw EditError(QStringLiteral("There is no such device for %1 to go into").arg(track.name));
+    }
+    if (p.outputWouldCycle(trackId, output)) {
+        throw EditError(QStringLiteral("%1 can't go there: that track takes what %1 puts out").arg(track.name));
+    }
+    if (output != track.output) {
+        push(std::make_unique<UpdateTrackCommand>(project_, trackId, TrackField::Output, track.output, output,
+                                                  QStringLiteral("Change Track Output")));
+    }
+}
+
+void ProjectEditor::dropOutputs(const QSet<QString>& trackIds, const QSet<QString>& deviceIds, const QString& text) {
+    const Project& p = *project_;
+    QSet<QString> devices = deviceIds;
+    for (const QString& id : trackIds) {
+        if (!p.hasOwner(id)) continue;
+        for (const Device* d : iterDevices(p.track(id).devices)) devices.insert(d->id);
+    }
+    QStringList dropped;
+    for (const Track* t : p.senders()) {
+        if (trackIds.contains(t->id)) continue;  // (going too)
+        const Output& output = t->output;
+        if ((output.to == Output::To::Track && trackIds.contains(output.id)) ||
+            (output.to == Output::To::Sidechain && devices.contains(output.id))) {
+            dropped.append(t->id);
+        }
+    }
+    for (const QString& id : dropped) {
+        push(std::make_unique<UpdateTrackCommand>(project_, id, TrackField::Output, p.track(id).output, Output{}, text));
     }
 }
 

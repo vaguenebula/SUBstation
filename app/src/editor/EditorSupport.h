@@ -43,6 +43,7 @@ inline Track skeleton(const Track& track) {
     copy.parent = track.parent;
     copy.inputTrack = track.inputTrack;
     copy.sends = track.sends;
+    copy.output = track.output;
     return copy;
 }
 

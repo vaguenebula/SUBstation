@@ -342,6 +342,14 @@ void Engine::moveProcessor(uint32_t processorId, uint32_t toChainId, int index) 
     if (from.stripId != to.stripId) {
         if (entry.sidechain) checkSidechainLocked(entry.sidechain->source, to.stripId);
         if (entry.rack) checkRackSidechainsLocked(processorId, to.stripId);
+        // And the tracks whose output goes into its sidechain (or into one in it).
+        std::vector<uint32_t> moving{processorId}, chains;
+        if (entry.rack) rackContentsLocked(processorId, moving, chains);
+        for (const TrackModel& track : tracks_) {
+            if (track.outputProcessor != 0 && std::find(moving.begin(), moving.end(), track.outputProcessor) != moving.end()) {
+                checkSidechainLocked(track.id, to.stripId);
+            }
+        }
     }
     std::erase(from.inserts, processor);
     to.inserts.insert(to.inserts.begin() + insertPosition(index, to.inserts.size()), processor);

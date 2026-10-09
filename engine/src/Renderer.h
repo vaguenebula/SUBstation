@@ -194,6 +194,7 @@ private:
         std::vector<float> audible;   // the fader's mute (and solo) ramp, for pre-fader taps
         std::vector<float> edgeGain;  // an automated send level, per sample
         std::vector<float> activator;  // a track's automated switch, per sample (fillSwitch)
+        std::vector<float> keyLeft, keyRight;  // a device's sidechain, summed from several edges
         std::vector<float> switchStates;  // fillSwitch's: the switch's states, from a fade before the chunk
         // A device switched by its automation, in a chain this deep (a strip's
         // own: 0): its gain per sample (fillSwitch) and its input, passed on.
@@ -323,7 +324,8 @@ private:
                       bool monitored, int depth, WorkerScratch& scratch) noexcept;
     // One device (not a rack) of a chain over the slices, with its automation and sidechain.
     void processDevice(const RenderSnapshot& snap, const StripRender& chain, size_t i, ProcessContext& context,
-                       const Slices& slices, ProcessEvent* events, float* left, float* right) noexcept;
+                       const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
+                       WorkerScratch& scratch) noexcept;
     DelayLine* switchDelayLine(const SwitchRender& device) const noexcept;
     // A switch's lane as a gain per sample over the chunk: 1 where it is on, 0
     // where it is off, fading over switchFade() samples after each switch (the

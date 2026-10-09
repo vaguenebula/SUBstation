@@ -200,8 +200,21 @@ public:
     // instead of device channels; none: no input. EditError for a source it
     // can't take (itself, one it feeds: a cycle; not an audio track).
     void setTrackInputTrack(const QString& trackId, const std::optional<QString>& sourceId);
+    // Where an input from a track's output is taken: kPostFader (Ableton's Post
+    // Mixer), kPreFader (Post FX) or kPreFx (Pre FX: a MIDI track's after its
+    // instrument). EditError for another.
+    void setTrackInputTap(const QString& trackId, const QString& tap);
     // One of kMonitorModes; EditError for another.
     void setTrackMonitor(const QString& trackId, const QString& mode);
+
+    // Outputs.
+    // Where a track's (or a return's) output goes (Ableton's Audio To): into
+    // its group (outside one, the master), the master, an audio track's input
+    // (Track In; its own group stands for "into its group"), a device's sidechain
+    // input (on a track, a return or the master), or nowhere (Sends Only).
+    // EditError for one it can't go into: itself, a device on itself, one it
+    // feeds (a cycle), a track that isn't an audio track, a device that isn't there.
+    void setTrackOutput(const QString& trackId, const Output& output);
     // A MIDI track's MIDI input (none: none). EditError for a channel out of 0..16.
     void setTrackMidiInput(const QString& trackId, const std::optional<MidiInput>& midiInput);
 
@@ -643,6 +656,9 @@ public:
     // sourceId "": no input.
     Q_INVOKABLE bool trySetTrackInputTrack(const QString& trackId, const QString& sourceId);
     Q_INVOKABLE bool trySetTrackMonitor(const QString& trackId, const QString& mode);
+    Q_INVOKABLE bool trySetTrackInputTap(const QString& trackId, const QString& tap);
+    // to: "group", "master", "track" (id: the track's), "sidechain" (id: the device's) or "none".
+    Q_INVOKABLE bool trySetTrackOutput(const QString& trackId, const QString& to, const QString& id = {});
     // `enabled` false: no MIDI input. device "": every input; channel 0: every channel.
     Q_INVOKABLE bool trySetTrackMidiInput(const QString& trackId, bool enabled, const QString& device = {},
                                           int channel = 0);
@@ -692,6 +708,9 @@ private:
                              const QString& text);
     void setInput(const QString& trackId, const std::vector<int>& channels, const std::optional<QString>& sourceId);
     void dropInputs(const QSet<QString>& sourceIds, const QString& text);
+    // The outputs into these tracks, or into these devices (or devices on these
+    // tracks), go into their groups.
+    void dropOutputs(const QSet<QString>& trackIds, const QSet<QString>& deviceIds, const QString& text);
     void dropSidechains(const QSet<QString>& sourceIds, const QString& text);
     Clip recordedMidiClip(const RecordedTake& take, double quantize) const;
 
