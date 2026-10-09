@@ -1,6 +1,7 @@
 #include "audio/AudioFiles.h"
 
 #include "browser/FileIndex.h"
+#include "io/Bytes.h"
 #include "model/Project.h"
 
 #include <QDir>
@@ -14,18 +15,6 @@
 namespace sub::app {
 
 namespace {
-
-void appendLe16(QByteArray& bytes, quint16 value) {
-    char data[2];
-    qToLittleEndian(value, data);
-    bytes.append(data, 2);
-}
-
-void appendLe32(QByteArray& bytes, quint32 value) {
-    char data[4];
-    qToLittleEndian(value, data);
-    bytes.append(data, 4);
-}
 
 // The folder a saved project's files go in ("Recordings", "Freeze", ...), or none if it isn't saved.
 QString besideProject(const Project& project, const QString& name) {

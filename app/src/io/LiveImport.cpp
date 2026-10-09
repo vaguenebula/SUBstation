@@ -7,6 +7,7 @@
 
 #include "io/LiveImport.h"
 
+#include "io/Bytes.h"
 #include "io/Json.h"
 #include "io/LiveSet.h"
 #include "io/Serialization.h"
@@ -28,7 +29,6 @@
 #include <QMap>
 #include <QRegularExpression>
 #include <QSet>
-#include <QtEndian>
 
 #include <algorithm>
 #include <cmath>
@@ -172,24 +172,6 @@ QByteArray hexBytes(const QString& text) {
         if (!c.isSpace()) digits.append(c);
     }
     return QByteArray::fromHex(digits.toLatin1());
-}
-
-void appendLe32(QByteArray& bytes, quint32 value) {
-    char data[4];
-    qToLittleEndian(value, data);
-    bytes.append(data, 4);
-}
-
-void appendLe64(QByteArray& bytes, quint64 value) {
-    char data[8];
-    qToLittleEndian(value, data);
-    bytes.append(data, 8);
-}
-
-void appendBe32(QByteArray& bytes, quint32 value) {
-    char data[4];
-    qToBigEndian(value, data);
-    bytes.append(data, 4);
 }
 
 // A name for matching a VST2 plug-in with its VST3: lower case, letters and
