@@ -17,7 +17,7 @@ TrackHeaderItem {
     readonly property int pad: 2
     readonly property int box: 16
     readonly property int meterArea: 14
-    readonly property int mixerWidth: 92
+    readonly property int mixerWidth: 112
     readonly property int ioWidth: 84
     readonly property int mixerX: width - meterArea - mixerWidth
     readonly property int ioX: ioShown ? mixerX - ioWidth : 0
@@ -58,9 +58,9 @@ TrackHeaderItem {
     ValueBox {
         id: volume
         objectName: "volume"
-        x: header.mixerX + 4
+        x: header.mixerX + 8
         y: header.rowY(0)
-        width: 40
+        width: 44
         height: header.box
         flat: true
         fill: header.volumeFraction(header.volume)
@@ -89,9 +89,9 @@ TrackHeaderItem {
     ValueBox {
         id: pan
         objectName: "pan"
-        x: header.mixerX + 48
+        x: header.mixerX + 60
         y: header.rowY(1)
-        width: 40
+        width: 44
         height: header.box
         flat: true
         fill: (header.pan + 1) / 2

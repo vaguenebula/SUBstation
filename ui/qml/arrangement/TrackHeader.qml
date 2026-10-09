@@ -29,9 +29,14 @@ TrackHeaderItem {
     readonly property int pad: 2
     readonly property int box: 16
     readonly property int meterArea: 14
-    readonly property int mixerWidth: 92
+    readonly property int mixerWidth: 112
     readonly property int ioWidth: 84
     readonly property int mixerX: width - meterArea - mixerWidth
+    // The mixer column's two columns, as Ableton's: the activator over volume;
+    // solo and arm over pan.
+    readonly property int mixerLeftX: mixerX + 8
+    readonly property int mixerRightX: mixerX + 60
+    readonly property int wideBox: 44
     readonly property int ioX: ioShown ? mixerX - ioWidth : 0
     readonly property int nameColumnRight: (ioShown ? ioX : mixerX) - 1
     readonly property bool isGroup: kind === "group"
@@ -143,9 +148,9 @@ TrackHeaderItem {
     ToggleButton {
         id: activator
         objectName: "activator"
-        x: header.mixerX + 4
+        x: header.mixerLeftX
         y: header.rowY(0)
-        width: 40
+        width: header.wideBox
         height: header.box
         role: "activator"
         text: header.isReturn ? header.letter : String(header.number)
@@ -163,7 +168,7 @@ TrackHeaderItem {
     ToggleButton {
         id: solo
         objectName: "solo"
-        x: header.mixerX + 48
+        x: header.mixerRightX
         y: header.rowY(0)
         width: 20
         height: header.box
@@ -176,9 +181,9 @@ TrackHeaderItem {
     ToggleButton {
         id: arm
         objectName: "arm"
-        x: header.mixerX + 72
+        x: header.mixerRightX + 26
         y: header.rowY(0)
-        width: 16
+        width: 18
         height: header.box
         visible: header.records
         role: "arm"
@@ -191,9 +196,9 @@ TrackHeaderItem {
     ValueBox {
         id: volume
         objectName: "volume"
-        x: header.mixerX + 4
+        x: header.mixerLeftX
         y: header.rowY(1)
-        width: 40
+        width: header.wideBox
         height: header.box
         visible: header.fits(1)
         flat: true
@@ -224,9 +229,9 @@ TrackHeaderItem {
     ValueBox {
         id: pan
         objectName: "pan"
-        x: header.mixerX + 48
+        x: header.mixerRightX
         y: header.rowY(1)
-        width: 40
+        width: header.wideBox
         height: header.box
         visible: header.fits(1)
         flat: true
@@ -261,9 +266,9 @@ TrackHeaderItem {
         objectName: "sends"
         header: header
         menu: header.menu
-        x: header.mixerX + 2
+        x: header.mixerX + 4
         y: header.rowY(2)
-        width: header.mixerWidth - 4
+        width: header.mixerWidth - 8
         height: Math.max(0, header.mainHeight - 1 - header.pad - y)
         visible: header.hasSends && header.fits(2)
     }

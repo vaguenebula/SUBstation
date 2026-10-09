@@ -39,7 +39,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 ## Layout
 
 ```
- col 0 (stretches)               col 1 (308 px)       col 2
+ col 0 (stretches)               col 1 (328 px)       col 2
 ┌──────────────────────────────┬────────────────────────────┐
 │ ArrangementRuler (40)        │ GridInfo        (spans 1-2)│
 ├──────────────────────────────┼───────────────────┬────────┤
@@ -458,14 +458,14 @@ folded or empty group's band is its name bar.
 
 ### Layout
 
-TrackHeader.qml (308 px wide; 224 without the In/Out column, `ioShown`, the view's *View › In/Out*), in rows
+TrackHeader.qml (328 px wide; 244 without the In/Out column, `ioShown`, the view's *View › In/Out*), in rows
 `row` (18 px) apart, each shown when the track is tall enough for it (`fits(r)`: a folded track shows row 0):
 
 | Column | A track | A group (and a return) |
 |---|---|---|
 | name (to `nameColumnRight`) | the name bar; the automation choosers (`AutomationChoosers`) from row 1: device, parameter, **+** | the name bar; the choosers from row 2 |
 | In/Out (84 px, `IoChooser`s) | `input` (Audio From, MIDI From), `inputChannel` (its channel, or tap), `monitor` (In, Auto, Off: `monitor:in`...), `output` (Audio To), `outputChannel` (Track In, Sidechain-...) | `output`, `outputChannel` |
-| mixer (92 px) | `activator` (mute, following its automation, with the automation dot; the track's number), `solo`, `arm`; `volume` and `pan` (flat `ValueBox`es, no wheel, filled as far as their slider: `volumeFraction()`, from the middle for pan; the volume reads as Ableton's, `formatVolume()`: "0", "-15.0", "-inf"); `sends` (`SendKnobs`, while there are returns, in rows) | the same, without arm (a return's activator is its letter) |
+| mixer (112 px, as Ableton's: the activator over volume, 44 px each; solo and arm over pan, 44 px) | `activator` (mute, following its automation, with the automation dot; the track's number), `solo`, `arm`; `volume` and `pan` (flat `ValueBox`es, no wheel, filled as far as their slider: `volumeFraction()`, from the middle for pan; the volume reads as Ableton's, `formatVolume()`: "0", "-15.0", "-inf"); `sends` (`SendKnobs`, while there are returns, in rows) | the same, without arm (a return's activator is its letter) |
 | meter (14 px) | the `Meter` | the `Meter` |
 
 An `IoChooser` shows its text and a "▾" (one under another, a grip at its left) and asks for its menu; with no

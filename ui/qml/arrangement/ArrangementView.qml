@@ -42,7 +42,7 @@ FocusScope {
 
     // The headers: their name column, In/Out column (while shown) and mixer column, as Ableton's.
     property bool ioShown: true
-    readonly property int headerWidth: ioShown ? 308 : 224
+    readonly property int headerWidth: ioShown ? 328 : 244
     readonly property int barWidth: Theme.scrollBarWidth
     readonly property int rulerHeight: 40
     readonly property real lanesWidth: Math.max(0, width - headerWidth - barWidth)
