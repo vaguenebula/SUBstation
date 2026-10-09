@@ -36,7 +36,7 @@ What the user sees (the clip view, warp modes, transpose, tempo and key from fil
 | File | What it holds |
 |---|---|
 | [AudioSource.h](../../engine/src/AudioSource.h) / [.cpp](../../engine/src/AudioSource.cpp) | `AudioFileInfo`, `AudioSource::probe()`, `AudioSource::load()`, planar data, peak mipmaps |
-| [Warp.h](../../engine/src/Warp.h) / [.cpp](../../engine/src/Warp.cpp) | `WarpMode`, `StretchConfig`, `stretchConfigFor()`, `WarpVoice`, `WarpVoiceSet`, `renderResampled()` |
+| [Warp.h](../../engine/src/Warp.h) / [.cpp](../../engine/src/Warp.cpp) | `WarpMode`, `StretchConfig`, `stretchConfigFor()`, `stretchTiming()`, `kStretchSeed`, `WarpVoice`, `WarpVoiceSet`, `renderResampled()` |
 | [Snapshot.h](../../engine/src/Snapshot.h) | `ClipRender` (`Playback::Direct / Resample / Stretch`, `rate`, `sourceAt()`, `key`), `TrackBuffers::kMaxClipVoices` |
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | clips to `ClipRender`s, choosing the playback; `ensureWarpVoicesLocked()` |
 | [Engine.cpp](../../engine/src/Engine.cpp) | the source cache: `loadSource()`, `cachedSource()`, `releaseUnusedSources()`, `reloadSourcesLocked()`, `sourceKey()` |
@@ -103,6 +103,11 @@ lower-cased, so two spellings of a path share it).
 Built-in devices that play files (the Sampler) get theirs through the same cache via a `SourceLoader`
 (see [devices.md](devices.md)). The engine bridge decodes sources in a thread pool of its own
 ([app/engine-bridge.md](../app/engine-bridge.md)).
+
+The Sampler warps its sample too (its Warp: the whole sample in so many beats at the tempo), with the same modes: it
+resamples for Re-Pitch, and otherwise runs a Signalsmith stretcher per note, configured with the same block sizes
+(`stretchTiming()`) and seed (`kStretchSeed`) as the clips'. Its stretchers are its own, made on the main side while
+it stretches ([devices.md](devices.md#sampler-builtinsampler-instrument)).
 
 ## Warp modes and how a clip plays
 

@@ -204,20 +204,25 @@ private Q_SLOTS:
         QCOMPARE(QString::fromLatin1(body->metaObject()->className()).section(u'_', 0, 0), QStringLiteral("SamplerEditor"));
         QCOMPARE(f->width(), body->implicitWidth() + 2);  // the editor's own width, in the frame's border
         QCOMPARE(body->height(), f->height() - 2 - partOf(sampler, "header")->height());  // the body's whole height
-        // Its pages: the title bar's arrows.
+        // Its pages, named: tabs in the title bar instead of the arrows.
         QCOMPARE(f->property("pages").toInt(), 2);
-        QVERIFY(partOf(sampler, "nextButton")->isVisible());
-        QCOMPARE(partOf(sampler, "pageLabel")->property("text").toString(), QStringLiteral("1/2"));
-        test::click(window(), centerOf(sampler, "nextButton"));
+        QVERIFY(!partOf(sampler, "nextButton")->isVisible());
+        QVERIFY(!partOf(sampler, "pageLabel")->isVisible());
+        QQuickItem* sampleTab = test::itemNamed(f, QStringLiteral("pageTab_Sample"));
+        QQuickItem* controlsTab = test::itemNamed(f, QStringLiteral("pageTab_Controls"));
+        QVERIFY(sampleTab && controlsTab && sampleTab->isVisible() && controlsTab->isVisible());
+        QVERIFY(sampleTab->property("checked").toBool() && !controlsTab->property("checked").toBool());
+        test::click(window(), test::centerOf(controlsTab));
         QCOMPARE(body->property("page").toInt(), 1);
-        QCOMPARE(partOf(sampler, "pageLabel")->property("text").toString(), QStringLiteral("2/2"));
+        QVERIFY(controlsTab->property("checked").toBool() && !sampleTab->property("checked").toBool());
         session().selection()->selectTrack(QString());
         session().selection()->selectTrack(track);  // made again: on the same page
         QCOMPARE(frame(sampler)->property("body").value<QQuickItem*>()->property("page").toInt(), 1);
+        QVERIFY(test::itemNamed(frame(sampler), QStringLiteral("pageTab_Controls"))->property("checked").toBool());
         // Its menu starts with its own entries.
         ui_.rightClick(centerOf(sampler, "title"));
         QVERIFY(ui_.menuOpened());
-        QCOMPARE(test::menuTexts(menu()).mid(0, 3), (QStringList{"Load Sample…", "Clear Sample", "Fold"}));
+        QCOMPARE(test::menuTexts(menu()).mid(0, 4), (QStringList{"Load Sample…", "Clear Sample", "Reverse", "Fold"}));
         QVERIFY(!test::menuEnabled(menu(), QStringLiteral("Clear Sample")));
         closeMenu();
         // One page: no arrows.

@@ -37,7 +37,11 @@ What SUBstation doesn't do yet, by area.
 - CLAP plug-ins.
 - Multi-output instruments: plug-ins get their main buses and a sidechain only.
 - MIDI effect plug-ins.
-- The Sampler plays one sample (no zones or multisamples).
+- The Sampler plays one sample (no zones or multisamples). Of Simpler, it doesn't have
+  manual slicing (moving or adding slices by hand), slicing to a drum rack, previewing
+  slices by clicking them, warp markers within the sample or detecting its tempo (Warp
+  takes the whole sample as so many beats), filter and pitch envelopes, the filter's
+  analog-modelled circuits, or Spread.
 
 ## Audio clips
 

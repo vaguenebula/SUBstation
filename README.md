@@ -23,7 +23,8 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
   and key worked out from its MIDI and shown over the notes (notes out of the key in
   red), and block chords or a bass line written from them; MIDI input from
   controllers and the computer keyboard.
-- **Devices**: a built-in Synth, Sampler, Compressor (with sidechain), Over The Top
+- **Devices**: a built-in Synth, a Sampler after Ableton's Simpler (Classic, 1-Shot and
+  Slice modes, slicing at transients, warping, a filter and an LFO), Compressor (with sidechain), Over The Top
   multiband compressor, Disperser (phase dispersion through up to 64 all-pass stages,
   its group delay drawn) and Utility; racks with parallel chains, macros and presets.
 - **VST3 plug-ins**: instruments and effects, their own editors, presets, sidechains,

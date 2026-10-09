@@ -34,6 +34,18 @@ inline constexpr int kNumStretchConfigs = 3;
 
 StretchConfig stretchConfigFor(WarpMode mode) noexcept;
 
+// A stretch configuration's analysis block and the interval between blocks, in
+// seconds (the Sampler configures its own stretchers with these too).
+struct StretchTiming {
+    double blockSeconds;
+    double intervalSeconds;
+};
+StretchTiming stretchTiming(StretchConfig config) noexcept;
+
+// The seed every stretcher starts from: it randomises some phases (when
+// stretching a lot), and offline renders should come out the same every time.
+inline constexpr long kStretchSeed = 0x6115;
+
 // One stretcher, bound to whichever clip is using it. Constructing it allocates;
 // render() is real-time safe.
 class WarpVoice {

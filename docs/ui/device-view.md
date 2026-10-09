@@ -30,8 +30,8 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 | Disperser: [DisperserEditor.qml](../../ui/qml/devices/editors/DisperserEditor.qml), [DispersionGraph](../../ui/src/devices/DispersionGraph.h) | |
 | EQ: [EqEditor.qml](../../ui/qml/devices/editors/EqEditor.qml), [EqWindow.qml](../../ui/qml/devices/editors/EqWindow.qml), [EqWindows.qml](../../ui/qml/devices/editors/EqWindows.qml), [EqBandPanel.qml](../../ui/qml/devices/editors/EqBandPanel.qml), [EqCorner.qml](../../ui/qml/devices/editors/EqCorner.qml), [EqGraphMenus.qml](../../ui/qml/devices/editors/EqGraphMenus.qml), [EqGraph](../../ui/src/devices/EqGraph.h), [EqView](../../ui/src/devices/EqView.h), [EqTypeIcon](../../ui/src/devices/EqTypeIcon.h) | |
 | Sidechain: [SidechainEditor.qml](../../ui/qml/devices/editors/SidechainEditor.qml), [CurveGraph](../../ui/src/devices/CurveGraph.h), [ClashView](../../ui/src/devices/ClashView.h) | |
-| Sampler: [SamplerEditor.qml](../../ui/qml/devices/editors/SamplerEditor.qml), [SampleView](../../ui/src/devices/SampleView.h) | |
-| [PanelMenu.qml](../../ui/qml/devices/PanelMenu.qml), [DynamicMenu.qml](../../ui/qml/devices/DynamicMenu.qml), [ParamArea.qml](../../ui/qml/devices/ParamArea.qml), [ParamKnob.qml](../../ui/qml/devices/ParamKnob.qml), [ParamBox.qml](../../ui/qml/devices/ParamBox.qml), [ParamButton.qml](../../ui/qml/devices/ParamButton.qml), [DeviceHeaderButton.qml](../../ui/qml/devices/DeviceHeaderButton.qml) | Menus filled when they open; the editors' parameter-bound knobs, boxes and buttons; a title bar's buttons |
+| Sampler: [SamplerEditor.qml](../../ui/qml/devices/editors/SamplerEditor.qml), [SampleView](../../ui/src/devices/SampleView.h), the application layer's [SampleSlices.h](../../app/src/audio/SampleSlices.h) | |
+| [PanelMenu.qml](../../ui/qml/devices/PanelMenu.qml), [DynamicMenu.qml](../../ui/qml/devices/DynamicMenu.qml), [ParamArea.qml](../../ui/qml/devices/ParamArea.qml), [ParamKnob.qml](../../ui/qml/devices/ParamKnob.qml), [ParamBox.qml](../../ui/qml/devices/ParamBox.qml), [ParamButton.qml](../../ui/qml/devices/ParamButton.qml), [ParamChoice.qml](../../ui/qml/devices/ParamChoice.qml), [DeviceHeaderButton.qml](../../ui/qml/devices/DeviceHeaderButton.qml) | Menus filled when they open; the editors' parameter-bound knobs, boxes, buttons and drop-downs; a title bar's buttons |
 
 ## The panel
 
@@ -168,7 +168,9 @@ and editor, its sidechain) reading the project again whenever that may have chan
   automation dot: `enabled`, `enabledAutomation`; right-click: Show, Delete and Re-Enable Automation), the name
   (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
   and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the sidechain button (a
-  device with a sidechain input), the page arrows and "n/m" (only with more than one page), the save button.
+  device with a sidechain input), the page arrows and "n/m" (only with more than one page), or, for an editor that
+  names its pages (`pageNames`: the Sampler's *Sample* and *Controls*, as Simpler's), a tab per page instead
+  (`pageTab_<name>`, lit while it shows), the save button.
 - **Body**: a `Loader` taking all the height there is: a rack's `RackDeviceBody`, a plug-in's `PluginDeviceBody`,
   the device's editor (`DeviceEditors.editorFor(kind)`), or `DeviceKnobPages`. A body may have `pages` and `page`
   (the title bar pages through them; the page is restored from the area when the body is made again). Its content
@@ -301,10 +303,11 @@ readonly property var editors: ({
 
 - `required property string trackId` and `deviceId`.
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
-  `implicitWidth` is the body's width (Compressor 658, Delay 532, Disperser 544, Sampler 566, Sidechain 720, EQ 580,
+  `implicitWidth` is the body's width (Compressor 658, Delay 532, Disperser 544, Sampler 760, Sidechain 720, EQ 580,
   or 756 with its band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px from the top
   and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
-- Optional: `pages` (read) and `page` (read/write) for pages of knobs; `menuActions` (a list of `Action`s the
+- Optional: `pages` (read) and `page` (read/write) for pages of knobs, and `pageNames` (the title bar's tabs instead of
+  its arrows); `menuActions` (a list of `Action`s the
   device's menu starts with); the signal `sidechainMenuRequested()` (the frame shows the sidechain menu).
 - Clicks it doesn't take go on to the frame (selecting the device, its menu).
 
@@ -398,14 +401,36 @@ The editors:
     envelope where it clashes, the dashed target) and `ClashView` (the spectra, the clash band) draw. Fit writes the
     points, the length (sync off) and the crossover. The hint over the curve (no sidechain while triggered by one)
     asks the frame for the sidechain menu.
-- **Sampler** ([SamplerEditor.qml](../../ui/qml/devices/editors/SamplerEditor.qml)): two pages of six knobs, three to
-  a row (the sample's, then the amplitude's), and a [SampleView](../../ui/src/devices/SampleView.h): the sample's
-  waveform from its peaks (`waveformColumns()`), the part outside Start..End dimmed, the loop bracketed when it loops,
-  and the newest note's position (display `position`). Drag the Start or End marker (within `kMarkerGrab` 5 px) to set
-  it (one undo step per drag, kept within the other marker); drop an audio file on it, or double-click it to browse.
-  The device's menu starts with Load Sample… and Clear Sample (`menuActions`). The sample's path lives in the device's
-  state ("sample"); loading one is `editor.setDeviceState(..., "Load Sample")`, undoable. The waveform is the
-  bridge's (`waveform(path)`, requested if not decoded yet; quick, as the engine decoded it for the sampler).
+- **Sampler** ([SamplerEditor.qml](../../ui/qml/devices/editors/SamplerEditor.qml)), laid out as Ableton's Simpler:
+  two pages named in the title bar (`pageNames`: Sample, Controls).
+  - *Sample*: the mode tabs (Classic, 1-Shot, Slice: a `RoleButton` each, its icon over its name) beside the display: a
+    [SampleView](../../ui/src/devices/SampleView.h) over a strip of the sample's settings on the same dark ground (Gain;
+    by mode Loop and its Fade, or Trigger/Gate, or Slice By with its sensitivity, division or regions and Playback;
+    Snap; Warp, *as* its length, its mode, `:2` and `*2`). Under the display a row: the filter (on, its shape as an
+    icon, 12/24, Frequency, Res, dimmed while off), the LFO (on, Hz or synced, its shape, its rate or synced rate), the
+    envelope (Classic's ADSR, the others' fades), Transp, Vol < Vel, Volume. The display takes the height there is.
+  - *Controls*: sections of knobs and buttons: Pitch (Root Key, Transp, Detune, Voices, Glide), Sample (Start, End,
+    Loop Start, Loop Fade; Reverse, Snap, Loop), LFO (on, Retrig, shape, sync and rate; its Volume, Pitch, Filter and
+    Pan), Output (Pan, Gain).
+  - Lists are [ParamChoice](../../ui/qml/devices/ParamChoice.qml)s (a small button with the value's name or icon and
+    an arrow, its list a menu, filled when it opens); value boxes' texts are made again when their parameter comes
+    (`formatOf(param)`: a box whose value doesn't change would keep the empty text it had without one).
+  - The display ([SampleView](../../ui/src/devices/SampleView.h)): the waveform from its peaks
+    (`waveformColumns()`), flipped while it plays reversed, so what is drawn is what plays left to right; the sample's
+    name in its top left corner; Start and End as accent lines flagged at the top, the rest dimmed; by mode, the loop
+    (bracketed over the top from Loop Start, its handle at the bottom, its crossfade shaded at its end and where it
+    fades from), the fades (a line), or the slices (a line where each starts, numbered at the bottom while there is room, the one the playhead
+    is in lit: `playingSlice`); the newest note's position (display `position`); a time ruler (m:ss:mmm) under it. It
+    places everything as the engine does: frames from percent (truncated), snapped with Snap through the application
+    layer's `sampleSlices::nearestZeroCrossing`, slices from `sampleSlices::sliceStarts` over the transients it finds
+    once per sample and direction ([SampleSlices.h](../../app/src/audio/SampleSlices.h), the engine's own functions on
+    the bridge's `Waveform`, which is the engine's decoded source). Drag Start, End, or Loop Start while Classic
+    loops (within `kMarkerGrab` 5 px, the nearest; Loop Start by its handle in the bottom `kLoopHandle` 10 px first,
+    so it can be pulled off Start; one undo step per drag, kept within the others); drop an audio file on it, or
+    double-click it to browse.
+  - The device's menu starts with Load Sample…, Clear Sample and Reverse (`menuActions`). The sample's path lives in
+    the device's state ("sample"); loading one is `editor.setDeviceState(..., "Load Sample")`, undoable. The waveform
+    is the bridge's (`waveform(path)`, requested if not decoded yet; quick, as the engine decoded it for the sampler).
 
 ### Adding an editor
 
