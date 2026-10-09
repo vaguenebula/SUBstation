@@ -564,7 +564,8 @@ private Q_SLOTS:
         QVERIFY(files && !files->isVisible());
         key(Qt::Key_F, Qt::ControlModifier | Qt::AltModifier);
         QVERIFY(files->isVisible());
-        QVERIFY(files->mapToScene({0, 0}).x() > item(QStringLiteral("arrangementArea"))->mapToScene({0, 0}).x());
+        // (The split view lays out what shows at its next polish.)
+        QTRY_VERIFY(files->mapToScene({0, 0}).x() > item(QStringLiteral("arrangementArea"))->mapToScene({0, 0}).x());
         key(Qt::Key_F, Qt::ControlModifier | Qt::AltModifier);
         QVERIFY(!files->isVisible());
         session().files()->reveal(QStringLiteral("C:/nowhere/kick.wav"));
