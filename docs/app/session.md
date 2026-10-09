@@ -151,10 +151,11 @@ The session never asks the user anything; the UI does, and then calls it:
   application opens a new project this way as it starts, unless it was given a project to open.
 - **Import Ableton Live Set**: `importLiveSet(path)` reads and translates the set
   ([live-import.md](live-import.md)), with the plug-in index's plug-ins, and loads it as `loadInto` loads a
-  project file (a set that can't be read: a `warning`, and the project stays). It then clears the undo stack and
-  the selection, names the untitled project after the set (`title()`, `suggestedSavePath()`), emits
-  `projectOpened()`, says "Imported song.als: 12 tracks, 80 clips" and, if anything didn't come across as it was,
-  lists it in an `information`.
+  project file (a set that can't be read: a `warning`, and the project stays). It then goes on as opening does
+  (`loadedFrom`: a session of its own, the folder remembered, the files looked at, `projectOpened()`), names the
+  untitled project after the set (`title()`, `suggestedSavePath()`) and leaves it unsaved (`QUndoStack::resetClean`:
+  not `clean` until saved, so New, Open and Quit ask), says "Imported song.als: 12 tracks, 80 clips" and, if anything
+  didn't come across as it was, lists it in an `information`. Running out of memory reading it is a `warning` too.
 - **Templates**: `saveAsTemplate()` stores the plug-ins' states, then writes the project to `templatePath()`
   (`Template.gilproj` in the local data folder, or `SUBSTATION_TEMPLATE`) without making it the project's file: the
   project keeps its file and its unsaved changes. Its files are kept by their absolute paths

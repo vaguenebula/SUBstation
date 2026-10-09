@@ -50,6 +50,9 @@ constexpr const char* kLiveColors[] = {
     "#85a5c2", "#8393cc", "#a595b5", "#bf9fbe", "#bc7196", "#7b7b7b", "#af3333", "#a95131", "#724f41", "#dbc300",
     "#85961f", "#539f31", "#0a9c8e", "#236384", "#1a2f96", "#2f52a2", "#624bad", "#a34bad", "#cc2e6e", "#3c3c3c"};
 
+// An element's colour index: Color (Live 11 and later) or ColorIndex (Live 10).
+int colorOf(const Element& element) { return element.integer(u"Color", element.integer(u"ColorIndex", 0)); }
+
 QString liveColor(int index) {
     constexpr int count = static_cast<int>(sizeof(kLiveColors) / sizeof(kLiveColors[0]));
     return index >= 0 && index < count ? QString::fromLatin1(kLiveColors[index]) : kTrackColors.front();
@@ -153,6 +156,14 @@ std::function<double(double)> builtinNormalized(const QString& kind, const QStri
     return {};
 }
 
+// A 32-bit word Live writes (a class id's, a VST3 ParamID, a VST2's id), as a
+// signed or an unsigned number; none if it isn't one.
+std::optional<quint32> liveWord(const Element& element, QStringView path) {
+    const double value = element.number(path, std::nan(""));
+    if (!(value >= -2147483648.0 && value < 4294967296.0) || value != std::floor(value)) return std::nullopt;
+    return static_cast<quint32>(static_cast<qint64>(value));
+}
+
 QByteArray hexBytes(const QString& text) {
     QString digits;
     digits.reserve(text.size());
@@ -203,6 +214,8 @@ struct Span {
 };
 
 constexpr int kMostSpans = 4096;
+const QString kTooManyLoops =
+    QStringLiteral("Some looping clips loop too often to write out: they stop after %1 loops.").arg(kMostSpans);
 
 std::vector<Span> clipSpans(const Element& clip, double length, bool* cut = nullptr) {
     const double loopStart = clip.number(u"Loop/LoopStart");
@@ -370,7 +383,10 @@ private:
     QJsonArray clips(const Element& track, bool midi, const std::function<std::optional<int>(int)>& pitch = {});
     std::optional<QJsonObject> midiClip(const Element& clip, const std::function<std::optional<int>(int)>& pitch);
     void audioClips(const Element& clip, QJsonArray& out);
+    // Clip envelopes are left out: noted, a clip each.
+    void noteClipEnvelopes(const Element& track);
     QString samplePath(const Element* sampleRef);
+    QString resolveSample(const QString& path, const QString& relative);
     void addTarget(const Element* parameter, const QString& owner, const QString& key,
                    std::function<double(double)> normalized);
     void addBuiltinTarget(const Element* parameter, const QString& owner, const QString& kind, const QString& deviceId,
@@ -397,7 +413,7 @@ private:
     std::vector<QJsonObject> tracks_;
     QJsonArray returns_;
     int clipCount_ = 0;
-    int missingFiles_ = 0;
+    QHash<QString, QString> resolvedPaths_;  // a file as the set names it (path, relative) -> where it is
     QSet<QString> missingPaths_;
 };
 
@@ -414,7 +430,7 @@ void Importer::readSettings() {
     if (mixer) {
         tempo_ = mixer->number(u"Tempo/Manual", 120.0);
         const int signature = mixer->integer(u"TimeSignature/Manual", 201);
-        numerator_ = signature % 99 + 1;
+        numerator_ = std::clamp(signature % 99 + 1, 1, 32);
         denominator_ = 1 << std::clamp(signature / 99, 0, 5);
     }
     // An automated tempo or time signature: its value at the start; changes are noted.
@@ -425,12 +441,14 @@ void Importer::readSettings() {
         };
         const QString tempoTarget = targetId(u"Tempo/AutomationTarget");
         const QString signatureTarget = targetId(u"TimeSignature/AutomationTarget");
-        settingTargets_ << tempoTarget << signatureTarget;
+        for (const QString& target : {tempoTarget, signatureTarget}) {
+            if (!target.isEmpty()) settingTargets_ << target;
+        }
         if (const Element* envelopes = master->at(u"AutomationEnvelopes/Envelopes")) {
             for (const Element* envelope : envelopes->all(u"AutomationEnvelope")) {
                 const QString target = envelope->value(u"EnvelopeTarget/PointeeId").value_or(QString());
                 const Element* events = envelope->at(u"Automation/Events");
-                if (!events || (target != tempoTarget && target != signatureTarget)) continue;
+                if (!events || target.isEmpty() || (target != tempoTarget && target != signatureTarget)) continue;
                 std::optional<double> first;
                 QSet<QString> values;
                 for (const Element* event : events->all()) {
@@ -440,7 +458,7 @@ void Importer::readSettings() {
                 }
                 if (!first) continue;
                 if (target == tempoTarget) {
-                    tempo_ = *first;
+                    tempo_ = std::clamp(*first, 20.0, 999.0);  // (as the project has it, before the note says it)
                     if (values.size() > 1) {
                         notes_.line(
                             QStringLiteral("The tempo changes during the song; SUBstation has one tempo: %1 BPM.")
@@ -448,7 +466,7 @@ void Importer::readSettings() {
                     }
                 } else {
                     const int signature = static_cast<int>(*first);
-                    numerator_ = signature % 99 + 1;
+                    numerator_ = std::clamp(signature % 99 + 1, 1, 32);
                     denominator_ = 1 << std::clamp(signature / 99, 0, 5);
                     if (values.size() > 1) {
                         notes_.line(
@@ -461,7 +479,6 @@ void Importer::readSettings() {
         }
     }
     tempo_ = std::clamp(tempo_, 20.0, 999.0);
-    numerator_ = std::clamp(numerator_, 1, 32);
 }
 
 QString Importer::liveName(const Element& track) {
@@ -573,6 +590,7 @@ ImportResult Importer::run() {
             if (track->tag == u"GroupTrack") groupIds.insert(liveId, id);
             if (track->flag(u"Freeze"))
                 notes_.listed(QStringLiteral("Frozen in Live, imported unfrozen"), liveName(*track));
+            noteClipEnvelopes(*track);
             if (const Element* drums = drumRackOf(*track)) {
                 translateDrumTrack(*track, *drums, id, parent);
             } else {
@@ -623,7 +641,7 @@ ImportResult Importer::run() {
     const double loopStart = transport ? std::max(0.0, transport->number(u"LoopStart")) : 0.0;
     const double loopLength = transport ? transport->number(u"LoopLength", 16.0) : 16.0;
 
-    if (missingFiles_ > 0) {
+    if (!missingPaths_.isEmpty()) {
         notes_.line(
             missingPaths_.size() == 1
                 ? QStringLiteral("1 audio file isn't where the set says (moved, or on another computer): the "
@@ -679,7 +697,7 @@ QJsonObject Importer::translateTrack(const Element& track, const QString& id, co
                                  trackName(track, group  ? QStringLiteral("Group")
                                                   : midi ? QStringLiteral("MIDI")
                                                          : QStringLiteral("Audio")),
-                                 liveColor(track.integer(u"Color", 0)));
+                                 liveColor(colorOf(track)));
     data[QStringLiteral("parent")] = parent ? QJsonValue(*parent) : QJsonValue(QJsonValue::Null);
     data[QStringLiteral("folded")] = !track.flag(u"TrackUnfolded", true);
     if (const Element* mixer = track.at(u"DeviceChain/Mixer")) {
@@ -704,8 +722,7 @@ QJsonObject Importer::translateTrack(const Element& track, const QString& id, co
 // rack) with a MIDI track for each pad the clips play, each with that pad's notes.
 void Importer::translateDrumTrack(const Element& track, const Element& drums, const QString& id,
                                   const std::optional<QString>& parent) {
-    QJsonObject group =
-        trackBase(id, kGroupKind, trackName(track, QStringLiteral("Drums")), liveColor(track.integer(u"Color", 0)));
+    QJsonObject group = trackBase(id, kGroupKind, trackName(track, QStringLiteral("Drums")), liveColor(colorOf(track)));
     group[QStringLiteral("parent")] = parent ? QJsonValue(*parent) : QJsonValue(QJsonValue::Null);
     group[QStringLiteral("folded")] = !track.flag(u"TrackUnfolded", true);
     if (const Element* mixer = track.at(u"DeviceChain/Mixer")) {
@@ -736,11 +753,18 @@ void Importer::translateDrumTrack(const Element& track, const Element& drums, co
         notes_.listed(QStringLiteral("Left out (Drum Racks' return chains)"), liveName(track));
     }
     for (const Pad& pad : pads_.value(track.attribute(u"Id"))) {
+        // Its clips first: one whose notes are all outside the clips' windows makes
+        // no track (nor notes on its devices; a sidechain from it goes, its automation is noted).
+        const int note = pad.note;
+        const int sends = std::clamp(pad.sends, 0, 127);
+        const QJsonArray padClips = clips(
+            track, true, [note, sends](int key) { return key == note ? std::optional<int>(sends) : std::nullopt; });
+        if (padClips.isEmpty()) continue;
         const Element& branch = *pad.element;
         QString name = branch.value(u"Name/UserName").value_or(QString()).trimmed();
         if (name.isEmpty()) name = branch.value(u"Name/EffectiveName").value_or(QString()).trimmed();
         if (name.isEmpty()) name = branch.value(u"Name").value_or(QStringLiteral("Pad"));
-        QJsonObject padTrack = trackBase(pad.id, kMidiKind, name, liveColor(track.integer(u"Color", 0)));
+        QJsonObject padTrack = trackBase(pad.id, kMidiKind, name, liveColor(colorOf(track)));
         padTrack[QStringLiteral("parent")] = id;
         padTrack[QStringLiteral("folded")] = true;
         padTrack[QStringLiteral("midi_input")] =
@@ -756,11 +780,6 @@ void Importer::translateDrumTrack(const Element& track, const Element& drums, co
         padTrack[QStringLiteral("solo")] = branch.flag(u"IsSoloed");
         padTrack[QStringLiteral("devices")] =
             translateDevices(branch.at(u"DeviceChain/MidiToAudioDeviceChain/Devices"), pad.id);
-        const int note = pad.note;
-        const int sends = std::clamp(pad.sends, 0, 127);
-        const QJsonArray padClips = clips(
-            track, true, [note, sends](int key) { return key == note ? std::optional<int>(sends) : std::nullopt; });
-        if (padClips.isEmpty()) continue;  // (its notes are all outside the clips' windows; a sidechain from it goes)
         padTrack[QStringLiteral("clips")] = padClips;
         tracks_.push_back(padTrack);
     }
@@ -770,7 +789,7 @@ QJsonObject Importer::translateReturn(const Element& track, const QString& id) {
     QJsonObject data{{QStringLiteral("id"), id},
                      {QStringLiteral("kind"), kReturnKind},
                      {QStringLiteral("name"), returnName(track)},
-                     {QStringLiteral("color"), liveColor(track.integer(u"Color", 0))},
+                     {QStringLiteral("color"), liveColor(colorOf(track))},
                      {QStringLiteral("volume_db"), 0.0},
                      {QStringLiteral("pan"), 0.0},
                      {QStringLiteral("mute"), false},
@@ -901,7 +920,9 @@ void Importer::addTarget(const Element* parameter, const QString& owner, const Q
                          std::function<double(double)> normalized) {
     if (!parameter || !normalized) return;
     const Element* target = parameter->child(u"AutomationTarget");
-    if (target) targets_.insert(target->attribute(u"Id"), Target{owner, key, std::move(normalized)});
+    if (target && !target->attribute(u"Id").isEmpty()) {
+        targets_.insert(target->attribute(u"Id"), Target{owner, key, std::move(normalized)});
+    }
 }
 
 void Importer::addBuiltinTarget(const Element* parameter, const QString& owner, const QString& kind,
@@ -955,7 +976,7 @@ std::optional<QJsonObject> Importer::plugin(const Element& device, const QString
     if (const Element* vst3 = desc->child(u"Vst3PluginInfo")) {
         quint32 words[4] = {};
         for (int i = 0; i < 4; ++i) {
-            words[i] = static_cast<quint32>(static_cast<qint64>(vst3->number(QStringLiteral("Uid/Fields.%1").arg(i))));
+            words[i] = liveWord(*vst3, QStringLiteral("Uid/Fields.%1").arg(i)).value_or(0);
         }
         const QString uid = QString::fromStdString(sub::vst3::classIdFromWords(words[0], words[1], words[2], words[3]));
         const QString presetId =
@@ -993,17 +1014,18 @@ std::optional<QJsonObject> Importer::plugin(const Element& device, const QString
         }
         if (const Element* parameters = device.child(u"ParameterList")) {
             for (const Element* parameter : parameters->all()) {
-                const int paramId = parameter->integer(u"ParameterId", -1);
-                if (paramId < 0) continue;
+                // A VST3 ParamID (high-bit ids written negative); -1 is a slot with none (kNoParamId).
+                const std::optional<quint32> paramId = liveWord(*parameter, u"ParameterId");
+                if (!paramId || *paramId == 0xFFFFFFFFu) continue;
                 addTarget(parameter->child(u"ParameterValue"), owner,
-                          automation::deviceKey(id, QString::number(paramId)), plainNormalized);
+                          automation::deviceKey(id, QString::number(*paramId)), plainNormalized);
             }
         }
         return data;
     }
     if (const Element* vst2 = desc->child(u"VstPluginInfo")) {
         const QString name = vst2->value(u"PlugName").value_or(QStringLiteral("Plug-in"));
-        const quint32 vst2Id = static_cast<quint32>(static_cast<qint64>(vst2->number(u"UniqueId")));
+        const quint32 vst2Id = liveWord(*vst2, u"UniqueId").value_or(0);
         // The installed VST3 made to replace it (its class id "VST" + its id), else one of its name.
         const PluginInfo* replacement = nullptr;
         const PluginInfo* sameName = nullptr;
@@ -1037,9 +1059,9 @@ std::optional<QJsonObject> Importer::plugin(const Element& device, const QString
         const QByteArray chunk =
             preset && preset->child(u"Buffer") ? hexBytes(preset->child(u"Buffer")->text) : QByteArray();
         if (replacement && !chunk.isEmpty()) {
-            const quint32 type = static_cast<quint32>(static_cast<qint64>(preset->number(u"Type")));
+            const quint32 type = liveWord(*preset, u"Type").value_or(0);
             const bool bank = type == 0x46424368u;  // 'FBCh' ('FPCh': a program)
-            const quint32 version = static_cast<quint32>(static_cast<qint64>(vst2->number(u"Version")));
+            const quint32 version = liveWord(*vst2, u"Version").value_or(0);
             const QByteArray state =
                 vst2CompatibleState(chunk, vst2Id, version, bank, preset->integer(u"ProgramCount", 1));
             const auto words = sub::vst3::wordsFromClassId(replacement->uid.toStdString());
@@ -1249,8 +1271,9 @@ std::optional<QJsonObject> Importer::sampler(const Element& device, const QStrin
     const auto percentOf = [frames](double frame) {
         return frames > 0 ? std::clamp(100.0 * frame / frames, 0.0, 100.0) : 0.0;
     };
-    const double gain =
-        device.number(u"VolumeAndPan/Volume/Manual") + gainToDb(std::max(part.number(u"Volume", 1.0), kMinGain));
+    // Its gain: the device's volume and its sample's (automation of the volume keeps the sample's on top).
+    const double partDb = gainToDb(std::max(part.number(u"Volume", 1.0), kMinGain));
+    const double gain = device.number(u"VolumeAndPan/Volume/Manual") + partDb;
     const bool simpler = device.tag == u"OriginalSimpler";
     const int mode = simpler ? std::clamp(device.integer(u"Globals/PlaybackMode", 0), 0, 2) : 0;
     QJsonObject params{
@@ -1279,7 +1302,7 @@ std::optional<QJsonObject> Importer::sampler(const Element& device, const QStrin
     addBuiltinTarget(device.at(u"Pitch/TransposeKey"), owner, kind, id, QStringLiteral("tune"),
                      [](double v) { return v; });
     addBuiltinTarget(device.at(u"VolumeAndPan/Volume"), owner, kind, id, QStringLiteral("gain"),
-                     [](double v) { return v; });
+                     [partDb](double v) { return v + partDb; });
     QJsonObject data = builtin(kind, id, params);
     if (!path.isEmpty()) {
         if (const auto state = deviceState::toModel({{QStringLiteral("sample"), path}}))
@@ -1290,12 +1313,35 @@ std::optional<QJsonObject> Importer::sampler(const Element& device, const QStrin
 
 // --- Clips ------------------------------------------------------------------------------------------
 
+void Importer::noteClipEnvelopes(const Element& track) {
+    for (const QStringView path : {u"DeviceChain/MainSequencer/ClipTimeable/ArrangerAutomation/Events",
+                                   u"DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events"}) {
+        const Element* events = track.at(path);
+        if (!events) continue;
+        for (const Element* clip : events->all()) {
+            const Element* envelopes = clip->at(u"Envelopes/Envelopes");
+            if (envelopes && !envelopes->children.empty()) {
+                notes_.listed(QStringLiteral("Left out (clip envelopes)"), liveName(track));
+            }
+        }
+    }
+}
+
 QString Importer::samplePath(const Element* sampleRef) {
     if (!sampleRef) return {};
     const Element* file = sampleRef->child(u"FileRef");
     if (!file) return {};
     const QString path = QDir::fromNativeSeparators(file->value(u"Path").value_or(QString()));
     const QString relative = QDir::fromNativeSeparators(file->value(u"RelativePath").value_or(QString()));
+    // Each file looked for once (many clips play one).
+    const QString key = path + u'\n' + relative;
+    if (const auto known = resolvedPaths_.constFind(key); known != resolvedPaths_.constEnd()) return *known;
+    const QString resolved = resolveSample(path, relative);
+    resolvedPaths_.insert(key, resolved);
+    return resolved;
+}
+
+QString Importer::resolveSample(const QString& path, const QString& relative) {
     if (!path.isEmpty() && QFileInfo::exists(path)) return path;
     // Moved with the set: beside it (its project folder), or a folder up.
     if (!relative.isEmpty()) {
@@ -1306,7 +1352,6 @@ QString Importer::samplePath(const Element* sampleRef) {
     }
     if (path.isEmpty() && relative.isEmpty()) return {};
     const QString kept = path.isEmpty() ? QDir::cleanPath(setDir_.filePath(relative)) : path;
-    ++missingFiles_;
     missingPaths_.insert(kept);
     return kept;
 }
@@ -1317,10 +1362,6 @@ QJsonArray Importer::clips(const Element& track, bool midi, const std::function<
                                           : u"DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events");
     if (!events) return out;
     for (const Element* clip : events->all(midi ? u"MidiClip" : u"AudioClip")) {
-        const Element* envelopes = clip->at(u"Envelopes/Envelopes");
-        if (envelopes && !envelopes->children.empty()) {
-            notes_.listed(QStringLiteral("Left out (clip envelopes)"), liveName(track));
-        }
         if (midi) {
             if (auto translated = midiClip(*clip, pitch)) {
                 out.append(*translated);
@@ -1340,9 +1381,7 @@ std::optional<QJsonObject> Importer::midiClip(const Element& clip,
     if (length <= 0) return std::nullopt;
     bool cut = false;
     const std::vector<Span> spans = clipSpans(clip, length, &cut);
-    if (cut)
-        notes_.line(QStringLiteral("Some looping clips loop too often to write out: they stop after %1 loops.")
-                        .arg(kMostSpans));
+    if (cut) notes_.line(kTooManyLoops);
     QJsonArray notes;
     if (const Element* keyTracks = clip.at(u"Notes/KeyTracks")) {
         for (const Element* keyTrack : keyTracks->all(u"KeyTrack")) {
@@ -1456,9 +1495,7 @@ void Importer::audioClips(const Element& clip, QJsonArray& out) {
             pieces.push_back({start + at / secondsPerBeat, from, to - from, 0.0});
         }
     }
-    if (cut)
-        notes_.line(QStringLiteral("Some looping clips loop too often to write out: they stop after %1 loops.")
-                        .arg(kMostSpans));
+    if (cut) notes_.line(kTooManyLoops);
     if (clamped) {
         notes_.line(
             QStringLiteral("Some warped audio stretched past SUBstation's tempos (%1 to %2 BPM) plays at their limit.")

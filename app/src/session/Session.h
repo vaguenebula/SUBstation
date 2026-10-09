@@ -433,7 +433,16 @@ Q_SIGNALS:
 
 private:
     void wire();
-    void resetSession();
+    // A session of its own for the project now in it (new, opened, imported): no
+    // undo history (clean), nothing selected, at the start. `untitledName`: what it
+    // is called while it has no file (an imported set's name; none: "Untitled").
+    void resetSession(const QString& untitledName = {});
+    // After a project was read from a file (opened, imported): resetSession, the
+    // file's folder remembered, the project's files looked at, projectOpened.
+    void loadedFrom(const QString& path, const QString& untitledName = {});
+    // What the status line adds about the files the project plays that are
+    // missing (": 2 files are missing (the File Manager finds them)"), or "".
+    QString missingFilesText() const;
     bool saveTo(const QString& path);
     void addRecent(const QString& path);
     void setRecent(const QStringList& paths);

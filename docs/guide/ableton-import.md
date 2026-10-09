@@ -3,7 +3,9 @@
 *File › Import Ableton Live Set…* opens a Live Set (`.als`, from Live 10, 11 or 12) as a
 new project. SUBstation asks about unsaved changes first, as *Open…* does. The project is
 untitled but named after the set: the title bar says its name, and *Save* asks where to
-save it, starting with that name (`My Song.gilproj`). The set itself is only read.
+save it, starting with that name (`My Song.gilproj`). Until it is saved it counts as
+unsaved (the title has a `*`), so *New*, *Open* and quitting ask first. The set itself is
+only read.
 
 Once it is open, a message lists what didn't come across as it was (devices SUBstation
 has nothing like, plug-ins that aren't installed, automation of what was left out...),
@@ -21,7 +23,7 @@ the MIDI is in.
 **Tracks.** Audio, MIDI and group tracks, nested and folded as in Live, return tracks and
 the main track, each with:
 
-- its name and colour. Live's numbered default names become SUBstation's: "4-Serum"
+- its name and colour (Live 10's colours too). Live's numbered default names become SUBstation's: "4-Serum"
   is "# Serum", so it shows its place in the arrangement as tracks come and go.
 - its volume, pan, activator and solo, and its sends (before or after the fader, as
   Live's *Sends Pre*).

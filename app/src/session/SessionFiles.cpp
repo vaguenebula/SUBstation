@@ -9,6 +9,8 @@
 #include <QSettings>
 #include <QVariant>
 
+#include <new>
+
 #include "audio/EngineBridge.h"
 #include "browser/PathKeys.h"
 #include "files/FileManager.h"
@@ -40,8 +42,8 @@ QString recentEntry(const QString& path) {
 
 // --- New, open, save --------------------------------------------------------------------------
 
-void Session::resetSession() {
-    untitledName_.clear();
+void Session::resetSession(const QString& untitledName) {
+    untitledName_ = untitledName;
     bridge_->stop();
     undoStack_->clear();
     undoStack_->setClean();
@@ -75,19 +77,24 @@ bool Session::openProject(const QString& path) {
         Q_EMIT warning(error.message());
         return false;
     }
-    resetSession();
-    setLastFolder(QFileInfo(path).absolutePath());
+    loadedFrom(path);
     addRecent(path);
+    Q_EMIT statusMessage(QStringLiteral("Opened ") + QFileInfo(path).fileName() + missingFilesText());
+    return true;
+}
+
+void Session::loadedFrom(const QString& path, const QString& untitledName) {
+    resetSession(untitledName);
+    setLastFolder(QFileInfo(path).absolutePath());
     files_->update();
     Q_EMIT projectOpened();
+}
+
+QString Session::missingFilesText() const {
     const int missing = files_->missingCount();
-    QString message = QStringLiteral("Opened ") + QFileInfo(path).fileName();
-    if (missing > 0) {
-        message += missing == 1 ? QStringLiteral(": 1 file is missing (the File Manager finds it)")
-                                : QStringLiteral(": %1 files are missing (the File Manager finds them)").arg(missing);
-    }
-    Q_EMIT statusMessage(message);
-    return true;
+    if (missing <= 0) return {};
+    return missing == 1 ? QStringLiteral(": 1 file is missing (the File Manager finds it)")
+                        : QStringLiteral(": %1 files are missing (the File Manager finds them)").arg(missing);
 }
 
 bool Session::importLiveSet(const QString& path) {
@@ -102,13 +109,13 @@ bool Session::importLiveSet(const QString& path) {
     } catch (const ProjectFileError& error) {
         Q_EMIT warning(error.message());
         return false;
+    } catch (const std::bad_alloc&) {
+        Q_EMIT warning(QStringLiteral("%1 is too large to import: there isn't enough memory.").arg(name));
+        return false;
     }
-    resetSession();
-    untitledName_ = fileStem(path);
-    Q_EMIT titleChanged();
-    setLastFolder(QFileInfo(path).absolutePath());
-    files_->update();
-    Q_EMIT projectOpened();
+    loadedFrom(path, fileStem(path));
+    // It has no file yet: unsaved until it is saved (New, Open and Quit ask first).
+    undoStack_->resetClean();
     const auto count = [](int n, const QString& one, const QString& many) {
         return QStringLiteral("%1 %2").arg(n).arg(n == 1 ? one : many);
     };

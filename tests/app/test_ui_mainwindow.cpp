@@ -773,11 +773,15 @@ private Q_SLOTS:
         call("importChosen", set);  // (the dialog's accepted)
         QCOMPARE(project().tempo(), 95.0);
         QCOMPARE(project().tracks().size(), size_t(1));
-        QCOMPARE(window_->title(), QStringLiteral("Live Song - SUBstation"));
+        QCOMPARE(window_->title(), QStringLiteral("Live Song* - SUBstation"));  // (not saved yet)
         QTRY_VERIFY(shown(QStringLiteral("messageBox")));
         QVERIFY(prop(QStringLiteral("messageBox"), "text").toString().contains(QStringLiteral("Saturator")));
         test::screenshot(window_, QStringLiteral("live-set-imported"));
         answer(QStringLiteral("messageBox"), QStringLiteral("ok"));
+        trigger(QStringLiteral("newProject"));  // it asks before the import goes
+        QTRY_VERIFY(shown(QStringLiteral("unsavedChangesDialog")));
+        answer(QStringLiteral("unsavedChangesDialog"), QStringLiteral("cancel"));
+        QCOMPARE(project().tempo(), 95.0);
     }
 
     // Export Audio: nothing to export says so; else it asks where (a WAV or an

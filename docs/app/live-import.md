@@ -25,7 +25,8 @@ Session::importLiveSet(path)                      (session/SessionFiles.cpp)
 
 A set is gzip-compressed XML (plain XML is read too). `gunzip` reads gzip's header, inflates
 with `puff` into a buffer as long as the trailer says, and checks the trailer's length and CRC-32:
-anything else is "damaged". `parseLiveSet` builds the element tree with `QXmlStreamReader`:
+anything else is "damaged". The trailer's length is taken only as far as deflate can go (1032 bytes
+from one): a cut file's last bytes would otherwise ask for gigabytes. `parseLiveSet` builds the element tree with `QXmlStreamReader`:
 
 - Element and attribute names are interned (a set has about a million elements of some 1500
   names), looked up by the reader's `QStringView` so no string is made for a name seen before.
@@ -60,6 +61,8 @@ Values Live writes, and what they become:
 | Time signature: `numerator - 1 + 99 * log2(denominator)` | numerator, denominator |
 | Colour: an index into Live's 70 colours | `kLiveColors` (its first 13 are `kTrackColors`) |
 | Drum Rack pad `ReceivingNote`: `128 - note` | the MIDI note |
+| 32-bit words (class id fields, VST3 `ParameterId`, a VST2's id): signed or unsigned | `liveWord()`: unsigned; a `ParameterId` of -1 is a slot with none |
+| Colour: `Color` (Live 11, 12) or `ColorIndex` (Live 10) | `colorOf()` |
 | Utility gain, Compressor threshold: linear amplitude | dB |
 | Delay times: seconds; feedback, dry/wet: 0..1 | ms; percent |
 | VST3 parameters: normalized | the same (their ids are the VST3 `ParamID`s) |
@@ -70,7 +73,11 @@ Clips:
   StartRelative`) for its length, and round its loop (`LoopStart..LoopEnd`) when `LoopOn`. Warped
   and MIDI clips' markers are in beats, unwarped audio clips' in seconds.
 - MIDI notes are written out span by span, cut at a span's end; a Drum Rack pad's clips keep its
-  note only, at its `SendingNote` (a pad track's clip with none of them is left out).
+  note only, at its `SendingNote` (a pad track's clip with none of them is left out). A pad whose
+  notes are all outside the clips' windows makes no track, and nothing of it (its devices, its
+  automation targets) is translated. Clip envelopes are noted once per Live track
+  (`noteClipEnvelopes`), not once per pad.
+- Samples are looked for once each (`resolvedPaths_`): where the set says, beside it, a folder up.
 - Warped audio: `WarpMap` maps content beats to file seconds through the warp markers (straight
   between them, the end stretches' tempo beyond). Each span is cut at the markers in it; each piece
   is a clip at `60 * beats / seconds` BPM, pieces of one tempo that follow each other are joined.

@@ -16,7 +16,9 @@
 #include "io/Serialization.h"
 #include "model/Automation.h"
 #include "model/DeviceState.h"
+#include "model/Devices.h"
 #include "model/Errors.h"
+#include "model/ParamSpec.h"
 #include "model/Project.h"
 #include "plugins/Vst3Ids.h"
 
@@ -127,7 +129,8 @@ struct Song {
     QString tracks;
     QString masterDevices;
     QString masterEnvelopes;
-    QString extra;  // more of LiveSet: Transport, ScaleInformation, SendsPre...
+    QString extra;               // more of LiveSet: Transport, ScaleInformation, SendsPre...
+    bool settingTargets = true;  // the tempo's and time signature's AutomationTargets
 };
 
 QByteArray liveSet(const Song& song) {
@@ -138,8 +141,9 @@ QByteArray liveSet(const Song& song) {
                 QStringLiteral("DeviceChain"),
                 element(QStringLiteral("Mixer"),
                         param(QStringLiteral("Volume"), 1.0, 5) + param(QStringLiteral("Pan"), 0.0, 3) +
-                            param(QStringLiteral("Tempo"), song.tempo, 8) +
-                            param(QStringLiteral("TimeSignature"), QString::number(song.signature), 10)) +
+                            param(QStringLiteral("Tempo"), song.tempo, song.settingTargets ? 8 : 0) +
+                            param(QStringLiteral("TimeSignature"), QString::number(song.signature),
+                                  song.settingTargets ? 10 : 0)) +
                     element(QStringLiteral("DeviceChain"), element(QStringLiteral("Devices"), song.masterDevices))));
     const QString xml =
         QStringLiteral(
@@ -391,6 +395,15 @@ private Q_SLOTS:
         } catch (const ProjectFileError& error) {
             QCOMPARE(error.message(), QStringLiteral("broken.als is damaged: its data doesn't check out"));
         }
+        // A cut file's last bytes (its length, as gzip has it) aren't taken on trust: no gigabytes asked for.
+        QByteArray cut = gzip(xml);
+        for (int i = 1; i <= 4; ++i) cut[cut.size() - i] = char(0xF0);
+        try {
+            live::parseLiveSet(cut, QStringLiteral("cut.als"));
+            QFAIL("a set with a broken length was read");
+        } catch (const ProjectFileError& error) {
+            QCOMPARE(error.message(), QStringLiteral("cut.als is damaged: its compressed data is broken"));
+        }
         try {
             live::parseLiveSet(QByteArrayLiteral("<?xml version=\"1.0\"?><Project />"), QStringLiteral("other.als"));
             QFAIL("not a set was read");
@@ -441,6 +454,22 @@ private Q_SLOTS:
         QCOMPARE(imported->project.tempo(), 150.0);
         QVERIFY(noteSays(imported->notes,
                          QStringLiteral("The tempo changes during the song; SUBstation has one tempo: 150 BPM.")));
+
+        // Past SUBstation's tempos: the one it has is said.
+        song.masterEnvelopes = envelope(8, floatEvent(-63072000, 1200) + floatEvent(64, 160));
+        imported = load(liveSet(song));
+        QCOMPARE(imported->project.tempo(), 999.0);
+        QVERIFY(noteSays(imported->notes, QStringLiteral("SUBstation has one tempo: 999 BPM.")));
+
+        // A tempo without an automation target, and an envelope without one: nothing is taken for the tempo.
+        song.settingTargets = false;
+        song.masterEnvelopes =
+            element(QStringLiteral("AutomationEnvelope"),
+                    QStringLiteral("<EnvelopeTarget />") +
+                        element(QStringLiteral("Automation"), element(QStringLiteral("Events"), floatEvent(0, 0.5))));
+        imported = load(liveSet(song));
+        QCOMPARE(imported->project.tempo(), 174.0);
+        QVERIFY(noteSays(imported->notes, QStringLiteral("Automation left out (of what didn't come across): Main.")));
     }
 
     // Tracks in groups (nested, folded), returns and their sends, names, colours,
@@ -512,6 +541,16 @@ private Q_SLOTS:
         QVERIFY(!p.tracks()[5].inputTrack);  // (resampling, not monitored: not taken)
         QCOMPARE(p.tracks()[5].monitor, QStringLiteral("off"));
         QCOMPARE(p.returns()[0].name, QStringLiteral("Reverb"));
+    }
+
+    // Live 10 keeps colours as ColorIndex.
+    void live10Colours() {
+        Song song;
+        LiveTrack t{QStringLiteral("AudioTrack"), 1, QStringLiteral("1-Audio")};
+        t.color = 14;
+        song.tracks = track(t).replace(QStringLiteral("<Color Value"), QStringLiteral("<ColorIndex Value"));
+        QVERIFY(song.tracks.contains(QStringLiteral("ColorIndex")));
+        QCOMPARE(load(liveSet(song))->project.tracks()[0].color, QStringLiteral("#ff3636"));
     }
 
     // MIDI clips: notes in place from the start marker; a loop written out loop
@@ -660,18 +699,24 @@ private Q_SLOTS:
         LiveTrack t{QStringLiteral("MidiTrack"), 1, QStringLiteral("1-Serum")};
         const QByteArray component("component state \x01\x02", 18);
         const QByteArray controller("controller", 10);
-        const QString parameters = element(
-            QStringLiteral("PluginFloatParameter"),
-            value(QStringLiteral("ParameterId"), QStringLiteral("7")) +
-                element(QStringLiteral("ParameterValue"),
-                        value(QStringLiteral("Manual"), 0.25) + QStringLiteral("<AutomationTarget Id=\"700\" />")),
-            QStringLiteral("Id=\"0\""));
+        const auto parameter = [](const QString& id, int target) {
+            return element(QStringLiteral("PluginFloatParameter"),
+                           value(QStringLiteral("ParameterId"), id) +
+                               element(QStringLiteral("ParameterValue"),
+                                       value(QStringLiteral("Manual"), 0.25) +
+                                           QStringLiteral("<AutomationTarget Id=\"%1\" />").arg(target)),
+                           QStringLiteral("Id=\"0\""));
+        };
+        // ParamID 7; 3000000000 (its high bit set: Live writes it as a signed number); a slot with none (-1).
+        const QString parameters = parameter(QStringLiteral("7"), 700) + parameter(QStringLiteral("-1294967296"), 701) +
+                                   parameter(QStringLiteral("-1"), 702);
         t.devices = vst2Device(QStringLiteral("Serum_x64"), 0x58667358, QByteArray("serum", 5)) +
                     vst3Device(QStringLiteral("Pro-Q 4"), proQ, component, controller, 2, parameters) +
                     vst2Device(QStringLiteral("ValhallaVintageVerb_x64"), 0x566C7676, QByteArray("VC2!vintage", 11)) +
                     vst2Device(QStringLiteral("Glitch2"), 0x476C7432, QByteArray("glitch", 6)) +
                     vst3Device(QStringLiteral("Unknown Thing"), wordsOf("NotInstalledHere"), component, {}, 2);
-        t.envelopes = envelope(700, floatEvent(0, 0.25) + floatEvent(4, 0.75));
+        t.envelopes = envelope(700, floatEvent(0, 0.25) + floatEvent(4, 0.75)) + envelope(701, floatEvent(0, 0.5)) +
+                      envelope(702, floatEvent(0, 0.5));
         song.tracks = track(t);
         auto imported = load(liveSet(song), QStringLiteral("/nowhere/song.als"), options);
         const std::vector<Device>& devices = imported->project.tracks()[0].devices;
@@ -702,6 +747,12 @@ private Q_SLOTS:
         QCOMPARE(points.size(), size_t{2});
         QCOMPARE(points[1].beat, 4.0);
         QCOMPARE(points[1].value, 0.75);
+        QCOMPARE(imported->project.tracks()[0]
+                     .automation.value(automation::deviceKey(eq.id, QStringLiteral("3000000000")))
+                     .size(),
+                 size_t{1});
+        QVERIFY(
+            noteSays(imported->notes, QStringLiteral("Automation left out (of what didn't come across): 1-Serum.")));
 
         // ValhallaVintageVerb (VST2) as the VST3 replacing it, with its settings in Steinberg's VST2 form.
         const Device& verb = devices[2];
@@ -826,14 +877,14 @@ private Q_SLOTS:
                                         element(QStringLiteral("MultiSamplePart"),
                                                 value(QStringLiteral("RootKey"), QStringLiteral("48")) +
                                                     value(QStringLiteral("Detune"), 0.0) +
-                                                    value(QStringLiteral("Volume"), 1.0) +
+                                                    value(QStringLiteral("Volume"), 0.5) +
                                                     value(QStringLiteral("SampleStart"), 0.0) +
                                                     value(QStringLiteral("SampleEnd"), 2400.0) +
                                                     sampleRef(kick, QStringLiteral("kick.wav"), 4800, 48000))))) +
                 element(QStringLiteral("Pitch"),
                         param(QStringLiteral("TransposeKey"), 2.0) + param(QStringLiteral("TransposeFine"), 10.0)) +
                 element(QStringLiteral("VolumeAndPan"),
-                        param(QStringLiteral("Volume"), -6.0) +
+                        param(QStringLiteral("Volume"), -6.0, 820) +
                             element(QStringLiteral("Envelope"), param(QStringLiteral("AttackTime"), 5.0) +
                                                                     param(QStringLiteral("DecayTime"), 300.0) +
                                                                     param(QStringLiteral("SustainLevel"), 0.5) +
@@ -856,7 +907,7 @@ private Q_SLOTS:
                                                                            param(QStringLiteral("Speaker"), true)))));
         t.devices = element(QStringLiteral("MidiArpeggiator"), QString()) + simpler + utility + eq8 + compressor +
                     delay + rack + element(QStringLiteral("Saturator"), QString());
-        t.envelopes = envelope(801, floatEvent(0, 1000.0) + floatEvent(2, 2000.0));
+        t.envelopes = envelope(801, floatEvent(0, 1000.0) + floatEvent(2, 2000.0)) + envelope(820, floatEvent(0, -6.0));
         song.tracks = track(source) + track(t);
         auto imported = load(liveSet(song), dir.path(QStringLiteral("song.als")));
         const Track& bass = imported->project.tracks()[1];
@@ -873,7 +924,18 @@ private Q_SLOTS:
         QCOMPARE(sampler.params.value(QStringLiteral("tune")), 2.0);
         QCOMPARE(sampler.params.value(QStringLiteral("fine")), 10.0);
         QCOMPARE(sampler.params.value(QStringLiteral("end")), 50.0);
-        QCOMPARE(sampler.params.value(QStringLiteral("gain")), -6.0);
+        // Its gain: the Simpler's volume and its sample's (-6 dB each); automating the
+        // volume keeps the sample's on top: at -6 dB it is the gain it has.
+        const double gainDb = -6.0 + 20.0 * std::log10(0.5);
+        QVERIFY(std::abs(sampler.params.value(QStringLiteral("gain")) - gainDb) < 1e-9);
+        const sub::ParamInfo* gainInfo = nullptr;
+        for (const sub::ParamInfo& info : builtinDevice(QStringLiteral("sampler"))->info->params) {
+            if (info.id == "gain") gainInfo = &info;
+        }
+        QVERIFY(gainInfo);
+        const Envelope gainPoints = bass.automation.value(automation::deviceKey(sampler.id, QStringLiteral("gain")));
+        QCOMPARE(gainPoints.size(), size_t{1});
+        QVERIFY(std::abs(gainPoints[0].value - ParamSpec::fromInfo(*gainInfo, {}, {}).toNormalized(gainDb)) < 1e-9);
         QCOMPARE(sampler.params.value(QStringLiteral("sustain")), 50.0);
         QCOMPARE(sampler.params.value(QStringLiteral("release")), 10000.0);  // (its longest)
 
@@ -937,7 +999,8 @@ private Q_SLOTS:
         TempDir dir;
         const QString kick = test::writeWav(dir.path(QStringLiteral("kick.wav")), std::vector<float>(4800, 0.5f), 1);
         const QString snare = test::writeWav(dir.path(QStringLiteral("snare.wav")), std::vector<float>(4800, 0.25f), 1);
-        const auto pad = [&](const QString& name, int note, const QString& sample, double volume) {
+        const auto pad = [&](const QString& name, int note, const QString& sample, double volume,
+                             const QString& more = {}) {
             const QString simpler =
                 element(QStringLiteral("OriginalSimpler"),
                         param(QStringLiteral("On"), true) +
@@ -950,8 +1013,9 @@ private Q_SLOTS:
             return element(
                 QStringLiteral("DrumBranch"),
                 element(QStringLiteral("Name"), value(QStringLiteral("EffectiveName"), name)) +
-                    element(QStringLiteral("DeviceChain"), element(QStringLiteral("MidiToAudioDeviceChain"),
-                                                                   element(QStringLiteral("Devices"), simpler))) +
+                    element(QStringLiteral("DeviceChain"),
+                            element(QStringLiteral("MidiToAudioDeviceChain"),
+                                    element(QStringLiteral("Devices"), simpler + more))) +
                     element(QStringLiteral("BranchInfo"),
                             value(QStringLiteral("ReceivingNote"), QString::number(128 - note)) +
                                 value(QStringLiteral("SendingNote"), QStringLiteral("60"))) +
@@ -964,16 +1028,26 @@ private Q_SLOTS:
         drums.color = 9;
         drums.mix.volume = 0.5;
         drums.devices =
-            element(QStringLiteral("DrumGroupDevice"),
-                    param(QStringLiteral("On"), true) +
-                        element(QStringLiteral("Branches"), pad(QStringLiteral("Kick"), 36, kick, 1.0) +
-                                                                pad(QStringLiteral("Snare"), 38, snare, 0.5) +
-                                                                pad(QStringLiteral("Unplayed"), 40, kick, 1.0))) +
+            element(
+                QStringLiteral("DrumGroupDevice"),
+                param(QStringLiteral("On"), true) +
+                    element(QStringLiteral("Branches"),
+                            pad(QStringLiteral("Kick"), 36, kick, 1.0) + pad(QStringLiteral("Snare"), 38, snare, 0.5) +
+                                pad(QStringLiteral("Unplayed"), 40, kick, 1.0) +
+                                pad(QStringLiteral("Outside"), 41, kick, 1.0,
+                                    vst2Device(QStringLiteral("Glitch2"), 0x476C7432, QByteArray("glitch", 6))))) +
             element(QStringLiteral("StereoGain"),
                     param(QStringLiteral("On"), true) + param(QStringLiteral("Gain"), 1.0));
+        // (A clip envelope, noted once for the clip, not once a pad; pad 41 plays only past the clip's end.)
         drums.clips =
-            midiClip(0.0, 4.0, keyTrack(36, note(0.0, 0.25) + note(2.0, 0.25)) + keyTrack(38, note(1.0, 0.25, 80)));
-        drums.envelopes = envelope(950 + 38, floatEvent(0, 1.0) + floatEvent(4, 0.5));
+            midiClip(0.0, 4.0,
+                     keyTrack(36, note(0.0, 0.25) + note(2.0, 0.25)) + keyTrack(38, note(1.0, 0.25, 80)) +
+                         keyTrack(41, note(6.0, 0.25)))
+                .replace(
+                    QStringLiteral("<Notes>"),
+                    QStringLiteral("<Envelopes><Envelopes><ClipEnvelope Id=\"0\" /></Envelopes></Envelopes><Notes>"));
+        drums.envelopes =
+            envelope(950 + 38, floatEvent(0, 1.0) + floatEvent(4, 0.5)) + envelope(950 + 41, floatEvent(0, 0.5));
         LiveTrack bass{QStringLiteral("AudioTrack"), 6, QStringLiteral("6-Bass")};
         bass.devices = element(
             QStringLiteral("Compressor2"),
@@ -1013,7 +1087,12 @@ private Q_SLOTS:
         QVERIFY(std::abs(snareTrack.volumeDb - 20.0 * std::log10(0.5)) < 1e-9);
         QCOMPARE(snareTrack.automation.value(automation::kMixerVolume).size(),
                  size_t{2});  // (its pad's volume, automated)
-        QVERIFY(!named(p, QStringLiteral("Unplayed")));
+        QVERIFY(!named(p, QStringLiteral("Unplayed")) && !named(p, QStringLiteral("Outside")));
+        QVERIFY(noteSays(imported->notes, QStringLiteral("Left out (clip envelopes): 5-Drum Rack.")));
+        QVERIFY(
+            !noteSays(imported->notes, QStringLiteral("Glitch2")));  // (the pad made no track: nothing of it is said)
+        QVERIFY(noteSays(imported->notes,
+                         QStringLiteral("Automation left out (of what didn't come across): 5-Drum Rack.")));
         const Device& ducking = p.tracks()[3].devices[0];
         QVERIFY(ducking.sidechain);
         QCOMPARE(ducking.sidechain->trackId, kickTrack.id);
@@ -1060,12 +1139,15 @@ private Q_SLOTS:
         QCOMPARE(f.project().tempo(), 172.0);
         QCOMPARE(f.engine.tempo(), 172.0);
         QCOMPARE(f.project().path(), QString());
-        QVERIFY(s.clean() && f.stack().count() == 0);
-        QCOMPARE(s.title(), QStringLiteral("My Song - SUBstation"));
+        QVERIFY(!s.clean() && f.stack().count() == 0);  // (unsaved: New, Open and Quit ask first)
+        QCOMPARE(s.title(), QStringLiteral("My Song* - SUBstation"));
         QCOMPARE(QFileInfo(s.suggestedSavePath()).fileName(), QStringLiteral("My Song.gilproj"));
         QCOMPARE(f.lastMessage(), QStringLiteral("Imported My Song.als: 1 track, 1 clip"));
         QCOMPARE(f.informations.size(), 1);
         QVERIFY(f.informations.back().contains(QStringLiteral("Saturator")));
+        QVERIFY(s.saveProjectAs(dir.path(QStringLiteral("My Song.gilproj"))));
+        QVERIFY(s.clean());
+        QCOMPARE(s.title(), QStringLiteral("My Song - SUBstation"));
         s.newProject();
         QCOMPARE(s.title(), QStringLiteral("Untitled - SUBstation"));
 

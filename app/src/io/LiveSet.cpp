@@ -9,6 +9,7 @@
 #include <QXmlStreamReader>
 
 #include <array>
+#include <new>
 
 extern "C" {
 #include "puff.h"
@@ -197,8 +198,19 @@ QByteArray gunzip(const QByteArray& gzip, const QString& name) {
     if (flags & 0x02) at += 2;  // FHCRC
     if (at + 8 > gzip.size()) damaged(name, QStringLiteral("it ends early"));
     // Its length (modulo 4 GB: no Live Set is near that) is the last 4 bytes.
+    // Taken on trust only as far as deflate can go (1032 bytes from one at
+    // most): a cut file's last bytes are anything, and asking for gigabytes of
+    // memory for them would fail where it should say the file is damaged.
     const uint32_t size = readLe32(gzip, gzip.size() - 4);
-    QByteArray out(static_cast<qsizetype>(size), Qt::Uninitialized);
+    if (static_cast<quint64>(size) > static_cast<quint64>(gzip.size() - at) * 1032 + 1024) {
+        damaged(name, QStringLiteral("its compressed data is broken"));
+    }
+    QByteArray out;
+    try {
+        out = QByteArray(static_cast<qsizetype>(size), Qt::Uninitialized);
+    } catch (const std::bad_alloc&) {
+        throw ProjectFileError(QStringLiteral("%1 is too large to read (%2 MB)").arg(name).arg(size >> 20));
+    }
     unsigned long outLength = size;
     unsigned long inLength = static_cast<unsigned long>(gzip.size() - at);
     const int result = puff(size > 0 ? reinterpret_cast<unsigned char*>(out.data()) : nullptr, &outLength,
