@@ -403,14 +403,15 @@ The editors:
   - The display ([SampleView](../../ui/src/devices/SampleView.h)): the waveform from its peaks
     (`waveformColumns()`), flipped while it plays reversed, so what is drawn is what plays left to right; the sample's
     name in its top left corner; Start and End as accent lines flagged at the top, the rest dimmed; by mode, the loop
-    (bracketed over the top from Loop Start, its crossfade shaded at its end and where it fades from), the fades (a
-    line), or the slices (a line where each starts, numbered at the bottom while there is room, the one the playhead
+    (bracketed over the top from Loop Start, its handle at the bottom, its crossfade shaded at its end and where it
+    fades from), the fades (a line), or the slices (a line where each starts, numbered at the bottom while there is room, the one the playhead
     is in lit: `playingSlice`); the newest note's position (display `position`); a time ruler (m:ss:mmm) under it. It
     places everything as the engine does: frames from percent (truncated), snapped with Snap through the application
     layer's `sampleSlices::nearestZeroCrossing`, slices from `sampleSlices::sliceStarts` over the transients it finds
     once per sample and direction ([SampleSlices.h](../../app/src/audio/SampleSlices.h), the engine's own functions on
     the bridge's `Waveform`, which is the engine's decoded source). Drag Start, End, or Loop Start while Classic
-    loops (within `kMarkerGrab` 5 px; one undo step per drag, kept within the others); drop an audio file on it, or
+    loops (within `kMarkerGrab` 5 px, the nearest; Loop Start by its handle in the bottom `kLoopHandle` 10 px first,
+    so it can be pulled off Start; one undo step per drag, kept within the others); drop an audio file on it, or
     double-click it to browse.
   - The device's menu starts with Load Sample…, Clear Sample and Reverse (`menuActions`). The sample's path lives in
     the device's state ("sample"); loading one is `editor.setDeviceState(..., "Load Sample")`, undoable. The waveform

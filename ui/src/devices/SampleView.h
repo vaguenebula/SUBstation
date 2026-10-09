@@ -10,7 +10,7 @@
 // corner, and a time ruler along the bottom.
 //
 // Drag a marker (within kMarkerGrab px: Start, End, and Classic's Loop Start
-// while it loops) to set it (one undo step per drag, kept within the others);
+// while it loops, by its handle at the bottom where it is on another) to set it (one undo step per drag, kept within the others);
 // drop an audio file on it to load it, or double-click it to browse
 // (browseRequested: the editor shows the file dialog). Loading a sample is an
 // undoable state change (ProjectEditor::setDeviceState); the path lives in the
@@ -55,6 +55,7 @@ public:
     static constexpr int kMinimumHeight = 40;
     static constexpr double kMarkerGrab = 5.0;  // px either side of a marker that grab it
     static constexpr double kRulerHeight = 10.0;  // the time ruler under the waveform
+    static constexpr double kLoopHandle = 10.0;   // the loop's marker grabbed first this far up from the bottom
     static inline const QString kFileFilter = QStringLiteral("Audio Files (*.wav *.wave *.flac *.mp3)");
 
     explicit SampleView(QQuickItem* parent = nullptr);
@@ -80,8 +81,9 @@ public:
     QRectF plot() const;
     // A Start or End (percent of the sample, as it plays) as x.
     double xOf(double percent) const;
-    // The marker within reach of x ("start", "end", "loop"; "" none).
-    QString markerAt(double x) const;
+    // The marker within reach of x ("start", "end", "loop"; "" none), the nearest (the first of
+    // equals); at y in the loop's handle (the bottom kLoopHandle px), the loop's first.
+    QString markerAt(double x, double y = -1.0) const;
 
 Q_SIGNALS:
     void sampleChanged();

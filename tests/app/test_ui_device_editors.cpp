@@ -620,6 +620,10 @@ private Q_SLOTS:
         QVERIFY2(std::abs(value("loop_start") - 75.0) <= 1.0, qPrintable(QString::number(value("loop_start"))));
         undo()->undo();
         QCOMPARE(value("loop_start"), 50.0);
+        // Where it is on Start, its handle at the bottom grabs it; anywhere else on the line, Start.
+        editor()->setDeviceParam(track, device, QStringLiteral("loop_start"), 0.0);
+        QCOMPARE(samples->markerAt(samples->xOf(0.0), plot.center().y()), QStringLiteral("start"));
+        QCOMPARE(samples->markerAt(samples->xOf(0.0) + 2, plot.bottom() - 3), QStringLiteral("loop"));
 
         // Warp: halved and doubled.
         QCOMPARE(find(view, QStringLiteral("warpBeats"))->property("box").value<QQuickItem*>()->property("text").toString(),

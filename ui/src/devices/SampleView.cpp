@@ -151,9 +151,13 @@ qint64 SampleView::frameOf(double percent) const {
     return snap_ ? sub::app::sampleSlices::nearestZeroCrossing(waveform_, reverse_, frame) : frame;
 }
 
-QString SampleView::markerAt(double x) const {
+QString SampleView::markerAt(double x, double y) const {
     if (waveform_.isNull())
         return {};
+    const bool loops = mode_ == kClassic && looping_;
+    const double loopX = xOfFrame(double(loopFrame_));
+    if (loops && y >= plot().bottom() - kLoopHandle && std::abs(loopX - x) <= kMarkerGrab)
+        return QStringLiteral("loop");  // its handle (where it is on Start, the only way to it)
     QString nearest;
     double distance = kMarkerGrab;
     const auto consider = [&](const QString& marker, double at) {
@@ -165,8 +169,8 @@ QString SampleView::markerAt(double x) const {
     };
     consider(QStringLiteral("start"), xOfFrame(double(startFrame_)));
     consider(QStringLiteral("end"), xOfFrame(double(endFrame_)));
-    if (mode_ == kClassic && looping_)
-        consider(QStringLiteral("loop"), xOfFrame(double(loopFrame_)));
+    if (loops)
+        consider(QStringLiteral("loop"), loopX);
     return nearest;
 }
 
@@ -353,7 +357,8 @@ void SampleView::setDrag(const QString& marker) {
 }
 
 void SampleView::mousePressEvent(QMouseEvent* event) {
-    const QString marker = event->button() == Qt::LeftButton ? markerAt(event->position().x()) : QString();
+    const QString marker =
+        event->button() == Qt::LeftButton ? markerAt(event->position().x(), event->position().y()) : QString();
     if (marker.isEmpty()) {
         event->ignore();  // (to the device: selecting it)
         return;
@@ -389,7 +394,8 @@ void SampleView::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void SampleView::hoverMoveEvent(QHoverEvent* event) {
     if (drag_.isEmpty())
-        setCursor(markerAt(event->position().x()).isEmpty() ? Qt::ArrowCursor : Qt::SizeHorCursor);
+        setCursor(markerAt(event->position().x(), event->position().y()).isEmpty() ? Qt::ArrowCursor
+                                                                                    : Qt::SizeHorCursor);
 }
 
 // --- Dropping files --------------------------------------------------------------------------
@@ -512,6 +518,10 @@ void SampleView::paint(SgPainter& p) {
         }
         p.fillRect(QRectF(loop, r.top(), end - loop, 3), Theme::kLoopOn);
         p.drawLine(QPointF(loop, r.top()), QPointF(loop, r.bottom()), Theme::kLoopOn, 1.5);
+        // Its handle at the bottom, pointing into the loop.
+        p.fillPolygon(QPolygonF({QPointF(loop, r.bottom() - kLoopHandle), QPointF(loop + 7, r.bottom() - kLoopHandle / 2),
+                                 QPointF(loop, r.bottom())}),
+                      Theme::kLoopOn);
     } else if (mode_ == kOneShot) {
         // Its fades: in from Start, out before End.
         const double perMs = waveform_.sampleRate() / 1000.0 * rate_;

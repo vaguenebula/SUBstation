@@ -22,14 +22,14 @@ double toDb(double energy, double floor) { return 10.0 * std::log10(std::max(ene
 std::vector<Onset> detectOnsets(const float* const* channels, int numChannels, int64_t frames, double sampleRate,
                                 bool reversed) {
     if (frames <= 0 || numChannels <= 0 || !(sampleRate > 0.0)) return {};
-    // The sample summed to mono, in the order it plays.
-    std::vector<float> mono(static_cast<size_t>(frames));
-    for (int64_t i = 0; i < frames; ++i) {
+    // The sample summed to mono, in the order it plays (read in place: a long file isn't copied).
+    const float scale = 1.f / static_cast<float>(numChannels);
+    const auto at = [&](int64_t i) {
+        const int64_t frame = reversed ? frames - 1 - i : i;
         float sum = 0.f;
-        for (int c = 0; c < numChannels; ++c) sum += channels[c][i];
-        mono[static_cast<size_t>(reversed ? frames - 1 - i : i)] = sum / static_cast<float>(numChannels);
-    }
-    const auto at = [&](int64_t i) { return mono[static_cast<size_t>(i)]; };
+        for (int c = 0; c < numChannels; ++c) sum += channels[c][frame];
+        return sum * scale;
+    };
 
     // Each hop's energy over a window of two hops: the whole band, and the highs
     // (the first difference), so hats and snares over a kick's tail rise too.
@@ -39,10 +39,13 @@ std::vector<Onset> detectOnsets(const float* const* channels, int numChannels, i
     for (int64_t k = 0; k < hops; ++k) {
         const int64_t from = k * hop, to = std::min(frames, from + 2 * hop);
         double f = 0.0, h = 0.0;
+        float previous = from > 0 ? at(from - 1) : 0.f;
         for (int64_t i = from; i < to; ++i) {
-            const double x = at(i), d = x - (i > 0 ? at(i - 1) : 0.f);
-            f += x * x;
+            const float x = at(i);
+            const double d = static_cast<double>(x) - previous;
+            f += static_cast<double>(x) * x;
             h += d * d;
+            previous = x;
         }
         full[static_cast<size_t>(k)] = f;
         highs[static_cast<size_t>(k)] = h;
