@@ -3,11 +3,12 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonParseError>
 #include <QList>
 #include <QUrl>
 
 #include <optional>
+
+#include "io/Json.h"
 
 namespace sub::app {
 
@@ -35,16 +36,9 @@ Payload payload(const std::vector<BrowserItem>& items) {
 
 QByteArray compact(const QJsonArray& array) { return QJsonDocument(array).toJson(QJsonDocument::Compact); }
 
-std::optional<QJsonArray> jsonArray(const QByteArray& data) {
-    QJsonParseError error;
-    const QJsonDocument document = QJsonDocument::fromJson(data, &error);
-    if (error.error != QJsonParseError::NoError || !document.isArray()) return std::nullopt;
-    return document.array();
-}
-
 QStringList strings(const QByteArray& data) {
     QStringList out;
-    if (const auto array = jsonArray(data))
+    if (const auto array = parseJsonArray(data))
         for (const QJsonValue& value : *array)
             if (value.isString()) out << value.toString();
     return out;
@@ -88,7 +82,7 @@ QVariantMap browserDragData(const std::vector<BrowserItem>& items) {
 
 std::vector<PluginInfo> pluginRefs(const QByteArray& data) {
     std::vector<PluginInfo> refs;
-    const auto array = jsonArray(data);
+    const auto array = parseJsonArray(data);
     if (!array) return {};
     for (const QJsonValue& value : *array) {
         const QJsonObject item = value.toObject();

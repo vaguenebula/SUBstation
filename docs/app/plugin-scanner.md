@@ -174,7 +174,8 @@ a temporary file). Caches written by earlier versions of SUBstation are read as 
 - Keys are `caseKey(path)`: on Windows the path in lower case with backslashes; elsewhere the path as it is.
 - A file version other than `kPluginCacheVersion` (1), or a file that can't be read or parsed, counts as an empty cache.
 - It is written with `QSaveFile` (a temporary file renamed into place), so a crash never leaves half a cache. A cache
-  that can't be written only costs time.
+  that can't be written only costs time. (Reading and writing it is `readVersionedObject`/`writeVersionedObject`,
+  [io/Json.h](../../app/src/io/Json.h), as the browser's `library.json` is.)
 - Failures are cached too: a file that crashed or timed out is not read again until it changes, or on a rescan.
 - Entries of files not in this scan (a folder removed from the list) are kept while the file exists, so adding the
   folder back is quick; they don't appear in the result.

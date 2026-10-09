@@ -1,5 +1,6 @@
 #include "io/Serialization.h"
 
+#include "io/Json.h"
 #include "model/Automation.h"
 #include "model/Errors.h"
 #include "model/Keys.h"
@@ -15,7 +16,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
-#include <QSaveFile>
 #include <QSet>
 #include <QVariant>
 
@@ -714,11 +714,9 @@ QJsonValue parseJson(const QByteArray& bytes, const QString& path) {
 
 // Writes `data` to `path` without ever leaving a half-written file behind.
 void writeJson(const QJsonObject& data, const QString& path) {
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(QJsonDocument(data).toJson(QJsonDocument::Indented)) < 0 ||
-        !file.commit()) {
-        throw ProjectFileError(
-            QStringLiteral("Could not save %1: %2").arg(QFileInfo(path).fileName(), file.errorString()));
+    QString error;
+    if (!writeJsonFile(path, data, &error)) {
+        throw ProjectFileError(QStringLiteral("Could not save %1: %2").arg(QFileInfo(path).fileName(), error));
     }
 }
 
