@@ -671,6 +671,27 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
     };
     std::map<std::string, uint32_t> rowOf;
     for (uint32_t r = 0; r < rows.size(); ++r) rowOf[whole(sounds[rows[r]].path)] = r;
+    // A library moved since the answers (another drive or folder): its files by
+    // their last three parts (two folders and the name), where those are unique.
+    auto tail = [](const std::string& path) {
+        const fs::path p = pathOf(path);
+        std::vector<std::string> parts;
+        for (const auto& part : p) parts.push_back(utf8(part));
+        std::string key;
+        for (size_t i = parts.size() > 3 ? parts.size() - 3 : 0; i < parts.size(); ++i) key += "/" + parts[i];
+        return key;
+    };
+    std::map<std::string, int64_t> rowOfTail;  // -1: more than one file
+    for (uint32_t r = 0; r < rows.size(); ++r) {
+        const auto [it, added] = rowOfTail.emplace(tail(sounds[rows[r]].path), r);
+        if (!added) it->second = -1;
+    }
+    auto find = [&](const std::string& path) -> std::optional<uint32_t> {
+        if (const auto it = rowOf.find(whole(path)); it != rowOf.end()) return it->second;
+        if (const auto it = rowOfTail.find(tail(path)); it != rowOfTail.end() && it->second >= 0)
+            return static_cast<uint32_t>(it->second);
+        return std::nullopt;
+    };
     auto fp = [&](uint32_t r) { return matrix.data() + static_cast<size_t>(r) * kDims; };
     std::vector<Answer> answers;
     size_t skipped = 0, missing = 0;
@@ -684,18 +705,20 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
             ++skipped;
             continue;
         }
-        const auto a = rowOf.find(whole(line[2])), b = rowOf.find(whole(line[3])), c = rowOf.find(whole(line[4]));
-        if (a == rowOf.end() || b == rowOf.end() || c == rowOf.end()) {
+        const auto a = find(line[2]), b = find(line[3]), c = find(line[4]);
+        if (!a || !b || !c) {
             ++missing;
             continue;
         }
-        const AspectDistances ab = aspects(fp(a->second), fp(b->second)), ac = aspects(fp(a->second), fp(c->second));
+        const AspectDistances ab = aspects(fp(*a), fp(*b)), ac = aspects(fp(*a), fp(*c));
         Answer answer;
         for (size_t i = 0; i < kAspects; ++i) answer.further[i] = ac[i] - ab[i];
         answer.pickedB = choice == "b";
-        answer.anchor = line[2];
-        answer.b = line[3];
-        answer.c = line[4];
+        // Where the files are now (the answers may name where they were).
+        auto now = [&](uint32_t r) { return utf8(fs::absolute(pathOf(sounds[rows[r]].path)).lexically_normal()); };
+        answer.anchor = now(*a);
+        answer.b = now(*b);
+        answer.c = now(*c);
         if (line.size() > 5) answer.ms = std::strtol(line[5].c_str(), nullptr, 10);
         answers.push_back(answer);
         const bool ordered = line[3] < line[4];
@@ -704,7 +727,7 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
     }
     std::printf("\n%zu answers from %s (%zu can't tell, %zu with a sound not in this library)\n", answers.size(),
                 file.c_str(), skipped, missing);
-    if (!missesFile.empty()) writeMisses(answers, missesFile);
+    if (!missesFile.empty() && !answers.empty()) writeMisses(answers, missesFile);
     if (answers.size() < 20) {
         std::printf("  too few to fit\n");
         return std::nullopt;

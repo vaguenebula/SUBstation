@@ -306,7 +306,8 @@ of the fit (five-fold, grouped by A), and each weight with a 90% interval
 answers alone allow). The rest of the run then uses
 the fitted weights, so a labelled library's P@10 shows whether they still find
 sounds of the same kind. Rate and fit on the same library: distances are in its
-spreads.
+spreads. If it has moved since (another drive or folder), answers are matched by
+their files' last two folders and name.
 
 How many answers it takes, from a simulated rater with known weights on a
 synthetic library (480 one-shots). A rater whose weights are the defaults: the
