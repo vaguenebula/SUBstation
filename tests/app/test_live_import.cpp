@@ -417,6 +417,20 @@ private Q_SLOTS:
             QVERIFY(error.message().startsWith(QStringLiteral("cut.als is damaged")));
         }
         QVERIFY_THROWS_EXCEPTION(ProjectFileError, live::readLiveSet(dir.path(QStringLiteral("none.als"))));
+
+        // Values that aren't numbers, or are past what they're read as, are the fallback.
+        const auto values = live::parseLiveSet(
+            QByteArrayLiteral("<Ableton><LiveSet><A Value=\"nan\" /><B Value=\"-inf\" /><C Value=\"1e20\" />"
+                              "<D Value=\"3.0\" X=\"inf\" Y=\"0.25\" /></LiveSet></Ableton>"),
+            QStringLiteral("values.als"));
+        const live::Element* set = values->child(u"LiveSet");
+        QCOMPARE(set->number(u"A", 120.0), 120.0);
+        QCOMPARE(set->number(u"B", 1.0), 1.0);
+        QCOMPARE(set->integer(u"A", 7), 7);
+        QCOMPARE(set->integer(u"C", 7), 7);
+        QCOMPARE(set->integer(u"D", 7), 3);
+        QCOMPARE(set->at(u"D")->numberAttribute(u"X", 2.0), 2.0);
+        QCOMPARE(set->at(u"D")->numberAttribute(u"Y", 2.0), 0.25);
     }
 
     // Tempo, time signature, loop and key; a tempo that changes is noted.
@@ -1142,6 +1156,7 @@ private Q_SLOTS:
         QVERIFY(!s.clean() && f.stack().count() == 0);  // (unsaved: New, Open and Quit ask first)
         QCOMPARE(s.title(), QStringLiteral("My Song* - SUBstation"));
         QCOMPARE(QFileInfo(s.suggestedSavePath()).fileName(), QStringLiteral("My Song.gilproj"));
+        QCOMPARE(QFileInfo(s.suggestedExportPath(QStringLiteral("mp3"))).fileName(), QStringLiteral("My Song.mp3"));
         QCOMPARE(f.lastMessage(), QStringLiteral("Imported My Song.als: 1 track, 1 clip"));
         QCOMPARE(f.informations.size(), 1);
         QVERIFY(f.informations.back().contains(QStringLiteral("Saturator")));

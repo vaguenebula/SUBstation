@@ -9,6 +9,8 @@
 #include <QXmlStreamReader>
 
 #include <array>
+#include <cmath>
+#include <limits>
 #include <new>
 
 extern "C" {
@@ -145,8 +147,8 @@ double Element::number(QStringView path, double fallback) const {
     const std::optional<QString> text = value(path);
     if (!text) return fallback;
     bool ok = false;
-    const double parsed = text->toDouble(&ok);
-    return ok ? parsed : fallback;
+    const double parsed = text->toDouble(&ok);  // (it takes "nan" and "inf" too)
+    return ok && std::isfinite(parsed) ? parsed : fallback;
 }
 
 int Element::integer(QStringView path, int fallback) const {
@@ -154,7 +156,10 @@ int Element::integer(QStringView path, int fallback) const {
     if (!text) return fallback;
     bool ok = false;
     const double parsed = text->toDouble(&ok);  // (Live writes some as "3.0")
-    return ok ? static_cast<int>(parsed) : fallback;
+    if (!ok || !(parsed >= std::numeric_limits<int>::min() && parsed <= std::numeric_limits<int>::max())) {
+        return fallback;  // (not a number, or past an int's)
+    }
+    return static_cast<int>(parsed);
 }
 
 bool Element::flag(QStringView path, bool fallback) const {
@@ -169,7 +174,7 @@ double Element::numberAttribute(QStringView name, double fallback) const {
     if (!hasAttribute(name)) return fallback;
     bool ok = false;
     const double parsed = attribute(name).toDouble(&ok);
-    return ok ? parsed : fallback;
+    return ok && std::isfinite(parsed) ? parsed : fallback;
 }
 
 // --- Reading ----------------------------------------------------------------------------------

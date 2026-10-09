@@ -327,7 +327,9 @@ QString Session::exportProblem(const QString& range) const {
 
 QString Session::suggestedExportPath(const QString& fileType) const {
     const QString path = project_->path();
-    const QString name = path.isEmpty() ? QStringLiteral("Untitled") : fileStem(path);
+    const QString name = !path.isEmpty()            ? fileStem(path)
+                         : !untitledName_.isEmpty() ? untitledName_
+                                                    : QStringLiteral("Untitled");
     return QDir(lastFolder()).filePath(name + (fileType == u"mp3" ? QStringLiteral(".mp3") : QStringLiteral(".wav")));
 }
 
