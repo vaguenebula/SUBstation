@@ -15,11 +15,15 @@
  *
  * You should have received a copy of the Affero GNU General Public License
  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
+ *
+ * Modified for SUBstation on 2026-10-09: an implementation for Microsoft's STL
+ * as it is now (see intelligence/third_party/essentia/VERSION.txt).
  */
 
 #ifndef ESSENTIA_ROGUEVECTOR_H
 #define ESSENTIA_ROGUEVECTOR_H
 
+#include <cassert>
 #include <vector>
 #include "types.h"
 
@@ -56,8 +60,33 @@ class RogueVector : public std::vector<T> {
   void setSize(size_t size);
 };
 
+// Microsoft's STL (MSVC's, or clang-cl's) implementation: the vector's three
+// pointers (first, last, end) are private, and the last members of it (after
+// a debug proxy where iterators are checked), so they are set where they are.
+#if defined(_MSVC_STL_VERSION)
+
+template <typename T>
+T** roguePointers(std::vector<T>* v) {
+  static_assert(sizeof(std::vector<T>) >= 3 * sizeof(T*), "a vector is three pointers, or more");
+  return reinterpret_cast<T**>(reinterpret_cast<char*>(v) + sizeof(std::vector<T>) - 3 * sizeof(T*));
+}
+
+template <typename T>
+void RogueVector<T>::setData(T* data) {
+  roguePointers<T>(static_cast<std::vector<T>*>(this))[0] = data;
+  assert(this->data() == data);
+}
+
+template <typename T>
+void RogueVector<T>::setSize(size_t size) {
+  T** pointers = roguePointers<T>(static_cast<std::vector<T>*>(this));
+  pointers[1] = pointers[0] + size;
+  pointers[2] = pointers[0] + size;
+  assert(this->size() == size && this->capacity() == size);
+}
+
 // Clang/LLVM implementation
-#if defined(__clang__) || defined(__EMSCRIPTEN__)
+#elif defined(__clang__) || defined(__EMSCRIPTEN__)
 
 // TODO: this is a big hack that relies on clang/libcpp not changing the memory
 //       layout of the std::vector (very dangerous, but works for now...)

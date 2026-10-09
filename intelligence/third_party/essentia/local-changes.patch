@@ -1,3 +1,24 @@
+--- a/src/algorithms/stats/crest.cpp
++++ b/src/algorithms/stats/crest.cpp
+@@ -15,6 +15,9 @@
+  *
+  * You should have received a copy of the Affero GNU General Public License
+  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
++ *
++ * Modified for SUBstation on 2026-10-09: std::bind2nd (gone from C++17) replaced
++ * with a lambda (see intelligence/third_party/essentia/VERSION.txt).
+  */
+ 
+ #include "crest.h"
+@@ -44,7 +47,7 @@
+     throw EssentiaException("Crest: array does not contain any values");
+   }
+ 
+-  if (find_if(array.begin(), array.end(), bind2nd(less<Real>(), 0)) != array.end()) {
++  if (find_if(array.begin(), array.end(), [](Real value) { return value < 0; }) != array.end()) {
+     throw EssentiaException("Crest: array must not contain negative values");
+   }
+ 
 --- a/src/essentia/algorithmfactory.h
 +++ b/src/essentia/algorithmfactory.h
 @@ -15,6 +15,9 @@
@@ -5,19 +26,22 @@
   * You should have received a copy of the Affero GNU General Public License
   * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
 + *
-+ * Modified for SUBstation on 2026-10-09: the explicit specializations of EssentiaFactory::_instance declared
-+ * (see intelligence/third_party/essentia/VERSION.txt).
++ * Modified for SUBstation on 2026-10-09: the explicit specializations of EssentiaFactory::_instance declared,
++ * but for MSVC's compiler (see intelligence/third_party/essentia/VERSION.txt).
   */
  
  #ifndef ESSENTIA_ALGORITHMFACTORY_H
-@@ -243,6 +246,11 @@
+@@ -243,6 +246,14 @@
    typedef EssentiaFactory<Algorithm> AlgorithmFactory;
  }
  
 +// The factories' instances are explicit specializations, defined in
 +// essentia.cpp: declared here, so every user of the factory knows of them.
++// (Not to MSVC's compiler, which takes such a declaration for a definition.)
++#if !defined(_MSC_VER) || defined(__clang__)
 +template<> standard::AlgorithmFactory* standard::AlgorithmFactory::_instance;
 +template<> streaming::AlgorithmFactory* streaming::AlgorithmFactory::_instance;
++#endif
 +
  } // namespace essentia
  
@@ -66,6 +90,59 @@
    Comparator _cmp;
    public:
      bool operator () (const std::pair<T,U>& p1, const std::pair<T,U>& p2) const {
+--- a/src/essentia/roguevector.h
++++ b/src/essentia/roguevector.h
+@@ -15,11 +15,15 @@
+  *
+  * You should have received a copy of the Affero GNU General Public License
+  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
++ *
++ * Modified for SUBstation on 2026-10-09: an implementation for Microsoft's STL
++ * as it is now (see intelligence/third_party/essentia/VERSION.txt).
+  */
+ 
+ #ifndef ESSENTIA_ROGUEVECTOR_H
+ #define ESSENTIA_ROGUEVECTOR_H
+ 
++#include <cassert>
+ #include <vector>
+ #include "types.h"
+ 
+@@ -56,8 +60,33 @@
+   void setSize(size_t size);
+ };
+ 
++// Microsoft's STL (MSVC's, or clang-cl's) implementation: the vector's three
++// pointers (first, last, end) are private, and the last members of it (after
++// a debug proxy where iterators are checked), so they are set where they are.
++#if defined(_MSVC_STL_VERSION)
++
++template <typename T>
++T** roguePointers(std::vector<T>* v) {
++  static_assert(sizeof(std::vector<T>) >= 3 * sizeof(T*), "a vector is three pointers, or more");
++  return reinterpret_cast<T**>(reinterpret_cast<char*>(v) + sizeof(std::vector<T>) - 3 * sizeof(T*));
++}
++
++template <typename T>
++void RogueVector<T>::setData(T* data) {
++  roguePointers<T>(static_cast<std::vector<T>*>(this))[0] = data;
++  assert(this->data() == data);
++}
++
++template <typename T>
++void RogueVector<T>::setSize(size_t size) {
++  T** pointers = roguePointers<T>(static_cast<std::vector<T>*>(this));
++  pointers[1] = pointers[0] + size;
++  pointers[2] = pointers[0] + size;
++  assert(this->size() == size && this->capacity() == size);
++}
++
+ // Clang/LLVM implementation
+-#if defined(__clang__) || defined(__EMSCRIPTEN__)
++#elif defined(__clang__) || defined(__EMSCRIPTEN__)
+ 
+ // TODO: this is a big hack that relies on clang/libcpp not changing the memory
+ //       layout of the std::vector (very dangerous, but works for now...)
 --- a/src/essentia/types.h
 +++ b/src/essentia/types.h
 @@ -15,6 +15,9 @@

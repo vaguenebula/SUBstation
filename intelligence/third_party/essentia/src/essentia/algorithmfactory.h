@@ -16,8 +16,8 @@
  * You should have received a copy of the Affero GNU General Public License
  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
  *
- * Modified for SUBstation on 2026-10-09: the explicit specializations of EssentiaFactory::_instance declared
- * (see intelligence/third_party/essentia/VERSION.txt).
+ * Modified for SUBstation on 2026-10-09: the explicit specializations of EssentiaFactory::_instance declared,
+ * but for MSVC's compiler (see intelligence/third_party/essentia/VERSION.txt).
  */
 
 #ifndef ESSENTIA_ALGORITHMFACTORY_H
@@ -248,8 +248,11 @@ namespace streaming {
 
 // The factories' instances are explicit specializations, defined in
 // essentia.cpp: declared here, so every user of the factory knows of them.
+// (Not to MSVC's compiler, which takes such a declaration for a definition.)
+#if !defined(_MSC_VER) || defined(__clang__)
 template<> standard::AlgorithmFactory* standard::AlgorithmFactory::_instance;
 template<> streaming::AlgorithmFactory* streaming::AlgorithmFactory::_instance;
+#endif
 
 } // namespace essentia
 

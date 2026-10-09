@@ -15,6 +15,9 @@
  *
  * You should have received a copy of the Affero GNU General Public License
  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
+ *
+ * Modified for SUBstation on 2026-10-09: std::bind2nd (gone from C++17) replaced
+ * with a lambda (see intelligence/third_party/essentia/VERSION.txt).
  */
 
 #include "crest.h"
@@ -44,7 +47,7 @@ void Crest::compute() {
     throw EssentiaException("Crest: array does not contain any values");
   }
 
-  if (find_if(array.begin(), array.end(), bind2nd(less<Real>(), 0)) != array.end()) {
+  if (find_if(array.begin(), array.end(), [](Real value) { return value < 0; }) != array.end()) {
     throw EssentiaException("Crest: array must not contain negative values");
   }
 
