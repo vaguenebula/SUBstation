@@ -1,6 +1,7 @@
 #include "arrangement/ArrangementRuler.h"
 
 #include "editor/ProjectEditor.h"
+#include "input/GestureKey.h"
 #include "model/Numbers.h"
 #include "model/Project.h"
 #include "model/Timebase.h"
@@ -13,7 +14,6 @@
 #include <QHoverEvent>
 #include <QMouseEvent>
 #include <QPolygonF>
-#include <QUuid>
 
 #include <algorithm>
 #include <cmath>
@@ -102,7 +102,7 @@ void ArrangementRuler::mousePressEvent(QMouseEvent* event) {
         }
         drag.start = project.loopStart();
         drag.end = project.loopEnd();
-        drag.key = QUuid::createUuid().toString();
+        drag.key = newGestureKey();
     } else {
         drag.mode = Mode::Scrub;
         drag.x = pos.x();

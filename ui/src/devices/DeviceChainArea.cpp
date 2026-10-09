@@ -532,10 +532,6 @@ bool DeviceChainArea::hasChain(const QString& rackId, const QString& chainId) co
                                           [&](const sub::app::Chain& chain) { return chain.id == chainId; });
 }
 
-QUrl DeviceChainArea::fileUrl(const QString& path) { return path.isEmpty() ? QUrl() : QUrl::fromLocalFile(path); }
-
-QString DeviceChainArea::localPath(const QUrl& url) { return url.isLocalFile() ? url.toLocalFile() : url.toString(); }
-
 // --- Following the model ----------------------------------------------------------------------
 
 QStringList DeviceChainArea::allDevices() const {

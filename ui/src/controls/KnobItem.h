@@ -24,6 +24,7 @@
 // was a drag or wheel (rather than typed or reset).
 
 #include "controls/DragCursor.h"
+#include "input/GestureKey.h"
 #include "sg/SgCanvas.h"
 
 #include <QColor>
@@ -176,8 +177,5 @@ private:
     std::optional<Drag> drag_;
     DragCursor cursor_;
 };
-
-// A gesture key: a new undo merge key for one drag (or notch, or reset).
-QString newGestureKey();
 
 }  // namespace sub::ui

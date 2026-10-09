@@ -1,10 +1,7 @@
 #include "arrangement/ArrangementPlayhead.h"
 
 #include "model/Numbers.h"
-#include "sg/SgPainter.h"
-#include "theme/Theme.h"
-
-#include <QPolygonF>
+#include "timeline/Timeline.h"
 
 namespace sub::ui {
 
@@ -25,14 +22,8 @@ void ArrangementPlayhead::paint(SgPainter& p) {
     const Arrangement* a = arrangement();
     if (!a || !a->playhead()) return;
     const double x = app::roundHalfEven(a->view().beatToX(*a->playhead()));
-    const double h = height();
     if (x < -8 || x > width() + 8) return;
-    if (ruler_) {
-        p.fillPolygon(QPolygonF({QPointF(x - 5, h - 8), QPointF(x + 6, h - 8), QPointF(x + 0.5, h - 1)}),
-                      Theme::kPlayhead);
-    } else {
-        p.fillRect(QRectF(x, 0, 1, h), Theme::kPlayhead);
-    }
+    timeline::drawPlayhead(p, a->view(), *a->playhead(), height(), ruler_);
 }
 
 }  // namespace sub::ui

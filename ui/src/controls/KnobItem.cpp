@@ -6,7 +6,6 @@
 
 #include <QKeyEvent>
 #include <QMouseEvent>
-#include <QUuid>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -30,8 +29,6 @@ std::optional<double> parsedNumber(const QJSValue& result) {
 }
 
 }  // namespace
-
-QString newGestureKey() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 
 void drawAutomationDot(SgPainter& p, const QString& state, const QPointF& at) {
     const QColor color = Theme::automationDotColor(state);

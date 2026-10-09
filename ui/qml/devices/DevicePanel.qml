@@ -272,21 +272,21 @@ Rectangle {
     function loadPresetFile(chain, index) {
         presetFileDialog.chain = chain
         presetFileDialog.index = index
-        presetFileDialog.currentFolder = area.fileUrl(Session.deviceSelection.presetFolder())
+        presetFileDialog.currentFolder = FileUrls.fileUrl(Session.deviceSelection.presetFolder())
         presetFileDialog.open()
     }
 
     function loadVst3Preset(deviceId) {
         vst3LoadDialog.deviceId = deviceId
-        vst3LoadDialog.currentFolder = area.fileUrl(Session.deviceSelection.vst3PresetFolder(deviceId))
+        vst3LoadDialog.currentFolder = FileUrls.fileUrl(Session.deviceSelection.vst3PresetFolder(deviceId))
         vst3LoadDialog.open()
     }
 
     function saveVst3Preset(deviceId, name) {
         const folder = Session.deviceSelection.vst3PresetFolder(deviceId)
         vst3SaveDialog.deviceId = deviceId
-        vst3SaveDialog.currentFolder = area.fileUrl(folder)
-        vst3SaveDialog.selectedFile = area.fileUrl(folder + "/" + name + ".vstpreset")
+        vst3SaveDialog.currentFolder = FileUrls.fileUrl(folder)
+        vst3SaveDialog.selectedFile = FileUrls.fileUrl(folder + "/" + name + ".vstpreset")
         vst3SaveDialog.open()
     }
 
@@ -465,7 +465,7 @@ Rectangle {
 
         title: qsTr("Load Preset")
         nameFilters: [qsTr("SUBstation Preset (*.gilpreset)")]
-        onAccepted: Session.deviceSelection.loadPresetFile(area.localPath(selectedFile), chain, index)
+        onAccepted: Session.deviceSelection.loadPresetFile(FileUrls.localPath(selectedFile), chain, index)
     }
 
     FileDialog {
@@ -476,7 +476,7 @@ Rectangle {
 
         title: qsTr("Load VST3 Preset")
         nameFilters: [qsTr("VST3 Preset (*.vstpreset)")]
-        onAccepted: Session.deviceSelection.loadVst3Preset(deviceId, area.localPath(selectedFile))
+        onAccepted: Session.deviceSelection.loadVst3Preset(deviceId, FileUrls.localPath(selectedFile))
     }
 
     FileDialog {
@@ -488,6 +488,6 @@ Rectangle {
         title: qsTr("Save VST3 Preset")
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("VST3 Preset (*.vstpreset)")]
-        onAccepted: Session.deviceSelection.saveVst3Preset(deviceId, area.localPath(selectedFile))
+        onAccepted: Session.deviceSelection.saveVst3Preset(deviceId, FileUrls.localPath(selectedFile))
     }
 }

@@ -1,5 +1,6 @@
 #include "pianoroll/VelocityLane.h"
 
+#include "input/GestureKey.h"
 #include "model/Notes.h"
 #include "model/Numbers.h"
 #include "pianoroll/NoteSet.h"
@@ -9,7 +10,6 @@
 #include <QCursor>
 #include <QHoverEvent>
 #include <QMouseEvent>
-#include <QUuid>
 
 #include <algorithm>
 #include <cmath>
@@ -98,7 +98,7 @@ void VelocityLane::mousePressEvent(QMouseEvent* event) {
     for (const int index : roll::clipsOf(roll->selectedNotes())) {
         if (const app::Clip* clip = roll->clipAt(index)) base[index] = clip->notes;
     }
-    drag_ = Drag{event->position().y(), std::move(base), QUuid::createUuid().toString(), roll->selectedNotes()};
+    drag_ = Drag{event->position().y(), std::move(base), newGestureKey(), roll->selectedNotes()};
     update();
 }
 

@@ -781,6 +781,6 @@ Item {
         id: fileDialog
         title: qsTr("Load Sample")
         nameFilters: [qsTr("Audio Files (*.wav *.wave *.flac *.mp3)")]
-        onAccepted: view.loadSampleUrl(selectedFile)
+        onAccepted: view.loadSample(FileUrls.localPath(selectedFile))
     }
 }

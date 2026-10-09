@@ -1,7 +1,8 @@
 #include "pianoroll/NoteGrid.h"
 
-#include "model/Notes.h"
+#include "input/GestureKey.h"
 #include "input/Modifiers.h"
+#include "model/Notes.h"
 #include "model/Numbers.h"
 #include "pianoroll/NoteSet.h"
 #include "sg/SgPainter.h"
@@ -11,7 +12,6 @@
 #include <QHoverEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
-#include <QUuid>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -31,7 +31,7 @@ namespace notes = app::notes;
 class NoteGrid::Gesture {
 public:
     Gesture(NoteGrid* grid, const QPointF& press)
-        : grid(grid), roll(grid->roll()), press(press), key(QUuid::createUuid().toString()) {}
+        : grid(grid), roll(grid->roll()), press(press), key(newGestureKey()) {}
     virtual ~Gesture() = default;
 
     // Past the drag threshold yet (from then on, it is active).

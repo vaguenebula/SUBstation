@@ -40,7 +40,6 @@
 #include <QString>
 #include <QStringList>
 #include <QTimer>
-#include <QUrl>
 #include <QVariantMap>
 #include <QQuickItem>
 #include <QtQml/qqmlregistration.h>
@@ -107,9 +106,6 @@ public:
     Q_INVOKABLE void setPage(const QString& deviceId, int page) { pages_.insert(deviceId, page); }
     // Whether a rack of the track shown still has this chain (after a chain's menu).
     Q_INVOKABLE bool hasChain(const QString& rackId, const QString& chainId) const;
-    // For the file dialogs: a path as a URL, a URL chosen as a path.
-    Q_INVOKABLE static QUrl fileUrl(const QString& path);
-    Q_INVOKABLE static QString localPath(const QUrl& url);
 
 Q_SIGNALS:
     void sessionChanged();
