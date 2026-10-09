@@ -21,6 +21,7 @@
 //   pixels), so pixel-exact QPainter code looks the same.
 // - fillRect, fillColumns and fillToBaseline are never antialiased: a pixel is
 //   filled when its centre is inside, so rects stay crisp at any zoom.
+//   fillBand always is.
 // - drawText(rect, flags, ...) clips to the rect unless Qt::TextDontClip, as
 //   QPainter does. Text is rendered once per (text, font, colour) at the
 //   window's device pixel ratio and cached as a texture.
@@ -147,6 +148,12 @@ public:
     // a column shorter than `minHeight` is made that tall about its middle.
     void fillColumns(qreal x0, qreal dx, const float* y0, const float* y1, int count, const QColor& color,
                      qreal minHeight = 0.0);
+    // A waveform's band, antialiased: column i spans x0 + i * dx to
+    // x0 + (i + 1) * dx, between outlines through its centre at tops[i] and
+    // bottoms[i] (tops above) that run straight on to its neighbours' centres.
+    // Each pixel is as covered as a box over it would be: an edge fades over
+    // where its outline runs within the column, and a device pixel more.
+    void fillBand(qreal x0, qreal dx, const float* tops, const float* bottoms, int count, const QColor& color);
 
     // --- Text and images ------------------------------------------------------
 

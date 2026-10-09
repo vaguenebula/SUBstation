@@ -334,6 +334,42 @@ private Q_SLOTS:
         CHECK_PIXEL(image, 160, 119, Qt::black);  // its gap at the bottom (270 degrees)
     }
 
+    void aBandIsAntialiased() {
+        // A waveform's band: solid between its outlines, soft at their edges
+        // (some pixels partly covered, not a pixel's staircase), and two
+        // halves clipped side by side the same as the whole.
+        Scene scene;
+        QVERIFY(scene.show());
+        const std::vector<float> top{40, 40, 20.5f, 40, 40}, bottom{44, 44, 60, 44, 44};
+        const QImage image = scene.render([&](SgPainter& p) {
+            p.fillBand(10, 10, top.data(), bottom.data(), 5, Qt::white);
+            for (const auto& [x0, x1] : {std::pair{110.0, 135.0}, std::pair{135.0, 160.0}}) {
+                p.save();
+                p.setClipRect(QRectF(x0, 0, x1 - x0, 100));
+                p.fillBand(110, 10, top.data(), bottom.data(), 5, Qt::white);
+                p.restore();
+            }
+        });
+        const qreal dpr = scene.dpr();
+        CHECK_PIXEL(image, 30, 40, Qt::white);
+        CHECK_PIXEL(image, 15, 42, Qt::white);
+        CHECK_PIXEL(image, 30, 10, Qt::black);
+        CHECK_PIXEL(image, 30, 70, Qt::black);
+        int partial = 0;
+        for (int y = 0; y < int(40 * dpr); ++y) {
+            const int gray = qGray(image.pixel(int(25 * dpr), y));
+            if (gray > 30 && gray < 225) ++partial;
+        }
+        QVERIFY2(partial >= 1, "no soft edge");
+        for (int y = 0; y < int(80 * dpr); ++y) {
+            for (int x = int(11 * dpr); x < int(49 * dpr); ++x) {
+                const QRgb whole = image.pixel(x, y), halves = image.pixel(x + int(100 * dpr), y);
+                if (!near(whole, halves, 2))
+                    QFAIL(qPrintable(QStringLiteral("(%1, %2): %3 vs %4").arg(x).arg(y).arg(rgb(whole), rgb(halves))));
+            }
+        }
+    }
+
     void columnsGradientImageOpacity() {
         Scene scene;
         QVERIFY(scene.show());
