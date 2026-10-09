@@ -2,8 +2,8 @@
 
 #include "model/Ids.h"
 #include "model/Notes.h"
+#include "model/Paths.h"
 
-#include <QDir>
 #include <QFileInfo>
 
 #include <algorithm>
@@ -11,11 +11,11 @@
 
 namespace sub::app::edits {
 
-namespace {
-
 void sortByStart(std::vector<Clip>& clips) {
     std::stable_sort(clips.begin(), clips.end(), [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
 }
+
+namespace {
 
 // The part of `clip` between two beats, its content left in place on the
 // timeline; none if that is too short to keep.
@@ -38,16 +38,6 @@ std::optional<Clip> piece(const Clip& clip, double start, double end, double tem
     if (end < clip.endBeat(tempo) - kEps) part.fadeOutSec = 0.0;
     part.fitFades();
     return part;
-}
-
-// A path as compared with another: absolute, clean, and (on Windows) in any case.
-QString comparablePath(const QString& path) {
-    const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-#ifdef Q_OS_WIN
-    return clean.toCaseFolded();
-#else
-    return clean;
-#endif
 }
 
 }  // namespace
@@ -283,7 +273,7 @@ Clip curveFade(const Clip& clip, bool out, double curve) {
 
 Clip reverseClip(const Clip& clip, const QString& path, double totalSec) {
     const double offset = std::max(0.0, totalSec - clip.offsetSec - clip.durationSec);
-    const bool back = !clip.reversedFrom.isEmpty() && comparablePath(path) == comparablePath(clip.reversedFrom);
+    const bool back = !clip.reversedFrom.isEmpty() && samePath(path, clip.reversedFrom);
     Clip reversed = clip;
     reversed.path = path;
     reversed.offsetSec = offset;
@@ -325,8 +315,6 @@ Clip relinkFile(const Clip& clip, const QString& from, const QString& to) {
     if (!clip.reversedFrom.isEmpty() && samePath(clip.reversedFrom, from)) relinked.reversedFrom = to;
     return relinked;
 }
-
-bool samePath(const QString& a, const QString& b) { return comparablePath(a) == comparablePath(b); }
 
 std::pair<double, double> selectionSpan(const std::vector<Clip>& clips, double tempo) {
     double start = clips.front().startBeat;

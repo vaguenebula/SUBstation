@@ -10,12 +10,6 @@ namespace sub::app {
 
 namespace {
 
-QStringList stringList(const std::vector<std::string>& names) {
-    QStringList list;
-    for (const std::string& name : names) list.append(QString::fromStdString(name));
-    return list;
-}
-
 template <typename T>
 QList<int> intList(const std::vector<T>& values) {
     QList<int> list;
@@ -95,28 +89,27 @@ QString EngineBridge::resetDevice() {
 }
 
 bool EngineBridge::showDeviceControlPanel() {
-    ++d_->busy;  // its dialog may run a message loop that calls us back
-    bool shown = false;
+    const BusyScope busy(d_->busy);  // its dialog may run a message loop that calls us back
     try {
-        shown = engine_.showDeviceControlPanel();
+        return engine_.showDeviceControlPanel();
     } catch (const std::exception& error) {
         qWarning("EngineBridge (control panel): %s", error.what());
     }
-    --d_->busy;
-    return shown;
+    return false;
 }
 
 QString EngineBridge::changeDevice(const std::function<void()>& change) {
     const double oldRate = engine_.sampleRate();
     QString error;
-    ++d_->busy;  // a driver may show a dialog while it opens
-    try {
-        change();
-    } catch (const std::exception& failure) {
-        error = QString::fromStdString(failure.what());
-        if (error.isEmpty()) error = QStringLiteral("The audio device could not be opened");
+    {
+        const BusyScope busy(d_->busy);  // a driver may show a dialog while it opens
+        try {
+            change();
+        } catch (const std::exception& failure) {
+            error = QString::fromStdString(failure.what());
+            if (error.isEmpty()) error = QStringLiteral("The audio device could not be opened");
+        }
     }
-    --d_->busy;
     if (engine_.sampleRate() != oldRate) refreshSources();
     Q_EMIT deviceChanged();
     return error;

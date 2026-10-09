@@ -7,6 +7,8 @@
 
 #include "io/LiveImport.h"
 
+#include "io/Bytes.h"
+#include "io/Json.h"
 #include "io/LiveSet.h"
 #include "io/Serialization.h"
 #include "model/Automation.h"
@@ -27,7 +29,6 @@
 #include <QMap>
 #include <QRegularExpression>
 #include <QSet>
-#include <QtEndian>
 
 #include <algorithm>
 #include <cmath>
@@ -171,24 +172,6 @@ QByteArray hexBytes(const QString& text) {
         if (!c.isSpace()) digits.append(c);
     }
     return QByteArray::fromHex(digits.toLatin1());
-}
-
-void appendLe32(QByteArray& bytes, quint32 value) {
-    char data[4];
-    qToLittleEndian(value, data);
-    bytes.append(data, 4);
-}
-
-void appendLe64(QByteArray& bytes, quint64 value) {
-    char data[8];
-    qToLittleEndian(value, data);
-    bytes.append(data, 8);
-}
-
-void appendBe32(QByteArray& bytes, quint32 value) {
-    char data[4];
-    qToBigEndian(value, data);
-    bytes.append(data, 4);
 }
 
 // A name for matching a VST2 plug-in with its VST3: lower case, letters and
@@ -698,7 +681,7 @@ QJsonObject Importer::translateTrack(const Element& track, const QString& id, co
                                                   : midi ? QStringLiteral("MIDI")
                                                          : QStringLiteral("Audio")),
                                  liveColor(colorOf(track)));
-    data[QStringLiteral("parent")] = parent ? QJsonValue(*parent) : QJsonValue(QJsonValue::Null);
+    data[QStringLiteral("parent")] = optionalString(parent);
     data[QStringLiteral("folded")] = !track.flag(u"TrackUnfolded", true);
     if (const Element* mixer = track.at(u"DeviceChain/Mixer")) {
         translateMixer(*mixer, id, data);
@@ -723,7 +706,7 @@ QJsonObject Importer::translateTrack(const Element& track, const QString& id, co
 void Importer::translateDrumTrack(const Element& track, const Element& drums, const QString& id,
                                   const std::optional<QString>& parent) {
     QJsonObject group = trackBase(id, kGroupKind, trackName(track, QStringLiteral("Drums")), liveColor(colorOf(track)));
-    group[QStringLiteral("parent")] = parent ? QJsonValue(*parent) : QJsonValue(QJsonValue::Null);
+    group[QStringLiteral("parent")] = optionalString(parent);
     group[QStringLiteral("folded")] = !track.flag(u"TrackUnfolded", true);
     if (const Element* mixer = track.at(u"DeviceChain/Mixer")) {
         translateMixer(*mixer, id, group);

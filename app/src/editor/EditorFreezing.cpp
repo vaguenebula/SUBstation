@@ -7,6 +7,7 @@
 #include "editor/ProjectEditor.h"
 
 #include "model/Commands.h"
+#include "model/Devices.h"
 #include "model/Ids.h"
 
 #include <QHash>
@@ -17,20 +18,9 @@
 
 namespace sub::app {
 
+using editing::distinct;
+using editing::frozenText;
 using editing::Macro;
-
-namespace {
-
-// Track ids, each once, in their order.
-QStringList distinct(const QStringList& ids) {
-    QStringList result;
-    for (const QString& id : ids) {
-        if (!result.contains(id)) result.append(id);
-    }
-    return result;
-}
-
-}  // namespace
 
 QStringList ProjectEditor::freezeTracks(const OrderedMap<QString, Freeze>& freezes) {
     const Project& p = *project_;
@@ -84,9 +74,7 @@ QStringList ProjectEditor::flattenTracks(const QStringList& trackIds) {
     const QString text = flat.size() == 1 ? QStringLiteral("Flatten Track") : QStringLiteral("Flatten Tracks");
     Macro macro(undoStack_, text);
     QSet<QString> devices;  // (the outputs into their sidechains go into their groups)
-    for (const QString& id : flat) {
-        for (const Device* d : iterDevices(p.track(id).devices)) devices.insert(d->id);
-    }
+    for (const QString& id : flat) devices.unite(deviceIdsOfList(p.track(id).devices));
     dropOutputs({}, devices, text);
     for (const QString& id : flat) {
         const Track track = p.track(id);
@@ -141,7 +129,7 @@ std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command)
         }
         what = QStringLiteral("files");
     } else if (const auto* chains = dynamic_cast<const SetChainsCommand*>(&command)) {
-        tracks = chains->after().keys();
+        tracks = chains->newValue().keys();
     } else if (const auto* param = dynamic_cast<const SetDeviceParamCommand*>(&command)) {
         tracks = {param->trackId()};
     } else if (const auto* params = dynamic_cast<const SetDeviceParamsCommand*>(&command)) {
@@ -171,7 +159,7 @@ std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command)
     }
     for (const QString& id : tracks) {
         if (!p.hasOwner(id) || !p.isFrozen(id)) continue;
-        return QStringLiteral("%1 is frozen: unfreeze it to change its %2").arg(p.track(*p.frozenBy(id)).name, what);
+        return frozenText(p.track(*p.frozenBy(id)).name, QStringLiteral("its ") + what);
     }
     return std::nullopt;
 }
@@ -257,9 +245,7 @@ std::optional<QString> ProjectEditor::heldProblem(const QStringList& trackIds) c
     const Project& p = *project_;
     for (const QString& id : trackIds) {
         const auto holder = p.frozenBy(id);
-        if (holder && *holder != id) {
-            return QStringLiteral("%1 is frozen: unfreeze it to change what is in it").arg(p.track(*holder).name);
-        }
+        if (holder && *holder != id) return frozenText(p.track(*holder).name, QStringLiteral("what is in it"));
     }
     return std::nullopt;
 }
@@ -287,9 +273,7 @@ std::optional<QString> ProjectEditor::arrangementProblem(const TrackTree& tree, 
         if (entry.parent == before.value(entry.id)) continue;
         auto frozen = holder(entry.id, before);
         if (!frozen) frozen = holder(entry.id, after);
-        if (frozen) {
-            return QStringLiteral("%1 is frozen: unfreeze it to change what is in it").arg(p.track(*frozen).name);
-        }
+        if (frozen) return frozenText(p.track(*frozen).name, QStringLiteral("what is in it"));
     }
     return std::nullopt;
 }

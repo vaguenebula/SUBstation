@@ -43,20 +43,21 @@ session's ([session.md](session.md)).
 | [Track.h](../../app/src/model/Track.h) | `Track`, `Freeze`, `MidiInput`, `Send`, `SendMap`, `EnvelopeMap`; `TrackField`/`TrackValue` (what `updateTrack` changes) and `trackFieldName`; the kinds (`kAudioKind`, `kMidiKind`, `kGroupKind`, `kReturnKind`, `kMasterKind`), `kMonitorModes`, `kTrackColors`, track heights; `newMaster`, `returnLetter` |
 | [TrackNames.h](../../app/src/model/TrackNames.h) | Track names: `#` for its number (`numberedName`), audio and MIDI tracks named by what they hold (`contentsLabel`, `contentsName`, `namedByContents`), names older projects had (`hasPlainName`, `plainNameTemplate`), `takeName` |
 | [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `PlayedNote`; `kWarpModes`, `legacyWarpMode`, `kMinSegmentBpm`, `kMaxSegmentBpm` |
-| [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kDefaultMacroCount`, `kMaxMacroCount`, `macroParam`, `macroIndex`, `macroCount`, `macroName`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
-| [Devices.h](../../app/src/model/Devices.h) | Kinds of devices: `builtinDevices()`, `builtinDevice()`, `builtinCategories()` (from the engine), `kDefaultInstrument`; `isInstrument`, `deviceIsInstrument`, `loadsInto`, `deviceName`, `kindName`; `newDevice`, `newRack`, `newChain`; `builtinParamInfo`, `deviceIdsOf`, `deviceIdsOfList` |
-| [Routing.h](../../app/src/model/Routing.h) | The group tree (`TreeEntry`, `TrackTree`, `treeProblem`, `repairTree`) and the routing graph (`routingGraph`, `feeds`, `wouldCycle`, `inputWouldCycle`, `sidechainWouldCycle`) |
+| [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `findChain`, `chainIndex`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kDefaultMacroCount`, `kMaxMacroCount`, `macroParam`, `macroIndex`, `macroCount`, `macroName`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
+| [Devices.h](../../app/src/model/Devices.h) | Kinds of devices: `builtinDevices()`, `builtinDevice()`, `builtinCategories()` (from the engine), `kDefaultInstrument`; `isInstrument`, `deviceIsInstrument`, `loadsInto`, `deviceName`, `kindName`; `newDevice`, `newRack`, `newChain`; `builtinParamInfo`, `deviceIdsOf`, `deviceIdsOfList`, `innerDeviceIds` (what is in a rack) |
+| [Routing.h](../../app/src/model/Routing.h) | The group tree (`TreeEntry`, `TrackTree`, `treeProblem`, `repairTree`) and the routing graph (`routingGraph`, `feeds`, `wouldCycle`, `inputWouldCycle`, `sidechainWouldCycle`); `isDefaultOutput` (an output that goes where the default does: its own group, or the master from outside a group) |
 | [Automation.h](../../app/src/model/Automation.h) | `AutomationPoint`, `Envelope`, `AutomationView`, `kMaster`; in `sub::app::automation`: target keys, the mixer's normalized mappings, evaluation (`valueAt`, `leftValue`, `shape`), every envelope edit |
 | [ParamSpec.h](../../app/src/model/ParamSpec.h) | `ParamSpec`: any automatable parameter described alike, with the engine's normalized mapping; `mixerSpecs`, `sendSpec`, `chainSpecs`, `formatValue` |
-| [Edits.h](../../app/src/model/Edits.h) | `sub::app::edits`: pure clip maths for audio and MIDI clips alike: overlaps, cuts, trims, splits, ranges, tempo fitting, consolidating, reversing, stretching, slipping, fades |
+| [Edits.h](../../app/src/model/Edits.h) | `sub::app::edits`: pure clip maths for audio and MIDI clips alike: overlaps, cuts, trims, splits, ranges, tempo fitting, consolidating, reversing, stretching, slipping, fades; `sortByStart`, how clip lists are kept |
 | [Notes.h](../../app/src/model/Notes.h) | `sub::app::notes`: pure note maths for the piano roll: overlaps on a key, moves, resizes, velocity, legato, ×2/÷2, quantize, humanize timing; note names |
-| [Commands.h](../../app/src/model/Commands.h) | The `QUndoCommand` subclasses; merging of continuous gestures (`MergeableCommand`, `kMergeId`) |
+| [Commands.h](../../app/src/model/Commands.h) | The `QUndoCommand` subclasses and what they share: `ValueCommand` (a target, its old and new value), `MergeableCommand` (one that merges continuous gestures: `kMergeId`, `mergeId`), `InsertCommand`/`RemoveCommand` (a track into or out of the tracks or the returns) |
 | [Timebase.h](../../app/src/model/Timebase.h) | `TimeSignature`, beats and seconds, bar.beat.sixteenth formatting and parsing, dB and pan text |
 | [Keys.h](../../app/src/model/Keys.h) | Musical keys (`Key`), tempo and key from file names (`parseFilename`), what a dropped clip starts with (`clipSettings`) |
 | [DeviceState.h](../../app/src/model/DeviceState.h) | `sub::app::deviceState`: a built-in device's state besides its parameters (a sampler's sample), in the engine's text format, base64 in `Device::state` |
 | [RecordedTake.h](../../app/src/model/RecordedTake.h) | `RecordedTake`, `RecordedTakeNote`: what a recording hands the editor |
-| [Errors.h](../../app/src/model/Errors.h) | `EditError` (an edit the user can't make), `ProjectFileError` (a file that can't be read or written); both carry a `QString` message for the user |
-| [Ids.h](../../app/src/model/Ids.h), [OrderedMap.h](../../app/src/model/OrderedMap.h), [Numbers.h](../../app/src/model/Numbers.h) | `newId()`; a map that keeps its keys in insertion order; rounding half to even, floor division that stays exact (`floorDiv`), fixed-point text |
+| [Errors.h](../../app/src/model/Errors.h) | `EditError` (an edit the user can't make), `ProjectFileError` (a file that can't be read or written); both are `UserError`s, carrying a `QString` message for the user (one catch takes either) |
+| [Paths.h](../../app/src/model/Paths.h) | Paths as the application compares them: `absoluteCleanPath`, `pathIdentity` (absolute and clean, case folded where the system ignores case: `sub::platform::kCaseSensitivePaths`), `samePath`. Decoded sources, the File Manager's files and the recent projects are keyed by it. `withSafeCharacters`: the characters Windows forbids in file names made `_` (takes' and presets' file names) |
+| [Ids.h](../../app/src/model/Ids.h), [OrderedMap.h](../../app/src/model/OrderedMap.h), [Numbers.h](../../app/src/model/Numbers.h) | `newId()`, `optionalId()` (`""`: none); a map that keeps its keys in insertion order; rounding half to even, floor division that stays exact (`floorDiv`), Python's whole-number `%` (`floorMod`), fixed-point text |
 | [editor/](../../app/src/editor) | `ProjectEditor` ([ProjectEditor.h](../../app/src/editor/ProjectEditor.h)), one source file per area: `EditorTracks.cpp` (tracks, returns and sends, groups, inputs, recordings), `EditorSettings.cpp` (tempo, time signature, key, loop), `EditorClips.cpp` (clips and time selections), `EditorDeviceChains.cpp` (devices in chains), `EditorRacks.cpp` (racks, their chains and macros), `EditorDeviceSettings.cpp` (a device's parameters, state, presets, switch, sidechain), `EditorAutomation.cpp` (envelopes and the lanes shown), `EditorFreezing.cpp` (freezing, unfreezing, flattening, and what frozen tracks refuse), `EditorFiles.cpp` (the files clips and devices play: one put in another's place, files found somewhere else). Its value types: `ClipRef`/`ClipRefs`, `TimeRange`, `MovedRange`, `ClipboardContent`/`CopiedTrack`/`CopiedFreeze`, `CopiedTracks`, `CopiedAutomation`, `TrackParent`/`InsertionPoint` |
 | [io/Serialization.h](../../app/src/io/Serialization.h), [io/Presets.h](../../app/src/io/Presets.h) | Project and preset files, the preset library: see [serialization.md](serialization.md) |
 
@@ -168,6 +169,8 @@ Device ids are unique in the whole project, so a device is found wherever it sit
 - `iterDevices(devices)`: every device depth first (each, then what is in its chains).
 - `iterChains(devices)`: every (rack, chain) depth first.
 - `devicePath` / `deviceAt`: a device's place as (index, chain, index, chain, ...).
+- `findChain(devices, chain)`: a rack chain anywhere in a chain, and its rack (`Project::chain` and `chainRack` are
+  it on a track's devices); `chainIndex(rack, chain)`: where one of a rack's own chains is.
 - `chainDevices(devices, chain)`: the vector of a chain (none = the track's own), which edits change in place on a
   copy of the track's devices.
 - `containerOf`: the chain a device is in (none = the track's own).
@@ -277,7 +280,7 @@ reachability. The cycle checks:
 
 The editor keeps outputs valid ([EditorTracks.cpp](../../app/src/editor/EditorTracks.cpp)): `setTrackOutput`
 refuses one into a track that isn't an audio track, a device that isn't there, or a cycle, and stores *Main* outside
-a group, or its own group, as the default; a track going into another group goes into it, as in Ableton (`arrange`:
+a group, or its own group, as the default (`isDefaultOutput`; loading does the same); a track going into another group goes into it, as in Ableton (`arrange`:
 the explicit outputs come back one by one, those that would close a cycle going into their groups); deleting the
 track or device an output goes into (`dropOutputs`, `setDevices`), flattening a track, or moving a device where an
 output into it would close a cycle sends those outputs into their groups, in the same undo step; copies of tracks
@@ -425,14 +428,17 @@ How it fits together:
 
 - **Snapshots, not deltas.** Commands store whole before/after values (a clip list, a device tree, an envelope, a
   track) and put one or the other in place. They are values, so the project gets copies and the stack's are never
-  the live model's. `RemoveTrackCommand` keeps the track it removed and puts it back.
+  the live model's. Most hold one such value: they are `ValueCommand`s (what they change, its `oldValue()` and
+  `newValue()`), and each has only its `redo()` and `undo()`. `RemoveTrackCommand` keeps the track it removed and puts
+  it back; it and `InsertTrackCommand` are the same classes as the returns' (`RemoveCommand`, `InsertCommand`) over
+  the other list's `Project` methods.
 - **Compound steps** are undo macros (`QUndoStack::beginMacro`/`endMacro`, opened by a scoped `Macro` in
   [EditorSupport.h](../../app/src/editor/EditorSupport.h), so it closes even when an edit throws): deleting tracks
   (inputs and sidechains from them dropped, the tracks, the sends into deleted returns and their automation),
   grouping, ungrouping, adding clips (with a new track), moving clips with their automation, deleting devices with
   their automation, recording.
 - **Gestures merge.** A merge key is a `QString`; empty never merges. A command given one returns id `kMergeId`
-  (0x6E1), and `mergeWith` accepts the next command of the same class with the same merge key and the same target,
+  (0x6E1, `mergeId()`), and `mergeWith` accepts the next command of the same class with the same merge key and the same target,
   keeping the first's old value and the latest's new one (`MergeableCommand`). `SetClipsCommand` needs the same set
   of tracks; `ReplaceFilesCommand` the same tracks and devices, and turns obsolete (leaving the stack) when it is back
   where it began. The UI makes one key per gesture (`QUuid::createUuid().toString()`; the shared `Knob` and `ValueBox`
@@ -569,8 +575,8 @@ refused because of frozen audio are said on `refused` too. The session shows `re
 - `replaceFile(clip, path, totalSec)` (another file in its place: where it is, with its settings; a clip playing all
   of its file, `playsWholeFile`, plays all of the new one, one playing a stretch plays the same stretch as far as the
   new file goes; named after the file, forwards, its fades held to its length), `relinkFile(clip, from, to)` (a file
-  found somewhere else, also what it was reversed from; nothing else changes), `samePath` (paths as the system
-  compares them).
+  found somewhere else, also what it was reversed from; nothing else changes; paths compared by `samePath`,
+  [Paths.h](../../app/src/model/Paths.h)).
 - `stretchClip(clip, edgeBeat, left, tempo)` (Alt-dragging an edge): that edge moves, the other stays, and the
   content plays faster or slower to fill it: an audio clip is warped to the segment BPM that makes it that long
   (within `kMinSegmentBpm`..`kMaxSegmentBpm`, 20..999), a MIDI clip's notes and offset are scaled; never before

@@ -7,6 +7,7 @@
 #include "model/Commands.h"
 #include "model/Devices.h"
 #include "model/Errors.h"
+#include "model/Ids.h"
 
 #include <QUndoStack>
 
@@ -121,7 +122,7 @@ void ProjectEditor::renameRack(const QString& trackId, const QString& deviceId, 
                                const QString& text) {
     const Device* device = project_->findDevice(trackId, deviceId);
     if (device == nullptr) return;
-    const std::optional<QString> nw = name.isEmpty() ? std::nullopt : std::optional<QString>(name);
+    const std::optional<QString> nw = optionalId(name);
     if (device->isRack() && device->name != nw) {
         push(std::make_unique<SetDeviceNameCommand>(project_, trackId, deviceId, device->name, nw, text));
     }

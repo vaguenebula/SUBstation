@@ -52,7 +52,7 @@ preferences ([AudioSettings.h](../../app/src/audio/AudioSettings.h)) and where t
 |---|---|
 | [EngineBridge.h](../../app/src/audio/EngineBridge.h) | `EngineBridge`: its whole API, signals and QML properties; its header comment is the design. Constants: `kComputerKeyboard`, `kFreezeTailSeconds`, `kMaxHiddenEditors`, `kPluginGapMs`, `kPluginRetryMs`, `kPositionPollMs`, `kMeterPollMs`. |
 | [EngineBridge.cpp](../../app/src/audio/EngineBridge.cpp) | Start-up (the project's signals it listens to, its timers and pools), `shutdown()`, the ids |
-| [BridgePrivate.h](../../app/src/audio/BridgePrivate.h) | `EngineBridge::Private`: the maps from model ids to engine ids, and the last value given to the engine of everything it pushes only when it changes. The application layer's own (it includes `Engine.h`). |
+| [BridgePrivate.h](../../app/src/audio/BridgePrivate.h) | `EngineBridge::Private`: the maps from model ids to engine ids, and the last value given to the engine of everything it pushes only when it changes. What the bridge's files share: `BusyScope` (`busy` counted around a plug-in's or driver's call, however it ends), `stateBytes`/`stateData` (a processor's state as the engine and the model have it), `stringList`, `guarded`. The application layer's own (it includes `Engine.h`). |
 | [BridgeTracks.cpp](../../app/src/audio/BridgeTracks.cpp) | Engine tracks, mixers, outputs, sends, clips and notes (and a drag's preview of them), tempo and loop, audio threads |
 | [BridgeInputs.cpp](../../app/src/audio/BridgeInputs.cpp) | Tracks' audio and MIDI inputs and monitoring, the device's inputs, the MIDI inputs open |
 | [BridgeDevices.cpp](../../app/src/audio/BridgeDevices.cpp) | Devices' processors in every chain, racks, sidechains, parameters, states |
@@ -68,7 +68,7 @@ preferences ([AudioSettings.h](../../app/src/audio/AudioSettings.h)) and where t
 | [BridgeTypes.h](../../app/src/audio/BridgeTypes.h), [Waveform.h](../../app/src/audio/Waveform.h), [LiveTake.h](../../app/src/audio/LiveTake.h), [RenderTask.h](../../app/src/audio/RenderTask.h), [ReverseJob.h](../../app/src/audio/ReverseJob.h), [EqResponse.h](../../app/src/audio/EqResponse.h), [DisperserResponse.h](../../app/src/audio/DisperserResponse.h), [SampleSlices.h](../../app/src/audio/SampleSlices.h) | What the bridge hands the UI, as the application's own types (below); the EQ's and the Disperser's curves and the Sampler's slices and snapping, the engine's own (for the editors) |
 | [EngineDescs.h](../../app/src/audio/EngineDescs.h) | Model to engine descriptions (clips, notes); the application layer's own |
 | [AudioSettings.h](../../app/src/audio/AudioSettings.h) | `AudioSettings` (QSettings), `audioThreads`/`setAudioThreads`, `disabledMidiInputs`/`setMidiInputDisabled`, `recordQuantize`/`setRecordQuantize`/`recordQuantizeChoices`, `defaultDriver`, `audioDrivers`, `kBufferSizes`, `kSampleRates` |
-| [AudioFiles.h](../../app/src/audio/AudioFiles.h) | `recordingsFolder`, `takePath`, `freezeFolder`, `reversedFolder`, `reversedPath`, `floatWavHeader`, `writeFloatWav`, `isAudioFile`, `audioExtensions`, `sourceKey` |
+| [AudioFiles.h](../../app/src/audio/AudioFiles.h) | `recordingsFolder`, `takePath`, `freezeFolder`, `reversedFolder`, `reversedPath`, `makeFolder` (or why it can't be made), `floatWavHeader`, `writeFloatWav`, `isAudioFile`, `audioExtensions` |
 
 ### What the UI may include
 
@@ -256,8 +256,9 @@ concerned (see [Freezing](#freezing)).
   | `StateDirty` | `pluginStateDirty`: the project has changes no edit shows |
 
 - **Re-entrancy**: a plug-in (or a driver) may run a message loop inside a call (a licence dialog, a control panel)
-  that calls back into the UI. Around such calls the bridge counts `busy`, and while it is above 0 it doesn't dispatch
-  plug-in reports or device events, nor load plug-ins that wait.
+  that calls back into the UI. Around such calls the bridge counts `busy` (a `BusyScope`: it counts down however the
+  call ends), and while it is above 0 it doesn't dispatch plug-in reports or device events, nor load plug-ins that
+  wait.
 
 See [engine/plugins.md](../engine/plugins.md) for the engine side.
 
@@ -411,7 +412,8 @@ See [engine/automation.md](../engine/automation.md).
 
 Audio files (`audioExtensions()`: `.wav`, `.wave`, `.flac`, `.mp3`) are decoded at the engine's rate in a
 `QThreadPool` of two threads (`Engine::loadSource`). `requestSource(path, then)` decodes a file once (keyed by
-`sourceKey(path)`: absolute and clean, lower case on Windows, so two spellings of one file share one source), queues
+`pathIdentity(path)`, [model/Paths.h](../../app/src/model/Paths.h): absolute and clean, in any case on Windows, so
+two spellings of one file share one source), queues
 `then` callbacks while it loads, and emits `sourceReady(path)` or `sourceFailed(path, message)` on the GUI thread.
 `waveform(path)` gives the decoded file as a `Waveform` (null while it isn't decoded); `isLoading`, `loadError`,
 `fileInfo` (the header only, cached, `sub::AudioSource::probe`). A file that couldn't be decoded is said in the status
@@ -550,7 +552,7 @@ same driver next time. Other parts keep their own keys: the session's (recent fi
   edits only count while its editor is open.
 - `Device::state` of a plug-in is stale until `storePluginStates()`; read `pluginState()` for the current one.
 - Overrides are lost on `reset` (opening a project) and are never saved.
-- Decoding is keyed by `sourceKey`, so two clips of one file share one source.
+- Decoding is keyed by `pathIdentity`, so two clips of one file share one source.
 - `source(path)` hands out the engine's `AudioSource` (forward-declared): only application-layer code that includes
   the engine may use it; the UI uses `waveform(path)`.
 - The timers' intervals are 16 and 33 ms; "60 and 30 times a second" are approximate.

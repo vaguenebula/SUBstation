@@ -1,28 +1,18 @@
 #include "browser/Library.h"
 
 #include <QDateTime>
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonParseError>
-#include <QSaveFile>
 
 #include <algorithm>
 #include <cmath>
 
 #include "browser/PathKeys.h"
+#include "io/Json.h"
 
 namespace sub::app {
 
 double Library::systemClock() { return static_cast<double>(QDateTime::currentMSecsSinceEpoch()) / 1000.0; }
 
-QString Library::defaultPath() {
-    const QString overridden = qEnvironmentVariable("SUBSTATION_LIBRARY");
-    if (!overridden.isEmpty()) return overridden;
-    return localDataDir() + QStringLiteral("/library.json");
-}
+QString Library::defaultPath() { return localDataFile("SUBSTATION_LIBRARY", QStringLiteral("library.json")); }
 
 Library::Library(QString path, Clock clock)
     : path_(path.isEmpty() ? defaultPath() : std::move(path)), clock_(clock ? std::move(clock) : Clock(&systemClock)) {
@@ -38,17 +28,6 @@ std::optional<double> Library::number(const QJsonValue& value) {
         if (ok) return parsed;
     }
     return std::nullopt;
-}
-
-bool Library::truthy(const QJsonValue& value) {
-    switch (value.type()) {
-        case QJsonValue::Bool: return value.toBool();
-        case QJsonValue::Double: return value.toDouble() != 0.0;
-        case QJsonValue::String: return !value.toString().isEmpty();
-        case QJsonValue::Array: return !value.toArray().isEmpty();
-        case QJsonValue::Object: return !value.toObject().isEmpty();
-        default: return false;
-    }
 }
 
 void Library::recordUse(const QStringList& keys) {
@@ -80,29 +59,13 @@ double Library::rank(const QString& key, std::optional<double> now) const {
 }
 
 QJsonObject Library::load() const {
-    QFile file(path_);
-    if (!file.open(QIODevice::ReadOnly)) return {};
-    QJsonParseError error;
-    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
-    if (error.error != QJsonParseError::NoError || !document.isObject()) return {};
-    const QJsonObject data = document.object();
-    if (data.value(QStringLiteral("version")).toInteger(-1) != kVersion) return {};
-    const QJsonValue items = data.value(QStringLiteral("items"));
-    if (!items.isObject()) return {};
     QJsonObject records;
-    const QJsonObject all = items.toObject();
+    const QJsonObject all = readVersionedObject(path_, kVersion, QStringLiteral("items"));
     for (auto it = all.begin(); it != all.end(); ++it)
         if (it.value().isObject()) records.insert(it.key(), it.value());
     return records;
 }
 
-void Library::save() const {
-    QDir().mkpath(QFileInfo(path_).absolutePath());
-    QSaveFile file(path_);
-    if (!file.open(QIODevice::WriteOnly)) return;
-    const QJsonObject data{{QStringLiteral("version"), kVersion}, {QStringLiteral("items"), records_}};
-    file.write(QJsonDocument(data).toJson(QJsonDocument::Indented));
-    file.commit();
-}
+void Library::save() const { writeVersionedObject(path_, kVersion, QStringLiteral("items"), records_); }
 
 }  // namespace sub::app

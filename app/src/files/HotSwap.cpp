@@ -9,6 +9,7 @@
 #include "browser/BrowserController.h"
 #include "editor/ProjectEditor.h"
 #include "model/Edits.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 
 namespace sub::app {
@@ -72,7 +73,7 @@ void HotSwap::findSimilar() {
     double start = 0.0;
     double length = -1.0;
     const Clip* clip = anchor_ ? project_->findClip(anchor_->trackId, anchor_->clipId) : nullptr;
-    if (clip && edits::samePath(clip->path, path_) && !edits::playsWholeFile(*clip)) {
+    if (clip && samePath(clip->path, path_) && !edits::playsWholeFile(*clip)) {
         start = clip->offsetSec;
         length = clip->durationSec;
     }
@@ -81,7 +82,7 @@ void HotSwap::findSimilar() {
 
 bool HotSwap::swap(const QString& path) {
     if (!active_ || path.isEmpty() || !isAudioFile(path) || QFileInfo(path).isDir()) return false;
-    if (edits::samePath(path, path_)) return true;
+    if (samePath(path, path_)) return true;
     const FileUses uses = changeableUses(*project_, uses_);
     if (uses.isEmpty()) {  // (frozen meanwhile)
         stop();

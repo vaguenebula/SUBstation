@@ -82,7 +82,7 @@ See [building.md](building.md).
 | [BrowserMime.h](../app/src/browser/BrowserMime.h) | The drag formats and their readers (`pluginRefs`, `deviceKinds`, `presetPaths`, `movedDevices`). |
 | [Library.h](../app/src/browser/Library.h) | `Library`: use counts kept in `library.json`, and `rank()`. |
 | [PresetIndex.h](../app/src/browser/PresetIndex.h) | `PresetIndex`: the presets in the user's library as items, listed again when they change. |
-| [PathKeys.h](../app/src/browser/PathKeys.h) | Paths as the browser compares them: `normalPath`, `toBackendPath`/`fromBackendPath`, `pathKey`, `caseKey`, `audioKey`, `localDataDir()`. |
+| [PathKeys.h](../app/src/browser/PathKeys.h) | Paths as the browser compares them: `normalPath`, `toBackendPath`/`fromBackendPath`, `pathKey`, `caseKey`, `audioKey`, `localDataDir()`, `localDataFile()` (a file there, or where an environment variable says: the tests' way to keep the user's files out of their runs). Its keys match what the Python version wrote (the system's separators and Windows' own lower case); the rest of the application tells whether two paths are one file with `pathIdentity`/`samePath` ([model/Paths.h](../app/src/model/Paths.h)). |
 
 The plug-ins the browser lists come from the plug-in index ([app/src/plugins](../app/src/plugins),
 [app/plugin-scanner.md](app/plugin-scanner.md)).
@@ -396,7 +396,7 @@ fresh, other items are the ones handed over with `setItems()`, by key.
 `ItemListModel` roles: `name`, `path`, `kind`, `detail`, `key`, `display` (the name, and for a plug-in or a preset its
 detail: "Name   (Vendor)"), `toolTip` (the item's tooltip or path, and how often it was used), `icon` ("waveform",
 "plugin" or "preset"), `uses`, `instrument`, `plugin` (a plug-in's `PluginRef` fields). `get(row)` returns every role
-of a row by name.
+of a row by name (`rowMap()`, [ListModels.h](../app/src/ListModels.h), as the plug-ins' and the File Manager's lists do).
 
 [SidebarModel](../app/src/browser/SidebarModel.h) is the sidebar as a flat list: *CATEGORIES* (All, Samples, Built-in
 and its categories, Plug-ins with Instruments and Audio Effects, Presets with a sub-entry per device they are for) and

@@ -1,16 +1,20 @@
 // The audio and MIDI preferences (AudioSettings and the other QSettings keys),
-// where the bridge puts its files (recordings, frozen audio, reversed copies) and
-// how it names them, the float WAV writer, the EQ's curve, and what the UI reads
-// of the engine through the bridge (device status, the scope, MIDI inputs).
+// where the bridge puts its files (recordings, frozen audio, reversed copies),
+// how it names them and makes their folders, the float WAV writer, the EQ's
+// curve, the count of calls that may call the bridge back (BusyScope), and what
+// the UI reads of the engine through the bridge (device status, the scope, MIDI
+// inputs).
 
 #include "BridgeTestSupport.h"
 #include "TestSupport.h"
 
 #include "audio/AudioFiles.h"
 #include "audio/AudioSettings.h"
+#include "audio/BridgePrivate.h"
 #include "audio/DisperserResponse.h"
 #include "audio/EqResponse.h"
 #include "audio/EngineBridge.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 
 #include "builtin/DisperserDesign.h"
@@ -170,7 +174,31 @@ private Q_SLOTS:
         QVERIFY(isAudioFile(QStringLiteral("c.mp3")) && isAudioFile(QStringLiteral("d.wave")));
         QVERIFY(!isAudioFile(QStringLiteral("e.gilproj")));
         QCOMPARE(audioExtensions().size(), 4);
-        QCOMPARE(sourceKey(QStringLiteral("/a/b/../c.wav")), sourceKey(QStringLiteral("/a/c.wav")));
+        QCOMPARE(pathIdentity(QStringLiteral("/a/b/../c.wav")), pathIdentity(QStringLiteral("/a/c.wav")));
+    }
+
+    void foldersAreMadeOrSayWhyNot() {
+        test::TempDir dir;
+        QVERIFY(!makeFolder(dir.path(QStringLiteral("a/b")), QStringLiteral("the folder")));
+        QVERIFY(QFileInfo(dir.path(QStringLiteral("a/b"))).isDir());
+        QVERIFY(!makeFolder(dir.path(QStringLiteral("a/b")), QStringLiteral("the folder")));  // (there already)
+        QVERIFY(QFile(dir.path(QStringLiteral("file"))).open(QIODevice::WriteOnly));  // a file where a folder would go
+        const QString inside = dir.path(QStringLiteral("file/Freeze"));
+        QCOMPARE(makeFolder(inside, QStringLiteral("the freeze folder")),
+                 std::optional<QString>(QStringLiteral("Could not create the freeze folder ") +
+                                        QDir::toNativeSeparators(inside)));
+    }
+
+    void busyLastsAsLongAsTheCallWhateverItThrows() {
+        int busy = 0;
+        try {
+            const BusyScope outer(busy);
+            const BusyScope inner(busy);
+            QCOMPARE(busy, 2);
+            throw 1;  // (not a std::exception)
+        } catch (int) {
+        }
+        QCOMPARE(busy, 0);
     }
 
     void floatWavFilesDecodeAsWritten() {

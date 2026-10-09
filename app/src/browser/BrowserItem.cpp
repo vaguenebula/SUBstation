@@ -3,17 +3,9 @@
 #include <QDir>
 
 #include "browser/PathKeys.h"
-#include "builtin/BuiltinRegistry.h"
+#include "model/Devices.h"
 
 namespace sub::app {
-
-namespace {
-
-QString categoryName(const BuiltinInfo& device) {
-    return device.isInstrument() ? QStringLiteral("Instruments") : QStringLiteral("Audio Effects");
-}
-
-}  // namespace
 
 QString kindName(ItemKind kind) {
     switch (kind) {
@@ -40,12 +32,10 @@ QString BrowserItem::key() const {
 std::vector<BrowserItem> builtinItems(const QString& category) {
     // By category (in the order they first come), then as the engine lists them.
     std::vector<BrowserItem> items;
-    for (const QString& name : builtinCategoryNames()) {
+    for (const auto& [name, kinds] : builtinCategories()) {
         if (!category.isEmpty() && category != name) continue;
-        for (const BuiltinInfo& device : BuiltinRegistry::instance().devices()) {
-            if (categoryName(device) != name) continue;
-            items.push_back({QString::fromStdString(device.name), QString::fromStdString(device.id), ItemKind::Device,
-                             name, std::nullopt, {}});
+        for (const QString& kind : kinds) {
+            items.push_back({builtinDevice(kind)->name, kind, ItemKind::Device, name, std::nullopt, {}});
         }
     }
     return items;
@@ -53,8 +43,7 @@ std::vector<BrowserItem> builtinItems(const QString& category) {
 
 QStringList builtinCategoryNames() {
     QStringList categories;
-    for (const BuiltinInfo& device : BuiltinRegistry::instance().devices())
-        if (!categories.contains(categoryName(device))) categories << categoryName(device);
+    for (const auto& [name, _] : builtinCategories()) categories << name;
     return categories;
 }
 

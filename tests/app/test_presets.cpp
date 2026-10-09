@@ -8,6 +8,7 @@
 #include "io/Serialization.h"
 #include "model/Devices.h"
 #include "model/Errors.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 
 #include <QDir>
@@ -91,9 +92,15 @@ private Q_SLOTS:
     void presetNamesBecomeFileNames() {
         test::TempDir dir;
         QCOMPARE(presetFileName("  Lead: \"Bright\" / Wide?  "), QStringLiteral("Lead_ _Bright_ _ Wide_"));
+        // (The characters Windows forbids, as takes' file names have them too.)
+        QCOMPARE(withSafeCharacters(QStringLiteral("a<b>c:d\"e/f\\g|h?i*j\tk\x01l\u00e9")),
+                 QStringLiteral("a_b_c_d_e_f_g_h_i_j_k_l\u00e9"));
         for (const char* bad : {"", "   ", "...", "CON", "nul.txt", "com1"}) {
             QVERIFY_THROWS_EXCEPTION(EditError, presetFileName(QString::fromLatin1(bad)));
         }
+        // An edit refused and a file that can't be read are both errors the user sees.
+        QVERIFY_THROWS_EXCEPTION(UserError, presetFileName(QStringLiteral("CON")));
+        QVERIFY_THROWS_EXCEPTION(UserError, loadPreset(dir.path(QStringLiteral("none.gilpreset"))));
         QCOMPARE(presetPath(test::makeDevice("d", "utility"), "a/b", dir.path()),
                  dir.path() + "/Utility/a_b" + kPresetExtension);
         // A device called as the defaults' folder groups apart from it.
@@ -337,6 +344,9 @@ private Q_SLOTS:
         QVERIFY(!loadsInto(newDevice(kPluginKind, effectRef), newDevice(kPluginKind, synthRef)));
         QCOMPARE(deviceIdsOf(effectRack).size(), 2);
         QCOMPARE(deviceIdsOfList({effectRack, utility("v")}).size(), 3);
+        QCOMPARE(innerDeviceIds(effectRack), QSet<QString>{QStringLiteral("u")});  // (not the rack's own)
+        QCOMPARE(innerDeviceIds(rackOf({effectRack})), deviceIdsOf(effectRack));  // (in racks in it too)
+        QVERIFY(innerDeviceIds(utility("v")).isEmpty());
     }
 };
 

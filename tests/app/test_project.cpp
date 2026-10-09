@@ -8,6 +8,7 @@
 #include "model/Errors.h"
 #include "model/Ids.h"
 #include "model/Project.h"
+#include "model/Routing.h"
 
 #include <QSignalSpy>
 #include <QTest>
@@ -181,6 +182,17 @@ private Q_SLOTS:
         QCOMPARE(idsOf(project.sidechainSources("c")), (QStringList{"g", "a", "b", "r1", "r2"}));
     }
 
+    void outputsThatGoWhereTheDefaultDoes() {
+        const std::optional<QString> none;
+        const std::optional<QString> group = QStringLiteral("g");
+        QVERIFY(isDefaultOutput(Output::group(), none) && isDefaultOutput(Output::group(), group));
+        QVERIFY(isDefaultOutput(Output::master(), none));  // (outside a group, its group is the master)
+        QVERIFY(!isDefaultOutput(Output::master(), group));
+        QVERIFY(isDefaultOutput(Output::track("g"), group));
+        QVERIFY(!isDefaultOutput(Output::track("a"), group) && !isDefaultOutput(Output::track("g"), none));
+        QVERIFY(!isDefaultOutput(Output::none(), none) && !isDefaultOutput(Output::sidechain("g"), group));
+    }
+
     void freezing() {
         Project project;
         fill(project);
@@ -229,6 +241,12 @@ private Q_SLOTS:
         QVERIFY(findDevice(devices, "inner") != nullptr && findDevice(devices, "nowhere") == nullptr);
         QCOMPARE(containerOf(devices, "inner"), std::optional<QString>("deepChain"));
         QVERIFY(!containerOf(devices, "first") && !containerOf(devices, "nowhere"));
+        const ConstRackChain found = findChain(std::as_const(devices), "deepChain");
+        QVERIFY(found.rack == &devices[1].chains[0].devices[1] && found.chain == &found.rack->chains[0]);
+        QCOMPARE(findChain(devices, "c2").chain, &devices[1].chains[1]);  // (one to change in place)
+        QVERIFY(findChain(devices, "nowhere").rack == nullptr && findChain(devices, "nowhere").chain == nullptr);
+        QCOMPARE(chainIndex(rack, "c2"), 1);
+        QCOMPARE(chainIndex(rack, "deepChain"), -1);  // (a chain of a rack in it, not its own)
         QCOMPARE(chainDevices(devices, std::nullopt), &devices);
         QCOMPARE(chainDevices(devices, QString("c2"))->size(), size_t(0));
         QVERIFY(chainDevices(devices, QString("nowhere")) == nullptr);

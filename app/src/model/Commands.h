@@ -32,6 +32,7 @@
 #include <optional>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace sub::app {
@@ -40,6 +41,9 @@ namespace sub::app {
 // checks the class, the merge key and the target.
 inline constexpr int kMergeId = 0x6E1;
 
+// A command's id for its merge key: kMergeId, or -1 (it never merges) for none.
+inline int mergeId(const QString& mergeKey) { return mergeKey.isEmpty() ? -1 : kMergeId; }
+
 // Track id -> its clips.
 using ClipLists = QMap<QString, std::vector<Clip>>;
 // Frozen track id -> what of its frozen audio plays (Freeze::segments; none: all of it).
@@ -47,41 +51,98 @@ using FrozenSegments = QMap<QString, std::optional<std::vector<Clip>>>;
 // Track id -> its devices, in the order given.
 using DeviceLists = OrderedMap<QString, std::vector<Device>>;
 
-// Base for single-value changes that merge while a gesture is in progress:
-// `Target` says what changes (merging needs the same), `Value` its value.
-template <typename Self, typename Target, typename Value>
-class MergeableCommand : public QUndoCommand {
+// Base for single-value changes: `Target` says what changes (std::monostate:
+// nothing in particular, the whole of something), `Value` its value; redo()
+// puts the new value in place, undo() the old one. It never merges.
+template <typename Target, typename Value>
+class ValueCommand : public QUndoCommand {
 public:
-    int id() const override { return mergeKey_.isEmpty() ? -1 : kMergeId; }
-
-    bool mergeWith(const QUndoCommand* other) override {
-        const auto* same = dynamic_cast<const Self*>(other);
-        if (same == nullptr) return false;
-        const MergeableCommand* next = same;
-        if (next->mergeKey_ != mergeKey_ || !(next->target_ == target_)) return false;
-        new_ = next->new_;
-        return true;
-    }
-
     const Target& target() const { return target_; }
     const Value& oldValue() const { return old_; }
     const Value& newValue() const { return new_; }
-    const QString& mergeKey() const { return mergeKey_; }
 
 protected:
-    MergeableCommand(Project* project, const QString& text, Target target, Value old, Value nw, QString mergeKey)
+    ValueCommand(Project* project, const QString& text, Target target, Value old, Value nw)
         : QUndoCommand(text),
           project_(project),
           target_(std::move(target)),
           old_(std::move(old)),
-          new_(std::move(nw)),
-          mergeKey_(std::move(mergeKey)) {}
+          new_(std::move(nw)) {}
 
     Project* project_;
     Target target_;
     Value old_;
     Value new_;
+};
+
+// One that merges while a gesture is in progress: with the next command of the
+// same class (`Self`), the same merge key and the same target.
+template <typename Self, typename Target, typename Value>
+class MergeableCommand : public ValueCommand<Target, Value> {
+public:
+    int id() const override { return mergeId(mergeKey_); }
+
+    bool mergeWith(const QUndoCommand* other) override {
+        const auto* same = dynamic_cast<const Self*>(other);
+        if (same == nullptr) return false;
+        const MergeableCommand* next = same;
+        if (next->mergeKey_ != mergeKey_ || !(next->target_ == this->target_)) return false;
+        this->new_ = next->new_;
+        return true;
+    }
+
+    const QString& mergeKey() const { return mergeKey_; }
+
+protected:
+    MergeableCommand(Project* project, const QString& text, Target target, Value old, Value nw, QString mergeKey)
+        : ValueCommand<Target, Value>(project, text, std::move(target), std::move(old), std::move(nw)),
+          mergeKey_(std::move(mergeKey)) {}
+
     QString mergeKey_;
+};
+
+// Puts a track into one of the project's lists, at an index (past the end:
+// last), and takes it out on undo. `Insert` and `Remove` are that list's
+// Project methods: insertTrack and removeTrack, or insertReturn and removeReturn.
+template <auto Insert, auto Remove>
+class InsertCommand : public QUndoCommand {
+public:
+    void redo() override { (project_->*Insert)(track_, index_); }
+    void undo() override { (project_->*Remove)(track_.id); }
+
+    const Track& track() const { return track_; }
+    int index() const { return index_; }
+
+protected:
+    InsertCommand(Project* project, Track track, int index, const QString& text)
+        : QUndoCommand(text), project_(project), track_(std::move(track)), index_(index) {}
+
+private:
+    Project* project_;
+    Track track_;
+    int index_;
+};
+
+// Takes a track out of one of the project's lists, and puts it back where it
+// was on undo (`Remove`, `Insert`: as InsertCommand's).
+template <auto Remove, auto Insert>
+class RemoveCommand : public QUndoCommand {
+public:
+    void redo() override { saved_ = (project_->*Remove)(trackId_); }
+    void undo() override {
+        if (saved_) (project_->*Insert)(saved_->first, saved_->second);
+    }
+
+    const QString& trackId() const { return trackId_; }
+
+protected:
+    RemoveCommand(Project* project, const QString& trackId, const QString& text)
+        : QUndoCommand(text), project_(project), trackId_(trackId) {}
+
+private:
+    Project* project_;
+    QString trackId_;
+    std::optional<std::pair<Track, int>> saved_;  // the track and where it was, while removed
 };
 
 // Replaces the clip lists of one or more tracks (moves, trims, splits...),
@@ -94,7 +155,7 @@ public:
     SetClipsCommand(Project* project, const QString& text, ClipLists before, ClipLists after, QString mergeKey = {},
                     FrozenSegments frozenBefore = {}, FrozenSegments frozenAfter = {});
 
-    int id() const override;
+    int id() const override { return mergeId(mergeKey_); }
     bool mergeWith(const QUndoCommand* other) override;
     void redo() override;
     void undo() override;
@@ -130,7 +191,7 @@ public:
                         DeviceStates statesBefore, DeviceStates statesAfter, QString mergeKey = {},
                         bool relink = false);
 
-    int id() const override;
+    int id() const override { return mergeId(mergeKey_); }
     bool mergeWith(const QUndoCommand* other) override;
     void redo() override;
     void undo() override;
@@ -152,57 +213,30 @@ private:
     bool relink_;
 };
 
-class InsertTrackCommand : public QUndoCommand {
+class InsertTrackCommand : public InsertCommand<&Project::insertTrack, &Project::removeTrack> {
 public:
-    InsertTrackCommand(Project* project, Track track, int index, const QString& text = QStringLiteral("Insert Track"));
-
-    void redo() override;
-    void undo() override;
-
-    const Track& track() const { return track_; }
-    int index() const { return index_; }
-
-private:
-    Project* project_;
-    Track track_;
-    int index_;
+    InsertTrackCommand(Project* project, Track track, int index, const QString& text = QStringLiteral("Insert Track"))
+        : InsertCommand(project, std::move(track), index, text) {}
 };
 
-class RemoveTrackCommand : public QUndoCommand {
+class RemoveTrackCommand : public RemoveCommand<&Project::removeTrack, &Project::insertTrack> {
 public:
-    RemoveTrackCommand(Project* project, const QString& trackId, const QString& text = QStringLiteral("Delete Track"));
-
-    void redo() override;
-    void undo() override;
-
-    const QString& trackId() const { return trackId_; }
-
-private:
-    Project* project_;
-    QString trackId_;
-    std::optional<std::pair<Track, int>> saved_;  // the track and where it was, while removed
+    RemoveTrackCommand(Project* project, const QString& trackId, const QString& text = QStringLiteral("Delete Track"))
+        : RemoveCommand(project, trackId, text) {}
 };
 
 // Puts another track in a track's place, of the same id (a track flattened: an
 // audio track now).
-class ReplaceTrackCommand : public QUndoCommand {
+class ReplaceTrackCommand : public ValueCommand<std::monostate, Track> {
 public:
     ReplaceTrackCommand(Project* project, Track before, Track after, const QString& text);
 
     void redo() override;
     void undo() override;
-
-    const Track& before() const { return before_; }
-    const Track& after() const { return after_; }
-
-private:
-    Project* project_;
-    Track before_;
-    Track after_;
 };
 
-// Freezes a track (its frozen audio), or unfreezes it (none).
-class SetFreezeCommand : public QUndoCommand {
+// Freezes a track (its frozen audio), or unfreezes it (none). Target: the track's id.
+class SetFreezeCommand : public ValueCommand<QString, std::optional<Freeze>> {
 public:
     SetFreezeCommand(Project* project, const QString& trackId, std::optional<Freeze> old, std::optional<Freeze> nw,
                      const QString& text);
@@ -210,15 +244,7 @@ public:
     void redo() override;
     void undo() override;
 
-    const QString& trackId() const { return trackId_; }
-    const std::optional<Freeze>& oldValue() const { return old_; }
-    const std::optional<Freeze>& newValue() const { return new_; }
-
-private:
-    Project* project_;
-    QString trackId_;
-    std::optional<Freeze> old_;
-    std::optional<Freeze> new_;
+    const QString& trackId() const { return target_; }
 };
 
 // One setting of a track: target (track id, field).
@@ -296,8 +322,8 @@ public:
     void undo() override;
 };
 
-// A track's whole device tree.
-class SetDevicesCommand : public QUndoCommand {
+// A track's whole device tree. Target: the track's id.
+class SetDevicesCommand : public ValueCommand<QString, std::vector<Device>> {
 public:
     SetDevicesCommand(Project* project, const QString& trackId, std::vector<Device> before,
                       std::vector<Device> after, const QString& text);
@@ -305,33 +331,17 @@ public:
     void redo() override;
     void undo() override;
 
-    const QString& trackId() const { return trackId_; }
-    const std::vector<Device>& before() const { return before_; }
-    const std::vector<Device>& after() const { return after_; }
-
-private:
-    Project* project_;
-    QString trackId_;
-    std::vector<Device> before_;
-    std::vector<Device> after_;
+    const QString& trackId() const { return target_; }
 };
 
 // Changes several tracks' devices in one go: devices moving between them stay
 // the same devices (a plug-in isn't loaded again).
-class SetChainsCommand : public QUndoCommand {
+class SetChainsCommand : public ValueCommand<std::monostate, DeviceLists> {
 public:
     SetChainsCommand(Project* project, DeviceLists before, DeviceLists after, const QString& text);
 
     void redo() override;
     void undo() override;
-
-    const DeviceLists& before() const { return before_; }
-    const DeviceLists& after() const { return after_; }
-
-private:
-    Project* project_;
-    DeviceLists before_;
-    DeviceLists after_;
 };
 
 // One parameter of a device. Target: (track id, device id, param id).
@@ -380,8 +390,11 @@ public:
     ChainField field() const { return std::get<2>(target_); }
 };
 
+// What a command on one device changes: (track id, device id).
+using DeviceTarget = std::pair<QString, QString>;
+
 // A rack's name (none: named by its kind).
-class SetDeviceNameCommand : public QUndoCommand {
+class SetDeviceNameCommand : public ValueCommand<DeviceTarget, std::optional<QString>> {
 public:
     SetDeviceNameCommand(Project* project, const QString& trackId, const QString& deviceId,
                          std::optional<QString> old, std::optional<QString> nw, const QString& text);
@@ -389,15 +402,8 @@ public:
     void redo() override;
     void undo() override;
 
-    const QString& trackId() const { return trackId_; }
-    const QString& deviceId() const { return deviceId_; }
-
-private:
-    Project* project_;
-    QString trackId_;
-    QString deviceId_;
-    std::optional<QString> old_;
-    std::optional<QString> new_;
+    const QString& trackId() const { return target_.first; }
+    const QString& deviceId() const { return target_.second; }
 };
 
 // A rack's macro mappings, and the values of parameters they move ({(device
@@ -427,7 +433,7 @@ private:
 
 // Replaces a device's state: a plug-in's whole state (loading a preset), a
 // built-in device's besides its parameters (a sampler's sample); base64.
-class SetDeviceStateCommand : public QUndoCommand {
+class SetDeviceStateCommand : public ValueCommand<DeviceTarget, std::optional<QString>> {
 public:
     SetDeviceStateCommand(Project* project, const QString& trackId, const QString& deviceId,
                           std::optional<QString> old, std::optional<QString> nw, const QString& text);
@@ -435,17 +441,8 @@ public:
     void redo() override;
     void undo() override;
 
-    const QString& trackId() const { return trackId_; }
-    const QString& deviceId() const { return deviceId_; }
-    const std::optional<QString>& oldValue() const { return old_; }
-    const std::optional<QString>& newValue() const { return new_; }
-
-private:
-    Project* project_;
-    QString trackId_;
-    QString deviceId_;
-    std::optional<QString> old_;
-    std::optional<QString> new_;
+    const QString& trackId() const { return target_.first; }
+    const QString& deviceId() const { return target_.second; }
 };
 
 class SetDeviceEnabledCommand : public QUndoCommand {
@@ -467,7 +464,7 @@ private:
 };
 
 // A device's sidechain (none: none).
-class SetDeviceSidechainCommand : public QUndoCommand {
+class SetDeviceSidechainCommand : public ValueCommand<DeviceTarget, std::optional<Sidechain>> {
 public:
     SetDeviceSidechainCommand(Project* project, const QString& trackId, const QString& deviceId,
                               std::optional<Sidechain> old, std::optional<Sidechain> nw, const QString& text);
@@ -475,17 +472,8 @@ public:
     void redo() override;
     void undo() override;
 
-    const QString& trackId() const { return trackId_; }
-    const QString& deviceId() const { return deviceId_; }
-    const std::optional<Sidechain>& oldValue() const { return old_; }
-    const std::optional<Sidechain>& newValue() const { return new_; }
-
-private:
-    Project* project_;
-    QString trackId_;
-    QString deviceId_;
-    std::optional<Sidechain> old_;
-    std::optional<Sidechain> new_;
+    const QString& trackId() const { return target_.first; }
+    const QString& deviceId() const { return target_.second; }
 };
 
 // Replaces several envelopes at once, {(owner, key): envelope} (moving a time
@@ -518,53 +506,27 @@ public:
 // Reorders the tracks and changes which group each is in (grouping, ungrouping,
 // moving tracks into or out of a group): before and after list every track's
 // (id, parent) in order.
-class ArrangeTracksCommand : public QUndoCommand {
+class ArrangeTracksCommand : public ValueCommand<std::monostate, TrackTree> {
 public:
     ArrangeTracksCommand(Project* project, TrackTree before, TrackTree after, const QString& text);
 
     void redo() override;
     void undo() override;
-
-    const TrackTree& before() const { return before_; }
-    const TrackTree& after() const { return after_; }
-
-private:
-    Project* project_;
-    TrackTree before_;
-    TrackTree after_;
 };
 
-class InsertReturnCommand : public QUndoCommand {
+class InsertReturnCommand : public InsertCommand<&Project::insertReturn, &Project::removeReturn> {
 public:
     InsertReturnCommand(Project* project, Track track, int index,
-                        const QString& text = QStringLiteral("Insert Return Track"));
-
-    void redo() override;
-    void undo() override;
-
-    const Track& track() const { return track_; }
-
-private:
-    Project* project_;
-    Track track_;
-    int index_;
+                        const QString& text = QStringLiteral("Insert Return Track"))
+        : InsertCommand(project, std::move(track), index, text) {}
 };
 
 // Takes a return away; the sends into it are taken away first, in the same macro.
-class RemoveReturnCommand : public QUndoCommand {
+class RemoveReturnCommand : public RemoveCommand<&Project::removeReturn, &Project::insertReturn> {
 public:
     RemoveReturnCommand(Project* project, const QString& trackId,
-                        const QString& text = QStringLiteral("Delete Return Track"));
-
-    void redo() override;
-    void undo() override;
-
-    const QString& trackId() const { return trackId_; }
-
-private:
-    Project* project_;
-    QString trackId_;
-    std::optional<std::pair<Track, int>> saved_;
+                        const QString& text = QStringLiteral("Delete Return Track"))
+        : RemoveCommand(project, trackId, text) {}
 };
 
 }  // namespace sub::app

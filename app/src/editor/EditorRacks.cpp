@@ -19,28 +19,8 @@
 namespace sub::app {
 
 using editing::indexOfDevice;
-using editing::optionalId;
 
 namespace {
-
-// The rack holding a chain of this id, and the chain's index in it; null: none.
-std::pair<Device*, int> rackOfChain(std::vector<Device>& devices, const QString& chainId) {
-    for (const RackChain& rc : iterChains(devices)) {
-        if (rc.chain->id != chainId) continue;
-        for (int i = 0; i < static_cast<int>(rc.rack->chains.size()); ++i) {
-            if (rc.rack->chains[i].id == chainId) return {rc.rack, i};
-        }
-    }
-    return {nullptr, -1};
-}
-
-// A rack chain of this id; null: none.
-const Chain* findChain(const std::vector<Device>& devices, const QString& chainId) {
-    for (const ConstRackChain& rc : iterChains(devices)) {
-        if (rc.chain->id == chainId) return rc.chain;
-    }
-    return nullptr;
-}
 
 }  // namespace
 
@@ -116,10 +96,7 @@ QString ProjectEditor::addRackChain(const QString& trackId, const QString& rackI
     const QString id = chain.id;
     rack->chains.insert(rack->chains.begin() + editing::clampIndex(index, count), std::move(chain));
     push(std::make_unique<SetDevicesCommand>(project_, trackId, before, after, QStringLiteral("Add Chain")));
-    for (const ConstRackChain& rc : iterChains(project_->track(trackId).devices)) {
-        if (rc.chain->id == id) return id;
-    }
-    return {};
+    return findChain(project_->track(trackId).devices, id).chain != nullptr ? id : QString();
 }
 
 void ProjectEditor::removeRackChains(const QString& trackId, const QStringList& chainIds) {
@@ -148,17 +125,15 @@ QString ProjectEditor::duplicateRackChain(const QString& trackId, const QString&
     if (track == nullptr) return {};
     const std::vector<Device> before = track->devices;
     std::vector<Device> after = before;
-    const auto [rack, index] = rackOfChain(after, chainId);
+    Device* rack = findChain(after, chainId).rack;
     if (rack == nullptr) return {};
+    const int index = chainIndex(*rack, chainId);
     Device holder = newRack({rack->chains[index]});
     refreshIds(holder);
     const QString id = holder.chains.front().id;
     rack->chains.insert(rack->chains.begin() + index + 1, std::move(holder.chains.front()));
     push(std::make_unique<SetDevicesCommand>(project_, trackId, before, after, QStringLiteral("Duplicate Chain")));
-    for (const ConstRackChain& rc : iterChains(project_->track(trackId).devices)) {
-        if (rc.chain->id == id) return id;
-    }
-    return {};
+    return findChain(project_->track(trackId).devices, id).chain != nullptr ? id : QString();
 }
 
 void ProjectEditor::moveRackChain(const QString& trackId, const QString& chainId, int index) {
@@ -166,8 +141,9 @@ void ProjectEditor::moveRackChain(const QString& trackId, const QString& chainId
     if (track == nullptr) return;
     const std::vector<Device> before = track->devices;
     std::vector<Device> after = before;
-    const auto [rack, at] = rackOfChain(after, chainId);
+    Device* rack = findChain(after, chainId).rack;
     if (rack == nullptr) return;
+    const int at = chainIndex(*rack, chainId);
     Chain chain = std::move(rack->chains[at]);
     rack->chains.erase(rack->chains.begin() + at);
     const int count = static_cast<int>(rack->chains.size());
@@ -179,7 +155,7 @@ void ProjectEditor::moveRackChain(const QString& trackId, const QString& chainId
 
 void ProjectEditor::renameChain(const QString& trackId, const QString& chainId, const QString& name) {
     const Track* track = project_->findTrack(trackId);
-    const Chain* chain = track != nullptr ? findChain(track->devices, chainId) : nullptr;
+    const Chain* chain = track != nullptr ? findChain(track->devices, chainId).chain : nullptr;
     if (chain == nullptr) return;
     const QString old = chain->name;
     if (!name.isEmpty() && name != old) {
@@ -223,7 +199,7 @@ void ProjectEditor::setChainParam(const QString& trackId, const QString& chainId
                                   const QString& mergeKey) {
     const auto known = chainFieldFromName(field);
     const Track* track = project_->findTrack(trackId);
-    if (!known || *known == ChainField::Name || track == nullptr || findChain(track->devices, chainId) == nullptr) return;
+    if (!known || *known == ChainField::Name || track == nullptr || findChain(track->devices, chainId).chain == nullptr) return;
     setChainParam(trackId, chainId, *known, value, mergeKey);
 }
 

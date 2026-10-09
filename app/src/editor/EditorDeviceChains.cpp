@@ -6,6 +6,7 @@
 
 #include "model/Commands.h"
 #include "model/Devices.h"
+#include "model/Ids.h"
 
 #include <QUndoStack>
 
@@ -15,7 +16,6 @@ namespace sub::app {
 
 using editing::indexOfDevice;
 using editing::Macro;
-using editing::optionalId;
 
 namespace {
 
@@ -25,8 +25,7 @@ namespace {
 void pruneMacros(std::vector<Device>& devices) {
     for (Device* rack : iterDevices(devices)) {
         if (rack->macros.empty()) continue;
-        QSet<QString> inside = deviceIdsOf(*rack);
-        inside.remove(rack->id);
+        const QSet<QString> inside = innerDeviceIds(*rack);
         std::vector<MacroMapping> kept;
         for (const MacroMapping& m : rack->macros) {
             if (inside.contains(m.deviceId) && m.macro < macroCount(*rack)) kept.push_back(m);
@@ -52,11 +51,7 @@ QStringList outermost(const std::vector<Device>& devices, const QStringList& dev
         if (deviceIds.contains(d->id) && !deviceIsInstrument(*d)) found.push_back(d);
     }
     QSet<QString> inside;
-    for (const Device* d : found) {
-        QSet<QString> ids = deviceIdsOf(*d);
-        ids.remove(d->id);
-        inside.unite(ids);
-    }
+    for (const Device* d : found) inside.unite(innerDeviceIds(*d));
     QStringList result;
     for (const Device* d : found) {
         if (!inside.contains(d->id)) result.append(d->id);
@@ -161,11 +156,7 @@ std::vector<Device> ProjectEditor::copyDevices(const QString& trackId, const QSt
         if (deviceIds.contains(d->id)) found.push_back(d);
     }
     QSet<QString> inside;
-    for (const Device* d : found) {
-        QSet<QString> ids = deviceIdsOf(*d);
-        ids.remove(d->id);
-        inside.unite(ids);
-    }
+    for (const Device* d : found) inside.unite(innerDeviceIds(*d));
     std::vector<Device> copies;
     for (const Device* d : found) {
         if (!inside.contains(d->id)) copies.push_back(*d);

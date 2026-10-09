@@ -6,22 +6,15 @@
 
 #include <functional>
 
-#include "audio/AudioFiles.h"
 #include "model/DeviceState.h"
 #include "model/Devices.h"
+#include "model/Numbers.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 
 namespace sub::app {
 
 namespace {
-
-// Every device on a track, in racks too (depth first, in order).
-void eachDevice(const std::vector<Device>& devices, const std::function<void(const Device&)>& visit) {
-    for (const Device& device : devices) {
-        visit(device);
-        for (const Chain& chain : device.chains) eachDevice(chain.devices, visit);
-    }
-}
 
 // Every use of a file in the project: (its path, the use), in the order met.
 void eachUse(const Project& project, const std::function<void(const QString&, const ClipRef*, const DeviceRef*)>& use) {
@@ -33,12 +26,12 @@ void eachUse(const Project& project, const std::function<void(const QString&, co
                 use(clip.path, &ref, nullptr);
             }
         }
-        eachDevice(track->devices, [&](const Device& device) {
-            const QString path = deviceFile(device);
-            if (path.isEmpty()) return;
-            const DeviceRef ref{track->id, device.id};
+        for (const Device* device : iterDevices(track->devices)) {  // (in racks too)
+            const QString path = deviceFile(*device);
+            if (path.isEmpty()) continue;
+            const DeviceRef ref{track->id, device->id};
             use(path, nullptr, &ref);
-        });
+        }
     }
 }
 
@@ -66,7 +59,7 @@ std::vector<ProjectFile> projectFiles(const Project& project) {
     std::vector<ProjectFile> files;
     QHash<QString, size_t> byKey;
     eachUse(project, [&](const QString& path, const ClipRef* clip, const DeviceRef* device) {
-        const QString key = sourceKey(path);
+        const QString key = pathIdentity(path);
         auto found = byKey.constFind(key);
         if (found == byKey.constEnd()) {
             found = byKey.insert(key, files.size());
@@ -82,9 +75,9 @@ std::vector<ProjectFile> projectFiles(const Project& project) {
 FileUses fileUses(const Project& project, const QString& path) {
     FileUses uses;
     if (path.isEmpty()) return uses;
-    const QString key = sourceKey(path);
+    const QString key = pathIdentity(path);
     eachUse(project, [&](const QString& used, const ClipRef* clip, const DeviceRef* device) {
-        if (sourceKey(used) != key) return;
+        if (pathIdentity(used) != key) return;
         if (clip) uses.clips.append(*clip);
         if (device) uses.devices.append(*device);
     });
@@ -125,7 +118,7 @@ QString usesText(const Project& project, const FileUses& uses) {
     QStringList parts;
     if (!uses.clips.isEmpty()) {
         const int clips = static_cast<int>(uses.clips.size());
-        parts << (clips == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(clips));
+        parts << countText(clips, QStringLiteral("clip"), QStringLiteral("clips"));
     }
     // Devices by what they are called ("Sampler", "2 × Sampler").
     QMap<QString, int> devices;

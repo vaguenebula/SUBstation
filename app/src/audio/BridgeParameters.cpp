@@ -278,12 +278,9 @@ std::optional<double> EngineBridge::ownValue(const QString& owner, const QString
     if (key == automation::kMixerOn) return track.mute ? 0.0 : 1.0;
     if (const auto returnId = automation::keySend(key)) return track.sends.value(*returnId, Send{}).levelDb;
     if (const auto control = automation::keyChainControl(key)) {
-        for (const ConstRackChain& rc : iterChains(track.devices)) {
-            if (rc.chain->id == control->chainId) {
-                return control->control == automation::kChainVolume ? rc.chain->volumeDb : rc.chain->pan;
-            }
-        }
-        return std::nullopt;
+        const Chain* chain = findChain(track.devices, control->chainId).chain;
+        if (chain == nullptr) return std::nullopt;
+        return control->control == automation::kChainVolume ? chain->volumeDb : chain->pan;
     }
     const auto target = automation::parseKey(key);
     if (!target) return std::nullopt;

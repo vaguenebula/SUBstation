@@ -1,27 +1,27 @@
 // Audio sources: files decoded in a thread pool (of two), at the engine's rate,
-// for clips and previews. Each file is decoded once (keyed by sourceKey(), so
+// for clips and previews. Each file is decoded once (keyed by pathIdentity(), so
 // two spellings of a file share one source); what waits for it runs on the main
 // thread when it is ready.
 
 #include <QFileInfo>
 
-#include "audio/AudioFiles.h"
 #include "audio/BridgePrivate.h"
+#include "model/Paths.h"
 
 namespace sub::app {
 
 std::shared_ptr<const sub::AudioSource> EngineBridge::source(const QString& path) const {
-    return d_->sources.value(sourceKey(path));
+    return d_->sources.value(pathIdentity(path));
 }
 
 Waveform EngineBridge::waveform(const QString& path) const { return Waveform(source(path)); }
 
-bool EngineBridge::isLoading(const QString& path) const { return d_->loading.contains(sourceKey(path)); }
+bool EngineBridge::isLoading(const QString& path) const { return d_->loading.contains(pathIdentity(path)); }
 
-QString EngineBridge::loadError(const QString& path) const { return d_->failed.value(sourceKey(path)); }
+QString EngineBridge::loadError(const QString& path) const { return d_->failed.value(pathIdentity(path)); }
 
 void EngineBridge::requestSource(const QString& path, std::function<void()> then) {
-    const QString key = sourceKey(path);
+    const QString key = pathIdentity(path);
     const auto source = d_->sources.constFind(key);
     if (source != d_->sources.constEnd() && (*source)->sampleRate() == static_cast<uint32_t>(engine_.sampleRate())) {
         if (then) then();
@@ -52,7 +52,7 @@ void EngineBridge::requestSource(const QString& path, std::function<void()> then
 }
 
 void EngineBridge::onLoaded(const QString& path, std::shared_ptr<sub::AudioSource> source) {
-    const QString key = sourceKey(path);
+    const QString key = pathIdentity(path);
     d_->sources.insert(key, std::move(source));
     const std::vector<std::function<void()>> callbacks = d_->loading.take(key);
     Q_EMIT sourceReady(path);
@@ -60,7 +60,7 @@ void EngineBridge::onLoaded(const QString& path, std::shared_ptr<sub::AudioSourc
 }
 
 void EngineBridge::onFailed(const QString& path, const QString& message) {
-    const QString key = sourceKey(path);
+    const QString key = pathIdentity(path);
     d_->loading.remove(key);
     d_->failed.insert(key, message);
     Q_EMIT sourceFailed(path, message);
@@ -69,7 +69,7 @@ void EngineBridge::onFailed(const QString& path, const QString& message) {
 }
 
 std::optional<AudioFileInfo> EngineBridge::fileInfo(const QString& path) {
-    const QString key = sourceKey(path);
+    const QString key = pathIdentity(path);
     if (!d_->fileInfo.contains(key)) {
         try {
             const sub::AudioFileInfo probed = sub::AudioSource::probe(path.toStdString());
