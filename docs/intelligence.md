@@ -74,7 +74,9 @@ weighted mean, so an aspect counts by its weight however many features it has. S
 1 for the same sound, about 0.37 for two unrelated ones.
 
 The weights (Timbre 0.5, TimbreMotion 1.5, Spectrum 2.5, Envelope 2, Pitch 0.5, Rhythm 0.5) were tuned on a real
-library, rounded rather than taken at the optimum so as not to fit it too closely.
+library, rounded rather than taken at the optimum so as not to fit it too closely. They can also be fitted to a
+listener's answers to "which of B and C is more like A?" (`sound_similarity_bench --triplets`, then
+`tools/similarity_rater`, then `--ratings`: [benchmarks/README.md](../benchmarks/README.md#weights-from-listening)).
 
 ### How well it works
 

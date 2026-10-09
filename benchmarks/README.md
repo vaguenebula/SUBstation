@@ -258,6 +258,7 @@ noise, and timing every track costs nothing measurable on one thread.
 ```
 sound_similarity_bench --folder <sample library> [--threads N] [--limit N] [--cache file]
                        [--weights t,m,s,e,p,r] [--tune] [--show N] [--json out.json]
+                       [--triplets N file] [--seed N] [--ratings file]
 ```
 
 Fingerprints every audio file under the folder (on `--threads` threads, normal
@@ -272,6 +273,42 @@ each aspect alone, and with `--tune` searches the aspects' weights (Timbre,
 TimbreMotion, Spectrum, Envelope, Pitch, Rhythm) for the best mean precision@10
 over kinds. `--show N` prints the N nearest of one query per kind. How the
 fingerprint works is in [docs/intelligence.md](../docs/intelligence.md).
+
+## Weights from listening
+
+Labels from file names count a clap next to a snare as a miss, though a listener
+may call them close. The weights can be fitted to your ear instead:
+
+```
+sound_similarity_bench --folder <library> --cache fp.bin --triplets 1000 triplets.tsv
+python tools/similarity_rater/rate.py triplets.tsv          # rate; Ctrl+C and again to carry on
+sound_similarity_bench --folder <library> --cache fp.bin --ratings ratings.tsv
+```
+
+`--triplets` writes N questions: a one-shot (A, at most 4 s long) and two of its
+40 nearest (B, C); which is more like A? Of 150 pairs it takes the one the
+aspects most disagree about, as that's where an answer says the most about the
+weights; one in seven is a random pair, and one in twenty is asked again later
+with B and C swapped. The rater (Python 3, nothing else) plays them on a local
+page: Space plays A, B, A, C; ←/F or →/J answers; S is can't tell; U undoes. Each
+answer is saved at once.
+
+`--ratings` fits the weights: the chance B is picked is a logistic function of
+how much further C is than B from A in each aspect, weighted, with the weights
+kept at 0 or more. It prints how often a repeated question got the same answer,
+how many answers the default and fitted weights agree with on answers left out
+of the fit (five-fold, grouped by A), and each weight with a 90% interval
+(refitted 200 times on the answers drawn again). The rest of the run then uses
+the fitted weights, so a labelled library's P@10 shows whether they still find
+sounds of the same kind. Rate and fit on the same library: distances are in its
+spreads.
+
+How many answers it takes, from a simulated rater with known weights on a
+synthetic library (480 one-shots): 150 answers get the largest weights
+roughly right, but an interval can be 2 wide; 300 get them all within about 0.5;
+600 to 1 000 narrow the intervals to about ±0.4. With a ridge of 0.5 the fit was
+biased (weights pulled together, an aspect weighted 0 given 0.7), so it is 0.01.
+At about 5 s a question, 1 000 is under an hour and a half.
 
 ## Results
 

@@ -5,6 +5,7 @@
 //   sound_similarity_bench --folder <library> [--threads N] [--limit N]
 //                          [--cache file] [--weights t,m,s,e,p,r] [--tune]
 //                          [--show N] [--json file]
+//                          [--triplets N file] [--seed N] [--ratings file]
 //
 // The files' kinds come from their names and their folder's (a library sorted
 // into Kicks, Snares... folders, or named so): kick, snare, clap, closed and
@@ -14,10 +15,16 @@
 // kind. --tune searches the aspects' weights for the best mean precision@10.
 // --cache keeps the fingerprints between runs (they are made again when the
 // feature version changes).
+//
+// Weights from listening (README.md, Weights from listening): --triplets writes N triplets of sounds
+// (A, B, C) to rate by ear with tools/similarity_rater (which of B and C is
+// more like A?), picked where the aspects disagree about the answer; --ratings
+// fits the weights to the answers and runs the rest with them.
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -27,6 +34,7 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
@@ -218,10 +226,355 @@ std::string weightsText(const AspectWeights& w) {
     return out.str();
 }
 
+
+// --- Weights from listening ---
+
+// Each aspect's distance alone between two fingerprints (the mean of its
+// features' clipped squared z-differences): the distance is their weighted mean.
+using AspectDistances = std::array<float, kAspects>;
+
+struct AspectComparisons {
+    std::array<Comparison, kAspects> each;
+
+    AspectComparisons(const std::vector<float>& matrix, size_t count) {
+        for (size_t a = 0; a < kAspects; ++a) {
+            AspectWeights only;
+            only.weight.fill(0.f);
+            only.weight[a] = 1.f;
+            each[a] = Comparison::fit(matrix.data(), count, nullptr, only);
+        }
+    }
+    AspectDistances operator()(const float* x, const float* y) const {
+        AspectDistances d{};
+        for (size_t a = 0; a < kAspects; ++a) d[a] = each[a].distance(x, y);
+        return d;
+    }
+};
+
+// Tab-separated lines, '#' lines left out.
+std::vector<std::vector<std::string>> readTsv(const std::string& file) {
+    std::vector<std::vector<std::string>> rows;
+    std::ifstream in(pathOf(file));
+    for (std::string line; std::getline(in, line);) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        std::vector<std::string> fields;
+        std::stringstream fieldsIn(line);
+        for (std::string f; std::getline(fieldsIn, f, '\t');) fields.push_back(f);
+        rows.push_back(std::move(fields));
+    }
+    return rows;
+}
+
+// Writes `count` triplets, one an anchor: A, and two of its 40 nearest one-shots
+// (by `weights`), B and C, in a random order. Of 150 pairs it takes the one the
+// aspects most disagree about (the aspects, weighed alike, pulling both ways as
+// evenly as they can), which is what an answer tells the weights most about;
+// one in seven is a random pair instead, so plain cases are in it too. One in
+// twenty is asked again later, B and C swapped: how often you answer it the
+// same is how consistent the answers are.
+void writeTriplets(const std::vector<Sound>& sounds, const std::vector<uint32_t>& rows, const std::vector<float>& matrix,
+                   const AspectWeights& weights, size_t count, uint32_t seed, const std::string& file) {
+    const Comparison comparison = Comparison::fit(matrix.data(), rows.size(), nullptr, weights);
+    const AspectComparisons aspects(matrix, rows.size());
+    auto fp = [&](uint32_t r) { return matrix.data() + static_cast<size_t>(r) * kDims; };
+    // One-shots: not loops, at most 4 s long (quick to listen to).
+    std::vector<uint32_t> shots;
+    for (uint32_t r = 0; r < rows.size(); ++r)
+        if (!sounds[rows[r]].loop && fp(r)[feature::Length] <= std::log10(4.f)) shots.push_back(r);
+    std::mt19937 random(seed);
+    std::shuffle(shots.begin(), shots.end(), random);
+    const float sameSound = 0.02f;  // closer than this: the same sound, or as good as
+    struct Triplet {
+        uint32_t a, b, c;
+        int repeatOf = -1;
+    };
+    std::vector<Triplet> triplets;
+    std::vector<std::pair<float, uint32_t>> nearest;
+    // Each one-shot an A in turn (again from the first if there are fewer than `count`).
+    for (size_t next = 0; triplets.size() < count && next < shots.size() * 4; ++next) {
+        const uint32_t a = shots[next % shots.size()];
+        nearest.clear();
+        for (const uint32_t r : shots) {
+            const float d = comparison.distance(fp(a), fp(r));
+            if (r != a && d >= sameSound) nearest.push_back({d, r});
+        }
+        const size_t k = std::min<size_t>(40, nearest.size());
+        if (k < 2) continue;
+        std::partial_sort(nearest.begin(), nearest.begin() + static_cast<ptrdiff_t>(k), nearest.end());
+        std::uniform_int_distribution<size_t> pick(0, k - 1);
+        const bool plain = random() % 7 == 0;
+        float best = -1.f;
+        Triplet t{a, 0, 0};
+        for (int tries = 0; tries < 150; ++tries) {
+            const uint32_t b = nearest[pick(random)].second, c = nearest[pick(random)].second;
+            if (b == c || comparison.distance(fp(b), fp(c)) < sameSound) continue;
+            const AspectDistances ab = aspects(fp(a), fp(b)), ac = aspects(fp(a), fp(c));
+            float towardsB = 0.f, towardsC = 0.f;
+            for (size_t i = 0; i < kAspects; ++i) (ac[i] > ab[i] ? towardsB : towardsC) += std::abs(ac[i] - ab[i]);
+            const float disagreement = plain ? 1.f : std::min(towardsB, towardsC) / std::max(1e-6f, towardsB + towardsC);
+            if (disagreement > best) {
+                best = disagreement;
+                t.b = b;
+                t.c = c;
+            }
+            if (plain) break;
+        }
+        if (best >= 0.f) triplets.push_back(t);
+    }
+    // The repeats, each somewhere after its first time.
+    const size_t firsts = triplets.size();
+    for (size_t i = 0; i < firsts / 20; ++i) {
+        const size_t of = std::uniform_int_distribution<size_t>(0, firsts - 1)(random);
+        if (triplets[of].repeatOf >= 0) continue;
+        Triplet again{triplets[of].a, triplets[of].c, triplets[of].b, static_cast<int>(of)};
+        const size_t at = std::uniform_int_distribution<size_t>(of + 1, triplets.size())(random);
+        triplets.insert(triplets.begin() + static_cast<ptrdiff_t>(at), again);
+        for (Triplet& u : triplets)
+            if (u.repeatOf >= static_cast<int>(at)) ++u.repeatOf;
+    }
+    // Whole paths: the rater opens them from wherever it runs.
+    auto whole = [&](uint32_t r) { return utf8(fs::absolute(pathOf(sounds[rows[r]].path)).lexically_normal()); };
+    std::ofstream out(pathOf(file), std::ios::binary);
+    out << "# sound_similarity_bench triplets: which of B and C is more like A? (tools/similarity_rater)\n"
+        << "# id\trepeat of\tA\tB\tC\n";
+    for (size_t i = 0; i < triplets.size(); ++i) {
+        const Triplet& t = triplets[i];
+        bool swap = t.repeatOf < 0 && random() % 2;
+        out << i << '\t' << (t.repeatOf >= 0 ? std::to_string(t.repeatOf) : "") << '\t' << whole(t.a) << '\t'
+            << whole(swap ? t.c : t.b) << '\t' << whole(swap ? t.b : t.c) << '\n';
+    }
+    std::printf("%zu triplets (%zu asked again) written to %s\n", triplets.size(), triplets.size() - firsts, file.c_str());
+}
+
+// An answer: how much further C is than B from A in each aspect, and whether B
+// was picked as the closer.
+struct Answer {
+    AspectDistances further{};
+    bool pickedB = false;
+    std::string anchor;
+};
+
+// The chance B is picked: sigmoid(sum of u[a] * further[a]), u >= 0; u is the
+// weights times how sure the answers are. The fit: the most likely u, with the
+// least ridge that keeps it finite when the answers never contradict an aspect
+// (more pulls the weights towards each other: 0.5 already biased a simulated
+// rater's), by Newton's method on the aspects not held at 0.
+std::array<double, kAspects> fitAnswers(const std::vector<Answer>& answers, const std::vector<size_t>& use) {
+    constexpr double ridge = 0.01;
+    std::array<double, kAspects> u;
+    u.fill(0.1);
+    auto loss = [&](const std::array<double, kAspects>& v) {
+        double sum = 0.0;
+        for (const size_t i : use) {
+            double z = 0.0;
+            for (size_t a = 0; a < kAspects; ++a) z += v[a] * answers[i].further[a];
+            if (!answers[i].pickedB) z = -z;
+            sum += z > 0 ? std::log1p(std::exp(-z)) : -z + std::log1p(std::exp(z));
+        }
+        for (const double x : v) sum += 0.5 * ridge * x * x;
+        return sum;
+    };
+    double current = loss(u);
+    for (int iteration = 0; iteration < 100; ++iteration) {
+        std::array<double, kAspects> gradient{};
+        std::array<std::array<double, kAspects>, kAspects> hessian{};
+        for (const size_t i : use) {
+            const auto& x = answers[i].further;
+            double z = 0.0;
+            for (size_t a = 0; a < kAspects; ++a) z += u[a] * x[a];
+            const double p = 1.0 / (1.0 + std::exp(-z));
+            const double r = p - (answers[i].pickedB ? 1.0 : 0.0);
+            for (size_t a = 0; a < kAspects; ++a) {
+                gradient[a] += r * x[a];
+                for (size_t b = 0; b < kAspects; ++b) hessian[a][b] += p * (1.0 - p) * x[a] * x[b];
+            }
+        }
+        for (size_t a = 0; a < kAspects; ++a) {
+            gradient[a] += ridge * u[a];
+            hessian[a][a] += ridge;
+        }
+        // Held at 0: the aspects at 0 the loss would push below it.
+        std::array<bool, kAspects> free{};
+        for (size_t a = 0; a < kAspects; ++a) free[a] = u[a] > 1e-9 || gradient[a] < 0.0;
+        // Solve hessian * step = gradient over the free aspects (Gaussian elimination).
+        std::vector<size_t> f;
+        for (size_t a = 0; a < kAspects; ++a)
+            if (free[a]) f.push_back(a);
+        const size_t n = f.size();
+        std::vector<std::vector<double>> m(n, std::vector<double>(n + 1));
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t j = 0; j < n; ++j) m[i][j] = hessian[f[i]][f[j]];
+            m[i][n] = gradient[f[i]];
+        }
+        for (size_t col = 0; col < n; ++col) {
+            size_t pivot = col;
+            for (size_t r = col + 1; r < n; ++r)
+                if (std::abs(m[r][col]) > std::abs(m[pivot][col])) pivot = r;
+            std::swap(m[col], m[pivot]);
+            for (size_t r = 0; r < n; ++r) {
+                if (r == col) continue;
+                const double k = m[r][col] / m[col][col];
+                for (size_t c = col; c <= n; ++c) m[r][c] -= k * m[col][c];
+            }
+        }
+        std::array<double, kAspects> step{};
+        for (size_t i = 0; i < n; ++i) step[f[i]] = m[i][n] / m[i][i];
+        // Back off until the loss falls, clamping at 0.
+        bool moved = false;
+        for (double t = 1.0; t > 1e-6; t *= 0.5) {
+            std::array<double, kAspects> trial;
+            for (size_t a = 0; a < kAspects; ++a) trial[a] = std::max(0.0, u[a] - t * step[a]);
+            const double l = loss(trial);
+            if (l < current - 1e-10) {
+                u = trial;
+                moved = current - l > 1e-9;
+                current = l;
+                break;
+            }
+        }
+        if (!moved) break;
+    }
+    return u;
+}
+
+// The weights a fit gives, scaled to add up to what the defaults do.
+AspectWeights weightsOf(const std::array<double, kAspects>& u) {
+    const auto defaults = AspectWeights::defaults();
+    const double total = std::accumulate(defaults.begin(), defaults.end(), 0.0);
+    const double sum = std::accumulate(u.begin(), u.end(), 0.0);
+    AspectWeights w;
+    for (size_t a = 0; a < kAspects; ++a) w.weight[a] = sum > 0.0 ? static_cast<float>(u[a] * total / sum) : 0.f;
+    return w;
+}
+
+// How many answers the weights agree with (the closer by them is the one picked).
+double agreement(const std::vector<Answer>& answers, const std::vector<size_t>& use, const AspectWeights& w) {
+    if (use.empty()) return 0.0;
+    double hits = 0.0;
+    for (const size_t i : use) {
+        double z = 0.0;
+        for (size_t a = 0; a < kAspects; ++a) z += w.weight[a] * answers[i].further[a];
+        hits += z == 0.0 ? 0.5 : ((z > 0.0) == answers[i].pickedB ? 1.0 : 0.0);
+    }
+    return hits / static_cast<double>(use.size());
+}
+
+// Fits the weights to the rater's answers (tools/similarity_rater) and says how
+// far to trust them. The aspects' distances come from this library's spreads:
+// rate and fit on the same library.
+std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const std::vector<uint32_t>& rows,
+                                        const std::vector<float>& matrix, const std::string& file, uint32_t seed) {
+    const AspectComparisons aspects(matrix, rows.size());
+    // By whole path, however the library's folder was written.
+    auto whole = [](const std::string& path) {
+        std::error_code error;
+        const fs::path p = fs::weakly_canonical(pathOf(path), error);
+        return utf8(error ? fs::absolute(pathOf(path)).lexically_normal() : p);
+    };
+    std::map<std::string, uint32_t> rowOf;
+    for (uint32_t r = 0; r < rows.size(); ++r) rowOf[whole(sounds[rows[r]].path)] = r;
+    auto fp = [&](uint32_t r) { return matrix.data() + static_cast<size_t>(r) * kDims; };
+    std::vector<Answer> answers;
+    size_t skipped = 0, missing = 0;
+    // The same question asked twice (B and C in either order): did the answers agree?
+    std::map<std::string, std::vector<std::string>> asked;
+    for (const auto& line : readTsv(file)) {
+        // id, choice (b, c or skip), A, B, C[, ms]
+        if (line.size() < 5) continue;
+        const std::string& choice = line[1];
+        if (choice != "b" && choice != "c") {
+            ++skipped;
+            continue;
+        }
+        const auto a = rowOf.find(whole(line[2])), b = rowOf.find(whole(line[3])), c = rowOf.find(whole(line[4]));
+        if (a == rowOf.end() || b == rowOf.end() || c == rowOf.end()) {
+            ++missing;
+            continue;
+        }
+        const AspectDistances ab = aspects(fp(a->second), fp(b->second)), ac = aspects(fp(a->second), fp(c->second));
+        Answer answer;
+        for (size_t i = 0; i < kAspects; ++i) answer.further[i] = ac[i] - ab[i];
+        answer.pickedB = choice == "b";
+        answer.anchor = line[2];
+        answers.push_back(answer);
+        const bool ordered = line[3] < line[4];
+        asked[line[2] + '\t' + (ordered ? line[3] + '\t' + line[4] : line[4] + '\t' + line[3])].push_back(
+            line[choice == "b" ? 3 : 4]);
+    }
+    std::printf("\n%zu answers from %s (%zu can't tell, %zu with a sound not in this library)\n", answers.size(),
+                file.c_str(), skipped, missing);
+    if (answers.size() < 20) {
+        std::printf("  too few to fit\n");
+        return std::nullopt;
+    }
+    int repeats = 0, same = 0;
+    for (const auto& [question, picks] : asked)
+        for (size_t i = 1; i < picks.size(); ++i) {
+            ++repeats;
+            same += picks[i] == picks[0];
+        }
+    if (repeats)
+        std::printf("  asked again: the same answer %d times out of %d (%.0f%%; chance is 50%%, and the questions are "
+                    "close calls on purpose)\n", same, repeats, 100.0 * same / repeats);
+
+    std::vector<size_t> all(answers.size());
+    std::iota(all.begin(), all.end(), size_t{0});
+    const AspectWeights fitted = weightsOf(fitAnswers(answers, all));
+
+    // Cross-validated: answers in five groups by their A, each group judged by
+    // weights fitted on the other four.
+    std::map<std::string, int> group;
+    std::vector<std::string> anchors;
+    for (const Answer& answer : answers)
+        if (group.emplace(answer.anchor, 0).second) anchors.push_back(answer.anchor);
+    std::mt19937 random(seed);
+    std::shuffle(anchors.begin(), anchors.end(), random);
+    for (size_t i = 0; i < anchors.size(); ++i) group[anchors[i]] = static_cast<int>(i % 5);
+    double heldOutFitted = 0.0, heldOutDefaults = 0.0;
+    for (int g = 0; g < 5; ++g) {
+        std::vector<size_t> train, test;
+        for (size_t i = 0; i < answers.size(); ++i) (group[answers[i].anchor] == g ? test : train).push_back(i);
+        heldOutFitted += agreement(answers, test, weightsOf(fitAnswers(answers, train))) * test.size();
+        heldOutDefaults += agreement(answers, test, AspectWeights{}) * test.size();
+    }
+    std::printf("  answers agreed with, on answers held out of the fit: default weights %.1f%%, fitted %.1f%% "
+                "(on all, fitted on all: %.1f%%)\n",
+                100.0 * heldOutDefaults / answers.size(), 100.0 * heldOutFitted / answers.size(),
+                100.0 * agreement(answers, all, fitted));
+
+    // How sure each weight is: refitted on the answers drawn again (by A, 200 times).
+    std::map<std::string, std::vector<size_t>> byAnchor;
+    for (size_t i = 0; i < answers.size(); ++i) byAnchor[answers[i].anchor].push_back(i);
+    std::array<std::vector<float>, kAspects> drawn;
+    std::uniform_int_distribution<size_t> pick(0, anchors.size() - 1);
+    for (int draw = 0; draw < 200; ++draw) {
+        std::vector<size_t> use;
+        for (size_t i = 0; i < anchors.size(); ++i) {
+            const auto& those = byAnchor[anchors[pick(random)]];
+            use.insert(use.end(), those.begin(), those.end());
+        }
+        const AspectWeights w = weightsOf(fitAnswers(answers, use));
+        for (size_t a = 0; a < kAspects; ++a) drawn[a].push_back(w.weight[a]);
+    }
+    const AspectWeights defaults;
+    std::printf("  %-13s %8s %8s %16s\n", "aspect", "default", "fitted", "90% interval");
+    for (size_t a = 0; a < kAspects; ++a) {
+        auto& d = drawn[a];
+        std::sort(d.begin(), d.end());
+        std::printf("  %-13s %8.2f %8.2f %7.2f - %-7.2f\n", aspectName(static_cast<Aspect>(a)), defaults.weight[a],
+                    fitted.weight[a], d[d.size() / 20], d[d.size() * 19 / 20]);
+    }
+    std::printf("  fitted weights %s\n", weightsText(fitted).c_str());
+    return fitted;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string folder, cacheFile, jsonFile;
+    std::string folder, cacheFile, jsonFile, tripletsFile, ratingsFile;
+    size_t tripletCount = 0;
+    uint32_t seed = 1;
     unsigned threads = std::max(1u, std::thread::hardware_concurrency() / 2);
     size_t limit = 0;
     int show = 0;
@@ -237,6 +590,11 @@ int main(int argc, char** argv) {
         else if (arg == "--json") jsonFile = next();
         else if (arg == "--show") show = std::stoi(next());
         else if (arg == "--tune") tune = true;
+        else if (arg == "--triplets") {
+            tripletCount = std::stoul(next());
+            tripletsFile = next();
+        } else if (arg == "--seed") seed = static_cast<uint32_t>(std::stoul(next()));
+        else if (arg == "--ratings") ratingsFile = next();
         else if (arg == "--weights") {
             std::stringstream list(next());
             std::string item;
@@ -248,7 +606,8 @@ int main(int argc, char** argv) {
     }
     if (folder.empty()) {
         std::cerr << "usage: sound_similarity_bench --folder <sample library> [--threads N] [--limit N] [--cache file] "
-                     "[--weights t,m,s,e,p,r] [--tune] [--show N] [--json file]\n";
+                     "[--weights t,m,s,e,p,r] [--tune] [--show N] [--json file] [--triplets N file] [--seed N] "
+                     "[--ratings file]\n";
         return 2;
     }
 
@@ -335,6 +694,17 @@ int main(int argc, char** argv) {
             for (size_t r = 0; r < rows.size(); ++r) d[r] = comparison.distance(matrix.data(), matrix.data() + r * kDims);
         std::printf("one search over %zu fingerprints: %.3f ms\n", rows.size(), 1000 * (now() - t0) / repeats);
     }
+
+    // --- Weights from listening ---
+    if (!ratingsFile.empty()) {
+        if (const auto fitted = fitRatings(sounds, rows, matrix, ratingsFile, seed)) {
+            if (!queries.empty())
+                std::printf("\nweights %s: mean P@10 %.3f (over kinds)\n", weightsText(weights).c_str(),
+                            evaluate(sounds, matrix, rows, queries, weights).macro10);
+            weights = *fitted;
+        }
+    }
+    if (tripletCount > 0) writeTriplets(sounds, rows, matrix, weights, tripletCount, seed, tripletsFile);
 
     // --- Retrieval ---
     std::printf("\nweights %s\n", weightsText(weights).c_str());
