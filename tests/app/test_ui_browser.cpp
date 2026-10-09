@@ -166,7 +166,8 @@ private Q_SLOTS:
         QVERIFY(settle());
         QStringList effectNames = names();
         effectNames.sort();
-        QCOMPARE(effectNames, (QStringList{QStringLiteral("Compressor"), QStringLiteral("Delay"), QStringLiteral("EQ"),
+        QCOMPARE(effectNames, (QStringList{QStringLiteral("Compressor"), QStringLiteral("Delay"),
+                                           QStringLiteral("Disperser"), QStringLiteral("EQ"),
                                            QStringLiteral("Over The Top"), QStringLiteral("Sidechain"),
                                            QStringLiteral("Utility")}));
         const int utility = int(names().indexOf(QStringLiteral("Utility")));

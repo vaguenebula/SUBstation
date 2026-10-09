@@ -21,7 +21,8 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
   red), and block chords or a bass line written from them; MIDI input from
   controllers and the computer keyboard.
 - **Devices**: a built-in Synth, Sampler, Compressor (with sidechain), Over The Top
-  multiband compressor and Utility; racks with parallel chains, macros and presets.
+  multiband compressor, Disperser (phase dispersion through up to 64 all-pass stages,
+  its group delay drawn) and Utility; racks with parallel chains, macros and presets.
 - **VST3 plug-ins**: instruments and effects, their own editors, presets, sidechains,
   latency compensation everywhere, crash-safe scanning.
 - **Automation** of every parameter, played sample-accurately.

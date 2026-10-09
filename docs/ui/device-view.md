@@ -27,6 +27,7 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 | [editors/DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml) | The editor registry (a singleton): `editorFor(kind)` |
 | Compressor: [CompressorEditor.qml](../../ui/qml/devices/editors/CompressorEditor.qml), [ReductionGraph](../../ui/src/devices/ReductionGraph.h) | |
 | Delay: [DelayEditor.qml](../../ui/qml/devices/editors/DelayEditor.qml), [FilterGraph](../../ui/src/devices/FilterGraph.h) | |
+| Disperser: [DisperserEditor.qml](../../ui/qml/devices/editors/DisperserEditor.qml), [DispersionGraph](../../ui/src/devices/DispersionGraph.h) | |
 | EQ: [EqEditor.qml](../../ui/qml/devices/editors/EqEditor.qml), [EqWindow.qml](../../ui/qml/devices/editors/EqWindow.qml), [EqWindows.qml](../../ui/qml/devices/editors/EqWindows.qml), [EqBandPanel.qml](../../ui/qml/devices/editors/EqBandPanel.qml), [EqCorner.qml](../../ui/qml/devices/editors/EqCorner.qml), [EqGraphMenus.qml](../../ui/qml/devices/editors/EqGraphMenus.qml), [EqGraph](../../ui/src/devices/EqGraph.h), [EqView](../../ui/src/devices/EqView.h), [EqTypeIcon](../../ui/src/devices/EqTypeIcon.h) | |
 | Sidechain: [SidechainEditor.qml](../../ui/qml/devices/editors/SidechainEditor.qml), [CurveGraph](../../ui/src/devices/CurveGraph.h), [ClashView](../../ui/src/devices/ClashView.h) | |
 | Sampler: [SamplerEditor.qml](../../ui/qml/devices/editors/SamplerEditor.qml), [SampleView](../../ui/src/devices/SampleView.h) | |
@@ -288,6 +289,7 @@ device's kind (its engine id):
 readonly property var editors: ({
     "compressor": "CompressorEditor.qml",
     "delay": "DelayEditor.qml",
+    "disperser": "DisperserEditor.qml",
     "eq": "EqEditor.qml",
     "sampler": "SamplerEditor.qml",
     "sidechain": "SidechainEditor.qml"
@@ -299,8 +301,8 @@ readonly property var editors: ({
 
 - `required property string trackId` and `deviceId`.
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
-  `implicitWidth` is the body's width (Compressor 658, Delay 532, Sampler 566, Sidechain 720, EQ 580, or 756 with its
-  band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px from the top
+  `implicitWidth` is the body's width (Compressor 658, Delay 532, Disperser 478, Sampler 566, Sidechain 720, EQ 580,
+  or 756 with its band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px from the top
   and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
 - Optional: `pages` (read) and `page` (read/write) for pages of knobs; `menuActions` (a list of `Action`s the
   device's menu starts with); the signal `sidechainMenuRequested()` (the frame shows the sidechain menu).
@@ -340,6 +342,17 @@ The editors:
   the display `input`: a 4096-point Hann FFT of the latest samples, falling 1 dB per refresh:
   `analysis::FallingSpectrum`), the Filter switch, the frequency (a log-scaled value box) and width; the Mode buttons
   and Ping Pong; Feedback with Freeze beside it over Dry/Wet.
+- **Disperser** ([DisperserEditor.qml](../../ui/qml/devices/editors/DisperserEditor.qml)): no pages: Amount (in whole
+  stages), Frequency and Pinch knobs side by side, their names above and values below, over a Bypass button; beside
+  them a [DispersionGraph](../../ui/src/devices/DispersionGraph.h) (260 px): the stages' group delay in ms on a
+  20 Hz..20 kHz log axis, worked out at the engine's sample rate from the engine's own stages
+  (`sub::app::disperserGroupDelayMs`, the application layer's wrapper of `sub::disperser::groupDelayMs`, so the curve
+  is the delay that plays), one point per column plus its peak and where it is tuned (high up, the peak can be
+  narrower than a column: `disperserPeakFrequency`). Its delay axis fits the curve (1, 2 or 5 times a power of ten at or
+  above the peak: `niceRange`), worked out again when the parameters or the audio device (its rate) change. The dot
+  sits on the curve where the stages are tuned (`disperserTunedFrequency`), with the delay there read out at the top
+  right: drag across for the Frequency, up and down for the Pinch (doubling every `kPinchPixels`, 60 px), one undo
+  step per drag. Bypassed, the curve is greyed.
 - **EQ** ([EqEditor.qml](../../ui/qml/devices/editors/EqEditor.qml)): no pages, no body margins: the curve
   ([EqGraph](../../ui/src/devices/EqGraph.h)) from the title bar to the bottom edge, Scale and Output knobs in its
   bottom corners ([EqCorner.qml](../../ui/qml/devices/editors/EqCorner.qml)), and the selected band's controls

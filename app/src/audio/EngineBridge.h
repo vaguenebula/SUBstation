@@ -124,7 +124,7 @@
 //
 // This header includes none of the engine's: the UI may include it (and
 // BridgeTypes.h, Waveform.h, LiveTake.h, RenderTask.h, ReverseJob.h,
-// AudioSettings.h, AudioFiles.h, EqResponse.h). EngineDescs.h and
+// AudioSettings.h, AudioFiles.h, EqResponse.h, DisperserResponse.h). EngineDescs.h and
 // BridgePrivate.h are the application layer's own.
 
 #include "audio/AudioSettings.h"

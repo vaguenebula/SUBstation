@@ -64,7 +64,7 @@ preferences ([AudioSettings.h](../../app/src/audio/AudioSettings.h)) and where t
 | [BridgeFreezing.cpp](../../app/src/audio/BridgeFreezing.cpp) | Frozen tracks in the engine, rendering a freeze, exporting |
 | [BridgeReversing.cpp](../../app/src/audio/BridgeReversing.cpp) | Reversed copies of files, for reversed clips |
 | [BridgeAudioDevice.cpp](../../app/src/audio/BridgeAudioDevice.cpp) | Opening the audio device, resets, its control panel, its events, `startAudio()` |
-| [BridgeTypes.h](../../app/src/audio/BridgeTypes.h), [Waveform.h](../../app/src/audio/Waveform.h), [LiveTake.h](../../app/src/audio/LiveTake.h), [RenderTask.h](../../app/src/audio/RenderTask.h), [ReverseJob.h](../../app/src/audio/ReverseJob.h), [EqResponse.h](../../app/src/audio/EqResponse.h) | What the bridge hands the UI, as the application's own types (below) |
+| [BridgeTypes.h](../../app/src/audio/BridgeTypes.h), [Waveform.h](../../app/src/audio/Waveform.h), [LiveTake.h](../../app/src/audio/LiveTake.h), [RenderTask.h](../../app/src/audio/RenderTask.h), [ReverseJob.h](../../app/src/audio/ReverseJob.h), [EqResponse.h](../../app/src/audio/EqResponse.h), [DisperserResponse.h](../../app/src/audio/DisperserResponse.h) | What the bridge hands the UI, as the application's own types (below) |
 | [EngineDescs.h](../../app/src/audio/EngineDescs.h) | Model to engine descriptions (clips, notes); the application layer's own |
 | [AudioSettings.h](../../app/src/audio/AudioSettings.h) | `AudioSettings` (QSettings), `audioThreads`/`setAudioThreads`, `disabledMidiInputs`/`setMidiInputDisabled`, `recordQuantize`/`setRecordQuantize`/`recordQuantizeChoices`, `defaultDriver`, `audioDrivers`, `kBufferSizes`, `kSampleRates` |
 | [AudioFiles.h](../../app/src/audio/AudioFiles.h) | `recordingsFolder`, `takePath`, `freezeFolder`, `reversedFolder`, `reversedPath`, `floatWavHeader`, `writeFloatWav`, `isAudioFile`, `audioExtensions`, `sourceKey` |
@@ -83,6 +83,7 @@ UI shows of the engine comes as application-layer types:
 | `ProcessorParam`, `ProcessorDisplay`, `ParamGroup` | a processor's parameters as a device's editor shows them (with the engine's normalized mapping), the streams its own editor draws (meters, curves), and an owner's automatable parameters as `ParamSpec`s |
 | `RenderTask` (`EngineRender`, `FreezeRender`), `ReverseJob` | a render or a reversed copy on a thread of its own, followed without waiting (below) |
 | `eqResponseDb()` | the EQ device's band response, computed by the engine's own filter design, so the curve drawn is the one that plays |
+| `disperserGroupDelayMs()`, `disperserTunedFrequency()`, `disperserPeakFrequency()` | the Disperser's group delay (ms) from the engine's own stages, where they are tuned (below Nyquist) and where the delay peaks, so the graph drawn is the delay that plays |
 
 `BridgePrivate.h` and `EngineDescs.h` are the application layer's own.
 

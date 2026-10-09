@@ -8,10 +8,12 @@
 
 #include "audio/AudioFiles.h"
 #include "audio/AudioSettings.h"
+#include "audio/DisperserResponse.h"
 #include "audio/EqResponse.h"
 #include "audio/EngineBridge.h"
 #include "model/Project.h"
 
+#include "builtin/DisperserDesign.h"
 #include "builtin/EqDesign.h"
 
 #include <QDir>
@@ -201,6 +203,30 @@ private Q_SLOTS:
         // Above Nyquist: Nyquist's.
         QCOMPARE(eqResponseDb(sub::eq::Bell, 1000.0, 6.0, 1.0, 0, 48000.0, {24000.0, 40000.0})[1],
                  eqResponseDb(sub::eq::Bell, 1000.0, 6.0, 1.0, 0, 48000.0, {24000.0})[0]);
+    }
+
+    void theDisperserCurveIsTheEngines() {
+        const QList<double> frequencies{20.0, 200.0, 1000.0, 5000.0, 30000.0};
+        const QList<double> curve = disperserGroupDelayMs(32, 1000.0, 2.0, 48000.0, frequencies);
+        QCOMPARE(curve.size(), 5);
+        for (qsizetype i = 0; i < frequencies.size(); ++i)
+            QCOMPARE(curve[i], sub::disperser::groupDelayMs(32, 1000.0, 2.0, 48000.0, frequencies[i]));
+        QVERIFY(curve[2] > curve[1] && curve[2] > curve[3]);  // it peaks where it is tuned
+        QVERIFY(std::abs(curve[2] - 32 * 2 * 2.0 / (3.14159265358979 * 1000.0) * 1000.0) < 0.5);  // ~2Q/(pi f) a stage
+        // Above Nyquist: Nyquist's. No stages: no delay.
+        QCOMPARE(curve[4], disperserGroupDelayMs(32, 1000.0, 2.0, 48000.0, {24000.0})[0]);
+        QCOMPARE(disperserGroupDelayMs(0, 1000.0, 2.0, 48000.0, {1000.0})[0], 0.0);
+        // Its peak: its poles' frequency, a little below where it is tuned (f sqrt(1 - 1/4Q²)), kept
+        // below Nyquist; at 0 Hz for a pinch so low its poles are real.
+        QVERIFY(std::abs(disperserPeakFrequency(1000.0, 2.0, 48000.0) / (1000.0 * std::sqrt(1.0 - 1.0 / 16.0)) - 1.0) <
+                0.01);
+        QVERIFY(std::abs(disperserPeakFrequency(1000.0, 10.0, 48000.0) / 1000.0 - 1.0) < 0.01);
+        QVERIFY(std::abs(disperserPeakFrequency(20000.0, 10.0, 44100.0) - 0.45 * 44100.0) < 50.0);
+        QCOMPARE(disperserPeakFrequency(1000.0, 0.1, 48000.0), 0.0);
+        const double peak = disperserPeakFrequency(20000.0, 10.0, 44100.0);
+        const double atPeak = disperserGroupDelayMs(64, 20000.0, 10.0, 44100.0, {peak})[0];
+        for (const double nearby : {19000.0, 19500.0, 20000.0, 20500.0})
+            QVERIFY(atPeak >= disperserGroupDelayMs(64, 20000.0, 10.0, 44100.0, {nearby})[0]);
     }
 
     void startingAudioFallsBackOrSaysSo() {
