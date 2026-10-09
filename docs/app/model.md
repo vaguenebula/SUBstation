@@ -50,7 +50,7 @@ session's ([session.md](session.md)).
 | [ParamSpec.h](../../app/src/model/ParamSpec.h) | `ParamSpec`: any automatable parameter described alike, with the engine's normalized mapping; `mixerSpecs`, `sendSpec`, `chainSpecs`, `formatValue` |
 | [Edits.h](../../app/src/model/Edits.h) | `sub::app::edits`: pure clip maths for audio and MIDI clips alike: overlaps, cuts, trims, splits, ranges, tempo fitting, consolidating, reversing, stretching, slipping, fades |
 | [Notes.h](../../app/src/model/Notes.h) | `sub::app::notes`: pure note maths for the piano roll: overlaps on a key, moves, resizes, velocity, legato, ×2/÷2, quantize, humanize timing; note names |
-| [Commands.h](../../app/src/model/Commands.h) | The `QUndoCommand` subclasses; merging of continuous gestures (`MergeableCommand`, `kMergeId`) |
+| [Commands.h](../../app/src/model/Commands.h) | The `QUndoCommand` subclasses and what they share: `ValueCommand` (a target, its old and new value), `MergeableCommand` (one that merges continuous gestures: `kMergeId`, `mergeId`), `InsertCommand`/`RemoveCommand` (a track into or out of the tracks or the returns) |
 | [Timebase.h](../../app/src/model/Timebase.h) | `TimeSignature`, beats and seconds, bar.beat.sixteenth formatting and parsing, dB and pan text |
 | [Keys.h](../../app/src/model/Keys.h) | Musical keys (`Key`), tempo and key from file names (`parseFilename`), what a dropped clip starts with (`clipSettings`) |
 | [DeviceState.h](../../app/src/model/DeviceState.h) | `sub::app::deviceState`: a built-in device's state besides its parameters (a sampler's sample), in the engine's text format, base64 in `Device::state` |
@@ -426,14 +426,17 @@ How it fits together:
 
 - **Snapshots, not deltas.** Commands store whole before/after values (a clip list, a device tree, an envelope, a
   track) and put one or the other in place. They are values, so the project gets copies and the stack's are never
-  the live model's. `RemoveTrackCommand` keeps the track it removed and puts it back.
+  the live model's. Most hold one such value: they are `ValueCommand`s (what they change, its `oldValue()` and
+  `newValue()`), and each has only its `redo()` and `undo()`. `RemoveTrackCommand` keeps the track it removed and puts
+  it back; it and `InsertTrackCommand` are the same classes as the returns' (`RemoveCommand`, `InsertCommand`) over
+  the other list's `Project` methods.
 - **Compound steps** are undo macros (`QUndoStack::beginMacro`/`endMacro`, opened by a scoped `Macro` in
   [EditorSupport.h](../../app/src/editor/EditorSupport.h), so it closes even when an edit throws): deleting tracks
   (inputs and sidechains from them dropped, the tracks, the sends into deleted returns and their automation),
   grouping, ungrouping, adding clips (with a new track), moving clips with their automation, deleting devices with
   their automation, recording.
 - **Gestures merge.** A merge key is a `QString`; empty never merges. A command given one returns id `kMergeId`
-  (0x6E1), and `mergeWith` accepts the next command of the same class with the same merge key and the same target,
+  (0x6E1, `mergeId()`), and `mergeWith` accepts the next command of the same class with the same merge key and the same target,
   keeping the first's old value and the latest's new one (`MergeableCommand`). `SetClipsCommand` needs the same set
   of tracks; `ReplaceFilesCommand` the same tracks and devices, and turns obsolete (leaving the stack) when it is back
   where it began. The UI makes one key per gesture (`QUuid::createUuid().toString()`; the shared `Knob` and `ValueBox`

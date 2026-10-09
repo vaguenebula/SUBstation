@@ -22,8 +22,6 @@ SetClipsCommand::SetClipsCommand(Project* project, const QString& text, ClipList
       frozenBefore_(std::move(frozenBefore)),
       frozenAfter_(std::move(frozenAfter)) {}
 
-int SetClipsCommand::id() const { return mergeKey_.isEmpty() ? -1 : kMergeId; }
-
 bool SetClipsCommand::mergeWith(const QUndoCommand* other) {
     const auto* next = dynamic_cast<const SetClipsCommand*>(other);
     if (next == nullptr || next->mergeKey_ != mergeKey_ || next->after_.keys() != after_.keys() ||
@@ -61,8 +59,6 @@ ReplaceFilesCommand::ReplaceFilesCommand(Project* project, const QString& text, 
       mergeKey_(std::move(mergeKey)),
       relink_(relink) {}
 
-int ReplaceFilesCommand::id() const { return mergeKey_.isEmpty() ? -1 : kMergeId; }
-
 bool ReplaceFilesCommand::mergeWith(const QUndoCommand* other) {
     const auto* next = dynamic_cast<const ReplaceFilesCommand*>(other);
     if (next == nullptr || next->mergeKey_ != mergeKey_ || next->after_.keys() != after_.keys() ||
@@ -93,37 +89,20 @@ void ReplaceFilesCommand::undo() {
 
 // --- Tracks ---
 
-InsertTrackCommand::InsertTrackCommand(Project* project, Track track, int index, const QString& text)
-    : QUndoCommand(text), project_(project), track_(std::move(track)), index_(index) {}
-
-void InsertTrackCommand::redo() { project_->insertTrack(track_, index_); }
-
-void InsertTrackCommand::undo() { project_->removeTrack(track_.id); }
-
-RemoveTrackCommand::RemoveTrackCommand(Project* project, const QString& trackId, const QString& text)
-    : QUndoCommand(text), project_(project), trackId_(trackId) {}
-
-void RemoveTrackCommand::redo() { saved_ = project_->removeTrack(trackId_); }
-
-void RemoveTrackCommand::undo() {
-    if (!saved_) return;
-    project_->insertTrack(saved_->first, saved_->second);
-}
-
 ReplaceTrackCommand::ReplaceTrackCommand(Project* project, Track before, Track after, const QString& text)
-    : QUndoCommand(text), project_(project), before_(std::move(before)), after_(std::move(after)) {}
+    : ValueCommand(project, text, {}, std::move(before), std::move(after)) {}
 
-void ReplaceTrackCommand::redo() { project_->replaceTrack(after_); }
+void ReplaceTrackCommand::redo() { project_->replaceTrack(new_); }
 
-void ReplaceTrackCommand::undo() { project_->replaceTrack(before_); }
+void ReplaceTrackCommand::undo() { project_->replaceTrack(old_); }
 
 SetFreezeCommand::SetFreezeCommand(Project* project, const QString& trackId, std::optional<Freeze> old,
                                    std::optional<Freeze> nw, const QString& text)
-    : QUndoCommand(text), project_(project), trackId_(trackId), old_(std::move(old)), new_(std::move(nw)) {}
+    : ValueCommand(project, text, trackId, std::move(old), std::move(nw)) {}
 
-void SetFreezeCommand::redo() { project_->setFrozen(trackId_, new_); }
+void SetFreezeCommand::redo() { project_->setFrozen(trackId(), new_); }
 
-void SetFreezeCommand::undo() { project_->setFrozen(trackId_, old_); }
+void SetFreezeCommand::undo() { project_->setFrozen(trackId(), old_); }
 
 UpdateTrackCommand::UpdateTrackCommand(Project* project, const QString& trackId, TrackField field, TrackValue old,
                                        TrackValue nw, const QString& text, QString mergeKey)
@@ -184,18 +163,18 @@ void UpdateSettingsCommand::undo() { project_->updateSettings(old_); }
 
 SetDevicesCommand::SetDevicesCommand(Project* project, const QString& trackId, std::vector<Device> before,
                                      std::vector<Device> after, const QString& text)
-    : QUndoCommand(text), project_(project), trackId_(trackId), before_(std::move(before)), after_(std::move(after)) {}
+    : ValueCommand(project, text, trackId, std::move(before), std::move(after)) {}
 
-void SetDevicesCommand::redo() { project_->setDevices(trackId_, after_); }
+void SetDevicesCommand::redo() { project_->setDevices(trackId(), new_); }
 
-void SetDevicesCommand::undo() { project_->setDevices(trackId_, before_); }
+void SetDevicesCommand::undo() { project_->setDevices(trackId(), old_); }
 
 SetChainsCommand::SetChainsCommand(Project* project, DeviceLists before, DeviceLists after, const QString& text)
-    : QUndoCommand(text), project_(project), before_(std::move(before)), after_(std::move(after)) {}
+    : ValueCommand(project, text, {}, std::move(before), std::move(after)) {}
 
-void SetChainsCommand::redo() { project_->setChains(after_); }
+void SetChainsCommand::redo() { project_->setChains(new_); }
 
-void SetChainsCommand::undo() { project_->setChains(before_); }
+void SetChainsCommand::undo() { project_->setChains(old_); }
 
 SetDeviceParamCommand::SetDeviceParamCommand(Project* project, const QString& trackId, const QString& deviceId,
                                              const QString& paramId, double old, double nw, QString mergeKey)
@@ -226,16 +205,11 @@ void UpdateChainCommand::undo() { project_->updateChain(trackId(), chainId(), fi
 
 SetDeviceNameCommand::SetDeviceNameCommand(Project* project, const QString& trackId, const QString& deviceId,
                                            std::optional<QString> old, std::optional<QString> nw, const QString& text)
-    : QUndoCommand(text),
-      project_(project),
-      trackId_(trackId),
-      deviceId_(deviceId),
-      old_(std::move(old)),
-      new_(std::move(nw)) {}
+    : ValueCommand(project, text, {trackId, deviceId}, std::move(old), std::move(nw)) {}
 
-void SetDeviceNameCommand::redo() { project_->setDeviceName(trackId_, deviceId_, new_); }
+void SetDeviceNameCommand::redo() { project_->setDeviceName(trackId(), deviceId(), new_); }
 
-void SetDeviceNameCommand::undo() { project_->setDeviceName(trackId_, deviceId_, old_); }
+void SetDeviceNameCommand::undo() { project_->setDeviceName(trackId(), deviceId(), old_); }
 
 SetMacrosCommand::SetMacrosCommand(Project* project, const QString& trackId, const QString& rackId,
                                    std::vector<MacroMapping> old, std::vector<MacroMapping> nw, const QString& text,
@@ -256,16 +230,11 @@ void SetMacrosCommand::undo() { apply(old_); }
 SetDeviceStateCommand::SetDeviceStateCommand(Project* project, const QString& trackId, const QString& deviceId,
                                              std::optional<QString> old, std::optional<QString> nw,
                                              const QString& text)
-    : QUndoCommand(text),
-      project_(project),
-      trackId_(trackId),
-      deviceId_(deviceId),
-      old_(std::move(old)),
-      new_(std::move(nw)) {}
+    : ValueCommand(project, text, {trackId, deviceId}, std::move(old), std::move(nw)) {}
 
-void SetDeviceStateCommand::redo() { project_->setDeviceState(trackId_, deviceId_, new_); }
+void SetDeviceStateCommand::redo() { project_->setDeviceState(trackId(), deviceId(), new_); }
 
-void SetDeviceStateCommand::undo() { project_->setDeviceState(trackId_, deviceId_, old_); }
+void SetDeviceStateCommand::undo() { project_->setDeviceState(trackId(), deviceId(), old_); }
 
 SetDeviceEnabledCommand::SetDeviceEnabledCommand(Project* project, const QString& trackId, const QString& deviceId,
                                                  bool enabled)
@@ -282,16 +251,11 @@ void SetDeviceEnabledCommand::undo() { project_->setDeviceEnabled(trackId_, devi
 SetDeviceSidechainCommand::SetDeviceSidechainCommand(Project* project, const QString& trackId,
                                                      const QString& deviceId, std::optional<Sidechain> old,
                                                      std::optional<Sidechain> nw, const QString& text)
-    : QUndoCommand(text),
-      project_(project),
-      trackId_(trackId),
-      deviceId_(deviceId),
-      old_(std::move(old)),
-      new_(std::move(nw)) {}
+    : ValueCommand(project, text, {trackId, deviceId}, std::move(old), std::move(nw)) {}
 
-void SetDeviceSidechainCommand::redo() { project_->setDeviceSidechain(trackId_, deviceId_, new_); }
+void SetDeviceSidechainCommand::redo() { project_->setDeviceSidechain(trackId(), deviceId(), new_); }
 
-void SetDeviceSidechainCommand::undo() { project_->setDeviceSidechain(trackId_, deviceId_, old_); }
+void SetDeviceSidechainCommand::undo() { project_->setDeviceSidechain(trackId(), deviceId(), old_); }
 
 // --- Automation ---
 
@@ -322,27 +286,10 @@ void SetEnvelopeCommand::undo() { project_->setEnvelope(owner(), automationKey()
 // --- Groups and returns ---
 
 ArrangeTracksCommand::ArrangeTracksCommand(Project* project, TrackTree before, TrackTree after, const QString& text)
-    : QUndoCommand(text), project_(project), before_(std::move(before)), after_(std::move(after)) {}
+    : ValueCommand(project, text, {}, std::move(before), std::move(after)) {}
 
-void ArrangeTracksCommand::redo() { project_->arrangeTracks(after_); }
+void ArrangeTracksCommand::redo() { project_->arrangeTracks(new_); }
 
-void ArrangeTracksCommand::undo() { project_->arrangeTracks(before_); }
-
-InsertReturnCommand::InsertReturnCommand(Project* project, Track track, int index, const QString& text)
-    : QUndoCommand(text), project_(project), track_(std::move(track)), index_(index) {}
-
-void InsertReturnCommand::redo() { project_->insertReturn(track_, index_); }
-
-void InsertReturnCommand::undo() { project_->removeReturn(track_.id); }
-
-RemoveReturnCommand::RemoveReturnCommand(Project* project, const QString& trackId, const QString& text)
-    : QUndoCommand(text), project_(project), trackId_(trackId) {}
-
-void RemoveReturnCommand::redo() { saved_ = project_->removeReturn(trackId_); }
-
-void RemoveReturnCommand::undo() {
-    if (!saved_) return;
-    project_->insertReturn(saved_->first, saved_->second);
-}
+void ArrangeTracksCommand::undo() { project_->arrangeTracks(old_); }
 
 }  // namespace sub::app

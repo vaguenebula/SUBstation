@@ -141,7 +141,7 @@ std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command)
         }
         what = QStringLiteral("files");
     } else if (const auto* chains = dynamic_cast<const SetChainsCommand*>(&command)) {
-        tracks = chains->after().keys();
+        tracks = chains->newValue().keys();
     } else if (const auto* param = dynamic_cast<const SetDeviceParamCommand*>(&command)) {
         tracks = {param->trackId()};
     } else if (const auto* params = dynamic_cast<const SetDeviceParamsCommand*>(&command)) {
