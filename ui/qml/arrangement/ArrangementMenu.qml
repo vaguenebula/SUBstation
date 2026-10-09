@@ -5,8 +5,9 @@ import SUBstation
 // A menu the arrangement's C++ items work out (their MenuEntries): the lanes',
 // a header's, a chooser's. show() fills it with the entries
 // ([{id, text, enabled, checkable, checked, shortcut, toolTip, swatch, dot,
-// separator, submenu, children}]) and pops it up; the entry chosen goes back
-// to `target.triggerMenu(id)`, which runs it in C++.
+// separator, search, submenu, children}]) and pops it up; the entry chosen
+// goes back to `target.triggerMenu(id)`, which runs it in C++. A search entry
+// is a search field over a scrolled list of its children (MenuSearch).
 //
 //   onMenuRequested: (entries, pos) => menu.show(entries, lanes, lanes, pos.x, pos.y)
 Menu {
@@ -16,6 +17,8 @@ Menu {
     // What fill() made: held here until the next show() (made without a parent,
     // the garbage collector would take them otherwise, submenus while shown).
     property var made: []
+    // Its search field, which its entries type into while highlighted (ArrangementMenuItem).
+    property MenuSearch searchField: null
 
     function show(entries, target, parentItem, x, y) {
         menu.target = target
@@ -32,6 +35,7 @@ Menu {
 
     // Empties the menu (and its submenus), then destroys what fill() made.
     function release() {
+        searchField = null
         empty(menu)
         for (let i = 0; i < made.length; ++i)
             made[i].destroy()
@@ -59,22 +63,22 @@ Menu {
             const entry = entries[i]
             if (entry.separator) {
                 m.addItem(make(separatorComponent, {}))
+            } else if (entry.search) {
+                const search = make(searchComponent, {
+                    menu: m,
+                    rows: entry.children,
+                    run: child => menu.choose(child.id),
+                    rowComponent: rowComponent
+                })
+                m.addItem(search)
+                if (m === menu)
+                    searchField = search
             } else if (entry.submenu) {
                 const sub = make(submenuComponent, { title: entry.text, enabled: entry.enabled })
                 fill(sub, entry.children)
                 m.addMenu(sub)
             } else {
-                m.addItem(make(itemComponent, {
-                    text: entry.text,
-                    enabled: entry.enabled,
-                    checkable: entry.checkable,
-                    checked: entry.checked,
-                    shortcutHint: entry.shortcut,
-                    toolTipText: entry.toolTip,
-                    swatch: entry.swatch !== undefined ? entry.swatch : "transparent",
-                    dot: entry.dot !== undefined ? entry.dot : "transparent",
-                    entryId: entry.id
-                }))
+                m.addItem(make(itemComponent, { entry: entry }))
             }
         }
     }
@@ -86,9 +90,20 @@ Menu {
         }
     }
 
+    // A row of a search field's list: drawn as the entries are.
+    Component {
+        id: rowComponent
+        ArrangementMenuItem {}
+    }
+
     Component {
         id: separatorComponent
         MenuSeparator {}
+    }
+
+    Component {
+        id: searchComponent
+        MenuSearch {}
     }
 
     Component {

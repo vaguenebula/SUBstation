@@ -15,6 +15,7 @@
 #include <QDragLeaveEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QJSValue>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -124,13 +125,32 @@ inline std::unique_ptr<QMimeData> movedMime(const QString& trackId, const QStrin
     return mime;
 }
 
-// The device view's menu (PanelMenu) or a parameter's (ParamMenu): its entries' texts ("" for a separator).
+// A menu's search field (MenuSearch: the tracks of a sidechain menu): the
+// texts of its rows (or only those shown), and the row shown with a text,
+// scrolled into view (null: none).
+inline QStringList searchTexts(QQuickItem* search, bool shownOnly = false) {
+    QVariant texts;
+    QMetaObject::invokeMethod(search, "texts", Q_RETURN_ARG(QVariant, texts), Q_ARG(QVariant, shownOnly));
+    if (texts.metaType() == QMetaType::fromType<QJSValue>()) texts = texts.value<QJSValue>().toVariant();
+    return texts.toStringList();
+}
+inline QQuickItem* searchRow(QQuickItem* search, const QString& text) {
+    QVariant row;
+    QMetaObject::invokeMethod(search, "rowItem", Q_RETURN_ARG(QVariant, row), Q_ARG(QVariant, text));
+    if (row.metaType() == QMetaType::fromType<QJSValue>()) return qobject_cast<QQuickItem*>(row.value<QJSValue>().toQObject());
+    return qvariant_cast<QQuickItem*>(row);
+}
+inline bool isSearch(QQuickItem* item) { return item && part(item, "list") != nullptr; }
+
+// The device view's menu (PanelMenu) or a parameter's (ParamMenu): its
+// entries' texts ("" for a separator, and for a search field: its rows' after it).
 inline QStringList menuTexts(QObject* menu) {
     QStringList texts;
     for (int i = 0; menu && i < menu->property("count").toInt(); ++i) {
         QQuickItem* item = nullptr;
         QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, i));
         texts << (item ? item->property("text").toString() : QString());
+        if (isSearch(item)) texts += searchTexts(item);
     }
     return texts;
 }
@@ -138,7 +158,11 @@ inline QQuickItem* menuItem(QObject* menu, const QString& text) {
     for (int i = 0; menu && i < menu->property("count").toInt(); ++i) {
         QQuickItem* item = nullptr;
         QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, i));
-        if (item && item->property("text").toString() == text) return item;
+        if (isSearch(item)) {
+            if (QQuickItem* row = searchRow(item, text)) return row;
+        } else if (item && item->property("text").toString() == text) {
+            return item;
+        }
     }
     return nullptr;
 }
