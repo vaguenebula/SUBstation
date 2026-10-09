@@ -12,10 +12,11 @@ preferences ([AudioSettings.h](../../app/src/audio/AudioSettings.h)) and where t
   Project (Qt signals)              EngineBridge                     sub::Engine (Engine.h)
   trackInserted / returnInserted ─► addEngineTrack ───────────────► addTrack, trackChain, ...
   trackRemoved / returnRemoved   ─► onTrackRemoved ───────────────► removeTrack
-  trackChanged                   ─► onTrackChanged: mixer, input,
-                                    sends, editor titles ─────────► setTrackGain/Pan/Mute/Solo, setTrackInput...,
-                                                                    setTrackSend / removeTrackSend
-  tracksArranged                 ─► pushOutputs ──────────────────► setTrackOutput
+  trackChanged                   ─► onTrackChanged: mixer, sends,
+                                    routes, editor titles ────────► setTrackGain/Pan/Mute/Solo, setTrackInput...,
+                                                                    setTrackSend / removeTrackSend, setTrackOutput...
+  tracksArranged                 ─► pushRoutes ───────────────────► setTrackOutput, setTrackOutputSidechain,
+                                                                    setTrackInMonitored, setTrackInputTrack...
   clipsChanged                   ─► pushClips ────────────────────► setTrackClips / setTrackNotes (+ decoding)
   devicesChanged                 ─► syncDevices ──────────────────► addBuiltinProcessor, addPluginProcessor,
                                                                     moveProcessor, setChainOrder, addRack,
@@ -153,15 +154,21 @@ too, and loaded) and `engineChainId(chain)` (a rack chain's engine chain) give t
 - `addEngineTrack` pushes, in order: mixer, input, frozen state, clips, devices, automation, then outputs (its own,
   and what is in it, back into it), sends (a return: every track's, since sends into it can exist only now), the
   inputs taken from it, and sidechains.
-- **Groups**: the engine knows only where each track's output goes. `pushOutputs` sets every track's output to its
-  group's engine track or the master. Changed routes go to the master first, then to their new group, so that no step
-  closes a cycle (a group moving into what was in it).
+- **Outputs and groups**: the engine knows only where each track's output goes. `pushOutputs` sets every track's
+  (and return's) output as `Track::output` says (`wantedOutput`): its group's engine track (by default) or the master,
+  another track (`setTrackOutput`), a device's processor's sidechain (`setTrackOutputSidechain`; nowhere while that
+  device's plug-in isn't there yet, or it has no sidechain input), or nowhere (`kNoOutput`). It has the engine take
+  what goes into an audio track as that track's input (`setTrackInMonitored`: Ableton's Track In); groups and returns
+  are buses. Changed routes go to the master first, then where they go, so that no step closes a cycle (a group
+  moving into what was in it); one the engine refuses for now comes with the change in its way. `pushRoutes` pushes
+  outputs, inputs and sidechains, in that order: after rearranging, a track's change, and device syncs (a device's
+  processor is new, or an instrument a Pre FX tap is taken after).
 - **Returns and sends**: a track's sends are engine sends into the returns' engine tracks, at the send's gain, before
   or after the fader. `pushSends` removes the sends going away first, then sets the others; one the engine refuses (a
   cycle with a send another track hasn't given up yet) is skipped and comes with that track's turn. A send automated
   without having been set yet is made, silent, so that its automation plays (`wantedSends`).
 - **Inputs**: `pushInput` sets device channels (`setTrackInput`) or another track's output (`setTrackInputTrack`;
-  `kMaster` for resampling), the monitoring mode, arming and a MIDI track's MIDI input (`setTrackMidiInput(engine id,
+  `kMaster` for resampling; tapped where `Track::inputTap` says, as a sidechain's tap: `engineTap`), the monitoring mode, arming and a MIDI track's MIDI input (`setTrackMidiInput(engine id,
   enabled, device, channel)`). A source the engine refuses for now (a cycle another change hasn't undone yet) leaves
   the track with no input until that change comes. A track given ASIO input channels the device hasn't open makes the
   device open again with them too (`openInputs`), as it runs now, and saves that, so they open next time too.

@@ -11,9 +11,9 @@ Rectangle {
 
     signal clicked()
 
-    height: 18
+    height: 16
     radius: 2
-    color: Theme.surface
+    color: area.containsMouse ? Theme.surfaceHover : Theme.surface
     border.color: Theme.border
 
     Text {
@@ -23,7 +23,7 @@ Rectangle {
         text: chooser.text
         elide: Text.ElideRight
         color: Theme.text
-        font: Theme.uiFont(7.5)
+        font: Theme.uiFont(8)
     }
     Text {
         anchors.right: parent.right

@@ -122,6 +122,11 @@ Theme::ButtonLook Theme::buttonLook(const QString& role, bool hovered, bool pres
         look.pointSize = 8.0;
         look.weight = QFont::DemiBold;
         look.radius = 2;
+    } else if (role == QLatin1String("monitor")) {
+        // A track header's In, Auto and Off: small, side by side (the one chosen in the accent).
+        look.paddingH = look.paddingV = 0;
+        look.pointSize = 8.0;
+        look.radius = 2;
     } else if (role == QLatin1String("flat")) {
         // Later than every state rule: no background in any state, dim text but under the mouse.
         look.paddingH = look.paddingV = 0;

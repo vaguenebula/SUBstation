@@ -6,11 +6,13 @@
 #include "controls/Meter.h"
 #include "editor/ProjectEditor.h"
 #include "model/Automation.h"
+#include "model/Devices.h"
 #include "model/Errors.h"
 #include "model/Project.h"
 #include "model/Routing.h"
 #include "model/Timebase.h"
 #include "session/ArrangementActions.h"
+#include "session/AudioPreferences.h"
 #include "session/Selection.h"
 #include "sg/SgPainter.h"
 #include "theme/Icons.h"
@@ -41,43 +43,50 @@ const QString kGroup = QStringLiteral("group");
 const QString kReturn = QStringLiteral("return");
 const QString kMasterKind = QStringLiteral("master");
 
-QString monitorLabel(const QString& mode) {
-    if (mode == u"in") return QStringLiteral("In");
-    if (mode == u"off") return QStringLiteral("Off");
-    return QStringLiteral("Auto");
-}
+const QString kMain = QStringLiteral("Main");  // the master, as Ableton 12 calls it
+const QString kNoInput = QStringLiteral("No Input");
+const QString kAllIns = QStringLiteral("All Ins");
+const QString kExtIn = QStringLiteral("Ext. In");
+const QString kSendsOnly = QStringLiteral("Sends Only");
+const QString kTrackIn = QStringLiteral("Track In");
 
-QString monitorTip(const QString& mode, bool midi) {
-    if (mode == u"in") return QStringLiteral("In: always hears its input, never its clips");
-    if (mode == u"off") return QStringLiteral("Off: never hears its input");
-    if (mode == u"auto") {
-        // A MIDI track's clips play on while it hears its input (Auto), as in Ableton.
-        return midi ? QStringLiteral("Auto: hears its input while armed, beside its clips")
-                    : QStringLiteral("Auto: hears its input while armed, unless playing back");
-    }
-    return {};
-}
-
-QString inputLabel(const std::vector<int>& channels) {
-    if (channels.empty()) return QStringLiteral("No Input");
+// A channel, or a pair, as Ableton numbers them: "1", "1/2".
+QString channelsLabel(const std::vector<int>& channels) {
     QStringList numbers;
     for (int c : channels) numbers << QString::number(c + 1);
-    return QStringLiteral("In ") + numbers.join(u'/');
+    return numbers.join(u'/');
 }
 
-QString midiInputLabel(const std::optional<app::MidiInput>& input) {
-    if (!input) return QStringLiteral("No Input");
-    const QString name = input->device.isEmpty() ? QStringLiteral("All Ins") : input->device;
-    return input->channel ? QStringLiteral("%1 · Ch %2").arg(name).arg(input->channel) : name;
-}
-
-// (label, channels) for a device's inputs: each one (mono), then each pair.
-std::vector<std::pair<QString, std::vector<int>>> inputChoices(const QStringList& names) {
+// (label, channels) for a device's inputs, as Ableton lists them: each one (mono), then each pair.
+std::vector<std::pair<QString, std::vector<int>>> inputChoices(int count) {
     std::vector<std::pair<QString, std::vector<int>>> choices;
-    for (int c = 0; c < names.size(); ++c)
-        choices.emplace_back(QStringLiteral("%1  (%2)").arg(inputLabel({c}), names[c]), std::vector<int>{c});
-    for (int c = 0; c + 1 < names.size(); c += 2) choices.emplace_back(inputLabel({c, c + 1}), std::vector<int>{c, c + 1});
+    for (int c = 0; c < count; ++c) choices.emplace_back(channelsLabel({c}), std::vector<int>{c});
+    for (int c = 0; c + 1 < count; c += 2) choices.emplace_back(channelsLabel({c, c + 1}), std::vector<int>{c, c + 1});
     return choices;
+}
+
+// Where an input from a track is taken, as Ableton calls it.
+QString tapLabel(const QString& tap) {
+    if (tap == app::kPreFx) return QStringLiteral("Pre FX");
+    if (tap == app::kPreFader) return QStringLiteral("Post FX");
+    return QStringLiteral("Post Mixer");
+}
+
+const QStringList kInputTaps{app::kPreFx, app::kPreFader, app::kPostFader};
+
+QString channelLabel(int channel) {
+    return channel ? QStringLiteral("Ch. %1").arg(channel) : QStringLiteral("All Channels");
+}
+
+QString sidechainLabel(const app::Device& device) { return QStringLiteral("Sidechain-") + app::deviceName(device); }
+
+// What goes into a track's input is heard while it monitors: says so if it doesn't (as Ableton, it plays its clips).
+void hintTrackIn(app::Session* session, const QString& trackId) {
+    const app::Project& project = *session->project();
+    if (!project.hasTrack(trackId) || project.track(trackId).monitor == u"in") return;
+    Q_EMIT session->bridge()->statusMessage(
+        QStringLiteral("%1 hears what goes into it while it monitors: set its monitoring to In (or arm it, on Auto).")
+            .arg(project.track(trackId).name));
 }
 
 // A send level typed: "-6", "-6 dB".
@@ -138,6 +147,20 @@ void TrackHeaderItem::setNameRight(qreal x) {
     update();
 }
 
+void TrackHeaderItem::setIoLeft(qreal x) {
+    if (x == ioLeft_) return;
+    ioLeft_ = x;
+    Q_EMIT columnsChanged();
+    update();
+}
+
+void TrackHeaderItem::setMixerLeft(qreal x) {
+    if (x == mixerLeft_) return;
+    mixerLeft_ = x;
+    Q_EMIT columnsChanged();
+    update();
+}
+
 app::Project* TrackHeaderItem::project() const { return session_ ? session_->project() : nullptr; }
 
 const app::Track* TrackHeaderItem::track() const {
@@ -184,28 +207,119 @@ QString TrackHeaderItem::soloToolTip() const {
 QString TrackHeaderItem::inputText() const {
     const app::Track* t = track();
     if (!t || !t->hasClips()) return {};  // nothing to record: no input
-    if (t->isMidi()) return midiInputLabel(t->midiInput);
+    if (t->isMidi()) {
+        if (!t->midiInput) return kNoInput;
+        return t->midiInput->allDevices() ? kAllIns : t->midiInput->device;
+    }
     if (t->inputTrack) return project()->inputName(*t->inputTrack);
-    return inputLabel(t->input);
+    return t->input.empty() ? kNoInput : kExtIn;
 }
 
 QString TrackHeaderItem::inputToolTip() const {
     const app::Track* t = track();
     if (!t || !t->hasClips()) return {};
-    if (t->isMidi()) return QStringLiteral("MIDI input (the MIDI inputs on in Preferences, and a channel)");
-    if (t->inputTrack) {
-        if (*t->inputTrack == app::kMaster)
-            return QStringLiteral("Audio input: the master's output (resampling: recorded, not heard)");
-        return QStringLiteral("Audio input: %1's output, after its fader").arg(project()->inputName(*t->inputTrack));
-    }
-    return QStringLiteral("Audio input (the audio device's channels, or another track's output)");
+    if (t->isMidi()) return QStringLiteral("MIDI From: the MIDI inputs on in Preferences (All Ins), one of them, or none");
+    return QStringLiteral("Audio From: the audio device's inputs (Ext. In), the mix (Resampling), another track's "
+                          "output, or none");
 }
 
-QString TrackHeaderItem::monitorText() const { return track() ? monitorLabel(track()->monitor) : QString(); }
-
-QString TrackHeaderItem::monitorToolTip() const {
+QString TrackHeaderItem::inputChannelText() const {
     const app::Track* t = track();
-    return t ? QStringLiteral("Monitoring. ") + monitorTip(t->monitor, t->isMidi()) : QString();
+    if (!t || !t->hasClips()) return {};
+    if (t->isMidi()) return t->midiInput ? channelLabel(t->midiInput->channel) : QString();
+    if (t->inputTrack) return *t->inputTrack == app::kMaster ? QString() : tapLabel(t->inputTap);
+    return channelsLabel(t->input);
+}
+
+QString TrackHeaderItem::inputChannelToolTip() const {
+    const app::Track* t = track();
+    if (!t || inputChannelText().isEmpty()) return {};
+    if (t->isMidi()) return QStringLiteral("The MIDI channel it hears");
+    if (t->inputTrack) {
+        return QStringLiteral("Where %1's signal is taken: before its devices (Pre FX), after them (Post FX) or "
+                              "after its mixer (Post Mixer)")
+            .arg(project()->inputName(*t->inputTrack));
+    }
+    const QStringList names = session_->bridge()->inputNames();
+    QStringList named;
+    for (int c : t->input) {
+        if (c < names.size()) named << names[c];
+    }
+    return named.isEmpty() ? QStringLiteral("The audio device's input channel, or pair")
+                           : QStringLiteral("The audio device's %1").arg(named.join(QStringLiteral(" and ")));
+}
+
+QString TrackHeaderItem::monitor() const { return track() ? track()->monitor : QString(); }
+
+QString TrackHeaderItem::monitorToolTip(const QString& mode, bool midi) {
+    if (mode == u"in") return QStringLiteral("Monitor In: always hears its input, never its clips");
+    if (mode == u"off") return QStringLiteral("Monitor Off: never hears its input");
+    if (mode == u"auto") {
+        // A MIDI track's clips play on while it hears its input (Auto), as in Ableton.
+        return midi ? QStringLiteral("Monitor Auto: hears its input while armed, beside its clips")
+                    : QStringLiteral("Monitor Auto: hears its input while armed, unless playing back");
+    }
+    return {};
+}
+
+std::optional<QString> TrackHeaderItem::outputTrack() const {
+    const app::Track* t = track();
+    if (!t || isMaster()) return std::nullopt;
+    return project()->outputTarget(trackId_);
+}
+
+QString TrackHeaderItem::outputText() const {
+    const app::Track* t = track();
+    if (!t || isMaster()) return {};
+    switch (t->output.to) {
+    case app::Output::To::None: return kSendsOnly;
+    case app::Output::To::Master: return kMain;
+    case app::Output::To::Group:
+    case app::Output::To::Track:
+    case app::Output::To::Sidechain: break;
+    }
+    if (const auto target = outputTrack()) return project()->track(*target).name;
+    return kMain;  // (outside a group, or into a device on the master)
+}
+
+QString TrackHeaderItem::outputToolTip() const {
+    if (!track() || isMaster()) return {};
+    return QStringLiteral("Audio To: the master (Main), its group, another track (its input, or a device taking a "
+                          "sidechain there), or only its sends");
+}
+
+QString TrackHeaderItem::outputChannelText() const {
+    const app::Track* t = track();
+    if (!t || isMaster()) return {};
+    if (t->output.to == app::Output::To::Track) return kTrackIn;
+    if (t->output.to == app::Output::To::Sidechain) {
+        const auto owner = project()->deviceOwner(t->output.id);
+        if (owner) {
+            if (const app::Device* device = project()->findDevice(*owner, t->output.id)) return sidechainLabel(*device);
+        }
+    }
+    return {};
+}
+
+QString TrackHeaderItem::outputChannelToolTip() const {
+    const app::Track* t = track();
+    if (!t || outputChannelText().isEmpty()) return {};
+    if (t->output.to == app::Output::To::Track) {
+        return QStringLiteral("Into that track's input: heard while it monitors (In, or Auto while armed)");
+    }
+    return QStringLiteral("Into that device's sidechain input: heard only through it");
+}
+
+QColor TrackHeaderItem::barColor() const {
+    if (isMaster()) return QColor(app::kMasterColor);
+    return track() ? QColor(track()->color) : QColor(Theme::kSurface);
+}
+
+QColor TrackHeaderItem::barText() const {
+    // Dark on a light bar, light on a dark one, as Ableton writes them.
+    const QColor bar = barColor();
+    const double luma = 0.299 * bar.redF() + 0.587 * bar.greenF() + 0.114 * bar.blueF();
+    return luma > 0.45 ? Theme::kAccentText : Theme::kText;
 }
 
 QVariantList TrackHeaderItem::lanes() const {
@@ -222,23 +336,13 @@ QVariantList TrackHeaderItem::lanes() const {
 qreal TrackHeaderItem::nameLeft() const {
     const app::Project* p = project();
     const bool frozen = p && !isMaster() && p->frozenBy(trackId_).has_value();
-    if (isReturn() || isMaster()) return 10 + (frozen ? kSnowflake + 3 : 0);
+    if (isReturn() || isMaster()) return 6 + (frozen ? kSnowflake + 3 : 0);
     return foldRect().right() + 3 + (p && p->isFrozen(trackId_) ? kSnowflake + 3 : 0);
-}
-
-int TrackHeaderItem::nameTop() const {
-    const app::Track* t = track();
-    return t && t->isGroup() ? arrangement::kGroupBar : 0;
-}
-
-double TrackHeaderItem::stripWidth() const {
-    const app::Track* t = track();
-    return t && t->isGroup() ? arrangement::kGroupBand : kStrip;
 }
 
 QRectF TrackHeaderItem::foldRect() const {
     if (isReturn() || isMaster()) return {};
-    return QRectF(indent() + stripWidth() + 2, nameTop() + kNamePad, kFoldWidth, kNameButton);  // (as the buttons)
+    return QRectF(indent() + 4, kNamePad, kFoldWidth, kNameButton);  // (as the buttons)
 }
 
 bool TrackHeaderItem::mixerAutomated() const {
@@ -279,14 +383,19 @@ void TrackHeaderItem::connectAll() {
             return;
         }
         const app::Track* t = track();
-        if (t && t->inputTrack == id) Q_EMIT changed();  // what takes its output shows its name
+        // What takes its output, goes into it or is in it shows its name.
+        if (t && (t->inputTrack == id || t->parent == id || outputTrack() == id || t->output.to == app::Output::To::Track))
+            Q_EMIT changed();
         refreshSends();  // its sends or its input: which sends would close a cycle
     });
     connect(p, &app::Project::devicesChanged, this, [this](const QString& id) {
-        if (id == trackId_)
+        if (id == trackId_) {
             refresh();
-        else
-            refreshSends();  // (a sidechain is a routing edge too)
+            return;
+        }
+        refreshSends();  // (a sidechain is a routing edge too)
+        const app::Track* t = track();
+        if (t && t->output.to == app::Output::To::Sidechain) Q_EMIT changed();  // (its device's name)
     });
     for (auto signal : {&app::Project::trackInserted, &app::Project::trackRemoved, &app::Project::returnInserted,
                         &app::Project::returnRemoved}) {
@@ -313,6 +422,9 @@ void TrackHeaderItem::connectAll() {
     });
     connect(bridge, &app::EngineBridge::positionChanged, this, &TrackHeaderItem::followAutomation);
     connect(bridge, &app::EngineBridge::metersUpdated, this, &TrackHeaderItem::updateMeter);
+    connect(bridge, &app::EngineBridge::deviceChanged, this, [this] {
+        if (isMaster()) Q_EMIT changed();  // (its Main Out)
+    });
     connect(session_->selection(), &app::Selection::changed, this, [this] {
         Q_EMIT selectedChanged();
         update();
@@ -574,6 +686,10 @@ void TrackHeaderItem::armClicked(bool on) {
     }
 }
 
+void TrackHeaderItem::setMonitor(const QString& mode) {
+    if (track() && track()->hasClips()) session_->editor()->trySetTrackMonitor(trackId_, mode);
+}
+
 void TrackHeaderItem::toggleFold() {
     // Fold or unfold it; when it is one of several selected tracks, they all take its new state.
     const app::Track* t = track();
@@ -597,6 +713,22 @@ QVariant TrackHeaderItem::parseSendLevel(const QString& text) const {
 }
 
 QString TrackHeaderItem::formatDb(double db) { return app::formatDb(db); }
+
+QString TrackHeaderItem::formatVolume(double db) {
+    if (db <= automation::kMinVolumeDb) return QStringLiteral("-inf");
+    if (std::abs(db) < 0.05) return QStringLiteral("0");
+    return QString::number(db, 'f', 1);
+}
+
+double TrackHeaderItem::volumeFraction(double db) { return automation::volumeToNormalized(db); }
+
+QString TrackHeaderItem::mainOutText() const {
+    if (!isMaster() || !session_) return {};
+    const QList<int> channels = session_->bridge()->deviceStatus().outputChannels;
+    return channelsLabel(channels.size() >= 2 ? std::vector<int>{channels[0], channels[1]}
+                         : channels.size() == 1 ? std::vector<int>{channels[0]}
+                                                : std::vector<int>{0, 1});
+}
 
 QString TrackHeaderItem::formatPan(double pan) { return app::formatPan(pan); }
 
@@ -779,12 +911,19 @@ MenuEntries TrackHeaderItem::contextMenu() {
     return menu;
 }
 
+void TrackHeaderItem::addConfigure(MenuEntries& menu, bool midi) {
+    Arrangement* arrangement = arrangement_;
+    menu.add(QStringLiteral("Configure…"), [arrangement, midi] {
+        if (arrangement) Q_EMIT arrangement->preferencesRequested(midi ? 1 : 0);
+    });
+}
+
 MenuEntries TrackHeaderItem::inputMenu() {
-    // No input, the audio device's inputs (each, then each pair), then the
-    // master's output (resampling) and the other tracks', groups' and returns'
-    // (those it feeds greyed out: taking theirs would close a cycle). A MIDI
-    // track: no input, every input or one (those connected, and the one chosen
-    // if it isn't), and in a submenu the channel.
+    // As Ableton's Audio From: Ext. In (the audio device's inputs), Configure...,
+    // Resampling (the master's output), the other tracks', groups' and returns'
+    // outputs (those it feeds greyed out: taking theirs would close a cycle),
+    // No Input. MIDI From: All Ins, the computer keyboard and each MIDI input
+    // (those connected, and the one chosen if it isn't), Configure..., No Input.
     MenuEntries menu;
     const app::Track* t = track();
     if (!t || !t->hasClips()) return menu;
@@ -794,55 +933,43 @@ MenuEntries TrackHeaderItem::inputMenu() {
     if (t->isMidi()) {
         const std::optional<app::MidiInput> current = t->midiInput;
         const int channel = current ? current->channel : 0;
-        const auto add = [&](const QString& label, const std::optional<QString>& device) {
+        const auto add = [&](const QString& label, const QString& device) {
             MenuEntry& entry = menu.add(label, [editor, id, device, channel] {
-                editor->trySetTrackMidiInput(id, device.has_value(), device.value_or(QString()), channel);
+                editor->trySetTrackMidiInput(id, true, device, channel);
             });
             entry.checkable = true;
-            entry.checked = device ? current == app::MidiInput{*device, channel} : !current.has_value();
+            entry.checked = current == app::MidiInput{device, channel} || (current && current->device == device);
         };
-        add(QStringLiteral("No Input"), std::nullopt);
-        add(QStringLiteral("All Ins"), QString());
-        const QStringList connected = bridge->midiInputChoices();
-        QStringList names = connected;
+        add(kAllIns, QString());
+        const QStringList connected = bridge->midiInputChoices();  // (the computer keyboard last)
+        QStringList names;
+        if (connected.contains(app::kComputerKeyboard)) names << app::kComputerKeyboard;
+        for (const QString& name : connected) {
+            if (name != app::kComputerKeyboard) names << name;
+        }
         if (current && !current->device.isEmpty() && !names.contains(current->device)) names << current->device;
-        if (!names.isEmpty()) menu.addSeparator();
         for (const QString& name : names)
             add(connected.contains(name) ? name : QStringLiteral("%1 (not connected)").arg(name), name);
-        if (names.isEmpty()) menu.add(QStringLiteral("No MIDI input is connected")).enabled = false;
         menu.addSeparator();
-        MenuEntry& channels = menu.addSubmenu(
-            QStringLiteral("Channel: %1").arg(channel ? QString::number(channel) : QStringLiteral("All")));
-        channels.enabled = current.has_value();
-        const QString device = current ? current->device : QString();
-        for (int number = 0; number <= 16; ++number) {
-            MenuEntry& entry = MenuList(channels.children)
-                                   .add(number == 0 ? QStringLiteral("All Channels") : QStringLiteral("Channel %1").arg(number),
-                                        [editor, id, device, number] { editor->trySetTrackMidiInput(id, true, device, number); });
-            entry.checkable = true;
-            entry.checked = number == channel;
-            if (number == 0) MenuList(channels.children).addSeparator();
-        }
+        addConfigure(menu, true);
+        menu.addSeparator();
+        MenuEntry& none = menu.add(kNoInput, [editor, id] { editor->trySetTrackMidiInput(id, false); });
+        none.checkable = true;
+        none.checked = !current.has_value();
         return menu;
     }
     const app::Project& p = *project();
-    MenuEntry& none = menu.add(QStringLiteral("No Input"), [editor, id] { editor->trySetTrackInput(id, {}); });
-    none.checkable = true;
-    none.checked = !t->hasInput();
-    const QStringList names = bridge->inputNames();
-#ifdef Q_OS_WIN
-    if (names.isEmpty()) menu.add(QStringLiteral("The audio device has no inputs (choose an ASIO driver)")).enabled = false;
-#else  // (no ASIO here)
-    if (names.isEmpty()) menu.add(QStringLiteral("The audio device has no inputs")).enabled = false;
-#endif
-    const std::optional<std::vector<int>> current = t->inputTrack ? std::nullopt : std::optional(t->input);
-    for (const auto& [label, channels] : inputChoices(names)) {
-        if (channels.size() == 2 && names.size() > 2 && channels == std::vector<int>{0, 1}) menu.addSeparator();
-        const QList<int> list(channels.begin(), channels.end());
-        MenuEntry& entry = menu.add(label, [editor, id, list] { editor->trySetTrackInput(id, list); });
-        entry.checkable = true;
-        entry.checked = current && *current == channels;
-    }
+    const bool external = !t->inputTrack && !t->input.empty();
+    MenuEntry& ext = menu.add(kExtIn, [editor, bridge, id, external] {
+        if (external) return;
+        // The first pair (or the only channel) of the device's inputs.
+        const int count = static_cast<int>(bridge->inputNames().size());
+        editor->trySetTrackInput(id, count == 1 ? QList<int>{0} : QList<int>{0, 1});
+    });
+    ext.checkable = true;
+    ext.checked = external;
+    ext.toolTip = QStringLiteral("The audio device's inputs: the channel, or pair, below");
+    addConfigure(menu);
     menu.addSeparator();
     std::vector<QString> sources{app::kMaster};
     for (const app::Track* source : p.inputSources(id)) sources.push_back(source->id);
@@ -859,19 +986,219 @@ MenuEntries TrackHeaderItem::inputMenu() {
             menu.addSeparator();
         }
     }
+    menu.addSeparator();
+    MenuEntry& none = menu.add(kNoInput, [editor, id] { editor->trySetTrackInput(id, {}); });
+    none.checkable = true;
+    none.checked = !t->hasInput();
     return menu;
 }
 
-MenuEntries TrackHeaderItem::monitorMenu() {
+MenuEntries TrackHeaderItem::inputChannelMenu() {
+    // The channel (or pair) of the audio device's inputs; where an input from a
+    // track is taken; a MIDI input's channel.
     MenuEntries menu;
     const app::Track* t = track();
-    if (!t || !t->hasClips()) return menu;
+    if (!t || !t->hasClips() || inputChannelText().isEmpty()) return menu;
     app::ProjectEditor* editor = session_->editor();
     const QString id = trackId_;
-    for (const QString& mode : {QStringLiteral("in"), QStringLiteral("auto"), QStringLiteral("off")}) {
-        MenuEntry& entry = menu.add(monitorTip(mode, t->isMidi()), [editor, id, mode] { editor->trySetTrackMonitor(id, mode); });
+    if (t->isMidi()) {
+        const QString device = t->midiInput->device;
+        for (int number = 0; number <= 16; ++number) {
+            MenuEntry& entry = menu.add(channelLabel(number), [editor, id, device, number] {
+                editor->trySetTrackMidiInput(id, true, device, number);
+            });
+            entry.checkable = true;
+            entry.checked = number == t->midiInput->channel;
+            if (number == 0) menu.addSeparator();
+        }
+        return menu;
+    }
+    if (t->inputTrack) {
+        for (const QString& tap : kInputTaps) {
+            MenuEntry& entry = menu.add(tapLabel(tap), [editor, id, tap] { editor->trySetTrackInputTap(id, tap); });
+            entry.checkable = true;
+            entry.checked = t->inputTap == tap;
+        }
+        return menu;
+    }
+    const QStringList names = session_->bridge()->inputNames();
+    if (names.isEmpty()) {
+#ifdef Q_OS_WIN
+        menu.add(QStringLiteral("The audio device has no inputs (choose an ASIO driver)")).enabled = false;
+#else  // (no ASIO here)
+        menu.add(QStringLiteral("The audio device has no inputs")).enabled = false;
+#endif
+        addConfigure(menu);
+        return menu;
+    }
+    const auto choices = inputChoices(static_cast<int>(names.size()));
+    for (const auto& [label, channels] : choices) {
+        if (channels.size() == 2 && channels.front() == 0 && names.size() > 1) menu.addSeparator();
+        const QList<int> list(channels.begin(), channels.end());
+        MenuEntry& entry = menu.add(label, [editor, id, list] { editor->trySetTrackInput(id, list); });
         entry.checkable = true;
-        entry.checked = t->monitor == mode;
+        entry.checked = t->input == channels;
+        QStringList named;
+        for (int c : channels) named << names[c];
+        entry.toolTip = named.join(QStringLiteral(", "));
+    }
+    return menu;
+}
+
+TrackHeaderItem::OutputTarget TrackHeaderItem::outputTarget(const QString& targetId) const {
+    // An audio track's input, and the devices on it with a sidechain input.
+    OutputTarget target;
+    const app::Track* t = project()->findTrack(targetId);
+    if (t == nullptr) return target;
+    target.track = t;
+    target.trackIn = t->isAudio();
+    for (const app::Device* device : app::iterDevices(t->devices)) {
+        if (session_->bridge()->hasSidechainInput(targetId, device->id)) target.devices << device->id;
+    }
+    return target;
+}
+
+std::vector<TrackHeaderItem::OutputTarget> TrackHeaderItem::outputTargets() const {
+    // As Ableton lists them: the tracks (and returns) with an input or a device
+    // taking a sidechain, but this one and its own group (listed apart).
+    std::vector<OutputTarget> targets;
+    const app::Track* t = track();
+    if (!t) return targets;
+    for (const app::Track* other : project()->senders()) {
+        if (other->id == trackId_ || other->id == t->parent) continue;
+        OutputTarget target = outputTarget(other->id);
+        if (target.trackIn || !target.devices.isEmpty()) targets.push_back(std::move(target));
+    }
+    return targets;
+}
+
+MenuEntries TrackHeaderItem::outputMenu() {
+    // As Ableton's Audio To: Ext. Out (not here yet), Configure..., Main (the
+    // master), its group, the tracks it can go into (their input, or a device's
+    // sidechain there; those it feeds greyed out: going into them would close a
+    // cycle), Sends Only.
+    MenuEntries menu;
+    const app::Track* t = track();
+    if (!t || isMaster()) return menu;
+    app::ProjectEditor* editor = session_->editor();
+    const app::Project& p = *project();
+    const QString id = trackId_;
+    const auto add = [&](const QString& label, const app::Output& output, bool checked) -> MenuEntry& {
+        const QString to = output.to == app::Output::To::Track       ? QStringLiteral("track")
+                           : output.to == app::Output::To::Sidechain ? QStringLiteral("sidechain")
+                           : output.to == app::Output::To::Master    ? QStringLiteral("master")
+                           : output.to == app::Output::To::None      ? QStringLiteral("none")
+                                                                     : QStringLiteral("group");
+        const QString target = output.id;
+        app::Session* session = session_;
+        MenuEntry& entry = menu.add(label, [editor, session, id, to, target] {
+            if (editor->trySetTrackOutput(id, to, target) && to == u"track") hintTrackIn(session, target);
+        });
+        entry.checkable = true;
+        entry.checked = checked;
+        return entry;
+    };
+    MenuEntry& ext = menu.add(QStringLiteral("Ext. Out"));
+    ext.enabled = false;
+    ext.toolTip = QStringLiteral("Tracks can't play on the audio device's outputs directly (yet): they go into the master");
+    addConfigure(menu);
+    menu.addSeparator();
+    const bool toMain = t->output.to == app::Output::To::Master || (t->output.isDefault() && !t->parent);
+    add(kMain, app::Output::master(), toMain);
+    if (t->parent) add(p.track(*t->parent).name, app::Output::group(), t->output.isDefault());
+    const std::vector<OutputTarget> targets = outputTargets();
+    if (!targets.empty()) menu.addSeparator();
+    const std::optional<QString> now = outputTrack();
+    for (const OutputTarget& target : targets) {
+        // Into its input, or (a track without one) the first device taking a sidechain.
+        const app::Output output = target.trackIn ? app::Output::track(target.track->id)
+                                                  : app::Output::sidechain(target.devices.front());
+        const bool usable = !p.outputWouldCycle(id, output);
+        const bool going = now == target.track->id && !t->output.isDefault();
+        MenuEntry& entry = add(usable ? target.track->name : QStringLiteral("%1 (it feeds this track)").arg(target.track->name),
+                               output, going);
+        entry.enabled = usable || going;
+    }
+    menu.addSeparator();
+    add(kSendsOnly, app::Output::none(), t->output.to == app::Output::To::None).toolTip =
+        QStringLiteral("Only its sends are heard");
+    return menu;
+}
+
+MenuEntries TrackHeaderItem::mainOutMenu() {
+    // The audio device's outputs the master plays on (an ASIO device's pairs:
+    // choosing one opens the device again; other drivers play on the first two).
+    MenuEntries menu;
+    if (!isMaster() || !session_) return menu;
+    app::EngineBridge* bridge = session_->bridge();
+    const app::AudioDeviceStatus status = bridge->deviceStatus();
+    const auto choices = app::outputChoices(bridge->deviceCapabilities().outputNames);
+    if (status.open && status.backend == u"ASIO" && !choices.empty()) {
+        const std::vector<int> current(status.outputChannels.begin(), status.outputChannels.end());
+        for (const auto& [label, channels] : choices) {
+            MenuEntry& entry = menu.add(channelsLabel(channels), [bridge, status, channels] {
+                // As the device runs now, on these outputs (saved if it opens).
+                app::AudioSettings settings;
+                settings.driver = status.backend;
+                settings.deviceName = status.name;
+                settings.sampleRate = status.sampleRate;
+                settings.bufferFrames = status.bufferFrames;
+                settings.inputChannels.assign(status.inputChannels.begin(), status.inputChannels.end());
+                settings.outputChannels = channels;
+                const QString error = bridge->openDevice(settings);
+                if (error.isEmpty()) {
+                    settings.save();
+                } else {
+                    Q_EMIT bridge->statusMessage(QStringLiteral("The outputs could not be opened: ") + error);
+                }
+            });
+            entry.checkable = true;
+            entry.checked = current == channels;
+            entry.toolTip = label;
+        }
+    } else {
+        MenuEntry& entry = menu.add(mainOutText());
+        entry.checkable = true;
+        entry.checked = true;
+        entry.enabled = false;
+        entry.toolTip = QStringLiteral("The master plays on the audio device's first two outputs (an ASIO device's can be chosen)");
+    }
+    menu.addSeparator();
+    addConfigure(menu);
+    return menu;
+}
+
+MenuEntries TrackHeaderItem::outputChannelMenu() {
+    // Where in the track it goes into: its input (Track In), or a device's sidechain.
+    MenuEntries menu;
+    const app::Track* t = track();
+    const std::optional<QString> now = outputTrack();
+    if (!t || isMaster() || outputChannelText().isEmpty() || !now) return menu;
+    app::ProjectEditor* editor = session_->editor();
+    const app::Project& p = *project();
+    const QString id = trackId_;
+    const OutputTarget target = outputTarget(*now);
+    if (target.trackIn) {
+        const bool usable = !p.outputWouldCycle(id, app::Output::track(*now));
+        const QString to = *now;
+        app::Session* session = session_;
+        MenuEntry& entry = menu.add(kTrackIn, [editor, session, id, to] {
+            if (editor->trySetTrackOutput(id, QStringLiteral("track"), to)) hintTrackIn(session, to);
+        });
+        entry.checkable = true;
+        entry.checked = t->output.to == app::Output::To::Track;
+        entry.enabled = usable || entry.checked;
+    }
+    for (const QString& deviceId : target.devices) {
+        const app::Device* device = p.findDevice(*now, deviceId);
+        if (device == nullptr) continue;
+        const bool usable = !p.outputWouldCycle(id, app::Output::sidechain(deviceId));
+        MenuEntry& entry = menu.add(sidechainLabel(*device), [editor, id, deviceId] {
+            editor->trySetTrackOutput(id, QStringLiteral("sidechain"), deviceId);
+        });
+        entry.checkable = true;
+        entry.checked = t->output == app::Output::sidechain(deviceId);
+        entry.enabled = usable || entry.checked;
     }
     return menu;
 }
@@ -978,6 +1305,20 @@ MenuEntries TrackHeaderItem::paramMenu(int lane) {
 
 // --- Painting ----------------------------------------------------------------------------------------------
 
+namespace {
+
+// The ground under a strip's name column below its name bar (its automation
+// choosers'): the header's, tinted with its colour, as Ableton shades it.
+QColor shade(const QColor& color) {
+    constexpr double kTint = 0.16;
+    const QColor ground = Theme::kPanelAlt;
+    return QColor::fromRgbF(ground.redF() + kTint * (color.redF() - ground.redF()),
+                            ground.greenF() + kTint * (color.greenF() - ground.greenF()),
+                            ground.blueF() + kTint * (color.blueF() - ground.blueF()));
+}
+
+}  // namespace
+
 void TrackHeaderItem::paint(SgPainter& p) {
     const app::Track* t = track();
     const double w = width(), h = height();
@@ -985,66 +1326,58 @@ void TrackHeaderItem::paint(SgPainter& p) {
     p.fillRect(QRectF(0, 0, w, h), isSelected ? Theme::kLaneSelected : Theme::kPanelAlt);
     if (!t) return;
     const app::Project& project = *this->project();
-    // The lanes below it: a panel each, with a line above.
+    const double main = row_.mainHeight;
+    const bool strip = isReturn() || isMaster();  // (no fold button, no bands)
+    // The name column: from the group bands to the In/Out column (or the mixer's).
+    const double left = strip ? 1.0 : indent();
+    const double right = (ioLeft_ > 0 ? ioLeft_ : mixerLeft_ > 0 ? mixerLeft_ : w) - 1;
+    const QColor color = barColor();
+    // Its colour: a track's name row; a group's down to its choosers (all of
+    // it without them); below, a dark shade of it.
+    const double bar = folded_ || (t->isGroup() && !automationShown_) ? main - 1
+                       : t->isGroup()                                 ? double(kGroupBlock)
+                                                                      : double(kNamePad + kNameButton + kNamePad);
+    p.fillRect(QRectF(left, 0, right - left, bar), color);
+    if (bar < main - 1) p.fillRect(QRectF(left, bar, right - left, main - 1 - bar), shade(color));
+    // The lanes below it: a row each, with a line above.
     for (const LaneRow& lane : row_.lanes) {
         const double top = lane.top - rowTop_;
-        p.fillRect(QRectF(0, top, w, lane.height), Theme::kPanel);
+        p.fillRect(QRectF(left, top, right - left, lane.height), shade(color));
         p.fillRect(QRectF(0, top, w, 1), Theme::kGridBar);
     }
+    // The columns' edges.
+    p.fillRect(QRectF(right, 0, 1, h), Theme::kBorder);
+    if (ioLeft_ > 0 && mixerLeft_ > ioLeft_) p.fillRect(QRectF(mixerLeft_ - 1, 0, 1, h), Theme::kBorder);
+    const QColor ink = barText();
+    const QColor dimInk = QColor::fromRgbF(0.5 * (ink.redF() + color.redF()), 0.5 * (ink.greenF() + color.greenF()),
+                                           0.5 * (ink.blueF() + color.blueF()));
     const auto drawFrozen = [&](double x) {
         // A snowflake in the name row if it is frozen (dimmer if it is in a frozen group, not frozen itself).
         const auto holder = project.frozenBy(trackId_);
         if (!holder || snowflake_.isNull()) return false;
         p.save();
         p.setOpacity(*holder == trackId_ ? 1.0 : 0.5);
-        p.drawImage(QRectF(x, nameTop() + kNamePad + (kNameButton - kSnowflake) / 2, kSnowflake, kSnowflake), snowflake_);
+        p.drawImage(QRectF(x, kNamePad + (kNameButton - kSnowflake) / 2, kSnowflake, kSnowflake), snowflake_);
         p.restore();
         return true;
     };
-    if (isMaster()) {
-        p.fillRect(QRectF(0, 0, 5, h), Theme::kTextDim);
-        p.fillRect(QRectF(0, 0, w, 1), Theme::kBorder);
-        p.fillRect(QRectF(0, 0, 1, h), Theme::kBorder);
-        p.drawText(QRectF(12, 0, 100, kMasterHeight), Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("Master"),
-                   Theme::kText, uiFont(9, true));
-        return;
-    }
-    if (isReturn()) {
-        p.fillRect(QRectF(0, 0, 5, h), QColor(t->color));
-        p.fillRect(QRectF(0, 0, w, 1), Theme::kBorder);
-        p.fillRect(QRectF(0, 0, 1, h), Theme::kBorder);
-        const double left = 10 + (drawFrozen(10) ? kSnowflake + 3 : 0);
-        if (!renaming_) {
-            const QFont font = uiFont(9, true);
-            const QRectF nameRect(left, kNamePad, nameRight_ - left, kNameButton);  // (as a track's)
-            p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, SgPainter::elidedText(t->name, font, nameRect.width()),
-                       mute() ? Theme::kTextDim : Theme::kText, font);
-        }
-        return;
-    }
-    // Its own colour, after the bands of the groups it is in (GroupBands draws
-    // those, over the headers: a group's runs on down its tracks). A group's
-    // goes across its top too, above its name row.
-    p.fillRect(QRectF(indent(), 0, stripWidth(), h - 1), QColor(t->color));
-    if (t->isGroup()) p.fillRect(QRectF(indent(), 0, w - indent(), arrangement::kGroupBar), QColor(t->color));
-    // The fold button, in a circle. A track's: a triangle, pointing right while
-    // folded, down while open. A group's: three bars (its tracks), the circle
-    // filled while folded (its tracks tucked away).
-    {
+    if (!strip) {
+        // The fold button, in a circle. A track's: a triangle, pointing right
+        // while folded, down while open. A group's: three bars (its tracks), the
+        // circle filled while folded (its tracks tucked away).
         const QRectF rect = foldRect();
         const QPointF c = rect.center();
         const double radius = 5.5;
-        const QColor ink = Theme::kText;
         p.save();
         p.setAntialiasing(true);
         if (t->isGroup() && t->folded) p.fillEllipse(c, radius + 0.6, radius + 0.6, ink);
         p.drawEllipse(QRectF(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius), ink, 1.2);
         if (t->isGroup()) {
-            const QColor bars = t->folded ? Theme::kPanelAlt : ink;
+            const QColor bars = t->folded ? color : ink;
             for (const double dy : {-2.5, 0.0, 2.5}) {
                 const double half = dy == 0.0 ? 2.8 : 2.2;
-                const QRectF bar(c.x() - half, c.y() + dy - 0.6, 2 * half, 1.2);
-                p.fillPolygon(QPolygonF({bar.topLeft(), bar.topRight(), bar.bottomRight(), bar.bottomLeft()}), bars);
+                const QRectF line(c.x() - half, c.y() + dy - 0.6, 2 * half, 1.2);
+                p.fillPolygon(QPolygonF({line.topLeft(), line.topRight(), line.bottomRight(), line.bottomLeft()}), bars);
             }
         } else if (t->folded) {
             p.fillPolygon(QPolygonF({QPointF(c.x() - 1.5, c.y() - 3.0), QPointF(c.x() + 2.5, c.y()),
@@ -1057,13 +1390,14 @@ void TrackHeaderItem::paint(SgPainter& p) {
         }
         p.restore();
     }
-    drawFrozen(foldRect().right() + 3);
+    drawFrozen(strip ? 6 : foldRect().right() + 3);
     if (!renaming_) {
-        const QFont font = uiFont(9, isSelected || t->isGroup());
-        const double left = nameLeft();
-        const QRectF nameRect(left, nameTop() + kNamePad, nameRight_ - left, kNameButton);
-        p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, SgPainter::elidedText(t->name, font, nameRect.width()),
-                   mute() ? Theme::kTextDim : Theme::kText, font);
+        const QFont font = uiFont(9, isSelected || t->isGroup() || strip);
+        const double nameX = nameLeft();
+        const QRectF nameRect(nameX, kNamePad, nameRight_ - nameX, kNameButton);
+        const QString name = isMaster() ? kMain : t->name;
+        p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, SgPainter::elidedText(name, font, nameRect.width()),
+                   mute() ? dimInk : ink, font);
     }
     p.fillRect(QRectF(0, h - 1, w, 1), Theme::kBorder);
     p.fillRect(QRectF(0, 0, 1, h), Theme::kBorder);

@@ -2,11 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A strip's send knobs, one per return, side by side, each with the return's
-// letter (in the accent colour while it taps before the fader). A knob moves as
-// a volume fader does; typing a dB value works. Right-click: Pre-Fader, Remove
-// Send, Show Automation (not on a knob greyed out: the return feeds this
-// strip). Those that don't fit don't show.
+// A strip's send knobs, one per return, side by side in rows, each with the
+// return's letter (in the accent colour while it taps before the fader). A
+// knob moves as a volume fader does; typing a dB value works. Right-click:
+// Pre-Fader, Remove Send, Show Automation (not on a knob greyed out: the
+// return feeds this strip). Those that don't fit don't show.
 Item {
     id: sendKnobs
 
@@ -14,9 +14,10 @@ Item {
     required property ArrangementMenu menu
 
     readonly property int count: header.sends.length
-    readonly property int slotWidth: 36  // a knob and its letter, at most
-    readonly property int slot: count ? Math.max(24, Math.min(slotWidth, Math.floor(width / count))) : 0
-    readonly property int knobSize: Math.max(16, Math.min(height, slot - 12))
+    readonly property int slotWidth: 30  // a knob and its letter
+    readonly property int rowHeight: 18
+    readonly property int columns: Math.max(1, Math.floor(width / slotWidth))
+    readonly property int knobSize: 16
 
     Repeater {
         model: sendKnobs.header.sends
@@ -28,15 +29,16 @@ Item {
             required property int index
             readonly property string returnId: modelData.returnId
 
-            x: index * sendKnobs.slot
-            width: sendKnobs.slot
-            height: sendKnobs.height
-            visible: x + sendKnobs.slot <= sendKnobs.width
+            x: (index % sendKnobs.columns) * sendKnobs.slotWidth
+            y: Math.floor(index / sendKnobs.columns) * sendKnobs.rowHeight
+            width: sendKnobs.slotWidth
+            height: sendKnobs.rowHeight
+            visible: y + sendKnobs.knobSize <= sendKnobs.height
 
             Text {
                 objectName: "sendLetter"
-                width: sendKnobs.slot - sendKnobs.knobSize - 1
-                height: parent.height
+                width: sendKnobs.slotWidth - sendKnobs.knobSize - 2
+                height: sendKnobs.knobSize
                 horizontalAlignment: Text.AlignRight
                 verticalAlignment: Text.AlignVCenter
                 text: send.modelData.letter
@@ -47,8 +49,7 @@ Item {
             Knob {
                 id: knob
                 objectName: "sendKnob"
-                x: sendKnobs.slot - sendKnobs.knobSize
-                y: Math.floor((parent.height - sendKnobs.knobSize) / 2)
+                x: sendKnobs.slotWidth - sendKnobs.knobSize
                 width: sendKnobs.knobSize
                 height: sendKnobs.knobSize
                 from: 0

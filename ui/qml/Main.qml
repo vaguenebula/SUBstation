@@ -20,7 +20,8 @@ import SUBstation
 // interfaces, each call guarded:
 //   arrangement: zoom(factor), zoomToArrangement(), narrowGrid(), widenGrid(),
 //                openClipView(), renameTrack(trackId) -> bool, focusLanes();
-//                snap, follow (read/write), gridStep, gridLevel; statusMessage(text)
+//                snap, follow, ioShown (read/write), gridStep, gridLevel; statusMessage(text),
+//                preferencesRequested(page)
 //   devicePanel: startChainRename(rackId, chainId) -> bool, focusDevices();
 //                statusMessage(text)
 ApplicationWindow {
@@ -457,6 +458,18 @@ ApplicationWindow {
                 Action { id: infoViewAction; objectName: "infoView"; text: qsTr("&Info View"); checkable: true; checked: true }
                 Action { objectName: "clipView"; text: qsTr("&Clip View"); shortcut: "Shift+Tab"; onTriggered: window.toggleClipView() }
                 Action { objectName: "automation"; text: qsTr("&Automation"); shortcut: "A"; onTriggered: Session.editor.toggleAllAutomation() }
+                // The track headers' In/Out column (Audio From and To, monitoring), as Ableton's.
+                Action {
+                    objectName: "inOut"
+                    text: qsTr("&In/Out")
+                    shortcut: "Ctrl+Alt+I"
+                    checkable: true
+                    checked: arrangement.ioShown
+                    onTriggered: {
+                        arrangement.ioShown = checked
+                        checked = Qt.binding(() => arrangement.ioShown)
+                    }
+                }
                 // The piano roll's chord lane and its notes out of the key in red.
                 Action {
                     objectName: "showHarmony"
@@ -605,6 +618,10 @@ ApplicationWindow {
                     objectName: "arrangement"
                     anchors.fill: parent
                     visible: !arrangementArea.clipViewShown
+                    onPreferencesRequested: page => {
+                        preferences.currentPage = page
+                        preferences.open()
+                    }
                 }
 
                 ClipView {

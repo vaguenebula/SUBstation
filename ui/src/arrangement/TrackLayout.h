@@ -21,36 +21,36 @@
 
 namespace sub::app {
 class Project;
+struct Track;
 }
 
 namespace sub::ui::arrangement {
 
 inline constexpr int kAutomationLaneHeight = 44;  // a lane shown below a track (or a return, the master)
-// Groups in the headers' column: a band in the group's colour down its header
-// and its tracks' (kGroupBand wide, a level kGroupIndent further right per
-// group a track is in), and a bar across the top of its header, above its name row.
-inline constexpr int kGroupIndent = 8;
-inline constexpr int kGroupBand = 7;
-inline constexpr int kGroupBar = 3;
-// A folded track: its name row, its buttons (16 px) 2 px from the top and from
-// the line below (its clips are bars, as in Ableton, as high as an open track's
-// clips' title bars: ArrangementLanes' kTitleHeight).
+// Groups in the headers' column, as Ableton's: a band in the group's colour
+// down its header and its tracks' (kGroupBand wide with the outline at its
+// right, a level kGroupIndent further right per group a track is in: side by
+// side), from under the group's colour, which fills its name bar (and, while
+// its choosers show, the row under it: kGroupBlock high) or all of its name column.
+inline constexpr int kGroupIndent = 6;
+inline constexpr int kGroupBand = 6;
+inline constexpr int kGroupBlock = 38;
+// A folded track (or group): its name row, its buttons (16 px) 2 px from the
+// top and from the line below (its clips are bars, as in Ableton, as high as an
+// open track's clips' title bars: ArrangementLanes' kTitleHeight).
 inline constexpr int kFoldedHeight = 21;
-// A folded group: the same below its bar, so a little taller: it stands out.
-inline constexpr int kFoldedGroupHeight = kFoldedHeight + kGroupBar;
-// A track's own lane while its automation shows: room in its header for the choosers.
+// A track's own lane while its automation shows: room in its header's name
+// column for the choosers (two rows and "+" under its name row; a group's
+// under the two rows of its colour).
 inline constexpr int kMinAutomationRow = 76;
-// The send knobs' row in a track's header, while there are return tracks
-// (below volume and pan): the choosers go below it.
-inline constexpr int kSendsRow = 24;
-inline constexpr int kHeaderWidth = 252;  // the headers' column
+inline constexpr int kMinGroupAutomationRow = 94;
 inline constexpr int kDropZone = 120;  // empty space below the last track for dropping files
 inline constexpr int kMasterHeight = 40;
-inline constexpr int kReturnHeight = 52;  // a return track's row: its name, then volume, pan and its sends
-inline constexpr int kChooserHeight = 18;  // an automation chooser
+// A return track's row: its name, Audio To, activator and solo; volume and pan; its sends.
+inline constexpr int kReturnHeight = 57;
 
 // How tall a track's own lane is at least while its automation shows.
-int minAutomationRow(const app::Project& project);
+int minAutomationRow(const app::Track& track);
 
 // An automation lane shown below its owner's own lane.
 struct LaneRow {
@@ -63,8 +63,8 @@ struct LaneRow {
 };
 
 // A track: its own lane (clips; its automation too while that shows), then the
-// automation lanes shown below it. A folded track's row is kFoldedHeight high
-// (a folded group's kFoldedGroupHeight); neither shows automation. A folded
+// automation lanes shown below it. A folded track's (or group's) row is
+// kFoldedHeight high, and shows no automation. A folded
 // track (not a group) shows its clips as `bars`, as Ableton does: they are
 // clicked and dragged whole (all title); between them the row is a grid like
 // any other, to select time on.
