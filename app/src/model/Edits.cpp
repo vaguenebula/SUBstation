@@ -293,6 +293,41 @@ Clip reverseClip(const Clip& clip, const QString& path, double totalSec) {
     return reversed;
 }
 
+bool playsWholeFile(const Clip& clip) {
+    return clip.isAudio() && clip.offsetSec <= 1e-6 &&
+           (clip.sourceDurationSec <= 0.0 || clip.durationSec >= clip.sourceDurationSec - 1e-3);
+}
+
+Clip replaceFile(const Clip& clip, const QString& path, double totalSec) {
+    if (!clip.isAudio() || totalSec <= 0.0) return clip;
+    Clip replaced = clip;
+    replaced.path = path;
+    replaced.name = QFileInfo(path).completeBaseName();
+    replaced.reversedFrom.clear();
+    replaced.sourceDurationSec = totalSec;
+    if (playsWholeFile(clip)) {
+        replaced.offsetSec = 0.0;
+        replaced.durationSec = totalSec;
+    } else {
+        // (A stretch starting past the new file's end plays from its start.)
+        const double offset = clip.offsetSec < totalSec - kMinClipSec ? std::max(0.0, clip.offsetSec) : 0.0;
+        replaced.offsetSec = offset;
+        replaced.durationSec = std::min(clip.durationSec, totalSec - offset);
+    }
+    replaced.fitFades();
+    return replaced;
+}
+
+Clip relinkFile(const Clip& clip, const QString& from, const QString& to) {
+    if (!clip.isAudio()) return clip;
+    Clip relinked = clip;
+    if (samePath(clip.path, from)) relinked.path = to;
+    if (!clip.reversedFrom.isEmpty() && samePath(clip.reversedFrom, from)) relinked.reversedFrom = to;
+    return relinked;
+}
+
+bool samePath(const QString& a, const QString& b) { return comparablePath(a) == comparablePath(b); }
+
 std::pair<double, double> selectionSpan(const std::vector<Clip>& clips, double tempo) {
     double start = clips.front().startBeat;
     double end = clips.front().endBeat(tempo);

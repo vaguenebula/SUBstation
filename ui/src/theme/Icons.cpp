@@ -239,6 +239,25 @@ const std::map<QString, Icon>& icons() {
                                            p.drawEllipse(QRectF(10, 10, 30, 30));
                                            p.drawLine(QPointF(37, 37), QPointF(54, 54));
                                        }};
+        // Two arrows, one each way: a hot swap (what the browser selects plays in its place).
+        t[QStringLiteral("hotswap")] = {text, [](QPainter& p, const QColor& c, bool) {
+                                            p.setPen(pen(c, 5, Qt::RoundCap, Qt::RoundJoin));
+                                            p.setBrush(Qt::NoBrush);
+                                            p.drawLine(QPointF(10, 21), QPointF(52, 21));
+                                            p.drawPath(path({{41, 10}, {52, 21}, {41, 32}}, false));
+                                            p.drawLine(QPointF(54, 43), QPointF(12, 43));
+                                            p.drawPath(path({{23, 32}, {12, 43}, {23, 54}}, false));
+                                        }};
+        // A warning triangle: a file that isn't there any more.
+        t[QStringLiteral("missing")] = {Theme::kRecordOn, [](QPainter& p, const QColor& c, bool) {
+                                            p.setPen(pen(c, 5, Qt::RoundCap, Qt::RoundJoin));
+                                            p.setBrush(Qt::NoBrush);
+                                            p.drawPath(path({{32, 8}, {58, 54}, {6, 54}}, true));
+                                            p.drawLine(QPointF(32, 24), QPointF(32, 38));
+                                            p.setBrush(c);
+                                            p.setPen(Qt::NoPen);
+                                            p.drawEllipse(QPointF(32, 46), 3.5, 3.5);
+                                        }};
         // The application's own icon: its colours are its own, even disabled.
         t[QStringLiteral("app_icon")] = {Theme::kAccent, [](QPainter& p, const QColor&, bool) {
                                              p.setBrush(Theme::kPanelAlt);

@@ -62,6 +62,7 @@ SelectionList {
     onCountChanged: fetchNearEnd()
     onHeightChanged: fetchNearEnd()
     onActivated: row => browser.activate(row)
+    onChosen: row => browser.choose(row)
 
     Connections {
         target: results.browser

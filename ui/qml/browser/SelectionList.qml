@@ -9,7 +9,10 @@ import SUBstation
 // Page Up/Down and End move the current row; Return/Enter and a double-click
 // activate it; a right-click selects the row and asks for its menu. The list
 // takes the keyboard focus when clicked. Its rows give their mouse to a
-// SelectionRowArea.
+// SelectionRowArea. A row the user chooses, clicked and let go of without a
+// drag, or reached with the arrow keys, is said on chosen() (a hot swap swaps
+// it in); the current row changing otherwise (a press that becomes a drag, the
+// list changing) is no choice.
 //
 // Keys the list doesn't take (Home, Delete, letters...) are the window's
 // shortcuts, as before.
@@ -27,6 +30,9 @@ ListView {
 
     // Return/Enter (byKey) or a double-click on a row.
     signal activated(int row, bool byKey)
+    // A row the user chose: a left click let go of without a drag, or Up/Down,
+    // Page Up/Down and End.
+    signal chosen(int row)
     // A drag of the selected rows starts (sorted).
     signal dragRequested(var rows)
     // A right-click on a row (it is selected).
@@ -151,10 +157,13 @@ ListView {
         case Qt.Key_Enter:
             if (currentIndex >= 0)
                 activated(currentIndex, true)
-            break
+            event.accepted = true
+            return
         default:
             return
         }
         event.accepted = true
+        if (currentIndex >= 0)
+            chosen(currentIndex)
     }
 }

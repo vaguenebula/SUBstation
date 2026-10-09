@@ -99,7 +99,9 @@ A key in the name (`Am`, `F#m`, `Eb`, `G minor`, `Cmaj`) transposes the clip to 
 
 ## Audio files
 
-The browser lists WAV, FLAC and MP3 files. Files are decoded into memory when added (see
+The browser lists WAV, FLAC and MP3 files. To put another file in a clip's place (in
+every clip playing it), or to find files that went missing, see
+[file-manager.md](file-manager.md). Files are decoded into memory when added (see
 [limitations.md](limitations.md)).
 
 ---

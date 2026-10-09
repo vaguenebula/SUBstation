@@ -15,6 +15,12 @@
 // keeps the counts. Uses are counted but the list is not re-sorted then: the
 // selection stays put.
 //
+// An audio file the user chooses (clicked and let go of without a drag, or
+// reached with the arrow keys: choose(), chooseFile()) is said on fileChosen: a
+// hot swap (HotSwap.h) swaps it in, and takes a double-click or Enter on it
+// instead of the arrangement. The current item changing by itself (a list
+// searched again, a press that becomes a drag) is no choice.
+//
 // Plug-ins are listed as the background scan finds them (Plug-ins ›
 // Instruments / Audio Effects); the status shows the scan's progress, and the
 // Plug-ins entry's tooltip lists the files that could not be read.
@@ -186,6 +192,10 @@ public:
     // What a drag of these rows carries, as {mime type: text} (BrowserMime.h).
     Q_INVOKABLE QVariantMap dragData(const QList<int>& rows) const;
 
+    // A row the user chose (a click released without a drag, the arrow keys):
+    // an audio file is said on fileChosen.
+    Q_INVOKABLE void choose(int row);
+
     // --- The folder tree ---
     // Its current file changed: an audio file is previewed.
     Q_INVOKABLE void treeCurrentChanged(const QString& path);
@@ -193,6 +203,8 @@ public:
     Q_INVOKABLE void activateFile(const QString& path);
     // A drag of these files from the tree was dropped: they count as used.
     Q_INVOKABLE void droppedFiles(const QStringList& paths);
+    // A file of the tree the user chose (as choose()).
+    Q_INVOKABLE void chooseFile(const QString& path);
 
     // --- Preview ---
     Q_INVOKABLE void stopPreview();
@@ -260,6 +272,7 @@ Q_SIGNALS:
     void deviceActivated(const QString& kind);     // add the built-in device to the selected track
     void pluginActivated(const QVariantMap& plugin);  // add the plug-in (PluginRef fields) to the selected track
     void presetActivated(const QString& path);     // add the preset's device to the selected track
+    void fileChosen(const QString& path);          // an audio file the user chose (a hot swap swaps it in)
     void previewRequested(const QString& path);    // play the file through the engine's preview
     void previewStopped();
     void statusMessage(const QString& message);    // for the window's status line
