@@ -3,8 +3,8 @@
 // window had it. It owns the project, the undo stack, the editor, the
 // selection, the engine bridge, the browser, the plug-in index, the sound
 // similarity (which analyses the browser's files), the song's harmony (its
-// chords and key, from its MIDI) and the humanizer (velocities by machine
-// learning), and wires
+// chords and key, from its MIDI), the humanizer (velocities by machine
+// learning) and the track labels (what each track is, in words), and wires
 // them together (the hooks and signals the main window used to connect). The
 // UI reaches all of it through the session: QML as the `Session` singleton
 // (registered by the UI), the UI's C++ items through these accessors.
@@ -79,6 +79,7 @@ class Render;
 class RenderProgress;
 class Selection;
 class SoundSimilarity;
+class TrackLabels;
 
 class Session : public QObject {
     Q_OBJECT
@@ -92,6 +93,7 @@ class Session : public QObject {
     Q_PROPERTY(sub::app::SoundSimilarity* similarity READ similarity CONSTANT)
     Q_PROPERTY(sub::app::Harmony* harmony READ harmony CONSTANT)
     Q_PROPERTY(sub::app::Humanizer* humanizer READ humanizer CONSTANT)
+    Q_PROPERTY(sub::app::TrackLabels* trackLabels READ trackLabels CONSTANT)
     Q_PROPERTY(sub::app::ArrangementActions* arrangement READ arrangement CONSTANT)
     Q_PROPERTY(sub::app::DeviceSelection* deviceSelection READ deviceSelection CONSTANT)
     Q_PROPERTY(sub::app::RenderProgress* render READ render CONSTANT)
@@ -168,6 +170,7 @@ public:
     SoundSimilarity* similarity() const { return similarity_; }
     Harmony* harmony() const { return harmony_; }
     Humanizer* humanizer() const { return humanizer_; }
+    TrackLabels* trackLabels() const { return trackLabels_; }
     ArrangementActions* arrangement() const { return arrangement_; }
     DeviceSelection* deviceSelection() const { return devices_; }
     RenderProgress* render() const { return render_; }
@@ -406,6 +409,7 @@ private:
     SoundSimilarity* similarity_ = nullptr;
     Harmony* harmony_ = nullptr;
     Humanizer* humanizer_ = nullptr;
+    TrackLabels* trackLabels_ = nullptr;
     BrowserController* browser_ = nullptr;
     PresetIndex* presets_ = nullptr;
     RenderProgress* render_ = nullptr;

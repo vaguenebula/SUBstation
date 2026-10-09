@@ -15,6 +15,21 @@ TrackHeaderItem {
     trackId: "master"
     meter: meterItem
 
+    // Over "Master": what its effects do to the mix (its label, then its effects). Hovering only.
+    Item {
+        objectName: "nameHover"
+        x: 12
+        width: 60
+        height: header.masterHeight
+
+        HoverHandler {
+            id: nameHover
+        }
+        ToolTip.visible: nameHover.hovered && header.nameToolTip !== ""
+        ToolTip.text: header.nameToolTip
+        ToolTip.delay: 700
+    }
+
     Meter {
         id: meterItem
         objectName: "meter"

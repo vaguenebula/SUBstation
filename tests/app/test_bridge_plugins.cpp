@@ -319,6 +319,15 @@ private Q_SLOTS:
         QCOMPARE(editor.count(), 1);
         QCOMPARE(dirty.count(), 1);  // the project has changes no edit shows
 
+        // Another preset: said for its device (what it is called is the engine's to say; this one has none).
+        QSignalSpy preset(&bridge, &EngineBridge::pluginPresetChanged);
+        BridgeTestAccess::injectEvents(bridge, {report(Type::PresetChanged, processor)});
+        bridge.pollPlugins();
+        QCOMPARE(preset.count(), 1);
+        QCOMPARE(preset.first(), place);
+        QCOMPARE(bridge.pluginPresetName(track, device), QString());
+        QCOMPARE(bridge.pluginPresetName(track, QStringLiteral("nope")), QString());
+
         // Not while a plug-in's call runs a message loop: the reports wait.
         BridgeTestAccess::injectEvents(bridge, {report(Type::StateDirty, processor)});
         BridgeTestAccess::setBusy(bridge, true);

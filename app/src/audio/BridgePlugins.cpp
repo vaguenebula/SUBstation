@@ -82,6 +82,12 @@ std::optional<QByteArray> EngineBridge::pluginState(const QString& trackId, cons
     return QByteArray(reinterpret_cast<const char*>(state.data()), static_cast<qsizetype>(state.size()));
 }
 
+QString EngineBridge::pluginPresetName(const QString& trackId, const QString& deviceId) {
+    const auto processorId = engineDeviceId(trackId, deviceId);
+    if (!processorId || !d_->pluginIds.contains(*processorId)) return {};
+    return QString::fromStdString(engine_.processorPresetName(*processorId));
+}
+
 QString EngineBridge::applyPluginState(const QString& trackId, const QString& deviceId, const QByteArray& state) {
     const auto processorId = engineDeviceId(trackId, deviceId);
     if (!processorId || !d_->pluginIds.contains(*processorId)) return QStringLiteral("the plug-in isn't loaded.");
@@ -304,6 +310,7 @@ void EngineBridge::dispatchProcessorEvents(const std::vector<sub::ProcessorEvent
             break;
         case Type::EditorRequested: requestPluginEditor(trackId, deviceId); break;  // like any editor, shown with its track
         case Type::StateDirty: dirty = true; break;
+        case Type::PresetChanged: Q_EMIT pluginPresetChanged(trackId, deviceId); break;
         }
     }
     for (const auto& [trackId, deviceId] : changed) Q_EMIT pluginParamsChanged(trackId, deviceId);

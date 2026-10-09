@@ -4,14 +4,17 @@ The intelligence module is what SUBstation works out about music and sound: for 
 Similar Sounds in the browser, on threads of its own), **harmony** (a song's chords and key, inferred from its MIDI:
 the piano roll's chord lane, its notes out of the key in red, and Generate's block chords and bass lines) and
 **humanizing** (the piano roll's Humanize › Velocity: velocities from HUMANBRO's XGBoost model, through its C++ library,
-vendored); later MIDI generation by machine learning (melodies, accompaniment), a timing model for Humanize › Timing,
-chords from audio, and an MCP server for agents, which will take the harmony as context. It is a layer of its own, as
+vendored) and **track labels** (what each track is, in a few words: "Washed Out Serum Pluck", from its names, presets,
+notes, effects and mixer; the tooltip over a track's name); later MIDI generation by machine learning (melodies,
+accompaniment), a timing model for Humanize › Timing, chords from audio, and an MCP server for agents, which will take
+the harmony and the track labels as context. It is a layer of its own, as
 the browser's backend is: the static library `sub_intelligence` ([intelligence/src](../intelligence/src), namespace
 `sub::intelligence`), with no Qt, and knowing nothing of the engine or the browser; its application side is
 [app/src/intelligence](../app/src/intelligence) (`SoundSimilarity`, `Session.similarity`; `Harmony`,
-`Session.harmony`; `Humanizer`, `Session.humanizer`). How Find Similar behaves for the user is in
-[guide/browser.md](guide/browser.md#find-similar-sounds), the chords, the key, Generate and Humanize in
-[guide/midi.md](guide/midi.md#chords-and-key).
+`Session.harmony`; `Humanizer`, `Session.humanizer`; `TrackLabels`, `Session.trackLabels`). How Find Similar behaves
+for the user is in [guide/browser.md](guide/browser.md#find-similar-sounds), the chords, the key, Generate and
+Humanize in [guide/midi.md](guide/midi.md#chords-and-key), the track labels in
+[guide/arrangement.md](guide/arrangement.md#what-a-track-is).
 
 ```
  application thread (Qt)                         sub::intelligence (C++, no Qt)
@@ -256,6 +259,193 @@ status line says so: the model knows pianos. Each track's targets keep their own
 loud lead together leaves each as loud as it was. Nothing runs in the background: a click on Humanize › Velocity
 waits for it, a tenth of a second for the longest parts.
 
+## Track labels: what each track is, in words
+
+[labels/](../intelligence/src/labels) (namespace `sub::intelligence::labels`) says what each track of a project is, in
+a few words, as a producer would name it: "Washed Out Serum Pluck", "Orchestral Trumpet", "Sad Piano Line", "Echoing
+Bell Stab", "Drum Group (Kick, Snare)". People see it over a track's name (its tooltip); the MCP server will hand it to
+agents as context, with the track's family ("synth", "drums"...), its role ("pluck", "kick"), every trait found, and
+what the label was made from. It is pure functions of the facts it is told (`TrackFacts`: plain values, no Qt), as
+harmony is: the same project always gives the same labels, and the details say why.
+
+### What was weighed
+
+| Approach | Quality | Cost | Verdict |
+|---|---|---|---|
+| A language model over the project's facts | fluent; knows any plug-in and preset by name | a model to run (or a service to call) at every change; not reproducible, not checkable | not here: an agent over the MCP server can do it on top of these labels and their details |
+| The track's name alone (what a DAW shows) | says nothing of "3 Serum 2" or "# Audio", most tracks' names | none | where it starts |
+| Rules over everything a producer would look at, each source weighed, combined over the project | right wherever names, presets, notes or effects say; the evidence shown | a few milliseconds a song | **chosen** |
+
+### Where the words come from, and how much each weighs
+
+| Source | What it says | Nouns | Adjectives |
+|---|---|---|---|
+| The track's name, if the user gave it ("vocals", "bass bridge") | what the user says it is | 3.0 | 0.7 |
+| Its instrument's preset ("PL - Electric Flow", "Core - Trumpet") | what the preset is; a category before " - " counts 0.5 more, the words after it are flavour (adjectives 0.4, materials 0.3) | 2.5 | 0.55 |
+| A rack's name ("Supersaw", "Metallic Dist") | the user's (or a preset's) name for what it holds | 2.5 holding the instrument, else 2.0 | 0.6 |
+| Its audio files' names, by how much each plays; a sampler's sample | pack codes, tempos and keys left out | 2.5 × its share | 0.5 × its share |
+| The instrument's own name ("Originals - Cinematic Soft Piano", "Superior Drummer"), its VST3 category ("Instrument\|Drum") | what a sample library plays | 2.0, 1.5 | 0.45 |
+| A built-in synth's envelope | a quick decay to silence plucks; a slow attack, held, swells into a pad | 1.4 | |
+| Its notes | the part they play | up to 1.3 | |
+| Its effects, its sends, its fader and pan | how it sounds | | 0.15–0.9, by kind and amount |
+
+A noun names a track from a weight of 1.0 (a pattern from 0.8).
+
+### Words ([Words.h](../intelligence/src/labels/Words.h))
+
+`readWords()` splits a name at separators, at camelCase ("BellStab": bell, stab) and between letters and digits
+("fill110"), drops checksums, then reads the longest phrase the vocabulary knows at each word (three words at most:
+"closed hi hat", "future bass", "one shot"), else a plural whose singular it knows, else a word glued from two or three
+it knows ("bassline"). The vocabulary (about 450 words) has:
+
+- instruments, by how specific (rank 4: Closed Hat, Violins, Kalimba, Acapella; 3: Kick, Piano, Vocal, Bell; 1:
+  Drums, Strings),
+- sounds (Pluck, Pad, Lead, Bass, Sub Bass, 808, Reese Bass, Stab, Supersaw, Riser, Impact, Sweep, Atmosphere, Wind...),
+- patterns (Chords, Arp, Line, Loop, Fill, One-Shot),
+- adjectives (Soft, Dark, Dirty, Fat, Cinematic, Washed Out...), and genres (Future Bass, DnB, Dubstep...): a genre is
+  no sound, so "Future Bass - Shlow" is no bass.
+
+Where a word is read changes what short codes mean: "PL", "BS", "LD", "PD", "KY", "CH" are a preset's categories
+(Serum's and most sound designers'), but in a file's name capitals are a sample pack's code or name ("OS_LDNB_...",
+"VRB2_...", "DECODEDDRUMBASS"). Numbers, keys ("A#min", "Fm"), tempos, filler ("init", "default", "dry", "wet",
+"main"...) and sample labels ("Zenhiser", "KSHMR") say nothing. Other words it doesn't know are kept apart: names of
+things ("Missme", "Dynasty"), which tell tracks apart when nothing else does.
+
+### Effects ([Effects.h](../intelligence/src/labels/Effects.h))
+
+What a device is (`classify()`): a built-in one by its kind; an instrument as such; a plug-in by its name: first a few
+whose names mislead or say nothing (Trackspacer ducks, soothe2 tames resonances, Crystalline and Supermassive are
+reverbs, SPL De-Verb takes reverb away, kHs Tape Stop glitches), then the words of names, as a producer reads them
+("verb": a reverb; "dist": a distortion; "delay", "echo": a delay; "comp": a compressor; "satur", "tape", "tube":
+saturation; "crush": lo-fi; "chorus", "flang", "phase", "filter", "pitch", "imager", "wide"...; short ones only as
+whole words: "eq", "ott", "amp"), then its VST3 category ("Fx|Reverb"; many plug-ins say only "Fx").
+
+How much it does (`readDevice()`), from its parameters where they are known: a built-in device's from the project; a
+plug-in's from the engine while it is loaded (only those whose names the labeller reads: "Mix", "Dry/Wet", "Wet",
+"Feedback", "Drive", "Depth", "Ratio"...: `readsParam()`), else from its saved state, where many keep them as text
+(`paramsInState()`: Valhalla's `Mix="0.5"`, JUCE's `<PARAM id="mix" value="0.5"/>`). A value's share comes from its
+text if it says percent ("35.0 %") or decibels, else from its normalized value.
+
+| Effect | Trait (weight) |
+|---|---|
+| Reverb | half wet or more: Washed Out (0.9); a quarter: Spacious (0.65); a tenth: Roomy (0.35); how wet unknown: Spacious (0.45); a shimmer: Shimmering |
+| Delay | Echoing: 0.45, more the wetter (+0.25 from 35 % wet) and the longer it feeds back (+0.1 from 70 %) |
+| Distortion, saturation, amp | Distorted (0.55–0.8 by drive), Saturated (0.5), Overdriven |
+| Lo-fi, vocoder, glitch, granular | Lo-Fi (0.75), Vocoded (0.75), Glitchy, Granular |
+| OTT (Xfer's, Over The Top) | Squashed, by depth: 0.75 from 60 %, 0.5 from 30 % |
+| Compressor | Squashed from 8:1; else barely Compressed (0.15) |
+| Sidechain, volume shapers | Pumping (0.7); Trackspacer: Ducked |
+| Width (a utility's width, imagers, wideners) | Wide (0.55–0.6), Mono |
+| A built-in EQ's cuts | a high cut at 1.5 kHz or below: Muffled; at 4 kHz: Dark; a low cut from 400 Hz: Thin; both: Telephone (0.7). Cleaning the lows says nothing |
+| Chorus, flanger, phaser, tremolo | Chorused, Flanged, Phased, Pulsing |
+| Pitch correction | Auto-Tuned (0.6) |
+| A built-in synth's filter | Dark, Mellow, Resonant |
+
+Off, or dry (under 3 % wet): nothing. A send to a return whose effect is a reverb counts as the track's own reverb
+(from -3 dB: Washed Out; from -12 dB: Spacious), to a delay as Echoing. A fader at -20 dB or below: Quiet; a pan past
+60 %: Hard-Left or Hard-Right.
+
+### Notes ([NoteProfile.h](../intelligence/src/labels/NoteProfile.h))
+
+The notes a track is heard playing, where they play, as a profile: how many, the 5th to 95th percentile pitches, the
+median pitch by time, the median length, how many sound at each onset (starts within a 32nd are struck together), the
+share of onsets with three notes or more, onsets per beat while anything sounds.
+
+| Notes | Part |
+|---|---|
+| three or more struck together (or 2.6 sounding on average) | Chords; held two beats or more: a Pad; short: a Stab |
+| one at a time, the median below E1 (40) | Sub Bass; below F2 (53): Bass |
+| one at a time, short and fast over more than a fifth | Arp |
+| one at a time from C3 | a Lead (its Line) |
+
+Notes name what nothing else does (an init Serum's sound), never over what an instrument is: a trumpet's notes are a
+trumpet's, a drum's are no chords.
+
+### Putting it together ([TrackLabels.h](../intelligence/src/labels/TrackLabels.h))
+
+A track's best instrument, sound and pattern (by weight, then rank, then which came first) make its nouns: [a synth's
+name] [instrument] [sound] [pattern], no word twice: "Serum Pluck Arp", "Bell Stab", "Drum Loop". A synth's name
+always goes first ("Serum", "Synth"); another instrument's only when nothing else says what it plays ("Kontakt
+Chords"; but "808", not "Sampler 808"). Patterns that say nothing more go (a pad's chords, a lead's line, a pluck
+played one note at a time); a synth's family is its sound's ("Serum Vocal Lead" is a synth); nature sounds are an
+ambience ("Wind Ambience"). Then at most two traits, one of each group (space, echo, drive, dynamics, width, tone...),
+the first from 0.4, a second only from 0.55: "Washed Out Serum Pluck", "Echoing Distorted Serum Pluck". What a sound
+is made of goes next to its noun ("Soft Acoustic Kick"). With nothing to name it by: its main file's own words
+("Rousey Thing"), else "Audio", "MIDI", or "Empty Audio" (no clips, no instrument).
+
+A group is named by what it holds: by its name if the user's says ("synths": Synth Group); else by the family of 60 %
+of its tracks (Drum Group), by two families making 80 % (Synth & Bass Group); a group holding 60 % of the song's
+tracks is its Mix Bus; else a Mixed Group; with a trait of its own effects (Pumping Drum Group). A return is named by
+its effect (Reverb Return: how wet its reverb is says nothing on a return, which is all wet); the master is Master,
+its effects in its details.
+
+### The project
+
+- **Shared traits weigh less.** A trait on k of n tracks keeps 1 - 0.65 (k - 1)/(n - 1) of its weight (0.35 when all
+  have it): the same reverb on every track doesn't make every label Spacious, but the one track drowned in it still
+  says so. (It stays among each track's traits.)
+- **Tracks alike are told apart**, each way in turn while they are still alike: by a trait one has that the others
+  lack, by how much it says of the track itself however many share it (from 0.35: a preset's flavour words aren't
+  enough; of six arps alike, the quiet ones are Quiet); by their register (the highest High, the lowest Low, if 7
+  semitones or more apart); by their presets' own names, their files' own words or the user's names ("Serum Pluck
+  (Dynasty)", "Riser (Stratosphere)"); groups by what they hold ("Drum Group (Kick, Snare)"); else numbered in the
+  project's order ("Kick 2").
+
+### How well it works
+
+On real projects (14, about 340 tracks), as they open:
+
+| The track | Its label |
+|---|---|
+| "# Serum 2": preset PLUCK - Dynasty in a rack "Fast Simple Arp - Octave shift random", ValhallaSupermassive half wet, fast notes over two octaves | Washed Out Fast Serum Pluck Arp |
+| "# BBC Symphony Orchestra": Core - Trumpet; Core - Basses | Orchestral Trumpet; Orchestral Double Bass |
+| "# Originals - Cinematic Soft Piano": preset Washed Out, chords | Washed Out Piano Chords |
+| "# Kontakt 7" in a rack "Grand Piano with Pad" | Grand Piano Pad |
+| "# Serum 2": BS - Dirty Fat BASS | Dirty Serum Bass |
+| "# Serum 2": LEAD - Sounds Like a Vocal Shot, through a delay | Echoing Serum Vocal Lead |
+| "# C_BellStab1" through kHs Delay | Echoing Bell Stab |
+| "# OS_LDNB_174_Amaj_Sad_Piano_Line" | Sad Piano Line |
+| "# VRB2_Missme_Acapella_DRY_120_A#min" through OTT at 77 % | Squashed Acapella |
+| "# 91V_FRF_174_bass_synth_club_greedy_Fm" | Synth Bass |
+| "# Cymbals_ClosedHiHat3", "# ct_clhat_quick" | Closed Hat |
+| two risers | Riser (Stratosphere), Riser (Sustained) |
+| a group of a kick, a snare and a chime | Drum Group (Kick, Snare) |
+
+What it gets wrong is mostly where nothing says: a Kontakt instrument keeps no name in its state, an init Serum playing
+a line may be a lead or a pluck, a take recorded here is a "Recording". Speed (a release build, an Intel Core Ultra 7):
+51 tracks with 1 080 notes, 1.7 ms; 83 tracks, 3.5 ms; gathering the facts takes about as long again (a saved state is
+decoded once while it stays the same).
+
+### What would make it better
+
+- An agent over the labels and their details (the MCP server's): to name a track better, or to answer "which is the
+  lead?".
+- Sound: the similarity's fingerprint of a track's audio (or of its frozen render) as one more source; a kick sounds
+  like a kick whatever its file is called.
+- More plug-ins' presets ([engine/plugins.md](engine/plugins.md#preset-names)) and their states' amounts.
+- Words: the vocabulary is a table; a word a user's projects keep using is a line in Words.cpp.
+
+### Track labels: the application side
+
+`TrackLabels` ([TrackLabels.h](../app/src/intelligence/TrackLabels.h), `Session.trackLabels`) lives on the
+application's thread. It tells the labeller what the project holds (`facts()`): each track (its tracks, returns and
+master, in the arrangement's order) with its name and whether the user gave it (`namedByUser()`: not one SUBstation
+gave after what it holds, its number, a file, an instrument, or a copy's " 2"); its devices and racks: a built-in
+device's parameters with their names, units and normalized values; a plug-in's name, vendor, VST3 category (from the
+plug-in index), its preset (as the plug-in says now, `EngineBridge::pluginPresetName()`; else as its saved state in the
+project says, `presetNameFromPreset()`) and the parameters the labeller reads (the engine's while it is loaded, else
+`paramsInState()` of its saved state; a saved state is decoded once while it stays the same); a sampler's sample; the
+audio clips it plays (their files, their lengths in beats; not deactivated ones), its notes where they play
+(`Clip::heardNotes()`), its sends, fader, pan and mute.
+
+A change to what the labels depend on (tracks, clips, devices, their parameters and states, freezing, the tempo; a
+plug-in's preset, its parameters edited in its editor, plug-ins loaded; the plug-in scan) marks them stale and,
+`kSettleMs` (250 ms) after the last change of a burst (a knob dragged), emits `changed` (and `revision` goes up).
+Values a plug-in's automation moves don't: it says so at every poll while it plays, and the labels read values as they
+are whenever they are made. The track headers ask again only on `changed` (and for a new track), never at every refresh. They are made again the next time anything asks, on the application's thread: `label()`,
+`toolTip()` (the label, then its details, a line each: the track header's `nameToolTip`, in the info view), and
+`describe()` (every track for agents: id, name, kind, parent, label, family, role, traits, details).
+
 ## Files
 
 ### The module (`intelligence/src`)
@@ -274,6 +464,11 @@ waits for it, a tenth of a second for the longest parts.
 | [humanize/VelocityModel.h](../intelligence/src/humanize/VelocityModel.h) | `VelocityModel` (`humanize()`, `predict()`), `Note` (a part's, `target` or context), `Meter`, `ModelError` |
 | [third_party/humanbro](../intelligence/third_party/humanbro) | HUMANBRO's C++ runtime (the `humanbro` library): `humanbro::Humanizer`, its features and tree walker |
 | [models/velocity.hbm](../intelligence/models) | The velocity model (HUMANBRO's quantized one); [models/README.md](../intelligence/models/README.md) says where it came from and how to replace it |
+| [labels/Facts.h](../intelligence/src/labels/Facts.h) | `TrackFacts` (a track as the labeller is told it: `DeviceFact`, `ParamFact`, `NoteFact`, `ClipFact`, `SendFact`), `TrackLabel` (its label, family, role, traits, details) |
+| [labels/Words.h](../intelligence/src/labels/Words.h) | `readWords()` (a name's words, by `Source`), `splitWords()`, `Word`, `WordKind`, `Family`, `familyId()`, `familyTitle()`, `titleCase()`; the vocabulary (Words.cpp) |
+| [labels/Effects.h](../intelligence/src/labels/Effects.h) | `Effect`, `classify()`, `readDevice()` (`Trait`s and a summary), `findParam()`, `fraction()`, `readsParam()`, `paramsInState()` |
+| [labels/NoteProfile.h](../intelligence/src/labels/NoteProfile.h) | `NoteProfile`, `profile()`, `readNotes()`, `describe()`, `noteName()` |
+| [labels/TrackLabels.h](../intelligence/src/labels/TrackLabels.h) | `labelTracks()`: a project's tracks' labels |
 
 ### The application side (`app/src/intelligence`)
 
@@ -282,6 +477,10 @@ waits for it, a tenth of a second for the longest parts.
 | [SoundSimilarity.h](../app/src/intelligence/SoundSimilarity.h) | `SoundSimilarity` (`Session.similarity`): the index on the application's thread; `setLibrary(FileIndex*)`, `find()`, `found(SimilarSounds)`, `progressChanged`; `SimilarSounds` (a result: `similarity(path)`, `best(n)`, `scorer()`) |
 | [Harmony.h](../app/src/intelligence/Harmony.h) | `Harmony` (`Session.harmony`): the song's notes (`songNotes()`), its chords and key inferred from them when asked after a change, the key (the project's, else inferred), `shown` (the setting C toggles) |
 | [Humanizer.h](../app/src/intelligence/Humanizer.h) | `Humanizer` (`Session.humanizer`): the velocity model loaded on first use (`velocityModelPath()`, `velocityAvailable`), `velocities(targets, amount)` with each track's notes as context, `statusMessage` |
+| [TrackLabels.h](../app/src/intelligence/TrackLabels.h) | `TrackLabels` (`Session.trackLabels`): the project's facts (`facts()`, `namedByUser()`), its labels made again when asked after a change, `label()`, `toolTip()`, `describe()`, `changed`, `revision` |
+
+A plug-in's preset's name is the engine's to read ([engine/plugins.md](engine/plugins.md#preset-names)): the
+application asks the bridge for it, or reads a project's saved state with the engine's `presetNameFromPreset()`.
 
 The browser's side of Find Similar is in [BrowserController](../app/src/browser/BrowserController.h)
 (`findSimilar()`, `clearSimilar()`, `similarTo`) and the backend's `Sort::Score` ([browser.md](browser.md)).
@@ -388,8 +587,19 @@ too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`
   velocity (only the targets' mean, which levels it), and the same part always comes out the same. Only targets
   change. The vendored runtime (`intelligence/third_party/humanbro`, outside the boundary check's folders) includes
   nothing of Qt either.
+- Track labels are pure functions of the facts: the same project always gives the same labels, and every label says
+  what it was made from (its details). Nothing is read from disk, kept between calls or run in the background; the
+  application gathers the facts on its own thread, only when asked after a change.
 
 ## Extending it
+
+- **A word for the labels**: a line in `kEntries` (Words.cpp): its kind, family, rank, how it shows, and where it is
+  read (a preset's category codes in presets only). Filler goes in `kNoise`.
+- **A plug-in the labels misread**: an effect whose name misleads, a line in `kNameRules` (Effects.cpp) before the
+  general words; an instrument whose name doesn't say what it plays, or that is a synth, a line in `kInstruments`
+  (TrackLabels.cpp).
+- **A trait**: a case in `readDevice()` with its weight and group (`traitGroup()` for adjectives that say the same),
+  and its parameters' names in `readsParam()`'s lists.
 
 - **A new feature**: add it to `feature::` and `featureInfo()` (its name, aspect and minimum spread), compute it in
   `SoundAnalyzer::analyze()`, bump `kFeatureVersion`, and run `sound_similarity_bench --tune` on a labelled library
@@ -444,6 +654,20 @@ too. `shown` (View › Chords and Key, C) is a setting (`pianoroll/show_harmony`
   the key, clicks going through it), notes out of the key in red, Generate › Chords and › Bass; Humanize's menu
   (Velocity and Timing, each with its own amount, the notes getting the keyboard back);
   [test_ui_mainwindow.cpp](../tests/app/test_ui_mainwindow.cpp): C.
+- [tests/intelligence/test_labels.cpp](../tests/intelligence/test_labels.cpp) (`intelligence_tests`): names split
+  into words; what files' and presets' names say (codes in presets only, a genre no sound, an orchestra's); what
+  effects are (built-ins, the words of names, names that mislead, categories) and how much they do (a reverb's mix,
+  a delay's feedback, OTT's depth, a utility's width, an EQ's cuts; off, dry); parameters' values (text, decibels,
+  saved states); what notes play; labels: a pluck washed out by its reverb, instruments, presets and samples, notes
+  naming what nothing else does, audio tracks by their files, the user's own name, the mixer and sends, groups,
+  returns and the master, shared traits weighing less, tracks alike told apart; the same facts giving the same
+  labels, 200 tracks of 500 notes in good time.
+- [tests/app/test_track_labels.cpp](../tests/app/test_track_labels.cpp): what the labeller is told (devices and
+  their parameters, notes and files where they play, sends, mute; not a deactivated clip's notes); whose name a track
+  has; presets and amounts read from plug-ins' saved states; following the project once its edits settle; what
+  agents (`describe()`) and tooltips get. [test_ui_mainwindow.cpp](../tests/app/test_ui_mainwindow.cpp): a track's
+  name hovered says its label in the info view, and follows its edits. The engine's side of presets' names:
+  [engine/plugins.md](engine/plugins.md#tests).
 - [tests/app/test_sound_similarity.cpp](../tests/app/test_sound_similarity.cpp): the browser's files analysed; Find
   Similar's list, sort, status, filtering by text and places; ending it (another sort, another list, clearing, Ctrl+F);
   a clip's part of a loop; a sound outside the library and `SimilarSounds`; files found later; a sound that can't be

@@ -130,6 +130,23 @@ TrackHeaderItem {
         laneRight: header.innerRight
     }
 
+    // Over the name: what the return is, in words (its label, then its effects). Hovering only.
+    Item {
+        objectName: "nameHover"
+        x: 10
+        y: header.buttonTop
+        width: Math.max(0, header.nameRight - x)
+        height: header.buttonHeight
+        visible: !header.renaming
+
+        HoverHandler {
+            id: nameHover
+        }
+        ToolTip.visible: nameHover.hovered && header.nameToolTip !== ""
+        ToolTip.text: header.nameToolTip
+        ToolTip.delay: 700
+    }
+
     TextField {
         id: rename
         objectName: "rename"

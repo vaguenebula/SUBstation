@@ -2,9 +2,9 @@
 # on threads of its own, independent of the engine, the browser and Qt (the
 # application layer, app/src/intelligence, wraps it in Qt objects). Sound
 # similarity, harmony (a song's chords and key from its MIDI, and parts made
-# from them) and humanizing (velocities by machine learning); MIDI generation
-# by machine learning and an MCP server for agents are to come (see
-# docs/intelligence.md).
+# from them), humanizing (velocities by machine learning) and track labels;
+# MIDI generation by machine learning and an MCP server for agents are to come
+# (see docs/intelligence.md).
 #
 #   core/        what its parts share: decoding audio (miniaudio), the platform
 #                (Platform.cpp on Windows, PlatformPosix.cpp elsewhere)
@@ -13,12 +13,18 @@
 #   harmony/     chords and keys: inferring them from notes, block chords and
 #                bass lines from them
 #   humanize/    a part's velocities from HUMANBRO's model (models/velocity.hbm)
+#   labels/      what each track is, in a few words ("Washed Out Serum Pluck"),
+#                from its names, presets, notes, effects and mixer
 add_library(sub_intelligence STATIC
     src/core/AudioReader.cpp
     src/harmony/Accompaniment.cpp
     src/harmony/ChordInference.cpp
     src/harmony/Chords.cpp
     src/humanize/VelocityModel.cpp
+    src/labels/Effects.cpp
+    src/labels/NoteProfile.cpp
+    src/labels/TrackLabels.cpp
+    src/labels/Words.cpp
     src/similarity/Similarity.cpp
     src/similarity/SoundFeatures.cpp
     src/similarity/SoundIndex.cpp

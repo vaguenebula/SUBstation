@@ -149,6 +149,7 @@ struct ProcessorEvent {
         StateDirty,        // the plug-in's state changed in a way no parameter shows
         LatencyChanged,
         ParamTouched,      // the user took hold of a parameter in the plug-in's editor (paramIndex)
+        PresetChanged,     // the preset (patch, instrument) the plug-in has loaded is another: presetName()
     };
     Type type = Type::ParamsChanged;
     int paramIndex = -1;  // ParamEdited, ParamTouched: which parameter,
@@ -192,6 +193,11 @@ public:
     // Empty for processors whose parameters are their whole state.
     virtual std::vector<uint8_t> getState() { return {}; }
     virtual void setState(const std::vector<uint8_t>& /*state*/) {}
+
+    // The preset (patch, instrument) a plug-in has loaded, as far as it tells ("" if
+    // unknown, or for devices that have none). Thread-safe; it changes with
+    // ProcessorEvent::PresetChanged.
+    virtual std::string presetName() const { return {}; }
 
     // Main-thread housekeeping, called regularly. Returns true if the processor's
     // latency changed, so the engine must realign the tracks.

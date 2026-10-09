@@ -23,6 +23,7 @@
 // plug-ins, so what it touches is thread-safe.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -69,6 +70,7 @@ public:
 
     std::vector<uint8_t> getState() override;
     void setState(const std::vector<uint8_t>& state) override;
+    std::string presetName() const override;
 
     bool idle() override;
     void takeEvents(std::vector<ProcessorEvent>& out) override;
@@ -127,6 +129,12 @@ private:
     void pushEvent(const ProcessorEvent& event);
     int indexOf(Steinberg::Vst::ParamID id) const;  // hold mutex_
     void dropEditor();
+
+    // The loaded preset's name (main thread): the plug-in's program list if it has
+    // real names, else a name in its saved state (scanned whatever an earlier scan
+    // found if `stateChanged`). Pushes PresetChanged if it changed.
+    void refreshPresetName(bool stateChanged);
+    std::string programName() const;
 
     // The module outlives everything the plug-in made, so it comes first.
     VST3::Hosting::Module::Ptr module_;
@@ -195,6 +203,23 @@ private:
     std::unordered_map<Steinberg::Vst::ParamID, Gesture> gestures_;
     uint32_t gestureCounter_ = 0;
     std::vector<ProcessorEvent> pending_;
+
+    // Preset name (presetName_ under mutex_). Checked in idle() when the state may
+    // have changed (restored, setDirty, a restart saying values changed; at most
+    // every kPresetCheckInterval), and every kPresetPollInterval while the editor
+    // is open, where presets are picked. The poll scans the state only if its last
+    // scan found a name: a plug-in that keeps none there isn't read again and again.
+    // Its program-change parameters (main thread) are found by buildParams().
+    struct ProgramParam {
+        Steinberg::Vst::ParamID id = 0;
+        int32_t steps = 0;
+        Steinberg::Vst::UnitID unit = 0;
+    };
+    std::vector<ProgramParam> programParams_;
+    std::string presetName_;
+    std::atomic<bool> presetStateChanged_{true};
+    bool stateHasName_ = true;
+    std::chrono::steady_clock::time_point lastPresetCheck_{};
 
     std::unique_ptr<EditorWindow> editor_;
     std::optional<EditorWindow::Position> editorPosition_;  // where the last editor was: the next opens there
