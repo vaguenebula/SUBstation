@@ -31,7 +31,7 @@ ListView {
     // Return/Enter (byKey) or a double-click on a row.
     signal activated(int row, bool byKey)
     // A row the user chose: a left click let go of without a drag, or Up/Down,
-    // Page Up/Down and End.
+    // Page Up/Down, End and the list's own keys (keyHandler: the tree's Right).
     signal chosen(int row)
     // A drag of the selected rows starts (sorted).
     signal dragRequested(var rows)
@@ -131,8 +131,11 @@ ListView {
     ScrollBar.vertical: ScrollBar {}
 
     Keys.onPressed: event => {
+        const before = currentIndex
         if (keyHandler && keyHandler(event)) {
             event.accepted = true
+            if (currentIndex >= 0 && currentIndex !== before)  // (a list's own keys moved it: the tree's Right)
+                chosen(currentIndex)
             return
         }
         const extend = (event.modifiers & Qt.ShiftModifier) !== 0
