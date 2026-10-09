@@ -223,6 +223,7 @@ private Q_SLOTS:
         test::click(window_, test::centerOf(button));
         QVERIFY(hotSwap().active());
         QTRY_VERIFY(bar->isVisible());
+        QVERIFY(test::laidOut(window_));  // (until then the similar bar lies over it, its own ✕ over this one)
         test::click(window_, test::centerOf(item("stopHotSwap")));
         QVERIFY(!hotSwap().active());
         test::click(window_, test::centerOf(button));

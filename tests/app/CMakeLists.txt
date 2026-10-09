@@ -1,10 +1,11 @@
 # Qt Test: each test_*.cpp is an executable of its own (QTEST_MAIN or
 # QTEST_GUILESS_MAIN), run offscreen. App-layer tests link sub_app; tests whose
-# file name starts with test_ui_ link the UI (sub_ui) too, and run on a real
+# file name starts with test_ui_ link the UI (sub_ui) and Qt Quick Test (its
+# waits for a window to lay out what changed) too, and run on a real
 # (virtual) display where there is one: Qt's offscreen platform renders Qt Quick
 # in software, which draws none of the UI's scene-graph geometry. On Linux they
 # run under xvfb-run with the xcb platform (Mesa renders OpenGL in software).
-find_package(Qt6 REQUIRED COMPONENTS Test)
+find_package(Qt6 REQUIRED COMPONENTS Test QuickTest)
 find_program(XVFB_RUN xvfb-run)
 file(GLOB APP_TEST_SOURCES CONFIGURE_DEPENDS test_*.cpp)
 file(GLOB APP_TEST_SUPPORT CONFIGURE_DEPENDS support/*.cpp support/*.h)
@@ -21,7 +22,7 @@ foreach (_source IN LISTS APP_TEST_SOURCES)
         target_link_libraries(${_name} PRIVATE sub_app_test_support)
     endif()
     if (_name MATCHES "^test_ui_")
-        target_link_libraries(${_name} PRIVATE sub_ui sub_uiplugin)
+        target_link_libraries(${_name} PRIVATE sub_ui sub_uiplugin Qt6::QuickTest)
     endif()
     if (TARGET sub_test_plugins)
         add_dependencies(${_name} sub_test_plugins)

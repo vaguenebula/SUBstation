@@ -125,8 +125,8 @@ The engine's tests link `sub_engine` and nothing else, which also shows that the
 ### tests/app/support
 
 The application layer's tests link `sub_app` and `sub_app_test_support` (the `.cpp` files here, a static library);
-the UI's tests (`test_ui_*`) link `sub_ui` too, and use the header-only helpers, since the library doesn't link Qt
-Quick.
+the UI's tests (`test_ui_*`) link `sub_ui` and Qt Quick Test too, and use the header-only helpers, since the library
+doesn't link Qt Quick.
 
 | File | What it holds |
 |---|---|
@@ -134,7 +134,7 @@ Quick.
 | [EditorFixture.h](../tests/app/support/EditorFixture.h) | `EditorFixture`: a project, its undo stack and a `ProjectEditor` on them, with what the editor refused collected (`messages`); `env()` (an envelope from points), `audioClip()`. |
 | [BridgeTestSupport.h](../tests/app/support/BridgeTestSupport.h) | `Studio`: a project, its undo stack, an engine without a device and the bridge between them, shut down when it goes; `Edits`: the editor's edits made as the editor makes them (the model's commands, in the same order); the test plug-ins as `PluginRef`s and `PluginInfo`s; `BridgeTestAccess`, the bridge's friend: plug-in reports injected as if the plug-ins had sent them, the plug-in loading timer stopped and stepped by hand, the meters polled, the bridge made busy. |
 | [SessionFixture.h](../tests/app/support/SessionFixture.h) | `SessionFixture`: an engine without a device (clips without fades, unless asked for) and a `Session` on it that scans no plug-ins, keeps no browser index and analyses no sounds in the background (its browser lists the user's Music folder); what it says (`messages`, `warnings`, `informations`) collected; `waitForRender`, `waitForSource`, `render` (offline), `level`, `clipTrack`. |
-| [UiTestSupport.h](../tests/app/support/UiTestSupport.h) | `UiSession`: a session on a fresh engine, registered as the QML `Session` singleton, and a QML engine set up for the UI's module (analysing the browser's sounds only if asked: `UiSession(true)`, for a test with places of its own); `show()` loads a window of QML and waits until it is exposed and active. Mouse, wheel and key input as a user sends it (`press`, `moveTo`, `release`, `click`, `doubleClick`, `drag`, `wheel`), `haveDisplay()`, `screenshot()`. |
+| [UiTestSupport.h](../tests/app/support/UiTestSupport.h) | `UiSession`: a session on a fresh engine, registered as the QML `Session` singleton, and a QML engine set up for the UI's module (analysing the browser's sounds only if asked: `UiSession(true)`, for a test with places of its own); `show()` loads a window of QML and waits until it is exposed and active. Mouse, wheel and key input as a user sends it (`press`, `moveTo`, `release`, `click`, `doubleClick`, `drag`, `wheel`), `laidOut()` (waits until the window has laid out what changed), `haveDisplay()`, `screenshot()`. |
 | [ArrangementTestSupport.h](../tests/app/support/ArrangementTestSupport.h) | The arrangement view in a window on a `UiSession`; its items found by name, points in its lanes and headers, the menus its items work out, audio files to put in it. |
 | [DevicePanelTestSupport.h](../tests/app/support/DevicePanelTestSupport.h) | The device panel in a window as the main window places it; its parts found by object name or by device; its menus read and chosen from; drags from the browser (or along the chain) delivered as the platform delivers them. |
 | [BrowserReference.h](../tests/app/support/BrowserReference.h) | A plain, slower implementation of the browser's index and search, kept as the reference the native backend must agree with, item for item and in the same order (`test_browser_native`), and what `browser_backend_bench` checks every query against. |
@@ -388,8 +388,10 @@ Steinberg's ASIO SDK, which isn't redistributable, so the ASIO tests skip there.
   `QGuiApplication`) and `#include "test_<area>.moc"`. Use the fixtures above (`EditorFixture` for the editor's rules,
   `Studio` for the bridge, `SessionFixture` for the session's actions) rather than making the pieces by hand.
 - **UI behaviour** goes into `tests/app/test_ui_<area>.cpp`: a `UiSession`, the view in a window of QML, and input
-  sent as a user would. Skip what needs drawn geometry without a display (`haveDisplay()`). moc stops reading a file
-  at a C++ raw string literal: put inline QML in string constants after the test class (or in a support header).
+  sent as a user would. Skip what needs drawn geometry without a display (`haveDisplay()`). Layouts place their items
+  only when the window polishes them, before its next frame: before a click on something just shown (or moved by what
+  was shown or hidden), wait for `laidOut()`, or the click may land on what lies there until then. moc stops reading a
+  file at a C++ raw string literal: put inline QML in string constants after the test class (or in a support header).
 - Shared helpers go into `tests/app/support` (header-only if they need Qt Quick), not into a test file.
 - A new test plug-in goes into `tests/vst3_plugins` and the `sub_test_plugins` target in
   [TestPlugins.cmake](../tests/TestPlugins.cmake); a new driver hook into `test_asio_driver.cpp`, its `.def` and

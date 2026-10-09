@@ -2,7 +2,8 @@
 // What the UI's tests share: a session over an engine (no audio device),
 // known to QML as the `Session` singleton, a window of QML on it, and mouse,
 // wheel and key input sent to that window as a user would. Header only: the
-// support library doesn't link Qt Quick; the UI tests (test_ui_*) do.
+// support library doesn't link Qt Quick (or Qt Quick Test); the UI tests
+// (test_ui_*) do.
 
 #include "Engine.h"
 #include "TestSupport.h"
@@ -22,6 +23,7 @@
 #include <QTest>
 #include <QWheelEvent>
 #include <QtDebug>
+#include <QtQuickTest/quicktest.h>
 
 #include <memory>
 
@@ -99,6 +101,11 @@ private:
 // A point of an item, in its window.
 inline QPoint at(const QQuickItem* item, const QPointF& local) { return item->mapToScene(local).toPoint(); }
 inline QPoint centerOf(const QQuickItem* item) { return at(item, QPointF(item->width() / 2, item->height() / 2)); }
+
+// Waits until the window has laid out what changed. Layouts place their items when the window polishes them, before
+// its next frame: until then an item just shown keeps the place it had, where what moved up while it was hidden lies
+// over it (and takes a click meant for it).
+inline bool laidOut(QQuickWindow* window) { return QQuickTest::qWaitForPolish(window); }
 
 // Mouse input, the left button, with modifiers held throughout (QTest's
 // mouseMove has none). Moves go to the window directly, the button held.
