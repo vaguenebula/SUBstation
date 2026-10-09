@@ -3,6 +3,7 @@
 // time, rendering the project as it was when it started.
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -137,6 +138,42 @@ TEST_CASE("a render hears the project as it was when it started") {
         CHECK_ALLCLOSE(samples, 0.5, 1e-6, 1e-12);  // (pytest.approx)
     }
     CHECK_EQ(at(engine.renderOffline(0.0, 100), 50, 0), 0.f);
+}
+
+TEST_CASE("an export as MP3: the mix, encoded at the bitrate asked for") {
+    JobEngine e;
+    auto& engine = e.engine;
+    clipTrack(engine, dcWav());
+    const auto mp3 = tempDir() / "mix.mp3";
+    const sub::ExportFormat format{sub::ExportFormat::Kind::Mp3, 24, 256};
+    const auto job = engine.startExport(mp3.string(), 0.0, 2.0, format);
+    CHECK(fileExists(mp3));  // created at once
+    CHECK(job->finish() == std::optional<int64_t>(2 * kBeat));  // (the frames rendered)
+    const std::vector<uint8_t> bytes = readBytes(mp3);
+    REQUIRE(bytes.size() > 4);
+    CHECK_EQ(bytes[0], 0xFF);  // MPEG-1 Layer III,
+    CHECK_EQ(bytes[1] & 0xFE, 0xFA);
+    CHECK_EQ((bytes[2] >> 4) & 0xF, 0xD);  // 256 kbps
+    sub::Engine reader;
+    const auto decoded = reader.loadSource(mp3.string());
+    CHECK_EQ(decoded->channels(), 2u);
+    // The second, and at most the encoder's delay and padding more (a frame or two).
+    CHECK(decoded->frames() >= 2 * kBeat);
+    CHECK(decoded->frames() <= 2 * kBeat + 3 * 1152);
+    CHECK_APPROX(at(engine.renderOffline(0.0, 100), 50, 0), 0.5);  // (live again)
+    double sum = 0.0;
+    for (int64_t i = kBeat - 500; i < kBeat + 500; ++i) sum += decoded->channelData(1)[i];
+    CHECK(std::abs(sum / 1000.0 - 0.5) < 0.05);
+
+    // Cancelled, it leaves nothing; a bitrate MP3 hasn't is refused before a file is made.
+    auto cancelled = engine.startExport((tempDir() / "long.mp3").string(), 0.0, kTwoHours, format);
+    cancelled->cancel();
+    CHECK(!cancelled->finish().has_value());
+    CHECK(!fileExists(tempDir() / "long.mp3"));
+    CHECK_THROWS_AS(engine.startExport((tempDir() / "bad.mp3").string(), 0.0, 2.0,
+                                       sub::ExportFormat{sub::ExportFormat::Kind::Mp3, 24, 500}),
+                    std::invalid_argument);
+    CHECK(!fileExists(tempDir() / "bad.mp3"));
 }
 
 TEST_CASE("a render that can't start says why") {

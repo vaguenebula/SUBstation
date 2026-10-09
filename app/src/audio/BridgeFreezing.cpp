@@ -108,9 +108,15 @@ void EngineBridge::discardFreeze(const Freeze& freeze) {
 
 std::unique_ptr<EngineRender> EngineBridge::startExport(const QString& path, double startBeat, double endBeat,
                                                         int bitDepth) {
+    return startExport(path, startBeat, endBeat, AudioExportFormat{false, bitDepth});
+}
+
+std::unique_ptr<EngineRender> EngineBridge::startExport(const QString& path, double startBeat, double endBeat,
+                                                        const AudioExportFormat& format) {
+    const sub::ExportFormat engineFormat{format.mp3 ? sub::ExportFormat::Kind::Mp3 : sub::ExportFormat::Kind::Wav,
+                                         format.bitDepth, format.bitrate};
     try {
-        return std::make_unique<EngineRender>(
-            engine_.startExport(path.toStdString(), startBeat, endBeat, bitDepth));
+        return std::make_unique<EngineRender>(engine_.startExport(path.toStdString(), startBeat, endBeat, engineFormat));
     } catch (const std::exception& error) {
         throw EditError(QString::fromStdString(error.what()));
     }

@@ -287,9 +287,18 @@ stops; press it again to return to the start. **Home** goes to the start.
 - **Undo / redo** (**Ctrl+Z** / **Ctrl+Y** or **Ctrl+Shift+Z**) cover all edits.
 - Projects are `.gilproj` files (JSON): *File › New Project*, *Open…*, *Open Recent*,
   *Save* and *Save As…* (**Ctrl+Shift+S**).
+- *File › Save as Template* makes the project as it is now the one every new project
+  starts as: *New Project*, and SUBstation's start without a project to open, open
+  exactly that (its tracks, clips, devices and plug-ins' settings, automation, routing,
+  tempo, key, loop and what its views show), untitled. Saving it again replaces it;
+  *File › Clear Template* goes back to empty new projects. The project you saved it
+  from stays as it was (its file, its unsaved changes).
 - *File › Export Audio…* (**Ctrl+Shift+R**) renders the arrangement (from the start to
-  the end of the last clip) or the loop region to a WAV file, 16-bit, 24-bit or 32-bit
-  float. It renders in the background, its progress in a dialog; the window goes on
+  the end of the last clip), the loop region, or the time selection (the whole mix over
+  its time, whichever tracks it is on) to a WAV file, 16-bit, 24-bit or 32-bit float, or
+  to an MP3 file, 128 to 320 kbps (constant bitrate, LAME's encoder; above 48 kHz it is
+  resampled, MP3 goes no higher). The file type and bitrate stay as you chose them last.
+  It renders in the background, its progress in a dialog; the window goes on
   meanwhile (but takes no edits, and nothing plays). **Cancel** (or Esc) stops it and
   deletes the unfinished file.
 - Opening a project shows it at once; its plug-ins load after it, one at a time (see

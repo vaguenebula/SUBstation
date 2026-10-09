@@ -150,8 +150,9 @@ ApplicationWindow {
         recentMenu.addItem(recentEntry.createObject(recentMenu.contentItem, {text: qsTr("&Clear List"), clearList: true}))
     }
 
-    // File › Export Audio…: the range and bit depth, then where (or why there is nothing to export).
-    function exportChosen(range, bitDepth) {
+    // File › Export Audio…: the range, the file type and its bit depth or
+    // bitrate, then where (or why there is nothing to export).
+    function exportChosen(range, bitDepth, fileType, bitrate) {
         const problem = Session.exportProblem(range)
         if (problem !== "") {
             messages.information(problem)
@@ -159,14 +160,18 @@ ApplicationWindow {
         }
         exportFileDialog.range = range
         exportFileDialog.bitDepth = bitDepth
-        exportFileDialog.currentFolder = FileUrls.folderUrl(Session.suggestedExportPath())
-        exportFileDialog.selectedFile = FileUrls.fileUrl(Session.suggestedExportPath())
+        exportFileDialog.fileType = fileType || "wav"
+        exportFileDialog.bitrate = bitrate || Session.defaultExportBitrate
+        const suggested = Session.suggestedExportPath(exportFileDialog.fileType)
+        exportFileDialog.currentFolder = FileUrls.folderUrl(suggested)
+        exportFileDialog.selectedFile = FileUrls.fileUrl(suggested)
         exportFileDialog.open()
     }
 
     function exportFileChosen(path) {
         if (path !== "")
-            Session.exportAudio(path, exportFileDialog.range, exportFileDialog.bitDepth)
+            Session.exportAudio(path, exportFileDialog.range, exportFileDialog.bitDepth, exportFileDialog.fileType,
+                                exportFileDialog.bitrate)
     }
 
     // --- Edit ----------------------------------------------------------------------------------
@@ -354,6 +359,8 @@ ApplicationWindow {
                 MenuSeparator {}
                 Action { objectName: "save"; text: qsTr("&Save"); shortcut: StandardKey.Save; onTriggered: window.save() }
                 Action { objectName: "saveAs"; text: qsTr("Save &As…"); shortcut: "Ctrl+Shift+S"; onTriggered: window.saveAs() }
+                Action { objectName: "saveAsTemplate"; text: qsTr("Save as &Template"); onTriggered: Session.saveAsTemplate() }
+                Action { objectName: "clearTemplate"; text: qsTr("C&lear Template"); enabled: Session.hasTemplate; onTriggered: Session.clearTemplate() }
                 MenuSeparator {}
                 Action { objectName: "exportAudio"; text: qsTr("&Export Audio…"); shortcut: "Ctrl+Shift+R"; onTriggered: exportDialog.open() }
                 MenuSeparator {}
@@ -763,7 +770,7 @@ ApplicationWindow {
 
     ExportDialog {
         id: exportDialog
-        onExportChosen: (range, bitDepth) => window.exportChosen(range, bitDepth)
+        onExportChosen: (range, bitDepth, fileType, bitrate) => window.exportChosen(range, bitDepth, fileType, bitrate)
     }
 
     RenderDialog {
@@ -796,10 +803,12 @@ ApplicationWindow {
         objectName: "exportFileDialog"
         property string range: "arrangement"
         property int bitDepth: 24
+        property string fileType: "wav"
+        property int bitrate: 320
         title: qsTr("Export Audio")
         fileMode: FileDialog.SaveFile
-        nameFilters: [qsTr("WAV Audio (*.wav)")]
-        defaultSuffix: "wav"
+        nameFilters: fileType === "mp3" ? [qsTr("MP3 Audio (*.mp3)")] : [qsTr("WAV Audio (*.wav)")]
+        defaultSuffix: fileType
         onAccepted: window.exportFileChosen(FileUrls.localPath(selectedFile))
     }
 

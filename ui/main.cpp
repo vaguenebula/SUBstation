@@ -48,12 +48,15 @@ int main(int argc, char* argv[]) {
         // Plug-in editors float above the main window.
         session.setOwnerWindow([window] { return static_cast<uintptr_t>(window->winId()); });
     }
-    // The audio device opens once the window shows; then the project asked for, if any.
+    // The audio device opens once the window shows; then the project asked for,
+    // if any, else a new one (the template, if one was saved).
     QMetaObject::invokeMethod(&session, [&session] { session.start(); }, Qt::QueuedConnection);
     const QStringList arguments = QCoreApplication::arguments();
     if (arguments.size() > 1) {
         const QString path = arguments.at(1);
         QMetaObject::invokeMethod(&session, [&session, path] { session.openProject(path); }, Qt::QueuedConnection);
+    } else if (session.hasTemplate()) {
+        QMetaObject::invokeMethod(&session, [&session] { session.newProject(); }, Qt::QueuedConnection);
     }
     const int result = app.exec();
     session.shutdown();

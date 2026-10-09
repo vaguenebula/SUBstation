@@ -245,12 +245,16 @@ private Q_SLOTS:
     }
 
     // Export Audio: the range (the loop's only while it is on and has a
-    // length) and the bit depth (24 at first); OK says which.
+    // length, the time selection's only while there is one), the file type
+    // (WAV at first) and the bit depth (24 at first) or, for an MP3, the
+    // bitrate (320 at first); OK says which.
     void exportDialog() {
         open(QStringLiteral("exportDialog"));
         QCOMPARE(shown(QStringLiteral("exportRange"))->property("count").toInt(), 1);
         QCOMPARE(comboText(QStringLiteral("exportRange")), QStringLiteral("Arrangement (start to end of last clip)"));
+        QCOMPARE(comboText(QStringLiteral("exportFileType")), QStringLiteral("WAV"));
         QCOMPARE(comboText(QStringLiteral("exportBitDepth")), QStringLiteral("24-bit"));
+        QVERIFY(!shown(QStringLiteral("exportBitrate")));
         test::screenshot(window_, QStringLiteral("export-dialog"));
         close(QStringLiteral("exportDialog"));
 
@@ -261,12 +265,39 @@ private Q_SLOTS:
         QCOMPARE(comboText(QStringLiteral("exportRange")), QStringLiteral("Loop region"));
         const int float32 = indexOfLabel(session().exportBitDepthChoices(), QStringLiteral("32-bit float"));
         choose(QStringLiteral("exportBitDepth"), float32);
-        QSignalSpy chosen(object(QStringLiteral("exportDialog")), SIGNAL(exportChosen(QString, int)));
+        QSignalSpy chosen(object(QStringLiteral("exportDialog")), SIGNAL(exportChosen(QString, int, QString, int)));
         QMetaObject::invokeMethod(object(QStringLiteral("exportDialog")), "accept");
         QCOMPARE(chosen.size(), 1);
         QCOMPARE(chosen[0][0].toString(), QStringLiteral("loop"));
         QCOMPARE(chosen[0][1].toInt(), 32);
+        QCOMPARE(chosen[0][2].toString(), QStringLiteral("wav"));
         QTRY_VERIFY(!visible(QStringLiteral("exportDialog")));
+
+        // A time selection: its range is there too; MP3 shows the bitrate instead of the bit depth.
+        session().selection()->setTimeRange(4.0, 12.0, {session().editor()->addAudioTrack()});  // (bars of 4 beats)
+        open(QStringLiteral("exportDialog"));
+        QCOMPARE(shown(QStringLiteral("exportRange"))->property("count").toInt(), 3);
+        choose(QStringLiteral("exportRange"), 2);
+        QCOMPARE(comboText(QStringLiteral("exportRange")), QStringLiteral("Time Selection (2.1.1 to 4.1.1)"));
+        choose(QStringLiteral("exportFileType"), 1);
+        QCOMPARE(comboText(QStringLiteral("exportFileType")), QStringLiteral("MP3"));
+        QVERIFY(!shown(QStringLiteral("exportBitDepth")));
+        QCOMPARE(comboText(QStringLiteral("exportBitrate")), QStringLiteral("320 kbps"));
+        choose(QStringLiteral("exportBitrate"), indexOfLabel(session().exportBitrateChoices(), QStringLiteral("192 kbps")));
+        test::screenshot(window_, QStringLiteral("export-dialog-mp3"));
+        QMetaObject::invokeMethod(object(QStringLiteral("exportDialog")), "accept");
+        QCOMPARE(chosen.size(), 2);
+        QCOMPARE(chosen[1][0].toString(), QStringLiteral("selection"));
+        QCOMPARE(chosen[1][2].toString(), QStringLiteral("mp3"));
+        QCOMPARE(chosen[1][3].toInt(), 192);
+        QTRY_VERIFY(!visible(QStringLiteral("exportDialog")));
+        // The file type and bitrate stay as chosen.
+        open(QStringLiteral("exportDialog"));
+        QCOMPARE(comboText(QStringLiteral("exportFileType")), QStringLiteral("MP3"));
+        QCOMPARE(comboText(QStringLiteral("exportBitrate")), QStringLiteral("192 kbps"));
+        choose(QStringLiteral("exportFileType"), 0);
+        close(QStringLiteral("exportDialog"));
+        session().selection()->clear();
     }
 
     // A render's progress (test_the_window_goes_on_while_it_renders...): modal,

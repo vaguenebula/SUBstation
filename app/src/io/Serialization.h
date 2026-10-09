@@ -128,4 +128,10 @@ Device loadPreset(const QString& path);
 void saveProject(Project& project, const QString& path);
 void loadProject(Project& project, const QString& path);
 
+// A template: the project as its file holds it (its files by absolute path),
+// written to `path` (its folder made) without becoming the project's file; and
+// a new project from one, everything in it as it was saved, untitled (no path).
+void saveTemplate(const Project& project, const QString& path);
+void loadTemplate(Project& project, const QString& path);
+
 }  // namespace sub::app

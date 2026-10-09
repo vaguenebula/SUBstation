@@ -1,18 +1,21 @@
-// The session's files: new, open, save, the recent projects, the last folder,
-// and exporting audio.
+// The session's files: new, open, save, the template, the recent projects, the
+// last folder, and exporting audio.
 
 #include "session/Session.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QSettings>
 #include <QVariant>
 
 #include "audio/EngineBridge.h"
+#include "browser/PathKeys.h"
 #include "files/FileManager.h"
 #include "io/Serialization.h"
 #include "model/Errors.h"
 #include "model/Project.h"
+#include "model/Timebase.h"
 #include "session/DeviceSelection.h"
 #include "session/Renders.h"
 #include "session/Selection.h"
@@ -48,7 +51,16 @@ void Session::resetSession() {
 }
 
 void Session::newProject() {
-    project_->clear();
+    bool fromTemplate = false;
+    if (hasTemplate()) {
+        try {
+            sub::app::loadTemplate(*project_, templatePath());
+            fromTemplate = true;
+        } catch (const ProjectFileError& error) {
+            Q_EMIT warning(error.message() + QStringLiteral("\nThe new project starts empty."));
+        }
+    }
+    if (!fromTemplate) project_->clear();
     resetSession();
 }
 
@@ -110,6 +122,38 @@ QString Session::suggestedSavePath() const {
 QString Session::projectFilter() const { return QStringLiteral("SUBstation Project (*%1)").arg(kProjectExtension); }
 
 QString Session::projectExtension() const { return kProjectExtension; }
+
+// --- The template ------------------------------------------------------------------------------
+
+QString Session::templatePath() {
+    const QString env = qEnvironmentVariable("SUBSTATION_TEMPLATE");
+    return !env.isEmpty() ? env : localDataDir() + QStringLiteral("/Template") + kProjectExtension;
+}
+
+bool Session::hasTemplate() const { return QFileInfo(templatePath()).isFile(); }
+
+bool Session::saveAsTemplate() {
+    bridge_->storePluginStates();
+    try {
+        sub::app::saveTemplate(*project_, templatePath());
+    } catch (const ProjectFileError& error) {
+        Q_EMIT warning(error.message());
+        return false;
+    }
+    Q_EMIT templateChanged();
+    Q_EMIT statusMessage(QStringLiteral("Saved as the template: new projects start as this one is now"));
+    return true;
+}
+
+void Session::clearTemplate() {
+    if (!hasTemplate()) return;
+    if (!QFile::remove(templatePath())) {
+        Q_EMIT warning(QStringLiteral("Could not remove the template (%1).").arg(QDir::toNativeSeparators(templatePath())));
+        return;
+    }
+    Q_EMIT templateChanged();
+    Q_EMIT statusMessage(QStringLiteral("Template cleared: new projects start empty"));
+}
 
 // --- Recent projects, the last folder -----------------------------------------------------------
 
@@ -183,6 +227,14 @@ QVariantList Session::exportRangeChoices() const {
         choices.append(QVariantMap{{QStringLiteral("label"), QStringLiteral("Loop region")},
                                    {QStringLiteral("value"), QStringLiteral("loop")}});
     }
+    if (selection_->hasTimeRange() && selection_->rangeEnd() > selection_->rangeStart()) {
+        const TimeSignature ts = project_->timeSignature();
+        choices.append(QVariantMap{
+            {QStringLiteral("label"), QStringLiteral("Time Selection (%1 to %2)")
+                                          .arg(formatPosition(selection_->rangeStart(), ts),
+                                               formatPosition(selection_->rangeEnd(), ts))},
+            {QStringLiteral("value"), QStringLiteral("selection")}});
+    }
     return choices;
 }
 
@@ -192,27 +244,49 @@ QVariantList Session::exportBitDepthChoices() const {
             QVariantMap{{QStringLiteral("label"), QStringLiteral("32-bit float")}, {QStringLiteral("value"), 32}}};
 }
 
+QVariantList Session::exportFileTypeChoices() const {
+    return {QVariantMap{{QStringLiteral("label"), QStringLiteral("WAV")}, {QStringLiteral("value"), QStringLiteral("wav")}},
+            QVariantMap{{QStringLiteral("label"), QStringLiteral("MP3")}, {QStringLiteral("value"), QStringLiteral("mp3")}}};
+}
+
+QVariantList Session::exportBitrateChoices() const {
+    QVariantList choices;
+    for (const int kbps : {320, 256, 192, 160, 128}) {
+        choices.append(QVariantMap{{QStringLiteral("label"), QStringLiteral("%1 kbps").arg(kbps)},
+                                   {QStringLiteral("value"), kbps}});
+    }
+    return choices;
+}
+
 namespace {
 
-std::pair<double, double> exportRange(const Project& project, const QString& range) {
+std::pair<double, double> exportRange(const Project& project, const Selection& selection, const QString& range) {
     if (range == u"loop") return {project.loopStart(), project.loopEnd()};
+    if (range == u"selection") {
+        if (!selection.hasTimeRange()) return {0.0, 0.0};
+        return {selection.rangeStart(), selection.rangeEnd()};
+    }
     return {0.0, project.endBeat()};
 }
 
 }  // namespace
 
 QString Session::exportProblem(const QString& range) const {
-    const auto [start, end] = exportRange(*project_, range);
+    if (range == u"selection" && !selection_->hasTimeRange()) {
+        return QStringLiteral("There is no time selection to export: select a time range in the arrangement first.");
+    }
+    const auto [start, end] = exportRange(*project_, *selection_, range);
     return end <= start ? QStringLiteral("There is nothing to export yet.") : QString();
 }
 
-QString Session::suggestedExportPath() const {
+QString Session::suggestedExportPath(const QString& fileType) const {
     const QString path = project_->path();
     const QString name = path.isEmpty() ? QStringLiteral("Untitled") : fileStem(path);
-    return QDir(lastFolder()).filePath(name + QStringLiteral(".wav"));
+    return QDir(lastFolder()).filePath(name + (fileType == u"mp3" ? QStringLiteral(".mp3") : QStringLiteral(".wav")));
 }
 
-bool Session::exportAudio(const QString& path, const QString& range, int bitDepth) {
+bool Session::exportAudio(const QString& path, const QString& range, int bitDepth, const QString& fileType,
+                          int bitrate) {
     const QString problem = exportProblem(range);
     if (!problem.isEmpty()) {
         Q_EMIT information(problem);
@@ -220,9 +294,10 @@ bool Session::exportAudio(const QString& path, const QString& range, int bitDept
     }
     if (path.isEmpty() || rendering()) return false;
     if (bridge_->isPlaying()) togglePlay();
-    const auto [start, end] = exportRange(*project_, range);
+    const auto [start, end] = exportRange(*project_, *selection_, range);
+    const AudioExportFormat format{fileType == u"mp3", bitDepth, bitrate};
     // In the background (session/Renders.h): the progress in a dialog, with Cancel.
-    return startRender(new ExportAudioRender(render_, bridge_, path, start, end, bitDepth, this));
+    return startRender(new ExportAudioRender(render_, bridge_, path, start, end, format, this));
 }
 
 }  // namespace sub::app

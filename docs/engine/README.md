@@ -26,7 +26,7 @@ includes the engine's headers.
 | [EngineInput.cpp](../../engine/src/EngineInput.cpp) | Track inputs (device channels or another track's output), monitoring, arming, recording, MIDI input. See [recording.md](recording.md) and [midi.md](midi.md). |
 | [EngineChains.cpp](../../engine/src/EngineChains.cpp) | Device chains, racks, sidechains, and the processor calls (parameters, state, editors, events). See [routing.md](routing.md), [devices.md](devices.md), [plugins.md](plugins.md). |
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | Building the `RenderSnapshot` from the edit model, and publishing it. See [rendering.md](rendering.md) and [routing.md](routing.md). |
-| [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | `renderOffline()` and `exportWav()`: suspending live output, a separate `Renderer`, fresh delay lines and stretch voices; renders in the background (`startExport()`, `startTrackRender()`) and `RenderJob`. |
+| [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | `renderOffline()` and `exportWav()` (`exportFile()`: WAV or MP3): suspending live output, a separate `Renderer`, fresh delay lines and stretch voices; renders in the background (`startExport()`, `startTrackRender()`) and `RenderJob`. |
 | [RenderJob.h](../../engine/src/RenderJob.h) | A render on a thread of its own: its progress, `cancel()`, `finish()`. |
 | [Snapshot.h](../../engine/src/Snapshot.h) | The snapshot's types. See [rendering.md](rendering.md). |
 | [Renderer.h](../../engine/src/Renderer.h) / [.cpp](../../engine/src/Renderer.cpp) | Turns a snapshot into audio. See [rendering.md](rendering.md). |
@@ -260,8 +260,10 @@ snapshot's `outputLatency()`: they render that much first and drop it.
 `startExport()` and `startTrackRender()` do the same on a thread of their own and return a
 `RenderJob` ([RenderJob.h](../../engine/src/RenderJob.h)) at once; `exportWav()` and
 `renderTrackToWav()` are those, waited for. Under the lock, on the calling (main) thread, they
-create the file (a `WavWriter`: miniaudio's encoder, 16-bit with triangle dither, 24-bit or
-32-bit float), suspend live output, reset the processors and prepare an `OfflineRender`: the
+create the file (an `AudioFileWriter`, [AudioFileWriter.h](../../engine/src/AudioFileWriter.h): a
+`WavWriter`, miniaudio's encoder, 16-bit with triangle dither, 24-bit or 32-bit float; or for an
+`ExportFormat` of kind `Mp3` an MP3 writer, LAME's encoder at a constant bitrate,
+[Mp3Writer.cpp](../../engine/src/Mp3Writer.cpp)), suspend live output, reset the processors and prepare an `OfflineRender`: the
 renderer, its lines, and a `shared_ptr` to the snapshot as it is, which keeps its processors,
 sources and buffers alive whatever the UI changes meanwhile. The job's thread then renders that
 snapshot without the lock (4096 frames at a time), so the UI's calls (meters, the playhead,

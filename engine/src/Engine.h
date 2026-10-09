@@ -175,6 +175,16 @@ struct ProcessorEventRecord : ProcessorEvent {
     uint32_t processorId = 0;
 };
 
+// What an export writes (Engine::startExport): a WAV file, `bitDepth` 16 or 24
+// (integer; 16 dithered) or 32 (float); or an MP3 file at a constant `bitrate`
+// in kbps, 32 to 320 (AudioFileWriter.h).
+struct ExportFormat {
+    enum class Kind { Wav, Mp3 };
+    Kind kind = Kind::Wav;
+    int bitDepth = 24;
+    int bitrate = 320;
+};
+
 struct DeviceStatus {
     bool open = false;
     std::string name;
@@ -477,6 +487,8 @@ public:
     std::vector<float> renderOffline(double startBeat, int64_t frames, bool loop = false,
                                      bool metronome = false);  // interleaved stereo
     void exportWav(const std::string& path, double startBeat, double endBeat, int bitDepth);
+    // The same in any format (WAV or MP3).
+    void exportFile(const std::string& path, double startBeat, double endBeat, const ExportFormat& format);
     // One track's signal before its fader (after its devices: what freezing it
     // keeps), lined up with the timeline: what it plays at startBeat comes first.
     // Solo is ignored (what goes into a group is heard as if nothing were
@@ -487,13 +499,15 @@ public:
     // Returns the frames written.
     int64_t renderTrackToWav(uint32_t trackId, const std::string& path, double startBeat, double endBeat,
                              double tailSeconds);
-    // exportWav() and renderTrackToWav() on a thread of their own (RenderJob.h):
+    // exportWav() (exportFile()) and renderTrackToWav() on a thread of their own (RenderJob.h):
     // they return at once with the job, its file created (or throw why not).
     // One job at a time. Until it is finished live output is silent, and what
     // would disturb it is refused (std::runtime_error): another render, opening
     // a device, the audio threads, recording. Other changes are taken, but the
     // job renders the project as it was when it started.
     std::shared_ptr<RenderJob> startExport(const std::string& path, double startBeat, double endBeat, int bitDepth);
+    std::shared_ptr<RenderJob> startExport(const std::string& path, double startBeat, double endBeat,
+                                           const ExportFormat& format);
     std::shared_ptr<RenderJob> startTrackRender(uint32_t trackId, const std::string& path, double startBeat,
                                                 double endBeat, double tailSeconds);
     bool isRendering();  // a job is running (or done, not finished yet)

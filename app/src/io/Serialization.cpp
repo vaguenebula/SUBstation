@@ -1116,6 +1116,23 @@ void loadProject(Project& project, const QString& path) {
     project.replaceContents(std::move(contents));
 }
 
+void saveTemplate(const Project& project, const QString& path) {
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    writeJson(projectToJson(project), path);  // (its files by their absolute paths only: it moves nowhere)
+}
+
+void loadTemplate(Project& project, const QString& path) {
+    const QJsonValue data = parseJson(readFile(path), path);
+    if (!data.isObject()) throw ProjectFileError(QStringLiteral("The template is not a SUBstation project"));
+    ProjectContents contents;
+    try {
+        contents = contentsFromJson(data.toObject(), QString());  // untitled: no file of its own
+    } catch (const Damaged& error) {
+        throw ProjectFileError(QStringLiteral("The template is damaged: %1").arg(error.detail()));
+    }
+    project.replaceContents(std::move(contents));
+}
+
 // --- Presets ---
 
 QJsonObject deviceToPreset(const Device& device) {

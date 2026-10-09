@@ -116,6 +116,8 @@ class Session : public QObject {
     Q_PROPERTY(QStringList recentProjects READ recentProjects NOTIFY recentProjectsChanged)
     // Where the file dialogs start: the folder last opened from or saved to (else ~/Music).
     Q_PROPERTY(QString lastFolder READ lastFolder NOTIFY lastFolderChanged)
+    // A template was saved: New Project (and the application's start) opens it.
+    Q_PROPERTY(bool hasTemplate READ hasTemplate NOTIFY templateChanged)
     // The file dialogs' filter: "SUBstation Project (*.gilproj)".
     Q_PROPERTY(QString projectFilter READ projectFilter CONSTANT)
     Q_PROPERTY(QString projectExtension READ projectExtension CONSTANT)
@@ -140,6 +142,11 @@ class Session : public QObject {
     // Export Audio's choices: [{label, value: 16, 24 or 32}] and the default (24).
     Q_PROPERTY(QVariantList exportBitDepthChoices READ exportBitDepthChoices CONSTANT)
     Q_PROPERTY(int defaultExportBitDepth READ defaultExportBitDepth CONSTANT)
+    // Export Audio's file types ([{label: "WAV", value: "wav"}, {label: "MP3", value: "mp3"}]),
+    // and an MP3's bitrates ([{label: "320 kbps", value: 320}, ...]; 320 at first).
+    Q_PROPERTY(QVariantList exportFileTypeChoices READ exportFileTypeChoices CONSTANT)
+    Q_PROPERTY(QVariantList exportBitrateChoices READ exportBitrateChoices CONSTANT)
+    Q_PROPERTY(int defaultExportBitrate READ defaultExportBitrate CONSTANT)
 
     // How long the status line shows a message (ms), as the main window did.
     Q_PROPERTY(int statusTimeout READ statusTimeout CONSTANT)
@@ -191,6 +198,7 @@ public:
     QString confirmDiscardText() const { return QStringLiteral("Save changes to the current project?"); }
     QStringList recentProjects() const;
     QString lastFolder() const;
+    bool hasTemplate() const;
     QString projectFilter() const;
     QString projectExtension() const;
     int countInBars() const;
@@ -205,6 +213,9 @@ public:
     QString pluginsLoadingText() const;
     QVariantList exportBitDepthChoices() const;
     int defaultExportBitDepth() const { return 24; }
+    QVariantList exportFileTypeChoices() const;
+    QVariantList exportBitrateChoices() const;
+    int defaultExportBitrate() const { return 320; }
     int statusTimeout() const { return kStatusTimeoutMs; }
     QString aboutTitle() const;
     QString aboutText() const;
@@ -332,7 +343,9 @@ public:
     Q_INVOKABLE QStringList flattenTracks(const QStringList& trackIds);
 
     // --- Files ---------------------------------------------------------------------------
-    // New Project (the UI asked about unsaved changes first).
+    // New Project (the UI asked about unsaved changes first): the template, if
+    // one was saved (untitled, everything in it as it was saved), else an
+    // empty project. A template that can't be read: warning, and an empty one.
     Q_INVOKABLE void newProject();
     // Opens a project file (the UI asked about unsaved changes first; a file
     // that can't be read: warning). Whether it opened (projectOpened). Files
@@ -354,18 +367,34 @@ public:
     Q_INVOKABLE QVariantList recentMenuItems() const;
     Q_INVOKABLE void clearRecentProjects();
 
+    // --- Templates -----------------------------------------------------------------------
+    // Save as Template: the project as it is now (its tracks, clips, devices and
+    // plug-ins' states, automation, routing, tempo and settings, what its views
+    // show) is what every new project starts as from now on. The project stays
+    // as it was (its file, its unsaved changes). Whether it was saved.
+    Q_INVOKABLE bool saveAsTemplate();
+    // Clear Template: new projects start empty again.
+    Q_INVOKABLE void clearTemplate();
+    // Where the template is kept: Template.gilproj in the application's local
+    // data folder, or SUBSTATION_TEMPLATE if set (the tests).
+    static QString templatePath();
+
     // --- Export Audio -------------------------------------------------------------------
-    // The ranges it can render: [{label, value: "arrangement" | "loop"}] (the
-    // loop region only while the loop is on and has a length).
+    // The ranges it can render: [{label, value: "arrangement" | "loop" |
+    // "selection"}] (the loop region only while the loop is on and has a
+    // length; the time selection, "Time Selection (5.1.1 to 9.1.1)", only while
+    // there is one: the whole mix over its time, whichever tracks it is on).
     Q_INVOKABLE QVariantList exportRangeChoices() const;
     // Why a range can't be exported ("There is nothing to export yet."), or "".
     Q_INVOKABLE QString exportProblem(const QString& range) const;
-    // Where its file dialog starts: "<last folder>/<project name>.wav".
-    Q_INVOKABLE QString suggestedExportPath() const;
-    // Renders the range into `path` (WAV, `bitDepth`) in the background (its
-    // progress in `render`), playback stopped first. False if it didn't start
+    // Where its file dialog starts: "<last folder>/<project name>.wav" (".mp3" for "mp3").
+    Q_INVOKABLE QString suggestedExportPath(const QString& fileType = QStringLiteral("wav")) const;
+    // Renders the range into `path` in the background (its progress in
+    // `render`), playback stopped first: a WAV file of `bitDepth`, or for
+    // `fileType` "mp3" an MP3 file at `bitrate` kbps. False if it didn't start
     // (nothing to export: information; or a render runs).
-    Q_INVOKABLE bool exportAudio(const QString& path, const QString& range, int bitDepth);
+    Q_INVOKABLE bool exportAudio(const QString& path, const QString& range, int bitDepth,
+                                 const QString& fileType = QStringLiteral("wav"), int bitrate = 320);
 
     // --- For the tests -------------------------------------------------------------------
     // How a track's render becomes its frozen audio (default EngineBridge::finishFreeze).
@@ -386,6 +415,7 @@ Q_SIGNALS:
     void cleanChanged();
     void recentProjectsChanged();
     void lastFolderChanged();
+    void templateChanged();
     void countInBarsChanged();
     void recordQuantizeChanged();
     void automationOverriddenChanged();

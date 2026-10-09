@@ -17,6 +17,14 @@
 
 namespace sub::app {
 
+// What Export Audio writes (EngineBridge::startExport): a WAV file of
+// `bitDepth` (16, 24 or 32 float), or an MP3 file at `bitrate` kbps (32 to 320).
+struct AudioExportFormat {
+    bool mp3 = false;
+    int bitDepth = 24;
+    int bitrate = 320;
+};
+
 // An audio file's length and format, from its header (EngineBridge::fileInfo).
 struct AudioFileInfo {
     Q_GADGET

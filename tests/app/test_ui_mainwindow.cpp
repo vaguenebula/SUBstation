@@ -105,15 +105,19 @@ class TestUiMainWindow : public QObject {
         QVERIFY(QMetaObject::invokeMethod(find(dialog), "answer", Q_ARG(QVariant, value)));
         QTRY_VERIFY(!shown(dialog));
     }
-    QVariant call(const char* function, const QVariant& a = QVariant(), const QVariant& b = QVariant()) {
+    QVariant call(const char* function, const QVariant& a = QVariant(), const QVariant& b = QVariant(),
+                  const QVariant& c = QVariant(), const QVariant& d = QVariant()) {
         QVariant result;
         if (!b.isValid() && !a.isValid())
             QMetaObject::invokeMethod(window_, function, Q_RETURN_ARG(QVariant, result));
         else if (!b.isValid())
             QMetaObject::invokeMethod(window_, function, Q_RETURN_ARG(QVariant, result), Q_ARG(QVariant, a));
-        else
+        else if (!c.isValid())
             QMetaObject::invokeMethod(window_, function, Q_RETURN_ARG(QVariant, result), Q_ARG(QVariant, a),
                                       Q_ARG(QVariant, b));
+        else
+            QMetaObject::invokeMethod(window_, function, Q_RETURN_ARG(QVariant, result), Q_ARG(QVariant, a),
+                                      Q_ARG(QVariant, b), Q_ARG(QVariant, c), Q_ARG(QVariant, d));
         return result;
     }
 
@@ -736,24 +740,42 @@ private Q_SLOTS:
         QCOMPARE(window_->title(), QStringLiteral("ctrl s - SUBstation"));
     }
 
-    // Export Audio: nothing to export says so; else it asks where and renders it.
+    // Export Audio: nothing to export says so; else it asks where (a WAV or an
+    // MP3 file) and renders it.
     void exportAudio() {
-        call("exportChosen", QStringLiteral("arrangement"), 24);
+        call("exportChosen", QStringLiteral("arrangement"), 24, QStringLiteral("wav"), 320);
         QTRY_VERIFY(shown(QStringLiteral("messageBox")));
         QCOMPARE(prop(QStringLiteral("messageBox"), "text").toString(), QStringLiteral("There is nothing to export yet."));
         answer(QStringLiteral("messageBox"), QStringLiteral("ok"));
 
         const QString path = wav(QStringLiteral("export.wav"), 0.5);
         audioTrack(path, 0.5);
-        call("exportChosen", QStringLiteral("arrangement"), 16);
+        call("exportChosen", QStringLiteral("arrangement"), 16, QStringLiteral("wav"), 320);
         QTRY_VERIFY(shown(QStringLiteral("exportFileDialog")));
         QCOMPARE(prop(QStringLiteral("exportFileDialog"), "bitDepth").toInt(), 16);
+        QCOMPARE(prop(QStringLiteral("exportFileDialog"), "defaultSuffix").toString(), QStringLiteral("wav"));
         QMetaObject::invokeMethod(find(QStringLiteral("exportFileDialog")), "close");
         const QString mix = dir_->path(QStringLiteral("mix.wav"));
         call("exportFileChosen", mix);
         QTRY_VERIFY_WITH_TIMEOUT(!session().render()->active(), 30000);
         QVERIFY(QFileInfo::exists(mix));
         QCOMPARE(status(), QStringLiteral("Exported mix.wav"));
+
+        // An MP3, of the time selection.
+        session().selection()->setTimeRange(0.0, 0.5, {project().tracks().front().id});
+        call("exportChosen", QStringLiteral("selection"), 24, QStringLiteral("mp3"), 192);
+        QTRY_VERIFY(shown(QStringLiteral("exportFileDialog")));
+        QCOMPARE(prop(QStringLiteral("exportFileDialog"), "fileType").toString(), QStringLiteral("mp3"));
+        QCOMPARE(prop(QStringLiteral("exportFileDialog"), "bitrate").toInt(), 192);
+        QCOMPARE(prop(QStringLiteral("exportFileDialog"), "defaultSuffix").toString(), QStringLiteral("mp3"));
+        QCOMPARE(prop(QStringLiteral("exportFileDialog"), "nameFilters").toStringList(),
+                 QStringList{QStringLiteral("MP3 Audio (*.mp3)")});
+        QMetaObject::invokeMethod(find(QStringLiteral("exportFileDialog")), "close");
+        const QString mp3 = dir_->path(QStringLiteral("mix.mp3"));
+        call("exportFileChosen", mp3);
+        QTRY_VERIFY_WITH_TIMEOUT(!session().render()->active(), 30000);
+        QVERIFY(QFileInfo(mp3).size() > 0);
+        QCOMPARE(status(), QStringLiteral("Exported mix.mp3"));
     }
 
     // Closing while a render runs cancels it (the window stays); with unsaved

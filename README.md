@@ -35,7 +35,8 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
 - **Browser** with instant search over hundreds of thousands of samples, preview,
   and ranking by use; *Find Similar Sounds* by timbre, envelope and pitch, from
   Essentia's audio descriptors, the library analysed in the background.
-- **Multi-threaded rendering**, bit-identical on any number of threads; WAV export.
+- **Multi-threaded rendering**, bit-identical on any number of threads; WAV and MP3 export of the
+  arrangement, the loop or a time selection.
 
 See the [user guide](docs/guide/README.md) for how each of these behaves, and
 [what isn't implemented yet](docs/guide/limitations.md).
@@ -108,7 +109,8 @@ QML views (on Linux under `xvfb-run`). See [docs/testing.md](docs/testing.md).
 
 ```
 engine/src/          the real-time audio engine and plug-in hosting (sub_engine; no Qt)
-engine/third_party/  miniaudio (public domain / MIT-0), Signalsmith Stretch and Linear, the VST 3 SDK subset (MIT)
+engine/third_party/  miniaudio (public domain / MIT-0), Signalsmith Stretch and Linear, the VST 3 SDK subset (MIT),
+                     LAME's MP3 encoder (LGPL)
 intelligence/third_party/  Essentia 2.1-beta5's core and the algorithms used (AGPLv3), HUMANBRO's runtime
 browser/src/         the browser's file index and search (sub_browser; no Qt)
 app/src/             the application layer (sub_app; Qt Core and Gui): model/, editor/, io/, audio/,
