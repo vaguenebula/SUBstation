@@ -357,6 +357,7 @@ void writeTriplets(const std::vector<Sound>& sounds, const std::vector<uint32_t>
 struct Answer {
     AspectDistances further{};
     bool pickedB = false;
+    bool labelled = false;  // A is a one-shot of a known kind (a drum, by its name)
     std::string anchor, b, c;
     long ms = -1;  // how long the question took, if the rater says
 };
@@ -716,6 +717,7 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
         answer.pickedB = choice == "b";
         // Where the files are now (the answers may name where they were).
         auto now = [&](uint32_t r) { return utf8(fs::absolute(pathOf(sounds[rows[r]].path)).lexically_normal()); };
+        answer.labelled = !sounds[rows[*a]].label.empty() && !sounds[rows[*a]].loop;
         answer.anchor = now(*a);
         answer.b = now(*b);
         answer.c = now(*c);
@@ -763,6 +765,16 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
         heldOutFitted +=
             agreement(answers, test, weightsOf(fitAnswers(answers, train, choosePull(answers, train)))) * test.size();
         heldOutDefaults += agreement(answers, test, AspectWeights{}) * test.size();
+    }
+    // Where the defaults do well and where not: drums (A a one-shot of a known
+    // kind) and the rest (instruments, vocals, FX, loops).
+    {
+        std::vector<size_t> drums, rest;
+        for (size_t i = 0; i < answers.size(); ++i) (answers[i].labelled ? drums : rest).push_back(i);
+        std::printf("  the default weights agree with %.1f%% of %zu answers about drums (A a kick, snare, hat...), "
+                    "%.1f%% of %zu about the rest\n",
+                    100.0 * agreement(answers, drums, AspectWeights{}), drums.size(),
+                    100.0 * agreement(answers, rest, AspectWeights{}), rest.size());
     }
     std::printf("  pulled towards the default weights by %g (0: not at all; 10000: all but the defaults)\n", pull);
     std::printf("  answers agreed with, on answers held out of the fit: default weights %.1f%%, fitted %.1f%% "
