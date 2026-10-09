@@ -876,8 +876,7 @@ void repairRouting(std::vector<Track>& tracks, std::vector<Track>& returns, Trac
         for (auto* list : {&tracks, &returns}) {
             for (Track& t : *list) {
                 Output output = outputs[i++];
-                if (output.to == Output::To::Master && !t.parent) output = {};  // (the same)
-                if (output.to == Output::To::Track && t.parent == output.id) output = {};
+                if (isDefaultOutput(output, t.parent)) output = {};  // (the same)
                 const bool there = output.to == Output::To::Track       ? audioTracks.contains(output.id) && output.id != t.id
                                    : output.to == Output::To::Sidechain ? deviceIds.contains(output.id)
                                                                         : true;

@@ -17,6 +17,14 @@ namespace {
     throw std::out_of_range(std::string("no ") + what + " " + id.toStdString());
 }
 
+// Where the track of this id is in a list (-1: not there).
+int indexIn(const std::vector<Track>& tracks, const QString& trackId) {
+    for (int index = 0; index < static_cast<int>(tracks.size()); ++index) {
+        if (tracks[index].id == trackId) return index;
+    }
+    return -1;
+}
+
 double asDouble(const ChainValue& value) {
     if (const auto* d = std::get_if<double>(&value)) return *d;
     if (const auto* b = std::get_if<bool>(&value)) return *b ? 1.0 : 0.0;
@@ -105,15 +113,12 @@ const Track& Project::track(const QString& trackId) const {
 Track& Project::trackRef(const QString& trackId) { return const_cast<Track&>(track(trackId)); }
 
 int Project::trackIndex(const QString& trackId) const {
-    for (int index = 0; index < static_cast<int>(tracks_.size()); ++index) {
-        if (tracks_[index].id == trackId) return index;
-    }
-    missing("track", trackId);
+    const int index = indexIn(tracks_, trackId);
+    if (index < 0) missing("track", trackId);
+    return index;
 }
 
-bool Project::hasTrack(const QString& trackId) const {
-    return std::any_of(tracks_.begin(), tracks_.end(), [&](const Track& t) { return t.id == trackId; });
-}
+bool Project::hasTrack(const QString& trackId) const { return indexIn(tracks_, trackId) >= 0; }
 
 const Clip* Project::findClip(const QString& trackId, const QString& clipId) const {
     const Track* owner = findTrack(trackId);
@@ -169,15 +174,12 @@ QStringList Project::owners() const {
 
 // --- Returns and sends ---
 
-bool Project::hasReturn(const QString& trackId) const {
-    return std::any_of(returns_.begin(), returns_.end(), [&](const Track& t) { return t.id == trackId; });
-}
+bool Project::hasReturn(const QString& trackId) const { return indexIn(returns_, trackId) >= 0; }
 
 int Project::returnIndex(const QString& trackId) const {
-    for (int index = 0; index < static_cast<int>(returns_.size()); ++index) {
-        if (returns_[index].id == trackId) return index;
-    }
-    missing("return track", trackId);
+    const int index = indexIn(returns_, trackId);
+    if (index < 0) missing("return track", trackId);
+    return index;
 }
 
 QString Project::returnLetter(const QString& trackId) const { return sub::app::returnLetter(returnIndex(trackId)); }

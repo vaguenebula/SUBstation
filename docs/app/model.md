@@ -45,7 +45,7 @@ session's ([session.md](session.md)).
 | [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `PlayedNote`; `kWarpModes`, `legacyWarpMode`, `kMinSegmentBpm`, `kMaxSegmentBpm` |
 | [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `findChain`, `chainIndex`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kDefaultMacroCount`, `kMaxMacroCount`, `macroParam`, `macroIndex`, `macroCount`, `macroName`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
 | [Devices.h](../../app/src/model/Devices.h) | Kinds of devices: `builtinDevices()`, `builtinDevice()`, `builtinCategories()` (from the engine), `kDefaultInstrument`; `isInstrument`, `deviceIsInstrument`, `loadsInto`, `deviceName`, `kindName`; `newDevice`, `newRack`, `newChain`; `builtinParamInfo`, `deviceIdsOf`, `deviceIdsOfList`, `innerDeviceIds` (what is in a rack) |
-| [Routing.h](../../app/src/model/Routing.h) | The group tree (`TreeEntry`, `TrackTree`, `treeProblem`, `repairTree`) and the routing graph (`routingGraph`, `feeds`, `wouldCycle`, `inputWouldCycle`, `sidechainWouldCycle`) |
+| [Routing.h](../../app/src/model/Routing.h) | The group tree (`TreeEntry`, `TrackTree`, `treeProblem`, `repairTree`) and the routing graph (`routingGraph`, `feeds`, `wouldCycle`, `inputWouldCycle`, `sidechainWouldCycle`); `isDefaultOutput` (an output that goes where the default does: its own group, or the master from outside a group) |
 | [Automation.h](../../app/src/model/Automation.h) | `AutomationPoint`, `Envelope`, `AutomationView`, `kMaster`; in `sub::app::automation`: target keys, the mixer's normalized mappings, evaluation (`valueAt`, `leftValue`, `shape`), every envelope edit |
 | [ParamSpec.h](../../app/src/model/ParamSpec.h) | `ParamSpec`: any automatable parameter described alike, with the engine's normalized mapping; `mixerSpecs`, `sendSpec`, `chainSpecs`, `formatValue` |
 | [Edits.h](../../app/src/model/Edits.h) | `sub::app::edits`: pure clip maths for audio and MIDI clips alike: overlaps, cuts, trims, splits, ranges, tempo fitting, consolidating, reversing, stretching, slipping, fades; `sortByStart`, how clip lists are kept |
@@ -280,7 +280,7 @@ reachability. The cycle checks:
 
 The editor keeps outputs valid ([EditorTracks.cpp](../../app/src/editor/EditorTracks.cpp)): `setTrackOutput`
 refuses one into a track that isn't an audio track, a device that isn't there, or a cycle, and stores *Main* outside
-a group, or its own group, as the default; a track going into another group goes into it, as in Ableton (`arrange`:
+a group, or its own group, as the default (`isDefaultOutput`; loading does the same); a track going into another group goes into it, as in Ableton (`arrange`:
 the explicit outputs come back one by one, those that would close a cycle going into their groups); deleting the
 track or device an output goes into (`dropOutputs`, `setDevices`), flattening a track, or moving a device where an
 output into it would close a cycle sends those outputs into their groups, in the same undo step; copies of tracks

@@ -319,8 +319,7 @@ void ProjectEditor::arrange(const TrackTree& tree, const QString& text, const QS
         Output output = original.output;
         if (output.isDefault()) return;
         const bool intoAnother = copy.parent && copy.parent != original.parent;
-        if (intoAnother || (output.to == Output::To::Master && !copy.parent) ||
-            (output.to == Output::To::Track && copy.parent == output.id)) {
+        if (intoAnother || isDefaultOutput(output, copy.parent)) {
             regrouped.append(copy.id);
             return;
         }
@@ -619,10 +618,7 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
             }
         }
         const bool intoAnother = copied.roots.contains(original.id) && track.parent && track.parent != original.parent;
-        if (intoAnother || (output.to == Output::To::Master && !track.parent) ||
-            (output.to == Output::To::Track && track.parent == output.id)) {
-            output = {};
-        }
+        if (intoAnother || isDefaultOutput(output, track.parent)) output = {};
     }
     p.addFoldedDevices(folded);
     QStringList made;
@@ -840,9 +836,7 @@ void ProjectEditor::setTrackOutput(const QString& trackId, const Output& wanted)
     if (track.isMaster()) throw EditError(QStringLiteral("The master plays on the audio device's outputs"));
     Output output = wanted;
     // Into its own group, or into the master from outside one: into its group.
-    if ((output.to == Output::To::Master && !track.parent) || (output.to == Output::To::Track && track.parent == output.id)) {
-        output = {};
-    }
+    if (isDefaultOutput(output, track.parent)) output = {};
     if (output.to == Output::To::Track) {
         const Track* target = p.hasTrack(output.id) ? &p.track(output.id) : nullptr;
         if (target == nullptr || !target->isAudio() || output.id == trackId) {

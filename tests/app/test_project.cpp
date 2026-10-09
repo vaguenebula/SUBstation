@@ -8,6 +8,7 @@
 #include "model/Errors.h"
 #include "model/Ids.h"
 #include "model/Project.h"
+#include "model/Routing.h"
 
 #include <QSignalSpy>
 #include <QTest>
@@ -179,6 +180,17 @@ private Q_SLOTS:
         QVERIFY(project.sidechainWouldCycle("a", kMaster) && !project.sidechainWouldCycle(kMaster, "c"));
         QVERIFY(project.sidechainWouldCycle("b", "c") && !project.sidechainWouldCycle("c", "a"));
         QCOMPARE(idsOf(project.sidechainSources("c")), (QStringList{"g", "a", "b", "r1", "r2"}));
+    }
+
+    void outputsThatGoWhereTheDefaultDoes() {
+        const std::optional<QString> none;
+        const std::optional<QString> group = QStringLiteral("g");
+        QVERIFY(isDefaultOutput(Output::group(), none) && isDefaultOutput(Output::group(), group));
+        QVERIFY(isDefaultOutput(Output::master(), none));  // (outside a group, its group is the master)
+        QVERIFY(!isDefaultOutput(Output::master(), group));
+        QVERIFY(isDefaultOutput(Output::track("g"), group));
+        QVERIFY(!isDefaultOutput(Output::track("a"), group) && !isDefaultOutput(Output::track("g"), none));
+        QVERIFY(!isDefaultOutput(Output::none(), none) && !isDefaultOutput(Output::sidechain("g"), group));
     }
 
     void freezing() {

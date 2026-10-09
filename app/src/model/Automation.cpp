@@ -71,6 +71,22 @@ AutomationPoint withCurve(AutomationPoint p, double curve) {
     return p;
 }
 
+// The envelope with what is between two beats taken out: straight across from
+// where it arrives at `start` to where it leaves `end`.
+Envelope joinedAcross(const Envelope& points, double start, double end) {
+    const Envelope edged = edges(points, start, end);
+    Envelope joined;
+    for (const AutomationPoint& p : edged) {
+        if (p.beat < start) joined.push_back(p);
+    }
+    joined.push_back(withCurve(firstAt(edged, start), 0.0));
+    joined.push_back(lastAt(edged, end));
+    for (const AutomationPoint& p : edged) {
+        if (p.beat > end) joined.push_back(p);
+    }
+    return simplify(joined);
+}
+
 // Whether the envelope stays the same without point i.
 bool redundant(const Envelope& points, size_t i) {
     const AutomationPoint& p = points[i];
@@ -355,17 +371,7 @@ Envelope removeRange(const Envelope& points, double start, double end) {
     const bool all = std::all_of(points.begin(), points.end(),
                                  [&](const AutomationPoint& p) { return start <= p.beat && p.beat <= end; });
     if (all) return {};
-    const Envelope edged = edges(points, start, end);
-    Envelope joined;
-    for (const AutomationPoint& p : edged) {
-        if (p.beat < start) joined.push_back(p);
-    }
-    joined.push_back(withCurve(firstAt(edged, start), 0.0));
-    joined.push_back(lastAt(edged, end));
-    for (const AutomationPoint& p : edged) {
-        if (p.beat > end) joined.push_back(p);
-    }
-    return simplify(joined);
+    return joinedAcross(points, start, end);
 }
 
 Envelope copyRange(const Envelope& points, double start, double end) {
@@ -420,21 +426,8 @@ Envelope moveRange(const Envelope& points, double start, double end, double delt
     deltaBeats = std::max(deltaBeats, -start);
     Envelope content = copyRange(points, start, end);
     for (AutomationPoint& p : content) p.value = clampValue(p.value + deltaValue);
-    Envelope base = points;
-    if (deltaBeats != 0.0) {
-        // Where it was, straight across (keeping the envelope outside, even if all of it moves).
-        const Envelope edged = edges(points, start, end);
-        Envelope joined;
-        for (const AutomationPoint& p : edged) {
-            if (p.beat < start) joined.push_back(p);
-        }
-        joined.push_back(withCurve(firstAt(edged, start), 0.0));
-        joined.push_back(lastAt(edged, end));
-        for (const AutomationPoint& p : edged) {
-            if (p.beat > end) joined.push_back(p);
-        }
-        base = simplify(joined);
-    }
+    // Where it was, straight across (keeping the envelope outside, even if all of it moves).
+    const Envelope base = deltaBeats != 0.0 ? joinedAcross(points, start, end) : points;
     const Envelope moved = pasteRange(base, content, start + deltaBeats, end - start);
     return dropRedundant(moved, {start, end, start + deltaBeats, end + deltaBeats});
 }

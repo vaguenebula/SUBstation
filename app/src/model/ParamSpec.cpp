@@ -105,28 +105,44 @@ bool ParamSpec::operator==(const ParamSpec& other) const {
            scale == other.scale && steps == other.steps && labels == other.labels;
 }
 
+namespace {
+
+// A fader's level in dB (a mixer's, a send's, a chain's): silence (kMinVolumeDb) to kMaxVolumeDb.
+ParamSpec volumeSpec(const QString& key, const QString& name, const QString& group, double defaultDb) {
+    ParamSpec spec;
+    spec.key = key;
+    spec.name = name;
+    spec.group = group;
+    spec.minimum = automation::kMinVolumeDb;
+    spec.maximum = automation::kMaxVolumeDb;
+    spec.defaultValue = defaultDb;
+    spec.unit = QStringLiteral("dB");
+    spec.scale = ParamSpec::Scale::Fader;
+    spec.text = formatDb;
+    return spec;
+}
+
+// A pan, -1 (left) to 1 (right).
+ParamSpec panSpec(const QString& key, const QString& name, const QString& group) {
+    ParamSpec spec;
+    spec.key = key;
+    spec.name = name;
+    spec.group = group;
+    spec.minimum = -1.0;
+    spec.maximum = 1.0;
+    spec.defaultValue = 0.0;
+    spec.text = formatPan;
+    return spec;
+}
+
+}  // namespace
+
 std::vector<ParamSpec> mixerSpecs(bool master, const std::vector<std::pair<QString, QString>>& sends) {
     const QString who = master ? QStringLiteral("Master") : QStringLiteral("Track");
-    ParamSpec volume;
-    volume.key = automation::kMixerVolume;
-    volume.name = who + QStringLiteral(" Volume");
-    volume.group = QStringLiteral("Mixer");
-    volume.minimum = automation::kMinVolumeDb;
-    volume.maximum = automation::kMaxVolumeDb;
-    volume.defaultValue = 0.0;
-    volume.unit = QStringLiteral("dB");
-    volume.scale = ParamSpec::Scale::Fader;
-    volume.text = formatDb;
-    ParamSpec pan;
-    pan.key = automation::kMixerPan;
-    pan.name = who + QStringLiteral(" Pan");
-    pan.group = QStringLiteral("Mixer");
-    pan.minimum = -1.0;
-    pan.maximum = 1.0;
-    pan.defaultValue = 0.0;
-    pan.text = formatPan;
-    std::vector<ParamSpec> specs{volume, pan};
-    if (!master) specs.push_back(switchSpec(automation::kMixerOn, QStringLiteral("Track Activator"), volume.group));
+    const QString group = QStringLiteral("Mixer");
+    std::vector<ParamSpec> specs{volumeSpec(automation::kMixerVolume, who + QStringLiteral(" Volume"), group, 0.0),
+                                 panSpec(automation::kMixerPan, who + QStringLiteral(" Pan"), group)};
+    if (!master) specs.push_back(switchSpec(automation::kMixerOn, QStringLiteral("Track Activator"), group));
     for (const auto& [returnId, letter] : sends) specs.push_back(sendSpec(returnId, letter));
     return specs;
 }
@@ -149,17 +165,8 @@ ParamSpec deviceOnSpec(const QString& deviceId, const QString& group) {
 }
 
 ParamSpec sendSpec(const QString& returnId, const QString& letter) {
-    ParamSpec spec;
-    spec.key = automation::sendKey(returnId);
-    spec.name = QStringLiteral("Send ") + letter;
-    spec.group = QStringLiteral("Mixer");
-    spec.minimum = automation::kMinVolumeDb;
-    spec.maximum = automation::kMaxVolumeDb;
-    spec.defaultValue = automation::kMinVolumeDb;
-    spec.unit = QStringLiteral("dB");
-    spec.scale = ParamSpec::Scale::Fader;
-    spec.text = formatDb;
-    return spec;
+    return volumeSpec(automation::sendKey(returnId), QStringLiteral("Send ") + letter, QStringLiteral("Mixer"),
+                      automation::kMinVolumeDb);
 }
 
 std::vector<ParamSpec> macroSpecs(const QString& rackId, const QStringList& names, const QString& group) {
@@ -179,26 +186,10 @@ std::vector<ParamSpec> chainSpecs(const QString& rackId, const std::vector<std::
                                   const QString& group) {
     std::vector<ParamSpec> specs;
     for (const auto& [chainId, name] : chains) {
-        ParamSpec volume;
-        volume.key = automation::chainKey(rackId, chainId, automation::kChainVolume);
-        volume.name = name + QStringLiteral(" Volume");
-        volume.group = group;
-        volume.minimum = automation::kMinVolumeDb;
-        volume.maximum = automation::kMaxVolumeDb;
-        volume.defaultValue = 0.0;
-        volume.unit = QStringLiteral("dB");
-        volume.scale = ParamSpec::Scale::Fader;
-        volume.text = formatDb;
-        specs.push_back(volume);
-        ParamSpec pan;
-        pan.key = automation::chainKey(rackId, chainId, automation::kChainPan);
-        pan.name = name + QStringLiteral(" Pan");
-        pan.group = group;
-        pan.minimum = -1.0;
-        pan.maximum = 1.0;
-        pan.defaultValue = 0.0;
-        pan.text = formatPan;
-        specs.push_back(pan);
+        specs.push_back(volumeSpec(automation::chainKey(rackId, chainId, automation::kChainVolume),
+                                   name + QStringLiteral(" Volume"), group, 0.0));
+        specs.push_back(panSpec(automation::chainKey(rackId, chainId, automation::kChainPan), name + QStringLiteral(" Pan"),
+                                group));
     }
     return specs;
 }
