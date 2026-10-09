@@ -82,7 +82,7 @@ See [building.md](building.md).
 | [BrowserMime.h](../app/src/browser/BrowserMime.h) | The drag formats and their readers (`pluginRefs`, `deviceKinds`, `presetPaths`, `movedDevices`). |
 | [Library.h](../app/src/browser/Library.h) | `Library`: use counts kept in `library.json`, and `rank()`. |
 | [PresetIndex.h](../app/src/browser/PresetIndex.h) | `PresetIndex`: the presets in the user's library as items, listed again when they change. |
-| [PathKeys.h](../app/src/browser/PathKeys.h) | Paths as the browser compares them: `normalPath`, `toBackendPath`/`fromBackendPath`, `pathKey`, `caseKey`, `audioKey`, `localDataDir()`. Its keys match what the Python version wrote (the system's separators and Windows' own lower case); the rest of the application tells whether two paths are one file with `pathIdentity`/`samePath` ([model/Paths.h](../app/src/model/Paths.h)). |
+| [PathKeys.h](../app/src/browser/PathKeys.h) | Paths as the browser compares them: `normalPath`, `toBackendPath`/`fromBackendPath`, `pathKey`, `caseKey`, `audioKey`, `localDataDir()`, `localDataFile()` (a file there, or where an environment variable says: the tests' way to keep the user's files out of their runs). Its keys match what the Python version wrote (the system's separators and Windows' own lower case); the rest of the application tells whether two paths are one file with `pathIdentity`/`samePath` ([model/Paths.h](../app/src/model/Paths.h)). |
 
 The plug-ins the browser lists come from the plug-in index ([app/src/plugins](../app/src/plugins),
 [app/plugin-scanner.md](app/plugin-scanner.md)).

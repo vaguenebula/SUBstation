@@ -181,8 +181,7 @@ QString Session::projectExtension() const { return kProjectExtension; }
 // --- The template ------------------------------------------------------------------------------
 
 QString Session::templatePath() {
-    const QString env = qEnvironmentVariable("SUBSTATION_TEMPLATE");
-    return !env.isEmpty() ? env : localDataDir() + QStringLiteral("/Template") + kProjectExtension;
+    return localDataFile("SUBSTATION_TEMPLATE", QStringLiteral("Template") + kProjectExtension);
 }
 
 bool Session::hasTemplate() const { return QFileInfo(templatePath()).isFile(); }

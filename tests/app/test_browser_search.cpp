@@ -293,6 +293,10 @@ private Q_SLOTS:
         QCOMPARE(FileIndex::defaultIndexPath(), path());
         qunsetenv("SUBSTATION_BROWSER_INDEX");
         QVERIFY(FileIndex::defaultIndexPath().endsWith(QStringLiteral("/SUBstation/browser-index.bin")));
+        QCOMPARE(FileIndex::defaultIndexPath(), localDataDir() + QStringLiteral("/browser-index.bin"));
+        qputenv("SUBSTATION_BROWSER_INDEX", QByteArray());  // (set, but empty: as if it weren't)
+        QCOMPARE(FileIndex::defaultIndexPath(), localDataDir() + QStringLiteral("/browser-index.bin"));
+        qunsetenv("SUBSTATION_BROWSER_INDEX");
     }
 
 private:

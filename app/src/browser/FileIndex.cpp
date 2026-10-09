@@ -108,9 +108,7 @@ bool FileIndex::isAudioFile(const QString& path) {
 }
 
 QString FileIndex::defaultIndexPath() {
-    const QString overridden = qEnvironmentVariable("SUBSTATION_BROWSER_INDEX");
-    if (!overridden.isEmpty()) return overridden;
-    return localDataDir() + QStringLiteral("/browser-index.bin");
+    return localDataFile("SUBSTATION_BROWSER_INDEX", QStringLiteral("browser-index.bin"));
 }
 
 FileIndex::FileIndex(QObject* parent, std::optional<QString> indexPath, uint32_t maxFiles, uint32_t maxDepth)

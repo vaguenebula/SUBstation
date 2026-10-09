@@ -154,7 +154,8 @@ but keep their cache entries.
 
 `pluginCachePath()`: `vst3-cache.json` in `localDataDir()` (`%LOCALAPPDATA%\SUBstation` on Windows, the system's place
 for application data elsewhere: `~/.local/share/SUBstation`), or `SUBSTATION_PLUGIN_CACHE` if set (the tests point it at
-a temporary file). Caches written by earlier versions of SUBstation are read as they are.
+a temporary file): `localDataFile()`, as the browser's files and the template have it. Caches written by earlier
+versions of SUBstation are read as they are.
 
 ```json
 {

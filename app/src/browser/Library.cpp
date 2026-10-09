@@ -13,11 +13,7 @@ namespace sub::app {
 
 double Library::systemClock() { return static_cast<double>(QDateTime::currentMSecsSinceEpoch()) / 1000.0; }
 
-QString Library::defaultPath() {
-    const QString overridden = qEnvironmentVariable("SUBSTATION_LIBRARY");
-    if (!overridden.isEmpty()) return overridden;
-    return localDataDir() + QStringLiteral("/library.json");
-}
+QString Library::defaultPath() { return localDataFile("SUBSTATION_LIBRARY", QStringLiteral("library.json")); }
 
 Library::Library(QString path, Clock clock)
     : path_(path.isEmpty() ? defaultPath() : std::move(path)), clock_(clock ? std::move(clock) : Clock(&systemClock)) {

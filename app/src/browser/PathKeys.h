@@ -46,5 +46,8 @@ QString audioKey(const QString& path);
 // %LOCALAPPDATA%\SUBstation (as before), elsewhere the system's place for
 // application data (~/.local/share/SUBstation).
 QString localDataDir();
+// A file of the application's there (`name`), or the path the environment
+// variable `envVar` holds, if it is set and not empty (the tests set them).
+QString localDataFile(const char* envVar, const QString& name);
 
 }  // namespace sub::app

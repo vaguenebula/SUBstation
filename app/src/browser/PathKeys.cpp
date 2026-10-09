@@ -51,4 +51,9 @@ QString localDataDir() {
 #endif
 }
 
+QString localDataFile(const char* envVar, const QString& name) {
+    const QString overridden = qEnvironmentVariable(envVar);
+    return !overridden.isEmpty() ? overridden : localDataDir() + u'/' + name;
+}
+
 }  // namespace sub::app

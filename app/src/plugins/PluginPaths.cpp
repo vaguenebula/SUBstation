@@ -121,11 +121,7 @@ QStringList findPluginFiles(const QStringList& roots) {
 
 QStringList findPluginFiles() { return findPluginFiles(pluginSearchFolders()); }
 
-QString pluginCachePath() {
-    const QString overridden = qEnvironmentVariable("SUBSTATION_PLUGIN_CACHE");
-    if (!overridden.isEmpty()) return overridden;
-    return localDataDir() + QStringLiteral("/vst3-cache.json");
-}
+QString pluginCachePath() { return localDataFile("SUBSTATION_PLUGIN_CACHE", QStringLiteral("vst3-cache.json")); }
 
 QString pluginBinary(const QString& path) {
     const QFileInfo info(path);
