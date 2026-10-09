@@ -1110,11 +1110,14 @@ MenuEntries TrackHeaderItem::outputMenu() {
     if (!targets.empty()) menu.addSeparator();
     const std::optional<QString> now = outputTrack();
     for (const OutputTarget& target : targets) {
-        // Into its input, or (a track without one) the first device taking a sidechain.
-        const app::Output output = target.trackIn ? app::Output::track(target.track->id)
-                                                  : app::Output::sidechain(target.devices.front());
-        const bool usable = !p.outputWouldCycle(id, output);
+        // Into its input, or (a track without one) the first device taking a
+        // sidechain; the one it goes into now if it goes there (which one is
+        // outputChannelMenu()'s).
         const bool going = now == target.track->id && !t->output.isDefault();
+        const app::Output output = going           ? t->output
+                                   : target.trackIn ? app::Output::track(target.track->id)
+                                                    : app::Output::sidechain(target.devices.front());
+        const bool usable = !p.outputWouldCycle(id, output);
         MenuEntry& entry = add(usable ? target.track->name : QStringLiteral("%1 (it feeds this track)").arg(target.track->name),
                                output, going);
         entry.enabled = usable || going;

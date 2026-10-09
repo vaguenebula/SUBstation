@@ -1212,6 +1212,17 @@ private Q_SLOTS:
         QTRY_VERIFY(popup()->property("visible").toBool());
         test::screenshot(window(), QStringLiteral("arrangement_output_channel_menu"));
         closePopup();
+        // Into a sidechain on an audio track, its name chosen again: it stays in the sidechain (not its input).
+        const QString busCompressor = editor().addDevice(bus, QStringLiteral("compressor"));
+        h_->settle();
+        QVERIFY(header(a)->outputMenu().triggerText(QStringLiteral("Bus")));
+        QVERIFY(header(a)->outputChannelMenu().triggerText(QStringLiteral("Sidechain-Compressor")));
+        h_->settle();
+        QCOMPARE(project().track(a).output, sub::app::Output::sidechain(busCompressor));
+        QVERIFY(header(a)->outputMenu().find(QStringLiteral("Bus"))->checked);
+        QVERIFY(header(a)->outputMenu().triggerText(QStringLiteral("Bus")));
+        h_->settle();
+        QCOMPARE(project().track(a).output, sub::app::Output::sidechain(busCompressor));
         // Sends Only; then back to Main.
         QVERIFY(header(a)->outputMenu().triggerText(QStringLiteral("Sends Only")));
         h_->settle();
