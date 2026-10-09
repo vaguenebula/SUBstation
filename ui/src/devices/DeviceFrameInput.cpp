@@ -9,8 +9,6 @@
 #include <QMouseEvent>
 #include <QStyleHints>
 
-#include <cmath>
-
 namespace sub::ui {
 
 DeviceFrameInput::DeviceFrameInput(QQuickItem* parent) : QQuickItem(parent) {
@@ -60,18 +58,7 @@ bool DeviceFrameInput::instrument() const {
 bool DeviceFrameInput::folded() const { return session_ && session_->project()->isDeviceFolded(deviceId_); }
 
 bool DeviceFrameInput::secondPressOfDoubleClick(const QMouseEvent* event) {
-    // As QGuiApplication decides to follow a press with a double-click.
-    const QStyleHints* hints = QGuiApplication::styleHints();
-    const QPointF at = event->scenePosition();
-    const bool second = !lastWasSecond_ && event->button() == lastButton_ && lastPress_ != 0 &&
-                        event->timestamp() - lastPress_ < ulong(hints->mouseDoubleClickInterval()) &&
-                        std::abs(at.x() - lastPressAt_.x()) <= hints->mouseDoubleClickDistance() &&
-                        std::abs(at.y() - lastPressAt_.y()) <= hints->mouseDoubleClickDistance();
-    lastPress_ = event->timestamp();
-    lastPressAt_ = at;
-    lastButton_ = event->button();
-    lastWasSecond_ = second;
-    return second;
+    return doubleClicks_.isSecondPress(event);
 }
 
 void DeviceFrameInput::mousePressEvent(QMouseEvent* event) {

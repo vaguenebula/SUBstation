@@ -90,10 +90,6 @@ Q_SIGNALS:
     void sessionChanged();
 
 private:
-    // An Action's or Shortcut's key sequences, from what QML holds (a string, a
-    // QKeySequence::StandardKey, a QKeySequence, or a list of them).
-    static QList<QKeySequence> sequences(const QVariant& shortcut);
-
     QPointer<QObject> target_;
     QPointer<app::Session> session_;
     bool installed_ = false;

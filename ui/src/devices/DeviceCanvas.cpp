@@ -4,18 +4,15 @@
 
 #include "audio/BridgeTypes.h"
 #include "audio/EngineBridge.h"
+#include "controls/Automation.h"
 #include "editor/ProjectEditor.h"
 #include "model/Automation.h"
 #include "model/Device.h"
 #include "model/Project.h"
 #include "model/Track.h"
 
-#include <QGuiApplication>
 #include <QMouseEvent>
 #include <QScopedValueRollback>
-#include <QStyleHints>
-
-#include <cmath>
 
 namespace sub::ui {
 
@@ -172,10 +169,7 @@ const sub::app::Device* DeviceCanvas::device() const {
 QString DeviceCanvas::automationState(const QString& paramId) const {
     if (!session_)
         return {};
-    const QString key = sub::app::automation::deviceKey(deviceId_, paramId);
-    if (session_->bridge()->isOverridden(trackId_, key))
-        return QStringLiteral("off");
-    return session_->bridge()->isAutomated(trackId_, key) ? QStringLiteral("on") : QString();
+    return ui::automationState(*session_->bridge(), trackId_, sub::app::automation::deviceKey(deviceId_, paramId));
 }
 
 double DeviceCanvas::value(const QString& paramId) const {
@@ -218,18 +212,7 @@ void DeviceCanvas::setParamValue(const QString& paramId, double value, const QSt
 }
 
 bool DeviceCanvas::secondPressOfDoubleClick(const QMouseEvent* event) {
-    // As QGuiApplication decides to follow a press with a double-click.
-    const QStyleHints* hints = QGuiApplication::styleHints();
-    const QPointF at = event->scenePosition();
-    const bool second = !lastWasSecond_ && event->button() == lastButton_ && lastPress_ != 0 &&
-                        event->timestamp() - lastPress_ < ulong(hints->mouseDoubleClickInterval()) &&
-                        std::abs(at.x() - lastPressAt_.x()) <= hints->mouseDoubleClickDistance() &&
-                        std::abs(at.y() - lastPressAt_.y()) <= hints->mouseDoubleClickDistance();
-    lastPress_ = event->timestamp();
-    lastPressAt_ = at;
-    lastButton_ = event->button();
-    lastWasSecond_ = second;
-    return second;
+    return doubleClicks_.isSecondPress(event);
 }
 
 void DeviceCanvas::touch(const QString& paramId) {

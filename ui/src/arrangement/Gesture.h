@@ -28,6 +28,11 @@ namespace sub::ui::arrangement {
 
 inline constexpr double kDragThreshold = 4.0;  // pixels (manhattan) before a press is a drag
 
+// Whether the mouse at `pos` has moved far enough from `press` to be dragging.
+inline bool farEnough(const QPointF& pos, const QPointF& press) {
+    return (pos - press).manhattanLength() >= kDragThreshold;
+}
+
 // A clip to draw for a gesture: on the row of the track at `row` (an index
 // into Project::tracks()), in its track's colour.
 struct GestureClip {

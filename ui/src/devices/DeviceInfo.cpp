@@ -1,6 +1,7 @@
 #include "devices/DeviceInfo.h"
 
 #include "audio/EngineBridge.h"
+#include "controls/Automation.h"
 #include "editor/ProjectEditor.h"
 #include "model/Device.h"
 #include "model/Devices.h"
@@ -274,20 +275,11 @@ void DeviceInfo::showSwitchAutomation() {
         session_->editor()->showAutomation(trackId_, switchKey());
 }
 
-void DeviceInfo::deleteSwitchAutomation() {
-    if (session_ && session_->project()->hasOwner(trackId_))
-        session_->editor()->clearEnvelope(trackId_, switchKey());
-}
+void DeviceInfo::deleteSwitchAutomation() { AutomationTarget{session_, trackId_, switchKey()}.deleteEnvelope(); }
 
-void DeviceInfo::reEnableAutomation() {
-    if (session_)
-        session_->bridge()->reEnableAutomation(trackId_);
-}
+void DeviceInfo::reEnableAutomation() { AutomationTarget{session_, trackId_, switchKey()}.reEnable(); }
 
-bool DeviceInfo::hasSwitchEnvelope() const {
-    return session_ && session_->project()->hasOwner(trackId_) &&
-           !session_->project()->envelope(trackId_, switchKey()).empty();
-}
+bool DeviceInfo::hasSwitchEnvelope() const { return AutomationTarget{session_, trackId_, switchKey()}.hasEnvelope(); }
 
 void DeviceInfo::moveLeft() {
     if (!session_ || !state_.canMoveLeft)

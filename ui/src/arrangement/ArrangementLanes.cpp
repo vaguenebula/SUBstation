@@ -9,6 +9,7 @@
 #include "editor/ProjectEditor.h"
 #include "files/FileManager.h"
 #include "files/HotSwap.h"
+#include "input/Modifiers.h"
 #include "model/Devices.h"
 #include "model/Edits.h"
 #include "model/Errors.h"
@@ -92,22 +93,6 @@ bool isSlipModifier(Qt::KeyboardModifiers modifiers) {
 // Alt (without Ctrl): drag a clip's edge to stretch it.
 bool isStretchModifier(Qt::KeyboardModifiers modifiers) {
     return (modifiers & Qt::AltModifier) && !(modifiers & Qt::ControlModifier);
-}
-
-// The modifiers held once a key event is through: a modifier key's own press
-// or release isn't in its event's modifiers on every platform.
-Qt::KeyboardModifiers heldModifiers(const QKeyEvent* event) {
-    Qt::KeyboardModifiers modifiers = event->modifiers();
-    Qt::KeyboardModifier own = Qt::NoModifier;
-    switch (event->key()) {
-        case Qt::Key_Control: own = Qt::ControlModifier; break;
-        case Qt::Key_Alt: own = Qt::AltModifier; break;
-        case Qt::Key_Shift: own = Qt::ShiftModifier; break;
-        case Qt::Key_Meta: own = Qt::MetaModifier; break;
-        default: break;
-    }
-    if (own != Qt::NoModifier) modifiers.setFlag(own, event->type() == QEvent::KeyPress);
-    return modifiers;
 }
 
 // Audio files dragged in: local URLs with an audio extension.
@@ -1018,7 +1003,7 @@ bool ArrangementLanes::eventFilter(QObject* watched, QEvent* event) {
                     const Qt::KeyboardModifiers mods = key->modifiers();
                     const app::ComputerKeyboard* keyboard = ready() ? session()->computerKeyboard() : nullptr;
                     const bool plays = keyboard && keyboard->takesKey(Qt::Key_F) && !(mods & Qt::ShiftModifier);
-                    held = !(mods & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) && !plays &&
+                    held = !hasShortcutModifier(mods) && !plays &&
                            !app::ComputerKeyboard::focusTakesText();
                 }
                 setFadeKey(held);

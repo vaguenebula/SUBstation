@@ -41,7 +41,6 @@ using app::Envelope;
 
 double fine(Qt::KeyboardModifiers modifiers) { return modifiers & Qt::ShiftModifier ? 0.1 : 1.0; }
 bool alt(Qt::KeyboardModifiers modifiers) { return modifiers & Qt::AltModifier; }
-bool farEnough(const QPointF& pos, const QPointF& press) { return (pos - press).manhattanLength() >= kDragThreshold; }
 
 const timeline::Timeline& viewOf(LanesHost& host) { return host.hostArrangement()->view(); }
 app::Project& projectOf(LanesHost& host) { return *host.hostSession()->project(); }

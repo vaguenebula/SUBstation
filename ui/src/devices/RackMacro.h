@@ -21,6 +21,7 @@
 #include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 
+#include "controls/Automation.h"
 #include "session/Session.h"
 
 namespace sub::ui {
@@ -105,6 +106,7 @@ Q_SIGNALS:
     void mappingKeysChanged();
 
 private:
+    AutomationTarget automationTarget() const;
     void refreshValue();
 
     QPointer<sub::app::Session> session_;

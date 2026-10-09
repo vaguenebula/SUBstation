@@ -204,10 +204,7 @@ Rectangle {
         const rackId = macro.rackId
         let renaming = false
         menu.reset()
-        menu.entry(qsTr("Show Automation"), () => macro.showAutomation(), undefined, macro.canAutomate())
-        menu.entry(qsTr("Delete Automation"), () => macro.deleteAutomation(), undefined, macro.hasEnvelope())
-        if (macro.isOverridden())
-            menu.entry(qsTr("Re-Enable Automation"), () => macro.reEnableAutomation())
+        menu.automationEntries(macro)
         menu.separator()
         menu.entry(qsTr("Rename"), () => renaming = true)
         menu.entry(qsTr("Edit Mappings…"), () => macroMappings.show(macro, cell), undefined, macro.mapped)

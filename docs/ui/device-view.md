@@ -213,8 +213,9 @@ and editor, its sidechain) reading the project again whenever that may have chan
 - `set(value, mergeKey)` → `editor.setDeviceParam(track, device, param, value, key)`; pressing the cell or the knob
   calls `touch()` (`editor.touchParameter`), so the arrangement shows its automation.
 - Right-click: [ParamMenu](../../ui/qml/devices/ParamMenu.qml): Show Automation, Delete Automation, Re-Enable
-  Automation and, inside a rack, *Map to Macro* (the rack's macros by name: `DeviceParam::macroNames()`) / *Unmap
-  from <macro>* (`editor.mapMacro`, `editor.unmapMacro`, `editor.macroOf`).
+  Automation (`DynamicMenu.automationEntries()`, as a macro's menu has them; `AutomationTarget` in C++) and, inside
+  a rack, *Map to Macro* (the rack's macros by name: `DeviceParam::macroNames()`) / *Unmap from <macro>*
+  (`editor.mapMacro`, `editor.unmapMacro`, `editor.macroOf`).
 - A parameter mapped to an automated macro is automated as far as the cell knows (`bridge.isAutomated`: the red dot)
   and follows the macro's envelope over its range (`bridge.currentValue`).
 

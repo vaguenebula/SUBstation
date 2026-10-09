@@ -1,6 +1,7 @@
 #include "devices/DeviceParam.h"
 
 #include "audio/EngineBridge.h"
+#include "controls/Automation.h"
 #include "controls/ValueBoxItem.h"
 #include "editor/ProjectEditor.h"
 #include "model/Automation.h"
@@ -16,17 +17,6 @@ namespace sub::ui {
 
 using sub::app::EngineBridge;
 using sub::app::Project;
-
-namespace {
-
-// "on" while its automation plays, "off" when overridden, else "" (mixer_controls.automation_state).
-QString automationStateOf(const EngineBridge& bridge, const QString& owner, const QString& key) {
-    if (bridge.isOverridden(owner, key))
-        return QStringLiteral("off");
-    return bridge.isAutomated(owner, key) ? QStringLiteral("on") : QString();
-}
-
-}  // namespace
 
 DeviceParam::DeviceParam(QObject* parent) : QObject(parent) {}
 
@@ -131,7 +121,7 @@ void DeviceParam::refreshSpec() {
 }
 
 void DeviceParam::refreshAutomation() {
-    const QString state = session_ && !deviceId_.isEmpty() ? automationStateOf(*session_->bridge(), trackId_, key())
+    const QString state = session_ && !deviceId_.isEmpty() ? automationState(*session_->bridge(), trackId_, key())
                                                             : QString();
     if (state == automation_)
         return;
@@ -216,28 +206,19 @@ void DeviceParam::touch() {
         session_->editor()->touchParameter(trackId_, key());
 }
 
-bool DeviceParam::canAutomate() const { return session_ && session_->bridge()->canAutomate(trackId_, key()); }
+AutomationTarget DeviceParam::automationTarget() const { return {session_, trackId_, key()}; }
 
-bool DeviceParam::hasEnvelope() const {
-    return session_ && session_->project()->hasOwner(trackId_) && !session_->project()->envelope(trackId_, key()).empty();
-}
+bool DeviceParam::canAutomate() const { return automationTarget().canAutomate(); }
 
-bool DeviceParam::isOverridden() const { return session_ && session_->bridge()->isOverridden(trackId_, key()); }
+bool DeviceParam::hasEnvelope() const { return automationTarget().hasEnvelope(); }
 
-void DeviceParam::showAutomation() {
-    if (session_ && session_->project()->hasOwner(trackId_))
-        session_->editor()->showAutomation(trackId_, key());
-}
+bool DeviceParam::isOverridden() const { return automationTarget().isOverridden(); }
 
-void DeviceParam::deleteAutomation() {
-    if (session_ && session_->project()->hasOwner(trackId_))
-        session_->editor()->clearEnvelope(trackId_, key());
-}
+void DeviceParam::showAutomation() { automationTarget().show(); }
 
-void DeviceParam::reEnableAutomation() {
-    if (session_)
-        session_->bridge()->reEnableAutomation(trackId_);
-}
+void DeviceParam::deleteAutomation() { automationTarget().deleteEnvelope(); }
+
+void DeviceParam::reEnableAutomation() { automationTarget().reEnable(); }
 
 QString DeviceParam::rackId() const {
     if (!session_)

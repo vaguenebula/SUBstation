@@ -19,10 +19,7 @@ DynamicMenu {
         if (!param)
             return
         const p = param
-        entry(qsTr("Show Automation"), () => p.showAutomation(), undefined, p.canAutomate())
-        entry(qsTr("Delete Automation"), () => p.deleteAutomation(), undefined, p.hasEnvelope())
-        if (p.isOverridden())
-            entry(qsTr("Re-Enable Automation"), () => p.reEnableAutomation())
+        automationEntries(p)
         const rack = p.rackId()
         if (rack !== "") {  // its rack's macros can move it
             separator()

@@ -19,6 +19,7 @@
 #include <optional>
 
 #include "devices/DeviceChainArea.h"
+#include "input/DoubleClicks.h"
 #include "session/Session.h"
 
 namespace sub::ui {
@@ -72,10 +73,7 @@ private:
     QPointer<DeviceChainArea> chainArea_;
     QPointer<QQuickItem> frame_;
     std::optional<QPointF> press_;  // where the left button went down (none: no click under way)
-    ulong lastPress_ = 0;
-    QPointF lastPressAt_;
-    Qt::MouseButton lastButton_ = Qt::NoButton;
-    bool lastWasSecond_ = false;
+    DoubleClicks doubleClicks_;
 };
 
 }  // namespace sub::ui

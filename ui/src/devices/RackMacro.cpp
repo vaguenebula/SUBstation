@@ -1,6 +1,7 @@
 #include "devices/RackMacro.h"
 
 #include "audio/EngineBridge.h"
+#include "controls/Automation.h"
 #include "editor/ProjectEditor.h"
 #include "model/Automation.h"
 #include "model/Device.h"
@@ -105,10 +106,7 @@ void RackMacro::refresh() {
     if (rack != nullptr && rack->isRack()) {
         name = sub::app::macroName(*rack, index_);
         named = index_ < sub::app::macroCount(*rack) && !rack->macroNames[size_t(index_)].isEmpty();
-        const EngineBridge* bridge = session_->bridge();
-        automation = bridge->isOverridden(trackId_, key()) ? QStringLiteral("off")
-                     : bridge->isAutomated(trackId_, key()) ? QStringLiteral("on")
-                                                            : QString();
+        automation = automationState(*session_->bridge(), trackId_, key());
         for (const sub::app::MacroMapping& mapping : rack->macros) {
             const Device* device = mapping.macro == index_ ? project->findDevice(trackId_, mapping.deviceId) : nullptr;
             if (device == nullptr)
@@ -226,28 +224,19 @@ void RackMacro::removeLastMacro() {
         session_->editor()->setMacroCount(trackId_, rackId_, macroCountOf(session_, trackId_, rackId_) - 1);
 }
 
-bool RackMacro::canAutomate() const { return session_ && session_->bridge()->canAutomate(trackId_, key()); }
+AutomationTarget RackMacro::automationTarget() const { return {session_, trackId_, key()}; }
 
-bool RackMacro::hasEnvelope() const {
-    return session_ && session_->project()->hasOwner(trackId_) && !session_->project()->envelope(trackId_, key()).empty();
-}
+bool RackMacro::canAutomate() const { return automationTarget().canAutomate(); }
 
-bool RackMacro::isOverridden() const { return session_ && session_->bridge()->isOverridden(trackId_, key()); }
+bool RackMacro::hasEnvelope() const { return automationTarget().hasEnvelope(); }
 
-void RackMacro::showAutomation() {
-    if (session_ && session_->project()->hasOwner(trackId_))
-        session_->editor()->showAutomation(trackId_, key());
-}
+bool RackMacro::isOverridden() const { return automationTarget().isOverridden(); }
 
-void RackMacro::deleteAutomation() {
-    if (session_ && session_->project()->hasOwner(trackId_))
-        session_->editor()->clearEnvelope(trackId_, key());
-}
+void RackMacro::showAutomation() { automationTarget().show(); }
 
-void RackMacro::reEnableAutomation() {
-    if (session_)
-        session_->bridge()->reEnableAutomation(trackId_);
-}
+void RackMacro::deleteAutomation() { automationTarget().deleteEnvelope(); }
+
+void RackMacro::reEnableAutomation() { automationTarget().reEnable(); }
 
 // --- RackMacros ---------------------------------------------------------------------------------
 

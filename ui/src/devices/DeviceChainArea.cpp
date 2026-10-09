@@ -3,6 +3,7 @@
 #include "browser/BrowserMime.h"
 #include "controls/KnobItem.h"
 #include "controls/ValueBoxItem.h"
+#include "input/Modifiers.h"
 #include "model/Device.h"
 #include "model/Project.h"
 #include "session/DeviceSelection.h"
@@ -30,11 +31,6 @@ namespace {
 const QString kDeviceRole = QStringLiteral("device");
 const QString kChainRole = QStringLiteral("chain");
 const QString kChainRowRole = QStringLiteral("chainRow");
-
-// Ctrl+Alt: drag to scroll, as in the arrangement.
-bool isPanModifier(Qt::KeyboardModifiers modifiers) {
-    return (modifiers & Qt::ControlModifier) && (modifiers & Qt::AltModifier);
-}
 
 // The topmost item at a scene point under `item` (in paint order), not looking into clipped parts.
 QQuickItem* topItemAt(QQuickItem* item, const QPointF& scenePos) {

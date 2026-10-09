@@ -1,6 +1,7 @@
 #include "pianoroll/NoteGrid.h"
 
 #include "model/Notes.h"
+#include "input/Modifiers.h"
 #include "model/Numbers.h"
 #include "pianoroll/NoteSet.h"
 #include "sg/SgPainter.h"
@@ -227,22 +228,6 @@ private:
     int scrollY_;
 };
 
-// The modifiers held once a key event is through: a modifier key's own press
-// or release isn't in its event's modifiers on every platform (X11 reports the
-// state before it).
-Qt::KeyboardModifiers heldModifiers(const QKeyEvent* event) {
-    Qt::KeyboardModifiers modifiers = event->modifiers();
-    Qt::KeyboardModifier own = Qt::NoModifier;
-    switch (event->key()) {
-    case Qt::Key_Control: own = Qt::ControlModifier; break;
-    case Qt::Key_Alt: own = Qt::AltModifier; break;
-    case Qt::Key_Shift: own = Qt::ShiftModifier; break;
-    case Qt::Key_Meta: own = Qt::MetaModifier; break;
-    default: break;
-    }
-    if (own != Qt::NoModifier) modifiers.setFlag(own, event->type() == QEvent::KeyPress);
-    return modifiers;
-}
 
 // Each part of [from, to] outside every span.
 std::vector<PianoRoll::Span> outside(std::vector<PianoRoll::Span> spans, double from, double to) {
@@ -269,10 +254,6 @@ NoteGrid::NoteGrid(QQuickItem* parent) : RollItem(parent) {
 }
 
 NoteGrid::~NoteGrid() = default;
-
-bool NoteGrid::isPanModifier(Qt::KeyboardModifiers modifiers) {
-    return (modifiers & Qt::ControlModifier) && (modifiers & Qt::AltModifier);
-}
 
 void NoteGrid::rollConnected(PianoRoll* roll) {
     connect(roll, &PianoRoll::vscrollChanged, this, &QQuickItem::update);

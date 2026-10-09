@@ -22,6 +22,7 @@
 #include <optional>
 
 #include "audio/BridgeTypes.h"
+#include "controls/Automation.h"
 #include "session/Session.h"
 
 namespace sub::ui {
@@ -118,6 +119,7 @@ Q_SIGNALS:
     void automationChanged();
 
 private:
+    AutomationTarget automationTarget() const;
     void connectSession();
     void refreshSpec();
     void refreshValue();

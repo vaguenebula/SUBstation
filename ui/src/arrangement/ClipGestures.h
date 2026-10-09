@@ -244,9 +244,6 @@ private:
     int scrollY_ = 0;
 };
 
-// Ctrl+Alt: drag to scroll the arrangement, as in Ableton.
-bool isPanModifier(Qt::KeyboardModifiers modifiers);
-
 // Select the time from `start` to `end` on the rows from `firstRow` to
 // `lastRow` (indices into the layout's rows, either way round): a clip range
 // over their tracks and what is in the groups among them, shown over those

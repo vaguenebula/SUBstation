@@ -1,6 +1,7 @@
 #include "controls/ValueBoxItem.h"
 
 #include "controls/KnobItem.h"
+#include "input/Modifiers.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 
@@ -11,7 +12,6 @@
 #include <QWheelEvent>
 
 #include <algorithm>
-#include <cmath>
 #include <cmath>
 
 namespace sub::ui {
@@ -448,7 +448,7 @@ void ValueBoxItem::wheelEvent(QWheelEvent* event) {
 
 bool ValueBoxItem::typesInto(const QKeyEvent* event) const {
     return default_ && !event->text().isEmpty() && kTypingKeys.contains(event->text()) &&
-           !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+           !hasShortcutModifier(event->modifiers());
 }
 
 void ValueBoxItem::keyPressEvent(QKeyEvent* event) {
