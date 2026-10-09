@@ -860,13 +860,16 @@ void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
             settings.divisionBeats = slicing::kSliceDivisionBeats[division];
             settings.regions = static_cast<int>(std::lround(param(Regions)));
             std::array<int64_t, slicing::kMaxSlices> starts{};
-            const int count = slicing::sliceStarts(settings, onsets.data(), onsets.size(), b.start, b.end,
-                                                   active_->source->sampleRate(), starts.data());
+            int count = slicing::sliceStarts(settings, onsets.data(), onsets.size(), b.start, b.end,
+                                             active_->source->sampleRate(), starts.data());
+            // (Snapped as the editor draws them: up to the one after this key's.)
+            count = slicing::snapSliceStarts(starts.data(), count, b.end, [this](int64_t frame) { return snap(frame); },
+                                             index + 2);
             if (index >= count) return;
-            const int64_t from = snap(starts[static_cast<size_t>(index)]);
+            const int64_t from = starts[static_cast<size_t>(index)];
             const int64_t to = b.playback == Playback::Thru || index + 1 >= count
                                    ? b.end
-                                   : snap(starts[static_cast<size_t>(index) + 1]);
+                                   : starts[static_cast<size_t>(index) + 1];
             if (to <= from) return;
             if (b.playback == Playback::Poly) makeRoom(b.voices);
             else killAll();

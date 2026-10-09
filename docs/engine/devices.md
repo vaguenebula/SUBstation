@@ -19,7 +19,7 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/BuiltinRegistry.h](../../engine/src/builtin/BuiltinRegistry.h) / [.cpp](../../engine/src/builtin/BuiltinRegistry.cpp) | `BuiltinRegistry`, `BuiltinInfo`, `BuiltinCategory`, `SUB_REGISTER_BUILTIN` |
 | [builtin/devices/Synth.cpp](../../engine/src/builtin/devices/Synth.cpp) | the Synth instrument |
 | [builtin/devices/Sampler.cpp](../../engine/src/builtin/devices/Sampler.cpp) | the Sampler instrument |
-| [builtin/SampleSlicing.h](../../engine/src/builtin/SampleSlicing.h) / [.cpp](../../engine/src/builtin/SampleSlicing.cpp) | The Sampler's slicing (`detectOnsets`, `sliceStarts`) and Snap (`nearestZeroCrossing`), shared with the application layer's `sampleSlices` ([app/src/audio/SampleSlices.h](../../app/src/audio/SampleSlices.h)) for the editor |
+| [builtin/SampleSlicing.h](../../engine/src/builtin/SampleSlicing.h) / [.cpp](../../engine/src/builtin/SampleSlicing.cpp) | The Sampler's slicing (`detectOnsets`, `sliceStarts`) and Snap (`nearestZeroCrossing`, `snapSliceStarts`), shared with the application layer's `sampleSlices` ([app/src/audio/SampleSlices.h](../../app/src/audio/SampleSlices.h)) for the editor |
 | [builtin/devices/Utility.cpp](../../engine/src/builtin/devices/Utility.cpp) | Utility: gain, pan, width |
 | [builtin/devices/Ott.cpp](../../engine/src/builtin/devices/Ott.cpp) | Over The Top: multiband upward/downward compression |
 | [builtin/devices/Compressor.cpp](../../engine/src/builtin/devices/Compressor.cpp) | Compressor, with sidechain and displays |
@@ -281,7 +281,8 @@ project saved then plays as it did: a parameter it doesn't have takes its defaul
     the first, each key up the next; keys below or past the last play nothing. A slice
     plays from its start to the next's (Thru: to End), at the root's pitch plus
     Transpose and Detune. Mono and Thru cut the slice before; Poly limits notes as
-    Classic does. Fades, Trigger and Gate as 1-Shot's; with Snap, slices snap too.
+    Classic does. Fades, Trigger and Gate as 1-Shot's; with Snap, slices snap too, and slices
+    snapped onto one another (or onto End) are one (`slicing::snapSliceStarts`), so each key plays one.
 - **Transients** (`slicing::detectOnsets`, at load, both ways): the sample summed to
   mono; per hop of 128 samples at 48 kHz (`sampleRate / 375`), the energy over two hops,
   of the whole band and of the first difference (the highs), in dB floored 60 dB below
@@ -767,7 +768,8 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
 - [test_sampler_engine.cpp](../../tests/engine/test_sampler_engine.cpp): listing and parameters (old projects' defaults),
   pitch from key, root and tuning at any file rate, start, end and loop, velocity, its state's text (escaping), a
   missing file, unknown values, swapping samples while notes play, and the position display; then transients found
-  where hits start and slices at each sensitivity, beats and regions, snapping; Slice (by region, beat and transient,
+  where hits start and slices at each sensitivity, beats and regions, snapping (slices snapped onto one another are
+  one, a key each); Slice (by region, beat and transient,
   Mono, Poly, Thru), 1-Shot (Trigger, Gate, fades, one note at a time), Classic's Loop Start and Loop Fade, reverse,
   snap, gain and pan, the filter's four types and slopes and resonance, the LFO (tremolo, vibrato, synced, restarted,
   pan, filter), voices and legato glide, warping (Re-Pitch, every stretching mode, keys, tempo, repeatable renders,

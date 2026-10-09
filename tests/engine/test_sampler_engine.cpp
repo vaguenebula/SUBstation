@@ -390,6 +390,16 @@ TEST_CASE("slicing: transients where hits start, stronger ones first to count") 
     const int64_t snapped = sub::slicing::nearestZeroCrossing(waveChannels, 1, 24000, false, 4944, 480);
     CHECK_EQ(snapped, int64_t{4964});
     CHECK_EQ(sub::slicing::nearestZeroCrossing(waveChannels, 1, 24000, false, 0, 480), int64_t{0});
+
+    // Snapped slices that land on one another, before the one before or on End are one.
+    const std::map<int64_t, int64_t> landing{{100, 150}, {200, 150}, {300, 140}, {400, 420}, {500, 600}};
+    const auto snapTo = [&](int64_t frame) { return landing.at(frame); };
+    std::array<int64_t, 6> bounds{0, 100, 200, 300, 400, 500};
+    CHECK_EQ(sub::slicing::snapSliceStarts(bounds.data(), 6, 600, snapTo), 3);
+    CHECK((std::vector<int64_t>(bounds.begin(), bounds.begin() + 3) == std::vector<int64_t>{0, 150, 420}));
+    bounds = {0, 100, 200, 300, 400, 500};
+    CHECK_EQ(sub::slicing::snapSliceStarts(bounds.data(), 6, 600, snapTo, 2), 2);  // (only as many as wanted)
+    CHECK((std::vector<int64_t>(bounds.begin(), bounds.begin() + 3) == std::vector<int64_t>{0, 150, 200}));
 }
 
 TEST_CASE("slice mode: a slice per key from C1, cut by region, beat or transient") {
@@ -427,6 +437,44 @@ TEST_CASE("slice mode: a slice per key from C1, cut by region, beat or transient
         INFO("hit " + std::to_string(k));
         CHECK_APPROX_REL(dominantFreq(leftFrom(out, from, from + 9600)), 200.0 + 100.0 * static_cast<double>(k), 0.03);
     }
+}
+
+TEST_CASE("slices snapped onto one another are one: each key from C1 plays a slice of its own") {
+    // 25 Hz: a zero crossing every 960 frames, between two samples (so the 16-bit file
+    // keeps it); 64 regions of a second are 750 frames, so some snap onto the same one.
+    Samples wave(kSampleRate);
+    for (size_t i = 0; i < wave.size(); ++i)
+        wave[i] = static_cast<float>(0.5 * std::sin(2.0 * kPi * 25.0 * (static_cast<double>(i) + 0.5) / kSampleRate));
+    const float* channels[] = {wave.data()};
+    sub::slicing::SliceSettings settings;
+    settings.by = sub::slicing::SliceBy::Region;
+    settings.regions = 64;
+    std::array<int64_t, sub::slicing::kMaxSlices> starts{};
+    int count = sub::slicing::sliceStarts(settings, nullptr, 0, 0, kSampleRate, kSampleRate, starts.data());
+    REQUIRE(count == 64);
+    count = sub::slicing::snapSliceStarts(starts.data(), count, kSampleRate, [&](int64_t frame) {
+        return sub::slicing::nearestZeroCrossing(channels, 1, kSampleRate, false, frame, kSampleRate / 100);
+    });
+    REQUIRE(count < 64);
+    REQUIRE(count > 40);
+
+    // Each key a 16th of a beat long, an 8th apart (3000 frames: longer than any slice), and one past the last.
+    std::vector<sub::NoteDesc> notes;
+    for (int k = 0; k <= count; ++k) notes.push_back({k / 8.0, 1.0 / 16.0, 36 + k, 127});
+    sub::Engine engine;
+    samplerTrack(engine, notes, makeWav(wave), {{"mode", 2.f}, {"slice_by", 2.f}, {"regions", 64.f}, {"snap", 1.f}});
+    constexpr int64_t kApart = kBeat / 8;
+    const Samples out = engine.renderOffline(0.0, (count + 2) * kApart);
+    for (int k = 0; k < count; ++k) {
+        const int64_t from = starts[static_cast<size_t>(k)];
+        const int64_t to = k + 1 < count ? starts[static_cast<size_t>(k) + 1] : kSampleRate;
+        const int64_t played = k * kApart;
+        INFO("key " + std::to_string(36 + k) + ": frames " + std::to_string(from) + " to " + std::to_string(to));
+        for (int64_t i = 10; i < to - from - 10; i += 23)
+            CHECK_NEAR(at(out, played + i, 0), wave[static_cast<size_t>(from + i)], 2e-4);
+        CHECK(!anyNonzero(leftFrom(out, played + (to - from) + 100, played + kApart)));
+    }
+    CHECK(!anyNonzero(leftFrom(out, count * kApart)));  // (past the last slice)
 }
 
 TEST_CASE("slice playback: mono cuts the slice before, poly lets it ring, thru plays on to the end") {

@@ -62,6 +62,22 @@ int64_t nearestZeroCrossing(const float* const* channels, int numChannels, int64
 // How far Snap looks for a zero crossing, in seconds.
 inline constexpr double kSnapSeconds = 0.01;
 
+// Snap the slices (sliceStarts' `count` in `starts`, of a part ending at `end`):
+// each but the first to `snap(frame)`. A slice snapped onto or before the one
+// before it, or onto `end`, is dropped (slices snapped onto one another are one),
+// so every slice left has something to play and the keys from C1 play them in
+// turn. Stops once `most` are left (the ones after aren't needed). Returns how
+// many are left. Real-time safe, as `snap` is.
+template <typename Frame, typename Snap>
+int snapSliceStarts(Frame* starts, int count, int64_t end, const Snap& snap, int most = kMaxSlices) {
+    int n = count > 0 ? 1 : 0;
+    for (int i = 1; i < count && n < most; ++i) {
+        const auto frame = static_cast<Frame>(snap(starts[i]));
+        if (frame > starts[n - 1] && frame < end) starts[n++] = frame;
+    }
+    return n;
+}
+
 // The lengths in beats of the Beat divisions, as the Sampler's list names them
 // (1/16, 1/8, 1/4, 1/2, 1 Bar, 2 Bars, 4 Bars; a bar is 4 beats).
 inline constexpr double kSliceDivisionBeats[] = {0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0};

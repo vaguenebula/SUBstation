@@ -48,5 +48,8 @@ int maxSlices();
 // Snap: the zero crossing nearest `frame` (within the Sampler's reach), as the Sampler snaps Start, End,
 // Loop Start and slices.
 qint64 nearestZeroCrossing(const Waveform& waveform, bool reversed, qint64 frame);
+// Snap: the slices (from sliceStarts(), of a part ending at `end`) at their zero crossings, as the Sampler
+// snaps them; slices snapped onto one another (or onto `end`) are one.
+std::vector<qint64> snapSliceStarts(const Waveform& waveform, bool reversed, std::vector<qint64> starts, qint64 end);
 
 }  // namespace sub::app::sampleSlices

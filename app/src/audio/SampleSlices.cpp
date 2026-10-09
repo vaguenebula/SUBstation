@@ -72,4 +72,11 @@ qint64 nearestZeroCrossing(const Waveform& waveform, bool reversed, qint64 frame
                                              reach);
 }
 
+std::vector<qint64> snapSliceStarts(const Waveform& waveform, bool reversed, std::vector<qint64> starts, qint64 end) {
+    const auto snap = [&](qint64 frame) { return nearestZeroCrossing(waveform, reversed, frame); };
+    const int count = sub::slicing::snapSliceStarts(starts.data(), static_cast<int>(starts.size()), end, snap);
+    starts.resize(static_cast<std::size_t>(count));
+    return starts;
+}
+
 }  // namespace sub::app::sampleSlices

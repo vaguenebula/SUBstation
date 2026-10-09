@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace sub::ui {
 
@@ -299,10 +300,8 @@ void SampleView::updateLayout() {
             settings.regionBeats = sliceSettings_.regionBeats * double(endFrame_ - startFrame_) / double(frames);
             slices_ = sub::app::sampleSlices::sliceStarts(settings, transients_[way], startFrame_, endFrame_,
                                                           waveform_.sampleRate());
-            if (snap_) {
-                for (std::size_t i = 1; i < slices_.size(); ++i)
-                    slices_[i] = sub::app::sampleSlices::nearestZeroCrossing(waveform_, reverse_, slices_[i]);
-            }
+            if (snap_)
+                slices_ = sub::app::sampleSlices::snapSliceStarts(waveform_, reverse_, std::move(slices_), endFrame_);
         }
     }
     Q_EMIT layoutChanged();

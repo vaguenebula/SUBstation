@@ -109,7 +109,7 @@ the bottom.
 - Drag Start, End and (Classic, looping) Loop Start on the display.
 - Under the display: **Gain**; the mode's own settings; **Snap** (Start, End, Loop
   Start and slices move to the nearest zero crossing, so notes don't click as they
-  start); **Warp** *as* a length: the whole sample lasts that many beats at the song's
+  start; slices that land on the same one become one); **Warp** *as* a length: the whole sample lasts that many beats at the song's
   tempo and follows it. Its warp modes are the clips': Transients, Standard, Smooth and
   Formants stretch it (the keys transpose it, not its length), Re-Pitch speeds it up or
   slows it down like a record (the pitch goes with it). **:2** and **\*2** halve and
