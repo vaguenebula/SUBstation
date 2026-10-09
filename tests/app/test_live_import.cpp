@@ -7,6 +7,7 @@
 // own that SUBstation has, racks); Drum Racks as a track a pad; automation; and
 // the notes on what didn't come across.
 
+#include "BridgeTestSupport.h"
 #include "SessionFixture.h"
 #include "TestSupport.h"
 
@@ -716,6 +717,55 @@ private Q_SLOTS:
         QCOMPARE(devices[3].plugin->name, QStringLiteral("Unknown Thing"));
         QVERIFY(noteSays(imported->notes, QStringLiteral("Not installed here")));
         QVERIFY(noteSays(imported->notes, QStringLiteral("Glitch2")));
+    }
+
+    // A real VST3 plug-in's settings as Live keeps them (its processor's and
+    // controller's states, its class id as four words) come back in it: the
+    // .vstpreset made of them is one Steinberg's reader (the engine's) takes.
+    void aPlugInsSettingsComeBackInIt() {
+        const QString bundle = test::testPluginsBundle();
+        if (!test::haveTestPlugins(bundle)) QSKIP("test plug-ins not built");
+        const auto effect = test::testPlugin(bundle, QStringLiteral("SUB Test Effect"));
+        QVERIFY(effect);
+        // Its settings, as Live would have saved them: its states, from a .vstpreset of it.
+        sub::Engine engine;
+        const uint32_t engineTrack = engine.addTrack();
+        const uint32_t plugin = engine.addPluginProcessor(engine.trackChain(engineTrack), "VST3",
+                                                          effect->path.toStdString(), effect->uid.toStdString(), -1);
+        engine.setProcessorParam(plugin, test::kEffectGain, 0.3f);
+        const std::vector<uint8_t> saved = engine.processorState(plugin);
+        const QByteArray preset(reinterpret_cast<const char*>(saved.data()), qsizetype(saved.size()));
+        const QByteArray component = presetChunk(preset, "Comp");
+        QVERIFY(!component.isEmpty());
+        const auto words = sub::vst3::wordsFromClassId(effect->uid.toStdString());
+        QVERIFY(words);
+        QCOMPARE(classId(*words), effect->uid);  // (and back)
+        // Its .vstpreset again, as the importer makes it: Steinberg's reader takes it.
+        const QByteArray rebuilt = live::vstPreset(
+            QString::fromStdString(sub::vst3::presetClassId((*words)[0], (*words)[1], (*words)[2], (*words)[3])),
+            component, presetChunk(preset, "Cont"));
+        const uint32_t other = engine.addPluginProcessor(engine.trackChain(engineTrack), "VST3",
+                                                         effect->path.toStdString(), effect->uid.toStdString(), -1);
+        engine.setProcessorState(other, std::vector<uint8_t>(rebuilt.begin(), rebuilt.end()));
+        QVERIFY(std::abs(engine.processorParam(other, test::kEffectGain) - 0.3f) < 1e-6f);
+
+        // And a set holding it: the device loads with those settings.
+        SessionFixture f;
+        f.bridge().setKnownPlugins(test::testPluginInfos(bundle));
+        live::ImportOptions options;
+        options.plugins = test::testPluginInfos(bundle);
+        Song song;
+        LiveTrack t{QStringLiteral("AudioTrack"), 1, QStringLiteral("1-Audio")};
+        t.devices = vst3Device(QStringLiteral("SUB Test Effect"), *words, component, presetChunk(preset, "Cont"), 2);
+        song.tracks = track(t);
+        loadInto(f.project(), import(liveSet(song), QStringLiteral("/nowhere/song.als"), options).project);
+        QTRY_VERIFY_WITH_TIMEOUT(f.bridge().pluginsPending() == 0, 5000);
+        const Track& imported = f.project().tracks()[0];
+        QCOMPARE(imported.devices.size(), size_t{1});
+        QCOMPARE(imported.devices[0].plugin->path, bundle);
+        const auto id = f.bridge().engineDeviceId(imported.id, imported.devices[0].id);
+        QVERIFY(id);
+        QVERIFY(std::abs(f.engine.processorParam(*id, test::kEffectGain) - 0.3f) < 1e-6f);
     }
 
     // Live's devices SUBstation has: Utility, EQ Eight, Compressor (and its
