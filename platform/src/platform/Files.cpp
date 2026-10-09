@@ -19,16 +19,20 @@ using File = std::unique_ptr<std::FILE, FileCloser>;
 
 }  // namespace
 
-std::optional<std::string> readFile(const std::string& path) {
+template <typename Bytes>
+std::optional<Bytes> readFile(const std::string& path) {
     const File file(openFile(path, false));
     if (!file) return std::nullopt;
-    std::string data;
+    Bytes data;
     if (const auto s = stamp(path)) data.reserve(static_cast<size_t>(s->size));
     char chunk[1 << 16];
-    for (size_t n; (n = std::fread(chunk, 1, sizeof chunk, file.get())) > 0;) data.append(chunk, n);
+    for (size_t n; (n = std::fread(chunk, 1, sizeof chunk, file.get())) > 0;) data.insert(data.end(), chunk, chunk + n);
     if (std::ferror(file.get())) return std::nullopt;
     return data;
 }
+
+template std::optional<std::string> readFile(const std::string&);
+template std::optional<std::vector<char>> readFile(const std::string&);
 
 bool writeFileAtomically(const std::string& path, std::string_view bytes) {
     std::error_code ignored;

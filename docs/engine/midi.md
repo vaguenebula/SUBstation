@@ -50,8 +50,9 @@ the tests).
 | [Transport.h](../../engine/src/Transport.h) | `PreviewNote`; in `SharedState`: `previewNotes` queue, `midiInput` queue and `midiInputMutex`, `midiInputDelay`, `midiSampleRate`, `clock` |
 | [Processor.h](../../engine/src/Processor.h) | `ProcessEvent` (`NoteOn`, `NoteOff`, `Midi`), `setEnabled`, `requestReset`, `takeResetRequest`, `reset`, `resetOffline` |
 | [Renderer.h](../../engine/src/Renderer.h), [Renderer.cpp](../../engine/src/Renderer.cpp) | Note events, active notes, preview notes, MIDI input gathering and routing, live notes, MIDI recording |
-| [MidiInput.h](../../engine/src/MidiInput.h), [MidiInput.cpp](../../engine/src/MidiInput.cpp) | `MidiInputEvent`, `AudioClock`, `hostTimeNs()`, `MidiInputDevices` |
-| [backends/MidiWinMM.cpp](../../engine/src/backends/MidiWinMM.cpp), [backends/MidiNone.cpp](../../engine/src/backends/MidiNone.cpp) | `MidiInputDevices` on Windows (WinMM), and elsewhere (no devices) |
+| [MidiInput.h](../../engine/src/MidiInput.h), [MidiInput.cpp](../../engine/src/MidiInput.cpp) | `MidiInputEvent`, `AudioClock`, `MidiInputDevices` (the same on every system: the names users see, which inputs are open, closing them) |
+| [backends/MidiDriver.h](../../engine/src/backends/MidiDriver.h) | What a system's MIDI API gives `MidiInputDevices`: `systemInputNames()`, `openSystemInput()` (an `InputConnection`, closed when it goes), `shortMessageSize()` |
+| [backends/MidiWinMM.cpp](../../engine/src/backends/MidiWinMM.cpp), [backends/MidiNone.cpp](../../engine/src/backends/MidiNone.cpp) | Those on Windows (WinMM), and elsewhere (no devices) |
 | [EngineInput.cpp](../../engine/src/EngineInput.cpp) | MIDI ports, `Engine::midiInput` (stamping), `sendMidiInput`, `discardMidiInputLocked`, MIDI targets in `startRecording` |
 | [Recorder.h](../../engine/src/Recorder.h), [Recorder.cpp](../../engine/src/Recorder.cpp) | `RecordedNote`, `MidiRecordingTake`, `RecordingSession::midiNotes`, MIDI results in `finish()` |
 | [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | `resetProcessorsLocked` around offline renders and exports |
@@ -285,10 +286,12 @@ and the session applies *Record Quantization* (`recordQuantize()` in
 
 ## Extending it
 
-- **Another MIDI backend** (Windows MIDI Services, or ALSA sequencer input on Linux): `MidiInputDevices` is
-  the only part that knows about the system's MIDI; each platform has its own file in `backends/`, chosen in
-  [engine/CMakeLists.txt](../../engine/CMakeLists.txt). Keep its interface: list by name, open with a port id,
-  call the handler with the bytes and `hostTimeNs()` taken on arrival.
+- **Another MIDI backend** (Windows MIDI Services, ALSA's sequencer on Linux, CoreMIDI on macOS): a file in
+  `backends/` implementing [MidiDriver.h](../../engine/src/backends/MidiDriver.h), chosen in
+  [engine/CMakeLists.txt](../../engine/CMakeLists.txt): list the inputs by their names, open one as an
+  `InputConnection` that calls the handler with its port, the bytes (`shortMessageSize()` for APIs that hand over
+  a byte stream) and `hostTimeNs()` taken on arrival, and stops calling once destroyed. `MidiInputDevices` does
+  the rest.
 - **Recording controllers** (sustain, pitch bend): `routeMidiInput()` would send them to the take as well,
   and `MidiRecordingTake::Event` / `RecordedNote` would need a form for them.
 - **MIDI effects** would sit between `buildNoteEvents()` and the instrument; today events go straight to

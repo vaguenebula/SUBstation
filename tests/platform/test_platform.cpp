@@ -2,6 +2,7 @@
 // operating system, tested on whichever this is.
 
 #include <string>
+#include <vector>
 
 #include "harness/Test.h"
 #include "platform/Bytes.h"
@@ -105,6 +106,9 @@ TEST_CASE("a file is written whole, its folder made, and read back") {
     const std::string bytes("one\0two", 7);
     REQUIRE(writeFileAtomically(file, bytes));
     CHECK_EQ(readFile(file).value_or(""), bytes);
+    const auto asVector = readFile<std::vector<char>>(file);
+    REQUIRE(asVector);
+    CHECK_EQ(std::string(asVector->begin(), asVector->end()), bytes);
     REQUIRE(stamp(file));
     CHECK_EQ(stamp(file)->size, uint64_t(7));
     CHECK(!stamp(folder));  // a folder has no stamp

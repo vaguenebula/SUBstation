@@ -1,31 +1,83 @@
 #pragma once
 // Small real-time helpers shared by the engine. Everything that runs on the
 // audio thread must be wait-free: no locks, no allocation, no deallocation.
+//
+// What depends on the CPU is here too, each for x86-64 and for arm64:
+// ScopedNoDenormals (MXCSR, FPCR) and cpuRelax() (PAUSE, ISB).
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vector>
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#define SUB_RT_X86 1
 #include <xmmintrin.h>
+#elif defined(__aarch64__)
+#define SUB_RT_ARM64 1
+#endif
 
 namespace sub {
 
 // Enables flush-to-zero / denormals-are-zero for the current scope. Denormal
 // floats make recursive DSP (filters, reverb tails, plugins) extremely slow.
+// x86: MXCSR's FTZ and DAZ bits; arm64: FPCR's FZ bit (which flushes inputs
+// and results alike).
 class ScopedNoDenormals {
 public:
-    ScopedNoDenormals() noexcept : saved_(_mm_getcsr()) { _mm_setcsr(saved_ | 0x8040u); }
-    ~ScopedNoDenormals() { _mm_setcsr(saved_); }
+    ScopedNoDenormals() noexcept : saved_(read()) { write(saved_ | kFlushToZero); }
+    ~ScopedNoDenormals() { write(saved_); }
     ScopedNoDenormals(const ScopedNoDenormals&) = delete;
     ScopedNoDenormals& operator=(const ScopedNoDenormals&) = delete;
 
 private:
-    unsigned int saved_;
+#if SUB_RT_X86
+    using Register = unsigned int;
+    static constexpr Register kFlushToZero = 0x8040u;
+    static Register read() noexcept { return _mm_getcsr(); }
+    static void write(Register value) noexcept { _mm_setcsr(value); }
+#elif SUB_RT_ARM64
+    using Register = uint64_t;
+    static constexpr Register kFlushToZero = Register(1) << 24;
+    static Register read() noexcept {
+        Register value;
+        __asm__ __volatile__("mrs %0, fpcr" : "=r"(value));
+        return value;
+    }
+    static void write(Register value) noexcept { __asm__ __volatile__("msr fpcr, %0" : : "r"(value)); }
+#else  // (no other CPU is built for: nothing is flushed)
+    using Register = int;
+    static constexpr Register kFlushToZero = 0;
+    static Register read() noexcept { return 0; }
+    static void write(Register) noexcept {}
+#endif
+    Register saved_;
 };
+
+// Inside a spin-wait loop, between looks: tells the CPU this thread is waiting,
+// so the other hyper-thread of its core runs and the loop draws less power
+// (x86's PAUSE; arm64's ISB, which waits about as long, where its YIELD is a
+// no-op on most cores).
+inline void cpuRelax() noexcept {
+#if SUB_RT_X86
+    _mm_pause();
+#elif SUB_RT_ARM64
+    __asm__ __volatile__("isb sy" : : : "memory");
+#endif
+}
+
+// The host clock: the time audio callbacks begin and MIDI input arrives,
+// stamped with it (std::chrono::steady_clock: QueryPerformanceCounter on
+// Windows, CLOCK_MONOTONIC elsewhere), in nanoseconds.
+inline int64_t hostTimeNs() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 // Linear ramp towards a target; removes "zipper" noise from gain/pan changes.
 class SmoothedValue {

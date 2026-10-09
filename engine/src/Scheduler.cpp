@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <xmmintrin.h>
 
 #include "platform/Threads.h"
 #include "rt/RtUtils.h"
@@ -127,11 +126,11 @@ void Scheduler::run(TaskGraph& graph, Job job, void* context, bool parallel) noe
     if (sleepers_.load(std::memory_order_seq_cst) > 0) state_.notify_all();
 
     work(0);
-    while (graph.done_.load(std::memory_order_acquire) < size) _mm_pause();  // the last nodes on the workers
+    while (graph.done_.load(std::memory_order_acquire) < size) cpuRelax();  // the last nodes on the workers
     // Close it, and wait for the workers still inside to leave: a worker that
     // joins counts itself first and then checks that the run is still open.
     state_.store(open & ~uint64_t{1}, std::memory_order_seq_cst);
-    while (active_.load(std::memory_order_seq_cst) > 0) _mm_pause();
+    while (active_.load(std::memory_order_seq_cst) > 0) cpuRelax();
 }
 
 void Scheduler::work(int worker) noexcept {
@@ -144,7 +143,7 @@ void Scheduler::work(int worker) noexcept {
         const int node = graph.queue_[head].load(std::memory_order_acquire);
         if (node < 0) {  // none ready: the nodes running will queue the next
             if (++idle < kPausesBeforeYield) {
-                _mm_pause();
+                cpuRelax();
             } else {
                 std::this_thread::yield();
             }
@@ -172,7 +171,7 @@ void Scheduler::workerMain(int worker) noexcept {
         const auto deadline = std::chrono::steady_clock::now() + kSpinBeforeSleep;
         for (int spins = 1; state != kQuit && (!(state & 1) || state == joined); ++spins) {
             if (spins % 64 == 0 && std::chrono::steady_clock::now() > deadline) break;
-            _mm_pause();
+            cpuRelax();
             state = state_.load(std::memory_order_seq_cst);
         }
         if (state == kQuit) break;

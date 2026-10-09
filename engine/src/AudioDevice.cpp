@@ -2,34 +2,15 @@
 
 #include <stdexcept>
 
-#include "backends/WasapiBackend.h"
-#if SUBSTATION_HAS_ASIO
-#include "backends/AsioBackend.h"
-#endif
+#include "backends/AudioBackends.h"
 
 namespace sub {
 
-AudioDevice::AudioDevice() {
-#if SUBSTATION_HAS_ASIO
-    // First: ASIO needs this thread in a single-threaded COM apartment, which
-    // miniaudio would otherwise make multithreaded.
-    auto asio = createAsioBackend();
-#endif
-    backends_.push_back(std::make_unique<WasapiBackend>());
-#if SUBSTATION_HAS_ASIO
-    backends_.push_back(std::move(asio));
-#endif
-}
+AudioDevice::AudioDevice() : backends_(makeAudioBackends()) {}
 
 AudioDevice::~AudioDevice() { close(); }
 
-std::vector<std::string> AudioDevice::driverTypes() {
-#if SUBSTATION_HAS_ASIO
-    return {WasapiBackend::kName, "ASIO"};
-#else
-    return {WasapiBackend::kName};
-#endif
-}
+std::vector<std::string> AudioDevice::driverTypes() { return audioDriverNames(); }
 
 AudioBackend& AudioDevice::backend(const std::string& driver) {
     for (auto& backend : backends_) {

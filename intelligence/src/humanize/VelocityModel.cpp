@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <utility>
 
 #include <humanbro/humanbro.hpp>
 
@@ -17,9 +18,9 @@ namespace {
 constexpr int kTicksPerQuarter = 960;
 
 std::vector<char> readModel(const std::string& path) {
-    const std::optional<std::string> data = platform::readFile(path);
+    std::optional<std::vector<char>> data = platform::readFile<std::vector<char>>(path);
     if (!data) throw ModelError((platform::stamp(path) ? "can't read the model file " : "can't open the model file ") + path);
-    return std::vector<char>(data->begin(), data->end());
+    return std::move(*data);
 }
 
 }  // namespace

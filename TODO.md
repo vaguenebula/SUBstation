@@ -587,12 +587,13 @@ never `#ifdef`s through the engine. Stages in order; each lands with its CI
 job green.
 
 Stage 1 — The real-time base (both)
-- [ ] arm64 builds: the AVX2 flags (`engine/CMakeLists.txt`) for x86_64 only;
+- [x] arm64 builds: the AVX2 flags (`engine/CMakeLists.txt`) for x86_64 only;
       arm64 builds with its baseline (NEON).
-- [ ] `ScopedNoDenormals` (`rt/RtUtils.h`) on arm64: FPCR's FZ bit instead of MXCSR.
-- [ ] A `cpuRelax()` in `rt/` for the spin loops (`_mm_pause` on x86,
-      `yield`/`isb` on arm64): `Scheduler.cpp`, `Vst3Support.h`.
-- [ ] The workers' real-time priority (what MMCSS does on Windows, `Scheduler::workerMain`):
+- [x] `ScopedNoDenormals` (`rt/RtUtils.h`) on arm64: FPCR's FZ bit instead of MXCSR.
+- [x] A `cpuRelax()` in `rt/` for the spin loops (`_mm_pause` on x86,
+      `isb` on arm64): `Scheduler.cpp`, `Vst3Support.h`.
+- [ ] The workers' real-time priority (what MMCSS does on Windows:
+      `platform::ScopedRealtimePriority`, `platform/src/platform/PlatformPosix.cpp`):
   - [ ] Linux: `SCHED_FIFO` through rtkit (or limits.conf), falling back to
         normal priority with a warning in the audio settings.
   - [ ] macOS: time-constraint policy, and the workers join the device's
@@ -601,7 +602,8 @@ Stage 1 — The real-time base (both)
 - [ ] A benchmark run (`parallel_render_bench`) on each platform: no worse
       than Windows on comparable hardware.
 
-Stage 2 — Audio backends
+Stage 2 — Audio backends (each listed and made by its system's file behind
+`backends/AudioBackends.h`: `AudioBackendsPosix.cpp` here, before "System")
 - [ ] Linux: a PipeWire backend (`backends/PipeWireBackend.cpp`, libpipewire
       `pw_filter`): the driver every Linux build has, in place of miniaudio's
       "System" there.
@@ -623,10 +625,11 @@ Stage 2 — Audio backends
   - [ ] The device's workgroup handed to the `Scheduler` (Stage 1).
   - [ ] Device changes (unplugged, rate changed by another app) handled.
   - [ ] Microphone permission asked (`NSMicrophoneUsageDescription`).
-- [ ] miniaudio's "System" driver stays only as the fallback when neither
-      opens (no PipeWire daemon, a CI container).
+- [ ] miniaudio's "System" driver (`MiniaudioBackend`) stays only as the
+      fallback when neither opens (no PipeWire daemon, a CI container).
 
-Stage 3 — MIDI
+Stage 3 — MIDI (each a file behind `backends/MidiDriver.h`: the system's
+inputs listed and one opened; `MidiInputDevices` does the rest)
 - [ ] Linux: an ALSA sequencer backend (`backends/MidiAlsa.cpp`, as
       `MidiWinMM.cpp`): ports listed, hot-plug, timestamps. (PipeWire bridges
       ALSA MIDI, so this covers it.)
@@ -635,12 +638,15 @@ Stage 3 — MIDI
 - [ ] `MidiNone.cpp` only where neither builds.
 
 Stage 4 — Plug-ins
-- [ ] macOS: the VST3 SDK's `module_mac.mm` as the module loader; `.vst3`
-      bundles (`Contents/MacOS`) in `Vst3Format.cpp`; the scanner loads them.
+- [ ] macOS: the VST3 SDK's `module_mac.mm` as the module loader; the scanner
+      loads `.vst3` bundles. (Their code's place, `Contents/MacOS`, and the
+      folders are `plugins/Vst3PlatformPosix.cpp`'s already.)
 - [ ] macOS: universal or arm64 plug-ins only; x86_64-only bundles listed as
       unsupported (no Rosetta host).
-- [ ] Editors on macOS: `EditorWindowMac.mm`, an `NSWindow` holding the view
-      (`kPlatformTypeNSView`), resizing, Retina scale, position remembered.
+- [ ] Editors on macOS: `EditorWindowMac.mm` (its `EditorWindow::Native`,
+      beside `EditorWindowWin32.cpp`), an `NSWindow` holding the view
+      (`canHold()`: `kPlatformTypeNSView`), resizing, Retina scale
+      (`setContentScale()`), position remembered.
 - [ ] Editors on Linux: `EditorWindowX11.cpp` (`kPlatformTypeX11EmbedWindowID`),
       under XWayland on Wayland.
   - [ ] `Steinberg::Linux::IRunLoop` for the plug-ins: their fds and timers

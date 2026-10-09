@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <thread>
 #include <vector>
-#include <xmmintrin.h>
 
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
@@ -42,7 +41,7 @@ using Steinberg::Vst::ParamValue;
 class SpinLock {
 public:
     void lock() noexcept {
-        while (flag_.test_and_set(std::memory_order_acquire)) _mm_pause();
+        while (flag_.test_and_set(std::memory_order_acquire)) cpuRelax();
     }
     void unlock() noexcept { flag_.clear(std::memory_order_release); }
 

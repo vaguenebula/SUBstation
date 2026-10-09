@@ -1,7 +1,6 @@
 #include "plugins/Vst3Processor.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -550,9 +549,7 @@ void Vst3Processor::fillContext(const ProcessContext& ctx) {
     c.sampleRate = ctx.sampleRate;
     c.projectTimeSamples = ctx.samplePos;
     c.continousTimeSamples = continuousSamples_;
-    c.systemTime = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       std::chrono::steady_clock::now().time_since_epoch())
-                       .count();
+    c.systemTime = hostTimeNs();
     c.projectTimeMusic = ctx.beatPos;
     const double beatsPerBar = ctx.timeSigNum * 4.0 / ctx.timeSigDen;
     c.barPositionMusic = std::floor(ctx.beatPos / beatsPerBar + 1e-9) * beatsPerBar;
@@ -876,7 +873,7 @@ bool Vst3Processor::openEditor(void* ownerWindow, const std::string& title) {
     dropEditor();
     if (!controller_) return false;
     IPtr<IPlugView> view = owned(controller_->createView(ViewType::kEditor));
-    if (!view || view->isPlatformTypeSupported(kPlatformTypeHWND) != kResultTrue) return false;
+    if (!view || !EditorWindow::canHold(*view)) return false;
     editor_ = std::make_unique<EditorWindow>(view, ownerWindow, title,
                                              editorPosition_ ? &*editorPosition_ : nullptr);
     if (!editor_->isOpen()) {

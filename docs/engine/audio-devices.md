@@ -5,7 +5,8 @@ miniaudio) or ASIO (Steinberg's driver model, compiled only when the ASIO SDK wa
 platforms other than Windows the WASAPI backend opens miniaudio's default backend instead, as the
 "System" driver ([below](#the-system-driver-elsewhere)). This
 part lives in [AudioDevice.h](../../engine/src/AudioDevice.h) / [AudioDevice.cpp](../../engine/src/AudioDevice.cpp),
-the two backends in [engine/src/backends/](../../engine/src/backends/), and the engine's side of it
+the backends in [engine/src/backends/](../../engine/src/backends/) (which ones a build has: a file per system behind
+[AudioBackends.h](../../engine/src/backends/AudioBackends.h)), and the engine's side of it
 (opening, resets, driver events, the audio callback) in [EngineDevice.cpp](../../engine/src/EngineDevice.cpp).
 
 For the preferences the user sees, see [guide/audio-setup.md](../guide/audio-setup.md); for how the
@@ -50,8 +51,9 @@ for building with or without the ASIO SDK, [building.md](../building.md).
 | File | What it holds |
 |---|---|
 | [AudioDevice.h](../../engine/src/AudioDevice.h) | `DeviceConfig`, `DeviceCaps`, `DeviceState`, `AudioIO`, `DeviceEvent`, the `AudioCallback` and `AudioBackend` interfaces, and `AudioDevice` |
-| [AudioDevice.cpp](../../engine/src/AudioDevice.cpp) | `AudioDevice`: makes the backends (ASIO first, for COM), picks one by driver name, remembers the last config for resets |
-| [backends/WasapiBackend.h](../../engine/src/backends/WasapiBackend.h), [.cpp](../../engine/src/backends/WasapiBackend.cpp) | WASAPI output through miniaudio, shared or exclusive; elsewhere the "System" driver |
+| [AudioDevice.cpp](../../engine/src/AudioDevice.cpp) | `AudioDevice`: makes the system's backends, picks one by driver name, remembers the last config for resets |
+| [backends/AudioBackends.h](../../engine/src/backends/AudioBackends.h) | `audioDriverNames()`, `makeAudioBackends()`: the driver types this build has, one file per system: [AudioBackendsWin32.cpp](../../engine/src/backends/AudioBackendsWin32.cpp) (WASAPI, then ASIO with the SDK; ASIO is made first, for COM), [AudioBackendsPosix.cpp](../../engine/src/backends/AudioBackendsPosix.cpp) ("System") |
+| [backends/MiniaudioBackend.h](../../engine/src/backends/MiniaudioBackend.h), [.cpp](../../engine/src/backends/MiniaudioBackend.cpp) | Output through miniaudio: WASAPI, shared or exclusive, on Windows; elsewhere the "System" driver |
 | [backends/AsioBackend.h](../../engine/src/backends/AsioBackend.h), [.cpp](../../engine/src/backends/AsioBackend.cpp) | ASIO through `IASIO`: finding and loading drivers, channels, rate, buffer size, the callbacks, resets, control panel. Built only with `SUBSTATION_HAS_ASIO` |
 | [backends/AsioSupport.h](../../engine/src/backends/AsioSupport.h) | The parts of ASIO hosting that need no SDK: the sample formats and their conversion, the buffer sizes to offer and to ask for (namespace `sub::asio`) |
 | [miniaudio_impl.c](../../engine/src/miniaudio_impl.c) | The single translation unit that compiles miniaudio's implementation (`MINIAUDIO_IMPLEMENTATION`) |
@@ -170,7 +172,7 @@ open it gets the mean of left and right. Which device outputs those are is the c
 which then plays in mono) is just the pair (or single channel) opened. The master's output also goes
 into the oscilloscope ring (`SharedState::pushScope`, read by `masterScope()`).
 
-### WASAPI (`WasapiBackend`)
+### WASAPI (`MiniaudioBackend`)
 
 - One miniaudio context, WASAPI only (any backend if that fails). `devices()` lists playback devices
   with their default flag. A name is matched exactly; "Audio device not found" otherwise.
@@ -333,8 +335,10 @@ silence.
 - **A new driver type** is a new `AudioBackend`: implement `name()`, `devices()`, `open()`, `start()`,
   `close()` (blocking until the callback stops), `isOpen()` and `state()`, call
   `AudioCallback::audioCallback` with planar float buffers, a running `sampleTime` and the steady-clock
-  `hostTimeNs`, and report events as flags. Add it to `AudioDevice`'s constructor and to
-  `AudioDevice::driverTypes()`. Mind COM: if it initialises COM, do it after the ASIO backend has.
+  `hostTimeNs()`, and report events as flags. Add it to its system's `audioDriverNames()` and
+  `makeAudioBackends()` ([AudioBackends.h](../../engine/src/backends/AudioBackends.h): a PipeWire backend goes in
+  `AudioBackendsPosix.cpp`, on Linux, before "System"). Mind COM on Windows: if it initialises COM, do it after the
+  ASIO backend has.
 - **WASAPI capture**: open miniaudio's duplex (or capture) device, fill `AudioIO::inputs`/`numInputs`,
   report `inputChannels`, `inputLatency` and input names in `state()`; recording and monitoring then
   work as they do for ASIO.

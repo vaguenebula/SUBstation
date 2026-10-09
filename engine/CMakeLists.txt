@@ -206,7 +206,7 @@ add_library(sub_engine STATIC
     src/EngineSnapshot.cpp
     src/EngineTracks.cpp
     src/AudioDevice.cpp
-    src/backends/WasapiBackend.cpp
+    src/backends/MiniaudioBackend.cpp
     src/AudioSource.cpp
     src/Renderer.cpp
     src/Scheduler.cpp
@@ -219,14 +219,18 @@ add_library(sub_engine STATIC
     src/builtin/SampleSlicing.cpp
     ${BUILTIN_DEVICE_SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinDevices.cpp
+    src/plugins/EditorWindow.cpp
     src/plugins/Vst3Format.cpp
     src/plugins/Vst3Ids.cpp
     src/plugins/Vst3Processor.cpp
 )
+# Each system's audio driver types, MIDI inputs and plug-in editor windows are files of their own.
 if (WIN32)
-    target_sources(sub_engine PRIVATE src/backends/MidiWinMM.cpp src/plugins/EditorWindow.cpp)
+    target_sources(sub_engine PRIVATE src/backends/AudioBackendsWin32.cpp src/backends/MidiWinMM.cpp
+                                      src/plugins/EditorWindowWin32.cpp src/plugins/Vst3PlatformWin32.cpp)
 else()
-    target_sources(sub_engine PRIVATE src/backends/MidiNone.cpp src/plugins/EditorWindowNone.cpp)
+    target_sources(sub_engine PRIVATE src/backends/AudioBackendsPosix.cpp src/backends/MidiNone.cpp
+                                      src/plugins/EditorWindowNone.cpp src/plugins/Vst3PlatformPosix.cpp)
 endif()
 add_library(sub::engine ALIAS sub_engine)
 target_include_directories(sub_engine PUBLIC src)
@@ -249,18 +253,21 @@ if (ASIO_SDK)
     target_compile_definitions(sub_engine PUBLIC SUBSTATION_HAS_ASIO=1)
 endif()
 sub_project_warnings(sub_engine)
-# The audio path is float loops: let the compiler vectorize them with AVX2.
-# Needs a CPU with AVX2 (Intel Haswell / AMD Zen and later). No fast math
-# (/fp:fast, -ffast-math): a DAW's results must not depend on the compiler
-# reordering arithmetic or assuming there's no NaN or infinity (a broken
-# plug-in's output, a division by a parameter at 0). Denormals are flushed
-# where audio is rendered instead (ScopedNoDenormals, rt/RtUtils.h).
-# -fno-math-errno only lets GCC and Clang inline sqrt and friends: nothing
-# reads errno.
-if (MSVC)
-    target_compile_options(sub_engine PRIVATE /arch:AVX2)
-elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
-    target_compile_options(sub_engine PRIVATE -mavx2 -mfma -fno-math-errno)
+# The audio path is float loops: let the compiler vectorize them with AVX2 on
+# x86-64 (a CPU with AVX2 is needed: Intel Haswell / AMD Zen and later). On
+# arm64 (Apple Silicon, Linux on ARM) the compiler's baseline, NEON, is what it
+# vectorizes with: no flags. No fast math (/fp:fast, -ffast-math): a DAW's
+# results must not depend on the compiler reordering arithmetic or assuming
+# there's no NaN or infinity (a broken plug-in's output, a division by a
+# parameter at 0). Denormals are flushed where audio is rendered instead
+# (ScopedNoDenormals, rt/RtUtils.h). -fno-math-errno only lets GCC and Clang
+# inline sqrt and friends: nothing reads errno.
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+    if (MSVC)
+        target_compile_options(sub_engine PRIVATE /arch:AVX2)
+    else()
+        target_compile_options(sub_engine PRIVATE -mavx2 -mfma)
+    endif()
     if (MINGW)
         # GCC on 64-bit Windows can't align the stack to 32 bytes (GCC bug 54412),
         # so an aligned AVX move to a stack slot may crash: the assembler makes
@@ -271,6 +278,7 @@ elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
             target_compile_options(sub_engine PRIVATE -Wa,-muse-unaligned-vector-move)
         endif()
     endif()
-else()
+endif()
+if (NOT MSVC)
     target_compile_options(sub_engine PRIVATE -fno-math-errno)
 endif()

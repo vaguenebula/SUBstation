@@ -71,9 +71,10 @@ file.
 
 ## Where it looks
 
-- `standardPluginFolders()`: on Windows `%CommonProgramFiles%\VST3` and `%LOCALAPPDATA%\Programs\Common\VST3` (with
-  fallbacks if the variables are missing); elsewhere the engine's list (`Vst3Format::defaultSearchPaths()`: `~/.vst3`,
-  `/usr/lib/vst3`, `/usr/local/lib/vst3` on Linux). If `SUBSTATION_VST3_PATH` is set, those folders instead
+- `standardPluginFolders()`: the system's VST3 folders, as the engine knows them (`Vst3Format::defaultSearchPaths()`:
+  `C:\Program Files\Common Files\VST3` and `%LOCALAPPDATA%\Programs\Common\VST3` on Windows; `~/.vst3`,
+  `/usr/lib/vst3`, `/usr/local/lib/vst3` on Linux; [engine/plugins.md](../engine/plugins.md)). If
+  `SUBSTATION_VST3_PATH` is set, those folders instead
   (separated by the system's list separator, `;` on Windows and `:` elsewhere; empty for none). The tests set it, so
   they never see the installed plug-ins.
 - `pluginSearchFolders(custom)`: the standard folders, then the user's own, each once (compared by `pathKey()`: the
@@ -108,7 +109,8 @@ file.
 A file is read again when its *signature* changes: the modification time (nanoseconds since
 1970) and size of the file its code is in (`pluginSignature()`). For a bundle
 that is `Contents/x86_64-win/<name>.vst3` inside it on Windows, `Contents/x86_64-linux/<name>.so` on Linux
-(`aarch64-linux` on ARM) (`pluginBinary()`), else the path itself. A file whose signature can't be read gets none,
+(`aarch64-linux` on ARM), `Contents/MacOS/<name>` on macOS (`pluginBinary()`, from the engine's
+`Vst3Format::binaryInBundle()`), else the path itself. A file whose signature can't be read gets none,
 which never matches.
 
 ### The child process

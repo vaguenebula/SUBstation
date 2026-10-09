@@ -21,9 +21,10 @@ are is in [architecture.md](architecture.md).
     qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtquick-templates
     qml6-module-qtquick-dialogs qml6-module-qtqml-workerscript qml6-module-qt-labs-settings
     qml6-module-qtquick-shapes libgl-dev libxkbcommon-dev` (and `xvfb` to run the UI's tests headless).
-- A CPU with AVX2 (Intel Haswell, AMD Zen or later) to run it: the engine is compiled with AVX2 (`/arch:AVX2`
-  with MSVC, `-mavx2 -mfma` with GCC and Clang; with MinGW also `-Wa,-muse-unaligned-vector-move`, as GCC can't
-  align the stack for AVX on 64-bit Windows). Not with fast math (`/fp:fast`, `-ffast-math`): the results mustn't
+- On x86-64, a CPU with AVX2 (Intel Haswell, AMD Zen or later) to run it: the engine is compiled with AVX2
+  (`/arch:AVX2` with MSVC, `-mavx2 -mfma` with GCC and Clang; with MinGW also `-Wa,-muse-unaligned-vector-move`, as
+  GCC can't align the stack for AVX on 64-bit Windows). On arm64 the engine builds with the CPU's baseline (NEON),
+  no flags. Not with fast math (`/fp:fast`, `-ffast-math`): the results mustn't
   depend on the compiler reordering arithmetic or assuming there is no NaN or infinity. Denormals are flushed to
   zero where audio renders (`ScopedNoDenormals`), not by a compiler flag.
 - Optional: Steinberg's ASIO SDK, for ASIO (see [ASIO SDK](#asio-sdk)).
@@ -95,7 +96,7 @@ Pass them at configure time: `cmake -B build -DSUBSTATION_TEST_PLUGINS=OFF`.
 | `vst3_base`, `vst3_hosting` | static libraries | engine | The VST 3 SDK's interfaces and base library, and its host side (module loading: `module_win32.cpp` or `module_linux.cpp`). `vst3_hosting` is C++17 on purpose: as C++17 the module loader reads paths as UTF-8 (`u8path`); as C++20 it would use the ANSI code page on Windows, and plug-ins with non-ASCII paths would not load. |
 | `mp3lame` | static library (C) | engine | [LAME](../engine/third_party/lame)'s encoding library (`libmp3lame`, its SSE quantizer on x86-64), with a `config.h` of ours; MP3 export (`Mp3Writer.cpp`). |
 | `sub_platform` | static library | platform | What every layer needs from the operating system ([platform/](../platform/CMakeLists.txt), [platform.md](platform.md)): paths and their keys, files, binary fields, threads' priorities; no Qt, nothing of the other layers. `PlatformWin32.cpp` on Windows, `PlatformPosix.cpp` elsewhere. |
-| `sub_engine` | static library | engine | The real-time engine ([engine/](../engine/CMakeLists.txt)): no Qt. On Windows it adds the WinMM MIDI backend, the plug-in editor windows and, with the SDK, ASIO; elsewhere a MIDI backend without devices and no editor windows. |
+| `sub_engine` | static library | engine | The real-time engine ([engine/](../engine/CMakeLists.txt)): no Qt; on `sub_platform`. Each system's audio drivers, MIDI inputs, plug-in editor windows and VST3 folders are files of their own ([engine/README.md](engine/README.md#platforms)): on Windows WASAPI and, with the SDK, ASIO, WinMM MIDI, Win32 editor windows; elsewhere miniaudio's "System", a MIDI backend without devices and no editor windows. |
 | `sub_browser` | static library | browser | The browser's file index and search ([browser/](../browser/CMakeLists.txt)): no Qt; `sub_platform`, and a Win32 or POSIX layer of its own for listing and watching folders (inotify's watcher on Linux). |
 | `essentia` | static library | intelligence | [Essentia](../intelligence/third_party/essentia) 2.1-beta5's core and the 29 algorithms the sound similarity uses, with KISS FFT: no other dependency. Built as C++17, its warnings not shown, with `ESSENTIA_STATIC` and `DEBUGGING_ENABLED=0` (public: they shape its headers). AGPLv3: [licensing.md](licensing.md). |
 | `humanbro` | static library | intelligence | [HUMANBRO](../intelligence/third_party/humanbro)'s C++ runtime: MIDI features and the tree ensemble that predicts velocities. Built with its own strict floating-point flags (`/fp:precise`; `-ffp-contract=off -fno-fast-math`). |

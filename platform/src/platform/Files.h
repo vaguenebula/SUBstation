@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace sub::platform {
 
@@ -30,8 +31,12 @@ bool replaceFile(const std::string& from, const std::string& to);
 // Opens a file for binary reading or writing; null on failure.
 std::FILE* openFile(const std::string& path, bool write);
 
-// A whole file's bytes; none if it can't be read.
-std::optional<std::string> readFile(const std::string& path);
+// A whole file's bytes, as a std::string or a std::vector<char> (whichever the
+// caller keeps it in: no copy); none if it can't be read.
+template <typename Bytes = std::string>
+std::optional<Bytes> readFile(const std::string& path);
+extern template std::optional<std::string> readFile(const std::string&);
+extern template std::optional<std::vector<char>> readFile(const std::string&);
 
 // Writes a whole file as one step: to `path` + ".tmp" first (making the folder
 // if needed), then over `path` (replaceFile), so a crash or a full disk never

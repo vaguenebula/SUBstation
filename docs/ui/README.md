@@ -473,7 +473,7 @@ or shortcut does.
 [PluginEditorKeys](../../ui/src/platform/PluginEditorKeys.h) (in Main.qml, `target: window`). The rules as the user
 sees them: [guide/shortcuts.md](../guide/shortcuts.md).
 
-Plug-in editors are plain Win32 windows (the engine's `EditorWindow.cpp`, window class `SUBstationPluginEditor`; see
+Plug-in editors are plain Win32 windows (the engine's `EditorWindowWin32.cpp`, window class `SUBstationPluginEditor`; see
 [engine/plugins.md](../engine/plugins.md)), so Qt never sees their keys as key events. Their messages still pass
 through Qt's event loop, so `PluginEditorKeys`, a `QAbstractNativeEventFilter` installed on the application on
 Windows only (`supported`), sees each `WM_KEYDOWN` / `WM_SYSKEYDOWN`:

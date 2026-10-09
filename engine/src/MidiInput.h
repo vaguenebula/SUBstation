@@ -16,8 +16,10 @@
 // producers (driver threads, sendMidiInput()) serialise on their own mutex, so
 // the audio thread never waits.
 //
-// WinMM is the first backend; Windows MIDI Services can be another later
-// (MidiInputDevices is the only part that knows about it).
+// Each system's MIDI API is a file of its own behind backends/MidiDriver.h
+// (WinMM's is MidiWinMM.cpp; ALSA's sequencer, CoreMIDI and Windows MIDI
+// Services can be others): it lists the inputs and opens one, and
+// MidiInputDevices does the rest the same way for all of them.
 
 #include <atomic>
 #include <cstdint>
@@ -89,14 +91,11 @@ private:
     int64_t lastHost_ = 0;  // audio thread
 };
 
-// The host clock MIDI input is stamped with: the one audio backends stamp their
-// callbacks with (std::chrono::steady_clock, i.e. QueryPerformanceCounter).
-int64_t hostTimeNs() noexcept;
-
 // The system's MIDI input devices (WinMM on Windows: backends/MidiWinMM.cpp;
 // none elsewhere: backends/MidiNone.cpp). Main thread, except the handler,
 // which the driver calls on its own thread for every short message (channel
-// and system messages; System Exclusive is ignored).
+// and system messages; System Exclusive is ignored), stamped with
+// hostTimeNs() (rt/RtUtils.h).
 class MidiInputDevices {
 public:
     using Handler = std::function<void(uint16_t port, const uint8_t* message, int size, int64_t hostTimeNs)>;
