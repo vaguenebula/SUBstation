@@ -127,7 +127,9 @@ the bottom.
 - Loading a sample can be undone, and the sample is saved with the project. Files load
   in the background, and the engine swaps them in without stopping the audio.
 - Warped notes that stretch (not Re-Pitch) cost more: each one runs a stretcher (up to
-  8 at once), and starting a note computes the stretcher's first block ahead.
+  8 at once), and starting a note computes the stretcher's first block ahead. Warped to
+  play more than 4 times as fast (a long sample in few beats), notes are resampled
+  instead.
 
 | Parameter | Range |
 |---|---|

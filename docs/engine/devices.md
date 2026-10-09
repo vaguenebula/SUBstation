@@ -266,8 +266,8 @@ project saved then plays as it did: a parameter it doesn't have takes its defaul
     Voices limits the notes: the quietest releasing one, else the oldest, is cut short
     to make room. One voice: a new note cuts the last; with Glide too, notes overlapping
     are legato: the voice goes on, its pitch moving linearly (in semitones) to the new
-    key over the glide time, and back to the newest key still held when the top one is
-    let go (the keys held are kept in order).
+    key over the glide time, and back to the newest key still held when the one playing
+    is let go (the keys held are kept in order, even while there is no sample).
   - *1-Shot*: one voice at a time, pitched; the envelope is Fade In (linear from 0),
     then held. Trigger ignores the note-off; Gate fades out over Fade Out (linear) from
     it. Either way it fades out linearly over the Fade Out before End, in played time.
@@ -295,24 +295,29 @@ project saved then plays as it did: a parameter it doesn't have takes its defaul
   the whole sample lasts `warp_beats` beats at the block's tempo: `rate = frames /
   (beats * 60 / tempo * sampleRate)`. Re-Pitch resamples at `rate * 2^(semitones / 12)`;
   the other modes stretch: each voice gets a Signalsmith stretcher of its own, configured
-  with the clips' block sizes for that mode ([warp.md](warp.md); Formants keeps the
-  formants), fed `rate` frames a frame from where it plays (wrapping its loop; silent
+  with the clips' block sizes for that mode and split computation (each block's work
+  spread over the interval after it; [warp.md](warp.md); Formants keeps the formants),
+  fed `rate` frames a frame from where it plays (wrapping a Classic voice's loop; silent
   past its end), transposed by `semitones`. A note-on seeks it (`outputSeek`, its
-  latency computed ahead), so its first frame is the slice's or Start's at once.
+  latency computed ahead), so its first frame is the slice's or Start's at once. Faster
+  than 4 times (`kMaxStretchRate`: a long sample in few beats) notes are resampled, as
+  a stretcher's work grows with the rate.
 - **Stretchers** are made on the main side (`updatePool()`: `idle()`, `prepare()`,
   `resetOffline()`), only while Warp is on with a stretching mode: one for a mono mode,
   else as many as Voices allows up to 8 (`kMaxStretched`, which then limits the notes
   too), plus 2 for notes fading out; each is about 0.9 MB. They are handed to the
   rendering thread as samples are (`pendingPool_`, `retiredPools_`); voices of the pool
-  it replaces stop. `resetOffline()` makes fresh ones (with the fixed seed), so offline
-  renders come out the same every time. Until they come (or with none free) a warped note
+  it replaces fade out (resampled). `resetOffline()` makes fresh ones (with the fixed
+  seed), and `reset()` counts notes from 0 again (a Random LFO restarted by notes takes
+  its values from them), so offline renders come out the same every time. Until they come (or with none free) a warped note
   is resampled as Re-Pitch would.
 - **Filter**, on the voices' mix: TPT state-variable sections (Zavalishin/Simper);
   12 dB one, 24 dB two (low- and high-pass a Butterworth pair, Q 0.54 and 1.31; band-pass
-  and notch two of Q 0.71). Resonance raises the last section's Q towards 10
-  geometrically. The band-pass is normalized to unity at its centre. The cutoff glides to
+  and notch two of Q 0.71). Resonance raises the resonant sections' Q towards 10
+  geometrically (the last of a low- or high-pass; both of a band-pass or notch). The band-pass is normalized to unity at its centre. The cutoff glides to
   its target (5 ms, in log) a chunk of 32 samples at a time, limited to 0.45 of the
-  sample rate; switched on, it starts at its cutoff from silence.
+  sample rate; switched on, it starts at its cutoff from silence. After the last note
+  the device goes on rendering until the filter has rung out.
 - **LFO**, one for the device, evaluated at each chunk's ends: the gains glide between
   them, the pitch and cutoff take the middle. Sine, triangle, saw up and down, square,
   and random (a new value each cycle, from a hash of the cycle's number). Synced while
@@ -692,8 +697,9 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   where hits start and slices at each sensitivity, beats and regions, snapping; Slice (by region, beat and transient,
   Mono, Poly, Thru), 1-Shot (Trigger, Gate, fades, one note at a time), Classic's Loop Start and Loop Fade, reverse,
   snap, gain and pan, the filter's four types and slopes and resonance, the LFO (tremolo, vibrato, synced, restarted,
-  pan, filter), voices and legato glide, warping (Re-Pitch, every stretching mode, keys, tempo, repeatable renders),
-  and the display of a reversed note.
+  pan, filter), voices and legato glide, warping (Re-Pitch, every stretching mode, keys, tempo, repeatable renders,
+  resampled past 4 times as fast), the display of a reversed note, a resonant filter ringing out after the last note,
+  and a random LFO restarted by notes rendering the same every time.
 - [test_midi_engine.cpp](../../tests/engine/test_midi_engine.cpp): the Synth plays the right pitch and level.
 - [test_automation_engine.cpp](../../tests/engine/test_automation_engine.cpp): built-in blocks split where automation
   changes values.

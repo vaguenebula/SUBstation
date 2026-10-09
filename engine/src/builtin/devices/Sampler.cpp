@@ -75,6 +75,7 @@ constexpr int kChunk = 32;                     // the LFO, glides and the cutoff
 constexpr int kMaxVoices = 32;                 // notes at once (the most Voices allows)
 constexpr int kVoiceSlots = kMaxVoices + 8;    // and voices cut short, fading out
 constexpr int kMaxStretched = 8;               // stretched (warped) notes at once
+constexpr double kMaxStretchRate = 4.0;        // faster than this, warped notes are resampled (a stretcher's work grows with it)
 constexpr float kSilent = 1e-4f;               // -80 dB: a releasing voice ends here
 constexpr double kFadeTo = 1e-3;               // decay and release times are to -60 dB
 constexpr double kKillSeconds = 0.004;         // a voice cut short fades out over this
@@ -192,11 +193,12 @@ struct Reader {
 };
 
 // What a stretcher reads: a voice's frames from `from` on (`input[c][i]`: frame
-// from + i as it plays), silent from `end` unless it loops.
+// from + i as it plays), silent from `end` unless it `loops` (Classic's loop).
 struct StretchInput {
     const Reader* reader;
     int64_t from;
     int64_t end;
+    bool loops;
 
     struct Channel {
         const StretchInput* input;
@@ -205,7 +207,7 @@ struct StretchInput {
     };
     Channel operator[](int c) const noexcept { return {this, c}; }
     float frame(int c, int64_t i) const noexcept {
-        if (reader->loop) return reader->at(c, i);
+        if (loops) return reader->at(c, i);
         return i < end ? reader->raw(c, i) : 0.f;
     }
 };
@@ -314,6 +316,9 @@ private:
     int64_t snap(int64_t frame) const noexcept;
     void noteOn(uint8_t key, uint8_t velocity);
     void noteOff(uint8_t key);
+    // The keys held, newest last (for legato), kept even while nothing can play.
+    void holdKey(uint8_t key) noexcept;
+    void releaseKey(uint8_t key) noexcept;
     Voice* startVoice(uint8_t key, uint8_t velocity, int64_t from, int64_t end, double pitch);
     void makeRoom(int limit);
     void killAll();
@@ -331,6 +336,7 @@ private:
     bool finished(const Voice& voice) const noexcept;
     float lfoValue(double phase, uint64_t cycle) const noexcept;
     void filterChunk(int from, int to, float* left, float* right, float lfo);
+    bool filterRinging() const noexcept;
     float playhead() const noexcept;
 
     // Main side: the sample's path (as the state has it, even if it couldn't be
@@ -474,6 +480,7 @@ void SamplerProcessor::prepare(double sampleRate, int /*maxBlockSize*/) {
 void SamplerProcessor::reset() {
     for (Voice& voice : voices_) voice.active = false;
     heldCount_ = 0;
+    noteCounter_ = 0;
     volume_.snapTo(dbToGain(param(Volume)));
     gain_.snapTo(dbToGain(param(Gain)));
     pan_.snapTo(param(Pan));
@@ -592,8 +599,9 @@ void SamplerProcessor::updatePool(bool fresh) {
         const size_t count = std::max(wanted, fresh && poolConfig_ == config ? poolSize_ : 0);
         for (size_t i = 0; i < count; ++i) {
             auto stretcher = std::make_unique<Stretcher>(kStretchSeed);
+            // Split computation spreads each block's work over the interval after it, as the clips' do.
             stretcher->configure(2, static_cast<int>(sampleRate_ * timing.blockSeconds),
-                                 static_cast<int>(sampleRate_ * timing.intervalSeconds));
+                                 static_cast<int>(sampleRate_ * timing.intervalSeconds), true);
             pool->stretchers.push_back(std::move(stretcher));
         }
     }
@@ -608,7 +616,9 @@ void SamplerProcessor::takePool() noexcept {
     if (pool_ && !retiredPools_.push(pool_)) return;  // next block
     pool_ = pendingPool_.exchange(nullptr, std::memory_order_acq_rel);
     for (Voice& voice : voices_) {
-        if (voice.stretch >= 0) voice.active = false;  // their stretchers went
+        if (voice.stretch < 0) continue;
+        voice.stretch = -1;  // their stretchers went: they fade out, resampled
+        kill(voice);
     }
 }
 
@@ -676,7 +686,7 @@ void SamplerProcessor::readBlock(const ProcessContext& ctx) {
         const double beats = std::max(1.0, std::round(static_cast<double>(param(WarpBeats))));
         b.rate = static_cast<double>(frames) / (beats * 60.0 / tempo * sampleRate_);
         const auto mode = choice<WarpMode>(param(WarpModeParam));
-        b.stretch = mode != WarpMode::RePitch && pool_ && !pool_->stretchers.empty();
+        b.stretch = mode != WarpMode::RePitch && b.rate <= kMaxStretchRate && pool_ && !pool_->stretchers.empty();
         b.formants = mode == WarpMode::Formants;
     }
     b.root = static_cast<int>(std::lround(param(Root)));
@@ -762,6 +772,7 @@ SamplerProcessor::Voice* SamplerProcessor::startVoice(uint8_t key, uint8_t veloc
         }
     }
     if (!target) return nullptr;
+    target->active = false;  // (its stretcher free for this note)
     const int stretch = block_.stretch ? freeStretcher() : -1;
     const float sensitivity = std::clamp(param(Velocity) / 100.f, 0.f, 1.f);
     Voice& voice = *target;
@@ -782,9 +793,10 @@ SamplerProcessor::Voice* SamplerProcessor::startVoice(uint8_t key, uint8_t veloc
         stretcher.setTransposeSemitones(voice.stretchSemitones);
         stretcher.setFormantFactor(1.f, block_.formants);
         const int seekLength = stretcher.outputSeekLength(static_cast<float>(block_.rate));
-        const StretchInput input{&reader_, from, end >= 0 ? end : block_.end};
+        const bool loops = voice.classic && reader_.loop;
+        const StretchInput input{&reader_, from, end >= 0 ? end : block_.end, loops};
         stretcher.outputSeek(input, seekLength);
-        voice.input = reader_.wrapped(from + seekLength);
+        voice.input = loops ? reader_.wrapped(from + seekLength) : from + seekLength;
     }
     if (param(LfoOn) >= 0.5f && param(LfoRetrig) >= 0.5f) {
         lfoPhase_ = 0.0;
@@ -793,17 +805,23 @@ SamplerProcessor::Voice* SamplerProcessor::startVoice(uint8_t key, uint8_t veloc
     return &voice;
 }
 
-void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
-    // The keys held, newest last (for legato).
+void SamplerProcessor::holdKey(uint8_t key) noexcept {
+    releaseKey(key);
+    if (heldCount_ < static_cast<int>(heldKeys_.size())) heldKeys_[static_cast<size_t>(heldCount_++)] = key;
+}
+
+void SamplerProcessor::releaseKey(uint8_t key) noexcept {
     for (int i = 0; i < heldCount_; ++i) {
         if (heldKeys_[static_cast<size_t>(i)] == key) {
             std::copy(heldKeys_.begin() + i + 1, heldKeys_.begin() + heldCount_, heldKeys_.begin() + i);
             --heldCount_;
-            break;
+            return;
         }
     }
-    if (heldCount_ < static_cast<int>(heldKeys_.size())) heldKeys_[static_cast<size_t>(heldCount_++)] = key;
+}
 
+void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
+    holdKey(key);
     const Block& b = block_;
     if (b.end <= b.start) return;  // nothing to play
     switch (b.mode) {
@@ -859,19 +877,12 @@ void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
 }
 
 void SamplerProcessor::noteOff(uint8_t key) {
-    for (int i = 0; i < heldCount_; ++i) {
-        if (heldKeys_[static_cast<size_t>(i)] == key) {
-            std::copy(heldKeys_.begin() + i + 1, heldKeys_.begin() + heldCount_, heldKeys_.begin() + i);
-            --heldCount_;
-            break;
-        }
-    }
+    releaseKey(key);
     const Block& b = block_;
     if (b.mode == Mode::Classic && b.voices == 1 && b.glideSamples >= 1.0) {
-        // Legato: back to the newest key still held, else the note ends.
+        // Legato: letting go of the key playing goes back to the newest still held.
         Voice* playing = monoVoice();
-        if (!playing || !playing->held || playing->key != key) return;
-        if (heldCount_ > 0) {
+        if (playing && playing->held && playing->key == key && heldCount_ > 0) {
             playing->key = heldKeys_[static_cast<size_t>(heldCount_ - 1)];
             glideTo(*playing, playing->key - b.root);
             return;
@@ -956,8 +967,8 @@ void SamplerProcessor::renderVoice(Voice& voice, int from, int to, double semito
         voice.inputDebt -= count;
         std::array<float, kChunk> outL{}, outR{};
         float* outputs[2] = {outL.data(), outR.data()};
-        stretcher.process(StretchInput{&r, voice.input, end}, count, outputs, frames);
-        voice.input = r.wrapped(voice.input + count);
+        stretcher.process(StretchInput{&r, voice.input, end, loops}, count, outputs, frames);
+        voice.input = loops ? r.wrapped(voice.input + count) : voice.input + count;
         for (int i = 0; i < frames; ++i) {
             if (!loops && voice.position >= stop) {
                 voice.active = false;
@@ -966,7 +977,7 @@ void SamplerProcessor::renderVoice(Voice& voice, int from, int to, double semito
             const float gain = gainAt(voice.position, b.rate);
             left[from + i] += outL[static_cast<size_t>(i)] * gain;
             right[from + i] += outR[static_cast<size_t>(i)] * gain;
-            voice.position = r.wrapped(voice.position + b.rate);
+            voice.position = loops ? r.wrapped(voice.position + b.rate) : voice.position + b.rate;
         }
     } else {
         const double increment = b.rate * std::exp2(semitones / 12.0);
@@ -1035,6 +1046,14 @@ void SamplerProcessor::filterChunk(int from, int to, float* left, float* right, 
             x[i] = y;
         }
     }
+}
+
+// The filter still rings after the last voice (a resonant one for tens of milliseconds).
+bool SamplerProcessor::filterRinging() const noexcept {
+    if (!filtering_) return false;
+    return std::any_of(filters_.begin(), filters_.end(), [](const Svf& filter) {
+        return std::abs(filter.ic1) > kSilent * 0.1f || std::abs(filter.ic2) > kSilent * 0.1f;
+    });
 }
 
 void SamplerProcessor::renderChunk(const ProcessContext& ctx, int from, int to, float* left, float* right) {
@@ -1110,9 +1129,15 @@ void SamplerProcessor::render(const ProcessContext& ctx, float* const* channels,
 
     const AudioSource* source = active_ ? active_->source.get() : nullptr;
     const int64_t frames = source ? source->frames() : 0;
-    const bool silent = ctx.inEvents.count == 0 &&
+    const bool silent = ctx.inEvents.count == 0 && !filterRinging() &&
                         std::none_of(voices_.begin(), voices_.end(), [](const Voice& voice) { return voice.active; });
     if (frames <= 0 || silent) {  // nothing to play: skip the work, and start the next note at the current settings
+        for (size_t e = 0; e < ctx.inEvents.count; ++e) {  // (the keys held still count, for legato)
+            const ProcessEvent& event = ctx.inEvents.events[e];
+            if (event.type == ProcessEvent::Type::NoteOn && event.velocity() > 0) holdKey(event.key());
+            else if (event.type == ProcessEvent::Type::NoteOn || event.type == ProcessEvent::Type::NoteOff)
+                releaseKey(event.key());
+        }
         volume_.snapTo(dbToGain(param(Volume)));
         gain_.snapTo(dbToGain(param(Gain)));
         pan_.snapTo(param(Pan));

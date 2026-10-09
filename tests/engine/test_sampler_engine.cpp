@@ -732,3 +732,31 @@ TEST_CASE("the position display follows a reversed note from the sample's end") 
     REQUIRE(!values.empty());
     CHECK_NEAR(values.back(), 0.5, 0.02);
 }
+
+TEST_CASE("warped many times faster than the sample, notes are resampled, not stretched") {
+    // Three seconds in a beat (half a second): six times as fast, beyond what stretching is for.
+    sub::Engine engine;
+    samplerTrack(engine, {{0.0, 1.0, 60, 127}}, makeWav(sine(100, 3.0)),
+                 {{"mode", 1.f}, {"warp", 1.f}, {"warp_beats", 1.f}, {"warp_mode", 1.f}});
+    const Samples out = engine.renderOffline(0.0, 2 * kBeat);
+    CHECK_APPROX_REL(dominantFreq(leftFrom(out, 1000, 20000)), 600, 5e-3);
+    CHECK(!anyNonzero(leftFrom(out, kBeat + 100)));  // (all of it in its beat)
+}
+
+TEST_CASE("a resonant filter rings out after the last note") {
+    // 20 ms of 200 Hz through a resonant low-pass at 200 Hz: it rings on after the sample ends.
+    sub::Engine engine;
+    samplerTrack(engine, {{0.0, 1.0, 60, 127}}, makeWav(sine(200, 0.02)),
+                 {{"mode", 1.f}, {"filter", 1.f}, {"filter_freq", 200.f}, {"filter_res", 100.f}});
+    const Samples out = engine.renderOffline(0.0, kBeat);
+    CHECK(rms(leftFrom(out, 2000, 3000)) > 1e-3);  // past the sample's end (960) and the first block's (1024)
+    CHECK(rms(leftFrom(out, 20000)) < 1e-4);         // until it has died away
+}
+
+TEST_CASE("a random LFO restarted by notes renders the same every time") {
+    sub::Engine engine;
+    samplerTrack(engine, {{0.0, 0.5, 60, 127}, {0.5, 0.5, 62, 127}, {1.0, 0.5, 64, 127}}, makeWav(sine(440, 1.0)),
+                 {{"lfo", 1.f}, {"lfo_wave", 5.f}, {"lfo_retrig", 1.f}, {"lfo_rate", 8.f}, {"lfo_volume", 100.f}});
+    const Samples first = engine.renderOffline(0.0, 2 * kBeat);
+    CHECK(first == engine.renderOffline(0.0, 2 * kBeat));
+}
