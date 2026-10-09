@@ -16,15 +16,6 @@
 namespace sub {
 namespace {
 
-// Fixed seed: the stretcher randomises some phases, and offline renders should
-// come out the same every time.
-constexpr long kStretchSeed = 0x6115;
-
-struct StretchTiming {
-    double blockSeconds;
-    double intervalSeconds;
-};
-
 // Shorter blocks keep drum transients tight; longer ones give smoother tones
 // and textures at the cost of smearing attacks.
 constexpr std::array<StretchTiming, kNumStretchConfigs> kTimings = {{
@@ -89,6 +80,8 @@ const SincTable kSinc;
 
 }  // namespace
 
+StretchTiming stretchTiming(StretchConfig config) noexcept { return kTimings[static_cast<size_t>(config)]; }
+
 StretchConfig stretchConfigFor(WarpMode mode) noexcept {
     switch (mode) {
         case WarpMode::Transients: return StretchConfig::Transient;
@@ -111,7 +104,7 @@ struct WarpVoice::State {
 
 WarpVoice::WarpVoice(StretchConfig config, double sampleRate)
     : config_(config), state_(std::make_unique<State>()) {
-    const StretchTiming& timing = kTimings[static_cast<size_t>(config)];
+    const StretchTiming timing = stretchTiming(config);
     // Split computation spreads each spectral block's work over the following
     // interval instead of doing it all in one callback. It adds an interval of
     // latency, which the alignment below compensates like the rest.

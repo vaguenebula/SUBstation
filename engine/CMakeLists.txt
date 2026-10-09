@@ -176,6 +176,7 @@ add_library(sub_engine STATIC
     src/Warp.cpp
     src/builtin/BuiltinProcessor.cpp
     src/builtin/BuiltinRegistry.cpp
+    src/builtin/SampleSlicing.cpp
     ${BUILTIN_DEVICE_SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinDevices.cpp
     src/plugins/Vst3Format.cpp
