@@ -354,6 +354,7 @@ level; what is around the stages' frequency comes out later (a transient becomes
 | `amount` | Amount | stages | 0..64, 64 steps | 16 |
 | `freq` | Frequency | Hz | 20..20000, log | 1000 |
 | `pinch` | Pinch | Q | 0.1..10, log | 1 |
+| `mix` | Dry/Wet | % | 0..100 | 100 |
 | `bypass` | Bypass | | Off, On | Off |
 
 - **A stage** is the bilinear transform of the analog all-pass (s² - s/Q + 1) / (s² + s/Q + 1),
@@ -379,14 +380,18 @@ level; what is around the stages' frequency comes out later (a transient becomes
   instead would let them smear the signal's abrupt start into a chirp longer than the fade). Stages
   no longer heard are cleared. A change during a fade starts when it is done. At 0 stages (and
   none coming) the input passes untouched, bit for bit.
-- **Bypass** glides between the input and the stages' output (two one-poles of 5 ms: it can turn
-  back halfway without a kink) and, once there, passes the input bit for bit. The stages keep
-  running while bypassed, so it comes back without a seam; switching the device off saves them.
+- **Dry/Wet and Bypass** glide (two one-poles of 5 ms each: they can turn back halfway without a
+  kink); what is heard of the stages' output is Dry/Wet's share times Bypass's (0 or 1), the rest
+  the input. With no latency the two line up to the sample, so in between they add up as a
+  phaser's do, |(1 - mix) + mix H|: notches where the stages turn the phase half a circle (all the
+  way down at an even blend). The level is flat only fully wet. Fully dry or bypassed, once there,
+  it passes the input bit for bit. The stages keep running meanwhile, so it comes back without a
+  seam; switching the device off saves them.
 - **Denormals**: states below 1e-20 are flushed to 0 after each stretch, so silence rings out to
   exact zeros. `reset()` clears every stage and snaps the glides and fades to the parameters;
   `prepare()` (a new sample rate) works out the glides and fades again and resets.
 - `latencySamples()` is 0: the dispersion is the effect, and the engine doesn't delay the other
-  tracks against it. `tailSamples()`: until what is left of the impulse response is 60 dB down,
+  tracks against it. `tailSamples()` (0 with no stages, bypassed or fully dry): until what is left of the impulse response is 60 dB down,
   1.25 times the largest group delay (`maxGroupDelaySamples`, which looks at the poles' angle too:
   high up the peak is narrower than any grid) plus 7 time constants of the slowest pole
   (`decayPerSample`), a bound measured over the parameters' range at 44.1 and 192 kHz; at most 60 s.
@@ -522,7 +527,7 @@ readonly property var editors: ({
   call (through `EngineBridge::readProcessorDisplay()`; the item keeps the position per processor and display).
 - Today there are six. The Compressor draws its gain reduction over the last 240 display values (about 1.3 s at
   48 kHz) and In/Out meters with the threshold marked; the Delay its filter over a spectrum of `input`; the
-  Disperser its group delay in ms (from `disperser::groupDelayMs`, the engine's own stages); the EQ its
+  Disperser its group delay in ms on a fixed log axis (from `disperser::groupDelayMs`, the engine's own stages); the EQ its
   bands' curves (from `eq::responseDb`) over an analyzer of `input` and `output`; the Sidechain its curve, its
   playhead from `phase` and its fit to the kick (`key`, against `input`); the Sampler the sample's waveform with Start/End markers and
   the playhead from `position` (drop or double-click to load a sample; loading is an undoable state change through
@@ -627,7 +632,7 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
 - [test_delay_engine.cpp](../../tests/engine/test_delay_engine.cpp): synced and free times, offset, link,
   feedback, ping pong, freeze, the filter, the modes (with automation changing the time), and its display.
 - [test_disperser_engine.cpp](../../tests/engine/test_disperser_engine.cpp): its listing; passing through
-  untouched (no stages, bypassed); a flat magnitude (every bin within 0.01 dB, all its energy) and the
+  untouched (no stages, bypassed, fully dry); Dry/Wet's blend, to the sample, and its notches; a flat magnitude (every bin within 0.01 dB, all its energy) and the
   design's group delay, at the extremes (20 s at 20 Hz), at 8 to 192 kHz and kept below Nyquist;
   stability; never more energy out than in, however Frequency and Pinch jump; each channel its own;
   Amount landing exactly on the new number of stages; every control changing without a click (a

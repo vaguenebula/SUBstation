@@ -624,7 +624,9 @@ private Q_SLOTS:
         KnobItem* amount = knob("amount");
         KnobItem* freq = knob("freq");
         KnobItem* pinch = knob("pinch");
-        QVERIFY(amount && freq && pinch);
+        KnobItem* mix = knob("mix");
+        QVERIFY(amount && freq && pinch && mix);
+        QCOMPARE(mix->value(), 100.0);  // Dry/Wet: fully wet
         QCOMPARE(amount->value(), 16.0);
         QCOMPARE(amount->step(), 1.0);
         QVERIFY(freq->logScale() && pinch->logScale());
@@ -646,12 +648,15 @@ private Q_SLOTS:
         const double peak = disperserPeakFrequency(1000.0, 1.0, rate);
         QVERIFY(peak > 800.0 && peak < 1000.0);
         QVERIFY2(std::abs(frequencies[top] / peak - 1.0) < 0.03, qPrintable(QString::number(frequencies[top])));
-        QVERIFY(graph->rangeMs() >= graph->peakMs() && graph->rangeMs() < 2.5 * graph->peakMs());
-        QCOMPARE(DispersionGraph::niceRange(3.2), 5.0);
-        QCOMPARE(DispersionGraph::niceRange(10.0), 10.0);
-        QCOMPARE(DispersionGraph::niceRange(10.5), 20.0);
-        QCOMPARE(DispersionGraph::niceRange(1500.0), 2000.0);
-        QCOMPARE(DispersionGraph::niceRange(0.0), 0.1);
+        // The delay axis: logarithmic and fixed, 0.1 ms along the bottom (and anything less) to 30 s at
+        // the top, every decade as tall.
+        const QRectF plot = graph->plot();
+        QCOMPARE(graph->yOf(DispersionGraph::kMinMs), plot.bottom());
+        QCOMPARE(graph->yOf(0.0), plot.bottom());
+        QCOMPARE(graph->yOf(DispersionGraph::kMaxMs), plot.top());
+        QVERIFY(std::abs((graph->yOf(1.0) - graph->yOf(10.0)) - (graph->yOf(100.0) - graph->yOf(1000.0))) < 1e-9);
+        const double octave =
+            plot.height() * std::log(2.0) / std::log(DispersionGraph::kMaxMs / DispersionGraph::kMinMs);
         QVERIFY(std::abs(graph->dot().x() - graph->xOf(1000.0)) < 1e-9);
 
         // An edit, undoable; the graph follows: twice the stages, twice the delay.
@@ -659,9 +664,30 @@ private Q_SLOTS:
         editor()->setDeviceParam(track, device, QStringLiteral("amount"), 32.0);
         QCOMPARE(amount->value(), 32.0);
         QVERIFY(std::abs(graph->peakMs() / before - 2.0) < 1e-9);
+        const double at1k = graph->dot().y();
         undo()->undo();
         QCOMPARE(amount->value(), 16.0);
         QCOMPARE(graph->peakMs(), before);
+        QVERIFY2(std::abs((graph->dot().y() - at1k) - octave) < 1e-6, qPrintable(QString::number(octave)));
+
+        // The same settings an octave lower delay about twice as long: the curve slides up by that much
+        // (the axis stays put), and a small move of the frequency moves it a little, never in a jump.
+        const double before500 = graph->dot().y();
+        editor()->setDeviceParam(track, device, QStringLiteral("freq"), 500.0);
+        QVERIFY2(std::abs((before500 - graph->dot().y()) - octave) < 0.5, qPrintable(QString::number(graph->dot().y())));
+        double last = graph->dot().y();
+        for (double f = 490.0; f > 400.0; f -= 10.0) {
+            editor()->setDeviceParam(track, device, QStringLiteral("freq"), f);
+            QVERIFY(graph->dot().y() < last && last - graph->dot().y() < 1.0);  // up, a little
+            last = graph->dot().y();
+        }
+        while (freq->value() != 1000.0) undo()->undo();
+
+        // Dry/Wet: undoable; fully dry, nothing of the stages is heard.
+        editor()->setDeviceParam(track, device, QStringLiteral("mix"), 0.0);
+        QCOMPARE(mix->value(), 0.0);
+        undo()->undo();
+        QCOMPARE(mix->value(), 100.0);
 
         // Bypass: a switch, undoable.
         QQuickItem* bypass = find(view, QStringLiteral("bypass"));

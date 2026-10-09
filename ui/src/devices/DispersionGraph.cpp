@@ -31,20 +31,6 @@ DispersionGraph::DispersionGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     });
 }
 
-double DispersionGraph::niceRange(double ms) {
-    double range = 0.1;
-    if (!std::isfinite(ms))
-        return range;
-    while (range < ms) {
-        for (const double step : {2.0, 2.5, 2.0}) {  // 0.1 -> 0.2 -> 0.5 -> 1 ...
-            range *= step;
-            if (range >= ms)
-                break;
-        }
-    }
-    return range;
-}
-
 QRectF DispersionGraph::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 16, -1, -1); }
 
 double DispersionGraph::xOf(double freq) const {
@@ -60,7 +46,8 @@ double DispersionGraph::freqAt(double x) const {
 
 double DispersionGraph::yOf(double ms) const {
     const QRectF r = plot();
-    return r.bottom() - std::clamp(ms / range_, 0.0, 1.0) * r.height();
+    const double fraction = std::log(std::max(ms, kMinMs) / kMinMs) / std::log(kMaxMs / kMinMs);
+    return r.bottom() - std::clamp(fraction, 0.0, 1.0) * r.height();
 }
 
 QPointF DispersionGraph::dot() const { return QPointF(xOf(std::clamp(tuned_, kLow, kHigh)), yOf(tunedDelay_)); }
@@ -70,6 +57,7 @@ void DispersionGraph::sync() {
     freq_ = value(QStringLiteral("freq"));
     pinch_ = value(QStringLiteral("pinch"));
     bypassed_ = value(QStringLiteral("bypass")) >= 0.5;
+    dry_ = value(QStringLiteral("mix")) <= 0.0;
     updateCurve();
     update();
 }
@@ -97,7 +85,6 @@ void DispersionGraph::updateCurve() {
     frequencies_.assign(frequencies.begin(), frequencies.end());
     delays_.assign(delays.begin(), delays.end());
     peak_ = delays_.empty() ? 0.0 : *std::max_element(delays_.begin(), delays_.end());
-    range_ = niceRange(peak_);
     tunedDelay_ = sub::app::disperserGroupDelayMs(stages_, freq_, pinch_, rate, {tuned_}).value(0);
     Q_EMIT curveChanged();
 }
@@ -136,7 +123,7 @@ void DispersionGraph::dragTo(const QPointF& pos) {
 
 namespace {
 
-// "0.5 ms", "20 ms", "2 s": the axis' figures.
+// "1 ms", "100 ms", "10 s": the axis' figures.
 QString axisText(double ms) {
     return ms >= 1000.0 ? pythonGeneral(ms / 1000.0) + QStringLiteral(" s") : pythonGeneral(ms) + QStringLiteral(" ms");
 }
@@ -158,16 +145,14 @@ void DispersionGraph::paint(SgPainter& p) {
         }
     }
     const QFont font = uiFont(7);
-    for (const double fraction : {0.5, 1.0}) {  // the delay axis: its top and half way, figures under the lines
-        const double y = yOf(fraction * range_);
-        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, fraction == 1.0 ? 160 : 90));
-        p.drawText(QRectF(r.left() + 3, y + 1, 60, 12), Qt::AlignLeft | Qt::AlignVCenter, axisText(fraction * range_),
-                   Theme::kTextDim, font);
+    for (const double ms : {1.0, 10.0, 100.0, 1000.0, 10000.0}) {  // the delay axis: a line per decade, figures under
+        const double y = yOf(ms);
+        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, 120));
+        p.drawText(QRectF(r.left() + 3, y + 1, 60, 12), Qt::AlignLeft | Qt::AlignVCenter, axisText(ms), Theme::kTextDim,
+                   font);
     }
-    p.drawText(QRectF(r.left() + 3, r.bottom() - 13, 60, 12), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("0"),
-               Theme::kTextDim, font);
 
-    const bool on = !bypassed_ && stages_ > 0;
+    const bool on = !bypassed_ && !dry_ && stages_ > 0;
     const QColor color = on ? Theme::kScopeLine : Theme::kTextDisabled;
     std::vector<QPointF> curve;
     curve.reserve(frequencies_.size());

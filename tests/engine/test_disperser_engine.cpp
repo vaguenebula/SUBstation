@@ -1,7 +1,8 @@
 // The built-in Disperser: a cascade of all-passes that delays what is around a
 // frequency. Its magnitude stays flat and its group delay is the design's (the
 // curve its editor draws), at the extremes and at any sample rate; however its
-// controls move it puts out no more energy than it was given; each channel is
+// controls move it puts out no more energy than it was given; Dry/Wet blends
+// the input with its dispersed copy in time; each channel is
 // its own; changes of every control are click-free; reset, silence and a new
 // sample rate start it cleanly; its tail covers its ringing; and the engine
 // keeps its dispersion (no latency to compensate).
@@ -222,7 +223,7 @@ TEST_CASE("the disperser is listed with its parameters") {
     const sub::BuiltinInfo info = builtinInfo("disperser");
     CHECK_EQ(info.name, std::string("Disperser"));
     CHECK(!info.isInstrument());
-    CHECK(paramIds(info.params) == (std::vector<std::string>{"amount", "freq", "pinch", "bypass"}));
+    CHECK(paramIds(info.params) == (std::vector<std::string>{"amount", "freq", "pinch", "mix", "bypass"}));
     const sub::ParamInfo& amount = info.params[0];
     CHECK_EQ(amount.minValue, 0.f);
     CHECK_EQ(amount.maxValue, 64.f);
@@ -237,7 +238,13 @@ TEST_CASE("the disperser is listed with its parameters") {
     CHECK(pinch.isLog());
     CHECK_APPROX(pinch.minValue, 0.1);
     CHECK_EQ(pinch.maxValue, 10.f);
-    const sub::ParamInfo& bypass = info.params[3];
+    const sub::ParamInfo& mix = info.params[3];
+    CHECK_EQ(mix.name, std::string("Dry/Wet"));
+    CHECK_EQ(mix.unit, std::string("%"));
+    CHECK_EQ(mix.minValue, 0.f);
+    CHECK_EQ(mix.maxValue, 100.f);
+    CHECK_EQ(mix.defaultValue, 100.f);
+    const sub::ParamInfo& bypass = info.params[4];
     CHECK(bypass.valueLabels == (std::vector<std::string>{"Off", "On"}));
     CHECK_EQ(bypass.defaultValue, 0.f);
     for (const sub::ParamInfo& p : info.params) CHECK(p.automatable);
@@ -253,9 +260,10 @@ TEST_CASE("the disperser is listed with its parameters") {
     CHECK(processor.tail > 0);
 }
 
-TEST_CASE("no stages, or bypassed, pass the input through untouched") {
+TEST_CASE("no stages, bypassed or fully dry, it passes the input through untouched") {
     const Samples left = noise(kSampleRate, 1), right = noise(kSampleRate, 2);
-    for (const Values& values : {Values{{"amount", 0.f}}, Values{{"amount", 64.f}, {"bypass", 1.f}}}) {
+    for (const Values& values : {Values{{"amount", 0.f}}, Values{{"amount", 64.f}, {"bypass", 1.f}},
+                                 Values{{"amount", 64.f}, {"mix", 0.f}}}) {
         INFO(values[0].first + " " + std::to_string(values.back().second));
         Disperser d(kSampleRate, values);
         Samples l = left, r = right;
@@ -378,6 +386,36 @@ TEST_CASE("however Frequency and Pinch move, it never puts out more energy than 
     CHECK(maxAbs(out) < 2.5);  // (a state-variable filter's peak here: about 8)
 }
 
+TEST_CASE("Dry/Wet blends the input with its dispersed copy, in time") {
+    // The dry input isn't delayed (there is no latency), so the blend is exactly
+    // the input's share plus the stages' output's share, sample for sample.
+    const Setting s{24, 700.f, 3.f};
+    const Samples wet = impulseResponse(s, 1 << 15);
+    for (const float mix : {50.f, 30.f}) {
+        INFO(std::to_string(mix) + " %");
+        Disperser d(kSampleRate, {{"amount", 24.f}, {"freq", 700.f}, {"pinch", 3.f}, {"mix", mix}});
+        const Samples blend = d.play(impulse(wet.size()));
+        Samples want(wet.size());
+        const double share = mix / 100.0;
+        for (size_t i = 0; i < want.size(); ++i) want[i] = static_cast<float>(share * wet[i] + (i == 0 ? 1.0 - share : 0.0));
+        CHECK_ALLCLOSE(blend, want, 0.0, 1e-7);
+        // So it sounds as a phaser does: |(1 - mix) + mix H| at each frequency, notched where the
+        // stages turn the phase half a circle (and, at an even blend, only there).
+        const disperser::Stage stage = disperser::design(700.0, 3.0, kSampleRate);
+        for (const double freq : {100.0, 500.0, 680.0, 700.0, 720.0, 1000.0, 5000.0}) {
+            INFO(std::to_string(freq) + " Hz");
+            const std::complex<double> h = std::pow(disperser::response(stage, 2.0 * kPi * freq / kSampleRate), 24);
+            CHECK_APPROX_TOL(std::abs(transform(blend, freq, kSampleRate)), std::abs((1.0 - share) + share * h), 1e-4,
+                             1e-5);
+        }
+    }
+    // At an even blend the notches go all the way down; fully wet the level is flat.
+    Disperser even(kSampleRate, {{"amount", 1.f}, {"freq", 1000.f}, {"pinch", 1.f}, {"mix", 50.f}});
+    const Samples h = even.play(impulse(1 << 14));
+    CHECK(std::abs(transform(h, 1000.0, kSampleRate)) < 1e-4);  // one stage turns 1 kHz half a circle
+    CHECK_APPROX_TOL(std::abs(transform(h, 50.0, kSampleRate)), 1.0, 0.01, 0.0);
+}
+
 TEST_CASE("each channel has its own state") {
     const std::vector<Change> changes = {{9000, "amount", 40.f}, {20000, "freq", 300.f}, {30000, "pinch", 4.f},
                                          {40000, "bypass", 1.f}, {41000, "bypass", 0.f}};
@@ -447,7 +485,8 @@ TEST_CASE("changing any control is click-free") {
         {s(1.6), "freq", 3000.f},  {s(1.8), "pinch", 4.f},    {s(2.0), "pinch", 0.3f},
         {s(2.2), "bypass", 1.f},   {s(2.4), "bypass", 0.f},   {s(2.41), "amount", 50.f},
         {s(2.6), "freq", 600.f},   {s(2.6), "amount", 8.f},   {s(2.6), "pinch", 2.f},
-        {s(2.8), "bypass", 1.f},   {s(2.81), "bypass", 0.f},
+        {s(2.8), "bypass", 1.f},   {s(2.81), "bypass", 0.f},  {s(2.85), "mix", 30.f},
+        {s(2.9), "mix", 0.f},      {s(2.91), "mix", 100.f},   {s(2.95), "mix", 60.f},
     };
     Disperser d(kSampleRate, {{"amount", 16.f}});
     const Samples out = d.play(tone, changes);
@@ -558,6 +597,8 @@ TEST_CASE("its tail covers its ringing") {
     Disperser none(kSampleRate, {{"amount", 0.f}}), bypassed(kSampleRate, {{"bypass", 1.f}});
     CHECK_EQ(tailOf(none), 0);
     CHECK_EQ(tailOf(bypassed), 0);
+    Disperser dry(kSampleRate, {{"mix", 0.f}});
+    CHECK_EQ(tailOf(dry), 0);
     // At most a minute, however long its delay.
     Disperser longest(kSampleRate, {{"amount", 64.f}, {"freq", 20.f}, {"pinch", 10.f}});
     CHECK(tailOf(longest) > 20 * kSampleRate);

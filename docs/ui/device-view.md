@@ -301,7 +301,7 @@ readonly property var editors: ({
 
 - `required property string trackId` and `deviceId`.
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
-  `implicitWidth` is the body's width (Compressor 658, Delay 532, Disperser 478, Sampler 566, Sidechain 720, EQ 580,
+  `implicitWidth` is the body's width (Compressor 658, Delay 532, Disperser 544, Sampler 566, Sidechain 720, EQ 580,
   or 756 with its band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px from the top
   and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
 - Optional: `pages` (read) and `page` (read/write) for pages of knobs; `menuActions` (a list of `Action`s the
@@ -343,16 +343,18 @@ The editors:
   `analysis::FallingSpectrum`), the Filter switch, the frequency (a log-scaled value box) and width; the Mode buttons
   and Ping Pong; Feedback with Freeze beside it over Dry/Wet.
 - **Disperser** ([DisperserEditor.qml](../../ui/qml/devices/editors/DisperserEditor.qml)): no pages: Amount (in whole
-  stages), Frequency and Pinch knobs side by side, their names above and values below, over a Bypass button; beside
+  stages), Frequency, Pinch and Dry/Wet knobs side by side, their names above and values below, over a Bypass button; beside
   them a [DispersionGraph](../../ui/src/devices/DispersionGraph.h) (260 px): the stages' group delay in ms on a
   20 Hz..20 kHz log axis, worked out at the engine's sample rate from the engine's own stages
   (`sub::app::disperserGroupDelayMs`, the application layer's wrapper of `sub::disperser::groupDelayMs`, so the curve
   is the delay that plays), one point per column plus its peak and where it is tuned (high up, the peak can be
-  narrower than a column: `disperserPeakFrequency`). Its delay axis fits the curve (1, 2 or 5 times a power of ten at or
-  above the peak: `niceRange`), worked out again when the parameters or the audio device (its rate) change. The dot
+  narrower than a column: `disperserPeakFrequency`), worked out again when the parameters or the audio device (its rate)
+  change. Its delay axis is logarithmic and fixed, `kMinMs` (0.1 ms; less lies along the bottom) to `kMaxMs` (30 s), a
+  line and a figure per decade: an octave lower the same settings delay twice as long, so the curve slides up by the
+  same distance and keeps its shape (an axis fitted to the curve jumped as it was dragged). The dot
   sits on the curve where the stages are tuned (`disperserTunedFrequency`), with the delay there read out at the top
   right: drag across for the Frequency, up and down for the Pinch (doubling every `kPinchPixels`, 60 px), one undo
-  step per drag. Bypassed, the curve is greyed.
+  step per drag. Bypassed or fully dry, the curve is greyed.
 - **EQ** ([EqEditor.qml](../../ui/qml/devices/editors/EqEditor.qml)): no pages, no body margins: the curve
   ([EqGraph](../../ui/src/devices/EqGraph.h)) from the title bar to the bottom edge, Scale and Output knobs in its
   bottom corners ([EqCorner.qml](../../ui/qml/devices/editors/EqCorner.qml)), and the selected band's controls
