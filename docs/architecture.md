@@ -51,7 +51,7 @@ and searches the sample browser's files, and the intelligence module, which work
 | Layer | Where | Built as | Depends on | Docs |
 |---|---|---|---|---|
 | UI | [ui/qml](../ui/qml) (QML module `SUBstation`), [ui/src](../ui/src) (C++ Qt Quick items), [ui/style](../ui/style) (the controls' style), [ui/main.cpp](../ui/main.cpp) | `sub_ui` + the `substation` executable | the application layer, Qt Quick, QML, Quick Controls | [ui/](ui/README.md) |
-| Application layer | [app/src](../app/src): `model/`, `editor/`, `io/`, `audio/`, `session/`, `browser/`, `intelligence/`, `plugins/`, `analysis/` | `sub_app` | Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence` | [app/](README.md#application-layer) |
+| Application layer | [app/src](../app/src): `model/`, `editor/`, `io/`, `audio/`, `session/`, `files/`, `browser/`, `intelligence/`, `plugins/`, `analysis/` | `sub_app` | Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence` | [app/](README.md#application-layer) |
 | Audio engine | [engine/src](../engine/src) | `sub_engine` (namespace `sub`) | the C++ standard library, miniaudio, the VST 3 SDK | [engine/](engine/README.md) |
 | Browser backend | [browser/src](../browser/src) | `sub_browser` (namespace `sub::browser`) | the C++ standard library | [browser.md](browser.md) |
 | Intelligence | [intelligence/src](../intelligence/src): `core/`, `similarity/`, `harmony/`, `humanize/` | `sub_intelligence` (namespace `sub::intelligence`) | the C++ standard library, miniaudio (its decoders), Signalsmith Linear (its FFTs), HUMANBRO's runtime (`humanbro`, vendored; its model in intelligence/models) | [intelligence.md](intelligence.md) |

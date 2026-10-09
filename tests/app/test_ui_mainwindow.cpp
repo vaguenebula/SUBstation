@@ -31,6 +31,7 @@
 #include "audio/EngineBridge.h"
 #include "browser/BrowserController.h"
 #include "editor/ProjectEditor.h"
+#include "files/FileManager.h"
 #include "intelligence/Harmony.h"
 #include "model/Project.h"
 #include "mainwindow/WindowState.h"
@@ -556,6 +557,22 @@ private Q_SLOTS:
         QVERIFY(!area->isVisible());
         key(Qt::Key_L, Qt::ControlModifier | Qt::AltModifier);
         QVERIFY(area->isVisible());
+
+        // View › File Manager (hidden at first) shows and hides it, right of the
+        // arrangement; Show in File Manager (an audio clip's menu) shows it.
+        auto* files = item(QStringLiteral("fileManager"));
+        QVERIFY(files && !files->isVisible());
+        key(Qt::Key_F, Qt::ControlModifier | Qt::AltModifier);
+        QVERIFY(files->isVisible());
+        // (The split view lays out what shows at its next polish.)
+        QTRY_VERIFY(files->mapToScene({0, 0}).x() > item(QStringLiteral("arrangementArea"))->mapToScene({0, 0}).x());
+        key(Qt::Key_F, Qt::ControlModifier | Qt::AltModifier);
+        QVERIFY(!files->isVisible());
+        session().files()->reveal(QStringLiteral("C:/nowhere/kick.wav"));
+        QVERIFY(files->isVisible());
+        key(Qt::Key_F, Qt::ControlModifier | Qt::AltModifier);
+        QVERIFY(!files->isVisible());
+        window_->contentItem()->forceActiveFocus();
 
         // Zooming and the grid reach the arrangement through its interface: with
         // the placeholder there is none, and nothing goes wrong.

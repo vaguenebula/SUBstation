@@ -238,15 +238,20 @@ into a chirp; sustained sounds change little.
   it is kept below half the sample rate: at 44.1 kHz, 20 kHz plays as 19.8 kHz.)
 - **Pinch** (Q 0.1 to 10): how narrow the band they delay. Pinched, a narrow band comes
   out much later (a pitched, ringing zap); open, a wide band a little later.
+- **Dry/Wet** (0 to 100 %): blends the untouched sound with the dispersed one. In between
+  they add up as a phaser's do, cutting notches where the dispersion has turned a
+  frequency half a circle (deepest at 50 %); fully wet, nothing is louder or quieter.
 - **Bypass**: the sound passes through untouched, fading over about 20 ms. The stages
   keep running, so switching it back is seamless (the device's on/off switch stops them).
-- **The graph** shows how late each frequency comes out, in milliseconds (or seconds:
-  64 narrow stages at 20 Hz hold 20 Hz back by 20 s). It is worked out from the very
+- **The graph** shows how late each frequency comes out, from 0.1 ms at the bottom to 30 s
+  at the top, a decade per line (64 narrow stages at 20 Hz hold 20 Hz back by 20 s). The
+  scale stays put: an octave lower, the same settings delay twice as long, and the curve
+  slides up by the same distance, keeping its shape. It is worked out from the very
   filters the engine plays, at its sample rate. Drag the dot across for the Frequency, up
-  and down for the Pinch.
+  and down for the Pinch. Bypassed or fully dry, it is greyed.
 - Every control can be automated, and changes don't click: Amount crossfades to the new
-  number of stages (the stages added fade in from silence), Bypass fades, and Frequency
-  and Pinch glide. Swept quickly through many narrow stages, Frequency and Pinch are
+  number of stages (the stages added fade in from silence), and Dry/Wet, Bypass,
+  Frequency and Pinch glide. Swept quickly through many narrow stages, Frequency and Pinch are
   heard as the sweep itself (a zap), never louder than what went in.
 - Its delay is the effect, not latency: other tracks aren't delayed to line up with it.
   A long dispersion rings on after the sound stops, as a reverb does.

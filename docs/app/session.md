@@ -26,6 +26,7 @@ accessors. The UI shows dialogs and asks the session to act; the session itself 
 | [ComputerKeyboard.h](../../app/src/session/ComputerKeyboard.h) | The computer MIDI keyboard |
 | [AudioPreferences.h](../../app/src/session/AudioPreferences.h), [MidiPreferences.h](../../app/src/session/MidiPreferences.h) | Preferences › Audio and › MIDI, without their widgets |
 | [SessionSupport.h](../../app/src/session/SessionSupport.h) | Small helpers the parts share (plug-in refs from QML maps, clip refs for QML) |
+| [files/FileManager.h](../../app/src/files/FileManager.h), [files/HotSwap.h](../../app/src/files/HotSwap.h) | The File Manager and hot swaps ([below](#the-file-manager-and-hot-swaps-filemanager-hotswap)); what they work from: [files/ProjectFiles.h](../../app/src/files/ProjectFiles.h) (the files a project plays, and what plays each) and [files/MissingFiles.h](../../app/src/files/MissingFiles.h) (finding missing files again) |
 
 ## What it owns
 
@@ -33,8 +34,8 @@ accessors. The UI shows dialogs and asks the session to act; the session itself 
 `EngineBridge` (on the engine it is given, which outlives it), the `PluginIndex`, the `SoundSimilarity` (which
 analyses the browser's files: [intelligence.md](../intelligence.md)), the `Harmony` (the song's chords and key), the `BrowserController` (which starts the plug-in
 scan, and points the sound similarity at its index), the `PresetIndex`, the `RenderProgress`, and the parts `ArrangementActions`, `DeviceSelection`,
-`ComputerKeyboard`, `AudioPreferences`, `MidiPreferences`. They are its children, and QML reads them as constant
-properties:
+`ComputerKeyboard`, `HotSwap`, `FileManager`, `AudioPreferences`, `MidiPreferences`. They are its children, and QML
+reads them as constant properties:
 
 | Property | Type | What it is |
 |---|---|---|
@@ -46,6 +47,7 @@ properties:
 | `deviceSelection` | `DeviceSelection` | [below](#the-device-view-deviceselection) |
 | `render` | `RenderProgress` | [below](#renders-in-the-background) |
 | `computerKeyboard` | `ComputerKeyboard` | [below](#the-computer-midi-keyboard) |
+| `files`, `hotSwap` | `FileManager`, `HotSwap` | [below](#the-file-manager-and-hot-swaps-filemanager-hotswap) |
 | `audioPreferences`, `midiPreferences` | `AudioPreferences`, `MidiPreferences` | [below](#preferences) |
 
 `Session::Options` is for the tests: `scanner` (the plug-in scanner's program; empty: `substation-scan` beside the
@@ -56,7 +58,7 @@ disk) and `analyseSounds` (fingerprint the browser's files in the background).
 and ASIO drivers' dialogs belong to. `start()` (queued by `ui/main.cpp` once the window shows) starts audio
 (`EngineBridge::startAudio`: the render threads, the MIDI inputs, the saved device). `shutdown()` (after the event
 loop, or when the session goes) aborts a render that runs, stops the transport and the preview, closes the plug-in
-editors, stops the browser's threads, then the sound similarity's (saving the fingerprints), closes the device and shuts the bridge down (the plug-ins unload while the
+editors, ends a hot swap and a search for missing files, stops the browser's threads, then the sound similarity's (saving the fingerprints), closes the device and shuts the bridge down (the plug-ins unload while the
 application is still whole).
 
 ## Wiring
@@ -66,8 +68,9 @@ The session connects its parts to each other in `Session::wire()`:
 - **The editor's hooks**: `setParamInfo` ← `EngineBridge::deviceParamInfo`, made a `ParamSpec` (`ParamSpec::fromInfo`),
   for macros; `setOwnValue` ← `EngineBridge::ownValue`; `setDeviceDefaults` ← `defaultDevice` (the user's default
   presets, [io/Presets.h](../../app/src/io/Presets.h)).
-- **Messages**: the bridge's, the browser's, the plug-in index's, the arrangement's, the device view's and the computer
-  keyboard's `statusMessage`, and the editor's `refused`, all go out on the session's `statusMessage`.
+- **Messages**: the bridge's, the browser's, the plug-in index's, the arrangement's, the device view's, the computer
+  keyboard's, the humanizer's, the File Manager's and the hot swap's `statusMessage`, and the editor's `refused`, all go
+  out on the session's `statusMessage`.
 - **Plug-ins**: the plug-in index's results go to `EngineBridge::setKnownPlugins` (so projects find plug-ins that
   moved); the editor's `pluginAdded` opens the plug-in's editor on the next turn of the event loop (the add, a drop,
   has finished, and the track may be selected just after), if its track is still there; a plug-in editor's
@@ -80,9 +83,12 @@ The session connects its parts to each other in `Session::wire()`:
   taken hold of: `parameterTouched`) shows its automation lane, if it can be automated.
 - **Recording**: `takesRecorded` → `ProjectEditor::addRecordings(takes, recordQuantize())`, one undo step; the new
   clips are selected.
-- **The browser**: previews go to the bridge (`previewFile`, `stopPreview`); what it activates (a double-click, Enter)
-  goes on the selected track (`addFileAtInsert`, `addDeviceToSelectedTrack`, `addPluginToSelectedTrack`,
-  `addPresetToSelectedTrack`); its presets are the `PresetIndex`'s, listed again when the library changes.
+- **The browser**: previews go to the bridge (`previewFile`, `stopPreview`), but while a hot swap runs and the
+  transport plays (what is selected is heard in the song); what it activates (a double-click, Enter) goes on the
+  selected track (`addFileAtInsert`, `addDeviceToSelectedTrack`, `addPluginToSelectedTrack`,
+  `addPresetToSelectedTrack`); its presets are the `PresetIndex`'s, listed again when the library changes. While a hot
+  swap runs, an audio file the user chooses there (`fileChosen`: clicked, or reached with the arrow keys) is swapped
+  in (`HotSwap::swap`), and one activated is kept instead of added (`HotSwap::commit`).
 - **State for the UI**: `automationOverridden` follows `EngineBridge::automationStateChanged`; `pluginsLoaded`,
   `pluginsTotal` and `pluginsLoadingText` follow `pluginsLoading`; `clean` and `title` follow the undo stack's clean
   state and the project's path.
@@ -136,7 +142,9 @@ The session never asks the user anything; the UI does, and then calls it:
   written is a `warning`.
 - **Open**: `openProject(path)` loads the file (one that can't be read: a `warning`, and the open project stays as it
   was), clears the undo stack, the selection and the insert marker, remembers the folder and the file, emits
-  `projectOpened()` and says "Opened <file>". Its plug-ins load after it shows ([engine-bridge.md](engine-bridge.md#opening-a-project)).
+  `projectOpened()` and says "Opened <file>", and how many of the files it plays are missing ("Opened song.gilproj: 2
+  files are missing (the File Manager finds them)"; the UI shows the File Manager then). Its plug-ins load after it
+  shows ([engine-bridge.md](engine-bridge.md#opening-a-project)).
 - **New**: `newProject()` empties the project, the undo stack and the selection.
 - **Close**: `requestClose()` is false while a render runs: it cancels the render instead, and the window stays (as
   the render dialog's Cancel would). Otherwise the UI asks about unsaved changes as above.
@@ -223,6 +231,57 @@ Clicking a chain (`clickChain`) shows its rack's devices again.
 - **Drops**: `dropMoved(ids, chain, index)`, `dropDevices(kinds, plugins, chain, index)`,
   `dropPresets(paths, chain, index, intoDeviceId)` (onto a device of the preset's kind: loaded into it), `dragEnded()`.
 - Texts the view shows: `kEffectsHint`, `kInstrumentHint`, `kInstrumentRefused`.
+
+## The File Manager and hot swaps (FileManager, HotSwap)
+
+The files a project plays are worked out from the project each time, never stored:
+[ProjectFiles.h](../../app/src/files/ProjectFiles.h)'s `projectFiles(project)` walks the tracks, the returns and the
+master, each one's audio clips (the file a clip plays: a reversed clip's reversed copy) and then its devices, in racks
+too: a built-in device's state names a file under `"sample"` (`deviceFile`, `withDeviceFile`; the Sampler's). It
+groups them as the system compares paths (`sourceKey`) and keeps each file's uses (`FileUses`: `ClipRef`s and
+`DeviceRef`s). Frozen tracks' own audio isn't among them. `changeableUses` leaves out what is on frozen tracks (or in
+frozen groups), which a replacement may not change.
+
+Putting one file in another's place is the editor's (`EditorFiles.cpp`, [model.md](model.md)):
+`ProjectEditor::replaceFile(uses, path, seconds, text, mergeKey)` changes the clips (each as `edits::replaceFile` has
+it, then `edits::fitToTempo` trims one running into the next) and the devices' states in one `ReplaceFilesCommand`;
+`relinkFiles({old: new})` does it for files found somewhere else (the same audio: `edits::relinkFile`, also what a
+reversed clip was reversed from; frozen tracks take it).
+
+**`FileManager`** (`Session.files`, [FileManager.h](../../app/src/files/FileManager.h)) is the panel's logic:
+
+- `files` is a `FileListModel` (roles `path`, `name`, `folder`, `missing`, `uses`, `frozen`): the missing first, then
+  by name, filtered by `filter` (every word in the name or the folder). `fileCount`, `missingCount` and `summary`
+  ("12 files, 2 missing") count every file. It follows the project after each change (a zero-length timer:
+  `update()` once per turn of the event loop; `update()` at once from `openProject`). Whether a file is there is a
+  `QFileInfo::isFile()` kept per file: looked at again on `refresh()` (the panel showing), and for a file the engine
+  decoded or failed to (`sourceReady`, `sourceFailed`): the engine's memory is no proof a file is on disk.
+- `search()` and `searchFolder(folder)` run a `missing::MissingFileSearch` on a thread of its own: it collects the
+  files with a missing file's name from the browser index's latest snapshot (in memory) and from folders walked on
+  disk (the project's, or the one chosen; 16 deep, no names starting with "." or "$", no symbolic links to folders),
+  then `missing::match` picks for each the candidate sharing the most folders with it, from the file up
+  (`bestMatch`), and where the files found went tells where the others did (`moveAlong`). Its result comes back as a
+  queued call; a search started meanwhile, `cancelSearch()`, or another project drop it. What was found for files
+  still missing goes through `relinkFiles` ("Locate Missing Files"), and the status line says how many.
+- `locate(path, found)`: one missing file pointed at by the user, and the others `moveAlong` finds from it.
+- `replace(path, with)`: an audio file in its place wherever it plays (`changeableUses`: frozen tracks' are left, and
+  said so), its length from `EngineBridge::fileInfo`.
+- `hotSwap(path)`, `selectClips(path)`, `findSimilar(path)`, `showInFolder(path)`, `actions(path)` (a row's menu),
+  `dialogFolder(path)` (where Replace… and Locate… start), `reveal(path)` (Show in File Manager from an audio clip's
+  menu: `revealRequested`, the UI shows the panel and the row; a filter hiding the file is cleared).
+
+**`HotSwap`** (`Session.hotSwap`, [HotSwap.h](../../app/src/files/HotSwap.h)) links the browser to a file's uses:
+`startClip(ref)` (an audio clip's menu) and `startFile(path)` (the File Manager) take every clip and sampler playing
+the file (but frozen tracks'), and ask the browser for the sounds most like it (`BrowserController::findSimilar`; for
+a clip, like the part of its file it plays). While `active`, `swap(path)` (the browser's `fileChosen`) puts each file
+chosen in their place through `replaceFile` with a merge key of the hot swap's own, so all of it is one undo step,
+worked out from the clips as they were before it began; back on the file it began with, the merged command is
+obsolete and leaves the stack. `commit(path)` (the browser's double-click or Enter) swaps and ends; `stop()` ends.
+It never outlives what the user is doing with it: the undo stack moving but for its own swaps (any other edit, an undo,
+a redo) ends it, and so do `Project::reset` and none of what it swaps being left; the browser panel ends it on a press
+outside it (but the File Manager and the transport bar) and when a drag starts there, so a sample dragged out while
+one runs is added, never swapped in. `path`, `name`, `originPath` and `usesText` are for the browser's bar and the
+File Manager's lit button.
 
 ## Renders in the background
 
@@ -333,6 +392,9 @@ parts keep these QSettings keys:
   meanwhile, freezing and flattening, plug-ins loading after a project opens.
 - [test_session_engine.cpp](../../tests/app/test_session_engine.cpp): what the engine hears of the edits.
 - [test_session_keyboard.cpp](../../tests/app/test_session_keyboard.cpp): the computer MIDI keyboard.
+- [test_file_manager.cpp](../../tests/app/test_file_manager.cpp): the project's files, replacing and relinking them,
+  matching missing files and the search in the background (in the project's folder, a folder chosen, the browser's
+  places), Locate, the File Manager's list, and hot swaps through the browser.
 - The UI's tests ([testing.md](../testing.md#the-ui-test_ui_-on-a-display)) drive all of it through the QML.
 
 Test fixture: [SessionFixture.h](../../tests/app/support/SessionFixture.h) ([testing.md](../testing.md#testsappsupport)).

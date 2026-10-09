@@ -23,6 +23,7 @@ code is put together, [../README.md](../README.md).
 | [recording.md](recording.md) | Arming, inputs, monitoring, the count-in, takes, resampling |
 | [automation.md](automation.md) | Automation lanes and editing envelopes, Lock Envelopes, overriding and re-enabling |
 | [browser.md](browser.md) | The browser: categories, places, search, preview, ranking |
+| [file-manager.md](file-manager.md) | The File Manager (the project's files, missing ones found, one replaced everywhere) and hot-swapping samples from the browser |
 | [audio-setup.md](audio-setup.md) | Preferences: ASIO and WASAPI (the *System* driver on Linux), sample rate, buffer size, audio threads, MIDI inputs, plug-in folders |
 | [shortcuts.md](shortcuts.md) | Every keyboard shortcut, and which keys reach a plug-in's editor |
 | [limitations.md](limitations.md) | What isn't implemented yet |
@@ -39,6 +40,8 @@ code is put together, [../README.md](../README.md).
   Slice modes, warping, a filter and an LFO); Utility, Over The Top, Compressor, Delay,
   Disperser, EQ and Sidechain effects; VST3 instruments and effects; racks with chains and macros.
 - Warping and transposing audio, set up from the file name.
+- A File Manager that finds missing samples and replaces one everywhere it plays, and
+  hot-swapping samples from the browser (similar sounds listed first) while the song plays.
 - A piano roll with legato, timing, quantize and humanize tools (velocities by machine learning).
 - Audio and MIDI recording, resampling, MIDI input and a computer MIDI keyboard.
 - Automation of every device parameter and of volume, pan and sends.

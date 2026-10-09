@@ -9,6 +9,8 @@
 #include "browser/ItemListModel.h"
 #include "browser/SidebarModel.h"
 #include "editor/ProjectEditor.h"
+#include "files/FileManager.h"
+#include "files/HotSwap.h"
 #include "intelligence/Harmony.h"
 #include "intelligence/Humanizer.h"
 #include "intelligence/SoundSimilarity.h"
@@ -59,6 +61,9 @@ void registerSession(sub::app::Session* session) {
     registerUncreatable<DeviceSelection>("DeviceSelection");
     registerUncreatable<RenderProgress>("RenderProgress");
     registerUncreatable<ComputerKeyboard>("ComputerKeyboard");
+    registerUncreatable<FileManager>("FileManager");
+    registerUncreatable<FileListModel>("FileListModel");
+    registerUncreatable<HotSwap>("HotSwap");
     registerUncreatable<AudioPreferences>("AudioPreferences");
     registerUncreatable<MidiPreferences>("MidiPreferences");
     qmlRegisterUncreatableType<QUndoStack>(kUri, 1, 0, "UndoStack", kMadeByTheSession);

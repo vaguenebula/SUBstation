@@ -104,6 +104,7 @@ private Q_SLOTS:
         const QMap<QString, double> values{{QStringLiteral("amount"), 40.0},
                                            {QStringLiteral("freq"), 250.0},
                                            {QStringLiteral("pinch"), 3.5},
+                                           {QStringLiteral("mix"), 40.0},
                                            {QStringLiteral("bypass"), 1.0}};
         for (auto it = values.begin(); it != values.end(); ++it) f.editor().setDeviceParam(track, device, it.key(), it.value());
         const QString key = automation::deviceKey(device, QStringLiteral("freq"));

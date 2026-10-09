@@ -9,8 +9,9 @@
 // loop), EditorClips.cpp (clips and time selections), EditorDeviceChains.cpp
 // (devices in chains), EditorRacks.cpp (racks, their chains and macros),
 // EditorDeviceSettings.cpp (a device's parameters, state, presets, switch and
-// sidechain), EditorAutomation.cpp (envelopes and the lanes shown) and
-// EditorFreezing.cpp (freezing, flattening, and what frozen tracks refuse).
+// sidechain), EditorAutomation.cpp (envelopes and the lanes shown),
+// EditorFreezing.cpp (freezing, flattening, and what frozen tracks refuse) and
+// EditorFiles.cpp (the files clips and devices play: replaced, found again).
 // Kinds of devices and new devices are in model/Devices.h.
 //
 // Some changes are view state, saved with the project but not undone (as in
@@ -41,6 +42,7 @@
 #include "editor/CopiedTracks.h"
 #include "editor/TimeRange.h"
 #include "editor/TrackPlace.h"
+#include "files/ProjectFiles.h"
 #include "model/Automation.h"
 #include "model/Clip.h"
 #include "model/Device.h"
@@ -378,6 +380,26 @@ public:
     // deactivated (a deactivated clip doesn't play; see Clip::muted). One undo
     // step. The clips changed (none if refused: on a frozen track).
     ClipRefs setRangeActive(double start, double end, const QStringList& trackIds, bool active);
+
+    // --- Files (EditorFiles.cpp) ---
+
+    // Puts the file `path` (`seconds` long) in place of whatever these clips
+    // and devices play (the File Manager's Replace, a hot swap), as one undo
+    // step: each clip as edits::replaceFile has it (one that runs into the next
+    // clip is trimmed there), each device's state naming it. Uses on frozen
+    // tracks are refused (`refused`): leave them out (changeableUses). With a
+    // merge key, a hot swap's replacements are one undo step, each worked out
+    // from the clips as they were before it began (so a long sample tried and
+    // left doesn't leave its clips trimmed). False if nothing changed (or it
+    // was refused).
+    bool replaceFile(const FileUses& uses, const QString& path, double seconds, const QString& text,
+                     const QString& mergeKey = {});
+    // Files found somewhere else (missing ones located): each old path -> its
+    // new one, wherever a clip plays it (or was reversed from it) and a device
+    // names it; on frozen tracks too, as it is the same audio. One undo step;
+    // false if nothing changed.
+    bool relinkFiles(const QMap<QString, QString>& moved,
+                     const QString& text = QStringLiteral("Locate Missing Files"));
 
     // --- Devices in chains (EditorDeviceChains.cpp) ---
 

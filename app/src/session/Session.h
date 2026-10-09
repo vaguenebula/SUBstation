@@ -25,6 +25,10 @@
 // - render: the render running in the background, for its modal dialog
 //   (RenderProgress);
 // - computerKeyboard: the computer MIDI keyboard (ComputerKeyboard);
+// - files: the File Manager: the files the project plays, missing ones found
+//   again, one replaced by another (FileManager);
+// - hotSwap: a hot swap: the browser's selection swapped into clips or
+//   samplers (HotSwap; it takes the browser's double-click and Enter);
 // - audioPreferences, midiPreferences: Preferences › Audio and › MIDI
 //   (Preferences › Plug-ins is the plug-in index's: plugins).
 //
@@ -67,8 +71,10 @@ class BrowserController;
 class ComputerKeyboard;
 class DeviceSelection;
 class EngineBridge;
+class FileManager;
 class FreezeRender;
 class Harmony;
+class HotSwap;
 class Humanizer;
 class MidiPreferences;
 class PluginIndex;
@@ -96,6 +102,8 @@ class Session : public QObject {
     Q_PROPERTY(sub::app::DeviceSelection* deviceSelection READ deviceSelection CONSTANT)
     Q_PROPERTY(sub::app::RenderProgress* render READ render CONSTANT)
     Q_PROPERTY(sub::app::ComputerKeyboard* computerKeyboard READ computerKeyboard CONSTANT)
+    Q_PROPERTY(sub::app::FileManager* files READ files CONSTANT)
+    Q_PROPERTY(sub::app::HotSwap* hotSwap READ hotSwap CONSTANT)
     Q_PROPERTY(sub::app::AudioPreferences* audioPreferences READ audioPreferences CONSTANT)
     Q_PROPERTY(sub::app::MidiPreferences* midiPreferences READ midiPreferences CONSTANT)
 
@@ -172,6 +180,8 @@ public:
     DeviceSelection* deviceSelection() const { return devices_; }
     RenderProgress* render() const { return render_; }
     ComputerKeyboard* computerKeyboard() const { return keyboard_; }
+    FileManager* files() const { return files_; }
+    HotSwap* hotSwap() const { return hotSwap_; }
     AudioPreferences* audioPreferences() const { return audioPreferences_; }
     MidiPreferences* midiPreferences() const { return midiPreferences_; }
     PresetIndex* presets() const { return presets_; }
@@ -325,7 +335,9 @@ public:
     // New Project (the UI asked about unsaved changes first).
     Q_INVOKABLE void newProject();
     // Opens a project file (the UI asked about unsaved changes first; a file
-    // that can't be read: warning). Whether it opened (projectOpened).
+    // that can't be read: warning). Whether it opened (projectOpened). Files
+    // it plays that are missing are said in the status line (the UI shows the
+    // File Manager).
     Q_INVOKABLE bool openProject(const QString& path);
     // Ctrl+S: to the project's file; one never saved: saveAsRequested (the UI
     // asks where, then saveProjectAs), false meanwhile. Whether it was saved.
@@ -412,6 +424,8 @@ private:
     ArrangementActions* arrangement_ = nullptr;
     DeviceSelection* devices_ = nullptr;
     ComputerKeyboard* keyboard_ = nullptr;
+    HotSwap* hotSwap_ = nullptr;
+    FileManager* files_ = nullptr;
     AudioPreferences* audioPreferences_ = nullptr;
     MidiPreferences* midiPreferences_ = nullptr;
     QPointer<Render> rendering_;

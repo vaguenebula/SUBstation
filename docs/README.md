@@ -27,6 +27,7 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | [Recording](guide/recording.md) | arming, inputs, monitoring, count-in, takes, resampling |
 | [Automation](guide/automation.md) | lanes, editing envelopes, locking, overrides |
 | [Browser](guide/browser.md) | places, search, preview, ranking, finding similar sounds |
+| [File Manager and hot swap](guide/file-manager.md) | the project's files, finding missing ones, replacing a file everywhere, hot-swapping samples |
 | [Audio setup](guide/audio-setup.md) | ASIO and WASAPI, sample rate, buffers, audio threads, MIDI inputs |
 | [Keyboard shortcuts](guide/shortcuts.md) | every shortcut |
 | [Limitations](guide/limitations.md) | what isn't implemented yet |
@@ -60,7 +61,7 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | [Model](app/model.md) | `model/`, `editor/`: the project, its types and signals, pure edit maths, the editor, undo commands |
 | [Serialization](app/serialization.md) | `io/`: `.gilproj` projects, `.gilpreset` presets, the preset library |
 | [Engine bridge](app/engine-bridge.md) | `audio/`: mirroring the project into the engine, transport, plug-ins, recording, renders, settings |
-| [Session](app/session.md) | `session/`: the main window's logic: files, transport, Edit and Create commands, renders, preferences |
+| [Session](app/session.md) | `session/`, `files/`: the main window's logic: files, transport, Edit and Create commands, renders, preferences; the File Manager (missing files found, files replaced) and hot swaps |
 | [Plug-in scanner](app/plugin-scanner.md) | `plugins/`, `tools/scanner`: finding and reading VST3 plug-ins in child processes |
 | [Analysis](app/analysis.md) | `analysis/`: signal maths for the devices' editors (the Sidechain's fit, spectra) |
 

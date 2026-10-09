@@ -7,6 +7,8 @@
 #include "browser/BrowserController.h"
 #include "browser/BrowserMime.h"
 #include "editor/ProjectEditor.h"
+#include "files/FileManager.h"
+#include "files/HotSwap.h"
 #include "model/Devices.h"
 #include "model/Edits.h"
 #include "model/Errors.h"
@@ -1124,6 +1126,19 @@ MenuEntries ArrangementLanes::contextMenu(const QPointF& pos) {
             MenuEntry& similar = menu.add(QStringLiteral("Find Similar Sounds"),
                                           [browser, path, start, length] { browser->findSimilar(path, start, length); });
             similar.enabled = browser->canFindSimilar() && !path.isEmpty();
+            // A hot swap of its file, wherever it plays: the browser lists the
+            // sounds most like this clip's, and the one selected there plays
+            // in the file's place.
+            app::HotSwap* hotSwap = s->hotSwap();
+            const app::ClipRef ref{hit->trackId, clip.id};
+            MenuEntry& swap = menu.add(QStringLiteral("Hot-Swap Sample"), [hotSwap, ref] { hotSwap->startClip(ref); });
+            swap.enabled = !path.isEmpty();
+            swap.toolTip = QStringLiteral("The sample selected in the browser plays in this file's place, in every clip "
+                                          "and sampler playing it; the browser lists similar sounds");
+            app::FileManager* files = s->files();
+            MenuEntry& reveal =
+                menu.add(QStringLiteral("Show in File Manager"), [files, path] { files->reveal(path); });
+            reveal.enabled = !path.isEmpty();
         }
         menu.addSeparator();
         menu.add(QStringLiteral("Delete"), [actions] { actions->deleteArea(); }).shortcut = QStringLiteral("Del");

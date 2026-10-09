@@ -115,6 +115,43 @@ private:
     FrozenSegments frozenAfter_;
 };
 
+// (track id, device id) -> a device's state (Device::state).
+using DeviceStates = QMap<std::pair<QString, QString>, std::optional<QString>>;
+
+// Puts other files in place of some (the File Manager, a hot swap): the clips
+// of the tracks playing them (whole lists) and the states of the built-in
+// devices naming them (a sampler's sample), together, as one undo step. With
+// a merge key (a hot swap trying file after file) consecutive replacements of
+// the same tracks and devices merge. `relink`: the files were only found
+// somewhere else (the same audio), so frozen tracks may take it.
+class ReplaceFilesCommand : public QUndoCommand {
+public:
+    ReplaceFilesCommand(Project* project, const QString& text, ClipLists before, ClipLists after,
+                        DeviceStates statesBefore, DeviceStates statesAfter, QString mergeKey = {},
+                        bool relink = false);
+
+    int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+    void redo() override;
+    void undo() override;
+
+    const ClipLists& before() const { return before_; }
+    const ClipLists& after() const { return after_; }
+    const DeviceStates& statesBefore() const { return statesBefore_; }
+    const DeviceStates& statesAfter() const { return statesAfter_; }
+    const QString& mergeKey() const { return mergeKey_; }
+    bool relink() const { return relink_; }
+
+private:
+    Project* project_;
+    ClipLists before_;
+    ClipLists after_;
+    DeviceStates statesBefore_;
+    DeviceStates statesAfter_;
+    QString mergeKey_;
+    bool relink_;
+};
+
 class InsertTrackCommand : public QUndoCommand {
 public:
     InsertTrackCommand(Project* project, Track track, int index, const QString& text = QStringLiteral("Insert Track"));

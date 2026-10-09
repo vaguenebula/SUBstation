@@ -192,6 +192,11 @@ void BrowserController::setCurrentRow(int row) {
     if (item && item->kind == ItemKind::Audio && !restoring_) maybePreview(item->path);
 }
 
+void BrowserController::choose(int row) {
+    const BrowserItem* item = results_->item(row);
+    if (item && item->kind == ItemKind::Audio) Q_EMIT fileChosen(item->path);
+}
+
 // --- Sidebar ------------------------------------------------------------------------------
 
 void BrowserController::buildSidebar(std::optional<Scope> select) {
@@ -661,6 +666,10 @@ QVariantMap BrowserController::dragData(const QList<int>& rows) const { return b
 
 void BrowserController::treeCurrentChanged(const QString& path) {
     if (!path.isEmpty() && !QFileInfo(path).isDir()) maybePreview(path);
+}
+
+void BrowserController::chooseFile(const QString& path) {
+    if (!path.isEmpty() && FileIndex::isAudioFile(path) && !QFileInfo(path).isDir()) Q_EMIT fileChosen(path);
 }
 
 void BrowserController::activateFile(const QString& path) {

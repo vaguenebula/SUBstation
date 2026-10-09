@@ -455,7 +455,11 @@ index closes.
 
 **Preview.** Setting `currentRow` to an audio file (in the list or the tree: `treeCurrentChanged(path)`) previews it
 (`previewRequested(path)`, which the session sends to `EngineBridge::previewFile`) while `previewEnabled` is on;
-`previewing` is true from then until it stops. The panel stops it on a press anywhere outside the browser
+`previewing` is true from then until it stops. An audio file the user chooses (a row clicked and let go of without a
+drag, or reached with the arrow keys: the lists' `chosen(row)`, then `choose(row)` or `chooseFile(path)`) is said on
+`fileChosen(path)`: a hot swap swaps it in (`HotSwap`, [app/session.md](app/session.md#the-file-manager-and-hot-swaps-filemanager-hotswap)),
+and the session gives what is activated meanwhile to the hot swap instead of the arrangement. The current item
+changing otherwise (a press that becomes a drag, a list searched again) previews but is no choice. The panel stops it on a press anywhere outside the browser
 (`stopPreview()`). See [app/engine-bridge.md](app/engine-bridge.md).
 
 **Places and settings.** The places and the sort are kept in `QSettings` (`browser/places`, `browser/sort`). The
@@ -474,6 +478,11 @@ application ends, which stops the backend's threads (saving the index) and waits
 - **The similar bar** (`similarBar`), under them while `similarTo` is set: "Similar to *name*" (the path as its
   tooltip) and a ✕ (`clearSimilar()`). The main window shows the browser when Find Similar starts (from a clip's menu
   with the browser hidden).
+- **The hot-swap bar** (`hotSwapBar`), over the similar bar while `Session.hotSwap.active`: "Hot-Swap *name*
+  (*uses*)", its Similar (`HotSwap::findSimilar`: the sounds like the one swapped in now) and a ✕ (`stop()`). Esc
+  with the list (or the tree) having the keyboard ends the hot swap too; a hot swap starting gives it the keyboard.
+  A press outside the panel ends it (an `OutsidePresses`, but in `hotSwapKeepers`: the main window gives the File
+  Manager and the transport bar), and so does a drag starting from the panel (`startDrag`).
 - **The sidebar** ([BrowserSidebar.qml](../ui/qml/browser/BrowserSidebar.qml)) in a `SplitView` beside the results: a
   click sets `scope`; Add Folder… asks for a folder (`FolderDialog`, `addPlaceRequested`); a right-click opens the
   entry's `ActionMenu`.

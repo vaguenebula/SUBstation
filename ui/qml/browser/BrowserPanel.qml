@@ -20,10 +20,22 @@ import SUBstation
 // Find Similar Sounds (an audio file's menu here, or an audio clip's in the
 // arrangement) lists the sounds most like it, most similar first: a bar over
 // the list says like what, and its ✕ goes back to the list as it was.
+//
+// While a hot swap runs (Session.hotSwap: an audio clip's menu, the File
+// Manager), a bar over the list says what the user's choice plays in: a file
+// clicked (let go of without a drag) or reached with the arrow keys swaps in at
+// once, a double-click or Enter keeps it and ends the hot swap, as Esc or the
+// bar's ✕ do. Its Similar lists the sounds most like what is swapped in. The
+// list takes the keyboard when a hot swap starts. A press anywhere outside the
+// browser (but `hotSwapKeepers`: the File Manager, the transport bar) ends it,
+// and so does a drag starting here: what is dragged out is added, not swapped.
 Rectangle {
     id: panel
 
     readonly property var browser: Session.browser
+    readonly property var hotSwap: Session.hotSwap
+    // Items a press in doesn't end a hot swap (the window's File Manager and transport bar).
+    property var hotSwapKeepers: []
     // The results list has the keyboard (Ctrl+R renames the preset there).
     readonly property bool listFocused: results.activeFocus
     readonly property alias searchField: search
@@ -53,6 +65,7 @@ Rectangle {
     function startDrag(rows, fromTree) {
         if (rows.length === 0)
             return
+        hotSwap.stop()  // (what is dragged out is added: the hot swap is over)
         dragSource.rows = rows
         dragSource.paths = fromTree ? tree.folders.paths(rows) : []
         dragSource.fromTree = fromTree
@@ -116,6 +129,28 @@ Rectangle {
     color: Theme.window
     implicitWidth: 300
 
+    // Esc (the list or the tree having the keyboard) ends a hot swap.
+    Keys.onEscapePressed: event => {
+        if (panel.hotSwap.active)
+            panel.hotSwap.stop()
+        else
+            event.accepted = false
+    }
+
+    // A hot swap starting: the list (or the tree) takes the keyboard, for the arrow keys.
+    Connections {
+        target: panel.hotSwap
+
+        property bool wasActive: false
+
+        function onChanged() {
+            const starting = panel.hotSwap.active && !wasActive
+            wasActive = panel.hotSwap.active
+            if (starting && !results.activeFocus && !tree.activeFocus)
+                (panel.browser.showingTree ? tree : results).forceActiveFocus()
+        }
+    }
+
     Connections {
         target: panel.browser
 
@@ -150,6 +185,15 @@ Rectangle {
         enabled: panel.browser.previewing
         ignore: sidebarMenu.visible || resultMenu.visible || sort.popup.visible
         onPressed: panel.browser.stopPreview()
+    }
+
+    // A press anywhere else ends a hot swap: the user is doing something else.
+    OutsidePresses {
+        item: panel
+        enabled: panel.hotSwap.active
+        alsoInside: panel.hotSwapKeepers
+        ignore: sidebarMenu.visible || resultMenu.visible || sort.popup.visible
+        onPressed: panel.hotSwap.stop()
     }
 
     // Carries a drag out of the browser (the platform's drag: to the arrangement, the device view...).
@@ -226,6 +270,63 @@ Rectangle {
                 tooltip: panel.browser.similarTo !== "" ? qsTr("Similarity: the most similar sounds first")
                                                         : qsTr("Sort the list: Rank puts what you use most first")
                 onChosen: index => panel.browser.sort = panel.browser.sorts[index].value
+            }
+        }
+
+        // A hot swap: what the selection plays in the place of.
+        Rectangle {
+            id: hotSwapBar
+            objectName: "hotSwapBar"
+            Layout.fillWidth: true
+            Layout.leftMargin: 6
+            Layout.rightMargin: 6
+            visible: panel.hotSwap.active
+            implicitHeight: hotSwapRow.implicitHeight + 4
+            radius: 3
+            color: Theme.accent
+
+            RowLayout {
+                id: hotSwapRow
+                anchors.fill: parent
+                anchors.leftMargin: 6
+                anchors.rightMargin: 2
+                spacing: 5
+
+                Icon {
+                    name: "hotswap"
+                    color: Theme.accentText
+                }
+                Label {
+                    objectName: "hotSwapLabel"
+                    Layout.fillWidth: true
+                    text: qsTr("Hot-Swap %1").arg(panel.hotSwap.name)
+                          + (panel.hotSwap.usesText !== "" ? "  (" + panel.hotSwap.usesText + ")" : "")
+                    color: Theme.accentText
+                    elide: Text.ElideMiddle
+
+                    HoverHandler {
+                        id: hotSwapHover
+                    }
+                    ToolTip.visible: hotSwapHover.hovered
+                    ToolTip.text: qsTr("Hot-Swap\nThe sample selected here plays in the place of %1 (%2): click through samples, or use the arrow keys, to hear them in the song. Double-click one (or press Enter) to keep it; Esc keeps what is swapped in.")
+                                  .arg(panel.hotSwap.name).arg(panel.hotSwap.usesText)
+                    ToolTip.delay: 700
+                }
+                RoleButton {
+                    objectName: "hotSwapSimilar"
+                    role: "small"
+                    visible: panel.browser.canFindSimilar
+                    text: qsTr("Similar")
+                    tooltip: qsTr("Similar\nLists the sounds most like the one swapped in now.")
+                    onClicked: panel.hotSwap.findSimilar()
+                }
+                RoleButton {
+                    objectName: "stopHotSwap"
+                    role: "small"
+                    text: "✕"
+                    tooltip: qsTr("End the hot swap, keeping what is swapped in (Esc)")
+                    onClicked: panel.hotSwap.stop()
+                }
             }
         }
 

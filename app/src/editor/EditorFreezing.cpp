@@ -131,6 +131,15 @@ std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command)
             if (changed && !carriesFrozen(it.key(), carried)) tracks.append(it.key());
         }
         what = QStringLiteral("clips");
+    } else if (const auto* files = dynamic_cast<const ReplaceFilesCommand*>(&command)) {
+        // (A file found somewhere else is the same audio: frozen tracks take it.)
+        if (!files->relink()) {
+            for (auto it = files->after().constBegin(); it != files->after().constEnd(); ++it) {
+                if (files->before().value(it.key()) != it.value()) tracks.append(it.key());
+            }
+            for (const auto& device : files->statesAfter().keys()) tracks.append(device.first);
+        }
+        what = QStringLiteral("files");
     } else if (const auto* chains = dynamic_cast<const SetChainsCommand*>(&command)) {
         tracks = chains->after().keys();
     } else if (const auto* param = dynamic_cast<const SetDeviceParamCommand*>(&command)) {

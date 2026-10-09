@@ -3,7 +3,8 @@ import SUBstation
 
 // A row's mouse in a SelectionList: presses and releases select, a double-click
 // activates, a right-click asks for the row's menu, and dragging further than
-// the platform's drag distance starts a drag of the selected rows.
+// the platform's drag distance starts a drag of the selected rows. A left click
+// let go of without a drag chooses the row (the list's chosen()).
 MouseArea {
     id: area
 
@@ -32,8 +33,10 @@ MouseArea {
         list.startDragFrom(row)
     }
     onReleased: mouse => {
-        if (!dragging && mouse.button === Qt.LeftButton)
+        if (!dragging && mouse.button === Qt.LeftButton) {
             list.releaseRow(row)
+            list.chosen(row)
+        }
         dragging = false
     }
     onDoubleClicked: mouse => {

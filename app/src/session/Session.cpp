@@ -11,6 +11,8 @@
 #include "browser/BrowserController.h"
 #include "browser/PresetIndex.h"
 #include "editor/ProjectEditor.h"
+#include "files/FileManager.h"
+#include "files/HotSwap.h"
 #include "intelligence/Harmony.h"
 #include "intelligence/Humanizer.h"
 #include "intelligence/SoundSimilarity.h"
@@ -57,6 +59,8 @@ Session::Session(sub::Engine& engine, Options options, QObject* parent)
     arrangement_ = new ArrangementActions(editor_, selection_, bridge_, render_, this);
     devices_ = new DeviceSelection(editor_, selection_, bridge_, this);
     keyboard_ = new ComputerKeyboard(bridge_, this);
+    hotSwap_ = new HotSwap(project_, editor_, undoStack_, bridge_, browser_, this);
+    files_ = new FileManager(project_, editor_, selection_, bridge_, browser_, hotSwap_, this);
     audioPreferences_ = new AudioPreferences(bridge_, this);
     midiPreferences_ = new MidiPreferences(bridge_, this);
     finishFreeze_ = [this](FreezeRender& render) { return bridge_->finishFreeze(render); };
@@ -84,19 +88,29 @@ void Session::wire() {
     for (QObject* source : {static_cast<QObject*>(bridge_), static_cast<QObject*>(browser_),
                             static_cast<QObject*>(plugins_), static_cast<QObject*>(arrangement_),
                             static_cast<QObject*>(devices_), static_cast<QObject*>(keyboard_),
-                            static_cast<QObject*>(humanizer_)}) {
+                            static_cast<QObject*>(humanizer_), static_cast<QObject*>(files_),
+                            static_cast<QObject*>(hotSwap_)}) {
         connect(source, SIGNAL(statusMessage(QString)), this, SIGNAL(statusMessage(QString)));
     }
     connect(editor_, &ProjectEditor::refused, this, &Session::statusMessage);  // an edit a frozen track can't take
 
     // The plug-ins the scan found are where the bridge looks for a device's plug-in.
     connect(plugins_, &PluginIndex::updated, this, [this] { bridge_->setKnownPlugins(plugins_->plugins()); });
-    // Previewing files from the browser.
-    connect(browser_, &BrowserController::previewRequested, bridge_,
-            [this](const QString& path) { bridge_->previewFile(path); });
+    // Previewing files from the browser (but while a hot swap plays them in the song).
+    connect(browser_, &BrowserController::previewRequested, bridge_, [this](const QString& path) {
+        if (!(hotSwap_->active() && bridge_->isPlaying())) bridge_->previewFile(path);
+    });
     connect(browser_, &BrowserController::previewStopped, bridge_, [this] { bridge_->stopPreview(); });
-    // What the browser adds (a double-click, Enter) goes on the selected track.
-    connect(browser_, &BrowserController::fileActivated, this, &Session::addFileAtInsert);
+    // A hot swap swaps in what the user chooses in the browser.
+    connect(browser_, &BrowserController::fileChosen, hotSwap_, [this](const QString& path) { hotSwap_->swap(path); });
+    // What the browser adds (a double-click, Enter) goes on the selected track;
+    // while hot-swapping, it is kept instead (the hot swap ends).
+    connect(browser_, &BrowserController::fileActivated, this, [this](const QString& path) {
+        if (hotSwap_->active())
+            hotSwap_->commit(path);
+        else
+            addFileAtInsert(path);
+    });
     connect(browser_, &BrowserController::deviceActivated, this, &Session::addDeviceToSelectedTrack);
     connect(browser_, &BrowserController::pluginActivated, this, &Session::addPluginToSelectedTrack);
     connect(browser_, &BrowserController::presetActivated, this, &Session::addPresetToSelectedTrack);
@@ -196,6 +210,8 @@ void Session::shutdown() {
     bridge_->stop();
     bridge_->stopPreview();
     bridge_->closeAllEditors();
+    hotSwap_->stop();
+    files_->cancelSearch();
     browser_->shutdown();
     similarity_->close();  // (after the browser, which lets go of it first; saves the fingerprints)
     engine_.closeDevice();
