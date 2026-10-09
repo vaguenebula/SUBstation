@@ -59,7 +59,8 @@ void Renderer::setScheduler(Scheduler* scheduler) {
     scratch_.resize(static_cast<size_t>(scheduler ? scheduler->threads() : 1));
     for (WorkerScratch& scratch : scratch_) {
         for (auto* buffer : {&scratch.warpLeft, &scratch.warpRight, &scratch.autoGain, &scratch.autoPanLeft,
-                             &scratch.autoPanRight, &scratch.audible, &scratch.edgeGain, &scratch.activator}) {
+                             &scratch.autoPanRight, &scratch.audible, &scratch.edgeGain, &scratch.activator,
+                             &scratch.keyLeft, &scratch.keyRight}) {
             buffer->assign(kMaxBlock, 0.f);
         }
         scratch.switchStates.assign(kMaxBlock + kMaxSwitchFade, 0.f);
@@ -366,8 +367,15 @@ void Renderer::renderTrack(const RenderSnapshot& snap, int t, WorkerScratch& scr
     if (buffers.monitored) {  // its input: the device's, or another track's output (rendered: it fed this one)
         if (track.input.source == InputEdge::Source::Track) {
             sumEdge(snap, snap.edges[static_cast<size_t>(track.input.edge)], left, right, frames, scratch);
-        } else {
+        } else if (track.input.fromDevice()) {
             readInput(track.input, left, right, frames);
+        }
+        // And what other tracks' outputs bring into it (Track In), in a fixed order.
+        if (track.trackIn) {
+            for (const int e : track.incoming) {
+                const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
+                if (edge.kind == EdgeRender::Kind::TrackIn) sumEdge(snap, edge, left, right, frames, scratch);
+            }
         }
     } else if (!buffers.recorded) {  // (being recorded, unmonitored: silence; the take replaces its clips)
         int nextVoice = 0;
@@ -481,14 +489,15 @@ void Renderer::edgeSignal(const RenderSnapshot& snap, const EdgeRender& edge, co
 
 void Renderer::workOutSolo(const RenderSnapshot& snap) noexcept {
     // Each solo button is read once, so the chunk sees one consistent state. An
-    // input edge only counts while its track hears it (monitored): otherwise its
-    // track plays its clips, and the edge only feeds a recording. A sidechain
+    // input edge (a Track In edge too) only counts while its track hears it
+    // (monitored): otherwise its track plays its clips, and the edge only feeds
+    // a recording. A sidechain
     // isn't heard: solo goes up it (what keys a strip that is heard keeps keying
     // it: one soloed, fed by a solo or feeding one; the master's devices are
     // always heard) but not down it (soloing what keys a strip doesn't make that
     // strip heard).
     const auto passes = [&snap](const EdgeRender& edge) {  // its signal goes on into its destination's
-        return edge.sums() || (edge.kind == EdgeRender::Kind::Input &&
+        return edge.sums() || ((edge.kind == EdgeRender::Kind::Input || edge.kind == EdgeRender::Kind::TrackIn) &&
                                snap.tracks[static_cast<size_t>(edge.to)].buffers->monitored);
     };
     const auto carries = [&passes](const EdgeRender& edge) {
@@ -606,9 +615,14 @@ void Renderer::sumEdge(const RenderSnapshot& snap, const EdgeRender& edge, float
 }
 
 bool Renderer::isMonitored(const TrackRender& track, ChunkFlags flags) const noexcept {
-    // Offline renders play the arrangement. The master's output can't be heard
-    // on a track: the track goes into it.
-    if (!flags.live || !track.input.monitorable()) return false;
+    // Offline renders play the arrangement, but for what a track monitoring In
+    // hears from other tracks (its input from one, what comes in as its Track
+    // In): the device's input isn't there. The master's output can't be heard on
+    // a track: the track goes into it.
+    if (!track.input.monitorable() && !track.trackIn) return false;
+    if (!flags.live) {
+        return track.monitor == MonitorMode::In && (track.input.source == InputEdge::Source::Track || track.trackIn);
+    }
     switch (track.monitor) {
         case MonitorMode::In: return true;
         case MonitorMode::Auto: return track.armed && (!playing_ || recording_ != nullptr);
@@ -672,10 +686,14 @@ void Renderer::recordRendered(const RenderSnapshot& snap) noexcept {
             left = masterLeft_.data();
             right = masterRight_.data();
         } else {
+            // Its source's signal where its input edge taps it: after its fader
+            // (its buffer, before any edge's delay), before it, or after a device.
             for (const TrackRender& track : snap.tracks) {
-                if (track.id != take->sourceTrackId) continue;
-                left = track.buffers->left.data();  // after its fader, before any edge's delay
-                right = track.buffers->right.data();
+                if (track.id != take->trackId) continue;
+                const int e = track.input.source == InputEdge::Source::Track ? track.input.edge : -1;
+                if (e >= 0 && snap.tracks[static_cast<size_t>(snap.edges[static_cast<size_t>(e)].from)].id == take->sourceTrackId) {
+                    edgeSignal(snap, snap.edges[static_cast<size_t>(e)], left, right);
+                }
                 break;
             }
         }
@@ -964,7 +982,8 @@ void Renderer::processChain(const RenderSnapshot& snap, const StripRender& chain
         if (insert.isEnabled()) {
             // The strip's signal waits for a sidechain that comes later than it (but
             // not while monitored: a player hears only the devices' own latency).
-            const int e = !rack && i < chain.sidechains.size() ? chain.sidechains[i] : -1;
+            // (Each edge into it has the same delay: one waits for them all.)
+            const int e = !rack && i < chain.sidechains.size() && !chain.sidechains[i].empty() ? chain.sidechains[i].front() : -1;
             if (e >= 0) {
                 const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
                 if (DelayLine* wait = deviceDelayLine(edge, e)) {
@@ -1006,7 +1025,7 @@ void Renderer::processChain(const RenderSnapshot& snap, const StripRender& chain
             if (on && rack) {
                 processRack(snap, *rack, context, slices, events, left, right, frames, monitored, scratch);
             } else if (on) {
-                processDevice(snap, chain, i, context, slices, events, left, right);
+                processDevice(snap, chain, i, context, slices, events, left, right, frames, scratch);
             }
             if (!on) {
                 std::copy_n(dryL, frames, left);
@@ -1029,16 +1048,41 @@ void Renderer::processChain(const RenderSnapshot& snap, const StripRender& chain
 }
 
 void Renderer::processDevice(const RenderSnapshot& snap, const StripRender& chain, size_t i, ProcessContext& context,
-                             const Slices& slices, ProcessEvent* events, float* left, float* right) noexcept {
+                             const Slices& slices, ProcessEvent* events, float* left, float* right, int frames,
+                             WorkerScratch& scratch) noexcept {
     Processor& insert = *chain.inserts[i];
     const double samplesPerBeat = snap.samplesPerBeat();
-    const int e = i < chain.sidechains.size() ? chain.sidechains[i] : -1;
-    insert.setSidechainConnected(e >= 0);
+    static const std::vector<int> kNone;
+    const std::vector<int>& keys = i < chain.sidechains.size() ? chain.sidechains[i] : kNone;
+    insert.setSidechainConnected(!keys.empty());
+    // What its sidechain hears: the edge's signal; several edges' summed (solo may leave some out).
     const float* keyL = nullptr;
     const float* keyR = nullptr;
-    if (e >= 0) {
+    bool summing = false;
+    for (const int e : keys) {
         const EdgeRender& edge = snap.edges[static_cast<size_t>(e)];
-        if (edge.state->live) edgeSignal(snap, edge, keyL, keyR);  // (solo may leave it out)
+        if (!edge.state->live) continue;
+        const float* l;
+        const float* r;
+        edgeSignal(snap, edge, l, r);
+        if (!keyL) {
+            keyL = l;
+            keyR = r;
+            continue;
+        }
+        float* sumL = scratch.keyLeft.data();
+        float* sumR = scratch.keyRight.data();
+        if (!summing) {
+            std::copy_n(keyL, frames, sumL);
+            std::copy_n(keyR, frames, sumR);
+            keyL = sumL;
+            keyR = sumR;
+            summing = true;
+        }
+        for (int s = 0; s < frames; ++s) {
+            sumL[s] += l[s];
+            sumR[s] += r[s];
+        }
     }
     for (int s = 0; s < slices.count; ++s) {
         const Slice& slice = slices.slice[static_cast<size_t>(s)];

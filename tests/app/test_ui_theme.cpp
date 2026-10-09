@@ -89,6 +89,8 @@ private Q_SLOTS:
             {"deviceHeaderSelected", QColor("#577077")}, {"scopeLine", QColor("#ffb84d")},
             {"scopeGlow", QColor(255, 166, 43, 60)}, {"scopeAxis", QColor(255, 255, 255, 22)},
             {"frozen", QColor("#8fd3ff")},          {"frozenTint", QColor(143, 211, 255, 34)},
+            // A track header's volume and pan fill: the accent, see-through.
+            {"volumeFill", QColor(255, 166, 43, 110)},
         };
         Theme theme;
         for (const auto& [name, color] : expected) {
@@ -113,6 +115,16 @@ private Q_SLOTS:
                 ++colors;
         }
         QCOMPARE(colors, int(expected.size()) + 4);  // and the stylesheet's own four
+    }
+
+    // A track header's In, Auto and Off: small, the one chosen in the accent.
+    void monitorButtons() {
+        const auto look = [](bool checked) { return Theme::buttonLook(QStringLiteral("monitor"), false, false, checked, true); };
+        QCOMPARE(look(false).background, Theme::kSurface);
+        QCOMPARE(look(true).background, Theme::kAccent);
+        QCOMPARE(look(true).text, Theme::kAccentText);
+        QCOMPARE(look(false).paddingH, 0);
+        QCOMPARE(look(false).pointSize, 8.0);
     }
 
     void buttonRolesFollowTheStylesheet() {
@@ -143,7 +155,7 @@ private Q_SLOTS:
         QCOMPARE(look("record", false, false, false, true).minHeight, 22);
         const L arm = look("arm", false, false, true, true);
         QCOMPARE(arm.background, Theme::kRecordOn);
-        QCOMPARE(arm.radius, 8);
+        QCOMPARE(arm.radius, 2);  // (a box, as solo's)
         QCOMPARE(look("re-enable", false, false, true, true).background, Theme::kAccent);
         QCOMPARE(look("tool", false, false, false, true).paddingH, 2);
         // Flat: never a background; dim, but TEXT under the mouse.

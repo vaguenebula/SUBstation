@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <vector>
 
 #include "ArrangementTestSupport.h"
 #include "model/Automation.h"
@@ -114,8 +115,8 @@ class TestUiArrangementTracks : public QObject {
         QVERIFY(h);
         auto* column = h_->find<QQuickItem*>(QStringLiteral("headers"));
         QVERIFY(column);
-        const QPoint start = test::at(h, QPointF(h->width() / 2, 8));
-        const QPoint end = test::at(column, QPointF(h->width() / 2, endY));
+        const QPoint start = test::at(h, QPointF(h->nameLeft() + 8, 8));  // (by its name bar)
+        const QPoint end = test::at(column, QPointF(h->nameLeft() + 8, endY));
         test::press(window(), start);
         test::moveTo(window(), start + QPoint(0, 12));
         test::moveTo(window(), end);
@@ -293,9 +294,9 @@ private Q_SLOTS:
         auto* line = h_->find<QQuickItem*>(QStringLiteral("dropLine"));
         QVERIFY(column && line);
         TrackHeaderItem* h = header(ids[0]);
-        const QPoint start = test::at(h, QPointF(h->width() / 2, 8));
+        const QPoint start = test::at(h, QPointF(h->nameLeft() + 8, 8));  // (by its name bar)
         const arr::Row last = h_->rowOf(ids[2]);
-        const QPoint end = test::at(column, QPointF(h->width() / 2, last.top + last.mainHeight - 6));
+        const QPoint end = test::at(column, QPointF(h->nameLeft() + 8, last.top + last.mainHeight - 6));
         test::press(window(), start);
         test::moveTo(window(), start + QPoint(0, 12));
         test::moveTo(window(), end);
@@ -337,12 +338,15 @@ private Q_SLOTS:
             for (const arr::EnvelopeArea& area : lanes()->envelopeAreas()) QVERIFY(area.owner != a);
         }
 
-        // A folded group is its name row too (a little taller than a track's), and hides its tracks.
+        // A folded group is two rows, taller than a folded track (as in Ableton:
+        // its name row, its volume and pan under it), and hides its tracks.
         fold(group);
         {
             const arr::Row row = h_->rowOf(group);
+            QCOMPARE(row.mainHeight, arr::kFoldedGroupHeight);
             QVERIFY(h_->rowOf(a).mainHeight < row.mainHeight && row.mainHeight < height);
             QVERIFY(row.lanes.empty() && !row.automation);
+            QVERIFY(control(group, "volume")->isVisible() && control(group, "pan")->isVisible());
             QQuickItem* chooser = control(group, "deviceChooser");
             QVERIFY(!chooser || !chooser->isVisible());
             QVERIFY(h_->rowOf(b).hidden);
@@ -449,10 +453,12 @@ private Q_SLOTS:
         }
     }
 
-    // A folded track's and a folded group's name rows sit in the middle of what
-    // they have (a group's below the bar across its top): as much room above
-    // the buttons, the meter and the fold button as below them, selected or not.
-    void foldedHeadersPadTheirNameRowEvenly() {
+    // A folded track's name row sits in the middle of what it has: as much room
+    // above the buttons, the meter, the first In/Out chooser and the fold button
+    // as below them, selected or not. A folded group has two rows (as in
+    // Ableton: as tall as its colour while it is open), volume, pan and the In/Out
+    // column's second chooser in the second, as evenly.
+    void foldedHeadersPadTheirRowsEvenly() {
         const QStringList ids = makeTracks(2);
         const QString group = editor().groupTracks({ids[1]});
         h_->settle();
@@ -461,18 +467,28 @@ private Q_SLOTS:
         h_->settle();
         QCOMPARE(h_->rowOf(ids[0]).mainHeight, arr::kFoldedHeight);
         QCOMPARE(h_->rowOf(group).mainHeight, arr::kFoldedGroupHeight);
-        QVERIFY(arr::kFoldedGroupHeight > arr::kFoldedHeight);
         for (const QString& id : {ids[0], group}) {
+            const bool isGroup = id == group;
             TrackHeaderItem* h = header(id);
-            const double top = h->nameTop();  // (below a group's bar)
-            QCOMPARE(top, id == group ? double(arr::kGroupBar) : 0.0);
+            const double top = 0.0;
             const double bottom = h->mainHeight() - 1;  // (the line under it)
-            for (const char* name : {"activator", "solo", "meter"}) {
-                const QRectF r = geometryOf(control(id, name));
-                QVERIFY2(r.top() - top == bottom - r.bottom(), name);
-            }
-            const QRectF fold = h->foldRect();
-            QCOMPARE(fold.center().y() - top, bottom - fold.center().y());
+            const char* first = isGroup ? "output" : "input";  // (the In/Out column's first row)
+            const char* second = isGroup ? "outputChannel" : "inputChannel";
+            QVERIFY(control(id, first)->isVisible());
+            QCOMPARE(control(id, second)->isVisible(), isGroup);
+            QCOMPARE(control(id, "volume")->isVisible(), isGroup);
+            QCOMPARE(control(id, "pan")->isVisible(), isGroup);
+            // The first row as far from the top as the last from the line under it.
+            const double pad = geometryOf(control(id, "activator")).top() - top;
+            for (const char* name : {"activator", "solo", first})
+                QVERIFY2(geometryOf(control(id, name)).top() - top == pad, name);
+            const auto lastRow = isGroup ? std::vector<const char*>{"volume", "pan", second}
+                                         : std::vector<const char*>{"activator", "solo", first};
+            for (const char* name : lastRow) QVERIFY2(bottom - geometryOf(control(id, name)).bottom() == pad, name);
+            const QRectF meter = geometryOf(control(id, "meter"));
+            QCOMPARE(meter.top() - top, bottom - meter.bottom());
+            // The fold button is on the name row.
+            QCOMPARE(h->foldRect().center().y(), geometryOf(control(id, "activator")).center().y());
             for (bool selected : {false, true}) {
                 selection().selectTrack(selected ? id : QString());
                 h_->settle();
@@ -519,19 +535,22 @@ private Q_SLOTS:
         const arr::Row first = h_->rowOf(outer), last = h_->rowOf(c);
         for (double y = first.top; y < last.bottom() - 1; y += 1) QCOMPARE(at(band(0), y), color(outer));
         QVERIFY(at(band(0), last.bottom() - 1) != color(outer));  // the line under the group shows
-        // Across the top of its header (the bar), and the inner group's.
-        QCOMPARE(at(150, first.top + 1), color(outer));
-        QCOMPARE(at(150, h_->rowOf(inner).top + 1), color(inner));
+        // Its name column, in its colour (its name bar), and the inner group's.
+        QCOMPARE(at(60, first.top + 1), color(outer));
+        QCOMPARE(at(60, h_->rowOf(inner).top + 1), color(inner));
+        // A track's name bar is in its colour; below it, a dark shade of it.
+        QCOMPARE(at(60, h_->rowOf(a).top + 1), color(a));
+        QVERIFY(at(60, h_->rowOf(a).top + 40) != color(a));
         // The inner group's: from its header to C's bottom, beside the outer one's.
         for (double y = h_->rowOf(inner).top; y < last.bottom() - 1; y += 1) QCOMPARE(at(band(1), y), color(inner));
         QVERIFY(at(band(1), h_->rowOf(a).top + 10) != color(inner));
-        // The folded group: its band and its bar, on its header only.
+        // The folded group: its band and its name bar, on its header only.
         const arr::Row foldedRow = h_->rowOf(folded);
         QCOMPARE(at(band(0), foldedRow.top + foldedRow.mainHeight / 2), color(folded));
-        QCOMPARE(at(150, foldedRow.top + 1), color(folded));
+        QCOMPARE(at(60, foldedRow.top + 1), color(folded));
         QVERIFY(at(band(0), foldedRow.bottom() - 1) != color(folded));
-        // E, in no group: its own colour, as before.
-        QCOMPARE(at(3, h_->rowOf(e).top + 10), color(e));
+        // E, in no group: its name bar in its own colour, from the column's edge.
+        QCOMPARE(at(3, h_->rowOf(e).top + 19), color(e));  // (under its fold button)
         QCOMPARE(header(e)->indent(), 0);
         QCOMPARE(header(c)->indent(), 2 * arr::kGroupIndent);
     }
@@ -559,6 +578,45 @@ private Q_SLOTS:
         test::screenshot(window(), QStringLiteral("arrangement_folded_group"));
         QVERIFY(red(colorAt(1.5)));  // folded: it is
         QVERIFY(!red(colorAt(10.0)));  // (where no clip is)
+    }
+
+    // As in Ableton, a group's lane has a row per track in it, and five at
+    // least: a group of one track shows its clips in the top fifth of the lane,
+    // empty rows below them. Its fold button is the same folded as open (three
+    // bars in a circle, not filled in).
+    void aGroupsLaneHasFiveRowsAtLeast() {
+        const QStringList ids = makeTracks(1);
+        const QString group = editor().groupTracks({ids[0]});
+        editor().setTrackColor(ids[0], QStringLiteral("#ff2020"));
+        h_->settle();
+        auto pixel = [&](const QPoint& p) {
+            const qreal dpr = window()->effectiveDevicePixelRatio();
+            return window()->grabWindow().pixelColor(int(p.x() * dpr), int(p.y() * dpr));
+        };
+        // The fold button, drawn the same folded as open.
+        auto foldButton = [&] {
+            TrackHeaderItem* h = header(group);
+            const qreal dpr = window()->effectiveDevicePixelRatio();
+            const QRectF r = h->mapRectToScene(h->foldRect());
+            return window()->grabWindow().copy(QRectF(r.topLeft() * dpr, r.size() * dpr).toAlignedRect());
+        };
+        const QImage open = foldButton();
+        editor().setFolded(group, true);
+        h_->settle();
+        QCOMPARE(foldButton(), open);
+
+        const arr::Row row = h_->rowOf(group);
+        QCOMPARE(row.mainHeight, arr::kFoldedGroupHeight);
+        const double x = std::round(arrangement()->view().beatToX(1.5)) + 0.5;
+        auto red = [&](double offset) {
+            const QColor c = pixel(h_->at(QPointF(x, row.top - arrangement()->scrollY() + offset)));
+            return c.red() > 150 && c.green() < 100 && c.blue() < 100;
+        };
+        // The lane's rows: a fifth each of what is from 2 px under its top to 3 px over its bottom.
+        const double share = (arr::kFoldedGroupHeight - 5) / double(arr::kGroupSummaryRows);
+        QVERIFY(red(2 + share / 2));  // its track's clip, in the first
+        for (int i = 1; i < arr::kGroupSummaryRows; ++i) QVERIFY(!red(2 + (i + 0.5) * share));  // the rest empty
+        test::screenshot(window(), QStringLiteral("arrangement_folded_group_rows"));
     }
 
     void foldingOneOfTheSelectedTracksFoldsThemAll() {
@@ -784,12 +842,13 @@ private Q_SLOTS:
         QTRY_VERIFY(popup()->property("visible").toBool());
         QCOMPARE(popup()->property("count").toInt(), 4);  // (and a separator)
         closePopup();
-        // The send knobs sit below volume and pan; with automation shown, the choosers below them.
+        // The send knobs sit in the mixer column, below volume and pan; with
+        // automation shown, the choosers are in the name column, left of them.
         editor().showAutomation(track);
         h_->settle();
-        QVERIFY(h_->rowOf(track).mainHeight >= 100);
         QQuickItem* chooser = control(track, "deviceChooser");
-        QVERIFY(chooser && chooser->mapToScene(QPointF()).y() >= knobs(header(track))[0]->mapToScene(QPointF()).y() + 16);
+        QVERIFY(chooser && chooser->isVisible());
+        QVERIFY(chooser->mapToScene(QPointF(chooser->width(), 0)).x() <= knobs(header(track))[0]->mapToScene(QPointF()).x());
         QVERIFY(menu.triggerText(QStringLiteral("Remove Send")));
         QVERIFY(project().track(track).sends.isEmpty());
     }
@@ -916,6 +975,25 @@ private Q_SLOTS:
 
     // --- The header's controls ----------------------------------------------------------------
 
+    // The mixer column's controls fill it in two columns as wide as each other,
+    // as Ableton's: the activator over volume; solo and arm over pan.
+    void theMixerControlsFillTheirColumn() {
+        const QString track = editor().addAudioTrack();
+        h_->settle();
+        const QRectF activator = geometryOf(control(track, "activator")), volume = geometryOf(control(track, "volume"));
+        const QRectF solo = geometryOf(control(track, "solo")), arm = geometryOf(control(track, "arm"));
+        const QRectF pan = geometryOf(control(track, "pan"));
+        QCOMPARE(volume.width(), pan.width());
+        QCOMPARE(activator.width(), volume.width());
+        QCOMPARE(activator.left(), volume.left());
+        QCOMPARE(solo.left(), pan.left());
+        QCOMPARE(arm.right(), pan.right());
+        QCOMPARE(solo.width(), arm.width());
+        // From the column's left edge to the meter, as far from each.
+        const double meter = geometryOf(control(track, "meter")).left();
+        QCOMPARE(volume.left() - header(track)->mixerLeft(), meter - pan.right());
+    }
+
     void headerControls() {
         const QString track = editor().addAudioTrack();
         h_->settle();
@@ -1013,18 +1091,29 @@ private Q_SLOTS:
         const QString groupName = project().track(group).name, retName = project().track(ret).name;
         TrackHeaderItem* h = header(b);
         QCOMPARE(h->inputText(), QStringLiteral("No Input"));
-        QCOMPARE(h->monitorText(), QStringLiteral("Auto"));
+        QCOMPARE(h->inputChannelText(), QString());  // (an empty box: nothing to choose)
+        QCOMPARE(h->monitor(), QStringLiteral("auto"));
         arr::MenuEntries menu = h->inputMenu();
         const QString cycle = groupName + QStringLiteral(" (it takes this track's output)");
-#ifdef Q_OS_WIN
-        const QString noInputs = QStringLiteral("The audio device has no inputs (choose an ASIO driver)");
-#else
-        const QString noInputs = QStringLiteral("The audio device has no inputs");
-#endif
-        QCOMPARE(entryTexts(menu), (QStringList{QStringLiteral("No Input"), noInputs, QStringLiteral("Resampling"),
-                                                QStringLiteral("Drums"), cycle, retName}));
+        // As Ableton's Audio From.
+        QCOMPARE(entryTexts(menu), (QStringList{QStringLiteral("Ext. In"), QStringLiteral("Configure…"),
+                                                QStringLiteral("Resampling"), QStringLiteral("Drums"), cycle, retName,
+                                                QStringLiteral("No Input")}));
         QVERIFY(!menu.find(cycle)->enabled);  // its own group
         QVERIFY(menu.find(QStringLiteral("Drums"))->enabled && menu.find(QStringLiteral("No Input"))->checked);
+        // Configure... asks for the preferences' Audio page.
+        QSignalSpy preferences(arrangement(), &sub::ui::Arrangement::preferencesRequested);
+        QVERIFY(menu.triggerText(QStringLiteral("Configure…")));
+        QCOMPARE(preferences.size(), 1);
+        QCOMPARE(preferences.at(0).at(0).toInt(), 0);
+        // Ext. In: the device's channels (here, none open: the first pair), and their choices below.
+        QVERIFY(h->inputMenu().triggerText(QStringLiteral("Ext. In")));
+        h_->settle();
+        QCOMPARE(project().track(b).input, (std::vector<int>{0, 1}));
+        QCOMPARE(header(b)->inputText(), QStringLiteral("Ext. In"));
+        QCOMPARE(header(b)->inputChannelText(), QStringLiteral("1/2"));
+        undo().undo();
+        h_->settle();
 
         // The input button shows the menu.
         clickControl(b, "input");
@@ -1037,8 +1126,21 @@ private Q_SLOTS:
         h_->settle();
         QCOMPARE(project().track(b).inputTrack, std::optional<QString>(a));
         QCOMPARE(header(b)->inputText(), QStringLiteral("Drums"));
-        QVERIFY(header(b)->inputToolTip().contains(QStringLiteral("Drums's output")));
         QVERIFY(header(b)->inputMenu().find(QStringLiteral("Drums"))->checked);
+        // Below it, where Drums's signal is taken: Post Mixer, or Pre FX, Post FX.
+        QCOMPARE(header(b)->inputChannelText(), QStringLiteral("Post Mixer"));
+        QVERIFY(header(b)->inputChannelToolTip().contains(QStringLiteral("Drums")));
+        QCOMPARE(entryTexts(header(b)->inputChannelMenu()),
+                 (QStringList{QStringLiteral("Pre FX"), QStringLiteral("Post FX"), QStringLiteral("Post Mixer")}));
+        QVERIFY(header(b)->inputChannelMenu().triggerText(QStringLiteral("Pre FX")));
+        h_->settle();
+        QCOMPARE(project().track(b).inputTap, sub::app::kPreFx);
+        QCOMPARE(header(b)->inputChannelText(), QStringLiteral("Pre FX"));
+        clickControl(b, "inputChannel");
+        QTRY_VERIFY(popup()->property("visible").toBool());
+        closePopup();
+        undo().undo();
+        h_->settle();
         editor().renameTrack(a, QStringLiteral("Beat"));
         h_->settle();
         QCOMPARE(header(b)->inputText(), QStringLiteral("Beat"));  // it follows its source's name
@@ -1046,6 +1148,7 @@ private Q_SLOTS:
         h_->settle();
         QCOMPARE(project().track(b).inputTrack, std::optional<QString>(kMaster));
         QCOMPARE(header(b)->inputText(), QStringLiteral("Resampling"));
+        QCOMPARE(header(b)->inputChannelText(), QString());  // (the mix, as it is heard)
         undo().undo();
         undo().undo();
         QCOMPARE(project().track(b).inputTrack, std::optional<QString>(a));
@@ -1062,26 +1165,198 @@ private Q_SLOTS:
         }
     }
 
-    void theMonitoringMenu() {
+    // In, Auto and Off side by side, as Ableton's: the one chosen lit.
+    void theMonitoringButtons() {
         const QString track = editor().addAudioTrack();
         h_->settle();
-        arr::MenuEntries menu = header(track)->monitorMenu();
-        QCOMPARE(menu.entries().size(), size_t(3));
-        QVERIFY(menu.entries()[0].text.startsWith(QStringLiteral("In")));
-        QVERIFY(menu.entries()[1].text.startsWith(QStringLiteral("Auto")) && menu.entries()[1].checked);
-        QVERIFY(menu.entries()[2].text.startsWith(QStringLiteral("Off")));
-        QVERIFY(menu.trigger(menu.toVariant()[2].toMap().value(QStringLiteral("id")).toInt()));
+        const auto lit = [&](const char* mode) {
+            return control(track, (QStringLiteral("monitor:") + QLatin1String(mode)).toLatin1().constData())
+                ->property("lit")
+                .toBool();
+        };
+        QVERIFY(control(track, "monitor")->isVisible());
+        QVERIFY(lit("auto") && !lit("in") && !lit("off"));
+        clickControl(track, "monitor:off");
         h_->settle();
         QCOMPARE(project().track(track).monitor, QStringLiteral("off"));
-        QCOMPARE(header(track)->monitorText(), QStringLiteral("Off"));
+        QCOMPARE(header(track)->monitor(), QStringLiteral("off"));
+        QVERIFY(lit("off") && !lit("auto"));
+        clickControl(track, "monitor:in");
+        QCOMPARE(project().track(track).monitor, QStringLiteral("in"));
+        undo().undo();
         undo().undo();
         h_->settle();
         QCOMPARE(project().track(track).monitor, QStringLiteral("auto"));
-        // Through the button: the menu shows, and what is chosen there is done.
-        clickControl(track, "monitor");
+        QVERIFY(lit("auto"));
+        QVERIFY(header(track)->monitorToolTip(QStringLiteral("in"), false).contains(QStringLiteral("always")));
+    }
+
+    // Audio To, as Ableton's: Main, its group, the tracks it can go into (an
+    // audio track's input, a device taking a sidechain), Sends Only; below,
+    // where in that track it goes.
+    void theOutputChoosers() {
+        const QString a = editor().addAudioTrack(-1, QStringLiteral("Drums"));
+        const QString bus = editor().addAudioTrack(-1, QStringLiteral("Bus"));
+        const QString keys = editor().addMidiTrack(-1, QStringLiteral("Keys"));
+        const QString inGroup = editor().addAudioTrack(-1, QStringLiteral("Inner"));
+        const QString group = editor().groupTracks({inGroup});
+        const QString compressor = editor().addDevice(keys, QStringLiteral("compressor"));
+        h_->settle();
+        const QString groupName = project().track(group).name;
+        TrackHeaderItem* h = header(a);
+        QCOMPARE(h->outputText(), QStringLiteral("Main"));
+        QCOMPARE(h->outputChannelText(), QString());  // (an empty box)
+        arr::MenuEntries menu = h->outputMenu();
+        // Bus (an audio track: its input), Keys (a MIDI track with a compressor:
+        // its sidechain), the track in the group; not the group itself.
+        QCOMPARE(entryTexts(menu), (QStringList{QStringLiteral("Ext. Out"), QStringLiteral("Configure…"),
+                                                QStringLiteral("Main"), QStringLiteral("Bus"), QStringLiteral("Keys"),
+                                                QStringLiteral("Inner"), QStringLiteral("Sends Only")}));
+        QVERIFY(!menu.find(QStringLiteral("Ext. Out"))->enabled);
+        QVERIFY(menu.find(QStringLiteral("Main"))->checked);
+        QVERIFY(menu.triggerText(QStringLiteral("Bus")));
+        h_->settle();
+        QCOMPARE(project().track(a).output, sub::app::Output::track(bus));
+        QCOMPARE(header(a)->outputText(), QStringLiteral("Bus"));
+        QCOMPARE(header(a)->outputChannelText(), QStringLiteral("Track In"));
+        QCOMPARE(entryTexts(header(a)->outputChannelMenu()), QStringList{QStringLiteral("Track In")});
+        // A MIDI track: into its compressor's sidechain; the name follows the device's.
+        QVERIFY(header(a)->outputMenu().triggerText(QStringLiteral("Keys")));
+        h_->settle();
+        QCOMPARE(project().track(a).output, sub::app::Output::sidechain(compressor));
+        QCOMPARE(header(a)->outputText(), QStringLiteral("Keys"));
+        QCOMPARE(header(a)->outputChannelText(), QStringLiteral("Sidechain-Compressor"));
+        QVERIFY(header(a)->outputChannelMenu().find(QStringLiteral("Sidechain-Compressor"))->checked);
+        clickControl(a, "outputChannel");
         QTRY_VERIFY(popup()->property("visible").toBool());
-        QCOMPARE(popup()->property("count").toInt(), 3);
+        test::screenshot(window(), QStringLiteral("arrangement_output_channel_menu"));
         closePopup();
+        // Into a sidechain on an audio track, its name chosen again: it stays in the sidechain (not its input).
+        const QString busCompressor = editor().addDevice(bus, QStringLiteral("compressor"));
+        h_->settle();
+        QVERIFY(header(a)->outputMenu().triggerText(QStringLiteral("Bus")));
+        QVERIFY(header(a)->outputChannelMenu().triggerText(QStringLiteral("Sidechain-Compressor")));
+        h_->settle();
+        QCOMPARE(project().track(a).output, sub::app::Output::sidechain(busCompressor));
+        QVERIFY(header(a)->outputMenu().find(QStringLiteral("Bus"))->checked);
+        QVERIFY(header(a)->outputMenu().triggerText(QStringLiteral("Bus")));
+        h_->settle();
+        QCOMPARE(project().track(a).output, sub::app::Output::sidechain(busCompressor));
+        // Sends Only; then back to Main.
+        QVERIFY(header(a)->outputMenu().triggerText(QStringLiteral("Sends Only")));
+        h_->settle();
+        QCOMPARE(header(a)->outputText(), QStringLiteral("Sends Only"));
+        QVERIFY(header(a)->outputMenu().triggerText(QStringLiteral("Main")));
+        h_->settle();
+        QVERIFY(project().track(a).output.isDefault());
+
+        // In a group: its group's name, Main past it; a track that feeds it is greyed out.
+        TrackHeaderItem* inner = header(inGroup);
+        QCOMPARE(inner->outputText(), groupName);
+        arr::MenuEntries innerMenu = inner->outputMenu();
+        QVERIFY(innerMenu.find(groupName)->checked && !innerMenu.find(QStringLiteral("Main"))->checked);
+        editor().setTrackOutput(bus, sub::app::Output::track(inGroup));
+        h_->settle();
+        const arr::MenuEntry* cycle = header(inGroup)->outputMenu().find(QStringLiteral("Bus (it feeds this track)"));
+        QVERIFY(cycle && !cycle->enabled);
+        QVERIFY(header(inGroup)->outputMenu().triggerText(QStringLiteral("Main")));
+        h_->settle();
+        QCOMPARE(project().track(inGroup).output, sub::app::Output::master());
+        QCOMPARE(header(inGroup)->outputText(), QStringLiteral("Main"));
+        // A group's Audio To is its In/Out column's first row.
+        QVERIFY(control(group, "output")->isVisible() && !control(group, "input")->isVisible());
+        QCOMPARE(control(group, "output")->y(), control(a, "input")->y());
+        // The button shows the menu.
+        clickControl(a, "output");
+        QTRY_VERIFY(popup()->property("visible").toBool());
+        test::screenshot(window(), QStringLiteral("arrangement_output_menu"));
+        closePopup();
+    }
+
+    // A set routed as Ableton users route theirs: groups in a premaster group,
+    // two of them into a track that ducks them (Track In), a track keying that
+    // track's device (Sidechain-...), a MIDI track monitoring Auto, folded
+    // groups, automation shown on the groups. What each header's In/Out shows.
+    void anAbletonLikeSet() {
+        auto& e = editor();
+        const QString chords = e.addMidiTrack(-1, QStringLiteral("chords"));
+        const QString pad = e.addAudioTrack(-1, QStringLiteral("pad"));
+        const QString kit = e.addMidiTrack(-1, QStringLiteral("DRUMS"));
+        const QString ride = e.addAudioTrack(-1, QStringLiteral("ride"));
+        const QString shaker = e.addAudioTrack(-1, QStringLiteral("shaker"));
+        const QString sidechain = e.addAudioTrack(-1, QStringLiteral("SIDECHAIN"));
+        const QString kick = e.addAudioTrack(-1, QStringLiteral("kick"));
+        const QString intro = e.groupTracks({chords});
+        const QString fx = e.groupTracks({pad});
+        const QString cymbals = e.groupTracks({ride});
+        const QString percs = e.groupTracks({shaker});
+        const QString drums = e.groupTracks({kit, cymbals, percs});
+        const QString premaster = e.groupTracks({intro, fx, drums});
+        const QString shaper = e.addDevice(sidechain, QStringLiteral("compressor"));
+        const QStringList names{QStringLiteral("Premaster"), QStringLiteral("intro"), QStringLiteral("fx"),
+                                QStringLiteral("drums"), QStringLiteral("cymbals"), QStringLiteral("percs")};
+        const QStringList groups{premaster, intro, fx, drums, cymbals, percs};
+        const QStringList colors{QStringLiteral("#1a2f96"), QStringLiteral("#a9a9a9"), QStringLiteral("#1aff2f"),
+                                 QStringLiteral("#ffa529"), QStringLiteral("#ffa529"), QStringLiteral("#ffa529")};
+        for (qsizetype i = 0; i < groups.size(); ++i) {
+            e.renameTrack(groups[i], names[i]);
+            e.setTrackColor(groups[i], colors[i]);
+        }
+        e.setTrackColor(chords, QStringLiteral("#a9a9a9"));
+        e.setTrackColor(kit, QStringLiteral("#ffa529"));
+        e.setTrackOutput(intro, sub::app::Output::track(sidechain));
+        e.setTrackOutput(fx, sub::app::Output::track(sidechain));
+        e.setTrackOutput(kick, sub::app::Output::sidechain(shaper));
+        e.setTrackParam(intro, sub::app::TrackField::VolumeDb, -15.0);
+        e.setTrackParam(fx, sub::app::TrackField::VolumeDb, -15.0);
+        e.setTrackParam(drums, sub::app::TrackField::VolumeDb, -15.0);
+        e.setTrackMonitor(sidechain, QStringLiteral("in"));
+        for (const QString& id : {premaster, intro}) e.showAutomation(id, automation::kMixerOn);
+        e.showAutomation(drums, automation::kMixerVolume);
+        e.showAutomation(chords);
+        e.setFolded(cymbals, true);
+        e.setFolded(percs, true);
+        h_->settle();
+        QCOMPARE(header(premaster)->outputText(), QStringLiteral("Main"));
+        QCOMPARE(header(intro)->outputText(), QStringLiteral("SIDECHAIN"));
+        QCOMPARE(header(intro)->outputChannelText(), QStringLiteral("Track In"));
+        QCOMPARE(header(chords)->outputText(), QStringLiteral("intro"));
+        QCOMPARE(header(chords)->inputText(), QStringLiteral("All Ins"));
+        QCOMPARE(header(drums)->outputText(), QStringLiteral("Premaster"));
+        QCOMPARE(header(cymbals)->outputText(), QStringLiteral("drums"));
+        QCOMPARE(header(kick)->outputText(), QStringLiteral("SIDECHAIN"));
+        QCOMPARE(header(kick)->outputChannelText(), QStringLiteral("Sidechain-Compressor"));
+        QCOMPARE(entryTexts(header(kick)->outputChannelMenu()),
+                 (QStringList{QStringLiteral("Track In"), QStringLiteral("Sidechain-Compressor")}));
+        QCOMPARE(control(intro, "volume")->property("text").toString(), QStringLiteral("-15.0"));
+        QCOMPARE(control(premaster, "volume")->property("text").toString(), QStringLiteral("0"));
+        auto* column = h_->find<QQuickItem*>(QStringLiteral("headers"));
+        test::screenshot(window(), QStringLiteral("arrangement_ableton_set"),
+                         column->mapRectToScene(column->boundingRect()).toAlignedRect());
+        arrangement()->scrollToY(h_->rowOf(sidechain).top);
+        h_->settle();
+        clickControl(kick, "outputChannel");
+        QTRY_VERIFY(popup()->property("visible").toBool());
+        test::screenshot(window(), QStringLiteral("arrangement_ableton_set_sidechain_menu"));
+        closePopup();
+    }
+
+    // View › In/Out hides the In/Out column: the headers narrow by it.
+    void hidingTheInOutColumn() {
+        const QString track = editor().addAudioTrack();
+        h_->settle();
+        QQuickItem* view = h_->view();
+        QVERIFY(view->property("ioShown").toBool());
+        const double wide = header(track)->width();
+        QVERIFY(control(track, "input")->isVisible());
+        view->setProperty("ioShown", false);
+        h_->settle();
+        QVERIFY(header(track)->width() < wide);
+        QVERIFY(!control(track, "input")->isVisible() && !control(track, "output")->isVisible());
+        QVERIFY(control(track, "activator")->isVisible());
+        view->setProperty("ioShown", true);
+        h_->settle();
+        QCOMPARE(header(track)->width(), wide);
     }
 
     void midiHeaderControls() {
@@ -1091,12 +1366,20 @@ private Q_SLOTS:
         QVERIFY(h->midi());
         QVERIFY(control(track, "input")->isVisible() && control(track, "monitor")->isVisible());
         QCOMPARE(h->inputText(), QStringLiteral("All Ins"));
+        QCOMPARE(h->inputChannelText(), QStringLiteral("All Channels"));
+        // As Ableton's MIDI From: All Ins, the computer keyboard (and each MIDI input), Configure..., No Input.
         arr::MenuEntries menu = h->inputMenu();
-        QCOMPARE(menu.texts().mid(0, 2), (QStringList{QStringLiteral("No Input"), QStringLiteral("All Ins")}));
-        QVERIFY(menu.triggerText(QStringLiteral("Channel: All/Channel 10")));
+        QCOMPARE(entryTexts(menu).mid(0, 2), (QStringList{QStringLiteral("All Ins"), QStringLiteral("Computer Keyboard")}));
+        QCOMPARE(entryTexts(menu).mid(entryTexts(menu).size() - 2),
+                 (QStringList{QStringLiteral("Configure…"), QStringLiteral("No Input")}));
+        QSignalSpy preferences(arrangement(), &sub::ui::Arrangement::preferencesRequested);
+        QVERIFY(menu.triggerText(QStringLiteral("Configure…")));
+        QCOMPARE(preferences.at(0).at(0).toInt(), 1);  // the MIDI page
+        QVERIFY(h->inputChannelMenu().triggerText(QStringLiteral("Ch. 10")));
         h_->settle();
         QCOMPARE(project().track(track).midiInput, (std::optional<sub::app::MidiInput>(sub::app::MidiInput{QString(), 10})));
-        QCOMPARE(header(track)->inputText(), QStringLiteral("All Ins · Ch 10"));
+        QCOMPARE(header(track)->inputText(), QStringLiteral("All Ins"));
+        QCOMPARE(header(track)->inputChannelText(), QStringLiteral("Ch. 10"));
         QVERIFY(header(track)->inputMenu().triggerText(QStringLiteral("No Input")));
         h_->settle();
         QVERIFY(!project().track(track).midiInput);

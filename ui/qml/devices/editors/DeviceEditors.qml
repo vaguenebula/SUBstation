@@ -31,6 +31,7 @@ QtObject {
     readonly property var editors: ({
         "compressor": "CompressorEditor.qml",
         "delay": "DelayEditor.qml",
+        "disperser": "DisperserEditor.qml",
         "eq": "EqEditor.qml",
         "sampler": "SamplerEditor.qml",
         "sidechain": "SidechainEditor.qml"

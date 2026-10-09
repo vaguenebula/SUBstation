@@ -10,7 +10,10 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
 ## Features
 
 - **Arrangement**: audio and MIDI tracks, group tracks (nesting, folding), return
-  tracks and sends, a master with its own effects; clip editing with snapping
+  tracks and sends, a master with its own effects; track headers laid out as Ableton's,
+  with an In/Out column routing each track as Ableton does (Audio From with Pre FX, Post
+  FX or Post Mixer; Audio To its group, Main, another track's input or a device's
+  sidechain, or Sends Only); clip editing with snapping
   (trimming, stretching, sliding a clip's content), clip fades with curves,
   deactivating clips (0, as in Ableton), time selections, undo/redo for every edit.
 - **Audio clips**: real-time warping (Signalsmith Stretch) with several warp modes,
@@ -22,7 +25,8 @@ meters are C++ scene-graph items. It also builds and runs on Linux.
   controllers and the computer keyboard.
 - **Devices**: a built-in Synth, a Sampler after Ableton's Simpler (Classic, 1-Shot and
   Slice modes, slicing at transients, warping, a filter and an LFO), Compressor (with sidechain), Over The Top
-  multiband compressor and Utility; racks with parallel chains, macros and presets.
+  multiband compressor, Disperser (phase dispersion through up to 64 all-pass stages,
+  its group delay drawn) and Utility; racks with parallel chains, macros and presets.
 - **VST3 plug-ins**: instruments and effects, their own editors, presets, sidechains,
   latency compensation everywhere, crash-safe scanning.
 - **Automation** of every parameter, played sample-accurately.

@@ -28,6 +28,7 @@
 #include "controls/DragCursor.h"
 #include "sg/SgCanvas.h"
 
+#include <QColor>
 #include <QElapsedTimer>
 #include <QFont>
 #include <QJSValue>
@@ -63,6 +64,13 @@ class ValueBoxItem : public SgCanvas {
     Q_PROPERTY(bool dragging READ dragging NOTIFY draggingChanged)
     Q_PROPERTY(bool hovered READ hovered NOTIFY hoveredChanged)
     Q_PROPERTY(bool typeable READ typeable NOTIFY defaultValueChanged)  // typing a digit edits (has a default)
+    // The flat box of a track's header (Ableton's layout): tighter corners;
+    // with a `fill` (0..1, from `fillFrom`: 0 for a volume, 0.5 for a pan; < 0:
+    // none) drawn in `fillColor`, a slider.
+    Q_PROPERTY(bool flat READ flat WRITE setFlat NOTIFY lookChanged)
+    Q_PROPERTY(qreal fill READ fill WRITE setFill NOTIFY lookChanged)
+    Q_PROPERTY(qreal fillFrom READ fillFrom WRITE setFillFrom NOTIFY lookChanged)
+    Q_PROPERTY(QColor fillColor READ fillColor WRITE setFillColor NOTIFY lookChanged)
 
 public:
     static constexpr double kDragRate = 0.25;       // steps per pixel dragged
@@ -106,6 +114,14 @@ public:
     bool dragging() const { return drag_.has_value(); }
     bool hovered() const { return hovered_; }
     bool typeable() const { return default_.has_value(); }
+    bool flat() const { return flat_; }
+    void setFlat(bool flat);
+    qreal fill() const { return fill_; }
+    void setFill(qreal fill);
+    qreal fillFrom() const { return fillFrom_; }
+    void setFillFrom(qreal from);
+    QColor fillColor() const { return fillColor_; }
+    void setFillColor(const QColor& color);
 
     // C++ alternatives to the JavaScript formatter and parser.
     void setFormatFunction(std::function<QString(double)> format);
@@ -196,6 +212,10 @@ private:
     DragCursor cursor_;
     QString wheelGesture_;
     QElapsedTimer wheelClock_;  // since the gesture's last notch
+    bool flat_ = false;
+    qreal fill_ = -1.0;
+    qreal fillFrom_ = 0.0;
+    QColor fillColor_;
 };
 
 }  // namespace sub::ui

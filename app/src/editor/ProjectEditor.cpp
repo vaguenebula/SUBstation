@@ -69,6 +69,30 @@ bool ProjectEditor::trySetTrackMonitor(const QString& trackId, const QString& mo
     return reportRefusal([&] { setTrackMonitor(trackId, mode); });
 }
 
+bool ProjectEditor::trySetTrackInputTap(const QString& trackId, const QString& tap) {
+    if (!project_->hasOwner(trackId)) return false;
+    return reportRefusal([&] { setTrackInputTap(trackId, tap); });
+}
+
+bool ProjectEditor::trySetTrackOutput(const QString& trackId, const QString& to, const QString& id) {
+    if (!project_->hasOwner(trackId)) return false;
+    return reportRefusal([&] {
+        Output output;
+        if (to == u"master") {
+            output = Output::master();
+        } else if (to == u"none") {
+            output = Output::none();
+        } else if (to == u"track") {
+            output = Output::track(id);
+        } else if (to == u"sidechain") {
+            output = Output::sidechain(id);
+        } else if (to != u"group") {
+            throw EditError(QStringLiteral("No such output: %1").arg(to));
+        }
+        setTrackOutput(trackId, output);
+    });
+}
+
 bool ProjectEditor::trySetTrackMidiInput(const QString& trackId, bool enabled, const QString& device, int channel) {
     if (!project_->hasOwner(trackId)) return false;
     return reportRefusal([&] {

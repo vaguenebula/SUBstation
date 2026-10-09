@@ -1,7 +1,7 @@
 # Mixing
 
-How tracks are heard: solo and mute, group tracks in the mix, return tracks and sends,
-sidechains, delay compensation, and freezing tracks to save CPU. The controls are in the track headers (see
+How tracks are heard: solo and mute, where each track's output goes, group tracks in the
+mix, return tracks and sends, sidechains, delay compensation, and freezing tracks to save CPU. The controls are in the track headers (see
 [arrangement.md](arrangement.md)) and, for sidechains, in the device view (see
 [devices.md](devices.md)).
 
@@ -17,6 +17,41 @@ sidechains, delay compensation, and freezing tracks to save CPU. The controls ar
   already, unsoloes every track (*Edit › Solo Selected Tracks*).
 - Soloing (a rack chain's too) is saved with the project but isn't an undo step, as in
   Ableton.
+
+## Where a track goes: Audio To
+
+Each track's header has, in its In/Out column (as in Ableton; *View › In/Out*,
+**Ctrl+Alt+I**, shows or hides the column), **Audio To**: where its output goes, and
+under it where in that track. A group's and a return's Audio To is the first row of
+its column; a track's is under its input and monitoring.
+
+| Audio To | Under it | What happens |
+|---|---|---|
+| *Main* | (empty) | Into the master, past any group it is in |
+| its group | (empty) | Into its group (a track in a group goes there by default, as in Ableton) |
+| an audio track | *Track In* | Into that track's input: heard through it (its devices and mixer) while it monitors, *In*, or *Auto* and armed, instead of its clips, as if played into it; with monitoring *Off* it plays its clips and what comes in isn't heard |
+| a track with a device taking a sidechain | *Sidechain-‹device›* | Into that device's sidechain input, after this track's fader: it keys the device (a ducker, a compressor) and isn't heard otherwise; several tracks can go into one device, along with the device's own sidechain, and are summed |
+| *Sends Only* | | Nowhere: only its sends (and tracks taking it as their input) hear it |
+
+*Ext. Out* (straight to the audio device's outputs) is listed but not there yet: tracks
+go through the master. *Configure…* opens the audio preferences.
+
+- The list has the tracks it can go into: audio tracks (their Track In) and any track,
+  group or return with a device taking a sidechain. Those that would make a loop (they
+  feed this track) are greyed out.
+- Choosing an audio track sends it to its Track In; the menu under it chooses between
+  its Track In and its devices' sidechains. If that track isn't monitoring *In*, the
+  status line says so: as in Ableton, what goes into a track's input is heard only
+  while it monitors.
+- Putting tracks into a group (**Ctrl+G**, or dragging them in) sends them into it,
+  whatever they went into before, as in Ableton; moving a track within its group or out
+  of it keeps its Audio To.
+- Deleting the track (or the device) a track goes into, or a move that would make a
+  loop, sends it back into its group (in the same undo step).
+- The master's Audio To is *Main Out*: the audio device's outputs it plays on (an ASIO
+  device's pairs can be chosen there; other drivers play on the first two).
+- What goes into a track's Track In isn't recorded with it (record a track's output with
+  [Audio From](recording.md#resampling) instead).
 
 ## Groups in the mix
 
@@ -69,6 +104,9 @@ Delay compensation works per send: a track sending to two returns of different l
 is delayed differently on each, and everything lines up again at the master.
 
 ## Sidechains
+
+A device's sidechain can also be fed from the other side: a track's [Audio
+To](#where-a-track-goes-audio-to) set to that device's track, *Sidechain-‹device›*.
 
 A device with a sidechain input (a plug-in's aux input: a compressor, a gate, a
 vocoder; or the built-in Compressor) has a **sidechain button** (an arrow into a bar)

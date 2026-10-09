@@ -238,6 +238,8 @@ Q_SIGNALS:
     void statusMessage(const QString& message);
     // Start renaming this track (or return) in place (its header does).
     void renameRequested(const QString& trackId);
+    // A header's Configure...: show the preferences' Audio page (0) or MIDI page (1).
+    void preferencesRequested(int page);
 
 private:
     struct Marker {

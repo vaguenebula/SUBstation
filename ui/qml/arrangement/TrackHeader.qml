@@ -2,81 +2,164 @@ import QtQuick
 import QtQuick.Controls
 import SUBstation
 
-// A track's header (a group's too), right of its lane: the meter on the right;
-// the activator (mute, labelled with the track's number), solo and arm (not for
-// a group: it records nothing) on the name row; on the second row (from 48 px)
-// volume, pan, the input and the monitoring; then the send knobs (while there
-// are returns), then the automation choosers in its own lane and in each lane
-// below. A group's name row and all below it start under the bar across its
-// top (nameTop). What it paints, its mouse handling and what its controls do
-// are TrackHeaderItem's. Everything below the name row starts after the group
-// bands and ends where the buttons above do.
+// A track's header (a group's, a return's too), right of its lane, laid out as
+// Ableton's, in rows `row` apart:
+//
+//   name column             | In/Out column              | mixer column              | meter
+//   [fold] name (its colour)| Audio From / MIDI From     | activator  S  arm         |
+//   device chooser          |   its channel, or tap      | volume     pan            |
+//   parameter chooser       | In  Auto  Off              | sends...                  |
+//                    (+)    | Audio To                   |                           |
+//                           |   Track In, Sidechain-...  |                           |
+//
+// A group (and a return) has no input, monitoring or arm (it records
+// nothing): its Audio To is its In/Out column's first row, and its colour fills
+// its name column's first two rows (its choosers below). A row shows where the
+// track is tall enough for it (a folded track: its first). Without `ioShown`
+// (View › In/Out) there is no In/Out column. Below its own lane, each lane's
+// choosers. What it paints, its mouse handling and what its controls do are
+// TrackHeaderItem's.
 TrackHeaderItem {
     id: header
 
     property ArrangementMenu menu: null
+    property bool ioShown: true
 
-    readonly property int nameRow: 22
-    // The name row's buttons: as high as a folded track lets them be, 2 px from
-    // its top and its bottom line (TrackHeaderItem::kNamePad, kNameButton).
-    readonly property int buttonTop: nameTop + 2
-    readonly property int buttonHeight: 16
-    readonly property int meterWidth: 8
-    readonly property int armWidth: 20
-    readonly property int innerRight: width - meterWidth - 10
-    readonly property int innerLeft: 10 + indent
-    readonly property bool secondRow: mainHeight >= nameTop + 48
+    readonly property int row: 18
+    readonly property int pad: 2
+    readonly property int box: 16
+    readonly property int meterArea: 14
+    readonly property int mixerWidth: 112
+    readonly property int ioWidth: 84
+    readonly property int mixerX: width - meterArea - mixerWidth
+    readonly property int meterX: width - meterArea + 4
+    // The mixer column's two columns, as Ableton's, as wide as each other and
+    // filling it: as far from the column's edge as from the meter, 4 px, and
+    // 4 px apart. The activator over volume; solo and arm over pan.
+    readonly property int mixerGap: 4
+    readonly property int mixerLeftX: mixerX + mixerGap
+    readonly property int mixerRight: meterX - mixerGap  // (where the controls end)
+    readonly property int mixerLeftWidth: Math.floor((mixerRight - mixerLeftX - mixerGap) / 2)
+    readonly property int mixerRightX: mixerLeftX + mixerLeftWidth + mixerGap
+    readonly property int mixerRightWidth: mixerLeftWidth
+    readonly property int mixerButton: Math.floor((mixerRightWidth - mixerGap) / 2)  // solo, arm
+    readonly property int ioX: ioShown ? mixerX - ioWidth : 0
+    readonly property int nameColumnRight: (ioShown ? ioX : mixerX) - 1
+    readonly property bool isGroup: kind === "group"
+    readonly property bool isReturn: kind === "return"
     readonly property bool hasSends: sends.length > 0
-    readonly property int chooserRow: nameTop + 52 + (hasSends ? 24 : 0)
+    // The In/Out rows: a track's input, its channel, monitoring, then Audio To; a group's Audio To first.
+    readonly property int outputRow: records ? 3 : 0
 
-    nameRight: activator.x - 4
+    function rowY(r) {
+        return pad + r * row
+    }
+    function fits(r) {
+        return rowY(r) + box <= mainHeight - 1 - pad
+    }
+
+    nameRight: nameColumnRight - 4
+    ioLeft: ioX
+    mixerLeft: mixerX
     meter: meterItem
 
     Meter {
         id: meterItem
         objectName: "meter"
-        x: header.width - header.meterWidth - 4
-        y: header.nameTop + 4
-        width: header.meterWidth
-        height: Math.max(8, header.mainHeight - header.nameTop - 9)
+        x: header.meterX
+        y: header.pad
+        width: 8
+        height: Math.max(8, header.mainHeight - 2 * header.pad - 1)
     }
 
-    ToggleButton {
-        id: arm
-        objectName: "arm"
-        x: header.innerRight - 18
-        y: header.buttonTop
-        width: 18
-        height: header.buttonHeight
-        visible: header.records
-        role: "arm"
-        text: "●"
-        tooltip: qsTr("Arm Recording; Ctrl-click to arm it along with others")
-        checked: header.armed
-        onToggled: header.armClicked(checked)
+    // --- In/Out ---------------------------------------------------------------------------
+
+    Item {
+        id: io
+        objectName: "io"
+        x: header.ioX + 3
+        width: header.ioWidth - 6
+        height: header.mainHeight
+        visible: header.ioShown
+
+        IoChooser {
+            id: input
+            objectName: "input"
+            y: header.rowY(0)
+            width: io.width
+            visible: header.records && header.fits(0)
+            text: header.inputText
+            tooltip: header.inputToolTip
+            onClicked: header.menu.show(header.inputMenuEntries(), header, input, 0, input.height)
+        }
+        IoChooser {
+            id: inputChannel
+            objectName: "inputChannel"
+            y: header.rowY(1)
+            width: io.width
+            sub: true
+            visible: header.records && header.fits(1)
+            text: header.inputChannelText
+            tooltip: header.inputChannelToolTip
+            onClicked: header.menu.show(header.inputChannelMenuEntries(), header, inputChannel, 0, inputChannel.height)
+        }
+        Row {
+            objectName: "monitor"
+            y: header.rowY(2)
+            spacing: 2
+            visible: header.records && header.fits(2)
+
+            Repeater {
+                model: [{mode: "in", label: qsTr("In")}, {mode: "auto", label: qsTr("Auto")}, {mode: "off", label: qsTr("Off")}]
+
+                RoleButton {
+                    required property var modelData
+                    objectName: "monitor:" + modelData.mode
+                    width: modelData.mode === "auto" ? io.width - 2 * 20 - 4 : 20
+                    height: header.box
+                    role: "monitor"
+                    text: modelData.label
+                    lit: header.monitor === modelData.mode
+                    tooltip: header.monitorToolTip(modelData.mode, header.midi)
+                    onClicked: header.setMonitor(modelData.mode)
+                }
+            }
+        }
+        IoChooser {
+            id: output
+            objectName: "output"
+            y: header.rowY(header.outputRow)
+            width: io.width
+            visible: header.fits(header.outputRow)
+            text: header.outputText
+            tooltip: header.outputToolTip
+            onClicked: header.menu.show(header.outputMenuEntries(), header, output, 0, output.height)
+        }
+        IoChooser {
+            id: outputChannel
+            objectName: "outputChannel"
+            y: header.rowY(header.outputRow + 1)
+            width: io.width
+            sub: true
+            visible: header.fits(header.outputRow + 1)
+            text: header.outputChannelText
+            tooltip: header.outputChannelToolTip
+            onClicked: header.menu.show(header.outputChannelMenuEntries(), header, outputChannel, 0,
+                                        outputChannel.height)
+        }
     }
-    ToggleButton {
-        id: solo
-        objectName: "solo"
-        x: header.innerRight - header.armWidth - 22
-        y: header.buttonTop
-        width: 22
-        height: header.buttonHeight
-        role: "solo"
-        text: "S"
-        tooltip: header.soloToolTip
-        checked: header.solo
-        onToggled: header.soloClicked(checked)
-    }
+
+    // --- Mixer -----------------------------------------------------------------------------
+
     ToggleButton {
         id: activator
         objectName: "activator"
-        x: header.innerRight - header.armWidth - 22 - 30
-        y: header.buttonTop
-        width: 28
-        height: header.buttonHeight
+        x: header.mixerLeftX
+        y: header.rowY(0)
+        width: header.mixerLeftWidth
+        height: header.box
         role: "activator"
-        text: String(header.number)
+        text: header.isReturn ? header.letter : String(header.number)
         tooltip: qsTr("Track Activator (unmute)")
         checked: !header.mute
         automation: header.activatorAutomation
@@ -88,23 +171,54 @@ TrackHeaderItem {
             onPressed: mouse => header.menu.show(header.activatorMenuEntries(), header, activator, mouse.x, mouse.y)
         }
     }
+    ToggleButton {
+        id: solo
+        objectName: "solo"
+        x: header.mixerRightX
+        y: header.rowY(0)
+        width: header.mixerButton
+        height: header.box
+        role: "solo"
+        text: "S"
+        tooltip: header.soloToolTip
+        checked: header.solo
+        onToggled: header.soloClicked(checked)
+    }
+    ToggleButton {
+        id: arm
+        objectName: "arm"
+        x: header.mixerRightX + header.mixerRightWidth - width
+        y: header.rowY(0)
+        width: header.mixerButton
+        height: header.box
+        visible: header.records
+        role: "arm"
+        text: "●"
+        tooltip: qsTr("Arm Recording; Ctrl-click to arm it along with others")
+        checked: header.armed
+        onToggled: header.armClicked(checked)
+    }
 
     ValueBox {
         id: volume
         objectName: "volume"
-        x: header.innerLeft
-        y: header.nameTop + header.nameRow + 4
-        width: 72
-        height: 20
-        visible: header.secondRow
+        x: header.mixerLeftX
+        y: header.rowY(1)
+        width: header.mixerLeftWidth
+        height: header.box
+        visible: header.fits(1)
+        flat: true
+        fill: header.volumeFraction(header.volume)
+        fillColor: Theme.volumeFill
         from: -70
         to: 6
         step: 0.25
         decimals: 1
-        sampleText: "-70.0 dB"
+        sampleText: "-70.0"
+        font: Theme.uiFont(8)
         defaultValue: 0
         wheel: false
-        formatter: v => header.formatDb(v)
+        formatter: v => header.formatVolume(v)
         value: header.volume
         automation: header.volumeAutomation
         onMoved: (value, gestureKey) => header.setVolume(value, gestureKey, volume.relative)
@@ -114,21 +228,29 @@ TrackHeaderItem {
             id: volumeHover
         }
         ToolTip.visible: volumeHover.hovered && !volume.dragging
-        ToolTip.text: qsTr("Track Volume (drag; select and type a number; double-click to reset)")
+        ToolTip.text: qsTr("Track Volume: %1 (drag; select and type a number; double-click to reset)")
+                          .arg(header.formatDb(header.volume))
         ToolTip.delay: 700
     }
-    Knob {
+    ValueBox {
         id: pan
         objectName: "pan"
-        x: header.innerLeft + 77
-        y: header.nameTop + header.nameRow + 1
-        width: 26
-        height: 26
-        visible: header.secondRow
+        x: header.mixerRightX
+        y: header.rowY(1)
+        width: header.mixerRightWidth
+        height: header.box
+        visible: header.fits(1)
+        flat: true
+        fill: (header.pan + 1) / 2
+        fillFrom: 0.5
+        fillColor: Theme.volumeFill
         from: -1
         to: 1
+        step: 0.02
+        decimals: 2
+        sampleText: "50L"
+        font: Theme.uiFont(8)
         defaultValue: 0
-        bipolar: true
         wheel: false
         formatter: v => header.formatPan(v)
         parser: text => header.parsePan(text)
@@ -136,71 +258,46 @@ TrackHeaderItem {
         automation: header.panAutomation
         onMoved: (value, gestureKey) => header.setPan(value, gestureKey, pan.relative)
         onTouched: header.touchPan()
-    }
-    RoleButton {
-        id: input
-        objectName: "input"
-        x: header.innerLeft + 108
-        y: header.nameTop + header.nameRow + 4
-        width: Math.max(20, monitor.x - 4 - x)
-        height: 20
-        visible: header.secondRow && header.records
-        role: "small"
-        text: header.inputText
-        tooltip: header.inputToolTip
-        contentItem: Text {
-            text: input.text
-            font: input.font
-            color: input.look.text
-            elide: Text.ElideRight
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
+
+        HoverHandler {
+            id: panHover
         }
-        onClicked: header.menu.show(header.inputMenuEntries(), header, input, 0, input.height)
-    }
-    RoleButton {
-        id: monitor
-        objectName: "monitor"
-        x: header.innerRight - width
-        y: header.nameTop + header.nameRow + 4
-        width: Math.max(40, implicitWidth + 4)
-        height: 20
-        visible: header.secondRow && header.records
-        role: "small"
-        text: header.monitorText
-        tooltip: header.monitorToolTip
-        onClicked: header.menu.show(header.monitorMenuEntries(), header, monitor, 0, monitor.height)
+        ToolTip.visible: panHover.hovered && !pan.dragging
+        ToolTip.text: qsTr("Track Panning (drag; select and type 25L, C, 50R; double-click to center)")
+        ToolTip.delay: 700
     }
 
-    // The sends, below volume and pan (and the automation choosers below them).
+    // The sends, below volume and pan.
     SendKnobs {
         objectName: "sends"
         header: header
         menu: header.menu
-        x: header.innerLeft
-        y: header.nameTop + 52
-        width: header.innerRight - header.innerLeft
-        height: 22
-        visible: header.secondRow && header.hasSends && header.mainHeight >= header.nameTop + 52 + 24 - 2
+        x: header.mixerLeftX
+        y: header.rowY(2)
+        width: header.mixerRight - header.mixerLeftX
+        height: Math.max(0, header.mainHeight - 1 - header.pad - y)
+        visible: header.hasSends && header.fits(2)
     }
+
+    // --- Name column ---------------------------------------------------------------------
 
     AutomationChoosers {
         objectName: "choosers"
         anchors.fill: parent
         header: header
         menu: header.menu
-        mainRect: Qt.rect(header.innerLeft, header.chooserRow, header.innerRight - header.innerLeft, 18)
-        laneLeft: header.innerLeft
-        laneRight: header.innerRight
+        columnLeft: (header.isReturn ? 1 : header.indent + (header.isGroup ? 6 : 0)) + 3  // (after a group's band)
+        columnRight: header.nameColumnRight - 3
+        mainTop: header.rowY(header.isGroup ? 2 : 1)
     }
 
     TextField {
         id: rename
         objectName: "rename"
         x: header.nameLeft - 2
-        y: header.buttonTop - 1
-        width: activator.x - x - 4
-        height: header.buttonHeight + 2
+        y: header.pad - 1
+        width: header.nameColumnRight - x - 3
+        height: header.box + 2
         visible: header.renaming
         padding: 2
         font: Theme.uiFont(9)

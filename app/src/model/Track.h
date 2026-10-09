@@ -102,6 +102,26 @@ struct Send {
     friend bool operator==(const Send&, const Send&) = default;
 };
 
+// Where a track's output goes (Ableton's Audio To): into its group (outside
+// one, the master: the default); the master, past its group; another track's
+// input (an audio track's Track In: it hears it while it monitors); a device's
+// sidechain (aux) input, wherever that device is (it goes along when the device
+// moves); or nowhere, so that only its sends are heard (Sends Only).
+struct Output {
+    enum class To : quint8 { Group, Master, Track, Sidechain, None };
+    To to = To::Group;
+    QString id;  // Track: the track's id; Sidechain: the device's
+
+    static Output group() { return {}; }
+    static Output master() { return {To::Master, {}}; }
+    static Output track(const QString& trackId) { return {To::Track, trackId}; }
+    static Output sidechain(const QString& deviceId) { return {To::Sidechain, deviceId}; }
+    static Output none() { return {To::None, {}}; }
+    bool isDefault() const { return to == To::Group; }
+
+    friend bool operator==(const Output&, const Output&) = default;
+};
+
 // Return id -> its send. Replaced whole, never changed in place.
 using SendMap = QMap<QString, Send>;
 // Target key -> envelope (never an empty one), in the order they were first set.
@@ -119,14 +139,16 @@ enum class TrackField {
     Height,      // int
     Input,       // std::vector<int>
     InputTrack,  // std::optional<QString>
+    InputTap,    // QString: kPostFader, kPreFader, kPreFx
     MidiInput,   // std::optional<MidiInput>
     Monitor,     // QString
     Armed,       // bool
     Folded,      // bool
     Sends,       // SendMap
+    Output,      // Output
 };
-using TrackValue =
-    std::variant<bool, int, double, QString, std::vector<int>, std::optional<QString>, std::optional<MidiInput>, SendMap>;
+using TrackValue = std::variant<bool, int, double, QString, std::vector<int>, std::optional<QString>,
+                                std::optional<MidiInput>, SendMap, Output>;
 // Several settings of one track.
 using TrackValues = QMap<TrackField, TrackValue>;
 
@@ -160,6 +182,10 @@ struct Track {
     // kMaster: the master's, resampling); `input` is empty then. None: the
     // device's channels.
     std::optional<QString> inputTrack;
+    // Where that track's output is taken (as a sidechain's tap: Ableton's Post
+    // Mixer, kPostFader; Post FX, kPreFader; Pre FX, kPreFx: a MIDI track's after
+    // its instrument). The master's is after its fader, whatever this says.
+    QString inputTap = kPostFader;
     // MIDI input (MIDI tracks); none: none. New MIDI tracks hear every input, as in Ableton.
     std::optional<MidiInput> midiInput = MidiInput{};
     QString monitor = QStringLiteral("auto");  // one of kMonitorModes
@@ -168,6 +194,7 @@ struct Track {
     // A thin row, automation hidden; a group: its tracks hidden (saved, not undone).
     bool folded = false;
     SendMap sends;  // return id -> its send (replaced whole, never changed)
+    Output output;  // where its output goes (a return's too; the master has none)
     std::optional<Freeze> frozen;  // its frozen audio (none: not frozen); see Freeze
 
     // What its name is made from: its nameTemplate, or its name if it has none.

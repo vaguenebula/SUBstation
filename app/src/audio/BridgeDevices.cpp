@@ -136,7 +136,7 @@ void EngineBridge::syncDevices(const QString& trackId) {
     }
     if (project_->hasOwner(trackId)) pushEnabled(trackId);
     pushChainMixers(trackId);
-    pushSidechains();  // (the new processors', or a sidechain changed)
+    pushRoutes();  // (the new processors': outputs into their sidechains, inputs after them, theirs)
 }
 
 // A chain's devices into its engine chain (in no particular order yet), then
@@ -271,28 +271,30 @@ bool EngineBridge::hasSidechainInput(const QString& trackId, const QString& devi
 
 // The sidechain the engine should give a device's processor (none: none, or
 // one from a track the engine hasn't yet).
+std::pair<sub::SidechainTap, quint32> EngineBridge::engineTap(const QString& sourceId, const QString& tap) {
+    if (tap == kPostFader) return {sub::SidechainTap::PostFader, 0};
+    if (tap == kPreFx) {
+        // A MIDI track's own audio is its instrument's (or its instrument rack's): before its effects.
+        const Track* sourceTrack = project_->findTrack(sourceId);
+        if (sourceTrack != nullptr && !sourceTrack->devices.empty() && deviceIsInstrument(sourceTrack->devices.front())) {
+            if (const auto instrument = engineDeviceId(sourceId, sourceTrack->devices.front().id)) {
+                return {sub::SidechainTap::AfterDevice, *instrument};
+            }
+        }
+        return {sub::SidechainTap::PreFx, 0};
+    }
+    const std::optional<quint32> tapped = tap == kPreFader ? std::nullopt : engineDeviceId(sourceId, tap);
+    if (!tapped) return {sub::SidechainTap::PreFader, 0};  // before the fader (also while that device isn't on the source)
+    return {sub::SidechainTap::AfterDevice, *tapped};
+}
+
 std::optional<EngineBridge::SidechainState> EngineBridge::wantedSidechain(const Device& device, quint32 processorId) {
     if (!device.sidechain || device.sidechain->trackId == kMaster) return std::nullopt;
     const Sidechain sidechain = *device.sidechain;
     const auto source = engineTrackId(sidechain.trackId);
     if (!source || !engine_.processorInfo(processorId).hasSidechain) return std::nullopt;
-    if (sidechain.tap == kPostFader) return SidechainState{*source, sub::SidechainTap::PostFader, 0};
-    if (sidechain.tap == kPreFx) {
-        // A MIDI track's own audio is its instrument's (or its instrument rack's): before its effects.
-        const Track* sourceTrack = project_->findTrack(sidechain.trackId);
-        if (sourceTrack != nullptr && !sourceTrack->devices.empty() && deviceIsInstrument(sourceTrack->devices.front())) {
-            if (const auto instrument = engineDeviceId(sidechain.trackId, sourceTrack->devices.front().id)) {
-                return SidechainState{*source, sub::SidechainTap::AfterDevice, *instrument};
-            }
-        }
-        return SidechainState{*source, sub::SidechainTap::PreFx, 0};
-    }
-    const std::optional<quint32> tapped =
-        sidechain.tap == kPreFader ? std::nullopt : engineDeviceId(sidechain.trackId, sidechain.tap);
-    if (!tapped) {  // before the fader (also while the device it is taken after isn't on the source)
-        return SidechainState{*source, sub::SidechainTap::PreFader, 0};
-    }
-    return SidechainState{*source, sub::SidechainTap::AfterDevice, *tapped};
+    const auto [tap, tapProcessor] = engineTap(sidechain.trackId, sidechain.tap);
+    return SidechainState{*source, tap, tapProcessor};
 }
 
 // Every device's sidechain to the engine (devices in racks too): those

@@ -129,7 +129,8 @@ and the project file saves: `"# Kick"`; `TrackField::Name`; empty: `name` as it 
 `kDefaultTrackHeight`, 96 px, a new group's `kDefaultGroupHeight`, 104), `clips` (sorted by `startBeat`),
 `devices`, `automation` (target key → envelope, never empty; an `EnvelopeMap`, which keeps the order targets were
 first automated in), `automationView`, audio input (`input`: none, `{c}` or `{l, r}` device channels, or
-`inputTrack`: another track's id or `kMaster` for resampling), `midiInput` (a `MidiInput`, or none for *No Input*;
+`inputTrack`: another track's id or `kMaster` for resampling; `inputTap`: where that is taken, `kPostFader`,
+`kPreFader` or `kPreFx`, as a sidechain's tap), `output` (an `Output`: where its output goes; see below), `midiInput` (a `MidiInput`, or none for *No Input*;
 new MIDI tracks hear every input), `monitor` (`kMonitorModes`: `off`, `in`, `auto`), `armed`, `parent` (the group it
 is in), `folded`, `sends` (return id → `Send`), `frozen`.
 
@@ -241,7 +242,15 @@ order), `children`, `ancestors`, `isDescendant`, `depth`, `isHidden` (a group it
 (a track inserted there goes into the group of the track it goes before), `tree()` (every track's id and parent: a
 `TrackTree`). The engine sees only where each track's output goes.
 
-### Returns, sends, inputs, sidechains: the routing graph
+### Outputs, returns, sends, inputs, sidechains: the routing graph
+
+`Output{to, id}`: where a track's (group's, return's) output goes, Ableton's *Audio To*. `Group` (the default):
+into its group, or the master outside one; `Master`: the master, past its group; `Track` (`id`: an audio
+track's): into that track's input (*Track In*: the bridge has the engine take what goes into an audio track as its
+input, heard while it monitors); `Sidechain` (`id`: a device's, on a track, a return or the master): into that
+device's sidechain input, wherever the device is (it moves with it); `None`: nowhere (*Sends Only*).
+`outputTarget(track)` is the track it goes into (its group, a track, a device's track), none for the master or
+nowhere.
 
 `Send{levelDb, preFader}`: a track's (group's, return's) send to a return, after its fader and pan, or before it.
 Silent at `kMinVolumeDb` (the default for a new send). A muted track sends nothing either way. `Track::sends` is
@@ -252,17 +261,27 @@ Mixer*), `kPreFader` (`"pre"`, *Post FX*), `kPreFx` (`"pre-fx"`: before all the 
 after its instrument), or a device id (after that device; before the fader while that device isn't on the source).
 `tapDevice()` is that id, or none.
 
-`routingGraph(tracks, returns)` maps each track and return to what its signal goes into: its group, the returns it
-sends to, the tracks taking their input from it, and the tracks whose devices take it as their sidechain. The master
-isn't in it (everything reaches it). `feeds(graph, a, b)` is reachability. The cycle checks:
+`routingGraph(tracks, returns)` maps each track and return to what its signal goes into: where its output goes
+(its group by default), the returns it sends to, the tracks taking their input from it, and the tracks whose
+devices take it as their sidechain. The master isn't in it (everything reaches it). `feeds(graph, a, b)` is
+reachability. The cycle checks:
 
+- `outputWouldCycle(track, output)`: its output would go into itself (a device on itself) or a track it feeds.
 - `wouldCycle(track, return)`: a send would close a cycle (the return is the track or feeds it).
 - `inputWouldCycle(track, source)`: never for `kMaster` (resampling; a track recording it never plays it back into
   it, since it can't monitor it).
 - `sidechainWouldCycle(track, source)`: always for `kMaster` as source; never for a device on the master.
 
 `Project` wraps them and adds the menus' lists: `sendTargets`, `inputSources`, `sidechainSources`, `inputName`
-(`"Resampling"` for the master).
+(`"Resampling"` for the master), `outputTarget`, `outputWouldCycle`.
+
+The editor keeps outputs valid ([EditorTracks.cpp](../../app/src/editor/EditorTracks.cpp)): `setTrackOutput`
+refuses one into a track that isn't an audio track, a device that isn't there, or a cycle, and stores *Main* outside
+a group, or its own group, as the default; a track going into another group goes into it, as in Ableton (`arrange`:
+the explicit outputs come back one by one, those that would close a cycle going into their groups); deleting the
+track or device an output goes into (`dropOutputs`, `setDevices`), flattening a track, or moving a device where an
+output into it would close a cycle sends those outputs into their groups, in the same undo step; copies of tracks
+go into the copies of what they went into (`insertCopies`).
 
 ### Automation
 

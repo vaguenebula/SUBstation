@@ -38,12 +38,24 @@ struct EngineBridge::SidechainState {
     friend bool operator==(const SidechainState&, const SidechainState&) = default;
 };
 
+// Where a track's output goes as the engine has it: an engine track (or
+// sub::Engine::kMaster, or sub::Engine::kNoOutput), or a device's sidechain
+// (`processor`, when not 0).
+struct EngineBridge::OutputState {
+    quint32 track = sub::Engine::kMaster;
+    quint32 processor = 0;
+
+    friend bool operator==(const OutputState&, const OutputState&) = default;
+};
+
 struct EngineBridge::Private {
     // A track's input as the engine has it: (device channels, the engine track
-    // whose output it takes, monitoring, armed, MIDI input).
+    // whose output it takes and where it is tapped, monitoring, armed, MIDI input).
     struct InputState {
         std::vector<int> channels;
         std::optional<quint32> source;
+        sub::SidechainTap tap = sub::SidechainTap::PostFader;
+        quint32 tapProcessor = 0;
         QString monitor;
         bool armed = false;
         std::optional<MidiInput> midi;
@@ -90,7 +102,8 @@ struct EngineBridge::Private {
     QMap<QString, std::pair<double, double>> mixer;  // owner -> (volume dB, pan) the engine has
     QMap<QString, bool> mutes;  // track id -> its mute as the engine has it
     QMap<QString, InputState> inputs;  // track id -> its input as the engine has it
-    QMap<QString, quint32> outputs;  // track id -> the engine track its output goes into
+    QMap<QString, OutputState> outputs;  // track id -> where its output goes
+    QMap<QString, bool> trackIn;  // track id -> whether what goes into it is its input (Track In), as the engine has it
     QMap<QString, std::map<quint32, std::pair<double, bool>>> sends;  // track id -> {engine return: (gain, pre-fader)}
     QSet<QString> frozen;  // tracks the engine has frozen
     QMap<QString, QMap<QString, double>> sendLevels;  // track id -> {return id: level dB} the engine has

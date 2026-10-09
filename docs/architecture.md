@@ -77,7 +77,8 @@ and searches the sample browser's files, and the intelligence module, which work
   `Q_INVOKABLE`s and signals, but includes nothing of QML.
 - **The application layer talks to the engine only through [Engine.h](../engine/src/Engine.h)** and the few engine
   headers it needs besides: `builtin/BuiltinRegistry.h` (the built-in devices), `Processor.h` (`ParamInfo`),
-  `AudioSource.h`, `RenderJob.h`, `AudioDevice.h` (the default driver), `builtin/EqDesign.h` (the EQ's curves)
+  `AudioSource.h`, `RenderJob.h`, `AudioDevice.h` (the default driver), `builtin/EqDesign.h` (the EQ's curves),
+  `builtin/DisperserDesign.h` (the Disperser's group delay)
   and `plugins/Vst3Format.h` (the default VST3 folders). Only the engine bridge talks to the engine about the
   project. What the UI shows of the engine (waveform peaks, meters, the scope, device status, plug-in parameter
   texts, devices' displays) comes through application-layer types whose headers include no engine header

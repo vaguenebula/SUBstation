@@ -629,18 +629,19 @@ void ArrangementLanes::drawGroupSummary(SgPainter& p, const QString& groupId, do
     // in it (those in groups in it too), in order, with that track's clips as
     // bars, so the group's structure shows: in each track's colour while folded
     // (its tracks are hidden; deactivated clips grey), barely there while open
-    // (its tracks show below it).
+    // (its tracks show below it). kGroupSummaryRows rows at least: with fewer
+    // tracks, empty ones below theirs.
     const QRectF area(visible.left(), rowTop + 2, visible.width(), rowHeight - 5);
     if (area.height() < 1) return;
     const app::Project& project = *session()->project();
     std::vector<const app::Track*> tracks;
     for (const app::Track* track : project.descendants(groupId)) {
-        if (track->hasClips()) tracks.push_back(track);
+        if (!track->isGroup()) tracks.push_back(track);
     }
     if (tracks.empty()) return;
     const timeline::Timeline& view = arrangement()->view();
     const double tempo = project.tempo();
-    const double share = area.height() / static_cast<double>(tracks.size());
+    const double share = area.height() / static_cast<double>(std::max(tracks.size(), size_t(kGroupSummaryRows)));
     const double gap = share >= 3.0 ? 1.0 : 0.0;  // a line between the rows, while they have room for one
     p.save();
     p.setClipRect(area);

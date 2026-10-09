@@ -9,7 +9,8 @@ their own page: [plugins.md](plugins.md).
 ## The device view
 
 - It shows the built-in Synth and Sampler instruments, the Utility device, Over The Top,
-  Compressor, Delay, EQ and Sidechain, and plug-ins, all through the same interface: they show alike.
+  Compressor, Delay, Disperser, EQ and Sidechain, and plug-ins, all through the same interface:
+  they show alike.
 - On a MIDI track the instrument comes first; the master takes audio effects only.
 - **Ctrl+Alt+L** (*View › Device View*) shows or hides it, with the info view.
 - The **info view**, at the bottom left, says what the control under the mouse is: its
@@ -37,8 +38,8 @@ Each device has a title bar, as in Ableton (teal while the device is selected), 
 - Each parameter gets a knob, or a list for parameters that choose between named
   values. Frequency and time knobs turn logarithmically.
 - Most devices show four parameters at a time, in a 2×2 grid; the page arrows show the
-  others. The Compressor, the Delay, the EQ, the Sidechain and the Sampler have editors of
-  their own (below).
+  others. The Compressor, the Delay, the Disperser, the EQ, the Sidechain and the Sampler have
+  editors of their own (below).
 - Clicking a parameter shows its automation in the arrangement. Right-click one to
   *Show Automation*, *Delete Automation* or *Re-Enable Automation*, and, in a rack,
   *Map to Macro* (see [automation.md](automation.md) and [Macros](#macros)).
@@ -223,6 +224,32 @@ A stereo delay after Ableton's, with an editor laid out like it.
 - **Feedback** (0 to 95 %) and **Freeze** (∞): frozen, what is in the delay goes round
   for ever and new input is ignored.
 - **Dry/Wet**: 0 to 100 %.
+
+### Disperser
+
+Phase dispersion, after Kilohearts' Disperser: a chain of all-pass filters that delays
+what is around one frequency more than the rest, without making anything louder or
+quieter. A kick's click turns into a zap, a snare into a laser, a pad's attack softens
+into a chirp; sustained sounds change little.
+
+- **Amount**: how many all-pass stages the sound goes through, 0 to 64. At 0 it passes
+  through untouched. Each stage adds the same delay again.
+- **Frequency** (20 Hz to 20 kHz): where the stages delay the sound most. (Near the top
+  it is kept below half the sample rate: at 44.1 kHz, 20 kHz plays as 19.8 kHz.)
+- **Pinch** (Q 0.1 to 10): how narrow the band they delay. Pinched, a narrow band comes
+  out much later (a pitched, ringing zap); open, a wide band a little later.
+- **Bypass**: the sound passes through untouched, fading over about 20 ms. The stages
+  keep running, so switching it back is seamless (the device's on/off switch stops them).
+- **The graph** shows how late each frequency comes out, in milliseconds (or seconds:
+  64 narrow stages at 20 Hz hold 20 Hz back by 20 s). It is worked out from the very
+  filters the engine plays, at its sample rate. Drag the dot across for the Frequency, up
+  and down for the Pinch.
+- Every control can be automated, and changes don't click: Amount crossfades to the new
+  number of stages (the stages added fade in from silence), Bypass fades, and Frequency
+  and Pinch glide. Swept quickly through many narrow stages, Frequency and Pinch are
+  heard as the sweep itself (a zap), never louder than what went in.
+- Its delay is the effect, not latency: other tracks aren't delayed to line up with it.
+  A long dispersion rings on after the sound stops, as a reverb does.
 
 ### EQ
 

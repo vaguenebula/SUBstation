@@ -59,6 +59,8 @@ class Theme : public QObject {
     Q_PROPERTY(QColor keyLabel READ keyLabel CONSTANT)
     Q_PROPERTY(QColor blackKeyRow READ blackKeyRow CONSTANT)
     Q_PROPERTY(QColor outsideClip READ outsideClip CONSTANT)
+    // Track headers
+    Q_PROPERTY(QColor volumeFill READ volumeFill CONSTANT)
     // Controls
     Q_PROPERTY(QColor activatorOn READ activatorOn CONSTANT)
     Q_PROPERTY(QColor soloOn READ soloOn CONSTANT)
@@ -134,6 +136,8 @@ public:
     static constexpr QColor kBlackKeyRow{0x25, 0x25, 0x25};    // BLACK_KEY_ROW
     static constexpr QColor kOutsideClip{0x00, 0x00, 0x00, 110};  // OUTSIDE_CLIP: content a clip has but doesn't play
     static constexpr QColor kOutOfKey{0xff, 0x4a, 0x3d};  // notes out of the song's key are tinted halfway to it
+    // A track header's volume and pan boxes: the slider's fill under the value (the accent, see-through).
+    static constexpr QColor kVolumeFill{0xff, 0xa6, 0x2b, 110};
     // Controls
     static constexpr QColor kActivatorOn{0xff, 0xc2, 0x33};          // ACTIVATOR_ON
     static constexpr QColor kSoloOn{0x4f, 0xa3, 0xff};               // SOLO_ON
@@ -207,6 +211,7 @@ public:
     QColor keyLabel() const { return kKeyLabel; }
     QColor blackKeyRow() const { return kBlackKeyRow; }
     QColor outsideClip() const { return kOutsideClip; }
+    QColor volumeFill() const { return kVolumeFill; }
     QColor activatorOn() const { return kActivatorOn; }
     QColor soloOn() const { return kSoloOn; }
     QColor playOn() const { return kPlayOn; }

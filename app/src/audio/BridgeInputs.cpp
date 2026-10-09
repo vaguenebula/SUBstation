@@ -43,6 +43,9 @@ void EngineBridge::pushInput(const QString& trackId) {
     Private::InputState state;
     if (!track.isMidi()) state.channels = track.input;
     state.source = inputSource(track);
+    if (state.source && *state.source != sub::Engine::kMaster) {
+        std::tie(state.tap, state.tapProcessor) = engineTap(*track.inputTrack, track.inputTap);
+    }
     state.monitor = track.monitor;
     state.armed = track.armed;
     if (track.isMidi()) state.midi = track.midiInput;
@@ -50,17 +53,20 @@ void EngineBridge::pushInput(const QString& trackId) {
     const std::optional<Private::InputState> old =
         found != d_->inputs.constEnd() ? std::optional(*found) : std::nullopt;
     if (old && *old == state) return;  // (a mixer change)
-    if (!old || old->channels != state.channels || old->source != state.source) {
+    if (!old || old->channels != state.channels || old->source != state.source || old->tap != state.tap ||
+        old->tapProcessor != state.tapProcessor) {
         if (!state.source) {
             engine_.setTrackInput(*engineId, state.channels);
         } else {
             try {
-                engine_.setTrackInputTrack(*engineId, *state.source);
+                engine_.setTrackInputTrack(*engineId, *state.source, state.tap, state.tapProcessor);
             } catch (const std::invalid_argument&) {
                 // A cycle with a route another change hasn't undone yet: it comes with that change.
                 engine_.setTrackInput(*engineId, {});
                 state.channels.clear();
                 state.source.reset();
+                state.tap = sub::SidechainTap::PostFader;
+                state.tapProcessor = 0;
             }
         }
     }

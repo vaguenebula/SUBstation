@@ -286,6 +286,62 @@ private Q_SLOTS:
         QCOMPARE(engineInput(track), bridge.engineTrackId(later));
     }
 
+    // A track's output as the model has it, in the engine: into its group, the
+    // master, an audio track's input (heard while that track monitors), a
+    // device's sidechain (the device's processor), or nowhere; an input from a
+    // track where it is tapped.
+    void theEngineSendsOutputsWhereTheModelSays() {
+        test::TempDir dir;
+        Studio studio;
+        EngineBridge& bridge = *studio.bridge;
+        const auto output = [&](const QString& trackId) { return studio.engine.trackOutput(*bridge.engineTrackId(trackId)); };
+        const QString source = studio.clipTrack(dcWav(dir));
+        const QString bus = studio.edit.addAudioTrack(QStringLiteral("Bus"));
+        const QString group = studio.edit.groupTracks({source});
+        QCOMPARE(output(source), *bridge.engineTrackId(group));
+        QVERIFY(near(studio.level(), 0.5, 1e-3));
+        studio.edit.setTrack(source, TrackField::Output, Output::master());
+        QCOMPARE(output(source), sub::Engine::kMaster);
+        QVERIFY(near(studio.level(), 0.5, 1e-3));
+        // Into the bus's input: heard while the bus monitors (In; Auto plays its clips).
+        studio.edit.setTrack(source, TrackField::Output, Output::track(bus));
+        QCOMPARE(output(source), *bridge.engineTrackId(bus));
+        QVERIFY(near(studio.level(), 0.0));
+        studio.edit.setTrack(bus, TrackField::Monitor, QStringLiteral("in"));
+        QVERIFY(near(studio.level(), 0.5, 1e-3));
+        studio.edit.setTrack(bus, TrackField::VolumeDb, -6.0206);  // through the bus
+        QVERIFY(near(studio.level(), 0.25, 1e-3));
+        // Sends only.
+        studio.edit.setTrack(source, TrackField::Output, Output::none());
+        QCOMPARE(output(source), sub::Engine::kNoOutput);
+        QVERIFY(near(studio.level(), 0.0));
+        // Into a device's sidechain: its processor's.
+        const QString compressor = studio.edit.addDevice(bus, QStringLiteral("compressor"));
+        studio.edit.setTrack(source, TrackField::Output, Output::sidechain(compressor));
+        QCOMPARE(studio.engine.trackOutputSidechain(*bridge.engineTrackId(source)), *bridge.engineDeviceId(bus, compressor));
+        // The device going: (until the editor sends it into its group) nowhere.
+        studio.edit.removeDevices(bus, {compressor});
+        QCOMPARE(studio.engine.trackOutputSidechain(*bridge.engineTrackId(source)), 0u);
+        QCOMPARE(output(source), sub::Engine::kNoOutput);
+        studio.stack.undo();
+        QCOMPARE(studio.engine.trackOutputSidechain(*bridge.engineTrackId(source)), *bridge.engineDeviceId(bus, compressor));
+        studio.edit.setTrack(source, TrackField::Output, Output::group());
+        QCOMPARE(output(source), *bridge.engineTrackId(group));
+        QCOMPARE(studio.engine.trackOutputSidechain(*bridge.engineTrackId(source)), 0u);
+
+        // An input from a track, before its fader: the bus hears the source at its level before the fader.
+        studio.edit.setTrack(source, TrackField::Output, Output::none());
+        studio.edit.setTrack(source, TrackField::VolumeDb, -6.0206);
+        studio.edit.setTrack(bus, TrackField::VolumeDb, 0.0);
+        studio.edit.removeDevices(bus, {compressor});
+        studio.edit.setInput(bus, {}, source);
+        QVERIFY(near(studio.level(), 0.25, 1e-3));  // after the source's fader
+        studio.edit.setTrack(bus, TrackField::InputTap, kPreFader);
+        QVERIFY(near(studio.level(), 0.5, 1e-3));
+        studio.edit.setTrack(bus, TrackField::InputTap, kPreFx);
+        QVERIFY(near(studio.level(), 0.5, 1e-3));
+    }
+
     void theMastersMixerAndTheProjectsSettings() {
         test::TempDir dir;
         Studio studio;

@@ -19,6 +19,10 @@ QString formatValue(double value, const QString& unit) {
     if (unit.isEmpty()) return value != 0.0 ? formatFixed(value, 2, true) : QStringLiteral("0.00");
     if (unit == u":1") return formatFixed(value, 1) + QStringLiteral(":1");  // a ratio
     if (unit == u"note") return notes::noteName(static_cast<int>(roundHalfEven(value)));  // a MIDI key
+    if (unit == u"stages") {  // a count (the Disperser's)
+        const auto whole = static_cast<long long>(roundHalfEven(value));
+        return QString::number(whole) + (whole == 1 ? QStringLiteral(" stage") : QStringLiteral(" stages"));
+    }
     if (unit == u"st" || unit == u"ct") {  // semitones, cents
         const auto whole = static_cast<long long>(roundHalfEven(value));
         if (whole == 0) return QStringLiteral("0 ") + unit;

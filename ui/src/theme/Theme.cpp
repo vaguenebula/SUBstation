@@ -113,14 +113,19 @@ Theme::ButtonLook Theme::buttonLook(const QString& role, bool hovered, bool pres
         look.paddingH = look.paddingV = 2;
         look.minWidth = 26;
         look.minHeight = 22;
-    } else if (role == QLatin1String("arm")) {
+    } else if (role == QLatin1String("arm")) {  // (a box as solo's, as Ableton's, its dot the text)
         look.paddingH = look.paddingV = 0;
         look.pointSize = 8.0;
-        look.radius = 8;
+        look.radius = 2;
     } else if (role == QLatin1String("activator") || role == QLatin1String("solo")) {
         look.paddingH = look.paddingV = 0;
         look.pointSize = 8.0;
         look.weight = QFont::DemiBold;
+        look.radius = 2;
+    } else if (role == QLatin1String("monitor")) {
+        // A track header's In, Auto and Off: small, side by side (the one chosen in the accent).
+        look.paddingH = look.paddingV = 0;
+        look.pointSize = 8.0;
         look.radius = 2;
     } else if (role == QLatin1String("flat")) {
         // Later than every state rule: no background in any state, dim text but under the mouse.

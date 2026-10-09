@@ -44,7 +44,7 @@ void EngineBridge::onFreezeChanged(const QString& trackId) {
     if (!frozen && midi) engine_.setTrackClips(*engineId, {});  // (its frozen audio: it plays its notes again)
     pushClips(trackId);
     syncDevices(trackId);
-    pushSidechains();
+    pushRoutes();
 }
 
 Freeze EngineBridge::renderFreeze(const QString& trackId) {

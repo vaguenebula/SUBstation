@@ -234,6 +234,15 @@ public:
     // The returns a track (or return) can send to: all but those that would close a cycle.
     std::vector<const Track*> sendTargets(const QString& trackId) const;
 
+    // --- Outputs ---
+    // Whether a track's (or a return's) output going there would close a cycle
+    // (see sub::app::outputWouldCycle).
+    bool outputWouldCycle(const QString& trackId, const Output& output) const;
+    // The track (or return) a track's output goes into (see sub::app::outputTarget):
+    // its group, a track, or the one a device whose sidechain it goes into is on.
+    // None: the master, or nowhere.
+    std::optional<QString> outputTarget(const QString& trackId) const;
+
     // --- Groups ---
     // The index just past the last descendant of the track at `index` (index + 1 if it has none).
     int subtreeEnd(int index) const;

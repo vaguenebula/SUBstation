@@ -8,9 +8,7 @@
 
 namespace sub::ui::arrangement {
 
-int minAutomationRow(const app::Project& project) {
-    return kMinAutomationRow + (project.returns().empty() ? 0 : kSendsRow);
-}
+int minAutomationRow(const app::Track& track) { return track.isGroup() ? kMinGroupAutomationRow : kMinAutomationRow; }
 
 int Row::height() const {
     int h = mainHeight;
@@ -34,7 +32,7 @@ AutomationRows automationRows(const app::AutomationView& view, int top, int main
 }
 
 AutomationRows returnRows(const app::Project& project, const QString& returnId) {
-    return automationRows(project.automationView(returnId), 0, kReturnHeight, kReturnHeight + kChooserHeight + 10);
+    return automationRows(project.automationView(returnId), 0, kReturnHeight);
 }
 
 AutomationRows masterRows(const app::Project& project) {
@@ -44,7 +42,6 @@ AutomationRows masterRows(const app::Project& project) {
 void TrackLayout::rebuild(const app::Project& project) {
     rows_.clear();
     int y = 0;
-    const int minRow = minAutomationRow(project);
     QSet<QString> folded;  // folded groups, and the groups in them
     for (const app::Track& track : project.tracks()) {
         const bool hidden = track.parent && folded.contains(*track.parent);
@@ -64,12 +61,12 @@ void TrackLayout::rebuild(const app::Project& project) {
         row.depth = depth;
         if (hidden) {
             row.hidden = true;
-        } else if (track.folded) {  // just its name row, no automation
+        } else if (track.folded) {  // just its name row (a group's two rows), no automation
             row.mainHeight = track.isGroup() ? kFoldedGroupHeight : kFoldedHeight;
             row.folded = true;
             row.bars = !track.isGroup();
         } else {
-            AutomationRows lanes = automationRows(track.automationView, y, track.height, minRow);
+            AutomationRows lanes = automationRows(track.automationView, y, track.height, minAutomationRow(track));
             row.mainHeight = lanes.mainHeight;
             row.lanes = std::move(lanes.lanes);
             row.automation = track.automationView.shown;

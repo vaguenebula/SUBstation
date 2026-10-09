@@ -203,9 +203,9 @@ struct StripRender {
     // A track's switch (its activator, kTrackOnLane): while it has one it is
     // heard where it is on, whatever its mute (the master has none).
     AutomationRender on;
-    // Per insert, the edge going into its sidechain (aux) input, if any (-1:
-    // none); empty if none has one.
-    std::vector<int> sidechains;
+    // Per insert, the edges going into its sidechain (aux) input (summed: its
+    // own sidechain, and tracks' outputs going into it); empty if none has any.
+    std::vector<std::vector<int>> sidechains;
     // The edges leaving it after one of its devices (EdgeRender::Tap::AfterDevice), by
     // device: those before its first device (tapDevice -1) first. A rack's chain
     // has those taken after its own devices (its strip's source's sidechains).
@@ -250,19 +250,23 @@ struct EdgeState {
 };
 
 // An edge of the routing graph (Routing.h): a strip's signal going into another
-// strip (a group's bus, a return), or into the master. Each track has one
-// output edge (post-fader) and any number of sends, tapped after its fader or
-// before it. The destination sums its incoming edges, each at its level. An
+// strip (a group's bus, a return), or into the master. Each track has at most
+// one output edge (post-fader) and any number of sends, tapped after its fader
+// or before it. The destination sums its incoming edges, each at its level. An
 // input edge (resampling) is a track's input taken from another track's output
-// (post-fader): it isn't summed, but heard instead of the track's clips while
-// the track is monitored (InputEdge), and recorded; it isn't delay-compensated.
-// A sidechain goes into one device of its destination (a track's, or the
-// master's), into its aux input: tapped after the source's fader, before it,
-// after one of its devices or before all of them, and lined up with the destination's signal at that
-// device. It isn't heard on its own, so the source's mute (and solo) silence it
-// only after the fader.
+// (tapped as a sidechain is): it isn't summed, but heard instead of the track's
+// clips while the track is monitored (InputEdge), and recorded; it isn't
+// delay-compensated. A Track In edge is an output into a track that takes what
+// goes into it as its input (Engine::setTrackInMonitored): heard as an input
+// edge is, but not recorded. A sidechain goes into one device of its
+// destination (a track's, or the master's), into its aux input: tapped after
+// the source's fader, before it, after one of its devices or before all of
+// them, and lined up with the destination's signal at that device (a track's
+// output going into a device's sidechain is one too, after the fader). It
+// isn't heard on its own, so the source's mute (and solo) silence it only
+// after the fader.
 struct EdgeRender {
-    enum class Kind : uint8_t { Output, Send, Input, Sidechain };
+    enum class Kind : uint8_t { Output, Send, Input, TrackIn, Sidechain };
     enum class Tap : uint8_t { PostFader, PreFader, AfterDevice };
 
     int from = 0;   // the snapshot track it leaves
@@ -289,8 +293,8 @@ struct EdgeRender {
     // tap before the fader (the source's buffer holds it after the fader), or a
     // signal delayed for this edge alone. Otherwise the destination reads the source's buffer.
     bool ownSignal() const noexcept { return tap != Tap::PostFader || compensation > 0; }
-    // Whether its destination sums it into its input (an input edge is heard
-    // only while monitored, a sidechain only by its device).
+    // Whether its destination sums it into its input (an input or Track In edge
+    // is heard only while monitored, a sidechain only by its device).
     bool sums() const noexcept { return kind == Kind::Output || kind == Kind::Send; }
 };
 
@@ -306,6 +310,7 @@ struct InputEdge {
     int left = -1;
     int right = -1;
     int edge = -1;  // Track: the snapshot edge (Kind::Input) it comes in on
+    int arrival = 0;  // Track: how late its source's signal leaves where it is tapped
 
     bool fromDevice() const noexcept { return source == Source::Device; }
     // Whether the track can hear it (monitoring): the device's, or another track's.
@@ -382,7 +387,7 @@ struct TrackBuffers {
 struct TrackRender : StripRender {
     uint32_t id = 0;
     std::vector<int> incoming;      // edges into it (snapshot edges), in the order it sums them
-    std::vector<int> outgoing;      // edges out of it: its output first, then its sends (and input edges and sidechains)
+    std::vector<int> outgoing;      // edges out of it: its output (if any) first, then its sends (and input edges and sidechains)
     int inputCount = 0;             // incoming.size(): the scheduler runs it once they are done
     // How late it hears what its summed edges bring. (Its own clips and notes
     // play on time: they aren't delayed to line up with its inputs, and nor is
@@ -396,6 +401,9 @@ struct TrackRender : StripRender {
     // Frozen (Engine::setTrackFrozen): it plays its clips (its frozen audio)
     // and doesn't hear what goes into it; it has no devices, notes or input then.
     bool frozen = false;
+    // Other tracks' outputs come into it as its input (Track In edges): it can
+    // be monitored without an input of its own.
+    bool trackIn = false;
     std::vector<ClipRender> clips;  // sorted by start
     int64_t maxClipLength = 0;      // bounds the binary search window
     std::vector<NoteRender> notes;  // sorted by start

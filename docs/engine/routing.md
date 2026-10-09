@@ -28,9 +28,17 @@ and [guide/devices.md](../guide/devices.md).
 
 Each track has:
 
-- **One output edge** (`Kind::Output`), post-fader, into the master or into another track,
-  which sums it into its own input: that track is a group's bus. `setTrackOutput(track, to)`;
-  `kMaster` is the default. When a track goes, what went into it goes to the master.
+- **At most one output edge**, post-fader: into the master or into another track
+  (`Kind::Output`), which sums it into its own input (that track is a group's bus);
+  `setTrackOutput(track, to)`, `kMaster` the default. Into a track that takes what goes
+  into it as its input (`setTrackInMonitored(track, true)`: Ableton's Track In, an audio
+  track) it is a `Kind::TrackIn` edge instead: not summed nor aligned, heard (as an input
+  edge is) only while that track is monitored, along with its own input, not recorded.
+  Into a device's sidechain input (`setTrackOutputSidechain(track, processor)`: Ableton's
+  Audio To a device) it is a sidechain edge (`Kind::Sidechain`, after the fader) into that
+  device, summed there with the device's own sidechain and other outputs going into it.
+  With `kNoOutput` there is none (Ableton's Sends Only). When a track goes, what went into
+  it goes to the master; when a device goes, what went into its sidechain does too.
 - **Any number of sends** (`Kind::Send`), into other tracks (return tracks), at a level
   (`EdgeState::gain`), tapped after the fader or before it (`preFader`). One send per pair:
   setting it again changes it, and a new level alone is just an atomic store (no new snapshot).
@@ -38,26 +46,35 @@ Each track has:
   goes, the sends into it go too. A send's level automation is a mixer lane of the sending track,
   `send:<track id>` (see [automation.md](automation.md)).
 - **An input edge** (`Kind::Input`), if its input is another track's output
-  (`setTrackInputTrack`): from that track into this one, tapped after the source's fader and
-  before any delay compensation. It orders the graph (the source renders first) and closes cycles
-  like any edge, but isn't summed or aligned: the track hears it instead of its clips while
-  monitored, and records it. Resampling the master is no edge: the master renders after every
-  track. See [recording.md](recording.md).
+  (`setTrackInputTrack(track, source, tap, tapProcessor)`): from that track into this one,
+  tapped as a sidechain is (after the source's fader, Ableton's Post Mixer; before it, Post
+  FX; after one of its devices; or before them all, Pre FX) and before any delay
+  compensation. It orders the graph (the source renders first) and closes cycles like any
+  edge, but isn't summed or aligned: the track hears it instead of its clips while
+  monitored (live; offline, while it monitors In), and records it (a take is placed by how
+  late the tap leaves the source: `InputEdge::arrival`). Resampling the master is no edge:
+  the master renders after every track. See [recording.md](recording.md).
 - **Sidechains** (`Kind::Sidechain`): an edge from the source track to one device of the
   destination strip (its aux input), kept with the device (`ProcessorEntry::sidechain`), so it
   moves with it. See [Sidechains](#sidechains).
 
 In the engine's terms (`routeEdgesLocked()`), the edges are listed as `RouteEdge`s between
-indices into `tracks_` (-1: the master): each track's output then its sends; then the input
-edges; then the sidechains, by destination (the tracks, then the master's devices) and device
-slot. `RouteEdge::sums` is false for input edges and sidechains; `tap` says where along the
-source's chain it leaves; `device` which slot of the destination a sidechain goes into.
+indices into `tracks_` (-1: the master): each track's output (`kOutputEdge`, or
+`kOutputSidechainEdge` into a device) then its sends; then the input edges; then the
+sidechains, by destination (the tracks, then the master's devices) and device slot.
+`RouteEdge::sums` is false for input, Track In and sidechain edges; `tap` says where along
+the source's chain it leaves; `device` which slot of the destination a sidechain goes into.
 
-The model behind them, per track (`TrackModel`): `output`, `outputState`, `delay` (the output
-edge's line), `sends` (`SendModel`: destination, pre-fader, `EdgeState`, `DelayLine`),
-`inputTrack` and `inputState`. Per device: `SidechainModel` (source, tap, tap device,
-`EdgeState`, its own delay line and the device's). These outlive snapshots; the snapshot's
-`EdgeRender`s point at them.
+The model behind them, per track (`TrackModel`): `output` (or `kNoOutput`),
+`outputProcessor` (a device whose sidechain it goes into instead), `inMonitored` (what goes
+into it is its input), `outputState`, `delay` (the output edge's line), `sends` (`SendModel`:
+destination, pre-fader, `EdgeState`, `DelayLine`), `inputTrack`, `inputTap`,
+`inputTapProcessor` and `inputState`. Per device: `SidechainModel` (source, tap, tap device,
+`EdgeState`, its own delay line) and `ProcessorEntry::sidechainWait` (the device's own
+signal's line, waiting for whatever comes into its sidechain). These outlive snapshots; the
+snapshot's `EdgeRender`s point at them. A device's sidechain edges are summed into a
+worker's scratch (`WorkerScratch::keyLeft`, `keyRight`) when there are several
+(`StripRender::sidechains`: per insert, the edges into it).
 
 ### In the snapshot
 
@@ -296,6 +313,12 @@ In the engine's tests, [tests/engine](../../tests/engine):
   returns, muted tracks, cycles across sends and outputs, removing a return, solo and mute,
   compensation per edge (one track into two returns of different latency, a pre-fader tap after
   a latent device), send automation in time.
+- [test_track_routing_engine.cpp](../../tests/engine/test_track_routing_engine.cpp): Ableton's routings:
+  Sends Only, an output into a device's sidechain (summed with its own and other outputs, lined
+  up, cycles refused, the device going), Track In (heard while monitored, not lined up), inputs
+  from a track tapped Pre FX, Post FX or Post Mixer;
+  [test_parallel_engine.cpp](../../tests/engine/test_parallel_engine.cpp) renders random graphs of them on
+  any number of threads.
 - [test_sidechain_engine.cpp](../../tests/engine/test_sidechain_engine.cpp): taps, alignment both ways,
   a tap before a device waiting for its own sidechain, groups and the master, automation after a
   waiting device, cycles, the source going, mute and solo, silence flagged, workers.
