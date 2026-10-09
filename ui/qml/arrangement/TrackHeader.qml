@@ -32,12 +32,14 @@ TrackHeaderItem {
     readonly property int mixerWidth: 112
     readonly property int ioWidth: 84
     readonly property int mixerX: width - meterArea - mixerWidth
+    readonly property int meterX: width - meterArea + 4
     // The mixer column's two columns, as Ableton's, as wide as each other and
-    // filling it (4 px in from its edges, 4 px apart): the activator over
-    // volume; solo and arm over pan.
+    // filling it: as far from the column's edge as from the meter, 4 px, and
+    // 4 px apart. The activator over volume; solo and arm over pan.
     readonly property int mixerGap: 4
     readonly property int mixerLeftX: mixerX + mixerGap
-    readonly property int mixerLeftWidth: Math.floor((mixerWidth - 3 * mixerGap) / 2)
+    readonly property int mixerRight: meterX - mixerGap  // (where the controls end)
+    readonly property int mixerLeftWidth: Math.floor((mixerRight - mixerLeftX - mixerGap) / 2)
     readonly property int mixerRightX: mixerLeftX + mixerLeftWidth + mixerGap
     readonly property int mixerRightWidth: mixerLeftWidth
     readonly property int mixerButton: Math.floor((mixerRightWidth - mixerGap) / 2)  // solo, arm
@@ -64,7 +66,7 @@ TrackHeaderItem {
     Meter {
         id: meterItem
         objectName: "meter"
-        x: header.width - header.meterArea + 3
+        x: header.meterX
         y: header.pad
         width: 8
         height: Math.max(8, header.mainHeight - 2 * header.pad - 1)
@@ -185,7 +187,7 @@ TrackHeaderItem {
     ToggleButton {
         id: arm
         objectName: "arm"
-        x: header.mixerX + header.mixerWidth - header.mixerGap - width
+        x: header.mixerRightX + header.mixerRightWidth - width
         y: header.rowY(0)
         width: header.mixerButton
         height: header.box
@@ -270,9 +272,9 @@ TrackHeaderItem {
         objectName: "sends"
         header: header
         menu: header.menu
-        x: header.mixerX + 4
+        x: header.mixerLeftX
         y: header.rowY(2)
-        width: header.mixerWidth - 8
+        width: header.mixerRight - header.mixerLeftX
         height: Math.max(0, header.mainHeight - 1 - header.pad - y)
         visible: header.hasSends && header.fits(2)
     }

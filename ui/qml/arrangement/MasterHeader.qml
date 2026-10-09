@@ -36,7 +36,7 @@ TrackHeaderItem {
     Meter {
         id: meterItem
         objectName: "meter"
-        x: header.width - header.meterArea + 3
+        x: header.width - header.meterArea + 4  // (as a track's: 4 px from its pan)
         y: header.pad
         width: 8
         height: Math.max(8, header.mainHeight - 2 * header.pad - 1)
@@ -60,7 +60,7 @@ TrackHeaderItem {
         objectName: "volume"
         x: header.mixerX + 4
         y: header.rowY(0)
-        width: 50
+        width: 52
         height: header.box
         flat: true
         fill: header.volumeFraction(header.volume)
@@ -89,9 +89,9 @@ TrackHeaderItem {
     ValueBox {
         id: pan
         objectName: "pan"
-        x: header.mixerX + 58
+        x: header.mixerX + 60
         y: header.rowY(1)
-        width: 50
+        width: 52
         height: header.box
         flat: true
         fill: (header.pan + 1) / 2

@@ -989,10 +989,9 @@ private Q_SLOTS:
         QCOMPARE(solo.left(), pan.left());
         QCOMPARE(arm.right(), pan.right());
         QCOMPARE(solo.width(), arm.width());
-        // From the column's left edge to the meter's, as far in from each.
-        TrackHeaderItem* h = header(track);
-        const double meter = geometryOf(control(track, "meter")).left() - 3;  // (the meter's area)
-        QCOMPARE(volume.left() - h->mixerLeft(), meter - pan.right());
+        // From the column's left edge to the meter, as far from each.
+        const double meter = geometryOf(control(track, "meter")).left();
+        QCOMPARE(volume.left() - header(track)->mixerLeft(), meter - pan.right());
     }
 
     void headerControls() {
