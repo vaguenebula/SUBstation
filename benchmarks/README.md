@@ -288,14 +288,17 @@ sound_similarity_bench --folder <library> --cache fp.bin --ratings ratings.tsv
 `--triplets` writes N questions: a one-shot (A, at most 4 s long) and two of its
 40 nearest (B, C); which is more like A? Of 150 pairs it takes the one the
 aspects most disagree about, as that's where an answer says the most about the
-weights; one in seven is a random pair, and one in twenty is asked again later
-with B and C swapped. The rater (Python 3, nothing else) plays them on a local
+weights; one in seven is a random pair, and one in twenty is asked again 20 to
+100 questions later with B and C swapped. The rater (Python 3, nothing else) plays them on a local
 page: Space plays A, B, A, C; ←/F or →/J answers; S is can't tell; U undoes. Each
 answer is saved at once.
 
 `--ratings` fits the weights: the chance B is picked is a logistic function of
 how much further C is than B from A in each aspect, weighted, with the weights
-kept at 0 or more. It prints how often a repeated question got the same answer,
+kept at 0 or more, and pulled towards the default weights. How hard is chosen by
+cross-validation, taking the strongest pull within one standard error of the
+best: the fit stays on the defaults until the answers show clearly that they're
+off, rather than following a few hundred close calls' noise. It prints the pull, how often a repeated question got the same answer,
 how many answers the default and fitted weights agree with on answers left out
 of the fit (five-fold, grouped by A), and each weight with a 90% interval
 (refitted 200 times on the answers drawn again). The rest of the run then uses
@@ -304,11 +307,14 @@ sounds of the same kind. Rate and fit on the same library: distances are in its
 spreads.
 
 How many answers it takes, from a simulated rater with known weights on a
-synthetic library (480 one-shots): 150 answers get the largest weights
-roughly right, but an interval can be 2 wide; 300 get them all within about 0.5;
-600 to 1 000 narrow the intervals to about ±0.4. With a ridge of 0.5 the fit was
-biased (weights pulled together, an aspect weighted 0 given 0.7), so it is 0.01.
-At about 5 s a question, 1 000 is under an hour and a half.
+synthetic library (480 one-shots). A rater whose weights are the defaults: the
+fit stays on the defaults at 215, 500 and 1 000 answers. One far from them
+(0.5, 3, 1, 2, 0.25, 0): the defaults at 215; at 500, 0.83, 3.07, 1.01, 2.13,
+0.46, 0; at 1 000, 0.65, 3.23, 1.08, 2.20, 0.34, 0. A rater only a little off the
+defaults is hard to tell from them even at 1 000: the answers are close calls,
+and the aspects go together. With a ridge of 0.5 the fit was biased (weights
+pulled together, an aspect weighted 0 given 0.7), so it is 0.01. At about 5 s a
+question, 1 000 is under an hour and a half.
 
 ## Results
 

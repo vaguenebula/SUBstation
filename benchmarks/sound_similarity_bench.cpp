@@ -271,7 +271,7 @@ std::vector<std::vector<std::string>> readTsv(const std::string& file) {
 // aspects most disagree about (the aspects, weighed alike, pulling both ways as
 // evenly as they can), which is what an answer tells the weights most about;
 // one in seven is a random pair instead, so plain cases are in it too. One in
-// twenty is asked again later, B and C swapped: how often you answer it the
+// twenty is asked again 20 to 100 questions later, B and C swapped: how often you answer it the
 // same is how consistent the answers are.
 void writeTriplets(const std::vector<Sound>& sounds, const std::vector<uint32_t>& rows, const std::vector<float>& matrix,
                    const AspectWeights& weights, size_t count, uint32_t seed, const std::string& file) {
@@ -328,7 +328,8 @@ void writeTriplets(const std::vector<Sound>& sounds, const std::vector<uint32_t>
         const size_t of = std::uniform_int_distribution<size_t>(0, firsts - 1)(random);
         if (triplets[of].repeatOf >= 0) continue;
         Triplet again{triplets[of].a, triplets[of].c, triplets[of].b, static_cast<int>(of)};
-        const size_t at = std::uniform_int_distribution<size_t>(of + 1, triplets.size())(random);
+        // Soon after (20 to 100 questions on), so a few hundred answers already have some.
+        const size_t at = std::min(triplets.size(), std::uniform_int_distribution<size_t>(of + 20, of + 100)(random));
         triplets.insert(triplets.begin() + static_cast<ptrdiff_t>(at), again);
         for (Triplet& u : triplets)
             if (u.repeatOf >= static_cast<int>(at)) ++u.repeatOf;
@@ -356,14 +357,33 @@ struct Answer {
 };
 
 // The chance B is picked: sigmoid(sum of u[a] * further[a]), u >= 0; u is the
-// weights times how sure the answers are. The fit: the most likely u, with the
-// least ridge that keeps it finite when the answers never contradict an aspect
-// (more pulls the weights towards each other: 0.5 already biased a simulated
-// rater's), by Newton's method on the aspects not held at 0.
-std::array<double, kAspects> fitAnswers(const std::vector<Answer>& answers, const std::vector<size_t>& use) {
+// weights times how sure the answers are. The fit: the most likely u, pulled
+// towards the default weights' shape by `pull` (a penalty on the part of u not
+// along them: how sure isn't penalised, only how the aspects share it). With no
+// pull it is the answers' alone, which with a few hundred close calls follows
+// their noise; with a lot, the defaults. A little ridge besides keeps u finite
+// when the answers never contradict an aspect (more than 0.01 biased a
+// simulated rater's weights). Newton's method on the aspects not held at 0.
+std::array<double, kAspects> fitAnswers(const std::vector<Answer>& answers, const std::vector<size_t>& use,
+                                        double pull) {
     constexpr double ridge = 0.01;
+    // The defaults' direction, of length 1.
+    std::array<double, kAspects> d{};
+    {
+        const auto w = AspectWeights::defaults();
+        double length = 0.0;
+        for (size_t a = 0; a < kAspects; ++a) length += static_cast<double>(w[a]) * w[a];
+        for (size_t a = 0; a < kAspects; ++a) d[a] = w[a] / std::sqrt(std::max(length, 1e-12));
+    }
+    auto off = [&](const std::array<double, kAspects>& v) {  // v less its part along the defaults
+        double along = 0.0;
+        for (size_t a = 0; a < kAspects; ++a) along += v[a] * d[a];
+        std::array<double, kAspects> o;
+        for (size_t a = 0; a < kAspects; ++a) o[a] = v[a] - along * d[a];
+        return o;
+    };
     std::array<double, kAspects> u;
-    u.fill(0.1);
+    for (size_t a = 0; a < kAspects; ++a) u[a] = 0.1 * d[a] + 1e-3;
     auto loss = [&](const std::array<double, kAspects>& v) {
         double sum = 0.0;
         for (const size_t i : use) {
@@ -372,7 +392,8 @@ std::array<double, kAspects> fitAnswers(const std::vector<Answer>& answers, cons
             if (!answers[i].pickedB) z = -z;
             sum += z > 0 ? std::log1p(std::exp(-z)) : -z + std::log1p(std::exp(z));
         }
-        for (const double x : v) sum += 0.5 * ridge * x * x;
+        const auto o = off(v);
+        for (size_t a = 0; a < kAspects; ++a) sum += 0.5 * ridge * v[a] * v[a] + 0.5 * pull * o[a] * o[a];
         return sum;
     };
     double current = loss(u);
@@ -390,8 +411,10 @@ std::array<double, kAspects> fitAnswers(const std::vector<Answer>& answers, cons
                 for (size_t b = 0; b < kAspects; ++b) hessian[a][b] += p * (1.0 - p) * x[a] * x[b];
             }
         }
+        const auto o = off(u);
         for (size_t a = 0; a < kAspects; ++a) {
-            gradient[a] += ridge * u[a];
+            gradient[a] += ridge * u[a] + pull * o[a];
+            for (size_t b = 0; b < kAspects; ++b) hessian[a][b] += pull * ((a == b ? 1.0 : 0.0) - d[a] * d[b]);
             hessian[a][a] += ridge;
         }
         // Held at 0: the aspects at 0 the loss would push below it.
@@ -460,6 +483,51 @@ double agreement(const std::vector<Answer>& answers, const std::vector<size_t>& 
     return hits / static_cast<double>(use.size());
 }
 
+// How unlikely an answer is by u (its negative log-likelihood).
+double surprise(const Answer& answer, const std::array<double, kAspects>& u) {
+    double z = 0.0;
+    for (size_t a = 0; a < kAspects; ++a) z += u[a] * answer.further[a];
+    if (!answer.pickedB) z = -z;
+    return z > 0 ? std::log1p(std::exp(-z)) : -z + std::log1p(std::exp(z));
+}
+
+// How hard to pull towards the defaults: each pull of a range fitted on four
+// of five groups of `use` (by A) and judged by how unlikely it finds the fifth's
+// answers. The strongest pull within one standard error of the best is taken:
+// the defaults unless the answers show clearly enough that they're off.
+double choosePull(const std::vector<Answer>& answers, const std::vector<size_t>& use) {
+    static constexpr double pulls[] = {0.0, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 1e4};
+    constexpr size_t count = std::size(pulls);
+    std::hash<std::string> hash;
+    std::vector<std::array<double, count>> each(use.size());  // each answer's surprise, by pull
+    for (size_t p = 0; p < count; ++p)
+        for (size_t g = 0; g < 5; ++g) {
+            std::vector<size_t> train;
+            for (const size_t i : use)
+                if (hash(answers[i].anchor + "#inner") % 5 != g) train.push_back(i);
+            const auto u = fitAnswers(answers, train, pulls[p]);
+            for (size_t k = 0; k < use.size(); ++k)
+                if (hash(answers[use[k]].anchor + "#inner") % 5 == g) each[k][p] = surprise(answers[use[k]], u);
+        }
+    const double n = static_cast<double>(use.size());
+    std::array<double, count> mean{};
+    for (const auto& e : each)
+        for (size_t p = 0; p < count; ++p) mean[p] += e[p] / n;
+    const size_t best = static_cast<size_t>(std::min_element(mean.begin(), mean.end()) - mean.begin());
+    for (size_t p = count; p-- > best;) {
+        // The standard error of the difference from the best (answer by answer).
+        double sum = 0.0, squares = 0.0;
+        for (const auto& e : each) {
+            const double d = e[p] - e[best];
+            sum += d;
+            squares += d * d;
+        }
+        const double m = sum / n, se = std::sqrt(std::max(0.0, squares / n - m * m) / std::max(1.0, n - 1.0));
+        if (m <= se) return pulls[p];
+    }
+    return pulls[best];
+}
+
 // Fits the weights to the rater's answers (tools/similarity_rater) and says how
 // far to trust them. The aspects' distances come from this library's spreads:
 // rate and fit on the same library.
@@ -520,10 +588,11 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
 
     std::vector<size_t> all(answers.size());
     std::iota(all.begin(), all.end(), size_t{0});
-    const AspectWeights fitted = weightsOf(fitAnswers(answers, all));
+    const double pull = choosePull(answers, all);
+    const AspectWeights fitted = weightsOf(fitAnswers(answers, all, pull));
 
     // Cross-validated: answers in five groups by their A, each group judged by
-    // weights fitted on the other four.
+    // weights fitted on the other four (their pull chosen from those four alone).
     std::map<std::string, int> group;
     std::vector<std::string> anchors;
     for (const Answer& answer : answers)
@@ -535,9 +604,11 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
     for (int g = 0; g < 5; ++g) {
         std::vector<size_t> train, test;
         for (size_t i = 0; i < answers.size(); ++i) (group[answers[i].anchor] == g ? test : train).push_back(i);
-        heldOutFitted += agreement(answers, test, weightsOf(fitAnswers(answers, train))) * test.size();
+        heldOutFitted +=
+            agreement(answers, test, weightsOf(fitAnswers(answers, train, choosePull(answers, train)))) * test.size();
         heldOutDefaults += agreement(answers, test, AspectWeights{}) * test.size();
     }
+    std::printf("  pulled towards the default weights by %g (0: not at all; 10000: all but the defaults)\n", pull);
     std::printf("  answers agreed with, on answers held out of the fit: default weights %.1f%%, fitted %.1f%% "
                 "(on all, fitted on all: %.1f%%)\n",
                 100.0 * heldOutDefaults / answers.size(), 100.0 * heldOutFitted / answers.size(),
@@ -554,7 +625,7 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
             const auto& those = byAnchor[anchors[pick(random)]];
             use.insert(use.end(), those.begin(), those.end());
         }
-        const AspectWeights w = weightsOf(fitAnswers(answers, use));
+        const AspectWeights w = weightsOf(fitAnswers(answers, use, pull));
         for (size_t a = 0; a < kAspects; ++a) drawn[a].push_back(w.weight[a]);
     }
     const AspectWeights defaults;
