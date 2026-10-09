@@ -35,11 +35,11 @@
 #include <thread>
 #include <vector>
 
-#include "AsioDriver.h"
+#include "harness/AsioDriver.h"
 #include "Engine.h"
-#include "Fixtures.h"
+#include "harness/Fixtures.h"
 #include "Json.h"
-#include "Signal.h"
+#include "harness/Signal.h"
 #include "plugins/Vst3Format.h"
 
 // The harness's failure report (its Main.cpp is the tests' own): the fake
