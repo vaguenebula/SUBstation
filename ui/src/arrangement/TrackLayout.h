@@ -48,9 +48,9 @@ inline constexpr int kFoldedGroupHeight = kGroupBlock + 1;
 inline constexpr int kGroupSummaryRows = 5;
 // A track's own lane while its automation shows: room in its header's name
 // column for the choosers (two rows and "+" under its name row; a group's
-// under the two rows of its colour).
-inline constexpr int kMinAutomationRow = 76;
-inline constexpr int kMinGroupAutomationRow = 94;
+// under the two rows of its colour), 4 px below them.
+inline constexpr int kMinAutomationRow = 80;
+inline constexpr int kMinGroupAutomationRow = 98;
 inline constexpr int kDropZone = 120;  // empty space below the last track for dropping files
 inline constexpr int kMasterHeight = 40;
 // A return track's row: its name, Audio To, activator and solo; volume and pan; its sends.
