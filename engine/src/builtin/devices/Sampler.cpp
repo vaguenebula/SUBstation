@@ -954,6 +954,9 @@ void SamplerProcessor::renderVoice(Voice& voice, int from, int to, double semito
         return gain;
     };
 
+    // A stretched note warped faster than stretching is for (its Warp Length or the tempo changed as it
+    // played) goes on resampled, as a new note would: a stretcher's work grows with the rate.
+    if (voice.stretch >= 0 && b.rate > kMaxStretchRate) voice.stretch = -1;
     if (voice.stretch >= 0 && pool_) {
         Stretcher& stretcher = *pool_->stretchers[static_cast<size_t>(voice.stretch)];
         const auto wanted = static_cast<float>(semitones);

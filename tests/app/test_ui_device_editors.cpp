@@ -593,6 +593,7 @@ private Q_SLOTS:
         const auto clip = editor()->addMidiClip(track, 0.0, 4.0);
         QVERIFY(clip);
         editor()->setClipNotes(*clip, {Note{38, 0.0, 0.25, 127}}, QStringLiteral("Add Note"));  // D1: the third
+        bridge()->waitForDeviceStates();  // (the sample is set in the engine in the background)
         engine_->renderOffline(0.0, kSampleRate / 16);
         refreshDisplays();
         QCOMPARE(samples->playingSlice(), 2);

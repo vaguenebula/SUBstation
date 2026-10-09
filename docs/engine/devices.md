@@ -303,7 +303,8 @@ project saved then plays as it did: a parameter it doesn't have takes its defaul
   past its end), transposed by `semitones`. A note-on seeks it (`outputSeek`, its
   latency computed ahead), so its first frame is the slice's or Start's at once. Faster
   than 4 times (`kMaxStretchRate`: a long sample in few beats) notes are resampled, as
-  a stretcher's work grows with the rate.
+  a stretcher's work grows with the rate; a stretched note that gets there as it plays
+  (Warp Length or the tempo changing) gives its stretcher up and goes on resampled.
 - **Stretchers** are made on the main side (`updatePool()`: `idle()`, `prepare()`,
   `resetOffline()`), only while Warp is on with a stretching mode: one for a mono mode,
   else as many as Voices allows up to 8 (`kMaxStretched`, which then limits the notes
@@ -765,7 +766,7 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   Mono, Poly, Thru), 1-Shot (Trigger, Gate, fades, one note at a time), Classic's Loop Start and Loop Fade, reverse,
   snap, gain and pan, the filter's four types and slopes and resonance, the LFO (tremolo, vibrato, synced, restarted,
   pan, filter), voices and legato glide, warping (Re-Pitch, every stretching mode, keys, tempo, repeatable renders,
-  resampled past 4 times as fast), the display of a reversed note, a resonant filter ringing out after the last note,
+  resampled past 4 times as fast, also a note already playing), the display of a reversed note, a resonant filter ringing out after the last note,
   and a random LFO restarted by notes rendering the same every time.
 - [test_midi_engine.cpp](../../tests/engine/test_midi_engine.cpp): the Synth plays the right pitch and level.
 - [test_automation_engine.cpp](../../tests/engine/test_automation_engine.cpp): built-in blocks split where automation

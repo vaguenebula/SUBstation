@@ -743,6 +743,21 @@ TEST_CASE("warped many times faster than the sample, notes are resampled, not st
     CHECK(!anyNonzero(leftFrom(out, kBeat + 100)));  // (all of it in its beat)
 }
 
+TEST_CASE("a stretched note warped past what stretching is for as it plays goes on resampled") {
+    // Three seconds as 16 beats for the first beat (stretched, at its pitch), then as 1 beat: six times as fast.
+    sub::Engine engine;
+    const auto [track, device] = samplerTrack(engine, {{0.0, 1.0, 60, 127}}, makeWav(sine(100, 3.0)),
+                                              {{"mode", 1.f}, {"warp", 1.f}, {"warp_beats", 16.f}, {"warp_mode", 1.f}});
+    const sub::ParamInfo beats = paramInfo(engine, device, "warp_beats");
+    using Points = std::vector<sub::AutomationPoint>;
+    engine.setTrackAutomation(track, {{device, "warp_beats", Points{{0.0, beats.toNormalized(16.f), 0.f},
+                                                                    {1.0, beats.toNormalized(16.f), 0.f},
+                                                                    {1.0, beats.toNormalized(1.f), 0.f}}}});
+    const Samples out = engine.renderOffline(0.0, 2 * kBeat);
+    CHECK_APPROX_REL(dominantFreq(leftFrom(out, 6000, 22000)), 100, 0.01);
+    CHECK_APPROX_REL(dominantFreq(leftFrom(out, kBeat + 1000, kBeat + 20000)), 600, 0.01);
+}
+
 TEST_CASE("a resonant filter rings out after the last note") {
     // 20 ms of 200 Hz through a resonant low-pass at 200 Hz: it rings on after the sample ends.
     sub::Engine engine;
