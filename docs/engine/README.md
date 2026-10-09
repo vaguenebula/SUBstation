@@ -35,7 +35,7 @@ includes the engine's headers.
 | [Transport.h](../../engine/src/Transport.h) | `TransportCommand`, `PreviewNote` and `SharedState`: what the API threads and the audio thread share. |
 | [Metronome.h](../../engine/src/Metronome.h) / [.cpp](../../engine/src/Metronome.cpp) | The click generator. See [rendering.md](rendering.md#metronome-and-count-in). |
 | [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) | Real-time helpers: `ScopedNoDenormals`, `SmoothedValue`, `SpscQueue`, `DeferredReleasePool`, `atomicStoreMax`, `dbToGain`, `balanceGains`, `DisplayStream`. |
-| [PathUtils.h](../../engine/src/PathUtils.h) | `pathFromUtf8()` and `widen()`: the engine takes paths as UTF-8, Windows file APIs want UTF-16. |
+| [MiniaudioFiles.h](../../engine/src/MiniaudioFiles.h) | `initDecoderFile()`, `initEncoderFile()`: miniaudio's files by UTF-8 path (its wide calls on Windows, its narrow ones elsewhere). The engine takes paths as UTF-8; the platform layer ([platform.md](../platform.md)) turns them into what the system and `std::filesystem` take (`platform::toPath()`). |
 
 The `Engine` class is declared once in `Engine.h` and implemented by area across the
 `Engine*.cpp` files (the comment at the top of `Engine.cpp` lists them). They all build into

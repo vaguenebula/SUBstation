@@ -46,7 +46,7 @@
 #include <vector>
 
 #include "core/AudioReader.h"
-#include "core/Hash.h"
+#include "platform/Bytes.h"
 #include "similarity/FeatureExtractor.h"
 #include "similarity/Similarity.h"
 #include "similarity/SoundIndex.h"
@@ -455,7 +455,7 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> tuneQueries, heldOut;
     for (const uint32_t q : queries) {
         const std::string folderPath = utf8(pathOf(sounds[rows[q]].path).parent_path());
-        (fnv1a(folderPath) % 2 == 0 ? tuneQueries : heldOut).push_back(q);
+        (sub::platform::fnv1a(folderPath) % 2 == 0 ? tuneQueries : heldOut).push_back(q);
     }
     if (!split) tuneQueries = queries;
     auto report = [&](const char* title, const AspectWeights& w) {

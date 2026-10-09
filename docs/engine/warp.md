@@ -64,7 +64,8 @@ Both Signalsmith libraries are added as `SYSTEM` include directories in [CMakeLi
 4. It builds the peaks.
 
 It throws `std::runtime_error` if the file can't be opened or contains no audio. Paths are UTF-8 and opened with
-`ma_decoder_init_file_w` (through `widen()`, [PathUtils.h](../../engine/src/PathUtils.h)), so any Windows path works.
+`initDecoderFile()` ([MiniaudioFiles.h](../../engine/src/MiniaudioFiles.h)): miniaudio's wide call on Windows, so any
+Windows path works, and its narrow one elsewhere, so a path never goes through the C library's locale.
 
 `AudioSource::probe(utf8Path)` reads only what is needed for length and format (`AudioFileInfo`: frames at the file's
 own rate, channels, rate, duration). For streams that report no length it counts the frames by decoding.

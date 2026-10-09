@@ -13,7 +13,7 @@
 
 #include "Sounds.h"
 #include "core/AudioReader.h"
-#include "core/Hash.h"
+#include "platform/Bytes.h"
 #include "similarity/EssentiaExtractor.h"
 #include "similarity/Similarity.h"
 #include "similarity/SoundStore.h"
@@ -575,7 +575,7 @@ TEST_CASE("the store: saved and read back; another extractor's, or anything unex
     writeBytes(bytes.substr(0, bytes.size() - 3));
     CHECK(!readStore(file, schema()).has_value());
     auto withChecksum = [](std::string body) {
-        const uint64_t h = fnv1a(body);  // (as the store sums)
+        const uint64_t h = sub::platform::fnv1a(body);  // (as the store sums)
         for (int i = 0; i < 8; ++i) body.push_back(static_cast<char>(h >> (8 * i)));
         return body;
     };

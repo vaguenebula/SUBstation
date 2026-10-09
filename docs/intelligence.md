@@ -333,8 +333,6 @@ waits for it, a tenth of a second for the longest parts.
 | File | What it holds |
 |---|---|
 | [core/AudioReader.h](../intelligence/src/core/AudioReader.h) | `readMono()`: decodes a file (or a part) with miniaudio, mixed down, at most 48 kHz; `readMonoAt()`, at a given rate; `resampleMono()` (band-limited, Kaiser-windowed sinc, polyphase; cancellable); `MonoAudio`, `AudioError` |
-| [core/Hash.h](../intelligence/src/core/Hash.h) | `fnv1a()`: the stores' checksums, schema keys, result paths |
-| [core/Platform.h](../intelligence/src/core/Platform.h) | `FileStamp`/`stamp()`, `enterBackgroundMode()`, `replaceFile()`, `openFile()`, WTF-8 to UTF-16; [Platform.cpp](../intelligence/src/core/Platform.cpp) (Windows), [PlatformPosix.cpp](../intelligence/src/core/PlatformPosix.cpp) |
 | [similarity/FeatureSchema.h](../intelligence/src/similarity/FeatureSchema.h) | `Aspect`, `AspectWeights`, `FeatureInfo`, `FeatureSchema` (an extractor's features, weights, and what saved fingerprints must match: `key()`) |
 | [similarity/FeatureExtractor.h](../intelligence/src/similarity/FeatureExtractor.h) | `FeatureExtractor` (`extract()` from PCM, `extractFile()`; cancellable), `SoundBuffer`, `Extraction`, `ExtractorFactory` (the schema, and how to make an extractor), `defaultExtractorFactory()` |
 | [similarity/EssentiaExtractor.h](../intelligence/src/similarity/EssentiaExtractor.h) | `EssentiaExtractor` (one per thread), the fingerprint's layout (`feature::`), `featureInfo()`, `essentiaSchema()`, `kFeatureVersion`, `kAnalysisRate` |
@@ -349,6 +347,10 @@ waits for it, a tenth of a second for the longest parts.
 | [humanize/VelocityModel.h](../intelligence/src/humanize/VelocityModel.h) | `VelocityModel` (`humanize()`, `predict()`), `Note` (a part's, `target` or context), `Meter`, `ModelError` |
 | [third_party/humanbro](../intelligence/third_party/humanbro) | HUMANBRO's C++ runtime (the `humanbro` library): `humanbro::Humanizer`, its features and tree walker |
 | [models/velocity.hbm](../intelligence/models) | The velocity model (HUMANBRO's quantized one); [models/README.md](../intelligence/models/README.md) says where it came from and how to replace it |
+
+What the module needs of the operating system (file stamps, `readFile()`/`writeFileAtomically()`, background priority,
+path keys, WTF-8 to UTF-16) and the stores' fields and checksum (`ByteWriter`, `ByteReader`, `fnv1a()`) are the
+platform layer's, which the browser and the engine share: [platform.md](platform.md).
 
 ### The application side (`app/src/intelligence`)
 

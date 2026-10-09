@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "AudioFileWriter.h"
-#include "PathUtils.h"
+#include "MiniaudioFiles.h"
 #include "miniaudio.h"
 
 namespace sub {
@@ -40,7 +40,7 @@ public:
     WavWriter(std::string path, ma_format format, double sampleRate) : path_(std::move(path)), format_(format) {
         ma_encoder_config config =
             ma_encoder_config_init(ma_encoding_format_wav, format, 2, static_cast<ma_uint32>(sampleRate));
-        if (ma_encoder_init_file_w(widen(path_).c_str(), &config, &encoder_) != MA_SUCCESS) {
+        if (initEncoderFile(path_, config, &encoder_) != MA_SUCCESS) {
             throw std::runtime_error("Could not create " + path_);
         }
     }
@@ -48,7 +48,7 @@ public:
         close();
         if (!kept_) {
             std::error_code ignored;
-            std::filesystem::remove(pathFromUtf8(path_), ignored);
+            std::filesystem::remove(platform::toPath(path_), ignored);
         }
     }
     WavWriter(const WavWriter&) = delete;

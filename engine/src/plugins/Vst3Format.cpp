@@ -8,11 +8,10 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <cwctype>
 #include <filesystem>
 #include <stdexcept>
 
-#include "PathUtils.h"
+#include "platform/Paths.h"
 #include "plugins/Vst3Processor.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "public.sdk/source/vst/hosting/hostclasses.h"
@@ -47,25 +46,11 @@ void ensureComInitialized() {
 #endif
 }
 
-std::string utf8(const std::filesystem::path& path) {
-    const std::u8string text = path.u8string();
-    return {reinterpret_cast<const char*>(text.data()), text.size()};
-}
-
-// One module per file: paths compare as the file system does (Windows ignores case).
-std::string moduleKey(const std::string& path) {
-    std::wstring wide = pathFromUtf8(path).lexically_normal().make_preferred().wstring();
-#ifdef _WIN32
-    std::transform(wide.begin(), wide.end(), wide.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
-#endif
-    return utf8(std::filesystem::path(wide));
-}
-
 #ifdef _WIN32
 std::string knownFolder(REFKNOWNFOLDERID id) {
     PWSTR folder = nullptr;
     std::string result;
-    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &folder))) result = utf8(std::filesystem::path(folder));
+    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &folder))) result = platform::fromNative(folder);
     CoTaskMemFree(folder);
     return result;
 }
@@ -87,11 +72,11 @@ std::vector<std::string> Vst3Format::defaultSearchPaths() const {
     std::vector<std::string> paths;
 #ifdef _WIN32
     for (const auto& folder : {knownFolder(FOLDERID_ProgramFilesCommon), knownFolder(FOLDERID_UserProgramFilesCommon)}) {
-        if (!folder.empty()) paths.push_back(utf8(pathFromUtf8(folder) / "VST3"));
+        if (!folder.empty()) paths.push_back(platform::fromPath(platform::toPath(folder) / "VST3"));
     }
 #else
     // The VST 3 locations on Linux: the user's, then the system's.
-    if (const char* home = std::getenv("HOME"); home && *home) paths.push_back(utf8(pathFromUtf8(home) / ".vst3"));
+    if (const char* home = std::getenv("HOME"); home && *home) paths.push_back(platform::fromPath(platform::toPath(home) / ".vst3"));
     paths.push_back("/usr/lib/vst3");
     paths.push_back("/usr/local/lib/vst3");
 #endif
@@ -100,7 +85,7 @@ std::vector<std::string> Vst3Format::defaultSearchPaths() const {
 
 VST3::Hosting::Module::Ptr Vst3Format::loadModule(const std::string& path) {
     std::lock_guard lock(mutex_);
-    auto& slot = modules_[moduleKey(path)];
+    auto& slot = modules_[platform::fileKey(path)];  // one module per file
     if (auto module = slot.lock()) return module;
     std::string error;
     auto module = VST3::Hosting::Module::create(path, error);
@@ -145,7 +130,7 @@ std::shared_ptr<Processor> Vst3Format::instantiate(const std::string& path, cons
             return processor;
         }
     }
-    throw std::runtime_error(utf8(pathFromUtf8(path).filename()) + " does not contain this plug-in any more.");
+    throw std::runtime_error(platform::fromPath(platform::toPath(path).filename()) + " does not contain this plug-in any more.");
 }
 
 }  // namespace sub::vst3

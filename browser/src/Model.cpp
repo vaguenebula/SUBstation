@@ -62,14 +62,7 @@ void Snapshot::join(std::string& path, std::string_view folder, std::string_view
     path.clear();
     path.reserve(folder.size() + 1 + name.size());
     path.append(folder);
-    const char last = folder.empty() ? '\0' : folder.back();
-#ifdef _WIN32
-    const bool separated = last == '\\' || last == '/' || last == ':';  // "C:" alone is that drive's own folder
-#else
-    const bool separated = last == '/';
-#endif
-    if (!separated) path.push_back(platform::kSeparator);
-    path.append(name);
+    platform::appendName(path, name);
 }
 
 std::string placePrefix(std::string_view root) {

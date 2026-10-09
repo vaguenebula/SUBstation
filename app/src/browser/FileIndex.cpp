@@ -8,7 +8,7 @@
 #include <cmath>
 #include <limits>
 
-#include "Platform.h"
+#include "platform/Paths.h"
 #include "browser/BrowserSearch.h"
 #include "browser/PathKeys.h"
 
@@ -92,7 +92,7 @@ std::vector<browser::UsageRecord> usageRecords(const Library& library) {
 browser::PlaceSpec placeSpec(const QString& root) {
     const QString normal = normalPath(root);
     const std::string native = toBackendPath(normal);
-    return {native, browser::platform::pathKey(native), toBackendPath(QFileInfo(normal).fileName())};
+    return {native, platform::pathKey(native), toBackendPath(QFileInfo(normal).fileName())};
 }
 
 // --- FileIndex ---------------------------------------------------------------------------

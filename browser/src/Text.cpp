@@ -55,44 +55,15 @@ bool isWord(uint32_t c) { return c < 128 ? (kAscii[c] & kIsWord) != 0 : inRanges
 // The regex's [\s_\-.()\[\]]
 bool isSeparator(uint32_t c) { return c < 128 ? (kAscii[c] & kIsSeparator) != 0 : inRanges(kSpace, c); }
 
-// One code point from WTF-8 (surrogates allowed). Bad bytes read as U+FFFD.
-uint32_t decode(const unsigned char*& p, const unsigned char* end) {
-    const uint32_t b = *p++;
-    if (b < 0x80) return b;
-    int extra = b >= 0xF0 ? 3 : b >= 0xE0 ? 2 : b >= 0xC0 ? 1 : -1;
-    if (extra < 0 || end - p < extra) return 0xFFFD;
-    uint32_t c = b & (0x3F >> extra);
-    for (int i = 0; i < extra; ++i) {
-        if ((*p & 0xC0) != 0x80) return 0xFFFD;
-        c = (c << 6) | (*p++ & 0x3F);
-    }
-    return c;
-}
-
-void append(std::string& out, uint32_t c) {
-    if (c < 0x80) {
-        out.push_back(static_cast<char>(c));
-    } else if (c < 0x800) {
-        out.push_back(static_cast<char>(0xC0 | (c >> 6)));
-        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
-    } else if (c < 0x10000) {
-        out.push_back(static_cast<char>(0xE0 | (c >> 12)));
-        out.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
-    } else {
-        out.push_back(static_cast<char>(0xF0 | (c >> 18)));
-        out.push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
-    }
-}
+using sub::platform::appendUtf8;
+using sub::platform::decodeUtf8;
 
 std::vector<uint32_t> codePoints(std::string_view s) {
     std::vector<uint32_t> cps;
     cps.reserve(s.size());
     auto* p = reinterpret_cast<const unsigned char*>(s.data());
     auto* end = p + s.size();
-    while (p < end) cps.push_back(decode(p, end));
+    while (p < end) cps.push_back(decodeUtf8(p, end));
     return cps;
 }
 
@@ -122,46 +93,6 @@ bool isFinalSigma(const std::vector<uint32_t>& cps, size_t i) {
 
 }  // namespace
 
-std::string toUtf8(std::wstring_view s) {
-    std::string out;
-    out.reserve(s.size());
-    for (size_t i = 0; i < s.size(); ++i) {
-        uint32_t c = static_cast<uint16_t>(s[i]);
-        if (c >= 0xD800 && c < 0xDC00 && i + 1 < s.size()) {
-            const uint32_t low = static_cast<uint16_t>(s[i + 1]);
-            if (low >= 0xDC00 && low < 0xE000) {
-                c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
-                ++i;
-            }
-        }
-        append(out, c);
-    }
-    return out;
-}
-
-std::wstring toWide(std::string_view s) {
-    std::wstring out;
-    out.reserve(s.size());
-    auto* p = reinterpret_cast<const unsigned char*>(s.data());
-    auto* end = p + s.size();
-    while (p < end) {
-        const uint32_t c = decode(p, end);
-        if (c >= 0x10000) {
-            out.push_back(static_cast<wchar_t>(0xD800 + ((c - 0x10000) >> 10)));
-            out.push_back(static_cast<wchar_t>(0xDC00 + ((c - 0x10000) & 0x3FF)));
-        } else {
-            out.push_back(static_cast<wchar_t>(c));
-        }
-    }
-    return out;
-}
-
-bool isAscii(std::string_view s) {
-    for (char c : s)
-        if (static_cast<unsigned char>(c) >= 0x80) return false;
-    return true;
-}
-
 std::string pyLower(std::string_view s) {
     if (isAscii(s)) return asciiLower(s);
     const auto cps = codePoints(s);
@@ -170,13 +101,13 @@ std::string pyLower(std::string_view s) {
     for (size_t i = 0; i < cps.size(); ++i) {
         const uint32_t c = cps[i];
         if (c < 0x80) {
-            append(out, c >= 'A' && c <= 'Z' ? c + 32 : c);
+            appendUtf8(out, c >= 'A' && c <= 'Z' ? c + 32 : c);
         } else if (c == 0x3A3) {
-            append(out, isFinalSigma(cps, i) ? 0x3C2 : 0x3C3);
+            appendUtf8(out, isFinalSigma(cps, i) ? 0x3C2 : 0x3C3);
         } else if (const CaseMapping* m = findMapping(kLower, c)) {
-            for (int k = 0; k < m->n; ++k) append(out, m->to[k]);
+            for (int k = 0; k < m->n; ++k) appendUtf8(out, m->to[k]);
         } else {
-            append(out, c);
+            appendUtf8(out, c);
         }
     }
     return out;
@@ -189,13 +120,13 @@ std::string pyCasefold(std::string_view s) {
     auto* p = reinterpret_cast<const unsigned char*>(s.data());
     auto* end = p + s.size();
     while (p < end) {
-        const uint32_t c = decode(p, end);
+        const uint32_t c = decodeUtf8(p, end);
         if (c == 0x3A3) {
-            append(out, 0x3C3);  // casefold has no context
+            appendUtf8(out, 0x3C3);  // casefold has no context
         } else if (const CaseMapping* m = c < 0x80 ? nullptr : findMapping(kFold, c)) {
-            for (int k = 0; k < m->n; ++k) append(out, m->to[k]);
+            for (int k = 0; k < m->n; ++k) appendUtf8(out, m->to[k]);
         } else {
-            append(out, c >= 'A' && c <= 'Z' ? c + 32 : c);
+            appendUtf8(out, c >= 'A' && c <= 'Z' ? c + 32 : c);
         }
     }
     return out;
@@ -209,7 +140,7 @@ std::vector<std::string> pySplit(std::string_view s) {
     const unsigned char* word = nullptr;
     while (p < end) {
         const unsigned char* at = p;
-        const uint32_t c = decode(p, end);
+        const uint32_t c = decodeUtf8(p, end);
         if (isSpace(c)) {
             if (word) parts.emplace_back(reinterpret_cast<const char*>(word), at - word);
             word = nullptr;
@@ -230,14 +161,14 @@ void wordStarts(std::string_view s, std::vector<uint32_t>& out) {
     // word character, and the next search starts after it.
     while (p < end) {
         const bool atStart = p == begin;
-        const uint32_t c = decode(p, end);
+        const uint32_t c = decodeUtf8(p, end);
         if (atStart && isWord(c)) {  // ^ then \w
             out.push_back(0);
             continue;
         }
         if (isSeparator(c) && p < end) {
             const unsigned char* next = p;
-            if (isWord(decode(next, end))) {
+            if (isWord(decodeUtf8(next, end))) {
                 out.push_back(static_cast<uint32_t>(p - begin));
                 p = next;
             }

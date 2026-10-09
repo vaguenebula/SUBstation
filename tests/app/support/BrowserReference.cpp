@@ -18,7 +18,7 @@
 #include <windows.h>
 #endif
 
-#include "Platform.h"
+#include "platform/Paths.h"
 #include "Text.h"
 #include "browser/PathKeys.h"
 
@@ -188,7 +188,7 @@ std::vector<BrowserItem> findScored(std::vector<BrowserItem> items, const QStrin
 std::vector<BrowserItem> placeItems(const std::vector<BrowserItem>& items, const QString& place) {
     std::vector<BrowserItem> out;
     for (const BrowserItem& item : items) {
-        const bool under = backend::platform::kCaseSensitivePaths
+        const bool under = sub::platform::kCaseSensitivePaths
                                ? item.path.startsWith(place + QLatin1Char('/'))
                                : lower(item.path).starts_with(lower(place) + "/");
         if (under) out.push_back(item);

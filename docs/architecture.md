@@ -3,7 +3,9 @@
 SUBstation is one C++ program in five layers: a Qt Quick UI that draws everything, an application layer that owns
 the project and everything that works on it, a real-time audio engine that plays it, a small library that indexes
 and searches the sample browser's files, and the intelligence module, which works things out about music and sound
-(how similar sounds are, in the background; a song's chords and key, from its MIDI). This page is the map; each part has its own pages (see the
+(how similar sounds are, in the background; a song's chords and key, from its MIDI). Under the engine, the browser and
+the intelligence module lies a small platform layer: what they need from the operating system, one file per system,
+so nothing above it has `#ifdef`s for one. This page is the map; each part has its own pages (see the
 [index](README.md)).
 
 ## Layers
@@ -46,15 +48,20 @@ and searches the sample browser's files, and the intelligence module, which work
                 │ Harmony: pure functions; Harmony (app/src/intelligence) calls them  │
                 │ on the GUI thread with the song's MIDI notes when asked             │
                 └─────────────────────────────────────────────────────────────────────┘
+                ┌─────────────────────────────────────────────────────────────────────┐
+  platform      │ sub_platform, under the engine, the browser and the intelligence:   │
+                │ paths and their keys, files, threads' priorities; a file per system │
+                └─────────────────────────────────────────────────────────────────────┘
 ```
 
 | Layer | Where | Built as | Depends on | Docs |
 |---|---|---|---|---|
 | UI | [ui/qml](../ui/qml) (QML module `SUBstation`), [ui/src](../ui/src) (C++ Qt Quick items), [ui/style](../ui/style) (the controls' style), [ui/main.cpp](../ui/main.cpp) | `sub_ui` + the `substation` executable | the application layer, Qt Quick, QML, Quick Controls | [ui/](ui/README.md) |
 | Application layer | [app/src](../app/src): `model/`, `editor/`, `io/`, `audio/`, `session/`, `files/`, `browser/`, `intelligence/`, `plugins/`, `analysis/` | `sub_app` | Qt Core and Gui, `sub_engine`, `sub_browser`, `sub_intelligence` | [app/](README.md#application-layer) |
-| Audio engine | [engine/src](../engine/src) | `sub_engine` (namespace `sub`) | the C++ standard library, miniaudio, the VST 3 SDK | [engine/](engine/README.md) |
-| Browser backend | [browser/src](../browser/src) | `sub_browser` (namespace `sub::browser`) | the C++ standard library | [browser.md](browser.md) |
-| Intelligence | [intelligence/src](../intelligence/src): `core/`, `similarity/`, `harmony/`, `humanize/` | `sub_intelligence` (namespace `sub::intelligence`) | the C++ standard library, miniaudio (its decoders), Essentia (its descriptors: vendored, AGPLv3, [licensing.md](licensing.md)), HUMANBRO's runtime (`humanbro`, vendored; its model in intelligence/models) | [intelligence.md](intelligence.md) |
+| Audio engine | [engine/src](../engine/src) | `sub_engine` (namespace `sub`) | the C++ standard library, the platform layer, miniaudio, the VST 3 SDK | [engine/](engine/README.md) |
+| Browser backend | [browser/src](../browser/src) | `sub_browser` (namespace `sub::browser`) | the C++ standard library, the platform layer | [browser.md](browser.md) |
+| Intelligence | [intelligence/src](../intelligence/src): `core/`, `similarity/`, `harmony/`, `humanize/` | `sub_intelligence` (namespace `sub::intelligence`) | the C++ standard library, the platform layer, miniaudio (its decoders), Essentia (its descriptors: vendored, AGPLv3, [licensing.md](licensing.md)), HUMANBRO's runtime (`humanbro`, vendored; its model in intelligence/models) | [intelligence.md](intelligence.md) |
+| Platform | [platform/src/platform](../platform/src/platform) | `sub_platform` (namespace `sub::platform`) | the C++ standard library and the system's own calls (one file per system) | [platform.md](platform.md) |
 | Plug-in scanner | [tools/scanner](../tools/scanner/main.cpp) | `substation-scan`, a program of its own | `sub_engine` | [app/plugin-scanner.md](app/plugin-scanner.md) |
 
 [ui/main.cpp](../ui/main.cpp) puts the layers together: it makes the `QGuiApplication`, the engine, the
@@ -99,7 +106,8 @@ source file's `#include` lines and fails if:
 
 | Folder | Must not include |
 |---|---|
-| `engine/src`, `browser/src`, `intelligence/src` | anything of Qt (`Q...`, `qt...`), `app/` or `ui/` |
+| `platform/src`, `engine/src`, `browser/src`, `intelligence/src` | anything of Qt (`Q...`, `qt...`), `app/` or `ui/` |
+| `platform/src` | the engine's, the browser backend's or the intelligence module's headers: they all stand on it |
 | `intelligence/src` | the engine's headers, the browser backend's headers (it decodes through the `miniaudio` library and analyses with `essentia`, third-party targets of their own) |
 | `app/src` | Qt Quick or QML (`QtQuick`, `QtQml`, `QQuick*`, `QQml*`, `QJSValue`, `QJSEngine`) or `ui/` |
 | `ui/src` | the engine's headers (any header under `engine/src` by its name, miniaudio, the VST 3 SDK) |

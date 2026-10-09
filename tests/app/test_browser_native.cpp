@@ -39,7 +39,6 @@
 
 #include "Browser.h"
 #include "BrowserReference.h"
-#include "Platform.h"
 #include "Search.h"
 #include "Text.h"
 #include "browser/BrowserSearch.h"
@@ -47,6 +46,8 @@
 #include "browser/ItemListModel.h"
 #include "browser/Library.h"
 #include "browser/PathKeys.h"
+#include "platform/Bytes.h"
+#include "platform/Paths.h"
 
 using namespace sub::app;
 namespace backend = sub::browser;
@@ -102,30 +103,14 @@ constexpr uint32_t kMaxFiles = 300000;
 constexpr uint32_t kMaxDepth = 16;
 
 struct Fnv {
-    uint64_t hash = 0xcbf29ce484222325ull;
-    void add(std::string_view data) {
-        for (const char c : data) hash = (hash ^ static_cast<unsigned char>(c)) * 0x100000001b3ull;
-    }
+    uint64_t hash = sub::platform::kFnvOffsetBasis;
+    void add(std::string_view data) { hash = sub::platform::fnv1a(data, hash); }
 };
 
 // One code point as WTF-8 (surrogates too, as Python's surrogatepass).
 std::string utf8(uint32_t c) {
     std::string out;
-    if (c < 0x80) {
-        out += static_cast<char>(c);
-    } else if (c < 0x800) {
-        out += static_cast<char>(0xC0 | (c >> 6));
-        out += static_cast<char>(0x80 | (c & 0x3F));
-    } else if (c < 0x10000) {
-        out += static_cast<char>(0xE0 | (c >> 12));
-        out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
-        out += static_cast<char>(0x80 | (c & 0x3F));
-    } else {
-        out += static_cast<char>(0xF0 | (c >> 18));
-        out += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
-        out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
-        out += static_cast<char>(0x80 | (c & 0x3F));
-    }
+    sub::platform::appendUtf8(out, c);
     return out;
 }
 
@@ -435,16 +420,16 @@ private Q_SLOTS:
 #ifdef _WIN32
         // os.path.normcase: backslashes and Windows' own lower case (no final
         // sigma, no ß expanded).
-        QCOMPARE(QString::fromStdString(backend::platform::pathKey("C:\\Samples\\Kick.WAV")), QStringLiteral("c:\\samples\\kick.wav"));
-        QCOMPARE(QString::fromStdString(backend::platform::pathKey(QStringLiteral("D:/\u00c0\u03a3/X.wav").toStdString())),
+        QCOMPARE(QString::fromStdString(sub::platform::pathKey("C:\\Samples\\Kick.WAV")), QStringLiteral("c:\\samples\\kick.wav"));
+        QCOMPARE(QString::fromStdString(sub::platform::pathKey(QStringLiteral("D:/\u00c0\u03a3/X.wav").toStdString())),
                  QStringLiteral("d:\\\u00e0\u03c3\\x.wav"));
-        QCOMPARE(QString::fromStdString(backend::platform::pathKey(QStringLiteral("E:\\Stra\u00dfe\\\u0391\u03a3.flac").toStdString())),
+        QCOMPARE(QString::fromStdString(sub::platform::pathKey(QStringLiteral("E:\\Stra\u00dfe\\\u0391\u03a3.flac").toStdString())),
                  QStringLiteral("e:\\stra\u00dfe\\\u03b1\u03c3.flac"));
         QCOMPARE(audioKey(QStringLiteral("C:/x/y/../Kick.WAV")), QStringLiteral("audio:c:\\x\\kick.wav"));
 #else
         // Elsewhere names keep their case: "Kick.wav" and "kick.wav" are two files.
-        QCOMPARE(backend::platform::pathKey("/Samples/Kick.WAV"), std::string("/Samples/Kick.WAV"));
-        QCOMPARE(backend::platform::nameKey("Kick.WAV"), std::string("Kick.WAV"));
+        QCOMPARE(sub::platform::pathKey("/Samples/Kick.WAV"), std::string("/Samples/Kick.WAV"));
+        QCOMPARE(sub::platform::nameKey("Kick.WAV"), std::string("Kick.WAV"));
         QCOMPARE(audioKey(QStringLiteral("/x/y/../Kick.WAV")), QStringLiteral("audio:/x/Kick.WAV"));
         QVERIFY(audioKey(QStringLiteral("/x/Kick.wav")) != audioKey(QStringLiteral("/x/kick.wav")));
 #endif

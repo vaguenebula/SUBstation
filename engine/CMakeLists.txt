@@ -1,7 +1,7 @@
 # The real-time audio engine: DSP, the routing graph, VST3 hosting, MIDI input,
 # recording, rendering and real-time scheduling. A static library with no Qt
 # (and no other UI) dependency: the application layer (app/) drives it through
-# Engine.h. tests/boundaries.cmake checks that nothing here includes Qt.
+# Engine.h. cmake/CheckBoundaries.cmake checks that nothing here includes Qt.
 
 # miniaudio is compiled once, as C, in its own translation unit.
 add_library(miniaudio STATIC src/miniaudio_impl.c)
@@ -234,9 +234,9 @@ target_include_directories(sub_engine PUBLIC src)
 # MIT-licensed, header-only, no further dependencies.
 target_include_directories(sub_engine SYSTEM PRIVATE third_party/signalsmith-stretch)
 target_link_libraries(sub_engine PRIVATE signalsmith_linear mp3lame)
-target_link_libraries(sub_engine PUBLIC miniaudio vst3_hosting)
+target_link_libraries(sub_engine PUBLIC sub_platform miniaudio vst3_hosting)
 if (WIN32)
-    target_link_libraries(sub_engine PUBLIC user32 ole32 uuid advapi32 winmm avrt)
+    target_link_libraries(sub_engine PUBLIC user32 ole32 uuid advapi32 winmm)
     target_compile_definitions(sub_engine PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
     target_link_libraries(sub_engine PUBLIC Threads::Threads)

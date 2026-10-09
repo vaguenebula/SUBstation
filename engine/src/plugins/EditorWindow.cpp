@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-#include "PathUtils.h"
+#include "platform/Unicode.h"
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 
 namespace sub::vst3 {
@@ -72,7 +72,7 @@ EditorWindow::EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* own
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
     if (resizable_) style |= WS_THICKFRAME;
     // Created where it will be (if known), so it has that screen's scale from the start.
-    hwnd_ = CreateWindowExW(0, kWindowClass, widen(title).c_str(), style, position ? position->x : CW_USEDEFAULT,
+    hwnd_ = CreateWindowExW(0, kWindowClass, platform::toWide(title).c_str(), style, position ? position->x : CW_USEDEFAULT,
                             position ? position->y : CW_USEDEFAULT, 400, 300, owner, nullptr, thisModule(), this);
     if (!hwnd_) {
         view_ = nullptr;
@@ -133,7 +133,7 @@ void EditorWindow::detachView() {
 }
 
 void EditorWindow::setTitle(const std::string& title) {
-    if (hwnd_) SetWindowTextW(hwnd_, widen(title).c_str());
+    if (hwnd_) SetWindowTextW(hwnd_, platform::toWide(title).c_str());
 }
 
 void EditorWindow::bringToFront() {

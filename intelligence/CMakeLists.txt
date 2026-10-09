@@ -6,8 +6,8 @@
 # by machine learning and an MCP server for agents are to come (see
 # docs/intelligence.md).
 #
-#   core/        what its parts share: decoding audio (miniaudio), the platform
-#                (Platform.cpp on Windows, PlatformPosix.cpp elsewhere)
+#   core/        what its parts share: decoding audio (miniaudio), hashing
+#                (what it needs of the operating system is sub_platform's: platform/)
 #   similarity/  sound similarity: fingerprints (made with Essentia), comparing
 #                them, and the index of a sample library kept up to date in the
 #                background
@@ -26,18 +26,13 @@ add_library(sub_intelligence STATIC
     src/similarity/Similarity.cpp
     src/similarity/SoundIndex.cpp
     src/similarity/SoundStore.cpp)
-if (WIN32)
-    target_sources(sub_intelligence PRIVATE src/core/Platform.cpp)
-    target_compile_definitions(sub_intelligence PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
-else()
-    target_sources(sub_intelligence PRIVATE src/core/PlatformPosix.cpp)
-endif()
 add_library(sub::intelligence ALIAS sub_intelligence)
 target_include_directories(sub_intelligence PUBLIC src)
+# The operating system: sub_platform (platform/), which the other layers share.
 # Decoding: miniaudio, a third-party target the engine's folder holds
 # (engine/CMakeLists.txt); nothing of the engine itself. Essentia and
 # HUMANBRO's runtime, below.
-target_link_libraries(sub_intelligence PUBLIC Threads::Threads PRIVATE miniaudio essentia humanbro)
+target_link_libraries(sub_intelligence PUBLIC sub_platform Threads::Threads PRIVATE miniaudio essentia humanbro)
 set_target_properties(sub_intelligence PROPERTIES POSITION_INDEPENDENT_CODE ON)
 sub_project_warnings(sub_intelligence)
 

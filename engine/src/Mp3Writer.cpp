@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "PathUtils.h"
+#include "platform/Paths.h"
 #include "lame.h"
 
 namespace sub {
@@ -39,7 +39,7 @@ public:
             throw std::runtime_error("The MP3 encoder can't encode at " + std::to_string(rate) + " Hz, " +
                                      std::to_string(kbps) + " kbps");
         }
-        file_.open(pathFromUtf8(path_), std::ios::binary | std::ios::trunc);
+        file_.open(platform::toPath(path_), std::ios::binary | std::ios::trunc);
         if (!file_) {
             lame_close(lame_);
             throw std::runtime_error("Could not create " + path_);
@@ -51,7 +51,7 @@ public:
         if (file_.is_open()) file_.close();
         if (!kept_) {
             std::error_code ignored;
-            std::filesystem::remove(pathFromUtf8(path_), ignored);
+            std::filesystem::remove(platform::toPath(path_), ignored);
         }
     }
 

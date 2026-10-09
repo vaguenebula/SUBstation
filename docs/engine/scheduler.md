@@ -61,8 +61,9 @@ workers rendered since the scheduler started (tests and benchmarks use it to see
 
 `Scheduler(threads)` starts `threads - 1` workers; `threads` counts the caller's.
 
-- On Windows each worker joins MMCSS as "Pro Audio" (`AvSetMmThreadCharacteristicsW`, linked with `avrt`)
-  for its life; elsewhere workers keep the default priority. Every worker flushes denormals while it renders
+- Each worker holds the platform layer's `ScopedRealtimePriority` for its life ([platform.md](../platform.md)): on
+  Windows it joins MMCSS as "Pro Audio" (`AvSetMmThreadCharacteristicsW`); elsewhere workers keep the default
+  priority for now (Linux's `SCHED_FIFO` and macOS's audio workgroups go there). Every worker flushes denormals while it renders
   (`ScopedNoDenormals`).
 - Between runs a worker spins (with `_mm_pause`) for about 50 microseconds: consecutive chunks of
   one callback come within microseconds. Then it sleeps on `state_` (`std::atomic::wait`) until

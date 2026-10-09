@@ -9,7 +9,7 @@
 #include <numeric>
 #include <optional>
 
-#include "core/Platform.h"
+#include "platform/Unicode.h"
 #include "miniaudio.h"
 
 namespace sub::intelligence {

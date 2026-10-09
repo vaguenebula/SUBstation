@@ -67,7 +67,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/Platform.h"
+#include "platform/Files.h"
 #include "similarity/FeatureExtractor.h"
 #include "similarity/Similarity.h"
 

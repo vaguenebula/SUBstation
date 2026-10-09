@@ -4,11 +4,7 @@
 #include <chrono>
 #include <xmmintrin.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#include <avrt.h>
-#endif
-
+#include "platform/Threads.h"
 #include "rt/RtUtils.h"
 
 namespace sub {
@@ -169,10 +165,7 @@ void Scheduler::work(int worker) noexcept {
 }
 
 void Scheduler::workerMain(int worker) noexcept {
-#ifdef _WIN32
-    DWORD task = 0;
-    HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task);
-#endif
+    const platform::ScopedRealtimePriority realtime;  // (MMCSS's "Pro Audio" on Windows, as the driver's thread)
     uint64_t joined = 0;  // the last run it took part in
     for (;;) {
         uint64_t state = state_.load(std::memory_order_seq_cst);
@@ -197,9 +190,6 @@ void Scheduler::workerMain(int worker) noexcept {
         state_.wait(state, std::memory_order_seq_cst);  // returns at once if a run opened meanwhile
         sleepers_.fetch_sub(1, std::memory_order_seq_cst);
     }
-#ifdef _WIN32
-    if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
-#endif
 }
 
 }  // namespace sub

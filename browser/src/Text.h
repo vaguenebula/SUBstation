@@ -6,9 +6,10 @@
 // (tools/gen_unicode_tables.py), so results don't change.
 //
 // Strings are WTF-8: UTF-8 that may also hold unpaired surrogates, which Windows
-// file names (and so Python strings) can contain. Byte order is code point order,
-// so comparing bytes compares strings as Python does. (How file names compare in
-// item keys is the platform's: see nameKey() in Platform.h.)
+// file names (and so Python strings) can contain (platform/Unicode.h). Byte order
+// is code point order, so comparing bytes compares strings as Python does. (How
+// file names compare in item keys is the platform's: see nameKey() in
+// platform/Paths.h.)
 
 #pragma once
 
@@ -17,13 +18,11 @@
 #include <string_view>
 #include <vector>
 
+#include "platform/Unicode.h"
+
 namespace sub::browser {
 
-// WTF-8 and UTF-16 (in wchar_t, as Windows' wide calls take it), both ways.
-std::string toUtf8(std::wstring_view s);
-std::wstring toWide(std::string_view s);
-
-bool isAscii(std::string_view s);
+using sub::platform::isAscii;
 
 // str.lower(), str.casefold() and str.split() (without arguments).
 std::string pyLower(std::string_view s);

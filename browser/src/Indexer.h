@@ -133,7 +133,7 @@ private:
     bool load();
     void save();
 
-    const platform::NativeString store_;
+    const std::string store_;  // the saved index (UTF-8)
     const Limits limits_;
     const std::function<void()> changed_;
 

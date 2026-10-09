@@ -6,47 +6,13 @@
 
 #include <algorithm>
 
-#include "Text.h"
-
 namespace sub::browser::platform {
-
-namespace {
-
-// Windows' own lower case (LCMapStringEx, invariant locale): what
-// os.path.normcase() uses, so item keys come out as Python made them.
-std::wstring lowerCase(std::wstring_view s) {
-    if (s.empty()) return {};
-    std::wstring lowered(s.size(), L'\0');
-    const int n = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, s.data(), static_cast<int>(s.size()),
-                                lowered.data(), static_cast<int>(lowered.size()), nullptr, nullptr, 0);
-    if (n <= 0) return std::wstring(s);
-    lowered.resize(static_cast<size_t>(n));
-    return lowered;
-}
-
-}  // namespace
-
-std::string toUtf8(const NativeString& s) { return sub::browser::toUtf8(s); }
-
-NativeString fromUtf8(std::string_view s) { return sub::browser::toWide(s); }
-
-bool isSeparator(char c) { return c == '\\' || c == '/'; }
-
-std::string nameKey(std::string_view name) { return sub::browser::toUtf8(lowerCase(sub::browser::toWide(name))); }
-
-std::string pathKey(std::string_view path) {
-    std::wstring wide = sub::browser::toWide(path);
-    std::replace(wide.begin(), wide.end(), L'/', L'\\');
-    return sub::browser::toUtf8(lowerCase(wide));
-}
 
 bool listFolder(const NativeString& path, std::vector<Entry>& out) {
     out.clear();
     // The pattern os.scandir uses: path, a backslash unless it ends in one, '*'.
     std::wstring pattern = path;
-    const wchar_t last = pattern.empty() ? L'\0' : pattern.back();
-    if (last != L'\\' && last != L'/' && last != L':') pattern += L'\\';
-    pattern += L'*';
+    appendName(pattern, std::wstring_view(L"*"));
     WIN32_FIND_DATAW data;
     HANDLE find = FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr,
                                    FIND_FIRST_EX_LARGE_FETCH);
@@ -83,12 +49,6 @@ std::optional<uint64_t> folderTime(const NativeString& path) {
     const BOOL ok = GetFileInformationByHandleEx(handle, FileBasicInfo, &info, sizeof(info));
     CloseHandle(handle);
     return ok ? static_cast<uint64_t>(info.LastWriteTime.QuadPart) : 0;
-}
-
-void enterBackgroundMode() { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN); }
-
-bool replaceFile(const NativeString& from, const NativeString& to) {
-    return MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
 }
 
 // --- Event ----------------------------------------------------------------------------

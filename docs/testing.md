@@ -21,7 +21,8 @@ ctest --test-dir build -N                      # list them without running
 ```
 
 CTest knows each test program as one test: `boundaries`, `engine` (all of `engine_tests`), `intelligence` (all of
-`intelligence_tests`, which runs and filters as `engine_tests` does, with the same harness), and one per
+`intelligence_tests`) and `platform` (all of `platform_tests`, the platform layer's: [platform.md](platform.md)), the
+last two running and filtering as `engine_tests` does, with the same harness, and one per
 `tests/app/test_*.cpp`, by its name (`test_editor_racks`, `test_ui_arrangement`...). Each Qt Test program keeps its
 settings in a folder of its own (see [tests/app/support](#testsappsupport)), so `-j` is safe.
 
@@ -88,7 +89,7 @@ device editor, the windows they drive), to look at.
 
 ```
 tests/
-  CMakeLists.txt        the boundary check, engine_tests, intelligence_tests, and a program per tests/app/test_*.cpp
+  CMakeLists.txt        the boundary check, engine_tests, intelligence_tests, platform_tests, and a program per tests/app/test_*.cpp
   TestPlugins.cmake     the test VST3 bundle and, with the ASIO SDK, the fake ASIO driver
   engine/
     harness/            the engine tests' harness (no Qt)
@@ -96,6 +97,8 @@ tests/
   intelligence/
     Sounds.h            drum hits, tones and loops made from formulas, written as WAV files
     test_*.cpp          the intelligence module's tests: intelligence_tests (the engine tests' harness)
+  platform/
+    test_*.cpp          the platform layer's tests: platform_tests (the engine tests' harness)
   app/
     support/            what the application layer's and the UI's tests share (sub_app_test_support)
     test_*.cpp          a Qt Test program each; test_ui_* link the UI too
@@ -104,7 +107,7 @@ tests/
 ```
 
 Sources are globbed: a new `tests/engine/test_*.cpp` joins `engine_tests`, a new `tests/intelligence/test_*.cpp`
-joins `intelligence_tests`, and a new `tests/app/test_*.cpp` is a new program, on the next configure (`ninja` checks
+joins `intelligence_tests`, a new `tests/platform/test_*.cpp` joins `platform_tests`, and a new `tests/app/test_*.cpp` is a new program, on the next configure (`ninja` checks
 the globs).
 
 ### tests/engine/harness

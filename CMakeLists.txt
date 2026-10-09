@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.26)
 project(SUBstation VERSION 0.2.0 LANGUAGES C CXX)
 
-# Three layers, each a library of its own (see docs/architecture.md):
+# The layers, each a library of its own (see docs/architecture.md):
+#   platform/      what they need from the operating system (no Qt)  -> sub_platform
 #   engine/        the real-time audio engine (no Qt)                -> sub_engine
 #   browser/       the browser's file index and search (no Qt)      -> sub_browser
 #   intelligence/  sound similarity, and later more (no Qt)          -> sub_intelligence
@@ -44,6 +45,7 @@ include(cmake/Warnings.cmake)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+add_subdirectory(platform)
 add_subdirectory(engine)
 add_subdirectory(browser)
 add_subdirectory(intelligence)  # (after the engine: it decodes with its miniaudio target)

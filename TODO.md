@@ -582,8 +582,9 @@ Later
 Windows stays as it is (WASAPI, ASIO, WinMM, Win32 editors). Linux and macOS
 get native backends of their own: **PipeWire** on Linux, **Core Audio** on
 macOS. Each platform's code is a file of its own behind the seams that exist
-(`AudioBackend`, `MidiInput`, `EditorWindow`, `Platform.h`), never `#ifdef`s
-through the engine. Stages in order; each lands with its CI job green.
+(`AudioBackend`, `MidiInput`, `EditorWindow`, the platform layer `platform/`),
+never `#ifdef`s through the engine. Stages in order; each lands with its CI
+job green.
 
 Stage 1 — The real-time base (both)
 - [ ] arm64 builds: the AVX2 flags (`engine/CMakeLists.txt`) for x86_64 only;
@@ -652,10 +653,12 @@ Stage 4 — Plug-ins
       editor tests run on Linux (Xvfb) and macOS.
 
 Stage 5 — The rest of the platform layer
-- [ ] macOS file watching for the browser (`PlatformPosix.cpp` has inotify
-      only): FSEvents.
+- [ ] macOS file watching for the browser (`FolderWatcherNone.cpp` there now;
+      Linux's is `FolderWatcherInotify.cpp`): FSEvents, a `FolderWatcher` of
+      its own.
 - [ ] Thread priorities for the browser's and intelligence's background
-      threads on macOS (QoS classes).
+      threads on macOS (QoS classes): `enterBackgroundMode()` in
+      `platform/src/platform/PlatformPosix.cpp`, which both use.
 - [ ] Plug-in paths checked on macOS (`/Library/Audio/Plug-Ins/VST3`,
       `~/Library/...`) and Linux (`~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`).
 
