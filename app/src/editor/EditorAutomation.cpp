@@ -12,18 +12,10 @@
 
 namespace sub::app {
 
+using editing::distinct;
 using editing::Macro;
 
 namespace {
-
-// These lanes, each once, in their order.
-QList<LaneRef> distinct(const QList<LaneRef>& lanes) {
-    QList<LaneRef> result;
-    for (const LaneRef& lane : lanes) {
-        if (!result.contains(lane)) result.append(lane);
-    }
-    return result;
-}
 
 std::vector<int> indexList(const QList<int>& indices) { return {indices.begin(), indices.end()}; }
 

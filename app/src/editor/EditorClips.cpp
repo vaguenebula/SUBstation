@@ -22,6 +22,7 @@
 
 namespace sub::app {
 
+using editing::frozenText;
 using editing::Macro;
 
 namespace {
@@ -44,6 +45,15 @@ std::vector<Clip> movedBlock(const std::vector<Clip>& clips, double start, doubl
         kept.push_back(std::move(piece));
     }
     return edits::resolveOverlaps(kept, ids, tempo);
+}
+
+// The clips but those of these ids, in their order.
+std::vector<Clip> clipsWithout(const std::vector<Clip>& clips, const QSet<QString>& ids) {
+    std::vector<Clip> kept;
+    for (const Clip& c : clips) {
+        if (!ids.contains(c.id)) kept.push_back(c);
+    }
+    return kept;
 }
 
 // Clip ids by track, in the order the tracks come in `refs`.
@@ -91,8 +101,7 @@ bool ProjectEditor::commitMoved(const QString& text, const QMap<QString, std::ve
     for (auto it = envelopes.constBegin(); it != envelopes.constEnd(); ++it) {
         const auto& [owner, key] = it.key();
         if (laneFrozen(owner, key) && !carriesFrozen(owner, carried)) {
-            Q_EMIT refused(QStringLiteral("%1 is frozen: unfreeze it to change its automation")
-                               .arg(p.track(*p.frozenBy(owner)).name));
+            Q_EMIT refused(frozenText(p.track(*p.frozenBy(owner)).name, QStringLiteral("its automation")));
             return false;
         }
     }
@@ -172,7 +181,7 @@ ClipRefs ProjectEditor::addClips(const QString& trackId, double startBeat,
     Project& p = *project_;
     if (sources.empty()) return {};
     if (!trackId.isEmpty() && p.isFrozen(trackId) && p.track(trackId).isAudio()) {
-        Q_EMIT refused(QStringLiteral("%1 is frozen: unfreeze it to change its clips").arg(p.track(*p.frozenBy(trackId)).name));
+        Q_EMIT refused(frozenText(p.track(*p.frozenBy(trackId)).name, QStringLiteral("its clips")));
         return {};
     }
     QString target = trackId;
@@ -294,9 +303,7 @@ ClipRefs ProjectEditor::moveClips(const ClipRefs& refs, double deltaBeats, int t
     for (const auto& [_, clip] : moving) movingIds.insert(clip.id);
     if (!copyClips) {
         for (const auto& [trackId, _] : moving) {
-            auto& list = lists[trackId];
-            list.erase(std::remove_if(list.begin(), list.end(), [&](const Clip& c) { return movingIds.contains(c.id); }),
-                       list.end());
+            std::erase_if(lists[trackId], [&](const Clip& c) { return movingIds.contains(c.id); });
             affected.insert(trackId);
         }
     }
@@ -355,11 +362,7 @@ void ProjectEditor::updateClips(const ClipRefs& refs, const std::function<Clip(c
 void ProjectEditor::deleteClips(const ClipRefs& refs) {
     QMap<QString, std::vector<Clip>> after;
     for (const auto& [trackId, ids] : idsByTrack(refs)) {
-        std::vector<Clip> kept;
-        for (const Clip& c : project_->track(trackId).clips) {
-            if (!ids.contains(c.id)) kept.push_back(c);
-        }
-        after.insert(trackId, kept);
+        after.insert(trackId, clipsWithout(project_->track(trackId).clips, ids));
     }
     commitClips(refs.size() > 1 ? QStringLiteral("Delete Clips") : QStringLiteral("Delete Clip"), after);
 }
@@ -411,10 +414,7 @@ ClipRefs ProjectEditor::consolidateClips(const ClipRefs& refs) {
         const Clip clip = edits::consolidateMidi(clips);
         QSet<QString> ids;
         for (const Clip& c : clips) ids.insert(c.id);
-        std::vector<Clip> kept;
-        for (const Clip& c : project_->track(trackId).clips) {
-            if (!ids.contains(c.id)) kept.push_back(c);
-        }
+        std::vector<Clip> kept = clipsWithout(project_->track(trackId).clips, ids);
         kept.push_back(clip);
         after.insert(trackId, edits::resolveOverlaps(kept, {clip.id}, tempo));
         joined.append({trackId, clip.id});
@@ -512,11 +512,18 @@ bool ProjectEditor::deleteRange(double start, double end, const QStringList& tra
         Q_EMIT refused(*problem);
         return false;
     }
+    return commitMoved(QStringLiteral("Delete Time Selection"), after, clearedAutomation(start, end, tracks),
+                       frozenWithout(tracks, start, end));
+}
+
+QMap<QString, std::vector<Clip>> ProjectEditor::frozenWithout(const QStringList& trackIds, double start,
+                                                              double end) const {
+    const double tempo = project_->tempo();
     QMap<QString, std::vector<Clip>> frozen;
-    for (const QString& holder : frozenRenders(tracks)) {
+    for (const QString& holder : frozenRenders(trackIds)) {
         frozen.insert(holder, edits::removeRange(frozenSegments(holder), start, end, tempo));
     }
-    return commitMoved(QStringLiteral("Delete Time Selection"), after, clearedAutomation(start, end, tracks), frozen);
+    return frozen;
 }
 
 std::optional<ClipRefs> ProjectEditor::duplicateRange(double start, double end, const QStringList& trackIds) {
@@ -623,11 +630,7 @@ std::optional<ClipboardContent> ProjectEditor::cutRange(double start, double end
             if (points != current) envelopes.insert({copied.trackId, key}, points);
         }
     }
-    QMap<QString, std::vector<Clip>> frozen;
-    for (const QString& holder : frozenRenders(tracks)) {
-        frozen.insert(holder, edits::removeRange(frozenSegments(holder), start, end, tempo));
-    }
-    if (!commitMoved(QStringLiteral("Cut"), after, envelopes, frozen)) return std::nullopt;
+    if (!commitMoved(QStringLiteral("Cut"), after, envelopes, frozenWithout(tracks, start, end))) return std::nullopt;
     return content;
 }
 
@@ -841,10 +844,7 @@ QMap<QString, std::vector<Clip>> ProjectEditor::changedInRange(double start, dou
             }
         }
         if (inside.empty()) continue;
-        std::vector<Clip> kept;
-        for (const Clip& c : clips) {
-            if (!ids.contains(c.id)) kept.push_back(c);
-        }
+        std::vector<Clip> kept = clipsWithout(clips, ids);
         for (const Clip& c : edits::removeRange(inside, start, end, tempo)) kept.push_back(c);
         for (const Clip& c : edits::sliceRange(inside, start, end, tempo, true)) {
             const Clip piece = change(c);

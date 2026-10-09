@@ -26,6 +26,7 @@
 namespace sub::app {
 
 using editing::clampIndex;
+using editing::frozenText;
 using editing::Macro;
 using editing::skeleton;
 
@@ -48,10 +49,6 @@ QStringList deviceAndChainIds(const Device& device) {
     for (const Device* d : iterDevices(holder)) ids.append(d->id);
     for (const ConstRackChain& rc : iterChains(std::as_const(holder))) ids.append(rc.chain->id);
     return ids;
-}
-
-QString frozenHolderText(const QString& name) {
-    return QStringLiteral("%1 is frozen: unfreeze it to change what is in it").arg(name);
 }
 
 }  // namespace
@@ -148,7 +145,7 @@ void ProjectEditor::deleteTracks(const QStringList& trackIds) {
         if (!doomed.contains(track.id)) continue;
         const auto holder = p.frozenBy(track.id);
         if (holder && !doomed.contains(*holder)) {
-            Q_EMIT refused(frozenHolderText(p.track(*holder).name));
+            Q_EMIT refused(frozenText(p.track(*holder).name, QStringLiteral("what is in it")));
             return;
         }
     }

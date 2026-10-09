@@ -6,6 +6,7 @@
 #include "model/Device.h"
 #include "model/Track.h"
 
+#include <QList>
 #include <QString>
 #include <QUndoStack>
 
@@ -27,6 +28,22 @@ public:
 private:
     QUndoStack* stack_;
 };
+
+// The items of a list (ids, lanes), each once, in their order.
+template <typename T>
+QList<T> distinct(const QList<T>& items) {
+    QList<T> result;
+    for (const T& item : items) {
+        if (!result.contains(item)) result.append(item);
+    }
+    return result;
+}
+
+// What a frozen track (named `name`) says when an edit of `what` ("its
+// clips", "what is in it") is refused: its audio holds it.
+inline QString frozenText(const QString& name, const QString& what) {
+    return QStringLiteral("%1 is frozen: unfreeze it to change %2").arg(name, what);
+}
 
 // An index into a list of `size` (< 0: past its end), held to it.
 inline int clampIndex(int index, int size) { return index < 0 ? size : std::min(index, size); }

@@ -18,20 +18,9 @@
 
 namespace sub::app {
 
+using editing::distinct;
+using editing::frozenText;
 using editing::Macro;
-
-namespace {
-
-// Track ids, each once, in their order.
-QStringList distinct(const QStringList& ids) {
-    QStringList result;
-    for (const QString& id : ids) {
-        if (!result.contains(id)) result.append(id);
-    }
-    return result;
-}
-
-}  // namespace
 
 QStringList ProjectEditor::freezeTracks(const OrderedMap<QString, Freeze>& freezes) {
     const Project& p = *project_;
@@ -170,7 +159,7 @@ std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command)
     }
     for (const QString& id : tracks) {
         if (!p.hasOwner(id) || !p.isFrozen(id)) continue;
-        return QStringLiteral("%1 is frozen: unfreeze it to change its %2").arg(p.track(*p.frozenBy(id)).name, what);
+        return frozenText(p.track(*p.frozenBy(id)).name, QStringLiteral("its ") + what);
     }
     return std::nullopt;
 }
@@ -256,9 +245,7 @@ std::optional<QString> ProjectEditor::heldProblem(const QStringList& trackIds) c
     const Project& p = *project_;
     for (const QString& id : trackIds) {
         const auto holder = p.frozenBy(id);
-        if (holder && *holder != id) {
-            return QStringLiteral("%1 is frozen: unfreeze it to change what is in it").arg(p.track(*holder).name);
-        }
+        if (holder && *holder != id) return frozenText(p.track(*holder).name, QStringLiteral("what is in it"));
     }
     return std::nullopt;
 }
@@ -286,9 +273,7 @@ std::optional<QString> ProjectEditor::arrangementProblem(const TrackTree& tree, 
         if (entry.parent == before.value(entry.id)) continue;
         auto frozen = holder(entry.id, before);
         if (!frozen) frozen = holder(entry.id, after);
-        if (frozen) {
-            return QStringLiteral("%1 is frozen: unfreeze it to change what is in it").arg(p.track(*frozen).name);
-        }
+        if (frozen) return frozenText(p.track(*frozen).name, QStringLiteral("what is in it"));
     }
     return std::nullopt;
 }
