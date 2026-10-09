@@ -301,7 +301,8 @@ best: the fit stays on the defaults until the answers show clearly that they're
 off, rather than following a few hundred close calls' noise. It prints the pull, how often a repeated question got the same answer,
 how many answers the default and fitted weights agree with on answers left out
 of the fit (five-fold, grouped by A), and each weight with a 90% interval
-(refitted 200 times on the answers drawn again). The rest of the run then uses
+(refitted 200 times on the answers drawn again, without the pull: what the
+answers alone allow). The rest of the run then uses
 the fitted weights, so a labelled library's P@10 shows whether they still find
 sounds of the same kind. Rate and fit on the same library: distances are in its
 spreads.

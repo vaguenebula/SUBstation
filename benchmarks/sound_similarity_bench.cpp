@@ -614,7 +614,8 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
                 100.0 * heldOutDefaults / answers.size(), 100.0 * heldOutFitted / answers.size(),
                 100.0 * agreement(answers, all, fitted));
 
-    // How sure each weight is: refitted on the answers drawn again (by A, 200 times).
+    // How sure each weight is: refitted on the answers drawn again (by A, 200
+    // times), unpulled: with the pull the intervals would only show the defaults.
     std::map<std::string, std::vector<size_t>> byAnchor;
     for (size_t i = 0; i < answers.size(); ++i) byAnchor[answers[i].anchor].push_back(i);
     std::array<std::vector<float>, kAspects> drawn;
@@ -625,11 +626,11 @@ std::optional<AspectWeights> fitRatings(const std::vector<Sound>& sounds, const 
             const auto& those = byAnchor[anchors[pick(random)]];
             use.insert(use.end(), those.begin(), those.end());
         }
-        const AspectWeights w = weightsOf(fitAnswers(answers, use, pull));
+        const AspectWeights w = weightsOf(fitAnswers(answers, use, 0.0));
         for (size_t a = 0; a < kAspects; ++a) drawn[a].push_back(w.weight[a]);
     }
     const AspectWeights defaults;
-    std::printf("  %-13s %8s %8s %16s\n", "aspect", "default", "fitted", "90% interval");
+    std::printf("  %-13s %8s %8s %26s\n", "aspect", "default", "fitted", "90% interval, answers alone");
     for (size_t a = 0; a < kAspects; ++a) {
         auto& d = drawn[a];
         std::sort(d.begin(), d.end());
