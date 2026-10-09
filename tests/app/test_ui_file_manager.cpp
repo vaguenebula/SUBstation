@@ -13,6 +13,7 @@
 #include <QQuickWindow>
 #include <QSettings>
 #include <QTest>
+#include <QtQuickTest/quicktest.h>
 
 #include <memory>
 #include <utility>
@@ -223,6 +224,9 @@ private Q_SLOTS:
         test::click(window_, test::centerOf(button));
         QVERIFY(hotSwap().active());
         QTRY_VERIFY(bar->isVisible());
+        // (laid out first: shown again, the bar is where it was until then, under the Similar bar
+        // if that moved up while it was hidden: the click could end up on that bar's ✕)
+        QVERIFY(QQuickTest::qWaitForPolish(window_));
         test::click(window_, test::centerOf(item("stopHotSwap")));
         QVERIFY(!hotSwap().active());
         test::click(window_, test::centerOf(button));
