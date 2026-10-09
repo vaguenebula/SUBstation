@@ -439,8 +439,7 @@ column, from its indent, its **name bar** in its colour (`barColor()`), the name
 name row, a group's down to its choosers (`kGroupBlock`, 38 px: two rows) or, without them, all its name column;
 below, a shade of its colour (the header's ground tinted with it), the choosers' ground, as for each lane below it.
 On the name bar: the fold button (a triangle in a circle for a track, pointing right while folded; three bars in a
-circle for a group, the same folded or open, as Ableton's), the snowflake of a frozen track (dimmer in a frozen group, not frozen
-itself), and its name (bold while it is selected, a return's and the master's always; a group's as a track's). A
+circle for a group, the same folded or open, as Ableton's) and its name (bold while it is selected, a return's and the master's always; a group's as a track's). A
 return's name bar has no fold button; the master's is named "Main", as in Ableton 12.
 The name bar, the fold button and every control are `kNameButton` (16 px) high, `kRow` (18 px) apart from
 `kNamePad` (2 px) below the top, so a folded track's name row is centred in its 21 px (2 px above and below them,

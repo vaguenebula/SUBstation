@@ -15,7 +15,6 @@
 #include "session/AudioPreferences.h"
 #include "session/Selection.h"
 #include "sg/SgPainter.h"
-#include "theme/Icons.h"
 #include "theme/Theme.h"
 
 #include <QCursor>
@@ -23,7 +22,6 @@
 #include <QHoverEvent>
 #include <QMouseEvent>
 #include <QPolygonF>
-#include <QQuickWindow>
 #include <QStyleHints>
 #include <QVariantMap>
 #include <QWheelEvent>
@@ -334,10 +332,8 @@ QVariantList TrackHeaderItem::lanes() const {
 }
 
 qreal TrackHeaderItem::nameLeft() const {
-    const app::Project* p = project();
-    const bool frozen = p && !isMaster() && p->frozenBy(trackId_).has_value();
-    if (isReturn() || isMaster()) return 6 + (frozen ? kSnowflake + 3 : 0);
-    return foldRect().right() + 3 + (p && p->isFrozen(trackId_) ? kSnowflake + 3 : 0);
+    if (isReturn() || isMaster()) return 6;
+    return foldRect().right() + 3;
 }
 
 QRectF TrackHeaderItem::foldRect() const {
@@ -407,10 +403,6 @@ void TrackHeaderItem::connectAll() {
         update();  // its indent follows the groups
     });
     connect(p, &app::Project::reset, this, &TrackHeaderItem::refresh);
-    connect(p, &app::Project::freezeChanged, this, [this] {  // (and what is in it)
-        Q_EMIT changed();
-        update();
-    });
     connect(p, &app::Project::automationViewChanged, this, [this](const QString& owner) {
         if (owner == trackId_) refreshChoosers();
     });
@@ -435,15 +427,6 @@ void TrackHeaderItem::connectAll() {
         if (id == trackId_) startRename();
     });
     refresh();
-}
-
-void TrackHeaderItem::itemChange(ItemChange change, const ItemChangeData& value) {
-    SgCanvas::itemChange(change, value);
-    if (change == ItemSceneChange && value.window) {
-        const qreal dpr = value.window->effectiveDevicePixelRatio();
-        snowflake_ = Icons::image(QStringLiteral("snowflake"), static_cast<int>(std::ceil(kSnowflake * dpr)));
-        update();
-    }
 }
 
 void TrackHeaderItem::refresh() {
@@ -1328,7 +1311,6 @@ void TrackHeaderItem::paint(SgPainter& p) {
     const bool isSelected = selected();
     p.fillRect(QRectF(0, 0, w, h), isSelected ? Theme::kLaneSelected : Theme::kPanelAlt);
     if (!t) return;
-    const app::Project& project = *this->project();
     const double main = row_.mainHeight;
     const bool strip = isReturn() || isMaster();  // (no fold button, no bands)
     // The name column: from the group bands to the In/Out column (or the mixer's).
@@ -1354,16 +1336,6 @@ void TrackHeaderItem::paint(SgPainter& p) {
     const QColor ink = barText();
     const QColor dimInk = QColor::fromRgbF(0.5 * (ink.redF() + color.redF()), 0.5 * (ink.greenF() + color.greenF()),
                                            0.5 * (ink.blueF() + color.blueF()));
-    const auto drawFrozen = [&](double x) {
-        // A snowflake in the name row if it is frozen (dimmer if it is in a frozen group, not frozen itself).
-        const auto holder = project.frozenBy(trackId_);
-        if (!holder || snowflake_.isNull()) return false;
-        p.save();
-        p.setOpacity(*holder == trackId_ ? 1.0 : 0.5);
-        p.drawImage(QRectF(x, kNamePad + (kNameButton - kSnowflake) / 2, kSnowflake, kSnowflake), snowflake_);
-        p.restore();
-        return true;
-    };
     if (!strip) {
         // The fold button, in a circle. A track's: a triangle, pointing right
         // while folded, down while open. A group's: three bars (its tracks),
@@ -1391,7 +1363,6 @@ void TrackHeaderItem::paint(SgPainter& p) {
         }
         p.restore();
     }
-    drawFrozen(strip ? 6 : foldRect().right() + 3);
     if (!renaming_) {
         const QFont font = uiFont(9, isSelected || strip);
         const double nameX = nameLeft();
