@@ -4,7 +4,9 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <numbers>
+#include <numeric>
 #include <optional>
 
 #include "core/Platform.h"
@@ -42,16 +44,15 @@ bool isMp3(const std::string& path) {
     return ext == ".mp3";
 }
 
-// Decodes at the rate `rateFor` picks for the file's own (0: its own).
-template <typename RateFor>
-MonoAudio decodeMono(const std::string& path, double startSeconds, double maxSeconds, RateFor rateFor) {
+}  // namespace
+
+MonoAudio readMono(const std::string& path, double startSeconds, double maxSeconds, uint32_t maxSampleRate) {
     Decoder native(path, ma_decoder_config_init(ma_format_f32, 0, 0));
     const uint32_t channels = native.get()->outputChannels;
     const uint32_t rate = native.get()->outputSampleRate;
     if (channels == 0 || rate == 0) throw AudioError("no audio");
-    const uint32_t wantedRate = rateFor(rate);
-    const uint32_t outRate = wantedRate ? wantedRate : rate;
-    std::optional<Decoder> resampled;  // only at another rate than the file's
+    const uint32_t outRate = std::min(rate, maxSampleRate);
+    std::optional<Decoder> resampled;  // only above the highest rate analysed
     if (outRate != rate) {
         ma_decoder_config config = ma_decoder_config_init(ma_format_f32, channels, outRate);
         config.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER;
@@ -96,18 +97,13 @@ MonoAudio decodeMono(const std::string& path, double startSeconds, double maxSec
     return audio;
 }
 
-}  // namespace
-
-MonoAudio readMono(const std::string& path, double startSeconds, double maxSeconds, uint32_t maxSampleRate) {
-    return decodeMono(path, startSeconds, maxSeconds, [maxSampleRate](uint32_t rate) { return std::min(rate, maxSampleRate); });
-}
-
-MonoAudio readMonoAt(const std::string& path, double startSeconds, double maxSeconds, uint32_t sampleRate) {
+MonoAudio readMonoAt(const std::string& path, double startSeconds, double maxSeconds, uint32_t sampleRate,
+                     const std::atomic<bool>* cancel) {
     MonoAudio audio = readMono(path, startSeconds, maxSeconds, std::numeric_limits<uint32_t>::max());
     if (audio.sampleRate != sampleRate) {
-        audio.samples = resampleMono(audio.samples.data(), audio.samples.size(), audio.sampleRate, sampleRate);
+        audio.samples = resampleMono(audio.samples.data(), audio.samples.size(), audio.sampleRate, sampleRate, cancel);
         audio.sampleRate = sampleRate;
-        if (audio.samples.empty()) throw AudioError("no audio");
+        if (audio.samples.empty() && !(cancel && cancel->load(std::memory_order_relaxed))) throw AudioError("no audio");
     }
     return audio;
 }
@@ -118,11 +114,16 @@ namespace {
 // convolved with a sinc, windowed (Kaiser) to kZeroCrossings zero crossings on
 // either side, its cutoff at kPassband of the lower rate's Nyquist frequency.
 // The kernel is tabulated once, kTableSteps points a zero crossing, and read
-// with linear interpolation.
+// with linear interpolation into a filter for each phase an output sample can
+// fall at between two input samples (polyphase): `to` / gcd(from, to) of them.
 constexpr int kZeroCrossings = 16;
 constexpr int kTableSteps = 512;
 constexpr double kPassband = 0.97;
 constexpr double kKaiserBeta = 9.0;  // (about -90 dB beyond the cutoff)
+constexpr int kLanes = 8;                       // taps summed side by side (each phase's filter padded to them)
+constexpr uint64_t kMaxPhases = 1024;           // more (an odd rate: 44101 Hz), and each output's filter is made for it
+constexpr uint64_t kMaxPhaseFloats = 1u << 22;  // (16 MB)
+constexpr size_t kCancelEvery = 8192;           // output samples between looks at the cancel flag
 
 double besselI0(double x) {
     double sum = 1.0, term = 1.0;
@@ -134,48 +135,99 @@ double besselI0(double x) {
     return sum;
 }
 
-const std::vector<float>& sincTable() {
-    static const std::vector<float> table = [] {
-        std::vector<float> t(static_cast<size_t>(kZeroCrossings * kTableSteps) + 2, 0.f);
+const std::vector<double>& sincTable() {
+    static const std::vector<double> table = [] {
+        std::vector<double> t(static_cast<size_t>(kZeroCrossings * kTableSteps) + 2, 0.0);
         const double norm = besselI0(kKaiserBeta);
         for (size_t i = 0; i < t.size(); ++i) {
             const double u = static_cast<double>(i) / kTableSteps;  // in zero crossings
             const double r = u / kZeroCrossings;
             if (r > 1.0) break;
             const double sinc = u == 0.0 ? 1.0 : std::sin(std::numbers::pi * u) / (std::numbers::pi * u);
-            t[i] = static_cast<float>(sinc * besselI0(kKaiserBeta * std::sqrt(1.0 - r * r)) / norm);
+            t[i] = sinc * besselI0(kKaiserBeta * std::sqrt(1.0 - r * r)) / norm;
         }
         return t;
     }();
     return table;
 }
 
+// The filter from one rate to another.
+struct Polyphase {
+    uint32_t from = 0, to = 0;
+    uint64_t up = 0, down = 0;  // to and from over their greatest common divisor
+    double scale = 0.0;         // the kernel's time scale: zero crossings per input sample
+    int half = 0;               // input samples either side of an output's
+    size_t taps = 0;            // 2 * half + 1, padded to kLanes
+    std::vector<float> phases;  // `up` filters of `taps`, if not too many
+
+    Polyphase(uint32_t f, uint32_t t) : from(f), to(t) {
+        const uint64_t g = std::gcd(f, t);
+        up = t / g;
+        down = f / g;
+        // (Stretched when going down, so the cutoff is the output's Nyquist frequency.)
+        scale = std::min(1.0, static_cast<double>(t) / f) * kPassband;
+        half = static_cast<int>(std::ceil(kZeroCrossings / scale));
+        taps = (static_cast<size_t>(2 * half + 1) + kLanes - 1) / kLanes * kLanes;
+        if (up <= kMaxPhases && up * taps <= kMaxPhaseFloats) {
+            phases.resize(static_cast<size_t>(up) * taps);
+            for (uint64_t p = 0; p < up; ++p) filter(static_cast<double>(p) / static_cast<double>(up), &phases[p * taps]);
+        }
+    }
+
+    // The filter for an output `fraction` of an input sample after input n: tap
+    // k weighs input n - half + k.
+    void filter(double fraction, float* out) const {
+        const std::vector<double>& table = sincTable();
+        for (size_t k = 0; k < taps; ++k) {
+            const double u = std::fabs(static_cast<double>(static_cast<int>(k) - half) - fraction) * scale * kTableSteps;
+            double w = 0.0;
+            if (u < kZeroCrossings * kTableSteps) {
+                const auto i = static_cast<size_t>(u);
+                w = table[i] + (u - static_cast<double>(i)) * (table[i + 1] - table[i]);
+            }
+            out[k] = static_cast<float>(w * scale);
+        }
+    }
+};
+
+float dot(const float* a, const float* b, size_t n) {
+    float lanes[kLanes] = {};
+    for (size_t k = 0; k < n; k += kLanes)
+        for (int i = 0; i < kLanes; ++i) lanes[i] += a[k + i] * b[k + i];
+    float sum = 0.f;
+    for (const float v : lanes) sum += v;
+    return sum;
+}
+
 }  // namespace
 
-std::vector<float> resampleMono(const float* samples, size_t count, uint32_t from, uint32_t to) {
+std::vector<float> resampleMono(const float* samples, size_t count, uint32_t from, uint32_t to,
+                                const std::atomic<bool>* cancel) {
     if (from == to || count == 0 || from == 0 || to == 0) return std::vector<float>(samples, samples + count);
-    const std::vector<float>& table = sincTable();
-    // The kernel's time scale: zero crossings per input sample (stretched when
-    // going down, so its cutoff is the output's Nyquist frequency).
-    const double scale = std::min(1.0, static_cast<double>(to) / from) * kPassband;
-    const double reach = kZeroCrossings / scale;  // input samples on either side
-    const double step = static_cast<double>(from) / to;
+    // The last rates' filter, kept: a thread resamples one library's files, mostly at one rate.
+    thread_local std::unique_ptr<Polyphase> kept;
+    if (!kept || kept->from != from || kept->to != to) kept = std::make_unique<Polyphase>(from, to);
+    const Polyphase& f = *kept;
+
     const auto wanted = static_cast<size_t>(std::llround(static_cast<double>(count) * to / from));
+    // The input with `half` zeros before it, and enough after it for the last
+    // output's filter: output j is at input j * down / up.
+    const size_t lastInput = wanted ? static_cast<size_t>((wanted - 1) * f.down / f.up) : 0;
+    std::vector<float> padded(std::max(count, lastInput + 1) + f.taps + static_cast<size_t>(f.half), 0.f);
+    std::copy(samples, samples + count, padded.begin() + f.half);
+    std::vector<float> scratch(f.phases.empty() ? f.taps : 0);
     std::vector<float> out(wanted);
-    const auto last = static_cast<ptrdiff_t>(count) - 1;
     for (size_t j = 0; j < wanted; ++j) {
-        const double t = static_cast<double>(j) * step;
-        const auto first = std::max<ptrdiff_t>(0, static_cast<ptrdiff_t>(std::ceil(t - reach)));
-        const auto end = std::min<ptrdiff_t>(last, static_cast<ptrdiff_t>(std::floor(t + reach)));
-        double sum = 0.0;
-        for (ptrdiff_t k = first; k <= end; ++k) {
-            const double u = std::fabs(t - static_cast<double>(k)) * scale * kTableSteps;
-            const auto i = static_cast<size_t>(u);
-            const double a = u - static_cast<double>(i);
-            const double w = table[i] + a * (table[i + 1] - table[i]);
-            sum += w * samples[k];
-        }
-        const auto y = static_cast<float>(sum * scale);
+        if (j % kCancelEvery == 0 && cancel && cancel->load(std::memory_order_relaxed)) return {};
+        const uint64_t position = j * f.down;
+        const auto n = static_cast<size_t>(position / f.up);
+        const uint64_t phase = position % f.up;
+        const float* filter = scratch.data();
+        if (f.phases.empty())
+            f.filter(static_cast<double>(phase) / static_cast<double>(f.up), scratch.data());
+        else
+            filter = &f.phases[phase * f.taps];
+        const float y = dot(filter, padded.data() + n, f.taps);  // (padded[n] is input n - half)
         out[j] = std::isfinite(y) ? y : 0.f;
     }
     return out;

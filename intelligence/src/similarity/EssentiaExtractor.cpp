@@ -42,6 +42,8 @@ constexpr double kRolloff = 0.85;
 constexpr double kPowerFloor = 1e-12;   // (no bin quite 0: flatness's geometric mean stays finite)
 constexpr double kMelFloor = 1e-10;     // MFCC's silence threshold (-100 dB)
 constexpr double kPeakFloor = 1e-3;     // spectral peaks within 60 dB of the frame's loudest bin
+constexpr int kMaxPeaks = kBins / 2 + 1;  // (every one there can be)
+constexpr size_t kDissonancePeaks = 100;  // the lowest, which Dissonance weighs (its cost grows with their square)
 constexpr double kFrameRangeDb = 50.0;  // frames within this of the loudest are weighed in, louder ones more
 constexpr double kAttackSeconds = 0.03;
 constexpr double kBodySeconds = 0.25;
@@ -75,9 +77,9 @@ struct Frame {
     std::array<float, kMelBands> mel{};  // dB
     std::array<float, kMfccs> mfcc{};    // 1-12
     std::array<float, kContrastBands> contrast{}, valley{};
-    double skewness = 0.0, kurtosis = 0.0, crest = 0.0, hfc = 0.0, zcr = 0.0, flux = 0.0, decrease = 0.0;
+    double skewness = 0.0, kurtosis = 0.0, crest = 0.0, zcr = 0.0, flux = 0.0, decrease = 0.0;
     double complexity = 0.0, dissonance = 0.0, salience = 0.0;
-    bool hasSalience = false;
+    bool hasFlux = false, hasSalience = false;
     size_t start = 0;  // its first sample
 };
 
@@ -94,13 +96,13 @@ struct EssentiaExtractor::State {
 
     // A frame's algorithms and what they read and write (bound once).
     Algorithm windowing, spectrum, mfcc, centroid, moments, shape, rolloff, flatness, subBass, air, total;
-    Algorithm contrast, crest, hfc, zcr, flux, decrease, peaks, complexity, dissonance, salience;
+    Algorithm contrast, crest, zcr, flux, decrease, peaks, dissonance, salience;
     std::vector<Real> frame, windowed, magnitude, bandMagnitude, bandPower, melBands, mfccs, centralMoments;
     std::vector<Real> unitMagnitude, contrasts, valleys, relative, relativeBand, peakHz, peakMagnitudes;
+    std::vector<Real> dissonanceHz, dissonanceMagnitudes;
     Real centroidHz = 0, variance = 0, skewness = 0, kurtosis = 0, rolloffHz = 0, flatnessRatio = 0;
     Real subEnergy = 0, airEnergy = 0, totalEnergy = 0;
-    Real crestRatio = 0, hfcValue = 0, zcrRatio = 0, fluxValue = 0, decreaseSlope = 0, complexityCount = 0,
-         dissonanceValue = 0, salienceValue = 0;
+    Real crestRatio = 0, zcrRatio = 0, fluxValue = 0, decreaseSlope = 0, dissonanceValue = 0, salienceValue = 0;
 
     // The envelope's.
     Algorithm attack, duration, temporalCentroid;
@@ -146,16 +148,15 @@ struct EssentiaExtractor::State {
                                                     "numberBands", kContrastBands, "lowFrequencyBound", kMinHz,
                                                     "highFrequencyBound", kMaxHz));
         crest.reset(es::AlgorithmFactory::create("Crest"));
-        hfc.reset(es::AlgorithmFactory::create("HFC", "sampleRate", kRate));
         zcr.reset(es::AlgorithmFactory::create("ZeroCrossingRate"));
         flux.reset(es::AlgorithmFactory::create("Flux", "norm", "L2", "halfRectify", true));
         decrease.reset(es::AlgorithmFactory::create("Decrease", "range", 1.0));
         // Peaks of the spectrum relative to its loudest bin (so the floor is a level below it).
-        peaks.reset(es::AlgorithmFactory::create("SpectralPeaks", "sampleRate", kRate, "maxPeaks", 100, "minFrequency",
-                                                 kMinHz, "maxFrequency", kMaxHz, "magnitudeThreshold", kPeakFloor,
-                                                 "orderBy", "frequency"));
-        complexity.reset(es::AlgorithmFactory::create("SpectralComplexity", "sampleRate", kRate, "magnitudeThreshold",
-                                                      kPeakFloor));
+        // (Their count is the spectral complexity: SpectralComplexity's own
+        // peaks are fixed at 100 Hz-5 kHz.)
+        peaks.reset(es::AlgorithmFactory::create("SpectralPeaks", "sampleRate", kRate, "maxPeaks", kMaxPeaks,
+                                                 "minFrequency", kMinHz, "maxFrequency", kMaxHz, "magnitudeThreshold",
+                                                 kPeakFloor, "orderBy", "frequency"));
         dissonance.reset(es::AlgorithmFactory::create("Dissonance"));
         salience.reset(es::AlgorithmFactory::create("PitchSalience", "sampleRate", kRate, "lowBoundary", 200.0,
                                                     "highBoundary", 5000.0));
@@ -207,8 +208,6 @@ struct EssentiaExtractor::State {
         contrast->output("spectralValley").set(valleys);
         crest->input("array").set(bandPower);
         crest->output("crest").set(crestRatio);
-        hfc->input("spectrum").set(magnitude);
-        hfc->output("hfc").set(hfcValue);
         zcr->input("signal").set(frame);
         zcr->output("zeroCrossingRate").set(zcrRatio);
         flux->input("spectrum").set(relative);
@@ -218,10 +217,8 @@ struct EssentiaExtractor::State {
         peaks->input("spectrum").set(relative);
         peaks->output("frequencies").set(peakHz);
         peaks->output("magnitudes").set(peakMagnitudes);
-        complexity->input("spectrum").set(relative);
-        complexity->output("spectralComplexity").set(complexityCount);
-        dissonance->input("frequencies").set(peakHz);
-        dissonance->input("magnitudes").set(peakMagnitudes);
+        dissonance->input("frequencies").set(dissonanceHz);
+        dissonance->input("magnitudes").set(dissonanceMagnitudes);
         dissonance->output("dissonance").set(dissonanceValue);
         salience->input("spectrum").set(magnitude);
         salience->output("pitchSalience").set(salienceValue);
@@ -267,7 +264,6 @@ struct EssentiaExtractor::State {
         for (size_t k = 0; k < magnitude.size(); ++k) unitMagnitude[k] = magnitude[k] * kUnit;
         contrast->compute();
         crest->compute();
-        hfc->compute();
         zcr->compute();
         // The spectrum relative to its loudest bin: what the peaks, the flux and
         // the decrease read (level-free).
@@ -278,7 +274,9 @@ struct EssentiaExtractor::State {
         flux->compute();
         decrease->compute();
         peaks->compute();
-        complexity->compute();
+        const size_t beating = std::min(peakHz.size(), kDissonancePeaks);
+        dissonanceHz.assign(peakHz.begin(), peakHz.begin() + static_cast<ptrdiff_t>(beating));
+        dissonanceMagnitudes.assign(peakMagnitudes.begin(), peakMagnitudes.begin() + static_cast<ptrdiff_t>(beating));
         dissonance->compute();
         if (salient) salience->compute();
 
@@ -298,11 +296,10 @@ struct EssentiaExtractor::State {
         fr.skewness = std::copysign(std::log1p(std::fabs(static_cast<double>(skewness))), static_cast<double>(skewness));
         fr.kurtosis = std::log(std::max(static_cast<double>(kurtosis) + 3.0, 1e-3));  // (of the plain fourth moment)
         fr.crest = std::log10(std::max<double>(crestRatio, 1.0));
-        fr.hfc = power > 0 ? std::log2(std::max(1.0, static_cast<double>(hfcValue) / power) / 1000.0) : 0.0;
         fr.zcr = std::log2(1.0 + zcrRatio * kRate);
         fr.flux = fluxValue;
         fr.decrease = decreaseSlope;
-        fr.complexity = std::log2(1.0 + complexityCount);
+        fr.complexity = std::log2(1.0 + static_cast<double>(peakHz.size()));
         fr.dissonance = dissonanceValue;
         fr.hasSalience = salient;
         fr.salience = salient ? salienceValue : 0.0;
@@ -348,7 +345,7 @@ Extraction EssentiaExtractor::State::analyse(const float* samples, size_t count,
     // --- The spectrum, frame by frame -------------------------------------------------------
     const size_t frameCount = length <= kFrame ? 1 : 1 + (length - kFrame + kHop - 1) / kHop;
     frames.resize(frameCount);
-    flux->reset();  // (each sound's first frame is its own)
+    flux->reset();  // (each sound's first frame has no flux: nothing before it to change from)
     double loudest = -1e9;
     for (size_t t = 0; t < frameCount; ++t) {
         if (t % kCancelEvery == 0 && cancelled(cancel)) return Extraction::Cancelled;
@@ -359,6 +356,7 @@ Extraction EssentiaExtractor::State::analyse(const float* samples, size_t count,
             frame[i] = at < length ? x[at] : 0.f;
         }
         analyseFrame(fr, t % kSalienceEvery == 0);
+        fr.hasFlux = t > 0;
         loudest = std::max(loudest, fr.db);
     }
 
@@ -367,8 +365,8 @@ Extraction EssentiaExtractor::State::analyse(const float* samples, size_t count,
     std::array<std::array<Weighted, kPartMfccs>, kParts> parts{};
     std::array<Weighted, kContrastBands> contrastMean{}, valleyMean{};
     Weighted centroidMean, bandwidthMean, rolloffMean, flatnessMean, subMean, airMean, attackCentroid, attackFlatness;
-    Weighted skewnessMean, kurtosisMean, crestMean, hfcMean, zcrMean, fluxMean, decreaseMean, complexityMean,
-        dissonanceMean, salienceMean;
+    Weighted skewnessMean, kurtosisMean, crestMean, zcrMean, fluxMean, decreaseMean, complexityMean, dissonanceMean,
+        salienceMean;
     const auto attackEnd = static_cast<size_t>(kAttackSeconds * kRate);
     const auto bodyEnd = static_cast<size_t>(kBodySeconds * kRate);
     for (const Frame& fr : frames) {
@@ -396,9 +394,8 @@ Extraction EssentiaExtractor::State::analyse(const float* samples, size_t count,
         skewnessMean.add(fr.skewness, w);
         kurtosisMean.add(fr.kurtosis, w);
         crestMean.add(fr.crest, w);
-        hfcMean.add(fr.hfc, w);
         zcrMean.add(fr.zcr, w);
-        fluxMean.add(fr.flux, w);
+        if (fr.hasFlux) fluxMean.add(fr.flux, w);
         decreaseMean.add(fr.decrease, w);
         complexityMean.add(fr.complexity, w);
         dissonanceMean.add(fr.dissonance, w);
@@ -435,7 +432,6 @@ Extraction EssentiaExtractor::State::analyse(const float* samples, size_t count,
     fp[feature::Skewness] = static_cast<float>(skewnessMean.mean());
     fp[feature::Kurtosis] = static_cast<float>(kurtosisMean.mean());
     fp[feature::Crest] = static_cast<float>(crestMean.mean());
-    fp[feature::Hfc] = static_cast<float>(hfcMean.mean());
     fp[feature::ZeroCrossings] = static_cast<float>(zcrMean.mean());
     fp[feature::Flux] = static_cast<float>(fluxMean.mean());
     fp[feature::Decrease] = static_cast<float>(decreaseMean.mean());
@@ -496,8 +492,8 @@ EssentiaExtractor::EssentiaExtractor() : state_(std::make_unique<State>()) {}
 
 EssentiaExtractor::~EssentiaExtractor() = default;
 
-MonoAudio EssentiaExtractor::decode(const std::string& path, double start, double seconds) {
-    return readMonoAt(path, start, seconds, kAnalysisRate);
+MonoAudio EssentiaExtractor::decode(const std::string& path, double start, double seconds, const CancelFlag* cancel) {
+    return readMonoAt(path, start, seconds, kAnalysisRate, cancel);
 }
 
 Extraction EssentiaExtractor::extract(const SoundBuffer& sound, float* out, const CancelFlag* cancel) {
@@ -520,7 +516,8 @@ Extraction EssentiaExtractor::extract(const SoundBuffer& sound, float* out, cons
     }
     size_t analysed = count;
     if (sound.sampleRate != kAnalysisRate) {
-        s.resampled = resampleMono(samples, count, sound.sampleRate, kAnalysisRate);
+        s.resampled = resampleMono(samples, count, sound.sampleRate, kAnalysisRate, cancel);
+        if (cancelled(cancel)) return Extraction::Cancelled;
         samples = s.resampled.data();
         analysed = s.resampled.size();
         if (analysed == 0) return Extraction::Silent;
@@ -570,7 +567,6 @@ const std::vector<FeatureInfo>& featureInfo() {
         a[feature::Skewness] = {"skewness", Aspect::SpectralShape, 0.1f};
         a[feature::Kurtosis] = {"kurtosis", Aspect::SpectralShape, 0.15f};
         a[feature::Crest] = {"crest", Aspect::SpectralShape, 0.03f};
-        a[feature::Hfc] = {"hfc", Aspect::SpectralShape, 0.15f};
         a[feature::ZeroCrossings] = {"zeroCrossings", Aspect::SpectralShape, 0.15f};
         a[feature::Flux] = {"flux", Aspect::SpectralShape, 0.05f};
         a[feature::Decrease] = {"decrease", Aspect::SpectralShape, 0.007f};
@@ -589,7 +585,7 @@ const FeatureSchema& essentiaSchema() {
         s.version = kFeatureVersion;
         s.settings = std::string("essentia=") + ESSENTIA_VERSION +
                      " rate=44100 frame=1024 hop=256 window=hann mel=htk40:20-16000:power:dbpow:dct2"
-                     " band=20-16000 rolloff=0.85 contrast=6:20-16000 peaks=100:-60dB salience=200-5000/4"
+                     " band=20-16000 rolloff=0.85 contrast=6:20-16000 peaks=-60dB dissonance=100 salience=200-5000/4"
                      " pitch=yin1024x4@11025(mean4):21.5-2000:0.15 envelope=2ms analysed=6s";
         s.features = featureInfo();
         // Timbre, TimbreMotion, Spectrum, Envelope, Pitch, Rhythm: as tuned on a

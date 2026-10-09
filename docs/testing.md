@@ -276,7 +276,8 @@ folder, since its `Signal.h` would be found for `<signal.h>` where file names ig
 Essentia's descriptors: what each aspect of a fingerprint tells apart, on drum hits, synth one-shots, tones and loops
 made from formulas, and what doesn't change it (level, rate, leading silence), with silence, clicks, odd rates and
 broken samples and files; comparing and the library's statistics; the store (another extractor's is ignored); the
-index's threads, saving and checking stamps, searches, cancelling (with an extractor of the tests' own, slow on purpose); harmony: the key, chords from notes (sevenths,
+index's threads, saving and checking stamps, the library's statistics kept and measured again, searches, cancelling
+(with an extractor of the tests' own, slow on purpose), an extractor that can't be made; harmony: the key, chords from notes (sevenths,
 inversions, melodies, arpeggios, rests), the parts written from chords; humanizing with the velocity model shipped
 (models/velocity.hbm): loading it, what it predicts depending only on the notes, the targets' level, the amount.
 See [intelligence.md](intelligence.md#tests).

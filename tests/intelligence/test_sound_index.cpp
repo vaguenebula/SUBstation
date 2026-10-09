@@ -10,6 +10,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <stdexcept>
 #include <thread>
 
 #include "Sounds.h"
@@ -91,7 +92,8 @@ struct Slow {
     std::shared_ptr<std::atomic<double>> delay = std::make_shared<std::atomic<double>>(0.0);
     std::shared_ptr<std::atomic<int>> started = std::make_shared<std::atomic<int>>(0);
     ExtractorFactory factory() const {
-        return [delay = delay, started = started] { return std::make_unique<SlowExtractor>(delay, started); };
+        return {SlowExtractor::slowSchema(),
+                [delay = delay, started = started] { return std::make_unique<SlowExtractor>(delay, started); }};
     }
 };
 
@@ -504,6 +506,73 @@ TEST_CASE("the library's statistics are saved with its fingerprints, and searche
     for (size_t i = 0; i < first.size(); ++i) {
         if (library.paths[i] == library.first("kick")) continue;
         CHECK(nearer[i] > first[i]);
+    }
+}
+
+TEST_CASE("saved statistics stay until a library is taken; then they follow it, with or without a store") {
+    const Library library;
+    const std::string store = utf8(tempDir() / "sound-index.bin");
+    {
+        SoundIndex index(options(store));
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+    }
+    const auto saved = readStore(store, essentiaSchema());
+    REQUIRE(saved.has_value());
+    REQUIRE(saved->statistics.has_value());
+    // Searched from a sound outside the library before any is taken: they are
+    // used as they are, and saved again as they were.
+    {
+        SoundIndex index(options(store));
+        const auto result = search(index, wav("outside/tone.wav", tone(330.0, 0.5, 10.0)));
+        CHECK(result->error.empty());
+        CHECK_EQ(index.status().statistics, library.paths.size());
+    }  // (closing saves the sound searched from)
+    const auto again = readStore(store, essentiaSchema());
+    REQUIRE(again.has_value());
+    REQUIRE(again->statistics.has_value());
+    CHECK_EQ(again->sounds.size(), saved->sounds.size() + 1);
+    CHECK_EQ(again->statistics->count, saved->statistics->count);
+    CHECK(again->statistics->spread == saved->statistics->spread);
+
+    // Nowhere to save them: a search measures them, and measures them again
+    // when the library has changed.
+    SoundIndex index(options());
+    const std::vector<std::string> half(library.paths.begin(), library.paths.begin() + 8);
+    index.setLibrary(half);
+    REQUIRE(index.waitIdle(30.0));
+    search(index, library.first("kick"));
+    CHECK_EQ(index.status().statistics, half.size());
+    index.setLibrary(library.paths);
+    REQUIRE(index.waitIdle(30.0));
+    search(index, library.first("kick"));
+    CHECK_EQ(index.status().statistics, library.paths.size());
+}
+
+TEST_CASE("an extractor that can't be made stops the analysis (saying why), not the program") {
+    const Library library;
+    const Slow slow;
+    for (int how = 0; how < 3; ++how) {
+        INFO(std::to_string(how));
+        SoundIndexOptions o = options();
+        if (how == 0)  // (a model missing, say)
+            o.extractor = {SlowExtractor::slowSchema(),
+                           []() -> std::unique_ptr<FeatureExtractor> { throw std::runtime_error("no model"); }};
+        if (how == 1) o.extractor = {SlowExtractor::slowSchema(), [] { return std::unique_ptr<FeatureExtractor>(); }};
+        if (how == 2) o.extractor = {essentiaSchema(), slow.factory().make};  // (another schema's)
+        SoundIndex index(o);
+        index.setLibrary(library.paths);
+        REQUIRE(index.waitIdle(30.0));
+        const SoundIndexStatus status = index.status();
+        CHECK(!status.busy);
+        CHECK(!status.error.empty());
+        CHECK_EQ(status.analysed, 0u);
+        CHECK_EQ(status.failed, 0u);
+        CHECK_EQ(status.pending(), library.paths.size());
+        // A search can't analyse its sound either: its result says why.
+        const auto result = search(index, library.first("kick"));
+        CHECK(!result->error.empty());
+        if (how == 0) CHECK(result->error.find("no model") != std::string::npos);
     }
 }
 

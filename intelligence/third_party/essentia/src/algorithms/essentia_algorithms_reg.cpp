@@ -11,11 +11,9 @@
 #include "algorithms/sfx/pitchsalience.h"
 #include "algorithms/spectral/energyband.h"
 #include "algorithms/spectral/flux.h"
-#include "algorithms/spectral/hfc.h"
 #include "algorithms/spectral/melbands.h"
 #include "algorithms/spectral/mfcc.h"
 #include "algorithms/spectral/rolloff.h"
-#include "algorithms/spectral/spectralcomplexity.h"
 #include "algorithms/spectral/spectralcontrast.h"
 #include "algorithms/spectral/spectralpeaks.h"
 #include "algorithms/spectral/triangularbands.h"
@@ -47,11 +45,9 @@ ESSENTIA_API void registerAlgorithm() {
     AlgorithmFactory::Registrar<PitchSalience> regPitchSalience;
     AlgorithmFactory::Registrar<EnergyBand> regEnergyBand;
     AlgorithmFactory::Registrar<Flux> regFlux;
-    AlgorithmFactory::Registrar<HFC> regHFC;
     AlgorithmFactory::Registrar<MelBands> regMelBands;
     AlgorithmFactory::Registrar<MFCC> regMFCC;
     AlgorithmFactory::Registrar<RollOff> regRollOff;
-    AlgorithmFactory::Registrar<SpectralComplexity> regSpectralComplexity;
     AlgorithmFactory::Registrar<SpectralContrast> regSpectralContrast;
     AlgorithmFactory::Registrar<SpectralPeaks> regSpectralPeaks;
     AlgorithmFactory::Registrar<TriangularBands> regTriangularBands;
@@ -85,11 +81,9 @@ ESSENTIA_API void registerAlgorithm() {
     AlgorithmFactory::Registrar<PitchSalience, essentia::standard::PitchSalience> regPitchSalience;
     AlgorithmFactory::Registrar<EnergyBand, essentia::standard::EnergyBand> regEnergyBand;
     AlgorithmFactory::Registrar<Flux, essentia::standard::Flux> regFlux;
-    AlgorithmFactory::Registrar<HFC, essentia::standard::HFC> regHFC;
     AlgorithmFactory::Registrar<MelBands, essentia::standard::MelBands> regMelBands;
     AlgorithmFactory::Registrar<MFCC, essentia::standard::MFCC> regMFCC;
     AlgorithmFactory::Registrar<RollOff, essentia::standard::RollOff> regRollOff;
-    AlgorithmFactory::Registrar<SpectralComplexity, essentia::standard::SpectralComplexity> regSpectralComplexity;
     AlgorithmFactory::Registrar<SpectralContrast, essentia::standard::SpectralContrast> regSpectralContrast;
     AlgorithmFactory::Registrar<SpectralPeaks, essentia::standard::SpectralPeaks> regSpectralPeaks;
     AlgorithmFactory::Registrar<TriangularBands, essentia::standard::TriangularBands> regTriangularBands;

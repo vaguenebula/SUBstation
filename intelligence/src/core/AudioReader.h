@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -31,15 +32,19 @@ struct MonoAudio {
 MonoAudio readMono(const std::string& path, double startSeconds, double maxSeconds, uint32_t maxSampleRate = 48000);
 
 // The same, at exactly `sampleRate` (decoded at the file's own rate, then
-// resampled with resampleMono()).
-MonoAudio readMonoAt(const std::string& path, double startSeconds, double maxSeconds, uint32_t sampleRate);
+// resampled with resampleMono()). No samples if `cancel` was set meanwhile.
+MonoAudio readMonoAt(const std::string& path, double startSeconds, double maxSeconds, uint32_t sampleRate,
+                     const std::atomic<bool>* cancel = nullptr);
 
 // Mono samples at `from` Hz, resampled to `to` Hz: band-limited interpolation,
 // a Kaiser-windowed sinc (16 zero crossings either side, flat to 97% of the
-// lower rate's Nyquist frequency, about -90 dB past it). No delay: the sound
-// starts where it did. (miniaudio's resampler is linear, which takes a few dB
-// off the top octave: a 48 kHz copy of a sound would analyse darker than a
-// 44.1 kHz one.) `from` == `to` copies them.
-std::vector<float> resampleMono(const float* samples, size_t count, uint32_t from, uint32_t to);
+// lower rate's Nyquist frequency, about -90 dB past it), as a polyphase filter
+// (made once for a pair of rates and kept, one pair a thread). No delay: the
+// sound starts where it did. (miniaudio's resampler is linear, which takes a
+// few dB off the top octave: a 48 kHz copy of a sound would analyse darker than
+// a 44.1 kHz one.) `from` == `to` copies them. None if `cancel` is set while it
+// works.
+std::vector<float> resampleMono(const float* samples, size_t count, uint32_t from, uint32_t to,
+                                const std::atomic<bool>* cancel = nullptr);
 
 }  // namespace sub::intelligence

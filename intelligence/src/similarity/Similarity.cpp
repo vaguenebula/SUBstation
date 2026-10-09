@@ -18,7 +18,6 @@ FeatureStatistics FeatureStatistics::measure(const FeatureSchema& schema, const 
     const size_t n = rows ? rows->size() : count;
     FeatureStatistics s;
     s.count = n;
-    s.center.assign(dims, 0.f);
     s.spread.assign(dims, 0.f);
     std::vector<float> values(n);
     for (size_t d = 0; d < dims; ++d) {
@@ -40,7 +39,6 @@ FeatureStatistics FeatureStatistics::measure(const FeatureSchema& schema, const 
                 sumSquares += x * x;
             }
             const double mean = sum / static_cast<double>(n);
-            s.center[d] = static_cast<float>(mean);
             spread = std::sqrt(std::max(0.0, sumSquares / static_cast<double>(n) - mean * mean));
         }
         s.spread[d] = std::max(static_cast<float>(spread), schema.features[d].minSpread);
@@ -61,7 +59,7 @@ Comparison::Comparison(const FeatureSchema& schema, const FeatureStatistics& sta
     const bool measured = statistics.fits(schema);
     for (size_t d = 0; d < dims; ++d) {
         const FeatureInfo& f = schema.features[d];
-        spread_[d] = std::max(measured ? statistics.spread[d] : 0.f, f.minSpread);
+        spread_[d] = std::max(measured ? statistics.spread[d] : 0.f, f.minSpread);  // (saved ones too)
         inverseSpread_[d] = 1.f / spread_[d];
         const auto a = static_cast<size_t>(f.aspect);
         share_[d] = total > 0.f ? std::max(0.f, weights.weight[a]) / (static_cast<float>(features[a]) * total) : 0.f;

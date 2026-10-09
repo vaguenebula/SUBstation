@@ -1,7 +1,8 @@
 // What makes fingerprints: a FeatureExtractor turns a sound (mono PCM, or a
 // file decoded for it) into its schema's fixed number of features. The index
 // takes a factory of them (SoundIndexOptions::extractor), one extractor per
-// thread; the one SUBstation uses is EssentiaExtractor (EssentiaExtractor.h).
+// thread, each made on its thread; the one SUBstation uses is
+// EssentiaExtractor (EssentiaExtractor.h).
 //
 // Another is a matter of writing one and handing its factory over: a learned
 // embedding, say, as an extractor whose schema has an Embedding aspect beside
@@ -73,11 +74,23 @@ public:
 
 protected:
     // Decodes `seconds` of the file from `start` (mono): at its own rate up to
-    // 48 kHz, unless the extractor analyses at a rate of its own.
-    virtual MonoAudio decode(const std::string& path, double start, double seconds);
+    // 48 kHz, unless the extractor analyses at a rate of its own. Gives up
+    // (returns no samples) when `cancel` is set.
+    virtual MonoAudio decode(const std::string& path, double start, double seconds, const CancelFlag* cancel);
 };
 
-using ExtractorFactory = std::function<std::unique_ptr<FeatureExtractor>()>;
+// Makes extractors: the schema they make fingerprints of is known before any
+// is made (an extractor's set-up, its algorithms or a model, is the work of the
+// thread that uses it, not of whoever creates the index).
+struct ExtractorFactory {
+    FeatureSchema schema;
+    std::function<std::unique_ptr<FeatureExtractor>()> make;
+
+    explicit operator bool() const { return static_cast<bool>(make); }
+    // One extractor. Throws (std::runtime_error, or what `make` throws) if it
+    // makes none, or one of another schema.
+    std::unique_ptr<FeatureExtractor> operator()() const;
+};
 
 // Essentia's (EssentiaExtractor).
 ExtractorFactory defaultExtractorFactory();

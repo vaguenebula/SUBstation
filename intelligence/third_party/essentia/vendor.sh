@@ -24,11 +24,9 @@ ALGORITHMS=(
     sfx/pitchsalience:PitchSalience
     spectral/energyband:EnergyBand
     spectral/flux:Flux
-    spectral/hfc:HFC
     spectral/melbands:MelBands
     spectral/mfcc:MFCC
     spectral/rolloff:RollOff
-    spectral/spectralcomplexity:SpectralComplexity
     spectral/spectralcontrast:SpectralContrast
     spectral/spectralpeaks:SpectralPeaks
     spectral/triangularbands:TriangularBands

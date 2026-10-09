@@ -4,7 +4,7 @@
 // nearest sounds match what the query is (README.md).
 //
 //   sound_similarity_bench --folder <library> [--threads N] [--limit N]
-//                          [--cache file] [--weights t,m,s,e,p,r[,x]] [--tune]
+//                          [--cache file] [--weights t,m,s,e,p,r,ts,c,ss,to,x] [--tune]
 //                          [--show N] [--split] [--index] [--json file]
 //
 // The files' kinds come from their names and their folder's (a library sorted
@@ -15,7 +15,10 @@
 // whole library; precision@k is the share of its k nearest sounds (itself left
 // out) that are one-shots of its kind. Each loop is a query too, its hits
 // other loops. --tune searches the aspects' weights for the best mean
-// precision@10 over the one-shot kinds. --split halves the queries by their
+// precision@10 over the one-shot kinds; --weights sets them, in the order of
+// FeatureSchema.h's aspects (timbre, timbreMotion, spectrum, envelope, pitch,
+// rhythm, timbreSpread, contrast, spectralShape, tonality, embedding), those
+// left out keeping the extractor's. --split halves the queries by their
 // folder (a hash of its path): --tune then tunes on one half, and both halves
 // are reported, so what the tuning gained is seen on sounds it didn't see.
 // --cache keeps the fingerprints between
@@ -43,6 +46,7 @@
 #include <vector>
 
 #include "core/AudioReader.h"
+#include "core/Hash.h"
 #include "similarity/FeatureExtractor.h"
 #include "similarity/Similarity.h"
 #include "similarity/SoundIndex.h"
@@ -341,7 +345,7 @@ int main(int argc, char** argv) {
     int show = 0;
     bool tune = false, indexToo = false, split = false;
     const ExtractorFactory factory = defaultExtractorFactory();
-    const FeatureSchema schema = factory()->schema();
+    const FeatureSchema& schema = factory.schema;
     const size_t dims = schema.dims();
     AspectWeights weights = schema.weights;
     for (int i = 1; i < argc; ++i) {
@@ -359,7 +363,6 @@ int main(int argc, char** argv) {
         else if (arg == "--weights") {
             std::stringstream list(next());
             std::string item;
-            weights.weight.fill(0.f);
             for (size_t a = 0; a < kAspects && std::getline(list, item, ','); ++a) weights.weight[a] = std::stof(item);
         } else {
             std::cerr << "unknown argument " << arg << "\n";
@@ -368,7 +371,7 @@ int main(int argc, char** argv) {
     }
     if (folder.empty()) {
         std::cerr << "usage: sound_similarity_bench --folder <sample library> [--threads N] [--limit N] [--cache file] "
-                     "[--weights t,m,s,e,p,r[,x]] [--tune] [--show N] [--split] [--index] [--json file]\n";
+                     "[--weights t,m,s,e,p,r,ts,c,ss,to,x] [--tune] [--show N] [--split] [--index] [--json file]\n";
         return 2;
     }
     std::printf("extractor %s (version %u, %zu features): %s\n", schema.extractor.c_str(), schema.version, dims,
@@ -452,9 +455,7 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> tuneQueries, heldOut;
     for (const uint32_t q : queries) {
         const std::string folderPath = utf8(pathOf(sounds[rows[q]].path).parent_path());
-        uint64_t h = 1469598103934665603ull;
-        for (const char c : folderPath) h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ull;
-        (h % 2 == 0 ? tuneQueries : heldOut).push_back(q);
+        (fnv1a(folderPath) % 2 == 0 ? tuneQueries : heldOut).push_back(q);
     }
     if (!split) tuneQueries = queries;
     auto report = [&](const char* title, const AspectWeights& w) {

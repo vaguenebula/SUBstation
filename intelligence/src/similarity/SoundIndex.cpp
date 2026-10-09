@@ -5,6 +5,7 @@
 #include <limits>
 
 #include "core/AudioReader.h"
+#include "core/Hash.h"
 #include "similarity/SoundStore.h"
 
 namespace sub::intelligence {
@@ -16,6 +17,7 @@ using Clock = std::chrono::steady_clock;
 constexpr auto kProgressWakeInterval = std::chrono::milliseconds(250);
 constexpr auto kWaitForLoad = std::chrono::seconds(10);
 constexpr auto kWaitForLibrary = std::chrono::seconds(3);
+constexpr size_t kStatisticsSample = 20000;  // fingerprints the library's statistics are measured on, at most
 
 double millisecondsSince(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
@@ -28,11 +30,7 @@ Clock::duration seconds(double s) { return std::chrono::duration_cast<Clock::dur
 // --- SimilarityResult ------------------------------------------------------------------
 
 uint64_t SimilarityResult::pathHash(std::string_view path) {
-    uint64_t h = 1469598103934665603ull;  // FNV-1a
-    for (const char c : path) {
-        h ^= static_cast<unsigned char>(c);
-        h *= 1099511628211ull;
-    }
+    const uint64_t h = fnv1a(path);
     return h ? h : 1;  // (0 marks an empty slot)
 }
 
@@ -62,14 +60,15 @@ float SimilarityResult::similarity(std::string_view path) const {
 // --- SoundIndex ------------------------------------------------------------------------
 
 SoundIndex::SoundIndex(SoundIndexOptions options) : options_(std::move(options)) {
+    // (Extractors are made on the threads that use them.)
     factory_ = options_.extractor ? options_.extractor : defaultExtractorFactory();
-    searchExtractor_ = factory_();
-    schema_ = searchExtractor_->schema();
+    schema_ = factory_.schema;
     dims_ = schema_.dims();
     weights_ = options_.weights.value_or(schema_.weights);
-    analysers_ = options_.threads ? options_.threads : std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
-    if (!options_.analyse) analysers_ = 0;
-    for (unsigned i = 0; i < analysers_; ++i) workers_.emplace_back([this] { workerLoop(); });
+    const unsigned analysers =
+        !options_.analyse ? 0u : options_.threads ? options_.threads : std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+    analysers_ = analysers;
+    for (unsigned i = 0; i < analysers; ++i) workers_.emplace_back([this] { workerLoop(); });
     keeper_ = std::thread([this] { keeperLoop(); });
     search_ = std::thread([this] { searchLoop(); });
 }
@@ -165,6 +164,7 @@ SoundIndexStatus SoundIndex::status() const {
 
 SoundIndexStatus SoundIndex::statusLocked() const {
     SoundIndexStatus s = counts_;
+    s.statistics = statistics_.fits(schema_) ? statistics_.count : 0;
     s.busy = busyLocked();
     s.analysing = !loaded_ || running_ > 0 || !analyseQueue_.empty() || !checkQueue_.empty();
     return s;
@@ -294,6 +294,42 @@ void SoundIndex::applyLibrary(const Library& files, const std::vector<std::strin
     workerWake_.notify_all();
 }
 
+// --- The library's statistics --------------------------------------------------------------
+
+void SoundIndex::refreshStatistics(std::unique_lock<std::mutex>& lock, bool exact) {
+    if (measuring_) return;  // (another thread is at it: these are as good meanwhile)
+    const std::vector<uint32_t> rows = libraryRows();
+    if (rows.size() < 2) return;  // (a library not taken yet: the saved ones stay)
+    // Up to date unless fingerprints changed (were analysed, or analysed again)
+    // for more than a tenth as many files as they describe, or the library grew
+    // or shrank by more than a tenth; `exact`, unless anything changed.
+    if (statistics_.fits(schema_)) {
+        const uint64_t tolerance = exact ? 0 : statistics_.count / 10;
+        const uint64_t changes = counts_.version - statisticsVersion_;
+        const uint64_t rowsNow = rows.size();
+        const uint64_t difference = rowsNow > statistics_.count ? rowsNow - statistics_.count : statistics_.count - rowsNow;
+        if (changes <= tolerance && difference <= tolerance) return;
+    }
+    // Measured without the lock (searches, analysers and the application go
+    // on), on a copy of at most kStatisticsSample fingerprints, evenly spread.
+    const size_t sampled = std::min(rows.size(), kStatisticsSample);
+    std::vector<float> sample(sampled * dims_);
+    for (size_t i = 0; i < sampled; ++i) {
+        const uint32_t row = rows[i * rows.size() / sampled];
+        std::copy_n(fingerprints_.begin() + static_cast<ptrdiff_t>(static_cast<size_t>(row) * dims_), dims_,
+                    sample.begin() + static_cast<ptrdiff_t>(i * dims_));
+    }
+    const uint64_t version = counts_.version;
+    measuring_ = true;
+    lock.unlock();
+    FeatureStatistics measured = FeatureStatistics::measure(schema_, sample.data(), sampled);
+    measured.count = rows.size();
+    lock.lock();
+    measuring_ = false;
+    statistics_ = std::move(measured);
+    statisticsVersion_ = version;
+}
+
 // --- The keeper --------------------------------------------------------------------------
 
 void SoundIndex::load() {
@@ -334,6 +370,7 @@ void SoundIndex::load() {
 void SoundIndex::save(std::unique_lock<std::mutex>& lock) {
     saveDue_ = false;
     if (options_.store.empty()) return;
+    refreshStatistics(lock, true);  // (saved as they are now)
     // What is kept: the library's files; files that left it lately (a place on
     // a drive unplugged for now, a place removed for a while), to be found
     // again when they come back; and the references searched from most recently.
@@ -351,15 +388,6 @@ void SoundIndex::save(std::unique_lock<std::mutex>& lock) {
         references.resize(options_.maxReferences);
     }
     keep.insert(keep.end(), references.begin(), references.end());
-    // The library's statistics, measured again if fingerprints changed since
-    // (if it has any: those of a library not taken yet are kept).
-    if (statisticsVersion_ != counts_.version) {
-        const std::vector<uint32_t> rows = libraryRows();
-        if (rows.size() >= 2) {
-            statistics_ = FeatureStatistics::measure(schema_, fingerprints_.data(), entries_.size(), &rows);
-            statisticsVersion_ = counts_.version;
-        }
-    }
     StoreWriter writer(schema_, static_cast<uint32_t>(keep.size()));
     StoredSound sound;
     for (const uint32_t i : keep) {
@@ -435,9 +463,31 @@ void SoundIndex::keeperLoop() {
 
 void SoundIndex::workerLoop() {
     if (options_.background) platform::enterBackgroundMode();
-    std::unique_ptr<FeatureExtractor> extractor = factory_();
+    std::unique_ptr<FeatureExtractor> extractor;
+    std::string error;
+    try {
+        extractor = factory_();
+    } catch (const std::exception& e) {
+        error = e.what();
+    }
     std::vector<float> fingerprint(dims_);
     std::unique_lock lock(mutex_);
+    if (!extractor) {
+        // Without it, the others analyse; with none left, nothing is (the files
+        // stay as they are), and the status says why.
+        if (--analysers_ == 0) {
+            counts_.error = "cannot analyse: " + error;
+            for (const uint32_t i : analyseQueue_) entries_[i].queued = false;
+            for (const uint32_t i : checkQueue_) entries_[i].checking = false;
+            analyseQueue_.clear();
+            checkQueue_.clear();
+        }
+        workerWake_.notify_all();
+        idle_.notify_all();
+        lock.unlock();
+        wake();
+        return;
+    }
     for (;;) {
         workerWake_.wait(lock, [this] { return stop_ || (loaded_ && (!analyseQueue_.empty() || !checkQueue_.empty())); });
         if (stop_) break;
@@ -579,6 +629,7 @@ std::shared_ptr<SimilarityResult> SoundIndex::runSearch(uint64_t generation, con
     }
     if (!haveReference) {
         Extraction extraction = Extraction::Silent;
+        if (!searchExtractor_) searchExtractor_ = factory_();  // (throws: the search's error)
         try {
             extraction = searchExtractor_->extractFile(query.path, query.start, query.length, reference.data(), &stopSearch_);
             if (extraction == Extraction::Silent) result->error = "silent";
@@ -613,21 +664,15 @@ std::shared_ptr<SimilarityResult> SoundIndex::runSearch(uint64_t generation, con
     std::vector<std::pair<uint64_t, float>> scores;
     std::vector<std::pair<float, uint32_t>> ranked;
     {
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
+        if (latest_.load() != generation) return nullptr;
+        refreshStatistics(lock, false);  // (may let go of the lock a while)
         if (latest_.load() != generation) return nullptr;
         const std::vector<uint32_t> rows = libraryRows();
         result->libraryFiles = counts_.library;
         // The sound itself, if it is a library file (by key: however its path is spelt).
         const auto self = byKey_.find(std::string_view(key));
         const uint32_t selfIndex = self == byKey_.end() ? std::numeric_limits<uint32_t>::max() : self->second;
-        // The library's statistics: those saved or measured last, unless they
-        // describe less than half of what is analysed now (the first run's
-        // early searches) or more than twice it (places removed), when they
-        // are measured again.
-        if (!statistics_.fits(schema_) || statistics_.count * 2 < rows.size() || statistics_.count > rows.size() * 2) {
-            statistics_ = FeatureStatistics::measure(schema_, fingerprints_.data(), entries_.size(), &rows);
-            statisticsVersion_ = counts_.version;
-        }
         const Comparison comparison(schema_, statistics_, weights_);
         scores.reserve(rows.size());
         ranked.reserve(rows.size());

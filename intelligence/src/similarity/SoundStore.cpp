@@ -5,7 +5,10 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <utility>
+
+#include "core/Hash.h"
 
 namespace sub::intelligence {
 
@@ -13,15 +16,6 @@ namespace {
 
 constexpr char kMagic[8] = {'S', 'U', 'B', 'S', 'N', 'D', 'X', '1'};
 constexpr uint8_t kAnalysed = 1, kReference = 2;
-
-uint64_t fnv1a(const char* data, size_t size) {
-    uint64_t h = 1469598103934665603ull;
-    for (size_t i = 0; i < size; ++i) {
-        h ^= static_cast<unsigned char>(data[i]);
-        h *= 1099511628211ull;
-    }
-    return h;
-}
 
 struct FileCloser {
     void operator()(std::FILE* f) const {
@@ -78,11 +72,8 @@ private:
 StoreWriter::StoreWriter(const FeatureSchema& schema, uint32_t count) : dims_(schema.dims()) {
     bytes_.append(kMagic, sizeof(kMagic));
     u32(kStoreFormat);
-    str(schema.extractor);
-    u32(schema.version);
-    str(schema.settings);
-    u32(static_cast<uint32_t>(dims_));
     u64(schema.key());
+    u32(static_cast<uint32_t>(dims_));
     u32(count);
 }
 
@@ -108,7 +99,15 @@ void StoreWriter::str(const std::string& s) {
     bytes_ += s;
 }
 
+void StoreWriter::add(const StoredSound& sound) {
+    if (sound.analysed && sound.fingerprint.size() != dims_)
+        throw std::invalid_argument("a fingerprint of " + std::to_string(sound.fingerprint.size()) +
+                                    " features where the schema has " + std::to_string(dims_));
+    add(sound, sound.fingerprint.data());
+}
+
 void StoreWriter::add(const StoredSound& sound, const float* fingerprint) {
+    if (sound.analysed && !fingerprint && dims_ > 0) throw std::invalid_argument("an analysed sound without a fingerprint");
     str(sound.path);
     u64(sound.stamp.size);
     u64(sound.stamp.modified);
@@ -121,11 +120,10 @@ void StoreWriter::add(const StoredSound& sound, const float* fingerprint) {
 }
 
 std::string StoreWriter::finish(const FeatureStatistics* statistics) {
-    const bool withStatistics = statistics && statistics->center.size() == dims_ && statistics->spread.size() == dims_;
+    const bool withStatistics = statistics && statistics->spread.size() == dims_;
     bytes_.push_back(static_cast<char>(withStatistics ? 1 : 0));
     if (withStatistics) {
         u64(statistics->count);
-        for (const float v : statistics->center) f32(v);
         for (const float v : statistics->spread) f32(v);
     }
     u64(fnv1a(bytes_.data(), bytes_.size()));
@@ -160,13 +158,11 @@ std::optional<StoreContents> readStore(const std::string& file, const FeatureSch
 
     Reader in(data.data(), data.size() - 8);
     char magic[sizeof(kMagic)];
-    uint32_t format = 0, version = 0, dims = 0, count = 0;
+    uint32_t format = 0, dims = 0, count = 0;
     uint64_t key = 0;
-    std::string extractor, settings;
     if (!in.bytes(magic, sizeof(magic)) || std::memcmp(magic, kMagic, sizeof(kMagic)) != 0) return std::nullopt;
-    if (!in.u32(format) || format != kStoreFormat || !in.str(extractor) || extractor != schema.extractor ||
-        !in.u32(version) || version != schema.version || !in.str(settings) || settings != schema.settings ||
-        !in.u32(dims) || dims != schema.dims() || !in.u64(key) || key != schema.key() || !in.u32(count))
+    if (!in.u32(format) || format != kStoreFormat || !in.u64(key) || key != schema.key() || !in.u32(dims) ||
+        dims != schema.dims() || !in.u32(count))
         return std::nullopt;
     StoreContents contents;
     contents.sounds.reserve(std::min<size_t>(count, data.size() / 32));
@@ -191,11 +187,8 @@ std::optional<StoreContents> readStore(const std::string& file, const FeatureSch
     if (!in.u8(withStatistics)) return std::nullopt;
     if (withStatistics) {
         FeatureStatistics st;
-        st.center.resize(dims);
         st.spread.resize(dims);
         if (!in.u64(st.count)) return std::nullopt;
-        for (float& v : st.center)
-            if (!in.f32(v)) return std::nullopt;
         for (float& v : st.spread)
             if (!in.f32(v) || !(v > 0.f) || !std::isfinite(v)) return std::nullopt;
         contents.statistics = std::move(st);

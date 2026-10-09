@@ -1,9 +1,9 @@
 // The fingerprints saved between runs (sound-index.bin), so a library is
 // analysed once: only files that are new or changed are analysed again.
 //
-// A store holds one extractor's fingerprints, as it made them: the header says
-// which extractor, its version, its settings and its features (the schema's
-// key). Fingerprints are used only by the same extractor, as it is: any
+// A store holds one extractor's fingerprints, as it made them: the header has
+// its schema's key (FeatureSchema::key: its name, version, settings and
+// features). Fingerprints are used only by the same extractor, as it is: any
 // difference (another extractor, another version, other settings) and they are
 // all made again. A file is told by its path and its stamp (size and last-write
 // time): one whose stamp changed is analysed again.
@@ -12,11 +12,8 @@
 //
 //   "SUBSNDX1"                   8 bytes magic
 //   u32 format                   3 (kStoreFormat)
-//   str extractor                its name ("builtin", "essentia")
-//   u32 version                  its schema's version
-//   str settings                 its extraction settings
+//   u64 key                      FeatureSchema::key()
 //   u32 dims                     features per fingerprint
-//   u64 key                      FeatureSchema::key(): extractor, version, settings, features
 //   u32 count
 //   count x {
 //     str path                   UTF-8 (WTF-8), the system's form
@@ -29,7 +26,7 @@
 //     f32 x dims                 (analysed only) the fingerprint
 //   }
 //   u8  statistics               1 if the library's statistics follow
-//   u64 measured; f32 x dims centre; f32 x dims spread   (FeatureStatistics)
+//   u64 measured; f32 x dims spread   (FeatureStatistics)
 //   u64 FNV-1a                   of everything before it
 //   str = u32 length + bytes
 //
@@ -70,9 +67,12 @@ struct StoreContents {
 class StoreWriter {
 public:
     StoreWriter(const FeatureSchema& schema, uint32_t count);
-    // `fingerprint`: schema.dims() floats, if the sound is analysed.
+    // `fingerprint`: schema.dims() floats, if the sound is analysed (throws
+    // std::invalid_argument if it is null).
     void add(const StoredSound& sound, const float* fingerprint);
-    void add(const StoredSound& sound) { add(sound, sound.fingerprint.data()); }
+    // Its own fingerprint (throws std::invalid_argument if it is analysed and
+    // that isn't schema.dims() floats).
+    void add(const StoredSound& sound);
     // The bytes, with the statistics (if any) and the checksum.
     std::string finish(const FeatureStatistics* statistics = nullptr);
 

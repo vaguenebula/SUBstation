@@ -9,15 +9,18 @@
 //   (sound-index.bin), takes the library from its source when told it changed
 //   (at most once a second), and saves (10 s after a change, and on close);
 // - analysers (a quarter of the cores, one to four), at background priority,
-//   each with an extractor of its own (SoundIndexOptions::extractor; Essentia's
-//   when the build has it): fingerprint the library's new files, then check the saved ones against
-//   their files (size and last-write time) and analyse again those that
-//   changed (again whenever the library is taken, for files last checked
-//   more than recheckSeconds before). Files that can't be decoded are
-//   remembered as such until they change;
+//   each with an extractor of its own, made on its thread
+//   (SoundIndexOptions::extractor; Essentia's by default): fingerprint the
+//   library's new files, then check the saved ones against their files (size
+//   and last-write time) and analyse again those that changed (again whenever
+//   the library is taken, for files last checked more than recheckSeconds
+//   before). Files that can't be decoded are remembered as such until they
+//   change. An analyser whose extractor can't be made stops; with none left,
+//   nothing is analysed, and the status says why;
 // - one for searches, at normal priority (the user waits for it): analyses the
 //   sound searched from if it has no fingerprint yet (a file outside the
-//   library, a part of a file, a library file not reached yet), then compares it
+//   library, a part of a file, a library file not reached yet; its extractor
+//   made when it first needs one), then compares it
 //   with every analysed file of the library. A search asked for replaces one
 //   waiting (and stops one running), and only the latest one's result is
 //   handed out; cancelSearch() drops them all.
@@ -25,7 +28,11 @@
 // Closing stops the analysers in the middle of a file (extractors poll a flag
 // between frames): the file stays to analyse next time. Searches measure
 // features in the library's statistics (Similarity.h), which are saved with
-// the fingerprints and measured again when they are saved after a change.
+// the fingerprints. A save measures them again if fingerprints changed since; a
+// search, once fingerprints changed for a tenth as many files as they describe
+// or the library grew or shrank by a tenth. On at most 20000 fingerprints, and
+// without holding up the other threads. Until a library is taken, the saved
+// ones stay.
 //
 // When there is a result, or the analysis moved on (at most four times a
 // second), the wake callback is called from one of those threads, once until
@@ -115,9 +122,11 @@ struct SoundIndexStatus {
     uint64_t analysed = 0;      // of them, with a fingerprint
     uint64_t failed = 0;        // of them, that couldn't be analysed (not decodable, silent)
     uint64_t version = 0;       // changes when fingerprints are added or change
+    std::string error;          // why the library can't be analysed ("" if it can)
     // For tests and benchmarks.
     double loadMs = 0.0;           // reading the saved fingerprints
     uint64_t analysedThisRun = 0;  // files analysed (not read from the store) since it started
+    uint64_t statistics = 0;       // the library's files its statistics were measured on (0: none yet)
 
     uint64_t pending() const { return library > analysed + failed ? library - analysed - failed : 0; }
 };
@@ -127,7 +136,7 @@ struct SoundIndexOptions {
     unsigned threads = 0;       // analysers; 0: a quarter of the cores, one to four
     bool analyse = true;        // analyse the library (off: only the sounds searched from; tests)
     bool background = true;     // analysers and keeper at background priority (tests turn it off)
-    ExtractorFactory extractor; // what makes fingerprints, one per thread; empty: defaultExtractorFactory()
+    ExtractorFactory extractor; // what makes fingerprints (one extractor per thread); empty: defaultExtractorFactory()
     std::optional<AspectWeights> weights;  // how much each aspect counts in searches; none: the extractor's
     double saveDelaySeconds = 10.0;
     double refreshSeconds = 1.0;  // the least time between takings of the library
@@ -215,6 +224,9 @@ private:
     // `keys`: the files' pathKey()s, made before the lock is taken.
     void applyLibrary(const Library& files, const std::vector<std::string>& keys);
     void save(std::unique_lock<std::mutex>& lock);
+    // The library's statistics, measured again if they are out of date (lets
+    // go of the lock while it measures); `exact`: if any fingerprint changed.
+    void refreshStatistics(std::unique_lock<std::mutex>& lock, bool exact);
     std::shared_ptr<SimilarityResult> runSearch(uint64_t generation, const SoundQuery& query);
     uint32_t addEntry(std::string path, std::string key);
     std::vector<uint32_t> libraryRows() const;  // the library's analysed entries
@@ -228,11 +240,11 @@ private:
 
     SoundIndexOptions options_;
     ExtractorFactory factory_;
-    std::unique_ptr<FeatureExtractor> searchExtractor_;  // (only the search thread uses it)
+    std::unique_ptr<FeatureExtractor> searchExtractor_;  // (only the search thread makes and uses it)
     FeatureSchema schema_;
     size_t dims_ = 0;
     AspectWeights weights_;
-    unsigned analysers_ = 0;
+    unsigned analysers_ = 0;  // with an extractor (or making it)
     CancelFlag stopAnalysis_{false};  // set on close: analysers give up the file they're on
     CancelFlag stopSearch_{false};    // set when the running search is replaced or cancelled
 
@@ -258,6 +270,7 @@ private:
     std::vector<float> fingerprints_;  // dims_ per entry
     FeatureStatistics statistics_;     // the library's (measured or saved)
     uint64_t statisticsVersion_ = 0;   // counts_.version they were measured at
+    bool measuring_ = false;           // a thread measures them (without the lock)
     std::unordered_map<std::string, uint32_t, Hash, std::equal_to<>> byKey_;  // by platform::pathKey()
     std::deque<uint32_t> analyseQueue_, checkQueue_;
     unsigned running_ = 0;  // analysers working on a file

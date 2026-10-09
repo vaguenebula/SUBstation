@@ -276,7 +276,7 @@ sounds (itself left out) that are one-shots of its kind; each loop is a query to
 its hits other loops. It prints that per kind and each aspect alone. `--weights`
 gives the aspects' weights in `Aspect`'s order (Timbre, TimbreMotion, Spectrum,
 Envelope, Pitch, Rhythm, TimbreSpread, Contrast, SpectralShape, Tonality,
-Embedding). `--split` halves the queries by their folder and reports each half;
+Embedding); those left off the end keep the extractor's. `--split` halves the queries by their folder and reports each half;
 `--tune` searches the weights for the best mean precision@10 over the kinds of
 the first half (so the second shows what the tuning is worth on sounds it didn't
 see). `--index` also runs the `SoundIndex` itself over the library at background
@@ -294,8 +294,8 @@ release build on a 4-core cloud machine (Linux, GCC 13):
 
 | | |
 |---|---|
-| analysing 2 068 files, 4 threads | 9.1 s (227 files/s); a file: median 10 ms, 95% 62 ms (a thread); one thread 59 files/s |
-| the index, 4 analysers at background priority | 9.3 s; the next start reads the 0.8 MB store in 3 ms and has checked every file's stamp 9 ms later; a search 0.7 ms |
+| analysing 2 068 files, 4 threads | 8.6 s (240 files/s); a file: median 10 ms, 95% 58 ms (a thread); one thread 59 files/s |
+| the index, 4 analysers at background priority | 8.2 s; the next start reads the 0.8 MB store in 3 ms and has checked every file's stamp 8 ms later; a search 0.7 ms |
 | one search over 2 068 fingerprints | 0.2 ms (the comparison only); measuring the library's statistics 2 ms |
 | queries | 583 labelled one-shots, 40 loops |
 
@@ -305,13 +305,13 @@ replaced, built from the commit before; the same files, labels and queries):
 | | one-shots, mean over kinds | one-shots, all | P@1, mean | loops | kick | snare | synth stab | synth bass |
 |---|---|---|---|---|---|---|---|---|
 | the module's own descriptors | 0.467 | 0.580 | 0.671 | 0.462 | 0.455 | 0.692 | 0.804 | 0.414 |
-| Essentia's (default weights) | **0.491** | **0.602** | **0.687** | **0.543** | **0.499** | **0.699** | **0.865** | **0.507** |
+| Essentia's (default weights) | **0.492** | **0.602** | **0.683** | **0.528** | **0.504** | **0.692** | **0.870** | **0.504** |
 
 Each aspect alone (mean precision@10 over kinds): timbre 0.34, timbre motion 0.37,
 spectrum 0.34, envelope 0.18, pitch 0.13, rhythm 0.11, timbre spread 0.22,
-contrast 0.39, spectral shape 0.32, tonality 0.20. With `--split`, the six aspects
+contrast 0.39, spectral shape 0.32, tonality 0.22. With `--split`, the six aspects
 the module had: 0.389 / 0.469 (the two halves); with the four added: 0.407 /
-0.511. Weights `--tune`d on the first half did worse on the second (0.480), so the
+0.514. Weights `--tune`d on the first half did worse on the second (0.498), so the
 defaults stay round. The full table per kind is in
 [docs/intelligence.md](../docs/intelligence.md#how-well-it-works).
 

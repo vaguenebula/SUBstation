@@ -3,8 +3,8 @@
 // Features come in different units (dB, octaves, seconds on a log scale), so
 // each is measured in spreads of the library it is searched in (z-scores),
 // never dividing by less than the feature's minSpread. The library's
-// statistics (each feature's centre and spread) are measured robustly, its
-// extreme 1% at either end held at the 1st and 99th percentiles (winsorized):
+// statistics (each feature's spread) are measured robustly, its extreme 1% at
+// either end held at the 1st and 99th percentiles (winsorized):
 // a few broken or freakish files don't flatten the scale for everything else.
 // The index keeps them with the fingerprints and saves them (SoundStore.h), so
 // a search measures in the same scale whatever has been analysed since.
@@ -30,20 +30,18 @@
 
 namespace sub::intelligence {
 
-// Each feature's centre and spread over a library's fingerprints.
+// Each feature's spread over a library's fingerprints. (Only differences are
+// compared: where the features are centred doesn't count.)
 struct FeatureStatistics {
-    uint64_t count = 0;         // fingerprints measured
-    std::vector<float> center;  // the winsorized mean
+    uint64_t count = 0;         // the fingerprints they describe
     std::vector<float> spread;  // the winsorized standard deviation, at least the feature's minSpread
 
     // Of these fingerprints (schema.dims() floats each, one after another;
-    // `rows` picks some, or all if null). With fewer than two, the centres
-    // are 0 and the spreads the features' minSpreads.
+    // `rows` picks some, or all if null). With fewer than two, the spreads
+    // are the features' minSpreads.
     static FeatureStatistics measure(const FeatureSchema& schema, const float* fingerprints, size_t count,
                                      const std::vector<uint32_t>* rows = nullptr);
-    bool fits(const FeatureSchema& schema) const {
-        return center.size() == schema.dims() && spread.size() == schema.dims();
-    }
+    bool fits(const FeatureSchema& schema) const { return spread.size() == schema.dims(); }
 };
 
 class Comparison {

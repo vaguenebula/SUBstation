@@ -15,7 +15,7 @@ What is here, copied by vendor.sh from a checkout of the tag:
   reads or writes files and so needs FFmpeg, YAML or JSON (utils/audiocontext,
   ffmpegapi, jsonconvert, yamlast, metadatautils), the ready-made music and
   Freesound extractors, and the synthesis utilities.
-- src/algorithms: only the 31 algorithms the sound similarity's extractor runs
+- src/algorithms: only the 29 algorithms the sound similarity's extractor runs
   (intelligence/src/similarity/EssentiaExtractor.cpp) and those they create:
   vendor.sh's ALGORITHMS list.
 - src/3rdparty/kiss_fft130: KISS FFT 1.3.0 (BSD-3-Clause, its COPYING), the FFT

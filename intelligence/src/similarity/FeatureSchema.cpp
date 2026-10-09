@@ -1,5 +1,7 @@
 #include "similarity/FeatureSchema.h"
 
+#include "core/Hash.h"
+
 namespace sub::intelligence {
 
 const char* aspectName(Aspect aspect) {
@@ -27,27 +29,19 @@ AspectWeights AspectWeights::only(Aspect aspect) {
 }
 
 uint64_t FeatureSchema::key() const {
-    uint64_t h = 1469598103934665603ull;  // FNV-1a
-    auto add = [&h](const void* data, size_t size) {
-        const auto* p = static_cast<const unsigned char*>(data);
-        for (size_t i = 0; i < size; ++i) {
-            h ^= p[i];
-            h *= 1099511628211ull;
-        }
-    };
-    auto text = [&](const std::string& s) {
-        add(s.data(), s.size());
-        add("", 1);  // (a separator)
+    uint64_t h = kFnvOffsetBasis;
+    auto text = [&h](const std::string& s) {
+        h = fnv1a(s.data(), s.size() + 1, h);  // (with its terminating 0: a separator)
     };
     text(extractor);
     const unsigned char v[4] = {static_cast<unsigned char>(version), static_cast<unsigned char>(version >> 8),
                                 static_cast<unsigned char>(version >> 16), static_cast<unsigned char>(version >> 24)};
-    add(v, 4);
+    h = fnv1a(v, 4, h);
     text(settings);
     for (const FeatureInfo& f : features) {
         text(f.name);
         const auto aspect = static_cast<unsigned char>(f.aspect);
-        add(&aspect, 1);
+        h = fnv1a(&aspect, 1, h);
     }
     return h;
 }

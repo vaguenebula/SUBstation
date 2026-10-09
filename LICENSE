@@ -25,6 +25,6 @@ SOFTWARE.
 This licence covers SUBstation's own code. The third-party code in
 engine/third_party and intelligence/third_party keeps its own licence, in its
 folder. In particular Essentia (intelligence/third_party/essentia) is under the
-GNU Affero General Public License v3: a build that includes it (the default,
-SUBSTATION_ESSENTIA=ON) is, as a whole, distributed under the AGPLv3's terms.
-See docs/licensing.md.
+GNU Affero General Public License v3: every build includes it, so a build
+you distribute is, as a whole, distributed under the AGPLv3's terms. See
+docs/licensing.md.

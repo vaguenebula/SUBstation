@@ -19,11 +19,12 @@
 //   Contrast       peaks against valleys in six bands (SpectralContrast): a
 //                  tone's spectrum is all peaks, noise's all valley
 //   SpectralShape  the spectrum's shape beyond its centre and spread: skewness and
-//                  kurtosis (DistributionShape), Crest, HFC, ZeroCrossingRate, how
-//                  it changes (Flux) and slopes (Decrease)
-//   Tonality       how many peaks it has (SpectralComplexity), how they beat
-//                  (Dissonance: a cymbal's metal, a detuned stab), how strongly
-//                  the spectrum repeats at a harmonic spacing (PitchSalience)
+//                  kurtosis (DistributionShape), Crest, ZeroCrossingRate, how it
+//                  changes from frame to frame (Flux) and slopes (Decrease)
+//   Tonality       how many peaks it has (SpectralPeaks within 60 dB of the
+//                  loudest: its spectral complexity), how they beat (Dissonance:
+//                  a cymbal's metal, a detuned stab), how strongly the spectrum
+//                  repeats at a harmonic spacing (PitchSalience)
 //   Envelope       how it starts and dies away, on its 2 ms amplitude envelope:
 //                  LogAttackTime (20% to 90% of the peak), EffectiveDuration
 //                  (time within 30 dB of the peak), the temporal centroid
@@ -97,11 +98,10 @@ enum : uint32_t {
     Skewness = Valley + 6,       // the spectrum's skewness (DistributionShape), sign(x) ln(1 + |x|)
     Kurtosis,          // ln of its fourth standardized moment
     Crest,             // log10(the loudest bin / the mean)
-    Hfc,               // log2(high-frequency content / energy / 1 kHz)
     ZeroCrossings,     // log2(1 + zero crossings per second)
-    Flux,              // the spectrum's rise from frame to frame (relative to its loudest bin)
+    Flux,              // the spectrum's rise from frame to frame (relative to its loudest bin; not the first's)
     Decrease,          // the spectrum's slope (relative to its loudest bin)
-    Complexity,        // log2(1 + spectral peaks within 60 dB of the loudest)
+    Complexity,        // log2(1 + spectral peaks within 60 dB of the loudest, 20 Hz-16 kHz)
     Dissonance,        // 0..1: how much the peaks beat against each other (Dissonance)
     Salience,          // 0..1: how strongly the spectrum repeats 200 Hz-5 kHz apart (PitchSalience;
                        // harmonics do, and noise's even spectrum scores high too)
@@ -122,7 +122,7 @@ inline constexpr uint32_t kAnalysisRate = 44100;
 // Bump when what EssentiaExtractor computes changes: fingerprints saved by an
 // earlier version are then made again. (Its settings and Essentia's version
 // are part of what saved fingerprints must match too: FeatureSchema::key.)
-inline constexpr uint32_t kFeatureVersion = 1;
+inline constexpr uint32_t kFeatureVersion = 2;
 
 // The fingerprint's features (kDims of them) and schema ("essentia").
 const std::vector<FeatureInfo>& featureInfo();
@@ -140,7 +140,7 @@ public:
 
 protected:
     // Decoded at kAnalysisRate.
-    MonoAudio decode(const std::string& path, double start, double seconds) override;
+    MonoAudio decode(const std::string& path, double start, double seconds, const CancelFlag* cancel) override;
 
 private:
     struct State;

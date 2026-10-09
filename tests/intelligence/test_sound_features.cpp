@@ -2,15 +2,18 @@
 // apart, what doesn't count (level, rate, leading silence, length), damaged and
 // odd input, comparing them, the library's statistics, and the store.
 
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <limits>
 #include <map>
 #include <numbers>
+#include <stdexcept>
 
 #include "Sounds.h"
 #include "core/AudioReader.h"
+#include "core/Hash.h"
 #include "similarity/EssentiaExtractor.h"
 #include "similarity/Similarity.h"
 #include "similarity/SoundStore.h"
@@ -145,6 +148,23 @@ TEST_CASE("resampling keeps a sound's pitch, length, timing and brightness") {
     CHECK_NEAR(after[feature::Rolloff], before[feature::Rolloff], 0.01);
     // The same rate: a copy.
     CHECK(resampleMono(in.data(), in.size(), 22050, 22050) == std::vector<float>(in.begin(), in.end()));
+    // From common rates (each phase's filter made once) and odd ones (made
+    // for each sample), a tone comes out as the tone, to -60 dB.
+    for (const uint32_t from : {48000u, 192000u, 8000u, 44101u, 30001u}) {
+        INFO(std::to_string(from));
+        Samples sine(from / 2);
+        for (size_t i = 0; i < sine.size(); ++i)
+            sine[i] = static_cast<float>(0.5 * std::sin(2.0 * std::numbers::pi * 1000.0 * static_cast<double>(i) / from));
+        const std::vector<float> at = resampleMono(sine.data(), sine.size(), from, kRate);
+        CHECK_NEAR(static_cast<double>(at.size()), kRate / 2.0, 1.0);
+        double worst = 0.0;
+        for (size_t j = 2000; j + 2000 < at.size(); ++j)
+            worst = std::max(worst, std::fabs(at[j] - 0.5 * std::sin(2.0 * std::numbers::pi * 1000.0 * static_cast<double>(j) / kRate)));
+        CHECK(worst < 5e-4);
+    }
+    // Cancelled: nothing.
+    const std::atomic<bool> stop{true};
+    CHECK(resampleMono(hiss.data(), hiss.size(), kRate, 48000, &stop).empty());
 }
 
 TEST_CASE("Essentia's spectrum: a sine's brightness is its frequency, at any rate") {
@@ -266,6 +286,17 @@ TEST_CASE("very short sounds, odd rates and broken samples are analysed safely")
     CHECK(distance(fp, fingerprint(snare())) < 0.05f);
 }
 
+TEST_CASE("a part of a file is as long as asked, or as what is left of the file") {
+    EssentiaExtractor extractor;
+    const std::string path = wav("part.wav", tone(330.0, 2.0, 10.0));
+    // 10 s asked from 1 s into a 2 s file: the second that is there.
+    const std::vector<float> asked = extractor.extractFile(path, 1.0, 10.0);
+    REQUIRE(asked.size() == kDims);
+    CHECK(asked == extractor.extractFile(path, 1.0, 1.0));
+    CHECK_NEAR(asked[feature::Length], 0.0, 0.01);  // (log10 of 1 s)
+    CHECK_NEAR(extractor.extractFile(path, 0.5, 0.25)[feature::Length], std::log10(0.25), 0.01);
+}
+
 TEST_CASE("pitch: a tone's is found, noise has none") {
     for (const double hz : {55.0, 110.0, 440.0, 880.0}) {
         INFO(std::to_string(hz) + " Hz");
@@ -335,6 +366,15 @@ TEST_CASE("the spectrum's peaks, contrast, shape and change: a tone, noise, drum
     // from frame to frame, a steady tone's doesn't.
     CHECK(h[feature::ZeroCrossings] > k[feature::ZeroCrossings] + 4.f);
     CHECK(noiseFp[feature::Flux] > 10.f * steady[feature::Flux]);
+    // (A sound's first frame has nothing before it to change from: a click
+    // shorter than a frame has no flux.)
+    CHECK_EQ(fingerprint(noise(0.005))[feature::Flux], 0.f);
+    // Peaks are counted across the band: partials all above 5 kHz (a cymbal's) are many.
+    Samples high(frames(0.5), 0.f);
+    for (int p = 0; p < 40; ++p)
+        for (size_t i = 0; i < high.size(); ++i)
+            high[i] += static_cast<float>(0.02 * std::sin(2.0 * std::numbers::pi * (6000.0 + 223.0 * p) * static_cast<double>(i) / kRate + p));
+    CHECK(fingerprint(high)[feature::Complexity] > toneFp[feature::Complexity] + 2.f);
     // A loop's timbre moves from hit to hit; a steady tone's stays.
     CHECK(loop[feature::MfccSpread] > 5.f * steady[feature::MfccSpread]);
 }
@@ -438,7 +478,6 @@ TEST_CASE("the library's statistics: robust to a few wild files") {
     CHECK_EQ(tame.count, 1000u);
     CHECK_NEAR(tame.spread[0], 0.2887, 0.01);  // (uniform: 1 / sqrt(12))
     CHECK_NEAR(wild.spread[0], tame.spread[0], 0.02);
-    CHECK_NEAR(wild.center[0], tame.center[0], 0.02);
     // Fewer than two: no spread but the feature's least.
     const FeatureStatistics lone = FeatureStatistics::measure(one, values.data(), 1);
     CHECK_EQ(lone.spread[0], 1e-3f);
@@ -489,7 +528,6 @@ TEST_CASE("the store: saved and read back; another extractor's, or anything unex
     sounds[2].fingerprint.assign(kDims, 0.25f);
     FeatureStatistics statistics;
     statistics.count = 2;
-    statistics.center.assign(kDims, 0.5f);
     statistics.spread.assign(kDims, 2.f);
     const std::string file = utf8(tempDir() / "sound-index.bin");
     StoreWriter writer(schema(), 3);
@@ -511,7 +549,6 @@ TEST_CASE("the store: saved and read back; another extractor's, or anything unex
     }
     REQUIRE(read->statistics.has_value());
     CHECK_EQ(read->statistics->count, 2u);
-    CHECK(read->statistics->center == statistics.center);
     CHECK(read->statistics->spread == statistics.spread);
 
     // Without statistics.
@@ -538,11 +575,7 @@ TEST_CASE("the store: saved and read back; another extractor's, or anything unex
     writeBytes(bytes.substr(0, bytes.size() - 3));
     CHECK(!readStore(file, schema()).has_value());
     auto withChecksum = [](std::string body) {
-        uint64_t h = 1469598103934665603ull;  // FNV-1a, as the store sums
-        for (const char c : body) {
-            h ^= static_cast<unsigned char>(c);
-            h *= 1099511628211ull;
-        }
+        const uint64_t h = fnv1a(body);  // (as the store sums)
         for (int i = 0; i < 8; ++i) body.push_back(static_cast<char>(h >> (8 * i)));
         return body;
     };
@@ -553,4 +586,15 @@ TEST_CASE("the store: saved and read back; another extractor's, or anything unex
     writeBytes(withChecksum(body));
     CHECK(!readStore(file, schema()).has_value());
     CHECK(!readStore(utf8(tempDir() / "missing.bin"), schema()).has_value());
+
+    // An analysed sound's fingerprint must be the schema's size.
+    StoreWriter strict(schema(), 1);
+    StoredSound wrong = sounds[0];
+    wrong.fingerprint.resize(kDims - 1);
+    CHECK_THROWS_AS(strict.add(wrong), std::invalid_argument);
+    wrong.fingerprint.clear();
+    CHECK_THROWS_AS(strict.add(wrong), std::invalid_argument);
+    CHECK_THROWS_AS(strict.add(wrong, nullptr), std::invalid_argument);
+    wrong.analysed = false;  // (one that couldn't be analysed has none)
+    strict.add(wrong);
 }
