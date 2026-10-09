@@ -12,7 +12,7 @@
 
 add_executable(parallel_render_bench parallel_render_bench.cpp Json.h)
 target_include_directories(parallel_render_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-                           ${PROJECT_SOURCE_DIR}/tests/engine/harness)
+                           ${PROJECT_SOURCE_DIR}/tests/engine)  # harness/...: never the harness folder, whose Signal.h is <signal.h> where names ignore case
 target_link_libraries(parallel_render_bench PRIVATE sub_engine)
 sub_project_warnings(parallel_render_bench)
 # Live runs play through the fake ASIO driver the tests build (Windows, with the ASIO SDK).
@@ -35,7 +35,7 @@ if (SUBSTATION_BUILD_APP)
         ${PROJECT_SOURCE_DIR}/tests/app/support/BrowserReference.cpp
         ${PROJECT_SOURCE_DIR}/tests/app/support/BrowserReference.h)
     target_include_directories(browser_backend_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-                               ${PROJECT_SOURCE_DIR}/tests/app/support ${PROJECT_SOURCE_DIR}/tests/engine/harness)
+                               ${PROJECT_SOURCE_DIR}/tests/app/support ${PROJECT_SOURCE_DIR}/tests/engine)
     target_link_libraries(browser_backend_bench PRIVATE sub_app)
     sub_project_warnings(browser_backend_bench)
 else()
