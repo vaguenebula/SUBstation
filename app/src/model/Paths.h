@@ -1,5 +1,5 @@
 #pragma once
-// Paths as the application compares them.
+// Paths as the application compares them, and names files can have.
 //
 // Two spellings of one file are the same file: relative or absolute, with "."
 // and ".." or without, and where the system ignores case (Windows), in another
@@ -23,5 +23,10 @@ QString absoluteCleanPath(const QString& path);
 QString pathIdentity(const QString& path);
 // Whether two paths are the same file (by pathIdentity).
 bool samePath(const QString& a, const QString& b);
+
+// A name with the characters Windows forbids in file names (<>:"/\|?* and
+// control characters) each made '_'. What else a name needs (trimming,
+// reserved names, one for an empty name) is the caller's.
+QString withSafeCharacters(const QString& name);
 
 }  // namespace sub::app

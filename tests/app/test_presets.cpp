@@ -8,6 +8,7 @@
 #include "io/Serialization.h"
 #include "model/Devices.h"
 #include "model/Errors.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 
 #include <QDir>
@@ -91,6 +92,9 @@ private Q_SLOTS:
     void presetNamesBecomeFileNames() {
         test::TempDir dir;
         QCOMPARE(presetFileName("  Lead: \"Bright\" / Wide?  "), QStringLiteral("Lead_ _Bright_ _ Wide_"));
+        // (The characters Windows forbids, as takes' file names have them too.)
+        QCOMPARE(withSafeCharacters(QStringLiteral("a<b>c:d\"e/f\\g|h?i*j\tk\x01l\u00e9")),
+                 QStringLiteral("a_b_c_d_e_f_g_h_i_j_k_l\u00e9"));
         for (const char* bad : {"", "   ", "...", "CON", "nul.txt", "com1"}) {
             QVERIFY_THROWS_EXCEPTION(EditError, presetFileName(QString::fromLatin1(bad)));
         }

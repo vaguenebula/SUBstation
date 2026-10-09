@@ -2,6 +2,7 @@
 
 #include "browser/FileIndex.h"
 #include "io/Bytes.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 
 #include <QDir>
@@ -22,6 +23,15 @@ QString besideProject(const Project& project, const QString& name) {
     return QFileInfo(project.path()).absoluteDir().filePath(name);
 }
 
+// A new file in `folder`: `stem` and `extension` (".wav"), or if that is taken
+// "<stem> 2", "<stem> 3"..., the first that isn't.
+QString uniquePath(const QString& folder, const QString& stem, const QString& extension) {
+    const QDir dir(folder);
+    QString path = dir.filePath(stem + extension);
+    for (int n = 2; QFileInfo::exists(path); ++n) path = dir.filePath(stem + u' ' + QString::number(n) + extension);
+    return path;
+}
+
 }  // namespace
 
 QStringList audioExtensions() { return FileIndex::audioExtensions(); }
@@ -39,11 +49,7 @@ QString recordingsFolder(const Project& project) {
 }
 
 QString takePath(const QString& folder, const QString& trackName, const QDateTime& when) {
-    QString name;
-    for (const QChar c : trackName) {
-        const bool forbidden = QStringLiteral("<>:\"/\\|?*").contains(c) || c.unicode() < 0x20;
-        name.append(forbidden ? QChar(u'_') : c);
-    }
+    QString name = withSafeCharacters(trackName);
     // Spaces and dots go from both ends (Windows drops them from file names).
     qsizetype first = 0;
     qsizetype last = name.size();
@@ -51,13 +57,7 @@ QString takePath(const QString& folder, const QString& trackName, const QDateTim
     while (last > first && (name[last - 1] == u' ' || name[last - 1] == u'.')) --last;
     name = name.mid(first, last - first);
     if (name.isEmpty()) name = QStringLiteral("Audio");
-    const QString stem = name + u' ' + when.toString(QStringLiteral("yyyy-MM-dd HHmmss"));
-    const QDir dir(folder);
-    QString path = dir.filePath(stem + QStringLiteral(".wav"));
-    for (int n = 2; QFileInfo::exists(path); ++n) {
-        path = dir.filePath(stem + u' ' + QString::number(n) + QStringLiteral(".wav"));
-    }
-    return path;
+    return uniquePath(folder, name + u' ' + when.toString(QStringLiteral("yyyy-MM-dd HHmmss")), QStringLiteral(".wav"));
 }
 
 QString freezeFolder(const Project& project) {
@@ -71,13 +71,7 @@ QString reversedFolder(const Project& project) {
 }
 
 QString reversedPath(const QString& folder, const QString& source) {
-    const QString stem = QFileInfo(source).completeBaseName();
-    const QDir dir(folder);
-    QString path = dir.filePath(stem + QStringLiteral(" R.wav"));
-    for (int n = 2; QFileInfo::exists(path); ++n) {
-        path = dir.filePath(stem + QStringLiteral(" R ") + QString::number(n) + QStringLiteral(".wav"));
-    }
-    return path;
+    return uniquePath(folder, QFileInfo(source).completeBaseName() + QStringLiteral(" R"), QStringLiteral(".wav"));
 }
 
 std::optional<QString> makeFolder(const QString& folder, const QString& what) {

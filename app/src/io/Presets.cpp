@@ -8,7 +8,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QRegularExpression>
 #include <QStringList>
 
 #include <algorithm>
@@ -16,12 +15,6 @@
 namespace sub::app {
 
 namespace {
-
-// Not in Windows file names.
-const QRegularExpression& forbidden() {
-    static const QRegularExpression re(QStringLiteral("[<>:\"/\\\\|?*\\x{0000}-\\x{001f}]"));
-    return re;
-}
 
 bool reserved(const QString& name) {
     static const QStringList names = [] {
@@ -62,9 +55,7 @@ QString libraryDir() {
 }
 
 QString presetFileName(const QString& name) {
-    QString cleaned = name;
-    cleaned.replace(forbidden(), QStringLiteral("_"));
-    cleaned = withoutTrailingDots(cleaned.trimmed());
+    const QString cleaned = withoutTrailingDots(withSafeCharacters(name).trimmed());
     if (cleaned.isEmpty() || reserved(cleaned.section(u'.', 0, 0).toUpper())) {
         throw EditError(QStringLiteral("'%1' can't be a preset's name").arg(name));
     }

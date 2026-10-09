@@ -22,4 +22,12 @@ QString pathIdentity(const QString& path) {
 
 bool samePath(const QString& a, const QString& b) { return pathIdentity(a) == pathIdentity(b); }
 
+QString withSafeCharacters(const QString& name) {
+    QString safe = name;
+    for (QChar& c : safe) {
+        if (c.unicode() < 0x20 || QStringView(u"<>:\"/\\|?*").contains(c)) c = u'_';
+    }
+    return safe;
+}
+
 }  // namespace sub::app
