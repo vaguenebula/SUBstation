@@ -396,7 +396,7 @@ fresh, other items are the ones handed over with `setItems()`, by key.
 `ItemListModel` roles: `name`, `path`, `kind`, `detail`, `key`, `display` (the name, and for a plug-in or a preset its
 detail: "Name   (Vendor)"), `toolTip` (the item's tooltip or path, and how often it was used), `icon` ("waveform",
 "plugin" or "preset"), `uses`, `instrument`, `plugin` (a plug-in's `PluginRef` fields). `get(row)` returns every role
-of a row by name.
+of a row by name (`rowMap()`, [ListModels.h](../app/src/ListModels.h), as the plug-ins' and the File Manager's lists do).
 
 [SidebarModel](../app/src/browser/SidebarModel.h) is the sidebar as a flat list: *CATEGORIES* (All, Samples, Built-in
 and its categories, Plug-ins with Instruments and Audio Effects, Presets with a sub-entry per device they are for) and

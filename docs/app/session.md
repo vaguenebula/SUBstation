@@ -266,7 +266,8 @@ reversed clip was reversed from; frozen tracks take it).
 
 **`FileManager`** (`Session.files`, [FileManager.h](../../app/src/files/FileManager.h)) is the panel's logic:
 
-- `files` is a `FileListModel` (roles `path`, `name`, `folder`, `missing`, `uses`, `frozen`): the missing first, then
+- `files` is a `FileListModel` (roles `path`, `name`, `folder`, `missing`, `uses`, `frozen`; `get(row)` gives them by
+  name: `rowMap()`, [ListModels.h](../../app/src/ListModels.h)): the missing first, then
   by name, filtered by `filter` (every word in the name or the folder). `fileCount`, `missingCount` and `summary`
   ("12 files, 2 missing") count every file. It follows the project after each change (a zero-length timer:
   `update()` once per turn of the event loop; `update()` at once from `openProject`). Whether a file is there is a

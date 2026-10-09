@@ -460,6 +460,10 @@ private Q_SLOTS:
         QCOMPARE(rows.get(0).value(QStringLiteral("name")).toString(), QStringLiteral("Kick.wav"));
         QCOMPARE(rows.get(0).value(QStringLiteral("uses")).toString(), QStringLiteral("1 clip"));
         QCOMPARE(rows.get(0).value(QStringLiteral("folder")).toString(), QDir::toNativeSeparators(dir.path()));
+        QCOMPARE(rows.get(0).keys(), (QStringList{QStringLiteral("folder"), QStringLiteral("frozen"),
+                                                  QStringLiteral("missing"), QStringLiteral("name"),
+                                                  QStringLiteral("path"), QStringLiteral("uses")}));
+        QVERIFY(rows.get(2).isEmpty() && rows.get(-1).isEmpty());  // (no such row)
         QCOMPARE(rows.rowOf(snare), 1);
         // Filtered by name (and folder).
         files.setFilter(QStringLiteral("snar"));

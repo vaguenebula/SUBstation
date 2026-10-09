@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include "Browser.h"  // the browser's index (sub_browser: its Snapshot)
+#include "ListModels.h"
 #include "audio/AudioFiles.h"
 #include "audio/EngineBridge.h"
 #include "browser/BrowserController.h"
@@ -76,13 +77,7 @@ void FileListModel::setRows(std::vector<Row> rows) {
     if (count() != before) Q_EMIT countChanged();
 }
 
-QVariantMap FileListModel::get(int row) const {
-    if (row < 0 || row >= count()) return {};
-    const Row& r = rows_[static_cast<size_t>(row)];
-    return {{QStringLiteral("path"), r.path},       {QStringLiteral("name"), r.name},
-            {QStringLiteral("folder"), r.folder},   {QStringLiteral("uses"), r.uses},
-            {QStringLiteral("missing"), r.missing}, {QStringLiteral("frozen"), r.frozen}};
-}
+QVariantMap FileListModel::get(int row) const { return rowMap(*this, row); }
 
 int FileListModel::rowOf(const QString& path) const {
     for (int i = 0; i < count(); ++i) {

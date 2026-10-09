@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <memory>
 
+#include "ListModels.h"
 #include "browser/BrowserMime.h"
 #include "browser/Library.h"
 
@@ -60,14 +61,7 @@ std::vector<BrowserItem> ItemListModel::items(const QList<int>& rows) const {
     return out;
 }
 
-QVariantMap ItemListModel::get(int row) const {
-    QVariantMap out;
-    if (!item(row)) return out;
-    const QHash<int, QByteArray> names = roleNames();
-    for (auto it = names.cbegin(); it != names.cend(); ++it)
-        out.insert(QString::fromUtf8(it.value()), data(index(row), it.key()));
-    return out;
-}
+QVariantMap ItemListModel::get(int row) const { return rowMap(*this, row); }
 
 void ItemListModel::usesChanged() {
     if (items_.empty()) return;
