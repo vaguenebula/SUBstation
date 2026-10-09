@@ -16,8 +16,9 @@ import SUBstation
 // Enter chooses the row highlighted (the first that can be chosen, once
 // something is typed), Esc closes the menu. With one of the menu's own entries
 // highlighted, what is typed is typed here, and the arrows come back into the
-// list: the menu's entries pass their keys to keyPressed() and typed() (the
-// menu's searchField: see DynamicMenu, ArrangementMenu and the style's MenuItem).
+// list (Enter chooses that entry, as menus do): the menu's entries pass their
+// keys to keyPressed() and typed() (the menu's searchField: see DynamicMenu,
+// ArrangementMenu and the style's MenuItem).
 Item {
     id: search
 
@@ -28,8 +29,10 @@ Item {
     required property var rows
     required property var run
     // What a row is drawn with: a MenuItem showing `entry` (one of the rows),
-    // as the menu draws its own entries.
-    property Component rowComponent: plainRow
+    // as the menu draws its own entries. (The menu's: a component declared
+    // here could not be made in the list's delegates before Qt 6.12, this
+    // file's components being bound to it.)
+    required property Component rowComponent
     property int maxRows: 8
     readonly property alias field: field
     readonly property alias list: list
@@ -142,12 +145,9 @@ Item {
         return ctrl === alt
     }
 
-    // A key pressed on one of the menu's own entries (Space types too: Enter chooses the entry).
+    // A key pressed on one of the menu's own entries (Space types too: Enter is the entry's).
     function keyPressed(item, event) {
-        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            item.click()
-            event.accepted = true
-        } else if (event.key === Qt.Key_Down && item === entryAbove()) {
+        if (event.key === Qt.Key_Down && item === entryAbove()) {
             takeKeyboard()
             highlight(step(-1, 1), true)
             event.accepted = true
@@ -203,18 +203,6 @@ Item {
         text: "X"
     }
 
-    Component {
-        id: plainRow
-
-        MenuItem {
-            property var entry: null
-
-            text: entry ? entry.text : ""
-            enabled: !entry || entry.enabled
-            checkable: entry ? entry.checkable === true : false
-            checked: entry ? entry.checked === true : false
-        }
-    }
 
     // The wheel over the field, or over a list that can't scroll further: not
     // passed on to what is under the menu.

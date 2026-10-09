@@ -357,15 +357,23 @@ private Q_SLOTS:
         QTest::keyClick(window(), Qt::Key_Up);
         QCOMPARE(focused(), QStringLiteral("menuSearch"));
         QCOMPARE(row(), 1);
+        // Enter on one of the menu's entries highlighted (a tap) takes it.
+        QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(highlighted(), indexOf(QStringLiteral("Pre FX")));
+        QTest::keyClick(window(), Qt::Key_Return);
+        QTRY_VERIFY(!ui_.menu()->property("visible").toBool());
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{top, sub::app::kPreFx}));
+        // Esc closes it, nothing chosen; Enter on a row highlighted with the
+        // arrows takes it (where the old one was taken).
+        openMenu(keyed);
         QTest::keyClick(window(), Qt::Key_Escape);
         QTRY_VERIFY(!ui_.menu()->property("visible").toBool());
-        QCOMPARE(sidechain(bass, keyed), (Sidechain{top, sub::app::kPostFader}));
-        // Enter on a row highlighted with the arrows takes it.
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{top, sub::app::kPreFx}));
         openMenu(keyed);
         QTest::keyClick(window(), Qt::Key_Down);
         QTest::keyClick(window(), Qt::Key_Return);
         QTRY_VERIFY(!ui_.menu()->property("visible").toBool());
-        QCOMPARE(sidechain(bass, keyed), (Sidechain{kick, sub::app::kPostFader}));
+        QCOMPARE(sidechain(bass, keyed), (Sidechain{kick, sub::app::kPreFx}));
     }
 
     void manyTracksScroll() {
@@ -391,18 +399,20 @@ private Q_SLOTS:
         QCOMPARE(rows->property("contentY").toReal(), 0.0);
         ui_.screenshot(QStringLiteral("sidechain-menu-many"), true);
 
+        // The arrows: down to the 12th, in view. (First: on some platforms the
+        // wheel's event below hovers a row, which highlights it.)
+        for (int i = 0; i < 12; ++i) QTest::keyClick(window(), Qt::Key_Down);
+        QCOMPARE(row(), 11);
+        const qreal y = 11 * rowHeight - rows->property("contentY").toReal();
+        QVERIFY2(y > 0 && y + rowHeight <= rows->height(), qPrintable(QString::number(y)));
+        // The wheel scrolls it on.
+        const qreal before = rows->property("contentY").toReal();
         const QPoint over = test::centerOf(rows);
         QWheelEvent wheel(QPointF(over), QPointF(window()->mapToGlobal(over)), QPoint(), QPoint(0, -120), Qt::NoButton,
                           Qt::NoModifier, Qt::NoScrollPhase, false);
         QGuiApplication::sendEvent(window(), &wheel);
-        QTRY_VERIFY(rows->property("contentY").toReal() > 0);
+        QTRY_VERIFY(rows->property("contentY").toReal() > before);
         QVERIFY(ui_.menu()->property("visible").toBool());
-
-        // The arrows: down to the 12th, in view.
-        for (int i = 0; i < 12; ++i) QTest::keyClick(window(), Qt::Key_Down);
-        QCOMPARE(row(), 11);
-        const qreal y = 11 * rowHeight - rows->property("contentY").toReal();
-        QVERIFY2(y >= 0 && y + rowHeight <= rows->height(), qPrintable(QString::number(y)));
         // Typing: back to the top, the rows that match.
         typeText(QStringLiteral("track 2"));
         QCOMPARE(rows->property("contentY").toReal(), 0.0);

@@ -48,7 +48,12 @@ Menu {
     // as the menu opens.
     function search(rows, run, target) {
         const into = target || menu
-        const field = searchComponent.createObject(into.contentItem, { menu: into, rows: rows, run: run })
+        const field = searchComponent.createObject(into.contentItem, {
+            menu: into,
+            rows: rows,
+            run: run,
+            rowComponent: searchRowComponent
+        })
         into.addItem(field)
         if (into === menu)
             searchField = field
@@ -74,6 +79,18 @@ Menu {
     Component {
         id: searchComponent
         MenuSearch {}
+    }
+    // A row of a search field's list: a menu item showing its entry.
+    Component {
+        id: searchRowComponent
+        MenuItem {
+            property var entry: null
+
+            text: entry ? entry.text : ""
+            enabled: !entry || entry.enabled
+            checkable: entry ? entry.checkable === true : false
+            checked: entry ? entry.checked === true : false
+        }
     }
     Component {
         id: submenuComponent
