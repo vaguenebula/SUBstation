@@ -1,0 +1,120 @@
+--- a/src/essentia/algorithmfactory.h
++++ b/src/essentia/algorithmfactory.h
+@@ -15,6 +15,9 @@
+  *
+  * You should have received a copy of the Affero GNU General Public License
+  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
++ *
++ * Modified for SUBstation on 2026-10-09: the explicit specializations of EssentiaFactory::_instance declared
++ * (see intelligence/third_party/essentia/VERSION.txt).
+  */
+ 
+ #ifndef ESSENTIA_ALGORITHMFACTORY_H
+@@ -243,6 +246,11 @@
+   typedef EssentiaFactory<Algorithm> AlgorithmFactory;
+ }
+ 
++// The factories' instances are explicit specializations, defined in
++// essentia.cpp: declared here, so every user of the factory knows of them.
++template<> standard::AlgorithmFactory* standard::AlgorithmFactory::_instance;
++template<> streaming::AlgorithmFactory* streaming::AlgorithmFactory::_instance;
++
+ } // namespace essentia
+ 
+ 
+--- a/src/essentia/config.h
++++ b/src/essentia/config.h
+@@ -15,6 +15,9 @@
+  *
+  * You should have received a copy of the Affero GNU General Public License
+  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
++ *
++ * Modified for SUBstation on 2026-10-09: ESSENTIA_STATIC (a static library: ESSENTIA_API empty)
++ * (see intelligence/third_party/essentia/VERSION.txt).
+  */
+ 
+ #ifndef ESSENTIA_CONFIG_H
+@@ -198,7 +201,9 @@
+ 
+ // define ESSENTIA_EXPORTS when building the DLL, don't when importing it
+ // into your application.
+-#if ESSENTIA_EXPORTS
++#if defined(ESSENTIA_STATIC)
++#  define ESSENTIA_API  // built as a static library: nothing exported or imported
++#elif ESSENTIA_EXPORTS
+ #  define ESSENTIA_API ESSENTIA_DLLEXPORT
+ #else
+ #  define ESSENTIA_API ESSENTIA_DLLIMPORT
+--- a/src/essentia/essentiamath.h
++++ b/src/essentia/essentiamath.h
+@@ -15,6 +15,9 @@
+  *
+  * You should have received a copy of the Affero GNU General Public License
+  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
++ *
++ * Modified for SUBstation on 2026-10-09: std::binary_function base removed (gone from C++17 standard libraries)
++ * (see intelligence/third_party/essentia/VERSION.txt).
+  */
+ 
+ #ifndef ESSENTIA_MATH_H
+@@ -795,7 +798,7 @@
+ }
+ 
+ template<typename T, typename U, typename Comparator=std::greater<T> >
+-class PairCompare : public std::binary_function<T, U, bool> {
++class PairCompare {
+   Comparator _cmp;
+   public:
+     bool operator () (const std::pair<T,U>& p1, const std::pair<T,U>& p2) const {
+--- a/src/essentia/types.h
++++ b/src/essentia/types.h
+@@ -15,6 +15,9 @@
+  *
+  * You should have received a copy of the Affero GNU General Public License
+  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
++ *
++ * Modified for SUBstation on 2026-10-09: std::binary_function base removed (gone from C++17 standard libraries)
++ * (see intelligence/third_party/essentia/VERSION.txt).
+  */
+ 
+ #ifndef ESSENTIA_TYPES_H
+@@ -114,8 +117,7 @@
+ /**
+  * Function object for comparing two strings in a case-insensitive manner.
+  */
+-struct case_insensitive_str_cmp
+-  : public std::binary_function<const std::string&, const std::string&, bool> {
++struct case_insensitive_str_cmp {
+   bool operator()(const std::string& str1, const std::string& str2) const {
+     return std::lexicographical_compare(str1.begin(), str1.end(),
+                                         str2.begin(), str2.end(),
+--- a/src/essentia/utils/peak.h
++++ b/src/essentia/utils/peak.h
+@@ -15,6 +15,9 @@
+  *
+  * You should have received a copy of the Affero GNU General Public License
+  * version 3 along with this program.  If not, see http://www.gnu.org/licenses/
++ *
++ * Modified for SUBstation on 2026-10-09: std::binary_function bases removed (gone from C++17 standard libraries)
++ * (see intelligence/third_party/essentia/VERSION.txt).
+  */
+ 
+ #ifndef PEAK_H
+@@ -71,7 +74,7 @@
+ // the positions are equal it sorts by descending magnitude
+ template<typename Comp1=std::less<Real>,
+          typename Comp2=std::greater_equal<Real> >
+-class ComparePeakPosition : public std::binary_function<Real, Real, bool> {
++class ComparePeakPosition {
+   Comp1 _cmp1;
+   Comp2 _cmp2;
+   public:
+@@ -86,7 +89,7 @@
+ // the magnitudes are equal it sorts by ascending position
+ template<typename Comp1=std::greater<Real>,
+          typename Comp2=std::less_equal<Real> >
+-class ComparePeakMagnitude : public std::binary_function<Real, Real, bool> {
++class ComparePeakMagnitude {
+   Comp1 _cmp1;
+   Comp2 _cmp2;
+   public:
