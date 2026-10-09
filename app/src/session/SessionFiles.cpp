@@ -105,12 +105,20 @@ bool Session::importLiveSet(const QString& path) {
         live::ImportOptions options;
         options.plugins = plugins_->plugins();
         imported = live::importLiveSet(*set, path, options);
-        sub::app::loadInto(*project_, imported.project);
     } catch (const ProjectFileError& error) {
         Q_EMIT warning(error.message());
         return false;
     } catch (const std::bad_alloc&) {
         Q_EMIT warning(QStringLiteral("%1 is too large to import: there isn't enough memory.").arg(name));
+        return false;
+    }
+    // Loaded as a project file is, once the set's elements are freed. Running out
+    // of memory from here on isn't caught, as in Open: the project could be half
+    // replaced, and going on with it would be worse.
+    try {
+        sub::app::loadInto(*project_, imported.project);
+    } catch (const ProjectFileError& error) {
+        Q_EMIT warning(error.message());
         return false;
     }
     loadedFrom(path, fileStem(path));
