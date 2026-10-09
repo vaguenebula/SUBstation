@@ -68,5 +68,7 @@ const sub::ParamInfo* builtinParamInfo(const QString& kind, const QString& param
 QSet<QString> deviceIdsOfList(const std::vector<Device>& devices);
 // A device's id, and those of everything in it (a rack).
 QSet<QString> deviceIdsOf(const Device& device);
+// The ids of everything in a rack (in its chains, racks in them too), not its own.
+QSet<QString> innerDeviceIds(const Device& rack);
 
 }  // namespace sub::app

@@ -337,6 +337,9 @@ private Q_SLOTS:
         QVERIFY(!loadsInto(newDevice(kPluginKind, effectRef), newDevice(kPluginKind, synthRef)));
         QCOMPARE(deviceIdsOf(effectRack).size(), 2);
         QCOMPARE(deviceIdsOfList({effectRack, utility("v")}).size(), 3);
+        QCOMPARE(innerDeviceIds(effectRack), QSet<QString>{QStringLiteral("u")});  // (not the rack's own)
+        QCOMPARE(innerDeviceIds(rackOf({effectRack})), deviceIdsOf(effectRack));  // (in racks in it too)
+        QVERIFY(innerDeviceIds(utility("v")).isEmpty());
     }
 };
 

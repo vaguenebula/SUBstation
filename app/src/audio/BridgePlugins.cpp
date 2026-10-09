@@ -6,6 +6,7 @@
 #include "audio/BridgePrivate.h"
 
 #include "model/Devices.h"
+#include "model/Ids.h"
 #include "model/Project.h"
 #include "plugins/PluginInfo.h"
 
@@ -192,7 +193,7 @@ void EngineBridge::requestPluginEditor(const QString& trackId, const QString& de
 
 void EngineBridge::showPluginEditors(const QString& trackId) {
     Private& d = *d_;
-    const std::optional<QString> shown = trackId.isEmpty() ? std::nullopt : std::optional(trackId);
+    const std::optional<QString> shown = optionalId(trackId);
     if (shown == d.editorsTrack) return;
     d.editorsTrack = shown;
     // A copy: opening an editor may run a message loop that changes the chains.

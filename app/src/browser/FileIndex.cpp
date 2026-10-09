@@ -11,6 +11,7 @@
 #include "platform/Paths.h"
 #include "browser/BrowserSearch.h"
 #include "browser/PathKeys.h"
+#include "io/Json.h"
 
 namespace sub::app {
 
@@ -72,7 +73,7 @@ std::vector<browser::UsageRecord> usageRecords(const Library& library) {
     for (auto it = all.begin(); it != all.end(); ++it) {
         const QJsonObject record = it.value().toObject();
         double score = 0.0;
-        if (Library::truthy(record.value(QStringLiteral("score")))) {
+        if (truthy(record.value(QStringLiteral("score")))) {
             const auto number = Library::number(record.value(QStringLiteral("score")));
             if (!number) continue;  // not a number: left out
             score = *number;

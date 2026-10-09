@@ -6,6 +6,7 @@
 #include "audio/AudioFiles.h"
 #include "audio/BridgePrivate.h"
 
+#include "model/Devices.h"
 #include "model/Paths.h"
 #include "model/Project.h"
 
@@ -36,11 +37,8 @@ void EngineBridge::onFreezeChanged(const QString& trackId) {
     const Track& track = project_->track(trackId);
     const bool frozen = track.frozen.has_value();
     const bool midi = track.isMidi();
-    if (frozen) {  // its plug-ins go: their states into the model, to be saved while it is frozen
-        QSet<QString> ids;
-        for (const Device* device : iterDevices(track.devices)) ids.insert(device->id);
-        storePluginStates(ids);
-    }
+    // Frozen, its plug-ins go: their states into the model, to be saved while it is frozen.
+    if (frozen) storePluginStates(deviceIdsOfList(track.devices));
     pushFrozen(trackId);
     if (!frozen && midi) engine_.setTrackClips(*engineId, {});  // (its frozen audio: it plays its notes again)
     pushClips(trackId);

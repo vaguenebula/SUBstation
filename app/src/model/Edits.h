@@ -18,6 +18,9 @@
 
 namespace sub::app::edits {
 
+// Sorts clips by where they start, those starting together in the order they were.
+void sortByStart(std::vector<Clip>& clips);
+
 inline constexpr double kMinClipSec = 0.005;
 inline constexpr double kMinMidiClipBeats = 1.0 / 64;
 inline constexpr double kEps = 1e-9;

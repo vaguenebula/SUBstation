@@ -2,6 +2,8 @@
 
 #include "io/Json.h"
 #include "model/Automation.h"
+#include "model/Devices.h"
+#include "model/Edits.h"
 #include "model/Errors.h"
 #include "model/Keys.h"
 #include "model/Notes.h"
@@ -87,18 +89,6 @@ QJsonObject objectOr(const QJsonObject& object, const QString& key) {
         damaged(QStringLiteral("%1 is %2, not an object").arg(quoted(key), QLatin1String(typeName(*it))));
     }
     return it->toObject();
-}
-
-// Whether a value counts as true (as a condition would take it).
-bool truthy(const QJsonValue& value) {
-    switch (value.type()) {
-    case QJsonValue::Bool: return value.toBool();
-    case QJsonValue::Double: return value.toDouble() != 0.0;
-    case QJsonValue::String: return !value.toString().isEmpty();
-    case QJsonValue::Array: return !value.toArray().isEmpty();
-    case QJsonValue::Object: return !value.toObject().isEmpty();
-    default: return false;
-    }
 }
 
 // An object, or empty for nothing (null, a missing field, an empty value).
@@ -198,10 +188,6 @@ std::optional<QString> stringOrNone(const QJsonValue& value) {
     return value.toString();
 }
 
-QJsonValue optionalString(const std::optional<QString>& text) {
-    return text ? QJsonValue(*text) : QJsonValue(QJsonValue::Null);
-}
-
 double clamped(double value, double low, double high) { return std::max(low, std::min(high, value)); }
 
 // --- Paths ---
@@ -229,10 +215,7 @@ QString resolveClipPath(const QJsonObject& data, const QString& base, const QStr
 
 // The file's name without its last extension ("kick.wav": "kick").
 QString stemOf(const QString& path) {
-    QString name = path;
-#ifdef Q_OS_WIN
-    name.replace(u'\\', u'/');
-#endif
+    QString name = QDir::fromNativeSeparators(path);
     name = name.mid(name.lastIndexOf(u'/') + 1);
     const qsizetype dot = name.lastIndexOf(u'.');
     return (dot > 0 && dot < name.size() - 1) ? name.left(dot) : name;
@@ -556,8 +539,7 @@ std::optional<Freeze> freezeFromJson(const QJsonValue& value, const QString& bas
                 continue;
             }
         }
-        std::stable_sort(clips.begin(), clips.end(),
-                         [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
+        edits::sortByStart(clips);
         freeze.segments = std::move(clips);
     }
     return freeze;
@@ -798,11 +780,7 @@ Device deviceFromJson(const QJsonValue& value) {
     device.sidechain = sidechainFromJson(d.value(QStringLiteral("sidechain")));
     if (device.isRack()) {
         for (const QJsonValue& c : listOr(d, QStringLiteral("chains"))) device.chains.push_back(chainFromJson(c));
-        QSet<QString> inside;
-        for (const Chain& c : device.chains) {
-            for (const Device* inner : iterDevices(c.devices)) inside.insert(inner->id);
-        }
-        inside.remove(device.id);
+        const QSet<QString> inside = innerDeviceIds(device);
         std::vector<MacroMapping> mappings;
         for (const QJsonValue& m : listOr(d, QStringLiteral("macros"))) {
             const QJsonObject mapping = asObject(m);
@@ -890,13 +868,9 @@ void repairRouting(std::vector<Track>& tracks, std::vector<Track>& returns, Trac
         if (t.isAudio()) audioTracks.insert(t.id);
     }
     for (const auto* list : {&tracks, &returns}) {
-        for (const Track& t : *list) {
-            for (const Device* d : iterDevices(t.devices)) deviceIds.insert(d->id);
-        }
+        for (const Track& t : *list) deviceIds.unite(deviceIdsOfList(t.devices));
     }
-    if (master != nullptr) {
-        for (const Device* d : iterDevices(master->devices)) deviceIds.insert(d->id);
-    }
+    if (master != nullptr) deviceIds.unite(deviceIdsOfList(master->devices));
     {
         size_t i = 0;
         for (auto* list : {&tracks, &returns}) {
@@ -949,9 +923,7 @@ void repairRouting(std::vector<Track>& tracks, std::vector<Track>& returns, Trac
 QJsonObject projectToJson(const Project& project, const QString& projectFile) {
     const QString base = baseOf(projectFile);
     QSet<QString> deviceIds;
-    for (const Track* t : project.allTracks()) {
-        for (const Device* d : iterDevices(t->devices)) deviceIds.insert(d->id);
-    }
+    for (const Track* t : project.allTracks()) deviceIds.unite(deviceIdsOfList(t->devices));
     // View state of the devices there are, sorted.
     const auto present = [&](const QSet<QString>& ids) {
         QStringList kept;
@@ -1009,8 +981,7 @@ std::vector<Track> tracksFromJson(const QJsonObject& data, const QString& projec
             for (const QJsonValue& c : listOr(t, QStringLiteral("clips"))) {
                 track.clips.push_back(kind == kMidiKind ? midiClipFromJson(c) : audioClipFromJson(c, base));
             }
-            std::stable_sort(track.clips.begin(), track.clips.end(),
-                             [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
+            edits::sortByStart(track.clips);
         }
         track.kind = kind;
         track.automation = automationFromJson(t.value(QStringLiteral("automation")));

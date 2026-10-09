@@ -10,11 +10,13 @@
 #include <functional>
 
 #include "audio/EngineBridge.h"
+#include "editor/EditorSupport.h"
 #include "editor/ProjectEditor.h"
 #include "io/Presets.h"
 #include "io/Serialization.h"
 #include "model/Devices.h"
 #include "model/Errors.h"
+#include "model/Ids.h"
 #include "model/Project.h"
 #include "session/Selection.h"
 #include "session/SessionSupport.h"
@@ -83,7 +85,7 @@ QStringList DeviceSelection::chainDevices(const QString& chain) const {
     QStringList ids;
     const auto* list = devices();
     if (list == nullptr) return ids;
-    const auto* devices = sub::app::chainDevices(*list, chain.isEmpty() ? std::nullopt : std::optional<QString>(chain));
+    const auto* devices = sub::app::chainDevices(*list, optionalId(chain));
     if (devices != nullptr) {
         for (const Device& device : *devices) ids.append(device.id);
     }
@@ -325,14 +327,13 @@ bool DeviceSelection::ungroupSelected() {
     if (racks.isEmpty()) return false;
     selected_.clear();
     Q_EMIT changed();
-    QUndoStack* stack = editor_->undoStack();
-    stack->beginMacro(racks.size() == 1 ? QStringLiteral("Ungroup Rack") : QStringLiteral("Ungroup Racks"));
+    const editing::Macro macro(editor_->undoStack(),
+                               racks.size() == 1 ? QStringLiteral("Ungroup Rack") : QStringLiteral("Ungroup Racks"));
     for (const QString& rackId : racks) {
         if (!editor_->ungroupRack(trackId_, rackId)) {
             Q_EMIT statusMessage(QStringLiteral("A rack of several instruments can't be ungrouped: a chain has one."));
         }
     }
-    stack->endMacro();
     return true;
 }
 

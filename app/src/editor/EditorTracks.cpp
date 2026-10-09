@@ -473,14 +473,14 @@ bool ProjectEditor::canMoveTracks(const QStringList& trackIds, int index, const 
             if (p.isDescendant(parent, root)) return false;
         }
     }
-    const TrackTree tree = arranged(rootIds, index, editing::optionalId(parent));
+    const TrackTree tree = arranged(rootIds, index, optionalId(parent));
     return tree != p.tree() && validTree(tree) && !arrangementProblem(tree);
 }
 
 bool ProjectEditor::moveTracks(const QStringList& trackIds, int index, const QString& parent) {
     if (!canMoveTracks(trackIds, index, parent)) return false;
     const QStringList rootIds = roots(trackIds);
-    arrange(arranged(rootIds, index, editing::optionalId(parent)),
+    arrange(arranged(rootIds, index, optionalId(parent)),
             rootIds.size() == 1 ? QStringLiteral("Move Track") : QStringLiteral("Move Tracks"));
     return true;
 }
@@ -545,7 +545,7 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
     // too; none if it is gone.
     const auto source = [&](const QString& trackId) -> std::optional<QString> {
         if (renamed.contains(trackId)) return renamed.value(trackId);
-        if (trackId == kMaster || p.hasTrack(trackId) || p.hasReturn(trackId)) return trackId;
+        if (p.hasOwner(trackId)) return trackId;
         return std::nullopt;
     };
     std::tie(index, parent) = outsideFrozen(index, parent);
@@ -777,8 +777,7 @@ void ProjectEditor::setTrackInput(const QString& trackId, const std::vector<int>
 void ProjectEditor::setTrackInputTrack(const QString& trackId, const std::optional<QString>& sourceId) {
     const Project& p = *project_;
     const Track& track = p.track(trackId);
-    if (sourceId && (!track.isAudio() || !(*sourceId == kMaster || p.hasTrack(*sourceId) || p.hasReturn(*sourceId)) ||
-                     p.inputWouldCycle(trackId, *sourceId))) {
+    if (sourceId && (!track.isAudio() || !p.hasOwner(*sourceId) || p.inputWouldCycle(trackId, *sourceId))) {
         throw EditError(QStringLiteral("%1 can't take its input from that track").arg(track.name));
     }
     setInput(trackId, {}, sourceId);
@@ -869,8 +868,7 @@ void ProjectEditor::dropOutputs(const QSet<QString>& trackIds, const QSet<QStrin
     const Project& p = *project_;
     QSet<QString> devices = deviceIds;
     for (const QString& id : trackIds) {
-        if (!p.hasOwner(id)) continue;
-        for (const Device* d : iterDevices(p.track(id).devices)) devices.insert(d->id);
+        if (p.hasOwner(id)) devices.unite(deviceIdsOfList(p.track(id).devices));
     }
     QStringList dropped;
     for (const Track* t : p.senders()) {

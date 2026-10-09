@@ -36,8 +36,6 @@ private:
     std::vector<Note> notes_;
 };
 
-int floorMod(int value, int divisor) { return ((value % divisor) + divisor) % divisor; }
-
 int floorDivInt(int value, int divisor) {
     const int quotient = value / divisor;
     return (value % divisor != 0 && (value < 0) != (divisor < 0)) ? quotient - 1 : quotient;

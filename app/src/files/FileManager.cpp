@@ -19,6 +19,7 @@
 #include "model/Paths.h"
 #include "model/Project.h"
 #include "session/Selection.h"
+#include "session/SessionSupport.h"
 
 namespace sub::app {
 
@@ -27,8 +28,6 @@ namespace {
 QVariantMap action(const QString& id, const QString& label) {
     return {{QStringLiteral("action"), id}, {QStringLiteral("label"), label}};
 }
-
-QString stem(const QString& path) { return QFileInfo(path).completeBaseName(); }
 
 QString fileCountText(int count) {
     return count == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(count);
@@ -331,11 +330,11 @@ bool FileManager::replace(const QString& path, const QString& with) {
     }
     const std::optional<AudioFileInfo> info = bridge_->fileInfo(with);  // (it says why it couldn't read it)
     if (!info || info->duration <= 0.0) return false;
-    const QString text = QStringLiteral("Replace %1 with %2").arg(stem(path), stem(with));
+    const QString text = QStringLiteral("Replace %1 with %2").arg(fileStem(path), fileStem(with));
     if (!editor_->replaceFile(uses, with, info->duration, text)) return false;
     exists_.insert(pathIdentity(with), true);
     QString message =
-        QStringLiteral("Replaced %1 with %2 (%3)").arg(stem(path), stem(with), usesText(*project_, uses));
+        QStringLiteral("Replaced %1 with %2 (%3)").arg(fileStem(path), fileStem(with), usesText(*project_, uses));
     if (!frozen.isEmpty()) message += QStringLiteral("; frozen tracks' are left as they are");
     Q_EMIT statusMessage(message);
     return true;

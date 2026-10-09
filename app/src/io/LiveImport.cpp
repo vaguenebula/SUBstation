@@ -7,6 +7,7 @@
 
 #include "io/LiveImport.h"
 
+#include "io/Json.h"
 #include "io/LiveSet.h"
 #include "io/Serialization.h"
 #include "model/Automation.h"
@@ -698,7 +699,7 @@ QJsonObject Importer::translateTrack(const Element& track, const QString& id, co
                                                   : midi ? QStringLiteral("MIDI")
                                                          : QStringLiteral("Audio")),
                                  liveColor(colorOf(track)));
-    data[QStringLiteral("parent")] = parent ? QJsonValue(*parent) : QJsonValue(QJsonValue::Null);
+    data[QStringLiteral("parent")] = optionalString(parent);
     data[QStringLiteral("folded")] = !track.flag(u"TrackUnfolded", true);
     if (const Element* mixer = track.at(u"DeviceChain/Mixer")) {
         translateMixer(*mixer, id, data);
@@ -723,7 +724,7 @@ QJsonObject Importer::translateTrack(const Element& track, const QString& id, co
 void Importer::translateDrumTrack(const Element& track, const Element& drums, const QString& id,
                                   const std::optional<QString>& parent) {
     QJsonObject group = trackBase(id, kGroupKind, trackName(track, QStringLiteral("Drums")), liveColor(colorOf(track)));
-    group[QStringLiteral("parent")] = parent ? QJsonValue(*parent) : QJsonValue(QJsonValue::Null);
+    group[QStringLiteral("parent")] = optionalString(parent);
     group[QStringLiteral("folded")] = !track.flag(u"TrackUnfolded", true);
     if (const Element* mixer = track.at(u"DeviceChain/Mixer")) {
         translateMixer(*mixer, id, group);

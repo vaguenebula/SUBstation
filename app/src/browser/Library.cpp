@@ -1,7 +1,6 @@
 #include "browser/Library.h"
 
 #include <QDateTime>
-#include <QJsonArray>
 
 #include <algorithm>
 #include <cmath>
@@ -29,17 +28,6 @@ std::optional<double> Library::number(const QJsonValue& value) {
         if (ok) return parsed;
     }
     return std::nullopt;
-}
-
-bool Library::truthy(const QJsonValue& value) {
-    switch (value.type()) {
-        case QJsonValue::Bool: return value.toBool();
-        case QJsonValue::Double: return value.toDouble() != 0.0;
-        case QJsonValue::String: return !value.toString().isEmpty();
-        case QJsonValue::Array: return !value.toArray().isEmpty();
-        case QJsonValue::Object: return !value.toObject().isEmpty();
-        default: return false;
-    }
 }
 
 void Library::recordUse(const QStringList& keys) {

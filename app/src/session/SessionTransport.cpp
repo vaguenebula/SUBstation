@@ -80,9 +80,6 @@ QVariantList Session::countInChoices() const {
     return choices;
 }
 
-double Session::countInBeats() const {
-    const TimeSignature& ts = project_->timeSignature();
-    return countInBars() * ts.numerator * 4.0 / ts.denominator;
-}
+double Session::countInBeats() const { return countInBars() * project_->timeSignature().beatsPerBar(); }
 
 }  // namespace sub::app

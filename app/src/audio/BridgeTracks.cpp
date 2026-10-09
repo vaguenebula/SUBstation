@@ -53,8 +53,7 @@ void EngineBridge::onReset() {
     d.previewing.clear();
     d.reversed.clear();
     stopLoadingPlugins();
-    QStringList ids;
-    for (const Track* track : project_->allTracks()) ids.append(track->id);
+    const QStringList ids = project_->owners();
     d.deferring = true;  // its plug-ins load after it shows (BridgeLoading.cpp)
     try {
         for (const QString& id : ids) addEngineTrack(id);

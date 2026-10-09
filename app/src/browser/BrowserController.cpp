@@ -299,9 +299,7 @@ void BrowserController::updatePluginsToolTip() {
     const std::vector<ScanFailure>& failures = plugins_->failures();
     QStringList lines{QStringLiteral("VST3 plug-ins")};
     if (!failures.empty()) {
-        lines << QString() << QStringLiteral("Could not be read:");
-        for (size_t i = 0; i < failures.size() && i < 30; ++i)
-            lines << QFileInfo(failures[i].path).fileName() + QStringLiteral(": ") + failures[i].reason;
+        lines << QString() << QStringLiteral("Could not be read:") << plugins_->failuresText();
         if (failures.size() > 30) lines << QStringLiteral("...and %1 more").arg(failures.size() - 30);
     }
     const QString toolTip = lines.join(QLatin1Char('\n'));

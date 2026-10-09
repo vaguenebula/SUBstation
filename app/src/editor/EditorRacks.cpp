@@ -19,7 +19,6 @@
 namespace sub::app {
 
 using editing::indexOfDevice;
-using editing::optionalId;
 
 namespace {
 

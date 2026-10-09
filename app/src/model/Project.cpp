@@ -1,5 +1,6 @@
 #include "model/Project.h"
 
+#include "model/Edits.h"
 #include "model/Errors.h"
 #include "model/TrackNames.h"
 
@@ -525,17 +526,14 @@ void Project::setFrozen(const QString& trackId, const std::optional<Freeze>& fre
 void Project::setFrozenSegments(const QString& trackId, std::optional<std::vector<Clip>> segments) {
     std::optional<Freeze>& frozen = trackRef(trackId).frozen;
     if (!frozen) return;
-    if (segments) {
-        std::stable_sort(segments->begin(), segments->end(),
-                         [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
-    }
+    if (segments) edits::sortByStart(*segments);
     if (frozen->segments == segments) return;
     frozen->segments = std::move(segments);
     Q_EMIT clipsChanged(trackId);
 }
 
 void Project::setClips(const QString& trackId, std::vector<Clip> clips) {
-    std::stable_sort(clips.begin(), clips.end(), [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
+    edits::sortByStart(clips);
     Track& track = trackRef(trackId);
     const bool followed = namedByContents(track);
     track.clips = std::move(clips);

@@ -851,7 +851,7 @@ QMap<QString, std::vector<Clip>> ProjectEditor::changedInRange(double start, dou
             changed.append({id, piece.id});
             kept.push_back(piece);
         }
-        std::stable_sort(kept.begin(), kept.end(), [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
+        edits::sortByStart(kept);
         after.insert(id, kept);
     }
     return after;

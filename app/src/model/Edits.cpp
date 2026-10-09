@@ -11,11 +11,11 @@
 
 namespace sub::app::edits {
 
-namespace {
-
 void sortByStart(std::vector<Clip>& clips) {
     std::stable_sort(clips.begin(), clips.end(), [](const Clip& a, const Clip& b) { return a.startBeat < b.startBeat; });
 }
+
+namespace {
 
 // The part of `clip` between two beats, its content left in place on the
 // timeline; none if that is too short to keep.

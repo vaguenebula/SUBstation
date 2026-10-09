@@ -15,14 +15,6 @@ namespace sub::app {
 
 namespace {
 
-// Every device on a track, in racks too (depth first, in order).
-void eachDevice(const std::vector<Device>& devices, const std::function<void(const Device&)>& visit) {
-    for (const Device& device : devices) {
-        visit(device);
-        for (const Chain& chain : device.chains) eachDevice(chain.devices, visit);
-    }
-}
-
 // Every use of a file in the project: (its path, the use), in the order met.
 void eachUse(const Project& project, const std::function<void(const QString&, const ClipRef*, const DeviceRef*)>& use) {
     for (const Track* track : project.allTracks()) {
@@ -33,12 +25,12 @@ void eachUse(const Project& project, const std::function<void(const QString&, co
                 use(clip.path, &ref, nullptr);
             }
         }
-        eachDevice(track->devices, [&](const Device& device) {
-            const QString path = deviceFile(device);
-            if (path.isEmpty()) return;
-            const DeviceRef ref{track->id, device.id};
+        for (const Device* device : iterDevices(track->devices)) {  // (in racks too)
+            const QString path = deviceFile(*device);
+            if (path.isEmpty()) continue;
+            const DeviceRef ref{track->id, device->id};
             use(path, nullptr, &ref);
-        });
+        }
     }
 }
 

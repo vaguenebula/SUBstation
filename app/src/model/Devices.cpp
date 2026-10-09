@@ -145,4 +145,11 @@ QSet<QString> deviceIdsOf(const Device& device) {
     return ids;
 }
 
+QSet<QString> innerDeviceIds(const Device& rack) {
+    QSet<QString> ids;
+    for (const Chain& chain : rack.chains) ids.unite(deviceIdsOfList(chain.devices));
+    ids.remove(rack.id);  // (should something in it have its id)
+    return ids;
+}
+
 }  // namespace sub::app
