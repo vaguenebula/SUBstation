@@ -86,9 +86,11 @@ inline float fallCoefficient(float ms, double samplesPerMs) noexcept {
 
 // --- Notes ---------------------------------------------------------------------------------
 
-// Renders a block in stretches between its note events: render(from, to) up to
-// each event, then noteOn(key, velocity) for a note that starts there or
-// noteOff(key) for one that ends (a note-on at velocity 0 too), then the rest.
+// Renders a block in stretches between its events: render(from, to) up to each
+// event, then noteOn(key, velocity) for a note that starts there or
+// noteOff(key) for one that ends (ProcessEvent::startsNote/endsNote), then the
+// rest. Every event splits the block, so one more kind (a pitch bend, a
+// controller) needs only its own handler here.
 template <typename Render, typename NoteOn, typename NoteOff>
 void renderBetweenNotes(const EventList& events, int frames, Render&& render, NoteOn&& noteOn, NoteOff&& noteOff) {
     int position = 0;
