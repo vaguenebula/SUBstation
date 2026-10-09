@@ -20,10 +20,7 @@ struct AutomationEngine {
 std::string longDcWav() { return makeWav(full(4 * kSampleRate * 2, 0.5f), 2); }
 
 uint32_t dcTrack(sub::Engine& engine, const std::string& path, double seconds = 4.0) {
-    engine.loadSource(path);
-    const uint32_t track = engine.addTrack();
-    engine.setTrackClips(track, {clip(path, 0.0, seconds, 0.0, 1.f)});
-    return track;
+    return clipTrack(engine, path, 0.0, seconds);
 }
 
 using Points = std::vector<sub::AutomationPoint>;

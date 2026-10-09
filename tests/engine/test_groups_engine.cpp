@@ -12,7 +12,6 @@ using namespace subtest;
 
 namespace {
 
-enum { FX_GAIN, FX_LATENCY };  // SUB Test Effect's parameters
 
 struct GroupsEngine {
     sub::Engine engine;
@@ -25,24 +24,7 @@ uint32_t group(sub::Engine& engine, std::optional<uint32_t> output = std::nullop
     return track;
 }
 
-uint32_t utility(sub::Engine& engine, uint32_t track, float gainDb) {
-    return utilityOn(engine, engine.trackChain(track), gainDb);
-}
-
-uint32_t latentEffect(sub::Engine& engine, uint32_t track, int latency) {
-    const uint32_t effect = addTestPlugin(engine, engine.trackChain(track), "SUB Test Effect");
-    engine.setProcessorParam(effect, FX_LATENCY, static_cast<float>(latency));
-    engine.idle();  // the plug-in asked for a restart to change its latency
-    return effect;
-}
-
 // A click of 0.25 at the start of 1000 samples.
-std::string clickWav() {
-    Samples click(1000, 0.f);
-    click[0] = 0.25f;
-    return makeWav(click);
-}
-
 std::vector<int64_t> clicks(const Samples& out) { return above(channel(out, 0), 1e-6); }
 
 std::string level(float value, int seconds = 1) { return makeWav(full(static_cast<size_t>(seconds) * kSampleRate * 2, value), 2); }
@@ -174,7 +156,7 @@ TEST_CASE("compensation in nested groups") {
     requireTestPlugins();
     GroupsEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(0.25);
     const uint32_t outer = group(engine);
     const uint32_t inner = group(engine, outer);
     const uint32_t deep = clipTrack(engine, wav, 1.0, 1.0, inner);  // in a group in a group

@@ -13,23 +13,11 @@ using namespace subtest;
 
 namespace {
 
-enum { FX_GAIN, FX_LATENCY };  // SUB Test Effect's parameters
 
 struct FreezeEngine {
     sub::Engine engine;
     FreezeEngine() { engine.setClipFadeMs(0); }
 };
-
-uint32_t utility(sub::Engine& engine, uint32_t track, float gainDb) {
-    return utilityOn(engine, engine.trackChain(track), gainDb);
-}
-
-uint32_t latentEffect(sub::Engine& engine, uint32_t track, int latency) {
-    const uint32_t effect = addTestPlugin(engine, engine.trackChain(track), "SUB Test Effect");
-    engine.setProcessorParam(effect, FX_LATENCY, static_cast<float>(latency));
-    engine.idle();  // the plug-in asked for a restart to change its latency
-    return effect;
-}
 
 // Renders the track to `path` and plays that instead, frozen (as the app does).
 int64_t freeze(sub::Engine& engine, uint32_t track, const std::filesystem::path& path, double endBeat,
@@ -45,12 +33,6 @@ int64_t freeze(sub::Engine& engine, uint32_t track, const std::filesystem::path&
 std::vector<int64_t> clicks(const Samples& out) { return above(channel(out, 0), 1e-6); }
 
 // A click of 0.25 at sample 1000 of a second.
-std::string clickWav() {
-    Samples click(kSampleRate, 0.f);
-    click[1000] = 0.25f;
-    return makeWav(click);
-}
-
 std::string level(float value, int seconds = 1) { return makeWav(full(static_cast<size_t>(seconds) * kSampleRate * 2, value), 2); }
 
 }  // namespace
@@ -104,7 +86,7 @@ TEST_CASE("the render lines up with the timeline") {
     requireTestPlugins();
     FreezeEngine e;
     auto& engine = e.engine;
-    const uint32_t track = clipTrack(engine, clickWav());
+    const uint32_t track = clipTrack(engine, clickWav(0.25, kSampleRate, 1000));
     latentEffect(engine, track, 300);
     CHECK(clicks(engine.renderTrackOffline(track, 0.0, 4000)) == std::vector<int64_t>{1000});
 }
@@ -114,7 +96,7 @@ TEST_CASE("a group's render lines up with the timeline") {
     FreezeEngine e;
     auto& engine = e.engine;
     const uint32_t bus = engine.addTrack();
-    const uint32_t late = clipTrack(engine, clickWav(), 0.0, 1.0, bus);
+    const uint32_t late = clipTrack(engine, clickWav(0.25, kSampleRate, 1000), 0.0, 1.0, bus);
     latentEffect(engine, late, 200);  // the bus hears its tracks 200 late
     latentEffect(engine, bus, 100);
     CHECK(clicks(engine.renderTrackOffline(bus, 0.0, 4000)) == std::vector<int64_t>{1000});
@@ -241,7 +223,7 @@ TEST_CASE("a frozen track adds no latency") {
     requireTestPlugins();
     FreezeEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(0.25, kSampleRate, 1000);
     const uint32_t track = clipTrack(engine, wav);
     latentEffect(engine, track, 300);
     clipTrack(engine, wav, 1.0);
@@ -255,7 +237,7 @@ TEST_CASE("a frozen group lines up with nothing inside it") {
     requireTestPlugins();
     FreezeEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(0.25, kSampleRate, 1000);
     const uint32_t bus = engine.addTrack();
     const uint32_t child = clipTrack(engine, wav, 0.0, 1.0, bus);
     latentEffect(engine, child, 500);  // would make everything else 500 late

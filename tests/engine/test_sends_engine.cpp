@@ -17,33 +17,15 @@ using namespace subtest;
 
 namespace {
 
-enum { FX_GAIN, FX_LATENCY };  // SUB Test Effect's parameters
 
 struct SendsEngine {
     sub::Engine engine;
     SendsEngine() { engine.setClipFadeMs(0); }
 };
 
-uint32_t utility(sub::Engine& engine, uint32_t track, float gainDb) {
-    return utilityOn(engine, engine.trackChain(track), gainDb);
-}
-
-uint32_t latentEffect(sub::Engine& engine, uint32_t track, int latency) {
-    const uint32_t effect = addTestPlugin(engine, engine.trackChain(track), "SUB Test Effect");
-    engine.setProcessorParam(effect, FX_LATENCY, static_cast<float>(latency));
-    engine.idle();  // the plug-in asked for a restart to change its latency
-    return effect;
-}
-
 double level(sub::Engine& engine) { return at(engine.renderOffline(0.0, 4000), -1, 0); }  // past a Utility's ramp
 
 // A click of 0.25 at the start of 1000 samples.
-std::string clickWav() {
-    Samples click(1000, 0.f);
-    click[0] = 0.25f;
-    return makeWav(click);
-}
-
 std::vector<int64_t> clicks(const Samples& out) { return above(channel(out, 0), 1e-6); }
 
 std::string levelWav(float value, int seconds = 1) {
@@ -190,7 +172,7 @@ TEST_CASE("compensation across sends") {
     requireTestPlugins();
     SendsEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(0.25);
     const uint32_t track = clipTrack(engine, wav, 1.0);
     clipTrack(engine, wav, 1.0);  // beside it, straight into the master
     const uint32_t nearReturn = engine.addTrack(), farReturn = engine.addTrack();  // returns
@@ -225,7 +207,7 @@ TEST_CASE("a pre-fader tap after a latent device") {
     requireTestPlugins();
     SendsEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(0.25);
     const uint32_t track = clipTrack(engine, wav, 1.0);
     const uint32_t ret = engine.addTrack();
     latentEffect(engine, track, 200);
@@ -247,7 +229,7 @@ TEST_CASE("send automation plays in time") {
     const uint32_t ret = engine.addTrack();
     latentEffect(engine, track, 100);
     latentEffect(engine, ret, 50);
-    const uint32_t late = clipTrack(engine, clickWav());
+    const uint32_t late = clipTrack(engine, clickWav(0.25));
     latentEffect(engine, late, 400);  // so that the return's edge to the master is delayed too
     engine.setTrackGain(track, 0.f);  // only the send is heard
     engine.setTrackSend(track, ret, 1.f, true);

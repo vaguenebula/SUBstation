@@ -22,10 +22,7 @@ struct SwitchEngine {
 std::string longDcWav() { return makeWav(full(4 * kSampleRate * 2, 0.5f), 2); }
 
 uint32_t dcTrack(sub::Engine& engine, const std::string& path, double startBeat = 0.0) {
-    engine.loadSource(path);
-    const uint32_t track = engine.addTrack();
-    engine.setTrackClips(track, {clip(path, startBeat, 4.0, 0.0, 1.f)});
-    return track;
+    return clipTrack(engine, path, startBeat, 4.0);
 }
 
 using Points = std::vector<sub::AutomationPoint>;

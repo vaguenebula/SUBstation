@@ -26,22 +26,12 @@
 #include <QTest>
 
 using namespace sub::app;
+using test::ids;
+using test::kinds;
 using sub::app::test::SessionFixture;
 using sub::app::test::TempDir;
 
 namespace {
-
-QStringList ids(const std::vector<Device>& devices) {
-    QStringList list;
-    for (const Device& device : devices) list.append(device.id);
-    return list;
-}
-
-QStringList kinds(const std::vector<Device>& devices) {
-    QStringList list;
-    for (const Device& device : devices) list.append(device.kind);
-    return list;
-}
 
 // A new audio track (Ctrl+T), selected, with these devices.
 std::pair<QString, QStringList> shownTrack(SessionFixture& f, const QStringList& deviceKinds) {

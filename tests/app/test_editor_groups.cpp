@@ -18,6 +18,7 @@
 
 using namespace sub::app;
 using test::EditorFixture;
+using test::ids;
 
 namespace {
 
@@ -36,12 +37,6 @@ QStringList tracks(EditorFixture& f, const QStringList& trackNames) {
     QStringList ids;
     for (const QString& name : trackNames) ids.append(f.editor.addAudioTrack(-1, name));
     return ids;
-}
-
-QStringList ids(const std::vector<const Track*>& tracks) {
-    QStringList result;
-    for (const Track* t : tracks) result.append(t->id);
-    return result;
 }
 
 QStringList order(const Project& project) {

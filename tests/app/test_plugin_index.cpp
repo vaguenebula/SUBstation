@@ -157,25 +157,6 @@ struct Progress {
     }
 };
 
-// An environment variable set for one test, and put back after it.
-class ScopedEnv {
-public:
-    ScopedEnv(const char* name, const QByteArray& value) : name_(name), had_(qEnvironmentVariableIsSet(name)), old_(qgetenv(name)) {
-        qputenv(name, value);
-    }
-    ~ScopedEnv() {
-        if (had_)
-            qputenv(name_, old_);
-        else
-            qunsetenv(name_);
-    }
-
-private:
-    const char* name_;
-    bool had_;
-    QByteArray old_;
-};
-
 }  // namespace
 
 class TestPluginIndex : public QObject {
@@ -370,7 +351,7 @@ private Q_SLOTS:
     void aScannerThatDoesNotStartFails() {
         QFETCH(QString, mode);
         QFETCH(bool, missing);
-        const ScopedEnv env("SUB_FAKE_SCANNER", mode.toUtf8());
+        const test::ScopedEnv env("SUB_FAKE_SCANNER", mode);
         const QString a = path(QStringLiteral("VST3/A.vst3"));
         writeFile(a, "error:x");
         PluginScanner scanner(missing ? path(QStringLiteral("no-such-scanner")) : self(), cacheFile(), 1.0);
@@ -444,7 +425,7 @@ private Q_SLOTS:
     void searchPaths() {
         const QString root = tmp_->path();
         const QString a = root + QStringLiteral("/A"), b = root + QStringLiteral("/B"), c = root + QStringLiteral("/C");
-        const ScopedEnv env("SUBSTATION_VST3_PATH", (a + QDir::listSeparator() + b).toUtf8());
+        const test::ScopedEnv env("SUBSTATION_VST3_PATH", a + QDir::listSeparator() + b);
         QCOMPARE(standardPluginFolders(), QStringList({a, b}));
         QCOMPARE(pluginSearchFolders(), QStringList({a, b}));
         // The user's own folders come after the standard ones, each folder once.
@@ -569,7 +550,7 @@ private Q_SLOTS:
         const QString more = path(QStringLiteral("VST3/More Junk.vst3"));
         writeFile(junk, "not a plug-in");
         writeFile(more, "nor this");
-        const ScopedEnv crash("SUB_TEST_PLUGIN_CRASH", "1");  // the test plug-ins kill the process as they load
+        const test::ScopedEnv crash("SUB_TEST_PLUGIN_CRASH", QStringLiteral("1"));  // the test plug-ins kill the process as they load
         const ScanResult result = PluginScanner(QStringLiteral(SUBSTATION_SCANNER), cacheFile()).scan(QStringList{junk, bundle, more});
         QVERIFY(result.plugins.empty());
         const auto why = reasons(result);
@@ -589,7 +570,7 @@ private Q_SLOTS:
         copyTree(QStringLiteral(SUBSTATION_TEST_PLUGINS_BUNDLE), bundle);
         const QString junk = path(QStringLiteral("VST3/Junk.vst3"));
         writeFile(junk, "not a plug-in");
-        const ScopedEnv hang("SUB_TEST_PLUGIN_HANG", "1");
+        const test::ScopedEnv hang("SUB_TEST_PLUGIN_HANG", QStringLiteral("1"));
         QElapsedTimer timer;
         timer.start();
         const ScanResult result = PluginScanner(QStringLiteral(SUBSTATION_SCANNER), cacheFile(), 2.0).scan(QStringList{bundle, junk});

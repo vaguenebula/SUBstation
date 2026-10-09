@@ -24,7 +24,6 @@ namespace {
 
 // SUB Test Synth's parameters (then Macros 2..10).
 enum { GAIN, WAVE, TEMPO, PLAYING, BEAT, LOOP, MACRO };
-enum { FX_GAIN, FX_LATENCY, FX_BYPASS };  // SUB Test Effect's
 
 using EventType = sub::ProcessorEvent::Type;
 
@@ -50,12 +49,6 @@ std::vector<std::string> paramNames(const std::vector<sub::ParamInfo>& params) {
     std::vector<std::string> names;
     for (const auto& p : params) names.push_back(p.name);
     return names;
-}
-
-std::string clickWav() {
-    std::vector<float> click(1000, 0.f);
-    click[0] = 0.5f;
-    return makeWav(click);
 }
 
 #ifdef _WIN32
@@ -264,7 +257,7 @@ TEST_CASE("a mono plug-in on a stereo track") {
 TEST_CASE("latency is compensated") {
     PluginEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(0.5);
     const uint32_t late = clipTrack(engine, wav, 1.0);
     const uint32_t direct = clipTrack(engine, wav, 1.0);
     const uint32_t effect = addTestPlugin(engine, engine.trackChain(late), "SUB Test Effect");
@@ -359,7 +352,7 @@ TEST_CASE("chain order") {
 TEST_CASE("a plug-in moves to another track as it is") {
     PluginEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(0.5);
     const uint32_t a = clipTrack(engine, wav, 1.0);
     const uint32_t b = clipTrack(engine, wav, 1.0);
     const uint32_t effect = addTestPlugin(engine, engine.trackChain(a), "SUB Test Effect");
@@ -467,7 +460,7 @@ TEST_CASE("plug-ins without an editor") {
 TEST_CASE("a latent plug-in on the master") {
     PluginEngine e;
     auto& engine = e.engine;
-    const uint32_t track = clipTrack(engine, clickWav(), 1.0);
+    const uint32_t track = clipTrack(engine, clickWav(0.5), 1.0);
     const uint32_t effect = addTestPlugin(engine, engine.trackChain(sub::Engine::kMaster), "SUB Test Effect");
     engine.setProcessorParam(effect, FX_LATENCY, 100);
     engine.idle();  // the plug-in asked for a restart to change its latency

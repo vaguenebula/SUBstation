@@ -153,11 +153,9 @@ private Q_SLOTS:
         QCOMPARE(recordingsFolder(project), QDir(dir.path()).filePath("Recordings"));
         QCOMPARE(freezeFolder(project), QDir(dir.path()).filePath("Freeze"));
         QCOMPARE(reversedFolder(project), QDir(dir.path()).filePath("Reversed"));
-        const QByteArray before = qgetenv("SUBSTATION_RECORDINGS");
-        qunsetenv("SUBSTATION_RECORDINGS");
+        const test::ScopedEnv unset("SUBSTATION_RECORDINGS", std::nullopt);
         project.setPath({});
         QVERIFY(recordingsFolder(project).endsWith("SUBstation/Recordings"));
-        qputenv("SUBSTATION_RECORDINGS", before);
     }
 
     void reversedCopiesAreNumbered() {

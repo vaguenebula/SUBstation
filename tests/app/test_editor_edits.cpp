@@ -19,20 +19,13 @@
 
 using namespace sub::app;
 using test::EditorFixture;
+using test::round6;
+using test::Spans;
+using test::spans;
 
 namespace {
 
 constexpr double kTempo = 120.0;  // 1 beat = 0.5 s
-
-double round6(double value) { return std::round(value * 1e6) / 1e6; }
-
-using Spans = std::vector<std::pair<double, double>>;
-
-Spans spans(const std::vector<Clip>& clips, double tempo = kTempo) {
-    Spans result;
-    for (const Clip& c : clips) result.emplace_back(round6(c.startBeat), round6(c.endBeat(tempo)));
-    return result;
-}
 
 bool near(double a, double b, double tolerance = 1e-9) { return std::abs(a - b) <= tolerance; }
 

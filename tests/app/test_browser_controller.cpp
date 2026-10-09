@@ -105,8 +105,7 @@ private Q_SLOTS:
         const QString music = QDir(home).filePath(QStringLiteral("Music"));
         QCOMPARE(BrowserController::defaultPlaces(), QStringList{normalPath(QFileInfo(music).isDir() ? music : home)});
 #ifndef _WIN32
-        const QByteArray oldHome = qgetenv("HOME");
-        qputenv("HOME", path(QStringLiteral("home")).toUtf8());
+        const test::ScopedEnv homeEnv("HOME", path(QStringLiteral("home")));
         QDir().mkpath(path(QStringLiteral("home/Music")));
         {
             BrowserController browser(nullptr, options());
@@ -121,7 +120,6 @@ private Q_SLOTS:
                      << QStringLiteral("Add Folder…");
             QCOMPARE(sidebarTitles(*browser.sidebar()), expected);
         }
-        qputenv("HOME", oldHome);
 #endif
     }
 

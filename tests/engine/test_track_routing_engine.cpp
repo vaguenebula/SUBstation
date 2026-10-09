@@ -15,7 +15,6 @@ using namespace subtest;
 
 namespace {
 
-enum { FX_GAIN, FX_LATENCY };  // SUB Test Effect's parameters
 constexpr double kClick = 0.25;
 
 struct RoutingEngine {
@@ -27,17 +26,8 @@ struct RoutingEngine {
 };
 
 // A click of kClick at the start of 1000 samples.
-std::string clickWav() {
-    Samples click(1000, 0.f);
-    click[0] = static_cast<float>(kClick);
-    return makeWav(click);
-}
-
 uint32_t clickTrack(sub::Engine& engine, const std::string& path, double startBeat = 1.0) {
-    engine.loadSource(path);
-    const uint32_t track = engine.addTrack();
-    engine.setTrackClips(track, {clip(path, startBeat, 1000.0 / kSampleRate)});
-    return track;
+    return clipTrack(engine, path, startBeat, 1000.0 / kSampleRate);
 }
 
 // SUB Test Effect: `gain` times its input, `latency` samples late.
@@ -49,11 +39,6 @@ uint32_t effect(sub::Engine& engine, uint32_t track, int latency = 0, double gai
     return pid;
 }
 
-// SUB Test Sidechain on a track (its output: its input plus its sidechain).
-uint32_t keyed(sub::Engine& engine, uint32_t track) {
-    return addTestPlugin(engine, engine.trackChain(track), "SUB Test Sidechain");
-}
-
 Clicks render(sub::Engine& engine, double beats = 2.0) {
     return clicksOf(channel(engine.renderOffline(0.0, static_cast<int64_t>(beats * kBeat)), 0));
 }
@@ -63,7 +48,7 @@ Clicks render(sub::Engine& engine, double beats = 2.0) {
 TEST_CASE("sends only: a track without an output is heard through its sends") {
     RoutingEngine e;
     auto& engine = e.engine;
-    const uint32_t track = clickTrack(engine, clickWav());
+    const uint32_t track = clickTrack(engine, clickWav(kClick));
     const uint32_t ret = engine.addTrack();
     engine.setTrackSend(track, ret, 0.5f, false);
     CHECK_CLICKS(render(engine), {{kBeat, kClick * 1.5}});  // its output and its send
@@ -80,7 +65,7 @@ TEST_CASE("sends only: a track without an output is heard through its sends") {
 TEST_CASE("an output into a device's sidechain is heard only there") {
     RoutingEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t source = clickTrack(engine, wav);
     engine.setTrackGain(source, 0.5f);  // after its fader
     const uint32_t track = engine.addTrack();  // no clips: its device puts out what its sidechain hears
@@ -121,7 +106,7 @@ TEST_CASE("outputs into a sidechain line up with the signal at the device") {
         INFO("source " + std::to_string(sourceLatency) + ", track " + std::to_string(trackLatency));
         RoutingEngine e;
         auto& engine = e.engine;
-        const std::string wav = clickWav();
+        const std::string wav = clickWav(kClick);
         const uint32_t source = clickTrack(engine, wav);
         effect(engine, source, sourceLatency);
         const uint32_t other = clickTrack(engine, wav);  // a second output into it, with no latency
@@ -138,7 +123,7 @@ TEST_CASE("outputs into a sidechain that would close a cycle are refused") {
     RoutingEngine e;
     auto& engine = e.engine;
     const uint32_t group = engine.addTrack();
-    const uint32_t track = clickTrack(engine, clickWav());
+    const uint32_t track = clickTrack(engine, clickWav(kClick));
     engine.setTrackOutput(track, group);
     const uint32_t own = keyed(engine, track);
     const uint32_t onGroup = keyed(engine, group);
@@ -148,7 +133,7 @@ TEST_CASE("outputs into a sidechain that would close a cycle are refused") {
     const uint32_t plain = engine.addBuiltinProcessor(engine.trackChain(group), "utility", -1);
     CHECK_THROWS_AS(engine.setTrackOutputSidechain(track, plain), std::invalid_argument);  // no sidechain input
     // A device moving onto a track that feeds what goes into it: refused too.
-    const uint32_t other = clickTrack(engine, clickWav());
+    const uint32_t other = clickTrack(engine, clickWav(kClick));
     engine.setTrackOutputSidechain(other, onGroup);
     engine.setTrackOutput(track, other);  // (into the other's bus: the other track feeds the group no more)
     CHECK_THROWS_AS(engine.moveProcessor(onGroup, engine.trackChain(track), -1), std::invalid_argument);
@@ -158,7 +143,7 @@ TEST_CASE("outputs into a sidechain that would close a cycle are refused") {
 TEST_CASE("track in: what goes into a track is heard while it monitors") {
     RoutingEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t source = clickTrack(engine, wav);
     engine.setTrackGain(source, 0.5f);
     const uint32_t track = clickTrack(engine, wav, 0.0);  // its own clip, a beat earlier
@@ -185,7 +170,7 @@ TEST_CASE("track in: what goes into a track is heard while it monitors") {
 TEST_CASE("track in lines nothing up: the track hears its inputs as they come") {
     RoutingEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t source = clickTrack(engine, wav);
     effect(engine, source, 300);
     const uint32_t track = engine.addTrack();
@@ -201,7 +186,7 @@ TEST_CASE("track in lines nothing up: the track hears its inputs as they come") 
 TEST_CASE("an input from a track tapped before its devices, before its fader or after it") {
     RoutingEngine e;
     auto& engine = e.engine;
-    const uint32_t source = clickTrack(engine, clickWav());
+    const uint32_t source = clickTrack(engine, clickWav(kClick));
     const uint32_t fx = effect(engine, source, 0, 0.5);
     engine.setTrackGain(source, 0.5f);
     engine.setTrackOutput(source, sub::Engine::kNoOutput);  // heard only through the track taking it

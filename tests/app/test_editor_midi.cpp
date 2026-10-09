@@ -13,25 +13,14 @@
 
 using namespace sub::app;
 using test::EditorFixture;
+using test::ids;
+using test::kinds;
+using test::round6;
 
 namespace {
 
 constexpr int C = 60, E = 64, G = 67;
 constexpr double kSec = 0.5;  // seconds per beat at 120 BPM
-
-double round6(double value) { return std::round(value * 1e6) / 1e6; }
-
-QStringList kinds(const std::vector<Device>& devices) {
-    QStringList result;
-    for (const Device& d : devices) result.append(d.kind);
-    return result;
-}
-
-QStringList ids(const std::vector<Device>& devices) {
-    QStringList result;
-    for (const Device& d : devices) result.append(d.id);
-    return result;
-}
 
 struct Played {
     double start;
