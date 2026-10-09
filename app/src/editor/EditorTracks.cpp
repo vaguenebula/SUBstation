@@ -859,7 +859,7 @@ void ProjectEditor::dropOutputs(const QSet<QString>& trackIds, const QSet<QStrin
     const Project& p = *project_;
     QSet<QString> devices = deviceIds;
     for (const QString& id : trackIds) {
-        if (p.hasOwner(id)) devices.unite(deviceIdsOfList(p.track(id).devices));
+        if (p.hasOwner(id)) addDeviceIds(devices, p.track(id).devices);
     }
     QStringList dropped;
     for (const Track* t : p.senders()) {

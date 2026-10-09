@@ -675,6 +675,9 @@ Stage 6 — Feeling native
       Settings…, Quit).
 - [ ] Ctrl → Cmd on macOS: the QML's `ControlModifier` checks reviewed
       (mouse modifiers: Cmd-click, Alt-drag), the shortcuts' texts in the menus.
+      (The C++ items read the modifiers' meanings from `ui/src/input/Modifiers.h`,
+      and the menus' shortcut texts and `PluginEditorKeys` read shortcuts as Qt
+      Quick binds them, `keySequences()`: both follow Qt's Command mapping.)
 - [ ] The audio settings show only the platform's drivers.
 
 Stage 7 — Packaging and CI

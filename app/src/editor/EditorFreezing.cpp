@@ -74,7 +74,7 @@ QStringList ProjectEditor::flattenTracks(const QStringList& trackIds) {
     const QString text = flat.size() == 1 ? QStringLiteral("Flatten Track") : QStringLiteral("Flatten Tracks");
     Macro macro(undoStack_, text);
     QSet<QString> devices;  // (the outputs into their sidechains go into their groups)
-    for (const QString& id : flat) devices.unite(deviceIdsOfList(p.track(id).devices));
+    for (const QString& id : flat) addDeviceIds(devices, p.track(id).devices);
     dropOutputs({}, devices, text);
     for (const QString& id : flat) {
         const Track track = p.track(id);

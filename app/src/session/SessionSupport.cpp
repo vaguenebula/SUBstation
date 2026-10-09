@@ -46,7 +46,7 @@ void storeTrackPluginStates(EngineBridge& bridge, const Project& project, const 
         if (!project.hasTrack(trackId)) continue;
         std::vector<const Track*> tracks{&project.track(trackId)};
         for (const Track* inside : project.descendants(trackId)) tracks.push_back(inside);
-        for (const Track* track : tracks) ids.unite(deviceIdsOfList(track->devices));
+        for (const Track* track : tracks) addDeviceIds(ids, track->devices);
     }
     bridge.storePluginStates(ids);
 }

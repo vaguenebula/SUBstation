@@ -868,9 +868,9 @@ void repairRouting(std::vector<Track>& tracks, std::vector<Track>& returns, Trac
         if (t.isAudio()) audioTracks.insert(t.id);
     }
     for (const auto* list : {&tracks, &returns}) {
-        for (const Track& t : *list) deviceIds.unite(deviceIdsOfList(t.devices));
+        for (const Track& t : *list) addDeviceIds(deviceIds, t.devices);
     }
-    if (master != nullptr) deviceIds.unite(deviceIdsOfList(master->devices));
+    if (master != nullptr) addDeviceIds(deviceIds, master->devices);
     {
         size_t i = 0;
         for (auto* list : {&tracks, &returns}) {
@@ -922,7 +922,7 @@ void repairRouting(std::vector<Track>& tracks, std::vector<Track>& returns, Trac
 QJsonObject projectToJson(const Project& project, const QString& projectFile) {
     const QString base = baseOf(projectFile);
     QSet<QString> deviceIds;
-    for (const Track* t : project.allTracks()) deviceIds.unite(deviceIdsOfList(t->devices));
+    for (const Track* t : project.allTracks()) addDeviceIds(deviceIds, t->devices);
     // View state of the devices there are, sorted.
     const auto present = [&](const QSet<QString>& ids) {
         QStringList kept;

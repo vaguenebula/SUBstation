@@ -133,21 +133,30 @@ const sub::ParamInfo* builtinParamInfo(const QString& kind, const QString& param
     return nullptr;
 }
 
+void addDeviceIds(QSet<QString>& ids, const std::vector<Device>& devices) {
+    for (const Device* d : iterDevices(devices)) ids.insert(d->id);
+}
+
 QSet<QString> deviceIdsOfList(const std::vector<Device>& devices) {
     QSet<QString> ids;
-    for (const Device* d : iterDevices(devices)) ids.insert(d->id);
+    addDeviceIds(ids, devices);
     return ids;
 }
 
+void addDeviceIds(QSet<QString>& ids, const Device& device) {
+    ids.insert(device.id);
+    for (const Chain& chain : device.chains) addDeviceIds(ids, chain.devices);
+}
+
 QSet<QString> deviceIdsOf(const Device& device) {
-    QSet<QString> ids{device.id};
-    for (const Chain& chain : device.chains) ids.unite(deviceIdsOfList(chain.devices));
+    QSet<QString> ids;
+    addDeviceIds(ids, device);
     return ids;
 }
 
 QSet<QString> innerDeviceIds(const Device& rack) {
     QSet<QString> ids;
-    for (const Chain& chain : rack.chains) ids.unite(deviceIdsOfList(chain.devices));
+    for (const Chain& chain : rack.chains) addDeviceIds(ids, chain.devices);
     ids.remove(rack.id);  // (should something in it have its id)
     return ids;
 }

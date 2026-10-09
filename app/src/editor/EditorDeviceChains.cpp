@@ -226,7 +226,7 @@ bool ProjectEditor::moveDevices(const QString& trackId, const QStringList& devic
     std::vector<Device>* target = chainDevices(after, chainId);
     if (moving.isEmpty() || target == nullptr) return false;
     QSet<QString> inside;
-    for (const QString& id : moving) inside.unite(deviceIdsOf(*findDevice(after, id)));
+    for (const QString& id : moving) addDeviceIds(inside, *findDevice(after, id));
     if (chainId && inside.contains(project_->chainRack(trackId, *chainId).id)) return false;  // into itself
     const int depth = rackDepth(after, chainId);
     for (const QString& id : moving) {
@@ -281,7 +281,7 @@ bool ProjectEditor::moveDevicesToTrack(const QString& trackId, const QStringList
     const int size = static_cast<int>(target->size());
     const int at = index < 0 ? size : std::max(startsWithInstrument(*target) ? 1 : 0, std::min(index, size));
     QSet<QString> movedIds;
-    for (const Device& d : moved) movedIds.unite(deviceIdsOf(d));
+    for (const Device& d : moved) addDeviceIds(movedIds, d);
     target->insert(target->begin() + at, std::make_move_iterator(moved.begin()), std::make_move_iterator(moved.end()));
     pruneMacros(source);
     pruneMacros(targetDevices);

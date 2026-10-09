@@ -64,6 +64,11 @@ Chain newChain(const QString& name, std::vector<Device> devices = {});
 // A built-in device's parameter as the engine describes it (null: no such one).
 const sub::ParamInfo* builtinParamInfo(const QString& kind, const QString& paramId);
 
+// Adds the ids of these devices and of everything in them to `ids` (no set of
+// their own made on the way: for gathering many lists' ids).
+void addDeviceIds(QSet<QString>& ids, const std::vector<Device>& devices);
+// Adds a device's id and those of everything in it (a rack) to `ids`.
+void addDeviceIds(QSet<QString>& ids, const Device& device);
 // The ids of these devices and of everything in them.
 QSet<QString> deviceIdsOfList(const std::vector<Device>& devices);
 // A device's id, and those of everything in it (a rack).
