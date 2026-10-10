@@ -1729,11 +1729,11 @@ the reverb comes out. The maths it shares with its editor is in
   loop all-pass's length moves into or out of the loops' gains over the crossfade. A change during one waits for it
   to end. The reflections glide to the new Density's taps.
 - **Smoothing**: what moves a delay (Predelay, the onset, Size, Scale) and the levels on the audio (Reflect, Diffuse,
-  Stereo, Dry/Wet, the input filter's switches) glide a sample at a time, two one-poles in a row (25 ms, Smooth's,
-  50 ms, 5 ms), so nothing has a corner. Everything else glides every 32 samples (two one-poles of 20 or 30 ms; the
-  frequencies, times and LFO rates in log) and what it sets (the loops' and shelves' gains and corners, the input
-  filter's corners, the all-passes' gains, the taps' gains and Spin's drift, Chorus's drift) is ramped linearly across
-  the 32. Every glide lands on its target exactly once within a hair of it, so a settled control is exactly its
+  Stereo, Dry/Wet, the input filter's switches) glide a sample at a time, two one-poles in a row (`dsp::Glide`; 25 ms,
+  Smooth's, 50 ms, 5 ms), so nothing has a corner. Everything else glides every 32 samples (two one-poles of 20 or
+  30 ms; the frequencies, times and LFO rates in log) and what it sets (the loops' and shelves' gains and corners, the
+  input filter's corners, the all-passes' gains, the taps' gains and Spin's drift, Chorus's drift) is ramped linearly
+  across the 32. Every glide lands on its target exactly once within a hair of it, so a settled control is exactly its
   target and nothing is worked out again. Dry/Wet is `dry (1 - mix) + wet mix`: exactly dry at 0, exactly wet at 1.
 - **Sleeping**: once the input has been below -160 dB for longer than the input line reaches, and the tail and
   reflections are below -120 dB (not frozen, no Density change under way), it sleeps: the wet is exactly 0, the
@@ -1751,11 +1751,12 @@ the reverb comes out. The maths it shares with its editor is in
 - `latencySamples()` is 0. `tailSamples()`: the predelay, the onset and Spin's drift of it, the diffusers, a pass of
   the longest loop and Chorus's depth, 1.15 times Decay and 0.1 s (then the tail is 60 dB down); frozen, or at most, a
   minute.
-- **Displays**, the 256-sample ones pushed together: `input` (the mono input's peak, dB, floor -90), `early` (the
-  reflections' peak after Reflect), `diffuse` (the tail's RMS after Diffuse), `spin` and `chorus` (the LFOs' phases
-  0..1 after the value's last sample, so they step by exactly `rate * 256 / fs`; -1 while switched off and faded,
-  asleep too; the chorus one is the first active line's), and per sample `signal` (the mono input, before the filter)
-  and `tail` (the tail's mid after Diffuse). Asleep, the levels read -90 and the per-sample ones publish nothing.
+- **Displays**, the 256-sample ones pushed together: `input` (the mono input's peak, dB, floor -90:
+  `reverb::kMeterFloorDb`), `early` (the reflections' peak after Reflect), `diffuse` (the tail's RMS after Diffuse),
+  `spin` and `chorus` (the LFOs' phases 0..1 after the value's last sample, so they step by exactly `rate * 256 / fs`;
+  -1 while switched off and faded, asleep too; the chorus one is the first active line's), and per sample `signal`
+  (the mono input, before the filter) and `tail` (the tail's mid after Diffuse). Asleep, the levels read -90 and the
+  per-sample ones publish nothing.
 - **Shared design**: `reverb::decaySeconds(settings, f, fs)` is the tail's decay time per frequency as the network
   plays it (the loop of a line of the active lines' mean length, through the same `rates`, `loop` and one-pole
   responses: in a network that mixes every line into every other each pass, energy decays at the lines' mean loss
@@ -2254,9 +2255,11 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   switched mid-glide too); automation through the engine, to the sample; reset and a new rate (44.1 to 192 kHz; Size's
   glide at the new rate); extremes; silence ringing out to exact zeros, denormal input, waking as a fresh device (also
   with Predelay, Size and Shape raised while it slept, and woken just after it fell asleep, the delays jumping as it
-  wakes at each Smooth); its tail; its displays (levels, the signal sample for sample, the tail's level falling at
-  Decay's pace, the LFOs' phases however blocks fall, and when switched while it sleeps); the design's helpers for the
-  editor; what it costs.
+  wakes at each Smooth); a NaN, an infinity or 1e31 in its input playing exactly as a 0 there would (at the defaults,
+  fully dry, and frozen with the input feeding the tail), and the loudest input it takes staying finite; its tail; its
+  displays (levels, the signal sample for sample, the tail's level falling at Decay's pace, the LFOs' phases however
+  blocks fall, and when switched while it sleeps); the design's helpers for the editor; what it costs (in the thread's
+  CPU time).
 - [test_disperser_engine.cpp](../../tests/engine/test_disperser_engine.cpp): its listing; passing through
   untouched (no stages, bypassed, fully dry); Dry/Wet's blend, to the sample, and its notches; a flat magnitude (every bin within 0.01 dB, all its energy) and the
   design's group delay, at the extremes (20 s at 20 Hz), at 8 to 192 kHz and kept below Nyquist;

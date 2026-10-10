@@ -13,7 +13,8 @@
 // every band rings for its own time. Size scales every delay by sqrt(size / 100).
 //
 // Shared with the application layer's ReverbResponse (app/src/audio), which
-// wraps decaySeconds(), inputFilterDb(), earlyTaps() and spinPan() for the editor.
+// wraps decaySeconds(), inputFilterDb(), earlyTaps() and spinPan() for the editor,
+// and hands it the constants it needs (checked against these).
 
 #include <algorithm>
 #include <array>
@@ -30,9 +31,18 @@ inline constexpr int kMaxTaps = 12;
 inline constexpr int kMaxDiffusers = 4;
 inline constexpr int kControl = 32;             // samples per control sub-chunk
 inline constexpr int kMeterSamples = 256;       // audio per meter value
+inline constexpr float kMeterFloorDb = -90.f;   // the level displays' floor: what they read in silence
 inline constexpr double kMinLineSamples = 4.0;  // a line is never shorter
 inline constexpr double kMinSize = 0.22;        // the Size parameter's range
 inline constexpr double kMaxSize = 500.0;
+// The ranges of the parameters the editor's pads and graph drag: In Filter Freq (Hz) and Width (octaves), ER Spin
+// Rate (Hz), the shelves' frequencies (Hz) and gains (% of Decay), Decay Time (ms).
+inline constexpr double kMinInFreq = 50.0, kMaxInFreq = 18000.0;
+inline constexpr double kMinInWidth = 0.5, kMaxInWidth = 9.0;
+inline constexpr double kMinSpinRate = 0.07, kMaxSpinRate = 1.3;
+inline constexpr double kMinShelfFreq = 20.0, kMaxLoFreq = 15000.0, kMaxHiFreq = 16000.0;
+inline constexpr double kMinShelfGain = 20.0, kMaxShelfGain = 100.0;
+inline constexpr double kMinDecayMs = 200.0, kMaxDecayMs = 60000.0;
 
 // The network's lines at Size 100, in ms: spread about geometrically (ratio
 // ~1.084) and nudged off exact ratios, so their echoes never line up.

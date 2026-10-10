@@ -72,6 +72,7 @@
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
 #include "builtin/Dsp.h"
+#include "builtin/DspBlocks.h"
 #include "builtin/ReverbDesign.h"
 #include "rt/RtUtils.h"
 
@@ -82,6 +83,7 @@ using reverb::kControl;
 using reverb::kMaxDiffusers;
 using reverb::kMaxLines;
 using reverb::kMaxTaps;
+using reverb::kMeterFloorDb;
 using reverb::kMeterSamples;
 
 constexpr double kPi = std::numbers::pi;
@@ -91,7 +93,6 @@ constexpr double kGuardLevel = 8.0;           // +18 dBFS: the tail's output pea
 constexpr double kMaxPredelayMs = 250.0;
 constexpr float kAwakeLevel = 1e-8f;          // -160 dB: an input this loud wakes it
 constexpr float kSleepLevel = 1e-6f;          // -120 dB: a tail this quiet lets it sleep
-constexpr float kMeterFloorDb = -90.f;
 constexpr double kLandedSamples = 1e-5;       // a delay's glide lands within this of its target
 constexpr int kSettleSamples = 4;             // a Thiran's state is worked out again over this many
 constexpr size_t kClearSlice = 16384;         // asleep: floats of what was let go cleared a sub-chunk
@@ -105,9 +106,6 @@ constexpr double kDelaySeconds = 0.025;  // Predelay and the onset
 constexpr double kScaleSeconds = 0.05;
 constexpr double kLevelSeconds = 0.005;  // Reflect, Diffuse, Stereo, Dry/Wet, the input filter's switches
 constexpr std::array<double, 3> kSizeSeconds = {0.002, 0.35, 0.05};  // Smooth: None, Slow, Fast
-
-// 0 at 0, 1 at 1, flat at both ends: the Density crossfade's shape.
-inline double sCurve(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
 
 // A 4-point (Hermite) read of a line `delay` samples (1 to `most`) before its
 // latest write, `next` being where the next goes: as dsp::DelayLine::hermite().
@@ -124,39 +122,30 @@ inline float hadamardSign(int row, int column) noexcept {
     return (std::popcount(static_cast<unsigned>(row & column)) & 1) ? -1.f : 1.f;
 }
 
-// Two one-poles in a row gliding to a target, moved on a sub-chunk at a time: a
-// jump eases in and out, and a glide can turn back halfway without a kink. It
-// lands on the target exactly once within `landed` of it, so a settled control
-// is exactly its target (nothing is recomputed, and none is exactly none).
-struct Glide {
-    double first = 0.0, value = 0.0;
-
-    void snap(double target) noexcept { first = value = target; }
-    bool settled(double target) const noexcept { return first == target && value == target; }
-    // Moves on by `c` (the share of the way a one-pole goes in the sub-chunk); true if it moved.
-    bool move(double target, double c, double landed) noexcept {
-        if (settled(target)) return false;
-        first += c * (target - first);
-        value += c * (first - value);
-        if (std::abs(target - first) < landed && std::abs(target - value) < landed) snap(target);
-        return true;
-    }
-};
+// A glide (dsp::Glide: two one-poles in a row) moved on a sub-chunk at a time, by
+// `c` (the share of the way a one-pole goes in the sub-chunk): true if it moved.
+// Once within `landed` of its target it is exactly that, so a settled control is
+// its target (nothing is worked out again, and none is exactly none).
+inline bool moved(dsp::Glide& glide, double target, double c, double landed) noexcept {
+    if (glide.settled(target)) return false;
+    glide.next(target, c, landed);
+    return true;
+}
 
 // The same moved a sample at a time (a delay, or a level on the audio: no
-// corners at all). It lands at a sub-chunk's end, once within `landed`.
-struct Smooth {
-    double first = 0.0, value = 0.0, target = 0.0, c = 1.0, landed = 0.0;
+// corners at all), its target, pace and landing kept with it. It lands only at a
+// sub-chunk's end (land()), so within a sub-chunk every sample glides or none does.
+struct Smooth : dsp::Glide {
+    double target = 0.0, c = 1.0, landed = 0.0;
 
-    void snap(double to) noexcept { first = value = target = to; }
-    bool settled() const noexcept { return first == target && value == target; }
-    double next() noexcept {
-        first += c * (target - first);
-        value += c * (first - value);
-        return value;
+    void snap(double to) noexcept {
+        Glide::snap(to);
+        target = to;
     }
+    bool settled() const noexcept { return Glide::settled(target); }
+    double next() noexcept { return Glide::next(target, c, 0.0); }  // (0: it never lands here)
     void land() noexcept {
-        if (std::abs(target - first) < landed && std::abs(target - value) < landed) snap(target);
+        if (std::abs(target - first) < landed && std::abs(target - value) < landed) Glide::snap(target);
     }
 };
 
@@ -506,7 +495,7 @@ public:
             diffuser.y = 0.f;
         }
         for (TapState& tap : tap_) {
-            tap.gain = Glide{};
+            tap.gain = dsp::Glide{};
             tap.drift = tap.left = tap.right = Ramp{};
         }
         netDrift_ = Ramp{};
@@ -614,7 +603,7 @@ private:
     struct TapState {
         double time = 0.0;           // its time after the predelay at size factor 1 (samples)
         double angle = 0.0, swing = 0.0, restLeft = 0.0, restRight = 0.0;  // its pan (reverb::tapAngle(), tapSwing())
-        Glide gain;                  // its gain, gliding to Shape's and Density's
+        dsp::Glide gain;             // its gain, gliding to Shape's and Density's
         double target = 0.0;         // the gain it glides to (Shape's envelope; 0 for a tap the Density doesn't use)
         Ramp drift, left, right;     // Spin's drift of its time; its gain into each side
     };
@@ -687,7 +676,7 @@ private:
     void movePace(int n, double c) noexcept {
         const size_t smooth = smoothIndex();
         const double from = pace_.value;
-        if (pace_.move(sizePaceLog_[smooth], c, 1e-6)) {
+        if (moved(pace_, sizePaceLog_[smooth], c, 1e-6)) {
             size_.c = std::exp(from);
             sizeRatio_ = std::exp((pace_.value - from) / n);
         } else {
@@ -768,32 +757,32 @@ private:
         aimSmooths();
         movePace(n, fast);
         delaysMoving_ = !size_.settled() || !scale_.settled();
-        filterMoved_ = inFreq_.move(logInFreq(), fast, 1e-6) | inWidth_.move(param(InWidth), fast, 1e-6);
+        filterMoved_ = moved(inFreq_, logInFreq(), fast, 1e-6) | moved(inWidth_, param(InWidth), fast, 1e-6);
         bool loops = layoutSwitched_ | switch_.active | !size_.settled() | (layout_.loopAllpass && !scale_.settled()) |
                      gammaMoved_;
-        loops |= decay_.move(logDecay(), slow, 1e-6);
-        loops |= loFreq_.move(logLoFreq(), fast, 1e-6);
-        loops |= hiFreq_.move(logHiFreq(), fast, 1e-6);
-        loops |= loShare_.move(param(LoGain) / 100.0, fast, 1e-6);
-        loops |= hiShare_.move(param(HiGain) / 100.0, fast, 1e-6);
-        loops |= loOn_.move(onOff(isOn(LoShelf)), fast, 1e-6);
-        loops |= hiOn_.move(onOff(isOn(HiFilter)), fast, 1e-6);
-        loops |= lowpass_.move(onOff(choiceIndex(HiType) == 1), fast, 1e-6);
-        loops |= freeze_.move(onOff(isOn(Freeze)), slow, 1e-6);
-        loops |= flat_.move(onOff(isOn(Flat)), fast, 1e-6);
-        loops |= cut_.move(onOff(isOn(Cut)), fast, 1e-6);
+        loops |= moved(decay_, logDecay(), slow, 1e-6);
+        loops |= moved(loFreq_, logLoFreq(), fast, 1e-6);
+        loops |= moved(hiFreq_, logHiFreq(), fast, 1e-6);
+        loops |= moved(loShare_, param(LoGain) / 100.0, fast, 1e-6);
+        loops |= moved(hiShare_, param(HiGain) / 100.0, fast, 1e-6);
+        loops |= moved(loOn_, onOff(isOn(LoShelf)), fast, 1e-6);
+        loops |= moved(hiOn_, onOff(isOn(HiFilter)), fast, 1e-6);
+        loops |= moved(lowpass_, onOff(choiceIndex(HiType) == 1), fast, 1e-6);
+        loops |= moved(freeze_, onOff(isOn(Freeze)), slow, 1e-6);
+        loops |= moved(flat_, onOff(isOn(Flat)), fast, 1e-6);
+        loops |= moved(cut_, onOff(isOn(Cut)), fast, 1e-6);
         gammaMoved_ = false;
-        diffusion_.move(param(Diffusion) / 100.0, slow, 1e-6);
-        spinAmount_.move(targetSpin(), fast, 1e-5);
-        chorusAmount_.move(targetChorus(), fast, 1e-5);
+        moved(diffusion_, param(Diffusion) / 100.0, slow, 1e-6);
+        moved(spinAmount_, targetSpin(), fast, 1e-5);
+        moved(chorusAmount_, targetChorus(), fast, 1e-5);
         updateShown();
         updateTapTargets();
-        for (TapState& tap : tap_) tap.gain.move(tap.target, fast, 1e-7);
+        for (TapState& tap : tap_) moved(tap.gain, tap.target, fast, 1e-7);
 
         // The LFOs: their phases at the sub-chunk's start (for the displays) and end.
         // Their rates glide (in log) too: a jump of rate would step the drift's speed.
-        spinRateLog_.move(logSpinRate(), slow, 1e-6);
-        chorusRateLog_.move(logChorusRate(), slow, 1e-6);
+        moved(spinRateLog_, logSpinRate(), slow, 1e-6);
+        moved(chorusRateLog_, logChorusRate(), slow, 1e-6);
         spinStart_ = spinPhase_;
         spinRate_ = std::exp(spinRateLog_.value);
         spinPhase_ += spinRate_ * n / fs;
@@ -819,7 +808,7 @@ private:
         const double norm = switch_.active ? 1.0 : 1.0 / std::sqrt(static_cast<double>(layout_.lines));
         double allpassShare = layout_.loopAllpass ? 1.0 : 0.0;
         if (switch_.active) {
-            const double t = sCurve(std::min(1.0, static_cast<double>(switch_.at + n) / switchLength_));
+            const double t = dsp::sCurve(std::min(1.0, static_cast<double>(switch_.at + n) / switchLength_));
             allpassShare = (switch_.from.loopAllpass ? 1.0 - t : 0.0) + (layout_.loopAllpass ? t : 0.0);
         }
         const double z = freeze_.value;
@@ -1328,11 +1317,11 @@ private:
         for (int i = 0; i < n; ++i) {
             const size_t ii = static_cast<size_t>(i);
             const double s = c.s[ii], sc = c.sc[ii];
-            const double along = std::min(1.0, (sw.at + i + 1) * step), t = sCurve(along);
+            const double along = std::min(1.0, (sw.at + i + 1) * step), t = dsp::sCurve(along);
             const float in = static_cast<float>(t), out = 1.f - in;  // (linear: what the two share)
             // What joins (a diffuser, a loop all-pass) hears its input ease in over the crossfade's first
             // quarter: smoothly, and soon enough that its memory is mostly full by the time it is heard.
-            const auto joining = static_cast<float>(sCurve(std::min(1.0, 4.0 * along)));
+            const auto joining = static_cast<float>(dsp::sCurve(std::min(1.0, 4.0 * along)));
             const auto co = static_cast<float>(std::cos(0.5 * kPi * t));
             const auto si = static_cast<float>(std::sin(0.5 * kPi * t));
             const float cosSin = 2.f * co * si;
@@ -1619,16 +1608,14 @@ private:
     // After an awake sub-chunk: what has died away flushed to 0, the guard, and whether to sleep.
     void afterChunk() noexcept {
         for (LineState& line : line_) {
-            line.y = static_cast<float>(dsp::flushTiny(line.y));
-            line.hi.s = static_cast<float>(dsp::flushTiny(line.hi.s));
-            line.lo.s = static_cast<float>(dsp::flushTiny(line.lo.s));
-            line.allpassY = static_cast<float>(dsp::flushTiny(line.allpassY));
+            line.y = dsp::flushTiny(line.y);
+            line.hi.s = dsp::flushTiny(line.hi.s);
+            line.lo.s = dsp::flushTiny(line.lo.s);
+            line.allpassY = dsp::flushTiny(line.allpassY);
         }
-        for (DiffuserState& diffuser : diffuser_) diffuser.y = static_cast<float>(dsp::flushTiny(diffuser.y));
-        for (dsp::Svf* svf : {&hp_, &lp_}) {
-            svf->ic1 = static_cast<float>(dsp::flushTiny(svf->ic1));
-            svf->ic2 = static_cast<float>(dsp::flushTiny(svf->ic2));
-        }
+        for (DiffuserState& diffuser : diffuser_) diffuser.y = dsp::flushTiny(diffuser.y);
+        hp_.flush();
+        lp_.flush();
 
         // The guard: the loops' gain eases down while the tail's output is too loud, and back.
         if (netPeak_ > kGuardLevel) {
@@ -1679,24 +1666,24 @@ private:
             {"predelay", "Predelay", "ms", 0.5f, 250.f, 2.5f, true},
             {"lo_cut", "Lo Cut", "", 0.f, 1.f, 1.f, false, kOnOff},
             {"hi_cut", "Hi Cut", "", 0.f, 1.f, 1.f, false, kOnOff},
-            {"in_freq", "In Filter Freq", "Hz", 50.f, 18000.f, 830.f, true},
-            {"in_width", "In Filter Width", "oct", 0.5f, 9.f, 7.5f},
+            {"in_freq", "In Filter Freq", "Hz", float(reverb::kMinInFreq), float(reverb::kMaxInFreq), 830.f, true},
+            {"in_width", "In Filter Width", "oct", float(reverb::kMinInWidth), float(reverb::kMaxInWidth), 7.5f},
             {"spin", "ER Spin", "", 0.f, 1.f, 1.f, false, kOnOff},
-            {"spin_rate", "ER Spin Rate", "Hz", 0.07f, 1.3f, 0.3f, true},
+            {"spin_rate", "ER Spin Rate", "Hz", float(reverb::kMinSpinRate), float(reverb::kMaxSpinRate), 0.3f, true},
             {"spin_amount", "ER Spin Amount", "%", 0.f, 100.f, 25.f},
             {"shape", "ER Shape", "%", 0.f, 100.f, 50.f},
             {"density", "Density", "", 0.f, 3.f, 3.f, false, {"Sparse", "Low", "Mid", "High"}},
             {"smooth", "Size Smoothing", "", 0.f, 2.f, 1.f, false, {"None", "Slow", "Fast"}},
-            {"size", "Room Size", "size", 0.22f, 500.f, 100.f, true},
-            {"stereo", "Stereo Image", "°", 0.f, 120.f, 100.f},
+            {"size", "Room Size", "size", float(reverb::kMinSize), float(reverb::kMaxSize), 100.f, true},
+            {"stereo", "Stereo Image", "°", 0.f, float(reverb::kMaxStereo), 100.f},
             {"lo_shelf", "Lo Shelf", "", 0.f, 1.f, 1.f, false, kOnOff},
-            {"lo_freq", "Lo Shelf Freq", "Hz", 20.f, 15000.f, 90.f, true},
-            {"lo_gain", "Lo Shelf Gain", "%", 20.f, 100.f, 75.f},
+            {"lo_freq", "Lo Shelf Freq", "Hz", float(reverb::kMinShelfFreq), float(reverb::kMaxLoFreq), 90.f, true},
+            {"lo_gain", "Lo Shelf Gain", "%", float(reverb::kMinShelfGain), float(reverb::kMaxShelfGain), 75.f},
             {"hi_filter", "Hi Filter", "", 0.f, 1.f, 1.f, false, kOnOff},
             {"hi_type", "Hi Filter Type", "", 0.f, 1.f, 0.f, false, {"Shelf", "Low-pass"}},
-            {"hi_freq", "Hi Filter Freq", "Hz", 20.f, 16000.f, 4500.f, true},
-            {"hi_gain", "Hi Shelf Gain", "%", 20.f, 100.f, 70.f},
-            {"decay", "Decay Time", "ms", 200.f, 60000.f, 1200.f, true},
+            {"hi_freq", "Hi Filter Freq", "Hz", float(reverb::kMinShelfFreq), float(reverb::kMaxHiFreq), 4500.f, true},
+            {"hi_gain", "Hi Shelf Gain", "%", float(reverb::kMinShelfGain), float(reverb::kMaxShelfGain), 70.f},
+            {"decay", "Decay Time", "ms", float(reverb::kMinDecayMs), float(reverb::kMaxDecayMs), 1200.f, true},
             {"freeze", "Freeze", "", 0.f, 1.f, 0.f, false, kOnOff},
             {"flat", "Flat", "", 0.f, 1.f, 1.f, false, kOnOff},
             {"cut", "Cut", "", 0.f, 1.f, 1.f, false, kOnOff},
@@ -1761,9 +1748,9 @@ private:
 
     // The glides: a sample at a time (delays, levels) and a sub-chunk at a time.
     Smooth predelay_, onset_, size_, scale_, reflect_, diffuse_, stereo_, mix_, loCutMix_, hiCutMix_;
-    Glide inFreq_, inWidth_, decay_, loFreq_, hiFreq_, loShare_, hiShare_, loOn_, hiOn_, lowpass_, freeze_, flat_, cut_,
-        diffusion_, spinAmount_, chorusAmount_, spinRateLog_, chorusRateLog_;
-    Glide pace_;                         // the log of Size's per-sample coefficient
+    dsp::Glide inFreq_, inWidth_, decay_, loFreq_, hiFreq_, loShare_, hiShare_, loOn_, hiOn_, lowpass_, freeze_, flat_,
+        cut_, diffusion_, spinAmount_, chorusAmount_, spinRateLog_, chorusRateLog_;
+    dsp::Glide pace_;                    // the log of Size's per-sample coefficient
     double sizeRatio_ = 1.0;             // its factor a sample across the sub-chunk
     std::array<double, 3> sizePace_{}, sizePaceLog_{};  // Size's coefficient at each Smooth (at this rate)
     bool snapping_ = false;

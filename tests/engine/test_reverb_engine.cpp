@@ -6,26 +6,33 @@
 // swinging and drifting the reflections as spinPan() and spinDriftMs() say (and
 // reaching the tail); Chorus, Diffusion and Scale each doing what they say; no
 // metallic ringing; every control and switch changing without a click;
-// automation to the sample; reset and a new rate; extremes; silence ringing out
-// to exact zeros and waking into silence; its tail; its displays; what it costs.
+// automation to the sample; reset and a new rate; extremes; input that isn't
+// audio (NaN, infinity) taken as silence; silence ringing out to exact zeros and
+// waking into silence; its tail; its displays; what it costs.
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <limits>
 #include <map>
-#include <memory>
 #include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "Engine.h"
+#include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
 #include "builtin/Dsp.h"
 #include "builtin/ReverbDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 #include "rt/RtUtils.h"
 
 using namespace subtest;
@@ -33,16 +40,8 @@ namespace reverb = sub::reverb;
 
 namespace {
 
-constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
-
-using Values = std::vector<std::pair<std::string, float>>;
-
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
+using Values = ParamValues;
+using Change = ParamChange;
 
 // What most cases start from: nothing moves by itself (Spin and Chorus off),
 // the input unfiltered, the reflections at their least (-30 dB), all wet.
@@ -64,56 +63,22 @@ Values with(Values values, const Values& more) {
 
 int64_t frames(double seconds, double rate = kSampleRate) { return static_cast<int64_t>(std::lround(seconds * rate)); }
 
-// A Reverb on its own, outside an engine: processed in blocks (the renderer's
-// flush-to-zero on, as it renders), its changes handed over as automation.
-class Reverb {
+// A Reverb on its own, outside an engine (harness/Standalone.h), the renderer's
+// flush-to-zero on as it renders; played in stereo too, made ready for a new
+// rate, and its displays read.
+class Reverb : public Standalone {
 public:
-    explicit Reverb(const Values& values = {}, double rate = kSampleRate)
-        : processor_(sub::BuiltinRegistry::instance().create("reverb")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
+    explicit Reverb(const Values& values = {}, double rate = kSampleRate) : Standalone("reverb", rate, values) {}
 
-    sub::Processor& processor() { return *processor_; }
-    double rate() const { return rate_; }
     // Made ready for another sample rate (as the engine does when the audio device changes).
     void prepare(double rate) {
-        rate_ = rate;
-        processor_->prepare(rate, kBlock);
+        processor().prepare(rate, kMaxBlock);
+        context().sampleRate = rate;
     }
 
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-
-    // Processes one or two channels of equal length in place, `block` frames at a time.
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
         const sub::ScopedNoDenormals noDenormals;
-        const auto length = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[2] = {};
-        size_t next = 0;
-        for (int64_t start = 0; start < length; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, length - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
-            }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->clearAutomation();
-        }
+        Standalone::run(channels, changes, block);
     }
     // One channel: what comes out.
     Samples play(Samples mono, const std::vector<Change>& changes = {}, int block = 256) {
@@ -128,11 +93,11 @@ public:
     }
     // A display's values published since the last call.
     std::vector<float> display(const std::string& id) {
-        const std::vector<sub::DisplayInfo> infos = processor_->displays();
+        const std::vector<sub::DisplayInfo> infos = processor().displays();
         for (size_t i = 0; i < infos.size(); ++i) {
             if (infos[i].id != id) continue;
             std::vector<float> out;
-            positions_[i] = processor_->readDisplay(static_cast<int>(i), positions_[i], out);
+            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], out);
             return out;
         }
         INFO(id);
@@ -141,8 +106,6 @@ public:
     }
 
 private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
     std::map<size_t, uint64_t> positions_;
 };
 
@@ -166,7 +129,7 @@ Samples smoothSine(double freq, double seconds, double rate = kSampleRate, doubl
     const double fadeIn = 0.1 * rate;
     for (size_t i = 0; i < x.size(); ++i) {
         const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
+        x[i] = static_cast<float>(sub::dsp::sCurve(t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
     }
     return x;
 }
@@ -301,6 +264,23 @@ std::string show(const Values& values) {
     std::string text;
     for (const auto& [id, value] : values) text += (text.empty() ? "" : ", ") + id + " " + std::to_string(value);
     return text;
+}
+
+// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else the
+// machine is doing (the wall clock would count the time other processes had the core).
+double threadSeconds() {
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user;
+    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
+    const auto ticks = [](const FILETIME& t) {
+        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
+    };
+    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks, counted at the scheduler's ~16 ms)
+#else
+    timespec t{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
+#endif
 }
 
 }  // namespace
@@ -1170,7 +1150,7 @@ TEST_CASE("the reverb's reset and a new sample rate start it from silence") {
 
     // A new rate: tuned to it, from silence.
     r.play(noise(kSampleRate, 10));
-    r.processor().prepare(96000.0, kBlock);
+    r.processor().prepare(96000.0, Standalone::kMaxBlock);
     Reverb at96(values, 96000.0);
     // (the helper's rate is the one it was made at: render the new rate by hand)
     Samples h(96000, 0.f), h96(96000, 0.f);
@@ -1235,6 +1215,39 @@ TEST_CASE("the reverb stays finite and decays at the extremes") {
         const double first = energy(slice(l, frames(2.0), frames(3.0))), last = energy(slice(l, frames(5.0)));
         CHECK(last < first);
     }
+}
+
+TEST_CASE("the reverb takes NaN, infinity and absurd levels in its input as silence") {
+    // One would circulate in the feedback network for good, and the guard can't see a NaN: the
+    // device's input is cleaned before it (BuiltinProcessor::process()). A bad sample on one side, in
+    // noise that goes on, plays exactly as a 0 there would: at the defaults, fully dry, and frozen
+    // with the input still feeding the tail.
+    const float bad[] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 1e31f};
+    const Samples left = noise(2 * kSampleRate, 26), right = noise(2 * kSampleRate, 27);
+    const int64_t at = frames(0.5) + 17;
+    for (const Values& values : {Values{}, Values{{"mix", 0.f}}, Values{{"freeze", 1.f}, {"cut", 0.f}}}) {
+        Samples zeroed = left;
+        zeroed[static_cast<size_t>(at)] = 0.f;
+        Reverb clean(values);
+        const auto [wantL, wantR] = clean.play(zeroed, right);
+        for (const float value : bad) {
+            INFO(show(values) + " given " + std::to_string(value));
+            Samples broken = left;
+            broken[static_cast<size_t>(at)] = value;
+            Reverb r(values);
+            const auto [l, rr] = r.play(broken, right);
+            CHECK_ARRAY_EQUAL(l, wantL);
+            CHECK_ARRAY_EQUAL(rr, wantR);
+        }
+    }
+    // The loudest input it takes (BuiltinProcessor::kMaxInput), frozen with the input feeding the
+    // tail, the guard holding it: every sample finite.
+    const Samples loud = noise(kSampleRate, 28, sub::BuiltinProcessor::kMaxInput);
+    Reverb frozen({{"freeze", 1.f}, {"cut", 0.f}, {"mix", 100.f}});
+    const auto [l, rr] = frozen.play(loud, loud);
+    CHECK(allFinite(l));
+    CHECK(allFinite(rr));
 }
 
 TEST_CASE("the reverb's silence rings out to exact zeros") {
@@ -1449,13 +1462,19 @@ TEST_CASE("the reverb's displays") {
 
 #ifdef NDEBUG
 TEST_CASE("the reverb costs little") {
+    // 10 s of stereo noise at the defaults (High, Spin and Chorus on), timed in the thread's CPU time (a busy
+    // machine takes the core away, not the device's cost), the best of two: well under a tenth of real time
+    // (it takes about 1.5 % of a core; the bound only catches a gross regression, such as denormals).
     const auto length = static_cast<size_t>(10 * kSampleRate);
     const Samples l = noise(length, 18), r = noise(length, 19);
-    Reverb reverb;
-    const auto start = std::chrono::steady_clock::now();
-    reverb.play(l, r, {}, 256);
-    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-    INFO("10 s took " + std::to_string(seconds) + " s");
-    CHECK(seconds < 1.0);
+    double best = 1e9;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        Reverb reverb;
+        const double start = threadSeconds();
+        reverb.play(l, r, {}, 256);
+        best = std::min(best, threadSeconds() - start);
+    }
+    INFO("10 s took " + std::to_string(best) + " s");
+    CHECK(best < 1.0);
 }
 #endif
