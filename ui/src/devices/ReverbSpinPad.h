@@ -56,6 +56,9 @@ public:
     QList<QPointF> trail(int k) const;
     // Whether reflection k is drawn (the Density plays it).
     bool particleShown(int k) const { return k >= 0 && k < kTaps && radius_[std::size_t(k)] > 0.0; }
+    // How far reflection k's particle can reach up or down from where it sits at rest: its radius with its
+    // glow lit up, and Spin's bob at its most (0 for one not drawn).
+    double particleReach(int k) const;
     // Spin's swing as drawn (0..1): its amount, eased as Spin is switched, while the reflections sound.
     double amountShown() const { return amount_.value * presence_.value; }
 

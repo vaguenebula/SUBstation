@@ -892,18 +892,20 @@ The editors:
   second row); the diffusion network (the Lo and Hi switches and the high filter's type over a
   [ReverbDecayGraph](../../ui/src/devices/ReverbDecayGraph.h), the shelves' frequencies and gains in boxes under it;
   Decay over Freeze, Flat and Cut; Diffusion over Scale; Chorus over Rate, Chorus's switch the Amount knob's title); the
-  output (Reflect over Diffuse, and Dry/Wet). Knobs are the house's 34 px `EditorKnob`s in two rows, top and bottom; the
-  switches sit level with the first row's captions, the boxes along the bottom, and the pads and the graph grow into the
-  height between them (`height - 54`). Each box is as wide as its widest text (its sample text: a pattern such as
-  "1d.dd kHz", each "d" the font's widest digit, as figures may be proportional: "14.44 kHz" in Inter) and the
-  automation dot, each list as wide as its longest name and the arrow (`FontMetrics` over the names: Density's
-  "Sparse"), the Freeze, Flat and Cut column as wide as Freeze with its snowflake; the pads and the graph span the boxes
-  under them, and each section follows the one before, so the width is worked out (995 px in the tests' host, with its
-  Inter: 890 before the boxes were measured). What a switch leaves unused dims (opacity 0.55, over 120 ms) but stays
-  editable, as in Live: the input's boxes while both cuts are off, Spin's boxes while it is off, the type and the Hi
-  boxes while Hi is off (Hi's gain also while the type is Low-pass, which has none), the Lo boxes while Lo is off, Flat
-  and Cut while Freeze is off (they only act frozen), Chorus's knobs while it is off. `implicitHeight` is 148 in the
-  tests' host (whose body is 154).
+  output (Reflect over Diffuse, and Dry/Wet). Knobs are the house's 34 px `EditorKnob`s in two rows, top and bottom,
+  each row's dials and readouts in line; the switches sit level with the first row's captions, the boxes along the
+  bottom, and the pads and the graph grow into the height between them (`height - 54`). Chorus's switch takes the place
+  of its knob's (empty) caption, down to 1 px over the dial (so 14 px high to the others' 16), and is declared after
+  the knob, so it lies on top: the mouse there lights the switch and shows its tooltip, not the knob's. Each box is as
+  wide as its widest text (its sample text: a pattern such as "1d.dd kHz", each "d" the font's widest digit, as figures
+  may be proportional: "14.44 kHz" in Inter) and the automation dot, each list as wide as its longest name and the
+  arrow (`FontMetrics` over the names: Density's "Sparse"), the Freeze, Flat and Cut column as wide as Freeze with its
+  snowflake; the pads and the graph span the boxes under them, and each section follows the one before, so the width is
+  worked out (995 px in the tests' host, with its Inter: 890 before the boxes were measured). What a switch leaves
+  unused dims (opacity 0.55, over 120 ms) but stays editable, as in Live: the input's boxes while both cuts are off,
+  Spin's boxes while it is off, the type and the Hi boxes while Hi is off (Hi's gain also while the type is Low-pass,
+  which has none), the Lo boxes while Lo is off, Flat and Cut while Freeze is off (they only act frozen), Chorus's knobs
+  while it is off. `implicitHeight` is 148 in the tests' host (whose body is 154).
   - The pads and the graph draw what the engine plays, from its own maths through the application layer
     (`sub::app::reverbInputFilterDb`, `reverbDecaySeconds`, `reverbEarlyTaps`, `reverbSpinPan`, `reverbStereoWidth`,
     `reverbDiffuseOnsetMs`, over `sub::reverb`'s functions in `ReverbDesign.h`), at the engine's sample rate (again
@@ -921,8 +923,11 @@ The editors:
     settings change, they orbit as Spin swings them, at the phase the device publishes (display `spin`; the pans are
     the engine's own law, `reverbSpinPan`), trailing their last six positions (started again only when the particles'
     homes move: Size, Shape, Density, Stereo), and light up, fading over a third of a second as the reflections do; in
-    silence they ease back to rest. Switching Spin eases its swing in or out. At the top right, when the tail starts
-    after the input (Predelay, Shape's onset and the shortest line, at Size: "tail +53 ms").
+    silence they ease back to rest. Switching Spin eases its swing in or out. The first row sits under the captions'
+    strip by the most a particle reaches (the loudest's radius with its glow lit, and Spin's 3 px bob at 100 %), so no
+    particle ever touches the captions; L and R, in the bottom corners, are drawn over the particles, so the last
+    reflection swung to a side at a high Spin passes under the letter. At the top right, when the tail starts after the
+    input (Predelay, Shape's onset and the shortest line, at Size: "tail +53 ms").
   - `ReverbDecayGraph`: the decay time per frequency (to −60 dB, on a log axis from 40 ms to 100 s, under a strip for
     its captions; its figures at 0.1, 1 and 10 s sit under their lines, and one the curve or a guide runs through goes
     over its line where there is room, else over them on a chip of the background), the curve of a line of the active

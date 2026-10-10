@@ -35,10 +35,7 @@ Item {
 
     // The body: the sections side by side, 8 px in from either side.
     implicitWidth: mixKnob.x + mixKnob.width + 8
-    implicitHeight: 6 + Math.max(2 * shapeKnob.implicitHeight + 8,
-                                 20 + decayGraph.implicitHeight + 4 + 18,
-                                 18 + chorusAmountKnob.implicitHeight - chorusAmountKnob.knob.y + 4
-                                 + shapeKnob.implicitHeight) + 6
+    implicitHeight: 6 + Math.max(2 * shapeKnob.implicitHeight + 8, 20 + decayGraph.implicitHeight + 4 + 18) + 6
 
     // The second row of knobs (at the bottom), the canvases' height (20 px under the top for their
     // switches, 4 px over their boxes) and where the boxes are.
@@ -503,29 +500,32 @@ Item {
         x: diffusionKnob.x + diffusionKnob.width + 4
     }
 
-    // Chorus: its switch is the Amount knob's title (the knob's own caption, empty, lies under it), Rate below.
+    // Chorus: Amount in the first row with the other knobs, its switch the knob's title; Rate below. The switch
+    // fills the strip of the knob's own caption (empty) down to 1 px over the dial, a little shorter than the
+    // other switches. It comes after the knob, so it lies on top: the mouse there hovers the switch, not the knob.
+    EditorKnob {
+        id: chorusAmountKnob
+        objectName: "chorusAmountKnob"
+        x: networkEdge.x + 4
+        y: 6
+        opacity: editor.chorusOn ? 1 : editor.dim
+        param: p.get("chorus_amount")
+        tooltip: qsTr("Chorus Amount: how far they drift")
+    }
     FadingButton {
         id: chorusButton
         objectName: "chorusButton"
-        x: networkEdge.x + 4
-        y: 6
+        x: chorusAmountKnob.x
+        y: chorusAmountKnob.y
         width: editor.cell
+        height: chorusAmountKnob.knob.y - 1
         param: p.get("chorus")
         text: qsTr("Chorus")
         tooltip: qsTr("Chorus: the tail's echoes drift in pitch, for a lusher, less metallic sound")
     }
     EditorKnob {
-        id: chorusAmountKnob
-        objectName: "chorusAmountKnob"
-        x: chorusButton.x
-        y: chorusButton.y + chorusButton.height + 2 - knob.y
-        opacity: editor.chorusOn ? 1 : editor.dim
-        param: p.get("chorus_amount")
-        tooltip: qsTr("Chorus Amount: how far they drift")
-    }
-    EditorKnob {
         objectName: "chorusRateKnob"
-        x: chorusButton.x
+        x: chorusAmountKnob.x
         y: editor.row2
         opacity: editor.chorusOn ? 1 : editor.dim
         param: p.get("chorus_rate")

@@ -1,8 +1,9 @@
 // The Reverb's editor (ui/qml/devices/editors/ReverbEditor.qml; ui/src/devices/ReverbFilterPad,
 // ReverbSpinPad, ReverbDecayGraph): loaded as the device view loads it, over a real engine. It fits
 // the view's height (and its own least height), nothing overlapping, its boxes, lists and switches as
-// wide as their text and its knobs the house's 34 px; every control is bound to its
-// parameter (undoably, with a tooltip); the pads' and the graph's drags are one undo step each and
+// wide as their text and its knobs the house's 34 px in rows; every control is bound to its
+// parameter (undoably, with a tooltip), each switch the one under the mouse over it (Chorus's over its
+// knob's caption too); the pads' and the graph's drags are one undo step each and
 // set what the engine plays; the curves are the engine's own maths (ReverbResponse.h); what the
 // engine publishes as it renders reaches the pads and the graph, which animate and then rest. With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there playing, frozen, and in other modes.
@@ -56,6 +57,10 @@ const QList<std::pair<const char*, const char*>> kControls = {
     {"chorusAmountKnob", "chorus_amount"}, {"chorusRateKnob", "chorus_rate"}, {"reflectKnob", "reflect"},
     {"diffuseKnob", "diffuse"},      {"mixKnob", "mix"}};
 const QStringList kCanvases = {QStringLiteral("filterPad"), QStringLiteral("spinPad"), QStringLiteral("decayGraph")};
+// The knobs of each row, left to right.
+const QList<const char*> kFirstRow = {"shapeKnob",     "sizeKnob",         "stereoKnob",  "decayKnob",
+                                      "diffusionKnob", "chorusAmountKnob", "reflectKnob", "mixKnob"};
+const QList<const char*> kSecondRow = {"predelayKnob", "scaleKnob", "chorusRateKnob", "diffuseKnob"};
 
 // The first of `frequencies` (rising) at or above `hz`.
 std::size_t indexOf(const std::vector<double>& frequencies, double hz) {
@@ -220,8 +225,18 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
                          qPrintable(rects[i].first + QStringLiteral(" over ") + rects[j].first));
         const QRectF chorus = rectIn(view, control(view, "chorusButton"));
         const QRectF dial = rectIn(view, knob(view, "chorusAmountKnob"));
-        QVERIFY2(chorus.bottom() < dial.top() && std::abs(chorus.center().x() - dial.center().x()) < 0.5,
+        QVERIFY2(chorus.top() == rectIn(view, control(view, "chorusAmountKnob")).top() &&
+                     chorus.bottom() < dial.top() && std::abs(chorus.center().x() - dial.center().x()) < 0.5,
                  qPrintable(QString::number(chorus.bottom()) + u' ' + QString::number(dial.top())));
+        // Each row's dials in line, and so their readouts (Chorus Amount's under its switch too).
+        for (const QList<const char*>& row : {kFirstRow, kSecondRow}) {
+            const double top = rectIn(view, knob(view, row[0])).top();
+            for (const char* name : row)
+                QVERIFY2(rectIn(view, knob(view, name)).top() == top,
+                         qPrintable(QString::fromLatin1(name) + u' ' +
+                                    QString::number(rectIn(view, knob(view, name)).top()) + u' ' +
+                                    QString::number(top)));
+        }
     }
 
     // Every box as wide as the widest text its parameter takes (over its whole range, whatever the font's
@@ -467,6 +482,50 @@ private Q_SLOTS:
         QTRY_VERIFY(opacityOf("spinAmountBox") < 1.0 && opacityOf("spinRateBox") < 1.0);
     }
 
+    // --- Under the mouse --------------------------------------------------------------------------
+
+    void hovering() {
+        Shown s = reverb();
+        QVERIFY(s.view);
+        // The tooltip shown (Qt Quick Controls' one, shared by every control): its text, or none.
+        const auto tipShown = [&]() -> QString {
+            auto* tip = qmlEngine(s.view)->property("_q_QQuickToolTip").value<QObject*>();
+            return tip && tip->property("visible").toBool() ? tip->property("text").toString() : QString();
+        };
+        const auto buttonOf = [&](const char* name) {
+            return qvariant_cast<QQuickItem*>(control(s.view, name)->property("button"));
+        };
+        // Every switch lights under the mouse: no other control lies over it.
+        for (const auto& [name, id] : kControls) {
+            if (!QByteArray(name).endsWith("Button"))
+                continue;
+            QTest::mouseMove(window_, QPoint(1, 1));
+            QTRY_VERIFY2(!buttonOf(name)->property("hovered").toBool(), name);
+            QTest::mouseMove(window_, centerOf(buttonOf(name)));
+            QTRY_VERIFY2(buttonOf(name)->property("hovered").toBool(), name);
+        }
+        // Chorus's switch lies over its Amount knob's (empty) caption: it, not the knob, is under the mouse
+        // there, and shows its own tooltip; the knob's dial below, the knob's. Up from the dial onto the
+        // switch, and down again.
+        const QString chorusTip = buttonOf("chorusButton")->property("tooltip").toString();
+        const QString amountTip = control(s.view, "chorusAmountKnob")->property("tooltip").toString();
+        QVERIFY(!chorusTip.isEmpty() && !amountTip.isEmpty() && chorusTip != amountTip);
+        QTest::mouseMove(window_, QPoint(1, 1));
+        QTRY_COMPARE(tipShown(), QString());
+        QTest::mouseMove(window_, centerOf(buttonOf("chorusButton")));
+        QTRY_COMPARE(tipShown(), chorusTip);
+        QTest::mouseMove(window_, centerOf(knob(s.view, "chorusAmountKnob")));
+        QTRY_VERIFY(!buttonOf("chorusButton")->property("hovered").toBool());
+        QTRY_COMPARE(tipShown(), amountTip);
+        QTest::mouseMove(window_, centerOf(buttonOf("chorusButton")));
+        QTRY_VERIFY(buttonOf("chorusButton")->property("hovered").toBool());
+        QTRY_COMPARE(tipShown(), chorusTip);
+        QTest::mouseMove(window_, centerOf(knob(s.view, "chorusAmountKnob")));
+        QTRY_COMPARE(tipShown(), amountTip);
+        QTest::mouseMove(window_, QPoint(1, 1));
+        QTRY_COMPARE(tipShown(), QString());
+    }
+
     // --- The input filter's pad -------------------------------------------------------------------
 
     void filterPad() {
@@ -531,6 +590,18 @@ private Q_SLOTS:
         for (int k = 0; k < 12; ++k) QVERIFY(pad->particleShown(k));
         QVERIFY(pad->particles()[0].y() < pad->particles()[11].y());
         QVERIFY((pad->particles()[3].x() > pad->width() / 2) == (taps[3].pan > 0));
+        // Each, lit up and bobbing at Spin's most, keeps under the captions' strip ("Early", the tail's onset)
+        // and in the pad, at every Shape (how loud each is): the first, the loudest and largest, too.
+        for (const double shape : {0.0, 50.0, 100.0}) {
+            set(s, "shape", shape);
+            QVERIFY(pad->particleReach(0) > pad->particleReach(11));
+            for (int k = 0; k < 12; ++k) {
+                const double y = pad->particles()[k].y(), reach = pad->particleReach(k);
+                QVERIFY2(reach > 0.0 && y - reach >= pad->plot().top() + 13.0 && y + reach <= pad->plot().bottom(),
+                         qPrintable(QStringLiteral("Shape %1, %2: %3 +- %4").arg(shape).arg(k).arg(y).arg(reach)));
+            }
+        }
+        set(s, "shape", 50.0);
 
         const int steps = undo()->index();
         drag(pad, QPointF(pad->xOfRate(0.1), pad->yOfAmount(10.0)), QPointF(pad->xOfRate(1.0), pad->yOfAmount(80.0)));

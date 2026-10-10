@@ -23,11 +23,16 @@ constexpr double kLingerSeconds = 2.0;   // and stays this long after Spin's set
 constexpr double kSounding = 0.01;       // the reflections' light above this: they sound
 constexpr double kFlashSeconds = 0.35;   // the reflections' light fades
 constexpr double kFlashRangeDb = 54.0;   // their level from -54 dB (dark) to 0 (bright)
+constexpr double kRadius = 1.5;          // px: a particle's radius, as quiet as can be
+constexpr double kRadiusLoud = 3.0;      // px more, as loud as the loudest
+constexpr double kGlow = 3.0;            // px of glow round the loudest, lit up
 constexpr double kBob = 3.0;             // px a particle bobs up and down at Spin 100 %
 constexpr double kMoved = 0.2;           // px: less is no reason to paint again
-constexpr double kRowTop = 17.0;         // the first reflection's row, under the captions
+constexpr double kCaption = 13.0;        // px: the captions' strip at the top, clear of the handle and particles
+// The first reflection's row: 1 px under the captions with the loudest particle lit and bobbing at its highest
+// (the first is the loudest at every Shape).
+constexpr double kRowTop = kCaption + kRadius + kRadiusLoud + kGlow + kBob + 1.0;
 constexpr double kRowBottom = 13.0;      // the last's, above the L and R
-constexpr double kCaption = 13.0;        // px: the captions' strip at the top, clear of the handle
 constexpr double kStaleSeconds = 0.1;    // a tick without values keeps the last this long (a long audio block)
 
 }  // namespace
@@ -66,6 +71,13 @@ QPointF ReverbSpinPad::handle() const { return QPointF(xOfRate(rate_), yOfAmount
 
 QList<QPointF> ReverbSpinPad::particles() const { return QList<QPointF>(at_.begin(), at_.end()); }
 
+double ReverbSpinPad::particleReach(int k) const {
+    if (!particleShown(k))
+        return 0.0;
+    const std::size_t i = std::size_t(k);
+    return radius_[i] + kGlow * loudness_[i] + kBob;
+}
+
 QList<QPointF> ReverbSpinPad::trail(int k) const {
     if (k < 0 || k >= kTaps)
         return {};
@@ -95,7 +107,7 @@ void ReverbSpinPad::sync() {
         const std::size_t i = std::size_t(k);
         row_[i] = last > 0.0 ? tap.ms / last : 0.0;
         loudness_[i] = loudest > 0.0 ? std::abs(tap.gain) / loudest : 0.0;
-        radius_[i] = tap.gain != 0.0 ? 1.5 + 3.0 * loudness_[i] : 0.0;
+        radius_[i] = tap.gain != 0.0 ? kRadius + kRadiusLoud * loudness_[i] : 0.0;
     }
     const double onset = sub::app::reverbDiffuseOnsetMs(size, shape, density) + value(QStringLiteral("predelay"));
     onsetText_ = QStringLiteral("tail +%1 ms").arg(qRound(onset));
@@ -248,13 +260,9 @@ void ReverbSpinPad::paint(SgPainter& p) {
     p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
     const QFont font = uiFont(7);
 
-    // The stereo field: its middle, and L and R at the bottom corners.
-    p.drawLine(QPointF(r.center().x(), r.top() + kRowTop - 4), QPointF(r.center().x(), r.bottom() - 3),
+    // The stereo field's middle, under the captions.
+    p.drawLine(QPointF(r.center().x(), r.top() + kCaption), QPointF(r.center().x(), r.bottom() - 3),
                withAlpha(Theme::kGridBeat, 200));
-    p.drawText(QRectF(r.left() + 3, r.bottom() - 12, 12, 11), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("L"),
-               Theme::kTextDisabled, font);
-    p.drawText(QRectF(r.right() - 15, r.bottom() - 12, 12, 11), Qt::AlignRight | Qt::AlignVCenter,
-               QStringLiteral("R"), Theme::kTextDisabled, font);
 
     // The captions: what it is, and when the tail starts after the input.
     p.drawText(QRectF(r.left() + 3, r.top() + 1, 40, 12), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Early"),
@@ -287,10 +295,17 @@ void ReverbSpinPad::paint(SgPainter& p) {
             continue;
         const double light = flash * loudness_[k];
         if (light > 0.05)  // a soft glow round a bright one
-            p.fillEllipse(at_[k], radius_[k] + 3.0 * light, radius_[k] + 3.0 * light,
+            p.fillEllipse(at_[k], radius_[k] + kGlow * light, radius_[k] + kGlow * light,
                           withAlpha(Theme::kScopeLine, int(50 * light)));
         p.fillEllipse(at_[k], radius_[k], radius_[k], withAlpha(Theme::kScopeLine, int(60 + 170 * light)));
     }
+
+    // L and R at the bottom corners, over the particles: the last reflection, swung to a side at a high Spin,
+    // passes under the letter.
+    p.drawText(QRectF(r.left() + 3, r.bottom() - 12, 12, 11), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("L"),
+               Theme::kTextDisabled, font);
+    p.drawText(QRectF(r.right() - 15, r.bottom() - 12, 12, 11), Qt::AlignRight | Qt::AlignVCenter,
+               QStringLiteral("R"), Theme::kTextDisabled, font);
 
     // The handle: a ring with a dot in it.
     const QColor ring = spin_ ? Theme::kAccent : Theme::kTextDim;
