@@ -879,6 +879,23 @@ TEST_CASE("the reverb's density changes keep a frozen tail") {
     }
 }
 
+TEST_CASE("the reverb's density changes start what joins from silence") {
+    // Loud noise into High, then Sparse: the lines, loop all-passes and diffusers Sparse doesn't run keep
+    // what they held. A faint input keeps it awake until, a second later, High comes back: what joins must
+    // start from silence (it is let go, and cleared just ahead of its reads), not play the old tail back.
+    const Values values = with(kQuiet, {{"decay", 200.f}});
+    Samples in = noise(2 * kSampleRate, 24, 1e-5f);
+    const Samples loud = noise(kSampleRate / 2, 25, 0.3f);
+    std::copy(loud.begin(), loud.end(), in.begin());
+    Reverb r(values);
+    const Samples out = r.play(in, {{frames(0.5), "density", 0.f}, {frames(1.5), "density", 3.f}});
+    INFO("while loud " + std::to_string(maxAbs(slice(out, frames(0.2), frames(0.5)))) + ", before the change " +
+         std::to_string(maxAbs(slice(out, frames(1.3), frames(1.5)))) + ", after " +
+         std::to_string(maxAbs(slice(out, frames(1.5)))));
+    CHECK(maxAbs(slice(out, frames(0.2), frames(0.5))) > 0.05);
+    CHECK(maxAbs(slice(out, frames(1.5))) < 1e-4);
+}
+
 TEST_CASE("the reverb's spin swings and drifts each reflection as its design says") {
     // The reflections alone (two renders that differ only in Reflect, as above), Spin at its deepest and
     // fastest, Stereo at 120 (the sides as they are), impulses 80 ms apart: each tap's gain into each side
@@ -1267,6 +1284,27 @@ TEST_CASE("the reverb's silence rings out to exact zeros") {
         CHECK(allEqual(slice(al, frames(1.5), frames(2.0)), 0.0));  // (asleep)
         CHECK_ARRAY_EQUAL(slice(al, frames(2.0)), slice(bl, frames(2.0)));
         CHECK_ARRAY_EQUAL(slice(ar, frames(2.0)), slice(br, frames(2.0)));
+    }
+    // The same just after it fell asleep, its buffers still being cleared a slice at a time: what the reads
+    // reach is cleared just ahead of them, so it plays as one that never heard anything all the same.
+    {
+        const Values values = {{"decay", 200.f}, {"mix", 100.f}, {"shape", 0.f}};
+        const Samples heard = silence(noise(kSampleRate / 2, 23, 0.3f), 2.0);
+        Reverb probe(values);
+        const int64_t asleep = nonzero(probe.play(heard)).back() + 1;  // (the wet is exact zeros from there)
+        REQUIRE(asleep < frames(2.0));
+        for (const int64_t after : {int64_t{32}, int64_t{100}, int64_t{400}}) {
+            INFO("woken " + std::to_string(after) + " samples after falling asleep");
+            const int64_t wake = asleep + after;
+            Samples a = heard, b(heard.size(), 0.f);
+            a[static_cast<size_t>(wake)] = b[static_cast<size_t>(wake)] = 0.5f;
+            const std::vector<Change> grow = {
+                {wake - 16, "predelay", 250.f}, {wake - 16, "size", 500.f}, {wake - 16, "shape", 100.f}};
+            Reverb x(values), y(values);
+            const Samples ax = x.play(a, grow), by = y.play(b, grow);
+            CHECK(maxAbs(slice(ax, wake)) > 0.01);
+            CHECK_ARRAY_EQUAL(slice(ax, wake), slice(by, wake));
+        }
     }
 
     // Asleep with Spin on, its phase goes on (the editor's particles drift on).

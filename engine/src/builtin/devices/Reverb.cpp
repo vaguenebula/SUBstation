@@ -51,9 +51,12 @@
 //   line reaches and the tail has died below -120 dB (not frozen), it sleeps:
 //   the wet is exactly 0 and the network is skipped until sound comes back
 //   (the glides and the LFOs go on; what they set is snapped there on waking).
-//   Asleep, every buffer is cleared, a slice a sub-chunk, so a reverb that
-//   wakes reaching further back (Predelay, Size or Shape raised meanwhile)
-//   hears silence, not what it held when it fell asleep.
+//   Its buffers are let go: they read as silence from then on, so a reverb that
+//   wakes reaching further back (Predelay, Size or Shape raised meanwhile) hears
+//   silence, not what it held when it fell asleep. No buffer is cleared whole
+//   at once (LineBank): each sub-chunk clears only what its reads will reach,
+//   and asleep a slice of the rest goes each sub-chunk. A reset, and what joins
+//   on a change of Density, are let go the same way.
 // - On one channel, that channel is the input and the wet's mid the output.
 
 #include <algorithm>
@@ -69,7 +72,6 @@
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
 #include "builtin/Dsp.h"
-#include "builtin/DspBlocks.h"
 #include "builtin/ReverbDesign.h"
 #include "rt/RtUtils.h"
 
@@ -92,7 +94,7 @@ constexpr float kSleepLevel = 1e-6f;          // -120 dB: a tail this quiet lets
 constexpr float kMeterFloorDb = -90.f;
 constexpr double kLandedSamples = 1e-5;       // a delay's glide lands within this of its target
 constexpr int kSettleSamples = 4;             // a Thiran's state is worked out again over this many
-constexpr size_t kClearSlice = 16384;         // asleep: floats of the buffers cleared a sub-chunk
+constexpr size_t kClearSlice = 16384;         // asleep: floats of what was let go cleared a sub-chunk
 constexpr float kTailGain = static_cast<float>(reverb::kDiffuseGain * reverb::kOutputScale);
 
 // The sub-chunk glides' time constants (each of the two one-poles), and the
@@ -106,6 +108,16 @@ constexpr std::array<double, 3> kSizeSeconds = {0.002, 0.35, 0.05};  // Smooth: 
 
 // 0 at 0, 1 at 1, flat at both ends: the Density crossfade's shape.
 inline double sCurve(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
+
+// A 4-point (Hermite) read of a line `delay` samples (1 to `most`) before its
+// latest write, `next` being where the next goes: as dsp::DelayLine::hermite().
+inline float hermiteRead(const float* line, size_t next, size_t mask, float most, float delay) noexcept {
+    delay = std::clamp(delay, 1.f, most);
+    const int whole = static_cast<int>(delay);
+    const float t = delay - static_cast<float>(whole);
+    const size_t at = next - 1 - static_cast<size_t>(whole);  // `whole` samples before the latest
+    return dsp::hermite(line[(at + 1) & mask], line[at & mask], line[(at - 1) & mask], line[(at - 2) & mask], t);
+}
 
 // A Walsh-Hadamard matrix's entry (+-1), at a row and a column.
 inline float hadamardSign(int row, int column) noexcept {
@@ -194,6 +206,14 @@ struct Ramp {
 // Delay lines of one power-of-two length side by side, written in step (one
 // write position for all). Each starts a cache line further than a whole number
 // of lines' lengths, so their writes (all at one position) don't share a cache set.
+//
+// A line let go (on falling asleep, on reset, on joining the network) reads as
+// silence from then on, yet is never cleared whole at once: each sub-chunk,
+// ensure() clears what is stale where its reads are about to reach (as much as
+// they move, a sub-chunk ahead), and while asleep clearSome() clears a slice at a
+// time. Positions are counted from prepare() on (unwrapped), so what of a line is
+// clean is everything from `clean` on (cleared, or written since it was let go)
+// and a window [lo, hi) below it, cleared ahead of its reads.
 class LineBank {
 public:
     void prepare(int lines, double maxDelaySamples) {
@@ -201,22 +221,13 @@ public:
         while (size < static_cast<size_t>(std::ceil(maxDelaySamples)) + kSettleSamples + 12) size <<= 1;
         stride_ = size + 16;
         mask_ = size - 1;
-        buffer_.assign(stride_ * static_cast<size_t>(lines), 0.f);
-        write_ = 0;
+        count_ = std::min(lines, kMaxLines);
+        buffer_.assign(stride_ * static_cast<size_t>(count_), 0.f);
+        write_ = synced_ = 0;
+        written_ = 0;
+        stale_.fill(Stale{});
+        staleCount_ = 0;
     }
-    void clear() noexcept {
-        std::fill(buffer_.begin(), buffer_.end(), 0.f);
-        write_ = 0;
-    }
-    void clear(int line) noexcept { std::fill_n(this->line(line), mask_ + 1, 0.f); }
-    // Clears up to `count` floats from `from` on (of all the lines together); returns how many it did.
-    size_t clearPart(size_t from, size_t count) noexcept {
-        if (from >= buffer_.size()) return 0;
-        count = std::min(count, buffer_.size() - from);
-        std::fill_n(buffer_.data() + from, count, 0.f);
-        return count;
-    }
-    size_t floats() const noexcept { return buffer_.size(); }
     float* line(int q) noexcept { return buffer_.data() + static_cast<size_t>(q) * stride_; }
     size_t stride() const noexcept { return stride_; }
     size_t mask() const noexcept { return mask_; }
@@ -224,9 +235,107 @@ public:
     void advance() noexcept { write_ = (write_ + 1) & mask_; }
     bool empty() const noexcept { return buffer_.empty(); }
 
+    // Brings the count of writes up to date: at least once every `mask() + 1` of them (each sub-chunk).
+    void sync() noexcept {
+        written_ += static_cast<int64_t>((write_ - synced_) & mask_);
+        synced_ = write_;
+    }
+    // Line q is let go: what it holds reads as silence from now on.
+    void letGo(int q) noexcept {
+        sync();
+        Stale& stale = stale_[static_cast<size_t>(q)];
+        if (!stale.on) ++staleCount_;
+        stale = Stale{true, written_, 0, 0};
+    }
+    bool anyStale() const noexcept { return staleCount_ > 0; }
+
+    // Before a sub-chunk of `n` samples whose reads of line q are at delays from `least` to `most` samples
+    // (and a few either side: kReadReach): clears what is stale where they reach.
+    void ensure(int q, double least, double most, int n) noexcept {
+        Stale& stale = stale_[static_cast<size_t>(q)];
+        if (!stale.on) return;
+        sync();
+        const int64_t oldest = written_ - static_cast<int64_t>(mask_ + 1);  // (older is no longer in the ring)
+        const int64_t from = std::max(oldest, written_ - static_cast<int64_t>(std::ceil(most)) - kReadReach);
+        const int64_t to = std::min(stale.clean, written_ + n - static_cast<int64_t>(std::floor(least)) + kReadReach);
+        if (from < to) {
+            if (stale.lo == stale.hi) {
+                clear(q, from, to);
+                stale.lo = from;
+                stale.hi = to;
+            } else {  // (the reads move on smoothly: what they reach now joins the window, or a gap the move left)
+                if (from < stale.lo) clear(q, from, stale.lo);
+                if (to > stale.hi) clear(q, stale.hi, to);
+                stale.lo = std::min(stale.lo, from);
+                stale.hi = std::max(stale.hi, to);
+            }
+            if (stale.hi >= stale.clean) {  // the window reaches the clean part: one now
+                stale.clean = stale.lo;
+                stale.lo = stale.hi = 0;
+            }
+        }
+        if (stale.clean <= oldest) forget(stale);
+    }
+
+    // Asleep (nothing is written): clears up to `count` more floats of what is stale, the newest first; returns
+    // how many of `count` are left.
+    size_t clearSome(size_t count) noexcept {
+        if (staleCount_ == 0) return count;
+        sync();
+        const int64_t oldest = written_ - static_cast<int64_t>(mask_ + 1);
+        for (int q = 0; q < count_ && count > 0; ++q) {
+            Stale& stale = stale_[static_cast<size_t>(q)];
+            while (stale.on && count > 0) {
+                if (stale.lo != stale.hi && stale.hi >= stale.clean) {  // down to the window: on below it
+                    stale.clean = std::min(stale.clean, stale.lo);
+                    stale.lo = stale.hi = 0;
+                }
+                if (stale.clean <= oldest) {
+                    forget(stale);
+                    break;
+                }
+                const int64_t bottom = stale.lo != stale.hi ? std::max(oldest, stale.hi) : oldest;
+                const int64_t from = std::max(bottom, stale.clean - static_cast<int64_t>(count));
+                clear(q, from, stale.clean);
+                count -= static_cast<size_t>(stale.clean - from);
+                stale.clean = from;
+            }
+        }
+        return count;
+    }
+
 private:
+    // A line let go: everything from `clean` on reads as silence, and [lo, hi) (empty if lo == hi).
+    struct Stale {
+        bool on = false;
+        int64_t clean = 0, lo = 0, hi = 0;
+    };
+    // How far past its delay a read reaches: a Thiran's re-settling (kSettleSamples + 3), Hermite's neighbours.
+    static constexpr int64_t kReadReach = kSettleSamples + 4;
+
+    void forget(Stale& stale) noexcept {
+        stale.on = false;
+        --staleCount_;
+    }
+    // Clears positions [from, to) of line q, of those the ring holds now (any other shares a place with one).
+    void clear(int q, int64_t from, int64_t to) noexcept {
+        from = std::max(from, written_ - static_cast<int64_t>(mask_ + 1));
+        to = std::min(to, written_);
+        if (from >= to) return;
+        float* const base = line(q);
+        const size_t start = static_cast<size_t>(from) & mask_;
+        const auto count = static_cast<size_t>(to - from);
+        const size_t first = std::min(count, mask_ + 1 - start);
+        std::fill_n(base + start, first, 0.f);
+        std::fill_n(base, count - first, 0.f);
+    }
+
     std::vector<float> buffer_;
-    size_t stride_ = 0, mask_ = 0, write_ = 0;
+    size_t stride_ = 0, mask_ = 0, write_ = 0, synced_ = 0;
+    int count_ = 0;  // lines
+    int64_t written_ = 0;  // the next write's position, counted from prepare() on (brought up to date by sync())
+    std::array<Stale, kMaxLines> stale_{};
+    int staleCount_ = 0;
 };
 
 // First-order Thiran (all-pass) interpolation of a delay D (at least 2 samples)
@@ -332,7 +441,7 @@ public:
         const double s = reverb::sizeFactor(reverb::kMaxSize), c = reverb::scaleFactor(100.0);
         // The input line: the predelay, then the last tap at the largest Size with Spin's drift.
         const double inputMs = kMaxPredelayMs + (reverb::kTapMs[kMaxTaps - 1] + 2.0 * reverb::kSpinDepthMs) * s;
-        input_.prepare(static_cast<int>(std::ceil(inputMs * fs / 1000.0)) + 8);
+        input_.prepare(1, std::ceil(inputMs * fs / 1000.0) + 8.0);
         lines_.prepare(kMaxLines, (reverb::kLineMs[kMaxLines - 1] * s + reverb::kChorusDepthMs) * fs / 1000.0 + 2.0);
         allpasses_.prepare(kMaxLines, reverb::loopAllpassSamples(kMaxLines - 1, s, c, fs) + 2.0);
         double longestDiffuser = 0.0;
@@ -378,13 +487,10 @@ public:
     }
 
     // Silent, every glide and fade where the parameters are, the LFOs at their
-    // start: renders after a reset are the same every time.
+    // start: renders after a reset are the same every time. (The buffers are let
+    // go, not cleared at once: they read as silence all the same.)
     void reset() override {
         if (lines_.empty()) return;
-        input_.reset();
-        lines_.clear();
-        allpasses_.clear();
-        diffusers_.clear();
         for (int q = 0; q < kMaxLines; ++q) {
             LineState& line = line_[static_cast<size_t>(q)];
             line.mod = line.gain = line.kHi = line.kLo = Ramp{};
@@ -414,6 +520,7 @@ public:
         layoutDensity_ = std::clamp(choiceIndex(DensityParam), 0, 3);
         layout_ = reverb::layout(reverb::densityAt(layoutDensity_));
         runLayout();
+        letGoBuffers();
         fresh_.fill(false);
         freshDiffuser_.fill(false);
         layoutSwitched_ = false;
@@ -423,7 +530,6 @@ public:
         snapping_ = false;
         sleeping_ = false;
         silent_ = 0;
-        clearing_ = Clearing{};
         meterCount_ = 0;
         meterInput_ = meterEarly_ = 0.f;
         meterDiffuse_ = 0.0;
@@ -436,6 +542,7 @@ protected:
         if (channels <= 0 || lines_.empty()) return;
         for (int at = 0; at < numFrames;) {
             const int n = std::min(kControl, numFrames - at);
+            for (LineBank* bank : {&input_, &lines_, &allpasses_, &diffusers_}) bank->sync();
             // How long the input has been silent; any sound wakes it before it is processed.
             int lastLoud = -1;
             for (int i = 0; i < n; ++i) {
@@ -449,7 +556,6 @@ protected:
             } else {
                 silent_ = std::min<int64_t>(silent_ + n, int64_t{1} << 40);
             }
-            if (waking) clearAll();  // (what wasn't cleared yet while it slept)
             const bool loopsMoved = moveGlides(n);
             if (!sleeping_) {
                 snapping_ = waking;  // (nothing was ramped while it slept)
@@ -521,11 +627,6 @@ private:
         std::array<int, kMaxLines> slotFrom{}, slotTo{};  // the line's index in each network (-1: not in it)
         std::array<float, kMaxLines> alike{};             // the two writes' correlation (see startSwitch())
         float alikeL = 0.f, alikeR = 0.f;                 // the same for the two networks' outputs
-    };
-    // Asleep: how far the buffers have been cleared (bank 3: all of them).
-    struct Clearing {
-        int bank = 3;
-        size_t at = 0;
     };
     // What a sub-chunk's front hands on, a sample at a time: the input, the size factor and size times
     // scale (the delays as they glide), the network's input read from the input line, the reflections;
@@ -768,6 +869,7 @@ private:
             line.mod.set(drift, n, snapping_ || fresh_[static_cast<size_t>(q)]);
             linesMoving_ = linesMoving_ || !line.mod.still();
         }
+        clearAhead(n);  // (before any read, the Thirans' below included)
         if (!linesMoving_) {
             for (int r = 0; r < runningCount_; ++r) {
                 const int q = running_[static_cast<size_t>(r)];
@@ -868,21 +970,30 @@ private:
         runningCount_ = layout_.lines;
         for (int k = 0; k < layout_.lines; ++k) running_[static_cast<size_t>(k)] = lineOf(layout_, k);
     }
-    void clearLine(int q) noexcept {
+    // What joins the network starts from silence: its states at once, its buffer let go (LineBank).
+    void joinLine(int q) noexcept {
         LineState& line = line_[static_cast<size_t>(q)];
-        lines_.clear(q);
+        lines_.letGo(q);
         line.y = 0.f;
         line.hi.s = line.lo.s = 0.f;
         fresh_[static_cast<size_t>(q)] = true;
     }
-    void clearAllpass(int q) noexcept {
-        allpasses_.clear(q);
+    void joinAllpass(int q) noexcept {
+        allpasses_.letGo(q);
         line_[static_cast<size_t>(q)].allpassY = 0.f;
     }
-    void clearDiffuser(int j) noexcept {
-        diffusers_.clear(j);
+    void joinDiffuser(int j) noexcept {
+        diffusers_.letGo(j);
         diffuser_[static_cast<size_t>(j)].y = 0.f;
         freshDiffuser_[static_cast<size_t>(j)] = true;
+    }
+    // Whether running line q's loop all-pass runs: High's, and while a change of Density crossfades, either
+    // network's.
+    bool allpassRuns(int q) const noexcept {
+        if (!switch_.active) return layout_.loopAllpass;
+        const auto i = static_cast<size_t>(q);
+        return (switch_.from.loopAllpass && switch_.slotFrom[i] >= 0) ||
+               (layout_.loopAllpass && switch_.slotTo[i] >= 0);
     }
     // Scales the ramps that carry a network's 1 / sqrt(N): the running lines' gains and the input's share.
     void scaleGains(double factor) noexcept {
@@ -910,10 +1021,10 @@ private:
             const bool inFrom = sw.slotFrom[i] >= 0, inTo = sw.slotTo[i] >= 0;
             if (!inFrom && !inTo) continue;
             running_[static_cast<size_t>(runningCount_++)] = q;
-            if (inTo && !inFrom) clearLine(q);
-            if (to.loopAllpass && inTo && !(from.loopAllpass && inFrom)) clearAllpass(q);
+            if (inTo && !inFrom) joinLine(q);
+            if (to.loopAllpass && inTo && !(from.loopAllpass && inFrom)) joinAllpass(q);
         }
-        for (int j = from.diffusers; j < to.diffusers; ++j) clearDiffuser(j);
+        for (int j = from.diffusers; j < to.diffusers; ++j) joinDiffuser(j);
 
         // How alike the two networks' writes into a line that stays are, so their crossfade keeps its level:
         // each write is a row of its network's (normalized) matrix times the lines' outputs. Taken as
@@ -960,10 +1071,10 @@ private:
         };
         for (int k = 0; k < to.lines; ++k) {
             const int q = lineOf(to, k);
-            if (!in(from, q)) clearLine(q);
-            if (to.loopAllpass && (!from.loopAllpass || !in(from, q))) clearAllpass(q);
+            if (!in(from, q)) joinLine(q);
+            if (to.loopAllpass && (!from.loopAllpass || !in(from, q))) joinAllpass(q);
         }
-        for (int j = from.diffusers; j < to.diffusers; ++j) clearDiffuser(j);
+        for (int j = from.diffusers; j < to.diffusers; ++j) joinDiffuser(j);
         layout_ = to;
         layoutDensity_ = density;
         runLayout();
@@ -998,6 +1109,9 @@ private:
         dsp::Svf hp = hp_, lp = lp_;
         dsp::SvfCoefficients hpCoefficients = hpCoefficients_, lpCoefficients = lpCoefficients_;
         float earlyPeak = 0.f;
+        float* const inputLine = input_.line(0);
+        const size_t inputMask = input_.mask();
+        const auto inputMost = static_cast<float>(inputMask + 1 - 3);
 
         for (int i = 0; i < n; ++i) {
             const size_t ii = static_cast<size_t>(i);
@@ -1037,13 +1151,16 @@ private:
                 const float low = lp.tick(lpCoefficients, filtered).low;
                 filtered += hiMix * (low - filtered);
             }
-            input_.push(filtered);
+            inputLine[input_.write()] = filtered;
+            input_.advance();
+            const size_t next = input_.write();
 
             // Early reflections.
             float earlyL = 0.f, earlyR = 0.f;
             for (int t = 0; t < tapCount; ++t) {
                 TapState& tap = taps[static_cast<size_t>(t)];
-                const float v = input_.hermite(static_cast<float>(before + tap.time * s) + tap.drift.next());
+                const float delay = static_cast<float>(before + tap.time * s) + tap.drift.next();
+                const float v = hermiteRead(inputLine, next, inputMask, inputMost, delay);
                 earlyL += v * tap.left.next();
                 earlyR += v * tap.right.next();
             }
@@ -1054,7 +1171,8 @@ private:
             c.earlyR[ii] = earlyR;
 
             // The network's input: Shape's onset after the predelay (drifting with the first reflection).
-            c.u[ii] = input_.hermite(static_cast<float>(before + later) + netDrift.next());
+            c.u[ii] = hermiteRead(inputLine, next, inputMask, inputMost,
+                                  static_cast<float>(before + later) + netDrift.next());
         }
 
         for (int t = 0; t < tapCount; ++t)
@@ -1384,7 +1502,7 @@ private:
     }
 
     // Asleep: the wet is exactly 0 (the network skipped), the dry still goes
-    // through Dry/Wet; the glides go on, and the buffers are cleared a slice at a time.
+    // through Dry/Wet; the glides go on, and what was let go is cleared a slice at a time.
     void renderAsleep(float* const* ch, int channels, int at, int n) noexcept {
         if (!mix_.settled() || (mix_.value != 0.0 && mix_.value != 1.0)) {
             for (int i = 0; i < n; ++i) {
@@ -1406,13 +1524,13 @@ private:
         }
         for (int i = 0; i < n; ++i)
             if (++meterCount_ == kMeterSamples) publishMeters(i, -1.f, -1.f, -1.0);
-        clearSome(kClearSlice);
+        size_t count = kClearSlice;
+        for (LineBank* bank : {&input_, &lines_, &allpasses_, &diffusers_}) count = bank->clearSome(count);
     }
 
-    // Falling asleep: what the network and the filters hold (all below -120 dB) is let go, and the buffers
-    // are cleared from here on, a slice a sub-chunk (no spike), the input line (the smallest) at once.
-    void startClearing() noexcept {
-        input_.reset();
+    // Falling asleep: what the network and the filters hold (all below -120 dB) is let go, the states at
+    // once and the buffers as reads come near them, or a slice a sub-chunk while it sleeps (LineBank).
+    void fallAsleep() noexcept {
         for (LineState& line : line_) {
             line.y = line.allpassY = 0.f;
             line.hi.s = line.lo.s = 0.f;
@@ -1420,22 +1538,53 @@ private:
         for (DiffuserState& diffuser : diffuser_) diffuser.y = 0.f;
         hp_.reset();
         lp_.reset();
-        clearing_ = Clearing{0, 0};
+        letGoBuffers();
     }
-    // Clears up to `count` more floats of the banks.
-    void clearSome(size_t count) noexcept {
-        LineBank* const banks[3] = {&lines_, &allpasses_, &diffusers_};
-        while (count > 0 && clearing_.bank < 3) {
-            const size_t done = banks[clearing_.bank]->clearPart(clearing_.at, count);
-            count -= done;
-            clearing_.at += done;
-            if (clearing_.at >= banks[clearing_.bank]->floats()) {
-                ++clearing_.bank;
-                clearing_.at = 0;
+    // The input line and what the network runs (its lines, loop all-passes and diffusers) are let go: they
+    // read as silence from now on. No event clears a whole buffer at once.
+    void letGoBuffers() noexcept {
+        input_.letGo(0);
+        for (int r = 0; r < runningCount_; ++r) {
+            const int q = running_[static_cast<size_t>(r)];
+            lines_.letGo(q);
+            if (allpassRuns(q)) allpasses_.letGo(q);
+        }
+        for (int j = 0; j < diffusersRunning(); ++j) diffusers_.letGo(j);
+    }
+    // Before a sub-chunk's reads: what they can reach of a buffer let go is cleared (LineBank::ensure()),
+    // each read's delay bounded over the sub-chunk by its glides' (each moves between where it is, where
+    // it was heading, and its target) and its ramps' ends.
+    void clearAhead(int n) noexcept {
+        const auto bounds = [](const Smooth& g) {
+            return std::pair{std::min({g.first, g.value, g.target}), std::max({g.first, g.value, g.target})};
+        };
+        const auto [sLo, sHi] = bounds(size_);
+        const auto [cLo, cHi] = bounds(scale_);
+        if (input_.anyStale()) {
+            // The first reflection's at the predelay (and drifts later only); the last's, or the network's.
+            const auto [pLo, pHi] = bounds(predelay_);
+            const double onset = bounds(onset_).second;
+            const double drift = 2.0 * reverb::kSpinDepthMs * sampleRate_ / 1000.0;  // (at most)
+            input_.ensure(0, pLo, pHi + std::max(tap_[kMaxTaps - 1].time * sHi, onset) + drift, n);
+        }
+        if (lines_.anyStale() || allpasses_.anyStale()) {
+            for (int r = 0; r < runningCount_; ++r) {
+                const int q = running_[static_cast<size_t>(r)];
+                const LineState& line = line_[static_cast<size_t>(q)];
+                const double from = line.mod.value, to = line.mod.end;
+                lines_.ensure(q, lineDelay(line, sLo) + std::min(from, to), lineDelay(line, sHi) + std::max(from, to),
+                              n);
+                if (allpassRuns(q))
+                    allpasses_.ensure(q, allpassDelay(line, sLo * cLo), allpassDelay(line, sHi * cHi), n);
+            }
+        }
+        if (diffusers_.anyStale()) {
+            for (int j = 0; j < diffusersRunning(); ++j) {
+                const DiffuserState& diffuser = diffuser_[static_cast<size_t>(j)];
+                diffusers_.ensure(j, diffuserDelay(diffuser, sLo * cLo), diffuserDelay(diffuser, sHi * cHi), n);
             }
         }
     }
-    void clearAll() noexcept { clearSome(std::numeric_limits<size_t>::max()); }
 
     // The 256-sample displays, at sample `i` of the sub-chunk: the input's and
     // the reflections' peaks and the tail's RMS (below 0: asleep, the floor), and
@@ -1488,7 +1637,7 @@ private:
         if (static_cast<double>(silent_) > reach && netPeak_ < kSleepLevel && earlyPeak_ < kSleepLevel &&
             freeze_.settled(0.0) && !isOn(Freeze) && !switch_.active) {
             sleeping_ = true;
-            startClearing();
+            fallAsleep();
         }
     }
 
@@ -1565,7 +1714,7 @@ private:
     int switchLength_ = 960;
 
     // Buffers (prepare() sizes them).
-    dsp::DelayLine input_;
+    LineBank input_;  // one line: the filtered input
     LineBank lines_, allpasses_, diffusers_;
     Chunk chunk_;
 
@@ -1617,7 +1766,6 @@ private:
     // Sleeping, and the meters.
     bool sleeping_ = false;
     int64_t silent_ = 0;  // samples since the input was last above kAwakeLevel
-    Clearing clearing_;
     float netPeak_ = 0.f, earlyPeak_ = 0.f;
     int meterCount_ = 0;
     float meterInput_ = 0.f, meterEarly_ = 0.f;

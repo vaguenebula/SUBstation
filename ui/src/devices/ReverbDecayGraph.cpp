@@ -8,12 +8,15 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QHoverEvent>
 #include <QLinearGradient>
 #include <QMouseEvent>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <utility>
 
 namespace sub::ui {
 
@@ -39,6 +42,30 @@ QColor mix(const QColor& a, const QColor& b, double t) {
 
 // "0.1 s", "1 s", "10 s": the axis' figures.
 QString axisText(double seconds) { return pythonGeneral(seconds) + QStringLiteral(" s"); }
+
+// Where an axis figure drawn in `box` (left, middle) puts its ink: its width, the digits' height.
+QRectF inkOf(const QRectF& box, const QString& text, const QFontMetricsF& metrics) {
+    const double baseline = box.top() + (box.height() - metrics.height()) / 2.0 + metrics.ascent();
+    return QRectF(box.left(), baseline - metrics.capHeight(), metrics.horizontalAdvance(text), metrics.capHeight());
+}
+
+// Whether a line (its points left to right) passes within `margin` px of `rect`.
+bool passesNear(const std::vector<QPointF>& line, const QRectF& rect, double margin = 1.0) {
+    const double left = rect.left() - margin, right = rect.right() + margin;
+    const double top = rect.top() - margin, bottom = rect.bottom() + margin;
+    for (std::size_t i = 1; i < line.size(); ++i) {
+        const QPointF a = line[i - 1], b = line[i];
+        if (b.x() < left || a.x() > right)
+            continue;
+        const auto yAt = [&](double x) {
+            return b.x() == a.x() ? a.y() : a.y() + (b.y() - a.y()) * (x - a.x()) / (b.x() - a.x());
+        };
+        const double y0 = yAt(std::max(a.x(), left)), y1 = yAt(std::min(b.x(), right));
+        if (std::max(y0, y1) >= top && std::min(y0, y1) <= bottom)
+            return true;
+    }
+    return false;
+}
 
 }  // namespace
 
@@ -486,14 +513,53 @@ void ReverbDecayGraph::paint(SgPainter& p) {
     const QRectF r = plot(), axis = axisRect();
     const QFont font = uiFont(7);
     p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
+
+    // The curve and the shelves' guides, worked out first: the axis' figures keep clear of them (of where the
+    // curve rests: its ripple would flip a figure to and fro). Frozen, the curve no longer settles onto the
+    // guides (the handles are what thaws): they fade, and the handles dim.
+    const double frozen = frozen_.value;
+    const int guide = int(90 * (1.0 - frozen));
+    std::vector<QPointF> curve;
+    curve.reserve(shown_.size());
+    for (std::size_t i = 0; i < shown_.size() && i < frequencies_.size(); ++i)
+        curve.emplace_back(xOf(frequencies_[i]), yOfLog(shown_[i]));
+    std::vector<std::vector<QPointF>> guides;
+    if (settings_.loShelf && guide > 0)
+        guides.push_back({QPointF(r.left(), handleAt(Lo).y()), handleAt(Lo)});
+    if (settings_.hiFilter && !settings_.hiLowpass && guide > 0)
+        guides.push_back({handleAt(Hi), QPointF(r.right(), handleAt(Hi).y())});
+    const auto crosses = [&](const QRectF& ink) {
+        return passesNear(curve, ink) ||
+               std::any_of(guides.begin(), guides.end(), [&](const auto& line) { return passesNear(line, ink); });
+    };
+
+    // The decay axis: a line per decade, its figure under it. Where the curve or a guide runs through a figure,
+    // the figure goes over its line if there is room (in the axis, clear of them and of the figure above), else
+    // over them, on a chip of the background.
     p.save();
     p.setClipRect(r);
     drawDecadeGrid(p, r, LogAxis{kLow, kHigh, r.left(), r.width()});
-    for (const double seconds : {0.1, 1.0, 10.0}) {  // the decay axis: a line per decade, figures under
-        const double y = yOf(seconds);
+    const QFontMetricsF metrics(font);
+    constexpr std::array<double, 3> kDecades = {0.1, 1.0, 10.0};
+    const auto underBox = [&](double seconds) { return QRectF(r.left() + 3, yOf(seconds) + 1, 40, 11); };
+    std::vector<std::pair<QRectF, QString>> chipped;
+    for (std::size_t k = 0; k < kDecades.size(); ++k) {
+        const double y = yOf(kDecades[k]);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, 120));
-        p.drawText(QRectF(r.left() + 3, y + 1, 40, 11), Qt::AlignLeft | Qt::AlignVCenter, axisText(seconds),
-                   Theme::kTextDisabled, font);
+        const QString text = axisText(kDecades[k]);
+        QRectF box = underBox(kDecades[k]);
+        if (crosses(inkOf(box, text, metrics))) {
+            const QRectF over(box.left(), y - 12, 40, 11), ink = inkOf(over, text, metrics);
+            double top = axis.top() + 1;
+            if (k + 1 < kDecades.size())  // (the next decade's figure hangs under its line, up there)
+                top = std::max(top, inkOf(underBox(kDecades[k + 1]), axisText(kDecades[k + 1]), metrics).bottom() + 8);
+            if (ink.top() < top || crosses(ink)) {
+                chipped.emplace_back(box, text);
+                continue;
+            }
+            box = over;
+        }
+        p.drawText(box, Qt::AlignLeft | Qt::AlignVCenter, text, Theme::kTextDisabled, font);
     }
 
     // The tail's spectrum as it dies away.
@@ -513,37 +579,32 @@ void ReverbDecayGraph::paint(SgPainter& p) {
     }
 
     // Frozen: the plot takes the frozen tint.
-    const double frozen = frozen_.value;
     if (frozen > 0.0)
         p.fillRect(r, withAlpha(Theme::kFrozen, int(34 * frozen)));
 
     // The curve: filled, glowing while the tail sounds, rippling with the chorus.
     const double glow = glow_.value;
     const QColor color = dry_ ? Theme::kTextDisabled : mix(Theme::kScopeLine, Theme::kFrozen, frozen);
-    std::vector<QPointF> curve;
-    curve.reserve(shown_.size());
     const double ripple = kRipplePx * depth_.value * glow;
-    for (std::size_t i = 0; i < shown_.size() && i < frequencies_.size(); ++i) {
-        const double along = 3.0 * double(i) / double(shown_.size());  // three ripples across
-        const double wave = ripple > 0.0 ? ripple * std::sin(2.0 * kPi * (chorusPhase_ + along)) : 0.0;
-        curve.emplace_back(xOf(frequencies_[i]), yOfLog(shown_[i]) + wave);
+    if (ripple > 0.0) {
+        for (std::size_t i = 0; i < curve.size(); ++i) {
+            const double along = 3.0 * double(i) / double(shown_.size());  // three ripples across
+            curve[i].ry() += ripple * std::sin(2.0 * kPi * (chorusPhase_ + along));
+        }
     }
     if (curve.size() >= 2) {
         p.fillToBaseline(curve.data(), int(curve.size()), r.bottom(), withAlpha(color, int(22 + 40 * glow)));
         drawGlowPolyline(p, curve, color, 1.5 + 1.0 * glow);
     }
 
-    // The shelves' guides: how long their bands ring, level out to their edges. Frozen, the curve no
-    // longer settles onto them (the handles are what thaws): they fade, and the handles dim.
+    // The shelves' guides: how long their bands ring, level out to their edges.
     const QColor accent = dry_ ? Theme::kTextDisabled : Theme::kAccent;
-    const int guide = int(90 * (1.0 - frozen));
-    if (settings_.loShelf && guide > 0) {
-        const QPointF at = handleAt(Lo);
-        drawDashedPolyline(p, {QPointF(r.left(), at.y()), at}, withAlpha(accent, guide), 1.0);
-    }
-    if (settings_.hiFilter && !settings_.hiLowpass && guide > 0) {
-        const QPointF at = handleAt(Hi);
-        drawDashedPolyline(p, {at, QPointF(r.right(), at.y())}, withAlpha(accent, guide), 1.0);
+    for (const std::vector<QPointF>& line : guides)
+        drawDashedPolyline(p, line, withAlpha(accent, guide), 1.0);
+
+    for (const auto& [box, text] : chipped) {
+        p.fillRoundedRect(inkOf(box, text, metrics).adjusted(-2, -2, 2, 2), 2, 2, withAlpha(Theme::kMeterBg, 220));
+        p.drawText(box, Qt::AlignLeft | Qt::AlignVCenter, text, Theme::kTextDisabled, font);
     }
     p.restore();
 
