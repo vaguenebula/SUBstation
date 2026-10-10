@@ -1,6 +1,7 @@
 #include "devices/SaturatorCurve.h"
 
 #include "devices/EditorPaint.h"
+#include "devices/SaturatorPaint.h"
 #include "input/GestureKey.h"
 #include "model/ParamSpec.h"
 #include "sg/SgPainter.h"
@@ -20,14 +21,6 @@ namespace {
 
 constexpr int kBassShaper = 2;
 constexpr int kWaveshaper = 7;
-
-// `a` turning into `b` as `t` goes 0..1 (alpha too).
-QColor mixColor(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    auto mix = [t](float x, float y) { return x + (y - x) * float(t); };
-    return QColor::fromRgbF(mix(a.redF(), b.redF()), mix(a.greenF(), b.greenF()), mix(a.blueF(), b.blueF()),
-                            mix(a.alphaF(), b.alphaF()));
-}
 
 // The loudest of a display's values (linear peaks), 0 for none or nonsense.
 double loudest(const std::vector<float>& values) {
@@ -133,7 +126,9 @@ void SaturatorCurve::sync() {
         settled_ = false;
     }
     target_ = std::move(target);
-    synced_ = true;
+    // (not before the device is there: until then value() gives the defaults, and its real settings would
+    // morph in from them each time the editor opens)
+    synced_ = device() != nullptr;
     setCursor(shape_.type == kBassShaper || shape_.type == kWaveshaper ? Qt::SizeAllCursor : Qt::SizeVerCursor);
     update();
 }
@@ -147,14 +142,22 @@ void SaturatorCurve::refreshDisplays() {
     const std::vector<float> ins = readDisplay(QStringLiteral("in_peak"));
     const std::vector<float> outs = readDisplay(QStringLiteral("out_peak"));
     const double lastIn = latestIn_, lastOut = latestOut_;
-    latestIn_ = loudest(ins);
-    latestOut_ = loudest(outs);
+    // The values come a block of audio at a time: with a block longer than a tick, a tick without any
+    // is a gap between blocks, not silence. The levels hold until none has come for kHoldSeconds.
+    quietFor_ = ins.empty() && outs.empty() ? quietFor_ + dt : 0.0;
+    const bool gone = quietFor_ > kHoldSeconds;
+    if (!ins.empty() || gone)
+        latestIn_ = loudest(ins);
+    if (!outs.empty() || gone)
+        latestOut_ = loudest(outs);
 
-    // The dots: up at once to the newest peak, falling back smoothly.
+    // The dots, and the bars under and beside the curve with them: up at once to the newest peak, falling
+    // back smoothly. The meters hold their peaks as ticks.
     const double fall = std::exp(-dt / kDotFallSeconds);
     dot_ = std::max(latestIn_, dot_ * fall);
-    in_.update(ins.empty() ? -120.0 : toDb(latestIn_), dt, 30.0, 1.0, kMeterFloorDb);
-    out_.update(outs.empty() ? -120.0 : toDb(latestOut_), dt, 30.0, 1.0, kMeterFloorDb);
+    outLevel_ = std::max(latestOut_, outLevel_ * fall);
+    in_.update(latestIn_ > 0.0 ? toDb(latestIn_) : -120.0, dt, 30.0, 1.0, kMeterFloorDb);
+    out_.update(latestOut_ > 0.0 ? toDb(latestOut_) : -120.0, dt, 30.0, 1.0, kMeterFloorDb);
 
     // The afterglow: the highest dot of the last moments, held, then falling back to the dot.
     if (dot_ >= glow_) {
@@ -174,10 +177,7 @@ void SaturatorCurve::refreshDisplays() {
     bool moving = sat_.step(easeFraction(dt, 0.06));
     dotAlpha_.target = dot_ > 0.001 ? 1.0 : 0.0;
     moving = dotAlpha_.step(easeFraction(dt, 0.12)) || moving;
-    if (!ins.empty())
-        over_ = latestIn_ > 1.0 ? 1.0 : over_ * std::exp(-dt / kOverSeconds);
-    else
-        over_ *= std::exp(-dt / kOverSeconds);
+    over_ = latestIn_ > 1.0 ? 1.0 : over_ * std::exp(-dt / kOverSeconds);
 
     // A new shape eases in.
     if (morph_.step(easeFraction(dt, kMorphSeconds))) {
@@ -194,14 +194,15 @@ void SaturatorCurve::refreshDisplays() {
     // Quiet: what is left of the dots and the flash goes, so it settles.
     if (dot_ <= 1e-5)
         dot_ = 0.0;
+    if (outLevel_ <= 1e-5)
+        outLevel_ = 0.0;
     if (glow_ <= 1e-5)
         glow_ = 0.0;
     if (over_ <= 0.01)
         over_ = 0.0;
-    const bool metersDown = in_.level <= kMeterFloorDb && in_.peak <= kMeterFloorDb && out_.level <= kMeterFloorDb &&
-                            out_.peak <= kMeterFloorDb;
+    const bool peaksDown = in_.peak <= kMeterFloorDb && out_.peak <= kMeterFloorDb;
     const bool wasSettled = settled_;
-    settled_ = !moving && dot_ == 0.0 && glow_ == 0.0 && over_ == 0.0 && metersDown;
+    settled_ = !moving && dot_ == 0.0 && outLevel_ == 0.0 && glow_ == 0.0 && over_ == 0.0 && peaksDown;
     if (!settled_ || !wasSettled)
         update();  // (once more as it settles, to draw it at rest)
     if (latestIn_ != lastIn || latestOut_ != lastOut)
@@ -219,15 +220,17 @@ void SaturatorCurve::mousePressEvent(QMouseEvent* event) {
         return;  // (the double-click follows)
     gesture_ = newGestureKey();
     lastAt_ = event->position();
+    movedAcross_ = movedUp_ = 0.0;
     dragDrive_ = shape_.driveDb;
     dragThreshold_ = shape_.thresholdDb;
     dragCurve_ = shape_.wsCurve;
-    dragKeys_ = {kDrive};
+    across_.clear();
     if (bass())
-        dragKeys_ << kThreshold;
+        across_ = kThreshold;
     else if (waveshaper())
-        dragKeys_ << kCurve;
-    touch(kDrive);
+        across_ = kCurve;
+    if (across_.isEmpty())
+        touch(kDrive);  // (else the first moves say which: setParams shows the first one's automation)
 }
 
 void SaturatorCurve::mouseMoveEvent(QMouseEvent* event) {
@@ -237,16 +240,21 @@ void SaturatorCurve::mouseMoveEvent(QMouseEvent* event) {
     const double fine = event->modifiers() & Qt::ShiftModifier ? kFine : 1.0;
     const double dx = pos.x() - lastAt_.x(), dy = lastAt_.y() - pos.y();
     lastAt_ = pos;
+    movedAcross_ += std::abs(dx);
+    movedUp_ += std::abs(dy);
     dragDrive_ = std::clamp(dragDrive_ + dy * kDrivePerPixel * fine, -36.0, 36.0);
     dragThreshold_ = std::clamp(dragThreshold_ + dx * kThresholdPerPixel * fine, -50.0, 0.0);
     dragCurve_ = std::clamp(dragCurve_ + dx * kCurvePerPixel * fine, 0.0, 100.0);
     auto rounded = [](double v) { return std::round(v * 100.0) / 100.0; };
+    // The same parameters every move (one undo step), the one moved most so far first: its automation shows.
+    const double across = across_ == kThreshold ? rounded(dragThreshold_) : rounded(dragCurve_);
+    const bool acrossFirst = !across_.isEmpty() && movedAcross_ > movedUp_;
     sub::app::OrderedMap<QString, double> values;
+    if (acrossFirst)
+        values.insert(across_, across);
     values.insert(kDrive, rounded(dragDrive_));
-    if (dragKeys_.contains(kThreshold))
-        values.insert(kThreshold, rounded(dragThreshold_));
-    if (dragKeys_.contains(kCurve))
-        values.insert(kCurve, rounded(dragCurve_));
+    if (!across_.isEmpty() && !acrossFirst)
+        values.insert(across_, across);
     setParams(values, gesture_, QStringLiteral("Change Saturator"));
 }
 
@@ -307,7 +315,9 @@ void SaturatorCurve::paint(SgPainter& p) {
     p.save();
     p.setClipRect(r);
     // The Bass Shaper's threshold (where it leaves the straight line), Post Clip's ceiling.
-    if (bass() && thresholdInput_ < 1.0) {
+    // (Not within a few pixels of the middle, where Drive far above the threshold puts them: two lines
+    // on the axis would say nothing.)
+    if (bass() && thresholdInput_ < 1.0 && xOf(thresholdInput_) - cx >= kThresholdMarkerGap) {
         for (const double x : {xOf(-thresholdInput_), xOf(thresholdInput_)})
             drawDashedPolyline(p, {QPointF(x, r.top()), QPointF(x, r.bottom())}, withAlpha(Theme::kAccent, 110), 1.0);
     }
@@ -333,7 +343,7 @@ void SaturatorCurve::paint(SgPainter& p) {
     }
 
     // The signal on it: the stretch it reaches lit, the afterglow beyond, the dots.
-    const QColor hot = mixColor(Theme::kScopeLine, Theme::kMeterHigh, sat_.value);
+    const QColor hot = colorBetween(Theme::kScopeLine, Theme::kMeterHigh, sat_.value);
     const double dot = std::min(dot_, 1.0);
     const double alpha = dotAlpha_.value;
     if (alpha > 0.0 && n >= 2) {
@@ -372,15 +382,15 @@ void SaturatorCurve::paint(SgPainter& p) {
     p.restore();
 
     // The In strip under the curve (its x axis), the Out strip at its right (its y axis): bars from the
-    // middle out to the level either way, green, yellow from -12 dB, red from -3 dB, the held peak a tick.
+    // middle out to the level either way (the In bar's reach is the dots'), green, yellow from -12 dB, red
+    // from -3 dB, the held peak a tick.
     const QRectF inStrip(r.left(), r.bottom() + kGap, r.width(), kStrip);
     const QRectF outStrip(r.right() + kGap, r.top(), kStrip, r.height());
     const double yellow = std::pow(10.0, -12.0 / 20.0), red = std::pow(10.0, -3.0 / 20.0);
-    auto strip = [&](const QRectF& well, bool across, double levelDb, double peakDb) {
+    auto strip = [&](const QRectF& well, bool across, double level, double peakDb) {
         p.fillRect(well, Theme::kPanel);
         const double unit = across ? well.width() / 2 : well.height() / 2 / kOutputRange;  // pixels per 1.0
         const double half = across ? well.width() / 2 : well.height() / 2;
-        const double level = levelDb <= kMeterFloorDb ? 0.0 : std::pow(10.0, levelDb / 20.0);
         const double reach = std::min(level * unit, half);
         const QPointF mid = well.center();
         auto band = [&](double from, double to, const QColor& color) {
@@ -411,19 +421,25 @@ void SaturatorCurve::paint(SgPainter& p) {
             }
         }
     };
-    strip(inStrip, true, in_.level, in_.peak);
-    strip(outStrip, false, out_.level, out_.peak);
+    strip(inStrip, true, std::min(dot_, 1.0), in_.peak);
+    strip(outStrip, false, outLevel_, out_.peak);
 
-    // The drive and HQ, in the corner the curve never takes (the type is the list beside it).
+    // The drive and HQ in the bottom right corner, which an odd curve takes only when it folds (Sinoid
+    // Fold, the Waveshaper's ripples); the type is the list beside it. Each on a dark backing, so a grid
+    // line, Post Clip's ceiling or a fold passing behind doesn't run through it.
     const QFont font = uiFont(7);
     const double drive = shape_.driveDb;
     const QString driveText =
         (drive > 0.0 ? QStringLiteral("+") : QString()) + sub::app::formatValue(drive, QStringLiteral("dB"));
-    p.drawText(QRectF(r.center().x(), r.bottom() - 13, r.width() / 2 - 3, 12), Qt::AlignRight | Qt::AlignVCenter,
-               driveText, std::abs(drive) > 1e-9 ? Theme::kText : Theme::kTextDim, font);
+    auto corner = [&](double bottom, const QString& text, const QColor& color) {
+        const double w = SgPainter::textWidth(text, font);
+        const QRectF at(r.right() - 3 - w, bottom - 12, w, 12);
+        p.fillRoundedRect(at.adjusted(-2, 0, 2, 0), 2, 2, withAlpha(Theme::kMeterBg, 200));
+        p.drawText(at, Qt::AlignRight | Qt::AlignVCenter, text, color, font);
+    };
+    corner(r.bottom() - 1, driveText, std::abs(drive) > 1e-9 ? Theme::kText : Theme::kTextDim);
     if (hq_)
-        p.drawText(QRectF(r.center().x(), r.bottom() - 25, r.width() / 2 - 3, 12), Qt::AlignRight | Qt::AlignVCenter,
-                   QStringLiteral("HQ"), Theme::kAccent, font);
+        corner(r.bottom() - 13, QStringLiteral("HQ"), Theme::kAccent);
 }
 
 }  // namespace sub::ui

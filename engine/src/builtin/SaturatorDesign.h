@@ -207,8 +207,9 @@ inline Shape makeShape(int type, float thresholdDb, float wsDrive, float wsLin, 
 
 inline float shape(const Shape& s, float u) noexcept { return curve(s.type, params(s), u); }
 
-// After the curve (and Color's de-emphasis): Soft is the Analog Clip curve
-// again, Hard a clip at 1, so the output never passes full scale (times Output).
+// After the curve, Color's de-emphasis and Dry/Wet: Soft is the Analog Clip
+// curve again, Hard a clip at 1, so the output never passes full scale (times
+// Output), whatever Dry/Wet blends back in.
 inline float postClip(Clip clip, float y) noexcept {
     switch (clip) {
     case Clip::None: return y;

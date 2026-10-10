@@ -5,12 +5,13 @@ import SUBstation
 // The Saturator's editor, laid out as Live 12.1's Saturator with its expanded
 // view open beside the front panel: Drive, the Type and the DC and HQ switches;
 // the shaper curve (SaturatorCurve: the signal lit on it, In and Out strips;
-// drag it for Drive) with Post Clip under it; Output and Dry/Wet. Then Color's
-// pre-shaper EQ over the input and output spectra (SaturatorColorGraph; drag
-// its handles) with its switch and four knobs, and the curve's own controls:
-// the Waveshaper's six, or the Bass Shaper's Threshold. Every control shows its
-// parameter as it is now (its automation's value while that plays), sets it
-// undoably, touches it when pressed, and right-click gives its menu.
+// drag it for Drive) with Post Clip under it; Output and Dry/Wet. Then Color:
+// its switch over its pre-shaper EQ on the input and output spectra
+// (SaturatorColorGraph; drag its handles) and its four knobs. Last the curve's
+// own controls: the Waveshaper's six, or the Bass Shaper's Threshold. Every
+// control shows its parameter as it is now (its automation's value while that
+// plays), sets it undoably, touches it when pressed, and right-click gives its
+// menu.
 Item {
     id: editor
 
@@ -82,7 +83,7 @@ Item {
                 width: 40
                 param: p.get("hq")
                 text: qsTr("HQ")
-                tooltip: qsTr("Hi-Quality: shapes at 4× the sample rate, so loud high sounds alias far less (more CPU, 36 samples of latency)")
+                tooltip: qsTr("Hi-Quality: shapes and clips at 4× the sample rate, so loud high sounds alias far less (more CPU, 36 samples of latency)")
             }
         }
     }
@@ -118,7 +119,7 @@ Item {
             anchors.bottom: parent.bottom
             width: parent.width
             param: p.get("clip")
-            tooltip: qsTr("Post Clip: clips the output softly (the Analog Clip curve) or hard, so it never goes over the Output level")
+            tooltip: qsTr("Post Clip: clips the output, dry and wet together, softly (the Analog Clip curve) or hard, so it never goes over the Output level (with HQ, bright sound can a little)")
         }
     }
 
@@ -167,16 +168,26 @@ Item {
         y: 6
         width: 220
         height: editor.height - 12
-        implicitHeight: colorGraph.implicitHeight + 4 + colorKnobs.height
+        implicitHeight: colorSwitch.height + 4 + colorGraph.implicitHeight + 4 + colorKnobs.height
 
+        // The switch over the graph (not on it: it would hide a handle dragged up there).
+        ParamButton {
+            id: colorSwitch
+            objectName: "color"
+            width: 44
+            param: p.get("color")
+            text: qsTr("Color")
+            tooltip: qsTr("Color: two filters around the curve. What they boost is driven harder (then turned back down); what they cut stays clean (then turned back up)")
+        }
         SaturatorColorGraph {
             id: colorGraph
             objectName: "saturatorColor"
             session: Session
             trackId: editor.trackId
             deviceId: editor.deviceId
+            y: colorSwitch.height + 4
             width: parent.width
-            height: Math.max(implicitHeight, parent.height - 4 - colorKnobs.height)
+            height: Math.max(implicitHeight, parent.height - y - 4 - colorKnobs.height)
 
             HoverHandler {
                 id: colorHover
@@ -184,15 +195,6 @@ Item {
             ToolTip.visible: colorHover.hovered && !colorHover.point.pressedButtons
             ToolTip.delay: 700
             ToolTip.text: qsTr("Color's pre-shaper EQ over the input (filled) and output (line) spectra. Drag the dots: Base up and down; the peak across for Freq and up and down for Depth")
-        }
-        ParamButton {
-            objectName: "color"
-            x: 4
-            y: 4
-            width: 44
-            param: p.get("color")
-            text: qsTr("Color")
-            tooltip: qsTr("Color: two filters around the curve. What they boost is driven harder (then turned back down); what they cut stays clean (then turned back up)")
         }
         Row {
             id: colorKnobs
@@ -373,6 +375,7 @@ Item {
                 tooltip: qsTr("Threshold: the Bass Shaper is linear below it and saturates above it; at 0 dB it clips hard")
             }
             EditorReadout {
+                objectName: "bassHint"
                 width: parent.width
                 color: Theme.textDim
                 text: qsTr("linear below, saturating above")

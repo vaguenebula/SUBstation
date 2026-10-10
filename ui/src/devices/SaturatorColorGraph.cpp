@@ -3,6 +3,7 @@
 #include "audio/EngineBridge.h"
 #include "audio/SaturatorResponse.h"
 #include "devices/EditorPaint.h"
+#include "devices/SaturatorPaint.h"
 #include "input/GestureKey.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
@@ -19,14 +20,6 @@ namespace sub::ui {
 using sub::app::analysis::EqAnalyzer;
 
 namespace {
-
-// `a` turning into `b` as `t` goes 0..1 (alpha too).
-QColor mixColor(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    auto mix = [t](float x, float y) { return x + (y - x) * float(t); };
-    return QColor::fromRgbF(mix(a.redF(), b.redF()), mix(a.greenF(), b.greenF()), mix(a.blueF(), b.blueF()),
-                            mix(a.alphaF(), b.alphaF()));
-}
 
 // A spectrum's columns smoothed a little (1-2-1, twice): calmer between a low note's harmonics,
 // where the columns are narrower than the FFT's bins.
@@ -131,7 +124,9 @@ void SaturatorColorGraph::sync() {
     } else {
         settled_ = false;  // (the next tick eases towards it)
     }
-    synced_ = true;
+    // (not before the device is there: until then value() gives the defaults, and its real settings would
+    // ease in from them each time the editor opens)
+    synced_ = device() != nullptr;
     update();
 }
 
@@ -152,13 +147,18 @@ void SaturatorColorGraph::updateCurve(bool exact) {
 
 // --- Displays and animation ---------------------------------------------------------------
 
-void SaturatorColorGraph::feed(EqAnalyzer::Channel channel, const std::vector<float>& samples) {
+void SaturatorColorGraph::feed(EqAnalyzer::Channel channel, const std::vector<float>& samples, double dt) {
     const double rate = sampleRate();
+    // The values come a block of audio at a time: a tick without any soon after some is a gap between
+    // blocks (longer than a tick), not silence. The spectrum holds until none has come for kHoldSeconds.
+    double& quiet = quietFor_[channel];
     if (samples.empty()) {
-        if (analyzer_.live(channel))
+        quiet += dt;
+        if (quiet > kHoldSeconds && analyzer_.live(channel))
             analyzer_.feed(channel, nullptr, 0, rate);  // (falls back)
         return;
     }
+    quiet = 0.0;
     // Silence once its window is all silent, and the spectrum down: nothing to work out.
     const bool silent = std::all_of(samples.begin(), samples.end(), [](float s) { return s == 0.0f; });
     int& zeros = zeros_[channel];
@@ -173,8 +173,8 @@ void SaturatorColorGraph::refreshDisplays() {
     if (!clock_.isValid())
         clock_.start();
     const bool wasInLive = inLive_, wasOutLive = outLive_;
-    feed(EqAnalyzer::Input, readDisplay(QStringLiteral("input")));
-    feed(EqAnalyzer::Output, readDisplay(QStringLiteral("output")));
+    feed(EqAnalyzer::Input, readDisplay(QStringLiteral("input")), dt);
+    feed(EqAnalyzer::Output, readDisplay(QStringLiteral("output")), dt);
     inLive_ = analyzer_.live(EqAnalyzer::Input);
     outLive_ = analyzer_.live(EqAnalyzer::Output);
     // (once more as one falls silent, to draw it at the floor)
@@ -230,12 +230,14 @@ void SaturatorColorGraph::mousePressEvent(QMouseEvent* event) {
         return;  // (the double-click follows)
     gesture_ = newGestureKey();
     handle_ = handle;
-    hovered_ = handle;
+    setHovered(handle);
     lastAt_ = event->position();
+    movedAcross_ = movedUp_ = 0.0;
     dragBase_ = base_;
     dragFreqX_ = xOf(freq_);
     dragDepth_ = depth_;
-    touch(handle == Handle::Base ? kBase : kFreq);
+    if (handle == Handle::Base)
+        touch(kBase);  // (the peak's first moves say which of its two: setParams shows the first one's automation)
     update();
 }
 
@@ -246,32 +248,52 @@ void SaturatorColorGraph::mouseMoveEvent(QMouseEvent* event) {
     const double fine = event->modifiers() & Qt::ShiftModifier ? kFine : 1.0;
     const double up = (lastAt_.y() - pos.y()) * 2.0 * kRangeDb / std::max(1.0, plot().height()) * fine;
     const double across = (pos.x() - lastAt_.x()) * fine;
+    movedAcross_ += std::abs(pos.x() - lastAt_.x());
+    movedUp_ += std::abs(pos.y() - lastAt_.y());
     lastAt_ = pos;
     auto rounded = [](double v, double to) { return std::round(v / to) * to; };
+    // The same parameters every move (one undo step), the one moved most first: its automation shows.
     if (handle_ == Handle::Base) {
-        dragBase_ = std::clamp(dragBase_ + up, -36.0, 36.0);
+        // (the handle is on the shelf at 60 Hz, which moves a little less than Base: so it follows the mouse)
+        dragBase_ = std::clamp(dragBase_ + up / baseHandleSlope(dragBase_), -36.0, 36.0);
         setParams({{kBase, rounded(dragBase_, 0.01)}, {kColor, 1.0}}, gesture_,
                   QStringLiteral("Change Saturator Color"));
     } else if (handle_ == Handle::Peak) {
         dragFreqX_ = std::clamp(dragFreqX_ + across, xOf(30.0), xOf(18500.0));
         dragDepth_ = std::clamp(dragDepth_ + up, -36.0, 36.0);
-        setParams({{kFreq, rounded(std::clamp(frequencyAxis().valueAt(dragFreqX_), 30.0, 18500.0), 0.1)},
-                   {kDepth, rounded(dragDepth_, 0.01)},
-                   {kColor, 1.0}},
-                  gesture_, QStringLiteral("Change Saturator Color"));
+        const double freq = rounded(std::clamp(frequencyAxis().valueAt(dragFreqX_), 30.0, 18500.0), 0.1);
+        const double depth = rounded(dragDepth_, 0.01);
+        sub::app::OrderedMap<QString, double> values;
+        if (movedUp_ > movedAcross_)
+            values.insert(kDepth, depth);
+        values.insert(kFreq, freq);
+        if (movedUp_ <= movedAcross_)
+            values.insert(kDepth, depth);
+        values.insert(kColor, 1.0);
+        setParams(values, gesture_, QStringLiteral("Change Saturator Color"));
     }
+}
+
+double SaturatorColorGraph::baseHandleSlope(double base) const {
+    const double low = std::max(-36.0, base - 0.5), high = std::min(36.0, base + 0.5);
+    const QList<double> at = {kBaseHandleHz};
+    const double rate = sampleRate();
+    const double rise = sub::app::saturatorColorDb(high, freq_, width_, depth_, rate, at).value(0) -
+                        sub::app::saturatorColorDb(low, freq_, width_, depth_, rate, at).value(0);
+    return std::max(0.25, rise / (high - low));
 }
 
 void SaturatorColorGraph::mouseReleaseEvent(QMouseEvent* event) {
     gesture_.clear();
     handle_ = Handle::None;
-    hovered_ = handleAt(event->position());
+    setHovered(handleAt(event->position()));
     update();
 }
 
 void SaturatorColorGraph::mouseUngrabEvent() {
     gesture_.clear();
     handle_ = Handle::None;
+    setHovered(Handle::None);
     update();
 }
 
@@ -286,8 +308,7 @@ void SaturatorColorGraph::mouseDoubleClickEvent(QMouseEvent* event) {
     setParams({{handle == Handle::Base ? kBase : kDepth, 0.0}}, QString(), QStringLiteral("Change Saturator Color"));
 }
 
-void SaturatorColorGraph::hoverMoveEvent(QHoverEvent* event) {
-    const Handle handle = handleAt(event->position());
+void SaturatorColorGraph::setHovered(Handle handle) {
     if (handle == hovered_)
         return;
     hovered_ = handle;
@@ -298,12 +319,11 @@ void SaturatorColorGraph::hoverMoveEvent(QHoverEvent* event) {
     update();
 }
 
+void SaturatorColorGraph::hoverMoveEvent(QHoverEvent* event) { setHovered(handleAt(event->position())); }
+
 void SaturatorColorGraph::hoverLeaveEvent(QHoverEvent*) {
-    if (hovered_ == Handle::None || !gesture_.isEmpty())
-        return;
-    hovered_ = Handle::None;
-    unsetCursor();
-    update();
+    if (gesture_.isEmpty())
+        setHovered(Handle::None);
 }
 
 // --- Painting -------------------------------------------------------------------------------
@@ -344,7 +364,7 @@ void SaturatorColorGraph::paint(SgPainter& p) {
 
     // The EQ: lit while Color is on, grey while off.
     const double on = onEased_.value;
-    const QColor color = mixColor(Theme::kTextDisabled, Theme::kAccent, on);
+    const QColor color = colorBetween(Theme::kTextDisabled, Theme::kAccent, on);
     if (curveDb_.size() == n && n >= 2) {
         std::vector<QPointF> curve(n);
         for (std::size_t i = 0; i < n; ++i)

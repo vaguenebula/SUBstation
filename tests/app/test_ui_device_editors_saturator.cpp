@@ -2,24 +2,30 @@
 // loaded as the device view loads it, with a real session over an engine:
 // its controls bound to their parameters (undoable, the engine following), the
 // curve and Color's EQ being the engine's own maths, the graphs' drags one undo
-// step each, and the displays reaching the graphs (rendering offline) and
-// letting them settle. With SUBSTATION_UI_SCREENSHOTS set to a folder, the
-// editor is saved there as PNGs, with signal flowing, in three of its modes.
+// step each (showing the automation of what they move most), and the displays
+// reaching the graphs (rendering offline), holding over the gaps between
+// blocks and letting them settle. With SUBSTATION_UI_SCREENSHOTS set to a
+// folder, the editor is saved there as PNGs, with signal flowing, in three of
+// its modes.
 
 #include <QGuiApplication>
 #include <QQuickItem>
+#include <QSignalSpy>
 #include <QStyleHints>
 #include <QTest>
 #include <QUndoStack>
 
 #include <cmath>
+#include <map>
 #include <vector>
 
 #include "EditorHarness.h"
 #include "audio/SaturatorResponse.h"
+#include "builtin/SaturatorDesign.h"
 #include "controls/KnobItem.h"
 #include "devices/SaturatorColorGraph.h"
 #include "devices/SaturatorCurve.h"
+#include "model/Automation.h"
 
 using namespace sub::app;
 using namespace sub::ui;
@@ -177,17 +183,70 @@ private Q_SLOTS:
         QCOMPARE(find(s.view, QStringLiteral("shaperTitle"))->property("text").toString(),
                  QStringLiteral("Waveshaper"));
 
-        // Nothing overlaps: the columns' items stay in their columns, inside the body.
-        const QRectF body(0, 0, s.view->width(), s.view->height());
-        for (const QString& id : kKnobs + QStringList{QStringLiteral("type"), QStringLiteral("clip"),
-                                                       QStringLiteral("color"), QStringLiteral("dc"),
-                                                       QStringLiteral("hq")}) {
+        // Nothing overlaps: each control stays in its column (inside the body's margins), the shown
+        // shaper section with the Waveshaper's knobs, then with the Bass Shaper's Threshold.
+        const double top = 6, bottom = s.view->height() - 6;
+        const std::map<QString, QRectF> columns = {
+            {QStringLiteral("front"), QRectF(QPointF(8, top), QPointF(92, bottom))},
+            {QStringLiteral("curve"), QRectF(QPointF(100, top), QPointF(260, bottom))},
+            {QStringLiteral("levels"), QRectF(QPointF(268, top), QPointF(330, bottom))},
+            {QStringLiteral("color"), QRectF(QPointF(347, top), QPointF(567, bottom))},
+            {QStringLiteral("shaper"), QRectF(QPointF(584, top), QPointF(748, bottom))},
+        };
+        const std::map<QString, QString> columnOf = {
+            {QStringLiteral("drive"), QStringLiteral("front")},
+            {QStringLiteral("type"), QStringLiteral("front")},
+            {QStringLiteral("dc"), QStringLiteral("front")},
+            {QStringLiteral("hq"), QStringLiteral("front")},
+            {QStringLiteral("saturatorCurve"), QStringLiteral("curve")},
+            {QStringLiteral("clip"), QStringLiteral("curve")},
+            {QStringLiteral("output"), QStringLiteral("levels")},
+            {QStringLiteral("mix"), QStringLiteral("levels")},
+            {QStringLiteral("color"), QStringLiteral("color")},
+            {QStringLiteral("saturatorColor"), QStringLiteral("color")},
+            {QStringLiteral("base"), QStringLiteral("color")},
+            {QStringLiteral("freq"), QStringLiteral("color")},
+            {QStringLiteral("width"), QStringLiteral("color")},
+            {QStringLiteral("depth"), QStringLiteral("color")},
+            {QStringLiteral("shaperTitle"), QStringLiteral("shaper")},
+            {QStringLiteral("threshold"), QStringLiteral("shaper")},
+            {QStringLiteral("ws_drive"), QStringLiteral("shaper")},
+            {QStringLiteral("ws_lin"), QStringLiteral("shaper")},
+            {QStringLiteral("ws_curve"), QStringLiteral("shaper")},
+            {QStringLiteral("ws_damp"), QStringLiteral("shaper")},
+            {QStringLiteral("ws_depth"), QStringLiteral("shaper")},
+            {QStringLiteral("ws_period"), QStringLiteral("shaper")},
+        };
+        auto rectOf = [&](const QString& id) {
             QQuickItem* item = find(s.view, id);
-            if (!item->isVisible())
-                continue;
-            const QRectF at = item->mapRectToItem(s.view, QRectF(0, 0, item->width(), item->height()));
-            QVERIFY2(body.adjusted(8, 6, -8, -6).contains(at), qPrintable(id));
-        }
+            return item->mapRectToItem(s.view, QRectF(0, 0, item->width(), item->height()));
+        };
+        auto inColumns = [&](int shown) {
+            int checked = 0;
+            for (const auto& [id, column] : columnOf) {
+                QQuickItem* item = find(s.view, id);
+                if (!item || !item->isVisible())
+                    continue;
+                ++checked;
+                QVERIFY2(columns.at(column).contains(rectOf(id)), qPrintable(id + QStringLiteral(" in ") + column));
+            }
+            QCOMPARE(checked, shown);  // (all but the hidden section's)
+        };
+        inColumns(21);
+        // Color's switch is above its graph, not over it (where it would hide a handle).
+        QVERIFY(!rectOf(QStringLiteral("color")).intersects(rectOf(QStringLiteral("saturatorColor"))));
+        QVERIFY(s.color->height() >= double(SaturatorColorGraph::kMinimumHeight));
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), 2.0);
+        QTRY_VERIFY_WITH_TIMEOUT(find(s.view, QStringLiteral("bassSection"))->isVisible() &&
+                                     !find(s.view, QStringLiteral("waveshaperSection"))->isVisible(),
+                                 500);
+        inColumns(16);
+        // (the hint under the Threshold too, its text within its width)
+        QQuickItem* hint = find(s.view, QStringLiteral("bassHint"));
+        QVERIFY(hint && hint->isVisible());
+        QVERIFY(columns.at(QStringLiteral("shaper")).contains(rectOf(QStringLiteral("bassHint"))));
+        QVERIFY2(hint->property("contentWidth").toDouble() <= hint->width(),
+                 qPrintable(QString::number(hint->property("contentWidth").toDouble())));
     }
 
     // --- Every control sets its parameter undoably, and the engine follows ---------------------
@@ -337,39 +396,76 @@ private Q_SLOTS:
         // (Sinoid Fold at +6 dB folds back: full scale in comes out lower than half scale does)
         QVERIFY(std::abs(curve->targetCurve().back()) < curve->targetCurve()[inputs.size() * 3 / 4]);
 
-        // Every type, Post Clip and the shapers' own controls are the engine's too.
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), 2.0);
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("threshold"), -30.0);
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("clip"), 1.0);
-        SaturatorShape bass;
-        bass.type = 2;
-        bass.driveDb = 6.0;
-        bass.thresholdDb = -30.0;
-        bass.clip = 1;
-        QCOMPARE(curve->targetCurve()[inputs.size() - 3], saturatorCurveAt(bass, inputs[inputs.size() - 3]));
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), 7.0);
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("ws_depth"), 60.0);
-        SaturatorShape shaper = bass;
-        shaper.type = 7;
-        shaper.wsDepth = 60.0;
-        for (size_t i = 0; i < inputs.size(); i += 11)
-            QCOMPARE(curve->targetCurve()[i], saturatorCurveAt(shaper, inputs[i]));
+        // Every type, both Post Clips and the shapers' own controls are the engine's too, each control
+        // at a value of its own: compared with the engine's saturator::transfer itself (not the application
+        // layer's wrapper the editor calls), so a setting read into the wrong place on the way would show.
+        const std::vector<std::pair<const char*, double>> settings = {
+            {"threshold", -30.0}, {"ws_drive", 70.0}, {"ws_lin", 30.0},   {"ws_curve", 80.0},
+            {"ws_damp", 20.0},    {"ws_depth", 60.0}, {"ws_period", 40.0}};
+        for (const auto& [id, v] : settings)
+            editor()->setDeviceParam(s.track, s.device, QString::fromLatin1(id), v);
+        for (const int clip : {1, 2}) {
+            editor()->setDeviceParam(s.track, s.device, QStringLiteral("clip"), double(clip));
+            for (int type = 0; type < sub::saturator::kTypes; ++type) {
+                editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), double(type));
+                const sub::saturator::Shape played =
+                    sub::saturator::makeShape(type, -30.f, 70.f, 30.f, 80.f, 20.f, 60.f, 40.f);
+                for (size_t i = 0; i < inputs.size(); ++i) {
+                    const double sound = sub::saturator::transfer(played, sub::saturator::clipAt(clip),
+                                                                  sub::expDbToGain(6.f), float(inputs[i]));
+                    QVERIFY2(curve->targetCurve()[i] == sound,
+                             qPrintable(QStringLiteral("type %1, clip %2, at %3").arg(type).arg(clip).arg(inputs[i])));
+                }
+            }
+        }
 
-        // Color's EQ is the engine's design at its rate, once it has eased there.
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("color"), 1.0);
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("base"), 12.0);
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("depth"), -6.0);
+        // Color's EQ is the engine's design at its rate (the engine's own colorResponseDb), once it has
+        // eased there; each of its four controls away from its default.
+        const double rate = bridge()->sampleRate();
+        for (const auto& [id, v] :
+             {std::pair{"color", 1.0}, {"base", 12.0}, {"freq", 2500.0}, {"width", 30.0}, {"depth", -6.0}})
+            editor()->setDeviceParam(s.track, s.device, QString::fromLatin1(id), v);
         QTRY_VERIFY_WITH_TIMEOUT(s.color->settled(), 1000);
         const std::vector<double>& columns = s.color->columns();
         QVERIFY(columns.size() > 150);
-        const QList<double> db = saturatorColorDb(12.0, 1000.0, 50.0, -6.0, bridge()->sampleRate(),
-                                                  QList<double>(columns.begin(), columns.end()));
+        const sub::saturator::ColorDesign design = sub::saturator::colorDesign(12.0, 2500.0, 30.0, -6.0, rate);
         for (size_t i = 0; i < columns.size(); ++i)
-            QCOMPARE(s.color->curveDb()[i], db[qsizetype(i)]);
+            QCOMPARE(s.color->curveDb()[i], sub::saturator::colorResponseDb(design, columns[i], rate));
         // Its handles sit on it: Base on the shelf (+12 dB), the peak at its Depth.
-        QVERIFY(std::abs(s.color->peakHandle().x() - s.color->xOf(1000.0)) < 1e-9);
+        QVERIFY(std::abs(s.color->peakHandle().x() - s.color->xOf(2500.0)) < 1e-9);
         QVERIFY(std::abs(s.color->peakHandle().y() - s.color->yOfDb(-6.0)) < 0.2);
         QVERIFY(std::abs(s.color->baseHandle().y() - s.color->yOfDb(12.0)) < 1.0);
+    }
+
+    // --- An editor opens on the device as it is, without easing in from the defaults ----------------
+
+    void opensAsItIs() {
+        const QString track = audioTrackWith(tone(1000.0, kSampleRate, 0.5), QStringLiteral("tone"), 1.0);
+        QVERIFY(!track.isEmpty());
+        const QString device = editor()->addDevice(track, QStringLiteral("saturator"));
+        for (const auto& [id, v] : {std::pair{"type", 5.0}, {"drive", 12.0}, {"color", 1.0}, {"base", 12.0}})
+            editor()->setDeviceParam(track, device, QString::fromLatin1(id), v);
+        QQuickItem* view = show(QStringLiteral("saturator"), track, device);
+        QVERIFY(view);
+        auto* curve = find<SaturatorCurve>(view, QStringLiteral("saturatorCurve"));
+        auto* color = find<SaturatorColorGraph>(view, QStringLiteral("saturatorColor"));
+        QVERIFY(curve && color);
+        // (show() has let 50 ms of ticks go by: a morph from the defaults would still be under way)
+        QVERIFY(!curve->morphing());
+        QCOMPARE(curve->drawnCurve(), curve->targetCurve());
+        SaturatorShape folded;
+        folded.type = 5;
+        folded.driveDb = 12.0;
+        const std::vector<double>& inputs = curve->inputs();
+        const QList<double> fold = saturatorCurve(folded, QList<double>(inputs.begin(), inputs.end()));
+        for (size_t i = 0; i < inputs.size(); ++i)
+            QCOMPARE(curve->drawnCurve()[i], fold[qsizetype(i)]);
+        const std::vector<double>& columns = color->columns();
+        const QList<double> db = saturatorColorDb(12.0, 1000.0, 50.0, 0.0, bridge()->sampleRate(),
+                                                  QList<double>(columns.begin(), columns.end()));
+        for (size_t i = 0; i < columns.size(); ++i)
+            QCOMPARE(color->curveDb()[i], db[qsizetype(i)]);
+        QTRY_VERIFY_WITH_TIMEOUT(color->settled(), 1000);
     }
 
     // --- The graphs' drags, one undo step each ---------------------------------------------------
@@ -392,9 +488,22 @@ private Q_SLOTS:
         // (under the mouse the curve snaps to its shape, no lag)
         QVERIFY(!s.curve->morphing());
 
+        // Each drag shows the automation of the parameter it moves most (that of the first one set).
+        auto touchedKeys = [](const QSignalSpy& touched) {
+            QStringList keys;
+            for (const QList<QVariant>& args : touched)
+                keys << args.at(1).toString();
+            keys.removeDuplicates();
+            return keys;
+        };
+        auto keyOf = [&](const char* id) {
+            return QStringList{automation::deviceKey(s.device, QString::fromLatin1(id))};
+        };
+
         // In the Bass Shaper, across for the Threshold too.
         editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), 2.0);
         steps = undo()->index();
+        QSignalSpy touched(editor(), &ProjectEditor::parameterTouched);
         QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, middle);
         for (int dx = 5; dx <= 20; dx += 5)
             dragTo(middle - QPoint(dx, 0));
@@ -403,10 +512,12 @@ private Q_SLOTS:
         QVERIFY(std::abs(value("drive") - 10.0) < 0.01);
         QCOMPARE(undo()->index(), steps + 1);
         QCOMPARE(engineParam(s, "threshold"), float(value("threshold")));
+        QCOMPARE(touchedKeys(touched), keyOf("threshold"));
 
         // In the Waveshaper, across for its Curve; Shift, pressed mid-drag, goes on finer from there.
         editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), 7.0);
         steps = undo()->index();
+        touched.clear();
         QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, middle);
         dragTo(middle + QPoint(20, 0));
         QVERIFY(std::abs(value("ws_curve") - (50.0 + 20 * SaturatorCurve::kCurvePerPixel)) < 0.01);
@@ -416,6 +527,7 @@ private Q_SLOTS:
         QVERIFY2(std::abs(value("ws_curve") - curve) < 0.01, qPrintable(QString::number(value("ws_curve"))));
         QVERIFY(std::abs(value("drive") - 10.0) < 0.01);
         QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(touchedKeys(touched), keyOf("ws_curve"));
 
         // A double-click sets Drive back to 0 dB, one step.
         steps = undo()->index();
@@ -478,6 +590,43 @@ private Q_SLOTS:
         dragTo(away - QPoint(0, 20));
         QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, away - QPoint(0, 20));
         QCOMPARE(undo()->index(), steps);
+
+        // The peak dragged straight up shows Depth's automation (what it moves), not Frequency's. On past
+        // the top: the handle stops at +36 dB while the mouse goes on, and is released away from it.
+        touched.clear();
+        const QPoint peak = scenePoint(color, color->peakHandle());
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, peak);
+        for (int dy = 10; dy <= 50; dy += 10)
+            dragTo(peak - QPoint(0, dy));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, peak - QPoint(0, 50));
+        QCOMPARE(value("depth"), 36.0);
+        QCOMPARE(touchedKeys(touched), keyOf("depth"));
+        // Back over an empty spot the cursor is the plain one again; over a handle, the pointing hand.
+        QTest::mouseMove(window_, scenePoint(color, QPointF(color->xOf(300.0), color->plot().bottom() - 6)));
+        QCOMPARE(color->cursor().shape(), Qt::ArrowCursor);
+        QTest::mouseMove(window_, scenePoint(color, color->baseHandle()));
+        QCOMPARE(color->cursor().shape(), Qt::PointingHandCursor);
+        QTest::mouseMove(window_, scenePoint(color, QPointF(color->xOf(300.0), color->plot().bottom() - 6)));
+        QCOMPARE(color->cursor().shape(), Qt::ArrowCursor);
+
+        // Base far up puts its handle near the graph's top, where nothing covers it: it drags, and
+        // follows the mouse (it is on the shelf's slope, which moves a little less than Base itself).
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("base"), 30.0);
+        QTRY_VERIFY_WITH_TIMEOUT(color->settled(), 1000);
+        const QPointF high = color->baseHandle();
+        QVERIFY2(high.y() < color->plot().top() + 0.25 * color->plot().height(), qPrintable(QString::number(high.y())));
+        steps = undo()->index();
+        const QPoint grabbed = scenePoint(color, high);
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, grabbed);
+        dragTo(grabbed + QPoint(0, 3));
+        dragTo(grabbed + QPoint(0, 6));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, grabbed + QPoint(0, 6));
+        QVERIFY2(value("base") < 30.0, qPrintable(QString::number(value("base"))));
+        QCOMPARE(value("color"), 1.0);
+        QCOMPARE(undo()->index(), steps + 1);
+        QTRY_VERIFY_WITH_TIMEOUT(color->settled(), 1000);
+        QVERIFY2(std::abs(color->baseHandle().y() - (high.y() + 6.0)) < 0.25,
+                 qPrintable(QStringLiteral("%1 -> %2").arg(high.y()).arg(color->baseHandle().y())));
     }
 
     // --- The displays reach the graphs, which settle when the sound stops -------------------------
@@ -492,13 +641,26 @@ private Q_SLOTS:
         QVERIFY2(std::abs(curve->inputLevel() - 0.5) < 0.01, qPrintable(QString::number(curve->inputLevel())));
         QVERIFY2(std::abs(curve->outputLevel() - 0.5) < 0.01, qPrintable(QString::number(curve->outputLevel())));
         QVERIFY(curve->dotLevel() > 0.49);
-        QVERIFY(curve->glowLevel() >= curve->dotLevel());
         QVERIFY(!curve->settled());
         QVERIFY(curve->saturationTarget() < 0.01);  // (Analog Clip is straight at half scale)
         QVERIFY(s.color->live());
         QVERIFY(!s.color->settled());
 
-        // Without sound the dots fall back, then everything settles: an idle editor stops repainting.
+        // A tick without values just after some is a gap between the audio's blocks (a buffer longer
+        // than a tick), not silence: the levels, the dots, the bars and the spectrum hold.
+        const double level = curve->inputLevel(), dot = curve->dotLevel(), bar = curve->outputBar();
+        const std::vector<double> spectrum = s.color->inputSpectrum();
+        QVERIFY(bar > 0.49);
+        QVERIFY(!spectrum.empty());
+        refreshDisplays();
+        QCOMPARE(curve->inputLevel(), level);
+        QCOMPARE(curve->dotLevel(), dot);
+        QCOMPARE(curve->outputBar(), bar);
+        QCOMPARE(s.color->inputSpectrum(), spectrum);
+
+        // Without sound the dots fall back (the afterglow holding a moment where they were), then
+        // everything settles: an idle editor stops repainting.
+        QTRY_VERIFY_WITH_TIMEOUT(curve->glowLevel() > curve->dotLevel() + 0.1, 1000);
         QTRY_VERIFY_WITH_TIMEOUT(curve->dotLevel() < 0.05, 2000);
         QTRY_VERIFY_WITH_TIMEOUT(curve->settled() && s.color->settled(), 6000);
         QCOMPARE(curve->dotLevel(), 0.0);
@@ -510,7 +672,6 @@ private Q_SLOTS:
         refreshDisplays();
         QVERIFY2(curve->saturationTarget() > 0.7, qPrintable(QString::number(curve->saturationTarget())));
         QVERIFY(curve->saturation() > 0.0);
-        QVERIFY(curve->glowLevel() >= curve->dotLevel());
         QCOMPARE(curve->overFlash(), 0.0);
         // The output, clipped at full scale (the 4x filters aside, Analog Clip's 1).
         QVERIFY2(curve->outputLevel() > 0.99 && curve->outputLevel() < 1.01,

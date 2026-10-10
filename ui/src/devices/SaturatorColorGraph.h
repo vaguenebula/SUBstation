@@ -36,7 +36,8 @@ public:
     static constexpr double kBaseHandleHz = 60.0;  // on the shelf's plateau
     static constexpr double kHandleHit = 8.0;      // px
     static constexpr double kEaseSeconds = 0.04;
-    static constexpr double kFine = 0.2;  // Shift
+    static constexpr double kFine = 0.2;         // Shift
+    static constexpr double kHoldSeconds = 0.1;  // longer without values than a block's gap: silence
 
     enum class Handle { None, Base, Peak };
 
@@ -47,6 +48,9 @@ public:
     const std::vector<double>& curveDb() const { return curveDb_; }
     bool live() const;                         // a spectrum shows
     bool settled() const { return settled_; }  // nothing moves: no repainting
+    // The spectra as drawn (dB per column; empty before any).
+    const std::vector<double>& inputSpectrum() const { return inCols_; }
+    const std::vector<double>& outputSpectrum() const { return outCols_; }
     QPointF baseHandle() const;
     QPointF peakHandle() const;
 
@@ -73,7 +77,10 @@ private:
     // The curve and the handles from the eased values (`exact`: from the parameters as they are).
     void updateCurve(bool exact);
     Handle handleAt(const QPointF& pos) const;
-    void feed(sub::app::analysis::EqAnalyzer::Channel channel, const std::vector<float>& samples);
+    void setHovered(Handle handle);  // (and the cursor)
+    // How far the Base handle moves per dB of Base, at `base` (a little under 1: it is on the shelf's slope).
+    double baseHandleSlope(double base) const;
+    void feed(sub::app::analysis::EqAnalyzer::Channel channel, const std::vector<float>& samples, double dt);
 
     // The parameters as they are set, and as drawn (eased; the frequency in log).
     double base_ = 0.0, freq_ = 1000.0, width_ = 50.0, depth_ = 0.0;
@@ -88,7 +95,8 @@ private:
     sub::app::analysis::EqAnalyzer analyzer_;
     std::vector<double> inCols_, outCols_;
     bool inLive_ = false, outLive_ = false;
-    int zeros_[2] = {0, 0};  // the latest values that were all 0, per channel (all of its window: skip them)
+    int zeros_[2] = {0, 0};            // the latest values that were all 0, per channel (all of its window: skip them)
+    double quietFor_[2] = {0.0, 0.0};  // seconds without values, per channel
     QMetaObject::Connection bridgeConnection_;  // the bridge's deviceChanged: a new sample rate
     QElapsedTimer clock_;
     bool settled_ = true;
@@ -98,9 +106,10 @@ private:
     Handle hovered_ = Handle::None;
     // Where the mouse last was, and the values dragged so far (the frequency as a position across,
     // unrounded): each move adds its own distance, so a press a little off the handle doesn't jump
-    // it, and Shift can come and go mid-drag.
+    // it, and Shift can come and go mid-drag. And how far it went each way.
     QPointF lastAt_;
     double dragBase_ = 0.0, dragFreqX_ = 0.0, dragDepth_ = 0.0;
+    double movedAcross_ = 0.0, movedUp_ = 0.0;
 };
 
 }  // namespace sub::ui

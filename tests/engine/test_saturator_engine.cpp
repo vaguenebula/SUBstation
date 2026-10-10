@@ -1,9 +1,10 @@
 // The built-in Saturator: each curve plays as its editor draws it (the same
 // functions), with the numbers its formulas give; the Waveshaper's controls do
 // what Ableton's do; saturation adds odd harmonics only; Post Clip holds the
-// output to the Output level; Output and Dry/Wet; Color leaves a clean sound
-// alone (also while it glides) and moves the saturation; DC; Hi-Quality's
-// aliasing, latency and pre-roll; every control changes without a click;
+// output to the Output level at any Dry/Wet; Output and Dry/Wet; Color leaves a
+// clean sound alone (also while it glides) and moves the saturation; DC;
+// Hi-Quality's aliasing (the curves' and Post Clip's), latency and pre-roll;
+// every control changes without a click;
 // automation through the engine to the sample; reset and a new sample rate;
 // silence rings out to exact zeros; the tail covers the ringing; extremes stay
 // finite; one channel; the displays.
@@ -271,6 +272,29 @@ uint32_t clickTrack(sub::Engine& engine, float left, float right, int64_t at, do
 
 int64_t seconds(double s) { return static_cast<int64_t>(s * kSampleRate); }
 
+// The most a signal held within ±1 at 4x can come out of the 4x path's filters
+// (dsp::Oversampler::down at factor 4): the sum of the magnitudes of the
+// weights one output sample takes from the 4x samples. Post Clip's ceiling
+// holds at 4x; this is how far past it the band-limited output can go, at
+// the very worst.
+double downWorstGain() {
+    constexpr int kFrames = 64, kLookedAt = 40;
+    double sum = 0.0;
+    for (int at = 0; at < 4 * kFrames; ++at) {
+        sub::dsp::Oversampler os;
+        os.prepare(kFrames, 2);
+        os.setFactorLog2(2);
+        const std::vector<float> silence(kFrames, 0.f);
+        float* fast = os.up(silence.data(), kFrames);
+        std::fill(fast, fast + 4 * kFrames, 0.f);
+        fast[at] = 1.f;
+        std::vector<float> out(kFrames);
+        os.down(fast, kFrames, out.data());
+        sum += std::abs(out[kLookedAt]);
+    }
+    return sum;
+}
+
 }  // namespace
 
 TEST_CASE("the saturator is listed with its parameters") {
@@ -503,6 +527,20 @@ TEST_CASE("the saturator's Post Clip holds the output to the Output level") {
     const Samples quieter = play(loud + Values{{"clip", 2.f}, {"output", -6.f}}, in);
     CHECK(maxAbs(quieter) <= 0.501188);
     CHECK_ALLCLOSE(transferOf(7, 12.f, in, -18.f, {50.f, 50.f, 50.f, 0.f, 0.f, 0.f}, 2), hard, 1e-6, 1e-6);
+
+    // At any Dry/Wet: Post Clip holds the blend, the dry sound in it too (here a hot input, 2.0).
+    const Samples hot = sine(100.0, 0.5, 2.0);
+    for (const float mix : {100.f, 50.f, 0.f}) {
+        INFO(std::to_string(mix) + " %");
+        const Values blend = {{"type", 7.f}, {"drive", 6.f}, {"mix", mix}};  // (the Waveshaper: unbounded)
+        CHECK(maxAbs(play(blend, hot)) > 1.5);
+        CHECK(maxAbs(play(blend + Values{{"clip", 1.f}}, hot)) <= 1.0);
+        CHECK(maxAbs(play(blend + Values{{"clip", 2.f}}, hot)) <= 1.0);
+        CHECK(maxAbs(play(blend + Values{{"clip", 2.f}, {"output", -6.f}}, hot)) <= 0.501188);
+    }
+    // Fully dry, sound under the knee comes through Soft Clip untouched (the Analog Clip curve is straight there).
+    const Samples underKnee = sine(1000.0, 0.5, 0.7);
+    CHECK_ARRAY_EQUAL(play({{"drive", 24.f}, {"mix", 0.f}, {"clip", 1.f}}, underKnee), underKnee);
 }
 
 TEST_CASE("the saturator's Output and Dry/Wet") {
@@ -578,11 +616,33 @@ TEST_CASE("the saturator's Color leaves clean sound alone and moves the saturati
     const Samples out = play(start, quiet, glides);
     CHECK_ALLCLOSE(out, quiet, 0.0, 2e-5);
 
-    // The same with Hi-Quality: the de-emphasis takes each redesign 36 samples
-    // late, as the signal reaches it through the 4x path.
+    // The same with Hi-Quality (Color's filters at 4x, designed for that rate),
+    // against the 4x path without Color.
     const Samples through = play({{"hq", 1.f}}, quiet);
     const Samples hqOut = play(start + Values{{"hq", 1.f}}, quiet, glides);
     CHECK_ALLCLOSE(hqOut, through, 0.0, 2e-5);
+
+    // Hi-Quality switched off while Color glides on and on (Base and Depth
+    // jumping every 150 ms, as stepped automation or a knob kept moving): once
+    // the fade is done, the 1x path is clean at once.
+    {
+        Samples twoTone = sine(200.0, 2.0, 0.025);
+        const Samples high = sine(3000.0, 2.0, 0.025);
+        for (size_t i = 0; i < twoTone.size(); ++i) twoTone[i] += high[i];
+        std::vector<Change> steps;
+        for (int k = 0; k < 13; ++k) {
+            steps.push_back({seconds(0.15 * k), "base", k % 2 ? 24.f : -24.f});
+            steps.push_back({seconds(0.15 * k), "depth", k % 2 ? -18.f : 18.f});
+        }
+        const int64_t off = seconds(0.51);
+        steps.push_back({off, "hq", 0.f, true});
+        std::sort(steps.begin(), steps.end(), [](const Change& a, const Change& b) { return a.frame < b.frame; });
+        const Values linear = {{"drive", -12.f}, {"color", 1.f}, {"freq", 300.f}, {"hq", 1.f}};
+        const Samples out = play(linear, twoTone, steps);
+        Samples want = twoTone;
+        for (float& v : want) v *= sub::expDbToGain(-12.f);
+        CHECK_ALLCLOSE(slice(out, off + kFade), slice(want, off + kFade), 0.0, 1e-6);
+    }
 
     // (e) On at 0 dB, Color is switched out: bit for bit as off.
     const Values shaper = {{"type", 7.f}, {"drive", 12.f}};
@@ -634,6 +694,24 @@ TEST_CASE("the saturator's Hi-Quality oversamples and reports its latency") {
         const double plain = alias(digital, 7100.0), hq = alias(digital + Values{{"hq", 1.f}}, 7100.0);
         INFO("Digital Clip: " + std::to_string(plain) + " dB, with Hi-Quality " + std::to_string(hq));
         CHECK(hq < plain - 20.0);
+    }
+    // Post Clip runs at 4x too (with Color's de-emphasis and Dry/Wet before it): Soft
+    // Clip after a curve, Hard Clip after the unbounded Waveshaper or a band cut by Color.
+    // (Measured 35, 36, 33, 36, 24 and 44 dB; at the base rate it was 1 to 4 dB.)
+    {
+        const std::vector<std::pair<Values, double>> clipped = {
+            {{{"drive", 12.f}, {"clip", 1.f}}, 30.0},
+            {{{"type", 4.f}, {"drive", 12.f}, {"clip", 1.f}}, 30.0},
+            {{{"type", 7.f}, {"drive", 18.f}, {"clip", 2.f}}, 25.0},
+            {{{"type", 7.f}, {"drive", 18.f}, {"clip", 1.f}}, 30.0},
+            {{{"type", 3.f}, {"drive", 12.f}, {"color", 1.f}, {"depth", -12.f}, {"freq", 5000.f}, {"clip", 2.f}}, 18.0},
+            {{{"type", 3.f}, {"drive", 12.f}, {"color", 1.f}, {"depth", -12.f}, {"freq", 5000.f}, {"clip", 1.f}}, 30.0},
+        };
+        for (const auto& [values, better] : clipped) {
+            const double plain = alias(values, 5000.0), hq = alias(values + Values{{"hq", 1.f}}, 5000.0);
+            INFO("Post Clip: " + std::to_string(plain) + " dB, with Hi-Quality " + std::to_string(hq));
+            CHECK(hq < plain - better);
+        }
     }
     // (d) Through the engine: the other tracks wait for it.
     {
@@ -725,6 +803,15 @@ TEST_CASE("changing any saturator control is click-free") {
         {"ws_depth", {{"drive", 6.f}, {"type", 7.f}}, {{{"ws_depth", 100.f}}, {{"ws_depth", 0.f}}}},
         {"ws_period", {{"type", 7.f}, {"ws_depth", 50.f}}, {{{"ws_period", 30.f}}, {{"ws_period", 0.f}}}},
         {"hq", {{"drive", 12.f}, {"type", 3.f}}, {{{"hq", 1.f}}, {{"hq", 0.f}}}, true},
+        // (each way the incoming path's Color filters start from silence)
+        {"hq with color",
+         {{"drive", 12.f}, {"type", 3.f}, {"color", 1.f}, {"base", 18.f}, {"depth", -12.f}, {"freq", 2000.f}},
+         {{{"hq", 1.f}}, {{"hq", 0.f}}},
+         true},
+        {"hq with post clip",
+         {{"drive", 12.f}, {"type", 3.f}, {"clip", 1.f}, {"mix", 70.f}},
+         {{{"hq", 1.f}}, {{"hq", 0.f}}},
+         true},
     };
     const std::vector<sub::ParamInfo> params = builtinInfo("saturator").params;
     const auto valueOf = [&](const Values& values, const std::string& id) {
@@ -876,6 +963,16 @@ TEST_CASE("the saturator's silence rings out to exact zeros") {
     const Samples quiet = s.play(tiny);
     CHECK(allFinite(quiet));
     CHECK(allEqual(slice(quiet, kSampleRate), 0.0));
+
+    // A slowly decaying section (Depth at 60 Hz) too, at 1x and at 4x: its two states are
+    // cleared together (cleared one at a time, it would ring at about 1e-19 for ever).
+    for (const float hq : {0.f, 1.f}) {
+        INFO(std::to_string(hq));
+        Saturator low(kSampleRate, {{"hq", hq}, {"color", 1.f}, {"depth", 6.f}, {"freq", 60.f}, {"drive", 12.f}});
+        Samples y = noise(kSampleRate / 2, 10, 1.f);
+        y.resize(static_cast<size_t>(2.5 * kSampleRate), 0.f);
+        CHECK(allEqual(slice(low.play(y), seconds(1.5)), 0.0));
+    }
 }
 
 TEST_CASE("the saturator's tail covers its ringing") {
@@ -900,7 +997,8 @@ TEST_CASE("the saturator's tail covers its ringing") {
     const Samples hc = cut.play(impulse(static_cast<size_t>(8 * kSampleRate)));
     CHECK(energy(slice(hc, cut.processor().tailSamples())) < 1e-6 * energy(hc));
 
-    // DC alone: its filter's 7 time constants; Hi-Quality alone, its filters' memory; nothing at the defaults.
+    // DC alone: 8 of its filter's time constants; Hi-Quality alone, its filters' memory; Color off
+    // (whatever its gains), nothing.
     Saturator dc(kSampleRate, {{"dc", 1.f}});
     CHECK_EQ(dc.processor().tailSamples(), static_cast<int>(std::ceil(8.0 / (2.0 * kPi * 5.0) * kSampleRate)));
     Saturator hq(kSampleRate, {{"hq", 1.f}});
@@ -931,6 +1029,12 @@ TEST_CASE("the saturator stays finite and bounded at the extremes") {
         for (const sub::ParamInfo& p : params) values.push_back({p.id, p.fromNormalized(unit(random))});
         sets.push_back(values);
     }
+    // Post Clip Hard holds the output to the Output level at any Dry/Wet. With Hi-Quality
+    // it holds at 4x, and the 4x filters can take the band-limited output a little past it:
+    // at most by their worst gain (1.84; hard-clipped saws and sines measure 1.17 at most).
+    const double worst = downWorstGain();
+    CHECK(worst > 1.0);
+    CHECK(worst < 2.0);
     for (const double rate : {44100.0, 48000.0, 192000.0}) {
         const auto n = static_cast<size_t>(rate / 2);
         Samples in = noise(n, 7, 1.f);
@@ -939,13 +1043,14 @@ TEST_CASE("the saturator stays finite and bounded at the extremes") {
             INFO(std::to_string(rate) + " Hz, set " + std::to_string(k));
             const Samples out = play(sets[k], in, {}, rate);
             CHECK(allFinite(out));
-            // Post Clip Hard, fully wet: never past the Output level.
-            Values clipped = sets[k] + Values{{"clip", 2.f}, {"mix", 100.f}};
+            const Values clipped = sets[k] + Values{{"clip", 2.f}};
             const Samples held = play(clipped, in, {}, rate);
-            float output = 0.f;
-            for (const auto& [id, value] : clipped)
+            float output = 0.f, hq = 0.f;
+            for (const auto& [id, value] : clipped) {
                 if (id == "output") output = value;
-            CHECK(maxAbs(held) <= sub::expDbToGain(output) + 1e-6);
+                if (id == "hq") hq = value;
+            }
+            CHECK(maxAbs(held) <= sub::expDbToGain(output) * (hq >= 0.5f ? worst : 1.0) + 1e-6);
         }
     }
     // Frequency at the top at 22.05 kHz: kept below Nyquist, stable.
@@ -985,18 +1090,22 @@ TEST_CASE("the saturator on one channel, and its channels independent") {
 
 TEST_CASE("the saturator's displays") {
     const Samples in = sine(1000.0, 1.0, 0.5);
-    for (const int channels : {2, 1}) {
-        INFO(std::to_string(channels));
+    // In blocks of 256 (two meter values each), and of 100 with automation (that changes
+    // nothing) splitting them at odd frames: the meters count across every stretch.
+    const std::vector<Change> splits = {{333, "drive", 0.f}, {1001, "drive", 0.f}, {2777, "drive", 0.f}};
+    for (const auto& [channels, block] : {std::pair{2, 256}, std::pair{1, 256}, std::pair{2, 100}, std::pair{1, 100}}) {
+        INFO(std::to_string(channels) + " channels, blocks of " + std::to_string(block));
         Saturator s(kSampleRate, {{"type", 3.f}});
         Samples l = in, r = in;
         std::vector<float> inPeak, outPeak, input, output;  // (read as it runs: a display keeps 8192 values)
         for (size_t at = 0; at < in.size(); at += 4096) {
             const size_t n = std::min<size_t>(4096, in.size() - at);
             Samples pl(l.begin() + at, l.begin() + at + n), pr(r.begin() + at, r.begin() + at + n);
+            const std::vector<Change> changes = block == 256 ? std::vector<Change>{} : splits;
             if (channels == 2)
-                s.run({&pl, &pr});
+                s.run({&pl, &pr}, changes, block);
             else
-                s.run({&pl});
+                s.run({&pl}, changes, block);
             std::copy(pl.begin(), pl.end(), l.begin() + at);
             for (auto [id, into] : {std::pair{"in_peak", &inPeak}, std::pair{"out_peak", &outPeak},
                                     std::pair{"input", &input}, std::pair{"output", &output}}) {
