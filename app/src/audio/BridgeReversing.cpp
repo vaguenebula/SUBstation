@@ -44,7 +44,9 @@ std::unique_ptr<ReverseJob> EngineBridge::startReversed(const QString& path) {
     }
     const QString folder = reversedFolder(*project_);
     if (const auto problem = makeFolder(folder, QStringLiteral("the folder"))) throw EditError(*problem);
-    return std::make_unique<ReverseJob>(engine_, decoded, reversedPath(folder, path));
+    auto job = std::make_unique<ReverseJob>(engine_, decoded, reversedPath(folder, path));
+    job->start();
+    return job;
 }
 
 std::optional<std::pair<QString, double>> EngineBridge::finishReversed(const QString& path, ReverseJob& job) {

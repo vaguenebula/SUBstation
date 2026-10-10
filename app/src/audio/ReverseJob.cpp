@@ -22,14 +22,17 @@ ReverseJob::ReverseJob(sub::Engine& engine, std::shared_ptr<const sub::AudioSour
       frames_(source_->frames()),
       seconds_(static_cast<double>(source_->frames()) / source_->sampleRate()),
       chunk_(std::max<qint64>(1, chunkFrames)),
-      utf8Path_(path.toStdString()) {
-    thread_ = std::thread([this] { run(); });
-    follow();
-}
+      utf8Path_(path.toStdString()) {}
 
 ReverseJob::~ReverseJob() {
     cancelJob();
     if (thread_.joinable()) thread_.join();
+}
+
+void ReverseJob::start() {
+    if (thread_.joinable() || done()) return;
+    thread_ = std::thread([this] { run(); });
+    follow();
 }
 
 double ReverseJob::progress() const {
@@ -39,6 +42,7 @@ double ReverseJob::progress() const {
 }
 
 std::shared_ptr<sub::AudioSource> ReverseJob::finish() {
+    start();  // (if it wasn't)
     if (thread_.joinable()) thread_.join();
     if (!error_.empty()) {
         throw EditError(QStringLiteral("Could not write %1: %2")
