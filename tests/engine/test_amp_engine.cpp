@@ -827,6 +827,32 @@ TEST_CASE("changing the amp model morphs without a click") {
     CHECK(worst <= 0.01);
 }
 
+TEST_CASE("a model change works its levels out a cell at a time, the same in any blocks") {
+    // The morph's levels (an amp::Transfer each) come one per 16-sample cell of the grid at
+    // most: it sets off once the first four are known, three cells after the change, and until
+    // then the amp plays on as the old model, bit for bit. A change inside a cell waits for the
+    // next cell's start; it all goes by the grid, so it is the same whatever the blocks.
+    const Samples x = sine220(0.5);
+    const int64_t at = 16 * 900;  // a cell's start (the grid counts from the first sample)
+    const auto firstDifference = [](const Samples& a, const Samples& b) {
+        for (size_t i = 0; i < a.size(); ++i)
+            if (a[i] != b[i]) return static_cast<int64_t>(i);
+        return static_cast<int64_t>(a.size());
+    };
+    for (const int block : {1, 37, 256, 1024}) {
+        INFO("blocks of " + std::to_string(block));
+        Amp steady(kSampleRate, model(amp::Rock));
+        const Samples old = steady.play(x, {}, block);
+        for (const int64_t offset : {0, 7}) {
+            INFO("the change " + std::to_string(offset) + " samples into a cell");
+            Amp a(kSampleRate, model(amp::Rock));
+            const Samples out = a.play(x, {{at + offset, "type", static_cast<float>(amp::Lead)}}, block);
+            const int64_t setsOff = at + (offset == 0 ? 0 : 16) + 3 * 16;
+            CHECK_EQ(firstDifference(out, old), setsOff);
+        }
+    }
+}
+
 TEST_CASE("turning any of the amp's dials is click-free") {
     const Samples x = sine220(0.6);
     const int64_t at = frameAt(0.3);
@@ -1158,6 +1184,39 @@ TEST_CASE("the amp's cost stays bounded") {
     INFO("Dual " + std::to_string(10.0 * dual) + " %, Mono " + std::to_string(10.0 * mono) + " % of real time");
     CHECK(dual < 0.1 * 10.0);
     CHECK(mono < dual);
+
+    // A model change's first block (32 frames: two cells, two of the morph's levels) costs a
+    // few steady ones, not ten (as four levels in its first cell did): medians over 60 changes.
+    using Clock = std::chrono::steady_clock;
+    Amp a(kSampleRate, model(amp::Rock));
+    sub::ProcessContext ctx;
+    ctx.sampleRate = kSampleRate;
+    Samples l(32), r(32);
+    float* channels[2] = {l.data(), r.data()};
+    const Samples input = noise(static_cast<size_t>(kSampleRate), 32, 0.25f);
+    std::vector<double> steady, starts;
+    for (int b = 0; b < 6100; ++b) {
+        const auto from = static_cast<std::ptrdiff_t>(b % 1400) * 32;
+        std::copy_n(input.begin() + from, 32, l.begin());
+        std::copy_n(input.begin() + from, 32, r.begin());
+        const bool change = b >= 100 && b % 100 == 0;  // (each morph, 77 blocks, done before the next)
+        if (change) a.set("type", static_cast<float>((b / 100) % kModels));
+        const auto start = Clock::now();
+        a.processor().process(ctx, channels, 2, 32);
+        const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
+        if (change) {
+            starts.push_back(seconds);
+        } else if (b >= 100 && b % 100 >= 80) {
+            steady.push_back(seconds);
+        }
+    }
+    const auto median = [](std::vector<double> v) {
+        std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2), v.end());
+        return v[v.size() / 2];
+    };
+    INFO("a change's first block " + std::to_string(1e6 * median(starts)) + " us, a steady one " +
+         std::to_string(1e6 * median(steady)) + " us");
+    CHECK(median(starts) < 6.0 * median(steady));
 }
 #endif
 

@@ -24,7 +24,9 @@
 // - A change of model morphs (50 ms, an S-curve) from the voicing as it is to
 //   the new one: every number of the voicing moves continuously, and the trim
 //   keeps the blend in between as loud as the two models (amp::Transfer works
-//   their levels out), where it would swell by up to 6 dB.
+//   their levels out, one per 16-sample cell of the grid at most: the morph
+//   sets off once its first four are known, 1 ms at 48 kHz), where it would
+//   swell by up to 6 dB.
 // - Mono runs one amp on the sum (half the work); Dual one per channel. The
 //   switch crossfades over 20 ms; the second amp starts from rest, its input
 //   fading in over 5 ms, and stops once Mono is back.
@@ -301,8 +303,10 @@ public:
         model_ = std::clamp(choiceIndex(Type), 0, amp::kModels - 1);
         voice_ = from_ = to_ = amp::voicing(model_);
         morph_ = 1.0;
+        morphFrames_ = 0;
+        morphMoves_ = false;
         levelComp_ = 0.0;
-        levelKnown_ = -1;
+        levelKnown_ = 0;
         std::fill(std::begin(recentIn_), std::end(recentIn_), 0.f);
         last_ = controlsFor(voice_);
         resetPaths();
@@ -338,7 +342,7 @@ private:
         for (int at = 0, phase = meterCount_; at < frames;) {
             const int len = std::min(kChunk - phase % kChunk, frames - at);
             ChunkControls& c = controls_[static_cast<size_t>(chunks++)];
-            c = nextControls(len);
+            c = nextControls(len, phase % kChunk == 0);
             c.cellEnd = (phase + len) % kChunk == 0;
             at += len;
             phase = (phase + len) % kMeterSamples;
@@ -368,7 +372,10 @@ private:
             from_ = voice_;
             to_ = amp::voicing(model);
             morph_ = 0.0;
-            levelKnown_ = -1;
+            morphFrames_ = 0;
+            levelKnown_ = 0;
+            levelSteps_[0] = levelComp_;  // (from the compensation as it is)
+            morphMoves_ = false;
         }
         if (n == 2 && fade_ < 0) {  // a change during a fade starts when it is done
             const Mode want = wantedMode();
@@ -403,14 +410,17 @@ private:
     double dialTarget(int k) const noexcept { return std::clamp<double>(param(Gain + k), 0.0, 10.0); }
     float targetMix() const noexcept { return std::clamp(param(Mix), 0.f, 100.f) / 100.f; }
 
-    // The next chunk's controls (at its end), `len` base-rate samples long.
-    ChunkControls nextControls(int len) noexcept {
+    // The next chunk's controls (at its end), `len` base-rate samples long; `cellStart`: it
+    // starts one of the grid's cells.
+    ChunkControls nextControls(int len, bool cellStart) noexcept {
         bool dialsMove = false;
         for (int k = 0; k < 6; ++k) dialsMove = dialsMove || dial_[k] != dialTarget(k);
         const bool morphing = morph_ < 1.0;
+        if (morphing && cellStart) morphCell();
+        const bool morphMoves = morphing && morphMoves_;
         ChunkControls c = last_;
         c.frames = len;
-        c.moving = dialsMove || morphing;
+        c.moving = dialsMove || morphMoves;
         if (!c.moving) return c;  // steady: as the last one
         const double glide = len == kChunk ? chunkGlide_ : 1.0 - std::exp(-len / (kSmoothSeconds * sampleRate_));
         bool toneMoves = false;
@@ -421,49 +431,78 @@ private:
             if (std::abs(target - dial_[k]) < 1e-4) dial_[k] = target;
             toneMoves = toneMoves || k == Bass - Gain || k == Middle - Gain || k == Treble - Gain;
         }
-        if (morphing) {
-            morph_ = std::min(1.0, morph_ + len / (kMorphSeconds * sampleRate_));
+        if (morphMoves) {
+            morphFrames_ += len;
+            morph_ = std::min(1.0, static_cast<double>(morphFrames_) / (kMorphSeconds * sampleRate_));
             voice_ = morph_ >= 1.0 ? to_ : amp::blend(from_, to_, sCurve(morph_));
             voicingControls(voice_, c);
         }
-        dialControls(voice_, c, morphing || toneMoves);
+        dialControls(voice_, c, morphMoves || toneMoves);
         if (morphing) c.trim *= static_cast<float>(std::pow(10.0, morphLevel() / 20.0));
         last_ = c;
         return c;
     }
 
-    // How much the blend in a morph is to be turned down (dB, on its trim) to
-    // sound as loud as the morph's ends put it, their levels in between: a
-    // blend of two voicings clips where neither does, so it can come out up to
-    // 6 dB louder than both. The levels are amp::Transfer's (its RMS for a tone
-    // at the input's recent peak), worked out at kLevelSteps + 1 points of the
-    // morph as it gets near them (one at a time; the first chunk works out
-    // four) and joined by a smooth curve (Catmull-Rom: straight lines would
-    // bend at the points, which the sound would show).
-    double morphLevel() noexcept {
-        if (morph_ >= 1.0) return levelComp_ = 0.0;
+    // A grid cell's start in a morph: one more of its levels if the curve needs
+    // it by the cell's end, and whether the morph moves through the cell (it
+    // waits, still, for the levels its curve needs there). Each level is an
+    // amp::Transfer, about twice the work the amp does for a cell: one a cell at
+    // most, so no block of a morph costs more than about three times a steady
+    // one (the start waits three cells, 1 ms at 48 kHz, for the ends' levels and
+    // the first two points'). Decided per cell and the morph's place counted in
+    // samples, so a morph sets off and moves at the same samples whatever the
+    // blocks.
+    void morphCell() noexcept {
+        const double end = std::min(1.0, static_cast<double>(morphFrames_ + kChunk) / (kMorphSeconds * sampleRate_));
+        const int needed = levelsNeeded(end);
+        if (levelKnown_ < needed) workOutLevel();
+        morphMoves_ = levelKnown_ >= needed;
+    }
+
+    // How many of the morph's levels (the ends', then points 1 to kLevelSteps - 1:
+    // levelKnown_ counts them) its curve needs at `at` (0..1).
+    static int levelsNeeded(double at) noexcept {
+        if (at >= 1.0) return 0;  // (done: the new model's own level)
+        const int step = std::min(static_cast<int>(at * kLevelSteps), kLevelSteps - 1);
+        return 2 + std::min(step + 2, kLevelSteps - 1);  // (point kLevelSteps is 0)
+    }
+
+    // The morph's next level: its start's, then its end's (for a tone at the
+    // input's recent peak), then each point's compensation.
+    void workOutLevel() noexcept {
         const auto level = [&](const amp::Voicing& v) {
             const amp::Transfer t(v, dial_[0], dial_[1], dial_[2], dial_[3], dial_[4], dial_[5], sampleRate_,
                                   kLevelPoints);
             return 20.0 * std::log10(std::max(t.rms(levelInput_, 0.0), 1e-12));
         };
-        if (levelKnown_ < 0) {  // a morph starting: from the level as it is (in a morph, the one in between)
+        const int k = levelKnown_++;
+        if (k == 0) {  // from the level as it is (in a morph, the one in between)
             double peak = meterIn_;
             for (const float p : recentIn_) peak = std::max(peak, double(p));
             levelInput_ = std::clamp(peak, 1e-3, 1.0);
-            levelFrom_ = level(from_) + levelComp_;
+            levelFrom_ = level(from_) + levelSteps_[0];
+        } else if (k == 1) {
             levelTo_ = level(to_);
-            levelSteps_[0] = levelComp_;
-            levelKnown_ = 0;
+        } else {
+            const int point = k - 1;
+            const double s = sCurve(static_cast<double>(point) / kLevelSteps);
+            levelSteps_[point] = (1.0 - s) * levelFrom_ + s * levelTo_ - level(amp::blend(from_, to_, s));
         }
+    }
+
+    // How much the blend in a morph is to be turned down (dB, on its trim) to
+    // sound as loud as the morph's ends put it, their levels in between: a
+    // blend of two voicings clips where neither does, so it can come out up to
+    // 6 dB louder than both. The levels are worked out at kLevelSteps + 1 points
+    // of the morph as it gets near them (morphCell()) and joined by a smooth
+    // curve (Catmull-Rom: straight lines would bend at the points, which the
+    // sound would show). While the morph waits for its first ones, it holds the
+    // compensation it had.
+    double morphLevel() noexcept {
+        if (morph_ >= 1.0) return levelComp_ = 0.0;
+        if (morphFrames_ == 0) return levelComp_ = levelSteps_[0];
         const double at = morph_ * kLevelSteps;
         const int step = std::min(static_cast<int>(at), kLevelSteps - 1);
-        while (levelKnown_ < std::min(step + 2, kLevelSteps)) {  // the points the curve needs here
-            const int k = ++levelKnown_;
-            const double s = sCurve(static_cast<double>(k) / kLevelSteps);
-            levelSteps_[k] =
-                k == kLevelSteps ? 0.0 : (1.0 - s) * levelFrom_ + s * levelTo_ - level(amp::blend(from_, to_, s));
-        }
         // Mirrored past the ends: the morph's S-curve starts and ends still, so does the level.
         const auto point = [&](int k) { return levelSteps_[k < 0 ? -k : (k > kLevelSteps ? 2 * kLevelSteps - k : k)]; };
         const double p0 = point(step - 1), p1 = point(step), p2 = point(step + 1), p3 = point(step + 2);
@@ -889,11 +928,13 @@ private:
     int model_ = 0;
     amp::Voicing voice_ = amp::voicing(0), from_ = voice_, to_ = voice_;  // the morph
     double morph_ = 1.0;                                                  // 1: done
-    // The morph's levels (morphLevel()): the input's peak they are for, the ends', its points and how many are
-    // known (-1: none yet), and the compensation now.
+    int morphFrames_ = 0;                                                 // how far it has moved
+    bool morphMoves_ = false;  // through this cell (it waits for its levels: morphCell())
+    // The morph's levels (morphCell(), morphLevel()): the input's peak they are for, the ends', its points (the
+    // compensation at each) and how many of them are known (the ends' first), and the compensation now.
     double levelInput_ = 1e-3, levelFrom_ = 0.0, levelTo_ = 0.0, levelComp_ = 0.0;
-    double levelSteps_[kLevelSteps + 1] = {};
-    int levelKnown_ = -1;
+    double levelSteps_[kLevelSteps + 1] = {};  // (the last, the morph's end, stays 0)
+    int levelKnown_ = 0;
     float recentIn_[4] = {};  // the input's peak in the last four display windows
 
     Mode mode_ = Mode::Mono;

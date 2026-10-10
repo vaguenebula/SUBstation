@@ -2,6 +2,7 @@
 
 #include "audio/AmpResponse.h"
 #include "audio/EngineBridge.h"
+#include "devices/AmpDisplays.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 
@@ -17,31 +18,6 @@ namespace {
 constexpr double kFallDbPerSecond = 18.0;  // the dots fall back this fast
 constexpr double kSagSeconds = 0.06;
 constexpr double kSagStepDb = 0.05;  // the curve is made again when the sag as drawn moves this far
-
-// The loudest of a display's last `keep` values (dB, floored), or nothing. Only the
-// last: a read can hand over a long backlog (what came while the editor wasn't
-// showing), which is history, not the level now.
-bool loudest(const std::vector<float>& values, size_t keep, double& into) {
-    if (values.empty())
-        return false;
-    double most = AmpDriveGraph::kFloorDb;
-    for (size_t i = values.size() - std::min(keep, values.size()); i < values.size(); ++i) {
-        if (std::isfinite(values[i]))
-            most = std::max(most, double(values[i]));
-    }
-    into = most;
-    return true;
-}
-
-bool latest(const std::vector<float>& values, double& into) {
-    for (auto it = values.rbegin(); it != values.rend(); ++it) {
-        if (std::isfinite(*it)) {
-            into = *it;
-            return true;
-        }
-    }
-    return false;
-}
 
 double amplitude(double db) { return std::min(1.0, std::pow(10.0, db / 20.0)); }
 
@@ -90,10 +66,6 @@ QPointF AmpDriveGraph::dot() const {
     return QPointF(xOf(a), yOf(curveAt(a)));
 }
 
-size_t AmpDriveGraph::recentValues(double dt) const {
-    return size_t(std::ceil(std::max(kRecentSeconds, dt) * sampleRate() / kSamplesPerValue));
-}
-
 double AmpDriveGraph::outputAt(double x) const {
     return sub::app::ampTransfer(model_, gain_, bass_, middle_, treble_, presence_, volume_, curveSag_, sampleRate(),
                                  {x})
@@ -123,12 +95,20 @@ void AmpDriveGraph::geometryChange(const QRectF& newGeometry, const QRectF& oldG
 }
 
 void AmpDriveGraph::updateCurve() {
-    // The preamp's part for a column's worth of tones (the slow part), then the curve for the sag as drawn.
+    // Made again only when what it is made from changes: sync() comes at every playhead
+    // move while any of the device's parameters follows automation (Dry/Wet's too), and
+    // making it is milliseconds of work.
     const double rate = sampleRate();
     const int columns = std::max(2, int(plot().width()));
+    const CurveKey key{model_, columns, rate, {gain_, bass_, middle_, treble_, presence_, volume_}};
+    if (key == made_)
+        return;
+    made_ = key;
+    // The preamp's part for a column's worth of tones (the slow part), then the curve for the sag as drawn.
+    // Each x and -x are exact opposites (whole numbers over the columns), so a tone's two ends share its work.
     QList<double> xs;
     xs.reserve(columns + 1);
-    for (int i = 0; i <= columns; ++i) xs.append(-1.0 + 2.0 * double(i) / columns);
+    for (int i = 0; i <= columns; ++i) xs.append(double(2 * i - columns) / columns);
     transfer_.prepare(model_, gain_, bass_, middle_, treble_, presence_, volume_, rate, xs);
     xs_ = xs;
     // Up is scaled to the curve's reach without sag (it rises with the input: its ends), so the
@@ -154,8 +134,9 @@ void AmpDriveGraph::refreshDisplays() {
     const double dt = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
     if (!clock_.isValid())
         clock_.start();
-    bool read = loudest(readDisplay(QStringLiteral("input")), recentValues(dt), inputRead_);
-    read = latest(readDisplay(QStringLiteral("sag")), sagRead_) || read;
+    bool read = ampDisplays::loudest(readDisplay(QStringLiteral("input")), ampDisplays::recentValues(dt, sampleRate()),
+                                     kFloorDb, inputRead_);
+    read = ampDisplays::latest(readDisplay(QStringLiteral("sag")), sagRead_) || read;
     if (read) {
         lastRead_.restart();
     } else if (!lastRead_.isValid() || lastRead_.elapsed() > kQuietSeconds * 1000.0) {

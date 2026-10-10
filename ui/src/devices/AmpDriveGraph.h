@@ -18,8 +18,10 @@
 // supply sags (display sag), the power stage's drive drops and the curve's
 // shoulder breathes down with it (made again from the preamp's part kept, a
 // fraction of the work). A display read counts what came since the last tick
-// (at least its last kRecentSeconds): a backlog (what came while the editor
-// wasn't showing, seconds of it) is history. No mouse.
+// (at least its last 50 ms, AmpDisplays.h): a backlog (what came while the
+// editor wasn't showing, seconds of it) is history. The curve is made again
+// only when what it is made from changes (the settings, the rate, the width),
+// not at every sync. No mouse.
 
 #include "audio/AmpResponse.h"
 #include "devices/DeviceCanvas.h"
@@ -49,9 +51,6 @@ public:
     static constexpr double kQuietSeconds = 0.3;  // with no display values this long, the dots fall
     static constexpr int kTrail = 8;              // ticks the trail remembers
     static constexpr double kReach = 0.86;        // the curve's largest output, of the half height
-    // What a display read counts: what came since the last tick (at most 0.1 s), and at least its last 50 ms.
-    static constexpr double kRecentSeconds = 0.05;
-    static constexpr int kSamplesPerValue = 256;  // the device's displays'
 
     explicit AmpDriveGraph(QQuickItem* parent = nullptr);
 
@@ -81,13 +80,21 @@ protected:
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
-    void updateCurve();              // for the settings (the preamp's part too)
+    void updateCurve();              // for the settings (the preamp's part too), if they changed
     void shapeCurve();               // for the sag as drawn
     double curveAt(double x) const;  // interpolated from curve_
-    size_t recentValues(double dt) const;  // a display read's last values that count (dt: since the last tick)
+
+    // What the curve is made from: the settings, the columns and the rate.
+    struct CurveKey {
+        int model = -1, columns = 0;
+        double rate = 0.0;
+        std::array<double, 6> dials = {};  // Gain, Bass, Middle, Treble, Presence, Volume
+        bool operator==(const CurveKey&) const = default;
+    };
 
     int model_ = 0;
     double gain_ = 5.0, bass_ = 5.0, middle_ = 5.0, treble_ = 5.0, presence_ = 5.0, volume_ = 5.0;
+    CurveKey made_;  // what the curve was last made from (model -1: not yet)
     sub::app::AmpTransferCurve transfer_;
     QList<double> xs_;  // the curve's inputs
     std::vector<QPointF> curve_;

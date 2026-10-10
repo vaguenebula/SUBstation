@@ -3,13 +3,14 @@
 // fits the body; its controls bound to their parameters (undoable, the engine
 // following); the model buttons with their sliding underline; the tone curve and
 // the transfer curve being the engine's own maths (the application layer's
-// AmpResponse.h); the tone handles' drags one undo step each; and the displays
-// reaching the face (rendering offline): the tubes, the dots, the lamp and the
-// meter, holding through ticks that read nothing and cooling after, the sag's
-// feedback, a backlog of display values counting for nothing; an editor opened
-// on a model showing it at once. With SUBSTATION_UI_SCREENSHOTS set to a
-// folder, the editor is saved there as PNGs: Lead with signal flowing, Bass in
-// Dual turned up, a tone handle dragged, idle.
+// AmpResponse.h), the transfer made again only for what it is made from; the
+// tone handles' drags one undo step each; and the displays reaching the face
+// (rendering offline): the tubes, the dots, the lamp and the meter, holding
+// through ticks that read nothing and cooling after, the sag's feedback, a
+// backlog of display values counting for nothing; an editor opened on a model
+// showing it at once. With SUBSTATION_UI_SCREENSHOTS set to a folder, the
+// editor is saved there as PNGs: Lead with signal flowing, Bass in Dual turned
+// up, a tone handle dragged, idle.
 
 #include <QGuiApplication>
 #include <QMouseEvent>
@@ -652,6 +653,38 @@ private Q_SLOTS:
                                                                {s.drive->curve()[middle + 7].x()})[0]);
         undo()->undo();
         QCOMPARE(slope(), gentle);
+    }
+
+    // The curve is made again only when what it is made from changes: syncs for anything else (the
+    // playhead moving while Dry/Wet follows its automation, the Output switch) leave it be, making it
+    // being milliseconds of work. Each x and -x are exact opposites, so a tone's two ends share it.
+    void driveCurveIsMadeForChanges() {
+        const Shown s = showAmp();
+        QVERIFY(s.drive);
+        const std::vector<QPointF> curve = s.drive->curve();
+        QVERIFY(curve.size() >= 100);
+        for (size_t i = 0; i < curve.size(); ++i)
+            QVERIFY(curve[i].x() == -curve[curve.size() - 1 - i].x());
+
+        QSignalSpy made(s.drive, &AmpDriveGraph::curveChanged);
+        QSignalSpy synced(s.drive, &DeviceCanvas::synced);
+        const QString key = automation::deviceKey(s.device, QStringLiteral("mix"));
+        editor()->setEnvelope(s.track, key, {{0.0, 0.5, 0.0}, {16.0, 1.0, 0.0}});
+        for (int i = 0; i < 10; ++i) Q_EMIT bridge()->positionChanged(0.25 * i);
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("dual"), 1.0);
+        QVERIFY2(synced.count() >= 12, qPrintable(QString::number(synced.count())));
+        QCOMPARE(made.count(), 0);
+        QVERIFY(s.drive->curve() == curve);
+
+        // What it is made from: once a change.
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("volume"), 7.0);
+        QCOMPARE(made.count(), 1);
+        for (int i = 0; i < 5; ++i) Q_EMIT bridge()->positionChanged(3.0 + 0.25 * i);
+        QCOMPARE(made.count(), 1);
+        QCOMPARE(s.drive->outputAt(0.5), ampTransfer(0, 5, 5, 5, 5, 5, 7, 0.0, bridge()->sampleRate(), {0.5})[0]);
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), 4.0);
+        QCOMPARE(made.count(), 2);
+        editor()->clearEnvelope(s.track, key);
     }
 
     // --- The displays reach the face ------------------------------------------------------------------

@@ -359,10 +359,25 @@ struct ToneState {
     bool atRest() const noexcept { return z1 == 0.0 && z2 == 0.0 && z3 == 0.0; }
 };
 
-// The digital stack's response at `freq` Hz.
+// z⁻¹ at `freq` Hz: what the responses below are worked out at (several of them
+// at one frequency can share it).
+inline std::complex<double> unitDelay(double freq, double rate) noexcept {
+    return std::polar(1.0, -2.0 * kPi * freq / rate);
+}
+
+// a / b, worked out plainly: std::complex's division guards against overflow and
+// infinities, which these responses never meet, at several times the cost.
+inline std::complex<double> divide(std::complex<double> a, std::complex<double> b) noexcept {
+    const double d = 1.0 / (b.real() * b.real() + b.imag() * b.imag());
+    return {(a.real() * b.real() + a.imag() * b.imag()) * d, (a.imag() * b.real() - a.real() * b.imag()) * d};
+}
+
+// The digital stack's response at z⁻¹ = `z`, and at `freq` Hz.
+inline std::complex<double> toneStackDigital(const ToneCoefficients& c, std::complex<double> z) noexcept {
+    return divide(c.b0 + z * (c.b1 + z * (c.b2 + z * c.b3)), 1.0 + z * (c.a1 + z * (c.a2 + z * c.a3)));
+}
 inline std::complex<double> toneStackDigital(const ToneCoefficients& c, double freq, double rate) noexcept {
-    const std::complex<double> z = std::polar(1.0, -2.0 * kPi * freq / rate);  // z⁻¹
-    return (c.b0 + z * (c.b1 + z * (c.b2 + z * c.b3))) / (1.0 + z * (c.a1 + z * (c.a2 + z * c.a3)));
+    return toneStackDigital(c, unitDelay(freq, rate));
 }
 
 // What kVoicings' toneMakeupDb holds for a stack: minus the analog response's
@@ -383,10 +398,13 @@ inline double toneMakeupDb(const ToneParts& p) noexcept {
 inline double onePoleCoeff(double cutoffHz, double rate) noexcept {
     return static_cast<float>(std::exp(-2.0 * kPi * std::max(0.0, cutoffHz) / rate));
 }
-// A one-pole low-pass's response (coefficient c: y = x + c (y[-1] - x)) at `freq`: (1 - c) / (1 - c z⁻¹).
+// A one-pole low-pass's response (coefficient c: y = x + c (y[-1] - x)): (1 - c) / (1 - c z⁻¹), at z⁻¹ = `z`
+// and at `freq`.
+inline std::complex<double> onePoleLowpass(double c, std::complex<double> z) noexcept {
+    return divide(1.0 - c, 1.0 - c * z);
+}
 inline std::complex<double> onePoleLowpass(double c, double freq, double rate) noexcept {
-    const std::complex<double> z = std::polar(1.0, -2.0 * kPi * freq / rate);
-    return (1.0 - c) / (1.0 - c * z);
+    return onePoleLowpass(c, unitDelay(freq, rate));
 }
 inline double onePoleLowpassGain(double c, double freq, double rate) noexcept {
     return std::abs(onePoleLowpass(c, freq, rate));
@@ -396,8 +414,11 @@ inline double onePoleHighpassGain(double c, double freq, double rate) noexcept {
     return std::abs(1.0 - onePoleLowpass(c, freq, rate));
 }
 // A first-order high shelf made of one (x + (G - 1)(x - lowpass(x))): its response.
+inline std::complex<double> onePoleShelf(double c, double gain, std::complex<double> z) noexcept {
+    return 1.0 + (gain - 1.0) * (1.0 - onePoleLowpass(c, z));
+}
 inline std::complex<double> onePoleShelf(double c, double gain, double freq, double rate) noexcept {
-    return 1.0 + (gain - 1.0) * (1.0 - onePoleLowpass(c, freq, rate));
+    return onePoleShelf(c, gain, unitDelay(freq, rate));
 }
 
 // --- The curves the editor draws ----------------------------------------------------------
@@ -465,17 +486,23 @@ public:
         drive_ = std::pow(10.0, volumeDb(v, volume) / 20.0);
         powerOffset_ = restValue(v.powerBias);
         powerOut_ = 1.0 / shapeSlope(v.powerBias);
-        // The linear parts' responses at the oversampled rate (oversampled: dropped above its half).
-        const auto lowpass = [rate](double hz, double f) { return onePoleLowpass(onePoleCoeff(hz, rate), f, rate); };
-        const auto highpass = [&](double hz, double f) { return 1.0 - lowpass(hz, f); };
-        const auto adaa = [rate](double f) { return (1.0 + std::polar(1.0, -2.0 * kPi * f / rate)) / 2.0; };
-        const auto into = [&](int k, double f) { return lowpass(v.stages[k].lowpassHz, f) * adaa(f); };
+        // The linear parts' responses at the oversampled rate (oversampled: dropped above its half), each
+        // one-pole's coefficient worked out once and each harmonic's z⁻¹ once for them all.
+        double highpassC[3], millerC[3];  // each stage's coupling high-pass and Miller low-pass
+        for (int k = 0; k < 3; ++k) {
+            highpassC[k] = onePoleCoeff(v.stages[k].highpassHz, rate);
+            millerC[k] = onePoleCoeff(v.stages[k].lowpassHz, rate);
+        }
+        const double presenceC = onePoleCoeff(v.presenceHz, rate), gridC = onePoleCoeff(kGridHz, rate),
+                     transformerC = onePoleCoeff(v.transformerHz, rate);
+        const auto adaa = [](std::complex<double> z) { return (1.0 + z) / 2.0; };
         // Into V1 there is the tone alone: its gain is all that matters.
+        const std::complex<double> z0 = unitDelay(f0, rate);
         const std::complex<double> input =
             (1.0 - onePoleLowpass(onePoleCoeff(v.inputHighpassHz, sampleRate), f0, sampleRate)) *
             onePoleShelf(onePoleCoeff(v.brightHz, sampleRate), std::pow(10.0, v.brightDb / 20.0), f0, sampleRate) *
-            lowpass(v.stages[0].lowpassHz, f0);
-        input_ = std::abs(input * adaa(f0));
+            onePoleLowpass(millerC[0], z0);
+        input_ = std::abs(input * adaa(z0));
         const double r = onePoleCoeff(kDcBlockerHz, sampleRate);  // dsp::DcBlocker: y = x - x[-1] + r y[-1]
         const double trim = std::pow(10.0, v.trimDb / 20.0);
         for (int k = 0; k <= points_ / 2; ++k) {
@@ -484,26 +511,33 @@ public:
                 link_[0][k] = link_[1][k] = link_[2][k] = out_[k] = 0.0;
                 continue;
             }
-            link_[0][k] = highpass(v.stages[0].highpassHz, f) * into(1, f);
-            link_[1][k] = highpass(v.stages[1].highpassHz, f) * toneStackDigital(tone, f, rate) * makeup * into(2, f);
-            link_[2][k] = highpass(v.stages[2].highpassHz, f) *
-                          onePoleShelf(onePoleCoeff(v.presenceHz, rate), shelf, f, rate) * lowpass(kGridHz, f) *
-                          adaa(f);
-            const std::complex<double> z = std::polar(1.0, -2.0 * kPi * f / sampleRate);
-            out_[k] = f < 0.5 * sampleRate ? lowpass(v.transformerHz, f) * (1.0 - z) / (1.0 - r * z) * trim : 0.0;
+            const std::complex<double> z = unitDelay(f, rate);
+            const auto highpass = [&](int s) { return 1.0 - onePoleLowpass(highpassC[s], z); };
+            const auto into = [&](int s) { return onePoleLowpass(millerC[s], z) * adaa(z); };
+            link_[0][k] = highpass(0) * into(1);
+            link_[1][k] = highpass(1) * toneStackDigital(tone, z) * makeup * into(2);
+            link_[2][k] = highpass(2) * onePoleShelf(presenceC, shelf, z) * onePoleLowpass(gridC, z) * adaa(z);
+            const std::complex<double> base = unitDelay(f, sampleRate);
+            out_[k] = f < 0.5 * sampleRate
+                          ? onePoleLowpass(transformerC, z) * divide(1.0 - base, 1.0 - r * base) * trim
+                          : 0.0;
         }
         gain_ = input_ * linear * std::abs(link_[0][1] * link_[1][1] * link_[2][1] * out_[1]);
         // The filters alone (the anti-aliasing's half samples are part of the device's latency).
         const std::complex<double> filters =
-            input * link_[0][1] * link_[1][1] * link_[2][1] * out_[1] / (adaa(f0) * adaa(f0) * adaa(f0));
+            input * link_[0][1] * link_[1][1] * link_[2][1] * out_[1] / (adaa(z0) * adaa(z0) * adaa(z0));
         phaseDelay_ = -std::arg(filters) / (2.0 * kPi * f0 / sampleRate);
+        // The FFT's twiddles (and the input tone's samples): e^(-2 pi i j / points), j up to half.
+        for (int j = 0; j < points_ / 2; ++j) twiddle_[j] = unitDelay(j, points_);
     }
 
     // The power stage's input for a tone of peak `amplitude` (1.0: 0 dBFS): one period.
     Wave preamp(double amplitude) const noexcept {
         Wave w{};
         const double q = amplitude * input_ * gIn_[0];
-        for (int n = 0; n < points_; ++n) w[n] = stage(0, q * std::sin(2.0 * kPi * n / points_));
+        const int half = points_ / 2;  // sin(2 pi n / points), from the twiddles: -Im, and odd past the half
+        for (int n = 0; n < half; ++n) w[n] = stage(0, q * -twiddle_[n].imag());
+        for (int n = half; n < points_; ++n) w[n] = stage(0, q * twiddle_[n - half].imag());
         for (int k = 0; k < 3; ++k) {
             filter(w, link_[k]);
             if (k < 2)
@@ -556,7 +590,9 @@ private:
     // A period through a linear part: each harmonic times the part's response at it.
     void filter(Wave& w, const Response& h) const noexcept {
         const int n = points_;
-        Wave re = w, im{};
+        Wave re, im;  // (their first points_ only)
+        std::copy_n(w.begin(), n, re.begin());
+        std::fill_n(im.begin(), n, 0.0);
         fft(re, im, false);
         for (int k = 0; k <= n / 2; ++k) {
             const std::complex<double> x = std::complex<double>(re[k], im[k]) * h[k];
@@ -568,11 +604,11 @@ private:
             }
         }
         fft(re, im, true);
-        w = re;
+        std::copy_n(re.begin(), n, w.begin());
     }
 
-    // In place over points_, radix 2; `inverse` divides by points_. The twiddles by
-    // recurrence: nothing static, so nothing to set up on first use.
+    // In place over points_, radix 2; `inverse` divides by points_. The twiddles are
+    // the Transfer's own (nothing static, so nothing to set up on first use).
     void fft(Wave& re, Wave& im, bool inverse) const noexcept {
         const int n = points_;
         for (int i = 1, j = 0; i < n; ++i) {
@@ -584,21 +620,18 @@ private:
                 std::swap(im[i], im[j]);
             }
         }
+        const double sign = inverse ? -1.0 : 1.0;  // the inverse's twiddles are the conjugates
         for (int length = 2; length <= n; length <<= 1) {
-            const double angle = (inverse ? 2.0 : -2.0) * kPi / length;
-            const double stepRe = std::cos(angle), stepIm = std::sin(angle);
+            const int stride = n / length;
             for (int i = 0; i < n; i += length) {
-                double wr = 1.0, wi = 0.0;
                 for (int j = 0; j < length / 2; ++j) {
+                    const double wr = twiddle_[j * stride].real(), wi = sign * twiddle_[j * stride].imag();
                     const int a = i + j, b = a + length / 2;
                     const double vr = re[b] * wr - im[b] * wi, vi = re[b] * wi + im[b] * wr;
                     re[b] = re[a] - vr;
                     im[b] = im[a] - vi;
                     re[a] += vr;
                     im[a] += vi;
-                    const double next = wr * stepRe - wi * stepIm;
-                    wi = wr * stepIm + wi * stepRe;
-                    wr = next;
                 }
             }
         }
@@ -612,6 +645,7 @@ private:
     double drive_ = 1.0, powerOffset_ = 0.0, powerOut_ = 1.0, gain_ = 1.0, phaseDelay_ = 0.0;
     Response link_[3] = {};  // V1 to V2, V2 to V3 (the tone section), V3 to the power stage
     Response out_ = {};      // the power stage to the output
+    std::array<std::complex<double>, kPoints / 2> twiddle_ = {};
 };
 
 // One point of the curve (Transfer works the parts out once for a curve's worth).
