@@ -27,6 +27,7 @@
 #include "devices/EditorPaint.h"
 
 #include <QElapsedTimer>
+#include <QLineF>
 #include <QList>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
@@ -72,6 +73,7 @@ public:
     static constexpr double kFineDrag = 0.1;               // Shift
     static constexpr double kHeaderLeft = 64.0;            // the QML Sidechain badge's room in the header
     static constexpr double kMeterFloorDb = -60.0;
+    static constexpr std::array<double, 4> kLevelFigures{0.0, -24.0, -48.0, -72.0};  // dB, figured on the grid
 
     explicit SpectralGraph(QQuickItem* parent = nullptr);
 
@@ -88,12 +90,20 @@ public:
     double yOfLevel(double db) const;
     double dbPerPixel() const;
     // Where a handle is: 1 the pivot (1 kHz), 2 and 3 the tilt handles (100 Hz, 10 kHz), 4 Below's (300 Hz on
-    // the green line), held within the plot; 5 and 6 the Focus edges' grips (at the plot's bottom; an open
-    // edge's just inside the plot's border).
+    // the green line), each on its line as drawn; where the line has left the plot by then, at the point it
+    // leaves it (towards 1 kHz, where both lines are always inside). 5 and 6 the Focus edges' grips (at the
+    // plot's bottom; an open edge's just inside the plot's border).
     QPointF handle(int which) const;
     // The lines as drawn (eased), dB.
     double thresholdAt(double hz) const;
     double belowAt(double hz) const;
+    // The lines as drawn, straight across the plot from 20 Hz to 20 kHz: their ends where those levels map, beyond
+    // the plot where a line leaves it (the plot clips it there).
+    QLineF thresholdLine() const;
+    QLineF belowLine() const;
+    // How much of a level figure (kLevelFigures, inside the plot's left edge) is drawn, 0..1: one a threshold runs
+    // through fades out.
+    double figureShown(double db) const;
     // The Focus edges as drawn (eased), Hz.
     double focusLowShown() const;
     double focusHighShown() const;
@@ -154,6 +164,9 @@ private:
     // Which handle is at `pos` (Handle), as the mouse finds them.
     int hit(const QPointF& pos) const;
     double edgeX(int which) const;  // a Focus edge's line (its grip's x for an open edge)
+    double lineY(double db) const;  // as yOfLevel(), not held to the plot (for the lines, which the plot clips)
+    QPointF onLine(const QLineF& line, double hz) const;  // a handle's place on `line` (see handle())
+    static QString levelFigure(double db);                // "0", "−24"...
     void setHovered(int which);
     void updateReadout();
     void updateLines();

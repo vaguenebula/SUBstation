@@ -1,10 +1,11 @@
 // The Spectral Compressor's editor (ui/qml/devices/editors/SpectralEditor.qml, ui/src/devices/SpectralGraph):
 // loaded as the device view loads it, its knobs, value boxes and button bound to their parameters (undoably),
-// the display's lines the engine's own (sub::app::spectralThresholdDb), its handles and edges dragged with the
-// mouse (one undo step a drag, Shift finely from where it is pressed), the engine's displays reaching it as it
-// renders offline (cuts, lifts, the held cut, the glow, Delta's tint), and the Sidechain badge. With
-// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there idle, at its widest values, with a signal
-// flowing, lifting, keyed by a sidechain, and with Delta on.
+// the display's lines the engine's own (sub::app::spectralThresholdDb; drawn where they are when steep enough to
+// leave the plot, their handles on them) and the level figures they cross fading, its handles and edges dragged
+// with the mouse (one undo step a drag, Shift finely from where it is pressed), the engine's displays reaching it
+// as it renders offline (cuts, lifts, the held cut, the glow, Delta's tint), and the Sidechain badge. With
+// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there idle, at its widest values, with a steep threshold,
+// with a signal flowing, lifting, keyed by a sidechain, and with Delta on.
 
 #include <QByteArray>
 #include <QImage>
@@ -171,6 +172,44 @@ class TestUiDeviceEditorsSpectral : public QObject, public sub::app::test::Edito
     }
 
     QPoint at(int handle) { return scenePoint(graph_, graph_->handle(handle)); }
+
+    // A line drawn (SpectralGraph::thresholdLine(), belowLine()) at x.
+    static double yOn(const QLineF& line, double x) { return line.y1() + line.dy() * (x - line.x1()) / line.dx(); }
+
+    // Where a level maps on the display's axis, not held to the plot.
+    double trueY(double db) {
+        const QRectF plot = graph_->plot();
+        return plot.bottom() -
+               (db - SpectralGraph::kFloorDb) / (SpectralGraph::kCeilingDb - SpectralGraph::kFloorDb) * plot.height();
+    }
+
+    // A handle is on `line` as drawn, inside the plot.
+    bool onTheDrawnLine(int handle, const QLineF& line) {
+        const QPointF point = graph_->handle(handle);
+        const bool on = std::abs(point.y() - yOn(line, point.x())) < 0.5 && graph_->plot().contains(point);
+        if (!on)
+            qWarning("handle %d at (%.1f, %.1f), the line there at %.1f", handle, point.x(), point.y(),
+                     yOn(line, point.x()));
+        return on;
+    }
+
+    // The middle row of the threshold's orange core in the display's column at `hz` (scene px; -1: none).
+    double orangeRowAt(double hz) {
+        const QImage image = grab();
+        const qreal scale = image.devicePixelRatio();
+        const QRectF plot = graph_->mapRectToScene(graph_->plot());
+        const int x = int(std::lround(graph_->mapToScene(QPointF(graph_->xOf(hz), 0)).x() * scale));
+        double rows = 0.0;
+        int count = 0;
+        for (int y = int(plot.top() * scale); y <= int(plot.bottom() * scale); ++y) {
+            const QColor c = image.pixelColor(x, y);
+            if (c.red() > 180 && c.green() > 100 && c.blue() < 90) {
+                rows += y;
+                ++count;
+            }
+        }
+        return count ? (rows / count + 0.5) / scale : -1.0;
+    }
 
     // A drag from `from` by `by` in `steps` moves, with `modifiers`.
     void drag(QPoint from, QPoint by, Qt::KeyboardModifiers modifiers = Qt::NoModifier, int steps = 3) {
@@ -486,18 +525,14 @@ private Q_SLOTS:
         QVERIFY2(std::abs(value("tilt") - (before - 20 * dbPerPixel / octaves)) <= 0.02,
                  qPrintable(QString::number(value("tilt"))));
 
-        // The handles ride the line, held within the plot.
+        // The handles ride the line as drawn, within the plot (more in linesLeavingThePlot).
         set("tilt", 6.0);
         set("threshold", 12.0);
         tick();
         const QRectF plot = graph_->plot();
-        for (const auto& [handle, hz] : {std::pair{int(SpectralGraph::TiltLow), 100.0},
-                                         std::pair{int(SpectralGraph::ThresholdHandle), 1000.0},
-                                         std::pair{int(SpectralGraph::TiltHigh), 10000.0}}) {
-            const QPointF point = graph_->handle(handle);
-            QVERIFY(std::abs(point.y() - graph_->yOfLevel(graph_->thresholdAt(hz))) < 0.5);
-            QVERIFY(plot.top() <= point.y() && point.y() <= plot.bottom());
-        }
+        for (const int handle :
+             {int(SpectralGraph::TiltLow), int(SpectralGraph::ThresholdHandle), int(SpectralGraph::TiltHigh)})
+            QVERIFY(onTheDrawnLine(handle, graph_->thresholdLine()));
         QCOMPARE(graph_->handle(SpectralGraph::TiltHigh).y(), plot.top());  // (+12 + 20 dB: off the top)
 
         // A double-click: level with pink again.
@@ -508,6 +543,129 @@ private Q_SLOTS:
         QCOMPARE(value("tilt"), 0.0);
         QCOMPARE(undo()->index(), steps + 1);
         QCOMPARE(undo()->undoText(), QStringLiteral("Reset Tilt"));
+    }
+
+    // A line steep enough to leave the plot is drawn where it is up to the edge it leaves by (the plot clips it; its
+    // ends aren't held to the axis, which bent it), each handle stays on it inside the plot (one whose own frequency
+    // is off the axis where the line leaves), and the mouse finds the line only where it is drawn.
+    void linesLeavingThePlot() {
+        QVERIFY(showDevice());
+        const QRectF plot = graph_->plot();
+        const QList<double> frequencies{20.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0, 20000.0};
+        struct Steep {
+            double threshold, tilt;
+            int handle;     // the handle off the axis at its own frequency
+            double leaves;  // where the line leaves the plot on its way there (Hz)
+            bool top;       // by the top (else the floor)
+        };
+        // E.g. -60 dB, +6 dB/oct: 100 Hz is at -79.9 dB, under the -78 dB floor, which the line meets at 125 Hz.
+        for (const Steep& steep : {Steep{-60.0, 6.0, SpectralGraph::TiltLow, 125.0, false},
+                                   Steep{0.0, 6.0, SpectralGraph::TiltHigh, 8000.0, true},
+                                   Steep{-72.0, -6.0, SpectralGraph::TiltHigh, 2000.0, false},
+                                   Steep{12.0, -6.0, SpectralGraph::TiltLow, 500.0, true}}) {
+            set("threshold", steep.threshold);
+            set("tilt", steep.tilt);
+            tick();
+            const QLineF line = graph_->thresholdLine();
+            QCOMPARE(line.x1(), plot.left());
+            QCOMPARE(line.x2(), plot.right());
+            for (const double hz : frequencies) {
+                const double level = steep.threshold + steep.tilt * std::log2(hz / 1000.0);
+                QVERIFY2(std::abs(yOn(line, graph_->xOf(hz)) - trueY(level)) < 1e-6,
+                         qPrintable(QStringLiteral("%1 dB, %2 dB/oct at %3 Hz").arg(steep.threshold)
+                                        .arg(steep.tilt).arg(hz)));
+            }
+            const QPointF pivot = graph_->handle(SpectralGraph::ThresholdHandle);
+            QVERIFY(std::abs(pivot.x() - graph_->xOf(1000.0)) < 1e-6);
+            QVERIFY(std::abs(pivot.y() - trueY(steep.threshold)) < 1e-6);
+            for (const int handle :
+                 {int(SpectralGraph::ThresholdHandle), int(SpectralGraph::TiltLow), int(SpectralGraph::TiltHigh)})
+                QVERIFY(onTheDrawnLine(handle, line));
+            const QPointF off = graph_->handle(steep.handle);
+            QCOMPARE(off.y(), steep.top ? plot.top() : plot.bottom());
+            QVERIFY2(std::abs(off.x() - graph_->xOf(steep.leaves)) < 0.5, qPrintable(QString::number(off.x())));
+        }
+
+        // The Below line likewise (-72 dB, +6 dB/oct: 300 Hz is at -82.4 dB; the line meets the floor at 500 Hz).
+        set("threshold", -30.0);
+        set("tilt", 6.0);
+        set("upward", 2.0);
+        set("below", -72.0);
+        tick();
+        const QLineF below = graph_->belowLine();
+        QVERIFY(std::abs(below.y1() - trueY(-72.0 + 6.0 * std::log2(20.0 / 1000.0))) < 1e-6);
+        QVERIFY(onTheDrawnLine(SpectralGraph::BelowHandle, below));
+        QCOMPARE(graph_->handle(SpectralGraph::BelowHandle).y(), plot.bottom());
+        QVERIFY(std::abs(graph_->handle(SpectralGraph::BelowHandle).x() - graph_->xOf(500.0)) < 0.5);
+        for (const int handle :
+             {int(SpectralGraph::ThresholdHandle), int(SpectralGraph::TiltLow), int(SpectralGraph::TiltHigh)})
+            QVERIFY(onTheDrawnLine(handle, graph_->thresholdLine()));
+
+        // Painted where it is: at -60 dB, +6 dB/oct the orange line crosses 300 Hz at -70.4 dB (bent onto the
+        // floor at 20 Hz it crossed at -60.8, 11 px higher).
+        set("upward", 1.0);
+        set("threshold", -60.0);
+        tick();
+        QTest::qWait(50);
+        const double expected = graph_->mapToScene(QPointF(0, trueY(-60.0 + 6.0 * std::log2(0.3)))).y();
+        const double drawn = orangeRowAt(300.0);
+        QVERIFY2(std::abs(drawn - expected) < 1.5,
+                 qPrintable(QStringLiteral("%1 against %2").arg(drawn).arg(expected)));
+        save(grab(), QStringLiteral("spectral-steep.png"));
+
+        // The mouse: nothing over the floor where the line has gone under it (at 40 Hz it is at -87.9 dB); the line
+        // where it is drawn.
+        QTest::mouseMove(window_, scenePoint(graph_, QPointF(graph_->xOf(40.0), plot.bottom() - 2)));
+        QTest::qWait(20);
+        QCOMPARE(graph_->hoveredHandle(), int(SpectralGraph::None));
+        const QPointF onLine(graph_->xOf(300.0), yOn(graph_->thresholdLine(), graph_->xOf(300.0)));
+        QTest::mouseMove(window_, scenePoint(graph_, onLine + QPointF(0, 3)));
+        QTRY_COMPARE(graph_->hoveredHandle(), int(SpectralGraph::ThresholdHandle));
+        QTest::mouseMove(window_, scenePoint(graph_, QPointF(plot.center().x(), plot.top() + 4)));
+        QTRY_COMPARE(graph_->hoveredHandle(), int(SpectralGraph::None));
+
+        // A handle held at the edge still drags as it does on its own frequency: 100 Hz's up 20 px.
+        const double dbPerPixel = graph_->dbPerPixel();
+        const int steps = undo()->index();
+        drag(at(SpectralGraph::TiltLow), QPoint(0, -20));
+        QVERIFY2(std::abs(value("tilt") - (6.0 - 20 * dbPerPixel / std::log2(10.0))) <= 0.02,
+                 qPrintable(QString::number(value("tilt"))));
+        QCOMPARE(value("threshold"), -60.0);
+        QCOMPARE(undo()->index(), steps + 1);
+    }
+
+    // The level figures at the plot's left: one a threshold runs through fades out (at the defaults the threshold,
+    // -18 dB, runs through "−24", which sits just over its line), smoothly as the line moves.
+    void figuresStepAside() {
+        QVERIFY(showDevice());
+        tick();
+        QVERIFY2(graph_->figureShown(-24.0) < 0.01, qPrintable(QString::number(graph_->figureShown(-24.0))));
+        for (const double db : {0.0, -48.0, -72.0}) QCOMPARE(graph_->figureShown(db), 1.0);
+        set("threshold", -30.0);
+        tick();
+        for (const double db : SpectralGraph::kLevelFigures) QCOMPARE(graph_->figureShown(db), 1.0);
+        set("threshold", -24.0);  // on the figure's own line, under it: still read
+        tick();
+        QVERIFY(graph_->figureShown(-24.0) > 0.5);
+
+        // Fading as the line passes, without a jump.
+        double last = graph_->figureShown(-24.0);
+        for (double db = -24.0; db <= -12.0; db += 0.1) {
+            set("threshold", db);
+            tick(1);
+            const double shown = graph_->figureShown(-24.0);
+            QVERIFY2(std::abs(shown - last) < 0.1, qPrintable(QStringLiteral("%1 at %2 dB").arg(shown).arg(db)));
+            last = shown;
+        }
+
+        // The Below line too, while it is shown.
+        set("threshold", -18.0);
+        set("below", -42.0);
+        tick();
+        QCOMPARE(graph_->figureShown(-48.0), 1.0);  // (Upward 1:1: no Below line)
+        set("upward", 2.0);
+        tick();
+        QVERIFY(graph_->figureShown(-48.0) < 0.01);
     }
 
     void dragBelow() {

@@ -8,6 +8,7 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QHoverEvent>
 #include <QLineF>
 #include <QMouseEvent>
@@ -65,6 +66,18 @@ bool easeAll(std::vector<double>& shown, const std::vector<double>& target, doub
         moving = true;
     }
     return moving;
+}
+
+// How clear of `line` (one of the thresholds drawn) a box is, 0..1: 0 where the line or the bright part of its glow
+// runs through it, 1 from a few pixels off, smoothly between.
+double clearOf(const QLineF& line, const QRectF& box) {
+    if (line.dx() <= 0.0)
+        return 1.0;
+    const auto yAt = [&](double x) { return line.y1() + line.dy() * (x - line.x1()) / line.dx(); };
+    const double a = yAt(box.left()), b = yAt(box.right());
+    const double gap = std::max({0.0, std::min(a, b) - box.bottom(), box.top() - std::max(a, b)});
+    const double t = std::clamp((gap - 0.75) / 2.75, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
 }
 
 // Calls `draw` with each run of `points` where `present(j)` (taking in its neighbours either side): a line lying
@@ -168,6 +181,54 @@ double SpectralGraph::belowAt(double hz) const {
     return sub::app::spectralBelowDb(thresholdShown_.value, belowShown_.value, tiltShown_.value, {hz}).value(0);
 }
 
+double SpectralGraph::lineY(double db) const {
+    const QRectF r = plot();
+    return r.bottom() - (db - kFloorDb) / (kCeilingDb - kFloorDb) * r.height();
+}
+
+// Each line is straight on these axes (dB against log frequency), so its two ends draw it; mapped as they are, not
+// held to the axis, so a line steep enough to leave the plot is drawn where it is up to the edge it leaves by.
+QLineF SpectralGraph::thresholdLine() const {
+    const QRectF r = plot();
+    return {r.left(), lineY(thresholdAt(kLow)), r.right(), lineY(thresholdAt(kHigh))};
+}
+
+QLineF SpectralGraph::belowLine() const {
+    const QRectF r = plot();
+    return {r.left(), lineY(belowAt(kLow)), r.right(), lineY(belowAt(kHigh))};
+}
+
+QString SpectralGraph::levelFigure(double db) { return db == 0.0 ? id("0") : QStringLiteral("−%1").arg(-db); }
+
+// A figure sits just over its line; one a threshold runs through fades out (struck through, it would read as that
+// threshold's level), back in as the line moves off it.
+double SpectralGraph::figureShown(double db) const {
+    const QFont font = uiFont(7);
+    const QFontMetricsF metrics(font);
+    const double baseline = yOfLevel(db) - 1 - metrics.descent();  // (drawn bottom-aligned 1 px over the line)
+    const QRectF glyphs(plot().left() + 9, baseline - metrics.capHeight(),
+                        SgPainter::textWidth(levelFigure(db), font), metrics.capHeight());
+    return std::min(clearOf(thresholdLine(), glyphs),
+                    1.0 - belowOpacity_.value * (1.0 - clearOf(belowLine(), glyphs)));
+}
+
+QPointF SpectralGraph::onLine(const QLineF& line, double hz) const {
+    const QRectF r = plot();
+    const double x = xOf(hz);
+    if (line.dx() <= 0.0 || r.height() <= 0.0)  // (not laid out yet)
+        return {x, line.y1()};
+    const double slope = line.dy() / line.dx();
+    const double y = line.y1() + slope * (x - line.x1());
+    if (r.top() <= y && y <= r.bottom())
+        return {x, y};
+    // Off the plot here: where the line leaves it, between here and 1 kHz (both lines' levels there are within the
+    // axis whatever the parameters, so a handle held this way stays on its line, inside the plot).
+    const double edge = y < r.top() ? r.top() : r.bottom();
+    const double pivot = xOf(kPivotHz);
+    const double across = slope != 0.0 ? line.x1() + (edge - line.y1()) / slope : x;
+    return {std::clamp(across, std::min(x, pivot), std::max(x, pivot)), edge};
+}
+
 double SpectralGraph::focusLowShown() const { return std::exp2(focusLowShown_.value); }
 
 double SpectralGraph::focusHighShown() const { return std::exp2(focusHighShown_.value); }
@@ -185,13 +246,13 @@ double SpectralGraph::edgeX(int which) const {
 QPointF SpectralGraph::handle(int which) const {
     switch (which) {
     case ThresholdHandle:
-        return {xOf(kPivotHz), yOfLevel(thresholdAt(kPivotHz))};
+        return onLine(thresholdLine(), kPivotHz);
     case TiltLow:
-        return {xOf(kLowHandleHz), yOfLevel(thresholdAt(kLowHandleHz))};
+        return onLine(thresholdLine(), kLowHandleHz);
     case TiltHigh:
-        return {xOf(kHighHandleHz), yOfLevel(thresholdAt(kHighHandleHz))};
+        return onLine(thresholdLine(), kHighHandleHz);
     case BelowHandle:
-        return {xOf(kBelowHandleHz), yOfLevel(belowAt(kBelowHandleHz))};
+        return onLine(belowLine(), kBelowHandleHz);
     case FocusLowEdge:
     case FocusHighEdge:
         return {edgeX(which), plot().bottom() - 6.0};
@@ -439,26 +500,28 @@ int SpectralGraph::hit(const QPointF& pos) const {
     const QRectF r = plot();
     if (!r.adjusted(-kHandleHit, -kHandleHit, kHandleHit, kHandleHit).contains(pos))
         return None;
-    // A handle: the nearest.
+    // A handle: the nearest (on a tie, the one drawn on top: the pivot, the tilt handles, Below's).
     int found = None;
-    double nearest = kHandleHit;
+    double nearest = std::numeric_limits<double>::infinity();
     for (const int which : {int(ThresholdHandle), int(TiltLow), int(TiltHigh), int(BelowHandle)}) {
         if (which == BelowHandle && !belowShown())
             continue;
         const double distance = QLineF(handle(which), pos).length();
-        if (distance <= nearest) {
+        if (distance < nearest) {
             nearest = distance;
             found = which;
         }
     }
-    if (found != None)
+    if (nearest <= kHandleHit)
         return found;
-    // A line: the nearer (the threshold on a tie).
+    // A line, where it is drawn (inside the plot): the nearer (the threshold on a tie).
     if (r.left() <= pos.x() && pos.x() <= r.right()) {
-        const double hz = freqAt(pos.x());
-        const double threshold = std::abs(pos.y() - yOfLevel(thresholdAt(hz)));
-        const double below =
-            belowShown() ? std::abs(pos.y() - yOfLevel(belowAt(hz))) : std::numeric_limits<double>::infinity();
+        const auto away = [&](const QLineF& line) {
+            const double y = line.y1() + line.dy() * (pos.x() - line.x1()) / std::max(1e-9, line.dx());
+            return r.top() <= y && y <= r.bottom() ? std::abs(pos.y() - y) : std::numeric_limits<double>::infinity();
+        };
+        const double threshold = away(thresholdLine());
+        const double below = belowShown() ? away(belowLine()) : std::numeric_limits<double>::infinity();
         if (std::min(threshold, below) <= kLineHit)
             return threshold <= below ? ThresholdHandle : BelowHandle;
     }
@@ -648,6 +711,8 @@ void SpectralGraph::paint(SgPainter& p) {
 
     const QRectF r = plot();
     const QFont font7 = uiFont(7), font8 = uiFont(8);
+    const QLineF thresholdLine = this->thresholdLine(), belowLine = this->belowLine();
+    const double belowOpacity = belowOpacity_.value;
 
     // The grid: decades across, every 12 dB up (0 dB brighter), figures inside at the left and under the plot.
     drawDecadeGrid(p, r, frequencyAxis());
@@ -655,10 +720,11 @@ void SpectralGraph::paint(SgPainter& p) {
         const double y = yOfLevel(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, db == 0.0 ? 170 : 110));
     }
-    for (const double db : {0.0, -24.0, -48.0, -72.0}) {
-        const double y = yOfLevel(db);
-        p.drawText(QRectF(r.left() + 9, y - 11, 40, 10), Qt::AlignLeft | Qt::AlignBottom,
-                   db == 0.0 ? QStringLiteral("0") : QStringLiteral("−%1").arg(-db), Theme::kTextDim, font7);
+    for (const double db : kLevelFigures) {
+        const double shown = figureShown(db);
+        if (shown > 0.01)
+            p.drawText(QRectF(r.left() + 9, yOfLevel(db) - 11, 40, 10), Qt::AlignLeft | Qt::AlignBottom,
+                       levelFigure(db), withAlpha(Theme::kTextDim, int(std::lround(255 * shown))), font7);
     }
     for (const auto& [hz, label] : {std::pair{50.0, "50"}, std::pair{100.0, "100"}, std::pair{500.0, "500"},
                                     std::pair{1000.0, "1k"}, std::pair{5000.0, "5k"}, std::pair{10000.0, "10k"}}) {
@@ -775,17 +841,15 @@ void SpectralGraph::paint(SgPainter& p) {
     eachRun(points, [&](std::size_t j) { return shownOutput_[j] > kFloorDb; },
             [&](const std::vector<QPointF>& run) { drawGlowPolyline(p, run, outputColor, 1.25); });
 
-    // The thresholds: Below (green, while Upward is on) under the threshold (orange).
-    const std::vector<QPointF> belowLine{{r.left(), yOfLevel(belowAt(kLow))}, {r.right(), yOfLevel(belowAt(kHigh))}};
-    const std::vector<QPointF> thresholdLine{{r.left(), yOfLevel(thresholdAt(kLow))},
-                                             {r.right(), yOfLevel(thresholdAt(kHigh))}};
-    if (belowOpacity_.value > 0.001) {
-        p.setOpacity(belowOpacity_.value);
-        drawGlowPolyline(p, belowLine, Theme::kPlayOn, 1.25);
+    // The thresholds: Below (green, while Upward is on) under the threshold (orange). (Clipped to the plot, where a
+    // line steep enough leaves it.)
+    if (belowOpacity > 0.001) {
+        p.setOpacity(belowOpacity);
+        drawGlowPolyline(p, {belowLine.p1(), belowLine.p2()}, Theme::kPlayOn, 1.25);
         p.setOpacity(1.0);
     }
     const QColor lineColor = active_ ? Theme::kAccent : Theme::kTextDim;
-    drawGlowPolyline(p, thresholdLine, lineColor, 1.5);
+    drawGlowPolyline(p, {thresholdLine.p1(), thresholdLine.p2()}, lineColor, 1.5);
     p.restore();
 
     // The Focus edges: a line each, and a grip at the bottom (an open edge, only its grip).
@@ -813,8 +877,8 @@ void SpectralGraph::paint(SgPainter& p) {
         p.fillPolygon(outline, 4, Theme::kMeterBg);
         p.fillPolygon(inside, 4, color);
     };
-    if (belowOpacity_.value > 0.001) {
-        p.setOpacity(belowOpacity_.value);
+    if (belowOpacity > 0.001) {
+        p.setOpacity(belowOpacity);
         circle(handle(BelowHandle), 4.0 + 1.5 * handleGrow_[std::size_t(BelowHandle)].value, Theme::kPlayOn);
         p.setOpacity(1.0);
     }
