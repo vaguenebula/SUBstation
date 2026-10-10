@@ -16,18 +16,22 @@
 //   apart at 100 %); two white noises (mid and side), each through two
 //   band-pass sections (TPT state-variable, k v1) and scaled to RMS 1/sqrt 2
 //   exactly (erosion::band), mixed to the sides by Stereo's mid and side gains.
-//   Noise Blend crossfades sine and noise at equal power. Live's legacy modes
-//   are settings: Sine is Noise Blend 0 %, Noise 100 %, Wide Noise 100 % with
-//   Stereo 100 %.
+//   Each instance salts the noises' seeds with a number of its own, so two
+//   Erosions set alike don't wobble in lockstep. Noise Blend crossfades sine
+//   and noise at equal power. Live's legacy modes are settings: Sine is Noise
+//   Blend 0 %, Noise 100 %, Wide Noise 100 % with Stereo 100 %.
 // - Smoothing: the work runs in chunks of 16 samples on a grid that goes on
 //   across blocks (so the output never depends on how a block is split). At each
 //   chunk's start the controls' glides (two one-poles of 10 ms in a row, so a
 //   jump eases in and out; Frequency and Width in log) move on a chunk, and what
 //   they make (the excursion, the weights, the spread, the noise's gain and its
 //   sections' g and k) ramps linearly over the chunk, the sections' coefficients
-//   made from g and k sample by sample while they move. The phasor's rate steps
-//   per chunk (its phase stays continuous). Once every glide has landed nothing
-//   is worked out again: a device left alone costs only its per-sample work.
+//   made from g and k sample by sample while they move, and their states eased
+//   by as much as the band's steady level changes (so the energy they hold from
+//   the old band doesn't modulate harder, or weaker, than the new band does).
+//   The phasor's rate steps per chunk (its phase stays continuous). Once every
+//   glide has landed nothing is worked out again: a device left alone costs
+//   only its per-sample work.
 // - One channel gets the left modulator, worked out exactly as in stereo: a mono
 //   run is the left side of a stereo one. More than two: the first two.
 // - Nothing recursive decays (the delay has no feedback, the sections always hear
@@ -35,7 +39,9 @@
 //   line has emptied, 2D samples on.
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -49,7 +55,7 @@ namespace sub {
 namespace {
 
 constexpr int kChunk = 16;              // samples per control-rate step
-constexpr int kMeterSamples = 256;      // audio per `erosion` value
+constexpr int kMeterSamples = erosion::kMeterSamples;  // audio per `erosion` value
 static_assert(kMeterSamples % kChunk == 0, "a meter's frames end with a chunk");
 constexpr double kGlideSeconds = 0.01;  // each of a control's two one-poles
 constexpr double kLanded = 1e-6;        // a glide this near its target lands on it
@@ -106,7 +112,8 @@ public:
                                      {"output", 1},
                                      {"erosion", kMeterSamples},
                                      {"mod_l", 1},
-                                     {"mod_r", 1}}) {}
+                                     {"mod_r", 1}}),
+          salt_(erosion::instanceSalt(erosion::instancesMade.fetch_add(1, std::memory_order_relaxed))) {}
 
     std::string typeId() const override { return "builtin:erosion"; }
     std::string name() const override { return "Erosion"; }
@@ -118,6 +125,7 @@ public:
 
     void prepare(double sampleRate, int) override {
         sampleRate_ = sampleRate;
+        rawFreq_ = std::numeric_limits<float>::quiet_NaN();  // (its log is the modulator's at this rate)
         centre_ = erosion::centreDelaySamples(sampleRate);
         limit_ = static_cast<float>(erosion::limitSamples(sampleRate));
         maxExcursion_ = erosion::maxExcursionSamples(sampleRate);
@@ -126,13 +134,14 @@ public:
         reset();
     }
 
-    // Silent, the modulators restarted (the noise reseeded: a render repeats
-    // exactly), and every glide and ramp where the parameters are.
+    // Silent, the modulators restarted (the noise reseeded with this instance's
+    // seeds: its renders repeat exactly), and every glide and ramp where the
+    // parameters are.
     void reset() override {
         for (dsp::DelayLine& line : lines_) line.reset();
         for (dsp::Svf& section : sections_) section.reset();
-        noiseMid_.seed(erosion::kMidSeed);
-        noiseSide_.seed(erosion::kSideSeed);
+        noiseMid_.seed(erosion::saltedSeed(erosion::kMidSeed, salt_));
+        noiseSide_.seed(erosion::saltedSeed(erosion::kSideSeed, salt_));
         cos_ = 1.0;
         sin_ = 0.0;
         freq_.snap(targetLogFreq());
@@ -143,6 +152,8 @@ public:
         workOut(true, true, true, true, true);
         for (int r = 0; r < NumRamps; ++r) ramps_[r].snap(next_[r]);
         coefficients_ = dsp::SvfCoefficients(ramps_[G].target, ramps_[K].target);
+        bandMoving_ = false;
+        stateStep_ = 1.f;
         chunkLeft_ = 0;
         meterCount_ = 0;
         meterSum_ = 0.0;
@@ -182,7 +193,19 @@ private:
         workOut(freq, width, amount, blend, stereo);
         for (int r = 0; r < NumRamps; ++r) ramps_[r].start(next_[r]);
         bandMoving_ = ramps_[G].step != 0.f || ramps_[K].step != 0.f;
-        if (!bandMoving_) coefficients_ = dsp::SvfCoefficients(ramps_[G].target, ramps_[K].target);
+        if (bandMoving_) {
+            // The sections keep the energy they built at the old band, but the noise's gain is the new band's
+            // steady one: moved a long way down (or widened) the old energy would modulate several times too
+            // hard, narrowed too weakly, until it decayed at the new band's rate (a few hundred ms low down).
+            // So their states ease across the chunk by as much as a section's steady level changes: scale k v1
+            // is the noise, RMS 1/sqrt 2, so v1 settles at an RMS of 1/(sqrt 2 k scale).
+            const double level = (static_cast<double>(ramps_[K].value) * ramps_[Scale].value) /
+                                 (static_cast<double>(ramps_[K].target) * ramps_[Scale].target);
+            stateStep_ = static_cast<float>(std::pow(level, 1.0 / kChunk));
+        } else {
+            coefficients_ = dsp::SvfCoefficients(ramps_[G].target, ramps_[K].target);
+            stateStep_ = 1.f;
+        }
         // The phasor's radius back to 1 (its rounding would otherwise drift it).
         const double radius = 1.5 - 0.5 * (cos_ * cos_ + sin_ * sin_);
         cos_ *= radius;
@@ -239,6 +262,7 @@ private:
         dsp::Svf m1 = sections_[0], m2 = sections_[1], s1 = sections_[2], s2 = sections_[3];
         dsp::Noise noiseMid = noiseMid_, noiseSide = noiseSide_;
         const bool bandMoving = bandMoving_;
+        const float stateStep = stateStep_;
         const float centre = static_cast<float>(centre_), limit = limit_;
         double sum = meterSum_;  // (summed in the samples' order, however the block was split)
 
@@ -261,6 +285,14 @@ private:
                 g += gStep;
                 k += kStep;
                 coefficients = dsp::SvfCoefficients(g, k);
+                const auto ease = [stateStep](dsp::Svf& section) {
+                    section.ic1 *= stateStep;
+                    section.ic2 *= stateStep;
+                };
+                ease(m1);
+                ease(m2);
+                ease(s1);
+                ease(s2);
             }
             const float bandK = coefficients.k;
             float midNoise = bandK * m1.tick(coefficients, noiseMid.next()).band;
@@ -353,11 +385,23 @@ private:
         meterSum_ = 0.0;
     }
 
-    double targetLogFreq() const noexcept {
-        return std::log(erosion::modFrequency(param(Frequency), sampleRate_));
+    // Frequency's and Width's glides run in log: the logs are taken again only
+    // when the parameter changes, so a settled chunk does no transcendental work.
+    double targetLogFreq() noexcept {
+        const float raw = param(Frequency);
+        if (raw != rawFreq_) {
+            rawFreq_ = raw;
+            logFreq_ = std::log(erosion::modFrequency(raw, sampleRate_));
+        }
+        return logFreq_;
     }
-    double targetLogWidth() const noexcept {
-        return std::log(std::clamp<double>(param(Width), erosion::kMinWidth, erosion::kMaxWidth));
+    double targetLogWidth() noexcept {
+        const float raw = param(Width);
+        if (raw != rawWidth_) {
+            rawWidth_ = raw;
+            logWidth_ = std::log(std::clamp<double>(raw, erosion::kMinWidth, erosion::kMaxWidth));
+        }
+        return logWidth_;
     }
     double targetAmount() const noexcept { return std::clamp(param(Amount), 0.f, 100.f) / 100.0; }
     double targetBlend() const noexcept { return std::clamp(param(Blend), 0.f, 100.f) / 100.0; }
@@ -386,16 +430,21 @@ private:
     dsp::DelayLine lines_[kChannels];
     dsp::Svf sections_[4];  // the mid noise's two band-pass sections, then the side's
     dsp::Noise noiseMid_, noiseSide_;
+    uint32_t salt_ = 0;                         // this instance's, for the noises' seeds (erosion::instanceSalt)
     double cos_ = 1.0, sin_ = 0.0;              // the sine's phasor
     double rotateCos_ = 1.0, rotateSin_ = 0.0;  // its turn per sample
 
     Ease freq_, width_, amount_, blend_, stereo_;  // the controls' glides (Frequency and Width in log)
+    // Frequency's and Width's parameters as last read, and their logs (NaN: none yet).
+    float rawFreq_ = std::numeric_limits<float>::quiet_NaN(), rawWidth_ = std::numeric_limits<float>::quiet_NaN();
+    double logFreq_ = 0.0, logWidth_ = 0.0;
     // What the glides make, ramped over each chunk (RampId), and where each is
     // headed next: workOut() sets those, only for what moved.
     Ramp ramps_[NumRamps];
     float next_[NumRamps] = {0.f, 0.f, 1.f, 1.f, 1.f, 0.f, 1.f, 0.f, 0.f, 1.f};
     dsp::SvfCoefficients coefficients_;  // the sections' (made per sample while g or k ramps)
     bool bandMoving_ = false;
+    float stateStep_ = 1.f;  // while the band moves, the sections' states times this a sample
     int chunkLeft_ = 0;  // samples left in the chunk under way
 
     int meterCount_ = 0;

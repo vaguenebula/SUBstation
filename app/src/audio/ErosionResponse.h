@@ -1,13 +1,16 @@
 #pragma once
 // The Erosion device's maths, as its editor draws and reads it out: the noise's
 // band (its magnitude, its edges), the frequency the modulator plays, how far
-// Amount moves the delay, Noise Blend's weights. Worked out by the engine's own
+// Amount moves the delay, Noise Blend's weights, how much its `erosion` display
+// says it erodes now. Worked out by the engine's own
 // functions (engine/src/builtin/ErosionDesign.h), so the band drawn is the
 // filter that plays and the excursion read out is the one applied.
 
 #include <QList>
 #include <QPair>
 #include <QString>
+
+#include <vector>
 
 namespace sub::app {
 
@@ -37,11 +40,17 @@ double erosionExcursionMs(double amount, double sampleRate);
 // "±0.9 µs" below, "±0 µs" at 0.
 QString erosionExcursionText(double ms);
 
-// The device's latency in ms (2 ms, in whole samples).
-double erosionLatencyMs(double sampleRate);
-
 // Noise Blend's equal-power weights {sine, noise} for `blend` (%): exactly 1 and
 // 0 at the ends, as the engine's.
 QPair<double, double> erosionBlendWeights(double blend);
+
+// How much the device is eroding now, from what a refresh read of its `erosion`
+// display (dB, one value per erosion::kMeterSamples frames): the most of the
+// newest values, those covering the last kErosionRecentSeconds (about two
+// refreshes), -90 without any. A read can hold a long backlog (an editor shown,
+// or shown again, after the sound stopped reads up to 44 s of it at 48 kHz):
+// only its end is now.
+inline constexpr double kErosionRecentSeconds = 0.035;
+double erosionRecentDb(const std::vector<float>& values, double sampleRate);
 
 }  // namespace sub::app

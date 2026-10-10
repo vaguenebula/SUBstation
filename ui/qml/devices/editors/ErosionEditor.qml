@@ -83,7 +83,7 @@ Item {
             }
             ToolTip.visible: graphHover.hovered && !graph.dragging
             ToolTip.delay: 700
-            ToolTip.text: qsTr("Drag: Frequency across, Amount up and down (Shift: finely). Alt-drag up and down or the wheel: Filter Width. Behind it, the input's spectrum (filled) and the output's (line)")
+            ToolTip.text: qsTr("Drag: Frequency across, Amount up and down (Shift: finely). Alt-drag up and down or the wheel (Ctrl: finely): Filter Width. Behind it, the input's spectrum (filled) and the output's (line)")
         }
 
         Grid {

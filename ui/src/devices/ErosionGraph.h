@@ -15,7 +15,8 @@
 // Drag the dot (it jumps to the press) for the Frequency and the Amount; Shift
 // starts from where the dot is and moves it finely; Alt (Option) starts from the
 // dot too and drags up and down for the Filter Width (doubling every
-// kWidthPixels); the wheel sets the Filter Width. One undo step per drag, and per
+// kWidthPixels); the wheel sets the Filter Width, Ctrl+wheel finely (Shift+wheel
+// is the device chain's: it scrolls the chain). One undo step per drag, and per
 // burst of wheel notches.
 
 #include "analysis/Spectrum.h"
@@ -43,14 +44,19 @@ public:
     static constexpr double kHigh = 20000.0;
     static constexpr int kColumn = 2;                  // px per column of the shimmer and the spectra
     static constexpr double kWidthPixels = 40.0;       // Alt-dragged up this far, the Filter Width doubles
-    static constexpr double kWheelOctaves = 0.25;      // a wheel notch multiplies it by 2^0.25 (Shift: 2^(1/16))
+    static constexpr double kWheelOctaves = 0.25;      // a wheel notch multiplies it by 2^0.25 (Ctrl: 2^(1/16))
     static constexpr double kFine = 0.15;              // Shift-dragged, the dot moves this share of the mouse's way
     static constexpr int kWheelGestureMs = 400;        // wheel notches closer than this are one undo step
     static constexpr double kTopStrip = 14.0;          // over the plot: the source and the readout
+    static constexpr double kDotRadius = 5.0;          // the dot's ring (2 px wide),
+    static constexpr double kHaloGrowth = 6.0;         // and how far its halo reaches past it, eroding hard
 
     explicit ErosionGraph(QQuickItem* parent = nullptr);
 
     QRectF plot() const;
+    // Where the dot's centre goes up and down: the plot less the dot's reach, its halo's at the top (clear of
+    // the strip's texts) and its ring's at the bottom (inside the well).
+    QRectF travel() const;
     LogAxis frequencyAxis() const;
     double xOf(double freq) const;
     double freqAt(double x) const;
@@ -74,7 +80,8 @@ public:
     double noiseWeight() const { return noiseWeight_; }
     // How much the sound is being eroded (0..1, eased): what the shimmer, the halo and the spike's trembling follow.
     double activity() const { return activity_.value; }
-    // The loudest `erosion` value of the last refresh (dB; -90 without any).
+    // How much the last refresh says the device erodes now (dB; -90 without any): the newest `erosion`
+    // values it read (sub::app::erosionRecentDb), not a backlog's.
     double erosionDb() const { return erosionDb_; }
     // Whether the input's spectrum shows anything above its floor.
     bool spectrumLive() const { return !inColumns_.empty(); }

@@ -22,6 +22,7 @@
 // application layer includes this one.
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -159,7 +160,35 @@ inline Spread stereoSpread(double stereoPercent) noexcept {
     return {mid, w * mid, w * 0.25 * kPi};
 }
 
-// The noise generators' seeds (dsp::Noise, DspBlocks.h): mid and side.
+// The noise generators' seeds (dsp::Noise, DspBlocks.h): mid and side, each
+// salted with the instance's own number (instanceSalt), so Erosions set alike
+// don't modulate alike: two on double-tracked parts would otherwise wobble in
+// lockstep, and an export, which resets every device at once, would line them
+// all up. An instance keeps its salt for life: its reset() restarts its own
+// noise, so its renders repeat.
 constexpr uint32_t kMidSeed = 0x2545F491u, kSideSeed = 0x9E3779B9u;
+
+// How many Erosions have been made: each takes the count, as it is made, for
+// its number. (Tests set it back to 0 to make devices that play alike.)
+inline std::atomic<uint32_t> instancesMade{0};
+
+// An instance's number mixed into its salt (lowbias32: consecutive numbers give
+// unrelated salts; 0 gives 0, the plain seeds).
+inline uint32_t instanceSalt(uint32_t instance) noexcept {
+    uint32_t x = instance;
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A seed salted (never 0, which dsp::Noise has no sequence from).
+inline uint32_t saltedSeed(uint32_t seed, uint32_t salt) noexcept { return (seed ^ salt) != 0 ? seed ^ salt : seed; }
+
+// Audio frames per value of the device's `erosion` display (what it changed,
+// in dB): the editor reads that many frames into each value.
+constexpr int kMeterSamples = 256;
 
 }  // namespace sub::erosion

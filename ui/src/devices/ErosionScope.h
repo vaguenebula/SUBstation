@@ -19,6 +19,7 @@
 
 #include <QtQml/qqmlregistration.h>
 
+#include <utility>
 #include <vector>
 
 namespace sub::ui {
@@ -51,9 +52,19 @@ protected:
     void paint(SgPainter& painter) override;
 
 private:
+    // Values of one modulator not yet paired: the two are read one after the other, so the second read may
+    // hold values published between them, whose partners come with the next refresh.
+    struct Unpaired {
+        qint64 at = 0;  // the absolute index of the first
+        std::vector<float> values;
+    };
+    void take(Unpaired& unpaired, std::pair<qint64, std::vector<float>> read);
+
     std::vector<float> left_, right_;  // rings of kRing
     int head_ = 0;                     // where the next pair goes
     int count_ = 0;
+    Unpaired unpairedLeft_, unpairedRight_;
+    int trail_ = 2;  // pairs traced: kTrailSeconds at the engine's rate (worked out in refreshDisplays())
     double amount_ = 25.0, noiseWeight_ = 1.0;
     Eased activity_;
     Eased midRms_, sideRms_;  // the cloud's size

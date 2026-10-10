@@ -3,13 +3,15 @@
 // its latency, which the engine compensates; a sine puts sidebands where theory
 // says (Bessel functions of the modulation index) and Stereo puts the sides a
 // quarter cycle apart; the noise modulates as hard at any Frequency and Width
-// (its exact normalisation), Stereo decorrelates its sides, highs erode before
-// lows, Width spreads the sidebands; the output doesn't depend on how blocks are
-// split; every control changes without a click; automation through the engine
-// lands in its chunk, aligned; reset and a new rate start it afresh; it stays
-// finite at the extremes; silence comes out as exact zeros; one channel is the
-// left of two; its displays carry what the editor draws, and the band the
-// editor draws is the filter that plays.
+// (its exact normalisation), and goes on doing so while the band moves a long
+// way; two devices set alike don't share their noise; Stereo decorrelates its
+// sides, highs erode before lows, Width spreads the sidebands; the output
+// doesn't depend on how blocks are split; every control changes without a click
+// and lands where it was turned; automation through the engine lands in its
+// chunk, aligned; reset and a new rate start it afresh; it stays finite at the
+// extremes; silence comes out as exact zeros; one channel is the left of two;
+// its displays carry what the editor draws, and the band the editor draws is the
+// filter that plays.
 
 #include <algorithm>
 #include <cmath>
@@ -51,11 +53,14 @@ struct Change {
 // An Erosion on its own, outside an engine, at any sample rate: processed in
 // blocks, its changes handed over as automation (so its blocks split there) as
 // the renderer does. Its displays are read after every block (a stream keeps
-// only its latest 8192 values) and gathered from the start.
+// only its latest 8192 values) and gathered from the start. Each instance salts
+// its noise with a number of its own; `alike` makes it as the first one made
+// (the count set back to 0), so a test's devices share their noise, whichever
+// tests ran before.
 class Erosion {
 public:
-    explicit Erosion(double rate = kSampleRate, const Values& values = {})
-        : processor_(sub::BuiltinRegistry::instance().create("erosion")), rate_(rate) {
+    explicit Erosion(double rate = kSampleRate, const Values& values = {}, bool alike = true)
+        : processor_(make(alike)), rate_(rate) {
         for (const auto& [id, value] : values) set(id, value);
         processor_->prepare(rate, kBlock);
         const std::vector<sub::DisplayInfo> infos = processor_->displays();
@@ -121,6 +126,11 @@ public:
     }
 
 private:
+    static std::shared_ptr<sub::Processor> make(bool alike) {
+        if (alike) erosion::instancesMade.store(0);
+        return sub::BuiltinRegistry::instance().create("erosion");
+    }
+
     void readDisplays() {
         for (size_t i = 0; i < ids_.size(); ++i)
             positions_[i] = processor_->readDisplay(static_cast<int>(i), positions_[i], displays_[i]);
@@ -187,10 +197,11 @@ double bandEnergy(const Samples& x, double lo, double hi, int64_t from, int64_t 
     return sum;
 }
 
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d; a
-// smooth signal well below Nyquist hardly at all.
+// The largest 6th difference over [from, to): a steep high-pass (gain
+// (2 sin(pi f / rate))^6), 8 times (18 dB) more sensitive at Nyquist than at a
+// quarter of the sample rate and about 2·10^5 times more than at 2 kHz (48 kHz).
+// A step of d shows as up to 20 d; a smooth signal well below Nyquist hardly at
+// all.
 double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
     std::vector<double> d(x.begin(), x.end());
     for (int k = 0; k < 6; ++k)
@@ -356,6 +367,15 @@ TEST_CASE("at Amount 0 erosion is a clean delay of its latency") {
         const Samples& meter = device.display("erosion");
         CHECK_EQ(meter.size(), size_t{kSampleRate / 2 / 256});
         CHECK(allEqual(meter, -90.0));
+        // The modulators run on all the same (the scope traces them, and when Amount rises the device goes
+        // on as if it had eroded all along): they are what they are at any Amount.
+        Values eroding = values;
+        eroding.push_back({"amount", 25.f});
+        Erosion other(kSampleRate, eroding);
+        const auto eroded = other.playStereo(left, right);
+        CHECK(!allclose(eroded.first, l, 0.0, 0.01));
+        CHECK_ARRAY_EQUAL(device.display("mod_l"), other.display("mod_l"));
+        CHECK_ARRAY_EQUAL(device.display("mod_r"), other.display("mod_r"));
     }
 }
 
@@ -379,7 +399,8 @@ TEST_CASE("through the engine erosion at Amount 0 is transparent and aligned") {
 TEST_CASE("erosion's sine modulates the phase as theory says") {
     // A 1 kHz tone through a 3 kHz sine at Amount 30: E = 66.468 * 0.09 samples, so a
     // modulation index of 2 pi 1000 E / 48000; the carrier keeps J0 of it, the first
-    // sidebands (2 and 4 kHz) J1, the second (5 and 7 kHz) J2.
+    // sidebands (2 and 4 kHz) J1, the second (5 and 7 kHz) J2: within 0.1 % (they
+    // agree to 4e-5, the Hermite read's error).
     const double e = erosion::maxExcursionSamples(kSampleRate) * 0.09;
     CHECK_APPROX_TOL(e, 5.9821, 0.0, 1e-4);
     const double beta = 2.0 * kPi * 1000.0 * e / kSampleRate;
@@ -392,7 +413,7 @@ TEST_CASE("erosion's sine modulates the phase as theory says") {
     const std::pair<double, int> components[] = {{1000.0, 0}, {2000.0, 1}, {4000.0, 1}, {5000.0, 2}, {7000.0, 2}};
     for (const auto& [freq, order] : components) {
         INFO(std::to_string(freq) + " Hz");
-        CHECK_APPROX_REL(amplitudeAt(l, freq, from, n), 0.5 * std::abs(besselJ(order, beta)), 0.02);
+        CHECK_APPROX_REL(amplitudeAt(l, freq, from, n), 0.5 * std::abs(besselJ(order, beta)), 1e-3);
     }
     CHECK_APPROX_TOL(0.5 * besselJ(0, beta), 0.4262, 0.0, 1e-4);
     CHECK_APPROX_TOL(0.5 * besselJ(1, beta), 0.1811, 0.0, 1e-4);
@@ -475,7 +496,6 @@ TEST_CASE("erosion's noise modulates as hard at any Frequency and Width") {
         }
         CHECK_APPROX_REL(gain, sum, 1e-9);
         CHECK_APPROX_REL(gain, floatSum, 1e-4);
-        CHECK_APPROX_REL(erosion::band(freq, width, rate).scale, std::sqrt(1.5 / gain), 1e-12);
     }
     // Uniform noise through the pair, times the scale: RMS 1/sqrt 2.
     Pair pair(5000.0, 0.1, 48000.0);
@@ -489,6 +509,69 @@ TEST_CASE("erosion's noise modulates as hard at any Frequency and Width") {
         sum += y * y;
     }
     CHECK_APPROX_REL(std::sqrt(sum / kCount), erosion::kNoiseRms, 0.01);
+}
+
+TEST_CASE("erosion's noise modulates as hard while its band moves a long way") {
+    // The sections hold the energy they built at the old band, and the noise's gain is the new band's: moved
+    // far down or widened, that energy would modulate several times too hard, and narrowed too weakly, for a
+    // few hundred ms, until it decayed at the new band's rate. The modulator's RMS in each 100 ms after the
+    // step, over 32 devices (each its own noise: a narrow band's level wanders slowly), stays near 1/sqrt 2.
+    struct Move {
+        const char* id;
+        float to;
+        float freq, width;
+    };
+    const Move moves[] = {{"freq", 30.f, 5000.f, 0.1f},
+                          {"freq", 20.f, 18000.f, 0.1f},
+                          {"width", 0.1f, 20.f, 10.f},
+                          {"width", 10.f, 20.f, 0.1f}};
+    constexpr int kRuns = 32, kWindows = 3;
+    const int64_t window = kSampleRate / 10;
+    for (const Move& move : moves) {
+        INFO(std::string(move.id) + " to " + std::to_string(move.to) + " from " + std::to_string(move.freq) + " Hz, " +
+             std::to_string(move.width) + " oct");
+        erosion::instancesMade.store(0);  // (the devices' noises the same each time the test runs)
+        std::vector<double> power(kWindows, 0.0);
+        for (int run = 0; run < kRuns; ++run) {
+            Erosion device(kSampleRate,
+                           {{"blend", 100.f}, {"amount", 50.f}, {"freq", move.freq}, {"width", move.width}}, false);
+            const int64_t at = kSampleRate + 661 * run;  // (the band settled; a little later each time)
+            device.play(Samples(static_cast<size_t>(at + kWindows * window), 0.f), {{at, move.id, move.to}});
+            const Samples& mod = device.display("mod_l");
+            for (int w = 0; w < kWindows; ++w) {
+                const double level = rms(slice(mod, at + w * window, at + (w + 1) * window));
+                power[static_cast<size_t>(w)] += level * level / kRuns;
+            }
+        }
+        for (int w = 0; w < kWindows; ++w) {
+            const double level = std::sqrt(power[static_cast<size_t>(w)]);
+            INFO("from " + std::to_string(100 * w) + " ms: " + std::to_string(level));
+            CHECK(level < 1.5 * erosion::kNoiseRms);
+            CHECK(level > erosion::kNoiseRms / 1.5);
+        }
+    }
+}
+
+TEST_CASE("two erosions set alike don't share their noise") {
+    // Each instance salts its noises' seeds with a number of its own: two on double-tracked parts don't
+    // wobble in lockstep, nor after a reset made together (an export's). Each repeats itself after one.
+    const Values values = {{"blend", 100.f}, {"freq", 2000.f}, {"width", 5.f}, {"amount", 50.f}};
+    const Samples in = tone(440.0, kSampleRate / 2);
+    Erosion one(kSampleRate, values), two(kSampleRate, values, false);
+    const Samples first = one.play(in), second = two.play(in);
+    const int64_t from = 4800, n = kSampleRate / 2 - 4800;
+    CHECK(!allclose(first, second, 0.0, 0.01));
+    CHECK(std::abs(correlationOf(one.display("mod_l"), two.display("mod_l"), from, n)) < 0.05);
+    one.processor().reset();
+    two.processor().reset();
+    CHECK_ARRAY_EQUAL(one.play(in), first);
+    CHECK_ARRAY_EQUAL(two.play(in), second);
+    const int64_t again = static_cast<int64_t>(in.size()) + from;
+    CHECK(std::abs(correlationOf(one.display("mod_l"), two.display("mod_l"), again, n)) < 0.05);
+    // The salts: the first made has the plain seeds; consecutive ones unrelated; a salted seed never 0.
+    CHECK_EQ(erosion::instanceSalt(0), 0u);
+    CHECK(erosion::instanceSalt(1) != erosion::instanceSalt(2));
+    CHECK_EQ(erosion::saltedSeed(erosion::kMidSeed, erosion::kMidSeed), erosion::kMidSeed);
 }
 
 TEST_CASE("erosion's wide noise is independent per side") {
@@ -625,6 +708,21 @@ TEST_CASE("changing any of erosion's controls is click-free") {
         INFO("smoothed " + std::to_string(smoothed) + ", spliced " + std::to_string(click));
         CHECK(smoothed < 3e-4);
         CHECK(click > 30.0 * smoothed);
+
+        // And it lands where it was turned: from 100 ms after the step (95 % of a glide takes about 50 ms)
+        // the device plays as one set there all along does (the same noise: alike devices).
+        const int64_t landed = kAt + 4800, n = static_cast<int64_t>(in.size()) - landed;
+        if (step.id == "freq") {  // (the sine's phase differs, so where its energy is: 80 Hz, not 40)
+            CHECK(amplitudeAt(smooth.display("mod_l"), 80.0, landed, kSampleRate / 2) > 0.98);
+            CHECK(amplitudeAt(smooth.display("mod_l"), 40.0, landed, kSampleRate / 2) < 0.02);
+        } else {
+            for (const char* id : {"mod_l", "mod_r"}) {
+                INFO(id);
+                CHECK(correlationOf(smooth.display(id), after.display(id), landed, n) > 0.999);
+            }
+            CHECK(correlationOf(out.first, later.first, landed, n) > 0.999);
+            CHECK(correlationOf(out.second, later.second, landed, n) > 0.999);
+        }
     }
 }
 
@@ -669,7 +767,7 @@ TEST_CASE("erosion's automation plays through the engine") {
 }
 
 TEST_CASE("reset and a new sample rate start erosion afresh") {
-    const Values values = {{"blend", 60.f}, {"stereo", 70.f}, {"amount", 50.f}, {"freq", 700.f}};
+    const Values values = {{"blend", 60.f}, {"stereo", 70.f}, {"amount", 50.f}, {"freq", 15000.f}};
     const Samples a = noise(kSampleRate / 2, 5), b = noise(kSampleRate / 2, 6);
     Erosion fresh(kSampleRate, values);
     const auto want = fresh.playStereo(a, b);
@@ -680,12 +778,16 @@ TEST_CASE("reset and a new sample rate start erosion afresh") {
     CHECK_ARRAY_EQUAL(got.first, want.first);
     CHECK_ARRAY_EQUAL(got.second, want.second);
 
-    // A new rate: its latency and output as a fresh device's there.
-    device.processor().prepare(96000.0, kBlock);
-    CHECK_EQ(device.processor().latencySamples(), 192);
-    Erosion at96(96000.0, values);
-    const Samples c = noise(48000, 7);
-    CHECK_ARRAY_EQUAL(device.play(c), at96.play(c));
+    // A new rate: its latency and output as a fresh device's there (at 32 kHz the modulator is held to
+    // 0.45 of the rate, 14.4 kHz).
+    for (const auto& [rate, latency] : {std::pair{96000.0, 192}, std::pair{32000.0, 64}}) {
+        INFO(std::to_string(rate));
+        device.processor().prepare(rate, kBlock);
+        CHECK_EQ(device.processor().latencySamples(), latency);
+        Erosion there(rate, values);
+        const Samples c = noise(48000, 7);
+        CHECK_ARRAY_EQUAL(device.play(c), there.play(c));
+    }
 }
 
 TEST_CASE("erosion stays stable at the extremes") {
@@ -761,8 +863,13 @@ TEST_CASE("erosion on one channel is the left of two") {
         CHECK_ARRAY_EQUAL(mono.display("mod_r"), mono.display("mod_l"));
         if (stereo > 0.f) CHECK(!allclose(l, r, 0.0, 0.01));
     }
-    // From one channel to two: the second starts from silence (it has no history).
+    // From two channels to one and back: the second starts from silence again (what it held from before the
+    // one-channel stretch is stale), as it does from one channel to two.
     Erosion device(kSampleRate, {{"amount", 0.f}});
+    {
+        Samples a = noise(4800, 19), b = noise(4800, 20);
+        device.run({&a, &b});
+    }
     device.play(noise(4800, 14));
     Samples l = noise(4800, 15), r = noise(4800, 16);
     const Samples rightIn = r;

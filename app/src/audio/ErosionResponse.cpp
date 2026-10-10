@@ -3,6 +3,9 @@
 #include "builtin/ErosionDesign.h"
 #include "model/Numbers.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace sub::app {
 
 static_assert(kErosionMinFrequency == sub::erosion::kMinFrequency &&
@@ -38,13 +41,20 @@ QString erosionExcursionText(double ms) {
     return plusMinus + QStringLiteral("0 µs");
 }
 
-double erosionLatencyMs(double sampleRate) {
-    return sampleRate > 0.0 ? 1000.0 * sub::erosion::centreDelaySamples(sampleRate) / sampleRate : 0.0;
-}
-
 QPair<double, double> erosionBlendWeights(double blend) {
     const sub::erosion::Weights weights = sub::erosion::blendWeights(blend);
     return {weights.sine, weights.noise};
+}
+
+double erosionRecentDb(const std::vector<float>& values, double sampleRate) {
+    const auto recent = static_cast<size_t>(
+        std::max(1.0, std::ceil(kErosionRecentSeconds * sampleRate / sub::erosion::kMeterSamples)));
+    double db = -90.0;
+    for (size_t i = values.size() - std::min(values.size(), recent); i < values.size(); ++i) {
+        if (std::isfinite(values[i]))
+            db = std::max(db, double(values[i]));
+    }
+    return db;
 }
 
 }  // namespace sub::app

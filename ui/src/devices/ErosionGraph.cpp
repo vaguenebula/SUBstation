@@ -34,6 +34,8 @@ constexpr float kRetarget = 0.08f;          // and the chance a knot takes a fre
 constexpr double kSpikePerTick = 0.3;       // the sine's spike: its wave's phase, radians a refresh at full activity,
 constexpr double kSpikeSway = 2.0;          // how far it sways (px) then,
 constexpr double kSpikeWavelength = 24.0;   // and its wavelength (px)
+constexpr double kWhiskerGap = 3.0;         // the band's -3 dB edges' whiskers: this far out from the outline,
+constexpr double kWhiskerLength = 6.0;      // and this long (px)
 
 double rounded(double value, double step) { return std::round(value / step) * step; }
 
@@ -61,6 +63,10 @@ ErosionGraph::ErosionGraph(QQuickItem* parent) : DeviceCanvas(parent) {
 
 QRectF ErosionGraph::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, kTopStrip, -1, -1); }
 
+QRectF ErosionGraph::travel() const {
+    return plot().adjusted(0, kDotRadius + kHaloGrowth + 1.0, 0, -(kDotRadius + 1.0));
+}
+
 LogAxis ErosionGraph::frequencyAxis() const {
     const QRectF r = plot();
     return {kLow, kHigh, r.left(), r.width()};
@@ -71,12 +77,12 @@ double ErosionGraph::xOf(double freq) const { return frequencyAxis().position(fr
 double ErosionGraph::freqAt(double x) const { return frequencyAxis().valueAt(x); }
 
 double ErosionGraph::yOfAmount(double amount) const {
-    const QRectF r = plot();
-    return r.bottom() - std::clamp(amount, 0.0, 100.0) / 100.0 * r.height();
+    const QRectF r = travel();
+    return r.bottom() - std::clamp(amount, 0.0, 100.0) / 100.0 * std::max(0.0, r.height());
 }
 
 double ErosionGraph::amountAt(double y) const {
-    const QRectF r = plot();
+    const QRectF r = travel();
     return r.height() > 0.0 ? std::clamp((r.bottom() - y) / r.height() * 100.0, 0.0, 100.0) : 0.0;
 }
 
@@ -173,12 +179,9 @@ void ErosionGraph::refreshDisplays() {
     }
     const bool live = !inColumns_.empty() || !outColumns_.empty();
 
-    // How much is being eroded: rising quickly, falling back over half a second.
-    erosionDb_ = -90.0;
-    for (const float db : erosion) {
-        if (std::isfinite(db))
-            erosionDb_ = std::max(erosionDb_, double(db));
-    }
+    // How much is being eroded now (not a backlog's worth: shown after the sound stopped, the first read
+    // holds the loud past): rising quickly, falling back over half a second.
+    erosionDb_ = sub::app::erosionRecentDb(erosion, rate);
     activity_.target = std::clamp((erosionDb_ - kActivityFloorDb) / kActivitySpanDb, 0.0, 1.0);
     const bool moved = activity_.step(activity_.target > activity_.value ? kActivityRise : kActivityFall);
     if (activity_.value > 0.0) {
@@ -305,11 +308,17 @@ void ErosionGraph::wheelEvent(QWheelEvent* event) {
         event->ignore();
         return;
     }
-    // Notches in a quick burst are one undo step.
+    if (drag_ == Drag::Point) {
+        // (Dragging the dot, the drag has the mouse: a notch would split its undo step in two.)
+        event->accept();
+        return;
+    }
+    // Notches in a quick burst are one undo step. Ctrl turns finely (Shift+wheel scrolls the device chain
+    // before the graph sees it).
     if (wheelGesture_.isEmpty() || !wheelClock_.isValid() || wheelClock_.elapsed() > kWheelGestureMs)
         wheelGesture_ = newGestureKey();
     wheelClock_.start();
-    const double octaves = delta / 120.0 * ((event->modifiers() & Qt::ShiftModifier) ? 1.0 / 16.0 : kWheelOctaves);
+    const double octaves = delta / 120.0 * ((event->modifiers() & Qt::ControlModifier) ? 1.0 / 16.0 : kWheelOctaves);
     const double width = rounded(
         std::clamp(width_ * std::exp2(octaves), sub::app::kErosionMinWidth, sub::app::kErosionMaxWidth), 0.001);
     touch(QStringLiteral("width"));
@@ -421,14 +430,18 @@ void ErosionGraph::paint(SgPainter& p) {
             outline[i] = QPointF(xOf(frequencies_[i]), r.bottom() - magnitudes_[i] * h);
         drawGlowPolyline(p, outline, withAlpha(Theme::kAccent, int(std::lround(255 * noiseWeight_))), 1.5);
     }
+    // Its -3 dB edges: a short whisker out from each, level with where the outline crosses it (an upright
+    // tick would lie along a narrow band's steep outline).
     if (noiseWeight_ > 0.05 && h >= 1.0) {
-        const QColor tick = altHeld_ || drag_ == Drag::Width ? Theme::kText : Theme::kTextDim;
+        const QColor tick = withAlpha(altHeld_ || drag_ == Drag::Width ? Theme::kText : Theme::kTextDim,
+                                      int(std::lround(255 * noiseWeight_)));
         const double y = r.bottom() - 0.70710678 * h;
-        for (const double edge : {edges_.first, edges_.second}) {
+        const std::pair<double, double> whiskers[] = {{edges_.first, -1.0}, {edges_.second, 1.0}};
+        for (const auto& [edge, out] : whiskers) {
             if (kLow <= edge && edge <= kHigh) {
                 const double x = xOf(edge);
-                p.drawLine(QPointF(x, y - 4), QPointF(x, y + 4), withAlpha(tick, int(std::lround(255 * noiseWeight_))),
-                           1.0, Qt::FlatCap);
+                p.drawLine(QPointF(x + out * kWhiskerGap, y), QPointF(x + out * (kWhiskerGap + kWhiskerLength), y),
+                           tick, 1.0, Qt::FlatCap);
             }
         }
     }
@@ -461,11 +474,13 @@ void ErosionGraph::paint(SgPainter& p) {
     p.restore();
 
     // The dot: a halo while it erodes, dim at Amount 0.
-    if (activity > 0.0)
-        p.fillEllipse(at, 5 + 6 * activity, 5 + 6 * activity,
-                      withAlpha(Theme::kAccent, int(std::lround(60 * activity))));
-    p.fillEllipse(at, 4.5, 4.5, Theme::kPanelAlt);
-    p.drawEllipse(QRectF(at.x() - 5, at.y() - 5, 10, 10), amount_ > 0.0 ? Theme::kAccent : Theme::kTextDim, 2);
+    if (activity > 0.0) {
+        const double halo = kDotRadius + kHaloGrowth * activity;
+        p.fillEllipse(at, halo, halo, withAlpha(Theme::kAccent, int(std::lround(60 * activity))));
+    }
+    p.fillEllipse(at, kDotRadius - 0.5, kDotRadius - 0.5, Theme::kPanelAlt);
+    p.drawEllipse(QRectF(at.x() - kDotRadius, at.y() - kDotRadius, 2 * kDotRadius, 2 * kDotRadius),
+                  amount_ > 0.0 ? Theme::kAccent : Theme::kTextDim, 2);
 
     // What modulates, and where and how far.
     QString source;

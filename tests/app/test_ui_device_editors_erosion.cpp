@@ -1,11 +1,14 @@
 // The Erosion's editor (ui/qml/devices/editors/ErosionEditor.qml, ErosionGraph,
 // ErosionScope): loaded as the device view loads it, over a real engine; its
-// knobs, its X-Y display's drags (Shift, Alt) and wheel, what the engine's
-// displays bring it, and what the engine plays after. With
+// knobs, its X-Y display's drags (Shift, Alt) and wheel (in the device chain
+// too), what the engine's displays bring it (and not a backlog's worth after the
+// sound stopped), and what the engine plays after. With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as PNGs.
 
+#include <QCursor>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoStack>
@@ -18,6 +21,7 @@
 #include "audio/EngineBridge.h"
 #include "audio/ErosionResponse.h"
 #include "controls/KnobItem.h"
+#include "devices/DeviceChainArea.h"
 #include "devices/DeviceParam.h"
 #include "devices/ErosionGraph.h"
 #include "devices/ErosionScope.h"
@@ -78,6 +82,15 @@ class TestUiDeviceEditorsErosion : public QObject, public sub::app::test::Editor
     }
 
     static bool near(double a, double b, double relative) { return std::abs(a / b - 1.0) <= relative; }
+
+    // A knob's drag puts the pointer back where it was pressed when it is released (DragCursor), and the
+    // window system delivers that as a move of its own, later: let it land before the next press, or it
+    // lands in the next drag (as a jump from where the last knob was).
+    void pointerBackAt(QPoint pressed) {
+        const QPoint global = window_->mapToGlobal(pressed);
+        (void)QTest::qWaitFor([&] { return QCursor::pos() == global; }, 500);  // (if it can be warped at all)
+        QTest::qWait(50);
+    }
 
     // As playing does: rendered a piece at a time, the displays refreshed after each (each render starts
     // afresh, so pieces as long as the analyzer's window keep the seams out of sight).
@@ -214,6 +227,7 @@ private Q_SLOTS:
             for (int dy = 10; dy <= 30; dy += 10)
                 dragTo(window_, at - QPoint(0, dy));
             QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at - QPoint(0, 30));
+            pointerBackAt(at);
             if (before < dial->to())
                 QVERIFY2(value(id) > before, id);
             else
@@ -298,6 +312,16 @@ private Q_SLOTS:
         QCOMPARE(erosionExcursionText(0.0), QStringLiteral("±0 µs"));
         QCOMPARE(erosionExcursionText(0.0009), QStringLiteral("±0.9 µs"));
 
+        // The dot's travel keeps its ring and its halo clear of the strip's texts at Amount 100, and its ring
+        // inside the well at 0; across it, Amount and height map both ways.
+        const QRectF plot = graph->plot();
+        QVERIFY(graph->yOfAmount(100.0) - ErosionGraph::kDotRadius - ErosionGraph::kHaloGrowth > plot.top());
+        QVERIFY(graph->yOfAmount(0.0) + ErosionGraph::kDotRadius + 1.0 <= plot.bottom());
+        for (const double amount : {0.0, 12.5, 60.0, 100.0})
+            QVERIFY(std::abs(graph->amountAt(graph->yOfAmount(amount)) - amount) < 1e-9);
+        QCOMPARE(graph->amountAt(plot.top()), 100.0);
+        QCOMPARE(graph->amountAt(plot.bottom()), 0.0);
+
         // Narrower, fewer frequencies are well inside the band; narrower than a pixel, it still peaks at the dot.
         const auto above = [&] {
             const std::vector<double>& magnitudes = graph->magnitudes();
@@ -370,6 +394,20 @@ private Q_SLOTS:
         QVERIFY2(std::abs(value("amount") - 50.0) < 1.0, qPrintable(QString::number(value("amount"))));
         undo()->undo();
 
+        // A wheel notch while the dot is dragged does nothing (the drag has the mouse): still one undo step.
+        steps = undo()->index();
+        const QPoint start = scenePoint(graph, QPointF(graph->xOf(3000.0), graph->yOfAmount(30.0)));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, start);
+        dragTo(window_, start + QPoint(10, -10));
+        wheel(start + QPoint(10, -10), 120);
+        QCOMPARE(value("width"), 2.5);
+        dragTo(window_, start + QPoint(20, -20));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, start + QPoint(20, -20));
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+        QCOMPARE(value("freq"), 1000.0);
+        QCOMPARE(value("amount"), 25.0);
+
         // Other buttons go on to the frame (its menu).
         steps = undo()->index();
         QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier, centerOf(graph));
@@ -401,7 +439,7 @@ private Q_SLOTS:
         undo()->undo();
         QCOMPARE(value("width"), 2.5);
 
-        // The wheel: a quarter octave a notch, notches in a quick burst one undo step.
+        // The wheel: a notch multiplies the Width by 2^(1/4) (about 19 %), notches in a quick burst one undo step.
         steps = undo()->index();
         const QPoint middle = centerOf(graph);
         wheel(middle, 120);
@@ -414,7 +452,7 @@ private Q_SLOTS:
         QVERIFY2(near(value("width"), 2.5 * std::exp2(0.75), 0.005), qPrintable(QString::number(value("width"))));
         QCOMPARE(undo()->index(), steps + 2);
         const double before = value("width");
-        wheel(middle, 120, Qt::ShiftModifier);  // finely
+        wheel(middle, 120, Qt::ControlModifier);  // finely: 2^(1/16)
         QVERIFY2(near(value("width"), before * std::exp2(1.0 / 16.0), 0.005),
                  qPrintable(QString::number(value("width"))));
         wheel(middle, -120 * 40);  // (held at the bottom of its range)
@@ -439,6 +477,73 @@ private Q_SLOTS:
         QCOMPARE(undo()->index(), steps + 1);
         undo()->undo();
         QCOMPARE(value("width"), 2.5);
+    }
+
+    void wheelInTheDeviceChain() {
+        // In the device view the editor sits in a DeviceChainArea, which takes Shift+wheel anywhere over the
+        // chain to scroll it before the graph sees it: the fine wheel is Ctrl's, which the chain lets through,
+        // as it does the plain wheel.
+        QQuickItem* view = showErosion();
+        QVERIFY(view);
+        auto* graph = find<ErosionGraph>(view, QStringLiteral("erosionGraph"));
+        QVERIFY(graph);
+        QQuickItem* body = view->parentItem();  // (the host's loader, at the window's top left)
+        QQuickItem* top = body->parentItem();
+        auto* chain = new DeviceChainArea;  // (parented once made: it watches its window's events from then)
+        chain->setParentItem(top);
+        chain->setSize(top->size());
+        auto* content = new QQuickItem(chain);  // a chain wider than the view, to scroll
+        content->setSize(QSizeF(4 * top->width(), top->height()));
+        chain->setContent(content);
+        body->setParentItem(chain);
+        const auto restore = qScopeGuard([&] {
+            body->setParentItem(top);
+            delete chain;
+        });
+        const QPoint middle = centerOf(graph);
+        wheel(middle, 120);
+        QVERIFY2(near(value("width"), 2.5 * std::exp2(0.25), 0.005), qPrintable(QString::number(value("width"))));
+        const double before = value("width");
+        QTest::qWait(500);  // (a new burst)
+        wheel(middle, 120, Qt::ControlModifier);
+        QVERIFY2(near(value("width"), before * std::exp2(1.0 / 16.0), 0.005),
+                 qPrintable(QString::number(value("width"))));
+        const double fine = value("width");
+        wheel(middle, -120, Qt::ShiftModifier);
+        QCOMPARE(value("width"), fine);  // the chain's: it scrolled
+        QCOMPARE(chain->contentX(), double(DeviceChainArea::kWheelScroll));
+    }
+
+    void quietAfterTheSoundStopped() {
+        // An editor shown after the sound stopped, or shown again, reads the backlog of what was eroded (the
+        // `erosion` display keeps 44 s of it): only its newest values are now, so in silence it stays still.
+        QQuickItem* view = showErosion(buzz(kSampleRate));  // (a second of it, then silence)
+        QVERIFY(view);
+        auto* graph = find<ErosionGraph>(view, QStringLiteral("erosionGraph"));
+        auto* scope = find<ErosionScope>(view, QStringLiteral("erosionScope"));
+        QVERIFY(graph && scope);
+        set("amount", 60.0);
+        engine()->renderOffline(0.0, 3 * kSampleRate);  // eroded, then two seconds of silence: not read yet
+        refreshDisplays();
+        QCOMPARE(graph->erosionDb(), -90.0);
+        QCOMPARE(graph->activity(), 0.0);
+        QCOMPARE(scope->activity(), 0.0);
+
+        // Hidden while it played and stopped, then shown again: the same.
+        view->setVisible(false);
+        engine()->renderOffline(0.0, 3 * kSampleRate);
+        refreshDisplays();  // (not read: hidden)
+        view->setVisible(true);
+        refreshDisplays();
+        QCOMPARE(graph->erosionDb(), -90.0);
+        QCOMPARE(graph->activity(), 0.0);
+        QCOMPARE(scope->activity(), 0.0);
+
+        // While it plays, it shows.
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        refreshDisplays();
+        QVERIFY2(graph->erosionDb() > -40.0, qPrintable(QString::number(graph->erosionDb())));
+        QVERIFY(graph->activity() > 0.1 && scope->activity() > 0.1);
     }
 
     void displaysReachTheEditor() {

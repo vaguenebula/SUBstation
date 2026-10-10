@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 
 namespace sub::ui {
 
@@ -59,19 +60,48 @@ void ErosionScope::sync() {
     update();
 }
 
+void ErosionScope::take(Unpaired& unpaired, std::pair<qint64, std::vector<float>> read) {
+    auto& [at, values] = read;
+    if (values.empty())
+        return;
+    if (!unpaired.values.empty() && unpaired.at + qint64(unpaired.values.size()) == at) {
+        unpaired.values.insert(unpaired.values.end(), values.begin(), values.end());
+    } else {  // (the first read, or one after a gap: read too late to follow on, or from a new processor)
+        unpaired.at = at;
+        unpaired.values = std::move(values);
+    }
+    if (unpaired.values.size() > size_t(kRing)) {  // (only the latest can go in the ring)
+        const size_t extra = unpaired.values.size() - size_t(kRing);
+        unpaired.values.erase(unpaired.values.begin(), unpaired.values.begin() + std::ptrdiff_t(extra));
+        unpaired.at += qint64(extra);
+    }
+}
+
 void ErosionScope::refreshDisplays() {
-    // The modulators, paired by their absolute index (a value published between the two reads waits).
-    const auto [leftAt, left] = readDisplayAt(QStringLiteral("mod_l"));
-    const auto [rightAt, right] = readDisplayAt(QStringLiteral("mod_r"));
+    // The modulators, paired by their absolute index. They are read one after the other, so the second
+    // read may hold values the engine published between the two: those wait for their partners.
+    take(unpairedLeft_, readDisplayAt(QStringLiteral("mod_l")));
+    take(unpairedRight_, readDisplayAt(QStringLiteral("mod_r")));
+    const qint64 leftAt = unpairedLeft_.at, rightAt = unpairedRight_.at;
     const qint64 from = std::max(leftAt, rightAt);
-    const qint64 to = std::min(leftAt + qint64(left.size()), rightAt + qint64(right.size()));
+    const qint64 to = std::min(leftAt + qint64(unpairedLeft_.values.size()),
+                               rightAt + qint64(unpairedRight_.values.size()));
     for (qint64 i = std::max(from, to - kRing); i < to; ++i) {
-        left_[size_t(head_)] = left[size_t(i - leftAt)];
-        right_[size_t(head_)] = right[size_t(i - rightAt)];
+        left_[size_t(head_)] = unpairedLeft_.values[size_t(i - leftAt)];
+        right_[size_t(head_)] = unpairedRight_.values[size_t(i - rightAt)];
         head_ = (head_ + 1) % kRing;
         count_ = std::min(count_ + 1, kRing);
     }
     const bool came = to > from;
+    // What was paired (or can't be any more: older than the other's) goes; the rest waits.
+    for (Unpaired* unpaired : {&unpairedLeft_, &unpairedRight_}) {
+        const qint64 end = unpaired->at + qint64(unpaired->values.size());
+        const qint64 keep = std::max(unpaired->at, std::min(end, std::max(to, from)));
+        unpaired->values.erase(unpaired->values.begin(),
+                               unpaired->values.begin() + std::ptrdiff_t(keep - unpaired->at));
+        unpaired->at = keep;
+    }
+    trail_ = std::max(2, int(std::lround(kTrailSeconds * sampleRate())));
     // The cloud's size: the mid's and the side's RMS over the latest pairs, eased.
     if (came) {
         const int n = std::min(count_, kCloudPairs);
@@ -88,11 +118,8 @@ void ErosionScope::refreshDisplays() {
     bool cloudMoved = midRms_.step(kCloudEase, 1e-3);
     cloudMoved = sideRms_.step(kCloudEase, 1e-3) || cloudMoved;
 
-    double db = -90.0;
-    for (const float value : readDisplay(QStringLiteral("erosion"))) {
-        if (std::isfinite(value))
-            db = std::max(db, double(value));
-    }
+    // How much is being eroded now: the newest values (the read may hold a backlog's).
+    const double db = sub::app::erosionRecentDb(readDisplay(QStringLiteral("erosion")), sampleRate());
     activity_.target = std::clamp((db - kActivityFloorDb) / kActivitySpanDb, 0.0, 1.0);
     const bool moved = activity_.step(activity_.target > activity_.value ? kActivityRise : kActivityFall);
 
@@ -123,7 +150,7 @@ void ErosionScope::paint(SgPainter& p) {
 
     // The trace: the latest pairs, mid up and side across. Its radius eases towards the rim (tanh): a sine's
     // swing lands at 0.8 of it, and noise peaks round off into it instead of piling up on it.
-    const int n = std::min(count_, std::max(2, int(std::lround(kTrailSeconds * sampleRate()))));
+    const int n = std::min(count_, trail_);
     if (n < 2)
         return;
     const double r = radius - 2.0;
