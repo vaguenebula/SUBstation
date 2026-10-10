@@ -36,6 +36,10 @@ Note note(int pitch, double start, double length, std::vector<BendPoint> bend = 
     return n;
 }
 
+// An array holding `inner`. (Not QJsonArray{inner}: MSVC takes a braced array
+// of one array as a copy of it, not an array holding it.)
+QJsonArray holding(const QJsonArray& inner) { return QJsonArray{QJsonValue(inner)}; }
+
 std::vector<double> times(const Note& n) {
     std::vector<double> out;
     for (const BendPoint& p : n.bend) out.push_back(test::round6(p.time));
@@ -217,9 +221,9 @@ private Q_SLOTS:
         QCOMPARE(saved[0].toArray().size(), 6);  // (its fifth value written: false)
         QCOMPARE(saved[0].toArray()[4].toBool(), false);
         QCOMPARE(saved[0].toArray()[5].toObject()[QStringLiteral("bend")].toArray(),
-                 (QJsonArray{QJsonArray{0.5, 2.0, -0.25}}));
+                 holding(QJsonArray{0.5, 2.0, -0.25}));
         QCOMPARE(saved[0].toArray()[5].toObject()[QStringLiteral("vibrato")].toArray(),
-                 (QJsonArray{QJsonArray{0.25, 0.5, 0.75, 6.0, 0.5}}));
+                 holding(QJsonArray{0.25, 0.5, 0.75, 6.0, 0.5}));
         QCOMPARE(saved[1].toArray().size(), 4);  // unbent notes as they were
         Project loaded;
         loadProject(loaded, target);
@@ -242,7 +246,7 @@ private Q_SLOTS:
                                          QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("c")},
                                                                 {QStringLiteral("start_beat"), 0},
                                                                 {QStringLiteral("duration_beats"), 4},
-                                                                {QStringLiteral("notes"), QJsonArray{noteData}}}}}}}}};
+                                                                {QStringLiteral("notes"), holding(noteData)}}}}}}}};
             QFile file(target);
             QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
             file.write(QJsonDocument(data).toJson());
@@ -250,15 +254,15 @@ private Q_SLOTS:
         Project project;
         write(QJsonArray{60, 0, 1, 100, false, 3});
         QVERIFY_THROWS_EXCEPTION(ProjectFileError, loadProject(project, target));
-        write(QJsonArray{60, 0, 1, 100, false, QJsonObject{{QStringLiteral("bend"), QJsonArray{QJsonArray{0.5, 1}}}}});
+        write(QJsonArray{60, 0, 1, 100, false, QJsonObject{{QStringLiteral("bend"), holding(QJsonArray{0.5, 1})}}});
         QVERIFY_THROWS_EXCEPTION(ProjectFileError, loadProject(project, target));
         // Numbers as text may say "nan" or "inf": not in a bend (the pitch would be).
         write(QJsonArray{60, 0, 1, 100, false,
-                         QJsonObject{{QStringLiteral("bend"), QJsonArray{QJsonArray{0.5, QStringLiteral("nan"), 0}}}}});
+                         QJsonObject{{QStringLiteral("bend"), holding(QJsonArray{0.5, QStringLiteral("nan"), 0})}}});
         QVERIFY_THROWS_EXCEPTION(ProjectFileError, loadProject(project, target));
         write(QJsonArray{60, 0, 1, 100, false,
                          QJsonObject{{QStringLiteral("vibrato"),
-                                      QJsonArray{QJsonArray{QStringLiteral("inf"), 1, 0.5, 5.5, 0.3}}}}});
+                                      holding(QJsonArray{QStringLiteral("inf"), 1, 0.5, 5.5, 0.3})}}});
         QVERIFY_THROWS_EXCEPTION(ProjectFileError, loadProject(project, target));
         // Points out of order load in order; out of range, held to it.
         write(QJsonArray{60, 0, 1, 100, false,
