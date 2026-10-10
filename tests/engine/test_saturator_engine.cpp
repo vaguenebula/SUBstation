@@ -980,27 +980,27 @@ TEST_CASE("the saturator's displays") {
     const Samples in = sine(1000.0, 1.0, 0.5);
     // In blocks of 256 (two meter values each), and of 100 with automation (that changes
     // nothing) splitting them at odd frames: the meters count across every stretch.
-    const std::vector<Change> splits = {{333, "drive", 0.f}, {1001, "drive", 0.f}, {2777, "drive", 0.f}};
+    std::vector<Change> splits;
+    for (int64_t at = 0; at < static_cast<int64_t>(in.size()); at += 4096)
+        for (const int64_t frame : {333, 1001, 2777}) splits.push_back({at + frame, "drive", 0.f});
     for (const auto& [channels, block] : {std::pair{2, 256}, std::pair{1, 256}, std::pair{2, 100}, std::pair{1, 100}}) {
         INFO(std::to_string(channels) + " channels, blocks of " + std::to_string(block));
         Saturator s(kSampleRate, {{"type", 3.f}});
         Samples l = in, r = in;
         std::vector<float> inPeak, outPeak, input, output;  // (read as it runs: a display keeps 8192 values)
-        for (size_t at = 0; at < in.size(); at += 4096) {
-            const size_t n = std::min<size_t>(4096, in.size() - at);
-            Samples pl(l.begin() + at, l.begin() + at + n), pr(r.begin() + at, r.begin() + at + n);
-            const std::vector<Change> changes = block == 256 ? std::vector<Change>{} : splits;
-            if (channels == 2)
-                s.run({&pl, &pr}, changes, block);
-            else
-                s.run({&pl}, changes, block);
-            std::copy(pl.begin(), pl.end(), l.begin() + at);
+        const auto read = [&] {
             for (auto [id, into] : {std::pair{"in_peak", &inPeak}, std::pair{"out_peak", &outPeak},
                                     std::pair{"input", &input}, std::pair{"output", &output}}) {
                 const std::vector<float> values = s.display(id);
                 into->insert(into->end(), values.begin(), values.end());
             }
-        }
+        };
+        const std::vector<Change> changes = block == 256 ? std::vector<Change>{} : splits;
+        if (channels == 2)
+            s.run({&l, &r}, changes, block, [&](int64_t, int) { read(); });
+        else
+            s.run({&l}, changes, block, [&](int64_t, int) { read(); });
+        read();
         CHECK_EQ(inPeak.size(), 375u);
         CHECK_EQ(outPeak.size(), 375u);
         for (size_t i = 1; i < inPeak.size(); ++i) {
