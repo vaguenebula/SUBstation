@@ -126,6 +126,7 @@ public:
     double deltaShare() const { return deltaShown_.value; }  // how far the output line is tinted for Delta (0..1)
     double hotShare() const { return hotShown_.value; }      // how bright the glow over the threshold is (0..1)
     bool cutHeld() const { return anyHeld_; }                // the line of the recent deepest cut is drawn
+    bool focusDimmed() const { return focusDimmed_; }        // the Focus band's dim is drawn
 
 Q_SIGNALS:
     void keyedChanged();
@@ -204,7 +205,7 @@ private:
     QList<double> frequencies_;           // the display points (Hz)
     QList<double> focusFrequencies_;      // kFocusStops, evenly across the plot (Hz)
     QList<double> focusWeights_;          // the Focus band's weight there, from the edges as drawn
-    bool focusDimmed_ = false;            // any weight there is under 1
+    bool focusDimmed_ = false;            // some weight there darkens the plot (the dim is drawn)
 
     // The displays.
     FrameAssembler input_, key_, output_, gain_;

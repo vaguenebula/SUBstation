@@ -27,6 +27,7 @@ namespace {
 constexpr double kPivotHz = sub::app::kSpectralPivotHz;
 constexpr double kSpectrumMarginDb = 6.0;    // spectra are held this far beyond the axis (no time spent off it)
 constexpr double kStaleSeconds = 0.3;        // no frame for this long: the displays sink back
+constexpr double kRecentSeconds = 0.1;       // a tick reads the meters' newest values back this far (a long block)
 constexpr double kHoldSeconds = 0.8;         // the deepest cut's line holds, then falls
 constexpr double kHoldFallDbPerSecond = 18.0;
 constexpr double kHeldDrawnDb = 0.01;        // a held cut is drawn from this deep
@@ -34,6 +35,9 @@ constexpr double kDeltaFade = 0.7;           // with Delta on, what the output l
 constexpr int kFocusDimAlpha = 170;          // outside the Focus band (a weight of 0), dimmed this much
 
 QString id(const char* text) { return QString::fromLatin1(text); }
+
+// How much the Focus dim darkens where the band gives a frequency `weight` of its gain (0: not at all).
+int focusDimAlpha(double weight) { return int(std::lround(kFocusDimAlpha * (1.0 - weight))); }
 
 // The highest finite value (`otherwise` without one).
 double highest(const std::vector<float>& values, double otherwise) {
@@ -359,7 +363,10 @@ void SpectralGraph::updateLines() {
     const QList<double> curve = sub::app::spectralThresholdDb(thresholdShown_.value, tiltShown_.value, frequencies_);
     thresholdCurve_.assign(curve.begin(), curve.end());
     focusWeights_ = sub::app::spectralFocusWeights(focusLowShown(), focusHighShown(), focusFrequencies_);
-    focusDimmed_ = std::any_of(focusWeights_.begin(), focusWeights_.end(), [](double w) { return w < 1.0; });
+    // Drawn where any of it shows (at the default band the edges' round trip through log2 leaves a weight a hair
+    // under 1 at 20 kHz, which darkens nothing).
+    focusDimmed_ =
+        std::any_of(focusWeights_.begin(), focusWeights_.end(), [](double w) { return focusDimAlpha(w) > 0; });
 }
 
 void SpectralGraph::updateReadout() {
@@ -401,8 +408,9 @@ void SpectralGraph::refreshDisplays() {
         const auto [first, values] = readDisplayAt(id(display));
         assembler->add(first, values);
     }
-    const std::vector<float> levelsIn = readDisplay(id("in_level"));
-    const std::vector<float> levelsOut = readDisplay(id("out_level"));
+    // The meters' newest values (shown again after the sound stopped, a read holds the loud past).
+    const std::vector<float> levelsIn = readRecent(id("in_level"), kRecentSeconds);
+    const std::vector<float> levelsOut = readRecent(id("out_level"), kRecentSeconds);
 
     // The targets: the frames that came since the last tick (merged); none for a while, the floor.
     const bool fresh = input_.fresh || key_.fresh || output_.fresh || gain_.fresh;
@@ -461,7 +469,7 @@ void SpectralGraph::refreshDisplays() {
     bool readings = maxCut_.step(levels, 1e-3);
     readings = maxLift_.step(levels, 1e-3) || readings;
 
-    // The meters: the hop's peaks since they last had any; none for a while, they fall.
+    // The meters: the loudest of the newest hops' peaks since they last had any; none for a while, they fall.
     meterDt_ += dt;
     sinceLevel_ = levelsIn.empty() && levelsOut.empty() ? sinceLevel_ + dt : 0.0;
     if (!levelsIn.empty() || !levelsOut.empty() || sinceLevel_ > kStaleSeconds) {
@@ -820,8 +828,7 @@ void SpectralGraph::paint(SgPainter& p) {
         QGradientStops stops;
         const double last = double(focusWeights_.size() - 1);
         for (int i = 0; i < focusWeights_.size(); ++i) {
-            const int alpha = int(std::lround(kFocusDimAlpha * (1.0 - focusWeights_[i])));
-            stops.append({i / last, withAlpha(Theme::kMeterBg, alpha)});
+            stops.append({i / last, withAlpha(Theme::kMeterBg, focusDimAlpha(focusWeights_[i]))});
         }
         QLinearGradient dim(QPointF(r.left(), 0), QPointF(r.right(), 0));
         dim.setStops(stops);

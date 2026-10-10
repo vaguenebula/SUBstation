@@ -30,7 +30,9 @@ constexpr double kRipplePx = 1.2;        // the ripple's height at Chorus 100 % 
 constexpr double kSpectrumTopDb = -12.0;  // the tail's spectrum over the axis' height
 constexpr double kFineRatio = 0.25;       // Shift: the drag's ratios to this power
 constexpr double kHandleInset = 6.0;      // px: a handle's centre stays this far inside the plot (its largest ring)
-constexpr double kStaleSeconds = 0.1;     // a tick without values keeps the last this long (a long audio block)
+// A long audio block: a tick reads a level display's newest values back this far (not a backlog's), and one
+// without values keeps the last this long.
+constexpr double kStaleSeconds = 0.1;
 // The ranges its handles drag: the engine's, through the application layer.
 constexpr double kMinShelfFreq = sub::app::kReverbMinShelfFreq;
 constexpr double kMaxLoFreq = sub::app::kReverbMaxLoFreq, kMaxHiFreq = sub::app::kReverbMaxHiFreq;
@@ -303,9 +305,10 @@ void ReverbDecayGraph::refreshDisplays() {
         updateColumns();
         spectrumChanged_ = true;
     }
-    // The tick's loudest value. A tick that brings none (the audio's blocks longer than a tick) keeps the
-    // last for a moment: only a while without any is silence (asleep, the engine publishes the floor).
-    const std::vector<float> diffuse = readDisplay(QStringLiteral("diffuse"));
+    // The loudest of the tick's newest values (shown again after the sound stopped, a read holds the loud past:
+    // DeviceCanvas::readRecent). A tick that brings none (the audio's blocks longer than a tick) keeps the last
+    // for a moment: only a while without any is silence (asleep, the engine publishes the floor).
+    const std::vector<float> diffuse = readRecent(QStringLiteral("diffuse"), kStaleSeconds);
     if (!diffuse.empty()) {
         diffuseDb_ = kMeterFloorDb;
         for (const float v : diffuse) diffuseDb_ = std::max(diffuseDb_, double(v));

@@ -20,7 +20,9 @@ namespace {
 constexpr double kSwitchSeconds = 0.04;  // a switch's change eases over about 120 ms (three of these)
 constexpr double kGlowSeconds = 0.25;    // the glow fades
 constexpr double kGlowRangeDb = 48.0;    // the input's level from -48 dB (none) to 0 (all)
-constexpr double kStaleSeconds = 0.1;   // a tick without values keeps the last this long (a long audio block)
+// A long audio block: a tick reads the input's newest values back this far (not a backlog's), and one without
+// values keeps the last this long.
+constexpr double kStaleSeconds = 0.1;
 constexpr double kCaption = 13.0;       // px: the caption's strip at the top, clear of the dot
 
 }  // namespace
@@ -143,9 +145,10 @@ void ReverbFilterPad::refreshDisplays() {
         updateColumns();
         spectrumChanged_ = true;
     }
-    // The newest value and the tick's loudest. A tick that brings none (the audio's blocks longer than a
-    // tick) keeps the last for a moment: only a while without any is silence.
-    const std::vector<float> input = readDisplay(QStringLiteral("input"));
+    // The newest value and the loudest of the tick's newest (shown again after the sound stopped, a read holds
+    // the loud past: DeviceCanvas::readRecent). A tick that brings none (the audio's blocks longer than a tick)
+    // keeps the last for a moment: only a while without any is silence.
+    const std::vector<float> input = readRecent(QStringLiteral("input"), kStaleSeconds);
     double newest = inputLevel_;
     if (!input.empty()) {
         newest = double(input.back());

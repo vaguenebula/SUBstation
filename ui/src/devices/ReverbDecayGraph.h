@@ -144,8 +144,8 @@ private:
     sub::app::analysis::FallingSpectrum spectrum_;
     std::vector<double> columns_;
     bool spectrumChanged_ = false;
-    // The tick's loudest "diffuse" (kept a moment through ticks without one), and the seconds since a tick last
-    // brought one.
+    // The loudest of the tick's newest "diffuse" values (kept a moment through ticks without any), and the
+    // seconds since a tick last brought one.
     double diffuseDb_ = sub::app::kReverbMeterFloorDb;
     double stale_ = 0.0;
     double chorusPhase_ = 0.0;   // the newest "chorus" (the last while still)

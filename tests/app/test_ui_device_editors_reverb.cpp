@@ -1,12 +1,11 @@
-// The Reverb's editor (ui/qml/devices/editors/ReverbEditor.qml; ui/src/devices/ReverbFilterPad,
-// ReverbSpinPad, ReverbDecayGraph): loaded as the device view loads it, over a real engine. It fits
-// the view's height (and its own least height), nothing overlapping, its boxes, lists and switches as
-// wide as their text and its knobs the house's 34 px in rows; every control is bound to its
-// parameter (undoably, with a tooltip), each switch the one under the mouse over it (Chorus's over its
-// knob's caption too); the pads' and the graph's drags are one undo step each and
-// set what the engine plays; the curves are the engine's own maths (ReverbResponse.h); what the
-// engine publishes as it renders reaches the pads and the graph, which animate and then rest. With
-// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there playing, frozen, and in other modes.
+// The Reverb's editor (ui/qml/devices/editors/ReverbEditor.qml; ui/src/devices/ReverbFilterPad, ReverbSpinPad,
+// ReverbDecayGraph): loaded as the device view loads it, over a real engine. It fits the view's height (and its own
+// least height), nothing overlapping, its boxes, lists and switches as wide as their text and its knobs the house's
+// 34 px in rows; every control is bound to its parameter (undoably, with a tooltip), each switch the one under the
+// mouse over it (Chorus's over its knob's caption too); the pads' and the graph's drags are one undo step each and set
+// what the engine plays; the curves are the engine's own maths (ReverbResponse.h); what the engine publishes as it
+// renders reaches the pads and the graph (lit by what is now, not by a backlog's loudest), which animate and then rest.
+// With SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there playing, frozen, and in other modes.
 
 #include <QCursor>
 #include <QFontMetrics>
@@ -847,6 +846,19 @@ private Q_SLOTS:
         QCOMPARE(s.filter->inputLevel(), kReverbMeterFloorDb);
         QVERIFY(s.filter->glow() < glow);
         QVERIFY(s.spin->flash() < flash);
+    }
+
+    // A read can hold a long backlog (an editor shown, or shown again, after the sound stopped): what is lit is
+    // now (the newest values, DeviceCanvas::readRecent), not the backlog's loudest.
+    void displaysAfterABacklog() {
+        Shown s = reverb();  // (a second of the tone)
+        QVERIFY(s.filter && s.spin && s.decay);
+        refreshDisplays();
+        play(3.0);  // the tone, and two seconds of silence after it, read at once
+        QCOMPARE(s.filter->inputLevel(), kReverbMeterFloorDb);
+        QCOMPARE(s.filter->glow(), 0.0);
+        QCOMPARE(s.spin->flash(), 0.0);
+        QCOMPARE(s.decay->tailLevel(), ReverbDecayGraph::kMeterFloorDb);
     }
 
     // --- Transitions ease, and then everything rests --------------------------------------------

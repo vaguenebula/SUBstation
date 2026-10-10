@@ -1,11 +1,11 @@
 // The Spectral Compressor's editor (ui/qml/devices/editors/SpectralEditor.qml, ui/src/devices/SpectralGraph):
-// loaded as the device view loads it, its knobs, value boxes and button bound to their parameters (undoably),
-// the display's lines the engine's own (sub::app::spectralThresholdDb; drawn where they are when steep enough to
-// leave the plot, their handles on them) and the level figures they cross fading, the Focus band's dim the engine's
-// weights (sub::app::spectralFocusWeights) with the figures over it, its handles and edges dragged
-// with the mouse (one undo step a drag, Shift finely from where it is pressed), the engine's displays reaching it
-// as it renders offline (cuts, lifts, the held cut, the glow, Delta's tint), and the Sidechain badge (its menu
-// under it). With
+// loaded as the device view loads it, its knobs, value boxes and button bound to their parameters (undoably), Below
+// dimmed (still settable) while Upward is 1:1; the display's lines the engine's own (sub::app::spectralThresholdDb;
+// drawn where they are when steep enough to leave the plot, their handles on them) and the level figures they cross
+// fading, the Focus band's dim the engine's weights (sub::app::spectralFocusWeights; none drawn at the default band)
+// with the figures over it, its handles and edges dragged with the mouse (one undo step a drag, Shift finely from
+// where it is pressed), the engine's displays reaching it as it renders offline (cuts, lifts, the held cut, the
+// glow, Delta's tint; the meters showing now after a backlog), and the Sidechain badge (its menu under it). With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there idle, at its widest values, with a steep threshold,
 // with a signal flowing, lifting, keyed by a sidechain, and with Delta on.
 
@@ -695,6 +695,7 @@ private Q_SLOTS:
     void focusDimFollowsTheWeights() {
         QVERIFY(showDevice());
         tick();
+        QVERIFY(!graph_->focusDimmed());  // (the default band dims nothing: no dim is drawn)
         QTest::qWait(50);
         // The brightest pixel of a box of the display (graph coordinates).
         const auto brightest = [&](const QImage& image, const QRectF& box) {
@@ -713,6 +714,7 @@ private Q_SLOTS:
 
         set("focus_lo", 1200.0);
         tick();
+        QVERIFY(graph_->focusDimmed());
         const double half = 1200.0 / std::exp2(1.0 / 6.0);  // half its gain: half a fade (a third of an octave) out
         const QList<double> weights = spectralFocusWeights(1200.0, 20000.0, {650.0, half, 1500.0});
         QCOMPARE(weights[0], 0.0);
@@ -938,6 +940,17 @@ private Q_SLOTS:
         for (int i = 0; i < 30; ++i) refreshDisplays();
         QTest::qWait(50);
         QCOMPARE(graph_->lastStats().frames, settled);
+    }
+
+    // A read can hold a long backlog (an editor shown, or shown again, after the sound stopped): the meters show
+    // now (the newest values, DeviceCanvas::readRecent), not the backlog's loudest.
+    void metersAfterABacklog() {
+        QVERIFY(showDevice(pinkNoise(kSampleRate, -12.0)));  // (a second of it)
+        tick(3);
+        engine()->renderOffline(0.0, 3 * kSampleRate);  // the noise, and two seconds of silence after it, read at once
+        refreshDisplays();
+        QCOMPARE(graph_->levelIn(), SpectralGraph::kMeterFloorDb);
+        QCOMPARE(graph_->levelOut(), SpectralGraph::kMeterFloorDb);
     }
 
     void deltaTintsTheOutput() {

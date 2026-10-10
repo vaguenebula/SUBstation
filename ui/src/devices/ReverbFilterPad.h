@@ -105,8 +105,8 @@ private:
     std::vector<double> columns_;  // the spectrum under each column
     bool spectrumChanged_ = false;
     double inputLevel_ = sub::app::kReverbMeterFloorDb;
-    // The last tick's loudest "input" (kept a moment through ticks without one), and the seconds since a tick
-    // last brought one.
+    // The loudest of the last tick's newest "input" values (kept a moment through ticks without any), and the
+    // seconds since a tick last brought one.
     double loudest_ = sub::app::kReverbMeterFloorDb;
     double stale_ = 0.0;
     Eased glow_;

@@ -33,7 +33,9 @@ constexpr double kCaption = 13.0;        // px: the captions' strip at the top, 
 // (the first is the loudest at every Shape).
 constexpr double kRowTop = kCaption + kRadius + kRadiusLoud + kGlow + kBob + 1.0;
 constexpr double kRowBottom = 13.0;      // the last's, above the L and R
-constexpr double kStaleSeconds = 0.1;    // a tick without values keeps the last this long (a long audio block)
+// A long audio block: a tick reads the reflections' newest levels back this far (not a backlog's), and one
+// without values keeps the last this long.
+constexpr double kStaleSeconds = 0.1;
 
 }  // namespace
 
@@ -157,10 +159,12 @@ void ReverbSpinPad::place() {
 
 void ReverbSpinPad::refreshDisplays() {
     const double seconds = tickSeconds();
-    // A tick that brings no values (the audio's blocks longer than a tick) keeps the last for a moment: the
-    // phase runs on at Spin's rate (set right by the next one published), the light holds.
+    // The newest phase, and the loudest of the newest levels (shown again after the sound stopped, a read holds
+    // the loud past: DeviceCanvas::readRecent). A tick that brings no values (the audio's blocks longer than a
+    // tick) keeps the last for a moment: the phase runs on at Spin's rate (set right by the next one published),
+    // the light holds.
     const std::vector<float> phases = readDisplay(QStringLiteral("spin"));
-    const std::vector<float> early = readDisplay(QStringLiteral("early"));
+    const std::vector<float> early = readRecent(QStringLiteral("early"), kStaleSeconds);
     const bool stale = phases.empty() && early.empty() && (stale_ += seconds) > kStaleSeconds;
     if (!phases.empty()) {
         phase_ = phases.back();
