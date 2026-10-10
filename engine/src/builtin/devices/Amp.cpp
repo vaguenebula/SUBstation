@@ -23,10 +23,13 @@
 //   the chunk reuses the last one's controls and runs loops without ramps.
 // - A change of model morphs (50 ms, an S-curve) from the voicing as it is to
 //   the new one: every number of the voicing moves continuously, and the trim
-//   keeps the blend in between as loud as the two models (amp::Transfer works
-//   their levels out, one per 16-sample cell of the grid at most: the morph
-//   sets off once its first four are known, 1 ms at 48 kHz), where it would
-//   swell by up to 6 dB.
+//   keeps the blend in between as loud as the two models (amp::BasicTransfer
+//   works their levels out, one per 16-sample cell of the grid at most: the
+//   morph sets off once its first four are known, 1 ms at 48 kHz), where it
+//   would swell by up to 6 dB. What the rate and each model set (the levels'
+//   tables, the logarithms a blend takes) is worked out beforehand: a change
+//   from a model computes no sine, cosine or exp in its first block (the two
+//   models' levels).
 // - Mono runs one amp on the sum (half the work); Dual one per channel. The
 //   switch crossfades over 20 ms; the second amp starts from rest, its input
 //   fading in over 5 ms, and stops once Mono is back.
@@ -70,8 +73,9 @@ constexpr double kFadeInSeconds = 0.005;  // the second amp's input, as it start
 constexpr double kMixSeconds = 0.02;      // Dry/Wet's ramp
 constexpr int kSleepFrames = 4096;        // silence in before an amp at rest may sleep
 constexpr int kQuietOut = 256;            // and out (well past what its down-sampler holds)
-constexpr int kLevelPoints = 64;          // a period's samples for the morph's levels (amp::Transfer)
+constexpr int kLevelPoints = 64;          // a period's samples for the morph's levels (amp::BasicTransfer)
 constexpr int kLevelSteps = 16;           // points of the morph its levels are worked out at
+using LevelTransfer = amp::BasicTransfer<kLevelPoints>;
 // The displays': audio per value (a multiple of kChunk) and what a level reads at silence.
 constexpr int kMeterSamples = amp::kDisplaySamples;
 constexpr float kFloorDb = amp::kDisplayFloorDb;
@@ -262,7 +266,9 @@ public:
                                      {"drive3", kMeterSamples},
                                      {"power", kMeterSamples},
                                      {"sag", kMeterSamples},
-                                     {"output", kMeterSamples}}) {}
+                                     {"output", kMeterSamples}}) {
+        for (int m = 0; m < amp::kModels; ++m) modelLogs_[m] = amp::logsOf(amp::voicing(m));
+    }
 
     std::string typeId() const override { return "builtin:amp"; }
     std::string name() const override { return "Amp"; }
@@ -295,6 +301,8 @@ public:
         fadeLength_ = std::max(1, static_cast<int>(std::lround(kFadeSeconds * sampleRate)));
         fadeInLength_ = std::max(1, static_cast<int>(std::lround(kFadeInSeconds * sampleRate)));
         chunkGlide_ = 1.0 - std::exp(-kChunk / (kSmoothSeconds * sampleRate));
+        levelRate_ = LevelTransfer::Rate(sampleRate, kLevelPoints);
+        for (int m = 0; m < amp::kModels; ++m) modelVoices_[m].set(amp::voicing(m), levelRate_);
         reset();
     }
 
@@ -303,6 +311,8 @@ public:
         for (int k = 0; k < 6; ++k) dial_[k] = dialTarget(k);
         model_ = std::clamp(choiceIndex(Type), 0, amp::kModels - 1);
         voice_ = from_ = to_ = amp::voicing(model_);
+        voiceModel_ = fromModel_ = model_;
+        fromLogs_ = toLogs_ = modelLogs_[model_];
         morph_ = 1.0;
         morphFrames_ = 0;
         morphMoves_ = false;
@@ -372,6 +382,9 @@ private:
             model_ = model;
             from_ = voice_;
             to_ = amp::voicing(model);
+            fromModel_ = voiceModel_;  // (a model's own: its logarithms and its Voice are known)
+            fromLogs_ = fromModel_ >= 0 ? modelLogs_[fromModel_] : amp::logsOf(from_);
+            toLogs_ = modelLogs_[model];
             morph_ = 0.0;
             morphFrames_ = 0;
             levelKnown_ = 0;
@@ -435,7 +448,8 @@ private:
         if (morphMoves) {
             morphFrames_ += len;
             morph_ = std::min(1.0, static_cast<double>(morphFrames_) / (kMorphSeconds * sampleRate_));
-            voice_ = morph_ >= 1.0 ? to_ : amp::blend(from_, to_, dsp::sCurve(morph_));
+            voice_ = morph_ >= 1.0 ? to_ : amp::blend(from_, fromLogs_, to_, toLogs_, dsp::sCurve(morph_));
+            voiceModel_ = morph_ >= 1.0 ? model_ : -1;
             voicingControls(voice_, c);
         }
         dialControls(voice_, c, morphMoves || toneMoves);
@@ -446,11 +460,13 @@ private:
 
     // A grid cell's start in a morph: one more of its levels if the curve needs
     // it by the cell's end, and whether the morph moves through the cell (it
-    // waits, still, for the levels its curve needs there). Each level is an
-    // amp::Transfer, about twice the work the amp does for a cell: one a cell at
-    // most, so no block of a morph costs more than about three times a steady
-    // one (the start waits three cells, 1 ms at 48 kHz, for the ends' levels and
-    // the first two points'). Decided per cell and the morph's place counted in
+    // waits, still, for the levels its curve needs there). Each level is a
+    // LevelTransfer, from a model's tables about the work the amp does for a
+    // cell, from a blend's (made then) half as much again: one a cell at most,
+    // so a change's first block of two cells (the two models' levels) costs
+    // about two steady ones and no block of a morph more than about three (the
+    // start waits three cells, 1 ms at 48 kHz, for the ends' levels and the
+    // first two points'). Decided per cell and the morph's place counted in
     // samples, so a morph sets off and moves at the same samples whatever the
     // blocks.
     void morphCell() noexcept {
@@ -471,23 +487,27 @@ private:
     // The morph's next level: its start's, then its end's (for a tone at the
     // input's recent peak), then each point's compensation.
     void workOutLevel() noexcept {
-        const auto level = [&](const amp::Voicing& v) {
-            const amp::Transfer t(v, dial_[0], dial_[1], dial_[2], dial_[3], dial_[4], dial_[5], sampleRate_,
-                                  kLevelPoints);
+        const auto level = [&](const LevelTransfer::Voice& voice) {
+            const LevelTransfer t(voice, dial_[0], dial_[1], dial_[2], dial_[3], dial_[4], dial_[5]);
             return 20.0 * std::log10(std::max(t.rms(levelInput_, 0.0), 1e-12));
+        };
+        const auto blended = [&](const amp::Voicing& v) -> const LevelTransfer::Voice& {
+            blendVoice_.set(v, levelRate_);
+            return blendVoice_;
         };
         const int k = levelKnown_++;
         if (k == 0) {  // from the level as it is (in a morph, the one in between)
             double peak = meterIn_;
             for (const float p : recentIn_) peak = std::max(peak, double(p));
             levelInput_ = std::clamp(peak, 1e-3, 1.0);
-            levelFrom_ = level(from_) + levelSteps_[0];
+            levelFrom_ = level(fromModel_ >= 0 ? modelVoices_[fromModel_] : blended(from_)) + levelSteps_[0];
         } else if (k == 1) {
-            levelTo_ = level(to_);
+            levelTo_ = level(modelVoices_[model_]);
         } else {
             const int point = k - 1;
             const double s = dsp::sCurve(static_cast<double>(point) / kLevelSteps);
-            levelSteps_[point] = (1.0 - s) * levelFrom_ + s * levelTo_ - level(amp::blend(from_, to_, s));
+            levelSteps_[point] =
+                (1.0 - s) * levelFrom_ + s * levelTo_ - level(blended(amp::blend(from_, fromLogs_, to_, toLogs_, s)));
         }
     }
 
@@ -928,6 +948,10 @@ private:
     double chunkGlide_ = 0.3;              // their one-poles' step over a whole chunk
     int model_ = 0;
     amp::Voicing voice_ = amp::voicing(0), from_ = voice_, to_ = voice_;  // the morph
+    // The model voice_ is (-1: a blend between two) and the one from_ is; the logarithms blend() takes for from_
+    // and to_, and each model's (worked out once).
+    int voiceModel_ = 0, fromModel_ = 0;
+    amp::VoicingLogs fromLogs_{}, toLogs_{}, modelLogs_[amp::kModels] = {};
     double morph_ = 1.0;                                                  // 1: done
     int morphFrames_ = 0;                                                 // how far it has moved
     bool morphMoves_ = false;  // through this cell (it waits for its levels: morphCell())
@@ -937,6 +961,9 @@ private:
     double levelSteps_[kLevelSteps + 1] = {};  // (the last, the morph's end, stays 0)
     int levelKnown_ = 0;
     float recentIn_[4] = {};  // the input's peak in the last four display windows
+    // The levels' tables (made in prepare()): what the rate sets, what each model sets, and a blend's (made as needed).
+    LevelTransfer::Rate levelRate_{48000.0, kLevelPoints};
+    LevelTransfer::Voice modelVoices_[amp::kModels], blendVoice_;
 
     Mode mode_ = Mode::Mono;
     int fade_ = -1;  // samples into the Output switch's fade (-1: none)

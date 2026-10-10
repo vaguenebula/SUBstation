@@ -1194,8 +1194,11 @@ TEST_CASE("the amp's cost stays bounded") {
     CHECK(dual < 0.1 * 10.0);
     CHECK(mono < dual);
 
-    // A model change's first block (32 frames: two cells, two of the morph's levels) costs a
-    // few steady ones, not ten (as four levels in its first cell did): medians over 60 changes.
+    // A model change's first block (32 frames: two cells, the two models' levels) costs about two
+    // steady ones, each level from its model's tables, made in prepare(): medians over 60 changes.
+    // (Working each level's sines, cosines and filters out afresh, with a full-length FFT, it cost
+    // 3.8 on Linux and 6.8 with MinGW, whose maths library is slower; four levels in its first
+    // cell, ten.)
     Amp a(kSampleRate, model(amp::Rock));
     sub::ProcessContext ctx;
     ctx.sampleRate = kSampleRate;

@@ -36,7 +36,7 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Saturator.cpp](../../engine/src/builtin/devices/Saturator.cpp) | Saturator: eight curves, Color's emphasis and its inverse, Post Clip on the dry/wet blend, DC, 4x oversampling of all of it |
 | [builtin/SaturatorDesign.h](../../engine/src/builtin/SaturatorDesign.h) | The Saturator's curves (`saturator::makeShape`, `params`, `curve`, `transfer`), Post Clip and Color's design (`colorDesign`, `inverse`, `between`, `colorResponseDb`, `colorTimeConstant`), shared with the application layer's `saturatorCurve()` and `saturatorColorDb()` for the editor |
 | [builtin/devices/Amp.cpp](../../engine/src/builtin/devices/Amp.cpp) | Amp: seven amp models, the tone stack, sag, Mono and Dual, sleep |
-| [builtin/AmpDesign.h](../../engine/src/builtin/AmpDesign.h) | The Amp's design (`amp::kVoicings`, `blend`, the stages' curve and `Adaa`, the tone stack, the dials' mappings, `Transfer`: a tone's steady state by harmonic balance, the displays' `kDisplaySamples` and `kDisplayFloorDb`), shared with the application layer's `ampToneResponseDb()`, `ampTransfer()` and `AmpTransferCurve` for the editor's curves (and `ampModelNames()`, `ampDisplayFloorDb()`); the device keeps its model morph level-matched with `Transfer` |
+| [builtin/AmpDesign.h](../../engine/src/builtin/AmpDesign.h) | The Amp's design (`amp::kVoicings`, `blend`, the stages' curve and `Adaa`, the tone stack, the dials' mappings, `Transfer`: a tone's steady state by harmonic balance, from tables a rate and a voicing set that can be worked out beforehand (`BasicTransfer`'s `Rate` and `Voice`), the displays' `kDisplaySamples` and `kDisplayFloorDb`), shared with the application layer's `ampToneResponseDb()`, `ampTransfer()` and `AmpTransferCurve` for the editor's curves (and `ampModelNames()`, `ampDisplayFloorDb()`); the device keeps its model morph level-matched with a `BasicTransfer<64>` |
 | [builtin/devices/Erosion.cpp](../../engine/src/builtin/devices/Erosion.cpp) | Erosion: a 2 ms delay modulated by a sine or band-passed noise, Noise Blend and Stereo Width, chunked glides and ramps, displays |
 | [builtin/ErosionDesign.h](../../engine/src/builtin/ErosionDesign.h) | Erosion's maths (`erosion::band`, `noisePowerGain`, `bandMagnitude`, `bandEdges`, `excursionSamples`, `blendWeights`, `stereoSpread`, the instances' noise salts), shared with the application layer's `ErosionResponse.h` for the editor |
 | [builtin/devices/Delay.cpp](../../engine/src/builtin/devices/Delay.cpp) | Delay: synced or free times per side, filter, modes, ping pong, freeze |
@@ -1154,18 +1154,22 @@ decimal, no sign: `formatValue` in [ParamSpec.cpp](../../app/src/model/ParamSpec
 - **Amp Type** morphs over 50 ms (an S-curve) from the voicing as it is to the new one: dB values, biases and the sag
   linearly, frequencies, times and the tone stack's parts geometrically, so every coefficient moves continuously. A
   new model during a morph starts a new one from the voicing in between. A blend of two voicings clips where neither
-  does (the heads, the gains and the trim stop agreeing midway), so on the way it came out up to 6 dB louder than
-  both (Lead to Bass); the trim keeps it level-matched: `amp::Transfer` (below) gives each voicing's level (the RMS of
-  a 1 kHz tone at the input's recent peak, 64 samples a period), and the blend is turned by how far its level is
-  from the two models' in between, worked out at 17 points of the morph as it reaches them and joined by a smooth
-  curve. Each of those levels is about twice the work the amp does for 16 samples, so they come one per 16-sample
-  cell of the control grid at most: the morph sets off once its first four are known (1 ms after the change at
-  48 kHz, during which the amp plays on as the old model), and no block of it costs more than about three steady
-  ones. It goes by the grid, so a morph sets off and moves at the same samples whatever the blocks. Through every
-  one of the 42 morphs the level stays within +0.9 / −1.4 dB of the two models (a −12 dBFS sine, 5 ms windows). Each
-  chunk of a morph applies the compensation to the voicing's own trim (never to the last chunk's, which carries it
-  already), so dials moving while a morph waits change nothing in its level, and changes coming faster than a morph
-  can set off hold the blend they found, at its level.
+  does (the heads, the gains and the trim stop agreeing midway), so on the way it came out up to 6 dB louder than both
+  (Lead to Bass); the trim keeps it level-matched: `amp::Transfer`'s harmonic balance (below; a `BasicTransfer<64>`)
+  gives each voicing's level (the RMS of a 1 kHz tone at the input's recent peak, 64 samples a period), and the blend
+  is turned by how far its level is from the two models' in between, worked out at 17 points of the morph as it
+  reaches them and joined by a smooth curve. What the rate sets (every sine and cosine those levels take) and what
+  each model sets (its filters' coefficients and their responses: `amp::BasicTransfer`'s `Rate` and `Voice`), and the
+  logarithms a blend takes of each model's frequencies, are worked out in `prepare()` and at construction: a level
+  from a model's costs what the dials add and the period's FFTs (a real period through a complex FFT of half its
+  length), about the work the amp does for 16 samples, a blend's half as much again. They come one per 16-sample cell
+  of the control grid at most: the morph sets off once its first four are known (1 ms after the change at 48 kHz,
+  during which the amp plays on as the old model), a change's first 32-frame block (the two models' levels) costs
+  about two steady ones, and no block of a morph more than about three. It goes by the grid, so a morph sets off and
+  moves at the same samples whatever the blocks. Through every one of the 42 morphs the level stays within +0.9 /
+  −1.4 dB of the two models (a −12 dBFS sine, 5 ms windows). Each chunk of a morph applies the compensation to the
+  voicing's own trim (never to the last chunk's, which carries it already), so dials moving while a morph waits change
+  nothing in its level, and changes coming faster than a morph can set off hold the blend they found, at its level.
 - **Mono and Dual** (the Output switch): Mono runs one amp on (L + R) / 2 and writes it to both channels (half the
   work); Dual runs one per channel. The switch crossfades over 20 ms (an S-curve on the amps' inputs and on the right
   channel's output); the second amp starts from rest, its input fading in over 5 ms, and stops once Mono is back. A

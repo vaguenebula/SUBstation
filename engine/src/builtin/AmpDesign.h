@@ -34,7 +34,9 @@
 // Shared by the device and, through the application layer's AmpResponse.h, its
 // editor: the tone curve (toneResponseDb) and the transfer curve (Transfer) are
 // worked out from the very numbers and functions the engine plays. The device
-// also keeps a model morph level-matched with Transfer's levels.
+// also keeps a model morph level-matched with Transfer's levels, from tables it
+// works out beforehand (BasicTransfer's Rate and Voice, the logarithms blend()
+// takes).
 
 #include <algorithm>
 #include <array>
@@ -214,18 +216,45 @@ inline constexpr Voicing kVoicings[kModels] = {
 
 inline const Voicing& voicing(int model) noexcept { return kVoicings[std::clamp(model, 0, kModels - 1)]; }
 
+// The fields blend() moves geometrically (frequencies, the sag's times, the tone
+// stack's parts), each handed to `f` in one order.
+inline constexpr int kGeometricFields = 19;
+template <class V, class F>
+void forGeometricFields(V& v, F&& f) {
+    f(v.inputHighpassHz);
+    f(v.brightHz);
+    for (auto& s : v.stages) {
+        f(s.lowpassHz);
+        f(s.highpassHz);
+    }
+    for (auto* part : {&v.tone.r1, &v.tone.r2, &v.tone.r3, &v.tone.r4, &v.tone.c1, &v.tone.c2, &v.tone.c3}) f(*part);
+    f(v.presenceHz);
+    f(v.sagAttackMs);
+    f(v.sagReleaseMs);
+    f(v.transformerHz);
+}
+
+// Their logarithms, what a blend interpolates: worked out once for a morph's ends (the
+// device keeps each model's), a blend on the way costs an exp a field and no log.
+using VoicingLogs = std::array<double, kGeometricFields>;
+inline VoicingLogs logsOf(const Voicing& v) noexcept {
+    VoicingLogs logs{};
+    size_t i = 0;
+    forGeometricFields(v, [&](double x) { logs[i++] = std::log(x); });
+    return logs;
+}
+
 // Between two voicings, `t` of the way (0: a, 1: b, exactly): dB values,
 // biases, Gain's split and the sag's amount linearly; frequencies, the sag's
-// times and the tone stack's parts geometrically. Every field moves
-// continuously, so a morph moves every coefficient continuously.
-inline Voicing blend(const Voicing& a, const Voicing& b, double t) noexcept {
+// times and the tone stack's parts geometrically (`la` and `lb`: logsOf(a) and
+// logsOf(b)). Every field moves continuously, so a morph moves every
+// coefficient continuously.
+inline Voicing blend(const Voicing& a, const VoicingLogs& la, const Voicing& b, const VoicingLogs& lb,
+                     double t) noexcept {
     if (t <= 0.0) return a;
     if (t >= 1.0) return b;
     const auto lin = [t](double x, double y) { return (1.0 - t) * x + t * y; };
-    const auto geo = [t](double x, double y) { return std::exp((1.0 - t) * std::log(x) + t * std::log(y)); };
-    Voicing v;
-    v.inputHighpassHz = geo(a.inputHighpassHz, b.inputHighpassHz);
-    v.brightHz = geo(a.brightHz, b.brightHz);
+    Voicing v = a;
     v.brightDb = lin(a.brightDb, b.brightDb);
     v.gainMinDb = lin(a.gainMinDb, b.gainMinDb);
     v.gainMaxDb = lin(a.gainMaxDb, b.gainMaxDb);
@@ -233,23 +262,27 @@ inline Voicing blend(const Voicing& a, const Voicing& b, double t) noexcept {
     for (int k = 0; k < 3; ++k) {
         const Stage& x = a.stages[k];
         const Stage& y = b.stages[k];
-        v.stages[k] = {lin(x.levelDb, y.levelDb), lin(x.headDb, y.headDb), lin(x.bias, y.bias),
-                       geo(x.lowpassHz, y.lowpassHz), geo(x.highpassHz, y.highpassHz)};
+        v.stages[k].levelDb = lin(x.levelDb, y.levelDb);
+        v.stages[k].headDb = lin(x.headDb, y.headDb);
+        v.stages[k].bias = lin(x.bias, y.bias);
     }
-    v.tone = {geo(a.tone.r1, b.tone.r1), geo(a.tone.r2, b.tone.r2), geo(a.tone.r3, b.tone.r3),
-              geo(a.tone.r4, b.tone.r4), geo(a.tone.c1, b.tone.c1), geo(a.tone.c2, b.tone.c2),
-              geo(a.tone.c3, b.tone.c3)};
     v.toneMakeupDb = lin(a.toneMakeupDb, b.toneMakeupDb);
-    v.presenceHz = geo(a.presenceHz, b.presenceHz);
     v.presenceRangeDb = lin(a.presenceRangeDb, b.presenceRangeDb);
     v.volumeDb = lin(a.volumeDb, b.volumeDb);
     v.powerBias = lin(a.powerBias, b.powerBias);
     v.sag = lin(a.sag, b.sag);
-    v.sagAttackMs = geo(a.sagAttackMs, b.sagAttackMs);
-    v.sagReleaseMs = geo(a.sagReleaseMs, b.sagReleaseMs);
-    v.transformerHz = geo(a.transformerHz, b.transformerHz);
     v.trimDb = lin(a.trimDb, b.trimDb);
+    size_t i = 0;
+    forGeometricFields(v, [&](double& x) {
+        x = std::exp((1.0 - t) * la[i] + t * lb[i]);
+        ++i;
+    });
     return v;
+}
+inline Voicing blend(const Voicing& a, const Voicing& b, double t) noexcept {
+    if (t <= 0.0) return a;
+    if (t >= 1.0) return b;
+    return blend(a, logsOf(a), b, logsOf(b), t);
 }
 
 // --- The dials ----------------------------------------------------------------------------
@@ -441,107 +474,214 @@ inline double toneResponseDb(const Voicing& v, double bass, double middle, doubl
 // What comes out for a 1 kHz tone with these settings: the output's highest and
 // lowest values for each peak level going in, as the amp plays the tone once it
 // has settled. Worked out by harmonic balance over one period of the tone
-// (kPoints samples of it): each curve sample by sample, and each linear part
-// between the curves harmonic by harmonic, by its own response at that
-// harmonic, as the device runs it (the input high-pass and bright shelf at the
-// base rate; each stage's Miller low-pass, the stages' anti-aliasing as the
-// half-sample average it is for a smooth signal, (1 + z⁻¹) / 2, the coupling
-// high-passes, the tone section with its make-up, the power tubes' input
-// low-pass and the transformer at the oversampled rate, with every harmonic
-// above its half dropped; the down-sampler keeping what lies under half the
-// base rate; the DC blocker and the trim). So each stage's asymmetry makes the
-// DC the next coupling removes, and each harmonic is filtered where it goes, as
-// in the device: played at the defaults, a tone's peaks land within 0.1 dB of
-// these. The supply's sag is the slow envelope it is: the power drive `sagDb`
-// lower. The preamp's part (up to the power stage's input) doesn't depend on
-// the sag, so an editor can keep a curve's worth of it while the sag moves.
-// Allocates nothing (the period lives on the stack): the device works its
-// model morph's levels out with it in real time.
-class Transfer {
+// (`points` samples of it, a power of two up to MaxPoints): each curve sample by
+// sample, and each linear part between the curves harmonic by harmonic, by its
+// own response at that harmonic, as the device runs it (the input high-pass and
+// bright shelf at the base rate; each stage's Miller low-pass, the stages'
+// anti-aliasing as the half-sample average it is for a smooth signal,
+// (1 + z⁻¹) / 2, the coupling high-passes, the tone section with its make-up,
+// the power tubes' input low-pass and the transformer at the oversampled rate,
+// with every harmonic above its half dropped; the down-sampler keeping what lies
+// under half the base rate; the DC blocker and the trim). So each stage's
+// asymmetry makes the DC the next coupling removes, and each harmonic is
+// filtered where it goes, as in the device: played at the defaults, a tone's
+// peaks land within 0.1 dB of these. The supply's sag is the slow envelope it
+// is: the power drive `sagDb` lower. The preamp's part (up to the power stage's
+// input) doesn't depend on the sag, so an editor can keep a curve's worth of it
+// while the sag moves.
+//
+// What the rate alone sets (a Rate: every sine and cosine) and what the voicing
+// alone sets (a Voice: every filter's coefficient and most of their responses)
+// can be worked out beforehand and handed in. The device works its model morph's
+// levels out in real time from a Rate and each model's Voice, made in prepare(),
+// so a level costs what the dials add and the period's FFTs (a blend's, in a
+// morph, its Voice too). Allocates nothing (the period lives on the stack).
+// Transfer takes up to 256 samples a period (the curves drawn); the device's
+// levels take 64, in a BasicTransfer<64> (its tables a quarter of the size).
+template <int MaxPoints>
+class BasicTransfer {
 public:
     static constexpr double kFrequency = 1000.0;
-    static constexpr int kPoints = 256;  // samples of a period at most: the harmonics up to the 128th
+    static constexpr int kPoints = MaxPoints;  // samples of a period at most: the harmonics up to kPoints / 2
+    static_assert(kPoints >= 8 && (kPoints & (kPoints - 1)) == 0);
     using Wave = std::array<double, kPoints>;
+    using Response = std::array<std::complex<double>, kPoints / 2 + 1>;  // harmonics 0 (DC) .. kPoints / 2
     struct Peaks {
         double high = 0.0, low = 0.0;
     };
+    using Half = std::array<double, kPoints / 2>;
+    // The FFT's tables for a period of `points` samples. A period is real: it goes through a
+    // complex FFT of half its length (its even samples the real part, its odd ones the
+    // imaginary), its harmonics are split out of that and joined back into it.
+    struct Fft {
+        // The half-length FFT's twiddles, e^(-2 pi i j / length), each pass's in a row (length 8,
+        // 16, .. points / 2, j under half of it: the first two passes need none), and its order:
+        // each index's bits reversed.
+        Half twiddleRe{}, twiddleIm{};
+        std::array<int, kPoints / 2> reversed{};
+        // e^(-2 pi i k / points), k under points / 2: what splits harmonic k out (and, its
+        // imaginary parts, the tone's samples).
+        std::array<std::complex<double>, kPoints / 2> split{};
+    };
 
-    // `points` (a power of two up to kPoints) samples a period: fewer cost less (the device's morph
-    // takes 64 for its levels), the curves drawn take kPoints.
-    Transfer(const Voicing& v, double gain, double bass, double middle, double treble, double presence, double volume,
-             double sampleRate, int points = kPoints) noexcept
-        : v_(v), points_(std::clamp(points, 8, kPoints)) {
-        const double rate = kOversampling * sampleRate, f0 = kFrequency;
-        const double g = gainDb(v, gain);
-        const ToneCoefficients tone = toneStack(v.tone, bass, middle, treble, rate);
-        const double makeup = std::pow(10.0, v.toneMakeupDb / 20.0);
-        const double shelf = std::pow(10.0, presenceDb(v, presence) / 20.0);
-        double linear = 1.0;  // the small-signal gain through the stages' curves
-        for (int k = 0; k < 3; ++k) {
-            const Stage& s = v.stages[k];
-            const double knob = k == 0 ? v.gainSplit * g : (k == 2 ? (1.0 - v.gainSplit) * g : 0.0);
-            gIn_[k] = std::pow(10.0, (s.levelDb + knob - s.headDb) / 20.0);
-            gOut_[k] = std::pow(10.0, s.headDb / 20.0) / shapeSlope(s.bias);
-            offset_[k] = restValue(s.bias);
-            linear *= std::pow(10.0, (s.levelDb + knob) / 20.0);
+    // What a Transfer works out from the rate alone for `points` samples a period:
+    // each harmonic's z⁻¹ at the oversampled rate, the parts that depend on nothing
+    // else (the stages' anti-aliasing, the power tubes' input low-pass and, at the
+    // base rate, the DC blocker), and the FFT's tables.
+    struct Rate {
+        explicit Rate(double baseRate, int periodPoints = kPoints) noexcept
+            : sampleRate(baseRate), points(std::clamp(periodPoints, 8, kPoints)) {
+            const double rate = kOversampling * sampleRate, f0 = kFrequency;
+            base = unitDelay(f0, sampleRate);
+            const double r = dsp::onePoleCutoff(kDcBlockerHz, sampleRate);  // dsp::DcBlocker: y = x - x[-1] + r y[-1]
+            const double gridC = dsp::onePoleCutoff(kGridHz, rate);
+            for (int k = 0; k <= points / 2; ++k) {
+                const double f = k * f0;
+                if (f >= 0.5 * rate) break;
+                harmonics = k + 1;
+                z[k] = unitDelay(f, rate);
+                adaa[k] = (1.0 + z[k]) / 2.0;
+                grid[k] = onePoleLowpass(gridC, z[k]);
+                if (f < 0.5 * sampleRate) {
+                    const std::complex<double> b = unitDelay(f, sampleRate);
+                    dc[k] = divide(1.0 - b, 1.0 - r * b);
+                    baseHarmonics = k + 1;
+                }
+            }
+            const int m = points / 2;
+            for (int k = 0; k < m; ++k) fft.split[k] = unitDelay(k, points);
+            for (int i = 1, j = 0; i < m; ++i) {
+                int bit = m >> 1;
+                for (; j & bit; bit >>= 1) j ^= bit;
+                j ^= bit;
+                fft.reversed[i] = j;
+            }
+            for (int half = 4, at = 0; half < m; at += half, half <<= 1) {
+                for (int j = 0; j < half; ++j) {  // e^(-2 pi i j / (2 half))
+                    fft.twiddleRe[at + j] = fft.split[j * (points / (2 * half))].real();
+                    fft.twiddleIm[at + j] = fft.split[j * (points / (2 * half))].imag();
+                }
+            }
         }
-        drive_ = std::pow(10.0, volumeDb(v, volume) / 20.0);
-        powerOffset_ = restValue(v.powerBias);
-        powerOut_ = 1.0 / shapeSlope(v.powerBias);
-        // The linear parts' responses at the oversampled rate (oversampled: dropped above its half), each
-        // one-pole's coefficient worked out once and each harmonic's z⁻¹ once for them all.
-        double highpassC[3], millerC[3];  // each stage's coupling high-pass and Miller low-pass
-        for (int k = 0; k < 3; ++k) {
-            highpassC[k] = dsp::onePoleCutoff(v.stages[k].highpassHz, rate);
-            millerC[k] = dsp::onePoleCutoff(v.stages[k].lowpassHz, rate);
+
+        double sampleRate;
+        int points;
+        int harmonics = 0;            // those under half the oversampled rate (the rest are dropped)
+        int baseHarmonics = 0;        // and under half the base rate (all the output keeps)
+        std::complex<double> base;    // the tone's z⁻¹ at the base rate
+        Response z{};                 // each harmonic's z⁻¹ at the oversampled rate
+        Response adaa{};              // the stages' anti-aliasing: (1 + z⁻¹) / 2
+        Response grid{};              // the power tubes' input low-pass
+        Response dc{};                // the DC blocker
+        Fft fft;
+    };
+
+    // What a Transfer works out from a voicing at a Rate before the dials: the
+    // stages' output gains and rest values, the input's gain at the tone, and each
+    // filter's response at each harmonic (bar the two the dials move: the tone stack's
+    // and Presence's shelf's gain).
+    struct Voice {
+        Voice() = default;
+        Voice(const Voicing& v, const Rate& r) noexcept { set(v, r); }
+
+        // Made again in place (allocating nothing): the device's blends in a morph. It keeps
+        // a pointer to `r`.
+        void set(const Voicing& v, const Rate& r) noexcept {
+            rate = &r;
+            voicing = v;
+            const double sampleRate = r.sampleRate, overRate = kOversampling * sampleRate;
+            makeup = std::pow(10.0, v.toneMakeupDb / 20.0);
+            for (int k = 0; k < 3; ++k) {
+                const Stage& s = v.stages[k];
+                gOut[k] = std::pow(10.0, s.headDb / 20.0) / shapeSlope(s.bias);
+                offset[k] = restValue(s.bias);
+            }
+            powerOffset = restValue(v.powerBias);
+            powerOut = 1.0 / shapeSlope(v.powerBias);
+            double highpassC[3], millerC[3];  // each stage's coupling high-pass and Miller low-pass
+            for (int k = 0; k < 3; ++k) {
+                highpassC[k] = dsp::onePoleCutoff(v.stages[k].highpassHz, overRate);
+                millerC[k] = dsp::onePoleCutoff(v.stages[k].lowpassHz, overRate);
+            }
+            const double presenceC = dsp::onePoleCutoff(v.presenceHz, overRate);
+            const double transformerC = dsp::onePoleCutoff(v.transformerHz, overRate);
+            // Into V1 there is the tone alone: its gain is all that matters.
+            const double bright = std::pow(10.0, v.brightDb / 20.0);
+            inputResponse = (1.0 - onePoleLowpass(dsp::onePoleCutoff(v.inputHighpassHz, sampleRate), r.base)) *
+                            onePoleShelf(dsp::onePoleCutoff(v.brightHz, sampleRate), bright, r.base) *
+                            onePoleLowpass(millerC[0], r.z[1]);
+            input = std::abs(inputResponse * r.adaa[1]);
+            const double trim = std::pow(10.0, v.trimDb / 20.0);
+            for (int k = 0; k < r.harmonics; ++k) {
+                const std::complex<double> z = r.z[k];
+                const auto highpass = [&](int s) { return 1.0 - onePoleLowpass(highpassC[s], z); };
+                const auto into = [&](int s) { return onePoleLowpass(millerC[s], z) * r.adaa[k]; };
+                link0[k] = highpass(0) * into(1);
+                highpass1[k] = highpass(1);
+                into2[k] = into(2);
+                highpass2[k] = highpass(2);
+                presence[k] = 1.0 - onePoleLowpass(presenceC, z);  // (the shelf's boosted part)
+                out[k] = k < r.baseHarmonics ? onePoleLowpass(transformerC, z) * r.dc[k] * trim : 0.0;
+            }
         }
-        const double presenceC = dsp::onePoleCutoff(v.presenceHz, rate);
-        const double gridC = dsp::onePoleCutoff(kGridHz, rate);
-        const double transformerC = dsp::onePoleCutoff(v.transformerHz, rate);
-        const auto adaa = [](std::complex<double> z) { return (1.0 + z) / 2.0; };
-        // Into V1 there is the tone alone: its gain is all that matters.
-        const std::complex<double> z0 = unitDelay(f0, rate);
-        const double bright = std::pow(10.0, v.brightDb / 20.0);
-        const std::complex<double> input =
-            (1.0 - onePoleLowpass(dsp::onePoleCutoff(v.inputHighpassHz, sampleRate), f0, sampleRate)) *
-            onePoleShelf(dsp::onePoleCutoff(v.brightHz, sampleRate), bright, f0, sampleRate) *
-            onePoleLowpass(millerC[0], z0);
-        input_ = std::abs(input * adaa(z0));
-        const double r = dsp::onePoleCutoff(kDcBlockerHz, sampleRate);  // dsp::DcBlocker: y = x - x[-1] + r y[-1]
-        const double trim = std::pow(10.0, v.trimDb / 20.0);
+
+        const Rate* rate = nullptr;
+        Voicing voicing{};
+        double makeup = 1.0;  // the tone stack's
+        double input = 1.0;   // the input stage's gain at the tone, into V1's curve
+        std::complex<double> inputResponse{};  // (without V1's anti-aliasing: its half sample is latency)
+        double gOut[3] = {}, offset[3] = {}, powerOffset = 0.0, powerOut = 1.0;
+        // V1 to V2; V2's coupling and V3's input around the tone stack; V3's coupling and
+        // Presence's shelf's boosted part; the power stage to the output.
+        Response link0{}, highpass1{}, into2{}, highpass2{}, presence{}, out{};
+    };
+
+    // From a Voice (at its Rate): the device's way.
+    BasicTransfer(const Voice& voice, double gain, double bass, double middle, double treble, double presence,
+                  double volume) noexcept
+        : v_(voice.voicing), points_(voice.rate->points), sampleRate_(voice.rate->sampleRate) {
+        const Rate& rate = *voice.rate;
+        gainDb_ = gainDb(v_, gain);
+        const ToneCoefficients tone = toneStack(v_.tone, bass, middle, treble, kOversampling * sampleRate_);
+        const double shelf = std::pow(10.0, presenceDb(v_, presence) / 20.0);
+        for (int k = 0; k < 3; ++k) {
+            const Stage& s = v_.stages[k];
+            gIn_[k] = std::pow(10.0, (s.levelDb + knob(k) - s.headDb) / 20.0);
+            gOut_[k] = voice.gOut[k];
+            offset_[k] = voice.offset[k];
+        }
+        drive_ = std::pow(10.0, volumeDb(v_, volume) / 20.0);
+        powerOffset_ = voice.powerOffset;
+        powerOut_ = voice.powerOut;
+        input_ = voice.input;
+        inputResponse_ = voice.inputResponse;
+        adaa1_ = rate.adaa[1];
         for (int k = 0; k <= points_ / 2; ++k) {
-            const double f = k * f0;
-            if (f >= 0.5 * rate) {
+            if (k >= rate.harmonics) {  // at or above half the oversampled rate: dropped
                 link_[0][k] = link_[1][k] = link_[2][k] = out_[k] = 0.0;
                 continue;
             }
-            const std::complex<double> z = unitDelay(f, rate);
-            const auto highpass = [&](int s) { return 1.0 - onePoleLowpass(highpassC[s], z); };
-            const auto into = [&](int s) { return onePoleLowpass(millerC[s], z) * adaa(z); };
-            link_[0][k] = highpass(0) * into(1);
-            link_[1][k] = highpass(1) * toneStackDigital(tone, z) * makeup * into(2);
-            link_[2][k] = highpass(2) * onePoleShelf(presenceC, shelf, z) * onePoleLowpass(gridC, z) * adaa(z);
-            const std::complex<double> base = unitDelay(f, sampleRate);
-            out_[k] = f < 0.5 * sampleRate
-                          ? onePoleLowpass(transformerC, z) * divide(1.0 - base, 1.0 - r * base) * trim
-                          : 0.0;
+            link_[0][k] = voice.link0[k];
+            link_[1][k] = voice.highpass1[k] * toneStackDigital(tone, rate.z[k]) * voice.makeup * voice.into2[k];
+            link_[2][k] = voice.highpass2[k] * (1.0 + (shelf - 1.0) * voice.presence[k]) * rate.grid[k] * rate.adaa[k];
+            out_[k] = voice.out[k];
         }
-        gain_ = input_ * linear * std::abs(link_[0][1] * link_[1][1] * link_[2][1] * out_[1]);
-        // The filters alone (the anti-aliasing's half samples are part of the device's latency).
-        const std::complex<double> filters =
-            input * link_[0][1] * link_[1][1] * link_[2][1] * out_[1] / (adaa(z0) * adaa(z0) * adaa(z0));
-        phaseDelay_ = -std::arg(filters) / (2.0 * kPi * f0 / sampleRate);
-        // The FFT's twiddles (and the input tone's samples): e^(-2 pi i j / points), j up to half.
-        for (int j = 0; j < points_ / 2; ++j) twiddle_[j] = unitDelay(j, points_);
+        fft_ = rate.fft;
     }
+
+    // From the voicing at a rate: `points` samples a period (fewer cost less; the curves
+    // drawn take kPoints).
+    BasicTransfer(const Voicing& v, double gain, double bass, double middle, double treble, double presence,
+                  double volume, double sampleRate, int points = kPoints) noexcept
+        : BasicTransfer(Voice(v, Rate(sampleRate, points)), gain, bass, middle, treble, presence, volume) {}
 
     // The power stage's input for a tone of peak `amplitude` (1.0: 0 dBFS): one period.
     Wave preamp(double amplitude) const noexcept {
         Wave w{};
         const double q = amplitude * input_ * gIn_[0];
-        const int half = points_ / 2;  // sin(2 pi n / points), from the twiddles: -Im, and odd past the half
-        for (int n = 0; n < half; ++n) w[n] = stage(0, q * -twiddle_[n].imag());
-        for (int n = half; n < points_; ++n) w[n] = stage(0, q * twiddle_[n - half].imag());
+        const int half = points_ / 2;  // sin(2 pi n / points): -Im of e^(-2 pi i n / points), odd past the half
+        for (int n = 0; n < half; ++n) w[n] = stage(0, q * -fft_.split[n].imag());
+        for (int n = half; n < points_; ++n) w[n] = stage(0, q * fft_.split[n - half].imag());
         for (int k = 0; k < 3; ++k) {
             filter(w, link_[k]);
             if (k < 2)
@@ -551,7 +691,7 @@ public:
     }
     // What comes out for that input with the power drive `sagDb` lower: one period.
     Wave power(const Wave& in, double sagDb) const noexcept {
-        const double drive = drive_ * std::pow(10.0, -sagDb / 20.0);
+        const double drive = sagDb == 0.0 ? drive_ : drive_ * std::pow(10.0, -sagDb / 20.0);  // (pow(10, 0) is 1)
         Wave w{};
         for (int n = 0; n < points_; ++n) w[n] = powerOut_ * (shape(in[n] * drive + v_.powerBias) - powerOffset_);
         filter(w, out_);
@@ -580,57 +720,97 @@ public:
         return x >= 0.0 ? p.high : p.low;
     }
     // For small signals, what comes out over what goes in: the curve's slope through 0.
-    double smallSignalGain(double sagDb) const noexcept { return gain_ * drive_ * std::pow(10.0, -sagDb / 20.0); }
+    double smallSignalGain(double sagDb) const noexcept {
+        double linear = 1.0;  // the small-signal gain through the stages' curves
+        for (int k = 0; k < 3; ++k) linear *= std::pow(10.0, (v_.stages[k].levelDb + knob(k)) / 20.0);
+        const double gain = input_ * linear * std::abs(link_[0][1] * link_[1][1] * link_[2][1] * out_[1]);
+        return gain * drive_ * std::pow(10.0, -sagDb / 20.0);
+    }
     // How late its filters put a small tone out besides the device's latency (base-rate
     // samples, its phase over its frequency): the one-pole low-passes a fraction of a sample
-    // each, the high-passes a little early.
-    double phaseDelay() const noexcept { return phaseDelay_; }
+    // each, the high-passes a little early. (The anti-aliasing's half samples are part of
+    // the device's latency: the filters alone.)
+    double phaseDelay() const noexcept {
+        const std::complex<double> filters =
+            inputResponse_ * link_[0][1] * link_[1][1] * link_[2][1] * out_[1] / (adaa1_ * adaa1_ * adaa1_);
+        return -std::arg(filters) / (2.0 * kPi * kFrequency / sampleRate_);
+    }
 
 private:
-    using Response = std::array<std::complex<double>, kPoints / 2 + 1>;  // harmonics 0 (DC) .. kPoints / 2
+    // Gain's share at stage k, in dB.
+    double knob(int k) const noexcept {
+        return k == 0 ? v_.gainSplit * gainDb_ : (k == 2 ? (1.0 - v_.gainSplit) * gainDb_ : 0.0);
+    }
 
     double stage(int k, double q) const noexcept { return gOut_[k] * (shape(q + v_.stages[k].bias) - offset_[k]); }
 
-    // A period through a linear part: each harmonic times the part's response at it.
+    // A period through a linear part: each harmonic times the part's response at it (of
+    // harmonics 0 and points / 2, the real part: all a real period keeps of them). Harmonics
+    // k and m - k (m = points / 2) come out of the half-length transform's bins k and m - k,
+    // a and b, together, with W = e^(-2 pi i k / points) (W at m - k is -conj W):
+    //   X(k) = (s - d) / 2, X(m - k) = conj(s + d) / 2, s = a + conj b, d = i W (a - conj b),
+    // and go back into them the same way the other way round (conj W, the inverse's).
     void filter(Wave& w, const Response& h) const noexcept {
-        const int n = points_;
-        Wave re, im;  // (their first points_ only)
-        std::copy_n(w.begin(), n, re.begin());
-        std::fill_n(im.begin(), n, 0.0);
+        const int m = points_ / 2;
+        Half re, im;  // (their first m only)
+        for (int j = 0; j < m; ++j) {
+            re[j] = w[2 * j];
+            im[j] = w[2 * j + 1];
+        }
         fft(re, im, false);
-        for (int k = 0; k <= n / 2; ++k) {
-            const std::complex<double> x = std::complex<double>(re[k], im[k]) * h[k];
-            re[k] = x.real();
-            im[k] = x.imag();
-            if (k > 0 && k < n - k) {  // the negative frequencies, mirrored
-                re[n - k] = x.real();
-                im[n - k] = -x.imag();
-            }
+        const auto i = [](std::complex<double> x) { return std::complex<double>(-x.imag(), x.real()); };  // i x
+        const double dc = ((re[0] + im[0]) * h[0]).real(), top = ((re[0] - im[0]) * h[m]).real();
+        re[0] = 0.5 * (dc + top);
+        im[0] = 0.5 * (dc - top);
+        for (int k = 1; k <= m / 2; ++k) {
+            const int l = m - k;
+            const std::complex<double> a(re[k], im[k]), b(re[l], im[l]), wk = fft_.split[k];
+            const std::complex<double> s = a + std::conj(b), d = i(wk * (a - std::conj(b)));
+            const std::complex<double> xk = (s - d) * h[k], xl = std::conj(s + d) * h[l];  // (twice X times h)
+            const std::complex<double> e = xk + std::conj(xl), g = i(std::conj(wk) * (xk - std::conj(xl)));
+            re[k] = 0.25 * (e.real() + g.real());
+            im[k] = 0.25 * (e.imag() + g.imag());
+            re[l] = 0.25 * (e.real() - g.real());
+            im[l] = 0.25 * (g.imag() - e.imag());
         }
         fft(re, im, true);
-        std::copy_n(re.begin(), n, w.begin());
+        for (int j = 0; j < m; ++j) {
+            w[2 * j] = re[j];
+            w[2 * j + 1] = im[j];
+        }
     }
 
-    // In place over points_, radix 2; `inverse` divides by points_. The twiddles are
-    // the Transfer's own (nothing static, so nothing to set up on first use).
-    void fft(Wave& re, Wave& im, bool inverse) const noexcept {
-        const int n = points_;
-        for (int i = 1, j = 0; i < n; ++i) {
-            int bit = n >> 1;
-            for (; j & bit; bit >>= 1) j ^= bit;
-            j ^= bit;
+    // In place over points_ / 2: its first two passes at once (their twiddles are 1 and -i),
+    // then radix 2; `inverse` divides by points_ / 2. The tables are the Transfer's own
+    // (nothing static, so nothing to set up on first use).
+    void fft(Half& re, Half& im, bool inverse) const noexcept {
+        const int n = points_ / 2;
+        for (int i = 1; i < n; ++i) {
+            const int j = fft_.reversed[i];
             if (i < j) {
                 std::swap(re[i], re[j]);
                 std::swap(im[i], im[j]);
             }
         }
         const double sign = inverse ? -1.0 : 1.0;  // the inverse's twiddles are the conjugates
-        for (int length = 2; length <= n; length <<= 1) {
-            const int stride = n / length;
-            for (int i = 0; i < n; i += length) {
-                for (int j = 0; j < length / 2; ++j) {
-                    const double wr = twiddle_[j * stride].real(), wi = sign * twiddle_[j * stride].imag();
-                    const int a = i + j, b = a + length / 2;
+        for (int i = 0; i < n; i += 4) {
+            const double r0 = re[i] + re[i + 1], i0 = im[i] + im[i + 1], r1 = re[i] - re[i + 1], i1 = im[i] - im[i + 1];
+            const double r2 = re[i + 2] + re[i + 3], i2 = im[i + 2] + im[i + 3];
+            const double r3 = sign * (im[i + 2] - im[i + 3]), i3 = sign * (re[i + 3] - re[i + 2]);  // times -i (or i)
+            re[i] = r0 + r2;
+            im[i] = i0 + i2;
+            re[i + 2] = r0 - r2;
+            im[i + 2] = i0 - i2;
+            re[i + 1] = r1 + r3;
+            im[i + 1] = i1 + i3;
+            re[i + 3] = r1 - r3;
+            im[i + 3] = i1 - i3;
+        }
+        for (int half = 4, at = 0; half < n; at += half, half <<= 1) {
+            for (int i = 0; i < n; i += 2 * half) {
+                for (int j = 0; j < half; ++j) {
+                    const double wr = fft_.twiddleRe[at + j], wi = sign * fft_.twiddleIm[at + j];
+                    const int a = i + j, b = a + half;
                     const double vr = re[b] * wr - im[b] * wi, vi = re[b] * wi + im[b] * wr;
                     re[b] = re[a] - vr;
                     im[b] = im[a] - vi;
@@ -639,18 +819,27 @@ private:
                 }
             }
         }
-        if (inverse)
-            for (int i = 0; i < n; ++i) re[i] /= n;
+        if (inverse) {
+            for (int i = 0; i < n; ++i) {
+                re[i] /= n;
+                im[i] /= n;
+            }
+        }
     }
 
     Voicing v_;
     int points_ = kPoints;
+    double sampleRate_ = 48000.0, gainDb_ = 0.0;
     double input_ = 1.0, gIn_[3] = {}, gOut_[3] = {}, offset_[3] = {};
-    double drive_ = 1.0, powerOffset_ = 0.0, powerOut_ = 1.0, gain_ = 1.0, phaseDelay_ = 0.0;
+    double drive_ = 1.0, powerOffset_ = 0.0, powerOut_ = 1.0;
+    std::complex<double> inputResponse_{}, adaa1_{};  // (phaseDelay())
     Response link_[3] = {};  // V1 to V2, V2 to V3 (the tone section), V3 to the power stage
     Response out_ = {};      // the power stage to the output
-    std::array<std::complex<double>, kPoints / 2> twiddle_ = {};
+    Fft fft_;
 };
+
+// Up to 256 samples a period: the editor's curves.
+using Transfer = BasicTransfer<256>;
 
 // One point of the curve (Transfer works the parts out once for a curve's worth).
 inline double transfer(const Voicing& v, double gain, double bass, double middle, double treble, double presence,
