@@ -24,11 +24,11 @@
 //   (15 ms, every 32 frames while they move); a change of the EQ's type or of the
 //   lookahead crossfades over 10 ms (one that comes during a crossfade starts when
 //   it is done). A filter the EQ starts (switched on, or a new type) starts warm:
-//   run first over the key's last moments, a few times faster than they came
-//   until it has caught up (at most 6.7 ms), and heard only then, so it has
-//   nothing to settle and its fade in is only ever between two settled outputs.
-//   Threshold, Return, Attack, Hold and Release only move decisions and the
-//   ramps' speeds.
+//   run first over the key's last moments, 16 frames for each that comes
+//   (gate::kWarmPace), until it has caught up (at most 6.7 ms), and heard only
+//   then, so it has nothing to settle and its fade in is only ever between two
+//   settled outputs. Threshold, Return, Attack, Hold and Release only move
+//   decisions and the ramps' speeds.
 // - Lookahead is latency (0, 1 or 10 ms; 1 ms by default, as Live's): idle()
 //   tells the engine when it changes, so the other tracks are realigned.
 //

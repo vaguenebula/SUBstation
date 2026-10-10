@@ -2,7 +2,8 @@
 // The Gate's maths its editor shares (app/src/audio/GateResponse.h): the floor,
 // the gain for how far open it is, the lookahead's choices, the display's rate,
 // the ranges the editor's graphs drag in, and the sidechain EQ's filters, so
-// what the editor draws is what plays; and how a key EQ filter starts warm.
+// what the editor draws is what plays. Also, for the device and its tests only,
+// how a key EQ filter starts warm (kWarmSeconds, kWarmPace, warmFrames).
 
 #include <algorithm>
 #include <cmath>
@@ -78,8 +79,9 @@ inline double keyFilterDb(KeyFilter type, double freq, double q, double gainDb, 
     return keyFilter(type, freq, q, gainDb, sampleRate).magnitudeDb(std::min(at, 0.5 * sampleRate), sampleRate);
 }
 
-// How many frames of the key a filter that starts is run over first: as long as its slowest pole
-// takes to fall 60 dB (so where it started from no longer shows), at most `most`.
+// The device's own (and its tests'; the editor has no use for it): how many frames of the key a filter
+// that starts is run over first, as long as its slowest pole takes to fall 60 dB (so where it started
+// from no longer shows), at most `most`.
 inline int warmFrames(const dsp::BiquadCoefficients& c, int most) noexcept {
     const double disc = c.a1 * c.a1 - 4.0 * c.a2;
     const double radius = disc < 0.0 ? std::sqrt(c.a2) : 0.5 * (std::abs(c.a1) + std::sqrt(disc));
@@ -87,8 +89,5 @@ inline int warmFrames(const dsp::BiquadCoefficients& c, int most) noexcept {
     if (radius >= 1.0) return most;
     return std::clamp(static_cast<int>(std::ceil(std::log(1e-3) / std::log(radius))), 1, most);
 }
-// The frame (from 0, where it starts) on which a filter run over `frames` of the key first, kWarmPace a
-// frame, has caught up: it is heard from there.
-inline int caughtUpFrame(int frames) noexcept { return std::max(0, (frames + kWarmPace - 2) / (kWarmPace - 1) - 1); }
 
 }  // namespace sub::gate

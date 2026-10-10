@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -141,14 +140,6 @@ Samples tone(double freq, int64_t frames, double amplitude = 0.5, double rate = 
     Samples x(static_cast<size_t>(frames));
     for (size_t i = 0; i < x.size(); ++i)
         x[i] = static_cast<float>(amplitude * std::sin(2.0 * kPi * freq * static_cast<double>(i) / rate));
-    return x;
-}
-
-Samples noise(int64_t frames, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(static_cast<size_t>(frames));
-    for (float& v : x) v = uniform(random);
     return x;
 }
 
@@ -412,16 +403,16 @@ TEST_CASE("the gate's Floor is how far a closed gate turns the sound down") {
     CHECK(allEqual(slice(out, 4800 + 480 + 4800, 4800 + 24000), 0.0));
     CHECK(allEqual(slice(out, 2 * 4800 + 24000 + 480 + 4800), 0.0));
     Gate shut(with(kBase, {{"floor", -75.f}, {"threshold", 6.f}}));
-    CHECK(allEqual(shut.play(noise(9600, 1)), 0.0));
+    CHECK(allEqual(shut.play(Rng(1).uniformSamples(9600, -0.5, 0.5)), 0.0));
     // At 0 dB: no effect, whatever the key does.
     for (const float threshold : {-40.f, 6.f}) {
         Gate open(with(kBase, {{"floor", 0.f}, {"threshold", threshold}}));
-        const Samples in = noise(24000, 2);
+        const Samples in = Rng(2).uniformSamples(24000, -0.5, 0.5);
         CHECK_ARRAY_EQUAL(open.playStereo(in), in);
     }
     // At -20 dB: a tenth.
     Gate tenth(with(kBase, {{"floor", -20.f}, {"threshold", 6.f}}));
-    const Samples in = noise(4800, 3);
+    const Samples in = Rng(3).uniformSamples(4800, -0.5, 0.5);
     const Samples ducked = tenth.play(in);
     for (size_t i = 0; i < in.size(); i += 97) CHECK_APPROX_TOL(ducked[i], in[i] * 0.1, 1e-6, 1e-9);
     CHECK_APPROX(gate::floorGain(-20.f), 0.1);
@@ -675,7 +666,7 @@ TEST_CASE("the gate listening puts out the key instead") {
 TEST_CASE("a filter the gate's key EQ starts has nothing to settle: a new type, or the EQ switched on") {
     // Listening to a key of 40 Hz (0.5) and 3 kHz (0.1) through filters at 30 Hz, where they
     // are slowest. Switched at `at`, the new filter is run over the key's last moments first
-    // (gate::warmFrames of them), 16 a frame until it has caught up (gate::caughtUpFrame): until
+    // (gate::warmFrames of them), 16 a frame until it has caught up with the key: until
     // then exactly the old filter is heard; then, for 10 ms, exactly the crossfade between the
     // two settled outputs (the outputs of gates set so all along); from its end on, the new
     // one's. Carrying on from the old filter's state instead, Band-pass to Low Shelf +15 dB
@@ -694,7 +685,11 @@ TEST_CASE("a filter the gate's key EQ starts has nothing to settle: a new type, 
         INFO("warmed over " + std::to_string(frames) + " frames");
         CHECK(frames > 0);
         CHECK(frames <= most);
-        const int64_t start = at + gate::caughtUpFrame(frames);
+        // It starts `frames` behind the key and gains kWarmPace - 1 on it a frame (it runs over
+        // kWarmPace while one more comes); it is heard on the first frame that starts at most
+        // kWarmPace - 1 behind (it runs over the rest, that frame last).
+        int64_t start = at;
+        for (int behind = frames; behind > gate::kWarmPace - 1; behind -= gate::kWarmPace - 1) ++start;
         CHECK(start - at <= most / (gate::kWarmPace - 1));  // (6.7 ms at most)
         return start;
     };
@@ -895,7 +890,7 @@ TEST_CASE("the gate's automation plays to the sample, whatever the block size") 
 
     // The EQ's glide keeps its pace however the stretches split: listening to an EQ'd
     // key of noise, its frequency jumping and its gain changing every 37 samples.
-    const Samples hiss = noise(24000, 4);
+    const Samples hiss = Rng(4).uniformSamples(24000, -0.5, 0.5);
     std::vector<Change> changes = {{1000, "sc_eq_freq", 2000.f}};
     for (int64_t n = 37; n < 24000; n += 37)
         changes.push_back({n, "sc_eq_gain", static_cast<float>(12.0 * std::sin(static_cast<double>(n) / 900.0))});
@@ -961,11 +956,12 @@ TEST_CASE("reset and a new sample rate start the gate closed and silent, at its 
 
     // A new rate: as a gate made at that rate, from silence.
     Gate moved(with(kBase, {{"lookahead", 2.f}}));
-    moved.play(noise(9600, 5));
+    moved.play(Rng(5).uniformSamples(9600, -0.5, 0.5));
     moved.processor().prepare(96000.0, kBlock);
     CHECK_EQ(moved.processor().latencySamples(), 960);
     Gate at96(with(kBase, {{"lookahead", 2.f}}), 96000.0);
-    const Samples bursts = plus(noise(19200, 6, 0.1f), levels({{4800, 0.f}, {4800, 0.4f}, {9600, 0.f}}));
+    const Samples bursts =
+        plus(Rng(6).uniformSamples(19200, -0.1, 0.1), levels({{4800, 0.f}, {4800, 0.4f}, {9600, 0.f}}));
     CHECK_ARRAY_EQUAL(moved.play(bursts), at96.play(bursts));
 }
 
@@ -1001,9 +997,9 @@ TEST_CASE("at the extremes the gate stays finite and never louder than its input
             for (const sub::ParamInfo& p : builtinInfo("gate").params)
                 if (p.id != "sc_listen") values.emplace_back(p.id, top ? p.maxValue : p.minValue);
             Gate g(values, rate);
-            const Samples in =
-                plus(noise(static_cast<int64_t>(rate), 7, 0.5f), tone(50.0, static_cast<int64_t>(rate), 0.4, rate));
-            const Samples key = noise(static_cast<int64_t>(rate), 8, 1.f);
+            const Samples in = plus(Rng(7).uniformSamples(static_cast<size_t>(rate), -0.5, 0.5),
+                                    tone(50.0, static_cast<int64_t>(rate), 0.4, rate));
+            const Samples key = Rng(8).uniformSamples(static_cast<size_t>(rate), -1.0, 1.0);
             Samples l = in, r = in;
             g.run({&l, &r}, {}, 256, Key{&key});
             CHECK(allFinite(l) && allFinite(r));
@@ -1018,7 +1014,7 @@ TEST_CASE("the gate takes NaN and infinity in its input or its sidechain as sile
     // or on the sidechain (the Gate takes it so where it reads the key), the key a blend of both;
     // with the key EQ off and on (a slow bell: its states would keep a NaN for good), listening or
     // not: what comes out is finite and, to the bit, what a zero there gives.
-    const Samples in = noise(9600, 16, 0.3f), key = noise(9600, 17, 0.6f);
+    const Samples in = Rng(16).uniformSamples(9600, -0.3, 0.3), key = Rng(17).uniformSamples(9600, -0.6, 0.6);
     const auto at = static_cast<size_t>(2400);
     const Values eq = {
         {"sc_eq", 1.f}, {"sc_eq_type", 1.f}, {"sc_eq_freq", 30.f}, {"sc_eq_q", 12.f}, {"sc_eq_gain", 15.f}};
@@ -1055,10 +1051,10 @@ TEST_CASE("the gate stays stable, and silence rings out to exact zeros") {
     // and widest, cut and boosted, at both ends of its range; listening, so the
     // filtered key is heard. Then silence: the EQ's states die away to exact zeros,
     // as soon as its slowest pole takes them below 1e-20 (where dsp::Biquad zeroes them):
-    // within a few milliseconds high up, 4 s for a bell 15 dB down at 30 Hz and
-    // Q 0.1 (whose slowest pole is a real one near 1 Hz), 8.5 s for one 15 dB up
-    // at Q 12.
-    const Samples in = noise(24000, 9, 0.5f), key = noise(24000, 10, 1.f);
+    // within a few milliseconds high up, about 0.1 s for the default high-pass (the
+    // usual settings, below), 5.5 s for a bell 15 dB down at 30 Hz and Q 0.1 (whose
+    // slowest pole is a real one near 1 Hz), 12 s for one 15 dB up at Q 12.
+    const Samples in = Rng(9).uniformSamples(24000, -0.5, 0.5), key = Rng(10).uniformSamples(24000, -1.0, 1.0);
     for (int type = 0; type < gate::kKeyFilters; ++type) {
         for (const float q : {0.1f, 12.f}) {
             for (const float gain : {-15.f, 15.f}) {
@@ -1114,21 +1110,22 @@ TEST_CASE("the gate stays stable, and silence rings out to exact zeros") {
                         {"sc_eq_gain", 15.f},
                         {"sc_gain", 24.f},
                         {"threshold", -20.f}}));
-    const Samples long_ = noise(10 * kSampleRate, 11, 0.5f), longKey = noise(10 * kSampleRate, 12, 1.f);
+    const Samples long_ = Rng(11).uniformSamples(10 * kSampleRate, -0.5, 0.5),
+                  longKey = Rng(12).uniformSamples(10 * kSampleRate, -1.0, 1.0);
     Samples l = long_, r = long_;
     g.run({&l, &r}, {}, 256, Key{&longKey});
     CHECK(allFinite(l));
     CHECK(neverLouder(long_, l));
     // Without the EQ, silence after sound is silence at once (no lookahead) or after it.
     Gate plain(with(kBase, {{"lookahead", 2.f}}));
-    Samples burst = noise(4800, 13);
+    Samples burst = Rng(13).uniformSamples(4800, -0.5, 0.5);
     burst.resize(9600, 0.f);
     const Samples out = plain.play(burst);
     CHECK(allEqual(slice(out, 4800 + 480), 0.0));
 }
 
 TEST_CASE("on one channel the gate gates as two equal channels do") {
-    for (const Samples& in : {levels({{9600, 0.5f}, {9600, 0.001f}}), noise(19200, 14, 0.3f)}) {
+    for (const Samples& in : {levels({{9600, 0.5f}, {9600, 0.001f}}), Rng(14).uniformSamples(19200, -0.3, 0.3)}) {
         for (const Values& values : {kBase, with(kBase, {{"lookahead", 1.f}, {"threshold", -12.f}}),
                                      with(kBase, {{"sc_eq", 1.f}, {"sc_eq_type", 1.f}, {"sc_eq_gain", 12.f}})}) {
             Gate one(values), two(values);
@@ -1183,7 +1180,7 @@ TEST_CASE("the gate's displays: the levels in, out and of the key, and how much 
 
     // The four streams always hold the same count, whatever the block sizes.
     for (const int block : {1, 7, 100, 1024}) {
-        Samples x = noise(3001, 15), y = x;
+        Samples x = Rng(15).uniformSamples(3001, -0.5, 0.5), y = x;
         g.run({&x, &y}, {}, block);
         std::vector<float> ignored;
         const uint64_t count = g.processor().readDisplay(0, 0, ignored);

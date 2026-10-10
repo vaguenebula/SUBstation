@@ -26,7 +26,7 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Ott.cpp](../../engine/src/builtin/devices/Ott.cpp) | Over The Top: multiband upward/downward compression |
 | [builtin/devices/Compressor.cpp](../../engine/src/builtin/devices/Compressor.cpp) | Compressor, with sidechain and displays |
 | [builtin/devices/Gate.cpp](../../engine/src/builtin/devices/Gate.cpp) | Gate: threshold, return, hold, attack and release, floor, flip, lookahead; keyed by its input or a sidechain through an EQ; listening to the key; displays |
-| [builtin/GateDesign.h](../../engine/src/builtin/GateDesign.h) | The Gate's maths (`gate::floorGain`, `closeDb`, `pass`, `gain`, `lookaheadSamples`, `keyFilter`, `keyFilterDb`, the key EQ's types, the parameters' ranges, and how a key EQ filter starts warm: `warmFrames`, `caughtUpFrame`), shared with the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h) for the editor's meter, key EQ curve and drags |
+| [builtin/GateDesign.h](../../engine/src/builtin/GateDesign.h) | The Gate's maths (`gate::floorGain`, `closeDb`, `pass`, `gain`, `lookaheadSamples`, `keyFilter`, `keyFilterDb`, the key EQ's types, the parameters' ranges), shared with the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h) for the editor's meter, key EQ curve and drags; and, not shared with it, how a key EQ filter starts warm (`kWarmSeconds`, `kWarmPace`, `warmFrames`: the device's and its tests') |
 | [builtin/devices/Limiter.cpp](../../engine/src/builtin/devices/Limiter.cpp) | Limiter: brick-wall lookahead limiting, Soft Clip, True Peak, L/R or M/S with Link, Maximize, its displays |
 | [builtin/LimiterDesign.h](../../engine/src/builtin/LimiterDesign.h) | The Limiter's scales, Soft Clip's knee, the M/S ceiling, the true-peak interpolator and its parabola (`limiter::scales`, `knee`, `shape`, `sharedCeiling`, `truePeakPhases`, `refinedPeak`), shared with the application layer's `LimiterResponse.h` for the editor |
 | [builtin/devices/Multiband.cpp](../../engine/src/builtin/devices/Multiband.cpp) | Multiband Dynamics: a three-way Linkwitz-Riley split, Above and Below per band, Peak and RMS detectors, split switches, activators and solos, a per-band sidechain and Listen, glides on a 32-sample grid, displays |
@@ -493,9 +493,9 @@ the editor shares is in [GateDesign.h](../../engine/src/builtin/GateDesign.h) (n
   5 dB for tens of milliseconds, enough to open the gate. It runs over that history 16 frames a frame
   (`gate::kWarmPace`) until it has caught up with the key, so no one block pays for it all (100 ms is 19 200 frames
   a channel at 192 kHz: run at once, a 32-frame block cost 200 µs where it lasts 167 µs), and is heard only from
-  then: the crossfade (or the fade in) starts that much later (`gate::caughtUpFrame`), a few frames for most
-  filters and 6.7 ms at most, with the old filter (or the key unfiltered) heard until then. Nothing of it but that
-  short history is kept while it is off.
+  then: the crossfade (or the fade in) starts that much later (it gains 15 frames on the key a frame: a few frames
+  for most filters, 6.7 ms at most), with the old filter (or the key unfiltered) heard until then. Nothing of it but
+  that short history is kept while it is off.
 - **Detection**: peak, linked stereo (the louder key channel's level opens the gate for both), with no smoothing
   besides the lookahead window; chatter on low notes is what Return and Hold are for, as in Live (the default 10 ms
   hold holds across a 50 Hz note's zero crossings).

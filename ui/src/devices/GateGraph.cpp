@@ -24,14 +24,15 @@ namespace {
 
 constexpr const char* kStreamIds[GateGraph::kStreams] = {"input", "output", "key", "open"};
 constexpr qint64 kMask = GateGraph::kCapacity - 1;
-constexpr double kLagSeconds = 0.03;     // the drawing stays this far behind the newest value
-constexpr double kMaxLagSeconds = 0.1;   // and jumps on when it falls further behind
-constexpr double kQuietSeconds = 0.25;   // no values for this long: the engine stopped
-constexpr double kRecentSeconds = 0.1;   // a tick's levels are of this much at most (after a backlog)
-constexpr double kPingSeconds = 0.25;    // the ring as the gate opens
-constexpr double kPulseSeconds = 1.2;    // the listening label's pulse
-constexpr double kShadeAlpha = 36.0;     // the blue where the gate is open, over the levels
-constexpr double kKeyFall = 300.0;       // dB/s the key dot falls (24 dB in 80 ms: it moves, it doesn't lag)
+constexpr double kLagSeconds = 0.03;      // the drawing stays this far behind the newest value,
+constexpr double kLagEaseSeconds = 0.16;  // easing back to it at this pace (a tenth a tick at 60 Hz)
+constexpr double kMaxLagSeconds = 0.1;    // and jumps on when it falls further behind
+constexpr double kQuietSeconds = 0.25;    // no values for this long: the engine stopped
+constexpr double kRecentSeconds = 0.1;    // a tick's levels are of this much at most (after a backlog)
+constexpr double kPingSeconds = 0.25;     // the ring as the gate opens
+constexpr double kPulseSeconds = 1.2;     // the listening label's pulse
+constexpr double kShadeAlpha = 36.0;      // the blue where the gate is open, over the levels
+constexpr double kKeyFall = 300.0;        // dB/s the key dot falls (24 dB in 80 ms: it moves, it doesn't lag)
 constexpr double kPi = 3.14159265358979323846;
 
 // What a stream holds where it has no values: the bottom of the axis, closed.
@@ -301,7 +302,7 @@ void GateGraph::refreshDisplays() {
         else if (lag < 0.0)
             scroll_ = double(newest_);  // no more values: it stops there
         else
-            scroll_ += 0.1 * (lag - kLagSeconds * rate_);
+            scroll_ += easeFraction(dt, kLagEaseSeconds) * (lag - kLagSeconds * rate_);
     }
     scroll_ = std::min(scroll_, double(newest_));
     if (scroll_ != before) {
