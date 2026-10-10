@@ -1,0 +1,254 @@
+import QtQuick
+import QtQuick.Controls
+import SUBstation
+
+// The Spectral Compressor's editor: the thresholds' controls at the left (Threshold, Ratio, Below and
+// Upward over Tilt, Knee, Range and Smoothing), time and output at the right (Attack, Release and Stereo
+// Link over Dry/Wet, Output and Delta), and between them SpectralGraph: the spectrum in and out, the
+// thresholds (drag them; tilt them by the orange line's end handles), the Focus band's edges, and what each
+// frequency is turned down (from the top) or brought up (from the bottom), as it plays. The Sidechain badge
+// over the display is lit while another track keys it; a click asks the frame for the sidechain menu. Every
+// control shows its parameter as it is now, sets it undoably, touches it when pressed, and right-click gives
+// its menu.
+Item {
+    id: editor
+
+    required property string trackId
+    required property string deviceId
+    readonly property alias graph: graph
+    // The badge was clicked: the device's frame shows its sidechain menu.
+    signal sidechainMenuRequested()
+
+    // A knob's cell: wide enough for "Stereo Link" and "-1.5 dB/oct" at 8 pt.
+    readonly property int cellWidth: 64
+    readonly property int leftWidth: 4 * cellWidth
+    readonly property int rightWidth: 3 * cellWidth
+    readonly property int gap: 10
+    readonly property int graphWidth: 376  // SpectralGraph::kWidth
+
+    // The device's body: the knobs either side of the display, 10 px from it, and the margins.
+    implicitWidth: 8 + leftWidth + gap + graphWidth + gap + rightWidth + 8
+    implicitHeight: 6 + Math.max(left.implicitHeight, right.implicitHeight, graph.implicitHeight) + 6
+
+    DeviceParamMap {
+        id: p
+        trackId: editor.trackId
+        deviceId: editor.deviceId
+        ids: ["threshold", "ratio", "below", "upward", "tilt", "knee", "range", "smooth", "focus_lo", "focus_hi",
+              "attack", "release", "link", "mix", "output", "delta"]
+    }
+
+    // The curve: the thresholds and their ratios, then their shape.
+    Grid {
+        id: left
+        x: 8
+        y: 6
+        columns: 4
+        columnSpacing: 0
+        rowSpacing: 8
+
+        EditorKnob {
+            objectName: "threshold"
+            width: editor.cellWidth
+            param: p.get("threshold")
+            title: qsTr("Threshold")
+            tooltip: qsTr("Threshold: each frequency louder than this is turned down by Ratio. Pink noise reads its own level at every frequency")
+        }
+        EditorKnob {
+            objectName: "ratio"
+            width: editor.cellWidth
+            param: p.get("ratio")
+            title: qsTr("Ratio")
+            tooltip: qsTr("Ratio: how hard each frequency above the threshold is pushed down")
+        }
+        EditorKnob {
+            objectName: "below"
+            width: editor.cellWidth
+            param: p.get("below")
+            title: qsTr("Below")
+            tooltip: qsTr("Below: each frequency quieter than this is brought up by Upward (never above Threshold)")
+        }
+        EditorKnob {
+            objectName: "upward"
+            width: editor.cellWidth
+            param: p.get("upward")
+            title: qsTr("Upward")
+            tooltip: qsTr("Upward: how far each frequency under Below is brought up towards it (1:1: not at all)")
+        }
+        EditorKnob {
+            objectName: "tilt"
+            width: editor.cellWidth
+            param: p.get("tilt")
+            title: qsTr("Tilt")
+            knob.bipolar: true
+            tooltip: qsTr("Tilt: turns both thresholds about 1 kHz, in dB per octave, against a pink spectrum (0: they follow pink noise; up: the highs are let louder)")
+        }
+        EditorKnob {
+            objectName: "knee"
+            width: editor.cellWidth
+            param: p.get("knee")
+            title: qsTr("Knee")
+            tooltip: qsTr("Knee: how gradually the compression starts around each threshold")
+        }
+        EditorKnob {
+            objectName: "range"
+            width: editor.cellWidth
+            param: p.get("range")
+            title: qsTr("Range")
+            tooltip: qsTr("Range: the most any frequency is turned down or up")
+        }
+        EditorKnob {
+            objectName: "smooth"
+            width: editor.cellWidth
+            param: p.get("smooth")
+            title: qsTr("Smoothing")
+            tooltip: qsTr("Smoothing: how wide a band each frequency's level is measured over: 0 each bin alone (most selective), 100 two octaves (gentlest)")
+        }
+    }
+
+    Rectangle {
+        x: left.x + editor.leftWidth + editor.gap / 2
+        y: 10
+        width: 1
+        height: editor.height - 20
+        color: Theme.border
+        opacity: 0.7
+    }
+
+    SpectralGraph {
+        id: graph
+        objectName: "spectralGraph"
+        session: Session
+        trackId: editor.trackId
+        deviceId: editor.deviceId
+        x: 8 + editor.leftWidth + editor.gap
+        y: 6
+        width: editor.width - x - editor.gap - editor.rightWidth - 8
+        height: Math.max(implicitHeight, editor.height - 12)
+
+        HoverHandler {
+            id: graphHover
+        }
+        ToolTip.visible: graphHover.hovered && !graphHover.point.pressedButtons
+        ToolTip.delay: 700
+        ToolTip.text: [
+            qsTr("Spectrum in (filled) and out (line). The orange line is the threshold: drag it, or its end handles to tilt it. Orange from the top: how far each frequency is turned down; green from the bottom: how far it is brought up"),
+            qsTr("Threshold: drag up or down (Shift: finely; double-click: back to -24 dB)"),
+            qsTr("Tilt: drag to turn both thresholds about 1 kHz (double-click: level with pink)"),
+            qsTr("Tilt: drag to turn both thresholds about 1 kHz (double-click: level with pink)"),
+            qsTr("Below: drag up or down; frequencies under the green line are brought up (double-click: back to -48 dB)"),
+            qsTr("Focus Low: drag sideways; nothing below it is changed (double-click: all the way down)"),
+            qsTr("Focus High: drag sideways; nothing above it is changed (double-click: all the way up)")
+        ][graph.hoveredHandle] || ""
+    }
+
+    // Over the display's top left: lit while a sidechain keys the gains; a click opens the sidechain menu.
+    Rectangle {
+        id: badge
+        objectName: "sidechainBadge"
+
+        readonly property bool lit: graph.keyed
+
+        x: graph.x + 4
+        y: graph.y + 2
+        width: badgeText.implicitWidth + 10
+        height: 12
+        radius: 3
+        color: lit ? Theme.accent : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0)
+        border.width: lit ? 0 : 1
+        border.color: Theme.textDisabled
+        Behavior on color {
+            ColorAnimation {
+                duration: 150
+            }
+        }
+
+        Text {
+            id: badgeText
+            anchors.centerIn: parent
+            text: qsTr("Sidechain")
+            font: Theme.uiFont(7)
+            color: badge.lit ? Theme.accentText : Theme.textDim
+        }
+        MouseArea {
+            id: badgeArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: editor.sidechainMenuRequested()
+        }
+        ToolTip.visible: badgeArea.containsMouse
+        ToolTip.delay: 700
+        ToolTip.text: qsTr("Sidechain: lit while another track's spectrum keys the gains. Click for the sidechain menu")
+    }
+
+    Rectangle {
+        x: graph.x + graph.width + editor.gap / 2
+        y: 10
+        width: 1
+        height: editor.height - 20
+        color: Theme.border
+        opacity: 0.7
+    }
+
+    // Time and output.
+    Grid {
+        id: right
+        x: editor.width - 8 - editor.rightWidth
+        y: 6
+        columns: 3
+        columnSpacing: 0
+        rowSpacing: 8
+
+        EditorKnob {
+            objectName: "attack"
+            width: editor.cellWidth
+            param: p.get("attack")
+            title: qsTr("Attack")
+            tooltip: qsTr("Attack: how fast a frequency's gain follows its level up")
+        }
+        EditorKnob {
+            objectName: "release"
+            width: editor.cellWidth
+            param: p.get("release")
+            title: qsTr("Release")
+            tooltip: qsTr("Release: how fast a frequency's gain recovers as its level falls")
+        }
+        EditorKnob {
+            objectName: "link"
+            width: editor.cellWidth
+            param: p.get("link")
+            title: qsTr("Stereo Link")
+            tooltip: qsTr("Stereo Link: 100 both channels get the same gains (the louder one's); 0 each channel its own")
+        }
+        EditorKnob {
+            id: mixKnob
+            objectName: "mix"
+            width: editor.cellWidth
+            param: p.get("mix")
+            title: qsTr("Dry/Wet")
+            tooltip: qsTr("Dry/Wet: the processed sound blended with the input (in time: the input is delayed as much)")
+        }
+        EditorKnob {
+            objectName: "output"
+            width: editor.cellWidth
+            param: p.get("output")
+            title: qsTr("Output")
+            knob.bipolar: true
+            tooltip: qsTr("Output: the level after everything")
+        }
+        Item {
+            width: editor.cellWidth
+            height: mixKnob.height
+
+            ParamButton {
+                objectName: "delta"
+                anchors.centerIn: parent
+                width: editor.cellWidth - 6
+                param: p.get("delta")
+                text: qsTr("Delta")
+                tooltip: qsTr("Delta: hear only what the device changes (what it takes away; what it adds comes out inverted), to set it by ear")
+            }
+        }
+    }
+}

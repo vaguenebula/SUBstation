@@ -44,6 +44,8 @@ QString formatValue(double value, const QString& unit) {
         return countText(beats, QStringLiteral("Beat"), QStringLiteral("Beats"));
     }
     if (unit == u"\u00B0") return formatFixed(value, 0) + QStringLiteral("\u00B0");  // an angle (a phase offset): "180°"
+    // A slope (the Spectral Compressor's Tilt): "-1.5 dB/oct".
+    if (unit == u"dB/oct") return formatFixed(value, 1) + QStringLiteral(" dB/oct");
     return formatFixed(value, 2) + u' ' + unit;
 }
 
