@@ -827,7 +827,7 @@ TEST_CASE("changing the amp model morphs without a click") {
     CHECK(worst <= 0.01);
 }
 
-TEST_CASE("a model change works its levels out a cell at a time, the same in any blocks") {
+TEST_CASE("an amp's model change works its levels out a cell at a time, the same in any blocks") {
     // The morph's levels (an amp::Transfer each) come one per 16-sample cell of the grid at
     // most: it sets off once the first four are known, three cells after the change, and until
     // then the amp plays on as the old model, bit for bit. A change inside a cell waits for the
@@ -850,6 +850,84 @@ TEST_CASE("a model change works its levels out a cell at a time, the same in any
             const int64_t setsOff = at + (offset == 0 ? 0 : 16) + 3 * 16;
             CHECK_EQ(firstDifference(out, old), setsOff);
         }
+    }
+}
+
+TEST_CASE("model changes faster than a morph keep the amp's level while a dial moves") {
+    // A change made in a morph starts from the morph's level compensation as it is, and holds
+    // it while it waits for its own levels. A dial moving meanwhile must not apply it again
+    // (it was once compounded on the trim in every such chunk: changes faster than the morph's
+    // 1 ms wait, with Gain automated, ran away to silence or to inf). Changes that never let
+    // a morph set off hold the blend they found, at the compensation worked out for the dials
+    // then: with Gain swept from 4 to 6 it stays within 2 dB of the two models (+1.6 / -1.3
+    // measured; +0.6 / -1.2 with Gain still).
+    const double seconds = 1.0;
+    const Samples x = sine220(seconds);
+    const int64_t first = frameAt(0.2), toggling = frameAt(0.225), end = frameAt(seconds);
+    // Gain automated: a slow sine between 4 and 6, a point every 64 samples.
+    std::vector<Change> gain;
+    for (int64_t f = frameAt(0.1); f < end; f += 64)
+        gain.push_back({f, "gain", static_cast<float>(5.0 + std::sin(2.0 * M_PI * 3.0 * f / kSampleRate))});
+    const auto merged = [](std::vector<Change> a, const std::vector<Change>& b) {
+        a.insert(a.end(), b.begin(), b.end());
+        std::stable_sort(a.begin(), a.end(), [](const Change& l, const Change& r) { return l.frame < r.frame; });
+        return a;
+    };
+    const std::pair<int, int> pairs[] = {{amp::Clean, amp::Blues}, {amp::Blues, amp::Bass}, {amp::Rock, amp::Lead}};
+    for (const auto& [a, b] : pairs) {
+        // Each model played steadily with the same automation: the levels the output stays between.
+        Amp steadyA(kSampleRate, model(a)), steadyB(kSampleRate, model(b));
+        const Samples outA = steadyA.play(x, gain, 64), outB = steadyB.play(x, gain, 64);
+        for (const int period : {16, 32, 47, 48, 64}) {
+            INFO(modelName(a) + " and " + modelName(b) + " in turn every " + std::to_string(period) + " samples");
+            // A change to the second model, then from halfway through its morph a change every `period` samples.
+            std::vector<Change> changes = {{first, "type", static_cast<float>(b)}};
+            int now = b;
+            for (int64_t f = toggling; f < end; f += period) {
+                now = now == a ? b : a;
+                changes.push_back({f, "type", static_cast<float>(now)});
+            }
+            Amp amp(kSampleRate, model(a));
+            const Samples out = amp.play(x, merged(changes, gain), 64);
+            REQUIRE(allFinite(out));
+            for (int64_t w = first; w + frameAt(0.05) <= end; w += frameAt(0.05)) {
+                const int64_t e = w + frameAt(0.05);
+                const double level = rmsDb(out, w, e), la = rmsDb(outA, w, e), lb = rmsDb(outB, w, e);
+                INFO("at " + std::to_string(w) + ": " + std::to_string(level) + " dB, the models " +
+                     std::to_string(la) + " and " + std::to_string(lb) + " dB");
+                CHECK(level <= std::max(la, lb) + 2.0);
+                CHECK(level >= std::min(la, lb) - 2.0);
+            }
+        }
+    }
+}
+
+TEST_CASE("an amp's model change in a morph keeps its level whether a dial glides or not") {
+    // Two model changes 25 ms apart (the second in the first's morph, waiting a millisecond for
+    // its levels) with Gain gliding from 5 to 5.5 through both, against the same changes with
+    // Gain already at 5.5: in 1 ms windows, the same level within a decibel (Gain still 0.01
+    // short makes 0.1 dB at most), where a compensation applied twice dipped 10 dB.
+    const Samples x = sine220(0.7);
+    const int64_t glide = frameAt(0.45), first = frameAt(0.5), second = frameAt(0.525);
+    const std::tuple<int, int, int> triples[] = {{amp::Rock, amp::Lead, amp::Clean},
+                                                 {amp::Lead, amp::Bass, amp::Clean},
+                                                 {amp::Clean, amp::Heavy, amp::Blues},
+                                                 {amp::Boost, amp::Blues, amp::Lead}};
+    for (const auto& [from, mid, last] : triples) {
+        INFO(modelName(from) + " to " + modelName(mid) + " to " + modelName(last));
+        const std::vector<Change> changes = {{first, "type", static_cast<float>(mid)},
+                                             {second, "type", static_cast<float>(last)}};
+        std::vector<Change> gliding = changes;
+        gliding.insert(gliding.begin(), {glide, "gain", 5.5f});
+        Amp a(kSampleRate, model(from)), b(kSampleRate, model(from, {{"gain", 5.5f}}));
+        const Samples moving = a.play(x, gliding, 64), still = b.play(x, changes, 64);
+        double worst = 0.0;
+        for (int64_t w = second - frameAt(0.005); w < second + frameAt(0.03); w += 48) {
+            const double pa = maxAbs(slice(moving, w, w + 48)), pb = maxAbs(slice(still, w, w + 48));
+            worst = std::max(worst, std::abs(20.0 * std::log10(pa / pb)));
+        }
+        INFO("the largest difference: " + std::to_string(worst) + " dB");
+        CHECK(worst <= 1.0);
     }
 }
 

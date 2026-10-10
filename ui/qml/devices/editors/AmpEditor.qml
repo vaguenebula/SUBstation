@@ -26,7 +26,7 @@ Item {
 
     readonly property int leftWidth: 140   // the tubes over the drive graph
     readonly property int plateWidth: 368  // the model buttons and the knobs over the tone graph
-    readonly property int rightWidth: 68   // Output and Dry/Wet over the lamp
+    readonly property int rightWidth: 80   // Output and Dry/Wet over the lamp (Mono 3 px clear of its button's border)
     readonly property int meterWidth: 10
     readonly property int gap: 10
     readonly property int modelWidth: 50  // a model button's (7 x 50 + 6 x 3 = plateWidth)

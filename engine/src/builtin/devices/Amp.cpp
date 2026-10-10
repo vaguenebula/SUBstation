@@ -108,7 +108,10 @@ struct ChunkControls {
     double drive = 1.0, powerBias = 0.0, powerOffset = 0.0, powerGOut = 1.0;
     float sag = 0.f, sagAttack = 1.f, sagRelease = 1.f;
     float transformer = 0.f;
-    float trim = 1.f;
+    // The output's trim: the voicing's own, and in a morph that times the
+    // morph's level compensation (worked out afresh each chunk from the
+    // voicing's, never from the last chunk's trim, which already carries one).
+    float voiceTrim = 1.f, trim = 1.f;
 };
 
 // What a chunk of one amp showed: each stage's peak |q| (V1, V2, V3, power;
@@ -438,7 +441,7 @@ private:
             voicingControls(voice_, c);
         }
         dialControls(voice_, c, morphMoves || toneMoves);
-        if (morphing) c.trim *= static_cast<float>(std::pow(10.0, morphLevel() / 20.0));
+        if (morphing) c.trim = c.voiceTrim * static_cast<float>(std::pow(10.0, morphLevel() / 20.0));
         last_ = c;
         return c;
     }
@@ -543,7 +546,7 @@ private:
         c.sagAttack = static_cast<float>(1.0 - std::exp(-1.0 / (v.sagAttackMs * 1e-3 * rate)));
         c.sagRelease = static_cast<float>(1.0 - std::exp(-1.0 / (v.sagReleaseMs * 1e-3 * rate)));
         c.transformer = dsp::onePoleCutoff(v.transformerHz, overRate);
-        c.trim = static_cast<float>(std::pow(10.0, v.trimDb / 20.0));
+        c.voiceTrim = c.trim = static_cast<float>(std::pow(10.0, v.trimDb / 20.0));
     }
 
     // What the dials set with the voicing: the stages' input gains (Gain), the

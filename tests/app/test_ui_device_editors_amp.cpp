@@ -42,6 +42,7 @@ using sub::app::test::kSampleRate;
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kWidth = 642.0;  // the editor's
 
 const QStringList kDials = {QStringLiteral("gain"),   QStringLiteral("bass"),     QStringLiteral("middle"),
                             QStringLiteral("treble"), QStringLiteral("presence"), QStringLiteral("volume")};
@@ -201,7 +202,7 @@ private Q_SLOTS:
         QVERIFY(s.view && s.panel && s.drive && s.tone);
         QVERIFY2(s.view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(s.view->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(s.view->implicitWidth(), 630.0);
+        QCOMPARE(s.view->implicitWidth(), kWidth);
         QCOMPARE(s.view->height(), double(bodyHeight()));
         QVERIFY(find(s.view, QStringLiteral("typeUnderline")));
 
@@ -221,11 +222,15 @@ private Q_SLOTS:
             QVERIFY(button);
             controls << button;
         }
-        // Each button's label fits it (the monitor role has no padding).
+        // Each button's label fits it 2 px clear of its 1 px border at least (the monitor role has no padding).
         for (QQuickItem* button : controls) {
             auto* content = qvariant_cast<QQuickItem*>(buttonOf(button)->property("contentItem"));
             QVERIFY(content);
-            QVERIFY2(content->implicitWidth() <= button->width(), qPrintable(button->objectName()));
+            QVERIFY2(content->implicitWidth() + 2.0 * (1.0 + 2.0) <= button->width(),
+                     qPrintable(QStringLiteral("%1: %2 in %3")
+                                    .arg(button->objectName())
+                                    .arg(content->implicitWidth())
+                                    .arg(button->width())));
         }
         for (const QString& id : kDials + QStringList{QStringLiteral("mix")}) {
             QVERIFY2(knobOf(s.view, id), qPrintable(id));
@@ -242,7 +247,7 @@ private Q_SLOTS:
         QList<QRectF> rects;
         for (QQuickItem* control : controls) {
             const QRectF rect = control->mapRectToItem(s.view, QRectF(0, 0, control->width(), control->height()));
-            QVERIFY2(rect.right() <= 630.0 - 8.0, qPrintable(control->objectName()));
+            QVERIFY2(rect.right() <= kWidth - 8.0, qPrintable(control->objectName()));
             QVERIFY2(rect.left() >= 8.0 && rect.top() >= 6.0, qPrintable(control->objectName()));
             for (int i = 0; i < rects.size(); ++i)
                 QVERIFY2(!rects[i].intersects(rect),
@@ -250,7 +255,7 @@ private Q_SLOTS:
             rects << rect;
         }
         // The panel's wells sit where the layout leaves room: the meter at the right margin.
-        QCOMPARE(s.panel->meterRect().right(), 630.0 - 8.0);
+        QCOMPARE(s.panel->meterRect().right(), kWidth - 8.0);
         QVERIFY(s.panel->tubeRect().bottom() < s.drive->mapToItem(s.view, QPointF(0, 0)).y());
         QCOMPARE(s.panel->jewelRect().bottom(), s.view->height() - 6.0);
         // The lamp's and the meter's tooltips cover them whole (the meter's its whole height).
