@@ -4,7 +4,9 @@
 // end a chunk at a time, so a long file neither holds up the window nor needs a
 // second copy of itself in memory; then decoded there. Followed as the engine's
 // renders are (RenderTask): progress, done, cancel(). Cancelled or failed, what
-// was written of it goes.
+// was written of it goes. Made, it waits for start() (as the engine's RenderJob
+// does; startReversed starts it at once): cancelled before that, it writes none
+// of the copy (a short one could be written before a cancel reached it).
 
 #include "audio/RenderTask.h"
 
@@ -28,10 +30,13 @@ class ReverseJob : public RenderTask {
     Q_OBJECT
 
 public:
-    // Starts writing the reversed copy of `source` to `path` (its thread runs at once).
+    // The reversed copy of `source` to write to `path`, once started.
     ReverseJob(sub::Engine& engine, std::shared_ptr<const sub::AudioSource> source, const QString& path,
                qint64 chunkFrames = kReverseChunk, QObject* parent = nullptr);
     ~ReverseJob() override;  // cancelled, and waited for
+
+    // Starts writing it: its thread runs, and it is followed. Once.
+    void start();
 
     qint64 frames() const { return frames_; }
     double seconds() const { return seconds_; }
@@ -41,8 +46,8 @@ public:
     bool done() const override { return done_.load(std::memory_order_acquire); }
     bool cancelled() const override { return cancel_.load(std::memory_order_relaxed); }
 
-    // Waits for it: the copy, decoded, or null if it was cancelled (its file
-    // gone). Throws EditError if it couldn't be written.
+    // Waits for it (started, if it wasn't): the copy, decoded, or null if it was
+    // cancelled (its file gone). Throws EditError if it couldn't be written.
     std::shared_ptr<sub::AudioSource> finish();
 
 protected:

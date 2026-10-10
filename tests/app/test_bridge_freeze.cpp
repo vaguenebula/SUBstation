@@ -20,6 +20,7 @@
 #include <QSignalSpy>
 #include <QTest>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace sub::app;
@@ -344,12 +345,21 @@ private Q_SLOTS:
         QCOMPARE(*bridge.reversedCopy(path), reversed->first);  // given again for this file
         QCOMPARE(bridge.renderReversed(path).first, reversed->first);
 
-        // Cancelled (written a chunk at a time): its file goes.
+        // Written a chunk at a time (that one was one chunk): the same copy. (Not
+        // started, finishing it starts it.)
+        ReverseJob chunked(studio.engine, bridge.source(path), dir.path("chunked.wav"), 1000);
+        const std::shared_ptr<sub::AudioSource> chunks = chunked.finish();
+        QVERIFY(chunks && chunks->frames() == copy->frames());
+        QVERIFY(std::equal(chunks->data(), chunks->data() + chunks->frames(), copy->data()));
+
+        // Cancelled before it starts (started at once, a short copy could be
+        // written before the cancel reached it): its file goes.
         auto cancelled = std::make_unique<ReverseJob>(studio.engine, bridge.source(path),
-                                                      reversedPath(reversedFolder(studio.project), path), 1000);
+                                                      reversedPath(reversedFolder(studio.project), path));
         const QString gone = cancelled->path();
         QCOMPARE(QFileInfo(gone).fileName(), QStringLiteral("ramp R 2.wav"));
         cancelled->cancel();
+        cancelled->start();
         QVERIFY(!bridge.finishReversed(path, *cancelled));
         QVERIFY(!QFileInfo::exists(gone));
 

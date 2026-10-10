@@ -347,7 +347,10 @@ A reversed clip plays a reversed copy of its file, named `name R.wav` (`reversed
 - `startReversed(path)` starts a `ReverseJob`: the decoded source (it must be decoded: otherwise `EditError`, with a
   message for the user) written backwards as a 32-bit float WAV, `kReverseChunk` frames at a time from its end, on a
   thread of its own, then decoded there. It is a `RenderTask` (progress, done, `cancel()`), so the session's renders
-  follow it as they follow the engine's; cancelled or failed, its file goes.
+  follow it as they follow the engine's; cancelled or failed, its file goes. A `ReverseJob` is made, then started
+  (`start()`, which `startReversed` calls at once, as the engine starts its `RenderJob`s): cancelled before that, it
+  writes none of the copy (the tests' way to cancel one deterministically: a short copy can be written before a cancel
+  reaches it); finished, it is started if it wasn't.
 - `finishReversed(path, job)`: the copy's path and length in seconds (decoded, so it plays without a gap, and
   remembered for `path`), none if cancelled, or `EditError`.
 - `renderReversed(path)` is the three of them, waited for.
