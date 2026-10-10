@@ -1165,7 +1165,8 @@ decimal, no sign: `formatValue` in [ParamSpec.cpp](../../app/src/model/ParamSpec
   length), about the work the amp does for 16 samples, a blend's half as much again. They come one per 16-sample cell
   of the control grid at most: the morph sets off once its first four are known (1 ms after the change at 48 kHz,
   during which the amp plays on as the old model), a change's first 32-frame block (the two models' levels) costs
-  about two steady ones, and no block of a morph more than about three. It goes by the grid, so a morph sets off and
+  about two steady ones, and no block of a morph more than about three (measured with glibc: a blend's level still
+  calls exp and pow, so a slower maths library costs more). It goes by the grid, so a morph sets off and
   moves at the same samples whatever the blocks. Through every one of the 42 morphs the level stays within +0.9 /
   −1.4 dB of the two models (a −12 dBFS sine, 5 ms windows). Each chunk of a morph applies the compensation to the
   voicing's own trim (never to the last chunk's, which carries it already), so dials moving while a morph waits change

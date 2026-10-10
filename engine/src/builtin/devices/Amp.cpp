@@ -259,6 +259,10 @@ public:
     enum Display { InputLevel = 0, Drive1, Drive2, Drive3, PowerDrive, SagDisplay, OutputLevel };
     enum class Mode { Mono, Dual };
 
+    // Its levels' voicings point at its own rate tables (levelRate_): never copied or moved.
+    AmpProcessor(const AmpProcessor&) = delete;
+    AmpProcessor& operator=(const AmpProcessor&) = delete;
+
     AmpProcessor()
         : BuiltinProcessor(infos(), {{"input", kMeterSamples},
                                      {"drive1", kMeterSamples},
@@ -464,9 +468,10 @@ private:
     // LevelTransfer, from a model's tables about the work the amp does for a
     // cell, from a blend's (made then) half as much again: one a cell at most,
     // so a change's first block of two cells (the two models' levels) costs
-    // about two steady ones and no block of a morph more than about three (the
-    // start waits three cells, 1 ms at 48 kHz, for the ends' levels and the
-    // first two points'). Decided per cell and the morph's place counted in
+    // about two steady ones and no block of a morph more than about three with
+    // glibc (a blend's level still calls exp and pow) (the start waits three
+    // cells, 1 ms at 48 kHz, for the ends' levels and the first two points').
+    // Decided per cell and the morph's place counted in
     // samples, so a morph sets off and moves at the same samples whatever the
     // blocks.
     void morphCell() noexcept {
