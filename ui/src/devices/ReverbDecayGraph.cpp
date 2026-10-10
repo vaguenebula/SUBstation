@@ -31,14 +31,11 @@ constexpr double kSpectrumTopDb = -12.0;  // the tail's spectrum over the axis' 
 constexpr double kFineRatio = 0.25;       // Shift: the drag's ratios to this power
 constexpr double kHandleInset = 6.0;      // px: a handle's centre stays this far inside the plot (its largest ring)
 constexpr double kStaleSeconds = 0.1;     // a tick without values keeps the last this long (a long audio block)
-
-// a + (b - a) t, of colours.
-QColor mix(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    const auto lerp = [t](float from, float to) { return float(from + (to - from) * t); };
-    return QColor::fromRgbF(lerp(a.redF(), b.redF()), lerp(a.greenF(), b.greenF()), lerp(a.blueF(), b.blueF()),
-                            lerp(a.alphaF(), b.alphaF()));
-}
+// The ranges its handles drag: the engine's, through the application layer.
+constexpr double kMinShelfFreq = sub::app::kReverbMinShelfFreq;
+constexpr double kMaxLoFreq = sub::app::kReverbMaxLoFreq, kMaxHiFreq = sub::app::kReverbMaxHiFreq;
+constexpr double kMinShelfGain = sub::app::kReverbMinShelfGain, kMaxShelfGain = sub::app::kReverbMaxShelfGain;
+constexpr double kMinDecayMs = sub::app::kReverbMinDecayMs, kMaxDecayMs = sub::app::kReverbMaxDecayMs;
 
 // "0.1 s", "1 s", "10 s": the axis' figures.
 QString axisText(double seconds) { return pythonGeneral(seconds) + QStringLiteral(" s"); }
@@ -70,7 +67,7 @@ bool passesNear(const std::vector<QPointF>& line, const QRectF& rect, double mar
 }  // namespace
 
 ReverbDecayGraph::ReverbDecayGraph(QQuickItem* parent) : DeviceCanvas(parent) {
-    setImplicitSize(kWidth, kMinimumHeight);
+    setImplicitSize(kMinimumWidth, kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton);
     setAcceptHoverEvents(true);
     setCursor(Qt::SizeVerCursor);
@@ -120,12 +117,6 @@ double ReverbDecayGraph::yOfLog(double logSeconds) const {
 }
 
 double ReverbDecayGraph::yOf(double seconds) const { return yOfLog(logOf(seconds)); }
-
-double ReverbDecayGraph::secondsAt(double y) const {
-    const QRectF r = axisRect();
-    const double fraction = std::clamp((r.bottom() - y) / r.height(), 0.0, 1.0);
-    return kMinSeconds * std::pow(kMaxSeconds / kMinSeconds, fraction);
-}
 
 bool ReverbDecayGraph::shelfOn(Handle handle) const {
     return handle == Lo ? settings_.loShelf : handle == Hi ? settings_.hiFilter : true;
@@ -306,9 +297,7 @@ void ReverbDecayGraph::updateColumns() { columns_ = spectrum_.columns(std::max(2
 // --- Displays and animation -------------------------------------------------------------
 
 void ReverbDecayGraph::refreshDisplays() {
-    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    const double seconds = tickSeconds();
     const std::vector<float> tail = readDisplay(QStringLiteral("tail"));
     if (spectrum_.add(tail.data(), tail.size(), sampleRate())) {
         updateColumns();
@@ -454,22 +443,25 @@ void ReverbDecayGraph::dragTo(const QPointF& pos, Qt::KeyboardModifiers modifier
     // (A shelf switched off, or the Low-pass, has no gain the handle shows: across only.)
     case Lo:
         if (gainless(Lo))
-            setParams({{QStringLiteral("lo_freq"), std::clamp(startFreq_ * rx, 20.0, 15000.0)}}, gesture_, text);
+            setParams({{QStringLiteral("lo_freq"), std::clamp(startFreq_ * rx, kMinShelfFreq, kMaxLoFreq)}}, gesture_,
+                      text);
         else
-            setParams({{QStringLiteral("lo_freq"), std::clamp(startFreq_ * rx, 20.0, 15000.0)},
-                       {QStringLiteral("lo_gain"), std::clamp(startGain_ * ry, 20.0, 100.0)}},
+            setParams({{QStringLiteral("lo_freq"), std::clamp(startFreq_ * rx, kMinShelfFreq, kMaxLoFreq)},
+                       {QStringLiteral("lo_gain"), std::clamp(startGain_ * ry, kMinShelfGain, kMaxShelfGain)}},
                       gesture_, text);
         break;
     case Hi:
         if (gainless(Hi))
-            setParams({{QStringLiteral("hi_freq"), std::clamp(startFreq_ * rx, 20.0, 16000.0)}}, gesture_, text);
+            setParams({{QStringLiteral("hi_freq"), std::clamp(startFreq_ * rx, kMinShelfFreq, kMaxHiFreq)}}, gesture_,
+                      text);
         else
-            setParams({{QStringLiteral("hi_freq"), std::clamp(startFreq_ * rx, 20.0, 16000.0)},
-                       {QStringLiteral("hi_gain"), std::clamp(startGain_ * ry, 20.0, 100.0)}},
+            setParams({{QStringLiteral("hi_freq"), std::clamp(startFreq_ * rx, kMinShelfFreq, kMaxHiFreq)},
+                       {QStringLiteral("hi_gain"), std::clamp(startGain_ * ry, kMinShelfGain, kMaxShelfGain)}},
                       gesture_, text);
         break;
     case Decay:
-        setParams({{QStringLiteral("decay"), std::clamp(startDecay_ * ry, 200.0, 60000.0)}}, gesture_, text);
+        setParams({{QStringLiteral("decay"), std::clamp(startDecay_ * ry, kMinDecayMs, kMaxDecayMs)}}, gesture_,
+                  text);
         break;
     case None: break;
     }
@@ -584,7 +576,7 @@ void ReverbDecayGraph::paint(SgPainter& p) {
 
     // The curve: filled, glowing while the tail sounds, rippling with the chorus.
     const double glow = glow_.value;
-    const QColor color = dry_ ? Theme::kTextDisabled : mix(Theme::kScopeLine, Theme::kFrozen, frozen);
+    const QColor color = dry_ ? Theme::kTextDisabled : mixColor(Theme::kScopeLine, Theme::kFrozen, frozen);
     const double ripple = kRipplePx * depth_.value * glow;
     if (ripple > 0.0) {
         for (std::size_t i = 0; i < curve.size(); ++i) {

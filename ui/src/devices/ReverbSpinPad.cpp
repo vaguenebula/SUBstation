@@ -33,7 +33,7 @@ constexpr double kStaleSeconds = 0.1;    // a tick without values keeps the last
 }  // namespace
 
 ReverbSpinPad::ReverbSpinPad(QQuickItem* parent) : DeviceCanvas(parent) {
-    setImplicitSize(kWidth, kMinimumHeight);
+    setImplicitSize(kMinimumWidth, kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton);
     setCursor(Qt::SizeAllCursor);
 }
@@ -144,9 +144,7 @@ void ReverbSpinPad::place() {
 // --- Displays and animation -------------------------------------------------------------
 
 void ReverbSpinPad::refreshDisplays() {
-    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    const double seconds = tickSeconds();
     // A tick that brings no values (the audio's blocks longer than a tick) keeps the last for a moment: the
     // phase runs on at Spin's rate (set right by the next one published), the light holds.
     const std::vector<float> phases = readDisplay(QStringLiteral("spin"));
@@ -161,7 +159,7 @@ void ReverbSpinPad::refreshDisplays() {
         drawPhase_ -= std::floor(drawPhase_);
     }
     if (!early.empty()) {
-        double loudest = -90.0;
+        double loudest = sub::app::kReverbMeterFloorDb;
         for (const float v : early) loudest = std::max(loudest, double(v));
         flash_.target = std::clamp((loudest + kFlashRangeDb) / kFlashRangeDb, 0.0, 1.0);
         stale_ = 0.0;

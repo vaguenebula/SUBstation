@@ -8,6 +8,15 @@
 
 namespace sub::app {
 
+static_assert(kReverbTaps == sub::reverb::kMaxTaps && kReverbMeterFloorDb == double(sub::reverb::kMeterFloorDb));
+static_assert(kReverbMinInFreq == sub::reverb::kMinInFreq && kReverbMaxInFreq == sub::reverb::kMaxInFreq &&
+              kReverbMinInWidth == sub::reverb::kMinInWidth && kReverbMaxInWidth == sub::reverb::kMaxInWidth &&
+              kReverbMinSpinRate == sub::reverb::kMinSpinRate && kReverbMaxSpinRate == sub::reverb::kMaxSpinRate);
+static_assert(kReverbMinShelfFreq == sub::reverb::kMinShelfFreq && kReverbMaxLoFreq == sub::reverb::kMaxLoFreq &&
+              kReverbMaxHiFreq == sub::reverb::kMaxHiFreq && kReverbMinShelfGain == sub::reverb::kMinShelfGain &&
+              kReverbMaxShelfGain == sub::reverb::kMaxShelfGain && kReverbMinDecayMs == sub::reverb::kMinDecayMs &&
+              kReverbMaxDecayMs == sub::reverb::kMaxDecayMs);
+
 QList<double> reverbDecaySeconds(const ReverbDecaySettings& settings, double sampleRate,
                                  const QList<double>& frequencies) {
     sub::reverb::DecaySettings p;

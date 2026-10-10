@@ -18,8 +18,8 @@
 #include "devices/EditorPaint.h"
 
 #include "analysis/Spectrum.h"
+#include "audio/ReverbResponse.h"
 
-#include <QElapsedTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include <vector>
@@ -29,21 +29,21 @@ namespace sub::ui {
 class ReverbFilterPad : public DeviceCanvas {
     Q_OBJECT
     QML_ELEMENT
-    Q_PROPERTY(double inputLevel READ inputLevel NOTIFY levelsChanged)  // dB: the newest "input" (-90 a while without)
+    Q_PROPERTY(double inputLevel READ inputLevel NOTIFY levelsChanged)  // dB: the newest "input" (floor: none lately)
     Q_PROPERTY(double glow READ glow NOTIFY levelsChanged)              // 0..1, eased
     Q_PROPERTY(bool animating READ animating NOTIFY levelsChanged)      // the last tick asked for a repaint
 
 public:
-    static constexpr int kWidth = 108;
+    static constexpr int kMinimumWidth = 108;  // (the editor gives it the width of the boxes under it)
     static constexpr int kMinimumHeight = 56;
     static constexpr double kLow = 20.0;  // Hz across the pad
     static constexpr double kHigh = 20000.0;
     static constexpr double kTopDb = 6.0;  // the response's axis
     static constexpr double kFloorDb = -30.0;
-    static constexpr double kWidthMin = 0.5;  // octaves, the pad's bottom
-    static constexpr double kWidthMax = 9.0;  // and its top
-    static constexpr double kFreqMin = 50.0;  // In Filter Freq's range
-    static constexpr double kFreqMax = 18000.0;
+    static constexpr double kWidthMin = sub::app::kReverbMinInWidth;  // octaves, the pad's bottom
+    static constexpr double kWidthMax = sub::app::kReverbMaxInWidth;  // and its top
+    static constexpr double kFreqMin = sub::app::kReverbMinInFreq;    // In Filter Freq's range
+    static constexpr double kFreqMax = sub::app::kReverbMaxInFreq;
 
     explicit ReverbFilterPad(QQuickItem* parent = nullptr);
 
@@ -84,7 +84,7 @@ protected:
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
-    // One tick of animation, `seconds` after the last (refreshDisplays calls it with the time since).
+    // One tick of animation, `seconds` after the last (refreshDisplays calls it with tickSeconds()).
     void advance(double seconds);
     void updateCurve();
     void updateShown();
@@ -104,11 +104,12 @@ private:
     sub::app::analysis::FallingSpectrum spectrum_;
     std::vector<double> columns_;  // the spectrum under each column
     bool spectrumChanged_ = false;
-    double inputLevel_ = -90.0;
-    double loudest_ = -90.0;  // the last tick's loudest "input" (kept a moment through ticks without one)
-    double stale_ = 0.0;      // s since a tick last brought one
+    double inputLevel_ = sub::app::kReverbMeterFloorDb;
+    // The last tick's loudest "input" (kept a moment through ticks without one), and the seconds since a tick
+    // last brought one.
+    double loudest_ = sub::app::kReverbMeterFloorDb;
+    double stale_ = 0.0;
     Eased glow_;
-    QElapsedTimer clock_;
     bool animating_ = false;
     QMetaObject::Connection bridgeConnection_;  // the bridge's deviceChanged: a new sample rate
 

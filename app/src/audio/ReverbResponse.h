@@ -8,6 +8,18 @@
 
 namespace sub::app {
 
+// The engine's constants the editor needs (ReverbDesign.h's, which ReverbResponse.cpp checks they are):
+inline constexpr int kReverbTaps = 12;                // the early reflections
+inline constexpr double kReverbMeterFloorDb = -90.0;  // the level displays (input, early, diffuse) in silence
+// The ranges of the parameters the pads and the graph drag: In Filter Freq (Hz) and Width (octaves), ER Spin Rate
+// (Hz), the shelves' frequencies (Hz) and gains (% of Decay), Decay Time (ms).
+inline constexpr double kReverbMinInFreq = 50.0, kReverbMaxInFreq = 18000.0;
+inline constexpr double kReverbMinInWidth = 0.5, kReverbMaxInWidth = 9.0;
+inline constexpr double kReverbMinSpinRate = 0.07, kReverbMaxSpinRate = 1.3;
+inline constexpr double kReverbMinShelfFreq = 20.0, kReverbMaxLoFreq = 15000.0, kReverbMaxHiFreq = 16000.0;
+inline constexpr double kReverbMinShelfGain = 20.0, kReverbMaxShelfGain = 100.0;
+inline constexpr double kReverbMinDecayMs = 200.0, kReverbMaxDecayMs = 60000.0;
+
 // What the decay curve depends on, as the device's parameters hold them.
 struct ReverbDecaySettings {
     double decayMs = 1200.0, size = 100.0, scale = 50.0;
@@ -32,7 +44,7 @@ QList<double> reverbInputFilterDb(double freq, double width, bool loCut, bool hi
 struct ReverbTap {
     double ms = 0.0, gain = 0.0, pan = 0.0;
 };
-// All twelve, in order (gain 0 for those `density` doesn't use), for Size
+// All twelve (kReverbTaps), in order (gain 0 for those `density` doesn't use), for Size
 // `size` and Shape `shape` (%).
 QList<ReverbTap> reverbEarlyTaps(double size, double shape, int density);
 // Where Spin has reflection `k` (0..11) in the stereo field (-1..1), its amount

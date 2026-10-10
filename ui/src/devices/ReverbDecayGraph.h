@@ -29,7 +29,6 @@
 #include "analysis/Spectrum.h"
 #include "audio/ReverbResponse.h"
 
-#include <QElapsedTimer>
 #include <QPointF>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
@@ -49,7 +48,7 @@ class ReverbDecayGraph : public DeviceCanvas {
     Q_PROPERTY(QString readout READ readout NOTIFY levelsChanged)        // the top right's text
 
 public:
-    static constexpr int kWidth = 200;
+    static constexpr int kMinimumWidth = 200;  // (the editor gives it the width of the boxes under it)
     static constexpr int kMinimumHeight = 80;
     static constexpr int kMeterWidth = 6;
     static constexpr double kLow = 20.0;  // Hz across the graph
@@ -91,7 +90,6 @@ public:
     Q_INVOKABLE double xOf(double freq) const;
     Q_INVOKABLE double freqAt(double x) const;
     Q_INVOKABLE double yOf(double seconds) const;
-    Q_INVOKABLE double secondsAt(double y) const;
 
 Q_SIGNALS:
     void curveChanged();
@@ -146,8 +144,10 @@ private:
     sub::app::analysis::FallingSpectrum spectrum_;
     std::vector<double> columns_;
     bool spectrumChanged_ = false;
-    double diffuseDb_ = -90.0;   // the tick's loudest "diffuse" (kept a moment through ticks without one)
-    double stale_ = 0.0;         // s since a tick last brought one
+    // The tick's loudest "diffuse" (kept a moment through ticks without one), and the seconds since a tick last
+    // brought one.
+    double diffuseDb_ = sub::app::kReverbMeterFloorDb;
+    double stale_ = 0.0;
     double chorusPhase_ = 0.0;   // the newest "chorus" (the last while still)
     bool chorusMoved_ = false;
     MeterBallistics meter_;
@@ -156,7 +156,6 @@ private:
     // The animation.
     Eased frozen_, glow_, depth_;
     std::array<Eased, 3> grow_;  // each handle's size: 0 (4 px) .. 1 (6 px)
-    QElapsedTimer clock_;
     bool animating_ = false;
     QMetaObject::Connection bridgeConnection_;  // the bridge's deviceChanged: a new sample rate
 

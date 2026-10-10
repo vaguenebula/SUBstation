@@ -329,7 +329,7 @@ readonly property var editors: ({
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
   `implicitWidth` is the body's width (Compressor 658, Gate 566, or 833 with its sidechain section, Limiter 608,
   Multiband Dynamics 816, Spectral Compressor 936, Saturator 771, Amp 642, Erosion 532, Delay 532, Chorus-Ensemble
-  534, Phaser-Flanger 732, or 906 with More open, Reverb 890, Disperser 544, EQ 580, or 756 with its band controls,
+  534, Phaser-Flanger 732, or 906 with More open, Reverb 995, Disperser 544, EQ 580, or 756 with its band controls,
   Sidechain 720, Sampler 760); it may change. It gets the body's whole height and grows its graphs into it (6 px
   from the top and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
 - Optional: `pages` (read) and `page` (read/write) for pages of knobs, and `pageNames` (the title bar's tabs instead of
@@ -885,24 +885,30 @@ The editors:
     the Feedback. The drags hold to the parameters' ranges, the engine's (`phaserRanges()`). One undo step per drag (a merge key per gesture); a double-click sets the two back to their defaults
     under its first click's key, so the click's jump and the reset are one step, undone to what was there before.
 - **Reverb** ([ReverbEditor.qml](../../ui/qml/devices/editors/ReverbEditor.qml)): no pages; laid out as Ableton's,
-  sections side by side with a faint rule between them: Input (Lo Cut and Hi Cut over a
-  [ReverbFilterPad](../../ui/src/devices/ReverbFilterPad.h), 108 px, its frequency and width in value boxes under
-  it); the early reflections (Spin over a [ReverbSpinPad](../../ui/src/devices/ReverbSpinPad.h), 96 px, its amount and
-  rate in boxes; Shape over Predelay); Global (Size and Stereo over Density and Smooth, lists under their captions in
-  the middle of the second row); the diffusion network (the Lo and Hi switches and the high filter's type over a
-  [ReverbDecayGraph](../../ui/src/devices/ReverbDecayGraph.h), 200 px, the shelves' frequencies and gains in boxes
-  under it; Decay over Freeze, Flat and Cut; Diffusion over Scale; Chorus over its Amount and Rate, 26 px knobs); the
-  output (Reflect over Diffuse, and Dry/Wet). Knobs are `EditorKnob`s in two rows, top and bottom; the switches sit
-  level with the first row's captions, the boxes along the bottom, and the pads and the graph grow into the height
-  between them (`height - 54`). What a switch leaves unused dims (opacity 0.55, over 120 ms) but stays editable, as
-  in Live: the input's boxes while both cuts are off, Spin's boxes while it is off, the type and the Hi boxes while
-  Hi is off (Hi's gain also while the type is Low-pass, which has none), the Lo boxes while Lo is off, Flat and Cut
-  while Freeze is off (they only act frozen), Chorus's knobs while it is off. `implicitHeight` is 148 in the tests'
-  host (whose body is 154).
+  sections side by side with an `EditorDivider` between them: Input (Lo Cut and Hi Cut over a
+  [ReverbFilterPad](../../ui/src/devices/ReverbFilterPad.h), its frequency and width in value boxes under it); the early
+  reflections (Spin over a [ReverbSpinPad](../../ui/src/devices/ReverbSpinPad.h), its amount and rate in boxes; Shape
+  over Predelay); Global (Size and Stereo over Density and Smooth, lists under their captions in the middle of the
+  second row); the diffusion network (the Lo and Hi switches and the high filter's type over a
+  [ReverbDecayGraph](../../ui/src/devices/ReverbDecayGraph.h), the shelves' frequencies and gains in boxes under it;
+  Decay over Freeze, Flat and Cut; Diffusion over Scale; Chorus over Rate, Chorus's switch the Amount knob's title); the
+  output (Reflect over Diffuse, and Dry/Wet). Knobs are the house's 34 px `EditorKnob`s in two rows, top and bottom; the
+  switches sit level with the first row's captions, the boxes along the bottom, and the pads and the graph grow into the
+  height between them (`height - 54`). Each box is as wide as its widest text (its sample text: a pattern such as
+  "1d.dd kHz", each "d" the font's widest digit, as figures may be proportional: "14.44 kHz" in Inter) and the
+  automation dot, each list as wide as its longest name and the arrow (`FontMetrics` over the names: Density's
+  "Sparse"), the Freeze, Flat and Cut column as wide as Freeze with its snowflake; the pads and the graph span the boxes
+  under them, and each section follows the one before, so the width is worked out (995 px in the tests' host, with its
+  Inter: 890 before the boxes were measured). What a switch leaves unused dims (opacity 0.55, over 120 ms) but stays
+  editable, as in Live: the input's boxes while both cuts are off, Spin's boxes while it is off, the type and the Hi
+  boxes while Hi is off (Hi's gain also while the type is Low-pass, which has none), the Lo boxes while Lo is off, Flat
+  and Cut while Freeze is off (they only act frozen), Chorus's knobs while it is off. `implicitHeight` is 148 in the
+  tests' host (whose body is 154).
   - The pads and the graph draw what the engine plays, from its own maths through the application layer
     (`sub::app::reverbInputFilterDb`, `reverbDecaySeconds`, `reverbEarlyTaps`, `reverbSpinPan`, `reverbStereoWidth`,
     `reverbDiffuseOnsetMs`, over `sub::reverb`'s functions in `ReverbDesign.h`), at the engine's sample rate (again
-    when the audio device changes).
+    when the audio device changes); the engine's constants they need (the twelve reflections, the displays' floor, the
+    pads' parameter ranges) come the same way (`kReverbTaps`, `kReverbMeterFloorDb`, `kReverbMinInFreq`, ...).
   - `ReverbFilterPad`: the band's response (−30 to +6 dB) on a 20 Hz..20 kHz log axis over the spectrum of the
     display `signal` (the input summed to mono; `analysis::FallingSpectrum`); its dot is the band, dragged across for
     In Filter Freq and up and down for its width (0.5 octaves at the bottom, 9 at the top, under a 13 px strip for the
@@ -931,15 +937,16 @@ The editors:
     per drag; double-clicking a shelf's handle switches it (its second press starts no drag). Hovering a handle grows it
     (4 to 6 px) and reads it out at the top right ("Hi 4.50 kHz · 70 %"; else the decay, or Frozen). Frozen, the guides
     fade out and the handles dim (they are what the tail thaws to). Fully dry, it is greyed.
-  - Animation: each canvas moves in `advance()`, from `refreshDisplays()` with the real time since the last tick
-    (`Eased`, `easeFraction`, `MeterBallistics`). A tick that brings no values (the audio's blocks longer than a tick)
-    keeps the last ones for 100 ms (the spin pad's phase runs on at Spin's rate), so meters, glows and particles don't
-    flicker or stall with long buffers. A switch that changes a curve (Lo Cut, Hi Cut; Lo, Hi, the type, Density,
-    Flat, Cut) eases it from the curve as drawn to the new one over about 120 ms; Freeze lifts the decay curve to the
-    top in the frozen colour, easing into the edge, tinting the plot (τ 0.15 s; without Flat its shelved bands stay
-    low, as they still die away); the curve thickens and its fill brightens while the tail sounds, and a ripple runs
-    along it at the chorus's rate (display `chorus`) as deep as Chorus Amount, fading with the tail. Dragged values
-    never animate. Each repaints only while something moves or changed: nothing while idle or silent.
+  - Animation: each canvas moves in `advance()`, from `refreshDisplays()` with the time since the last tick
+    (`DeviceCanvas::tickSeconds()`; `Eased`, `easeFraction`, `MeterBallistics`). A tick that brings no values (the
+    audio's blocks longer than a tick) keeps the last ones for 100 ms (the spin pad's phase runs on at Spin's rate), so
+    meters, glows and particles don't flicker or stall with long buffers. A switch that changes a curve (Lo Cut, Hi Cut;
+    Lo, Hi, the type, Density, Flat, Cut) eases it from the curve as drawn to the new one over about 120 ms; Freeze
+    lifts the decay curve to the top in the frozen colour, easing into the edge, tinting the plot (τ 0.15 s; without
+    Flat its shelved bands stay low, as they still die away); the curve thickens and its fill brightens while the tail
+    sounds, and a ripple runs along it at the chorus's rate (display `chorus`) as deep as Chorus Amount, fading with the
+    tail. Dragged values never animate. Each repaints only while something moves or changed: nothing while idle or
+    silent.
 - **Disperser** ([DisperserEditor.qml](../../ui/qml/devices/editors/DisperserEditor.qml)): no pages: Amount (in whole
   stages), Frequency, Pinch and Dry/Wet knobs side by side, their names above and values below, over a Bypass button; beside
   them a [DispersionGraph](../../ui/src/devices/DispersionGraph.h) (260 px): the stages' group delay in ms on a
@@ -1091,6 +1098,6 @@ The editors:
 | [test_ui_device_editors_erosion.cpp](../../tests/app/test_ui_device_editors_erosion.cpp) | The Erosion's editor: fitting the body, every knob bound and undoable, the band being the engine's filter and the dot's travel clear of the strip, the display's drags (Shift, Alt) and wheel (Ctrl finely; in a device chain, whose Shift+wheel scrolls it) as single undo steps, the displays reaching the graph and the scope (not a backlog's worth after the sound stopped, and a silent graph no longer repainting), the engine having what it set |
 | [test_ui_device_editors_chorus.cpp](../../tests/app/test_ui_device_editors_chorus.cpp) | The Chorus-Ensemble's editor: fitting the body (margins, nothing overlapping or cut short; the high-pass box wide enough for its widest values and the automation dot, Time for each choice), every control bound to its parameter and undoable (each knob dragged), the modes (their sets cross-fading one after the other; Feedback and Ø dimmed in Vibrato and still settable), Taps, Time, the high-pass and Ø, the display's drags (Shift, mid-drag too) as single undo steps, each setting only the parameter its direction picked (the other's automation not overridden), the displays reaching the graph (the voices where the engine's delays are, the glow from the sound now and not the display's history, freezing, and resting without repaints with the traces held), layouts fading without pops, the engine having what it set; no text spilling out of its box; no QML warnings |
 | [test_ui_device_editors_phaser.cpp](../../tests/app/test_ui_device_editors_phaser.cpp) | The Phaser-Flanger's editor: fitting the body (inside its margins, its knobs the house's 34 px, bipolar only about 0), every control bound to its parameter and undoable (each knob dragged, each switch clicked, the waveform chosen), the swapped controls rebinding (Freq/Rate, Phase/Spin, the delay's Time), the mode tabs, More as view state (not undone, kept when shown again; Env dimming its controls); the curve the engine's design with the notches marked where it puts them, a fine comb drawn as a band; the graph's drags and double-click as single undo steps (undone to what was there before), its cursor over the plot only; a synced rate's wheel stepping a division a notch (Live's 22); the tabs on whole pixels, the Time knob staying put between the delay modes; the displays reaching the graph (the LFO's phase and value, the sweep, both channels, the levels), going quiet and then not repainting; `DisplayPlayback` smooth at 1024-frame blocks, wrapping phases, pauses; at 2048-frame blocks the meters still falling at their pace, a fast LFO's comet tail, a random shape's trace started afresh; what a curve costs (in the thread's CPU time, optimized builds only); the engine having what it set; no QML warnings |
-| [test_ui_device_editors_reverb.cpp](../../tests/app/test_ui_device_editors_reverb.cpp) | The Reverb's editor: fitting the view and its own least height with nothing overlapping, every control bound to its parameter (with a tooltip) and undoable, Size read as a bare number and Stereo in whole degrees, the boxes' log drags, dimming; the filter pad's, spin pad's and decay graph's drags (one undo step each, Shift finely, the engine having the values), the pads' handles clear of their captions, the decay graph's handles inside the plot and picked when the shelves cross, its double-click (whose second press, dragged, drags nothing), the Low-pass's and a switched-off shelf's handles moving across only; the curves being the engine's maths (frozen too); the displays reaching them (input level and spectrum, tail meter and spectrum, Spin's phase), held through a tick without values and falling back; the spin pad's trails kept through a sync; the transitions easing (Freeze into the top edge) and everything resting in silence |
+| [test_ui_device_editors_reverb.cpp](../../tests/app/test_ui_device_editors_reverb.cpp) | The Reverb's editor: fitting the view and its own least height with nothing overlapping, its boxes as wide as the widest text their parameters take (over the whole range) and the automation dot, its lists as their longest names and the arrow, its switches as their text, its knobs the house's 34 px, the pads and the graph spanning their boxes; every control bound to its parameter (with a tooltip) and undoable, Size read as a bare number and Stereo in whole degrees, the boxes' log drags, dimming (to 0.55, still editable); the filter pad's, spin pad's and decay graph's drags (one undo step each, Shift finely, the engine having the values), the pads' handles clear of their captions, the decay graph's handles inside the plot and picked when the shelves cross, its double-click (whose second press, dragged, drags nothing), the Low-pass's and a switched-off shelf's handles moving across only; the curves being the engine's maths (frozen too); the displays reaching them (input level and spectrum, tail meter and spectrum, Spin's phase), held through a tick without values and falling back; the spin pad's trails kept through a sync; the transitions easing (Freeze into the top edge) and everything resting in silence |
 | [test_session_devices.cpp](../../tests/app/test_session_devices.cpp) | `DeviceSelection` through the session: selecting, the focus, the clipboard, folding, racks, drops, presets |
 | [test_sidechain_fit.cpp](../../tests/app/test_sidechain_fit.cpp) | The Sidechain's fit |

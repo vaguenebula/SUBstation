@@ -901,8 +901,8 @@ handles), then the levels. The editor goes left to right:
   darker, like a real room's air; it has no share, and its handle moves across only.
   **Diffusion** is how quickly the echoes blur into a smooth tail; **Scale** how coarse
   that blur is (most noticeable in small rooms). **Chorus** makes the tail's echoes
-  drift in pitch (**Amount**, **Rate**), against a metallic ring; the curve ripples with
-  it while the tail sounds.
+  drift in pitch, against a metallic ring: the knob under its switch is how far, **Rate**
+  how fast; the curve ripples with it while the tail sounds.
 - **Freeze**: the tail holds for ever, for pads and drones (the curve rises to the top,
   in blue, and the handles dim: they are what it thaws to). With **Cut** (on by default)
   new sound no longer reaches it, so play a chord, freeze, and play over it; without

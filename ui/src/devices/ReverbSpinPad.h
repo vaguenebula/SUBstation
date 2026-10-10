@@ -20,7 +20,8 @@
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
-#include <QElapsedTimer>
+#include "audio/ReverbResponse.h"
+
 #include <QList>
 #include <QPointF>
 #include <QtQml/qqmlregistration.h>
@@ -37,11 +38,11 @@ class ReverbSpinPad : public DeviceCanvas {
     Q_PROPERTY(bool animating READ animating NOTIFY levelsChanged)
 
 public:
-    static constexpr int kWidth = 96;
+    static constexpr int kMinimumWidth = 96;  // (the editor gives it the width of the boxes under it)
     static constexpr int kMinimumHeight = 56;
-    static constexpr double kRateMin = 0.07;  // Hz: ER Spin Rate's range, across
-    static constexpr double kRateMax = 1.3;
-    static constexpr int kTaps = 12;
+    static constexpr double kRateMin = sub::app::kReverbMinSpinRate;  // Hz: ER Spin Rate's range, across
+    static constexpr double kRateMax = sub::app::kReverbMaxSpinRate;
+    static constexpr int kTaps = sub::app::kReverbTaps;
     static constexpr int kTrail = 6;  // positions kept per particle
 
     explicit ReverbSpinPad(QQuickItem* parent = nullptr);
@@ -108,7 +109,6 @@ private:
     Eased flash_;
     std::array<QPointF, kTaps> at_{}, painted_{};  // now, and as last painted
     std::array<std::array<QPointF, kTrail>, kTaps> trail_{};  // the latest first
-    QElapsedTimer clock_;
     bool animating_ = false;
 
     // The drag (as the filter pad's).

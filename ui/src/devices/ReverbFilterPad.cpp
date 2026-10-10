@@ -20,14 +20,13 @@ namespace {
 constexpr double kSwitchSeconds = 0.04;  // a switch's change eases over about 120 ms (three of these)
 constexpr double kGlowSeconds = 0.25;    // the glow fades
 constexpr double kGlowRangeDb = 48.0;    // the input's level from -48 dB (none) to 0 (all)
-constexpr double kInputFloorDb = -90.0;
 constexpr double kStaleSeconds = 0.1;   // a tick without values keeps the last this long (a long audio block)
 constexpr double kCaption = 13.0;       // px: the caption's strip at the top, clear of the dot
 
 }  // namespace
 
 ReverbFilterPad::ReverbFilterPad(QQuickItem* parent) : DeviceCanvas(parent) {
-    setImplicitSize(kWidth, kMinimumHeight);
+    setImplicitSize(kMinimumWidth, kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton);
     setCursor(Qt::SizeAllCursor);
     // The curve is the engine's at its sample rate: worked out again when the audio device changes.
@@ -138,9 +137,7 @@ void ReverbFilterPad::updateColumns() { columns_ = spectrum_.columns(std::max(2,
 // --- Displays and animation -------------------------------------------------------------
 
 void ReverbFilterPad::refreshDisplays() {
-    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    const double seconds = tickSeconds();
     const std::vector<float> signal = readDisplay(QStringLiteral("signal"));
     if (spectrum_.add(signal.data(), signal.size(), sampleRate())) {
         updateColumns();
@@ -152,11 +149,11 @@ void ReverbFilterPad::refreshDisplays() {
     double newest = inputLevel_;
     if (!input.empty()) {
         newest = double(input.back());
-        loudest_ = kInputFloorDb;
+        loudest_ = sub::app::kReverbMeterFloorDb;
         for (const float v : input) loudest_ = std::max(loudest_, double(v));
         stale_ = 0.0;
     } else if ((stale_ += seconds) > kStaleSeconds) {
-        newest = loudest_ = kInputFloorDb;
+        newest = loudest_ = sub::app::kReverbMeterFloorDb;
     }
     if (newest != inputLevel_) {
         inputLevel_ = newest;

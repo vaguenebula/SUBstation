@@ -1,12 +1,15 @@
 // The Reverb's editor (ui/qml/devices/editors/ReverbEditor.qml; ui/src/devices/ReverbFilterPad,
 // ReverbSpinPad, ReverbDecayGraph): loaded as the device view loads it, over a real engine. It fits
-// the view's height (and its own least height), nothing overlapping; every control is bound to its
+// the view's height (and its own least height), nothing overlapping, its boxes, lists and switches as
+// wide as their text and its knobs the house's 34 px; every control is bound to its
 // parameter (undoably, with a tooltip); the pads' and the graph's drags are one undo step each and
 // set what the engine plays; the curves are the engine's own maths (ReverbResponse.h); what the
 // engine publishes as it renders reaches the pads and the graph, which animate and then rest. With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there playing, frozen, and in other modes.
 
 #include <QCursor>
+#include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QImage>
 #include <QLineF>
@@ -206,10 +209,68 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
                                 QString::number(r.y()) + u' ' + QString::number(r.width()) + u'x' +
                                 QString::number(r.height())));
         }
+        // (Chorus's switch is its Amount knob's title: it lies over the knob's empty caption, clear of its dial.)
+        const auto title = [](const QString& a, const QString& b) {
+            return (a == u"chorusButton" && b == u"chorusAmountKnob") ||
+                   (b == u"chorusButton" && a == u"chorusAmountKnob");
+        };
         for (int i = 0; i < rects.size(); ++i)
             for (int j = i + 1; j < rects.size(); ++j)
-                QVERIFY2(!rects[i].second.intersects(rects[j].second),
+                QVERIFY2(title(rects[i].first, rects[j].first) || !rects[i].second.intersects(rects[j].second),
                          qPrintable(rects[i].first + QStringLiteral(" over ") + rects[j].first));
+        const QRectF chorus = rectIn(view, control(view, "chorusButton"));
+        const QRectF dial = rectIn(view, knob(view, "chorusAmountKnob"));
+        QVERIFY2(chorus.bottom() < dial.top() && std::abs(chorus.center().x() - dial.center().x()) < 0.5,
+                 qPrintable(QString::number(chorus.bottom()) + u' ' + QString::number(dial.top())));
+    }
+
+    // Every box as wide as the widest text its parameter takes (over its whole range, whatever the font's
+    // figures) and the automation dot (ValueBoxItem's own measure: the text and 16 px); every list as wide
+    // as its longest name with the arrow; every switch as wide as its text (and icon); the knobs the
+    // house's 34 px.
+    void checkWidths(QQuickItem* view) {
+        for (const auto& [name, id] : kControls) {
+            QQuickItem* item = control(view, name);
+            const QByteArray kind(name);
+            if (kind.endsWith("Box")) {
+                ValueBoxItem* b = box(view, name);
+                sub::ui::DeviceParam* p = paramOf(item);
+                const QFontMetrics metrics(b->font());  // (as ValueBoxItem measures its sample text)
+                double widest = 0.0;
+                QString text;
+                for (int i = 0; i <= 2000; ++i) {
+                    const double t = i / 2000.0;
+                    const double v = p->logScale() ? p->minimum() * std::pow(p->maximum() / p->minimum(), t)
+                                                   : p->minimum() + t * (p->maximum() - p->minimum());
+                    if (metrics.horizontalAdvance(p->format(v)) > widest) {
+                        widest = double(metrics.horizontalAdvance(p->format(v)));
+                        text = p->format(v);
+                    }
+                }
+                QVERIFY2(item->width() >= widest + 16.0 - 1e-6, qPrintable(QStringLiteral("%1 %2 for \"%3\" (%4)")
+                                                                          .arg(QString::fromLatin1(name))
+                                                                          .arg(item->width())
+                                                                          .arg(text)
+                                                                          .arg(widest)));
+            } else if (kind.endsWith("Choice")) {
+                auto* button = qvariant_cast<QQuickItem*>(item->property("button"));
+                const QFontMetricsF metrics(qvariant_cast<QFont>(button->property("font")));
+                double longest = 0.0;
+                for (const QString& label : paramOf(item)->labels())
+                    longest = std::max(longest, metrics.horizontalAdvance(label));
+                const double padding =
+                    button->property("leftPadding").toDouble() + button->property("rightPadding").toDouble();
+                QVERIFY2(item->width() >= longest + padding - 1e-6,
+                         qPrintable(QString::fromLatin1(name) + u' ' + QString::number(item->width()) + u' ' +
+                                    QString::number(longest + padding)));
+            } else if (kind.endsWith("Button")) {
+                QVERIFY2(item->width() >= item->implicitWidth() - 1e-6,
+                         qPrintable(QString::fromLatin1(name) + u' ' + QString::number(item->width()) + u' ' +
+                                    QString::number(item->implicitWidth())));
+            } else if (kind.endsWith("Knob")) {
+                QCOMPARE(item->property("size").toDouble(), 34.0);
+            }
+        }
     }
 
 private Q_SLOTS:
@@ -238,16 +299,24 @@ private Q_SLOTS:
         Shown s = reverb();
         QVERIFY(s.view && s.filter && s.spin && s.decay);
         QVERIFY2(s.view->implicitHeight() <= bodyHeight(), qPrintable(QString::number(s.view->implicitHeight())));
-        QCOMPARE(s.view->implicitWidth(), 890.0);
         QCOMPARE(s.view->height(), double(bodyHeight()));
         for (const auto& [name, id] : kControls) QVERIFY2(control(s.view, name), name);
-        // The pads and the graph grow into the body: 26 px from its top, 28 from its bottom (their boxes).
-        for (QQuickItem* canvas : {static_cast<QQuickItem*>(s.filter), static_cast<QQuickItem*>(s.spin),
-                                   static_cast<QQuickItem*>(s.decay)})
+        // As wide as its sections, 8 px in from either side (Dry/Wet the last).
+        QCOMPARE(s.view->implicitWidth(), rectIn(s.view, control(s.view, "mixKnob")).right() + 8.0);
+        QVERIFY2(s.view->implicitWidth() < 1100.0, qPrintable(QString::number(s.view->implicitWidth())));
+        // The pads and the graph grow into the body: 26 px from its top, 28 from its bottom (their boxes), and
+        // span the boxes under them.
+        const QList<std::tuple<QQuickItem*, const char*, const char*>> spans = {
+            {s.filter, "inFreqBox", "inWidthBox"}, {s.spin, "spinAmountBox", "spinRateBox"},
+            {s.decay, "loFreqBox", "hiGainBox"}};
+        for (const auto& [canvas, first, last] : spans) {
             QVERIFY2(std::abs(canvas->height() - (s.view->height() - 54)) <= 1.0, qPrintable(canvas->objectName()));
-        QCOMPARE(s.filter->width(), double(ReverbFilterPad::kWidth));
-        QCOMPARE(s.spin->width(), double(ReverbSpinPad::kWidth));
-        QCOMPARE(s.decay->width(), double(ReverbDecayGraph::kWidth));
+            const QRectF r = rectIn(s.view, canvas);
+            QCOMPARE(r.left(), rectIn(s.view, control(s.view, first)).left());
+            QCOMPARE(r.right(), rectIn(s.view, control(s.view, last)).right());
+            QVERIFY(canvas->width() >= canvas->implicitWidth());
+        }
+        checkWidths(s.view);
         checkLaidOut(s.view);
         if (QTest::currentTestFailed())
             return;
@@ -377,6 +446,7 @@ private Q_SLOTS:
         QCOMPARE(opacityOf("hiTypeChoice"), 1.0);
         set(s, "hi_filter", 0.0);
         QTRY_VERIFY(opacityOf("hiTypeChoice") < 1.0 && opacityOf("hiFreqBox") < 1.0 && opacityOf("hiGainBox") < 1.0);
+        QTRY_COMPARE(opacityOf("hiFreqBox"), 0.55);  // (the house's dimmed but settable)
         QVERIFY(control(s.view, "hiFreqBox")->isEnabled());
         set(s, "hi_filter", 1.0);
         set(s, "hi_type", 1.0);
@@ -668,7 +738,7 @@ private Q_SLOTS:
         Shown s = reverb();
         QVERIFY(s.filter && s.spin && s.decay);
         refreshDisplays();  // (nothing yet)
-        QCOMPARE(s.filter->inputLevel(), -90.0);
+        QCOMPARE(s.filter->inputLevel(), kReverbMeterFloorDb);
         play();
         // The input: the tone's 0.5 summed to mono.
         QVERIFY2(std::abs(s.filter->inputLevel() + 6.02) < 0.6, qPrintable(QString::number(s.filter->inputLevel())));
@@ -703,7 +773,7 @@ private Q_SLOTS:
         refreshes(10, 30);
         QVERIFY2(s.decay->tailLevel() <= tail - 10.0, qPrintable(QString::number(s.decay->tailLevel())));
         QVERIFY2(s.spin->amountShown() > 0.15, qPrintable(QString::number(s.spin->amountShown())));  // (they ring on)
-        QCOMPARE(s.filter->inputLevel(), -90.0);
+        QCOMPARE(s.filter->inputLevel(), kReverbMeterFloorDb);
         QVERIFY(s.filter->glow() < glow);
         QVERIFY(s.spin->flash() < flash);
     }
