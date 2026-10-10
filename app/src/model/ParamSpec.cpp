@@ -52,6 +52,7 @@ QString formatValue(double value, const QString& unit) {
         if (decimals > 0 && formatFixed(value, decimals).toDouble() >= std::pow(10.0, 3 - decimals)) --decimals;
         return QStringLiteral("1:") + formatFixed(value, decimals);
     }
+    if (unit == u"dial") return formatFixed(value, 1);  // an amp's 0..10 dial: "5.0"
     return formatFixed(value, 2) + u' ' + unit;
 }
 
