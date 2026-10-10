@@ -67,41 +67,25 @@ class Gate : public Standalone {
 public:
     explicit Gate(const Values& values = kBase, double rate = kSampleRate) : Standalone("gate", rate, values) {}
 
-    // Processes one or two channels of equal length in place, `block` frames at a time.
+    // Processes one or two channels of equal length in place, `block` frames at a time (the changes in the order
+    // of their frames, as Standalone's).
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256,
              const Key& key = {}) {
         if (key.left == nullptr) {
             Standalone::run(channels, changes, block);
             return;
         }
-        // A block at a time (ending where a direct change comes, as Standalone's do), its sidechain with it.
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        for (int64_t start = 0; start < frames;) {
-            int64_t end = std::min<int64_t>(start + block, frames);
-            for (const Change& change : changes)
-                if (change.direct && change.frame > start) end = std::min(end, change.frame);
-            std::vector<Samples> parts;
-            std::vector<Samples*> pointers;
-            for (const Samples* c : channels) parts.emplace_back(c->begin() + start, c->begin() + end);
-            for (Samples& part : parts) pointers.push_back(&part);
-            std::vector<Change> here;
-            for (const Change& change : changes) {
-                const int64_t frame = std::max<int64_t>(0, change.frame);
-                if (frame >= start && frame < end)
-                    here.push_back({frame - start, change.id, change.value, change.direct});
-            }
+        // Each block connected or not by where it starts, and handed the key's frames from there.
+        const Samples* right = key.right != nullptr ? key.right : key.left;
+        Standalone::run(channels, changes, block, [&](int64_t start, int) {
             const bool connected = start >= key.from && start < key.to;
             processor().setSidechainConnected(connected);
-            if (connected) {
-                const Samples* right = key.right != nullptr ? key.right : key.left;
+            if (connected)
                 processor().setSidechain(key.left->data() + start, right->data() + start);
-            }
-            Standalone::run(pointers, here, static_cast<int>(end - start));
-            processor().setSidechain(nullptr, nullptr);
-            for (size_t c = 0; c < channels.size(); ++c)
-                std::copy(parts[c].begin(), parts[c].end(), channels[c]->begin() + start);
-            start = end;
-        }
+            else
+                processor().setSidechain(nullptr, nullptr);
+        });
+        processor().setSidechain(nullptr, nullptr);
     }
     // One channel: what comes out.
     Samples play(Samples mono, const std::vector<Change>& changes = {}, int block = 256, const Key& key = {}) {

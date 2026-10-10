@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -64,8 +65,13 @@ public:
         for (const auto& [id, value] : values) set(id, value);
     }
 
+    // What a test hands the device before each block, as the renderer would for that block's frames (a
+    // sidechain, ...): called with the block's first frame and its length, just before process(), its context set.
+    using BeforeBlock = std::function<void(int64_t start, int frames)>;
+
     // Processes channels of equal length in place (one, two, ...), `block` frames at a time.
-    void run(const std::vector<Samples*>& channels, const std::vector<ParamChange>& changes = {}, int block = 256) {
+    void run(const std::vector<Samples*>& channels, const std::vector<ParamChange>& changes = {}, int block = 256,
+             const BeforeBlock& beforeBlock = {}) {
         const auto frames = static_cast<int64_t>(channels[0]->size());
         std::vector<float*> pointers(channels.size());
         size_t next = 0;
@@ -92,6 +98,7 @@ public:
             context_.samplePos = start;
             const double samplesPerBeat = context_.samplesPerBeat();
             context_.beatPos = samplesPerBeat > 0.0 ? double(start) / samplesPerBeat : 0.0;
+            if (beforeBlock) beforeBlock(start, n);
             processor_->process(context_, pointers.data(), static_cast<int>(channels.size()), n);
             processor_->clearAutomation();
             start = end;
