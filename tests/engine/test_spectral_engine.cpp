@@ -10,12 +10,6 @@
 // the engine lining other tracks up with it; and what it costs (the thread's
 // CPU time), in all and per audio callback.
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <time.h>
-#endif
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -32,6 +26,7 @@
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
 #include "harness/Standalone.h"
+#include "harness/ThreadTime.h"
 
 using namespace subtest;
 namespace spectral = sub::spectral;
@@ -72,32 +67,20 @@ public:
 
     int frame() { return processor().tailSamples(); }  // (the tail is the frame)
 
-    // Processes one or two channels of equal length in place, `block` frames at a time, its changes handed over
-    // as automation (so its blocks split there) as the renderer does (they all can be automated).
+    // Processes one or two channels of equal length in place, `block` frames at a time, as Standalone::run (its
+    // changes handed over as automation: they all can be automated), each block handed the key's frames from where
+    // it starts; the displays read before each block and after the last.
     void run(const std::vector<Samples*>& channels, const Key& key = {}, const std::vector<Change>& changes = {},
              int block = 256) {
         sub::Processor& p = processor();
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        float* pointers[2] = {};
-        size_t next = 0;
-        for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                p.automate(i, p.params()[static_cast<size_t>(i)].toNormalized(change.value),
-                           static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
-            }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
+        Standalone::run(channels, changes, block, [&](int64_t start, int) {
+            readDisplays();
             p.setSidechainConnected(key.connected);
             p.setSidechain(key.left ? key.left->data() + start : nullptr,
                            key.right ? key.right->data() + start : nullptr);
-            context().samplePos = start;
-            p.process(context(), pointers, static_cast<int>(channels.size()), n);
-            p.setSidechain(nullptr, nullptr);
-            p.clearAutomation();
-            for (int d = 0; d < kDisplays; ++d) positions_[d] = p.readDisplay(d, positions_[d], shown_[d]);
-        }
+        });
+        p.setSidechain(nullptr, nullptr);
+        readDisplays();
     }
     Samples play(Samples mono, const std::vector<Change>& changes = {}, const Key& key = {}) {
         run({&mono}, key, changes);
@@ -122,6 +105,10 @@ public:
     }
 
 private:
+    void readDisplays() {
+        for (int d = 0; d < kDisplays; ++d) positions_[d] = processor().readDisplay(d, positions_[d], shown_[d]);
+    }
+
     std::vector<float> shown_[kDisplays];
     uint64_t positions_[kDisplays] = {};
 };
@@ -197,86 +184,6 @@ Samples whiteNoise(size_t frames, double rmsDb, uint64_t seed) {
     for (float& v : x) v = static_cast<float>(sigma * rng.normal());
     return x;
 }
-
-// RMS of samples [from, to) in dB.
-double rmsDb(const Samples& x, int64_t from, int64_t to) { return 20.0 * std::log10(rms(slice(x, from, to)) + 1e-30); }
-
-// A sine that fades in over 100 ms.
-Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    const double fadeIn = 0.1 * rate;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
-    }
-    return x;
-}
-
-// The largest 6th difference over [from, to): a steep high-pass (8 times, 18 dB, more sensitive at Nyquist than
-// at a quarter of the rate, 10^5 times more than at 2 kHz). A step of d shows as up to 20 d; a smooth signal
-// well below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
-}
-
-// `x` delayed by `frames` (zeros first), the same length.
-Samples delayed(const Samples& x, int frames) {
-    Samples out(x.size(), 0.f);
-    std::copy(x.begin(), x.end() - std::min<std::ptrdiff_t>(frames, static_cast<std::ptrdiff_t>(x.size())),
-              out.begin() + std::min<std::ptrdiff_t>(frames, static_cast<std::ptrdiff_t>(x.size())));
-    return out;
-}
-
-// The energy of `x` (Hann-windowed) between two frequencies, in dB.
-double bandDb(const Samples& x, double low, double high, double rate = kSampleRate) {
-    const std::vector<double> s = spectrum(x, hanning(x.size()));
-    double sum = 0.0;
-    for (size_t k = 0; k < s.size(); ++k) {
-        const double f = static_cast<double>(k) * rate / static_cast<double>(x.size());
-        if (f >= low && f <= high) sum += s[k] * s[k];
-    }
-    return 10.0 * std::log10(sum + 1e-300);
-}
-
-double gainToDb(double gain) { return 20.0 * std::log10(gain); }
-
-#ifdef NDEBUG
-// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else the machine is doing
-// (the wall clock would count the time other processes had the core).
-double threadSeconds() {
-#ifdef _WIN32
-    FILETIME created, exited, kernel, user;
-    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
-    const auto ticks = [](const FILETIME& t) {
-        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
-    };
-    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks, counted at the scheduler's ~16 ms)
-#else
-    timespec t{};
-    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
-    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
-#endif
-}
-
-// The same finely enough to time one audio callback, in the thread clock's own units (nanoseconds; on Windows,
-// whose thread times count in the scheduler's ticks, the cycles the thread ran): for comparing pieces of work.
-double threadTicks() {
-#ifdef _WIN32
-    ULONG64 cycles = 0;
-    QueryThreadCycleTime(GetCurrentThread(), &cycles);
-    return static_cast<double>(cycles);
-#else
-    return 1e9 * threadSeconds();
-#endif
-}
-#endif
 
 }  // namespace
 
@@ -1237,7 +1144,7 @@ TEST_CASE("spectral: displays") {
             INFO(std::to_string(spectral::displayFrequency(j)));
             const double g = meanDb(gain, from, to, j);
             CHECK_NEAR(meanDb(output, from, to, j),
-                       meanDb(input, from, to, j) + gainToDb(1.0 - std::pow(10.0, g / 20.0)), 1.5);
+                       meanDb(input, from, to, j) + db(1.0 - std::pow(10.0, g / 20.0)), 1.5);
         }
     }
 }

@@ -10,17 +10,9 @@
 // audio (NaN, infinity) taken as silence; silence ringing out to exact zeros and
 // waking into silence; its tail; its displays; what it costs.
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <time.h>
-#endif
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <map>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -33,6 +25,7 @@
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
 #include "harness/Standalone.h"
+#include "harness/ThreadTime.h"
 #include "rt/RtUtils.h"
 
 using namespace subtest;
@@ -48,37 +41,13 @@ using Change = ParamChange;
 const Values kQuiet = {{"spin", 0.f}, {"chorus", 0.f}, {"lo_cut", 0.f}, {"hi_cut", 0.f}, {"reflect", -30.f},
                        {"mix", 100.f}};
 
-// `values` with `more` set on top (a value set twice: the later).
-Values with(Values values, const Values& more) {
-    for (const auto& [id, value] : more) {
-        auto at = std::find_if(values.begin(), values.end(), [&](const auto& v) { return v.first == id; });
-        if (at != values.end()) {
-            at->second = value;
-        } else {
-            values.emplace_back(id, value);
-        }
-    }
-    return values;
-}
-
 int64_t frames(double seconds, double rate = kSampleRate) { return static_cast<int64_t>(std::lround(seconds * rate)); }
 
 // A Reverb on its own, outside an engine (harness/Standalone.h), the renderer's
-// flush-to-zero on as it renders; played in stereo too, made ready for a new
-// rate, and its displays read.
+// flush-to-zero on as it renders; played in stereo too.
 class Reverb : public Standalone {
 public:
-    explicit Reverb(const Values& values = {}, double rate = kSampleRate)
-        : Standalone("reverb", rate, values), rate_(rate) {}
-
-    // Made ready for another sample rate (as the engine does when the audio device changes): it plays at it.
-    void prepare(double rate) {
-        processor().prepare(rate, kMaxBlock);
-        context().sampleRate = rate;
-        rate_ = rate;
-    }
-    // The rate it plays at (Standalone's rate() stays the one it was made at: this hides it).
-    double rate() const { return rate_; }
+    explicit Reverb(const Values& values = {}, double rate = kSampleRate) : Standalone("reverb", rate, values) {}
 
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
         const sub::ScopedNoDenormals noDenormals;
@@ -95,78 +64,15 @@ public:
         run({&left, &right}, changes, block);
         return {std::move(left), std::move(right)};
     }
-    // A display's values published since the last call.
-    std::vector<float> display(const std::string& id) {
-        const std::vector<sub::DisplayInfo> infos = processor().displays();
-        for (size_t i = 0; i < infos.size(); ++i) {
-            if (infos[i].id != id) continue;
-            std::vector<float> out;
-            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], out);
-            return out;
-        }
-        INFO(id);
-        REQUIRE(false);
-        return {};
-    }
-
-private:
-    double rate_;
-    std::map<size_t, uint64_t> positions_;
 };
-
-Samples impulse(size_t length) {
-    Samples x(length, 0.f);
-    x[0] = 1.f;
-    return x;
-}
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
-    return x;
-}
-
-// A sine that fades in over 100 ms (no click of its own to start with).
-Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    const double fadeIn = 0.1 * rate;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(sub::dsp::sCurve(t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
-    }
-    return x;
-}
 
 Samples silence(Samples x, double seconds, double rate = kSampleRate) {
     x.resize(x.size() + static_cast<size_t>(seconds * rate), 0.f);
     return x;
 }
 
-double energy(const Samples& x) {
-    double sum = 0.0;
-    for (const float v : x) sum += static_cast<double>(v) * v;
-    return sum;
-}
-double db(double ratio) { return 10.0 * std::log10(std::max(ratio, 1e-300)); }
-double rmsDb(const Samples& x) { return 20.0 * std::log10(std::max(rms(x), 1e-300)); }
-
-// The largest 6th difference over [from, to): a steep high-pass ((2 sin(w/2))^6:
-// 64 at Nyquist), 8 times (18 dB) more sensitive at Nyquist than at a quarter of
-// the sample rate and 2 10^5 times more than at 2 kHz (48 kHz). A step of d
-// shows as up to 10 d (a one-sample spike, 20 d); a smooth signal well below
-// Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
-}
+// An energy (power) ratio in dB.
+double powerDb(double ratio) { return 10.0 * std::log10(std::max(ratio, 1e-300)); }
 
 // A band around `freq`, `octaves` wide: three RBJ band-passes (0 dB at their
 // centre) in a row, each of Q 0.51 / (2^(w/2) - 2^(-w/2)) so the three are
@@ -216,7 +122,7 @@ double t60(const std::vector<const Samples*>& sides, double freq, double rate = 
     }
     double st = 0, sy = 0, stt = 0, sty = 0, count = 0;
     for (size_t i = 0; i < curve.size(); ++i) {
-        const double level = db(curve[i] / curve[0]);
+        const double level = powerDb(curve[i] / curve[0]);
         if (level > -5.0) continue;
         if (level < -25.0) break;
         const double t = static_cast<double>(i) / rate;
@@ -263,29 +169,6 @@ Response impulseResponse(const Values& values, double seconds, double rate = kSa
     const size_t length = static_cast<size_t>(seconds * rate);
     auto [left, right] = r.play(impulse(length), impulse(length));
     return {std::move(left), std::move(right)};
-}
-
-std::string show(const Values& values) {
-    std::string text;
-    for (const auto& [id, value] : values) text += (text.empty() ? "" : ", ") + id + " " + std::to_string(value);
-    return text;
-}
-
-// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else the
-// machine is doing (the wall clock would count the time other processes had the core).
-double threadSeconds() {
-#ifdef _WIN32
-    FILETIME created, exited, kernel, user;
-    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
-    const auto ticks = [](const FILETIME& t) {
-        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
-    };
-    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks, counted at the scheduler's ~16 ms)
-#else
-    timespec t{};
-    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
-    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
-#endif
 }
 
 }  // namespace
@@ -407,8 +290,8 @@ TEST_CASE("the reverb decays per band as its design says") {
             const Response h = impulseResponse(values, 2.5 * decay / 1000.0 + 0.5);
             for (const double band : {125.0, 1000.0, 8000.0}) {
                 const double want = designDecay(design, band), got = h.t60(band);
-                INFO(show(values) + " at " + std::to_string(band) + " Hz: " + std::to_string(got) + " s, designed " +
-                     std::to_string(want));
+                INFO(describe(values) + " at " + std::to_string(band) + " Hz: " + std::to_string(got) +
+                     " s, designed " + std::to_string(want));
                 if (want >= 0.4) {
                     CHECK_APPROX_TOL(got, want, lowpass && band == 8000.0 ? 0.25 : 0.15, 0.0);
                 } else {
@@ -533,8 +416,8 @@ TEST_CASE("the reverb's shape moves the diffuse onset and the reflections' envel
         const double predelay = 2.5, first = reverb::kTapMs[0], last = reverb::kTapMs[reverb::kMaxTaps - 1];
         const double third = (last - first) / 3.0;
         const auto at = [&](double ms) { return frames((predelay + ms) / 1000.0); };
-        return db(energy(slice(h, at(last - third), at(last + 0.5))) /
-                  energy(slice(h, at(first - 0.5), at(first + third))));
+        return powerDb(energy(slice(h, at(last - third), at(last + 0.5))) /
+                       energy(slice(h, at(first - 0.5), at(first + third))));
     };
     const double gentle = fall(0.f), steep = fall(100.f);
     INFO(std::to_string(gentle) + " dB and " + std::to_string(steep) + " dB");
@@ -619,8 +502,8 @@ TEST_CASE("the reverb's levels") {
         const Samples h = r.play(impulse(static_cast<size_t>(1.6 * kSampleRate)));
         return energy(slice(h, frames(from), frames(to)));
     };
-    CHECK_NEAR(db(window(-30.f, 0.f, 0.0025, 0.0225) / window(0.f, 0.f, 0.0025, 0.0225)), -30.0, 0.5);
-    CHECK_NEAR(db(window(-30.f, -30.f, 0.5, 1.5) / window(-30.f, 0.f, 0.5, 1.5)), -30.0, 0.5);
+    CHECK_NEAR(powerDb(window(-30.f, 0.f, 0.0025, 0.0225) / window(0.f, 0.f, 0.0025, 0.0225)), -30.0, 0.5);
+    CHECK_NEAR(powerDb(window(-30.f, -30.f, 0.5, 1.5) / window(-30.f, 0.f, 0.5, 1.5)), -30.0, 0.5);
 
     // White noise at -20 dBFS RMS, all wet: the reverb about as loud (a few dB under).
     const float amplitude = static_cast<float>(0.1 * std::sqrt(3.0));  // uniform: RMS = amplitude / sqrt(3)
@@ -706,7 +589,7 @@ TEST_CASE("the reverb's flat keeps every band frozen, or not") {
                 sum += d[static_cast<size_t>(i)] * d[static_cast<size_t>(i)];
             return sum;
         };
-        return db(band(4.0, 4.5) / band(1.0, 1.5));
+        return powerDb(band(4.0, 4.5) / band(1.0, 1.5));
     };
     const double held = highs(1.f), lost = highs(0.f);
     INFO("highs over 3 s: " + std::to_string(held) + " dB with Flat, " + std::to_string(lost) + " dB without");
@@ -721,7 +604,7 @@ TEST_CASE("the reverb's guard keeps it bounded") {
     const Samples loud = noise(static_cast<size_t>(20 * kSampleRate), 8, 1.f);
     for (const Values& values : {Values{{"freeze", 1.f}, {"cut", 0.f}, {"mix", 100.f}},
                                  Values{{"decay", 60000.f}, {"mix", 100.f}}}) {
-        INFO(show(values));
+        INFO(describe(values));
         Reverb r(values);
         const auto [l, rr] = r.play(loud, loud);
         CHECK(allFinite(l) && allFinite(rr));
@@ -1043,9 +926,9 @@ TEST_CASE("the reverb's tail has no metallic ringing") {
                 const auto to = static_cast<size_t>(f * std::pow(2.0, 1.0 / 6.0) / binHz);
                 double sum = 0.0;
                 for (size_t j = from; j <= to; ++j) sum += power[j];
-                worst = std::max(worst, db(power[k] / (sum / static_cast<double>(to - from + 1))));
+                worst = std::max(worst, powerDb(power[k] / (sum / static_cast<double>(to - from + 1))));
             }
-            INFO(show(values) + ": a bin " + std::to_string(worst) + " dB over its third-octave");
+            INFO(describe(values) + ": a bin " + std::to_string(worst) + " dB over its third-octave");
             CHECK(worst < 14.0);
         }
     }
@@ -1198,7 +1081,7 @@ TEST_CASE("the reverb stays finite and decays at the extremes") {
     };
     const Samples x = silence(noise(static_cast<size_t>(2 * kSampleRate), 11), 4.0);
     for (const Values& values : settings) {
-        INFO(show(values));
+        INFO(describe(values));
         Reverb r(with(values, {{"mix", 100.f}}));
         const auto [l, rr] = r.play(x, x);
         REQUIRE(allFinite(l) && allFinite(rr));
@@ -1223,7 +1106,7 @@ TEST_CASE("the reverb takes NaN, infinity and absurd levels in its input as sile
         Reverb clean(values);
         const auto [wantL, wantR] = clean.play(zeroed, right);
         for (const float value : bad) {
-            INFO(show(values) + " given " + std::to_string(value));
+            INFO(describe(values) + " given " + std::to_string(value));
             Samples broken = left;
             broken[static_cast<size_t>(at)] = value;
             Reverb r(values);
@@ -1344,7 +1227,7 @@ TEST_CASE("the reverb's tail covers its ringing") {
     for (const Values& values :
          {Values{{"decay", 500.f}}, Values{{"decay", 1200.f}}, Values{{"decay", 5000.f}},
           Values{{"predelay", 250.f}, {"size", 500.f}}, Values{{"decay", 200.f}, {"size", 500.f}}}) {
-        INFO(show(values));
+        INFO(describe(values));
         Reverb r(with(values, {{"mix", 100.f}}));
         const auto tail = static_cast<size_t>(r.processor().tailSamples());
         const Samples h = r.play(impulse(2 * tail + kSampleRate));

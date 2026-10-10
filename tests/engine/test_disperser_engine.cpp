@@ -40,46 +40,6 @@ struct Disperser : Standalone {
     explicit Disperser(double rate = kSampleRate, const Values& values = {}) : Standalone("disperser", rate, values) {}
 };
 
-Samples impulse(size_t length) {
-    Samples x(length, 0.f);
-    x[0] = 1.f;
-    return x;
-}
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
-    return x;
-}
-
-// A sine that fades in over 100 ms: the stages never hear it start abruptly
-// (which they would smear into a chirp, as they should: that is the effect).
-Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    const double fadeIn = 0.1 * rate;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
-    }
-    return x;
-}
-
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d; a
-// smooth signal well below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i) worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
-}
-
 // The impulse response's transform at `freq` (Hz).
 std::complex<double> transform(const Samples& h, double freq, double rate, bool timesN = false) {
     const double w = 2.0 * kPi * freq / rate;
@@ -101,12 +61,6 @@ double designDelay(int stages, double freq, double pinch, double rate, double at
     return disperser::groupDelayMs(stages, freq, pinch, rate, at) * rate / 1000.0;
 }
 
-double energy(const Samples& x) {
-    double sum = 0.0;
-    for (const float v : x) sum += static_cast<double>(v) * v;
-    return sum;
-}
-
 // Whether, at every frame, what came out so far holds no more energy than what went in.
 bool neverMoreThanGiven(const Samples& in, const Samples& out) {
     double given = 0.0, put = 0.0;
@@ -117,14 +71,6 @@ bool neverMoreThanGiven(const Samples& in, const Samples& out) {
     }
     return true;
 }
-
-size_t powerOfTwoAtLeast(size_t n) {
-    size_t p = 1;
-    while (p < n) p <<= 1;
-    return p;
-}
-
-int tailOf(Disperser& d) { return d.processor().tailSamples(); }
 
 struct Setting {
     int stages;
@@ -145,7 +91,7 @@ Disperser deviceFor(const Setting& s) {
 // Its impulse response, `length` long (at least twice its tail by default).
 Samples impulseResponse(const Setting& s, size_t length = 0) {
     Disperser d = deviceFor(s);
-    if (length == 0) length = powerOfTwoAtLeast(2 * static_cast<size_t>(tailOf(d)) + 1024);
+    if (length == 0) length = powerOfTwoAtLeast(2 * static_cast<size_t>(d.processor().tailSamples()) + 1024);
     return d.play(impulse(length));
 }
 
@@ -526,20 +472,20 @@ TEST_CASE("its tail covers its ringing") {
                              Setting{8, 50.f, 0.5f, 192000.0}}) {
         INFO(describe(s));
         Disperser d = deviceFor(s);
-        const auto tail = static_cast<size_t>(tailOf(d));
+        const auto tail = static_cast<size_t>(d.processor().tailSamples());
         const Samples h = d.play(impulse(powerOfTwoAtLeast(4 * tail + 4096)));
         CHECK(energy(slice(h, static_cast<int64_t>(tail))) < 1e-6 * energy(h));  // 60 dB down
         CHECK(tail < h.size() / 2);
     }
     Disperser none(kSampleRate, {{"amount", 0.f}}), bypassed(kSampleRate, {{"bypass", 1.f}});
-    CHECK_EQ(tailOf(none), 0);
-    CHECK_EQ(tailOf(bypassed), 0);
+    CHECK_EQ(none.processor().tailSamples(), 0);
+    CHECK_EQ(bypassed.processor().tailSamples(), 0);
     Disperser dry(kSampleRate, {{"mix", 0.f}});
-    CHECK_EQ(tailOf(dry), 0);
+    CHECK_EQ(dry.processor().tailSamples(), 0);
     // At most a minute, however long its delay.
     Disperser longest(kSampleRate, {{"amount", 64.f}, {"freq", 20.f}, {"pinch", 10.f}});
-    CHECK(tailOf(longest) > 20 * kSampleRate);
-    CHECK(tailOf(longest) <= 60 * kSampleRate);
+    CHECK(longest.processor().tailSamples() > 20 * kSampleRate);
+    CHECK(longest.processor().tailSamples() <= 60 * kSampleRate);
 }
 
 TEST_CASE("the engine keeps its dispersion: nothing is delayed to line up with it") {

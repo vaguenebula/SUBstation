@@ -38,18 +38,6 @@ using Values = ParamValues;
 const Values kBase = {{"threshold", -40.f}, {"return", 3.f},    {"attack", 0.1f}, {"hold", 10.f}, {"release", 100.f},
                       {"floor", -40.f},     {"lookahead", 0.f}, {"flip", 0.f},    {"sc_eq", 0.f}, {"sc_listen", 0.f}};
 
-// `base` with `more` merged in (as a Python dict update).
-Values with(Values base, const Values& more) {
-    for (const auto& [id, value] : more) {
-        auto it = std::find_if(base.begin(), base.end(), [&](const auto& v) { return v.first == id; });
-        if (it != base.end())
-            it->second = value;
-        else
-            base.emplace_back(id, value);
-    }
-    return base;
-}
-
 using Change = ParamChange;
 
 // The sidechain: what it hears (left, and right or the left again), and the
@@ -100,17 +88,6 @@ public:
         CHECK_ARRAY_EQUAL(r, l);
         return l;
     }
-
-    // Display `index`'s values since the last read.
-    std::vector<float> display(int index) {
-        std::vector<float> values;
-        positions_[static_cast<size_t>(index)] =
-            processor().readDisplay(index, positions_[static_cast<size_t>(index)], values);
-        return values;
-    }
-
-private:
-    uint64_t positions_[4] = {};
 };
 
 // Constant stretches: {length, value}, one after another.
@@ -120,6 +97,7 @@ Samples levels(const std::vector<std::pair<int64_t, float>>& parts) {
     return x;
 }
 
+// The harness's sine(), `frames` long (not a length in seconds).
 Samples tone(double freq, int64_t frames, double amplitude = 0.5, double rate = kSampleRate) {
     Samples x(static_cast<size_t>(frames));
     for (size_t i = 0; i < x.size(); ++i)
@@ -138,35 +116,8 @@ double gainAt(const Samples& out, const Samples& in, int64_t i) {
     return static_cast<double>(out[static_cast<size_t>(i)]) / static_cast<double>(in[static_cast<size_t>(i)]);
 }
 
-// The largest sample-to-sample step over [from, to).
-double largestStep(const Samples& x, int64_t from = 1, int64_t to = -1) {
-    if (to < 0) to = static_cast<int64_t>(x.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 1); i < to; ++i)
-        worst =
-            std::max(worst, std::abs(static_cast<double>(x[static_cast<size_t>(i)]) - x[static_cast<size_t>(i - 1)]));
-    return worst;
-}
-
-// The largest 6th difference over [from, to): a steep high-pass, a gain of 64
-// (36 dB) at Nyquist, 8 at a quarter of the sample rate, and 2 * 10^5 times less
-// at 2 kHz (48 kHz) than at Nyquist. A step of d shows as up to 20 d; a smooth
-// signal well below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
-}
-
 // RMS over the last `frames`.
 double tailRms(const Samples& x, int64_t frames) { return rms(slice(x, static_cast<int64_t>(x.size()) - frames)); }
-
-double db(double ratio) { return 20.0 * std::log10(ratio); }
 
 // The gain the gate applies with its openness at `openness` (0..1), not flipped.
 double expectedGain(double openness, float floorDb) {

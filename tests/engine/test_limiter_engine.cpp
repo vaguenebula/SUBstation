@@ -42,51 +42,19 @@ constexpr int kD = limiter::kDetectorDelay;
 constexpr int kS = kL + 1 - kD;  // the attack's length: 133
 static_assert(kL - kD == kS - 1, "the gain starts falling S - 1 samples before a peak comes out");
 
-// A Limiter on its own (harness/Standalone.h), with what its tests add: two channels played as a
-// pair, and its displays read on from where the last read left off.
+// A Limiter on its own (harness/Standalone.h).
 class Limiter : public Standalone {
 public:
     explicit Limiter(const ParamValues& values = {}, double rate = kSampleRate) : Standalone("limiter", rate, values) {}
-
-    using Standalone::play;
-    // Two channels: what comes out.
-    std::pair<Samples, Samples> play(Samples left, Samples right, const std::vector<ParamChange>& changes = {}) {
-        run({&left, &right}, changes);
-        return {std::move(left), std::move(right)};
-    }
-
-    // Display `id`'s values since the last read of it.
-    std::vector<float> display(const std::string& id) {
-        const std::vector<sub::DisplayInfo> infos = processor().displays();
-        for (size_t i = 0; i < infos.size(); ++i) {
-            if (infos[i].id != id) continue;
-            std::vector<float> out;
-            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], out);
-            return out;
-        }
-        INFO(id);
-        REQUIRE(false);
-        return {};
-    }
-
-private:
-    std::map<size_t, uint64_t> positions_;
 };
 
 // --- Signals -------------------------------------------------------------------------------
 
+// The harness's sine() from a starting phase (in radians), and rounded to whole frames.
 Samples tone(double freq, double seconds, double amplitude, double phase = 0.0, double rate = kSampleRate) {
     Samples x(static_cast<size_t>(std::llround(seconds * rate)));
     for (size_t i = 0; i < x.size(); ++i)
         x[i] = static_cast<float>(amplitude * std::sin(2.0 * kPi * freq * static_cast<double>(i) / rate + phase));
-    return x;
-}
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
     return x;
 }
 
@@ -150,8 +118,6 @@ Samples scaled(Samples x, double gain) {
 
 // --- Measures ------------------------------------------------------------------------------
 
-double db(double gain) { return 20.0 * std::log10(gain); }
-
 double peak(const Samples& x, int64_t from = 0, int64_t to = std::numeric_limits<int64_t>::max()) {
     return maxAbs(slice(x, from, to));
 }
@@ -169,21 +135,6 @@ float postOf(const ParamValues& values) {
                                       {"output", -0.3f}};
     for (const auto& [id, value] : values) v[id] = value;
     return limiter::scales(v["maximize"] >= 0.5f, v["gain"], v["ceiling"], v["threshold"], v["output"]).post;
-}
-
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d; a
-// smooth signal well below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
 }
 
 // A reference true-peak meter, independent of the device: 32 points per sample
@@ -224,32 +175,6 @@ double truePeak(const Samples& x, int64_t from, int64_t to) {
     return most;
 }
 double truePeakDb(const Samples& x, int64_t from, int64_t to) { return db(truePeak(x, from, to)); }
-
-// The level of a frequency over [from, from + length): a Hann-windowed DFT bin, as an amplitude.
-double levelAt(const Samples& x, double freq, int64_t from, int64_t length) {
-    std::complex<double> sum = 0.0;
-    double weights = 0.0;
-    for (int64_t n = 0; n < length; ++n) {
-        const double w = 0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(n) / static_cast<double>(length));
-        sum += w * static_cast<double>(x[static_cast<size_t>(from + n)]) *
-               std::polar(1.0, -2.0 * kPi * freq * static_cast<double>(n) / kSampleRate);
-        weights += w;
-    }
-    return 2.0 * std::abs(sum) / weights;
-}
-
-// x delayed by `frames` (zeros first), as long as x.
-Samples delayed(const Samples& x, int64_t frames) {
-    Samples out(x.size(), 0.f);
-    for (size_t i = static_cast<size_t>(frames); i < x.size(); ++i) out[i] = x[i - static_cast<size_t>(frames)];
-    return out;
-}
-
-float maxOfValues(const std::vector<float>& v, size_t from = 0) {
-    float most = -std::numeric_limits<float>::infinity();
-    for (size_t i = from; i < v.size(); ++i) most = std::max(most, v[i]);
-    return most;
-}
 
 // A stereo test input: two channels and the gain they go in at.
 struct Input {
@@ -439,7 +364,7 @@ TEST_CASE("the limiter's auto release is quick after a short peak and slow after
         l.play(in, in);
         const std::vector<float> gr = l.display("reduction_a");
         const int64_t out = 24240 + kL;
-        CHECK(maxOfValues(gr) > 10.f);
+        CHECK(maxOf(gr) > 10.f);
         const float after = grAt(gr, out + 7200);
         INFO("150 ms after the burst: " + std::to_string(after) + " dB");
         CHECK(after < 0.5f);
@@ -470,8 +395,8 @@ TEST_CASE("the limiter's auto release doesn't distort a sustained bass note") {
     const auto distortion = [](const Samples& x, double freq) {
         constexpr int64_t kFrom = 2 * kSampleRate, kLength = kSampleRate;  // (whole cycles, after it settles)
         double harmonics = 0.0;
-        for (int h = 2; h <= 24; ++h) harmonics += std::pow(levelAt(x, h * freq, kFrom, kLength), 2.0);
-        return std::sqrt(harmonics) / levelAt(x, freq, kFrom, kLength);
+        for (int h = 2; h <= 24; ++h) harmonics += std::pow(windowedAmplitude(x, h * freq, kFrom, kLength), 2.0);
+        return std::sqrt(harmonics) / windowedAmplitude(x, freq, kFrom, kLength);
     };
     for (const double freq : {30.0, 50.0}) {
         const Samples in = tone(freq, 3.0, 2.0);
@@ -608,9 +533,9 @@ TEST_CASE("the limiter's Soft Clip rounds peaks off near the ceiling") {
         INFO("mode " + std::to_string(mode));
         Limiter l({{"mode", mode}});
         const auto [out, unused] = l.play(atCeiling, atCeiling);
-        const double fundamental = levelAt(out, 100.0, from, length);
-        const double third = levelAt(out, 300.0, from, length);
-        CHECK(maxOfValues(l.display("reduction_a")) < 0.001f);
+        const double fundamental = windowedAmplitude(out, 100.0, from, length);
+        const double third = windowedAmplitude(out, 300.0, from, length);
+        CHECK(maxOf(l.display("reduction_a")) < 0.001f);
         const std::vector<float> clip = l.display("clip");
         if (mode == 0.f) {
             CHECK_APPROX_TOL(peak(out), c, 0.0, 1e-6);
@@ -619,7 +544,7 @@ TEST_CASE("the limiter's Soft Clip rounds peaks off near the ceiling") {
             CHECK(db(third / fundamental) < -100.0);
         } else {
             CHECK_APPROX_TOL(db(peak(out) / c), db(0.875), 0.0, 0.01);  // -1.16 dB
-            CHECK_APPROX_TOL(maxOfValues(clip, 4), -db(0.875), 0.0, 0.05);
+            CHECK_APPROX_TOL(maxOf(slice(clip, 4)), -db(0.875), 0.0, 0.05);
             CHECK_APPROX_TOL(db(third / fundamental), -27.0, 0.0, 2.0);
         }
     }
@@ -629,14 +554,14 @@ TEST_CASE("the limiter's Soft Clip rounds peaks off near the ceiling") {
         Limiter l({{"mode", 1.f}});
         const auto [out, unused] = l.play(over, over);
         CHECK_APPROX_TOL(db(peak(out) / c), 0.0, 0.0, 0.01);
-        CHECK(maxOfValues(l.display("reduction_a")) < 0.01f);
+        CHECK(maxOf(l.display("reduction_a")) < 0.01f);
     }
     for (const float mode : {0.f, 1.f}) {
         const Samples over = tone(100.0, 0.5, c * std::pow(10.0, 12.0 / 20.0));
         Limiter l({{"mode", mode}});
         const auto [out, unused] = l.play(over, over);
         CHECK(peak(out) <= c);
-        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_a"), 20), mode == 0.f ? 12.0 : 8.48, 0.0, 0.2);
+        CHECK_APPROX_TOL(maxOf(slice(l.display("reduction_a"), 20)), mode == 0.f ? 12.0 : 8.48, 0.0, 0.2);
     }
     // Sample by sample, it is the knee's curve.
     Samples ramp(24000 + kL, 0.f);
@@ -661,7 +586,7 @@ TEST_CASE("the limiter's Maximize turns the gain into Output - Threshold") {
     Limiter l({{"maximize", 1.f}, {"output", -1.f}, {"threshold", -18.f}});
     const auto [out, unused] = l.play(in, in);
     CHECK_APPROX_TOL(db(peak(out, kL + 4800)), -1.0, 0.0, 0.02);
-    CHECK_APPROX_TOL(maxOfValues(l.display("reduction_a"), 4), 5.96, 0.0, 0.1);
+    CHECK_APPROX_TOL(maxOf(slice(l.display("reduction_a"), 4)), 5.96, 0.0, 0.1);
     // The same as Standard with 17 dB of gain and the ceiling at -1 dB.
     Limiter standard({{"gain", 17.f}, {"ceiling", -1.f}});
     const auto [same, unused2] = standard.play(in, in);
@@ -679,20 +604,20 @@ TEST_CASE("the limiter's L/R, M/S and Link") {
     {
         Limiter l(values(100.f));
         l.play(loud, quiet);
-        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_a"), 4), 6.02, 0.0, 0.1);
-        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_b"), 4), 6.02, 0.0, 0.1);
+        CHECK_APPROX_TOL(maxOf(slice(l.display("reduction_a"), 4)), 6.02, 0.0, 0.1);
+        CHECK_APPROX_TOL(maxOf(slice(l.display("reduction_b"), 4)), 6.02, 0.0, 0.1);
     }
     {
         Limiter l(values(0.f));
         const auto [left, right] = l.play(loud, quiet);
-        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_a"), 4), 6.02, 0.0, 0.1);
+        CHECK_APPROX_TOL(maxOf(slice(l.display("reduction_a"), 4)), 6.02, 0.0, 0.1);
         CHECK(allEqual(l.display("reduction_b"), 0.0));
         CHECK_ALLCLOSE(right, delayed(quiet, kL), 1e-6, 1e-9);
     }
     {
         Limiter l(values(50.f));
         l.play(loud, quiet);
-        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_b"), 4), -db(0.75), 0.0, 0.2);  // half the depth: 2.5 dB
+        CHECK_APPROX_TOL(maxOf(slice(l.display("reduction_b"), 4)), -db(0.75), 0.0, 0.2);  // half the depth: 2.5 dB
     }
     // M/S, unlinked: a loud centre is limited and the side keeps its level.
     const Samples mid = tone(1000.0, 0.5, 1.6), side = tone(3000.0, 0.5, 0.1);
@@ -712,7 +637,7 @@ TEST_CASE("the limiter's L/R, M/S and Link") {
         CHECK_ALLCLOSE(sideOut, delayed(side, kL), 0.0, 1e-5);
         CHECK(peak(midOut, kL + 4800) < 0.95);
         CHECK(allEqual(l.display("reduction_b"), 0.0));
-        CHECK(maxOfValues(l.display("reduction_a"), 4) > 3.f);
+        CHECK(maxOf(slice(l.display("reduction_a"), 4)) > 3.f);
         CHECK(std::max(peak(a), peak(b)) <= 1.0);
     }
     // Linked, M/S is L/R linked: |mid| + |side| is the louder of |left| and |right| at every moment,
@@ -1018,7 +943,7 @@ TEST_CASE("the limiter on one channel: the ceiling holds, and Routing and Link c
     CHECK(plain.display("output_r") == plain.display("output_l"));
     const std::vector<float> grA = plain.display("reduction_a"), grB = plain.display("reduction_b");
     CHECK(grA == grB);
-    CHECK(maxOfValues(grA) > 6.f);
+    CHECK(maxOf(grA) > 6.f);
 }
 
 TEST_CASE("the engine delays the other tracks by the limiter's lookahead") {

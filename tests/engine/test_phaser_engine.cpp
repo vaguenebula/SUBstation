@@ -13,12 +13,6 @@
 // ringing; it stays stable at the extremes, one channel plays as either of
 // two, and its displays are what plays.
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <time.h>
-#endif
-
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -26,7 +20,6 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -40,6 +33,7 @@
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
 #include "harness/Standalone.h"
+#include "harness/ThreadTime.h"
 
 using namespace subtest;
 namespace phaser = sub::phaser;
@@ -65,12 +59,6 @@ class Phaser : public Standalone {
 public:
     explicit Phaser(double rate = kSampleRate, const Values& values = {}) : Standalone("phaser", rate, values) {}
 
-    // Prepared again, at another rate.
-    void prepare(double rate) {
-        processor().prepare(rate, kMaxBlock);
-        context().sampleRate = rate;
-    }
-
     // The transport: playing (or not) at `tempo`, each block's beat counted from
     // `startBeat` at the frame this is called on; `beatAt`, if set, gives a
     // block's beat from its frame instead (a loop, a locate).
@@ -84,31 +72,18 @@ public:
 
     // As Standalone::run; while the transport plays, each block at the song's position.
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
-        const auto frames = static_cast<int64_t>(channels[0]->size());
         if (!context().playing && !beatAt) {
             Standalone::run(channels, changes, block);
-            played_ += frames;
-            return;
+        } else {
+            Standalone::run(channels, changes, block, [&](int64_t start, int) {
+                sub::ProcessContext& ctx = context();
+                const int64_t at = played_ + start;
+                ctx.samplePos = at;
+                ctx.beatPos =
+                    beatAt ? beatAt(at) : startBeat_ + static_cast<double>(at - since_) / ctx.samplesPerBeat();
+            });
         }
-        sub::ProcessContext& ctx = context();
-        std::vector<float*> pointers(channels.size());
-        size_t next = 0;
-        for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor().automate(i, processor().params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
-            }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            const int64_t at = played_ + start;
-            ctx.samplePos = at;
-            ctx.beatPos = beatAt ? beatAt(at) : startBeat_ + static_cast<double>(at - since_) / ctx.samplesPerBeat();
-            processor().process(ctx, pointers.data(), static_cast<int>(channels.size()), n);
-            processor().clearAutomation();
-        }
-        played_ += frames;
+        played_ += static_cast<int64_t>(channels[0]->size());
     }
     // One channel: what comes out.
     Samples play(Samples mono, const std::vector<Change>& changes = {}, int block = 256) {
@@ -116,126 +91,13 @@ public:
         return mono;
     }
 
-    // Every value of display `id` since the last call.
-    std::vector<float> display(const std::string& id) {
-        const std::vector<sub::DisplayInfo> infos = processor().displays();
-        for (size_t i = 0; i < infos.size(); ++i) {
-            if (infos[i].id != id) continue;
-            std::vector<float> out;
-            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], out);
-            return out;
-        }
-        INFO(id);
-        REQUIRE(false);
-        return {};
-    }
-
 private:
     double startBeat_ = 0.0;
     int64_t played_ = 0, since_ = 0;
-    uint64_t positions_[16] = {};
 };
 
-// A click at frame `at`. The delay modes' tests start theirs after a sample of silence: a reset
-// that finds the input sounding (switched on mid-sound) fades the delay line's input in.
-Samples impulse(size_t length, size_t at = 0) {
-    Samples x(length, 0.f);
-    x[at] = 1.f;
-    return x;
-}
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
-    return x;
-}
-
-// A sine that fades in over 100 ms (so its start is no click of its own).
-Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    const double fadeIn = 0.1 * rate;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
-    }
-    return x;
-}
-
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d, a
-// kink (a change of slope s) as 6 s; a smooth signal well below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0 || to > static_cast<int64_t>(d.size())) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
-}
-
-// The transform of `x` at `freq` (Hz) over [from, from + length) (all of it by default).
-std::complex<double> transform(const Samples& x, double freq, double rate = kSampleRate, size_t from = 0,
-                               size_t length = 0) {
-    if (length == 0) length = x.size() - from;
-    const std::complex<double> step = std::polar(1.0, -2.0 * kPi * freq / rate);
-    std::complex<double> z = std::polar(1.0, -2.0 * kPi * freq / rate * static_cast<double>(from)), sum = 0.0;
-    for (size_t n = from; n < from + length; ++n) {
-        sum += static_cast<double>(x[n]) * z;
-        z *= step;
-        if ((n & 1023) == 0) z /= std::abs(z);  // (a recurrence: kept on the circle)
-    }
-    return sum;
-}
-
-double db(double gain) { return 20.0 * std::log10(std::max(gain, 1e-30)); }
-
-// A steady tone's amplitude at `freq` over [from, from + length) (a whole number of its cycles).
-double toneLevel(const Samples& x, double freq, size_t from, size_t length, double rate = kSampleRate) {
-    return 2.0 * std::abs(transform(x, freq, rate, from, length)) / static_cast<double>(length);
-}
-
-double energy(const Samples& x) {
-    double sum = 0.0;
-    for (const float v : x) sum += static_cast<double>(v) * v;
-    return sum;
-}
-
-size_t powerOfTwoAtLeast(size_t n) {
-    size_t p = 1;
-    while (p < n) p <<= 1;
-    return p;
-}
-
-double frac(double x) { return x - std::floor(x); }
 double wrapHalf(double x) { return x - std::floor(x + 0.5); }                   // into -0.5..0.5
 double wrapAngle(double x) { return x - 2.0 * kPi * std::floor(x / (2.0 * kPi) + 0.5); }  // into -π..π
-
-double minOf(const std::vector<float>& v) { return *std::min_element(v.begin(), v.end()); }
-double maxOfValues(const std::vector<float>& v) { return *std::max_element(v.begin(), v.end()); }
-
-int tailOf(Phaser& p) { return p.processor().tailSamples(); }
-
-// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else
-// the machine is doing (the wall clock would count the time other processes had the core).
-double threadSeconds() {
-#ifdef _WIN32
-    FILETIME created, exited, kernel, user;
-    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
-    const auto ticks = [](const FILETIME& t) {
-        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
-    };
-    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks, counted at the scheduler's ~16 ms)
-#else
-    timespec t{};
-    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
-    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
-#endif
-}
 
 }  // namespace
 
@@ -372,7 +234,7 @@ TEST_CASE("phaser-flanger: the phaser's notches are where its design puts them")
         const Samples h = p.play(impulse(1 << 15));
         for (const double f : notches) {
             INFO("notch at " + std::to_string(f));
-            CHECK(db(std::abs(transform(h, f))) < -40.0);
+            CHECK(db(std::abs(transformAt(h, f))) < -40.0);
         }
         phaser::Response r;
         r.notches = k.notches;
@@ -384,7 +246,7 @@ TEST_CASE("phaser-flanger: the phaser's notches are where its design puts them")
             const double f = 20.0 * std::pow(1000.0, i / 200.0);
             const double want = phaser::responseDb(r, f, kSampleRate);
             if (want < -30.0) continue;
-            worst = std::max(worst, std::abs(db(std::abs(transform(h, f))) - want));
+            worst = std::max(worst, std::abs(db(std::abs(transformAt(h, f))) - want));
         }
         INFO("off the design by " + std::to_string(worst) + " dB at most");
         CHECK(worst < 0.1);
@@ -463,7 +325,7 @@ TEST_CASE("phaser-flanger: the LFO sweeps the notches") {
     CHECK(sweepOff < 0.03);  // (the modulation's 1 ms smoothing)
     CHECK(qOff < 1e-6);
     CHECK_APPROX_REL(minOf(sweep), 125.0, 0.02);
-    CHECK_APPROX_REL(maxOfValues(sweep), 8000.0, 0.02);
+    CHECK_APPROX_REL(maxOf(sweep), 8000.0, 0.02);
 
     // Blend 1: the modulation moves Spread instead, the centre stays.
     Phaser spread(kSampleRate,
@@ -471,8 +333,8 @@ TEST_CASE("phaser-flanger: the LFO sweeps the notches") {
     spread.play(smoothSine(440.0, 2.0));
     const std::vector<float> centre = spread.display("sweep_l"), qs = spread.display("q_l");
     CHECK_APPROX_REL(minOf(centre), 1000.0, 0.001);
-    CHECK_APPROX_REL(maxOfValues(centre), 1000.0, 0.001);
-    CHECK_APPROX_REL(maxOfValues(qs), phaser::qOfSpread(0.0), 0.02);
+    CHECK_APPROX_REL(maxOf(centre), 1000.0, 0.001);
+    CHECK_APPROX_REL(maxOf(qs), phaser::qOfSpread(0.0), 0.02);
     CHECK_APPROX_REL(minOf(qs), phaser::qOfSpread(1.0), 0.02);
 }
 
@@ -577,7 +439,7 @@ TEST_CASE("phaser-flanger: the LFO's shapes and Duty, LFO 2, and Triangle Analog
         Phaser p(kSampleRate, still({{"amount", 100.f}, {"lfo_wave", 2.f}, {"lfo_freq", freq}}));
         p.play(Samples(4 * kSampleRate, 0.f));
         const std::vector<float> lfo = p.display("lfo");
-        CHECK_APPROX_REL(maxOfValues(lfo), peak, 0.02);
+        CHECK_APPROX_REL(maxOf(lfo), peak, 0.02);
         CHECK_APPROX_REL(-minOf(lfo), peak, 0.02);
     }
 }
@@ -643,16 +505,18 @@ TEST_CASE("phaser-flanger: stereo: the right LFO runs Phase ahead, or spins fast
 }
 
 TEST_CASE("phaser-flanger: the flanger is a comb at its delay, fed back to the sample") {
-    // 1 ms: 48 samples. Half the input, and half of it 48 samples later.
+    // 1 ms: 48 samples. Half the input, and half of it 48 samples later. (The click comes after a
+    // sample of silence, as in the other delay modes' tests: a reset that finds the input sounding,
+    // as when switched on mid-sound, fades the delay line's input in.)
     Phaser p(kSampleRate, still({{"mode", 1.f}, {"flange_time", 1.f}}));
     const Samples h = p.play(impulse(4096, 1));
     Samples want(h.size(), 0.f);
     want[1] = want[49] = 0.5f;
     CHECK_ALLCLOSE(h, want, 0.0, 1e-7);
     // Its notches: an odd number of half cycles in 1 ms.
-    CHECK(db(std::abs(transform(h, 500.0))) < -40.0);
-    CHECK(db(std::abs(transform(h, 1500.0))) < -40.0);
-    CHECK_NEAR(db(std::abs(transform(h, 1000.0))), 0.0, 0.05);
+    CHECK(db(std::abs(transformAt(h, 500.0))) < -40.0);
+    CHECK(db(std::abs(transformAt(h, 1500.0))) < -40.0);
+    CHECK_NEAR(db(std::abs(transformAt(h, 1000.0))), 0.0, 0.05);
 
     // Feedback 50 %: each pass 0.475 of the last, inverted with Ø.
     for (const bool invert : {false, true}) {
@@ -688,7 +552,7 @@ TEST_CASE("phaser-flanger: the modulation moves the delays") {
     flanger.play(Samples(2 * kSampleRate, 0.f));
     const std::vector<float> f = flanger.display("sweep_l");
     CHECK_APPROX_REL(minOf(f), 1.0, 0.03);  // two octaves either side
-    CHECK_APPROX_REL(maxOfValues(f), 16.0, 0.03);
+    CHECK_APPROX_REL(maxOf(f), 16.0, 0.03);
     CHECK(allEqual(flanger.display("q_l"), 0.0));
     Phaser doubler(kSampleRate,
                    still({{"mode", 2.f}, {"doubler_time", 40.f}, {"amount", 100.f}, {"lfo_wave", 0.f},
@@ -696,7 +560,7 @@ TEST_CASE("phaser-flanger: the modulation moves the delays") {
     doubler.play(Samples(2 * kSampleRate, 0.f));
     const std::vector<float> d = doubler.display("sweep_l");
     CHECK_APPROX_REL(minOf(d), 34.0, 0.02);  // 15 % either side
-    CHECK_APPROX_REL(maxOfValues(d), 46.0, 0.02);
+    CHECK_APPROX_REL(maxOf(d), 46.0, 0.02);
 }
 
 TEST_CASE("phaser-flanger: the envelope follower moves the sweep with the input's level") {
@@ -743,7 +607,7 @@ TEST_CASE("phaser-flanger: Safe Bass keeps the lows out of the effect") {
     for (const float safe : {5.f, 800.f}) {
         Phaser p(kSampleRate, still({{"notches", 1.f}, {"center", 100.f}, {"safe_bass", safe}}));
         const Samples out = p.play(tone);
-        const double level = db(toneLevel(out, 100.0, from, length) / 0.5);
+        const double level = db(toneAmplitude(out, 100.0, from, length) / 0.5);
         INFO("Safe Bass " + std::to_string(safe) + ": " + std::to_string(level) + " dB");
         if (safe < 10.f) {
             CHECK(level < -30.0);
@@ -754,8 +618,8 @@ TEST_CASE("phaser-flanger: Safe Bass keeps the lows out of the effect") {
     // A 1 ms flanger above 200 Hz: its comb as it was, the bands adding up to an all-pass.
     Phaser comb(kSampleRate, still({{"mode", 1.f}, {"flange_time", 1.f}, {"safe_bass", 200.f}}));
     const Samples h = comb.play(impulse(1 << 15, 1));
-    CHECK(db(std::abs(transform(h, 1500.0))) < -40.0);
-    CHECK_NEAR(db(std::abs(transform(h, 1000.0))), 0.0, 0.2);
+    CHECK(db(std::abs(transformAt(h, 1500.0))) < -40.0);
+    CHECK_NEAR(db(std::abs(transformAt(h, 1000.0))), 0.0, 0.2);
     // Both as the design draws them.
     Phaser notch(kSampleRate, still({{"notches", 1.f}, {"center", 100.f}, {"safe_bass", 800.f}}));
     const Samples hn = notch.play(impulse(1 << 15));
@@ -772,7 +636,7 @@ TEST_CASE("phaser-flanger: Safe Bass keeps the lows out of the effect") {
         INFO(std::to_string(f) + " Hz");
         for (const auto& [response, measured] : {std::pair{r, &hn}, std::pair{rc, &h}}) {
             const double want = phaser::responseDb(response, f, kSampleRate);
-            if (want > -30.0) CHECK_NEAR(db(std::abs(transform(*measured, f))), want, 0.1);
+            if (want > -30.0) CHECK_NEAR(db(std::abs(transformAt(*measured, f))), want, 0.1);
         }
     }
 }
@@ -786,11 +650,11 @@ TEST_CASE("phaser-flanger: Warmth darkens and saturates the effect") {
     const size_t from = kSampleRate / 4, length = kSampleRate / 2;  // (5000 cycles)
     {
         Phaser p = doubler(0.f);
-        CHECK_NEAR(db(toneLevel(p.play(high), 10000.0, from, length) / 0.1), 0.0, 0.01);
+        CHECK_NEAR(db(toneAmplitude(p.play(high), 10000.0, from, length) / 0.1), 0.0, 0.01);
     }
     {
         Phaser p = doubler(100.f);
-        const double level = db(toneLevel(p.play(high), 10000.0, from, length) / 0.1);
+        const double level = db(toneAmplitude(p.play(high), 10000.0, from, length) / 0.1);
         CHECK(level > -7.0);
         CHECK(level < -6.0);
         // (quiet, the wet path is the filter the design draws: its saturation adds next to nothing)
@@ -807,8 +671,8 @@ TEST_CASE("phaser-flanger: Warmth darkens and saturates the effect") {
     for (const float warmth : {0.f, 100.f}) {
         Phaser p = doubler(warmth);
         const Samples out = p.play(loud);
-        const double third = db(toneLevel(out, 600.0, kSampleRate / 4, kSampleRate) /
-                                toneLevel(out, 200.0, kSampleRate / 4, kSampleRate));
+        const double third = db(toneAmplitude(out, 600.0, kSampleRate / 4, kSampleRate) /
+                                toneAmplitude(out, 200.0, kSampleRate / 4, kSampleRate));
         INFO("Warmth " + std::to_string(warmth) + ": the 3rd harmonic at " + std::to_string(third) + " dB");
         if (warmth > 0.f) {
             CHECK(third > -35.0);
@@ -824,9 +688,9 @@ TEST_CASE("phaser-flanger: Warmth darkens and saturates the effect") {
           std::tuple{7000.0, std::vector<double>{13000.0}, std::vector<double>{45.0}}}) {
         Phaser p = doubler(100.f);
         const Samples out = p.play(smoothSine(tone, 1.0, kSampleRate, 0.9));
-        const double level = toneLevel(out, tone, kSampleRate / 4, kSampleRate / 2);
+        const double level = toneAmplitude(out, tone, kSampleRate / 4, kSampleRate / 2);
         for (size_t i = 0; i < folds.size(); ++i) {
-            const double alias = db(toneLevel(out, folds[i], kSampleRate / 4, kSampleRate / 2) / level);
+            const double alias = db(toneAmplitude(out, folds[i], kSampleRate / 4, kSampleRate / 2) / level);
             INFO(std::to_string(tone) + " Hz folding to " + std::to_string(folds[i]) + " Hz: " +
                  std::to_string(alias) + " dB");
             CHECK(alias < -under[i]);
@@ -1252,7 +1116,7 @@ TEST_CASE("phaser-flanger: its tail covers its ringing") {
         for (const auto& [id, value] : setting) name += id + " " + std::to_string(value) + " ";
         INFO(name);
         Phaser p(kSampleRate, values);
-        const auto tail = static_cast<size_t>(tailOf(p));
+        const auto tail = static_cast<size_t>(p.processor().tailSamples());
         const Samples h = p.play(impulse(powerOfTwoAtLeast(2 * tail + 4096), 1));
         const Samples after = slice(h, static_cast<int64_t>(tail) + 1);
         INFO("tail " + std::to_string(tail) + ", what is left " + std::to_string(db(maxAbs(after) / maxAbs(h))) +
@@ -1261,12 +1125,12 @@ TEST_CASE("phaser-flanger: its tail covers its ringing") {
         CHECK(energy(after) < 1e-5 * energy(h));
     }
     Phaser dry(kSampleRate, {{"mix", 0.f}, {"feedback", 95.f}});
-    CHECK_EQ(tailOf(dry), 0);
+    CHECK_EQ(dry.processor().tailSamples(), 0);
     // At most a minute, however long it rings.
     Phaser longest(kSampleRate, {{"notches", 42.f}, {"center", 70.f}, {"spread", 0.f}, {"feedback", 100.f},
                                  {"amount", 100.f}});
-    CHECK(tailOf(longest) > 10 * kSampleRate);
-    CHECK(tailOf(longest) <= 60 * kSampleRate);
+    CHECK(longest.processor().tailSamples() > 10 * kSampleRate);
+    CHECK(longest.processor().tailSamples() <= 60 * kSampleRate);
 }
 
 TEST_CASE("phaser-flanger: it stays stable at the extremes and at any sample rate") {
@@ -1312,7 +1176,7 @@ TEST_CASE("phaser-flanger: it stays stable at the extremes and at any sample rat
     Phaser high(22050.0, {{"amount", 0.f}, {"center", 18500.f}});
     high.play(Samples(22050, 0.f));
     const std::vector<float> top = high.display("sweep_l");
-    CHECK(maxOfValues(top) < 9922.5);
+    CHECK(maxOf(top) < 9922.5);
     CHECK_APPROX_REL(minOf(top), 9922.5, 1e-4);
     CHECK_APPROX_REL(minOf(top), phaser::phaserCenterHz(18500.0, 0.0, 0.0, 22050.0), 1e-6);
     // And the flanger never reads nearer than 2 samples (0.1 ms swept down two octaves would be 0.55).

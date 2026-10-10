@@ -7,17 +7,10 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <time.h>
-#endif
 
 #include "Engine.h"
 #include "builtin/AmpDesign.h"
@@ -26,6 +19,7 @@
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
 #include "harness/Standalone.h"
+#include "harness/ThreadTime.h"
 
 using namespace subtest;
 namespace amp = sub::amp;
@@ -36,31 +30,13 @@ constexpr int kBlock = 1024;  // the renderer's largest block
 constexpr int kLatency = 37;
 constexpr int kModels = amp::kModels;
 
-// An Amp on its own (harness/Standalone.h), its two channels played at once, its displays read.
+// An Amp on its own (harness/Standalone.h), prepared for blocks as long as `maxBlock`.
 class Amp : public Standalone {
 public:
     explicit Amp(double rate = kSampleRate, const ParamValues& values = {}, int maxBlock = kMaxBlock)
         : Standalone("amp", rate, values) {
         if (maxBlock != kMaxBlock) processor().prepare(rate, maxBlock);  // (longer blocks come in slices)
     }
-
-    // Two channels: what comes out of each.
-    std::pair<Samples, Samples> playStereo(const Samples& left, const Samples& right,
-                                           const std::vector<ParamChange>& changes = {}, int block = 256) {
-        Samples l = left, r = right;
-        run({&l, &r}, changes, block);
-        return {l, r};
-    }
-
-    // Display `index`'s values since the last read.
-    std::vector<float> display(int index) {
-        std::vector<float> out;
-        positions_[index] = processor().readDisplay(index, positions_[index], out);
-        return out;
-    }
-
-private:
-    uint64_t positions_[7] = {};
 };
 
 enum Display { Input = 0, Drive1, Drive2, Drive3, Power, Sag, Output };
@@ -73,42 +49,10 @@ ParamValues model(int m, const ParamValues& more = {}) {
 
 std::string modelName(int m) { return amp::modelLabels()[static_cast<size_t>(m)]; }
 
-// A sine, `amplitude` peak.
-Samples tone(double freq, double amplitude, double seconds, double rate = kSampleRate) {
-    Samples x(static_cast<size_t>(std::lround(seconds * rate)));
-    for (size_t i = 0; i < x.size(); ++i)
-        x[i] = static_cast<float>(amplitude * std::sin(2.0 * kPi * freq * static_cast<double>(i) / rate));
-    return x;
-}
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
-    return x;
-}
-
-double rmsDb(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    if (to < 0) to = static_cast<int64_t>(x.size());
-    double sum = 0.0;
-    for (int64_t i = from; i < to; ++i)
-        sum += static_cast<double>(x[static_cast<size_t>(i)]) * x[static_cast<size_t>(i)];
-    return 10.0 * std::log10(sum / static_cast<double>(std::max<int64_t>(1, to - from)) + 1e-30);
-}
-
 // The amplitude of `freq` in the last half, by a Hann-windowed DFT (exact frequency).
 double amplitudeAt(const Samples& x, double freq, double rate = kSampleRate) {
-    const size_t from = x.size() / 2, n = x.size() - from;
-    std::complex<double> sum = 0.0;
-    double weights = 0.0;
-    for (size_t i = 0; i < n; ++i) {
-        const double w = 0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(i) / static_cast<double>(n));
-        sum +=
-            w * static_cast<double>(x[from + i]) * std::polar(1.0, -2.0 * kPi * freq * static_cast<double>(i) / rate);
-        weights += w;
-    }
-    return 2.0 * std::abs(sum) / weights;
+    const auto from = static_cast<int64_t>(x.size() / 2);
+    return windowedAmplitude(x, freq, from, static_cast<int64_t>(x.size()) - from, rate);
 }
 
 // The amplitudes of the first `n` harmonics of `freq`.
@@ -125,19 +69,12 @@ double thd(const Samples& x, double freq, double rate = kSampleRate) {
     return std::sqrt(sum) / h[0];
 }
 
-double db(double v) { return 20.0 * std::log10(std::max(v, 1e-30)); }
-
 // The amplitude of `freq` over whole periods of the last half (a plain DFT), in dB.
 double toneAt(const Samples& x, double freq, double rate = kSampleRate) {
     const double period = rate / freq;
     const auto periods = static_cast<int64_t>(static_cast<double>(x.size() / 2) / period);
     const auto n = static_cast<int64_t>(std::lround(static_cast<double>(periods) * period));
-    const int64_t from = static_cast<int64_t>(x.size()) - n;
-    std::complex<double> sum = 0.0;
-    for (int64_t i = 0; i < n; ++i)
-        sum += static_cast<double>(x[static_cast<size_t>(from + i)]) *
-               std::polar(1.0, -2.0 * kPi * freq * static_cast<double>(i) / rate);
-    return db(2.0 * std::abs(sum) / static_cast<double>(n));
+    return db(toneAmplitude(x, freq, static_cast<int64_t>(x.size()) - n, n, rate));
 }
 
 // What lies between the harmonics (and DC) of `freq`, against everything, below
@@ -164,61 +101,16 @@ double aliasDb(const Samples& x, double freq, double rate = kSampleRate) {
     return 10.0 * std::log10(between / total + 1e-30);
 }
 
-// The largest 6th difference over [from, to): a steep high-pass, (2 sin(ω / 2))^6:
-// 64 times as sensitive at Nyquist as at a sixth of the rate (8 times, 18 dB,
-// more than at a quarter). A step of d shows as up to 20 d; a smooth signal well
-// below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < std::min<int64_t>(to, static_cast<int64_t>(d.size())); ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
-}
-
 int64_t frameAt(double seconds, double rate = kSampleRate) { return static_cast<int64_t>(std::lround(seconds * rate)); }
 
 #ifdef NDEBUG  // (the timed tests are Release only)
-// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else the
-// machine is doing (a wall clock counts the time other processes had the core). On Windows it is
-// counted at the scheduler's tick (about 16 ms): for long stretches only.
-double threadSeconds() {
-#ifdef _WIN32
-    FILETIME created, exited, kernel, user;
-    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
-    const auto ticks = [](const FILETIME& t) {
-        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
-    };
-    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks)
-#else
-    timespec t{};
-    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
-    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
-#endif
-}
-
-// The same, finely, for short stretches compared with each other: on Windows the thread's cycles
-// (QueryThreadCycleTime), elsewhere its CPU time in seconds.
-double threadTicks() {
-#ifdef _WIN32
-    ULONG64 cycles = 0;
-    QueryThreadCycleTime(GetCurrentThread(), &cycles);
-    return static_cast<double>(cycles);
-#else
-    return threadSeconds();
-#endif
-}
-
 // The CPU seconds an amp with `values` takes over `left` and `right` (after playing `before`,
 // untimed): the best of three runs.
 double bestOfThree(const ParamValues& values, const Samples& left, const Samples& right, const Samples& before) {
     double best = 1e9;
     for (int run = 0; run < 3; ++run) {
         Amp a(kSampleRate, values);
-        if (!before.empty()) a.playStereo(before, before);
+        if (!before.empty()) a.play(before, before);
         Samples l = left, r = right;
         const double start = threadSeconds();
         a.run({&l, &r});
@@ -239,7 +131,7 @@ const ParamValues kAllAtZero = {{"gain", 0.f},   {"bass", 0.f},     {"middle", 0
 const char* const kDials[] = {"gain", "bass", "middle", "treble", "presence", "volume"};
 
 // The -12 dBFS (peak) 220 Hz sine most tests play, `seconds` long.
-Samples sine220(double seconds = 1.0) { return tone(220.0, 0.25, seconds); }
+Samples sine220(double seconds = 1.0) { return sine(220.0, seconds, 0.25); }
 
 // Whether two voicings are the same, field by field.
 bool sameVoicing(const amp::Voicing& a, const amp::Voicing& b) {
@@ -471,7 +363,7 @@ TEST_CASE("every amp model is level-matched at the defaults") {
         for (const float dual : {0.f, 1.f}) {
             INFO(modelName(m) + (dual > 0.f ? " Dual" : " Mono"));
             Amp a(kSampleRate, model(m, {{"dual", dual}}));
-            const auto [l, r] = a.playStereo(x, x);
+            const auto [l, r] = a.play(x, x);
             CHECK_NEAR(rmsDb(l, frameAt(0.5)), -15.05, 1.0);
             CHECK_NEAR(rmsDb(r, frameAt(0.5)), -15.05, 1.0);
         }
@@ -555,7 +447,7 @@ TEST_CASE("Volume sets the level, and on Blues, Heavy and Bass drives the power 
     Amp noon(kSampleRate, model(amp::Blues)), full(kSampleRate, model(amp::Blues, {{"volume", 10.f}}));
     CHECK(thd(full.play(x), 220.0) > 2.0 * thd(noon.play(x), 220.0));
     for (const double level : {0.25, 0.1}) {
-        const Samples y = tone(220.0, level, 1.0);
+        const Samples y = sine(220.0, 1.0, level);
         Amp heavy(kSampleRate, model(amp::Heavy)), cranked(kSampleRate, model(amp::Heavy, {{"volume", 10.f}}));
         const double atNoon = thd(heavy.play(y), 220.0), atTen = thd(cranked.play(y), 220.0);
         INFO("Heavy at " + std::to_string(db(level)) + " dBFS: THD " + std::to_string(100 * atNoon) + " % to " +
@@ -578,8 +470,8 @@ TEST_CASE("the amp's supply sags under load and recovers") {
 
     // A loud burst (-6 dBFS), then quiet (-30): the sag lets go over its release,
     // back to what the quiet signal alone pulls the supply down by.
-    Samples burst = tone(220.0, 0.5, 0.3);
-    const Samples soft = tone(220.0, 0.0316, 2.0);
+    Samples burst = sine(220.0, 0.3, 0.5);
+    const Samples soft = sine(220.0, 2.0, 0.0316);
     burst.insert(burst.end(), soft.begin(), soft.end());
     Amp a(kSampleRate, model(amp::Blues)), quiet(kSampleRate, model(amp::Blues));
     a.play(burst);
@@ -612,7 +504,7 @@ TEST_CASE("the amp's tone curve is the sound") {
         const amp::Voicing& v = amp::voicing(m);
         for (const Turn& turn : turns) {
             INFO(modelName(m) + " " + turn.id + " " + std::to_string(turn.value));
-            const Samples x = tone(turn.freq, 1e-3, 1.0);
+            const Samples x = sine(turn.freq, 1.0, 1e-3);
             Amp noon(kSampleRate, model(m, {{"gain", 0.f}})),
                 turned(kSampleRate, model(m, {{"gain", 0.f}, {turn.id, turn.value}}));
             const double played = toneAt(turned.play(x), turn.freq) - toneAt(noon.play(x), turn.freq);
@@ -632,7 +524,7 @@ TEST_CASE("the amp's transfer curve is the sound") {
     // In the linear region its slope is the device's gain at 1 kHz, every filter
     // included. (-100 dBFS: at -60 the hottest settings already bend V3.)
     constexpr double kLevel = 1e-5;
-    const Samples x = tone(1000.0, kLevel, 0.5);
+    const Samples x = sine(1000.0, 0.5, kLevel);
     for (int m = 0; m < kModels; ++m) {
         const ParamValues turned = {{"gain", 10.f}, {"bass", 0.f}, {"treble", 10.f}};
         for (const ParamValues& settings : {ParamValues{}, turned}) {
@@ -665,7 +557,7 @@ TEST_CASE("the amp's transfer curve is the sound") {
             for (int m = 0; m < kModels; ++m) {
                 INFO(modelName(m) + ", " + setting.name + ", a tone of peak " + std::to_string(a));
                 Amp amp(kSampleRate, model(m, setting.values));
-                const Samples out = slice(amp.play(tone(1000.0, a, 1.0)), frameAt(0.5));
+                const Samples out = slice(amp.play(sine(1000.0, 1.0, a)), frameAt(0.5));
                 const double high = *std::max_element(out.begin(), out.end()),
                              low = *std::min_element(out.begin(), out.end());
                 const std::vector<float> sag = amp.display(Sag);
@@ -689,7 +581,7 @@ TEST_CASE("the amp's transfer curve is the sound") {
 
 TEST_CASE("the amp's tone controls drive the stage after them") {
     // The stack sits before V3, so more bass drives it harder.
-    const Samples x = tone(110.0, 0.25, 1.0);
+    const Samples x = sine(110.0, 1.0, 0.25);
     for (const int m : {static_cast<int>(amp::Lead), static_cast<int>(amp::Blues)}) {
         INFO(modelName(m));
         Amp noon(kSampleRate, model(m)), boosted(kSampleRate, model(m, {{"bass", 10.f}}));
@@ -698,12 +590,12 @@ TEST_CASE("the amp's tone controls drive the stage after them") {
 }
 
 TEST_CASE("Mono runs one amp on both channels, Dual one on each") {
-    const Samples a = tone(220.0, 0.25, 0.5), b = tone(330.0, 0.25, 0.5);
+    const Samples a = sine(220.0, 0.5, 0.25), b = sine(330.0, 0.5, 0.25);
     const Samples silence(a.size(), 0.f);
     // Mono: the sum, the same out of both sides.
     {
         Amp mono(kSampleRate, model(amp::Rock));
-        const auto [l, r] = mono.playStereo(a, silence);
+        const auto [l, r] = mono.play(a, silence);
         CHECK_ARRAY_EQUAL(l, r);
         Samples half = a;
         for (float& v : half) v *= 0.5f;
@@ -713,7 +605,7 @@ TEST_CASE("Mono runs one amp on both channels, Dual one on each") {
     // Dual: each side its own amp.
     {
         Amp dual(kSampleRate, model(amp::Rock, {{"dual", 1.f}}));
-        const auto [l, r] = dual.playStereo(a, b);
+        const auto [l, r] = dual.play(a, b);
         CHECK(db(amplitudeAt(l, 330.0)) < -100.0);
         CHECK(db(amplitudeAt(r, 220.0)) < -100.0);
         Amp left(kSampleRate, model(amp::Rock)), right(kSampleRate, model(amp::Rock));
@@ -726,13 +618,13 @@ TEST_CASE("Mono runs one amp on both channels, Dual one on each") {
 }
 
 TEST_CASE("switching the amp between Mono and Dual is click-free") {
-    const Samples a = tone(220.0, 0.25, 1.5), b = tone(330.0, 0.25, 1.5);
+    const Samples a = sine(220.0, 1.5, 0.25), b = sine(330.0, 1.5, 0.25);
     const int64_t on = frameAt(0.5), off = frameAt(1.0), lat = kLatency;
     const auto ms = [](double v) { return frameAt(v / 1000.0); };
     for (const int m : {static_cast<int>(amp::Clean), static_cast<int>(amp::Lead)}) {
         INFO(modelName(m));
         Amp switched(kSampleRate, model(m));
-        const auto [l, r] = switched.playStereo(a, b, {{on, "dual", 1.f}, {off, "dual", 0.f}});
+        const auto [l, r] = switched.play(a, b, {{on, "dual", 1.f}, {off, "dual", 0.f}});
         CHECK(allFinite(l) && allFinite(r));
         for (const Samples* out : {&l, &r}) {
             for (const int64_t at : {on, off}) {
@@ -746,7 +638,7 @@ TEST_CASE("switching the amp between Mono and Dual is click-free") {
         }
         // Once faded, the right side is its own amp's.
         Amp dual(kSampleRate, model(m, {{"dual", 1.f}}));
-        const auto [dl, dr] = dual.playStereo(a, b);
+        const auto [dl, dr] = dual.play(a, b);
         CHECK_NEAR(rmsDb(r, on + ms(40), on + ms(140)), rmsDb(dr, on + ms(40), on + ms(140)), 0.5);
         CHECK_NEAR(rmsDb(l, on + ms(40), on + ms(140)), rmsDb(dl, on + ms(40), on + ms(140)), 0.5);
     }
@@ -801,7 +693,7 @@ TEST_CASE("changing the amp model morphs without a click") {
     // In the linear region (-80 dBFS: nothing clips, the tone plays pure, so the
     // measure is sharp), every morph is smooth to within 1 % of the output's peak:
     // a step 40 dB under the signal would show.
-    const Samples quiet = tone(220.0, 1e-4, 0.8);
+    const Samples quiet = sine(220.0, 0.8, 1e-4);
     double worst = 0.0;
     for (int from = 0; from < kModels; ++from) {
         for (int to = 0; to < kModels; ++to) {
@@ -950,7 +842,7 @@ TEST_CASE("turning any of the amp's dials is click-free") {
     // sharp, every model's every dial glides within 1 % of the output's peak: a
     // step 40 dB under the signal would show. (At -12 dBFS above, the crunch and
     // lead models' own clipping edges set the bound.)
-    const Samples quiet = tone(220.0, 1e-4, 0.6);
+    const Samples quiet = sine(220.0, 0.6, 1e-4);
     for (int m = 0; m < kModels; ++m) {
         for (const char* dial : kDials) {
             for (const float from : {0.f, 10.f}) {
@@ -980,7 +872,7 @@ TEST_CASE("turning any of the amp's dials is click-free") {
 TEST_CASE("the amp's automation plays through the engine sample-accurately") {
     sub::Engine engine;
     engine.setClipFadeMs(0);
-    const std::string path = makeWav(stereo(tone(221.25, 0.25, 3.0)), 2);
+    const std::string path = makeWav(stereo(sine(221.25, 3.0, 0.25)), 2);
     engine.loadSource(path);
     const uint32_t track = engine.addTrack();
     engine.setTrackClips(track, {clip(path, 0.0, 3.0, 0.0, 1.f)});
@@ -1032,7 +924,7 @@ TEST_CASE("the amp's Dry/Wet blends in the input delayed by its latency") {
 TEST_CASE("the amp's latency is reported and compensated") {
     // The wet comes out 37 samples late, and its filters' own phase delay (the design's):
     // a small 1 kHz tone's phase, to within a twentieth of a sample, every model.
-    const Samples x = tone(1000.0, 1e-5, 0.5);
+    const Samples x = sine(1000.0, 0.5, 1e-5);
     const double period = kSampleRate / 1000.0;
     for (int m = 0; m < kModels; ++m) {
         INFO(modelName(m));
@@ -1137,14 +1029,14 @@ TEST_CASE("reset and a new sample rate start the amp from silence") {
     a.play(n);
     a.processor().prepare(96000.0, kBlock);
     Amp at96(96000.0, model(amp::Rock));
-    const Samples x96 = tone(220.0, 0.25, 1.0, 96000.0);
+    const Samples x96 = sine(220.0, 1.0, 0.25, 96000.0);
     const Samples out = a.play(x96);
     CHECK_ARRAY_EQUAL(out, at96.play(x96));
     CHECK_NEAR(rmsDb(out, 48000), -15.05, 1.5);
 }
 
 TEST_CASE("the amp stays finite and bounded at the extremes and at any rate") {
-    const Samples hot = tone(220.0, 1.0, 0.5);
+    const Samples hot = sine(220.0, 0.5, 1.0);
     const Samples loud = noise(kSampleRate / 2, 26, 1.0f);
     for (int m = 0; m < kModels; ++m) {
         std::vector<std::pair<std::string, ParamValues>> cases = {{"all 0", kAllAtZero}, {"all 10", kAllAtTen}};
@@ -1167,7 +1059,7 @@ TEST_CASE("the amp stays finite and bounded at the extremes and at any rate") {
         for (int m = 0; m < kModels; ++m) {
             INFO(modelName(m) + " at " + std::to_string(rate));
             Amp a(rate, model(m));
-            const Samples out = a.play(tone(220.0, 0.25, 1.0, rate));
+            const Samples out = a.play(sine(220.0, 1.0, 0.25, rate));
             CHECK(allFinite(out));
             CHECK(maxAbs(out) <= 2.0);
             CHECK_NEAR(rmsDb(out, static_cast<int64_t>(rate / 2)), -15.05, 1.5);
@@ -1238,7 +1130,7 @@ TEST_CASE("the amp puts out no DC") {
 }
 
 TEST_CASE("the amp keeps what folds back far down") {
-    const Samples x = tone(997.0, 0.25, 0.5);
+    const Samples x = sine(997.0, 0.5, 0.25);
     for (int m = 0; m < kModels; ++m) {
         INFO(modelName(m));
         Amp high(kSampleRate, model(m, {{"gain", 10.f}})), noon(kSampleRate, model(m)),
@@ -1260,7 +1152,7 @@ TEST_CASE("the amp's displays show its input, each stage's drive, the sag and it
     for (int m = 0; m < kModels; ++m) {
         INFO(modelName(m));
         Amp a(kSampleRate, model(m));
-        const auto [l, r] = a.playStereo(x, x);
+        const auto [l, r] = a.play(x, x);
         std::vector<std::vector<float>> d;
         for (int i = 0; i < 7; ++i) d.push_back(a.display(i));
         for (const auto& values : d) CHECK_EQ(values.size(), size_t{187});
@@ -1366,11 +1258,11 @@ TEST_CASE("the amp plays the same in any block size") {
         for (const int m : {static_cast<int>(amp::Clean), static_cast<int>(amp::Blues), static_cast<int>(amp::Bass)}) {
             const ParamValues values = model(m, {{"dual", 1.f}, {"volume", 10.f}});
             Amp reference(kSampleRate, values);
-            const auto [wantLeft, wantRight] = reference.playStereo(left, right, {}, 64);
+            const auto [wantLeft, wantRight] = reference.play(left, right, {}, 64);
             for (const int block : {1, 1000, 1024}) {
                 INFO(modelName(m) + " in blocks of " + std::to_string(block));
                 Amp a(kSampleRate, values);
-                const auto [l, r] = a.playStereo(left, right, {}, block);
+                const auto [l, r] = a.play(left, right, {}, block);
                 CHECK_ARRAY_EQUAL(l, wantLeft);
                 CHECK_ARRAY_EQUAL(r, wantRight);
             }
@@ -1407,25 +1299,25 @@ TEST_CASE("an amp at rest sleeps through silence and wakes as a fresh one") {
     const int64_t back = frameAt(4.0);
     {
         Amp a(kSampleRate, model(amp::Lead));
-        const auto [l, r] = a.playStereo(x, x);
+        const auto [l, r] = a.play(x, x);
         Amp fresh(kSampleRate, model(amp::Lead));
-        const auto [fl, fr] = fresh.playStereo(again, again);
+        const auto [fl, fr] = fresh.play(again, again);
         CHECK_ARRAY_EQUAL(slice(l, back), fl);
         CHECK_ARRAY_EQUAL(slice(r, back), fr);
     }
     // The model changed while it was silent: it wakes as that model.
     {
         Amp a(kSampleRate, model(amp::Lead));
-        const auto [l, r] = a.playStereo(x, x, {{frameAt(2.0), "type", static_cast<float>(amp::Bass)}});
+        const auto [l, r] = a.play(x, x, {{frameAt(2.0), "type", static_cast<float>(amp::Bass)}});
         Amp fresh(kSampleRate, model(amp::Bass));
-        const auto [fl, fr] = fresh.playStereo(again, again);
+        const auto [fl, fr] = fresh.play(again, again);
         CHECK_ARRAY_EQUAL(slice(l, back), fl);
     }
     // Dual with one side silent: that side's amp puts out exact zeros (asleep), the other plays on.
     {
         const Samples silence(x.size(), 0.f);
         Amp a(kSampleRate, model(amp::Lead, {{"dual", 1.f}}));
-        const auto [l, r] = a.playStereo(x, silence);
+        const auto [l, r] = a.play(x, silence);
         CHECK(allEqual(r, 0.0));
         Amp one(kSampleRate, model(amp::Lead));
         CHECK_ALLCLOSE(l, one.play(x), 0.0, 1e-6);

@@ -39,58 +39,15 @@ constexpr int kFade = kSampleRate / 100;  // the lists' and switches' 10 ms
 using Values = ParamValues;
 using Change = ParamChange;
 
-// A Saturator on its own, outside an engine (harness/Standalone.h), and what
-// its displays published.
+// A Saturator on its own, outside an engine (harness/Standalone.h).
 struct Saturator : Standalone {
     explicit Saturator(double rate = kSampleRate, const Values& values = {}) : Standalone("saturator", rate, values) {}
-
-    // Everything display `id` published since the last call.
-    std::vector<float> display(const std::string& id) {
-        const std::vector<sub::DisplayInfo> displays = processor().displays();
-        for (size_t i = 0; i < displays.size(); ++i) {
-            if (displays[i].id != id) continue;
-            std::vector<float> out;
-            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], out);
-            return out;
-        }
-        INFO(id);
-        REQUIRE(false);
-        return {};
-    }
-
-private:
-    uint64_t positions_[8] = {};
 };
 
 Samples play(const Values& values, const Samples& in, const std::vector<Change>& changes = {},
              double rate = kSampleRate) {
     Saturator s(rate, values);
     return s.play(in, changes);
-}
-
-Samples impulse(size_t length, float level = 1.f) {
-    Samples x(length, 0.f);
-    x[0] = level;
-    return x;
-}
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
-    return x;
-}
-
-// A sine that fades in over 100 ms (so its start is no click of its own).
-Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    const double fadeIn = 0.1 * rate;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
-    }
-    return x;
 }
 
 // Each level held `hold` samples.
@@ -115,32 +72,6 @@ Samples ramp(float from, float to, int samples) {
     return x;
 }
 
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d; a
-// smooth signal well below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < std::min<int64_t>(to, static_cast<int64_t>(d.size())); ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
-}
-
-// The energy of the spectrum's bins in [lo, hi] Hz, in dB.
-double bandDb(const Samples& y, double lo, double hi, double rate = kSampleRate) {
-    const std::vector<double> s = spectrum(y, hanning(y.size()));
-    double sum = 0.0;
-    for (size_t k = 0; k < s.size(); ++k) {
-        const double f = static_cast<double>(k) * rate / static_cast<double>(y.size());
-        if (f >= lo && f <= hi) sum += s[k] * s[k];
-    }
-    return 10.0 * std::log10(sum + 1e-30);
-}
-
 // Harmonic `k` of `f0` relative to the fundamental, in dB, from a Hann-windowed spectrum.
 double harmonicDbc(const Samples& y, double f0, int k, double rate = kSampleRate) {
     const std::vector<double> s = spectrum(y, hanning(y.size()));
@@ -152,12 +83,6 @@ double harmonicDbc(const Samples& y, double f0, int k, double rate = kSampleRate
         return peak;
     };
     return 20.0 * std::log10((level(k * f0) + 1e-30) / level(f0));
-}
-
-double energy(const Samples& x) {
-    double sum = 0.0;
-    for (const float v : x) sum += static_cast<double>(v) * v;
-    return sum;
 }
 
 // The share (dB) of a periodic render's energy (a whole number of periods,
@@ -189,11 +114,6 @@ Samples transferOf(int type, float driveDb, const Samples& in, float thresholdDb
 Values wsValues(const std::vector<float>& ws) {
     return {{"ws_drive", ws[0]}, {"ws_lin", ws[1]},   {"ws_curve", ws[2]},
             {"ws_damp", ws[3]},  {"ws_depth", ws[4]}, {"ws_period", ws[5]}};
-}
-
-Values operator+(Values a, const Values& b) {
-    a.insert(a.end(), b.begin(), b.end());
-    return a;
 }
 
 // The device's output for a constant input `x` (after it has settled).
@@ -670,7 +590,7 @@ TEST_CASE("the saturator's Hi-Quality oversamples and reports its latency") {
         CHECK_EQ(nonzero(left).size(), 1u);  // (the dry click, as it was)
         // The wet one band-limited by the 4x path's filters, its peak where the dry click is.
         Saturator alone(kSampleRate, {{"hq", 1.f}});
-        const Samples response = alone.play(impulse(256, left[argmax(leftAbs)]));
+        const Samples response = alone.play(impulse(256, 0, left[argmax(leftAbs)]));
         CHECK_EQ(argmax(response), static_cast<size_t>(kHqLatency));
         CHECK_APPROX_TOL(right[argmax(rightAbs)], response[kHqLatency], 1e-5, 0.0);
     }
@@ -940,7 +860,7 @@ TEST_CASE("the saturator's tail covers its ringing") {
     CHECK_EQ(dc.processor().tailSamples(), static_cast<int>(std::ceil(8.0 / (2.0 * kPi * 5.0) * kSampleRate)));
     Saturator hq(kSampleRate, {{"hq", 1.f}});
     CHECK_EQ(hq.processor().tailSamples(), kHqPreroll);
-    const Samples hh = hq.play(impulse(1024, 0.5f));
+    const Samples hh = hq.play(impulse(1024, 0, 0.5f));
     CHECK(energy(slice(hh, kHqPreroll)) < 1e-9 * energy(hh));
     Saturator colorOff(kSampleRate, {{"base", 24.f}, {"depth", 24.f}});
     CHECK_EQ(colorOff.processor().tailSamples(), 0);

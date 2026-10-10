@@ -10,20 +10,12 @@
 
 #include <algorithm>
 #include <cmath>
-#include <complex>
 #include <limits>
 #include <memory>
-#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <time.h>
-#endif
 
 #include "Engine.h"
 #include "builtin/BuiltinRegistry.h"
@@ -31,6 +23,7 @@
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
 #include "harness/Standalone.h"
+#include "harness/ThreadTime.h"
 
 using namespace subtest;
 namespace mb = sub::multiband;
@@ -50,28 +43,17 @@ struct Multiband : Standalone {
     explicit Multiband(const Values& values = {}, double rate = kSampleRate) : Standalone("multiband", rate, values) {}
 
     // Processes one or two channels of equal length in place, `block` frames at a time, keyed by `key`
-    // (two channels as long) while `keyed`.
+    // (two channels as long) while `keyed`: each block handed the key's frames from where it starts.
     void runKeyed(const std::vector<Samples*>& channels, const std::vector<const Samples*>& key, bool keyed,
                   int block = 256) {
         processor().setSidechainConnected(keyed);
-        for (size_t start = 0; start < channels[0]->size(); start += static_cast<size_t>(block)) {
-            const size_t n = std::min(static_cast<size_t>(block), channels[0]->size() - start);
-            std::vector<Samples> parts;
-            for (Samples* c : channels) {
-                const auto from = c->begin() + static_cast<int64_t>(start);
-                parts.emplace_back(from, from + static_cast<int64_t>(n));
-            }
-            std::vector<Samples*> pointers;
-            for (Samples& part : parts) pointers.push_back(&part);
+        run(channels, {}, block, [&](int64_t start, int) {
             processor().setSidechain(key[0]->data() + start, key[1]->data() + start);
-            run(pointers, {}, block);
-            processor().setSidechain(nullptr, nullptr);
-            for (size_t c = 0; c < channels.size(); ++c)
-                std::copy(parts[c].begin(), parts[c].end(), channels[c]->begin() + static_cast<int64_t>(start));
-        }
+        });
+        processor().setSidechain(nullptr, nullptr);
     }
 
-    // Every value of a display so far.
+    // Every value of a display so far (not only those since the last read, as Standalone's display()).
     std::vector<float> display(const std::string& id) {
         const std::vector<sub::DisplayInfo> displays = processor().displays();
         for (size_t i = 0; i < displays.size(); ++i) {
@@ -89,22 +71,6 @@ struct Multiband : Standalone {
 // A change of a parameter that isn't automatable (a split switch, a solo, Listen): set between
 // blocks, as the editor sets it.
 Change direct(int64_t frame, const std::string& id, float value) { return {frame, id, value, true}; }
-
-// The CPU time this thread has had (s): what a cost check measures, whatever else the machine runs.
-double threadSeconds() {
-#ifdef _WIN32
-    FILETIME created, exited, kernel, user;
-    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
-    const auto ticks = [](const FILETIME& t) {
-        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
-    };
-    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks)
-#else
-    timespec t{};
-    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
-    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
-#endif
-}
 
 // The setting the tests start from unless they say otherwise: Peak, attack 1 ms, release 50 ms on every band.
 Values base(Values extra = {}) {
@@ -129,65 +95,13 @@ Values everyBand(const std::string& field, float value) {
     return {{"low_" + field, value}, {"mid_" + field, value}, {"high_" + field, value}};
 }
 
-Values operator+(Values a, const Values& b) {
-    a.insert(a.end(), b.begin(), b.end());
-    return a;
-}
-
 float amplitude(double db) { return static_cast<float>(std::pow(10.0, db / 20.0)); }
-
-Samples impulse(size_t length) {
-    Samples x(length, 0.f);
-    x[0] = 1.f;
-    return x;
-}
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
-    return x;
-}
-
-Samples tone(double freq, double seconds, double level, double rate = kSampleRate) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    for (size_t i = 0; i < x.size(); ++i)
-        x[i] = static_cast<float>(level * std::sin(2.0 * kPi * freq * static_cast<double>(i) / rate));
-    return x;
-}
-
-// A sine that fades in over 100 ms (so its start is no click of its own).
-Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    const double fadeIn = 0.1 * rate;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
-    }
-    return x;
-}
 
 Samples mix(const std::vector<Samples>& parts) {
     Samples sum(parts[0].size(), 0.f);
     for (const Samples& part : parts)
         for (size_t i = 0; i < sum.size(); ++i) sum[i] += part[i];
     return sum;
-}
-
-// The largest 6th difference over [from, to): a steep high-pass (|2 sin(pi f /
-// sr)|^6), 8 times (18 dB) more sensitive at Nyquist than at a quarter of the
-// sample rate and 2 10^5 times more than at 2 kHz (48 kHz). A step of d shows as
-// up to 10 d; a smooth signal well below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
 }
 
 // A steady tone's amplitude in dB, from its RMS over the last 100 ms (whole
@@ -197,13 +111,9 @@ double levelDb(const Samples& x, double rate = kSampleRate) {
     return 20.0 * std::log10(std::sqrt(2.0) * rms(slice(x, -static_cast<int64_t>(0.1 * rate))) + 1e-300);
 }
 
-// One tone's amplitude in dB (a Goertzel over [from, to), whole periods of it).
+// One tone's amplitude in dB over [from, to) (whole periods of it).
 double toneDb(const Samples& x, double freq, int64_t from, int64_t to, double rate = kSampleRate) {
-    std::complex<double> sum = 0.0;
-    for (int64_t i = from; i < to; ++i)
-        sum += static_cast<double>(x[static_cast<size_t>(i)]) *
-               std::polar(1.0, -2.0 * kPi * freq * static_cast<double>(i) / rate);
-    return 20.0 * std::log10(2.0 * std::abs(sum) / static_cast<double>(to - from) + 1e-300);
+    return db(toneAmplitude(x, freq, from, to - from, rate));
 }
 // Over the last 100 ms.
 double toneDb(const Samples& x, double freq) {
@@ -211,17 +121,9 @@ double toneDb(const Samples& x, double freq) {
     return toneDb(x, freq, n - at(0.1), n);
 }
 
-double energy(const Samples& x) {
-    double sum = 0.0;
-    for (const float v : x) sum += static_cast<double>(v) * v;
-    return sum;
-}
-
 // The LR4 halves' shares of a frequency (in phase with each other).
 double lowShare(double f, double crossover) { return 1.0 / (1.0 + std::pow(f / crossover, 4.0)); }
 double highShare(double f, double crossover) { return 1.0 - lowShare(f, crossover); }
-
-double db(double gain) { return 20.0 * std::log10(gain); }
 
 }  // namespace
 
@@ -368,29 +270,29 @@ TEST_CASE("multiband: above its threshold, a ratio over 1:1 compresses") {
     const double in = db(0.5);
     Multiband d(single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}}));
     const double want = in + (in + 20.0) * (1.0 / 4.0 - 1.0);  // -16.506
-    CHECK_APPROX_TOL(levelDb(d.play(tone(1000.0, 1.0, 0.5))), want, 0.0, 0.05);
+    CHECK_APPROX_TOL(levelDb(d.play(sine(1000.0, 1.0, 0.5))), want, 0.0, 0.05);
     Multiband limit(single({{"mid_above", -20.f}, {"mid_above_ratio", 100.f}}));
-    CHECK_APPROX_TOL(levelDb(limit.play(tone(1000.0, 1.0, 0.5))), in + (in + 20.0) * (0.01 - 1.0), 0.0, 0.05);
+    CHECK_APPROX_TOL(levelDb(limit.play(sine(1000.0, 1.0, 0.5))), in + (in + 20.0) * (0.01 - 1.0), 0.0, 0.05);
     // Below the threshold, nothing.
     Multiband quiet(single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}}));
-    CHECK_APPROX_TOL(levelDb(quiet.play(tone(1000.0, 1.0, 0.05))), db(0.05), 0.0, 0.02);
+    CHECK_APPROX_TOL(levelDb(quiet.play(sine(1000.0, 1.0, 0.05))), db(0.05), 0.0, 0.02);
 }
 
 TEST_CASE("multiband: above its threshold, a ratio under 1:1 expands upwards, by 30 dB at most") {
     Multiband d(single({{"mid_above", -20.f}, {"mid_above_ratio", 0.5f}}));
-    CHECK_APPROX_TOL(levelDb(d.play(tone(1000.0, 1.0, amplitude(-10.0)))), 0.0, 0.0, 0.05);
+    CHECK_APPROX_TOL(levelDb(d.play(sine(1000.0, 1.0, amplitude(-10.0)))), 0.0, 0.0, 0.05);
     Multiband most(single({{"mid_above", -40.f}, {"mid_above_ratio", 0.25f}}));
-    const Samples out = most.play(tone(1000.0, 1.0, 0.5));
+    const Samples out = most.play(sine(1000.0, 1.0, 0.5));
     CHECK_APPROX_TOL(levelDb(out), db(0.5) + mb::kMaxBoostDb, 0.0, 0.05);  // (101.9 dB asked)
     CHECK(allFinite(out));
 }
 
 TEST_CASE("multiband: below its threshold, a ratio over 1:1 lifts quiet sound, but never the floor") {
     Multiband d(single({{"mid_below", -40.f}, {"mid_below_ratio", 4.f}}));
-    CHECK_APPROX_TOL(levelDb(d.play(tone(1000.0, 1.0, 0.001))), -45.0, 0.0, 0.1);
+    CHECK_APPROX_TOL(levelDb(d.play(sine(1000.0, 1.0, 0.001))), -45.0, 0.0, 0.1);
     // At -84 dB the upward gain is half faded: 33 dB asked, 16.5 given.
     Multiband faint(single({{"mid_below", -40.f}, {"mid_below_ratio", 4.f}}));
-    CHECK_APPROX_TOL(levelDb(faint.play(tone(1000.0, 1.0, amplitude(-84.0)))), -67.5, 0.0, 0.1);
+    CHECK_APPROX_TOL(levelDb(faint.play(sine(1000.0, 1.0, amplitude(-84.0)))), -67.5, 0.0, 0.1);
     CHECK_APPROX(mb::upwardFade(-84.f), 0.5);
     CHECK_EQ(mb::upwardFade(-96.f), 0.f);
     CHECK_EQ(mb::upwardFade(-72.f), 1.f);
@@ -401,9 +303,9 @@ TEST_CASE("multiband: below its threshold, a ratio over 1:1 lifts quiet sound, b
 
 TEST_CASE("multiband: below its threshold, a ratio under 1:1 expands downwards, by 96 dB at most") {
     Multiband d(single({{"mid_below", -30.f}, {"mid_below_ratio", 0.5f}}));
-    CHECK_APPROX_TOL(levelDb(d.play(tone(1000.0, 1.0, amplitude(-50.0)))), -70.0, 0.0, 0.1);
+    CHECK_APPROX_TOL(levelDb(d.play(sine(1000.0, 1.0, amplitude(-50.0)))), -70.0, 0.0, 0.1);
     Multiband gate(single({{"mid_below", -30.f}, {"mid_below_ratio", 0.25f}}));
-    const Samples out = gate.play(tone(1000.0, 1.0, amplitude(-80.0)));
+    const Samples out = gate.play(sine(1000.0, 1.0, amplitude(-80.0)));
     CHECK(maxAbs(slice(out, -at(0.1))) < 2e-9);  // -150 dB asked, -96 given: -176 dB
     CHECK(maxAbs(slice(out, -at(0.1))) > 0.0);
 }
@@ -415,7 +317,7 @@ TEST_CASE("multiband: both sides work at once") {
          std::vector<std::pair<double, double>>{{-10.0, -17.5}, {-60.0, -55.0}, {-35.0, -35.0}}) {
         INFO(std::to_string(in) + " dB in");
         Multiband d(both);
-        CHECK_APPROX_TOL(levelDb(d.play(tone(1000.0, 1.0, amplitude(in)))), out, 0.0, 0.1);
+        CHECK_APPROX_TOL(levelDb(d.play(sine(1000.0, 1.0, amplitude(in)))), out, 0.0, 0.1);
     }
 }
 
@@ -425,7 +327,7 @@ TEST_CASE("multiband: Soft Knee bends the curve in over 6 dB") {
          std::vector<std::pair<double, double>>{{-20.0, -0.5625}, {-17.0, -2.25}, {-23.0, 0.0}}) {
         INFO(std::to_string(in) + " dB in");
         Multiband d(knee);
-        CHECK_APPROX_TOL(levelDb(d.play(tone(1000.0, 1.0, amplitude(in)))), in + gain, 0.0, 0.03);
+        CHECK_APPROX_TOL(levelDb(d.play(sine(1000.0, 1.0, amplitude(in)))), in + gain, 0.0, 0.03);
     }
     // The shared curve says the same.
     CHECK_APPROX_TOL(mb::staticGainDb(-20.f, -20.f, 4.f, -40.f, 1.f, true, 1.f), -0.5625, 0.0, 1e-6);
@@ -437,10 +339,10 @@ TEST_CASE("multiband: Soft Knee bends the curve in over 6 dB") {
 TEST_CASE("multiband: Amount scales every ratio's effect") {
     const double in = db(0.5);
     Multiband half(single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}, {"amount", 50.f}}));
-    CHECK_APPROX_TOL(levelDb(half.play(tone(1000.0, 1.0, 0.5))), in + 0.5 * (in + 20.0) * -0.75, 0.0, 0.05);
+    CHECK_APPROX_TOL(levelDb(half.play(sine(1000.0, 1.0, 0.5))), in + 0.5 * (in + 20.0) * -0.75, 0.0, 0.05);
     Multiband none(single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}, {"amount", 0.f}}));
     Multiband unity(single());
-    const Samples x = tone(1000.0, 1.0, 0.5);
+    const Samples x = sine(1000.0, 1.0, 0.5);
     CHECK_ARRAY_EQUAL(none.play(x), unity.play(x));
 }
 
@@ -467,7 +369,7 @@ TEST_CASE("multiband: attack and release are each side's, as Ableton defines the
                             {"mid_attack", 100.f},
                             {"mid_release", 200.f},
                             {"time", time}}));
-        Samples x = tone(1000.0, 2.5, 0.01);
+        Samples x = sine(1000.0, 2.5, 0.01);
         for (int64_t i = at(0.5); i < at(1.5); ++i) x[static_cast<size_t>(i)] *= 50.f;
         d.play(x);
         const std::vector<float> gain = d.display("mid_gain");
@@ -482,7 +384,7 @@ TEST_CASE("multiband: attack and release are each side's, as Ableton defines the
     // louder peaks), its release as the level comes back (at once).
     Multiband below(
         single({{"mid_below", -30.f}, {"mid_below_ratio", 4.f}, {"mid_attack", 100.f}, {"mid_release", 200.f}}));
-    Samples x = tone(1000.0, 2.5, 0.1);
+    Samples x = sine(1000.0, 2.5, 0.1);
     for (int64_t i = at(0.5); i < at(1.5); ++i) x[static_cast<size_t>(i)] *= amplitude(-30.0);
     below.play(x);
     const std::vector<float> gain = below.display("mid_gain");
@@ -493,10 +395,10 @@ TEST_CASE("multiband: attack and release are each side's, as Ableton defines the
 
 TEST_CASE("multiband: Peak follows the peaks, RMS the power, and switching between them is smooth") {
     Multiband peak(single());
-    peak.play(tone(1000.0, 0.5, 0.5));
+    peak.play(sine(1000.0, 0.5, 0.5));
     CHECK_APPROX_TOL(peak.display("mid_in").back(), db(0.5), 0.0, 0.05);
     Multiband rmsMode(single({{"mode", 1.f}}));
-    rmsMode.play(tone(1000.0, 0.5, 0.5));
+    rmsMode.play(sine(1000.0, 0.5, 0.5));
     CHECK_APPROX_TOL(rmsMode.display("mid_in").back(), db(0.5) - 3.0103, 0.0, 0.05);
 
     // Mid-tone, compressing: the level moves 3 dB within about 30 ms, the gain follows (at the release
@@ -517,7 +419,7 @@ TEST_CASE("multiband: Peak follows the peaks, RMS the power, and switching betwe
 
 TEST_CASE("multiband: Input drives the band into its thresholds; the Outputs come after") {
     const Values values = single({{"mid_in", 6.f}, {"mid_above", -20.f}, {"mid_above_ratio", 4.f}});
-    const Samples x = tone(1000.0, 1.0, amplitude(-26.0));
+    const Samples x = sine(1000.0, 1.0, amplitude(-26.0));
     Multiband d(values);
     CHECK_APPROX_TOL(levelDb(d.play(x)), -20.0, 0.0, 0.05);
     CHECK_APPROX_TOL(d.display("mid_in").back(), -20.0, 0.0, 0.05);
@@ -534,24 +436,24 @@ TEST_CASE("multiband: each band is its own, and a band switched off belongs to t
     const double highOut =
         db(0.1 * highShare(10000.0, 2500.0) * amplitude((highIn + 30.0) * -0.75) + 0.1 * lowShare(10000.0, 2500.0));
     Multiband high(base({{"high_above", -30.f}, {"high_above_ratio", 4.f}}));
-    CHECK_APPROX_TOL(levelDb(high.play(tone(10000.0, 1.0, 0.1))), highOut, 0.0, 0.15);  // -27.42
+    CHECK_APPROX_TOL(levelDb(high.play(sine(10000.0, 1.0, 0.1))), highOut, 0.0, 0.15);  // -27.42
     CHECK_APPROX_TOL(highOut, -27.42, 0.0, 0.02);
     Multiband highOff(base({{"high_above", -30.f}, {"high_above_ratio", 4.f}, {"high_on", 0.f}}));
-    CHECK_APPROX_TOL(levelDb(highOff.play(tone(10000.0, 1.0, 0.1))), -20.0, 0.0, 0.02);  // the mid band's: 1:1
+    CHECK_APPROX_TOL(levelDb(highOff.play(sine(10000.0, 1.0, 0.1))), -20.0, 0.0, 0.02);  // the mid band's: 1:1
 
     // 40 Hz in the low band, likewise.
     const double lowIn = db(0.1 * lowShare(40.0, 120.0));
     const double lowOut =
         db(0.1 * lowShare(40.0, 120.0) * amplitude((lowIn + 30.0) * -0.75) + 0.1 * highShare(40.0, 120.0));
     Multiband low(base({{"low_above", -30.f}, {"low_above_ratio", 4.f}}));
-    CHECK_APPROX_TOL(levelDb(low.play(tone(40.0, 2.0, 0.1))), lowOut, 0.0, 0.15);  // -27.28
+    CHECK_APPROX_TOL(levelDb(low.play(sine(40.0, 2.0, 0.1))), lowOut, 0.0, 0.15);  // -27.28
     CHECK_APPROX_TOL(lowOut, -27.28, 0.0, 0.02);
     Multiband lowOff(base({{"low_above", -30.f}, {"low_above_ratio", 4.f}, {"low_on", 0.f}}));
-    CHECK_APPROX_TOL(levelDb(lowOff.play(tone(40.0, 2.0, 0.1))), -20.0, 0.0, 0.02);
+    CHECK_APPROX_TOL(levelDb(lowOff.play(sine(40.0, 2.0, 0.1))), -20.0, 0.0, 0.02);
 
     // Off, a band takes the mid band's settings (and the mid band's detector hears it).
     Multiband followsMid(base({{"high_on", 0.f}, {"mid_above", -30.f}, {"mid_above_ratio", 4.f}}));
-    CHECK_APPROX_TOL(levelDb(followsMid.play(tone(10000.0, 1.0, 0.1))), -20.0 - 10.0 * 0.75, 0.0, 0.1);
+    CHECK_APPROX_TOL(levelDb(followsMid.play(sine(10000.0, 1.0, 0.1))), -20.0 - 10.0 * 0.75, 0.0, 0.1);
 
     // Switching them on and off mid-tone (a tone each band carries part of): no click.
     const Samples x = smoothSine(220.0, 3.0);
@@ -577,7 +479,7 @@ TEST_CASE("multiband: each band is its own, and a band switched off belongs to t
 }
 
 TEST_CASE("multiband: solo lets only the soloed bands be heard") {
-    const Samples x = mix({tone(40.0, 1.0, 0.1), tone(1000.0, 1.0, 0.1), tone(10000.0, 1.0, 0.1)});
+    const Samples x = mix({sine(40.0, 1.0, 0.1), sine(1000.0, 1.0, 0.1), sine(10000.0, 1.0, 0.1)});
     const auto levels = [&](const Values& values) {
         Multiband d(values);
         const Samples out = d.play(x);
@@ -615,28 +517,28 @@ TEST_CASE("multiband: a band's activator bypasses its gains and dynamics, and ke
     // came (through the split's all-pass) and its displays show the level as it comes, and no change.
     const Values one = single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}, {"mid_in", 6.f}, {"mid_out", -12.f}});
     Multiband bypassed(one + Values{{"mid_active", 0.f}});
-    CHECK_APPROX_TOL(levelDb(bypassed.play(tone(1000.0, 1.0, 0.5))), db(0.5), 0.0, 0.02);
+    CHECK_APPROX_TOL(levelDb(bypassed.play(sine(1000.0, 1.0, 0.5))), db(0.5), 0.0, 0.02);
     CHECK_APPROX_TOL(bypassed.display("mid_in").back(), db(0.5), 0.0, 0.05);
     CHECK_EQ(bypassed.display("mid_gain").back(), 0.f);
     CHECK_EQ(bypassed.display("mid_out").back(), bypassed.display("mid_in").back());
     Multiband working(one);
     const double driven = db(0.5) + 6.0;
-    CHECK_APPROX_TOL(levelDb(working.play(tone(1000.0, 1.0, 0.5))), driven + (driven + 20.0) * -0.75 - 12.0, 0.0, 0.05);
+    CHECK_APPROX_TOL(levelDb(working.play(sine(1000.0, 1.0, 0.5))), driven + (driven + 20.0) * -0.75 - 12.0, 0.0, 0.05);
 
     // The low band bypassed keeps its frequencies its own: the mid band, compressing, doesn't take them
     // (as it does with the low band switched off), and the other bands work on.
     const Values midWorks = base({{"mid_above", -30.f}, {"mid_above_ratio", 4.f}, {"high_above", -30.f},
                                   {"high_above_ratio", 4.f}, {"low_above", -30.f}, {"low_above_ratio", 4.f}});
     Multiband lowBypassed(midWorks + Values{{"low_active", 0.f}});
-    CHECK_APPROX_TOL(levelDb(lowBypassed.play(tone(40.0, 2.0, 0.1))), -20.0, 0.0, 0.05);
+    CHECK_APPROX_TOL(levelDb(lowBypassed.play(sine(40.0, 2.0, 0.1))), -20.0, 0.0, 0.05);
     Multiband lowMerged(midWorks + Values{{"low_on", 0.f}});
-    CHECK_APPROX_TOL(levelDb(lowMerged.play(tone(40.0, 2.0, 0.1))), -20.0 - 10.0 * 0.75, 0.0, 0.1);
+    CHECK_APPROX_TOL(levelDb(lowMerged.play(sine(40.0, 2.0, 0.1))), -20.0 - 10.0 * 0.75, 0.0, 0.1);
     Multiband highWorks(midWorks + Values{{"low_active", 0.f}});
-    CHECK_APPROX_TOL(levelDb(highWorks.play(tone(10000.0, 1.0, 0.1))), -27.42, 0.0, 0.15);
+    CHECK_APPROX_TOL(levelDb(highWorks.play(sine(10000.0, 1.0, 0.1))), -27.42, 0.0, 0.15);
 
     // A band switched off takes the mid band's gains: the mid band bypassed, nothing shapes them.
     Multiband highOff(midWorks + Values{{"high_on", 0.f}, {"mid_active", 0.f}});
-    CHECK_APPROX_TOL(levelDb(highOff.play(tone(10000.0, 1.0, 0.1))), -20.0, 0.0, 0.02);
+    CHECK_APPROX_TOL(levelDb(highOff.play(sine(10000.0, 1.0, 0.1))), -20.0, 0.0, 0.02);
 
     // Bypassing and activating again glides: no click (a band cut 12 dB and lifted 12 dB in turn).
     const Samples x = smoothSine(220.0, 2.0);
@@ -655,12 +557,12 @@ TEST_CASE("multiband: Listen puts out what the detectors hear") {
     // Unkeyed: its own input, through the split's all-pass (as the defaults put it out), whatever the
     // bands do.
     const Values squashing = base(everyBand("above", -40.f) + everyBand("above_ratio", 8.f));
-    const Samples x = mix({noise(kSampleRate / 2, 24, 0.2f), tone(300.0, 0.5, 0.3)});
+    const Samples x = mix({noise(kSampleRate / 2, 24, 0.2f), sine(300.0, 0.5, 0.3)});
     Multiband plain, listening(squashing + Values{{"sc_listen", 1.f}});
     CHECK_ALLCLOSE(listening.play(x), plain.play(x), 0.0, 1e-6);
 
     // Keyed: the key after S/C Gain, as much of it as S/C Mix takes, the rest its own input.
-    const Samples key = mix({noise(kSampleRate / 2, 25, 0.3f), tone(60.0, 0.5, 0.4)});
+    const Samples key = mix({noise(kSampleRate / 2, 25, 0.3f), sine(60.0, 0.5, 0.4)});
     for (const auto& [gain, share] : std::vector<std::pair<float, float>>{{0.f, 1.f}, {-12.f, 1.f}, {0.f, 0.5f}}) {
         INFO("S/C Gain " + std::to_string(gain) + ", S/C Mix " + std::to_string(share));
         Multiband keyed(squashing + Values{{"sc_listen", 1.f}, {"sc_gain", gain}, {"sc_mix", 100.f * share}});
@@ -685,9 +587,9 @@ TEST_CASE("multiband: Listen puts out what the detectors hear") {
 TEST_CASE("multiband: a sidechain keys each band by the same band of the key") {
     sub::Engine engine;
     engine.setClipFadeMs(0);
-    const Samples main = mix({tone(40.0, 1.0, 0.1), tone(1000.0, 1.0, 0.1), tone(10000.0, 1.0, 0.1)});
+    const Samples main = mix({sine(40.0, 1.0, 0.1), sine(1000.0, 1.0, 0.1), sine(10000.0, 1.0, 0.1)});
     const uint32_t track = clipTrack(engine, makeWav(stereo(main), 2), 0.0, 1.0);
-    const uint32_t keyTrack = clipTrack(engine, makeWav(stereo(tone(1000.0, 1.0, 1.0 - 1.0 / 32768)), 2), 0.0, 1.0);
+    const uint32_t keyTrack = clipTrack(engine, makeWav(stereo(sine(1000.0, 1.0, 1.0 - 1.0 / 32768)), 2), 0.0, 1.0);
     engine.setTrackGain(keyTrack, 0.f);  // heard only through the sidechain, taken before its fader
     const uint32_t device = engine.addBuiltinProcessor(engine.trackChain(track), "multiband", -1);
     for (const auto& [id, value] : base(everyBand("above", -25.f) + everyBand("above_ratio", 4.f)))
@@ -733,8 +635,8 @@ TEST_CASE("multiband: a sidechain keys each band by the same band of the key") {
     for (const float scMix : {100.f, 0.f}) {
         INFO("sc_mix " + std::to_string(scMix));
         Multiband keyed(base({{"mid_in", 6.f}, {"sc_mix", scMix}}));
-        Samples l = tone(1000.0, 0.5, 0.1), r = l;
-        const Samples key = tone(1000.0, 0.5, 0.5);
+        Samples l = sine(1000.0, 0.5, 0.1), r = l;
+        const Samples key = sine(1000.0, 0.5, 0.5);
         keyed.runKeyed({&l, &r}, {&key, &key}, true);
         const double trigger = scMix > 0.f ? 0.5 : 0.1;
         CHECK_APPROX_TOL(keyed.display("mid_in").back(), db(trigger * lowShare(1000.0, 2500.0)) + 6.0, 0.0, 0.1);
@@ -747,8 +649,8 @@ TEST_CASE("multiband: one channel is keyed by both of the key's, and a key conne
     // the two (0.5) keys it.
     const Values values = base(everyBand("above", -25.f) + everyBand("above_ratio", 4.f));
     Multiband d(values);
-    Samples x = tone(1000.0, 1.0, 0.1);
-    const Samples silent(x.size(), 0.f), right = tone(1000.0, 1.0, 1.0);
+    Samples x = sine(1000.0, 1.0, 0.1);
+    const Samples silent(x.size(), 0.f), right = sine(1000.0, 1.0, 1.0);
     d.runKeyed({&x}, {&silent, &right}, true);
     const double want = db(lowShare(1000.0, 2500.0) * amplitude((db(0.5 * lowShare(1000.0, 2500.0)) + 25.0) * -0.75) +
                            highShare(1000.0, 2500.0));
@@ -757,7 +659,7 @@ TEST_CASE("multiband: one channel is keyed by both of the key's, and a key conne
 
     // Keyed by a loud key, then let go of while the key still sounds (its split frozen mid-ring), then
     // keyed again: the same as a device keyed for the first time there.
-    const Samples key = tone(60.0, 1.0, 1.0), main = mix({tone(60.0, 1.0, 0.1), tone(1000.0, 1.0, 0.1)});
+    const Samples key = sine(60.0, 1.0, 1.0), main = mix({sine(60.0, 1.0, 0.1), sine(1000.0, 1.0, 0.1)});
     Multiband again(values), fresh(values);
     for (Multiband* device : {&again, &fresh}) {
         Samples a = main, b = main;
@@ -887,7 +789,7 @@ TEST_CASE("multiband: reset and a new sample rate start it from silence") {
         r.play(noise(kSampleRate, 9));
         r.processor().prepare(rate, kBlock);
         Multiband atRate(compressing, rate);
-        const Samples y = tone(1000.0, 1.0, 0.5, rate);
+        const Samples y = sine(1000.0, 1.0, 0.5, rate);
         const Samples out = r.play(y);
         CHECK_ARRAY_EQUAL(out, atRate.play(y));
         CHECK_APPROX_TOL(levelDb(out, rate), compressed, 0.0, 0.05);
@@ -1027,7 +929,7 @@ TEST_CASE("multiband: the loudest input it is given leaves it finite, and it com
 
 TEST_CASE("multiband: one channel plays as the left of two that are the same") {
     const Values values = base(everyBand("above_ratio", 4.f) + everyBand("below_ratio", 2.f));
-    const Samples x = mix({noise(kSampleRate, 14, 0.2f), tone(300.0, 1.0, 0.3)});
+    const Samples x = mix({noise(kSampleRate, 14, 0.2f), sine(300.0, 1.0, 0.3)});
     const std::vector<Change> changes = {{at(0.3), "xover_low", 400.f}, {at(0.5), "mode", 1.f}};
     Multiband mono(values), two(values);
     const Samples alone = mono.play(x, changes);
@@ -1039,23 +941,23 @@ TEST_CASE("multiband: one channel plays as the left of two that are the same") {
 
 TEST_CASE("multiband: its stereo is linked, and a silent side stays silent") {
     Multiband d(single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}}));
-    Samples l = tone(1000.0, 1.0, 0.5), r(l.size(), 0.f);
+    Samples l = sine(1000.0, 1.0, 0.5), r(l.size(), 0.f);
     d.run({&l, &r});
     CHECK_APPROX_TOL(levelDb(l), db(0.5) + (db(0.5) + 20.0) * -0.75, 0.0, 0.05);
     CHECK(allEqual(r, 0.0));
     // A tone on the right compresses the left too (both get the louder side's gain).
     Multiband linked(single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}}));
-    Samples quiet = tone(1000.0, 1.0, 0.05), loud = tone(1000.0, 1.0, 0.5);
+    Samples quiet = sine(1000.0, 1.0, 0.05), loud = sine(1000.0, 1.0, 0.5);
     linked.run({&quiet, &loud});
     CHECK_APPROX_TOL(levelDb(quiet), db(0.05) + (db(0.5) + 20.0) * -0.75, 0.0, 0.05);
 
     // RMS on two channels that differ reads the louder channel's power, as on one: each channel's mean square,
     // the larger taken (the mean of the larger square each sample would read about 2.1 dB hot on these).
     Multiband rmsMode(single({{"mode", 1.f}}));
-    Samples sine = tone(1000.0, 0.5, 0.5), cosine(sine.size());
-    for (size_t i = 0; i < cosine.size(); ++i)
-        cosine[i] = static_cast<float>(0.5 * std::cos(2.0 * kPi * 1000.0 * static_cast<double>(i) / kSampleRate));
-    rmsMode.run({&sine, &cosine});
+    Samples sines = sine(1000.0, 0.5, 0.5), cosines(sines.size());
+    for (size_t i = 0; i < cosines.size(); ++i)
+        cosines[i] = static_cast<float>(0.5 * std::cos(2.0 * kPi * 1000.0 * static_cast<double>(i) / kSampleRate));
+    rmsMode.run({&sines, &cosines});
     CHECK_APPROX_TOL(rmsMode.display("mid_in").back(), db(0.5) - 3.0103, 0.0, 0.05);
     Multiband wide(single({{"mode", 1.f}}));
     Samples left = noise(kSampleRate, 21, 0.3f), right = noise(kSampleRate, 22, 0.3f);
@@ -1086,7 +988,7 @@ TEST_CASE("multiband: its tail covers the crossovers' ringing") {
 TEST_CASE("multiband: its displays show each band's level in and out and its gain change") {
     // Three bands, the mid compressing 1:4 above -20 dB; 1 kHz at 0.5 (97.5 % of it in the mid band).
     Multiband d(base({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}}));
-    d.play(tone(1000.0, 100 * 256.0 / kSampleRate, 0.5));
+    d.play(sine(1000.0, 100 * 256.0 / kSampleRate, 0.5));
     for (const char* band : {"low", "mid", "high"})
         for (const char* kind : {"_in", "_out", "_gain"})
             CHECK_EQ(d.display(std::string(band) + kind).size(), size_t{100});
@@ -1101,7 +1003,7 @@ TEST_CASE("multiband: its displays show each band's level in and out and its gai
 
     // A band switched off publishes the floor and no gain (the mid band shows what it does).
     Multiband off(base({{"high_on", 0.f}, {"mid_above", -20.f}, {"mid_above_ratio", 4.f}}));
-    off.play(tone(10000.0, 0.1, 0.5));
+    off.play(sine(10000.0, 0.1, 0.5));
     CHECK_EQ(off.display("high_in").back(), mb::kDisplayFloorDb);
     CHECK_EQ(off.display("high_out").back(), mb::kDisplayFloorDb);
     CHECK_EQ(off.display("high_gain").back(), 0.f);

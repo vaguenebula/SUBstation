@@ -327,13 +327,6 @@ double crossingFreq(const Samples& samples) {
     return count > 0 ? count * kSampleRate / static_cast<double>(last - first) : 0.0;
 }
 
-// The biggest jump from one sample to the next: a click.
-double largestStep(const Samples& samples) {
-    double most = 0.0;
-    for (size_t i = 1; i < samples.size(); ++i) most = std::max(most, std::abs(double(samples[i]) - samples[i - 1]));
-    return most;
-}
-
 double dB(double ratio) { return 20.0 * std::log10(std::max(ratio, 1e-12)); }
 
 }  // namespace

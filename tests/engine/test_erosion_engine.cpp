@@ -59,28 +59,11 @@ public:
         displays_.assign(infos.size(), {});
     }
 
-    // Processes one or two channels of equal length in place, `block` frames at a time (each a
-    // Standalone run of its own, its changes from where it starts), the displays read after each.
+    // Processes one or two channels of equal length in place, `block` frames at a time, as
+    // Standalone::run; the displays read before each block and after the last.
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        std::vector<Samples> pieces(channels.size());
-        std::vector<Samples*> pointers;
-        for (Samples& piece : pieces) pointers.push_back(&piece);
-        size_t next = 0;
-        for (int64_t start = 0; start < frames; start += block) {
-            const int64_t end = std::min<int64_t>(start + block, frames);
-            for (size_t c = 0; c < channels.size(); ++c)
-                pieces[c].assign(channels[c]->begin() + start, channels[c]->begin() + end);
-            std::vector<Change> here;
-            for (; next < changes.size() && changes[next].frame < end; ++next) {
-                here.push_back(changes[next]);
-                here.back().frame = std::max<int64_t>(0, changes[next].frame - start);
-            }
-            Standalone::run(pointers, here, block);
-            for (size_t c = 0; c < channels.size(); ++c)
-                std::copy(pieces[c].begin(), pieces[c].end(), channels[c]->begin() + start);
-            readDisplays();
-        }
+        Standalone::run(channels, changes, block, [this](int64_t, int) { readDisplays(); });
+        readDisplays();
     }
     // One channel: what comes out.
     Samples play(Samples mono, const std::vector<Change>& changes = {}, int block = 256) {
@@ -119,22 +102,6 @@ private:
     std::vector<Samples> displays_;
 };
 
-// The DFT of x[from, from + n) at `freq` (one bin: n should hold whole cycles of it).
-std::complex<double> binAt(const Samples& x, double freq, int64_t from, int64_t n, double rate = kSampleRate) {
-    const std::complex<double> turn = std::polar(1.0, -2.0 * kPi * freq / rate);
-    std::complex<double> w = 1.0, sum = 0.0;
-    for (int64_t i = 0; i < n; ++i) {
-        sum += static_cast<double>(x[static_cast<size_t>(from + i)]) * w;
-        w *= turn;
-    }
-    return sum;
-}
-
-// A component's amplitude: 2 |X| / n.
-double amplitudeAt(const Samples& x, double freq, int64_t from, int64_t n, double rate = kSampleRate) {
-    return 2.0 * std::abs(binAt(x, freq, from, n, rate)) / static_cast<double>(n);
-}
-
 // The energy of x[from, from + n) between lo and hi Hz (rfft bins).
 double bandEnergy(const Samples& x, double lo, double hi, int64_t from, int64_t n, double rate = kSampleRate) {
     const std::vector<double> s = spectrum(slice(x, from, from + n));
@@ -144,22 +111,6 @@ double bandEnergy(const Samples& x, double lo, double hi, int64_t from, int64_t 
         if (f >= lo && f <= hi) sum += s[k] * s[k];
     }
     return sum;
-}
-
-// The largest 6th difference over [from, to): a steep high-pass (gain
-// (2 sin(pi f / rate))^6), 8 times (18 dB) more sensitive at Nyquist than at a
-// quarter of the sample rate and about 2·10^5 times more than at 2 kHz (48 kHz).
-// A step of d shows as up to 20 d; a smooth signal well below Nyquist hardly at
-// all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i)
-        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
 }
 
 // The Bessel function of the first kind J_n(x), from its series (25 terms: plenty below x = 3).
@@ -181,13 +132,6 @@ std::vector<double> toDouble(const Samples& x) { return {x.begin(), x.end()}; }
 // Pearson's correlation of two streams over [from, from + n).
 double correlationOf(const Samples& a, const Samples& b, int64_t from, int64_t n) {
     return correlation(toDouble(slice(a, from, from + n)), toDouble(slice(b, from, from + n)));
-}
-
-// The input delayed by `delay` samples (zeros first).
-Samples delayed(const Samples& x, int delay) {
-    Samples out(x.size(), 0.f);
-    for (size_t i = static_cast<size_t>(delay); i < x.size(); ++i) out[i] = x[i - static_cast<size_t>(delay)];
-    return out;
 }
 
 // The noise's band-pass pair, as the device runs it: two TPT state-variable
@@ -363,7 +307,7 @@ TEST_CASE("erosion's sine modulates the phase as theory says") {
     const std::pair<double, int> components[] = {{1000.0, 0}, {2000.0, 1}, {4000.0, 1}, {5000.0, 2}, {7000.0, 2}};
     for (const auto& [freq, order] : components) {
         INFO(std::to_string(freq) + " Hz");
-        CHECK_APPROX_REL(amplitudeAt(l, freq, from, n), 0.5 * std::abs(besselJ(order, beta)), 1e-3);
+        CHECK_APPROX_REL(toneAmplitude(l, freq, from, n), 0.5 * std::abs(besselJ(order, beta)), 1e-3);
     }
     CHECK_APPROX_TOL(0.5 * besselJ(0, beta), 0.4262, 0.0, 1e-4);
     CHECK_APPROX_TOL(0.5 * besselJ(1, beta), 0.1811, 0.0, 1e-4);
@@ -378,10 +322,10 @@ TEST_CASE("erosion's Frequency moves the sidebands") {
         return device.play(in);
     };
     const Samples low = run(2500.f), high = run(6000.f);
-    CHECK(amplitudeAt(low, 3500.0, from, n) > 10.0 * amplitudeAt(low, 7000.0, from, n));
-    CHECK(amplitudeAt(high, 7000.0, from, n) > 10.0 * amplitudeAt(high, 3500.0, from, n));
-    CHECK(amplitudeAt(low, 3500.0, from, n) > 0.01);
-    CHECK(amplitudeAt(high, 7000.0, from, n) > 0.01);
+    CHECK(toneAmplitude(low, 3500.0, from, n) > 10.0 * toneAmplitude(low, 7000.0, from, n));
+    CHECK(toneAmplitude(high, 7000.0, from, n) > 10.0 * toneAmplitude(high, 3500.0, from, n));
+    CHECK(toneAmplitude(low, 3500.0, from, n) > 0.01);
+    CHECK(toneAmplitude(high, 7000.0, from, n) > 0.01);
     // And Filter Width does nothing to the sine: the noise's weight is exactly 0.
     CHECK_ARRAY_EQUAL(run(1000.f, 0.1f), run(1000.f, 10.f));
 }
@@ -398,8 +342,9 @@ TEST_CASE("erosion's Stereo puts the sine's sides a quarter cycle apart") {
     {
         Erosion device(kSampleRate, {{"blend", 0.f}, {"stereo", 100.f}, {"freq", 3000.f}, {"amount", 30.f}});
         const auto [l, r] = device.playStereo(in, in);
-        CHECK_APPROX_TOL(std::abs(degrees(binAt(l, 4000.0, from, n), binAt(r, 4000.0, from, n))), 90.0, 0.0, 2.0);
-        CHECK_APPROX_TOL(degrees(binAt(l, 1000.0, from, n), binAt(r, 1000.0, from, n)), 0.0, 0.0, 0.5);
+        CHECK_APPROX_TOL(std::abs(degrees(transformAt(l, 4000.0, from, n), transformAt(r, 4000.0, from, n))), 90.0,
+                         0.0, 2.0);
+        CHECK_APPROX_TOL(degrees(transformAt(l, 1000.0, from, n), transformAt(r, 1000.0, from, n)), 0.0, 0.0, 0.5);
         // The modulators themselves (every sample: whole cycles of 3 kHz, 16 samples each).
         CHECK(std::abs(correlationOf(device.display("mod_l"), device.display("mod_r"), from, n)) < 0.005);
     }
@@ -565,10 +510,10 @@ TEST_CASE("erosion takes high frequencies first") {
     Erosion device(kSampleRate, {{"blend", 100.f}, {"freq", 1000.f}, {"width", 2.5f}, {"amount", 40.f}});
     const Samples out = device.play(in);
     const int64_t from = kSampleRate / 2, n = kSampleRate;
-    INFO("200 Hz " + std::to_string(amplitudeAt(out, 200.0, from, n)) + ", 5 kHz " +
-         std::to_string(amplitudeAt(out, 5000.0, from, n)));
-    CHECK(amplitudeAt(out, 200.0, from, n) >= 0.95 * 0.25);
-    CHECK(amplitudeAt(out, 5000.0, from, n) <= 0.1 * 0.25);
+    INFO("200 Hz " + std::to_string(toneAmplitude(out, 200.0, from, n)) + ", 5 kHz " +
+         std::to_string(toneAmplitude(out, 5000.0, from, n)));
+    CHECK(toneAmplitude(out, 200.0, from, n) >= 0.95 * 0.25);
+    CHECK(toneAmplitude(out, 5000.0, from, n) <= 0.1 * 0.25);
     // What wasn't kept went into hiss around it, not away: the level stays.
     CHECK_APPROX_REL(rms(slice(out, from, from + n)), rms(slice(in, from, from + n)), 0.05);
 }
@@ -664,8 +609,8 @@ TEST_CASE("changing any of erosion's controls is click-free") {
         // the device plays as one set there all along does (the same noise: alike devices).
         const int64_t landed = kAt + 4800, n = static_cast<int64_t>(in.size()) - landed;
         if (step.id == "freq") {  // (the sine's phase differs, so where its energy is: 80 Hz, not 40)
-            CHECK(amplitudeAt(smooth.display("mod_l"), 80.0, landed, kSampleRate / 2) > 0.98);
-            CHECK(amplitudeAt(smooth.display("mod_l"), 40.0, landed, kSampleRate / 2) < 0.02);
+            CHECK(toneAmplitude(smooth.display("mod_l"), 80.0, landed, kSampleRate / 2) > 0.98);
+            CHECK(toneAmplitude(smooth.display("mod_l"), 40.0, landed, kSampleRate / 2) < 0.02);
         } else {
             for (const char* id : {"mod_l", "mod_r"}) {
                 INFO(id);
@@ -919,7 +864,7 @@ TEST_CASE("the erosion band the editor draws is the filter that plays") {
             const double drawn = erosion::bandMagnitude(s.freq, s.width, s.rate, f);
             if (20.0 * std::log10(drawn) < -60.0) continue;
             INFO("at " + std::to_string(f) + " Hz");
-            const double played = std::abs(binAt(h, f, 0, n, s.rate));
+            const double played = std::abs(transformAt(h, f, 0, n, s.rate));
             CHECK_APPROX_TOL(20.0 * std::log10(played), 20.0 * std::log10(drawn), 0.0, 0.01);
             ++compared;
         }
