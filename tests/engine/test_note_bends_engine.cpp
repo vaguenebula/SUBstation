@@ -13,6 +13,7 @@
 
 #include "Engine.h"
 #include "Ump.h"
+#include "builtin/BuiltinProcessor.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
 
@@ -466,8 +467,8 @@ TEST_CASE("the sampler plays a bent note at its bent pitch") {
     const std::string path = makeWav(sine(440.0, 2.0, 0.5));  // at its root key, C3
     const uint32_t track = engine.addTrack();
     const uint32_t sampler = engine.addBuiltinProcessor(engine.trackChain(track), "sampler", -1);
-    const std::string state = "sample=" + path + "\n";
-    engine.setProcessorState(sampler, std::vector<uint8_t>(state.begin(), state.end()));
+    // (Its state escapes backslashes: a Windows path goes through the engine's own encoding.)
+    engine.setProcessorState(sampler, sub::BuiltinProcessor::encodeState({{"sample", path}}));
     engine.setTrackNotes(track, {bentNote(0.0, 2.0, 60, {{0.0, 12.0, 0.0}}), bentNote(2.0, 2.0, 60, {{0.0, -12.0, 0.0}})});
     const Samples out = channel(engine.renderOffline(0.0, 4 * kBeat), 0);
     CHECK_APPROX_REL(dominantFreq(slice(out, 2400, 2400 + 8192)), 880.0, 3e-3);
