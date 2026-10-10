@@ -23,11 +23,21 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 | [DeviceKnobPages.qml](../../ui/qml/devices/DeviceKnobPages.qml), [DeviceParamKnob.qml](../../ui/qml/devices/DeviceParamKnob.qml), [ParamCell.qml](../../ui/qml/devices/ParamCell.qml), [DeviceParams](../../ui/src/devices/DeviceParams.h), [DeviceParam](../../ui/src/devices/DeviceParam.h), [ParamMenu.qml](../../ui/qml/devices/ParamMenu.qml) | A built-in device without an editor: a knob (or list) per parameter, four to a page; a parameter's cell (`ParamCell`, which `PluginParamKnob` shows a plug-in's parameter in too), its state and its menu |
 | [PluginDeviceBody.qml](../../ui/qml/devices/PluginDeviceBody.qml), [PluginParamKnob.qml](../../ui/qml/devices/PluginParamKnob.qml), [PluginParams](../../ui/src/devices/PluginParams.h) | A plug-in's generic editor: its parameters (`PluginParams`, `PluginParam`), or why it shows none |
 | [RackDeviceBody.qml](../../ui/qml/devices/RackDeviceBody.qml), [RackMacroKnob.qml](../../ui/qml/devices/RackMacroKnob.qml), [RackMacroMappings.qml](../../ui/qml/devices/RackMacroMappings.qml), [RackChainRow.qml](../../ui/qml/devices/RackChainRow.qml), [RackChainView.qml](../../ui/qml/devices/RackChainView.qml), [RackMacro](../../ui/src/devices/RackMacro.h) (`RackMacro`, `RackMacros`), [RackChain](../../ui/src/devices/RackChain.h), [RackChains](../../ui/src/devices/RackChains.h) | A rack: its buttons, macros and chain list, a macro's mappings and their ranges, a chain's row, the chain shown beside the rack |
-| [DeviceCanvas](../../ui/src/devices/DeviceCanvas.h), [EditorPaint](../../ui/src/devices/EditorPaint.h) | The base of the editors' drawn items, and their drawing helpers (among them `LogAxis`, the graphs' logarithmic frequency and time axes, and `drawDecadeGrid()`) |
+| [DeviceCanvas](../../ui/src/devices/DeviceCanvas.h), [EditorPaint](../../ui/src/devices/EditorPaint.h) | The base of the editors' drawn items, and their drawing helpers (among them `LogAxis`, the graphs' logarithmic frequency and time axes, and `drawDecadeGrid()`), what they animate with (`MeterBallistics`, a meter's fall and held peak; `Eased` and `easeFraction()`, a value easing towards its target by the time since the last tick) and the meters and lines they share (`dbToY()`, `drawLevelMeter()`, `drawReductionMeter()`, `drawGlowPolyline()`) |
 | [editors/DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml) | The editor registry (a singleton): `editorFor(kind)` |
-| [editors/EditorCaption.qml](../../ui/qml/devices/editors/EditorCaption.qml), [editors/EditorReadout.qml](../../ui/qml/devices/editors/EditorReadout.qml) | The editors' captions (a control's name over it) and readouts (its value under it) |
+| [editors/EditorCaption.qml](../../ui/qml/devices/editors/EditorCaption.qml), [editors/EditorReadout.qml](../../ui/qml/devices/editors/EditorReadout.qml), [editors/EditorKnob.qml](../../ui/qml/devices/editors/EditorKnob.qml), [editors/DeviceParamMap.qml](../../ui/qml/devices/editors/DeviceParamMap.qml) | The editors' captions (a control's name over it) and readouts (its value under it); `EditorKnob`, a knob between the two, bound to its parameter and dimmed while disabled; `DeviceParamMap`, a `DeviceParam` per id (`get(id)`) |
 | Compressor: [CompressorEditor.qml](../../ui/qml/devices/editors/CompressorEditor.qml), [ReductionGraph](../../ui/src/devices/ReductionGraph.h) | |
+| Gate: [GateEditor.qml](../../ui/qml/devices/editors/GateEditor.qml), [GateViews.qml](../../ui/qml/devices/editors/GateViews.qml), [GateGraph](../../ui/src/devices/GateGraph.h), [GateKeyGraph](../../ui/src/devices/GateKeyGraph.h), [GateFilterIcon](../../ui/src/devices/GateFilterIcon.h), the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h) | |
+| Limiter: [LimiterEditor.qml](../../ui/qml/devices/editors/LimiterEditor.qml), [LimiterGraph](../../ui/src/devices/LimiterGraph.h), the application layer's [LimiterResponse.h](../../app/src/audio/LimiterResponse.h) | |
+| Multiband Dynamics: [MultibandEditor.qml](../../ui/qml/devices/editors/MultibandEditor.qml), [MultibandGraph](../../ui/src/devices/MultibandGraph.h), the application layer's [MultibandResponse.h](../../app/src/audio/MultibandResponse.h) | |
+| Spectral Compressor: [SpectralEditor.qml](../../ui/qml/devices/editors/SpectralEditor.qml), [SpectralGraph](../../ui/src/devices/SpectralGraph.h), the application layer's [SpectralResponse.h](../../app/src/audio/SpectralResponse.h) | |
+| Saturator: [SaturatorEditor.qml](../../ui/qml/devices/editors/SaturatorEditor.qml), [SaturatorCurve](../../ui/src/devices/SaturatorCurve.h), [SaturatorColorGraph](../../ui/src/devices/SaturatorColorGraph.h) (with [SaturatorPaint.h](../../ui/src/devices/SaturatorPaint.h), what they share), the application layer's [SaturatorResponse.h](../../app/src/audio/SaturatorResponse.h) | |
+| Amp: [AmpEditor.qml](../../ui/qml/devices/editors/AmpEditor.qml), [AmpPanel](../../ui/src/devices/AmpPanel.h), [AmpDriveGraph](../../ui/src/devices/AmpDriveGraph.h), [AmpToneGraph](../../ui/src/devices/AmpToneGraph.h), [AmpDisplays.h](../../ui/src/devices/AmpDisplays.h) (reading its displays), the application layer's [AmpResponse.h](../../app/src/audio/AmpResponse.h) | |
+| Erosion: [ErosionEditor.qml](../../ui/qml/devices/editors/ErosionEditor.qml), [ErosionGraph](../../ui/src/devices/ErosionGraph.h), [ErosionScope](../../ui/src/devices/ErosionScope.h), the application layer's [ErosionResponse.h](../../app/src/audio/ErosionResponse.h) | |
 | Delay: [DelayEditor.qml](../../ui/qml/devices/editors/DelayEditor.qml), [FilterGraph](../../ui/src/devices/FilterGraph.h) | |
+| Chorus-Ensemble: [ChorusEditor.qml](../../ui/qml/devices/editors/ChorusEditor.qml), [ChorusGraph](../../ui/src/devices/ChorusGraph.h), the application layer's [ChorusVoices.h](../../app/src/audio/ChorusVoices.h) | |
+| Phaser-Flanger: [PhaserEditor.qml](../../ui/qml/devices/editors/PhaserEditor.qml), [PhaserGraph](../../ui/src/devices/PhaserGraph.h) (with `DisplayPlayback`), the application layer's [PhaserResponse.h](../../app/src/audio/PhaserResponse.h) | |
+| Reverb: [ReverbEditor.qml](../../ui/qml/devices/editors/ReverbEditor.qml), [ReverbFilterPad](../../ui/src/devices/ReverbFilterPad.h), [ReverbSpinPad](../../ui/src/devices/ReverbSpinPad.h), [ReverbDecayGraph](../../ui/src/devices/ReverbDecayGraph.h), the application layer's [ReverbResponse.h](../../app/src/audio/ReverbResponse.h) | |
 | Disperser: [DisperserEditor.qml](../../ui/qml/devices/editors/DisperserEditor.qml), [DispersionGraph](../../ui/src/devices/DispersionGraph.h) | |
 | EQ: [EqEditor.qml](../../ui/qml/devices/editors/EqEditor.qml), [EqWindow.qml](../../ui/qml/devices/editors/EqWindow.qml), [EqWindows.qml](../../ui/qml/devices/editors/EqWindows.qml), [EqBandPanel.qml](../../ui/qml/devices/editors/EqBandPanel.qml), [EqCorner.qml](../../ui/qml/devices/editors/EqCorner.qml), [EqGraphMenus.qml](../../ui/qml/devices/editors/EqGraphMenus.qml), [EqGraph](../../ui/src/devices/EqGraph.h), [EqView](../../ui/src/devices/EqView.h), [EqTypeIcon](../../ui/src/devices/EqTypeIcon.h) | |
 | Sidechain: [SidechainEditor.qml](../../ui/qml/devices/editors/SidechainEditor.qml), [CurveGraph](../../ui/src/devices/CurveGraph.h), [ClashView](../../ui/src/devices/ClashView.h) | |
@@ -293,12 +303,22 @@ device's kind (its engine id):
 
 ```js
 readonly property var editors: ({
+    "amp": "AmpEditor.qml",
+    "chorus": "ChorusEditor.qml",
     "compressor": "CompressorEditor.qml",
     "delay": "DelayEditor.qml",
     "disperser": "DisperserEditor.qml",
     "eq": "EqEditor.qml",
+    "erosion": "ErosionEditor.qml",
+    "gate": "GateEditor.qml",
+    "limiter": "LimiterEditor.qml",
+    "multiband": "MultibandEditor.qml",
+    "phaser": "PhaserEditor.qml",
+    "reverb": "ReverbEditor.qml",
     "sampler": "SamplerEditor.qml",
-    "sidechain": "SidechainEditor.qml"
+    "saturator": "SaturatorEditor.qml",
+    "sidechain": "SidechainEditor.qml",
+    "spectral": "SpectralEditor.qml"
 })
 ```
 
@@ -307,8 +327,10 @@ readonly property var editors: ({
 
 - `required property string trackId` and `deviceId`.
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
-  `implicitWidth` is the body's width (Compressor 658, Delay 532, Disperser 544, Sampler 760, Sidechain 720, EQ 580,
-  or 756 with its band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px from the top
+  `implicitWidth` is the body's width (Compressor 658, Gate 566, or 833 with its sidechain section, Limiter 608,
+  Multiband Dynamics 800, Spectral Compressor 924, Saturator 756, Amp 642, Erosion 532, Delay 532, Chorus-Ensemble
+  534, Phaser-Flanger 732, or 906 with More open, Reverb 890, Disperser 544, Sampler 760, Sidechain 720, EQ 580, or
+  756 with its band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px from the top
   and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
 - Optional: `pages` (read) and `page` (read/write) for pages of knobs, and `pageNames` (the title bar's tabs instead of
   its arrows); `menuActions` (a list of `Action`s the
