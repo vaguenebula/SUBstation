@@ -13,6 +13,9 @@
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as PNGs.
 
 #include <QElapsedTimer>
+#include <QFont>
+#include <QJSValue>
+#include <QQmlComponent>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QStyleHints>
@@ -21,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <tuple>
 #include <vector>
 
@@ -117,6 +121,141 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
                                                       : QString();
     }
 
+    // Where an item is in the editor.
+    static QRectF rectOf(QQuickItem* view, QQuickItem* item) {
+        return item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height()));
+    }
+    // Shown: visible, and not faded out (dimmed is shown).
+    static bool shown(QQuickItem* item) {
+        if (!item->isVisible())
+            return false;
+        for (QQuickItem* at = item; at; at = at->parentItem()) {
+            if (at->opacity() <= 0.0)
+                return false;
+        }
+        return true;
+    }
+    // Every item under `root`, recursively.
+    static void collect(QQuickItem* root, QList<QQuickItem*>& out) {
+        for (QQuickItem* child : root->childItems()) {
+            out << child;
+            collect(child, out);
+        }
+    }
+
+    // A Text in `font`, to measure texts as a caption or a readout lays them out (its width: the advance, and
+    // whatever of the last glyph reaches past it).
+    std::unique_ptr<QQuickItem> textProbe(const QFont& font) {
+        QQmlComponent component(qml_.get());
+        component.setData("import QtQuick\nText {}", QUrl());
+        std::unique_ptr<QQuickItem> probe(qobject_cast<QQuickItem*>(component.create()));
+        if (probe)
+            probe->setProperty("font", font);
+        return probe;
+    }
+    static double textWidth(QQuickItem* probe, const QString& text) {
+        probe->setProperty("text", text);
+        return probe->implicitWidth();
+    }
+
+    // The values over a parameter's range, sampled finely enough to meet every text it reads as (evenly in log
+    // for a log-scaled parameter).
+    static std::vector<double> valuesOver(const sub::ui::DeviceParam* p) {
+        std::vector<double> values;
+        constexpr int kCount = 20000;
+        for (int i = 0; i <= kCount; ++i) {
+            const double t = double(i) / kCount;
+            values.push_back(p->logScale() ? p->minimum() * std::pow(p->maximum() / p->minimum(), t)
+                                           : p->minimum() + t * (p->maximum() - p->minimum()));
+        }
+        return values;
+    }
+
+    // A knob's caption whole, and every value its readout can show (its parameter's whole range, through the
+    // knob's own formatter where it has one).
+    void readoutFits(QQuickItem* cell) {
+        QVERIFY(cell && cell->childItems().size() >= 3);
+        QQuickItem* caption = cell->childItems().at(0);
+        QQuickItem* readout = cell->childItems().at(2);
+        QVERIFY2(caption->implicitWidth() <= caption->width(), qPrintable(caption->property("text").toString()));
+        auto* p = qvariant_cast<sub::ui::DeviceParam*>(paramKnobOf(cell)->property("param"));
+        QVERIFY(p);
+        const QJSValue formatter = cell->property("formatter").value<QJSValue>();
+        const std::unique_ptr<QQuickItem> probe = textProbe(readout->property("font").value<QFont>());
+        QVERIFY(probe);
+        QStringList texts;
+        for (const double v : valuesOver(p)) {
+            const QString text = formatter.isCallable() ? formatter.call({QJSValue(v)}).toString() : p->format(v);
+            if (texts.contains(text))
+                continue;
+            texts << text;
+            QVERIFY2(textWidth(probe.get(), text) <= readout->width(),
+                     qPrintable(cell->objectName() + QStringLiteral(": ") + text));
+        }
+    }
+
+    // Everything shown fits: inside the body, no text cut short or spilling out of its box, no two of `controls`
+    // over each other, the switches' texts inside their borders (a pixel each side), a list's clear of its arrow,
+    // each ♪ clear of its caption's text and of the dial under it; and the editor as wide as its sections, the
+    // last (`last`'s) 8 px from the right.
+    void fits(QQuickItem* view, const QStringList& controls, const char* last) {
+        QList<QQuickItem*> items;
+        collect(view, items);
+        const QRectF body(0, 0, view->width(), view->height());
+        for (QQuickItem* item : items) {
+            if (!shown(item) || item->width() <= 0 || item->height() <= 0)
+                continue;
+            const QRectF rect = rectOf(view, item);
+            QVERIFY2(body.adjusted(-0.5, -0.5, 0.5, 0.5).contains(rect),
+                     qPrintable(QStringLiteral("%1 (%2) at %3,%4 %5x%6")
+                                    .arg(item->objectName(), QString::fromLatin1(item->metaObject()->className()))
+                                    .arg(rect.x())
+                                    .arg(rect.y())
+                                    .arg(rect.width())
+                                    .arg(rect.height())));
+            if (item->inherits("QQuickText")) {
+                const QString text = item->property("text").toString();
+                QVERIFY2(!item->property("truncated").toBool(), qPrintable(text));
+                QVERIFY2(item->property("contentWidth").toDouble() <= item->width() + 0.5, qPrintable(text));
+            }
+        }
+        QList<QPair<QString, QRectF>> placed;
+        for (const QString& name : controls) {
+            QQuickItem* control = find(view, name);
+            QVERIFY2(control, qPrintable(name));
+            if (shown(control))
+                placed.append({name, rectOf(view, control)});
+        }
+        for (qsizetype i = 0; i < placed.size(); ++i) {
+            for (qsizetype j = i + 1; j < placed.size(); ++j) {
+                const QRectF overlap = placed[i].second.intersected(placed[j].second);
+                QVERIFY2(overlap.width() < 0.01 || overlap.height() < 0.01,
+                         qPrintable(placed[i].first + QStringLiteral(" over ") + placed[j].first));
+            }
+        }
+        for (const char* name : {"modePhaser", "modeFlanger", "modeDoubler", "spinOn", "fbInvert", "expandButton",
+                                 "envOn", "sync", "sync2"}) {
+            QQuickItem* control = find(view, QString::fromLatin1(name));
+            QQuickItem* face = buttonOf(control) ? buttonOf(control) : control;
+            if (shown(control))
+                QVERIFY2(face->property("implicitContentWidth").toDouble() <= face->width() - 2.0, name);
+        }
+        QQuickItem* wave = buttonOf(find(view, QStringLiteral("wave")));
+        QVERIFY(wave->implicitWidth() <= wave->width());
+        for (const auto& [knobName, buttonName] : {std::pair{"rate", "sync"}, std::pair{"rate2", "sync2"}}) {
+            QQuickItem* cell = find(view, QString::fromLatin1(knobName));
+            QQuickItem* sync = find(view, QString::fromLatin1(buttonName));
+            if (!shown(sync))
+                continue;
+            QQuickItem* caption = cell->childItems().at(0);
+            const QRectF captionAt = rectOf(view, caption), syncAt = rectOf(view, sync);
+            const double textRight = captionAt.center().x() + caption->implicitWidth() / 2;
+            QVERIFY2(syncAt.left() >= textRight + 1.0 - 1e-6, buttonName);
+            QVERIFY2(!syncAt.intersects(rectOf(view, knobOf(cell))), buttonName);
+        }
+        QCOMPARE(view->implicitWidth(), rectOf(view, find(view, QString::fromLatin1(last))).right() + 8.0);
+    }
+
     // More (LFO 2, the envelope, Safe Bass) open or not: view state the editor keeps (DeviceViews).
     static void setExpanded(QQuickItem* view, bool open) {
         QVERIFY(QMetaObject::invokeMethod(view, "setExpanded", Q_ARG(QVariant, open)));
@@ -166,7 +305,6 @@ private Q_SLOTS:
         QVERIFY(view);
         QVERIFY2(view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(view->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(view->implicitWidth(), 732.0);
         for (const char* name : {"modePhaser", "modeFlanger", "modeDoubler", "phaserKnobs", "notches", "center",
                                  "spread", "blend", "delayKnobs", "time", "notchReadout", "phaserGraph", "rate", "sync",
                                  "wave", "spinOn", "duty", "phaseSpin", "amount", "feedback", "fbInvert", "mix",
@@ -231,6 +369,59 @@ private Q_SLOTS:
             const QRectF at = cell->mapRectToItem(view, QRectF(0, 0, cell->width(), cell->height()));
             QVERIFY2(at.top() >= 6 && at.bottom() <= view->height() - 6, control.name);
         }
+
+        // Whatever the font, everything fits and shows its whole text, and the editor is as wide as its
+        // sections: as it opens; with the swapped controls' others (the synced rates, Spin) and More open; in
+        // the delay modes. Every caption and every value a readout can show whole.
+        const QStringList controls = {
+            "modePhaser", "modeFlanger", "modeDoubler", "notches", "center", "spread", "blend", "time",
+            "notchReadout", "phaserGraph", "rate", "wave", "spinOn", "duty", "phaseSpin", "amount", "feedback",
+            "fbInvert", "expandButton", "warmth", "output", "mix", "lfo2Mix", "rate2", "safeBass", "envAmount",
+            "envAttack", "envRelease"};
+        fits(view, controls, "mix");
+        QVERIFY(!QTest::currentTestFailed());
+        for (const char* name : {"notches", "center", "spread", "blend", "rate", "duty", "phaseSpin", "amount",
+                                 "feedback", "warmth", "output", "mix", "lfo2Mix", "rate2", "safeBass", "envAmount",
+                                 "envAttack", "envRelease"}) {
+            readoutFits(find(view, QString::fromLatin1(name)));
+            QVERIFY2(!QTest::currentTestFailed(), name);
+        }
+        set("lfo_sync", 1);
+        set("lfo2_sync", 1);
+        set("spin_on", 1);
+        QCOMPARE(captionOf(find(view, QStringLiteral("rate"))), QStringLiteral("Rate"));
+        QCOMPARE(captionOf(find(view, QStringLiteral("phaseSpin"))), QStringLiteral("Spin"));
+        setExpanded(view, true);
+        QTRY_COMPARE(find(view, QStringLiteral("extraSection"))->opacity(), 1.0);
+        QVERIFY(fitted());
+        fits(view, controls, "envRelease");
+        QVERIFY(!QTest::currentTestFailed());
+        for (const char* name : {"rate", "phaseSpin", "rate2"}) {
+            readoutFits(find(view, QString::fromLatin1(name)));
+            QVERIFY2(!QTest::currentTestFailed(), name);
+        }
+        setExpanded(view, false);
+        QVERIFY(fitted());
+        // The delay modes: the Time knob over both delays' ranges, and the Flanger's first notch under it over
+        // its range (as the graph names it: 500 / Time Hz).
+        QQuickItem* time = find(view, QStringLiteral("time"));
+        QQuickItem* notch = find(view, QStringLiteral("notchReadout"));
+        set("mode", 1);
+        QTRY_VERIFY(!find(view, QStringLiteral("phaserKnobs"))->isVisible());
+        QTRY_COMPARE(find(view, QStringLiteral("delayKnobs"))->opacity(), 1.0);
+        fits(view, controls, "mix");
+        QVERIFY(!QTest::currentTestFailed());
+        readoutFits(time);
+        QVERIFY(!QTest::currentTestFailed());
+        const std::unique_ptr<QQuickItem> probe = textProbe(notch->property("font").value<QFont>());
+        QVERIFY(probe);
+        for (const double ms : valuesOver(qvariant_cast<sub::ui::DeviceParam*>(paramKnobOf(time)->property("param")))) {
+            const QString text = QStringLiteral("Notch %1").arg(formatValue(500.0 / ms, QStringLiteral("Hz")));
+            QVERIFY2(textWidth(probe.get(), text) <= notch->width(), qPrintable(text));
+        }
+        set("mode", 2);
+        QCOMPARE(paramIdOf(time), QStringLiteral("doubler_time"));
+        readoutFits(time);
     }
 
     // Every knob and switch sets its parameter, one undo step each.
@@ -405,9 +596,11 @@ private Q_SLOTS:
         const int count = undo()->count();
         const bool clean = undo()->isClean();
         QVERIFY(!expand->property("checked").toBool());
+        const double collapsed = view->implicitWidth();
 
+        // Open: as wide again as the section (a gap and three cells).
         click(expand);
-        QCOMPARE(view->implicitWidth(), 906.0);
+        QCOMPARE(view->implicitWidth(), collapsed + extra->width());
         QTRY_VERIFY(extra->isVisible());
         QTRY_COMPARE(extra->opacity(), 1.0);
         QVERIFY(expand->property("checked").toBool());
@@ -421,7 +614,7 @@ private Q_SLOTS:
         QMetaObject::invokeMethod(root_.get(), "clear");
         view = show(QStringLiteral("phaser"), track_, device_);
         QVERIFY(view);
-        QCOMPARE(view->implicitWidth(), 906.0);
+        QCOMPARE(view->implicitWidth(), collapsed + find(view, QStringLiteral("extraSection"))->width());
         expand = find(view, QStringLiteral("expandButton"));
         QVERIFY(expand->property("checked").toBool());
         QVERIFY(find(view, QStringLiteral("extraSection"))->isVisible());
@@ -448,7 +641,7 @@ private Q_SLOTS:
         save(grab(), QStringLiteral("phaser-expanded.png"));
 
         click(find(view, QStringLiteral("expandButton")));
-        QCOMPARE(view->implicitWidth(), 732.0);
+        QCOMPARE(view->implicitWidth(), collapsed);
         QVERIFY(!find(view, QStringLiteral("expandButton"))->property("checked").toBool());
         QVERIFY(!find(view, QStringLiteral("extraSection"))->isVisible());
     }

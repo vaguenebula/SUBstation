@@ -8,6 +8,7 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QLinearGradient>
 #include <QMouseEvent>
 
@@ -415,6 +416,7 @@ void ChorusGraph::drawFigures(SgPainter& p) {
     // same figure in the same place stays.
     const QRectF r = plot();
     const QFont font = uiFont(7);
+    const double height = std::ceil(QFontMetricsF(font).height());  // (a figure's line, whatever the font)
     struct Figure {
         QString text;
         double y = 0.0;
@@ -448,7 +450,7 @@ void ChorusGraph::drawFigures(SgPainter& p) {
         const Figure& f = figures[k];
         const double alpha = std::clamp(2.0 * f.alpha - 1.0, 0.0, 1.0);
         if (alpha > 0.0)
-            p.drawText(QRectF(r.left() + 3, f.above ? f.y - 12.0 : f.y + 1.0, 60.0, 11.0),
+            p.drawText(QRectF(r.left() + 3, f.above ? f.y - 1.0 - height : f.y + 1.0, r.width() / 2, height),
                        Qt::AlignLeft | Qt::AlignVCenter, f.text, scaledAlpha(Theme::kTextDim, alpha), font);
     }
 }
@@ -478,8 +480,8 @@ void ChorusGraph::paint(SgPainter& p) {
     // The header: what the axis is, and the largest detune (while dragging: the Rate and the Amount).
     const QFont font = uiFont(7);
     const QColor text = frozen_ ? Theme::kTextDim : Theme::kText;
-    p.drawText(QRectF(r.left() + 3, 1, 60, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Delay (ms)"),
-               Theme::kTextDim, font);
+    p.drawText(QRectF(r.left() + 3, 1, r.width() / 2, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("Delay (ms)"), Theme::kTextDim, font);
     if (!gesture_.isEmpty()) {
         const QString dragged = sub::app::formatValue(rate_, QStringLiteral("Hz")) + QStringLiteral("  ·  ") +
                                 sub::app::formatValue(amount_, QStringLiteral("%"));

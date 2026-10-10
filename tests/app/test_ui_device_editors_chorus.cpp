@@ -9,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QFont>
 #include <QFontMetricsF>
+#include <QQmlComponent>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
@@ -16,6 +17,7 @@
 #include <QUndoStack>
 
 #include <cmath>
+#include <memory>
 
 #include "EditorHarness.h"
 #include "audio/ChorusVoices.h"
@@ -119,6 +121,49 @@ class TestUiDeviceEditorsChorus : public QObject, public sub::app::test::EditorH
         }
     }
 
+    // Every text a parameter's value reads as over its range: values sampled finely enough to meet each (evenly
+    // in log for a log-scaled parameter), formatted as the parameter formats them.
+    static QStringList textsOver(const sub::ui::DeviceParam* p) {
+        QStringList texts;
+        constexpr int kCount = 20000;
+        for (int i = 0; i <= kCount; ++i) {
+            const double t = double(i) / kCount;
+            const double v = p->logScale() ? p->minimum() * std::pow(p->maximum() / p->minimum(), t)
+                                           : p->minimum() + t * (p->maximum() - p->minimum());
+            const QString text = p->format(v);
+            if (!texts.contains(text))
+                texts << text;
+        }
+        return texts;
+    }
+
+    // A Text in `font`, to measure texts as a caption or a readout lays them out (its width: the advance, and
+    // whatever of the last glyph reaches past it).
+    std::unique_ptr<QQuickItem> textProbe(const QFont& font) {
+        QQmlComponent component(qml_.get());
+        component.setData("import QtQuick\nText {}", QUrl());
+        std::unique_ptr<QQuickItem> probe(qobject_cast<QQuickItem*>(component.create()));
+        if (probe)
+            probe->setProperty("font", font);
+        return probe;
+    }
+    static double textWidth(QQuickItem* probe, const QString& text) {
+        probe->setProperty("text", text);
+        return probe->implicitWidth();
+    }
+
+    // The strip's voices (outside Chorus mode): whole, at the strip's right end, 8 px clear of the high-pass box.
+    bool voicesClear(QQuickItem* view) {
+        auto rectOf = [view](QQuickItem* item) {
+            return item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height()));
+        };
+        QQuickItem* text = find(view, QStringLiteral("voicesText"));
+        const QRectF voices = rectOf(text), box = rectOf(find(view, QStringLiteral("hpFreq")));
+        const QRectF graph = rectOf(find(view, QStringLiteral("chorusGraph")));
+        return !text->property("truncated").toBool() && voices.left() >= box.right() + 8.0 - 0.5
+            && std::abs(voices.right() - graph.right()) < 0.5;
+    }
+
     // The editor's layout as the engine's: the indices the graph is drawing.
     ChorusLayout layoutNow() { return {int(value("mode")), int(value("taps")), int(value("time"))}; }
 
@@ -178,10 +223,9 @@ private Q_SLOTS:
     void fitsAndBinds() {
         QQuickItem* view = showChorus();
         QVERIFY(view);
-        // It fits the device view's body, as wide as its parts.
+        // It fits the device view's body.
         QVERIFY2(view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(view->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(view->implicitWidth(), 534.0);
 
         // Every control is there, bound to its parameter, with a tooltip.
         for (const auto& [name, id] : kControls) {
@@ -200,7 +244,7 @@ private Q_SLOTS:
         QVERIFY(graph->height() >= ChorusGraph::kMinimumHeight);
 
         // The margins: the tabs 6 px below the top, the strip and the knobs' bottom row 6 px above the bottom,
-        // the display 8 px in from the left, the last column 8 px from the right.
+        // the display 8 px in from the left.
         auto rectOf = [&](QQuickItem* item) {
             return item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height()));
         };
@@ -210,7 +254,17 @@ private Q_SLOTS:
         QVERIFY(std::abs(rectOf(find(view, QStringLiteral("hpFreq"))).bottom() - (view->height() - 6)) < 0.5);
         QVERIFY(std::abs(rectOf(find(view, QStringLiteral("modeVibrato"))).right() - rectOf(graph).right()) < 0.5);
         QCOMPARE(rectOf(graph).left(), 8.0);
-        QCOMPARE(rectOf(graph).width(), 234.0);
+        QVERIFY(rectOf(graph).width() >= 234.0);  // (234 px, or what a wider font's tabs or strip need)
+        // As wide as its parts: 8 + the display, the knobs' columns (each knob centred in its own) + 8, less the
+        // frame's border (the device's width, as the house's editors count it).
+        const QRectF last = rectOf(find(view, QStringLiteral("mix")));
+        const double columnWidth = view->property("columnWidth").toDouble();
+        QCOMPARE(view->implicitWidth(), last.right() + (columnWidth - last.width()) / 2 + 8.0 - 2.0);
+        // The tabs on whole pixels.
+        for (const char* tab : {"modeChorus", "modeEnsemble", "modeVibrato"}) {
+            const QRectF at = rectOf(find(view, QString::fromLatin1(tab)));
+            QVERIFY2(at.left() == std::round(at.left()) && at.width() == std::round(at.width()), tab);
+        }
 
         // Nothing overflows the body, no text is cut short, and no two controls shown overlap.
         QList<QQuickItem*> items;
@@ -264,19 +318,40 @@ private Q_SLOTS:
         auto* hpFreq = qvariant_cast<ValueBoxItem*>(find(view, QStringLiteral("hpFreq"))->property("box"));
         QVERIFY(hpFreq && hpFreq->logScale());
         QCOMPARE(hpFreq->text(), QStringLiteral("100 Hz"));
-        // Wide enough for its widest values and the automation dot (at 6 px, 2.5 px round: the text centred
-        // clear of it), and Time for its longest choice and its arrow.
+        // Wide enough for every value it shows, centred clear of the automation dot (6 px in, 2.5 px round), and
+        // Time for its longest choice and its arrow.
         const QFontMetricsF boxFont(hpFreq->property("font").value<QFont>());
-        for (const double hz : {20.0, 999.0, 1000.0, 1500.0, 2000.0}) {
-            const QString text = formatValue(hz, QStringLiteral("Hz"));
-            QVERIFY2(boxFont.horizontalAdvance(text) + 16 <= hpFreq->width() + 0.5, qPrintable(text));
-        }
+        const QStringList hpTexts = textsOver(boundParam(view, "hpFreq"));
+        QVERIFY(hpTexts.contains(QStringLiteral("20 Hz")) && hpTexts.contains(QStringLiteral("2.00 kHz")));
+        for (const QString& text : hpTexts)
+            QVERIFY2((hpFreq->width() - boxFont.horizontalAdvance(text)) / 2 >= 6.0 + 2.5, qPrintable(text));
         for (int choice = 0; choice < 6; ++choice) {
             set("time", choice);
             QQuickItem* face = button(view, "time");
             QVERIFY2(face->implicitWidth() <= face->width() + 0.5, qPrintable(face->property("text").toString()));
         }
         set("time", 0.0);
+        // Every knob's caption and every value its readout can show whole (Offset's and Shape's too, shown in
+        // Vibrato), each centred on its knob.
+        for (const char* id : {"rate", "amount", "feedback", "warmth", "width", "offset", "shape", "output", "mix"}) {
+            QQuickItem* cell = find(view, QString::fromLatin1(id));
+            QVERIFY2(cell && cell->childItems().size() >= 3, id);
+            QQuickItem* caption = cell->childItems().at(0);
+            QQuickItem* readout = cell->childItems().at(2);
+            QVERIFY2(caption->implicitWidth() <= caption->width(), qPrintable(caption->property("text").toString()));
+            const std::unique_ptr<QQuickItem> probe = textProbe(readout->property("font").value<QFont>());
+            QVERIFY(probe);
+            for (const QString& text : textsOver(boundParam(view, id)))
+                QVERIFY2(textWidth(probe.get(), text) <= readout->width(), qPrintable(text));
+            const double middle = rectOf(knob(view, id)).center().x();
+            QVERIFY2(std::abs(rectOf(caption).center().x() - middle) < 0.5, id);
+            QVERIFY2(std::abs(rectOf(readout).center().x() - middle) < 0.5, id);
+        }
+        // The switches' texts inside their borders (a pixel each side).
+        for (const char* name : {"modeChorus", "modeEnsemble", "modeVibrato", "taps1", "taps2", "fbInvert"}) {
+            QQuickItem* face = button(view, name);
+            QVERIFY2(face->property("implicitContentWidth").toDouble() <= face->width() - 2.0, name);
+        }
 
         // Chorus mode: Taps, Time and Width shown, not Offset or Shape; Ø enabled; the tab lit.
         QVERIFY(lit(view, "modeChorus") && !lit(view, "modeEnsemble") && !lit(view, "modeVibrato"));
@@ -373,6 +448,7 @@ private Q_SLOTS:
         QTRY_VERIFY(shown(find(view, QStringLiteral("voicesText"))));
         QCOMPARE(find(view, QStringLiteral("voicesText"))->property("text").toString(),
                  QStringLiteral("3 voices a side"));
+        QVERIFY(voicesClear(view));
         QCOMPARE(undo()->index(), steps + 1);
         tick(40);
         QCOMPARE(graph->layoutFade(), 1.0);
@@ -404,6 +480,7 @@ private Q_SLOTS:
         QTRY_VERIFY(!find(view, QStringLiteral("width"))->isVisible());
         QCOMPARE(find(view, QStringLiteral("voicesText"))->property("text").toString(),
                  QStringLiteral("1 voice a side"));
+        QVERIFY(voicesClear(view));
         QTRY_COMPARE(find(view, QStringLiteral("fbInvert"))->opacity(), 0.55);
         QTRY_COMPARE(find(view, QStringLiteral("feedback"))->opacity(), 0.55);
         QVERIFY(find(view, QStringLiteral("fbInvert"))->isEnabled());

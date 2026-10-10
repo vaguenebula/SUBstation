@@ -9,6 +9,7 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QLinearGradient>
 #include <QHoverEvent>
 #include <QMouseEvent>
@@ -618,12 +619,13 @@ void PhaserGraph::paint(SgPainter& p) {
 void PhaserGraph::paintResponse(SgPainter& p) {
     const QRectF r = plot();
     const QFont font = uiFont(7);
+    const double lineHeight = QFontMetricsF(font).height();  // (a figure's, whatever the font)
     drawDecadeGrid(p, r, frequencyAxis());
     for (const int db : {12, 0, -12, -24}) {
         const double y = yOf(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y),
                    db == 0 ? Theme::kGridBar : withAlpha(Theme::kGridBeat, 160));
-        p.drawText(QRectF(r.left() + 3, y + 1, 30, 10), Qt::AlignLeft | Qt::AlignTop,
+        p.drawText(QRectF(r.left() + 3, y + 1, r.width() / 4, lineHeight), Qt::AlignLeft | Qt::AlignTop,
                    db > 0 ? QStringLiteral("+%1").arg(db) : QString::number(db), Theme::kTextDim, font);
     }
 
@@ -705,12 +707,14 @@ void PhaserGraph::paintStrip(SgPainter& p) {
     };
     const double opacity = dotOpacity_.value;
 
-    // Its name, and LFO 2's share while it has one.
+    // Its name, and LFO 2's share while it has one: centred on the 11 px over the lane (not clipped to them, so a
+    // taller font's line doesn't lose its ends), each in its half.
     static const QStringList kNames = sub::app::phaserWaveLabels();
-    p.drawText(QRectF(s.left() + 5, s.top() + 1, 100, 11), Qt::AlignLeft | Qt::AlignVCenter, kNames.value(wave_),
-               Theme::kTextDim, font);
+    const QRectF line(s.left() + 5, s.top() + 1, s.width() - 16, 11);
+    p.drawText(line.adjusted(0, 0, -line.width() / 2, 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextDontClip,
+               kNames.value(wave_), Theme::kTextDim, font);
     if (lfo2Mix_ > 0.0)
-        p.drawText(QRectF(s.right() - 105, s.top() + 1, 94, 11), Qt::AlignRight | Qt::AlignVCenter,
+        p.drawText(line.adjusted(line.width() / 2, 0, 0, 0), Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip,
                    QStringLiteral("LFO 2 %1").arg(sub::app::formatValue(lfo2Mix_, QStringLiteral("%"))),
                    Theme::kTextDim, font);
 
