@@ -15,6 +15,7 @@
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 
+#include <QCursor>
 #include <QKeyEvent>
 #include <QPolygonF>
 
@@ -181,23 +182,42 @@ private:
 };
 
 // The vibrato tool on a note: a drag across it draws vibrato over the stretch
-// dragged across (on the grid; Alt: anywhere), dragging up deepens it from the
-// bend bar's depth; a click adds vibrato from there to the note's end, or, on
-// a vibrato, takes it away.
+// dragged across (on the grid; Ctrl: anywhere), dragging up deepens it from the
+// bend bar's depth. While Shift is held, dragging sideways makes it faster
+// (right) or slower (left) instead, and while Alt is, its ramp longer or
+// shorter (how much of it it takes to reach its depth): the stretch and the
+// depth stay as they are meanwhile, and go on from there once it is let go. A
+// click adds vibrato from there to the note's end, or, on a vibrato, takes it
+// away. The bend bar keeps its settings for the next one.
 class VibratoGesture : public NoteGrid::Gesture {
 public:
     VibratoGesture(NoteGrid* grid, const QPointF& press, const ClipNote& note, bool free)
-        : Gesture(grid, press), base_(note), current_(note) {
+        : Gesture(grid, press), base_(note), current_(note), last_(press), rate_(roll->vibratoRate()),
+          fade_(roll->vibratoFade() / 100.0), depth_(roll->vibratoDepth()) {
         const double start = roll->rollStart(note);
         from_ = std::clamp(roll->view().snapBeat(roll->view().xToBeat(press.x()), free), start, start + note.note.length);
     }
 
     void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override {
         if (!started(pos)) return;
+        const bool speed = modifiers & Qt::ShiftModifier, ramp = modifiers & Qt::AltModifier;
+        const QPointF step = pos - last_;
+        last_ = pos;
+        if (speed || ramp) {
+            held_ += step;  // (taken from the stretch and the depth)
+            if (speed) {
+                rate_ = std::clamp(rate_ * std::exp2(step.x() / NoteGrid::kVibratoRatePixels), notes::kMinVibratoRate,
+                                   notes::kMaxVibratoRate);
+            }
+            if (ramp) fade_ = std::clamp(fade_ + step.x() / NoteGrid::kVibratoRampPixels, 0.0, 1.0);
+        }
+        grid->setCursor(QCursor(speed || ramp ? Qt::SizeHorCursor : Qt::CrossCursor));
+        // Where the mouse would be but for what Shift and Alt took.
+        const QPointF at = pos - held_;
         const double start = roll->rollStart(base_);
-        const double to = std::clamp(roll->view().snapBeat(roll->view().xToBeat(pos.x()), modifiers & Qt::AltModifier),
+        const double to = std::clamp(roll->view().snapBeat(roll->view().xToBeat(at.x()), modifiers & Qt::ControlModifier),
                                      start, start + base_.note.length);
-        depth_ = std::clamp(roll->vibratoDepth() + (press.y() - pos.y()) / roll->rowHeight(), 0.05, 12.0);
+        depth_ = std::clamp(roll->vibratoDepth() + (press.y() - at.y()) / roll->rowHeight(), 0.05, 12.0);
         const double a = std::min(from_, to), b = std::max(from_, to);
         if (b - a < notes::kMinVibratoBeats) return;
         draw(a - start, b - a);
@@ -214,29 +234,34 @@ public:
             }
         }
         const double from = from_ - roll->rollStart(base_);
-        if (base_.note.length - from >= notes::kMinVibratoBeats) {
-            depth_ = roll->vibratoDepth();
-            draw(from, base_.note.length - from);
-        }
+        if (base_.note.length - from >= notes::kMinVibratoBeats) draw(from, base_.note.length - from);
     }
 
     std::optional<std::pair<QPointF, QString>> label() const override {
         if (!active) return std::nullopt;
         return std::make_pair(QPointF(press.x(), press.y() - 14),
-                              semitoneText(depth_) + QStringLiteral(" · ") + app::formatFixed(roll->vibratoRate(), 1) +
-                                  QStringLiteral(" Hz"));
+                              semitoneText(depth_) + QStringLiteral(" · ") + app::formatFixed(rate(), 1) +
+                                  QStringLiteral(" Hz · ramp ") + app::formatFixed(fade() * 100.0, 0) + QStringLiteral(" %"));
     }
 
 private:
+    // What it is drawn with: the rate to a tenth of a hertz, the ramp to a percent.
+    double rate() const { return std::round(rate_ * 10.0) / 10.0; }
+    double fade() const { return std::round(fade_ * 100.0) / 100.0; }
+
     void draw(double start, double length) {
-        const Note drawn = notes::withVibrato(base_.note, roll->newVibrato(start, length, depth_));
+        const Note drawn = notes::withVibrato(base_.note, app::Vibrato{start, length, depth_, rate(), fade()});
         current_ = roll->commitBend(current_, drawn, QStringLiteral("Draw Vibrato"), key);
     }
 
     ClipNote base_;
     ClipNote current_;
     double from_ = 0.0;  // roll beats
-    double depth_ = 0.5;
+    QPointF last_;       // the mouse at the last move
+    QPointF held_;       // how far it moved while Shift or Alt was held
+    double rate_;        // as dragged, before rounding
+    double fade_;
+    double depth_;
 };
 
 }  // namespace
@@ -391,7 +416,7 @@ std::unique_ptr<NoteGrid::Gesture> NoteGrid::bendPress(const QPointF& pos, Qt::K
             if (const auto hit = noteAt(pos)) note = hit->note;
         }
         if (!note) return nullptr;
-        return std::make_unique<VibratoGesture>(this, pos, *note, modifiers & Qt::AltModifier);
+        return std::make_unique<VibratoGesture>(this, pos, *note, modifiers & Qt::ControlModifier);
     }
     const auto hit = bendHitAt(pos, modifiers);
     if (!hit) return std::make_unique<SelectBendsGesture>(this, pos, additive);

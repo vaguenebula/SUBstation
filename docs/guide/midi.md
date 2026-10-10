@@ -140,12 +140,20 @@ up to 48 semitones either way.
 notes:
 
 - **Drag across a note** to give it vibrato over the stretch you drag across (on the
-  grid; Alt: anywhere). Dragging up as you go makes it deeper; the depth and rate show
-  as you draw.
+  grid; Ctrl: anywhere). Dragging up as you go makes it deeper. While you draw it:
+  - hold **Shift** and drag sideways to change its **speed** (right: faster, left:
+    slower; 100 pixels doubles or halves it);
+  - hold **Alt** and drag sideways to change its **ramp**, how long it takes to reach
+    its full depth (right: longer, left: shorter).
+
+  The stretch and depth stay put while Shift or Alt is held, and carry on from there
+  when you let go, so you can switch back and forth in one drag. The depth, rate and
+  ramp show by the mouse as you draw. The bend bar keeps its own settings for the next
+  vibrato.
 - **Click a note** for vibrato from there to its end. **Click a vibrato** to take it
   away. A vibrato shows as an orange bar along the bottom of its note.
 - The bend bar sets what a new vibrato takes: its **rate** (5.5 Hz at first), its
-  **depth** (how far it swings either way: 0.50 semitones), and its **swell** (how much
+  **depth** (how far it swings either way: 0.50 semitones), and its **ramp** (how much
   of its length it takes to reach its depth: 30 %). A vibrato keeps the settings it was
   drawn with.
 - Vibrato swings around the curve you draw by hand, and dies away at its end, so the

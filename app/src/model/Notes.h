@@ -32,10 +32,13 @@ inline constexpr double kHumanizeBeats = 0.125;
 
 // Bends: how far a note bends either way (the engine's sub::kMaxBendSemitones,
 // MIDI 2.0's per-note range), the shortest vibrato, and a new vibrato's rate
-// (cycles a second), depth (semitones) and swell (share of its length).
+// (cycles a second), depth (semitones) and ramp (the share of its length it
+// takes to reach its depth).
 inline constexpr double kMaxBendSemitones = 48.0;
 inline constexpr double kMinVibratoBeats = 1.0 / 32;
 inline constexpr double kDefaultVibratoRate = 5.5;
+inline constexpr double kMinVibratoRate = 0.5;  // what the vibrato tool draws (cycles a second)
+inline constexpr double kMaxVibratoRate = 20.0;
 inline constexpr double kDefaultVibratoDepth = 0.5;
 inline constexpr double kDefaultVibratoFade = 0.3;
 

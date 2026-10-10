@@ -31,9 +31,11 @@
 // freely), Alt-drag a segment to bend it, drag in empty space to select points,
 // double-click to put one at the pitch clicked. Delete deletes the selected
 // points; Ctrl+A selects every point. The vibrato tool (V) draws vibrato: drag
-// across a note for the stretch it covers (up deepens it), click a note for
-// vibrato from there to its end, click a vibrato to take it away. Out of bend
-// mode, bent notes show their curves faintly.
+// across a note for the stretch it covers (on the grid; Ctrl: anywhere; up
+// deepens it, and sideways with Shift held makes it faster or slower, with Alt
+// its ramp longer or shorter), click a note for vibrato from there to its end,
+// click a vibrato to take it away. Out of bend mode, bent notes show their
+// curves faintly.
 
 #include "model/Clip.h"
 #include "pianoroll/NoteSet.h"
@@ -67,6 +69,10 @@ public:
     static constexpr double kLineGrab = 5.0;      // pixels around a curve that count as on it
     static constexpr double kSegmentGrab = 14.0;  // pixels around a segment that Alt-grab it
     static constexpr double kCurvePixels = 150.0;  // an Alt-drag this far bends a segment from straight to its most
+    // Drawing vibrato: a Shift-drag this far sideways doubles its rate (or
+    // halves it); an Alt-drag this far takes its ramp from none to all of it.
+    static constexpr double kVibratoRatePixels = 100.0;
+    static constexpr double kVibratoRampPixels = 200.0;
 
     // Where a note was hit: its ends resize it, its body moves it.
     enum class Zone { Start, End, Body };

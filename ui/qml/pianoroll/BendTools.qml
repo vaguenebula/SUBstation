@@ -5,7 +5,7 @@ import SUBstation
 // The bend bar: while the piano roll is in bend mode (B), a small rounded bar at
 // the top right of the note grid with the bend tools: Draw (points on the
 // notes' bend curves, as automation's) and Vibrato (V: drag across a note to
-// draw vibrato on it), the rate, depth and swell a new vibrato takes, and Clear
+// draw vibrato on it), the rate, depth and ramp a new vibrato takes, and Clear
 // (the selected notes' bends, every note's with none selected). Its buttons and
 // boxes never take the focus, so the notes keep the keyboard; it keeps its
 // clicks to itself (the grid is underneath).
@@ -87,7 +87,7 @@ Rectangle {
             role: "tool"
             iconName: "vibrato"
             checked: bar.vibrato
-            tooltip: qsTr("Draw vibrato (V): drag across a note (up for deeper),\nclick a note for vibrato to its end, click a vibrato to remove it")
+            tooltip: qsTr("Draw vibrato (V): drag across a note (up for deeper; hold Shift and drag sideways\nfor its speed, Alt for its ramp), click a note for vibrato to its end,\nclick a vibrato to remove it")
             onToggled: {
                 bar.roll.bendTool = "vibrato"
                 checked = Qt.binding(() => bar.vibrato)
@@ -104,7 +104,7 @@ Rectangle {
             formatter: v => v.toFixed(1) + " Hz"
             value: bar.roll.vibratoRate
             onMoved: value => bar.roll.vibratoRate = value
-            tip: qsTr("Vibrato rate: how many times a second a new vibrato swings")
+            tip: qsTr("Vibrato rate: how many times a second a new vibrato swings\n(hold Shift and drag sideways as you draw it to change it)")
         }
         Box {
             objectName: "vibratoDepth"
@@ -128,7 +128,7 @@ Rectangle {
             formatter: v => v.toFixed(0) + " %"
             value: bar.roll.vibratoFade
             onMoved: value => bar.roll.vibratoFade = value
-            tip: qsTr("Vibrato swell: how much of a new vibrato's length it takes to reach its depth")
+            tip: qsTr("Vibrato ramp: how much of a new vibrato's length it takes to reach its depth\n(hold Alt and drag sideways as you draw it to change it)")
         }
         Separator {}
         RoleButton {

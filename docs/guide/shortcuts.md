@@ -105,8 +105,10 @@ pastes at the paste marker: click the grid to place it), Ctrl+U quantizes them, 
 arrow keys move them (Up/Down a semitone, Shift an octave; Left/Right a grid step, Shift
 a bar). 0 deactivates the selected notes (or activates them, if they all are), not the
 clip. C shows or hides the song's chords and key over the notes. B turns bend mode on
-and off (the notes' pitch curves, edited as automation is), V picks the vibrato tool;
-in bend mode Delete deletes the selected bend points and Ctrl+A selects them all. See
+and off (the notes' pitch curves, edited as automation is), V picks the vibrato tool
+(while drawing a vibrato, Shift-drag sideways sets its speed, Alt-drag its ramp, and
+Ctrl draws it off the grid); in bend mode Delete deletes the selected bend points and
+Ctrl+A selects them all. See
 [midi.md](midi.md#the-piano-roll).
 
 ## Plug-in editors

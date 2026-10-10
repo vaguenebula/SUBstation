@@ -514,7 +514,7 @@ void PianoRoll::setBendTool(const QString& tool) {
 }
 
 void PianoRoll::setVibratoRate(double hz) {
-    hz = std::clamp(hz, 0.5, 20.0);
+    hz = std::clamp(hz, notes::kMinVibratoRate, notes::kMaxVibratoRate);
     if (hz == vibratoRate_) return;
     vibratoRate_ = hz;
     Q_EMIT toolSettingsChanged();
@@ -532,10 +532,6 @@ void PianoRoll::setVibratoFade(double percent) {
     if (percent == vibratoFade_) return;
     vibratoFade_ = percent;
     Q_EMIT toolSettingsChanged();
-}
-
-app::Vibrato PianoRoll::newVibrato(double start, double length, double depth) const {
-    return {start, length, depth, vibratoRate_, vibratoFade_ / 100.0};
 }
 
 void PianoRoll::selectBends(std::vector<BendRef> points) {

@@ -56,8 +56,8 @@
 // every note shows its bend as a curve over the rows, a semitone a row, and the
 // note grid edits it as an automation lane is edited: points added on the line,
 // dragged, clicked away, segments bent. Its vibrato tool (V) draws vibrato onto
-// a note over the stretch dragged across, at the rate, depth and swell set in
-// the bend bar; it swings around the curve drawn by hand, so the two go
+// a note over the stretch dragged across, at the rate, depth and ramp set in
+// the bend bar (Shift and Alt change its rate and ramp as it is drawn); it swings around the curve drawn by hand, so the two go
 // together. A bend edit replaces the note with its new self (commitBend()),
 // the selections following it. Out of bend mode, bent notes show their curve
 // faintly.
@@ -145,7 +145,7 @@ class PianoRoll : public QObject {
     Q_PROPERTY(int toolsCount READ toolsCount NOTIFY toolsChanged)
     Q_PROPERTY(bool hasCopiedNotes READ hasCopiedNotes NOTIFY copiedChanged)
     // Bend mode (B): notes' bend curves shown to edit; the tool, "draw" (points)
-    // or "vibrato" (V); a new vibrato's rate (Hz), depth (semitones) and swell
+    // or "vibrato" (V); a new vibrato's rate (Hz), depth (semitones) and ramp
     // (percent of its length); how many bend points are selected.
     Q_PROPERTY(bool bendMode READ bendMode WRITE setBendMode NOTIFY bendModeChanged)
     Q_PROPERTY(QString bendTool READ bendTool WRITE setBendTool NOTIFY bendModeChanged)
@@ -330,8 +330,6 @@ public:
     void setVibratoDepth(double semitones);
     double vibratoFade() const { return vibratoFade_; }
     void setVibratoFade(double percent);
-    // A new vibrato from `start` for `length` beats (of a note's own) at the bend bar's settings.
-    app::Vibrato newVibrato(double start, double length, double depth) const;
 
     // A point of a note's bend: the note and the point's place in its bend.
     struct BendRef {

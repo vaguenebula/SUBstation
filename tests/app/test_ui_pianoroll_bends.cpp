@@ -4,7 +4,8 @@
 // clicked away, selected with Shift and a rubber band and deleted with Delete,
 // a segment bent with Alt, a point double-clicked in at a pitch; the vibrato
 // tool (V) drawing vibrato over a stretch, adding it to a note's end and taking
-// it away; Clear; the note tools staying away in bend mode. Runs on a display
+// it away, Shift and Alt changing its speed and ramp as it is drawn, Ctrl
+// drawing it off the grid; Clear; the note tools staying away in bend mode. Runs on a display
 // (xvfb here).
 
 #include <QQuickItem>
@@ -259,6 +260,51 @@ private Q_SLOTS:
         QCOMPARE(n.bend.size(), size_t(1));
         QCOMPARE(n.vibrato.size(), size_t(1));
         QCOMPARE(n.bendAt(3.5, project().tempo()), 2.0);  // past the vibrato: the curve, held
+    }
+
+    void shiftAndAltSetAVibratosSpeedAndRampAsItIsDrawn() {
+        openClip({note(60, 0.0, 4.0)});
+        bendMode();
+        QTest::keyClick(window_, Qt::Key_V);
+        const double rate = roll()->vibratoRate(), fade = roll()->vibratoFade() / 100.0;
+        const auto drawn = [&] {
+            const Note n = only();
+            return n.vibrato.size() == 1 ? n.vibrato.front() : sub::app::Vibrato{};
+        };
+        test::press(window_, onCurve(1.0, 60));
+        test::moveTo(window_, onCurve(2.0, 60));
+        test::moveTo(window_, onCurve(3.0, 60));
+        QCOMPARE(drawn().length, 2.0);
+        QCOMPARE(drawn().rate, rate);
+        QCOMPARE(drawn().fade, fade);
+        // Shift: sideways is its speed (100 px doubles it); the stretch stays.
+        const QPoint shifted = onCurve(3.0, 60) + QPoint(int(NoteGrid::kVibratoRatePixels), 0);
+        test::moveTo(window_, shifted, Qt::ShiftModifier);
+        QCOMPARE(drawn().rate, std::round(rate * 2.0 * 10.0) / 10.0);
+        QCOMPARE(drawn().start, 1.0);
+        QCOMPARE(drawn().length, 2.0);
+        // Alt: sideways is its ramp (200 px from none to all of it).
+        const int rampStep = int(NoteGrid::kVibratoRampPixels * 0.3);
+        test::moveTo(window_, shifted + QPoint(rampStep, 0), Qt::AltModifier);
+        QCOMPARE(drawn().fade, std::round((fade + 0.3) * 100.0) / 100.0);
+        QCOMPARE(drawn().rate, std::round(rate * 2.0 * 10.0) / 10.0);
+        QCOMPARE(drawn().length, 2.0);
+        // Let go of them: the stretch goes on from where it was (a beat left: to beat 2).
+        const int held = int(NoteGrid::kVibratoRatePixels) + rampStep;
+        test::moveTo(window_, onCurve(2.0, 60) + QPoint(held, 0));
+        QCOMPARE(drawn().length, 1.0);
+        QCOMPARE(drawn().depth, roll()->vibratoDepth());  // (the depth stayed too)
+        test::release(window_, onCurve(2.0, 60) + QPoint(held, 0));
+        QCOMPARE(drawn().rate, std::round(rate * 2.0 * 10.0) / 10.0);
+        QCOMPARE(undo().undoText(), QStringLiteral("Draw Vibrato"));
+        QCOMPARE(roll()->vibratoRate(), rate);  // (the bend bar keeps its own for the next one)
+        undo().undo();
+        QVERIFY(only().vibrato.empty());  // one undo step
+        // Ctrl: off the grid.
+        test::drag(window_, onCurve(1.0, 60), onCurve(2.3, 60), Qt::ControlModifier);
+        const double sixteenths = drawn().length * 16.0;
+        QVERIFY2(std::abs(sixteenths - std::round(sixteenths)) > 1e-6, qPrintable(QString::number(drawn().length)));
+        QVERIFY(std::abs(drawn().length - 1.3) < 0.05);
     }
 
     void clearTakesTheBendsAway() {
