@@ -1,8 +1,8 @@
 #pragma once
 // Multiband Dynamics' gain law, as its editor draws and reads it out: the
 // engine's own (engine/src/builtin/MultibandDesign.h), so what the graph shows
-// a level getting is what plays, with the engine's ranges and display rate.
-// And its ratios and times as typed: "1:4", "4:1", "0.5"; "250 ms", "1.5 s".
+// a level getting is what plays, with the engine's ranges. And its ratios and
+// times as typed: "1:4", "4:1", "0.5"; "250 ms", "1.5 s".
 
 #include <QString>
 
@@ -10,13 +10,11 @@
 
 namespace sub::app {
 
-// The device's thresholds' and ratios' ranges, and the audio per display value: the engine's
-// (MultibandDesign.h), which the UI can't include.
+// The device's thresholds' and ratios' ranges: the engine's (MultibandDesign.h, which the UI can't include).
 double multibandMinThresholdDb();
 double multibandMaxThresholdDb();
 double multibandMinRatio();
 double multibandMaxRatio();
-int multibandDisplaySamples();
 
 // The gain change (dB) the dynamics settle on for a steady level `levelDb` (dB), once attack and
 // release are done: a band's Above and Below thresholds (dB) and ratios, Soft Knee, and Amount

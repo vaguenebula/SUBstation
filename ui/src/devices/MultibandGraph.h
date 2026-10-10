@@ -17,12 +17,12 @@
 // and Shift+wheel are the device chain's (it scrolls).
 //
 // It reads the device's displays (`<band>_in`, `_out`, `_gain`) each display
-// tick, the recent ones only (a stall's backlog is old audio), and eases
-// everything it draws there by the time since the last tick: meters with
-// ballistics, the gain change (once the audio stops, going down with the
-// meters), each side's glow while it works, highlights under the mouse, lanes
-// dimmed when switched off, bypassed or muted by a solo. Once all of it has
-// settled, it stops repainting.
+// tick, the recent ones only (DeviceCanvas::readRecent: a stall's backlog is
+// old audio), and eases everything it draws there by the time since the last
+// tick: meters with ballistics, the gain change (once the audio stops, going
+// down with the meters), each side's glow while it works, highlights under the
+// mouse, lanes dimmed when switched off, bypassed or muted by a solo. Once all
+// of it has settled, it stops repainting.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
@@ -53,11 +53,11 @@ public:
     static constexpr double kRatioPixels = 30.0;  // dragged this far, a ratio doubles (or halves)
     static constexpr double kFineFactor = 0.2;    // with Shift
     static constexpr double kRatioDetent = 0.03;  // within 3 % of 1:1 a dragged ratio is 1:1
-    static constexpr double kWheelGesture = 0.4;  // s: wheel notches this close are one undo step (as the EQ's)
     static constexpr double kWheelStill = 5.0;    // px: the mouse moved further between notches ends a run
     static constexpr double kHoldSeconds = 0.24;  // without values this long, the meters let go
-    // s of display values a tick looks at, the latest: a whole buffer's arrive at once (2048 samples at 44.1 kHz,
-    // 46 ms), and older ones are a stall's backlog (a hidden editor shown again, an offline render).
+    // s of display values a tick looks at, the latest (DeviceCanvas::readRecent): a whole buffer's arrive at once
+    // (2048 samples at 44.1 kHz, 46 ms), and older ones are a stall's backlog (an editor shown again, an offline
+    // render, a busy UI).
     static constexpr double kRecentSpan = 0.1;
 
     explicit MultibandGraph(QQuickItem* parent = nullptr);
@@ -212,9 +212,12 @@ private:
     // A run of the wheel: one gesture on one target, worked out from where it started (as a drag is), so the
     // small steps of a high-resolution wheel or a touchpad add up rather than each being rounded away. It keeps its
     // target while the mouse stays where the last notch was (`at`), though a threshold it moves leaves the mouse.
+    // Its notches are WheelGesture's window apart at most (GestureKey.h), but the run is more than a key: it also
+    // ends when the mouse moves on, and its key goes with its target and the settings it started from, so it keeps
+    // its own clock.
     std::optional<Drag> wheel_;
     double wheelNotches_ = 0.0;
-    QElapsedTimer wheelClock_;
+    QElapsedTimer wheelClock_;  // since the run's last notch
 };
 
 }  // namespace sub::ui

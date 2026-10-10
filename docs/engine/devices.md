@@ -787,19 +787,18 @@ distance past the threshold the level change divides (at 4, a level 4 dB past it
 
   A band switched off (done fading) publishes −90, −90, 0 (the mid band shows what it does). A band bypassed shows
   its level as it comes (no Input) and no change. With every ratio 1:1, in and out are the same.
-- **The shared design**: [MultibandDesign.h](../../engine/src/builtin/MultibandDesign.h) (`sub::multiband`, inline,
-  no Qt) holds the ranges, the display rate (`kDisplaySamples`), `slope`, `upwardFade`, `aboveGainDb`, `belowGainDb`,
+- **The shared design**: [MultibandDesign.h](../../engine/src/builtin/MultibandDesign.h) (`sub::multiband`, inline, no
+  Qt) holds the ranges, the display rate (`kDisplaySamples`), `slope`, `upwardFade`, `aboveGainDb`, `belowGainDb`,
   `bandGainDb`, `staticGainDb` (the curve a steady level settles on) and `windowSeconds`; the device runs these very
-  functions per sample. The application layer's
-  [app/src/audio/MultibandResponse.h](../../app/src/audio/MultibandResponse.h) (`multibandGainDb`; the ranges and
-  the display rate, `multibandMinThresholdDb()`... `multibandDisplaySamples()`; and `multibandParseRatio`,
-  `multibandParseMs` for typed ratios and times) hands them to the editor, so its readouts and handles are the
-  sound.
-- About 0.66-0.69 % of one core at 48 kHz stereo at the defaults, and 0.70-0.78 % with every band's ratios working,
-  Soft Knee and Peak (`builtin_devices_bench`, best of three, on a 2.1 GHz Xeon; Over The Top 0.40 % there). A
-  sidechain keying it brings it to about 1 % (none at Sidechain Mix 0 %, where the key's split doesn't run), and
-  everything at once (a sidechain, both crossovers swept all the time, Peak/RMS switched every 50 ms so it is nearly
-  always crossfading) to about 1.05 %.
+  functions per sample. The application layer's [MultibandResponse.h](../../app/src/audio/MultibandResponse.h)
+  (`multibandGainDb`; the ranges, `multibandMinThresholdDb()`... `multibandMaxRatio()`; and `multibandParseRatio`,
+  `multibandParseMs` for typed ratios and times) hands them to the editor, so its readouts and handles are the sound.
+  (The displays' rate reaches the editor with them: `DeviceCanvas::readRecent` takes it from the device's `displays()`.)
+- About 0.66-0.69 % of one core at 48 kHz stereo at the defaults, and 0.70-0.78 % with every band's ratios working, Soft
+  Knee and Peak (`builtin_devices_bench`, best of three, on a 2.1 GHz Xeon; Over The Top 0.40 % there). A sidechain
+  keying it brings it to about 1 % (none at S/C Mix 0 %, where the key's split doesn't run), and everything at once (a
+  sidechain, both crossovers swept all the time, Peak/RMS switched every 50 ms so it is nearly always crossfading) to
+  about 1.05 %.
 
 ### Spectral Compressor (`builtin:spectral`, AudioEffect, sidechain)
 

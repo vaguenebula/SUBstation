@@ -490,27 +490,27 @@ The editors:
     white to orange with the gain reduction, Soft Clip's share with it as the GR bars stack it, fully at 6 dB) and the
     hover (the line thickens, its handle lights). It repaints only while something moves or a figure changes: not while
     idle, nor while silence scrolls through once nothing in view is loud.
-- **Multiband Dynamics** ([MultibandEditor.qml](../../ui/qml/devices/editors/MultibandEditor.qml)): no pages; laid
-  out as Live's, a row per band with High on top (the rows are the graph's lanes: `rowHeight` is the graph's, the
-  body's height less a 16 px header, in three): the band's button, its activator (lit while the band works; off, the
-  band is bypassed), and its solo; under High's and Low's, the switch that splits the band off (lit while it is; off,
-  the Mid band has its frequencies) beside the crossover (a log-scaled box reading "2.50 kHz", typed as "1.5k" or
-  "800"); the band's Input; its lane of the display; two fields the **T**/**B**/**A** buttons in the header over the
-  band column switch between, for every band at once (attack and release, or the Below or the Above threshold and
-  ratio; all are made, one page shown, fading in over 120 ms, so their object names stay put), each column captioned
-  ("Attack" and "Release", "Below" or "Above" and "Ratio"); its Output; then the device's Amount, Time and Output
-  knobs (Output drawn bipolar), Soft Knee, Peak and RMS, and the sidechain's S/C Gain and S/C Mix knobs (24 px;
-  dimmed to 0.55 without a sidechain, but settable first, as the Gate's) beside a Sidechain button (lit while there is
-  one; it asks the frame for the sidechain menu under itself) over Listen, the three rows spread over the body's
-  height. The page shown is the device's view state (`DeviceViews`, "page"), so it outlives the frames being made
-  again. A band switched off or bypassed dims its boxes to 0.55 over 120 ms (they stay editable, as Live keeps them);
-  one switched off dims its button and crossover too, and disables its solo (it has no sound of its own to solo). Ratio boxes print the `ratio` unit as Live does
-  (`formatValue`: "1:4.00", "1:66.7", "1:100", "1:0.500": R dB past the threshold come out as one) and read it
-  through `parseRatio` (the application layer's `multibandParseRatio`): Live's "1:R", R alone, or a compressor's
-  "4:1"; to three decimals, so a typed "1:0.333" stays. The attack and release boxes read "250 ms", "1.5 s" or a
-  bare number of milliseconds (`parseTime`, `multibandParseMs`). Boxes take their formatter from their parameter
-  (`formatOf(param)`), so one whose value never changes still gets its text, and are a little wider than their
-  sample text needs (its width + 16), so the automation dot at their left never covers a minus sign.
+- **Multiband Dynamics** ([MultibandEditor.qml](../../ui/qml/devices/editors/MultibandEditor.qml)): no pages; laid out
+  as Live's, a row per band with High on top (the rows are the graph's lanes: `rowHeight` is the graph's, the body's
+  height less a 16 px header, in three): the band's button, its activator (lit while the band works; off, the band is
+  bypassed), and its solo; under High's and Low's, the switch that splits the band off (lit while it is; off, the Mid
+  band has its frequencies) beside the crossover (a log-scaled box reading "2.50 kHz", typed as "1.5k" or "800"); the
+  band's Input; its lane of the display; two fields the **T**/**B**/**A** buttons in the header over the band column
+  switch between, for every band at once (attack and release, or the Below or the Above threshold and ratio; all are
+  made, one page shown, fading in over 120 ms, so their object names stay put), each column captioned ("Attack" and
+  "Release", "Below" or "Above" and "Ratio"); its Output; then the device's Amount, Time and Output knobs (Output drawn
+  bipolar), Soft Knee, Peak and RMS, and the sidechain's S/C Gain and S/C Mix knobs (24 px; dimmed to 0.55 without a
+  sidechain, but settable first, as the Gate's) beside a Sidechain button (lit while there is one; it asks the frame for
+  the sidechain menu under itself) over Listen, the three rows spread over the body's height. The page shown is the
+  device's view state (`DeviceViews`, "page"), so it outlives the frames being made again. A band switched off or
+  bypassed dims its boxes to 0.55 over 120 ms (they stay editable, as Live keeps them); one switched off dims its button
+  and crossover too, and disables its solo (it has no sound of its own to solo). Ratio boxes print the `ratio` unit as
+  Live does (`formatValue`: "1:4.00", "1:66.7", "1:100", "1:0.500": R dB past the threshold come out as one) and read it
+  through `parseRatio` (the application layer's `multibandParseRatio`): Live's "1:R", R alone, or a compressor's "4:1";
+  to three decimals, so a typed "1:0.333" stays. The attack and release boxes read "250 ms", "1.5 s" or a bare number of
+  milliseconds (`parseTime`, `multibandParseMs`). Boxes take their formatter and their double-click default from their
+  parameter (`formatOf(param)`, its `defaultValue`), so one whose value never changes still gets its text, and are a
+  little wider than their sample text needs (its width + 16), so the automation dot at their left clears a minus sign.
   - The display ([MultibandGraph](../../ui/src/devices/MultibandGraph.h), 268 px): a lane per band on a linear level
     axis from −80 to +6 dB (its figures, −80 to 0, in the header: a "+6" at the edge would run into the "0"; a faint
     line every 10 dB, 0 dB brighter). In each, the Below region is a block from the left edge to the Below threshold and
@@ -536,33 +536,35 @@ The editors:
     pair at either end; **Shift**: a fifth as far (read on every move, so it can change mid-drag). Ctrl+Alt is left to
     the device chain (its hand scroll, which takes the press first). Double-click a handle for its threshold's default
     (−20 dB Above, −40 dB Below, pushing the other) or a block for 1:1. The wheel moves a threshold half a dB a notch
-    and a ratio by 2^(1/8), up being louder in that region; a run of notches on one target (less than `kWheelGesture`,
-    0.4 s as the EQ's, apart) is worked out from where it began, as a drag is, so a high-resolution wheel's or a touchpad's small
-    steps add up (and leave 1:1's detent) rather than each being rounded away. A run keeps its target while the mouse
-    stays within `kWheelStill` (5 px) of its last notch: a threshold it moves slides out from under the mouse (about 1.5
-    px a notch), onto its block or the gap between the thresholds, and the run goes on with the threshold. Shift+wheel
-    is the chain's (it scrolls), so the graph leaves it. A switched-off band's lane takes drags as any other. One undo
-    step per drag, per double-click and per run of notches (`setParams` with a merge key per gesture, the parameter
-    grabbed first so its lane shows). Between the thresholds and in the header a press goes on to the frame. The cursor
-    is a horizontal resize over a handle and a vertical one over a block; while dragging, a bubble over the handle (or
-    at the mouse) reads the value ("Above −23.5 dB", "Below 1:2.00"); a switched-off lane's "→ Mid" under it makes way
-    (fading out over 60 ms, back when the bubble leaves it).
-  - Its animation, in `refreshDisplays()`, moved on by the time since the last tick (`tickSeconds()`): it reads all
-    nine displays (`<band>_in`, `_out`, `_gain`) and looks at the recent values only (`kRecentSpan`, 100 ms, at the
-    engine's display rate, `multibandDisplaySamples()`: 19 at 48 kHz, so a 2048-sample buffer's eight, which arrive at
-    once, are all read), so after a stall it shows now rather than the backlog's loudest; with nothing new it keeps the
-    last readings for `kHoldSeconds` (0.24 s), then takes the floor. The meters have ballistics
-    (`MeterBallistics`: rising at once, falling 36 dB/s, the out peak held 1 s); the gain change eases (`Eased`, 30 ms)
-    to the reading, and once the audio has stopped (`lettingGoGain`) to the change between the falling meters, so the
-    bars and the figure agree all the way down (the meters take seconds to fall; the change alone would be home in a
-    tenth of one); where one meter is at the floor already, the figure keeps the reading (the change goes on past it, as
-    `changeSpan` draws it while playing) until the other is there too; each side glows (a halo on its handle, a brighter
-    block; rising over 50 ms, falling over 250 ms) while it changes the level of a band that sounds, judged by the level
-    the displays last reported, not by the falling meter (which, after the audio stops, would pass through a Below
-    region the band isn't in); the handle and block under the mouse or dragged light up (60 ms; in a Ctrl or Alt drag,
-    every one moved); a lane eases to 0.35 when its band is switched off (with "→ Mid" over it) or bypassed (its level
-    shown as it comes, nothing working: no glow, marker or figure) and to 0.5 when a solo mutes it (80 ms). A device shown afresh is drawn as it is (the first `sync()` snaps them). Once everything has
-    settled it stops calling `update()` (`animating()` false): an idle or silent editor doesn't repaint.
+    and a ratio by 2^(1/8), up being louder in that region; a run of notches on one target (less than
+    `WheelGesture::kWindowMs`, 400 ms, apart, as the EQ's; the run keeps a clock of its own, since it is more than an
+    undo key) is worked out from where it began, as a drag is, so a high-resolution wheel's or a touchpad's small steps
+    add up (and leave 1:1's detent) rather than each being rounded away. A run keeps its target while the mouse stays
+    within `kWheelStill` (5 px) of its last notch: a threshold it moves slides out from under the mouse (about 1.5 px a
+    notch), onto its block or the gap between the thresholds, and the run goes on with the threshold. Shift+wheel is the
+    chain's (it scrolls), so the graph leaves it. A switched-off band's lane takes drags as any other. One undo step per
+    drag, per double-click and per run of notches (`setParams` with a merge key per gesture, the parameter grabbed first
+    so its lane shows). Between the thresholds and in the header a press goes on to the frame. The cursor is a
+    horizontal resize over a handle and a vertical one over a block; while dragging, a bubble over the handle (or at the
+    mouse) reads the value ("Above −23.5 dB", "Below 1:2.00"); a switched-off lane's "→ Mid" under it makes way (fading
+    out over 60 ms, back when the bubble leaves it).
+  - Its animation, in `refreshDisplays()`, moved on by the time since the last tick (`tickSeconds()`): it reads all nine
+    displays (`<band>_in`, `_out`, `_gain`), their recent values only (`readRecent`: the last `kRecentSpan`, 100 ms, of
+    audio at the displays' rate, 19 values at 48 kHz, so a 2048-sample buffer's eight, which arrive at once, are all
+    read), so after a stall it shows now rather than the backlog's loudest; with nothing new it keeps the last readings
+    for `kHoldSeconds` (0.24 s), then takes the floor. The meters have ballistics (`MeterBallistics`: rising at once,
+    falling 36 dB/s, the out peak held 1 s); the gain change eases (`Eased`, 30 ms) to the reading, and once the audio
+    has stopped (`lettingGoGain`) to the change between the falling meters, so the bars and the figure agree all the way
+    down (the meters take seconds to fall; the change alone would be home in a tenth of one); where one meter is at the
+    floor already, the figure keeps the reading (the change goes on past it, as `changeSpan` draws it while playing)
+    until the other is there too; each side glows (a halo on its handle, a brighter block; rising over 50 ms, falling
+    over 250 ms) while it changes the level of a band that sounds, judged by the level the displays last reported, not
+    by the falling meter (which, after the audio stops, would pass through a Below region the band isn't in); the handle
+    and block under the mouse or dragged light up (60 ms; in a Ctrl or Alt drag, every one moved); a lane eases to 0.35
+    when its band is switched off (with "→ Mid" over it) or bypassed (its level shown as it comes, nothing working: no
+    glow, marker or figure) and to 0.5 when a solo mutes it (80 ms). A device shown afresh is drawn as it is (the first
+    `sync()` snaps them). Once everything has settled it stops calling `update()` (`animating()` false): an idle or
+    silent editor doesn't repaint.
 - **Spectral Compressor** ([SpectralEditor.qml](../../ui/qml/devices/editors/SpectralEditor.qml)): no pages: the
   thresholds' knobs at the left (Threshold, Ratio, Below, Upward over Tilt, Knee, Range, Smoothing); at the right the
   Focus band's edges as value boxes (Focus Low over Focus High, each a `ParamBox` under its name, level with the knobs
@@ -1120,7 +1122,7 @@ The editors:
 | [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) | The registry (every kind with an editor, and the generic knobs for the others); the Compressor's, Delay's, Disperser's, EQ's, Sidechain's and Sampler's editors, each loaded as the view loads it, driven with the mouse and keys, the project and (rendering offline) the engine checked; what the editors share (SgPainter's additions, the animation helpers, `EditorKnob` and `DeviceParamMap`); the parameter cell and its menu. Its host, and every editor test's, is [support/EditorHarness.h](../../tests/app/support/EditorHarness.h) |
 | [test_ui_device_editors_gate.cpp](../../tests/app/test_ui_device_editors_gate.cpp) | The Gate's editor: fitting the body, every control bound and undoable (the lookahead reaching the engine's latency; the list as wide as its longest choice; only the key EQ's Gain bipolar; the In meter's panel-grey well); the threshold and return lines' drags (relative, Shift, double-click, one step each; either taken when they are one), their right-click menus, the meters not a control; the displays reaching the graph (its rings holding all the plot draws, at any rate up to 384 kHz), its scrolling and rest, going idle, silence and a steady tone drawing nothing, listening while idle drawing nothing; the key dot's colour following the key's level now and the dot falling below the line within a few ticks, the passing shade showing over the levels; the sidechain section (fold, the type buttons' EQ faces, what is dimmed but settable and what is disabled, the source button naming itself for the menu, renames, every cell's widest values whole); the key curve being the engine's filter, its dot following the mouse, Ctrl and the wheel for the bell's Q |
 | [test_ui_device_editors_limiter.cpp](../../tests/app/test_ui_device_editors_limiter.cpp) | The Limiter's editor: fitting the view, every control bound to its parameter and undoable (Gain bipolar; Release dimmed while Auto is on and still settable; the boxes and lists wide enough for their widest text; the lookahead reaching the engine's latency; Maximize swapping Gain for Output and the line for the Threshold, a press mid-crossfade turning the knob coming in), the line dragged (one undo step, Shift finely, held to the parameter's range, double-click for the default, presses elsewhere ignored), the hover following the line as it moves, opening as the device is (nothing animating in), the displays reaching the graph (levels, gain reduction, Soft Clip's share in both figures and in the line's glow; with Maximize, the history's output in the line's domain and the Out meter in dBFS), its animation and its rest, the maths shared with the engine |
-| [test_ui_device_editors_multiband.cpp](../../tests/app/test_ui_device_editors_multiband.cpp) | Multiband Dynamics' editor: it fits the body (at its least height too), every box as wide as its text and automation dot need, every control bound and undoable (the engine has what they set: the activators and the split switches, each where Live has it), ratios and times typed and printed, the T/B/A pages and their captions (the page outliving the editor being made again); the graph's threshold and ratio drags (pushing, Ctrl, Alt, Shift; Ctrl+Alt left to the chain), double-clicks and wheel (a high-resolution wheel's steps adding up; a run staying on a threshold that slides from under the mouse; Shift+wheel left to the chain), one undo step each; the displays reaching the graph as the engine renders (a whole 2048-sample buffer's read), its meters, eased gain, glows (not after the audio stops), target marker, a cut under the floor drawn only as far as the level before it, the bars and the figure agreeing tick by tick while the meters let go (a lift, a cut, a cut under the floor), lanes and highlights, a switched-off lane's "→ Mid" making way for a drag's bubble, the hover readout clear of the change's figure, a bypassed band's lane (its level only), and its stopping once still; the sidechain's controls (dimmed but settable without a sidechain, whole readouts, the menu asked for under the button, Listen); the `ratio` unit and the typed texts (with no window, on any platform) |
+| [test_ui_device_editors_multiband.cpp](../../tests/app/test_ui_device_editors_multiband.cpp) | Multiband Dynamics' editor: it fits the body (at its least height too), every box as wide as its text and automation dot need and reset by a double-click to its parameter's default, every control bound and undoable (the engine has what they set: the activators and the split switches, each where Live has it), ratios and times typed and printed, the T/B/A pages and their captions (the page outliving the editor being made again); the graph's threshold and ratio drags (pushing, Ctrl, Alt, Shift; Ctrl+Alt left to the chain), double-clicks and wheel (a high-resolution wheel's steps adding up; a run staying on a threshold that slides from under the mouse; Shift+wheel left to the chain), one undo step each; the displays reaching the graph as the engine renders (a whole 2048-sample buffer's read), its meters, eased gain, glows (not after the audio stops), target marker, a cut under the floor drawn only as far as the level before it, the bars and the figure agreeing tick by tick while the meters let go (a lift, a cut, a cut under the floor), lanes and highlights, a switched-off lane's "→ Mid" making way for a drag's bubble, the hover readout clear of the change's figure, a bypassed band's lane (its level only), and its stopping once still; the sidechain's controls (dimmed but settable without a sidechain, whole readouts, the menu asked for under the button, Listen); the `ratio` unit and the typed texts (with no window, on any platform) |
 | [test_ui_device_editors_spectral.cpp](../../tests/app/test_ui_device_editors_spectral.cpp) | The Spectral Compressor's editor: fitting the body, every name and value whole, its knobs and Delta bound and undoable, the lines the engine's, lines leaving the plot drawn where they are with their handles on them (and the mouse finding them only there), the level figures a line crosses fading, the threshold, tilt, Below and Focus dragged (one undo step, Shift, Shift pressed mid-drag, double-click), the Focus boxes (wide enough for their widest value clear of the automation dot), Below dimmed but settable while Upward is 1:1, the Focus dim the engine's weights with the level figures over it, the displays reaching the graph and sinking back without a bounce, the held cut outliving the curtain, nothing drawn while still, lifts, the glow only while cutting, Delta's spectrum and tint, the key line only where the key is, the Sidechain badge (its menu under it) |
 | [test_ui_device_editors_saturator.cpp](../../tests/app/test_ui_device_editors_saturator.cpp) | The Saturator's editor: fitting the body (its columns 8 px apart in order, each control in its own column, with either shaper section showing; Color's switch off its graph; the lists as wide as their longest names with the arrow; no caption or readout cut short at either end of a knob's range), every control bound to its parameter, undoable and reaching the engine (each knob, the lists, the switches; Hi-Quality's latency), the knobs bipolar whose range is symmetric about 0, Color's under Live 12.1's names, the Color and Waveshaper knobs dimmed and lit, the Waveshaper and Bass Shaper sections swapping; the curve and Color's EQ being the engine's own `saturator::transfer` and `colorResponseDb` (every type, both Post Clips, every shaper control; exactly, after the morph and the ease); an editor opening on the device as it is, without a morph; the graphs' drags (Shift mid-drag, double-clicks, presses off the handles, Amt Lo dragged near the top, the cursor after a drag) as single undo steps, showing the automation of what they move most; the displays reaching the curve (the dots, the saturation, the afterglow, the over-full-scale flash) and the spectra, holding over a tick without values, a backlog counting for nothing, and both graphs settling without repaints in silence |
 | [test_ui_device_editors_amp.cpp](../../tests/app/test_ui_device_editors_amp.cpp) | The Amp's editor: fitting the body (nothing past the margins or overlapping, the buttons' labels unclipped), every control bound to its parameter, undoable and reaching the engine; what it takes from the device through the application layer (the models' names, the displays' floor), and the Output buttons' names and the tone handles' ranges from the parameters, being the device's; the model buttons and the underline sliding and turning to the model's colour; an editor opened on a model showing it at once; the tone curve and the transfer being the engine's maths (exactly, after a new model's morph); the tone handles as controls: drags (fine with Shift, Shift mid-drag, double-clicks, presses off them) as single undo steps, the wheel (a fiftieth of the range a notch, a burst one undo step, another handle's notch one of its own), both stopping at the range's ends, the automation dot, the parameter's menu on the right button, a double-click off them the frame's, their hover; the drive curve made again only for what it is made from (not as the playhead moves under automation), its xs exact opposites; the displays reaching the tubes, the dots, the lamp and the meter, holding through ticks that read nothing, cooling after, a backlog counting for nothing, the sag lowering the drive curve and dimming the lamp, and the face settling without repaints |

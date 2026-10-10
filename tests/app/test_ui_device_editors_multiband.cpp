@@ -8,6 +8,7 @@
 // SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there.
 
 #include <QGuiApplication>
+#include <QHash>
 #include <QImage>
 #include <QMouseEvent>
 #include <QQuickItem>
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "EditorHarness.h"
@@ -29,6 +31,7 @@
 #include "devices/DisplayClock.h"
 #include "devices/MultibandGraph.h"
 #include "editor/ProjectEditor.h"
+#include "input/GestureKey.h"
 #include "model/ParamSpec.h"
 
 using namespace sub::app;
@@ -199,7 +202,26 @@ private Q_SLOTS:
         QCOMPARE(box(s.view, "xoverHigh")->value(), 2500.0);
         QCOMPARE(box(s.view, "xoverHigh")->text(), QStringLiteral("2.50 kHz"));
         QCOMPARE(box(s.view, "midAttack")->text(), QStringLiteral("10 ms"));
-        auto* amount = qvariant_cast<KnobItem*>(
+        // A double-click resets each to its parameter's default, the engine's.
+        QHash<QString, double> defaults;
+        for (const ProcessorParam& param : bridge()->deviceParams(s.track, s.device))
+            defaults.insert(param.id, param.defaultValue);
+        std::vector<std::pair<QString, QString>> boxes = {{QStringLiteral("xoverHigh"), QStringLiteral("xover_high")},
+                                                          {QStringLiteral("xoverLow"), QStringLiteral("xover_low")}};
+        for (const char* band : {"high", "mid", "low"}) {
+            for (const auto& [field, id] : {std::pair{"In", "in"}, std::pair{"Out", "out"}, std::pair{"Above", "above"},
+                                            std::pair{"AboveRatio", "above_ratio"}, std::pair{"Below", "below"},
+                                            std::pair{"BelowRatio", "below_ratio"}, std::pair{"Attack", "attack"},
+                                            std::pair{"Release", "release"}})
+                boxes.emplace_back(QString::fromLatin1(band) + QString::fromLatin1(field),
+                                   QString::fromLatin1(band) + QLatin1Char('_') + QString::fromLatin1(id));
+        }
+        for (const auto& [name, id] : boxes) {
+            const QVariant reset = box(s.view, qPrintable(name))->defaultValue();
+            QVERIFY2(defaults.contains(id) && reset.isValid() && reset.toDouble() == defaults.value(id),
+                     qPrintable(QStringLiteral("%1: %2").arg(name, reset.toString())));
+        }
+        auto* amount =qvariant_cast<KnobItem*>(
             qvariant_cast<QQuickItem*>(find(s.view, QStringLiteral("amount"))->property("knob"))->property("knob"));
         QVERIFY(amount);
         QCOMPARE(amount->value(), 100.0);
@@ -700,7 +722,7 @@ private Q_SLOTS:
         QCOMPARE(value("mid_above_ratio"), 1.0);
         QVERIFY(oneStepAfter(before));
         // The other way, a run of its own (the last one over), from where the handle is now.
-        QTest::qWait(int(MultibandGraph::kWheelGesture * 1000.0) + 100);
+        QTest::qWait(int(WheelGesture::kWindowMs) + 100);
         before = undo()->index();
         const QPoint moved = scenePoint(graph, graph->aboveHandle(kMid));
         for (int i = 0; i < 8; ++i)

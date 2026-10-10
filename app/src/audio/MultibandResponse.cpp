@@ -16,7 +16,6 @@ double multibandMinThresholdDb() { return mb::kMinThresholdDb; }
 double multibandMaxThresholdDb() { return mb::kMaxThresholdDb; }
 double multibandMinRatio() { return mb::kMinRatio; }
 double multibandMaxRatio() { return mb::kMaxRatio; }
-int multibandDisplaySamples() { return mb::kDisplaySamples; }
 
 double multibandGainDb(double levelDb, double above, double aboveRatio, double below, double belowRatio,
                        bool softKnee, double amountPercent) {

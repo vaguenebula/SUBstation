@@ -42,21 +42,19 @@ double clampThreshold(double db) {
 // The texts the graph draws, with a true minus sign.
 QString typeset(QString text) { return text.replace(QLatin1Char('-'), QChar(0x2212)); }
 
-// The largest of the latest `count` values (NaN as the floor), or the value of largest magnitude.
-double largest(const std::vector<float>& values, std::size_t count) {
+// The largest of the values (NaN as the floor), or the value of largest magnitude.
+double largest(const std::vector<float>& values) {
     double most = -1e300;
-    for (std::size_t i = values.size() - std::min(count, values.size()); i < values.size(); ++i) {
-        const double v = std::isnan(values[i]) ? MultibandGraph::kFloorDb : double(values[i]);
-        most = std::max(most, v);
-    }
+    for (const float value : values)
+        most = std::max(most, std::isnan(value) ? MultibandGraph::kFloorDb : double(value));
     return std::clamp(most, -1e3, 1e3);
 }
 
-double extreme(const std::vector<float>& values, std::size_t count) {
+double extreme(const std::vector<float>& values) {
     double most = 0.0;
-    for (std::size_t i = values.size() - std::min(count, values.size()); i < values.size(); ++i) {
-        if (std::isfinite(values[i]) && std::abs(values[i]) > std::abs(most))
-            most = values[i];
+    for (const float value : values) {
+        if (std::isfinite(value) && std::abs(value) > std::abs(most))
+            most = value;
     }
     return most;
 }
@@ -268,28 +266,27 @@ void MultibandGraph::refreshDisplays() {
     const double dt = tickSeconds();
     std::array<std::array<std::vector<float>, 3>, kBands> read;
     bool any = false;
-    for (int b = 0; b < kBands; ++b) {  // (all nine, so they stay in step)
+    // All nine, so they stay in step; only the recent values: a buffer's worth arrives at once, but after a stall
+    // the backlog is old audio.
+    for (int b = 0; b < kBands; ++b) {
         for (int k = 0; k < 3; ++k) {
-            read[std::size_t(b)][std::size_t(k)] = readDisplay(paramId(b, kKinds[k]));
+            read[std::size_t(b)][std::size_t(k)] = readRecent(paramId(b, kKinds[k]), kRecentSpan);
             any = any || !read[std::size_t(b)][std::size_t(k)].empty();
         }
     }
     quietSeconds_ = any ? 0.0 : quietSeconds_ + dt;
     const bool lettingGo = !any && quietSeconds_ > kHoldSeconds;  // the audio stopped (or the device)
-    // Only the recent values: a buffer's worth arrives at once, but after a stall the backlog is old audio.
-    const auto latest =
-        std::size_t(std::max(1.0, std::ceil(kRecentSpan * sampleRate() / sub::app::multibandDisplaySamples())));
     bool moved = false;
     for (int b = 0; b < kBands; ++b) {
         BandView& view = bands_[std::size_t(b)];
         const auto& values = read[std::size_t(b)];
         if (any) {
             if (!values[0].empty())
-                view.inRead = largest(values[0], latest);
+                view.inRead = largest(values[0]);
             if (!values[1].empty())
-                view.outRead = largest(values[1], latest);
+                view.outRead = largest(values[1]);
             if (!values[2].empty())
-                view.gainRead = extreme(values[2], latest);
+                view.gainRead = extreme(values[2]);
         } else if (lettingGo) {
             view.inRead = view.outRead = kFloorDb;
         }
@@ -546,7 +543,7 @@ void MultibandGraph::wheelEvent(QWheelEvent* event) {
     // target while the mouse stays where the last notch left it: a threshold the wheel moves slides out from under
     // the mouse (1.5 px a notch against a 5 px grab), and what is there then is its block or the gap between the
     // thresholds, not what the run is turning.
-    const bool going = wheel_ && wheelClock_.isValid() && wheelClock_.elapsed() <= kWheelGesture * 1000.0 &&
+    const bool going = wheel_ && wheelClock_.isValid() && wheelClock_.elapsed() <= WheelGesture::kWindowMs &&
                        std::hypot(pos.x() - wheel_->at.x(), pos.y() - wheel_->at.y()) <= kWheelStill;
     const std::optional<Target> target = going ? std::optional<Target>(wheel_->target) : targetAt(pos);
     if (!target) {

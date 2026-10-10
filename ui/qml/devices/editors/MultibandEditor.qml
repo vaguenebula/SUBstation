@@ -170,7 +170,6 @@ Item {
 
         property string band: "high"
         property int rowIndex: 0
-        property real defaultFrequency: 2500
         property string sampleText: ""
         property string switchTip: ""
         property string boxTip: ""
@@ -198,7 +197,7 @@ Item {
             param: split.frequency
             logScale: true
             decimals: 0
-            defaultValue: split.defaultFrequency
+            defaultValue: split.frequency ? split.frequency.defaultValue : undefined
             formatter: editor.formatOf(split.frequency)
             parser: editor.parserOf(split.frequency)
             sampleText: split.sampleText
@@ -214,7 +213,6 @@ Item {
     Split {
         band: "high"
         rowIndex: 0
-        defaultFrequency: 2500
         sampleText: "15.00 kHz"
         switchTip: qsTr("Splits the high band off at this frequency. Off, its frequencies belong to the Mid band, "
                         + "which then shapes them with its own settings")
@@ -224,7 +222,6 @@ Item {
     Split {
         band: "low"
         rowIndex: 2
-        defaultFrequency: 120
         sampleText: "3.00 kHz"
         switchTip: qsTr("Splits the low band off at this frequency. Off, its frequencies belong to the Mid band, "
                         + "which then shapes them with its own settings")
@@ -233,9 +230,11 @@ Item {
 
     // --- A band's row: its activator and solo, Input, the fields of the page shown, Output -----
 
-    // A band's box, dimmed while the band is switched off or bypassed (still editable).
+    // A band's box, dimmed while the band is switched off or bypassed (still editable). A double-click resets it
+    // to its parameter's default.
     component DimBox: ParamBox {
         property bool bandOn: true
+        defaultValue: param ? param.defaultValue : undefined
         opacity: bandOn ? 1 : editor.dimmed
         Behavior on opacity {
             NumberAnimation {
@@ -320,7 +319,6 @@ Item {
             param: row.param("in")
             step: 0.1
             decimals: 1
-            defaultValue: 0
             formatter: editor.formatOf(row.param("in"))
             sampleText: "-24.0 dB"
             tooltip: qsTr("Gain before the band's dynamics (it moves the band's level against its thresholds)")
@@ -336,7 +334,6 @@ Item {
                 param: row.param("above")
                 step: 0.1
                 decimals: 1
-                defaultValue: -20
                 formatter: editor.formatOf(row.param("above"))
                 sampleText: "-80.0 dB"
                 tooltip: qsTr("Above: what happens to the band above this level. From 1:1 up it is compressed (at "
@@ -351,7 +348,6 @@ Item {
                 param: row.param("above_ratio")
                 logScale: true
                 decimals: 3
-                defaultValue: 1
                 formatter: editor.formatOf(row.param("above_ratio"))
                 parser: t => editor.parseRatio(t)
                 sampleText: "1:0.250"
@@ -370,7 +366,6 @@ Item {
                 param: row.param("below")
                 step: 0.1
                 decimals: 1
-                defaultValue: -40
                 formatter: editor.formatOf(row.param("below"))
                 sampleText: "-80.0 dB"
                 tooltip: qsTr("Below: what happens to the band below this level. From 1:1 up it is pulled up "
@@ -386,7 +381,6 @@ Item {
                 param: row.param("below_ratio")
                 logScale: true
                 decimals: 3
-                defaultValue: 1
                 formatter: editor.formatOf(row.param("below_ratio"))
                 parser: t => editor.parseRatio(t)
                 sampleText: "1:0.250"
@@ -406,7 +400,6 @@ Item {
                 param: row.param("attack")
                 logScale: true
                 decimals: 2
-                defaultValue: 10
                 formatter: editor.formatOf(row.param("attack"))
                 parser: t => editor.parseTime(t)
                 sampleText: "0.88 ms"
@@ -422,7 +415,6 @@ Item {
                 param: row.param("release")
                 logScale: true
                 decimals: 2
-                defaultValue: 100
                 formatter: editor.formatOf(row.param("release"))
                 parser: t => editor.parseTime(t)
                 sampleText: "0.88 ms"
@@ -438,7 +430,6 @@ Item {
             param: row.param("out")
             step: 0.1
             decimals: 1
-            defaultValue: 0
             formatter: editor.formatOf(row.param("out"))
             sampleText: "-24.0 dB"
             tooltip: qsTr("Gain after the band's dynamics")

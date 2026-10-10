@@ -2,11 +2,14 @@
 // side's law (Above and Below, compressing and expanding, clamped, the knee,
 // Amount), attack, release and Time as Ableton defines them; Peak and RMS;
 // Input and Output gains; each band on its own, switched off (its frequencies
-// the mid band's) and soloed; a sidechain keying each band by its own band;
-// every control changing without a click; automation to the sample; reset and
-// new sample rates; silence ringing out to exact zeros; the extremes; one
-// channel and linked stereo; the tail; the displays; its cost; and an output
-// that doesn't depend on how blocks are cut.
+// the mid band's), bypassed by its activator and soloed; Listen; a sidechain
+// keying each band by its own band (one channel by both of the key's, a key
+// connected again starting from silence); every control changing without a
+// click; automation to the sample; reset and new sample rates; silence ringing
+// out to exact zeros; the extremes; NaNs and infinities in the input and the
+// key, and the loudest input it is given; one channel and linked stereo; the
+// tail; the displays; its cost; and an output that doesn't depend on how
+// blocks are cut.
 
 #include <algorithm>
 #include <cmath>
@@ -29,8 +32,6 @@ using namespace subtest;
 namespace mb = sub::multiband;
 
 namespace {
-
-constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
 
 using Values = ParamValues;
 using Change = ParamChange;
@@ -618,7 +619,7 @@ TEST_CASE("multiband: a sidechain keys each band by the same band of the key") {
     keyed = levels();
     CHECK_APPROX_TOL(keyed[1], keyedOut(-12.0), 0.0, 0.4);  // -9.2
     setParam(engine, device, "sc_gain", 0.f);
-    // Sidechain Mix at 0: the device's own input keys it, exactly as with no sidechain.
+    // S/C Mix at 0: the device's own input keys it, exactly as with no sidechain.
     setParam(engine, device, "sc_mix", 0.f);
     const Samples ownKey = engine.renderOffline(0.0, kSampleRate);
     setParam(engine, device, "sc_mix", 100.f);
@@ -631,7 +632,7 @@ TEST_CASE("multiband: a sidechain keys each band by the same band of the key") {
     for (const double level : levels()) CHECK_APPROX_TOL(level, 0.0, 0.0, 0.1);
 
     // Keyed, a band's `in` display is the trigger's level, what its thresholds are compared with: the key's
-    // band, after the band's Input; at Sidechain Mix 0 the device's own.
+    // band, after the band's Input; at S/C Mix 0 the device's own.
     for (const float scMix : {100.f, 0.f}) {
         INFO("sc_mix " + std::to_string(scMix));
         Multiband keyed(base({{"mid_in", 6.f}, {"sc_mix", scMix}}));
@@ -787,7 +788,7 @@ TEST_CASE("multiband: reset and a new sample rate start it from silence") {
         const Values compressing = single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}});
         Multiband r(compressing);
         r.play(noise(kSampleRate, 9));
-        r.processor().prepare(rate, kBlock);
+        r.prepare(rate);
         Multiband atRate(compressing, rate);
         const Samples y = sine(1000.0, 1.0, 0.5, rate);
         const Samples out = r.play(y);
