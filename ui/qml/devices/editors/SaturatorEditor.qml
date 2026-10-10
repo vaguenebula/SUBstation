@@ -7,7 +7,8 @@ import SUBstation
 // the shaper curve (SaturatorCurve: the signal lit on it, In and Out strips;
 // drag it for Drive) with Post Clip under it; Output and Dry/Wet. Then Color:
 // its switch over its pre-shaper EQ on the input and output spectra
-// (SaturatorColorGraph; drag its handles) and its four knobs. Last the curve's
+// (SaturatorColorGraph; drag its handles) and its four knobs (Amt Lo, Freq,
+// Width, Amt Hi: Live 12.1's names). Last the curve's
 // own controls: the Waveshaper's six, or the Bass Shaper's Threshold. Every
 // control shows its parameter as it is now (its automation's value while that
 // plays), sets it undoably, touches it when pressed, and right-click gives its
@@ -20,16 +21,32 @@ Item {
     readonly property alias curve: curve
     readonly property alias colorGraph: colorGraph
 
-    // The Type list's index (2 Bass Shaper, 7 Waveshaper), and what it shows.
+    // The Type list's index, and what it shows (which entries are the Bass Shaper and the Waveshaper is the
+    // engine's, through the curve).
     readonly property int type: p.get("type") ? p.get("type").index : 0
-    readonly property bool waveshaper: type === 7
-    readonly property bool bass: type === 2
+    readonly property bool waveshaper: type === curve.waveshaperType
+    readonly property bool bass: type === curve.bassShaperType
     readonly property bool colorOn: p.get("color") ? p.get("color").value >= 0.5 : false
 
-    // Columns: the front panel (Drive, the curve, Output and Dry/Wet), a line, Color, a line, the shaper's controls.
-    implicitWidth: 756
+    // The Type list as wide as its longest name with its arrow (and the front panel with it).
+    readonly property real typeListWidth: {
+        const names = typeChoice.names
+        let widest = 0
+        for (let i = 0; i < names.length; ++i)
+            widest = Math.max(widest, listFont.advanceWidth(names[i]))
+        return Math.ceil(widest + typeChoice.button.leftPadding + typeChoice.button.rightPadding) + 2
+    }
+
+    // Columns 8 px apart: the front panel (Drive, the curve, Output and Dry/Wet), a line, Color, a line, the
+    // shaper's controls.
+    implicitWidth: shaperSection.x + shaperSection.width + 8
     implicitHeight: 6 + Math.max(front.implicitHeight, curveColumn.implicitHeight, levels.implicitHeight,
                                  colorSection.implicitHeight, shaperSection.implicitHeight) + 6
+
+    FontMetrics {
+        id: listFont
+        font: typeChoice.button.font
+    }
 
     DeviceParamMap {
         id: p
@@ -43,9 +60,10 @@ Item {
 
     Item {
         id: front
+        objectName: "front"
         x: 8
         y: 6
-        width: 84
+        width: Math.max(84, editor.typeListWidth)
         height: editor.height - 12
         implicitHeight: drive.height + 4 + typeChoice.height + 4 + switches.height
 
@@ -57,6 +75,7 @@ Item {
             param: p.get("drive")
             title: qsTr("Drive")
             tooltip: qsTr("Drive: the level into the curve. Turn it up to saturate more; the curve shows how far")
+            knob.bipolar: true
         }
         ParamChoice {
             id: typeChoice
@@ -64,7 +83,9 @@ Item {
             y: drive.height + 4
             width: parent.width
             param: p.get("type")
-            tooltip: qsTr("The shaping curve: Analog Clip, Soft Sine, Bass Shaper (linear below its Threshold), Medium Curve, Hard Curve, Sinoid Fold (folds back over full scale), Digital Clip, or the Waveshaper's own")
+            tooltip: qsTr("The shaping curve: Analog Clip, Soft Sine, Bass Shaper (linear below its Threshold), " +
+                          "Medium Curve, Hard Curve, Sinoid Fold (folds back over full scale), Digital Clip, or " +
+                          "the Waveshaper's own")
         }
         Row {
             id: switches
@@ -73,24 +94,26 @@ Item {
 
             ParamButton {
                 objectName: "dc"
-                width: 40
+                width: (front.width - switches.spacing) / 2
                 param: p.get("dc")
                 text: qsTr("DC")
                 tooltip: qsTr("DC: removes DC offset from the input before it is shaped")
             }
             ParamButton {
                 objectName: "hq"
-                width: 40
+                width: (front.width - switches.spacing) / 2
                 param: p.get("hq")
                 text: qsTr("HQ")
-                tooltip: qsTr("Hi-Quality: shapes and clips at 4× the sample rate, so loud high sounds alias far less (more CPU, 36 samples of latency)")
+                tooltip: qsTr("Hi-Quality: shapes and clips at 4× the sample rate, so loud high sounds alias far " +
+                              "less (more CPU, %1 samples of latency)").arg(curve.hqLatency)
             }
         }
     }
 
     Item {
         id: curveColumn
-        x: 100
+        objectName: "curveColumn"
+        x: front.x + front.width + 8
         y: 6
         width: 160
         height: editor.height - 12
@@ -110,7 +133,9 @@ Item {
             }
             ToolTip.visible: curveHover.hovered && !curveHover.point.pressedButtons
             ToolTip.delay: 700
-            ToolTip.text: qsTr("The shaping curve: input across, output up. The light shows how far the signal reaches. Drag up and down for Drive; across for the Threshold (Bass Shaper) or Curve (Waveshaper). Double-click: Drive to 0 dB")
+            ToolTip.text: qsTr("The shaping curve: input across, output up. The light shows how far the signal " +
+                               "reaches. Drag up and down for Drive; across for the Threshold (Bass Shaper) or " +
+                               "Curve (Waveshaper). Double-click: Drive to 0 dB")
         }
         // Post Clip Mode, under the curve as in Live.
         ParamChoice {
@@ -119,14 +144,16 @@ Item {
             anchors.bottom: parent.bottom
             width: parent.width
             param: p.get("clip")
-            tooltip: qsTr("Post Clip: clips the output, dry and wet together, softly (the Analog Clip curve) or hard, so it never goes over the Output level (with HQ, bright sound can a little)")
+            tooltip: qsTr("Post Clip: clips the output, dry and wet together, softly (the Analog Clip curve) or " +
+                          "hard, so it never goes over the Output level (with HQ, bright sound can a little)")
         }
     }
 
     // Output at the top, Dry/Wet at the bottom: their values on the line the other sections' end on.
     Item {
         id: levels
-        x: 268
+        objectName: "levels"
+        x: curveColumn.x + curveColumn.width + 8
         y: 6
         width: 62
         height: editor.height - 12
@@ -151,12 +178,9 @@ Item {
         }
     }
 
-    Rectangle {
-        x: 338
-        y: 6
-        width: 1
-        height: editor.height - 12
-        color: Theme.border
+    EditorDivider {
+        id: colorDivider
+        x: levels.x + levels.width + 8
     }
 
     // --- Color --------------------------------------------------------------------------------
@@ -164,7 +188,7 @@ Item {
     Item {
         id: colorSection
         objectName: "colorSection"
-        x: 347
+        x: colorDivider.x + 9
         y: 6
         width: 220
         height: editor.height - 12
@@ -177,7 +201,8 @@ Item {
             width: 44
             param: p.get("color")
             text: qsTr("Color")
-            tooltip: qsTr("Color: two filters around the curve. What they boost is driven harder (then turned back down); what they cut stays clean (then turned back up)")
+            tooltip: qsTr("Color: two filters around the curve. What they boost is driven harder (then turned " +
+                          "back down); what they cut stays clean (then turned back up)")
         }
         SaturatorColorGraph {
             id: colorGraph
@@ -194,7 +219,9 @@ Item {
             }
             ToolTip.visible: colorHover.hovered && !colorHover.point.pressedButtons
             ToolTip.delay: 700
-            ToolTip.text: qsTr("Color's pre-shaper EQ over the input (filled) and output (line) spectra. Drag the dots: Base up and down; the peak across for Freq and up and down for Depth")
+            ToolTip.text: qsTr("Color's pre-shaper EQ over the input (filled) and output (line) spectra. Drag " +
+                               "the dots: Amt Lo's up and down; the band's across for Freq and up and down for " +
+                               "Amt Hi")
         }
         Row {
             id: colorKnobs
@@ -205,8 +232,8 @@ Item {
                 objectName: "base"
                 size: 24
                 param: p.get("base")
-                title: qsTr("Base")
-                tooltip: qsTr("Base: more (+) or less (−) saturation of the lows")
+                title: qsTr("Amt Lo")
+                tooltip: qsTr("Amt Lo: more (+) or less (−) saturation of the lows")
                 knob.bipolar: true
                 opacity: editor.colorOn ? 1 : 0.55
             }
@@ -215,7 +242,7 @@ Item {
                 size: 24
                 param: p.get("freq")
                 title: qsTr("Freq")
-                tooltip: qsTr("Freq: the centre of Color's second filter")
+                tooltip: qsTr("Freq: the centre of Color's band")
                 opacity: editor.colorOn ? 1 : 0.55
             }
             EditorKnob {
@@ -223,27 +250,24 @@ Item {
                 size: 24
                 param: p.get("width")
                 title: qsTr("Width")
-                tooltip: qsTr("Width: how wide a band Color's second filter takes")
+                tooltip: qsTr("Width: how wide Color's band is")
                 opacity: editor.colorOn ? 1 : 0.55
             }
             EditorKnob {
                 objectName: "depth"
                 size: 24
                 param: p.get("depth")
-                title: qsTr("Depth")
-                tooltip: qsTr("Depth: more (+) or less (−) saturation around Freq")
+                title: qsTr("Amt Hi")
+                tooltip: qsTr("Amt Hi: more (+) or less (−) saturation of the band around Freq")
                 knob.bipolar: true
                 opacity: editor.colorOn ? 1 : 0.55
             }
         }
     }
 
-    Rectangle {
-        x: 575
-        y: 6
-        width: 1
-        height: editor.height - 12
-        color: Theme.border
+    EditorDivider {
+        id: shaperDivider
+        x: colorSection.x + colorSection.width + 8
     }
 
     // --- The curve's own controls: the Waveshaper's, or the Bass Shaper's Threshold -----------
@@ -251,7 +275,7 @@ Item {
     Item {
         id: shaperSection
         objectName: "shaperSection"
-        x: 584
+        x: shaperDivider.x + 9
         y: 6
         width: 164
         height: editor.height - 12
@@ -372,7 +396,8 @@ Item {
                 width: 62
                 param: p.get("threshold")
                 title: qsTr("Threshold")
-                tooltip: qsTr("Threshold: the Bass Shaper is linear below it and saturates above it; at 0 dB it clips hard")
+                tooltip: qsTr("Threshold: the Bass Shaper is linear below it and saturates above it; at 0 dB it " +
+                              "clips hard")
             }
             EditorReadout {
                 objectName: "bassHint"

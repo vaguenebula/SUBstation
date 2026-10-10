@@ -1,6 +1,7 @@
 #include "audio/SaturatorResponse.h"
 
 #include "builtin/SaturatorDesign.h"
+#include "model/Devices.h"
 
 namespace sub::app {
 
@@ -51,6 +52,17 @@ QList<double> saturatorColorDb(double baseDb, double freq, double width, double 
 
 double saturatorThresholdInput(double thresholdDb, double driveDb) {
     return double(sub::saturator::thresholdGain(float(thresholdDb))) / double(sub::expDbToGain(float(driveDb)));
+}
+
+int saturatorBassShaperType() { return int(sub::saturator::Type::BassShaper); }
+
+int saturatorWaveshaperType() { return int(sub::saturator::Type::Waveshaper); }
+
+int saturatorHqLatency() { return sub::saturator::hqLatency(); }
+
+SaturatorRange saturatorRange(const QString& paramId) {
+    const sub::ParamInfo* info = builtinParamInfo(QStringLiteral("saturator"), paramId);
+    return info ? SaturatorRange{info->minValue, info->maxValue} : SaturatorRange{};
 }
 
 }  // namespace sub::app

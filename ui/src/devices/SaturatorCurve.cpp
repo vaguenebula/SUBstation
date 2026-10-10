@@ -1,7 +1,6 @@
 #include "devices/SaturatorCurve.h"
 
 #include "devices/EditorPaint.h"
-#include "devices/SaturatorPaint.h"
 #include "input/GestureKey.h"
 #include "model/ParamSpec.h"
 #include "sg/SgPainter.h"
@@ -18,9 +17,6 @@ namespace sub::ui {
 using sub::app::SaturatorShape;
 
 namespace {
-
-constexpr int kBassShaper = 2;
-constexpr int kWaveshaper = 7;
 
 // The loudest of a display's values (linear peaks), 0 for none or nonsense.
 double loudest(const std::vector<float>& values) {
@@ -95,9 +91,16 @@ double SaturatorCurve::curveAt(double input) const {
     return target_[i] + (target_[i + 1] - target_[i]) * f;
 }
 
+int SaturatorCurve::bassShaperType() { return sub::app::saturatorBassShaperType(); }
+
+int SaturatorCurve::waveshaperType() { return sub::app::saturatorWaveshaperType(); }
+
+int SaturatorCurve::hqLatency() { return sub::app::saturatorHqLatency(); }
+
 void SaturatorCurve::sync() {
     SaturatorShape shape;
-    shape.type = std::clamp(int(std::lround(value(QStringLiteral("type")))), 0, 7);
+    // (the type and Post Clip as indices: the engine's makeShape() and clipAt() hold them to their lists)
+    shape.type = int(std::lround(value(QStringLiteral("type"))));
     shape.driveDb = value(kDrive);
     shape.thresholdDb = value(kThreshold);
     shape.wsDrive = value(QStringLiteral("ws_drive"));
@@ -106,7 +109,7 @@ void SaturatorCurve::sync() {
     shape.wsDamp = value(QStringLiteral("ws_damp"));
     shape.wsDepth = value(QStringLiteral("ws_depth"));
     shape.wsPeriod = value(QStringLiteral("ws_period"));
-    shape.clip = std::clamp(int(std::lround(value(QStringLiteral("clip")))), 0, 2);
+    shape.clip = int(std::lround(value(QStringLiteral("clip"))));
     shape_ = shape;
     mix_ = value(QStringLiteral("mix"));
     hq_ = value(QStringLiteral("hq")) >= 0.5;
@@ -129,16 +132,14 @@ void SaturatorCurve::sync() {
     // (not before the device is there: until then value() gives the defaults, and its real settings would
     // morph in from them each time the editor opens)
     synced_ = device() != nullptr;
-    setCursor(shape_.type == kBassShaper || shape_.type == kWaveshaper ? Qt::SizeAllCursor : Qt::SizeVerCursor);
+    setCursor(bass() || waveshaper() ? Qt::SizeAllCursor : Qt::SizeVerCursor);
     update();
 }
 
 // --- Displays and animation ---------------------------------------------------------------
 
 void SaturatorCurve::refreshDisplays() {
-    const double dt = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.001, 0.1) : 1.0 / 60;
-    if (!clock_.isValid())
-        clock_.start();
+    const double dt = tickSeconds();
     const std::vector<float> ins = readDisplay(QStringLiteral("in_peak"));
     const std::vector<float> outs = readDisplay(QStringLiteral("out_peak"));
     const double lastIn = latestIn_, lastOut = latestOut_;
@@ -224,6 +225,9 @@ void SaturatorCurve::mousePressEvent(QMouseEvent* event) {
     dragDrive_ = shape_.driveDb;
     dragThreshold_ = shape_.thresholdDb;
     dragCurve_ = shape_.wsCurve;
+    driveRange_ = sub::app::saturatorRange(kDrive);
+    thresholdRange_ = sub::app::saturatorRange(kThreshold);
+    curveRange_ = sub::app::saturatorRange(kCurve);
     across_.clear();
     if (bass())
         across_ = kThreshold;
@@ -242,9 +246,9 @@ void SaturatorCurve::mouseMoveEvent(QMouseEvent* event) {
     lastAt_ = pos;
     movedAcross_ += std::abs(dx);
     movedUp_ += std::abs(dy);
-    dragDrive_ = std::clamp(dragDrive_ + dy * kDrivePerPixel * fine, -36.0, 36.0);
-    dragThreshold_ = std::clamp(dragThreshold_ + dx * kThresholdPerPixel * fine, -50.0, 0.0);
-    dragCurve_ = std::clamp(dragCurve_ + dx * kCurvePerPixel * fine, 0.0, 100.0);
+    dragDrive_ = driveRange_.clamp(dragDrive_ + dy * kDrivePerPixel * fine);
+    dragThreshold_ = thresholdRange_.clamp(dragThreshold_ + dx * kThresholdPerPixel * fine);
+    dragCurve_ = curveRange_.clamp(dragCurve_ + dx * kCurvePerPixel * fine);
     auto rounded = [](double v) { return std::round(v * 100.0) / 100.0; };
     // The same parameters every move (one undo step), the one moved most so far first: its automation shows.
     const double across = across_ == kThreshold ? rounded(dragThreshold_) : rounded(dragCurve_);
@@ -343,7 +347,7 @@ void SaturatorCurve::paint(SgPainter& p) {
     }
 
     // The signal on it: the stretch it reaches lit, the afterglow beyond, the dots.
-    const QColor hot = colorBetween(Theme::kScopeLine, Theme::kMeterHigh, sat_.value);
+    const QColor hot = mixColor(Theme::kScopeLine, Theme::kMeterHigh, sat_.value);
     const double dot = std::min(dot_, 1.0);
     const double alpha = dotAlpha_.value;
     if (alpha > 0.0 && n >= 2) {

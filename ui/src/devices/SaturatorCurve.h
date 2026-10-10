@@ -20,7 +20,6 @@
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
-#include <QElapsedTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include <vector>
@@ -31,6 +30,10 @@ class SaturatorCurve : public DeviceCanvas {
     Q_OBJECT
     QML_ELEMENT
     Q_PROPERTY(double inputLevel READ inputLevel NOTIFY levelsChanged)  // the latest in_peak (linear)
+    // For the editor, from the engine: the Type list's Bass Shaper and Waveshaper entries, Hi-Quality's latency.
+    Q_PROPERTY(int bassShaperType READ bassShaperType CONSTANT)
+    Q_PROPERTY(int waveshaperType READ waveshaperType CONSTANT)
+    Q_PROPERTY(int hqLatency READ hqLatency CONSTANT)
 
 public:
     static constexpr int kWidth = 160;
@@ -70,6 +73,10 @@ public:
     double glowLevel() const { return glow_; }              // the afterglow's reach
     bool settled() const { return settled_; }               // nothing moves: no repainting
 
+    static int bassShaperType();
+    static int waveshaperType();
+    static int hqLatency();
+
     QRectF plot() const;
     double xOf(double input) const;
     double yOf(double output) const;
@@ -94,8 +101,8 @@ private:
     double curveAt(double input) const;                               // the target curve, between its points
     double drawnAt(double input) const;                               // the drawn one
     std::vector<QPointF> pointsWithin(double from, double to) const;  // the drawn curve over from..to
-    bool bass() const { return shape_.type == 2; }
-    bool waveshaper() const { return shape_.type == 7; }
+    bool bass() const { return shape_.type == bassShaperType(); }
+    bool waveshaper() const { return shape_.type == waveshaperType(); }
 
     std::vector<double> inputs_;
     sub::app::SaturatorShape shape_;
@@ -117,7 +124,6 @@ private:
     double glow_ = 0.0, glowHeld_ = 0.0;
     double over_ = 0.0;
     MeterBallistics in_, out_;
-    QElapsedTimer clock_;
     bool settled_ = true;
 
     QString gesture_;  // the drag's merge key ("": none)
@@ -126,6 +132,7 @@ private:
     // distance, so Shift can come and go mid-drag without a jump. And how far it went each way.
     QPointF lastAt_;
     double dragDrive_ = 0.0, dragThreshold_ = -18.0, dragCurve_ = 50.0;
+    sub::app::SaturatorRange driveRange_, thresholdRange_, curveRange_;  // what they stay within (the engine's)
     double movedAcross_ = 0.0, movedUp_ = 0.0;
 };
 

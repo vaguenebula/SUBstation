@@ -3,7 +3,6 @@
 #include "audio/EngineBridge.h"
 #include "audio/SaturatorResponse.h"
 #include "devices/EditorPaint.h"
-#include "devices/SaturatorPaint.h"
 #include "input/GestureKey.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
@@ -169,9 +168,7 @@ void SaturatorColorGraph::feed(EqAnalyzer::Channel channel, const std::vector<fl
 }
 
 void SaturatorColorGraph::refreshDisplays() {
-    const double dt = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.001, 0.1) : 1.0 / 60;
-    if (!clock_.isValid())
-        clock_.start();
+    const double dt = tickSeconds();
     const bool wasInLive = inLive_, wasOutLive = outLive_;
     feed(EqAnalyzer::Input, readDisplay(QStringLiteral("input")), dt);
     feed(EqAnalyzer::Output, readDisplay(QStringLiteral("output")), dt);
@@ -236,6 +233,9 @@ void SaturatorColorGraph::mousePressEvent(QMouseEvent* event) {
     dragBase_ = base_;
     dragFreqX_ = xOf(freq_);
     dragDepth_ = depth_;
+    baseRange_ = sub::app::saturatorRange(kBase);
+    freqRange_ = sub::app::saturatorRange(kFreq);
+    depthRange_ = sub::app::saturatorRange(kDepth);
     if (handle == Handle::Base)
         touch(kBase);  // (the peak's first moves say which of its two: setParams shows the first one's automation)
     update();
@@ -254,14 +254,14 @@ void SaturatorColorGraph::mouseMoveEvent(QMouseEvent* event) {
     auto rounded = [](double v, double to) { return std::round(v / to) * to; };
     // The same parameters every move (one undo step), the one moved most first: its automation shows.
     if (handle_ == Handle::Base) {
-        // (the handle is on the shelf at 60 Hz, which moves a little less than Base: so it follows the mouse)
-        dragBase_ = std::clamp(dragBase_ + up / baseHandleSlope(dragBase_), -36.0, 36.0);
+        // (the handle is on the shelf at 60 Hz, which moves a little less than Amt Lo: so it follows the mouse)
+        dragBase_ = baseRange_.clamp(dragBase_ + up / baseHandleSlope(dragBase_));
         setParams({{kBase, rounded(dragBase_, 0.01)}, {kColor, 1.0}}, gesture_,
                   QStringLiteral("Change Saturator Color"));
     } else if (handle_ == Handle::Peak) {
-        dragFreqX_ = std::clamp(dragFreqX_ + across, xOf(30.0), xOf(18500.0));
-        dragDepth_ = std::clamp(dragDepth_ + up, -36.0, 36.0);
-        const double freq = rounded(std::clamp(frequencyAxis().valueAt(dragFreqX_), 30.0, 18500.0), 0.1);
+        dragFreqX_ = std::clamp(dragFreqX_ + across, xOf(freqRange_.low), xOf(freqRange_.high));
+        dragDepth_ = depthRange_.clamp(dragDepth_ + up);
+        const double freq = rounded(freqRange_.clamp(frequencyAxis().valueAt(dragFreqX_)), 0.1);
         const double depth = rounded(dragDepth_, 0.01);
         sub::app::OrderedMap<QString, double> values;
         if (movedUp_ > movedAcross_)
@@ -275,7 +275,8 @@ void SaturatorColorGraph::mouseMoveEvent(QMouseEvent* event) {
 }
 
 double SaturatorColorGraph::baseHandleSlope(double base) const {
-    const double low = std::max(-36.0, base - 0.5), high = std::min(36.0, base + 0.5);
+    const sub::app::SaturatorRange range = sub::app::saturatorRange(kBase);
+    const double low = std::max(range.low, base - 0.5), high = std::min(range.high, base + 0.5);
     const QList<double> at = {kBaseHandleHz};
     const double rate = sampleRate();
     const double rise = sub::app::saturatorColorDb(high, freq_, width_, depth_, rate, at).value(0) -
@@ -364,7 +365,7 @@ void SaturatorColorGraph::paint(SgPainter& p) {
 
     // The EQ: lit while Color is on, grey while off.
     const double on = onEased_.value;
-    const QColor color = colorBetween(Theme::kTextDisabled, Theme::kAccent, on);
+    const QColor color = mixColor(Theme::kTextDisabled, Theme::kAccent, on);
     if (curveDb_.size() == n && n >= 2) {
         std::vector<QPointF> curve(n);
         for (std::size_t i = 0; i < n; ++i)
@@ -378,7 +379,7 @@ void SaturatorColorGraph::paint(SgPainter& p) {
     }
     p.restore();
 
-    // The handles: Base's on the shelf, the peak's at its top.
+    // The handles: Amt Lo's on the shelf, the peak's at its top.
     const QColor ring = on > 0.5 ? Theme::kAccent : Theme::kTextDim;
     for (const Handle handle : {Handle::Base, Handle::Peak}) {
         const QPointF at = handle == Handle::Base ? baseHandle() : peakHandle();
@@ -392,13 +393,16 @@ void SaturatorColorGraph::paint(SgPainter& p) {
         p.drawEllipse(QRectF(at.x() - 4.5, at.y() - 4.5, 9, 9), ring, 1.5);
     }
 
-    // Which spectrum is which.
+    // Which spectrum is which, on a dark backing (the output's line runs along the bottom right).
     const QFont font = uiFont(7);
-    const QRectF corner(r.right() - 44, r.bottom() - 13, 41, 12);
-    p.drawText(corner, Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("Out"), withAlpha(Theme::kScopeLine, 200),
+    const QString in = QStringLiteral("In"), out = QStringLiteral("Out");
+    const double outWidth = SgPainter::textWidth(out, font);
+    const double legendWidth = SgPainter::textWidth(in, font) + kLegendGap + outWidth;
+    const QRectF corner(r.right() - 3 - legendWidth, r.bottom() - 13, legendWidth, 12);
+    p.fillRoundedRect(corner.adjusted(-2, 0, 2, 0), 2, 2, withAlpha(Theme::kMeterBg, 200));
+    p.drawText(corner, Qt::AlignRight | Qt::AlignVCenter, out, withAlpha(Theme::kScopeLine, 200), font);
+    p.drawText(corner.adjusted(0, 0, -outWidth - kLegendGap, 0), Qt::AlignRight | Qt::AlignVCenter, in, Theme::kTextDim,
                font);
-    p.drawText(corner.adjusted(0, 0, -SgPainter::textWidth(QStringLiteral("Out"), font) - 5, 0),
-               Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("In"), Theme::kTextDim, font);
 }
 
 }  // namespace sub::ui

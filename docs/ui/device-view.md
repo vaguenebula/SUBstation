@@ -31,7 +31,7 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 | Limiter: [LimiterEditor.qml](../../ui/qml/devices/editors/LimiterEditor.qml), [LimiterGraph](../../ui/src/devices/LimiterGraph.h), the application layer's [LimiterResponse.h](../../app/src/audio/LimiterResponse.h) | |
 | Multiband Dynamics: [MultibandEditor.qml](../../ui/qml/devices/editors/MultibandEditor.qml), [MultibandGraph](../../ui/src/devices/MultibandGraph.h), the application layer's [MultibandResponse.h](../../app/src/audio/MultibandResponse.h) | |
 | Spectral Compressor: [SpectralEditor.qml](../../ui/qml/devices/editors/SpectralEditor.qml), [SpectralGraph](../../ui/src/devices/SpectralGraph.h), the application layer's [SpectralResponse.h](../../app/src/audio/SpectralResponse.h) | |
-| Saturator: [SaturatorEditor.qml](../../ui/qml/devices/editors/SaturatorEditor.qml), [SaturatorCurve](../../ui/src/devices/SaturatorCurve.h), [SaturatorColorGraph](../../ui/src/devices/SaturatorColorGraph.h) (with [SaturatorPaint.h](../../ui/src/devices/SaturatorPaint.h), what they share), the application layer's [SaturatorResponse.h](../../app/src/audio/SaturatorResponse.h) | |
+| Saturator: [SaturatorEditor.qml](../../ui/qml/devices/editors/SaturatorEditor.qml), [SaturatorCurve](../../ui/src/devices/SaturatorCurve.h), [SaturatorColorGraph](../../ui/src/devices/SaturatorColorGraph.h), the application layer's [SaturatorResponse.h](../../app/src/audio/SaturatorResponse.h) | |
 | Amp: [AmpEditor.qml](../../ui/qml/devices/editors/AmpEditor.qml), [AmpPanel](../../ui/src/devices/AmpPanel.h), [AmpDriveGraph](../../ui/src/devices/AmpDriveGraph.h), [AmpToneGraph](../../ui/src/devices/AmpToneGraph.h), [AmpDisplays.h](../../ui/src/devices/AmpDisplays.h) (reading its displays), the application layer's [AmpResponse.h](../../app/src/audio/AmpResponse.h) | |
 | Erosion: [ErosionEditor.qml](../../ui/qml/devices/editors/ErosionEditor.qml), [ErosionGraph](../../ui/src/devices/ErosionGraph.h), [ErosionScope](../../ui/src/devices/ErosionScope.h), the application layer's [ErosionResponse.h](../../app/src/audio/ErosionResponse.h) | |
 | Delay: [DelayEditor.qml](../../ui/qml/devices/editors/DelayEditor.qml), [FilterGraph](../../ui/src/devices/FilterGraph.h) | |
@@ -328,7 +328,7 @@ readonly property var editors: ({
 - `required property string trackId` and `deviceId`.
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
   `implicitWidth` is the body's width (Compressor 658, Gate 566, or 833 with its sidechain section, Limiter 608,
-  Multiband Dynamics 816, Spectral Compressor 936, Saturator 756, Amp 642, Erosion 532, Delay 532, Chorus-Ensemble
+  Multiband Dynamics 816, Spectral Compressor 936, Saturator 771, Amp 642, Erosion 532, Delay 532, Chorus-Ensemble
   534, Phaser-Flanger 732, or 906 with More open, Reverb 890, Disperser 544, EQ 580, or 756 with its band controls,
   Sidechain 720, Sampler 760); it may change. It gets the body's whole height and grows its graphs into it (6 px
   from the top and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
@@ -594,18 +594,25 @@ The editors:
     by `tickSeconds()`, and the item repaints only while something moves. The display points per frame and the pivot
     come from the application layer (`kSpectralDisplayPoints`, `kSpectralPivotHz`, checked against the engine's).
 - **Saturator** ([SaturatorEditor.qml](../../ui/qml/devices/editors/SaturatorEditor.qml)): no pages; laid out as Live
-  12.1's Saturator with its expanded view open beside the front panel, in columns 8 px apart, a 1 px line
-  (`Theme.border`) after the front panel and after Color. The front panel: Drive (a 40 px knob) over the Type list (a
-  `ParamChoice`), DC and HQ at the bottom; the curve ([SaturatorCurve](../../ui/src/devices/SaturatorCurve.h), 160 px)
-  over the Post Clip list, where Live puts it; Output over Dry/Wet. Then Color: the Color switch in a row of its own,
-  its graph ([SaturatorColorGraph](../../ui/src/devices/SaturatorColorGraph.h), 220 px) under it (not on it: there it
-  would hide a handle dragged to the top), and under that Base, Freq, Width and Depth (24 px knobs, Base and Depth
-  bipolar), dimmed to 55 % while Color is off (still editable, as Live's greyed knobs are). Last the curve's own
-  controls under a title (Waveshaper or Bass Shaper, in the accent colour while that curve is chosen): the Waveshaper's
-  six knobs in two rows (dimmed unless it is chosen), or the Bass Shaper's Threshold, the two cross-fading (150 ms) as
-  the Type goes to or from Bass Shaper. The bottom rows (DC and HQ, Post Clip, Dry/Wet, Color's knobs, the Waveshaper's
-  second row) all end 6 px above the body's bottom, the graphs growing into the height there is; `implicitHeight` is the
-  tallest column's (Output over Dry/Wet: 8 px less than the body on any font).
+  12.1's Saturator with its expanded view open beside the front panel, in columns 8 px apart, each placed after the
+  last, an `EditorDivider` after the front panel and after Color; `implicitWidth` ends 8 px after the last. The front
+  panel: Drive (a 40 px knob, bipolar: ±36 dB) over the Type list (a `ParamChoice` as wide as its longest name with its
+  arrow, measured with a `FontMetrics` on its font: "Medium Curve" makes it about 99 px, the front panel with it, 84 at
+  least), DC and HQ sharing its width at the bottom; the curve
+  ([SaturatorCurve](../../ui/src/devices/SaturatorCurve.h), 160 px) over the Post Clip list, where Live puts it; Output
+  over Dry/Wet. Then Color: the Color switch in a row of its own, its graph
+  ([SaturatorColorGraph](../../ui/src/devices/SaturatorColorGraph.h), 220 px) under it (not on it: there it would hide
+  a handle dragged to the top), and under that Amt Lo, Freq, Width and Amt Hi (Live 12.1's names for the parameters
+  `base`, `freq`, `width` and `depth`; small 24 px knobs under the graph, Amt Lo and Amt Hi bipolar), dimmed to 55 %
+  while Color is off (still editable, as Live's greyed knobs are). Last the curve's own controls under a title
+  (Waveshaper or Bass Shaper, in the accent colour while that curve is chosen): the Waveshaper's six knobs in two rows
+  of 24 px (three rows with the title: 34 px ones wouldn't fit the body), dimmed unless it is chosen, or the Bass
+  Shaper's Threshold, the two cross-fading (150 ms) as the Type goes to or from Bass Shaper. Which Type entries are
+  the Bass Shaper and the Waveshaper, and Hi-Quality's latency in its tooltip, are the engine's, through the curve's
+  constant properties (`bassShaperType`, `waveshaperType`, `hqLatency`, from `SaturatorResponse`). The bottom rows (DC
+  and HQ, Post Clip, Dry/Wet, Color's knobs, the Waveshaper's second row) all end 6 px above the body's bottom, the
+  graphs growing into the height there is; `implicitHeight` is the tallest column's (Output over Dry/Wet: 8 px less
+  than the body on any font).
   - The curve: input across (−1..1, ±0 dBFS before Drive), output up over ±`kOutputRange` (1.15, so full scale and a
     clip's flat top show inside the plot), two points a pixel, from the engine's own functions
     (`sub::app::saturatorCurve`, the application layer's wrapper of `saturator::transfer`: Drive, the curve and Post
@@ -616,8 +623,9 @@ The editors:
     value is in the bottom right corner (the quadrant an odd curve takes only when it folds: Sinoid Fold, the
     Waveshaper's ripples), HQ over it while on, each on a dark backing so that a grid line, Post Clip's ceiling or a
     fold behind doesn't run through it.
-  - Its animation, in `refreshDisplays()`: the display `in_peak` (the input's peak every 128 samples, before Drive) puts
-    two dots on the curve at ± its level, rising at once and falling back (τ 150 ms), fading out in silence (τ 120 ms).
+  - Its animation, in `refreshDisplays()`, moved on by `tickSeconds()`: the display `in_peak` (the input's peak every
+    128 samples, before Drive) puts two dots on the curve at ± its level, rising at once and falling back (τ 150 ms),
+    fading out in silence (τ 120 ms).
     The stretch of the curve between them is lit (`drawGlowPolyline`), amber turning red as the curve bends away from
     its small-signal line there (1 − |f(x)| / (f′(0)·x), eased τ 60 ms; `saturatorSlope`), the dots' halos growing with
     it; beyond them an afterglow runs out to the highest the dots reached in the last 0.3 s (then falling, τ 250 ms),
@@ -635,8 +643,9 @@ The editors:
     repaint.
   - Drags: up and down for Drive (0.25 dB a pixel), across for the Bass Shaper's Threshold (0.25 dB) or the
     Waveshaper's Curve (0.5 %), Shift five times as finely, pressed or let go mid-drag without a jump (each move adds
-    its own distance); one undo step per drag, which shows the automation of the parameter it has moved most (Drive,
-    or the Threshold or Curve for a drag mostly across). Double-click: Drive back to 0 dB.
+    its own distance), within the parameters' ranges (`saturatorRange()`, the engine's); one undo step per drag, which
+    shows the automation of the parameter it has moved most (Drive, or the Threshold or Curve for a drag mostly
+    across). Double-click: Drive back to 0 dB.
   - Color's graph: Color's emphasis (the EQ before the curve; the inverse after it is its mirror image) on a
     20 Hz..20 kHz log axis, ±36 dB, from the engine's own design (`sub::app::saturatorColorDb`, the wrapper of
     `saturator::colorDesign` and `colorResponseDb`) at its sample rate (again when the audio device changes). It eases
@@ -644,12 +653,13 @@ The editors:
     colour while Color is on, grey while off (fading, τ 80 ms). Behind it the spectra of the displays `input`
     (filled) and `output` (a line) through `analysis::EqAnalyzer` (as the EQ's: rising 0.55 and falling 0.09 of the
     way per refresh), smoothed a little across columns; once a display's window is all silence and its spectrum is
-    down, it isn't analysed. Two handles: Base on the shelf at 60 Hz (up and down, following the mouse: Base moves by
-    the distance over the shelf's slope there), the peak at Freq and Depth (across and up and down, from where it was
-    pressed; Depth's automation shows for a drag mostly up and down, Freq's else); a drag switches Color on in the
-    same undo step, double-clicking a handle sets its gain to 0 dB, and a hovered or dragged handle fills with a glow
-    ring and the pointing-hand cursor (set again on release, from where the mouse is). A press away from the handles
-    goes on to the frame.
+    down, it isn't analysed. "In" and "Out" name them at the bottom right, on a dark backing (the output's line runs
+    there). Two handles: Amt Lo's on the shelf at 60 Hz (up and down, following the mouse: Amt Lo moves by the
+    distance over the shelf's slope there), the peak's at Freq and Amt Hi (across and up and down, from where it was
+    pressed; Amt Hi's automation shows for a drag mostly up and down, Freq's else), within the parameters' ranges; a
+    drag switches Color on in the same undo step, double-clicking a handle sets its gain to 0 dB, and a hovered or
+    dragged handle fills with a glow ring and the pointing-hand cursor (set again on release, from where the mouse
+    is). A press away from the handles goes on to the frame.
 - **Amp** ([AmpEditor.qml](../../ui/qml/devices/editors/AmpEditor.qml)): no pages; laid out as Live's Amp, flat on the
   body: the seven models as a row of `ParamButton`s (`role: "monitor"`, 50 × 18, from the parameter's labels) over Gain,
   Bass, Middle, Treble, Presence and Volume (`EditorKnob`s in 58 px cells 4 px apart, reading "5.0": the `dial` unit),
@@ -1077,7 +1087,7 @@ The editors:
 | [test_ui_device_editors_limiter.cpp](../../tests/app/test_ui_device_editors_limiter.cpp) | The Limiter's editor: fitting the view, every control bound to its parameter and undoable (Gain bipolar; Release dimmed while Auto is on and still settable; the boxes and lists wide enough for their widest text; the lookahead reaching the engine's latency; Maximize swapping Gain for Output and the line for the Threshold, a press mid-crossfade turning the knob coming in), the line dragged (one undo step, Shift finely, held to the parameter's range, double-click for the default, presses elsewhere ignored), the hover following the line as it moves, opening as the device is (nothing animating in), the displays reaching the graph (levels, gain reduction, Soft Clip's share in both figures; with Maximize, the history's output in the line's domain and the Out meter in dBFS), its animation and its rest, the maths shared with the engine |
 | [test_ui_device_editors_multiband.cpp](../../tests/app/test_ui_device_editors_multiband.cpp) | Multiband Dynamics' editor: it fits the body (at its least height too), every box as wide as its text and automation dot need, every control bound and undoable (the engine has what they set: the activators and the split switches, each where Live has it), ratios and times typed and printed, the T/B/A pages and their captions (the page outliving the editor being made again); the graph's threshold and ratio drags (pushing, Ctrl, Alt, Shift; Ctrl+Alt left to the chain), double-clicks and wheel (a high-resolution wheel's steps adding up; a run staying on a threshold that slides from under the mouse; Shift+wheel left to the chain), one undo step each; the displays reaching the graph as the engine renders (a whole 2048-sample buffer's read), its meters, eased gain, glows (not after the audio stops), target marker, a cut under the floor drawn only as far as the level before it, the bars and the figure agreeing tick by tick while the meters let go (a lift, a cut, a cut under the floor), lanes and highlights, a switched-off lane's "→ Mid" making way for a drag's bubble, the hover readout clear of the change's figure, a bypassed band's lane (its level only), and its stopping once still; the sidechain's controls (dimmed but settable without a sidechain, whole readouts, the menu asked for under the button, Listen); the `ratio` unit and the typed texts (with no window, on any platform) |
 | [test_ui_device_editors_spectral.cpp](../../tests/app/test_ui_device_editors_spectral.cpp) | The Spectral Compressor's editor: fitting the body, every name and value whole, its knobs and Delta bound and undoable, the lines the engine's, lines leaving the plot drawn where they are with their handles on them (and the mouse finding them only there), the level figures a line crosses fading, the threshold, tilt, Below and Focus dragged (one undo step, Shift, Shift pressed mid-drag, double-click), the Focus boxes (wide enough for their widest value clear of the automation dot), Below dimmed but settable while Upward is 1:1, the Focus dim the engine's weights with the level figures over it, the displays reaching the graph and sinking back without a bounce, the held cut outliving the curtain, nothing drawn while still, lifts, the glow only while cutting, Delta's spectrum and tint, the key line only where the key is, the Sidechain badge (its menu under it) |
-| [test_ui_device_editors_saturator.cpp](../../tests/app/test_ui_device_editors_saturator.cpp) | The Saturator's editor: fitting the body (each control in its own column, with either shaper section showing; Color's switch off its graph), every control bound to its parameter, undoable and reaching the engine (each knob, the lists, the switches; Hi-Quality's latency), the Color and Waveshaper knobs dimmed and lit, the Waveshaper and Bass Shaper sections swapping; the curve and Color's EQ being the engine's own `saturator::transfer` and `colorResponseDb` (every type, both Post Clips, every shaper control; exactly, after the morph and the ease); an editor opening on the device as it is, without a morph; the graphs' drags (Shift mid-drag, double-clicks, presses off the handles, Base dragged near the top, the cursor after a drag) as single undo steps, showing the automation of what they move most; the displays reaching the curve (the dots, the saturation, the afterglow, the over-full-scale flash) and the spectra, holding over a tick without values, and both graphs settling without repaints in silence |
+| [test_ui_device_editors_saturator.cpp](../../tests/app/test_ui_device_editors_saturator.cpp) | The Saturator's editor: fitting the body (its columns 8 px apart in order, each control in its own column, with either shaper section showing; Color's switch off its graph; the lists as wide as their longest names with the arrow; no caption or readout cut short at either end of a knob's range), every control bound to its parameter, undoable and reaching the engine (each knob, the lists, the switches; Hi-Quality's latency), the knobs bipolar whose range is symmetric about 0, Color's under Live 12.1's names, the Color and Waveshaper knobs dimmed and lit, the Waveshaper and Bass Shaper sections swapping; the curve and Color's EQ being the engine's own `saturator::transfer` and `colorResponseDb` (every type, both Post Clips, every shaper control; exactly, after the morph and the ease); an editor opening on the device as it is, without a morph; the graphs' drags (Shift mid-drag, double-clicks, presses off the handles, Amt Lo dragged near the top, the cursor after a drag) as single undo steps, showing the automation of what they move most; the displays reaching the curve (the dots, the saturation, the afterglow, the over-full-scale flash) and the spectra, holding over a tick without values, and both graphs settling without repaints in silence |
 | [test_ui_device_editors_amp.cpp](../../tests/app/test_ui_device_editors_amp.cpp) | The Amp's editor: fitting the body (nothing past the margins or overlapping, the buttons' labels unclipped), every control bound to its parameter, undoable and reaching the engine; what it takes from the device through the application layer (the models' names, the displays' rate and floor) being the device's; the model buttons and the underline sliding and turning to the model's colour; an editor opened on a model showing it at once; the tone curve and the transfer being the engine's maths (exactly, after a new model's morph); the tone handles as controls: drags (fine with Shift, Shift mid-drag, double-clicks, presses off them) as single undo steps, the wheel, the automation dot, the parameter's menu on the right button, a double-click off them the frame's, their hover; the drive curve made again only for what it is made from (not as the playhead moves under automation), its xs exact opposites; the displays reaching the tubes, the dots, the lamp and the meter, holding through ticks that read nothing, cooling after, a backlog counting for nothing, the sag lowering the drive curve and dimming the lamp, and the face settling without repaints |
 | [test_ui_device_editors_erosion.cpp](../../tests/app/test_ui_device_editors_erosion.cpp) | The Erosion's editor: fitting the body, every knob bound and undoable, the band being the engine's filter and the dot's travel clear of the strip, the display's drags (Shift, Alt) and wheel (Ctrl finely; in a device chain, whose Shift+wheel scrolls it) as single undo steps, the displays reaching the graph and the scope (not a backlog's worth after the sound stopped, and a silent graph no longer repainting), the engine having what it set |
 | [test_ui_device_editors_chorus.cpp](../../tests/app/test_ui_device_editors_chorus.cpp) | The Chorus-Ensemble's editor: fitting the body (margins, nothing overlapping or cut short; the high-pass box wide enough for its widest values and the automation dot, Time for each choice), every control bound to its parameter and undoable (each knob dragged), the modes (their sets cross-fading one after the other; Feedback and Ø dimmed in Vibrato and still settable), Taps, Time, the high-pass and Ø, the display's drags (Shift, mid-drag too) as single undo steps, each setting only the parameter its direction picked (the other's automation not overridden), the displays reaching the graph (the voices where the engine's delays are, the glow from the sound now and not the display's history, freezing, and resting without repaints with the traces held), layouts fading without pops, the engine having what it set; no text spilling out of its box; no QML warnings |

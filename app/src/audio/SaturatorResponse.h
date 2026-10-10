@@ -1,9 +1,14 @@
 #pragma once
 // The Saturator device's shaping and Color, as its editor draws them: worked
 // out by the engine's own functions (engine/src/builtin/SaturatorDesign.h), so
-// the curve drawn is the shaping that plays and the EQ drawn is Color's.
+// the curve drawn is the shaping that plays and the EQ drawn is Color's. And
+// what else the editor needs to know of the engine: which Type entries have
+// controls of their own, Hi-Quality's latency, the parameters' ranges.
 
 #include <QList>
+#include <QString>
+
+#include <algorithm>
 
 namespace sub::app {
 
@@ -32,5 +37,19 @@ QList<double> saturatorColorDb(double baseDb, double freq, double width, double 
 // The Bass Shaper's threshold as an input level (linear, before Drive): where its curve leaves the
 // straight line.
 double saturatorThresholdInput(double thresholdDb, double driveDb);
+
+// The Type list's entries whose curves have controls of their own (the engine's saturator::Type):
+// the Bass Shaper's Threshold, the Waveshaper's six.
+int saturatorBassShaperType();
+int saturatorWaveshaperType();
+// Hi-Quality's latency, in samples (its 4x filters').
+int saturatorHqLatency();
+
+// A parameter's range in its units, as the engine declares it: what the graphs' drags stay within.
+struct SaturatorRange {
+    double low = 0.0, high = 1.0;
+    double clamp(double value) const { return std::clamp(value, low, high); }
+};
+SaturatorRange saturatorRange(const QString& paramId);
 
 }  // namespace sub::app

@@ -4,10 +4,11 @@
 // curve and Color's EQ being the engine's own maths, the graphs' drags one undo
 // step each (showing the automation of what they move most), and the displays
 // reaching the graphs (rendering offline), holding over the gaps between
-// blocks and letting them settle. With SUBSTATION_UI_SCREENSHOTS set to a
-// folder, the editor is saved there as PNGs, with signal flowing, in three of
-// its modes.
+// blocks and letting them settle; it fits, every list and readout whole. With
+// SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there as PNGs,
+// with signal flowing, in four of its modes.
 
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QQuickItem>
 #include <QSignalSpy>
@@ -135,7 +136,6 @@ private Q_SLOTS:
         QVERIFY2(s.view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(s.view->implicitHeight()).arg(bodyHeight())));
         QVERIFY(bodyHeight() - s.view->implicitHeight() >= 6);
-        QCOMPARE(s.view->implicitWidth(), 756.0);
         QCOMPARE(s.view->height(), double(bodyHeight()));
         // The graphs grow into the body: the curve's column and Color's reach its bottom margin.
         QCOMPARE(s.curve->mapToItem(s.view, QPointF(0, 0)).y(), 6.0);
@@ -155,9 +155,18 @@ private Q_SLOTS:
         QCOMPARE(knobOf(s.view, QStringLiteral("mix"))->value(), 100.0);
         QCOMPARE(knobOf(s.view, QStringLiteral("ws_curve"))->value(), 50.0);
         QVERIFY(knobOf(s.view, QStringLiteral("freq"))->logScale());
-        QVERIFY(knobOf(s.view, QStringLiteral("base"))->bipolar());
-        QVERIFY(knobOf(s.view, QStringLiteral("depth"))->bipolar());
-        QVERIFY(!knobOf(s.view, QStringLiteral("drive"))->bipolar());
+        // Bipolar: the knobs whose range is symmetric about 0 (Drive, Amt Lo and Amt Hi, ±36 dB); no others.
+        for (const QString& id : kKnobs) {
+            const bool symmetric = id == u"drive" || id == u"base" || id == u"depth";
+            QVERIFY2(knobOf(s.view, id)->bipolar() == symmetric, qPrintable(id));
+        }
+        // Color's knobs under Live 12.1's names (their ids those of before it).
+        const std::map<QString, QString> captions = {{QStringLiteral("base"), QStringLiteral("Amt Lo")},
+                                                     {QStringLiteral("freq"), QStringLiteral("Freq")},
+                                                     {QStringLiteral("width"), QStringLiteral("Width")},
+                                                     {QStringLiteral("depth"), QStringLiteral("Amt Hi")}};
+        for (const auto& [id, caption] : captions)
+            QCOMPARE(find(s.view, id)->property("title").toString(), caption);
 
         // The lists and switches.
         for (const char* id : {"type", "clip", "color", "dc", "hq"}) {
@@ -183,43 +192,85 @@ private Q_SLOTS:
         QCOMPARE(find(s.view, QStringLiteral("shaperTitle"))->property("text").toString(),
                  QStringLiteral("Waveshaper"));
 
-        // Nothing overlaps: each control stays in its column (inside the body's margins), the shown
-        // shaper section with the Waveshaper's knobs, then with the Bass Shaper's Threshold.
-        const double top = 6, bottom = s.view->height() - 6;
-        const std::map<QString, QRectF> columns = {
-            {QStringLiteral("front"), QRectF(QPointF(8, top), QPointF(92, bottom))},
-            {QStringLiteral("curve"), QRectF(QPointF(100, top), QPointF(260, bottom))},
-            {QStringLiteral("levels"), QRectF(QPointF(268, top), QPointF(330, bottom))},
-            {QStringLiteral("color"), QRectF(QPointF(347, top), QPointF(567, bottom))},
-            {QStringLiteral("shaper"), QRectF(QPointF(584, top), QPointF(748, bottom))},
+        auto rectOf = [&](const QString& id) {
+            QQuickItem* item = find(s.view, id);
+            return item->mapRectToItem(s.view, QRectF(0, 0, item->width(), item->height()));
         };
+        // The columns, 8 px apart (a 1 px line and 8 px more before Color and before the shaper's
+        // controls), inside the body's margins; the editor as wide as they are.
+        const std::vector<std::pair<QString, double>> order = {{QStringLiteral("front"), 8.0},
+                                                               {QStringLiteral("curveColumn"), 8.0},
+                                                               {QStringLiteral("levels"), 8.0},
+                                                               {QStringLiteral("colorSection"), 17.0},
+                                                               {QStringLiteral("shaperSection"), 17.0}};
+        std::map<QString, QRectF> columns;
+        double right = 0.0;
+        for (const auto& [id, gap] : order) {
+            const QRectF r = rectOf(id);
+            QVERIFY2(r.left() == right + gap, qPrintable(id + QStringLiteral(" at ") + QString::number(r.left())));
+            QCOMPARE(r.top(), 6.0);
+            QCOMPARE(r.bottom(), s.view->height() - 6);
+            columns[id] = r;
+            right = r.right();
+        }
+        QCOMPARE(s.view->implicitWidth(), right + 8);
+        QCOMPARE(columns.at(QStringLiteral("curveColumn")).width(), double(SaturatorCurve::kWidth));
+        QCOMPARE(columns.at(QStringLiteral("colorSection")).width(), double(SaturatorColorGraph::kWidth));
+
+        // The lists as wide as their longest names with the arrow, in the font they are drawn in (the
+        // Type list, "Medium Curve", widening the front panel past its 84 px).
+        for (const char* id : {"type", "clip"}) {
+            QQuickItem* face = buttonOf(find(s.view, QString::fromLatin1(id)));
+            const QFontMetricsF metrics(face->property("font").value<QFont>());
+            const double room =
+                face->width() - face->property("leftPadding").toDouble() - face->property("rightPadding").toDouble();
+            for (const QString& name : find(s.view, QString::fromLatin1(id))->property("names").toStringList()) {
+                const double needs = metrics.horizontalAdvance(name);
+                QVERIFY2(needs <= room, qPrintable(QStringLiteral("%1: %2 px in %3").arg(name).arg(needs).arg(room)));
+            }
+        }
+
+        // No caption or readout is cut short, each knob at either end of its range.
+        for (const QString& id : kKnobs) {
+            const double before = param(s.track, s.device, id);
+            for (const bool high : {false, true}) {
+                KnobItem* knob = knobOf(s.view, id);
+                editor()->setDeviceParam(s.track, s.device, id, high ? knob->to() : knob->from());
+                QCoreApplication::processEvents();
+                for (QQuickItem* text : find(s.view, id)->childItems()) {
+                    if (text->inherits("QQuickText"))
+                        QVERIFY2(!text->property("truncated").toBool(),
+                                 qPrintable(id + QStringLiteral(": ") + text->property("text").toString()));
+                }
+            }
+            editor()->setDeviceParam(s.track, s.device, id, before);
+        }
+
+        // Nothing overlaps: each control stays in its column, the shown shaper section with the
+        // Waveshaper's knobs, then with the Bass Shaper's Threshold.
         const std::map<QString, QString> columnOf = {
             {QStringLiteral("drive"), QStringLiteral("front")},
             {QStringLiteral("type"), QStringLiteral("front")},
             {QStringLiteral("dc"), QStringLiteral("front")},
             {QStringLiteral("hq"), QStringLiteral("front")},
-            {QStringLiteral("saturatorCurve"), QStringLiteral("curve")},
-            {QStringLiteral("clip"), QStringLiteral("curve")},
+            {QStringLiteral("saturatorCurve"), QStringLiteral("curveColumn")},
+            {QStringLiteral("clip"), QStringLiteral("curveColumn")},
             {QStringLiteral("output"), QStringLiteral("levels")},
             {QStringLiteral("mix"), QStringLiteral("levels")},
-            {QStringLiteral("color"), QStringLiteral("color")},
-            {QStringLiteral("saturatorColor"), QStringLiteral("color")},
-            {QStringLiteral("base"), QStringLiteral("color")},
-            {QStringLiteral("freq"), QStringLiteral("color")},
-            {QStringLiteral("width"), QStringLiteral("color")},
-            {QStringLiteral("depth"), QStringLiteral("color")},
-            {QStringLiteral("shaperTitle"), QStringLiteral("shaper")},
-            {QStringLiteral("threshold"), QStringLiteral("shaper")},
-            {QStringLiteral("ws_drive"), QStringLiteral("shaper")},
-            {QStringLiteral("ws_lin"), QStringLiteral("shaper")},
-            {QStringLiteral("ws_curve"), QStringLiteral("shaper")},
-            {QStringLiteral("ws_damp"), QStringLiteral("shaper")},
-            {QStringLiteral("ws_depth"), QStringLiteral("shaper")},
-            {QStringLiteral("ws_period"), QStringLiteral("shaper")},
-        };
-        auto rectOf = [&](const QString& id) {
-            QQuickItem* item = find(s.view, id);
-            return item->mapRectToItem(s.view, QRectF(0, 0, item->width(), item->height()));
+            {QStringLiteral("color"), QStringLiteral("colorSection")},
+            {QStringLiteral("saturatorColor"), QStringLiteral("colorSection")},
+            {QStringLiteral("base"), QStringLiteral("colorSection")},
+            {QStringLiteral("freq"), QStringLiteral("colorSection")},
+            {QStringLiteral("width"), QStringLiteral("colorSection")},
+            {QStringLiteral("depth"), QStringLiteral("colorSection")},
+            {QStringLiteral("shaperTitle"), QStringLiteral("shaperSection")},
+            {QStringLiteral("threshold"), QStringLiteral("shaperSection")},
+            {QStringLiteral("ws_drive"), QStringLiteral("shaperSection")},
+            {QStringLiteral("ws_lin"), QStringLiteral("shaperSection")},
+            {QStringLiteral("ws_curve"), QStringLiteral("shaperSection")},
+            {QStringLiteral("ws_damp"), QStringLiteral("shaperSection")},
+            {QStringLiteral("ws_depth"), QStringLiteral("shaperSection")},
+            {QStringLiteral("ws_period"), QStringLiteral("shaperSection")},
         };
         auto inColumns = [&](int shown) {
             int checked = 0;
@@ -244,7 +295,7 @@ private Q_SLOTS:
         // (the hint under the Threshold too, its text within its width)
         QQuickItem* hint = find(s.view, QStringLiteral("bassHint"));
         QVERIFY(hint && hint->isVisible());
-        QVERIFY(columns.at(QStringLiteral("shaper")).contains(rectOf(QStringLiteral("bassHint"))));
+        QVERIFY(columns.at(QStringLiteral("shaperSection")).contains(rectOf(QStringLiteral("bassHint"))));
         QVERIFY2(hint->property("contentWidth").toDouble() <= hint->width(),
                  qPrintable(QString::number(hint->property("contentWidth").toDouble())));
     }
@@ -431,7 +482,7 @@ private Q_SLOTS:
         const sub::saturator::ColorDesign design = sub::saturator::colorDesign(12.0, 2500.0, 30.0, -6.0, rate);
         for (size_t i = 0; i < columns.size(); ++i)
             QCOMPARE(s.color->curveDb()[i], sub::saturator::colorResponseDb(design, columns[i], rate));
-        // Its handles sit on it: Base on the shelf (+12 dB), the peak at its Depth.
+        // Its handles sit on it: Amt Lo's on the shelf (+12 dB), the peak's at its Amt Hi.
         QVERIFY(std::abs(s.color->peakHandle().x() - s.color->xOf(2500.0)) < 1e-9);
         QVERIFY(std::abs(s.color->peakHandle().y() - s.color->yOfDb(-6.0)) < 0.2);
         QVERIFY(std::abs(s.color->baseHandle().y() - s.color->yOfDb(12.0)) < 1.0);
@@ -537,7 +588,7 @@ private Q_SLOTS:
         QCOMPARE(value("drive"), 0.0);
         QCOMPARE(undo()->index(), steps + 1);
 
-        // Color: the peak's handle across for Freq, up for Depth, switching Color on, all one step.
+        // Color: the peak's handle across for Freq, up for Amt Hi, switching Color on, all one step.
         SaturatorColorGraph* color = s.color;
         QTRY_VERIFY_WITH_TIMEOUT(color->settled(), 1000);
         QVERIFY(std::abs(color->peakHandle().x() - color->xOf(1000.0)) < 1e-9);
@@ -567,7 +618,7 @@ private Q_SLOTS:
         undo()->redo();
         QTRY_VERIFY_WITH_TIMEOUT(color->settled(), 1000);
 
-        // Base's handle, up; a double-click on a handle sets its gain back to 0 dB, one step.
+        // Amt Lo's handle, up; a double-click on a handle sets its gain back to 0 dB, one step.
         steps = undo()->index();
         const QPoint base = scenePoint(color, color->baseHandle());
         QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, base);
@@ -591,7 +642,7 @@ private Q_SLOTS:
         QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, away - QPoint(0, 20));
         QCOMPARE(undo()->index(), steps);
 
-        // The peak dragged straight up shows Depth's automation (what it moves), not Frequency's. On past
+        // The peak dragged straight up shows Amt Hi's automation (what it moves), not Freq's. On past
         // the top: the handle stops at +36 dB while the mouse goes on, and is released away from it.
         touched.clear();
         const QPoint peak = scenePoint(color, color->peakHandle());
@@ -609,8 +660,8 @@ private Q_SLOTS:
         QTest::mouseMove(window_, scenePoint(color, QPointF(color->xOf(300.0), color->plot().bottom() - 6)));
         QCOMPARE(color->cursor().shape(), Qt::ArrowCursor);
 
-        // Base far up puts its handle near the graph's top, where nothing covers it: it drags, and
-        // follows the mouse (it is on the shelf's slope, which moves a little less than Base itself).
+        // Amt Lo far up puts its handle near the graph's top, where nothing covers it: it drags, and
+        // follows the mouse (it is on the shelf's slope, which moves a little less than Amt Lo itself).
         editor()->setDeviceParam(s.track, s.device, QStringLiteral("base"), 30.0);
         QTRY_VERIFY_WITH_TIMEOUT(color->settled(), 1000);
         const QPointF high = color->baseHandle();
@@ -740,6 +791,18 @@ private Q_SLOTS:
             play(0.0, 0.15, 4, 20);
             QTest::qWait(120);  // (the dots fall back a little: the afterglow shows beyond them)
             save(grab(), QStringLiteral("saturator-bass.png"));
+        }
+        clearHost();
+        // Medium Curve (the Type list's longest name) into Hard Clip, Color keeping the lows clean.
+        {
+            const Shown s = showSaturator(hits(110.0, kSampleRate, 0.8, 0.5));
+            QVERIFY(s.curve);
+            for (const auto& [id, v] : {std::pair{"type", 3.0}, {"drive", 12.0}, {"clip", 2.0}, {"color", 1.0},
+                                        {"base", -12.0}, {"depth", 6.0}, {"freq", 3000.0}})
+                editor()->setDeviceParam(s.track, s.device, QString::fromLatin1(id), v);
+            QTRY_VERIFY_WITH_TIMEOUT(!s.curve->morphing(), 1000);
+            play(0.0, 0.3, 8, 20);
+            save(grab(), QStringLiteral("saturator-medium.png"));
         }
     }
 };

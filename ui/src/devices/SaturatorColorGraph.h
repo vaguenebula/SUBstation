@@ -6,17 +6,17 @@
 // the EQ's analyzer (analysis::EqAnalyzer). The curve is worked out by the
 // engine's own design (sub::app::saturatorColorDb) and eases to new settings; it
 // glows in the accent colour while Color is on and is grey while it is off. Two
-// handles: Base (the low shelf, on its plateau at 60 Hz), up and down; the peak,
-// across for its Frequency and up and down for its Depth. Dragging either
-// switches Color on, all in one undo step; double-clicking one sets its gain to
-// 0 dB. Everything moves in refreshDisplays(); when nothing moves it stops
+// handles: Amt Lo's (the low shelf, on its plateau at 60 Hz), up and down; the
+// peak's, across for Freq and up and down for Amt Hi. Dragging either switches
+// Color on, all in one undo step; double-clicking one sets its gain to 0 dB.
+// Everything moves in refreshDisplays(); when nothing moves it stops
 // repainting.
 
 #include "analysis/Spectrum.h"
+#include "audio/SaturatorResponse.h"
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
-#include <QElapsedTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include <vector>
@@ -38,6 +38,7 @@ public:
     static constexpr double kEaseSeconds = 0.04;
     static constexpr double kFine = 0.2;         // Shift
     static constexpr double kHoldSeconds = 0.1;  // longer without values than a block's gap: silence
+    static constexpr double kLegendGap = 5.0;    // px between the legend's "In" and "Out"
 
     enum class Handle { None, Base, Peak };
 
@@ -48,9 +49,8 @@ public:
     const std::vector<double>& curveDb() const { return curveDb_; }
     bool live() const;                         // a spectrum shows
     bool settled() const { return settled_; }  // nothing moves: no repainting
-    // The spectra as drawn (dB per column; empty before any).
+    // The input's spectrum as drawn (dB per column; empty before any).
     const std::vector<double>& inputSpectrum() const { return inCols_; }
-    const std::vector<double>& outputSpectrum() const { return outCols_; }
     QPointF baseHandle() const;
     QPointF peakHandle() const;
 
@@ -78,7 +78,8 @@ private:
     void updateCurve(bool exact);
     Handle handleAt(const QPointF& pos) const;
     void setHovered(Handle handle);  // (and the cursor)
-    // How far the Base handle moves per dB of Base, at `base` (a little under 1: it is on the shelf's slope).
+    // How far Amt Lo's handle moves per dB of Amt Lo (`base`), at `base` (a little under 1: it is on the
+    // shelf's slope).
     double baseHandleSlope(double base) const;
     void feed(sub::app::analysis::EqAnalyzer::Channel channel, const std::vector<float>& samples, double dt);
 
@@ -98,7 +99,6 @@ private:
     int zeros_[2] = {0, 0};            // the latest values that were all 0, per channel (all of its window: skip them)
     double quietFor_[2] = {0.0, 0.0};  // seconds without values, per channel
     QMetaObject::Connection bridgeConnection_;  // the bridge's deviceChanged: a new sample rate
-    QElapsedTimer clock_;
     bool settled_ = true;
 
     QString gesture_;  // the drag's merge key ("": none)
@@ -110,6 +110,7 @@ private:
     QPointF lastAt_;
     double dragBase_ = 0.0, dragFreqX_ = 0.0, dragDepth_ = 0.0;
     double movedAcross_ = 0.0, movedUp_ = 0.0;
+    sub::app::SaturatorRange baseRange_, freqRange_, depthRange_;  // what they stay within (the engine's)
 };
 
 }  // namespace sub::ui
