@@ -187,14 +187,12 @@ void GateKeyGraph::wheelEvent(QWheelEvent* event) {
         return;
     }
     event->accept();
-    if (wheelGesture_.isEmpty() || !wheelClock_.isValid() || wheelClock_.elapsed() > kWheelGestureMs)
-        wheelGesture_ = newGestureKey();  // (notches close together are one step)
-    wheelClock_.start();
+    const QString burst = wheelGesture_.key();  // (notches close together are one step)
     const double step = event->modifiers() & Qt::ShiftModifier ? 1.03 : 1.15;
     const double q = sub::app::gateKeyQRange().clamp(q_ * std::pow(step, delta / 120.0));
     if (!gesture_.isEmpty())
         dragQ_ = q;  // (a drag goes on from it)
-    setParams({{QStringLiteral("sc_eq_q"), q}}, wheelGesture_, QStringLiteral("Change Gate Key Filter Q"));
+    setParams({{QStringLiteral("sc_eq_q"), q}}, burst, QStringLiteral("Change Gate Key Filter Q"));
 }
 
 // --- Painting ------------------------------------------------------------------------------

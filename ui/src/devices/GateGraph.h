@@ -17,13 +17,13 @@
 //
 // It reads the device's displays "input", "output", "key" and "open" (one value
 // per 256 samples, pushed together) by absolute index into a ring per stream, so
-// they line up whatever each read got. It scrolls smoothly: the drawing moves on
-// by the time since the last tick, a fraction of a pixel at a time, a steady
-// 30 ms behind the newest value (which absorbs the audio's block-sized bursts),
-// and stops where the values stop. Every animation steps in refreshDisplays()
-// (about 60 times a second) by the time since the last; it repaints only while
-// something moves or changes what is drawn (a history of silence scrolling by
-// changes nothing).
+// they line up whatever each read got; the rings hold what the plot can show at
+// the engine's rate. It scrolls smoothly: the drawing moves on by the time since
+// the last tick, a fraction of a pixel at a time, a steady 30 ms behind the
+// newest value (which absorbs the audio's block-sized bursts), and stops where
+// the values stop. Every animation steps in refreshDisplays() (about 60 times a
+// second) by the time since the last; it repaints only while something moves or
+// changes what is drawn (a history of silence scrolling by changes nothing).
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
@@ -54,12 +54,17 @@ public:
     static constexpr double kFloorDb = -72.0;  // the level axis
     static constexpr double kCeilingDb = 6.0;
     static constexpr double kHistorySeconds = 2.5;
-    static constexpr int kCapacity = 2048;  // values kept per stream (2.5 s at 192 kHz is 1875)
     static constexpr double kLineGrab = 6.0;     // px either side of a line that picks it up
     static constexpr double kRightStrip = 62.0;  // the dB figures and the two meters, captioned
     enum Stream { Input = 0, Output, Key, Open, kStreams };
 
     explicit GateGraph(QQuickItem* parent = nullptr);
+
+    // The values a stream's ring keeps at `valuesPerSecond`: what the plot can show (kHistorySeconds, as
+    // far behind the newest value as the drawing may lag) and a tenth more for the columns drawn in part at
+    // its ends (a column is at least a pixel's worth: a tenth covers a plot 20 px wide or wider), as a power
+    // of two (an index's low bits are its place).
+    static qint64 ringCapacity(double valuesPerSecond);
 
     double levelIn() const { return levelIn_; }
     double levelOut() const { return levelOut_; }
@@ -83,6 +88,8 @@ public:
     qint64 newest() const { return newest_; }    // the index after the latest value all four streams have
     int historySize() const;                     // values held
     float historyAt(int stream, qint64 index) const;
+    // The values each stream's ring keeps: ringCapacity() at the engine's rate.
+    qint64 capacity() const { return capacity_; }
     // Not at rest: the last tick asked for a repaint, or a meter is still falling (or its peak held).
     bool animating() const { return animating_; }
     QRectF inMeter() const;    // the meters' wells
@@ -112,6 +119,8 @@ protected:
 private:
     enum class Line { None, Threshold, Return };
 
+    // The rate the values come at, and the rings sized for it (resized, the history starts again).
+    void fitRings(double valuesPerSecond);
     // Reads what the displays published since the last tick; whether anything came.
     bool readStreams(bool& restarted);
     void write(int stream, qint64 index, float value);
@@ -136,6 +145,7 @@ private:
 
     // The history: a ring per stream, by absolute index.
     std::array<std::vector<float>, kStreams> rings_;
+    qint64 capacity_ = 0;                    // each ring's size (a power of two)
     std::array<qint64, kStreams> ends_{};    // after each stream's latest value (-1: not known)
     std::array<float, kStreams> last_{};     // each stream's latest value
     qint64 begin_ = 0;                       // the first index every stream has
@@ -143,7 +153,7 @@ private:
     qint64 lastVaried_ = 0;  // the latest index where a value differs from the one before (the picture is
                              // the same either side of anything older)
     bool started_ = false;
-    double rate_ = 48000.0 / 256.0;  // values a second
+    double rate_ = 0.0;  // values a second (the engine's rate over the displays' samples per value)
     double scroll_ = 0.0;
     float previousOpen_ = 0.f;
 

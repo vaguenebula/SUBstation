@@ -7,14 +7,14 @@
 // the filter is tuned: drag across for the frequency, up and down for the gain
 // (the shelves and the bell) or the Q (the pass filters, and the bell with Ctrl:
 // doubling every kQPixels), Shift finely; one undo step per drag; the wheel over
-// the dot sets the Q (notches closer than 400 ms one step), as the EQ's bands;
-// double-click puts the three back to their defaults. With the EQ off the curve
-// is grey and unfilled, easing to the accent as it comes on.
+// the dot sets the Q (a burst of notches one undo step: WheelGesture), as the
+// EQ's bands; double-click puts the three back to their defaults. With the EQ off
+// the curve is grey and unfilled, easing to the accent as it comes on.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
+#include "input/GestureKey.h"
 
-#include <QElapsedTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include <vector>
@@ -34,7 +34,6 @@ public:
     static constexpr double kRangeDb = 18.0;  // above and below 0 dB
     static constexpr double kQPixels = 60.0;  // dragged up this far, the Q doubles
     static constexpr int kMinimumHeight = 36;
-    static constexpr int kWheelGestureMs = 400;  // wheel notches closer than this are one undo step (the EQ's)
 
     explicit GateKeyGraph(QQuickItem* parent = nullptr);
 
@@ -97,8 +96,7 @@ private:
     double dragFreqX_ = 0.0;  // the dragged values as the drag has them (unclamped)
     double dragQ_ = 1.0;
     double dragGain_ = 0.0;
-    QString wheelGesture_;  // the wheel's merge key, and when it last turned
-    QElapsedTimer wheelClock_;
+    WheelGesture wheelGesture_;  // the wheel's: one per burst of notches
     std::vector<QPointF> points_;  // paint()'s scratch
 };
 

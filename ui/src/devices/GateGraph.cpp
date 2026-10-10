@@ -23,7 +23,6 @@ namespace sub::ui {
 namespace {
 
 constexpr const char* kStreamIds[GateGraph::kStreams] = {"input", "output", "key", "open"};
-constexpr qint64 kMask = GateGraph::kCapacity - 1;
 constexpr double kLagSeconds = 0.03;      // the drawing stays this far behind the newest value,
 constexpr double kLagEaseSeconds = 0.16;  // easing back to it at this pace (a tenth a tick at 60 Hz)
 constexpr double kMaxLagSeconds = 0.1;    // and jumps on when it falls further behind
@@ -67,10 +66,9 @@ GateGraph::GateGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     setImplicitSize(kWidth, kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton);  // (right-click off the lines: the frame's menu)
     setAcceptHoverEvents(true);
-    for (int s = 0; s < kStreams; ++s) {
-        rings_[std::size_t(s)].assign(kCapacity, clearValue(s));
+    fitRings(sampleRate() / sub::app::gateDisplaySamples());
+    for (int s = 0; s < kStreams; ++s)
         last_[std::size_t(s)] = clearValue(s);
-    }
     ends_.fill(-1);
     inMeter_.reset(kFloorDb);
     keyMeter_.reset(kFloorDb);
@@ -124,7 +122,7 @@ qint64 GateGraph::historyBegin() const {
     qint64 latest = newest_;
     for (const qint64 end : ends_)
         latest = std::max(latest, end);
-    return std::max(begin_, latest - kCapacity);  // (a stream a value ahead has written over its oldest)
+    return std::max(begin_, latest - capacity_);  // (a stream a value ahead has written over its oldest)
 }
 
 int GateGraph::historySize() const { return started_ ? int(std::max<qint64>(0, newest_ - historyBegin())) : 0; }
@@ -132,7 +130,26 @@ int GateGraph::historySize() const { return started_ ? int(std::max<qint64>(0, n
 float GateGraph::historyAt(int stream, qint64 index) const {
     if (stream < 0 || stream >= kStreams || !started_ || index < historyBegin() || index >= ends_[std::size_t(stream)])
         return stream >= 0 && stream < kStreams ? clearValue(stream) : 0.f;
-    return rings_[std::size_t(stream)][std::size_t(index & kMask)];
+    return rings_[std::size_t(stream)][std::size_t(index & (capacity_ - 1))];
+}
+
+qint64 GateGraph::ringCapacity(double valuesPerSecond) {
+    const double values = 1.1 * (kHistorySeconds + kMaxLagSeconds) * std::max(1.0, valuesPerSecond);
+    qint64 capacity = 64;
+    while (double(capacity) < values)
+        capacity *= 2;
+    return capacity;
+}
+
+void GateGraph::fitRings(double valuesPerSecond) {
+    rate_ = std::max(1.0, valuesPerSecond);
+    const qint64 capacity = ringCapacity(rate_);
+    if (capacity == capacity_)
+        return;
+    capacity_ = capacity;
+    for (int s = 0; s < kStreams; ++s)
+        rings_[std::size_t(s)].assign(std::size_t(capacity_), clearValue(s));
+    started_ = false;  // (what was kept has no place in the new rings: the next read starts the history again)
 }
 
 // --- The parameters ------------------------------------------------------------------------
@@ -174,7 +191,7 @@ void GateGraph::readSidechain() {
 void GateGraph::write(int stream, qint64 index, float value) {
     if (!std::isfinite(value))
         value = clearValue(stream);
-    rings_[std::size_t(stream)][std::size_t(index & kMask)] = value;
+    rings_[std::size_t(stream)][std::size_t(index & (capacity_ - 1))] = value;
     // Whether the picture changes here: levels as the axis draws them, how open to a step's worth.
     const float before = last_[std::size_t(stream)];
     const bool differs =
@@ -223,12 +240,13 @@ bool GateGraph::readStreams(bool& restarted) {
         const qint64 end = first + qint64(values.size());
         if (ends_[std::size_t(s)] < 0)  // (a stream starting: the history begins where all have values)
             begin_ = std::max(begin_, first);
-        for (qint64 i = std::max(first, end - kCapacity); i < end; ++i)
+        for (qint64 i = std::max(first, end - capacity_); i < end; ++i)
             write(s, i, values[std::size_t(i - first)]);
         ends_[std::size_t(s)] = end;
 
         // The tick's level: the loudest of what came (so a short burst is not missed), of the latest
-        // kRecentSeconds after a backlog.
+        // kRecentSeconds after a backlog. (The values DeviceCanvas::readRecent would keep, but picked from
+        // the read that fills the history: readRecent would drop the rest, which the history needs.)
         const qint64 from = std::max(first, end - recent);
         if (s == Open) {
             for (qint64 i = first; i < end; ++i) {
@@ -259,7 +277,7 @@ bool GateGraph::readStreams(bool& restarted) {
 
 void GateGraph::refreshDisplays() {
     const double dt = tickSeconds();
-    rate_ = std::max(1.0, sampleRate() / sub::app::gateDisplaySamples());
+    fitRings(sampleRate() / sub::app::gateDisplaySamples());  // (the engine's rate may have changed)
 
     bool restarted = false;
     const bool came = readStreams(restarted);
@@ -514,6 +532,7 @@ void GateGraph::paint(SgPainter& p) {
     first = std::max(first, floorDiv(begin + k - 1, k));  // (only buckets the history wholly has)
     const qint64 last = std::min(floorDiv(newest_, k), floorDiv(qint64(std::ceil(scroll_)), k) + 1);
     const int count = started_ ? int(std::max<qint64>(0, last - first)) : 0;
+    const qint64 mask = capacity_ - 1;
     if (count >= 2) {
         for (auto* v : {&inTops_, &outTops_, &keyTops_, &bottoms_, &shadeTops_, &opens_})
             v->resize(std::size_t(count));
@@ -525,7 +544,7 @@ void GateGraph::paint(SgPainter& p) {
             const qint64 from = (first + i) * k;
             float in = -1e9f, out = -1e9f, key = -1e9f, open = 0.f;
             for (qint64 v = from; v < from + k; ++v) {
-                const std::size_t slot = std::size_t(v & kMask);
+                const std::size_t slot = std::size_t(v & mask);
                 in = std::max(in, rings_[Input][slot]);
                 out = std::max(out, rings_[Output][slot]);
                 key = std::max(key, rings_[Key][slot]);

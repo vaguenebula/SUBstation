@@ -448,6 +448,18 @@ private Q_SLOTS:
         QCOMPARE(graph->historyAt(GateGraph::Input, newest - 1), float(20 * std::log10(0.5)));
         QCOMPARE(graph->historyAt(GateGraph::Open, newest - 1), 1.0f);
         QVERIFY(graph->scroll() <= double(graph->newest()));
+        // The rings hold all the plot can draw at the engine's rate, as they would at any other (ASIO's
+        // 384 kHz too, where 2048 values were 1.4 s): its 2.5 s, up to 0.1 s behind the newest value, and a
+        // column drawn in part at either end.
+        QCOMPARE(graph->capacity(), GateGraph::ringCapacity(kSampleRate / double(gateDisplaySamples())));
+        for (const double rate : {8000.0, 44100.0, 48000.0, 96000.0, 192000.0, 384000.0}) {
+            const double perSecond = rate / gateDisplaySamples();
+            const double column = std::ceil(GateGraph::kHistorySeconds * perSecond / graph->plot().width());
+            const double drawn = (GateGraph::kHistorySeconds + 0.1) * perSecond + 2 * column + 2;
+            const qint64 capacity = GateGraph::ringCapacity(perSecond);
+            QVERIFY2(double(capacity) >= drawn, qPrintable(QStringLiteral("%1 Hz: %2").arg(rate).arg(capacity)));
+            QCOMPARE(capacity & (capacity - 1), qint64(0));  // (an index's low bits are its place)
+        }
 
         // More audio: the drawing scrolls on, never past the newest value.
         const double before = graph->scroll();

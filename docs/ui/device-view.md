@@ -389,8 +389,8 @@ The editors:
     the gate), filled under it in the accent while the EQ is on and grey while it is off (easing between them, 100 ms).
     Drag its dot across for the frequency, up and down for the gain (shelves, bell) or the Q (the pass filters, and the
     bell with Ctrl: doubling every 60 px), Shift finely, one undo step per drag; the wheel over the dot sets the Q (the
-    bell and the pass filters; notches closer than 400 ms are one undo step), as the EQ's bands; a double-click puts the
-    three back to their defaults. Which types use Gain and Q (`usesGain`, `usesQ`, from
+    bell and the pass filters; a burst of notches less than 400 ms apart is one undo step, `WheelGesture`), as the EQ's
+    bands; a double-click puts the three back to their defaults. Which types use Gain and Q (`usesGain`, `usesQ`, from
     `sub::app::gateKeyFilterUsesGain/Q`) also enables the knobs. The dot's level is worked out with the curve on the GUI
     thread, so `paint()` only reads members; what the dot drags is held to the parameters' ranges as the engine has them
     (`sub::app::gateKeyFreqRange()`, `gateKeyQRange()`, `gateKeyGainRange()`). One rule throughout: what is set for
@@ -399,25 +399,27 @@ The editors:
     disabled, and the curve's dot never sets that either.
   - `GateGraph` draws the last 2.5 s of the displays `input`, `output`, `key` and `open` (one value per 256 samples
     each, read with `readDisplayAt` into a ring per stream by absolute index, so they line up whatever a read got; a
-    stream that doesn't go on from where it was, a new processor, starts the history again), newest at the right edge,
-    on a −72..+6 dB axis: the input as a light grey band, the output over it darker with a white outline (so what the
-    gate takes away is the light part showing above the dark), a faint blue shade over all of it where the gate let
-    sound through (over the levels too, so it reads whatever the level), and the key in green while it isn't the plain
-    input (a sidechain, or the EQ on it). Values are drawn in buckets aligned to their absolute index (as many as make a
-    column a pixel wide: the max of the levels, the mean of `open`), with `fillBand`, so the history glides by fractions
-    of a pixel without shimmering. Across it the threshold (a glowing blue line, its tab at the right) and where an open
-    gate closes again (Return: a dashed orange line below it, the band between them tinted), each showing its value
-    while hovered or dragged (drawn over everything else). Top left an LED and "Open"/"Closed", or "Idle" (the LED out)
-    once no values have come for 0.25 s: the device switched off, the engine stopped; "Listening to the key" pulses at
-    the top on a dark backing while Listen is on and sound comes (idle, nothing of the key is heard: it holds still,
-    dimmed, and nothing repaints). On the right edge the newest key level as a dot (blue while the tick's key level, not
-    the dot's falling one, is at or above the threshold, its halo as open as the gate; a ring ripples out from it as the
-    gate opens, clipped to the plot), the dB figures, and two meters in `kPanel` wells (as the Compressor's), captioned
-    "In" and "Gate", both on the plot's own axis (0 dB at their top, a tick every 12 dB where the plot has its grid
-    lines): the input's level (the house meter, `drawLevelMeter()` with `MeterWell::Panel`: green, yellow from -12 dB,
-    red from -3 dB, and red above 0 dB over the well's top) and how far the gate turns down what comes in, growing down
-    from the top by as many dB (`sub::app::gateGainDb` of `open` and the floor: to the floor's depth when shut, the
-    whole well at a silent floor).
+    stream that doesn't go on from where it was, a new processor, starts the history again; the rings hold what the plot
+    can show at the engine's rate, `ringCapacity()`: its 2.5 s, as far behind as the drawing may lag, and a tenth more
+    for the columns drawn in part at its ends), newest at the right edge, on a −72..+6 dB axis: the input as a light
+    grey band, the output over it darker with a white outline (so what the gate takes away is the light part showing
+    above the dark), a faint blue shade over all of it where the gate let sound through (over the levels too, so it
+    reads whatever the level), and the key in green while it isn't the plain input (a sidechain, or the EQ on it).
+    Values are drawn in buckets aligned to their absolute index (as many as make a column a pixel wide: the max of the
+    levels, the mean of `open`), with `fillBand`, so the history glides by fractions of a pixel without shimmering.
+    Across it the threshold (a glowing blue line, its tab at the right) and where an open gate closes again (Return: a
+    dashed orange line below it, the band between them tinted), each showing its value while hovered or dragged (drawn
+    over everything else). Top left an LED and "Open"/"Closed", or "Idle" (the LED out) once no values have come for
+    0.25 s: the device switched off, the engine stopped; "Listening to the key" pulses at the top on a dark backing
+    while Listen is on and sound comes (idle, nothing of the key is heard: it holds still, dimmed, and nothing
+    repaints). On the right edge the newest key level as a dot (blue while the tick's key level, not the dot's falling
+    one, is at or above the threshold, its halo as open as the gate; a ring ripples out from it as the gate opens,
+    clipped to the plot), the dB figures, and two meters in `kPanel` wells (as the Compressor's), captioned "In" and
+    "Gate", both on the plot's own axis (0 dB at their top, a tick every 12 dB where the plot has its grid lines): the
+    input's level (the house meter, `drawLevelMeter()` with `MeterWell::Panel`: green, yellow from -12 dB, red from
+    -3 dB, and red above 0 dB over the well's top) and how far the gate turns down what comes in, growing down from the
+    top by as many dB (`sub::app::gateGainDb` of `open` and the floor: to the floor's depth when shut, the whole well at
+    a silent floor).
   - Its animation, all stepped in `refreshDisplays()` by the time since the last tick (`tickSeconds()`, as every
     editor's): the drawing scrolls on at the values' rate, easing towards a steady 30 ms behind the newest value (which
     absorbs the audio's block-sized bursts; more than 100 ms behind, it jumps), and stops where the values stop; the
@@ -427,7 +429,10 @@ The editors:
     scrolling repaints while something that differs is in sight (a history of silence scrolling by changes nothing), and
     the meters and the key dot once they are a twentieth of a pixel from where they were last drawn (a steady tone's
     peaks jitter by about 1e-4 dB a tick) or the dot's colour changes, so an idle, silent or steady Gate draws nothing;
-    `levelsChanged` likewise waits for a level to move 0.01 dB.
+    `levelsChanged` likewise waits for a level to move 0.01 dB. A tick's levels (the meters', the key dot's, the LED's)
+    are the loudest of the newest 0.1 s it read, so an editor shown again after the sound stopped doesn't light up with
+    the backlog: the values `readRecent()` would keep, but picked from the read that fills the history (`readRecent()`
+    would drop the rest, which the history needs).
   - Drag the threshold line (or anywhere else in the plot; not the figures or the meters) up and down for the threshold,
     the return line for Return (down: it closes lower), relative to where the press was (nothing jumps), Shift finely;
     one undo step per drag ("Change Gate Threshold", "Change Gate Return"), the lines following the mouse at once, held
@@ -1108,7 +1113,7 @@ The editors:
 | [test_ui_device_panel_racks.cpp](../../tests/app/test_ui_device_panel_racks.cpp) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain list and the chain's devices shown when asked for, the chain clicked shown beside the rack and dropped into, chain mixers, macros added and taken away, renamed in place, automated, mapping to a macro, its ranges and unmapping, Ctrl+R on a chain (its list hidden too), a chain's menu, the view's height staying put |
 | [test_ui_device_panel_sidechain.cpp](../../tests/app/test_ui_device_panel_sidechain.cpp) | The sidechain button and its menu: sources, cycles greyed out, taps (after devices in racks too) |
 | [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) | The registry (every kind with an editor, and the generic knobs for the others); the Compressor's, Delay's, Disperser's, EQ's, Sidechain's and Sampler's editors, each loaded as the view loads it, driven with the mouse and keys, the project and (rendering offline) the engine checked; what the editors share (SgPainter's additions, the animation helpers, `EditorKnob` and `DeviceParamMap`); the parameter cell and its menu. Its host, and every editor test's, is [support/EditorHarness.h](../../tests/app/support/EditorHarness.h) |
-| [test_ui_device_editors_gate.cpp](../../tests/app/test_ui_device_editors_gate.cpp) | The Gate's editor: fitting the body, every control bound and undoable (the lookahead reaching the engine's latency; the list as wide as its longest choice; only the key EQ's Gain bipolar; the In meter's panel-grey well); the threshold and return lines' drags (relative, Shift, double-click, one step each; either taken when they are one), their right-click menus, the meters not a control; the displays reaching the graph, its scrolling and rest, going idle, silence and a steady tone drawing nothing, listening while idle drawing nothing; the key dot's colour following the key's level now and the dot falling below the line within a few ticks, the passing shade showing over the levels; the sidechain section (fold, the type buttons' EQ faces, what is dimmed but settable and what is disabled, the source button naming itself for the menu, renames, every cell's widest values whole); the key curve being the engine's filter, its dot following the mouse, Ctrl and the wheel for the bell's Q |
+| [test_ui_device_editors_gate.cpp](../../tests/app/test_ui_device_editors_gate.cpp) | The Gate's editor: fitting the body, every control bound and undoable (the lookahead reaching the engine's latency; the list as wide as its longest choice; only the key EQ's Gain bipolar; the In meter's panel-grey well); the threshold and return lines' drags (relative, Shift, double-click, one step each; either taken when they are one), their right-click menus, the meters not a control; the displays reaching the graph (its rings holding all the plot draws, at any rate up to 384 kHz), its scrolling and rest, going idle, silence and a steady tone drawing nothing, listening while idle drawing nothing; the key dot's colour following the key's level now and the dot falling below the line within a few ticks, the passing shade showing over the levels; the sidechain section (fold, the type buttons' EQ faces, what is dimmed but settable and what is disabled, the source button naming itself for the menu, renames, every cell's widest values whole); the key curve being the engine's filter, its dot following the mouse, Ctrl and the wheel for the bell's Q |
 | [test_ui_device_editors_limiter.cpp](../../tests/app/test_ui_device_editors_limiter.cpp) | The Limiter's editor: fitting the view, every control bound to its parameter and undoable (Gain bipolar; Release dimmed while Auto is on and still settable; the boxes and lists wide enough for their widest text; the lookahead reaching the engine's latency; Maximize swapping Gain for Output and the line for the Threshold, a press mid-crossfade turning the knob coming in), the line dragged (one undo step, Shift finely, held to the parameter's range, double-click for the default, presses elsewhere ignored), the hover following the line as it moves, opening as the device is (nothing animating in), the displays reaching the graph (levels, gain reduction, Soft Clip's share in both figures; with Maximize, the history's output in the line's domain and the Out meter in dBFS), its animation and its rest, the maths shared with the engine |
 | [test_ui_device_editors_multiband.cpp](../../tests/app/test_ui_device_editors_multiband.cpp) | Multiband Dynamics' editor: it fits the body (at its least height too), every box as wide as its text and automation dot need, every control bound and undoable (the engine has what they set: the activators and the split switches, each where Live has it), ratios and times typed and printed, the T/B/A pages and their captions (the page outliving the editor being made again); the graph's threshold and ratio drags (pushing, Ctrl, Alt, Shift; Ctrl+Alt left to the chain), double-clicks and wheel (a high-resolution wheel's steps adding up; a run staying on a threshold that slides from under the mouse; Shift+wheel left to the chain), one undo step each; the displays reaching the graph as the engine renders (a whole 2048-sample buffer's read), its meters, eased gain, glows (not after the audio stops), target marker, a cut under the floor drawn only as far as the level before it, the bars and the figure agreeing tick by tick while the meters let go (a lift, a cut, a cut under the floor), lanes and highlights, a switched-off lane's "→ Mid" making way for a drag's bubble, the hover readout clear of the change's figure, a bypassed band's lane (its level only), and its stopping once still; the sidechain's controls (dimmed but settable without a sidechain, whole readouts, the menu asked for under the button, Listen); the `ratio` unit and the typed texts (with no window, on any platform) |
 | [test_ui_device_editors_spectral.cpp](../../tests/app/test_ui_device_editors_spectral.cpp) | The Spectral Compressor's editor: fitting the body, every name and value whole, its knobs and Delta bound and undoable, the lines the engine's, lines leaving the plot drawn where they are with their handles on them (and the mouse finding them only there), the level figures a line crosses fading, the threshold, tilt, Below and Focus dragged (one undo step, Shift, Shift pressed mid-drag, double-click), the Focus boxes (wide enough for their widest value clear of the automation dot), Below dimmed but settable while Upward is 1:1, the Focus dim the engine's weights with the level figures over it, the displays reaching the graph and sinking back without a bounce, the held cut outliving the curtain, nothing drawn while still, lifts, the glow only while cutting, Delta's spectrum and tint, the key line only where the key is, the Sidechain badge (its menu under it) |

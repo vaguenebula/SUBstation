@@ -114,9 +114,9 @@ double dbToY(double db, const QRectF& rect, double floorDb, double ceilingDb);
 // A meter's well: dark (kMeterBg, its lines light) on a panel, or the panel's grey (kPanel, its
 // lines dark) inside a display's own black.
 enum class MeterWell { Dark, Panel };
-// The house level meter, upright in `rect`: a dark well, the level filled green, turning yellow
-// above -12 dB and red above -3 dB (of the ceiling), faint lines every 12 dB, and the held peak as
-// a bright line (red once it reaches the ceiling).
+// The house level meter, upright in `rect`: its well (dark unless `well` says otherwise), the level
+// filled green, turning yellow above -12 dB and red above -3 dB (of the ceiling), faint lines every
+// 12 dB, and the held peak as a bright line (red once it reaches the ceiling).
 void drawLevelMeter(SgPainter& painter, const QRectF& rect, double levelDb, double peakDb, double floorDb = -60.0,
                     double ceilingDb = 0.0, MeterWell well = MeterWell::Dark);
 // A gain reduction meter: the reduction grows down from the top of `rect` in the accent colour,
