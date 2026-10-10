@@ -3,7 +3,7 @@
 // own design (engine/src/builtin/AmpDesign.h: the model's voicing, its tone
 // stack, its filters and the stages' curve), so what is drawn is what plays;
 // and the figures the editor reads the device by (its models, its displays'
-// rate and floor), the device's own.
+// floor), the device's own.
 
 #include <QList>
 #include <QStringList>
@@ -17,8 +17,8 @@ namespace sub::app {
 QStringList ampModelNames();
 int ampModelCount();
 
-// The device's displays: audio samples per value (256), and the floor they read (dB: -90).
-int ampDisplaySamples();
+// What the device's displays read at silence (dB: -90). (Their rate, audio samples per value,
+// the editor reads with them: DeviceCanvas::readRecent.)
 double ampDisplayFloorDb();
 
 // The Amp's tone section (the model's tone stack with its make-up, and Presence)

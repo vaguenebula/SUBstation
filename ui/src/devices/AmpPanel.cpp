@@ -111,11 +111,11 @@ void AmpPanel::refreshDisplays() {
     bool read = false;
     static const QString kDrives[kTubes] = {QStringLiteral("drive1"), QStringLiteral("drive2"),
                                             QStringLiteral("drive3"), QStringLiteral("power")};
-    const size_t keep = ampDisplays::recentValues(dt, sampleRate());
+    const double recent = ampDisplays::recentSeconds(dt);
     for (int i = 0; i < kTubes; ++i)
-        read = ampDisplays::loudest(readDisplay(kDrives[i]), keep, floorDb_, driveDb_[size_t(i)]) || read;
-    read = ampDisplays::latest(readDisplay(QStringLiteral("sag")), sagRead_) || read;
-    read = ampDisplays::loudest(readDisplay(QStringLiteral("output")), keep, floorDb_, outputDb_) || read;
+        read = ampDisplays::loudest(readRecent(kDrives[i], recent), floorDb_, driveDb_[size_t(i)]) || read;
+    read = ampDisplays::latest(readRecent(QStringLiteral("sag"), recent), sagRead_) || read;
+    read = ampDisplays::loudest(readRecent(QStringLiteral("output"), recent), floorDb_, outputDb_) || read;
     if (read) {
         lastRead_.restart();
     } else if (!lastRead_.isValid() || lastRead_.elapsed() > kQuietSeconds * 1000.0) {

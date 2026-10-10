@@ -4,7 +4,8 @@
 // curve and Color's EQ being the engine's own maths, the graphs' drags one undo
 // step each (showing the automation of what they move most), and the displays
 // reaching the graphs (rendering offline), holding over the gaps between
-// blocks and letting them settle; it fits, every list and readout whole. With
+// blocks and letting them settle, a backlog of display values counting for
+// nothing; it fits, every list and readout whole. With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there as PNGs,
 // with signal flowing, in four of its modes.
 
@@ -769,6 +770,36 @@ private Q_SLOTS:
         QCOMPARE(curve->dotLevel(), curve->inputLevel());  // (drawn at full scale, the edge)
         QTRY_VERIFY_WITH_TIMEOUT(curve->overFlash() == 0.0, 2000);
         QTRY_VERIFY_WITH_TIMEOUT(curve->settled(), 6000);
+    }
+
+    // What came while the editor wasn't showing is history: its first look at the displays shows
+    // the level now, not the loudest of the backlog (seconds of it).
+    void backlogIsHistory() {
+        // A tone played loud for a second, then quiet: rendered before the editor shows.
+        std::vector<float> signal = tone(1000.0, kSampleRate, 0.9);
+        const std::vector<float> quiet = tone(1000.0, kSampleRate * 3 / 2, 0.05);
+        signal.insert(signal.end(), quiet.begin(), quiet.end());
+        const QString track = audioTrackWith(signal, QStringLiteral("tone"), double(signal.size()) / kSampleRate);
+        QVERIFY(!track.isEmpty());
+        const QString device = editor()->addDevice(track, QStringLiteral("saturator"));
+        // (Once the engine plays the clip through the saturator: its source and the device load as they will.)
+        const auto plays = [&] {
+            double most = 0.0;
+            for (const float v : engine_->renderOffline(0.0, kSampleRate / 20))
+                most = std::max(most, double(std::abs(v)));
+            return bridge()->engineDeviceId(track, device).has_value() && most > 0.5;
+        };
+        QTRY_VERIFY(plays());
+        engine_->renderOffline(0.0, int(signal.size()));
+        QQuickItem* view = show(QStringLiteral("saturator"), track, device);
+        QVERIFY(view);
+        auto* curve = find<SaturatorCurve>(view, QStringLiteral("saturatorCurve"));
+        QVERIFY(curve);
+        refreshDisplays();
+        QVERIFY2(std::abs(curve->inputLevel() - 0.05) < 0.002, qPrintable(QString::number(curve->inputLevel())));
+        QVERIFY2(std::abs(curve->outputLevel() - 0.05) < 0.002, qPrintable(QString::number(curve->outputLevel())));
+        QVERIFY2(curve->dotLevel() < 0.06, qPrintable(QString::number(curve->dotLevel())));
+        QVERIFY2(curve->glowLevel() < 0.06, qPrintable(QString::number(curve->glowLevel())));
     }
 
     // --- Pictures --------------------------------------------------------------------------------

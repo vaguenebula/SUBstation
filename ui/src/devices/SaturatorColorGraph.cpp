@@ -170,6 +170,8 @@ void SaturatorColorGraph::feed(EqAnalyzer::Channel channel, const std::vector<fl
 void SaturatorColorGraph::refreshDisplays() {
     const double dt = tickSeconds();
     const bool wasInLive = inLive_, wasOutLive = outLive_;
+    // Every value read goes to the analyser, a backlog's too (not readRecent's newest): it keeps the
+    // latest kFftSize samples and works out one spectrum a refresh, so a backlog only fills its window.
     feed(EqAnalyzer::Input, readDisplay(QStringLiteral("input")), dt);
     feed(EqAnalyzer::Output, readDisplay(QStringLiteral("output")), dt);
     inLive_ = analyzer_.live(EqAnalyzer::Input);

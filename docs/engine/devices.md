@@ -36,7 +36,7 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Saturator.cpp](../../engine/src/builtin/devices/Saturator.cpp) | Saturator: eight curves, Color's emphasis and its inverse, Post Clip on the dry/wet blend, DC, 4x oversampling of all of it |
 | [builtin/SaturatorDesign.h](../../engine/src/builtin/SaturatorDesign.h) | The Saturator's curves (`saturator::makeShape`, `params`, `curve`, `transfer`), Post Clip and Color's design (`colorDesign`, `inverse`, `between`, `colorResponseDb`, `colorTimeConstant`), shared with the application layer's `saturatorCurve()` and `saturatorColorDb()` for the editor |
 | [builtin/devices/Amp.cpp](../../engine/src/builtin/devices/Amp.cpp) | Amp: seven amp models, the tone stack, sag, Mono and Dual, sleep |
-| [builtin/AmpDesign.h](../../engine/src/builtin/AmpDesign.h) | The Amp's design (`amp::kVoicings`, `blend`, the stages' curve and `Adaa`, the tone stack, the dials' mappings, `Transfer`: a tone's steady state by harmonic balance, the displays' `kDisplaySamples` and `kDisplayFloorDb`), shared with the application layer's `ampToneResponseDb()`, `ampTransfer()` and `AmpTransferCurve` for the editor's curves (and `ampModelNames()`, `ampDisplaySamples()`, `ampDisplayFloorDb()`); the device keeps its model morph level-matched with `Transfer` |
+| [builtin/AmpDesign.h](../../engine/src/builtin/AmpDesign.h) | The Amp's design (`amp::kVoicings`, `blend`, the stages' curve and `Adaa`, the tone stack, the dials' mappings, `Transfer`: a tone's steady state by harmonic balance, the displays' `kDisplaySamples` and `kDisplayFloorDb`), shared with the application layer's `ampToneResponseDb()`, `ampTransfer()` and `AmpTransferCurve` for the editor's curves (and `ampModelNames()`, `ampDisplayFloorDb()`); the device keeps its model morph level-matched with `Transfer` |
 | [builtin/devices/Erosion.cpp](../../engine/src/builtin/devices/Erosion.cpp) | Erosion: a 2 ms delay modulated by a sine or band-passed noise, Noise Blend and Stereo Width, chunked glides and ramps, displays |
 | [builtin/ErosionDesign.h](../../engine/src/builtin/ErosionDesign.h) | Erosion's maths (`erosion::band`, `noisePowerGain`, `bandMagnitude`, `bandEdges`, `excursionSamples`, `blendWeights`, `stereoSpread`, the instances' noise salts), shared with the application layer's `ErosionResponse.h` for the editor |
 | [builtin/devices/Delay.cpp](../../engine/src/builtin/devices/Delay.cpp) | Delay: synced or free times per side, filter, modes, ping pong, freeze |
@@ -1199,8 +1199,9 @@ decimal, no sign: `formatValue` in [ParamSpec.cpp](../../app/src/model/ParamSpec
   (with two amps, the larger): `input` (the input's peak, dBFS), `drive1`, `drive2`, `drive3` (each preamp stage's
   peak against its clipping point, dB: 0 is where it clips), `power` (the power stage's, the same), `sag` (the
   supply's sag at the window's end, dB, ≥ 0) and `output` (the output's peak after Dry/Wet, dBFS); floored at −90
-  (`amp::kDisplayFloorDb`). The editor takes the rate and the floor from the design through the application layer
-  (`ampDisplaySamples()`, `ampDisplayFloorDb()`), as it takes the models' names (`ampModelNames()`).
+  (`amp::kDisplayFloorDb`). The editor takes the floor from the design through the application layer
+  (`ampDisplayFloorDb()`), as it takes the models' names (`ampModelNames()`), and the rate from the displays
+  themselves (`DeviceCanvas::readRecent`).
 - **Shared with the editor**: `amp::toneResponseDb()` (the tone stack's digital response with its make-up, times
   Presence's shelf, at the oversampled rate: the tone controls' part; the fixed roll-offs of the power tubes' input
   and the transformer aren't in it) and `amp::Transfer`, the transfer for a 1 kHz tone worked out by harmonic balance:

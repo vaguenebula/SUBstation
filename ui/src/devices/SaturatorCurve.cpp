@@ -140,8 +140,11 @@ void SaturatorCurve::sync() {
 
 void SaturatorCurve::refreshDisplays() {
     const double dt = tickSeconds();
-    const std::vector<float> ins = readDisplay(QStringLiteral("in_peak"));
-    const std::vector<float> outs = readDisplay(QStringLiteral("out_peak"));
+    // What came since the last tick, at least its last kRecentSeconds: a backlog (what came while the
+    // editor wasn't showing, seconds of it) is history, not the level now.
+    const double recent = std::max(kRecentSeconds, dt);
+    const std::vector<float> ins = readRecent(QStringLiteral("in_peak"), recent);
+    const std::vector<float> outs = readRecent(QStringLiteral("out_peak"), recent);
     const double lastIn = latestIn_, lastOut = latestOut_;
     // The values come a block of audio at a time: with a block longer than a tick, a tick without any
     // is a gap between blocks, not silence. The levels hold until none has come for kHoldSeconds.

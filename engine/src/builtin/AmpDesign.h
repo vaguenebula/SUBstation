@@ -53,8 +53,8 @@ inline constexpr int kOversamplingLog2 = 2;  // 4x
 inline constexpr int kOversampling = 1 << kOversamplingLog2;
 inline constexpr double kPi = std::numbers::pi;
 inline constexpr double kDcBlockerHz = 10.0;  // after the oversampled section
-// The device's displays (the editor reads them through the application layer's AmpResponse.h):
-// audio per value, and the floor of those in dB.
+// The device's displays: audio per value, and the floor of those in dB (the editor takes the floor
+// through the application layer's AmpResponse.h).
 inline constexpr int kDisplaySamples = 256;
 inline constexpr float kDisplayFloorDb = -90.f;
 // The power tubes' input (their grids' Miller capacitance): a one-pole low-pass

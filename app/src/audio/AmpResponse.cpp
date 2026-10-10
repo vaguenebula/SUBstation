@@ -18,8 +18,6 @@ QStringList ampModelNames() {
 
 int ampModelCount() { return sub::amp::kModels; }
 
-int ampDisplaySamples() { return sub::amp::kDisplaySamples; }
-
 double ampDisplayFloorDb() { return sub::amp::kDisplayFloorDb; }
 
 QList<double> ampToneResponseDb(int model, double bass, double middle, double treble, double presence,

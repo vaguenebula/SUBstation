@@ -287,8 +287,9 @@ private Q_SLOTS:
     }
 
     // What the editor takes from the device, through the application layer, is the device's own:
-    // the models (the logo's names, how many there are), the displays' rate (how many values a
-    // tick counts) and what they read at silence (the floor the levels fall to).
+    // the models (the logo's names, how many there are) and what the displays read at silence (the
+    // floor the levels fall to). (Their rate, how many values a tick counts, comes with them:
+    // DeviceCanvas::readRecent.)
     void figuresAreTheDevices() {
         QStringList labels;
         for (const std::string& label : sub::amp::modelLabels()) labels << QString::fromStdString(label);
@@ -299,8 +300,6 @@ private Q_SLOTS:
         QCOMPARE(int(device->params().front().valueLabels.size()), ampModelCount());
         device->prepare(kSampleRate, 1024);
         QCOMPARE(int(device->displays().size()), 7);
-        for (const sub::DisplayInfo& display : device->displays())
-            QCOMPARE(display.samplesPerValue, ampDisplaySamples());
         std::vector<float> left(1024, 0.f), right(1024, 0.f);
         float* channels[2] = {left.data(), right.data()};
         sub::ProcessContext context;
@@ -308,7 +307,7 @@ private Q_SLOTS:
         device->process(context, channels, 2, 1024);
         std::vector<float> input;
         device->readDisplay(0, 0, input);
-        QCOMPARE(input.size(), size_t(1024 / ampDisplaySamples()));
+        QCOMPARE(input.size(), size_t(1024 / device->displays().front().samplesPerValue));
         for (const float value : input) QCOMPARE(double(value), ampDisplayFloorDb());
     }
 
@@ -613,7 +612,8 @@ private Q_SLOTS:
         QCOMPARE(value("treble"), 5.0);
 
         // The wheel over a handle: 0.2 a notch (the knob's), a fifth of that with Shift; notches close
-        // together are one undo step. Away from the handles it goes on (to the view).
+        // together are one undo step, but one on another handle is a step of its own. Away from the
+        // handles it goes on (to the view).
         steps = undo()->index();
         const QPointF b = s.tone->handlePos(kBass);
         QVERIFY(wheelOver(s.tone, b, 1));
@@ -622,6 +622,10 @@ private Q_SLOTS:
         QVERIFY(wheelOver(s.tone, b, -1, Qt::ShiftModifier));
         QVERIFY2(std::abs(value("bass") - 5.36) < 1e-9, qPrintable(QString::number(value("bass"))));
         QCOMPARE(undo()->index(), steps + 1);
+        QVERIFY(wheelOver(s.tone, s.tone->handlePos(kMiddle), 1));
+        QCOMPARE(undo()->index(), steps + 2);
+        undo()->undo();
+        QCOMPARE(value("middle"), 5.0);
         const QPointF away(s.tone->xOf(100.0) + 30.0, s.tone->height() / 2);
         QVERIFY(!wheelOver(s.tone, away, 1));
         QVERIFY(std::abs(value("bass") - 5.36) < 1e-9);

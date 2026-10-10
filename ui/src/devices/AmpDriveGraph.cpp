@@ -133,9 +133,9 @@ void AmpDriveGraph::shapeCurve() {
 
 void AmpDriveGraph::refreshDisplays() {
     const double dt = tickSeconds();
-    bool read = ampDisplays::loudest(readDisplay(QStringLiteral("input")), ampDisplays::recentValues(dt, sampleRate()),
-                                     floorDb_, inputRead_);
-    read = ampDisplays::latest(readDisplay(QStringLiteral("sag")), sagRead_) || read;
+    const double recent = ampDisplays::recentSeconds(dt);
+    bool read = ampDisplays::loudest(readRecent(QStringLiteral("input"), recent), floorDb_, inputRead_);
+    read = ampDisplays::latest(readRecent(QStringLiteral("sag"), recent), sagRead_) || read;
     if (read) {
         lastRead_.restart();
     } else if (!lastRead_.isValid() || lastRead_.elapsed() > kQuietSeconds * 1000.0) {

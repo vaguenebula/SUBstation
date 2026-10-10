@@ -21,8 +21,8 @@
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
+#include "input/GestureKey.h"
 
-#include <QElapsedTimer>
 #include <QPointF>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
@@ -145,9 +145,7 @@ private:
     QString gesture_;  // the drag's merge key ("": none)
     double lastY_ = 0.0;      // where the mouse was at the drag's last move
     double dragValue_ = 5.0;  // the dial as the drag has it (unrounded)
-    QString wheelGesture_;    // the wheel's merge key, its handle, since its last notch
-    int wheelHandle_ = -1;
-    QElapsedTimer wheelClock_;
+    WheelGesture wheelGesture_;  // the wheel's: one per burst of notches
     QMetaObject::Connection bridgeConnection_;
 };
 

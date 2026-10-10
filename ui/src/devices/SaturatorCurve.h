@@ -10,8 +10,10 @@
 // signal has just been. Red bars flash at the sides when the input passes full
 // scale. Under the curve the In strip (the dots' level on the same x axis, the
 // held peak a tick), at its right the Out strip (display "out_peak", the
-// device's real output, on the y axis). A new setting morphs the curve from the
-// old shape to the new.
+// device's real output, on the y axis). A display read counts what came since
+// the last tick (at least its last kRecentSeconds: DeviceCanvas::readRecent): a
+// backlog (what came while the editor wasn't showing) is history. A new setting
+// morphs the curve from the old shape to the new.
 // Drag up and down for Drive, and across for the Bass Shaper's Threshold or the
 // Waveshaper's Curve, one undo step per drag; double-click sets Drive to 0 dB.
 // Everything moves in refreshDisplays(); when nothing moves it stops repainting.
@@ -51,6 +53,7 @@ public:
     static constexpr double kGlowFallSeconds = 0.25;  // then falls with this
     static constexpr double kOverSeconds = 0.3;       // the over-full-scale flash fades with this
     static constexpr double kHoldSeconds = 0.1;       // longer without values than a block's gap: silence
+    static constexpr double kRecentSeconds = 0.05;    // a tick's read counts at least its last this long
     static constexpr double kMeterFloorDb = -90.0;
     static constexpr double kThresholdMarkerGap = 3.0;  // px: the Bass Shaper's markers nearer the middle: not drawn
 

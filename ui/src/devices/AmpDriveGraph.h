@@ -18,10 +18,10 @@
 // supply sags (display sag), the power stage's drive drops and the curve's
 // shoulder breathes down with it (made again from the preamp's part kept, a
 // fraction of the work). A display read counts what came since the last tick
-// (at least its last 50 ms, AmpDisplays.h): a backlog (what came while the
-// editor wasn't showing, seconds of it) is history. The curve is made again
-// only when what it is made from changes (the settings, the rate, the width),
-// not at every sync. No mouse.
+// (at least its last 50 ms: readRecent, AmpDisplays.h): a backlog (what came
+// while the editor wasn't showing, seconds of it) is history. The curve is made
+// again only when what it is made from changes (the settings, the rate, the
+// width), not at every sync. No mouse.
 
 #include "audio/AmpResponse.h"
 #include "devices/DeviceCanvas.h"

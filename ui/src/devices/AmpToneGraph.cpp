@@ -23,7 +23,6 @@ namespace {
 
 constexpr double kMorphSeconds = 0.04;   // a new model's curve (through smoothstep: mostly there in 0.12 s)
 constexpr double kHandleSeconds = 0.06;  // a handle growing under the mouse
-constexpr qint64 kWheelGestureMs = 400;  // wheel notches closer than this are one undo step
 
 QString dialText(double value) { return sub::app::formatValue(value, QStringLiteral("dial")); }
 
@@ -286,13 +285,10 @@ void AmpToneGraph::wheelEvent(QWheelEvent* event) {
         setParams({{id, dialValue(dragValue_, range)}}, gesture_);
         return;
     }
-    if (wheelGesture_.isEmpty() || wheelHandle_ != handle || !wheelClock_.isValid() ||
-        wheelClock_.elapsed() > kWheelGestureMs)
-        wheelGesture_ = newGestureKey();
-    wheelHandle_ = handle;
-    wheelClock_.start();
+    // A burst of notches is one undo step. (One on another handle shares the burst's key but not its
+    // step: an edit merges only into one of the same parameters.)
     touch(id);
-    setParams({{id, dialValue(value(id) + delta / 120.0 * step, range)}}, wheelGesture_);
+    setParams({{id, dialValue(value(id) + delta / 120.0 * step, range)}}, wheelGesture_.key());
 }
 
 void AmpToneGraph::setHovered(int handle) {

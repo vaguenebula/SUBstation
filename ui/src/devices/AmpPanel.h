@@ -16,9 +16,9 @@
 // own pace) keeps the last values, so nothing flickers with the block size;
 // after kQuietSeconds with nothing at all (the device off, the engine stopped)
 // everything cools. A read counts what came since the last tick (at least its
-// last 50 ms, AmpDisplays.h): a backlog (what came while the editor wasn't
-// showing, seconds of it) is history. It takes no mouse: clicks go on to the
-// controls over it and to the frame.
+// last 50 ms: readRecent, AmpDisplays.h): a backlog (what came while the editor
+// wasn't showing, seconds of it) is history. It takes no mouse: clicks go on to
+// the controls over it and to the frame.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
