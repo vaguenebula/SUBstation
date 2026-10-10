@@ -205,7 +205,7 @@ TEST_CASE("the gate is listed with its parameters") {
     CHECK_EQ(info.params[12].valueLabels[5], std::string("High-pass"));
 
     // At its defaults: 1 ms of lookahead (Live's), so 48 samples of latency at 48 kHz.
-    Gate defaults({});
+    Gate defaults(Values{});
     CHECK_EQ(defaults.processor().typeId(), std::string("builtin:gate"));
     CHECK_EQ(defaults.processor().name(), std::string("Gate"));
     CHECK(defaults.processor().hasSidechain());
@@ -1100,7 +1100,7 @@ TEST_CASE("on one channel the gate gates as two equal channels do") {
 }
 
 TEST_CASE("the gate's displays: the levels in, out and of the key, and how much passed") {
-    Gate g({});  // the defaults: threshold -12 dB, 1 ms of lookahead, 3.5 ms attack
+    Gate g(Values{});  // the defaults: threshold -12 dB, 1 ms of lookahead, 3.5 ms attack
     std::vector<std::pair<std::string, int>> displays;
     for (const auto& d : g.processor().displays()) displays.emplace_back(d.id, d.samplesPerValue);
     CHECK(displays ==
