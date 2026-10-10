@@ -20,8 +20,9 @@ import QtQuick
 //   Sampler's two); the title bar shows the page arrows while there is more
 //   than one. `menuActions` (a list of Action): what the device's right-click
 //   menu starts with (the Sampler's Load Sample… and Clear Sample).
-//   `sidechainMenuRequested()`: show the device's sidechain menu (the
-//   Sidechain's hint over its curve).
+//   `sidechainMenuRequested(from)`: show the device's sidechain menu, under
+//   the item `from` (an editor's sidechain button), or without one in the
+//   editor's middle (the Sidechain's hint over its curve).
 // - It reads its displays as the meters update (EngineBridge::metersUpdated)
 //   while it is visible, and edits through the editor (undoably). Clicks it
 //   doesn't take (on its background) go on to what is under it: the view's

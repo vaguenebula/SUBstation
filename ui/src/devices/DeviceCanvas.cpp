@@ -2,6 +2,8 @@
 
 #include "devices/DisplayClock.h"
 
+#include <algorithm>
+
 #include "audio/BridgeTypes.h"
 #include "audio/EngineBridge.h"
 #include "controls/Automation.h"
@@ -237,5 +239,15 @@ std::pair<qint64, std::vector<float>> DeviceCanvas::readDisplayAt(const QString&
 }
 
 std::vector<float> DeviceCanvas::readDisplay(const QString& displayId) { return readDisplayAt(displayId).second; }
+
+double DeviceCanvas::tickSeconds() {
+    constexpr double kTick = kDisplayRefreshMs / 1000.0;
+    if (!tickTimer_.isValid()) {
+        tickTimer_.start();
+        return kTick;
+    }
+    const double elapsed = double(tickTimer_.restart()) / 1000.0;
+    return elapsed > 1.0 ? kTick : std::clamp(elapsed, kTick, 0.1);  // (over a second: it was hidden)
+}
 
 }  // namespace sub::ui

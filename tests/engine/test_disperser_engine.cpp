@@ -23,6 +23,7 @@
 #include "builtin/DisperserDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace disperser = sub::disperser;
@@ -31,69 +32,12 @@ namespace {
 
 constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
 
-using Values = std::vector<std::pair<std::string, float>>;
+using Values = ParamValues;
+using Change = ParamChange;
 
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
-
-// A Disperser on its own, outside an engine, at any sample rate: processed in
-// blocks, its changes handed over as automation (so its blocks split there) as
-// the renderer does.
-class Disperser {
-public:
-    explicit Disperser(double rate = kSampleRate, const Values& values = {})
-        : processor_(sub::BuiltinRegistry::instance().create("disperser")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
-
-    sub::Processor& processor() { return *processor_; }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-
-    // Processes one or two channels of equal length in place, `block` frames at a time.
-    void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[2] = {};
-        size_t next = 0;
-        for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
-            }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->clearAutomation();
-        }
-    }
-    // One channel: what comes out.
-    Samples play(Samples mono, const std::vector<Change>& changes = {}) {
-        run({&mono}, changes);
-        return mono;
-    }
-
-private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
+// A Disperser on its own, outside an engine (harness/Standalone.h).
+struct Disperser : Standalone {
+    explicit Disperser(double rate = kSampleRate, const Values& values = {}) : Standalone("disperser", rate, values) {}
 };
 
 Samples impulse(size_t length) {

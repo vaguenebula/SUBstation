@@ -20,11 +20,6 @@ constexpr double kColorSeconds = 0.08;  // a new model's colour
 constexpr double kMeterFallDbPerSecond = 24.0;
 constexpr double kMeterHoldSeconds = 1.0;
 
-double smoothstep(double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
-
 // From `a` to `b` component by component (8 bits each: exactly `b` at 1).
 QColor mix(const QColor& a, const QColor& b, double t) {
     t = std::clamp(t, 0.0, 1.0);

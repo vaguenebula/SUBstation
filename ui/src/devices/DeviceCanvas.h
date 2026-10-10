@@ -24,6 +24,7 @@
 #include <QHash>
 #include <QMap>
 #include <QPointF>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
@@ -105,6 +106,11 @@ protected:
     virtual void sync();
     // Draws what the engine reported since; called as the meters update, while visible.
     virtual void refreshDisplays() {}
+    // In refreshDisplays(): the seconds since the last call, to move animations on by. Never less
+    // than a tick (kDisplayRefreshMs: so animations ticked by hand move as the clock would) nor
+    // more than 0.1 s (a busy UI doesn't make them jump); the first call, or one after the item
+    // was hidden for a while, counts as one tick.
+    double tickSeconds();
     // The device's state besides its parameters changed (a sampler's sample).
     virtual void stateChanged() { sync(); }
 
@@ -133,6 +139,7 @@ private:
     QHash<QString, quint64> positions_;  // "<processor>:<display>" -> where to read from
     QList<QMetaObject::Connection> connections_;
     DoubleClicks doubleClicks_;
+    QElapsedTimer tickTimer_;  // since the last tickSeconds()
 };
 
 }  // namespace sub::ui

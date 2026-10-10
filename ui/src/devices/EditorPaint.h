@@ -22,6 +22,8 @@ class SgPainter;
 
 // `color` at `alpha` (0..255, clamped), as the editors' _alpha().
 QColor withAlpha(const QColor& color, int alpha);
+// The colour `t` of the way from `a` to `b` (0..1, clamped), alpha too.
+QColor mixColor(const QColor& a, const QColor& b, double t);
 // f"{value:.{decimals}f}"
 QString pythonFixed(double value, int decimals);
 // f"{value:+.{decimals}f}": always signed.
@@ -49,9 +51,10 @@ void drawDecadeGrid(SgPainter& painter, const QRectF& plot, const LogAxis& axis)
 
 // A polyline dashed as QPen's Qt::DashLine: dashes of 4 widths, gaps of 2.
 void drawDashedPolyline(SgPainter& painter, const std::vector<QPointF>& points, const QColor& color, double width);
-// A cubic Bézier from `from`, flattened into `out` (from excluded).
-void appendCubic(std::vector<QPointF>& out, const QPointF& from, const QPointF& c1, const QPointF& c2,
-                 const QPointF& to, int steps = 12);
+// A cubic Bézier from `from`, flattened into `out` (from excluded). `from` is a copy: it is often
+// out.back(), which appending moves.
+void appendCubic(std::vector<QPointF>& out, QPointF from, const QPointF& c1, const QPointF& c2, const QPointF& to,
+                 int steps = 12);
 
 // --- Animation --------------------------------------------------------------------------------
 // Editors animate in refreshDisplays() (about 60 times a second, DisplayClock): they move these on
@@ -94,6 +97,13 @@ struct Eased {
 // argument for an easing that looks the same whatever the tick's rate.
 inline double easeFraction(double dtSeconds, double seconds) {
     return seconds <= 0.0 ? 1.0 : 1.0 - std::exp(-dtSeconds / seconds);
+}
+
+// 0 below 0, 1 above 1, and an S-curve between, flat at both ends (smoothstep): fades and
+// highlights that start and stop softly.
+inline double smoothstep(double t) {
+    t = std::clamp(t, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
 }
 
 // --- Meters and lines -------------------------------------------------------------------------

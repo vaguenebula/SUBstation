@@ -1170,6 +1170,27 @@ private Q_SLOTS:
         QVERIFY(std::abs(easeFraction(1.0 / 60, 0.1) - (1.0 - std::exp(-1.0 / 6))) < 1e-12);
         QCOMPARE(dbToY(-30.0, QRectF(0, 10, 10, 60), -60.0, 0.0), 40.0);
         QCOMPARE(dbToY(-100.0, QRectF(0, 10, 10, 60), -60.0, 0.0), 70.0);
+
+        // Colours mix alpha too; smoothstep holds its ends.
+        const QColor mid = mixColor(QColor(0, 0, 0, 0), QColor(255, 255, 255, 255), 0.5);
+        QVERIFY(std::abs(mid.alphaF() - 0.5) < 0.01 && std::abs(mid.redF() - 0.5) < 0.01);
+        QCOMPARE(mixColor(Qt::red, Qt::blue, 2.0), QColor(Qt::blue));
+        QCOMPARE(smoothstep(-1.0), 0.0);
+        QCOMPARE(smoothstep(0.5), 0.5);
+        QCOMPARE(smoothstep(3.0), 1.0);
+
+        // A canvas's ticks: the first is one tick long, ticks by hand (no time between) count as
+        // ticks too, and a long gap (hidden) as one tick.
+        struct Probe : DeviceCanvas {
+            using DeviceCanvas::tickSeconds;
+            void paint(SgPainter&) override {}
+        } probe;
+        const double tick = kDisplayRefreshMs / 1000.0;
+        QCOMPARE(probe.tickSeconds(), tick);
+        QCOMPARE(probe.tickSeconds(), tick);
+        QTest::qWait(40);
+        const double later = probe.tickSeconds();
+        QVERIFY2(later >= 0.035 && later <= 0.1, qPrintable(QString::number(later)));
     }
 
 

@@ -307,3 +307,28 @@ TEST_CASE("dsp blocks: a low, narrow biquad rings out to exact zeros") {
         CHECK_EQ(state.process(coeffs, 0.f), 0.f);
     }
 }
+
+TEST_CASE("dsp blocks: a glide eases in and out and lands exactly; the S-curve; flushing floats") {
+    namespace dsp = sub::dsp;
+    dsp::Glide glide;
+    glide.snap(0.0);
+    CHECK(glide.settled(0.0));
+    // Two poles: the first step moves only coefficient² of the way (it eases in), then it lands exactly.
+    const double first = glide.next(1.0, 0.1, 1e-9);
+    CHECK_NEAR(first, 0.01, 1e-12);
+    int steps = 1;
+    while (!glide.settled(1.0) && steps < 10000) {
+        glide.next(1.0, 0.1, 1e-9);
+        ++steps;
+    }
+    CHECK(glide.settled(1.0));
+    CHECK_EQ(glide.value, 1.0);
+    CHECK(steps < 400);
+
+    CHECK_EQ(dsp::sCurve(0.f), 0.f);
+    CHECK_EQ(dsp::sCurve(1.f), 1.f);
+    CHECK_EQ(dsp::sCurve(0.5), 0.5);
+    CHECK_NEAR(dsp::sCurve(0.25), 0.15625, 1e-12);
+    CHECK_EQ(dsp::flushTiny(1e-21f), 0.f);
+    CHECK_EQ(dsp::flushTiny(-1e-19f), -1e-19f);
+}

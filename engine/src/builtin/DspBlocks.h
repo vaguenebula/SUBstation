@@ -1,8 +1,9 @@
 #pragma once
 // Building blocks the built-in effects share, beside Dsp.h's: one-pole and DC
-// filters, a delay line, an envelope follower, an LFO with Ableton's shapes and
-// synced rates, RBJ biquads, a Linkwitz-Riley crossover, a sliding maximum (for
-// lookahead), white noise, a fast tanh, and linear-phase oversampling.
+// filters, a two-pole glide for controls, a delay line, an envelope follower,
+// an LFO with Ableton's shapes and synced rates, RBJ biquads, a Linkwitz-Riley
+// crossover, a sliding maximum (for lookahead), white noise, a fast tanh, and
+// linear-phase oversampling.
 //
 // All inline. What allocates says so (prepare()); everything else is real-time
 // safe: no locks, no allocation, no exceptions.
@@ -57,6 +58,27 @@ public:
 private:
     float r_ = 0.9993f;
     float x1_ = 0.f, y1_ = 0.f;
+};
+
+// --- Glide ---------------------------------------------------------------------------------
+
+// A control's glide towards its target through two one-poles in a row: unlike
+// one, it eases in as well as out (no step in its slope when the target jumps,
+// which a pitch or a delay time would let you hear). `coefficient` is the share
+// of the way each pole moves per step; once both are within `landed` of the
+// target it lands there exactly, and settled() is true until the target moves.
+struct Glide {
+    double first = 0.0, value = 0.0;
+
+    void snap(double target) noexcept { first = value = target; }
+    bool settled(double target) const noexcept { return first == target && value == target; }
+    double next(double target, double coefficient, double landed) noexcept {
+        if (settled(target)) return value;
+        first += coefficient * (target - first);
+        value += coefficient * (first - value);
+        if (std::abs(target - first) < landed && std::abs(target - value) < landed) snap(target);
+        return value;
+    }
 };
 
 // --- Delay line ----------------------------------------------------------------------------
@@ -394,6 +416,11 @@ struct Crossover {
         low.reset();
         high.reset();
     }
+    void flush() noexcept {
+        split.flush();
+        low.flush();
+        high.flush();
+    }
     void process(const CrossoverCoefficients& c, float x, float& lowOut, float& highOut) noexcept {
         const Svf::Outputs s = split.tick(c.svf, x);
         const float hp = x - c.svf.k * s.band - s.low;
@@ -407,6 +434,7 @@ struct CrossoverAllpass {
     Svf state;
 
     void reset() noexcept { state.reset(); }
+    void flush() noexcept { state.flush(); }
     float process(const CrossoverCoefficients& c, float x) noexcept {
         return x - 2.f * c.svf.k * state.tick(c.svf, x).band;
     }

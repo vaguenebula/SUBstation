@@ -14,6 +14,13 @@ QColor withAlpha(const QColor& color, int alpha) {
     return result;
 }
 
+QColor mixColor(const QColor& a, const QColor& b, double t) {
+    t = std::clamp(t, 0.0, 1.0);
+    const auto mix = [t](float x, float y) { return float(x + (y - x) * t); };
+    return QColor::fromRgbF(mix(a.redF(), b.redF()), mix(a.greenF(), b.greenF()), mix(a.blueF(), b.blueF()),
+                            mix(a.alphaF(), b.alphaF()));
+}
+
 QString pythonFixed(double value, int decimals) { return QString::number(value, 'f', decimals); }
 
 QString pythonSigned(double value, int decimals) {
@@ -69,8 +76,8 @@ void drawDashedPolyline(SgPainter& p, const std::vector<QPointF>& points, const 
         p.drawPolyline(piece.data(), int(piece.size()), color, width, Qt::FlatCap);
 }
 
-void appendCubic(std::vector<QPointF>& out, const QPointF& from, const QPointF& c1, const QPointF& c2,
-                 const QPointF& to, int steps) {
+void appendCubic(std::vector<QPointF>& out, QPointF from, const QPointF& c1, const QPointF& c2, const QPointF& to,
+                 int steps) {
     for (int i = 1; i <= steps; ++i) {
         const double t = double(i) / steps, u = 1.0 - t;
         out.push_back(from * (u * u * u) + c1 * (3 * u * u * t) + c2 * (3 * u * t * t) + to * (t * t * t));

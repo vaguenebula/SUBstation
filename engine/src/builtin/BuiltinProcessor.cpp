@@ -83,6 +83,11 @@ void BuiltinProcessor::setParam(int index, float value) {
 }
 
 void BuiltinProcessor::process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) {
+    // (A comparison NaN fails, so it is caught with the rest; the loop vectorises.)
+    for (int c = 0; c < std::clamp(numChannels, 0, kMaxChannels); ++c) {
+        float* x = channels[c];
+        for (int i = 0; i < numFrames; ++i) x[i] = std::abs(x[i]) <= kMaxInput ? x[i] : 0.f;
+    }
     const size_t count = numAutomation();
     stretchStart_ = 0;
     if (count == 0) {

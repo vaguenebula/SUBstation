@@ -43,6 +43,7 @@ Column {
     }
     EditorReadout {
         width: parent.width
+        color: Theme.text  // (the cell's opacity dims it while disabled: not twice)
         text: cell.param ? (cell.formatter ? cell.formatter(cell.param.value) : cell.param.text) : ""
         elide: Text.ElideRight
     }
