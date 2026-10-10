@@ -58,6 +58,13 @@ Each track has:
   destination strip (its aux input), kept with the device (`ProcessorEntry::sidechain`), so it
   moves with it. See [Sidechains](#sidechains).
 
+A device's MIDI input from another track (`ProcessorEntry::midiSource`,
+`Engine::setProcessorMidiInput()`) is no edge: notes are built for every track in the
+prologue, before the graph runs, and copied into the device's own feed there, so it orders
+nothing, can't close a cycle (a track can play its notes into a device on itself, or two tracks
+into each other's) and isn't delay-compensated (the notes arrive on the beat they are written
+on, as the track's own would). See [midi.md](midi.md#a-devices-midi-input-from-another-track).
+
 In the engine's terms (`routeEdgesLocked()`), the edges are listed as `RouteEdge`s between
 indices into `tracks_` (-1: the master): each track's output (`kOutputEdge`, or
 `kOutputSidechainEdge` into a device) then its sends; then the input edges; then the

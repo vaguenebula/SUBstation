@@ -215,6 +215,14 @@ std::vector<const Track*> Project::sidechainSources(const QString& trackId) cons
 
 std::vector<const Track*> Project::inputSources(const QString& trackId) const { return sidechainSources(trackId); }
 
+std::vector<const Track*> Project::midiSources(const QString& trackId) const {
+    std::vector<const Track*> sources;
+    for (const Track& t : tracks_) {
+        if (t.kind == kMidiKind && t.id != trackId) sources.push_back(&t);
+    }
+    return sources;
+}
+
 QString Project::inputName(const QString& sourceId) const {
     return sourceId == kMaster ? QStringLiteral("Resampling") : track(sourceId).name;
 }
@@ -640,6 +648,11 @@ void Project::setDeviceEnabled(const QString& trackId, const QString& deviceId, 
 void Project::setDeviceSidechain(const QString& trackId, const QString& deviceId,
                                  const std::optional<Sidechain>& sidechain) {
     deviceRef(trackId, deviceId).sidechain = sidechain;
+    Q_EMIT devicesChanged(trackId);
+}
+
+void Project::setDeviceMidiFrom(const QString& trackId, const QString& deviceId, const QString& sourceId) {
+    deviceRef(trackId, deviceId).midiFrom = sourceId;
     Q_EMIT devicesChanged(trackId);
 }
 

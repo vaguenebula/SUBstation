@@ -159,7 +159,7 @@ The device view's clipboard is its own: the arrangement's clips, automation and 
 
 [DeviceFrame.qml](../../ui/qml/devices/DeviceFrame.qml) is what every device shares, with `DeviceInfo` (what the frame
 shows of the device: its name, tooltip, kind, on/off, folded, its chain, Move Left/Right, a plug-in's loading state
-and editor, its sidechain) reading the project again whenever that may have changed:
+and editor, its sidechain, its MIDI input) reading the project again whenever that may have changed:
 
 - **Frame**: `kPanelAlt` in a 1 px line of its title bar's colour, 3 px corners. Its width is `DEVICE_WIDTH` (216 px),
   a rack's or an editor's own (`body.implicitWidth + 2`: a rack's grows with its macros and its chain list), or 26 px
@@ -168,8 +168,8 @@ and editor, its sidechain) reading the project again whenever that may have chan
   `DeviceInfo::setEnabled`, overriding the switch's automation while it plays; following that automation, with the
   automation dot: `enabled`, `enabledAutomation`; right-click: Show, Delete and Re-Enable Automation), the name
   (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
-  and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the sidechain button (a
-  device with a sidechain input), the page arrows and "n/m" (only with more than one page), or, for an editor that
+  and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the MIDI From button
+  (a device that plays notes), the sidechain button (a device with a sidechain input), the page arrows and "n/m" (only with more than one page), or, for an editor that
   names its pages (`pageNames`: the Sampler's *Sample* and *Controls*, as Simpler's), a tab per page instead
   (`pageTab_<name>`, lit while it shows), the save button.
 - **Body**: a `Loader` taking all the height there is: a rack's `RackDeviceBody`, a plug-in's `PluginDeviceBody`,
@@ -199,6 +199,16 @@ and editor, its sidechain) reading the project again whenever that may have chan
   Post Mixer; devices with the same name in a chain are numbered). `tapOf()` shows a tap after a device that left the
   source as Post FX, and after its instrument as Pre FX, as the engine treats them. Choosing calls `editor.trySetDeviceSidechain`, which reports a refusal (the
   source went meanwhile) as a status message. Engine side: [engine/routing.md](../engine/routing.md).
+- **MIDI From** (`midiFromButton`, the `note` icon): the button exists when the device plays notes
+  (`DeviceInfo.acceptsMidi`, from `bridge.acceptsMidi(track, device)`: an instrument, or an effect with a MIDI input,
+  as a vocoder or a pitch corrector has; not while a plug-in isn't loaded). It is lit while the device takes another
+  track's notes (`midiFromOn`), its tooltip naming that track ("MIDI From: Keys (it plays that track's notes)", or
+  "MIDI From: its own track (click to take another track's notes)"). Its menu (`DevicePanel.showMidiFromMenu`, from
+  `DeviceInfo::midiFromMenu()`) is *Own Track*, then the MIDI tracks whose notes it could take
+  (`Project::midiSources`: every MIDI track but its own) under a search field that has the keyboard as it opens.
+  Choosing calls `DeviceInfo::setMidiFrom` → `editor.trySetDeviceMidiFrom` (one undo step). The tooltip follows the
+  source's renames. Model and engine sides: [app/model.md](../app/model.md#devices-racks-chains),
+  [engine/midi.md](../engine/midi.md#a-devices-midi-input-from-another-track).
 
 ### Built-in devices
 
@@ -474,6 +484,7 @@ The editors:
 | [test_ui_device_panel_presets.cpp](../../tests/app/test_ui_device_panel_presets.cpp) | The save button on every kind of device (asking before replacing), a rack taking the preset's name, presets dropped between devices and onto a device of their kind (outlined; one undo step) or of another, default presets |
 | [test_ui_device_panel_racks.cpp](../../tests/app/test_ui_device_panel_racks.cpp) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain list and the chain's devices shown when asked for, the chain clicked shown beside the rack and dropped into, chain mixers, macros added and taken away, renamed in place, automated, mapping to a macro, its ranges and unmapping, Ctrl+R on a chain (its list hidden too), a chain's menu, the view's height staying put |
 | [test_ui_device_panel_sidechain.cpp](../../tests/app/test_ui_device_panel_sidechain.cpp) | The sidechain button and its menu: sources, cycles greyed out, taps (after devices in racks too) |
+| [test_ui_device_panel_midi_from.cpp](../../tests/app/test_ui_device_panel_midi_from.cpp) | The MIDI From button (on an instrument and an effect with a MIDI input, not on one without), its tooltip (following its source's name) and menu, choosing a track and its own again, undo, its source deleted |
 | [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) | Each editor loaded as the view loads it, driven with the mouse and keys, the project and (rendering offline) the engine checked; the parameter cell and its menu |
 | [test_session_devices.cpp](../../tests/app/test_session_devices.cpp) | `DeviceSelection` through the session: selecting, the focus, the clipboard, folding, racks, drops, presets |
 | [test_sidechain_fit.cpp](../../tests/app/test_sidechain_fit.cpp) | The Sidechain's fit |

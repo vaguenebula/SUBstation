@@ -1,8 +1,10 @@
 # MIDI
 
-MIDI tracks, MIDI clips and the piano roll that edits them, MIDI input from controllers
-and keyboards, and the computer MIDI keyboard. Recording MIDI is in
-[recording.md](recording.md).
+MIDI tracks, MIDI clips and the piano roll that edits them, notes' pitch bends and
+vibrato (MIDI 2.0's per-note pitch bend), MIDI input from controllers and keyboards
+(MIDI 2.0 too), and the computer MIDI keyboard. Recording MIDI is in
+[recording.md](recording.md). A device on any track can play a MIDI track's notes
+(*MIDI From*, see [devices.md](devices.md#midi-from-another-track)).
 
 ## MIDI tracks and clips
 
@@ -67,6 +69,8 @@ double-clicked, if it plays there). Generate writes into the clip you double-cli
 | 0 | Deactivate the selected notes: they show grey and aren't heard (if they all are deactivated: activate them) |
 | Up / Down | Move a semitone (Shift: an octave) |
 | Left / Right | Move a grid step (Shift: a bar) |
+| B | Bend mode: show the notes' pitch bends to edit (again: back to the notes) |
+| V | The vibrato tool (into bend mode, if it is off; again: back to drawing points) |
 
 ### Velocity lane
 
@@ -98,6 +102,69 @@ on the selected notes and hides while you drag them. Each tool is one undo step.
     always get the same velocities.
   - **Timing** nudges starts at random, as a player would. At 100 % a note moves by up
     to a 32nd note; the default is 25 %. Lengths and velocities stay.
+
+### Pitch bends and vibrato
+
+Every note can bend: its pitch moves along a curve you draw, and vibrato can swing
+around it. This is MIDI 2.0's *per-note pitch bend*: each note bends on its own, so a
+chord's notes can glide apart, and one note's scoop doesn't move the others.
+
+Press **B** (or the bend button next to the headphones, above the keys) for **bend
+mode**: the notes stand back and each shows its bend as a white line over the rows, a
+semitone a row, starting from the middle of the note's own row (a note that doesn't
+bend shows a flat line). The bend bar shows at the grid's top right. B again goes back
+to editing notes.
+
+Curves are edited as automation envelopes are:
+
+- **Click on a note's line** to add a point there (press and drag to place it at once).
+  Points snap to the grid and to whole semitones as you drag; **Alt** places them
+  freely (off the grid, between semitones).
+- **Drag a point** to move it in time and pitch; a point can't pass its neighbours, nor
+  leave its note. The value shows by it as you drag ("+2.00 st").
+- **Click a point** to delete it. **Shift-click** or **Ctrl-click** points to select
+  several (they move together, even across notes), or **drag in empty space** to select
+  those in a rubber band; **Ctrl+A** selects every point. **Delete** deletes the
+  selected points (in bend mode Delete never deletes notes).
+- **Alt-drag between two points** to bend that segment (up bulges it upward).
+- **Double-click** to put a point at the pitch you clicked, on the note whose line is
+  nearest (a whole semitone; Alt: exactly where you clicked).
+
+How a curve plays: it starts at the note's own pitch at its start, goes through its
+points (from the first one, a straight line or the bend you gave each segment), then
+stays at the last point's pitch to the note's end and through its release. A point at
+the note's very start makes it start bent (a scoop up into it from below). Bends reach
+up to 48 semitones either way.
+
+**The vibrato tool** (**V**, or the wavy button in the bend bar) draws vibrato onto
+notes:
+
+- **Drag across a note** to give it vibrato over the stretch you drag across (on the
+  grid; Alt: anywhere). Dragging up as you go makes it deeper; the depth and rate show
+  as you draw.
+- **Click a note** for vibrato from there to its end. **Click a vibrato** to take it
+  away. A vibrato shows as an orange bar along the bottom of its note.
+- The bend bar sets what a new vibrato takes: its **rate** (5.5 Hz at first), its
+  **depth** (how far it swings either way: 0.50 semitones), and its **swell** (how much
+  of its length it takes to reach its depth: 30 %). A vibrato keeps the settings it was
+  drawn with.
+- Vibrato swings around the curve you draw by hand, and dies away at its end, so the
+  two go together: draw a scoop up into a note and vibrato on what follows, or add points
+  later and the vibrato follows them. In bend mode the curve it swings around shows as a
+  fainter line.
+
+**Clear** in the bend bar takes away the selected notes' bends and vibrato (every
+note's, with none selected). Each edit is one undo step.
+
+Bends move with their notes: moving, quantizing, copying, ×2 / ÷2 and legato carry
+them along (×2 / ÷2 stretch them in time). Trimming a note's start keeps its bend where
+it was in time; points or vibrato past a note's end are kept but not heard, as notes
+outside a clip are. Out of bend mode, a bent note shows its curve faintly.
+
+What hears bends: the built-in **Synth** and **Sampler**, and VST3 instruments that
+take *note expression* (VST3's per-note pitch, "tuning"). A plug-in that doesn't
+follows the notes without their bends. Notes recorded from a MIDI 2.0 controller keep
+the per-note bends played on them, drawn as points ([recording.md](recording.md)).
 
 ### Chords and key
 
@@ -158,6 +225,13 @@ is the only input.
 - Keys held when the transport stops, or when a track stops hearing its input
   (disarmed, another input), are released.
 - An input chosen on a track but not connected shows as *(not connected)*.
+- **MIDI 2.0.** The engine takes MIDI 2.0 messages (Universal MIDI Packets) as well as
+  MIDI 1.0's: notes, controllers, pressure and pitch bend play as MIDI 1.0's do (at
+  MIDI 1.0's resolution), and a **per-note pitch bend** bends the one note it names, as
+  a drawn bend does (48 semitones either way; resetting a note's controllers takes its
+  bend away). Recorded, a note keeps its per-note bends as points. MIDI 2.0 devices
+  themselves need a MIDI 2.0 driver (Windows MIDI Services), which SUBstation doesn't
+  have yet ([limitations.md](limitations.md)).
 
 ## Computer MIDI keyboard
 

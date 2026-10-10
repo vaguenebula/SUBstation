@@ -221,10 +221,10 @@ private Q_SLOTS:
         QCOMPARE(folders->property("currentIndex").toInt(), 1);
         QVERIFY(shown(QStringLiteral("removePluginFolder"))->isEnabled());
         QTRY_VERIFY_WITH_TIMEOUT(!index.scanning(), 30000);
-        QCOMPARE(index.pluginCount(), 4);
+        QCOMPARE(index.pluginCount(), 5);
         QCOMPARE(index.failureCount(), 1);
         QCOMPARE(shown(QStringLiteral("scanStatus"))->property("text").toString(),
-                 QStringLiteral("4 plug-ins found · 1 file could not be read"));
+                 QStringLiteral("5 plug-ins found · 1 file could not be read"));
         QVERIFY(shown(QStringLiteral("rescanPlugins"))->isEnabled());
         test::screenshot(window_, QStringLiteral("preferences-plugins-found"));
 
@@ -232,7 +232,7 @@ private Q_SLOTS:
         QVERIFY(index.scanning());
         QVERIFY(!shown(QStringLiteral("rescanPlugins"))->isEnabled());
         QTRY_VERIFY_WITH_TIMEOUT(!index.scanning(), 30000);
-        QCOMPARE(index.pluginCount(), 4);
+        QCOMPARE(index.pluginCount(), 5);
         test::click(window_, test::centerOf(shown(QStringLiteral("removePluginFolder"))));
         QVERIFY(index.customFolders().isEmpty());
         QCOMPARE(folders->property("count").toInt(), 1);

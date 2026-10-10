@@ -23,7 +23,7 @@ load:  Session::openProject(path)
               └─ read, parse the JSON
                    ├─ check "format" and "version"
                    ├─ tracksFromJson (+ repairTree), returnsFromJson, the master
-                   ├─ repairRouting   (drops sends, inputs and sidechains that can't be)
+                   ├─ repairRouting   (drops sends, inputs, sidechains and MIDI inputs that can't be)
                    └─ Project::replaceContents(...)  → Project::reset → the bridge rebuilds the engine
 ```
 
@@ -62,7 +62,7 @@ source-audio seconds; volumes are dB; pan is -1..1; automation values are normal
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | `"gilstudio-project"` | must match, or the file is refused ("Not a SUBstation project") |
-| `version` | int | `kProjectVersion`, now 20; a larger one is refused ("This project was saved by a newer version of SUBstation") |
+| `version` | int | `kProjectVersion`, now 22; a larger one is refused ("This project was saved by a newer version of SUBstation") |
 | `tempo` | float | BPM (default 120) |
 | `key` | string or null | the project key as `Key::name()` (`"Am"`, `"F#"`, `"Bb"`); null: *No Key* |
 | `time_signature` | `[numerator, denominator]` | default `[4, 4]` |
@@ -137,9 +137,20 @@ used (and the same for `reversed_from`). So a project folder (with its samples a
 `id`, `name` (MIDI clips have none: saved `""`; one in an earlier file is dropped on load), `start_beat`,
 `duration_beats`, `offset_beats`, `muted` (only for a deactivated clip: `true`), and `notes` inline as
 `[pitch, start, length, velocity]` (beats from the clip's content start), with a fifth value, `true`, for a
-deactivated note. On load, notes with a length of 0 or less
+deactivated note. A bent note (MIDI 2.0's per-note pitch bend) has a sixth value, its bend, so its fifth is written
+too (`false` unless it is deactivated):
+
+```json
+[60, 0, 1, 100, false, {"bend": [[0.25, 2, 0], [0.5, 2, 0.4]], "vibrato": [[0.5, 0.5, 0.5, 5.5, 0.3]]}]
+```
+
+`bend` is its points, `[time, semitones, curve]` (`time` in beats from the note's start), and `vibrato` its vibratos,
+`[start, length, depth, rate, fade]` (beats from the note's start; `depth` in semitones, `rate` in cycles a second);
+either is left out when it has none. On load, notes with a length of 0 or less
 are dropped, pitch is clamped to 0..127, velocity to 1..127, start to 0 and up, and the notes are sorted and
-de-duplicated (`notes::normalize`).
+de-duplicated (`notes::normalize`). Bend points are sorted and held to ±48 semitones, vibratos without a length or
+a rate are dropped (those past the note's end are kept, as saved); a point or a vibrato with the wrong number of
+values, or a sixth value that isn't an object, makes the file damaged.
 
 ### Devices
 
@@ -152,6 +163,7 @@ de-duplicated (`notes::normalize`).
 | `plugin` | plug-ins only: `{"format": "VST3", "uid", "name", "vendor", "path", "instrument"}` |
 | `state` | base64: a plug-in's whole state (a `.vstpreset`), or a built-in device's non-parameter values; omitted when a built-in device has none |
 | `sidechain` | only when set: `{"track": source id, "tap": "post" / "pre" / "pre-fx" / a device id}` |
+| `midi_from` | only when set: the id of the MIDI track whose notes it plays instead of its own track's (version 22) |
 | `name` | racks only, when set: the preset it was saved as or loaded from |
 | `chains` | racks only: `[{"id", "name", "volume_db", "pan", "mute", "solo", "devices": [...]}]` |
 | `macros` | racks only: `[{"macro": 0..15, "device", "param", "low", "high"}]` (`low` > `high`: the other way round) |
@@ -211,6 +223,8 @@ that makes an older file load as it was, and saving writes the current version.
 | 18 | racks' macros: how many and their names (`macro_names`) | the macros a rack uses (mapped, or turned from 0), and at least 4, named by number (racks had eight) |
 | 19 | track names as templates (`#`: the track's number, its place) | a track named as new ones were (`3 Audio`, `2 MIDI`, `1 Group`): `# Audio` named by what it holds, `# Group`; other names as they are |
 | 20 | deactivated clips (`muted` on an audio or MIDI clip) and notes (a fifth value, `true`) | every clip and note playing |
+| 21 | tracks' outputs (`output`) and where inputs from tracks are tapped (`input_tap`) | outputs into their groups (or the master), inputs taken after the source's fader |
+| 22 | notes' bends (a sixth value: points and vibratos, MIDI 2.0's per-note pitch bend) and devices' MIDI inputs from other tracks (`midi_from`) | no note bent; every device playing its own track's notes |
 
 `folded_devices` has no version of its own: files without it load with no device folded. Nor have
 `chain_lists_shown` and `rack_devices_hidden`: files without them show no chain list, and every rack's devices. The
@@ -233,7 +247,9 @@ refusing the file:
   - each audio track's `input_track` is kept only if the source exists (a track, a return or the master) and doesn't
     close a cycle; then its device channels are cleared;
   - sidechains are put back one by one on every owner's devices (racks too), dropped if the source isn't a track or
-    return of the project or would close a cycle.
+    return of the project or would close a cycle;
+  - a device's `midi_from` is dropped (it plays its own track's notes) unless it names a MIDI track of the project
+    other than the device's own.
 - Rack macro mappings to a device not in the rack, or to a macro the rack doesn't have, are dropped. A rack has 1 to
   16 macros (`macro_names` longer than 16 is cut there; an empty one gives the default 4), and a value for each.
 - Sends' and chains' levels are clamped to the faders' range (-70..+6 dB), pans to -1..1; a MIDI channel outside
@@ -275,11 +291,11 @@ lists them, and right-clicking beside the devices loads a file (see [guide/devic
 ```
 
 - `deviceToPreset(device)`: the device as the project file stores it (a rack with its chains, the devices in them
-  with plug-ins' states as last stored, its macros), with every `sidechain` stripped (they name tracks of the project
-  it came from). The session stores the plug-ins' states first.
+  with plug-ins' states as last stored, its macros), with every `sidechain` and `midi_from` stripped (they name
+  tracks of the project it came from). The session stores the plug-ins' states first.
 - `presetDevice(data)`: checks `format` ("Not a SUBstation preset") and `version` (`kPresetVersion` = 1; a newer one is
   refused), refuses racks nested deeper than `kMaxRackDepth` ("The preset nests racks too deep"), makes a damaged one
-  `ProjectFileError("The preset is damaged: ...")`, clears sidechains and gives the device and everything in it
+  `ProjectFileError("The preset is damaged: ...")`, clears sidechains and MIDI inputs and gives the device and everything in it
   **fresh ids** (`refreshIds`, which also renames macro mappings). So a preset loaded twice is two racks.
 - `savePreset` / `loadPreset` write and read the file (`QSaveFile`, as projects). `loadPreset` names a rack after the
   file.
@@ -352,6 +368,10 @@ engine reads and writes them (`EngineBridge::applyPluginState`, `pluginState`), 
 - [test_presets.cpp](../../tests/app/test_presets.cpp): the library (saving by name, listing by device, renaming),
   default presets, presets as new devices, rack names.
 - [test_midi_model.cpp](../../tests/app/test_midi_model.cpp): MIDI tracks and inputs round trip.
+- [test_note_bends.cpp](../../tests/app/test_note_bends.cpp): notes' bends round trip; damaged ones refused, points
+  out of order or range loaded in order and held to it.
+- [test_editor_midi_from.cpp](../../tests/app/test_editor_midi_from.cpp): MIDI inputs saved and loaded, one from a
+  track that isn't a MIDI track dropped, presets without them.
 - [test_editor_groups.cpp](../../tests/app/test_editor_groups.cpp),
   [test_editor_sends.cpp](../../tests/app/test_editor_sends.cpp),
   [test_editor_resampling.cpp](../../tests/app/test_editor_resampling.cpp),

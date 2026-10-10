@@ -225,6 +225,10 @@ public:
     // could take as its sidechain, but its own, in order (some would close a
     // cycle: sidechainWouldCycle).
     std::vector<const Track*> sidechainSources(const QString& trackId) const;
+    // The MIDI tracks whose notes a device on a track (or a return, or the
+    // master) could take instead of its own track's, but that track itself, in
+    // order. (A MIDI input carries no audio: none closes a cycle.)
+    std::vector<const Track*> midiSources(const QString& trackId) const;
     // The tracks (groups too) and returns whose output a track could take as its
     // input, but itself, in order (some would close a cycle: inputWouldCycle).
     // The master's (resampling) can be taken too.
@@ -337,6 +341,7 @@ public:
     void setDeviceParams(const QString& trackId, const QMap<DeviceParam, double>& values);
     void setDeviceEnabled(const QString& trackId, const QString& deviceId, bool enabled);
     void setDeviceSidechain(const QString& trackId, const QString& deviceId, const std::optional<Sidechain>& sidechain);
+    void setDeviceMidiFrom(const QString& trackId, const QString& deviceId, const QString& sourceId);
     void setDeviceState(const QString& trackId, const QString& deviceId, const std::optional<QString>& state);
     // A plug-in device's state as its plug-in has it now (base64), and where the
     // plug-in was found, kept in the model without a signal or an undo step: it
@@ -373,7 +378,7 @@ Q_SIGNALS:
     // The tracks' order or groups changed (not which tracks there are).
     void tracksArranged();
     void clipsChanged(const QString& trackId);
-    // Devices added/removed/moved/toggled (in racks too), a sidechain, macros or a rack's name changed.
+    // Devices added/removed/moved/toggled (in racks too), a sidechain, a MIDI input, macros or a rack's name changed.
     void devicesChanged(const QString& trackId);
     // A rack chain's name or mixer.
     void chainChanged(const QString& trackId, const QString& chainId);

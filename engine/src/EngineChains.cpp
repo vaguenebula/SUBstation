@@ -370,7 +370,31 @@ void Engine::moveProcessor(uint32_t processorId, uint32_t toChainId, int index) 
 
 ProcessorInfo Engine::processorInfo(uint32_t processorId) {
     auto p = processor(processorId);
-    return {p->typeId(), p->name(), p->latencySamples(), p->tailSamples(), p->hasEditor(), p->hasSidechain()};
+    return {p->typeId(),    p->name(),         p->latencySamples(), p->tailSamples(),
+            p->hasEditor(), p->hasSidechain(), p->acceptsMidi()};
+}
+
+void Engine::setProcessorMidiInput(uint32_t processorId, uint32_t sourceTrackId) {
+    std::lock_guard lock(mutex_);
+    const auto processor = processorLocked(processorId);
+    ProcessorEntry& entry = processors_[processorId];
+    if (sourceTrackId != 0) {
+        if (!processor->acceptsMidi()) {
+            throw std::invalid_argument("Device " + std::to_string(processorId) + " takes no MIDI");
+        }
+        arrangementTrackLocked(sourceTrackId);  // (throws for an unknown one)
+    }
+    if (entry.midiSource == sourceTrackId) return;
+    entry.midiSource = sourceTrackId;
+    if (sourceTrackId != 0 && !entry.midiFeed) entry.midiFeed = std::make_shared<MidiFeed>(TrackBuffers::kMaxEvents);
+    processor->requestReset();  // what it heard from where it heard it stops
+    rebuildSnapshotLocked();
+}
+
+uint32_t Engine::processorMidiInput(uint32_t processorId) {
+    std::lock_guard lock(mutex_);
+    processorLocked(processorId);
+    return processors_[processorId].midiSource;
 }
 
 void Engine::setProcessorSidechain(uint32_t processorId, uint32_t sourceTrackId, SidechainTap tap,

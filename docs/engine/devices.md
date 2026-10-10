@@ -16,7 +16,7 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 |---|---|
 | [Processor.h](../../engine/src/Processor.h) | `ProcessEvent`, `EventList`, `ProcessContext`, `ParamInfo`, `DisplayInfo`, `ParamAutomation`, `ProcessorEvent`, `Processor` |
 | [builtin/BuiltinProcessor.h](../../engine/src/builtin/BuiltinProcessor.h) / [.cpp](../../engine/src/builtin/BuiltinProcessor.cpp) | parameters as atomics (`param`, `isOn`, `choice`, `choiceIndex`, `offOnLabels`), automation by splitting blocks, displays, state as named text values, `loadSource()` |
-| [builtin/Dsp.h](../../engine/src/builtin/Dsp.h) | DSP the devices share, all inline: the state-variable filter section (`dsp::Svf`, `dsp::SvfCoefficients`), `hermite`, `followPeak`, `flushTiny`, the instruments' envelopes (`riseStep`, `fallCoefficient`, `kSilent`, `kFadeTo`), `renderBetweenNotes` |
+| [builtin/Dsp.h](../../engine/src/builtin/Dsp.h) | DSP the devices share, all inline: the state-variable filter section (`dsp::Svf`, `dsp::SvfCoefficients`), `hermite`, `followPeak`, `flushTiny`, the instruments' envelopes (`riseStep`, `fallCoefficient`, `kSilent`, `kFadeTo`), `renderBetweenNotes`, `kBendGlideSeconds` |
 | [builtin/BuiltinRegistry.h](../../engine/src/builtin/BuiltinRegistry.h) / [.cpp](../../engine/src/builtin/BuiltinRegistry.cpp) | `BuiltinRegistry`, `BuiltinInfo`, `BuiltinCategory`, `SUB_REGISTER_BUILTIN` |
 | [builtin/devices/Synth.cpp](../../engine/src/builtin/devices/Synth.cpp) | the Synth instrument |
 | [builtin/devices/Sampler.cpp](../../engine/src/builtin/devices/Sampler.cpp) | the Sampler instrument |
@@ -65,15 +65,20 @@ Everything else is called from the main (UI) thread, as plug-in formats require,
 | `requestReset()` / `takeResetRequest()` | asks whichever renderer processes it next to `reset()` it first |
 | `automate()`, `clearAutomation()`, `automation()`, `numAutomation()` | automation for one `process()` call; see [automation.md](automation.md) |
 | `hasSidechain()`, `setSidechain()`, `setSidechainConnected()`, `sidechain(c)`, `sidechainConnected()` | the sidechain (aux) input; see below |
+| `acceptsMidi()` | it plays notes (an instrument, or an effect with a MIDI input, as a vocoder or a pitch corrector has): what can take another track's notes ([midi.md](midi.md#a-devices-midi-input-from-another-track)). Main thread; false by default |
 | `displays()`, `readDisplay()` | streams of values for a device's own editor |
 
 ### Events and context
 
 - `ProcessEvent`: `NoteOn`, `NoteOff` (`data[0]` key, 60 = C3; `data[1]` velocity, 0 for note-offs; `data[2]`
-  channel) or raw `Midi` bytes, at a `sampleOffset`. The renderer sends each track's notes to every processor on the
-  track (audio effects ignore them), sorted by offset, note-offs before note-ons at the same offset. A note-on with
-  velocity 0 counts as a note-off (`startsNote()`, `endsNote()` say which an event is). Plug-in adapters translate
-  them to their format's events.
+  channel), `NoteBend` (a note's pitch from here on, `bend` semitones from its key: MIDI 2.0's per-note pitch bend)
+  or raw `Midi` bytes, at a `sampleOffset`. Notes are addressed as MIDI 2.0 addresses them: a note-on carries a
+  `noteId`, and its note-off and bends carry the same; -1 (a MIDI 1.0 message) means the note is known by its key and
+  channel. The renderer sends each track's notes to every processor on the track (audio effects ignore them; a device
+  may take another track's instead), sorted by offset, note-offs before note-ons at the same offset and a note's
+  bends after its note-on. A note-on with velocity 0 counts as a note-off (`startsNote()`, `endsNote()` say which an
+  event is). Plug-in adapters translate them to their format's events. See [midi.md](midi.md) for where they come
+  from.
 - `ProcessContext`: sample rate, `samplePos` and `beatPos` of the block's first frame, tempo, time signature,
   `playing`, `looping` with loop start and end beats, `offline`, and `inEvents`; `samplesPerBeat()` and
   `beatsPerBar()` from them. The renderer splits blocks where the playhead jumps (a loop wrap), so a block is always
@@ -194,7 +199,12 @@ resonant low-pass filter. Mono, on both channels. Velocity sets the level.
   its target (about 5 ms) with coefficients per sample, so turning the knob doesn't step; it is limited to 0.45 of the
   sample rate. Resonance maps to damping from 2 (none) to 0.1 (Q = 10) and applies per block.
 - Voices: a note-on takes a free voice, else the quietest releasing one, else the oldest. With the same key held
-  twice, the older note ends first. One voice's peak at full velocity is 0.25.
+  twice, the older note ends first (a note-off with a note id ends that note's voice). One voice's peak at full
+  velocity is 0.25.
+- Bends: a `NoteBend` moves its note's voice (by its note id, else the newest voice on its key) to `bend` semitones
+  from its key, held to ±48 (`kMaxBendSemitones`). The voice glides there per sample, a one-pole of about a
+  millisecond (`dsp::kBendGlideSeconds`), so the renderer's steps (one every 32 samples at most) don't zipper; the
+  oscillator's increment is the key's times 2^(bend/12).
 - It *writes* (does not add) its output: it is the first device on a MIDI track. With no events and no active voice it
   writes silence and skips the work. `tailSamples()` is the release time.
 
@@ -257,6 +267,12 @@ clicking.
 
 The defaults are the Sampler before it had modes (Classic, everything else off), so a
 project saved then plays as it did: a parameter it doesn't have takes its default.
+
+A `NoteBend` moves the voice playing its note (by note id, else a voice on its key) to `bend` semitones from its
+pitch, in every mode (a slice too), held to ±48. The voice glides there a chunk at a time with the same
+millisecond one-pole as the Synth (`dsp::kBendGlideSeconds`), and the bend adds to its pitch as Transpose and the LFO
+do. A legato note that takes over a mono voice takes it over at its own pitch (its bend back to 0); letting go of it
+glides back to the newest key still held, whose bends then find the voice by its key (it drops the note id).
 
 - **The sample as it plays** (`Reader`, built per block): frames are counted in the
   order the sample plays, so Reverse reads it backwards (`frames - 1 - i`) and every
@@ -783,6 +799,8 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   resampled past 4 times as fast, also a note already playing), the display of a reversed note, a resonant filter ringing out after the last note,
   and a random LFO restarted by notes rendering the same every time.
 - [test_midi_engine.cpp](../../tests/engine/test_midi_engine.cpp): the Synth plays the right pitch and level.
+- [test_note_bends_engine.cpp](../../tests/engine/test_note_bends_engine.cpp): the Synth and the Sampler play a
+  note's bend at its bent pitch, and the Synth bends only the note a bend names.
 - [test_automation_engine.cpp](../../tests/engine/test_automation_engine.cpp): built-in blocks split where automation
   changes values.
 

@@ -53,17 +53,58 @@ inline constexpr double kMaxSegmentBpm = 999.0;
 // (Unknown: the name itself.)
 QString legacyWarpMode(const QString& name);
 
+// A breakpoint of a note's bend (MIDI 2.0's per-note pitch bend): `time` in
+// beats from the note's start, `semitones` from its pitch, and how the segment
+// from it to the next point bends (-1..1, as an automation breakpoint's curve).
+struct BendPoint {
+    double time = 0.0;
+    double semitones = 0.0;
+    double curve = 0.0;
+
+    friend bool operator==(const BendPoint&, const BendPoint&) = default;
+};
+
+// Vibrato over a stretch of a note, on top of its bend: from `start` (beats
+// from the note's start) for `length` beats, swinging `depth` semitones either
+// way `rate` times a second, swelling in over the first `fade` (0..1) of it.
+struct Vibrato {
+    double start = 0.0;
+    double length = 0.0;
+    double depth = 0.5;
+    double rate = 5.5;
+    double fade = 0.3;
+
+    friend bool operator==(const Vibrato&, const Vibrato&) = default;
+};
+
 // A MIDI note. Times are in beats from the start of its clip's content. A
 // deactivated note (`muted`, 0 in the piano roll, as in Ableton) is kept and
 // edited like any other but isn't heard (Clip::heardNotes).
+//
+// Its bend is a curve of points from its start (sorted by time), and vibratos
+// on top of it: it starts at the note's pitch, goes through the points, then
+// holds the last one's value; a vibrato swells in and dies away on the curve.
+// How it sounds is the engine's sub::bend (engine/src/NoteBend.h): bendAt().
+// Its times are the note's own, so it moves with the note; trimming the note's
+// start keeps it where it was in time, and points or vibratos past its end are
+// kept but not heard.
 struct Note {
     int pitch = 60;  // MIDI note number, 60 = C3
     double start = 0.0;
     double length = 0.0;
     int velocity = 100;  // 1..127
     bool muted = false;  // deactivated: silent
+    std::vector<BendPoint> bend;    // sorted by time
+    std::vector<Vibrato> vibrato;   // in time order, not overlapping
 
     double end() const { return start + length; }
+    // It has a bend (points or vibrato) to draw and play.
+    bool bent() const { return !bend.empty() || !vibrato.empty(); }
+    // Its bend in semitones `beat` beats from its start, at `tempo` (the
+    // vibratos' rates are in cycles a second); curveAt(): its points' curve
+    // alone, what the vibratos swing around.
+    double bendAt(double beat, double tempo) const;
+    double curveAt(double beat) const;
 
     friend bool operator==(const Note&, const Note&) = default;
 };

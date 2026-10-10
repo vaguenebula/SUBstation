@@ -87,12 +87,14 @@ inline float fallCoefficient(float ms, double samplesPerMs) noexcept {
 // --- Notes ---------------------------------------------------------------------------------
 
 // Renders a block in stretches between its events: render(from, to) up to each
-// event, then noteOn(key, velocity) for a note that starts there or
-// noteOff(key) for one that ends (ProcessEvent::startsNote/endsNote), then the
-// rest. Every event splits the block, so one more kind (a pitch bend, a
-// controller) needs only its own handler here.
-template <typename Render, typename NoteOn, typename NoteOff>
-void renderBetweenNotes(const EventList& events, int frames, Render&& render, NoteOn&& noteOn, NoteOff&& noteOff) {
+// event, then noteOn(event) for a note that starts there, noteOff(event) for
+// one that ends (ProcessEvent::startsNote/endsNote) or noteBend(event) for a
+// note's bend (MIDI 2.0's per-note pitch bend: event.bend semitones, the note
+// event.noteId, else the key), then the rest. Every event splits the block, so
+// one more kind (a controller) needs only its own handler here.
+template <typename Render, typename NoteOn, typename NoteOff, typename NoteBend>
+void renderBetweenNotes(const EventList& events, int frames, Render&& render, NoteOn&& noteOn, NoteOff&& noteOff,
+                        NoteBend&& noteBend) {
     int position = 0;
     for (size_t e = 0; e < events.count; ++e) {
         const ProcessEvent& event = events.events[e];
@@ -100,12 +102,18 @@ void renderBetweenNotes(const EventList& events, int frames, Render&& render, No
         render(position, at);
         position = at;
         if (event.startsNote()) {
-            noteOn(event.key(), event.velocity());
+            noteOn(event);
         } else if (event.endsNote()) {
-            noteOff(event.key());
+            noteOff(event);
+        } else if (event.type == ProcessEvent::Type::NoteBend) {
+            noteBend(event);
         }
     }
     render(position, frames);
 }
+
+// How quickly a voice follows its note's bend: a one-pole glide of about a
+// millisecond, so the steps between bend events (Renderer::kBendStep) don't zipper.
+inline constexpr double kBendGlideSeconds = 0.001;
 
 }  // namespace sub::dsp

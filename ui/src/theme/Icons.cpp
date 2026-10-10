@@ -8,6 +8,8 @@
 #include <QUrlQuery>
 #include <QVariant>
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <vector>
@@ -302,6 +304,31 @@ const std::map<QString, Icon>& icons() {
                                          p.setBrush(Qt::NoBrush);
                                          p.drawPath(path({{30, 46}, {30, 10}, {48, 22}}, false));
                                      }};
+        // A note bending up: the piano roll's bend mode (its notes' pitch curves).
+        t[QStringLiteral("bend")] = {text, [](QPainter& p, const QColor& c, bool) {
+                                         p.setPen(pen(c, 5, Qt::RoundCap, Qt::RoundJoin));
+                                         p.setBrush(Qt::NoBrush);
+                                         QPainterPath curve(QPointF(8, 48));
+                                         curve.lineTo(22, 48);
+                                         curve.cubicTo(QPointF(34, 48), QPointF(36, 18), QPointF(48, 18));
+                                         curve.lineTo(56, 18);
+                                         p.drawPath(curve);
+                                         p.setPen(Qt::NoPen);
+                                         p.setBrush(c);
+                                         p.drawEllipse(QPointF(22, 48), 5, 5);
+                                         p.drawEllipse(QPointF(48, 18), 5, 5);
+                                     }};
+        // A line swinging, wider as it goes: drawing vibrato onto a note.
+        t[QStringLiteral("vibrato")] = {text, [](QPainter& p, const QColor& c, bool) {
+                                            p.setPen(pen(c, 5, Qt::RoundCap, Qt::RoundJoin));
+                                            p.setBrush(Qt::NoBrush);
+                                            QPainterPath wave(QPointF(6, 32));
+                                            for (int x = 7; x <= 58; ++x) {
+                                                const double swell = std::min(1.0, (x - 6) / 26.0);
+                                                wave.lineTo(x, 32 - 16 * swell * std::sin((x - 6) * 0.36));
+                                            }
+                                            p.drawPath(wave);
+                                        }};
         // A device's fold button: a triangle pointing down while it is open, right while folded.
         t[QStringLiteral("fold")] = {text, [](QPainter& p, const QColor& c, bool folded) {
                                          p.fillPath(folded ? path({{22, 14}, {46, 32}, {22, 50}}, true)

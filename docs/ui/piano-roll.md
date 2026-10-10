@@ -20,10 +20,13 @@ This page is about the code.
 | [ClipViewController](../../ui/src/pianoroll/ClipViewController.h) | What the clip view shows and does (the old `ClipView` without its widgets): which clips open, MIDI or audio, editing every open audio clip at once |
 | [ClipWaveform](../../ui/src/pianoroll/ClipWaveform.h) | The audio clips' waveforms, each whole source file fitted to the width |
 | [ClipViewKnob.qml](../../ui/qml/clipview/ClipViewKnob.qml), [ClipViewSection.qml](../../ui/qml/clipview/ClipViewSection.qml) | A captioned knob with its readout; a titled box of controls |
-| [PianoRollView.qml](../../ui/qml/pianoroll/PianoRollView.qml) | The piano roll's layout: the headphones button, the ruler, the keys, the note grid with the chord lane and the note tools over it, the velocity lane, the scroll bars |
-| [PianoRoll](../../ui/src/pianoroll/PianoRoll.h) | The piano roll's state (the old `PianoRoll` without its widgets): the clips it shows, its own time axis and row height, the selected notes (and the stretch a rubber band selected), the paste marker, the notes copied, the playhead, the keys sounding, the note tools' settings and actions, the song's chords and key over the clips, Generate |
+| [PianoRollView.qml](../../ui/qml/pianoroll/PianoRollView.qml) | The piano roll's layout: the headphones and bend buttons, the ruler, the keys, the note grid with the chord lane and the note tools over it, the velocity lane, the scroll bars |
+| [PianoRoll](../../ui/src/pianoroll/PianoRoll.h) | The piano roll's state (the old `PianoRoll` without its widgets): the clips it shows, its own time axis and row height, the selected notes (and the stretch a rubber band selected), the paste marker, the notes copied, the playhead, the keys sounding, the note tools' settings and actions, the song's chords and key over the clips, Generate; bend mode, its tool and the vibrato's settings, the selected bend points, bend edits |
 | [RollItem](../../ui/src/pianoroll/RollItem.h) | The base of the piano roll's items: `session` and `roll` properties |
 | [NoteGrid](../../ui/src/pianoroll/NoteGrid.h) | The notes: painting, hit-testing, mouse, wheel, keys, and its gestures (`MoveNotesGesture`, `ResizeNotesGesture`, `SelectNotesGesture`, `PanGesture`) |
+| [NoteGridBends.cpp](../../ui/src/pianoroll/NoteGridBends.cpp) | The note grid's bends: the curves painted, hit-testing (`bendHitAt`, `curveNear`), bend mode's presses, double-clicks, cursor and keys, and its gestures (`MoveBendPointsGesture`, `CurveBendGesture`, `SelectBendsGesture`, `VibratoGesture`) |
+| [NoteGridGesture.h](../../ui/src/pianoroll/NoteGridGesture.h) | `NoteGrid::Gesture`, the base of the grid's mouse drags (private to NoteGrid.cpp and NoteGridBends.cpp) |
+| [BendTools.qml](../../ui/qml/pianoroll/BendTools.qml) | The bend bar, at the grid's top right in bend mode: Draw and Vibrato, a new vibrato's rate, depth and swell, Clear |
 | [PianoKeys](../../ui/src/pianoroll/PianoKeys.h), [PianoRuler](../../ui/src/pianoroll/PianoRuler.h), [VelocityLane](../../ui/src/pianoroll/VelocityLane.h), [RollPlayhead](../../ui/src/pianoroll/RollPlayhead.h) | The keyboard, the ruler, the velocities, and the playhead over each |
 | [ChordLane](../../ui/src/pianoroll/ChordLane.h) | The song's chords along the top of the notes |
 | [NoteTools.qml](../../ui/qml/pianoroll/NoteTools.qml) | The floating bar with Legato, ×2, ÷2, Quantize and Humanize (Velocity, Timing) |
@@ -31,7 +34,8 @@ This page is about the code.
 
 The note maths is in the application layer's [model/Notes.h](../../app/src/model/Notes.h) (pure functions on
 `Note`s, tested without Qt): `place`, `shifted`, `resized`, `clampMove`, `withVelocity`, `legato`, `timeScaled`,
-`quantized`, `humanizedTiming`, `span`, `byTime`, `kMinNoteBeats`, `kQuantizeGrids`, `kHumanizeBeats`. See
+`quantized`, `humanizedTiming`, `span`, `byTime`, `kMinNoteBeats`, `kQuantizeGrids`, `kHumanizeBeats`, and bends'
+`withBendPoint`, `withBendPointsMoved`, `withoutBendPoints`, `withBendCurve`, `withVibrato`, `withoutVibrato`. See
 [app/model.md](../app/model.md). Humanize › Velocity's velocities are the session's humanizer's (`Session.humanizer`,
 [intelligence.md](../intelligence.md#humanizing-velocities-by-machine-learning)).
 
@@ -104,10 +108,12 @@ Warping and its modes in the engine: [engine/warp.md](../engine/warp.md).
 
 ```
 ┌──────────┬────────────────────────────┬───┐
-│ preview  │ PianoRuler (24 px)         │   │
+│hear bend │ PianoRuler (24 px)         │   │
 ├──────────┼────────────────────────────┼───┤
 │ PianoKeys│ NoteGrid, ChordLane on top │ v │
-│ (64 px)  │             ┌───────────┐  │ b │
+│ (64 px)  │             ┌──BendTools┐  │ b │
+│          │             └───────────┘  │ a │
+│          │             ┌───────────┐  │ b │
 │          │             │ NoteTools │  │ a │
 │          │             └───────────┘  │ r │
 ├──────────┼────────────────────────────┼───┤
@@ -118,8 +124,10 @@ Warping and its modes in the engine: [engine/warp.md](../engine/warp.md).
 ```
 
 `PianoRollView` makes the `PianoRoll` (`session: Session`) and gives it to every item (`roll: pianoRoll`); a
-`RollPlayhead` sits over the ruler (`ruler: true`), the note grid and the velocity lane. `ChordLane` (18 px, shown
-with `Session.harmony.shown`) and `NoteTools` are children of the note grid, over it: the lane along its top, under
+`RollPlayhead` sits over the ruler (`ruler: true`), the note grid and the velocity lane. Above the keys, the
+headphones button (`preview`) and the bend button (`bend`, objectName `bendMode`: bend mode, as B). `ChordLane` (18
+px, shown with `Session.harmony.shown`), `NoteTools` and `BendTools` (shown in bend mode, below the chords) are
+children of the note grid, over it: the lane along its top, under
 the playhead, taking no clicks. `focusNotes()` gives the note grid the keyboard; clicks on the keys, the ruler and
 the velocities give it to the notes too (`PianoRoll::focusGrid()`). The scroll bars follow the roll except while
 dragged (then the roll follows them: `scrollToX`, `scrollToY`). The ruler, the keys, the note grid and the velocity
@@ -240,8 +248,8 @@ notch); otherwise it scrolls three rows a notch. The keys forward their wheel ev
 
 ### Keys
 
-The grid takes `Delete`/`Backspace`, `Ctrl+A`, `Ctrl+D`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+U`, the arrow keys and
-`0` (`handles()`). The main window has shortcuts for most of them too (for clips); the grid accepts their
+The grid takes `Delete`/`Backspace`, `Ctrl+A`, `Ctrl+D`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+U`, the arrow keys,
+`0`, `B` and `V` (`handles()`). In bend mode, Delete and Ctrl+A act on bend points instead (below). The main window has shortcuts for most of them too (for clips); the grid accepts their
 `ShortcutOverride` event in
 `event()`, so Qt delivers them to the grid as key presses instead of firing the window's actions, while it has the
 focus. A hidden grid gives the focus up, so the window's shortcuts work again once the clip view goes.
@@ -255,6 +263,8 @@ focus. A hidden grid gives the focus up, so the window's shortcuts work again on
 | Ctrl+C / Ctrl+X | `copySelected()` / `cutSelected()`: the selected notes copied (their track, their times from the stretch's start); cut takes them out |
 | Ctrl+V | `paste()`: the copied notes at the paste marker (else right after where they were copied), each into the clip of its track that plays there (else the one there, else the lead); selected, the marker moving to their end |
 | 0 | deactivates the selected notes (`notes::withActive`), or activates them if they all are; they stay selected |
+| B | bend mode on or off (below) |
+| V | the vibrato tool (into bend mode if it is off); again, back to Draw |
 | Up / Down | a semitone (Shift: an octave) |
 | Left / Right | a grid step (Shift: a bar) |
 
@@ -314,6 +324,54 @@ velocities to their own (nothing changes if the model can't be loaded: the statu
 the roll's properties: `quantizeGrid`, `quantizeAmount`, `humanizeVelocityAmount` (how far velocities move toward the
 model's), `humanizeTimingAmount` (at 100 %, notes move by up to `humanizeBeats`, a 32nd note).
 
+### Bends and vibrato
+
+A note's bend (MIDI 2.0's per-note pitch bend: [app/model.md](../app/model.md#clips-and-notes)) shows over the rows
+as a curve, a semitone a row from the middle of the note's own (`PianoRoll::bendY()`, `bendSemitones()`), sampled
+from the note's `bendAt()` finely enough for its fastest vibrato. Out of bend mode a bent note shows its curve faintly
+over it. **Bend mode** (`PianoRoll.bendMode`: B, or the bend button) shows every note's curve, a flat line at its
+pitch for a note without a bend, dims the notes (so the curves stand out), hides the note tools and shows the bend
+bar; the grid's presses, double-clicks, cursor and keys go to [NoteGridBends.cpp](../../ui/src/pianoroll/NoteGridBends.cpp)
+(Ctrl+Alt still pans). Painted per note: the curve (white, with a shadow; thicker while Alt hovers a segment), the
+hand-drawn curve faintly under a vibrato (`Note::curveAt()`: what the vibrato swings around), an orange bar along the
+bottom of the row for each vibrato, the points (selected ones filled with the selection colour, a hovered one
+larger), a ghost point where a click would add one, and by a dragged point its value ("+2.00 st") or by a vibrato
+being drawn its length, depth and rate (`Gesture::label()`).
+
+With the **Draw** tool (`bendTool` `"draw"`), the curves are edited as an automation envelope is
+(`bendHitAt(pos, modifiers)`: a point within `kPointGrab`, 6 px; the curve within `kLineGrab`, 5 px; with Alt a
+segment within `kSegmentGrab`, 14 px):
+
+| Press | Does |
+|---|---|
+| on a curve | adds a point there (on the grid; at the curve's own value, so the line doesn't move) and drags it where the mouse goes: one undo step |
+| on a point | `MoveBendPointsGesture`: drags the selected points (of every note) in time and pitch, the grabbed one onto the grid and a whole semitone (Alt: freely), the others by as much (`notes::withBendPointsMoved`: they stay in order and in their note). A click without a drag deletes the point (not with Shift or Ctrl) |
+| Shift/Ctrl on a point | adds it to the selected points, or takes it out |
+| Alt on a segment | `CurveBendGesture`: bends the segment from its first point; up bulges it upward (`kCurvePixels`, 150 px, from straight to the most) |
+| empty space | `SelectBendsGesture`: a rubber band over points (Shift/Ctrl add to them); a click lets them go |
+
+Double-click puts a point at the pitch clicked (a whole semitone; Alt: anywhere) on the note whose curve is nearest
+(`curveNear()`); where the click before just put one, that one goes there instead. Delete deletes the selected
+points (never notes, in bend mode); Ctrl+A selects every point.
+
+The **Vibrato** tool (`bendTool` `"vibrato"`, V) is `VibratoGesture` on the note whose curve is near the press, else
+the note under it: dragging across the note draws vibrato over the stretch dragged across (on the grid; Alt:
+anywhere), at the bend bar's rate and swell, dragging up deepens it from the bar's depth (`depth_`, 0.05..12
+semitones); a click adds vibrato from there to the note's end, or, on a vibrato, takes it away.
+`notes::withVibrato()` gives the new vibrato the stretch it covers (those already there are shortened, split, or
+go). Its rate is in cycles a second (`vibratoRate`, 5.5 at first), its depth in semitones either way
+(`vibratoDepth`, 0.5) and its swell the share of its length it takes to reach its depth (`vibratoFade`, a percent,
+30). It adds to the curve and begins and ends on it, so it follows whatever is drawn by hand.
+
+Edits go through `PianoRoll::commitBend(from, to, text, mergeKey, points)` (and `commitBends` for several notes): the
+note is replaced by its new self in its clip (`setClipsNotes`, merged per gesture key), the selected notes and points
+following it ("Add Bend Point", "Move Bend Points", "Delete Bend Point", "Bend Segment", "Draw Vibrato", "Remove
+Vibrato"; Delete's "Delete Bend Points"). `clearBends()` (the bar's Clear, "Clear Bends") takes the selected notes' bends away, every note's with none selected.
+`selectedBends()` are `BendRef{note, point}`s; `refresh()` drops those whose note is gone. The bend bar
+([BendTools.qml](../../ui/qml/pianoroll/BendTools.qml)) is as the note tools: its buttons and boxes never take the
+focus and it keeps its clicks. Auditioning a note plays it without its bend; the engine plays it bent
+([engine/midi.md](../engine/midi.md#bends-midi-20s-per-note-pitch-bend)).
+
 ### Chords, the key and Generate
 
 The song's harmony is the session's (`Session.harmony`, [intelligence.md](../intelligence.md#harmony-the-application-side)):
@@ -359,8 +417,10 @@ playing inside a clip shown and emits `playheadChanged`; only the `RollPlayhead`
 - **A new note tool**: write the pure function in [model/Notes.h](../../app/src/model/Notes.h) (notes in, changed
   notes out), add a `Q_INVOKABLE` on `PianoRoll` that calls `applyTool(targets, changed, text)`, and a button in
   NoteTools.qml.
-- **A new gesture**: subclass `NoteGrid::Gesture` in [NoteGrid.cpp](../../ui/src/pianoroll/NoteGrid.cpp); use
-  `started(pos)` for the drag threshold, commit with the gesture's `key`, and give `rubberBand()` if it draws one.
+- **A new gesture**: subclass `NoteGrid::Gesture` ([NoteGridGesture.h](../../ui/src/pianoroll/NoteGridGesture.h))
+  in [NoteGrid.cpp](../../ui/src/pianoroll/NoteGrid.cpp), or in [NoteGridBends.cpp](../../ui/src/pianoroll/NoteGridBends.cpp)
+  for bend mode; use `started(pos)` for the drag threshold, commit with the gesture's `key`, and give `rubberBand()`
+  if it draws one, `label()` for a value shown by the mouse.
 - **A new key**: add it to `NoteGrid::handles()` (so it overrides a window shortcut with the same key) and to
   `keyPressEvent`.
 - **A new clip setting**: a method on `ClipViewController` that calls `update(change, text, mergeKey)` with a function
@@ -373,13 +433,15 @@ playing inside a clip shown and emits `playheadChanged`; only the `RollPlayhead`
   with a bare `note.start`.
 - Gestures commit from the notes as they were at the press (`base_`), not from the current clip, or a drag would
   compound.
-- Notes are compared by value: two identical notes on the same key and time are one in a set. `notes::place` decides
-  how overlaps resolve.
+- Notes are compared by value: two identical notes on the same key and time are one in a set (`noteLess` is
+  `notes::lessFull`, bends included). `notes::place` decides how overlaps resolve.
+- A bend edit makes a new note: hold a `ClipNote` across a bend gesture only as `commitBend()` returns it.
 
 ## Tests
 
 | Test file | Covers here |
 |---|---|
 | [test_ui_pianoroll.cpp](../../tests/app/test_ui_pianoroll.cpp) | Through the clip view: a MIDI track with the Synth and a clip opened in the piano roll; notes drawn and heard, dragged to move, resize and copy; the notes' keys taking precedence over the window's shortcuts; the rubber band, the keys and the velocity lane; Alt+wheel and Ctrl+Alt drags; the note tools floating by notes selected by dragging (Humanize's menu: Velocity and Timing, each with its amount); the song's chords along the top (over the part the clip plays, hidden with the key, clicks going through them), notes out of the key in red, Generate › Chords and › Bass |
+| [test_ui_pianoroll_bends.cpp](../../tests/app/test_ui_pianoroll_bends.cpp) | Bend mode: B and the bend button showing the curves (and the note tools staying away); a point added on a curve dragged where the mouse goes; points clicked away, selected and deleted; Alt-dragging a segment; double-clicking a point at the pitch clicked; the vibrato tool's drags and clicks, and the bend bar's settings; Clear |
 | [test_ui_clipview.cpp](../../tests/app/test_ui_clipview.cpp) | Audio clips: one clip opened, its settings and waveform; several edited in unison; warping and transposing reaching the audio; the clip gain making the waveform taller; which clips open with a MIDI clip among them; going back (Esc, ×, the clips deleted, the project reset) |
 | [test_midi_model.cpp](../../tests/app/test_midi_model.cpp) | The note maths |

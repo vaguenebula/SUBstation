@@ -157,4 +157,18 @@ void ProjectEditor::setDeviceSidechain(const QString& trackId, const QString& de
     }
 }
 
+void ProjectEditor::setDeviceMidiFrom(const QString& trackId, const QString& deviceId, const QString& sourceId) {
+    const Project& p = *project_;
+    const Device& device = p.device(trackId, deviceId);
+    // Its own track is what it hears without one.
+    const QString source = sourceId == trackId ? QString() : sourceId;
+    if (!source.isEmpty() && (!p.hasTrack(source) || p.track(source).kind != kMidiKind)) {
+        throw EditError(QStringLiteral("%1 can only take its notes from a MIDI track").arg(deviceName(device)));
+    }
+    if (source != device.midiFrom) {
+        const QString text = source.isEmpty() ? QStringLiteral("Remove MIDI Input") : QStringLiteral("Change MIDI Input");
+        push(std::make_unique<SetDeviceMidiFromCommand>(project_, trackId, deviceId, device.midiFrom, source, text));
+    }
+}
+
 }  // namespace sub::app

@@ -88,6 +88,10 @@ its take replaces them. With monitoring *Off* it is silent until recording stops
 - A key still held when recording stops ends with the take.
 - *Edit › Record Quantization* (none, 1/4 to 1/32, triplets) puts recorded notes' starts
   on that grid (lengths as played).
+- A MIDI 2.0 controller's per-note pitch bends are recorded with their notes: each
+  note's bend as it was played, drawn with as few points as keep its shape (to edit in
+  the piano roll's bend mode: [midi.md](midi.md#pitch-bends-and-vibrato)). MIDI 1.0's
+  channel pitch bend is played, not recorded.
 
 ## Resampling
 

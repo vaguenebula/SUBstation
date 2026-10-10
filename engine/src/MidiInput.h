@@ -20,6 +20,11 @@
 // (WinMM's is MidiWinMM.cpp; ALSA's sequencer, CoreMIDI and Windows MIDI
 // Services can be others): it lists the inputs and opens one, and
 // MidiInputDevices does the rest the same way for all of them.
+//
+// MIDI 2.0: Universal MIDI Packets (Ump.h) come in through
+// Engine::sendUmp(), stamped and queued the same way, each decoded into a
+// MidiInputEvent: MIDI 2.0's channel voice messages at MIDI 1.0's resolution,
+// but its per-note pitch bend, which bends the one note it names.
 
 #include <atomic>
 #include <cstdint>
@@ -33,13 +38,19 @@
 
 namespace sub {
 
-// A short MIDI message on its way to the audio thread.
+// A short MIDI message on its way to the audio thread: a MIDI 1.0 channel or
+// system message (a MIDI 2.0 device's are put in this form, Ump.h), or a MIDI
+// 2.0 per-note pitch bend, which MIDI 1.0 has no message for (`status` 0x6n,
+// MIDI 2.0's opcode and the channel; `data1` the key; `value` its 32 bits).
 struct MidiInputEvent {
+    enum class Kind : uint8_t { Message, NoteBend };
     int64_t time = 0;   // device sample at which it plays
     uint16_t port = 0;  // which input (Engine's port ids)
     uint8_t status = 0;
     uint8_t data1 = 0;
     uint8_t data2 = 0;
+    Kind kind = Kind::Message;
+    uint32_t value = 0;  // NoteBend: 0x80000000 is none, 0 and 0xFFFFFFFF the range's ends
 };
 
 // The audio device's sample clock against the host clock: written by the audio

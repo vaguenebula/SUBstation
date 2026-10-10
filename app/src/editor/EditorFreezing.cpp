@@ -76,6 +76,7 @@ QStringList ProjectEditor::flattenTracks(const QStringList& trackIds) {
     QSet<QString> devices;  // (the outputs into their sidechains go into their groups)
     for (const QString& id : flat) addDeviceIds(devices, p.track(id).devices);
     dropOutputs({}, devices, text);
+    dropMidiInputs(QSet<QString>(flat.begin(), flat.end()), text);  // (audio tracks now: no notes)
     for (const QString& id : flat) {
         const Track track = p.track(id);
         Track after = track;
@@ -106,7 +107,7 @@ QStringList ProjectEditor::flattenTracks(const QStringList& trackIds) {
 std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command) const {
     // Why a command can't be made: it changes the clips, devices or device
     // automation of a frozen track (or of a track in a frozen group); none: it
-    // can. (Taking away a sidechain whose source goes is fine.)
+    // can. (Taking away a sidechain or a MIDI input whose source goes is fine.)
     // A clip change carrying the frozen audio of every frozen track holding the
     // clips' tracks along (a time selection's edit) is fine.
     const Project& p = *project_;
@@ -138,6 +139,8 @@ std::optional<QString> ProjectEditor::frozenProblem(const QUndoCommand& command)
         tracks = {chain->trackId()};
     } else if (const auto* sidechain = dynamic_cast<const SetDeviceSidechainCommand*>(&command)) {
         if (sidechain->newValue()) tracks = {sidechain->trackId()};
+    } else if (const auto* midi = dynamic_cast<const SetDeviceMidiFromCommand*>(&command)) {
+        if (!midi->newValue().isEmpty()) tracks = {midi->trackId()};  // (one whose source goes may go)
     } else if (const auto* devices = dynamic_cast<const SetDevicesCommand*>(&command)) {
         tracks = {devices->trackId()};
     } else if (const auto* enabled = dynamic_cast<const SetDeviceEnabledCommand*>(&command)) {

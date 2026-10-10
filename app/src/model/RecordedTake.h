@@ -7,16 +7,20 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <utility>
 #include <vector>
 
 namespace sub::app {
 
-// A note of a MIDI take, in seconds on the timeline, within the take.
+// A note of a MIDI take, in seconds on the timeline, within the take, and how
+// it was bent as it played (MIDI 2.0's per-note pitch bend): (seconds from its
+// start, semitones), in time order.
 struct RecordedTakeNote {
     double start = 0.0;
     double end = 0.0;
     int pitch = 60;
     int velocity = 100;
+    std::vector<std::pair<double, double>> bend;
 
     bool operator==(const RecordedTakeNote&) const = default;
 };

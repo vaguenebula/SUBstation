@@ -157,6 +157,7 @@ void ProjectEditor::deleteTracks(const QStringList& trackIds) {
     const QSet<QString> going = doomed | returns;
     dropInputs(going, text);  // (first: undo brings them back after their sources)
     dropSidechains(going, text);
+    dropMidiInputs(going, text);
     dropOutputs(going, {}, text);
     // The last first: undo brings back each group before what is in it.
     QStringList removed;
@@ -537,8 +538,8 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
     Project& p = *project_;
     QHash<QString, QString> renamed;
     for (const Track& t : copied.tracks) renamed.insert(t.id, newId());
-    // A track a copy hears (its input, a sidechain): the copy of it, if copied
-    // too; none if it is gone.
+    // A track a copy hears (its input, a sidechain, a MIDI input): the copy of
+    // it, if copied too; none if it is gone.
     const auto source = [&](const QString& trackId) -> std::optional<QString> {
         if (renamed.contains(trackId)) return renamed.value(trackId);
         if (p.hasOwner(trackId)) return trackId;
@@ -569,6 +570,7 @@ QStringList ProjectEditor::insertCopies(const CopiedTracks& copied, int index, s
             for (qsizetype i = 0; i < old.size() && i < nw.size(); ++i) ids.insert(old[i], nw[i]);
         }
         for (Device* device : iterDevices(track.devices)) {
+            if (!device->midiFrom.isEmpty()) device->midiFrom = source(device->midiFrom).value_or(QString());
             if (!device->sidechain) continue;
             const auto heard = source(device->sidechain->trackId);
             if (heard) {
@@ -819,6 +821,20 @@ void ProjectEditor::dropSidechains(const QSet<QString>& sourceIds, const QString
     }
 }
 
+void ProjectEditor::dropMidiInputs(const QSet<QString>& sourceIds, const QString& text) {
+    // (Those on them keep theirs: they come back together.)
+    std::vector<std::tuple<QString, QString, QString>> dropped;  // (track, device, its source)
+    for (const Track* track : project_->allTracks()) {
+        if (sourceIds.contains(track->id)) continue;
+        for (const Device* device : iterDevices(track->devices)) {
+            if (sourceIds.contains(device->midiFrom)) dropped.emplace_back(track->id, device->id, device->midiFrom);
+        }
+    }
+    for (const auto& [trackId, deviceId, source] : dropped) {
+        push(std::make_unique<SetDeviceMidiFromCommand>(project_, trackId, deviceId, source, QString(), text));
+    }
+}
+
 void ProjectEditor::setTrackInputTap(const QString& trackId, const QString& tap) {
     if (tap != kPostFader && tap != kPreFader && tap != kPreFx) {
         throw EditError(QStringLiteral("An input is taken before a track's devices, before its fader or after it"));
@@ -949,7 +965,12 @@ Clip ProjectEditor::recordedMidiClip(const RecordedTake& take, double quantize) 
             if (snapped >= 0 && snapped < end - start) begin = snapped;
         }
         if (begin < 0 || begin >= end - start || length <= 0) continue;
-        clipNotes.push_back(Note{std::clamp(played.pitch, 0, 127), begin, length, std::clamp(played.velocity, 1, 127)});
+        Note note{std::clamp(played.pitch, 0, 127), begin, length, std::clamp(played.velocity, 1, 127)};
+        // How it was bent (MIDI 2.0), a point for each change it heard, drawn with as few as keep its shape.
+        std::vector<BendPoint> bend;
+        for (const auto& [seconds, semitones] : played.bend) bend.push_back({secondsToBeats(seconds, tempo), semitones, 0.0});
+        for (const BendPoint& point : notes::simplifiedBend(bend)) note = notes::withBendPoint(note, point);
+        clipNotes.push_back(std::move(note));
     }
     return Clip::midi(newId(), QString(), start, end - start, 0.0, notes::normalize(clipNotes));
 }

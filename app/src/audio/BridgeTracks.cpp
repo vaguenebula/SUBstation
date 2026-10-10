@@ -46,6 +46,7 @@ void EngineBridge::onReset() {
     d.sendLevels.clear();
     d.frozen.clear();
     d.sidechains.clear();
+    d.midiInputs.clear();
     d.pluginErrors.clear();
     d.meters.clear();
     d.editorsWanted.clear();
@@ -66,6 +67,7 @@ void EngineBridge::onReset() {
     pushAllSends();  // (into returns added after the tracks sending to them)
     pushAllInputs();  // (from tracks added after the tracks taking them)
     pushSidechains();
+    pushMidiInputs();
     pushSettings();
     // Forget decoded audio the new project doesn't use.
     QSet<QString> used;
@@ -121,6 +123,7 @@ void EngineBridge::addEngineTrack(const QString& trackId) {
     }
     if (!master) pushAllInputs();  // the inputs taken from it (back)
     pushSidechains();  // its devices', and those it is the source of
+    pushMidiInputs();  // the same
 }
 
 void EngineBridge::onTrackRemoved(const QString& trackId) {
@@ -153,6 +156,9 @@ void EngineBridge::onTrackRemoved(const QString& trackId) {
         }
         for (auto it = d.sidechains.begin(); it != d.sidechains.end();) {
             it = it->second.source == *engineId ? d.sidechains.erase(it) : std::next(it);
+        }
+        for (auto it = d.midiInputs.begin(); it != d.midiInputs.end();) {  // (the engine let them go)
+            it = it->second == *engineId ? d.midiInputs.erase(it) : std::next(it);
         }
     }
     for (auto it = d.overridden.begin(); it != d.overridden.end();) {
@@ -281,6 +287,7 @@ void EngineBridge::pushRoutes() {
     pushOutputs();
     pushAllInputs();
     pushSidechains();
+    pushMidiInputs();
 }
 
 // The engine sends a track should have: its sends, and silent ones for those

@@ -13,6 +13,7 @@
 
 #include "AudioSource.h"
 #include "Automation.h"
+#include "NoteBend.h"
 #include "Processor.h"
 #include "Scheduler.h"
 #include "Warp.h"
@@ -164,13 +165,41 @@ struct SwitchRender {
     std::shared_ptr<DelayLine> delay;  // for the live renderer
 };
 
+// A note's bend (NoteBend.h) as the renderer plays it: times in samples from
+// the note's start, vibratos' rates in cycles a sample.
+struct NoteBendRender {
+    std::vector<BendPoint> points;  // sorted by time
+    std::vector<VibratoSpan> vibrato;
+
+    double at(double t) const noexcept { return bend::at(points, vibrato, t); }
+};
+
 // A note of a MIDI clip, already cut to its clip: the renderer sends a note-on
-// at `start` and a note-off at `end`.
+// at `start` and a note-off at `end`, and while it sounds its bend (if any).
 struct NoteRender {
     int64_t start = 0;  // timeline samples
     int64_t end = 0;    // > start
     uint8_t key = 60;
     uint8_t velocity = 100;
+    std::shared_ptr<const NoteBendRender> bend;  // null: it doesn't bend
+};
+
+// A device's MIDI input from another track (Engine::setProcessorMidiInput()):
+// what it hears instead of its own track's notes. Rendering-thread state, kept
+// with the device across snapshots: the prologue copies the source track's
+// events for the chunk into it, before the graph runs (where the source's own
+// devices rebase theirs to their stretches), and the device reads its copy.
+struct MidiFeed {
+    std::vector<ProcessEvent> events;
+    int numEvents = 0;
+
+    explicit MidiFeed(int capacity) : events(static_cast<size_t>(capacity)) {}
+};
+
+// A device's feed in the snapshot, and where it comes from.
+struct MidiFeedRender {
+    int source = -1;  // the snapshot track whose notes it takes (-1: none in this snapshot)
+    std::shared_ptr<MidiFeed> feed;
 };
 
 // How deep racks nest: a rack in a strip's own chain is at depth 0, one in a
@@ -204,6 +233,9 @@ struct StripRender {
     std::vector<int> deviceTaps;
     // Per insert, its chains if it is a rack (null: a device); empty if none is.
     std::vector<std::shared_ptr<const RackRender>> racks;
+    // Per insert, the MIDI it takes from another track instead of the strip's
+    // notes (null: the strip's); empty if none takes any.
+    std::vector<std::shared_ptr<MidiFeed>> midiFeeds;
 };
 
 // A chain of a rack: a strip inside a strip. The rack hands each chain its own
@@ -422,6 +454,8 @@ struct RenderSnapshot {
     std::vector<int> chainDelays;
     // Every switched device's latency, by its SwitchRender::delayIndex (likewise).
     std::vector<int> switchDelays;
+    // Every device's MIDI input from another track (StripRender::midiFeeds), for the prologue to fill.
+    std::vector<MidiFeedRender> midiFeeds;
 
     // The output lags the timeline by this much: the tracks' latency, then the
     // master's devices. The metronome is delayed as much.

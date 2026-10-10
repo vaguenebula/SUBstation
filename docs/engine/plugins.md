@@ -158,15 +158,20 @@ In `process()`:
 - Each input bus's silence flags are set per channel by checking for all-zero samples.
 - The main output is copied back to the track; a mono output goes to both sides.
 
-`hasSidechain()` is `auxInput_ >= 0`. Routing and alignment of sidechains are in [routing.md](routing.md).
+`hasSidechain()` is `auxInput_ >= 0`; `acceptsMidi()` is `eventInput_ >= 0` (an instrument, or an effect with an
+event input, as a vocoder or a pitch corrector has: it can take another track's notes, [midi.md](midi.md#a-devices-midi-input-from-another-track)). Routing and alignment of sidechains are in [routing.md](routing.md).
 
 ### Events: notes and MIDI
 
 `buildEvents()` turns the block's `ProcessEvent`s into VST3 events on the first event input bus (instruments play the
 MIDI clips, and the piano roll's notes, sample-accurately):
 
-- Note-ons (velocity / 127) and note-offs; a note-on with velocity 0 releases. `held_[channel][key]` counts notes
-  without a note-off yet.
+- Note-ons (velocity / 127) and note-offs, with the note's id (`ProcessEvent::noteId`, -1 for none); a note-on
+  with velocity 0 releases. `held_[channel][key]` counts notes without a note-off yet.
+- A note's bend (`NoteBend`, MIDI 2.0's per-note pitch bend) becomes a `kNoteExpressionValueEvent` of
+  `kTuningTypeID` for the note it names: VST3's per-note pitch, normalized as 0.5 + semitones / 240 (0.5 is none,
+  ±120 semitones across). A bend without a note id is dropped (note expressions address notes by id). A plug-in
+  that doesn't support tuning expressions ignores them.
 - `reset()` sets `releaseAll_`; the next block starts with a note-off for every held note. (Real-time resets come on
   stop, locate, loop wrap and around offline renders; see [midi.md](midi.md).)
 - Raw MIDI: control change, channel pressure and pitch bend are mapped to parameters through the controller's
@@ -358,10 +363,11 @@ sidechain only.
 
 ## Tests
 
-The tests use three VST3 plug-ins built with the engine ([tests/vst3_plugins/](../../tests/vst3_plugins)): *SUB Test
-Synth*, an instrument with a separate controller (it reports the transport it gets back as parameters); *SUB Test
-Effect*, a single-component effect with adjustable latency and, on Windows, a Win32 editor; and *SUB Test Mono*, a
-mono effect without a controller; plus *SUB Test Sidechain* ([test_sidechain.cpp](../../tests/vst3_plugins/test_sidechain.cpp)),
+The tests use four VST3 plug-ins built with the engine ([tests/vst3_plugins/](../../tests/vst3_plugins)): *SUB Test
+Synth*, an instrument with a separate controller (it reports the transport it gets back as parameters, and a note's
+tuning expression bends that note's sine); *SUB Test Effect*, a single-component effect with adjustable latency and,
+on Windows, a Win32 editor; *SUB Test Mono*, a mono effect without a controller; and *SUB Test Note Effect*, an
+effect with an event input whose output is its input plus each held note's velocity / 127 (DC); plus *SUB Test Sidechain* ([test_sidechain.cpp](../../tests/vst3_plugins/test_sidechain.cpp)),
 whose output is its input plus its sidechain. The tests see only these, never the installed ones: the engine's tests
 load the bundle by its path (`SUBSTATION_TEST_PLUGINS_BUNDLE`, [harness/Fixtures.h](../../tests/engine/harness/Fixtures.h)),
 and the application's tests point `SUBSTATION_VST3_PATH` at folders of their own.
@@ -372,6 +378,9 @@ and the application's tests point `SUBSTATION_VST3_PATH` at folders of their own
   and its controller, mono plug-ins on a stereo track, latency compensation (also on the master), state, load errors,
   chain order, moving to another track as it is, editor edits, resizing and closing (Windows only; skipped
   elsewhere), plug-ins without an editor.
+- [tests/engine/test_note_bends_engine.cpp](../../tests/engine/test_note_bends_engine.cpp) and
+  [test_midi_routing_engine.cpp](../../tests/engine/test_midi_routing_engine.cpp): a note's bend reaching a plug-in
+  as its tuning expression; an effect with an event input playing along with another track's notes.
 - [tests/engine/test_sidechain_engine.cpp](../../tests/engine/test_sidechain_engine.cpp): sidechains into plug-ins, and
   a missing sidechain reaching the plug-in flagged as silence.
 - [tests/app/test_plugin_index.cpp](../../tests/app/test_plugin_index.cpp): scanning with `substation-scan`, including

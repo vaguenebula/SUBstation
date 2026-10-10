@@ -3,9 +3,18 @@
 #include "model/Automation.h"
 #include "model/Timebase.h"
 
+#include "NoteBend.h"
+
 #include <algorithm>
 
 namespace sub::app {
+
+double Note::bendAt(double beat, double tempo) const {
+    // The engine's rules, in beats: a vibrato's cycles a second are 60 / tempo cycles a beat.
+    return sub::bend::at(bend, vibrato, beat, tempo > 0.0 ? 60.0 / tempo : 0.0);
+}
+
+double Note::curveAt(double beat) const { return sub::bend::curveAt(bend, beat); }
 
 QString legacyWarpMode(const QString& name) {
     if (name == u"Beats") return QStringLiteral("Transients");

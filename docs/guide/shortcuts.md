@@ -79,6 +79,7 @@ the focus. Most are also in the menus, which show their keys.
 | End a hot swap, keeping the sample swapped in (the browser's list having the keyboard); keep the sample selected and end it | Esc; Enter (or double-click it) |
 | Show / hide the track headers' In/Out column | Ctrl+Alt+I |
 | Show / hide the piano roll's chords and the key (notes out of it in red) | C |
+| Piano roll: bend mode (the notes' pitch bends) / the vibrato tool | B / V |
 | Search everything in the browser ("All"); Enter selects the first result, Enter again adds it | Ctrl+F |
 
 ## Devices
@@ -103,7 +104,9 @@ In the piano roll, Delete, Ctrl+A, Ctrl+D and Ctrl+C / Ctrl+X / Ctrl+V act on no
 pastes at the paste marker: click the grid to place it), Ctrl+U quantizes them, and
 arrow keys move them (Up/Down a semitone, Shift an octave; Left/Right a grid step, Shift
 a bar). 0 deactivates the selected notes (or activates them, if they all are), not the
-clip. C shows or hides the song's chords and key over the notes. See
+clip. C shows or hides the song's chords and key over the notes. B turns bend mode on
+and off (the notes' pitch curves, edited as automation is), V picks the vibrato tool;
+in bend mode Delete deletes the selected bend points and Ctrl+A selects them all. See
 [midi.md](midi.md#the-piano-roll).
 
 ## Plug-in editors

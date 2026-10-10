@@ -60,6 +60,7 @@ public:
     void process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) override;
     int latencySamples() const override { return latency_.load(std::memory_order_relaxed); }
     bool hasSidechain() const override { return auxInput_ >= 0; }
+    bool acceptsMidi() const override { return eventInput_ >= 0; }  // it has an event input
     int tailSamples() const override { return tail_; }
 
     const std::vector<ParamInfo>& params() const override { return params_; }

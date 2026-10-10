@@ -36,12 +36,17 @@ std::vector<sub::ClipDesc> clipDescs(const std::vector<Clip>& clips) {
 
 std::vector<sub::NoteDesc> noteDescs(const Track& track) { return clipNoteDescs(track.clips); }
 
+sub::NoteDesc noteDesc(const PlayedNote& played) {
+    sub::NoteDesc desc{played.start, played.end - played.start, played.note.pitch, played.note.velocity, {}, {}};
+    for (const BendPoint& point : played.note.bend) desc.bend.push_back({point.time, point.semitones, point.curve});
+    for (const Vibrato& v : played.note.vibrato) desc.vibrato.push_back({v.start, v.length, v.depth, v.rate, v.fade});
+    return desc;
+}
+
 std::vector<sub::NoteDesc> clipNoteDescs(const std::vector<Clip>& clips) {
     std::vector<sub::NoteDesc> notes;
     for (const Clip& clip : clips) {
-        for (const PlayedNote& played : clip.heardNotes()) {
-            notes.push_back({played.start, played.end - played.start, played.note.pitch, played.note.velocity});
-        }
+        for (const PlayedNote& played : clip.heardNotes()) notes.push_back(noteDesc(played));
     }
     return notes;
 }

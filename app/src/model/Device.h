@@ -101,7 +101,10 @@ struct Chain;
 // the model. A plug-in keeps its own state; `state` holds it (base64) as last
 // saved, for loading the project. Its `params` only record values changed from
 // the host, for undo. A rack's params are its macros' values (macroParam()). A
-// device with a sidechain (aux) input may hear a track there (`sidechain`).
+// device with a sidechain (aux) input may hear a track there (`sidechain`). A
+// device that plays notes (an instrument, an effect with a MIDI input, as a
+// vocoder or a pitch corrector has) may take a MIDI track's notes instead of
+// its own track's (`midiFrom`, that track's id; "": its own track's).
 struct Device {
     QString id;
     QString kind;
@@ -110,6 +113,7 @@ struct Device {
     std::optional<PluginRef> plugin;
     std::optional<QString> state;
     std::optional<Sidechain> sidechain;
+    QString midiFrom;  // a MIDI track whose notes it plays instead of its own track's ("": its own track's)
     std::vector<Chain> chains;  // a rack's
     std::vector<MacroMapping> macros;  // a rack's
     // A rack's macros, one each: its name as the user gave it ("": "Macro N"; macroName()).

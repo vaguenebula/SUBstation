@@ -69,7 +69,8 @@ double MacroMapping::target(double value) const { return low + std::max(0.0, std
 
 bool Device::operator==(const Device& other) const {
     return id == other.id && kind == other.kind && enabled == other.enabled && params == other.params &&
-           plugin == other.plugin && state == other.state && sidechain == other.sidechain && chains == other.chains &&
+           plugin == other.plugin && state == other.state && sidechain == other.sidechain &&
+           midiFrom == other.midiFrom && chains == other.chains &&
            macros == other.macros && macroNames == other.macroNames && name == other.name;
 }
 

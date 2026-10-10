@@ -222,7 +222,9 @@ the application layer's `ParamSpec` ([app/src/model/ParamSpec.h](../app/src/mode
 (`ParamSpec::fromInfo`) and maps the same way, and describes the mixer's controls itself (`mixerSpecs`). The
 mixer's mappings and the shape of curved segments in [Automation.h](../app/src/model/Automation.h) are the
 engine's ([engine/src/Automation.h](../engine/src/Automation.h): `kAutomationCurvature`, `kMaxVolumeGain`), and
-[test_automation_model.cpp](../tests/app/test_automation_model.cpp) holds the two together. The bridge hands the
+[test_automation_model.cpp](../tests/app/test_automation_model.cpp) holds the two together. A note's pitch bend
+is shared the same way: the application layer draws and edits it with the engine's own rules (`sub::bend`,
+header-only, in [engine/src/NoteBend.h](../engine/src/NoteBend.h)), so the piano roll shows what plays. The bridge hands the
 UI every owner's parameters as `ParamSpec`s (`EngineBridge::paramGroups`), and the editor learns plug-ins'
 mappings (for macros) through a hook the session wires to the bridge. See
 [engine/automation.md](engine/automation.md) and [app/model.md](app/model.md#automation).
