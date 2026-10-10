@@ -52,8 +52,9 @@ class PhaserGraph : public DeviceCanvas {
     Q_PROPERTY(int mode READ mode NOTIFY curveChanged)
 
 public:
-    // The engine's displays, a stream each of the playback (in the engine's order: displayId()).
-    static constexpr int kStreams = 11;
+    // The engine's displays the playback plays, a stream each (in the engine's order: displayId()); the
+    // levels, `input` and `output`, go to the meters as they come.
+    static constexpr int kStreams = 9;
     using Playback = DisplayPlayback<kStreams>;
 
     static constexpr int kWidth = 240;

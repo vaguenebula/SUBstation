@@ -1543,7 +1543,8 @@ The ranges are Live's (its Output a gain of 0..2, here in dB down to -36). The L
   middle of a sound), what the line is written with fades in over 5 ms (`kStartFadeSeconds`, an S-curve, sample by
   sample whatever the blocks), so the copy read a delay later comes in smoothly instead of with a step (which would
   come after the renderer's own 5 ms switch fade had ended: a 30 ms Doubler's measured 0.134 on a 0.3 sine). A sound
-  that starts after silence goes in untouched.
+  that starts after silence goes in untouched. (An offline render starts with a reset too: a sound already playing at
+  its first frame, or a hit right on it, reaches the line faded the same way.)
 - **Feedback**: `feedbackGain` (±0.95 at 100 %, negative with Ø) into the core's input, through a soft limit (as it
   is up to +6 dBFS, then bent to stay below ±4): 95 % with any modulation can't run away.
 - **Modulation**: `(1 - mix2) · LFO 1 + mix2 · LFO 2`, times Amount, plus the envelope times Env Amount, held to ±2.
@@ -1574,12 +1575,12 @@ The ranges are Live's (its Output a gain of 0..2, here in dB down to -36). The L
   starts from silence.
 - **Warmth**: `y + w (L(tanh(2y) / 2) - y)`, `L` a 5 kHz one-pole: the effect's output saturated and darkened, inside
   the feedback loop, so echoes and resonances darken as they recirculate. Skipped while 0. The saturation runs at the
-  sample rate, antialiased by its antiderivative (first-order ADAA: each sample the curve's mean between the last
-  input and this one, `(F(y) - F(y₋₁)) / (y - y₋₁)` with `F = ln cosh(2y) / 4`; its value at the middle when the two
-  are within 1e-5), so the harmonics it makes beyond Nyquist fold back far quieter: a 9 kHz tone at -1 dBFS (48 kHz)
-  folds its 3rd to 21 kHz 31 dB under the tone and its 5th to 3 kHz 49 dB under (20 and 26 dB unantialiased), a 7 kHz
-  tone its 5th to 13 kHz 49 dB under (34). Only what the curve adds to `y` goes through the mean; `y` itself passes as
-  it is, so a quiet signal has exactly the response the design draws (no half-sample delay).
+  sample rate, antialiased by its antiderivative (first-order ADAA: each sample the curve's mean between the last input
+  and this one, `(F(y) - F(y₋₁)) / (y - y₋₁)` with `F = ln cosh(2y) / 4`; its value at the middle when the two are
+  within 1e-5), so the harmonics it makes beyond Nyquist fold back far quieter: a 9 kHz tone at -1 dBFS (48 kHz) folds
+  its 3rd to 21 kHz 31 dB under the tone and its 5th to 3 kHz 49 dB under (20 and 26 dB unantialiased), a 7 kHz tone its
+  5th to 13 kHz 49 dB under (34). Only what the curve adds to `y` goes through the mean; `y` itself passes as it is, so
+  a quiet signal has exactly the response the design draws (no half-sample delay).
 - **Safe Bass**: a Linkwitz-Riley crossover (`dsp::Crossover`) at its frequency per channel; the lows stay dry
   (`out = low + (1 - mix) high + mix wet(high)`: the bands add up to an all-pass, flat in level). It fades in and out
   over 20 ms, its crossover's frequency moving sample by sample as it glides; at 5 Hz it is off and costs nothing.
@@ -1594,7 +1595,7 @@ The ranges are Live's (its Output a gain of 0..2, here in dB down to -36). The L
   fades in; a delay core's feedback fades with its share; Flanger and Doubler crossfade two reads of one line, with
   no swoop and no gap). A change of Notches fades over 20 ms as the Disperser's Amount does (fewer: to the tap after
   the stages kept; more: the stages added hear their input fade in). A change during a fade waits for it. Every one
-  of the 30 controls changing in turn where it is heard (78 changes over 16 s), then a 5 Hz sweep run into the
+  of the 30 controls changing in turn where it is heard (81 changes over 16 s), then a 5 Hz sweep run into the
   stages' top and bottom limits, a 220 Hz tone's 6th difference stays below 2e-5 (the Disperser's limit: 1e-4):
   1.9e-5 at Dry/Wet's jump from 0 to 100 %, 1.7e-5 at Output's 30 dB, every other change 1.4e-5 at most and most of
   them about 2e-6, which is also what a steady sweep measures.
@@ -1605,9 +1606,8 @@ The ranges are Live's (its Output a gain of 0..2, here in dB down to -36). The L
   exact zeros. NaN and infinity in its input never reach it (`BuiltinProcessor::process()` takes them as silence): it
   plays on as if they had been zeros.
 - `reset()` clears every state, starts the LFOs from phase 0 and snaps every glide and fade to the parameters (an
-  offline render starts the same every time), and arms the line's start fade; `prepare()` sizes the lines (250 ms)
-  and resets. On one channel the
-  left LFO plays; channels past the second pass untouched.
+  offline render starts the same every time), and arms the line's start fade; `prepare()` sizes the lines (250 ms) and
+  resets. On one channel the left LFO plays; channels past the second pass untouched.
 - `latencySamples()` is 0 (the delay and the sweep are the effect). `tailSamples()` (0 fully dry): the feedback's
   passes to -60 dB (`ln 1e-3 / ln |g|`) times the loop's longest delay (Phaser: the slowest stage the modulation
   reaches, its largest group delay times Notches, plus its own ring, with half as much again to spare; the delay
@@ -1624,15 +1624,14 @@ The ranges are Live's (its Output a gain of 0..2, here in dB down to -36). The L
   comb's `D / (1 - g D)`, with Warmth's low-pass, Safe Bass's bands, Dry/Wet and Output. `notchFrequencies()` puts the
   notches in closed form (the bilinear transform keeps the analog all-pass's phase at the warped frequency:
   `Ω² + (cot θ / Q) Ω - 1 = 0`), `stagePhase()` a stage's phase, unwrapped. `phaser::curve()` is what the editor draws:
-  per column of the plot, up to 12 points and every notch inside it where the response turns less than a cycle;
-  where a comb is finer than the columns, its top and bottom at 48 fixed angles of the turning factor (the same each
-  time, so the band stands still as the sweep moves). It designs the Phaser's stage and works out Output's gain once
-  per curve (the same sums `responseDb()` does per point): 0.1-0.3 ms for the editor's 226 columns. The application
-  layer's `phaserResponseDb()` and `phaserCurvePoints()`
-  ([app/src/audio/PhaserResponse.h](../../app/src/audio/PhaserResponse.h)) wrap them, so the curve drawn is the
-  sound; `curve()` also gives each column's turn (the radians the wet path turns across it, what tells the dense
-  columns), with which the graph draws a comb finer than it can show as a line as a band too. `wetTransfer()` is the
-  wet path alone (what Dry/Wet at 100 % plays, before Output).
+  per column of the plot, up to 12 points and every notch inside it where the response turns less than a cycle; where a
+  comb is finer than the columns, its top and bottom at 48 fixed angles of the turning factor (the same each time, so
+  the band stands still as the sweep moves). It designs the Phaser's stage and works out Output's gain once per curve
+  (the same sums `responseDb()` does per point): 0.1-0.3 ms for the editor's 226 columns. The application layer's
+  `phaserResponseDb()` and `phaserCurvePoints()` ([PhaserResponse.h](../../app/src/audio/PhaserResponse.h)) wrap them,
+  so the curve drawn is the sound; `curve()` also gives each column's turn (the radians the wet path turns across it,
+  what tells the dense columns), with which the graph draws a comb finer than it can show as a line as a band too.
+  `wetTransfer()` is the wet path alone (what Dry/Wet at 100 % plays, before Output).
 - **Cost** (`builtin_devices_bench`, 48 kHz stereo): about 0.2 % of one core at the defaults (0.21 %, the
   Disperser 0.21 % in the same runs); the Flanger 0.30 % and the Doubler 0.25 %; 42 notches, Feedback 95 %, Amount
   100 %, Random S&H 0.65 %; a deep, fast sweep (Amount 100 %, a 5 Hz sine: the stages designed every sample) 0.49 %

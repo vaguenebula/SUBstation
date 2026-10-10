@@ -777,33 +777,33 @@ TEST_CASE("phaser-flanger: changing any control is click-free") {
     // stages' top and bottom limits.
     const auto s = [](double seconds) { return static_cast<int64_t>(seconds * kSampleRate); };
     const std::vector<Change> changes = {
-        {s(0.4), "notches", 12.f},    {s(0.6), "notches", 1.f},     {s(0.8), "notches", 42.f},
-        {s(1.0), "notches", 4.f},     {s(1.2), "center", 300.f},    {s(1.4), "center", 3000.f},
-        {s(1.6), "spread", 0.f},      {s(1.8), "spread", 100.f},    {s(2.0), "blend", 1.f},
-        {s(2.2), "mode", 1.f},        {s(2.4), "flange_time", 0.5f}, {s(2.6), "flange_time", 10.f},
-        {s(2.8), "feedback", 0.f},    {s(3.0), "feedback", 60.f},   {s(3.2), "fb_invert", 1.f},
-        {s(3.4), "mode", 2.f},        {s(3.6), "doubler_time", 20.f}, {s(3.8), "doubler_time", 150.f},
-        {s(4.0), "fb_invert", 0.f},   {s(4.2), "mode", 0.f},        {s(4.4), "mode", 2.f},
-        {s(4.6), "mode", 1.f},        {s(4.8), "mode", 0.f},        {s(5.0), "lfo_wave", 1.f},
-        {s(5.2), "lfo_wave", 2.f},        {s(5.4), "lfo_freq", 5.f},        {s(5.6), "lfo_wave", 0.f},
-        {s(5.8), "lfo_sync", 1.f},        {s(6.0), "lfo_rate", 7.f},        {s(6.2), "lfo_sync", 0.f},
-        {s(6.4), "phase", 270.f},     {s(6.6), "spin_on", 1.f},     {s(6.8), "spin_on", 0.f},
-        {s(7.0), "lfo2_mix", 100.f},  {s(7.2), "env_on", 1.f},      {s(7.4), "env_on", 0.f},
-        {s(7.6), "safe_bass", 500.f}, {s(7.8), "safe_bass", 5.f},   {s(8.0), "warmth", 100.f},
-        {s(8.2), "warmth", 0.f},      {s(8.4), "output", -24.f},    {s(8.6), "output", 6.f},
-        {s(8.8), "output", 0.f},      {s(9.0), "mix", 0.f},         {s(9.2), "mix", 100.f},
-        {s(9.4), "mix", 50.f},        {s(9.6), "center", 500.f},    {s(9.6), "notches", 8.f},
-        {s(9.6), "spread", 30.f},     {s(10.0), "lfo2_mix", 0.f},   {s(10.2), "blend", 0.5f},
-        {s(10.4), "amount", 100.f},   {s(10.8), "amount", 0.f},     {s(11.0), "amount", 60.f},
-        {s(11.2), "lfo_duty", 90.f},      {s(11.4), "lfo_duty", -90.f},     {s(11.6), "lfo_wave", 2.f},
-        {s(11.8), "lfo_duty", 90.f},      {s(12.0), "lfo_duty", 0.f},       {s(12.2), "spin_on", 1.f},
-        {s(12.4), "spin", 50.f},     {s(12.6), "spin", 0.f},       {s(12.8), "env_on", 1.f},
-        {s(13.0), "env_amount", -100.f}, {s(13.2), "env_attack", 30.f}, {s(13.4), "env_attack", 0.1f},
-        {s(13.6), "env_release", 400.f}, {s(13.8), "env_release", 50.f}, {s(14.0), "env_on", 0.f},
-        {s(14.2), "lfo2_mix", 50.f},  {s(14.4), "lfo2_freq", 0.2f},     {s(14.6), "lfo2_sync", 1.f},
-        {s(14.8), "lfo2_rate", 13.f},     {s(15.0), "lfo2_sync", 0.f},      {s(15.2), "lfo2_mix", 0.f},
-        {s(15.2), "blend", 0.f},      {s(15.2), "lfo_wave", 0.f},       {s(15.2), "lfo_freq", 5.f},
-        {s(15.2), "amount", 100.f},   {s(15.2), "center", 5000.f},  {s(15.8), "center", 70.f},
+        {s(0.4), "notches", 12.f},       {s(0.6), "notches", 1.f},        {s(0.8), "notches", 42.f},
+        {s(1.0), "notches", 4.f},        {s(1.2), "center", 300.f},       {s(1.4), "center", 3000.f},
+        {s(1.6), "spread", 0.f},         {s(1.8), "spread", 100.f},       {s(2.0), "blend", 1.f},
+        {s(2.2), "mode", 1.f},           {s(2.4), "flange_time", 0.5f},   {s(2.6), "flange_time", 10.f},
+        {s(2.8), "feedback", 0.f},       {s(3.0), "feedback", 60.f},      {s(3.2), "fb_invert", 1.f},
+        {s(3.4), "mode", 2.f},           {s(3.6), "doubler_time", 20.f},  {s(3.8), "doubler_time", 150.f},
+        {s(4.0), "fb_invert", 0.f},      {s(4.2), "mode", 0.f},           {s(4.4), "mode", 2.f},
+        {s(4.6), "mode", 1.f},           {s(4.8), "mode", 0.f},           {s(5.0), "lfo_wave", 1.f},
+        {s(5.2), "lfo_wave", 2.f},       {s(5.4), "lfo_freq", 5.f},       {s(5.6), "lfo_wave", 0.f},
+        {s(5.8), "lfo_sync", 1.f},       {s(6.0), "lfo_rate", 7.f},       {s(6.2), "lfo_sync", 0.f},
+        {s(6.4), "phase", 270.f},        {s(6.6), "spin_on", 1.f},        {s(6.8), "spin_on", 0.f},
+        {s(7.0), "lfo2_mix", 100.f},     {s(7.2), "env_on", 1.f},         {s(7.4), "env_on", 0.f},
+        {s(7.6), "safe_bass", 500.f},    {s(7.8), "safe_bass", 5.f},      {s(8.0), "warmth", 100.f},
+        {s(8.2), "warmth", 0.f},         {s(8.4), "output", -24.f},       {s(8.6), "output", 6.f},
+        {s(8.8), "output", 0.f},         {s(9.0), "mix", 0.f},            {s(9.2), "mix", 100.f},
+        {s(9.4), "mix", 50.f},           {s(9.6), "center", 500.f},       {s(9.6), "notches", 8.f},
+        {s(9.6), "spread", 30.f},        {s(10.0), "lfo2_mix", 0.f},      {s(10.2), "blend", 0.5f},
+        {s(10.4), "amount", 100.f},      {s(10.8), "amount", 0.f},        {s(11.0), "amount", 60.f},
+        {s(11.2), "lfo_duty", 90.f},     {s(11.4), "lfo_duty", -90.f},    {s(11.6), "lfo_wave", 2.f},
+        {s(11.8), "lfo_duty", 90.f},     {s(12.0), "lfo_duty", 0.f},      {s(12.2), "spin_on", 1.f},
+        {s(12.4), "spin", 50.f},         {s(12.6), "spin", 0.f},          {s(12.8), "env_on", 1.f},
+        {s(13.0), "env_amount", -100.f}, {s(13.2), "env_attack", 30.f},   {s(13.4), "env_attack", 0.1f},
+        {s(13.6), "env_release", 400.f}, {s(13.8), "env_release", 50.f},  {s(14.0), "env_on", 0.f},
+        {s(14.2), "lfo2_mix", 50.f},     {s(14.4), "lfo2_freq", 0.2f},    {s(14.6), "lfo2_sync", 1.f},
+        {s(14.8), "lfo2_rate", 13.f},    {s(15.0), "lfo2_sync", 0.f},     {s(15.2), "lfo2_mix", 0.f},
+        {s(15.2), "blend", 0.f},         {s(15.2), "lfo_wave", 0.f},      {s(15.2), "lfo_freq", 5.f},
+        {s(15.2), "amount", 100.f},      {s(15.2), "center", 5000.f},     {s(15.8), "center", 70.f},
     };
     const Values opening = {{"amount", 30.f}, {"lfo_wave", 0.f}, {"lfo_freq", 0.5f}, {"env_amount", 100.f}};
     const Samples tone = smoothSine(220.0, 16.4);
@@ -978,12 +978,6 @@ TEST_CASE("phaser-flanger: switched on in the middle of a sound, it comes in wit
     constexpr int64_t kAt = 24000;
     constexpr int kSwitchFade = 240;
     const int64_t until = kAt + kSampleRate / 4;  // (past the longest delay, 150 ms swept 7.5 % longer, + 40 ms)
-    const auto steepest = [](const Samples& x, int64_t from, int64_t to) {
-        double most = 0.0;
-        for (int64_t i = from; i < to; ++i)
-            most = std::max(most, std::abs(static_cast<double>(x[size_t(i)]) - x[size_t(i - 1)]));
-        return most;
-    };
     // Switched on at kAt, the renderer's fade emulated.
     const auto switchedOn = [&](const Values& values, int block) {
         Phaser device(kSampleRate, values);
@@ -1009,8 +1003,8 @@ TEST_CASE("phaser-flanger: switched on in the middle of a sound, it comes in wit
         for (const auto& [id, value] : values) name += ", " + id + " " + std::to_string(value);
         INFO(name);
         Phaser always(kSampleRate, values);
-        const double reference = std::max(steepest(always.play(tone), kAt, until), steepest(tone, kAt, until));
-        const double got = steepest(switchedOn(values, 256), kAt, until);
+        const double reference = std::max(largestStep(always.play(tone), kAt, until), largestStep(tone, kAt, until));
+        const double got = largestStep(switchedOn(values, 256), kAt, until);
         INFO("the steepest step " + std::to_string(got) + ", always on " + std::to_string(reference));
         CHECK(got <= 1.25 * reference + 0.005);
     }

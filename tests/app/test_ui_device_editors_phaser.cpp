@@ -6,17 +6,11 @@
 // engine's design, its notch markers where the design puts them, a fine comb
 // drawn as a band; the graph's drags and its double-click, one undo step each;
 // what the engine's displays bring it (the sweep, the LFO's phase, the levels),
-// going quiet without them and then not repainting; the playback of the display
-// values, smooth whatever the audio's block size, and the meters, the comet's
-// tail and a random shape's trace keeping their pace; what the engine has
-// after. With SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as
-// PNGs.
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <time.h>
-#endif
+// going quiet without them and then not repainting; the meters showing the
+// sound now, not a backlog's; the playback of the display values, smooth
+// whatever the audio's block size, and the meters, the comet's tail and a
+// random shape's trace keeping their pace; what the engine has after. With
+// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as PNGs.
 
 #include <QElapsedTimer>
 #include <QQuickItem>
@@ -30,6 +24,7 @@
 #include <tuple>
 #include <vector>
 
+#include "../engine/harness/ThreadTime.h"  // (the cost tests' clock: the CPU time this thread has used)
 #include "EditorHarness.h"
 #include "audio/EngineBridge.h"
 #include "audio/PhaserResponse.h"
@@ -42,6 +37,7 @@
 using namespace sub::app;
 using namespace sub::ui;
 using sub::app::test::kSampleRate;
+using subtest::threadSeconds;
 
 namespace {
 
@@ -74,23 +70,6 @@ constexpr Control kMoreKnobs[] = {{"lfo2Mix", "lfo2_mix"},     {"rate2", "lfo2_f
 // Every switch and button: its object name and parameter.
 constexpr Control kButtons[] = {{"sync", "lfo_sync"},   {"spinOn", "spin_on"}, {"fbInvert", "fb_invert"},
                                 {"sync2", "lfo2_sync"}, {"envOn", "env_on"}};
-
-// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else the
-// machine is doing (the wall clock would count the time other processes had the core).
-double threadSeconds() {
-#ifdef _WIN32
-    FILETIME created, exited, kernel, user;
-    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
-    const auto ticks = [](const FILETIME& t) {
-        return double((quint64(t.dwHighDateTime) << 32) | t.dwLowDateTime);
-    };
-    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks, counted at the scheduler's ~16 ms)
-#else
-    timespec t{};
-    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
-    return double(t.tv_sec) + 1e-9 * double(t.tv_nsec);
-#endif
-}
 
 }  // namespace
 
@@ -714,6 +693,43 @@ private Q_SLOTS:
         QVERIFY(std::abs(graph->sweepLeft() - 2000.0) < 1e-9);
         refreshDisplays();
         QVERIFY(!graph->moving());
+    }
+
+    // The meters show the sound now: shown again after a loud part, the device silent since, they don't light
+    // up from the display's history (a read then brings seconds of it).
+    void metersShowNow() {
+        QQuickItem* view = showPhaser(4);
+        QVERIFY(view);
+        auto* graph = find<PhaserGraph>(view, QStringLiteral("phaserGraph"));
+        QVERIFY(graph);
+        for (int i = 0; i < 30; ++i) {
+            play(10.0, 768);  // (silence: after the tone's clip)
+            QVERIFY2(graph->levelIn() < -40.0, qPrintable(QString::number(graph->levelIn())));
+        }
+        QVERIFY(graph->live());
+
+        // Hidden through a loud part, silent again, then shown.
+        view->setVisible(false);
+        engine()->renderOffline(0.0, 2 * kSampleRate);
+        engine()->renderOffline(10.0, 3 * kSampleRate);
+        view->setVisible(true);
+        play(10.0, 768);
+        QVERIFY2(graph->levelIn() < -40.0, qPrintable(QString::number(graph->levelIn())));
+        QVERIFY2(graph->levelOut() < -40.0, qPrintable(QString::number(graph->levelOut())));
+
+        // Sound now: the meters show it.
+        play(0.0, 4096);
+        QVERIFY2(std::abs(graph->levelIn() - 20 * std::log10(0.5)) < 0.5,
+                 qPrintable(QString::number(graph->levelIn())));
+
+        // A large block's values all count, not only the newest the tick's time covers: one of 2048 frames, the
+        // tone's last 1024 then silence, shows the tone (its four silent values alone would cover a tick).
+        for (int i = 0; i < 120; ++i) play(10.0, 768);  // (the meter falling 24 dB a second)
+        QVERIFY2(graph->levelIn() < -40.0, qPrintable(QString::number(graph->levelIn())));
+        refreshDisplays();  // (so the tick below counts a display tick's time, too short for the older values)
+        play(double(4 * kSampleRate - 1024) / (kSampleRate / 2), 2048);
+        QVERIFY2(std::abs(graph->levelIn() - 20 * std::log10(0.5)) < 1.0,
+                 qPrintable(QString::number(graph->levelIn())));
     }
 
     // The display values played back smoothly, whatever batches they come in.

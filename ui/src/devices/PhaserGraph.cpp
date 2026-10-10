@@ -22,13 +22,13 @@ namespace sub::ui {
 
 namespace {
 
-// The displays, in the engine's order (their index is the playback's stream).
-enum Stream { kPhase = 0, kPhaseRight, kLfo, kMod, kEnv, kSweepLeft, kSweepRight, kQLeft, kQRight, kInput, kOutput };
+// The displays the playback plays, in the engine's order (their index is the playback's stream).
+enum Stream { kPhase = 0, kPhaseRight, kLfo, kMod, kEnv, kSweepLeft, kSweepRight, kQLeft, kQRight };
 const QString& displayId(int stream) {
     static const QString kIds[PhaserGraph::kStreams] = {
-        QStringLiteral("phase"),   QStringLiteral("phase_r"), QStringLiteral("lfo"),     QStringLiteral("mod"),
-        QStringLiteral("env"),     QStringLiteral("sweep_l"), QStringLiteral("sweep_r"), QStringLiteral("q_l"),
-        QStringLiteral("q_r"),     QStringLiteral("input"),   QStringLiteral("output")};
+        QStringLiteral("phase"),   QStringLiteral("phase_r"), QStringLiteral("lfo"),
+        QStringLiteral("mod"),     QStringLiteral("env"),     QStringLiteral("sweep_l"),
+        QStringLiteral("sweep_r"), QStringLiteral("q_l"),     QStringLiteral("q_r")};
     return kIds[stream];
 }
 
@@ -397,15 +397,12 @@ void PhaserGraph::refreshDisplays() {
     }
     size_t count = pending_[0].size();
     for (const std::vector<float>& values : pending_) count = std::min(count, values.size());
-    double inPeak = -1e300, outPeak = -1e300;
     for (size_t i = 0; i < count; ++i) {
         Playback::Frame frame;
         for (int s = 0; s < kStreams; ++s) {
             const float v = pending_[size_t(s)][i];
             frame[size_t(s)] = std::isfinite(v) ? v : 0.0f;
         }
-        inPeak = std::max(inPeak, double(frame[kInput]));
-        outPeak = std::max(outPeak, double(frame[kOutput]));
         playback_.append(frame);
     }
     for (std::vector<float>& values : pending_) values.erase(values.begin(), values.begin() + std::ptrdiff_t(count));
@@ -495,13 +492,24 @@ void PhaserGraph::refreshDisplays() {
         moving = true;
     }
 
-    // The meters want the newest: what came this tick, or on a tick that brought nothing (a large
-    // audio block's gap) the last that came, so they go on falling and holding at their pace; quiet,
-    // they fall.
-    if (count > 0) {
-        lastInPeak_ = inPeak;
-        lastOutPeak_ = outPeak;
-    }
+    // The meters want the newest: the peaks of what came this tick, as far back as the tick or the
+    // largest recent batch goes (a large audio block's values all count) but no further (readRecent: a
+    // read can bring a backlog, the editor shown again reading seconds of the display's history, which
+    // no longer sounds); on a tick that brought nothing (a large block's gap) the last that came, so
+    // they go on falling and holding at their pace; quiet, they fall.
+    const double recent = std::max(dt, playback_.target() * sub::app::phaserDisplaySamples() / sampleRate());
+    const auto peakOf = [](const std::vector<float>& levels) {
+        double peak = -1e300;
+        for (const float level : levels) {
+            if (std::isfinite(level))
+                peak = std::max(peak, double(level));
+        }
+        return peak;
+    };
+    if (const std::vector<float> levels = readRecent(QStringLiteral("input"), recent); !levels.empty())
+        lastInPeak_ = peakOf(levels);
+    if (const std::vector<float> levels = readRecent(QStringLiteral("output"), recent); !levels.empty())
+        lastOutPeak_ = peakOf(levels);
     if (live_) {
         in_.update(lastInPeak_, dt, 24.0, 1.0, kMeterFloor);
         out_.update(lastOutPeak_, dt, 24.0, 1.0, kMeterFloor);
