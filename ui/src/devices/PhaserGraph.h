@@ -25,14 +25,12 @@
 //   Doubler: the Time), up and down for the Spread (the delay modes: the
 //   Feedback), one undo step per drag; double-click to reset them, one step
 //   with the first click's jump.
-// - Expanded (LFO 2, the envelope and Safe Bass shown) is view state, kept per
-//   device while the application runs, not saved.
 
 #include "audio/PhaserResponse.h"
 #include "devices/DeviceCanvas.h"
+#include "devices/DisplayPlayback.h"
 #include "devices/EditorPaint.h"
 
-#include <QElapsedTimer>
 #include <QPointF>
 #include <QtQml/qqmlregistration.h>
 
@@ -42,64 +40,9 @@
 
 namespace sub::ui {
 
-// Display values played back at the audio's own pace. The engine publishes them a block at a
-// time (a 1024-frame block brings four at once, then nothing for 21 ms) while the screen ticks
-// every 16.7 ms: drawing the latest value each tick would move the curve in uneven jerks. A
-// playhead runs through the frames at their rate, about the largest recent batch behind the
-// newest, interpolating between them; a little faster when further behind, a little slower when
-// nearer (never backwards), and jumping only when it falls far behind (or waited at the newest
-// for frames that then came). All the streams arrive together, so one playhead serves them all.
-// Pure arithmetic on a fixed ring.
-class DisplayPlayback {
-public:
-    static constexpr int kStreams = 11;
-    static constexpr int kCapacity = 64;      // frames kept
-    static constexpr int kMaxTarget = 16;     // the target lag's most, in frames
-    static constexpr double kWindow = 0.5;    // seconds of batches the target lag looks back on
-    using Frame = std::array<float, kStreams>;
-
-    // A frame, in the order they arrived; then endBatch(how many came this tick, 0: none).
-    void append(const Frame& frame);
-    void endBatch(int batch);
-    // Moves the playhead on by `dtSeconds` at `framesPerSecond`.
-    void advance(double dtSeconds, double framesPerSecond);
-    // A stream's value at the playhead: linear between the frames either side; a phase (0..1) the
-    // short way round; in log (for sweeps, which are positive).
-    double value(int stream) const;
-    double phase(int stream) const;
-    double logValue(int stream) const;
-    void snapToNewest();
-    void clear();
-
-    bool empty() const { return count_ == 0; }
-    qint64 newest() const { return count_ - 1; }  // the newest frame's number (from 0)
-    double head() const { return head_; }         // where the playhead is, in frames
-    double lag() const { return empty() ? 0.0 : double(newest()) - head_; }
-    int target() const;                           // the lag it keeps to
-    // Frame `index`'s value of `stream` (held to the frames kept).
-    float at(qint64 index, int stream) const;
-
-private:
-    struct Batch {
-        double age = 0.0;
-        int size = 0;
-    };
-    template <typename Mix>
-    double interpolate(int stream, Mix mix) const;
-
-    std::array<Frame, kCapacity> frames_{};
-    qint64 count_ = 0;     // frames appended
-    double head_ = 0.0;    // the playhead (a frame number)
-    bool waiting_ = true;  // at the newest, waiting for more
-    std::array<Batch, 32> batches_{};  // the recent batches (a ring)
-    int batchCount_ = 0, batchNext_ = 0;
-};
-
 class PhaserGraph : public DeviceCanvas {
     Q_OBJECT
     QML_ELEMENT
-    // LFO 2, the envelope and Safe Bass shown (view state, per device, not saved).
-    Q_PROPERTY(bool expanded READ expanded WRITE setExpanded NOTIFY expandedChanged)
     // Values coming from the engine (the curve is the engine's; else the parameters').
     Q_PROPERTY(bool live READ live NOTIFY displaysChanged)
     // The sweep as drawn: the left stages' centre (Hz) or the delay (ms).
@@ -109,6 +52,10 @@ class PhaserGraph : public DeviceCanvas {
     Q_PROPERTY(int mode READ mode NOTIFY curveChanged)
 
 public:
+    // The engine's displays, a stream each of the playback (in the engine's order: displayId()).
+    static constexpr int kStreams = 11;
+    using Playback = DisplayPlayback<kStreams>;
+
     static constexpr int kWidth = 240;
     static constexpr int kMinimumHeight = 100;
     static constexpr double kLow = 20.0;  // Hz across the plot
@@ -126,8 +73,6 @@ public:
     static constexpr int kTrace = 512;                // the random shapes' trace: 2.7 s of values
     static constexpr int kMarkerSpacing = 8;          // px: comb markers closer than this are left out
     static constexpr double kBandPeriod = 8.0;        // px: a comb whose cycle is shorter is drawn as a band
-    static constexpr double kMinFlangeMs = 0.1, kMaxFlangeMs = 20.0;  // the times' ranges (the parameters')
-    static constexpr double kMinDoublerMs = 20.0, kMaxDoublerMs = 150.0;
 
     explicit PhaserGraph(QQuickItem* parent = nullptr);
 
@@ -139,7 +84,7 @@ public:
     double freqAt(double x) const;
     double yOf(double db) const;
     // The delay modes' drag across: Flanger, the comb's first notch under the mouse (500 / freqAt(x)
-    // ms, held to 0.1..20); Doubler, log across 20..150 ms, the longest at the left.
+    // ms, held to the Time's range); Doubler, log across its Time's range, the longest at the left.
     double xOfTime(double ms) const;
     double timeAt(double x) const;
 
@@ -156,7 +101,6 @@ public:
     double qLeft() const { return std::exp2(qL_.value); }
     double qRight() const { return std::exp2(qR_.value); }
     double lfoPhase() const { return lfoPhase_; }
-    double lfoPhaseRight() const { return lfoPhaseRight_; }
     double lfoValue() const { return lfoValue_; }
     double modulation() const { return modulation_; }
     double envelope() const { return envBar_.value; }
@@ -165,17 +109,14 @@ public:
     double dotOpacity() const { return dotOpacity_.value; }
     int traceLength() const { return traceCount_; }  // the random shapes' values traced so far (of kTrace)
     double trailSpan() const { return trailSpan_; }   // how far the dot went over its trail's ticks (cycles)
-    const DisplayPlayback& playback() const { return playback_; }
+    const Playback& playback() const { return playback_; }
     int mode() const { return mode_; }
     bool live() const { return live_; }
     QString notchText() const;
-    bool expanded() const;
-    void setExpanded(bool on);
     // Whether the last tick asked to be drawn again (something moved).
     bool moving() const { return moving_; }
 
 Q_SIGNALS:
-    void expandedChanged();
     void displaysChanged();
     void curveChanged();
     void sweepChanged();
@@ -258,15 +199,14 @@ private:
     bool moving_ = false;
     double sinceArrival_ = 1e9;  // seconds without display values (the ticks' times)
     qint64 holdUntil_ = -1;      // a mode change: frames before this one may be the old mode's
-    DisplayPlayback playback_;
-    std::array<std::vector<float>, DisplayPlayback::kStreams> pending_;  // read, not yet whole frames
+    Playback playback_;
+    std::array<std::vector<float>, kStreams> pending_;  // read, not yet whole frames
     std::array<Dot, kTrail> trail_{};
     int trailCount_ = 0, trailNext_ = 0, trailSettle_ = 0;
     double trailSpan_ = 0.0;  // how far the dot went over the trail's ticks (cycles)
     std::vector<float> trace_;  // the random shapes' values, a ring of kTrace
     int traceNext_ = 0, traceCount_ = 0;
     qint64 traced_ = -1;  // the last frame put in the trace
-    QElapsedTimer clock_;
     double drawnLeft_ = 0.0, drawnRight_ = 0.0, drawnQLeft_ = 0.0, drawnQRight_ = 0.0;  // the curve's
 
     // The curve.

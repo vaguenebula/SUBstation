@@ -19,7 +19,7 @@ struct PhaserCurve {
     double feedback = 0.0;                // the signed loop gain (phaserFeedbackGain)
     double warmth = 0.0;                  // 0..1
     double mix = 0.5;                     // 0..1
-    double safeBassHz = 5.0;              // 5 Hz (or less): off
+    double safeBassHz = 0.0;              // at or below phaserRanges().safeBassOffHz: off
     double outputDb = 0.0;
 };
 
@@ -59,5 +59,17 @@ double phaserDelayMs(int mode, double timeMs, double mod, double sampleRate);
 double phaserFeedbackGain(double percent, bool invert);
 
 QStringList phaserWaveLabels();
+
+// The engine's constants its editor needs: the frames a display value stands for, and the
+// parameters' ranges, which its drags hold to.
+int phaserDisplaySamples();
+struct PhaserRanges {
+    int maxNotches = 0;
+    double minCenterHz = 0.0, maxCenterHz = 0.0;
+    double minFlangeMs = 0.0, maxFlangeMs = 0.0;
+    double minDoublerMs = 0.0, maxDoublerMs = 0.0;
+    double safeBassOffHz = 0.0;  // Safe Bass at (or below) this is off
+};
+PhaserRanges phaserRanges();
 
 }  // namespace sub::app

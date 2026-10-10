@@ -8,11 +8,11 @@ import SUBstation
 // moving with the modulation, over the LFO's shape and its phase); the LFO
 // (Freq or a synced Rate, the waveform, Duty Cycle, Phase or Spin); the globals
 // (Amount, Feedback and its Ø, Warmth, Output, Dry/Wet); and, shown by More,
-// LFO 2, the envelope follower and Safe Bass. Controls that only swap with a
-// switch (Freq/Rate, Phase/Spin, the delay's Time) rebind in place. Every
-// control shows its parameter as it is now (its automation's value while that
-// plays), sets it undoably, touches it when pressed, and right-click gives its
-// menu.
+// LFO 2, the envelope follower and Safe Bass (whether it is open is view
+// state, by device: DeviceViews). Controls that only swap with a switch
+// (Freq/Rate, Phase/Spin, the delay's Time) rebind in place. Every control
+// shows its parameter as it is now (its automation's value while that plays),
+// sets it undoably, touches it when pressed, and right-click gives its menu.
 Item {
     id: editor
 
@@ -21,8 +21,8 @@ Item {
     readonly property alias graph: graph
 
     readonly property int margin: 8
-    readonly property int cell: 52      // a knob's cell (an EditorKnob's width at size 30)
-    readonly property int knobSize: 30
+    readonly property int cell: 52      // a knob's cell (an EditorKnob's width at the house size)
+    readonly property int knobSize: 34
     readonly property int gap: 4        // between cells
     readonly property int sectionGap: 10
     readonly property int tabWidth: 58
@@ -43,13 +43,15 @@ Item {
     readonly property real rowsY: Math.round((height - rowsHeight) / 2)
 
     readonly property int mode: p.get("mode") ? p.get("mode").index : 0  // 0 Phaser, 1 Flanger, 2 Doubler
-    readonly property bool synced: on("sync")
+    readonly property bool synced: on("lfo_sync")
     readonly property bool spinning: on("spin_on")
-    readonly property bool synced2: on("sync2")
+    readonly property bool synced2: on("lfo2_sync")
     readonly property bool envOn: on("env_on")
+    // More: LFO 2, the envelope follower and Safe Bass shown (not saved: how the device is looked at).
+    readonly property bool expanded: DeviceViews.value(deviceId, "expanded", false)
 
     // The body: the sections and the gaps between them, and the extra section while shown.
-    implicitWidth: globalsX + tripleWidth + (graph.expanded ? sectionGap + tripleWidth : 0) + margin
+    implicitWidth: globalsX + tripleWidth + (expanded ? sectionGap + tripleWidth : 0) + margin
     implicitHeight: 6 + Math.max(rowsHeight, time.implicitHeight + 14, graph.implicitHeight, 3 * 16 + 8) + 6
 
     function on(id) {
@@ -57,27 +59,23 @@ Item {
         return param ? param.value >= 0.5 : false
     }
 
+    function setExpanded(open) {
+        DeviceViews.setValue(deviceId, "expanded", open)
+    }
+
     DeviceParamMap {
         id: p
         trackId: editor.trackId
         deviceId: editor.deviceId
         ids: ["mode", "notches", "center", "spread", "blend", "flange_time", "doubler_time", "amount", "feedback",
-              "fb_invert", "sync", "freq", "rate", "wave", "duty", "spin_on", "phase", "spin", "lfo2_mix", "sync2",
-              "freq2", "rate2", "env_on", "env_amount", "env_attack", "env_release", "safe_bass", "warmth",
-              "output", "mix"]
-    }
-
-    // A thin line between sections.
-    component Divider: Rectangle {
-        y: 6
-        width: 1
-        height: editor.height - 12
-        color: Theme.border
+              "fb_invert", "lfo_sync", "lfo_freq", "lfo_rate", "lfo_wave", "lfo_duty", "spin_on", "phase", "spin",
+              "lfo2_mix", "lfo2_sync", "lfo2_freq", "lfo2_rate", "env_on", "env_amount", "env_attack", "env_release",
+              "safe_bass", "warmth", "output", "mix"]
     }
 
     // A knob whose rate can be synced: the ♪ switch at the right of its caption. Synced, it steps
     // through note values, and the wheel moves it one a notch (the knob's own wheel moves a fiftieth
-    // of the range, which a list of 19 rounds back to where it was).
+    // of the range, which a list of 22 rounds back to where it was).
     component SyncedKnob: Item {
         id: synced
 
@@ -217,7 +215,7 @@ Item {
         }
     }
 
-    Divider {
+    EditorDivider {
         x: editor.margin + editor.tabWidth + 3
     }
 
@@ -315,7 +313,7 @@ Item {
         }
     }
 
-    Divider {
+    EditorDivider {
         x: editor.graphX - 5
     }
 
@@ -337,10 +335,11 @@ Item {
         }
         ToolTip.visible: graphHover.hovered && !graphHover.point.pressedButtons
         ToolTip.delay: 700
-        ToolTip.text: qsTr("The response as it plays now. Drag across for the Center (Flanger: the first notch; Doubler: the Time), up and down for the Spread (the Feedback); double-click to reset")
+        ToolTip.text: qsTr("The response as it plays now. Drag across for the Center (Flanger: the first notch; "
+                           + "Doubler: the Time), up and down for the Spread (the Feedback); double-click to reset")
     }
 
-    Divider {
+    EditorDivider {
         x: editor.lfoX - 5
     }
 
@@ -358,11 +357,11 @@ Item {
             id: rate
             knobName: "rate"
             buttonName: "sync"
-            knob.param: editor.synced ? p.get("rate") : p.get("freq")
+            knob.param: editor.synced ? p.get("lfo_rate") : p.get("lfo_freq")
             knob.step: editor.synced ? 1 : 0
             knob.title: editor.synced ? qsTr("Rate") : qsTr("Freq")
             knob.tooltip: qsTr("How fast the LFO moves (♪: in note values)")
-            syncButton.param: p.get("sync")
+            syncButton.param: p.get("lfo_sync")
         }
         Item {
             width: editor.cell
@@ -375,7 +374,7 @@ Item {
                 ParamChoice {
                     objectName: "wave"
                     width: editor.cell
-                    param: p.get("wave")
+                    param: p.get("lfo_wave")
                     iconOnly: true
                     icons: ["wave_sine", "wave_triangle", "wave_triangle", "wave_triangle", "wave_triangle",
                             "wave_saw_up", "wave_saw_down", "wave_square", "wave_random", "wave_random"]
@@ -394,7 +393,7 @@ Item {
             id: duty
             objectName: "duty"
             size: editor.knobSize
-            param: p.get("duty")
+            param: p.get("lfo_duty")
             knob.bipolar: true
             title: qsTr("Duty")
             tooltip: qsTr("Bends the shape: a rectangle's width, the others' skew")
@@ -409,7 +408,7 @@ Item {
         }
     }
 
-    Divider {
+    EditorDivider {
         x: editor.globalsX - 5
     }
 
@@ -462,10 +461,10 @@ Item {
                     iconSize: 10
                     text: qsTr("More")
                     checkable: false
-                    checked: graph.expanded
-                    tooltip: graph.expanded ? qsTr("Hide LFO 2, the envelope follower and Safe Bass")
-                                            : qsTr("Show LFO 2, the envelope follower and Safe Bass")
-                    onClicked: graph.expanded = !graph.expanded
+                    checked: editor.expanded
+                    tooltip: editor.expanded ? qsTr("Hide LFO 2, the envelope follower and Safe Bass")
+                                             : qsTr("Show LFO 2, the envelope follower and Safe Bass")
+                    onClicked: editor.setExpanded(!editor.expanded)
                 }
             }
         }
@@ -500,15 +499,15 @@ Item {
         x: editor.extraX - 10
         width: editor.sectionGap + editor.tripleWidth
         height: editor.height
-        visible: graph.expanded
-        opacity: graph.expanded ? 1 : 0
+        visible: editor.expanded
+        opacity: editor.expanded ? 1 : 0
         Behavior on opacity {
             NumberAnimation {
                 duration: 150
             }
         }
 
-        Divider {
+        EditorDivider {
             x: 5
         }
         Grid {
@@ -535,11 +534,11 @@ Item {
                         duration: 120
                     }
                 }
-                knob.param: editor.synced2 ? p.get("rate2") : p.get("freq2")
+                knob.param: editor.synced2 ? p.get("lfo2_rate") : p.get("lfo2_freq")
                 knob.step: editor.synced2 ? 1 : 0
                 knob.title: editor.synced2 ? qsTr("Rate") : qsTr("Freq")  // (LFO 2's: beside it)
                 knob.tooltip: qsTr("How fast LFO 2 moves (♪: in note values)")
-                syncButton.param: p.get("sync2")
+                syncButton.param: p.get("lfo2_sync")
                 syncButton.tooltip: qsTr("Sync LFO 2 to the song's tempo")
             }
             EditorKnob {
@@ -547,8 +546,8 @@ Item {
                 size: editor.knobSize
                 param: p.get("safe_bass")
                 title: qsTr("Safe Bass")
-                formatter: v => v <= 5.001 ? qsTr("Off") : param.format(v)
-                tooltip: qsTr("Keep everything below this out of the effect (5 Hz: off)")
+                formatter: v => v <= param.minimum + 0.001 ? qsTr("Off") : param.format(v)
+                tooltip: qsTr("Keep everything below this out of the effect (all the way down: off)")
             }
             EnvCell {
                 id: envAmount

@@ -100,4 +100,19 @@ QStringList phaserWaveLabels() {
     return labels;
 }
 
+int phaserDisplaySamples() { return sub::phaser::kDisplaySamples; }
+
+PhaserRanges phaserRanges() {
+    PhaserRanges r;
+    r.maxNotches = sub::phaser::kMaxNotches;
+    r.minCenterHz = sub::phaser::kMinCenter;
+    r.maxCenterHz = sub::phaser::kMaxCenter;
+    r.minFlangeMs = sub::phaser::kMinFlangeMs;
+    r.maxFlangeMs = sub::phaser::kMaxFlangeMs;
+    r.minDoublerMs = sub::phaser::kMinDoublerMs;
+    r.maxDoublerMs = sub::phaser::kMaxDoublerMs;
+    r.safeBassOffHz = sub::phaser::kSafeBassOff;
+    return r;
+}
+
 }  // namespace sub::app

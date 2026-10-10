@@ -35,9 +35,14 @@ enum class Wave {
 
 constexpr double kPi = std::numbers::pi;
 
+// The parameters' ranges (Live's), which the editor's drags hold to too.
 constexpr int kMaxNotches = 42;
-constexpr double kMinCenter = 70.0, kMaxCenter = 18500.0;  // the Center parameter's range (abl.dsp.phaser~'s)
-constexpr double kMinRate = 0.01, kMaxRate = 5.0;          // Hz: Freq and Freq 2
+constexpr double kMinCenter = 70.0, kMaxCenter = 18500.0;      // Hz: Center
+constexpr double kMinFlangeMs = 0.1, kMaxFlangeMs = 20.0;      // the Flanger's Time
+constexpr double kMinDoublerMs = 20.0, kMaxDoublerMs = 150.0;  // the Doubler's Time
+constexpr double kMinRate = 0.01, kMaxRate = 40.0;             // Hz: Freq and Freq 2
+constexpr double kMaxSpin = 0.5;                               // Spin's most: the right LFO half as fast again
+
 constexpr double kMinStageHz = 10.0;        // the lowest the modulation takes the stages
 constexpr double kMaxQ = 5.0, kMinQ = 0.15;  // Spread 0 % .. 100 %
 constexpr double kPhaserOctaves = 3.0;      // modulation 1.0 moves Center this many octaves
@@ -54,6 +59,7 @@ constexpr double kSafeBassOff = 5.0;        // Hz: Safe Bass at (or below) this 
 constexpr double kEnvRangeDb = 48.0;        // the envelope's 0..1 spans -48..0 dBFS
 constexpr double kModLimit = 2.0;           // the summed modulation is held to ±2
 constexpr double kSafetyKnee = 2.0, kSafetyLimit = 4.0;  // the feedback path's soft limit
+constexpr double kLevelFloorDb = -90.0;     // the level displays' floor (silence)
 
 // Timing, shared with the tests.
 constexpr int kChunk = 16;                  // frames per control chunk
@@ -67,6 +73,7 @@ constexpr double kLfoFadeSeconds = 0.02;    // an LFO's value crossfading over a
 constexpr double kNotchFadeSeconds = 0.02;  // a change of Notches
 constexpr double kModeFadeSeconds = 0.03;   // a change of Mode
 constexpr double kSafeFadeSeconds = 0.02;   // Safe Bass switching on or off
+constexpr double kStartFadeSeconds = 0.005; // the delay line's input after a reset that finds a sound playing
 
 inline const std::vector<std::string>& modeLabels() {
     static const std::vector<std::string> kLabels = {"Phaser", "Flanger", "Doubler"};
@@ -200,15 +207,11 @@ inline double softCenterLog2(double log2Hz, double sampleRate) noexcept {
     return log2Hz;
 }
 
-// The stages' frequency, in log2 Hz, for a centre given in log2 Hz: moved
+// The stages' frequency in Hz for a centre given in log2 Hz: moved
 // kPhaserOctaves per unit of modulation (less as Blend gives the modulation to
-// Spread), with the soft limits above.
-inline double centerLog2At(double log2Center, double blend, double mod, double sampleRate) noexcept {
-    return softCenterLog2(log2Center + (1.0 - blend) * kPhaserOctaves * mod, sampleRate);
-}
-
-// The same in Hz. (Away from the limits, where it nearly always is, one exp2:
-// the device works it out every sample while the stages move.)
+// Spread), with the soft limits above. (Away from the limits, where it nearly
+// always is, one exp2: the device works it out every sample while the stages
+// move.)
 inline double centerHzAt(double log2Center, double blend, double mod, double sampleRate) noexcept {
     constexpr double kInside = 0.8408964152537145;  // 2^-kCenterEdge
     const double log2Hz = log2Center + (1.0 - blend) * kPhaserOctaves * mod;

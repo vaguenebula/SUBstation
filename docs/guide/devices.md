@@ -804,21 +804,22 @@ whoosh of a flanger, or (with a longer delay) a second, slightly wandering take.
 - **Amount** (0 to 100 %): how far the LFO (and the envelope, below) moves the sweep: up
   to three octaves of the Center either way, two octaves of the Flanger's Time, 15 % of
   the Doubler's.
-- **The LFO**: **Freq** (0.01 to 5 Hz), or with the **♪** switch on, **Rate** in note
-  values (1/64 to 8 bars, a value a wheel notch), the LFO then following the song; the
+- **The LFO**: **Freq** (0.01 to 40 Hz: from a slow sweep to a fast warble), or with the
+  **♪** switch on, **Rate** in note values (Live's: 1/64 to 3/4 of a bar, triplets among
+  them, then 1 to 8 bars; a value a wheel notch), the LFO then following the song; the
   **waveform** (Sine, Triangle, Triangle Analog: a rounded square that gets rounder and
   quieter the faster it runs, Triangle 8 and 16: stepped, Saw Up, Saw Down, Rectangle,
   Random: smooth, Random S&H: stepped); **Duty** (−100 to 100 %), which bends the shape
   (a rectangle's width, the others' skew); and **Phase** (0 to 360°), how far the right
   channel's LFO runs ahead of the left's (180°: opposite, a wide stereo sweep). With
-  **Spin** on, the right LFO instead runs faster than the left by **Spin** (0 to 100 %),
-  so the two drift in and out of step.
+  **Spin** on, the right LFO instead runs faster than the left by **Spin** (0 to 50 %:
+  at most half as fast again), so the two drift in and out of step.
 - **Feedback** (0 to 100 %): the output fed back in: sharper, ringing notches and a
   stronger, more metallic sweep. **Ø** flips its polarity, which moves the resonances
   between the notches (hollow, nasal).
 - **Warmth** (0 to 100 %): a little saturation and darkening of the effect, also as it
   feeds back.
-- **Output** (−24 to +24 dB) and **Dry/Wet** (0 to 100 %): at 50 % the notches are
+- **Output** (−36 to +6 dB) and **Dry/Wet** (0 to 100 %): at 50 % the notches are
   deepest; at 100 % only the moved copy is heard (a Flanger then becomes a vibrato, a
   Doubler a wandering delayed copy).
 - **More** shows the rest:
@@ -827,7 +828,7 @@ whoosh of a flanger, or (with a longer delay) a second, slightly wandering take.
     give a more irregular sweep.
   - **Env** follows the input's level and moves the sweep with it, by **Env Amount**
     (−100 to 100 %: negative moves it the other way): louder notes sweep further.
-    **Attack** (0.1 to 300 ms) and **Release** (1 to 3000 ms) are how fast it follows.
+    **Attack** (0.1 to 30 ms) and **Release** (0.1 to 400 ms) are how fast it follows.
   - **Safe Bass** (Off at 5 Hz, up to 3 kHz): everything below it stays out of the
     effect, so a bass line or a kick keeps its weight while the rest sweeps.
 - **The graph** shows the response as it plays: the notches (or the comb) moving with
@@ -843,7 +844,8 @@ whoosh of a flanger, or (with a longer delay) a second, slightly wandering take.
   they were).
 - Every control can be automated, and changes don't click: the controls glide, a change
   of mode or of Notches crossfades, and an LFO that jumps (a new waveform, Sync
-  switched, the song jumping) fades to its new place.
+  switched, the song jumping) fades to its new place. Switched on while something plays,
+  the Flanger's and the Doubler's delayed copy comes in smoothly too.
 - Tips: a slow Triangle (0.1 to 0.3 Hz) with 4 to 8 notches and some Feedback is the
   classic phaser; a Flanger at 1 to 3 ms with 70 % Feedback is the jet whoosh (Ø for a
   hollower one); a Doubler at about 30 ms with Phase 180° and little Amount widens a

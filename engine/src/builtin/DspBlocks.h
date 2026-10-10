@@ -278,21 +278,21 @@ private:
     uint32_t cycle_ = 0;
 };
 
-// Synced LFO rates as note lengths (a bar is a whole note, 4 beats), straight,
-// triplet (T, 2/3 as long) and dotted (D, 1.5 times): labels for a list
+// Live's synced LFO rates (its Auto Filter's, Auto Pan's and Phaser-Flanger's):
+// fractions of a bar (a whole note, 4 beats) from 1/64 to 3/4, the triplets
+// among them (1/48, 1/24, 1/12, 1/6, 1/3), then 1 to 8 bars. Labels for a list
 // parameter, and each one's length in beats.
 inline const std::vector<std::string>& syncedDivisionLabels() {
     static const std::vector<std::string> kLabels = {
-        "1/64", "1/32T", "1/32", "1/16T", "1/16", "1/16D", "1/8T", "1/8", "1/8D", "1/4T",
-        "1/4",  "1/4D",  "1/2T", "1/2",   "1/2D", "1 Bar", "2 Bars", "4 Bars", "8 Bars",
+        "1/64", "1/48", "1/32", "1/24", "1/16", "1/12", "1/8", "1/6", "3/16", "1/4", "5/16",
+        "1/3", "3/8", "1/2", "3/4", "1 Bar", "1.5 Bars", "2 Bars", "3 Bars", "4 Bars", "6 Bars", "8 Bars",
     };
     return kLabels;
 }
 inline double syncedCycleBeats(int divisionIndex) noexcept {
-    static constexpr std::array<double, 19> kBeats = {
-        4.0 / 64,       4.0 / 32 * 2 / 3, 4.0 / 32, 4.0 / 16 * 2 / 3, 4.0 / 16, 4.0 / 16 * 1.5, 4.0 / 8 * 2 / 3,
-        4.0 / 8,        4.0 / 8 * 1.5,    1.0 * 2 / 3, 1.0,            1.5,                2.0 * 2 / 3,
-        2.0,            3.0,              4.0,         8.0,            16.0,               32.0,
+    static constexpr std::array<double, 22> kBeats = {
+        4.0 / 64, 4.0 / 48, 4.0 / 32, 4.0 / 24, 4.0 / 16, 4.0 / 12, 4.0 / 8, 4.0 / 6, 0.75, 1.0,  1.25,
+        4.0 / 3,  1.5,      2.0,      3.0,      4.0,      6.0,      8.0,     12.0,    16.0, 24.0, 32.0,
     };
     return kBeats[static_cast<size_t>(std::clamp(divisionIndex, 0, static_cast<int>(kBeats.size()) - 1))];
 }

@@ -36,7 +36,7 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 | Erosion: [ErosionEditor.qml](../../ui/qml/devices/editors/ErosionEditor.qml), [ErosionGraph](../../ui/src/devices/ErosionGraph.h), [ErosionScope](../../ui/src/devices/ErosionScope.h), the application layer's [ErosionResponse.h](../../app/src/audio/ErosionResponse.h) | |
 | Delay: [DelayEditor.qml](../../ui/qml/devices/editors/DelayEditor.qml), [FilterGraph](../../ui/src/devices/FilterGraph.h) | |
 | Chorus-Ensemble: [ChorusEditor.qml](../../ui/qml/devices/editors/ChorusEditor.qml), [ChorusGraph](../../ui/src/devices/ChorusGraph.h), the application layer's [ChorusVoices.h](../../app/src/audio/ChorusVoices.h) | |
-| Phaser-Flanger: [PhaserEditor.qml](../../ui/qml/devices/editors/PhaserEditor.qml), [PhaserGraph](../../ui/src/devices/PhaserGraph.h) (with `DisplayPlayback`), the application layer's [PhaserResponse.h](../../app/src/audio/PhaserResponse.h) | |
+| Phaser-Flanger: [PhaserEditor.qml](../../ui/qml/devices/editors/PhaserEditor.qml), [PhaserGraph](../../ui/src/devices/PhaserGraph.h), [DisplayPlayback.h](../../ui/src/devices/DisplayPlayback.h) (display values played back at the audio's pace, for any editor), the application layer's [PhaserResponse.h](../../app/src/audio/PhaserResponse.h) | |
 | Reverb: [ReverbEditor.qml](../../ui/qml/devices/editors/ReverbEditor.qml), [ReverbFilterPad](../../ui/src/devices/ReverbFilterPad.h), [ReverbSpinPad](../../ui/src/devices/ReverbSpinPad.h), [ReverbDecayGraph](../../ui/src/devices/ReverbDecayGraph.h), the application layer's [ReverbResponse.h](../../app/src/audio/ReverbResponse.h) | |
 | Disperser: [DisperserEditor.qml](../../ui/qml/devices/editors/DisperserEditor.qml), [DispersionGraph](../../ui/src/devices/DispersionGraph.h) | |
 | EQ: [EqEditor.qml](../../ui/qml/devices/editors/EqEditor.qml), [EqWindow.qml](../../ui/qml/devices/editors/EqWindow.qml), [EqWindows.qml](../../ui/qml/devices/editors/EqWindows.qml), [EqBandPanel.qml](../../ui/qml/devices/editors/EqBandPanel.qml), [EqCorner.qml](../../ui/qml/devices/editors/EqCorner.qml), [EqGraphMenus.qml](../../ui/qml/devices/editors/EqGraphMenus.qml), [EqGraph](../../ui/src/devices/EqGraph.h), [EqView](../../ui/src/devices/EqView.h), [EqTypeIcon](../../ui/src/devices/EqTypeIcon.h) | |
@@ -813,23 +813,24 @@ The editors:
     Once everything
     has settled, a frozen or resting graph doesn't repaint.
 - **Phaser-Flanger** ([PhaserEditor.qml](../../ui/qml/devices/editors/PhaserEditor.qml)): no pages; laid out as
-  Ableton's, in sections a thin line apart, two rows of 30 px knobs centred in the height: the mode tabs (Phaser,
-  Flanger, Doubler: tall `ParamButton`s on `mode`, the body's full height); the mode's controls (Phaser: Notches,
-  Center, Spread, Blend; Flanger and Doubler: one 44 px Time knob bound to `flange_time` or `doubler_time`, and under
-  the Flanger's its comb's first notch, "Notch 200 Hz"), the two sets crossfading (120 ms) as the mode changes; the
-  graph (240 px); the LFO (Freq, or with its ♪ switch (12 px, in the caption's row) Rate, a list knob over the synced
-  divisions; the waveform, a `ParamChoice` showing its icon; Spin; Duty Cycle, bipolar; Phase, or with Spin on, Spin);
-  the globals (Amount, Feedback, Ø over **More**; Warmth, Output, Dry/Wet). The tabs share the height in whole pixels
-  (45, 44, 45 in the body's 154), so their borders are crisp; the Time knob sits where it would with the Flanger's
-  notch under it in the Doubler too, so it doesn't move between the two. Controls that swap with a switch rebind in
-  place (one knob, its parameter, caption and step changing); synced, a rate knob steps through the note values, and
-  the wheel over it moves it one a notch (an undo step each; the knob's own wheel, a fiftieth of the range, would round
-  back to the same division). **More** (a `RoleButton` lit while open, not a parameter) shows a further section
-  (fading in over 150 ms): LFO 2 (its mix), LFO 2's Freq or Rate with its own ♪ (dimmed while LFO 2 has no share),
-  Safe Bass ("Off" at 5 Hz); Env (the switch where the caption would be) over its amount (bipolar), Attack and
-  Release, dimmed while Env Follow is off (they stay live: only the opacity changes, as Live's greyed controls).
-  Whether it is open is view state kept per device id while the application runs (`PhaserGraph::expanded`, a static
-  hash: a frame made again shows it as it was), never saved or undone.
+  Ableton's, in sections an `EditorDivider` apart, two rows of the house's 34 px knobs centred in the height: the mode
+  tabs (Phaser, Flanger, Doubler: tall `ParamButton`s on `mode`, the body's full height); the mode's controls (Phaser:
+  Notches, Center, Spread, Blend; Flanger and Doubler: one 44 px Time knob bound to `flange_time` or `doubler_time`, and
+  under the Flanger's its comb's first notch, "Notch 200 Hz"), the two sets crossfading (120 ms) as the mode changes;
+  the graph (240 px); the LFO (Freq, or with its ♪ switch (12 px, in the caption's row) Rate, a list knob over Live's 22
+  synced divisions; the waveform, a `ParamChoice` showing its icon; Spin; Duty Cycle, bipolar; Phase, or with Spin on,
+  Spin); the globals (Amount, Feedback, Ø over **More**; Warmth, Output, Dry/Wet). The tabs share the height in whole
+  pixels (45, 44, 45 in the body's 154), so their borders are crisp; the Time knob sits where it would with the
+  Flanger's notch under it in the Doubler too, so it doesn't move between the two. Controls that swap with a switch
+  rebind in place (one knob, its parameter, caption and step changing); synced, a rate knob steps through the note
+  values, and the wheel over it moves it one a notch (an undo step each; the knob's own wheel, a fiftieth of the range,
+  would round back to the same division). **More** (a `RoleButton` lit while open, not a parameter) shows a further
+  section (fading in over 150 ms): LFO 2 (its mix), LFO 2's Freq or Rate with its own ♪ (dimmed while LFO 2 has no
+  share), Safe Bass ("Off" at its lowest, the parameter's minimum); Env (the switch where the caption would be) over its
+  amount (bipolar), Attack and Release, dimmed while Env Follow is off (opacity 0.55; they stay live, as Live's greyed
+  controls). Output (−36..+6 dB, Live's) is not bipolar. Whether More is open is view state kept by device id in
+  `DeviceViews` ("expanded"; the editor's `expanded` and `setExpanded()`: a frame made again shows it as it was), never
+  saved or undone.
   - The graph ([PhaserGraph](../../ui/src/devices/PhaserGraph.h)): the response on a 20 Hz..20 kHz log axis,
     +18..−30 dB, worked out from the engine's own maths (`sub::app::phaserCurvePoints`, the application layer's
     wrapper of `sub::phaser::curve`: the stages, the comb, the feedback, Warmth's filter, Safe Bass's bands, Dry/Wet
@@ -851,24 +852,25 @@ The editors:
     shapes as a trace of the values that came, scrolling (started afresh when one is chosen: four cycles of the shape,
     dim, until its values come); and at its right edge a bar of the summed modulation the sweep follows (LFO 1, LFO 2
     and the envelope; Amount 100 % reaches the edge).
-  - Its animation, in `refreshDisplays()`: the engine publishes eleven displays every 256 samples, a block at a time
-    (a 1024-frame block brings four values at once, then none for 21 ms, while the screen ticks every 16.7 ms).
-    `DisplayPlayback` plays them back at their own pace: a playhead runs through them at 187.5 values a second,
+  - Its animation, in `refreshDisplays()`, moved on by `tickSeconds()`: the engine publishes eleven displays every 256
+    samples (`phaserDisplaySamples()`, the engine's figure through the application layer), a block at a time (a
+    1024-frame block brings four values at once, then none for 21 ms, while the screen ticks every 16 ms).
+    `DisplayPlayback<11>` plays them back at their own pace: a playhead runs through them at 187.5 values a second,
     interpolating (phases the short way round, sweeps in log), held about the largest recent batch behind the newest
     (measured after each tick's move, so it never starves), a little faster or slower to stay there, jumping only when
     it falls far behind or a batch comes after a pause. So the notches glide at the screen's rate instead of jumping a
-    block at a time. A mode change fades the old curve out (τ 60 ms) and draws the new where the parameters put it
-    until the engine's values of that mode arrive (frames already on their way are not taken for the new mode's);
-    then, as when the values start coming again, the drawn sweep catches up with the engine's over a few ticks
-    (τ 30 ms) rather than jumping. With no values for 0.3 s (the engine stopped, the device off) the curve eases back
-    to the parameters (τ 50 ms), the dots dim to 35 % (τ 80 ms) and the meters fall; once everything has settled
-    nothing repaints. A parameter's edit is drawn at once when not playing (it is what the user drags). A curve costs
-    0.1-0.3 ms at 226 columns, worked out again only when the sweep moves.
+    block at a time. A mode change fades the old curve out (τ 60 ms) and draws the new where the parameters put it until
+    the engine's values of that mode arrive (frames already on their way are not taken for the new mode's); then, as
+    when the values start coming again, the drawn sweep catches up with the engine's over a few ticks (τ 30 ms) rather
+    than jumping. With no values for 0.3 s (the engine stopped, the device off) the curve eases back to the parameters
+    (τ 50 ms), the dots dim to 35 % (τ 80 ms) and the meters fall; once everything has settled nothing repaints. A
+    parameter's edit is drawn at once when not playing (it is what the user drags). A curve costs 0.1-0.3 ms at 226
+    columns, worked out again only when the sweep moves.
   - Drags (in the plot only, which alone shows the drag's cursor; the strip and meters go to the frame): Phaser,
     across for the Center (jumping to the press, as the Disperser's), up and down for the Spread (`kSpreadPixels`,
     150 px for its whole range); Flanger, across puts the comb's first notch under the mouse (Time = 500 / f ms), up
     and down the Feedback; Doubler, across for the Time (log, 150 ms at the left to 20 ms at the right), up and down
-    the Feedback. One undo step per drag (a merge key per gesture); a double-click sets the two back to their defaults
+    the Feedback. The drags hold to the parameters' ranges, the engine's (`phaserRanges()`). One undo step per drag (a merge key per gesture); a double-click sets the two back to their defaults
     under its first click's key, so the click's jump and the reset are one step, undone to what was there before.
 - **Reverb** ([ReverbEditor.qml](../../ui/qml/devices/editors/ReverbEditor.qml)): no pages; laid out as Ableton's,
   sections side by side with a faint rule between them: Input (Lo Cut and Hi Cut over a
@@ -1076,7 +1078,7 @@ The editors:
 | [test_ui_device_editors_amp.cpp](../../tests/app/test_ui_device_editors_amp.cpp) | The Amp's editor: fitting the body (nothing past the margins or overlapping, the buttons' labels unclipped), every control bound to its parameter, undoable and reaching the engine; the model buttons and the underline sliding and turning to the model's colour; an editor opened on a model showing it at once; the tone curve and the transfer being the engine's maths (exactly, after a new model's morph); the tone handles as controls: drags (fine with Shift, Shift mid-drag, double-clicks, presses off them) as single undo steps, the wheel, the automation dot, the parameter's menu on the right button, a double-click off them the frame's, their hover; the drive curve made again only for what it is made from (not as the playhead moves under automation), its xs exact opposites; the displays reaching the tubes, the dots, the lamp and the meter, holding through ticks that read nothing, cooling after, a backlog counting for nothing, the sag lowering the drive curve and dimming the lamp, and the face settling without repaints |
 | [test_ui_device_editors_erosion.cpp](../../tests/app/test_ui_device_editors_erosion.cpp) | The Erosion's editor: fitting the body, every knob bound and undoable, the band being the engine's filter and the dot's travel clear of the strip, the display's drags (Shift, Alt) and wheel (Ctrl finely; in a device chain, whose Shift+wheel scrolls it) as single undo steps, the displays reaching the graph and the scope (not a backlog's worth after the sound stopped, and a silent graph no longer repainting), the engine having what it set |
 | [test_ui_device_editors_chorus.cpp](../../tests/app/test_ui_device_editors_chorus.cpp) | The Chorus-Ensemble's editor: fitting the body (margins, nothing overlapping or cut short; the high-pass box wide enough for its widest values and the automation dot, Time for each choice), every control bound to its parameter and undoable (each knob dragged), the modes (their sets cross-fading one after the other; Feedback and Ø dimmed in Vibrato and still settable), Taps, Time, the high-pass and Ø, the display's drags (Shift, mid-drag too) as single undo steps, each setting only the parameter its direction picked (the other's automation not overridden), the displays reaching the graph (the voices where the engine's delays are, the glow from the sound now and not the display's history, freezing, and resting without repaints with the traces held), layouts fading without pops, the engine having what it set; no text spilling out of its box; no QML warnings |
-| [test_ui_device_editors_phaser.cpp](../../tests/app/test_ui_device_editors_phaser.cpp) | The Phaser-Flanger's editor: fitting the body (inside its margins), every control bound to its parameter and undoable (each knob dragged, each switch clicked, the waveform chosen), the swapped controls rebinding (Freq/Rate, Phase/Spin, the delay's Time), the mode tabs, More as view state (not undone, kept when shown again; Env dimming its controls); the curve the engine's design with the notches marked where it puts them, a fine comb drawn as a band; the graph's drags and double-click as single undo steps (undone to what was there before), its cursor over the plot only; a synced rate's wheel stepping a division a notch; the tabs on whole pixels, the Time knob staying put between the delay modes; the displays reaching the graph (the LFO's phase and value, the sweep, both channels, the levels), going quiet and then not repainting; `DisplayPlayback` smooth at 1024-frame blocks, wrapping phases, pauses; at 2048-frame blocks the meters still falling at their pace, a fast LFO's comet tail, a random shape's trace started afresh; what a curve costs; the engine having what it set; no QML warnings |
+| [test_ui_device_editors_phaser.cpp](../../tests/app/test_ui_device_editors_phaser.cpp) | The Phaser-Flanger's editor: fitting the body (inside its margins, its knobs the house's 34 px, bipolar only about 0), every control bound to its parameter and undoable (each knob dragged, each switch clicked, the waveform chosen), the swapped controls rebinding (Freq/Rate, Phase/Spin, the delay's Time), the mode tabs, More as view state (not undone, kept when shown again; Env dimming its controls); the curve the engine's design with the notches marked where it puts them, a fine comb drawn as a band; the graph's drags and double-click as single undo steps (undone to what was there before), its cursor over the plot only; a synced rate's wheel stepping a division a notch (Live's 22); the tabs on whole pixels, the Time knob staying put between the delay modes; the displays reaching the graph (the LFO's phase and value, the sweep, both channels, the levels), going quiet and then not repainting; `DisplayPlayback` smooth at 1024-frame blocks, wrapping phases, pauses; at 2048-frame blocks the meters still falling at their pace, a fast LFO's comet tail, a random shape's trace started afresh; what a curve costs (in the thread's CPU time, optimized builds only); the engine having what it set; no QML warnings |
 | [test_ui_device_editors_reverb.cpp](../../tests/app/test_ui_device_editors_reverb.cpp) | The Reverb's editor: fitting the view and its own least height with nothing overlapping, every control bound to its parameter (with a tooltip) and undoable, Size read as a bare number and Stereo in whole degrees, the boxes' log drags, dimming; the filter pad's, spin pad's and decay graph's drags (one undo step each, Shift finely, the engine having the values), the pads' handles clear of their captions, the decay graph's handles inside the plot and picked when the shelves cross, its double-click (whose second press, dragged, drags nothing), the Low-pass's and a switched-off shelf's handles moving across only; the curves being the engine's maths (frozen too); the displays reaching them (input level and spectrum, tail meter and spectrum, Spin's phase), held through a tick without values and falling back; the spin pad's trails kept through a sync; the transitions easing (Freeze into the top edge) and everything resting in silence |
 | [test_session_devices.cpp](../../tests/app/test_session_devices.cpp) | `DeviceSelection` through the session: selecting, the focus, the clipboard, folding, racks, drops, presets |
 | [test_sidechain_fit.cpp](../../tests/app/test_sidechain_fit.cpp) | The Sidechain's fit |

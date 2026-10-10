@@ -9,7 +9,6 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
-#include <QHash>
 #include <QLinearGradient>
 #include <QHoverEvent>
 #include <QMouseEvent>
@@ -19,103 +18,6 @@
 
 namespace sub::ui {
 
-// --- DisplayPlayback ----------------------------------------------------------------------
-
-void DisplayPlayback::append(const Frame& frame) {
-    frames_[static_cast<size_t>(count_ % kCapacity)] = frame;
-    ++count_;
-}
-
-void DisplayPlayback::endBatch(int batch) {
-    if (batch <= 0)
-        return;
-    batches_[size_t(batchNext_)] = {0.0, batch};
-    batchNext_ = (batchNext_ + 1) % int(batches_.size());
-    batchCount_ = std::min(batchCount_ + 1, int(batches_.size()));
-}
-
-int DisplayPlayback::target() const {
-    int most = 1;
-    for (int i = 0; i < batchCount_; ++i) {
-        if (batches_[size_t(i)].age <= kWindow)
-            most = std::max(most, batches_[size_t(i)].size);
-    }
-    return std::min(most, kMaxTarget);
-}
-
-void DisplayPlayback::advance(double dtSeconds, double framesPerSecond) {
-    dtSeconds = std::max(0.0, dtSeconds);
-    for (int i = 0; i < batchCount_; ++i) batches_[size_t(i)].age += dtSeconds;
-    if (empty())
-        return;
-    const double last = double(newest());
-    const double lagWanted = target();
-    const double step = dtSeconds * std::max(0.0, framesPerSecond);
-    // Frames came while it waited at the newest (after a pause): it starts again a target behind them.
-    if (waiting_ && head_ < last)
-        head_ = std::max(head_, last - lagWanted - step);
-    waiting_ = false;
-    // A little faster when it would end further behind than the target, a little slower when nearer
-    // (the lag after this tick's move: before it, the lag runs a tick's worth more).
-    const double behind = (last - (head_ + step) - lagWanted) / lagWanted;
-    head_ += step * std::clamp(1.0 + 0.1 * behind, 0.5, 1.5);
-    if (last - head_ > 2.0 * lagWanted + 1.0)
-        head_ = last - lagWanted;
-    if (head_ >= last) {
-        head_ = last;
-        waiting_ = true;
-    }
-}
-
-void DisplayPlayback::snapToNewest() {
-    head_ = empty() ? 0.0 : double(newest());
-    waiting_ = true;
-}
-
-void DisplayPlayback::clear() {
-    count_ = 0;
-    head_ = 0.0;
-    waiting_ = true;
-    batchCount_ = batchNext_ = 0;
-}
-
-float DisplayPlayback::at(qint64 index, int stream) const {
-    if (empty())
-        return 0.0f;
-    index = std::clamp(index, std::max<qint64>(0, count_ - kCapacity), newest());
-    return frames_[static_cast<size_t>(index % kCapacity)][size_t(std::clamp(stream, 0, kStreams - 1))];
-}
-
-template <typename Mix>
-double DisplayPlayback::interpolate(int stream, Mix mix) const {
-    if (empty())
-        return 0.0;
-    const double h = std::clamp(head_, double(std::max<qint64>(0, count_ - kCapacity)), double(newest()));
-    const auto i = static_cast<qint64>(std::floor(h));
-    return mix(double(at(i, stream)), double(at(std::min(i + 1, newest()), stream)), h - double(i));
-}
-
-double DisplayPlayback::value(int stream) const {
-    return interpolate(stream, [](double a, double b, double t) { return a + (b - a) * t; });
-}
-
-double DisplayPlayback::phase(int stream) const {
-    return interpolate(stream, [](double a, double b, double t) {
-        double d = b - a;
-        d -= std::round(d);  // the short way round
-        const double v = a + d * t;
-        return v - std::floor(v);
-    });
-}
-
-double DisplayPlayback::logValue(int stream) const {
-    return interpolate(stream, [](double a, double b, double t) {
-        if (a > 0.0 && b > 0.0)
-            return std::exp(std::log(a) + (std::log(b) - std::log(a)) * t);
-        return a + (b - a) * t;
-    });
-}
-
 // --- PhaserGraph ------------------------------------------------------------------------
 
 namespace {
@@ -123,22 +25,21 @@ namespace {
 // The displays, in the engine's order (their index is the playback's stream).
 enum Stream { kPhase = 0, kPhaseRight, kLfo, kMod, kEnv, kSweepLeft, kSweepRight, kQLeft, kQRight, kInput, kOutput };
 const QString& displayId(int stream) {
-    static const QString kIds[DisplayPlayback::kStreams] = {
+    static const QString kIds[PhaserGraph::kStreams] = {
         QStringLiteral("phase"),   QStringLiteral("phase_r"), QStringLiteral("lfo"),     QStringLiteral("mod"),
         QStringLiteral("env"),     QStringLiteral("sweep_l"), QStringLiteral("sweep_r"), QStringLiteral("q_l"),
         QStringLiteral("q_r"),     QStringLiteral("input"),   QStringLiteral("output")};
     return kIds[stream];
 }
 
-constexpr int kDisplaySamples = 256;   // frames per display value (the engine's)
 constexpr double kMeterFloor = -60.0;  // the meters' range
 constexpr int kModeHold = 8;           // a mode change: frames still on their way of the old mode, at most
 constexpr double kMinLog = -40.0;      // log2 of the least sweep or Q taken (no log of 0)
 
-// Which devices show their extra section (view state for as long as the application runs).
-QHash<QString, bool>& expandedStates() {
-    static QHash<QString, bool> states;
-    return states;
+// The engine's: the parameters' ranges.
+const sub::app::PhaserRanges& ranges() {
+    static const sub::app::PhaserRanges kRanges = sub::app::phaserRanges();
+    return kRanges;
 }
 
 double log2Of(double v) { return std::max(kMinLog, std::log2(std::max(v, 1e-12))); }
@@ -177,7 +78,6 @@ PhaserGraph::PhaserGraph(QQuickItem* parent) : DeviceCanvas(parent) {
         for (std::vector<float>& values : pending_) values.clear();
         trailCount_ = traceCount_ = 0;
         traced_ = -1;
-        Q_EMIT expandedChanged();
     });
 }
 
@@ -208,19 +108,22 @@ double PhaserGraph::yOf(double db) const {
 }
 
 double PhaserGraph::xOfTime(double ms) const {
+    const sub::app::PhaserRanges& range = ranges();
     if (mode_ != 2)
-        return xOf(500.0 / std::clamp(ms, kMinFlangeMs, kMaxFlangeMs));
+        return xOf(500.0 / std::clamp(ms, range.minFlangeMs, range.maxFlangeMs));
     const QRectF r = plot();
-    const double held = std::clamp(ms, kMinDoublerMs, kMaxDoublerMs);
-    return r.left() + std::log(kMaxDoublerMs / held) / std::log(kMaxDoublerMs / kMinDoublerMs) * r.width();
+    const double held = std::clamp(ms, range.minDoublerMs, range.maxDoublerMs);
+    const double span = std::log(range.maxDoublerMs / range.minDoublerMs);
+    return r.left() + std::log(range.maxDoublerMs / held) / span * r.width();
 }
 
 double PhaserGraph::timeAt(double x) const {
+    const sub::app::PhaserRanges& range = ranges();
     if (mode_ != 2)
-        return std::clamp(500.0 / freqAt(x), kMinFlangeMs, kMaxFlangeMs);
+        return std::clamp(500.0 / freqAt(x), range.minFlangeMs, range.maxFlangeMs);
     const QRectF r = plot();
     const double fraction = std::clamp((x - r.left()) / r.width(), 0.0, 1.0);
-    return kMaxDoublerMs * std::pow(kMinDoublerMs / kMaxDoublerMs, fraction);
+    return range.maxDoublerMs * std::pow(range.minDoublerMs / range.maxDoublerMs, fraction);
 }
 
 QString PhaserGraph::notchText() const {
@@ -228,15 +131,6 @@ QString PhaserGraph::notchText() const {
         return QString();
     const double firstNotch = 500.0 / std::max(flangeTime_, 1e-3);  // Hz: half a cycle in the delay
     return QStringLiteral("Notch %1").arg(sub::app::formatValue(firstNotch, QStringLiteral("Hz")));
-}
-
-bool PhaserGraph::expanded() const { return expandedStates().value(deviceId(), false); }
-
-void PhaserGraph::setExpanded(bool on) {
-    if (expanded() == on)
-        return;
-    expandedStates()[deviceId()] = on;
-    Q_EMIT expandedChanged();
 }
 
 sub::app::PhaserCurve PhaserGraph::curveSettings() const {
@@ -271,7 +165,7 @@ double PhaserGraph::shapeAt(double phase) const {
 
 void PhaserGraph::sync() {
     const int mode = std::clamp(int(std::lround(value(QStringLiteral("mode")))), 0, 2);
-    notches_ = std::clamp(int(std::lround(value(QStringLiteral("notches")))), 1, 42);
+    notches_ = std::clamp(int(std::lround(value(QStringLiteral("notches")))), 1, ranges().maxNotches);
     center_ = value(QStringLiteral("center"));
     spread_ = value(QStringLiteral("spread"));
     blend_ = value(QStringLiteral("blend"));
@@ -283,7 +177,8 @@ void PhaserGraph::sync() {
     mix_ = value(QStringLiteral("mix"));
     safeBass_ = value(QStringLiteral("safe_bass"));
     output_ = value(QStringLiteral("output"));
-    const int wave = std::clamp(int(std::lround(value(QStringLiteral("wave")))), 0, 9);
+    static const int kLastWave = int(sub::app::phaserWaveLabels().size()) - 1;
+    const int wave = std::clamp(int(std::lround(value(QStringLiteral("lfo_wave")))), 0, kLastWave);
     if (wave != wave_ && sub::app::phaserWaveIsRandom(wave)) {
         // A random shape chosen: its trace starts empty (four cycles of the shape until values come),
         // from the frames that come next (those already here are the shape's before).
@@ -291,11 +186,11 @@ void PhaserGraph::sync() {
         traced_ = std::max(traced_, playback_.newest());
     }
     wave_ = wave;
-    duty_ = value(QStringLiteral("duty")) / 100.0;
+    duty_ = value(QStringLiteral("lfo_duty")) / 100.0;
     const double tempo = session() && session()->project() ? session()->project()->tempo() : 120.0;
-    rateHz_ = value(QStringLiteral("sync")) >= 0.5
-                  ? sub::app::phaserSyncedRateHz(int(std::lround(value(QStringLiteral("rate")))), tempo)
-                  : value(QStringLiteral("freq"));
+    rateHz_ = value(QStringLiteral("lfo_sync")) >= 0.5
+                  ? sub::app::phaserSyncedRateHz(int(std::lround(value(QStringLiteral("lfo_rate")))), tempo)
+                  : value(QStringLiteral("lfo_freq"));
     phaseOffset_ = value(QStringLiteral("phase")) / 360.0;
     spinOn_ = value(QStringLiteral("spin_on")) >= 0.5;
     lfo2Mix_ = value(QStringLiteral("lfo2_mix"));
@@ -482,7 +377,7 @@ void PhaserGraph::trace() {
     if (playback_.empty())
         return;
     const auto head = static_cast<qint64>(std::floor(playback_.head()));
-    const qint64 from = std::max({traced_ + 1, playback_.newest() - DisplayPlayback::kCapacity + 1, qint64(0)});
+    const qint64 from = std::max({traced_ + 1, playback_.newest() - Playback::kCapacity + 1, qint64(0)});
     for (qint64 i = from; i <= head; ++i) {
         trace_[size_t(traceNext_)] = playback_.at(i, kLfo);
         traceNext_ = (traceNext_ + 1) % kTrace;
@@ -492,15 +387,11 @@ void PhaserGraph::trace() {
 }
 
 void PhaserGraph::refreshDisplays() {
-    double dt = 1.0 / 60.0;
-    if (clock_.isValid())
-        dt = std::clamp(clock_.restart() / 1000.0, 1.0 / 120.0, 0.1);
-    else
-        clock_.start();
+    const double dt = tickSeconds();
 
     // What came, as whole frames (the streams are published together; a read between two of them
     // leaves the rest for the next tick).
-    for (int s = 0; s < DisplayPlayback::kStreams; ++s) {
+    for (int s = 0; s < kStreams; ++s) {
         const std::vector<float> values = readDisplay(displayId(s));
         pending_[size_t(s)].insert(pending_[size_t(s)].end(), values.begin(), values.end());
     }
@@ -508,8 +399,8 @@ void PhaserGraph::refreshDisplays() {
     for (const std::vector<float>& values : pending_) count = std::min(count, values.size());
     double inPeak = -1e300, outPeak = -1e300;
     for (size_t i = 0; i < count; ++i) {
-        DisplayPlayback::Frame frame;
-        for (int s = 0; s < DisplayPlayback::kStreams; ++s) {
+        Playback::Frame frame;
+        for (int s = 0; s < kStreams; ++s) {
             const float v = pending_[size_t(s)][i];
             frame[size_t(s)] = std::isfinite(v) ? v : 0.0f;
         }
@@ -533,7 +424,7 @@ void PhaserGraph::refreshDisplays() {
     } else {
         sinceArrival_ += dt;
     }
-    playback_.advance(dt, sampleRate() / kDisplaySamples);
+    playback_.advance(dt, sampleRate() / sub::app::phaserDisplaySamples());
     if (live_ && sinceArrival_ > kStaleSeconds)
         live_ = false;
 
@@ -698,7 +589,7 @@ void PhaserGraph::dragTo(const QPointF& pos) {
     const double up = pressedAt_.y() - pos.y();
     if (mode_ == 0) {
         const double spread = std::clamp(pressedValue_ + up / kSpreadPixels * 100.0, 0.0, 100.0);
-        setParams({{QStringLiteral("center"), std::clamp(freqAt(pos.x()), 70.0, 18500.0)},
+        setParams({{QStringLiteral("center"), std::clamp(freqAt(pos.x()), ranges().minCenterHz, ranges().maxCenterHz)},
                    {QStringLiteral("spread"), spread}},
                   gesture_);
     } else {

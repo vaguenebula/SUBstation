@@ -12,6 +12,12 @@
 // after. With SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as
 // PNGs.
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
+
 #include <QElapsedTimer>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -57,17 +63,34 @@ struct Control {
     const char* name;
     const char* param;
 };
-constexpr Control kKnobs[] = {{"notches", "notches"}, {"center", "center"}, {"spread", "spread"},
-                              {"blend", "blend"},     {"rate", "freq"},     {"duty", "duty"},
-                              {"phaseSpin", "phase"}, {"amount", "amount"}, {"feedback", "feedback"},
-                              {"warmth", "warmth"},   {"output", "output"}, {"mix", "mix"}};
+constexpr Control kKnobs[] = {{"notches", "notches"}, {"center", "center"},     {"spread", "spread"},
+                              {"blend", "blend"},     {"rate", "lfo_freq"},     {"duty", "lfo_duty"},
+                              {"phaseSpin", "phase"}, {"amount", "amount"},     {"feedback", "feedback"},
+                              {"warmth", "warmth"},   {"output", "output"},     {"mix", "mix"}};
 // The extra section's (More) and the delay modes' knobs.
-constexpr Control kMoreKnobs[] = {{"lfo2Mix", "lfo2_mix"},     {"rate2", "freq2"},
+constexpr Control kMoreKnobs[] = {{"lfo2Mix", "lfo2_mix"},     {"rate2", "lfo2_freq"},
                                   {"safeBass", "safe_bass"},   {"envAmount", "env_amount"},
                                   {"envAttack", "env_attack"}, {"envRelease", "env_release"}};
 // Every switch and button: its object name and parameter.
-constexpr Control kButtons[] = {{"sync", "sync"},     {"spinOn", "spin_on"}, {"fbInvert", "fb_invert"},
-                                {"sync2", "sync2"},   {"envOn", "env_on"}};
+constexpr Control kButtons[] = {{"sync", "lfo_sync"},   {"spinOn", "spin_on"}, {"fbInvert", "fb_invert"},
+                                {"sync2", "lfo2_sync"}, {"envOn", "env_on"}};
+
+// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else the
+// machine is doing (the wall clock would count the time other processes had the core).
+double threadSeconds() {
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user;
+    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
+    const auto ticks = [](const FILETIME& t) {
+        return double((quint64(t.dwHighDateTime) << 32) | t.dwLowDateTime);
+    };
+    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks, counted at the scheduler's ~16 ms)
+#else
+    timespec t{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+    return double(t.tv_sec) + 1e-9 * double(t.tv_nsec);
+#endif
+}
 
 }  // namespace
 
@@ -113,6 +136,11 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
     static QString readoutOf(QQuickItem* cell) {
         return cell && cell->childItems().size() >= 3 ? cell->childItems().at(2)->property("text").toString()
                                                       : QString();
+    }
+
+    // More (LFO 2, the envelope, Safe Bass) open or not: view state the editor keeps (DeviceViews).
+    static void setExpanded(QQuickItem* view, bool open) {
+        QVERIFY(QMetaObject::invokeMethod(view, "setExpanded", Q_ARG(QVariant, open)));
     }
 
     void click(QQuickItem* item) {
@@ -179,7 +207,7 @@ private Q_SLOTS:
             QCOMPARE(paramIdOf(find(view, QString::fromLatin1(control.name))), QString::fromLatin1(control.param));
         for (const Control& control : kButtons)
             QCOMPARE(paramIdOf(find(view, QString::fromLatin1(control.name))), QString::fromLatin1(control.param));
-        QCOMPARE(paramIdOf(find(view, QStringLiteral("wave"))), QStringLiteral("wave"));
+        QCOMPARE(paramIdOf(find(view, QStringLiteral("wave"))), QStringLiteral("lfo_wave"));
         QCOMPARE(paramIdOf(find(view, QStringLiteral("time"))), QStringLiteral("flange_time"));
         for (const char* tab : {"modePhaser", "modeFlanger", "modeDoubler"})
             QCOMPARE(paramIdOf(find(view, QString::fromLatin1(tab))), QStringLiteral("mode"));
@@ -197,8 +225,12 @@ private Q_SLOTS:
         QCOMPARE(readoutOf(find(view, QStringLiteral("blend"))), QStringLiteral("0.00"));
         QCOMPARE(readoutOf(find(view, QStringLiteral("center"))), QStringLiteral("1.00 kHz"));
         QCOMPARE(captionOf(find(view, QStringLiteral("rate"))), QStringLiteral("Freq"));
+        // The house's 34 px knobs; bipolar where the range is about 0 (Duty, Env), Output (-36..+6 dB) not.
+        for (const Control& control : kKnobs)
+            QCOMPARE(knobOf(find(view, QString::fromLatin1(control.name)))->width(), 34.0);
         QVERIFY(knobOf(find(view, QStringLiteral("duty")))->bipolar());
         QVERIFY(knobOf(find(view, QStringLiteral("envAmount")))->bipolar());
+        QVERIFY(!knobOf(find(view, QStringLiteral("output")))->bipolar());
         QVERIFY(find(view, QStringLiteral("modePhaser"))->property("lit").toBool());
         QVERIFY(!find(view, QStringLiteral("modeFlanger"))->property("lit").toBool());
         // The tabs on whole pixels (their borders crisp), filling the height between the margins.
@@ -250,8 +282,7 @@ private Q_SLOTS:
         dragEach(kKnobs, std::size(kKnobs));
         QVERIFY(!QTest::currentTestFailed());
         // The extra section's, shown.
-        auto* graph = find<PhaserGraph>(view, QStringLiteral("phaserGraph"));
-        graph->setExpanded(true);
+        setExpanded(view, true);
         QTRY_VERIFY(find(view, QStringLiteral("extraSection"))->isVisible());
         QTest::qWait(50);
         dragEach(kMoreKnobs, std::size(kMoreKnobs));
@@ -269,16 +300,16 @@ private Q_SLOTS:
         // The waveform from its list.
         QQuickItem* wave = find(view, QStringLiteral("wave"));
         QVERIFY(QMetaObject::invokeMethod(wave, "choose", Q_ARG(QVariant, 9)));
-        QCOMPARE(value("wave"), 9.0);
+        QCOMPARE(value("lfo_wave"), 9.0);
         undo()->undo();
-        QCOMPARE(value("wave"), 1.0);
+        QCOMPARE(value("lfo_wave"), 1.0);
 
         // The Time knob, in the delay modes.
         set("mode", 1);
         QTRY_VERIFY(find(view, QStringLiteral("delayKnobs"))->isVisible());
         const Control time[] = {{"time", "flange_time"}};
         dragEach(time, 1);
-        graph->setExpanded(false);
+        setExpanded(view, false);
     }
 
     // The mode tabs: lit while chosen; the mode's controls crossfade; the Time rebinds.
@@ -331,11 +362,11 @@ private Q_SLOTS:
 
         int steps = undo()->index();
         click(find(view, QStringLiteral("sync")));
-        QCOMPARE(value("sync"), 1.0);
+        QCOMPARE(value("lfo_sync"), 1.0);
         QCOMPARE(undo()->index(), steps + 1);
-        QCOMPARE(paramIdOf(rate), QStringLiteral("rate"));
+        QCOMPARE(paramIdOf(rate), QStringLiteral("lfo_rate"));
         QCOMPARE(knobOf(rate)->step(), 1.0);
-        QCOMPARE(knobOf(rate)->to(), 18.0);
+        QCOMPARE(knobOf(rate)->to(), 21.0);  // (Live's 22 divisions)
         QCOMPARE(readoutOf(rate), QStringLiteral("1 Bar"));
         QCOMPARE(captionOf(rate), QStringLiteral("Rate"));
         QVERIFY(find(view, QStringLiteral("sync"))->property("lit").toBool());
@@ -343,17 +374,18 @@ private Q_SLOTS:
         // knob's own wheel moves it smoothly.
         steps = undo()->index();
         wheel(centerOf(knobOf(rate)), 120);
-        QCOMPARE(value("rate"), 16.0);
-        QCOMPARE(readoutOf(rate), QStringLiteral("2 Bars"));
+        QCOMPARE(value("lfo_rate"), 16.0);
+        QCOMPARE(readoutOf(rate), QStringLiteral("1.5 Bars"));
         wheel(centerOf(knobOf(rate)), -240);
-        QCOMPARE(value("rate"), 14.0);
+        QCOMPARE(value("lfo_rate"), 14.0);
+        QCOMPARE(readoutOf(rate), QStringLiteral("3/4"));
         for (int eighth = 0; eighth < 8; ++eighth) wheel(centerOf(knobOf(rate)), 15);  // (a fine wheel's)
-        QCOMPARE(value("rate"), 15.0);
+        QCOMPARE(value("lfo_rate"), 15.0);
         QCOMPARE(undo()->index(), steps + 3);
         undo()->undo();
         undo()->undo();
         undo()->undo();
-        QCOMPARE(value("rate"), 15.0);
+        QCOMPARE(value("lfo_rate"), 15.0);
 
         steps = undo()->index();
         click(find(view, QStringLiteral("spinOn")));
@@ -371,13 +403,14 @@ private Q_SLOTS:
         undo()->undo();
         undo()->undo();
         undo()->undo();
-        QCOMPARE(paramIdOf(rate), QStringLiteral("freq"));
+        QCOMPARE(paramIdOf(rate), QStringLiteral("lfo_freq"));
         QCOMPARE(knobOf(rate)->step(), 0.0);
         QCOMPARE(readoutOf(rate), QStringLiteral("0.50 Hz"));
+        QCOMPARE(knobOf(rate)->to(), 40.0);  // (Live's fastest)
         steps = undo()->index();
         wheel(centerOf(knobOf(rate)), 120);
-        QVERIFY(value("freq") > 0.5);
-        QCOMPARE(value("rate"), 15.0);
+        QVERIFY(value("lfo_freq") > 0.5);
+        QCOMPARE(value("lfo_rate"), 15.0);
         QCOMPARE(undo()->index(), steps + 1);
         undo()->undo();
         QCOMPARE(paramIdOf(phaseSpin), QStringLiteral("phase"));
@@ -612,15 +645,15 @@ private Q_SLOTS:
         auto* graph = find<PhaserGraph>(view, QStringLiteral("phaserGraph"));
         QVERIFY(graph);
         set("amount", 100);
-        set("wave", 0);  // Sine
-        set("freq", 2.0);
+        set("lfo_wave", 0);  // Sine
+        set("lfo_freq", 2.0);
         refreshDisplays();
         QVERIFY(!graph->live());
 
         // The engine has what the editor set.
         const auto id = bridge()->engineDeviceId(track_, device_);
         QVERIFY(id);
-        for (const char* p : {"amount", "wave", "freq", "notches", "center", "mix"})
+        for (const char* p : {"amount", "lfo_wave", "lfo_freq", "notches", "center", "mix"})
             QCOMPARE(engine()->processorParam(*id, engine()->processorParamIndex(*id, p)), float(value(p)));
 
         play(0.0, kSampleRate / 2);
@@ -634,10 +667,8 @@ private Q_SLOTS:
                  qPrintable(QString::number(graph->levelIn())));
         QVERIFY(graph->levelOut() > -60.0);
         // A few ticks on (no more values: the playhead waits at the newest), the drawn sweep is the engine's.
-        for (int i = 0; i < 8; ++i) {
-            QTest::qWait(17);
-            refreshDisplays();
-        }
+        // (Ticked by hand, each counts as a display tick, 16 ms: a busy machine can't make them stale.)
+        for (int i = 0; i < 8; ++i) refreshDisplays();
         QVERIFY(graph->live());
         const double rate = bridge()->sampleRate();
         const double expected = phaserCenterHz(1000.0, 0.0, graph->modulation(), rate);
@@ -663,8 +694,8 @@ private Q_SLOTS:
         QVERIFY(view);
         auto* graph = find<PhaserGraph>(view, QStringLiteral("phaserGraph"));
         set("amount", 100);
-        set("wave", 0);
-        set("freq", 2.0);
+        set("lfo_wave", 0);
+        set("lfo_freq", 2.0);
         play(0.0, kSampleRate / 2);
         QVERIFY(graph->live());
         QTest::qWait(400);
@@ -687,14 +718,11 @@ private Q_SLOTS:
 
     // The display values played back smoothly, whatever batches they come in.
     void displayPlaybackIsSmooth() {
-        DisplayPlayback playback;
+        using Playback = DisplayPlayback<1>;
+        Playback playback;
         const double fps = 48000.0 / 256.0;
         const double tick = 1.0 / 60.0, block = 1024.0 / 48000.0;
-        auto frameOf = [](double v) {
-            DisplayPlayback::Frame f;
-            f.fill(float(v));
-            return f;
-        };
+        auto frameOf = [](double v) { return Playback::Frame{float(v)}; };
         int appended = 0;
         double nextBlock = 0.0, last = -1.0;
         for (int t = 0; t < 120; ++t) {  // 2 s
@@ -717,8 +745,8 @@ private Q_SLOTS:
         QCOMPARE(playback.target(), 4);
 
         // A phase wrapping between two frames: through 1, not back through 0.5.
-        DisplayPlayback wrap;
-        DisplayPlayback::Frame a = frameOf(0.98), b = frameOf(0.02);
+        Playback wrap;
+        const Playback::Frame a = frameOf(0.98), b = frameOf(0.02);
         wrap.append(a);
         wrap.append(b);
         wrap.endBatch(2);
@@ -740,19 +768,22 @@ private Q_SLOTS:
         for (int i = 0; i < 30; ++i) playback.append(frameOf(appended++));
         playback.endBatch(30);
         playback.advance(0.0, fps);
-        QCOMPARE(playback.target(), DisplayPlayback::kMaxTarget);
-        QCOMPARE(playback.lag(), double(DisplayPlayback::kMaxTarget));
+        QCOMPARE(playback.target(), Playback::kMaxTarget);
+        QCOMPARE(playback.lag(), double(Playback::kMaxTarget));
         // Far behind (a block bigger than it keeps): it jumps up.
         for (int i = 0; i < 100; ++i) playback.append(frameOf(appended++));
         playback.endBatch(100);
         playback.advance(tick, fps);
-        QVERIFY(playback.lag() <= DisplayPlayback::kMaxTarget);
-        QVERIFY(playback.value(0) >= appended - 1 - DisplayPlayback::kMaxTarget);
+        QVERIFY(playback.lag() <= Playback::kMaxTarget);
+        QVERIFY(playback.value(0) >= appended - 1 - Playback::kMaxTarget);
     }
 
     // What a curve costs (worked out again each tick while the sweep moves, twice in stereo): well under a
-    // millisecond, also with 42 notches or a fine comb.
+    // millisecond, also with 42 notches or a fine comb. In the thread's CPU time, in an optimized build.
     void curveCost() {
+#ifndef NDEBUG
+        QSKIP("timing needs an optimized build");
+#else
         PhaserCurve curve;
         curve.feedback = phaserFeedbackGain(60.0, false);
         const int columns = int(PhaserGraph::kWidth - 2 - 3 * PhaserGraph::kMeterWidth);
@@ -762,21 +793,18 @@ private Q_SLOTS:
             curve.mode = mode;
             curve.notches = notches;
             curve.delayMs = mode == 2 ? 30.0 : 2.5;
-            QElapsedTimer timer;
-            timer.start();
             constexpr int kRuns = 50;
+            const double start = threadSeconds();
             for (int i = 0; i < kRuns; ++i) {
                 curve.centerHz = 400.0 + 10.0 * i;  // (a moving sweep)
                 const PhaserCurvePoints points =
                     phaserCurvePoints(curve, PhaserGraph::kLow, PhaserGraph::kHigh, columns, kSampleRate);
                 QVERIFY(!points.lineHz.isEmpty());
             }
-            const double us = double(timer.nsecsElapsed()) / kRuns / 1000.0;
-            qInfo().noquote() << QStringLiteral("a curve (%1): %2 us").arg(QLatin1String(label)).arg(us, 0, 'f', 0);
-#ifdef NDEBUG
-            QVERIFY2(us < 2000.0, label);
-#endif
+            const double us = (threadSeconds() - start) / kRuns * 1e6;
+            QVERIFY2(us < 2000.0, qPrintable(QStringLiteral("a curve (%1): %2 us").arg(QLatin1String(label)).arg(us)));
         }
+#endif
     }
 
     // The graph's animation keeps its pace whatever the audio's block size and the LFO's rate: with
@@ -787,9 +815,9 @@ private Q_SLOTS:
         QVERIFY(view);
         auto* graph = find<PhaserGraph>(view, QStringLiteral("phaserGraph"));
         QVERIFY(graph);
-        set("sync", 1);
-        set("rate", 4);  // "1/16": 8 Hz at 120 BPM
-        set("wave", 0);
+        set("lfo_sync", 1);
+        set("lfo_rate", 4);  // "1/16": 8 Hz at 120 BPM
+        set("lfo_wave", 0);
         set("amount", 100);
         // Played as the audio thread would: a block whenever the wall clock makes one due, the displays
         // ticking every 16 ms, from `beat` on.
@@ -823,14 +851,14 @@ private Q_SLOTS:
         QVERIFY2(graph->levelIn() < -6.0 - 18.0, qPrintable(QString::number(graph->levelIn())));
 
         // Random S&H: its trace fills from the values that come; chosen again after another shape, it starts afresh.
-        set("wave", 9);
+        set("lfo_wave", 9);
         QCOMPARE(graph->traceLength(), 0);
         playLive(0.3, 1024);
         const int traced = graph->traceLength();
         QVERIFY2(traced > 0 && traced < 100, qPrintable(QString::number(traced)));  // (0.3 s: 56 values)
-        set("wave", 0);
+        set("lfo_wave", 0);
         playLive(0.1, 1024);
-        set("wave", 9);
+        set("lfo_wave", 9);
         QCOMPARE(graph->traceLength(), 0);
     }
 
@@ -843,8 +871,8 @@ private Q_SLOTS:
         save(grab(), QStringLiteral("phaser-idle.png"));
 
         // Synced (so the LFO carries on from one render to the next), played a block at a time.
-        set("sync", 1);
-        set("rate", 13);  // "1/2": a cycle a second at 120 BPM
+        set("lfo_sync", 1);
+        set("lfo_rate", 13);  // "1/2": a cycle a second at 120 BPM
         set("amount", 70);
         set("feedback", 60);
         set("notches", 6);
@@ -869,24 +897,24 @@ private Q_SLOTS:
         save(grab(), QStringLiteral("phaser-flanger.png"));
 
         set("mode", 2);
-        set("wave", 9);  // Random S&H: a trace
-        set("rate", 10);
+        set("lfo_wave", 9);  // Random S&H: a trace
+        set("lfo_rate", 9);  // 1/4
         playFor(40, beat);
         save(grab(), QStringLiteral("phaser-doubler.png"));
 
         // Expanded, the envelope following and LFO 2 mixed in: the envelope's bar, LFO 2's share.
         set("mode", 0);
-        set("wave", 2);  // Triangle Analog
+        set("lfo_wave", 2);  // Triangle Analog
         set("env_on", 1);
         set("env_amount", 60);
         set("lfo2_mix", 40);
         set("feedback", 30);
-        graph->setExpanded(true);
+        setExpanded(view, true);
         QVERIFY(fitted());
         playFor(30, beat);
         QVERIFY(graph->envelope() > 0.5);  // (a 0.5 tone: -6 dBFS, 0.875 of the follower's range)
         save(grab(), QStringLiteral("phaser-expanded-playing.png"));
-        graph->setExpanded(false);
+        setExpanded(view, false);
     }
 };
 

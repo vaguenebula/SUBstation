@@ -1472,26 +1472,29 @@ Ableton's Phaser-Flanger: a phaser, a flanger and a doubler in one device, swept
 | `amount` | Amount | % | 0..100 | 50 |
 | `feedback` | Feedback | % | 0..100 | 50 |
 | `fb_invert` | Feedback Invert | | Off, On | Off |
-| `sync` | LFO Sync | | Off, On | Off |
-| `freq` | LFO Freq | Hz | 0.01..5, log | 0.5 |
-| `rate` | LFO Rate | | 1/64 .. 8 Bars (`dsp::syncedDivisionLabels()`, a list) | 1 Bar |
-| `wave` | LFO Waveform | | Sine, Triangle, Triangle Analog, Triangle 8, Triangle 16, Saw Up, Saw Down, Rectangle, Random, Random S&H | Triangle |
-| `duty` | Duty Cycle | % | -100..100 | 0 |
+| `lfo_sync` | LFO Sync | | Off, On | Off |
+| `lfo_freq` | LFO Freq | Hz | 0.01..40, log | 0.5 |
+| `lfo_rate` | LFO Rate | | Live's 22 divisions, 1/64 .. 8 Bars (`dsp::syncedDivisionLabels()`, a list) | 1 Bar |
+| `lfo_wave` | LFO Waveform | | Sine, Triangle, Triangle Analog, Triangle 8, Triangle 16, Saw Up, Saw Down, Rectangle, Random, Random S&H | Triangle |
+| `lfo_duty` | Duty Cycle | % | -100..100 | 0 |
 | `spin_on` | Spin On | | Off, On | Off |
 | `phase` | Phase | ° | 0..360 | 180 |
-| `spin` | Spin | % | 0..100 | 10 |
+| `spin` | Spin | % | 0..50 | 10 |
 | `lfo2_mix` | LFO 2 Mix | % | 0..100 | 0 |
-| `sync2` | LFO 2 Sync | | Off, On | Off |
-| `freq2` | LFO 2 Freq | Hz | 0.01..5, log | 2 |
-| `rate2` | LFO 2 Rate | | as `rate` | 1/4 |
+| `lfo2_sync` | LFO 2 Sync | | Off, On | Off |
+| `lfo2_freq` | LFO 2 Freq | Hz | 0.01..40, log | 2 |
+| `lfo2_rate` | LFO 2 Rate | | as `lfo_rate` | 1/4 |
 | `env_on` | Env Follow | | Off, On | Off |
 | `env_amount` | Env Amount | % | -100..100 | 50 |
-| `env_attack` | Env Attack | ms | 0.1..300, log | 10 |
-| `env_release` | Env Release | ms | 1..3000, log | 200 |
+| `env_attack` | Env Attack | ms | 0.1..30, log | 10 |
+| `env_release` | Env Release | ms | 0.1..400, log | 200 |
 | `safe_bass` | Safe Bass | Hz | 5..3000, log (5: off) | 5 |
 | `warmth` | Warmth | % | 0..100 | 0 |
-| `output` | Output | dB | -24..24 | 0 |
+| `output` | Output | dB | -36..6 | 0 |
 | `mix` | Dry/Wet | % | 0..100 | 50 |
+
+The ranges are Live's (its Output a gain of 0..2, here in dB down to -36). The LFOs' ids begin `lfo_` and `lfo2_`, so
+`freq` keeps meaning a filter's frequency on every device.
 
 - **Phaser**: Notches identical second-order all-passes in a row, the Disperser's normalized lattice stages
   (`disperser::design`), tuned to Center, their Q the Spread (`qOfSpread`: 5 · 0.03^spread, 5 at 0 %, 0.866 at 50 %,
@@ -1509,6 +1512,11 @@ Ableton's Phaser-Flanger: a phaser, a flanger and a doubler in one device, swept
   a moving read turns into jitter), exact at whole samples: 1 ms at 48 kHz is the input 48 samples later. Amount moves
   the flanger's delay ±2 octaves per unit, the doubler's ±15 %; the delay is held to at least 2 samples. The line is
   written in every mode (in Phaser mode with the input alone), so a delay mode coming in reads real history at once.
+  After a reset the line is empty; if the first frame the device then hears isn't silent (it was switched on in the
+  middle of a sound), what the line is written with fades in over 5 ms (`kStartFadeSeconds`, an S-curve, sample by
+  sample whatever the blocks), so the copy read a delay later comes in smoothly instead of with a step (which would
+  come after the renderer's own 5 ms switch fade had ended: a 30 ms Doubler's measured 0.134 on a 0.3 sine). A sound
+  that starts after silence goes in untouched.
 - **Feedback**: `feedbackGain` (±0.95 at 100 %, negative with Ø) into the core's input, through a soft limit (as it
   is up to +6 dBFS, then bent to stay below ±4): 95 % with any modulation can't run away.
 - **Modulation**: `(1 - mix2) · LFO 1 + mix2 · LFO 2`, times Amount, plus the envelope times Env Amount, held to ±2.
@@ -1526,10 +1534,12 @@ Ableton's Phaser-Flanger: a phaser, a flanger and a doubler in one device, swept
   is a ±1 rectangle through a 100 ms one-pole in its steady state (`analogShape`, `analogValue`): nearly square when
   slow, a quieter rounded triangle when fast (0.46 high at 5 Hz), its shape following the rate (glided, so a jump of
   Freq doesn't jump its level). Random glides from one cycle's value to the next's, Random S&H holds one a cycle,
-  both from the cycle's number (renders repeat exactly). LFO 2 is a triangle. The right channel runs Phase ahead of
-  the left (gliding to it the short way round, 50 ms), or with Spin `1 + spin` times as fast. Synced while the song
-  plays an LFO is at the song's position (`(beat / division)`, cycles and all); stopped, it runs free at the tempo's
-  rate.
+  both from the cycle's number (renders repeat exactly). LFO 2 is a triangle. Free, they run at 0.01..40 Hz (at
+  40 Hz, a chunk is 1/75 of a cycle). The right channel runs Phase ahead of the left (gliding to it the short way
+  round, 50 ms), or with Spin `1 + spin` times as fast (at most 1.5). Synced while the song plays an LFO is at the
+  song's position (`(beat / division)`, cycles and all); stopped, it runs free at the tempo's rate. The divisions
+  are Live's: 1/64, 1/48, 1/32, 1/24, 1/16, 1/12, 1/8, 1/6, 3/16, 1/4, 5/16, 1/3, 3/8, 1/2, 3/4 of a bar, then 1,
+  1.5, 2, 3, 4, 6 and 8 bars (`dsp::syncedCycleBeats`).
   Where its phase jumps (a new waveform, Sync switched on, a synced division changed, the transport starting or
   looping) its value crossfades from where it was over 20 ms (an S-curve) rather than jump.
 - **Envelope follower** (Env Follow): the input's peak (the louder channel; before Safe Bass) with Attack and Release,
@@ -1558,15 +1568,18 @@ Ableton's Phaser-Flanger: a phaser, a flanger and a doubler in one device, swept
   no swoop and no gap). A change of Notches fades over 20 ms as the Disperser's Amount does (fewer: to the tap after
   the stages kept; more: the stages added hear their input fade in). A change during a fade waits for it. Every one
   of the 30 controls changing in turn where it is heard (78 changes over 16 s), then a 5 Hz sweep run into the
-  stages' top and bottom limits, a 220 Hz tone's 6th difference stays below 4e-5 (the Disperser's limit: 1e-4):
-  3.4e-5 at Output's 36 dB jump, every other change 2e-5 at most and most of them about 2e-6, which is also what a
-  steady sweep measures.
+  stages' top and bottom limits, a 220 Hz tone's 6th difference stays below 2e-5 (the Disperser's limit: 1e-4):
+  1.9e-5 at Dry/Wet's jump from 0 to 100 %, 1.7e-5 at Output's 30 dB, every other change 1.4e-5 at most and most of
+  them about 2e-6, which is also what a steady sweep measures.
 - **Denormals**: it doesn't rely on the renderer's flushing. Recursive states (the cascade's, Warmth's, the
-  crossovers') are flushed per chunk; the cascade's output below 1e-20 and the delay line's writes below 1e-15 are
-  zero, and so is an output sample that would be a denormal float (gains gliding to 0 together, Dry/Wet and Warmth
-  turned down at once, take their product through that range). Silence rings out to exact zeros.
+  crossovers') are flushed per chunk (`dsp::flushTiny`, `Crossover::flush()`); the cascade's output and the delay
+  line's writes below 1e-20 are zero, and so is an output sample that would be a denormal float (gains gliding to 0
+  together, Dry/Wet and Warmth turned down at once, take their product through that range). Silence rings out to
+  exact zeros. NaN and infinity in its input never reach it (`BuiltinProcessor::process()` takes them as silence): it
+  plays on as if they had been zeros.
 - `reset()` clears every state, starts the LFOs from phase 0 and snaps every glide and fade to the parameters (an
-  offline render starts the same every time); `prepare()` sizes the lines (250 ms) and resets. On one channel the
+  offline render starts the same every time), and arms the line's start fade; `prepare()` sizes the lines (250 ms)
+  and resets. On one channel the
   left LFO plays; channels past the second pass untouched.
 - `latencySamples()` is 0 (the delay and the sweep are the effect). `tailSamples()` (0 fully dry): the feedback's
   passes to -60 dB (`ln 1e-3 / ln |g|`) times the loop's longest delay (Phaser: the slowest stage the modulation
@@ -1576,7 +1589,9 @@ Ableton's Phaser-Flanger: a phaser, a flanger and a doubler in one device, swept
   the right, 0..1), `lfo` (LFO 1's value on the left, after the shape, Duty and any jump's fade), `mod` (the left's
   smoothed modulation, -2..2), `env` (the envelope's 0..1; 0 while Env Follow is off), `sweep_l` and `sweep_r` (Phaser:
   the stages' frequency in Hz, as tuned; Flanger and Doubler: the delay in ms; during a mode's fade, the incoming
-  mode's), `q_l` and `q_r` (the stages' Q; 0 in the delay modes), `input` and `output` (the peaks, dB, floor -90).
+  mode's), `q_l` and `q_r` (the stages' Q; 0 in the delay modes), `input` and `output` (the peaks, dB, floor
+  `kLevelFloorDb`, -90). The editor reads the rate (`kDisplaySamples`) and the parameters' ranges through the
+  application layer (`phaserDisplaySamples()`, `phaserRanges()`).
 - **Response**: what plays, as a linear filter (Warmth's saturation left out), is `phaser::transfer()` and
   `responseDb()`: the cascade's `A^N` through the feedback loop and its extra sample (`P / (1 - g z⁻¹ P)`), or the
   comb's `D / (1 - g D)`, with Warmth's low-pass, Safe Bass's bands, Dry/Wet and Output. `notchFrequencies()` puts the
@@ -1591,12 +1606,12 @@ Ableton's Phaser-Flanger: a phaser, a flanger and a doubler in one device, swept
   sound; `curve()` also gives each column's turn (the radians the wet path turns across it, what tells the dense
   columns), with which the graph draws a comb finer than it can show as a line as a band too. `wetTransfer()` is the
   wet path alone (what Dry/Wet at 100 % plays, before Output).
-- **Cost** (`builtin_devices_bench`, 48 kHz stereo): about 0.2 % of one core at the defaults (0.21 %, the Disperser
-  0.21 % in the same runs); the Flanger 0.30 % and the Doubler 0.25 %; 42 notches, Feedback 95 %, Amount 100 %, Random
-  S&H 0.65 %; a deep, fast sweep (Amount 100 %, a 5 Hz sine: the stages designed every sample) 0.49 %; Warmth at 100 %
-  0.43 % (the Flanger's 0.68 %: the antialiased saturation's exp and log, per sample and channel); everything on at
-  once (42 notches, Triangle Analog, Warmth, Safe Bass, Env Follow, LFO 2, Spin) 1.3 %. Center automated without
-  pause 0.49 %, with 42 notches 1.0 %.
+- **Cost** (`builtin_devices_bench`, 48 kHz stereo): about 0.2 % of one core at the defaults (0.21 %, the
+  Disperser 0.21 % in the same runs); the Flanger 0.30 % and the Doubler 0.25 %; 42 notches, Feedback 95 %, Amount
+  100 %, Random S&H 0.65 %; a deep, fast sweep (Amount 100 %, a 5 Hz sine: the stages designed every sample) 0.49 %
+  (at 40 Hz, Live's fastest, 0.48 %); Warmth at 100 % 0.43 % (the Flanger's 0.68 %: the antialiased saturation's exp
+  and log, per sample and channel); everything on at once (42 notches, Triangle Analog, Warmth, Safe Bass, Env
+  Follow, LFO 2, Spin) 1.3 %. Center automated without pause 0.49 %, with 42 notches 1.0 %.
 
 ### Reverb (`builtin:reverb`, AudioEffect)
 

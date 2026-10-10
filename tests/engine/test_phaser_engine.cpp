@@ -7,10 +7,11 @@
 // Notches lands on the new setting exactly; every control changes without a
 // click, and a sweep into the stages' limits bends smoothly; automation plays
 // to the sample; synced LFOs follow the song and random ones repeat; reset and
-// a new rate start it cleanly, silence rings out to exact zeros (nothing
-// denormal on the way), its tail covers its ringing; it stays stable at the
-// extremes, one channel plays as either of two, and its displays are what
-// plays.
+// a new rate start it cleanly, switched on mid-sound its delayed copy comes in
+// without a click, what isn't audio in its input plays as silence; silence
+// rings out to exact zeros (nothing denormal on the way), its tail covers its
+// ringing; it stays stable at the extremes, one channel plays as either of
+// two, and its displays are what plays.
 
 #ifdef _WIN32
 #include <windows.h>
@@ -38,6 +39,7 @@
 #include "builtin/PhaserDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace phaser = sub::phaser;
@@ -45,16 +47,8 @@ namespace disperser = sub::disperser;
 
 namespace {
 
-constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
-
-using Values = std::vector<std::pair<std::string, float>>;
-
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
+using Values = ParamValues;
+using Change = ParamChange;
 
 // The settings most tests start from: no sweep and no feedback (the rest the
 // defaults: Phaser, 4 notches at 1 kHz, Spread 50 %, Dry/Wet 50 %), and more.
@@ -64,68 +58,55 @@ Values still(const Values& more = {}) {
     return values;
 }
 
-// A Phaser-Flanger on its own, outside an engine, at any sample rate: processed
-// in blocks, its changes handed over as automation (so its blocks split there)
-// as the renderer does. Its transport is stopped unless playing() says so.
-class Phaser {
+// A Phaser-Flanger on its own, outside an engine (harness/Standalone.h), and a
+// song's transport for it: stopped unless playing() says so, the song's
+// position going on from one run() to the next.
+class Phaser : public Standalone {
 public:
-    explicit Phaser(double rate = kSampleRate, const Values& values = {})
-        : processor_(sub::BuiltinRegistry::instance().create("phaser")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
+    explicit Phaser(double rate = kSampleRate, const Values& values = {}) : Standalone("phaser", rate, values) {}
 
-    sub::Processor& processor() { return *processor_; }
+    // Prepared again, at another rate.
     void prepare(double rate) {
-        rate_ = rate;
-        processor_->prepare(rate, kBlock);
+        processor().prepare(rate, kMaxBlock);
+        context().sampleRate = rate;
     }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
 
     // The transport: playing (or not) at `tempo`, each block's beat counted from
     // `startBeat` at the frame this is called on; `beatAt`, if set, gives a
     // block's beat from its frame instead (a loop, a locate).
     void playing(bool on, double tempo = 120.0, double startBeat = 0.0) {
-        playing_ = on;
-        tempo_ = tempo;
+        context().playing = on;
+        context().tempo = tempo;
         startBeat_ = startBeat;
         since_ = played_;
     }
     std::function<double(int64_t)> beatAt;
 
-    // Processes one or two channels of equal length in place, `block` frames at a time.
+    // As Standalone::run; while the transport plays, each block at the song's position.
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
         const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        ctx.playing = playing_;
-        ctx.tempo = tempo_;
-        float* pointers[2] = {};
+        if (!context().playing && !beatAt) {
+            Standalone::run(channels, changes, block);
+            played_ += frames;
+            return;
+        }
+        sub::ProcessContext& ctx = context();
+        std::vector<float*> pointers(channels.size());
         size_t next = 0;
         for (int64_t start = 0; start < frames; start += block) {
             const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
             while (next < changes.size() && changes[next].frame < start + n) {
                 const Change& change = changes[next++];
                 const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
+                processor().automate(i, processor().params()[static_cast<size_t>(i)].toNormalized(change.value),
                                      static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
             }
             for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
             const int64_t at = played_ + start;
             ctx.samplePos = at;
             ctx.beatPos = beatAt ? beatAt(at) : startBeat_ + static_cast<double>(at - since_) / ctx.samplesPerBeat();
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->clearAutomation();
+            processor().process(ctx, pointers.data(), static_cast<int>(channels.size()), n);
+            processor().clearAutomation();
         }
         played_ += frames;
     }
@@ -137,11 +118,11 @@ public:
 
     // Every value of display `id` since the last call.
     std::vector<float> display(const std::string& id) {
-        const std::vector<sub::DisplayInfo> infos = processor_->displays();
+        const std::vector<sub::DisplayInfo> infos = processor().displays();
         for (size_t i = 0; i < infos.size(); ++i) {
             if (infos[i].id != id) continue;
             std::vector<float> out;
-            positions_[i] = processor_->readDisplay(static_cast<int>(i), positions_[i], out);
+            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], out);
             return out;
         }
         INFO(id);
@@ -150,17 +131,16 @@ public:
     }
 
 private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
-    bool playing_ = false;
-    double tempo_ = 120.0, startBeat_ = 0.0;
+    double startBeat_ = 0.0;
     int64_t played_ = 0, since_ = 0;
     uint64_t positions_[16] = {};
 };
 
-Samples impulse(size_t length) {
+// A click at frame `at`. The delay modes' tests start theirs after a sample of silence: a reset
+// that finds the input sounding (switched on mid-sound) fades the delay line's input in.
+Samples impulse(size_t length, size_t at = 0) {
     Samples x(length, 0.f);
-    x[0] = 1.f;
+    x[at] = 1.f;
     return x;
 }
 
@@ -263,12 +243,13 @@ TEST_CASE("phaser-flanger: listed with its parameters") {
     const sub::BuiltinInfo info = builtinInfo("phaser");
     CHECK_EQ(info.name, std::string("Phaser-Flanger"));
     CHECK(!info.isInstrument());
+    // (The LFOs' ids are lfo_ and lfo2_ ones: `freq` is a filter's frequency on every device.)
     CHECK(paramIds(info.params) ==
-          (std::vector<std::string>{"mode",       "notches",     "center",    "spread",   "blend",   "flange_time",
-                                    "doubler_time", "amount",    "feedback",  "fb_invert", "sync",   "freq",
-                                    "rate",       "wave",        "duty",      "spin_on",  "phase",   "spin",
-                                    "lfo2_mix",   "sync2",       "freq2",     "rate2",    "env_on",  "env_amount",
-                                    "env_attack", "env_release", "safe_bass", "warmth",   "output",  "mix"}));
+          (std::vector<std::string>{"mode",       "notches",     "center",    "spread",    "blend",    "flange_time",
+                                    "doubler_time", "amount",    "feedback",  "fb_invert", "lfo_sync", "lfo_freq",
+                                    "lfo_rate",   "lfo_wave",    "lfo_duty",  "spin_on",   "phase",    "spin",
+                                    "lfo2_mix",   "lfo2_sync",   "lfo2_freq", "lfo2_rate", "env_on",   "env_amount",
+                                    "env_attack", "env_release", "safe_bass", "warmth",    "output",   "mix"}));
     const auto param = [&](const std::string& id) -> const sub::ParamInfo& {
         for (const sub::ParamInfo& p : info.params)
             if (p.id == id) return p;
@@ -290,26 +271,36 @@ TEST_CASE("phaser-flanger: listed with its parameters") {
     CHECK_EQ(center.maxValue, 18500.f);
     CHECK_EQ(center.defaultValue, 1000.f);
     CHECK_EQ(center.unit, std::string("Hz"));
-    for (const char* id : {"freq", "freq2"}) {
+    // The ranges are Live's.
+    for (const char* id : {"lfo_freq", "lfo2_freq"}) {
         INFO(id);
         CHECK(param(id).isLog());
         CHECK_APPROX(param(id).minValue, 0.01);
-        CHECK_EQ(param(id).maxValue, 5.f);
+        CHECK_EQ(param(id).maxValue, 40.f);
     }
-    CHECK(param("wave").valueLabels == phaser::waveLabels());
-    CHECK(param("wave").valueLabels ==
+    CHECK_EQ(param("lfo_freq").name, std::string("LFO Freq"));
+    CHECK_EQ(param("spin").maxValue, 50.f);  // the right LFO at most half as fast again
+    CHECK_APPROX(param("env_attack").minValue, 0.1);
+    CHECK_EQ(param("env_attack").maxValue, 30.f);
+    CHECK_APPROX(param("env_release").minValue, 0.1);
+    CHECK_EQ(param("env_release").maxValue, 400.f);
+    CHECK_EQ(param("output").maxValue, 6.f);  // (a gain of 2)
+    CHECK_EQ(param("output").defaultValue, 0.f);
+    CHECK(param("lfo_wave").valueLabels == phaser::waveLabels());
+    CHECK(param("lfo_wave").valueLabels ==
           (std::vector<std::string>{"Sine", "Triangle", "Triangle Analog", "Triangle 8", "Triangle 16", "Saw Up",
                                     "Saw Down", "Rectangle", "Random", "Random S&H"}));
-    CHECK_EQ(param("wave").defaultValue, 1.f);  // Triangle, as Live opens it
-    for (const char* id : {"rate", "rate2"}) {
+    CHECK_EQ(param("lfo_wave").defaultValue, 1.f);  // Triangle, as Live opens it
+    for (const char* id : {"lfo_rate", "lfo2_rate"}) {
         INFO(id);
         CHECK(param(id).valueLabels == sub::dsp::syncedDivisionLabels());
         CHECK_EQ(param(id).maxValue, static_cast<float>(sub::dsp::syncedDivisionLabels().size() - 1));
     }
-    CHECK_EQ(param("rate").valueLabels[static_cast<size_t>(param("rate").defaultValue)], std::string("1 Bar"));
-    CHECK_EQ(param("rate").defaultValue, 15.f);
-    CHECK_EQ(param("rate2").valueLabels[static_cast<size_t>(param("rate2").defaultValue)], std::string("1/4"));
-    CHECK_EQ(param("rate2").defaultValue, 10.f);
+    CHECK_EQ(param("lfo_rate").valueLabels.size(), size_t{22});  // Live's list
+    CHECK_EQ(param("lfo_rate").valueLabels[static_cast<size_t>(param("lfo_rate").defaultValue)], std::string("1 Bar"));
+    CHECK_EQ(param("lfo_rate").defaultValue, 15.f);
+    CHECK_EQ(param("lfo2_rate").valueLabels[static_cast<size_t>(param("lfo2_rate").defaultValue)], std::string("1/4"));
+    CHECK_EQ(param("lfo2_rate").defaultValue, 9.f);
     CHECK(param("flange_time").isLog());
     CHECK_APPROX(param("flange_time").minValue, 0.1);
     CHECK_EQ(param("flange_time").maxValue, 20.f);
@@ -322,11 +313,11 @@ TEST_CASE("phaser-flanger: listed with its parameters") {
     CHECK_EQ(param("safe_bass").defaultValue, 5.f);  // off
     CHECK_EQ(param("phase").unit, std::string("°"));
     CHECK_EQ(param("phase").maxValue, 360.f);
-    CHECK_EQ(param("duty").minValue, -100.f);
+    CHECK_EQ(param("lfo_duty").minValue, -100.f);
     CHECK_EQ(param("env_amount").minValue, -100.f);
     CHECK_EQ(param("mix").name, std::string("Dry/Wet"));
     CHECK_EQ(param("mix").defaultValue, 50.f);  // the deepest notches
-    for (const char* id : {"fb_invert", "sync", "spin_on", "sync2", "env_on"}) {
+    for (const char* id : {"fb_invert", "lfo_sync", "spin_on", "lfo2_sync", "env_on"}) {
         INFO(id);
         CHECK(param(id).valueLabels == (std::vector<std::string>{"Off", "On"}));
         CHECK_EQ(param(id).defaultValue, 0.f);
@@ -453,7 +444,7 @@ TEST_CASE("phaser-flanger: Spread moves the notches apart") {
 
 TEST_CASE("phaser-flanger: the LFO sweeps the notches") {
     // A 1 Hz sine, all the way: three octaves either side of 1 kHz.
-    Phaser p(kSampleRate, still({{"notches", 1.f}, {"amount", 100.f}, {"wave", 0.f}, {"freq", 1.f}}));
+    Phaser p(kSampleRate, still({{"notches", 1.f}, {"amount", 100.f}, {"lfo_wave", 0.f}, {"lfo_freq", 1.f}}));
     p.play(smoothSine(440.0, 2.0));
     const std::vector<float> phase = p.display("phase"), lfo = p.display("lfo"), sweep = p.display("sweep_l"),
                              q = p.display("q_l");
@@ -476,7 +467,7 @@ TEST_CASE("phaser-flanger: the LFO sweeps the notches") {
 
     // Blend 1: the modulation moves Spread instead, the centre stays.
     Phaser spread(kSampleRate,
-                  still({{"notches", 1.f}, {"amount", 100.f}, {"wave", 0.f}, {"freq", 1.f}, {"blend", 1.f}}));
+                  still({{"notches", 1.f}, {"amount", 100.f}, {"lfo_wave", 0.f}, {"lfo_freq", 1.f}, {"blend", 1.f}}));
     spread.play(smoothSine(440.0, 2.0));
     const std::vector<float> centre = spread.display("sweep_l"), qs = spread.display("q_l");
     CHECK_APPROX_REL(minOf(centre), 1000.0, 0.001);
@@ -491,8 +482,8 @@ TEST_CASE("phaser-flanger: the LFO's shapes and Duty, LFO 2, and Triangle Analog
     for (int wave = 0; wave < 10; ++wave) {
         for (const float duty : {0.f, 80.f, -80.f}) {
             INFO(phaser::waveLabels()[static_cast<size_t>(wave)] + ", Duty " + std::to_string(duty));
-            Phaser p(kSampleRate, still({{"amount", 100.f}, {"wave", static_cast<float>(wave)}, {"freq", 1.f},
-                                         {"duty", duty}}));
+            Phaser p(kSampleRate, still({{"amount", 100.f}, {"lfo_wave", static_cast<float>(wave)}, {"lfo_freq", 1.f},
+                                         {"lfo_duty", duty}}));
             p.play(Samples(2 * kSampleRate, 0.f));
             const std::vector<float> phase = p.display("phase"), lfo = p.display("lfo");
             const auto shape = static_cast<phaser::Wave>(wave);
@@ -522,7 +513,8 @@ TEST_CASE("phaser-flanger: the LFO's shapes and Duty, LFO 2, and Triangle Analog
     const auto triangle = [](double phase) {
         return static_cast<double>(sub::dsp::Lfo::shape(sub::dsp::LfoShape::Triangle, frac(phase), 0));
     };
-    const Values two = still({{"amount", 100.f}, {"wave", 0.f}, {"freq", 0.37f}, {"lfo2_mix", 100.f}, {"freq2", 2.f}});
+    const Values two =
+        still({{"amount", 100.f}, {"lfo_wave", 0.f}, {"lfo_freq", 0.37f}, {"lfo2_mix", 100.f}, {"lfo2_freq", 2.f}});
     {
         Phaser p(kSampleRate, two);
         p.play(Samples(2 * kSampleRate, 0.f));
@@ -537,7 +529,7 @@ TEST_CASE("phaser-flanger: the LFO's shapes and Duty, LFO 2, and Triangle Analog
     // Synced (1/4 at 120 BPM: 2 Hz again), from the song: a quarter of a beat in, a quarter of a cycle on.
     {
         Values synced = two;
-        synced.insert(synced.end(), {{"sync2", 1.f}, {"rate2", 10.f}});
+        synced.insert(synced.end(), {{"lfo2_sync", 1.f}, {"lfo2_rate", 9.f}});  // 1/4
         Phaser p(kSampleRate, synced);
         p.playing(true, 120.0, 0.25);
         p.play(Samples(2 * kSampleRate, 0.f));
@@ -564,11 +556,25 @@ TEST_CASE("phaser-flanger: the LFO's shapes and Duty, LFO 2, and Triangle Analog
         CHECK(worst < 0.02);
     }
 
+    // Live's fastest, 40 Hz: the sine at its phase, which moves on 0.213 of a cycle a value.
+    {
+        Phaser p(kSampleRate, still({{"amount", 100.f}, {"lfo_wave", 0.f}, {"lfo_freq", 40.f}}));
+        p.play(Samples(kSampleRate / 2, 0.f));
+        const std::vector<float> phase = p.display("phase"), lfo = p.display("lfo");
+        double phaseOff = 0.0, lfoOff = 0.0;
+        for (size_t k = 0; k < phase.size(); ++k) {
+            phaseOff = std::max(phaseOff, std::abs(wrapHalf(phase[k] - 40.0 * 256.0 * (k + 1) / kSampleRate)));
+            lfoOff = std::max(lfoOff, std::abs(lfo[k] - std::sin(2.0 * kPi * phase[k])));
+        }
+        CHECK(phaseOff < 1e-6);
+        CHECK(lfoOff < 1e-5);
+    }
+
     // Triangle Analog follows its rate: all but square at 0.5 Hz (reaching 1), a quieter rounded
     // triangle at 5 Hz (0.46 high).
     for (const auto& [freq, peak] : {std::pair{0.5f, 1.0}, std::pair{5.f, 0.46}}) {
         INFO(std::to_string(freq) + " Hz");
-        Phaser p(kSampleRate, still({{"amount", 100.f}, {"wave", 2.f}, {"freq", freq}}));
+        Phaser p(kSampleRate, still({{"amount", 100.f}, {"lfo_wave", 2.f}, {"lfo_freq", freq}}));
         p.play(Samples(4 * kSampleRate, 0.f));
         const std::vector<float> lfo = p.display("lfo");
         CHECK_APPROX_REL(maxOfValues(lfo), peak, 0.02);
@@ -577,7 +583,7 @@ TEST_CASE("phaser-flanger: the LFO's shapes and Duty, LFO 2, and Triangle Analog
 }
 
 TEST_CASE("phaser-flanger: stereo: the right LFO runs Phase ahead, or spins faster") {
-    const Values sweeping = still({{"amount", 100.f}, {"wave", 0.f}, {"freq", 1.f}});
+    const Values sweeping = still({{"amount", 100.f}, {"lfo_wave", 0.f}, {"lfo_freq", 1.f}});
     // Phase 180: the right sweeps the other way, mirrored about the centre (in log).
     {
         Phaser p(kSampleRate, sweeping);
@@ -639,9 +645,9 @@ TEST_CASE("phaser-flanger: stereo: the right LFO runs Phase ahead, or spins fast
 TEST_CASE("phaser-flanger: the flanger is a comb at its delay, fed back to the sample") {
     // 1 ms: 48 samples. Half the input, and half of it 48 samples later.
     Phaser p(kSampleRate, still({{"mode", 1.f}, {"flange_time", 1.f}}));
-    const Samples h = p.play(impulse(4096));
+    const Samples h = p.play(impulse(4096, 1));
     Samples want(h.size(), 0.f);
-    want[0] = want[48] = 0.5f;
+    want[1] = want[49] = 0.5f;
     CHECK_ALLCLOSE(h, want, 0.0, 1e-7);
     // Its notches: an odd number of half cycles in 1 ms.
     CHECK(db(std::abs(transform(h, 500.0))) < -40.0);
@@ -653,38 +659,40 @@ TEST_CASE("phaser-flanger: the flanger is a comb at its delay, fed back to the s
         INFO(invert ? "inverted" : "as it is");
         Phaser fed(kSampleRate, {{"amount", 0.f}, {"mode", 1.f}, {"flange_time", 1.f}, {"feedback", 50.f},
                                  {"fb_invert", invert ? 1.f : 0.f}});
-        const Samples echoes = fed.play(impulse(4096));
+        const Samples echoes = fed.play(impulse(4096, 1));
         const double sign = invert ? -1.0 : 1.0;
-        CHECK_NEAR(echoes[48], 0.5, 1e-6);
-        CHECK_NEAR(echoes[96], sign * 0.2375, 1e-6);
-        CHECK_NEAR(echoes[144], 0.1128125, 1e-6);
-        CHECK_NEAR(echoes[47], 0.0, 1e-7);
-        CHECK_NEAR(echoes[95], 0.0, 1e-7);
+        CHECK_NEAR(echoes[49], 0.5, 1e-6);
+        CHECK_NEAR(echoes[97], sign * 0.2375, 1e-6);
+        CHECK_NEAR(echoes[145], 0.1128125, 1e-6);
+        CHECK_NEAR(echoes[48], 0.0, 1e-7);
+        CHECK_NEAR(echoes[96], 0.0, 1e-7);
     }
 }
 
 TEST_CASE("phaser-flanger: the doubler is a copy Time later") {
     Phaser wet(kSampleRate, still({{"mode", 2.f}, {"doubler_time", 30.f}, {"mix", 100.f}}));
-    const Samples h = wet.play(impulse(4096));
-    CHECK_EQ(nonzero(h), (std::vector<int64_t>{1440}));
-    CHECK_NEAR(h[1440], 1.0, 1e-7);
+    const Samples h = wet.play(impulse(4096, 1));
+    CHECK_EQ(nonzero(h), (std::vector<int64_t>{1441}));
+    CHECK_NEAR(h[1441], 1.0, 1e-7);
     Phaser blend(kSampleRate, still({{"mode", 2.f}, {"doubler_time", 30.f}, {"mix", 25.f}}));
-    const Samples b = blend.play(impulse(4096));
-    CHECK_NEAR(b[0], 0.75, 1e-7);
-    CHECK_NEAR(b[1440], 0.25, 1e-7);
-    CHECK_EQ(nonzero(b), (std::vector<int64_t>{0, 1440}));
+    const Samples b = blend.play(impulse(4096, 1));
+    CHECK_NEAR(b[1], 0.75, 1e-7);
+    CHECK_NEAR(b[1441], 0.25, 1e-7);
+    CHECK_EQ(nonzero(b), (std::vector<int64_t>{1, 1441}));
 }
 
 TEST_CASE("phaser-flanger: the modulation moves the delays") {
     Phaser flanger(kSampleRate,
-                   still({{"mode", 1.f}, {"flange_time", 4.f}, {"amount", 100.f}, {"wave", 0.f}, {"freq", 1.f}}));
+                   still({{"mode", 1.f}, {"flange_time", 4.f}, {"amount", 100.f}, {"lfo_wave", 0.f},
+                          {"lfo_freq", 1.f}}));
     flanger.play(Samples(2 * kSampleRate, 0.f));
     const std::vector<float> f = flanger.display("sweep_l");
     CHECK_APPROX_REL(minOf(f), 1.0, 0.03);  // two octaves either side
     CHECK_APPROX_REL(maxOfValues(f), 16.0, 0.03);
     CHECK(allEqual(flanger.display("q_l"), 0.0));
     Phaser doubler(kSampleRate,
-                   still({{"mode", 2.f}, {"doubler_time", 40.f}, {"amount", 100.f}, {"wave", 0.f}, {"freq", 1.f}}));
+                   still({{"mode", 2.f}, {"doubler_time", 40.f}, {"amount", 100.f}, {"lfo_wave", 0.f},
+                          {"lfo_freq", 1.f}}));
     doubler.play(Samples(2 * kSampleRate, 0.f));
     const std::vector<float> d = doubler.display("sweep_l");
     CHECK_APPROX_REL(minOf(d), 34.0, 0.02);  // 15 % either side
@@ -745,7 +753,7 @@ TEST_CASE("phaser-flanger: Safe Bass keeps the lows out of the effect") {
     }
     // A 1 ms flanger above 200 Hz: its comb as it was, the bands adding up to an all-pass.
     Phaser comb(kSampleRate, still({{"mode", 1.f}, {"flange_time", 1.f}, {"safe_bass", 200.f}}));
-    const Samples h = comb.play(impulse(1 << 15));
+    const Samples h = comb.play(impulse(1 << 15, 1));
     CHECK(db(std::abs(transform(h, 1500.0))) < -40.0);
     CHECK_NEAR(db(std::abs(transform(h, 1000.0))), 0.0, 0.2);
     // Both as the design draws them.
@@ -839,7 +847,7 @@ TEST_CASE("phaser-flanger: Output and Dry/Wet") {
     for (const float mode : {0.f, 1.f, 2.f}) {
         INFO("mode " + std::to_string(mode));
         Phaser p(kSampleRate, {{"mode", mode}, {"mix", 0.f}, {"feedback", 95.f}, {"warmth", 100.f},
-                               {"amount", 100.f}, {"notches", 42.f}, {"wave", 9.f}, {"env_on", 1.f}});
+                               {"amount", 100.f}, {"notches", 42.f}, {"lfo_wave", 9.f}, {"env_on", 1.f}});
         Samples l = in, r = noise(kSampleRate, 4);
         const Samples right = r;
         p.run({&l, &r});
@@ -912,28 +920,28 @@ TEST_CASE("phaser-flanger: changing any control is click-free") {
         {s(2.8), "feedback", 0.f},    {s(3.0), "feedback", 60.f},   {s(3.2), "fb_invert", 1.f},
         {s(3.4), "mode", 2.f},        {s(3.6), "doubler_time", 20.f}, {s(3.8), "doubler_time", 150.f},
         {s(4.0), "fb_invert", 0.f},   {s(4.2), "mode", 0.f},        {s(4.4), "mode", 2.f},
-        {s(4.6), "mode", 1.f},        {s(4.8), "mode", 0.f},        {s(5.0), "wave", 1.f},
-        {s(5.2), "wave", 2.f},        {s(5.4), "freq", 5.f},        {s(5.6), "wave", 0.f},
-        {s(5.8), "sync", 1.f},        {s(6.0), "rate", 7.f},        {s(6.2), "sync", 0.f},
+        {s(4.6), "mode", 1.f},        {s(4.8), "mode", 0.f},        {s(5.0), "lfo_wave", 1.f},
+        {s(5.2), "lfo_wave", 2.f},        {s(5.4), "lfo_freq", 5.f},        {s(5.6), "lfo_wave", 0.f},
+        {s(5.8), "lfo_sync", 1.f},        {s(6.0), "lfo_rate", 7.f},        {s(6.2), "lfo_sync", 0.f},
         {s(6.4), "phase", 270.f},     {s(6.6), "spin_on", 1.f},     {s(6.8), "spin_on", 0.f},
         {s(7.0), "lfo2_mix", 100.f},  {s(7.2), "env_on", 1.f},      {s(7.4), "env_on", 0.f},
         {s(7.6), "safe_bass", 500.f}, {s(7.8), "safe_bass", 5.f},   {s(8.0), "warmth", 100.f},
-        {s(8.2), "warmth", 0.f},      {s(8.4), "output", -24.f},    {s(8.6), "output", 12.f},
+        {s(8.2), "warmth", 0.f},      {s(8.4), "output", -24.f},    {s(8.6), "output", 6.f},
         {s(8.8), "output", 0.f},      {s(9.0), "mix", 0.f},         {s(9.2), "mix", 100.f},
         {s(9.4), "mix", 50.f},        {s(9.6), "center", 500.f},    {s(9.6), "notches", 8.f},
         {s(9.6), "spread", 30.f},     {s(10.0), "lfo2_mix", 0.f},   {s(10.2), "blend", 0.5f},
         {s(10.4), "amount", 100.f},   {s(10.8), "amount", 0.f},     {s(11.0), "amount", 60.f},
-        {s(11.2), "duty", 90.f},      {s(11.4), "duty", -90.f},     {s(11.6), "wave", 2.f},
-        {s(11.8), "duty", 90.f},      {s(12.0), "duty", 0.f},       {s(12.2), "spin_on", 1.f},
-        {s(12.4), "spin", 100.f},     {s(12.6), "spin", 0.f},       {s(12.8), "env_on", 1.f},
-        {s(13.0), "env_amount", -100.f}, {s(13.2), "env_attack", 300.f}, {s(13.4), "env_attack", 0.1f},
-        {s(13.6), "env_release", 1000.f}, {s(13.8), "env_release", 50.f}, {s(14.0), "env_on", 0.f},
-        {s(14.2), "lfo2_mix", 50.f},  {s(14.4), "freq2", 0.2f},     {s(14.6), "sync2", 1.f},
-        {s(14.8), "rate2", 13.f},     {s(15.0), "sync2", 0.f},      {s(15.2), "lfo2_mix", 0.f},
-        {s(15.2), "blend", 0.f},      {s(15.2), "wave", 0.f},       {s(15.2), "freq", 5.f},
+        {s(11.2), "lfo_duty", 90.f},      {s(11.4), "lfo_duty", -90.f},     {s(11.6), "lfo_wave", 2.f},
+        {s(11.8), "lfo_duty", 90.f},      {s(12.0), "lfo_duty", 0.f},       {s(12.2), "spin_on", 1.f},
+        {s(12.4), "spin", 50.f},     {s(12.6), "spin", 0.f},       {s(12.8), "env_on", 1.f},
+        {s(13.0), "env_amount", -100.f}, {s(13.2), "env_attack", 30.f}, {s(13.4), "env_attack", 0.1f},
+        {s(13.6), "env_release", 400.f}, {s(13.8), "env_release", 50.f}, {s(14.0), "env_on", 0.f},
+        {s(14.2), "lfo2_mix", 50.f},  {s(14.4), "lfo2_freq", 0.2f},     {s(14.6), "lfo2_sync", 1.f},
+        {s(14.8), "lfo2_rate", 13.f},     {s(15.0), "lfo2_sync", 0.f},      {s(15.2), "lfo2_mix", 0.f},
+        {s(15.2), "blend", 0.f},      {s(15.2), "lfo_wave", 0.f},       {s(15.2), "lfo_freq", 5.f},
         {s(15.2), "amount", 100.f},   {s(15.2), "center", 5000.f},  {s(15.8), "center", 70.f},
     };
-    const Values opening = {{"amount", 30.f}, {"wave", 0.f}, {"freq", 0.5f}, {"env_amount", 100.f}};
+    const Values opening = {{"amount", 30.f}, {"lfo_wave", 0.f}, {"lfo_freq", 0.5f}, {"env_amount", 100.f}};
     const Samples tone = smoothSine(220.0, 16.4);
     Phaser p(kSampleRate, opening);
     p.playing(true, 120.0, 0.0);
@@ -952,7 +960,7 @@ TEST_CASE("phaser-flanger: changing any control is click-free") {
         each += line;
     }
     INFO("tone " + std::to_string(input) + ", through the changes " + std::to_string(output) + " (" + each + ")");
-    CHECK(output < 1e-4);  // (the Disperser's; measured 3.4e-5 at Output's 36 dB jump, any other change 2e-5 at most)
+    CHECK(output < 1e-4);  // (the Disperser's; measured 1.9e-5 at Dry/Wet's jump, 1.7e-5 at Output's 30 dB)
 
     // What the measure makes of a click: Phaser's output switched to Flanger's at once, unfaded,
     Phaser phased(kSampleRate, opening), flanged(kSampleRate, opening);
@@ -963,7 +971,7 @@ TEST_CASE("phaser-flanger: changing any control is click-free") {
     std::copy(flange.begin() + s(1.5), flange.end(), spliced.begin() + s(1.5));
     CHECK(clickiness(spliced, s(0.2)) > 50 * output);
     // and the dry tone switched to the device fully wet in one sample.
-    Phaser wet(kSampleRate, {{"amount", 30.f}, {"wave", 0.f}, {"freq", 0.5f}, {"mix", 100.f}});
+    Phaser wet(kSampleRate, {{"amount", 30.f}, {"lfo_wave", 0.f}, {"lfo_freq", 0.5f}, {"mix", 100.f}});
     Samples stepped = tone;
     const Samples allWet = wet.play(tone);
     std::copy(allWet.begin() + s(1.5), allWet.end(), stepped.begin() + s(1.5));
@@ -1011,8 +1019,8 @@ TEST_CASE("phaser-flanger: a synced LFO follows the song") {
     sub::Engine engine;
     const uint32_t track = engine.addTrack();
     const uint32_t id = engine.addBuiltinProcessor(engine.trackChain(track), "phaser", -1);
-    setParam(engine, id, "sync", 1.f);
-    setParam(engine, id, "rate", 10.f);  // 1/4
+    setParam(engine, id, "lfo_sync", 1.f);
+    setParam(engine, id, "lfo_rate", 9.f);  // 1/4
     setParam(engine, id, "spin_on", 1.f);
     setParam(engine, id, "spin", 50.f);
     engine.renderOffline(0.0, 2 * kSampleRate);
@@ -1030,10 +1038,11 @@ TEST_CASE("phaser-flanger: a synced LFO follows the song") {
     CHECK(rightOff < 1e-3);
 
     // Spin automated deep into a song: the right side speeds up step by step, never lurching.
-    Phaser p(kSampleRate, {{"sync", 1.f}, {"rate", 10.f}, {"spin_on", 1.f}, {"spin", 0.f}});
+    Phaser p(kSampleRate, {{"lfo_sync", 1.f}, {"lfo_rate", 9.f}, {"spin_on", 1.f}, {"spin", 0.f}});
     p.playing(true, 120.0, 1600.0);
     std::vector<Change> steps;
-    for (int i = 1; i <= 100; ++i) steps.push_back({static_cast<int64_t>(i) * 960, "spin", static_cast<float>(i)});
+    for (int i = 1; i <= 100; ++i)
+        steps.push_back({static_cast<int64_t>(i) * 960, "spin", 0.5f * static_cast<float>(i)});
     p.play(Samples(static_cast<size_t>(2.2 * kSampleRate), 0.f), steps);
     const std::vector<float> spun = p.display("phase_r");
     double least = 1.0, most = 0.0;
@@ -1043,12 +1052,12 @@ TEST_CASE("phaser-flanger: a synced LFO follows the song") {
         most = std::max(most, advance);
     }
     INFO("advances " + std::to_string(least) + " .. " + std::to_string(most));
-    CHECK(least > 0.0106 - 1e-4);
-    CHECK(most < 0.0214 + 1e-4);
+    CHECK(least > 0.0106 - 1e-4);  // (256 frames of a quarter note's 24 000)
+    CHECK(most < 0.016 + 1e-4);    // (half as much again, at Spin's most)
 }
 
 TEST_CASE("phaser-flanger: the random shapes repeat") {
-    const Values values = still({{"mode", 1.f}, {"amount", 100.f}, {"wave", 9.f}, {"freq", 5.f}});
+    const Values values = still({{"mode", 1.f}, {"amount", 100.f}, {"lfo_wave", 9.f}, {"lfo_freq", 5.f}});
     Phaser p(kSampleRate, values);
     const Samples in = noise(kSampleRate, 8);
     const Samples first = p.play(in);
@@ -1072,21 +1081,114 @@ TEST_CASE("phaser-flanger: the random shapes repeat") {
 TEST_CASE("phaser-flanger: reset and a new sample rate start it from silence") {
     const Values values = {{"mode", 1.f}, {"flange_time", 1.f}, {"amount", 0.f}};
     Phaser fresh(44100.0, values);
-    const Samples want = fresh.play(impulse(8192));
+    const Samples want = fresh.play(impulse(8192, 1));
     Phaser p(44100.0, values);
     p.play(noise(44100, 9));
     p.processor().reset();
-    CHECK_ARRAY_EQUAL(p.play(impulse(8192)), want);
+    CHECK_ARRAY_EQUAL(p.play(impulse(8192, 1)), want);
 
     // A new rate: 1 ms is 96 samples at 96 kHz.
     p.play(noise(44100, 10));
     p.prepare(96000.0);
-    const Samples h = p.play(impulse(8192));
-    CHECK_NEAR(h[96], 0.5, 1e-7);
-    CHECK_NEAR(h[0], 0.5, 1e-7);
-    CHECK_NEAR(h[95], 0.0, 1e-7);
+    const Samples h = p.play(impulse(8192, 1));
+    CHECK_NEAR(h[97], 0.5, 1e-7);
+    CHECK_NEAR(h[1], 0.5, 1e-7);
+    CHECK_NEAR(h[96], 0.0, 1e-7);
     Phaser at96(96000.0, values);
-    CHECK_ARRAY_EQUAL(h, at96.play(impulse(8192)));
+    CHECK_ARRAY_EQUAL(h, at96.play(impulse(8192, 1)));
+}
+
+TEST_CASE("phaser-flanger: switched on in the middle of a sound, it comes in without a click") {
+    // As the renderer switches a device on: reset where the sound is, its output faded in from the
+    // input over 5 ms (Renderer::kSwitchFade). The delay modes' line starts empty, so the copy read
+    // a delay later (after that fade) would start with a step: what the line is written with fades
+    // in instead. Every mode at its defaults and at the longest times, over the 40 ms after the copy
+    // comes in: no step steeper than the device always on, or the tone, makes (with a little room).
+    // (A 440 Hz cosine at 0.3: at its peak where the device comes on, 24 000 frames in, so the copy's
+    // first sample would be a step of 0.3 times its share. Without the fade, the steepest steps measured
+    // 0.063 at the Flanger's defaults, 0.139 at the Doubler's (30 ms on), 0.146 and 0.095 at the longest
+    // times; with it, no steeper than the device always on.)
+    Samples tone(static_cast<size_t>(1.5 * kSampleRate));
+    for (size_t i = 0; i < tone.size(); ++i)
+        tone[i] = static_cast<float>(0.3 * std::cos(2.0 * kPi * 440.0 * static_cast<double>(i) / kSampleRate));
+    constexpr int64_t kAt = 24000;
+    constexpr int kSwitchFade = 240;
+    const int64_t until = kAt + kSampleRate / 4;  // (past the longest delay, 150 ms swept 7.5 % longer, + 40 ms)
+    const auto steepest = [](const Samples& x, int64_t from, int64_t to) {
+        double most = 0.0;
+        for (int64_t i = from; i < to; ++i)
+            most = std::max(most, std::abs(static_cast<double>(x[size_t(i)]) - x[size_t(i - 1)]));
+        return most;
+    };
+    // Switched on at kAt, the renderer's fade emulated.
+    const auto switchedOn = [&](const Values& values, int block) {
+        Phaser device(kSampleRate, values);
+        device.play(slice(tone, 0, kAt), {}, block);  // (it held something: a reset clears it)
+        device.processor().reset();
+        const Samples on = device.play(slice(tone, kAt), {}, block);
+        Samples out = tone;
+        for (size_t i = 0; i < on.size(); ++i) {
+            const double g = std::min(1.0, static_cast<double>(i + 1) / kSwitchFade);
+            out[size_t(kAt) + i] = static_cast<float>(tone[size_t(kAt) + i] + g * (on[i] - tone[size_t(kAt) + i]));
+        }
+        return out;
+    };
+    const std::vector<Values> settings = {
+        {},
+        {{"mode", 1.f}},
+        {{"mode", 2.f}},
+        {{"mode", 1.f}, {"flange_time", 20.f}},
+        {{"mode", 2.f}, {"doubler_time", 150.f}},
+    };
+    for (const Values& values : settings) {
+        std::string name = "defaults";
+        for (const auto& [id, value] : values) name += ", " + id + " " + std::to_string(value);
+        INFO(name);
+        Phaser always(kSampleRate, values);
+        const double reference = std::max(steepest(always.play(tone), kAt, until), steepest(tone, kAt, until));
+        const double got = steepest(switchedOn(values, 256), kAt, until);
+        INFO("the steepest step " + std::to_string(got) + ", always on " + std::to_string(reference));
+        CHECK(got <= 1.25 * reference + 0.005);
+    }
+    // To the sample, whatever the blocks (the Doubler unswept: nothing else depends on them).
+    const Values unswept = {{"mode", 2.f}, {"amount", 0.f}};
+    const Samples whole = switchedOn(unswept, 1024);
+    CHECK_ARRAY_EQUAL(switchedOn(unswept, 100), whole);
+    CHECK_ARRAY_EQUAL(switchedOn(unswept, 37), whole);
+    // A sound coming in after silence goes in untouched: its first copy whole, a delay later.
+    Phaser fresh(kSampleRate, {{"mode", 2.f}, {"amount", 0.f}, {"feedback", 0.f}, {"mix", 100.f}});
+    const Samples h = fresh.play(impulse(4096, 1));
+    CHECK_EQ(nonzero(h), (std::vector<int64_t>{1441}));
+    CHECK_NEAR(h[1441], 1.0, 1e-7);
+}
+
+TEST_CASE("phaser-flanger: what isn't audio in its input plays as silence, and it carries on") {
+    // NaN, infinity and absurd levels (what a broken plug-in can hand on) are taken as silence
+    // before the device hears them (BuiltinProcessor::process()): in every mode, fed back hard,
+    // through Warmth, Safe Bass and the envelope, it plays as if they had been zeros, never stuck.
+    const Samples in = noise(kSampleRate, 31);
+    const std::pair<size_t, float> bad[] = {{1000, std::numeric_limits<float>::quiet_NaN()},
+                                            {1001, std::numeric_limits<float>::infinity()},
+                                            {5000, -std::numeric_limits<float>::infinity()},
+                                            {20000, 1e35f}};
+    for (const float mode : {0.f, 1.f, 2.f}) {
+        INFO("mode " + std::to_string(mode));
+        const Values values = {{"mode", mode},       {"feedback", 90.f}, {"warmth", 50.f},
+                               {"safe_bass", 100.f}, {"env_on", 1.f},    {"amount", 100.f}};
+        Samples broken = in, zeroed = in;
+        for (const auto& [frame, value] : bad) {
+            broken[frame] = value;
+            zeroed[frame] = 0.f;
+        }
+        Phaser hurt(kSampleRate, values), well(kSampleRate, values);
+        Samples l = broken, r = broken, wl = zeroed, wr = zeroed;
+        hurt.run({&l, &r});
+        well.run({&wl, &wr});
+        CHECK(allFinite(l) && allFinite(r));
+        CHECK_ARRAY_EQUAL(l, wl);
+        CHECK_ARRAY_EQUAL(r, wr);
+        CHECK(rms(slice(l, kSampleRate / 2)) > 0.01);  // (still playing)
+    }
 }
 
 TEST_CASE("phaser-flanger: silence rings out to exact zeros") {
@@ -1151,8 +1253,8 @@ TEST_CASE("phaser-flanger: its tail covers its ringing") {
         INFO(name);
         Phaser p(kSampleRate, values);
         const auto tail = static_cast<size_t>(tailOf(p));
-        const Samples h = p.play(impulse(powerOfTwoAtLeast(2 * tail + 4096)));
-        const Samples after = slice(h, static_cast<int64_t>(tail));
+        const Samples h = p.play(impulse(powerOfTwoAtLeast(2 * tail + 4096), 1));
+        const Samples after = slice(h, static_cast<int64_t>(tail) + 1);
         INFO("tail " + std::to_string(tail) + ", what is left " + std::to_string(db(maxAbs(after) / maxAbs(h))) +
              " dB");
         CHECK(maxAbs(after) < 1e-3 * maxAbs(h));  // 60 dB down
@@ -1185,9 +1287,9 @@ TEST_CASE("phaser-flanger: it stays stable at the extremes and at any sample rat
                                  {"env_amount", 100.f}, {"env_attack", 0.1f}, {"warmth", 30.f}};
                 values.insert(values.end(), setting.begin(), setting.end());
                 if (synced) {  // an 80 Hz LFO: 1/64 at 300 BPM
-                    values.insert(values.end(), {{"sync", 1.f}, {"rate", 0.f}, {"wave", 2.f}});
+                    values.insert(values.end(), {{"lfo_sync", 1.f}, {"lfo_rate", 0.f}, {"lfo_wave", 2.f}});
                 } else {
-                    values.insert(values.end(), {{"wave", 9.f}, {"freq", 5.f}});
+                    values.insert(values.end(), {{"lfo_wave", 9.f}, {"lfo_freq", 40.f}});
                 }
                 INFO(std::to_string(rate) + " Hz, mode " + std::to_string(setting[0].second) + ", setting " +
                      std::to_string(which) + (synced ? ", synced" : ", Random S&H"));
@@ -1214,7 +1316,8 @@ TEST_CASE("phaser-flanger: it stays stable at the extremes and at any sample rat
     CHECK_APPROX_REL(minOf(top), 9922.5, 1e-4);
     CHECK_APPROX_REL(minOf(top), phaser::phaserCenterHz(18500.0, 0.0, 0.0, 22050.0), 1e-6);
     // And the flanger never reads nearer than 2 samples (0.1 ms swept down two octaves would be 0.55).
-    Phaser shortest(22050.0, {{"mode", 1.f}, {"flange_time", 0.1f}, {"amount", 100.f}, {"wave", 0.f}, {"freq", 2.f}});
+    Phaser shortest(22050.0,
+                    {{"mode", 1.f}, {"flange_time", 0.1f}, {"amount", 100.f}, {"lfo_wave", 0.f}, {"lfo_freq", 2.f}});
     shortest.play(Samples(22050, 0.f));
     CHECK_APPROX_REL(minOf(shortest.display("sweep_l")), 2000.0 / 22050.0, 1e-4);
     // Triangle Analog at 80 Hz: finite, within ±1, whatever the duty.
@@ -1229,7 +1332,7 @@ TEST_CASE("phaser-flanger: it stays stable at the extremes and at any sample rat
 
 TEST_CASE("phaser-flanger: one channel plays as either of two") {
     const Samples in = noise(kSampleRate, 15);
-    const Values values = {{"phase", 180.f}, {"amount", 100.f}, {"freq", 3.f}, {"safe_bass", 150.f},
+    const Values values = {{"phase", 180.f}, {"amount", 100.f}, {"lfo_freq", 3.f}, {"safe_bass", 150.f},
                            {"warmth", 40.f}, {"env_on", 1.f}};
     for (const float mode : {0.f, 1.f, 2.f}) {
         INFO("mode " + std::to_string(mode));
@@ -1287,7 +1390,7 @@ TEST_CASE("phaser-flanger: it is cheap enough") {
         return best;
     };
     const double defaults = seconds({});
-    const double heavy = seconds({{"notches", 42.f}, {"feedback", 95.f}, {"amount", 100.f}, {"wave", 9.f}});
+    const double heavy = seconds({{"notches", 42.f}, {"feedback", 95.f}, {"amount", 100.f}, {"lfo_wave", 9.f}});
     INFO("10 s at the defaults: " + std::to_string(defaults) + " s; at the heaviest: " + std::to_string(heavy) + " s");
     CHECK(defaults < 0.1);
     CHECK(heavy < 0.4);
@@ -1295,7 +1398,8 @@ TEST_CASE("phaser-flanger: it is cheap enough") {
 }
 
 TEST_CASE("phaser-flanger: an LFO's jumps crossfade") {
-    const Values values = still({{"notches", 1.f}, {"amount", 100.f}, {"wave", 0.f}, {"freq", 0.5f}, {"rate", 10.f}});
+    const Values values =
+        still({{"notches", 1.f}, {"amount", 100.f}, {"lfo_wave", 0.f}, {"lfo_freq", 0.5f}, {"lfo_rate", 9.f}});
     const auto frameOf = [](size_t k) { return 256.0 * static_cast<double>(k + 1); };
     // Checks a jump at `at` (frame) from the old trajectory to the new: 3-5 values on the way, none
     // moving more than 0.6 of the jump, and from 30 ms on exactly the new.
@@ -1318,20 +1422,20 @@ TEST_CASE("phaser-flanger: an LFO's jumps crossfade") {
     {
         Phaser p(kSampleRate, values);
         p.playing(true, 120.0, 0.0);
-        p.play(Samples(kSampleRate, 0.f), {{24000, "sync", 1.f}});
+        p.play(Samples(kSampleRate, 0.f), {{24000, "lfo_sync", 1.f}});
         crossfades(p.display("lfo"), 24000.0, [](double frame) { return std::sin(2.0 * kPi * frac(frame / 24000.0)); });
     }
     // A new waveform just after a cycle starts: the sine near 0, the rectangle at +1.
     {
         Phaser p(kSampleRate, values);
-        p.play(Samples(3 * kSampleRate, 0.f), {{96016, "wave", 7.f}});
+        p.play(Samples(3 * kSampleRate, 0.f), {{96016, "lfo_wave", 7.f}});
         crossfades(p.display("lfo"), 96016.0,
                    [](double frame) { return frac(0.5 * frame / kSampleRate) < 0.5 ? 1.0 : -1.0; });
     }
     // The transport looping back, synced: a block at beat 8.25 (1), then one from beat 0 (0).
     {
         Values synced = values;
-        synced.emplace_back("sync", 1.f);
+        synced.emplace_back("lfo_sync", 1.f);
         Phaser p(kSampleRate, synced);
         p.playing(true, 120.0, 0.0);
         constexpr int64_t kLoop = 24064;
@@ -1346,7 +1450,7 @@ TEST_CASE("phaser-flanger: an LFO's jumps crossfade") {
     // Free, the transport changes nothing.
     {
         const Samples in = noise(kSampleRate, 16);
-        Phaser still1(kSampleRate, {{"freq", 2.f}}), moving(kSampleRate, {{"freq", 2.f}});
+        Phaser still1(kSampleRate, {{"lfo_freq", 2.f}}), moving(kSampleRate, {{"lfo_freq", 2.f}});
         const Samples want = still1.play(in);
         Samples got;
         for (int part = 0; part < 4; ++part) {

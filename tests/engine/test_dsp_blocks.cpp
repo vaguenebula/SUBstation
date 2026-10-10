@@ -130,11 +130,13 @@ TEST_CASE("dsp blocks: the LFO's shapes and its cycles") {
     CHECK_EQ(lfo.value(LfoShape::Random, 0.5), Lfo::shape(LfoShape::Random, 0.25, 3));
     CHECK_EQ(lfo.value(LfoShape::Random, -1.0), Lfo::shape(LfoShape::Random, 0.75, 1));
 
-    CHECK_EQ(dsp::syncedDivisionLabels().size(), size_t{19});
-    CHECK_EQ(dsp::syncedCycleBeats(10), 1.0);   // 1/4
-    CHECK_EQ(dsp::syncedCycleBeats(15), 4.0);   // 1 Bar
-    CHECK_NEAR(dsp::syncedCycleBeats(9), 2.0 / 3.0, 1e-12);  // 1/4T
-    CHECK_EQ(dsp::syncedCycleBeats(11), 1.5);   // 1/4D
+    CHECK_EQ(dsp::syncedDivisionLabels().size(), size_t{22});  // Live's
+    CHECK_EQ(dsp::syncedDivisionLabels()[9], std::string("1/4"));
+    CHECK_EQ(dsp::syncedCycleBeats(9), 1.0);
+    CHECK_EQ(dsp::syncedCycleBeats(15), 4.0);                  // 1 Bar
+    CHECK_NEAR(dsp::syncedCycleBeats(11), 4.0 / 3.0, 1e-12);  // 1/3: a half note's triplet
+    CHECK_EQ(dsp::syncedCycleBeats(8), 0.75);                  // 3/16
+    CHECK_EQ(dsp::syncedCycleBeats(21), 32.0);                 // 8 Bars
 }
 
 TEST_CASE("dsp blocks: biquads respond as their magnitude says") {

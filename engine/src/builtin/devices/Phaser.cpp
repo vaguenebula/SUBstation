@@ -30,6 +30,10 @@
 //   of Notches fades as the Disperser's Amount does, an LFO's jump (a new
 //   waveform, Sync, the transport) crossfades its value, Safe Bass fades in and
 //   out (its crossover's frequency moving sample by sample).
+// - Switched on in the middle of a sound (a reset that finds the input
+//   playing), the line starts empty: what it is written with fades in over
+//   5 ms, so the delayed copy comes in smoothly whenever it is read, not with a
+//   step a delay later (after the renderer's own fade has ended).
 // - Silence rings out to exact zeros without the renderer's denormal flushing:
 //   recursive states are flushed per chunk, the cascade's output and the delay
 //   line's writes per sample.
@@ -63,12 +67,6 @@ constexpr int kMaxNotches = phaser::kMaxNotches;
 constexpr double kLanded = 1e-6;      // the per-chunk glides land within this of their targets
 constexpr double kGainLanded = 1e-7;  // the per-sample ones
 constexpr double kTimeLanded = 1e-9;  // the delay times' (in log2 ms: 0.005 samples' jump at 150 ms would show)
-
-// 0 at 0, 1 at 1, flat at both ends: the fades' shape.
-inline double sCurve(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
-
-// A float state or write, zero once it is too small to hear (dsp::flushTiny is for doubles).
-inline float flushTinyFloat(float v) noexcept { return std::abs(v) < 1e-15f ? 0.f : v; }
 
 // The feedback path's soft limit: as it is up to kSafetyKnee (+6 dBFS), then
 // bent so it stays below kSafetyLimit: feedback at 95 % can't run away
@@ -143,23 +141,6 @@ inline disperser::Stage towards(const disperser::Stage& a, const disperser::Stag
     return s;
 }
 
-// Two one-poles in a row gliding to a target (as the Disperser's): a jump
-// eases in and out, and a glide can turn back halfway without a kink. It
-// lands on the target exactly once it is within `landed` of it.
-struct Ease {
-    double first = 0.0, value = 0.0;
-
-    void snap(double target) noexcept { first = value = target; }
-    bool settled(double target) const noexcept { return first == target && value == target; }
-    double next(double target, double coefficient, double landed) noexcept {
-        if (settled(target)) return value;
-        first += coefficient * (target - first);
-        value += coefficient * (first - value);
-        if (std::abs(target - first) < landed && std::abs(target - value) < landed) snap(target);
-        return value;
-    }
-};
-
 // A delay line read `delay` samples before the sample about to be written (≥ 2), with
 // DelayLine::hermite's 4-point interpolation, but its fraction taken in double: a float
 // delay resolves only 1/2048 of a sample at 150 ms, and a moving read would jitter by that.
@@ -177,8 +158,8 @@ class PhaserProcessor final : public BuiltinProcessor {
 public:
     enum Param {
         ModeParam = 0, Notches, Center, Spread, Blend, FlangeTime, DoublerTime, Amount, Feedback, FeedbackInvert,
-        Sync, Freq, Rate, Waveform, Duty, SpinOn, Phase, Spin, Lfo2Mix, Sync2, Freq2, Rate2, EnvOn, EnvAmount,
-        EnvAttack, EnvRelease, SafeBass, Warmth, Output, Mix, NumParams
+        LfoSync, LfoFreq, LfoRate, LfoWave, LfoDuty, SpinOn, Phase, Spin, Lfo2Mix, Lfo2Sync, Lfo2Freq, Lfo2Rate, EnvOn,
+        EnvAmount, EnvAttack, EnvRelease, SafeBass, Warmth, Output, Mix, NumParams
     };
     enum Display {
         PhaseDisplay = 0, PhaseRightDisplay, LfoDisplay, ModDisplay, EnvDisplay, SweepLeft, SweepRight, QLeft, QRight,
@@ -242,6 +223,7 @@ public:
         notchFadeLength_ = length(phaser::kNotchFadeSeconds);
         modeFadeLength_ = length(phaser::kModeFadeSeconds);
         safeFadeLength_ = length(phaser::kSafeFadeSeconds);
+        startFadeLength_ = length(phaser::kStartFadeSeconds);
         warmCoeff_ = dsp::onePoleCutoff(phaser::kWarmthCutoffHz, sampleRate);
         envAttack_ = envRelease_ = -1.f;  // set again at the next render
         reset();
@@ -272,7 +254,7 @@ public:
             run->offset = t.spinOn ? 0.0 : t.phaseCycles;
         }
         wave_ = t.wave;
-        for (Ease& m : mod_) m.snap(0.0);
+        for (dsp::Glide& m : mod_) m.snap(0.0);
         mode_ = modeFrom_ = modeTo_ = t.mode;
         modeFading_ = false;
         modeAt_ = 0;
@@ -329,7 +311,7 @@ private:
         int notches = 4;
         Wave wave = Wave::Triangle;
         bool sync = false, sync2 = false, spinOn = false, envOn = false, safeOn = false;
-        int rate = 15, rate2 = 10;
+        int rate = 15, rate2 = 9;
         double freq = 0.5, freq2 = 2.0;
         double logCenter = 0.0, spread = 0.5, blend = 0.0, logFlange = 0.0, logDoubler = 0.0;
         double flangeMs = 2.5, doublerMs = 30.0;
@@ -356,16 +338,16 @@ private:
         Targets t;
         t.mode = static_cast<Mode>(std::clamp(choiceIndex(ModeParam), 0, 2));
         t.notches = std::clamp(choiceIndex(Notches), 1, kMaxNotches);
-        t.wave = static_cast<Wave>(std::clamp(choiceIndex(Waveform), 0, 9));
-        t.sync = isOn(Sync);
-        t.sync2 = isOn(Sync2);
+        t.wave = static_cast<Wave>(std::clamp(choiceIndex(LfoWave), 0, 9));
+        t.sync = isOn(LfoSync);
+        t.sync2 = isOn(Lfo2Sync);
         t.spinOn = isOn(SpinOn);
         t.envOn = isOn(EnvOn);
         const int divisions = static_cast<int>(dsp::syncedDivisionLabels().size());
-        t.rate = std::clamp(choiceIndex(Rate), 0, divisions - 1);
-        t.rate2 = std::clamp(choiceIndex(Rate2), 0, divisions - 1);
-        t.freq = std::clamp<double>(param(Freq), phaser::kMinRate, phaser::kMaxRate);
-        t.freq2 = std::clamp<double>(param(Freq2), phaser::kMinRate, phaser::kMaxRate);
+        t.rate = std::clamp(choiceIndex(LfoRate), 0, divisions - 1);
+        t.rate2 = std::clamp(choiceIndex(Lfo2Rate), 0, divisions - 1);
+        t.freq = std::clamp<double>(param(LfoFreq), phaser::kMinRate, phaser::kMaxRate);
+        t.freq2 = std::clamp<double>(param(Lfo2Freq), phaser::kMinRate, phaser::kMaxRate);
         t.logCenter = std::log2(std::clamp<double>(param(Center), phaser::kMinCenter, phaser::kMaxCenter));
         t.spread = std::clamp(param(Spread) / 100.0, 0.0, 1.0);
         t.blend = std::clamp<double>(param(Blend), 0.0, 1.0);
@@ -376,9 +358,9 @@ private:
         t.amount = std::clamp(param(Amount) / 100.0, 0.0, 1.0);
         t.envAmount = t.envOn ? std::clamp(param(EnvAmount) / 100.0, -1.0, 1.0) : 0.0;
         t.lfo2Mix = std::clamp(param(Lfo2Mix) / 100.0, 0.0, 1.0);
-        t.duty = std::clamp(param(Duty) / 100.0, -1.0, 1.0);
+        t.duty = std::clamp(param(LfoDuty) / 100.0, -1.0, 1.0);
         t.phaseCycles = param(Phase) / 360.0;
-        t.spin = std::clamp(param(Spin) / 100.0, 0.0, 1.0);
+        t.spin = std::clamp(param(Spin) / 100.0, 0.0, phaser::kMaxSpin);
         t.feedback = phaser::feedbackGain(param(Feedback), isOn(FeedbackInvert));
         t.warmth = std::clamp(param(Warmth) / 100.0, 0.0, 1.0);
         t.outGain = dbToGain(param(Output));
@@ -516,7 +498,7 @@ private:
                 mod_[c].snap(raw);
             }
             const double from = rawFrom_[c];
-            Ease& mod = mod_[c];
+            dsp::Glide& mod = mod_[c];
             const bool moving = !(from == raw && mod.settled(raw));
             if (moving) {
                 const double k = modGlide_, step = (raw - from) * perFrame;
@@ -665,7 +647,7 @@ private:
             if (r.fadeAt >= lfoFadeLength_) {
                 r.fading = false;
             } else {
-                const double s = sCurve(static_cast<double>(r.fadeAt) / lfoFadeLength_);
+                const double s = dsp::sCurve(static_cast<double>(r.fadeAt) / lfoFadeLength_);
                 for (int c = 0; c < n; ++c) v[c] = r.from[c] + s * (v[c] - r.from[c]);
             }
         }
@@ -731,6 +713,9 @@ private:
         const double perSafeFade = 1.0 / safeFadeLength_;
         const float warmCoeff = warmCoeff_;
         int modeAt = modeAt_, notchAt = notchAt_, safeAt = safeAt_;
+        bool startArmed = startArmed_, startFading = startFading_;
+        int startAt = startAt_;
+        const double perStartFade = 1.0 / startFadeLength_;
         float outPeak = outPeak_;
 
         for (int i = from; i < to; ++i) {
@@ -742,7 +727,7 @@ private:
                 out_.next(tg.outGain, gainGlide_, kGainLanded);
             }
             const double g = gain_.value, w = warmth_.value, mix = mix_.value, outGain = out_.value;
-            const double share = modeFade ? sCurve((modeAt + 1) * perModeFade) : 1.0;  // the incoming mode's
+            const double share = modeFade ? dsp::sCurve((modeAt + 1) * perModeFade) : 1.0;  // the incoming mode's
             // The glides of the stages' and the delays' controls, in every mode (so a mode coming in finds
             // them where they would be in it).
             if (stageMoving) {
@@ -760,7 +745,7 @@ private:
             double s = 0.0;
             if (safe) {
                 safeAt += safeAt < safeTarget ? 1 : (safeAt > safeTarget ? -1 : 0);
-                s = sCurve(safeAt * perSafeFade);
+                s = dsp::sCurve(safeAt * perSafeFade);
                 if (safeGliding) {
                     const auto tanG = static_cast<float>(safeFromG + t * (safeToG - safeFromG));
                     safeCoeffs = dsp::SvfCoefficients(tanG, safeTo_.k);
@@ -806,7 +791,7 @@ private:
                 } else {
                     // Fewer: from the longer cascade's output to the tap after the stages kept. More: the
                     // stages added hear their input fade in, while the old output fades out.
-                    const double toShare = sCurve((notchAt + 1) * perNotchFade);
+                    const double toShare = dsp::sCurve((notchAt + 1) * perNotchFade);
                     double tap[N];
                     runStages<N>(stage, 0, shortRun, y);
                     for (int c = 0; c < N; ++c) {
@@ -823,6 +808,22 @@ private:
                     if (warm) v = warmPhaser_[c].process(v, w, warmCoeff);
                     feedback_[c] = safety(v);
                     wetPhaser[c] = v;
+                }
+            }
+
+            // The input's share in what the line is written with: 1, but after a reset that finds the
+            // input sounding (its first sample not silent: switched on mid-sound), rising from 0 over
+            // kStartFadeSeconds. The empty line's zeros then lead into it without a step, which a read
+            // a delay later would play once the renderer's own switch fade was over.
+            double into = 1.0;
+            if (startArmed || startFading) {
+                if (startArmed) {
+                    startArmed = false;
+                    for (int c = 0; c < N; ++c) startFading |= coreIn[c] != 0.0;
+                }
+                if (startFading) {
+                    into = dsp::sCurve(startAt * perStartFade);
+                    if (++startAt >= startFadeLength_) startFading = false;
                 }
             }
 
@@ -847,10 +848,10 @@ private:
                     if (twoReads) y = (1.0 - share) * y + share * readLine(lines_[c], delay(readB));
                     const double v = warm ? warmDelay_[c].process(y, w, warmCoeff) : y;
                     wetDelay[c] = v;
-                    lines_[c].push(flushTinyFloat(static_cast<float>(coreIn[c] + delayGain * safety(v))));
+                    lines_[c].push(dsp::flushTiny(static_cast<float>(into * coreIn[c] + delayGain * safety(v))));
                 }
             } else {
-                for (int c = 0; c < N; ++c) lines_[c].push(flushTinyFloat(static_cast<float>(coreIn[c])));
+                for (int c = 0; c < N; ++c) lines_[c].push(dsp::flushTiny(static_cast<float>(into * coreIn[c])));
             }
 
             for (int c = 0; c < N; ++c) {
@@ -875,6 +876,9 @@ private:
         modeAt_ = modeAt;
         notchAt_ = notchAt;
         safeAt_ = safeAt;
+        startArmed_ = startArmed;
+        startFading_ = startFading;
+        startAt_ = startAt;
         outPeak_ = outPeak;
     }
 
@@ -939,8 +943,9 @@ private:
             const int from = std::min(c, n - 1);
             publish(c == 0 ? QLeft : QRight, shown == Mode::Phaser ? static_cast<float>(q_[from]) : 0.f);
         }
-        publish(InputLevel, std::max(-90.f, gainToDb(inPeak_)));
-        publish(OutputLevel, std::max(-90.f, gainToDb(outPeak_)));
+        constexpr auto kFloor = static_cast<float>(phaser::kLevelFloorDb);
+        publish(InputLevel, std::max(kFloor, gainToDb(inPeak_)));
+        publish(OutputLevel, std::max(kFloor, gainToDb(outPeak_)));
         inPeak_ = outPeak_ = 0.f;
     }
 
@@ -956,10 +961,14 @@ private:
         for (double& fb : feedback_) fb = 0.0;
         for (WarmthPath& warmth : warmPhaser_) warmth.reset();
     }
-    // Every audio state silent (the LFOs and glides go on).
+    // Every audio state silent (the LFOs and glides go on). The lines start empty: if the input
+    // is sounding where they start, what they are written with fades in (startFading_).
     void clearAudio() noexcept {
         clearCascade();
         for (dsp::DelayLine& line : lines_) line.reset();
+        startArmed_ = true;
+        startFading_ = false;
+        startAt_ = 0;
         for (WarmthPath& warmth : warmDelay_) warmth.reset();
         for (dsp::Crossover& split : splits_) split.reset();
     }
@@ -975,12 +984,9 @@ private:
         }
         for (int c = 0; c < kChannels; ++c) {
             feedback_[c] = dsp::flushTiny(feedback_[c]);
-            warmPhaser_[c].pole.z = flushTinyFloat(warmPhaser_[c].pole.z);
-            warmDelay_[c].pole.z = flushTinyFloat(warmDelay_[c].pole.z);
-            for (dsp::Svf* svf : {&splits_[c].split, &splits_[c].low, &splits_[c].high}) {
-                svf->ic1 = flushTinyFloat(svf->ic1);
-                svf->ic2 = flushTinyFloat(svf->ic2);
-            }
+            warmPhaser_[c].pole.z = dsp::flushTiny(warmPhaser_[c].pole.z);
+            warmDelay_[c].pole.z = dsp::flushTiny(warmDelay_[c].pole.z);
+            splits_[c].flush();
         }
     }
 
@@ -1000,33 +1006,35 @@ private:
                  static_cast<float>(phaser::kMaxCenter), 1000.f, true},
                 {"spread", "Spread", "%", 0.f, 100.f, 50.f},
                 {"blend", "Blend", "", 0.f, 1.f, 0.f},
-                {"flange_time", "Flanger Time", "ms", 0.1f, 20.f, 2.5f, true},
-                {"doubler_time", "Doubler Time", "ms", 20.f, 150.f, 30.f, true},
+                {"flange_time", "Flanger Time", "ms", static_cast<float>(phaser::kMinFlangeMs),
+                 static_cast<float>(phaser::kMaxFlangeMs), 2.5f, true},
+                {"doubler_time", "Doubler Time", "ms", static_cast<float>(phaser::kMinDoublerMs),
+                 static_cast<float>(phaser::kMaxDoublerMs), 30.f, true},
                 {"amount", "Amount", "%", 0.f, 100.f, 50.f},
                 {"feedback", "Feedback", "%", 0.f, 100.f, 50.f},
                 {"fb_invert", "Feedback Invert", "", 0.f, 1.f, 0.f, false, offOn},
-                {"sync", "LFO Sync", "", 0.f, 1.f, 0.f, false, offOn},
-                {"freq", "LFO Freq", "Hz", static_cast<float>(phaser::kMinRate),
+                {"lfo_sync", "LFO Sync", "", 0.f, 1.f, 0.f, false, offOn},
+                {"lfo_freq", "LFO Freq", "Hz", static_cast<float>(phaser::kMinRate),
                  static_cast<float>(phaser::kMaxRate), 0.5f, true},
-                {"rate", "LFO Rate", "", 0.f, lastDivision, indexOf("1 Bar", 15), false, divisions},
-                {"wave", "LFO Waveform", "", 0.f, 9.f, 1.f, false, phaser::waveLabels()},
-                {"duty", "Duty Cycle", "%", -100.f, 100.f, 0.f},
+                {"lfo_rate", "LFO Rate", "", 0.f, lastDivision, indexOf("1 Bar", 15), false, divisions},
+                {"lfo_wave", "LFO Waveform", "", 0.f, 9.f, 1.f, false, phaser::waveLabels()},
+                {"lfo_duty", "Duty Cycle", "%", -100.f, 100.f, 0.f},
                 {"spin_on", "Spin On", "", 0.f, 1.f, 0.f, false, offOn},
                 {"phase", "Phase", "°", 0.f, 360.f, 180.f},
-                {"spin", "Spin", "%", 0.f, 100.f, 10.f},
+                {"spin", "Spin", "%", 0.f, static_cast<float>(100.0 * phaser::kMaxSpin), 10.f},
                 {"lfo2_mix", "LFO 2 Mix", "%", 0.f, 100.f, 0.f},
-                {"sync2", "LFO 2 Sync", "", 0.f, 1.f, 0.f, false, offOn},
-                {"freq2", "LFO 2 Freq", "Hz", static_cast<float>(phaser::kMinRate),
+                {"lfo2_sync", "LFO 2 Sync", "", 0.f, 1.f, 0.f, false, offOn},
+                {"lfo2_freq", "LFO 2 Freq", "Hz", static_cast<float>(phaser::kMinRate),
                  static_cast<float>(phaser::kMaxRate), 2.f, true},
-                {"rate2", "LFO 2 Rate", "", 0.f, lastDivision, indexOf("1/4", 10), false, divisions},
+                {"lfo2_rate", "LFO 2 Rate", "", 0.f, lastDivision, indexOf("1/4", 9), false, divisions},
                 {"env_on", "Env Follow", "", 0.f, 1.f, 0.f, false, offOn},
                 {"env_amount", "Env Amount", "%", -100.f, 100.f, 50.f},
-                {"env_attack", "Env Attack", "ms", 0.1f, 300.f, 10.f, true},
-                {"env_release", "Env Release", "ms", 1.f, 3000.f, 200.f, true},
+                {"env_attack", "Env Attack", "ms", 0.1f, 30.f, 10.f, true},
+                {"env_release", "Env Release", "ms", 0.1f, 400.f, 200.f, true},
                 {"safe_bass", "Safe Bass", "Hz", static_cast<float>(phaser::kSafeBassOff), 3000.f,
                  static_cast<float>(phaser::kSafeBassOff), true},
                 {"warmth", "Warmth", "%", 0.f, 100.f, 0.f},
-                {"output", "Output", "dB", -24.f, 24.f, 0.f},
+                {"output", "Output", "dB", -36.f, 6.f, 0.f},  // (Live's: a gain of 0..2)
                 {"mix", "Dry/Wet", "%", 0.f, 100.f, 50.f},
             };
         }();
@@ -1050,19 +1058,20 @@ private:
     double timeGlide_ = 4e-4, stageGlide_ = 1e-3, modGlide_ = 0.02;
     double gainGlide_ = 0.004;
     int lfoFadeLength_ = 960, notchFadeLength_ = 960, modeFadeLength_ = 1440, safeFadeLength_ = 960;
+    int startFadeLength_ = 240;
     float warmCoeff_ = 0.52f;
 
     Targets targets_;
     // The continuous controls' glides: per chunk, and per sample the gains', the stages' controls'
     // (Center in log2 Hz, Spread, Blend: stageMoving_ while they glide) and the delay times' (log2 ms:
     // timeMoving_).
-    Ease logSafe_, amount_, envAmount_, lfo2Mix_, duty_;
-    Ease gain_, warmth_, mix_, out_, logCenter_, spread_, blend_, logFlange_, logDoubler_;
+    dsp::Glide logSafe_, amount_, envAmount_, lfo2Mix_, duty_;
+    dsp::Glide gain_, warmth_, mix_, out_, logCenter_, spread_, blend_, logFlange_, logDoubler_;
     bool stageMoving_ = false, timeMoving_ = false;
 
     LfoRun lfo1_, lfo2_;
     Wave wave_ = Wave::Triangle;
-    Ease analogRate_;  // Triangle Analog's rate (log2 Hz), and its shape at the rate and duty it was worked out for
+    dsp::Glide analogRate_;  // Triangle Analog's rate (log2 Hz), its shape at the rate and duty it was worked out for
     phaser::AnalogShape analog_;
     double analogShapeRate_ = -1e9, analogShapeDuty_ = -1e9;
 
@@ -1072,7 +1081,7 @@ private:
     double envNow_ = 0.0;  // its 0..1 at the last chunk end
 
     // Each channel's modulation, and what it gives at the chunk ends: the stages, the two delays (samples).
-    Ease mod_[kChannels];
+    dsp::Glide mod_[kChannels];
     bool primed_ = false;
     double center_[kChannels] = {}, q_[kChannels] = {};
     disperser::Stage stageFrom_[kChannels], stageTo_[kChannels];
@@ -1092,8 +1101,11 @@ private:
     bool notchFading_ = false;   // from notchFrom_ stages to notchTo_, notchAt_ samples in
     int notchFrom_ = 4, notchTo_ = 4, notchAt_ = 0;
 
-    // The Flanger's and Doubler's lines.
+    // The Flanger's and Doubler's lines; after they were cleared, whether the next frame decides if
+    // their input fades in (startArmed_), and that fade, startAt_ of startFadeLength_ samples in.
     std::array<dsp::DelayLine, kChannels> lines_;
+    bool startArmed_ = true, startFading_ = false;
+    int startAt_ = 0;
 
     Mode mode_ = Mode::Phaser;   // the mode heard (when not fading)
     bool modeFading_ = false;    // from modeFrom_ to modeTo_, modeAt_ samples in
