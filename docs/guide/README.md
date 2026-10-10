@@ -26,6 +26,7 @@ code is put together, [../README.md](../README.md).
 | [ableton-import.md](ableton-import.md) | Importing Ableton Live Sets: what comes across (tracks, clips, plug-ins and their settings, Live's own devices, Drum Racks, automation) and what doesn't |
 | [file-manager.md](file-manager.md) | The File Manager (the project's files, missing ones found, one replaced everywhere) and hot-swapping samples from the browser |
 | [audio-setup.md](audio-setup.md) | Preferences: ASIO and WASAPI (the *System* driver on Linux), sample rate, buffer size, audio threads, MIDI inputs, plug-in folders |
+| [look-and-feel.md](look-and-feel.md) | Preferences › Look and Feel: the themes (Default, Disableton, Flashbang, Gay) |
 | [shortcuts.md](shortcuts.md) | Every keyboard shortcut, and which keys reach a plug-in's editor |
 | [limitations.md](limitations.md) | What isn't implemented yet |
 

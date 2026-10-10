@@ -24,7 +24,7 @@ void PianoKeys::rollConnected(PianoRoll* roll) {
 
 void PianoKeys::paint(SgPainter& p) {
     const QRectF rect = p.rect();
-    p.fillRect(rect, Theme::kEmptyArea);
+    p.fillRect(rect, Theme::emptyArea());
     PianoRoll* roll = this->roll();
     if (!roll) return;
     const int height = roll->rowHeight();
@@ -34,18 +34,18 @@ void PianoKeys::paint(SgPainter& p) {
     for (int pitch = roll->pitchAt(rect.bottom()); pitch <= roll->pitchAt(rect.top()); ++pitch) {
         const QRectF row(0, roll->pitchTop(pitch), width() - 1, height);
         const bool black = notes::isBlackKey(pitch);
-        p.fillRect(row, Theme::kKeyWhite);
-        if (black) p.fillRect(QRectF(0, row.top(), blackWidth, height), Theme::kKeyBlack);
+        p.fillRect(row, Theme::keyWhite());
+        if (black) p.fillRect(QRectF(0, row.top(), blackWidth, height), Theme::keyBlack());
         if (auditioned == pitch)
-            p.fillRect(QRectF(0, row.top(), black ? blackWidth : row.width(), height), Theme::kAccent);
+            p.fillRect(QRectF(0, row.top(), black ? blackWidth : row.width(), height), Theme::accent());
         if (pitch % 12 == 0 || pitch % 12 == 5)  // the gap between two white keys (B|C, E|F)
-            p.fillRect(QRectF(0, row.bottom() - 1, row.width(), 1), Theme::kTextDim);
+            p.fillRect(QRectF(0, row.bottom() - 1, row.width(), 1), Theme::textDim());
         if (pitch % 12 == 0) {
             p.drawText(row.adjusted(0, 0, -4, 0), Qt::AlignRight | Qt::AlignVCenter, notes::noteName(pitch),
-                       Theme::kKeyLabel, font);
+                       Theme::keyLabel(), font);
         }
     }
-    p.fillRect(QRectF(width() - 1, rect.top(), 1, rect.height()), Theme::kBorder);
+    p.fillRect(QRectF(width() - 1, rect.top(), 1, rect.height()), Theme::border());
 }
 
 void PianoKeys::mousePressEvent(QMouseEvent* event) {

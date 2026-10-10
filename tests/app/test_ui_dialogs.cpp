@@ -30,6 +30,7 @@
 #include "session/MidiPreferences.h"
 #include "session/RenderProgress.h"
 #include "session/Selection.h"
+#include "theme/Theme.h"
 
 namespace test = sub::app::test;
 
@@ -167,6 +168,30 @@ private Q_SLOTS:
         QCOMPARE(shown(QStringLiteral("exclusive")) != nullptr, prefs.exclusiveVisible());
         QCOMPARE(shown(QStringLiteral("outputs")) != nullptr, prefs.outputsVisible());
         QCOMPARE(shown(QStringLiteral("controlPanel")) != nullptr, prefs.controlPanelVisible());
+        close(QStringLiteral("preferencesDialog"));
+    }
+
+    // Preferences › Look and Feel: the themes; one chosen applies at once (the
+    // dialog repaints in it) and is kept.
+    void lookAndFeelPage() {
+        open(QStringLiteral("preferencesDialog"));
+        object(QStringLiteral("preferencesDialog"))->setProperty("currentPage", 3);
+        QQuickItem* box = nullptr;
+        QTRY_VERIFY((box = shown(QStringLiteral("theme"))) != nullptr);
+        QCOMPARE(box->property("count").toInt(), sub::ui::Theme::names().size());
+        QCOMPARE(comboText(QStringLiteral("theme")), QStringLiteral("Default"));
+        // Below the box: the page, on the dialog's background.
+        const QPointF below = box->mapToScene(QPointF(box->width() / 2, box->height() + 60));
+        for (int i : {1, 2, 3, 0}) {
+            choose(QStringLiteral("theme"), i);
+            const QString name = sub::ui::Theme::names()[i];
+            QCOMPARE(sub::ui::Theme::name(), name);
+            QCOMPARE(comboText(QStringLiteral("theme")), name);
+            QCOMPARE(QSettings().value(QLatin1String(sub::ui::Theme::kSettingsKey)).toString(), name);
+            QTRY_COMPARE(window_->grabWindow().pixelColor((below * window_->effectiveDevicePixelRatio()).toPoint()),
+                         sub::ui::Theme::window());
+            test::screenshot(window_, QStringLiteral("preferences-look-and-feel-") + name.toLower());
+        }
         close(QStringLiteral("preferencesDialog"));
     }
 

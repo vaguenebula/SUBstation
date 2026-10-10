@@ -18,7 +18,7 @@ PianoRuler::PianoRuler(QQuickItem* parent) : RollItem(parent) { setAcceptedMouse
 void PianoRuler::paint(SgPainter& p) {
     const QRectF rect = p.rect();
     const double h = height();
-    p.fillRect(rect, Theme::kPanel);
+    p.fillRect(rect, Theme::panel());
     PianoRoll* roll = this->roll();
     if (!roll) return;
     const timeline::Timeline& view = roll->view();
@@ -36,19 +36,19 @@ void PianoRuler::paint(SgPainter& p) {
     for (const timeline::GridLine& line : timeline::gridLines(view, rect.left() - 60, rect.right() + 1, step)) {
         const double tick = line.kind == timeline::LineKind::Bar ? 10 : line.kind == timeline::LineKind::Beat ? 6 : 3;
         const double x = app::roundHalfEven(line.x);
-        p.fillRect(QRectF(x, h - tick, 1, tick), line.kind == timeline::LineKind::Bar ? Theme::kTextDim : Theme::kGridBar);
+        p.fillRect(QRectF(x, h - tick, 1, tick), line.kind == timeline::LineKind::Bar ? Theme::textDim() : Theme::gridBar());
         if (std::abs(line.beat / every - std::round(line.beat / every)) < 1e-6)
-            p.drawText(QPointF(x + 3, 12), app::formatBarLabel(line.beat, ts), Theme::kText, font);
+            p.drawText(QPointF(x + 3, 12), app::formatBarLabel(line.beat, ts), Theme::text(), font);
     }
-    p.fillRect(QRectF(rect.left(), h - 1, rect.width(), 1), Theme::kBorder);
+    p.fillRect(QRectF(rect.left(), h - 1, rect.width(), 1), Theme::border());
     if (const auto start = roll->startBeat()) {
         const double sx = view.beatToX(*start);
-        p.fillPolygon(QPolygonF({QPointF(sx - 5, 1), QPointF(sx + 5, 1), QPointF(sx, 8)}), Theme::kInsertMarker);
+        p.fillPolygon(QPolygonF({QPointF(sx - 5, 1), QPointF(sx + 5, 1), QPointF(sx, 8)}), Theme::insertMarker());
     }
     // The paste marker: a tab at the bottom, over the notes' dashed line.
     if (const auto paste = roll->pasteBeat()) {
         const double px = app::roundHalfEven(view.beatToX(*paste));
-        p.fillRect(QRectF(px - 3, h - 7, 7, 6), Theme::kPasteMarker);
+        p.fillRect(QRectF(px - 3, h - 7, 7, 6), Theme::pasteMarker());
     }
 }
 

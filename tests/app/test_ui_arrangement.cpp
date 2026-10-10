@@ -1078,8 +1078,8 @@ private Q_SLOTS:
         arrangement()->onPosition(2.0);
         h_->settle();
         const QImage image = window()->grabWindow();
-        QCOMPARE(image.pixelColor(h_->at(QPointF(h_->x(1.5), y))), sub::ui::Theme::kRecordOn);
-        QVERIFY(image.pixelColor(h_->at(QPointF(h_->x(2.5), y))) != sub::ui::Theme::kRecordOn);
+        QCOMPARE(image.pixelColor(h_->at(QPointF(h_->x(1.5), y))), sub::ui::Theme::recordOn());
+        QVERIFY(image.pixelColor(h_->at(QPointF(h_->x(2.5), y))) != sub::ui::Theme::recordOn());
         test::screenshot(window(), QStringLiteral("arrangement_live_take"), QRect(0, 0, 400, 200));
         // A MIDI take's notes so far (a held one reaches the take's end).
         take.midi = true;

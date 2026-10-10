@@ -207,10 +207,10 @@ private Q_SLOTS:
         auto pixel = [&](qreal x, qreal y) { return image.pixel(int(x * dpr), int(y * dpr)); };
         auto* windowTitle = item(QStringLiteral("windowTitle"));
         const QRectF title = windowTitle->mapRectToScene(windowTitle->boundingRect());
-        QVERIFY(near(pixel(title.left() - 8, 5), Theme::kPanel));                 // the title bar
-        QVERIFY(near(pixel(tb.center().x(), tb.bottom() - 1), Theme::kBorder));   // its line
-        QVERIFY(near(pixel(t.center().x(), t.bottom() - 1), Theme::kBorder));     // the transport's line
-        QVERIFY(near(pixel((b.right() + a.left()) / 2, a.center().y()), Theme::kBorder));  // a split handle
+        QVERIFY(near(pixel(title.left() - 8, 5), Theme::panel()));                 // the title bar
+        QVERIFY(near(pixel(tb.center().x(), tb.bottom() - 1), Theme::border()));   // its line
+        QVERIFY(near(pixel(t.center().x(), t.bottom() - 1), Theme::border()));     // the transport's line
+        QVERIFY(near(pixel((b.right() + a.left()) / 2, a.center().y()), Theme::border()));  // a split handle
         // The real views are in: the arrangement's interface is there.
         QVERIFY(item(QStringLiteral("arrangement"))->metaObject()->indexOfMethod("zoomToArrangement()") >= 0);
 
@@ -230,8 +230,8 @@ private Q_SLOTS:
                 QTest::mouseMove(window_, at);
             QTest::qWait(250);
             const QImage open = window_->grabWindow();
-            QVERIFY2(near(open.pixel(int((at.x() + 20) * dpr), int((at.y() + 40) * dpr)), Theme::kPanelAlt) ||
-                         near(open.pixel(int((at.x() + 20) * dpr), int((at.y() + 40) * dpr)), Theme::kAccent),
+            QVERIFY2(near(open.pixel(int((at.x() + 20) * dpr), int((at.y() + 40) * dpr)), Theme::panelAlt()) ||
+                         near(open.pixel(int((at.x() + 20) * dpr), int((at.y() + 40) * dpr)), Theme::accent()),
                      names[menu]);
             test::screenshot(window_, QStringLiteral("main-window-%1-menu").arg(QLatin1String(names[menu])));
         }

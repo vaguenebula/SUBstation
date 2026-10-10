@@ -19,7 +19,7 @@ namespace {
 using Draw = std::function<void(QPainter&, const QColor&, bool on)>;
 
 struct Icon {
-    QColor color;  // its default colour
+    QColor (*color)();  // its default colour, the current theme's
     Draw draw;
 };
 
@@ -36,11 +36,13 @@ QPainterPath path(std::initializer_list<QPointF> points, bool close) {
     return result;
 }
 
+QColor appAccent() { return palettes().front().colors.accent; }
+
 // The icons, one function each.
 const std::map<QString, Icon>& icons() {
     static const std::map<QString, Icon> table = [] {
         std::map<QString, Icon> t;
-        const QColor text = Theme::kText, dim = Theme::kTextDim;
+        const auto text = &Theme::text, dim = &Theme::textDim;
 
         t[QStringLiteral("play")] = {text, [](QPainter& p, const QColor& c, bool) {
                                          p.fillPath(path({{18, 12}, {52, 32}, {18, 52}}, true), c);
@@ -48,7 +50,7 @@ const std::map<QString, Icon>& icons() {
         t[QStringLiteral("stop")] = {text, [](QPainter& p, const QColor& c, bool) {
                                          p.fillRect(QRectF(16, 16, 32, 32), c);
                                      }};
-        t[QStringLiteral("record")] = {QColor(0xff, 0x5a, 0x4d), [](QPainter& p, const QColor& c, bool) {
+        t[QStringLiteral("record")] = {&Theme::recordOn, [](QPainter& p, const QColor& c, bool) {
                                            p.setBrush(c);
                                            p.setPen(Qt::NoPen);
                                            p.drawEllipse(QRectF(16, 16, 32, 32));
@@ -149,7 +151,7 @@ const std::map<QString, Icon>& icons() {
                                               p.drawPath(path({{26, 20}, {38, 32}, {26, 44}}, false));
                                           }};
         // Six spokes with a pair of twigs each: a frozen track.
-        t[QStringLiteral("snowflake")] = {Theme::kFrozen, [](QPainter& p, const QColor& c, bool) {
+        t[QStringLiteral("snowflake")] = {&Theme::frozen, [](QPainter& p, const QColor& c, bool) {
                                               p.setPen(pen(c, 4.5, Qt::RoundCap));
                                               p.translate(32, 32);
                                               for (int i = 0; i < 6; ++i) {
@@ -324,7 +326,7 @@ const std::map<QString, Icon>& icons() {
                                             p.drawPath(path({{23, 32}, {12, 43}, {23, 54}}, false));
                                         }};
         // A warning triangle: a file that isn't there any more.
-        t[QStringLiteral("missing")] = {Theme::kRecordOn, [](QPainter& p, const QColor& c, bool) {
+        t[QStringLiteral("missing")] = {&Theme::recordOn, [](QPainter& p, const QColor& c, bool) {
                                             p.setPen(pen(c, 5, Qt::RoundCap, Qt::RoundJoin));
                                             p.setBrush(Qt::NoBrush);
                                             p.drawPath(path({{32, 8}, {58, 54}, {6, 54}}, true));
@@ -333,12 +335,13 @@ const std::map<QString, Icon>& icons() {
                                             p.setPen(Qt::NoPen);
                                             p.drawEllipse(QPointF(32, 46), 3.5, 3.5);
                                         }};
-        // The application's own icon: its colours are its own, even disabled.
-        t[QStringLiteral("app_icon")] = {Theme::kAccent, [](QPainter& p, const QColor&, bool) {
-                                             p.setBrush(Theme::kPanelAlt);
+        // The application's own icon: its colours are its own (the Default
+        // theme's, whatever the theme), even disabled.
+        t[QStringLiteral("app_icon")] = {appAccent, [](QPainter& p, const QColor&, bool) {
+                                             p.setBrush(palettes().front().colors.panelAlt);
                                              p.setPen(Qt::NoPen);
                                              p.drawRoundedRect(QRectF(2, 2, 60, 60), 12, 12);
-                                             p.setPen(pen(Theme::kAccent, 6, Qt::RoundCap));
+                                             p.setPen(pen(appAccent(), 6, Qt::RoundCap));
                                              const qreal bars[][2] = {{14, 12}, {24, 30}, {34, 40}, {44, 22}, {52, 10}};
                                              for (const auto& bar : bars)
                                                  p.drawLine(QPointF(bar[0], 32 - bar[1] / 2),
@@ -364,7 +367,7 @@ bool Icons::has(const QString& name) { return icons().count(name) > 0; }
 
 QColor Icons::defaultColor(const QString& name) {
     const auto it = icons().find(name);
-    return it == icons().end() ? QColor() : it->second.color;
+    return it == icons().end() ? QColor() : it->second.color();
 }
 
 bool Icons::draw(QPainter& painter, const QString& name, const QColor& color, bool on) {
@@ -373,7 +376,7 @@ bool Icons::draw(QPainter& painter, const QString& name, const QColor& color, bo
         return false;
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing);
-    it->second.draw(painter, color.isValid() ? color : it->second.color, on);
+    it->second.draw(painter, color.isValid() ? color : it->second.color(), on);
     painter.restore();
     return true;
 }
@@ -385,7 +388,7 @@ QImage Icons::image(const QString& name, int pixels, const QColor& color, bool o
     image.fill(Qt::transparent);
     QPainter painter(&image);
     painter.scale(qreal(pixels) / kGrid, qreal(pixels) / kGrid);
-    draw(painter, name, disabled ? QColor(Theme::kTextDisabled) : color, on);
+    draw(painter, name, disabled ? QColor(Theme::textDisabled()) : color, on);
     return image;
 }
 
@@ -400,6 +403,10 @@ QString Icons::url(const QString& name, const QVariant& color, bool on, bool dis
         query.addQueryItem(QStringLiteral("state"), QStringLiteral("on"));
     if (disabled)
         query.addQueryItem(QStringLiteral("mode"), QStringLiteral("disabled"));
+    // Each theme's icons are pictures of their own to QML's image cache: the
+    // default colours and the disabled one are the theme's.
+    if (Theme::name() != palettes().front().name)
+        query.addQueryItem(QStringLiteral("theme"), Theme::name());
     QUrl url;
     url.setScheme(QStringLiteral("image"));
     url.setHost(QStringLiteral("icons"));

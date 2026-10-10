@@ -46,7 +46,7 @@ std::optional<ClipNote> VelocityLane::stemAt(double x) const {
 void VelocityLane::paint(SgPainter& p) {
     const QRectF visible = p.rect();
     const double h = height();
-    p.fillRect(visible, Theme::kLane);
+    p.fillRect(visible, Theme::lane());
     PianoRoll* roll = this->roll();
     if (!roll) return;
     const timeline::Timeline& view = roll->view();
@@ -58,10 +58,10 @@ void VelocityLane::paint(SgPainter& p) {
         double from = visible.left();
         for (const auto& [start, end] : lit) {
             const double x0 = view.beatToX(start), x1 = view.beatToX(end);
-            if (x0 > from) p.fillRect(QRectF(from, 0, x0 - from, h), Theme::kOutsideClip);
+            if (x0 > from) p.fillRect(QRectF(from, 0, x0 - from, h), Theme::outsideClip());
             from = std::max(from, x1);
         }
-        if (from < visible.right() + 1) p.fillRect(QRectF(from, 0, visible.right() + 1 - from, h), Theme::kOutsideClip);
+        if (from < visible.right() + 1) p.fillRect(QRectF(from, 0, visible.right() + 1 - from, h), Theme::outsideClip());
         std::vector<QColor> colors;
         for (int i = 0; i < roll->clipCount(); ++i) colors.push_back(roll->colorOf(i));
         const double bottom = h - kMarginBottom;
@@ -71,20 +71,20 @@ void VelocityLane::paint(SgPainter& p) {
             const double x = app::roundHalfEven(view.beatToX(roll->rollStart(clipNote)));
             if (x < visible.left() - 3 || x > visible.right() + 3) return;
             const bool selected = roll->isSelected(clipNote);
-            const QColor stem = selected     ? Theme::kSelectionOutline
-                                : note.muted ? Theme::kDeactivatedClip
+            const QColor stem = selected     ? Theme::selectionOutline()
+                                : note.muted ? Theme::deactivatedClip()
                                              : colors[static_cast<size_t>(clipNote.clip)];
             const double y = velocityY(note.velocity);
             p.fillRect(QRectF(x, y, 1, bottom - y), stem);
             p.fillRect(QRectF(x - 2, y - 2, 5, 5), stem);
             if (selected && drag_)
-                p.drawText(QRectF(x + 5, y - 7, 30, 12), Qt::AlignLeft, QString::number(note.velocity), Theme::kText,
+                p.drawText(QRectF(x + 5, y - 7, 30, 12), Qt::AlignLeft, QString::number(note.velocity), Theme::text(),
                            font);
         });
     }
-    p.fillRect(QRectF(visible.left(), 0, visible.width(), 1), Theme::kBorder);
+    p.fillRect(QRectF(visible.left(), 0, visible.width(), 1), Theme::border());
     if (const auto start = roll->startBeat())
-        p.fillRect(QRectF(app::roundHalfEven(view.beatToX(*start)), 0, 1, h), Theme::kInsertMarker);
+        p.fillRect(QRectF(app::roundHalfEven(view.beatToX(*start)), 0, 1, h), Theme::insertMarker());
 }
 
 void VelocityLane::mousePressEvent(QMouseEvent* event) {

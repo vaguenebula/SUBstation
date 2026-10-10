@@ -1,7 +1,8 @@
 # Audio setup
 
 *Options › Preferences* (**Ctrl+,**, or click the audio device's name at the right of
-the transport bar) chooses the audio device, the MIDI inputs and the plug-in folders.
+the transport bar) chooses the audio device, the MIDI inputs and the plug-in folders
+(and the theme: [look-and-feel.md](look-and-feel.md)).
 SUBstation plays through ASIO drivers, or WASAPI shared or exclusive, with the sample
 rate and buffer size you choose. On Linux it plays through the *System* driver instead
 (see [below](#on-linux)).

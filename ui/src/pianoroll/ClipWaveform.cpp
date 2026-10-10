@@ -83,7 +83,7 @@ QString ClipWaveform::formatTime(double seconds, double step) {
 
 void ClipWaveform::paint(SgPainter& p) {
     const QRectF rect = p.rect();
-    p.fillRect(rect, Theme::kLane);
+    p.fillRect(rect, Theme::lane());
     if (bands_.empty()) return;
     if (bands_.size() == 1) {
         const QRectF area(0, kRulerHeight, width(), height() - kRulerHeight);
@@ -97,11 +97,11 @@ void ClipWaveform::paint(SgPainter& p) {
         const QRectF band(0, static_cast<double>(i) * bandHeight, width(), bandHeight - 1);
         drawBand(p, bands_[i], band);
         drawLabel(p, band, bands_[i].clip.name);
-        p.fillRect(QRectF(0, band.bottom(), width(), 1), Theme::kBorder);
+        p.fillRect(QRectF(0, band.bottom(), width(), 1), Theme::border());
     }
     if (shown < bands_.size()) {
         p.drawText(rect.adjusted(0, 0, -8, -4), Qt::AlignRight | Qt::AlignBottom,
-                   QStringLiteral("+%1 more").arg(bands_.size() - shown), Theme::kText, uiFont(8));
+                   QStringLiteral("+%1 more").arg(bands_.size() - shown), Theme::text(), uiFont(8));
     }
 }
 
@@ -112,7 +112,7 @@ double ClipWaveform::drawBand(SgPainter& p, const Band& band, const QRectF& area
     if (source.isNull() || source.frames() <= 0) {
         p.drawText(area, Qt::AlignCenter,
                    band.loadError.isEmpty() ? QStringLiteral("Loading…") : QStringLiteral("Missing file"),
-                   Theme::kTextDim, uiFont());
+                   Theme::textDim(), uiFont());
         return 0.0;
     }
     const double totalSec = static_cast<double>(source.frames()) / source.sampleRate();
@@ -129,7 +129,7 @@ double ClipWaveform::drawBand(SgPainter& p, const Band& band, const QRectF& area
         mids = {area.top() + area.height() / 4, area.top() + area.height() * 3 / 4};
     else
         mids = {area.center().y()};
-    for (double mid : mids) p.drawLine(QPointF(area.left(), mid), QPointF(area.right(), mid), Theme::kGridBeat);
+    for (double mid : mids) p.drawLine(QPointF(area.left(), mid), QPointF(area.right(), mid), Theme::gridBeat());
     p.save();
     p.setClipRect(area);
     QColor opaque = color;
@@ -144,10 +144,10 @@ double ClipWaveform::drawBand(SgPainter& p, const Band& band, const QRectF& area
     const QFont font = uiFont(7.5, true);
     for (const auto& [x, label] : {std::pair{x0, QStringLiteral("S")}, std::pair{x1, QStringLiteral("E")}}) {
         const bool end = label == u"E";
-        p.fillRect(QRectF(app::roundHalfEven(x) - (end ? 1 : 0), area.top(), 1, area.height()), Theme::kText);
+        p.fillRect(QRectF(app::roundHalfEven(x) - (end ? 1 : 0), area.top(), 1, area.height()), Theme::text());
         const QRectF flag(end ? x - 12 : x, area.top(), 12, 12);
-        p.fillRect(flag, Theme::kText);
-        p.drawText(flag, Qt::AlignCenter, label, Theme::kAccentText, font);
+        p.fillRect(flag, Theme::text());
+        p.drawText(flag, Qt::AlignCenter, label, Theme::accentText(), font);
     }
     return totalSec;
 }
@@ -159,11 +159,11 @@ void ClipWaveform::drawLabel(SgPainter& p, const QRectF& band, const QString& na
     const QRectF box(band.left() + 4, band.bottom() - metrics.height() - 5, metrics.horizontalAdvance(text) + 8,
                      metrics.height() + 2);
     p.fillRect(box, QColor(0, 0, 0, 150));
-    p.drawText(box, Qt::AlignCenter, text, Theme::kText, font);
+    p.drawText(box, Qt::AlignCenter, text, Theme::text(), font);
 }
 
 void ClipWaveform::drawRuler(SgPainter& p, double totalSec) const {
-    p.fillRect(QRectF(0, 0, width(), kRulerHeight), Theme::kPanel);
+    p.fillRect(QRectF(0, 0, width(), kRulerHeight), Theme::panel());
     const double pxPerSec = width() / totalSec;
     double step = kTimeSteps.back();
     for (double s : kTimeSteps) {
@@ -177,10 +177,10 @@ void ClipWaveform::drawRuler(SgPainter& p, double totalSec) const {
     for (long long i = 0; i <= ticks; ++i) {
         const double seconds = static_cast<double>(i) * step;
         const double x = app::roundHalfEven(seconds * pxPerSec);
-        p.fillRect(QRectF(x, kRulerHeight - 6, 1, 6), Theme::kTextDim);
-        p.drawText(QPointF(x + 3, kRulerHeight - 7), formatTime(seconds, step), Theme::kTextDim, font);
+        p.fillRect(QRectF(x, kRulerHeight - 6, 1, 6), Theme::textDim());
+        p.drawText(QPointF(x + 3, kRulerHeight - 7), formatTime(seconds, step), Theme::textDim(), font);
     }
-    p.fillRect(QRectF(0, kRulerHeight - 1, width(), 1), Theme::kBorder);  // the 1 px line at 19.5
+    p.fillRect(QRectF(0, kRulerHeight - 1, width(), 1), Theme::border());  // the 1 px line at 19.5
 }
 
 }  // namespace sub::ui

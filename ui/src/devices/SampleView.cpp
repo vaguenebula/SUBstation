@@ -452,40 +452,40 @@ void SampleView::paintRuler(SgPainter& p, const QRectF& area) const {
             break;
         }
     }
-    const QColor tick(Theme::kTextDim.red(), Theme::kTextDim.green(), Theme::kTextDim.blue(), 140);
+    const QColor tick(Theme::textDim().red(), Theme::textDim().green(), Theme::textDim().blue(), 140);
     for (int i = 1; i * step < seconds; ++i) {
         const double x = area.left() + i * step * perSecond;
         p.drawLine(QPointF(x, area.top()), QPointF(x, area.top() + 3), tick, 1);
         if (x + labelWidth - 10 < area.right())
             p.drawText(QRectF(x + 2, area.top(), labelWidth, area.height()), Qt::AlignVCenter | Qt::AlignLeft,
-                       timeText(i * step), Theme::kTextDim, font);
+                       timeText(i * step), Theme::textDim(), font);
     }
 }
 
 void SampleView::paint(SgPainter& p) {
     const QRectF all(0, 0, width(), height());
-    p.fillRect(all, Theme::kMeterBg);
+    p.fillRect(all, Theme::meterBg());
     const QRectF r = plot();
     const QFont font = uiFont(8);
     if (path_.isEmpty()) {
         p.drawText(all, Qt::AlignCenter, QStringLiteral("Drop a sample here\nor double-click to browse"),
-                   Theme::kTextDim, font);
+                   Theme::textDim(), font);
         return;
     }
     if (waveform_.isNull()) {
         paintName(p, r, font);
         if (error_.isEmpty())
-            p.drawText(r, Qt::AlignCenter, QStringLiteral("Loading…"), Theme::kTextDim, font);
+            p.drawText(r, Qt::AlignCenter, QStringLiteral("Loading…"), Theme::textDim(), font);
         return;
     }
     const double middle = r.center().y();
-    p.drawLine(QPointF(r.left(), middle), QPointF(r.right(), middle), Theme::kGridBar, 1);
+    p.drawLine(QPointF(r.left(), middle), QPointF(r.right(), middle), Theme::gridBar(), 1);
     if (!top_.empty())
-        p.fillColumns(r.left(), 1.0, top_.data(), bottom_.data(), int(top_.size()), Theme::kAccent, 1.0);
+        p.fillColumns(r.left(), 1.0, top_.data(), bottom_.data(), int(top_.size()), Theme::accent(), 1.0);
     paintRuler(p, QRectF(r.left(), r.bottom() + 1, r.width(), kRulerHeight));
 
     const double start = xOfFrame(double(startFrame_)), end = xOfFrame(double(endFrame_));
-    const QColor dimLine(Theme::kText.red(), Theme::kText.green(), Theme::kText.blue(), 110);
+    const QColor dimLine(Theme::text().red(), Theme::text().green(), Theme::text().blue(), 110);
     p.save();
     p.setClipRect(r);
     p.setAntialiasing(true);
@@ -502,7 +502,7 @@ void SampleView::paint(SgPainter& p) {
                 p.drawLine(QPointF(from, r.top()), QPointF(from, r.bottom()), dimLine, 1);
             if (to - from >= 14)
                 p.drawText(QRectF(from + 2, r.bottom() - 11, to - from - 2, 10), Qt::AlignLeft | Qt::AlignBottom,
-                           QString::number(i + 1), Theme::kText, small);
+                           QString::number(i + 1), Theme::text(), small);
         }
     } else if (mode_ == kClassic && looping_ && endFrame_ > loopFrame_) {
         // The loop: bracketed over the top, its crossfade shaded (its end, and what it fades from).
@@ -514,12 +514,12 @@ void SampleView::paint(SgPainter& p) {
             p.fillPolygon(QPolygonF({QPointF(from, r.top()), QPointF(loop, r.bottom()), QPointF(from, r.bottom())}),
                           shade);
         }
-        p.fillRect(QRectF(loop, r.top(), end - loop, 3), Theme::kLoopOn);
-        p.drawLine(QPointF(loop, r.top()), QPointF(loop, r.bottom()), Theme::kLoopOn, 1.5);
+        p.fillRect(QRectF(loop, r.top(), end - loop, 3), Theme::loopOn());
+        p.drawLine(QPointF(loop, r.top()), QPointF(loop, r.bottom()), Theme::loopOn(), 1.5);
         // Its handle at the bottom, pointing into the loop.
         p.fillPolygon(QPolygonF({QPointF(loop, r.bottom() - kLoopHandle), QPointF(loop + 7, r.bottom() - kLoopHandle / 2),
                                  QPointF(loop, r.bottom())}),
-                      Theme::kLoopOn);
+                      Theme::loopOn());
     } else if (mode_ == kOneShot) {
         // Its fades: in from Start, out before End.
         const double perMs = waveform_.sampleRate() / 1000.0 * rate_;
@@ -530,18 +530,18 @@ void SampleView::paint(SgPainter& p) {
         p.drawPolyline(shape, dimLine, 1);
     }
     // Start and End: lines flagged at the top, pointing into what plays.
-    p.drawLine(QPointF(start, r.top()), QPointF(start, r.bottom()), Theme::kAccent, 1.5);
-    p.drawLine(QPointF(end, r.top()), QPointF(end, r.bottom()), Theme::kAccent, 1.5);
-    p.fillPolygon(flag(start, r.top(), true), Theme::kAccent);
-    p.fillPolygon(flag(end, r.top(), false), Theme::kAccent);
+    p.drawLine(QPointF(start, r.top()), QPointF(start, r.bottom()), Theme::accent(), 1.5);
+    p.drawLine(QPointF(end, r.top()), QPointF(end, r.bottom()), Theme::accent(), 1.5);
+    p.fillPolygon(flag(start, r.top(), true), Theme::accent());
+    p.fillPolygon(flag(end, r.top(), false), Theme::accent());
     p.setAntialiasing(false);
     p.restore();
     // What doesn't play, dimmed.
-    p.fillRect(QRectF(r.left(), r.top(), start - r.left(), r.height()), Theme::kOutsideClip);
-    p.fillRect(QRectF(end, r.top(), r.right() - end, r.height()), Theme::kOutsideClip);
+    p.fillRect(QRectF(r.left(), r.top(), start - r.left(), r.height()), Theme::outsideClip());
+    p.fillRect(QRectF(end, r.top(), r.right() - end, r.height()), Theme::outsideClip());
     if (playhead_ >= 0) {
         const double x = r.left() + playhead_ * r.width();
-        p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()), Theme::kPlayhead, 1);
+        p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()), Theme::playhead(), 1);
     }
     paintName(p, r, font);
 }
@@ -552,8 +552,8 @@ void SampleView::paintName(SgPainter& p, const QRectF& r, const QFont& font) con
     const QString text = SgPainter::elidedText(error_.isEmpty() ? name : QStringLiteral("Missing: ") + name, font,
                                                r.width() * 0.6, Qt::ElideMiddle);
     const QRectF box(r.left() + 9, r.top() + 1, SgPainter::textWidth(text, font) + 6, 13);
-    p.fillRect(box, QColor(Theme::kMeterBg.red(), Theme::kMeterBg.green(), Theme::kMeterBg.blue(), 190));
-    p.drawText(box, Qt::AlignCenter, text, error_.isEmpty() ? Theme::kTextDim : Theme::kRecordOn, font);
+    p.fillRect(box, QColor(Theme::meterBg().red(), Theme::meterBg().green(), Theme::meterBg().blue(), 190));
+    p.drawText(box, Qt::AlignCenter, text, error_.isEmpty() ? Theme::textDim() : Theme::recordOn(), font);
 }
 
 }  // namespace sub::ui

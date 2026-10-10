@@ -55,7 +55,7 @@ void GroupBands::paint(SgPainter& p) {
         const double left = std::max(1, row.depth * arrangement::kGroupIndent);
         const double right = row.depth * arrangement::kGroupIndent + arrangement::kGroupBand;
         p.fillRect(QRectF(left, top, right - left, bottom - top), QColor(group->color));
-        p.fillRect(QRectF(right - 1, top, 1, bottom - top), Theme::kBorder);  // its outline
+        p.fillRect(QRectF(right - 1, top, 1, bottom - top), Theme::border());  // its outline
     }
 }
 

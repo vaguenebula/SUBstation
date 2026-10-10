@@ -18,7 +18,7 @@ For what the user sees and does, read the [user guide](../guide/README.md); this
 | [ui/src/Ui.h](../../ui/src/Ui.h) | `setUpApplication()` (the style, the UI font, the palette, the window icon) and `setUpEngine(QQmlEngine&)` (the import path, the icon provider). |
 | [ui/src/app/](../../ui/src/app) | `AppTypes`: `registerSession()` makes the session the `Session` singleton and registers the application layer's types QML sees (uncreatable). |
 | [ui/src/sg/](../../ui/src/sg) | The scene-graph toolkit: `SgCanvas`, `SgPainter`, `SgTextureCache` ([below](#the-scene-graph-toolkit)). |
-| [ui/src/theme/](../../ui/src/theme) | `Theme` (every colour, the fonts, the metrics, the buttons' looks) and `Icons` (vector icons, and the `image://icons` provider). |
+| [ui/src/theme/](../../ui/src/theme) | `Theme` (every colour, the fonts, the metrics, the buttons' looks), `Palettes` (the themes' colours) and `Icons` (vector icons, and the `image://icons` provider). |
 | [ui/src/controls/](../../ui/src/controls) | `KnobItem`, `ValueBoxItem`, `Meter`, `OscilloscopeItem`, `DragCursor`; `Automation` (`automationState()`: a control's automation as its dot shows it, `""`, `"on"` or `"off"`; `AutomationTarget`: a parameter menu's Show, Delete and Re-Enable Automation). |
 | [ui/src/input/](../../ui/src/input) | What every view reads from input alike: `Modifiers.h` (`isPanModifier()`: Ctrl+Alt drags scroll; `hasShortcutModifier()`: Ctrl, Alt or Meta, so a key isn't typing; `heldModifiers()`: the modifiers once a key event is through), `DoubleClicks` (a double-click's second press, [below](#gotchas)), `GestureKey.h` (`newGestureKey()`: one gesture's undo merge key, [below](#how-the-ui-talks-to-the-rest)), `Shortcuts` (`keySequences()`: an `Action`'s or `Shortcut`'s shortcut as Qt Quick reads it, for the menus' shortcut text and `PluginEditorKeys`). Ctrl is the shortcut modifier: on macOS Qt reports Command as `Qt::ControlModifier`, so the same code means Command there. |
 | [ui/src/timeline/](../../ui/src/timeline) | `timeline::Timeline` (zoom, scroll, the adaptive grid), `gridLines()`, `labelStep()`, `drawGrid()`, `drawLoopRegion()`, `drawPlayhead()`: the arrangement's and the piano roll's time axis. |
@@ -31,7 +31,7 @@ For what the user sees and does, read the [user guide](../guide/README.md); this
 | [ui/qml/files/](../../ui/qml/files) | The File Manager panel (`FileManagerPanel.qml`): [app/session.md](../app/session.md#the-file-manager-and-hot-swaps-filemanager-hotswap). |
 | [ui/qml/Main.qml](../../ui/qml/Main.qml), [ui/qml/TitleBar.qml](../../ui/qml/TitleBar.qml), [ui/qml/InfoView.qml](../../ui/qml/InfoView.qml), [ui/qml/Hints.qml](../../ui/qml/Hints.qml) | The main window, its title bar and its info view, which says the tooltips ([below](#the-main-window)). |
 | [ui/qml/transport/](../../ui/qml/transport) | `TransportBar.qml`. |
-| [ui/qml/dialogs/](../../ui/qml/dialogs) | Preferences (`PreferencesDialog`, `AudioPage`, `MidiPage`, `PluginsPage`), `ExportDialog`, `RenderDialog`, `AboutDialog`, `UnsavedChangesDialog`, and what they share: `MessageBox`, `ChoiceBox`. |
+| [ui/qml/dialogs/](../../ui/qml/dialogs) | Preferences (`PreferencesDialog`, `AudioPage`, `MidiPage`, `PluginsPage`, `LookAndFeelPage`), `ExportDialog`, `RenderDialog`, `AboutDialog`, `UnsavedChangesDialog`, and what they share: `MessageBox`, `ChoiceBox`. |
 | [ui/qml/](../../ui/qml) (top level) | The shared controls: `Knob`, `ValueBox`, `Oscilloscope`, `RoleButton`, `ToggleButton`, `IconButton`, `Icon`, `ButtonBackground`, `ButtonContent`; `Placeholder`. |
 | [ui/style/](../../ui/style) | The style: `ApplicationWindow`, `Button`, `CheckBox`, `ComboBox`, `Dialog`, `DialogButtonBox`, `Frame`, `GroupBox`, `ItemDelegate`, `Label`, `Menu`, `MenuBar`, `MenuBarItem`, `MenuItem`, `MenuSeparator`, `Pane`, `Popup`, `ProgressBar`, `ScrollBar`, `ScrollIndicator`, `SplitView`, `TabBar`, `TabButton`, `TextField`, `ToolButton`, `ToolTip`; the Basic style for the rest. |
 
@@ -319,16 +319,51 @@ nodes made): the tests read it.
 
 ## Theme, style and icons
 
-[Theme](../../ui/src/theme/Theme.h) is the one source of every colour and font: `Theme::kLane` in C++,
-`Theme.lane` in QML (a `QML_SINGLETON`). Base colours (`kWindow`, `kPanel`, `kSurface`, `kBorder`, `kText`,
-`kTextDim`, `kAccent`, ...), the arrangement's (`kLane`, `kGridBar`, `kPlayhead`, `kInsertMarker`, `kSelection`,
-`kWaveform`, ...), the piano roll's (`kKeyWhite`, `kBlackKeyRow`, `kOutsideClip`, ...) and the controls'
-(`kActivatorOn`, `kSoloOn`, `kMeterLow`, `kScopeLine`, `kFrozen`, `kAutomationOn`, ...). Fonts: `uiFont(pt, bold)`
+[Theme](../../ui/src/theme/Theme.h) is the one source of every colour and font: `Theme::lane()` in C++,
+`Theme.lane` in QML (a `QML_SINGLETON`). Base colours (`window`, `panel`, `surface`, `border`, `text`, `textDim`,
+`accent`, ...), the arrangement's (`lane`, `gridBar`, `playhead`, `insertMarker`, `selection`, `waveform`, ...), the
+piano roll's (`keyWhite`, `blackKeyRow`, `outsideClip`, ...) and the controls' (`activatorOn`, `soloOn`, `meterLow`,
+`scopeLine`, `frozen`, `knob`, `scrollHandle`, `automationOn`, ...). Fonts: `uiFont(pt, bold)`
 (Segoe UI, 9 pt by default), `monoFont(pt)` (Consolas), and for QML `Theme.font`, `Theme.smallFont` (8 pt, the
 buttons with a role), `Theme.listFont` (10 pt: the browser's lists, as Qt Quick draws small text smaller than the
 widgets did at the same size) and `Theme.listHeadingFont` (8.5 pt bold, the sidebar's headings), `Theme.uiFont()`. Metrics: `radius` (3), `controlHeight` (28, the transport bar's boxes and
-buttons), `scrollBarWidth` (12), `iconSize` (14). `setUpApplication()` applies the font and a palette from these
-colours.
+buttons), `scrollBarWidth` (12), `iconSize` (14). `setUpApplication()` applies the font, the theme last chosen and
+a palette from its colours.
+
+### Themes
+
+The colours are the current theme's: a `Palette` each in [Palettes.cpp](../../ui/src/theme/Palettes.cpp), chosen in
+*Options › Preferences… › Look and Feel* ([below](#dialogs)). A theme is colours only: the fonts, the metrics and the
+layout are the same in all of them.
+
+| Theme | What it is |
+|---|---|
+| Default | SUBstation's own: dark greys, the orange accent (the Python UI's theme, value for value). |
+| Disableton | Ableton Live 12's default theme: `#363636` panels on a `#2a2a2a` desktop, `#1e1e1e` controls, `#b5b5b5` text, orange `#ffad56` for what is on, cyan `#03c3d5` for knobs and the start marker, the teal `#637e86` of a selected device. |
+| Flashbang | Light: white controls on light grey, dark text. |
+| Gay | Dark (purple-black), the rainbow spread over what lights up: red records, orange activators, a yellow playhead, green loops and play, cyan knobs and markers, blue solos, violet selections, a pink accent. |
+
+`Theme::apply(name)` makes a theme current (names are matched case-folded; an unknown one changes nothing);
+`Theme.name = ...` in QML (`setName()`) also keeps it in the settings (`ui/theme`), which `setUpApplication()` reads
+(`savedName()`: Default for none, or one that's gone). A new theme applies at once, without a restart:
+
+- **QML** follows the singleton's `changed` (every colour property's notify signal). A binding that calls a
+  function of the theme (`Theme.buttonStyle()`, `Theme.automationColor()`, `Icons.url()`) isn't told by the
+  function, so it reads `Theme.name` too (`RoleButton`, the style's `ToolButton`, `Icon`).
+- **C++ items** read the colours as they paint (`Theme::lane()` is the current theme's, never a copy), and
+  `apply()` polishes and repaints every item of every window. An item with a colour property of its own keeps it
+  invalid until set and falls back to the theme's as it paints (`KnobItem`: `knob()`; `EqTypeIcon`: `accent()`).
+  `paint()` reads the colours on the render thread while the GUI thread, which changes them, is blocked.
+- **The application's palette** (`Theme::qtPalette()`) is set again.
+- **Icons** without a colour of their own take the theme's (`text`, `textDim`, `recordOn`, `frozen`), and the
+  disabled variant its `textDisabled`; `Icons.url()` adds `theme=<name>` in any theme but Default, so QML's image
+  cache keeps each theme's pictures apart. The application's icon keeps the Default theme's colours.
+
+The device editors' displays (the EQ's and the Sidechain's graphs, the clash view) keep colours of their own, dark in
+every theme, as a screen on a device.
+
+A colour new to the look goes into `Palette` (a value in every theme: `test_ui_theme` checks that each has all of
+them) with a `Q_PROPERTY` and a static getter in `Theme`.
 
 Buttons are coloured by their **role**, as the old stylesheet's `QPushButton[role=...]` rules did:
 `Theme::buttonLook(role, hovered, pressed, checked, enabled)` (`Theme.buttonStyle(...)` in QML) works out the
@@ -344,9 +379,9 @@ Basic style. A style `Button` is a `RoleButton` that takes the focus, as a dialo
 asked for, so they stay sharp at any scale and pixel ratio: play, stop, record, metronome, loop, follow,
 re_enable_automation, lock_envelopes, headphones, folder, waveform, plugin, preset, plugin_window, sidechain,
 snowflake, save, link, infinity, expand, sliders, fold, search, app_icon. QML gets them from the image provider,
-`image://icons/<name>[?color=%23rrggbb][&state=on][&mode=disabled]` (`Icons.url()` builds it; `Icon { name; color;
+`image://icons/<name>[?color=%23rrggbb][&state=on][&mode=disabled][&theme=<name>]` (`Icons.url()` builds it; `Icon { name; color;
 checked; size }` wraps it): `state=on` picks the On picture of `lock_envelopes` (closed) and `fold` (pointing right:
-folded), `mode=disabled` draws it in `kTextDisabled`. C++ items draw them with `Icons::image()` on the GUI thread
+folded), `mode=disabled` draws it in `Theme::textDisabled()`. C++ items draw them with `Icons::image()` on the GUI thread
 and keep the image. Add an icon by adding its drawing to the table in [Icons.cpp](../../ui/src/theme/Icons.cpp).
 
 ## Shared controls
@@ -433,6 +468,8 @@ application-layer object that holds the logic. What the preferences mean to the 
     searched) and the user's own (red if missing); Add Folder… and Remove (only new files are read; a removed
     folder's plug-ins leave the browser); Rescan Plug-ins; the scan's status, its failures in the tooltip. See
     [app/plugin-scanner.md](../app/plugin-scanner.md).
+  - **Look and Feel** (`LookAndFeelPage` on the `Theme` singleton): the theme, a `ChoiceBox` of `Theme.names`
+    showing `Theme.name` and setting it ([Themes](#themes)).
 - **Export Audio** (`ExportDialog`): the range (`Session.exportRangeChoices()`: the arrangement, or the loop region
   while the loop is on and has a length) and the bit depth (`exportBitDepthChoices`: 16-bit, 24-bit, 32-bit float;
   24 at first); OK emits `exportChosen(range, bitDepth)` and the window goes on ([above](#files-and-unsaved-changes)).
@@ -534,10 +571,10 @@ offscreen platform renders Qt Quick in software, without the items' geometry); w
 |---|---|
 | [test_ui_mainwindow.cpp](../../tests/app/test_ui_mainwindow.cpp) | The layout and its look, every menu action calling the session, the shortcuts, checkable actions kept in step with the model, Open Recent, files with the unsaved-changes question, closing (a render running, unsaved changes), the title, the status line, warnings, Export Audio, the clip view covering the arrangement, Rename, `PluginEditorKeys`, the window state kept |
 | [test_ui_transport.cpp](../../tests/app/test_ui_transport.cpp) | Each control of the transport bar and what it shows, whoever changed it; Play and Record following the bridge; nothing taking the keyboard |
-| [test_ui_dialogs.cpp](../../tests/app/test_ui_dialogs.cpp) | Preferences' pages on their controllers, Export Audio's choices, the render progress (modal, label, bar, Cancel) while exporting and freezing, the message boxes |
+| [test_ui_dialogs.cpp](../../tests/app/test_ui_dialogs.cpp) | Preferences' pages on their controllers (Look and Feel's themes applied and kept), Export Audio's choices, the render progress (modal, label, bar, Cancel) while exporting and freezing, the message boxes |
 | [test_ui_controls.cpp](../../tests/app/test_ui_controls.cpp) | Knobs and value boxes dragged (one gesture key per drag), wheeled, double-clicked and typed into; the meter's fall and clip light; the oscilloscope's trigger and fade from a fake feed; buttons that never take the focus |
 | [test_ui_sg.cpp](../../tests/app/test_ui_sg.cpp) | `SgCanvas` and `SgPainter` rendered for real and checked pixel by pixel; the big-recording split; a benchmark of an arrangement's worth of rects |
-| [test_ui_theme.cpp](../../tests/app/test_ui_theme.cpp) | Every colour with its value, the button roles' looks, every icon (its colour, states, the disabled variant) and the image provider |
+| [test_ui_theme.cpp](../../tests/app/test_ui_theme.cpp) | Every colour with its value, the themes (each complete, applied and kept), the button roles' looks, every icon (its colour, states, the disabled variant) and the image provider |
 | [test_ui_gallery.cpp](../../tests/app/test_ui_gallery.cpp) | The look end to end: a gallery of the shared controls and a sample of what the views draw |
 | [test_session_keyboard.cpp](../../tests/app/test_session_keyboard.cpp) | The computer MIDI keyboard: notes and octaves, shortcuts and text inputs keeping their keys, modifiers, releasing held notes |
 | [test_session_renders.cpp](../../tests/app/test_session_renders.cpp), [test_session_files.cpp](../../tests/app/test_session_files.cpp) | The session's side: renders in the background and Cancel, closing while one runs, plug-ins loading after a project opens; files, recent projects, the preferences |

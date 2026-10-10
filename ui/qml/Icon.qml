@@ -18,5 +18,6 @@ Image {
     sourceSize: Qt.size(size, size)
     fillMode: Image.PreserveAspectFit
     smooth: true
-    source: name ? Icons.url(name, color, checked, !enabled) : ""
+    // (Theme.name, never empty: drawn again in a new theme's colours.)
+    source: name && Theme.name ? Icons.url(name, color, checked, !enabled) : ""
 }

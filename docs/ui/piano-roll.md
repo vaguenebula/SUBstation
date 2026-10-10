@@ -137,7 +137,7 @@ the playhead scrolled out of the grid would show over the keys and the browser.
   `gridLines`/`drawGrid` work as in the arrangement. Its grid level starts at 1, a little wider than the
   arrangement's (1/16 notes across a bar).
 - **The part each clip plays** is from its `offsetBeats` to its `windowEnd()` (`windows()`, in roll beats): lit, with
-  the rest dimmed (`kOutsideClip`), and notes outside their clip's drawn at half strength (a note plays if it starts
+  the rest dimmed (`Theme::outsideClip()`), and notes outside their clip's drawn at half strength (a note plays if it starts
   in the window). Notes outside it are kept: trimming a clip hides notes, never deletes them.
 - **Converting**: the playhead is `beat - origin()` while the arrangement plays inside a clip shown; the ruler's
   click goes back with `+ origin()` (`requestLocate()` → `locateRequested`). `startBeat()` (the start marker) is the
@@ -194,12 +194,12 @@ forgets it.
 
 [NoteGrid](../../ui/src/pianoroll/NoteGrid.h).
 
-**Painting.** Rows (black keys `kBlackKeyRow`, lines at B|C and E|F), the grid, the dimmed outside of the clips'
+**Painting.** Rows (black keys `Theme::blackKeyRow()`, lines at B|C and E|F), the grid, the dimmed outside of the clips'
 windows (with several, a line in the clip's track colour at each window's ends), the selected stretch's tint, then
-the notes: each in its clip's track colour (halfway to red, `Theme::kOutOfKey`, for a note out of the song's key:
-`PianoRoll::outOfKey()`; grey, `Theme::kDeactivatedClip`, for a deactivated one, as its velocity stem is), more opaque for louder notes (alpha from velocity) and lighter when selected (white
+the notes: each in its clip's track colour (halfway to red, `Theme::outOfKey()`, for a note out of the song's key:
+`PianoRoll::outOfKey()`; grey, `Theme::deactivatedClip()`, for a deactivated one, as its velocity stem is), more opaque for louder notes (alpha from velocity) and lighter when selected (white
 outline), with the note's name when it is at least 30 by 10 px. Then the rubber band, the start marker
-(`startBeat()`, a line in `kInsertMarker`) and the paste marker (`pasteBeat()`, dashed in `kPasteMarker`); the
+(`startBeat()`, a line in `Theme::insertMarker()`) and the paste marker (`pasteBeat()`, dashed in `Theme::pasteMarker()`); the
 playhead is the `RollPlayhead` over it.
 
 **Hit-testing.** `PianoRoll::noteRect(note)` (at least 3 px wide) and `noteAt(pos)` → `Hit{note, zone}` for the
@@ -269,7 +269,7 @@ plays each key in turn; releasing stops it.
 
 [PianoRuler](../../ui/src/pianoroll/PianoRuler.h) draws bar numbers in roll time, a bar in each clip's track colour
 under the part it plays, the start marker (a triangle at the top) and the paste marker (a tab at the bottom, in
-`Theme::kPasteMarker`, over the grid's dashed line). A click plays from the snapped beat (`requestLocate()`, converted to
+`Theme::pasteMarker()`, over the grid's dashed line). A click plays from the snapped beat (`requestLocate()`, converted to
 the timeline); a drag pans or zooms as the arrangement's ruler does (decided on its first 3 px).
 
 ### Velocity lane

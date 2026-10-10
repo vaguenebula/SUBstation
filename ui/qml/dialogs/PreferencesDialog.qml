@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import SUBstation
 
 // Options › Preferences… (Ctrl+,, or a click on the audio device's name in the
-// transport bar): the Audio, MIDI and Plug-ins pages, and Close. Changes apply
+// transport bar): the Audio, MIDI, Plug-ins and Look and Feel pages, and Close. Changes apply
 // at once (see AudioPage). The Audio page follows the device while the dialog
 // shows (Session.audioPreferences open() and close()).
 Dialog {
@@ -14,6 +14,7 @@ Dialog {
     readonly property alias audioPage: audioPage
     readonly property alias midiPage: midiPage
     readonly property alias pluginsPage: pluginsPage
+    readonly property alias lookAndFeelPage: lookAndFeelPage
 
     objectName: "preferencesDialog"
     title: qsTr("Preferences")
@@ -41,6 +42,7 @@ Dialog {
             TabButton { text: qsTr("Audio") }
             TabButton { text: qsTr("MIDI") }
             TabButton { text: qsTr("Plug-ins") }
+            TabButton { text: qsTr("Look and Feel") }
         }
 
         // QTabWidget's pane: a BORDER line round the page.
@@ -68,6 +70,9 @@ Dialog {
                 }
                 PluginsPage {
                     id: pluginsPage
+                }
+                LookAndFeelPage {
+                    id: lookAndFeelPage
                 }
             }
         }
