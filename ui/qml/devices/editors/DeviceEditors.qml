@@ -29,12 +29,22 @@ import QtQuick
 QtObject {
     // kind -> the editor's file, beside this one.
     readonly property var editors: ({
+        "amp": "AmpEditor.qml",
+        "chorus": "ChorusEditor.qml",
         "compressor": "CompressorEditor.qml",
         "delay": "DelayEditor.qml",
         "disperser": "DisperserEditor.qml",
         "eq": "EqEditor.qml",
+        "erosion": "ErosionEditor.qml",
+        "gate": "GateEditor.qml",
+        "limiter": "LimiterEditor.qml",
+        "multiband": "MultibandEditor.qml",
+        "phaser": "PhaserEditor.qml",
+        "reverb": "ReverbEditor.qml",
         "sampler": "SamplerEditor.qml",
-        "sidechain": "SidechainEditor.qml"
+        "saturator": "SaturatorEditor.qml",
+        "sidechain": "SidechainEditor.qml",
+        "spectral": "SpectralEditor.qml"
     })
 
     // The editor's component URL for built-in devices of `kind`, or "" when it has none of its own.

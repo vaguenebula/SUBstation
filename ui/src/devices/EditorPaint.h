@@ -2,8 +2,10 @@
 
 // Small drawing helpers the device editors' items share: QPainter habits of
 // the old editors that SgPainter has no call for (a colour at an alpha, dashed
-// lines, Bézier outlines), number formatting as Python's f-strings did it, and
-// the graphs' logarithmic axes (frequency, time) with their decade grid.
+// lines, Bézier outlines), number formatting as Python's f-strings did it, the
+// graphs' logarithmic axes (frequency, time) with their decade grid, and what
+// the dynamics and modulation editors animate with: meters with ballistics,
+// values easing towards a target per display tick, a glowing line.
 
 #include <QColor>
 #include <QPointF>
@@ -50,5 +52,64 @@ void drawDashedPolyline(SgPainter& painter, const std::vector<QPointF>& points, 
 // A cubic Bézier from `from`, flattened into `out` (from excluded).
 void appendCubic(std::vector<QPointF>& out, const QPointF& from, const QPointF& c1, const QPointF& c2,
                  const QPointF& to, int steps = 12);
+
+// --- Animation --------------------------------------------------------------------------------
+// Editors animate in refreshDisplays() (about 60 times a second, DisplayClock): they move these on
+// by the time since the last tick, then update(); paint() only reads them.
+
+// A meter's reading as the eye follows it: it rises at once, falls smoothly (`fallDbPerSecond`),
+// and its peak holds for `holdSeconds` before falling as fast. Levels in dB, floored at `floorDb`.
+struct MeterBallistics {
+    double level = -120.0;
+    double peak = -120.0;
+    double held = 0.0;  // seconds the peak has held
+
+    void update(double db, double dtSeconds, double fallDbPerSecond = 24.0, double holdSeconds = 1.0,
+                double floorDb = -120.0);
+    void reset(double floorDb = -120.0) {
+        level = peak = floorDb;
+        held = 0.0;
+    }
+};
+
+// A value easing towards its target: each step moves it `fraction` of the way (a one-pole at the
+// tick's rate), snapping once within `epsilon`. step() says whether it is still moving (an editor
+// keeps repainting until everything settles).
+struct Eased {
+    double value = 0.0;
+    double target = 0.0;
+
+    bool step(double fraction, double epsilon = 1e-4) {
+        if (value == target)
+            return false;
+        value += (target - value) * std::clamp(fraction, 0.0, 1.0);
+        if (std::abs(target - value) <= epsilon)
+            value = target;
+        return true;
+    }
+    void snap(double to) { value = target = to; }
+};
+
+// The fraction a one-pole of time constant `seconds` moves in `dtSeconds`: Eased::step's
+// argument for an easing that looks the same whatever the tick's rate.
+inline double easeFraction(double dtSeconds, double seconds) {
+    return seconds <= 0.0 ? 1.0 : 1.0 - std::exp(-dtSeconds / seconds);
+}
+
+// --- Meters and lines -------------------------------------------------------------------------
+
+// `db` on a vertical scale over `rect`: `ceilingDb` at the top, `floorDb` at the bottom (held there).
+double dbToY(double db, const QRectF& rect, double floorDb, double ceilingDb);
+
+// The house level meter, upright in `rect`: a dark well, the level filled green, turning yellow
+// above -12 dB and red above -3 dB (of the ceiling), faint lines every 12 dB, and the held peak as
+// a bright line (red once it reaches the ceiling).
+void drawLevelMeter(SgPainter& painter, const QRectF& rect, double levelDb, double peakDb, double floorDb = -60.0,
+                    double ceilingDb = 0.0);
+// A gain reduction meter: the reduction grows down from the top of `rect` in the accent colour,
+// `rangeDb` at the bottom, with faint lines every 6 dB.
+void drawReductionMeter(SgPainter& painter, const QRectF& rect, double reductionDb, double rangeDb = 24.0);
+// A line with a soft glow: two wider, fainter strokes of `color` under it.
+void drawGlowPolyline(SgPainter& painter, const std::vector<QPointF>& points, const QColor& color, double width = 1.5);
 
 }  // namespace sub::ui

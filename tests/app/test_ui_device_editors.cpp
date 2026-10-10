@@ -4,7 +4,9 @@
 // engine; driven with the mouse and the keyboard; the project and (rendering
 // offline) the engine checked. Also the shared parameter cell (DeviceParamKnob)
 // and its menu. With SUBSTATION_UI_SCREENSHOTS set to a folder, every editor
-// is saved there as a PNG, with something to show.
+// is saved there as a PNG, with something to show. The host window and what the
+// editors' tests share are in support/EditorHarness.h; the newer devices'
+// editors have files of their own (test_ui_device_editors_<kind>.cpp).
 
 #include <QDir>
 #include <QGuiApplication>
@@ -29,6 +31,7 @@
 #include <vector>
 
 #include "Engine.h"
+#include "EditorHarness.h"
 #include "TestSupport.h"
 #include "Ui.h"
 #include "analysis/SidechainFit.h"
@@ -41,6 +44,7 @@
 #include "devices/DeviceParam.h"
 #include "devices/DispersionGraph.h"
 #include "devices/DisplayClock.h"
+#include "devices/EditorPaint.h"
 #include "devices/EqGraph.h"
 #include "devices/EqView.h"
 #include "devices/FilterGraph.h"
@@ -65,51 +69,6 @@ using sub::app::test::kSampleRate;
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
-// The host's QML (at the end of the file: moc skips what follows a raw string).
-extern const char* const kHost;
-
-void save(const QImage& image, const QString& name) {
-    const QString folder = qEnvironmentVariable("SUBSTATION_UI_SCREENSHOTS");
-    if (folder.isEmpty())
-        return;
-    QDir().mkpath(folder);
-    QVERIFY(image.save(QDir(folder).filePath(QStringLiteral("device-editors-") + name)));
-}
-
-QPoint scenePoint(QQuickItem* item, QPointF at) { return item->mapToScene(at).toPoint(); }
-
-QPoint centerOf(QQuickItem* item) { return scenePoint(item, QPointF(item->width() / 2, item->height() / 2)); }
-
-// A move with the left button held, with modifiers (QTest's mouseMove has none).
-void dragTo(QQuickWindow* window, QPoint pos, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-    QMouseEvent event(QEvent::MouseMove, QPointF(pos), QPointF(window->mapToGlobal(pos)), Qt::NoButton,
-                      Qt::LeftButton, modifiers);
-    QGuiApplication::sendEvent(window, &event);
-}
-
-void wheel(QQuickWindow* window, QPoint pos, int angle, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-    QWheelEvent event(QPointF(pos), QPointF(window->mapToGlobal(pos)), QPoint(), QPoint(0, angle), Qt::NoButton,
-                      modifiers, Qt::NoScrollPhase, false);
-    QGuiApplication::sendEvent(window, &event);
-}
-
-std::vector<float> tone(double freq, int frames, double amplitude = 0.5) {
-    std::vector<float> samples(static_cast<size_t>(frames));
-    for (int i = 0; i < frames; ++i)
-        samples[size_t(i)] = float(amplitude * std::sin(2 * kPi * freq * i / kSampleRate));
-    return samples;
-}
-
-// Interleaved stereo of the same mono signal.
-std::vector<float> stereo(const std::vector<float>& mono) {
-    std::vector<float> both;
-    both.reserve(mono.size() * 2);
-    for (float s : mono) {
-        both.push_back(s);
-        both.push_back(s);
-    }
-    return both;
-}
 
 float peakOf(const std::vector<float>& samples, size_t from = 0, size_t stride = 1, size_t offset = 0) {
     float most = 0.f;
@@ -135,82 +94,8 @@ protected:
 
 }  // namespace
 
-class TestUiDeviceEditors : public QObject {
+class TestUiDeviceEditors : public QObject, public sub::app::test::EditorHarness {
     Q_OBJECT
-
-    std::unique_ptr<sub::Engine> engine_;
-    std::unique_ptr<Session> session_;
-    std::unique_ptr<QQmlEngine> qml_;
-    std::unique_ptr<QObject> root_;
-    QQuickWindow* window_ = nullptr;
-    sub::app::test::TempDir dir_;
-
-    Project* project() const { return session_->project(); }
-    ProjectEditor* editor() const { return session_->editor(); }
-    QUndoStack* undo() const { return session_->undoStack(); }
-    EngineBridge* bridge() const { return session_->bridge(); }
-
-    double param(const QString& trackId, const QString& deviceId, const QString& paramId, double otherwise = -999) {
-        const Device* device = project()->findDevice(trackId, deviceId);
-        return device && device->params.contains(paramId) ? device->params.value(paramId) : otherwise;
-    }
-
-    // The device's body in the device view: the tallest device's (two rows of knobs and their names,
-    // 6 px above and below them), as the host measures it.
-    int bodyHeight() const { return root_->property("deviceBodyHeight").toInt(); }
-
-    // Shows a device's editor (DeviceEditors's component for its kind), the body's size (the device
-    // view's by default); the editor.
-    QQuickItem* show(const QString& kind, const QString& trackId, const QString& deviceId, int height = 0) {
-        if (height <= 0) height = bodyHeight();
-        QVariant url;
-        QMetaObject::invokeMethod(root_.get(), "editorFor", Q_RETURN_ARG(QVariant, url), Q_ARG(QVariant, kind));
-        if (url.toString().isEmpty())
-            return nullptr;
-        QVariant item;
-        QMetaObject::invokeMethod(root_.get(), "show", Q_RETURN_ARG(QVariant, item), Q_ARG(QVariant, url),
-                                  Q_ARG(QVariant, trackId), Q_ARG(QVariant, deviceId), Q_ARG(QVariant, height));
-        auto* editor = qvariant_cast<QQuickItem*>(item);
-        if (!editor)
-            return nullptr;
-        fitted();
-        QTest::qWait(50);  // (laid out, painted)
-        return editor;
-    }
-
-    // Waits for the window to take the body's size (the X server resizes it later), so
-    // clicks land inside it.
-    bool fitted() {
-        return QTest::qWaitFor([this] {
-            return window_->width() == root_->property("bodyWidth").toInt() + 2
-                && window_->height() == root_->property("bodyHeight").toInt() + 2;
-        }, 3000);
-    }
-
-    // Every item under `root` (in the item tree) whose object name starts with `prefix`, in order.
-    static QList<QQuickItem*> itemsNamed(QQuickItem* root, const QString& prefix) {
-        QList<QQuickItem*> found;
-        for (QQuickItem* child : root->childItems()) {
-            if (child->objectName().startsWith(prefix))
-                found << child;
-            found += itemsNamed(child, prefix);
-        }
-        return found;
-    }
-
-    template <typename T = QQuickItem>
-    T* find(QQuickItem* in, const QString& name) {
-        for (QQuickItem* item : itemsNamed(in, name)) {
-            if (item->objectName() == name) {
-                if (auto* found = qobject_cast<T*>(item))
-                    return found;
-            }
-        }
-        qWarning() << "no" << name;
-        return nullptr;
-    }
-
-    QImage grab() { return window_->grabWindow(); }
 
     // The EQ's window of a device, if one is open (EqWindows).
     QQuickWindow* eqWindowOf(const QString& track, const QString& device) {
@@ -219,9 +104,6 @@ class TestUiDeviceEditors : public QObject {
                                   Q_ARG(QVariant, device));
         return qvariant_cast<QQuickWindow*>(window);
     }
-
-    // The displays' clock ticked: what the editors read from the engine's displays as the view refreshes.
-    void refreshDisplays() { Q_EMIT sub::ui::DisplayClock::instance()->tick(); }
 
     // A MIDI track whose instrument is a Sampler, its editor shown: (track, device, editor, its waveform).
     std::tuple<QString, QString, QQuickItem*, SampleView*> sampler() {
@@ -247,59 +129,19 @@ class TestUiDeviceEditors : public QObject {
             QByteArray(reinterpret_cast<const char*>(bytes.data()), qsizetype(bytes.size())));
     }
 
-    QString audioTrackWith(const std::vector<float>& mono, const QString& name, double seconds) {
-        const QString path = sub::app::test::writeWav(dir_.path(name + QStringLiteral(".wav")), stereo(mono), 2);
-        const ClipRefs refs = editor()->addClips(QString(), 0.0, {{path, seconds}});
-        return refs.isEmpty() ? QString() : refs.first().trackId;
-    }
-
 private Q_SLOTS:
     void initTestCase() {
-        if (QGuiApplication::platformName() == QLatin1String("offscreen") ||
-            QGuiApplication::platformName() == QLatin1String("minimal"))
+        if (!haveDisplay())
             QSKIP("needs a display: the offscreen platform renders Qt Quick in software, without this geometry");
-        sub::app::test::prepareApplication();
-        sub::ui::setUpApplication();
-        engine_ = std::make_unique<sub::Engine>();
-        engine_->setClipFadeMs(0);
-        Session::Options options;
-        options.scanner = QStringLiteral(SUBSTATION_SCANNER);
-        options.scanPlugins = false;
-        options.browserIndex = false;
-        session_ = std::make_unique<Session>(*engine_, options);
-        sub::ui::registerSession(session_.get());
         qmlRegisterType<ManyRects>("EditorsTest", 1, 0, "ManyRects");
-        qml_ = std::make_unique<QQmlEngine>();
-        sub::ui::setUpEngine(*qml_);
-        QQmlComponent component(qml_.get());
-        component.setData(kHost, QUrl(QStringLiteral("qrc:/test/Host.qml")));
-        root_.reset(component.create());
-        if (!root_)
-            qWarning() << component.errors();
-        QVERIFY(root_);
-        window_ = qobject_cast<QQuickWindow*>(root_.get());
-        QVERIFY(window_);
-        window_->setPosition(200, 200);
-        QVERIFY(QTest::qWaitForWindowExposed(window_));
-        window_->requestActivate();
-        QVERIFY(QTest::qWaitForWindowActive(window_));
+        startHost();
     }
 
-    void cleanupTestCase() {
-        root_.reset();
-        qml_.reset();
-        if (session_)
-            session_->shutdown();
-        session_.reset();
-        engine_.reset();
-    }
+    void cleanupTestCase() { stopHost(); }
 
     void init() {
-        QMetaObject::invokeMethod(root_.get(), "clear");
-        project()->clear();
-        undo()->clear();
+        clearHost();
         EqView::instance()->setPanel(false);  // (shared by every EQ: as the app starts)
-        QTest::mouseMove(window_, QPoint(1, 1));
     }
 
     // --- What the editors needed of SgPainter ---------------------------------------------------
@@ -1295,6 +1137,96 @@ private Q_SLOTS:
         QVERIFY(QMetaObject::invokeMethod(action, "trigger"));
     }
 
+    // --- What the editors share ---------------------------------------------------------------
+
+    void animationHelpers() {
+        // A meter rises at once and falls at its rate; its peak holds, then falls as fast.
+        MeterBallistics meter;
+        meter.update(-6.0, 1.0 / 60);
+        QCOMPARE(meter.level, -6.0);
+        QCOMPARE(meter.peak, -6.0);
+        meter.update(-60.0, 0.5, 24.0, 1.0);
+        QCOMPARE(meter.level, -18.0);
+        QCOMPARE(meter.peak, -6.0);  // held
+        meter.update(-60.0, 0.75, 24.0, 1.0);
+        QCOMPARE(meter.level, -36.0);
+        QCOMPARE(meter.peak, -24.0);  // past its hold: falling as fast
+        meter.update(-30.0, 1.0, 24.0, 1.0);
+        QCOMPARE(meter.level, -30.0);
+        QCOMPARE(meter.peak, -30.0);  // never below the level
+        meter.update(std::nan(""), 10.0);
+        QCOMPARE(meter.level, -120.0);
+
+        // An eased value moves a share of the way per step and settles exactly on its target.
+        Eased eased;
+        eased.target = 1.0;
+        QVERIFY(eased.step(0.5));
+        QCOMPARE(eased.value, 0.5);
+        int steps = 1;
+        while (eased.step(0.5)) ++steps;
+        QCOMPARE(eased.value, 1.0);
+        QVERIFY(steps < 20);
+        QVERIFY(std::abs(easeFraction(1.0 / 60, 0.1) - (1.0 - std::exp(-1.0 / 6))) < 1e-12);
+        QCOMPARE(dbToY(-30.0, QRectF(0, 10, 10, 60), -60.0, 0.0), 40.0);
+        QCOMPARE(dbToY(-100.0, QRectF(0, 10, 10, 60), -60.0, 0.0), 70.0);
+    }
+
+
+    void editorKnobAndParamMap() {
+        // DeviceParamMap makes a DeviceParam per id; EditorKnob shows one with its name and value, bound
+        // as every editor's knobs are (the value as it is now, set undoably).
+        const QString track = audioTrackWith(std::vector<float>(kSampleRate / 10, 0.f), QStringLiteral("quiet"), 0.1);
+        QVERIFY(!track.isEmpty());
+        const QString device = editor()->addDevice(track, QStringLiteral("compressor"));
+        QQmlComponent component(qml_.get());
+        component.setData("import QtQuick\nimport SUBstation\n"
+                          "Item {\n"
+                          "    id: root\n"
+                          "    property string trackId\n"
+                          "    property string deviceId\n"
+                          "    readonly property alias map: params\n"
+                          "    width: 120; height: 80\n"
+                          "    DeviceParamMap { id: params; trackId: root.trackId; deviceId: root.deviceId;"
+                          " ids: [\"threshold\", \"ratio\", \"nothing\"] }\n"
+                          "    EditorKnob { objectName: \"threshold\"; param: params.get(\"threshold\");"
+                          " title: \"Threshold\" }\n"
+                          "}\n",
+                          QUrl(QStringLiteral("qrc:/test/Shared.qml")));
+        std::unique_ptr<QObject> root(component.createWithInitialProperties(
+            {{QStringLiteral("trackId"), track}, {QStringLiteral("deviceId"), device}}));
+        if (!root)
+            qWarning() << component.errors();
+        QVERIFY(root);
+        auto* item = qobject_cast<QQuickItem*>(root.get());
+        item->setParentItem(window_->contentItem());
+        auto* map = qvariant_cast<QObject*>(item->property("map"));
+        QVERIFY(map);
+        QVariant ratio, nothing;
+        QMetaObject::invokeMethod(map, "get", Q_RETURN_ARG(QVariant, ratio), Q_ARG(QVariant, QStringLiteral("ratio")));
+        QMetaObject::invokeMethod(map, "get", Q_RETURN_ARG(QVariant, nothing),
+                                  Q_ARG(QVariant, QStringLiteral("nothing")));
+        auto* ratioParam = qvariant_cast<sub::ui::DeviceParam*>(ratio);
+        QVERIFY(ratioParam);
+        QCOMPARE(ratioParam->value(), 4.0);
+        QVERIFY(!qvariant_cast<sub::ui::DeviceParam*>(nothing) || !qvariant_cast<sub::ui::DeviceParam*>(nothing)->valid());
+
+        QQuickItem* cell = find(item, QStringLiteral("threshold"));
+        QVERIFY(cell);
+        auto* knob = qvariant_cast<QQuickItem*>(cell->property("knob"));
+        auto* dial = knob ? qvariant_cast<KnobItem*>(knob->property("knob")) : nullptr;
+        QVERIFY(dial);
+        QCOMPARE(dial->value(), -18.0);
+        editor()->setDeviceParam(track, device, QStringLiteral("threshold"), -30.0);
+        QCOMPARE(dial->value(), -30.0);
+        undo()->undo();
+        QCOMPARE(dial->value(), -18.0);
+        // Its readout is the parameter's text.
+        bool found = false;
+        for (QQuickItem* child : cell->childItems())
+            found = found || child->property("text").toString() == QStringLiteral("-18.0 dB");
+        QVERIFY(found);
+    }
+
     void deviceParamKnob() {
         const QString track = editor()->addAudioTrack();
         const QString device = editor()->addDevice(track, QStringLiteral("utility"));
@@ -1561,79 +1493,3 @@ private Q_SLOTS:
 
 QTEST_MAIN(TestUiDeviceEditors)
 #include "test_ui_device_editors.moc"
-
-namespace {
-const char* const kHost = R"QML(
-import QtQuick
-import SUBstation
-
-Window {
-    id: window
-
-    // The editor shown, the body of a device in the device view, in its frame's colours.
-    function show(url, trackId, deviceId, height) {
-        loader.setSource(url, { trackId: trackId, deviceId: deviceId })
-        window.bodyHeight = height
-        return loader.item
-    }
-    function clear() {
-        loader.sourceComponent = null
-        loader.source = ""
-    }
-    function editorFor(kind) {
-        return DeviceEditors.editorFor(kind)
-    }
-    function eqWindow(trackId, deviceId) {
-        return EqWindows.windowOf(trackId, deviceId)
-    }
-    // A parameter's cell, as the device view shows those of devices without an editor.
-    function showKnob(trackId, deviceId, paramId) {
-        loader.sourceComponent = knob
-        loader.item.trackId = trackId
-        loader.item.deviceId = deviceId
-        loader.item.paramId = paramId
-        window.bodyHeight = loader.item.implicitHeight + 8
-        return loader.item
-    }
-
-    Component {
-        id: knob
-        DeviceParamKnob {
-            x: 8
-            y: 4
-        }
-    }
-
-    // The body of the device view's tallest device: two rows of knobs (a hidden one measured),
-    // 14 px apart, 6 px above and below them (DevicePanel's deviceHeight, less the frame and title bar).
-    readonly property int deviceBodyHeight: 6 + 2 * probe.implicitHeight + 14 + 6
-    DeviceParamKnob {
-        id: probe
-        visible: false
-    }
-
-    // The body's size, which the window follows (as the X server resizes it: later).
-    property int bodyHeight: deviceBodyHeight
-    readonly property int bodyWidth: loader.item ? loader.item.implicitWidth : 198
-
-    width: bodyWidth + 2
-    height: bodyHeight + 2
-    visible: true
-    color: Theme.border
-
-    Rectangle {
-        anchors.fill: parent
-        anchors.margins: 1
-        color: Theme.panelAlt
-        radius: 3
-    }
-    Loader {
-        id: loader
-        x: 1
-        y: 1
-        width: window.bodyWidth
-        height: window.bodyHeight
-    }
-}
-)QML";
-}  // namespace

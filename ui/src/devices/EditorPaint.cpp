@@ -77,4 +77,81 @@ void appendCubic(std::vector<QPointF>& out, const QPointF& from, const QPointF& 
     }
 }
 
+void MeterBallistics::update(double db, double dtSeconds, double fallDbPerSecond, double holdSeconds,
+                             double floorDb) {
+    db = std::isfinite(db) ? std::max(db, floorDb) : floorDb;
+    level = db >= level ? db : std::max(db, level - fallDbPerSecond * dtSeconds);
+    if (db >= peak) {
+        peak = db;
+        held = 0.0;
+    } else {
+        held += dtSeconds;
+        if (held > holdSeconds)
+            peak = std::max({level, floorDb, peak - fallDbPerSecond * dtSeconds});
+    }
+    level = std::max(level, floorDb);
+}
+
+double dbToY(double db, const QRectF& rect, double floorDb, double ceilingDb) {
+    if (!std::isfinite(db))
+        db = db > 0 ? ceilingDb : floorDb;
+    const double fraction = (std::clamp(db, floorDb, ceilingDb) - floorDb) / (ceilingDb - floorDb);
+    return rect.bottom() - fraction * rect.height();
+}
+
+void drawLevelMeter(SgPainter& p, const QRectF& rect, double levelDb, double peakDb, double floorDb,
+                    double ceilingDb) {
+    p.fillRect(rect, Theme::kMeterBg);
+    const double top = dbToY(levelDb, rect, floorDb, ceilingDb);
+    if (top < rect.bottom()) {
+        // Each colour only where the level reaches it, so the scale reads the same at any level.
+        const double yellow = dbToY(ceilingDb - 12.0, rect, floorDb, ceilingDb);
+        const double red = dbToY(ceilingDb - 3.0, rect, floorDb, ceilingDb);
+        p.fillRect(QRectF(rect.left(), std::max(top, yellow), rect.width(), rect.bottom() - std::max(top, yellow)),
+                   Theme::kMeterLow);
+        if (top < yellow)
+            p.fillRect(QRectF(rect.left(), std::max(top, red), rect.width(), yellow - std::max(top, red)),
+                       Theme::kMeterMid);
+        if (top < red)
+            p.fillRect(QRectF(rect.left(), top, rect.width(), red - top), Theme::kMeterHigh);
+    }
+    for (double db = ceilingDb - 12.0; db > floorDb; db -= 12.0) {
+        const double y = dbToY(db, rect, floorDb, ceilingDb);
+        p.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y), withAlpha(Theme::kPanel, 160));
+    }
+    if (peakDb > floorDb) {
+        const double y = dbToY(peakDb, rect, floorDb, ceilingDb);
+        p.fillRect(QRectF(rect.left(), std::min(y, rect.bottom() - 1.5), rect.width(), 1.5),
+                   peakDb >= ceilingDb - 0.05 ? Theme::kMeterHigh : Theme::kText);
+    }
+}
+
+void drawReductionMeter(SgPainter& p, const QRectF& rect, double reductionDb, double rangeDb) {
+    p.fillRect(rect, Theme::kMeterBg);
+    const double depth = std::clamp(std::isfinite(reductionDb) ? reductionDb : 0.0, 0.0, rangeDb) / rangeDb;
+    if (depth > 0.0) {
+        QLinearGradient gradient(rect.topLeft(), rect.bottomLeft());
+        gradient.setColorAt(0, withAlpha(Theme::kAccent, 150));
+        gradient.setColorAt(1, Theme::kAccent);
+        p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), depth * rect.height()), gradient);
+    }
+    for (double db = 6.0; db < rangeDb; db += 6.0) {
+        const double y = rect.top() + db / rangeDb * rect.height();
+        p.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y), withAlpha(Theme::kPanel, 160));
+    }
+}
+
+void drawGlowPolyline(SgPainter& p, const std::vector<QPointF>& points, const QColor& color, double width) {
+    if (points.size() < 2)
+        return;
+    const bool antialiased = p.antialiasing();
+    p.setAntialiasing(true);
+    p.drawPolyline(points.data(), int(points.size()), withAlpha(color, color.alpha() * 28 / 255), width + 5.0,
+                   Qt::RoundCap);
+    p.drawPolyline(points.data(), int(points.size()), withAlpha(color, color.alpha() * 70 / 255), width + 2.0,
+                   Qt::RoundCap);
+    p.drawPolyline(points.data(), int(points.size()), color, width, Qt::RoundCap);
+    p.setAntialiasing(antialiased);
+}
+
 }  // namespace sub::ui
