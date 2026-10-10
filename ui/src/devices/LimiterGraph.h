@@ -11,17 +11,20 @@
 // the line to 3.5 dB over it, where it reaches the line); a badge names the
 // mode (and MAX while Maximize is on).
 //
-// Levels are drawn in the line's domain, where the device works (the
+// The history is drawn in the line's domain, where the device works (the
 // application layer's LimiterResponse.h, from the engine's own maths): the
 // input as the device hears it (after Gain; with Maximize the raw input), the
 // output moved by what Maximize adds (Output - Threshold), so the loudest output
-// meets the line. The device's seven displays (in_l, in_r, out_l, out_r, gr_a,
-// gr_b, clip: one value per 128 samples, in step) are read by absolute index
-// into rings, and the history is drawn from fixed bins of them (a column each),
-// scrolling smoothly at a steady speed whatever the bursts they arrive in: the
-// cursor (the index at the plot's right edge) moves on by the time since the
-// last tick and eases towards the newest value, kLagSeconds behind it. The
-// meters read what the cursor passes, so they move with the history's edge.
+// meets the line. The In meter is the history's input; the Out meter and its
+// figure are the output as it comes out, in dBFS, as the axis reads (without
+// Maximize the two are the same). The device's seven displays (in_l, in_r,
+// out_l, out_r, gr_a, gr_b, clip: one value per 128 samples, in step) are read
+// by absolute index into rings, and the history is drawn from fixed bins of
+// them (a column each), scrolling smoothly at a steady speed whatever the
+// bursts they arrive in: the cursor (the index at the plot's right edge) moves
+// on by the time since the last tick and eases towards the newest value,
+// kLagSeconds behind it. The meters read what the cursor passes, so they move
+// with the history's edge.
 //
 // Everything moves in advance() (from refreshDisplays(), about 60 times a
 // second, with the time since the last tick): the cursor, the meters'
@@ -91,20 +94,22 @@ public:
     Q_INVOKABLE double softBand() const { return soft_.value; }
     double badge() const { return badge_.value; }
     double glow() const { return glow_.value; }
+    double hover() const { return hover_.value; }  // the line lit by the mouse over it (0..1, eased)
     // The band's edges relative to the line (dB): where the knee starts and where it reaches the line.
     double softKneeDb() const { return softKneeDb_; }
     double softTopDb() const { return softTopDb_; }
     // The absolute display index drawn at the plot's right edge, and one past the newest value read.
-    Q_INVOKABLE double cursor() const { return cursor_; }
+    Q_INVOKABLE double historyCursor() const { return cursor_; }
     Q_INVOKABLE qint64 valuesRead() const { return end_; }
-    // The meters' readings (dB: In and Out on the level axis, in the line's domain; GR and the
+    // The meters' readings (dB on the level axis: In in the line's domain, Out in dBFS; GR and the
     // knee's share positive). Channel 0 is L (or M), 1 is R (or S).
     const MeterBallistics& meterIn(int c) const { return meterIn_[std::size_t(c & 1)]; }
     const MeterBallistics& meterOut(int c) const { return meterOut_[std::size_t(c & 1)]; }
     const MeterBallistics& meterGr(int c) const { return meterGr_[std::size_t(c & 1)]; }
     const MeterBallistics& meterClip() const { return meterClip_; }
-    // The figures it shows: the footer's gain reduction ("GR −3.2 dB"), then under the meters the
-    // In, GR and Out peaks over the last second (In in the line's domain, Out in dBFS).
+    // The figures it shows: the footer's gain reduction over the last half second ("GR −3.2 dB"), then
+    // under the meters the In, GR and Out peaks over the last second (In in the line's domain, GR as the
+    // footer's, Out in dBFS). The gain reduction includes Soft Clip's share, as the GR bars do.
     Q_INVOKABLE QStringList figures() const { return {grText_, inText_, grPeakText_, outText_}; }
     // How many times it asked to be painted (the tests check it rests when nothing moves).
     int updates() const { return updates_; }
@@ -138,9 +143,12 @@ private:
     QString lineParam() const;
     bool nearLine(const QPointF& pos) const;
     void endDrag();
+    void updateHover();
     void requestPaint();
     // The most of `stream` (and its pair) over [from, to) of what is kept, or `otherwise` without any.
     float most(int stream, int pair, qint64 from, qint64 to, float otherwise) const;
+    // The most of the output in dBFS over [from, to): channel 0, 1, or -1 both.
+    float mostDbfs(int channel, qint64 from, qint64 to) const;
     float ring(int stream, qint64 index) const { return rings_[std::size_t(stream)][std::size_t(index & (kRing - 1))]; }
     void rebuildHistory();
     void updateTexts();
@@ -158,7 +166,7 @@ private:
     // The displays: rings by absolute index, [begin_, end_) valid; per stream what has come but not
     // yet in every stream (so they stay in step).
     std::array<std::vector<float>, kStreams> rings_;
-    std::vector<float> outDbfs_;  // the output's peak (both channels) as it came, in dBFS: the Out readout
+    std::array<std::vector<float>, 2> outDbfs_;  // the output's peaks as they came, in dBFS: the Out meter and figure
     std::array<std::vector<float>, kStreams> pending_;
     std::array<qint64, kStreams> pendingStart_{};
     qint64 begin_ = 0, end_ = 0;
@@ -193,6 +201,10 @@ private:
     QString dragId_;   // "ceiling" or "threshold"
     double dragDb_ = 0.0;
     double lastY_ = 0.0;
+    // The hover: where the mouse last was over the graph, and whether the resize cursor is set.
+    QPointF hoverPos_;
+    bool hovering_ = false;
+    bool resizeCursor_ = false;
 };
 
 }  // namespace sub::ui

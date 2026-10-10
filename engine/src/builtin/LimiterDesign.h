@@ -33,9 +33,9 @@ inline constexpr float kTruePeakMargin = 0.99770006f;  // -0.02 dB: True Peak's 
 inline constexpr float kSoftKnee = 0.5f;    // -6.02 dB: where Soft Clip's knee starts (of the ceiling)
 inline constexpr int kMeterSamples = 128;   // audio per display value
 inline constexpr float kFloorDb = -90.f;    // the displays' floor
-inline constexpr double kAutoFastMs = 50.0;          // auto release: the fast stage's time constant
-inline constexpr double kAutoSlowAttackMs = 400.0;   // the slow stage building up under sustained limiting
-inline constexpr double kAutoSlowReleaseMs = 600.0;  // the slow stage letting go
+inline constexpr double kAutoFastMs = 50.0;     // auto release: its time constant after a short peak
+inline constexpr double kAutoSlowMs = 600.0;    // ... and while limiting goes on all the time
+inline constexpr double kAutoDensityMs = 200.0;  // how far back it looks for how much of the time it limited
 inline constexpr double kRampSeconds = 0.02;  // pre, post, link, routing, mode and Auto's glides
 inline constexpr float kMaxInput = 1e30f;     // input beyond it (and NaN) is taken as 0
 inline constexpr double kDipSeconds = 0.002;  // the fade out and in around a lookahead change
@@ -47,6 +47,17 @@ inline constexpr float kTinyDepth = 1e-9f;           // release states below it 
 inline int lookaheadSamples(int choice, double sampleRate) noexcept {
     const double ms = kLookaheadMs[std::clamp(choice, 0, 2)];
     return std::max(kDetectorDelay + 1, static_cast<int>(std::lround(ms * sampleRate / 1000.0)));
+}
+
+// Auto release's time constant (ms) for how much of the recent time the limiter
+// was limiting (0..1, a one-pole over kAutoDensityMs of whether it was): 50 ms
+// after a short peak, up to 600 ms while limiting goes on, by its square (a
+// passage has to be dense before it slows much). A slow release over sustained
+// limiting keeps the gain from following each cycle of a bass note (which
+// distorts it); a quick one after a lone peak lets the level come back at once.
+inline double autoReleaseMs(double density) noexcept {
+    const double d = std::clamp(density, 0.0, 1.0);
+    return kAutoFastMs + (kAutoSlowMs - kAutoFastMs) * d * d;
 }
 
 // How the device scales the signal around its line: `pre` before limiting,

@@ -1,7 +1,9 @@
 // The Limiter's editor (ui/qml/devices/editors/LimiterEditor.qml, ui/src/devices/LimiterGraph):
 // loaded as the device view loads it, over a real engine. It fits the view's height; every control is
-// bound to its parameter (undoably); dragging the line is one undo step; what the engine publishes as
-// it renders reaches the graph (levels, gain reduction, Soft Clip's share), which animates and then
+// bound to its parameter (undoably); during Gain and Output's crossfade only the one coming takes the
+// mouse; it opens showing the device as it is (nothing animating in); dragging the line is one undo
+// step, and the line's hover follows the line as it moves; what the engine publishes as it renders
+// reaches the graph (levels, gain reduction, Soft Clip's share, the figures), which animates and then
 // rests; the line and Soft Clip's band are the engine's own maths (LimiterResponse.h). With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there limiting, in Soft Clip, with Maximize.
 
@@ -247,9 +249,9 @@ private Q_SLOTS:
         QVERIFY(!find(view, QStringLiteral("gain"))->isVisible());
         QVERIFY(find(view, QStringLiteral("output"))->isVisible());
         QCOMPARE(paramOf(find(view, QStringLiteral("lineBox")))->paramId(), QStringLiteral("threshold"));
-        QCOMPARE(box(view, "lineBox")->text(), QStringLiteral("0.0 dB"));
+        QCOMPARE(box(view, "lineBox")->text(), QStringLiteral("-0.3 dB"));  // (at the ceiling's: nothing changes)
         QVERIFY(graph->maximize());
-        QCOMPARE(graph->lineDb(), 0.0);
+        QVERIFY(std::abs(graph->lineDb() + 0.3) < 1e-6);
         undo()->undo();
         QCOMPARE(value("maximize"), 0.0);
         QTest::qWait(200);
@@ -257,6 +259,24 @@ private Q_SLOTS:
         QVERIFY(!find(view, QStringLiteral("output"))->isVisible());
         QCOMPARE(paramOf(find(view, QStringLiteral("lineBox")))->paramId(), QStringLiteral("ceiling"));
         QVERIFY(std::abs(graph->lineDb() + 0.3) < 1e-6);
+
+        // Mid-crossfade, the knob fading in takes the press, not the one fading out over it: only the one
+        // coming is enabled.
+        click(view, "maximize");
+        QTest::qWait(200);
+        undo()->undo();
+        QVERIFY(find(view, QStringLiteral("gain"))->isEnabled());
+        QVERIFY(!find(view, QStringLiteral("output"))->isEnabled());
+        for (int i = 0; i < 200 && !find(view, QStringLiteral("gain"))->isVisible(); ++i)
+            QTest::qWait(2);  // (Gain shows from its first frame; Output, fading out, is still over it)
+        const QPoint dial = centerOf(knob(view, "gain"));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, dial);
+        dragTo(dial + QPoint(0, 30));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, dial + QPoint(0, 30));
+        QVERIFY2(value("gain") < -0.5, qPrintable(QString::number(value("gain"))));
+        QVERIFY(std::abs(value("output") + 0.3) < 1e-6);
+        undo()->undo();
+        QCOMPARE(value("gain"), 0.0);
 
         // Link's box: a drag is one undo step; double-click resets it.
         ValueBoxItem* link = box(view, "link");
@@ -351,9 +371,10 @@ private Q_SLOTS:
         QVERIFY(std::abs(value("ceiling") + 0.3) < 1e-6);
 
         // With Maximize the line is the Threshold: the same drag sets it and leaves the Ceiling.
+        editor()->setDeviceParam(track, device, QStringLiteral("threshold"), -3.0);
         editor()->setDeviceParam(track, device, QStringLiteral("maximize"), 1.0);
         settle(graph);  // (the line eases from the ceiling to the threshold)
-        QVERIFY(std::abs(graph->lineY() - graph->yOf(0.0)) < 1e-3);
+        QVERIFY(std::abs(graph->lineY() - graph->yOf(-3.0)) < 1e-3);
         steps = undo()->index();
         const QPoint top = scenePoint(graph, QPointF(x, graph->lineY()));
         QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, top);
@@ -364,7 +385,54 @@ private Q_SLOTS:
         QVERIFY(std::abs(value("ceiling") + 0.3) < 1e-6);
         QCOMPARE(undo()->index(), steps + 1);
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, scenePoint(graph, QPointF(x, graph->lineY())));
-        QCOMPARE(value("threshold"), 0.0);
+        QVERIFY(std::abs(value("threshold") + 0.3) < 1e-6);
+    }
+
+    void hoverFollowsTheLine() {
+        auto [track, device, view, graph] = limiter();
+        QVERIFY(view && graph);
+        editor()->setDeviceParam(track, device, QStringLiteral("ceiling"), -6.0);
+        settle(graph);
+        const double x = graph->plot().center().x();
+        // Over the line: it lights, and the cursor is for resizing.
+        QTest::mouseMove(window_, scenePoint(graph, QPointF(x, graph->lineY() + 20)));
+        QTest::mouseMove(window_, scenePoint(graph, QPointF(x, graph->lineY())));
+        QTest::qWait(30);  // (the window delivers hover as it updates)
+        settle(graph);
+        QVERIFY(graph->hover() > 0.99);
+        QCOMPARE(graph->cursor().shape(), Qt::SizeVerCursor);
+        // The line moves away from the still mouse (a double-click's reset, undo, automation): the hover
+        // and the cursor go with it.
+        QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, scenePoint(graph, QPointF(x, graph->lineY())));
+        QVERIFY(std::abs(param(track, device, QStringLiteral("ceiling")) + 0.3) < 1e-6);
+        settle(graph);
+        QVERIFY(graph->hover() < 0.01);
+        QVERIFY(graph->cursor().shape() != Qt::SizeVerCursor);
+        // And back under it.
+        undo()->undo();
+        settle(graph);
+        QVERIFY(graph->hover() > 0.99);
+        QCOMPARE(graph->cursor().shape(), Qt::SizeVerCursor);
+    }
+
+    void opensAsItIs() {
+        // A Limiter set up before its editor opens (another track was shown, or the set was reopened): it
+        // appears as it is, the line at its place and Soft Clip's band and badge in, nothing animating in.
+        const QString track = audioTrackWith(tone(1000.0, int(kSampleRate)), QStringLiteral("tone"), 1.0);
+        QVERIFY(!track.isEmpty());
+        const QString device = editor()->addDevice(track, QStringLiteral("limiter"));
+        editor()->setDeviceParam(track, device, QStringLiteral("ceiling"), -12.0);
+        editor()->setDeviceParam(track, device, QStringLiteral("mode"), 1.0);
+        QQuickItem* view = show(QStringLiteral("limiter"), track, device);
+        auto* graph = view ? find<LimiterGraph>(view, QStringLiteral("limiterGraph")) : nullptr;
+        QVERIFY(graph);
+        QCOMPARE(graph->lineDb(), -12.0);
+        QCOMPARE(graph->shownLineDb(), -12.0);
+        QCOMPARE(graph->softBand(), 1.0);
+        QCOMPARE(graph->badge(), 1.0);
+        const int updates = graph->updates();
+        settle(graph);
+        QVERIFY(graph->updates() - updates <= 1);  // (nothing to move: at most the first paint)
     }
 
     // --- The displays ------------------------------------------------------------------------
@@ -384,14 +452,14 @@ private Q_SLOTS:
         QVERIFY(graph->valuesRead() > 0);
         // The figures: the reduction over the last half second; In (after Gain), GR and Out peaks.
         QCOMPARE(graph->figures(),
-                 QStringList({QStringLiteral("GR −6.3 dB"), QStringLiteral("6.0"), QStringLiteral("6.3"),
+                 QStringList({QStringLiteral("GR −6.3 dB"), QStringLiteral("6.0"), QStringLiteral("-6.3"),
                               QStringLiteral("-0.3")}));
 
         // The history scrolls on; the meters read what the cursor passes, up at once. The line warms with
         // the gain reduction.
-        const double cursor = graph->cursor();
+        const double cursor = graph->historyCursor();
         graph->advance(1.0 / 60);
-        QVERIFY(graph->cursor() > cursor);
+        QVERIFY(graph->historyCursor() > cursor);
         QVERIFY2(std::abs(graph->meterIn(0).level - over) < 0.3, qPrintable(QString::number(graph->meterIn(0).level)));
         QVERIFY2(std::abs(graph->meterOut(0).peak + 0.3) < 0.1, qPrintable(QString::number(graph->meterOut(0).peak)));
         QVERIFY2(std::abs(graph->meterGr(0).level - (over + 0.3)) < 0.3 && graph->meterGr(1).level > 6.0,
@@ -400,9 +468,9 @@ private Q_SLOTS:
             graph->advance(1.0 / 60);
         QVERIFY2(graph->glow() > 0.5, qPrintable(QString::number(graph->glow())));
         // It stops at the newest value read (it never runs past the data: the history holds still).
-        for (int i = 0; i < 20 && graph->cursor() < double(graph->valuesRead()); ++i)
+        for (int i = 0; i < 20 && graph->historyCursor() < double(graph->valuesRead()); ++i)
             graph->advance(1.0 / 60);
-        QCOMPARE(graph->cursor(), double(graph->valuesRead()));
+        QCOMPARE(graph->historyCursor(), double(graph->valuesRead()));
         // With nothing passing, the meters fall at 24 dB a second, their peaks held.
         const MeterBallistics out = graph->meterOut(0);
         graph->advance(1.0 / 60);
@@ -411,7 +479,7 @@ private Q_SLOTS:
         QCOMPARE(graph->meterOut(0).peak, out.peak);
         for (int i = 0; i < 60; ++i)
             graph->advance(1.0 / 60);
-        QCOMPARE(graph->cursor(), double(graph->valuesRead()));
+        QCOMPARE(graph->historyCursor(), double(graph->valuesRead()));
 
         // Then everything settles, and it rests: no more repainting.
         settle(graph);
@@ -445,9 +513,15 @@ private Q_SLOTS:
         QVERIFY2(graph->reduction() < 0.05, qPrintable(QString::number(graph->reduction())));
         graph->advance(1.0 / 60);
         QVERIFY2(std::abs(graph->meterClip().level - 1.8) < 0.2, qPrintable(QString::number(graph->meterClip().level)));
+        // Both gain reduction figures include the knee's share, as the GR bars do: they agree.
+        for (int i = 0; i < 60; ++i)
+            graph->advance(1.0 / 60);
+        const QStringList soft = graph->figures();
+        QCOMPARE(soft.at(2), QStringLiteral("-1.8"));
+        QCOMPARE(soft.at(0), QStringLiteral("GR −1.8 dB"));
 
-        // With Maximize the output is drawn in the line's domain (Output - Threshold off): the input is
-        // the raw input, and the output's top meets the line.
+        // With Maximize the history's output is drawn in the line's domain (Output - Threshold off), so
+        // its top meets the line; the input is the raw input; the Out meter reads dBFS, as its axis.
         editor()->setDeviceParam(track, device, QStringLiteral("mode"), 0.0);
         editor()->setDeviceParam(track, device, QStringLiteral("maximize"), 1.0);
         editor()->setDeviceParam(track, device, QStringLiteral("threshold"), -12.0);
@@ -460,14 +534,17 @@ private Q_SLOTS:
         QVERIFY2(std::abs(graph->levelOut() + 1.0) < 0.1, qPrintable(QString::number(graph->levelOut())));
         QVERIFY2(std::abs(graph->reduction() - 5.98) < 0.3, qPrintable(QString::number(graph->reduction())));
         graph->advance(1.0 / 60);
-        QVERIFY2(std::abs(graph->meterOut(0).level + 12.0) < 0.1,
+        QVERIFY2(std::abs(graph->meterOut(0).level + 1.0) < 0.1,
                  qPrintable(QString::number(graph->meterOut(0).level)));
-        // The Out figure is in dBFS as the output came, whatever the line does after.
+        // The Out meter and figure are in dBFS as the output came, whatever the line does after.
+        for (int i = 0; i < 60; ++i)
+            graph->advance(1.0 / 60);
         const QString outFigure = graph->figures().at(3);
+        QVERIFY2(outFigure.toDouble() > -2.0, qPrintable(outFigure));  // (dBFS, not the line's -12)
         editor()->setDeviceParam(track, device, QStringLiteral("threshold"), -6.0);
         graph->advance(1.0 / 60);
         QCOMPARE(graph->figures().at(3), outFigure);
-        QVERIFY2(std::abs(graph->meterOut(0).peak + 12.0) < 0.1, qPrintable(QString::number(graph->meterOut(0).peak)));
+        QVERIFY2(std::abs(graph->meterOut(0).peak + 1.0) < 0.1, qPrintable(QString::number(graph->meterOut(0).peak)));
     }
 
     void modeAnimates() {

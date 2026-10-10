@@ -10,12 +10,13 @@
 //
 // - Everything runs in a normalized domain where the line (the ceiling, or the
 //   threshold with Maximize) is 1 (limiter::scales()): `pre` multiplies the
-//   input, `post` the output. Both glide in equal ratios (a straight line in
-//   dB) over 20 ms, so a moving ceiling leaves material below it untouched
-//   (pre · post stays the gain). `post` and Soft Clip's amount travel with
-//   their sample through a ring as long as the lookahead, so each sample is
-//   detected and scaled with the same values: a change is a smooth level change
-//   and never breaks the brick wall. Input that isn't finite is taken as 0.
+//   input, `post` the output. Both glide over 20 ms along a smooth curve in dB
+//   (its slope never jumps), the same for both, so a moving ceiling leaves
+//   material below it untouched (pre · post stays the gain). `post` and Soft
+//   Clip's amount travel with their sample through a ring as long as the
+//   lookahead, so each sample is detected and scaled with the same values: a
+//   change is a smooth level change and never breaks the brick wall. Input that
+//   isn't finite is taken as 0.
 // - The detector runs 12 samples behind the input (kDetectorDelay): it measures
 //   each sample's peak (Standard, Soft Clip), or its true peak (True Peak:
 //   seven interpolated points between samples, 24 taps each, the largest
@@ -23,14 +24,14 @@
 //   out the gain each of four pipelines (L, R, M, S) must have at most, with
 //   Link blending each channel's own requirement with the pair's shared one.
 // - A pipeline holds the deepest requirement over the attack's length S (a
-//   sliding maximum), releases it (Release's one-pole, or Auto: a fast stage
-//   for short peaks and a slow one that builds up while limiting goes on), and
-//   smooths it with two box filters whose lengths add up to S. The gain each
-//   sample gets is an average of values that are each at least what that sample
-//   needs, so it is never above it, and reaches it exactly when a lone peak
-//   comes out, after an S-curve S - 1 samples long. The boxes sum in fixed
-//   point (multiples of 2^-30, rounded up): exact, so they never drift and come
-//   back to a gain of exactly 1.
+//   sliding maximum), releases it (Release's one-pole, or Auto's: 50 ms after a
+//   lone peak, slowing to 600 ms as the limiting gets dense), and smooths it
+//   with two box filters whose lengths add up to S. The gain each sample gets
+//   is an average of values that are each at least what that sample needs, so
+//   it is never above it, and reaches it exactly when a lone peak comes out,
+//   after an S-curve S - 1 samples long. The boxes sum in fixed point
+//   (multiples of 2^-30, rounded up): exact, so they never drift and come back
+//   to a gain of exactly 1.
 // - The output is the delayed input times the routing's gains (both routings
 //   are always worked out, and Routing crossfades between them, each obeying
 //   the ceiling), through Soft Clip's knee, clamped to the line, times `post`.
@@ -71,13 +72,20 @@ constexpr int kCentre = kTaps / 2 - 1;  // where sample m is in the detector's w
 constexpr int kLanes = 8;               // the interpolator's points per sample worked out at once: k = 1..8
 constexpr float kDepthScale = static_cast<float>(limiter::kDepthScale);
 
-// A gain that glides to its target in equal ratios per sample (a straight line
-// in dB), over `length` samples. Two of them moving together keep their
-// product's own straight line: pre · post stays the gain while the ceiling
-// moves. Gains here are always above 0, so the ratio exists; one pow() per new
+// A gain that glides to its target over `length` samples along a cubic in dB:
+// from where it is, at the slope it has, to the target with no slope left (from
+// rest, a smoothstep). Its slope doesn't jump where a glide starts or ends, nor
+// when a new target further on comes mid-glide (only when one turns it back),
+// so a level change has no kink to click on; and it never overshoots. Two of
+// them moving together keep their product's own curve (the cubic is linear in
+// its ends and slopes): pre · post stays the gain while the ceiling moves.
+// Gains here are always above 0, so the logs exist. A cubic's second difference
+// is constant, so each sample is three products (the gain by its step's ratio,
+// that ratio by its own, and that by a constant); a log and three exp() per new
 // target (a render call at most).
 struct GainGlide {
-    double current = 1.0, ratio = 1.0;
+    double current = 1.0;
+    double step = 1.0, stepRatio = 1.0, stepRatio2 = 1.0;  // the next sample's ratio, its ratio, and that's
     float target = 1.f;
     int remaining = 0, length = 1;
 
@@ -87,16 +95,38 @@ struct GainGlide {
     }
     void snapTo(float value) noexcept {
         current = target = value;
+        step = stepRatio = stepRatio2 = 1.0;
         remaining = 0;
     }
     void setTarget(float value) noexcept {
         if (value == target) return;
         target = value;
+        // ln gain over the next n samples, from here: slope k + a2 k² + a3 k³, reaching the target
+        // with no slope at k = n. The slope it has is carried on as far as the curve stays between
+        // here and the target: up to 3 times the straight line's (Fritsch and Carlson's bound for a
+        // monotone cubic), none when the target is the other way. So a ceiling gliding is never
+        // above both its old and its new value.
+        const double n = length, rise = std::log(static_cast<double>(value) / current), line = rise / n;
+        const double slope = std::clamp(std::log(step), std::min(0.0, 3.0 * line), std::max(0.0, 3.0 * line));
+        const double a2 = (3.0 * rise - 2.0 * slope * n) / (n * n), a3 = (slope * n - 2.0 * rise) / (n * n * n);
+        // Its steps L(k + 1) - L(k): the first is slope + a2 + a3; their differences start at
+        // 2 a2 + 6 a3 and grow by 6 a3 each.
+        step = std::exp(slope + a2 + a3);
+        stepRatio = std::exp(2.0 * a2 + 6.0 * a3);
+        stepRatio2 = std::exp(6.0 * a3);
         remaining = length;
-        ratio = std::pow(static_cast<double>(value) / current, 1.0 / length);
     }
     float next() noexcept {
-        if (remaining > 0) current = --remaining == 0 ? static_cast<double>(target) : current * ratio;
+        if (remaining > 0) {
+            if (--remaining == 0) {
+                current = target;
+                step = stepRatio = stepRatio2 = 1.0;
+            } else {
+                current *= step;
+                step *= stepRatio;
+                stepRatio *= stepRatio2;
+            }
+        }
         return static_cast<float>(current);
     }
 };
@@ -157,6 +187,10 @@ struct History {
     }
 };
 
+// Auto release's coefficient by how dense the limiting has been (0..1), in steps
+// worked out by prepare() (limiter::autoReleaseMs), read in between linearly.
+constexpr int kAutoSteps = 32;
+
 // What every pipeline shares between reconfigurations (and the release, per render call).
 struct PipelineShape {
     int window = 1;        // S: the hold's window and the boxes' combined support
@@ -164,21 +198,30 @@ struct PipelineShape {
     int64_t bScaled = static_cast<int64_t>(limiter::kDepthScale);  // b · 2^30
     double inverse = 1.0 / limiter::kDepthScale;                   // 1 / (b · 2^30)
     size_t mask = 1;
-    float release = 0.f, fast = 0.f, slowAttack = 0.f, slowRelease = 0.f;  // one-pole coefficients
+    float release = 0.f, density = 0.f;           // one-pole coefficients: Release's; Auto's density's
+    std::array<float, kAutoSteps + 1> automatic{};  // Auto's release coefficient at densities k / kAutoSteps
+
+    float autoRelease(float dense) const noexcept {
+        const float at = dense * static_cast<float>(kAutoSteps);
+        const int k = std::min(static_cast<int>(at), kAutoSteps - 1);
+        const auto i = static_cast<size_t>(k);
+        return automatic[i] + (at - static_cast<float>(k)) * (automatic[i + 1] - automatic[i]);
+    }
 };
 
 // One channel's gain computer (L, R, M or S): the required depth (1 - gain) in, the gain out.
 struct Pipeline {
     std::array<dsp::SlidingMax, 3> holds;  // one per lookahead, each exactly its window long
     dsp::SlidingMax* hold = &holds[1];
-    float manual = 0.f, fast = 0.f, slow = 0.f;  // the release stages, on the depth
-    std::vector<int32_t> ring1, ring2;            // the boxes' last values, in units of 2^-30
+    float manual = 0.f, automatic = 0.f;  // the release stages, on the depth: Release's and Auto's
+    float density = 0.f;                  // how much of the recent time it was limiting (0..1)
+    std::vector<int32_t> ring1, ring2;    // the boxes' last values, in units of 2^-30
     int64_t sum1 = 0, sum2 = 0;
 
     void clear(int choice) noexcept {
         hold = &holds[static_cast<size_t>(choice)];
         hold->reset();
-        manual = fast = slow = 0.f;
+        manual = automatic = density = 0.f;
         std::fill(ring1.begin(), ring1.end(), 0);
         std::fill(ring2.begin(), ring2.end(), 0);
         sum1 = sum2 = 0;
@@ -187,14 +230,18 @@ struct Pipeline {
     float next(float required, const PipelineShape& s, float autoShare, size_t pos) noexcept {
         const float held = hold->push(required, s.window);
         manual = dsp::followPeak(manual, held, s.release);
-        fast = dsp::followPeak(fast, held, s.fast);
-        slow = held + (held > slow ? s.slowAttack : s.slowRelease) * (slow - held);
+        // Auto: released as slowly as the limiting has lately been dense. A lone peak's comes
+        // back in about 50 ms; under sustained limiting (a bass note: its crests limited one
+        // after another) it slows to 600 ms, so the gain doesn't follow each cycle.
+        const float limiting = held > 0.f ? 1.f : 0.f;
+        density = limiting + s.density * (density - limiting);
+        automatic = dsp::followPeak(automatic, held, s.autoRelease(density));
         if (manual < limiter::kTinyDepth) manual = 0.f;
-        if (fast < limiter::kTinyDepth) fast = 0.f;
-        if (slow < limiter::kTinyDepth) slow = 0.f;
-        // Every stage is at least `held`, so any blend of them is too (the max only
+        if (automatic < limiter::kTinyDepth) automatic = 0.f;
+        if (density < limiter::kTinyDepth) density = 0.f;
+        // Both stages are at least `held`, so any blend of them is too (the max only
         // guards against rounding an ulp under it).
-        const float depth = std::max(held, manual + autoShare * (std::max(fast, slow) - manual));
+        const float depth = std::max(held, manual + autoShare * (automatic - manual));
         // Rounded up to a multiple of 2^-30 (exact: depth · 2^30 is at most 2^30, and
         // a float that large is a whole number already).
         const float scaled = depth * kDepthScale;
@@ -296,9 +343,10 @@ public:
             for (int k = 0; k < kLanes - 1; ++k) rows_[t][k] = phases[static_cast<size_t>(k)][static_cast<size_t>(t)];
             rows_[t][kLanes - 1] = t == kCentre + 1 ? 1.f : 0.f;
         }
-        shape_.fast = coefficient(limiter::kAutoFastMs);
-        shape_.slowAttack = coefficient(limiter::kAutoSlowAttackMs);
-        shape_.slowRelease = coefficient(limiter::kAutoSlowReleaseMs);
+        shape_.density = coefficient(limiter::kAutoDensityMs);
+        for (int k = 0; k <= kAutoSteps; ++k)
+            shape_.automatic[static_cast<size_t>(k)] =
+                coefficient(limiter::autoReleaseMs(static_cast<double>(k) / kAutoSteps));
         dip_.length = std::max(1, static_cast<int>(std::lround(limiter::kDipSeconds * sampleRate)));
         pre_.reset(sampleRate, limiter::kRampSeconds);
         post_.reset(sampleRate, limiter::kRampSeconds);
@@ -538,10 +586,13 @@ private:
                 const float gL = rL + link * (rLR - rL);
                 const float gR = rR + link * (rLR - rR);
                 // M/S: |left| and |right| are at most |mid| + |side|, so their sum must fit;
-                // own gains share the room out, the linked gain turns both down alike.
+                // own gains share the room out. The linked gain turns both down alike, by what
+                // left and right need: |mid| + |side| is the louder of |left| and |right| at every
+                // moment, between samples too, so that is exactly enough (the sum of the mid's and
+                // the side's true peaks, found at different moments, would be more than enough).
                 float gM = 1.f, gS = 1.f;
-                if (const float sum = pM + pS; sum > target) {
-                    const float rMS = target / sum;
+                if (const float linked = std::max(pL, pR); pM + pS > target || linked > target) {
+                    const float rMS = linked > target ? target / linked : 1.f;
                     float ownM, ownS;
                     limiter::sharedCeiling(pM, pS, target, ownM, ownS);
                     gM = ownM + link * (rMS - ownM);
@@ -587,7 +638,7 @@ private:
                     yl = routing >= 1.f ? ml : yl + routing * (ml - yl);
                     yr = routing >= 1.f ? mr : yr + routing * (mr - yr);
                 }
-                const float outR = knead(yr) * post * dip;
+                const float outR = throughKnee(yr) * post * dip;
                 right[i] = outR;
                 inPeak_[1] = std::max(inPeak_[1], std::abs(dr));
                 outPeak_[1] = std::max(outPeak_[1], std::abs(outR));
@@ -595,7 +646,7 @@ private:
                 minGain_[2] = std::min(minGain_[2], gainM);
                 minGain_[3] = std::min(minGain_[3], gainS);
             }
-            const float outL = knead(yl) * post * dip;
+            const float outL = throughKnee(yl) * post * dip;
             left[i] = outL;
             inPeak_[0] = std::max(inPeak_[0], std::abs(dl));
             outPeak_[0] = std::max(outPeak_[0], std::abs(outL));
@@ -610,7 +661,7 @@ private:
 
     // A limited sample (normalized) through Soft Clip's knee and clamped to the
     // line, noting what the knee took off.
-    float knead(float y) noexcept {
+    float throughKnee(float y) noexcept {
         const float a = std::abs(y);
         if (a <= knee_.start) return y;
         if (knee_.k > 0.f) {
@@ -636,7 +687,7 @@ private:
                 {"routing", "Routing", "", 0.f, 1.f, 0.f, false, kRoutings},
                 {"link", "Link", "%", 0.f, 100.f, 100.f},
                 {"maximize", "Maximize", "", 0.f, 1.f, 0.f, false, offOnLabels()},
-                {"threshold", "Threshold", "dB", -24.f, 0.f, 0.f},
+                {"threshold", "Threshold", "dB", -24.f, 0.f, -0.3f},
                 {"output", "Output", "dB", -24.f, 0.f, -0.3f},
             };
             list[Lookahead].automatable = false;  // (it is the device's latency)

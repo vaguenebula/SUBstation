@@ -3,9 +3,10 @@
 // the ceiling in any mode, routing, link, lookahead or release, and in True
 // Peak mode no peak between samples either (by a reference meter of the
 // test's own); a lone peak is caught exactly, the gain falling only over the
-// attack before it; the manual release and Auto's two stages; True Peak's
+// attack before it; the manual release, and Auto's (quick after a short peak,
+// slow under sustained limiting, so bass isn't distorted); True Peak's
 // interpolator and its parabola; Soft Clip's knee; Maximize; L/R, M/S and Link;
-// every control changing without a click, the glides straight in dB;
+// every control changing without a click, the glides smooth in dB;
 // automation through the engine; reset and new rates; the extremes and input
 // that isn't finite; silence ringing out to exact zeros; one channel; latency
 // through the engine; and its displays.
@@ -38,6 +39,7 @@ constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlo
 constexpr int kL = 144;       // the lookahead at 48 kHz, 3 ms (the default): the latency
 constexpr int kD = limiter::kDetectorDelay;
 constexpr int kS = kL + 1 - kD;  // the attack's length: 133
+static_assert(kL - kD == kS - 1, "the gain starts falling S - 1 samples before a peak comes out");
 
 using Values = std::vector<std::pair<std::string, float>>;
 
@@ -220,9 +222,16 @@ double peak(const Samples& x, int64_t from = 0, int64_t to = std::numeric_limits
     return maxAbs(slice(x, from, to));
 }
 
+double maxAbsDiff(const Samples& x, const Samples& y) {
+    double most = 0.0;
+    for (size_t i = 0; i < std::min(x.size(), y.size()); ++i)
+        most = std::max(most, std::abs(static_cast<double>(x[i]) - static_cast<double>(y[i])));
+    return most;
+}
+
 // The output's post: the very float the device multiplies by at the end.
 float postOf(const Values& values) {
-    std::map<std::string, float> v = {{"gain", 0.f}, {"ceiling", -0.3f}, {"maximize", 0.f}, {"threshold", 0.f},
+    std::map<std::string, float> v = {{"gain", 0.f}, {"ceiling", -0.3f}, {"maximize", 0.f}, {"threshold", -0.3f},
                                       {"output", -0.3f}};
     for (const auto& [id, value] : values) v[id] = value;
     return limiter::scales(v["maximize"] >= 0.5f, v["gain"], v["ceiling"], v["threshold"], v["output"]).post;
@@ -376,7 +385,7 @@ TEST_CASE("the limiter is listed with its parameters") {
         {"", 0.f, 1.f, 0.f, false, {"L/R", "M/S"}},
         {"%", 0.f, 100.f, 100.f, false, {}},
         {"", 0.f, 1.f, 0.f, false, {"Off", "On"}},
-        {"dB", -24.f, 0.f, 0.f, false, {}},
+        {"dB", -24.f, 0.f, -0.3f, false, {}},
         {"dB", -24.f, 0.f, -0.3f, false, {}},
     };
     REQUIRE(info.params.size() == expected.size());
@@ -472,7 +481,6 @@ TEST_CASE("the limiter catches a lone peak exactly, the gain falling only over t
     CHECK_ALLCLOSE(slice(out, kL, m + kD), 0.25, 0.0, 1e-6);
     // The attack: S - 1 samples of S-curve before the peak comes out, never rising.
     CHECK(out[m + kD] < 0.25f);
-    CHECK_EQ(m + kL - (m + kD), int64_t{kS - 1});
     for (int64_t n = m + kD; n + 1 < m + kL; ++n) {
         INFO(std::to_string(n));
         CHECK(out[static_cast<size_t>(n + 1)] <= out[static_cast<size_t>(n)]);
@@ -495,7 +503,7 @@ TEST_CASE("the limiter's manual release brings the gain back with its time const
 
 TEST_CASE("the limiter's auto release is quick after a short peak and slow after sustained limiting") {
     const auto grAt = [](const std::vector<float>& gr, int64_t frame) { return gr[static_cast<size_t>(frame / 128)]; };
-    // (a) A 5 ms burst 12 dB over a quiet tone: back within 150 ms (the fast stage).
+    // (a) A 5 ms burst 12 dB over a quiet tone: back within 150 ms (50 ms after a lone peak).
     {
         Samples in = tone(1000.0, 1.0, 0.05);
         const Samples burst = tone(1000.0, 1.0, 4.0);
@@ -510,7 +518,7 @@ TEST_CASE("the limiter's auto release is quick after a short peak and slow after
         CHECK(after < 0.5f);
         CHECK(after > 0.1f);
     }
-    // (b) Two seconds of limiting by 6 dB: Auto's slow stage holds the gain down for longer.
+    // (b) Two seconds of limiting by 6 dB: the gain comes back slowly after it (up to 600 ms).
     Samples in = tone(1000.0, 2.0, 2.0);
     in.resize(static_cast<size_t>(6 * kSampleRate), 0.f);
     const int64_t out = 2 * kSampleRate + kL;
@@ -525,6 +533,34 @@ TEST_CASE("the limiter's auto release is quick after a short peak and slow after
     Limiter manual({{"auto_release", 0.f}, {"release", 100.f}});
     manual.play(in, in);
     CHECK(grAt(manual.display("gr_a"), out + 600 * 48) < 0.5f);
+}
+
+TEST_CASE("the limiter's auto release doesn't distort a sustained bass note") {
+    // A low sine 6 dB over: its crests are limited one after another, and a release quick enough to
+    // follow each cycle modulates the gain at twice its frequency (distortion). Auto slows down under
+    // such sustained limiting: no worse than the default manual 300 ms, and far cleaner than 50 ms
+    // (what Auto is after a lone peak).
+    const auto distortion = [](const Samples& x, double freq) {
+        constexpr int64_t kFrom = 2 * kSampleRate, kLength = kSampleRate;  // (whole cycles, after it settles)
+        double harmonics = 0.0;
+        for (int h = 2; h <= 24; ++h) harmonics += std::pow(levelAt(x, h * freq, kFrom, kLength), 2.0);
+        return std::sqrt(harmonics) / levelAt(x, freq, kFrom, kLength);
+    };
+    for (const double freq : {30.0, 50.0}) {
+        const Samples in = tone(freq, 3.0, 2.0);
+        const auto thd = [&](const Values& values) {
+            Values all = values;
+            all.emplace_back("ceiling", 0.f);
+            Limiter l(all);
+            return distortion(l.play(in), freq);
+        };
+        const double automatic = thd({}), slow = thd({{"auto_release", 0.f}, {"release", 300.f}}),
+                     quick = thd({{"auto_release", 0.f}, {"release", 50.f}});
+        INFO(std::to_string(freq) + " Hz: THD with Auto " + std::to_string(100 * automatic) + " %, manual 300 ms " +
+             std::to_string(100 * slow) + " %, 50 ms " + std::to_string(100 * quick) + " %");
+        CHECK(automatic <= slow);
+        CHECK(automatic < 0.25 * quick);
+    }
 }
 
 TEST_CASE("the limiter's True Peak mode lets no peak between samples over the ceiling") {
@@ -703,6 +739,9 @@ TEST_CASE("the limiter's Maximize turns the gain into Output - Threshold") {
     Limiter standard({{"gain", 17.f}, {"ceiling", -1.f}});
     const auto [same, unused2] = standard.play(in, in);
     CHECK_ALLCLOSE(out, same, 1e-5, 1e-9);
+    // At its defaults (Threshold and Output at the Ceiling's -0.3 dB) switching it on changes nothing.
+    Limiter off, on({{"maximize", 1.f}});
+    CHECK_ARRAY_EQUAL(on.play(in), off.play(in));
 }
 
 TEST_CASE("the limiter's L/R, M/S and Link") {
@@ -749,13 +788,26 @@ TEST_CASE("the limiter's L/R, M/S and Link") {
         CHECK(maxOfValues(l.display("gr_a"), 4) > 3.f);
         CHECK(std::max(peak(a), peak(b)) <= 1.0);
     }
-    // Linked, M/S is L/R linked: |left| and |right| at most |mid| + |side|, both turned down alike.
-    for (const auto& [l1, r1] : {std::pair{left, right}, std::pair{loud, quiet}}) {
-        Limiter ms(values(100.f, 1.f)), lr(values(100.f, 0.f));
-        const auto [a, b] = ms.play(l1, r1);
-        const auto [c, d] = lr.play(l1, r1);
-        CHECK_ALLCLOSE(a, c, 1e-5, 1e-7);
-        CHECK_ALLCLOSE(b, d, 1e-5, 1e-7);
+    // Linked, M/S is L/R linked: |mid| + |side| is the louder of |left| and |right| at every moment,
+    // between samples too, so both are turned down alike by what left and right need. In True Peak as
+    // well: there the mid's and the side's true peaks come at different moments, and their sum would
+    // limit more than needed.
+    const Samples wideLeft = lowpassNoise(kSampleRate / 2, 11, 0.3, 16000.0),
+                  wideRight = lowpassNoise(kSampleRate / 2, 12, 0.3, 16000.0);
+    for (const float mode : {0.f, 2.f}) {
+        for (const auto& [l1, r1] : {std::pair{left, right}, std::pair{loud, quiet}, std::pair{wideLeft, wideRight}}) {
+            INFO("mode " + std::to_string(mode));
+            Values ms = values(100.f, 1.f), lr = values(100.f, 0.f);
+            for (Values* v : {&ms, &lr}) {
+                v->emplace_back("mode", mode);
+                v->emplace_back("gain", 9.f);
+            }
+            Limiter a1(ms), a2(lr);
+            const auto [a, b] = a1.play(l1, r1);
+            const auto [c, d] = a2.play(l1, r1);
+            CHECK_ALLCLOSE(a, c, 1e-5, 1e-7);
+            CHECK_ALLCLOSE(b, d, 1e-5, 1e-7);
+        }
     }
 }
 
@@ -763,37 +815,49 @@ TEST_CASE("changing any of the limiter's controls is click-free") {
     // A 200 Hz tone 6 dB into the limiter (L/R differ where it matters), one change by
     // automation at frame 24000 each; its clickiness around it against the steady renders'.
     const Samples a = tone(200.0, 0.75, 2.0), b = tone(300.0, 0.75, 1.0, 0.0);
+    // For the release's controls: the tone falling 12 dB (a 10 ms fade, 50 ms before the change), so
+    // the gain is coming back when they change (on a steady tone every release gives the same).
+    Samples falling = a;
+    for (size_t i = 0; i < falling.size(); ++i) {
+        const double t = std::clamp((static_cast<double>(i) - 21120.0) / 480.0, 0.0, 1.0);
+        falling[i] *= static_cast<float>(1.0 - 0.75 * t * t * (3.0 - 2.0 * t));
+    }
     struct Case {
         Values base;
         std::string id;
         float to;
-        bool wide = false;  // left and right differ
+        bool wide = false;      // left and right differ
+        bool released = false;  // the falling tone
     };
     const std::vector<Case> cases = {
-        {{}, "gain", 6.f},
-        {{}, "ceiling", -6.f},
+        {{}, "gain", 6.f, true},
+        {{}, "ceiling", -6.f, true},
         {{}, "link", 0.f, true},
         {{{"mode", 0.f}}, "mode", 1.f},
         {{{"mode", 1.f}}, "mode", 2.f},
         {{{"mode", 2.f}}, "mode", 0.f},
-        {{}, "routing", 1.f, true},
+        {{{"link", 0.f}}, "routing", 1.f, true},
         {{{"link", 50.f}}, "routing", 1.f, true},
-        {{{"threshold", -6.f}, {"output", -1.f}}, "maximize", 1.f},
-        {{}, "auto_release", 0.f},
-        {{{"auto_release", 0.f}}, "release", 1.f},
-        {{{"maximize", 1.f}, {"threshold", -6.f}, {"output", -1.f}}, "threshold", -12.f},
-        {{{"maximize", 1.f}, {"threshold", -6.f}, {"output", -1.f}}, "output", -3.f},
+        {{{"threshold", -6.f}, {"output", -1.f}}, "maximize", 1.f, true},
+        {{}, "auto_release", 0.f, false, true},
+        {{{"auto_release", 0.f}}, "auto_release", 1.f, false, true},
+        {{{"auto_release", 0.f}}, "release", 1.f, false, true},
+        {{{"maximize", 1.f}, {"threshold", -6.f}, {"output", -1.f}}, "threshold", -12.f, true},
+        {{{"maximize", 1.f}, {"threshold", -6.f}, {"output", -1.f}}, "output", -3.f, true},
     };
     constexpr int64_t kAt = 24000, kFrom = 22000, kTo = 30000;
     for (const Case& c : cases) {
-        INFO(c.id + " to " + std::to_string(c.to) + (c.wide ? " (wide)" : ""));
-        const Samples& right = c.wide ? b : a;
+        INFO(c.id + " to " + std::to_string(c.to) + (c.wide ? " (wide)" : "") + (c.released ? " (falling)" : ""));
+        const Samples& left = c.released ? falling : a;
+        const Samples& right = c.wide ? b : left;
         Values after = c.base;
         after.emplace_back(c.id, c.to);
         Limiter before(c.base), steady(after), changing(c.base);
-        const auto [b0, b1] = before.play(a, right);
-        const auto [s0, s1] = steady.play(a, right);
-        const auto [o0, o1] = changing.play(a, right, {{kAt, c.id, c.to}});
+        const auto [b0, b1] = before.play(left, right);
+        const auto [s0, s1] = steady.play(left, right);
+        const auto [o0, o1] = changing.play(left, right, {{kAt, c.id, c.to}});
+        // (the change must change something: a case that can't is no test)
+        CHECK(std::max(maxAbsDiff(o0, b0), maxAbsDiff(o1, b1)) > 1e-4);
         const double bound = 3.0 * std::max({clickiness(b0, kFrom, kTo), clickiness(b1, kFrom, kTo),
                                              clickiness(s0, kFrom, kTo), clickiness(s1, kFrom, kTo)}) + 1e-3;
         const double measured = std::max(clickiness(o0, kFrom, kTo), clickiness(o1, kFrom, kTo));
@@ -806,6 +870,21 @@ TEST_CASE("changing any of the limiter's controls is click-free") {
             for (size_t i = kAt; i < stepped.size(); ++i) stepped[i] *= 0.5f;
             CHECK(clickiness(stepped, kFrom, kTo) > 10.0 * bound);
         }
+    }
+
+    // Auto's switch is a 20 ms blend from one release to the other (the boxes alone would make any
+    // switch a 3 ms S-curve, click-free but sudden): a little of the way 5 ms in, all the way after.
+    {
+        Limiter automatic, manual({{"auto_release", 0.f}}), switching;
+        const Samples x = automatic.play(falling), y = manual.play(falling);
+        const Samples z = switching.play(falling, {{kAt, "auto_release", 0.f}});
+        constexpr size_t kCrest = 24324;  // (an output crest 5 ms after the change: they are 120 frames apart)
+        const double share = (z[kCrest] - x[kCrest]) / (y[kCrest] - x[kCrest]);
+        INFO("the way to manual, 5 ms in: " + std::to_string(share));
+        CHECK(std::abs(y[kCrest] - x[kCrest]) > 0.005);
+        CHECK(share > 0.05);
+        CHECK(share < 0.5);
+        CHECK_ARRAY_EQUAL(slice(z, kAt + 960 + kS), slice(y, kAt + 960 + kS));
     }
 
     // Lookahead, between blocks: a dip of a few milliseconds, never a click or an overshoot.
@@ -837,18 +916,19 @@ TEST_CASE("changing any of the limiter's controls is click-free") {
     CHECK_ALLCLOSE(slice(out, kSwitch + 2400), slice(steady6, kSwitch + 2400), 1e-5, 1e-7);
 }
 
-TEST_CASE("the limiter's glides are straight in dB, and a moving ceiling leaves quiet material alone") {
+TEST_CASE("the limiter's glides are smooth in dB, and a moving ceiling leaves quiet material alone") {
     const Samples in = tone(1000.0, 0.75, 0.1);  // -20 dBFS
     {
         Limiter l;
         const auto [out, unused] = l.play(in, in, {{24000, "gain", 6.f}});
-        // Each cycle's peak (48 samples) on the line from -20 to -14 dB over the 960 samples after it comes out.
+        // Each cycle's peak (48 samples) on the smoothstep from -20 to -14 dB (in dB: no kink where it
+        // starts or stops) over the 960 samples after it comes out.
         for (int64_t cycle = 0; cycle < 24; ++cycle) {
             const int64_t start = 24000 + kL + 48 * cycle;
             const size_t at = static_cast<size_t>(start) + argmax(slice(out, start, start + 48));
             const double t = std::clamp(static_cast<double>(static_cast<int64_t>(at) - 24000 - kL) / 960.0, 0.0, 1.0);
             INFO("cycle " + std::to_string(cycle));
-            CHECK_APPROX_TOL(db(std::abs(out[at])), -20.0 + 6.0 * t, 0.0, 0.05);
+            CHECK_APPROX_TOL(db(std::abs(out[at])), -20.0 + 6.0 * t * t * (3.0 - 2.0 * t), 0.0, 0.05);
         }
         CHECK_APPROX_TOL(db(peak(out, 24000 + kL + 960, 30000)), -20.0 + 6.0, 0.0, 0.01);
     }
@@ -959,7 +1039,7 @@ TEST_CASE("the limiter stays finite and under the ceiling at the extremes") {
         CHECK(allFinite(a) && allFinite(b));
         CHECK_EQ(a[1000 + kL], 0.f);
         CHECK_EQ(a[2000 + kL], 0.f);
-        if (mode == 0.f) CHECK_ALLCLOSE(a, want, 1e-6, 1e-9);
+        CHECK_ALLCLOSE(a, want, 1e-6, 1e-9);
         CHECK(peak(a, 3000 + kL) > 0.49);
     }
 }

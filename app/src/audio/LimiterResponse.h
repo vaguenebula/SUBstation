@@ -26,4 +26,9 @@ double limiterSoftTopDb();
 // Soft Clip's curve: a level in dB relative to the line, the level that comes out.
 double limiterSoftClipDb(double inDb);
 
+// The device's displays: how many samples each value covers (128), and the level it publishes for
+// silence (-90 dB).
+int limiterMeterSamples();
+double limiterFloorDb();
+
 }  // namespace sub::app

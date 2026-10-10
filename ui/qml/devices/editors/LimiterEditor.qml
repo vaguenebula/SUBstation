@@ -34,7 +34,8 @@ Item {
               "threshold", "output"]
     }
 
-    // Gain, or with Maximize the Output (the two crossfade), over Maximize (at the bottom, level with the
+    // Gain, or with Maximize the Output (the two crossfade; only the one fading in takes the mouse, so a
+    // press mid-fade never turns the one going away), over Maximize (at the bottom, level with the
     // display's).
     Item {
         id: gainColumn
@@ -59,6 +60,7 @@ Item {
                 tooltip: qsTr("Gain: boosts or cuts the input before limiting. Turn it up to push the sound into the ceiling.")
                 opacity: editor.maximizeOn ? 0 : 1  // (EditorKnob's own Behavior fades it)
                 visible: opacity > 0
+                enabled: !editor.maximizeOn  // (its opacity is set here, so it doesn't dim)
             }
             EditorKnob {
                 objectName: "output"
@@ -68,6 +70,7 @@ Item {
                 tooltip: qsTr("Output: where the loudest peaks come out with Maximize on (its ceiling).")
                 opacity: editor.maximizeOn ? 1 : 0
                 visible: opacity > 0
+                enabled: editor.maximizeOn
             }
         }
         ParamButton {

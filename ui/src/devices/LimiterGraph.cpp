@@ -18,8 +18,7 @@ namespace sub::ui {
 
 namespace {
 
-constexpr double kDisplayFloorDb = -90.0;  // what the device publishes for silence
-constexpr int kMeterSamples = 128;         // audio per display value (the device's)
+const double kDisplayFloorDb = sub::app::limiterFloorDb();  // what the device publishes for silence
 
 // Time constants (seconds) of what eases, and the meters' ballistics.
 constexpr double kScrollEase = 0.12;   // the cursor catching up with the newest values
@@ -61,7 +60,8 @@ LimiterGraph::LimiterGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     setAcceptHoverEvents(true);
     for (auto& ring : rings_)
         ring.assign(kRing, 0.0f);
-    outDbfs_.assign(kRing, float(kDisplayFloorDb));
+    for (auto& ring : outDbfs_)
+        ring.assign(kRing, float(kDisplayFloorDb));
     for (int c = 0; c < 2; ++c) {
         meterIn_[std::size_t(c)].reset(kFloorDb);
         meterOut_[std::size_t(c)].reset(kFloorDb);
@@ -86,7 +86,7 @@ double LimiterGraph::grY(double reductionDb) const {
     return r.top() + gr / kGrRangeDb * r.height();
 }
 
-double LimiterGraph::valuesPerSecond() const { return sampleRate() / kMeterSamples; }
+double LimiterGraph::valuesPerSecond() const { return sampleRate() / sub::app::limiterMeterSamples(); }
 
 double LimiterGraph::valuesPerColumn() const { return valuesPerSecond() * kHistorySeconds / plot().width(); }
 
@@ -103,6 +103,10 @@ void LimiterGraph::geometryChange(const QRectF& newGeometry, const QRectF& oldGe
 // --- The parameters -----------------------------------------------------------------------------
 
 void LimiterGraph::sync() {
+    if (!alive()) {  // (no device yet, or no longer: nothing to show; the first sync with one shows it as it is)
+        synced_ = false;
+        return;
+    }
     const bool maximize = value(QStringLiteral("maximize")) >= 0.5;
     const sub::app::LimiterLine line =
         sub::app::limiterLine(maximize, value(QStringLiteral("gain")), value(QStringLiteral("ceiling")),
@@ -181,7 +185,8 @@ void LimiterGraph::refreshDisplays() {
                     for (int s = 0; s < kStreams; ++s)
                         rings_[std::size_t(s)][std::size_t(i & (kRing - 1))] =
                             s <= OutR ? float(kDisplayFloorDb) : 0.0f;
-                    outDbfs_[std::size_t(i & (kRing - 1))] = float(kDisplayFloorDb);
+                    for (auto& ring : outDbfs_)
+                        ring[std::size_t(i & (kRing - 1))] = float(kDisplayFloorDb);
                 }
             } else {  // a new start (the device's processor made again): the history begins again
                 begin_ = from;
@@ -197,11 +202,12 @@ void LimiterGraph::refreshDisplays() {
             }
             in = std::max({in, v[InL], v[InR]});
             out = std::max({out, v[OutL], v[OutR]});
-            outDbfs_[std::size_t(i & (kRing - 1))] = std::max(v[OutL], v[OutR]);
+            outDbfs_[0][std::size_t(i & (kRing - 1))] = v[OutL];
+            outDbfs_[1][std::size_t(i & (kRing - 1))] = v[OutR];
             gr = std::max({gr, v[GrA], v[GrB]});
             clip = std::max(clip, v[Clip]);
-            // The output in the line's domain, converted as it comes, so the history stays put when the
-            // parameters change.
+            // The history's output in the line's domain, converted as it comes, so it stays put when the
+            // parameters change (the Out meter and its figure keep the dBFS).
             v[OutL] = std::max(float(kDisplayFloorDb), v[OutL] - float(outputShift_));
             v[OutR] = std::max(float(kDisplayFloorDb), v[OutR] - float(outputShift_));
             for (int s = 0; s < kStreams; ++s)
@@ -233,6 +239,19 @@ void LimiterGraph::refreshDisplays() {
     advance(seconds);
     if (arrived)
         Q_EMIT levelsChanged();
+}
+
+float LimiterGraph::mostDbfs(int channel, qint64 from, qint64 to) const {
+    from = std::max(from, begin_);
+    to = std::min(to, end_);
+    float m = float(kDisplayFloorDb);
+    for (qint64 i = from; i < to; ++i) {
+        for (int c = 0; c < 2; ++c) {
+            if (channel < 0 || channel == c)
+                m = std::max(m, outDbfs_[std::size_t(c)][std::size_t(i & (kRing - 1))]);
+        }
+    }
+    return m;
 }
 
 float LimiterGraph::most(int stream, int pair, qint64 from, qint64 to, float otherwise) const {
@@ -283,13 +302,15 @@ void LimiterGraph::advance(double seconds) {
     for (int c = 0; c < 2; ++c) {
         const std::size_t i = std::size_t(c);
         meter(meterIn_[i], most(InL + c, -1, lo, hi, float(kDisplayFloorDb)), kLevelFall, kLevelHold, kFloorDb);
-        meter(meterOut_[i], most(OutL + c, -1, lo, hi, float(kDisplayFloorDb)), kLevelFall, kLevelHold, kFloorDb);
+        meter(meterOut_[i], mostDbfs(c, lo, hi), kLevelFall, kLevelHold, kFloorDb);
         meter(meterGr_[i], most(GrA + c, -1, lo, hi, 0.0f), kReductionFall, kReductionHold, 0.0);
     }
     meter(meterClip_, most(Clip, -1, lo, hi, 0.0f), kReductionFall, kReductionHold, 0.0);
 
-    if (!dragging())
-        changed = line_.step(easeFraction(dt, kLineEase)) || changed;
+    if (!dragging() && line_.step(easeFraction(dt, kLineEase))) {
+        changed = true;
+        updateHover();  // (the line moved under a still mouse)
+    }
     changed = soft_.step(easeFraction(dt, kBadgeEase)) || changed;
     changed = badge_.step(easeFraction(dt, kBadgeEase)) || changed;
     changed = maxBadge_.step(easeFraction(dt, kBadgeEase)) || changed;
@@ -319,20 +340,24 @@ bool LimiterGraph::updateTextsChanged() {
 void LimiterGraph::updateTexts() {
     const double vps = valuesPerSecond();
     const qint64 at = qint64(std::floor(cursor_));
-    // The gain reduction (with the knee's share) over the last half second, so the figure reads steadily.
-    double gr = 0.0;
-    for (qint64 i = std::max(begin_, at - qint64(0.5 * vps)); i < std::min(at, end_); ++i)
-        gr = std::max(gr, double(std::max(ring(GrA, i), ring(GrB, i)) + ring(Clip, i)));
-    grFigure_ = gr;
-    grText_ = gr >= 0.05 ? QStringLiteral("GR −%1 dB").arg(pythonFixed(gr, 1)) : QStringLiteral("GR 0.0 dB");
-    // The meters' peaks over the last second: In in the line's domain, Out in dBFS.
+    // The gain reduction, Soft Clip's share with it (as the GR bars stack it), over the last half second
+    // at the bottom left (so it reads steadily) and the last second under the GR meters.
+    const auto reduction = [&](qint64 from) {
+        double gr = 0.0;
+        for (qint64 i = std::max(begin_, from); i < std::min(at, end_); ++i)
+            gr = std::max(gr, double(std::max(ring(GrA, i), ring(GrB, i)) + ring(Clip, i)));
+        return gr;
+    };
+    grFigure_ = reduction(at - qint64(0.5 * vps));
+    grText_ = grFigure_ >= 0.05 ? QStringLiteral("GR −%1 dB").arg(pythonFixed(grFigure_, 1))
+                                : QStringLiteral("GR 0.0 dB");
+    // The meters' peaks over the last second: In in the line's domain, GR negative as the footer's (with the
+    // narrow minus of the figures beside it), Out in dBFS.
     const qint64 second = at - qint64(vps);
     inText_ = levelText(most(InL, InR, second, at, float(kDisplayFloorDb)));
-    float out = float(kDisplayFloorDb);
-    for (qint64 i = std::max(begin_, second); i < std::min(at, end_); ++i)
-        out = std::max(out, outDbfs_[std::size_t(i & (kRing - 1))]);
-    outText_ = levelText(out);
-    grPeakText_ = pythonFixed(most(GrA, GrB, second, at, 0.0f), 1);
+    outText_ = levelText(mostDbfs(-1, second, at));
+    const double gr = reduction(second);
+    grPeakText_ = gr >= 0.05 ? pythonFixed(-gr, 1) : QStringLiteral("0.0");
 }
 
 void LimiterGraph::requestPaint() {
@@ -460,15 +485,11 @@ void LimiterGraph::paint(SgPainter& p) {
         p.fillRect(QRectF(r.left(), r.top(), kFadeWidth, r.height()), fade);
         p.restore();
     }
-    // The level's figures, over the history (dim), left; the reduction's beside its meters.
+    // The level's figures, over the history (dim), left.
     for (const double db : {12.0, 0.0, -12.0, -24.0}) {
         p.drawText(QRectF(r.left() + 3, yOf(db) + 1, 30, 10), Qt::AlignLeft | Qt::AlignTop,
                    db > 0 ? QStringLiteral("+%1").arg(int(db)) : QString::number(int(db)),
                    withAlpha(Theme::kTextDim, 190), font7);
-    }
-    for (const double db : {6.0, 12.0, 18.0}) {
-        p.drawText(QRectF(kMeterX[1] - 16, grY(db) - 5, 13, 10), Qt::AlignRight | Qt::AlignVCenter,
-                   QString::number(int(db)), withAlpha(Theme::kAccent, 140), font7);
     }
 
     // The meters, in wells: In and Out on the level axis (In red over the line, as the history), GR on
@@ -498,6 +519,15 @@ void LimiterGraph::paint(SgPainter& p) {
     const QPointF handle[3] = {{kHandleX, ly}, {kHandleX + kHandleSize, ly - kHandleSize / 2},
                                {kHandleX + kHandleSize, ly + kHandleSize / 2}};
     p.fillPolygon(handle, 3, mix(Theme::kAccent, QColor(255, 236, 200), 0.6 * hover_.value));
+
+    // The reduction's figures beside its meters, over the line (which passes behind them: at the
+    // default ceiling it runs right through the 6).
+    for (const double db : {6.0, 12.0, 18.0}) {
+        const QRectF box(kMeterX[1] - 16, grY(db) - 5, 13, 10);
+        p.fillRect(box, Theme::kMeterBg);
+        p.drawText(box, Qt::AlignRight | Qt::AlignVCenter, QString::number(int(db)), withAlpha(Theme::kAccent, 140),
+                   font7);
+    }
 
     // The header: the meters' names (GR's channels by Routing), the mode's badge and MAX.
     const char* names[3] = {"In", "GR", "Out"};
@@ -552,6 +582,8 @@ void LimiterGraph::mousePressEvent(QMouseEvent* event) {
     }
     if (second)
         return;  // (the double-click follows: it resets the line)
+    hoverPos_ = pos;
+    hovering_ = true;
     dragId_ = lineParam();
     touch(dragId_);
     gesture_ = newGestureKey();
@@ -559,12 +591,14 @@ void LimiterGraph::mousePressEvent(QMouseEvent* event) {
     lastY_ = pos.y();
     line_.snap(lineDb_);
     hover_.target = 1.0;
+    resizeCursor_ = true;
     setCursor(Qt::SizeVerCursor);
     Q_EMIT draggingChanged();
     requestPaint();
 }
 
 void LimiterGraph::mouseMoveEvent(QMouseEvent* event) {
+    hoverPos_ = event->position();  // (no hover events while a button is held)
     if (!dragging())
         return;
     const double y = event->position().y();
@@ -578,7 +612,10 @@ void LimiterGraph::mouseMoveEvent(QMouseEvent* event) {
     requestPaint();
 }
 
-void LimiterGraph::mouseReleaseEvent(QMouseEvent*) { endDrag(); }
+void LimiterGraph::mouseReleaseEvent(QMouseEvent* event) {
+    hoverPos_ = event->position();
+    endDrag();
+}
 
 void LimiterGraph::mouseUngrabEvent() { endDrag(); }
 
@@ -587,6 +624,7 @@ void LimiterGraph::endDrag() {
         return;
     gesture_.clear();
     Q_EMIT draggingChanged();
+    updateHover();
 }
 
 void LimiterGraph::mouseDoubleClickEvent(QMouseEvent* event) {
@@ -600,21 +638,30 @@ void LimiterGraph::mouseDoubleClickEvent(QMouseEvent* event) {
 }
 
 void LimiterGraph::hoverMoveEvent(QHoverEvent* event) {
+    hoverPos_ = event->position();
+    hovering_ = true;
+    updateHover();
+}
+
+void LimiterGraph::hoverLeaveEvent(QHoverEvent*) {
+    hovering_ = false;
+    updateHover();
+}
+
+// The line lit and the resize cursor while the mouse is over the line: checked as the mouse moves and
+// as the line moves under it (eased there by a double-click, undo, automation or Maximize).
+void LimiterGraph::updateHover() {
     if (dragging())
         return;
-    const bool near = nearLine(event->position());
+    const bool near = hovering_ && nearLine(hoverPos_);
     hover_.target = near ? 1.0 : 0.0;
+    if (near == resizeCursor_)
+        return;
+    resizeCursor_ = near;
     if (near)
         setCursor(Qt::SizeVerCursor);
     else
         unsetCursor();
-}
-
-void LimiterGraph::hoverLeaveEvent(QHoverEvent*) {
-    if (dragging())
-        return;
-    hover_.target = 0.0;
-    unsetCursor();
 }
 
 }  // namespace sub::ui
