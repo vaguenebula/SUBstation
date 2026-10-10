@@ -423,7 +423,10 @@ Steinberg's ASIO SDK, which isn't redistributable, so the ASIO tests skip there.
   After a change that shows, hides or moves items, wait until the window is laid out again
   (`QQuickTest::qWaitForPolish(window)`) before taking an item's place to click it: layouts place their items when
   Qt Quick polishes, before the next frame, so until then items keep their old places and can lie over each other
-  (a `QTRY_VERIFY` of something already true doesn't wait).
+  (a `QTRY_VERIFY` of something already true doesn't wait). Move the mouse off a control with a tooltip before
+  waiting after a gesture on it: resting there, it opens the tooltip once its delay passes (the editors': 700 ms;
+  half a second of 16 ms waits takes up to twice that on Windows, whose timers are coarse), and in a window too
+  small for the tooltip to sit clear of the control it opens over it and takes the next press.
 - Shared helpers go into `tests/app/support` (header-only if they need Qt Quick), not into a test file.
 - A new test plug-in goes into `tests/vst3_plugins` and the `sub_test_plugins` target in
   [TestPlugins.cmake](../tests/TestPlugins.cmake); a new driver hook into `test_asio_driver.cpp`, its `.def` and

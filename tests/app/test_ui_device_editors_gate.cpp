@@ -109,6 +109,15 @@ class TestUiDeviceEditorsGate : public QObject, public sub::app::test::EditorHar
         }
     }
 
+    // The mouse off the editor (where init() leaves it), then `count` ticks: the wait after a gesture on the
+    // graph. Resting on the graph, the mouse would open its tooltip once 0.7 s pass (tick(30) takes half a
+    // second, and up to twice that where the timers are coarse, as Windows'), and in the host window, too
+    // short for the tooltip to sit clear of the graph, it opens over the plot and takes the next press.
+    void tickAway(int count) {
+        QTest::mouseMove(window_, QPoint(1, 1));
+        tick(count);
+    }
+
     // Ticks until the graph has asked for no repaint three ticks running (at most `most` ticks): a meter
     // falling repaints only once it has moved a twentieth of a pixel, so a tick that comes close after
     // another may ask for none while it still falls.
@@ -277,7 +286,7 @@ private Q_SLOTS:
         QVERIFY(std::abs(graph->thresholdY() - graph->yOf(value())) < 1e-6);  // at once, not eased
         undo()->undo();
         QCOMPARE(value(), -40.0);
-        tick(30);
+        tickAway(30);
 
         // Anywhere else in the plot: the threshold too, relative (no jump at the press).
         at = scenePoint(graph, QPointF(plot.center().x(), plot.top() + 12));
@@ -287,7 +296,7 @@ private Q_SLOTS:
         QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at + QPoint(0, 20));
         QVERIFY2(std::abs(value() - (-40.0 - 20 * perPixel)) < 0.2, qPrintable(QString::number(value())));
         undo()->undo();
-        tick(30);
+        tickAway(30);
 
         // A press 5 px off the line and a release: nothing changes, nothing to undo.
         steps = undo()->index();
@@ -348,7 +357,7 @@ private Q_SLOTS:
         QVERIFY2(std::abs(value("return") - 10 * perPixel) < 0.2, qPrintable(QString::number(value("return"))));
         QCOMPARE(value("threshold"), -30.0);
         undo()->undo();
-        tick(30);
+        tickAway(30);
         at = scenePoint(graph, QPointF(plot.center().x(), graph->thresholdY() - 2));
         QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
         dragTo(at + QPoint(0, 10));
@@ -357,7 +366,7 @@ private Q_SLOTS:
                  qPrintable(QString::number(value("threshold"))));
         QCOMPARE(value("return"), 0.0);
         undo()->undo();
-        tick(30);
+        tickAway(30);
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier,
                            scenePoint(graph, QPointF(plot.center().x() + 20, graph->returnY() + 1)));
         QCOMPARE(value("return"), 3.0);
@@ -367,14 +376,14 @@ private Q_SLOTS:
         QCOMPARE(undo()->index(), steps + 2);
 
         undo()->undo();
-        tick(30);
+        tickAway(30);
 
         // A double-click on the threshold line puts it back (one step); on the return line, Return.
         at = scenePoint(graph, QPointF(plot.center().x() + 30, graph->thresholdY()));
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, at);
         QCOMPARE(value("threshold"), -12.0);
         QCOMPARE(undo()->index(), steps + 2);
-        tick(30);
+        tickAway(30);
         at = scenePoint(graph, QPointF(plot.center().x() - 30, graph->returnY()));
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, at);
         QCOMPARE(value("return"), 3.0);
