@@ -264,8 +264,11 @@ Item {
         onActiveFocusChanged: {
             if (activeFocus && search.menu.currentIndex !== -1)
                 Qt.callLater(search.takeKeyboard)  // (clicked with one of the menu's entries highlighted)
-            else if (!activeFocus)
-                search.current = -1  // (one of the menu's entries has the keyboard: one highlight)
+            else if (!activeFocus)  // one of the menu's entries has the keyboard: one highlight (but not
+                Qt.callLater(() => {  // for a moment's loss: the popup re-taking its focus as it opens)
+                    if (!field.activeFocus)
+                        search.current = -1
+                })
         }
     }
 
