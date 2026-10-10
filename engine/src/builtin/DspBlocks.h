@@ -352,7 +352,9 @@ private:
 };
 
 // A section's state: transposed direct form II, in double (a shelf at 20 Hz
-// keeps its precision), flushed to 0 when tiny.
+// keeps its precision), flushed to 0 once both states are tiny. Together: the
+// two states of a section with poles near z = 1 (low or narrow) nearly cancel,
+// and zeroing one alone kicks the other back up, round and round for minutes.
 struct Biquad {
     double s1 = 0.0, s2 = 0.0;
 
@@ -360,8 +362,9 @@ struct Biquad {
     float process(const BiquadCoefficients& c, float in) noexcept {
         const double x = in;
         const double y = c.b0 * x + s1;
-        s1 = flushTiny(c.b1 * x - c.a1 * y + s2);
-        s2 = flushTiny(c.b2 * x - c.a2 * y);
+        s1 = c.b1 * x - c.a1 * y + s2;
+        s2 = c.b2 * x - c.a2 * y;
+        if (std::abs(s1) < 1e-20 && std::abs(s2) < 1e-20) s1 = s2 = 0.0;
         return static_cast<float>(y);
     }
 };
@@ -545,7 +548,10 @@ private:
     static constexpr std::array<double, kMaxFactorLog2> kStageBeta = {7.8, 7.9, 7.9};
 
     // One 2x stage: the half-band filter h (unity gain at DC) split into its
-    // phases' non-zero taps, and the histories of both directions.
+    // phases' non-zero taps, and the histories of both directions. Both run a
+    // tap at a time over the whole block (contiguous, so the compiler
+    // vectorises it), adding the taps in the same order a sample at a time
+    // would.
     struct Stage {
         int taps = 0;
         // Up: output 2n + p = 2 * sum over taps j = p (mod 2) of h[j] x[n - (j - p) / 2].
@@ -553,11 +559,13 @@ private:
         std::array<std::vector<float>, 2> upCoeff;
         int upHistory = 0;
         std::vector<float> upBuffer;
-        // Down: output n = sum over taps j of h[j] v[2n - j].
+        std::array<std::vector<float>, 2> upSums;
+        // Down: output n = sum over taps j of h[j] v[2n - j], read from v's even and odd samples
+        // apart: an even j reads even[n - j / 2], an odd one odd[n - (j + 1) / 2].
         std::vector<int> downOffset;
         std::vector<float> downCoeff;
         int downHistory = 0;
-        std::vector<float> downBuffer;
+        std::vector<float> downEven, downOdd, downSums;
 
         void design(int count, double beta, int maxIn) {
             taps = count;
@@ -593,43 +601,56 @@ private:
                 downCoeff.push_back(static_cast<float>(c));
             }
             upHistory = (count - 1) / 2 + 1;
-            downHistory = count;
+            downHistory = count / 2 + 1;
             upBuffer.assign(static_cast<size_t>(upHistory + maxIn), 0.f);
-            downBuffer.assign(static_cast<size_t>(downHistory + 2 * maxIn), 0.f);
+            for (std::vector<float>& sums : upSums) sums.assign(static_cast<size_t>(maxIn), 0.f);
+            downEven.assign(static_cast<size_t>(downHistory + maxIn), 0.f);
+            downOdd.assign(static_cast<size_t>(downHistory + maxIn), 0.f);
+            downSums.assign(static_cast<size_t>(maxIn), 0.f);
         }
         void reset() noexcept {
             std::fill(upBuffer.begin(), upBuffer.end(), 0.f);
-            std::fill(downBuffer.begin(), downBuffer.end(), 0.f);
+            std::fill(downEven.begin(), downEven.end(), 0.f);
+            std::fill(downOdd.begin(), downOdd.end(), 0.f);
         }
         void up(const float* in, int n, float* out) noexcept {
             float* buffer = upBuffer.data();
             std::copy_n(in, n, buffer + upHistory);
-            for (int p = 0; p < 2; ++p) {
-                const int* delay = upDelay[static_cast<size_t>(p)].data();
-                const float* coeff = upCoeff[static_cast<size_t>(p)].data();
-                const int count = static_cast<int>(upDelay[static_cast<size_t>(p)].size());
-                for (int i = 0; i < n; ++i) {
-                    const float* x = buffer + upHistory + i;
-                    float sum = 0.f;
-                    for (int k = 0; k < count; ++k) sum += coeff[k] * x[-delay[k]];
-                    out[2 * i + p] = sum;
+            for (size_t p = 0; p < 2; ++p) {
+                float* sums = upSums[p].data();
+                std::fill_n(sums, n, 0.f);
+                for (size_t k = 0; k < upDelay[p].size(); ++k) {
+                    const float c = upCoeff[p][k];
+                    const float* x = buffer + upHistory - upDelay[p][k];
+                    for (int i = 0; i < n; ++i) sums[i] += c * x[i];
                 }
+            }
+            const float* even = upSums[0].data();
+            const float* odd = upSums[1].data();
+            for (int i = 0; i < n; ++i) {
+                out[2 * i] = even[i];
+                out[2 * i + 1] = odd[i];
             }
             std::copy_n(buffer + n, upHistory, buffer);
         }
         void down(const float* in, int n, float* out) noexcept {
-            float* buffer = downBuffer.data();
-            std::copy_n(in, 2 * n, buffer + downHistory);
-            const int count = static_cast<int>(downOffset.size());
-            const int* offset = downOffset.data();
-            const float* coeff = downCoeff.data();
+            float* even = downEven.data();
+            float* odd = downOdd.data();
             for (int i = 0; i < n; ++i) {
-                const float* v = buffer + downHistory + 2 * i;
-                float sum = 0.f;
-                for (int k = 0; k < count; ++k) sum += coeff[k] * v[-offset[k]];
-                out[i] = sum;
+                even[downHistory + i] = in[2 * i];
+                odd[downHistory + i] = in[2 * i + 1];
             }
-            std::copy_n(buffer + 2 * n, downHistory, buffer);
+            float* sums = downSums.data();
+            std::fill_n(sums, n, 0.f);
+            for (size_t k = 0; k < downOffset.size(); ++k) {
+                const int j = downOffset[k];
+                const float c = downCoeff[k];
+                const float* v = j % 2 == 0 ? even + downHistory - j / 2 : odd + downHistory - (j + 1) / 2;
+                for (int i = 0; i < n; ++i) sums[i] += c * v[i];
+            }
+            std::copy_n(sums, n, out);
+            std::copy_n(even + n, downHistory, even);
+            std::copy_n(odd + n, downHistory, odd);
         }
         static double besselI0(double x) {
             double sum = 1.0, term = 1.0;

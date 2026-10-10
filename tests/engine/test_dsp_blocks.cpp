@@ -290,3 +290,20 @@ TEST_CASE("dsp blocks: oversampled saturation folds back far less") {
     CHECK(plain > -40.0);
     CHECK(oversampled < plain - 25.0);
 }
+
+TEST_CASE("dsp blocks: a low, narrow biquad rings out to exact zeros") {
+    // Poles close to z = 1: flushing one state at a time would leave the pair cycling around 1e-19.
+    for (const auto& coeffs : {dsp::BiquadCoefficients::peak(30.0, 12.0, 15.0, kRate),
+                               dsp::BiquadCoefficients::peak(30.0, 0.1, -15.0, kRate),
+                               dsp::BiquadCoefficients::lowShelf(20.0, 0.7071, 12.0, kRate)}) {
+        dsp::Biquad state;
+        for (int i = 0; i < 4800; ++i) state.process(coeffs, i % 100 == 0 ? 1.f : 0.f);
+        int samples = 0;
+        while ((state.s1 != 0.0 || state.s2 != 0.0) && samples < 60 * 48000) {
+            state.process(coeffs, 0.f);
+            ++samples;
+        }
+        CHECK(samples < 30 * 48000);
+        CHECK_EQ(state.process(coeffs, 0.f), 0.f);
+    }
+}
