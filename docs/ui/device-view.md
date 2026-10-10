@@ -353,8 +353,8 @@ value as it is now, set undoably, touched when pressed, the parameter's menu on 
   (`bridge.readProcessorDisplay`, a position kept per processor and display; `readDisplayAt()` with the absolute index
   of the first value; `readRecent(id, seconds)` only the newest of it, the values covering the last `seconds` at the
   display's samples per value: a read can hold a long backlog, an editor shown again after the sound stopped).
-  `refreshDisplays()` is called as the meters update (`metersUpdated`, about 30 times a second), only while the item
-  is visible. Displays are what the engine's built-in devices publish for their editors (see
+  `refreshDisplays()` is called on each tick of the `DisplayClock` (about 60 times a second), only while the item is
+  visible. Displays are what the engine's built-in devices publish for their editors (see
   [engine/devices.md](../engine/devices.md)).
 - `secondPressOfDoubleClick()`: Qt Quick delivers a double-click's second press before the double-click; items whose
   first click changes what a double-click does skip it.
@@ -752,10 +752,10 @@ The editors:
     2 px column's edges and middle. Its −3 dB edges have a short whisker out from each, level with where the
     outline crosses them (an upright tick would lie along a narrow band's steep outline). The dot's travel up and
     down (`travel()`) is the plot less its reach: its halo's at the top, so it stays clear of the strip's texts, and
-    its ring's at the bottom, so it stays in the well. The sine is a spike up to the dot; Noise Blend
-    crossfades the band and the spike by the engine's equal-power weights (`erosionBlendWeights`). The strip over
-    the field reads the source ("Noise 70 % · Stereo 60 %") and where and how far it modulates ("1.00 kHz ·
-    ±87 µs": `erosionExcursionText`).
+    its ring's at the bottom, so it stays in the well. The sine is a spike up to the dot; Noise Blend crossfades the
+    band and the spike by the engine's equal-power weights (`erosionBlendWeights`). The strip over the field reads the
+    source ("Noise 70 % · Stereo 60 %") and where and how far it modulates ("1.00 kHz · ±87 µs":
+    `erosionExcursionText`).
   - Drags: a press puts the dot there, and dragging moves it (Frequency across, Amount up and down); Shift starts
     from where the dot is and moves it at `kFine` (0.15) of the mouse; Alt (Option) starts from the dot too and drags
     up and down for the Filter Width (twice it every `kWidthPixels`, 40 px; across still sets the Frequency, as

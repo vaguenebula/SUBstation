@@ -108,7 +108,7 @@ Q_SIGNALS:
 protected:
     // The device's parameters, automation or state may have changed: read what is drawn. The default repaints.
     virtual void sync();
-    // Draws what the engine reported since; called as the meters update, while visible.
+    // Draws what the engine reported since; called on each DisplayClock tick, while visible.
     virtual void refreshDisplays() {}
     // In refreshDisplays(): the seconds since the last call, to move animations on by. Never less
     // than a tick (kDisplayRefreshMs: so animations ticked by hand move as the clock would) nor
