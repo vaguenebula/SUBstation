@@ -845,7 +845,8 @@ sidechain, the key's spectrum sets the gains: one track's frequencies duck where
   wide Smoothing gentle with tones. (At 100 % the 2-octave box reads pink noise 0.34 dB low.)
 - **Envelopes**: per bin and hop, on the magnitude (the square root of Smoothing's mean power), Attack and Release
   as one-poles at the hop rate (`env = x + a (env - x)`, the attack's coefficient while rising), floored at a
-  magnitude of 1e-6 (and NaN lands there too, so a bad sample can't stick). Magnitude, as the Compressor's follower
+  magnitude of 1e-6 (and NaN lands there too: a bin's power overflowed by an absurd sample, one still under
+  `BuiltinProcessor::kMaxInput`, can't stick). Magnitude, as the Compressor's follower
   and nih-plug's, so a time means the same as there: a rise from silence reaches 63 % of the new magnitude in an
   attack time, and a fall far below decays at 8.69 dB per release time constant (a follower of power would take
   half as much). Times under a hop act at once, and the frame itself smears an onset over about N/2 (21 ms at
@@ -888,7 +889,9 @@ sidechain, the key's spectrum sets the gains: one track's frequencies duck where
   the audio path but the envelopes (floored), and the accumulators are cleared as they are read.
 - **Sidechain**: with a source chosen the key's two channels are transformed too (two more forward transforms a
   hop) and their levels set the gains; a source that is silent (null pointers) keys nothing, so the input passes as
-  it is, delayed, even with Upward on (silence is under its floor). Without one, its own input keys it.
+  it is, delayed, even with Upward on (silence is under its floor). Without one, its own input keys it. The key is
+  the engine's buffer, which `BuiltinProcessor::process()` doesn't sanitise as it does the input: the device takes a
+  key sample that isn't audio (NaN, infinity, beyond `kMaxInput`) as silence as it reads it.
 - **One channel**: that one, exactly as the left of a stereo pair with the same signal on both. More than two: the
   first two; the rest untouched.
 - **Reset** clears the rings, accumulators and spectra, puts the envelopes at their floor, and snaps every glide,
@@ -913,12 +916,14 @@ sidechain, the key's spectrum sets the gains: one track's frequencies duck where
   `readDisplayAt` gives), and the four are published three hops late (the frame published at hop h went in at hop h - 3
   and is centred on input sample hH - N - H), so a frame shows when its centre is heard, in step with the level streams.
   At 8192 values a stream holds 64 frames (0.68 s at 48 kHz). The `samplesPerValue` figures (4 and 512) are for 44.1 and
-  48 kHz.
+  48 kHz. Every value is finite: the spectra and levels read at most +300 dB (far above any audio: a full-scale tone
+  reads +20 dB), which a bin's power overflowed by an absurd sample would otherwise make infinite.
 - **The shared maths**: `spectral::frameSize`, `latencySamples`, `calibrationDb`, `pinkDb`, `thresholdDb`, `belowDb`,
   `focusWeight`, `smoothingOctaves`, `kneed`, `gainDb`, `displayFrequency` (inline, no FFT): the engine runs float
   copies of them per bin. The application layer's
-  [app/src/audio/SpectralResponse.h](../../app/src/audio/SpectralResponse.h) wraps them for the editor, so the threshold
-  drawn is the one that plays.
+  [app/src/audio/SpectralResponse.h](../../app/src/audio/SpectralResponse.h) wraps them for the editor (and gives it the
+  display points per frame and the pivot, checked against these), so the threshold drawn is the one that plays and the
+  Focus band is dimmed by the weights the sound gets.
 - About 0.6 % of one core at 48 kHz stereo at the defaults; 0.75 % at the heaviest settings (unlinked, Upward 10:1,
   Smoothing 100 %, everything over the threshold); about 0.1 % more keyed by a sidechain; 1.2 % at 96 kHz (1.4 %
   heaviest) and 2.3 % at 192 kHz (2.7 %), the frame doubling with the rate (measured with `builtin_devices_bench` on a
@@ -2121,10 +2126,11 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   Stereo Link (linked, each its own, halfway in dB); keying by a sidechain (alone, mono, silent, not connected, and
   through an engine); every control changing without a click (a 6th-difference measure, the ramped ones against a
   spliced switch); automation to the sample, alone and through the engine, in step with the audio; reset; silence
-  ringing out to exact zeros; stability at the extremes; one channel the left of two; the displays (counts, whole frames
-  for a reader that fell behind, published three hops late to the hop, the meters, the output display with Delta); the
-  engine lining other tracks up with it; and bounds on its cost, in all and per audio callback (no callback carries a
-  whole frame).
+  ringing out to exact zeros; stability at the extremes; NaN and infinity in the input and the key playing exactly as
+  zeros there, keyed or not, and absurd levels (+600 dBFS) leaving everything finite and the sound as it was 2 s on;
+  one channel the left of two; the displays (counts, whole frames for a reader that fell behind, published three hops
+  late to the hop, the meters, the output display with Delta); the engine lining other tracks up with it; and bounds
+  on its cost in the thread's CPU time, in all and per audio callback (no callback carries a whole frame).
 - [test_saturator_engine.cpp](../../tests/engine/test_saturator_engine.cpp): its listing; quiet audio untouched at
   the defaults, bit for bit; each curve played as its editor draws it (eight types, four drives, the Bass Shaper's
   thresholds, the Waveshaper's settings) and the curves' numbers; the Waveshaper's controls (no effect at WS Drive 0,

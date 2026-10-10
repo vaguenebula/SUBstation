@@ -85,6 +85,9 @@ constexpr int kChannels = 2;  // a sidechain is always stereo; the main input up
 // The envelopes' floor: a magnitude of 1e-6, -120 dB uncalibrated (about -154 dB pink-referenced at 1 kHz).
 constexpr float kTinyMagnitude = 1e-6f;
 constexpr float kMeterFloorDb = -90.f;  // in_level and out_level
+// What the displays read at the most: far above any audio (a full-scale tone reads +20 dB in the spectra), so they
+// stay finite when an absurd input sample (within BuiltinProcessor::kMaxInput) overflows a bin's power.
+constexpr float kTopDb = 300.f;
 constexpr int kPoints = spectral::kDisplayPoints;
 constexpr int kSpectralStreams = 4;  // input, key, output, gain
 constexpr int kSlots = 3;            // parameter snapshots and display frames kept: this frame's and two more
@@ -96,6 +99,9 @@ constexpr float kInvUpwardFadeDb = static_cast<float>(1.0 / spectral::kUpwardFad
 constexpr float kInvFocusEdge = static_cast<float>(1.0 / spectral::kFocusEdgeOctaves);
 constexpr double kLinkedFully = 0.9999;  // Stereo Link from here: one set of gains for both channels
 constexpr double kLanded = 1e-7;         // a glide this close to its target lands on it
+
+// A key sample as the input's are taken (BuiltinProcessor::process()): NaN, infinity and absurd levels as silence.
+inline float audioOrSilence(float x) noexcept { return std::abs(x) <= BuiltinProcessor::kMaxInput ? x : 0.f; }
 
 // How far past a threshold a level counts: spectral::kneed() in float, with the knee's halves worked out once.
 struct KneeCurve {
@@ -311,7 +317,8 @@ protected:
                     acc[c][w] = 0.f;
                     silent = silent && x == 0.f;
                 }
-                const float kl = keyL ? keyL[i] : 0.f, kr = keyR ? keyR[i] : 0.f;
+                // (The key is the engine's buffer, not sanitised as the input is: what isn't audio is silence.)
+                const float kl = keyL ? audioOrSilence(keyL[i]) : 0.f, kr = keyR ? audioOrSilence(keyR[i]) : 0.f;
                 keys[0][w] = kl;
                 keys[1][w] = kr;
                 silent = silent && kl == 0.f && kr == 0.f;
@@ -409,8 +416,8 @@ private:
         for (int s = 0; s < kSpectralStreams; ++s) {
             for (const float v : displayRing_[slot][static_cast<size_t>(s)]) publish(s, v);
         }
-        publish(InLevel, std::max(kMeterFloorDb, gainToDb(peakIn_)));
-        publish(OutLevel, std::max(kMeterFloorDb, gainToDb(peakOut_)));
+        publish(InLevel, std::clamp(gainToDb(peakIn_), kMeterFloorDb, kTopDb));
+        publish(OutLevel, std::clamp(gainToDb(peakOut_), kMeterFloorDb, kTopDb));
         peakIn_ = peakOut_ = 0.f;
         frameSlot_ = slot_;
         slot_ = slot_ == kSlots - 1 ? 0 : slot_ + 1;
@@ -596,7 +603,8 @@ private:
             }
             const float x = std::sqrt(mean), e = env[k];
             const float next = x + (x > e ? attack : release) * (e - x);
-            env[k] = next > kTinyMagnitude ? next : kTinyMagnitude;  // (a NaN in the input lands here too)
+            // (A power overflowed by an absurd input sample makes NaN here, which lands on the floor too.)
+            env[k] = next > kTinyMagnitude ? next : kTinyMagnitude;
         }
     }
 
@@ -743,7 +751,8 @@ private:
             } else {
                 value = power[p.k0] + p.t * (power[p.k1] - power[p.k0]);
             }
-            out[j] = std::max(kFloorDb, 10.f * std::log10(value + 1e-30f) + p.pinkDb);
+            const float db = 10.f * std::log10(value + 1e-30f) + p.pinkDb;
+            out[j] = db > kFloorDb ? std::min(db, kTopDb) : kFloorDb;  // (an overflowed power's NaN: the floor)
         }
     }
 

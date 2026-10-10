@@ -90,8 +90,8 @@ inline double focusWeight(double low, double high, double freq) noexcept {
 
 // Added to 10 log10 of a bin's power |X|² (an unscaled FFT of a periodic-Hann-windowed frame, Σw² = 3N/8) so
 // that, with pinkDb(), pink noise of RMS L dBFS between 20 Hz and 20 kHz reads L dB at every frequency. Pink
-// noise's one-sided power per hertz is σ² / (f ln 1000); a bin's expected power is S·sr·Σw²/2. At 48 kHz and 2048,
-// -34.26 dB (a full-scale sine at a bin's centre then reads 20 log10(N/4) + this = +19.93 dB at 1 kHz).
+// noise's one-sided power per hertz is σ² / (f ln 1000); a bin's expected power is S·sr·Σw²/2. At 48 kHz and
+// 2048, -34.26 dB (a full-scale sine at a bin's centre then reads 20 log10(N/4) + this = +19.93 dB at 1 kHz).
 inline double calibrationDb(double sampleRate, int frame) noexcept {
     return -10.0 * std::log10(3.0 * sampleRate * frame / (16.0 * std::log(kDisplayHighHz / kDisplayLowHz) * kPivotHz));
 }

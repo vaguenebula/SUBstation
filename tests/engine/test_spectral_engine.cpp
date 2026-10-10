@@ -5,15 +5,22 @@
 // Smoothing and the Focus band with numbers; Delta; attack and release in
 // time; Stereo Link; keying by a sidechain (alone and through an engine);
 // every control changing without a click; automation to the sample; reset,
-// silence ringing out to exact zeros, extremes, one channel; its displays, in
-// step with what is heard; the engine lining other tracks up with it; and what
-// it costs, in all and per audio callback.
+// silence ringing out to exact zeros, extremes, NaN and absurd levels in the
+// input and the key, one channel; its displays, in step with what is heard;
+// the engine lining other tracks up with it; and what it costs (the thread's
+// CPU time), in all and per audio callback.
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,13 +31,14 @@
 #include "builtin/SpectralDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace spectral = sub::spectral;
 
 namespace {
 
-constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
+constexpr int kBlock = Standalone::kMaxBlock;  // the renderer's largest block
 constexpr int kN = 2048;      // the frame at 48 kHz
 constexpr int kH = kN / 4;    // the hop
 constexpr int kL = kN + kH;   // the latency: the frame, and the hop its work is spread over
@@ -38,14 +46,8 @@ constexpr int kPoints = spectral::kDisplayPoints;
 
 enum Display { kInput = 0, kKey, kOutput, kGain, kInLevel, kOutLevel, kDisplays };
 
-using Values = std::vector<std::pair<std::string, float>>;
-
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
+using Values = ParamValues;
+using Change = ParamChange;
 
 // What goes into the sidechain: null channels are silence; `connected` says a source was chosen at all.
 struct Key {
@@ -62,37 +64,20 @@ Values steady(Values more = {}) {
     return values;
 }
 
-// A Spectral Compressor on its own, outside an engine, at any sample rate: processed in blocks, its changes
-// handed over as automation (so its blocks split there) as the renderer does, its sidechain as the renderer
-// gives it. Every display it publishes is collected as it plays.
-class Spectral {
+// A Spectral Compressor on its own, outside an engine (harness/Standalone.h), with what it needs besides: its
+// sidechain as the renderer gives it, and every display it publishes collected as it plays.
+class Spectral : public Standalone {
 public:
-    explicit Spectral(const Values& values = {}, double rate = kSampleRate)
-        : processor_(sub::BuiltinRegistry::instance().create("spectral")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
+    explicit Spectral(const Values& values = {}, double rate = kSampleRate) : Standalone("spectral", rate, values) {}
 
-    sub::Processor& processor() { return *processor_; }
-    int frame() const { return processor_->tailSamples(); }  // (the tail is the frame)
+    int frame() { return processor().tailSamples(); }  // (the tail is the frame)
 
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-
-    // Processes one or two channels of equal length in place, `block` frames at a time.
+    // Processes one or two channels of equal length in place, `block` frames at a time, its changes handed over
+    // as automation (so its blocks split there) as the renderer does (they all can be automated).
     void run(const std::vector<Samples*>& channels, const Key& key = {}, const std::vector<Change>& changes = {},
              int block = 256) {
+        sub::Processor& p = processor();
         const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
         float* pointers[2] = {};
         size_t next = 0;
         for (int64_t start = 0; start < frames; start += block) {
@@ -100,18 +85,18 @@ public:
             while (next < changes.size() && changes[next].frame < start + n) {
                 const Change& change = changes[next++];
                 const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
+                p.automate(i, p.params()[static_cast<size_t>(i)].toNormalized(change.value),
+                           static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
             }
             for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            processor_->setSidechainConnected(key.connected);
-            processor_->setSidechain(key.left ? key.left->data() + start : nullptr,
-                                     key.right ? key.right->data() + start : nullptr);
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->setSidechain(nullptr, nullptr);
-            processor_->clearAutomation();
-            for (int d = 0; d < kDisplays; ++d) positions_[d] = processor_->readDisplay(d, positions_[d], shown_[d]);
+            p.setSidechainConnected(key.connected);
+            p.setSidechain(key.left ? key.left->data() + start : nullptr,
+                           key.right ? key.right->data() + start : nullptr);
+            context().samplePos = start;
+            p.process(context(), pointers, static_cast<int>(channels.size()), n);
+            p.setSidechain(nullptr, nullptr);
+            p.clearAutomation();
+            for (int d = 0; d < kDisplays; ++d) positions_[d] = p.readDisplay(d, positions_[d], shown_[d]);
         }
     }
     Samples play(Samples mono, const std::vector<Change>& changes = {}, const Key& key = {}) {
@@ -137,8 +122,6 @@ public:
     }
 
 private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
     std::vector<float> shown_[kDisplays];
     uint64_t positions_[kDisplays] = {};
 };
@@ -219,7 +202,7 @@ Samples whiteNoise(size_t frames, double rmsDb, uint64_t seed) {
 double rmsDb(const Samples& x, int64_t from, int64_t to) { return 20.0 * std::log10(rms(slice(x, from, to)) + 1e-30); }
 
 // A sine that fades in over 100 ms.
-Samples smoothSine(double freq, double seconds, double amplitude, double rate = kSampleRate) {
+Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
     Samples x(static_cast<size_t>(seconds * rate));
     const double fadeIn = 0.1 * rate;
     for (size_t i = 0; i < x.size(); ++i) {
@@ -263,6 +246,37 @@ double bandDb(const Samples& x, double low, double high, double rate = kSampleRa
 }
 
 double gainToDb(double gain) { return 20.0 * std::log10(gain); }
+
+#ifdef NDEBUG
+// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else the machine is doing
+// (the wall clock would count the time other processes had the core).
+double threadSeconds() {
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user;
+    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
+    const auto ticks = [](const FILETIME& t) {
+        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
+    };
+    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks, counted at the scheduler's ~16 ms)
+#else
+    timespec t{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
+#endif
+}
+
+// The same finely enough to time one audio callback, in the thread clock's own units (nanoseconds; on Windows,
+// whose thread times count in the scheduler's ticks, the cycles the thread ran): for comparing pieces of work.
+double threadTicks() {
+#ifdef _WIN32
+    ULONG64 cycles = 0;
+    QueryThreadCycleTime(GetCurrentThread(), &cycles);
+    return static_cast<double>(cycles);
+#else
+    return 1e9 * threadSeconds();
+#endif
+}
+#endif
 
 }  // namespace
 
@@ -818,7 +832,7 @@ TEST_CASE("spectral: sidechain keys it") {
 TEST_CASE("spectral: no clicks") {
     // A 220 Hz tone (nothing else: noise would swamp the measure), every control jumping back and forth every
     // 0.25 s. Those that act through the frames crossfade over a frame; the others ramp over 20 ms.
-    const Samples tone = smoothSine(220.0, 2.5, 0.25);
+    const Samples tone = smoothSine(220.0, 2.5, kSampleRate, 0.25);
     Samples half = tone;
     for (float& v : half) v *= 0.5f;
     const auto s = [](double seconds) { return static_cast<int64_t>(seconds * kSampleRate); };
@@ -985,7 +999,7 @@ TEST_CASE("spectral: silence rings out to exact zeros") {
         const auto input = s.frames(kInput);
         const auto [from, to] = framesBetween(1.0 + 1.5 * kN / kSampleRate, 11.0, input.size());
         REQUIRE(to > from);
-        for (size_t i = from; i < to; ++i) CHECK(allEqual(input[i], -150.0));
+        for (size_t i = from; i < to; ++i) CHECK(allEqual(input[i], spectral::kFloorDb));
         for (int d = 0; d < kDisplays; ++d) CHECK(allFinite(s.shown(d)));
     }
 }
@@ -1090,6 +1104,52 @@ TEST_CASE("spectral: extremes are stable") {
     }
 }
 
+TEST_CASE("spectral: NaN, infinity and absurd levels, in the input and the key") {
+    // NaN, infinity and levels beyond BuiltinProcessor::kMaxInput are silence: the input's before the device sees
+    // them (BuiltinProcessor::process()), the key's (the engine's buffer) as the device reads it. So a signal with
+    // them plays exactly as with zeros there, keyed or not, and nothing keeps them.
+    constexpr float kNan = std::numeric_limits<float>::quiet_NaN(), kInf = std::numeric_limits<float>::infinity();
+    const auto length = static_cast<size_t>(4 * kSampleRate);
+    const Samples left = pinkNoise(length, -20.0, 113), right = pinkNoise(length, -20.0, 127);
+    const Samples key = pinkNoise(length, -10.0, 131);
+    const Values values = {{"threshold", -30.f}, {"ratio", 4.f}, {"upward", 2.f}, {"below", -40.f}};
+    const auto with = [](Samples x, const std::vector<std::pair<size_t, float>>& samples) {
+        for (const auto& [at, value] : samples) x[at] = value;
+        return x;
+    };
+    const Samples badLeft = with(left, {{20000, kNan}, {30000, kInf}}), badRight = with(right, {{25000, -kInf}});
+    const Samples badKey = with(key, {{22000, kNan}, {32000, kInf}, {42000, 3e38f}, {47000, -kInf}});
+    const Samples zeroLeft = with(left, {{20000, 0.f}, {30000, 0.f}}), zeroRight = with(right, {{25000, 0.f}});
+    const Samples zeroKey = with(key, {{22000, 0.f}, {32000, 0.f}, {42000, 0.f}, {47000, 0.f}});
+    for (const bool keyed : {false, true}) {
+        INFO(keyed ? "keyed" : "by its own input");
+        Spectral bad(values), zeros(values);
+        const auto [l1, r1] = bad.play(badLeft, badRight, {}, Key{&badKey, &badKey, keyed});
+        const auto [l0, r0] = zeros.play(zeroLeft, zeroRight, {}, Key{&zeroKey, &zeroKey, keyed});
+        CHECK(allFinite(l1) && allFinite(r1));
+        CHECK_ARRAY_EQUAL(l1, l0);
+        CHECK_ARRAY_EQUAL(r1, r0);
+        for (int d = 0; d < kDisplays; ++d) CHECK(bad.shown(d) == zeros.shown(d));
+    }
+
+    // A level that is still audio, however absurd (+600 dBFS, in the input and the key), overflows a bin's power:
+    // the envelopes take it as nothing, the displays read their top. Everything stays finite, and once the frames
+    // that heard it have gone and the envelopes have come back (2 s on: the release's time constant many times
+    // over), it plays as without it.
+    const Samples loudLeft = with(left, {{40000, 1e30f}}), loudRight = with(right, {{45000, -1e30f}});
+    const Samples loudKey = with(key, {{42000, 1e30f}});
+    for (const bool keyed : {false, true}) {
+        INFO(keyed ? "keyed, absurdly loud" : "by its own input, absurdly loud");
+        Spectral loud(values), plain(values);
+        const auto [l1, r1] = loud.play(loudLeft, loudRight, {}, Key{&loudKey, &loudKey, keyed});
+        const auto [l0, r0] = plain.play(left, right, {}, Key{&key, &key, keyed});
+        CHECK(allFinite(l1) && allFinite(r1));
+        for (int d = 0; d < kDisplays; ++d) CHECK(allFinite(loud.shown(d)));
+        CHECK_ALLCLOSE(slice(l1, 3 * kSampleRate), slice(l0, 3 * kSampleRate), 0.0, 1e-5);
+        CHECK_ALLCLOSE(slice(r1, 3 * kSampleRate), slice(r0, 3 * kSampleRate), 0.0, 1e-5);
+    }
+}
+
 TEST_CASE("spectral: one channel") {
     const Samples x = pinkNoise(2 * kSampleRate, -12.0, 73);
     for (const float link : {100.f, 50.f, 0.f}) {
@@ -1148,7 +1208,7 @@ TEST_CASE("spectral: displays") {
         b.play(burst);
         const auto input = b.frames(kInput);
         size_t first = 0;
-        while (first < input.size() && allEqual(input[first], -150.0)) ++first;
+        while (first < input.size() && allEqual(input[first], spectral::kFloorDb)) ++first;
         CHECK_EQ(first, size_t{kStart / kH + 3});
         CHECK(std::abs(frameCentre(first, kN) - kStart) < kN / 2);
         CHECK(*std::max_element(input[first].begin(), input[first].end()) > -60.f);
@@ -1205,20 +1265,20 @@ TEST_CASE("spectral: engine latency") {
 
 #ifdef NDEBUG
 TEST_CASE("spectral: cost") {
-    // 10 s of stereo pink noise at the defaults in well under half a second: catches a transform per sample or
-    // an allocation storm, not a benchmark. Then how the work falls into audio callbacks.
+    // 10 s of stereo pink noise at the defaults in well under half a second of the thread's CPU time: catches a
+    // transform per sample or an allocation storm, not a benchmark. Then how the work falls into audio callbacks.
     const Samples x = pinkNoise(10 * kSampleRate, -14.0, 97);
     Samples l = x, r = x;
     Spectral s;
-    const auto start = std::chrono::steady_clock::now();
+    const double start = threadSeconds();
     s.run({&l, &r}, {}, {}, 256);
-    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    const double seconds = threadSeconds() - start;
     INFO(std::to_string(seconds) + " s");
     CHECK(seconds < 0.5);
 
     // No audio callback carries a whole frame: its work is spread over the hop after it. At 192 kHz in blocks of
-    // 32 (a frame every 64 blocks), the 99th percentile of the blocks' times is a small share of a hop's time (a
-    // frame worked out in one block would be over that percentile, and all of a hop's time).
+    // 32 (a frame every 64 blocks), the 99th percentile of the blocks' costs is a small share of a hop's (a frame
+    // worked out in one block would be over that percentile, and all of a hop's cost).
     constexpr double kRate = 192000.0;
     constexpr int kSmall = 32;
     auto processor = sub::BuiltinRegistry::instance().create("spectral");
@@ -1229,19 +1289,19 @@ TEST_CASE("spectral: cost") {
     ctx.sampleRate = kRate;
     std::vector<double> blocks;
     double total = 0.0;
-    for (size_t start = 0; start + kSmall <= fast.size(); start += kSmall) {
-        float* pointers[2] = {left.data() + start, right.data() + start};
-        const auto from = std::chrono::steady_clock::now();
+    for (size_t at = 0; at + kSmall <= fast.size(); at += kSmall) {
+        float* pointers[2] = {left.data() + at, right.data() + at};
+        const double from = threadTicks();
         processor->process(ctx, pointers, 2, kSmall);
-        const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - from).count();
-        if (start < static_cast<size_t>(kRate / 4)) continue;  // (settled)
+        const double took = threadTicks() - from;
+        if (at < static_cast<size_t>(kRate / 4)) continue;  // (settled)
         blocks.push_back(took);
         total += took;
     }
     std::sort(blocks.begin(), blocks.end());
     const double perHop = total / static_cast<double>(blocks.size()) * (spectral::frameSize(kRate) / 4 / kSmall);
     const double p99 = blocks[blocks.size() * 99 / 100];
-    INFO("99th percentile " + std::to_string(p99 * 1e6) + " us of a hop's " + std::to_string(perHop * 1e6) + " us");
+    INFO("99th percentile " + std::to_string(p99) + " of a hop's " + std::to_string(perHop));
     CHECK(p99 < 0.3 * perHop);
 }
 #endif
