@@ -1,0 +1,740 @@
+// The Reverb's editor (ui/qml/devices/editors/ReverbEditor.qml; ui/src/devices/ReverbFilterPad,
+// ReverbSpinPad, ReverbDecayGraph): loaded as the device view loads it, over a real engine. It fits
+// the view's height (and its own least height), nothing overlapping; every control is bound to its
+// parameter (undoably, with a tooltip); the pads' and the graph's drags are one undo step each and
+// set what the engine plays; the curves are the engine's own maths (ReverbResponse.h); what the
+// engine publishes as it renders reaches the pads and the graph, which animate and then rest. With
+// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there playing, frozen, and in other modes.
+
+#include <QCursor>
+#include <QGuiApplication>
+#include <QImage>
+#include <QMouseEvent>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QScreen>
+#include <QTest>
+#include <QUndoStack>
+
+#include <algorithm>
+#include <cmath>
+#include <tuple>
+#include <vector>
+
+#include "EditorHarness.h"
+#include "analysis/Spectrum.h"
+#include "audio/ReverbResponse.h"
+#include "controls/KnobItem.h"
+#include "controls/ValueBoxItem.h"
+#include "devices/DeviceParam.h"
+#include "devices/ReverbDecayGraph.h"
+#include "devices/ReverbFilterPad.h"
+#include "devices/ReverbSpinPad.h"
+#include "model/ParamSpec.h"
+
+using namespace sub::app;
+using namespace sub::ui;
+using sub::app::test::kSampleRate;
+
+namespace {
+
+// Every control of the editor and the parameter it is bound to (the pads and the graph aside).
+const QList<std::pair<const char*, const char*>> kControls = {
+    {"loCutButton", "lo_cut"},       {"hiCutButton", "hi_cut"},         {"inFreqBox", "in_freq"},
+    {"inWidthBox", "in_width"},      {"spinButton", "spin"},            {"spinAmountBox", "spin_amount"},
+    {"spinRateBox", "spin_rate"},    {"shapeKnob", "shape"},            {"predelayKnob", "predelay"},
+    {"sizeKnob", "size"},            {"stereoKnob", "stereo"},          {"densityChoice", "density"},
+    {"smoothChoice", "smooth"},      {"loShelfButton", "lo_shelf"},     {"hiFilterButton", "hi_filter"},
+    {"hiTypeChoice", "hi_type"},     {"loFreqBox", "lo_freq"},          {"loGainBox", "lo_gain"},
+    {"hiFreqBox", "hi_freq"},        {"hiGainBox", "hi_gain"},          {"decayKnob", "decay"},
+    {"freezeButton", "freeze"},      {"flatButton", "flat"},            {"cutButton", "cut"},
+    {"diffusionKnob", "diffusion"},  {"scaleKnob", "scale"},            {"chorusButton", "chorus"},
+    {"chorusAmountKnob", "chorus_amount"}, {"chorusRateKnob", "chorus_rate"}, {"reflectKnob", "reflect"},
+    {"diffuseKnob", "diffuse"},      {"mixKnob", "mix"}};
+const QStringList kCanvases = {QStringLiteral("filterPad"), QStringLiteral("spinPad"), QStringLiteral("decayGraph")};
+
+// The first of `frequencies` (rising) at or above `hz`.
+std::size_t indexOf(const std::vector<double>& frequencies, double hz) {
+    return std::size_t(std::lower_bound(frequencies.begin(), frequencies.end(), hz) - frequencies.begin());
+}
+
+}  // namespace
+
+class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorHarness {
+    Q_OBJECT
+
+    struct Shown {
+        QString track, device;
+        QQuickItem* view = nullptr;
+        ReverbFilterPad* filter = nullptr;
+        ReverbSpinPad* spin = nullptr;
+        ReverbDecayGraph* decay = nullptr;
+    };
+
+    // A track playing a 1 kHz tone at 0.5 (-6.02 dBFS) through a Reverb, its editor shown.
+    Shown reverb(double seconds = 1.0) {
+        Shown s;
+        s.track = audioTrackWith(tone(1000.0, int(seconds * kSampleRate)), QStringLiteral("tone"), seconds);
+        if (s.track.isEmpty())
+            return s;
+        s.device = editor()->addDevice(s.track, QStringLiteral("reverb"));
+        s.view = show(QStringLiteral("reverb"), s.track, s.device);
+        if (s.view) {
+            s.filter = find<ReverbFilterPad>(s.view, QStringLiteral("filterPad"));
+            s.spin = find<ReverbSpinPad>(s.view, QStringLiteral("spinPad"));
+            s.decay = find<ReverbDecayGraph>(s.view, QStringLiteral("decayGraph"));
+        }
+        return s;
+    }
+
+    double value(const Shown& s, const char* id) { return param(s.track, s.device, QString::fromLatin1(id)); }
+    void set(const Shown& s, const char* id, double v) {
+        editor()->setDeviceParam(s.track, s.device, QString::fromLatin1(id), v);
+    }
+
+    // The control named `name` (exactly).
+    QQuickItem* control(QQuickItem* view, const char* name) { return find(view, QString::fromLatin1(name)); }
+    // An EditorKnob's dial.
+    KnobItem* knob(QQuickItem* view, const char* name) {
+        QQuickItem* cell = control(view, name);
+        auto* paramKnob = cell ? qvariant_cast<QQuickItem*>(cell->property("knob")) : nullptr;
+        return paramKnob ? qvariant_cast<KnobItem*>(paramKnob->property("knob")) : nullptr;
+    }
+    // A ParamBox's box.
+    ValueBoxItem* box(QQuickItem* view, const char* name) {
+        QQuickItem* item = control(view, name);
+        return item ? qvariant_cast<ValueBoxItem*>(item->property("box")) : nullptr;
+    }
+    static sub::ui::DeviceParam* paramOf(QQuickItem* item) {
+        return item ? qvariant_cast<sub::ui::DeviceParam*>(item->property("param")) : nullptr;
+    }
+    bool lit(QQuickItem* view, const char* name) {
+        QQuickItem* item = control(view, name);
+        return item && item->property("lit").toBool();
+    }
+    void click(QQuickItem* view, const char* name) {
+        QQuickItem* item = control(view, name);
+        QVERIFY(item);
+        QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier,
+                          centerOf(qvariant_cast<QQuickItem*>(item->property("button"))));
+    }
+    // The control as the user sees it: a knob's dial, a box's value, a switch lit, a list's choice.
+    double shownValue(QQuickItem* view, const char* name) {
+        if (KnobItem* k = QByteArray(name).endsWith("Knob") ? knob(view, name) : nullptr)
+            return k->value();
+        if (ValueBoxItem* b = QByteArray(name).endsWith("Box") ? box(view, name) : nullptr)
+            return b->value();
+        if (QByteArray(name).endsWith("Button"))
+            return lit(view, name) ? 1.0 : 0.0;
+        QQuickItem* item = control(view, name);
+        return item ? item->property("index").toDouble() : -999.0;
+    }
+    // Where a control is in the editor.
+    static QRectF rectIn(QQuickItem* view, QQuickItem* item) {
+        return item ? item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height())) : QRectF();
+    }
+    // The engine's value of the device's parameter.
+    double engineParam(const Shown& s, const char* id) {
+        const auto pid = bridge()->engineDeviceId(s.track, s.device);
+        return pid ? double(engine()->processorParam(*pid, engine()->processorParamIndex(*pid, id))) : -999.0;
+    }
+
+    // The mouse at exact positions in an item (QTest's are whole pixels in the window).
+    void mouse(QEvent::Type type, QQuickItem* item, QPointF at, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        const QPointF scene = item->mapToScene(at);
+        const Qt::MouseButton button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+        const Qt::MouseButtons buttons = type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton;
+        QMouseEvent event(type, scene, scene, window_->mapToGlobal(scene), button, buttons, modifiers);
+        QGuiApplication::sendEvent(window_, &event);
+    }
+    // A drag from `from` to `to` in `steps` moves, then let go.
+    void drag(QQuickItem* item, QPointF from, QPointF to, int steps = 3,
+              Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        mouse(QEvent::MouseButtonPress, item, from, modifiers);
+        for (int i = 1; i <= steps; ++i)
+            mouse(QEvent::MouseMove, item, from + (to - from) * (double(i) / steps), modifiers);
+        mouse(QEvent::MouseButtonRelease, item, to, modifiers);
+    }
+    // The hovering mouse (no button).
+    void hover(QQuickItem* item, QPointF at) {
+        const QPointF scene = item->mapToScene(at);
+        QMouseEvent event(QEvent::MouseMove, scene, scene, window_->mapToGlobal(scene), Qt::NoButton, Qt::NoButton,
+                          Qt::NoModifier);
+        QGuiApplication::sendEvent(window_, &event);
+    }
+
+    // Display refreshes `ms` apart, `count` of them.
+    void refreshes(int count, int ms = 20) {
+        for (int i = 0; i < count; ++i) {
+            QTest::qWait(ms);
+            refreshDisplays();
+        }
+    }
+    // Plays the track from the start for `seconds` (offline), then reads the displays.
+    void play(double seconds = 0.5) {
+        engine()->renderOffline(0.0, int64_t(seconds * kSampleRate));
+        refreshDisplays();
+    }
+
+    // Whether the part of `image` over `item` holds more than one colour.
+    QImage partOf(const QImage& image, QQuickItem* item) {
+        const QRectF scene = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+        const qreal dpr = image.devicePixelRatio();
+        return image.copy(QRectF(scene.topLeft() * dpr, scene.size() * dpr).toRect());
+    }
+    static bool varied(const QImage& image) {
+        const QRgb first = image.pixel(0, 0);
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                if (image.pixel(x, y) != first)
+                    return true;
+        return false;
+    }
+
+    // The controls within the body's margins, none overlapping another.
+    void checkLaidOut(QQuickItem* view) {
+        QList<std::pair<QString, QRectF>> rects;
+        for (const auto& [name, id] : kControls)
+            rects.append({QString::fromLatin1(name), rectIn(view, control(view, name))});
+        for (const QString& name : kCanvases) rects.append({name, rectIn(view, find(view, name))});
+        for (const auto& [name, r] : rects) {
+            QVERIFY2(!r.isEmpty(), qPrintable(name));
+            QVERIFY2(r.left() >= 8 - 1e-6 && r.right() <= view->width() - 8 + 1e-6 && r.top() >= 6 - 1e-6 &&
+                         r.bottom() <= view->height() - 6 + 1e-6,
+                     qPrintable(name + QStringLiteral(" at ") + QString::number(r.x()) + u',' +
+                                QString::number(r.y()) + u' ' + QString::number(r.width()) + u'x' +
+                                QString::number(r.height())));
+        }
+        for (int i = 0; i < rects.size(); ++i)
+            for (int j = i + 1; j < rects.size(); ++j)
+                QVERIFY2(!rects[i].second.intersects(rects[j].second),
+                         qPrintable(rects[i].first + QStringLiteral(" over ") + rects[j].first));
+    }
+
+private Q_SLOTS:
+    void initTestCase() {
+        if (!haveDisplay())
+            QSKIP("needs a display: the offscreen platform renders Qt Quick in software, without this geometry");
+        startHost();
+    }
+
+    void cleanupTestCase() { stopHost(); }
+
+    void init() {
+        clearHost();
+        // The real pointer off the window: a box's or a knob's drag puts it back where the drag began
+        // (DragCursor), where it would hover whatever the next editor has there (and show its tooltip).
+        QCursor::setPos(window_->screen(), QPoint(0, 0));
+    }
+
+    // --- Laid out --------------------------------------------------------------------------------
+
+    void layout() {
+        QVariant url;
+        QMetaObject::invokeMethod(root_.get(), "editorFor", Q_RETURN_ARG(QVariant, url),
+                                  Q_ARG(QVariant, QStringLiteral("reverb")));
+        QVERIFY(url.toString().endsWith(QStringLiteral("ReverbEditor.qml")));
+        Shown s = reverb();
+        QVERIFY(s.view && s.filter && s.spin && s.decay);
+        QVERIFY2(s.view->implicitHeight() <= bodyHeight(), qPrintable(QString::number(s.view->implicitHeight())));
+        QCOMPARE(s.view->implicitWidth(), 890.0);
+        QCOMPARE(s.view->height(), double(bodyHeight()));
+        for (const auto& [name, id] : kControls) QVERIFY2(control(s.view, name), name);
+        // The pads and the graph grow into the body: 26 px from its top, 28 from its bottom (their boxes).
+        for (QQuickItem* canvas : {static_cast<QQuickItem*>(s.filter), static_cast<QQuickItem*>(s.spin),
+                                   static_cast<QQuickItem*>(s.decay)})
+            QVERIFY2(std::abs(canvas->height() - (s.view->height() - 54)) <= 1.0, qPrintable(canvas->objectName()));
+        QCOMPARE(s.filter->width(), double(ReverbFilterPad::kWidth));
+        QCOMPARE(s.spin->width(), double(ReverbSpinPad::kWidth));
+        QCOMPARE(s.decay->width(), double(ReverbDecayGraph::kWidth));
+        checkLaidOut(s.view);
+        if (QTest::currentTestFailed())
+            return;
+
+        // At its own least height too.
+        const int least = int(std::ceil(s.view->implicitHeight()));
+        QQuickItem* view = show(QStringLiteral("reverb"), s.track, s.device, least);
+        QVERIFY(view);
+        QCOMPARE(view->height(), double(least));
+        checkLaidOut(view);
+        for (const QString& name : kCanvases) {
+            QQuickItem* canvas = find(view, name);
+            QVERIFY(canvas->height() >= canvas->implicitHeight());
+        }
+    }
+
+    // --- Bound, undoable ------------------------------------------------------------------------
+
+    void controls() {
+        Shown s = reverb();
+        QVERIFY(s.view);
+        // Every control is bound to its parameter, with a tooltip.
+        for (const auto& [name, id] : kControls) {
+            sub::ui::DeviceParam* p = paramOf(control(s.view, name));
+            QVERIFY2(p && p->valid(), name);
+            QCOMPARE(p->paramId(), QString::fromLatin1(id));
+            QVERIFY2(!control(s.view, name)->property("tooltip").toString().isEmpty(), name);
+        }
+        // Each shows its default.
+        const QList<std::pair<const char*, double>> defaults = {
+            {"loCutButton", 1},   {"hiCutButton", 1},     {"inFreqBox", 830},    {"inWidthBox", 7.5},
+            {"spinButton", 1},    {"spinAmountBox", 25},  {"spinRateBox", 0.3},  {"shapeKnob", 50},
+            {"predelayKnob", 2.5}, {"sizeKnob", 100},     {"stereoKnob", 100},   {"densityChoice", 3},
+            {"smoothChoice", 1},  {"loShelfButton", 1},   {"hiFilterButton", 1}, {"hiTypeChoice", 0},
+            {"loFreqBox", 90},    {"loGainBox", 75},      {"hiFreqBox", 4500},   {"hiGainBox", 70},
+            {"decayKnob", 1200},  {"freezeButton", 0},    {"flatButton", 1},     {"cutButton", 1},
+            {"diffusionKnob", 70}, {"scaleKnob", 50},     {"chorusButton", 1},   {"chorusAmountKnob", 20},
+            {"chorusRateKnob", 0.8}, {"reflectKnob", 0},  {"diffuseKnob", 0},    {"mixKnob", 40}};
+        QCOMPARE(defaults.size(), kControls.size());
+        for (const auto& [name, v] : defaults)
+            QVERIFY2(std::abs(shownValue(s.view, name) - v) < 1e-4 * std::max(1.0, std::abs(v)),
+                     qPrintable(QString::fromLatin1(name) + u' ' + QString::number(shownValue(s.view, name))));
+        QVERIFY(knob(s.view, "sizeKnob")->logScale() && knob(s.view, "decayKnob")->logScale());
+        QVERIFY(box(s.view, "inFreqBox")->logScale() && box(s.view, "hiFreqBox")->logScale());
+        // Size reads as Live's, a bare number.
+        QCOMPARE(paramOf(control(s.view, "sizeKnob"))->text(), QStringLiteral("100.00"));
+        QCOMPARE(formatValue(0.22, QStringLiteral("size")), QStringLiteral("0.22"));
+        QCOMPARE(formatValue(500.0, QStringLiteral("size")), QStringLiteral("500.00"));
+        QCOMPARE(box(s.view, "inFreqBox")->text(), QStringLiteral("830 Hz"));
+        QCOMPARE(box(s.view, "hiFreqBox")->text(), QStringLiteral("4.50 kHz"));
+
+        // A change of each shows on its control, and undo restores it.
+        const QList<std::pair<const char*, double>> changes = {
+            {"loCutButton", 0},   {"hiCutButton", 0},     {"inFreqBox", 2000},   {"inWidthBox", 3},
+            {"spinButton", 0},    {"spinAmountBox", 60},  {"spinRateBox", 1},    {"shapeKnob", 80},
+            {"predelayKnob", 40}, {"sizeKnob", 250},      {"stereoKnob", 50},    {"densityChoice", 1},
+            {"smoothChoice", 2},  {"loShelfButton", 0},   {"hiFilterButton", 0}, {"hiTypeChoice", 1},
+            {"loFreqBox", 300},   {"loGainBox", 40},      {"hiFreqBox", 2000},   {"hiGainBox", 30},
+            {"decayKnob", 5000},  {"freezeButton", 1},    {"flatButton", 0},     {"cutButton", 0},
+            {"diffusionKnob", 20}, {"scaleKnob", 90},     {"chorusButton", 0},   {"chorusAmountKnob", 70},
+            {"chorusRateKnob", 3}, {"reflectKnob", -6},   {"diffuseKnob", 3},    {"mixKnob", 100}};
+        for (int i = 0; i < changes.size(); ++i) {
+            const auto& [name, v] = changes[i];
+            const char* id = kControls[i].second;
+            QCOMPARE(QByteArray(kControls[i].first), QByteArray(name));
+            const double before = shownValue(s.view, name);
+            set(s, id, v);
+            QVERIFY2(std::abs(shownValue(s.view, name) - v) < 1e-4 * std::max(1.0, std::abs(v)), name);
+            undo()->undo();
+            QVERIFY2(shownValue(s.view, name) == before, name);
+        }
+
+        // Freeze, clicked: one undo step; the graph knows.
+        int steps = undo()->index();
+        click(s.view, "freezeButton");
+        QCOMPARE(value(s, "freeze"), 1.0);
+        QVERIFY(lit(s.view, "freezeButton"));
+        QVERIFY(s.decay->frozen());
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+        QVERIFY(!s.decay->frozen());
+
+        // Density from its list.
+        steps = undo()->index();
+        QMetaObject::invokeMethod(control(s.view, "densityChoice"), "choose", Q_ARG(QVariant, 0));
+        QCOMPARE(value(s, "density"), 0.0);
+        QCOMPARE(control(s.view, "densityChoice")->property("index").toInt(), 0);
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+
+        // A knob dragged up: one undo step.
+        steps = undo()->index();
+        const QPoint decayAt = centerOf(qvariant_cast<QQuickItem*>(control(s.view, "decayKnob")->property("knob")));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, decayAt);
+        for (int dy = 10; dy <= 40; dy += 10) dragTo(decayAt - QPoint(0, dy));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, decayAt - QPoint(0, 40));
+        QVERIFY2(value(s, "decay") > 1500.0, qPrintable(QString::number(value(s, "decay"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(engineParam(s, "decay"), double(float(value(s, "decay"))));
+        undo()->undo();
+        QCOMPARE(value(s, "decay"), 1200.0);
+
+        // A frequency box dragged up moves it in log: by the same ratio from 4.5 kHz and from 450 Hz.
+        int boxSteps = 0;
+        const auto dragBoxUp = [&](double from) {
+            set(s, "hi_freq", from);
+            const int before = undo()->index();
+            const QPoint at = centerOf(control(s.view, "hiFreqBox"));
+            QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+            for (int dy = 5; dy <= 20; dy += 5) dragTo(at - QPoint(0, dy));
+            QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at - QPoint(0, 20));
+            boxSteps += undo()->index() - before;
+            return value(s, "hi_freq") / from;
+        };
+        const double high = dragBoxUp(4500.0), low = dragBoxUp(450.0);
+        QCOMPARE(boxSteps, 2);  // one undo step a drag
+        QVERIFY2(high > 1.05, qPrintable(QString::number(high)));
+        QVERIFY2(std::abs(high / low - 1.0) < 0.02, qPrintable(QString::number(high) + u' ' + QString::number(low)));
+        set(s, "hi_freq", 4500.0);
+
+        // Switches dim what they leave unused (still editable).
+        const auto opacityOf = [&](const char* name) { return control(s.view, name)->opacity(); };
+        QCOMPARE(opacityOf("hiTypeChoice"), 1.0);
+        set(s, "hi_filter", 0.0);
+        QTest::qWait(250);  // (the 120 ms fade)
+        QVERIFY(opacityOf("hiTypeChoice") < 1.0 && opacityOf("hiFreqBox") < 1.0 && opacityOf("hiGainBox") < 1.0);
+        QVERIFY(control(s.view, "hiFreqBox")->isEnabled());
+        set(s, "hi_filter", 1.0);
+        set(s, "hi_type", 1.0);
+        QTest::qWait(250);
+        QVERIFY(opacityOf("hiGainBox") < 1.0);
+        QCOMPARE(opacityOf("hiFreqBox"), 1.0);
+        QCOMPARE(opacityOf("hiTypeChoice"), 1.0);
+        QCOMPARE(control(s.view, "hiTypeChoice")->property("index").toInt(), 1);
+        // Flat and Cut act only frozen; the chorus's knobs only with Chorus; the input's boxes only with a cut.
+        QVERIFY(opacityOf("flatButton") < 1.0 && opacityOf("cutButton") < 1.0);
+        set(s, "freeze", 1.0);
+        set(s, "chorus", 0.0);
+        set(s, "lo_cut", 0.0);
+        set(s, "hi_cut", 0.0);
+        set(s, "spin", 0.0);
+        QTest::qWait(250);
+        QCOMPARE(opacityOf("flatButton"), 1.0);
+        QVERIFY(opacityOf("chorusAmountKnob") < 1.0 && opacityOf("chorusRateKnob") < 1.0);
+        QVERIFY(opacityOf("inFreqBox") < 1.0 && opacityOf("inWidthBox") < 1.0);
+        QVERIFY(opacityOf("spinAmountBox") < 1.0 && opacityOf("spinRateBox") < 1.0);
+    }
+
+    // --- The input filter's pad -------------------------------------------------------------------
+
+    void filterPad() {
+        Shown s = reverb();
+        QVERIFY(s.filter);
+        ReverbFilterPad* pad = s.filter;
+        const double rate = bridge()->sampleRate();
+        // The curve is the engine's filter.
+        const std::vector<double>& frequencies = pad->curveFrequencies();
+        const std::vector<double>& db = pad->curveDb();
+        QVERIFY(frequencies.size() >= 100 && db.size() == frequencies.size());
+        for (std::size_t i = 0; i < frequencies.size(); i += 13)
+            QCOMPARE(db[i], reverbInputFilterDb(830.0, 7.5, true, true, rate, {frequencies[i]})[0]);
+        QVERIFY(std::abs(pad->dot().x() - pad->xOf(830.0)) < 1e-9);
+        QVERIFY(std::abs(pad->dot().y() - pad->yOfWidth(7.5)) < 1e-9);
+
+        // Dragged: across for the frequency, up and down for the width, one undo step.
+        const int steps = undo()->index();
+        drag(pad, QPointF(pad->xOf(400.0), pad->yOfWidth(3.0)), QPointF(pad->xOf(2000.0), pad->yOfWidth(6.0)));
+        QVERIFY2(std::abs(value(s, "in_freq") / 2000.0 - 1.0) < 0.02, qPrintable(QString::number(value(s, "in_freq"))));
+        QVERIFY2(std::abs(value(s, "in_width") - 6.0) < 0.06, qPrintable(QString::number(value(s, "in_width"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(undo()->undoText(), QStringLiteral("Change Reverb Input Filter"));
+        QCOMPARE(engineParam(s, "in_freq"), double(float(value(s, "in_freq"))));
+        QCOMPARE(engineParam(s, "in_width"), double(float(value(s, "in_width"))));
+        QCOMPARE(box(s.view, "inWidthBox")->value(), value(s, "in_width"));
+        undo()->undo();
+        QCOMPARE(value(s, "in_freq"), 830.0);
+        QCOMPARE(value(s, "in_width"), 7.5);
+
+        // Shift drags finely: a quarter as far.
+        drag(pad, pad->dot(), pad->dot() + QPointF(0, -40), 3, Qt::ShiftModifier);
+        const double fine = value(s, "in_width") - 7.5;
+        undo()->undo();
+        QVERIFY2(fine > 0.0 && std::abs(fine - (pad->widthAt(pad->yOfWidth(7.5) - 10) - 7.5)) < 0.02,
+                 qPrintable(QString::number(fine)));
+
+        // Lo Cut off: the lows pass (once it has eased), the high cut's slope is unchanged.
+        const std::size_t at30 = indexOf(frequencies, 30.0), at16k = indexOf(frequencies, 16000.0);
+        const double hiBefore = pad->curveDb()[at16k];
+        set(s, "lo_cut", 0.0);
+        refreshes(20);
+        QVERIFY2(std::abs(pad->curveShown()[at30]) < 0.1, qPrintable(QString::number(pad->curveShown()[at30])));
+        QVERIFY(std::abs(pad->curveDb()[at16k] - hiBefore) < 1e-9);
+        QVERIFY(hiBefore < -3.0);
+    }
+
+    // --- Spin's pad -----------------------------------------------------------------------------
+
+    void spinPad() {
+        Shown s = reverb();
+        QVERIFY(s.spin);
+        ReverbSpinPad* pad = s.spin;
+        QVERIFY(std::abs(pad->handle().x() - pad->xOfRate(0.3)) < 1e-4);  // (0.3 as a float)
+        QVERIFY(std::abs(pad->handle().y() - pad->yOfAmount(25.0)) < 1e-4);
+        // Its particles are the reflections at rest: across by their pans, down by their times (the
+        // earliest at the top), all twelve at High.
+        const QList<ReverbTap> taps = reverbEarlyTaps(100.0, 50.0, 3);
+        for (int k = 0; k < 12; ++k) QVERIFY(pad->particleShown(k));
+        QVERIFY(pad->particles()[0].y() < pad->particles()[11].y());
+        QVERIFY((pad->particles()[3].x() > pad->width() / 2) == (taps[3].pan > 0));
+
+        const int steps = undo()->index();
+        drag(pad, QPointF(pad->xOfRate(0.1), pad->yOfAmount(10.0)), QPointF(pad->xOfRate(1.0), pad->yOfAmount(80.0)));
+        QVERIFY2(std::abs(value(s, "spin_rate") - 1.0) < 0.03, qPrintable(QString::number(value(s, "spin_rate"))));
+        QVERIFY2(std::abs(value(s, "spin_amount") - 80.0) < 1.0, qPrintable(QString::number(value(s, "spin_amount"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(undo()->undoText(), QStringLiteral("Change Reverb Spin"));
+        QVERIFY(std::abs(pad->handle().x() - pad->xOfRate(value(s, "spin_rate"))) < 1e-9);
+        QVERIFY(std::abs(pad->handle().y() - pad->yOfAmount(value(s, "spin_amount"))) < 1e-9);
+        QCOMPARE(engineParam(s, "spin_rate"), double(float(value(s, "spin_rate"))));
+        QCOMPARE(engineParam(s, "spin_amount"), double(float(value(s, "spin_amount"))));
+        QCOMPARE(box(s.view, "spinAmountBox")->value(), value(s, "spin_amount"));
+
+        // Sparse plays six of the twelve: the others are not drawn.
+        set(s, "density", 0.0);
+        for (int k = 0; k < 12; ++k) QCOMPARE(pad->particleShown(k), k % 2 == 0);
+        undo()->undo();
+        undo()->undo();
+    }
+
+    // --- The decay graph --------------------------------------------------------------------------
+
+    void decayGraph() {
+        Shown s = reverb();
+        QVERIFY(s.decay);
+        ReverbDecayGraph* graph = s.decay;
+        const double rate = bridge()->sampleRate();
+        // The curve is the engine's decay per frequency.
+        const std::vector<double>& frequencies = graph->frequencies();
+        QVERIFY(frequencies.size() >= 150 && graph->seconds().size() == frequencies.size());
+        const ReverbDecaySettings defaults;
+        for (std::size_t i = 0; i < frequencies.size(); i += 11)
+            QCOMPARE(graph->seconds()[i], reverbDecaySeconds(defaults, rate, {frequencies[i]})[0]);
+        // The handles: Decay at 1.2 s between the shelves, the shelves at their bands' times.
+        QVERIFY(std::abs(graph->decayHandle().y() - graph->yOf(1.2)) < 1e-9);
+        QVERIFY(std::abs(graph->loHandle().x() - graph->xOf(90.0)) < 1e-9);
+        QVERIFY(std::abs(graph->loHandle().y() - graph->yOf(1.2 * 0.75)) < 1e-9);
+        QVERIFY(std::abs(graph->hiHandle().x() - graph->xOf(4500.0)) < 1e-9);
+        QVERIFY(std::abs(graph->hiHandle().y() - graph->yOf(1.2 * 0.7)) < 1e-9);
+        QVERIFY(graph->decayHandle().x() > graph->loHandle().x() && graph->decayHandle().x() < graph->hiHandle().x());
+
+        // Decay, dragged up: twice as long, one undo step.
+        int steps = undo()->index();
+        const QPointF decayAt = graph->decayHandle();
+        drag(graph, decayAt, decayAt - QPointF(0, graph->yOf(1.2) - graph->yOf(2.4)));
+        QVERIFY2(std::abs(value(s, "decay") / 2400.0 - 1.0) < 0.03, qPrintable(QString::number(value(s, "decay"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(undo()->undoText(), QStringLiteral("Change Reverb Decay"));
+        QCOMPARE(engineParam(s, "decay"), double(float(value(s, "decay"))));
+        QCOMPARE(knob(s.view, "decayKnob")->value(), value(s, "decay"));
+
+        // The high shelf's handle to 2 kHz and 0.4 of the decay: one undo step.
+        steps = undo()->index();
+        const double decay = value(s, "decay") / 1000.0;
+        drag(graph, graph->hiHandle(), QPointF(graph->xOf(2000.0), graph->yOf(decay * 0.4)));
+        QVERIFY2(std::abs(value(s, "hi_freq") / 2000.0 - 1.0) < 0.03, qPrintable(QString::number(value(s, "hi_freq"))));
+        QVERIFY2(std::abs(value(s, "hi_gain") - 40.0) < 2.0, qPrintable(QString::number(value(s, "hi_gain"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(engineParam(s, "hi_gain"), double(float(value(s, "hi_gain"))));
+        QCOMPARE(box(s.view, "hiGainBox")->value(), value(s, "hi_gain"));
+        undo()->undo();
+        undo()->undo();
+
+        // A low-pass has no gain to drag: its handle sits on the curve and moves across only.
+        set(s, "hi_type", 1.0);
+        QVERIFY(std::abs(graph->hiHandle().y() - graph->yOf(reverbDecaySeconds(
+                    [] { ReverbDecaySettings lp; lp.hiLowpass = true; return lp; }(), rate, {4500.0})[0])) < 1e-6);
+        steps = undo()->index();
+        drag(graph, graph->hiHandle(), graph->hiHandle() + QPointF(0, -30));
+        QCOMPARE(undo()->index(), steps);  // (nothing to change)
+        drag(graph, graph->hiHandle(), graph->hiHandle() + QPointF(20, -30));
+        QVERIFY(value(s, "hi_freq") > 4500.0);
+        QCOMPARE(value(s, "hi_gain"), 70.0);
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+        undo()->undo();
+
+        // A double-click on the low shelf's handle switches it off: one undo step; its handle dims to
+        // the decay's line.
+        steps = undo()->index();
+        QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, scenePoint(graph, graph->loHandle()));
+        QCOMPARE(value(s, "lo_shelf"), 0.0);
+        QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(undo()->undoText(), QStringLiteral("Switch Reverb Shelf"));
+        QVERIFY(!lit(s.view, "loShelfButton"));
+        QVERIFY(std::abs(graph->loHandle().y() - graph->yOf(1.2)) < 1e-9);
+        QCOMPARE(value(s, "lo_freq"), 90.0);  // (the double-click dragged nothing)
+        undo()->undo();
+        QCOMPARE(value(s, "lo_shelf"), 1.0);
+
+        // The shelves' ranges overlap: the low one right of the high one still picks each by its handle.
+        set(s, "lo_freq", 2000.0);
+        set(s, "hi_freq", 500.0);
+        drag(graph, graph->loHandle(), graph->loHandle() + QPointF(10, 0));
+        QVERIFY(value(s, "lo_freq") > 2000.0 && value(s, "hi_freq") == 500.0);
+        drag(graph, graph->hiHandle(), graph->hiHandle() + QPointF(-10, 0));
+        QVERIFY(value(s, "hi_freq") < 500.0 && value(s, "lo_freq") > 2000.0);
+        for (int i = 0; i < 4; ++i) undo()->undo();
+        QCOMPARE(value(s, "lo_freq"), 90.0);
+        QCOMPARE(value(s, "hi_freq"), 4500.0);
+
+        // Frozen: every band holds (with Cut and Flat about 1000 s, along the top).
+        set(s, "freeze", 1.0);
+        QVERIFY(graph->frozen());
+        for (const double seconds : graph->seconds()) QVERIFY2(seconds >= 900.0, qPrintable(QString::number(seconds)));
+        hover(s.view, QPointF(1, 1));  // (the mouse off the handles)
+        QCOMPARE(graph->hovered(), ReverbDecayGraph::None);
+        QCOMPARE(graph->readout(), QStringLiteral("Frozen"));
+        // Without Flat the shelves still take their bands away.
+        set(s, "flat", 0.0);
+        const auto at = [&](double hz) {
+            return graph->seconds()[indexOf(frequencies, hz)];
+        };
+        QVERIFY2(at(10000.0) < 10.0, qPrintable(QString::number(at(10000.0))));
+        QVERIFY2(at(1000.0) > 20.0, qPrintable(QString::number(at(1000.0))));
+    }
+
+    // --- What the engine publishes reaches them -------------------------------------------------
+
+    void displays() {
+        Shown s = reverb();
+        QVERIFY(s.filter && s.spin && s.decay);
+        refreshDisplays();  // (nothing yet)
+        QCOMPARE(s.filter->inputLevel(), -90.0);
+        play();
+        // The input: the tone's 0.5 summed to mono.
+        QVERIFY2(std::abs(s.filter->inputLevel() + 6.02) < 0.6, qPrintable(QString::number(s.filter->inputLevel())));
+        QVERIFY(s.filter->glow() > 0.5);
+        const auto peakHz = [](const sub::app::analysis::FallingSpectrum& spectrum) {
+            const std::vector<float>& levels = spectrum.levels();
+            const std::size_t top = std::size_t(std::max_element(levels.begin(), levels.end()) - levels.begin());
+            return double(top) * spectrum.sampleRate() / sub::app::analysis::FallingSpectrum::kFftSize;
+        };
+        const double inputPeak = peakHz(s.filter->spectrum());
+        QVERIFY2(std::abs(std::log2(inputPeak / 1000.0)) < 1.0 / 6, qPrintable(QString::number(inputPeak)));
+        // The tail: its meter, and its spectrum around the tone.
+        QVERIFY2(s.decay->tailLevel() > -50.0, qPrintable(QString::number(s.decay->tailLevel())));
+        const double tailPeak = peakHz(s.decay->tailSpectrum());
+        QVERIFY2(std::abs(std::log2(tailPeak / 1000.0)) < 1.0 / 6, qPrintable(QString::number(tailPeak)));
+        const std::size_t bin1k = std::size_t(std::lround(1000.0 * sub::app::analysis::FallingSpectrum::kFftSize /
+                                                          s.decay->tailSpectrum().sampleRate()));
+        QVERIFY(s.decay->tailSpectrum().levels()[bin1k] > sub::app::analysis::FallingSpectrum::kFloorDb + 30);
+        // Spin's phase, and the reflections lit.
+        QVERIFY2(s.spin->phase() >= 0.0 && s.spin->phase() < 1.0, qPrintable(QString::number(s.spin->phase())));
+        QVERIFY(s.spin->flash() > 0.5);
+        QVERIFY(s.spin->amountShown() > 0.0);  // (the swing easing in as the reflections sound)
+
+        // Nothing more played: the tail meter falls (at least as fast as the tail would), the input reads
+        // nothing and the glow fades.
+        const double tail = s.decay->tailLevel(), glow = s.filter->glow(), flash = s.spin->flash();
+        refreshes(10, 30);
+        QVERIFY2(s.decay->tailLevel() <= tail - 10.0, qPrintable(QString::number(s.decay->tailLevel())));
+        QVERIFY2(s.spin->amountShown() > 0.15, qPrintable(QString::number(s.spin->amountShown())));  // (they ring on)
+        QCOMPARE(s.filter->inputLevel(), -90.0);
+        QVERIFY(s.filter->glow() < glow);
+        QVERIFY(s.spin->flash() < flash);
+    }
+
+    // --- Transitions ease, and then everything rests --------------------------------------------
+
+    void animation() {
+        Shown s = reverb();
+        QVERIFY(s.filter && s.spin && s.decay);
+        refreshes(3);
+        // Freeze lifts the curve over a moment, not at once.
+        click(s.view, "freezeButton");
+        QVERIFY(s.decay->frozen());
+        QVERIFY(s.decay->frozenShown() < 0.5);  // (the display clock may have ticked once since)
+        refreshDisplays();
+        QVERIFY2(s.decay->frozenShown() > 0.0 && s.decay->frozenShown() < 1.0,
+                 qPrintable(QString::number(s.decay->frozenShown())));
+        const double middle = s.decay->shownY()[s.decay->shownY().size() / 2];
+        QVERIFY(middle < s.decay->yOf(1.2) && middle > s.decay->yOf(1000.0));
+        for (int i = 0; i < 60 && s.decay->frozenShown() < 1.0; ++i) refreshes(1);
+        QCOMPARE(s.decay->frozenShown(), 1.0);
+        QCOMPARE(s.decay->shownY()[s.decay->shownY().size() / 2], s.decay->yOf(1000.0));  // along the top
+
+        // A switch eases the filter's curve: Lo Cut off.
+        ReverbFilterPad* pad = s.filter;
+        const std::vector<double> frequencies = pad->curveFrequencies();
+        const std::size_t at30 = indexOf(frequencies, 30.0);
+        const double before = pad->curveShown()[at30];
+        QVERIFY(before < -6.0);
+        click(s.view, "loCutButton");
+        QCOMPARE(value(s, "lo_cut"), 0.0);
+        QVERIFY(pad->curveShown()[at30] < before + 0.5 * (pad->curveDb()[at30] - before));  // (not at once)
+        refreshDisplays();
+        QVERIFY2(pad->curveShown()[at30] > before && pad->curveShown()[at30] < pad->curveDb()[at30],
+                 qPrintable(QString::number(pad->curveShown()[at30])));
+        QVERIFY(pad->animating());
+        refreshes(20);
+        QVERIFY(pad->curveShown() == pad->curveDb());
+
+        // A drag never animates: the curve follows the parameter at once.
+        set(s, "in_width", 2.0);
+        QVERIFY(pad->curveShown() == pad->curveDb());
+
+        // Something played, then nothing: within a few seconds of refreshes nothing asks to be painted.
+        set(s, "freeze", 0.0);  // (frozen with Cut, nothing new reaches the tail)
+        play(0.3);
+        QVERIFY(s.decay->animating() && pad->animating() && s.spin->animating());
+        QVERIFY(s.decay->tailLevel() > -50.0);
+        bool rested = false;
+        for (int i = 0; i < 200 && !rested; ++i) {
+            refreshes(1);
+            rested = !s.decay->animating() && !pad->animating() && !s.spin->animating();
+        }
+        QVERIFY2(rested, qPrintable(QStringLiteral("decay %1 filter %2 spin %3")
+                                        .arg(s.decay->animating())
+                                        .arg(pad->animating())
+                                        .arg(s.spin->animating())));
+        QCOMPARE(s.decay->tailLevel(), ReverbDecayGraph::kMeterFloorDb);
+        QVERIFY(s.spin->amountShown() < 0.05);  // (in silence the reflections settle at rest)
+        QCOMPARE(s.spin->flash(), 0.0);
+        QCOMPARE(s.filter->glow(), 0.0);
+        refreshes(5);
+        QVERIFY(!s.decay->animating() && !pad->animating() && !s.spin->animating());
+    }
+
+    // --- How it looks ------------------------------------------------------------------------------
+
+    void screenshot() {
+        Shown s = reverb(2.0);
+        QVERIFY(s.view && s.spin && s.decay);
+        play(0.6);
+        refreshes(2, 16);
+        QTest::qWait(50);
+        const QImage playing = grab();
+        QVERIFY(varied(partOf(playing, s.decay)));
+        QVERIFY(varied(partOf(playing, s.spin)));
+        QVERIFY(varied(partOf(playing, s.filter)));
+        save(playing, QStringLiteral("reverb.png"));
+
+        // Hovering a shelf's handle reads it out.
+        hover(s.decay, s.decay->hiHandle());
+        refreshes(10, 16);
+        QCOMPARE(s.decay->hovered(), ReverbDecayGraph::Hi);
+        QCOMPARE(s.decay->readout(), QStringLiteral("Hi 4.50 kHz · 70 %"));
+        QTest::qWait(50);
+        save(grab(), QStringLiteral("reverb-hover.png"));
+        hover(s.view, QPointF(1, 1));
+
+        // Frozen while it plays (Cut off: the input keeps feeding the frozen tail), Spin wide and fast, Chorus
+        // deep: first as Freeze lifts the curve, then held.
+        set(s, "cut", 0.0);
+        set(s, "spin_amount", 90.0);
+        set(s, "spin_rate", 1.1);
+        set(s, "chorus_amount", 80.0);
+        play(0.6);
+        click(s.view, "freezeButton");
+        hover(s.view, QPointF(2, 2));  // (off the button: no tooltip)
+        QTest::qWait(60);
+        QVERIFY(s.decay->frozenShown() > 0.0 && s.decay->frozenShown() < 1.0);
+        save(grab(), QStringLiteral("reverb-freezing.png"));
+        refreshes(60, 16);
+        engine()->renderOffline(0.0, int64_t(0.8 * kSampleRate));
+        refreshDisplays();
+        refreshes(2, 16);
+        QTest::qWait(50);
+        QCOMPARE(s.decay->frozenShown(), 1.0);
+        save(grab(), QStringLiteral("reverb-frozen.png"));
+
+        // Another mode: Sparse, the high filter a low-pass, the input band narrow, Lo Shelf, Spin and Chorus off.
+        set(s, "freeze", 0.0);
+        set(s, "cut", 1.0);
+        set(s, "density", 0.0);
+        set(s, "hi_type", 1.0);
+        set(s, "hi_freq", 2500.0);
+        set(s, "lo_shelf", 0.0);
+        set(s, "in_width", 2.5);
+        set(s, "in_freq", 1500.0);
+        set(s, "spin", 0.0);
+        set(s, "chorus", 0.0);
+        set(s, "decay", 6000.0);
+        refreshes(30, 16);
+        QTest::qWait(50);
+        save(grab(), QStringLiteral("reverb-sparse.png"));
+    }
+};
+
+QTEST_MAIN(TestUiDeviceEditorsReverb)
+#include "test_ui_device_editors_reverb.moc"
