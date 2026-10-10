@@ -63,7 +63,6 @@ namespace {
 
 constexpr int kOs = amp::kOversampling;
 constexpr int kChunk = 16;                // base-rate samples per chunk of control-rate work
-constexpr int kMeterSamples = amp::kDisplaySamples;  // audio per display value (a multiple of kChunk)
 constexpr double kSmoothSeconds = 0.02;   // the dials' one-poles
 constexpr double kMorphSeconds = 0.05;    // a change of model
 constexpr double kFadeSeconds = 0.02;     // the Output switch's crossfade
@@ -73,6 +72,8 @@ constexpr int kSleepFrames = 4096;        // silence in before an amp at rest ma
 constexpr int kQuietOut = 256;            // and out (well past what its down-sampler holds)
 constexpr int kLevelPoints = 64;          // a period's samples for the morph's levels (amp::Transfer)
 constexpr int kLevelSteps = 16;           // points of the morph its levels are worked out at
+// The displays': audio per value (a multiple of kChunk) and what a level reads at silence.
+constexpr int kMeterSamples = amp::kDisplaySamples;
 constexpr float kFloorDb = amp::kDisplayFloorDb;
 // Below this the supply's sag leaves the power stage's gain at exactly 1.0f
 // (1 + sag env rounds to 1): the envelope is flushed to 0 there, every sample,

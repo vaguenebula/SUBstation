@@ -233,9 +233,9 @@ double bestOfThree(const ParamValues& values, const Samples& left, const Samples
 namespace {
 
 const ParamValues kAllAtTen = {{"gain", 10.f},   {"bass", 10.f},     {"middle", 10.f},
-                          {"treble", 10.f}, {"presence", 10.f}, {"volume", 10.f}};
+                               {"treble", 10.f}, {"presence", 10.f}, {"volume", 10.f}};
 const ParamValues kAllAtZero = {{"gain", 0.f},   {"bass", 0.f},     {"middle", 0.f},
-                           {"treble", 0.f}, {"presence", 0.f}, {"volume", 0.f}};
+                                {"treble", 0.f}, {"presence", 0.f}, {"volume", 0.f}};
 const char* const kDials[] = {"gain", "bass", "middle", "treble", "presence", "volume"};
 
 // The -12 dBFS (peak) 220 Hz sine most tests play, `seconds` long.
@@ -906,7 +906,7 @@ TEST_CASE("an amp's model change in a morph keeps its level whether a dial glide
     for (const auto& [from, mid, last] : triples) {
         INFO(modelName(from) + " to " + modelName(mid) + " to " + modelName(last));
         const std::vector<ParamChange> changes = {{first, "type", static_cast<float>(mid)},
-                                             {second, "type", static_cast<float>(last)}};
+                                                  {second, "type", static_cast<float>(last)}};
         std::vector<ParamChange> gliding = changes;
         gliding.insert(gliding.begin(), {glide, "gain", 5.5f});
         Amp a(kSampleRate, model(from)), b(kSampleRate, model(from, {{"gain", 5.5f}}));
