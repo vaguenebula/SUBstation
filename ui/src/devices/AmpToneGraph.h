@@ -134,7 +134,6 @@ private:
     QString wheelGesture_;    // the wheel's merge key, its handle, since its last notch
     int wheelHandle_ = -1;
     QElapsedTimer wheelClock_;
-    QElapsedTimer clock_;
     QMetaObject::Connection bridgeConnection_;
 };
 

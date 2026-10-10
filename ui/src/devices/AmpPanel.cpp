@@ -1,5 +1,6 @@
 #include "devices/AmpPanel.h"
 
+#include "audio/AmpResponse.h"
 #include "devices/AmpDisplays.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
@@ -20,23 +21,18 @@ constexpr double kColorSeconds = 0.08;  // a new model's colour
 constexpr double kMeterFallDbPerSecond = 24.0;
 constexpr double kMeterHoldSeconds = 1.0;
 
-// From `a` to `b` component by component (8 bits each: exactly `b` at 1).
-QColor mix(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    auto channel = [t](int from, int to) { return int(std::lround(from + (to - from) * t)); };
-    return QColor(channel(a.red(), b.red()), channel(a.green(), b.green()), channel(a.blue(), b.blue()),
-                  channel(a.alpha(), b.alpha()));
-}
-
 }  // namespace
 
-AmpPanel::AmpPanel(QQuickItem* parent) : DeviceCanvas(parent) {
+AmpPanel::AmpPanel(QQuickItem* parent)
+    : DeviceCanvas(parent), floorDb_(ampDisplays::floorDb()), names_(sub::app::ampModelNames()) {
     setAcceptedMouseButtons(Qt::NoButton);
     colorFrom_ = colorTo_ = ampModelColor(0);
     colorMix_.snap(1.0);
+    driveDb_.fill(floorDb_);
+    outputDb_ = floorDb_;
     for (Eased& g : glow_) g.snap(kIdleGlow);
     sag_.snap(0.0);
-    lamp_.snap(lampFor(kFloorDb, 0.0));
+    lamp_.snap(lampFor(floorDb_, 0.0));
     meter_.reset(kMeterFloorDb);
 }
 
@@ -64,7 +60,7 @@ void AmpPanel::setMeterRect(const QRectF& rect) {
     update();
 }
 
-QColor AmpPanel::modelColor() const { return mix(colorFrom_, colorTo_, colorMix_.value); }
+QColor AmpPanel::modelColor() const { return mixColor(colorFrom_, colorTo_, colorMix_.value); }
 
 double AmpPanel::glow(int tube) const { return tube >= 0 && tube < kTubes ? glow_[size_t(tube)].value : 0.0; }
 
@@ -86,7 +82,8 @@ void AmpPanel::sync() {
         update();
         return;
     }
-    const int model = std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, 6);
+    const int model =
+        std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, int(names_.size()) - 1);
     if (!synced_ || model != model_) {
         if (synced_) {  // the colour turns from what is drawn to the new model's
             colorFrom_ = modelColor();
@@ -108,9 +105,7 @@ void AmpPanel::sync() {
 }
 
 void AmpPanel::refreshDisplays() {
-    const double dt = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    const double dt = tickSeconds();
 
     // The latest values; a display that read nothing keeps its last.
     bool read = false;
@@ -118,15 +113,15 @@ void AmpPanel::refreshDisplays() {
                                             QStringLiteral("drive3"), QStringLiteral("power")};
     const size_t keep = ampDisplays::recentValues(dt, sampleRate());
     for (int i = 0; i < kTubes; ++i)
-        read = ampDisplays::loudest(readDisplay(kDrives[i]), keep, kFloorDb, driveDb_[size_t(i)]) || read;
+        read = ampDisplays::loudest(readDisplay(kDrives[i]), keep, floorDb_, driveDb_[size_t(i)]) || read;
     read = ampDisplays::latest(readDisplay(QStringLiteral("sag")), sagRead_) || read;
-    read = ampDisplays::loudest(readDisplay(QStringLiteral("output")), keep, kFloorDb, outputDb_) || read;
+    read = ampDisplays::loudest(readDisplay(QStringLiteral("output")), keep, floorDb_, outputDb_) || read;
     if (read) {
         lastRead_.restart();
     } else if (!lastRead_.isValid() || lastRead_.elapsed() > kQuietSeconds * 1000.0) {
-        driveDb_.fill(kFloorDb);  // nothing coming: everything cools
+        driveDb_.fill(floorDb_);  // nothing coming: everything cools
         sagRead_ = 0.0;
-        outputDb_ = kFloorDb;
+        outputDb_ = floorDb_;
     }
 
     bool moving = false;
@@ -213,7 +208,7 @@ void AmpPanel::paintTube(SgPainter& p, const QRectF& body, double g, double blue
     const double w = body.width(), h = body.height();
     const double round = w / 2.0;
     const QColor cold(0xff, 0x6a, 0x00), hot(0xff, 0xd2, 0x7a);
-    const QColor heat = mix(cold, hot, g);  // orange when idle, nearly white when driven hard
+    const QColor heat = mixColor(cold, hot, g);  // orange when idle, nearly white when driven hard
     // The glass, warmed from inside (and hazed blue, the power tube's, as the supply sags).
     p.fillRoundedRect(body, round, round, withAlpha(Theme::kSurface, 64));
     p.fillRoundedRect(body, round, round, withAlpha(QColor(0xff, 0x8a, 0x2a), int(36 * g * g)));
@@ -258,11 +253,8 @@ void AmpPanel::paintJewel(SgPainter& p) const {
     // The model's name as the amp's logo.
     QFont font = uiFont(10, true);
     font.setItalic(true);
-    static const QString kNames[] = {QStringLiteral("Clean"), QStringLiteral("Boost"), QStringLiteral("Blues"),
-                                     QStringLiteral("Rock"),  QStringLiteral("Lead"),  QStringLiteral("Heavy"),
-                                     QStringLiteral("Bass")};
     const double top = centre.y() + 9.0;
-    p.drawText(QRectF(r.left(), top, r.width(), r.bottom() - top), Qt::AlignCenter, kNames[std::clamp(model_, 0, 6)],
+    p.drawText(QRectF(r.left(), top, r.width(), r.bottom() - top), Qt::AlignCenter, names_.value(model_),
                modelColor(), font);
 }
 

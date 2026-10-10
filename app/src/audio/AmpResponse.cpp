@@ -5,9 +5,22 @@
 #include <QMap>
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 namespace sub::app {
+
+QStringList ampModelNames() {
+    QStringList names;
+    for (const std::string& label : sub::amp::modelLabels()) names.append(QString::fromStdString(label));
+    return names;
+}
+
+int ampModelCount() { return sub::amp::kModels; }
+
+int ampDisplaySamples() { return sub::amp::kDisplaySamples; }
+
+double ampDisplayFloorDb() { return sub::amp::kDisplayFloorDb; }
 
 QList<double> ampToneResponseDb(int model, double bass, double middle, double treble, double presence,
                                 double sampleRate, const QList<double>& frequencies) {

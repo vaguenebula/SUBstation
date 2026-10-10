@@ -1,13 +1,25 @@
 #pragma once
 // The Amp device's curves, as its editor draws them: worked out by the engine's
 // own design (engine/src/builtin/AmpDesign.h: the model's voicing, its tone
-// stack, its filters and the stages' curve), so what is drawn is what plays.
+// stack, its filters and the stages' curve), so what is drawn is what plays;
+// and the figures the editor reads the device by (its models, its displays'
+// rate and floor), the device's own.
 
 #include <QList>
+#include <QStringList>
 
 #include <memory>
 
 namespace sub::app {
+
+// The models, in the Amp Type parameter's order (Clean, Boost, Blues, Rock, Lead, Heavy,
+// Bass), and how many there are.
+QStringList ampModelNames();
+int ampModelCount();
+
+// The device's displays: audio samples per value (256), and the floor they read (dB: -90).
+int ampDisplaySamples();
+double ampDisplayFloorDb();
 
 // The Amp's tone section (the model's tone stack with its make-up, and Presence)
 // in dB at each of `frequencies` (Hz), as the engine plays it at `sampleRate`.

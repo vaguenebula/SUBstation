@@ -47,7 +47,6 @@ class AmpDriveGraph : public DeviceCanvas {
 public:
     static constexpr int kWidth = 140;
     static constexpr int kMinimumHeight = 40;
-    static constexpr double kFloorDb = -90.0;
     static constexpr double kQuietSeconds = 0.3;  // with no display values this long, the dots fall
     static constexpr int kTrail = 8;              // ticks the trail remembers
     static constexpr double kReach = 0.86;        // the curve's largest output, of the half height
@@ -92,6 +91,7 @@ private:
         bool operator==(const CurveKey&) const = default;
     };
 
+    const double floorDb_;  // what the displays read at silence (the device's)
     int model_ = 0;
     double gain_ = 5.0, bass_ = 5.0, middle_ = 5.0, treble_ = 5.0, presence_ = 5.0, volume_ = 5.0;
     CurveKey made_;  // what the curve was last made from (model -1: not yet)
@@ -103,9 +103,8 @@ private:
     double curveSag_ = 0.0;  // the sag the curve was made with
     QMetaObject::Connection bridgeConnection_;
 
-    double inputRead_ = kFloorDb;  // the latest input peak (held through ticks that read none)
+    double inputRead_ = 0.0;  // the latest input peak (held through ticks that read none)
     double sagRead_ = 0.0;
-    QElapsedTimer clock_;
     QElapsedTimer lastRead_;
     MeterBallistics input_;
     Eased sag_;

@@ -23,10 +23,11 @@ double amplitude(double db) { return std::min(1.0, std::pow(10.0, db / 20.0)); }
 
 }  // namespace
 
-AmpDriveGraph::AmpDriveGraph(QQuickItem* parent) : DeviceCanvas(parent) {
+AmpDriveGraph::AmpDriveGraph(QQuickItem* parent) : DeviceCanvas(parent), floorDb_(ampDisplays::floorDb()) {
     setImplicitSize(kWidth, kMinimumHeight);
     setAcceptedMouseButtons(Qt::NoButton);
-    input_.reset(kFloorDb);
+    inputRead_ = floorDb_;
+    input_.reset(floorDb_);
     sag_.snap(0.0);
     // The curve is the engine's at its sample rate: made again when the audio device changes.
     connect(this, &DeviceCanvas::deviceChanged, this, [this] {
@@ -77,7 +78,7 @@ void AmpDriveGraph::sync() {
         update();
         return;
     }
-    model_ = std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, 6);
+    model_ = std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, sub::app::ampModelCount() - 1);
     gain_ = value(QStringLiteral("gain"));
     bass_ = value(QStringLiteral("bass"));
     middle_ = value(QStringLiteral("middle"));
@@ -131,21 +132,19 @@ void AmpDriveGraph::shapeCurve() {
 }
 
 void AmpDriveGraph::refreshDisplays() {
-    const double dt = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    const double dt = tickSeconds();
     bool read = ampDisplays::loudest(readDisplay(QStringLiteral("input")), ampDisplays::recentValues(dt, sampleRate()),
-                                     kFloorDb, inputRead_);
+                                     floorDb_, inputRead_);
     read = ampDisplays::latest(readDisplay(QStringLiteral("sag")), sagRead_) || read;
     if (read) {
         lastRead_.restart();
     } else if (!lastRead_.isValid() || lastRead_.elapsed() > kQuietSeconds * 1000.0) {
-        inputRead_ = kFloorDb;
+        inputRead_ = floorDb_;
         sagRead_ = 0.0;
     }
 
     const double level = input_.level;
-    input_.update(inputRead_, dt, kFallDbPerSecond, 0.0, kFloorDb);
+    input_.update(inputRead_, dt, kFallDbPerSecond, 0.0, floorDb_);
     bool moving = input_.level != level;
     sag_.target = std::max(0.0, sagRead_);
     moving = sag_.step(easeFraction(dt, kSagSeconds), 1e-3) || moving;
@@ -225,7 +224,7 @@ void AmpDriveGraph::paint(SgPainter& p) {
     const QFont font = uiFont(7);
     p.drawText(QRectF(r.left() + 4, r.top() + 2, 60, 12), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Drive"),
                Theme::kTextDim, font);
-    const QString peak = input_.level <= kFloorDb + 0.5
+    const QString peak = input_.level <= floorDb_ + 0.5
                              ? QStringLiteral("−∞")
                              : pythonFixed(input_.level, 0).replace(QLatin1Char('-'), QChar(0x2212)) +
                                    QStringLiteral(" dB");

@@ -26,7 +26,7 @@ Item {
 
     readonly property int leftWidth: 140   // the tubes over the drive graph
     readonly property int plateWidth: 368  // the model buttons and the knobs over the tone graph
-    readonly property int rightWidth: 80   // Output and Dry/Wet over the lamp (Mono 3 px clear of its button's border)
+    readonly property int rightWidth: 80   // Output and Dry/Wet over the lamp ("Mono" 3 px clear of its border)
     readonly property int meterWidth: 10
     readonly property int gap: 10
     readonly property int modelWidth: 50  // a model button's (7 x 50 + 6 x 3 = plateWidth)
@@ -79,7 +79,8 @@ Item {
         }
         ToolTip.visible: tubeHover.hovered
         ToolTip.delay: 700
-        ToolTip.text: qsTr("The three preamp stages and the power tube glow as hard as each is driven; the power tube turns blue as the supply sags")
+        ToolTip.text: qsTr("The three preamp stages and the power tube glow as hard as each is driven; "
+                           + "the power tube turns blue as the supply sags")
     }
     Item {  // the lamp's
         objectName: "lampTip"
@@ -196,21 +197,24 @@ Item {
             width: editor.knobWidth
             param: p.get("bass")
             title: qsTr("Bass")
-            tooltip: qsTr("Bass: the tone stack's lows. The tone controls interact, as on a real amp, and more of them can mean more distortion")
+            tooltip: qsTr("Bass: the tone stack's lows. The tone controls interact, as on a real amp, "
+                          + "and more of them can mean more distortion")
         }
         EditorKnob {
             objectName: "middle"
             width: editor.knobWidth
             param: p.get("middle")
             title: qsTr("Middle")
-            tooltip: qsTr("Middle: the tone stack's mids. The tone controls interact, as on a real amp, and more of them can mean more distortion")
+            tooltip: qsTr("Middle: the tone stack's mids. The tone controls interact, as on a real amp, "
+                          + "and more of them can mean more distortion")
         }
         EditorKnob {
             objectName: "treble"
             width: editor.knobWidth
             param: p.get("treble")
             title: qsTr("Treble")
-            tooltip: qsTr("Treble: the tone stack's highs. The tone controls interact, as on a real amp, and more of them can mean more distortion")
+            tooltip: qsTr("Treble: the tone stack's highs. The tone controls interact, as on a real amp, "
+                          + "and more of them can mean more distortion")
         }
         EditorKnob {
             objectName: "presence"
@@ -271,7 +275,9 @@ Item {
         }
         ToolTip.visible: toneHover.hovered && !toneHover.point.pressedButtons && toneGraph.dragging < 0
         ToolTip.delay: 700
-        ToolTip.text: qsTr("The tone stack and Presence as they sound. Drag B, M, T or P up and down, or turn the wheel over one, to set it; double-click one to put it back to 5; right-click one for its menu")
+        ToolTip.text: qsTr("The tone stack and Presence as they sound. Drag B, M, T or P up and down, "
+                           + "or turn the wheel over one, to set it; double-click one to put it back to 5; "
+                           + "right-click one for its menu")
 
         onHandleMenuRequested: id => {
             handleMenu.param = p.get(id)

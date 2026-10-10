@@ -26,8 +26,10 @@
 #include <vector>
 
 #include "EditorHarness.h"
+#include "Processor.h"
 #include "audio/AmpResponse.h"
 #include "builtin/AmpDesign.h"
+#include "builtin/BuiltinRegistry.h"
 #include "controls/KnobItem.h"
 #include "devices/AmpDriveGraph.h"
 #include "devices/AmpPanel.h"
@@ -265,6 +267,32 @@ private Q_SLOTS:
             QVERIFY2(tip, qPrintable(name));
             QCOMPARE(tip->mapRectToItem(s.view, QRectF(0, 0, tip->width(), tip->height())), rect);
         }
+    }
+
+    // What the editor takes from the device, through the application layer, is the device's own:
+    // the models (the logo's names, how many there are), the displays' rate (how many values a
+    // tick counts) and what they read at silence (the floor the levels fall to).
+    void figuresAreTheDevices() {
+        QStringList labels;
+        for (const std::string& label : sub::amp::modelLabels()) labels << QString::fromStdString(label);
+        QCOMPARE(ampModelNames(), labels);
+        QCOMPARE(ampModelCount(), int(labels.size()));
+        const std::shared_ptr<sub::Processor> device = sub::BuiltinRegistry::instance().create("amp");
+        QVERIFY(device);
+        QCOMPARE(int(device->params().front().valueLabels.size()), ampModelCount());
+        device->prepare(kSampleRate, 1024);
+        QCOMPARE(int(device->displays().size()), 7);
+        for (const sub::DisplayInfo& display : device->displays())
+            QCOMPARE(display.samplesPerValue, ampDisplaySamples());
+        std::vector<float> left(1024, 0.f), right(1024, 0.f);
+        float* channels[2] = {left.data(), right.data()};
+        sub::ProcessContext context;
+        context.sampleRate = kSampleRate;
+        device->process(context, channels, 2, 1024);
+        std::vector<float> input;
+        device->readDisplay(0, 0, input);
+        QCOMPARE(input.size(), size_t(1024 / ampDisplaySamples()));
+        for (const float value : input) QCOMPARE(double(value), ampDisplayFloorDb());
     }
 
     // --- The knobs ---------------------------------------------------------------------------------

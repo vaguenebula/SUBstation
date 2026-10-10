@@ -21,15 +21,9 @@ namespace sub::ui {
 
 namespace {
 
-constexpr double kMorphSeconds = 0.04;   // a new model's curve (through sCurve: mostly there in 0.12 s)
+constexpr double kMorphSeconds = 0.04;   // a new model's curve (through smoothstep: mostly there in 0.12 s)
 constexpr double kHandleSeconds = 0.06;  // a handle growing under the mouse
 constexpr qint64 kWheelGestureMs = 400;  // wheel notches closer than this are one undo step
-
-// Eases in and out: a morph starts and lands gently.
-double sCurve(double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
 
 QString dialText(double value) { return sub::app::formatValue(value, QStringLiteral("dial")); }
 
@@ -105,7 +99,8 @@ void AmpToneGraph::sync() {
         update();
         return;
     }
-    const int model = std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, 6);
+    const int model =
+        std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, sub::app::ampModelCount() - 1);
     for (int i = 0; i < kHandles; ++i) {
         const QString id = QString::fromLatin1(kHandleList[size_t(i)].id);
         dials_[i] = value(id);
@@ -145,7 +140,7 @@ void AmpToneGraph::updateCurve() {
         shown_ = target_;
     } else {
         shown_.resize(target_.size());
-        const double t = sCurve(morph_.value);
+        const double t = smoothstep(morph_.value);  // (eases in and out: a morph starts and lands gently)
         for (size_t k = 0; k < target_.size(); ++k) shown_[k] = from_[k] + (target_[k] - from_[k]) * t;
     }
     Q_EMIT curveChanged();
@@ -162,16 +157,14 @@ bool AmpToneGraph::stepHandles(double dt) {
 }
 
 void AmpToneGraph::refreshDisplays() {
-    const double dt = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    const double dt = tickSeconds();
     bool moving = stepHandles(dt);
     if (morph_.step(easeFraction(dt, kMorphSeconds))) {
         moving = true;
         if (morph_.value >= 1.0 || from_.size() != target_.size()) {
             shown_ = target_;  // (exactly: from + (target - from) * 1 can be an ulp off)
         } else {
-            const double t = sCurve(morph_.value);
+            const double t = smoothstep(morph_.value);
             for (size_t k = 0; k < target_.size(); ++k) shown_[k] = from_[k] + (target_[k] - from_[k]) * t;
         }
         Q_EMIT curveChanged();
