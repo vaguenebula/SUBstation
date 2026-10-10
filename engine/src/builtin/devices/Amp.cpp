@@ -63,7 +63,7 @@ namespace {
 
 constexpr int kOs = amp::kOversampling;
 constexpr int kChunk = 16;                // base-rate samples per chunk of control-rate work
-constexpr int kMeterSamples = 256;        // audio per display value (a multiple of kChunk)
+constexpr int kMeterSamples = amp::kDisplaySamples;  // audio per display value (a multiple of kChunk)
 constexpr double kSmoothSeconds = 0.02;   // the dials' one-poles
 constexpr double kMorphSeconds = 0.05;    // a change of model
 constexpr double kFadeSeconds = 0.02;     // the Output switch's crossfade
@@ -73,16 +73,13 @@ constexpr int kSleepFrames = 4096;        // silence in before an amp at rest ma
 constexpr int kQuietOut = 256;            // and out (well past what its down-sampler holds)
 constexpr int kLevelPoints = 64;          // a period's samples for the morph's levels (amp::Transfer)
 constexpr int kLevelSteps = 16;           // points of the morph its levels are worked out at
-constexpr float kFloorDb = -90.f;
+constexpr float kFloorDb = amp::kDisplayFloorDb;
 // Below this the supply's sag leaves the power stage's gain at exactly 1.0f
 // (1 + sag env rounds to 1): the envelope is flushed to 0 there, every sample,
 // and gets there seconds sooner than 1e-20 would over a 300 ms release.
 constexpr float kSagFlush = 1e-8f;
 
 static_assert(kMeterSamples % kChunk == 0);
-
-inline double sCurve(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
-inline float flushTiny(float v) noexcept { return static_cast<float>(dsp::flushTiny(v)); }
 
 // A triode stage's controls for a chunk: gains, the bias and the curve's value
 // there (ramped), and its one-poles' coefficients.
@@ -165,23 +162,23 @@ struct Path {
     // Tiny states to zero (at the grid's points, so blocks of any size flush alike):
     // the base-rate filters', and the oversampled section's.
     void flushInput() noexcept {
-        inputHighpass.z = flushTiny(inputHighpass.z);
-        bright.z = flushTiny(bright.z);
+        inputHighpass.z = dsp::flushTiny(inputHighpass.z);
+        bright.z = dsp::flushTiny(bright.z);
     }
     void flushStages(const ChunkControls& c) noexcept {
         for (int k = 0; k < 3; ++k) {
             StageState& s = stage[k];
-            s.miller.z = flushTiny(s.miller.z);
-            s.coupling.z = flushTiny(s.coupling.z);
+            s.miller.z = dsp::flushTiny(s.miller.z);
+            s.coupling.z = dsp::flushTiny(s.coupling.z);
             if (std::abs(s.adaa.x0 - c.stage[k].bias) < 1e-20) s.adaa.prime(c.stage[k].bias);
         }
         tone.flush();
-        presence.z = flushTiny(presence.z);
-        grid.z = flushTiny(grid.z);
-        transformer.z = flushTiny(transformer.z);
+        presence.z = dsp::flushTiny(presence.z);
+        grid.z = dsp::flushTiny(grid.z);
+        transformer.z = dsp::flushTiny(transformer.z);
         if (std::abs(power.x0 - c.powerBias) < 1e-20) power.prime(c.powerBias);
-        fifo[0] = flushTiny(fifo[0]);
-        fifo[1] = flushTiny(fifo[1]);
+        fifo[0] = dsp::flushTiny(fifo[0]);
+        fifo[1] = dsp::flushTiny(fifo[1]);
     }
     // Every state the signal passes through at rest (after the flushes): silence in
     // puts out exact zeros. (The supply's sag may still be recovering: it only
@@ -437,7 +434,7 @@ private:
         if (morphMoves) {
             morphFrames_ += len;
             morph_ = std::min(1.0, static_cast<double>(morphFrames_) / (kMorphSeconds * sampleRate_));
-            voice_ = morph_ >= 1.0 ? to_ : amp::blend(from_, to_, sCurve(morph_));
+            voice_ = morph_ >= 1.0 ? to_ : amp::blend(from_, to_, dsp::sCurve(morph_));
             voicingControls(voice_, c);
         }
         dialControls(voice_, c, morphMoves || toneMoves);
@@ -488,7 +485,7 @@ private:
             levelTo_ = level(to_);
         } else {
             const int point = k - 1;
-            const double s = sCurve(static_cast<double>(point) / kLevelSteps);
+            const double s = dsp::sCurve(static_cast<double>(point) / kLevelSteps);
             levelSteps_[point] = (1.0 - s) * levelFrom_ + s * levelTo_ - level(amp::blend(from_, to_, s));
         }
     }
@@ -591,8 +588,8 @@ private:
             const float mono = 0.5f * (l[i] + r[i]);
             float s = 1.f, in = 1.f;
             if (fade_ >= 0) {
-                s = static_cast<float>(sCurve(static_cast<double>(fade_) / fadeLength_));
-                in = static_cast<float>(sCurve(std::min(1.0, static_cast<double>(fade_) / fadeInLength_)));
+                s = static_cast<float>(dsp::sCurve(static_cast<double>(fade_) / fadeLength_));
+                in = static_cast<float>(dsp::sCurve(std::min(1.0, static_cast<double>(fade_) / fadeInLength_)));
                 if (++fade_ > fadeLength_) fade_ = -1;
             }
             share_[static_cast<size_t>(i)] = s;
@@ -648,10 +645,10 @@ private:
             const ChunkControls& c = controls_[static_cast<size_t>(k)];
             float hp = c.inputHighpass, br = c.bright, g = c.brightGain, dhp = 0.f, dbr = 0.f, dg = 0.f;
             if (c.moving) {  // gains and coefficients glide across the chunk
-                const auto frames = static_cast<float>(c.frames);
-                dhp = (c.inputHighpass - from->inputHighpass) / frames;
-                dbr = (c.bright - from->bright) / frames;
-                dg = (c.brightGain - from->brightGain) / frames;
+                const auto chunkFrames = static_cast<float>(c.frames);
+                dhp = (c.inputHighpass - from->inputHighpass) / chunkFrames;
+                dbr = (c.bright - from->bright) / chunkFrames;
+                dg = (c.brightGain - from->brightGain) / chunkFrames;
                 hp = from->inputHighpass;
                 br = from->bright;
                 g = from->brightGain;

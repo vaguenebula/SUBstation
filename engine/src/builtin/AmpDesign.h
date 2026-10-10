@@ -44,6 +44,8 @@
 #include <string>
 #include <vector>
 
+#include "builtin/DspBlocks.h"
+
 namespace sub::amp {
 
 inline constexpr int kModels = 7;
@@ -51,6 +53,10 @@ inline constexpr int kOversamplingLog2 = 2;  // 4x
 inline constexpr int kOversampling = 1 << kOversamplingLog2;
 inline constexpr double kPi = std::numbers::pi;
 inline constexpr double kDcBlockerHz = 10.0;  // after the oversampled section
+// The device's displays (the editor reads them through the application layer's AmpResponse.h):
+// audio per value, and the floor of those in dB.
+inline constexpr int kDisplaySamples = 256;
+inline constexpr float kDisplayFloorDb = -90.f;
 // The power tubes' input (their grids' Miller capacitance): a one-pole low-pass
 // between Presence and the power stage. It keeps the edges of a preamp already
 // clipped and Presence's boost from reaching the power stage's curve at full
@@ -394,12 +400,8 @@ inline double toneMakeupDb(const ToneParts& p) noexcept {
 
 // --- One-pole responses -------------------------------------------------------------------
 
-// The coefficient of a one-pole low-pass at `cutoffHz` (dsp::onePoleCutoff's, as a float as the device keeps it).
-inline double onePoleCoeff(double cutoffHz, double rate) noexcept {
-    return static_cast<float>(std::exp(-2.0 * kPi * std::max(0.0, cutoffHz) / rate));
-}
-// A one-pole low-pass's response (coefficient c: y = x + c (y[-1] - x)): (1 - c) / (1 - c z⁻¹), at z⁻¹ = `z`
-// and at `freq`.
+// A one-pole low-pass's response (coefficient c, dsp::onePoleCutoff's as the device keeps it, a float:
+// y = x + c (y[-1] - x)): (1 - c) / (1 - c z⁻¹), at z⁻¹ = `z` and at `freq`.
 inline std::complex<double> onePoleLowpass(double c, std::complex<double> z) noexcept {
     return divide(1.0 - c, 1.0 - c * z);
 }
@@ -432,7 +434,7 @@ inline double toneResponseDb(const Voicing& v, double bass, double middle, doubl
     const ToneCoefficients c = toneStack(v.tone, bass, middle, treble, rate);
     const double shelf = std::pow(10.0, presenceDb(v, presence) / 20.0);
     const std::complex<double> h =
-        toneStackDigital(c, freq, rate) * onePoleShelf(onePoleCoeff(v.presenceHz, rate), shelf, freq, rate);
+        toneStackDigital(c, freq, rate) * onePoleShelf(dsp::onePoleCutoff(v.presenceHz, rate), shelf, freq, rate);
     return 20.0 * std::log10(std::max(std::abs(h), 1e-30)) + v.toneMakeupDb;
 }
 
@@ -490,20 +492,22 @@ public:
         // one-pole's coefficient worked out once and each harmonic's z⁻¹ once for them all.
         double highpassC[3], millerC[3];  // each stage's coupling high-pass and Miller low-pass
         for (int k = 0; k < 3; ++k) {
-            highpassC[k] = onePoleCoeff(v.stages[k].highpassHz, rate);
-            millerC[k] = onePoleCoeff(v.stages[k].lowpassHz, rate);
+            highpassC[k] = dsp::onePoleCutoff(v.stages[k].highpassHz, rate);
+            millerC[k] = dsp::onePoleCutoff(v.stages[k].lowpassHz, rate);
         }
-        const double presenceC = onePoleCoeff(v.presenceHz, rate), gridC = onePoleCoeff(kGridHz, rate),
-                     transformerC = onePoleCoeff(v.transformerHz, rate);
+        const double presenceC = dsp::onePoleCutoff(v.presenceHz, rate);
+        const double gridC = dsp::onePoleCutoff(kGridHz, rate);
+        const double transformerC = dsp::onePoleCutoff(v.transformerHz, rate);
         const auto adaa = [](std::complex<double> z) { return (1.0 + z) / 2.0; };
         // Into V1 there is the tone alone: its gain is all that matters.
         const std::complex<double> z0 = unitDelay(f0, rate);
+        const double bright = std::pow(10.0, v.brightDb / 20.0);
         const std::complex<double> input =
-            (1.0 - onePoleLowpass(onePoleCoeff(v.inputHighpassHz, sampleRate), f0, sampleRate)) *
-            onePoleShelf(onePoleCoeff(v.brightHz, sampleRate), std::pow(10.0, v.brightDb / 20.0), f0, sampleRate) *
+            (1.0 - onePoleLowpass(dsp::onePoleCutoff(v.inputHighpassHz, sampleRate), f0, sampleRate)) *
+            onePoleShelf(dsp::onePoleCutoff(v.brightHz, sampleRate), bright, f0, sampleRate) *
             onePoleLowpass(millerC[0], z0);
         input_ = std::abs(input * adaa(z0));
-        const double r = onePoleCoeff(kDcBlockerHz, sampleRate);  // dsp::DcBlocker: y = x - x[-1] + r y[-1]
+        const double r = dsp::onePoleCutoff(kDcBlockerHz, sampleRate);  // dsp::DcBlocker: y = x - x[-1] + r y[-1]
         const double trim = std::pow(10.0, v.trimDb / 20.0);
         for (int k = 0; k <= points_ / 2; ++k) {
             const double f = k * f0;
