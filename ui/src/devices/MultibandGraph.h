@@ -51,6 +51,7 @@ public:
     static constexpr double kFineFactor = 0.2;    // with Shift
     static constexpr double kRatioDetent = 0.03;  // within 3 % of 1:1 a dragged ratio is 1:1
     static constexpr double kWheelGesture = 0.6;  // s: wheel notches this close are one undo step
+    static constexpr double kWheelStill = 5.0;    // px: the mouse moved further between notches ends a run
     static constexpr double kTick = 0.016;        // s per display tick, for the animation
     static constexpr int kHoldTicks = 15;         // ticks without values before the meters let go
     // s of display values a tick looks at, the latest: a whole buffer's arrive at once (2048 samples at 44.1 kHz,
@@ -103,6 +104,10 @@ public:
     QRectF offLabelRect(int band) const;
     double offLabelOpacity(int band) const;
     QRectF bubbleRect() const;  // the drag's value, over the handle or at the mouse; empty without a drag
+    // The gain change in figures at the lane's top right, and the static curve's readout beside the hairline under
+    // the mouse (clear of the figure): their boxes, empty while not drawn.
+    QRectF gainLabelRect(int band) const;
+    QRectF hoverLabelRect(int band) const;
 
     Q_INVOKABLE QString ratioText(double ratio) const;           // "1:4.00", "1:0.500"
     Q_INVOKABLE double parseRatio(const QString& text) const;   // 0: unreadable
@@ -166,7 +171,7 @@ private:
         bool every = false;               // Ctrl: every band
         bool both = false;                // Alt: both thresholds
         std::array<Settings, kBands> start;
-        QPointF at;  // the mouse, for the bubble
+        QPointF at;  // the mouse, for the bubble (a wheel run: at its last notch)
     };
 
     static std::size_t index(int band) { return std::size_t(std::clamp(band, 0, kBands - 1)); }
@@ -183,6 +188,9 @@ private:
     void writeRatios(const Drag& drag, double factor, const QString& gesture);
     static double ratioStep(double ratio);  // held, 1:1 within the detent, 3 significant digits
     QString bubbleText() const;
+    QString gainText(int band) const;                 // empty while not drawn
+    std::optional<double> hoverLine(int band) const;  // the hairline's x, while the mouse is over the lane
+    QString hoverText(int band) const;
 
     void paintLane(SgPainter& p, int band) const;
     void paintBubble(SgPainter& p) const;
@@ -199,7 +207,8 @@ private:
     std::optional<QPointF> hoverAt_;  // the mouse over a lane (the static curve's hairline)
     std::optional<Drag> drag_;
     // A run of the wheel: one gesture on one target, worked out from where it started (as a drag is), so the
-    // small steps of a high-resolution wheel or a touchpad add up rather than each being rounded away.
+    // small steps of a high-resolution wheel or a touchpad add up rather than each being rounded away. It keeps its
+    // target while the mouse stays where the last notch was (`at`), though a threshold it moves leaves the mouse.
     std::optional<Drag> wheel_;
     double wheelNotches_ = 0.0;
     QElapsedTimer wheelClock_;

@@ -617,6 +617,45 @@ private Q_SLOTS:
         QCOMPARE(undo()->index(), before);
     }
 
+    void aWheelRunKeepsItsTarget() {
+        // A threshold the wheel moves slides out from under the mouse (half a dB, 1.5 px, a notch against a handle's
+        // 5 px grab). The run stays on it: a flick of eight notches moves it 4 dB in one undo step, rather than going
+        // on with the block's ratio (down) or stopping in the gap between the thresholds (up).
+        const Shown s = showDevice({{QStringLiteral("mid_below"), -70.0}});
+        QVERIFY(s.view && s.graph);
+        auto value = [&](const char* id) { return param(s.track, s.device, QString::fromLatin1(id)); };
+        MultibandGraph* graph = s.graph;
+        const QPoint handle = scenePoint(graph, graph->aboveHandle(kMid));
+        int before = undo()->index();
+        for (const int nudge : {0, 1, 2, 1, 0, -1, -2, -1})  // (a hand on the wheel moves the mouse a little)
+            wheel(handle + QPoint(nudge, 0), -120);
+        QCOMPARE(value("mid_above"), -24.0);
+        QCOMPARE(value("mid_above_ratio"), 1.0);
+        QVERIFY(oneStepAfter(before));
+        // The other way, a run of its own (the last one over), from where the handle is now.
+        QTest::qWait(int(MultibandGraph::kWheelGesture * 1000.0) + 100);
+        before = undo()->index();
+        const QPoint moved = scenePoint(graph, graph->aboveHandle(kMid));
+        for (int i = 0; i < 8; ++i)
+            wheel(moved, 120);
+        QCOMPARE(value("mid_above"), -20.0);
+        QCOMPARE(value("mid_above_ratio"), 1.0);
+        QVERIFY(oneStepAfter(before));
+        // The mouse moved on to something else (further than a handle's grab): a run on that, at once.
+        before = undo()->index();
+        wheel(scenePoint(graph, graph->aboveBlockPoint(kMid)), 120);
+        QCOMPARE(value("mid_above"), -20.0);
+        QVERIFY2(std::abs(value("mid_above_ratio") - 0.917) < 1e-9,
+                 qPrintable(QString::number(value("mid_above_ratio"))));
+        QVERIFY(oneStepAfter(before));
+        // And another lane.
+        before = undo()->index();
+        wheel(scenePoint(graph, graph->aboveHandle(kLow)), 120);
+        QCOMPARE(value("low_above"), -19.5);
+        QVERIFY(std::abs(value("mid_above_ratio") - 0.917) < 1e-9);
+        QVERIFY(oneStepAfter(before));
+    }
+
     void displaysReachTheGraph() {
         // One band (High and Low off), Peak, Above -20 at 1:4; a tone at 0.5 (-6.02 dB).
         const Shown s = showDevice({{QStringLiteral("low_on"), 0.0},
@@ -826,6 +865,47 @@ private Q_SLOTS:
         QVERIFY(!graph->animating());
     }
 
+    void theReadoutClearsTheGainFigure() {
+        // One band playing a tone at 0.5, Above -20 at 1:4: the gain change's figure (-8.2) at the lane's top right.
+        // The static curve's readout under the mouse, at the same height, sits beside the hairline, right of it where
+        // it fits, and never over the figure (it hid all but its last digit from -1 to +6 dB).
+        const Shown s = showDevice({{QStringLiteral("low_on"), 0.0},
+                                    {QStringLiteral("high_on"), 0.0},
+                                    {QStringLiteral("mid_above"), -20.0},
+                                    {QStringLiteral("mid_above_ratio"), 4.0}},
+                                   tone(1000.0, kSampleRate, 0.5));
+        QVERIFY(s.view && s.graph);
+        MultibandGraph* graph = s.graph;
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        ticks(10);
+        const QRectF figure = graph->gainLabelRect(kMid), lane = graph->lane(kMid);
+        QVERIFY2(graph->gainShown(kMid) < -8.0 && !figure.isEmpty(),
+                 qPrintable(QString::number(graph->gainShown(kMid))));
+        QVERIFY(graph->hoverLabelRect(kMid).isEmpty());  // (no mouse)
+        for (double db = -79.5; db <= 6.0; db += 0.5) {
+            const QPoint at = scenePoint(graph, QPointF(graph->xOfDb(db), lane.center().y() + 12.0));
+            QTest::mouseMove(window_, at);
+            const double hairline = graph->mapFromScene(QPointF(at)).x();
+            const QRectF readout = graph->hoverLabelRect(kMid);
+            const QString where = QStringLiteral("%1 dB: readout %2..%3, figure %4..%5")
+                                      .arg(db)
+                                      .arg(readout.left())
+                                      .arg(readout.right())
+                                      .arg(figure.left())
+                                      .arg(figure.right());
+            QVERIFY2(!readout.isEmpty() && !readout.intersects(figure), qPrintable(where));
+            QVERIFY2(readout.left() >= lane.left() && readout.right() <= lane.right(), qPrintable(where));
+            // Beside the hairline, right of it while there is room before the figure.
+            if (hairline + 4.0 + readout.width() <= figure.left() - 4.0)
+                QVERIFY2(std::abs(readout.left() - (hairline + 4.0)) < 1e-9, qPrintable(where));
+            else
+                QVERIFY2(readout.right() <= hairline - 4.0 + 1e-9, qPrintable(where));
+            QVERIFY(graph->hoverLabelRect(kHigh).isEmpty() && graph->hoverLabelRect(kLow).isEmpty());
+        }
+        QTest::mouseMove(window_, scenePoint(graph, QPointF(graph->xOfDb(4.0), lane.center().y() + 12.0)));
+        save(grab(), QStringLiteral("multiband-readout.png"));  // (the readout ending short of the figure)
+    }
+
     void sidechainControls() {
         const Shown s = showDevice();
         QVERIFY(s.view && s.graph);
@@ -856,6 +936,12 @@ private Q_SLOTS:
         QCOMPARE(formatValue(0.5, QStringLiteral("ratio")), QStringLiteral("1:0.500"));
         QCOMPARE(formatValue(0.25, QStringLiteral("ratio")), QStringLiteral("1:0.250"));
         QCOMPARE(formatValue(10.0, QStringLiteral("ratio")), QStringLiteral("1:10.0"));
+        // Counted on the value as rounded: just under a decade it rounds into the next one's digits.
+        QCOMPARE(formatValue(9.996, QStringLiteral("ratio")), QStringLiteral("1:10.0"));
+        QCOMPARE(formatValue(99.96, QStringLiteral("ratio")), QStringLiteral("1:100"));
+        QCOMPARE(formatValue(0.9996, QStringLiteral("ratio")), QStringLiteral("1:1.00"));
+        QCOMPARE(formatValue(9.994, QStringLiteral("ratio")), QStringLiteral("1:9.99"));
+        QCOMPARE(formatValue(0.9994, QStringLiteral("ratio")), QStringLiteral("1:0.999"));
 
         // Typed: Live's way, the R alone, or as a compressor writes it ("4:1"; any "a:b" not starting with 1).
         QCOMPARE(multibandParseRatio(QStringLiteral("1:4")), 4.0);

@@ -47,7 +47,9 @@ QString formatValue(double value, const QString& unit) {
     // A slope (the Spectral Compressor's Tilt): "-1.5 dB/oct".
     if (unit == u"dB/oct") return formatFixed(value, 1) + QStringLiteral(" dB/oct");
     if (unit == u"ratio") {  // a ratio either side of 1, as Live writes it: "1:4.00", "1:66.7", "1:100", "1:0.500"
-        const int decimals = value < 1.0 ? 3 : (value < 10.0 ? 2 : (value < 100.0 ? 1 : 0));  // 3 significant digits
+        // Three significant digits, counted on the value as rounded: 9.996 is "1:10.0", not "1:10.00".
+        int decimals = value < 1.0 ? 3 : (value < 10.0 ? 2 : (value < 100.0 ? 1 : 0));
+        if (decimals > 0 && formatFixed(value, decimals).toDouble() >= std::pow(10.0, 3 - decimals)) --decimals;
         return QStringLiteral("1:") + formatFixed(value, decimals);
     }
     return formatFixed(value, 2) + u' ' + unit;

@@ -542,16 +542,25 @@ void MultibandGraph::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void MultibandGraph::wheelEvent(QWheelEvent* event) {
     const int delta = event->angleDelta().y() ? event->angleDelta().y() : event->angleDelta().x();  // (Alt: sideways)
-    const std::optional<Target> target = targetAt(event->position());
+    const QPointF pos = event->position();
     // (Shift+wheel scrolls the device chain, as everywhere over it.)
-    if (!target || delta == 0 || drag_ || (event->modifiers() & Qt::ShiftModifier)) {
+    if (delta == 0 || drag_ || (event->modifiers() & Qt::ShiftModifier)) {
+        event->ignore();
+        return;
+    }
+    // A run of notches is one gesture on one target (one undo step), worked out from where it began. It keeps its
+    // target while the mouse stays where the last notch left it: a threshold the wheel moves slides out from under
+    // the mouse (1.5 px a notch against a 5 px grab), and what is there then is its block or the gap between the
+    // thresholds, not what the run is turning.
+    const bool going = wheel_ && wheelClock_.isValid() && wheelClock_.elapsed() <= kWheelGesture * 1000.0 &&
+                       std::hypot(pos.x() - wheel_->at.x(), pos.y() - wheel_->at.y()) <= kWheelStill;
+    const std::optional<Target> target = going ? std::optional<Target>(wheel_->target) : targetAt(pos);
+    if (!target) {
         event->ignore();
         return;
     }
     event->accept();
-    // A run of notches on one target is one gesture (one undo step), worked out from where it began.
-    if (!wheel_ || wheel_->target != *target || !wheelClock_.isValid() ||
-        wheelClock_.elapsed() > kWheelGesture * 1000.0) {
+    if (!going) {
         Drag run;
         run.target = *target;
         run.gesture = newGestureKey();
@@ -560,6 +569,7 @@ void MultibandGraph::wheelEvent(QWheelEvent* event) {
         wheel_ = run;
         wheelNotches_ = 0.0;
     }
+    wheel_->at = pos;
     wheelClock_.start();
     wheelNotches_ += delta / 120.0;
     if (target->handle) {  // half a dB a notch
@@ -692,29 +702,20 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
         p.drawRoundedRect(grip, 1.5, 1.5, withAlpha(Theme::kMeterBg, 200), 1.0);
     }
 
+    // Under the mouse: a hairline at that level (under the figures).
+    const std::optional<double> hairline = hoverLine(band);
+    if (hairline)
+        p.fillRect(QRectF(std::round(*hairline), l.top() + 1, 1, l.height() - 2), withAlpha(Theme::kText, 110));
+
     // The gain change in figures, while the band sounds (or is still letting go).
-    if (view.on && (inDb > kFloorDb || std::abs(gain) >= 0.05)) {
-        const QString text = std::abs(gain) < 0.05 ? QStringLiteral("0.0")
-                                                   : typeset((gain > 0 ? QStringLiteral("+") : QString()) +
-                                                             QString::number(gain, 'f', 1));
+    if (const QString text = gainText(band); !text.isEmpty()) {
         const QColor color = std::abs(gain) < 0.05 ? Theme::kTextDim : (gain < 0 ? Theme::kAccent : kBoost);
-        const double w = SgPainter::textWidth(text, font7) + 8.0;
-        pill(p, QRectF(l.right() - 2.0 - w, l.top() + 1.0, w, std::min(11.0, ym - 7.0 - l.top())), text, color,
-             font7);
+        pill(p, gainLabelRect(band), text, color, font7);
     }
 
-    // Under the mouse: the static curve at that level.
-    if (hoverAt_ && !drag_ && hoverAt_->y() >= l.top() && hoverAt_->y() <= l.bottom()) {
-        const double x = std::clamp(hoverAt_->x(), l.left() + 1, l.right() - 1);
-        p.fillRect(QRectF(std::round(x), l.top() + 1, 1, l.height() - 2), withAlpha(Theme::kText, 110));
-        const double level = dbAtX(x);
-        const QString text =
-            typeset(QStringLiteral("%1 → %2 dB")
-                        .arg(QString::number(level, 'f', 1), QString::number(staticOutDb(band, level), 'f', 1)));
-        const double w = SgPainter::textWidth(text, font7) + 8.0;
-        const double tx = x + 4.0 + w <= l.right() - 2.0 ? x + 4.0 : x - 4.0 - w;
-        pill(p, QRectF(tx, l.top() + 1.0, w, 11.0), text, Theme::kText, font7, 230);
-    }
+    // And the static curve at the hairline's level.
+    if (hairline)
+        pill(p, hoverLabelRect(band), hoverText(band), Theme::kText, font7, 230);
     p.restore();
 
     // A band switched off: the Mid band takes it.
@@ -737,6 +738,55 @@ double MultibandGraph::offLabelOpacity(int band) const {
     if (view.on)
         return 0.0;
     return std::clamp((1.0 - view.opacity.value) / (1.0 - kOffOpacity), 0.0, 1.0) * view.offLabel.value;
+}
+
+QString MultibandGraph::gainText(int band) const {
+    const BandView& view = bands_[index(band)];
+    const double gain = view.gain.value;
+    if (!view.on || (view.in.level <= kFloorDb && std::abs(gain) < 0.05))
+        return {};
+    if (std::abs(gain) < 0.05)
+        return QStringLiteral("0.0");
+    return typeset((gain > 0 ? QStringLiteral("+") : QString()) + QString::number(gain, 'f', 1));
+}
+
+QRectF MultibandGraph::gainLabelRect(int band) const {
+    const QString text = gainText(band);
+    if (text.isEmpty())
+        return {};
+    const QRectF l = lane(band);
+    const double w = SgPainter::textWidth(text, uiFont(7)) + 8.0;
+    return QRectF(l.right() - 2.0 - w, l.top() + 1.0, w, std::min(11.0, std::round(l.center().y()) - 7.0 - l.top()));
+}
+
+std::optional<double> MultibandGraph::hoverLine(int band) const {
+    const QRectF l = lane(band);
+    if (!hoverAt_ || drag_ || hoverAt_->y() < l.top() || hoverAt_->y() > l.bottom())
+        return std::nullopt;
+    return std::clamp(hoverAt_->x(), l.left() + 1, l.right() - 1);
+}
+
+QString MultibandGraph::hoverText(int band) const {
+    const std::optional<double> x = hoverLine(band);
+    if (!x)
+        return {};
+    const double level = dbAtX(*x);
+    return typeset(QStringLiteral("%1 → %2 dB")
+                       .arg(QString::number(level, 'f', 1), QString::number(staticOutDb(band, level), 'f', 1)));
+}
+
+QRectF MultibandGraph::hoverLabelRect(int band) const {
+    const std::optional<double> x = hoverLine(band);
+    if (!x)
+        return {};
+    const QRectF l = lane(band);
+    const double w = SgPainter::textWidth(hoverText(band), uiFont(7)) + 8.0;
+    // Right of the hairline where it fits, else left of it. It shares the top with the gain change's figure, so it
+    // ends short of that: with the mouse under the figure, a little way from the hairline (its text says the level).
+    const QRectF figure = gainLabelRect(band);
+    const double end = figure.isEmpty() ? l.right() - 2.0 : figure.left() - 4.0;
+    const double left = *x + 4.0 + w <= end ? *x + 4.0 : std::min(*x - 4.0 - w, end - w);
+    return QRectF(std::max(l.left() + 2.0, left), l.top() + 1.0, w, 11.0);
 }
 
 QString MultibandGraph::bubbleText() const {
