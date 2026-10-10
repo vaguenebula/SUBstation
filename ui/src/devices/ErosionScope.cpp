@@ -1,6 +1,7 @@
 #include "devices/ErosionScope.h"
 
 #include "audio/ErosionResponse.h"
+#include "devices/ErosionGraph.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 
@@ -12,20 +13,9 @@ namespace sub::ui {
 
 namespace {
 
-// As the graph's activity: the `erosion` display from -60 dB (0) over 48 dB (1), up quickly, down slowly.
-constexpr double kActivityFloorDb = -60.0;
-constexpr double kActivitySpanDb = 48.0;
-constexpr double kActivityRise = 0.35;
-constexpr double kActivityFall = 0.08;
-constexpr int kPieces = 6;  // the trace's pieces, oldest (faintest) first
-constexpr int kCloudPairs = 2048;  // the cloud is the RMS of the latest this many pairs (43 ms at 48 kHz),
-constexpr double kCloudEase = 0.25;  // eased this share of the way per refresh
-
-QColor mixed(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    const auto mix = [t](float from, float to) { return float(from + (to - from) * t); };
-    return QColor::fromRgbF(mix(a.redF(), b.redF()), mix(a.greenF(), b.greenF()), mix(a.blueF(), b.blueF()));
-}
+constexpr int kPieces = 6;               // the trace's pieces, oldest (faintest) first
+constexpr int kCloudPairs = 2048;        // the cloud is the RMS of the latest this many pairs (43 ms at 48 kHz),
+constexpr double kCloudSeconds = 0.056;  // eased with this time constant
 
 }  // namespace
 
@@ -56,7 +46,7 @@ double ErosionScope::spread() const {
 void ErosionScope::sync() {
     amount_ = value(QStringLiteral("amount"));
     noiseWeight_ = sub::app::erosionBlendWeights(value(QStringLiteral("blend"))).second;
-    settle_ = kSettleTicks;  // (the trace catches up with the change: the engine glides to it)
+    settle_ = kSettleSeconds;  // (the trace catches up with the change: the engine glides to it)
     update();
 }
 
@@ -78,6 +68,7 @@ void ErosionScope::take(Unpaired& unpaired, std::pair<qint64, std::vector<float>
 }
 
 void ErosionScope::refreshDisplays() {
+    const double dt = tickSeconds();
     // The modulators, paired by their absolute index. They are read one after the other, so the second
     // read may hold values the engine published between the two: those wait for their partners.
     take(unpairedLeft_, readDisplayAt(QStringLiteral("mod_l")));
@@ -115,19 +106,19 @@ void ErosionScope::refreshDisplays() {
         midRms_.target = n > 0 ? std::sqrt(mid2 / n) : 0.0;
         sideRms_.target = n > 0 ? std::sqrt(side2 / n) : 0.0;
     }
-    bool cloudMoved = midRms_.step(kCloudEase, 1e-3);
-    cloudMoved = sideRms_.step(kCloudEase, 1e-3) || cloudMoved;
+    const double cloudEase = easeFraction(dt, kCloudSeconds);
+    bool cloudMoved = midRms_.step(cloudEase, 1e-3);
+    cloudMoved = sideRms_.step(cloudEase, 1e-3) || cloudMoved;
 
-    // How much is being eroded now: the newest values (the read may hold a backlog's).
+    // How much is being eroded now, as the graph has it: the newest values (the read may hold a backlog's).
     const double db = sub::app::erosionRecentDb(readDisplay(QStringLiteral("erosion")), sampleRate());
-    activity_.target = std::clamp((db - kActivityFloorDb) / kActivitySpanDb, 0.0, 1.0);
-    const bool moved = activity_.step(activity_.target > activity_.value ? kActivityRise : kActivityFall);
+    const bool moved = ErosionGraph::easeActivity(activity_, db, dt);
 
     // Traced while it erodes, and for a moment after a change; in silence it holds still.
-    const bool tracing = came && (activity_.value > 0.005 || settle_ > 0);
-    if (came && settle_ > 0)
-        --settle_;
-    if (tracing || moved || (cloudMoved && settle_ > 0))
+    const bool tracing = came && (activity_.value > 0.005 || settle_ > 0.0);
+    if (came && settle_ > 0.0)
+        settle_ = std::max(0.0, settle_ - dt);
+    if (tracing || moved || (cloudMoved && settle_ > 0.0))
         update();
 }
 
@@ -164,7 +155,7 @@ void ErosionScope::paint(SgPainter& p) {
         points[size_t(k)] = QPointF(c.x() + side * scale, c.y() - mid * scale);
     }
     const double brightness = amount_ <= 0.0 ? 0.45 : 0.6 + 0.4 * activity_.value;
-    const QColor color = mixed(Theme::kSoloOn, Theme::kAccent, noiseWeight_);
+    const QColor color = mixColor(Theme::kSoloOn, Theme::kAccent, noiseWeight_);
     // Under it, the cloud the modulation fills (two RMS out): an upright sliver in mono, round at full Stereo.
     const auto reach = [&](double rms) { return std::max(1.0, std::tanh(kGain * 2.0 * rms) * r); };
     const QRectF cloud(c.x() - reach(sideRms_.value), c.y() - reach(midRms_.value), 2 * reach(sideRms_.value),

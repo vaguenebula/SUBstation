@@ -6,10 +6,11 @@
 // a trace fading with age, over a soft cloud as wide and tall as the
 // modulation's side and mid (two RMS out, eased). Mono (Stereo 0 %) it is an
 // upright line; as Stereo widens it opens into an ellipse, then a round cloud
-// (noise) or a circle (the sine, its sides a quarter cycle apart). Its colour goes from the sine's blue
-// to the noise's orange with Noise Blend; it is dim at Amount 0 (the modulators
-// run, but nothing is applied) and brightens while the sound is eroded (the
-// display `erosion`, eased as the graph's).
+// (noise) or a circle (the sine, its sides a quarter cycle apart). Its colour
+// goes from the sine's blue to the noise's orange with Noise Blend; it is dim at
+// Amount 0 (the modulators run, but nothing is applied) and brightens while the
+// sound is eroded (the display `erosion`, eased as the graph's activity:
+// ErosionGraph::easeActivity).
 //
 // It repaints only while the sound is eroded, or for a moment after a change
 // (the trace catching up with it): in silence it holds its last trace, still.
@@ -34,7 +35,7 @@ public:
     static constexpr double kTrailSeconds = 0.005;  // the latest this long are traced
     // A pair whose (mid, side) is d from the centre is drawn tanh(kGain d) of the way to the rim.
     static constexpr double kGain = 1.1;
-    static constexpr int kSettleTicks = 20;         // refreshes it repaints for after a change (a third of a second)
+    static constexpr double kSettleSeconds = 0.32;  // it repaints for this long after a change (20 ticks)
 
     explicit ErosionScope(QQuickItem* parent = nullptr);
 
@@ -68,7 +69,7 @@ private:
     double amount_ = 25.0, noiseWeight_ = 1.0;
     Eased activity_;
     Eased midRms_, sideRms_;  // the cloud's size
-    int settle_ = 0;  // refreshes left to repaint for after a change
+    double settle_ = 0.0;  // seconds left to repaint for after a change (counted while modulator values come)
 };
 
 }  // namespace sub::ui

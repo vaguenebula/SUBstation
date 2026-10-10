@@ -36,6 +36,10 @@ class ErosionGraph : public DeviceCanvas {
     Q_OBJECT
     QML_ELEMENT
     Q_PROPERTY(bool dragging READ dragging NOTIFY draggingChanged)  // from a press to its release (the tooltip waits)
+    // Noise Blend's weights as the engine has them (sub::app::erosionBlendWeights): the editor's glyphs and
+    // Width's dimming follow them.
+    Q_PROPERTY(double sineWeight READ sineWeight NOTIFY weightsChanged)
+    Q_PROPERTY(double noiseWeight READ noiseWeight NOTIFY weightsChanged)
 
 public:
     static constexpr int kWidth = 300;
@@ -50,6 +54,16 @@ public:
     static constexpr double kTopStrip = 14.0;          // over the plot: the source and the readout
     static constexpr double kDotRadius = 5.0;          // the dot's ring (2 px wide),
     static constexpr double kHaloGrowth = 6.0;         // and how far its halo reaches past it, eroding hard
+    // The activity (the graph's and the scope's): the `erosion` display from kActivityFloorDb (0) over
+    // kActivitySpanDb (1), eased towards that with these time constants: up in a few ticks, down over half a
+    // second.
+    static constexpr double kActivityFloorDb = -60.0;
+    static constexpr double kActivitySpanDb = 48.0;
+    static constexpr double kActivityRiseSeconds = 0.037;
+    static constexpr double kActivityFallSeconds = 0.19;
+
+    // `activity` moved `dtSeconds` on towards what `erosionDb` says; whether it moved.
+    static bool easeActivity(Eased& activity, double erosionDb, double dtSeconds);
 
     explicit ErosionGraph(QQuickItem* parent = nullptr);
 
@@ -91,6 +105,7 @@ public:
 
 Q_SIGNALS:
     void draggingChanged();
+    void weightsChanged();
 
 protected:
     void sync() override;
@@ -112,7 +127,7 @@ private:
     void apply();        // the drag's parameters, from where it has the dot
     void endDrag();
     void setAltHeld(bool held);
-    void shimmerStep();  // the band's fill on a tick: its knots glide on, the columns follow
+    void shimmerStep(double dtSeconds);  // the band's fill on a tick: its knots glide on, the columns follow
 
     sub::app::analysis::EqAnalyzer analyzer_;  // the input's and the output's spectra
     std::vector<double> frequencies_, magnitudes_, columnFrequencies_, columnMagnitudes_;

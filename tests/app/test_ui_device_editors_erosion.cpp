@@ -23,6 +23,8 @@
 #include "controls/KnobItem.h"
 #include "devices/DeviceChainArea.h"
 #include "devices/DeviceParam.h"
+#include "devices/DisplayClock.h"
+#include "devices/EditorPaint.h"
 #include "devices/ErosionGraph.h"
 #include "devices/ErosionScope.h"
 #include "editor/ProjectEditor.h"
@@ -198,6 +200,21 @@ private Q_SLOTS:
         QCOMPARE(find(view, QStringLiteral("width"))->opacity(), 1.0);
     }
 
+    void opensAsTheDeviceIs() {
+        // An editor opened on an Erosion playing its sine alone shows Width dimmed and the sine's glyph lit at
+        // once (the graph's weights, which the editor binds to, are the device's as it is made).
+        track_ = audioTrackWith(tone(3000.0, kSampleRate), QStringLiteral("tone"), 1.0);
+        QVERIFY(!track_.isEmpty());
+        device_ = editor()->addDevice(track_, QStringLiteral("erosion"));
+        set("blend", 0.0);
+        QQuickItem* view = show(QStringLiteral("erosion"), track_, device_);
+        QVERIFY(view);
+        QVERIFY2(std::abs(find(view, QStringLiteral("width"))->opacity() - 0.55) < 1e-6,
+                 qPrintable(QString::number(find(view, QStringLiteral("width"))->opacity())));
+        QVERIFY(std::abs(find(view, QStringLiteral("sineGlyph"))->opacity() - 1.0) < 1e-6);
+        QVERIFY(std::abs(find(view, QStringLiteral("noiseGlyph"))->opacity() - 0.3) < 1e-6);
+    }
+
     void controlsAreUndoable() {
         QQuickItem* view = showErosion();
         QVERIFY(view);
@@ -244,16 +261,28 @@ private Q_SLOTS:
         undo()->undo();
         QCOMPARE(graph->dot().y(), graph->yOfAmount(25.0));
 
-        // Noise Blend at 0: the sine's glyph lit, the noise's faint, Width dimmed (it does nothing to the sine).
+        // The glyphs as bright as the engine's equal-power weights say (through the graph: never copied).
         QQuickItem* sine = find(view, QStringLiteral("sineGlyph"));
         QQuickItem* noise = find(view, QStringLiteral("noiseGlyph"));
         QQuickItem* width = find(view, QStringLiteral("width"));
+        set("blend", 30.0);
+        const auto [sineWeight, noiseWeight] = erosionBlendWeights(30.0);
+        QCOMPARE(view->property("sineWeight").toDouble(), sineWeight);
+        QCOMPARE(view->property("noiseWeight").toDouble(), noiseWeight);
+        QVERIFY(std::abs(sine->opacity() - (0.3 + 0.7 * sineWeight)) < 1e-6);
+        QVERIFY(std::abs(noise->opacity() - (0.3 + 0.7 * noiseWeight)) < 1e-6);
+        undo()->undo();
+
+        // Noise Blend at 0: the sine's glyph lit, the noise's faint, Width dimmed (it does nothing to the sine).
         set("blend", 0.0);
         QVERIFY(std::abs(sine->opacity() - 1.0) < 0.01);
         QVERIFY(std::abs(noise->opacity() - 0.3) < 0.01);
-        QTRY_VERIFY(std::abs(width->opacity() - 0.45) < 0.01);  // (EditorKnob's 120 ms Behavior)
+        QTRY_VERIFY(std::abs(width->opacity() - 0.55) < 0.01);  // (EditorKnob's disabled look and 120 ms Behavior)
+        QVERIFY(width->isEnabled());  // (still settable, as Live's)
         QCOMPARE(graph->noiseWeight(), 0.0);
         QCOMPARE(graph->sineWeight(), 1.0);
+        QCOMPARE(view->property("sineWeight").toDouble(), 1.0);  // (the engine's weights, through the graph)
+        QCOMPARE(view->property("noiseWeight").toDouble(), 0.0);
         QTest::qWait(50);
         save(grab(), QStringLiteral("erosion-sine.png"));
         undo()->undo();
@@ -566,11 +595,15 @@ private Q_SLOTS:
         QCOMPARE(scope->pointCount(), ErosionScope::kRing);
         QVERIFY2(scope->spread() < 1e-6, qPrintable(QString::number(scope->spread())));  // mono: both sides alike
         QVERIFY(scope->activity() > 0.1);
-        // Nothing more coming, it falls back slowly.
+        // Nothing more coming, it falls back slowly: by the time each refresh says (DeviceCanvas::tickSeconds),
+        // never less than a tick's worth.
         const double risen = graph->activity();
         for (int i = 0; i < 10; ++i)
             refreshDisplays();
-        QVERIFY(graph->activity() < risen && graph->activity() > 0.3 * risen);
+        const double tick = kDisplayRefreshMs / 1000.0;
+        const double fallen = risen * std::pow(1.0 - easeFraction(tick, ErosionGraph::kActivityFallSeconds), 10);
+        QVERIFY2(graph->activity() <= fallen + 1e-9 && graph->activity() > 0.3 * risen,
+                 qPrintable(QStringLiteral("%1 from %2").arg(graph->activity()).arg(risen)));
         QVERIFY(graph->animating());
 
         // Stereo opens the modulation out: a round cloud at 100 %, about half as wide at 50 %.

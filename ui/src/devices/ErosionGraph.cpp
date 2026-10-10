@@ -23,15 +23,11 @@ using sub::app::analysis::EqAnalyzer;
 
 namespace {
 
-constexpr double kActivityFloorDb = -60.0;  // the `erosion` display: activity 0 here,
-constexpr double kActivitySpanDb = 48.0;    // and 1 this far above
-constexpr double kActivityRise = 0.35;      // of the way per refresh: up in a few,
-constexpr double kActivityFall = 0.08;      // down over half a second
 constexpr double kShimmerDepth = 0.4;       // at full activity the band's fill dips up to this share of its height
 constexpr int kKnotColumns = 8;             // the shimmer's knots: one every this many columns (16 px)
-constexpr float kKnotGlide = 0.12f;         // per refresh, of the way to a knot's target,
-constexpr float kRetarget = 0.08f;          // and the chance a knot takes a fresh one (about every 0.2 s)
-constexpr double kSpikePerTick = 0.3;       // the sine's spike: its wave's phase, radians a refresh at full activity,
+constexpr double kKnotSeconds = 0.125;      // a knot glides to its target with this time constant,
+constexpr double kRetargetSeconds = 0.19;   // and takes a fresh one about this often
+constexpr double kSpikeRate = 18.75;        // the sine's spike: its wave's phase, radians a second at full activity,
 constexpr double kSpikeSway = 2.0;          // how far it sways (px) then,
 constexpr double kSpikeWavelength = 24.0;   // and its wavelength (px)
 constexpr double kWhiskerGap = 3.0;         // the band's -3 dB edges' whiskers: this far out from the outline,
@@ -94,9 +90,14 @@ void ErosionGraph::sync() {
     amount_ = value(QStringLiteral("amount"));
     blend_ = value(QStringLiteral("blend"));
     stereo_ = value(QStringLiteral("stereo"));
+    // (Before its device is there, as the ids are set one by one, value() gives 0s, not the device's: the
+    // weights the editor binds to wait for it.)
     const auto [sine, noise] = sub::app::erosionBlendWeights(blend_);
-    sineWeight_ = sine;
-    noiseWeight_ = noise;
+    if (device() && (sine != sineWeight_ || noise != noiseWeight_)) {
+        sineWeight_ = sine;
+        noiseWeight_ = noise;
+        Q_EMIT weightsChanged();
+    }
     updateCurve();
     update();
 }
@@ -161,7 +162,14 @@ void ErosionGraph::updateCurve() {
 
 // --- Displays and animation -------------------------------------------------------------------
 
+bool ErosionGraph::easeActivity(Eased& activity, double erosionDb, double dtSeconds) {
+    activity.target = std::clamp((erosionDb - kActivityFloorDb) / kActivitySpanDb, 0.0, 1.0);
+    const double seconds = activity.target > activity.value ? kActivityRiseSeconds : kActivityFallSeconds;
+    return activity.step(easeFraction(dtSeconds, seconds));
+}
+
 void ErosionGraph::refreshDisplays() {
+    const double dt = tickSeconds();
     const double rate = sampleRate();
     const std::vector<float> input = readDisplay(QStringLiteral("input"));
     const std::vector<float> output = readDisplay(QStringLiteral("output"));
@@ -182,11 +190,10 @@ void ErosionGraph::refreshDisplays() {
     // How much is being eroded now (not a backlog's worth: shown after the sound stopped, the first read
     // holds the loud past): rising quickly, falling back over half a second.
     erosionDb_ = sub::app::erosionRecentDb(erosion, rate);
-    activity_.target = std::clamp((erosionDb_ - kActivityFloorDb) / kActivitySpanDb, 0.0, 1.0);
-    const bool moved = activity_.step(activity_.target > activity_.value ? kActivityRise : kActivityFall);
+    const bool moved = easeActivity(activity_, erosionDb_, dt);
     if (activity_.value > 0.0) {
-        shimmerStep();
-        sinePhase_ = std::fmod(sinePhase_ + kSpikePerTick * activity_.value, 2.0 * std::numbers::pi);
+        shimmerStep(dt);
+        sinePhase_ = std::fmod(sinePhase_ + kSpikeRate * dt * activity_.value, 2.0 * std::numbers::pi);
     }
 
     // Still in silence: nothing to repaint.
@@ -195,26 +202,28 @@ void ErosionGraph::refreshDisplays() {
         update();
 }
 
-void ErosionGraph::shimmerStep() {
+void ErosionGraph::shimmerStep(double dtSeconds) {
     // Heat haze: knots every kKnotColumns glide towards random heights, now and then taking fresh ones,
     // and the columns between follow them smoothly. (Fresh heights for every column every tick read as
     // TV static.) The right layer's knots take targets that part from the left's as Stereo widens: one
     // edge in mono, two shimmering on their own at 100 %.
     std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
     const float s = float(std::clamp(stereo_ / 100.0, 0.0, 1.0));
+    const auto glide = float(easeFraction(dtSeconds, kKnotSeconds));
+    // (A fresh target about every kRetargetSeconds: the chance one comes within the tick.)
+    const auto retarget = float(easeFraction(dtSeconds, kRetargetSeconds));
     for (size_t k = 0; k < knotsL_.size(); ++k) {
-        if (uniform(random_) < kRetarget) {
+        if (uniform(random_) < retarget) {
             const float t = uniform(random_);
             knotsL_[k].target = t;
             knotsR_[k].target = (1.0f - s) * t + s * uniform(random_);
         }
-        knotsL_[k].value += kKnotGlide * (knotsL_[k].target - knotsL_[k].value);
-        knotsR_[k].value += kKnotGlide * (knotsR_[k].target - knotsR_[k].value);
+        knotsL_[k].value += glide * (knotsL_[k].target - knotsL_[k].value);
+        knotsR_[k].value += glide * (knotsR_[k].target - knotsR_[k].value);
     }
     for (size_t c = 0; c < shimmerL_.size(); ++c) {
         const size_t k = c / kKnotColumns;
-        const float f = float(c % kKnotColumns) / kKnotColumns;
-        const float eased = f * f * (3.0f - 2.0f * f);
+        const auto eased = float(smoothstep(double(c % kKnotColumns) / kKnotColumns));
         shimmerL_[c] = knotsL_[k].value + (knotsL_[k + 1].value - knotsL_[k].value) * eased;
         shimmerR_[c] = knotsR_[k].value + (knotsR_[k + 1].value - knotsR_[k].value) * eased;
     }

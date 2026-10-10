@@ -19,14 +19,15 @@ Item {
     readonly property alias graph: graph
     readonly property alias scope: scope
 
-    readonly property int cellWidth: 66
-    readonly property int graphWidth: 300
+    // The knobs' cells: 66 px, room for the glyphs beside Noise Blend's knob, or wider if a font needs it for
+    // the widest caption.
+    readonly property int cellWidth: Math.max(66, Math.ceil(widestCaption.advanceWidth) + 2)
+    readonly property int graphWidth: graph.implicitWidth
     readonly property int spacing: 8
     readonly property int rowSpacing: 14
-    // Noise Blend's weights, as the engine has them (equal power).
-    readonly property real blend: p.get("blend") ? p.get("blend").value / 100 : 1
-    readonly property real sineWeight: Math.sin(Math.PI / 2 * (1 - blend))
-    readonly property real noiseWeight: Math.sin(Math.PI / 2 * blend)
+    // Noise Blend's weights, as the engine has them (equal power, exactly 1 and 0 at the ends).
+    readonly property real sineWeight: graph.sineWeight
+    readonly property real noiseWeight: graph.noiseWeight
 
     // The device's body: 8 + a column of knobs + SPACING + GRAPH_WIDTH + SPACING + two columns of
     // knobs 4 apart + 8, less the frame's border.
@@ -40,6 +41,12 @@ Item {
         ids: ["freq", "width", "amount", "blend", "stereo"]
     }
 
+    TextMetrics {
+        id: widestCaption
+        font: Theme.uiFont(8)  // (EditorCaption's)
+        text: qsTr("Noise Blend")
+    }
+
     Row {
         x: 8
         y: 6
@@ -50,22 +57,25 @@ Item {
             id: left
             spacing: editor.rowSpacing
 
-            // Dimmed while the sine alone plays (it does nothing to it), still adjustable, as Live's.
-            // (EditorKnob animates its opacity.)
+            // Dimmed while the sine alone plays (it does nothing to it), still adjustable, as Live's: as
+            // EditorKnob's disabled look (which animates its opacity).
             EditorKnob {
                 objectName: "width"
                 width: editor.cellWidth
                 param: p.get("width")
                 title: qsTr("Width")
-                tooltip: qsTr("Filter Width: how wide the noise's band is, in octaves. Narrow, it wobbles like a tone; wide, it hisses over everything. No effect on the sine. Alt-drag or turn the wheel over the display")
-                opacity: editor.noiseWeight > 0.001 ? 1 : 0.45
+                tooltip: qsTr("Filter Width: how wide the noise's band is, in octaves. Narrow, it wobbles like a "
+                              + "tone; wide, it hisses over everything. No effect on the sine. Alt-drag or turn "
+                              + "the wheel over the display")
+                opacity: editor.noiseWeight > 0.001 ? 1 : 0.55
             }
             EditorKnob {
                 objectName: "stereo"
                 width: editor.cellWidth
                 param: p.get("stereo")
                 title: qsTr("Stereo")
-                tooltip: qsTr("Stereo Width: from the same modulation on both sides (0 %) to independent noise and a sine a quarter cycle apart (100 %)")
+                tooltip: qsTr("Stereo Width: from the same modulation on both sides (0 %) to independent noise "
+                              + "and a sine a quarter cycle apart (100 %)")
             }
         }
 
@@ -83,7 +93,9 @@ Item {
             }
             ToolTip.visible: graphHover.hovered && !graph.dragging
             ToolTip.delay: 700
-            ToolTip.text: qsTr("Drag: Frequency across, Amount up and down (Shift: finely). Alt-drag up and down or the wheel (Ctrl: finely): Filter Width. Behind it, the input's spectrum (filled) and the output's (line)")
+            ToolTip.text: qsTr("Drag: Frequency across, Amount up and down (Shift: finely). Alt-drag up and down "
+                               + "or the wheel (Ctrl: finely): Filter Width. Behind it, the input's spectrum "
+                               + "(filled) and the output's (line)")
         }
 
         Grid {
@@ -98,14 +110,16 @@ Item {
                 width: editor.cellWidth
                 param: p.get("freq")
                 title: qsTr("Frequency")
-                tooltip: qsTr("Frequency: the sine's frequency, or the middle of the noise's band. Drag the display across")
+                tooltip: qsTr("Frequency: the sine's frequency, or the middle of the noise's band. Drag the "
+                              + "display across")
             }
             EditorKnob {
                 objectName: "amount"
                 width: editor.cellWidth
                 param: p.get("amount")
                 title: qsTr("Amount")
-                tooltip: qsTr("Amount: how far the modulation moves the short delay. High frequencies erode first. Drag the display up and down")
+                tooltip: qsTr("Amount: how far the modulation moves the short delay. High frequencies erode "
+                              + "first. Drag the display up and down")
             }
             // Noise Blend with its glyphs, pictures as Live's (not buttons): each as bright as its source plays.
             Item {
@@ -164,8 +178,8 @@ Item {
                 ErosionScope {
                     id: scope
                     objectName: "erosionScope"
-                    // Its own size (ErosionScope::kSize), or less to fit under the caption.
-                    readonly property real side: Math.min(46, freqKnob.height - scopeCaption.height - 1)
+                    // Its own size (its implicit one), or less to fit under the caption.
+                    readonly property real side: Math.min(implicitWidth, freqKnob.height - scopeCaption.height - 1)
                     anchors.horizontalCenter: parent.horizontalCenter
                     width: side
                     height: side
@@ -178,7 +192,8 @@ Item {
                     }
                     ToolTip.visible: scopeHover.hovered
                     ToolTip.delay: 700
-                    ToolTip.text: qsTr("The modulation, left against right: a line while both sides move alike; a cloud (noise) or a circle (sine) as Stereo widens it")
+                    ToolTip.text: qsTr("The modulation, left against right: a line while both sides move alike; "
+                                       + "a cloud (noise) or a circle (sine) as Stereo widens it")
                 }
             }
         }
