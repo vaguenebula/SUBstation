@@ -893,10 +893,10 @@ sidechain, the key's spectrum sets the gains: one track's frequencies duck where
   device takes away as it is, what it adds inverted (which the ear can't tell alone), after Output; for setting
   Threshold and Smoothing by ear.
 - **Silence**: a frame whose input and key are all exact zeros skips its transforms (its spectrum is zeros); its
-  envelopes release, and once they are all at their floor their levels come from a table (no logarithms). So
-  silence costs almost nothing and comes out as exact zeros from 2N + H after the last sound (the latency, and the
-  last frames to hear it). Nothing recursive runs on
-  the audio path but the envelopes (floored), and the accumulators are cleared as they are read.
+  envelopes release, and once they are all at their floor their levels come from a table (no logarithms). So silence
+  costs almost nothing and comes out as exact zeros from 2N + H after the last sound (the latency, and the last frames
+  to hear it). Nothing recursive runs on the audio path but the envelopes (floored), and the accumulators are cleared as
+  they are read.
 - **Sidechain**: with a source chosen the key's two channels are transformed too (two more forward transforms a
   hop) and their levels set the gains; a source that is silent (null pointers) keys nothing, so the input passes as
   it is, delayed, even with Upward on (silence is under its floor). Without one, its own input keys it. The key is
@@ -926,14 +926,13 @@ sidechain, the key's spectrum sets the gains: one track's frequencies duck where
   `readDisplayAt` gives), and the four are published three hops late (the frame published at hop h went in at hop h - 3
   and is centred on input sample hH - N - H), so a frame shows when its centre is heard, in step with the level streams.
   At 8192 values a stream holds 64 frames (0.68 s at 48 kHz). The `samplesPerValue` figures (4 and 512) are for 44.1 and
-  48 kHz. Every value is finite: the spectra and levels read at most +300 dB (far above any audio: a full-scale tone
-  reads +20 dB), which a bin's power overflowed by an absurd sample would otherwise make infinite.
+  48 kHz. Every value is finite and at most +300 dB (far above any audio: a full-scale tone reads +20 dB): a bin's power
+  overflowed by an absurd sample would make a spectrum infinite, and one just short of overflowing reads far over it.
 - **The shared maths**: `spectral::frameSize`, `latencySamples`, `calibrationDb`, `pinkDb`, `thresholdDb`, `belowDb`,
   `focusWeight`, `smoothingOctaves`, `kneed`, `gainDb`, `displayFrequency` (inline, no FFT): the engine runs float
-  copies of them per bin. The application layer's
-  [app/src/audio/SpectralResponse.h](../../app/src/audio/SpectralResponse.h) wraps them for the editor (and gives it the
-  display points per frame and the pivot, checked against these), so the threshold drawn is the one that plays and the
-  Focus band is dimmed by the weights the sound gets.
+  copies of them per bin. [SpectralResponse.h](../../app/src/audio/SpectralResponse.h), in the application layer, wraps
+  them for the editor (with the display points per frame and the pivot, checked against these), so the threshold drawn
+  is the one that plays and the Focus band is dimmed by the weights the sound gets.
 - About 0.6 % of one core at 48 kHz stereo at the defaults; 0.75 % at the heaviest settings (unlinked, Upward 10:1,
   Smoothing 100 %, everything over the threshold); about 0.1 % more keyed by a sidechain; 1.2 % at 96 kHz (1.4 %
   heaviest) and 2.3 % at 192 kHz (2.7 %), the frame doubling with the rate (measured with `builtin_devices_bench` on a
@@ -1640,11 +1639,11 @@ The ranges are Live's (its Output a gain of 0..2, here in dB down to -36). The L
 
 ### Reverb (`builtin:reverb`, AudioEffect)
 
-An algorithmic reverb after Ableton Live 12's Reverb: an input filter, early reflections, and a diffusion network
-with a decay time per band, chorus, Freeze, and three output levels. Mono in, stereo out, as Live's is: the input's
-two sides are summed before the reverb (a source panned hard left reverberates in the middle), and Stereo sets how wide
-the reverb comes out. The maths it shares with its editor is in
-[ReverbDesign.h](../../engine/src/builtin/ReverbDesign.h) (namespace `reverb`).
+An algorithmic reverb after Ableton Live 12's Reverb: an input filter, early reflections, and a diffusion network with a
+decay time per band, chorus, Freeze, and three output levels. Mono in, stereo out, as Live's is: the input's two sides
+are summed before the reverb (a source panned hard left reverberates in the middle), and Stereo sets how wide the reverb
+comes out. The maths it shares with its editor is in [ReverbDesign.h](../../engine/src/builtin/ReverbDesign.h)
+(namespace `reverb`).
 
 | id | Name | Unit | Range | Default |
 |---|---|---|---|---|
@@ -2170,10 +2169,11 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   through an engine); every control changing without a click (a 6th-difference measure, the ramped ones against a
   spliced switch); automation to the sample, alone and through the engine, in step with the audio; reset; silence
   ringing out to exact zeros; stability at the extremes; NaN and infinity in the input and the key playing exactly as
-  zeros there, keyed or not, and absurd levels (+600 dBFS) leaving everything finite and the sound as it was 2 s on;
-  one channel the left of two; the displays (counts, whole frames for a reader that fell behind, published three hops
-  late to the hop, the meters, the output display with Delta); the engine lining other tracks up with it; and bounds
-  on its cost in the thread's CPU time, in all and per audio callback (no callback carries a whole frame).
+  zeros there, keyed or not, and absurd levels (+600 dBFS) leaving everything finite and the sound as it was 2 s on, and
+  +360 dBFS reading at most +300 dB in every display; one channel the left of two; the displays (counts, whole frames
+  for a reader that fell behind, published three hops late to the hop, the meters, the output display with Delta); the
+  engine lining other tracks up with it; and bounds on its cost in the thread's CPU time, in all and per audio callback
+  (no callback carries a whole frame).
 - [test_saturator_engine.cpp](../../tests/engine/test_saturator_engine.cpp): its listing; quiet audio untouched at
   the defaults, bit for bit; each curve played as its editor draws it (eight types, four drives, the Bass Shaper's
   thresholds, the Waveshaper's settings) and the curves' numbers; the Waveshaper's controls (no effect at WS Drive 0,
@@ -2254,25 +2254,24 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   their depth, a dense comb as a steady band).
 - [test_reverb_engine.cpp](../../tests/engine/test_reverb_engine.cpp): its listing; exact silence for silence; fully
   dry, the input untouched bit for bit; the decay per band (125 Hz, 1 kHz, 8 kHz; three Decays, shelf and low-pass;
-  every Density; both shelves off) against `reverb::decaySeconds`, by Schroeder integration in steep bands; the
-  shelves damping their bands; the reflections placed, signed and weighted as `earlyTaps` says at four predelays and
-  sizes, the first at the predelay; Shape moving the diffuse onset and the reflections' envelope; the input filter as
+  every Density; both shelves off) against `reverb::decaySeconds`, by Schroeder integration in steep bands; the shelves
+  damping their bands; the reflections placed, signed and weighted as `earlyTaps` says at four predelays and sizes, the
+  first at the predelay; Shape moving the diffuse onset and the reflections' envelope; the input filter as
   `inputFilterDb` draws it; mono in; Stereo from mono to two independent sides; one channel; Reflect, Diffuse and the
   overall level; Freeze holding (where the same unfrozen dies away), Cut keeping new sound out (and without Cut letting
   it in), the release decaying at Decay's pace; Flat; the guard (left alone by full-scale noise, holding a +12 dBFS
   input); each Density's decay and echo density, a change of it keeping a frozen tail, and what joins starting from
-  silence (after holding a loud tail); Spin swinging and drifting
-  each reflection as `spinPan` and `spinDriftMs` say (Doppler included), and reaching the tail; Chorus spreading a
-  tone, Diffusion blurring the echoes sooner, Scale setting the diffusers' lengths; no metallic ringing; every control
-  and switch changing without a click (a 6th-difference measure, against the steady render and an unfaded gap; Smooth
-  switched mid-glide too); automation through the engine, to the sample; reset and a new rate (44.1 to 192 kHz; Size's
-  glide at the new rate); extremes; silence ringing out to exact zeros, denormal input, waking as a fresh device (also
-  with Predelay, Size and Shape raised while it slept, and woken just after it fell asleep, the delays jumping as it
-  wakes at each Smooth); a NaN, an infinity or 1e31 in its input playing exactly as a 0 there would (at the defaults,
-  fully dry, and frozen with the input feeding the tail), and the loudest input it takes staying finite; its tail; its
-  displays (levels, the signal sample for sample, the tail's level falling at Decay's pace, the LFOs' phases however
-  blocks fall, and when switched while it sleeps); the design's helpers for the editor; what it costs (in the thread's
-  CPU time).
+  silence (after holding a loud tail); Spin swinging and drifting each reflection as `spinPan` and `spinDriftMs` say
+  (Doppler included), and reaching the tail; Chorus spreading a tone, Diffusion blurring the echoes sooner, Scale
+  setting the diffusers' lengths; no metallic ringing; every control and switch changing without a click (a
+  6th-difference measure, against the steady render and an unfaded gap; Smooth switched mid-glide too); automation
+  through the engine, to the sample; reset and a new rate (44.1 to 192 kHz; Size's glide at the new rate); extremes;
+  silence ringing out to exact zeros, denormal input, waking as a fresh device (also with Predelay, Size and Shape
+  raised while it slept, and woken just after it fell asleep, the delays jumping as it wakes at each Smooth); a NaN, an
+  infinity or 1e31 in its input playing exactly as a 0 there would (at the defaults, fully dry, and frozen with the
+  input feeding the tail), and the loudest input it takes staying finite; its tail; its displays (levels, the signal
+  sample for sample, the tail's level falling at Decay's pace, the LFOs' phases however blocks fall, and when switched
+  while it sleeps); the design's helpers for the editor; what it costs (in the thread's CPU time).
 - [test_disperser_engine.cpp](../../tests/engine/test_disperser_engine.cpp): its listing; passing through
   untouched (no stages, bypassed, fully dry); Dry/Wet's blend, to the sample, and its notches; a flat magnitude (every bin within 0.01 dB, all its energy) and the
   design's group delay, at the extremes (20 s at 20 Hz), at 8 to 192 kHz and kept below Nyquist;

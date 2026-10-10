@@ -1055,6 +1055,18 @@ TEST_CASE("spectral: NaN, infinity and absurd levels, in the input and the key")
         CHECK_ALLCLOSE(slice(l1, 3 * kSampleRate), slice(l0, 3 * kSampleRate), 0.0, 1e-5);
         CHECK_ALLCLOSE(slice(r1, 3 * kSampleRate), slice(r0, 3 * kSampleRate), 0.0, 1e-5);
     }
+
+    // Loud enough to read far over the top (+360 dBFS) though a bin's power stays finite: every display, the levels
+    // compared (`key`) too, reads +300 dB at the most.
+    Spectral loud(values);
+    loud.play(with(left, {{40000, 1e18f}}), right);
+    for (int d = 0; d < kDisplays; ++d) {
+        INFO("display " + std::to_string(d));
+        const std::vector<float>& shown = loud.shown(d);
+        CHECK(allFinite(shown));
+        CHECK(*std::max_element(shown.begin(), shown.end()) <= 300.f);
+    }
+    CHECK_EQ(*std::max_element(loud.shown(kKey).begin(), loud.shown(kKey).end()), 300.f);
 }
 
 TEST_CASE("spectral: one channel") {

@@ -756,7 +756,8 @@ private:
         }
     }
 
-    // Levels (dB) as display values: each point's highest (or between two bins), floored.
+    // Levels (dB) as display values: each point's highest (or between two bins), floored, and held to the top as the
+    // spectra are (an absurd level whose power didn't quite overflow reads far over it).
     void showLevels(const float* level, float* out) const {
         for (int j = 0; j < kPoints; ++j) {
             const DisplayPoint& p = displayPoints_[static_cast<size_t>(j)];
@@ -766,7 +767,7 @@ private:
             } else if (p.kind == DisplayPoint::Interpolate) {
                 value = level[p.k0] + p.t * (level[p.k1] - level[p.k0]);
             }
-            out[j] = std::max(kFloorDb, value);
+            out[j] = std::clamp(value, kFloorDb, kTopDb);
         }
     }
 
