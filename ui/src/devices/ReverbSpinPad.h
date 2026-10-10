@@ -4,7 +4,7 @@
 // 1.3 Hz on a log axis; up and down for its amount; one undo step per drag,
 // Shift finely) over the reflections themselves, drawn as particles: one per
 // reflection the Density plays (sub::app::reverbEarlyTaps), placed across by
-// where it sits in the stereo field (times Stereo) and down by when it comes
+// where it sits in the stereo field (times Stereo's width) and down by when it comes
 // (the earliest at the top), as big as it is loud (Shape). The diffuse tail's
 // onset after the input (Predelay, Shape, Size) is read out at the top right.
 //
@@ -49,14 +49,17 @@ public:
     double phase() const { return phase_; }
     double flash() const { return flash_.value; }
     bool animating() const { return animating_; }
-    // Where each reflection's particle is now (those the Density doesn't play are not drawn).
+    // Where each reflection's particle is now (those the Density doesn't play are not drawn), and its
+    // trail (its last positions, the latest first).
     QList<QPointF> particles() const;
+    QList<QPointF> trail(int k) const;
     // Whether reflection k is drawn (the Density plays it).
     bool particleShown(int k) const { return k >= 0 && k < kTaps && radius_[std::size_t(k)] > 0.0; }
     // Spin's swing as drawn (0..1): its amount, eased as Spin is switched, while the reflections sound.
     double amountShown() const { return amount_.value * presence_.value; }
 
-    // Pad coordinates: the plot (the item less 1 px), the handle's area in it (6 px less all round).
+    // Pad coordinates: the plot (the item less 1 px), the handle's area in it (6 px less all round, and
+    // under the captions' 13 px strip, so the handle never covers them).
     QRectF plot() const;
     QRectF inner() const;
     Q_INVOKABLE double xOfRate(double hz) const;
@@ -64,9 +67,6 @@ public:
     Q_INVOKABLE double yOfAmount(double percent) const;
     Q_INVOKABLE double amountAt(double y) const;
     Q_INVOKABLE QPointF handle() const;
-
-    // One tick of animation, `seconds` after the last.
-    Q_INVOKABLE void advance(double seconds);
 
 Q_SIGNALS:
     void levelsChanged();
@@ -82,13 +82,16 @@ protected:
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
+    // One tick of animation, `seconds` after the last.
+    void advance(double seconds);
     QPointF positionOf(int k) const;
     void place();
     void dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers);
 
     // The parameters, as sync() read them.
     bool spin_ = true;
-    double rate_ = 0.3, amountPercent_ = 25.0, stereo_ = 100.0;
+    double rate_ = 0.3, amountPercent_ = 25.0;
+    double width_ = 100.0 / 120.0;  // Stereo's width on the wet (sub::app::reverbStereoWidth)
     bool synced_ = false;
     // The reflections at rest: each one's row (0 the first's time .. 1 the last's), radius (0: not played)
     // and loudness (0..1, of the loudest). (Their pans are the engine's: reverbSpinPan.)
@@ -97,7 +100,8 @@ private:
 
     // The motion.
     double phase_ = -1.0;      // the latest published (-1: still)
-    double drawPhase_ = 0.0;   // the one drawn (the last while still)
+    double drawPhase_ = 0.0;   // the one drawn (the last while still; run on through ticks without one)
+    double stale_ = 0.0;       // s since a tick last brought a value
     Eased amount_;             // Spin's amount 0..1 as drawn (0 while off)
     Eased presence_;           // 1 while the reflections sound (the swing drawn), 0 at rest in silence
     double linger_ = 0.0;      // s the swing still shows after Spin's settings changed

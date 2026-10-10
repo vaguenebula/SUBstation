@@ -26,6 +26,8 @@ constexpr double kGrowSeconds = 0.06;    // a handle grows under the mouse
 constexpr double kRipplePx = 1.2;        // the ripple's height at Chorus 100 % while the tail sounds
 constexpr double kSpectrumTopDb = -12.0;  // the tail's spectrum over the axis' height
 constexpr double kFineRatio = 0.25;       // Shift: the drag's ratios to this power
+constexpr double kHandleInset = 6.0;      // px: a handle's centre stays this far inside the plot (its largest ring)
+constexpr double kStaleSeconds = 0.1;     // a tick without values keeps the last this long (a long audio block)
 
 // a + (b - a) t, of colours.
 QColor mix(const QColor& a, const QColor& b, double t) {
@@ -80,8 +82,8 @@ double ReverbDecayGraph::freqAt(double x) const {
 }
 
 double ReverbDecayGraph::logOf(double seconds) {
-    // Held a little past the axis both ways, so what is off it (frozen: 1000 s) still eases in and out of view.
-    return std::log(std::clamp(std::isfinite(seconds) ? seconds : 1e9, kMinSeconds / 4, kMaxSeconds * 50));
+    // Held to the axis: what is off it (frozen: 1000 s) is drawn along its edge, and eases into and out of it.
+    return std::log(std::clamp(std::isfinite(seconds) ? seconds : kMaxSeconds, kMinSeconds, kMaxSeconds));
 }
 
 double ReverbDecayGraph::yOfLog(double logSeconds) const {
@@ -104,22 +106,29 @@ bool ReverbDecayGraph::shelfOn(Handle handle) const {
 
 QPointF ReverbDecayGraph::handleAt(Handle handle) const {
     const double decay = settings_.decayMs / 1000.0;
-    const QRectF r = plot();
+    QPointF at;
     switch (handle) {
     case Lo:
-        return QPointF(xOf(settings_.loFreq), yOf(settings_.loShelf ? decay * settings_.loGain / 100.0 : decay));
+        at = QPointF(xOf(settings_.loFreq), yOf(settings_.loShelf ? decay * settings_.loGain / 100.0 : decay));
+        break;
     case Hi: {
         const double seconds = !settings_.hiFilter ? decay
                                : settings_.hiLowpass ? lowpassAtHi_
                                                      : decay * settings_.hiGain / 100.0;
-        return QPointF(xOf(settings_.hiFreq), yOf(seconds));
+        at = QPointF(xOf(settings_.hiFreq), yOf(seconds));
+        break;
     }
-    case Decay:
-        return QPointF(std::clamp(xOf(std::sqrt(settings_.loFreq * settings_.hiFreq)), r.left() + 6, r.right() - 6),
-                       yOf(decay));
-    case None: break;
+    case Decay: at = QPointF(xOf(std::sqrt(settings_.loFreq * settings_.hiFreq)), yOf(decay)); break;
+    case None: return {};
     }
-    return {};
+    // Inside the plot, ring and all (a shelf at the end of its range sits at the plot's edge).
+    const QRectF inside = plot().adjusted(kHandleInset, kHandleInset, -kHandleInset, -kHandleInset);
+    return QPointF(std::clamp(at.x(), inside.left(), inside.right()),
+                   std::clamp(at.y(), inside.top(), inside.bottom()));
+}
+
+bool ReverbDecayGraph::gainless(Handle handle) const {
+    return (handle == Lo && !settings_.loShelf) || (handle == Hi && (!settings_.hiFilter || settings_.hiLowpass));
 }
 
 ReverbDecayGraph::Handle ReverbDecayGraph::handleNear(const QPointF& pos, double within) const {
@@ -236,7 +245,8 @@ void ReverbDecayGraph::updateCurve() {
 }
 
 void ReverbDecayGraph::updateTarget() {
-    // Between the unfrozen curve and the frozen one, in log seconds, as Freeze eases.
+    // Between the unfrozen curve and the frozen one, in log seconds (each held to the axis, so a curve off
+    // it eases into and out of its edge rather than racing to it and stopping dead), as Freeze eases.
     const std::vector<double>& unfrozen = settings_.freeze ? other_ : seconds_;
     const std::vector<double>& frozen = settings_.freeze ? seconds_ : other_;
     const double t = frozen_.value;
@@ -269,22 +279,29 @@ void ReverbDecayGraph::updateColumns() { columns_ = spectrum_.columns(std::max(2
 // --- Displays and animation -------------------------------------------------------------
 
 void ReverbDecayGraph::refreshDisplays() {
+    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
+    if (!clock_.isValid())
+        clock_.start();
     const std::vector<float> tail = readDisplay(QStringLiteral("tail"));
     if (spectrum_.add(tail.data(), tail.size(), sampleRate())) {
         updateColumns();
         spectrumChanged_ = true;
     }
+    // The tick's loudest value. A tick that brings none (the audio's blocks longer than a tick) keeps the
+    // last for a moment: only a while without any is silence (asleep, the engine publishes the floor).
     const std::vector<float> diffuse = readDisplay(QStringLiteral("diffuse"));
-    diffuseDb_ = kMeterFloorDb;
-    for (const float v : diffuse) diffuseDb_ = std::max(diffuseDb_, double(v));
+    if (!diffuse.empty()) {
+        diffuseDb_ = kMeterFloorDb;
+        for (const float v : diffuse) diffuseDb_ = std::max(diffuseDb_, double(v));
+        stale_ = 0.0;
+    } else if ((stale_ += seconds) > kStaleSeconds) {
+        diffuseDb_ = kMeterFloorDb;
+    }
     const std::vector<float> chorus = readDisplay(QStringLiteral("chorus"));
     if (!chorus.empty() && chorus.back() >= 0.0f && double(chorus.back()) != chorusPhase_) {
         chorusPhase_ = chorus.back();
         chorusMoved_ = true;
     }
-    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
     advance(seconds);
 }
 
@@ -295,7 +312,6 @@ void ReverbDecayGraph::advance(double seconds) {
     // The tail meter falls at least as fast as the tail does (60 dB in Decay), and the curve glows with it.
     const double fall = std::max(24.0, 1.2 * 60.0 / std::max(settings_.decayMs / 1000.0, 0.01));
     meter_.update(diffuseDb_, seconds, settings_.freeze ? 24.0 : fall, 1.0, kMeterFloorDb);
-    diffuseDb_ = kMeterFloorDb;  // (until the next tick brings a value)
     if (meter_.level != paintedLevel_ || meter_.peak != paintedPeak_) {
         paintedLevel_ = meter_.level;
         paintedPeak_ = meter_.peak;
@@ -408,13 +424,17 @@ void ReverbDecayGraph::dragTo(const QPointF& pos, Qt::KeyboardModifiers modifier
     }
     const QString text = QStringLiteral("Change Reverb Decay");
     switch (pressed_) {
+    // (A shelf switched off, or the Low-pass, has no gain the handle shows: across only.)
     case Lo:
-        setParams({{QStringLiteral("lo_freq"), std::clamp(startFreq_ * rx, 20.0, 15000.0)},
-                   {QStringLiteral("lo_gain"), std::clamp(startGain_ * ry, 20.0, 100.0)}},
-                  gesture_, text);
+        if (gainless(Lo))
+            setParams({{QStringLiteral("lo_freq"), std::clamp(startFreq_ * rx, 20.0, 15000.0)}}, gesture_, text);
+        else
+            setParams({{QStringLiteral("lo_freq"), std::clamp(startFreq_ * rx, 20.0, 15000.0)},
+                       {QStringLiteral("lo_gain"), std::clamp(startGain_ * ry, 20.0, 100.0)}},
+                      gesture_, text);
         break;
     case Hi:
-        if (settings_.hiLowpass && settings_.hiFilter)  // (its gain is unused)
+        if (gainless(Hi))
             setParams({{QStringLiteral("hi_freq"), std::clamp(startFreq_ * rx, 20.0, 16000.0)}}, gesture_, text);
         else
             setParams({{QStringLiteral("hi_freq"), std::clamp(startFreq_ * rx, 20.0, 16000.0)},
@@ -444,9 +464,9 @@ void ReverbDecayGraph::mouseDoubleClickEvent(QMouseEvent* event) {
 void ReverbDecayGraph::hoverMoveEvent(QHoverEvent* event) {
     const Handle handle = handleNear(event->position(), kGrab);
     setHovered(handle);
-    setCursor(handle == Lo || (handle == Hi && !(settings_.hiLowpass && settings_.hiFilter)) ? Qt::SizeAllCursor
-              : handle == Hi                                                                ? Qt::SizeHorCursor
-                                                                                            : Qt::SizeVerCursor);
+    setCursor(handle == Decay || handle == None ? Qt::SizeVerCursor
+              : gainless(handle)                ? Qt::SizeHorCursor
+                                                : Qt::SizeAllCursor);
 }
 
 void ReverbDecayGraph::hoverLeaveEvent(QHoverEvent*) { setHovered(None); }
@@ -513,15 +533,17 @@ void ReverbDecayGraph::paint(SgPainter& p) {
         drawGlowPolyline(p, curve, color, 1.5 + 1.0 * glow);
     }
 
-    // The shelves' guides: how long their bands ring, level out to their edges.
+    // The shelves' guides: how long their bands ring, level out to their edges. Frozen, the curve no
+    // longer settles onto them (the handles are what thaws): they fade, and the handles dim.
     const QColor accent = dry_ ? Theme::kTextDisabled : Theme::kAccent;
-    if (settings_.loShelf) {
+    const int guide = int(90 * (1.0 - frozen));
+    if (settings_.loShelf && guide > 0) {
         const QPointF at = handleAt(Lo);
-        drawDashedPolyline(p, {QPointF(r.left(), at.y()), at}, withAlpha(accent, 90), 1.0);
+        drawDashedPolyline(p, {QPointF(r.left(), at.y()), at}, withAlpha(accent, guide), 1.0);
     }
-    if (settings_.hiFilter && !settings_.hiLowpass) {
+    if (settings_.hiFilter && !settings_.hiLowpass && guide > 0) {
         const QPointF at = handleAt(Hi);
-        drawDashedPolyline(p, {at, QPointF(r.right(), at.y())}, withAlpha(accent, 90), 1.0);
+        drawDashedPolyline(p, {at, QPointF(r.right(), at.y())}, withAlpha(accent, guide), 1.0);
     }
     p.restore();
 
@@ -532,12 +554,15 @@ void ReverbDecayGraph::paint(SgPainter& p) {
     p.drawText(QRectF(r.left() + 50, r.top(), r.width() - 53, kHeader), Qt::AlignRight | Qt::AlignVCenter, readout(),
                lit ? Theme::kText : frozen > 0.5 ? Theme::kFrozen : Theme::kTextDim, font);
 
-    // The handles: rings, growing under the mouse, filled while held; a switched-off shelf's hollow and dim.
+    // The handles: rings, growing under the mouse, filled while held; a switched-off shelf's hollow and dim;
+    // all of them dimmed while frozen (unless held or hovered).
     for (const Handle handle : {Lo, Hi, Decay}) {
         const QPointF at = handleAt(handle);
-        const double radius = 4.0 + 2.0 * grow_[std::size_t(handle)].value;
+        const double grown = grow_[std::size_t(handle)].value;
+        const double radius = 4.0 + 2.0 * grown;
         const bool on = shelfOn(handle);
-        const QColor ring = on ? accent : Theme::kTextDim;
+        QColor ring = on ? accent : Theme::kTextDim;
+        ring.setAlphaF(float(ring.alphaF() * (1.0 - 0.6 * frozen * (1.0 - grown))));
         p.fillEllipse(at, radius, radius, handle == pressed_ && on ? ring : Theme::kMeterBg);
         p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), ring, on ? 2.0 : 1.2);
         if (handle == Decay && pressed_ != Decay)

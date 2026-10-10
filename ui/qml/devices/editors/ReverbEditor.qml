@@ -80,7 +80,7 @@ Item {
         }
     }
     // A switch that fades with what it depends on.
-    component Switch: ParamButton {
+    component FadingButton: ParamButton {
         height: 16
         Behavior on opacity {
             NumberAnimation {
@@ -122,7 +122,7 @@ Item {
 
     // --- Input ---------------------------------------------------------------------------------
 
-    Switch {
+    FadingButton {
         objectName: "loCutButton"
         x: 8
         y: 6
@@ -131,7 +131,7 @@ Item {
         text: qsTr("Lo Cut")
         tooltip: qsTr("Lo Cut: a high-pass on what goes into the reverb, at the band's low edge")
     }
-    Switch {
+    FadingButton {
         objectName: "hiCutButton"
         x: 64
         y: 6
@@ -185,14 +185,15 @@ Item {
 
     // --- Early reflections ---------------------------------------------------------------------
 
-    Switch {
+    FadingButton {
         objectName: "spinButton"
         x: 124
         y: 6
         width: 96
         param: p.get("spin")
         text: qsTr("Spin")
-        tooltip: qsTr("Spin: the early reflections drift in time and swing around the stereo field")
+        tooltip: qsTr("Spin: the early reflections drift in time and swing around the stereo field "
+                      + "(the tail hears them drift too)")
     }
     ReverbSpinPad {
         id: spinPad
@@ -275,7 +276,7 @@ Item {
         y: 6
         param: p.get("stereo")
         title: qsTr("Stereo")
-        tooltip: qsTr("Stereo: the reverb's width, from mono to wider than natural")
+        tooltip: qsTr("Stereo: the reverb's width, from mono to two sides independent of each other (at 120°)")
     }
     Choice {
         listName: "densityChoice"
@@ -302,7 +303,7 @@ Item {
 
     // --- Diffusion network ---------------------------------------------------------------------
 
-    Switch {
+    FadingButton {
         objectName: "loShelfButton"
         x: 398
         y: 6
@@ -311,7 +312,7 @@ Item {
         text: qsTr("Lo")
         tooltip: qsTr("Lo Shelf: the lows die away faster (drag the handle in the graph)")
     }
-    Switch {
+    FadingButton {
         objectName: "hiFilterButton"
         x: 442
         y: 6
@@ -412,7 +413,7 @@ Item {
         title: qsTr("Decay")
         tooltip: qsTr("Decay Time: how long the tail takes to fall 60 dB")
     }
-    Switch {
+    FadingButton {
         objectName: "freezeButton"
         x: 602
         y: editor.height - 62
@@ -422,7 +423,7 @@ Item {
         iconName: "snowflake"
         tooltip: qsTr("Freeze: the tail holds for ever")
     }
-    Switch {
+    FadingButton {
         objectName: "flatButton"
         x: 602
         y: editor.height - 42
@@ -432,7 +433,7 @@ Item {
         text: qsTr("Flat")
         tooltip: qsTr("Flat: frozen, every band holds (off: the shelves still take their bands away)")
     }
-    Switch {
+    FadingButton {
         objectName: "cutButton"
         x: 602
         y: editor.height - 22
@@ -463,7 +464,7 @@ Item {
         x: 712
     }
 
-    Switch {
+    FadingButton {
         objectName: "chorusButton"
         x: 716
         y: 6

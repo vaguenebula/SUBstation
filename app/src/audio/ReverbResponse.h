@@ -38,6 +38,8 @@ QList<ReverbTap> reverbEarlyTaps(double size, double shape, int density);
 // Where Spin has reflection `k` (0..11) in the stereo field (-1..1), its amount
 // 0..1, its LFO at `phase` (cycles): the reflection's own pan at amount 0.
 double reverbSpinPan(int k, double amount, double phase);
+// Stereo Image's width on the wet (0 mono .. 1 at 120, the two sides independent).
+double reverbStereoWidth(double stereo);
 
 // How long after the predelay the diffuse tail starts (ms): the network hears
 // the input Shape's onset later, and its first echo comes out a pass of its

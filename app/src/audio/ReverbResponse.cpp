@@ -53,6 +53,8 @@ double reverbSpinPan(int k, double amount, double phase) {
     return sub::reverb::spinPan(std::clamp(k, 0, sub::reverb::kMaxTaps - 1), amount, phase);
 }
 
+double reverbStereoWidth(double stereo) { return sub::reverb::stereoWidth(stereo); }
+
 double reverbDiffuseOnsetMs(double size, double shape, int density) {
     const double s = sub::reverb::sizeFactor(size);
     double shortest = sub::reverb::kLineMs.back();

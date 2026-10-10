@@ -5,12 +5,12 @@
 //
 // The signal: the input summed to mono goes through a band (a Butterworth
 // high-pass and low-pass), then into a delay line. The early reflections are 12
-// taps of that line after the predelay, each with a gain (Shape's envelope), a
-// sign and a pan; the diffuse tail is read from it later (Shape's onset), blurred
-// by Schroeder all-passes and fed into a feedback delay network: 4, 8 or 16
-// lines (Density) mixed by a Walsh-Hadamard matrix, each line's loop with two
-// one-pole shelves (or a low-pass) set so every band rings for its own time.
-// Size scales every delay by sqrt(size / 100).
+// taps of that line from the predelay on (the first at the predelay itself),
+// each with a gain (Shape's envelope), a sign and a pan; the diffuse tail is read
+// from it later (Shape's onset), blurred by Schroeder all-passes and fed into a
+// feedback delay network: 4, 8 or 16 lines (Density) mixed by a Walsh-Hadamard
+// matrix, each line's loop with two one-pole shelves (or a low-pass) set so
+// every band rings for its own time. Size scales every delay by sqrt(size / 100).
 //
 // Shared with the application layer's ReverbResponse (app/src/audio), which
 // wraps decaySeconds(), inputFilterDb(), earlyTaps() and spinPan() for the editor.
@@ -49,9 +49,11 @@ inline constexpr std::array<double, kMaxDiffusers> kDiffuserGain = {0.75, 0.75, 
 inline constexpr double kLoopAllpassShare = 0.11;  // High: each loop's all-pass, a share of its line (times Scale's c)
 inline constexpr double kLoopAllpassGain = 0.5;    // its gain at Diffusion 100 %
 
-// The early reflections at Size 100: time after the predelay (ms), pan (-1..1), sign.
-inline constexpr std::array<double, kMaxTaps> kTapMs = {3.1,  5.9,  8.8,  11.8, 15.2, 19.1,
-                                                        23.5, 28.6, 34.4, 41.0, 48.3, 56.7};
+// The early reflections at Size 100: time after the predelay (ms; the first comes
+// at the predelay itself, which is the time to the first reflection, as Live's
+// is), pan (-1..1), sign.
+inline constexpr std::array<double, kMaxTaps> kTapMs = {0.0,  2.8,  5.7,  8.7,  12.1, 16.0,
+                                                        20.4, 25.5, 31.3, 37.9, 45.2, 53.6};
 inline constexpr std::array<double, kMaxTaps> kTapPan = {-0.83, 0.71, -0.32, 0.94, -0.61, 0.17,
                                                          0.88,  -0.95, 0.42, -0.24, 0.66, -0.54};
 inline constexpr std::array<int, kMaxTaps> kTapSign = {+1, -1, +1, +1, -1, +1, -1, +1, -1, -1, +1, -1};
@@ -63,12 +65,13 @@ inline constexpr double kDiffuseGain = 1.3;  // the tail's trim: at the defaults
 // so the sum of their reads carries all of it however many there are, and the
 // tail is as loud at every Density (1 / sqrt(N) would make Sparse 6 dB louder).
 inline constexpr double kOutputScale = 0.25;
-inline constexpr double kSpinDepthMs = 1.0;          // Spin Amount 100 %: +-1 ms of tap drift (times min(1, s))
+inline constexpr double kSpinDepthMs = 1.0;          // Spin Amount 100 %: taps drift 0..2 ms later (times min(1, s))
 inline constexpr double kSpinPanSwing = 0.7;         // and +-0.7 of pan swing in the middle (see spinPan())
 inline constexpr double kChorusDepthMs = 2.0;        // Chorus Amount 100 %: +-2 ms on each line (a quarter at most)
 inline constexpr double kOnsetShare = 0.8;           // Shape 100 %: the diffuse onset 0.8 x the last tap's time later
 inline constexpr double kFreezeSeconds = 1000.0;     // frozen with Cut: the tail's decay time (practically endless)
 inline constexpr double kFreezeUncutSeconds = 60.0;  // frozen without Cut (the input keeps adding: kept bounded)
+inline constexpr double kMaxStereo = 120.0;          // Stereo Image's top: the two sides independent
 
 // --- Density: which lines, diffusers and taps play ------------------------------------------
 
@@ -138,6 +141,10 @@ inline double loopAllpassSamples(int line, double s, double c, double fs) noexce
 inline double diffuserSamples(int j, double s, double c, double fs) noexcept {
     return std::max(2.0, kDiffuserMs[static_cast<size_t>(j)] * s * c * fs / 1000.0);
 }
+// Stereo Image's width on the wet's side (mid/side): 0 mono, 1 at its top (120),
+// where the two sides are the network's own two independent sums, as Live's 120
+// degrees give each ear a channel independent of the other's.
+inline double stereoWidth(double stereo) noexcept { return std::clamp(stereo, 0.0, kMaxStereo) / kMaxStereo; }
 // How much later than the predelay the network hears the input, in ms: Shape's onset.
 inline double onsetMs(double s, double shapePercent) noexcept {
     return std::clamp(shapePercent, 0.0, 100.0) / 100.0 * kOnsetShare * kTapMs[kMaxTaps - 1] * s;
@@ -336,10 +343,12 @@ inline double spinAngle(int k, double amount, double phase) noexcept {
 inline double spinPan(int k, double amount, double phase) noexcept {
     return -std::cos(2.0 * (tapAngle(k) + spinAngle(k, amount, phase)));
 }
-// Spin's drift of tap k's time, in ms (at size factor s).
+// Spin's drift of tap k's time, in ms (at size factor s): later only (0 to twice
+// the depth), so no reflection ever comes before the predelay. Tap 0's drift
+// also moves where the network hears the input, so Spin reaches the tail too.
 inline double spinDriftMs(int k, double amount, double phase, double s) noexcept {
     return amount * kSpinDepthMs * std::min(1.0, s) *
-           std::sin(2.0 * std::numbers::pi * (phase + k / static_cast<double>(kMaxTaps)));
+           (1.0 + std::sin(2.0 * std::numbers::pi * (phase + k / static_cast<double>(kMaxTaps))));
 }
 
 }  // namespace sub::reverb

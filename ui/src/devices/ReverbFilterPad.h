@@ -29,7 +29,7 @@ namespace sub::ui {
 class ReverbFilterPad : public DeviceCanvas {
     Q_OBJECT
     QML_ELEMENT
-    Q_PROPERTY(double inputLevel READ inputLevel NOTIFY levelsChanged)  // dB: the newest "input" (-90 without)
+    Q_PROPERTY(double inputLevel READ inputLevel NOTIFY levelsChanged)  // dB: the newest "input" (-90 a while without)
     Q_PROPERTY(double glow READ glow NOTIFY levelsChanged)              // 0..1, eased
     Q_PROPERTY(bool animating READ animating NOTIFY levelsChanged)      // the last tick asked for a repaint
 
@@ -58,8 +58,9 @@ public:
     const std::vector<double>& curveShown() const { return shown_; }
     const sub::app::analysis::FallingSpectrum& spectrum() const { return spectrum_; }
 
-    // Pad coordinates: the plot (the item less 1 px), the dot's area in it (5 px less at the top and
-    // bottom: the width's axis), the axes.
+    // Pad coordinates: the plot (the item less 1 px), the dot's area in it (the width's axis: under the
+    // caption's 13 px strip and 6 px more, and 6 px above the bottom, so the dot never covers the caption),
+    // the axes.
     QRectF plot() const;
     QRectF inner() const;
     Q_INVOKABLE double xOf(double freq) const;
@@ -68,9 +69,6 @@ public:
     Q_INVOKABLE double widthAt(double y) const;
     double yOfDb(double db) const;
     Q_INVOKABLE QPointF dot() const;
-
-    // One tick of animation, `seconds` after the last (refreshDisplays calls it with the time since).
-    Q_INVOKABLE void advance(double seconds);
 
 Q_SIGNALS:
     void levelsChanged();
@@ -86,6 +84,8 @@ protected:
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
+    // One tick of animation, `seconds` after the last (refreshDisplays calls it with the time since).
+    void advance(double seconds);
     void updateCurve();
     void updateShown();
     void updateColumns();
@@ -105,6 +105,8 @@ private:
     std::vector<double> columns_;  // the spectrum under each column
     bool spectrumChanged_ = false;
     double inputLevel_ = -90.0;
+    double loudest_ = -90.0;  // the last tick's loudest "input" (kept a moment through ticks without one)
+    double stale_ = 0.0;      // s since a tick last brought one
     Eased glow_;
     QElapsedTimer clock_;
     bool animating_ = false;

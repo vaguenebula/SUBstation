@@ -73,17 +73,15 @@ public:
     bool animating() const { return animating_; }
     QString readout() const;
     const sub::app::analysis::FallingSpectrum& tailSpectrum() const { return spectrum_; }
-    const sub::app::ReverbDecaySettings& settings() const { return settings_; }
     // The drawn curve's y at each frequency now.
     std::vector<double> shownY() const;
 
-    // The handles (graph coordinates), and the one hovered or held.
+    // The handles (graph coordinates: each held inside the plot), and the one hovered.
     Q_INVOKABLE QPointF loHandle() const { return handleAt(Lo); }
     Q_INVOKABLE QPointF hiHandle() const { return handleAt(Hi); }
     Q_INVOKABLE QPointF decayHandle() const { return handleAt(Decay); }
     QPointF handleAt(Handle handle) const;
     Handle hovered() const { return hovered_; }
-    Handle pressed() const { return pressed_; }
 
     // Graph coordinates: the plot (the item less 1 px and the meter at the right), the decay axis in it
     // (under the captions), the axes.
@@ -94,9 +92,6 @@ public:
     Q_INVOKABLE double freqAt(double x) const;
     Q_INVOKABLE double yOf(double seconds) const;
     Q_INVOKABLE double secondsAt(double y) const;
-
-    // One tick of animation, `seconds` after the last.
-    Q_INVOKABLE void advance(double seconds);
 
 Q_SIGNALS:
     void curveChanged();
@@ -116,12 +111,15 @@ protected:
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
+    // One tick of animation, `seconds` after the last.
+    void advance(double seconds);
     void updateCurve();
     void updateTarget();
     void updateShown();
     void updateColumns();
     Handle handleNear(const QPointF& pos, double within) const;
     bool shelfOn(Handle handle) const;
+    bool gainless(Handle handle) const;  // a shelf's handle with no gain to drag (off, or the Low-pass)
     void setHovered(Handle handle);
     void startDrag(const QPointF& pos);
     void dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers);
@@ -148,7 +146,8 @@ private:
     sub::app::analysis::FallingSpectrum spectrum_;
     std::vector<double> columns_;
     bool spectrumChanged_ = false;
-    double diffuseDb_ = -90.0;   // the tick's loudest "diffuse" (the floor for a tick without one)
+    double diffuseDb_ = -90.0;   // the tick's loudest "diffuse" (kept a moment through ticks without one)
+    double stale_ = 0.0;         // s since a tick last brought one
     double chorusPhase_ = 0.0;   // the newest "chorus" (the last while still)
     bool chorusMoved_ = false;
     MeterBallistics meter_;

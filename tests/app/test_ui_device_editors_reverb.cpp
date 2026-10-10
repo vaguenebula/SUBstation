@@ -9,6 +9,7 @@
 #include <QCursor>
 #include <QGuiApplication>
 #include <QImage>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -367,19 +368,18 @@ private Q_SLOTS:
         QVERIFY2(std::abs(high / low - 1.0) < 0.02, qPrintable(QString::number(high) + u' ' + QString::number(low)));
         set(s, "hi_freq", 4500.0);
 
-        // Switches dim what they leave unused (still editable).
+        // Switches dim what they leave unused (still editable). (The fades run on the render loop's frames:
+        // waited for, not assumed done after a while.)
         const auto opacityOf = [&](const char* name) { return control(s.view, name)->opacity(); };
         QCOMPARE(opacityOf("hiTypeChoice"), 1.0);
         set(s, "hi_filter", 0.0);
-        QTest::qWait(250);  // (the 120 ms fade)
-        QVERIFY(opacityOf("hiTypeChoice") < 1.0 && opacityOf("hiFreqBox") < 1.0 && opacityOf("hiGainBox") < 1.0);
+        QTRY_VERIFY(opacityOf("hiTypeChoice") < 1.0 && opacityOf("hiFreqBox") < 1.0 && opacityOf("hiGainBox") < 1.0);
         QVERIFY(control(s.view, "hiFreqBox")->isEnabled());
         set(s, "hi_filter", 1.0);
         set(s, "hi_type", 1.0);
-        QTest::qWait(250);
+        QTRY_COMPARE(opacityOf("hiFreqBox"), 1.0);
+        QTRY_COMPARE(opacityOf("hiTypeChoice"), 1.0);
         QVERIFY(opacityOf("hiGainBox") < 1.0);
-        QCOMPARE(opacityOf("hiFreqBox"), 1.0);
-        QCOMPARE(opacityOf("hiTypeChoice"), 1.0);
         QCOMPARE(control(s.view, "hiTypeChoice")->property("index").toInt(), 1);
         // Flat and Cut act only frozen; the chorus's knobs only with Chorus; the input's boxes only with a cut.
         QVERIFY(opacityOf("flatButton") < 1.0 && opacityOf("cutButton") < 1.0);
@@ -388,11 +388,10 @@ private Q_SLOTS:
         set(s, "lo_cut", 0.0);
         set(s, "hi_cut", 0.0);
         set(s, "spin", 0.0);
-        QTest::qWait(250);
-        QCOMPARE(opacityOf("flatButton"), 1.0);
-        QVERIFY(opacityOf("chorusAmountKnob") < 1.0 && opacityOf("chorusRateKnob") < 1.0);
-        QVERIFY(opacityOf("inFreqBox") < 1.0 && opacityOf("inWidthBox") < 1.0);
-        QVERIFY(opacityOf("spinAmountBox") < 1.0 && opacityOf("spinRateBox") < 1.0);
+        QTRY_COMPARE(opacityOf("flatButton"), 1.0);
+        QTRY_VERIFY(opacityOf("chorusAmountKnob") < 1.0 && opacityOf("chorusRateKnob") < 1.0);
+        QTRY_VERIFY(opacityOf("inFreqBox") < 1.0 && opacityOf("inWidthBox") < 1.0);
+        QTRY_VERIFY(opacityOf("spinAmountBox") < 1.0 && opacityOf("spinRateBox") < 1.0);
     }
 
     // --- The input filter's pad -------------------------------------------------------------------
@@ -410,6 +409,9 @@ private Q_SLOTS:
             QCOMPARE(db[i], reverbInputFilterDb(830.0, 7.5, true, true, rate, {frequencies[i]})[0]);
         QVERIFY(std::abs(pad->dot().x() - pad->xOf(830.0)) < 1e-9);
         QVERIFY(std::abs(pad->dot().y() - pad->yOfWidth(7.5)) < 1e-9);
+        // The dot (its 5 px ring) stays under the caption's strip at the widest band, and in the pad.
+        QVERIFY(pad->yOfWidth(9.0) - 6.0 >= pad->plot().top() + 13.0);
+        QVERIFY(pad->yOfWidth(0.5) + 6.0 <= pad->plot().bottom());
 
         // Dragged: across for the frequency, up and down for the width, one undo step.
         const int steps = undo()->index();
@@ -468,12 +470,45 @@ private Q_SLOTS:
         QCOMPARE(engineParam(s, "spin_rate"), double(float(value(s, "spin_rate"))));
         QCOMPARE(engineParam(s, "spin_amount"), double(float(value(s, "spin_amount"))));
         QCOMPARE(box(s.view, "spinAmountBox")->value(), value(s, "spin_amount"));
+        undo()->undo();
+
+        // Shift drags finely: a quarter as far (from where Shift went down).
+        drag(pad, pad->handle(), pad->handle() + QPointF(0, -40), 3, Qt::ShiftModifier);
+        const double fine = value(s, "spin_amount") - 25.0;
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+        QVERIFY2(std::abs(fine - (pad->amountAt(pad->yOfAmount(25.0) - 10.0) - 25.0)) < 0.11,
+                 qPrintable(QString::number(fine)));
+        // The handle (its 5 px ring) stays under the captions' strip at the most Spin, and in the pad.
+        QVERIFY(pad->yOfAmount(100.0) - 6.0 >= pad->plot().top() + 13.0);
+        QVERIFY(pad->xOfRate(0.07) - 6.0 >= pad->plot().left() && pad->xOfRate(1.3) + 6.0 <= pad->plot().right());
 
         // Sparse plays six of the twelve: the others are not drawn.
         set(s, "density", 0.0);
         for (int k = 0; k < 12; ++k) QCOMPARE(pad->particleShown(k), k % 2 == 0);
         undo()->undo();
-        undo()->undo();
+
+        // Playing, the particles swing and trail their last positions. Any parameter's change (an automated
+        // one's, every playhead move) leaves the trails be; one that moves the particles' homes starts them
+        // again.
+        set(s, "spin_amount", 100.0);
+        set(s, "spin_rate", 1.3);
+        const auto distinct = [&](int k) {
+            const QList<QPointF> trail = pad->trail(k);
+            int count = 1;
+            for (int i = 1; i < trail.size(); ++i)
+                if (QLineF(trail[i], trail[i - 1]).length() > 0.05)
+                    ++count;
+            return count;
+        };
+        play(0.3);
+        refreshes(4, 12);
+        QVERIFY2(distinct(5) >= 3, qPrintable(QString::number(distinct(5))));
+        const QList<QPointF> trail = pad->trail(5);
+        set(s, "mix", 60.0);
+        QCOMPARE(pad->trail(5), trail);
+        set(s, "stereo", 60.0);
+        QCOMPARE(distinct(5), 1);
     }
 
     // --- The decay graph --------------------------------------------------------------------------
@@ -506,6 +541,16 @@ private Q_SLOTS:
         QCOMPARE(undo()->undoText(), QStringLiteral("Change Reverb Decay"));
         QCOMPARE(engineParam(s, "decay"), double(float(value(s, "decay"))));
         QCOMPARE(knob(s.view, "decayKnob")->value(), value(s, "decay"));
+        undo()->undo();
+
+        // Shift drags finely: the ratio to the power of a quarter.
+        const double up = graph->yOf(1.2) - graph->yOf(2.4);
+        drag(graph, graph->decayHandle(), graph->decayHandle() - QPointF(0, up), 3, Qt::ShiftModifier);
+        QVERIFY2(std::abs(value(s, "decay") / (1200.0 * std::pow(2.0, 0.25)) - 1.0) < 0.03,
+                 qPrintable(QString::number(value(s, "decay"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+        drag(graph, decayAt, decayAt - QPointF(0, up));
 
         // The high shelf's handle to 2 kHz and 0.4 of the decay: one undo step.
         steps = undo()->index();
@@ -518,6 +563,26 @@ private Q_SLOTS:
         QCOMPARE(box(s.view, "hiGainBox")->value(), value(s, "hi_gain"));
         undo()->undo();
         undo()->undo();
+
+        // A shelf switched off has no gain the handle shows: dragged, only its frequency moves.
+        set(s, "hi_filter", 0.0);
+        steps = undo()->index();
+        drag(graph, graph->hiHandle(), graph->hiHandle() + QPointF(20, 30));
+        QVERIFY(value(s, "hi_freq") > 4500.0);
+        QCOMPARE(value(s, "hi_gain"), 70.0);
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+        undo()->undo();
+
+        // At the ends of their ranges the handles stay inside the plot, ring and all.
+        set(s, "lo_freq", 20.0);
+        set(s, "lo_gain", 20.0);
+        set(s, "decay", 200.0);
+        set(s, "hi_freq", 16000.0);
+        const QRectF inside = graph->plot().adjusted(6, 6, -6, -6);
+        for (const QPointF& at : {graph->loHandle(), graph->hiHandle(), graph->decayHandle()})
+            QVERIFY2(inside.contains(at), qPrintable(QString::number(at.x()) + u',' + QString::number(at.y())));
+        for (int i = 0; i < 4; ++i) undo()->undo();
 
         // A low-pass has no gain to drag: its handle sits on the curve and moves across only.
         set(s, "hi_type", 1.0);
@@ -534,15 +599,36 @@ private Q_SLOTS:
         undo()->undo();
 
         // A double-click on the low shelf's handle switches it off: one undo step; its handle dims to
-        // the decay's line.
+        // the decay's line. Its second press, held and dragged, drags nothing. (By hand, as the platform
+        // sends it: press, release, press at once, Qt making the double-click; then moves, held.)
         steps = undo()->index();
-        QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, scenePoint(graph, graph->loHandle()));
+        const QPointF lo = graph->mapToScene(graph->loHandle()), global = window_->mapToGlobal(lo);
+        int& time = QTest::lastMouseTimestamp;
+        time += 1000;
+        qt_handleMouseEvent(window_, lo, global, Qt::LeftButton, Qt::LeftButton, QEvent::MouseButtonPress,
+                            Qt::NoModifier, time);
+        qt_handleMouseEvent(window_, lo, global, Qt::NoButton, Qt::LeftButton, QEvent::MouseButtonRelease,
+                            Qt::NoModifier, time);
+        time += 20;
+        qt_handleMouseEvent(window_, lo, global, Qt::LeftButton, Qt::LeftButton, QEvent::MouseButtonPress,
+                            Qt::NoModifier, time);
+        for (int i = 1; i <= 4; ++i) {
+            const QPointF at = lo + QPointF(5.0 * i, -5.0 * i);
+            qt_handleMouseEvent(window_, at, window_->mapToGlobal(at), Qt::LeftButton, Qt::NoButton,
+                                QEvent::MouseMove, Qt::NoModifier, time += 10);
+        }
+        const QPointF end = lo + QPointF(20, -20);
+        qt_handleMouseEvent(window_, end, window_->mapToGlobal(end), Qt::NoButton, Qt::LeftButton,
+                            QEvent::MouseButtonRelease, Qt::NoModifier, time += 10);
+        time += 1000;  // (no double-click with what comes next)
+        QCoreApplication::processEvents();
         QCOMPARE(value(s, "lo_shelf"), 0.0);
         QCOMPARE(undo()->index(), steps + 1);
         QCOMPARE(undo()->undoText(), QStringLiteral("Switch Reverb Shelf"));
         QVERIFY(!lit(s.view, "loShelfButton"));
         QVERIFY(std::abs(graph->loHandle().y() - graph->yOf(1.2)) < 1e-9);
-        QCOMPARE(value(s, "lo_freq"), 90.0);  // (the double-click dragged nothing)
+        QCOMPARE(value(s, "lo_freq"), 90.0);
+        QCOMPARE(value(s, "lo_gain"), 75.0);
         undo()->undo();
         QCOMPARE(value(s, "lo_shelf"), 1.0);
 
@@ -602,6 +688,11 @@ private Q_SLOTS:
         QVERIFY2(s.spin->phase() >= 0.0 && s.spin->phase() < 1.0, qPrintable(QString::number(s.spin->phase())));
         QVERIFY(s.spin->flash() > 0.5);
         QVERIFY(s.spin->amountShown() > 0.0);  // (the swing easing in as the reflections sound)
+        // A tick that brings nothing at once (an audio block longer than a tick) keeps what was there.
+        const double held = s.decay->tailLevel(), input = s.filter->inputLevel();
+        refreshDisplays();
+        QVERIFY2(s.decay->tailLevel() >= held - 0.5, qPrintable(QString::number(s.decay->tailLevel())));
+        QCOMPARE(s.filter->inputLevel(), input);
 
         // Nothing more played: the tail meter falls (at least as fast as the tail would), the input reads
         // nothing and the glow fades.
@@ -620,18 +711,27 @@ private Q_SLOTS:
         Shown s = reverb();
         QVERIFY(s.filter && s.spin && s.decay);
         refreshes(3);
-        // Freeze lifts the curve over a moment, not at once.
-        click(s.view, "freezeButton");
+        // Freeze lifts the curve over a moment, not at once (looked at before anything is processed, so no
+        // display tick can come between), and eases into the top edge rather than running into it.
+        set(s, "freeze", 1.0);
         QVERIFY(s.decay->frozen());
-        QVERIFY(s.decay->frozenShown() < 0.5);  // (the display clock may have ticked once since)
+        QCOMPARE(s.decay->frozenShown(), 0.0);
         refreshDisplays();
         QVERIFY2(s.decay->frozenShown() > 0.0 && s.decay->frozenShown() < 1.0,
                  qPrintable(QString::number(s.decay->frozenShown())));
-        const double middle = s.decay->shownY()[s.decay->shownY().size() / 2];
+        const std::size_t mid = s.decay->shownY().size() / 2;
+        double middle = s.decay->shownY()[mid];
         QVERIFY(middle < s.decay->yOf(1.2) && middle > s.decay->yOf(1000.0));
-        for (int i = 0; i < 60 && s.decay->frozenShown() < 1.0; ++i) refreshes(1);
+        double lastStep = 0.0;
+        for (int i = 0; i < 60 && s.decay->frozenShown() < 1.0; ++i) {
+            refreshes(1);
+            if (s.decay->shownY()[mid] != middle)
+                lastStep = middle - s.decay->shownY()[mid];
+            middle = s.decay->shownY()[mid];
+        }
         QCOMPARE(s.decay->frozenShown(), 1.0);
-        QCOMPARE(s.decay->shownY()[s.decay->shownY().size() / 2], s.decay->yOf(1000.0));  // along the top
+        QCOMPARE(s.decay->shownY()[mid], s.decay->yOf(1000.0));  // along the top
+        QVERIFY2(lastStep < 0.5, qPrintable(QString::number(lastStep)));
 
         // A switch eases the filter's curve: Lo Cut off.
         ReverbFilterPad* pad = s.filter;
@@ -639,9 +739,8 @@ private Q_SLOTS:
         const std::size_t at30 = indexOf(frequencies, 30.0);
         const double before = pad->curveShown()[at30];
         QVERIFY(before < -6.0);
-        click(s.view, "loCutButton");
-        QCOMPARE(value(s, "lo_cut"), 0.0);
-        QVERIFY(pad->curveShown()[at30] < before + 0.5 * (pad->curveDb()[at30] - before));  // (not at once)
+        set(s, "lo_cut", 0.0);
+        QCOMPARE(pad->curveShown()[at30], before);  // (not at once)
         refreshDisplays();
         QVERIFY2(pad->curveShown()[at30] > before && pad->curveShown()[at30] < pad->curveDb()[at30],
                  qPrintable(QString::number(pad->curveShown()[at30])));

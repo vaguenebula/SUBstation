@@ -27,6 +27,8 @@ constexpr double kBob = 3.0;             // px a particle bobs up and down at Sp
 constexpr double kMoved = 0.2;           // px: less is no reason to paint again
 constexpr double kRowTop = 17.0;         // the first reflection's row, under the captions
 constexpr double kRowBottom = 13.0;      // the last's, above the L and R
+constexpr double kCaption = 13.0;        // px: the captions' strip at the top, clear of the handle
+constexpr double kStaleSeconds = 0.1;    // a tick without values keeps the last this long (a long audio block)
 
 }  // namespace
 
@@ -38,7 +40,7 @@ ReverbSpinPad::ReverbSpinPad(QQuickItem* parent) : DeviceCanvas(parent) {
 
 QRectF ReverbSpinPad::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 1, -1, -1); }
 
-QRectF ReverbSpinPad::inner() const { return plot().adjusted(6, 6, -6, -6); }
+QRectF ReverbSpinPad::inner() const { return plot().adjusted(6, kCaption + 6, -6, -6); }
 
 double ReverbSpinPad::xOfRate(double hz) const {
     const QRectF r = inner();
@@ -64,13 +66,22 @@ QPointF ReverbSpinPad::handle() const { return QPointF(xOfRate(rate_), yOfAmount
 
 QList<QPointF> ReverbSpinPad::particles() const { return QList<QPointF>(at_.begin(), at_.end()); }
 
+QList<QPointF> ReverbSpinPad::trail(int k) const {
+    if (k < 0 || k >= kTaps)
+        return {};
+    const std::array<QPointF, kTrail>& trail = trail_[std::size_t(k)];
+    return QList<QPointF>(trail.begin(), trail.end());
+}
+
 void ReverbSpinPad::sync() {
     const bool wasSpinning = spin_;
     spin_ = value(QStringLiteral("spin")) >= 0.5;
     const double rateBefore = rate_;
     rate_ = value(QStringLiteral("spin_rate"));
     amountPercent_ = value(QStringLiteral("spin_amount"));
-    stereo_ = value(QStringLiteral("stereo"));
+    const double widthBefore = width_;
+    const std::array<double, kTaps> rowsBefore = row_, radiiBefore = radius_;
+    width_ = sub::app::reverbStereoWidth(value(QStringLiteral("stereo")));
     const double size = value(QStringLiteral("size")), shape = value(QStringLiteral("shape"));
     const int density = int(std::lround(value(QStringLiteral("density"))));
     const QList<sub::app::ReverbTap> taps = sub::app::reverbEarlyTaps(size, shape, density);
@@ -95,10 +106,14 @@ void ReverbSpinPad::sync() {
         amount_.target = amount;  // switched (or still easing from a switch): it eases, in advance()
     else
         amount_.snap(amount);  // dragged: it follows at once
+    // The trails start again only where the particles' homes moved (Size, Shape, Density, Stereo): any
+    // parameter's change (an automated one's, every playhead move) syncs, and must not cut them short.
+    const bool moved = !synced_ || width_ != widthBefore || row_ != rowsBefore || radius_ != radiiBefore;
     synced_ = true;
     place();
     painted_ = at_;
-    for (std::size_t k = 0; k < at_.size(); ++k) trail_[k].fill(at_[k]);
+    if (moved)
+        for (std::size_t k = 0; k < at_.size(); ++k) trail_[k].fill(at_[k]);
     update();
 }
 
@@ -115,7 +130,7 @@ QPointF ReverbSpinPad::positionOf(int k) const {
     const QRectF r = plot();
     const std::size_t i = std::size_t(k);
     const double amount = amount_.value * presence_.value;
-    const double pan = std::clamp(sub::app::reverbSpinPan(k, amount, drawPhase_) * stereo_ / 100.0, -1.0, 1.0);
+    const double pan = std::clamp(sub::app::reverbSpinPan(k, amount, drawPhase_) * width_, -1.0, 1.0);
     const double x = r.center().x() + (r.width() / 2 - 6.0) * pan;
     const double top = r.top() + kRowTop, bottom = r.bottom() - kRowBottom;
     const double bob = amount * kBob * std::sin(2.0 * kPi * (drawPhase_ + double(k) / kTaps));
@@ -129,19 +144,30 @@ void ReverbSpinPad::place() {
 // --- Displays and animation -------------------------------------------------------------
 
 void ReverbSpinPad::refreshDisplays() {
+    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
+    if (!clock_.isValid())
+        clock_.start();
+    // A tick that brings no values (the audio's blocks longer than a tick) keeps the last for a moment: the
+    // phase runs on at Spin's rate (set right by the next one published), the light holds.
     const std::vector<float> phases = readDisplay(QStringLiteral("spin"));
+    const std::vector<float> early = readDisplay(QStringLiteral("early"));
+    const bool stale = phases.empty() && early.empty() && (stale_ += seconds) > kStaleSeconds;
     if (!phases.empty()) {
         phase_ = phases.back();
         if (phase_ >= 0.0)
             drawPhase_ = phase_;
+    } else if (phase_ >= 0.0 && !stale) {
+        drawPhase_ += rate_ * seconds;
+        drawPhase_ -= std::floor(drawPhase_);
     }
-    const std::vector<float> early = readDisplay(QStringLiteral("early"));
-    double loudest = -90.0;
-    for (const float v : early) loudest = std::max(loudest, double(v));
-    flash_.target = std::clamp((loudest + kFlashRangeDb) / kFlashRangeDb, 0.0, 1.0);
-    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    if (!early.empty()) {
+        double loudest = -90.0;
+        for (const float v : early) loudest = std::max(loudest, double(v));
+        flash_.target = std::clamp((loudest + kFlashRangeDb) / kFlashRangeDb, 0.0, 1.0);
+        stale_ = 0.0;
+    } else if (stale) {
+        flash_.target = 0.0;
+    }
     advance(seconds);
 }
 
@@ -272,7 +298,6 @@ void ReverbSpinPad::paint(SgPainter& p) {
     const QColor ring = spin_ ? Theme::kAccent : Theme::kTextDim;
     p.drawEllipse(QRectF(h.x() - 5, h.y() - 5, 10, 10), ring, 2);
     p.fillEllipse(h, 1.5, 1.5, ring);
-
 }
 
 }  // namespace sub::ui

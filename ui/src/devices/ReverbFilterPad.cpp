@@ -21,6 +21,8 @@ constexpr double kSwitchSeconds = 0.04;  // a switch's change eases over about 1
 constexpr double kGlowSeconds = 0.25;    // the glow fades
 constexpr double kGlowRangeDb = 48.0;    // the input's level from -48 dB (none) to 0 (all)
 constexpr double kInputFloorDb = -90.0;
+constexpr double kStaleSeconds = 0.1;   // a tick without values keeps the last this long (a long audio block)
+constexpr double kCaption = 13.0;       // px: the caption's strip at the top, clear of the dot
 
 }  // namespace
 
@@ -43,7 +45,7 @@ ReverbFilterPad::ReverbFilterPad(QQuickItem* parent) : DeviceCanvas(parent) {
 
 QRectF ReverbFilterPad::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 1, -1, -1); }
 
-QRectF ReverbFilterPad::inner() const { return plot().adjusted(0, 6, 0, -6); }
+QRectF ReverbFilterPad::inner() const { return plot().adjusted(0, kCaption + 6, 0, -6); }
 
 double ReverbFilterPad::xOf(double freq) const {
     const QRectF r = plot();
@@ -136,23 +138,31 @@ void ReverbFilterPad::updateColumns() { columns_ = spectrum_.columns(std::max(2,
 // --- Displays and animation -------------------------------------------------------------
 
 void ReverbFilterPad::refreshDisplays() {
+    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
+    if (!clock_.isValid())
+        clock_.start();
     const std::vector<float> signal = readDisplay(QStringLiteral("signal"));
     if (spectrum_.add(signal.data(), signal.size(), sampleRate())) {
         updateColumns();
         spectrumChanged_ = true;
     }
+    // The newest value and the tick's loudest. A tick that brings none (the audio's blocks longer than a
+    // tick) keeps the last for a moment: only a while without any is silence.
     const std::vector<float> input = readDisplay(QStringLiteral("input"));
-    const double newest = input.empty() ? kInputFloorDb : double(input.back());
-    double loudest = kInputFloorDb;
-    for (const float v : input) loudest = std::max(loudest, double(v));
+    double newest = inputLevel_;
+    if (!input.empty()) {
+        newest = double(input.back());
+        loudest_ = kInputFloorDb;
+        for (const float v : input) loudest_ = std::max(loudest_, double(v));
+        stale_ = 0.0;
+    } else if ((stale_ += seconds) > kStaleSeconds) {
+        newest = loudest_ = kInputFloorDb;
+    }
     if (newest != inputLevel_) {
         inputLevel_ = newest;
         Q_EMIT levelsChanged();
     }
-    glow_.target = std::clamp((loudest + kGlowRangeDb) / kGlowRangeDb, 0.0, 1.0);
-    const double seconds = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    glow_.target = std::clamp((loudest_ + kGlowRangeDb) / kGlowRangeDb, 0.0, 1.0);
     advance(seconds);
 }
 
@@ -274,7 +284,6 @@ void ReverbFilterPad::paint(SgPainter& p) {
     p.fillEllipse(at, 4.0, 4.0, Theme::kMeterBg);
     p.drawEllipse(QRectF(at.x() - 5, at.y() - 5, 10, 10), ring, 2);
     p.restore();
-
 }
 
 }  // namespace sub::ui
