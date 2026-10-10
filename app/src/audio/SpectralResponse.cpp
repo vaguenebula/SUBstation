@@ -19,12 +19,6 @@ QList<double> spectralBelowDb(double threshold, double below, double tilt, const
     return levels;
 }
 
-double spectralGainDb(double levelDb, double thresholdDb, double belowDb, double ratio, double upward, double knee,
-                      double range) {
-    return sub::spectral::gainDb(levelDb, thresholdDb, belowDb, sub::spectral::downSlope(ratio),
-                                 sub::spectral::upSlope(upward), knee, range);
-}
-
 QList<double> spectralFocusWeights(double low, double high, const QList<double>& frequencies) {
     QList<double> weights;
     weights.reserve(frequencies.size());
@@ -38,9 +32,5 @@ QList<double> spectralDisplayFrequencies() {
     for (int j = 0; j < sub::spectral::kDisplayPoints; ++j) frequencies.append(sub::spectral::displayFrequency(j));
     return frequencies;
 }
-
-double spectralPinkDb(double frequency) { return sub::spectral::pinkDb(frequency); }
-
-int spectralLatencySamples(double sampleRate) { return sub::spectral::frameSize(sampleRate); }
 
 }  // namespace sub::app

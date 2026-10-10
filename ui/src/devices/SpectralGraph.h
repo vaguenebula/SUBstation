@@ -13,8 +13,9 @@
 //
 // Drag the threshold (its pivot or anywhere on it) up and down, its end handles
 // to tilt both thresholds about 1 kHz, the green line for Below, the Focus edges
-// sideways; Shift drags finely, a double-click resets, each drag is one undo
-// step, and the value being dragged (or hovered) reads in the header.
+// sideways; Shift drags finely (from where it is pressed on, as the knobs do), a
+// double-click resets, each drag is one undo step, and the value being dragged
+// (or hovered) reads in the header.
 //
 // The engine publishes a frame of 128 values per hop for each spectral display,
 // in step with what is heard; frames are reassembled by the values' absolute
@@ -109,6 +110,9 @@ public:
     qint64 framesSeen() const { return gain_.frames; }
     double levelIn() const { return meterIn_.level; }
     double levelOut() const { return meterOut_.level; }
+    double deltaShare() const { return deltaShown_.value; }  // how far the output line is tinted for Delta (0..1)
+    double hotShare() const { return hotShown_.value; }      // how bright the glow over the threshold is (0..1)
+    bool cutHeld() const { return anyHeld_; }                // the line of the recent deepest cut is drawn
 
 Q_SIGNALS:
     void keyedChanged();
@@ -157,7 +161,7 @@ private:
     QString paramOf(int which) const;
 
     // The parameters (as they are now).
-    double threshold_ = -24.0, ratio_ = 3.0, below_ = -48.0, upward_ = 1.0, tilt_ = 0.0;
+    double threshold_ = -18.0, ratio_ = 2.0, below_ = -48.0, upward_ = 1.0, tilt_ = 0.0;
     double range_ = 24.0, focusLow_ = 20.0, focusHigh_ = 20000.0, mix_ = 100.0;
     bool delta_ = false;
     bool keyed_ = false;
@@ -167,6 +171,7 @@ private:
     // What is drawn, easing towards the parameters: dB; the Focus edges in log2 Hz; 0..1.
     Eased thresholdShown_, belowShown_, tiltShown_, focusLowShown_, focusHighShown_;
     Eased belowOpacity_, deltaShown_;
+    Eased hotShown_;  // the glow over the threshold: 1 while anything above it is turned down
     std::array<Eased, 7> handleGrow_{};  // per Handle: 0 at rest, 1 hovered or dragged
     Eased readoutOpacity_;
     QString readoutText_;
@@ -178,6 +183,7 @@ private:
     std::vector<double> targetInput_, targetKey_, targetOutput_, targetGain_;
     std::vector<double> shownInput_, shownKey_, shownOutput_, shownGain_;
     std::vector<double> heldCut_, heldFor_;  // the deepest recent cut per point (dB, ≥ 0), and how long it held
+    bool anyHeld_ = false;                   // any point's held cut is deep enough to draw
     Eased maxCut_, maxLift_;
     MeterBallistics meterIn_, meterOut_;
     double meterDt_ = 0.0;     // seconds since the meters last had values
@@ -189,8 +195,8 @@ private:
     int hovered_ = None;
     int dragged_ = None;
     QString gesture_;  // the drag's merge key ("": none)
-    QPointF pressedAt_;
-    double pressedValue_ = 0.0;  // the dragged parameter at the press (Below: as drawn)
+    QPointF lastPos_;  // where the mouse was at the last move (each move adds its own distance, Shift or not)
+    double dragValue_ = 0.0;  // the dragged parameter, unrounded (from the press: Below as drawn)
 };
 
 }  // namespace sub::ui

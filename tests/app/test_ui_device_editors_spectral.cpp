@@ -1,10 +1,13 @@
 // The Spectral Compressor's editor (ui/qml/devices/editors/SpectralEditor.qml, ui/src/devices/SpectralGraph):
-// loaded as the device view loads it, its knobs and button bound to their parameters (undoably), the display's
-// lines the engine's own (sub::app::spectralThresholdDb), its handles and edges dragged with the mouse (one undo
-// step a drag), the engine's displays reaching it as it renders offline, and the Sidechain badge. With
-// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there idle, with a signal flowing, keyed by a
-// sidechain, and with Delta on.
+// loaded as the device view loads it, its knobs, value boxes and button bound to their parameters (undoably),
+// the display's lines the engine's own (sub::app::spectralThresholdDb), its handles and edges dragged with the
+// mouse (one undo step a drag, Shift finely from where it is pressed), the engine's displays reaching it as it
+// renders offline (cuts, lifts, the held cut, the glow, Delta's tint), and the Sidechain badge. With
+// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there idle, at its widest values, with a signal
+// flowing, lifting, keyed by a sidechain, and with Delta on.
 
+#include <QByteArray>
+#include <QImage>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
@@ -12,8 +15,10 @@
 #include <QUndoStack>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <random>
+#include <tuple>
 #include <vector>
 
 #include "EditorHarness.h"
@@ -32,16 +37,16 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 
 // Pink-ish noise (Paul Kellet's filter on white noise) at `rmsDb` dBFS RMS, with sines of `tonesDb` dBFS peak at
-// `tones` Hz on it: a dense mix with resonances poking out, as a spectral compressor is for.
+// `tones` Hz on it: a dense mix with resonances poking out, as a spectral compressor is for. The white noise is
+// mt19937's own output scaled by hand, the same on every platform (std::uniform_real_distribution's is not).
 std::vector<float> pinkNoise(int frames, double rmsDb, const std::vector<double>& tones = {}, double tonesDb = -30.0,
                              unsigned seed = 7) {
     std::mt19937 random(seed);
-    std::uniform_real_distribution<double> white(-1.0, 1.0);
     double b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
     std::vector<double> pink(static_cast<size_t>(frames));
     double power = 0.0;
     for (int i = 0; i < frames; ++i) {
-        const double w = white(random);
+        const double w = double(random()) * (2.0 / 4294967295.0) - 1.0;
         b0 = 0.99886 * b0 + w * 0.0555179;
         b1 = 0.99332 * b1 + w * 0.0750759;
         b2 = 0.96900 * b2 + w * 0.1538520;
@@ -62,6 +67,19 @@ std::vector<float> pinkNoise(int frames, double rmsDb, const std::vector<double>
         out[size_t(i)] = float(value);
     }
     return out;
+}
+
+// The display point nearest a frequency.
+int pointNear(double hz) {
+    return int(std::lround(std::log(hz / 20.0) / std::log(1000.0) * (SpectralGraph::kPoints - 1)));
+}
+
+// The median of `values` at the display points from `low` to `high` Hz.
+double medianBetween(const std::array<float, SpectralGraph::kPoints>& values, double low, double high) {
+    std::vector<double> chosen;
+    for (int j = pointNear(low); j <= pointNear(high); ++j) chosen.push_back(values[size_t(j)]);
+    std::sort(chosen.begin(), chosen.end());
+    return chosen[chosen.size() / 2];
 }
 
 }  // namespace
@@ -99,6 +117,46 @@ class TestUiDeviceEditorsSpectral : public QObject, public sub::app::test::Edito
 
     double value(const char* id) { return param(track_, device_, QString::fromLatin1(id)); }
     void set(const char* id, double v) { editor()->setDeviceParam(track_, device_, QString::fromLatin1(id), v); }
+
+    // A Focus edge's value box (ParamBox), and the box inside it.
+    QQuickItem* focusBox(const char* id) { return find(view_, QString::fromLatin1(id)); }
+    QQuickItem* valueBox(const char* id) {
+        QQuickItem* box = focusBox(id);
+        return box ? qvariant_cast<QQuickItem*>(box->property("box")) : nullptr;
+    }
+
+    // How many columns of the display's plot have the key line's yellow in their bottom rows (where a line along
+    // the floor would lie).
+    int yellowOnTheFloor() {
+        const QImage image = grab();
+        const qreal scale = image.devicePixelRatio();
+        const QRectF plot = graph_->mapRectToScene(graph_->plot());
+        int columns = 0;
+        for (int x = int(plot.left() * scale) + 2; x < int(plot.right() * scale) - 2; ++x) {
+            bool yellow = false;
+            for (int y = int((plot.bottom() - 3) * scale); y <= int(plot.bottom() * scale); ++y) {
+                const QColor c = image.pixelColor(x, y);
+                yellow = yellow || (c.red() > 150 && c.green() > 120 && c.blue() < 90 && c.green() > c.red() * 0.7);
+            }
+            columns += yellow ? 1 : 0;
+        }
+        return columns;
+    }
+
+    // How many pixels of the accent's orange the plot's upper `share` holds (the cuts hang there).
+    int orangeInTheTop(double share) {
+        const QImage image = grab();
+        const qreal scale = image.devicePixelRatio();
+        const QRectF plot = graph_->mapRectToScene(graph_->plot());
+        int pixels = 0;
+        for (int y = int(plot.top() * scale) + 1; y < int((plot.top() + share * plot.height()) * scale); ++y) {
+            for (int x = int(plot.left() * scale) + 2; x < int(plot.right() * scale) - 2; ++x) {
+                const QColor c = image.pixelColor(x, y);
+                pixels += c.red() > 90 && c.red() > c.green() + 25 && c.green() > c.blue() + 15 ? 1 : 0;
+            }
+        }
+        return pixels;
+    }
 
     // An EditorKnob's dial.
     KnobItem* knob(const char* id) {
@@ -146,11 +204,11 @@ private Q_SLOTS:
         QVERIFY(showDevice());
         QVERIFY2(view_->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(view_->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(view_->implicitWidth(), 860.0);
+        QCOMPARE(view_->implicitWidth(), 924.0);
 
         // Thirteen knobs, each reading its parameter's default, bound to it.
         const std::vector<std::pair<const char*, double>> defaults{
-            {"threshold", -24.0}, {"ratio", 3.0}, {"below", -48.0}, {"upward", 1.0}, {"tilt", 0.0},
+            {"threshold", -18.0}, {"ratio", 2.0}, {"below", -48.0}, {"upward", 1.0}, {"tilt", 0.0},
             {"knee", 6.0},        {"range", 24.0}, {"smooth", 40.0}, {"attack", 20.0}, {"release", 150.0},
             {"link", 100.0},      {"mix", 100.0},  {"output", 0.0}};
         const QRectF graphRect = graph_->mapRectToScene(QRectF(0, 0, graph_->width(), graph_->height()));
@@ -171,6 +229,22 @@ private Q_SLOTS:
             QVERIFY2(!knob(id)->logScale() && !knob(id)->bipolar(), id);
         QVERIFY(knob("tilt")->bipolar() && knob("output")->bipolar());
 
+        // The Focus edges' value boxes: bound to their parameters, at the right beside the display, level with the
+        // knobs of their rows.
+        for (const auto& [id, rowKnob, expected] : {std::tuple{"focus_lo", "attack", 20.0},
+                                                   std::tuple{"focus_hi", "mix", 20000.0}}) {
+            QQuickItem* box = focusBox(id);
+            QVERIFY2(box, id);
+            auto* p = qvariant_cast<sub::ui::DeviceParam*>(box->property("param"));
+            QVERIFY2(p && p->valid() && p->paramId() == QString::fromLatin1(id), id);
+            QCOMPARE(valueBox(id)->property("value").toDouble(), expected);
+            auto* dial = qvariant_cast<QQuickItem*>(find(view_, QString::fromLatin1(rowKnob))->property("knob"));
+            QVERIFY2(std::abs(centerOf(box).y() - centerOf(dial).y()) <= 2, id);
+            const QRectF rect = box->mapRectToScene(QRectF(0, 0, box->width(), box->height()));
+            QVERIFY2(!rect.intersects(graphRect) && rect.left() > graphRect.right() && rect.left() < centerOf(dial).x(),
+                     id);
+        }
+
         // Delta: a switch, off, level with the knobs beside it.
         QQuickItem* delta = find(view_, QStringLiteral("delta"));
         QVERIFY(delta);
@@ -178,7 +252,7 @@ private Q_SLOTS:
         auto* mixDial = qvariant_cast<QQuickItem*>(find(view_, QStringLiteral("mix"))->property("knob"));
         QVERIFY(std::abs(centerOf(delta).y() - centerOf(mixDial).y()) <= 4);
 
-        // The display between the knobs: 348 px, its plot roomy enough, the badge clear of the header's text.
+        // The display between the knobs: 376 px, its plot roomy enough, the badge clear of the header's text.
         QCOMPARE(graph_->width(), double(SpectralGraph::kWidth));
         const QRectF plot = graph_->plot();
         QVERIFY2(plot.width() >= 300 && plot.height() >= 90,
@@ -212,6 +286,7 @@ private Q_SLOTS:
             }
             QCOMPARE(texts, 2);  // its name and its value
         }
+        tick();  // (the lines glided there)
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-widest.png"));
         while (undo()->index() > before) undo()->undo();
@@ -242,10 +317,23 @@ private Q_SLOTS:
         const int steps = undo()->index();
         auto* thresholdKnob = qvariant_cast<QQuickItem*>(find(view_, QStringLiteral("threshold"))->property("knob"));
         drag(centerOf(thresholdKnob), QPoint(0, -40), Qt::NoModifier, 4);
-        QVERIFY2(value("threshold") > -24.0, qPrintable(QString::number(value("threshold"))));
+        QVERIFY2(value("threshold") > -18.0, qPrintable(QString::number(value("threshold"))));
         QCOMPARE(undo()->index(), steps + 1);
         undo()->undo();
-        QCOMPARE(value("threshold"), -24.0);
+        QCOMPARE(value("threshold"), -18.0);
+
+        // The Focus boxes: each shows its parameter; a drag up on one raises it (evenly in log frequency), one
+        // undo step; undo.
+        set("focus_hi", 8000.0);
+        QCOMPARE(valueBox("focus_hi")->property("value").toDouble(), 8000.0);
+        undo()->undo();
+        QCOMPARE(valueBox("focus_hi")->property("value").toDouble(), 20000.0);
+        drag(centerOf(valueBox("focus_lo")), QPoint(0, -30), Qt::NoModifier, 3);
+        QVERIFY2(value("focus_lo") > 25.0, qPrintable(QString::number(value("focus_lo"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        QCOMPARE(engineValue("focus_lo"), float(value("focus_lo")));
+        undo()->undo();
+        QCOMPARE(value("focus_lo"), 20.0);
 
         // Delta: a click switches it on (lit), one undo step; undo.
         QQuickItem* delta = find(view_, QStringLiteral("delta"));
@@ -279,14 +367,14 @@ private Q_SLOTS:
             }
         };
         check();
-        QCOMPARE(graph_->thresholdAt(1000.0), -24.0);
-        QCOMPARE(graph_->thresholdAt(20.0), -24.0);  // flat: it follows pink noise
+        QCOMPARE(graph_->thresholdAt(1000.0), -18.0);
+        QCOMPARE(graph_->thresholdAt(20.0), -18.0);  // flat: it follows pink noise
         set("upward", 2.0);
         set("below", -40.0);
         check();
         set("tilt", 3.0);
         check();
-        QVERIFY(std::abs(graph_->thresholdAt(10000.0) - (-24.0 + 3.0 * std::log2(10.0))) < 1e-6);
+        QVERIFY(std::abs(graph_->thresholdAt(10000.0) - (-18.0 + 3.0 * std::log2(10.0))) < 1e-6);
         set("below", 0.0);  // over the threshold: drawn on it (the engine's min)
         check();
         for (const double hz : frequencies) QVERIFY(std::abs(graph_->belowAt(hz) - graph_->thresholdAt(hz)) < 1e-9);
@@ -320,12 +408,12 @@ private Q_SLOTS:
         // Hovering the pivot: its readout.
         QTest::mouseMove(window_, at(SpectralGraph::ThresholdHandle));
         QTRY_COMPARE(graph_->hoveredHandle(), int(SpectralGraph::ThresholdHandle));
-        QCOMPARE(graph_->readout(), QStringLiteral("Threshold ") + formatValue(-24.0, QStringLiteral("dB")));
+        QCOMPARE(graph_->readout(), QStringLiteral("Threshold ") + formatValue(-18.0, QStringLiteral("dB")));
 
         // The pivot dragged up 30 px: up as far, one undo step, the tilt left alone.
         int steps = undo()->index();
         drag(at(SpectralGraph::ThresholdHandle), QPoint(0, -30));
-        QVERIFY2(std::abs(value("threshold") - (-24.0 + 30 * dbPerPixel)) <= 0.2,
+        QVERIFY2(std::abs(value("threshold") - (-18.0 + 30 * dbPerPixel)) <= 0.2,
                  qPrintable(QString::number(value("threshold"))));
         QCOMPARE(undo()->index(), steps + 1);
         QCOMPARE(value("tilt"), 0.0);
@@ -347,11 +435,32 @@ private Q_SLOTS:
         QVERIFY2(std::abs(value("threshold") - (before + 3 * dbPerPixel)) <= 0.11,
                  qPrintable(QString::number(value("threshold"))));
 
-        // A double-click on the pivot: back to -24, one undo step.
+        // Shift pressed partway through a drag slows what follows, from where the mouse is: the value doesn't jump
+        // back towards where the drag began (nor forward when Shift is let go).
+        set("threshold", -40.0);
+        tick();
+        before = value("threshold");
+        QPoint mouse = at(SpectralGraph::ThresholdHandle);
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, mouse);
+        for (int i = 0; i < 4; ++i) dragTo(mouse -= QPoint(0, 10));
+        const double fast = value("threshold");
+        QVERIFY2(std::abs(fast - (before + 40 * dbPerPixel)) <= 0.2, qPrintable(QString::number(fast)));
+        dragTo(mouse -= QPoint(0, 1), Qt::ShiftModifier);
+        QVERIFY2(std::abs(value("threshold") - (fast + 0.1 * dbPerPixel)) <= 0.11,
+                 qPrintable(QString::number(value("threshold"))));
+        for (int i = 0; i < 10; ++i) dragTo(mouse -= QPoint(0, 1), Qt::ShiftModifier);
+        const double fine = value("threshold");
+        QVERIFY2(std::abs(fine - (fast + 1.1 * dbPerPixel)) <= 0.11, qPrintable(QString::number(fine)));
+        dragTo(mouse -= QPoint(0, 1));
+        QVERIFY2(std::abs(value("threshold") - (fine + dbPerPixel)) <= 0.11,
+                 qPrintable(QString::number(value("threshold"))));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, mouse);
+
+        // A double-click on the pivot: back to -18, one undo step.
         tick();
         steps = undo()->index();
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, at(SpectralGraph::ThresholdHandle));
-        QCOMPARE(value("threshold"), -24.0);
+        QCOMPARE(value("threshold"), -18.0);
         QCOMPARE(undo()->index(), steps + 1);
         QCOMPARE(undo()->undoText(), QStringLiteral("Reset Threshold"));
     }
@@ -367,7 +476,7 @@ private Q_SLOTS:
         drag(at(SpectralGraph::TiltHigh), QPoint(0, -20));
         QVERIFY2(std::abs(value("tilt") - 20 * dbPerPixel / octaves) <= 0.02,
                  qPrintable(QString::number(value("tilt"))));
-        QCOMPARE(value("threshold"), -24.0);
+        QCOMPARE(value("threshold"), -18.0);
         QCOMPARE(undo()->index(), steps + 1);
         QCOMPARE(engineValue("tilt"), float(value("tilt")));
 
@@ -392,7 +501,7 @@ private Q_SLOTS:
         QCOMPARE(graph_->handle(SpectralGraph::TiltHigh).y(), plot.top());  // (+12 + 20 dB: off the top)
 
         // A double-click: level with pink again.
-        set("threshold", -24.0);
+        set("threshold", -18.0);
         tick();
         steps = undo()->index();
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, at(SpectralGraph::TiltHigh));
@@ -423,7 +532,7 @@ private Q_SLOTS:
         drag(at(SpectralGraph::BelowHandle), QPoint(0, 20));
         QVERIFY2(std::abs(value("below") - (-48.0 - 20 * dbPerPixel)) <= 0.2,
                  qPrintable(QString::number(value("below"))));
-        QCOMPARE(value("threshold"), -24.0);
+        QCOMPARE(value("threshold"), -18.0);
         QCOMPARE(undo()->index(), steps + 1);
         QCOMPARE(engineValue("below"), float(value("below")));
         QCOMPARE(graph_->readout(), QStringLiteral("Below ") + formatValue(value("below"), QStringLiteral("dB")));
@@ -432,9 +541,9 @@ private Q_SLOTS:
         set("below", 0.0);
         tick();
         drag(at(SpectralGraph::BelowHandle), QPoint(0, 10));
-        QVERIFY2(std::abs(value("below") - (-24.0 - 10 * dbPerPixel)) <= 0.2,
+        QVERIFY2(std::abs(value("below") - (-18.0 - 10 * dbPerPixel)) <= 0.2,
                  qPrintable(QString::number(value("below"))));
-        QCOMPARE(value("threshold"), -24.0);
+        QCOMPARE(value("threshold"), -18.0);
 
         // A double-click: back to -48.
         tick();
@@ -458,6 +567,20 @@ private Q_SLOTS:
         QCOMPARE(graph_->readout(),
                  QStringLiteral("Focus Low ") + formatValue(value("focus_lo"), QStringLiteral("Hz")));
         QCOMPARE(engineValue("focus_lo"), float(value("focus_lo")));
+
+        // Shift partway through an edge's drag: what follows is finer, nothing jumps back.
+        tick();
+        const double low = value("focus_lo");
+        QPoint grip = at(SpectralGraph::FocusLowEdge);
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, grip);
+        for (int i = 0; i < 4; ++i) dragTo(grip += QPoint(10, 0));
+        const double wide = value("focus_lo");
+        QVERIFY2(std::abs(wide - low * std::pow(1000.0, 40.0 / width)) <= 2.0, qPrintable(QString::number(wide)));
+        dragTo(grip += QPoint(1, 0), Qt::ShiftModifier);
+        QVERIFY2(std::abs(value("focus_lo") - wide * std::pow(1000.0, 0.1 / width)) <= 1.0,
+                 qPrintable(QString::number(value("focus_lo"))));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, grip);
+        undo()->undo();
 
         // The high edge dragged left past the low one: held a third of an octave above it.
         tick();
@@ -491,7 +614,7 @@ private Q_SLOTS:
         drag(bottom, QPoint(0, -40));
         QCOMPARE(undo()->index(), steps);
         QCOMPARE(undo()->count(), count);
-        QCOMPARE(value("threshold"), -24.0);
+        QCOMPARE(value("threshold"), -18.0);
         QCOMPARE(value("tilt"), 0.0);
         QCOMPARE(value("below"), -48.0);
         QCOMPARE(value("focus_lo"), 20.0);
@@ -501,7 +624,7 @@ private Q_SLOTS:
     // --- The displays ------------------------------------------------------------------------------
 
     void displaysReachTheGraph() {
-        QVERIFY(showDevice(pinkNoise(kSampleRate, -12.0, {350.0, 1200.0, 3500.0}, -24.0)));
+        QVERIFY(showDevice(pinkNoise(kSampleRate, -12.0, {350.0, 1200.0, 3500.0}, -18.0)));
         set("threshold", -40.0);
         tick();
         QCOMPARE(graph_->framesSeen(), qint64(0));
@@ -528,12 +651,14 @@ private Q_SLOTS:
         QCOMPARE(graph_->maxLiftDb(), 0.0);
         QVERIFY2(graph_->levelIn() > -30.0, qPrintable(QString::number(graph_->levelIn())));
         QVERIFY2(graph_->levelOut() < graph_->levelIn() - 3.0, qPrintable(QString::number(graph_->levelOut())));
-        // The tones stand out of the noise, and are cut deepest there.
-        const auto nearest = [&](double hz) {
-            return int(std::lround(std::log(hz / 20.0) / std::log(1000.0) * (SpectralGraph::kPoints - 1)));
-        };
-        QVERIFY(input[size_t(nearest(1200.0))] > input[size_t(nearest(1700.0))] + 6.0f);
-        QVERIFY(gain[size_t(nearest(1200.0))] < gain[size_t(nearest(1700.0))] - 1.0f);
+        // The tones stand out of the noise around them (the median of the points from 1.5 to 2.5 kHz: one frame of
+        // noise, so not any one point), and are cut deepest there. (Over 300 noise draws the smallest margins
+        // were 10.1 and 4.4 dB.)
+        const double noiseIn = medianBetween(input, 1500.0, 2500.0), noiseGain = medianBetween(gain, 1500.0, 2500.0);
+        QVERIFY2(input[size_t(pointNear(1200.0))] > noiseIn + 6.0,
+                 qPrintable(QStringLiteral("%1 %2").arg(input[size_t(pointNear(1200.0))]).arg(noiseIn)));
+        QVERIFY2(gain[size_t(pointNear(1200.0))] < noiseGain - 1.0,
+                 qPrintable(QStringLiteral("%1 %2").arg(gain[size_t(pointNear(1200.0))]).arg(noiseGain)));
 
         // The editor's view of it: drawn and moving.
         for (int i = 0; i < 20; ++i) refreshDisplays();
@@ -567,6 +692,22 @@ private Q_SLOTS:
         QVERIFY(*std::min_element(lastGain.begin(), lastGain.end()) > -0.5);
         QVERIFY(graph_->levelIn() < levelIn);
 
+        // The recent deepest cut's line outlives the cut: once the curtain has let go, it still holds (0.8 s
+        // from the last cut), then falls (18 dB/s) and goes.
+        const auto curtainGone = [&] {
+            const std::vector<double>& gains = graph_->shownGain();
+            return graph_->maxCutDb() < 0.05 && *std::min_element(gains.begin(), gains.end()) > -0.05;
+        };
+        for (int i = 0; i < 240 && !curtainGone(); ++i) refreshDisplays();
+        QVERIFY(curtainGone());
+        QVERIFY(graph_->cutHeld());
+        QTest::qWait(50);
+        QVERIFY(orangeInTheTop(0.4) > 20);  // drawn (the threshold, at -40 dB, is lower down)
+        for (int i = 0; i < 600 && graph_->cutHeld(); ++i) refreshDisplays();
+        QVERIFY(!graph_->cutHeld());
+        QTest::qWait(50);
+        QCOMPARE(orangeInTheTop(0.4), 0);
+
         // Once everything has settled, nothing is drawn again however often the display ticks.
         for (int i = 0; i < 600; ++i) refreshDisplays();  // (5 s: the meters' peaks have fallen)
         QTest::qWait(50);
@@ -579,10 +720,15 @@ private Q_SLOTS:
     void deltaTintsTheOutput() {
         QVERIFY(showDevice(pinkNoise(kSampleRate, -12.0, {350.0, 1200.0, 3500.0}, -24.0)));
         set("threshold", -30.0);
+        tick();
+        QCOMPARE(graph_->deltaShare(), 0.0);
         set("delta", 1.0);
         QCOMPARE(engineValue("delta"), 1.f);
+        tick(3);
+        QVERIFY(graph_->deltaShare() > 0.0 && graph_->deltaShare() < 1.0);  // (eased: it tints over 80 ms)
         engine()->renderOffline(0.0, kSampleRate / 2);
         tick(30);
+        QVERIFY(graph_->deltaShare() > 0.95);
         // With Delta on, the output display is what is taken away: under the input everywhere.
         const auto& input = graph_->latestInput();
         const std::vector<double>& output = graph_->shownOutput();
@@ -591,6 +737,33 @@ private Q_SLOTS:
         QVERIFY(*std::max_element(output.begin(), output.end()) > -40.0);
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-delta.png"));
+        tick();
+        QVERIFY(graph_->deltaShare() > 0.999);
+        set("delta", 0.0);
+        tick();
+        QVERIFY(graph_->deltaShare() < 0.001);
+    }
+
+    // --- The glow over the threshold --------------------------------------------------------------
+
+    void glowOnlyWhileCutting() {
+        QVERIFY(showDevice());
+        tick();
+        QCOMPARE(graph_->hotShare(), 1.0);
+        // Nothing over the threshold is turned down: Ratio 1:1 (Upward on, so the line stays lit), Range 0 or
+        // Dry/Wet 0. The glow fades out, and back in.
+        for (const auto& [id, off] : {std::pair{"ratio", 1.0}, std::pair{"range", 0.0}, std::pair{"mix", 0.0}}) {
+            if (QByteArray(id) == "ratio")
+                set("upward", 2.0);
+            set(id, off);
+            tick(3);
+            QVERIFY2(graph_->hotShare() > 0.0 && graph_->hotShare() < 1.0, id);  // (eased)
+            tick();
+            QVERIFY2(graph_->hotShare() < 0.001, id);
+            undo()->undo();
+            tick();
+            QVERIFY2(graph_->hotShare() > 0.999, id);
+        }
     }
 
     // --- The sidechain -------------------------------------------------------------------------------
@@ -611,6 +784,10 @@ private Q_SLOTS:
         QCOMPARE(keyed.count(), 1);
         QVERIFY(graph_->keyed());
         QVERIFY(badge->property("lit").toBool());
+        // Keyed, but nothing playing yet: no dashed line lies along the plot's floor.
+        tick();
+        QTest::qWait(50);
+        QCOMPARE(yellowOnTheFloor(), 0);
         set("threshold", -30.0);
         tick();
         QTest::qWait(200);  // (the badge lit)
@@ -625,7 +802,7 @@ private Q_SLOTS:
         const double topHz = spectralDisplayFrequencies()[top];
         QVERIFY2(topHz > 60.0 && topHz < 110.0, qPrintable(QString::number(topHz)));  // the bass, not the noise
         QVERIFY(gain[size_t(top)] < -6.0f);                                            // ducked under it
-        QVERIFY(gain[size_t(SpectralGraph::kPoints * 3 / 4)] > -0.5f);                 // not elsewhere (2.6 kHz)
+        QVERIFY(gain[size_t(SpectralGraph::kPoints * 3 / 4)] > -0.5f);                 // not elsewhere (3.7 kHz)
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-keyed.png"));
 
@@ -640,6 +817,31 @@ private Q_SLOTS:
         while (graph_->keyed() && undo()->canUndo()) undo()->undo();
         QVERIFY(!graph_->keyed());
         QVERIFY(!badge->property("lit").toBool());
+    }
+
+    // --- Lifts -------------------------------------------------------------------------------------------
+
+    void liftsRiseFromTheBottom() {
+        // Quiet pink noise under Below, with one loud tone over the threshold: the quiet frequencies are brought up
+        // (green, from the bottom; the header's figure), the tone turned down.
+        QVERIFY(showDevice(pinkNoise(kSampleRate, -50.0, {1000.0}, -12.0)));
+        set("upward", 2.0);
+        set("below", -30.0);
+        set("threshold", -18.0);
+        tick();
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        tick(30);
+        const auto& gain = graph_->latestGain();
+        int lifted = 0;
+        for (int j = pointNear(100.0); j <= pointNear(10000.0); ++j) lifted += gain[size_t(j)] > 3.0f ? 1 : 0;
+        QVERIFY2(lifted > 60, qPrintable(QString::number(lifted)));
+        QVERIFY(gain[size_t(pointNear(1000.0))] < -3.0f);  // the tone: cut
+        QVERIFY2(graph_->maxLiftDb() > 3.0, qPrintable(QString::number(graph_->maxLiftDb())));
+        const std::vector<double>& shown = graph_->shownGain();
+        QVERIFY(*std::max_element(shown.begin(), shown.end()) > 3.0);
+        QVERIFY(graph_->maxCutDb() > 3.0);
+        QTest::qWait(50);
+        save(grab(), QStringLiteral("spectral-lift.png"));
     }
 
     // --- How it looks ----------------------------------------------------------------------------------

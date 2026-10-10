@@ -3,13 +3,13 @@ import QtQuick.Controls
 import SUBstation
 
 // The Spectral Compressor's editor: the thresholds' controls at the left (Threshold, Ratio, Below and
-// Upward over Tilt, Knee, Range and Smoothing), time and output at the right (Attack, Release and Stereo
-// Link over Dry/Wet, Output and Delta), and between them SpectralGraph: the spectrum in and out, the
-// thresholds (drag them; tilt them by the orange line's end handles), the Focus band's edges, and what each
-// frequency is turned down (from the top) or brought up (from the bottom), as it plays. The Sidechain badge
-// over the display is lit while another track keys it; a click asks the frame for the sidechain menu. Every
-// control shows its parameter as it is now, sets it undoably, touches it when pressed, and right-click gives
-// its menu.
+// Upward over Tilt, Knee, Range and Smoothing), at the right the Focus band's edges as values (Focus Low
+// over Focus High), then time and output (Attack, Release and Stereo Link over Dry/Wet, Output and Delta),
+// and between them SpectralGraph: the spectrum in and out, the thresholds (drag them; tilt them by the
+// orange line's end handles), the Focus band's edges (dragged too), and what each frequency is turned down
+// (from the top) or brought up (from the bottom), as it plays. The Sidechain badge over the display is lit
+// while another track keys it; a click asks the frame for the sidechain menu. Every control shows its
+// parameter as it is now, sets it undoably, touches it when pressed, and right-click gives its menu.
 Item {
     id: editor
 
@@ -22,7 +22,7 @@ Item {
     // A knob's cell: wide enough for "Stereo Link" and "-1.5 dB/oct" at 8 pt.
     readonly property int cellWidth: 64
     readonly property int leftWidth: 4 * cellWidth
-    readonly property int rightWidth: 3 * cellWidth
+    readonly property int rightWidth: 4 * cellWidth  // the Focus column and three knobs
     readonly property int gap: 10
     readonly property int graphWidth: 376  // SpectralGraph::kWidth
 
@@ -36,6 +36,40 @@ Item {
         deviceId: editor.deviceId
         ids: ["threshold", "ratio", "below", "upward", "tilt", "knee", "range", "smooth", "focus_lo", "focus_hi",
               "attack", "release", "link", "mix", "output", "delta"]
+    }
+
+    // A Focus edge's cell: its name over a value box, level with the knobs beside it.
+    component FocusCell: Item {
+        id: cell
+
+        property string paramId: ""
+        property string title: ""
+        property string tooltip: ""
+        property real defaultValue: 0
+
+        width: editor.cellWidth
+        height: attackKnob.height
+
+        EditorCaption {
+            id: caption
+            width: parent.width
+            text: cell.title
+            elide: Text.ElideRight
+        }
+        ParamBox {
+            objectName: cell.paramId
+            x: 4
+            y: caption.height + attackKnob.spacing + (attackKnob.knob.height - height) / 2
+            width: parent.width - 8
+            param: p.get(cell.paramId)
+            logScale: true
+            decimals: 0
+            defaultValue: cell.defaultValue
+            formatter: v => param ? param.format(v) : ""
+            parser: text => param ? param.parse(text) : null
+            sampleText: "20.0 kHz"
+            tooltip: cell.tooltip
+        }
     }
 
     // The curve: the thresholds and their ratios, then their shape.
@@ -133,7 +167,7 @@ Item {
         ToolTip.delay: 700
         ToolTip.text: [
             qsTr("Spectrum in (filled) and out (line). The orange line is the threshold: drag it, or its end handles to tilt it. Orange from the top: how far each frequency is turned down; green from the bottom: how far it is brought up"),
-            qsTr("Threshold: drag up or down (Shift: finely; double-click: back to -24 dB)"),
+            qsTr("Threshold: drag up or down (Shift: finely; double-click: back to -18 dB)"),
             qsTr("Tilt: drag to turn both thresholds about 1 kHz (double-click: level with pink)"),
             qsTr("Tilt: drag to turn both thresholds about 1 kHz (double-click: level with pink)"),
             qsTr("Below: drag up or down; frequencies under the green line are brought up (double-click: back to -48 dB)"),
@@ -191,16 +225,24 @@ Item {
         opacity: 0.7
     }
 
-    // Time and output.
+    // Where it acts (the Focus band's edges, as values: typed, scrolled, automated and mapped as any control),
+    // then time and output.
     Grid {
         id: right
         x: editor.width - 8 - editor.rightWidth
         y: 6
-        columns: 3
+        columns: 4
         columnSpacing: 0
         rowSpacing: 8
 
+        FocusCell {
+            paramId: "focus_lo"
+            title: qsTr("Focus Low")
+            defaultValue: 20
+            tooltip: qsTr("Focus Low: nothing below this is changed (it fades out over a third of an octave under it). Its edge in the display drags it too")
+        }
         EditorKnob {
+            id: attackKnob
             objectName: "attack"
             width: editor.cellWidth
             param: p.get("attack")
@@ -220,6 +262,12 @@ Item {
             param: p.get("link")
             title: qsTr("Stereo Link")
             tooltip: qsTr("Stereo Link: 100 both channels get the same gains (the louder one's); 0 each channel its own")
+        }
+        FocusCell {
+            paramId: "focus_hi"
+            title: qsTr("Focus High")
+            defaultValue: 20000
+            tooltip: qsTr("Focus High: nothing above this is changed (it fades out over a third of an octave over it). Its edge in the display drags it too")
         }
         EditorKnob {
             id: mixKnob

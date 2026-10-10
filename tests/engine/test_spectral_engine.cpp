@@ -1,12 +1,13 @@
 // The built-in Spectral Compressor: a compressor per frequency over an STFT.
-// Its listing and the shared maths (SpectralDesign.h); its latency (the frame,
-// to the sample) and transparency; levels that read pink noise flat; downward
-// and upward compression, Range, Tilt, Smoothing and the Focus band with
-// numbers; Delta; attack and release in time; Stereo Link; keying by a
-// sidechain (alone and through an engine); every control changing without a
-// click; automation to the sample; reset, silence ringing out to exact zeros,
-// extremes, one channel; its displays; the engine lining other tracks up with
-// it; and what it costs.
+// Its listing, its gentle defaults and the shared maths (SpectralDesign.h);
+// its latency (the frame and a hop, to the sample) and transparency; levels
+// that read pink noise flat; downward and upward compression, Range, Tilt,
+// Smoothing and the Focus band with numbers; Delta; attack and release in
+// time; Stereo Link; keying by a sidechain (alone and through an engine);
+// every control changing without a click; automation to the sample; reset,
+// silence ringing out to exact zeros, extremes, one channel; its displays, in
+// step with what is heard; the engine lining other tracks up with it; and what
+// it costs, in all and per audio callback.
 
 #include <algorithm>
 #include <array>
@@ -30,8 +31,9 @@ namespace spectral = sub::spectral;
 namespace {
 
 constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
-constexpr int kN = 2048;      // the frame (and latency) at 48 kHz
+constexpr int kN = 2048;      // the frame at 48 kHz
 constexpr int kH = kN / 4;    // the hop
+constexpr int kL = kN + kH;   // the latency: the frame, and the hop its work is spread over
 constexpr int kPoints = spectral::kDisplayPoints;
 
 enum Display { kInput = 0, kKey, kOutput, kGain, kInLevel, kOutLevel, kDisplays };
@@ -72,7 +74,7 @@ public:
     }
 
     sub::Processor& processor() { return *processor_; }
-    int frame() const { return processor_->latencySamples(); }
+    int frame() const { return processor_->tailSamples(); }  // (the tail is the frame)
 
     int index(const std::string& id) const {
         const auto& params = processor_->params();
@@ -141,8 +143,12 @@ private:
     uint64_t positions_[kDisplays] = {};
 };
 
-// The input sample a published spectral frame is centred on (frame i, from 0, published at hop i + 1).
-int64_t frameCentre(size_t i, int frame) { return static_cast<int64_t>(i + 1) * (frame / 4) - frame; }
+// The input sample a published spectral frame is centred on (frame i, from 0, published at hop i + 1): the
+// frame that went in three hops before, centred half a frame before that, so the one heard as it is published.
+int64_t frameCentre(size_t i, int frame) {
+    const int hop = frame / 4;
+    return static_cast<int64_t>(i + 1) * hop - (frame + hop);
+}
 
 // The display point nearest a frequency.
 int pointAt(double hz) {
@@ -223,7 +229,7 @@ Samples smoothSine(double freq, double seconds, double amplitude, double rate = 
     return x;
 }
 
-// The largest 6th difference over [from, to): a steep high-pass (about 36 dB more sensitive at Nyquist than
+// The largest 6th difference over [from, to): a steep high-pass (8 times, 18 dB, more sensitive at Nyquist than
 // at a quarter of the rate, 10^5 times more than at 2 kHz). A step of d shows as up to 20 d; a smooth signal
 // well below Nyquist hardly at all.
 double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
@@ -274,7 +280,7 @@ TEST_CASE("spectral: listing") {
         bool log;
     };
     const std::vector<Expected> expected = {
-        {"Threshold", "dB", -72.f, 12.f, -24.f, false}, {"Ratio", ":1", 1.f, 20.f, 3.f, true},
+        {"Threshold", "dB", -72.f, 12.f, -18.f, false}, {"Ratio", ":1", 1.f, 20.f, 2.f, true},
         {"Below", "dB", -72.f, 12.f, -48.f, false},     {"Upward", ":1", 1.f, 10.f, 1.f, true},
         {"Tilt", "dB/oct", -6.f, 6.f, 0.f, false},      {"Knee", "dB", 0.f, 24.f, 6.f, false},
         {"Range", "dB", 0.f, 48.f, 24.f, false},        {"Smoothing", "%", 0.f, 100.f, 40.f, false},
@@ -306,6 +312,23 @@ TEST_CASE("spectral: listing") {
     CHECK(displays ==
           (std::vector<std::pair<std::string, int>>{
               {"input", 4}, {"key", 4}, {"output", 4}, {"gain", 4}, {"in_level", 512}, {"out_level", 512}}));
+}
+
+TEST_CASE("spectral: the defaults are gentle") {
+    // Inserted as it comes, it takes a few dB off a dense mix, mostly where tones stand out, and leaves a spectrum
+    // as dense as pink noise at a mix's level nearly alone: pink noise at -20 dBFS reads -20 dB at every
+    // frequency, under the default Threshold of -18 dB.
+    const auto down = [](double level) {
+        const Samples x = pinkNoise(3 * kSampleRate, level, 107);
+        Spectral s;
+        const Samples out = s.play(x);
+        return rmsDb(x, kSampleRate - kL, 3 * kSampleRate - kL) - rmsDb(out, kSampleRate, 3 * kSampleRate);
+    };
+    const double at20 = down(-20.0), at14 = down(-14.0);
+    INFO("pink at -20 dBFS down " + std::to_string(at20) + " dB, at -14 " + std::to_string(at14));
+    CHECK(at20 < 1.0);
+    CHECK(at14 > 1.0);
+    CHECK(at14 < 3.5);
 }
 
 TEST_CASE("spectral: design maths") {
@@ -383,32 +406,35 @@ TEST_CASE("spectral: latency and the impulse") {
     for (const double rate :
          {8000.0, 16000.0, 22050.0, 32000.0, 44100.0, 48000.0, 88200.0, 96000.0, 176400.0, 192000.0}) {
         INFO(std::to_string(rate));
+        const int frame = spectral::frameSize(rate);
         Spectral s({}, rate);
-        CHECK_EQ(s.processor().latencySamples(), spectral::frameSize(rate));
-        CHECK_EQ(s.processor().tailSamples(), spectral::frameSize(rate));
+        CHECK_EQ(s.processor().latencySamples(), frame + frame / 4);
+        CHECK_EQ(s.processor().latencySamples(), spectral::latencySamples(rate));
+        CHECK_EQ(s.processor().tailSamples(), frame);
     }
+    CHECK_EQ(spectral::latencySamples(48000.0), kL);
     for (const double rate : {48000.0, 96000.0}) {
         INFO(std::to_string(rate));
         Spectral s({{"threshold", 12.f}}, rate);
-        const int n = s.frame();
-        Samples x(static_cast<size_t>(100 + 3 * n), 0.f);
+        const int latency = s.processor().latencySamples();
+        Samples x(static_cast<size_t>(100 + 3 * latency), 0.f);
         x[100] = 1.f;
         const Samples out = s.play(x);
-        CHECK_NEAR(out[static_cast<size_t>(100 + n)], 1.0, 1e-5);
+        CHECK_NEAR(out[static_cast<size_t>(100 + latency)], 1.0, 1e-5);
         Samples rest = out;
-        rest[static_cast<size_t>(100 + n)] = 0.f;
+        rest[static_cast<size_t>(100 + latency)] = 0.f;
         CHECK(maxAbs(rest) < 1e-5);
     }
     // A new rate: the device starts from silence at its new frame.
     Spectral s({{"threshold", 12.f}});
     s.play(whiteNoise(20000, -10.0, 1));
     s.processor().prepare(96000.0, kBlock);
-    CHECK_EQ(s.processor().latencySamples(), 4096);
+    CHECK_EQ(s.processor().latencySamples(), 4096 + 1024);
     Samples x(16384, 0.f);
     x[10] = 1.f;
     const Samples out = s.play(x);
-    CHECK_EQ(argmax(out), size_t{10 + 4096});
-    CHECK_NEAR(out[10 + 4096], 1.0, 1e-5);
+    CHECK_EQ(argmax(out), size_t{10 + 5120});
+    CHECK_NEAR(out[10 + 5120], 1.0, 1e-5);
 }
 
 TEST_CASE("spectral: transparent below the threshold") {
@@ -418,8 +444,8 @@ TEST_CASE("spectral: transparent below the threshold") {
         INFO(values[0].first);
         Spectral s(values);
         const auto [l, r] = s.play(left, right);
-        CHECK_ALLCLOSE(slice(l, kN), slice(left, 0, -kN), 0.0, 2e-5);
-        CHECK_ALLCLOSE(slice(r, kN), slice(right, 0, -kN), 0.0, 2e-5);
+        CHECK_ALLCLOSE(slice(l, kL), slice(left, 0, -kL), 0.0, 2e-5);
+        CHECK_ALLCLOSE(slice(r, kL), slice(right, 0, -kL), 0.0, 2e-5);
     }
 }
 
@@ -427,9 +453,9 @@ TEST_CASE("spectral: dry is the input delayed, bit for bit") {
     const Samples left = pinkNoise(kSampleRate, -6.0, 3), right = whiteNoise(kSampleRate, -10.0, 4);
     Spectral s({{"mix", 0.f}, {"threshold", -72.f}, {"ratio", 20.f}, {"upward", 10.f}, {"below", 12.f}});
     const auto [l, r] = s.play(left, right);
-    CHECK_ARRAY_EQUAL(l, delayed(left, kN));
-    CHECK_ARRAY_EQUAL(r, delayed(right, kN));
-    CHECK(allEqual(slice(l, 0, kN), 0.0));
+    CHECK_ARRAY_EQUAL(l, delayed(left, kL));
+    CHECK_ARRAY_EQUAL(r, delayed(right, kL));
+    CHECK(allEqual(slice(l, 0, kL), 0.0));
 }
 
 TEST_CASE("spectral: pink noise reads its level") {
@@ -471,7 +497,7 @@ TEST_CASE("spectral: downward") {
     const double average = sum / count;
     INFO("gain 1-5 kHz " + std::to_string(average));
     CHECK_NEAR(average, -7.25, 0.5);
-    const double down = rmsDb(x, kSampleRate - kN, 3 * kSampleRate - kN) - rmsDb(out, kSampleRate, 3 * kSampleRate);
+    const double down = rmsDb(x, kSampleRate - kL, 3 * kSampleRate - kL) - rmsDb(out, kSampleRate, 3 * kSampleRate);
     INFO("down by " + std::to_string(down));
     CHECK_NEAR(down, 6.8, 0.6);
     // What comes out is what went in, turned down by the gains drawn.
@@ -485,7 +511,7 @@ TEST_CASE("spectral: range caps it") {
     const Samples x = pinkNoise(3 * kSampleRate, -20.0, 11);
     Spectral s(steady({{"threshold", -30.f}, {"ratio", 4.f}, {"range", 3.f}}));
     const Samples out = s.play(x);
-    const double down = rmsDb(x, kSampleRate - kN, 3 * kSampleRate - kN) - rmsDb(out, kSampleRate, 3 * kSampleRate);
+    const double down = rmsDb(x, kSampleRate - kL, 3 * kSampleRate - kL) - rmsDb(out, kSampleRate, 3 * kSampleRate);
     INFO("down by " + std::to_string(down));
     CHECK_NEAR(down, 3.0, 0.2);
     CHECK(*std::min_element(s.shown(kGain).begin(), s.shown(kGain).end()) >= -3.0001f);
@@ -494,7 +520,7 @@ TEST_CASE("spectral: range caps it") {
 TEST_CASE("spectral: upward under Below") {
     const Samples quiet = pinkNoise(3 * kSampleRate, -50.0, 13);
     const auto outDb = [](const Samples& out) { return rmsDb(out, kSampleRate, 3 * kSampleRate); };
-    const double in = rmsDb(quiet, kSampleRate - kN, 3 * kSampleRate - kN);
+    const double in = rmsDb(quiet, kSampleRate - kL, 3 * kSampleRate - kL);
     Spectral a(steady({{"threshold", -30.f}, {"ratio", 1.f}, {"upward", 2.f}, {"below", -30.f}}));
     const Samples lifted = a.play(quiet);
     INFO("Below -30: " + std::to_string(outDb(lifted)));
@@ -513,7 +539,7 @@ TEST_CASE("spectral: upward under Below") {
     // Under the upward floor (-90 dB) nothing is lifted; silence stays exact zeros.
     const Samples faint = pinkNoise(3 * kSampleRate, -110.0, 14);
     Spectral e(steady({{"threshold", -30.f}, {"ratio", 1.f}, {"upward", 2.f}, {"below", -30.f}}));
-    CHECK_NEAR(outDb(e.play(faint)), rmsDb(faint, kSampleRate - kN, 3 * kSampleRate - kN), 0.5);
+    CHECK_NEAR(outDb(e.play(faint)), rmsDb(faint, kSampleRate - kL, 3 * kSampleRate - kL), 0.5);
     Spectral f(steady({{"threshold", -30.f}, {"ratio", 1.f}, {"upward", 10.f}, {"below", 12.f}}));
     CHECK(allEqual(f.play(Samples(kSampleRate, 0.f)), 0.0));
 }
@@ -591,7 +617,7 @@ TEST_CASE("spectral: the Focus band") {
         CHECK(g < -2.5);
         CHECK(g > -6.0);
     }
-    const double down = rmsDb(x, kSampleRate - kN, 3 * kSampleRate - kN) - rmsDb(out, kSampleRate, 3 * kSampleRate);
+    const double down = rmsDb(x, kSampleRate - kL, 3 * kSampleRate - kL) - rmsDb(out, kSampleRate, 3 * kSampleRate);
     INFO("down by " + std::to_string(down));
     CHECK(down > 0.6);
     CHECK(down < 1.3);
@@ -599,7 +625,7 @@ TEST_CASE("spectral: the Focus band") {
     Spectral crossed(steady({{"threshold", -30.f}, {"ratio", 4.f}, {"focus_lo", 8000.f}, {"focus_hi", 1000.f}}));
     const Samples same = crossed.play(x);
     CHECK(*std::min_element(crossed.shown(kGain).begin(), crossed.shown(kGain).end()) > -0.01f);
-    CHECK_ALLCLOSE(slice(same, kN), slice(x, 0, -kN), 0.0, 2e-5);
+    CHECK_ALLCLOSE(slice(same, kL), slice(x, 0, -kL), 0.0, 2e-5);
 }
 
 TEST_CASE("spectral: Delta is the difference") {
@@ -608,7 +634,7 @@ TEST_CASE("spectral: Delta is the difference") {
     Spectral plain(setup), delta(steady({{"threshold", -30.f}, {"ratio", 4.f}, {"delta", 1.f}}));
     const auto [l0, r0] = plain.play(left, right);
     const auto [l1, r1] = delta.play(left, right);
-    const Samples dl = delayed(left, kN), dr = delayed(right, kN);
+    const Samples dl = delayed(left, kL), dr = delayed(right, kL);
     Samples wantL(dl.size()), wantR(dr.size());
     for (size_t i = 0; i < dl.size(); ++i) {
         wantL[i] = dl[i] - l0[i];
@@ -633,13 +659,22 @@ TEST_CASE("spectral: Delta is the difference") {
 }
 
 TEST_CASE("spectral: attack and release") {
-    // Pink noise stepping from -40 to -10 dBFS at 1 s and back at 3 s. The envelopes are linear power, so after
-    // the step up the level is -10 + 10 log10(1 - 0.999 e^(-t/attack)), after the step down -10 + 10 log10(0.001
-    // + 0.999 e^(-t/release)); with Ratio 2 over -30 dB the cut reaches 6.32 dB about 0.21 attack times after
-    // the step, and falls to 3.68 dB about 2.9 release times after the step down.
+    // Pink noise stepping from -40 to -10 dBFS at 1 s and back at 3 s, over a threshold of -30 dB at Ratio 2. The
+    // envelopes follow each bin's magnitude (as the Compressor's follower does), so after the step up the level
+    // stands 20 log10(1 - (1 - a) e^(-t/attack)) dB under where it settles (a = 10^(-30/20), the step), and after
+    // the step down 20 log10(a + (1 - a) e^(-t/release)) dB under it: a release time constant takes 8.7 dB off a
+    // fall far below (a follower of power would take 4.3). The cut, half the level's excess, is measured where
+    // the level is 12 dB under its held value: 0.257 attack times after the step up (a follower of power: 0.064)
+    // and 1.48 release times after the step down (a follower of power: 2.78). A frame straddling the step
+    // already reads much of the new level (the square root of its share of the window's energy), so the rise
+    // comes about 9 ms early at 500 ms (a frame-by-frame model of it without noise: 119.6 ms, not 128.6), and
+    // with a 20 ms attack a little before the step itself.
     Samples x = pinkNoise(5 * kSampleRate, -10.0, 23);
     for (size_t i = 0; i < x.size(); ++i)
         if (i < size_t{kSampleRate} || i >= size_t{3 * kSampleRate}) x[i] *= 0.031622777f;
+    const double step = std::pow(10.0, -30.0 / 20.0), under = std::pow(10.0, -12.0 / 20.0);
+    const double riseShare = -std::log((1.0 - under) / (1.0 - step));  // attack times
+    const double fallShare = -std::log((under - step) / (1.0 - step));  // release times
     struct Times {
         double rise, fall, held;
     };
@@ -668,25 +703,27 @@ TEST_CASE("spectral: attack and release") {
         const auto [from, to] = framesBetween(2.5, 3.0, cut.size());
         double held = 0.0;
         for (size_t i = from; i < to; ++i) held += cut[i] / static_cast<double>(to - from);
-        return Times{crossing(1.0, 6.32, true), crossing(3.0, 3.68, false), held};
+        // 12 dB of level under its held value is 6 dB of cut under the held cut (Ratio 2).
+        return Times{crossing(1.0, held - 6.0, true), crossing(3.0, held - 6.0, false), held};
     };
     const Times slow = measure(500.f, 200.f);
-    INFO("rise " + std::to_string(slow.rise) + " s, fall " + std::to_string(slow.fall) + " s, held " +
+    INFO("rise " + std::to_string(slow.rise) + " s (" + std::to_string(riseShare * 0.5) + "), fall " +
+         std::to_string(slow.fall) + " s (" + std::to_string(fallShare * 0.2) + "), held " +
          std::to_string(slow.held) + " dB");
     CHECK_NEAR(slow.held, 9.7, 0.5);
-    CHECK_NEAR(slow.rise, 0.105, 0.030);
-    CHECK_NEAR(slow.fall, 0.575, 0.060);
+    CHECK_NEAR(slow.rise, riseShare * 0.5 - 0.009, 0.02);  // 120 ms (a follower of power: 32)
+    CHECK_NEAR(slow.fall, fallShare * 0.2, 0.02);          // 297 ms (a follower of power: 556)
     const Times fastAttack = measure(20.f, 200.f), fastRelease = measure(500.f, 50.f);
     INFO("attack 20 ms: rise " + std::to_string(fastAttack.rise) + " s; release 50 ms: fall " +
          std::to_string(fastRelease.fall) + " s");
-    CHECK(fastAttack.rise < slow.rise - 0.05);
-    CHECK(fastRelease.fall < slow.fall - 0.2);
+    CHECK(fastAttack.rise < slow.rise - 0.08);
+    CHECK_NEAR(fastRelease.fall, fallShare * 0.05, 0.02);
 }
 
 TEST_CASE("spectral: stereo link") {
     const Samples left = pinkNoise(3 * kSampleRate, -10.0, 29), right = pinkNoise(3 * kSampleRate, -40.0, 31);
     const auto down = [](const Samples& in, const Samples& out) {
-        return rmsDb(in, kSampleRate - kN, 3 * kSampleRate - kN) - rmsDb(out, kSampleRate, 3 * kSampleRate);
+        return rmsDb(in, kSampleRate - kL, 3 * kSampleRate - kL) - rmsDb(out, kSampleRate, 3 * kSampleRate);
     };
     const auto run = [&](float link) {
         Spectral s(steady({{"threshold", -30.f}, {"ratio", 4.f}, {"link", link}}));
@@ -719,7 +756,7 @@ TEST_CASE("spectral: sidechain keys it") {
     const Samples quietKey(length, 0.f);
     constexpr size_t kWindow = 65536;
     const auto bands = [&](const Samples& in, const Samples& out) {
-        const Samples a = slice(in, kSampleRate - kN, kSampleRate - kN + kWindow);
+        const Samples a = slice(in, kSampleRate - kL, kSampleRate - kL + kWindow);
         const Samples b = slice(out, kSampleRate, kSampleRate + kWindow);
         return std::pair<double, double>{bandDb(a, 85.0, 115.0) - bandDb(b, 85.0, 115.0),
                                          bandDb(a, 1000.0, 10000.0) - bandDb(b, 1000.0, 10000.0)};
@@ -754,13 +791,13 @@ TEST_CASE("spectral: sidechain keys it") {
          {setup, steady({{"threshold", -20.f}, {"ratio", 4.f}, {"upward", 4.f}, {"below", 12.f}})}) {
         Spectral s(values);
         const Samples out = s.play(loud, {}, Key{nullptr, nullptr, true});
-        CHECK_ALLCLOSE(slice(out, kN), slice(loud, 0, -kN), 0.0, 2e-5);
+        CHECK_ALLCLOSE(slice(out, kL), slice(loud, 0, -kL), 0.0, 2e-5);
     }
     // Not connected: its own input keys it.
     {
         Spectral s(setup);
         const Samples out = s.play(loud, {}, Key{&key, &key, false});
-        CHECK(rmsDb(loud, kSampleRate - kN, 2 * kSampleRate - kN) - rmsDb(out, kSampleRate, 2 * kSampleRate) > 6.0);
+        CHECK(rmsDb(loud, kSampleRate - kL, 2 * kSampleRate - kL) - rmsDb(out, kSampleRate, 2 * kSampleRate) > 6.0);
     }
     // Through an engine: another track's 100 Hz keys it, heard only through the sidechain.
     sub::Engine engine;
@@ -821,7 +858,7 @@ TEST_CASE("spectral: no clicks") {
     }
 
     // Dry/Wet, Output and Delta ramp: against the same change switched at once (two renders spliced), where
-    // the change is heard (with the input it came with, N samples on), at a moment the tone is at its peak.
+    // the change is heard (with the input it came with, the latency on), at a moment the tone is at its peak.
     struct Ramped {
         std::string id;
         float a, b;
@@ -832,7 +869,7 @@ TEST_CASE("spectral: no clicks") {
         // Near 1 s, a quarter period past a whole number of periods: the tone's peak.
         const double period = kSampleRate / 220.0;
         const auto at = static_cast<int64_t>(std::round(std::round(kSampleRate / period) * period + period / 4));
-        const int64_t heard = at + kN;
+        const int64_t heard = at + kL;
         Values first = base, second = base;
         first.emplace_back(ramped.id, ramped.a);
         second.emplace_back(ramped.id, ramped.b);
@@ -850,14 +887,15 @@ TEST_CASE("spectral: no clicks") {
 }
 
 TEST_CASE("spectral: automation to the sample") {
-    // Output turned down at input sample 30000: the output of that sample (N later) is the ramp's first step.
+    // Output turned down at input sample 30000: the output of that sample (the latency on) is the ramp's first
+    // step.
     const Samples x = pinkNoise(kSampleRate, -20.0, 43);
     const Values setup = {{"threshold", -30.f}};
     Spectral plain(setup), automated(setup), quiet({{"threshold", -30.f}, {"output", -24.f}});
     const Samples a = plain.play(x);
     const Samples b = automated.play(x, {{30000, "output", -24.f}});
     const Samples c = quiet.play(x);
-    constexpr int64_t kHeard = 30000 + kN;
+    constexpr int64_t kHeard = 30000 + kL;
     CHECK_ARRAY_EQUAL(slice(b, 0, kHeard), slice(a, 0, kHeard));
     CHECK(b[kHeard] != a[kHeard]);
     CHECK(b[kHeard + 958] != c[kHeard + 958]);                          // still on its way
@@ -869,7 +907,7 @@ TEST_CASE("spectral: automation to the sample") {
     const Samples d = deeper.play(x, {{30000, "threshold", -60.f}});
     int64_t first = -1;
     for (size_t i = 0; i < d.size() && first < 0; ++i)
-        if (d[i] != a[i]) first = static_cast<int64_t>(i) - kN;  // in input time
+        if (d[i] != a[i]) first = static_cast<int64_t>(i) - kL;  // in input time
     CHECK(first >= 30000 - kN / 2);
     CHECK(first <= 30000);
 }
@@ -939,9 +977,10 @@ TEST_CASE("spectral: silence rings out to exact zeros") {
         Spectral s(values);
         const auto [l, r] = s.play(x, x);
         CHECK(allFinite(l));
-        CHECK(anyNonzero(slice(l, kSampleRate, kSampleRate + kN)));
-        CHECK(allEqual(slice(l, kSampleRate + 2 * kN), 0.0));
-        CHECK(allEqual(slice(r, kSampleRate + 2 * kN), 0.0));
+        // The last sound comes out the latency on, and the last frames to hear it end a frame after that.
+        CHECK(anyNonzero(slice(l, kSampleRate + kL, kSampleRate + kL + kN)));
+        CHECK(allEqual(slice(l, kSampleRate + kL + kN), 0.0));
+        CHECK(allEqual(slice(r, kSampleRate + kL + kN), 0.0));
         // The analyser reads the floor once the frames it shows are silent.
         const auto input = s.frames(kInput);
         const auto [from, to] = framesBetween(1.0 + 1.5 * kN / kSampleRate, 11.0, input.size());
@@ -1042,10 +1081,10 @@ TEST_CASE("spectral: extremes are stable") {
             CHECK(allFinite(l) && allFinite(r));
             for (int d = 0; d < kDisplays; ++d) CHECK(allFinite(s.shown(d)));
             const double bound =
-                rms(slice(x, 0, -kN)) * (std::pow(10.0, range / 20.0) + 1.0) * std::pow(10.0, output / 20.0) * 1.1 +
+                rms(slice(x, 0, -kL)) * (std::pow(10.0, range / 20.0) + 1.0) * std::pow(10.0, output / 20.0) * 1.1 +
                 1e-6;
-            INFO(std::to_string(rms(slice(l, kN))) + " against at most " + std::to_string(bound));
-            CHECK(rms(slice(l, kN)) <= bound);
+            INFO(std::to_string(rms(slice(l, kL))) + " against at most " + std::to_string(bound));
+            CHECK(rms(slice(l, kL)) <= bound);
             if (name == "silence") CHECK(allEqual(l, 0.0));
         }
     }
@@ -1097,6 +1136,24 @@ TEST_CASE("spectral: displays") {
     CHECK_EQ(next, uint64_t{(100 + 10 + 9000) * 128});
     CHECK_EQ((next - late.size()) % kPoints, uint64_t{0});
 
+    // In step with what is heard: the frame published at a hop is the one that went in three hops before, so a
+    // burst starting at input sample S first shows in the frame published at hop S / H + 4 (frame S / H + 3,
+    // centred within half a frame of S), not a hop sooner or later.
+    {
+        constexpr int64_t kStart = 10 * kH + kH / 2;
+        Samples burst(40 * kH, 0.f);
+        const Samples noise = whiteNoise(burst.size(), -6.0, 97);
+        std::copy(noise.begin() + kStart, noise.end(), burst.begin() + kStart);
+        Spectral b(steady({{"threshold", 12.f}}));
+        b.play(burst);
+        const auto input = b.frames(kInput);
+        size_t first = 0;
+        while (first < input.size() && allEqual(input[first], -150.0)) ++first;
+        CHECK_EQ(first, size_t{kStart / kH + 3});
+        CHECK(std::abs(frameCentre(first, kN) - kStart) < kN / 2);
+        CHECK(*std::max_element(input[first].begin(), input[first].end()) > -60.f);
+    }
+
     // In and Out: the peaks, Out 3 dB under In with Range 3.
     {
         Spectral r(steady({{"threshold", -30.f}, {"ratio", 4.f}, {"range", 3.f}}));
@@ -1127,7 +1184,7 @@ TEST_CASE("spectral: displays") {
 
 TEST_CASE("spectral: engine latency") {
     // A click on a plain track and the same click through the device: the engine delays the plain track by
-    // the frame, so they come out together.
+    // the latency, so they come out together.
     sub::Engine engine;
     engine.setClipFadeMs(0);
     constexpr int64_t kClick = 1000;
@@ -1135,7 +1192,7 @@ TEST_CASE("spectral: engine latency") {
     const uint32_t wet = stereoClickTrack(engine, 0.f, 1.f, kClick, 1.0);
     const uint32_t id = engine.addBuiltinProcessor(engine.trackChain(wet), "spectral", -1);
     setParam(engine, id, "threshold", 12.f);
-    CHECK_EQ(engine.processorInfo(id).latency, kN);
+    CHECK_EQ(engine.processorInfo(id).latency, kL);
     const Samples out = engine.renderOffline(0.0, kSampleRate);
     const Samples left = channel(out, 0), right = channel(out, 1);
     const std::vector<int64_t> dry = above(left, 0.1), through = above(right, 0.1);
@@ -1149,7 +1206,7 @@ TEST_CASE("spectral: engine latency") {
 #ifdef NDEBUG
 TEST_CASE("spectral: cost") {
     // 10 s of stereo pink noise at the defaults in well under half a second: catches a transform per sample or
-    // an allocation storm, not a benchmark.
+    // an allocation storm, not a benchmark. Then how the work falls into audio callbacks.
     const Samples x = pinkNoise(10 * kSampleRate, -14.0, 97);
     Samples l = x, r = x;
     Spectral s;
@@ -1158,5 +1215,33 @@ TEST_CASE("spectral: cost") {
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     INFO(std::to_string(seconds) + " s");
     CHECK(seconds < 0.5);
+
+    // No audio callback carries a whole frame: its work is spread over the hop after it. At 192 kHz in blocks of
+    // 32 (a frame every 64 blocks), the 99th percentile of the blocks' times is a small share of a hop's time (a
+    // frame worked out in one block would be over that percentile, and all of a hop's time).
+    constexpr double kRate = 192000.0;
+    constexpr int kSmall = 32;
+    auto processor = sub::BuiltinRegistry::instance().create("spectral");
+    processor->prepare(kRate, kBlock);
+    const Samples fast = pinkNoise(static_cast<size_t>(2 * kRate), -14.0, 99, kRate);
+    Samples left = fast, right = fast;
+    sub::ProcessContext ctx;
+    ctx.sampleRate = kRate;
+    std::vector<double> blocks;
+    double total = 0.0;
+    for (size_t start = 0; start + kSmall <= fast.size(); start += kSmall) {
+        float* pointers[2] = {left.data() + start, right.data() + start};
+        const auto from = std::chrono::steady_clock::now();
+        processor->process(ctx, pointers, 2, kSmall);
+        const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - from).count();
+        if (start < static_cast<size_t>(kRate / 4)) continue;  // (settled)
+        blocks.push_back(took);
+        total += took;
+    }
+    std::sort(blocks.begin(), blocks.end());
+    const double perHop = total / static_cast<double>(blocks.size()) * (spectral::frameSize(kRate) / 4 / kSmall);
+    const double p99 = blocks[blocks.size() * 99 / 100];
+    INFO("99th percentile " + std::to_string(p99 * 1e6) + " us of a hop's " + std::to_string(perHop * 1e6) + " us");
+    CHECK(p99 < 0.3 * perHop);
 }
 #endif

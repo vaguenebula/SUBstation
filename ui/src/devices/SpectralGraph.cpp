@@ -26,6 +26,8 @@ constexpr double kGainLimitDb = 48.0;        // the most Range lets a gain be
 constexpr double kStaleSeconds = 0.3;        // no frame for this long: the displays sink back
 constexpr double kHoldSeconds = 0.8;         // the deepest cut's line holds, then falls
 constexpr double kHoldFallDbPerSecond = 18.0;
+constexpr double kHeldDrawnDb = 0.01;        // a held cut is drawn from this deep
+constexpr double kDeltaFade = 0.7;           // with Delta on, what the output line now shows fades this far
 const double kThirdOctave = std::exp2(1.0 / 3.0);  // a Focus edge fades out over this beyond it (the engine's)
 
 QString id(const char* text) { return QString::fromLatin1(text); }
@@ -244,10 +246,12 @@ void SpectralGraph::sync() {
     focusHighShown_.target = std::log2(focusHigh_);
     belowOpacity_.target = belowShown() ? 1.0 : 0.0;
     deltaShown_.target = delta_ ? 1.0 : 0.0;
+    // The glow says "turned down here": only while anything over the threshold is (not at 1:1, Range 0 or Dry/Wet 0).
+    hotShown_.target = range_ > 0.0 && mix_ > 0.0 && ratio_ > 1.0001 ? 1.0 : 0.0;
     if (!primed_ && found) {  // the first time: drawn where it is, not easing in from the defaults
         primed_ = true;
         for (Eased* eased : {&thresholdShown_, &belowShown_, &tiltShown_, &focusLowShown_, &focusHighShown_,
-                             &belowOpacity_, &deltaShown_})
+                             &belowOpacity_, &deltaShown_, &hotShown_})
             eased->snap(eased->target);
     }
     // What is dragged follows the mouse at once.
@@ -354,8 +358,10 @@ void SpectralGraph::refreshDisplays() {
     moved |= easeAll(shownOutput_, targetOutput_, rise, fall, 0.01, kFloorDb);
     moved |= easeAll(shownGain_, targetGain_, flow, flow, 0.002);
 
-    // The deepest recent cut per point holds, then falls.
+    // The deepest recent cut per point holds, then falls (drawn for as long as it is there, after the cut itself
+    // has let go).
     double mostCut = 0.0, mostLift = 0.0;
+    bool held = false;
     for (std::size_t j = 0; j < shownGain_.size(); ++j) {
         const double cut = std::max(0.0, -shownGain_[j]);
         mostCut = std::max(mostCut, cut);
@@ -371,7 +377,10 @@ void SpectralGraph::refreshDisplays() {
                 moved = true;
             }
         }
+        held = held || heldCut_[j] > kHeldDrawnDb;
     }
+    moved |= held != anyHeld_;
+    anyHeld_ = held;
     maxCut_.target = mostCut;
     maxLift_.target = mostLift;
     const double levels = easeFraction(dt, 0.08);
@@ -405,6 +414,7 @@ void SpectralGraph::refreshDisplays() {
     moved |= lines;
     moved |= belowOpacity_.step(fade, 1e-3);
     moved |= deltaShown_.step(fade, 1e-3);
+    moved |= hotShown_.step(fade, 1e-3);
 
     // The handle under the mouse grows; the header's readout fades in and out.
     const int lit = hoveredHandle();
@@ -501,23 +511,23 @@ void SpectralGraph::mousePressEvent(QMouseEvent* event) {
         return;  // (the double-click follows)
     gesture_ = newGestureKey();
     dragged_ = which;
-    pressedAt_ = event->position();
+    lastPos_ = event->position();
     switch (which) {
     case ThresholdHandle:
-        pressedValue_ = threshold_;
+        dragValue_ = threshold_;
         break;
     case TiltLow:
     case TiltHigh:
-        pressedValue_ = tilt_;
+        dragValue_ = tilt_;
         break;
     case BelowHandle:
-        pressedValue_ = std::min(below_, threshold_);  // as drawn: a Below held at the threshold moves at once
+        dragValue_ = std::min(below_, threshold_);  // as drawn: a Below held at the threshold moves at once
         break;
     case FocusLowEdge:
-        pressedValue_ = focusLow_;
+        dragValue_ = focusLow_;
         break;
     default:
-        pressedValue_ = focusHigh_;
+        dragValue_ = focusHigh_;
         break;
     }
     touch(paramOf(which));
@@ -533,33 +543,40 @@ void SpectralGraph::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void SpectralGraph::dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
+    // Each move adds its own distance (from where the mouse last was), so pressing or letting go of Shift mid-drag
+    // changes the rate from there on, not the whole drag's (as the knobs do). Held at a limit, the value turns
+    // back as soon as the mouse does.
     const double fine = modifiers & Qt::ShiftModifier ? kFineDrag : 1.0;
-    const double delta = (pressedAt_.y() - pos.y()) * dbPerPixel() * fine;  // dB, up
-    auto tenth = [](double v) { return std::round(v * 10.0) / 10.0; };
-    double value = pressedValue_;
+    const double up = (lastPos_.y() - pos.y()) * dbPerPixel() * fine;               // dB
+    const double across = (pos.x() - lastPos_.x()) * fine / std::max(1.0, plot().width());  // of the plot
+    lastPos_ = pos;
+    double value = 0.0;
     switch (dragged_) {
     case ThresholdHandle:
     case BelowHandle:
-        value = tenth(std::clamp(pressedValue_ + delta, -72.0, 12.0));
+        dragValue_ = std::clamp(dragValue_ + up, -72.0, 12.0);
+        value = std::round(dragValue_ * 10.0) / 10.0;
         break;
     case TiltLow:
     case TiltHigh: {
         // That end of the line follows the mouse: the tilt changes by the move over its octaves from 1 kHz.
         const double octaves =
             sub::app::spectralThresholdDb(0.0, 1.0, {dragged_ == TiltLow ? kLowHandleHz : kHighHandleHz}).value(0);
-        value = std::round(std::clamp(pressedValue_ + delta / octaves, -6.0, 6.0) * 100.0) / 100.0;
+        dragValue_ = std::clamp(dragValue_ + up / octaves, -6.0, 6.0);
+        value = std::round(dragValue_ * 100.0) / 100.0;
         break;
     }
     case FocusLowEdge:
     case FocusHighEdge: {
-        // Relative to the press, evenly in log frequency (the plot is three decades wide).
-        const double moved = (pos.x() - pressedAt_.x()) * fine / std::max(1.0, plot().width());
-        const double hz = std::round(pressedValue_ * std::pow(kHigh / kLow, moved));
+        // Evenly in log frequency (the plot is three decades wide), a third of an octave from the other edge.
         const double apart = std::exp2(kMinFocusOctaves);
+        double low = kLow, high = kHigh;
         if (dragged_ == FocusLowEdge)
-            value = std::clamp(hz, kLow, std::max(kLow, std::floor(focusHigh_ / apart)));
+            high = std::max(kLow, focusHigh_ / apart);
         else
-            value = std::clamp(hz, std::min(kHigh, std::ceil(focusLow_ * apart)), kHigh);
+            low = std::min(kHigh, focusLow_ * apart);
+        dragValue_ = std::clamp(dragValue_ * std::pow(kHigh / kLow, across), low, high);
+        value = std::clamp(std::round(dragValue_), std::ceil(low), std::floor(high));
         break;
     }
     default:
@@ -681,25 +698,34 @@ void SpectralGraph::paint(SgPainter& p) {
             points, [&](std::size_t j) { return shownGain_[j] > 0.01; },
             [&](const std::vector<QPointF>& run) { p.drawPolyline(run.data(), int(run.size()), Theme::kPlayOn, 1.2); });
     }
-    if (maxCut_.value > 0.05 || *std::min_element(shownGain_.begin(), shownGain_.end()) < -0.05) {
+    // (With Delta on, the output line shows what is taken away: the curtain, its held line and the glow, which
+    // show it too, fade back so the line reads.)
+    const double shown = 1.0 - kDeltaFade * deltaShown_.value;
+    if (anyHeld_) {  // the recent deepest cut, held, then falling: for as long as it is there
         for (std::size_t j = 0; j < points.size(); ++j)
             points[j] = QPointF(xs[j], r.top() + depth(heldCut_[j]));
-        eachRun(points, [&](std::size_t j) { return heldCut_[j] > 0.01; }, [&](const std::vector<QPointF>& run) {
-            p.drawPolyline(run.data(), int(run.size()), withAlpha(Theme::kAccent, 150), 1.0);
-        });
+        eachRun(points, [&](std::size_t j) { return heldCut_[j] > kHeldDrawnDb; },
+                [&](const std::vector<QPointF>& run) {
+                    p.drawPolyline(run.data(), int(run.size()), withAlpha(Theme::kAccent, int(150 * shown)), 1.0);
+                });
+    }
+    if (maxCut_.value > 0.05 || *std::min_element(shownGain_.begin(), shownGain_.end()) < -0.05) {
         for (std::size_t j = 0; j < points.size(); ++j)
             points[j] = QPointF(xs[j], r.top() + depth(-shownGain_[j]));
         QLinearGradient fill(QPointF(0, r.top()), QPointF(0, r.top() + kCurtain * r.height()));
-        fill.setColorAt(0, withAlpha(Theme::kAccent, 110));
-        fill.setColorAt(1, withAlpha(Theme::kAccent, 24));
+        fill.setColorAt(0, withAlpha(Theme::kAccent, int(110 * shown)));
+        fill.setColorAt(1, withAlpha(Theme::kAccent, int(24 * shown)));
         p.fillToBaseline(points.data(), kPoints, r.top(), fill);
+        const QColor edge = withAlpha(Theme::kAccent, int(255 * shown));
         eachRun(
             points, [&](std::size_t j) { return shownGain_[j] < -0.01; },
-            [&](const std::vector<QPointF>& run) { p.drawPolyline(run.data(), int(run.size()), Theme::kAccent, 1.2); });
+            [&](const std::vector<QPointF>& run) { p.drawPolyline(run.data(), int(run.size()), edge, 1.2); });
     }
 
-    // Where the level compared is over the threshold, glowing.
-    {
+    // Where the level compared is over the threshold, glowing: why a frequency is turned down (so not while
+    // nothing is: Ratio 1:1, Range 0 or Dry/Wet 0).
+    const int glow = int(64 * hotShown_.value * shown);
+    if (glow > 0) {
         std::vector<float> tops(kPoints), bottoms(kPoints);
         bool over = false;
         for (std::size_t j = 0; j < tops.size(); ++j) {
@@ -710,7 +736,7 @@ void SpectralGraph::paint(SgPainter& p) {
         }
         if (over) {
             const double dx = r.width() / (kPoints - 1);
-            p.fillBand(r.left() - dx / 2, dx, tops.data(), bottoms.data(), kPoints, withAlpha(Theme::kAccent, 64));
+            p.fillBand(r.left() - dx / 2, dx, tops.data(), bottoms.data(), kPoints, withAlpha(Theme::kAccent, glow));
         }
     }
 
@@ -736,14 +762,16 @@ void SpectralGraph::paint(SgPainter& p) {
         p.fillRect(QRectF(from, r.top(), to - from, r.height()), edge);
     }
 
-    // The sidechain's levels (what is compared), dashed, while keyed; the output.
+    // The sidechain's levels (what is compared), dashed, while keyed; the output. (Each only where there is any:
+    // lying along the floor, a line would read as one of its own.)
     if (keyed_) {
         spectrum(shownKey_);
-        drawDashedPolyline(p, points, Theme::kMeterMid, 1.0);
+        eachRun(points, [&](std::size_t j) { return shownKey_[j] > kFloorDb; },
+                [&](const std::vector<QPointF>& run) { drawDashedPolyline(p, run, Theme::kMeterMid, 1.0); });
     }
-    // (Only where there is any: lying along the floor, it would read as a line of its own.)
+    // With Delta on it is what is taken away, in a red of its own (the threshold and the curtain are orange).
     spectrum(shownOutput_);
-    const QColor outputColor = blend(Theme::kFrozen, Theme::kAccent, deltaShown_.value);
+    const QColor outputColor = blend(Theme::kFrozen, Theme::kMeterHigh, deltaShown_.value);
     eachRun(points, [&](std::size_t j) { return shownOutput_[j] > kFloorDb; },
             [&](const std::vector<QPointF>& run) { drawGlowPolyline(p, run, outputColor, 1.25); });
 

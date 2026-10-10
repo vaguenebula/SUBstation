@@ -51,10 +51,17 @@ inline constexpr double kGlideSeconds = 0.030;          // the curves' per-hop g
 
 // The frame for a sample rate: 2048 at 44.1/48 kHz, doubling per octave of rate
 // (4096 at 88.2/96, 8192 at 176.4/192, 1024 at 22.05..32, 512 at 16, 256 at
-// 8 kHz), so a bin is about 23 Hz wide at any rate. It is also the latency.
+// 8 kHz), so a bin is about 23 Hz wide at any rate.
 inline int frameSize(double sampleRate) noexcept {
     const double octaves = std::round(std::log2(std::max(1.0, sampleRate) / kReferenceRate));
     return std::clamp(static_cast<int>(std::lround(kReferenceFrame * std::exp2(octaves))), kMinFrame, kMaxFrame);
+}
+
+// The latency: the frame, and one hop more, over which each frame's work is spread (so no audio callback
+// carries a whole frame's transforms). 2560 at 44.1/48 kHz: 53 ms at 48.
+inline int latencySamples(double sampleRate) noexcept {
+    const int frame = frameSize(sampleRate);
+    return frame + frame / kOverlap;
 }
 
 inline double octavesFromPivot(double freq) noexcept { return std::log2(std::max(freq, kLowestHz) / kPivotHz); }
