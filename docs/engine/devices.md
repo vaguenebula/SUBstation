@@ -36,7 +36,7 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Saturator.cpp](../../engine/src/builtin/devices/Saturator.cpp) | Saturator: eight curves, Color's emphasis and its inverse, Post Clip on the dry/wet blend, DC, 4x oversampling of all of it |
 | [builtin/SaturatorDesign.h](../../engine/src/builtin/SaturatorDesign.h) | The Saturator's curves (`saturator::makeShape`, `params`, `curve`, `transfer`), Post Clip and Color's design (`colorDesign`, `inverse`, `between`, `colorResponseDb`, `colorTimeConstant`), shared with the application layer's `saturatorCurve()` and `saturatorColorDb()` for the editor |
 | [builtin/devices/Amp.cpp](../../engine/src/builtin/devices/Amp.cpp) | Amp: seven amp models, the tone stack, sag, Mono and Dual, sleep |
-| [builtin/AmpDesign.h](../../engine/src/builtin/AmpDesign.h) | The Amp's design (`amp::kVoicings`, `blend`, the stages' curve and `Adaa`, the tone stack, the dials' mappings, `Transfer`: a tone's steady state by harmonic balance), shared with the application layer's `ampToneResponseDb()`, `ampTransfer()` and `AmpTransferCurve` for the editor's curves; the device keeps its model morph level-matched with `Transfer` |
+| [builtin/AmpDesign.h](../../engine/src/builtin/AmpDesign.h) | The Amp's design (`amp::kVoicings`, `blend`, the stages' curve and `Adaa`, the tone stack, the dials' mappings, `Transfer`: a tone's steady state by harmonic balance, the displays' `kDisplaySamples` and `kDisplayFloorDb`), shared with the application layer's `ampToneResponseDb()`, `ampTransfer()` and `AmpTransferCurve` for the editor's curves (and `ampModelNames()`, `ampDisplaySamples()`, `ampDisplayFloorDb()`); the device keeps its model morph level-matched with `Transfer` |
 | [builtin/devices/Erosion.cpp](../../engine/src/builtin/devices/Erosion.cpp) | Erosion: a 2 ms delay modulated by a sine or band-passed noise, Noise Blend and Stereo Width, chunked glides and ramps, displays |
 | [builtin/ErosionDesign.h](../../engine/src/builtin/ErosionDesign.h) | Erosion's maths (`erosion::band`, `noisePowerGain`, `bandMagnitude`, `bandEdges`, `excursionSamples`, `blendWeights`, `stereoSpread`, the instances' noise salts), shared with the application layer's `ErosionResponse.h` for the editor |
 | [builtin/devices/Delay.cpp](../../engine/src/builtin/devices/Delay.cpp) | Delay: synced or free times per side, filter, modes, ping pong, freeze |
@@ -1172,10 +1172,16 @@ decimal, no sign: `formatValue` in [ParamSpec.cpp](../../app/src/model/ParamSpec
   sample, as awake), and costs next to nothing until its input sounds again. Once the sag has recovered, a woken amp
   plays as a freshly reset one, bit for bit. `reset()` snaps the dials and the model to the parameters and silences
   both amps; `prepare()` sizes the buffers (blocks longer than its maximum are worked in slices) and resets.
-- **Displays**, one value each per 256 samples, published together at each window's end (with two amps, the larger):
-  `input` (the input's peak, dBFS), `drive1`, `drive2`, `drive3` (each preamp stage's peak against its clipping point,
-  dB: 0 is where it clips), `power` (the power stage's, the same), `sag` (the supply's sag at the window's end, dB,
-  ≥ 0) and `output` (the output's peak after Dry/Wet, dBFS); floored at −90.
+  Input that isn't audio (NaN, infinity, beyond ±1e30) reaches it as silence (`BuiltinProcessor::process()`), so
+  none of its states ever holds it: a bad sample plays as a zero would, bit for bit. One that is audio but absurd
+  (+600 dBFS) blocks it as it would a real amp: the input coupling holds the spike's tail far over the signal until
+  it has died away (0.15 s on Lead's 80 Hz, 0.7 s on Bass's 15 Hz), and it plays on.
+- **Displays**, one value each per 256 samples (`amp::kDisplaySamples`), published together at each window's end
+  (with two amps, the larger): `input` (the input's peak, dBFS), `drive1`, `drive2`, `drive3` (each preamp stage's
+  peak against its clipping point, dB: 0 is where it clips), `power` (the power stage's, the same), `sag` (the
+  supply's sag at the window's end, dB, ≥ 0) and `output` (the output's peak after Dry/Wet, dBFS); floored at −90
+  (`amp::kDisplayFloorDb`). The editor takes the rate and the floor from the design through the application layer
+  (`ampDisplaySamples()`, `ampDisplayFloorDb()`), as it takes the models' names (`ampModelNames()`).
 - **Shared with the editor**: `amp::toneResponseDb()` (the tone stack's digital response with its make-up, times
   Presence's shelf, at the oversampled rate: the tone controls' part; the fixed roll-offs of the power tubes' input
   and the transformer aren't in it) and `amp::Transfer`, the transfer for a 1 kHz tone worked out by harmonic balance:
@@ -2160,22 +2166,24 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   sections at 1x and 4x too); the tail; extremes at 44.1 to 192 kHz (Hard Clip's ceiling at any Dry/Wet, within the
   4x filters' worst gain with Hi-Quality); one channel, and channels independent; its displays (also in blocks that
   split the meters' 128 samples).
-- [test_amp_engine.cpp](../../tests/engine/test_amp_engine.cpp): its listing; the design (each stack's make-up and
-  its digital response against the analog one, the curve, its anti-aliasing exact at rest and when clipped, the
-  morph's ends, the transfer's parts); each model's character and level-matched defaults; Gain, Volume (the power
-  stage it drives, and the distortion it adds on Blues and Heavy) and the sag with its recovery; the tone curve as
-  played; the transfer as played (its slope, and a 1 kHz tone's peaks at −26 and −12 dBFS on every model: within
-  0.25 dB, 1 dB with Gain, Presence and Volume at 10); the tone controls driving V3; Mono and Dual; the Output switch
-  and every model morph click-free (a 6th-difference measure against an unfaded splice, at −12 dBFS and at −80, where
-  the tone is pure) and the morphs level-matched; Rock's and Lead's dials click-free at −12 dBFS and every model's every
-  dial at −80; automation through the engine to the sample (against an amp alone: a sample off fails); Dry/Wet with
-  the dry delayed; latency (a small tone's phase on every model, and the engine's compensation exact); the tail and
-  silence ringing out to exact zeros (the slowest stack too); reset and a new rate; extremes at 22 to 192 kHz and
-  +12 dBFS; no DC; aliasing (Gain 10, noon, and Gain, Presence and Volume at 10); the displays; its cost (and a model
-  change's first block against a steady one's); a model change's levels a cell at a time (the old model bit for bit
-  until the morph sets off, at the same sample in any blocks); model changes faster than a morph, and a change in a
-  morph, level-matched while a dial moves; blocks of 1 to 1024 frames and slices bit for bit
-  (soft onsets, silence and sleep in Dual too); sleep (its cost, in every build) and waking as a fresh amp.
+- [test_amp_engine.cpp](../../tests/engine/test_amp_engine.cpp): its listing; the design (each stack's make-up and its
+  digital response against the analog one, the curve, its anti-aliasing exact at rest and when clipped, the morph's
+  ends, the transfer's parts); each model's character and level-matched defaults; Gain, Volume (the power stage it
+  drives, and the distortion it adds on Blues and Heavy) and the sag with its recovery; NaN, infinity and absurd
+  levels in its input playing as zeros would, bit for bit (Mono, Dual and dry), and a +600 dBFS sample blocking it for
+  under a second; the tone curve as played; the transfer as played (its slope, and a 1 kHz tone's peaks at −26 and −12
+  dBFS on every model: within 0.25 dB, 1 dB with Gain, Presence and Volume at 10); the tone controls driving V3; Mono
+  and Dual; the Output switch and every model morph click-free (a 6th-difference measure against an unfaded splice, at
+  −12 dBFS and at −80, where the tone is pure) and the morphs level-matched; Rock's and Lead's dials click-free at −12
+  dBFS and every model's every dial at −80; automation through the engine to the sample (against an amp alone: a
+  sample off fails); Dry/Wet with the dry delayed; latency (a small tone's phase on every model, and the engine's
+  compensation exact); the tail and silence ringing out to exact zeros (the slowest stack too); reset and a new rate;
+  extremes at 22 to 192 kHz and +12 dBFS; no DC; aliasing (Gain 10, noon, and Gain, Presence and Volume at 10); the
+  displays; its cost (the thread's CPU time, Release only; and a model change's first block against a steady one's); a
+  model change's levels a cell at a time (the old model bit for bit until the morph sets off, at the same sample in
+  any blocks); model changes faster than a morph, and a change in a morph, level-matched while a dial moves; blocks of
+  1 to 1024 frames and slices bit for bit (soft onsets, silence and sleep in Dual too); sleep (its cost, Release only)
+  and waking as a fresh amp.
 - [test_erosion_engine.cpp](../../tests/engine/test_erosion_engine.cpp): its listing and 2 ms latency at any rate;
   Amount 0 a clean delay of its latency, bit for bit, and transparent through the engine (its modulators running on
   as at any Amount); a sine's sidebands as Bessel functions of the modulation index (within 0.1 %), Frequency moving
