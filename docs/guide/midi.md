@@ -181,6 +181,9 @@ there, the one nearest in pitch):
   note it goes to and how far.
 - Hold **Alt** and drag sideways to curve it: right makes it arrive later (it waits,
   then swoops), left sooner (it swoops, then settles). The stretch stays put meanwhile.
+  The curve you set is what new slides start with from then on, until you change it
+  again; it shows in the bend bar's **Curve** box while the glide tool is picked (type
+  0 there for straight slides).
 - A slide is two ordinary points on the note's curve, so you can change it afterwards
   with Draw (move its points, Alt-drag its segment, delete it). A note with nothing after
   it shows a no-entry cursor: there is nothing to slide to. The slide keeps the interval

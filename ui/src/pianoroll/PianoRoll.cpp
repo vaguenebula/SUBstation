@@ -541,6 +541,13 @@ void PianoRoll::setVibratoDepth(double semitones) {
     Q_EMIT toolSettingsChanged();
 }
 
+void PianoRoll::setGlideCurve(double percent) {
+    percent = std::clamp(percent, -100.0, 100.0);
+    if (percent == glideCurve_) return;
+    glideCurve_ = percent;
+    Q_EMIT toolSettingsChanged();
+}
+
 void PianoRoll::setVibratoFade(double percent) {
     percent = std::clamp(percent, 0.0, 100.0);
     if (percent == vibratoFade_) return;

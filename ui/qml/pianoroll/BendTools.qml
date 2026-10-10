@@ -6,7 +6,8 @@ import SUBstation
 // the top right of the note grid with the bend tools: Draw (points on the
 // notes' bend curves, as automation's; what B starts with), Vibrato (V: drag
 // across a note to draw vibrato on it) and Glide (G: a slide into the next
-// note), the rate, depth and ramp a new vibrato takes, and Clear
+// note), the rate, depth and ramp a new vibrato takes, with the Glide tool the
+// curve a new slide takes (the last one set with Alt as one was drawn), and Clear
 // (the selected notes' bends, every note's with none selected). Its buttons and
 // boxes never take the focus, so the notes keep the keyboard; it keeps its
 // clicks to itself (the grid is underneath).
@@ -143,6 +144,20 @@ Rectangle {
             value: bar.roll.vibratoFade
             onMoved: value => bar.roll.vibratoFade = value
             tip: qsTr("Vibrato ramp: how much of a new vibrato's length it takes to reach its depth\n(hold Alt and drag sideways as you draw it to change it)")
+        }
+        Separator { visible: bar.glide }
+        Box {
+            objectName: "glideCurve"
+            visible: bar.glide
+            from: -100
+            to: 100
+            step: 1
+            decimals: 0
+            sampleText: "+100 %"
+            formatter: v => (v > 0 ? "+" : "") + v.toFixed(0) + " %"
+            value: bar.roll.glideCurve
+            onMoved: value => bar.roll.glideCurve = value
+            tip: qsTr("Slide curve: how a new slide bends (+: it arrives later, −: sooner; 0: straight).\nHold Alt and drag sideways as you draw one to change it; it stays for the next")
         }
         Separator {}
         RoleButton {

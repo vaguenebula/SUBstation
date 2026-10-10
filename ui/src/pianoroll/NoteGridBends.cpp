@@ -277,14 +277,16 @@ private:
 // (notes::nextNote), from where the press is (on the grid; Ctrl: anywhere) over
 // the stretch dragged across, or with a click to the note's end. While Alt is
 // held, dragging sideways bends it instead (right: it arrives later, easing
-// in; left: sooner, easing out), the stretch staying where it is meanwhile.
-// It is made of two bend points (notes::withSlide), to edit as any others.
+// in; left: sooner, easing out), the stretch staying where it is meanwhile;
+// the curve set so is what new slides start with (PianoRoll::glideCurve). It
+// is made of two bend points (notes::withSlide), to edit as any others.
 class GlideGesture : public NoteGrid::Gesture {
 public:
     GlideGesture(NoteGrid* grid, const QPointF& press, const ClipNote& note, int target, bool free)
         : Gesture(grid, press), base_(note), current_(note), last_(press), target_(target),
           semitones_(std::clamp(static_cast<double>(target - note.note.pitch), -notes::kMaxBendSemitones,
-                                notes::kMaxBendSemitones)) {
+                                notes::kMaxBendSemitones)),
+          amount_(roll->glideCurve() / 100.0) {
         const double start = roll->rollStart(note);
         from_ = std::clamp(roll->view().snapBeat(roll->view().xToBeat(press.x()), free), start, start + note.note.length);
     }
@@ -297,6 +299,7 @@ public:
         if (bending) {
             held_ += step;  // (taken from the stretch)
             amount_ = std::clamp(amount_ + step.x() / NoteGrid::kGlideCurvePixels, -1.0, 1.0);
+            roll->setGlideCurve(curvePercent());  // (the next slide's too)
         }
         grid->setCursor(QCursor(bending ? Qt::SizeHorCursor : Qt::CrossCursor));
         const double start = roll->rollStart(base_);
@@ -318,8 +321,8 @@ public:
         return std::make_pair(QPointF(press.x(), press.y() - 14),
                               QStringLiteral("→ ") + notes::noteName(target_) + QStringLiteral(" · ") +
                                   semitoneText(semitones_) + QStringLiteral(" · curve ") +
-                                  (amount_ > 0.0 ? QStringLiteral("+") : QString()) +
-                                  app::formatFixed(amount_ * 100.0, 0) + QStringLiteral(" %"));
+                                  (curvePercent() > 0.0 ? QStringLiteral("+") : QString()) +
+                                  app::formatFixed(curvePercent(), 0) + QStringLiteral(" %"));
     }
 
     std::optional<QRectF> area() const override {
@@ -332,11 +335,15 @@ public:
     }
 
 private:
+    // Its curve as drawn: to a percent.
+    double curvePercent() const { return std::round(amount_ * 100.0); }
+
     void draw() {
         const double start = roll->rollStart(base_);
         // Right (positive) arrives later: the curve bulges away from where it goes.
         const double from = base_.note.curveAt(from_ - start);
-        const double curve = semitones_ >= from ? -amount_ : amount_;
+        const double amount = curvePercent() / 100.0;
+        const double curve = semitones_ >= from ? -amount : amount;
         const Note slid = notes::withSlide(base_.note, from_ - start, to_ - start, semitones_, curve);
         current_ = roll->commitBend(current_, slid, QStringLiteral("Add Slide"), key);
     }
@@ -347,9 +354,9 @@ private:
     QPointF held_;     // how far it moved while Alt was held
     int target_;       // the pitch it slides to
     double semitones_;
+    double amount_;      // its curve as dragged: -1..1, positive arriving later
     double from_ = 0.0;  // roll beats
     double to_ = 0.0;
-    double amount_ = 0.0;  // its curve as dragged: -1..1, positive arriving later
 };
 
 }  // namespace

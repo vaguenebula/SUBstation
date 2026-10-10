@@ -113,6 +113,7 @@ private Q_SLOTS:
         if (roll()) {
             roll()->setBendMode(false);
             roll()->setBendTool(QStringLiteral("draw"));
+            roll()->setGlideCurve(0.0);
         }
         test::moveTo(window_, QPoint(5, 5), {}, Qt::NoButton);
     }
@@ -337,6 +338,8 @@ private Q_SLOTS:
         };
         bendMode();
         QTest::keyClick(window_, Qt::Key_G);
+        QCOMPARE(roll()->glideCurve(), 0.0);  // (straight at first)
+        QTRY_VERIFY(item("glideCurve")->isVisible());  // (the bend bar shows it with the glide tool)
         // Dragged from beat 1 to beat 2: down three semitones over that stretch.
         test::drag(window_, onCurve(1.0, 71), onCurve(2.0, 71));
         QCOMPARE(b().bend.size(), size_t(2));
@@ -358,16 +361,21 @@ private Q_SLOTS:
         QVERIFY(std::abs(b().bend[0].curve - 0.5) < 0.02);  // (going down: bulging up arrives later)
         QVERIFY(b().bendAt(1.25, project().tempo()) > -1.5);  // later than halfway, halfway along
         test::release(window_, onCurve(1.5, 71) + QPoint(half, 0), Qt::AltModifier);
+        QCOMPARE(roll()->glideCurve(), 50.0);  // the curve new slides start with now
         undo().undo();
         QVERIFY(b().bend.empty());  // (one undo step)
-        // A click: from there to the note's end.
+        // A click: from there to the note's end, with that curve.
         test::click(window_, onCurve(0.5, 71));
         QCOMPARE(b().bend.size(), size_t(2));
         QCOMPARE(b().bend[0].time, 0.5);
         QCOMPARE(b().bend[1].time, 2.0);
+        QCOMPARE(b().bend[0].curve, 0.5);
+        // Until it is changed: straight again (as the bend bar's box sets it).
+        roll()->setGlideCurve(0.0);
         // Ctrl: from where it is pressed, off the grid.
         undo().undo();
         test::drag(window_, onCurve(0.3, 71), onCurve(1.0, 71), Qt::ControlModifier);
+        QCOMPARE(b().bend[0].curve, 0.0);
         QVERIFY(std::abs(b().bend[0].time - 0.3) < 0.03);
         QVERIFY(std::abs(b().bend[0].time * 16.0 - std::round(b().bend[0].time * 16.0)) > 1e-6);
         // Nothing after G#: no slide.

@@ -148,14 +148,16 @@ class PianoRoll : public QObject {
     // what B starts with), "vibrato" (V) or "glide" (G: slides); whether the
     // curves show now (bend mode, but for while Shift is held with the Draw or
     // Glide tool: the notes then, to edit as out of it); a new vibrato's rate
-    // (Hz), depth (semitones) and ramp (percent of its length); how many bend
-    // points are selected.
+    // (Hz), depth (semitones) and ramp (percent of its length); a new slide's
+    // curve (percent, -100..100: positive arrives later; the last one set with
+    // Alt as one was drawn); how many bend points are selected.
     Q_PROPERTY(bool bendMode READ bendMode WRITE setBendMode NOTIFY bendModeChanged)
     Q_PROPERTY(QString bendTool READ bendTool WRITE setBendTool NOTIFY bendModeChanged)
     Q_PROPERTY(bool bendView READ bendView NOTIFY bendModeChanged)
     Q_PROPERTY(double vibratoRate READ vibratoRate WRITE setVibratoRate NOTIFY toolSettingsChanged)
     Q_PROPERTY(double vibratoDepth READ vibratoDepth WRITE setVibratoDepth NOTIFY toolSettingsChanged)
     Q_PROPERTY(double vibratoFade READ vibratoFade WRITE setVibratoFade NOTIFY toolSettingsChanged)
+    Q_PROPERTY(double glideCurve READ glideCurve WRITE setGlideCurve NOTIFY toolSettingsChanged)
     Q_PROPERTY(int selectedBendCount READ selectedBendCount NOTIFY selectionChanged)
 
 public:
@@ -340,6 +342,8 @@ public:
     double vibratoDepth() const { return vibratoDepth_; }
     void setVibratoDepth(double semitones);
     double vibratoFade() const { return vibratoFade_; }
+    double glideCurve() const { return glideCurve_; }
+    void setGlideCurve(double percent);
     void setVibratoFade(double percent);
 
     // A point of a note's bend: the note and the point's place in its bend.
@@ -572,6 +576,7 @@ private:
     double vibratoRate_ = app::notes::kDefaultVibratoRate;
     double vibratoDepth_ = app::notes::kDefaultVibratoDepth;
     double vibratoFade_ = app::notes::kDefaultVibratoFade * 100.0;
+    double glideCurve_ = 0.0;  // percent
     std::vector<BendRef> selectedBends_;
 };
 
