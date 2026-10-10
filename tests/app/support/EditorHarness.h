@@ -33,6 +33,7 @@
 #include "model/Project.h"
 #include "session/Session.h"
 
+#include <QCursor>
 #include <QDir>
 #include <QGuiApplication>
 #include <QImage>
@@ -42,6 +43,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QTest>
 #include <QUndoStack>
 #include <QUrl>
@@ -191,7 +193,24 @@ protected:
         QMetaObject::invokeMethod(root_.get(), "clear");
         project()->clear();
         undo()->clear();
+        parkCursor();
         QTest::mouseMove(window_, QPoint(1, 1));
+    }
+
+    // The system's cursor out of the window's way, at the screen's bottom left. A knob's or value box's drag puts
+    // it back where the drag began (DragCursor), over the editor, and Windows tells a window where it is whenever
+    // the window changes under it (as each editor is shown, taking its size): what lies there would be hovered,
+    // and its tooltip would pop up over the editor.
+    void parkCursor() {
+        QScreen* screen = window_->screen();
+        if (!screen)
+            return;
+        const QRect area = screen->availableGeometry();
+        const QPoint away(area.left() + 8, area.bottom() - 8);
+        if (QCursor::pos(screen) == away)
+            return;
+        QCursor::setPos(screen, away);
+        QCoreApplication::processEvents();  // (the window told it left)
     }
 
     sub::Engine* engine() const { return engine_.get(); }
@@ -215,6 +234,7 @@ protected:
     QQuickItem* show(const QString& kind, const QString& trackId, const QString& deviceId, int height = 0) {
         if (height <= 0)
             height = bodyHeight();
+        parkCursor();  // (before the window takes the editor's size)
         QVariant url;
         QMetaObject::invokeMethod(root_.get(), "editorFor", Q_RETURN_ARG(QVariant, url), Q_ARG(QVariant, kind));
         if (url.toString().isEmpty())

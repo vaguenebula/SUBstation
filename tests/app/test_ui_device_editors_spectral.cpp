@@ -645,7 +645,10 @@ private Q_SLOTS:
         QTest::mouseMove(window_, scenePoint(graph_, QPointF(plot.center().x(), plot.top() + 4)));
         QTRY_COMPARE(graph_->hoveredHandle(), int(SpectralGraph::None));
 
-        // A handle held at the edge still drags as it does on its own frequency: 100 Hz's up 20 px.
+        // A handle held at the edge still drags as it does on its own frequency: 100 Hz's up 20 px. (Pressed from off
+        // the display, so that no tooltip is up: this window has no room for the display's below or above it, so a
+        // tip up as the press comes lies over the plot's bottom, where the handle is, and takes the press.)
+        QTest::mouseMove(window_, QPoint(1, 1));
         const double dbPerPixel = graph_->dbPerPixel();
         const int steps = undo()->index();
         drag(at(SpectralGraph::TiltLow), QPoint(0, -20));
