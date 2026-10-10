@@ -361,14 +361,18 @@ you set a ratio.
 
 **The editor** has a row per band, High on top:
 
-- **High**, **Mid** and **Low**: the bands. High and Low can be switched off; their
-  frequencies then belong to the Mid band, which shapes them with its own settings (with
-  both off the device is a single-band compressor and expander, Mid's controls acting on
-  everything). Their controls dim but can still be set. **S** solos a band (more than
-  one can be soloed).
-- The **crossovers** under High and Low (30 Hz to 18 kHz; 2.50 kHz and 120 Hz to start)
-  set where the bands split, 24 dB per octave. Left as they are, the bands add back up
-  to the input, with no dip or bump at the splits.
+- **High**, **Mid** and **Low**: the bands' buttons, their activators. A band switched
+  off here is bypassed: its Input, Output and dynamics stop acting, but its frequencies
+  stay its own (no other band shapes them). **S** solos a band (more than one can be
+  soloed).
+- The **crossovers** under High and Low (Low-Mid 30 Hz to 3 kHz, Mid-High 300 Hz to
+  15 kHz; 120 Hz and 2.50 kHz to start) set where the bands split, 24 dB per octave.
+  Left as they are, the bands add back up to the input, with no dip or bump at the
+  splits. The switch beside each splits its band off: switched off, the High (or Low)
+  band's frequencies belong to the Mid band, which shapes them with its own settings
+  (with both off the device is a single-band compressor and expander, Mid's controls
+  acting on everything). As in Live, these two switches can't be automated. The
+  controls of a band switched off or bypassed dim but can still be set.
 - **Input** and **Output** per band (±24 dB): a band's level before its dynamics (moving
   it against its thresholds) and after them.
 - **The display**: each band's lane, from −80 dB at the left to +6 dB at the right. The
@@ -392,13 +396,13 @@ you set a ratio.
     steps add up, and a turn of the wheel stays with the edge it started on as the edge
     moves away from the mouse. Over the device chain, Shift with the wheel and
     Ctrl+Alt-dragging scroll the chain, as everywhere there.
-- **T**, **B** and **A** switch the two fields beside every band between its **T**ime
-  (Attack 0.1 ms to 1 s, Release 1 ms to 3 s), the **B**elow threshold and ratio, and
-  the **A**bove threshold and ratio (−80 to 0 dB; 1:0.250 to 1:100). Type a ratio as
-  Live writes it ("1:4", Over The Top's "1:66.7"), as the number after "1:" ("4",
-  "0.5"), or as a compressor's ("4:1"); type a time as "250 ms" or "1.5 s" (a bare
-  number is milliseconds). Above, Attack is how fast compression or expansion comes when
-  the level rises past the threshold and Release how fast it lets go when it falls back;
+- **T**, **B** and **A**, over the bands' buttons, switch the two fields beside every band
+  between its **T**ime (Attack and Release, each 0.1 ms to 5 s), the **B**elow threshold
+  and ratio, and the **A**bove threshold and ratio (−80 to 0 dB; 1:0.250 to 1:100). Type a
+  ratio as Live writes it ("1:4", Over The Top's "1:66.7"), as the number after "1:" ("4",
+  "0.5"), or as a compressor's ("4:1"); type a time as "250 ms" or "1.5 s" (a bare number
+  is milliseconds). Above, Attack is how fast compression or expansion comes when the
+  level rises past the threshold and Release how fast it lets go when it falls back;
   Below, the same as the level drops under the threshold and comes back.
 - **Amount** (0 to 100 %) scales every ratio's effect: at 0 % nothing is compressed or
   expanded, so it dials a heavy setting back. **Time** (10 to 1000 %) scales every
@@ -407,11 +411,15 @@ you set a ratio.
   thresholds. **Peak** reacts to short peaks; **RMS** (the default) to the average
   level, letting short peaks through. On stereo, both follow the louder side.
 - **Sidechain** (the button, or the title bar's): another track's signal keys the bands,
-  each by its own band of it, so a kick ducks the lows and a vocal the mids. **SC Gain**
-  sets the key's level, **SC Mix** how much of the trigger is the key rather than the
-  device's own input. See [mixing.md](mixing.md#sidechains).
+  each by its own band of it, so a kick ducks the lows and a vocal the mids. **S/C Gain**
+  (−70 to +24 dB) sets the key's level, **S/C Mix** how much of the trigger is the key
+  rather than the device's own input; both can be set before a sidechain is chosen.
+  **Listen** (the headphones) lets you hear what the bands react to instead of the
+  output: the key, as much of it as S/C Mix takes (without a sidechain, the input). See
+  [mixing.md](mixing.md#sidechains).
 
-Every control can be automated (but the solos) and changes without clicks. The device
+Every control can be automated (but the solos, the split switches and Listen, as in
+Live) and changes without clicks. The device
 adds no latency. Upward compression fades out between −72 and −96 dB, so silence, and
 whatever lies under −96 dB, isn't lifted; a noise floor above that is, as Over The Top
 lifts it (hiss at −80 dB under a Below of −40 dB at 1:4 comes up 20 dB).

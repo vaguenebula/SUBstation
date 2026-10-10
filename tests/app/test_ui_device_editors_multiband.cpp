@@ -26,6 +26,7 @@
 #include "audio/MultibandResponse.h"
 #include "controls/KnobItem.h"
 #include "controls/ValueBoxItem.h"
+#include "devices/DisplayClock.h"
 #include "devices/MultibandGraph.h"
 #include "editor/ProjectEditor.h"
 #include "model/ParamSpec.h"
@@ -38,6 +39,8 @@ namespace {
 
 constexpr int kLow = MultibandGraph::Low, kMid = MultibandGraph::Mid, kHigh = MultibandGraph::High;
 constexpr int kBelow = MultibandGraph::Below, kAbove = MultibandGraph::Above;
+// Ticks by hand (each counts as one of the clock's, at least) within which the meters hold what they last read.
+constexpr int kHoldTicks = int(MultibandGraph::kHoldSeconds * 1000.0 / sub::ui::kDisplayRefreshMs);
 
 }  // namespace
 
@@ -152,7 +155,7 @@ private Q_SLOTS:
         QVERIFY(s.view && s.graph);
         QVERIFY2(s.view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(s.view->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(s.view->implicitWidth(), 800.0);
+        QCOMPARE(s.view->implicitWidth(), 816.0);
 
         // The device's own controls: within the body, their rows one under the other.
         QQuickItem* globals = find(s.view, QStringLiteral("globals"));
@@ -166,16 +169,25 @@ private Q_SLOTS:
             bottom = row->y() + row->height();
         }
 
-        for (const char* name : {"highOn", "midLabel", "lowOn", "highSolo", "midSolo", "lowSolo", "xoverHigh",
-                                 "xoverLow", "highIn", "midIn", "lowIn", "highOut", "midOut", "lowOut", "highAbove",
-                                 "midAbove", "lowAbove", "highAboveRatio", "midAboveRatio", "lowAboveRatio",
-                                 "highBelow", "midBelow", "lowBelow", "highBelowRatio", "midBelowRatio",
-                                 "lowBelowRatio", "highAttack", "midAttack", "lowAttack", "highRelease", "midRelease",
-                                 "lowRelease", "pageTime", "pageBelow", "pageAbove", "amount", "time", "output",
-                                 "softKnee", "modePeak", "modeRms", "scGain", "scMix", "sidechainButton",
+        for (const char* name : {"highActive", "midActive", "lowActive", "highOn", "lowOn", "highSolo", "midSolo",
+                                 "lowSolo", "xoverHigh", "xoverLow", "highIn", "midIn", "lowIn", "highOut", "midOut",
+                                 "lowOut", "highAbove", "midAbove", "lowAbove", "highAboveRatio", "midAboveRatio",
+                                 "lowAboveRatio", "highBelow", "midBelow", "lowBelow", "highBelowRatio",
+                                 "midBelowRatio", "lowBelowRatio", "highAttack", "midAttack", "lowAttack",
+                                 "highRelease", "midRelease", "lowRelease", "pages", "pageTime", "pageBelow",
+                                 "pageAbove", "pageCaption", "pageCaption2", "amount", "time", "output", "softKnee",
+                                 "modePeak", "modeRms", "scGain", "scMix", "sidechainButton", "scListen",
                                  "multibandGraph"})
             QVERIFY2(find(s.view, QString::fromLatin1(name)), name);
-        QVERIFY(!find(s.view, QStringLiteral("midLabel"))->property("param").isValid());  // Mid can't be switched off
+        // The bands' buttons are their activators, the switches beside the crossovers their splits.
+        for (const auto& [name, id] : {std::pair{"highActive", "high_active"}, std::pair{"midActive", "mid_active"},
+                                       std::pair{"lowActive", "low_active"}, std::pair{"highOn", "high_on"},
+                                       std::pair{"lowOn", "low_on"}}) {
+            QObject* bound = qvariant_cast<QObject*>(find(s.view, QString::fromLatin1(name))->property("param"));
+            QVERIFY2(bound && bound->property("paramId").toString() == QString::fromLatin1(id), name);
+        }
+        QCOMPARE(find(s.view, QStringLiteral("midActive"))->property("text").toString(), QStringLiteral("Mid"));
+        QVERIFY(find(s.view, QStringLiteral("highActive"))->property("lit").toBool());
 
         // The boxes read their parameters' defaults, in their units.
         QCOMPARE(box(s.view, "midAbove")->value(), -20.0);
@@ -214,11 +226,23 @@ private Q_SLOTS:
             QQuickItem* item = find(s.view, QString::fromLatin1(name));
             return item->mapToItem(s.view, QPointF(item->width(), 0)).x();
         };
-        const char* const columns[] = {"xoverHigh", "midIn",        "multibandGraph", "midAbove",
+        const char* const columns[] = {"highOn", "xoverHigh",     "midIn",  "multibandGraph", "midAbove",
                                        "midAboveRatio", "midOut", "globals"};
         for (std::size_t i = 1; i < std::size(columns); ++i)
             QVERIFY2(right(columns[i - 1]) <= left(columns[i]), columns[i]);
-        QVERIFY(left("xoverHigh") >= 8 && right("globals") <= s.view->width() - 8);
+        QVERIFY(right("highActive") <= left("highSolo") && right("highSolo") <= left("midIn"));
+        QVERIFY(left("highOn") >= 8 && right("globals") <= s.view->width() - 8);
+        // The T/B/A buttons in the header over the band column, clear of the High row's buttons and of Input's
+        // caption; every field column has its caption.
+        auto under = [&](const char* name) {
+            QQuickItem* item = find(s.view, QString::fromLatin1(name));
+            return item->mapToItem(s.view, QPointF(0, item->height())).y();
+        };
+        auto top = [&](const char* name) { return find(s.view, QString::fromLatin1(name))->mapToItem(s.view, {}).y(); };
+        QVERIFY(left("pages") >= 8 && right("pages") <= s.view->property("inX").toDouble());
+        QVERIFY(under("pages") <= top("highActive"));
+        QCOMPARE(left("pageCaption"), left("midAbove"));
+        QCOMPARE(left("pageCaption2"), left("midAboveRatio"));
         QCOMPARE(left("midAttack"), left("midAbove"));
         QCOMPARE(right("midRelease"), right("midAboveRatio"));
 
@@ -234,23 +258,37 @@ private Q_SLOTS:
         }
         QCOMPARE(s.graph->rowHeight(), (s.view->height() - 12 - 16) / 3);
 
-        // The fields: Above's to start with, then Time's, then Below's.
+        // The fields: Above's to start with, then Time's, then Below's, each column captioned.
         auto visible = [&](const char* name) { return find(s.view, QString::fromLatin1(name))->isVisible(); };
+        auto caption = [&](const char* name) { return find(s.view, QString::fromLatin1(name))->property("text"); };
         QVERIFY(visible("midAbove") && visible("midAboveRatio"));
         QVERIFY(!visible("midBelow") && !visible("midAttack"));
         QVERIFY(find(s.view, QStringLiteral("pageAbove"))->property("checked").toBool());
+        QCOMPARE(caption("pageCaption").toString(), QStringLiteral("Above"));
+        QCOMPARE(caption("pageCaption2").toString(), QStringLiteral("Ratio"));
         click(find(s.view, QStringLiteral("pageTime")));
         QVERIFY(visible("midAttack") && visible("midRelease") && visible("highAttack"));
         QVERIFY(!visible("midAbove") && !visible("midBelow"));
         QVERIFY(find(s.view, QStringLiteral("pageTime"))->property("checked").toBool());
         QVERIFY(!find(s.view, QStringLiteral("pageAbove"))->property("checked").toBool());
+        QCOMPARE(caption("pageCaption").toString(), QStringLiteral("Attack"));
+        QCOMPARE(caption("pageCaption2").toString(), QStringLiteral("Release"));
         click(find(s.view, QStringLiteral("pageBelow")));
         QVERIFY(visible("midBelow") && visible("lowBelowRatio"));
         QVERIFY(!visible("midAttack") && !visible("midAbove"));
+        QCOMPARE(caption("pageCaption").toString(), QStringLiteral("Below"));
+        QCOMPARE(caption("pageCaption2").toString(), QStringLiteral("Ratio"));
         QCOMPARE(undo()->count(), 0);  // (a view, not an edit)
+        // The page is the device's, not the editor's: an editor made again (as the chain's frames are, when
+        // its devices change) shows it still.
+        QQuickItem* again = show(QStringLiteral("multiband"), s.track, s.device);
+        QVERIFY(again);
+        QVERIFY(find(again, QStringLiteral("midBelow"))->isVisible());
+        QVERIFY(!find(again, QStringLiteral("midAbove"))->isVisible());
+        QVERIFY(find(again, QStringLiteral("pageBelow"))->property("checked").toBool());
 
         // At the least height it asks for, the rows and the device's controls still fit, apart.
-        QQuickItem* compact = show(QStringLiteral("multiband"), s.track, s.device, int(s.view->implicitHeight()));
+        QQuickItem* compact = show(QStringLiteral("multiband"), s.track, s.device, int(again->implicitHeight()));
         QVERIFY(compact);
         QQuickItem* low = find(compact, QStringLiteral("xoverLow"));
         QVERIFY(low->mapToItem(compact, QPointF(0, low->height())).y() <= compact->height() - 6 + 0.5);
@@ -281,7 +319,8 @@ private Q_SLOTS:
             QCOMPARE(value("mid_in"), 0.0);
         }
 
-        // High switched off: its lane and its controls dim (still editable), its solo can't be used.
+        // High's split switched off (the switch beside its crossover): its lane and its controls dim (still
+        // editable), its solo can't be used.
         {
             const int before = undo()->index();
             click(button(s.view, "highOn"));
@@ -291,13 +330,35 @@ private Q_SLOTS:
             QVERIFY(!s.graph->bandOn(kHigh));
             QVERIFY(!find(s.view, QStringLiteral("highSolo"))->isEnabled());
             QVERIFY(find(s.view, QStringLiteral("midSolo"))->isEnabled());
-            QTRY_COMPARE(find(s.view, QStringLiteral("highAbove"))->opacity(), 0.45);
-            QTRY_COMPARE(find(s.view, QStringLiteral("xoverHigh"))->opacity(), 0.45);
+            QTRY_COMPARE(find(s.view, QStringLiteral("highAbove"))->opacity(), 0.55);
+            QTRY_COMPARE(find(s.view, QStringLiteral("xoverHigh"))->opacity(), 0.55);
+            QTRY_COMPARE(find(s.view, QStringLiteral("highActive"))->opacity(), 0.55);
+            QVERIFY(find(s.view, QStringLiteral("highAbove"))->isEnabled());
             QCOMPARE(find(s.view, QStringLiteral("midAbove"))->opacity(), 1.0);
             undo()->undo();
             QCOMPARE(value("high_on"), 1.0);
             QVERIFY(s.graph->bandOn(kHigh));
             QTRY_COMPARE(find(s.view, QStringLiteral("highAbove"))->opacity(), 1.0);
+        }
+
+        // The Mid band bypassed (its activator, the band's button): its controls dim (still editable), its
+        // solo still works, its crossovers stay as they are; one step.
+        {
+            const int before = undo()->index();
+            click(button(s.view, "midActive"));
+            QCOMPARE(value("mid_active"), 0.0);
+            QVERIFY(oneStepAfter(before));
+            QVERIFY(!find(s.view, QStringLiteral("midActive"))->property("lit").toBool());
+            QVERIFY(!s.graph->bandActive(kMid) && s.graph->bandOn(kMid));
+            QVERIFY(find(s.view, QStringLiteral("midSolo"))->isEnabled());
+            QTRY_COMPARE(find(s.view, QStringLiteral("midAbove"))->opacity(), 0.55);
+            QTRY_COMPARE(find(s.view, QStringLiteral("midIn"))->opacity(), 0.55);
+            QCOMPARE(find(s.view, QStringLiteral("xoverHigh"))->opacity(), 1.0);
+            QCOMPARE(find(s.view, QStringLiteral("highAbove"))->opacity(), 1.0);
+            undo()->undo();
+            QCOMPARE(value("mid_active"), 1.0);
+            QVERIFY(s.graph->bandActive(kMid));
+            QTRY_COMPARE(find(s.view, QStringLiteral("midAbove"))->opacity(), 1.0);
         }
 
         // Solo, Peak/RMS, Soft Knee: a click, a step each.
@@ -356,6 +417,12 @@ private Q_SLOTS:
         QVERIFY(release->applyTyped(QStringLiteral("80")));
         QCOMPARE(value("mid_release"), 80.0);
         QCOMPARE(release->text(), QStringLiteral("80 ms"));
+        // Live's range, 0.1 ms to 5 s.
+        QVERIFY(release->applyTyped(QStringLiteral("4.5 s")));
+        QCOMPARE(value("mid_release"), 4500.0);
+        QVERIFY(release->applyTyped(QStringLiteral("0.2")));
+        QCOMPARE(value("mid_release"), 0.2);
+        QCOMPARE(release->text(), QStringLiteral("0.20 ms"));
         before = undo()->index();
         QVERIFY(!release->applyTyped(QStringLiteral("soon")));
         QCOMPARE(undo()->index(), before);
@@ -369,7 +436,7 @@ private Q_SLOTS:
         // The engine has what the editor set.
         const auto id = bridge()->engineDeviceId(s.track, s.device);
         QVERIFY(id);
-        for (const char* p : {"mid_above_ratio", "mid_solo", "mode", "soft_knee", "xover_low", "high_on"})
+        for (const char* p : {"mid_above_ratio", "mid_solo", "mode", "soft_knee", "xover_low", "high_on", "mid_active"})
             QCOMPARE(engine_->processorParam(*id, engine_->processorParamIndex(*id, p)), float(value(p)));
     }
 
@@ -708,6 +775,45 @@ private Q_SLOTS:
         QCOMPARE(graph->gainShown(kMid), 0.0);
     }
 
+    void aBypassedBandShowsItsLevelOnly() {
+        // One band (High and Low off), Peak, Above -20 at 1:4 with Input +6, bypassed by its activator: its
+        // lane dims (shown so at once), and it shows the band's level as it comes, without the Input, no change,
+        // no glow, no marker and no figure. Activated again, it works.
+        const Shown s = showDevice({{QStringLiteral("low_on"), 0.0},
+                                    {QStringLiteral("high_on"), 0.0},
+                                    {QStringLiteral("mode"), 0.0},
+                                    {QStringLiteral("mid_in"), 6.0},
+                                    {QStringLiteral("mid_above"), -20.0},
+                                    {QStringLiteral("mid_above_ratio"), 4.0},
+                                    {QStringLiteral("mid_active"), 0.0}},
+                                   tone(1000.0, kSampleRate, 0.5));
+        QVERIFY(s.view && s.graph);
+        MultibandGraph* graph = s.graph;
+        QVERIFY(!graph->bandActive(kMid));
+        QCOMPARE(graph->laneOpacity(kMid), 0.35);
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        ticks(10);
+        const double in = 20 * std::log10(0.5);
+        QVERIFY2(std::abs(graph->inLevel(kMid) - in) < 0.3, qPrintable(QString::number(graph->inLevel(kMid))));
+        QVERIFY2(std::abs(graph->outLevel(kMid) - in) < 0.3, qPrintable(QString::number(graph->outLevel(kMid))));
+        QCOMPARE(graph->gainTarget(kMid), 0.0);
+        QCOMPARE(graph->glow(kMid, kAbove), 0.0);
+        QVERIFY(!graph->targetMarkerDb(kMid));
+        QVERIFY(graph->gainLabelRect(kMid).isEmpty());
+
+        click(button(s.view, "midActive"));
+        QCOMPARE(param(s.track, s.device, QStringLiteral("mid_active")), 1.0);
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        ticks(13);
+        const double driven = in + 6.0;
+        QVERIFY2(std::abs(graph->inLevel(kMid) - driven) < 0.3, qPrintable(QString::number(graph->inLevel(kMid))));
+        QVERIFY2(std::abs(graph->gainTarget(kMid) - (driven + 20.0) * -0.75) < 0.3,
+                 qPrintable(QString::number(graph->gainTarget(kMid))));
+        QVERIFY(graph->glow(kMid, kAbove) > 0.9);
+        QVERIFY(!graph->gainLabelRect(kMid).isEmpty());
+        QVERIFY2(graph->laneOpacity(kMid) > 0.9, qPrintable(QString::number(graph->laneOpacity(kMid))));
+    }
+
     void aCutUnderTheFloorStopsAtTheLevelBefore() {
         // Gate-like downward expansion, one band, Peak, Below -40 at 1:0.250: a steady tone at -55 dB comes out
         // at -100, under the graph's floor.
@@ -811,7 +917,7 @@ private Q_SLOTS:
         ticks(13);
         QVERIFY2(graph->glow(kMid, kBelow) > 0.9, qPrintable(QString::number(graph->glow(kMid, kBelow))));
         QVERIFY2(std::abs(graph->gainTarget(kMid) - 7.5) < 0.2, qPrintable(QString::number(graph->gainTarget(kMid))));
-        ticks(MultibandGraph::kHoldTicks + 60);
+        ticks(kHoldTicks + 60);
         QVERIFY2(graph->glow(kMid, kBelow) < 0.1, qPrintable(QString::number(graph->glow(kMid, kBelow))));
     }
 
@@ -863,6 +969,16 @@ private Q_SLOTS:
         ticks(60);
         QVERIFY(graph->highlight(kMid, kAbove, false) == 0.0);
         QVERIFY(!graph->animating());
+
+        // A band bypassed (its activator) dims as one switched off, solo or not, and comes back.
+        click(button(s.view, "lowActive"));
+        QVERIFY(!graph->bandActive(kLow));
+        ticks(25);
+        QVERIFY(std::abs(graph->laneOpacity(kLow) - 0.35) < 0.01);
+        QCOMPARE(graph->offLabelOpacity(kLow), 0.0);  // ("→ Mid" is for a band switched off)
+        click(button(s.view, "lowActive"));
+        ticks(25);
+        QVERIFY(std::abs(graph->laneOpacity(kLow) - 0.5) < 0.01);  // (muted by Mid's solo still)
     }
 
     void theReadoutClearsTheGainFigure() {
@@ -909,22 +1025,65 @@ private Q_SLOTS:
     void sidechainControls() {
         const Shown s = showDevice();
         QVERIFY(s.view && s.graph);
+        auto value = [&](const char* id) { return param(s.track, s.device, QString::fromLatin1(id)); };
         QVERIFY(!s.graph->sidechained());
-        QVERIFY(!find(s.view, QStringLiteral("scGain"))->isEnabled());
-        QVERIFY(!find(s.view, QStringLiteral("scMix"))->isEnabled());
+        // Without a sidechain, S/C Gain and Mix dim but can be set first (as the Gate's, and Live's greyed ones).
+        QQuickItem* gain = find(s.view, QStringLiteral("scGain"));
+        QQuickItem* mix = find(s.view, QStringLiteral("scMix"));
+        QVERIFY(gain->isEnabled() && mix->isEnabled());
+        QTRY_COMPARE(gain->opacity(), 0.55);
+        QTRY_COMPARE(mix->opacity(), 0.55);
         QVERIFY(!find(s.view, QStringLiteral("sidechainButton"))->property("checked").toBool());
+        auto* knob = qvariant_cast<KnobItem*>(qvariant_cast<QQuickItem*>(gain->property("knob"))->property("knob"));
+        QVERIFY(knob);
+        const int before = undo()->index();
+        wheel(centerOf(knob), 120);
+        QVERIFY2(value("sc_gain") > 0.0, qPrintable(QString::number(value("sc_gain"))));
+        QVERIFY(oneStepAfter(before));
+        // Their readouts are whole, the longest too ("-70.0 dB", the least S/C Gain).
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("sc_gain"), -70.0);
+        for (QQuickItem* cell : {gain, mix}) {
+            const QList<QQuickItem*> children = cell->childItems();
+            QQuickItem* readout = children.last();
+            QVERIFY(!readout->property("text").toString().isEmpty());
+            QVERIFY2(!readout->property("truncated").toBool(), qPrintable(readout->property("text").toString()));
+        }
+        QCOMPARE(qvariant_cast<QQuickItem*>(mix->property("knob"))->property("bipolar").toBool(), false);
+        QVERIFY(qvariant_cast<QQuickItem*>(find(s.view, QStringLiteral("output"))->property("knob"))
+                    ->property("bipolar")
+                    .toBool());  // (±24 dB: drawn from the middle)
 
         const QString other = audioTrackWith(tone(60.0, kSampleRate), fileName("kick"), 1.0);
         QVERIFY(!other.isEmpty());
         QVERIFY(editor()->trySetDeviceSidechain(s.track, s.device, other));
         QVERIFY(s.graph->sidechained());
-        QVERIFY(find(s.view, QStringLiteral("scGain"))->isEnabled());
-        QVERIFY(find(s.view, QStringLiteral("scMix"))->isEnabled());
+        QTRY_COMPARE(gain->opacity(), 1.0);
+        QTRY_COMPARE(mix->opacity(), 1.0);
         QVERIFY(find(s.view, QStringLiteral("sidechainButton"))->property("checked").toBool());
 
-        QSignalSpy asked(s.view, SIGNAL(sidechainMenuRequested()));
-        click(find(s.view, QStringLiteral("sidechainButton")));
+        // The button asks for the sidechain's menu under itself.
+        QSignalSpy asked(s.view, SIGNAL(sidechainMenuRequested(QVariant)));
+        QQuickItem* chooser = find(s.view, QStringLiteral("sidechainButton"));
+        click(chooser);
         QCOMPARE(asked.count(), 1);
+        QCOMPARE(qvariant_cast<QQuickItem*>(asked.first().first()), chooser);
+        // Its text clear of its borders: the small role's padding, and room for the text within it (a pixel's
+        // overhang into the padding at most).
+        const double padding =
+            chooser->property("leftPadding").toDouble() + chooser->property("rightPadding").toDouble();
+        QVERIFY(chooser->property("leftPadding").toDouble() >= 7 && chooser->property("rightPadding").toDouble() >= 7);
+        QVERIFY2(chooser->property("implicitContentWidth").toDouble() <= chooser->width() - padding + 1.0,
+                 qPrintable(QString::number(chooser->property("implicitContentWidth").toDouble())));
+
+        // Listen: a switch (not automatable), one step; the engine has it.
+        const int listenBefore = undo()->index();
+        click(button(s.view, "scListen"));
+        QCOMPARE(value("sc_listen"), 1.0);
+        QVERIFY(oneStepAfter(listenBefore));
+        QVERIFY(find(s.view, QStringLiteral("scListen"))->property("lit").toBool());
+        const auto id = bridge()->engineDeviceId(s.track, s.device);
+        QVERIFY(id);
+        QCOMPARE(engine_->processorParam(*id, engine_->processorParamIndex(*id, "sc_listen")), 1.f);
     }
 
     void ratioTexts() {
@@ -1014,8 +1173,9 @@ private Q_SLOTS:
         QTest::qWait(30);
         save(grab(), QStringLiteral("multiband.png"));
 
-        // High off, the Below fields, the Mid Above handle dragged (its value over it).
-        editor()->setDeviceParam(s.track, s.device, QStringLiteral("high_on"), 0.0);
+        // High off, Low bypassed, the Below fields, the Mid Above handle dragged (its value over it).
+        editor()->setDeviceParams(s.track, s.device,
+                                  {{QStringLiteral("high_on"), 0.0}, {QStringLiteral("low_active"), 0.0}});
         click(find(s.view, QStringLiteral("pageBelow")));
         ticks(30);
         QTest::qWait(200);  // (the fields' fades)
@@ -1035,6 +1195,7 @@ private Q_SLOTS:
         QVERIFY(editor()->trySetDeviceSidechain(s.track, s.device, kick));
         editor()->setDeviceParams(s.track, s.device,
                                   {{QStringLiteral("high_on"), 1.0},
+                                   {QStringLiteral("low_active"), 1.0},
                                    {QStringLiteral("soft_knee"), 1.0},
                                    {QStringLiteral("low_below"), -60.0},
                                    {QStringLiteral("low_below_ratio"), 0.4}});

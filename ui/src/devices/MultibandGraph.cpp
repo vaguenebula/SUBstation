@@ -19,11 +19,6 @@
 
 namespace sub::ui {
 
-using sub::app::kMultibandMaxRatio;
-using sub::app::kMultibandMaxThresholdDb;
-using sub::app::kMultibandMinRatio;
-using sub::app::kMultibandMinThresholdDb;
-
 namespace {
 
 const QColor kBoost(0x4f, 0xd1, 0xc5);  // a region pulled up (teal); pulled down is the accent (orange)
@@ -40,7 +35,9 @@ constexpr double kOffOpacity = 0.35, kMutedOpacity = 0.5;
 
 double round1(double value) { return std::round(value * 10.0) / 10.0; }
 
-double clampThreshold(double db) { return std::clamp(db, kMultibandMinThresholdDb, kMultibandMaxThresholdDb); }
+double clampThreshold(double db) {
+    return std::clamp(db, sub::app::multibandMinThresholdDb(), sub::app::multibandMaxThresholdDb());
+}
 
 // The texts the graph draws, with a true minus sign.
 QString typeset(QString text) { return text.replace(QLatin1Char('-'), QChar(0x2212)); }
@@ -70,13 +67,6 @@ QColor sideColor(int side, double ratio) {
         return Theme::kTextDim;
     const bool down = side == MultibandGraph::Above ? ratio > 1.0 : ratio < 1.0;
     return down ? Theme::kAccent : kBoost;
-}
-
-QColor mixed(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    return QColor::fromRgbF(
-        float(a.redF() + (b.redF() - a.redF()) * t), float(a.greenF() + (b.greenF() - a.greenF()) * t),
-        float(a.blueF() + (b.blueF() - a.blueF()) * t), float(a.alphaF() + (b.alphaF() - a.alphaF()) * t));
 }
 
 // A rounded label behind `text`, `rect` its box.
@@ -167,7 +157,7 @@ std::pair<double, double> MultibandGraph::changeSpan(int band) const {
 
 std::optional<double> MultibandGraph::targetMarkerDb(int band) const {
     const BandView& view = bands_[index(band)];
-    if (view.inRead <= kFloorDb)
+    if (view.inRead <= kFloorDb || !view.active)
         return std::nullopt;
     // (By the readings, not the meters: they fall on after the audio stops.)
     const double target = staticOutDb(band, view.inRead);
@@ -202,6 +192,7 @@ void MultibandGraph::sync() {
         s.belowRatio = value(paramId(b, "below_ratio"));
         s.solo = value(paramId(b, "solo")) >= 0.5;
         view.on = b == Mid || value(paramId(b, "on")) >= 0.5;
+        view.active = value(paramId(b, "active")) >= 0.5;
     }
     amount_ = value(QStringLiteral("amount"));
     softKnee_ = value(QStringLiteral("soft_knee")) >= 0.5;
@@ -236,11 +227,11 @@ void MultibandGraph::setTargets() {
     for (int b = 0; b < kBands; ++b) {
         BandView& view = bands_[std::size_t(b)];
         const bool solo = b == Mid || !view.on ? mid.settings.solo : view.settings.solo;
-        view.opacity.target = !view.on ? kOffOpacity : (!anySolo || solo ? 1.0 : kMutedOpacity);
+        view.opacity.target = !view.on || !view.active ? kOffOpacity : (!anySolo || solo ? 1.0 : kMutedOpacity);
         view.offLabel.target = !view.on && bubble.isValid() && bubble.intersects(offLabelRect(b)) ? 0.0 : 1.0;
         // Working by the level the display last reported (held a while, then the floor), not by the falling
         // meter: once the audio stops, a meter passing through a Below region isn't the band being lifted.
-        const bool sounding = view.on && view.inRead > kFloorDb + 0.5;
+        const bool sounding = view.on && view.active && view.inRead > kFloorDb + 0.5;
         for (int side : {Below, Above}) {
             const bool working = sounding && std::abs(sideGainDb(b, side, view.inRead)) >= 0.1;
             view.glow[side].target = working ? 1.0 : 0.0;
@@ -274,6 +265,7 @@ double MultibandGraph::lettingGoGain(const BandView& view) {
 
 void MultibandGraph::refreshDisplays() {
     static const char* const kKinds[3] = {"in", "out", "gain"};
+    const double dt = tickSeconds();
     std::array<std::array<std::vector<float>, 3>, kBands> read;
     bool any = false;
     for (int b = 0; b < kBands; ++b) {  // (all nine, so they stay in step)
@@ -282,10 +274,11 @@ void MultibandGraph::refreshDisplays() {
             any = any || !read[std::size_t(b)][std::size_t(k)].empty();
         }
     }
-    quietTicks_ = any ? 0 : quietTicks_ + 1;
-    const bool lettingGo = !any && quietTicks_ > kHoldTicks;  // the audio stopped (or the device)
+    quietSeconds_ = any ? 0.0 : quietSeconds_ + dt;
+    const bool lettingGo = !any && quietSeconds_ > kHoldSeconds;  // the audio stopped (or the device)
     // Only the recent values: a buffer's worth arrives at once, but after a stall the backlog is old audio.
-    const auto latest = std::size_t(std::max(1.0, std::ceil(kRecentSpan * sampleRate() / kMeterSamples)));
+    const auto latest =
+        std::size_t(std::max(1.0, std::ceil(kRecentSpan * sampleRate() / sub::app::multibandDisplaySamples())));
     bool moved = false;
     for (int b = 0; b < kBands; ++b) {
         BandView& view = bands_[std::size_t(b)];
@@ -301,24 +294,24 @@ void MultibandGraph::refreshDisplays() {
             view.inRead = view.outRead = kFloorDb;
         }
         const MeterBallistics in = view.in, out = view.out;
-        view.in.update(view.inRead, kTick, 36.0, 0.8, kFloorDb);
-        view.out.update(view.outRead, kTick, 36.0, 1.0, kFloorDb);
+        view.in.update(view.inRead, dt, 36.0, 0.8, kFloorDb);
+        view.out.update(view.outRead, dt, 36.0, 1.0, kFloorDb);
         moved = moved || in.level != view.in.level || in.peak != view.in.peak || out.level != view.out.level ||
                 out.peak != view.out.peak;
         view.gain.target = lettingGo ? lettingGoGain(view) : view.gainRead;
-        moved = view.gain.step(easeFraction(kTick, kGainSeconds), 1e-3) || moved;
+        moved = view.gain.step(easeFraction(dt, kGainSeconds), 1e-3) || moved;
     }
     setTargets();
     for (BandView& view : bands_) {
         for (int side : {Below, Above}) {
             Eased& glow = view.glow[side];
             const double seconds = glow.target > glow.value ? kGlowUpSeconds : kGlowDownSeconds;
-            moved = glow.step(easeFraction(kTick, seconds), 1e-3) || moved;
-            moved = view.handleLight[side].step(easeFraction(kTick, kLightSeconds), 1e-3) || moved;
-            moved = view.blockLight[side].step(easeFraction(kTick, kLightSeconds), 1e-3) || moved;
+            moved = glow.step(easeFraction(dt, seconds), 1e-3) || moved;
+            moved = view.handleLight[side].step(easeFraction(dt, kLightSeconds), 1e-3) || moved;
+            moved = view.blockLight[side].step(easeFraction(dt, kLightSeconds), 1e-3) || moved;
         }
-        moved = view.opacity.step(easeFraction(kTick, kLaneSeconds), 1e-3) || moved;
-        moved = view.offLabel.step(easeFraction(kTick, kLightSeconds), 1e-3) || moved;
+        moved = view.opacity.step(easeFraction(dt, kLaneSeconds), 1e-3) || moved;
+        moved = view.offLabel.step(easeFraction(dt, kLightSeconds), 1e-3) || moved;
     }
     animating_ = moved;
     if (moved) {
@@ -472,8 +465,8 @@ void MultibandGraph::writeThresholds(const Drag& drag, double deltaDb, const QSt
         const Settings& s = drag.start[index(b)];
         double above = s.above, below = s.below;
         if (drag.both) {  // the pair moves, keeping its gap, and stops at either end
-            const double delta = std::clamp(deltaDb, kMultibandMinThresholdDb - std::min(above, below),
-                                            kMultibandMaxThresholdDb - std::max(above, below));
+            const double delta = std::clamp(deltaDb, sub::app::multibandMinThresholdDb() - std::min(above, below),
+                                            sub::app::multibandMaxThresholdDb() - std::max(above, below));
             above = clampThreshold(round1(above + delta));
             below = clampThreshold(round1(below + delta));
         } else if (side == Above) {  // pushing the other along: Above never under Below
@@ -495,11 +488,12 @@ void MultibandGraph::writeThresholds(const Drag& drag, double deltaDb, const QSt
 }
 
 double MultibandGraph::ratioStep(double ratio) {
-    ratio = std::clamp(ratio, kMultibandMinRatio, kMultibandMaxRatio);
+    const double least = sub::app::multibandMinRatio(), most = sub::app::multibandMaxRatio();
+    ratio = std::clamp(ratio, least, most);
     if (std::abs(ratio - 1.0) <= kRatioDetent)
         return 1.0;
     const double scale = std::pow(10.0, 2.0 - std::floor(std::log10(ratio)));  // 3 significant digits
-    return std::clamp(std::round(ratio * scale) / scale, kMultibandMinRatio, kMultibandMaxRatio);
+    return std::clamp(std::round(ratio * scale) / scale, least, most);
 }
 
 void MultibandGraph::writeRatios(const Drag& drag, double factor, const QString& gesture) {
@@ -694,11 +688,11 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
         if (glow > 0.01)
             drawGlowPolyline(p, {QPointF(x, l.top() + 2), QPointF(x, l.bottom() - 2)},
                              withAlpha(color, int(140 * glow)), 2.0);
-        const QColor line = mixed(color, Theme::kText, 0.5 * light);
+        const QColor line = mixColor(color, Theme::kText, 0.5 * light);
         const double w = 2.0 + light;
         p.fillRect(QRectF(x - w / 2, l.top() + 1, w, l.height() - 2), line);
         const QRectF grip(x - 2.0 - light / 2, ym - 6.0, 4.0 + light, 12.0);
-        p.fillRoundedRect(grip, 1.5, 1.5, mixed(color, Theme::kText, 0.35 + 0.45 * light));
+        p.fillRoundedRect(grip, 1.5, 1.5, mixColor(color, Theme::kText, 0.35 + 0.45 * light));
         p.drawRoundedRect(grip, 1.5, 1.5, withAlpha(Theme::kMeterBg, 200), 1.0);
     }
 
@@ -743,7 +737,7 @@ double MultibandGraph::offLabelOpacity(int band) const {
 QString MultibandGraph::gainText(int band) const {
     const BandView& view = bands_[index(band)];
     const double gain = view.gain.value;
-    if (!view.on || (view.in.level <= kFloorDb && std::abs(gain) < 0.05))
+    if (!view.on || !view.active || (view.in.level <= kFloorDb && std::abs(gain) < 0.05))
         return {};
     if (std::abs(gain) < 0.05)
         return QStringLiteral("0.0");

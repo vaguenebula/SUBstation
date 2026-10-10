@@ -8,18 +8,21 @@
 // ratio is from 1:1. The band's level before the dynamics is a thin bar, after
 // them a thick one in the meters' colours, with the gain change between the two
 // in orange or teal, a marker where the static curve is taking it, and the
-// change in figures. Drag a block's edge for its threshold, inside a block up or
-// down for its ratio (the block's level follows the mouse): one undo step per
-// gesture. Ctrl: every band at once; Alt: both thresholds of a band together;
-// Shift: finely. Double-click resets; the wheel steps (a run of it is one
-// gesture). Ctrl+Alt and Shift+wheel are the device chain's (it scrolls).
+// change in figures. A band bypassed by its activator shows its level, dimmed,
+// and nothing working; one switched off says the Mid band has it. Drag a
+// block's edge for its threshold, inside a block up or down for its ratio (the
+// block's level follows the mouse): one undo step per gesture. Ctrl: every
+// band at once; Alt: both thresholds of a band together; Shift: finely.
+// Double-click resets; the wheel steps (a run of it is one gesture). Ctrl+Alt
+// and Shift+wheel are the device chain's (it scrolls).
 //
 // It reads the device's displays (`<band>_in`, `_out`, `_gain`) each display
 // tick, the recent ones only (a stall's backlog is old audio), and eases
-// everything it draws there: meters with ballistics, the gain change (once the
-// audio stops, going down with the meters), each side's glow while it works,
-// highlights under the mouse, lanes dimmed when switched off or muted by a solo.
-// Once all of it has settled, it stops repainting.
+// everything it draws there by the time since the last tick: meters with
+// ballistics, the gain change (once the audio stops, going down with the
+// meters), each side's glow while it works, highlights under the mouse, lanes
+// dimmed when switched off, bypassed or muted by a solo. Once all of it has
+// settled, it stops repainting.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
@@ -50,14 +53,12 @@ public:
     static constexpr double kRatioPixels = 30.0;  // dragged this far, a ratio doubles (or halves)
     static constexpr double kFineFactor = 0.2;    // with Shift
     static constexpr double kRatioDetent = 0.03;  // within 3 % of 1:1 a dragged ratio is 1:1
-    static constexpr double kWheelGesture = 0.6;  // s: wheel notches this close are one undo step
+    static constexpr double kWheelGesture = 0.4;  // s: wheel notches this close are one undo step (as the EQ's)
     static constexpr double kWheelStill = 5.0;    // px: the mouse moved further between notches ends a run
-    static constexpr double kTick = 0.016;        // s per display tick, for the animation
-    static constexpr int kHoldTicks = 15;         // ticks without values before the meters let go
+    static constexpr double kHoldSeconds = 0.24;  // without values this long, the meters let go
     // s of display values a tick looks at, the latest: a whole buffer's arrive at once (2048 samples at 44.1 kHz,
     // 46 ms), and older ones are a stall's backlog (a hidden editor shown again, an offline render).
     static constexpr double kRecentSpan = 0.1;
-    static constexpr int kMeterSamples = 256;     // audio per display value (the device's)
 
     explicit MultibandGraph(QQuickItem* parent = nullptr);
 
@@ -82,7 +83,8 @@ public:
     double gainTarget(int band) const { return bands_[index(band)].gain.target; }  // the latest read, dB
     // Where a steady level `inDb` comes out of the band's dynamics: inDb + multibandGainDb(its settings).
     double staticOutDb(int band, double inDb) const;
-    bool bandOn(int band) const { return bands_[index(band)].on; }  // Mid always; High and Low their switch
+    bool bandOn(int band) const { return bands_[index(band)].on; }  // Mid always; High and Low their split switch
+    bool bandActive(int band) const { return bands_[index(band)].active; }  // its activator
     // The gain change drawn on a lane's bar, dB: from where the level would be without it (never past the level
     // before it: the out meter stops at the floor, a change can go on far under it) to the out level.
     std::pair<double, double> changeSpan(int band) const;
@@ -144,7 +146,8 @@ private:
     };
     struct BandView {
         Settings settings;
-        bool on = true;
+        bool on = true;      // split off (Mid always is)
+        bool active = true;  // its activator: off, the band is bypassed
         MeterBallistics in, out;
         Eased gain;
         // The displays' latest: in and out held a while, then the floor; the gain kept (lettingGoGain's).
@@ -152,7 +155,7 @@ private:
         std::array<Eased, 2> glow;         // [Below, Above]: the side is working
         std::array<Eased, 2> handleLight;  // under the mouse or dragged
         std::array<Eased, 2> blockLight;
-        Eased opacity;  // 1, 0.5 (muted by a solo), 0.35 (switched off)
+        Eased opacity;  // 1, 0.5 (muted by a solo), 0.35 (switched off or bypassed)
         Eased offLabel;  // 1; 0 while a drag's bubble covers it
     };
     // What the mouse is on: a threshold's handle or inside a block.
@@ -199,7 +202,7 @@ private:
     double amount_ = 100.0;  // %
     bool softKnee_ = false;
     bool sidechained_ = false;
-    int quietTicks_ = 0;     // ticks in a row without display values
+    double quietSeconds_ = 0.0;  // since the displays last had values
     bool animating_ = false;
     bool snap_ = true;  // the next sync shows the device as it is (no easing in)
 

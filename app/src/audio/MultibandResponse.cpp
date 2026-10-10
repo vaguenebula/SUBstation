@@ -12,9 +12,11 @@ namespace sub::app {
 
 namespace mb = sub::multiband;
 
-static_assert(kMultibandMinThresholdDb == double(mb::kMinThresholdDb) &&
-              kMultibandMaxThresholdDb == double(mb::kMaxThresholdDb));
-static_assert(kMultibandMinRatio == double(mb::kMinRatio) && kMultibandMaxRatio == double(mb::kMaxRatio));
+double multibandMinThresholdDb() { return mb::kMinThresholdDb; }
+double multibandMaxThresholdDb() { return mb::kMaxThresholdDb; }
+double multibandMinRatio() { return mb::kMinRatio; }
+double multibandMaxRatio() { return mb::kMaxRatio; }
+int multibandDisplaySamples() { return mb::kDisplaySamples; }
 
 double multibandGainDb(double levelDb, double above, double aboveRatio, double below, double belowRatio,
                        bool softKnee, double amountPercent) {
@@ -44,7 +46,7 @@ double multibandParseRatio(const QString& text) {
         if (a > 0.0 && b > 0.0)
             ratio = a == 1.0 ? b : a / b;  // Live's "1:R"; otherwise in to out, as "4:1"
     }
-    return ratio > 0.0 ? std::clamp(ratio, kMultibandMinRatio, kMultibandMaxRatio) : 0.0;
+    return ratio > 0.0 ? std::clamp(ratio, double(mb::kMinRatio), double(mb::kMaxRatio)) : 0.0;
 }
 
 std::optional<double> multibandParseMs(const QString& text) {

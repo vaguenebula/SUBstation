@@ -86,7 +86,7 @@ so nothing above it has `#ifdef`s for one. This page is the map; each part has i
   headers it needs besides: `builtin/BuiltinRegistry.h` (the built-in devices), `Processor.h` (`ParamInfo`),
   `AudioSource.h`, `RenderJob.h`, `AudioDevice.h` (the default driver), `builtin/GateDesign.h` (the Gate's key EQ
   curve and gain), `builtin/LimiterDesign.h` (the Limiter's line and Soft Clip's band), `builtin/MultibandDesign.h`
-  (Multiband Dynamics' gain law), `builtin/SpectralDesign.h` (the Spectral Compressor's threshold, Below and Focus),
+  (Multiband Dynamics' gain law, ranges and display rate), `builtin/SpectralDesign.h` (the Spectral Compressor's threshold, Below and Focus),
   `builtin/SaturatorDesign.h` (the Saturator's curve and Color), `builtin/AmpDesign.h` (the Amp's tone and transfer
   curves), `builtin/ErosionDesign.h` (Erosion's noise band and excursion), `builtin/ChorusDesign.h` (the
   Chorus-Ensemble's voices), `builtin/PhaserDesign.h` (the Phaser-Flanger's response and LFO shapes),

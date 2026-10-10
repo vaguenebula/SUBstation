@@ -29,8 +29,8 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/GateDesign.h](../../engine/src/builtin/GateDesign.h) | The Gate's maths (`gate::floorGain`, `closeDb`, `shape`, `pass`, `gain`, `lookaheadSamples`, `keyFilter`, `keyFilterDb`, the key EQ's types and ranges), shared with the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h) for the editor's meter and key EQ curve |
 | [builtin/devices/Limiter.cpp](../../engine/src/builtin/devices/Limiter.cpp) | Limiter: brick-wall lookahead limiting, Soft Clip, True Peak, L/R or M/S with Link, Maximize, its displays |
 | [builtin/LimiterDesign.h](../../engine/src/builtin/LimiterDesign.h) | The Limiter's scales, Soft Clip's knee, the M/S ceiling, the true-peak interpolator and its parabola (`limiter::scales`, `knee`, `shape`, `sharedCeiling`, `truePeakPhases`, `refinedPeak`), shared with the application layer's `LimiterResponse.h` for the editor |
-| [builtin/devices/Multiband.cpp](../../engine/src/builtin/devices/Multiband.cpp) | Multiband Dynamics: a three-way Linkwitz-Riley split, Above and Below per band, Peak and RMS detectors, band switches and solos, a per-band sidechain, glides on a 32-sample grid, displays |
-| [builtin/MultibandDesign.h](../../engine/src/builtin/MultibandDesign.h) | Multiband Dynamics' gain law (`multiband::aboveGainDb`, `belowGainDb`, `bandGainDb`, `staticGainDb`) and detector windows (`windowSeconds`), shared with the application layer's `multibandGainDb()` for the editor |
+| [builtin/devices/Multiband.cpp](../../engine/src/builtin/devices/Multiband.cpp) | Multiband Dynamics: a three-way Linkwitz-Riley split, Above and Below per band, Peak and RMS detectors, split switches, activators and solos, a per-band sidechain and Listen, glides on a 32-sample grid, displays |
+| [builtin/MultibandDesign.h](../../engine/src/builtin/MultibandDesign.h) | Multiband Dynamics' gain law (`multiband::aboveGainDb`, `belowGainDb`, `bandGainDb`, `staticGainDb`), ranges, display rate and detector windows (`windowSeconds`), shared with the application layer's `MultibandResponse.h` for the editor |
 | [builtin/devices/Spectral.cpp](../../engine/src/builtin/devices/Spectral.cpp) | Spectral Compressor: an STFT (Hann, 4x overlap, each frame's work spread over the hop after it, latency N + H), per-bin levels smoothed across frequency and followed over time, Stereo Link, the gain computer both ways with the Focus band, Delta, sidechain keying, displays |
 | [builtin/SpectralDesign.h](../../engine/src/builtin/SpectralDesign.h) | The Spectral Compressor's maths (`spectral::frameSize`, `latencySamples`, `calibrationDb`, `pinkDb`, `thresholdDb`, `belowDb`, `focusWeight`, `smoothingOctaves`, `gainDb`, `displayFrequency`), shared with the application layer's `SpectralResponse.h` for the editor |
 | [builtin/devices/Saturator.cpp](../../engine/src/builtin/devices/Saturator.cpp) | Saturator: eight curves, Color's emphasis and its inverse, Post Clip on the dry/wet blend, DC, 4x oversampling of all of it |
@@ -658,33 +658,35 @@ After Live's Multiband Dynamics: up to three bands, each with two thresholds, *A
 each, so one band can be compressed and expanded, downwards and upwards, at once
 ([MultibandDesign.h](../../engine/src/builtin/MultibandDesign.h)). Over The Top is one setting of it. A sidechain
 keys each band by the same band of the key. Its fresh state (every ratio 1:1) does nothing: the bands summed, an
-all-pass of the input.
+all-pass of the input. Ranges are Live's (its set files' parameters).
 
 | id | Name | Unit | Range | Default |
 |---|---|---|---|---|
-| `xover_low` | Low-Mid Crossover | Hz | 30..18000, log | 120 |
-| `xover_high` | Mid-High Crossover | Hz | 30..18000, log | 2500 |
-| `low_on` | Low Band On | | Off, On | On |
-| `high_on` | High Band On | | Off, On | On |
+| `xover_low` | Low-Mid Crossover | Hz | 30..3000, log | 120 |
+| `xover_high` | Mid-High Crossover | Hz | 300..15000, log | 2500 |
+| `low_on` | Low Band On | | Off, On (not automatable, as Live's split switches) | On |
+| `high_on` | High Band On | | Off, On (not automatable) | On |
+| `<band>_active` | `<Band>` Activator | | Off, On | On |
 | `<band>_in` | `<Band>` Input | dB | -24..24 | 0 |
 | `<band>_out` | `<Band>` Output | dB | -24..24 | 0 |
 | `<band>_above` | `<Band>` Above Threshold | dB | -80..0 | -20 |
 | `<band>_above_ratio` | `<Band>` Above Ratio | ratio | 0.25..100, log | 1 |
 | `<band>_below` | `<Band>` Below Threshold | dB | -80..0 | -40 |
 | `<band>_below_ratio` | `<Band>` Below Ratio | ratio | 0.25..100, log | 1 |
-| `<band>_attack` | `<Band>` Attack | ms | 0.1..1000, log | 10 |
-| `<band>_release` | `<Band>` Release | ms | 1..3000, log | 100 |
+| `<band>_attack` | `<Band>` Attack | ms | 0.1..5000, log | 10 |
+| `<band>_release` | `<Band>` Release | ms | 0.1..5000, log | 100 |
 | `<band>_solo` | `<Band>` Solo | | Off, On (not automatable, as Live's) | Off |
 | `amount` | Amount | % | 0..100 | 100 |
 | `time` | Time | % | 10..1000, log | 100 |
 | `output` | Output | dB | -24..24 | 0 |
 | `soft_knee` | Soft Knee | | Off, On | Off |
 | `mode` | Peak/RMS | | Peak, RMS | RMS |
-| `sc_gain` | Sidechain Gain | dB | -24..24 | 0 |
-| `sc_mix` | Sidechain Mix | % | 0..100 | 100 |
+| `sc_gain` | S/C Gain | dB | -70..24 | 0 |
+| `sc_mix` | S/C Mix | % | 0..100 | 100 |
+| `sc_listen` | S/C Listen | | Off, On (not automatable, as Live's) | Off |
 
-The nine `<band>_...` rows come three times, for `low`, `mid` and `high` (named "Low Input", "Mid Input", "High
-Input"...), in that order after `high_on`: band b's field f is parameter 4 + 9b + f. A ratio R is stored as the
+The ten `<band>_...` rows come three times, for `low`, `mid` and `high` (named "Low Activator", "Mid Input", "High
+Input"...), in that order after `high_on`: band b's field f is parameter 4 + 10b + f. A ratio R is stored as the
 distance past the threshold the level change divides (at 4, a level 4 dB past it comes out 1 dB past it), and the
 `ratio` unit prints it as Live does, "1:R" either side of 1:1, to three significant digits (`formatValue`:
 "1:4.00", "1:66.7", "1:100"; under 1 "1:0.500", "1:0.250"). So Live's numbers mean the same here: its "1 : 66.7"
@@ -695,11 +697,16 @@ distance past the threshold the level change divides (at 4, a level 4 dB past it
   flat (within 0.01 dB) whatever their gains are when they are equal. The dry signal is never mixed in, so nothing
   comb-filters against the crossovers' phase. A Low-Mid at or above the Mid-High splits both there: the mid band
   narrows to a band around it (peaking at −12 dB), and the sum stays flat.
-- **Low and High switch off as Live's do**: the split doesn't change (nor the phase), but a band switched off takes
-  the mid band's whole chain (Input, dynamics, Output) and its signal feeds the mid band's detector, so with both off
-  the mid band shapes the whole spectrum as one band. The switches crossfade the gains; every band's detector, gain
-  computer and smoothing keep running, switched off or not, so a band switched back on picks up where its own level
-  is. Solo: only the soloed bands are heard; a band switched off can't be soloed and follows the mid band's solo.
+- **Low and High, the split switches, switch the outer bands off as Live's do**: the split doesn't change (nor the
+  phase), but a band switched off takes the mid band's whole chain (Input, dynamics, Output) and its signal feeds the
+  mid band's detector, so with both off the mid band shapes the whole spectrum as one band. The switches crossfade
+  the gains; every band's detector, gain computer and smoothing keep running, switched off or not, so a band
+  switched back on picks up where its own level is. Not automatable, as Live's. Solo: only the soloed bands are
+  heard; a band switched off can't be soloed and follows the mid band's solo.
+- **Each band's activator** (Live's band buttons, the Mid band's too) bypasses it: its Input, dynamics and Output
+  glide to unity (its whole gain in dB scaled by the activator's glide), while its split stays, so its frequencies
+  are its own, not another band's to shape; the device's Output still applies. A band switched off takes the mid
+  band's gains, so with the Mid band bypassed nothing shapes it either. Its detector runs on.
 - **Detectors**, linked stereo (the louder channel; one channel: that one), per band, in dB after the band's Input
   (Input drives the detector as it drives the audio, so the thresholds stay where the level is drawn):
   - Peak: the largest |x| over a window of the band's lowest period (`multiband::windowSeconds`: 25 ms for the low
@@ -724,32 +731,39 @@ distance past the threshold the level change divides (at 4, a level 4 dB past it
   Time scales every band's attack and release (10..1000 %).
 - **Every control glides**: two one-poles of 5 ms in a row, so a jump eases in and out (a linear ramp's kinks show
   on a band's share of a tone), within 1 % after about 33 ms: thresholds, ratios (as their slopes), gains, Amount,
-  Output, Sidechain Gain and Mix, Soft Knee (the knee's width), Peak/RMS, the band switches, solos (each band's
-  audibility) and the sidechain's connection. Crossovers glide in log, a step per 32 samples, each crossover's
+  Output, S/C Gain and Mix, Listen, Soft Knee (the knee's width), Peak/RMS, the band switches and activators, solos
+  (each band's audibility) and the sidechain's connection (`dsp::Glide`, in double, a thin `Control` holding each
+  one's target and its value as a float for the loop). Crossovers glide in log, a step per 32 samples, each crossover's
   `g = tan(πf/sr)` interpolated sample by sample between the steps and its coefficients remade while it moves; the
   windows follow per step. Attack, release and Time make new coefficients per stretch (a time constant changing
   can't click). Only glides still moving are stepped (in groups: the device's controls, and each band's), so a
   device left alone does no smoothing work. The 32-sample grid runs across `render()` calls, so the output and the
   displays don't depend on where automation cuts a block (bit-identical in blocks of 1, 13, 256 and 1024).
-- **The sidechain** (`hasSidechain()`; Live 9's): the key, times Sidechain Gain, goes through a split of its own, so
-  each band is keyed by the same band of the key (a kick keys the low band, a vocal the mid). Sidechain Mix blends
-  what each detector hears from the device's own band (0 %) to the key's (100 %); at 0 % the output is exactly the
-  unkeyed one. One main channel: the key is the mean of its two. Connected but silent (solo leaving its source out):
-  the key is silence. The key's split runs only while some of the key is heard (the sidechain connected, or fading
-  in or out, and Sidechain Mix over 0 %: at 0 % it costs nothing), and is cleared once none is, so a key heard again
-  starts from silence. Its connection glides, but after a `reset()` the
-  first `render()` takes it as it is (the renderer sets the flag after resetting, and a reset has cleared every
-  state, so nothing can click): an offline render after a sidechain was removed starts unkeyed.
-- **Denormals and broken input**: on the 32-sample grid the crossovers' states (and the key's) below 1e-20 are
-  flushed to 0, mean squares below 1e-30 and gain changes below 1e-6 dB, so silence rings out to exact zeros; the
-  same flush clears states that aren't finite, so a NaN or infinity let in by a broken input is gone once the input
-  is finite again (an infinite level compresses fully and lets go at the release time), rather than kept for good.
+- **The sidechain** (`hasSidechain()`; Live 9's): the key, times S/C Gain, goes through a split of its own, so each
+  band is keyed by the same band of the key (a kick keys the low band, a vocal the mid). S/C Mix blends what each
+  detector hears from the device's own band (0 %) to the key's (100 %); at 0 % the output is exactly the unkeyed
+  one. One main channel: the key is the mean of its two. Connected but silent (solo leaving its source out): the key
+  is silence. A key sample that isn't audio (NaN, infinity, beyond `BuiltinProcessor::kMaxInput`) is taken as
+  silence where it is read: the input is cleaned by `process()`, the key isn't (it is the engine's buffer). The
+  key's split runs only while some of the key is heard (the sidechain connected, or fading in or out, and S/C Mix
+  over 0 %: at 0 % it costs nothing), and is cleared once none is, so a key heard again starts from silence. Its
+  connection glides, but after a `reset()` the first `render()` takes it as it is (the renderer sets the flag after
+  resetting, and a reset has cleared every state, so nothing can click): an offline render after a sidechain was
+  removed starts unkeyed.
+- **Listen** (S/C Listen, as Live's headphones): the output crossfades (a glide) to what the detectors hear, the
+  three bands of the trigger summed (an all-pass of it): the key after S/C Gain, blended with the device's own input
+  by S/C Mix; without a sidechain, the input.
+- **Denormals and the loudest input**: on the 32-sample grid the crossovers' states (and the key's), the mean
+  squares and the gain changes are flushed to 0 below 1e-20 (`Crossover::flush()`, `dsp::flushTiny`), so silence
+  rings out to exact zeros. The detectors' squares are held to 1e10 (+100 dB, far over any level the bands carry):
+  the loudest input `process()` lets in, 1e30, squared would be infinite, and an infinite mean square would never
+  come down; held there, the RMS detector is back from it within about a second.
 - `reset()` clears every state and snaps every glide to the parameters; `prepare()` (a new rate) sizes the sliding
   maxima for 25 ms, works out the glides again and resets. `latencySamples()` is 0: no lookahead, as Live's (its
   latency article lists lookahead only for Compressor, Gate and Limiter). `tailSamples()`: the crossovers' ringing,
   14 time constants of the slowest Butterworth pole, `ceil(14 √2 / (2π f) · sr)` with f the lower crossover (105 ms
   at 30 Hz, 26 ms at 120 Hz); the dynamics add none.
-- **Displays**, one value per 256 samples each, all nine published together:
+- **Displays**, one value per `multiband::kDisplaySamples` (256) each, all nine published together:
 
   | id | Each value |
   |---|---|
@@ -757,14 +771,16 @@ distance past the threshold the level change divides (at 4, a level 4 dB past it
   | `low_out`, `mid_out`, `high_out` | that level plus the gain change the dynamics are applying (before the Outputs): the static curve's output for it once attack and release have settled, the largest, −90 floor |
   | `low_gain`, `mid_gain`, `high_gain` | the dynamics' gain change (dB, signed: negative a cut, positive a boost; Amount and the limits applied), the one of largest magnitude |
 
-  A band switched off (done fading) publishes −90, −90, 0 (the mid band shows what it does). With every ratio 1:1,
-  in and out are the same.
+  A band switched off (done fading) publishes −90, −90, 0 (the mid band shows what it does). A band bypassed shows
+  its level as it comes (no Input) and no change. With every ratio 1:1, in and out are the same.
 - **The shared design**: [MultibandDesign.h](../../engine/src/builtin/MultibandDesign.h) (`sub::multiband`, inline,
-  no Qt) holds the ranges, `slope`, `upwardFade`, `aboveGainDb`, `belowGainDb`, `bandGainDb`, `staticGainDb` (the
-  curve a steady level settles on) and `windowSeconds`; the device runs these very functions per sample. The
-  application layer's [app/src/audio/MultibandResponse.h](../../app/src/audio/MultibandResponse.h)
-  (`multibandGainDb`; and `multibandParseRatio`, `multibandParseMs` for typed ratios and times) wraps them for the
-  editor, so its readouts and handles are the sound.
+  no Qt) holds the ranges, the display rate (`kDisplaySamples`), `slope`, `upwardFade`, `aboveGainDb`, `belowGainDb`,
+  `bandGainDb`, `staticGainDb` (the curve a steady level settles on) and `windowSeconds`; the device runs these very
+  functions per sample. The application layer's
+  [app/src/audio/MultibandResponse.h](../../app/src/audio/MultibandResponse.h) (`multibandGainDb`; the ranges and
+  the display rate, `multibandMinThresholdDb()`... `multibandDisplaySamples()`; and `multibandParseRatio`,
+  `multibandParseMs` for typed ratios and times) hands them to the editor, so its readouts and handles are the
+  sound.
 - About 0.66-0.69 % of one core at 48 kHz stereo at the defaults, and 0.70-0.78 % with every band's ratios working,
   Soft Knee and Peak (`builtin_devices_bench`, best of three, on a 2.1 GHz Xeon; Over The Top 0.40 % there). A
   sidechain keying it brings it to about 1 % (none at Sidechain Mix 0 %, where the key's split doesn't run), and
@@ -2071,12 +2087,15 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   crossovers, Amount 0 bit for bit); each side's law (Above and Below, compressing and expanding, the +30 and −96 dB
   limits, the upward fade, both at once), the knee, Amount; attack, release and Time as Live defines them (timed on
   the displays); Peak and RMS and switching between them; Input and the Outputs; each band, switched off (into the mid
-  band) and soloed; a sidechain keying each band by its own band (Gain, Mix, silence, one channel, connected again
-  from silence, the displays reading the trigger); every control changing without a click (a 6th-difference measure,
-  against a splice); automation through the engine, to the sample; reset and new rates; silence ringing out to exact
-  zeros; a broken input's NaNs and infinities; the extremes at 44.1 and 192 kHz; one channel and linked stereo (RMS
-  reading the louder channel's power on sides that differ); the tail; the displays; its cost; and an output that
-  doesn't depend on how blocks are cut.
+  band), bypassed by its activator (its split kept, its displays showing the level as it comes) and soloed; Listen
+  (the input unkeyed; keyed, the key after S/C Gain and S/C Mix's blend); a sidechain keying each band by its own
+  band (Gain, Mix, silence, one channel, connected again from silence, the displays reading the trigger); every
+  control changing without a click (a 6th-difference measure, against a splice); automation through the engine, to
+  the sample; reset and new rates; silence ringing out to exact zeros; NaNs and infinities in the input and in the
+  key (Listen too), and the loudest input let in (1e30); the extremes at 44.1 and 192 kHz; one channel and linked
+  stereo (RMS reading the louder channel's power on sides that differ); the tail; the displays; its cost (in the
+  thread's CPU time); and an output that doesn't depend on how blocks are cut. Its device runs on
+  [harness/Standalone.h](../../tests/engine/harness/Standalone.h), with a sidechain fed a block at a time.
 - [test_spectral_engine.cpp](../../tests/engine/test_spectral_engine.cpp): its listing, the defaults gentle on pink
   noise at a mix's level, and the shared maths (frame sizes, calibration, the knee, the gain computer's curve rising
   everywhere, Below held at the threshold, the Focus's weights); its latency, the frame and a hop, at every rate and an
