@@ -424,6 +424,7 @@ void GateGraph::mousePressEvent(QMouseEvent* event) {
     // On a line: that one; anywhere else in the plot: the threshold (the figures and the meters are
     // not a control). Relative to where it was: nothing jumps.
     Line line = lineAt(pos);
+    clicked_ = line;
     if (line == Line::None) {
         if (!plot().contains(pos)) {
             event->ignore();
@@ -484,7 +485,9 @@ void GateGraph::mouseUngrabEvent() {
 void GateGraph::mouseDoubleClickEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton)
         return;
-    const Line line = lineAt(event->position());
+    // The line its first press was on, where it was drawn then: that press put the lines where their
+    // values are, so one still easing has moved since (and the other may be under the mouse now).
+    const Line line = clicked_;
     endDrag();
     if (line == Line::Threshold)
         setParams({{QStringLiteral("threshold"), defaultValue(QStringLiteral("threshold"))}}, QString(),

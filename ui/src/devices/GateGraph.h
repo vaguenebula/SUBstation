@@ -179,6 +179,7 @@ private:
     // The mouse.
     Line drag_ = Line::None;
     Line hover_ = Line::None;
+    Line clicked_ = Line::None;  // the line the last first press was on, as drawn: what a double-click resets
     QString gesture_;       // the drag's merge key
     double dragValue_ = 0;  // the dragged parameter as the drag has it (unclamped)
     double lastY_ = 0;

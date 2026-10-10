@@ -388,6 +388,20 @@ private Q_SLOTS:
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, at);
         QCOMPARE(value("return"), 3.0);
         QCOMPARE(undo()->index(), steps + 3);
+
+        // Undone, the return line eases back down from where it is drawn (Return 3's place, the threshold's
+        // line 3 dB above it): double-clicked there before it moves, Return is still what is put back, one
+        // step (the first press puts the lines where their values are; the double-click resets the line
+        // that press was on, not what is under the mouse once the lines have moved).
+        tickAway(30);
+        undo()->undo();
+        QVERIFY(value("return") > 12.0);
+        QCOMPARE(graph->returnY(), graph->yOf(-15.0));
+        at = scenePoint(graph, QPointF(plot.center().x() - 30, graph->returnY()));
+        QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, at);
+        QCOMPARE(value("return"), 3.0);
+        QCOMPARE(value("threshold"), -12.0);
+        QCOMPARE(undo()->index(), steps + 3);
     }
 
     void lineMenusAndTheStrip() {
