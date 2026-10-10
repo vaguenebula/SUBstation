@@ -577,10 +577,11 @@ private Q_SLOTS:
     }
 
     // Switched off and on again by its automation (as by hand while playing), a
-    // device doesn't click: off in the middle of a sound, it fades between its
-    // sound and its input. On again in silence, it plays nothing of what it held,
-    // and goes on as one that never heard the sound before. Switched by hand, the
-    // input passes and it comes back as it was.
+    // device doesn't click: off or on in the middle of a sound, it fades between
+    // its sound and its input (a delay's copy of the sound too, which comes out
+    // after the switch's own fade). On again in silence, it plays nothing of what
+    // it held, and goes on as one that never heard the sound before. Switched by
+    // hand, the input passes and it comes back as it was.
     void switchedOffAndOnAgainCleanly_data() { kindRows(kEffects); }
     void switchedOffAndOnAgainCleanly() {
         QFETCH(QString, kind);
@@ -597,26 +598,31 @@ private Q_SLOTS:
         const std::vector<float> on = f.beats(4);
         const size_t latency = static_cast<size_t>(f.bridge().deviceLatency(track, device));
 
-        // On, off at beat 1, on again at 2.
+        // On, off at beat 1, on again at 2; in the second tone, off at 3.25 and on again at 3.5.
         const QString key = automation::deviceOnKey(device);
         f.editor().setEnvelope(track, key, {{0.0, 1.0, 0.0}, {1.0, 1.0, 0.0}, {1.0, 0.0, 0.0}, {2.0, 0.0, 0.0},
-                                            {2.0, 1.0, 0.0}});
+                                            {2.0, 1.0, 0.0}, {3.25, 1.0, 0.0}, {3.25, 0.0, 0.0}, {3.5, 0.0, 0.0},
+                                            {3.5, 1.0, 0.0}});
         const std::vector<float> switched = f.beats(4);
         f.play(track, later);
         const std::vector<float> unheard = f.beats(4);
 
-        // Off in the sound: a fade between the device's sound and its input, no sharper than either, then
-        // its input. The switch is heard where the device's sound comes out (its lane is as late as its
-        // parameters', the latency before it): a latent device's, its latency before the beat.
+        // Off or on in the sound: a fade between the device's sound and its input, no sharper than either
+        // (over 50 ms, past the longest delay's copy of the sound). The switch is heard where the device's
+        // sound comes out (its lane is as late as its parameters', the latency before it): a latent
+        // device's, its latency before the beat.
         const size_t off = frameAt(1.0) - latency;
-        const size_t from = off - 480, to = off + 960;
-        QVERIFY2(maxDifference(on, raw, from, to) > 0.01, "the device changes the tone");
-        QVERIFY2(maxDifference(switched, on, frameAt(0.5), from) < 1e-6, "on until then");
-        const double steepest = std::max(maxStep(on, from, to), maxStep(raw, from, to));
-        QVERIFY2(maxStep(switched, from, to) <= 1.25 * steepest + 0.005,
-                 qPrintable(QStringLiteral("a step of %1, at most %2 without the switch")
-                                .arg(maxStep(switched, from, to))
-                                .arg(steepest)));
+        QVERIFY2(maxDifference(on, raw, off - 480, off + 960) > 0.01, "the device changes the tone");
+        QVERIFY2(maxDifference(switched, on, frameAt(0.5), off - 480) < 1e-6, "on until then");
+        for (const double beat : {1.0, 3.25, 3.5}) {
+            const size_t from = frameAt(beat) - latency - 480, to = frameAt(beat) - latency + 2400;
+            const double steepest = std::max(maxStep(on, from, to), maxStep(raw, from, to));
+            QVERIFY2(maxStep(switched, from, to) <= 1.25 * steepest + 0.005,
+                     qPrintable(QStringLiteral("at beat %1, a step of %2, at most %3 without the switch")
+                                    .arg(beat)
+                                    .arg(maxStep(switched, from, to))
+                                    .arg(steepest)));
+        }
         const double passed = maxDifference(switched, raw, off + 480, frameAt(1.5));
         QVERIFY2(passed < 1e-6, qPrintable(QStringLiteral("off, %1 from its input").arg(passed)));
         // On at beat 2, in silence: nothing (until the second tone, as early as the latency lets the
