@@ -34,9 +34,7 @@ public:
     static constexpr double kRangeDb = 18.0;  // above and below 0 dB
     static constexpr double kQPixels = 60.0;  // dragged up this far, the Q doubles
     static constexpr int kMinimumHeight = 36;
-    static constexpr double kFreqMin = 30.0, kFreqMax = 15000.0;  // the parameters' ranges (the engine's)
-    static constexpr double kQMin = 0.1, kQMax = 12.0;
-    static constexpr double kGainMin = -15.0, kGainMax = 15.0;
+    static constexpr int kWheelGestureMs = 400;  // wheel notches closer than this are one undo step (the EQ's)
 
     explicit GateKeyGraph(QQuickItem* parent = nullptr);
 
@@ -89,7 +87,7 @@ private:
     std::vector<double> response_;
     QMetaObject::Connection bridgeConnection_;  // the bridge's deviceChanged: a new sample rate
 
-    QElapsedTimer clock_;
+    bool synced_ = false;  // sync() has run once (the curve's colour starts as it is)
     Eased activeEase_;  // 0: off (grey) .. 1: on (the accent, filled)
     Eased hoverEase_;   // the ring round the dot
     bool hovered_ = false;

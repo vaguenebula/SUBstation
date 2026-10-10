@@ -27,7 +27,7 @@ What the user does with it: [guide/devices.md](../guide/devices.md), [guide/plug
 | [editors/DeviceEditors.qml](../../ui/qml/devices/editors/DeviceEditors.qml) | The editor registry (a singleton): `editorFor(kind)` |
 | [editors/EditorCaption.qml](../../ui/qml/devices/editors/EditorCaption.qml), [editors/EditorReadout.qml](../../ui/qml/devices/editors/EditorReadout.qml), [editors/EditorKnob.qml](../../ui/qml/devices/editors/EditorKnob.qml), [editors/DeviceParamMap.qml](../../ui/qml/devices/editors/DeviceParamMap.qml) | The editors' captions (a control's name over it) and readouts (its value under it); `EditorKnob`, a knob between the two, bound to its parameter and dimmed while disabled; `DeviceParamMap`, a `DeviceParam` per id (`get(id)`) |
 | Compressor: [CompressorEditor.qml](../../ui/qml/devices/editors/CompressorEditor.qml), [ReductionGraph](../../ui/src/devices/ReductionGraph.h) | |
-| Gate: [GateEditor.qml](../../ui/qml/devices/editors/GateEditor.qml), [GateViews.qml](../../ui/qml/devices/editors/GateViews.qml), [GateGraph](../../ui/src/devices/GateGraph.h), [GateKeyGraph](../../ui/src/devices/GateKeyGraph.h), [GateFilterIcon](../../ui/src/devices/GateFilterIcon.h), the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h) | |
+| Gate: [GateEditor.qml](../../ui/qml/devices/editors/GateEditor.qml), [GateGraph](../../ui/src/devices/GateGraph.h), [GateKeyGraph](../../ui/src/devices/GateKeyGraph.h), the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h) | |
 | Limiter: [LimiterEditor.qml](../../ui/qml/devices/editors/LimiterEditor.qml), [LimiterGraph](../../ui/src/devices/LimiterGraph.h), the application layer's [LimiterResponse.h](../../app/src/audio/LimiterResponse.h) | |
 | Multiband Dynamics: [MultibandEditor.qml](../../ui/qml/devices/editors/MultibandEditor.qml), [MultibandGraph](../../ui/src/devices/MultibandGraph.h), the application layer's [MultibandResponse.h](../../app/src/audio/MultibandResponse.h) | |
 | Spectral Compressor: [SpectralEditor.qml](../../ui/qml/devices/editors/SpectralEditor.qml), [SpectralGraph](../../ui/src/devices/SpectralGraph.h), the application layer's [SpectralResponse.h](../../app/src/audio/SpectralResponse.h) | |
@@ -369,18 +369,21 @@ The editors:
 - **Gate** ([GateEditor.qml](../../ui/qml/devices/editors/GateEditor.qml)): no pages, laid out as Ableton's Gate:
   the display ([GateGraph](../../ui/src/devices/GateGraph.h), 280 px), then Threshold, Return and Floor over
   Attack, Hold and Release (`EditorKnob`s, centred in the body's height), and beside them Flip (level with the first
-  row's knobs) and the Lookahead chooser (0, 1 or 10 ms) under its caption. Floor at its bottom reads "−inf dB" (a
+  row's knobs) and the Lookahead chooser (0, 1 or 10 ms; as wide as the knobs' column, or as its longest choice and
+  the arrow need, measured with `FontMetrics`) under its caption. Floor at its bottom reads "−inf dB" (a
   formatter of the editor's own, on the readout and the knob's tooltip). A strip down the left edge (`sidechainFold`,
   "Sidechain" reading upwards, in the accent while the key isn't the plain input) unfolds the sidechain section
   between it and the display, as Ableton's unfolds to the left of the device: its width animates (140 ms) and the
   editor's `implicitWidth` with it, the controls laid out at the full width so the clip reveals them. Which Gates
-  show it is view state, kept by device id in the `GateViews` singleton (not saved), so a frame made again keeps it.
+  show it is view state, kept by device id in `DeviceViews` ("sidechain"; not saved), so a frame made again keeps it.
   - The section: a source button (the sidechain's track name, or "No Sidechain"; a click emits
-    `sidechainMenuRequested()`, so the frame shows the device's sidechain menu), Listen (headphones), EQ, and the EQ's
-    six types in Live's order (low shelf, bell, high shelf, low-pass, band-pass, high-pass: a button each, its shape
-    drawn by [GateFilterIcon](../../ui/src/devices/GateFilterIcon.h), dimmed while the EQ is off, its parameter's menu
-    on right-click); under them Gain and Dry/Wet (dimmed without a sidechain), Freq, Q and Gain (dimmed while the EQ is
-    off; Q disabled for the shelves, Gain for the pass filters); under those the key filter's curve
+    `sidechainMenuRequested(source)`, so the frame shows the device's sidechain menu under it), Listen (headphones),
+    EQ, and the EQ's six types in Live's order (low shelf, bell, high shelf, low-pass, band-pass, high-pass: a button
+    each, its face the EQ's own `EqTypeIcon` in the accent, dimmed while the EQ is off, its parameter's menu on
+    right-click); under them Gain and Dry/Wet (dimmed without a sidechain), Freq, Q and Gain (dimmed while the EQ is
+    off; Q disabled for the shelves, Gain for the pass filters; Gain's knob bipolar, its range ±15 dB), each cell as
+    wide as its parameter's widest value needs ("-70.0 dB", "15.00 kHz", measured with `TextMetrics`, so the section is
+    254 px in the house font); under those the key filter's curve
     ([GateKeyGraph](../../ui/src/devices/GateKeyGraph.h)): its response on a 20 Hz..20 kHz log axis, ±18 dB, from the
     engine's own filter at the engine's rate (`sub::app::gateKeyFilterDb`, the application layer's wrapper of
     `sub::gate::keyFilter`, so the curve is what keys the gate), filled under it in the accent while the EQ is on and
@@ -389,10 +392,11 @@ The editors:
     step per drag; the wheel over the dot sets the Q (the bell and the pass filters; notches closer than 400 ms are one
     undo step), as the EQ's bands; a double-click puts the three back to their defaults. Which types use Gain and Q
     (`usesGain`, `usesQ`, from `sub::app::gateKeyFilterUsesGain/Q`) also enables the knobs. The dot's level is worked
-    out with the curve on the GUI thread, so `paint()` only reads members. One rule throughout: what is set for later
-    (Gain and Dry/Wet without a sidechain; the EQ's knobs, type buttons and curve while it is off) is dimmed but stays
-    settable, menus and all, as Live's greyed controls; only what the EQ's type doesn't use is disabled, and the curve's
-    dot never sets that either.
+    out with the curve on the GUI thread, so `paint()` only reads members; what the dot drags is held to the
+    parameters' ranges as the engine has them (`sub::app::gateKeyFreqRange()`, `gateKeyQRange()`, `gateKeyGainRange()`).
+    One rule throughout: what is set for later (Gain and Dry/Wet without a sidechain; the EQ's knobs, type buttons and
+    curve while it is off) is dimmed (opacity 0.55) but stays settable, menus and all, as Live's greyed controls; only
+    what the EQ's type doesn't use is disabled, and the curve's dot never sets that either.
   - `GateGraph` draws the last 2.5 s of the displays `input`, `output`, `key` and `open` (one value per 256 samples
     each, read with `readDisplayAt` into a ring per stream by absolute index, so they line up whatever a read got; a
     stream that doesn't go on from where it was, a new processor, starts the history again), newest at the right edge,
@@ -405,14 +409,17 @@ The editors:
     gate closes again (Return: a dashed orange line below it, the band between them tinted), each showing its value
     while hovered or dragged (drawn over everything else). Top left an LED and "Open"/"Closed", or "Idle" (the LED out)
     once no values have come for 0.25 s: the device switched off, the engine stopped; "Listening to the key" pulses at
-    the top on a dark backing while Listen is on. On the right edge the newest key level as a dot (blue while the tick's
+    the top on a dark backing while Listen is on and sound comes (idle, nothing of the key is heard: it holds still,
+    dimmed, and nothing repaints). On the right edge the newest key level as a dot (blue while the tick's
     key level, not the dot's falling one, is at or above the threshold, its halo as open as the gate; a ring ripples out
     from it as the gate opens, clipped to the plot), the dB figures, and two meters in `kPanel` wells (as the
     Compressor's), captioned "In" and "Gate", both on the plot's own axis (0 dB at their top, a tick every 12 dB where
-    the plot has its grid lines): the input's level (green, yellow from -12 dB, red from -3 dB and above 0 dB) and how
+    the plot has its grid lines): the input's level (the house meter, `drawLevelMeter()` with `MeterWell::Panel`:
+    green, yellow from -12 dB, red from -3 dB, and red above 0 dB over the well's top) and how
     far the gate turns down what comes in, growing down from the top by as many dB (`sub::app::gateGainDb` of `open` and
     the floor: to the floor's depth when shut, the whole well at a silent floor).
-  - Its animation, all stepped in `refreshDisplays()` by the time since the last tick: the drawing scrolls on at the
+  - Its animation, all stepped in `refreshDisplays()` by the time since the last tick (`tickSeconds()`, as every
+    editor's): the drawing scrolls on at the
     values' rate, easing towards a steady 30 ms behind the newest value (which absorbs the audio's block-sized bursts;
     more than 100 ms behind, it jumps), and stops where the values stop; the input meter has ballistics
     (`MeterBallistics`: it rises at once, falls 24 dB/s, its peak held a second), the key dot falls at 300 dB/s, the
@@ -425,7 +432,7 @@ The editors:
   - Drag the threshold line (or anywhere else in the plot; not the figures or the meters) up and down for the
     threshold, the return line for Return (down: it closes lower), relative to where the press was (nothing jumps),
     Shift finely; one undo step per drag ("Change Gate Threshold", "Change Gate Return"), the lines following the
-    mouse at once. With the two lines on top of each other (Return 0), a press on or below them takes Return, above
+    mouse at once, held to the parameters' ranges (`sub::app::gateThresholdRange()`, `gateReturnRange()`). With the two lines on top of each other (Return 0), a press on or below them takes Return, above
     them the threshold. Double-click a line to put it back to its default. Right-click a line for its parameter's
     menu (`paramMenuRequested(id)`, opened by the editor's `ParamMenu`); elsewhere right-click goes on to the frame
     (the device's menu).
@@ -1102,7 +1109,7 @@ The editors:
 | [test_ui_device_panel_racks.cpp](../../tests/app/test_ui_device_panel_racks.cpp) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain list and the chain's devices shown when asked for, the chain clicked shown beside the rack and dropped into, chain mixers, macros added and taken away, renamed in place, automated, mapping to a macro, its ranges and unmapping, Ctrl+R on a chain (its list hidden too), a chain's menu, the view's height staying put |
 | [test_ui_device_panel_sidechain.cpp](../../tests/app/test_ui_device_panel_sidechain.cpp) | The sidechain button and its menu: sources, cycles greyed out, taps (after devices in racks too) |
 | [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) | The registry (every kind with an editor, and the generic knobs for the others); the Compressor's, Delay's, Disperser's, EQ's, Sidechain's and Sampler's editors, each loaded as the view loads it, driven with the mouse and keys, the project and (rendering offline) the engine checked; what the editors share (SgPainter's additions, the animation helpers, `EditorKnob` and `DeviceParamMap`); the parameter cell and its menu. Its host, and every editor test's, is [support/EditorHarness.h](../../tests/app/support/EditorHarness.h) |
-| [test_ui_device_editors_gate.cpp](../../tests/app/test_ui_device_editors_gate.cpp) | The Gate's editor: fitting the body, every control bound and undoable (the lookahead reaching the engine's latency); the threshold and return lines' drags (relative, Shift, double-click, one step each; either taken when they are one), their right-click menus, the meters not a control; the displays reaching the graph, its scrolling and rest, going idle, silence and a steady tone drawing nothing; the key dot's colour following the key's level now and the dot falling below the line within a few ticks, the passing shade showing over the levels; the sidechain section (fold, what is dimmed but settable and what is disabled, the source button, renames, Freq's readout whole at 15 kHz); the key curve being the engine's filter, its dot following the mouse, Ctrl and the wheel for the bell's Q |
+| [test_ui_device_editors_gate.cpp](../../tests/app/test_ui_device_editors_gate.cpp) | The Gate's editor: fitting the body, every control bound and undoable (the lookahead reaching the engine's latency; the list as wide as its longest choice; only the key EQ's Gain bipolar; the In meter's panel-grey well); the threshold and return lines' drags (relative, Shift, double-click, one step each; either taken when they are one), their right-click menus, the meters not a control; the displays reaching the graph, its scrolling and rest, going idle, silence and a steady tone drawing nothing, listening while idle drawing nothing; the key dot's colour following the key's level now and the dot falling below the line within a few ticks, the passing shade showing over the levels; the sidechain section (fold, the type buttons' EQ faces, what is dimmed but settable and what is disabled, the source button naming itself for the menu, renames, every cell's widest values whole); the key curve being the engine's filter, its dot following the mouse, Ctrl and the wheel for the bell's Q |
 | [test_ui_device_editors_limiter.cpp](../../tests/app/test_ui_device_editors_limiter.cpp) | The Limiter's editor: fitting the view, every control bound to its parameter and undoable (Gain bipolar; Release dimmed while Auto is on and still settable; the boxes and lists wide enough for their widest text; the lookahead reaching the engine's latency; Maximize swapping Gain for Output and the line for the Threshold, a press mid-crossfade turning the knob coming in), the line dragged (one undo step, Shift finely, held to the parameter's range, double-click for the default, presses elsewhere ignored), the hover following the line as it moves, opening as the device is (nothing animating in), the displays reaching the graph (levels, gain reduction, Soft Clip's share in both figures; with Maximize, the history's output in the line's domain and the Out meter in dBFS), its animation and its rest, the maths shared with the engine |
 | [test_ui_device_editors_multiband.cpp](../../tests/app/test_ui_device_editors_multiband.cpp) | Multiband Dynamics' editor: it fits the body (at its least height too), every box as wide as its text and automation dot need, every control bound and undoable (the engine has what they set: the activators and the split switches, each where Live has it), ratios and times typed and printed, the T/B/A pages and their captions (the page outliving the editor being made again); the graph's threshold and ratio drags (pushing, Ctrl, Alt, Shift; Ctrl+Alt left to the chain), double-clicks and wheel (a high-resolution wheel's steps adding up; a run staying on a threshold that slides from under the mouse; Shift+wheel left to the chain), one undo step each; the displays reaching the graph as the engine renders (a whole 2048-sample buffer's read), its meters, eased gain, glows (not after the audio stops), target marker, a cut under the floor drawn only as far as the level before it, the bars and the figure agreeing tick by tick while the meters let go (a lift, a cut, a cut under the floor), lanes and highlights, a switched-off lane's "→ Mid" making way for a drag's bubble, the hover readout clear of the change's figure, a bypassed band's lane (its level only), and its stopping once still; the sidechain's controls (dimmed but settable without a sidechain, whole readouts, the menu asked for under the button, Listen); the `ratio` unit and the typed texts (with no window, on any platform) |
 | [test_ui_device_editors_spectral.cpp](../../tests/app/test_ui_device_editors_spectral.cpp) | The Spectral Compressor's editor: fitting the body, every name and value whole, its knobs and Delta bound and undoable, the lines the engine's, lines leaving the plot drawn where they are with their handles on them (and the mouse finding them only there), the level figures a line crosses fading, the threshold, tilt, Below and Focus dragged (one undo step, Shift, Shift pressed mid-drag, double-click), the Focus boxes (wide enough for their widest value clear of the automation dot), Below dimmed but settable while Upward is 1:1, the Focus dim the engine's weights with the level figures over it, the displays reaching the graph and sinking back without a bounce, the held cut outliving the curtain, nothing drawn while still, lifts, the glow only while cutting, Delta's spectrum and tint, the key line only where the key is, the Sidechain badge (its menu under it) |

@@ -17,17 +17,6 @@
 
 namespace sub::ui {
 
-namespace {
-
-QColor mix(const QColor& from, const QColor& to, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    return QColor::fromRgbF(float(from.redF() + (to.redF() - from.redF()) * t),
-                            float(from.greenF() + (to.greenF() - from.greenF()) * t),
-                            float(from.blueF() + (to.blueF() - from.blueF()) * t));
-}
-
-}  // namespace
-
 GateKeyGraph::GateKeyGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     setImplicitSize(254, kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton);
@@ -78,8 +67,9 @@ void GateKeyGraph::sync() {
     usesGain_ = sub::app::gateKeyFilterUsesGain(type_);
     usesQ_ = sub::app::gateKeyFilterUsesQ(type_);
     activeEase_.target = active_ ? 1.0 : 0.0;
-    if (!clock_.isValid())  // (the first time: as it is, no easing)
+    if (!synced_)  // (the first time: as it is, no easing)
         activeEase_.snap(activeEase_.target);
+    synced_ = true;
     updateCurve();
     update();
 }
@@ -107,10 +97,7 @@ void GateKeyGraph::updateCurve() {
 }
 
 void GateKeyGraph::refreshDisplays() {
-    double dt = 0.0;
-    if (clock_.isValid())
-        dt = std::clamp(double(clock_.nsecsElapsed()) * 1e-9, 0.0, 0.05);
-    clock_.start();
+    const double dt = tickSeconds();
     hoverEase_.target = hovered_ || !gesture_.isEmpty() ? 1.0 : 0.0;
     bool moving = activeEase_.step(easeFraction(dt, 0.1), 1e-3);
     moving = hoverEase_.step(easeFraction(dt, 0.08), 1e-3) || moving;
@@ -151,15 +138,15 @@ void GateKeyGraph::mouseMoveEvent(QMouseEvent* event) {
     lastPos_ = pos;
     dragFreqX_ += dx;
     sub::app::OrderedMap<QString, double> values;
-    values.insert(QStringLiteral("sc_eq_freq"), std::clamp(freqAt(dragFreqX_), kFreqMin, kFreqMax));
+    values.insert(QStringLiteral("sc_eq_freq"), sub::app::gateKeyFreqRange().clamp(freqAt(dragFreqX_)));
     // Up and down: the Q for the pass filters (and the bell's with Ctrl, as the EQ's bands), else the gain.
     if (usesQ_ && (!usesGain_ || (event->modifiers() & Qt::ControlModifier))) {
         dragQ_ *= std::pow(2.0, up / kQPixels);
-        values.insert(QStringLiteral("sc_eq_q"), std::clamp(dragQ_, kQMin, kQMax));
+        values.insert(QStringLiteral("sc_eq_q"), sub::app::gateKeyQRange().clamp(dragQ_));
     } else {
         const QRectF r = plot().adjusted(0, 4, 0, -4);
         dragGain_ += up / std::max(1.0, r.height() / 2) * kRangeDb;
-        values.insert(QStringLiteral("sc_eq_gain"), std::clamp(dragGain_, kGainMin, kGainMax));
+        values.insert(QStringLiteral("sc_eq_gain"), sub::app::gateKeyGainRange().clamp(dragGain_));
     }
     setParams(values, gesture_, QStringLiteral("Change Gate Key Filter"));
 }
@@ -200,11 +187,11 @@ void GateKeyGraph::wheelEvent(QWheelEvent* event) {
         return;
     }
     event->accept();
-    if (wheelGesture_.isEmpty() || !wheelClock_.isValid() || wheelClock_.elapsed() > 400)
-        wheelGesture_ = newGestureKey();  // (notches closer than 400 ms are one step)
+    if (wheelGesture_.isEmpty() || !wheelClock_.isValid() || wheelClock_.elapsed() > kWheelGestureMs)
+        wheelGesture_ = newGestureKey();  // (notches close together are one step)
     wheelClock_.start();
     const double step = event->modifiers() & Qt::ShiftModifier ? 1.03 : 1.15;
-    const double q = std::clamp(q_ * std::pow(step, delta / 120.0), kQMin, kQMax);
+    const double q = sub::app::gateKeyQRange().clamp(q_ * std::pow(step, delta / 120.0));
     if (!gesture_.isEmpty())
         dragQ_ = q;  // (a drag goes on from it)
     setParams({{QStringLiteral("sc_eq_q"), q}}, wheelGesture_, QStringLiteral("Change Gate Key Filter Q"));
@@ -221,7 +208,7 @@ void GateKeyGraph::paint(SgPainter& p) {
     p.drawLine(QPointF(r.left(), zero), QPointF(r.right(), zero), withAlpha(Theme::kGridBar, 160));
 
     const double on = std::clamp(activeEase_.value, 0.0, 1.0);
-    const QColor color = mix(Theme::kTextDisabled, Theme::kAccent, on);
+    const QColor color = mixColor(Theme::kTextDisabled, Theme::kAccent, on);
     points_.resize(frequencies_.size());
     for (std::size_t i = 0; i < frequencies_.size(); ++i)
         points_[i] = QPointF(xOf(frequencies_[i]), yOf(response_[i]));

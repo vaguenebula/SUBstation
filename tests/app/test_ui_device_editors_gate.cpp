@@ -6,11 +6,12 @@
 // their parameters' menus; what the engine renders reaches the display, which
 // scrolls and stops, goes idle when nothing comes, and repaints only for what
 // shows; the key dot is blue for the key's level now, falls quickly, and the
-// blue where the gate passes shows over the levels; the sidechain section folds
-// and unfolds, follows the sidechain and its EQ (what is set for later dimmed
-// but settable); the key filter's curve is the engine's, its dot follows the
-// mouse, Ctrl and the wheel set the bell's Q. With SUBSTATION_UI_SCREENSHOTS
-// set, device-editors-gate*.png are saved there.
+// blue where the gate passes shows over the levels; listening, the label pulses
+// only while sound comes; the sidechain section folds and unfolds, follows the
+// sidechain and its EQ (what is set for later dimmed but settable), its cells
+// and the Lookahead list as wide as their values; the key filter's curve is the
+// engine's, its dot follows the mouse, Ctrl and the wheel set the bell's Q. With
+// SUBSTATION_UI_SCREENSHOTS set, device-editors-gate*.png are saved there.
 
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -24,6 +25,8 @@
 #include "EditorHarness.h"
 #include "audio/GateResponse.h"
 #include "controls/KnobItem.h"
+#include "devices/EqGraph.h"
+#include "devices/EqTypeIcon.h"
 #include "devices/GateGraph.h"
 #include "devices/GateKeyGraph.h"
 #include "model/Device.h"
@@ -167,6 +170,16 @@ private Q_SLOTS:
         for (const char* name : {"attack", "hold", "release"})
             QVERIFY2(knob(view, name)->logScale(), name);
         QCOMPARE(button(view, "lookahead")->property("text").toString(), QStringLiteral("1 ms"));
+        // The Lookahead list as wide as its longest choice and the arrow need (its face's implicit width).
+        QQuickItem* lookahead = find(view, QStringLiteral("lookahead"));
+        for (const double choice : {0.0, 2.0, 1.0}) {  // (back to the default last)
+            editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("lookahead"), choice);
+            QVERIFY2(button(view, "lookahead")->implicitWidth() <= lookahead->width(),
+                     qPrintable(button(view, "lookahead")->property("text").toString()));
+        }
+        // Only a knob whose range is symmetric about 0 is drawn from the middle (the key EQ's Gain).
+        for (const char* name : {"threshold", "return", "floor", "attack", "hold", "release"})
+            QVERIFY2(!knob(view, name)->bipolar(), name);
 
         // Floor at its bottom reads as silence (its readout and its knob's tooltip).
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("floor"), -75.0);
@@ -192,7 +205,12 @@ private Q_SLOTS:
             QVERIFY2(!rect.intersects(graph), name);
         }
         QTest::qWait(50);
-        save(grab(), QStringLiteral("gate-idle.png"));
+        const QImage shot = grab();
+        save(shot, QStringLiteral("gate-idle.png"));
+        // The In meter is the house's level meter in a well of the panel's grey (on the display's black).
+        const QRectF well = shown.graph->inMeter();
+        const QPoint inWell = scenePoint(shown.graph, QPointF(well.center().x(), well.top() + well.height() / 12));
+        QCOMPARE(shot.pixelColor(inWell * shot.devicePixelRatio()), QColor(0x25, 0x25, 0x25));
     }
 
     void controlsUndoable() {
@@ -546,6 +564,7 @@ private Q_SLOTS:
         QVERIFY(shown.view && shown.graph);
         GateGraph* graph = shown.graph;
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("threshold"), -30.0);
+        tick(30);  // (the lines where they are, not easing across where the shade is looked at)
         engine()->renderOffline(0.0, kSampleRate);
         tick(1);
         QVERIFY2(std::abs(graph->levelKey() - 20 * std::log10(0.5)) < 0.1,
@@ -554,10 +573,11 @@ private Q_SLOTS:
         QCOMPARE(graph->keyDotDb(), graph->levelKey());  // (it rises at once)
 
         // Where the gate is open, the blue shade shows over the levels too, not only above them: in the
-        // output's band (the dark grey) a little to the left of the newest values.
+        // output's band (the dark grey) a little to the left of the newest values, between the grid's
+        // -12 and -24 dB lines (well above the threshold's and Return's).
         QTest::qWait(50);
         const QImage shot = grab();
-        const QPoint inBand = scenePoint(graph, QPointF(graph->plot().right() - 20, graph->yOf(-30.0)));
+        const QPoint inBand = scenePoint(graph, QPointF(graph->plot().right() - 20, graph->yOf(-18.0)));
         const QColor shaded = shot.pixelColor(inBand * shot.devicePixelRatio());
         QVERIFY2(shaded.blue() - shaded.red() > 12, qPrintable(shaded.name()));
 
@@ -584,6 +604,24 @@ private Q_SLOTS:
         QVERIFY(graph->levelKey() < -45.0);
     }
 
+    void listeningIdleIsStill() {
+        // Listening, the label pulses while sound comes (the graph repaints every tick); once nothing
+        // comes (the device off, the engine stopped) it holds still, dimmed, and nothing repaints.
+        const Shown shown = gate(tone(220.0, kSampleRate), 1.0);
+        QVERIFY(shown.view && shown.graph);
+        GateGraph* graph = shown.graph;
+        editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("sc_listen"), 1.0);
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        tick(2);
+        QVERIFY(!graph->idle());
+        QVERIFY(graph->animating());
+        settle(graph);
+        QVERIFY(graph->idle());
+        QVERIFY(!graph->animating());
+        tick(5);
+        QVERIFY(!graph->animating());
+    }
+
     void sidechainSection() {
         const Shown shown = gate(tone(220.0, kSampleRate), 1.0);
         QVERIFY(shown.view && shown.graph);
@@ -594,10 +632,11 @@ private Q_SLOTS:
         QCOMPARE(section->width(), 0.0);
         QVERIFY(!section->isVisible());
 
-        // Unfolded: wider, as tall as ever.
+        // Unfolded: wider (the section, and the divider with the space round it), as tall as ever.
+        const double sectionWidth = view->property("sectionWidth").toDouble();
         click(find(view, QStringLiteral("sidechainFold")));
-        QTRY_COMPARE_WITH_TIMEOUT(section->width(), 254.0, 300);
-        QTRY_COMPARE(view->implicitWidth(), 833.0);
+        QTRY_COMPARE_WITH_TIMEOUT(section->width(), sectionWidth, 300);
+        QTRY_COMPARE(view->implicitWidth(), 566.0 + sectionWidth + 13);
         QVERIFY(view->implicitHeight() <= bodyHeight());
         QVERIFY(fitted());
         const QRectF inside = rectIn(section, view);
@@ -616,6 +655,20 @@ private Q_SLOTS:
         // Dimmed (its fade done): set for later, or not used by the EQ's type.
         auto dimmed = [&](const char* name) { return find(view, QString::fromLatin1(name))->opacity() < 0.99; };
         QVERIFY(checked(5) && !checked(0));  // high-pass
+        // The type buttons' faces are the EQ's (EqTypeIcon), its types in the S/C EQ Type's order, dimmed while
+        // the EQ is off.
+        const int kinds[] = {EqGraph::LowShelf, EqGraph::Bell,     EqGraph::HighShelf,
+                             EqGraph::HighCut,  EqGraph::BandPass, EqGraph::LowCut};
+        for (int type = 0; type < 6; ++type) {
+            QQuickItem* face = qvariant_cast<QQuickItem*>(
+                find(view, QStringLiteral("eqType%1").arg(type))->property("background"));
+            QVERIFY(qobject_cast<EqTypeIcon*>(face));
+            QCOMPARE(face->property("kind").toInt(), kinds[type]);
+        }
+        QTRY_COMPARE(find(view, QStringLiteral("eqType0"))->parentItem()->opacity(), 0.55);
+        QVERIFY(knob(view, "sc_eq_gain")->bipolar());
+        for (const char* name : {"sc_gain", "sc_mix", "sc_eq_freq", "sc_eq_q"})
+            QVERIFY2(!knob(view, name)->bipolar(), name);
         QCOMPARE(textOf(view, "sidechainSource"), QStringLiteral("No Sidechain"));
         // Set for later, dimmed but settable: Gain and Dry/Wet without a sidechain, the EQ's knobs while it
         // is off (as its type buttons and its curve). Only what the type doesn't use is disabled (a high-pass:
@@ -643,16 +696,18 @@ private Q_SLOTS:
         QCOMPARE(value("sc_eq"), 1.0);
         QVERIFY(enabled("sc_eq_freq") && enabled("sc_eq_q") && !enabled("sc_eq_gain"));
         QTRY_VERIFY(!dimmed("sc_eq_freq") && !dimmed("sc_eq_q") && dimmed("sc_eq_gain"));
-        // Freq's readout shows 10 kHz and up whole ("15.00 kHz": its cell is wide enough).
-        for (const double hz : {10000.0, 15000.0}) {
-            editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("sc_eq_freq"), hz);
-            QQuickItem* readout = nullptr;
-            for (QQuickItem* child : find(view, QStringLiteral("sc_eq_freq"))->childItems())
-                if (child->property("text").toString().endsWith(QStringLiteral("kHz")))
-                    readout = child;
-            QVERIFY(readout);
+        // Every cell's readout shows its widest values whole ("15.00 kHz", "-70.0 dB": each cell is wide enough).
+        const std::pair<const char*, double> widest[] = {
+            {"sc_eq_freq", 10000.0}, {"sc_eq_freq", 15000.0}, {"sc_eq_q", 0.1}, {"sc_eq_q", 12.0},
+            {"sc_eq_gain", -15.0},   {"sc_gain", -70.0},      {"sc_gain", 24.0}, {"sc_mix", 100.0}};
+        for (const auto& [id, at] : widest) {
+            const bool set = value(id) != at;  // (Dry/Wet's 100 % is its default)
+            if (set)
+                editor()->setDeviceParam(shown.track, shown.device, QString::fromLatin1(id), at);
+            QQuickItem* readout = find(view, QString::fromLatin1(id))->childItems().last();
             QVERIFY2(!readout->property("truncated").toBool(), qPrintable(readout->property("text").toString()));
-            undo()->undo();
+            if (set)
+                undo()->undo();
         }
         QCOMPARE(value("sc_eq_freq"), 80.0);
         int steps = undo()->index();
@@ -688,9 +743,10 @@ private Q_SLOTS:
         editor()->renameTrack(other, QStringLiteral("Kick"));
         QCOMPARE(textOf(view, "sidechainSource"), QStringLiteral("Kick"));
         QTRY_VERIFY(!dimmed("sc_gain") && !dimmed("sc_mix"));
-        QSignalSpy menu(view, SIGNAL(sidechainMenuRequested()));
+        QSignalSpy menu(view, SIGNAL(sidechainMenuRequested(QVariant)));
         click(find(view, QStringLiteral("sidechainSource")));
-        QCOMPARE(menu.count(), 1);
+        QCOMPARE(menu.count(), 1);  // (the frame opens the menu under the button it names)
+        QCOMPARE(qvariant_cast<QQuickItem*>(menu.at(0).at(0)), find(view, QStringLiteral("sidechainSource")));
         undo()->undo();  // (the rename)
         undo()->undo();  // (the sidechain)
         QVERIFY(!shown.graph->keyed());
@@ -699,7 +755,7 @@ private Q_SLOTS:
         // Shown again (the editor made anew), it keeps its section unfolded; folded, the width comes back.
         QQuickItem* again = show(QStringLiteral("gate"), shown.track, shown.device);
         QVERIFY(again);
-        QCOMPARE(again->implicitWidth(), 833.0);
+        QCOMPARE(again->implicitWidth(), 566.0 + sectionWidth + 13);
         click(find(again, QStringLiteral("sidechainFold")));
         QTRY_COMPARE(again->implicitWidth(), 566.0);
     }
@@ -710,7 +766,7 @@ private Q_SLOTS:
         auto value = [&](const char* id) { return param(shown.track, shown.device, QString::fromLatin1(id)); };
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier,
                           centerOf(find(shown.view, QStringLiteral("sidechainFold"))));
-        QTRY_COMPARE(shown.view->implicitWidth(), 833.0);
+        QTRY_COMPARE(shown.view->implicitWidth(), 566.0 + shown.view->property("sectionWidth").toDouble() + 13);
         QVERIFY(fitted());
         auto* graph = find<GateKeyGraph>(shown.view, QStringLiteral("keyGraph"));
         QVERIFY(graph);
@@ -868,7 +924,7 @@ private Q_SLOTS:
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("sc_eq_q"), 2.0);
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier,
                           centerOf(find(shown.view, QStringLiteral("sidechainFold"))));
-        QTRY_COMPARE(shown.view->implicitWidth(), 833.0);
+        QTRY_COMPARE(shown.view->implicitWidth(), 566.0 + shown.view->property("sectionWidth").toDouble() + 13);
         QVERIFY(fitted());
         QTest::mouseMove(window_, QPoint(1, 1));
         play(30);

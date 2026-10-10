@@ -21,15 +21,19 @@ Item {
 
     required property string trackId
     required property string deviceId
-    // The source button asks the frame for the device's sidechain menu.
-    signal sidechainMenuRequested()
+    // The source button asks the frame for the device's sidechain menu, under it.
+    signal sidechainMenuRequested(var from)
 
     readonly property alias graph: graph
     readonly property alias keyGraph: keyGraph
     readonly property alias lineMenu: lineMenu  // (the threshold's or Return's, from the display's lines)
-    readonly property bool sidechainShown: GateViews.isShown(deviceId)
+    // Whether the sidechain section shows: view state (DeviceViews), so a frame made again keeps it.
+    readonly property bool sidechainShown: DeviceViews.value(deviceId, "sidechain", false)
     readonly property int foldedWidth: 566
-    readonly property int sectionWidth: 254
+    // The section's knob cells, each as wide as its parameter's widest value needs.
+    readonly property int scCellWidth: Math.max(46, Math.ceil(scWidest.advanceWidth))
+    readonly property int eqCellWidth: Math.max(52, Math.ceil(eqWidest.advanceWidth))
+    readonly property int sectionWidth: 2 * scCellWidth + 6 + 3 * eqCellWidth
     // How far the main panel moves right for the sidechain section: its width, and the divider with
     // the space round it (13 px), in step with the section as it unfolds.
     readonly property real shift: section.width * (sectionWidth + 13) / sectionWidth
@@ -50,6 +54,17 @@ Item {
         deviceId: editor.deviceId
         ids: ["threshold", "return", "attack", "hold", "release", "floor", "lookahead", "flip", "sc_gain", "sc_mix",
               "sc_listen", "sc_eq", "sc_eq_type", "sc_eq_freq", "sc_eq_q", "sc_eq_gain"]
+    }
+
+    TextMetrics {
+        id: scWidest
+        font: Theme.uiFont(8)  // (EditorReadout's)
+        text: "-70.0 dB"
+    }
+    TextMetrics {
+        id: eqWidest
+        font: Theme.uiFont(8)
+        text: "15.00 kHz"
     }
 
     // Floor at its bottom is silence (the engine's rule, through the graph).
@@ -104,12 +119,13 @@ Item {
             id: foldArea
             anchors.fill: parent
             hoverEnabled: true
-            onClicked: GateViews.setShown(editor.deviceId, !editor.sidechainShown)
+            onClicked: DeviceViews.setValue(editor.deviceId, "sidechain", !editor.sidechainShown)
         }
 
         ToolTip.visible: foldArea.containsMouse
         ToolTip.delay: 700
-        ToolTip.text: qsTr("Sidechain: what opens the gate (another track, its gain and blend),\nan EQ on it, and listening to it")
+        ToolTip.text: qsTr("Sidechain: what opens the gate (another track, its gain and blend),\n"
+                           + "an EQ on it, and listening to it")
     }
 
     // --- The sidechain section -----------------------------------------------------------------
@@ -147,8 +163,9 @@ Item {
                 checkable: false
                 checked: graph.keyed
                 text: graph.sidechainName || qsTr("No Sidechain")
-                tooltip: qsTr("Where the key comes from: choose a track to open the gate with\n(the device's sidechain menu)")
-                onClicked: editor.sidechainMenuRequested()
+                tooltip: qsTr("Where the key comes from: choose a track to open the gate with\n"
+                              + "(the device's sidechain menu)")
+                onClicked: editor.sidechainMenuRequested(source)
                 // Its name (elided) and an arrow, as a drop-down's.
                 contentItem: Item {
                     Text {
@@ -189,7 +206,8 @@ Item {
                 text: qsTr("EQ")
                 tooltip: qsTr("EQ: open the gate from a band of the key only")
             }
-            // The EQ's type, a button each (its shape drawn), dimmed while the EQ is off.
+            // The EQ's type, a button each (its shape drawn as the EQ's bands' are), dimmed while the EQ
+            // is off.
             Repeater {
                 model: [qsTr("Low Shelf"), qsTr("Bell"), qsTr("High Shelf"), qsTr("Low-pass"), qsTr("Band-pass"),
                         qsTr("High-pass")]
@@ -197,11 +215,14 @@ Item {
                     id: typeCell
                     required property int index
                     required property string modelData
+                    // The S/C EQ Type's values (Live's order) as the EQ's types.
+                    readonly property var kinds: [EqGraph.LowShelf, EqGraph.Bell, EqGraph.HighShelf, EqGraph.HighCut,
+                                                  EqGraph.BandPass, EqGraph.LowCut]
                     x: 152 + 17 * index
                     y: 1
                     width: 17
                     height: 15
-                    opacity: editor.eqOn ? 1 : 0.45
+                    opacity: editor.eqOn ? 1 : 0.55
                     Behavior on opacity {
                         NumberAnimation {
                             duration: 120
@@ -222,8 +243,9 @@ Item {
                         checked: editor.eqType === typeCell.index
                         onPressed: if (p.get("sc_eq_type")) p.get("sc_eq_type").touch()
                         onClicked: if (p.get("sc_eq_type")) p.get("sc_eq_type").set(typeCell.index)
-                        background: GateFilterIcon {
-                            type: typeCell.index
+                        background: EqTypeIcon {
+                            kind: typeCell.kinds[typeCell.index]
+                            color: Theme.accent
                             checked: typeButton.checked
                             hovered: typeButton.hovered
                         }
@@ -244,7 +266,7 @@ Item {
                 EditorKnob {
                     id: scGain
                     objectName: "sc_gain"
-                    width: 46
+                    width: editor.scCellWidth
                     size: 28
                     param: p.get("sc_gain")
                     title: qsTr("Gain")
@@ -252,21 +274,24 @@ Item {
                     tooltip: qsTr("Sidechain gain: how loud the sidechain is to the gate (never heard)")
                 }
                 EditorKnob {
+                    id: scMix
                     objectName: "sc_mix"
-                    x: 48
-                    width: 46
+                    x: scGain.width + 2
+                    width: editor.scCellWidth
                     size: 28
                     param: p.get("sc_mix")
                     title: qsTr("Dry/Wet")
                     opacity: graph.keyed ? 1 : 0.55
-                    tooltip: qsTr("Sidechain Dry/Wet: 100 %: only the sidechain opens the gate;\n0 %: only the device's own input")
+                    tooltip: qsTr("Sidechain Dry/Wet: 100 %: only the sidechain opens the gate;\n"
+                                  + "0 %: only the device's own input")
                 }
-                // (52 px each: "15.00 kHz" fits.) Dimmed while the EQ is off, as its type buttons and
-                // curve, all still settable; the Q and Gain disabled for a type that doesn't use them.
+                // Dimmed while the EQ is off, as its type buttons and curve, all still settable; the Q
+                // and Gain disabled for a type that doesn't use them.
                 EditorKnob {
+                    id: eqFreq
                     objectName: "sc_eq_freq"
-                    x: 98
-                    width: 52
+                    x: scMix.x + scMix.width + 4
+                    width: editor.eqCellWidth
                     size: 28
                     param: p.get("sc_eq_freq")
                     title: qsTr("Freq")
@@ -274,9 +299,10 @@ Item {
                     tooltip: qsTr("Key EQ frequency")
                 }
                 EditorKnob {
+                    id: eqQ
                     objectName: "sc_eq_q"
-                    x: 150
-                    width: 52
+                    x: eqFreq.x + eqFreq.width
+                    width: editor.eqCellWidth
                     size: 28
                     param: p.get("sc_eq_q")
                     title: qsTr("Q")
@@ -288,11 +314,12 @@ Item {
                 }
                 EditorKnob {
                     objectName: "sc_eq_gain"
-                    x: 202
-                    width: 52
+                    x: eqQ.x + eqQ.width
+                    width: editor.eqCellWidth
                     size: 28
                     param: p.get("sc_eq_gain")
                     title: qsTr("Gain")
+                    knob.bipolar: true
                     enabled: editor.eqUsesGain
                     opacity: enabled && editor.eqOn ? 1 : 0.55
                     tooltip: qsTr("Key EQ gain (shelves and bell)")
@@ -314,20 +341,18 @@ Item {
                 }
                 ToolTip.visible: keyHover.hovered && !keyHover.point.pressedButtons
                 ToolTip.delay: 700
-                ToolTip.text: qsTr("The EQ on the key: only this band opens the gate.\nDrag the dot across for the frequency, up and down for the gain (shelves, bell) or the Q\n(the bell's with Ctrl); the wheel over the dot sets the Q")
+                ToolTip.text: qsTr("The EQ on the key: only this band opens the gate.\n"
+                                   + "Drag the dot across for the frequency, up and down for the gain (shelves, bell) "
+                                   + "or the Q\n(the bell's with Ctrl); the wheel over the dot sets the Q")
             }
         }
     }
 
     // Between the section and the display.
-    Rectangle {
+    EditorDivider {
         x: section.x + section.width + 6
-        y: 6
-        width: 1
-        height: editor.height - 12
         visible: section.width > 0
         opacity: section.width / editor.sectionWidth
-        color: Theme.border
     }
 
     // --- The main panel (moved right while the section shows) ----------------------------------
@@ -363,7 +388,11 @@ Item {
             }
             ToolTip.visible: graphHover.hovered && !graph.dragging
             ToolTip.delay: 700
-            ToolTip.text: qsTr("The last 2.5 s: the input (light) and the output (dark, outlined),\nshaded blue where the gate lets sound through.\nDrag the blue line for the threshold, the orange one for where it closes again (Return);\ndouble-click either to reset it, right-click it for its menu.\nAt the right: the input's level and how far the gate turns it down")
+            ToolTip.text: qsTr("The last 2.5 s: the input (light) and the output (dark, outlined),\n"
+                               + "shaded blue where the gate lets sound through.\n"
+                               + "Drag the blue line for the threshold, the orange one for where it closes again "
+                               + "(Return);\ndouble-click either to reset it, right-click it for its menu.\n"
+                               + "At the right: the input's level and how far the gate turns it down")
         }
 
         Grid {
@@ -387,7 +416,8 @@ Item {
                 width: 56
                 param: p.get("return")
                 title: qsTr("Return")
-                tooltip: qsTr("Return: how far below the threshold the level must fall before the gate closes again\n(the orange line); more stops chatter")
+                tooltip: qsTr("Return: how far below the threshold the level must fall before the gate closes "
+                              + "again\n(the orange line); more stops chatter")
             }
             EditorKnob {
                 objectName: "floor"
@@ -396,7 +426,8 @@ Item {
                 title: qsTr("Floor")
                 formatter: v => editor.floorText(v)
                 knob.formatter: v => editor.floorText(v)
-                tooltip: qsTr("Floor: how far a closed gate turns the sound down (−inf: silence; 0 dB: not at all)")
+                tooltip: qsTr("Floor: how far a closed gate turns the sound down "
+                              + "(−inf: silence; 0 dB: not at all)")
             }
             EditorKnob {
                 id: attackCell
@@ -404,7 +435,8 @@ Item {
                 width: 56
                 param: p.get("attack")
                 title: qsTr("Attack")
-                tooltip: qsTr("Attack: how long the gate takes to open; very short can click, long softens the onset")
+                tooltip: qsTr("Attack: how long the gate takes to open; very short can click, "
+                              + "long softens the onset")
             }
             EditorKnob {
                 objectName: "hold"
@@ -440,12 +472,21 @@ Item {
             text: qsTr("Lookahead")
         }
         ParamChoice {
+            id: lookahead
             objectName: "lookahead"
             x: 502
             y: knobGrid.y + attackCell.y + attackCell.knob.y + Math.round((attackCell.knob.height - height) / 2)
-            width: 56
+            // As wide as the knobs' column, or as its longest choice and the arrow need.
+            width: Math.max(56, Math.ceil(Math.max(0, ...names.map(name => lookaheadFont.advanceWidth(name))))
+                                + button.leftPadding + button.rightPadding)
             param: p.get("lookahead")
-            tooltip: qsTr("Lookahead: the gate sees what comes this much ahead, to open before a transient\n(adds as much latency)")
+            tooltip: qsTr("Lookahead: the gate sees what comes this much ahead, to open before a transient\n"
+                          + "(adds as much latency)")
+
+            FontMetrics {
+                id: lookaheadFont
+                font: lookahead.button.font
+            }
         }
     }
 }

@@ -106,9 +106,9 @@ double dbToY(double db, const QRectF& rect, double floorDb, double ceilingDb) {
     return rect.bottom() - fraction * rect.height();
 }
 
-void drawLevelMeter(SgPainter& p, const QRectF& rect, double levelDb, double peakDb, double floorDb,
-                    double ceilingDb) {
-    p.fillRect(rect, Theme::kMeterBg);
+void drawLevelMeter(SgPainter& p, const QRectF& rect, double levelDb, double peakDb, double floorDb, double ceilingDb,
+                    MeterWell well) {
+    p.fillRect(rect, well == MeterWell::Panel ? Theme::kPanel : Theme::kMeterBg);
     const double top = dbToY(levelDb, rect, floorDb, ceilingDb);
     if (top < rect.bottom()) {
         // Each colour only where the level reaches it, so the scale reads the same at any level.
@@ -124,7 +124,8 @@ void drawLevelMeter(SgPainter& p, const QRectF& rect, double levelDb, double pea
     }
     for (double db = ceilingDb - 12.0; db > floorDb; db -= 12.0) {
         const double y = dbToY(db, rect, floorDb, ceilingDb);
-        p.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y), withAlpha(Theme::kPanel, 160));
+        p.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y),
+                   well == MeterWell::Panel ? withAlpha(Theme::kMeterBg, 145) : withAlpha(Theme::kPanel, 160));
     }
     if (peakDb > floorDb) {
         const double y = dbToY(peakDb, rect, floorDb, ceilingDb);

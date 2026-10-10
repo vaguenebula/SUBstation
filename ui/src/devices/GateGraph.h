@@ -28,7 +28,6 @@
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
-#include <QElapsedTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include <array>
@@ -149,7 +148,6 @@ private:
     float previousOpen_ = 0.f;
 
     // What the ticks move on.
-    QElapsedTimer clock_;
     double sinceValues_ = 1e9;  // seconds since values last came
     double levelIn_ = kFloorDb, levelOut_ = kFloorDb, levelKey_ = kFloorDb;
     double passing_ = 0.0;
@@ -165,7 +163,7 @@ private:
     Eased threshold_, return_;  // the lines, in dB (the return line's is the level it closes below)
     Eased hoverThreshold_, hoverReturn_;
     double ping_ = -1.0;   // seconds since the gate last opened (< 0: no ring)
-    double pulse_ = 0.0;   // seconds, for the listening label
+    double pulse_ = 0.0;   // seconds, for the listening label (still while idle)
     bool animating_ = false;
 
     // The mouse.

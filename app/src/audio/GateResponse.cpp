@@ -16,6 +16,16 @@ sub::gate::KeyFilter keyFilterType(int type) {
 
 }  // namespace
 
+GateRange gateThresholdRange() { return {sub::gate::kThresholdMinDb, sub::gate::kThresholdMaxDb}; }
+
+GateRange gateReturnRange() { return {0.0, sub::gate::kReturnMaxDb}; }
+
+GateRange gateKeyFreqRange() { return {sub::gate::kKeyFreqMin, sub::gate::kKeyFreqMax}; }
+
+GateRange gateKeyQRange() { return {sub::gate::kKeyQMin, sub::gate::kKeyQMax}; }
+
+GateRange gateKeyGainRange() { return {sub::gate::kKeyGainMinDb, sub::gate::kKeyGainMaxDb}; }
+
 QList<double> gateKeyFilterDb(int type, double freq, double q, double gainDb, double sampleRate,
                               const QList<double>& frequencies) {
     QList<double> response;
@@ -35,9 +45,7 @@ bool gateKeyFilterUsesGain(int type) { return sub::gate::keyFilterUsesGain(keyFi
 
 bool gateKeyFilterUsesQ(int type) { return sub::gate::keyFilterUsesQ(keyFilterType(type)); }
 
-double gateFloorGain(double floorDb) { return sub::gate::floorGain(static_cast<float>(floorDb)); }
-
-bool gateFloorIsSilent(double floorDb) { return gateFloorGain(floorDb) <= 0.0; }
+bool gateFloorIsSilent(double floorDb) { return sub::gate::floorGain(static_cast<float>(floorDb)) <= 0.f; }
 
 double gateGainDb(double pass, double floorDb) {
     const float gain = sub::gate::gain(static_cast<float>(std::clamp(pass, 0.0, 1.0)),
