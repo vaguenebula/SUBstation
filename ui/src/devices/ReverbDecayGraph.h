@@ -29,7 +29,9 @@
 #include "analysis/Spectrum.h"
 #include "audio/ReverbResponse.h"
 
+#include <QFont>
 #include <QPointF>
+#include <QRectF>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 
@@ -48,14 +50,17 @@ class ReverbDecayGraph : public DeviceCanvas {
     Q_PROPERTY(QString readout READ readout NOTIFY levelsChanged)        // the top right's text
 
 public:
-    static constexpr int kMinimumWidth = 200;  // (the editor gives it the width of the boxes under it)
+    // At least, and as wide as its captions need (the editor gives it the width of the boxes under it).
+    static constexpr int kMinimumWidth = 200;
     static constexpr int kMinimumHeight = 80;
     static constexpr int kMeterWidth = 6;
     static constexpr double kLow = 20.0;  // Hz across the graph
     static constexpr double kHigh = 20000.0;
     static constexpr double kMinSeconds = 0.04;  // the decay axis (log): its bottom
     static constexpr double kMaxSeconds = 100.0;  // and its top
-    static constexpr double kHeader = 13.0;       // the captions' strip over the axis
+    static constexpr double kHeader = 13.0;       // the captions' strip over the axis,
+    static constexpr double kCaptionInset = 3.0;  // its captions this far in from the plot's sides,
+    static constexpr double kCaptionGap = 8.0;    // and at least this far apart
     static constexpr double kMeterFloorDb = -72.0;
     static constexpr double kGrab = 9.0;  // px from a handle that picks it
 
@@ -71,6 +76,13 @@ public:
     double frozenShown() const { return frozen_.value; }
     bool animating() const { return animating_; }
     QString readout() const;
+    // The captions over the plot, in captionFont(): "Decay time" at the left, the readout at the right, each rect
+    // as wide as its text (the readout's cut short kCaptionGap after the caption, should a graph ever be narrower
+    // than its implicit width: it is drawn clipped there). The implicit width is what the captions need with the
+    // widest readout its parameters' ranges give.
+    static QFont captionFont();
+    QRectF captionRect() const;
+    QRectF readoutRect() const;
     const sub::app::analysis::FallingSpectrum& tailSpectrum() const { return spectrum_; }
     // The drawn curve's y at each frequency now.
     std::vector<double> shownY() const;

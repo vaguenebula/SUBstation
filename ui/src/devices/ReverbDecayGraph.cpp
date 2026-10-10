@@ -12,6 +12,7 @@
 #include <QHoverEvent>
 #include <QLinearGradient>
 #include <QMouseEvent>
+#include <QStringList>
 
 #include <algorithm>
 #include <array>
@@ -66,10 +67,69 @@ bool passesNear(const std::vector<QPointF>& line, const QRectF& rect, double mar
     return false;
 }
 
+// How far `text` reaches from where it starts: its advance, or its last glyph's ink past it.
+double extentOf(const QString& text, const QFontMetricsF& metrics) {
+    return std::max(metrics.horizontalAdvance(text), metrics.boundingRect(text).right());
+}
+double extentOf(const QString& text, const QFont& font) { return extentOf(text, QFontMetricsF(font)); }
+
+// The readout's texts: a shelf's ("Hi 4.50 kHz · 70 %"), the Low-pass's, the decay time's.
+QString shelfText(const QString& name, double hz, double percent) {
+    return QStringLiteral("%1 %2 · %3")
+        .arg(name, sub::app::formatValue(hz, QStringLiteral("Hz")),
+             sub::app::formatValue(percent, QStringLiteral("%")));
+}
+QString lowpassText(double hz) {
+    return QStringLiteral("Low-pass %1").arg(sub::app::formatValue(hz, QStringLiteral("Hz")));
+}
+QString decayText(double ms) { return sub::app::formatValue(ms, QStringLiteral("ms")); }
+
+// Of the values from `from` to `to` (log), the one whose text is widest.
+template <typename Text>
+double widestOver(double from, double to, Text text, const QFontMetricsF& metrics) {
+    constexpr int kSteps = 1000;
+    double widest = from, most = -1.0;
+    for (int i = 0; i <= kSteps; ++i) {
+        const double v = from * std::pow(to / from, double(i) / kSteps);
+        if (const double extent = extentOf(text(v), metrics); extent > most) {
+            most = extent;
+            widest = v;
+        }
+    }
+    return widest;
+}
+
+QString captionText() { return QStringLiteral("Decay time"); }
+
 }  // namespace
 
+QFont ReverbDecayGraph::captionFont() { return uiFont(7); }
+
 ReverbDecayGraph::ReverbDecayGraph(QQuickItem* parent) : DeviceCanvas(parent) {
-    setImplicitSize(kMinimumWidth, kMinimumHeight);
+    // As wide as the captions need: the caption and the widest readout (each value at its widest over its
+    // parameter's range), apart and in from the plot's sides. (The font is the process's: worked out once.)
+    static const double kCaptions = [] {
+        const QFontMetricsF metrics(captionFont());
+        const auto percent = [](double v) { return sub::app::formatValue(v, QStringLiteral("%")); };
+        const double gain = widestOver(kMinShelfGain, kMaxShelfGain, percent, metrics);
+        const auto shelf = [gain](const QString& name) {
+            return [name, gain](double hz) { return shelfText(name, hz, gain); };
+        };
+        const double lo = widestOver(kMinShelfFreq, kMaxLoFreq, shelf(QStringLiteral("Lo")), metrics);
+        const double hi = widestOver(kMinShelfFreq, kMaxHiFreq, shelf(QStringLiteral("Hi")), metrics);
+        const QStringList readouts = {shelfText(QStringLiteral("Lo"), lo, gain),
+                                      shelfText(QStringLiteral("Hi"), hi, gain),
+                                      lowpassText(widestOver(kMinShelfFreq, kMaxHiFreq, lowpassText, metrics)),
+                                      decayText(widestOver(kMinDecayMs, kMaxDecayMs, decayText, metrics)),
+                                      QStringLiteral("Frozen"),
+                                      QStringLiteral("Lo off"),
+                                      QStringLiteral("Hi off")};
+        double widest = 0.0;
+        for (const QString& text : readouts) widest = std::max(widest, std::ceil(extentOf(text, metrics)));
+        return 2 * kCaptionInset + std::ceil(extentOf(captionText(), metrics)) + kCaptionGap + widest;
+    }();
+    // (The plot is the item less 1 px either side and the meter, 2 px from it, at the right.)
+    setImplicitSize(std::max(double(kMinimumWidth), std::ceil(kCaptions) + 1 + kMeterWidth + 2 + 1), kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton);
     setAcceptHoverEvents(true);
     setCursor(Qt::SizeVerCursor);
@@ -94,6 +154,18 @@ QRectF ReverbDecayGraph::plot() const {
 }
 
 QRectF ReverbDecayGraph::axisRect() const { return plot().adjusted(0, kHeader, 0, -3); }
+
+QRectF ReverbDecayGraph::captionRect() const {
+    const QRectF r = plot();
+    return {r.left() + kCaptionInset, r.top(), std::ceil(extentOf(captionText(), captionFont())), kHeader};
+}
+
+QRectF ReverbDecayGraph::readoutRect() const {
+    const QRectF r = plot();
+    const double right = r.right() - kCaptionInset, room = std::max(0.0, right - captionRect().right() - kCaptionGap);
+    const double width = std::min(std::ceil(extentOf(readout(), captionFont())), room);
+    return {right - width, r.top(), width, kHeader};
+}
 
 QRectF ReverbDecayGraph::meterRect() const { return QRectF(width() - 1 - kMeterWidth, 1, kMeterWidth, height() - 2); }
 
@@ -167,23 +239,21 @@ ReverbDecayGraph::Handle ReverbDecayGraph::handleNear(const QPointF& pos, double
 
 QString ReverbDecayGraph::readout() const {
     const Handle shown = pressed_ != None ? pressed_ : hovered_;
-    const auto hz = [](double v) { return sub::app::formatValue(v, QStringLiteral("Hz")); };
-    const auto percent = [](double v) { return sub::app::formatValue(v, QStringLiteral("%")); };
     switch (shown) {
     case Lo:
-        return settings_.loShelf ? QStringLiteral("Lo %1 · %2").arg(hz(settings_.loFreq), percent(settings_.loGain))
+        return settings_.loShelf ? shelfText(QStringLiteral("Lo"), settings_.loFreq, settings_.loGain)
                                  : QStringLiteral("Lo off");
     case Hi:
         if (!settings_.hiFilter)
             return QStringLiteral("Hi off");
-        return settings_.hiLowpass ? QStringLiteral("Low-pass %1").arg(hz(settings_.hiFreq))
-                                   : QStringLiteral("Hi %1 · %2").arg(hz(settings_.hiFreq), percent(settings_.hiGain));
+        return settings_.hiLowpass ? lowpassText(settings_.hiFreq)
+                                   : shelfText(QStringLiteral("Hi"), settings_.hiFreq, settings_.hiGain);
     case Decay:
     case None: break;
     }
     if (settings_.freeze && shown == None)
         return QStringLiteral("Frozen");
-    return sub::app::formatValue(settings_.decayMs, QStringLiteral("ms"));
+    return decayText(settings_.decayMs);
 }
 
 // --- The curve --------------------------------------------------------------------------
@@ -506,7 +576,7 @@ void ReverbDecayGraph::setHovered(Handle handle) {
 void ReverbDecayGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot(), axis = axisRect();
-    const QFont font = uiFont(7);
+    const QFont font = captionFont();
     p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
 
     // The curve and the shelves' guides, worked out first: the axis' figures keep clear of them (of where the
@@ -604,10 +674,9 @@ void ReverbDecayGraph::paint(SgPainter& p) {
     p.restore();
 
     // The captions: what it shows, and the handle under the mouse (else Decay, or Frozen).
-    p.drawText(QRectF(r.left() + 3, r.top(), 60, kHeader), Qt::AlignLeft | Qt::AlignVCenter,
-               QStringLiteral("Decay time"), Theme::kTextDim, font);
+    p.drawText(captionRect(), Qt::AlignLeft | Qt::AlignVCenter, captionText(), Theme::kTextDim, font);
     const bool lit = pressed_ != None || hovered_ != None;
-    p.drawText(QRectF(r.left() + 50, r.top(), r.width() - 53, kHeader), Qt::AlignRight | Qt::AlignVCenter, readout(),
+    p.drawText(readoutRect(), Qt::AlignRight | Qt::AlignVCenter, readout(),
                lit ? Theme::kText : frozen > 0.5 ? Theme::kFrozen : Theme::kTextDim, font);
 
     // The handles: rings, growing under the mouse, filled while held; a switched-off shelf's hollow and dim;

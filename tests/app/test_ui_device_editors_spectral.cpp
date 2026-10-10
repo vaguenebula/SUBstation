@@ -1,13 +1,15 @@
 // The Spectral Compressor's editor (ui/qml/devices/editors/SpectralEditor.qml, ui/src/devices/SpectralGraph):
-// loaded as the device view loads it, its knobs, value boxes and button bound to their parameters (undoably), Below
-// dimmed (still settable) while Upward is 1:1; the display's lines the engine's own (sub::app::spectralThresholdDb;
-// drawn where they are when steep enough to leave the plot, their handles on them) and the level figures they cross
-// fading, the Focus band's dim the engine's weights (sub::app::spectralFocusWeights; none drawn at the default band)
-// with the figures over it, its handles and edges dragged with the mouse (one undo step a drag, Shift finely from
-// where it is pressed), the engine's displays reaching it as it renders offline (cuts, lifts, the held cut, the
-// glow, Delta's tint; the meters showing now after a backlog), and the Sidechain badge (its menu under it). With
-// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there idle, at its widest values, with a steep threshold,
-// with a signal flowing, lifting, keyed by a sidechain, and with Delta on.
+// loaded as the device view loads it, its knobs, value boxes and button bound to their parameters (undoably), every
+// name and value whole at its widest whatever the font (the boxes' values clear of the automation dot, the header's
+// readout clear of the Sidechain badge) and nothing wider than its text needs, Below dimmed (still settable) while
+// Upward is 1:1; the display's lines the engine's own (sub::app::spectralThresholdDb; drawn where they are when steep
+// enough to leave the plot, their handles on them) and the level figures they cross fading, the Focus band's dim the
+// engine's weights (sub::app::spectralFocusWeights; none drawn at the default band) with the figures over it, its
+// handles and edges dragged with the mouse (one undo step a drag, Shift finely from where it is pressed), the
+// engine's displays reaching it as it renders offline (cuts, lifts, the held cut, the glow, Delta's tint; the meters
+// showing now after a backlog), and the Sidechain badge (its menu under it). With SUBSTATION_UI_SCREENSHOTS set to a
+// folder, it is saved there idle, at its widest values, with a steep threshold, with a signal flowing, lifting, keyed
+// by a sidechain, and with Delta on.
 
 #include <QByteArray>
 #include <QFontMetricsF>
@@ -74,6 +76,46 @@ std::vector<float> pinkNoise(int frames, double rmsDb, const std::vector<double>
     return out;
 }
 
+// How far `text` reaches from where it starts in `metrics`' font: its advance, or its last glyph's ink past it.
+double extentOf(const QString& text, const QFontMetricsF& metrics) {
+    return std::max(metrics.horizontalAdvance(text), metrics.boundingRect(text).right());
+}
+
+// `text` with every figure the font's widest (as the editor's sample texts have them).
+QString widened(QString text, const QFontMetricsF& metrics) {
+    QChar widest = u'0';
+    for (const QChar digit : QStringLiteral("123456789"))
+        if (metrics.horizontalAdvance(digit) > metrics.horizontalAdvance(widest))
+            widest = digit;
+    for (QChar& c : text)
+        if (c.isDigit())
+            c = widest;
+    return text;
+}
+
+// A parameter's values over its range: 2001 of them, evenly (in log for a log-scaled one).
+std::vector<double> valuesOf(const sub::ui::DeviceParam* p) {
+    std::vector<double> values;
+    for (int i = 0; i <= 2000; ++i) {
+        const double t = i / 2000.0;
+        values.push_back(p->logScale() ? p->minimum() * std::pow(p->maximum() / p->minimum(), t)
+                                       : p->minimum() + t * (p->maximum() - p->minimum()));
+    }
+    return values;
+}
+
+// Of a parameter's values, the one whose text reaches widest in `metrics`' font.
+double widestValue(const sub::ui::DeviceParam* p, const QFontMetricsF& metrics) {
+    double widest = p->minimum(), most = -1.0;
+    for (const double v : valuesOf(p)) {
+        if (const double extent = extentOf(p->format(v), metrics); extent > most) {
+            most = extent;
+            widest = v;
+        }
+    }
+    return widest;
+}
+
 // The display point nearest a frequency.
 int pointNear(double hz) {
     return int(std::lround(std::log(hz / 20.0) / std::log(1000.0) * (SpectralGraph::kPoints - 1)));
@@ -122,6 +164,12 @@ class TestUiDeviceEditorsSpectral : public QObject, public sub::app::test::Edito
 
     double value(const char* id) { return param(track_, device_, QString::fromLatin1(id)); }
     void set(const char* id, double v) { editor()->setDeviceParam(track_, device_, QString::fromLatin1(id), v); }
+
+    // The parameter a control (a knob's cell, a value box) is bound to.
+    sub::ui::DeviceParam* paramOf(const char* id) {
+        QQuickItem* item = find(view_, QString::fromLatin1(id));
+        return item ? qvariant_cast<sub::ui::DeviceParam*>(item->property("param")) : nullptr;
+    }
 
     // A Focus edge's value box (ParamBox), and the box inside it.
     QQuickItem* focusBox(const char* id) { return find(view_, QString::fromLatin1(id)); }
@@ -302,12 +350,31 @@ private Q_SLOTS:
             QVERIFY2(!rect.intersects(graphRect) && rect.left() > graphRect.right() && rect.left() < centerOf(dial).x(),
                      id);
             QVERIFY2(rect.right() <= 1 + view_->width() - 8 + 0.5, id);
-            // Wide enough for the widest value ("20.00 kHz", centred) clear of the automation dot (x 3.5..8.5).
-            const double widest =
-                QFontMetricsF(uiFont(8)).horizontalAdvance(formatValue(20000.0, QStringLiteral("Hz")));
-            QVERIFY2((box->width() - widest) / 2 >= 8.5 + 2.0,
-                     qPrintable(QStringLiteral("%1: %2 px for %3").arg(id).arg(box->width()).arg(widest)));
-            QVERIFY2(box->width() <= widest + 2 * 11 + 1, id);  // (and no wider)
+            // Wide enough for every value's text, centred, 2 px clear of the automation dot (x 3.5..8.5); and no
+            // wider than its widest text with every figure the font's widest and 11 px either side needs, or its
+            // column's other parts (a knob's cell, the captions, whole).
+            const QFontMetricsF metrics(uiFont(8));
+            double nearest = box->width(), widened = 0.0;
+            QString text;
+            for (const double v : valuesOf(p)) {
+                const double advance = metrics.horizontalAdvance(p->format(v));
+                if ((box->width() - advance) / 2 < nearest) {
+                    nearest = (box->width() - advance) / 2;
+                    text = p->format(v);
+                }
+                widened = std::max(widened, metrics.horizontalAdvance(::widened(p->format(v), metrics)));
+            }
+            QVERIFY2(nearest >= 8.5 + 2.0 - 1e-6,
+                     qPrintable(QStringLiteral("%1: %2 px for \"%3\"").arg(id).arg(box->width()).arg(text)));
+            QQuickItem* caption = nullptr;
+            for (QQuickItem* child : box->parentItem()->childItems())
+                if (child->property("truncated").isValid())
+                    caption = child;
+            QVERIFY2(caption && !caption->property("truncated").toBool(), id);
+            const double cell = find(view_, QStringLiteral("attack"))->width();
+            const double most = std::max({std::ceil(widened) + 2 * 11, cell, std::ceil(caption->implicitWidth())});
+            QVERIFY2(box->width() <= most + 1e-6, qPrintable(QStringLiteral("%1: %2 > %3").arg(id).arg(box->width())
+                                                                .arg(most)));
         }
 
         // Delta: a switch, off, level with the knobs beside it.
@@ -316,6 +383,13 @@ private Q_SLOTS:
         QVERIFY(!delta->property("lit").toBool());
         auto* mixDial = qvariant_cast<QQuickItem*>(find(view_, QStringLiteral("mix"))->property("knob"));
         QVERIFY(std::abs(centerOf(delta).y() - centerOf(mixDial).y()) <= 4);
+        // As wide as its text needs, in its cell (the last, at the right margin).
+        QQuickItem* output = find(view_, QStringLiteral("output"));
+        const QRectF deltaRect = delta->mapRectToScene(QRectF(0, 0, delta->width(), delta->height()));
+        const double outputRight = output->mapRectToScene(QRectF(0, 0, output->width(), output->height())).right();
+        QVERIFY2(delta->width() >= delta->implicitWidth() - 1e-6 && deltaRect.left() >= outputRight &&
+                     deltaRect.right() <= 1 + view_->width() - 8 + 0.5,
+                 qPrintable(QStringLiteral("%1 for %2").arg(delta->width()).arg(delta->implicitWidth())));
 
         // The display between the knobs: 376 px, its plot roomy enough, the badge clear of the header's text.
         QCOMPARE(graph_->width(), double(SpectralGraph::kWidth));
@@ -336,32 +410,45 @@ private Q_SLOTS:
         QQuickItem* badge = find(view_, QStringLiteral("sidechainBadge"));
         QVERIFY(badge);
         const QRectF badgeRect = badge->mapRectToScene(QRectF(0, 0, badge->width(), badge->height()));
-        QVERIFY(badgeRect.right() < graphRect.left() + SpectralGraph::kHeaderLeft);
+        QVERIFY(badgeRect.right() < graphRect.left() + graph_->headerLeft());  // (the readout starts after it)
+        QCOMPARE(graph_->readoutRect().left(), graph_->headerLeft());
         QVERIFY(badgeRect.bottom() <= graph_->mapToScene(plot.topLeft()).y() + 0.5);  // over the header, not the plot
         QVERIFY(!badge->property("lit").toBool());
 
-        // Every name and value reads whole, the widest too ("Stereo Link", "-0.5 dB/oct").
+        // Every name and value reads whole, the widest too: each knob at the value whose text is widest over its
+        // range ("-6.0 dB/oct", "-72.0 dB"); the cells as wide as the widest of those (every figure the font's
+        // widest) or the names need ("Stereo Link"), 64 px at least, and no wider.
         QCOMPARE(formatValue(-1.5, QStringLiteral("dB/oct")), QStringLiteral("-1.5 dB/oct"));
         QCOMPARE(formatValue(0.0, QStringLiteral("dB/oct")), QStringLiteral("0.0 dB/oct"));
         const int before = undo()->index();
-        for (const auto& [id, v] : std::vector<std::pair<const char*, double>>{
-                 {"threshold", -72.0}, {"below", -72.0}, {"tilt", -0.5}, {"ratio", 20.0}, {"upward", 10.0},
-                 {"release", 5000.0}, {"attack", 1000.0}, {"output", -24.0}, {"smooth", 100.0}, {"range", 48.0}})
-            set(id, v);
+        double need = 0.0;
         for (const auto& entry : defaults) {
             const char* id = entry.first;
             QQuickItem* cell = find(view_, QString::fromLatin1(id));
-            int texts = 0;
-            for (QQuickItem* child : cell->childItems()) {
-                if (child->property("truncated").isValid()) {
-                    ++texts;
-                    QVERIFY2(!child->property("truncated").toBool(), qPrintable(child->property("text").toString()));
-                }
-            }
-            QCOMPARE(texts, 2);  // its name and its value
+            QList<QQuickItem*> texts;
+            for (QQuickItem* child : cell->childItems())
+                if (child->property("truncated").isValid())
+                    texts.append(child);
+            QCOMPARE(texts.size(), 2);  // its name and its value
+            const QFontMetricsF metrics(qvariant_cast<QFont>(texts[1]->property("font")));
+            sub::ui::DeviceParam* p = paramOf(id);
+            set(id, widestValue(p, metrics));
+            for (QQuickItem* text : texts)
+                QVERIFY2(!text->property("truncated").toBool() && text->implicitWidth() <= cell->width() + 1e-6,
+                         qPrintable(QStringLiteral("%1: \"%2\" in %3 px")
+                                        .arg(QString::fromLatin1(id), text->property("text").toString())
+                                        .arg(cell->width())));
+            need = std::max(need, extentOf(texts[0]->property("text").toString(), metrics));
+            for (const double v : valuesOf(p))
+                need = std::max(need, extentOf(::widened(p->format(v), metrics), metrics));
+        }
+        for (const auto& entry : defaults) {
+            const double width = find(view_, QString::fromLatin1(entry.first))->width();
+            QVERIFY2(width >= 64.0 && width <= std::max(64.0, std::ceil(need)) + 1e-6,
+                     qPrintable(QStringLiteral("%1: %2, the texts need %3").arg(entry.first).arg(width).arg(need)));
         }
         tick();  // (the lines glided there)
-        QTRY_COMPARE(below->opacity(), 1.0);  // (Upward 10:1: Below no longer dimmed)
+        QTRY_COMPARE(below->opacity(), value("upward") > 1.001 ? 1.0 : 0.55);  // (Below dimmed at Upward 1:1)
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-widest.png"));
         while (undo()->index() > before) undo()->undo();
@@ -369,6 +456,50 @@ private Q_SLOTS:
         QTRY_COMPARE(below->opacity(), 0.55);
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-idle.png"));
+    }
+
+    // The header's readout reads whole at each handle's widest value (the parameter at the value whose text is
+    // widest over its range), after the Sidechain badge and before the cut's and the lift's figures at their
+    // widest.
+    void headerReadsWhole() {
+        QVERIFY(showDevice());
+        set("upward", 2.0);  // (Below's line and handle show, and the lift's figure)
+        QQuickItem* badge = find(view_, QStringLiteral("sidechainBadge"));
+        QVERIFY(badge);
+        const double badgeRight = badge->mapToItem(graph_, QPointF(badge->width(), 0)).x();
+        const QFontMetricsF metrics(SpectralGraph::headerFont());
+        // The cut's and the lift's figures at their widest (up to the Range's most).
+        double cutWidth = 0.0, liftWidth = 0.0;
+        for (double db = 0.0; db <= paramOf("range")->maximum() + 1e-9; db += 0.1) {
+            cutWidth = std::max(cutWidth, metrics.horizontalAdvance(QStringLiteral("−%1 dB").arg(db, 0, 'f', 1)));
+            liftWidth = std::max(liftWidth, metrics.horizontalAdvance(QStringLiteral("+%1 dB").arg(db, 0, 'f', 1)));
+        }
+        const double room = graph_->width() - SpectralGraph::kHeaderInset - cutWidth - SpectralGraph::kHeaderGap -
+                            liftWidth - SpectralGraph::kHeaderGap;
+        for (const auto& [handle, id] : {std::pair{SpectralGraph::ThresholdHandle, "threshold"},
+                                         std::pair{SpectralGraph::TiltLow, "tilt"},
+                                         std::pair{SpectralGraph::BelowHandle, "below"},
+                                         std::pair{SpectralGraph::FocusLowEdge, "focus_lo"},
+                                         std::pair{SpectralGraph::FocusHighEdge, "focus_hi"}}) {
+            const int before = undo()->index();
+            set(id, widestValue(paramOf(id), metrics));
+            tick();  // (the lines and edges glided there)
+            QTest::mouseMove(window_, at(handle));
+            QTRY_COMPARE(graph_->hoveredHandle(), int(handle));
+            const QString text = graph_->readout();
+            const QRectF rect = graph_->readoutRect();
+            QVERIFY2(rect.width() >= std::ceil(extentOf(text, metrics)) - 1e-6 && rect.left() > badgeRight &&
+                         rect.right() <= room + 1e-6,
+                     qPrintable(QStringLiteral("\"%1\" in %2..%3 (the badge to %4, room to %5)")
+                                    .arg(text)
+                                    .arg(rect.left())
+                                    .arg(rect.right())
+                                    .arg(badgeRight)
+                                    .arg(room)));
+            QTest::mouseMove(window_, QPoint(1, 1));
+            QTRY_COMPARE(graph_->hoveredHandle(), int(SpectralGraph::None));
+            while (undo()->index() > before) undo()->undo();
+        }
     }
 
     // --- Knobs and the button ------------------------------------------------------------------------

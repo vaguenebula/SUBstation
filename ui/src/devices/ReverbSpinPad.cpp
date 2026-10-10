@@ -7,6 +7,7 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QMouseEvent>
 
 #include <algorithm>
@@ -37,10 +38,36 @@ constexpr double kRowBottom = 13.0;      // the last's, above the L and R
 // without values keeps the last this long.
 constexpr double kStaleSeconds = 0.1;
 
+// How far `text` reaches from where it starts: its advance, or its last glyph's ink past it.
+double extentOf(const QString& text, const QFont& font) {
+    const QFontMetricsF metrics(font);
+    return std::max(metrics.horizontalAdvance(text), metrics.boundingRect(text).right());
+}
+
+// "Early", the left caption.
+QString earlyText() { return QStringLiteral("Early"); }
+
+// The tail's onset as the top right reads it, its figures `ms` ("53").
+QString onsetTextOf(const QString& ms) { return QStringLiteral("tail +%1 ms").arg(ms); }
+
 }  // namespace
 
+QFont ReverbSpinPad::captionFont() { return uiFont(7); }
+
 ReverbSpinPad::ReverbSpinPad(QQuickItem* parent) : DeviceCanvas(parent) {
-    setImplicitSize(kMinimumWidth, kMinimumHeight);
+    // As wide as the captions need: "Early" and the widest onset, its three figures the font's widest (figures may
+    // be proportional), apart and in from the plot's sides. (The font is the process's: worked out once.)
+    static const double kCaptions = [] {
+        const QFontMetricsF metrics(captionFont());
+        QChar widest = u'0';
+        for (const QChar digit : QStringLiteral("123456789"))
+            if (metrics.horizontalAdvance(digit) > metrics.horizontalAdvance(widest))
+                widest = digit;
+        const QString onset = onsetTextOf(QString(3, widest));
+        return 2 * (1 + kCaptionInset) + std::ceil(extentOf(earlyText(), captionFont())) + kCaptionGap +
+               std::ceil(extentOf(onset, captionFont()));
+    }();
+    setImplicitSize(std::max(double(kMinimumWidth), std::ceil(kCaptions)), kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton);
     setCursor(Qt::SizeAllCursor);
 }
@@ -48,6 +75,18 @@ ReverbSpinPad::ReverbSpinPad(QQuickItem* parent) : DeviceCanvas(parent) {
 QRectF ReverbSpinPad::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 1, -1, -1); }
 
 QRectF ReverbSpinPad::inner() const { return plot().adjusted(6, kCaption + 6, -6, -6); }
+
+QRectF ReverbSpinPad::earlyRect() const {
+    const QRectF r = plot();
+    return {r.left() + kCaptionInset, r.top() + 1, std::ceil(extentOf(earlyText(), captionFont())), 12};
+}
+
+QRectF ReverbSpinPad::onsetRect() const {
+    const QRectF r = plot();
+    const double right = r.right() - kCaptionInset, room = std::max(0.0, right - earlyRect().right() - kCaptionGap);
+    const double width = std::min(std::ceil(extentOf(onsetText_, captionFont())), room);
+    return {right - width, r.top() + 1, width, 12};
+}
 
 double ReverbSpinPad::xOfRate(double hz) const {
     const QRectF r = inner();
@@ -112,7 +151,7 @@ void ReverbSpinPad::sync() {
         radius_[i] = tap.gain != 0.0 ? kRadius + kRadiusLoud * loudness_[i] : 0.0;
     }
     const double onset = sub::app::reverbDiffuseOnsetMs(size, shape, density) + value(QStringLiteral("predelay"));
-    onsetText_ = QStringLiteral("tail +%1 ms").arg(qRound(onset));
+    onsetText_ = onsetTextOf(QString::number(qRound(onset)));
     const double amount = spin_ ? std::clamp(amountPercent_ / 100.0, 0.0, 1.0) : 0.0;
     if (synced_ && (amount != amount_.target || rate_ != rateBefore))
         linger_ = kLingerSeconds;  // Spin's settings changed: show how they swing, even in silence
@@ -284,17 +323,15 @@ void ReverbSpinPad::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
     p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
-    const QFont font = uiFont(7);
+    const QFont font = captionFont();
 
     // The stereo field's middle, under the captions.
     p.drawLine(QPointF(r.center().x(), r.top() + kCaption), QPointF(r.center().x(), r.bottom() - 3),
                withAlpha(Theme::kGridBeat, 200));
 
     // The captions: what it is, and when the tail starts after the input.
-    p.drawText(QRectF(r.left() + 3, r.top() + 1, 40, 12), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Early"),
-               Theme::kTextDim, font);
-    p.drawText(QRectF(r.left() + 30, r.top() + 1, r.width() - 33, 12), Qt::AlignRight | Qt::AlignVCenter,
-               onsetText_, Theme::kTextDim, font);
+    p.drawText(earlyRect(), Qt::AlignLeft | Qt::AlignVCenter, earlyText(), Theme::kTextDim, font);
+    p.drawText(onsetRect(), Qt::AlignRight | Qt::AlignVCenter, onsetText_, Theme::kTextDim, font);
 
     // The handle's crosshairs, under the particles.
     const QPointF h = handle();

@@ -21,9 +21,12 @@ import SUBstation
 // that plays), sets it undoably, touches it when pressed, and right-click gives
 // its menu; controls a switch leaves unused are dimmed, and stay editable.
 //
-// The boxes and lists are as wide as their widest text (the boxes' sample texts
-// in the font's widest digits, the lists' longest names); the pads and the graph
-// span the boxes under them, and everything to their right follows.
+// Everything with text is as wide as the font makes it: the knobs' columns their
+// widest caption or readout (the house's 52 px at least), the boxes their widest
+// text (sample texts in the font's widest digits) and the automation dot, the
+// lists their longest names and the arrow, the switches their text. The pads and
+// the graph span the boxes under them (and the switches over them, and their own
+// captions), and everything to their right follows.
 Item {
     id: editor
 
@@ -43,10 +46,18 @@ Item {
     readonly property real canvasHeight: height - 54
     readonly property real boxY: height - 24
     readonly property real dim: 0.55
-    readonly property real cell: 52  // a knob's column
-    // Decay over Freeze, Flat and Cut: a column as wide as Freeze (its snowflake and its name).
+    // A box's text this far in from either side at its widest: 1.5 px clear of the automation dot (drawn 3.5 to
+    // 8.5 px in from its left).
+    readonly property real boxMargin: 10
+    // A knob's column: as wide as the widest caption or readout a knob shows (the house's 52 px at least).
+    readonly property real cell: Math.max(52, Math.ceil(knobTexts.implicitWidth))
+    // Chorus's column: a knob's, or as wide as its switch (the Amount knob's title) needs; an even width, so the
+    // dial (centred on a whole pixel) and the switch over it share their centre.
+    readonly property real chorusWidth: 2 * Math.ceil(Math.max(cell, chorusButton.implicitWidth) / 2)
+    // Decay over Freeze, Flat and Cut: a column as wide as the widest of them (Freeze, with its snowflake).
     readonly property real freezeX: decayGraph.x + decayGraph.width + 4
-    readonly property real freezeWidth: Math.max(cell, Math.ceil(freezeButton.implicitWidth))
+    readonly property real freezeWidth: Math.max(cell, ...[freezeButton, flatButton, cutButton].map(
+        button => Math.ceil(button.implicitWidth)))
 
     // The switches, as they are now.
     readonly property bool loCutOn: isOn("lo_cut")
@@ -63,16 +74,23 @@ Item {
         return param ? param.value >= 0.5 : false
     }
 
-    // A box's sample text: `pattern` with each "d" the font's widest digit (figures may be proportional), so
-    // the box is as wide as the widest value it shows, whatever the font.
+    // A sample text: `pattern` with each "d" the font's widest digit (figures may be proportional), so what is
+    // measured is as wide as the widest value of that form, whatever the font.
     function sample(pattern) {
         return pattern.replace(/d/g, boxFont.widestDigit)
+    }
+    // A box's sample text: the widest of the forms its values take (as `sample` makes them).
+    function boxSample(patterns) {
+        return patterns.map(sample).reduce((widest, text) => boxFont.advance(text) > boxFont.advance(widest)
+                                                                 ? text : widest)
     }
 
     FontMetrics {
         id: boxFont
 
+        // (Read in a binding that names the font, so it is worked out again once the font is set.)
         readonly property string widestDigit: {
+            void font
             let widest = "0"
             for (const digit of "123456789") {
                 if (boxFont.advanceWidth(digit) > boxFont.advanceWidth(widest))
@@ -81,7 +99,36 @@ Item {
             return widest
         }
 
-        font: Theme.uiFont(8)  // (ParamBox's)
+        // `text`'s advance (the font followed, as above).
+        function advance(text) {
+            void font
+            return advanceWidth(text)
+        }
+
+        font: Theme.uiFont(8)  // (ParamBox's, and the knobs' captions' and readouts')
+    }
+
+    // The widest of `lines` as a Text lays them out in its font (a caption, a readout or a switch's text is as
+    // wide as its advance and whatever of its last glyph reaches past it): hidden, a line each.
+    component Widest: Text {
+        property var lines: []
+        visible: false
+        textFormat: Text.PlainText
+        text: lines.join("\n")
+    }
+    // What the knobs show at their widest: their captions, and each readout's widest form, every figure the
+    // font's widest (Predelay's "ddd ms" and "0.dd ms", Size's "ddd.dd", Stereo's degrees, Decay's "dd.dd s" and
+    // "1000 ms" (999.6 rounded), the percentages, Rate's "d.dd Hz", the levels' "-dd.d dB"). In the captions' and
+    // readouts' font.
+    Widest {
+        id: knobTexts
+        font: Theme.uiFont(8)
+        lines: [shapeKnob, predelayKnob, sizeKnob, stereoKnob, decayKnob, diffusionKnob, scaleKnob,
+                chorusAmountKnob, chorusRateKnob, reflectKnob, diffuseKnob, mixKnob]
+            .map(knob => knob.title)
+            .concat(["ddd ms", "d.d ms", "0.dd ms", "1000 ms", "ddd.dd", "ddd°", "dd.dd s", "100 %", "d.dd Hz",
+                     "-dd.d dB"]
+                        .map(pattern => editor.sample(pattern)))
     }
 
     DeviceParamMap {
@@ -94,13 +141,17 @@ Item {
               "chorus_amount", "reflect", "diffuse", "mix"]
     }
 
+    // A knob in its column.
+    component Knob: EditorKnob {
+        width: editor.cell
+    }
     // A value box for a parameter, as the Delay's: the parameter's own text, typed values parsed as it reads them;
-    // as wide as its sample text (its widest) and the automation dot.
+    // as wide as its sample text (its widest) with `boxMargin` either side.
     component Box: ParamBox {
         formatter: v => param ? param.format(v) : ""
         parser: text => param ? param.parse(text) : null
         defaultValue: param ? param.defaultValue : 0
-        width: Math.ceil(implicitWidth)
+        width: Math.ceil(boxFont.advance(sampleText)) + 2 * editor.boxMargin
         height: 18
         y: editor.boxY
         Behavior on opacity {
@@ -118,8 +169,19 @@ Item {
             }
         }
     }
+    // A list's names in its font: the advance of the longest (a last glyph reaching past it stays clear of the
+    // arrow, in the list's right padding).
+    component Names: FontMetrics {
+        function widest(names) {
+            void font  // (worked out again once the font is set)
+            let most = 0
+            for (const name of names)
+                most = Math.max(most, advanceWidth(name))
+            return most
+        }
+    }
     // A list under its caption, the two in the middle of a row of knobs; as wide as its longest name and
-    // the arrow (and a knob's column at least).
+    // the arrow, and its caption (and a knob's column at least).
     component Choice: Column {
         id: choice
 
@@ -129,20 +191,12 @@ Item {
         property alias listName: list.objectName  // (the list's: tests find it by its name)
         readonly property alias list: list
 
-        width: Math.max(editor.cell, Math.ceil(metrics.widest(list.names)) + list.button.leftPadding
-                        + list.button.rightPadding)
+        width: Math.max(editor.cell, Math.ceil(names.widest(list.names)) + list.button.leftPadding
+                        + list.button.rightPadding, Math.ceil(caption.implicitWidth))
         spacing: 2
 
-        FontMetrics {
-            id: metrics
-
-            function widest(names) {
-                let most = 0
-                for (const name of names)
-                    most = Math.max(most, advanceWidth(name))
-                return most
-            }
-
+        Names {
+            id: names
             font: list.button.font
         }
         EditorCaption {
@@ -159,6 +213,7 @@ Item {
     // --- Input ---------------------------------------------------------------------------------
 
     FadingButton {
+        id: loCutButton
         objectName: "loCutButton"
         x: filterPad.x
         y: 6
@@ -168,6 +223,7 @@ Item {
         tooltip: qsTr("Lo Cut: a high-pass on what goes into the reverb, at the band's low edge")
     }
     FadingButton {
+        id: hiCutButton
         objectName: "hiCutButton"
         x: filterPad.x + filterPad.width - width
         y: 6
@@ -184,7 +240,10 @@ Item {
         deviceId: editor.deviceId
         x: 8
         y: 26
-        width: inWidthBox.x + inWidthBox.width - x
+        // Its boxes side by side, or wider for the cuts' switches over it (each half of it) or its caption.
+        width: Math.max(inFreqBox.width + 4 + inWidthBox.width,
+                        2 * Math.max(Math.ceil(loCutButton.implicitWidth), Math.ceil(hiCutButton.implicitWidth)) + 4,
+                        implicitWidth)
         height: editor.canvasHeight
 
         HoverHandler {
@@ -202,24 +261,25 @@ Item {
         param: p.get("in_freq")
         logScale: true
         decimals: 0
-        sampleText: editor.sample("1d.dd kHz")  // (10 to 18 kHz)
+        sampleText: editor.boxSample(["ddd Hz", "1000 Hz", "d.dd kHz", "1d.dd kHz"])  // (50 Hz to 18 kHz)
         tooltip: qsTr("In Filter Freq: the centre of the band the reverb hears")
     }
     Box {
         id: inWidthBox
         objectName: "inWidthBox"
-        x: inFreqBox.x + inFreqBox.width + 4
+        x: filterPad.x + filterPad.width - width  // (under the pad's right edge)
         opacity: editor.loCutOn || editor.hiCutOn ? 1 : editor.dim
         param: p.get("in_width")
         step: 0.05
         decimals: 2
-        sampleText: editor.sample("d.dd oct")
+        sampleText: editor.boxSample(["d.dd oct"])
         tooltip: qsTr("In Filter Width: how wide that band is, in octaves")
     }
 
     // --- Early reflections ---------------------------------------------------------------------
 
     FadingButton {
+        id: spinButton
         objectName: "spinButton"
         x: spinPad.x
         y: 6
@@ -237,7 +297,9 @@ Item {
         deviceId: editor.deviceId
         x: spinAmountBox.x
         y: 26
-        width: spinRateBox.x + spinRateBox.width - x
+        // Its boxes side by side, or wider for Spin's switch or its captions ("Early", the tail's onset).
+        width: Math.max(spinAmountBox.width + 4 + spinRateBox.width, Math.ceil(spinButton.implicitWidth),
+                        implicitWidth)
         height: editor.canvasHeight
 
         HoverHandler {
@@ -255,21 +317,21 @@ Item {
         param: p.get("spin_amount")
         step: 0.5
         decimals: 1
-        sampleText: "100 %"
+        sampleText: editor.boxSample(["dd %", "100 %"])
         tooltip: qsTr("ER Spin Amount: how far the reflections drift")
     }
     Box {
         id: spinRateBox
         objectName: "spinRateBox"
-        x: spinAmountBox.x + spinAmountBox.width + 4
+        x: spinPad.x + spinPad.width - width
         opacity: editor.spinOn ? 1 : editor.dim
         param: p.get("spin_rate")
         logScale: true
         decimals: 2
-        sampleText: editor.sample("d.dd Hz")
+        sampleText: editor.boxSample(["d.dd Hz"])
         tooltip: qsTr("ER Spin Rate: how fast they drift (fast: doppler pitch and swirling pans)")
     }
-    EditorKnob {
+    Knob {
         id: shapeKnob
         objectName: "shapeKnob"
         x: spinPad.x + spinPad.width + 4
@@ -279,7 +341,8 @@ Item {
         tooltip: qsTr("Shape: low, the reflections fade slowly and the tail starts early; "
                       + "high, they fade fast and the tail starts later")
     }
-    EditorKnob {
+    Knob {
+        id: predelayKnob
         objectName: "predelayKnob"
         x: shapeKnob.x
         y: editor.row2
@@ -295,7 +358,8 @@ Item {
 
     // --- Global --------------------------------------------------------------------------------
 
-    EditorKnob {
+    Knob {
+        id: sizeKnob
         objectName: "sizeKnob"
         x: densityChoice.x + (densityChoice.width - width) / 2
         y: 6
@@ -303,7 +367,8 @@ Item {
         title: qsTr("Size")
         tooltip: qsTr("Size: the room's size (every delay of the reverb grows with it)")
     }
-    EditorKnob {
+    Knob {
+        id: stereoKnob
         objectName: "stereoKnob"
         x: smoothChoice.x + (smoothChoice.width - width) / 2
         y: 6
@@ -340,28 +405,35 @@ Item {
     // --- Diffusion network ---------------------------------------------------------------------
 
     FadingButton {
+        id: loShelfButton
         objectName: "loShelfButton"
         x: decayGraph.x
         y: 6
-        width: 40
+        width: Math.max(40, Math.ceil(implicitWidth))
         param: p.get("lo_shelf")
         text: qsTr("Lo")
         tooltip: qsTr("Lo Shelf: the lows die away faster (drag the handle in the graph)")
     }
     FadingButton {
+        id: hiFilterButton
         objectName: "hiFilterButton"
-        x: decayGraph.x + 44
+        x: loShelfButton.x + loShelfButton.width + 4
         y: 6
-        width: 40
+        width: Math.max(40, Math.ceil(implicitWidth))
         param: p.get("hi_filter")
         text: qsTr("Hi")
         tooltip: qsTr("Hi Filter: the highs die away faster: a shelf, or a low-pass on every pass")
     }
     ParamChoice {
+        id: hiTypeChoice
         objectName: "hiTypeChoice"
-        x: decayGraph.x + 88
+
+        // Its longest name with the arrow.
+        readonly property real needed: Math.ceil(hiTypeNames.widest(names)) + button.leftPadding + button.rightPadding
+
+        x: hiFilterButton.x + hiFilterButton.width + 4
         y: 6
-        width: decayGraph.width - 88
+        width: decayGraph.x + decayGraph.width - x
         height: 16
         opacity: editor.hiFilterOn ? 1 : editor.dim
         Behavior on opacity {
@@ -372,6 +444,11 @@ Item {
         param: p.get("hi_type")
         tooltip: qsTr("Hi Filter Type: a shelf (the highs ring for a share of Decay) "
                       + "or a low-pass (darker with every pass)")
+
+        Names {
+            id: hiTypeNames
+            font: hiTypeChoice.button.font
+        }
     }
     ReverbDecayGraph {
         id: decayGraph
@@ -381,7 +458,10 @@ Item {
         deviceId: editor.deviceId
         x: loFreqBox.x
         y: 26
-        width: hiGainBox.x + hiGainBox.width - x
+        // Its boxes side by side (the shelves' pairs 8 px apart), or wider for the switches and the type over it
+        // or its captions ("Decay time", the widest readout).
+        width: Math.max(loFreqBox.width + 4 + loGainBox.width + 8 + hiFreqBox.width + 4 + hiGainBox.width,
+                        hiTypeChoice.x - x + hiTypeChoice.needed, implicitWidth)
         height: editor.canvasHeight
 
         HoverHandler {
@@ -401,7 +481,7 @@ Item {
         param: p.get("lo_freq")
         logScale: true
         decimals: 0
-        sampleText: editor.sample("1d.dd kHz")
+        sampleText: editor.boxSample(["dd Hz", "ddd Hz", "1000 Hz", "d.dd kHz", "1d.dd kHz"])
         tooltip: qsTr("Lo Shelf Freq: where the lows start dying away faster")
     }
     Box {
@@ -412,33 +492,34 @@ Item {
         param: p.get("lo_gain")
         step: 1
         decimals: 0
-        sampleText: "100 %"
+        sampleText: editor.boxSample(["dd %", "100 %"])
         tooltip: qsTr("Lo Shelf Gain: how long the lows ring, as a share of Decay")
     }
     Box {
         id: hiFreqBox
         objectName: "hiFreqBox"
-        x: loGainBox.x + loGainBox.width + 8
+        x: hiGainBox.x - 4 - width
         opacity: editor.hiFilterOn ? 1 : editor.dim
         param: p.get("hi_freq")
         logScale: true
         decimals: 0
-        sampleText: editor.sample("1d.dd kHz")
+        sampleText: editor.boxSample(["dd Hz", "ddd Hz", "1000 Hz", "d.dd kHz", "1d.dd kHz"])
         tooltip: qsTr("Hi Filter Freq: where the highs start dying away faster")
     }
     Box {
         id: hiGainBox
         objectName: "hiGainBox"
-        x: hiFreqBox.x + hiFreqBox.width + 4
+        x: decayGraph.x + decayGraph.width - width  // (under the graph's right edge)
         opacity: editor.hiFilterOn && !editor.hiLowpass ? 1 : editor.dim
         param: p.get("hi_gain")
         step: 1
         decimals: 0
-        sampleText: "100 %"
+        sampleText: editor.boxSample(["dd %", "100 %"])
         tooltip: qsTr("Hi Shelf Gain: how long the highs ring, as a share of Decay (unused by the low-pass)")
     }
 
-    EditorKnob {
+    Knob {
+        id: decayKnob
         objectName: "decayKnob"
         x: editor.freezeX + (editor.freezeWidth - width) / 2
         y: 6
@@ -458,6 +539,7 @@ Item {
         tooltip: qsTr("Freeze: the tail holds for ever")
     }
     FadingButton {
+        id: flatButton
         objectName: "flatButton"
         x: editor.freezeX
         y: editor.height - 42
@@ -468,6 +550,7 @@ Item {
         tooltip: qsTr("Flat: frozen, every band holds (off: the shelves still take their bands away)")
     }
     FadingButton {
+        id: cutButton
         objectName: "cutButton"
         x: editor.freezeX
         y: editor.height - 22
@@ -477,7 +560,7 @@ Item {
         text: qsTr("Cut")
         tooltip: qsTr("Cut: frozen, new sound no longer reaches the tail")
     }
-    EditorKnob {
+    Knob {
         id: diffusionKnob
         objectName: "diffusionKnob"
         x: editor.freezeX + editor.freezeWidth + 2
@@ -486,7 +569,8 @@ Item {
         title: qsTr("Diffusion")
         tooltip: qsTr("Diffusion: how quickly the echoes blur into a smooth tail")
     }
-    EditorKnob {
+    Knob {
+        id: scaleKnob
         objectName: "scaleKnob"
         x: diffusionKnob.x
         y: editor.row2
@@ -508,6 +592,7 @@ Item {
         objectName: "chorusAmountKnob"
         x: networkEdge.x + 4
         y: 6
+        width: editor.chorusWidth
         opacity: editor.chorusOn ? 1 : editor.dim
         param: p.get("chorus_amount")
         tooltip: qsTr("Chorus Amount: how far they drift")
@@ -517,16 +602,18 @@ Item {
         objectName: "chorusButton"
         x: chorusAmountKnob.x
         y: chorusAmountKnob.y
-        width: editor.cell
+        width: editor.chorusWidth
         height: chorusAmountKnob.knob.y - 1
         param: p.get("chorus")
         text: qsTr("Chorus")
         tooltip: qsTr("Chorus: the tail's echoes drift in pitch, for a lusher, less metallic sound")
     }
     EditorKnob {
+        id: chorusRateKnob
         objectName: "chorusRateKnob"
         x: chorusAmountKnob.x
         y: editor.row2
+        width: editor.chorusWidth
         opacity: editor.chorusOn ? 1 : editor.dim
         param: p.get("chorus_rate")
         title: qsTr("Rate")
@@ -540,7 +627,8 @@ Item {
 
     // --- Output --------------------------------------------------------------------------------
 
-    EditorKnob {
+    Knob {
+        id: reflectKnob
         objectName: "reflectKnob"
         x: chorusEdge.x + 4
         y: 6
@@ -548,7 +636,8 @@ Item {
         title: qsTr("Reflect")
         tooltip: qsTr("Reflect: the early reflections' level")
     }
-    EditorKnob {
+    Knob {
+        id: diffuseKnob
         objectName: "diffuseKnob"
         x: chorusEdge.x + 4
         y: editor.row2
@@ -556,10 +645,10 @@ Item {
         title: qsTr("Diffuse")
         tooltip: qsTr("Diffuse: the tail's level")
     }
-    EditorKnob {
+    Knob {
         id: mixKnob
         objectName: "mixKnob"
-        x: chorusEdge.x + 4 + editor.cell + 2
+        x: reflectKnob.x + reflectKnob.width + 2
         y: 6
         param: p.get("mix")
         title: qsTr("Dry/Wet")

@@ -28,8 +28,10 @@
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
+#include <QFont>
 #include <QLineF>
 #include <QList>
+#include <QRectF>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 
@@ -51,6 +53,9 @@ class SpectralGraph : public DeviceCanvas {
     Q_PROPERTY(QString readout READ readout NOTIFY hoverChanged)    // the header's text for it
     Q_PROPERTY(double maxCutDb READ maxCutDb NOTIFY levelsChanged)  // ≥ 0, eased, as the header shows
     Q_PROPERTY(double maxLiftDb READ maxLiftDb NOTIFY levelsChanged)
+    // Where the header's readout starts: the editor's, clear of what it lays over the header's left (the
+    // Sidechain badge).
+    Q_PROPERTY(double headerLeft READ headerLeft WRITE setHeaderLeft NOTIFY headerLeftChanged)
 
 public:
     enum Handle { None = 0, ThresholdHandle, TiltLow, TiltHigh, BelowHandle, FocusLowEdge, FocusHighEdge };
@@ -73,7 +78,8 @@ public:
     static constexpr double kBelowHandleHz = 300.0;
     static constexpr double kMinFocusOctaves = 1.0 / 3.0;  // the editor keeps the Focus edges this far apart
     static constexpr double kFineDrag = 0.1;               // Shift
-    static constexpr double kHeaderLeft = 64.0;            // the QML Sidechain badge's room in the header
+    static constexpr double kHeaderInset = 4.0;            // px: the header's texts in from the sides,
+    static constexpr double kHeaderGap = 8.0;              // and apart
     static constexpr double kMeterFloorDb = -60.0;
     static constexpr int kFocusStops = 256;  // the Focus dim's weights, across the plot
     static constexpr std::array<double, 4> kLevelFigures{0.0, -24.0, -48.0, -72.0};  // dB, figured on the grid
@@ -85,6 +91,15 @@ public:
     QString readout() const { return readoutText_; }
     double maxCutDb() const { return maxCut_.value; }
     double maxLiftDb() const { return maxLift_.value; }
+    double headerLeft() const { return headerLeft_; }
+    void setHeaderLeft(double left);
+
+    // The header's texts are in headerFont(): the hovered or dragged value at the left (in readoutRect(): from
+    // headerLeft, as wide as its text, up to kHeaderGap before the room the cut's and the lift's figures take at
+    // their widest, "−dd.d dB" and "+dd.d dB" in the font's widest figures; drawn clipped there, should the
+    // header ever be too narrow), the cut and the lift at the right.
+    static QFont headerFont();
+    QRectF readoutRect() const;
 
     QRectF plot() const;
     LogAxis frequencyAxis() const;
@@ -130,6 +145,7 @@ public:
 
 Q_SIGNALS:
     void keyedChanged();
+    void headerLeftChanged();
     void hoverChanged();
     void levelsChanged();
 
@@ -201,6 +217,7 @@ private:
     std::array<Eased, 7> handleGrow_{};  // per Handle: 0 at rest, 1 hovered or dragged
     Eased readoutOpacity_;
     QString readoutText_;
+    double headerLeft_ = kHeaderInset;
     std::vector<double> thresholdCurve_;  // dB at each display point, as drawn
     QList<double> frequencies_;           // the display points (Hz)
     QList<double> focusFrequencies_;      // kFocusStops, evenly across the plot (Hz)

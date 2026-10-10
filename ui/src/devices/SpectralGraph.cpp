@@ -159,6 +159,32 @@ SpectralGraph::SpectralGraph(QQuickItem* parent) : DeviceCanvas(parent) {
 
 QRectF SpectralGraph::plot() const { return QRectF(1, 15, width() - 24, height() - 27); }
 
+void SpectralGraph::setHeaderLeft(double left) {
+    if (left == headerLeft_)
+        return;
+    headerLeft_ = left;
+    Q_EMIT headerLeftChanged();
+    update();
+}
+
+QFont SpectralGraph::headerFont() { return uiFont(8); }
+
+QRectF SpectralGraph::readoutRect() const {
+    // The room the cut's figure (and the lift's, while it shows) takes at its widest: "−dd.d dB", "+dd.d dB", each
+    // figure the font's widest.
+    const QFontMetricsF metrics(headerFont());
+    QChar widest = u'0';
+    for (const QChar digit : QStringLiteral("123456789"))
+        if (metrics.horizontalAdvance(digit) > metrics.horizontalAdvance(widest))
+            widest = digit;
+    const QString figures = QStringLiteral("%1%1.%1 dB").arg(widest);
+    double right = width() - kHeaderInset - metrics.horizontalAdvance(QStringLiteral("−") + figures) - kHeaderGap;
+    if (belowShown())
+        right -= metrics.horizontalAdvance(QStringLiteral("+") + figures) + kHeaderGap;
+    const double text = std::max(metrics.horizontalAdvance(readoutText_), metrics.boundingRect(readoutText_).right());
+    return {headerLeft_, 1, std::clamp(std::ceil(text), 0.0, std::max(0.0, right - headerLeft_)), 14};
+}
+
 LogAxis SpectralGraph::frequencyAxis() const {
     const QRectF r = plot();
     return {kLow, kHigh, r.left(), r.width()};
@@ -731,7 +757,7 @@ void SpectralGraph::paint(SgPainter& p) {
     p.drawRoundedRect(outer, 4, 4, withAlpha(Theme::kGridBeat, 150));
 
     const QRectF r = plot();
-    const QFont font7 = uiFont(7), font8 = uiFont(8);
+    const QFont font7 = uiFont(7), font8 = headerFont();
     const QLineF thresholdLine = this->thresholdLine(), belowLine = this->belowLine();
     const double belowOpacity = belowOpacity_.value;
 
@@ -916,21 +942,18 @@ void SpectralGraph::paint(SgPainter& p) {
     const double cut = maxCut_.value, lift = maxLift_.value;
     const QString cutText = cut >= 0.05 ? QStringLiteral("−%1 dB").arg(cut, 0, 'f', 1) : QStringLiteral("0.0 dB");
     const double cutWidth = SgPainter::textWidth(cutText, font8);
-    double headerRight = w - 4;
-    p.drawText(QRectF(headerRight - cutWidth - 2, 1, cutWidth + 2, 14), Qt::AlignRight | Qt::AlignVCenter, cutText,
+    const double cutRight = w - kHeaderInset;
+    p.drawText(QRectF(cutRight - cutWidth - 2, 1, cutWidth + 2, 14), Qt::AlignRight | Qt::AlignVCenter, cutText,
                cut >= 0.05 ? Theme::kAccent : Theme::kTextDim, font8);
-    headerRight -= cutWidth + 8;
     if (belowShown()) {
         const QString liftText = QStringLiteral("+%1 dB").arg(std::max(lift, 0.0), 0, 'f', 1);
-        const double liftWidth = SgPainter::textWidth(liftText, font8);
-        p.drawText(QRectF(headerRight - liftWidth - 2, 1, liftWidth + 2, 14), Qt::AlignRight | Qt::AlignVCenter,
+        const double liftWidth = SgPainter::textWidth(liftText, font8), liftRight = cutRight - cutWidth - kHeaderGap;
+        p.drawText(QRectF(liftRight - liftWidth - 2, 1, liftWidth + 2, 14), Qt::AlignRight | Qt::AlignVCenter,
                    liftText, lift >= 0.05 ? Theme::kPlayOn : Theme::kTextDim, font8);
-        headerRight -= liftWidth + 8;
     }
     if (readoutOpacity_.value > 0.001 && !readoutText_.isEmpty()) {
         p.setOpacity(readoutOpacity_.value);
-        p.drawText(QRectF(kHeaderLeft, 1, std::max(0.0, headerRight - kHeaderLeft), 14),
-                   Qt::AlignLeft | Qt::AlignVCenter, readoutText_, Theme::kText, font8);
+        p.drawText(readoutRect(), Qt::AlignLeft | Qt::AlignVCenter, readoutText_, Theme::kText, font8);
         p.setOpacity(1.0);
     }
 }

@@ -24,8 +24,11 @@
 
 #include "audio/ReverbResponse.h"
 
+#include <QFont>
 #include <QList>
 #include <QPointF>
+#include <QRectF>
+#include <QString>
 #include <QtQml/qqmlregistration.h>
 
 #include <array>
@@ -40,8 +43,11 @@ class ReverbSpinPad : public DeviceCanvas {
     Q_PROPERTY(bool animating READ animating NOTIFY levelsChanged)
 
 public:
-    static constexpr int kMinimumWidth = 96;  // (the editor gives it the width of the boxes under it)
+    // At least, and as wide as its captions need (the editor gives it the width of the boxes under it).
+    static constexpr int kMinimumWidth = 96;
     static constexpr int kMinimumHeight = 56;
+    static constexpr double kCaptionInset = 3.0;  // px: the captions in from the plot's sides,
+    static constexpr double kCaptionGap = 8.0;    // and at least this far apart
     static constexpr double kRateMin = sub::app::kReverbMinSpinRate;  // Hz: ER Spin Rate's range, across
     static constexpr double kRateMax = sub::app::kReverbMaxSpinRate;
     static constexpr int kTaps = sub::app::kReverbTaps;
@@ -63,6 +69,15 @@ public:
     double particleReach(int k) const;
     // Spin's swing as drawn (0..1): its amount, eased as Spin is switched, while the reflections sound.
     double amountShown() const { return amount_.value * presence_.value; }
+
+    // The captions over the plot, in captionFont(): "Early" at the left, the tail's onset after the input at the
+    // right ("tail +53 ms"), each rect as wide as its text (the onset's cut short kCaptionGap after "Early", should
+    // a pad ever be narrower than its implicit width: it is drawn clipped there). The implicit width is what the
+    // captions need with the widest onset (three of the font's widest figures: it stays under a second).
+    static QFont captionFont();
+    QString onsetText() const { return onsetText_; }
+    QRectF earlyRect() const;
+    QRectF onsetRect() const;
 
     // Pad coordinates: the plot (the item less 1 px), the handle's area in it (6 px less all round, and
     // under the captions' 13 px strip, so the handle never covers them).

@@ -1,14 +1,15 @@
 // The Reverb's editor (ui/qml/devices/editors/ReverbEditor.qml; ui/src/devices/ReverbFilterPad, ReverbSpinPad,
 // ReverbDecayGraph): loaded as the device view loads it, over a real engine. It fits the view's height (and its own
-// least height), nothing overlapping, its boxes, lists and switches as wide as their text and its knobs the house's
-// 34 px in rows; every control is bound to its parameter (undoably, with a tooltip), each switch the one under the
-// mouse over it (Chorus's over its knob's caption too); the pads' and the graph's drags are one undo step each and set
-// what the engine plays; the curves are the engine's own maths (ReverbResponse.h); what the engine publishes as it
-// renders reaches the pads and the graph (lit by what is now, not by a backlog's loudest), which animate and then rest.
-// With SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there playing, frozen, and in other modes.
+// least height), nothing overlapping, its boxes, lists and switches as wide as their text (the boxes' every value
+// clear of the automation dot) and its knobs the house's 34 px in rows; every caption and readout reads whole at its
+// widest, whatever the font, and nothing is wider than its text needs; every control is bound to its parameter
+// (undoably, with a tooltip), each switch the one under the mouse over it (Chorus's over its knob's caption too); the
+// pads' and the graph's drags are one undo step each and set what the engine plays; the curves are the engine's own
+// maths (ReverbResponse.h); what the engine publishes as it renders reaches the pads and the graph (lit by what is now,
+// not by a backlog's loudest), which animate and then rest. With SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved
+// there playing, frozen, in other modes, and with every box automated at its widest value.
 
 #include <QCursor>
-#include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QImage>
@@ -57,10 +58,53 @@ const QList<std::pair<const char*, const char*>> kControls = {
     {"chorusAmountKnob", "chorus_amount"}, {"chorusRateKnob", "chorus_rate"}, {"reflectKnob", "reflect"},
     {"diffuseKnob", "diffuse"},      {"mixKnob", "mix"}};
 const QStringList kCanvases = {QStringLiteral("filterPad"), QStringLiteral("spinPad"), QStringLiteral("decayGraph")};
+// A value box's automation dot reaches this far in from its left (ValueBoxItem: 2.5 px round at 6 px), and its text
+// keeps this far clear of it.
+constexpr double kDotRight = 8.5, kDotClearance = 1.5;
 // The knobs of each row, left to right.
 const QList<const char*> kFirstRow = {"shapeKnob",     "sizeKnob",         "stereoKnob",  "decayKnob",
                                       "diffusionKnob", "chorusAmountKnob", "reflectKnob", "mixKnob"};
 const QList<const char*> kSecondRow = {"predelayKnob", "scaleKnob", "chorusRateKnob", "diffuseKnob"};
+
+// How far `text` reaches from where it starts in `metrics`' font: its advance, or its last glyph's ink past it.
+double extentOf(const QString& text, const QFontMetricsF& metrics) {
+    return std::max(metrics.horizontalAdvance(text), metrics.boundingRect(text).right());
+}
+
+// `text` with every figure the font's widest (as the editor's sample texts have them).
+QString widened(QString text, const QFontMetricsF& metrics) {
+    QChar widest = u'0';
+    for (const QChar digit : QStringLiteral("123456789"))
+        if (metrics.horizontalAdvance(digit) > metrics.horizontalAdvance(widest))
+            widest = digit;
+    for (QChar& c : text)
+        if (c.isDigit())
+            c = widest;
+    return text;
+}
+
+// A parameter's values over its range: 2001 of them, evenly (in log for a log-scaled one).
+std::vector<double> valuesOf(const sub::ui::DeviceParam* p) {
+    std::vector<double> values;
+    for (int i = 0; i <= 2000; ++i) {
+        const double t = i / 2000.0;
+        values.push_back(p->logScale() ? p->minimum() * std::pow(p->maximum() / p->minimum(), t)
+                                       : p->minimum() + t * (p->maximum() - p->minimum()));
+    }
+    return values;
+}
+
+// Of a parameter's values, the one whose text reaches widest in `metrics`' font.
+double widestValue(const sub::ui::DeviceParam* p, const QFontMetricsF& metrics) {
+    double widest = p->minimum(), most = -1.0;
+    for (const double v : valuesOf(p)) {
+        if (const double extent = extentOf(p->format(v), metrics); extent > most) {
+            most = extent;
+            widest = v;
+        }
+    }
+    return widest;
+}
 
 // The first of `frequencies` (rising) at or above `hz`.
 std::size_t indexOf(const std::vector<double>& frequencies, double hz) {
@@ -240,33 +284,38 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
     }
 
     // Every box as wide as the widest text its parameter takes (over its whole range, whatever the font's
-    // figures) and the automation dot (ValueBoxItem's own measure: the text and 16 px); every list as wide
-    // as its longest name with the arrow; every switch as wide as its text (and icon); the knobs the
-    // house's 34 px.
+    // figures) with the automation dot clear of it (every value's text, centred, kDotClearance or more past the
+    // dot), and no wider (its widest text with every figure the font's widest no more than half a pixel further
+    // in); every list as wide as its longest name with the arrow, and its caption (or a knob's column), and no
+    // wider; every switch as wide as its text (and icon); the knobs the house's 34 px.
     void checkWidths(QQuickItem* view) {
+        const double cell = control(view, "shapeKnob")->width();
         for (const auto& [name, id] : kControls) {
             QQuickItem* item = control(view, name);
             const QByteArray kind(name);
             if (kind.endsWith("Box")) {
                 ValueBoxItem* b = box(view, name);
                 sub::ui::DeviceParam* p = paramOf(item);
-                const QFontMetrics metrics(b->font());  // (as ValueBoxItem measures its sample text)
-                double widest = 0.0;
+                const QFontMetricsF metrics(b->font());  // (as ValueBoxItem centres its text: by its advance)
+                double nearest = item->width(), widened = 0.0;
                 QString text;
-                for (int i = 0; i <= 2000; ++i) {
-                    const double t = i / 2000.0;
-                    const double v = p->logScale() ? p->minimum() * std::pow(p->maximum() / p->minimum(), t)
-                                                   : p->minimum() + t * (p->maximum() - p->minimum());
-                    if (metrics.horizontalAdvance(p->format(v)) > widest) {
-                        widest = double(metrics.horizontalAdvance(p->format(v)));
+                for (const double v : valuesOf(p)) {
+                    const double advance = metrics.horizontalAdvance(p->format(v));
+                    if ((item->width() - advance) / 2 < nearest) {
+                        nearest = (item->width() - advance) / 2;
                         text = p->format(v);
                     }
+                    widened = std::max(widened, metrics.horizontalAdvance(::widened(p->format(v), metrics)));
                 }
-                QVERIFY2(item->width() >= widest + 16.0 - 1e-6, qPrintable(QStringLiteral("%1 %2 for \"%3\" (%4)")
-                                                                          .arg(QString::fromLatin1(name))
-                                                                          .arg(item->width())
-                                                                          .arg(text)
-                                                                          .arg(widest)));
+                QVERIFY2(nearest >= kDotRight + kDotClearance - 1e-6,
+                         qPrintable(QStringLiteral("%1 %2 px: \"%3\" %4 px in")
+                                        .arg(QString::fromLatin1(name))
+                                        .arg(item->width())
+                                        .arg(text)
+                                        .arg(nearest)));
+                QVERIFY2((item->width() - widened) / 2 <= kDotRight + kDotClearance + 0.5 + 1e-6,
+                         qPrintable(QStringLiteral("%1 %2 px for %3").arg(QString::fromLatin1(name)).arg(item->width())
+                                        .arg(widened)));
             } else if (kind.endsWith("Choice")) {
                 auto* button = qvariant_cast<QQuickItem*>(item->property("button"));
                 const QFontMetricsF metrics(qvariant_cast<QFont>(button->property("font")));
@@ -278,6 +327,18 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
                 QVERIFY2(item->width() >= longest + padding - 1e-6,
                          qPrintable(QString::fromLatin1(name) + u' ' + QString::number(item->width()) + u' ' +
                                     QString::number(longest + padding)));
+                // Density's and Smooth's: under their captions, whole, as wide as the list or the caption needs,
+                // or a knob's column.
+                if (name != QByteArrayLiteral("hiTypeChoice")) {
+                    QQuickItem* caption = nullptr;
+                    for (QQuickItem* child : item->parentItem()->childItems())
+                        if (child->isVisible() && child->property("truncated").isValid())
+                            caption = child;
+                    QVERIFY2(caption && caption->implicitWidth() <= item->width() + 1e-6, name);
+                    QVERIFY2(item->width() <= std::max({cell, std::ceil(longest) + padding,
+                                                         std::ceil(caption->implicitWidth())}) + 1e-6,
+                             name);
+                }
             } else if (kind.endsWith("Button")) {
                 QVERIFY2(item->width() >= item->implicitWidth() - 1e-6,
                          qPrintable(QString::fromLatin1(name) + u' ' + QString::number(item->width()) + u' ' +
@@ -318,18 +379,41 @@ private Q_SLOTS:
         for (const auto& [name, id] : kControls) QVERIFY2(control(s.view, name), name);
         // As wide as its sections, 8 px in from either side (Dry/Wet the last).
         QCOMPARE(s.view->implicitWidth(), rectIn(s.view, control(s.view, "mixKnob")).right() + 8.0);
-        QVERIFY2(s.view->implicitWidth() < 1100.0, qPrintable(QString::number(s.view->implicitWidth())));
         // The pads and the graph grow into the body: 26 px from its top, 28 from its bottom (their boxes), and
-        // span the boxes under them.
-        const QList<std::tuple<QQuickItem*, const char*, const char*>> spans = {
-            {s.filter, "inFreqBox", "inWidthBox"}, {s.spin, "spinAmountBox", "spinRateBox"},
-            {s.decay, "loFreqBox", "hiGainBox"}};
-        for (const auto& [canvas, first, last] : spans) {
+        // span the boxes under them: as wide as the boxes side by side, or as the switches over them or their own
+        // captions need (their implicit widths), and no wider.
+        const auto widthOf = [&](const char* name) { return control(s.view, name)->width(); };
+        const auto needOf = [&](const char* name) { return std::ceil(control(s.view, name)->implicitWidth()); };
+        auto* hiType = control(s.view, "hiTypeChoice");
+        auto* hiTypeButton = qvariant_cast<QQuickItem*>(hiType->property("button"));
+        double hiTypeNeed = 0.0;
+        for (const QString& label : paramOf(hiType)->labels())
+            hiTypeNeed = std::max(hiTypeNeed, QFontMetricsF(qvariant_cast<QFont>(hiTypeButton->property("font")))
+                                                  .horizontalAdvance(label));
+        hiTypeNeed = std::ceil(hiTypeNeed) + hiTypeButton->property("leftPadding").toDouble() +
+                     hiTypeButton->property("rightPadding").toDouble();
+        const QList<std::tuple<QQuickItem*, const char*, const char*, double, double>> spans = {
+            {s.filter, "inFreqBox", "inWidthBox", widthOf("inFreqBox") + 4 + widthOf("inWidthBox"),
+             2 * std::max(needOf("loCutButton"), needOf("hiCutButton")) + 4},
+            {s.spin, "spinAmountBox", "spinRateBox", widthOf("spinAmountBox") + 4 + widthOf("spinRateBox"),
+             needOf("spinButton")},
+            {s.decay, "loFreqBox", "hiGainBox",
+             widthOf("loFreqBox") + 4 + widthOf("loGainBox") + 8 + widthOf("hiFreqBox") + 4 + widthOf("hiGainBox"),
+             widthOf("loShelfButton") + 4 + widthOf("hiFilterButton") + 4 + hiTypeNeed}};
+        for (const auto& [canvas, first, last, boxes, switches] : spans) {
             QVERIFY2(std::abs(canvas->height() - (s.view->height() - 54)) <= 1.0, qPrintable(canvas->objectName()));
             const QRectF r = rectIn(s.view, canvas);
             QCOMPARE(r.left(), rectIn(s.view, control(s.view, first)).left());
             QCOMPARE(r.right(), rectIn(s.view, control(s.view, last)).right());
             QVERIFY(canvas->width() >= canvas->implicitWidth());
+            QVERIFY2(canvas->width() >= boxes - 1e-6 && canvas->width() >= switches - 1e-6 &&
+                         canvas->width() <= std::max({boxes, switches, canvas->implicitWidth()}) + 1e-6,
+                     qPrintable(QStringLiteral("%1 %2: boxes %3, switches %4, implicitly %5")
+                                    .arg(canvas->objectName())
+                                    .arg(canvas->width())
+                                    .arg(boxes)
+                                    .arg(switches)
+                                    .arg(canvas->implicitWidth())));
         }
         checkWidths(s.view);
         checkLaidOut(s.view);
@@ -346,6 +430,130 @@ private Q_SLOTS:
             QQuickItem* canvas = find(view, name);
             QVERIFY(canvas->height() >= canvas->implicitHeight());
         }
+    }
+
+    // Every caption and readout whole: each knob's at the value whose text is widest over its parameter's range,
+    // the knobs' columns no wider than the widest of those (every figure the font's widest) needs, or the house's
+    // 52 px (Chorus's, its switch's, on an even width); the pads' and the graph's captions at their widest (the
+    // tail's onset at the parameters' ends, each readout at its values' widest), apart and inside, as wide as
+    // their implicit widths make room for.
+    void textsWhole() {
+        Shown s = reverb();
+        QVERIFY(s.view && s.spin && s.decay);
+        const int before = undo()->index();
+        const auto idOf = [](const char* name) {
+            for (const auto& [control, id] : kControls)
+                if (QByteArray(control) == name)
+                    return id;
+            return "";
+        };
+        double need = 0.0;
+        for (const QList<const char*>& row : {kFirstRow, kSecondRow}) {
+            for (const char* name : row) {
+                QQuickItem* cell = control(s.view, name);
+                QList<QQuickItem*> texts;  // its caption and its readout
+                for (QQuickItem* child : cell->childItems())
+                    if (child->property("truncated").isValid())
+                        texts.append(child);
+                QCOMPARE(texts.size(), 2);
+                const QFontMetricsF metrics(qvariant_cast<QFont>(texts[1]->property("font")));
+                sub::ui::DeviceParam* p = paramOf(cell);
+                set(s, idOf(name), widestValue(p, metrics));
+                for (QQuickItem* text : texts)
+                    QVERIFY2(!text->property("truncated").toBool() && text->implicitWidth() <= cell->width() + 1e-6,
+                             qPrintable(QStringLiteral("%1: \"%2\" in %3 px")
+                                            .arg(QString::fromLatin1(name), text->property("text").toString())
+                                            .arg(cell->width())));
+                need = std::max(need, extentOf(texts[0]->property("text").toString(), metrics));
+                for (const double v : valuesOf(p))
+                    need = std::max(need, extentOf(widened(p->format(v), metrics), metrics));
+            }
+        }
+        const double cell = std::max(52.0, std::ceil(need));
+        for (const QList<const char*>& row : {kFirstRow, kSecondRow}) {
+            for (const char* name : row) {
+                const double width = control(s.view, name)->width();
+                const bool chorus = QByteArray(name).startsWith("chorus");
+                const double expected =
+                    chorus ? 2 * std::ceil(std::max(cell, control(s.view, "chorusButton")->implicitWidth()) / 2) : cell;
+                QVERIFY2(width >= 52.0 && width <= expected + 1e-6,
+                         qPrintable(QStringLiteral("%1 %2, the texts need %3").arg(QString::fromLatin1(name))
+                                        .arg(width).arg(need)));
+            }
+        }
+        while (undo()->index() > before) undo()->undo();
+
+        // The tail's onset at its latest (the largest room, the latest Shape and Predelay, each Density).
+        ReverbSpinPad* pad = s.spin;
+        const QFontMetricsF captions(ReverbSpinPad::captionFont());
+        set(s, "size", paramOf(control(s.view, "sizeKnob"))->maximum());
+        set(s, "shape", 100.0);
+        set(s, "predelay", paramOf(control(s.view, "predelayKnob"))->maximum());
+        for (int density = 0; density <= 3; ++density) {
+            set(s, "density", density);
+            const QString text = pad->onsetText();
+            const QRectF early = pad->earlyRect(), onset = pad->onsetRect();
+            const double width = std::ceil(extentOf(text, captions));
+            QVERIFY2(onset.width() >= width - 1e-6 && onset.left() >= early.right() + ReverbSpinPad::kCaptionGap - 1e-6
+                         && early.left() >= pad->plot().left() && onset.right() <= pad->plot().right() &&
+                         early.width() >= extentOf(QStringLiteral("Early"), captions),
+                     qPrintable(QStringLiteral("%1 in %2..%3").arg(text).arg(onset.left()).arg(onset.right())));
+            QVERIFY2(pad->implicitWidth() >= 2 * (1 + ReverbSpinPad::kCaptionInset) + early.width() +
+                                                 ReverbSpinPad::kCaptionGap + width - 1e-6,
+                     qPrintable(QStringLiteral("%1: %2").arg(text).arg(pad->implicitWidth())));
+        }
+        while (undo()->index() > before) undo()->undo();
+
+        // The decay graph's readouts at their widest: each shelf's (its frequency and gain at their widest
+        // texts), the Low-pass's, the decay time's, Frozen.
+        ReverbDecayGraph* graph = s.decay;
+        const QFontMetricsF readouts(ReverbDecayGraph::captionFont());
+        const auto checkReadout = [&]() {
+            const QString text = graph->readout();
+            const QRectF caption = graph->captionRect(), readout = graph->readoutRect();
+            const double width = std::ceil(extentOf(text, readouts));
+            QVERIFY2(readout.width() >= width - 1e-6 &&
+                         readout.left() >= caption.right() + ReverbDecayGraph::kCaptionGap - 1e-6 &&
+                         caption.left() >= graph->plot().left() && readout.right() <= graph->plot().right() &&
+                         caption.width() >= extentOf(QStringLiteral("Decay time"), readouts),
+                     qPrintable(QStringLiteral("%1 in %2..%3").arg(text).arg(readout.left()).arg(readout.right())));
+            QVERIFY2(graph->implicitWidth() >= 2 + 2 * ReverbDecayGraph::kCaptionInset + caption.width() +
+                                                   ReverbDecayGraph::kCaptionGap + width +
+                                                   ReverbDecayGraph::kMeterWidth + 2 - 1e-6,
+                     qPrintable(QStringLiteral("%1: %2").arg(text).arg(graph->implicitWidth())));
+        };
+        const auto setWidest = [&](const char* name) {
+            set(s, idOf(name), widestValue(paramOf(control(s.view, name)), readouts));
+        };
+        for (const auto& [handle, freq, gain] : {std::tuple{ReverbDecayGraph::Lo, "loFreqBox", "loGainBox"},
+                                                 std::tuple{ReverbDecayGraph::Hi, "hiFreqBox", "hiGainBox"}}) {
+            const int shelf = undo()->index();
+            setWidest(freq);
+            setWidest(gain);
+            refreshes(2);
+            hover(graph, graph->handleAt(handle));
+            refreshes(2);
+            QCOMPARE(graph->hovered(), handle);
+            checkReadout();
+            hover(s.view, QPointF(1, 1));
+            while (undo()->index() > shelf) undo()->undo();
+        }
+        setWidest("hiFreqBox");
+        setWidest("decayKnob");
+        set(s, "hi_type", 1.0);  // Low-pass
+        refreshes(2);
+        hover(graph, graph->hiHandle());
+        refreshes(2);
+        QVERIFY(graph->readout().startsWith(QStringLiteral("Low-pass")));
+        checkReadout();
+        hover(s.view, QPointF(1, 1));
+        refreshes(2);
+        QCOMPARE(graph->hovered(), ReverbDecayGraph::None);
+        checkReadout();  // (the decay time)
+        set(s, "freeze", 1.0);
+        QCOMPARE(graph->readout(), QStringLiteral("Frozen"));
+        checkReadout();
+        while (undo()->index() > before) undo()->undo();
     }
 
     // --- Bound, undoable ------------------------------------------------------------------------
@@ -999,6 +1207,19 @@ private Q_SLOTS:
         refreshes(30, 16);
         QTest::qWait(50);
         save(grab(), QStringLiteral("reverb-sparse.png"));
+
+        // Every box at its widest text and automated (the dot at its left, clear of the text), every switch on.
+        for (const auto& [name, id] : kControls) {
+            if (QByteArray(name).endsWith("Button")) {
+                set(s, id, 1.0);
+            } else if (QByteArray(name).endsWith("Box")) {
+                set(s, id, widestValue(paramOf(control(s.view, name)), QFontMetricsF(box(s.view, name)->font())));
+                box(s.view, name)->setProperty("automation", QStringLiteral("on"));
+            }
+        }
+        refreshes(30, 16);
+        QTest::qWait(200);  // (the dimmed controls' fades)
+        save(grab(), QStringLiteral("reverb-automation.png"));
     }
 };
 
