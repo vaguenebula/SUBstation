@@ -57,7 +57,9 @@ Item {
                 width: parent.width
                 param: p.get("gain")
                 title: qsTr("Gain")
-                tooltip: qsTr("Gain: boosts or cuts the input before limiting. Turn it up to push the sound into the ceiling.")
+                tooltip: qsTr("Gain: boosts or cuts the input before limiting. "
+                              + "Turn it up to push the sound into the ceiling")
+                knob.bipolar: true  // (±24 dB: 0 is the middle)
                 opacity: editor.maximizeOn ? 0 : 1  // (EditorKnob's own Behavior fades it)
                 visible: opacity > 0
                 enabled: !editor.maximizeOn  // (its opacity is set here, so it doesn't dim)
@@ -67,7 +69,7 @@ Item {
                 width: parent.width
                 param: p.get("output")
                 title: qsTr("Output")
-                tooltip: qsTr("Output: where the loudest peaks come out with Maximize on (its ceiling).")
+                tooltip: qsTr("Output: where the loudest peaks come out with Maximize on (its ceiling)")
                 opacity: editor.maximizeOn ? 1 : 0
                 visible: opacity > 0
                 enabled: editor.maximizeOn
@@ -80,7 +82,8 @@ Item {
             width: parent.width
             param: p.get("maximize")
             text: qsTr("Maximize")
-            tooltip: qsTr("Maximize: loudness from one control. Lower the Threshold and everything comes up by as much; what reaches it comes out at the Output level.")
+            tooltip: qsTr("Maximize: loudness from one control. Lower the Threshold and everything comes up by as "
+                          + "much; what reaches it comes out at the Output level")
         }
     }
 
@@ -101,15 +104,23 @@ Item {
         // (over the plot and the meters: the header has the line's box, with a tooltip of its own)
         ToolTip.visible: graphHover.hovered && graphHover.point.position.y > 24 && !graph.dragging
         ToolTip.delay: 700
-        ToolTip.text: qsTr("Level over the last 1.5 s: input (grey, red where it goes over the line), output (light), gain reduction (orange, from the top). Drag the line to set the Ceiling (the Threshold with Maximize); double-click it for its default.")
+        ToolTip.text: qsTr("Level over the last 1.5 s: input (grey, red where it goes over the line), output "
+                           + "(light), gain reduction (orange, from the top). Drag the line to set the Ceiling "
+                           + "(the Threshold with Maximize); double-click it for its default")
     }
 
-    // The line's value, in the display's header (over it, so declared after it).
+    // The line's value, in the display's header (over it, so declared after it). The caption is as
+    // wide as the wider of its two names, so the box stays put when Maximize swaps them.
+    TextMetrics {
+        id: captionMetrics
+        font: lineCaption.font
+        text: qsTr("Threshold")
+    }
     EditorCaption {
         id: lineCaption
         x: graph.x + 6
         y: graph.y + 2
-        width: 52
+        width: Math.ceil(captionMetrics.advanceWidth) + 4
         height: 18
         horizontalAlignment: Text.AlignLeft
         verticalAlignment: Text.AlignVCenter
@@ -120,19 +131,23 @@ Item {
         objectName: "lineBox"
         x: lineCaption.x + lineCaption.width + 2
         y: graph.y + 2
-        width: 58
+        // (its widest text, its minimum's, + 16, and 4 more: the automation dot, 3.5 to 8.5 px from the
+        // left, clears a centred minus sign)
+        width: implicitWidth + 4
         param: editor.maximizeOn ? p.get("threshold") : p.get("ceiling")
         step: 0.1
         decimals: 1
         defaultValue: param ? param.defaultValue : undefined
-        sampleText: "-24.0 dB"
+        sampleText: param ? param.format(param.minimum) : ""
         formatter: v => param ? param.format(v) : ""
         parser: text => param ? param.parse(text) : null
-        tooltip: editor.maximizeOn ? qsTr("Threshold: the level where limiting starts; the gain is Output − Threshold.")
-                                   : qsTr("Ceiling: no peak comes out above it.")
+        tooltip: editor.maximizeOn
+                 ? qsTr("Threshold: the level where limiting starts; the gain is Output − Threshold")
+                 : qsTr("Ceiling: no peak comes out above it")
     }
 
-    // Release (set by Auto while it is on) over Auto.
+    // Release over Auto. While Auto is on Release is dimmed, as Ableton greys it, and can still be set
+    // (for when Auto is off again).
     Item {
         id: releaseColumn
 
@@ -149,8 +164,9 @@ Item {
             width: parent.width
             param: p.get("release")
             title: qsTr("Release")
-            enabled: !editor.autoOn
-            tooltip: qsTr("Release: how fast the gain comes back after a peak (set by Auto while it is on).")
+            opacity: editor.autoOn ? 0.55 : 1
+            tooltip: qsTr("Release: how fast the gain comes back after a peak (Auto sets it while it is on; "
+                          + "this one takes over when Auto is off)")
         }
         ParamButton {
             id: autoRelease
@@ -159,7 +175,8 @@ Item {
             width: parent.width
             param: p.get("auto_release")
             text: qsTr("Auto")
-            tooltip: qsTr("Auto release: quick after short peaks, slower while limiting goes on, so it neither pumps nor distorts.")
+            tooltip: qsTr("Auto release: quick after short peaks, slower while limiting goes on, so it neither "
+                          + "pumps nor distorts")
         }
     }
 
@@ -188,7 +205,8 @@ Item {
                 objectName: "lookahead"
                 width: parent.width
                 param: p.get("lookahead")
-                tooltip: qsTr("Lookahead: how far ahead peaks are seen (the device's latency). Shorter is punchier but can distort lows.")
+                tooltip: qsTr("Lookahead: how far ahead peaks are seen (the device's latency). Shorter is punchier "
+                              + "but can distort lows")
             }
         }
         Column {
@@ -203,7 +221,9 @@ Item {
                 objectName: "mode"
                 width: parent.width
                 param: p.get("mode")
-                tooltip: qsTr("Standard: no sample above the ceiling. Soft Clip: rounds peaks off as they near it, louder with some crunch. True Peak: no peak between samples above it either (for streaming).")
+                tooltip: qsTr("Standard: no sample above the ceiling. Soft Clip: rounds peaks off as they near it, "
+                              + "louder with some crunch. True Peak: no peak between samples above it either "
+                              + "(for streaming)")
             }
         }
         Row {
@@ -216,7 +236,7 @@ Item {
                 param: p.get("routing")
                 choice: 0
                 text: qsTr("L/R")
-                tooltip: qsTr("L/R: limits left and right.")
+                tooltip: qsTr("L/R: limits left and right")
             }
             ParamButton {
                 objectName: "routingMS"
@@ -224,7 +244,7 @@ Item {
                 param: p.get("routing")
                 choice: 1
                 text: qsTr("M/S")
-                tooltip: qsTr("M/S: limits the middle and the sides, so a loud centre needn't pull the sides down.")
+                tooltip: qsTr("M/S: limits the middle and the sides, so a loud centre needn't pull the sides down")
             }
         }
         Row {
@@ -240,15 +260,16 @@ Item {
             ParamBox {
                 id: linkBox
                 objectName: "link"
-                width: 68
+                width: implicitWidth + 4  // (as the line's box)
                 param: p.get("link")
                 step: 1
                 decimals: 0
-                defaultValue: 100.0
-                sampleText: "100 %"
+                defaultValue: param ? param.defaultValue : undefined
+                sampleText: param ? param.format(param.maximum) : ""
                 formatter: v => param ? param.format(v) : ""
                 parser: text => param ? param.parse(text) : null
-                tooltip: qsTr("Link: how much of one channel's gain reduction the other shares (100 %: both alike, 0 %: each its own).")
+                tooltip: qsTr("Link: how much of one channel's gain reduction the other shares (100 %: both alike, "
+                              + "0 %: each its own)")
             }
         }
     }

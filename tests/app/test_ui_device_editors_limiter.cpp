@@ -7,6 +7,7 @@
 // rests; the line and Soft Clip's band are the engine's own maths (LimiterResponse.h). With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there limiting, in Soft Clip, with Maximize.
 
+#include <QFontMetricsF>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QTest>
@@ -145,8 +146,12 @@ private Q_SLOTS:
         QCOMPARE(gain->value(), 0.0);
         QCOMPARE(release->value(), 300.0);
         QVERIFY(release->logScale());
+        QVERIFY(gain->bipolar());  // (±24 dB)
+        QVERIFY(!knob(view, "output")->bipolar() && !release->bipolar());
         QVERIFY(!find(view, QStringLiteral("output"))->isVisible());  // (Maximize is off)
-        QVERIFY(!find(view, QStringLiteral("release"))->isEnabled());  // set by Auto
+        // Release is Auto's while it is on: dimmed, as Ableton greys it, and still settable.
+        QVERIFY(find(view, QStringLiteral("release"))->isEnabled());
+        QTRY_COMPARE(find(view, QStringLiteral("release"))->opacity(), 0.55);
         QVERIFY(lit(view, "autoRelease"));
         QVERIFY(lit(view, "routingLR"));
         QVERIFY(!lit(view, "routingMS"));
@@ -158,6 +163,26 @@ private Q_SLOTS:
         QVERIFY(line && link);
         QCOMPARE(line->text(), QStringLiteral("-0.3 dB"));
         QCOMPARE(link->text(), QStringLiteral("100 %"));
+        // The boxes are wide enough for their widest text with the automation dot (3.5 to 8.5 px from the
+        // left) clear of it, centred; the lists for their longest name with the arrow.
+        for (const auto& [box, widest] : {std::pair{line, "-24.0 dB"}, std::pair{link, "100 %"}}) {
+            const double text = QFontMetricsF(box->font()).horizontalAdvance(QString::fromLatin1(widest));
+            QVERIFY2((box->width() - text) / 2 >= 9.5, widest);
+        }
+        for (const char* name : {"lookahead", "mode"}) {
+            QQuickItem* list = find(view, QString::fromLatin1(name));
+            sub::ui::DeviceParam* p = paramOf(list);
+            auto* button = qvariant_cast<QQuickItem*>(list->property("button"));
+            QVERIFY(p && button);
+            const int steps = undo()->index();
+            for (int i = 0; i < p->labels().size(); ++i) {
+                p->set(i);
+                QTRY_COMPARE(list->property("index").toInt(), i);
+                QVERIFY2(button->implicitWidth() <= list->width(), qPrintable(p->labels().at(i)));
+            }
+            while (undo()->index() > steps)
+                undo()->undo();
+        }
         QVERIFY(std::abs(graph->lineDb() + 0.3) < 1e-6);
         QVERIFY(!graph->maximize());
 
@@ -209,14 +234,23 @@ private Q_SLOTS:
         undo()->undo();
         QCOMPARE(gain->value(), 0.0);
 
-        // Auto: off frees the Release knob.
+        // Auto: off brings the Release knob up (it was dimmed); on dims it again. It can be set either way.
         click(view, "autoRelease");
         QCOMPARE(value("auto_release"), 0.0);
-        QVERIFY(find(view, QStringLiteral("release"))->isEnabled());
+        QTRY_COMPARE(find(view, QStringLiteral("release"))->opacity(), 1.0);
         QVERIFY(!lit(view, "autoRelease"));
         undo()->undo();
         QCOMPARE(value("auto_release"), 1.0);
-        QVERIFY(!find(view, QStringLiteral("release"))->isEnabled());
+        QTRY_COMPARE(find(view, QStringLiteral("release"))->opacity(), 0.55);
+        {
+            const QPoint dial = centerOf(knob(view, "release"));
+            QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, dial);
+            dragTo(dial - QPoint(0, 30));
+            QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, dial - QPoint(0, 30));
+            QVERIFY2(value("release") > 300.0, qPrintable(QString::number(value("release"))));
+            undo()->undo();
+            QCOMPARE(value("release"), 300.0);
+        }
 
         // Routing: a button per choice.
         click(view, "routingMS");
@@ -359,6 +393,21 @@ private Q_SLOTS:
         editor()->setDeviceParam(track, device, QStringLiteral("ceiling"), -9.0);
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, centerOf(box(view, "lineBox")));
         QVERIFY(std::abs(value("ceiling") + 0.3) < 1e-6);
+
+        // It stops at the parameter's range: dragged far up, the Ceiling's most (0 dB), and back down from
+        // there at once.
+        {
+            const QPoint from = scenePoint(graph, QPointF(x, graph->lineY()));
+            QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, from);
+            dragTo(from - QPoint(0, 60));
+            QCOMPARE(value("ceiling"), 0.0);
+            dragTo(from - QPoint(0, 55));
+            QVERIFY2(value("ceiling") < -0.5, qPrintable(QString::number(value("ceiling"))));
+            QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, from - QPoint(0, 55));
+            QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier,
+                               scenePoint(graph, QPointF(x, graph->lineY())));
+            QVERIFY(std::abs(value("ceiling") + 0.3) < 1e-6);
+        }
 
         // A press away from the line changes nothing.
         steps = undo()->index();
@@ -598,10 +647,6 @@ private Q_SLOTS:
         const LimiterLine plain = limiterLine(false, 6.0, -0.3, -12.0, -1.0);
         QVERIFY(std::abs(plain.lineDb + 0.3) < 1e-6);
         QCOMPARE(plain.outputShiftDb, 0.0);
-        // Soft Clip's curve: a peak at the line comes out 1.16 dB under it; at its top, at the line.
-        QVERIFY(std::abs(limiterSoftClipDb(0.0) + 1.16) < 0.01);
-        QVERIFY(std::abs(limiterSoftClipDb(limiterSoftTopDb())) < 0.01);
-        QVERIFY(std::abs(limiterSoftClipDb(-12.0) + 12.0) < 1e-4);
         // The axes: +12 dB at the plot's top, -36 at its bottom; the reduction's 24 dB at the bottom (6 dB
         // on the level's 0 dB line).
         const QRectF plot = graph->plot();

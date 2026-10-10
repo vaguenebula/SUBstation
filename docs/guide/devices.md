@@ -309,7 +309,7 @@ sound.
   music: quick after short peaks (about 50 ms), slower the longer limiting goes on (up
   to 600 ms), so a held bass note isn't distorted by the gain following its every cycle,
   and the level comes back soon after a lone peak. The Release knob is dimmed while Auto
-  is on.
+  is on; you can still set it, for when you switch Auto off.
 - **Lookahead** (1.5, 3 or 6 ms): how far ahead it sees peaks. Shorter is punchier but
   can distort the lows; take 6 ms for bass-heavy material. It is the device's latency:
   the other tracks are delayed to line up with it.

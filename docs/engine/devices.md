@@ -573,11 +573,13 @@ between the two; Maximize turns the ceiling into a threshold. Its latency is the
   ramps would bulge by about 1 dB halfway). A cubic's second difference is constant: three products a sample, a log and
   three `exp` per new target. `post` and Soft Clip's amount are written into rings as long as the lookahead when their
   sample comes in and read back when it comes out, so each sample is detected and scaled with the same values: a change
-  is a smooth level change and never breaks the brick wall. Input that isn't finite (NaN, ±inf, beyond 1e30) is taken as
-  0, so one bad sample can't silence the rest.
+  is a smooth level change and never breaks the brick wall. Input that isn't finite (NaN, ±inf, beyond 1e30) never
+  reaches it: `BuiltinProcessor::process()` takes it as 0, as for every built-in device, so one bad sample can't
+  silence the rest.
 - **Detection**, 12 samples behind the input (`kDetectorDelay`), of left, right, mid and side. Standard and Soft Clip
   take each sample's magnitude. True Peak interpolates seven points between each sample and the next (24 taps each, a
-  Kaiser-windowed sinc with β = 6, each phase passing DC exactly: flat within ±0.01 dB to 0.42 of the rate), and refines
+  Kaiser-windowed sinc with β = 6, `dsp::besselI0` for its window, each phase passing DC exactly: flat within ±0.01 dB
+  to 0.42 of the rate), and refines
   the largest of the eight by a parabola through it and its neighbours (`limiter::refinedPeak`, never below the point,
   within 0.002 dB of a sine's crest at 0.4 of the rate), aiming 0.02 dB under the ceiling (`kTruePeakMargin`). Its
   output, by a 32x reference meter, stays at or under the ceiling for content up to about 0.42 of the rate (20 kHz at
@@ -625,8 +627,9 @@ between the two; Maximize turns the ceiling into a threshold. Its latency is the
   the brick wall's clamp at the base rate clips what the decimation filter overshoots.)
 - **Smoothing.** Gain, Ceiling, Threshold, Output and Maximize glide `pre` and `post` (20 ms in dB); Release sets its
   coefficient per stretch; Link glides linearly (20 ms, before the pipelines, which smooth it further); Mode's Soft Clip
-  amount, Routing and Auto glide over 20 ms eased in and out (smoothstep: a crossfade has no kink where it starts or
-  stops); switching to or from True Peak only changes what is measured, which the pipelines smooth.
+  amount, Routing and Auto glide over 20 ms eased in and out (`dsp::sCurve`, a smoothstep: a crossfade has no kink
+  where it starts or stops); switching to or from True Peak only changes what is measured, which the pipelines
+  smooth.
 - **Lookahead changes** fade the output out (2 ms, a smootherstep), start again from the new length (the delay line,
   rings, holds, boxes and releases cleared: fills of a few thousand values at most), wait for the line to refill and
   fade back in: a dip of about L + 4 ms, never a click. `latencySamples()` and `tailSamples()` are the lookahead (72,
@@ -637,17 +640,17 @@ between the two; Maximize turns the ceiling into a threshold. Its latency is the
   comes out as exact zeros once the delay line has emptied, and the gain reduction returns to exactly 0 (with Auto about
   1.1 s after the input stops; manual, about 21 Release times).
 - **Displays**, seven, one value per 128 samples (`kMeterSamples`), published together, all measured where the sample
-  comes out (so a peak's input, reduction and output line up): `in_l`, `in_r` (the input's peak in the line's domain:
-  dBFS after Gain, or the raw input with Maximize; floor -90), `out_l`, `out_r` (the output's peak in dBFS), `gr_a`,
-  `gr_b` (the most gain reduction of the routing's two channels, L and R or M and S, in dB, positive; exactly 0 when the
-  gain stayed 1) and `clip` (what Soft Clip's knee took off the loudest peak, dB; exactly 0 in Standard and True Peak).
-  One channel: the right's are the left's.
+  comes out (so a peak's input, reduction and output line up): `input_l`, `input_r` (the input's peak in the line's
+  domain: dBFS after Gain, or the raw input with Maximize; floor -90), `output_l`, `output_r` (the output's peak in
+  dBFS), `reduction_a`, `reduction_b` (the most gain reduction of the routing's two channels, L and R or M and S, in
+  dB, positive, as the Compressor's `reduction`; exactly 0 when the gain stayed 1) and `clip` (what Soft Clip's knee
+  took off the loudest peak, dB; exactly 0 in Standard and True Peak). One channel: the right's are the left's.
 - **Shared with the editor** ([LimiterDesign.h](../../engine/src/builtin/LimiterDesign.h), through the application
   layer's [LimiterResponse.h](../../app/src/audio/LimiterResponse.h)): `limiter::scales` (the line, and Maximize's shift
-  of the output), `softKneeDb`, `softTopDb` and `softClipDb` (Soft Clip's band and curve: `knee` and `shape` through
-  it), `kMeterSamples` (the history's time axis) and `kFloorDb` (the displays' silence), so the line and Soft Clip's
-  band drawn are where the device limits and rounds off. `lookaheadSamples`, `autoReleaseMs`, `sharedCeiling`, the
-  true-peak phases, `refinedPeak` and `reductionDb` are the device's own (and its tests').
+  of the output), `softKneeDb` and `softTopDb` (Soft Clip's band), `kMeterSamples` (the history's time axis) and
+  `kFloorDb` (the displays' silence), so the line and Soft Clip's band drawn are where the device limits and rounds
+  off. `lookaheadSamples`, `autoReleaseMs`, `sharedCeiling`, the true-peak phases, `refinedPeak` and `reductionDb` are
+  the device's own (and its tests'); `interpolate` (the phases applied one point at a time) is the tests'.
 - On the machine it was written on (a 2.1 GHz Xeon, AVX2, `builtin_devices_bench`, 48 kHz stereo) it took 0.27 % of one
   core at its defaults (Standard), 0.32 % in Soft Clip with 12 dB of gain, 0.49 % in True Peak (0.65 % limiting 12 dB),
   and 0.91 % at its heaviest (True Peak, M/S at Link 50 %, 6 ms, 24 dB of gain).
@@ -2081,8 +2084,9 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   at Link 100 % exactly L/R linked, in Standard and True Peak); every control changing without a click (a 6th-difference
   measure, against an unfaded 6 dB step; each change must change the output, the release's on a falling tone; Auto's
   20 ms blend) and the lookahead's dip; glides smooth in dB, and a moving ceiling leaving quiet material untouched;
-  automation through the engine; reset and new rates; the extremes, input that isn't finite; silence ringing out to
-  exact zeros; one channel; latency compensated through the engine; its seven displays.
+  automation through the engine; reset and new rates; the extremes, and input that isn't audio (NaN, ±inf, beyond
+  1e30, in either routing) leaving no trace; silence ringing out to exact zeros; one channel; latency compensated
+  through the engine; its seven displays. The device runs alone on `harness/Standalone.h`.
 - [test_multiband_engine.cpp](../../tests/engine/test_multiband_engine.cpp): its listing; flat doing nothing (any
   crossovers, Amount 0 bit for bit); each side's law (Above and Below, compressing and expanding, the +30 and −96 dB
   limits, the upward fade, both at once), the knee, Amount; attack, release and Time as Live defines them (timed on

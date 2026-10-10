@@ -15,8 +15,8 @@
 //   material below it untouched (pre · post stays the gain). `post` and Soft
 //   Clip's amount travel with their sample through a ring as long as the
 //   lookahead, so each sample is detected and scaled with the same values: a
-//   change is a smooth level change and never breaks the brick wall. Input that
-//   isn't finite is taken as 0.
+//   change is a smooth level change and never breaks the brick wall. (Input
+//   that isn't finite never reaches it: BuiltinProcessor takes it as 0.)
 // - The detector runs 12 samples behind the input (kDetectorDelay): it measures
 //   each sample's peak (Standard, Soft Clip), or its true peak (True Peak:
 //   seven interpolated points between samples, 24 taps each, the largest
@@ -164,9 +164,6 @@ inline void interpolateRows(const float (&rows)[kTaps][kLanes], const float* con
 #endif
 }
 
-// A blend's linear ramp (0..1) eased in and out: no kink where a crossfade starts or stops.
-inline float ease(float x) noexcept { return x * x * (3.f - 2.f * x); }
-
 // The last kTaps samples of a channel, always contiguous (each written twice,
 // kTaps apart), for the detector's dot products.
 struct History {
@@ -296,12 +293,16 @@ class LimiterProcessor final : public BuiltinProcessor {
 public:
     enum Param { Gain = 0, Ceiling, Release, AutoRelease, Lookahead, Mode, Routing, Link, Maximize, Threshold, Output,
                  NumParams };
-    enum Display { InL = 0, InR, OutL, OutR, GrA, GrB, ClipDisplay };
+    enum Display { InputL = 0, InputR, OutputL, OutputR, ReductionA, ReductionB, ClipDisplay };
     enum ModeChoice { Standard = 0, SoftClip, TruePeak };
 
     LimiterProcessor()
-        : BuiltinProcessor(infos(), {{"in_l", kMeterSamples}, {"in_r", kMeterSamples}, {"out_l", kMeterSamples},
-                                     {"out_r", kMeterSamples}, {"gr_a", kMeterSamples}, {"gr_b", kMeterSamples},
+        : BuiltinProcessor(infos(), {{"input_l", kMeterSamples},
+                                     {"input_r", kMeterSamples},
+                                     {"output_l", kMeterSamples},
+                                     {"output_r", kMeterSamples},
+                                     {"reduction_a", kMeterSamples},
+                                     {"reduction_b", kMeterSamples},
                                      {"clip", kMeterSamples}}) {}
 
     std::string typeId() const override { return "builtin:limiter"; }
@@ -444,7 +445,7 @@ private:
         for (auto& history : history_) history.reset();
         prev7_[0] = prev7_[1] = 0.f;
         fill(postRing_, static_cast<float>(post_.current));
-        fill(softRing_, ease(softness_.current()));
+        fill(softRing_, dsp::sCurve(softness_.current()));
     }
 
     static void fill(dsp::DelayLine& line, float value) noexcept {
@@ -462,14 +463,14 @@ private:
             return std::max(limiter::kFloorDb, gainToDb(peak) + offsetDb);
         };
         const int right = stereo ? 1 : 0;
-        publish(InL, level(inPeak_[0], lineDb_));
-        publish(InR, level(inPeak_[right], lineDb_));
-        publish(OutL, level(outPeak_[0], 0.f));
-        publish(OutR, level(outPeak_[right], 0.f));
+        publish(InputL, level(inPeak_[0], lineDb_));
+        publish(InputR, level(inPeak_[right], lineDb_));
+        publish(OutputL, level(outPeak_[0], 0.f));
+        publish(OutputR, level(outPeak_[right], 0.f));
         // The routing's two channels: L and R, or M and S (where Routing is heading); mono: the one.
         const size_t first = stereo && routing_.target() >= 0.5f ? 2 : 0;
-        publish(GrA, limiter::reductionDb(minGain_[first]));
-        publish(GrB, limiter::reductionDb(minGain_[stereo ? first + 1 : first]));
+        publish(ReductionA, limiter::reductionDb(minGain_[first]));
+        publish(ReductionB, limiter::reductionDb(minGain_[stereo ? first + 1 : first]));
         publish(ClipDisplay, clipRatio_ > 1.f ? 20.f * std::log10(clipRatio_) : 0.f);
         clearMeters();
     }
@@ -526,26 +527,24 @@ private:
         constexpr float kMargin = kTruePeak ? limiter::kTruePeakMargin : 1.f;
         size_t pos = pos_;
         for (int i = from; i < to; ++i) {
-            // In: made finite, scaled to the line, into the lookahead and the detector's window.
+            // In: scaled to the line, into the lookahead and the detector's window.
             const float pre = pre_.next();
-            const float inL = left[i];
-            const float xl = (std::abs(inL) <= limiter::kMaxInput ? inL : 0.f) * pre;
+            const float xl = left[i] * pre;
             delay_[0].push(xl);
             const float* wl = history_[0].push(xl);
             [[maybe_unused]] const float* wr = wl;
             if constexpr (kStereo) {
-                const float inR = right[i];
-                const float xr = (std::abs(inR) <= limiter::kMaxInput ? inR : 0.f) * pre;
+                const float xr = right[i] * pre;
                 delay_[1].push(xr);
                 wr = history_[1].push(xr);
             }
             postRing_.push(post_.next());
-            softRing_.push(ease(softness_.next()));
+            softRing_.push(dsp::sCurve(softness_.next()));
 
             // The detector, for sample m = n - kDetectorDelay, with the knee it was given:
             // the most gain each pipeline may have; then the pipelines' gains.
             const float target = (1.f + (1.f - limiter::kSoftKnee) * softRing_.tap(kDetectorDelay)) * kMargin;
-            const float autoShare = ease(autoShare_.next());
+            const float autoShare = dsp::sCurve(autoShare_.next());
             float gainL;
             [[maybe_unused]] float gainR = 1.f, gainM = 1.f, gainS = 1.f;
             if constexpr (kStereo) {
@@ -629,7 +628,7 @@ private:
             float yl = gainL * dl;
             if constexpr (kStereo) {
                 // Both routings' outputs obey the ceiling, so Routing's crossfade between them does.
-                const float routing = ease(routing_.next());
+                const float routing = dsp::sCurve(routing_.next());
                 const float dr = delay_[1].tap(lookahead);
                 float yr = gainR * dr;
                 if (routing > 0.f) {

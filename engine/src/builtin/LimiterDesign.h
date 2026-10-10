@@ -1,8 +1,8 @@
 #pragma once
-// The Limiter's maths that its editor shares (builtin/devices/Limiter.cpp):
-// the lookahead's lengths, where the line is and how the signal is scaled
-// around it, Soft Clip's knee, the M/S ceiling, and the true-peak detector's
-// interpolator and peak refinement.
+// The Limiter's maths (builtin/devices/Limiter.cpp), some of it shared with its
+// editor: the lookahead's lengths, where the line is and how the signal is
+// scaled around it, Soft Clip's knee, the M/S ceiling, and the true-peak
+// detector's interpolator and peak refinement.
 //
 // The device works in a normalized domain where the line (the ceiling, or with
 // Maximize the threshold) is 1: the input is multiplied by `pre` before the
@@ -12,14 +12,15 @@
 // the ceiling is the Output.
 //
 // The editor (through the application layer's LimiterResponse.h) draws the
-// line, Soft Clip's band and its curve from these, so what it shows is where
-// the device rounds off and limits.
+// line and Soft Clip's band from these, so what it shows is where the device
+// rounds off and limits.
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <numbers>
 
+#include "builtin/DspBlocks.h"
 #include "rt/RtUtils.h"
 
 namespace sub::limiter {
@@ -37,7 +38,6 @@ inline constexpr double kAutoFastMs = 50.0;     // auto release: its time consta
 inline constexpr double kAutoSlowMs = 600.0;    // ... and while limiting goes on all the time
 inline constexpr double kAutoDensityMs = 200.0;  // how far back it looks for how much of the time it limited
 inline constexpr double kRampSeconds = 0.02;  // pre, post, link, routing, mode and Auto's glides
-inline constexpr float kMaxInput = 1e30f;     // input beyond it (and NaN) is taken as 0
 inline constexpr double kDipSeconds = 0.002;  // the fade out and in around a lookahead change
 inline constexpr double kDepthScale = 1073741824.0;  // 2^30: the box filters' fixed point
 inline constexpr float kTinyDepth = 1e-9f;           // release states below it are flushed to 0
@@ -95,11 +95,7 @@ inline float shape(float x, const Knee& knee) noexcept {
     return std::copysign(y, x);
 }
 
-// Soft Clip's curve (σ = 1) for a level in dB relative to the line: the level out.
-inline float softClipDb(float inDb) noexcept {
-    const float y = shape(std::pow(10.f, inDb / 20.f), knee(1.f));
-    return 20.f * std::log10(std::max(y, 1e-12f));
-}
+// Soft Clip's band, in dB relative to the line.
 inline float softKneeDb() noexcept { return 20.f * std::log10(kSoftKnee); }       // -6.02: it starts rounding off
 inline float softTopDb() noexcept { return 20.f * std::log10(2.f - kSoftKnee); }  // +3.52: it reaches the line
 
@@ -130,24 +126,13 @@ inline void sharedCeiling(float a, float b, float target, float& ga, float& gb) 
 using Phase = std::array<float, kTaps>;
 using Phases = std::array<Phase, kOversampling - 1>;
 
-namespace detail {
-inline double besselI0(double x) noexcept {
-    double sum = 1.0, term = 1.0;
-    for (int k = 1; k < 30; ++k) {
-        term *= (x / (2.0 * k)) * (x / (2.0 * k));
-        sum += term;
-    }
-    return sum;
-}
-}  // namespace detail
-
 // The seven phases (a function-local static: the first call works them out, so
 // the device makes it in prepare(), off the audio thread).
 inline const Phases& truePeakPhases() {
     static const Phases kPhases = [] {
         Phases phases{};
         constexpr int half = kTaps / 2;
-        const double i0Beta = detail::besselI0(kKaiserBeta);
+        const double i0Beta = dsp::besselI0(kKaiserBeta);
         for (int k = 1; k < kOversampling; ++k) {
             const double t = static_cast<double>(k) / kOversampling;
             double h[kTaps];
@@ -156,7 +141,7 @@ inline const Phases& truePeakPhases() {
                 const double u = t - static_cast<double>(i - (half - 1));  // tap i reads x[m - 11 + i]
                 const double sinc = std::sin(std::numbers::pi * u) / (std::numbers::pi * u);
                 const double r = u / half;
-                const double window = detail::besselI0(kKaiserBeta * std::sqrt(std::max(0.0, 1.0 - r * r))) / i0Beta;
+                const double window = dsp::besselI0(kKaiserBeta * std::sqrt(std::max(0.0, 1.0 - r * r))) / i0Beta;
                 h[i] = sinc * window;
                 sum += h[i];
             }
@@ -168,7 +153,9 @@ inline const Phases& truePeakPhases() {
     return kPhases;
 }
 
-// The signal at m + k / 8 from window[i] = x[m - 11 + i] (i = 0..23).
+// The signal at m + k / 8 from window[i] = x[m - 11 + i] (i = 0..23), one point at a time: the
+// interpolator written plainly, for the tests (the device works out all seven at once, with the
+// next sample, in Limiter.cpp's interpolateRows).
 inline float interpolate(const float* window, const Phase& h) noexcept {
     float sum = 0.f;
     for (int i = 0; i < kTaps; ++i) sum += h[static_cast<size_t>(i)] * window[i];

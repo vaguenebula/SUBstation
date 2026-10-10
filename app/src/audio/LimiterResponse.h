@@ -23,8 +23,6 @@ LimiterLine limiterLine(bool maximize, double gainDb, double ceilingDb, double t
 // the line (+3.52 dB: louder peaks are limited).
 double limiterSoftKneeDb();
 double limiterSoftTopDb();
-// Soft Clip's curve: a level in dB relative to the line, the level that comes out.
-double limiterSoftClipDb(double inDb);
 
 // The device's displays: how many samples each value covers (128), and the level it publishes for
 // silence (-90 dB).

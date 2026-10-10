@@ -17,25 +17,24 @@
 // output moved by what Maximize adds (Output - Threshold), so the loudest output
 // meets the line. The In meter is the history's input; the Out meter and its
 // figure are the output as it comes out, in dBFS, as the axis reads (without
-// Maximize the two are the same). The device's seven displays (in_l, in_r,
-// out_l, out_r, gr_a, gr_b, clip: one value per 128 samples, in step) are read
-// by absolute index into rings, and the history is drawn from fixed bins of
-// them (a column each), scrolling smoothly at a steady speed whatever the
-// bursts they arrive in: the cursor (the index at the plot's right edge) moves
-// on by the time since the last tick and eases towards the newest value,
-// kLagSeconds behind it. The meters read what the cursor passes, so they move
-// with the history's edge.
+// Maximize the two are the same). The device's seven displays (input_l,
+// input_r, output_l, output_r, reduction_a, reduction_b, clip: one value per
+// 128 samples, in step) are read by absolute index into rings, and the history
+// is drawn from fixed bins of them (a column each), scrolling smoothly at a
+// steady speed whatever the bursts they arrive in: the cursor (the index at the
+// plot's right edge) moves on by the time since the last tick and eases
+// towards the newest value, kLagSeconds behind it. The meters read what the
+// cursor passes, so they move with the history's edge.
 //
 // Everything moves in advance() (from refreshDisplays(), about 60 times a
-// second, with the time since the last tick): the cursor, the meters'
-// ballistics, and the eased line, Soft Clip's band, the badges, the line's
-// glow (it warms with the gain reduction) and the hover. It repaints only while
-// something moves or changed: nothing when idle or silent.
+// second, by DeviceCanvas::tickSeconds()): the cursor, the meters' ballistics,
+// and the eased line, Soft Clip's band, the badges, the line's glow (it warms
+// with the gain reduction) and the hover. It repaints only while something
+// moves or changed: nothing when idle or silent.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
-#include <QElapsedTimer>
 #include <QString>
 #include <QStringList>
 #include <QtQml/qqmlregistration.h>
@@ -69,7 +68,7 @@ public:
     static constexpr double kLineGrab = 5.0;     // px either side of the line
     static constexpr double kLagSeconds = 0.04;  // the scroll stays this far behind the newest value
     static constexpr int kRing = 4096;           // display values kept per stream (1.5 s at 192 kHz is 2250)
-    static constexpr int kStreams = 7;           // in_l, in_r, out_l, out_r, gr_a, gr_b, clip
+    static constexpr int kStreams = 7;           // input_l, input_r, output_l, output_r, reduction_a, reduction_b, clip
 
     explicit LimiterGraph(QQuickItem* parent = nullptr);
 
@@ -114,8 +113,9 @@ public:
     // How many times it asked to be painted (the tests check it rests when nothing moves).
     int updates() const { return updates_; }
 
-    // One tick of animation, `seconds` after the last (refreshDisplays calls it with the real time).
-    Q_INVOKABLE void advance(double seconds);
+    // One tick of animation, `dt` seconds after the last (refreshDisplays() passes tickSeconds(); the
+    // tests tick it by hand).
+    Q_INVOKABLE void advance(double dt);
 
 Q_SIGNALS:
     void lineChanged();
@@ -141,6 +141,8 @@ private:
     double valuesPerSecond() const;
     double valuesPerColumn() const;
     QString lineParam() const;
+    // A parameter's range, as the device declares it.
+    std::pair<double, double> rangeOf(const QString& paramId) const;
     bool nearLine(const QPointF& pos) const;
     void endDrag();
     void updateHover();
@@ -160,7 +162,7 @@ private:
     double outputShift_ = 0.0;  // dB taken off the output to draw it in the line's domain
     int mode_ = 0;              // 0 Standard, 1 Soft Clip, 2 True Peak
     int routing_ = 0;           // 0 L/R, 1 M/S
-    double softKneeDb_ = -6.0, softTopDb_ = 3.5;
+    double softKneeDb_ = 0.0, softTopDb_ = 0.0;  // (the engine's, from LimiterResponse: see the constructor)
     bool synced_ = false;
 
     // The displays: rings by absolute index, [begin_, end_) valid; per stream what has come but not
@@ -172,7 +174,6 @@ private:
     qint64 begin_ = 0, end_ = 0;
     qint64 lastLoud_ = -1;  // the newest index with anything the plot shows
     double cursor_ = 0.0;
-    QElapsedTimer clock_;
 
     // The latest tick's most.
     double reduction_ = 0.0, clipping_ = 0.0;
@@ -199,6 +200,7 @@ private:
     // The drag.
     QString gesture_;  // its merge key ("": none)
     QString dragId_;   // "ceiling" or "threshold"
+    std::pair<double, double> dragRange_;  // its range
     double dragDb_ = 0.0;
     double lastY_ = 0.0;
     // The hover: where the mouse last was over the graph, and whether the resize cursor is set.

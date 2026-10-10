@@ -495,6 +495,21 @@ private:
     int maxWindow_ = 1;
 };
 
+// --- Kaiser windows ------------------------------------------------------------------------
+
+// The modified Bessel function of the first kind of order 0, by its series (to 1e-12 of the
+// sum): a Kaiser window of β is I0(β √(1 - r²)) / I0(β) for r from -1 to 1. For designing
+// filters (oversampling's, the Limiter's true-peak interpolator), not per sample.
+inline double besselI0(double x) noexcept {
+    double sum = 1.0, term = 1.0;
+    for (int k = 1; k < 50; ++k) {
+        term *= (x / (2.0 * k)) * (x / (2.0 * k));
+        sum += term;
+        if (term < 1e-12 * sum) break;
+    }
+    return sum;
+}
+
 // --- Oversampling --------------------------------------------------------------------------
 
 // Linear-phase oversampling by 2, 4 or 8 (stages of 2, each a half-band FIR,
@@ -679,15 +694,6 @@ private:
             std::copy_n(sums, n, out);
             std::copy_n(even + n, downHistory, even);
             std::copy_n(odd + n, downHistory, odd);
-        }
-        static double besselI0(double x) {
-            double sum = 1.0, term = 1.0;
-            for (int k = 1; k < 50; ++k) {
-                term *= (x / (2.0 * k)) * (x / (2.0 * k));
-                sum += term;
-                if (term < 1e-12 * sum) break;
-            }
-            return sum;
         }
     };
 

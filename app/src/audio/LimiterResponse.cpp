@@ -14,8 +14,6 @@ double limiterSoftKneeDb() { return sub::limiter::softKneeDb(); }
 
 double limiterSoftTopDb() { return sub::limiter::softTopDb(); }
 
-double limiterSoftClipDb(double inDb) { return sub::limiter::softClipDb(float(inDb)); }
-
 int limiterMeterSamples() { return sub::limiter::kMeterSamples; }
 
 double limiterFloorDb() { return double(sub::limiter::kFloorDb); }

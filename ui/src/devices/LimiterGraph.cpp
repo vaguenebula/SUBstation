@@ -1,5 +1,7 @@
 #include "devices/LimiterGraph.h"
 
+#include "audio/BridgeTypes.h"
+#include "audio/EngineBridge.h"
 #include "audio/LimiterResponse.h"
 #include "input/GestureKey.h"
 #include "sg/SgPainter.h"
@@ -37,13 +39,6 @@ constexpr double kMeterX[3] = {260.0, 287.0, 308.0};  // In, GR, Out
 constexpr double kBarWidth = 4.0, kBarPitch = 5.0;
 constexpr double kHandleX = 322.0, kHandleSize = 8.0;  // the line's handle: a triangle pointing left
 constexpr double kFadeWidth = 24.0;  // the history's oldest end fades out over this
-
-QColor mix(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    auto at = [t](float from, float to) { return float(from + (to - from) * t); };
-    return QColor::fromRgbF(at(a.redF(), b.redF()), at(a.greenF(), b.greenF()), at(a.blueF(), b.blueF()),
-                            at(a.alphaF(), b.alphaF()));
-}
 
 // A level as the readouts show it: one decimal, "−∞" for nothing at all.
 QString levelText(double db) {
@@ -91,6 +86,15 @@ double LimiterGraph::valuesPerSecond() const { return sampleRate() / sub::app::l
 double LimiterGraph::valuesPerColumn() const { return valuesPerSecond() * kHistorySeconds / plot().width(); }
 
 QString LimiterGraph::lineParam() const { return maximize_ ? QStringLiteral("threshold") : QStringLiteral("ceiling"); }
+
+std::pair<double, double> LimiterGraph::rangeOf(const QString& paramId) const {
+    if (session()) {
+        for (const sub::app::ProcessorParam& param : session()->bridge()->deviceParams(trackId(), deviceId()))
+            if (param.id == paramId)
+                return {param.minValue, param.maxValue};
+    }
+    return {value(paramId), value(paramId)};  // (no device: nothing to drag)
+}
 
 void LimiterGraph::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {
     DeviceCanvas::geometryChange(newGeometry, oldGeometry);
@@ -149,9 +153,10 @@ void LimiterGraph::sync() {
 // --- The displays -------------------------------------------------------------------------------
 
 void LimiterGraph::refreshDisplays() {
-    static const QString kIds[kStreams] = {QStringLiteral("in_l"),  QStringLiteral("in_r"), QStringLiteral("out_l"),
-                                           QStringLiteral("out_r"), QStringLiteral("gr_a"), QStringLiteral("gr_b"),
-                                           QStringLiteral("clip")};
+    static const QString kIds[kStreams] = {
+        QStringLiteral("input_l"),     QStringLiteral("input_r"),     QStringLiteral("output_l"),
+        QStringLiteral("output_r"),    QStringLiteral("reduction_a"), QStringLiteral("reduction_b"),
+        QStringLiteral("clip")};
     for (int s = 0; s < kStreams; ++s) {
         auto [start, values] = readDisplayAt(kIds[s]);
         if (values.empty())
@@ -231,12 +236,7 @@ void LimiterGraph::refreshDisplays() {
         historyDirty_ = true;
     }
 
-    double seconds = 1.0 / 60;
-    if (clock_.isValid())
-        seconds = double(clock_.restart()) / 1000.0;
-    else
-        clock_.start();
-    advance(seconds);
+    advance(tickSeconds());
     if (arrived)
         Q_EMIT levelsChanged();
 }
@@ -270,8 +270,7 @@ float LimiterGraph::most(int stream, int pair, qint64 from, qint64 to, float oth
 
 // --- Animation ----------------------------------------------------------------------------------
 
-void LimiterGraph::advance(double seconds) {
-    const double dt = std::clamp(seconds, 0.0, 0.1);
+void LimiterGraph::advance(double dt) {
     const double vps = valuesPerSecond();
     bool changed = false;
 
@@ -514,11 +513,11 @@ void LimiterGraph::paint(SgPainter& p) {
     }
 
     // The line, across the plot and the meters, warming with the gain reduction; its handle.
-    const QColor lineColor = mix(Theme::kText, Theme::kAccent, glow_.value);
+    const QColor lineColor = mixColor(Theme::kText, Theme::kAccent, glow_.value);
     drawGlowPolyline(p, {QPointF(r.left(), ly), QPointF(kHandleX, ly)}, lineColor, 1.5 + hover_.value);
     const QPointF handle[3] = {{kHandleX, ly}, {kHandleX + kHandleSize, ly - kHandleSize / 2},
                                {kHandleX + kHandleSize, ly + kHandleSize / 2}};
-    p.fillPolygon(handle, 3, mix(Theme::kAccent, QColor(255, 236, 200), 0.6 * hover_.value));
+    p.fillPolygon(handle, 3, mixColor(Theme::kAccent, QColor(255, 236, 200), 0.6 * hover_.value));
 
     // The reduction's figures beside its meters, over the line (which passes behind them: at the
     // default ceiling it runs right through the 6).
@@ -558,7 +557,7 @@ void LimiterGraph::paint(SgPainter& p) {
     // The footer: the gain reduction now, the meters' peaks.
     const double footer = h - 14;
     p.drawText(QRectF(r.left(), footer, 120, 12), Qt::AlignLeft | Qt::AlignVCenter, grText_,
-               mix(Theme::kTextDim, Theme::kAccent, grTint_.value), font8);
+               mixColor(Theme::kTextDim, Theme::kAccent, grTint_.value), font8);
     const QString* readouts[3] = {&inText_, &grPeakText_, &outText_};
     for (int m = 0; m < 3; ++m) {
         const double cx = kMeterX[m] + (kBarPitch + kBarWidth) / 2;
@@ -585,6 +584,7 @@ void LimiterGraph::mousePressEvent(QMouseEvent* event) {
     hoverPos_ = pos;
     hovering_ = true;
     dragId_ = lineParam();
+    dragRange_ = rangeOf(dragId_);
     touch(dragId_);
     gesture_ = newGestureKey();
     dragDb_ = value(dragId_);
@@ -603,7 +603,7 @@ void LimiterGraph::mouseMoveEvent(QMouseEvent* event) {
         return;
     const double y = event->position().y();
     const double rate = (kTopDb - kFloorDb) / plot().height() * (event->modifiers() & Qt::ShiftModifier ? 0.25 : 1.0);
-    dragDb_ = std::clamp(dragDb_ + (lastY_ - y) * rate, -24.0, 0.0);
+    dragDb_ = std::clamp(dragDb_ + (lastY_ - y) * rate, dragRange_.first, dragRange_.second);
     lastY_ = y;
     const double rounded = std::round(dragDb_ * 10.0) / 10.0 + 0.0;  // (+ 0.0: no "-0")
     if (rounded != value(dragId_))

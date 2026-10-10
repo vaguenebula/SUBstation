@@ -26,98 +26,42 @@
 
 #include "Engine.h"
 #include "builtin/BuiltinRegistry.h"
+#include "builtin/DspBlocks.h"
 #include "builtin/LimiterDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace limiter = sub::limiter;
 
 namespace {
 
-constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
 constexpr int kL = 144;       // the lookahead at 48 kHz, 3 ms (the default): the latency
 constexpr int kD = limiter::kDetectorDelay;
 constexpr int kS = kL + 1 - kD;  // the attack's length: 133
 static_assert(kL - kD == kS - 1, "the gain starts falling S - 1 samples before a peak comes out");
 
-using Values = std::vector<std::pair<std::string, float>>;
-
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
-
-// A Limiter on its own, outside an engine, at any sample rate: processed in
-// blocks, its changes handed over as automation (so its blocks split there) as
-// the renderer does.
-class Limiter {
+// A Limiter on its own (harness/Standalone.h), with what its tests add: two channels played as a
+// pair, and its displays read on from where the last read left off.
+class Limiter : public Standalone {
 public:
-    explicit Limiter(const Values& values = {}, double rate = kSampleRate)
-        : processor_(sub::BuiltinRegistry::instance().create("limiter")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
+    explicit Limiter(const ParamValues& values = {}, double rate = kSampleRate) : Standalone("limiter", rate, values) {}
 
-    sub::Processor& processor() { return *processor_; }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-    void prepare(double rate) {
-        rate_ = rate;
-        processor_->prepare(rate, kBlock);
-    }
-
-    // Processes one or two channels of equal length in place, `block` frames at a time.
-    void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[2] = {};
-        size_t next = 0;
-        for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
-            }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            ctx.samplePos = samplePos_ + start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->clearAutomation();
-        }
-        samplePos_ += frames;
-    }
-    // One channel: what comes out.
-    Samples play(Samples mono, const std::vector<Change>& changes = {}) {
-        run({&mono}, changes);
-        return mono;
-    }
+    using Standalone::play;
     // Two channels: what comes out.
-    std::pair<Samples, Samples> play(Samples left, Samples right, const std::vector<Change>& changes = {}) {
+    std::pair<Samples, Samples> play(Samples left, Samples right, const std::vector<ParamChange>& changes = {}) {
         run({&left, &right}, changes);
         return {std::move(left), std::move(right)};
     }
 
     // Display `id`'s values since the last read of it.
     std::vector<float> display(const std::string& id) {
-        const std::vector<sub::DisplayInfo> infos = processor_->displays();
+        const std::vector<sub::DisplayInfo> infos = processor().displays();
         for (size_t i = 0; i < infos.size(); ++i) {
             if (infos[i].id != id) continue;
             std::vector<float> out;
-            positions_[i] = processor_->readDisplay(static_cast<int>(i), positions_[i], out);
+            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], out);
             return out;
         }
         INFO(id);
@@ -126,9 +70,6 @@ public:
     }
 
 private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
-    int64_t samplePos_ = 0;
     std::map<size_t, uint64_t> positions_;
 };
 
@@ -183,14 +124,7 @@ Samples lowpassNoise(size_t length, unsigned seed, double sigma, double cutoff) 
     std::vector<double> h(kTapsFir);
     double sum = 0.0;
     const double fc = cutoff / kSampleRate;
-    const auto i0 = [](double x) {
-        double s = 1.0, term = 1.0;
-        for (int k = 1; k < 40; ++k) {
-            term *= (x / (2.0 * k)) * (x / (2.0 * k));
-            s += term;
-        }
-        return s;
-    };
+    const auto i0 = [](double x) { return sub::dsp::besselI0(x); };
     for (int n = 0; n < kTapsFir; ++n) {
         const double m = n - (kTapsFir - 1) / 2.0;
         const double sinc = m == 0.0 ? 2.0 * fc : std::sin(2.0 * kPi * fc * m) / (kPi * m);
@@ -230,7 +164,7 @@ double maxAbsDiff(const Samples& x, const Samples& y) {
 }
 
 // The output's post: the very float the device multiplies by at the end.
-float postOf(const Values& values) {
+float postOf(const ParamValues& values) {
     std::map<std::string, float> v = {{"gain", 0.f}, {"ceiling", -0.3f}, {"maximize", 0.f}, {"threshold", -0.3f},
                                       {"output", -0.3f}};
     for (const auto& [id, value] : values) v[id] = value;
@@ -252,15 +186,6 @@ double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
     return worst;
 }
 
-double besselI0(double x) {
-    double sum = 1.0, term = 1.0;
-    for (int k = 1; k < 60; ++k) {
-        term *= (x / (2.0 * k)) * (x / (2.0 * k));
-        sum += term;
-    }
-    return sum;
-}
-
 // A reference true-peak meter, independent of the device: 32 points per sample
 // by a Kaiser-windowed sinc (β = 10) of 32 zero crossings each side,
 // interpolated from the whole signal (a slice's own ends would ring); the most
@@ -269,14 +194,15 @@ double truePeak(const Samples& x, int64_t from, int64_t to) {
     constexpr int kPoints = 32, kHalf = 32;
     static const std::vector<std::vector<double>> kPhases = [] {
         std::vector<std::vector<double>> phases(kPoints - 1, std::vector<double>(2 * kHalf));
-        const double i0Beta = besselI0(10.0);
+        const double i0Beta = sub::dsp::besselI0(10.0);
         for (int k = 1; k < kPoints; ++k) {
             const double t = static_cast<double>(k) / kPoints;
             for (int i = 0; i < 2 * kHalf; ++i) {
                 const double u = t - (i - (kHalf - 1));
                 const double r = u / kHalf;
                 phases[static_cast<size_t>(k - 1)][static_cast<size_t>(i)] =
-                    std::sin(kPi * u) / (kPi * u) * besselI0(10.0 * std::sqrt(std::max(0.0, 1.0 - r * r))) / i0Beta;
+                    std::sin(kPi * u) / (kPi * u) * sub::dsp::besselI0(10.0 * std::sqrt(std::max(0.0, 1.0 - r * r))) /
+                    i0Beta;
             }
         }
         return phases;
@@ -344,7 +270,7 @@ std::vector<Input> brickWallInputs() {
 }
 
 // Whether a render of `input` with `values` stays at or under the ceiling, exactly.
-bool holdsTheCeiling(const Input& input, Values values) {
+bool holdsTheCeiling(const Input& input, ParamValues values) {
     values.emplace_back("gain", input.gain);
     Limiter l(values);
     const auto [left, right] = l.play(input.left, input.right);
@@ -406,7 +332,8 @@ TEST_CASE("the limiter is listed with its parameters") {
 
     Limiter l;
     const std::vector<sub::DisplayInfo> displays = l.processor().displays();
-    const std::vector<std::string> ids = {"in_l", "in_r", "out_l", "out_r", "gr_a", "gr_b", "clip"};
+    const std::vector<std::string> ids = {"input_l",     "input_r",     "output_l", "output_r",
+                                          "reduction_a", "reduction_b", "clip"};
     REQUIRE(displays.size() == ids.size());
     for (size_t i = 0; i < ids.size(); ++i) {
         CHECK_EQ(displays[i].id, ids[i]);
@@ -430,7 +357,7 @@ TEST_CASE("below the ceiling the limiter is the input, its lookahead late") {
     CHECK(allEqual(slice(left, 0, kL), 0.0));
     CHECK_ALLCLOSE(slice(left, kL), slice(in, 0, static_cast<int64_t>(in.size()) - kL), 1e-6, 1e-9);
     CHECK_ARRAY_EQUAL(right, left);
-    for (const char* id : {"gr_a", "gr_b", "clip"}) {
+    for (const char* id : {"reduction_a", "reduction_b", "clip"}) {
         INFO(id);
         const std::vector<float> values = l.display(id);
         CHECK(!values.empty());
@@ -510,7 +437,7 @@ TEST_CASE("the limiter's auto release is quick after a short peak and slow after
         std::copy(burst.begin() + 24000, burst.begin() + 24240, in.begin() + 24000);
         Limiter l;
         l.play(in, in);
-        const std::vector<float> gr = l.display("gr_a");
+        const std::vector<float> gr = l.display("reduction_a");
         const int64_t out = 24240 + kL;
         CHECK(maxOfValues(gr) > 10.f);
         const float after = grAt(gr, out + 7200);
@@ -524,7 +451,7 @@ TEST_CASE("the limiter's auto release is quick after a short peak and slow after
     const int64_t out = 2 * kSampleRate + kL;
     Limiter automatic;
     automatic.play(in, in);
-    const std::vector<float> gr = automatic.display("gr_a");
+    const std::vector<float> gr = automatic.display("reduction_a");
     INFO("Auto: " + std::to_string(grAt(gr, out + 7200)) + " dB 150 ms after, " +
          std::to_string(grAt(gr, out + 3 * kSampleRate)) + " dB 3 s after");
     CHECK(grAt(gr, out - kSampleRate) > 6.f);
@@ -532,7 +459,7 @@ TEST_CASE("the limiter's auto release is quick after a short peak and slow after
     CHECK(grAt(gr, out + 3 * kSampleRate) < 0.1f);
     Limiter manual({{"auto_release", 0.f}, {"release", 100.f}});
     manual.play(in, in);
-    CHECK(grAt(manual.display("gr_a"), out + 600 * 48) < 0.5f);
+    CHECK(grAt(manual.display("reduction_a"), out + 600 * 48) < 0.5f);
 }
 
 TEST_CASE("the limiter's auto release doesn't distort a sustained bass note") {
@@ -548,8 +475,8 @@ TEST_CASE("the limiter's auto release doesn't distort a sustained bass note") {
     };
     for (const double freq : {30.0, 50.0}) {
         const Samples in = tone(freq, 3.0, 2.0);
-        const auto thd = [&](const Values& values) {
-            Values all = values;
+        const auto thd = [&](const ParamValues& values) {
+            ParamValues all = values;
             all.emplace_back("ceiling", 0.f);
             Limiter l(all);
             return distortion(l.play(in), freq);
@@ -683,7 +610,7 @@ TEST_CASE("the limiter's Soft Clip rounds peaks off near the ceiling") {
         const auto [out, unused] = l.play(atCeiling, atCeiling);
         const double fundamental = levelAt(out, 100.0, from, length);
         const double third = levelAt(out, 300.0, from, length);
-        CHECK(maxOfValues(l.display("gr_a")) < 0.001f);
+        CHECK(maxOfValues(l.display("reduction_a")) < 0.001f);
         const std::vector<float> clip = l.display("clip");
         if (mode == 0.f) {
             CHECK_APPROX_TOL(peak(out), c, 0.0, 1e-6);
@@ -702,14 +629,14 @@ TEST_CASE("the limiter's Soft Clip rounds peaks off near the ceiling") {
         Limiter l({{"mode", 1.f}});
         const auto [out, unused] = l.play(over, over);
         CHECK_APPROX_TOL(db(peak(out) / c), 0.0, 0.0, 0.01);
-        CHECK(maxOfValues(l.display("gr_a")) < 0.01f);
+        CHECK(maxOfValues(l.display("reduction_a")) < 0.01f);
     }
     for (const float mode : {0.f, 1.f}) {
         const Samples over = tone(100.0, 0.5, c * std::pow(10.0, 12.0 / 20.0));
         Limiter l({{"mode", mode}});
         const auto [out, unused] = l.play(over, over);
         CHECK(peak(out) <= c);
-        CHECK_APPROX_TOL(maxOfValues(l.display("gr_a"), 20), mode == 0.f ? 12.0 : 8.48, 0.0, 0.2);
+        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_a"), 20), mode == 0.f ? 12.0 : 8.48, 0.0, 0.2);
     }
     // Sample by sample, it is the knee's curve.
     Samples ramp(24000 + kL, 0.f);
@@ -729,12 +656,12 @@ TEST_CASE("the limiter's Maximize turns the gain into Output - Threshold") {
         Limiter l({{"maximize", 1.f}, {"output", -1.f}, {"threshold", -12.f}});
         const auto [out, unused] = l.play(in, in);
         CHECK_APPROX_TOL(db(peak(out, kL + 4800)), -1.04, 0.0, 0.01);
-        CHECK(allEqual(l.display("gr_a"), 0.0));
+        CHECK(allEqual(l.display("reduction_a"), 0.0));
     }
     Limiter l({{"maximize", 1.f}, {"output", -1.f}, {"threshold", -18.f}});
     const auto [out, unused] = l.play(in, in);
     CHECK_APPROX_TOL(db(peak(out, kL + 4800)), -1.0, 0.0, 0.02);
-    CHECK_APPROX_TOL(maxOfValues(l.display("gr_a"), 4), 5.96, 0.0, 0.1);
+    CHECK_APPROX_TOL(maxOfValues(l.display("reduction_a"), 4), 5.96, 0.0, 0.1);
     // The same as Standard with 17 dB of gain and the ceiling at -1 dB.
     Limiter standard({{"gain", 17.f}, {"ceiling", -1.f}});
     const auto [same, unused2] = standard.play(in, in);
@@ -747,25 +674,25 @@ TEST_CASE("the limiter's Maximize turns the gain into Output - Threshold") {
 TEST_CASE("the limiter's L/R, M/S and Link") {
     const Samples loud = tone(1000.0, 0.5, 2.0), quiet = tone(500.0, 0.5, 0.25);
     const auto values = [](float link, float routing = 0.f) {
-        return Values{{"ceiling", 0.f}, {"link", link}, {"routing", routing}};
+        return ParamValues{{"ceiling", 0.f}, {"link", link}, {"routing", routing}};
     };
     {
         Limiter l(values(100.f));
         l.play(loud, quiet);
-        CHECK_APPROX_TOL(maxOfValues(l.display("gr_a"), 4), 6.02, 0.0, 0.1);
-        CHECK_APPROX_TOL(maxOfValues(l.display("gr_b"), 4), 6.02, 0.0, 0.1);
+        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_a"), 4), 6.02, 0.0, 0.1);
+        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_b"), 4), 6.02, 0.0, 0.1);
     }
     {
         Limiter l(values(0.f));
         const auto [left, right] = l.play(loud, quiet);
-        CHECK_APPROX_TOL(maxOfValues(l.display("gr_a"), 4), 6.02, 0.0, 0.1);
-        CHECK(allEqual(l.display("gr_b"), 0.0));
+        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_a"), 4), 6.02, 0.0, 0.1);
+        CHECK(allEqual(l.display("reduction_b"), 0.0));
         CHECK_ALLCLOSE(right, delayed(quiet, kL), 1e-6, 1e-9);
     }
     {
         Limiter l(values(50.f));
         l.play(loud, quiet);
-        CHECK_APPROX_TOL(maxOfValues(l.display("gr_b"), 4), -db(0.75), 0.0, 0.2);  // half the depth: 2.5 dB
+        CHECK_APPROX_TOL(maxOfValues(l.display("reduction_b"), 4), -db(0.75), 0.0, 0.2);  // half the depth: 2.5 dB
     }
     // M/S, unlinked: a loud centre is limited and the side keeps its level.
     const Samples mid = tone(1000.0, 0.5, 1.6), side = tone(3000.0, 0.5, 0.1);
@@ -784,8 +711,8 @@ TEST_CASE("the limiter's L/R, M/S and Link") {
         }
         CHECK_ALLCLOSE(sideOut, delayed(side, kL), 0.0, 1e-5);
         CHECK(peak(midOut, kL + 4800) < 0.95);
-        CHECK(allEqual(l.display("gr_b"), 0.0));
-        CHECK(maxOfValues(l.display("gr_a"), 4) > 3.f);
+        CHECK(allEqual(l.display("reduction_b"), 0.0));
+        CHECK(maxOfValues(l.display("reduction_a"), 4) > 3.f);
         CHECK(std::max(peak(a), peak(b)) <= 1.0);
     }
     // Linked, M/S is L/R linked: |mid| + |side| is the louder of |left| and |right| at every moment,
@@ -797,8 +724,8 @@ TEST_CASE("the limiter's L/R, M/S and Link") {
     for (const float mode : {0.f, 2.f}) {
         for (const auto& [l1, r1] : {std::pair{left, right}, std::pair{loud, quiet}, std::pair{wideLeft, wideRight}}) {
             INFO("mode " + std::to_string(mode));
-            Values ms = values(100.f, 1.f), lr = values(100.f, 0.f);
-            for (Values* v : {&ms, &lr}) {
+            ParamValues ms = values(100.f, 1.f), lr = values(100.f, 0.f);
+            for (ParamValues* v : {&ms, &lr}) {
                 v->emplace_back("mode", mode);
                 v->emplace_back("gain", 9.f);
             }
@@ -823,7 +750,7 @@ TEST_CASE("changing any of the limiter's controls is click-free") {
         falling[i] *= static_cast<float>(1.0 - 0.75 * t * t * (3.0 - 2.0 * t));
     }
     struct Case {
-        Values base;
+        ParamValues base;
         std::string id;
         float to;
         bool wide = false;      // left and right differ
@@ -850,7 +777,7 @@ TEST_CASE("changing any of the limiter's controls is click-free") {
         INFO(c.id + " to " + std::to_string(c.to) + (c.wide ? " (wide)" : "") + (c.released ? " (falling)" : ""));
         const Samples& left = c.released ? falling : a;
         const Samples& right = c.wide ? b : left;
-        Values after = c.base;
+        ParamValues after = c.base;
         after.emplace_back(c.id, c.to);
         Limiter before(c.base), steady(after), changing(c.base);
         const auto [b0, b1] = before.play(left, right);
@@ -971,20 +898,22 @@ TEST_CASE("reset and a new sample rate start the limiter cleanly") {
     Limiter l({{"gain", 12.f}});
     l.play(loud, loud);
     l.processor().reset();
-    l.display("gr_a");
-    l.display("gr_b");
+    l.display("reduction_a");
+    l.display("reduction_b");
     const auto [left, right] = l.play(Samples(kSampleRate / 4, 0.f), Samples(kSampleRate / 4, 0.f));
     CHECK(allEqual(left, 0.0));
     CHECK(allEqual(right, 0.0));
-    CHECK(allEqual(l.display("gr_a"), 0.0));
-    CHECK(allEqual(l.display("gr_b"), 0.0));
+    CHECK(allEqual(l.display("reduction_a"), 0.0));
+    CHECK(allEqual(l.display("reduction_b"), 0.0));
 
-    // A new rate: the lookahead's length follows it, and the ceiling holds.
+    // A new rate (the same processor prepared again, as the engine does): the lookahead's length
+    // follows it, and the ceiling holds.
     for (const auto& [rate, lookahead, samples] : {std::tuple{96000.0, 1.f, 288}, std::tuple{44100.0, 1.f, 132},
                                                    std::tuple{44100.0, 0.f, 66}, std::tuple{44100.0, 2.f, 265}}) {
         INFO(std::to_string(rate) + " Hz, lookahead " + std::to_string(lookahead));
         l.set("lookahead", lookahead);
-        l.prepare(rate);
+        l.processor().prepare(rate, Standalone::kMaxBlock);
+        l.context().sampleRate = rate;
         CHECK_EQ(l.processor().latencySamples(), samples);
         CHECK_EQ(l.processor().tailSamples(), samples);
         const auto [a, b] = l.play(noise(static_cast<size_t>(rate / 4), 1), noise(static_cast<size_t>(rate / 4), 2));
@@ -1025,22 +954,29 @@ TEST_CASE("the limiter stays finite and under the ceiling at the extremes") {
             CHECK(allFinite(a) && allFinite(b));
         }
     }
-    // Input that isn't finite is taken as silence, and the limiter carries on.
+    // Input that isn't audio (NaN, infinities, beyond 1e30: BuiltinProcessor takes it as silence)
+    // leaves no trace: the limiter carries on as if those samples were 0.
     Samples in = tone(440.0, 0.25, 0.5);
     Samples want = delayed(in, kL);
-    in[1000] = std::numeric_limits<float>::quiet_NaN();
-    in[2000] = std::numeric_limits<float>::infinity();
-    want[1000 + kL] = 0.f;
-    want[2000 + kL] = 0.f;
+    const std::vector<std::pair<size_t, float>> bad = {{1000, std::numeric_limits<float>::quiet_NaN()},
+                                                       {1500, -std::numeric_limits<float>::infinity()},
+                                                       {2000, std::numeric_limits<float>::infinity()},
+                                                       {2500, 1e31f}};
+    for (const auto& [at, value] : bad) {
+        in[at] = value;
+        want[at + kL] = 0.f;
+    }
     for (const float mode : {0.f, 2.f}) {
-        INFO("mode " + std::to_string(mode));
-        Limiter l({{"mode", mode}});
-        const auto [a, b] = l.play(in, in);
-        CHECK(allFinite(a) && allFinite(b));
-        CHECK_EQ(a[1000 + kL], 0.f);
-        CHECK_EQ(a[2000 + kL], 0.f);
-        CHECK_ALLCLOSE(a, want, 1e-6, 1e-9);
-        CHECK(peak(a, 3000 + kL) > 0.49);
+        for (const float routing : {0.f, 1.f}) {
+            INFO("mode " + std::to_string(mode) + ", routing " + std::to_string(routing));
+            Limiter l({{"mode", mode}, {"routing", routing}});
+            const auto [a, b] = l.play(in, in);
+            CHECK(allFinite(a) && allFinite(b));
+            for (const auto& [at, value] : bad) CHECK_EQ(a[at + kL], 0.f);
+            CHECK_ALLCLOSE(a, want, 1e-6, 1e-9);
+            CHECK_ARRAY_EQUAL(b, a);
+            CHECK(peak(a, 3000 + kL) > 0.49);
+        }
     }
 }
 
@@ -1053,7 +989,7 @@ TEST_CASE("silence rings out of the limiter to exact zeros") {
     CHECK(peak(a, last + kL - 10, last + kL + 1) > 0.0);
     CHECK(allEqual(slice(a, last + kL + 1), 0.0));
     CHECK(allEqual(slice(b, last + kL + 1), 0.0));
-    for (const char* id : {"gr_a", "gr_b"}) {
+    for (const char* id : {"reduction_a", "reduction_b"}) {
         INFO(id);
         const std::vector<float> gr = l.display(id);
         const auto from = static_cast<size_t>((last + kL + kSampleRate * 3 / 10) / 128 + 1);
@@ -1067,7 +1003,7 @@ TEST_CASE("the limiter on one channel: the ceiling holds, and Routing and Link c
     for (const Input& input : brickWallInputs()) {
         for (const float mode : {0.f, 1.f, 2.f}) {
             INFO(input.name + ", mode " + std::to_string(mode));
-            const Values values = {{"mode", mode}, {"gain", input.gain}};
+            const ParamValues values = {{"mode", mode}, {"gain", input.gain}};
             Limiter l(values);
             const Samples out = l.play(input.left);
             CHECK(allFinite(out));
@@ -1078,9 +1014,9 @@ TEST_CASE("the limiter on one channel: the ceiling holds, and Routing and Link c
     Limiter plain({{"gain", 12.f}}), other({{"gain", 12.f}, {"routing", 1.f}, {"link", 0.f}});
     const Samples a = plain.play(in);
     CHECK_ARRAY_EQUAL(other.play(in), a);
-    CHECK(plain.display("in_r") == plain.display("in_l"));
-    CHECK(plain.display("out_r") == plain.display("out_l"));
-    const std::vector<float> grA = plain.display("gr_a"), grB = plain.display("gr_b");
+    CHECK(plain.display("input_r") == plain.display("input_l"));
+    CHECK(plain.display("output_r") == plain.display("output_l"));
+    const std::vector<float> grA = plain.display("reduction_a"), grB = plain.display("reduction_b");
     CHECK(grA == grB);
     CHECK(maxOfValues(grA) > 6.f);
 }
@@ -1112,14 +1048,14 @@ TEST_CASE("the limiter's displays") {
     {
         Limiter l({{"ceiling", 0.f}});
         l.play(loud, loud);
-        for (const char* id : {"in_l", "in_r", "out_l", "out_r", "gr_a", "gr_b", "clip"}) {
+        for (const char* id : {"input_l", "input_r", "output_l", "output_r", "reduction_a", "reduction_b", "clip"}) {
             INFO(id);
             CHECK_EQ(l.display(id).size(), size_t{100});
         }
     }
     Limiter l({{"ceiling", 0.f}});
     l.play(loud, loud);
-    const std::vector<float> in = l.display("in_l"), out = l.display("out_l"), gr = l.display("gr_a"),
+    const std::vector<float> in = l.display("input_l"), out = l.display("output_l"), gr = l.display("reduction_a"),
                              clip = l.display("clip");
     CHECK_EQ(in[0], limiter::kFloorDb);  // (the lookahead's silence)
     for (size_t i = 4; i < 100; ++i) {
@@ -1134,25 +1070,25 @@ TEST_CASE("the limiter's displays") {
     {
         Limiter g({{"ceiling", 0.f}, {"gain", 6.f}});
         g.play(loud, loud);
-        CHECK_APPROX_TOL(g.display("in_l")[50], 12.04, 0.0, 0.05);
+        CHECK_APPROX_TOL(g.display("input_l")[50], 12.04, 0.0, 0.05);
         Limiter m({{"maximize", 1.f}, {"threshold", -6.f}, {"output", -1.f}});
         m.play(loud, loud);
-        CHECK_APPROX_TOL(m.display("in_l")[50], 6.02, 0.0, 0.05);
-        CHECK_APPROX_TOL(m.display("out_l")[50], -1.0, 0.0, 0.05);
-        CHECK_APPROX_TOL(m.display("gr_a")[50], 12.02, 0.0, 0.1);
+        CHECK_APPROX_TOL(m.display("input_l")[50], 6.02, 0.0, 0.05);
+        CHECK_APPROX_TOL(m.display("output_l")[50], -1.0, 0.0, 0.05);
+        CHECK_APPROX_TOL(m.display("reduction_a")[50], 12.02, 0.0, 0.1);
     }
     // M/S on a mono signal, unlinked: the reduction is all the mid's.
     {
         Limiter ms({{"ceiling", 0.f}, {"routing", 1.f}, {"link", 0.f}});
         ms.play(loud, loud);
-        CHECK_APPROX_TOL(ms.display("gr_a")[50], 6.02, 0.0, 0.1);
-        CHECK(allEqual(ms.display("gr_b"), 0.0));
+        CHECK_APPROX_TOL(ms.display("reduction_a")[50], 6.02, 0.0, 0.1);
+        CHECK(allEqual(ms.display("reduction_b"), 0.0));
     }
     // Reading on: only what is new; falling behind skips to the latest 8192 values.
     l.play(loud, loud);
-    CHECK_EQ(l.display("gr_a").size(), size_t{100});
-    CHECK(l.display("gr_a").empty());
+    CHECK_EQ(l.display("reduction_a").size(), size_t{100});
+    CHECK(l.display("reduction_a").empty());
     const Samples longer = tone(1000.0, 128.0 * 9000 / kSampleRate, 0.5);
     l.play(longer, longer);
-    CHECK_EQ(l.display("gr_a").size(), size_t{8192});
+    CHECK_EQ(l.display("reduction_a").size(), size_t{8192});
 }
