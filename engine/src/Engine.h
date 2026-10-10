@@ -611,6 +611,9 @@ private:
         // Its own signal's delay before it, lining it up with what comes into
         // its sidechain (its own, and tracks' outputs), kept across snapshots.
         std::shared_ptr<DelayLine> sidechainWait;
+        // Its latency (insertLatency) when the snapshot was last aligned: idle()
+        // realigns when it differs, whatever the processor's own idle() says.
+        int alignedLatency = 0;
     };
     // A strip's devices depth first (Routing.h's slots): each device of its main
     // chain, and after a rack the devices of its chains, chain by chain.
