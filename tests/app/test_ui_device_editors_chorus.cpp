@@ -437,6 +437,28 @@ private Q_SLOTS:
         QTRY_COMPARE(find(view, QStringLiteral("fbInvert"))->opacity(), 1.0);
         QTRY_COMPARE(find(view, QStringLiteral("feedback"))->opacity(), 1.0);
         QCOMPARE(float(engineParam("mode")), 0.f);
+
+        // One opened in Vibrato and switched straight to Chorus: the text names Vibrato's voice while it fades
+        // out. The counts are the engine's (chorusVoices).
+        device_ = editor()->addDevice(track_, QStringLiteral("chorus"));
+        set("mode", 2.0);
+        view = show(QStringLiteral("chorus"), track_, device_);
+        QVERIFY(view);
+        voicesText = find(view, QStringLiteral("voicesText"));
+        QTRY_VERIFY(shown(voicesText));
+        QCOMPARE(voicesText->property("text").toString(), QStringLiteral("1 voice a side"));
+        QCOMPARE(chorusVoices({2, 1, 0}), 1);
+        set("mode", 0.0);
+        fading.restart();
+        bool sawText = false;
+        while (fading.elapsed() < 300) {
+            if (voicesText->isVisible() && voicesText->opacity() > 0.0) {
+                sawText = true;
+                QCOMPARE(voicesText->property("text").toString(), QStringLiteral("1 voice a side"));
+            }
+            QTest::qWait(5);
+        }
+        QVERIFY(sawText);  // (it did fade)
     }
 
     void tapsTimeHpInvert() {

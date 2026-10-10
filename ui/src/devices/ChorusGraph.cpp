@@ -58,6 +58,10 @@ double ChorusGraph::phase() const { return frac(drawn_); }
 
 int ChorusGraph::voiceCount() const { return 2 * sub::app::chorusVoices(layout_); }
 
+int ChorusGraph::sideVoices(int mode) const {
+    return sub::app::chorusVoices(ChorusLayout{mode, layout_.taps, layout_.time});
+}
+
 double ChorusGraph::voiceDelayMs(int channel, int voice) const { return delayMs(layout_, channel, voice); }
 
 double ChorusGraph::delayMs(const ChorusLayout& layout, int channel, int voice) const {
@@ -183,7 +187,7 @@ void ChorusGraph::refreshDisplays() {
     if (!frozen_)
         estimate_ += rate_ * dt;
     const std::vector<float> phases = readDisplay(QStringLiteral("phase"));
-    const std::vector<float> levels = readDisplay(QStringLiteral("level"));
+    const std::vector<float> levels = readRecent(QStringLiteral("level"), dt);
     const bool afresh = !haveValues_ || sinceValues_ > kSnapSeconds;
     if (!phases.empty()) {
         const double newest = std::isfinite(phases.back()) ? frac(double(phases.back())) : 0.0;
@@ -202,17 +206,15 @@ void ChorusGraph::refreshDisplays() {
     frozen_ = !enabled_ || !haveValues_ || sinceValues_ > kSnapSeconds;
 
     // The wet's level: its loudest over the last tick's sound, through the meter's ballistics (held without
-    // values). Only the newest values count: a read can bring a backlog (an editor opening, or shown again,
-    // reads the display's history, seconds of it), which is no longer sounding.
+    // values). Only the values covering the tick count (readRecent): a read can bring a backlog (an editor
+    // opening, or shown again, reads the display's history, seconds of it), which is no longer sounding.
     if (frozen_) {
         meter_.reset();
     } else if (!levels.empty()) {
-        const auto recent = size_t(std::ceil(dt * sampleRate() / sub::app::chorusDisplaySamples())) + 1;
         double loudest = -120.0;
-        for (auto level = levels.end() - std::ptrdiff_t(std::min(recent, levels.size())); level != levels.end();
-             ++level) {
-            if (std::isfinite(*level))
-                loudest = std::max(loudest, double(*level));
+        for (const float level : levels) {
+            if (std::isfinite(level))
+                loudest = std::max(loudest, double(level));
         }
         meter_.update(loudest, dt, 24.0, 0.5);
     }

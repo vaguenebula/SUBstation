@@ -1395,7 +1395,7 @@ comes back.
   (swing in seconds): ±22 cents at the defaults; never so fast that a voice plays backwards (at most 0.52: Vibrato
   at 15 Hz).
 - **Per channel, a sample at a time:**
-  - The High-Pass splits the input with a 4th-order Linkwitz-Riley crossover (`dsp::Crossover`; 20..2000 Hz, at most
+  - The High-pass splits the input with a 4th-order Linkwitz-Riley crossover (`dsp::Crossover`; 20..2000 Hz, at most
     0.45 of the rate): the highs go into the delay line, the lows to the wet unmodulated, so a bass stays solid and a
     fully wet Vibrato keeps its lows. The dry goes through the same crossover (its lows and highs summed: an all-pass,
     flat in level), so it is in phase with the wet's lows and Dry/Wet blends the two whole (left as it was, the dry
@@ -1458,9 +1458,8 @@ comes back.
 - Input that isn't audio (NaN, infinity, beyond 1e30) is silence (`BuiltinProcessor::process()`), so nothing of it
   stays in the lines, the loop or the filters.
 - **Denormals**: the crossovers' (`Crossover::flush()`) and the low-passes' states are flushed below 1e-20 after each
-  stretch, the DC
-  blockers flush their own, and what is fed back is gated below 1e-15, so silence rings out to exact zeros (after
-  Feedback 90 %, in about 2 s).
+  stretch, the DC blockers flush their own, and what is fed back is gated below 1e-15, so silence rings out to exact
+  zeros (after Feedback 90 %, in about 2 s).
 - `latencySamples()` is 0: the delay is the effect. `tailSamples()`: the layout's longest delay at any Amount
   (`chorus::highestMs`) times one plus the repeats until the feedback has taken an echo down 60 dB (`-3 / log10(0.97 ×
   feedback)`, at most 1000; none in Vibrato), and 50 ms for the filters; at most 60 s. 2952 samples at the defaults
@@ -1468,8 +1467,8 @@ comes back.
 - **Displays**, a value per 128 samples each (`chorus::kDisplaySamples`), published together so value k of each stands
   for the same samples: `phase` (the LFO's phase, 0..1, at the end of those samples: the editor draws every voice
   from it with the shared maths, so its traces move as the delays do) and `level` (the wet's peak after Output, both
-  sides, in dB, floor -90 (`kLevelFloorDb`): the traces' glow). The editor reads the rate through the application
-  layer (`chorusDisplaySamples()`).
+  sides, in dB, floor -90 (`kLevelFloorDb`): the traces' glow). The editor takes the newest phase, and of `level`
+  the values its last tick covers (`DeviceCanvas::readRecent`, which knows each display's samples per value).
 - **Design**: [ChorusDesign.h](../../engine/src/builtin/ChorusDesign.h) (namespace `sub::chorus`, inline, no Qt)
   holds the layouts (`layout()`, which normalises what a mode doesn't use), `centreMs`, `swingMs`, `lowestMs` /
   `highestMs`, `voicePhase`, `lfoValue`, `delayMs`, the detune (`detuneUpCents`, `peakDetuneCents`), the warmth's

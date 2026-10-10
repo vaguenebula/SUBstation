@@ -347,7 +347,7 @@ Release, 48 kHz, blocks of 256, 5 s. The raw report is in
 | device | defaults | heavy settings |
 |---|---|---|
 | Amp | 0.68 % | 1.36 % (Dual Mono, Lead, Gain 10) |
-| Chorus-Ensemble | 0.32 % | 0.86 % (Ensemble, Warmth 100, High-Pass, Feedback 80) |
+| Chorus-Ensemble | 0.32 % | 0.86 % (Ensemble, Warmth 100, High-pass, Feedback 80) |
 | Compressor | 0.13 % | |
 | Delay | 0.14 % | |
 | Disperser | 0.24 % | |

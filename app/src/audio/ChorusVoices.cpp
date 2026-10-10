@@ -20,8 +20,6 @@ double chorusMinRate() { return sub::chorus::kMinRate; }
 
 double chorusMaxRate() { return sub::chorus::kMaxRate; }
 
-int chorusDisplaySamples() { return sub::chorus::kDisplaySamples; }
-
 bool operator==(const ChorusLayout& a, const ChorusLayout& b) { return engineLayout(a) == engineLayout(b); }
 
 int chorusVoices(const ChorusLayout& layout) { return sub::chorus::voices(engineLayout(layout)); }

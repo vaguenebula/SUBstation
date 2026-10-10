@@ -9,8 +9,6 @@ namespace sub::app {
 // The Rate's range (Hz), the engine's.
 double chorusMinRate();
 double chorusMaxRate();
-// Samples per value of the device's displays (`phase`, `level`), the engine's.
-int chorusDisplaySamples();
 
 // The parameters' indices: mode 0 Chorus, 1 Ensemble, 2 Vibrato; taps 0 (one)
 // or 1 (two); time 0 (Auto) to 5 (50 ms).

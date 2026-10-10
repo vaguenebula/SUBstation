@@ -64,8 +64,10 @@ Item {
               "hp", "hp_freq", "output", "mix"]
     }
 
-    // How many voices a side the strip names outside Chorus mode (kept while it fades out).
-    onModeChanged: if (mode !== 0) voicesText.voices = mode === 1 ? 3 : 1
+    // How many voices a side the strip names outside Chorus mode, the engine's: set as the mode changes rather
+    // than bound, so that going back to Chorus it keeps naming the old mode's while it fades out.
+    onModeChanged: if (mode !== 0) voicesText.voices = graph.sideVoices(mode)
+    Component.onCompleted: voicesText.voices = graph.sideVoices(mode)
 
     // --- The display: the mode tabs, the graph, the high-pass strip --------------------------------
 
@@ -210,7 +212,7 @@ Item {
                 id: voicesText
                 objectName: "voicesText"
 
-                property int voices: editor.mode === 2 ? 1 : 3
+                property int voices  // (set by the editor)
 
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter

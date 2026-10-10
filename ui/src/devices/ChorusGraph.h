@@ -79,6 +79,9 @@ public:
 
     double windowCycles() const { return window_.value; }  // LFO cycles across the graph (eased)
     int voiceCount() const;                                // traces of the current layout: both sides'
+    // Voices a side in `mode` (0 Chorus, 1 Ensemble, 2 Vibrato) with the Taps and Time set, the engine's:
+    // what the editor's strip names outside Chorus mode.
+    Q_INVOKABLE int sideVoices(int mode) const;
     sub::app::ChorusLayout layout() const { return layout_; }
     double layoutFade() const { return layers_[0].alpha.value; }  // 0..1: the current layout fading in
     double layoutAlpha(const sub::app::ChorusLayout& layout) const;  // how much a layout's voices show (0..1)
