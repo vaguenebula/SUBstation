@@ -75,7 +75,9 @@ Item {
         color: Theme.border
     }
 
-    // A knob whose rate can be synced: the ♪ switch at the right of its caption.
+    // A knob whose rate can be synced: the ♪ switch at the right of its caption. Synced, it steps
+    // through note values, and the wheel moves it one a notch (the knob's own wheel moves a fiftieth
+    // of the range, which a list of 19 rounds back to where it was).
     component SyncedKnob: Item {
         id: synced
 
@@ -83,6 +85,7 @@ Item {
         property alias syncButton: syncButton
         property string knobName
         property string buttonName
+        readonly property bool stepping: knob.step > 0
 
         width: knob.width
         height: knob.implicitHeight
@@ -91,6 +94,23 @@ Item {
             id: knob
             objectName: synced.knobName
             size: editor.knobSize
+            knob.knob.wheel: !synced.stepping
+        }
+        WheelHandler {
+            property real pending: 0  // (a fine-grained wheel's eighths of a notch, until they make one)
+
+            enabled: synced.stepping
+            onWheel: event => {
+                pending += event.angleDelta.y
+                const notches = pending > 0 ? Math.floor(pending / 120) : Math.ceil(pending / 120)
+                pending -= notches * 120
+                const param = knob.param
+                if (notches === 0 || !param)
+                    return
+                const next = Math.max(param.minimum, Math.min(param.maximum, Math.round(param.value) + notches))
+                if (next !== param.value)
+                    param.set(next, "")
+            }
         }
         ParamButton {
             id: syncButton
@@ -184,9 +204,11 @@ Item {
             ParamButton {
                 required property var modelData
                 required property int index
+                // Whole pixels (45, 44, 45 in the body's 154): no edge falls between two rows.
+                readonly property real share: (editor.height - 12 - 2 * tabs.spacing) / 3
                 objectName: modelData[1]
                 width: tabs.width
-                height: (editor.height - 12 - 2 * tabs.spacing) / 3
+                height: Math.round((index + 1) * share) - Math.round(index * share)
                 param: p.get("mode")
                 choice: index
                 text: modelData[0]
@@ -262,7 +284,8 @@ Item {
             id: delayKnobs
             objectName: "delayKnobs"
             width: parent.width
-            y: Math.round((editor.height - height) / 2)
+            // Centred with the Flanger's notch under the knob, in the Doubler too: the knob stays put.
+            y: Math.round((editor.height - time.implicitHeight - spacing - notchReadout.implicitHeight) / 2)
             spacing: 4
             opacity: editor.mode !== 0 ? 1 : 0
             visible: opacity > 0
@@ -282,6 +305,7 @@ Item {
                 tooltip: qsTr("The delay: shorter moves the comb's notches up")
             }
             EditorReadout {
+                id: notchReadout
                 objectName: "notchReadout"
                 width: parent.width
                 visible: editor.mode === 1

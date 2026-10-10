@@ -12,15 +12,19 @@
 //   marked along the bottom; the envelope's level is a bar at the left; In and
 //   Out meters at the right.
 // - The LFO strip under it: the shape over a cycle with the phase's dot, its
-//   comet trail and the right LFO's dot (the random shapes: a trace of their
-//   values, scrolling), and a bar of the summed modulation the sweep follows.
+//   comet trail (the way the dot went over the last ticks, however fast) and
+//   the right LFO's dot (the random shapes: a trace of their values, scrolling,
+//   started afresh when one is chosen), and a bar of the summed modulation the
+//   sweep follows.
 // - The engine publishes its values a block at a time; DisplayPlayback plays
-//   them back at their own pace, so the curve glides at the screen's rate.
-//   Without values for kStaleSeconds (stopped, silent, bypassed), the curve
-//   eases back to where the parameters put it and the dots dim.
-// - Drag across for the Center (Flanger: the comb's first notch; Doubler: the
-//   Time), up and down for the Spread (the delay modes: the Feedback), one undo
-//   step per drag; double-click to reset them.
+//   them back at their own pace, so the curve glides at the screen's rate (and
+//   the meters fall at theirs on ticks that bring nothing). Without values for
+//   kStaleSeconds (stopped, silent, bypassed), the curve eases back to where
+//   the parameters put it and the dots dim.
+// - Drag across the plot for the Center (Flanger: the comb's first notch;
+//   Doubler: the Time), up and down for the Spread (the delay modes: the
+//   Feedback), one undo step per drag; double-click to reset them, one step
+//   with the first click's jump.
 // - Expanded (LFO 2, the envelope and Safe Bass shown) is view state, kept per
 //   device while the application runs, not saved.
 
@@ -118,6 +122,7 @@ public:
     static constexpr double kFeedbackPixels = 150.0;  // the same for Feedback
     static constexpr double kStaleSeconds = 0.3;      // no display values this long: not live
     static constexpr int kTrail = 10;                 // the dot's comet trail, in ticks
+    static constexpr double kTrailSpan = 0.4;         // its tail's longest, in cycles
     static constexpr int kTrace = 512;                // the random shapes' trace: 2.7 s of values
     static constexpr int kMarkerSpacing = 8;          // px: comb markers closer than this are left out
     static constexpr double kBandPeriod = 8.0;        // px: a comb whose cycle is shorter is drawn as a band
@@ -158,6 +163,8 @@ public:
     double levelIn() const { return in_.level; }  // the meters (with ballistics), dB
     double levelOut() const { return out_.level; }
     double dotOpacity() const { return dotOpacity_.value; }
+    int traceLength() const { return traceCount_; }  // the random shapes' values traced so far (of kTrace)
+    double trailSpan() const { return trailSpan_; }   // how far the dot went over its trail's ticks (cycles)
     const DisplayPlayback& playback() const { return playback_; }
     int mode() const { return mode_; }
     bool live() const { return live_; }
@@ -182,11 +189,13 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseUngrabEvent() override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void hoverMoveEvent(QHoverEvent* event) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
     struct Dot {
         double phase = 0.0, value = 0.0;
+        double step = 0.0;  // how far it went from the dot before (cycles)
     };
     // A curve as drawn, in pixels: its line (where a comb is finer than kBandPeriod, the comb's top)
     // and the runs of those columns, a band each between the comb's peaks and its notches.
@@ -244,6 +253,7 @@ private:
     double lfoPhase_ = 0.0, lfoPhaseRight_ = 0.5, lfoValue_ = 0.0, modulation_ = 0.0;
     Eased envBar_, dotOpacity_, oldFade_;
     MeterBallistics in_, out_;
+    double lastInPeak_ = -1e300, lastOutPeak_ = -1e300;  // the last values that came (dB)
     bool live_ = false;
     bool moving_ = false;
     double sinceArrival_ = 1e9;  // seconds without display values (the ticks' times)
@@ -252,6 +262,7 @@ private:
     std::array<std::vector<float>, DisplayPlayback::kStreams> pending_;  // read, not yet whole frames
     std::array<Dot, kTrail> trail_{};
     int trailCount_ = 0, trailNext_ = 0, trailSettle_ = 0;
+    double trailSpan_ = 0.0;  // how far the dot went over the trail's ticks (cycles)
     std::vector<float> trace_;  // the random shapes' values, a ring of kTrace
     int traceNext_ = 0, traceCount_ = 0;
     qint64 traced_ = -1;  // the last frame put in the trace
@@ -264,7 +275,8 @@ private:
     std::vector<double> markers_, markerAlpha_;
 
     // Dragging.
-    QString gesture_;  // the drag's merge key ("": none)
+    QString gesture_;      // the drag's merge key ("": none)
+    QString lastGesture_;  // the last press's (kept after it: a double-click's reset merges with its first click)
     QPointF pressedAt_;
     double pressedValue_ = 0.0;  // the Spread, or the Feedback
     QMetaObject::Connection bridgeConnection_;  // the bridge's deviceChanged: a new sample rate

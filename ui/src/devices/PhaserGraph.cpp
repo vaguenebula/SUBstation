@@ -11,11 +11,11 @@
 #include <QCursor>
 #include <QHash>
 #include <QLinearGradient>
+#include <QHoverEvent>
 #include <QMouseEvent>
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace sub::ui {
 
@@ -153,7 +153,7 @@ const QString& timeId(int mode) {
 PhaserGraph::PhaserGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     setImplicitSize(kWidth, kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton);
-    setCursor(Qt::SizeAllCursor);
+    setAcceptHoverEvents(true);  // (the drag's cursor over the plot only: hoverMoveEvent)
     trace_.assign(kTrace, 0.0f);
     in_.reset(kMeterFloor);
     out_.reset(kMeterFloor);
@@ -283,7 +283,14 @@ void PhaserGraph::sync() {
     mix_ = value(QStringLiteral("mix"));
     safeBass_ = value(QStringLiteral("safe_bass"));
     output_ = value(QStringLiteral("output"));
-    wave_ = std::clamp(int(std::lround(value(QStringLiteral("wave")))), 0, 9);
+    const int wave = std::clamp(int(std::lround(value(QStringLiteral("wave")))), 0, 9);
+    if (wave != wave_ && sub::app::phaserWaveIsRandom(wave)) {
+        // A random shape chosen: its trace starts empty (four cycles of the shape until values come),
+        // from the frames that come next (those already here are the shape's before).
+        traceCount_ = traceNext_ = 0;
+        traced_ = std::max(traced_, playback_.newest());
+    }
+    wave_ = wave;
     duty_ = value(QStringLiteral("duty")) / 100.0;
     const double tempo = session() && session()->project() ? session()->project()->tempo() : 120.0;
     rateHz_ = value(QStringLiteral("sync")) >= 0.5
@@ -558,7 +565,8 @@ void PhaserGraph::refreshDisplays() {
         lfoValue_ = playback_.value(kLfo);
         modulation_ = playback_.value(kMod);
         envBar_.target = envOn_ ? std::clamp(playback_.value(kEnv), 0.0, 1.0) : 0.0;
-        trace();
+        if (randomShape())
+            trace();
         moving = true;
     } else {
         // Quiet: back to where the parameters put it.
@@ -582,18 +590,31 @@ void PhaserGraph::refreshDisplays() {
     dotOpacity_.target = live_ ? 1.0 : 0.35;
     moving |= dotOpacity_.step(easeFraction(dt, 0.08), 1e-3);
     if (live_ || trailSettle_ > 0) {
-        trail_[size_t(trailNext_)] = {lfoPhase_, lfoValue_};
+        // How far the dot went since the last tick (forward: under half a cycle a tick at any rate
+        // the displays resolve), and so how far it went over the trail's ticks, however fast.
+        const Dot& last = trail_[size_t((trailNext_ - 1 + kTrail) % kTrail)];
+        const double step = trailCount_ > 0 ? lfoPhase_ - last.phase - std::floor(lfoPhase_ - last.phase) : 0.0;
+        trail_[size_t(trailNext_)] = {lfoPhase_, lfoValue_, step};
         trailNext_ = (trailNext_ + 1) % kTrail;
         trailCount_ = std::min(trailCount_ + 1, kTrail);
         trailSettle_ = live_ ? kTrail : trailSettle_ - 1;
+        trailSpan_ = 0.0;
+        for (int k = 0; k + 1 < trailCount_; ++k)  // (the newest's steps: the oldest's own came before it)
+            trailSpan_ += trail_[size_t((trailNext_ - 1 - k + kTrail) % kTrail)].step;
         moving = true;
     }
 
-    // The meters want the newest: what came this tick; quiet, they fall.
+    // The meters want the newest: what came this tick, or on a tick that brought nothing (a large
+    // audio block's gap) the last that came, so they go on falling and holding at their pace; quiet,
+    // they fall.
     if (count > 0) {
-        in_.update(inPeak, dt, 24.0, 1.0, kMeterFloor);
-        out_.update(outPeak, dt, 24.0, 1.0, kMeterFloor);
-    } else if (!live_) {
+        lastInPeak_ = inPeak;
+        lastOutPeak_ = outPeak;
+    }
+    if (live_) {
+        in_.update(lastInPeak_, dt, 24.0, 1.0, kMeterFloor);
+        out_.update(lastOutPeak_, dt, 24.0, 1.0, kMeterFloor);
+    } else {
         in_.update(kMeterFloor, dt, 24.0, 1.0, kMeterFloor);
         out_.update(kMeterFloor, dt, 24.0, 1.0, kMeterFloor);
     }
@@ -631,12 +652,13 @@ void PhaserGraph::startCatchUp() {
 
 void PhaserGraph::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton || !plot().contains(event->position())) {
+        lastGesture_.clear();
         event->ignore();  // (the strip and the meters: the frame's)
         return;
     }
     if (secondPressOfDoubleClick(event))
         return;
-    gesture_ = newGestureKey();
+    gesture_ = lastGesture_ = newGestureKey();
     pressedAt_ = event->position();
     pressedValue_ = mode_ == 0 ? spread_ : feedback_;
     touch(mode_ == 0 ? QStringLiteral("center") : timeId(mode_));
@@ -658,7 +680,18 @@ void PhaserGraph::mouseDoubleClickEvent(QMouseEvent* event) {
     gesture_.clear();
     const QString across = mode_ == 0 ? QStringLiteral("center") : timeId(mode_);
     const QString upDown = mode_ == 0 ? QStringLiteral("spread") : QStringLiteral("feedback");
-    setParams({{across, defaultValue(across)}, {upDown, defaultValue(upDown)}}, newGestureKey());
+    // Under the first click's key: its jump and the reset are one undo step, which undoes to what was
+    // there before the double-click.
+    setParams({{across, defaultValue(across)}, {upDown, defaultValue(upDown)}},
+              lastGesture_.isEmpty() ? newGestureKey() : lastGesture_);
+}
+
+void PhaserGraph::hoverMoveEvent(QHoverEvent* event) {
+    // The drag's cursor over the plot; the strip and the meters take no drag.
+    if (plot().contains(event->position()))
+        setCursor(Qt::SizeAllCursor);
+    else
+        unsetCursor();
 }
 
 void PhaserGraph::dragTo(const QPointF& pos) {
@@ -799,11 +832,11 @@ void PhaserGraph::paintStrip(SgPainter& p) {
         }
         p.drawPolyline(ahead.data(), int(ahead.size()), Theme::kTextDim, 1.2);
         p.drawPolyline(done.data(), int(done.size()), withAlpha(Theme::kAccent, 150), 1.2);
-        // The comet's tail: the way the dot came over the last ticks, brighter towards it.
+        // The comet's tail: the way the dot came over the last ticks, brighter towards it (a fast LFO's
+        // at most kTrailSpan of a cycle, however far it went).
         if (trailCount_ > 1) {
-            const Dot& oldest = trail_[size_t((trailNext_ - trailCount_ + 2 * kTrail) % kTrail)];
-            const double span = lfoPhase_ - oldest.phase - std::floor(lfoPhase_ - oldest.phase);
-            if (span > 0.0 && span < 0.5) {
+            const double span = std::min(trailSpan_, kTrailSpan);
+            if (span > 0.0) {
                 const int steps = std::max(1, int(std::ceil(span * r.width() / 2)));
                 QPointF from;
                 for (int k = 0; k <= steps; ++k) {

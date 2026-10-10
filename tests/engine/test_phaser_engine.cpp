@@ -1,16 +1,24 @@
 // The built-in Phaser-Flanger: its notches are where its design puts them (the
 // curve its editor draws), Spread moves them apart and the LFOs sweep them,
-// stereo by Phase or Spin; the flanger's comb and its feedback are exact to the
-// sample, the doubler's copy too; the envelope, Safe Bass, Warmth, Output and
-// Dry/Wet do what they say; a change of mode or of Notches lands on the new
-// setting exactly; every control changes without a click; automation plays to
-// the sample; synced LFOs follow the song and random ones repeat; reset and a
-// new rate start it cleanly, silence rings out to exact zeros, its tail covers
-// its ringing; it stays stable at the extremes, one channel plays as either of
-// two, and its displays are what plays.
+// every shape as its design draws it, bent by Duty, LFO 2 mixed in, stereo by
+// Phase or Spin; the flanger's comb and its feedback are exact to the sample,
+// the doubler's copy too; the envelope, Safe Bass, Warmth (its saturation
+// antialiased), Output and Dry/Wet do what they say; a change of mode or of
+// Notches lands on the new setting exactly; every control changes without a
+// click, and a sweep into the stages' limits bends smoothly; automation plays
+// to the sample; synced LFOs follow the song and random ones repeat; reset and
+// a new rate start it cleanly, silence rings out to exact zeros (nothing
+// denormal on the way), its tail covers its ringing; it stays stable at the
+// extremes, one channel plays as either of two, and its displays are what
+// plays.
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -19,6 +27,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -230,6 +239,23 @@ double minOf(const std::vector<float>& v) { return *std::min_element(v.begin(), 
 double maxOfValues(const std::vector<float>& v) { return *std::max_element(v.begin(), v.end()); }
 
 int tailOf(Phaser& p) { return p.processor().tailSamples(); }
+
+// The CPU time this thread has used, in seconds: what a piece of work costs, whatever else
+// the machine is doing (the wall clock would count the time other processes had the core).
+double threadSeconds() {
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user;
+    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
+    const auto ticks = [](const FILETIME& t) {
+        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
+    };
+    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks, counted at the scheduler's ~16 ms)
+#else
+    timespec t{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
+#endif
+}
 
 }  // namespace
 
@@ -459,7 +485,98 @@ TEST_CASE("phaser-flanger: the LFO sweeps the notches") {
     CHECK_APPROX_REL(minOf(qs), phaser::qOfSpread(1.0), 0.02);
 }
 
-TEST_CASE("phaser-flanger: stereo: the right LFO runs Phase behind, or spins faster") {
+TEST_CASE("phaser-flanger: the LFO's shapes and Duty, LFO 2, and Triangle Analog's rate reach the modulation") {
+    // Every shape at Duty 0 and ±80 %: the LFO's value is the shape's at its phase (away from a
+    // shape's jumps, where a value a float's rounding away would be the other side's).
+    for (int wave = 0; wave < 10; ++wave) {
+        for (const float duty : {0.f, 80.f, -80.f}) {
+            INFO(phaser::waveLabels()[static_cast<size_t>(wave)] + ", Duty " + std::to_string(duty));
+            Phaser p(kSampleRate, still({{"amount", 100.f}, {"wave", static_cast<float>(wave)}, {"freq", 1.f},
+                                         {"duty", duty}}));
+            p.play(Samples(2 * kSampleRate, 0.f));
+            const std::vector<float> phase = p.display("phase"), lfo = p.display("lfo");
+            const auto shape = static_cast<phaser::Wave>(wave);
+            size_t compared = 0;
+            double worst = 0.0;
+            for (size_t k = 0; k < phase.size(); ++k) {
+                const double at = phase[k];
+                const double seconds = 256.0 * static_cast<double>(k + 1) / kSampleRate;
+                const auto cycle = static_cast<uint32_t>(std::llround(seconds - at));
+                const auto value = [&](double ph) { return phaser::waveValue(shape, ph, cycle, duty / 100.0, 1.0); };
+                if (at < 1e-3 || at > 1.0 - 1e-3 || std::abs(value(at - 1e-4) - value(at + 1e-4)) > 0.01) continue;
+                worst = std::max(worst, std::abs(static_cast<double>(lfo[k]) - value(at)));
+                ++compared;
+            }
+            CHECK(compared > 300);
+            CHECK(worst < 1e-5);
+        }
+    }
+    // Duty bends the shape: at 80 %, the sine's first half takes 86 % of the cycle.
+    CHECK_APPROX(phaser::waveValue(phaser::Wave::Sine, 0.43, 0, 0.8, 1.0), 1.0);
+    CHECK_APPROX(phaser::waveValue(phaser::Wave::Sine, 0.93, 0, 0.8, 1.0), -1.0);
+    CHECK_EQ(phaser::waveValue(phaser::Wave::Rectangle, 0.85, 0, 0.8, 1.0), 1.f);
+    CHECK_EQ(phaser::waveValue(phaser::Wave::Rectangle, 0.87, 0, 0.8, 1.0), -1.f);
+
+    // LFO 2 alone (its Mix 100 %): the modulation is its triangle at Freq 2, whatever LFO 1 does
+    // (within the modulation's 1 ms smoothing, which rounds the triangle's turns).
+    const auto triangle = [](double phase) {
+        return static_cast<double>(sub::dsp::Lfo::shape(sub::dsp::LfoShape::Triangle, frac(phase), 0));
+    };
+    const Values two = still({{"amount", 100.f}, {"wave", 0.f}, {"freq", 0.37f}, {"lfo2_mix", 100.f}, {"freq2", 2.f}});
+    {
+        Phaser p(kSampleRate, two);
+        p.play(Samples(2 * kSampleRate, 0.f));
+        const std::vector<float> mod = p.display("mod");
+        double worst = 0.0;
+        for (size_t k = 0; k < mod.size(); ++k) {
+            const double seconds = 256.0 * static_cast<double>(k + 1) / kSampleRate;
+            worst = std::max(worst, std::abs(mod[k] - triangle(2.0 * seconds)));
+        }
+        CHECK(worst < 0.02);
+    }
+    // Synced (1/4 at 120 BPM: 2 Hz again), from the song: a quarter of a beat in, a quarter of a cycle on.
+    {
+        Values synced = two;
+        synced.insert(synced.end(), {{"sync2", 1.f}, {"rate2", 10.f}});
+        Phaser p(kSampleRate, synced);
+        p.playing(true, 120.0, 0.25);
+        p.play(Samples(2 * kSampleRate, 0.f));
+        const std::vector<float> mod = p.display("mod");
+        double worst = 0.0;
+        for (size_t k = 0; k < mod.size(); ++k) {
+            const double seconds = 256.0 * static_cast<double>(k + 1) / kSampleRate;
+            worst = std::max(worst, std::abs(mod[k] - triangle(0.25 + 2.0 * seconds)));
+        }
+        CHECK(worst < 0.02);
+    }
+    // Half and half: the average of the two.
+    {
+        Values half = two;
+        half.emplace_back("lfo2_mix", 50.f);
+        Phaser p(kSampleRate, half);
+        p.play(Samples(2 * kSampleRate, 0.f));
+        const std::vector<float> mod = p.display("mod"), lfo = p.display("lfo");
+        double worst = 0.0;
+        for (size_t k = 0; k < mod.size(); ++k) {
+            const double seconds = 256.0 * static_cast<double>(k + 1) / kSampleRate;
+            worst = std::max(worst, std::abs(mod[k] - (0.5 * lfo[k] + 0.5 * triangle(2.0 * seconds))));
+        }
+        CHECK(worst < 0.02);
+    }
+
+    // Triangle Analog follows its rate: all but square at 0.5 Hz (reaching 1), a quieter rounded
+    // triangle at 5 Hz (0.46 high).
+    for (const auto& [freq, peak] : {std::pair{0.5f, 1.0}, std::pair{5.f, 0.46}}) {
+        INFO(std::to_string(freq) + " Hz");
+        Phaser p(kSampleRate, still({{"amount", 100.f}, {"wave", 2.f}, {"freq", freq}}));
+        p.play(Samples(4 * kSampleRate, 0.f));
+        const std::vector<float> lfo = p.display("lfo");
+        CHECK_APPROX_REL(maxOfValues(lfo), peak, 0.02);
+        CHECK_APPROX_REL(-minOf(lfo), peak, 0.02);
+    }
+}
+
+TEST_CASE("phaser-flanger: stereo: the right LFO runs Phase ahead, or spins faster") {
     const Values sweeping = still({{"amount", 100.f}, {"wave", 0.f}, {"freq", 1.f}});
     // Phase 180: the right sweeps the other way, mirrored about the centre (in log).
     {
@@ -668,12 +785,14 @@ TEST_CASE("phaser-flanger: Warmth darkens and saturates the effect") {
         const double level = db(toneLevel(p.play(high), 10000.0, from, length) / 0.1);
         CHECK(level > -7.0);
         CHECK(level < -6.0);
+        // (quiet, the wet path is the filter the design draws: its saturation adds next to nothing)
         phaser::Response r;
         r.mode = phaser::Mode::Doubler;
         r.delayMs = 20.0;
         r.warmth = 1.0;
         r.mix = 1.0;
-        CHECK_NEAR(level, phaser::responseDb(r, 10000.0, kSampleRate), 0.3);
+        CHECK_NEAR(level, db(std::abs(phaser::wetTransfer(r, 2.0 * kPi * 10000.0 / kSampleRate, kSampleRate))), 0.1);
+        CHECK_NEAR(level, phaser::responseDb(r, 10000.0, kSampleRate), 0.1);
     }
     // 200 Hz at 0.9: a 3rd harmonic with it, none without.
     const Samples loud = smoothSine(200.0, 1.5, kSampleRate, 0.9);
@@ -687,6 +806,22 @@ TEST_CASE("phaser-flanger: Warmth darkens and saturates the effect") {
             CHECK(third > -35.0);
         } else {
             CHECK(third < -100.0);
+        }
+    }
+    // Loud and high, the harmonics beyond Nyquist fold back (the saturation runs at the rate) but
+    // far down: a 9 kHz tone's 3rd at 21 kHz and its 5th at 3 kHz, a 7 kHz tone's 5th at 13 kHz
+    // (unantialiased, 20, 26 and 34 dB under the tone).
+    for (const auto& [tone, folds, under] :
+         {std::tuple{9000.0, std::vector<double>{21000.0, 3000.0}, std::vector<double>{28.0, 45.0}},
+          std::tuple{7000.0, std::vector<double>{13000.0}, std::vector<double>{45.0}}}) {
+        Phaser p = doubler(100.f);
+        const Samples out = p.play(smoothSine(tone, 1.0, kSampleRate, 0.9));
+        const double level = toneLevel(out, tone, kSampleRate / 4, kSampleRate / 2);
+        for (size_t i = 0; i < folds.size(); ++i) {
+            const double alias = db(toneLevel(out, folds[i], kSampleRate / 4, kSampleRate / 2) / level);
+            INFO(std::to_string(tone) + " Hz folding to " + std::to_string(folds[i]) + " Hz: " +
+                 std::to_string(alias) + " dB");
+            CHECK(alias < -under[i]);
         }
     }
 }
@@ -764,7 +899,10 @@ TEST_CASE("phaser-flanger: changing any control is click-free") {
     // A 220 Hz tone through the device as it opens (but a 30 % sine sweep at
     // 0.5 Hz), the transport playing at 120 BPM (so Sync switches between the
     // free phase and the song's), every control jumping in turn as
-    // automation's steps make them.
+    // automation's steps make them, each where it is heard (the LFO's while
+    // LFO 1 is, the envelope's while it follows, Spin's while it spins, LFO
+    // 2's while it is mixed in); then the sweep run fast and deep into the
+    // stages' top and bottom limits.
     const auto s = [](double seconds) { return static_cast<int64_t>(seconds * kSampleRate); };
     const std::vector<Change> changes = {
         {s(0.4), "notches", 12.f},    {s(0.6), "notches", 1.f},     {s(0.8), "notches", 42.f},
@@ -783,10 +921,20 @@ TEST_CASE("phaser-flanger: changing any control is click-free") {
         {s(8.2), "warmth", 0.f},      {s(8.4), "output", -24.f},    {s(8.6), "output", 12.f},
         {s(8.8), "output", 0.f},      {s(9.0), "mix", 0.f},         {s(9.2), "mix", 100.f},
         {s(9.4), "mix", 50.f},        {s(9.6), "center", 500.f},    {s(9.6), "notches", 8.f},
-        {s(9.6), "spread", 30.f},
+        {s(9.6), "spread", 30.f},     {s(10.0), "lfo2_mix", 0.f},   {s(10.2), "blend", 0.5f},
+        {s(10.4), "amount", 100.f},   {s(10.8), "amount", 0.f},     {s(11.0), "amount", 60.f},
+        {s(11.2), "duty", 90.f},      {s(11.4), "duty", -90.f},     {s(11.6), "wave", 2.f},
+        {s(11.8), "duty", 90.f},      {s(12.0), "duty", 0.f},       {s(12.2), "spin_on", 1.f},
+        {s(12.4), "spin", 100.f},     {s(12.6), "spin", 0.f},       {s(12.8), "env_on", 1.f},
+        {s(13.0), "env_amount", -100.f}, {s(13.2), "env_attack", 300.f}, {s(13.4), "env_attack", 0.1f},
+        {s(13.6), "env_release", 1000.f}, {s(13.8), "env_release", 50.f}, {s(14.0), "env_on", 0.f},
+        {s(14.2), "lfo2_mix", 50.f},  {s(14.4), "freq2", 0.2f},     {s(14.6), "sync2", 1.f},
+        {s(14.8), "rate2", 13.f},     {s(15.0), "sync2", 0.f},      {s(15.2), "lfo2_mix", 0.f},
+        {s(15.2), "blend", 0.f},      {s(15.2), "wave", 0.f},       {s(15.2), "freq", 5.f},
+        {s(15.2), "amount", 100.f},   {s(15.2), "center", 5000.f},  {s(15.8), "center", 70.f},
     };
     const Values opening = {{"amount", 30.f}, {"wave", 0.f}, {"freq", 0.5f}, {"env_amount", 100.f}};
-    const Samples tone = smoothSine(220.0, 10.0);
+    const Samples tone = smoothSine(220.0, 16.4);
     Phaser p(kSampleRate, opening);
     p.playing(true, 120.0, 0.0);
     Samples l = tone, r = tone;
@@ -804,7 +952,7 @@ TEST_CASE("phaser-flanger: changing any control is click-free") {
         each += line;
     }
     INFO("tone " + std::to_string(input) + ", through the changes " + std::to_string(output) + " (" + each + ")");
-    CHECK(output < 1e-4);  // (as the Disperser's; measured 5e-5)
+    CHECK(output < 1e-4);  // (the Disperser's; measured 3.4e-5 at Output's 36 dB jump, any other change 2e-5 at most)
 
     // What the measure makes of a click: Phaser's output switched to Flanger's at once, unfaded,
     Phaser phased(kSampleRate, opening), flanged(kSampleRate, opening);
@@ -971,6 +1119,20 @@ TEST_CASE("phaser-flanger: silence rings out to exact zeros") {
         CHECK(allEqual(slice(tl, kSampleRate), 0.0));
         CHECK(allEqual(slice(tr, kSampleRate), 0.0));
     }
+    // Gains gliding to 0 together: clicks through Warmth at Output -24 dB (22.05 kHz, where Warmth's
+    // pole decays fastest), Dry/Wet and Warmth turned down at once. Their product, and what Warmth
+    // still holds, pass through a float's denormal range on the way to 0: none of it comes out.
+    {
+        Phaser p(22050.0, still({{"warmth", 100.f}, {"mix", 100.f}, {"output", -24.f}}));
+        Samples l(3 * 22050, 0.f);
+        for (size_t i = 0; i < l.size(); i += 551) l[i] = 1.f;
+        Samples r = l;
+        p.run({&l, &r}, {{21760, "mix", 0.f}, {21760, "warmth", 0.f}});
+        size_t denormal = 0;
+        for (const Samples* out : {&l, &r})
+            for (const float v : *out) denormal += v != 0.f && std::abs(v) < std::numeric_limits<float>::min();
+        CHECK_EQ(denormal, size_t{0});
+    }
 }
 
 TEST_CASE("phaser-flanger: its tail covers its ringing") {
@@ -1044,10 +1206,13 @@ TEST_CASE("phaser-flanger: it stays stable at the extremes and at any sample rat
             }
         }
     }
-    // Kept below Nyquist: at 22.05 kHz, 18.5 kHz plays at 0.45 of the rate.
+    // Kept below Nyquist: at 22.05 kHz, 18.5 kHz plays just under 0.45 of the rate (the limit's soft edge).
     Phaser high(22050.0, {{"amount", 0.f}, {"center", 18500.f}});
     high.play(Samples(22050, 0.f));
-    CHECK_APPROX_REL(minOf(high.display("sweep_l")), 9922.5, 1e-5);
+    const std::vector<float> top = high.display("sweep_l");
+    CHECK(maxOfValues(top) < 9922.5);
+    CHECK_APPROX_REL(minOf(top), 9922.5, 1e-4);
+    CHECK_APPROX_REL(minOf(top), phaser::phaserCenterHz(18500.0, 0.0, 0.0, 22050.0), 1e-6);
     // And the flanger never reads nearer than 2 samples (0.1 ms swept down two octaves would be 0.55).
     Phaser shortest(22050.0, {{"mode", 1.f}, {"flange_time", 0.1f}, {"amount", 100.f}, {"wave", 0.f}, {"freq", 2.f}});
     shortest.play(Samples(22050, 0.f));
@@ -1107,15 +1272,17 @@ TEST_CASE("phaser-flanger: it is cheap enough") {
 #ifndef NDEBUG
     SKIP("timing needs an optimized build");
 #else
+    // Timed in the thread's CPU time, not the wall clock's: a busy machine (a parallel build, the
+    // other tests) takes the core away, not the device's cost.
     const Samples left = noise(10 * kSampleRate, 21), right = noise(10 * kSampleRate, 22);
     const auto seconds = [&](const Values& values) {
         double best = 1e9;
         for (int attempt = 0; attempt < 2; ++attempt) {
             Phaser p(kSampleRate, values);
             Samples l = left, r = right;
-            const auto start = std::chrono::steady_clock::now();
+            const double start = threadSeconds();
             p.run({&l, &r});
-            best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+            best = std::min(best, threadSeconds() - start);
         }
         return best;
     };

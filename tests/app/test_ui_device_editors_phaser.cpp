@@ -2,18 +2,19 @@
 // PhaserGraph): loaded as the device view loads it, over a real engine. It fits
 // the view; every control is bound to its parameter and undoable, the swapped
 // ones (Freq/Rate, Phase/Spin, the delay's Time) rebinding in place; the mode
-// tabs, More (view state, not undone); the curve is the engine's design, its
-// notch markers where the design puts them, a fine comb drawn as a band; the
-// graph's drags, one undo step each; what the engine's displays bring it (the
-// sweep, the LFO's phase, the levels), going quiet without them and then not
-// repainting; the playback of the display values, smooth whatever the audio's
-// block size; what the engine has after. With SUBSTATION_UI_SCREENSHOTS set to a
-// folder, it is saved there as PNGs.
+// tabs, More (view state, not undone); a synced rate's wheel; the curve is the
+// engine's design, its notch markers where the design puts them, a fine comb
+// drawn as a band; the graph's drags and its double-click, one undo step each;
+// what the engine's displays bring it (the sweep, the LFO's phase, the levels),
+// going quiet without them and then not repainting; the playback of the display
+// values, smooth whatever the audio's block size, and the meters, the comet's
+// tail and a random shape's trace keeping their pace; what the engine has
+// after. With SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as
+// PNGs.
 
 #include <QElapsedTimer>
 #include <QQuickItem>
 #include <QQuickWindow>
-#include <QSignalSpy>
 #include <QStyleHints>
 #include <QTest>
 #include <QUndoStack>
@@ -200,6 +201,15 @@ private Q_SLOTS:
         QVERIFY(knobOf(find(view, QStringLiteral("envAmount")))->bipolar());
         QVERIFY(find(view, QStringLiteral("modePhaser"))->property("lit").toBool());
         QVERIFY(!find(view, QStringLiteral("modeFlanger"))->property("lit").toBool());
+        // The tabs on whole pixels (their borders crisp), filling the height between the margins.
+        double tabsEnd = 0.0;
+        for (const char* tab : {"modePhaser", "modeFlanger", "modeDoubler"}) {
+            QQuickItem* item = find(view, QString::fromLatin1(tab));
+            const QRectF at = item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height()));
+            QVERIFY2(at.top() == std::round(at.top()) && at.height() == std::round(at.height()), tab);
+            tabsEnd = at.bottom();
+        }
+        QCOMPARE(tabsEnd, view->height() - 6);
 
         // The knob rows sit inside the body's margins (6 px), the graph fills its height.
         auto* graph = find<PhaserGraph>(view, QStringLiteral("phaserGraph"));
@@ -293,12 +303,14 @@ private Q_SLOTS:
         QVERIFY(notchReadout->isVisible());
         QCOMPARE(notchReadout->property("text").toString(), QStringLiteral("Notch 200 Hz"));  // 1 / (2 · 2.5 ms)
         QCOMPARE(graph->mode(), 1);
+        const QPointF timeAt = time->mapToItem(view, QPointF(0, 0));
 
         click(find(view, QStringLiteral("modeDoubler")));
         QCOMPARE(value("mode"), 2.0);
         QCOMPARE(paramIdOf(time), QStringLiteral("doubler_time"));
         QCOMPARE(readoutOf(time), QStringLiteral("30 ms"));
         QVERIFY(!notchReadout->isVisible());
+        QCOMPARE(time->mapToItem(view, QPointF(0, 0)), timeAt);  // (the knob stays put without the notch under it)
         QCOMPARE(graph->mode(), 2);
         QCOMPARE(undo()->index(), steps + 2);
 
@@ -327,6 +339,21 @@ private Q_SLOTS:
         QCOMPARE(readoutOf(rate), QStringLiteral("1 Bar"));
         QCOMPARE(captionOf(rate), QStringLiteral("Rate"));
         QVERIFY(find(view, QStringLiteral("sync"))->property("lit").toBool());
+        // Synced, the wheel steps through the note values, one a notch (an undo step each); free, the
+        // knob's own wheel moves it smoothly.
+        steps = undo()->index();
+        wheel(centerOf(knobOf(rate)), 120);
+        QCOMPARE(value("rate"), 16.0);
+        QCOMPARE(readoutOf(rate), QStringLiteral("2 Bars"));
+        wheel(centerOf(knobOf(rate)), -240);
+        QCOMPARE(value("rate"), 14.0);
+        for (int eighth = 0; eighth < 8; ++eighth) wheel(centerOf(knobOf(rate)), 15);  // (a fine wheel's)
+        QCOMPARE(value("rate"), 15.0);
+        QCOMPARE(undo()->index(), steps + 3);
+        undo()->undo();
+        undo()->undo();
+        undo()->undo();
+        QCOMPARE(value("rate"), 15.0);
 
         steps = undo()->index();
         click(find(view, QStringLiteral("spinOn")));
@@ -347,6 +374,12 @@ private Q_SLOTS:
         QCOMPARE(paramIdOf(rate), QStringLiteral("freq"));
         QCOMPARE(knobOf(rate)->step(), 0.0);
         QCOMPARE(readoutOf(rate), QStringLiteral("0.50 Hz"));
+        steps = undo()->index();
+        wheel(centerOf(knobOf(rate)), 120);
+        QVERIFY(value("freq") > 0.5);
+        QCOMPARE(value("rate"), 15.0);
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
         QCOMPARE(paramIdOf(phaseSpin), QStringLiteral("phase"));
         QCOMPARE(value("fb_invert"), 0.0);
     }
@@ -507,17 +540,29 @@ private Q_SLOTS:
         QCOMPARE(undo()->count(), undo()->index());
         QVERIFY(std::abs(graph->sweepLeft() - value("center")) < 1e-6);
 
-        // A double-click: back to the defaults, one step (after its first click's, which moved the Center there).
+        // A double-click: back to the defaults, one step with its first click's jump to where it was
+        // clicked, so one undo goes back to what was there before.
         const QPoint somewhere = scenePoint(graph, QPointF(graph->xOf(3000.0), plot.center().y()));
         QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 50);
         steps = undo()->index();
+        const double centerBefore = value("center"), spreadBefore = value("spread");
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, somewhere);
         QCOMPARE(value("center"), 1000.0);
         QCOMPARE(value("spread"), 50.0);
-        QCOMPARE(undo()->index(), steps + 2);
+        QCOMPARE(undo()->index(), steps + 1);
         undo()->undo();
-        QVERIFY2(std::abs(value("center") / 3000.0 - 1.0) < 0.02, qPrintable(QString::number(value("center"))));
+        QCOMPARE(value("center"), centerBefore);
+        QCOMPARE(value("spread"), spreadBefore);
         undo()->redo();
+        QCOMPARE(value("center"), 1000.0);
+
+        // The drag's cursor over the plot only: the strip and the meters take no drag.
+        QTest::mouseMove(window_, scenePoint(graph, plot.center()));
+        QTRY_COMPARE(graph->cursor().shape(), Qt::SizeAllCursor);
+        QTest::mouseMove(window_, scenePoint(graph, graph->strip().center()));
+        QTRY_VERIFY(graph->cursor().shape() != Qt::SizeAllCursor);
+        QTest::mouseMove(window_, scenePoint(graph, graph->meters().center()));
+        QTRY_VERIFY(graph->cursor().shape() != Qt::SizeAllCursor);
 
         // A press in the LFO strip changes nothing (it goes to the frame).
         steps = undo()->index();
@@ -549,9 +594,15 @@ private Q_SLOTS:
         QVERIFY(graph->xOfTime(150.0) < graph->xOfTime(20.0));
         const QPoint doublerAt = scenePoint(graph, QPointF(graph->xOfTime(40.0), plot.center().y()));
         QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 50);
+        steps = undo()->index();
+        const double timeBefore = value("doubler_time"), feedbackBefore = value("feedback");
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, doublerAt);
         QCOMPARE(value("doubler_time"), 30.0);
         QCOMPARE(value("feedback"), 50.0);
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+        QCOMPARE(value("doubler_time"), timeBefore);
+        QCOMPARE(value("feedback"), feedbackBefore);
     }
 
     // Playing, the graph draws what the engine publishes: the sweep, the LFO's phase and value, the levels.
@@ -671,11 +722,12 @@ private Q_SLOTS:
         wrap.append(a);
         wrap.append(b);
         wrap.endBatch(2);
-        wrap.advance(0.5 / fps, fps);  // half a frame on from... wherever it started
-        const double h = wrap.head() - std::floor(wrap.head());
-        const double expected = std::fmod(0.98 + 0.04 * h, 1.0);
-        QVERIFY2(std::abs(wrap.phase(0) - expected) < 1e-6 || h == 0.0, qPrintable(QString::number(wrap.phase(0))));
-        QVERIFY(wrap.phase(0) > 0.9 || wrap.phase(0) < 0.1);
+        // (Half a frame's time: it starts again the target, 2, behind the newest (held at 0), and moves
+        // on at 0.925 of its pace, nearer the newest than the target: 0.4625 of a frame.)
+        wrap.advance(0.5 / fps, fps);
+        QCOMPARE(wrap.head(), 0.4625);
+        const double expected = 0.98 + 0.04 * 0.4625;
+        QVERIFY2(std::abs(wrap.phase(0) - expected) < 1e-6, qPrintable(QString::number(wrap.phase(0))));
 
         // Appends stopping: it holds at the newest.
         for (int i = 0; i < 60; ++i) {
@@ -725,6 +777,61 @@ private Q_SLOTS:
             QVERIFY2(us < 2000.0, label);
 #endif
         }
+    }
+
+    // The graph's animation keeps its pace whatever the audio's block size and the LFO's rate: with
+    // 2048-frame blocks (a tick in two bringing nothing) the meters still fall 24 dB a second; a fast
+    // LFO's comet tail follows the way it went; a random shape's trace starts afresh when chosen.
+    void animationKeepsPace() {
+        QQuickItem* view = showPhaser(1);
+        QVERIFY(view);
+        auto* graph = find<PhaserGraph>(view, QStringLiteral("phaserGraph"));
+        QVERIFY(graph);
+        set("sync", 1);
+        set("rate", 4);  // "1/16": 8 Hz at 120 BPM
+        set("wave", 0);
+        set("amount", 100);
+        // Played as the audio thread would: a block whenever the wall clock makes one due, the displays
+        // ticking every 16 ms, from `beat` on.
+        double beat = 0.0;
+        auto playLive = [&](double seconds, int block) {
+            QElapsedTimer clock;
+            clock.start();
+            const double blockSeconds = double(block) / kSampleRate;
+            qint64 blocks = 0;
+            while (clock.elapsed() < qint64(seconds * 1000.0)) {
+                for (; double(blocks) * blockSeconds <= double(clock.elapsed()) / 1000.0; ++blocks) {
+                    engine()->renderOffline(beat, block);
+                    beat += blockSeconds * 2.0;  // (120 BPM)
+                }
+                refreshDisplays();
+                QTest::qWait(16);
+            }
+        };
+        playLive(0.5, 2048);
+        QVERIFY(graph->live());
+        QVERIFY2(std::abs(graph->levelIn() - 20 * std::log10(0.5)) < 1.0,
+                 qPrintable(QString::number(graph->levelIn())));
+        // 8 Hz: more than half a cycle over the trail's ten ticks (the way the dot went: the phase apart from the
+        // oldest's would read that as less than it is, or as nothing).
+        QVERIFY2(graph->trailSpan() > 0.5, qPrintable(QString::number(graph->trailSpan())));
+
+        // The tone over (it ends at beat 2): the input falls at its pace, though some ticks bring nothing.
+        beat = 2.5;
+        playLive(1.0, 2048);
+        QVERIFY(graph->live());
+        QVERIFY2(graph->levelIn() < -6.0 - 18.0, qPrintable(QString::number(graph->levelIn())));
+
+        // Random S&H: its trace fills from the values that come; chosen again after another shape, it starts afresh.
+        set("wave", 9);
+        QCOMPARE(graph->traceLength(), 0);
+        playLive(0.3, 1024);
+        const int traced = graph->traceLength();
+        QVERIFY2(traced > 0 && traced < 100, qPrintable(QString::number(traced)));  // (0.3 s: 56 values)
+        set("wave", 0);
+        playLive(0.1, 1024);
+        set("wave", 9);
+        QCOMPARE(graph->traceLength(), 0);
     }
 
     // What it looks like: playing (the curve and the LFO moving), the Flanger, the Doubler's band.

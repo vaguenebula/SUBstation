@@ -11,15 +11,17 @@
 //   the flanger's delay two octaves, the doubler's 15 %. The line is written in
 //   every mode, so switching to a delay mode reads real history at once.
 // - Feedback goes back in with its polarity (Ø), through a soft limit above
-//   +6 dBFS so nothing runs away; Warmth gently saturates and darkens the
-//   effect inside the loop; Safe Bass keeps the lows dry (a Linkwitz-Riley
-//   split); Dry/Wet and Output last.
+//   +6 dBFS so nothing runs away; Warmth gently saturates (antialiased) and
+//   darkens the effect inside the loop; Safe Bass keeps the lows dry (a
+//   Linkwitz-Riley split); Dry/Wet and Output last.
 // - Control works per chunk of 16 frames: the LFOs and the envelope give the
 //   modulation at each chunk's end, which is drawn across the chunk and
 //   smoothed sample by sample. The Phaser's stages move linearly from one
-//   chunk end's coefficients to the next's; the delays follow the smoothed
-//   modulation sample by sample (a long delay would turn a chunk's corners
-//   into a zipper).
+//   chunk end's coefficients to the next's, or, where the modulation's way
+//   bends within the chunk (a fast, deep sweep, a triangle's turn), are
+//   designed sample by sample; the delays follow the smoothed modulation
+//   sample by sample (a long delay would turn a chunk's corners into a
+//   zipper).
 // - Nothing steps: the continuous controls glide (two one-poles in a row, so
 //   a jump eases in and out); while Center, Spread, Blend or a delay time
 //   glides, what it moves is worked out sample by sample; the gains glide per
@@ -37,6 +39,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -79,12 +82,54 @@ inline double safety(double v) noexcept {
     return v < 0.0 ? -bent : bent;
 }
 
-// Warmth: the effect's output blended (by w) with itself saturated and low-passed.
-inline double warmed(double y, double w, dsp::OnePole& pole, float coeff) noexcept {
-    constexpr auto kDrive = static_cast<float>(phaser::kWarmthDrive);
-    const float saturated = dsp::fastTanh(kDrive * static_cast<float>(y)) / kDrive;
-    return y + w * (static_cast<double>(pole.lowpass(saturated, coeff)) - y);
+// ln cosh u, without overflow; its error is a few parts in 1e16 of 1 + |u| (all the
+// antiderivative's difference quotient below needs).
+inline double logCosh(double u) noexcept {
+    constexpr double kLn2 = 0.6931471805599453;
+    const double a = std::abs(u);
+    return a + std::log(1.0 + std::exp(-2.0 * a)) - kLn2;
 }
+
+// tanh u, from the same exponential.
+inline double exactTanh(double u) noexcept {
+    const double e = std::exp(-2.0 * std::abs(u));
+    const double t = (1.0 - e) / (1.0 + e);
+    return u < 0.0 ? -t : t;
+}
+
+// Warmth: the effect's output blended (by w) with itself saturated (tanh(D y) / D) and low-passed.
+//
+// The saturation is antialiased (first-order antiderivative antialiasing): what
+// it puts out at each sample is the curve's mean between the last sample and
+// this one, the difference of its antiderivative (ln cosh(D y) / D²) over the
+// difference of the two, so its harmonics come out averaged over a sample and
+// those beyond Nyquist fold back far quieter (a 9 kHz tone at -1 dBFS at 48 kHz
+// folds its 3rd to 21 kHz 8 dB lower, a 7 kHz one its 5th to 13 kHz 14 dB
+// lower). Only what the curve adds to y goes through the mean: y itself passes
+// as it is, so what is clean (a quiet signal) keeps exactly the response the
+// design draws, with no half sample's delay.
+struct WarmthPath {
+    dsp::OnePole pole;
+    double last = 0.0, lastIntegral = 0.0;  // the last sample, and the antiderivative there
+
+    void reset() noexcept {
+        pole.reset();
+        last = lastIntegral = 0.0;
+    }
+    double process(double y, double w, float coeff) noexcept {
+        constexpr double kDrive = phaser::kWarmthDrive;
+        const double integral = logCosh(kDrive * y) / (kDrive * kDrive);
+        const double step = y - last;
+        // The curve's mean over [last, y]; as the two meet, its value at their middle.
+        const double mean = std::abs(step) > 1e-5 ? (integral - lastIntegral) / step
+                                                  : exactTanh(kDrive * 0.5 * (y + last)) / kDrive;
+        last = y;
+        lastIntegral = integral;
+        // (the mean less the straight line's, (y + last) / 2, plus y)
+        const auto saturated = static_cast<float>(mean + 0.5 * step);
+        return y + w * (static_cast<double>(pole.lowpass(saturated, coeff)) - y);
+    }
+};
 
 // Linear interpolation between two lattice stages. Each rotation's (k, c) is a
 // point on the unit circle; the chord between two lies inside it, so while the
@@ -383,8 +428,8 @@ private:
         }
         if (t.warmth == 0.0 && warmth_.settled(0.0)) {
             if (warmRunning_) {
-                for (dsp::OnePole& pole : warmPhaser_) pole.reset();
-                for (dsp::OnePole& pole : warmDelay_) pole.reset();
+                for (WarmthPath& warmth : warmPhaser_) warmth.reset();
+                for (WarmthPath& warmth : warmDelay_) warmth.reset();
                 warmRunning_ = false;
             }
         } else {
@@ -492,7 +537,11 @@ private:
             const double m = mod.value;
             const bool changed = moving || stale_;
             modMoving_[c] = moving;
-            if (!stageMoving_ && changed) setStage(c, m);
+            stageCurved_[c] = false;
+            if (!stageMoving_ && changed) {
+                setStage(c, m);
+                if (moving && primed_) stageCurved_[c] = curved(c, frames);
+            }
             if (!timeMoving_ && changed) {
                 delayTo_[0][c] = phaser::delaySamples(phaser::flangerMsAt(flangeMs, m), sampleRate_);
                 delayTo_[1][c] = phaser::delaySamples(phaser::doublerMsAt(doublerMs, m), sampleRate_);
@@ -529,6 +578,32 @@ private:
         center_[c] = phaser::centerHzAt(logCenter_.value, blend_.value, m, sampleRate_);
         q_[c] = phaser::phaserQ(spread_.value, blend_.value, m);
         stageTo_[c] = disperser::design(center_[c], q_[c], sampleRate_);
+    }
+
+    // Whether channel c's stages, moving in a straight line from the last chunk end's to this
+    // one's, would kink at the chunk's ends: how far the line misses their true way at the
+    // middle, in octaves of the stage's frequency (k1 = -cos w0) and of its bandwidth (k2, from
+    // a = sin w0 / 2Q). A slow sweep's way is all but straight over 16 samples; a fast, deep
+    // LFO's, the turn of a triangle or a rectangle's edge through the modulation's smoothing, a
+    // jump of Amount or Duty gliding, the envelope's attack: these bend within a chunk, and the
+    // stages then follow them sample by sample. (Straight pieces' corners at every chunk's end
+    // measured up to 1e-3 in the click test's measure; followed, about 2e-6.)
+    bool curved(int c, int frames) const noexcept {
+        constexpr double kStraight = 1e-6;  // octaves
+        constexpr double kLn2 = 0.6931471805599453;
+        if (frames < 2) return false;
+        const int middle = frames / 2 - 1;
+        const double m = modAt_[c][middle];
+        const double hz = phaser::centerHzAt(logCenter_.value, blend_.value, m, sampleRate_);
+        const double q = phaser::phaserQ(spread_.value, blend_.value, m);
+        const disperser::Stage way = disperser::design(hz, q, sampleRate_);
+        const disperser::Stage line =
+            towards(stageFrom_[c], stageTo_[c], static_cast<double>(middle + 1) / frames);
+        const double w0 = 2.0 * phaser::kPi * disperser::stageFrequency(hz, sampleRate_) / sampleRate_;
+        const double a = (1.0 - way.k2) / (1.0 + way.k2);
+        const double offFrequency = std::abs(line.k1 - way.k1) / (kLn2 * w0 * way.c1);
+        const double offBandwidth = std::abs(line.k2 - way.k2) * (1.0 + a) * (1.0 + a) / (2.0 * a * kLn2);
+        return std::max(offFrequency, offBandwidth) > kStraight;
     }
 
     // Moves an LFO on to the chunk's end, free (at its rate) or, synced while
@@ -687,8 +762,8 @@ private:
                 safeAt += safeAt < safeTarget ? 1 : (safeAt > safeTarget ? -1 : 0);
                 s = sCurve(safeAt * perSafeFade);
                 if (safeGliding) {
-                    const auto g = static_cast<float>(safeFromG + t * (safeToG - safeFromG));
-                    safeCoeffs = dsp::SvfCoefficients(g, safeTo_.k);
+                    const auto tanG = static_cast<float>(safeFromG + t * (safeToG - safeFromG));
+                    safeCoeffs = dsp::SvfCoefficients(tanG, safeTo_.k);
                 }
             }
             for (int c = 0; c < N; ++c) {
@@ -711,13 +786,16 @@ private:
                 disperser::Stage stage[N];
                 double y[N];
                 const double inFade = phaserIn ? share : 1.0;
+                const bool qHeld = !stageMoving && blend_.value == 0.0;  // (Spread alone sets Q: the chunk end's)
                 for (int c = 0; c < N; ++c) {
                     // The stages: moving linearly across the chunk with the modulation, or, while
-                    // Center, Spread or Blend glides, designed sample by sample (as the Disperser's).
-                    if (stageMoving) {
+                    // Center, Spread or Blend glides (as the Disperser's) or the modulation's way
+                    // bends within the chunk, designed sample by sample.
+                    if (stageMoving || stageCurved_[c]) {
                         const double m = modAt_[c][i];
+                        const double q = qHeld ? q_[c] : phaser::phaserQ(spread_.value, blend_.value, m);
                         stage[c] = disperser::design(phaser::centerHzAt(logCenter_.value, blend_.value, m, sampleRate_),
-                                                     phaser::phaserQ(spread_.value, blend_.value, m), sampleRate_);
+                                                     q, sampleRate_);
                     } else {
                         stage[c] = towards(stageFrom_[c], stageTo_[c], t);
                     }
@@ -742,7 +820,7 @@ private:
                 }
                 for (int c = 0; c < N; ++c) {
                     double v = std::abs(y[c]) < 1e-20 ? 0.0 : y[c];  // (its float never denormal)
-                    if (warm) v = warmed(v, w, warmPhaser_[c], warmCoeff);
+                    if (warm) v = warmPhaser_[c].process(v, w, warmCoeff);
                     feedback_[c] = safety(v);
                     wetPhaser[c] = v;
                 }
@@ -767,7 +845,7 @@ private:
                     };
                     double y = readLine(lines_[c], delay(readA));
                     if (twoReads) y = (1.0 - share) * y + share * readLine(lines_[c], delay(readB));
-                    const double v = warm ? warmed(y, w, warmDelay_[c], warmCoeff) : y;
+                    const double v = warm ? warmDelay_[c].process(y, w, warmCoeff) : y;
                     wetDelay[c] = v;
                     lines_[c].push(flushTinyFloat(static_cast<float>(coreIn[c] + delayGain * safety(v))));
                 }
@@ -784,7 +862,10 @@ private:
                 } else {
                     wet = phaserRuns ? wetPhaser[c] : wetDelay[c];
                 }
-                const auto out = static_cast<float>(outGain * ((1.0 - mix) * dry[c] + mix * (s * low[c] + wet)));
+                double sum = outGain * ((1.0 - mix) * dry[c] + mix * (s * low[c] + wet));
+                // (gains gliding to 0 together can take a product of them below a float's range)
+                if (std::abs(sum) < std::numeric_limits<float>::min()) sum = 0.0;
+                const auto out = static_cast<float>(sum);
                 ch[c][offset + i] = out;
                 outPeak = std::max(outPeak, std::abs(out));
             }
@@ -807,7 +888,7 @@ private:
                 notches_ = notchTo_;
             }
         } else {
-            for (dsp::OnePole& pole : warmDelay_) pole.reset();  // the line goes on being written
+            for (WarmthPath& warmth : warmDelay_) warmth.reset();  // the line goes on being written
         }
     }
 
@@ -873,13 +954,13 @@ private:
     void clearCascade() noexcept {
         clearStages(0, kMaxNotches);
         for (double& fb : feedback_) fb = 0.0;
-        for (dsp::OnePole& pole : warmPhaser_) pole.reset();
+        for (WarmthPath& warmth : warmPhaser_) warmth.reset();
     }
     // Every audio state silent (the LFOs and glides go on).
     void clearAudio() noexcept {
         clearCascade();
         for (dsp::DelayLine& line : lines_) line.reset();
-        for (dsp::OnePole& pole : warmDelay_) pole.reset();
+        for (WarmthPath& warmth : warmDelay_) warmth.reset();
         for (dsp::Crossover& split : splits_) split.reset();
     }
 
@@ -894,8 +975,8 @@ private:
         }
         for (int c = 0; c < kChannels; ++c) {
             feedback_[c] = dsp::flushTiny(feedback_[c]);
-            warmPhaser_[c].z = flushTinyFloat(warmPhaser_[c].z);
-            warmDelay_[c].z = flushTinyFloat(warmDelay_[c].z);
+            warmPhaser_[c].pole.z = flushTinyFloat(warmPhaser_[c].pole.z);
+            warmDelay_[c].pole.z = flushTinyFloat(warmDelay_[c].pole.z);
             for (dsp::Svf* svf : {&splits_[c].split, &splits_[c].low, &splits_[c].high}) {
                 svf->ic1 = flushTinyFloat(svf->ic1);
                 svf->ic2 = flushTinyFloat(svf->ic2);
@@ -999,12 +1080,13 @@ private:
     double rawFrom_[kChannels] = {};        // the modulation before smoothing, at the last chunk end
     double modAt_[kChannels][kChunk] = {};  // the smoothed modulation at each frame of the chunk
     bool modMoving_[kChannels] = {};
+    bool stageCurved_[kChannels] = {};  // designed sample by sample through this chunk (curved())
     bool stale_ = true;  // the chunk end's stages and delays must be worked out even if the modulation stood still
 
     // The Phaser's cascade (stage by stage, the channels side by side), its feedback, Warmth's filters.
     disperser::State stages_[kMaxNotches][kChannels] = {};
     double feedback_[kChannels] = {};
-    dsp::OnePole warmPhaser_[kChannels], warmDelay_[kChannels];
+    WarmthPath warmPhaser_[kChannels], warmDelay_[kChannels];
     bool warmRunning_ = false;
     int notches_ = 4;            // the stages heard (when not fading)
     bool notchFading_ = false;   // from notchFrom_ stages to notchTo_, notchAt_ samples in

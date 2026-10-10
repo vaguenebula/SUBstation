@@ -54,22 +54,7 @@ PhaserCurvePoints phaserCurvePoints(const PhaserCurve& curve, double lowHz, doub
     out.bottom = QList<double>(worked.bottom.begin(), worked.bottom.end());
     out.dense.reserve(qsizetype(worked.dense.size()));
     for (const uint8_t dense : worked.dense) out.dense.append(dense != 0);
-    // Each column's turn, as curve() works it out to tell the dense ones.
-    const sub::phaser::Response r = responseOf(curve);
-    const int count = std::max(1, columns);
-    const double nyquist = 0.499 * sampleRate;
-    const double delaySeconds = sub::phaser::delaySamples(r.delayMs, sampleRate) / sampleRate;
-    const int notches = std::clamp(r.notches, 1, sub::phaser::kMaxNotches);
-    out.turn.reserve(count);
-    for (int c = 0; c < count; ++c) {
-        const double a = std::min(lowHz * std::pow(highHz / lowHz, double(c) / count), nyquist);
-        const double b = std::min(c + 1 >= count ? highHz : lowHz * std::pow(highHz / lowHz, double(c + 1) / count),
-                                  nyquist);
-        out.turn.append(r.mode == sub::phaser::Mode::Phaser
-                            ? notches * std::abs(sub::phaser::stagePhase(b, r.centerHz, r.q, sampleRate) -
-                                                 sub::phaser::stagePhase(a, r.centerHz, r.q, sampleRate))
-                            : 2.0 * sub::phaser::kPi * (b - a) * delaySeconds);
-    }
+    out.turn = QList<double>(worked.turn.begin(), worked.turn.end());
     return out;
 }
 

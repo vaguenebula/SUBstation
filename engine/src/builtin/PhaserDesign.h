@@ -81,12 +81,13 @@ inline const std::vector<std::string>& waveLabels() {
     return kLabels;
 }
 
-// The stages' Q for a Spread of 0..1: 5 at 0, 0.866 at a half, 0.15 at 1 (evenly in log).
-// Unclamped, the same line beyond (the modulation's soft edges, below).
+// The stages' Q for a Spread of 0..1: 5 at 0, 0.866 at a half, 0.15 at 1 (evenly in log:
+// kQOctavesPerSpread octaves down across the range). Unclamped, the same line beyond (the
+// modulation's soft edges, below).
+constexpr double kQOctavesPerSpread = 5.058893689053568;  // log2(kMaxQ / kMinQ)
 inline double qOfSpreadUnclamped(double spread) noexcept {
-    constexpr double kLog2Max = 2.321928094887362;     // log2(kMaxQ)
-    constexpr double kLog2Ratio = -5.058893689053568;  // log2(kMinQ / kMaxQ)
-    return std::exp2(kLog2Max + kLog2Ratio * spread);
+    constexpr double kLog2Max = 2.321928094887362;  // log2(kMaxQ)
+    return std::exp2(kLog2Max - kQOctavesPerSpread * spread);
 }
 inline double qOfSpread(double spread01) noexcept { return qOfSpreadUnclamped(std::clamp(spread01, 0.0, 1.0)); }
 
@@ -182,20 +183,49 @@ inline double syncedRateHz(int division, double tempo) noexcept {
 
 // --- The modulation's mappings (mod: the summed, smoothed modulation, -2..2) -------------
 
-// The stages' frequency for a centre given in log2 Hz: moved kPhaserOctaves per
-// unit of modulation (less as Blend gives the modulation to Spread), held
-// between kMinStageHz and the stages' limit below Nyquist.
+// The stages' frequency is held between kMinStageHz and the stages' limit below
+// Nyquist (disperser::kNyquistLimit of the rate), softly: within kCenterEdge
+// octaves of either it bends (tanh, as softSpread: its slope and curvature
+// carry on) towards the limit, which it never quite reaches. A hard clamp would
+// put a corner in the sweep wherever the modulation took it to a limit, which
+// the stages turn into a tick at the LFO's rate. (The Center parameter's range
+// lies below the knee at 96 kHz; at 48 kHz its top, 18.5 kHz, plays 1.3 Hz
+// lower, at 44.1 kHz at 18.3 kHz.)
+constexpr double kCenterEdge = 0.25;
+inline double softCenterLog2(double log2Hz, double sampleRate) noexcept {
+    const double low = std::log2(kMinStageHz), high = std::log2(disperser::kNyquistLimit * sampleRate);
+    const double edge = std::min(kCenterEdge, 0.5 * std::max(high - low, 1e-9));
+    if (log2Hz > high - edge) return high - edge + edge * std::tanh((log2Hz - (high - edge)) / edge);
+    if (log2Hz < low + edge) return low + edge + edge * std::tanh((log2Hz - (low + edge)) / edge);
+    return log2Hz;
+}
+
+// The stages' frequency, in log2 Hz, for a centre given in log2 Hz: moved
+// kPhaserOctaves per unit of modulation (less as Blend gives the modulation to
+// Spread), with the soft limits above.
+inline double centerLog2At(double log2Center, double blend, double mod, double sampleRate) noexcept {
+    return softCenterLog2(log2Center + (1.0 - blend) * kPhaserOctaves * mod, sampleRate);
+}
+
+// The same in Hz. (Away from the limits, where it nearly always is, one exp2:
+// the device works it out every sample while the stages move.)
 inline double centerHzAt(double log2Center, double blend, double mod, double sampleRate) noexcept {
-    const double hz = std::exp2(log2Center + (1.0 - blend) * kPhaserOctaves * mod);
-    return std::clamp(hz, kMinStageHz, disperser::kNyquistLimit * sampleRate);
+    constexpr double kInside = 0.8408964152537145;  // 2^-kCenterEdge
+    const double log2Hz = log2Center + (1.0 - blend) * kPhaserOctaves * mod;
+    const double hz = std::exp2(log2Hz);
+    if (hz < kInside * disperser::kNyquistLimit * sampleRate && hz * kInside > kMinStageHz) return hz;
+    return std::exp2(softCenterLog2(log2Hz, sampleRate));
 }
 inline double phaserCenterHz(double centerHz, double blend, double mod, double sampleRate) noexcept {
     return centerHzAt(std::log2(std::clamp(centerHz, kMinCenter, kMaxCenter)), blend, mod, sampleRate);
 }
 
-// The stages' Q: Spread (0..1) moved by Blend's share of the modulation, with soft edges.
+// Spread (0..1) moved by Blend's share of the modulation, with soft edges; and the stages' Q from it.
+inline double spreadAt(double spread01, double blend, double mod) noexcept {
+    return softSpread(std::clamp(spread01, 0.0, 1.0) + blend * kSpreadSwing * mod);
+}
 inline double phaserQ(double spread01, double blend, double mod) noexcept {
-    return qOfSpreadUnclamped(softSpread(std::clamp(spread01, 0.0, 1.0) + blend * kSpreadSwing * mod));
+    return qOfSpreadUnclamped(spreadAt(spread01, blend, mod));
 }
 
 // A delay in samples, as the line reads it: at least kMinDelaySamples, at most kMaxDelayMs.
@@ -378,6 +408,7 @@ struct Curve {
     std::vector<CurvePoint> line;     // the polyline: the curve where it is sparse, its top where dense; rising
     std::vector<double> top, bottom;  // per column: the highest and lowest the response reaches in it (dB)
     std::vector<uint8_t> dense;       // per column: 1 where the wet path turns a whole cycle or more within it
+    std::vector<double> turn;         // per column: how far the wet path turns its phase across it (radians)
 };
 
 // In each column the wet path turns its phase by Δψ (Phaser: N times a stage's
@@ -395,6 +426,7 @@ inline void curve(const Response& r, double lowHz, double highHz, int columns, d
     out.top.assign(static_cast<size_t>(columns), 0.0);
     out.bottom.assign(static_cast<size_t>(columns), 0.0);
     out.dense.assign(static_cast<size_t>(columns), 0);
+    out.turn.assign(static_cast<size_t>(columns), 0.0);
     const double nyquist = 0.499 * sampleRate;
     const double ratio = highHz / lowHz;
     const auto edge = [&](int c) {
@@ -419,6 +451,7 @@ inline void curve(const Response& r, double lowHz, double highHz, int columns, d
         const double turn = phaser ? n * std::abs(stagePhase(b, r.centerHz, r.q, sampleRate) -
                                                   stagePhase(a, r.centerHz, r.q, sampleRate))
                                    : 2.0 * kPi * (b - a) * delaySeconds;
+        out.turn[static_cast<size_t>(c)] = turn;
         double top = -1e300, bottom = 1e300;
         const auto add = [&](double f, bool onLine) {
             const double v = db(f);
