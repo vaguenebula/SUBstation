@@ -858,12 +858,12 @@ TEST_CASE("the reverb's chorus, diffusion and scale do what they say") {
         Reverb r(with(kQuiet, {{"chorus", amount > 0.f ? 1.f : 0.f}, {"chorus_amount", amount}}));
         const Samples tail = slice(r.play(sine(1000.0, 3.0, 0.5)), frames(1.5), frames(2.5));
         const std::vector<double> m = spectrum(tail, hanning(tail.size()));
-        double near = 0.0, around = 0.0;
+        double onIt = 0.0, around = 0.0;  // (not `near`: <windows.h> defines it away)
         for (size_t k = 900; k <= 1100; ++k) {
             around += m[k] * m[k];
-            if (k >= 998 && k <= 1002) near += m[k] * m[k];
+            if (k >= 998 && k <= 1002) onIt += m[k] * m[k];
         }
-        return near / around;
+        return onIt / around;
     };
     const double still = onTone(0.f), light = onTone(20.f), deep = onTone(100.f);
     INFO("on the tone: " + std::to_string(still) + " off, " + std::to_string(light) + " at 20 %, " +
