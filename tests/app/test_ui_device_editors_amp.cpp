@@ -12,6 +12,7 @@
 // editor is saved there as PNGs: Lead with signal flowing, Bass in Dual turned
 // up, a tone handle dragged, idle.
 
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QMouseEvent>
 #include <QQuickItem>
@@ -47,7 +48,6 @@ using sub::app::test::kSampleRate;
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
-constexpr double kWidth = 642.0;  // the editor's
 
 const QStringList kDials = {QStringLiteral("gain"),   QStringLiteral("bass"),     QStringLiteral("middle"),
                             QStringLiteral("treble"), QStringLiteral("presence"), QStringLiteral("volume")};
@@ -130,6 +130,10 @@ class TestUiAmp : public QObject, public sub::app::test::EditorHarness {
             texts << (item ? item->property("text").toString() : QString());
         }
         return texts;
+    }
+    // An item's rect in the view's coordinates.
+    static QRectF rectIn(QQuickItem* view, QQuickItem* item) {
+        return item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height()));
     }
     // A ParamButton's clickable face.
     static QQuickItem* buttonOf(QQuickItem* control) {
@@ -216,7 +220,8 @@ private Q_SLOTS:
         QVERIFY(s.view && s.panel && s.drive && s.tone);
         QVERIFY2(s.view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(s.view->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(s.view->implicitWidth(), kWidth);
+        const double width = s.view->implicitWidth();  // (its parts', checked below)
+        QCOMPARE(s.view->width(), width);
         QCOMPARE(s.view->height(), double(bodyHeight()));
         QVERIFY(find(s.view, QStringLiteral("typeUnderline")));
 
@@ -266,15 +271,111 @@ private Q_SLOTS:
         QList<QRectF> rects;
         for (QQuickItem* control : controls) {
             const QRectF rect = control->mapRectToItem(s.view, QRectF(0, 0, control->width(), control->height()));
-            QVERIFY2(rect.right() <= kWidth - 8.0, qPrintable(control->objectName()));
+            QVERIFY2(rect.right() <= width - 8.0, qPrintable(control->objectName()));
             QVERIFY2(rect.left() >= 8.0 && rect.top() >= 6.0, qPrintable(control->objectName()));
             for (int i = 0; i < rects.size(); ++i)
                 QVERIFY2(!rects[i].intersects(rect),
                          qPrintable(control->objectName() + QStringLiteral(" overlaps ") + controls[i]->objectName()));
             rects << rect;
         }
+        // The editor is as wide as its parts: the tubes over the drive graph 8 px in (140 px), the plate (the
+        // models over the knobs over the tone graph) and the right column (Output over Dry/Wet over the lamp) 10 px
+        // apart, then the meter (10 px) 8 px from it and from the body's edge.
+        const QRectF drive = rectIn(s.view, s.drive);
+        const QRectF plate = rectIn(s.view, s.tone);
+        const QRectF right = rectIn(s.view, find(s.view, QStringLiteral("mix")));
+        QCOMPARE(drive.left(), 8.0);
+        QCOMPARE(drive.width(), 140.0);
+        QCOMPARE(s.panel->tubeRect().left(), drive.left());
+        QCOMPARE(s.panel->tubeRect().width(), drive.width());
+        QCOMPARE(plate.left(), drive.right() + 10.0);
+        QCOMPARE(right.left(), plate.right() + 10.0);
+        QCOMPARE(s.panel->jewelRect().left(), right.left());
+        QCOMPARE(s.panel->jewelRect().width(), right.width());
+        QCOMPARE(s.panel->meterRect().left(), right.right() + 8.0);
+        QCOMPARE(s.panel->meterRect().width(), 10.0);
+        QCOMPARE(s.panel->meterRect().right(), width - 8.0);
+        // The model buttons and the knobs' cells share the plate in whole pixels, 3 and 4 px apart, its edges
+        // theirs (so the rows stay in line whatever widths a font gives them).
+        const auto sharesThePlate = [&](const QList<QQuickItem*>& row, double spacing) -> QString {
+            for (int i = 0; i < row.size(); ++i) {
+                const QRectF rect = rectIn(s.view, row[i]);
+                if (rect.left() != std::round(rect.left()) || rect.width() != std::round(rect.width()))
+                    return row[i]->objectName() + QStringLiteral(" off whole pixels");
+                if (i == 0 ? rect.left() != plate.left() : rect.left() != rectIn(s.view, row[i - 1]).right() + spacing)
+                    return row[i]->objectName() + QStringLiteral(" out of place");
+                if (std::abs(rect.width() - row[0]->width()) > 1.0)
+                    return row[i]->objectName() + QStringLiteral(" not as wide as the others");
+            }
+            if (rectIn(s.view, row.last()).right() != plate.right())
+                return row.last()->objectName() + QStringLiteral(" short of the plate's edge");
+            return QString();
+        };
+        const QList<QQuickItem*> modelButtons = controls.mid(0, int(models.size()));
+        QList<QQuickItem*> dials;
+        for (const QString& id : kDials) dials << find(s.view, id);
+        QCOMPARE(sharesThePlate(modelButtons, 3.0), QString());
+        QCOMPARE(sharesThePlate(dials, 4.0), QString());
+        // And no wider than their texts need: the plate 368 px (7 x 50 + 6 x 3 = 6 x 58 + 5 x 4) and the right
+        // column 80, or where a font needs more, what its widest name or text needs (a button's label 2 px clear
+        // of its 1 px border, a cell's caption and readout a pixel clear of its sides, the logo 4 px).
+        {
+            const auto needs = [&](QQuickItem* item, const QStringList& texts) {
+                const QFontMetricsF metrics(qvariant_cast<QFont>(item->property("font")));
+                double most = 0.0;
+                for (const QString& text : texts) most = std::max(most, std::ceil(metrics.horizontalAdvance(text)));
+                return most;
+            };
+            const auto cellNeeds = [&](const QString& id) {
+                QQuickItem* cell = find(s.view, id);
+                auto* p = qvariant_cast<sub::ui::DeviceParam*>(cell->property("param"));
+                double most = 0.0;
+                for (QQuickItem* text : cell->childItems()) {
+                    if (text->inherits("QQuickText"))
+                        most = std::max(most, needs(text, {text->property("text").toString(), p->format(p->minimum()),
+                                                           p->format(p->maximum())}));
+                }
+                return most + 2.0;
+            };
+            double model = 0.0, output = 0.0, knob = 0.0;
+            for (QQuickItem* button : modelButtons)
+                model = std::max(model, needs(buttonOf(button), {buttonOf(button)->property("text").toString()}) + 6);
+            for (const char* name : {"dual_mono", "dual_dual"}) {
+                QQuickItem* button = buttonOf(find(s.view, QString::fromLatin1(name)));
+                output = std::max(output, needs(button, {button->property("text").toString()}) + 6);
+            }
+            for (const QString& id : kDials) knob = std::max(knob, cellNeeds(id));
+            QVERIFY2(plate.width() == 368.0 || plate.width() <= std::max(7 * model + 18, 6 * knob + 20),
+                     qPrintable(QStringLiteral("%1 for %2, %3").arg(plate.width()).arg(model).arg(knob)));
+            const double column = std::max({2 * output + 4, cellNeeds(QStringLiteral("mix")),
+                                            std::ceil(s.panel->logoWidth()) + 8});
+            QVERIFY2(right.width() == 80.0 || right.width() <= column,
+                     qPrintable(QStringLiteral("%1 for %2").arg(right.width()).arg(column)));
+        }
+        // The Output buttons share the right column, 4 px apart.
+        const QRectF mono = rectIn(s.view, find(s.view, QStringLiteral("dual_mono")));
+        const QRectF dual = rectIn(s.view, find(s.view, QStringLiteral("dual_dual")));
+        QCOMPARE(mono.left(), right.left());
+        QCOMPARE(dual.left(), mono.right() + 4.0);
+        QCOMPARE(dual.right(), right.right());
+        // The lamp's well holds the widest model's name as its logo, 4 px clear of its sides.
+        double logo = 0.0;
+        for (const QString& name : ampModelNames())
+            logo = std::max(logo, QFontMetricsF(AmpPanel::logoFont()).horizontalAdvance(name));
+        QCOMPARE(s.panel->logoWidth(), logo);
+        QVERIFY2(s.panel->jewelRect().width() >= logo + 8.0, qPrintable(QString::number(logo)));
+        // The tone graph's dB figures fit its gutter, right-aligned 3 px in from its edge, 2 px clear of the
+        // lines' ends (its plot's right edge) at least.
+        for (const double db : AmpToneGraph::kFigureDbs) {
+            const QString figure = AmpToneGraph::figureText(db);
+            QVERIFY2(QFontMetricsF(AmpToneGraph::figureFont()).horizontalAdvance(figure) + 4.0 <= s.tone->gutter(),
+                     qPrintable(figure));
+        }
+        QCOMPARE(AmpToneGraph::figureText(-12.0), QStringLiteral("\u221212"));
+        QVERIFY(s.tone->gutter() >= AmpToneGraph::kGutter);
+        QCOMPARE(s.tone->plot().right(), s.tone->width() - 1.0 - s.tone->gutter());
+
         // The panel's wells sit where the layout leaves room: the meter at the right margin.
-        QCOMPARE(s.panel->meterRect().right(), kWidth - 8.0);
         QVERIFY(s.panel->tubeRect().bottom() < s.drive->mapToItem(s.view, QPointF(0, 0)).y());
         QCOMPARE(s.panel->jewelRect().bottom(), s.view->height() - 6.0);
         // The lamp's and the meter's tooltips cover them whole (the meter's its whole height).
@@ -363,6 +464,47 @@ private Q_SLOTS:
         QCOMPARE(knobOf(s.view, QStringLiteral("mix"))->value(), 100.0);
     }
 
+    // No caption or readout is cut short, whatever the font: each cell is as wide as its caption and the widest
+    // text its parameter takes (over its whole range, measured in the readout's own font), and shows it whole.
+    void textsWhole() {
+        const Shown s = showAmp();
+        QVERIFY(s.view);
+        for (const QString& id : kDials + QStringList{QStringLiteral("mix")}) {
+            QQuickItem* cell = find(s.view, id);
+            auto* p = qvariant_cast<sub::ui::DeviceParam*>(cell->property("param"));
+            QVERIFY2(p, qPrintable(id));
+            QQuickItem* readout = nullptr;
+            for (QQuickItem* child : cell->childItems())
+                if (QByteArray(child->metaObject()->className()).startsWith("EditorReadout"))
+                    readout = child;
+            QVERIFY2(readout, qPrintable(id));
+            const QFontMetricsF metrics(qvariant_cast<QFont>(readout->property("font")));
+            double widest = 0.0, at = p->minimum();
+            for (int i = 0; i <= 1000; ++i) {
+                const double v = p->minimum() + i / 1000.0 * (p->maximum() - p->minimum());
+                if (metrics.horizontalAdvance(p->format(v)) > widest) {
+                    widest = metrics.horizontalAdvance(p->format(v));
+                    at = v;
+                }
+            }
+            QVERIFY2(readout->width() >= widest, qPrintable(QStringLiteral("%1: \"%2\" %3 px in %4")
+                                                                .arg(id, p->format(at))
+                                                                .arg(widest)
+                                                                .arg(readout->width())));
+            const double before = p->value();
+            for (const double v : {at, p->minimum(), p->maximum()}) {
+                editor()->setDeviceParam(s.track, s.device, id, v);
+                QCOMPARE(readoutOf(s.view, id), p->format(v));
+                for (QQuickItem* text : cell->childItems()) {
+                    if (text->inherits("QQuickText"))
+                        QVERIFY2(!text->property("truncated").toBool(),
+                                 qPrintable(id + QStringLiteral(": ") + text->property("text").toString()));
+                }
+            }
+            editor()->setDeviceParam(s.track, s.device, id, before);
+        }
+    }
+
     // --- The model buttons, the underline, Output -----------------------------------------------------
 
     void modelButtons() {
@@ -377,6 +519,7 @@ private Q_SLOTS:
         QCOMPARE(s.panel->modelColor(), ampModelColor(0));
         auto underX = [&](QQuickItem* button) { return button->mapToItem(s.view, QPointF(0, 0)).x(); };
         QVERIFY(std::abs(underline->x() - underX(clean)) < 0.5);
+        QCOMPARE(underline->width(), clean->width());
         QVERIFY(!buttonOf(lead)->property("tooltip").toString().isEmpty());
 
         // A click chooses Lead: lit, one undo step; the colour turns and the underline slides to it.
@@ -394,6 +537,7 @@ private Q_SLOTS:
         QCOMPARE(s.panel->modelColor(), ampModelColor(4));
         QCOMPARE(underline->property("color").value<QColor>(), ampModelColor(4));
         QVERIFY2(std::abs(underline->x() - underX(lead)) < 0.5, qPrintable(QString::number(underline->x())));
+        QCOMPARE(underline->width(), lead->width());
 
         // Undo: Clean again, the underline back under it.
         undo()->undo();

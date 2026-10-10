@@ -362,7 +362,7 @@ void ErosionGraph::setAltHeld(bool held) {
 void ErosionGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
-    const QFont font = uiFont(7);
+    const QFont font = stripFont();  // (the axis' figures' too)
     p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
 
     // The grid: a line per decade across, every quarter of the Amount up.
@@ -490,21 +490,36 @@ void ErosionGraph::paint(SgPainter& p) {
                   amount_ > 0.0 ? Theme::kAccent : Theme::kTextDim, 2);
 
     // What modulates, and where and how far.
-    QString source;
-    if (blend_ <= 0.0)
-        source = tr("Sine");
-    else if (blend_ >= 100.0)
-        source = tr("Noise");
-    else
-        source = tr("Noise %1").arg(sub::app::formatValue(blend_, QStringLiteral("%")));
-    source += stereo_ <= 0.0 ? tr(" · Mono")
-                             : tr(" · Stereo %1").arg(sub::app::formatValue(stereo_, QStringLiteral("%")));
-    p.drawText(QRectF(r.left() + 3, 0, r.width() / 2, kTopStrip), Qt::AlignLeft | Qt::AlignVCenter, source,
-               Theme::kTextDim, font);
-    const QString readout = sub::app::formatValue(tuned_, QStringLiteral("Hz")) + QStringLiteral(" · ") +
-                            sub::app::erosionExcursionText(excursionMs_);
-    p.drawText(QRectF(r.left(), 0, r.width() - 3, kTopStrip), Qt::AlignRight | Qt::AlignVCenter, readout,
+    const Strip texts = strip();
+    const double left = texts.sourceRect.left(), right = texts.readoutRect.right();
+    p.drawText(QRectF(left, 0, std::max(0.0, texts.readoutRect.left() - kStripGap - left), kTopStrip),
+               Qt::AlignLeft | Qt::AlignVCenter, texts.source, Theme::kTextDim, font);
+    p.drawText(QRectF(left, 0, right - left, kTopStrip), Qt::AlignRight | Qt::AlignVCenter, texts.readout,
                amount_ > 0.0 ? Theme::kText : Theme::kTextDim, font);
+}
+
+QFont ErosionGraph::stripFont() { return uiFont(7); }
+
+ErosionGraph::Strip ErosionGraph::strip() const {
+    Strip texts;
+    if (blend_ <= 0.0)
+        texts.source = tr("Sine");
+    else if (blend_ >= 100.0)
+        texts.source = tr("Noise");
+    else
+        texts.source = tr("Noise %1").arg(sub::app::formatValue(blend_, QStringLiteral("%")));
+    texts.source += stereo_ <= 0.0 ? tr(" · Mono")
+                                   : tr(" · Stereo %1").arg(sub::app::formatValue(stereo_, QStringLiteral("%")));
+    texts.readout = sub::app::formatValue(tuned_, QStringLiteral("Hz")) + QStringLiteral(" · ") +
+                    sub::app::erosionExcursionText(excursionMs_);
+    const QRectF r = plot();
+    const double left = r.left() + kStripInset, right = r.right() - kStripInset;
+    const double readoutWidth = std::min(std::ceil(SgPainter::textWidth(texts.readout, stripFont())), right - left);
+    texts.readoutRect = QRectF(right - readoutWidth, 0, readoutWidth, kTopStrip);
+    const double room = std::max(0.0, texts.readoutRect.left() - kStripGap - left);
+    texts.sourceRect =
+        QRectF(left, 0, std::min(std::ceil(SgPainter::textWidth(texts.source, stripFont())), room), kTopStrip);
+    return texts;
 }
 
 }  // namespace sub::ui

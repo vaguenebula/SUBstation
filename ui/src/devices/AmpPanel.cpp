@@ -36,6 +36,18 @@ AmpPanel::AmpPanel(QQuickItem* parent)
     meter_.reset(kMeterFloorDb);
 }
 
+QFont AmpPanel::logoFont() {
+    QFont font = uiFont(10, true);
+    font.setItalic(true);
+    return font;
+}
+
+double AmpPanel::logoWidth() const {
+    double widest = 0.0;
+    for (const QString& name : names_) widest = std::max(widest, SgPainter::textWidth(name, logoFont()));
+    return widest;
+}
+
 void AmpPanel::setTubeRect(const QRectF& rect) {
     if (rect == tubeRect_)
         return;
@@ -251,11 +263,9 @@ void AmpPanel::paintJewel(SgPainter& p) const {
     p.drawEllipse(QRectF(centre.x() - 7, centre.y() - 7, 14, 14), Theme::kGridBar, 1.5);  // the bezel
     p.fillEllipse(QPointF(centre.x() - 2.0, centre.y() - 2.5), 1.5, 1.0, withAlpha(Qt::white, 110));  // a facet
     // The model's name as the amp's logo.
-    QFont font = uiFont(10, true);
-    font.setItalic(true);
     const double top = centre.y() + 9.0;
     p.drawText(QRectF(r.left(), top, r.width(), r.bottom() - top), Qt::AlignCenter, names_.value(model_),
-               modelColor(), font);
+               modelColor(), logoFont());
 }
 
 }  // namespace sub::ui

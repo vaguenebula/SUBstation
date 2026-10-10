@@ -25,6 +25,9 @@
 #include "devices/EditorPaint.h"
 #include "input/GestureKey.h"
 
+#include <QFont>
+#include <QRectF>
+#include <QString>
 #include <QtQml/qqmlregistration.h>
 
 #include <random>
@@ -51,7 +54,9 @@ public:
     static constexpr double kWidthPixels = 40.0;       // Alt-dragged up this far, the Filter Width doubles
     static constexpr double kWheelOctaves = 0.25;      // a wheel notch multiplies it by 2^0.25 (Ctrl: 2^(1/16))
     static constexpr double kFine = 0.15;              // Shift-dragged, the dot moves this share of the mouse's way
-    static constexpr double kTopStrip = 14.0;          // over the plot: the source and the readout
+    static constexpr double kTopStrip = 14.0;          // over the plot: the source and the readout,
+    static constexpr double kStripInset = 3.0;         // this far in from the plot's sides,
+    static constexpr double kStripGap = 8.0;           // and at least this far apart
     static constexpr double kDotRadius = 5.0;          // the dot's ring (2 px wide),
     static constexpr double kHaloGrowth = 6.0;         // and how far its halo reaches past it, eroding hard
     // The activity (the graph's and the scope's): the `erosion` display from kActivityFloorDb (0) over
@@ -81,6 +86,17 @@ public:
     double amountAt(double y) const;  // held to 0..100
     // Where the dot is: the frequency the modulator plays (held to the axis), and the Amount.
     QPointF dot() const;
+
+    // The strip's texts over the plot, in stripFont(): what modulates at the left ("Noise 70 % · Stereo 60 %"),
+    // where and how far at the right ("1.00 kHz · ±87 µs"); each one's rect where its text is, as wide as it
+    // (the source's cut short kStripGap before the readout, should a font ever need more than the strip has:
+    // it is drawn clipped there).
+    struct Strip {
+        QString source, readout;
+        QRectF sourceRect, readoutRect;
+    };
+    Strip strip() const;
+    static QFont stripFont();
 
     // The band's outline: frequencies rising, one per pixel across the plot with the tuned one among
     // them (a band narrower than a pixel still peaks at the dot), and the band's magnitude at each (0..1,

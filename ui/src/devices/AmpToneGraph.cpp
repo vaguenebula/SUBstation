@@ -31,9 +31,17 @@ double dialValue(double value, const AmpToneGraph::Range& range) {
     return std::round(range.clamp(value) * 100.0) / 100.0;
 }
 
+// The gutter the figures need in `font`.
+double gutterFor(const QFont& font) {
+    double widest = 0.0;
+    for (const double db : AmpToneGraph::kFigureDbs)
+        widest = std::max(widest, SgPainter::textWidth(AmpToneGraph::figureText(db), font));
+    return std::max(AmpToneGraph::kGutter, std::ceil(widest) + 4.0);
+}
+
 }  // namespace
 
-AmpToneGraph::AmpToneGraph(QQuickItem* parent) : DeviceCanvas(parent) {
+AmpToneGraph::AmpToneGraph(QQuickItem* parent) : DeviceCanvas(parent), gutter_(gutterFor(figureFont())) {
     setImplicitSize(kWidth, kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton);
     setAcceptHoverEvents(true);
@@ -52,7 +60,13 @@ AmpToneGraph::AmpToneGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     });
 }
 
-QRectF AmpToneGraph::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 1, -1 - kGutter, -1); }
+QString AmpToneGraph::figureText(double db) {
+    return db == 0.0 ? QStringLiteral("0") : QString::number(db).replace(QLatin1Char('-'), QChar(0x2212));
+}
+
+QFont AmpToneGraph::figureFont() { return uiFont(7); }
+
+QRectF AmpToneGraph::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 1, -1 - gutter_, -1); }
 
 LogAxis AmpToneGraph::frequencyAxis() const {
     const QRectF r = plot();
@@ -320,13 +334,12 @@ void AmpToneGraph::paint(SgPainter& p) {
     const QRectF r = plot();
     p.fillRoundedRect(QRectF(0, 0, width(), height()), 4, 4, Theme::kMeterBg);
     drawDecadeGrid(p, r, frequencyAxis());
-    const QFont font = uiFont(7);
-    for (const double db : {0.0, -12.0}) {  // the dB lines, their figures in the gutter
+    const QFont font = figureFont();
+    for (const double db : kFigureDbs) {  // the dB lines, their figures in the gutter
         const double y = yOf(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y),
                    db == 0.0 ? withAlpha(Theme::kGridBar, 220) : withAlpha(Theme::kGridBeat, 200));
-        const QString figure = db == 0.0 ? QStringLiteral("0") : QStringLiteral("−%1").arg(-db);
-        p.drawText(QRectF(r.right() + 1, y - 6, kGutter - 3, 12), Qt::AlignRight | Qt::AlignVCenter, figure,
+        p.drawText(QRectF(r.right() + 1, y - 6, gutter_ - 3, 12), Qt::AlignRight | Qt::AlignVCenter, figureText(db),
                    Theme::kTextDim, font);
     }
 

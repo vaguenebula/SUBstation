@@ -24,14 +24,20 @@ Item {
     readonly property alias underline: underline
     readonly property alias handleMenu: handleMenu
 
-    readonly property int leftWidth: 140   // the tubes over the drive graph
-    readonly property int plateWidth: 368  // the model buttons and the knobs over the tone graph
-    readonly property int rightWidth: 80   // Output and Dry/Wet over the lamp ("Mono" 3 px clear of its border)
+    readonly property int leftWidth: 140  // the tubes over the drive graph
     readonly property int meterWidth: 10
     readonly property int gap: 10
-    readonly property int modelWidth: 50  // a model button's (7 x 50 + 6 x 3 = plateWidth)
     readonly property int modelSpacing: 3
-    readonly property int knobWidth: 58   // a knob's cell (6 x 58 + 5 x 4 = plateWidth)
+    readonly property int knobSpacing: 4
+    // The model buttons and the knobs over the tone graph: 368 px (7 x 50 + 6 x 3 = 6 x 58 + 5 x 4), or wider if
+    // a font needs it for a model's name or a knob's caption or readout; the buttons and the knobs' cells share
+    // it in whole pixels (modelX(), knobX()).
+    readonly property int plateWidth: Math.max(368, 7 * texts.modelWidth + 6 * modelSpacing,
+                                               6 * texts.knobWidth + 5 * knobSpacing)
+    // Output and Dry/Wet over the lamp: 80 px, or wider if a font needs it for the Output buttons' names, Dry/Wet's
+    // caption or readout, or the widest model's name as the lamp's logo (4 px clear of the well's sides).
+    readonly property int rightWidth: Math.max(80, 2 * texts.outputWidth + 4, texts.mixWidth,
+                                               Math.ceil(panel.logoWidth) + 8)
     readonly property int plateX: 8 + leftWidth + gap
     readonly property int rightX: plateX + plateWidth + gap
     readonly property int bottomY: knobRow.y + knobRow.height + 4  // the graphs' row
@@ -50,11 +56,68 @@ Item {
     implicitWidth: rightX + rightWidth + 8 + meterWidth + 8
     implicitHeight: bottomY + 40 + 6  // the graphs at least 40 px tall
 
+    // Where the i-th of `count` items `spacing` apart sharing `width` in whole pixels starts (i = count: where
+    // the last one ends, and `spacing` more).
+    function share(width, count, spacing, i) {
+        return Math.round(i * (width + spacing) / count)
+    }
+    // The model buttons' and the knobs' cells' places and widths across the plate.
+    function modelX(i) {
+        return share(plateWidth, 7, modelSpacing, i)
+    }
+    function modelW(i) {
+        return modelX(i + 1) - modelX(i) - modelSpacing
+    }
+    function knobX(i) {
+        return share(plateWidth, 6, knobSpacing, i)
+    }
+    function knobW(i) {
+        return knobX(i + 1) - knobX(i) - knobSpacing
+    }
+
     DeviceParamMap {
         id: p
         trackId: editor.trackId
         deviceId: editor.deviceId
         ids: ["type", "gain", "bass", "middle", "treble", "presence", "volume", "dual", "mix"]
+    }
+
+    // What the texts need, measured in their fonts (so the editor follows the font): a button its label 2 px
+    // clear of its 1 px border (the monitor role has no padding), a knob's cell its caption and its readout at
+    // their widest (the parameter's ends: "10.0", "100 %") with a pixel either side.
+    QtObject {
+        id: texts
+
+        // The widest of `list` in `metrics`' font, in whole pixels. (It reads the font, so a binding calling it
+        // follows the font: advanceWidth() alone doesn't make it a dependency, and it is set after a binding's
+        // first evaluation.)
+        function widest(metrics, list) {
+            void metrics.font
+            let most = 0
+            for (const text of list)
+                most = Math.max(most, metrics.advanceWidth(text))
+            return Math.ceil(most)
+        }
+        function ends(param) {
+            return param ? [param.format(param.minimum), param.format(param.maximum)] : []
+        }
+
+        readonly property int modelWidth: widest(buttonFont, p.get("type") ? p.get("type").labels : []) + 6
+        readonly property int outputWidth: widest(buttonFont, p.get("dual") ? p.get("dual").labels : []) + 6
+        readonly property int knobWidth: {
+            const captions = [qsTr("Gain"), qsTr("Bass"), qsTr("Middle"), qsTr("Treble"), qsTr("Presence"),
+                              qsTr("Volume")]
+            return widest(cellFont, captions.concat(ends(p.get("gain")))) + 2  // (the six dials alike)
+        }
+        readonly property int mixWidth: widest(cellFont, [qsTr("Dry/Wet")].concat(ends(p.get("mix")))) + 2
+    }
+    FontMetrics {
+        id: buttonFont
+        font: monoButton.font
+    }
+    FontMetrics {
+        id: cellFont
+        font: Theme.uiFont(8)  // (EditorCaption's and EditorReadout's)
     }
 
     // The face's wells behind everything: the tubes, the lamp and the meter.
@@ -110,11 +173,12 @@ Item {
     }
 
     // The models, Ableton's row of buttons.
-    Row {
+    Item {
         id: modelRow
         x: editor.plateX
         y: 6
-        spacing: editor.modelSpacing
+        width: editor.plateWidth
+        height: 18
 
         Repeater {
             model: p.get("type") ? p.get("type").labels : []
@@ -122,7 +186,8 @@ Item {
                 required property string modelData
                 required property int index
                 objectName: "type_" + modelData.toLowerCase()
-                width: editor.modelWidth
+                x: editor.modelX(index)
+                width: editor.modelW(index)
                 height: 18
                 role: "monitor"
                 param: p.get("type")
@@ -135,10 +200,13 @@ Item {
     // Under the chosen model, in its colour: it slides to a new one as its colour turns.
     Rectangle {
         id: underline
+
+        readonly property int model: p.get("type") ? p.get("type").index : 0
+
         objectName: "typeUnderline"
-        x: modelRow.x + (p.get("type") ? p.get("type").index : 0) * (editor.modelWidth + editor.modelSpacing)
+        x: modelRow.x + editor.modelX(model)
         y: modelRow.y + 19
-        width: editor.modelWidth
+        width: editor.modelW(model)
         height: 2
         radius: 1
         color: panel.modelColor
@@ -158,8 +226,9 @@ Item {
         spacing: 4
 
         ParamButton {
+            id: monoButton
             objectName: "dual_mono"
-            width: (editor.rightWidth - 4) / 2
+            width: Math.floor((editor.rightWidth - 4) / 2)
             height: 18
             role: "monitor"
             param: p.get("dual")
@@ -169,7 +238,7 @@ Item {
         }
         ParamButton {
             objectName: "dual_dual"
-            width: (editor.rightWidth - 4) / 2
+            width: editor.rightWidth - 4 - monoButton.width
             height: 18
             role: "monitor"
             param: p.get("dual")
@@ -179,22 +248,25 @@ Item {
         }
     }
 
-    Row {
+    Item {
         id: knobRow
         x: editor.plateX
         y: 28
-        spacing: 4
+        width: editor.plateWidth
+        height: childrenRect.height
 
         EditorKnob {
             objectName: "gain"
-            width: editor.knobWidth
+            x: editor.knobX(0)
+            width: editor.knobW(0)
             param: p.get("gain")
             title: qsTr("Gain")
             tooltip: qsTr("Gain: the level into the preamp: the main control of how much the amp distorts")
         }
         EditorKnob {
             objectName: "bass"
-            width: editor.knobWidth
+            x: editor.knobX(1)
+            width: editor.knobW(1)
             param: p.get("bass")
             title: qsTr("Bass")
             tooltip: qsTr("Bass: the tone stack's lows. The tone controls interact, as on a real amp, "
@@ -202,7 +274,8 @@ Item {
         }
         EditorKnob {
             objectName: "middle"
-            width: editor.knobWidth
+            x: editor.knobX(2)
+            width: editor.knobW(2)
             param: p.get("middle")
             title: qsTr("Middle")
             tooltip: qsTr("Middle: the tone stack's mids. The tone controls interact, as on a real amp, "
@@ -210,7 +283,8 @@ Item {
         }
         EditorKnob {
             objectName: "treble"
-            width: editor.knobWidth
+            x: editor.knobX(3)
+            width: editor.knobW(3)
             param: p.get("treble")
             title: qsTr("Treble")
             tooltip: qsTr("Treble: the tone stack's highs. The tone controls interact, as on a real amp, "
@@ -218,14 +292,16 @@ Item {
         }
         EditorKnob {
             objectName: "presence"
-            width: editor.knobWidth
+            x: editor.knobX(4)
+            width: editor.knobW(4)
             param: p.get("presence")
             title: qsTr("Presence")
             tooltip: qsTr("Presence: the power amp's mid/high edge and crispness")
         }
         EditorKnob {
             objectName: "volume"
-            width: editor.knobWidth
+            x: editor.knobX(5)
+            width: editor.knobW(5)
             param: p.get("volume")
             title: qsTr("Volume")
             tooltip: qsTr("Volume: the power amp's level. On Blues, Heavy and Bass, turned up, it distorts too")

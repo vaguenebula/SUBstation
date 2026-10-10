@@ -23,6 +23,7 @@
 #include "devices/EditorPaint.h"
 #include "input/GestureKey.h"
 
+#include <QFont>
 #include <QPointF>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
@@ -49,7 +50,8 @@ public:
     // 40 dB there, along the bottom then), Presence's +9 dB with Treble's.
     static constexpr double kFloorDb = -24.0;
     static constexpr double kCeilingDb = 12.0;
-    static constexpr double kGutter = 20.0;  // at the right, the dB figures
+    static constexpr double kGutter = 20.0;  // at the right, the dB figures: this, or wider if a font needs it
+    static constexpr std::array<double, 2> kFigureDbs = {0.0, -12.0};  // the figured lines
     static constexpr double kPixelsPerStep = 8.0;  // dragged up this far, a dial step of 1
     static constexpr double kFine = 0.2;           // with Shift (the wheel's too)
     static constexpr double kHitPixels = 14.0;     // a press this near a handle (across) takes it
@@ -96,6 +98,12 @@ public:
     // A wheel notch on a handle (without Shift): a fiftieth of its range, as on its knob.
     double wheelStep(int i) const;
 
+    // The dB figures in the gutter: "0", "−12", in figureFont().
+    static QString figureText(double db);
+    static QFont figureFont();
+    // The gutter at the right: kGutter, or where a font needs more, the widest figure and 4 px (the figures
+    // right-aligned 3 px in from the well's edge, 2 px clear of the lines' ends at least).
+    double gutter() const { return gutter_; }
     QRectF plot() const;
     LogAxis frequencyAxis() const;
     double xOf(double hz) const;
@@ -129,6 +137,7 @@ private:
     double shownAt(double hz) const;  // the curve as drawn at a handle's frequency
     bool stepHandles(double dt);
 
+    const double gutter_;
     int model_ = -1;  // -1: not synced with the device yet (the first curve shows at once)
     double dials_[kHandles] = {5.0, 5.0, 5.0, 5.0};
     std::array<QString, kHandles> automation_;  // their parameters' automation states ("on", "off", "")

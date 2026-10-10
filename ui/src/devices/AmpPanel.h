@@ -25,6 +25,7 @@
 
 #include <QColor>
 #include <QElapsedTimer>
+#include <QFont>
 #include <QRectF>
 #include <QStringList>
 #include <QtQml/qqmlregistration.h>
@@ -64,6 +65,8 @@ class AmpPanel : public DeviceCanvas {
     Q_PROPERTY(double outputLevel READ outputLevel NOTIFY levelsChanged)
     Q_PROPERTY(double sagDb READ sagDb NOTIFY levelsChanged)
     Q_PROPERTY(double lamp READ lamp NOTIFY levelsChanged)
+    // The widest model's name as the logo, in its font (logoFont()): the editor makes the lamp's well wide enough.
+    Q_PROPERTY(double logoWidth READ logoWidth CONSTANT)
 
 public:
     static constexpr int kTubes = 4;  // V1, V2, V3, P
@@ -85,6 +88,9 @@ public:
     double outputLevel() const { return meter_.level; }
     double sagDb() const { return sag_.value; }
     double lamp() const { return lamp_.value; }
+    double logoWidth() const;
+    // The logo's font: the model's name under the lamp.
+    static QFont logoFont();
     // A tube's glow as drawn (0..1) and where it is heading: 0..2 the preamp's V1..V3, 3 the power tube.
     Q_INVOKABLE double glow(int tube) const;
     Q_INVOKABLE double glowTarget(int tube) const;

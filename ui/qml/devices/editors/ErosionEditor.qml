@@ -20,8 +20,8 @@ Item {
     readonly property alias scope: scope
 
     // The knobs' cells: 66 px, room for the glyphs beside Noise Blend's knob, or wider if a font needs it for
-    // the widest caption.
-    readonly property int cellWidth: Math.max(66, Math.ceil(widestCaption.advanceWidth) + 2)
+    // the widest caption or readout (measured in their font: "Noise Blend" in most), with a pixel either side.
+    readonly property int cellWidth: Math.max(66, Math.ceil(cellFont.widest) + 2)
     readonly property int graphWidth: graph.implicitWidth
     readonly property int spacing: 8
     readonly property int rowSpacing: 14
@@ -41,10 +41,34 @@ Item {
         ids: ["freq", "width", "amount", "blend", "stereo"]
     }
 
-    TextMetrics {
-        id: widestCaption
-        font: Theme.uiFont(8)  // (EditorCaption's)
-        text: qsTr("Noise Blend")
+    // What the cells show at their widest, in EditorCaption's and EditorReadout's font: the captions, and the
+    // knobs' readouts as patterns of their widest values, each "d" the font's widest digit (figures may be
+    // proportional). Each measure reads `font` first: advanceWidth() alone doesn't make the font a dependency,
+    // and it is set after a binding's first evaluation.
+    FontMetrics {
+        id: cellFont
+
+        readonly property string widestDigit: {
+            void font
+            let widest = "0"
+            for (const digit of "123456789") {
+                if (cellFont.advanceWidth(digit) > cellFont.advanceWidth(widest))
+                    widest = digit
+            }
+            return widest
+        }
+        readonly property real widest: {
+            void font
+            const captions = [qsTr("Width"), qsTr("Stereo"), qsTr("Frequency"), qsTr("Amount"), qsTr("Noise Blend"),
+                              qsTr("L/R Mod")]
+            const readouts = ["1d.dd kHz", "ddd Hz", "10.00 oct", "d.dd oct", "100 %", "dd %"]
+            let most = 0
+            for (const text of captions.concat(readouts.map(pattern => pattern.replace(/d/g, widestDigit))))
+                most = Math.max(most, cellFont.advanceWidth(text))
+            return most
+        }
+
+        font: Theme.uiFont(8)
     }
 
     Row {

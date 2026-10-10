@@ -7,6 +7,8 @@
 
 #include <QCursor>
 #include <QElapsedTimer>
+#include <QFont>
+#include <QFontMetricsF>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QScopeGuard>
@@ -86,6 +88,22 @@ class TestUiDeviceEditorsErosion : public QObject, public sub::app::test::Editor
 
     static bool near(double a, double b, double relative) { return std::abs(a / b - 1.0) <= relative; }
 
+    // An item's rect in the view's coordinates.
+    static QRectF rectIn(QQuickItem* view, QQuickItem* item) {
+        return item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height()));
+    }
+
+    // An EditorKnob's readout (its Text under the knob).
+    QQuickItem* readout(QQuickItem* view, const char* id) {
+        QQuickItem* cell = find(view, QString::fromLatin1(id));
+        QQuickItem* found = nullptr;
+        for (QQuickItem* child : cell ? cell->childItems() : QList<QQuickItem*>()) {
+            if (QByteArray(child->metaObject()->className()).startsWith("EditorReadout"))
+                found = child;
+        }
+        return found;
+    }
+
     // A knob's drag puts the pointer back where it was pressed when it is released (DragCursor), and the
     // window system delivers that as a move of its own, later: let it land before the next press, or it
     // lands in the next drag (as a jump from where the last knob was).
@@ -138,12 +156,29 @@ private Q_SLOTS:
     void fitsAndShowsItsParameters() {
         QQuickItem* view = showErosion();
         QVERIFY(view);
-        // It fits the device view's body, as wide as its parts.
+        // It fits the device view's body, as wide as its parts: 8 px in, the column of knobs, the display 8 px
+        // after it, the two columns of knobs (4 px apart) 8 px after that, and 6 px to the body's edge (8 less
+        // the frame's border). The cells are alike, 66 px at least (room for Noise Blend's glyphs), or what a
+        // font needs for their texts (below).
         QVERIFY2(view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(view->implicitHeight()).arg(bodyHeight())));
-        const int cell = view->property("cellWidth").toInt();
-        QCOMPARE(view->implicitWidth(), double(8 + 3 * cell + 300 + 2 * 8 + 4 + 8 - 2));
-        QCOMPARE(view->implicitWidth(), 532.0);
+        const double cell = view->property("cellWidth").toDouble();
+        QVERIFY(cell >= 66.0);
+        const char* const cells[] = {"width", "stereo", "freq", "amount", "blend"};
+        for (const char* id : cells)
+            QCOMPARE(find(view, QString::fromLatin1(id))->width(), cell);
+        {
+            const QRectF left = rectIn(view, find(view, QStringLiteral("width")));
+            const QRectF graph = rectIn(view, find(view, QStringLiteral("erosionGraph")));
+            const QRectF freq = rectIn(view, find(view, QStringLiteral("freq")));
+            const QRectF amount = rectIn(view, find(view, QStringLiteral("amount")));
+            QCOMPARE(left.left(), 8.0);
+            QCOMPARE(graph.width(), double(ErosionGraph::kWidth));
+            QCOMPARE(graph.left(), left.right() + 8.0);
+            QCOMPARE(freq.left(), graph.right() + 8.0);
+            QCOMPARE(amount.left(), freq.right() + 4.0);
+            QCOMPARE(view->implicitWidth(), amount.right() + 6.0);
+        }
         // Nothing overflows the fixed body (the scope's cell included), nothing is clipped.
         QList<QQuickItem*> items;
         collect(view, items);
@@ -195,10 +230,105 @@ private Q_SLOTS:
         const double graphBottom = graph->mapRectToItem(view, QRectF(0, 0, 1, graph->height())).bottom();
         QVERIFY(std::abs(view->height() - graphBottom - 6.0) < 0.5);
         QVERIFY(scope->width() >= 40 && scope->width() == scope->height());
+        // The glyphs beside Noise Blend's knob, clear of it.
+        {
+            const QRectF dial = rectIn(view, knob(view, "blend"));
+            QVERIFY(rectIn(view, find(view, QStringLiteral("sineGlyph"))).right() < dial.left());
+            QVERIFY(rectIn(view, find(view, QStringLiteral("noiseGlyph"))).left() > dial.right());
+        }
         // The glyphs: the noise lit, the sine faint; Width as bright as the others.
         QVERIFY(std::abs(find(view, QStringLiteral("sineGlyph"))->opacity() - 0.3) < 0.01);
         QVERIFY(std::abs(find(view, QStringLiteral("noiseGlyph"))->opacity() - 1.0) < 0.01);
         QCOMPARE(find(view, QStringLiteral("width"))->opacity(), 1.0);
+    }
+
+    // Every readout is whole over its knob's whole range, whatever the font's figures: each cell is as wide as
+    // the widest text its parameter takes (measured in the readout's own font) and shows it uncut. And the cells
+    // are no wider than their texts need: 66 px, or where a font needs more, the widest caption or readout with
+    // a pixel either side (give or take what the editor's patterns of the widest digit add).
+    void readoutsWholeOverTheirRanges() {
+        QQuickItem* view = showErosion();
+        QVERIFY(view);
+        double needs = 0.0;  // the widest caption or readout
+        QList<QQuickItem*> items;
+        collect(view, items);
+        for (QQuickItem* item : items) {
+            if (QByteArray(item->metaObject()->className()).startsWith("EditorCaption"))
+                needs = std::max(needs, item->implicitWidth());
+        }
+        for (const char* id : {"freq", "width", "amount", "blend", "stereo"}) {
+            sub::ui::DeviceParam* p = boundParam(view, id);
+            QQuickItem* text = readout(view, id);
+            QVERIFY2(p && text, id);
+            const QFontMetricsF metrics(qvariant_cast<QFont>(text->property("font")));
+            double widest = 0.0, at = p->minimum();
+            for (int i = 0; i <= 2000; ++i) {
+                const double t = i / 2000.0;
+                const double v = p->logScale() ? p->minimum() * std::pow(p->maximum() / p->minimum(), t)
+                                               : p->minimum() + t * (p->maximum() - p->minimum());
+                if (metrics.horizontalAdvance(p->format(v)) > widest) {
+                    widest = metrics.horizontalAdvance(p->format(v));
+                    at = v;
+                }
+            }
+            QVERIFY2(text->width() >= widest,
+                     qPrintable(QStringLiteral("%1: \"%2\" %3 px in %4")
+                                    .arg(QString::fromLatin1(id), p->format(at))
+                                    .arg(widest)
+                                    .arg(text->width())));
+            set(id, at);
+            QCOMPARE(text->property("text").toString(), p->format(at));
+            QVERIFY2(!text->property("truncated").toBool(), qPrintable(p->format(at)));
+            needs = std::max(needs, widest);
+        }
+        const double cell = view->property("cellWidth").toDouble();
+        QVERIFY2(cell == 66.0 || cell <= std::ceil(needs) + 2.0 + 3.0,
+                 qPrintable(QStringLiteral("%1 for %2").arg(cell).arg(needs)));
+    }
+
+    // The display's strip shows what modulates and where, both whole and apart, at their widest: over the plot,
+    // inside its sides, and a strip's height for the font.
+    void stripTextsWhole() {
+        QQuickItem* view = showErosion();
+        QVERIFY(view);
+        auto* graph = find<ErosionGraph>(view, QStringLiteral("erosionGraph"));
+        QVERIFY(graph);
+        const QFontMetricsF metrics(ErosionGraph::stripFont());
+        QVERIFY(metrics.height() <= ErosionGraph::kTopStrip);
+        const QRectF plot = graph->plot();
+        QCOMPARE(plot.top(), ErosionGraph::kTopStrip);
+        int checked = 0;
+        for (const double blend : {0.0, 50.0, 99.0, 100.0}) {
+            for (const double stereo : {0.0, 99.0, 100.0}) {
+                for (const auto& [freq, amount] : {std::pair{18000.0, 100.0}, std::pair{999.0, 99.0},
+                                                   std::pair{20.0, 0.0}}) {
+                    set("blend", blend);
+                    set("stereo", stereo);
+                    set("freq", freq);
+                    set("amount", amount);
+                    const ErosionGraph::Strip strip = graph->strip();
+                    const QString what = strip.source + QStringLiteral(" | ") + strip.readout;
+                    QVERIFY2(strip.sourceRect.width() >= metrics.horizontalAdvance(strip.source), qPrintable(what));
+                    QVERIFY2(strip.readoutRect.width() >= metrics.horizontalAdvance(strip.readout), qPrintable(what));
+                    QVERIFY2(strip.sourceRect.left() >= plot.left() && strip.readoutRect.right() <= plot.right(),
+                             qPrintable(what));
+                    QVERIFY2(strip.sourceRect.right() + ErosionGraph::kStripGap <= strip.readoutRect.left(),
+                             qPrintable(what));
+                    for (const QRectF& rect : {strip.sourceRect, strip.readoutRect})
+                        QVERIFY(rect.top() >= 0.0 && rect.bottom() <= plot.top());
+                    ++checked;
+                }
+            }
+        }
+        QCOMPARE(checked, 36);
+        // (The widest of them, the last set: "Noise 99 % · Stereo 100 %" and "18.00 kHz · ±1.38 ms" at 48 kHz.)
+        set("blend", 99.0);
+        set("stereo", 100.0);
+        set("freq", 18000.0);
+        set("amount", 100.0);
+        QCOMPARE(graph->strip().source, QStringLiteral("Noise 99 % · Stereo 100 %"));
+        QCOMPARE(graph->strip().readout, QStringLiteral("18.00 kHz · ") +
+                                             erosionExcursionText(erosionExcursionMs(100.0, bridge()->sampleRate())));
     }
 
     void opensAsTheDeviceIs() {
