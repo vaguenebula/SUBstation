@@ -1024,9 +1024,10 @@ Clip, Output and Dry/Wet, a DC filter, and 4x oversampling (Hi-Quality). The mat
   ([app/src/audio/SaturatorResponse.h](../../app/src/audio/SaturatorResponse.h)) call them, so the curve drawn is
   the curve played, from the same float arithmetic.
 - At 48 kHz stereo on the machine it was written on (`builtin_devices_bench`): 0.09 % of one core at the defaults,
-  0.12 % at Medium Curve +12 dB, 0.31 % with the Waveshaper's ripples and gate, Color and DC; Hi-Quality about 1 %
-  (the 4x filters are most of it), 1.7 % at its heaviest (Hi-Quality, Waveshaper, Color at 4x, DC, Soft Clip, half
-  wet), 2.0 % with every glide moving all the time.
+  0.12 % at Medium Curve +12 dB, 0.31 % with the Waveshaper's ripples and gate, Color and DC; with Hi-Quality too,
+  and Drive at +12 dB, 0.67 % ([benchmarks/README.md](../../benchmarks/README.md)). Before `dsp::Oversampler`'s stages
+  were vectorised, Hi-Quality took about 1 % (the 4x filters most of it), 1.7 % at its heaviest (Hi-Quality,
+  Waveshaper, Color at 4x, DC, Soft Clip, half wet) and 2.0 % with every glide moving all the time.
 
 ### Amp (`builtin:amp`, AudioEffect)
 
@@ -1161,13 +1162,14 @@ decimal, no sign: `formatValue` in [ParamSpec.cpp](../../app/src/model/ParamSpec
   10. Its preamp's part doesn't depend on the sag, so the editor keeps it and remakes only the power stage's as the
   sag moves. Both through the application layer's [AmpResponse.h](../../app/src/audio/AmpResponse.h)
   (`ampToneResponseDb`, `ampTransfer`, `AmpTransferCurve`): the curves drawn are the sound.
-- **Cost** (48 kHz, `builtin_devices_bench --device amp`, the best of three on a 2.1 GHz VM, where OTT
-  measured 0.37 % in the same runs): 1.0 % of one core at the defaults (Mono), 1.9 % in Dual (Lead, Gain 10: the
-  same at any setting, the structure never changes), in proportion to the rate. Automating a dial adds next to
-  nothing (0.04 %), a model change every 100 ms 0.3 % (each morph works its levels out). A model change's first
-  block costs about 3.3 times a steady one in blocks of up to 64 frames (3 % of the block's time), 2.3 times at 128,
-  1.9 times at 256. About 40 % of it is `dsp::Oversampler`'s up and down. A silent track costs next to nothing once
-  its amp sleeps.
+- **Cost** (48 kHz, `builtin_devices_bench`, the best of three on a 2.1 GHz VM, where OTT measured 0.44 % in the
+  same runs; [benchmarks/README.md](../../benchmarks/README.md)): 0.68 % of one core at the defaults (Mono), 1.36 % in
+  Dual (Lead, Gain 10: the same at any setting, the structure never changes), in proportion to the rate. Measured
+  before `dsp::Oversampler`'s stages were vectorised (when the defaults took 1.0 %, Dual 1.9 %, and about 40 % of it
+  was the oversampler's up and down): automating a dial added next to nothing (0.04 %), a model change every 100 ms
+  0.3 % (each morph works its levels out), and a model change's first block cost about 3.3 times a steady one in
+  blocks of up to 64 frames (3 % of the block's time), 2.3 times at 128, 1.9 times at 256. A silent track costs next
+  to nothing once its amp sleeps.
 
 ### Erosion (`builtin:erosion`, AudioEffect)
 
