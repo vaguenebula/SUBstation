@@ -49,9 +49,10 @@ class Reverb : public Standalone {
 public:
     explicit Reverb(const Values& values = {}, double rate = kSampleRate) : Standalone("reverb", rate, values) {}
 
-    void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
+    void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256,
+             const BeforeBlock& beforeBlock = {}) {
         const sub::ScopedNoDenormals noDenormals;
-        Standalone::run(channels, changes, block);
+        Standalone::run(channels, changes, block, beforeBlock);
     }
     // One channel: what comes out.
     Samples play(Samples mono, const std::vector<Change>& changes = {}, int block = 256) {
@@ -1243,15 +1244,16 @@ TEST_CASE("the reverb's tail covers its ringing") {
 TEST_CASE("the reverb's displays") {
     Reverb r;
     const Samples tone = sine(1000.0, 0.5, 0.5);
-    // (in pieces: a reader keeps up with the latest 8192 values of a display)
+    // (Read before each block and after the last: a reader keeps up with the latest 8192 values of a display.)
     std::vector<float> signal, tail;
-    for (int64_t at = 0; at < static_cast<int64_t>(tone.size()); at += 4800) {
-        const Samples piece = slice(tone, at, at + 4800);
-        r.play(piece, piece);
+    const auto collect = [&] {
         const std::vector<float> s = r.display("signal"), t = r.display("tail");
         signal.insert(signal.end(), s.begin(), s.end());
         tail.insert(tail.end(), t.begin(), t.end());
-    }
+    };
+    Samples left = tone, right = tone;
+    r.run({&left, &right}, {}, 256, [&](int64_t, int) { collect(); });
+    collect();
     // The input's level (the mono sum: the tone itself), the input sample by sample.
     const std::vector<float> input = r.display("input");
     REQUIRE(input.size() == static_cast<size_t>(0.5 * kSampleRate) / 256);

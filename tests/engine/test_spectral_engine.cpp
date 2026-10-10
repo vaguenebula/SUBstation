@@ -33,7 +33,6 @@ namespace spectral = sub::spectral;
 
 namespace {
 
-constexpr int kBlock = Standalone::kMaxBlock;  // the renderer's largest block
 constexpr int kN = 2048;      // the frame at 48 kHz
 constexpr int kH = kN / 4;    // the hop
 constexpr int kL = kN + kH;   // the latency: the frame, and the hop its work is spread over
@@ -349,7 +348,7 @@ TEST_CASE("spectral: latency and the impulse") {
     // A new rate: the device starts from silence at its new frame.
     Spectral s({{"threshold", 12.f}});
     s.play(whiteNoise(20000, -10.0, 1));
-    s.processor().prepare(96000.0, kBlock);
+    s.prepare(96000.0);
     CHECK_EQ(s.processor().latencySamples(), 4096 + 1024);
     Samples x(16384, 0.f);
     x[10] = 1.f;
@@ -1197,26 +1196,27 @@ TEST_CASE("spectral: cost") {
 
     // No audio callback carries a whole frame: its work is spread over the hop after it. At 192 kHz in blocks of
     // 32 (a frame every 64 blocks), the 99th percentile of the blocks' costs is a small share of a hop's (a frame
-    // worked out in one block would be over that percentile, and all of a hop's cost).
+    // worked out in one block would be over that percentile, and all of a hop's cost). Each block is timed from
+    // the hook before it to the next one (or the end): the harness's own work between is nothing beside a block's.
     constexpr double kRate = 192000.0;
     constexpr int kSmall = 32;
-    auto processor = sub::BuiltinRegistry::instance().create("spectral");
-    processor->prepare(kRate, kBlock);
-    const Samples fast = pinkNoise(static_cast<size_t>(2 * kRate), -14.0, 99, kRate);
-    Samples left = fast, right = fast;
-    sub::ProcessContext ctx;
-    ctx.sampleRate = kRate;
+    Standalone fast("spectral", kRate);
+    Samples left = pinkNoise(static_cast<size_t>(2 * kRate), -14.0, 99, kRate), right = left;
     std::vector<double> blocks;
-    double total = 0.0;
-    for (size_t at = 0; at + kSmall <= fast.size(); at += kSmall) {
-        float* pointers[2] = {left.data() + at, right.data() + at};
-        const double from = threadTicks();
-        processor->process(ctx, pointers, 2, kSmall);
+    double total = 0.0, from = 0.0;
+    int64_t timing = -1;  // the first frame of the block being timed
+    const auto timed = [&] {
         const double took = threadTicks() - from;
-        if (at < static_cast<size_t>(kRate / 4)) continue;  // (settled)
+        if (timing < static_cast<int64_t>(kRate / 4)) return;  // (settled)
         blocks.push_back(took);
         total += took;
-    }
+    };
+    fast.run({&left, &right}, {}, kSmall, [&](int64_t start, int) {
+        timed();
+        timing = start;
+        from = threadTicks();
+    });
+    timed();
     std::sort(blocks.begin(), blocks.end());
     const double perHop = total / static_cast<double>(blocks.size()) * (spectral::frameSize(kRate) / 4 / kSmall);
     const double p99 = blocks[blocks.size() * 99 / 100];
