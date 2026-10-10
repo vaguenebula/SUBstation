@@ -241,17 +241,23 @@ QJsonObject bendToJson(const Note& note) {
 }
 
 void bendFromJson(const QJsonObject& data, Note& note) {
+    // (toFloat takes "nan" and "inf" as text: a bend holds neither, or the pitch played would.)
+    const auto finite = [](const QJsonValue& value) {
+        const double number = toFloat(value);
+        if (!std::isfinite(number)) damaged(QStringLiteral("a bend's value isn't a finite number"));
+        return number;
+    };
     for (const QJsonValue& entry : listOr(data, QStringLiteral("bend"))) {
         const QJsonArray p = entry.toArray();
         if (!entry.isArray() || p.size() != 3) damaged(QStringLiteral("a bend's point isn't [time, semitones, curve]"));
-        note = notes::withBendPoint(note, {toFloat(p.at(0)), toFloat(p.at(1)), toFloat(p.at(2))});
+        note = notes::withBendPoint(note, {finite(p.at(0)), finite(p.at(1)), finite(p.at(2))});
     }
     for (const QJsonValue& entry : listOr(data, QStringLiteral("vibrato"))) {
         const QJsonArray v = entry.toArray();
         if (!entry.isArray() || v.size() != 5) damaged(QStringLiteral("a vibrato isn't [start, length, depth, rate, fade]"));
-        const Vibrato vibrato{toFloat(v.at(0)), toFloat(v.at(1)),
-                              std::clamp(toFloat(v.at(2)), -notes::kMaxBendSemitones, notes::kMaxBendSemitones),
-                              toFloat(v.at(3)), std::clamp(toFloat(v.at(4)), 0.0, 1.0)};
+        const Vibrato vibrato{finite(v.at(0)), finite(v.at(1)),
+                              std::clamp(finite(v.at(2)), -notes::kMaxBendSemitones, notes::kMaxBendSemitones),
+                              finite(v.at(3)), std::clamp(finite(v.at(4)), 0.0, 1.0)};
         if (vibrato.length > 0 && vibrato.rate > 0) note.vibrato.push_back(vibrato);  // (as saved: past its end too)
     }
     std::sort(note.vibrato.begin(), note.vibrato.end(), [](const Vibrato& a, const Vibrato& b) { return a.start < b.start; });

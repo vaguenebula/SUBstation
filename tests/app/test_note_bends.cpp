@@ -252,6 +252,14 @@ private Q_SLOTS:
         QVERIFY_THROWS_EXCEPTION(ProjectFileError, loadProject(project, target));
         write(QJsonArray{60, 0, 1, 100, false, QJsonObject{{QStringLiteral("bend"), QJsonArray{QJsonArray{0.5, 1}}}}});
         QVERIFY_THROWS_EXCEPTION(ProjectFileError, loadProject(project, target));
+        // Numbers as text may say "nan" or "inf": not in a bend (the pitch would be).
+        write(QJsonArray{60, 0, 1, 100, false,
+                         QJsonObject{{QStringLiteral("bend"), QJsonArray{QJsonArray{0.5, QStringLiteral("nan"), 0}}}}});
+        QVERIFY_THROWS_EXCEPTION(ProjectFileError, loadProject(project, target));
+        write(QJsonArray{60, 0, 1, 100, false,
+                         QJsonObject{{QStringLiteral("vibrato"),
+                                      QJsonArray{QJsonArray{QStringLiteral("inf"), 1, 0.5, 5.5, 0.3}}}}});
+        QVERIFY_THROWS_EXCEPTION(ProjectFileError, loadProject(project, target));
         // Points out of order load in order; out of range, held to it.
         write(QJsonArray{60, 0, 1, 100, false,
                          QJsonObject{{QStringLiteral("bend"), QJsonArray{QJsonArray{0.75, 99, 0}, QJsonArray{0.25, 1, 0}}}}});
