@@ -22,13 +22,14 @@
 //   Blend 0 %, Noise 100 %, Wide Noise 100 % with Stereo 100 %.
 // - Smoothing: the work runs in chunks of 16 samples on a grid that goes on
 //   across blocks (so the output never depends on how a block is split). At each
-//   chunk's start the controls' glides (two one-poles of 10 ms in a row, so a
-//   jump eases in and out; Frequency and Width in log) move on a chunk, and what
-//   they make (the excursion, the weights, the spread, the noise's gain and its
-//   sections' g and k) ramps linearly over the chunk, the sections' coefficients
-//   made from g and k sample by sample while they move, and their states eased
-//   by as much as the band's steady level changes (so the energy they hold from
-//   the old band doesn't modulate harder, or weaker, than the new band does).
+//   chunk's start the controls' glides (dsp::Glide: two one-poles of 10 ms in a
+//   row, so a jump eases in and out; Frequency and Width in log) move on a
+//   chunk, and what they make (the excursion, the weights, the spread, the
+//   noise's gain and its sections' g and k) ramps linearly over the chunk, the
+//   sections' coefficients made from g and k sample by sample while they move,
+//   and their states eased by as much as the band's steady level changes (so
+//   the energy they hold from the old band doesn't modulate harder, or weaker,
+//   than the new band does).
 //   The phasor's rate steps per chunk (its phase stays continuous). Once every
 //   glide has landed nothing is worked out again: a device left alone costs
 //   only its per-sample work.
@@ -61,24 +62,6 @@ constexpr double kGlideSeconds = 0.01;  // each of a control's two one-poles
 constexpr double kLanded = 1e-6;        // a glide this near its target lands on it
 constexpr float kFloorDb = -90.f;       // the `erosion` display's floor
 constexpr int kChannels = 2;
-
-// Two one-poles in a row gliding to a target: a jump eases in and out, and a
-// glide can turn back halfway without a kink. It lands on the target exactly
-// once it is within `landed` of it. (As the Disperser's.)
-struct Ease {
-    double first = 0.0, value = 0.0;
-
-    void snap(double target) noexcept { first = value = target; }
-    bool settled(double target) const noexcept { return first == target && value == target; }
-    // One step towards the target; false if it was already there (nothing moved).
-    bool step(double target, double coefficient) noexcept {
-        if (settled(target)) return false;
-        first += coefficient * (target - first);
-        value += coefficient * (first - value);
-        if (std::abs(target - first) < kLanded && std::abs(target - value) < kLanded) snap(target);
-        return true;
-    }
-};
 
 // A value moving in a straight line over a chunk, sample by sample, from where
 // the last chunk was headed to this one's target (floats: the inner loop's type).
@@ -113,7 +96,7 @@ public:
                                      {"erosion", kMeterSamples},
                                      {"mod_l", 1},
                                      {"mod_r", 1}}),
-          salt_(erosion::instanceSalt(erosion::instancesMade.fetch_add(1, std::memory_order_relaxed))) {}
+          salt_(dsp::hash32(erosion::instancesMade.fetch_add(1, std::memory_order_relaxed))) {}
 
     std::string typeId() const override { return "builtin:erosion"; }
     std::string name() const override { return "Erosion"; }
@@ -185,11 +168,11 @@ private:
     // A chunk's start: the glides move on a chunk; what moved is worked out
     // again (what didn't keeps its target, and its ramp restarts there with step 0).
     void startChunk() noexcept {
-        const bool freq = freq_.step(targetLogFreq(), glide_);
-        const bool width = width_.step(targetLogWidth(), glide_);
-        const bool amount = amount_.step(targetAmount(), glide_);
-        const bool blend = blend_.step(targetBlend(), glide_);
-        const bool stereo = stereo_.step(targetStereo(), glide_);
+        const bool freq = step(freq_, targetLogFreq());
+        const bool width = step(width_, targetLogWidth());
+        const bool amount = step(amount_, targetAmount());
+        const bool blend = step(blend_, targetBlend());
+        const bool stereo = step(stereo_, targetStereo());
         workOut(freq, width, amount, blend, stereo);
         for (int r = 0; r < NumRamps; ++r) ramps_[r].start(next_[r]);
         bandMoving_ = ramps_[G].step != 0.f || ramps_[K].step != 0.f;
@@ -211,6 +194,13 @@ private:
         cos_ *= radius;
         sin_ *= radius;
         chunkLeft_ = kChunk;
+    }
+
+    // A control's glide a chunk on towards its target; false if it was there already (nothing moved).
+    bool step(dsp::Glide& glide, double target) const noexcept {
+        if (glide.settled(target)) return false;
+        glide.next(target, glide_, kLanded);
+        return true;
     }
 
     // The ramps' next targets (and the phasor's rate) from the glides' values: only
@@ -430,11 +420,11 @@ private:
     dsp::DelayLine lines_[kChannels];
     dsp::Svf sections_[4];  // the mid noise's two band-pass sections, then the side's
     dsp::Noise noiseMid_, noiseSide_;
-    uint32_t salt_ = 0;                         // this instance's, for the noises' seeds (erosion::instanceSalt)
+    uint32_t salt_ = 0;                         // this instance's, for the noises' seeds: its number hashed
     double cos_ = 1.0, sin_ = 0.0;              // the sine's phasor
     double rotateCos_ = 1.0, rotateSin_ = 0.0;  // its turn per sample
 
-    Ease freq_, width_, amount_, blend_, stereo_;  // the controls' glides (Frequency and Width in log)
+    dsp::Glide freq_, width_, amount_, blend_, stereo_;  // the controls' glides (Frequency and Width in log)
     // Frequency's and Width's parameters as last read, and their logs (NaN: none yet).
     float rawFreq_ = std::numeric_limits<float>::quiet_NaN(), rawWidth_ = std::numeric_limits<float>::quiet_NaN();
     double logFreq_ = 0.0, logWidth_ = 0.0;

@@ -1245,29 +1245,31 @@ clean delay of its latency.
   (the weights exactly 1 and 0 at the ends). The modulator plays at most 0.45 of the sample rate. Live's legacy
   modes are settings: Sine is Noise Blend 0 %, Noise 100 %, Wide Noise 100 % with Stereo 100 %.
 - **Its own noise**: each instance salts the noises' seeds (`kMidSeed`, `kSideSeed`) with a number of its own
-  (`instanceSalt` of the count of Erosions made before it, `instancesMade`), kept for its life. Two Erosions set
+  (`dsp::hash32` of the count of Erosions made before it, `instancesMade`), kept for its life. Two Erosions set
   alike therefore don't modulate alike: on double-tracked parts they would otherwise wobble in lockstep, and an
   export, which resets every device at once, would line them all up. Its renders still repeat (reset() reseeds it
   with its own seeds); a project loaded again gets new noise, statistically the same. (The tests set the count
   back to 0 to make devices that play alike.)
 - **Smoothing**: the work runs in chunks of 16 samples on a grid that goes on across blocks and stretches, so the
-  output never depends on how a block was split (offline renders are bit-identical at any block size). At each
-  chunk's start every control's glide (two one-poles of 10 ms in a row, so a jump eases in and out; Frequency and
-  Width in log) moves on a chunk, and what it makes ramps linearly across the chunk: the excursion, the blend's
+  output never depends on how a block was split (offline renders are bit-identical at any block size). At each chunk's
+  start every control's glide (`dsp::Glide`: two one-poles of 10 ms in a row, so a jump eases in and out; Frequency
+  and Width in log) moves on a chunk, and what it makes ramps linearly across the chunk: the excursion, the blend's
   weights, the noise's gain and its mid and side gains, the sine's offset, and the sections' g and k, from which the
-  sections' coefficients are made sample by sample while they move. While the band moves, the sections' states
-  ease across each chunk by as much as their steady level changes (k × scale over the chunk's: the noise, scale k
-  v1, keeps RMS 1/√2): the energy they built at the old band would otherwise modulate several times too hard after
-  a long move down or a widening, and too weakly after a narrowing, for a few hundred ms, until it decayed at the
-  new band's rate. The phasor's rate steps per chunk (its phase stays continuous). Once a glide has landed nothing
-  that depends on it is worked out again (Frequency's and Width's logs are taken only when the parameter changes):
-  a settled chunk does no transcendental work. The modulators never stop or restart, so there is no phase jump to
-  hide, and there are no lists or switches to crossfade.
+  sections' coefficients are made sample by sample while they move. While the band moves, the sections' states ease
+  across each chunk by as much as their steady level changes (k × scale over the chunk's: the noise, scale k v1, keeps
+  RMS 1/√2): the energy they built at the old band would otherwise modulate several times too hard after a long move
+  down or a widening, and too weakly after a narrowing, for a few hundred ms, until it decayed at the new band's rate.
+  The phasor's rate steps per chunk (its phase stays continuous). Once a glide has landed nothing that depends on it
+  is worked out again (Frequency's and Width's logs are taken only when the parameter changes): a settled chunk does
+  no transcendental work. The modulators never stop or restart, so there is no phase jump to hide, and there are no
+  lists or switches to crossfade.
 - **One channel** gets the left modulator, worked out exactly as in stereo (both noises run), so a mono run is the
   left side of a stereo one. More than two: the first two. A channel that wasn't processed starts from silence.
 - **Latency and tail**: `latencySamples()` is D (2 ms), so the engine delays the other tracks by it and at Amount 0
   the device is transparent, to the sample. `tailSamples()` is 2D: no sample stays longer. Nothing in it decays (the
-  delay has no feedback, the sections always hear noise), so silence comes out as exact zeros 2D samples on.
+  delay has no feedback, the sections always hear noise), so silence comes out as exact zeros 2D samples on. It
+  reads no sidechain; NaN or infinity in its input is silence by the time it hears it (`BuiltinProcessor`), so its
+  line never holds one.
 - **Reset**: the line and sections cleared, the noises reseeded with the instance's own seeds and the phasor
   restarted (its renders repeat exactly, noise included), every glide and ramp where the parameters are.
   `prepare()` (a new rate) works out D, the limit and the glides again, and resets.
@@ -2203,8 +2205,8 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   spreading the sidebands; the same output however the block is split; every control changing without a click (a
   6th-difference measure, against a spliced switch) and landing where it was turned; automation through the engine,
   to the chunk; reset and a new rate; stability at the extremes and under random automation; silence as exact
-  zeros; one channel the left of two (and two again); the displays; the band the editor draws against the filter's
-  impulse response.
+  zeros; NaN and infinity in the input as silence (bit for bit as a 0 there); one channel the left of two (and two
+  again); the displays; the band the editor draws against the filter's impulse response.
 - [test_delay_engine.cpp](../../tests/engine/test_delay_engine.cpp): synced and free times, offset, link,
   feedback, ping pong, freeze, the filter, the modes (with automation changing the time), and its display.
 - [test_chorus_engine.cpp](../../tests/engine/test_chorus_engine.cpp): its listing and the design's figures (the

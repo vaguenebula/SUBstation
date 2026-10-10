@@ -9,7 +9,8 @@
 // doesn't depend on how blocks are split; every control changes without a click
 // and lands where it was turned; automation through the engine lands in its
 // chunk, aligned; reset and a new rate start it afresh; it stays finite at the
-// extremes; silence comes out as exact zeros; one channel is the left of two;
+// extremes; silence comes out as exact zeros, NaN and infinity in as silence;
+// one channel is the left of two;
 // its displays carry what the editor draws, and the band the editor draws is the
 // filter that plays.
 
@@ -32,75 +33,53 @@
 #include "builtin/ErosionDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace erosion = sub::erosion;
 
 namespace {
 
-constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
-constexpr int kD = 96;        // the delay's centre (the latency) at 48 kHz
+constexpr int kD = 96;  // the delay's centre (the latency) at 48 kHz
 
-using Values = std::vector<std::pair<std::string, float>>;
+using Values = ParamValues;
+using Change = ParamChange;
 
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
-
-// An Erosion on its own, outside an engine, at any sample rate: processed in
-// blocks, its changes handed over as automation (so its blocks split there) as
-// the renderer does. Its displays are read after every block (a stream keeps
-// only its latest 8192 values) and gathered from the start. Each instance salts
-// its noise with a number of its own; `alike` makes it as the first one made
-// (the count set back to 0), so a test's devices share their noise, whichever
-// tests ran before.
-class Erosion {
+// An Erosion on its own, outside an engine (harness/Standalone.h), its displays
+// gathered from the start: read after every block (a stream keeps only its
+// latest 8192 values). Each instance salts its noise with a number of its own;
+// `alike` makes it as the first one made (the count set back to 0), so a test's
+// devices share their noise, whichever tests ran before.
+class Erosion : public Standalone {
 public:
     explicit Erosion(double rate = kSampleRate, const Values& values = {}, bool alike = true)
-        : processor_(make(alike)), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-        const std::vector<sub::DisplayInfo> infos = processor_->displays();
+        : Standalone(kind(alike), rate, values) {
+        const std::vector<sub::DisplayInfo> infos = processor().displays();
         for (const sub::DisplayInfo& info : infos) ids_.push_back(info.id);
         positions_.assign(infos.size(), 0);
         displays_.assign(infos.size(), {});
     }
 
-    sub::Processor& processor() { return *processor_; }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-
-    // Processes one or two channels of equal length in place, `block` frames at a time.
+    // Processes one or two channels of equal length in place, `block` frames at a time (each a
+    // Standalone run of its own, its changes from where it starts), the displays read after each.
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
         const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[2] = {};
+        std::vector<Samples> pieces(channels.size());
+        std::vector<Samples*> pointers;
+        for (Samples& piece : pieces) pointers.push_back(&piece);
         size_t next = 0;
         for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
+            const int64_t end = std::min<int64_t>(start + block, frames);
+            for (size_t c = 0; c < channels.size(); ++c)
+                pieces[c].assign(channels[c]->begin() + start, channels[c]->begin() + end);
+            std::vector<Change> here;
+            for (; next < changes.size() && changes[next].frame < end; ++next) {
+                here.push_back(changes[next]);
+                here.back().frame = std::max<int64_t>(0, changes[next].frame - start);
             }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->clearAutomation();
+            Standalone::run(pointers, here, block);
+            for (size_t c = 0; c < channels.size(); ++c)
+                std::copy(pieces[c].begin(), pieces[c].end(), channels[c]->begin() + start);
             readDisplays();
         }
     }
@@ -126,18 +105,16 @@ public:
     }
 
 private:
-    static std::shared_ptr<sub::Processor> make(bool alike) {
+    static std::string kind(bool alike) {
         if (alike) erosion::instancesMade.store(0);
-        return sub::BuiltinRegistry::instance().create("erosion");
+        return "erosion";
     }
 
     void readDisplays() {
         for (size_t i = 0; i < ids_.size(); ++i)
-            positions_[i] = processor_->readDisplay(static_cast<int>(i), positions_[i], displays_[i]);
+            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], displays_[i]);
     }
 
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
     std::vector<std::string> ids_;
     std::vector<uint64_t> positions_;
     std::vector<Samples> displays_;
@@ -569,8 +546,8 @@ TEST_CASE("two erosions set alike don't share their noise") {
     const int64_t again = static_cast<int64_t>(in.size()) + from;
     CHECK(std::abs(correlationOf(one.display("mod_l"), two.display("mod_l"), again, n)) < 0.05);
     // The salts: the first made has the plain seeds; consecutive ones unrelated; a salted seed never 0.
-    CHECK_EQ(erosion::instanceSalt(0), 0u);
-    CHECK(erosion::instanceSalt(1) != erosion::instanceSalt(2));
+    CHECK_EQ(sub::dsp::hash32(0), 0u);
+    CHECK(sub::dsp::hash32(1) != sub::dsp::hash32(2));
     CHECK_EQ(erosion::saltedSeed(erosion::kMidSeed, erosion::kMidSeed), erosion::kMidSeed);
 }
 
@@ -782,7 +759,7 @@ TEST_CASE("reset and a new sample rate start erosion afresh") {
     // 0.45 of the rate, 14.4 kHz).
     for (const auto& [rate, latency] : {std::pair{96000.0, 192}, std::pair{32000.0, 64}}) {
         INFO(std::to_string(rate));
-        device.processor().prepare(rate, kBlock);
+        device.processor().prepare(rate, Erosion::kMaxBlock);
         CHECK_EQ(device.processor().latencySamples(), latency);
         Erosion there(rate, values);
         const Samples c = noise(48000, 7);
@@ -848,6 +825,36 @@ TEST_CASE("silence comes out of erosion as exact zeros") {
     CHECK(allFinite(tl) && allFinite(tr));
     CHECK(allEqual(slice(tl, 1000 + 2 * kD), 0.0));
     CHECK(allEqual(slice(tr, 1000 + 2 * kD), 0.0));
+}
+
+TEST_CASE("erosion takes NaN and infinity in its input as silence") {
+    // BuiltinProcessor::process() zeroes them before the device hears them, so its line never holds one: what
+    // comes out is exactly what the same input with a 0 there gives, finite throughout, and it plays on.
+    const float bad[] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 3e38f};
+    const Values values = {{"amount", 60.f}, {"blend", 50.f}, {"stereo", 100.f}};
+    const Samples left = noise(kSampleRate / 2, 21), right = noise(kSampleRate / 2, 22);
+    Samples zeroedLeft = left, zeroedRight = right;
+    zeroedLeft[1000] = 0.f;
+    zeroedRight[3001] = 0.f;
+    Erosion clean(kSampleRate, values);
+    const auto want = clean.playStereo(zeroedLeft, zeroedRight);
+    CHECK(!allclose(want.first, delayed(left, kD), 0.0, 0.01));
+    for (const float value : bad) {
+        INFO(std::to_string(value));
+        Samples l = left, r = right;
+        l[1000] = value;
+        r[3001] = value;
+        Erosion device(kSampleRate, values);
+        const auto [gotLeft, gotRight] = device.playStereo(l, r);
+        CHECK(allFinite(gotLeft) && allFinite(gotRight));
+        CHECK_ARRAY_EQUAL(gotLeft, want.first);
+        CHECK_ARRAY_EQUAL(gotRight, want.second);
+        for (const char* id : {"input", "output", "erosion"}) {
+            INFO(id);
+            CHECK(allFinite(device.display(id)));
+        }
+    }
 }
 
 TEST_CASE("erosion on one channel is the left of two") {
