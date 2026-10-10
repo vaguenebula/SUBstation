@@ -192,7 +192,7 @@ TEST_CASE("the gate is listed with its parameters") {
         CHECK_APPROX(p.maxValue, e.max);
         CHECK_APPROX(p.defaultValue, e.value);
         CHECK_EQ(p.isLog(), e.log);
-        CHECK_EQ(p.automatable, p.id != "lookahead" && p.id != "sc_listen");
+        CHECK_EQ(p.automatable, p.id != "lookahead");  // (S/C Listen can be, as Live's SideListen)
     }
     CHECK_EQ(info.params[2].name, std::string("Attack"));
     CHECK_EQ(info.params[8].name, std::string("S/C Gain"));
@@ -821,6 +821,19 @@ TEST_CASE("the gate's automation plays to the sample, whatever the block size") 
         CHECK(out[at + 480] < in[at + 480]);
         CHECK(gainAt(out, in, at + 480 + 4798) > 0.01 * (1.0 + 1e-5));
         CHECK_APPROX_TOL(gainAt(out, in, at + 480 + 4799), 0.01, 1e-6, 0.0);
+    }
+
+    // S/C Listen too: the gate shut (DC 0.1 under a 0 dB threshold), Listen switched on at
+    // frame 24000 crossfades to the key (the input itself) from that frame, over 10 ms.
+    for (const int block : {64, 128, 1000, 1024}) {
+        INFO("listen, " + std::to_string(block));
+        const Values shut = with(kBase, {{"threshold", 0.f}});
+        Gate g(shut), plain(shut);
+        const Samples out = g.play(in, {{at, "sc_listen", 1.f}}, block), gated = plain.play(in, {}, block);
+        CHECK_ARRAY_EQUAL(slice(out, 0, at), slice(gated, 0, at));
+        CHECK(out[at] > gated[at]);
+        CHECK(out[at + 478] < 0.1f);
+        CHECK_EQ(out[at + 479], 0.1f);
     }
 
     // The EQ's glide keeps its pace however the stretches split: listening to an EQ'd

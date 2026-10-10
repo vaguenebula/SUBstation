@@ -283,8 +283,8 @@ the track itself).
   through the EQ), instead of the gate's output: handy for tuning the EQ. Switch it off
   again to hear the result.
 
-Every control except Lookahead and Listen can be automated, and none of them clicks when
-it moves.
+Every control except Lookahead can be automated (Listen too, as in Live), and none of them
+clicks when it moves.
 
 ### Limiter
 

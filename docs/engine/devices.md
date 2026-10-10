@@ -466,7 +466,7 @@ the editor shares is in [GateDesign.h](../../engine/src/builtin/GateDesign.h) (n
 | `flip` | Flip | | Off, On | Off |
 | `sc_gain` | S/C Gain | dB | -70..24 | 0 |
 | `sc_mix` | S/C Mix | % | 0..100 | 100 |
-| `sc_listen` | S/C Listen | | Off, On (not automatable, as Live's) | Off |
+| `sc_listen` | S/C Listen | | Off, On | Off |
 | `sc_eq` | S/C EQ On | | Off, On | Off |
 | `sc_eq_type` | S/C EQ Type | | Low Shelf, Bell, High Shelf, Low-pass, Band-pass, High-pass | High-pass |
 | `sc_eq_freq` | S/C EQ Freq | Hz | 30..15000, log | 80 |

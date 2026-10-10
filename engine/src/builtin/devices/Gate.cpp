@@ -458,7 +458,6 @@ private:
                 {"sc_eq_gain", "S/C EQ Gain", "dB", gate::kKeyGainMinDb, gate::kKeyGainMaxDb, 0.f},
             };
             list[Lookahead].automatable = false;  // (it is the device's latency)
-            list[ScListen].automatable = false;   // (a way to listen, not part of the sound; as Live's SideListen)
             return list;
         }();
         return kInfos;
