@@ -260,7 +260,9 @@ private Q_SLOTS:
             QQuickItem* item = find(s.view, QString::fromLatin1(name));
             return item->mapToItem(s.view, QPointF(0, item->height())).y();
         };
-        auto top = [&](const char* name) { return find(s.view, QString::fromLatin1(name))->mapToItem(s.view, {}).y(); };
+        auto top = [&](const char* name) {
+            return find(s.view, QString::fromLatin1(name))->mapToItem(s.view, QPointF()).y();
+        };
         QVERIFY(left("pages") >= 8 && right("pages") <= s.view->property("inX").toDouble());
         QVERIFY(under("pages") <= top("highActive"));
         QCOMPARE(left("pageCaption"), left("midAbove"));
