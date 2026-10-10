@@ -7,10 +7,15 @@
 // one moves the curve where the others act too.
 //
 // A handle per tone control sits on the curve at the frequency it acts most on
-// (B 100 Hz, M 700 Hz, T 3 kHz, P 6 kHz): drag it up and down to set its dial
-// (kPixelsPerStep a step; Shift finely), one undo step per drag; double-click
-// it to put it back to 5. A new model's curve morphs from the old one's; dials
-// and drags move it at once.
+// (B 100 Hz, M 700 Hz, T 3 kHz, P 6 kHz), a control of its parameter as its
+// knob is: drag it up and down to set its dial (kPixelsPerStep a step; Shift
+// finely, from where the mouse is when it is pressed), one undo step per drag;
+// the wheel over it (kWheelStep a notch, Shift finely; notches close together
+// one undo step); double-click it to put it back to 5; right-click it for its
+// parameter's menu (handleMenuRequested: the editor shows the ParamMenu); its
+// automation dot beside its letter. Presses anywhere else go on to the frame.
+// A new model's curve morphs from the old one's; dials and drags move it at
+// once.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
@@ -44,6 +49,7 @@ public:
     static constexpr double kGutter = 20.0;  // at the right, the dB figures
     static constexpr double kPixelsPerStep = 8.0;  // dragged up this far, a dial step of 1
     static constexpr double kFine = 0.2;           // with Shift
+    static constexpr double kWheelStep = 0.2;      // a wheel notch (as the knobs': 50 for the range)
     static constexpr double kHitPixels = 14.0;     // a press this near a handle (across) takes it
     static constexpr double kRadius = 4.5;         // a handle's
     static constexpr double kHoverRadius = 6.5;    // under the mouse or dragged
@@ -76,6 +82,8 @@ public:
     Q_INVOKABLE int handleAt(QPointF pos) const;
     // A handle's radius as drawn.
     Q_INVOKABLE double handleRadius(int i) const;
+    // A handle's parameter's automation as its dot shows it: "on", "off" (overridden) or "".
+    Q_INVOKABLE QString handleAutomation(int i) const;
 
     QRectF plot() const;
     LogAxis frequencyAxis() const;
@@ -85,6 +93,8 @@ public:
 Q_SIGNALS:
     void curveChanged();
     void handlesChanged();
+    // A right-click on a handle: its parameter's menu, at `position` (the item's).
+    void handleMenuRequested(const QString& paramId, QPointF position);
 
 protected:
     void sync() override;
@@ -95,6 +105,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseUngrabEvent() override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
     void hoverMoveEvent(QHoverEvent* event) override;
     void hoverLeaveEvent(QHoverEvent* event) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
@@ -106,8 +117,9 @@ private:
     double shownAt(double hz) const;  // the curve as drawn at a handle's frequency
     bool stepHandles(double dt);
 
-    int model_ = -1;  // -1: not synced yet (the first curve shows at once)
+    int model_ = -1;  // -1: not synced with the device yet (the first curve shows at once)
     double dials_[kHandles] = {5.0, 5.0, 5.0, 5.0};
+    std::array<QString, kHandles> automation_;  // their parameters' automation states ("on", "off", "")
     std::vector<double> frequencies_;
     std::vector<double> target_;
     std::vector<double> from_;
@@ -117,8 +129,11 @@ private:
     int hovered_ = -1;
     int dragging_ = -1;
     QString gesture_;  // the drag's merge key ("": none)
-    double pressedY_ = 0.0;
-    double pressedValue_ = 5.0;
+    double lastY_ = 0.0;      // where the mouse was at the drag's last move
+    double dragValue_ = 5.0;  // the dial as the drag has it (unrounded)
+    QString wheelGesture_;    // the wheel's merge key, its handle, since its last notch
+    int wheelHandle_ = -1;
+    QElapsedTimer wheelClock_;
     QElapsedTimer clock_;
     QMetaObject::Connection bridgeConnection_;
 };

@@ -5,16 +5,20 @@
 // the transfer curve being the engine's own maths (the application layer's
 // AmpResponse.h); the tone handles' drags one undo step each; and the displays
 // reaching the face (rendering offline): the tubes, the dots, the lamp and the
-// meter, holding through ticks that read nothing and cooling after. With
-// SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there as PNGs:
-// Lead with signal flowing, Bass in Dual turned up, a tone handle dragged, idle.
+// meter, holding through ticks that read nothing and cooling after, the sag's
+// feedback, a backlog of display values counting for nothing; an editor opened
+// on a model showing it at once. With SUBSTATION_UI_SCREENSHOTS set to a
+// folder, the editor is saved there as PNGs: Lead with signal flowing, Bass in
+// Dual turned up, a tone handle dragged, idle.
 
 #include <QGuiApplication>
 #include <QMouseEvent>
 #include <QQuickItem>
+#include <QSignalSpy>
 #include <QStyleHints>
 #include <QTest>
 #include <QUndoStack>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +32,7 @@
 #include "devices/AmpPanel.h"
 #include "devices/AmpToneGraph.h"
 #include "devices/DeviceParam.h"
+#include "model/Automation.h"
 
 using namespace sub::app;
 using namespace sub::ui;
@@ -90,12 +95,25 @@ class TestUiAmp : public QObject, public sub::app::test::EditorHarness {
         auto* paramKnob = cell ? qvariant_cast<QQuickItem*>(cell->property("knob")) : nullptr;
         return paramKnob ? qvariant_cast<KnobItem*>(paramKnob->property("knob")) : nullptr;
     }
-    // An EditorKnob's readout: the text under its knob.
+    // An EditorKnob's readout: the text under its knob (its EditorReadout, wherever it sits among the cell's children).
     QString readoutOf(QQuickItem* view, const QString& name) {
         QQuickItem* cell = find(view, name);
-        if (!cell || cell->childItems().size() < 3)
+        if (!cell)
             return QStringLiteral("?");
-        return cell->childItems().at(2)->property("text").toString();
+        for (QQuickItem* child : cell->childItems())
+            if (QByteArray(child->metaObject()->className()).startsWith("EditorReadout"))
+                return child->property("text").toString();
+        return QStringLiteral("?");
+    }
+    // A menu's entries' texts ("" for a separator).
+    static QStringList menuTexts(QObject* menu) {
+        QStringList texts;
+        for (int i = 0; i < menu->property("count").toInt(); ++i) {
+            QQuickItem* item = nullptr;
+            QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, i));
+            texts << (item ? item->property("text").toString() : QString());
+        }
+        return texts;
     }
     // A ParamButton's clickable face.
     static QQuickItem* buttonOf(QQuickItem* control) {
@@ -140,6 +158,24 @@ class TestUiAmp : public QObject, public sub::app::test::EditorHarness {
                           Qt::NoModifier);
         event.setTimestamp(timestamp);
         QGuiApplication::sendEvent(window_, &event);
+    }
+    // A mouse event sent to an item itself, with its timestamp: whether it took it.
+    bool sendTo(QQuickItem* item, QEvent::Type type, QPointF at, Qt::MouseButton button, Qt::MouseButtons buttons,
+                ulong timestamp) {
+        QMouseEvent event(type, at, item->mapToScene(at), QPointF(window_->mapToGlobal(scenePoint(item, at))), button,
+                          buttons, Qt::NoModifier);
+        event.setTimestamp(timestamp);
+        event.setAccepted(true);
+        QCoreApplication::sendEvent(item, &event);
+        return event.isAccepted();
+    }
+    // A wheel turned over an item's `at`, `notches` (120 each), with `modifiers`: whether it took it.
+    bool wheelOver(QQuickItem* item, QPointF at, int notches, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QWheelEvent event(at, item->mapToGlobal(at), QPoint(), QPoint(0, 120 * notches), Qt::NoButton, modifiers,
+                          Qt::NoScrollPhase, false);
+        event.setAccepted(false);
+        QCoreApplication::sendEvent(item, &event);
+        return event.isAccepted();
     }
 
 private Q_SLOTS:
@@ -216,6 +252,13 @@ private Q_SLOTS:
         QCOMPARE(s.panel->meterRect().right(), 630.0 - 8.0);
         QVERIFY(s.panel->tubeRect().bottom() < s.drive->mapToItem(s.view, QPointF(0, 0)).y());
         QCOMPARE(s.panel->jewelRect().bottom(), s.view->height() - 6.0);
+        // The lamp's and the meter's tooltips cover them whole (the meter's its whole height).
+        for (const auto& [name, rect] : {std::pair{QStringLiteral("lampTip"), s.panel->jewelRect()},
+                                         std::pair{QStringLiteral("meterTip"), s.panel->meterRect()}}) {
+            QQuickItem* tip = find(s.view, name);
+            QVERIFY2(tip, qPrintable(name));
+            QCOMPARE(tip->mapRectToItem(s.view, QRectF(0, 0, tip->width(), tip->height())), rect);
+        }
     }
 
     // --- The knobs ---------------------------------------------------------------------------------
@@ -432,10 +475,24 @@ private Q_SLOTS:
         QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at - QPoint(0, 30));
         QCOMPARE(undo()->index(), steps);
         for (const char* id : {"bass", "middle", "treble", "presence"}) QCOMPARE(value(id), 5.0);
-        // Nor does a right-click on a handle (that is the frame's menu).
+        // A right-click on a handle gives its parameter's menu (the knob's), and changes nothing.
+        QSignalSpy menus(s.tone, &AmpToneGraph::handleMenuRequested);
         QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier, scenePoint(s.tone, s.tone->handlePos(kBass)));
+        QCOMPARE(menus.count(), 1);
+        QCOMPARE(menus.at(0).at(0).toString(), QStringLiteral("bass"));
+        auto* menu = qvariant_cast<QObject*>(s.view->property("handleMenu"));
+        QVERIFY(menu);
+        auto* menuParam = qvariant_cast<sub::ui::DeviceParam*>(menu->property("param"));
+        QVERIFY(menuParam && menuParam->property("paramId").toString() == QStringLiteral("bass"));
+        QTRY_VERIFY(menu->property("visible").toBool());
+        QMetaObject::invokeMethod(menu, "close");
+        QTRY_VERIFY(!menu->property("visible").toBool());
         QCOMPARE(undo()->index(), steps);
         QCOMPARE(value("bass"), 5.0);
+        // One away from the handles is the frame's (not taken).
+        QVERIFY(!sendTo(s.tone, QEvent::MouseButtonPress, away, Qt::RightButton, Qt::RightButton, 1000));
+        sendTo(s.tone, QEvent::MouseButtonRelease, away, Qt::RightButton, Qt::NoButton, 1010);
+        QCOMPARE(menus.count(), 1);
 
         // A double-click on a handle puts its dial back to 5, in one undo step.
         editor()->setDeviceParam(s.track, s.device, QStringLiteral("middle"), 2.0);
@@ -473,6 +530,93 @@ private Q_SLOTS:
         QVERIFY(s.tone->cursor().shape() != Qt::SizeVerCursor);
         ticks(30);
         QVERIFY(std::abs(s.tone->handleRadius(kBass) - AmpToneGraph::kRadius) < 0.01);
+    }
+
+    // The handles are their parameters' controls as the knobs are: Shift mid-drag changing the
+    // rate from there on, the wheel, the automation dot and the menu; a double-click away from
+    // them is the frame's.
+    void handlesAreControls() {
+        const Shown s = showAmp();
+        QVERIFY(s.view && s.tone);
+        auto value = [&](const char* id) { return param(s.track, s.device, QString::fromLatin1(id)); };
+        constexpr int kBass = 0, kMiddle = 1, kTreble = 2;
+
+        // Treble up 32 px (to 9.0), then Shift: a pixel more is a fifth of a step's eighth, no jump;
+        // Shift let go: a pixel is an eighth of a step again, from there.
+        int steps = undo()->index();
+        const QPoint t = scenePoint(s.tone, s.tone->handlePos(kTreble));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, t);
+        for (int dy = 8; dy <= 32; dy += 8)
+            dragTo(window_, t - QPoint(0, dy));
+        QVERIFY2(std::abs(value("treble") - 9.0) < 0.006, qPrintable(QString::number(value("treble"))));
+        dragTo(window_, t - QPoint(0, 33), Qt::ShiftModifier);
+        QVERIFY2(std::abs(value("treble") - 9.025) < 0.006, qPrintable(QString::number(value("treble"))));
+        dragTo(window_, t - QPoint(0, 34));
+        QVERIFY2(std::abs(value("treble") - 9.15) < 0.006, qPrintable(QString::number(value("treble"))));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, t - QPoint(0, 34));
+        QCOMPARE(undo()->index(), steps + 1);
+        undo()->undo();
+        QCOMPARE(value("treble"), 5.0);
+
+        // The wheel over a handle: 0.2 a notch (the knob's), a fifth of that with Shift; notches close
+        // together are one undo step. Away from the handles it goes on (to the view).
+        steps = undo()->index();
+        const QPointF b = s.tone->handlePos(kBass);
+        QVERIFY(wheelOver(s.tone, b, 1));
+        QVERIFY(wheelOver(s.tone, b, 1));
+        QVERIFY2(std::abs(value("bass") - 5.4) < 1e-9, qPrintable(QString::number(value("bass"))));
+        QVERIFY(wheelOver(s.tone, b, -1, Qt::ShiftModifier));
+        QVERIFY2(std::abs(value("bass") - 5.36) < 1e-9, qPrintable(QString::number(value("bass"))));
+        QCOMPARE(undo()->index(), steps + 1);
+        const QPointF away(s.tone->xOf(100.0) + 30.0, s.tone->height() / 2);
+        QVERIFY(!wheelOver(s.tone, away, 1));
+        QVERIFY(std::abs(value("bass") - 5.36) < 1e-9);
+        undo()->undo();
+        QCOMPARE(value("bass"), 5.0);
+
+        // Its parameter's automation shows on the handle as on the knob: the red dot, grey once
+        // overridden; its menu is the knob's.
+        const QString key = automation::deviceKey(s.device, QStringLiteral("bass"));
+        QCOMPARE(s.tone->handleAutomation(kBass), QString());
+        editor()->setEnvelope(s.track, key, {{0.0, 0.5, 0.0}, {16.0, 0.5, 0.0}});
+        QCOMPARE(s.tone->handleAutomation(kBass), QStringLiteral("on"));
+        QCOMPARE(knobOf(s.view, QStringLiteral("bass"))->automation(), QStringLiteral("on"));
+        QCOMPARE(s.tone->handleAutomation(kMiddle), QString());
+        QTest::qWait(30);
+        save(grab(), QStringLiteral("amp-handle-automated.png"));
+        bridge()->overrideAutomation(s.track, key);
+        QCOMPARE(s.tone->handleAutomation(kBass), QStringLiteral("off"));
+        auto* menu = qvariant_cast<QObject*>(s.view->property("handleMenu"));
+        QVERIFY(menu);
+        QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier, scenePoint(s.tone, s.tone->handlePos(kBass)));
+        QTRY_VERIFY(menu->property("visible").toBool());
+        QCOMPARE(menuTexts(menu), (QStringList{"Show Automation", "Delete Automation", "Re-Enable Automation"}));
+        QMetaObject::invokeMethod(menu, "close");
+        QTRY_VERIFY(!menu->property("visible").toBool());
+        bridge()->reEnableAutomation(s.track);
+        QCOMPARE(s.tone->handleAutomation(kBass), QStringLiteral("on"));
+        editor()->clearEnvelope(s.track, key);
+        QCOMPARE(s.tone->handleAutomation(kBass), QString());
+
+        // A double-click away from the handles: neither press is the tone graph's, so the frame
+        // under it has both and its double-click (Ctrl folds the device). On a handle it takes the
+        // second press, its double-click following (Middle back to 5).
+        ulong at = ulong(QTest::lastMouseTimestamp) + 5000;
+        QVERIFY(!sendTo(s.tone, QEvent::MouseButtonPress, away, Qt::LeftButton, Qt::LeftButton, at));
+        sendTo(s.tone, QEvent::MouseButtonRelease, away, Qt::LeftButton, Qt::NoButton, at + 40);
+        QVERIFY(!sendTo(s.tone, QEvent::MouseButtonPress, away, Qt::LeftButton, Qt::LeftButton, at + 80));
+        QVERIFY(!sendTo(s.tone, QEvent::MouseButtonDblClick, away, Qt::LeftButton, Qt::LeftButton, at + 80));
+        sendTo(s.tone, QEvent::MouseButtonRelease, away, Qt::LeftButton, Qt::NoButton, at + 120);
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("middle"), 2.0);
+        const QPointF m = s.tone->handlePos(kMiddle);
+        at += 5000;
+        QVERIFY(sendTo(s.tone, QEvent::MouseButtonPress, m, Qt::LeftButton, Qt::LeftButton, at));
+        sendTo(s.tone, QEvent::MouseButtonRelease, m, Qt::LeftButton, Qt::NoButton, at + 40);
+        QVERIFY(sendTo(s.tone, QEvent::MouseButtonPress, m, Qt::LeftButton, Qt::LeftButton, at + 80));
+        QVERIFY(sendTo(s.tone, QEvent::MouseButtonDblClick, m, Qt::LeftButton, Qt::LeftButton, at + 80));
+        sendTo(s.tone, QEvent::MouseButtonRelease, m, Qt::LeftButton, Qt::NoButton, at + 120);
+        QTest::lastMouseTimestamp = int(at + 2000);
+        QCOMPARE(value("middle"), 5.0);
     }
 
     // --- The transfer curve is the sound ------------------------------------------------------------
@@ -530,9 +674,10 @@ private Q_SLOTS:
                  qPrintable(QStringLiteral("%1 %2 %3").arg(s.panel->glowTarget(0)).arg(s.panel->glowTarget(1))
                                 .arg(s.panel->glowTarget(2))));
         QVERIFY(s.panel->glowTarget(2) > 0.9);
-        // The meter: the output's peak.
+        // The meter: the output's peak now (a read counts its last 50 ms: what came before is history).
         double peak = 0.0;
-        for (const float v : out) peak = std::max(peak, double(std::abs(v)));
+        for (size_t i = out.size() - size_t(2 * kSampleRate / 20); i < out.size(); ++i)
+            peak = std::max(peak, double(std::abs(out[i])));
         QVERIFY2(std::abs(s.panel->outputLevel() - dbOf(peak)) < 0.5,
                  qPrintable(QStringLiteral("%1 %2").arg(s.panel->outputLevel()).arg(dbOf(peak))));
         // Playing on, the lamp rises with the output and V3 glows nearly full.
@@ -558,6 +703,109 @@ private Q_SLOTS:
             QVERIFY2(s.panel->glow(i) <= 0.2, qPrintable(QString::number(s.panel->glow(i))));
         QVERIFY(s.panel->lamp() < 0.5);
         QVERIFY(s.drive->inputLevel() < -25.0);  // (the dots fall back 18 dB a second)
+    }
+
+    // As the supply sags, the drive curve's shoulder is made for the sag (the power stage driven
+    // less), the lamp dims and the power tube shows it.
+    void sagShows() {
+        const Shown s = showAmp(tone(220.0, kSampleRate, 0.25));
+        QVERIFY(s.panel && s.drive);
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), 6.0);  // Bass
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("volume"), 10.0);
+        refreshDisplays();
+        play(0.0, 0.5, 24, 16);
+        QVERIFY2(s.panel->sagDb() > 1.0, qPrintable(QString::number(s.panel->sagDb())));
+        // The curve as drawn is made for the sag as eased (within its step of 0.05 dB).
+        QVERIFY2(std::abs(s.drive->sagDb() - s.panel->sagDb()) < 0.1,
+                 qPrintable(QStringLiteral("%1 %2").arg(s.drive->sagDb()).arg(s.panel->sagDb())));
+        const double rate = bridge()->sampleRate();
+        const std::vector<QPointF>& curve = s.drive->curve();
+        QVERIFY(curve.size() >= 100);
+        for (size_t i = 0; i < curve.size(); i += 10)
+            QCOMPARE(curve[i].y(), ampTransfer(6, 5, 5, 5, 5, 5, 10, s.drive->sagDb(), rate, {curve[i].x()})[0]);
+        // Its shoulder lower than with no sag; the plot's scale is the one with none.
+        QList<double> xs;
+        for (const QPointF& point : curve)
+            xs.append(point.x());
+        const QList<double> rested = ampTransfer(6, 5, 5, 5, 5, 5, 10, 0.0, rate, xs);
+        double lower = 0.0;
+        for (size_t i = 0; i < curve.size(); ++i)
+            lower = std::max(lower, std::abs(rested[qsizetype(i)]) - std::abs(curve[i].y()));
+        QVERIFY2(lower > 0.03 * s.drive->outputRange(),
+                 qPrintable(QStringLiteral("%1 of %2").arg(lower).arg(s.drive->outputRange())));
+        const double reach = std::max(rested.back(), -rested.front());
+        QVERIFY(std::abs(s.drive->outputRange() * AmpDriveGraph::kReach - reach) < 1e-9);
+        // The lamp dimmer than the same output would light it with the supply holding up.
+        const double holding = AmpPanel::lampFor(s.panel->outputLevel(), 0.0);
+        QVERIFY2(s.panel->lamp() < 0.95 * holding,
+                 qPrintable(QStringLiteral("%1 %2").arg(s.panel->lamp()).arg(holding)));
+    }
+
+    // An editor opened on an amp that isn't Clean shows its model at once: no turn of colour from
+    // Clean's, no curve sweeping up from one with every dial at 0.
+    void opensOnItsModel() {
+        const QString track = audioTrackWith(tone(220.0, kSampleRate / 2, 0.25), QStringLiteral("tone"), 0.5);
+        QVERIFY(!track.isEmpty());
+        const QString device = editor()->addDevice(track, QStringLiteral("amp"));
+        editor()->setDeviceParam(track, device, QStringLiteral("type"), 4.0);  // Lead
+        editor()->setDeviceParam(track, device, QStringLiteral("bass"), 7.0);
+        QQuickItem* view = show(QStringLiteral("amp"), track, device);
+        QVERIFY(view);
+        auto* panel = find<AmpPanel>(view, QStringLiteral("ampPanel"));
+        auto* toneGraph = find<AmpToneGraph>(view, QStringLiteral("ampToneGraph"));
+        auto* drive = find<AmpDriveGraph>(view, QStringLiteral("ampDriveGraph"));
+        QVERIFY(panel && toneGraph && drive);
+        QCOMPARE(panel->model(), 4);
+        QCOMPARE(panel->modelColor(), ampModelColor(4));
+        QVERIFY(!toneGraph->morphing());
+        QCOMPARE(toneGraph->shownDb(), toneGraph->targetDb());
+        const double rate = bridge()->sampleRate();
+        const std::vector<double>& freqs = toneGraph->frequencies();
+        const auto at100 = size_t(std::lower_bound(freqs.begin(), freqs.end(), 100.0) - freqs.begin());
+        QCOMPARE(toneGraph->shownDb()[at100], ampToneResponseDb(4, 7, 5, 5, 5, rate, {100.0})[0]);
+        QCOMPARE(drive->curve().back().y(), ampTransfer(4, 5, 7, 5, 5, 5, 5, 0.0, rate, {1.0})[0]);
+        ticks(3);
+        QCOMPARE(panel->modelColor(), ampModelColor(4));  // (nothing turning)
+        QVERIFY(!toneGraph->morphing());
+        auto* underline = find<QQuickItem>(view, QStringLiteral("typeUnderline"));
+        QVERIFY(underline);
+        QCOMPARE(underline->property("color").value<QColor>(), ampModelColor(4));
+    }
+
+    // What came while the editor wasn't showing is history: its first look at the displays shows
+    // the level now, not the loudest of the backlog (seconds of it), held by the meters' ballistics.
+    void backlogIsHistory() {
+        // A Lead played loud for a second, then quiet (-50.5 dBFS): rendered before the editor shows.
+        std::vector<float> signal = tone(220.0, kSampleRate, 0.9);
+        const std::vector<float> quiet = tone(220.0, kSampleRate * 3 / 2, 0.003);
+        signal.insert(signal.end(), quiet.begin(), quiet.end());
+        const QString track = audioTrackWith(signal, QStringLiteral("tone"), double(signal.size()) / kSampleRate);
+        QVERIFY(!track.isEmpty());
+        const QString device = editor()->addDevice(track, QStringLiteral("amp"));
+        editor()->setDeviceParam(track, device, QStringLiteral("type"), 4.0);
+        // (Once the engine plays the clip through the amp: its source and the device load as they will.)
+        const auto playsLead = [&] {
+            double most = 0.0;
+            for (const float v : engine_->renderOffline(0.0, kSampleRate / 20))
+                most = std::max(most, double(std::abs(v)));
+            return bridge()->engineDeviceId(track, device).has_value() && most > 0.1 && most < 0.5;  // (Lead's level)
+        };
+        QTRY_VERIFY(playsLead());
+        const std::vector<float> out = engine_->renderOffline(0.0, int(signal.size()));
+        QQuickItem* view = show(QStringLiteral("amp"), track, device);
+        QVERIFY(view);
+        auto* panel = find<AmpPanel>(view, QStringLiteral("ampPanel"));
+        auto* drive = find<AmpDriveGraph>(view, QStringLiteral("ampDriveGraph"));
+        QVERIFY(panel && drive);
+        refreshDisplays();
+        QVERIFY2(std::abs(drive->inputLevel() - dbOf(0.003)) < 1.0, qPrintable(QString::number(drive->inputLevel())));
+        double peak = 0.0;  // the output's over the render's last 50 ms
+        for (size_t i = out.size() - size_t(2 * kSampleRate / 20); i < out.size(); ++i)
+            peak = std::max(peak, double(std::abs(out[i])));
+        QVERIFY2(std::abs(panel->outputLevel() - dbOf(peak)) < 1.0,
+                 qPrintable(QStringLiteral("%1 %2").arg(panel->outputLevel()).arg(dbOf(peak))));
+        for (int i = 0; i < 3; ++i)  // (the loud second drove every preamp tube to full)
+            QVERIFY2(panel->glowTarget(i) < 0.5, qPrintable(QString::number(panel->glowTarget(i))));
     }
 
     // A face that has settled draws nothing more until something changes.

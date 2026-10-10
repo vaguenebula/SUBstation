@@ -19,14 +19,16 @@ constexpr double kColorSeconds = 0.08;  // a new model's colour
 constexpr double kMeterFallDbPerSecond = 24.0;
 constexpr double kMeterHoldSeconds = 1.0;
 
-// The display's loudest value (dB, floored), or nothing.
-bool loudest(const std::vector<float>& values, double& into) {
+// The loudest of a display's last `keep` values (dB, floored), or nothing. Only the
+// last: a read can hand over a long backlog (what came while the editor wasn't
+// showing), which is history, not the level now.
+bool loudest(const std::vector<float>& values, size_t keep, double& into) {
     if (values.empty())
         return false;
     double most = AmpPanel::kFloorDb;
-    for (const float v : values) {
-        if (std::isfinite(v))
-            most = std::max(most, double(v));
+    for (size_t i = values.size() - std::min(keep, values.size()); i < values.size(); ++i) {
+        if (std::isfinite(values[i]))
+            most = std::max(most, double(values[i]));
     }
     into = most;
     return true;
@@ -110,6 +112,10 @@ double AmpPanel::lampFor(double outputDb, double sagDb) {
 }
 
 void AmpPanel::sync() {
+    if (device() == nullptr) {  // (not yet, as it is being made: the first sync with it snaps)
+        update();
+        return;
+    }
     const int model = std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, 6);
     if (!synced_ || model != model_) {
         if (synced_) {  // the colour turns from what is drawn to the new model's
@@ -140,9 +146,11 @@ void AmpPanel::refreshDisplays() {
     bool read = false;
     static const QString kDrives[kTubes] = {QStringLiteral("drive1"), QStringLiteral("drive2"),
                                             QStringLiteral("drive3"), QStringLiteral("power")};
-    for (int i = 0; i < kTubes; ++i) read = loudest(readDisplay(kDrives[i]), driveDb_[size_t(i)]) || read;
+    const auto keep = size_t(std::ceil(std::max(kRecentSeconds, dt) * sampleRate() / kSamplesPerValue));
+    for (int i = 0; i < kTubes; ++i)
+        read = loudest(readDisplay(kDrives[i]), keep, driveDb_[size_t(i)]) || read;
     read = latest(readDisplay(QStringLiteral("sag")), sagRead_) || read;
-    read = loudest(readDisplay(QStringLiteral("output")), outputDb_) || read;
+    read = loudest(readDisplay(QStringLiteral("output")), keep, outputDb_) || read;
     if (read) {
         lastRead_.restart();
     } else if (!lastRead_.isValid() || lastRead_.elapsed() > kQuietSeconds * 1000.0) {

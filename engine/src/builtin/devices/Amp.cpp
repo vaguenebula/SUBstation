@@ -7,21 +7,24 @@
 //
 // Each model is a voicing of one structure (builtin/AmpDesign.h): an input
 // high-pass and a bright shelf at the base rate; then, 4x oversampled, three
-// triode stages (V1, V2, the tone stack, V3), Presence, a power stage whose
-// supply sags under load, and the output transformer; then a DC blocker and
-// the model's output trim (level-matched at the defaults).
+// triode stages (V1, V2, the tone stack, V3), Presence, the power tubes' input
+// low-pass, a power stage whose supply sags under load, and the output
+// transformer; then a DC blocker and the model's output trim (level-matched at
+// the defaults).
 //
 // - Control-rate work happens per chunk of up to 16 samples (kChunk), on a grid
 //   counted from the meters' 256-sample windows so a window always ends where a
 //   chunk does. At each chunk's start the controls are worked out at its end:
-//   the dials glide (one-poles of 20 ms), and every gain, bias, offset and filter
+//   the dials glide (one-poles of 20 ms), and every gain, bias and filter
 //   coefficient (the one-poles', the tone stack's) ramps linearly across the
 //   chunk from where the last one ended (per oversampled sample in the
 //   oversampled section), so nothing steps: a coefficient's step would be a step
 //   in the signal's slope, which a sine played clean shows. While nothing moves
 //   the chunk reuses the last one's controls and runs loops without ramps.
 // - A change of model morphs (50 ms, an S-curve) from the voicing as it is to
-//   the new one: every number of the voicing moves continuously.
+//   the new one: every number of the voicing moves continuously, and the trim
+//   keeps the blend in between as loud as the two models (amp::Transfer works
+//   their levels out), where it would swell by up to 6 dB.
 // - Mono runs one amp on the sum (half the work); Dual one per channel. The
 //   switch crossfades over 20 ms; the second amp starts from rest, its input
 //   fading in over 5 ms, and stops once Mono is back.
@@ -29,8 +32,10 @@
 //   oversampler's 36 and one for the stages' anti-aliasing), so at 0 the output
 //   is the input delayed, bit for bit.
 // - Every stage's anti-aliasing holds its bias at rest, and every recursive state
-//   is flushed when tiny after each slice, so silence rings out to exact zeros.
-//   An amp whose input has been silent for a while and whose states are all at
+//   is flushed when tiny at the chunk grid's points (the supply's envelope every
+//   sample), so silence rings out to exact zeros, and blocks of any size play
+//   alike, bit for bit. An amp whose input has been silent for a while, whose
+//   output has been exact zeros for a while too and whose states are all at
 //   rest sleeps (costs nothing, puts out the zeros it would) until its input
 //   sounds again. Its supply's sag recovers meanwhile, as it would awake; once
 //   it has, a woken amp plays as a freshly reset one.
@@ -63,10 +68,13 @@ constexpr double kFadeSeconds = 0.02;     // the Output switch's crossfade
 constexpr double kFadeInSeconds = 0.005;  // the second amp's input, as it starts
 constexpr double kMixSeconds = 0.02;      // Dry/Wet's ramp
 constexpr int kSleepFrames = 4096;        // silence in before an amp at rest may sleep
+constexpr int kQuietOut = 256;            // and out (well past what its down-sampler holds)
+constexpr int kLevelPoints = 64;          // a period's samples for the morph's levels (amp::Transfer)
+constexpr int kLevelSteps = 16;           // points of the morph its levels are worked out at
 constexpr float kFloorDb = -90.f;
 // Below this the supply's sag leaves the power stage's gain at exactly 1.0f
-// (1 + sag env rounds to 1): flushed to 0 there, it changes nothing that plays,
-// and it gets there seconds sooner than 1e-20 would over a 300 ms release.
+// (1 + sag env rounds to 1): the envelope is flushed to 0 there, every sample,
+// and gets there seconds sooner than 1e-20 would over a 300 ms release.
 constexpr float kSagFlush = 1e-8f;
 
 static_assert(kMeterSamples % kChunk == 0);
@@ -84,13 +92,15 @@ struct StageControls {
 // Everything a chunk of both amps needs, at the chunk's end. While anything
 // moves, each value ramps across the chunk from the last chunk's.
 struct ChunkControls {
-    int frames = 0;       // base-rate samples in the chunk (≤ kChunk)
-    bool moving = false;  // anything differs from the last chunk's: run the ramped loops
+    int frames = 0;        // base-rate samples in the chunk (≤ kChunk)
+    bool moving = false;   // anything differs from the last chunk's: run the ramped loops
+    bool cellEnd = false;  // it ends one of the grid's cells (not cut short by a block's end): flush there
     float inputHighpass = 0.f, bright = 0.f, brightGain = 1.f;  // base rate
     StageControls stage[3];
     amp::ToneCoefficients tone;
     double makeup = 1.0;                       // the stack's make-up gain (linear)
     float presence = 0.f, presenceGain = 1.f;  // the shelf's coefficient and gain
+    float grid = 0.f;                          // the power tubes' input low-pass
     // The power stage (its drive without the sag), and the sag's amount and its
     // attack and release (per base-rate sample).
     double drive = 1.0, powerBias = 0.0, powerOffset = 0.0, powerGOut = 1.0;
@@ -117,7 +127,7 @@ struct Path {
     dsp::OnePole inputHighpass, bright;  // base rate
     StageState stage[3];
     amp::ToneState tone;
-    dsp::OnePole presence, transformer;
+    dsp::OnePole presence, grid, transformer;
     amp::Adaa power;
     float fifo[2] = {};  // two oversampled samples: with the stages' half samples, one base-rate sample
     float env = 0.f, sagGain = 1.f;
@@ -134,6 +144,7 @@ struct Path {
         }
         tone.reset();
         presence.reset();
+        grid.reset();
         transformer.reset();
         power.reset();
         fifo[0] = fifo[1] = 0.f;
@@ -146,9 +157,13 @@ struct Path {
         for (int k = 0; k < 3; ++k) stage[k].adaa.prime(c.stage[k].bias);
         power.prime(c.powerBias);
     }
-    void flush(const ChunkControls& c) noexcept {
+    // Tiny states to zero (at the grid's points, so blocks of any size flush alike):
+    // the base-rate filters', and the oversampled section's.
+    void flushInput() noexcept {
         inputHighpass.z = flushTiny(inputHighpass.z);
         bright.z = flushTiny(bright.z);
+    }
+    void flushStages(const ChunkControls& c) noexcept {
         for (int k = 0; k < 3; ++k) {
             StageState& s = stage[k];
             s.miller.z = flushTiny(s.miller.z);
@@ -157,19 +172,18 @@ struct Path {
         }
         tone.flush();
         presence.z = flushTiny(presence.z);
+        grid.z = flushTiny(grid.z);
         transformer.z = flushTiny(transformer.z);
         if (std::abs(power.x0 - c.powerBias) < 1e-20) power.prime(c.powerBias);
         fifo[0] = flushTiny(fifo[0]);
         fifo[1] = flushTiny(fifo[1]);
-        if (env < kSagFlush) env = 0.f;
-        sagGain = 1.f / (1.f + c.sag * env);
     }
-    // Every state the signal passes through at rest (after flush()): silence in
+    // Every state the signal passes through at rest (after the flushes): silence in
     // puts out exact zeros. (The supply's sag may still be recovering: it only
     // scales what comes, and goes on recovering while the amp sleeps.)
     bool atRest(const ChunkControls& c) const noexcept {
-        if (inputHighpass.z != 0.f || bright.z != 0.f || !tone.atRest() || presence.z != 0.f || transformer.z != 0.f ||
-            fifo[0] != 0.f || fifo[1] != 0.f || power.x0 != c.powerBias)
+        if (inputHighpass.z != 0.f || bright.z != 0.f || !tone.atRest() || presence.z != 0.f || grid.z != 0.f ||
+            transformer.z != 0.f || fifo[0] != 0.f || fifo[1] != 0.f || power.x0 != c.powerBias)
             return false;
         for (int k = 0; k < 3; ++k) {
             const StageState& s = stage[k];
@@ -184,7 +198,7 @@ struct Path {
 template <bool Moving>
 struct StageRun {
     double gIn, gOut, bias, offset;
-    double dIn = 0.0, dOut = 0.0, dBias = 0.0, dOffset = 0.0;
+    double dIn = 0.0, dOut = 0.0, dBias = 0.0;
     float cm, cc, dcm = 0.f, dcc = 0.f, zm, zc;
     amp::Adaa adaa;
     double peak = 0.0;
@@ -197,13 +211,11 @@ struct StageRun {
             dIn = (to.gIn - from.gIn) * step;
             dOut = (to.gOut - from.gOut) * step;
             dBias = (to.bias - from.bias) * step;
-            dOffset = (to.offset - from.offset) * step;
             dcm = (to.miller - from.miller) / static_cast<float>(n);
             dcc = (to.coupling - from.coupling) / static_cast<float>(n);
             gIn = from.gIn;
             gOut = from.gOut;
             bias = from.bias;
-            offset = from.offset;
             cm = from.miller;
             cc = from.coupling;
         }
@@ -213,7 +225,10 @@ struct StageRun {
             gIn += dIn;
             gOut += dOut;
             bias += dBias;
-            offset += dOffset;
+            // The curve where the anti-aliasing averages it, half a step back as the bias
+            // moves (its rest value when it doesn't): a stage at rest stays at 0, where a
+            // ramped offset would leave steps of DC at the chunks' joins.
+            offset = amp::shape(bias - 0.5 * dBias);
             cm += dcm;
             cc += dcc;
         }
@@ -286,6 +301,9 @@ public:
         model_ = std::clamp(choiceIndex(Type), 0, amp::kModels - 1);
         voice_ = from_ = to_ = amp::voicing(model_);
         morph_ = 1.0;
+        levelComp_ = 0.0;
+        levelKnown_ = -1;
+        std::fill(std::begin(recentIn_), std::end(recentIn_), 0.f);
         last_ = controlsFor(voice_);
         resetPaths();
         mix_.snapTo(targetMix());
@@ -319,7 +337,9 @@ private:
         int chunks = 0;
         for (int at = 0, phase = meterCount_; at < frames;) {
             const int len = std::min(kChunk - phase % kChunk, frames - at);
-            controls_[static_cast<size_t>(chunks++)] = nextControls(len);
+            ChunkControls& c = controls_[static_cast<size_t>(chunks++)];
+            c = nextControls(len);
+            c.cellEnd = (phase + len) % kChunk == 0;
             at += len;
             phase = (phase + len) % kMeterSamples;
         }
@@ -328,11 +348,10 @@ private:
         mixOut(ch, n, frames, chunks, dualPath, fading);
         for (int p = 0; p < (dualPath ? 2 : 1); ++p) {
             if (asleep_[p]) continue;
-            path_[p].flush(last_);
-            if (quietFrames_[p] >= kSleepFrames && path_[p].atRest(last_)) {
-                // Its down-sampler and DC blocker may still hold the last tiny values
-                // that came out before the states reached zero: dropping them changes
-                // nothing measurable.
+            // Its output exact zeros for a while too: its down-sampler and DC blocker
+            // (whose states aren't ours to read) hold nothing more, so sleeping changes
+            // nothing at all, wherever a block ends. (Their reset is for certainty.)
+            if (quietFrames_[p] >= kSleepFrames && quietOut_[p] >= kQuietOut && path_[p].atRest(last_)) {
                 asleep_[p] = true;
                 path_[p].oversampler.reset();
                 path_[p].dc.reset();
@@ -349,6 +368,7 @@ private:
             from_ = voice_;
             to_ = amp::voicing(model);
             morph_ = 0.0;
+            levelKnown_ = -1;
         }
         if (n == 2 && fade_ < 0) {  // a change during a fade starts when it is done
             const Mode want = wantedMode();
@@ -368,6 +388,7 @@ private:
         path_[p].prime(last_);
         asleep_[p] = false;
         quietFrames_[p] = 0;
+        quietOut_[p] = 0;
     }
 
     void resetPaths() noexcept {
@@ -406,8 +427,49 @@ private:
             voicingControls(voice_, c);
         }
         dialControls(voice_, c, morphing || toneMoves);
+        if (morphing) c.trim *= static_cast<float>(std::pow(10.0, morphLevel() / 20.0));
         last_ = c;
         return c;
+    }
+
+    // How much the blend in a morph is to be turned down (dB, on its trim) to
+    // sound as loud as the morph's ends put it, their levels in between: a
+    // blend of two voicings clips where neither does, so it can come out up to
+    // 6 dB louder than both. The levels are amp::Transfer's (its RMS for a tone
+    // at the input's recent peak), worked out at kLevelSteps + 1 points of the
+    // morph as it gets near them (one at a time; the first chunk works out
+    // four) and joined by a smooth curve (Catmull-Rom: straight lines would
+    // bend at the points, which the sound would show).
+    double morphLevel() noexcept {
+        if (morph_ >= 1.0) return levelComp_ = 0.0;
+        const auto level = [&](const amp::Voicing& v) {
+            const amp::Transfer t(v, dial_[0], dial_[1], dial_[2], dial_[3], dial_[4], dial_[5], sampleRate_,
+                                  kLevelPoints);
+            return 20.0 * std::log10(std::max(t.rms(levelInput_, 0.0), 1e-12));
+        };
+        if (levelKnown_ < 0) {  // a morph starting: from the level as it is (in a morph, the one in between)
+            double peak = meterIn_;
+            for (const float p : recentIn_) peak = std::max(peak, double(p));
+            levelInput_ = std::clamp(peak, 1e-3, 1.0);
+            levelFrom_ = level(from_) + levelComp_;
+            levelTo_ = level(to_);
+            levelSteps_[0] = levelComp_;
+            levelKnown_ = 0;
+        }
+        const double at = morph_ * kLevelSteps;
+        const int step = std::min(static_cast<int>(at), kLevelSteps - 1);
+        while (levelKnown_ < std::min(step + 2, kLevelSteps)) {  // the points the curve needs here
+            const int k = ++levelKnown_;
+            const double s = sCurve(static_cast<double>(k) / kLevelSteps);
+            levelSteps_[k] =
+                k == kLevelSteps ? 0.0 : (1.0 - s) * levelFrom_ + s * levelTo_ - level(amp::blend(from_, to_, s));
+        }
+        // Mirrored past the ends: the morph's S-curve starts and ends still, so does the level.
+        const auto point = [&](int k) { return levelSteps_[k < 0 ? -k : (k > kLevelSteps ? 2 * kLevelSteps - k : k)]; };
+        const double p0 = point(step - 1), p1 = point(step), p2 = point(step + 1), p3 = point(step + 2);
+        const double t = at - step;
+        const double a = p2 - p0, b = 2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3, c = 3.0 * (p1 - p2) + p3 - p0;
+        return levelComp_ = p1 + 0.5 * t * (a + t * (b + t * c));
     }
 
     ChunkControls controlsFor(const amp::Voicing& v) const noexcept {
@@ -434,6 +496,7 @@ private:
         }
         c.makeup = std::pow(10.0, v.toneMakeupDb / 20.0);
         c.presence = dsp::onePoleCutoff(v.presenceHz, overRate);
+        c.grid = dsp::onePoleCutoff(amp::kGridHz, overRate);
         c.powerBias = v.powerBias;
         c.powerOffset = amp::restValue(v.powerBias);
         c.powerGOut = 1.0 / amp::shapeSlope(v.powerBias);
@@ -514,8 +577,8 @@ private:
                 std::fill_n(wet_[p].data(), frames, 0.f);
                 for (int k = 0; k < chunks; ++k) {  // the sag recovers over its release, as it would awake
                     const ChunkControls& c = controls_[static_cast<size_t>(k)];
-                    if (path.env > 0.f) {
-                        path.env *= static_cast<float>(std::pow(1.0 - c.sagRelease, c.frames));
+                    for (int i = 0; i < c.frames && path.env > 0.f; ++i) {  // as powerChunk() does in silence
+                        path.env += c.sagRelease * (0.f - path.env);
                         if (path.env < kSagFlush) path.env = 0.f;
                     }
                     meters_[p][static_cast<size_t>(k)] = ChunkMeters{};
@@ -530,6 +593,10 @@ private:
             path.sagGain = 1.f / (1.f + start_.sag * path.env);
         }
         runPath(path, in, wet_[p].data(), meters_[p].data(), frames, chunks);
+        const float* wet = wet_[p].data();
+        last = frames - 1;
+        while (last >= 0 && wet[last] == 0.f) --last;
+        quietOut_[p] = last < 0 ? std::min(kQuietOut, quietOut_[p] + frames) : frames - 1 - last;
     }
 
     void runPath(Path& p, const float* in, float* wet, ChunkMeters* meters, int frames, int chunks) noexcept {
@@ -558,6 +625,7 @@ private:
             }
             p.inputHighpass = input;
             p.bright = bright;
+            if (c.cellEnd) p.flushInput();
             at += c.frames;
             from = &c;
         }
@@ -572,6 +640,7 @@ private:
             } else {
                 stagesChunk<false>(p, *from, c, x, kOs * c.frames, meters[k]);
             }
+            if (c.cellEnd) p.flushStages(c);
             at += c.frames;
             from = &c;
         }
@@ -647,10 +716,10 @@ private:
     static float powerChunk(Path& p, const ChunkControls& from, const ChunkControls& c, float* x, int n) noexcept {
         const float attack = c.sagAttack, release = c.sagRelease;
         float sag = c.sag, dSag = 0.f;  // per base-rate sample
-        float cp = c.presence, cx = c.transformer, dcp = 0.f, dcx = 0.f;
+        float cp = c.presence, cg = c.grid, cx = c.transformer, dcp = 0.f, dcg = 0.f, dcx = 0.f;
         float shelf = c.presenceGain - 1.f, dShelf = 0.f;
         double drive = c.drive, bias = c.powerBias, offset = c.powerOffset, gOut = c.powerGOut;
-        double dDrive = 0.0, dBias = 0.0, dOffset = 0.0, dGOut = 0.0;
+        double dDrive = 0.0, dBias = 0.0, dGOut = 0.0;
         if constexpr (Moving) {
             const double step = 1.0 / n;
             shelf = from.presenceGain - 1.f;
@@ -658,19 +727,19 @@ private:
             sag = from.sag;
             dSag = (c.sag - from.sag) * static_cast<float>(kOs) / static_cast<float>(n);
             cp = from.presence;
+            cg = from.grid;
             cx = from.transformer;
             dcp = (c.presence - from.presence) / static_cast<float>(n);
+            dcg = (c.grid - from.grid) / static_cast<float>(n);
             dcx = (c.transformer - from.transformer) / static_cast<float>(n);
             dDrive = (c.drive - from.drive) * step;
             dBias = (c.powerBias - from.powerBias) * step;
-            dOffset = (c.powerOffset - from.powerOffset) * step;
             dGOut = (c.powerGOut - from.powerGOut) * step;
             drive = from.drive;
             bias = from.powerBias;
-            offset = from.powerOffset;
             gOut = from.powerGOut;
         }
-        float zp = p.presence.z, zx = p.transformer.z, f0 = p.fifo[0], f1 = p.fifo[1];
+        float zp = p.presence.z, zg = p.grid.z, zx = p.transformer.z, f0 = p.fifo[0], f1 = p.fifo[1];
         float env = p.env, sagGain = p.sagGain;
         amp::Adaa adaa = p.power;
         double peak = 0.0;
@@ -680,16 +749,18 @@ private:
                 if constexpr (Moving) {
                     shelf += dShelf;
                     cp += dcp;
+                    cg += dcg;
                     cx += dcx;
                     drive += dDrive;
                     bias += dBias;
-                    offset += dOffset;
+                    offset = amp::shape(bias - 0.5 * dBias);  // (as StageRun's)
                     gOut += dGOut;
                 }
                 const float v = x[j];
                 zp = v + cp * (zp - v);
                 const float s = v + shelf * (v - zp);  // Presence: a high shelf
-                const double q = static_cast<double>(s) * (drive * sagGain);
+                zg = s + cg * (zg - s);                // the power tubes' input (Miller) low-pass
+                const double q = static_cast<double>(zg) * (drive * sagGain);
                 peak = std::max(peak, std::abs(q));
                 const double y = adaa.process(q + bias) - offset;
                 most = std::max(most, static_cast<float>(std::abs(y)));
@@ -700,10 +771,12 @@ private:
                 f0 = zx;
             }
             env += (most > env ? attack : release) * (most - env);
+            if (env < kSagFlush) env = 0.f;  // (every sample, so blocks of any size play alike)
             if constexpr (Moving) sag += dSag;
             sagGain = 1.f / (1.f + sag * env);
         }
         p.presence.z = zp;
+        p.grid.z = zg;
         p.transformer.z = zx;
         p.fifo[0] = f0;
         p.fifo[1] = f1;
@@ -767,6 +840,8 @@ private:
         publish(PowerDrive, toDb(meterDrive_[3]));
         publish(SagDisplay, 20.f * std::log10(1.f + meterSag_));
         publish(OutputLevel, toDb(meterOut_));
+        std::rotate(std::begin(recentIn_), std::begin(recentIn_) + 1, std::end(recentIn_));
+        recentIn_[3] = meterIn_;
         meterCount_ = 0;
         clearMeters();
     }
@@ -814,6 +889,12 @@ private:
     int model_ = 0;
     amp::Voicing voice_ = amp::voicing(0), from_ = voice_, to_ = voice_;  // the morph
     double morph_ = 1.0;                                                  // 1: done
+    // The morph's levels (morphLevel()): the input's peak they are for, the ends', its points and how many are
+    // known (-1: none yet), and the compensation now.
+    double levelInput_ = 1e-3, levelFrom_ = 0.0, levelTo_ = 0.0, levelComp_ = 0.0;
+    double levelSteps_[kLevelSteps + 1] = {};
+    int levelKnown_ = -1;
+    float recentIn_[4] = {};  // the input's peak in the last four display windows
 
     Mode mode_ = Mode::Mono;
     int fade_ = -1;  // samples into the Output switch's fade (-1: none)
@@ -821,6 +902,7 @@ private:
     SmoothedValue mix_;
 
     int quietFrames_[2] = {};  // per amp: frames since its input was last non-zero (up to kSleepFrames)
+    int quietOut_[2] = {};     // and since its output was (up to kQuietOut)
     bool asleep_[2] = {};
 
     int meterCount_ = 0;

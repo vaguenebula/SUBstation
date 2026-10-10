@@ -11,7 +11,8 @@ import SUBstation
 // peaks riding on it (AmpDriveGraph), the tone stack's curve with a handle per
 // tone control to drag (AmpToneGraph), and the output meter. Every control shows
 // its parameter as it is now (its automation's value while that plays), sets it
-// undoably, touches it when pressed, and right-click gives its menu.
+// undoably, touches it when pressed, and right-click gives its menu (the tone
+// handles' too: handleMenu).
 Item {
     id: editor
 
@@ -21,6 +22,7 @@ Item {
     readonly property alias driveGraph: driveGraph
     readonly property alias toneGraph: toneGraph
     readonly property alias underline: underline
+    readonly property alias handleMenu: handleMenu
 
     readonly property int leftWidth: 140   // the tubes over the drive graph
     readonly property int plateWidth: 368  // the model buttons and the knobs over the tone graph
@@ -79,17 +81,31 @@ Item {
         ToolTip.delay: 700
         ToolTip.text: qsTr("The three preamp stages and the power tube glow as hard as each is driven; the power tube turns blue as the supply sags")
     }
-    Item {  // the lamp's and the meter's
-        x: editor.rightX
-        y: editor.bottomY
-        width: editor.width - x - 8
-        height: editor.height - y - 6
+    Item {  // the lamp's
+        objectName: "lampTip"
+        x: panel.jewelRect.x
+        y: panel.jewelRect.y
+        width: panel.jewelRect.width
+        height: panel.jewelRect.height
         HoverHandler {
             id: lampHover
         }
         ToolTip.visible: lampHover.hovered
         ToolTip.delay: 700
-        ToolTip.text: qsTr("The pilot lamp brightens with the output and dims as the supply sags. Right: the output level")
+        ToolTip.text: qsTr("The pilot lamp brightens with the output and dims as the supply sags")
+    }
+    Item {  // the meter's, its whole height
+        objectName: "meterTip"
+        x: panel.meterRect.x
+        y: panel.meterRect.y
+        width: panel.meterRect.width
+        height: panel.meterRect.height
+        HoverHandler {
+            id: meterHover
+        }
+        ToolTip.visible: meterHover.hovered
+        ToolTip.delay: 700
+        ToolTip.text: qsTr("The output level, after Dry/Wet")
     }
 
     // The models, Ableton's row of buttons.
@@ -255,6 +271,15 @@ Item {
         }
         ToolTip.visible: toneHover.hovered && !toneHover.point.pressedButtons && toneGraph.dragging < 0
         ToolTip.delay: 700
-        ToolTip.text: qsTr("The tone stack and Presence as they sound. Drag B, M, T or P up and down to set them; double-click one to put it back to 5")
+        ToolTip.text: qsTr("The tone stack and Presence as they sound. Drag B, M, T or P up and down, or turn the wheel over one, to set it; double-click one to put it back to 5; right-click one for its menu")
+
+        onHandleMenuRequested: id => {
+            handleMenu.param = p.get(id)
+            handleMenu.show()
+        }
+    }
+    // A tone handle's parameter's menu, as its knob's.
+    ParamMenu {
+        id: handleMenu
     }
 }

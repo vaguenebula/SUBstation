@@ -1,21 +1,31 @@
 #pragma once
 
-// The Amp's transfer curve: what comes out (up) for each input sample (across,
-// -1..1: 0 dBFS at the edges) with the settings as they are, for a 1 kHz tone
-// (sub::app::ampTransfer, the engine's own stages and voicing, so the curve is
-// the sound). Up is scaled to the curve's own reach (its largest output with no
-// sag), since the models are level-matched far below full scale: the shape
-// shows how hard and how lopsided it clips. A faint line is the clean gain (the
-// curve's slope at 0) carried on, so the bend away from it is the distortion.
+// The Amp's transfer curve: what comes out (up) for each level going in
+// (across, -1..1: 0 dBFS at the edges) with the settings as they are: for a
+// 1 kHz tone of peak x, the output's highest value at x and its lowest at -x
+// (sub::app::AmpTransferCurve: the engine's own stages, filters and voicing,
+// the tone played until it has settled, so the curve is the sound: a tone's
+// peaks land within 0.1 dB of it at the defaults, 0.6 dB with Gain, Presence
+// and Volume at 10).
+// Up is scaled to the curve's own reach (its largest output with no sag), since
+// the models are level-matched far below full scale: the shape shows how hard
+// and how lopsided it clips. A faint line is the clean gain (the curve's slope
+// at 0) carried on, so the bend away from it is the distortion.
 //
 // The input's peaks ride on it: two dots at +-the peak (display input, with a
 // meter's ballistics: up at once, falling 18 dB/s) and a short trail of where
 // they were, over the part of the curve the signal uses, which glows. As the
 // supply sags (display sag), the power stage's drive drops and the curve's
-// shoulder breathes down with it. No mouse.
+// shoulder breathes down with it (made again from the preamp's part kept, a
+// fraction of the work). A display read counts what came since the last tick
+// (at least its last kRecentSeconds): a backlog (what came while the editor
+// wasn't showing, seconds of it) is history. No mouse.
 
+#include "audio/AmpResponse.h"
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
+
+#include <QList>
 
 #include <QElapsedTimer>
 #include <QPointF>
@@ -39,6 +49,9 @@ public:
     static constexpr double kQuietSeconds = 0.3;  // with no display values this long, the dots fall
     static constexpr int kTrail = 8;              // ticks the trail remembers
     static constexpr double kReach = 0.86;        // the curve's largest output, of the half height
+    // What a display read counts: what came since the last tick (at most 0.1 s), and at least its last 50 ms.
+    static constexpr double kRecentSeconds = 0.05;
+    static constexpr int kSamplesPerValue = 256;  // the device's displays'
 
     explicit AmpDriveGraph(QQuickItem* parent = nullptr);
 
@@ -68,11 +81,15 @@ protected:
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
-    void updateCurve();
+    void updateCurve();              // for the settings (the preamp's part too)
+    void shapeCurve();               // for the sag as drawn
     double curveAt(double x) const;  // interpolated from curve_
+    size_t recentValues(double dt) const;  // a display read's last values that count (dt: since the last tick)
 
     int model_ = 0;
     double gain_ = 5.0, bass_ = 5.0, middle_ = 5.0, treble_ = 5.0, presence_ = 5.0, volume_ = 5.0;
+    sub::app::AmpTransferCurve transfer_;
+    QList<double> xs_;  // the curve's inputs
     std::vector<QPointF> curve_;
     double range_ = 1.0;   // output at the plot's top
     double slope_ = 1.0;   // the curve's slope at 0

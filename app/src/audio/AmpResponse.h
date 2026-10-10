@@ -1,9 +1,11 @@
 #pragma once
 // The Amp device's curves, as its editor draws them: worked out by the engine's
 // own design (engine/src/builtin/AmpDesign.h: the model's voicing, its tone
-// stack and the stages' curve), so what is drawn is what plays.
+// stack, its filters and the stages' curve), so what is drawn is what plays.
 
 #include <QList>
+
+#include <memory>
 
 namespace sub::app {
 
@@ -13,10 +15,36 @@ namespace sub::app {
 QList<double> ampToneResponseDb(int model, double bass, double middle, double treble, double presence,
                                 double sampleRate, const QList<double>& frequencies);
 
-// The Amp's static transfer for a 1 kHz tone: what comes out for each input
-// sample value of `xs` (1.0: 0 dBFS) with these settings and the power stage's
-// drive `sagDb` lower (the supply sagging).
+// The Amp's transfer for a 1 kHz tone (sub::amp::Transfer: the tone played
+// through the engine's stages and filters until it has settled): at each x of
+// `xs`, the output's highest value for a tone of peak x (1.0: 0 dBFS), or for
+// x < 0 its lowest for a tone of peak -x, with these settings and the power
+// stage's drive `sagDb` lower (the supply sagging).
 QList<double> ampTransfer(int model, double gain, double bass, double middle, double treble, double presence,
                           double volume, double sagDb, double sampleRate, const QList<double>& xs);
+
+// The same curve, made in two parts so that the sag moving alone costs a
+// fraction: the preamp's part for the settings and the xs once (prepare()),
+// then the power stage's for any sag (at()). at() gives what ampTransfer()
+// does, bit for bit.
+class AmpTransferCurve {
+public:
+    AmpTransferCurve();
+    ~AmpTransferCurve();
+    AmpTransferCurve(const AmpTransferCurve&) = delete;
+    AmpTransferCurve& operator=(const AmpTransferCurve&) = delete;
+
+    void prepare(int model, double gain, double bass, double middle, double treble, double presence, double volume,
+                 double sampleRate, const QList<double>& xs);
+    bool isEmpty() const { return !parts_; }
+    // The curve at each x prepared, with the power drive `sagDb` lower.
+    QList<double> at(double sagDb) const;
+    // Its slope through 0: what a small signal comes out as, over what goes in.
+    double smallSignalGain(double sagDb) const;
+
+private:
+    struct Parts;
+    std::unique_ptr<Parts> parts_;
+};
 
 }  // namespace sub::app

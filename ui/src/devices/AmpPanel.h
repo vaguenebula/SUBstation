@@ -15,8 +15,10 @@
 // A display tick that reads nothing (the engine hands its values over at its
 // own pace) keeps the last values, so nothing flickers with the block size;
 // after kQuietSeconds with nothing at all (the device off, the engine stopped)
-// everything cools. It takes no mouse: clicks go on to the controls over it and
-// to the frame.
+// everything cools. A read counts what came since the last tick (at least its
+// last kRecentSeconds): a backlog (what came while the editor wasn't showing,
+// seconds of it) is history. It takes no mouse: clicks go on to the controls
+// over it and to the frame.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
@@ -64,6 +66,9 @@ public:
     static constexpr int kTubes = 4;  // V1, V2, V3, P
     static constexpr double kIdleGlow = 0.12;  // a filament's glow with nothing through it
     static constexpr double kQuietSeconds = 0.3;  // with no display values this long, everything cools
+    // What a display read counts: what came since the last tick (at most 0.1 s), and at least its last 50 ms.
+    static constexpr double kRecentSeconds = 0.05;
+    static constexpr int kSamplesPerValue = 256;  // the device's displays'
     static constexpr double kFloorDb = -90.0;
     static constexpr double kMeterFloorDb = -60.0;
 
@@ -109,7 +114,7 @@ private:
 
     QRectF tubeRect_, jewelRect_, meterRect_;
     int model_ = 0;
-    bool synced_ = false;  // the first sync snaps to the model's colour
+    bool synced_ = false;  // the first sync with the device snaps to the model's colour
     QColor colorFrom_, colorTo_;
     Eased colorMix_;  // 0..1 from colorFrom_ to colorTo_
 

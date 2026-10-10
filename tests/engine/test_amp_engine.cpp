@@ -5,7 +5,6 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
-#include <cstdio>
 #include <limits>
 #include <memory>
 #include <random>
@@ -209,9 +208,10 @@ double aliasDb(const Samples& x, double freq, double rate = kSampleRate) {
     return 10.0 * std::log10(between / total + 1e-30);
 }
 
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the rate. A step of d
-// shows as up to 20 d; a smooth signal well below Nyquist hardly at all.
+// The largest 6th difference over [from, to): a steep high-pass, (2 sin(ω / 2))^6:
+// 64 times as sensitive at Nyquist as at a sixth of the rate (8 times, 18 dB,
+// more than at a quarter). A step of d shows as up to 20 d; a smooth signal well
+// below Nyquist hardly at all.
 double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
     std::vector<double> d(x.begin(), x.end());
     for (int k = 0; k < 6; ++k)
@@ -224,6 +224,22 @@ double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
 }
 
 int64_t frameAt(double seconds, double rate = kSampleRate) { return static_cast<int64_t>(std::lround(seconds * rate)); }
+
+// The seconds an amp with `values` takes over `left` and `right` (after playing `before`,
+// untimed): the best of three runs, as other work on the machine only ever makes one slower.
+double bestOfThree(const Values& values, const Samples& left, const Samples& right, const Samples& before) {
+    using Clock = std::chrono::steady_clock;
+    double best = 1e9;
+    for (int run = 0; run < 3; ++run) {
+        Amp a(kSampleRate, values);
+        if (!before.empty()) a.playStereo(before, before);
+        Samples l = left, r = right;
+        const auto start = Clock::now();
+        a.run({&l, &r});
+        best = std::min(best, std::chrono::duration<double>(Clock::now() - start).count());
+    }
+    return best;
+}
 
 }  // namespace
 
@@ -255,22 +271,6 @@ bool sameVoicing(const amp::Voicing& a, const amp::Voicing& b) {
                x.lowpassHz == y.lowpassHz && x.highpassHz == y.highpassHz;
     }
     return same;
-}
-
-// The lag (in samples, 0..maxLag) at which `out` best matches `in`.
-int correlationPeak(const Samples& in, const Samples& out, int maxLag) {
-    int best = 0;
-    double most = -1.0;
-    for (int lag = 0; lag <= maxLag; ++lag) {
-        double sum = 0.0;
-        for (size_t i = static_cast<size_t>(lag); i < out.size(); ++i)
-            sum += static_cast<double>(out[i]) * in[i - static_cast<size_t>(lag)];
-        if (sum > most) {
-            most = sum;
-            best = lag;
-        }
-    }
-    return best;
 }
 
 double meanOf(const Samples& x, int64_t from) {
@@ -444,11 +444,24 @@ TEST_CASE("the amp's design: tone stacks, the curve and its anti-aliasing") {
     CHECK_NEAR(half.gainSplit, 0.75, 1e-12);
     CHECK_NEAR(half.stages[1].bias, 0.175, 1e-12);
 
-    // The transfer, a point at a time or a curve's worth.
-    const amp::Transfer t(amp::voicing(amp::Rock), 7, 3, 6, 8, 4, 9, 1.5, kSampleRate);
+    // The transfer, a point at a time or a curve's worth; the preamp's part kept for any sag.
+    const amp::Transfer t(amp::voicing(amp::Rock), 7, 3, 6, 8, 4, 9, kSampleRate);
     for (const double x : {-1.0, -0.2, 0.0, 1e-3, 0.5})
-        CHECK_EQ(t(x), amp::transfer(amp::voicing(amp::Rock), 7, 3, 6, 8, 4, 9, 1.5, kSampleRate, x));
-    CHECK_EQ(t(0.0), 0.0);  // the stages' biases cancel
+        CHECK_EQ(t(x, 1.5), amp::transfer(amp::voicing(amp::Rock), 7, 3, 6, 8, 4, 9, 1.5, kSampleRate, x));
+    CHECK_EQ(t(0.0, 1.5), 0.0);  // the stages' biases cancel
+    const amp::Transfer::Wave w = t.preamp(0.3);
+    CHECK_EQ(t.peaksOf(t.power(w, 2.0)).high, t.peaks(0.3, 2.0).high);
+    CHECK_EQ(t.peaksOf(t.power(w, 2.0)).low, t(-0.3, 2.0));
+    CHECK(t(0.3, 2.0) < t(0.3, 0.0));  // the sag: less drive
+    // Its slope through 0, and its peaks there (the biased stages' even term aside).
+    CHECK_NEAR(t(1e-6, 0.0) / 1e-6, t.smallSignalGain(0.0), 1e-3 * t.smallSignalGain(0.0));
+    CHECK_NEAR(db(t.smallSignalGain(1.5) / t.smallSignalGain(0.0)), -1.5, 1e-9);
+    // Fewer points a period (the device's morph levels): the same level within 0.02 dB.
+    for (int m = 0; m < kModels; ++m) {
+        const amp::Transfer fine(amp::voicing(m), 5, 5, 5, 5, 5, 5, kSampleRate),
+            coarse(amp::voicing(m), 5, 5, 5, 5, 5, 5, kSampleRate, 64);
+        for (const double a : {1e-3, 0.03, 0.25, 0.9}) CHECK_NEAR(db(coarse.rms(a, 0.0) / fine.rms(a, 0.0)), 0.0, 0.02);
+    }
 
     // A one-pole's gain at its corner, far below the rate: -3 dB.
     CHECK_NEAR(db(amp::onePoleLowpassGain(sub::dsp::onePoleCutoff(100.0, 192000.0), 100.0, 192000.0)), -3.01, 0.05);
@@ -483,7 +496,7 @@ TEST_CASE("each amp model has its character") {
         double low, high;
     };
     const Band bands[kModels] = {{0.02, 0.10}, {0.25, 0.45}, {0.05, 0.16}, {0.22, 0.40},
-                                 {0.40, 1.00}, {0.40, 1.00}, {0.22, 0.40}};
+                                 {0.40, 1.00}, {0.28, 0.42}, {0.22, 0.40}};
     const Samples x = sine220();
     std::vector<std::vector<double>> h(kModels);
     for (int m = 0; m < kModels; ++m) {
@@ -549,9 +562,19 @@ TEST_CASE("Volume sets the level, and on Blues, Heavy and Bass drives the power 
             CHECK(power <= 1.f);
         }
     }
-    // On Blues, turned up, it distorts much more.
+    // On Blues, turned up, it distorts much more; on Heavy, whose preamp is already
+    // crunching at noon, clearly more too.
     Amp noon(kSampleRate, model(amp::Blues)), full(kSampleRate, model(amp::Blues, {{"volume", 10.f}}));
     CHECK(thd(full.play(x), 220.0) > 2.0 * thd(noon.play(x), 220.0));
+    for (const double level : {0.25, 0.1}) {
+        const Samples y = tone(220.0, level, 1.0);
+        Amp heavy(kSampleRate, model(amp::Heavy)), cranked(kSampleRate, model(amp::Heavy, {{"volume", 10.f}}));
+        const double atNoon = thd(heavy.play(y), 220.0), atTen = thd(cranked.play(y), 220.0);
+        INFO("Heavy at " + std::to_string(db(level)) + " dBFS: THD " + std::to_string(100 * atNoon) + " % to " +
+             std::to_string(100 * atTen) + " %");
+        CHECK(atTen > atNoon + 0.07);
+        CHECK(atTen > 1.25 * atNoon);
+    }
 }
 
 TEST_CASE("the amp's supply sags under load and recovers") {
@@ -618,9 +641,8 @@ TEST_CASE("the amp's tone curve is the sound") {
 }
 
 TEST_CASE("the amp's transfer curve is the sound") {
-    // In the linear region the transfer's slope is the device's gain at 1 kHz,
-    // every filter included. (-100 dBFS: at -60 the hottest settings already
-    // bend V3; the slope through 0 leaves out the biased stages' even term.)
+    // In the linear region its slope is the device's gain at 1 kHz, every filter
+    // included. (-100 dBFS: at -60 the hottest settings already bend V3.)
     constexpr double kLevel = 1e-5;
     const Samples x = tone(1000.0, kLevel, 0.5);
     for (int m = 0; m < kModels; ++m) {
@@ -630,10 +652,48 @@ TEST_CASE("the amp's transfer curve is the sound") {
             Amp a(kSampleRate, values);
             const double played = toneAt(a.play(x), 1000.0) - db(kLevel);
             const bool hot = !settings.empty();
-            const amp::Transfer t(amp::voicing(m), hot ? 10 : 5, hot ? 0 : 5, 5, hot ? 10 : 5, 5, 5, 0.0, kSampleRate);
-            const double drawn = db((t(kLevel) - t(-kLevel)) / (2.0 * kLevel));
+            const amp::Transfer t(amp::voicing(m), hot ? 10 : 5, hot ? 0 : 5, 5, hot ? 10 : 5, 5, 5, kSampleRate);
+            const double drawn = db(t.smallSignalGain(0.0));
             INFO("played " + std::to_string(played) + " dB, drawn " + std::to_string(drawn) + " dB");
             CHECK_NEAR(played, drawn, 0.15);
+            CHECK_NEAR(db((t(kLevel, 0.0) - t(-kLevel, 0.0)) / (2.0 * kLevel)), drawn, 0.01);
+        }
+    }
+
+    // Driven, the curve at ±the peak of a 1 kHz tone going in is where the tone's
+    // highest and lowest values come out: the dots ride the curve where the sound
+    // is. (With the sag as the device showed it.)
+    struct Setting {
+        const char* name;
+        Values values;
+        double within;  // dB
+    };
+    const std::vector<Setting> settings = {
+        {"defaults", {}, 0.25},
+        {"gain, presence and volume at 10", {{"gain", 10.f}, {"presence", 10.f}, {"volume", 10.f}}, 1.0}};
+    for (const Setting& setting : settings) {
+        for (const double a : {0.05, 0.25}) {
+            for (int m = 0; m < kModels; ++m) {
+                INFO(modelName(m) + ", " + setting.name + ", a tone of peak " + std::to_string(a));
+                Amp amp(kSampleRate, model(m, setting.values));
+                const Samples out = slice(amp.play(tone(1000.0, a, 1.0)), frameAt(0.5));
+                const double high = *std::max_element(out.begin(), out.end()),
+                             low = *std::min_element(out.begin(), out.end());
+                const std::vector<float> sag = amp.display(Sag);
+                double dials[6] = {5, 5, 5, 5, 5, 5};
+                for (const auto& [id, value] : setting.values)
+                    for (int d = 0; d < 6; ++d)
+                        if (id == kDials[d]) dials[d] = value;
+                const amp::Transfer t(amp::voicing(m), dials[0], dials[1], dials[2], dials[3], dials[4], dials[5],
+                                      kSampleRate);
+                const amp::Transfer::Peaks drawn = t.peaks(a, meanDb(sag, sag.size() / 2));
+                INFO("played " + std::to_string(high) + " / " + std::to_string(low) + ", drawn " +
+                     std::to_string(drawn.high) + " / " + std::to_string(drawn.low));
+                CHECK_NEAR(db(drawn.high / high), 0.0, setting.within);
+                CHECK_NEAR(db(drawn.low / low), 0.0, setting.within);
+                CHECK_EQ(t(a, meanDb(sag, sag.size() / 2)), drawn.high);
+                CHECK_EQ(t(-a, meanDb(sag, sag.size() / 2)), drawn.low);
+            }
         }
     }
 }
@@ -729,6 +789,17 @@ TEST_CASE("changing the amp model morphs without a click") {
             // tiny: a floor of 1e-4, a step of 5e-6 (-106 dBFS), the Disperser's bound.)
             CHECK(change <= std::max(1.5 * reference, 1e-4));
             CHECK_NEAR(rmsDb(out, at + frameAt(0.08)), rmsDb(steady[static_cast<size_t>(to)], at + frameAt(0.08)), 0.5);
+            // On the way, level-matched: no swell from a blend that clips where neither model
+            // does (in 5 ms windows, against both models played steadily).
+            for (int64_t w = at; w < at + frameAt(0.1); w += frameAt(0.005)) {
+                const int64_t e = w + frameAt(0.005);
+                const double level = rmsDb(out, w, e), a = rmsDb(steady[static_cast<size_t>(from)], w, e),
+                             b = rmsDb(steady[static_cast<size_t>(to)], w, e);
+                INFO("at " + std::to_string(w - at) + ": " + std::to_string(level) + " dB, the models " +
+                     std::to_string(a) + " and " + std::to_string(b) + " dB");
+                CHECK(level <= std::max(a, b) + 1.5);
+                CHECK(level >= std::min(a, b) - 2.0);
+            }
             // What the measure makes of a click: the two models spliced at once.
             Samples spliced = steady[static_cast<size_t>(from)];
             std::copy(steady[static_cast<size_t>(to)].begin() + at, steady[static_cast<size_t>(to)].end(),
@@ -737,6 +808,23 @@ TEST_CASE("changing the amp model morphs without a click") {
         }
     }
     CHECK(spliceRatio >= 3.0);
+
+    // In the linear region (-80 dBFS: nothing clips, the tone plays pure, so the
+    // measure is sharp), every morph is smooth to within 1 % of the output's peak:
+    // a step 40 dB under the signal would show.
+    const Samples quiet = tone(220.0, 1e-4, 0.8);
+    double worst = 0.0;
+    for (int from = 0; from < kModels; ++from) {
+        for (int to = 0; to < kModels; ++to) {
+            if (from == to) continue;
+            Amp a(kSampleRate, model(from));
+            const Samples out = a.play(quiet, {{at, "type", static_cast<float>(to)}});
+            worst =
+                std::max(worst, clickiness(out, at, at + frameAt(0.06) + kLatency) / maxAbs(slice(out, frameAt(0.2))));
+        }
+    }
+    INFO("the worst morph: " + std::to_string(worst) + " of the output's peak");
+    CHECK(worst <= 0.01);
 }
 
 TEST_CASE("turning any of the amp's dials is click-free") {
@@ -764,6 +852,28 @@ TEST_CASE("turning any of the amp's dials is click-free") {
         const Samples out = a.play(x, {{at, "mix", 100.f}});
         CHECK(clickiness(out, at, at + frameAt(0.05) + kLatency) <= 1.5 * reference);
     }
+    // In the linear region (-80 dBFS), where the tone plays pure and the measure is
+    // sharp, every model's every dial glides within 1 % of the output's peak: a
+    // step 40 dB under the signal would show. (At -12 dBFS above, the crunch and
+    // lead models' own clipping edges set the bound.)
+    const Samples quiet = tone(220.0, 1e-4, 0.6);
+    for (int m = 0; m < kModels; ++m) {
+        for (const char* dial : kDials) {
+            for (const float from : {0.f, 10.f}) {
+                const float to = 10.f - from;
+                INFO(modelName(m) + " " + dial + " " + std::to_string(from) + " to " + std::to_string(to));
+                Amp start(kSampleRate, model(m, {{dial, from}})), end(kSampleRate, model(m, {{dial, to}}));
+                const double level = std::max(maxAbs(slice(start.play(quiet), frameAt(0.2))),
+                                              maxAbs(slice(end.play(quiet), frameAt(0.2))));
+                Amp a(kSampleRate, model(m, {{dial, from}}));
+                const Samples out = a.play(quiet, {{at, dial, to}});
+                const double change = clickiness(out, at, at + frameAt(0.05) + kLatency) / level;
+                INFO(std::to_string(change) + " of the output's peak");
+                CHECK(change <= 0.01);
+            }
+        }
+    }
+
     // What the measure makes of a click: Gain 0 and 10 spliced.
     Amp low(kSampleRate, model(amp::Rock, {{"gain", 0.f}})), high(kSampleRate, model(amp::Rock, {{"gain", 10.f}}));
     Samples spliced = low.play(x);
@@ -780,24 +890,33 @@ TEST_CASE("the amp's automation plays through the engine sample-accurately") {
     engine.loadSource(path);
     const uint32_t track = engine.addTrack();
     engine.setTrackClips(track, {clip(path, 0.0, 3.0, 0.0, 1.f)});
+    const Samples dry = engine.renderOffline(0.0, 3 * kSampleRate);  // what the amp is fed
     const uint32_t id = engine.addBuiltinProcessor(engine.trackChain(track), "amp", -1);
     setParam(engine, id, "type", 3.f);
-    const Samples untouched = engine.renderOffline(0.0, 3 * kSampleRate);
-    CHECK(allFinite(untouched));
-    CHECK(rms(untouched) > 0.05);
 
     // Gain from 5 to 10 at beat 2 (1 s).
     using Points = std::vector<sub::AutomationPoint>;
     engine.setTrackAutomation(track, {{id, "gain", Points{{0.0, 0.5f, 0.f}, {2.0, 0.5f, 0.f}, {2.0, 1.f, 0.f}}}});
     const Samples out = engine.renderOffline(0.0, 3 * kSampleRate);
-    int64_t first = -1;
-    for (size_t i = 0; i < out.size() && first < 0; ++i)
-        if (out[i] != untouched[i]) first = static_cast<int64_t>(i) / 2;
-    INFO("first change at " + std::to_string(first));
-    CHECK(first >= kSampleRate);
-    CHECK(first <= kSampleRate + kLatency + 64);
-    CHECK(!allclose(frames(out, kSampleRate + 4800, 2 * kSampleRate),
-                    frames(untouched, kSampleRate + 4800, 2 * kSampleRate), 0.0, 0.01));
+    CHECK(allFinite(out));
+    // A standalone amp fed the same, Gain handed to it at frame 48000: the engine's
+    // output is what it puts out, its latency compensated. (The engine's blocks cut
+    // the glide's chunks elsewhere: within 1e-4. A sample late is 4e-4 off.)
+    const auto standalone = [&](int64_t at) {
+        Samples l = channel(dry, 0), r = channel(dry, 1);
+        l.resize(l.size() + kLatency, 0.f);
+        r.resize(r.size() + kLatency, 0.f);
+        Amp a(kSampleRate, model(amp::Rock));
+        a.run({&l, &r}, {{at, "gain", 10.f}});
+        return std::pair{slice(l, kLatency), slice(r, kLatency)};
+    };
+    const auto [l, r] = standalone(kSampleRate);
+    CHECK_ALLCLOSE(channel(out, 0), l, 0.0, 1e-4);
+    CHECK_ALLCLOSE(channel(out, 1), r, 0.0, 1e-4);
+    for (const int64_t late : {-1, 1}) {
+        INFO("the change " + std::to_string(late) + " samples late");
+        CHECK(!allclose(channel(out, 0), standalone(kSampleRate + late).first, 0.0, 1e-4));
+    }
 }
 
 TEST_CASE("the amp's Dry/Wet blends in the input delayed by its latency") {
@@ -817,11 +936,28 @@ TEST_CASE("the amp's Dry/Wet blends in the input delayed by its latency") {
 }
 
 TEST_CASE("the amp's latency is reported and compensated") {
-    // The wet signal comes out 37 samples late.
-    const Samples x = noise(kSampleRate / 2, 22, 0.01f);
-    Amp a(kSampleRate, model(amp::Clean, {{"gain", 0.f}}));
-    const int lag = correlationPeak(x, a.play(x), 100);
-    CHECK(std::abs(lag - kLatency) <= 1);
+    // The wet comes out 37 samples late, and its filters' own phase delay (the design's):
+    // a small 1 kHz tone's phase, to within a twentieth of a sample, every model.
+    const Samples x = tone(1000.0, 1e-5, 0.5);
+    const double period = kSampleRate / 1000.0;
+    for (int m = 0; m < kModels; ++m) {
+        INFO(modelName(m));
+        Amp a(kSampleRate, model(m, {{"gain", 0.f}}));
+        const Samples y = a.play(x);
+        const int64_t from = static_cast<int64_t>(x.size()) - 12 * static_cast<int64_t>(period);
+        std::complex<double> in = 0.0, out = 0.0;
+        for (int64_t i = from; i < static_cast<int64_t>(x.size()); ++i) {
+            const std::complex<double> w = std::polar(1.0, -2.0 * kPi * static_cast<double>(i) / period);
+            in += static_cast<double>(x[static_cast<size_t>(i)]) * w;
+            out += static_cast<double>(y[static_cast<size_t>(i)]) * w;
+        }
+        const double lag = std::fmod(-std::arg(out / in) / (2.0 * kPi) * period + 4.0 * period, period);
+        const amp::Transfer t(amp::voicing(m), 0, 5, 5, 5, 5, 5, kSampleRate);
+        const double want = std::fmod(kLatency + t.phaseDelay() + 4.0 * period, period);
+        INFO("played " + std::to_string(lag) + " samples (mod " + std::to_string(period) +
+             "), the latency and the filters " + std::to_string(want));
+        CHECK_NEAR(lag, want, 0.05);
+    }
 
     // Through the engine: a dry track's click and one through the amp (fully dry) land together.
     {
@@ -838,7 +974,8 @@ TEST_CASE("the amp's latency is reported and compensated") {
         REQUIRE(left.size() == 1);
         CHECK(right == left);
     }
-    // Fully wet: the amp's output lines up with a dry track playing the same noise.
+    // Fully wet: the engine starts the amp's track the latency early, so what comes out is
+    // what an amp on its own puts out, the latency later, on the dry track's time.
     {
         sub::Engine engine;
         engine.setClipFadeMs(0);
@@ -846,23 +983,17 @@ TEST_CASE("the amp's latency is reported and compensated") {
         const Samples silent(n.size(), 0.f);
         clipTrack(engine, makeWav(interleave({n, silent}), 2), 0.0, 1.0);
         const uint32_t wet = clipTrack(engine, makeWav(interleave({silent, n}), 2), 0.0, 1.0);
+        const Samples dry = channel(engine.renderOffline(0.0, kSampleRate), 1);  // what the amp is fed
         const uint32_t id = engine.addBuiltinProcessor(engine.trackChain(wet), "amp", -1);
         setParam(engine, id, "gain", 0.f);
         setParam(engine, id, "dual", 1.f);
         const Samples out = engine.renderOffline(0.0, kSampleRate);
-        const Samples left = channel(out, 0), right = channel(out, 1);
-        int best = 0;
-        double most = -1.0;
-        for (int lag = -20; lag <= 20; ++lag) {
-            double sum = 0.0;
-            for (size_t i = 100; i + 100 < left.size(); ++i)
-                sum += static_cast<double>(right[static_cast<size_t>(static_cast<int64_t>(i) + lag)]) * left[i];
-            if (sum > most) {
-                most = sum;
-                best = lag;
-            }
-        }
-        CHECK(std::abs(best) <= 1);
+        Samples l(dry.size() + kLatency, 0.f), r = dry;
+        r.resize(l.size(), 0.f);
+        Amp alone(kSampleRate, model(amp::Clean, {{"gain", 0.f}, {"dual", 1.f}}));
+        alone.run({&l, &r});
+        CHECK_ALLCLOSE(channel(out, 1), slice(r, kLatency), 0.0, 1e-6);
+        CHECK(rms(channel(out, 1)) > 1e-3);
     }
 }
 
@@ -969,11 +1100,17 @@ TEST_CASE("the amp keeps what folds back far down") {
     const Samples x = tone(997.0, 0.25, 0.5);
     for (int m = 0; m < kModels; ++m) {
         INFO(modelName(m));
-        Amp high(kSampleRate, model(m, {{"gain", 10.f}})), noon(kSampleRate, model(m));
-        const double atTen = aliasDb(high.play(x), 997.0), atFive = aliasDb(noon.play(x), 997.0);
-        INFO(std::to_string(atTen) + " / " + std::to_string(atFive) + " dB");
+        Amp high(kSampleRate, model(m, {{"gain", 10.f}})), noon(kSampleRate, model(m)),
+            hot(kSampleRate, model(m, {{"gain", 10.f}, {"presence", 10.f}, {"volume", 10.f}}));
+        const double atTen = aliasDb(high.play(x), 997.0), atFive = aliasDb(noon.play(x), 997.0),
+                     allUp = aliasDb(hot.play(x), 997.0);
+        INFO(std::to_string(atTen) + " / " + std::to_string(atFive) + " dB, with Presence and Volume at 10 too " +
+             std::to_string(allUp) + " dB");
         CHECK(atTen <= -55.0);
         CHECK(atFive <= -65.0);
+        // (A preamp already clipped, its edges boosted by Presence, into a power stage
+        // driven hard: the power tubes' input low-pass keeps this down.)
+        CHECK(allUp <= -55.0);
     }
 }
 
@@ -1014,33 +1151,13 @@ TEST_CASE("the amp's displays show its input, each stage's drive, the sag and it
 }
 
 #ifdef NDEBUG
-TEST_CASE("the amp's cost stays bounded, and silence costs next to nothing") {
-    using Clock = std::chrono::steady_clock;
-    const auto seconds = [](Clock::duration d) { return std::chrono::duration<double>(d).count(); };
+TEST_CASE("the amp's cost stays bounded") {
     const Samples n = noise(static_cast<size_t>(10 * kSampleRate), 28, 0.25f);
-    // The best of three runs (other work on the machine only ever makes one slower).
-    const auto time = [&](const Values& values, const Samples& left, const Samples& right, const Samples& before) {
-        double best = 1e9;
-        for (int run = 0; run < 3; ++run) {
-            Amp a(kSampleRate, values);
-            if (!before.empty()) a.playStereo(before, before);
-            Samples l = left, r = right;
-            const auto start = Clock::now();
-            a.run({&l, &r});
-            best = std::min(best, seconds(Clock::now() - start));
-        }
-        return best;
-    };
-    const double dual = time(model(amp::Lead, {{"gain", 10.f}, {"dual", 1.f}}), n, n, {});
-    const double mono = time(model(amp::Lead, {{"gain", 10.f}}), n, n, {});
+    const double dual = bestOfThree(model(amp::Lead, {{"gain", 10.f}, {"dual", 1.f}}), n, n, {});
+    const double mono = bestOfThree(model(amp::Lead, {{"gain", 10.f}}), n, n, {});
     INFO("Dual " + std::to_string(10.0 * dual) + " %, Mono " + std::to_string(10.0 * mono) + " % of real time");
     CHECK(dual < 0.1 * 10.0);
     CHECK(mono < dual);
-    const Samples quiet(n.size(), 0.f);
-    const double silent =
-        time(model(amp::Lead, {{"gain", 10.f}, {"dual", 1.f}}), quiet, quiet, slice(n, 0, kSampleRate));
-    INFO("silence " + std::to_string(10.0 * silent) + " %");
-    CHECK(silent < 0.15 * dual);
 }
 #endif
 
@@ -1056,6 +1173,35 @@ TEST_CASE("the amp plays the same in any block size") {
     // Prepared for 64 frames and handed 1000 at once: it works in slices.
     Amp sliced(kSampleRate, model(amp::Lead), 64);
     CHECK_ARRAY_EQUAL(sliced.play(x, {}, 1000), want);
+    // From silence and back to it, long enough to sleep, in Dual with the sides
+    // coming in softly at different times: every flush and the sleep fall on the
+    // same samples whatever the blocks (the supply's envelope's first tiny values
+    // too, which a flush at the blocks' ends would drop in some and not others).
+    {
+        Samples left(static_cast<size_t>(kSampleRate / 10), 0.f), right(left.size() + 3000, 0.f);
+        for (Samples* side : {&left, &right}) {
+            Samples burst = noise(static_cast<size_t>(kSampleRate / 2), side == &left ? 30 : 31, 0.3f);
+            for (size_t i = 0; i < burst.size(); ++i)
+                burst[i] *=
+                    static_cast<float>(std::sin(kPi * static_cast<double>(i) / static_cast<double>(burst.size())));
+            side->insert(side->end(), burst.begin(), burst.end());
+            side->resize(static_cast<size_t>(2 * kSampleRate), 0.f);
+            side->insert(side->end(), burst.begin(), burst.end());
+        }
+        right.resize(left.size());
+        for (const int m : {static_cast<int>(amp::Clean), static_cast<int>(amp::Blues), static_cast<int>(amp::Bass)}) {
+            const Values values = model(m, {{"dual", 1.f}, {"volume", 10.f}});
+            Amp reference(kSampleRate, values);
+            const auto [wantLeft, wantRight] = reference.playStereo(left, right, {}, 64);
+            for (const int block : {1, 1000, 1024}) {
+                INFO(modelName(m) + " in blocks of " + std::to_string(block));
+                Amp a(kSampleRate, values);
+                const auto [l, r] = a.playStereo(left, right, {}, block);
+                CHECK_ARRAY_EQUAL(l, wantLeft);
+                CHECK_ARRAY_EQUAL(r, wantRight);
+            }
+        }
+    }
     // With Gain gliding and the model morphing: the chunks fall on a grid of
     // their own (the meters'), but a block's end cuts one in two, which bends
     // a glide's ramp at another point: next to nothing.
@@ -1065,6 +1211,19 @@ TEST_CASE("the amp plays the same in any block size") {
 }
 
 TEST_CASE("an amp at rest sleeps through silence and wakes as a fresh one") {
+    // It sleeps: silence after noise costs a fraction of what the noise did. (Asleep or
+    // awake, it puts out the same exact zeros: only the time tells. Both timed in the
+    // same build, so this holds in a debug one too; asleep measured 0.04 to 0.06.)
+    {
+        const Samples n = noise(static_cast<size_t>(4 * kSampleRate), 28, 0.25f);
+        const Samples quiet(n.size(), 0.f);
+        Samples before = slice(n, 0, kSampleRate);
+        before.resize(static_cast<size_t>(4 * kSampleRate), 0.f);  // (asleep by its end)
+        const Values lead = model(amp::Lead, {{"gain", 10.f}, {"dual", 1.f}});
+        const double playing = bestOfThree(lead, n, n, {}), silent = bestOfThree(lead, quiet, quiet, before);
+        INFO("silence " + std::to_string(silent / playing) + " of the noise's time");
+        CHECK(silent < 0.5 * playing);
+    }
     Samples x = sine220(1.0);
     x.resize(static_cast<size_t>(4 * kSampleRate), 0.f);
     const Samples again = sine220(0.5);

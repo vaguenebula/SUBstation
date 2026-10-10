@@ -18,13 +18,16 @@ constexpr double kFallDbPerSecond = 18.0;  // the dots fall back this fast
 constexpr double kSagSeconds = 0.06;
 constexpr double kSagStepDb = 0.05;  // the curve is made again when the sag as drawn moves this far
 
-bool loudest(const std::vector<float>& values, double& into) {
+// The loudest of a display's last `keep` values (dB, floored), or nothing. Only the
+// last: a read can hand over a long backlog (what came while the editor wasn't
+// showing), which is history, not the level now.
+bool loudest(const std::vector<float>& values, size_t keep, double& into) {
     if (values.empty())
         return false;
     double most = AmpDriveGraph::kFloorDb;
-    for (const float v : values) {
-        if (std::isfinite(v))
-            most = std::max(most, double(v));
+    for (size_t i = values.size() - std::min(keep, values.size()); i < values.size(); ++i) {
+        if (std::isfinite(values[i]))
+            most = std::max(most, double(values[i]));
     }
     into = most;
     return true;
@@ -54,7 +57,8 @@ AmpDriveGraph::AmpDriveGraph(QQuickItem* parent) : DeviceCanvas(parent) {
         disconnect(bridgeConnection_);
         if (session())
             bridgeConnection_ = connect(session()->bridge(), &sub::app::EngineBridge::deviceChanged, this, [this] {
-                updateCurve();
+                if (device() != nullptr)
+                    updateCurve();
                 update();
             });
     });
@@ -86,6 +90,10 @@ QPointF AmpDriveGraph::dot() const {
     return QPointF(xOf(a), yOf(curveAt(a)));
 }
 
+size_t AmpDriveGraph::recentValues(double dt) const {
+    return size_t(std::ceil(std::max(kRecentSeconds, dt) * sampleRate() / kSamplesPerValue));
+}
+
 double AmpDriveGraph::outputAt(double x) const {
     return sub::app::ampTransfer(model_, gain_, bass_, middle_, treble_, presence_, volume_, curveSag_, sampleRate(),
                                  {x})
@@ -93,6 +101,10 @@ double AmpDriveGraph::outputAt(double x) const {
 }
 
 void AmpDriveGraph::sync() {
+    if (device() == nullptr) {  // (not yet, as it is being made: nothing to draw)
+        update();
+        return;
+    }
     model_ = std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, 6);
     gain_ = value(QStringLiteral("gain"));
     bass_ = value(QStringLiteral("bass"));
@@ -106,31 +118,35 @@ void AmpDriveGraph::sync() {
 
 void AmpDriveGraph::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {
     DeviceCanvas::geometryChange(newGeometry, oldGeometry);
-    if (newGeometry.size() != oldGeometry.size())
+    if (newGeometry.size() != oldGeometry.size() && device() != nullptr)
         updateCurve();
 }
 
 void AmpDriveGraph::updateCurve() {
+    // The preamp's part for a column's worth of tones (the slow part), then the curve for the sag as drawn.
     const double rate = sampleRate();
-    auto transfer = [&](double sagDb, const QList<double>& xs) {
-        return sub::app::ampTransfer(model_, gain_, bass_, middle_, treble_, presence_, volume_, sagDb, rate, xs);
-    };
-    curveSag_ = sag_.value;
     const int columns = std::max(2, int(plot().width()));
     QList<double> xs;
     xs.reserve(columns + 1);
     for (int i = 0; i <= columns; ++i) xs.append(-1.0 + 2.0 * double(i) / columns);
-    const QList<double> ys = transfer(curveSag_, xs);
-    curve_.resize(size_t(xs.size()));
-    for (qsizetype i = 0; i < xs.size(); ++i) curve_[size_t(i)] = QPointF(xs[i], ys[i]);
+    transfer_.prepare(model_, gain_, bass_, middle_, treble_, presence_, volume_, rate, xs);
+    xs_ = xs;
     // Up is scaled to the curve's reach without sag (it rises with the input: its ends), so the
-    // sag's breathing shows; the clean gain is its slope through 0.
-    const QList<double> ends = transfer(0.0, {-1.0, 1.0});
+    // sag's breathing shows.
+    const QList<double> ends =
+        sub::app::ampTransfer(model_, gain_, bass_, middle_, treble_, presence_, volume_, 0.0, rate, {-1.0, 1.0});
     const double reach = std::max(std::abs(ends.value(0)), std::abs(ends.value(1)));
     range_ = reach > 1e-9 ? reach / kReach : 1.0;
-    constexpr double kTiny = 1e-5;
-    const QList<double> near = transfer(curveSag_, {-kTiny, kTiny});
-    slope_ = (near.value(1) - near.value(0)) / (2.0 * kTiny);
+    shapeCurve();
+}
+
+void AmpDriveGraph::shapeCurve() {
+    curveSag_ = sag_.value;
+    const QList<double> ys = transfer_.at(curveSag_);
+    curve_.resize(size_t(xs_.size()));
+    for (qsizetype i = 0; i < xs_.size() && i < ys.size(); ++i)
+        curve_[size_t(i)] = QPointF(xs_[i], ys[i]);
+    slope_ = transfer_.smallSignalGain(curveSag_);  // the clean gain
     Q_EMIT curveChanged();
 }
 
@@ -138,7 +154,7 @@ void AmpDriveGraph::refreshDisplays() {
     const double dt = clock_.isValid() ? std::clamp(clock_.restart() / 1000.0, 0.0, 0.1) : 1.0 / 60.0;
     if (!clock_.isValid())
         clock_.start();
-    bool read = loudest(readDisplay(QStringLiteral("input")), inputRead_);
+    bool read = loudest(readDisplay(QStringLiteral("input")), recentValues(dt), inputRead_);
     read = latest(readDisplay(QStringLiteral("sag")), sagRead_) || read;
     if (read) {
         lastRead_.restart();
@@ -152,8 +168,9 @@ void AmpDriveGraph::refreshDisplays() {
     bool moving = input_.level != level;
     sag_.target = std::max(0.0, sagRead_);
     moving = sag_.step(easeFraction(dt, kSagSeconds), 1e-3) || moving;
-    if (std::abs(sag_.value - curveSag_) >= kSagStepDb || (sag_.value == sag_.target && sag_.value != curveSag_)) {
-        updateCurve();
+    if (!transfer_.isEmpty() &&
+        (std::abs(sag_.value - curveSag_) >= kSagStepDb || (sag_.value == sag_.target && sag_.value != curveSag_))) {
+        shapeCurve();  // (the power stage's part alone)
         moving = true;
     }
     // The trail: where the dots were over the last ticks.
