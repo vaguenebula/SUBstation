@@ -10,12 +10,14 @@
 // (B 100 Hz, M 700 Hz, T 3 kHz, P 6 kHz), a control of its parameter as its
 // knob is: drag it up and down to set its dial (kPixelsPerStep a step; Shift
 // finely, from where the mouse is when it is pressed), one undo step per drag;
-// the wheel over it (kWheelStep a notch, Shift finely; notches close together
-// one undo step); double-click it to put it back to 5; right-click it for its
-// parameter's menu (handleMenuRequested: the editor shows the ParamMenu); its
-// automation dot beside its letter. Presses anywhere else go on to the frame.
-// A new model's curve morphs from the old one's; dials and drags move it at
-// once.
+// the wheel over it (a notch moves it as a notch moves its knob, a fiftieth of
+// its range: KnobItem::kWheelNotches; Shift finely; notches close together one
+// undo step); double-click it to put it back to its default; right-click it
+// for its parameter's menu (handleMenuRequested: the editor shows the
+// ParamMenu); its automation dot beside its letter. Drags and the wheel keep
+// within the parameter's range, the device's own (read once it is there).
+// Presses anywhere else go on to the frame. A new model's curve morphs from
+// the old one's; dials and drags move it at once.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
@@ -25,6 +27,7 @@
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -48,8 +51,7 @@ public:
     static constexpr double kCeilingDb = 12.0;
     static constexpr double kGutter = 20.0;  // at the right, the dB figures
     static constexpr double kPixelsPerStep = 8.0;  // dragged up this far, a dial step of 1
-    static constexpr double kFine = 0.2;           // with Shift
-    static constexpr double kWheelStep = 0.2;      // a wheel notch (as the knobs': 50 for the range)
+    static constexpr double kFine = 0.2;           // with Shift (the wheel's too)
     static constexpr double kHitPixels = 14.0;     // a press this near a handle (across) takes it
     static constexpr double kRadius = 4.5;         // a handle's
     static constexpr double kHoverRadius = 6.5;    // under the mouse or dragged
@@ -65,6 +67,11 @@ public:
                                                                   {"middle", 700.0, "M", "Middle"},
                                                                   {"treble", 3000.0, "T", "Treble"},
                                                                   {"presence", 6000.0, "P", "Presence"}}};
+    // A handle's parameter's range.
+    struct Range {
+        double low = 0.0, high = 0.0;
+        double clamp(double value) const { return std::clamp(value, low, high); }
+    };
 
     explicit AmpToneGraph(QQuickItem* parent = nullptr);
 
@@ -84,6 +91,10 @@ public:
     Q_INVOKABLE double handleRadius(int i) const;
     // A handle's parameter's automation as its dot shows it: "on", "off" (overridden) or "".
     Q_INVOKABLE QString handleAutomation(int i) const;
+    // A handle's parameter's range, the device's (empty until it is there: nothing to drag).
+    Range handleRange(int i) const { return i >= 0 && i < kHandles ? ranges_[size_t(i)] : Range(); }
+    // A wheel notch on a handle (without Shift): a fiftieth of its range, as on its knob.
+    double wheelStep(int i) const;
 
     QRectF plot() const;
     LogAxis frequencyAxis() const;
@@ -112,6 +123,7 @@ protected:
 
 private:
     void updateCurve();
+    bool readRanges();  // (false: the device's parameters aren't there yet)
     void setHovered(int handle);
     void endDrag();
     double shownAt(double hz) const;  // the curve as drawn at a handle's frequency
@@ -120,6 +132,8 @@ private:
     int model_ = -1;  // -1: not synced with the device yet (the first curve shows at once)
     double dials_[kHandles] = {5.0, 5.0, 5.0, 5.0};
     std::array<QString, kHandles> automation_;  // their parameters' automation states ("on", "off", "")
+    std::array<Range, kHandles> ranges_;        // their parameters' ranges
+    bool rangesRead_ = false;                   // (read once a device is there, again for another)
     std::vector<double> frequencies_;
     std::vector<double> target_;
     std::vector<double> from_;

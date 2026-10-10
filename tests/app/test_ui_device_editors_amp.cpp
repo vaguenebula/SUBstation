@@ -23,6 +23,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "EditorHarness.h"
@@ -62,6 +65,15 @@ std::vector<float> plucks(double freq, int frames, double loud, double beat) {
 }
 
 double dbOf(double amplitude) { return 20.0 * std::log10(std::max(amplitude, 1e-9)); }
+
+// A parameter as the device itself lists it (its range, its choices' names).
+sub::ParamInfo deviceInfo(const char* id) {
+    const std::shared_ptr<sub::Processor> amp = sub::BuiltinRegistry::instance().create("amp");
+    for (const sub::ParamInfo& info : amp->params())
+        if (info.id == id)
+            return info;
+    return {};
+}
 
 }  // namespace
 
@@ -219,9 +231,14 @@ private Q_SLOTS:
             QCOMPARE(buttonOf(button)->property("text").toString(), name);
             controls << button;
         }
-        for (const char* name : {"dual_mono", "dual_dual"}) {
-            QQuickItem* button = find(s.view, QString::fromLatin1(name));
+        // The Output buttons, named after the `dual` parameter's choices, as the device has them.
+        const std::vector<std::string> outputs = deviceInfo("dual").valueLabels;
+        const char* const outputNames[] = {"dual_mono", "dual_dual"};
+        QCOMPARE(outputs.size(), std::size(outputNames));
+        for (size_t i = 0; i < outputs.size(); ++i) {
+            QQuickItem* button = find(s.view, QString::fromLatin1(outputNames[i]));
             QVERIFY(button);
+            QCOMPARE(buttonOf(button)->property("text").toString(), QString::fromStdString(outputs[i]));
             controls << button;
         }
         // Each button's label fits it 2 px clear of its 1 px border at least (the monitor role has no padding).
@@ -567,8 +584,8 @@ private Q_SLOTS:
     }
 
     // The handles are their parameters' controls as the knobs are: Shift mid-drag changing the
-    // rate from there on, the wheel, the automation dot and the menu; a double-click away from
-    // them is the frame's.
+    // rate from there on, the wheel, both within the parameter's range (the device's), the
+    // automation dot and the menu; a double-click away from them is the frame's.
     void handlesAreControls() {
         const Shown s = showAmp();
         QVERIFY(s.view && s.tone);
@@ -587,7 +604,10 @@ private Q_SLOTS:
         QVERIFY2(std::abs(value("treble") - 9.025) < 0.006, qPrintable(QString::number(value("treble"))));
         dragTo(window_, t - QPoint(0, 34));
         QVERIFY2(std::abs(value("treble") - 9.15) < 0.006, qPrintable(QString::number(value("treble"))));
-        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, t - QPoint(0, 34));
+        // On up, it stops at the top of the parameter's range.
+        dragTo(window_, t - QPoint(0, 50));
+        QCOMPARE(value("treble"), s.tone->handleRange(kTreble).high);
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, t - QPoint(0, 50));
         QCOMPARE(undo()->index(), steps + 1);
         undo()->undo();
         QCOMPARE(value("treble"), 5.0);
@@ -607,6 +627,23 @@ private Q_SLOTS:
         QVERIFY(std::abs(value("bass") - 5.36) < 1e-9);
         undo()->undo();
         QCOMPARE(value("bass"), 5.0);
+
+        // Each handle's range is its parameter's, the device's own, and a notch a fiftieth of it (the
+        // knob's); the wheel stops at either end.
+        for (int i = 0; i < AmpToneGraph::kHandles; ++i) {
+            const sub::ParamInfo info = deviceInfo(AmpToneGraph::kHandleList[size_t(i)].id);
+            QCOMPARE(s.tone->handleRange(i).low, double(info.minValue));
+            QCOMPARE(s.tone->handleRange(i).high, double(info.maxValue));
+            QCOMPARE(s.tone->wheelStep(i), (double(info.maxValue) - info.minValue) / KnobItem::kWheelNotches);
+        }
+        const AmpToneGraph::Range bass = s.tone->handleRange(kBass);
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("bass"), bass.high - 0.1);
+        QVERIFY(wheelOver(s.tone, s.tone->handlePos(kBass), 1));
+        QCOMPARE(value("bass"), bass.high);
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("bass"), bass.low + 0.1);
+        QVERIFY(wheelOver(s.tone, s.tone->handlePos(kBass), -1));
+        QCOMPARE(value("bass"), bass.low);
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("bass"), 5.0);
 
         // Its parameter's automation shows on the handle as on the knob: the red dot, grey once
         // overridden; its menu is the knob's.

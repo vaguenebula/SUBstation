@@ -27,8 +27,10 @@ constexpr qint64 kWheelGestureMs = 400;  // wheel notches closer than this are o
 
 QString dialText(double value) { return sub::app::formatValue(value, QStringLiteral("dial")); }
 
-// A dial's value as a drag or the wheel leaves it: within 0..10, to a hundredth.
-double dialValue(double value) { return std::round(std::clamp(value, 0.0, 10.0) * 100.0) / 100.0; }
+// A dial's value as a drag or the wheel leaves it: within its range, to a hundredth.
+double dialValue(double value, const AmpToneGraph::Range& range) {
+    return std::round(range.clamp(value) * 100.0) / 100.0;
+}
 
 }  // namespace
 
@@ -40,6 +42,7 @@ AmpToneGraph::AmpToneGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     for (Eased& r : radius_) r.snap(kRadius);
     // The curve is the engine's at its sample rate: worked out again when the audio device changes.
     connect(this, &DeviceCanvas::deviceChanged, this, [this] {
+        rangesRead_ = false;
         disconnect(bridgeConnection_);
         if (session())
             bridgeConnection_ = connect(session()->bridge(), &sub::app::EngineBridge::deviceChanged, this, [this] {
@@ -94,11 +97,32 @@ QString AmpToneGraph::handleAutomation(int i) const {
     return i >= 0 && i < kHandles ? automation_[size_t(i)] : QString();
 }
 
+double AmpToneGraph::wheelStep(int i) const {
+    const Range range = handleRange(i);
+    return (range.high - range.low) / KnobItem::kWheelNotches;
+}
+
+bool AmpToneGraph::readRanges() {
+    int found = 0;
+    for (const sub::app::ProcessorParam& param : session()->bridge()->deviceParams(trackId(), deviceId())) {
+        for (int i = 0; i < kHandles; ++i) {
+            if (param.id == QLatin1String(kHandleList[size_t(i)].id)) {
+                ranges_[size_t(i)] = {param.minValue, param.maxValue};
+                ++found;
+            }
+        }
+    }
+    return found == kHandles;
+}
+
 void AmpToneGraph::sync() {
     if (device() == nullptr) {  // (not yet, as it is being made: the first sync with it shows its curve at once)
+        rangesRead_ = false;
         update();
         return;
     }
+    if (!rangesRead_)
+        rangesRead_ = readRanges();
     const int model =
         std::clamp(static_cast<int>(std::lround(value(QStringLiteral("type")))), 0, sub::app::ampModelCount() - 1);
     for (int i = 0; i < kHandles; ++i) {
@@ -191,7 +215,9 @@ void AmpToneGraph::mousePressEvent(QMouseEvent* event) {
         event->ignore();
         return;
     }
-    if (second)  // the double-click follows: no drag that would carry the old value back
+    // A double-click's second press: its double-click follows, and a drag would carry the old value
+    // back. Before the device's ranges are there, nothing to drag.
+    if (second || !rangesRead_)
         return;
     gesture_ = newGestureKey();
     dragging_ = handle;
@@ -210,9 +236,10 @@ void AmpToneGraph::mouseMoveEvent(QMouseEvent* event) {
     // changes the rate from here on (not the whole drag), as the knobs do.
     const double scale = event->modifiers().testFlag(Qt::ShiftModifier) ? kFine : 1.0;
     const double y = event->position().y();
-    dragValue_ = std::clamp(dragValue_ + (lastY_ - y) / kPixelsPerStep * scale, 0.0, 10.0);
+    const Range& range = ranges_[size_t(dragging_)];
+    dragValue_ = range.clamp(dragValue_ + (lastY_ - y) / kPixelsPerStep * scale);
     lastY_ = y;
-    setParams({{QString::fromLatin1(kHandleList[size_t(dragging_)].id), dialValue(dragValue_)}}, gesture_);
+    setParams({{QString::fromLatin1(kHandleList[size_t(dragging_)].id), dialValue(dragValue_, range)}}, gesture_);
 }
 
 void AmpToneGraph::endDrag() {
@@ -246,16 +273,17 @@ void AmpToneGraph::mouseDoubleClickEvent(QMouseEvent* event) {
 void AmpToneGraph::wheelEvent(QWheelEvent* event) {
     const int handle = dragging_ >= 0 ? dragging_ : handleAt(event->position());
     const int delta = event->angleDelta().y() ? event->angleDelta().y() : event->angleDelta().x();
-    if (handle < 0 || delta == 0) {
+    if (handle < 0 || delta == 0 || !rangesRead_) {
         event->ignore();  // (the view scrolls)
         return;
     }
     event->accept();
     const QString id = QString::fromLatin1(kHandleList[size_t(handle)].id);
-    const double step = kWheelStep * (event->modifiers().testFlag(Qt::ShiftModifier) ? kFine : 1.0);
+    const Range& range = ranges_[size_t(handle)];
+    const double step = wheelStep(handle) * (event->modifiers().testFlag(Qt::ShiftModifier) ? kFine : 1.0);
     if (dragging_ >= 0) {  // the drag goes on from the new value, in its undo step
-        dragValue_ = std::clamp(dragValue_ + delta / 120.0 * step, 0.0, 10.0);
-        setParams({{id, dialValue(dragValue_)}}, gesture_);
+        dragValue_ = range.clamp(dragValue_ + delta / 120.0 * step);
+        setParams({{id, dialValue(dragValue_, range)}}, gesture_);
         return;
     }
     if (wheelGesture_.isEmpty() || wheelHandle_ != handle || !wheelClock_.isValid() ||
@@ -264,7 +292,7 @@ void AmpToneGraph::wheelEvent(QWheelEvent* event) {
     wheelHandle_ = handle;
     wheelClock_.start();
     touch(id);
-    setParams({{id, dialValue(value(id) + delta / 120.0 * step)}}, wheelGesture_);
+    setParams({{id, dialValue(value(id) + delta / 120.0 * step, range)}}, wheelGesture_);
 }
 
 void AmpToneGraph::setHovered(int handle) {

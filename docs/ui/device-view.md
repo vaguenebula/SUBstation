@@ -653,13 +653,13 @@ The editors:
 - **Amp** ([AmpEditor.qml](../../ui/qml/devices/editors/AmpEditor.qml)): no pages; laid out as Live's Amp, flat on the
   body: the seven models as a row of `ParamButton`s (`role: "monitor"`, 50 × 18, from the parameter's labels) over Gain,
   Bass, Middle, Treble, Presence and Volume (`EditorKnob`s in 58 px cells 4 px apart, reading "5.0": the `dial` unit),
-  and set apart at the right the Output switch (Mono, Dual: the `dual` parameter, Live's "Dual Mono") over Dry/Wet.
-  Under the chosen model a 2 px underline in the model's colour (`ampModelColor()`: the one colour the face has of its
-  own, besides the accent) slides to a new one (160 ms, `OutCubic`) as its colour turns. The editor is three columns
-  10 px apart (140, 368 and 80 px) and the output meter (10 px) at the right; the controls at the top, and a row of dark
-  wells (`Theme.meterBg`, 4 px corners) fills the rest of the body's height, 6 px from its bottom: the transfer curve,
-  the tone curve and the pilot lamp. `implicitHeight` is the controls' and 40 px of graphs (142 in the tests' host,
-  whose body is 154).
+  and set apart at the right the Output switch (Mono, Dual: the `dual` parameter, Live's "Dual Mono"; its buttons named
+  from the parameter's labels too) over Dry/Wet. Under the chosen model a 2 px underline in the model's colour
+  (`ampModelColor()`: the one colour the face has of its own, besides the accent) slides to a new one (160 ms,
+  `OutCubic`) as its colour turns. The editor is three columns 10 px apart (140, 368 and 80 px) and the output meter
+  (10 px) at the right; the controls at the top, and a row of dark wells (`Theme.meterBg`, 4 px corners) fills the rest
+  of the body's height, 6 px from its bottom: the transfer curve, the tone curve and the pilot lamp. `implicitHeight` is
+  the controls' and 40 px of graphs (142 in the tests' host, whose body is 154).
   - [AmpPanel](../../ui/src/devices/AmpPanel.h) fills the editor under everything and draws only into the rects the
     layout gives it (`tubeRect`, `jewelRect`, `meterRect`), taking no mouse. The tube window: V1, V2, V3 and the power
     tube on a rail, each glowing as hard as its stage is driven (the displays `drive1..3` and `power`, its peak
@@ -668,10 +668,9 @@ The editors:
     bloom (three layers, as the square of the glow, clipped to the window) spreads round it. The power tube's plate and
     glass turn blue with the supply's sag (display `sag`, τ 60 ms, full at 6 dB), as hard-driven power tubes do. The
     pilot lamp (a red jewel with a bezel, a halo and a facet) brightens with the output (display `output`) and dims as
-    the supply sags (τ 50 ms), over the model's name (the device's, `ampModelNames()`) as the amp's logo, bold italic
-    in its colour. The output meter
-    is `drawLevelMeter()` through `MeterBallistics` (falling 24 dB/s, the peak held 1 s), −60 to 0 dBFS. The lamp and
-    the meter have a tooltip each (the meter's over its whole height).
+    the supply sags (τ 50 ms), over the model's name (the device's, `ampModelNames()`) as the amp's logo, bold italic in
+    its colour. The output meter is `drawLevelMeter()` through `MeterBallistics` (falling 24 dB/s, the peak held 1 s),
+    −60 to 0 dBFS. The lamp and the meter have a tooltip each (the meter's over its whole height).
   - [AmpDriveGraph](../../ui/src/devices/AmpDriveGraph.h): the transfer curve, input across (−1..1, 0 dBFS at the
     edges), output up: for a 1 kHz tone of peak x, the output's highest value at x and its lowest at −x, from the
     engine's own stages, filters and voicing (the application layer's `AmpTransferCurve`, wrapping `amp::Transfer`:
@@ -694,13 +693,15 @@ The editors:
     glowing. A handle per tone control on the curve (B 100 Hz, M 700 Hz, T 3 kHz, P 6 kHz), its parameter's control
     as the knob is: drag it up and down for its dial (8 px a step, Shift a fifth of that, from where the mouse is: Shift
     pressed mid-drag changes the rate from there on), one undo step per drag, what it sets read out beside it while
-    dragged; the wheel over it, 0.2 a notch (the knob's), Shift a fifth, notches within 400 ms one undo step;
-    double-click one for 5 (its second press starts no drag); right-click one for its parameter's menu (the editor's
-    `ParamMenu`, through `handleMenuRequested`); its automation dot beside its letter (red while automation plays,
-    grey overridden). A press within 14 px across of one takes it; anywhere else, both presses of a double-click
-    too, goes on to the frame. A handle under the mouse grows (4.5 to 6.5 px, τ 60 ms) with the up-and-down cursor.
-    A new model's curve morphs from the one drawn (τ 40 ms through a smoothstep, landing exactly); dials, drags and
-    automation move it at once.
+    dragged; the wheel over it, a fiftieth of its range a notch (the knob's, `KnobItem::kWheelNotches`: 0.2), Shift a
+    fifth, notches within 400 ms one undo step; drags and the wheel stop at the ends of the range, the parameter's own
+    (read from the device's `deviceParams()` once it is there: before, a press drags nothing); double-click one for its
+    default (5; its second press starts no drag); right-click one for its parameter's menu (the editor's `ParamMenu`,
+    through `handleMenuRequested`); its automation dot beside its letter (red while automation plays, grey overridden).
+    A press within 14 px across of one takes it; anywhere else, both presses of a double-click too, goes on to the
+    frame. A handle under the mouse grows (4.5 to 6.5 px, τ 60 ms) with the up-and-down cursor. A new model's curve
+    morphs from the one drawn (τ 40 ms through a smoothstep, landing exactly); dials, drags and automation move it at
+    once.
   - Display ticks that read nothing (the engine hands its values over at its own pace: at 44.1 kHz in 1024-frame blocks,
     one 60 Hz tick in three) keep the last values, so nothing flickers with the block size; after 0.3 s with nothing at
     all (the device off, the engine stopped) everything cools and falls. A read counts what came since the last tick

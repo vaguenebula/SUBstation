@@ -150,7 +150,7 @@ Item {
         }
     }
 
-    // Output: one amp for both channels, or one each.
+    // Output: one amp for both channels, or one each; named as the parameter's choices (as the models).
     Row {
         id: outputRow
         x: editor.rightX
@@ -164,7 +164,7 @@ Item {
             role: "monitor"
             param: p.get("dual")
             choice: 0
-            text: qsTr("Mono")
+            text: (p.get("dual") && p.get("dual").labels[0]) || ""
             tooltip: qsTr("Output Mono: both channels summed through one amp (half the CPU)")
         }
         ParamButton {
@@ -174,7 +174,7 @@ Item {
             role: "monitor"
             param: p.get("dual")
             choice: 1
-            text: qsTr("Dual")
+            text: (p.get("dual") && p.get("dual").labels[1]) || ""
             tooltip: qsTr("Output Dual: each channel through an amp of its own: stereo, twice the CPU")
         }
     }
