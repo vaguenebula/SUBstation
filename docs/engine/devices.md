@@ -493,9 +493,9 @@ the editor shares is in [GateDesign.h](../../engine/src/builtin/GateDesign.h) (n
   5 dB for tens of milliseconds, enough to open the gate. It runs over that history 16 frames a frame
   (`gate::kWarmPace`) until it has caught up with the key, so no one block pays for it all (100 ms is 19 200 frames
   a channel at 192 kHz: run at once, a 32-frame block cost 200 µs where it lasts 167 µs), and is heard only from
-  then: the crossfade (or the fade in) starts that much later (it gains 15 frames on the key a frame: a few frames
-  for most filters, 6.7 ms at most), with the old filter (or the key unfiltered) heard until then. Nothing of it but
-  that short history is kept while it is off.
+  then: the crossfade (or the fade in) starts that much later (it gains 15 frames on the key a frame: about 1.3 ms
+  for the default high-pass, 6.7 ms at most), with the old filter (or the key unfiltered) heard until then. Nothing
+  of it but that short history is kept while it is off.
 - **Detection**: peak, linked stereo (the louder key channel's level opens the gate for both), with no smoothing
   besides the lookahead window; chatter on low notes is what Return and Hold are for, as in Live (the default 10 ms
   hold holds across a 50 Hz note's zero crossings).

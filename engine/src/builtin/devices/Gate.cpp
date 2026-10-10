@@ -394,7 +394,7 @@ private:
     // or from rest, its first tens of milliseconds would overshoot (+5 dB, a low
     // shelf at 30 Hz) and could open the gate. It runs over them kWarmPace frames a
     // frame (catchUp()), so no one block pays for all of them (up to 19 200 frames
-    // a channel at 192 kHz): most filters catch up within a few dozen frames, the
+    // a channel at 192 kHz): the default high-pass catches up in about 1.3 ms, the
     // slowest in kWarmSeconds / (kWarmPace - 1), 6.7 ms. Until then what it
     // replaces (the old filter, or the key unfiltered) is heard.
     void startWarm() noexcept {
