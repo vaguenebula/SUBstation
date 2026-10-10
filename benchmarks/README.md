@@ -346,23 +346,23 @@ Release, 48 kHz, blocks of 256, 5 s. The raw report is in
 
 | device | defaults | heavy settings |
 |---|---|---|
-| Amp | 0.68 % | 1.36 % (Dual Mono, Lead, Gain 10) |
-| Chorus-Ensemble | 0.32 % | 0.86 % (Ensemble, Warmth 100, High-pass, Feedback 80) |
-| Compressor | 0.13 % | |
+| Amp | 0.63 % | 1.37 % (Dual Mono, Lead, Gain 10) |
+| Chorus-Ensemble | 0.31 % | 0.67 % (Ensemble, Warmth 100, High-pass, Feedback 80) |
+| Compressor | 0.12 % | |
 | Delay | 0.14 % | |
-| Disperser | 0.24 % | |
+| Disperser | 0.23 % | |
 | EQ | 0.02 % | |
-| Erosion | 0.21 % | |
+| Erosion | 0.22 % | |
 | Gate | 0.14 % | |
-| Limiter | 0.31 % | 0.69 % (True Peak, Gain +12 dB) |
-| Multiband Dynamics | 0.71 % | |
-| Over The Top | 0.44 % | |
-| Phaser-Flanger | 0.23 % | 0.96 % (42 notches, Feedback 95, Amount 100) |
-| Reverb | 1.35 % | 1.45 % (Size 500, Predelay 250 ms, Decay 60 s, Spin and Chorus 100, Diffusion, Scale and Shape 100) |
-| Saturator | 0.09 % | 0.67 % (Hi-Quality, Waveshaper, Color, DC, Drive +12 dB) |
-| Sidechain | 0.08 % | |
-| Spectral Compressor | 0.56 % | 0.80 % (Stereo Link 0, Upward 10, Smoothing 100, Threshold -60, Ratio 20) |
-| Utility | 0.01 % | |
+| Limiter | 0.35 % | 0.68 % (True Peak, Gain +12 dB) |
+| Multiband Dynamics | 0.66 % | |
+| Over The Top | 0.40 % | |
+| Phaser-Flanger | 0.23 % | 0.75 % (42 notches, Feedback 95, Amount 100) |
+| Reverb | 1.43 % | 1.39 % (Size 500, Predelay 250 ms, Decay 60 s, Spin and Chorus 100, Diffusion, Scale and Shape 100) |
+| Saturator | 0.10 % | 0.65 % (Hi-Quality, Waveshaper, Color, DC, Drive +12 dB) |
+| Sidechain | 0.09 % | |
+| Spectral Compressor | 0.61 % | 0.73 % (Stereo Link 0, Upward 10, Smoothing 100, Threshold -60, Ratio 20) |
+| Utility | 0.02 % | |
 
 Oversampling (the Saturator's Hi-Quality, the Amp) runs the shared half-band
 stages a tap at a time over the block, which the compiler vectorises. Before it
