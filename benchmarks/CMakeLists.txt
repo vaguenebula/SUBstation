@@ -6,6 +6,8 @@
 #   browser_backend_bench   the browser's backend on a large synthetic library,
 #                           checked against the reference the tests use (it
 #                           needs the application layer: SUBSTATION_BUILD_APP)
+#   builtin_devices_bench   each built-in audio effect alone: what it costs a
+#                           core, at its defaults or at settings given
 #   sound_similarity_bench  the sound similarity's fingerprints on a real sample
 #                           library: speed, and how often a one-shot's nearest
 #                           sounds are of its kind (the intelligence module alone)
@@ -20,6 +22,11 @@ if (TARGET sub_test_asio)
     add_dependencies(parallel_render_bench sub_test_asio)
     target_compile_definitions(parallel_render_bench PRIVATE SUBSTATION_TEST_ASIO_DRIVER="$<TARGET_FILE:sub_test_asio>")
 endif()
+
+add_executable(builtin_devices_bench builtin_devices_bench.cpp Json.h)
+target_include_directories(builtin_devices_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(builtin_devices_bench PRIVATE sub_engine)
+sub_project_warnings(builtin_devices_bench)
 
 add_executable(sound_similarity_bench sound_similarity_bench.cpp)
 target_link_libraries(sound_similarity_bench PRIVATE sub_intelligence)
