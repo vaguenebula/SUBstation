@@ -572,10 +572,12 @@ The editors:
   Focus band's edges as value boxes (Focus Low over Focus High, each a `ParamBox` under its name, level with the knobs
   beside it: typed, scrolled, automated and mapped as any control), then the time and output knobs (Attack, Release,
   Stereo Link over Dry/Wet, Output and the Delta button); the knobs in 64 px cells (wide enough for "Stereo Link" and
-  "-0.5 dB/oct"), the Focus column as wide as its widest value ("20.00 kHz", measured with a `TextMetrics`) with 11 px
-  either side, clear of the automation dot, and between them a [SpectralGraph](../../ui/src/devices/SpectralGraph.h)
-  (376 px, its own implicit width), the sections parted by `EditorDivider`s. Tilt and Output are bipolar (symmetric
-  about 0); Below is dimmed (0.55, still settable) while Upward is 1:1, when it does nothing.
+  "-0.5 dB/oct"), the Focus column as wide as its widest value ("20.00 kHz", measured with a `TextMetrics` as the box
+  draws it: `Text.NativeRendering`, the font's hinted advances, which Windows' hinting makes wider than Qt Quick text's)
+  with 11 px either side, clear of the automation dot, and between them a
+  [SpectralGraph](../../ui/src/devices/SpectralGraph.h) (376 px, its own implicit width), the sections parted by
+  `EditorDivider`s. Tilt and Output are bipolar (symmetric about 0); Below is dimmed (0.55, still settable) while
+  Upward is 1:1, when it does nothing.
   - The graph: a 20 Hz..20 kHz log axis against the engine's pink-referenced level (-78 to +18 dB; figures every 24 dB
     inside its left edge, drawn over the Focus dim so they read wherever the band starts, each fading out while a
     threshold line runs through it, as it would read as that line's level). It draws the input spectrum filled and the

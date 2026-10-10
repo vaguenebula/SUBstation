@@ -48,9 +48,12 @@ Item {
         return param ? param.format(param.defaultValue) : ""
     }
 
+    // Measured as the box draws it (ValueBoxItem, with QPainter): with the font's hinted advances, not Qt Quick
+    // text's design ones, which hinting can widen (Windows' Segoe UI at 8 pt: "20.00 kHz" is 49 px, not 47).
     TextMetrics {
         id: widestFocus
         font: Theme.uiFont(8)
+        renderType: Text.NativeRendering
         text: p.get("focus_hi") ? p.get("focus_hi").format(p.get("focus_hi").maximum) : ""
     }
 
