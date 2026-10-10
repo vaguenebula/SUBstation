@@ -13,6 +13,7 @@
 #include <QQuickWindow>
 #include <QSettings>
 #include <QTest>
+#include <QtQuickTest/quicktest.h>
 
 #include <memory>
 #include <utility>
@@ -223,6 +224,9 @@ private Q_SLOTS:
         test::click(window_, test::centerOf(button));
         QVERIFY(hotSwap().active());
         QTRY_VERIFY(bar->isVisible());
+        // (Laid out again first: until then the similar sounds' bar, which took this bar's place while no hot swap
+        // ran, still lies over it, with its own ✕ (Back to the list) about where this one is.)
+        QVERIFY(QQuickTest::qWaitForPolish(window_));
         test::click(window_, test::centerOf(item("stopHotSwap")));
         QVERIFY(!hotSwap().active());
         test::click(window_, test::centerOf(button));

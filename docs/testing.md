@@ -128,8 +128,8 @@ The engine's tests link `sub_engine` and nothing else, which also shows that the
 ### tests/app/support
 
 The application layer's tests link `sub_app` and `sub_app_test_support` (the `.cpp` files here, a static library);
-the UI's tests (`test_ui_*`) link `sub_ui` too, and use the header-only helpers, since the library doesn't link Qt
-Quick.
+the UI's tests (`test_ui_*`) link `sub_ui` and Qt Quick Test too, and use the header-only helpers, since the library
+doesn't link Qt Quick.
 
 | File | What it holds |
 |---|---|
@@ -394,6 +394,10 @@ Steinberg's ASIO SDK, which isn't redistributable, so the ASIO tests skip there.
 - **UI behaviour** goes into `tests/app/test_ui_<area>.cpp`: a `UiSession`, the view in a window of QML, and input
   sent as a user would. Skip what needs drawn geometry without a display (`haveDisplay()`). moc stops reading a file
   at a C++ raw string literal: put inline QML in string constants after the test class (or in a support header).
+  After a change that shows, hides or moves items, wait until the window is laid out again
+  (`QQuickTest::qWaitForPolish(window)`) before taking an item's place to click it: layouts place their items when
+  Qt Quick polishes, before the next frame, so until then items keep their old places and can lie over each other
+  (a `QTRY_VERIFY` of something already true doesn't wait).
 - Shared helpers go into `tests/app/support` (header-only if they need Qt Quick), not into a test file.
 - A new test plug-in goes into `tests/vst3_plugins` and the `sub_test_plugins` target in
   [TestPlugins.cmake](../tests/TestPlugins.cmake); a new driver hook into `test_asio_driver.cpp`, its `.def` and

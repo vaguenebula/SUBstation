@@ -14,7 +14,8 @@ are is in [architecture.md](architecture.md).
 - A C++20 compiler: Visual Studio 2022 or newer (*Desktop development with C++*), MinGW-w64 GCC 13 or newer on
   Windows (the one Qt's installer ships), or GCC 13 / Clang 16 or newer.
 - CMake 3.26 or newer, and Ninja (recommended; Visual Studio's generator works too).
-- Qt 6.4 or newer (6.5+ recommended on Windows): Core, Gui, Qml, Quick, QuickControls2, and Test for the tests.
+- Qt 6.4 or newer (6.5+ recommended on Windows): Core, Gui, Qml, Quick, QuickControls2, and Test and QuickTest for
+  the tests.
   - Windows: Qt's online installer, the *MSVC 2022 64-bit* build of a Qt 6 release (or MSVC 2019's, which works
     with VS 2022), or its *MinGW 64-bit* build with the matching MinGW toolchain.
   - Debian/Ubuntu: `qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-controls
