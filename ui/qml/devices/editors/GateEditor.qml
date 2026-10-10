@@ -12,7 +12,10 @@ import SUBstation
 // and Dry/Wet, listening to it, and an EQ on it (six types, Freq, Q and Gain,
 // and its curve: GateKeyGraph). Every control shows its parameter as it is now
 // (its automation's value while that plays), sets it undoably, touches it when
-// pressed, and right-click gives its menu.
+// pressed, and right-click gives its menu. What is set for later (the external
+// knobs without a sidechain, the EQ's controls and curve while it is off) is
+// dimmed but still settable, as Live's greyed controls; only what the EQ's type
+// doesn't use (the shelves' Q, the pass filters' Gain) is disabled.
 Item {
     id: editor
 
@@ -237,6 +240,7 @@ Item {
                 width: parent.width
                 height: scGain.implicitHeight
 
+                // (Without a sidechain they have nothing to act on yet: dimmed, set beforehand.)
                 EditorKnob {
                     id: scGain
                     objectName: "sc_gain"
@@ -244,7 +248,7 @@ Item {
                     size: 28
                     param: p.get("sc_gain")
                     title: qsTr("Gain")
-                    enabled: graph.keyed
+                    opacity: graph.keyed ? 1 : 0.55
                     tooltip: qsTr("Sidechain gain: how loud the sidechain is to the gate (never heard)")
                 }
                 EditorKnob {
@@ -254,10 +258,11 @@ Item {
                     size: 28
                     param: p.get("sc_mix")
                     title: qsTr("Dry/Wet")
-                    enabled: graph.keyed
+                    opacity: graph.keyed ? 1 : 0.55
                     tooltip: qsTr("Sidechain Dry/Wet: 100 %: only the sidechain opens the gate;\n0 %: only the device's own input")
                 }
-                // (52 px each: "15.00 kHz" fits)
+                // (52 px each: "15.00 kHz" fits.) Dimmed while the EQ is off, as its type buttons and
+                // curve, all still settable; the Q and Gain disabled for a type that doesn't use them.
                 EditorKnob {
                     objectName: "sc_eq_freq"
                     x: 98
@@ -265,7 +270,7 @@ Item {
                     size: 28
                     param: p.get("sc_eq_freq")
                     title: qsTr("Freq")
-                    enabled: editor.eqOn
+                    opacity: editor.eqOn ? 1 : 0.55
                     tooltip: qsTr("Key EQ frequency")
                 }
                 EditorKnob {
@@ -277,7 +282,8 @@ Item {
                     title: qsTr("Q")
                     formatter: v => v.toFixed(2)
                     knob.formatter: v => v.toFixed(2)
-                    enabled: editor.eqOn && editor.eqUsesQ
+                    enabled: editor.eqUsesQ
+                    opacity: enabled && editor.eqOn ? 1 : 0.55
                     tooltip: qsTr("Key EQ width or resonance (bell, low-, band-, high-pass)")
                 }
                 EditorKnob {
@@ -287,7 +293,8 @@ Item {
                     size: 28
                     param: p.get("sc_eq_gain")
                     title: qsTr("Gain")
-                    enabled: editor.eqOn && editor.eqUsesGain
+                    enabled: editor.eqUsesGain
+                    opacity: enabled && editor.eqOn ? 1 : 0.55
                     tooltip: qsTr("Key EQ gain (shelves and bell)")
                 }
             }

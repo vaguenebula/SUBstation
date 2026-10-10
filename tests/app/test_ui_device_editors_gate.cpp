@@ -5,10 +5,12 @@
 // are one) and the key filter's dot drag in one undo step each, the lines give
 // their parameters' menus; what the engine renders reaches the display, which
 // scrolls and stops, goes idle when nothing comes, and repaints only for what
-// shows; the sidechain section folds and unfolds, follows the sidechain and its
-// EQ; the key filter's curve is the engine's, its dot follows the mouse, Ctrl
-// and the wheel set the bell's Q. With SUBSTATION_UI_SCREENSHOTS set,
-// device-editors-gate*.png are saved there.
+// shows; the key dot is blue for the key's level now, falls quickly, and the
+// blue where the gate passes shows over the levels; the sidechain section folds
+// and unfolds, follows the sidechain and its EQ (what is set for later dimmed
+// but settable); the key filter's curve is the engine's, its dot follows the
+// mouse, Ctrl and the wheel set the bell's Q. With SUBSTATION_UI_SCREENSHOTS
+// set, device-editors-gate*.png are saved there.
 
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -377,7 +379,8 @@ private Q_SLOTS:
         QSignalSpy asked(graph, &GateGraph::paramMenuRequested);
         for (const auto& [y, id] : {std::pair{graph->thresholdY(), QStringLiteral("threshold")},
                                     std::pair{graph->returnY(), QStringLiteral("return")}}) {
-            QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier, scenePoint(graph, QPointF(plot.center().x(), y)));
+            QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                              scenePoint(graph, QPointF(plot.center().x(), y)));
             QCOMPARE(asked.count(), id == QStringLiteral("threshold") ? 1 : 2);
             QCOMPARE(asked.last().at(0).toString(), id);
             QTRY_VERIFY(menu->property("opened").toBool());
@@ -532,6 +535,55 @@ private Q_SLOTS:
         }
     }
 
+    void keyDotAndShade() {
+        // A second of a tone at -6 dB through a -30 dB threshold, then -50 dB.
+        std::vector<float> burst(size_t(kSampleRate) * 2);
+        for (size_t i = 0; i < burst.size(); ++i) {
+            const double level = i < size_t(kSampleRate) ? 0.5 : 0.003;
+            burst[i] = float(level * std::sin(2 * kPi * 220.0 * double(i) / kSampleRate));
+        }
+        const Shown shown = gate(burst, 2.0);
+        QVERIFY(shown.view && shown.graph);
+        GateGraph* graph = shown.graph;
+        editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("threshold"), -30.0);
+        engine()->renderOffline(0.0, kSampleRate);
+        tick(1);
+        QVERIFY2(std::abs(graph->levelKey() - 20 * std::log10(0.5)) < 0.1,
+                 qPrintable(QString::number(graph->levelKey())));
+        QVERIFY(graph->keyAbove() && graph->isOpen());
+        QCOMPARE(graph->keyDotDb(), graph->levelKey());  // (it rises at once)
+
+        // Where the gate is open, the blue shade shows over the levels too, not only above them: in the
+        // output's band (the dark grey) a little to the left of the newest values.
+        QTest::qWait(50);
+        const QImage shot = grab();
+        const QPoint inBand = scenePoint(graph, QPointF(graph->plot().right() - 20, graph->yOf(-30.0)));
+        const QColor shaded = shot.pixelColor(inBand * shot.devicePixelRatio());
+        QVERIFY2(shaded.blue() - shaded.red() > 12, qPrintable(shaded.name()));
+
+        // Then the quiet: the dot is grey from the first tick that has only quiet values (one may still
+        // hold the tone's last ones), not once the falling dot gets below the line; and the dot falls
+        // below the line itself within a few ticks (it falls quickly: moving, not lagging).
+        const double beatsPerSecond = project()->tempo() / 60.0;
+        double seconds = 1.0;
+        int grey = -1, below = -1;
+        for (int i = 0; i < 30 && below < 0; ++i) {
+            QTest::qWait(16);
+            engine()->renderOffline(seconds * beatsPerSecond, kSampleRate / 60);
+            seconds += 1.0 / 60;
+            refreshDisplays();
+            if (grey < 0 && !graph->keyAbove())
+                grey = i;
+            if (grey >= 0)
+                QVERIFY2(!graph->keyAbove(), qPrintable(QString::number(i)));
+            if (graph->keyDotDb() < -30.0)
+                below = i;
+        }
+        QVERIFY2(grey >= 0 && grey <= 1, qPrintable(QString::number(grey)));
+        QVERIFY2(below >= 0 && below <= 10, qPrintable(QString::number(below)));
+        QVERIFY(graph->levelKey() < -45.0);
+    }
+
     void sidechainSection() {
         const Shown shown = gate(tone(220.0, kSampleRate), 1.0);
         QVERIFY(shown.view && shown.graph);
@@ -561,15 +613,36 @@ private Q_SLOTS:
         auto checked = [&](int type) {
             return find(view, QStringLiteral("eqType%1").arg(type))->property("checked").toBool();
         };
-        QVERIFY(!enabled("sc_gain") && !enabled("sc_mix"));  // (no sidechain)
-        QVERIFY(!enabled("sc_eq_freq") && !enabled("sc_eq_q") && !enabled("sc_eq_gain"));  // (the EQ off)
+        // Dimmed (its fade done): set for later, or not used by the EQ's type.
+        auto dimmed = [&](const char* name) { return find(view, QString::fromLatin1(name))->opacity() < 0.99; };
         QVERIFY(checked(5) && !checked(0));  // high-pass
         QCOMPARE(textOf(view, "sidechainSource"), QStringLiteral("No Sidechain"));
+        // Set for later, dimmed but settable: Gain and Dry/Wet without a sidechain, the EQ's knobs while it
+        // is off (as its type buttons and its curve). Only what the type doesn't use is disabled (a high-pass:
+        // the gain).
+        QVERIFY(enabled("sc_gain") && enabled("sc_mix"));
+        QVERIFY(enabled("sc_eq_freq") && enabled("sc_eq_q") && !enabled("sc_eq_gain"));
+        QTRY_VERIFY(dimmed("sc_gain") && dimmed("sc_mix"));
+        QTRY_VERIFY(dimmed("sc_eq_freq") && dimmed("sc_eq_q") && dimmed("sc_eq_gain"));
+        for (const char* id : {"sc_eq_freq", "sc_gain"}) {
+            const double before = value(id);
+            const int steps = undo()->index();
+            const QPoint at = centerOf(knob(view, id));
+            QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+            dragTo(at - QPoint(0, 10));
+            dragTo(at - QPoint(0, 20));
+            QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at - QPoint(0, 20));
+            QVERIFY2(value(id) > before, id);
+            QCOMPARE(undo()->index(), steps + 1);
+            undo()->undo();
+            QCOMPARE(value(id), before);
+        }
 
         // The EQ on: Freq and Q (a high-pass has no gain); a bell: Gain too; a low shelf: no Q.
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, centerOf(button(view, "sc_eq")));
         QCOMPARE(value("sc_eq"), 1.0);
         QVERIFY(enabled("sc_eq_freq") && enabled("sc_eq_q") && !enabled("sc_eq_gain"));
+        QTRY_VERIFY(!dimmed("sc_eq_freq") && !dimmed("sc_eq_q") && dimmed("sc_eq_gain"));
         // Freq's readout shows 10 kHz and up whole ("15.00 kHz": its cell is wide enough).
         for (const double hz : {10000.0, 15000.0}) {
             editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("sc_eq_freq"), hz);
@@ -591,6 +664,7 @@ private Q_SLOTS:
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, centerOf(find(view, QStringLiteral("eqType0"))));
         QCOMPARE(value("sc_eq_type"), 0.0);
         QVERIFY(enabled("sc_eq_gain") && !enabled("sc_eq_q"));
+        QTRY_VERIFY(!dimmed("sc_eq_gain") && dimmed("sc_eq_q"));
         undo()->undo();
         undo()->undo();
         QCOMPARE(value("sc_eq_type"), 5.0);
@@ -613,7 +687,7 @@ private Q_SLOTS:
         QCOMPARE(textOf(view, "sidechainSource"), name);
         editor()->renameTrack(other, QStringLiteral("Kick"));
         QCOMPARE(textOf(view, "sidechainSource"), QStringLiteral("Kick"));
-        QVERIFY(enabled("sc_gain") && enabled("sc_mix"));
+        QTRY_VERIFY(!dimmed("sc_gain") && !dimmed("sc_mix"));
         QSignalSpy menu(view, SIGNAL(sidechainMenuRequested()));
         click(find(view, QStringLiteral("sidechainSource")));
         QCOMPARE(menu.count(), 1);

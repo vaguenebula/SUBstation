@@ -65,6 +65,9 @@ public:
     double levelIn() const { return levelIn_; }
     double levelOut() const { return levelOut_; }
     double levelKey() const { return levelKey_; }
+    // The key's level now (the tick's, not the dot's falling one) at or above the threshold: the dot is blue.
+    bool keyAbove() const { return levelKey_ >= thresholdDb_; }
+    double keyDotDb() const { return keyMeter_.level; }  // the dot's level as drawn (falling smoothly)
     double passing() const { return passing_; }
     bool isOpen() const { return passing_ >= 0.5; }
     bool idle() const { return idle_; }
@@ -154,8 +157,9 @@ private:
     std::array<double, 4> emitted_{kFloorDb, kFloorDb, kFloorDb, 0.0};  // the levels levelsChanged last told of
     bool emittedIdle_ = true;
     double drawnIn_ = 0.0, drawnPeak_ = 0.0, drawnKey_ = 0.0;  // where the last repaint put the meter and the dot (y)
+    bool drawnKeyAbove_ = false;                               // and whether the dot was blue
     MeterBallistics inMeter_;
-    MeterBallistics keyMeter_;  // the key dot: rises at once, falls smoothly
+    MeterBallistics keyMeter_;  // the key dot: rises at once, falls quickly (its colour is the level now)
     Eased led_;                 // how open, for the LED
     Eased reduction_;           // dB the gate turns it down, for its meter
     Eased threshold_, return_;  // the lines, in dB (the return line's is the level it closes below)

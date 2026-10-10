@@ -30,6 +30,8 @@ constexpr double kQuietSeconds = 0.25;   // no values for this long: the engine 
 constexpr double kRecentSeconds = 0.1;   // a tick's levels are of this much at most (after a backlog)
 constexpr double kPingSeconds = 0.25;    // the ring as the gate opens
 constexpr double kPulseSeconds = 1.2;    // the listening label's pulse
+constexpr double kShadeAlpha = 36.0;     // the blue where the gate is open, over the levels
+constexpr double kKeyFall = 300.0;       // dB/s the key dot falls (24 dB in 80 ms: it moves, it doesn't lag)
 constexpr double kThresholdMin = -70.0, kThresholdMax = 6.0;  // the parameters' ranges (the engine's)
 constexpr double kReturnMin = 0.0, kReturnMax = 24.0;
 constexpr double kPi = 3.14159265358979323846;
@@ -186,6 +188,7 @@ void GateGraph::sync() {
         return_.snap(return_.target);
     }
     synced_ = true;
+    drawnKeyAbove_ = keyAbove();  // (the repaint below draws the dot's colour for the threshold now)
     update();
 }
 
@@ -348,12 +351,13 @@ void GateGraph::refreshDisplays() {
     }
 
     // The meters, the LED, the lines. The meters and the key dot repaint once they are a twentieth
-    // of a pixel from where they were last drawn (a steady tone's peaks jitter by about 1e-4 dB).
+    // of a pixel from where they were last drawn (a steady tone's peaks jitter by about 1e-4 dB), the
+    // dot also as its colour changes (the key's level now crossing the threshold).
     inMeter_.update(levelIn_, dt, 24.0, 1.0, kFloorDb);
-    keyMeter_.update(levelKey_, dt, 48.0, 0.0, kFloorDb);
+    keyMeter_.update(levelKey_, dt, kKeyFall, 0.0, kFloorDb);
     const auto moved = [this](double db, double drawn) { return std::abs(yOf(db) - drawn) > 0.05; };
     redraw = redraw || moved(inMeter_.level, drawnIn_) || moved(inMeter_.peak, drawnPeak_) ||
-             moved(keyMeter_.level, drawnKey_);
+             moved(keyMeter_.level, drawnKey_) || keyAbove() != drawnKeyAbove_;
     led_.target = passing_;
     redraw = led_.step(easeFraction(dt, 0.03), 1e-3) || redraw;
     // How far the gate turns down what comes in, in dB on the axis (with nothing coming in, nothing).
@@ -388,6 +392,7 @@ void GateGraph::refreshDisplays() {
         drawnIn_ = yOf(inMeter_.level);
         drawnPeak_ = yOf(inMeter_.peak);
         drawnKey_ = yOf(keyMeter_.level);
+        drawnKeyAbove_ = keyAbove();
         update();
     }
     if (levels)
@@ -578,7 +583,11 @@ void GateGraph::paint(SgPainter& p) {
         }
         p.save();
         p.setClipRect(r);
-        // Where the gate let sound through: a faint blue, in eight steps, each run of one step at once.
+        // The input (light), the output over it (darker, outlined): the light part is what the gate took.
+        p.fillBand(x0, dx, inTops_.data(), bottoms_.data(), count, QColor(0x9a, 0x9a, 0x9a, 150));
+        p.fillBand(x0, dx, outTops_.data(), bottoms_.data(), count, QColor(0x2e, 0x2e, 0x2e, 235));
+        // Where the gate let sound through: a faint blue over the whole height, the levels too (under
+        // them it would show only above the loudest), in eight steps, each run of one step at once.
         for (int i = 0; i < count;) {
             const int step = int(std::lround(std::clamp(double(opens_[std::size_t(i)]), 0.0, 1.0) * 8.0));
             int j = i + 1;
@@ -586,12 +595,9 @@ void GateGraph::paint(SgPainter& p) {
                 ++j;
             if (step > 0)
                 p.fillBand(x0 + i * dx, dx, shadeTops_.data() + i, bottoms_.data() + i, j - i,
-                           withAlpha(Theme::kSoloOn, int(std::lround(36.0 * step / 8.0))));
+                           withAlpha(Theme::kSoloOn, int(std::lround(kShadeAlpha * step / 8.0))));
             i = j;
         }
-        // The input (light), the output over it (darker, outlined): the light part is what the gate took.
-        p.fillBand(x0, dx, inTops_.data(), bottoms_.data(), count, QColor(0x9a, 0x9a, 0x9a, 150));
-        p.fillBand(x0, dx, outTops_.data(), bottoms_.data(), count, QColor(0x2e, 0x2e, 0x2e, 235));
         drawGlowPolyline(p, outline_, QColor(255, 255, 255, 200), 1.1);
         if (showKey_)
             p.drawPolyline(keyPoints_.data(), count, withAlpha(Theme::kPlayOn, 170), 1.0);
@@ -613,14 +619,14 @@ void GateGraph::paint(SgPainter& p) {
     const QPointF tab[3] = {{r.right(), thresholdY - 4.5}, {r.right(), thresholdY + 4.5}, {r.right() - 6, thresholdY}};
     p.fillPolygon(tab, 3, Theme::kSoloOn);
 
-    // The newest key level: a dot on the right edge, blue once it reaches the threshold; a ring
-    // ripples out from it as the gate opens.
+    // The newest key level: a dot on the right edge, falling quickly rather than jumping, blue while the
+    // key's level now (not the falling dot's) is at or above the threshold, its halo as open as the
+    // gate is; a ring ripples out from it as the gate opens.
     const double ledEase = std::clamp(led_.value, 0.0, 1.0);
     if (keyMeter_.level > kFloorDb + 0.5) {
         const QPointF dot(r.right(), yOf(keyMeter_.level));
-        const bool above = keyMeter_.level >= thresholdDb_;
         p.fillEllipse(dot, 6, 6, withAlpha(Theme::kSoloOn, int(std::lround(50 * ledEase))));
-        p.fillEllipse(dot, 2.5, 2.5, above ? Theme::kSoloOn : Theme::kTextDim);
+        p.fillEllipse(dot, 2.5, 2.5, keyAbove() ? Theme::kSoloOn : Theme::kTextDim);
     }
     if (ping_ >= 0.0) {  // (inside the plot: it would run over the figures)
         const double t = std::clamp(ping_ / kPingSeconds, 0.0, 1.0), eased = 1.0 - (1.0 - t) * (1.0 - t);
