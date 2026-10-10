@@ -7,6 +7,7 @@ Nothing they do touches your settings, use counts, browser index or plug-ins.
 |---|---|
 | [parallel_render_bench.cpp](parallel_render_bench.cpp) | Tracks rendered on one thread and on several: offline (best of three, checked bit-identical on any number of threads) and live through the fake ASIO driver. The engine alone, no Qt. |
 | [browser_backend_bench.cpp](browser_backend_bench.cpp) | The browser's backend on a large synthetic library: indexing, starting from the saved index, searches. Checks every query against the reference the tests use, and fails if any differs. |
+| [builtin_devices_bench.cpp](builtin_devices_bench.cpp) | Each built-in audio effect alone, as the audio thread runs it: what it costs a core, at its defaults or at settings given. The engine alone, no Qt. |
 | [sound_similarity_bench.cpp](sound_similarity_bench.cpp) | Sound similarity's fingerprints (Essentia's descriptors) on a real sample library: how fast they are made and searched, how fast the index analyses a library, and how often a sound's nearest sounds are of its kind; `--split` holds half the queries out, `--tune` searches the aspects' weights. The intelligence module alone, no Qt. |
 | [LibraryGen.h](LibraryGen.h) | Makes the synthetic sample libraries. |
 | [PyRandom.h](PyRandom.h), [Json.h](Json.h) | Python's random numbers (so a library is the one the Python generator made), and the reports as JSON. |
@@ -24,15 +25,16 @@ thousands of shapes).
 The benchmarks are built with `-DSUBSTATION_BUILD_BENCHMARKS=ON` (off by
 default), into the build's `bin` folder with everything else. Always in Release.
 `browser_backend_bench` needs the application layer (Qt Core, as the tests do);
-`parallel_render_bench` needs only the engine, and `sound_similarity_bench` only the
+`parallel_render_bench` and `builtin_devices_bench` need only the engine, and `sound_similarity_bench` only the
 intelligence module (no Qt either; it wants a sample library of your own).
 
 Linux:
 
 ```sh
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSUBSTATION_BUILD_BENCHMARKS=ON
-ninja -C build parallel_render_bench browser_backend_bench sound_similarity_bench
+ninja -C build parallel_render_bench browser_backend_bench builtin_devices_bench sound_similarity_bench
 build/bin/parallel_render_bench --tracks 32 --threads 1,2,4,8 --json parallel.json
+build/bin/builtin_devices_bench --seconds 5 --json devices.json
 build/bin/browser_backend_bench --size 200000 --json backend.json
 build/bin/sound_similarity_bench --folder ~/Samples --cache /tmp/fingerprints.bin --json similarity.json
 ```
@@ -321,3 +323,48 @@ an Intel Core Ultra 7 270K Plus (24 threads), Windows 11, MinGW GCC 13: precisio
 0.59, clap 0.56); 1 250 files/s on 12 threads, 1.4–9.5 ms a file. That library's
 labels are cleaner than Dirt-Samples' file names: compare extractors on one set,
 not the sets with each other.
+
+# Built-in devices
+
+```
+builtin_devices_bench [--device ID[,ID...]] [--seconds 10] [--block 256] [--rate 48000]
+    [--set PARAM=VALUE ...] [--json out.json]
+```
+
+Each built-in audio effect (or those named), made from the registry and prepared
+at the rate, plays stereo noise and two tones at about -12 dBFS in blocks of
+`--block` frames, as the audio thread gives them; the time its `process()` takes,
+against how long the audio plays, is its load on one core (best of three).
+`--set` changes a parameter, by id and in its own units, on every device that has
+one: the heavy settings below. No engine, no graph: the device alone.
+
+## Results
+
+Linux, Intel Xeon at 2.1 GHz (a cloud VM's 4 cores, other work on it), GCC 13,
+Release, 48 kHz, blocks of 256, 5 s. The raw report is in
+`results/builtin-devices.json`.
+
+| device | defaults | heavy settings |
+|---|---|---|
+| Amp | 0.68 % | 1.36 % (Dual Mono, Lead, Gain 10) |
+| Chorus-Ensemble | 0.32 % | 0.86 % (Ensemble, Warmth 100, High-Pass, Feedback 80) |
+| Compressor | 0.13 % | |
+| Delay | 0.14 % | |
+| Disperser | 0.24 % | |
+| EQ | 0.02 % | |
+| Erosion | 0.21 % | |
+| Gate | 0.14 % | |
+| Limiter | 0.31 % | 0.69 % (True Peak, Gain +12 dB) |
+| Multiband Dynamics | 0.71 % | |
+| Over The Top | 0.44 % | |
+| Phaser-Flanger | 0.23 % | 0.96 % (42 notches, Feedback 95, Amount 100) |
+| Reverb | 1.35 % | 1.45 % (Size 500, Predelay 250 ms, Decay 60 s, Spin and Chorus 100, Diffusion, Scale and Shape 100) |
+| Saturator | 0.09 % | 0.67 % (Hi-Quality, Waveshaper, Color, DC, Drive +12 dB) |
+| Sidechain | 0.08 % | |
+| Spectral Compressor | 0.56 % | 0.80 % (Stereo Link 0, Upward 10, Smoothing 100, Threshold -60, Ratio 20) |
+| Utility | 0.01 % | |
+
+Oversampling (the Saturator's Hi-Quality, the Amp) runs the shared half-band
+stages a tap at a time over the block, which the compiler vectorises. Before it
+did, the same machine measured about 1.4 % for the Saturator's heaviest
+Hi-Quality settings and 2.1-2.2 % for the Amp in Dual Mono.

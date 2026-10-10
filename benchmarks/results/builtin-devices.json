@@ -1,0 +1,75 @@
+{
+  "seconds": 5.0,
+  "block": 256,
+  "rate": 48000.0,
+  "results": [
+    {
+      "device": "amp",
+      "load_percent": 0.67820164
+    },
+    {
+      "device": "chorus",
+      "load_percent": 0.32284435999999983
+    },
+    {
+      "device": "compressor",
+      "load_percent": 0.1286794799999999
+    },
+    {
+      "device": "delay",
+      "load_percent": 0.13656769999999988
+    },
+    {
+      "device": "disperser",
+      "load_percent": 0.2421988999999998
+    },
+    {
+      "device": "eq",
+      "load_percent": 0.018413480000000038
+    },
+    {
+      "device": "erosion",
+      "load_percent": 0.20690653999999978
+    },
+    {
+      "device": "gate",
+      "load_percent": 0.1350808800000001
+    },
+    {
+      "device": "limiter",
+      "load_percent": 0.31232919999999986
+    },
+    {
+      "device": "multiband",
+      "load_percent": 0.7092113799999998
+    },
+    {
+      "device": "ott",
+      "load_percent": 0.43710853999999993
+    },
+    {
+      "device": "phaser",
+      "load_percent": 0.22682416000000005
+    },
+    {
+      "device": "reverb",
+      "load_percent": 1.3547649200000007
+    },
+    {
+      "device": "saturator",
+      "load_percent": 0.09062373999999998
+    },
+    {
+      "device": "sidechain",
+      "load_percent": 0.08361536
+    },
+    {
+      "device": "spectral",
+      "load_percent": 0.5631743199999999
+    },
+    {
+      "device": "utility",
+      "load_percent": 0.007578119999999943
+    }
+  ]
+}
